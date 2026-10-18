@@ -128,6 +128,9 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
   pool names.
 - **Rule: last writer wins on the stamp.** A remote stamp is newer when its `at` is greater, or when `at` is equal and its
   `host` sorts higher.
+- **Clock skew (codex #7).** A local save stamps `at = max(now, highest at seen from any host + 1)`. "Seen" means
+  stored locally or read from an envelope. A host whose clock runs slow therefore still wins with its next edit,
+  instead of being overwritten until its clock catches up.
   - When a remote stamp is newer and the hash differs, the daemon fetches that host's collection through a new peer
     route, `POST /api/peers/personas` (peer-token auth, `HostCaller`, `internal/peers/hostcaller.go:68`).
   - It stores the collection **with the remote's stamp**. The local revision is bumped for the App's CAS, and a
@@ -179,6 +182,15 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
   stores it on its own `spawn_ops` row. An older member host ignores the field and names the session by its own rules.
 - **Held names include live reservations:** ops not yet `registered`, not failed, and younger than 10 minutes. Two
   concurrent spawns never get the same name.
+- **Where reservations live (codex #2).**
+  - They are kept **in memory by the name service**, under the same pool lock as picking (`assignPooled`) and settling
+    (`settlePoolCollisions`). Reserving, releasing and counting held names are one atomic section.
+  - At boot they are **rebuilt from the team DB**: the open ops with a `pool_name`. The team module registers a reader
+    in core, and the peers module never opens `team.db`.
+  - **Released** when the op is registered (the session took the name), fails, is voided or times out, or when its
+    remote command expires. An entry older than 10 minutes also lapses by itself, so a missed release costs nothing.
+  - `ReserveExact` (a remote spawn; the lead host chose the name) is **refused when the name is held locally**. The
+    member host then names the session by rule 3, and the spawn itself goes on.
 - **A reservation is local to the daemon that holds it.** Other hosts do not see it. A cross-host clash is settled by
   v1's "newcomer yields" rule, which applies the same way when a spawn outlives its 10 minutes (a slow remote spawn, a
   spawn queued behind memory pressure). That degradation is accepted.
@@ -202,10 +214,18 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
   4. The lead-history row is written **only after the team row succeeds**. Its failure is only logged.
   - **A crash between steps 1 and 2** leaves the lead renamed, with no team and the approval still open. This is
     harmless: on a retry, 「保留目前的名字」 is the new name.
+  - **Losing the close (codex #1).** `CloseLeadApproved` reports a lost CAS as `won = false` with no error
+    (`team_store.go:460-480`): another decide, a requester cancel, or the sweeper's timeout closed the approval first.
+    A lost close is handled **like a failed one**: rename back, delete the alias, write no history, send no notice.
+  - **Decides on one approval run one at a time.** An in-process lock keyed by approval id is held across steps 1–3.
+    The sweeper's expiry close (`sweeper.go:197-207`) takes the same lock. Closes that do not take it (a cancel, an
+    abandon) are covered by the lost-close rule above.
 - The renamed lead gets a notice with its new address (§6.4).
 - Absent `lead_name` means the session keeps its name. It still gets a lead-history row when its name is a persona code.
-- `LeadPayload` gets `lead_names`: the candidate list at request time (§6.2 rule 1), so the dialog needs no extra
-  call. The dialog refreshes it when it opens.
+- `LeadPayload` gets `lead_names`: the candidate list at request time (§6.2 rule 1).
+  - The payload is stored, so it goes stale. The dialog reads a **fresh list when it opens**, through
+    `GET /api/team/approvals/{id}/lead-names` (codex #11).
+  - The stored list is the fallback when that read fails.
 - **The `/team` command** (`cmd/pdx/plugin/purdex/hooks/member.js:78` `parseTeamArgs`, `register.js:990` `teamCommand`):
   - The first word matches an active persona → it is `lead_name`, bound into the person token request, so the agent
     cannot drop it, and the rest is the note. The lead is created at once, as today.
@@ -215,6 +235,13 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
     the daemon never picks one.
   - No match → the request is created as a **normal lead approval with a card**, so the user picks the name. The
     person token is still used, so the decider is `person`.
+  - **`/team` with no words (codex #5).**
+    - A session that is not a lead → the card. Today this becomes a lead at once (`register.js:1038-1064`,
+      `becomeLeadOrShow`).
+    - A lead → the roster, unchanged (`register.js:1057`).
+  - **Mixed versions (codex #10).** The mod checks the persona list through `pdx`. When that fails (an older `pdx`),
+    or when the daemon lacks `team.lead_name.v1`, `/team` behaves exactly as today: no name, no card, the words are the
+    note.
 - Unattended mode refuses lead requests, as today (`UnattendedRefusable`, `wire_unattended.go:49`), so no lead is ever
   named without the user.
 - The capability is `team.lead_name.v1`.
@@ -236,7 +263,12 @@ CREATE TABLE IF NOT EXISTS name_pairs (lead_code TEXT NOT NULL, member_code TEXT
 
 - Written only through the name service:
   - on lead approval, after the team row succeeds (§5.3; a failure is only logged);
-  - on member spawn acceptance and on adopt (§5.2, §5.4).
+  - **for a spawned member, when its op is registered** (codex #3). The pair is the lead's code and the op's
+    `pool_name`; the member session may not be named yet at that moment. A local spawn records it on the lead host at
+    registration. A remote spawn records it on the lead host when `FinishRemoteSpawn` reports the registration
+    (`internal/module/team/spawn_remote.go:185-217`). An op without a `pool_name` records nothing.
+  - on adopt approval (§5.4).
+  - Each failure is only logged.
 - A relay writes nothing: the successor inherits the name.
 - **Familiar** = every `name_leads.code` ∪ every `name_pairs.member_code`. Each daemon publishes its familiar set in
   the envelope (§4.3), capped at 64 codes, most recent first, and unions the other hosts' sets.
@@ -263,6 +295,9 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
 - **Routing:**
   - After tier 1 misses (`address.go:321-333`), a `<host>/<alias>` resolves through the alias row's ref, by the
     existing ref path. Lineage therefore works, and a relayed successor is reached.
+  - `ipeers.Resolve` (`address.go:182`) is a pure function over the rows, so the aliases reach it as data: a new
+    `ResolveSnapshot.Aliases` map (full alias → ref) (codex #4). Its one production caller (`send.go:451`) fills the
+    map from a meta-DB reader, cached and invalidated on each rename.
   - Tier 1 always wins: when a live session holds the name, the alias is never consulted.
   - When a name is assigned anew, its alias row is deleted.
 - The bracket check (`name_mismatch`) accepts a name that is the session's current name or one of its aliases.
@@ -329,6 +364,10 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - It is written **in the same transaction** as `SetUnattended`'s CAS (`internal/module/hostconfig/unattended.go:112`),
     so the state and its record cannot differ. To make this possible, the store's `Put` gains an in-transaction
     callback.
+    - `Put` deliberately runs `BEGIN IMMEDIATE` on a dedicated `*sql.Conn` (`store.go:97-151`), not a `*sql.Tx`, so
+      that concurrent CAS writes answer 409 instead of `SQLITE_BUSY_SNAPSHOT` (codex #8). The callback therefore gets
+      that same connection as an exec/query interface.
+    - A failing callback rolls the state change back too.
   - It keeps the newest 100 rows.
   - It is created by migration; no backfill (history before this version is not known).
   - `GET /api/team/unattended` merges these rows with the team DB's decisions **when it reads**.
@@ -355,7 +394,10 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
 ### 9.2 One identity resolver
 
 - `seatOf(address | virtual name)` → `{code, name, avatar}`. It takes the suffix after the last `-` of the name after
-  the last `/`, and looks it up in the persona store (the session's host's copy, falling back to any host's).
+  the last `/`, and looks it up in the persona store.
+- **The App uses one persona collection: the one with the highest stamp** among the hosts it reads. Equal stamps are
+  broken by host, as the daemons do (§4.3). It never unions collections by code (codex #6): a union would show, and on
+  the next save revive, what last-writer-wins dropped.
 - It is the only parser. The four inline slicers become callers:
   - `team-views.ts:120`;
   - `UnattendedQuotaSection.tsx:47`;
@@ -426,7 +468,7 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 |---|---|---|---|
 | **NP-1** | personas key and routes, validation, 4 MiB route cap, pool registry (`PoolNameOf`, display names), picker uses personas, `journal.DisplayName`, capability `personas.v1` | codex | — |
 | **NP-2** | envelope `names`, snapshot records stamps and familiar sets, peer fetch route, last-writer-wins apply | codex | NP-1 |
-| **NP-3** | history tables, rules 1–3, aliases and routing, bracket check, backfill of old conversations, `CLAUDE.md` text | codex | NP-1 |
+| **NP-3** | history tables, rules 1–3, aliases and routing, bracket check, backfill of old conversations, familiar sets in the envelope, `CLAUDE.md` text | codex | NP-1; NP-2 for the familiar part |
 | **NP-4** | spawn reservation (local and remote), lead name at approval, `/team` parse and card path, adopt pair, cap 9, capabilities `team.lead_name.v1`, `team.max_members.v2` | codex + **1f** | NP-3 |
 | **NP-5** | task groups key and capability | codex | — |
 | **NP-6** | decision log, `unattended_events` migration, `log` on the unattended route, capability `team.decision_log.v1` | codex + **1f** | — |
@@ -457,6 +499,7 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 - **NP-2**
   - A newer remote stamp with a different hash is fetched and stored with the remote stamp (M: store with now → the
     hosts ping-pong forever).
+  - With a remote clock 5 minutes ahead, a local save after a sync still wins (M: stamp with `now` alone).
   - Equal stamps → no fetch.
   - An older daemon (no `names`) → nothing.
 - **NP-3**
@@ -471,6 +514,14 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
   - An approval whose name was taken meanwhile is refused with `name_taken`, leaves no team row, and the approval
     stays open.
   - A team-row failure after the rename renames back and removes the alias (M: skip the undo → renamed without a team).
+  - A close lost to a concurrent deny, cancel or timeout after the rename renames back, writes no history and sends no
+    notice (M: treat `won = false` as success).
+  - A daemon restart with an open op keeps its reservation (M: no rebuild → a second spawn gets the same name).
+  - A registered local spawn and a remote `FinishRemoteSpawn` each record one pair (M: record at acceptance → a failed
+    spawn counts).
+  - `/team` with no words on a non-lead gives the card; on a lead it shows the roster.
+  - A new mod with an older `pdx` or daemon keeps today's `/team`.
+  - The lead-names route leaves out a name reserved after the request was made.
   - `ensureColumn` for `spawn_ops.pool_name` runs twice without error.
   - Two personas sharing a display name's first word → `/team <that word>` gives the card (M: take the first match).
   - Cap 9 accepted and 10 refused; the CLI message says 1–9.
@@ -478,6 +529,8 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 - **NP-6**
   - The log mixes decisions and toggles by time and keeps 30 (M: filter by `since` → the list empties after a toggle).
   - The toggle row and the state change commit together (M: write outside the transaction).
+  - A failing event insert leaves the state unchanged.
+  - Two concurrent toggles still settle by CAS: one wins, the other retries (`unattended.go:120-151`).
 - **NA-1..8**
   - `seatOf` on an address, a bare name, an alias and a legacy name.
   - A speech start after a tool row gets the line, and continuous text does not (M: mark every `agent_text`).

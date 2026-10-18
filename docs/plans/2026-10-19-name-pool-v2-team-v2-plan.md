@@ -24,12 +24,13 @@
 | `PUT /api/hostconfig/personas` | `{items, baseRevision}` → 200 `{revision}`. A stale base gives 409 with the current entry (as every collection). A bad item gives 400 `{error, index, field}`. The body cap is 4 MiB. |
 | `GET /api/hostconfig` | no longer has `personas` |
 | host event `hostconfig.personas` | `{revision}` (P4) |
-| envelope `names` (`internal/peers/envelope.go`) | `{personas: {at, host, hash, count}, familiar: [code]}`, optional |
+| envelope `names` (`internal/peers/envelope.go`) | `{personas: {at, host, hash, count}, familiar: [code]}`, optional. NP-2 adds `personas`, NP-3 adds `familiar` (codex #9) |
 | `POST /api/peers/personas` (peer token) | body `{to_host_id}` → `{items, stamp}` |
 | `PUT /api/hostconfig/task-groups` / key `task_groups` | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
 | `LeadPayload.lead_names` | `[{code, name, kind: "keep"|"former"|"lead"|"other", last_at}]`. It is always present from a daemon with `team.lead_name.v1`; `[]` means that no persona exists. |
 | `Grant.lead_name` | an optional code. Absent means keep the current name. |
 | decide error | 409 `{error: "name_taken", lead_names: [...]}` (the refreshed list) |
+| `GET /api/team/approvals/{id}/lead-names` | `{lead_names: [...]}`, computed now. 404 for an unknown id; 409 `not_open` for a closed approval (codex #11) |
 | person token request (`POST team.PersonRoute`) | optional `lead_name` |
 | `SpawnAnswer.pool_name` / team command `spawn.pool_name` | a code, or `""` |
 | `GET /api/team/unattended` `log` | `[{at, type: "decision", kind, origin, decided_by: {kind, label}, state: "approved"|"denied"|"timeout"} | {at, type: "toggle", on, by: {kind, label}}]`, newest first, ≤ 30; `at` = `deadline_at` for `timeout`, else `decided_at` (spec §8) |
@@ -43,22 +44,40 @@
 
 ```go
 type NameService interface {
-    // Rule 2 (spec §6.2) for lead's team; reserves the pick for opID until expiry. "" = nothing free.
-    ReserveMember(ctx context.Context, leadSessionID, opID string, until time.Time) (code string, err error)
-    ReserveExact(ctx context.Context, code, opID string, until time.Time) error // remote spawn: the lead host chose
-    ReleaseReservation(opID string)
+    // Reservations (spec §5.2): in memory, under the pool lock that assignPooled and settlePoolCollisions take,
+    // so reserving, releasing and counting held names are one atomic section (codex #2).
+    // Rule 2 for the lead's team; "" = nothing free.
+    ReserveMember(ctx context.Context, leadSessionID, opID string, at time.Time) (code string, err error)
+    // A remote spawn: the lead host chose. ErrNameTaken when the name is held here → the member host uses rule 3.
+    ReserveExact(ctx context.Context, code, opID string, at time.Time) error
+    ReleaseReservation(opID string) // registered, failed, voided, timed out, remote command expired; idempotent
+
     LeadCandidates(ctx context.Context, sessionID string) ([]LeadCandidate, error) // rule 1, "keep" first
+
     // Spec §5.3 order: RenameForLead (meta CAS + alias; ErrNameTaken when held) → team row → RecordLead.
-    // UndoRenameForLead reverses a rename whose team row failed (CAS back, delete the alias).
+    // UndoRenameForLead reverses a rename whose close failed OR was lost (CAS back, delete the alias).
     RenameForLead(ctx context.Context, sessionID, code string) (oldName string, err error)
     UndoRenameForLead(ctx context.Context, sessionID, oldName string) error
     RecordLead(ctx context.Context, sessionID string) error
-    RecordPair(ctx context.Context, leadSessionID, memberSessionID string) error // adopt; no-op unless both are persona codes
+
+    // Pairs by code (codex #3): a spawned member is recorded at registration with the op's pool_name, before the
+    // member session is named; adopt resolves both codes from the sessions. No-op unless both are persona codes.
+    RecordPairCodes(ctx context.Context, leadCode, memberCode string) error
+    CodeOf(ctx context.Context, sessionID string) (code string, ok bool)
+}
+
+// Registered by the team module (codex #2): the open spawn ops that carry a pool_name, read once by the
+// name service after boot to rebuild its reservations. The peers module never opens team.db.
+type SpawnReservationReader interface {
+    OpenReservations(ctx context.Context) ([]Reservation, error) // {OpID, Code, CreatedAt}
 }
 ```
 
-- The registry key is `peers.NameServiceKey`. The team module tolerates its absence (a test build without peers): no
-  reservation, no lead names, and today's behaviour.
+- The registry keys are `peers.NameServiceKey` and `team.SpawnReservationsKey`. Both are resolved at use time, so the
+  start order of the modules does not matter.
+- The team module tolerates the name service's absence (a test build without peers): no reservations, no lead names,
+  and today's behaviour.
+- The name service tolerates the reader's absence: it then starts with no reservations.
 
 ## 2. Phases (one PR each, ≤ 800 lines / 20 files with tests; TDD; codex R1 + R2)
 
@@ -67,7 +86,7 @@ type NameService interface {
 | NP-0 | daemon member | Measurement only (P5), result into this plan by a docs commit | — |
 | NP-1 | daemon member A | personas key, routes, validation, event, pool registry, picker, `journal.DisplayName` | §1 |
 | NP-2 | daemon member A | envelope `names`, sync apply, peer route | NP-1 |
-| NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `CLAUDE.md` | NP-1 |
+| NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1; NP-2 for its last task (`familiar`) |
 | NP-4 | daemon member B | reservations (local and remote), lead names at approval, `/team` parse and card path, adopt pair, cap 9 | NP-0, NP-3 |
 | NP-5 | daemon member A | `task_groups` key and capability | §1 |
 | NP-6 | daemon member A | decision log, `unattended_events`, `log` field | §1 |
@@ -128,6 +147,8 @@ type NameService interface {
   calls `HostCaller.Call(..., "/api/peers/personas", ...)` and stores the result through a hostconfig method that keeps
   the given stamp (`PutSynced`).
 - One sync runs at a time, and at most one fetch per host per refresh.
+- The stamp of a local save is `max(now, highest at seen + 1)` (spec §4.3, codex #7). The highest `at` seen is kept in
+  memory, updated from each envelope and each store, and taken from the stored stamp at boot.
 
 **Tests**: as spec §11 NP-2, plus these:
 - A fetch that fails leaves the local set untouched (M: clear on error).
@@ -138,8 +159,13 @@ type NameService interface {
 - Migrations in the meta DB: `name_leads`, `name_pairs`, `peer_name_aliases` (`internal/store/meta.go:67`, one
   `migrateX` each).
 - `RenamePool` gains the alias insert in its transaction. `Assign` deletes an alias row for the name it assigns.
-- Routing: an alias tier after tier 1 (`address.go:~333`) resolves to the alias's ref, then goes through
-  `resolveRefHead`. The bracket check accepts aliases.
+- Routing (codex #4):
+  - `ResolveSnapshot` gains `Aliases map[string]string` (full alias name → ref).
+  - `Resolve` (`address.go:182`) checks it after tier 1 misses (`:321-333`) and goes on with that ref through
+    `resolveRefHead`. The combined form's bracket check accepts a name found in the map for that ref.
+  - `send.go:451`, the only production caller, fills the map from `PeerNameStore.Aliases()`. The map is cached in the
+    module and dropped on every rename or alias change.
+  - Tests at both levels: `Resolve` (a pure table test) and a send through `send.go` to an alias.
 - The rules (spec §6.2) live in `internal/module/peers/namerules.go` as pure functions over `(free, history, personas)`,
   with table tests. `assignPooled` uses rule 3.
 - Backfill (spec §6.4) is a pass after `settlePoolCollisions` (`module.go:866`) that renames under the pool lock.
@@ -149,6 +175,8 @@ type NameService interface {
   - It sends each renamed session the notice, through the `[pdx team]` notice channel. NP-3 confirms which channel
     reaches a session that is not a team seat, and records it here.
 - Alias retention (spec §6.3) runs once per hour: lineage dead for 30 days, and a cap of 512 rows.
+- **Last task, after NP-2 has merged:** the envelope's `familiar` (the last 64 codes from `name_leads` ∪
+  `name_pairs.member_code`), recorded per host by the snapshot, and the union used by rules 2 and 3 (codex #9).
 - The name service (§1.3) is implemented, except the reservations, which come in NP-4.
 - `CLAUDE.md` 「Peer addresses」: the persona names, aliases and backfill; the sentence 「已經有名字的舊對話維持原名」 is
   replaced.
@@ -160,22 +188,38 @@ type NameService interface {
 
 ### NP-4 (`internal/module/team`, `internal/team`, `cmd/pdx`, the mod, the skill)
 
-- `spawn_ops.pool_name` (`spawnCols`). `ReserveMember` at `accepted`. The answer carries the name. `ReleaseReservation`
-  runs on failure.
-- The remote `spawn` command carries `pool_name`, and the member host calls `ReserveExact`.
+- `spawn_ops.pool_name` (`spawnCols`). `ReserveMember` at `accepted`. The answer carries the name.
+- `ReleaseReservation` at every end of an op: registered, failed, voided, timed out, and the expiry of a remote command.
+- The team module registers `SpawnReservationReader` (open ops with a `pool_name`) for the boot rebuild.
+- The remote `spawn` command carries `pool_name`, and the member host calls `ReserveExact`. `ErrNameTaken` → no
+  reservation, and the spawn goes on.
 - Naming a spawned session uses the NP-0 path.
-- `LeadPayload.lead_names` is filled at request creation.
+- Pairs (codex #3):
+  - a local op reaching `registered` → `RecordPairCodes(lead code, op.pool_name)`;
+  - a remote spawn → the same on the lead host, when `FinishRemoteSpawn` records the registration
+    (`spawn_remote.go:185-217`);
+  - failures are logged.
+- `LeadPayload.lead_names` is filled at request creation. `GET /api/team/approvals/{id}/lead-names` answers a fresh
+  list (codex #11).
+- **Per-approval lock** (codex #1): an in-process keyed mutex held across rename, close and undo. The sweeper's
+  `closeExpired` (`sweeper.go:197-207`) takes it for lead approvals.
 - On decide with `lead_name`, the order follows spec §5.3. `BecomeLead` is split into `RenameForLead` (meta CAS plus
   alias) and `RecordLead` (history), with `UndoRenameForLead` (CAS back plus deleting the alias) between them:
   1. `RenameForLead`. `ErrNameTaken` → 409 `name_taken`, and the approval stays open.
-  2. `CloseLeadApproved`. If it fails, `UndoRenameForLead` runs and the error is returned.
+  2. `CloseLeadApproved`. **An error or a lost CAS (`won = false`, `team_store.go:460-480`)** → `UndoRenameForLead`.
+     An error is returned as such; a lost CAS answers as a lost decide does today.
   3. `RecordLead`. A failure is only logged.
   4. The rename notice (spec §6.4).
   - The §1.3 interface is amended to match.
 - Person token: `lead_name` is stored on the token and applied at approve.
 - Mod `member.js` `parseTeamArgs`: the first word is checked against the persona list. The mod reads it through
-  `pdx` (a new `pdx names --json`, listing the active codes and display names). A match goes into `--as`. No match → the
-  `card` kind, which creates a plain lead approval with the person decider.
+  `pdx` (a new `pdx names --json`, listing the active codes and display names, and whether the daemon has
+  `team.lead_name.v1`). A match goes into `--as`. No match → the `card` kind, which creates a plain lead approval with
+  the person decider.
+  - `/team` with no words: a non-lead → the `card` kind; a lead → the roster as today (`register.js:1057`) (codex #5).
+  - Fallback (codex #10): when `pdx names` fails (an older `pdx`), or the daemon lacks `team.lead_name.v1`, the parser
+    gives today's kinds (`lead` with the words as the note). A mixed-version test runs the mod against a stub `pdx`
+    that has no `names` subcommand.
 - Skill text: one line on `--as`.
 - `RecordPair` on adopt approval.
 - Cap 9: every place in spec §5.1, plus the capabilities.
@@ -196,8 +240,13 @@ type NameService interface {
 ### NP-6 (`internal/module/hostconfig`, `internal/module/team`)
 
 - `unattended_events` in `host_config.db` (`internal/module/hostconfig/store.go:44`):
-  - The store's `Put` gains an optional in-transaction callback, `PutWith(key, value, base, func(tx) error)`.
-  - `SetUnattended` (`unattended.go:112`) uses it to insert the event row and trim the table to 100.
+  - The store's `Put` gains an optional in-transaction callback: `PutWith(key, value, base, func(q execQuerier) error)`.
+  - `q` is the **same dedicated `*sql.Conn`** that `Put` has under `BEGIN IMMEDIATE` (`store.go:97-151`), behind a
+    small interface with `ExecContext` and `QueryRowContext`. It is not a `*sql.Tx`: switching to `db.Begin` would
+    turn concurrent CAS writes into `SQLITE_BUSY_SNAPSHOT` instead of 409 (codex #8).
+  - A callback error rolls the whole write back.
+  - `SetUnattended` (`unattended.go:112`) uses it to insert the event row and trim the table to 100. Its retry on a
+    stale entry (`:120-151`) is unchanged.
 - A reader is registered in core for the team module.
 - `store_unattended.go`: `ListRecentDecisions(limit)` over the kinds in L11 and the states `approved`, `denied` and
   `timeout`, any decider.
@@ -214,7 +263,8 @@ type NameService interface {
 - `usePersonaStore`:
   - keyed per host;
   - read on connect and on `hostconfig.personas`;
-  - `merged()` = the union by code, the newest stamp winning.
+  - `current()` = **the whole collection with the highest stamp** (`at`, then host), as the daemons decide. It is
+    never a union by code (spec §9.2, codex #6). The page edits and saves that collection.
 - `seatOf(addr)` in `lib/names/seat.ts`, as spec §9.2. It replaces the four inline slicers.
 - `<Avatar size code fallbackColor>`.
 - The persona page:
@@ -230,7 +280,8 @@ type NameService interface {
 
 **Tests**:
 - `seatOf` cases.
-- The store's merge rule.
+- The store picks the highest-stamp collection whole: a code that only the older host has is not shown (M: union by
+  code).
 - The import dry-run.
 - A rasterised image under 32 KB for each style (vitest with a canvas stub: assert that the call is made at 128 px; the
   real size is checked once on the App by the lead).
@@ -241,7 +292,8 @@ type NameService interface {
 - Each one follows spec §9.3–9.7. The places and files are listed there.
 - NA-4 keeps the tab-switch regression test (the CLAUDE.md checklist): the settings block is part of a tab-hosted panel.
 - NA-6 stores the toggle per device (`localStorage` through the existing device prefs).
-- NA-7 shows `lead_names` with avatars. On `name_taken` it refreshes from the 409 body.
+- NA-7 reads `GET /api/team/approvals/{id}/lead-names` when the dialog opens, and falls back to the payload's list
+  when that read fails. It shows the names with avatars. On `name_taken` it refreshes from the 409 body.
 - NA-8 drops the cap column and the folders, and shows `log` with toggles in bold.
 
 ## 3. Review, release, tests
