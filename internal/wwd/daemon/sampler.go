@@ -119,6 +119,11 @@ func (s *Sampler) Tick(now time.Time) {
 		}
 		o.Active, o.Reason = true, "fault: owner_active_file"
 		f.Owner = &o
+	} else if f.Owner == nil && s.opts.OwnerRule == "" && s.opts.Fault.OwnerFileAbsent() {
+		// no owner rule on this host ([owner] off; with a rule a null block is a failed reading, and a yield must stay) and the file is
+		// confirmed absent: a null block would not end a yield the file started (yield.Observe), so the block says the owner is away, with a
+		// reason that names the hook (jobusage ignores it, like the active one)
+		f.Owner = &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
 	}
 	s.mu.Lock()
 	in := derived.Input{
