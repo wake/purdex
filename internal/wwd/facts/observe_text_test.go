@@ -29,6 +29,9 @@ func TestRedactCommandAndSignatureCarryNoSecret(t *testing.T) {
 		"a purdex token":              {[]string{"pdx", "msg", "pdxp_AbCdEf0123456789"}, "pdxp_AbCdEf0123456789"},
 		"a long mixed run":            {[]string{"deploy", "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"}, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8"},
 		"a shell script":              {[]string{"bash", "-c", "curl --token supersecretvalue1 https://x"}, "supersecretvalue1"},
+		"a quoted script value with a space":  {[]string{"bash", "-c", "curl --token 'first tailfragment' https://x"}, "tailfragment"},
+		"a double-quoted flag=value, spaced":  {[]string{"sh", "-lc", `tool --password="one tailfragment" go`}, "tailfragment"},
+		"an unterminated quote in the script": {[]string{"bash", "-c", "curl --token 'first tailfragment"}, "tailfragment"},
 	} {
 		if got := RedactCommand(c.argv); strings.Contains(got, c.secret) {
 			t.Errorf("%s: the command keeps the secret: %q", name, got)

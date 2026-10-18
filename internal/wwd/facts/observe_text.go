@@ -70,9 +70,40 @@ func scrubbed(argv []string) []string {
 	argv = cleanArgv(argv)
 	out := redact.ScrubArgv(argv)
 	if i := shellScript(argv); i >= 0 {
-		out[i] = strings.Join(redact.ScrubArgv(strings.Fields(argv[i])), " ")
+		out[i] = strings.Join(redact.ScrubArgv(splitShellWords(argv[i])), " ")
 	}
 	return out
+}
+
+// splitShellWords splits on white space outside quotes and keeps the quote characters in the words, so a quoted value with spaces
+// ('secret value') stays one word for the scrubber instead of leaving its tail behind. An unterminated quote runs to the end.
+func splitShellWords(s string) []string {
+	var words []string
+	var cur strings.Builder
+	var quote rune
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			cur.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+			cur.WriteRune(r)
+		case unicode.IsSpace(r):
+			if cur.Len() > 0 {
+				words = append(words, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		words = append(words, cur.String())
+	}
+	return words
 }
 
 // RedactCommand is argv as one line with secrets replaced (internal/redact), control characters dropped and at most
