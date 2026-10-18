@@ -101,18 +101,44 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 			return Workspace{}, fmt.Errorf("snapshot: the bundle holds %s, not the snapshot commit %s", got, in.Commit)
 		}
 	}
-	clone, dir := in.Clone, in.Dir
+	return addWorktree(ctx, in.Clone, in.Dir, in.Commit, ref)
+}
+
+// CheckoutLocal makes a workspace of a commit that is in a repository on this host (the origin's own, for a job it runs itself): a
+// detached worktree at dir, with no download. The repository is gitDir (its work tree root, or a git directory); the checkout runs no
+// hooks. Cleanup removes the worktree and the directory.
+func CheckoutLocal(ctx context.Context, gitDir, commit, dir string) (Workspace, error) {
+	if !commitRe.MatchString(commit) || dir == "" {
+		return Workspace{}, errors.New("snapshot: CheckoutLocal needs a commit and a directory")
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		return Workspace{}, fmt.Errorf("snapshot: %s is already there", dir)
+	}
+	if err := ownRepo(ctx, gitDir); err != nil {
+		return Workspace{}, err
+	}
+	if !hasCommit(ctx, gitDir, commit) {
+		return Workspace{}, fmt.Errorf("snapshot: %s does not have the commit %s", gitDir, commit)
+	}
+	return addWorktree(ctx, gitDir, dir, commit, "")
+}
+
+// addWorktree adds a detached worktree of commit at dir in repo. ref, when it is not "", is a ref of the job that Cleanup removes too.
+func addWorktree(ctx context.Context, repo, dir, commit, ref string) (Workspace, error) {
 	cleanup := func() error {
-		// the worktree first, then the ref (its commit is then free for the clone's gc), then whatever is left of the directory
-		_, err1 := git(context.Background(), "wwd.snapshot-wtrm", clone, "worktree", "remove", "--force", dir)
-		_, err2 := git(context.Background(), "wwd.snapshot-unref", clone, "update-ref", "-d", ref)
-		_, err3 := git(context.Background(), "wwd.snapshot-prune", clone, "worktree", "prune")
+		// the worktree first, then the ref (its commit is then free for the repository's gc), then whatever is left of the directory
+		_, err1 := git(context.Background(), "wwd.snapshot-wtrm", repo, "worktree", "remove", "--force", dir)
+		var err2 error
+		if ref != "" {
+			_, err2 = git(context.Background(), "wwd.snapshot-unref", repo, "update-ref", "-d", ref)
+		}
+		_, err3 := git(context.Background(), "wwd.snapshot-prune", repo, "worktree", "prune")
 		err4 := os.RemoveAll(dir)
 		return errors.Join(err1, err2, err3, err4)
 	}
-	// core.hooksPath: the clone's post-checkout hook is the host's, not the job's, and would run before `start` and outside the job's
+	// core.hooksPath: the repository's post-checkout hook is the host's, not the job's, and would run before `start` and outside the job's
 	// environment. (A filter driver the host configured is the host's too: it runs only for a path the snapshot's .gitattributes names.)
-	if _, err := git(ctx, "wwd.snapshot-worktree", clone, "-c", "core.hooksPath="+os.DevNull, "worktree", "add", "--detach", "--force", dir, in.Commit); err != nil {
+	if _, err := git(ctx, "wwd.snapshot-worktree", repo, "-c", "core.hooksPath="+os.DevNull, "worktree", "add", "--detach", "--force", dir, commit); err != nil {
 		_ = cleanup() // git removes what it made when the checkout fails; this makes sure, and drops the ref
 		return Workspace{}, err
 	}
