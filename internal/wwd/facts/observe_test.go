@@ -460,6 +460,24 @@ func TestTrackerStopsKeepingAVerdictWhenTheIdentityReadKeepsFailing(t *testing.T
 	}
 }
 
+// With an identity that is never readable nothing is carried from one sample to the next: what can be read decides each time.
+func TestTrackerClassifiesEverySampleWhileTheIdentityIsNeverReadable(t *testing.T) {
+	h, tr := newHost(), newTracker() // newTracker: the identity is unknown
+	h.add(200, 100, "node", []string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"})
+	h.rec(200).FootprintBytes = mb(1500)
+	for n := 0; n < 3; n++ {
+		step(tr, h, n)
+	}
+	if len(tr.Live()) != 0 {
+		t.Fatal("a codex wrapper is never a tree")
+	}
+	h.args[200] = []string{"node", "server.js"} // another node holds the pid
+	step(tr, h, 3)
+	if live := tr.Live(); len(live) != 1 || live[0].Signature != "node server.js" {
+		t.Fatalf("%+v", live)
+	}
+}
+
 // A long gap between samples (the machine slept, wwd was stopped) is not charged as CPU.
 func TestTrackerCapsAGapBetweenSamples(t *testing.T) {
 	h := newHost()

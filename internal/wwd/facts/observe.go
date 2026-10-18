@@ -106,8 +106,9 @@ func NewTracker(cfg ObserveConfig) *Tracker {
 type harnessVerdict struct {
 	harness bool
 	ident   string // the process's start identity when it was classified ("" when unknown)
-	// failedAt is the sample in which a failed identity read first let this verdict stand (0: none). Later samples reclassify.
-	failedAt int
+	// unknownAt is the sample in which the verdict stood without an identity to check it by (0: none). It stands that way for the
+	// one sample only; the next one classifies again.
+	unknownAt int
 }
 
 // isHarness says whether p is part of codex's own machinery: named codex..., the app-server broker, or a node/python wrapper
@@ -118,14 +119,16 @@ func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 	id, _ := t.ident(p.PID)
 	if v, ok := t.harness[k]; ok {
 		switch {
-		case v.ident == id: // the same process (or no identity to tell by, on either side)
-			return v.harness
-		case id == "": // a read that failed: the verdict stands for one sample, not for as long as the reads keep failing
-			if v.failedAt == 0 || v.failedAt == t.sample {
-				v.failedAt = t.sample
-				t.harness[k] = v
+		case id != "":
+			if v.ident == id { // the same process
 				return v.harness
 			}
+		case v.unknownAt == t.sample: // no identity to check by, and this sample already decided
+			return v.harness
+		case v.ident != "" && v.unknownAt == 0: // one failed read after a good one keeps the verdict for this sample
+			v.unknownAt = t.sample
+			t.harness[k] = v
+			return v.harness
 		}
 	}
 	h := strings.HasPrefix(strings.ToLower(path.Base(p.Name)), "codex") || kindOf(p, c) == "codex-broker"
@@ -140,7 +143,11 @@ func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 			}
 		}
 	}
-	t.harness[k] = harnessVerdict{harness: h, ident: id}
+	v := harnessVerdict{harness: h, ident: id}
+	if id == "" {
+		v.unknownAt = t.sample
+	}
+	t.harness[k] = v
 	return h
 }
 
