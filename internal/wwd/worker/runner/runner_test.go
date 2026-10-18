@@ -756,3 +756,14 @@ func TestLocksAreComparedAsASet(t *testing.T) {
 		t.Fatalf("kind=%s err=%v: same keys in another order are the same locks", e.Kind, e.Err)
 	}
 }
+
+func TestFewerLocksThanListedIsAlsoAMismatch(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "mysql"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql", "tmux")), nil); e.Kind != KindSkipped || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+}
