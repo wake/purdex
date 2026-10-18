@@ -91,10 +91,10 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 	return out, true
 }
 
-// valueLike says whether a word after a flag can be its value: not another flag, and not a path or pattern (those are the task's
-// plain words, like the trailing ./... of `go test -timeout 30m ./...`).
+// valueLike says whether a word after a flag can be its value: not another flag, and not a relative path or pattern (those are the
+// task's plain words, like the trailing ./... of `go test -timeout 30m ./...`).
 func valueLike(w string) bool {
-	return w != "" && !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, ".") && !strings.Contains(w, "/")
+	return w != "" && !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, ".")
 }
 
 func equal(a, b []string) bool {
@@ -170,10 +170,10 @@ func plainFile(taskDir, abs, rel string) bool {
 		return false
 	}
 	real, err := filepath.EvalSymlinks(abs)
-	if err != nil || !within(realDir, real) {
+	if err != nil {
 		return false
 	}
-	if r, err := filepath.Rel(realDir, real); err != nil || filepath.ToSlash(r) != rel {
+	if r, err := filepath.Rel(realDir, real); err != nil || filepath.ToSlash(r) != rel { // outside, or moved by a link on the way
 		return false
 	}
 	st, err := os.Stat(real)

@@ -38,6 +38,15 @@ class = "release"
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test"}).Action, "the task's trailing ./... is part of it")
 }
 
+// A flag that carries its value with = has no value word: the plain word after it is the task's own.
+func TestMatch_AFlagWithEqualsTakesNoValueWord(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, "[entry]\nmode = \"deny\"\n[tasks.t]\nrun = \"make test --mode=fast onlyfast\"\nargs = \"none\"\n")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"make", "test", "onlyfast"}).Action, "the flag left out, its neighbour kept")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"make", "test", "--mode=fast", "onlyfast"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"make", "test"}).Action, "the plain word is part of the task")
+}
+
 // The manifest is the repository's: the search stops at the first repository root, so a project inside another repository that has
 // a manifest does not borrow it, and a repository without one has none.
 func TestMatch_TheManifestIsTheRepositorys(t *testing.T) {
@@ -92,6 +101,7 @@ func TestNormalize_RunnerOptions(t *testing.T) {
 		{[]string{"npx", "--yes", "--", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"npx", "--prefix", "spa", "vitest"}, []string{"vitest"}},
 		{[]string{"pnpm", "exec"}, nil},
+		{[]string{"npx", "--", "-p", "x"}, []string{"-p", "x"}}, // after -- everything is the command
 	} {
 		assert.Equal(t, c.want, normalize(c.in), c.in)
 	}
