@@ -73,6 +73,8 @@ export interface QueueEntry {
   claimAt?: number
   /** Set while the daemon reports stages for this message (`conversations.stages.v1`); absent = today's matching. The entry is then THE bubble: a row it claimed is covered, not the entry. */
   stage?: StageMark
+  /** Set on the view while the host reports stages: before the daemon's first stage the entry is 「在本機」 (still on this device). */
+  stagesHost?: boolean
 }
 
 /** A row of Claude Code's own queue line, identified by (text, at). */
@@ -147,9 +149,9 @@ export class SendQueue {
     for (const [id, t] of [...this.readTimers]) {
       if (!this.list.some((e) => e.id === id && e.stage?.stage === 'read')) { clearTimeout(t); this.readTimers.delete(id) }
     }
-    const rows = [...this.list.filter((e) => e.stage !== undefined && e.matched && e.claimAt !== undefined).map((e) => ({ text: e.text.trimEnd(), at: e.claimAt! })), ...this.spent]
+    const rows = this.coveredOf(this.list, this.spent)
     if (rows.length !== this.covered.length || rows.some((r, i) => r.text !== this.covered[i].text || r.at !== this.covered[i].at)) this.covered = rows
-    this.view = this.list.map((e) => ({ ...e }))
+    this.view = this.list.map((e) => this.viewOf(e))
     this.listeners.forEach((l) => l())
   }
 
@@ -235,17 +237,41 @@ export class SendQueue {
    * `maybe`. Idempotent: it emits only on a change (the caller reports on every header change and on every queue change).
    */
   setHeaderQueue(rows: readonly HeaderRow[]): void {
+    const res = this.claimRows(this.list, this.spent, rows)
+    this.spent = res.spent
+    if (res.changed) this.emit()
+  }
+
+  /**
+   * What the entries and the covered rows will be once `rows` is reported (setHeaderQueue), without touching the queue: PendingTail draws from this, so a
+   * header frame that arrives before the driver's effect has run is already one bubble in the render it arrives in.
+   */
+  previewHeaderQueue(rows: readonly HeaderRow[]): { entries: readonly QueueEntry[]; covered: readonly HeaderRow[] } {
+    const list = this.list.map((e) => this.viewOf(e))
+    const res = this.claimRows(list, [...this.spent], rows)
+    return { entries: list, covered: this.coveredOf(list, res.spent) }
+  }
+
+  private viewOf(e: QueueEntry): QueueEntry {
+    return this.stagesMode ? { ...e, stagesHost: true } : { ...e }
+  }
+
+  private coveredOf(list: readonly QueueEntry[], spent: readonly HeaderRow[]): HeaderRow[] {
+    return [...list.filter((e) => e.stage !== undefined && e.matched && e.claimAt !== undefined).map((e) => ({ text: e.text.trimEnd(), at: e.claimAt! })), ...spent]
+  }
+
+  private claimRows(list: QueueEntry[], spentIn: HeaderRow[], rows: readonly HeaderRow[]): { changed: boolean; spent: HeaderRow[] } {
     const rest = rows.map((r) => ({ text: r.text.trimEnd(), at: r.at, used: false }))
-    const handed = this.list.filter((e) => e.state === 'sent' && e.mode !== undefined)
+    const handed = list.filter((e) => e.state === 'sent' && e.mode !== undefined)
     let changed = false
     const free = rest.map((r) => ({ text: r.text, at: r.at, free: true }))
-    const stillListed = this.spent.filter((sp) => { // one to one: a row listed once keeps one spent claim
+    const stillListed = spentIn.filter((sp) => { // one to one: a row listed once keeps one spent claim
       const r = free.find((x) => x.free && x.at === sp.at && x.text === sp.text)
       if (r) r.free = false
       return r !== undefined
     })
-    if (stillListed.length !== this.spent.length) { this.spent = stillListed; changed = true }
-    for (const e of this.list) if (!handed.includes(e) && e.matched) { e.matched = false; changed = true }
+    if (stillListed.length !== spentIn.length) changed = true
+    for (const e of list) if (!handed.includes(e) && e.matched) { e.matched = false; changed = true }
     // 1. a claim stands while its row is rendered
     for (const e of handed) {
       if (!e.matched) continue
@@ -264,7 +290,7 @@ export class SendQueue {
       changed = true
     }
     for (const e of handed) if (!e.matched && this.staleHanded(e)) { this.markUnseen(e); changed = true }
-    if (changed) this.emit()
+    return { changed, spent: stillListed }
   }
 
   private staleHanded(e: QueueEntry): boolean {
@@ -280,6 +306,7 @@ export class SendQueue {
   setStagesMode(on: boolean): void {
     if (this.stagesMode === on) return
     this.stagesMode = on
+    this.emit()
   }
 
   /**

@@ -48,7 +48,7 @@ interface Props {
   layout?: 'deck' | 'chat'
 }
 
-export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layout = 'deck' }: Props) {
+export function PendingTail({ paneKey, hostId, sessionId, queued, layout = 'deck' }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
@@ -56,10 +56,12 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layou
   // the rows the deck renders, for Up (is there a Claude Code queue to take back?) and to end the hide after a take-back once the header caught up
   const userRowsSig = JSON.stringify(queued.filter((q) => q.source !== 'peer').map((q) => ({ text: q.text, at: q.at })))
   useEffect(() => { setHeaderUserRows(key, JSON.parse(userRowsSig) as HeaderRow[]) }, [key, userRowsSig])
-  const shownEntries = entries.filter((e) => e.state !== 'superseded' && (!e.matched || e.stage !== undefined))
+  // What the queue will be once the driver's effect has reported this header: the render the frame arrives in is already one bubble per message
+  const preview = queue.previewHeaderQueue(JSON.parse(userRowsSig) as HeaderRow[])
+  const shownEntries = preview.entries.filter((e) => e.state !== 'superseded' && (!e.matched || e.stage !== undefined))
   // a row a staged entry stands for is not drawn a second time (one bubble per message)
   // one to one: a row is covered by ONE claim, so a second row with the same text and stamp is still someone else's
-  const covered = queue.coveredRows().map((c) => ({ ...c, used: false }))
+  const covered = preview.covered.map((c) => ({ ...c, used: false }))
   const rows = queued.filter((q) => {
     if (q.source === 'peer') return true
     if (isRowHidden(tb, q)) return false
@@ -73,7 +75,7 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layou
     <div data-testid="pending-tail" className="space-y-3">
       {rows.map((q, i) => <HeaderQueuedLine key={`${q.at}:${i}`} item={q} onTakeBack={q.source === 'peer' ? undefined : takeBack} busy={tb.busy} layout={layout} />)}
       <QueuedMessages
-        entries={entries}
+        entries={preview.entries}
         layout={layout}
         className={layout === 'chat' ? 'flex flex-col items-end gap-2' : 'flex flex-col gap-2'}
         canUndo={adapterOf(key)?.recall !== false}

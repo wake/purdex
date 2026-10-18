@@ -2684,6 +2684,7 @@
   "deck.send.network": "連線中斷，可能已送出，請看紀錄",
   "deck.send.handed": "已送出",
   "deck.send.handed_keys": "已送出 · 未經 mod 確認",
+  "deck.stage.local": "在本機",
   "deck.stage.host": "已到主機",
   "deck.stage.queued": "在佇列",
   "deck.stage.failed": "送不出：{{reason}}",

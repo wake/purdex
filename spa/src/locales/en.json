@@ -2684,6 +2684,7 @@
   "deck.send.network": "Connection lost; may have been sent, check the transcript",
   "deck.send.handed": "Sent",
   "deck.send.handed_keys": "Sent · not confirmed by the mod",
+  "deck.stage.local": "On this device",
   "deck.stage.host": "At the host",
   "deck.stage.queued": "Queued",
   "deck.stage.failed": "Not sent: {{reason}}",

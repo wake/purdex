@@ -50,7 +50,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
         // Until the transcript has it, the message keeps the not-yet-accepted frame. "Queued" is only ever said of what the App still holds (the send
         // buffer, with its Undo); a message already handed out says it is on its way, or sent.
         if (e.state === 'undo' || e.state === 'sending' || e.state === 'sent') {
-          const label = e.stage ? (mark ? t(mark.key, mark.params) : '') : e.state === 'undo' ? t('deck.user.queued') : e.state === 'sending' ? t('deck.send.sending') : e.mode === 'keys' ? t('deck.send.handed_keys') : t('deck.send.accepted')
+          const label = e.stage ? (mark ? t(mark.key, mark.params) : '') : e.stagesHost && (e.state === 'undo' || e.state === 'sending') ? t('deck.stage.local') : e.state === 'undo' ? t('deck.user.queued') : e.state === 'sending' ? t('deck.send.sending') : e.mode === 'keys' ? t('deck.send.handed_keys') : t('deck.send.accepted')
           // the whole block takes that entry back: the held one (no daemon call), or a handed one (Claude Code's queue)
           const held = e.state === 'undo' && canUndo
           const handed = e.state === 'sent' && e.mode !== undefined && !!onTakeBack

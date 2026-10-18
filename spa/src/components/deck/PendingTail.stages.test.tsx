@@ -93,12 +93,47 @@ describe('one bubble', () => {
 })
 
 describe('one bubble, render by render', () => {
+  it('a header row that arrives before the queue has claimed it is not drawn beside the staged entry (the render the frame arrives in)', async () => {
+    const { q, id } = await handed()
+    act(() => q.setStages({ [id]: st(id, 'queued') })) // staged, and no setHeaderQueue yet: nothing is claimed in the queue
+    expect(q.coveredRows()).toEqual([])
+    render(tail(q, [{ ...ROW, source: 'user' }]))
+    expect(screen.getAllByTestId('queued-message')).toHaveLength(1)
+    expect(screen.queryByTestId('header-queued')).toBeNull()
+  })
+  it('a row stamped long before the hand-out is someone else\'s: it is drawn, and so is the entry', async () => {
+    const { q, id } = await handed()
+    act(() => q.setStages({ [id]: st(id, 'queued') }))
+    render(tail(q, [{ text: 'hi', at: 900_000, source: 'user' }]))
+    expect(screen.getAllByTestId('queued-message')).toHaveLength(1)
+    expect(screen.getAllByTestId('header-queued')).toHaveLength(1)
+  })
   it('two header rows with the same text and stamp, one of them the entry\'s: the other is still drawn', async () => {
     const { q, id } = await handed()
     act(() => { q.setStages({ [id]: st(id, 'queued') }); q.setHeaderQueue([ROW, ROW]) })
     render(tail(q, [{ ...ROW, source: 'user' }, { ...ROW, source: 'user' }]))
     expect(screen.getAllByTestId('queued-message')).toHaveLength(1)
     expect(screen.getAllByTestId('header-queued')).toHaveLength(1)
+  })
+})
+
+describe('on a host that reports stages, before its first stage', () => {
+  it('a message in the send buffer or going out is 「On this device」', async () => {
+    const q = sendQueueFor(KEY, () => port)
+    q.setStagesMode(true)
+    q.enqueue('hi')
+    const { unmount } = render(tail(q))
+    expect(screen.getByTestId('stage-mark')).toHaveTextContent('On this device')
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    render(tail(q))
+    expect(screen.getByTestId('stage-mark')).toHaveTextContent('On this device')
+  })
+  it('without stages the labels are today\'s', () => {
+    const q = sendQueueFor(KEY, () => port)
+    q.enqueue('hi')
+    render(tail(q))
+    expect(screen.getByTestId('stage-mark')).toHaveTextContent('You · queued')
   })
 })
 
