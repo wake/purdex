@@ -51,6 +51,9 @@ type Options struct {
 	NewID func() string
 	// Pinner pins the snapshots (see Pinner). Nil: nothing is pinned, which is for tests and for a host with no git.
 	Pinner Pinner
+	// LeaseS and RenewS are the lease a claim and each heartbeat hand out, and how often the worker should renew (default 60 and 15).
+	// Tests shorten them.
+	LeaseS, RenewS int
 }
 
 // Queue is the job queue of one origin.
@@ -62,6 +65,8 @@ type Queue struct {
 	newI func() string
 	seq  *sequencer
 	pin  Pinner
+
+	leaseS, renewS int
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
@@ -77,12 +82,25 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	if o.Origin == "" {
 		return nil, errors.New("queue: Options.Origin is required")
 	}
-	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer(), pin: o.Pinner}
+	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer(), pin: o.Pinner, leaseS: o.LeaseS, renewS: o.RenewS}
 	if q.now == nil {
 		q.now = time.Now
 	}
 	if q.newI == nil {
 		q.newI = func() string { return newJobID(q.now()) }
+	}
+	if q.leaseS == 0 {
+		q.leaseS = defaultLeaseS
+	}
+	if q.renewS == 0 {
+		q.renewS = defaultRenewS
+	}
+	if q.leaseS < 0 || q.renewS < 0 || q.renewS >= q.leaseS {
+		return nil, fmt.Errorf("queue: Options.RenewS (%d) must be positive and shorter than LeaseS (%d)", q.renewS, q.leaseS)
+	}
+	// a restart gives the jobs workers still hold a full lease before the first sweep can lapse them (spec 4.2)
+	if err := extendHeldLeases(context.Background(), db, q.now().UnixMilli(), q.leaseS); err != nil {
+		return nil, fmt.Errorf("queue: restart lease: %w", err)
 	}
 	return q, nil
 }

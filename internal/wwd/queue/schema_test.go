@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,7 +49,7 @@ func TestJobsTableHasEveryColumnOfTheStateMachine(t *testing.T) {
 	}
 	for _, c := range []string{
 		"id", "origin", "repo_name", "snap_commit", "task", "args", "class", "labels", "locks", "cacheable", "timeout_s",
-		"supersede_key", "interruptible", "queue_timeout_s", "adhoc", "sub_session", "created_at", "state", "attempts",
+		"supersede_key", "interruptible", "queue_timeout_s", "adhoc", "sub_session", "created_at", "state", "attempts", "lapses",
 		"claim_worker", "claim_id", "claim_since", "lease_deadline", "lease_s", "cancel_requested", "superseded_by",
 		"result", "result_claim_id", "finished_at", "log_size", "log_at", "local", "git_dir", "pinned", "updated_at",
 	} {
@@ -73,7 +74,7 @@ func TestAVersionOneDatabaseIsUpgraded(t *testing.T) {
 
 	var v int
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 2, v)
+	assert.Equal(t, schemaVersion, v)
 	var dir string
 	require.NoError(t, f.db.QueryRow(`SELECT git_dir FROM git_pins WHERE id = ?`, old).Scan(&dir))
 	assert.Equal(t, f.gitDir, dir, "the pin the old job holds is recorded")
@@ -83,6 +84,38 @@ func TestAVersionOneDatabaseIsUpgraded(t *testing.T) {
 	_, err = f.q.Cancel(ctx, old)
 	require.NoError(t, err)
 	assert.False(t, f.pins.has(f.gitDir, old), "and the old job's pin is released when it ends")
+}
+
+// A version 2 database (3b-2b, on main) gets jobs.lapses, with 0 for the jobs it already holds, and a lapse works on it afterwards. A
+// database that already has the column (version 3 code made it) is not altered twice. Mutation gate: no step → the claim query fails.
+func TestAVersionTwoDatabaseGainsLapses(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	id := f.submit(t)
+	_, err := f.db.Exec(`ALTER TABLE jobs DROP COLUMN lapses`)
+	require.NoError(t, err)
+	_, err = f.db.Exec(`UPDATE queue_schema SET version = 2`)
+	require.NoError(t, err)
+
+	require.NoError(t, Migrate(ctx, f.db))
+	require.NoError(t, Migrate(ctx, f.db))
+	var lapses, v int
+	require.NoError(t, f.db.QueryRow(`SELECT lapses FROM jobs WHERE id = ?`, id).Scan(&lapses))
+	assert.Equal(t, 0, lapses)
+	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
+	assert.Equal(t, 3, v)
+
+	f.claim(t, id, "air26")
+	f.clk.Advance(61 * time.Second)
+	_, err = f.q.Sweep(ctx)
+	require.NoError(t, err)
+	require.NoError(t, f.db.QueryRow(`SELECT lapses FROM jobs WHERE id = ?`, id).Scan(&lapses))
+	assert.Equal(t, 1, lapses)
+
+	// version 2 again, the column still there: the step does not add it a second time
+	_, err = f.db.Exec(`UPDATE queue_schema SET version = 2`)
+	require.NoError(t, err)
+	require.NoError(t, Migrate(ctx, f.db))
 }
 
 // A database written by a newer wwd is not opened by an older one: the older code would misread it.
