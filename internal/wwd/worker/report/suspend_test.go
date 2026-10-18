@@ -171,6 +171,18 @@ func TestReclaimKeepsSameIdJobsOfDifferentOriginsApart(t *testing.T) {
 	assert.Equal(t, "fedcba9876543210fedcba9876543210", air.releases[0].ClaimID)
 }
 
+// Even the same job id and the same claim id at two origins (an origin chooses its own) are two jobs: each goes back to its own.
+func TestReclaimKeepsIdenticalIdAndClaimOfDifferentOriginsApart(t *testing.T) {
+	mlab, air := &sink{t: t}, &sink{t: t}
+	ms := &multiSink{by: map[string]*sink{"mlab": mlab, "air26": air}}
+	a, _ := running("j_same", nil)
+	b, _ := running("j_same", nil)
+	b.Source = "air26" // same job id, same claim
+	require.NoError(t, New(Config{}).Reclaim(context.Background(), []Running{a, b}, ms.get))
+	assert.Len(t, mlab.releases, 1)
+	assert.Len(t, air.releases, 1)
+}
+
 // A job whose stop failed is not given back (it may still be running); the others are, and the error is returned.
 func TestReclaimDoesNotGiveBackAJobThatWouldNotStop(t *testing.T) {
 	mlab := &sink{t: t}
