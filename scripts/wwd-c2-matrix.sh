@@ -36,6 +36,8 @@ DB='$HOME/.local/share/wwd/wwd.db'
 # the probe tasks append one line per run here, outside the workspace. C2_RAN_LOG moves it (the script's stub tests do, so that they never
 # touch the file of a matrix that is running); the probe task gets the same path, and it is expanded by the shell of the host it runs on.
 RAN="${C2_RAN_LOG:-/tmp/wwd-c2-ran.log}"
+# it goes into shell text of four hosts and into a sed replacement: plain path characters (and a literal $HOME) only
+case "$RAN" in *[!A-Za-z0-9_./\$-]*|'') echo "C2_RAN_LOG must be a path of letters, digits and _ . / - (or \$HOME/...): '$RAN'" >&2; exit 2 ;; esac
 WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
 
 # ---- the cases (number, title, hosts, minutes, needs) --------------------------------------------------------
@@ -278,6 +280,7 @@ precheck() {
     if [ "$dry" -eq 1 ]; then on air26 "$AIR26_FIND_PDX"; AIR26_PDX=pdx
     else
       AIR26_PDX=$(on air26 "$AIR26_FIND_PDX" 2>/dev/null | head -1) || AIR26_PDX=""
+      case "$AIR26_PDX" in *[!A-Za-z0-9_./-]*) say "FAIL: the path of pdx on air26 has characters the script will not put into a command: '$AIR26_PDX'"; exit 1 ;; esac
       [ -n "$AIR26_PDX" ] || { say "FAIL: pdx is not on air26's non-interactive PATH, nor in ~/.local/bin/pdx, nor in ~/.config/pdx/bin/pdx (case 8 submits from there)"; exit 1; }
       say "   pdx on air26: $AIR26_PDX"
     fi ;;
@@ -742,8 +745,9 @@ precheck
 for run_case in $cases; do
   say ""; say "== case $run_case: $(catalog | awk -F'|' -v c="$run_case" '$1==c {print $2}') =="
   CASE_FAILS=0; CASE_SKIP=""
-  # a case that runs a job on air26's worker needs its owner away (case 11 only sends tokens)
-  if [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
+  # a case that runs a job on air26's worker needs its owner away
+  # (not 8: air26 is only a second origin there and its worker is off; not 11: it only sends tokens)
+  if [ "$run_case" != 8 ] && [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
     CASE_SKIP="air26's owner stayed active for 10 minutes ($(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null)): its worker would not take the job"
   else
     "case_$run_case"

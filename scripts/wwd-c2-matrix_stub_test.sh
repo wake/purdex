@@ -331,6 +331,17 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_WORKER_JSON='{"en
 has "WARN: air26's owner_rule is empty" "precheck with an empty owner_rule"
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14"; }
 hasnt "WARN: air26's owner_rule" "precheck with an owner_rule"
+# case 8 has air26 as an origin only (its worker is off): the owner does not matter, so it neither waits nor skips
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_ZONE=1 STUB_STATE=succeeded STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8 must run with air26's owner active"; }
+hasnt "waiting for air26's owner" "case 8"
+has "PASS case 8" "case 8 with air26's owner active"
+# a C2_RAN_LOG that would break the shell text is refused before anything is done
+for bad in '/tmp/a b' "/tmp/a'b" '/tmp/a&b' '/tmp/a|b'; do
+  rc=0
+  C2_RAN_LOG="$bad" HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "C2_RAN_LOG '$bad' must be refused with exit 2, got $rc"
+done
 # case 11 sends tokens only: it does not wait for the owner
 rm -f "$stub"/*.log
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 11 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 11 must not wait for the owner"; }

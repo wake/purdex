@@ -21,14 +21,14 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 | `--manual` | 需要「主人回來」的案例（7）改成請人移動 air26 的滑鼠，不用掛鉤 |
 | `--force` | 佇列裡已經有工作也照跑（預設要求佇列是空的） |
 | `--keep` | 結束時留下暫存目錄（印出路徑），除錯用 |
-| `C2_RAN_LOG` | 環境變數，換掉 probe 記錄檔的路徑（預設 `/tmp/wwd-c2-ran.log`）；腳本的 stub 測試用它，免得碰到正在跑的矩陣的檔案。值是字面字串，由各主機的 shell 展開（例 `'$HOME/wwd-c2-ran.log'`） |
+| `C2_RAN_LOG` | 環境變數，換掉 probe 記錄檔的路徑（預設 `/tmp/wwd-c2-ran.log`）；腳本的 stub 測試用它，免得碰到正在跑的矩陣的檔案。值是字面字串，由各主機的 shell 展開（例 `'$HOME/wwd-c2-ran.log'`）；只接受字母、數字與 `_ . / -`（可加字面 `$HOME`），其他字元腳本以結束碼 2 拒絕 |
 | `C2_TIMEOUT_SCALE=0` | 環境變數，把所有等待縮成 0，只給腳本自己的 stub 測試用，真機不要設 |
 
 ### 每個案例的共同流程
 
 1. **前置檢查**：四台都連得到；四台的 wwd 版本與 proto 相同；佇列是空的（除非 `--force`）；air19 的 worker 是關的；要跑案例 8 時，在 air26 找得到 `pdx`（依序找非互動 shell 的 PATH、`~/.local/bin/pdx`、`~/.config/pdx/bin/pdx`，印出用的是哪一個）。
 2. 建一個暫存 repo（`$TMPDIR/wwd-c2.<pid>/repo`，一個 commit，內含 probe 任務，見 §5）。
-3. 要用 air26 的 worker 的案例（除了 11）開始前，先等 air26 的 `facts.owner.active` 不是 true，最多 10 分鐘（印 `waiting for air26's owner to be idle`）；等不到這個案例 SKIP 並寫原因，不算 FAIL。
+3. 要用 air26 的 worker 的案例（不含 8，air26 在那裡只是第二個 origin；不含 11，只送 token）開始前，先等 air26 的 `facts.owner.active` 不是 true，最多 10 分鐘（印 `waiting for air26's owner to be idle`）；等不到這個案例 SKIP 並寫原因，不算 FAIL。
    案例本身：用 `only_workers` 設定誰的 worker 開著，製造一個故障，等待，唯讀檢查，印 `ok`／`FAIL`。「等到 running／claimed」是硬前置：等不到就 `FAIL precondition not reached`（附該工作與 air26 owner 的狀態），這個案例剩下的檢查不做，不會出現建立在沒發生的事情上的 `ok`。
 4. 每個案例結束都多一項檢查：**air19 從這次執行開始後沒有 claim 任何工作**。
 5. 結尾（也在 ^C、`exit`、SIGTERM 時）：恢復凍結的 wwd（`kill -CONT`）、把改過的 worker 設定原樣 PUT 回去、刪掉建立的 fault 檔、取消它建的工作、刪除暫存與遠端暫存、刪掉四台的 `/tmp/wwd-c2-ran.log`。
