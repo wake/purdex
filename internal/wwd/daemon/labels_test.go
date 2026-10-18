@@ -73,6 +73,31 @@ func TestInfoLabelsFollowFactsAndEventsOnlyOnChange(t *testing.T) {
 	}
 }
 
+// A stream that opens (or reopens) after the labels were published starts with
+// the current facts and then the current labels: it does not have to wait for a
+// change that may never come.
+func TestLateSubscriberGetsTheCurrentLabels(t *testing.T) {
+	d := newTestDaemon(t)
+	d.OnFacts(wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("24.14.0")}})
+	d.OnFacts(wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("24.14.0")}}) // no change, no event
+	ch, cancel := d.Events().Subscribe(false)
+	defer cancel()
+	if e := recv(t, ch); e.Type != wire.EventFacts {
+		t.Fatalf("first the facts, got %s", e.Type)
+	}
+	ev := labelsEvent(t, recv(t, ch))
+	if !slices.Equal(ev.Labels, []string{"arch:amd64", "os:linux", "tool:node24"}) {
+		t.Fatalf("%v", ev.Labels)
+	}
+	none(t, ch)
+	// a change after that reaches the open stream
+	d.OnFacts(wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("25.0.0")}})
+	recv(t, ch) // facts
+	if ev := labelsEvent(t, recv(t, ch)); !slices.Contains(ev.Labels, "tool:node25") {
+		t.Fatalf("%v", ev.Labels)
+	}
+}
+
 // RepoSource is the hook for the prepared-clone registry: its repos become
 // repo:<name> labels.
 func TestRepoSourceLabels(t *testing.T) {

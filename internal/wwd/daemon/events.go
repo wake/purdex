@@ -34,6 +34,10 @@ type Broker struct {
 	mu     sync.Mutex
 	subs   map[*subscriber]struct{}
 	latest *wire.Event // the last facts event: a new subscriber starts with it
+	// latestLabels is the last labels event, sent right after the facts: a stream
+	// that opens or reopens later still learns the current labels, which would
+	// otherwise reach it only with the next change.
+	latestLabels *wire.Event
 }
 
 func NewBroker() *Broker { return &Broker{subs: map[*subscriber]struct{}{}} }
@@ -62,6 +66,9 @@ func (b *Broker) subscribe(peer, capped bool) (<-chan wire.Event, func(), bool) 
 	}
 	if b.latest != nil {
 		s.ch <- *b.latest
+	}
+	if b.latestLabels != nil {
+		s.ch <- *b.latestLabels
 	}
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
@@ -127,7 +134,10 @@ func (b *Broker) PublishJob(ev wire.JobEvent) {
 // PublishLabels announces that this host's labels changed.
 func (b *Broker) PublishLabels(ev wire.LabelsEvent) {
 	if e, ok := envelope(wire.EventLabels, ev); ok {
-		b.publish(e, false)
+		b.mu.Lock() // remembering it and fanning it out are one step, as for facts
+		defer b.mu.Unlock()
+		b.latestLabels = &e
+		b.fanOutLocked(e, false)
 	}
 }
 

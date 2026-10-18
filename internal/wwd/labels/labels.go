@@ -12,17 +12,47 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
-// versionParts reads the leading numbers of a version string ("24.14.0", "16.2").
-func versionParts(v string) (major, minor int, ok bool) {
+// maxVersionDigits bounds a version number: a label like tool:node24 never has
+// more than four digits, and anything longer is not a version.
+const maxVersionDigits = 4
+
+func plainNumber(s string) (int, bool) {
+	if s == "" || len(s) > maxVersionDigits {
+		return 0, false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
+// versionParts reads the numbers a label needs from a version string
+// ("24.14.0", "16.2", "24.14.0-rc1"): the major, and when needMinor the minor
+// (its leading digits). A part that is missing, signed, not a number or too
+// long refuses the whole version: a missing minor is not minor 0.
+func versionParts(v string, needMinor bool) (major, minor int, ok bool) {
 	f := strings.SplitN(strings.TrimSpace(v), ".", 3)
-	major, err := strconv.Atoi(f[0])
-	if err != nil || major < 0 {
+	major, ok = plainNumber(f[0])
+	if !ok {
 		return 0, 0, false
 	}
-	if len(f) > 1 {
-		if m, err := strconv.Atoi(f[1]); err == nil && m >= 0 {
-			minor = m
-		}
+	if !needMinor {
+		return major, 0, true
+	}
+	if len(f) < 2 {
+		return 0, 0, false
+	}
+	digits := f[1]
+	end := 0
+	for end < len(digits) && digits[end] >= '0' && digits[end] <= '9' {
+		end++
+	}
+	minor, ok = plainNumber(digits[:end])
+	if !ok {
+		return 0, 0, false
 	}
 	return major, minor, true
 }
@@ -42,23 +72,23 @@ func FromFacts(f wire.Facts) (labels []string, fingerprint map[string]string) {
 	if f.OSVersion != "" {
 		fingerprint["os_version"] = f.OSVersion
 	}
-	one := func(key, name string, v *string, label func(major, minor int) string) {
+	one := func(key, name string, v *string, needMinor bool, label func(major, minor int) string) {
 		if v == nil {
 			return
 		}
-		if major, minor, ok := versionParts(*v); ok {
+		if major, minor, ok := versionParts(*v, needMinor); ok {
 			labels = append(labels, "tool:"+name+label(major, minor))
 			fingerprint[key] = strings.TrimSpace(*v)
 		}
 	}
 	major := func(maj, _ int) string { return strconv.Itoa(maj) }
-	one("go", "go", f.Tools.Go, func(maj, min int) string { return strconv.Itoa(maj) + "." + strconv.Itoa(min) })
-	one("node", "node", f.Tools.Node, major)
-	one("pnpm", "pnpm", f.Tools.Pnpm, major)
-	one("xcode", "xcode", f.Tools.Xcode, major)
+	one("go", "go", f.Tools.Go, true, func(maj, min int) string { return strconv.Itoa(maj) + "." + strconv.Itoa(min) })
+	one("node", "node", f.Tools.Node, false, major)
+	one("pnpm", "pnpm", f.Tools.Pnpm, false, major)
+	one("xcode", "xcode", f.Tools.Xcode, false, major)
 	var php []string
 	for _, v := range f.Tools.PHP {
-		if maj, min, ok := versionParts(v); ok {
+		if maj, min, ok := versionParts(v, true); ok {
 			labels = append(labels, "tool:php"+strconv.Itoa(maj)+strconv.Itoa(min))
 			php = append(php, strings.TrimSpace(v))
 		}

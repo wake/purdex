@@ -2,6 +2,8 @@ package labels
 
 import (
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -47,6 +49,41 @@ func TestFromFactsSkipsWhatIsNotThere(t *testing.T) {
 	l, fp = FromFacts(wire.Facts{})
 	if len(l) != 0 || len(fp) != 0 {
 		t.Fatalf("empty record: %v %v", l, fp)
+	}
+}
+
+// A version whose needed parts do not read is refused whole: it must not turn
+// into a plausible label (a missing minor is not minor 0).
+func TestFromFactsRefusesMalformedVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tools wire.Tools
+	}{
+		{"go without minor", wire.Tools{Go: s("1")}},
+		{"go bad minor", wire.Tools{Go: s("1.bad")}},
+		{"go negative", wire.Tools{Go: s("1.-2.0")}},
+		{"go signed", wire.Tools{Go: s("+1.26")}},
+		{"go overflow", wire.Tools{Go: s("1.99999999999999999999")}},
+		{"php bad minor", wire.Tools{PHP: []string{"8.x"}}},
+		{"php no minor", wire.Tools{PHP: []string{"8"}}},
+		{"node negative", wire.Tools{Node: s("-24.1.0")}},
+		{"node huge", wire.Tools{Node: s("99999999999999999999.0")}},
+	} {
+		l, fp := FromFacts(rec(tc.tools))
+		for _, x := range l {
+			if strings.HasPrefix(x, "tool:") {
+				t.Errorf("%s: label %q", tc.name, x)
+			}
+		}
+		for _, k := range []string{"go", "node", "php"} {
+			if _, ok := fp[k]; ok {
+				t.Errorf("%s: fingerprint %s=%q", tc.name, k, fp[k])
+			}
+		}
+	}
+	// a pre-release suffix on a good version is fine
+	if l, _ := FromFacts(rec(wire.Tools{Node: s("24.14.0-rc1")})); !slices.Contains(l, "tool:node24") {
+		t.Errorf("suffix after the numbers: %v", l)
 	}
 }
 

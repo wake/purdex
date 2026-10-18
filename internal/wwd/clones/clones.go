@@ -4,14 +4,17 @@
 //
 // The clones are listed in the wwd config ([repos], name = path). A listed path
 // counts only when it is a directory owned by the user running wwd that holds a
-// .git (a directory, or the file of a linked worktree). Nothing forks; a path
+// .git (a directory, or the "gitdir: <dir>" file of a linked worktree whose
+// target exists). Nothing forks; a path
 // that fails the check is left out without an error.
 package clones
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -32,7 +35,35 @@ func isCheckout(path string) bool {
 		return false
 	}
 	g, err := os.Stat(filepath.Join(path, ".git"))
-	return err == nil && (g.IsDir() || g.Mode().IsRegular())
+	if err != nil {
+		return false
+	}
+	return g.IsDir() || (g.Mode().IsRegular() && gitdirPointerOK(path))
+}
+
+// gitdirPointerOK reads the .git file of a linked worktree: "gitdir: <dir>",
+// the dir absolute or relative to the checkout, which must exist as a directory.
+func gitdirPointerOK(path string) bool {
+	f, err := os.Open(filepath.Join(path, ".git"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 4096))
+	if err != nil {
+		return false
+	}
+	line, _, _ := strings.Cut(string(b), "\n")
+	dir, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
+	dir = strings.TrimSpace(dir)
+	if !ok || dir == "" {
+		return false
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(path, dir)
+	}
+	fi, err := os.Stat(dir)
+	return err == nil && fi.IsDir()
 }
 
 // Verified is name → clone path for the entries of repos that are prepared
