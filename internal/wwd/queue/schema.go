@@ -121,6 +121,14 @@ var revStatements = []string{
 // epochStatements (version 5) give the database a name that is made once, with its tables, and never again: one row of 32 hex digits. A
 // client that keeps a cursor keeps this with it, and a database that was removed and made again has another, which tells the client its
 // cursor is of no use here. The insert only happens when the table is empty, so running it again (a migration repeated) keeps the first.
+//
+// The epoch is the history of the database FILE. Putting back an older copy of wwd.db puts back its epoch, and a client whose cursor is
+// ahead of that copy's head is only told so (409) until the head catches up to it; after that the cursor is taken and the changes below
+// it are missed. So a restore is not complete until its epoch is replaced:
+//
+//	UPDATE db_epoch SET id = lower(hex(randomblob(16)));
+//
+// (an operator's step in the restore procedure, with wwd stopped). Nothing here can tell a restore from a restart.
 var epochStatements = []string{
 	`CREATE TABLE IF NOT EXISTS db_epoch (id TEXT NOT NULL)`,
 	`INSERT INTO db_epoch (id) SELECT lower(hex(randomblob(16))) WHERE NOT EXISTS (SELECT 1 FROM db_epoch)`,
