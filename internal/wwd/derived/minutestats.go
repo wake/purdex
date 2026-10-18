@@ -17,7 +17,8 @@ type MinuteAgg struct {
 	runStart time.Time // when the current run began (valid while prevFull)
 }
 
-// memPct is the share of memory in use, from the record's own readings.
+// memPct is the share of memory in use, from the record's own readings: (total - available) / total, the quantity Purdex's live
+// sampler computes (hostmem.FastReader.Mem; see TestMemPctIsTheLiveSamplersArithmetic). A total of 0 reads as 0.
 func memPct(m wire.Mem) float64 {
 	if m.TotalMB <= 0 {
 		return 0

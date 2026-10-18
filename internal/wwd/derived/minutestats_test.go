@@ -153,3 +153,19 @@ func TestMinuteAggSnapshotDoesNotCloseTheMinute(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+// Memory in use is the quantity Purdex's own live sampler computes (hostmem.FastReader.Mem): (total - (Free + Inactive)
+// pages) / total, with Mach's Free already holding the speculative pages (#3074; the vm_stat text path adds Speculative
+// separately to a Free that lacks them: the same sum). wwd's available_mb is (Free + Inactive) from Mach, so the share
+// derived from the record is that quantity, up to the whole-MB rounding of the two figures.
+func TestMemPctIsTheLiveSamplersArithmetic(t *testing.T) {
+	const pageSize = 16384
+	free, inactive := uint64(124_288), uint64(200_000) // Mach free_count includes the 24 288 speculative pages
+	totalBytes := uint64(16 << 30)
+	availBytes := (free + inactive) * pageSize
+	want := 100 * (1 - float64(availBytes)/float64(totalBytes))
+	got := memPct(wire.Mem{TotalMB: int(totalBytes >> 20), AvailableMB: int(availBytes >> 20)})
+	if d := got - want; d > 0.01 || d < -0.01 {
+		t.Fatalf("memPct %.4f, the live sampler's %.4f", got, want)
+	}
+}
