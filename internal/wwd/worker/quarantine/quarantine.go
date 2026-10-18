@@ -50,8 +50,8 @@
 //
 // Who can take an owner's hold away: the runner that took it (Hold.Release, on the goroutine that also calls Begin and Add, and only for
 // a job that is not quarantined) and retire (locks.ReleaseOwner, under the store lock). Nothing else calls ReleaseOwner, so the hold that
-// Add and Begin saw under the store lock is still there when they commit. A new caller of ReleaseOwner for an owner that has an entry
-// must go through this package (Clear).
+// Add and Begin saw under the store lock is still there when they commit. To take an owner's hold away, always go through this package
+// (Clear); TestReleaseOwnerIsCalledOnlyFromThisPackage fails on any other caller of ReleaseOwner in the repository.
 //
 // Invariants (the tests check each after every cell of the table, and after every operation run in every outside-the-lock stretch of
 // every other):
