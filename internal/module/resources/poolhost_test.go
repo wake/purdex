@@ -158,6 +158,28 @@ func TestFleetSource_FollowsTheRowByRevision(t *testing.T) {
 	assert.False(t, none.isPool(), "no hostconfig = the own sample")
 }
 
+// LatestLocalFacts (the monitor's input) follows the same source and gives the facts as wwd sent them.
+func TestModule_LatestLocalFactsFollowsTheSource(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	row := &fakeFleetRow{cfg: hostconfig.FleetConfig{Source: hostconfig.FleetSourcePool}, rev: 1}
+	m := &Module{
+		pool: &poolHost{now: func() time.Time { return now }, pool: func(context.Context) (wire.Pool, error) {
+			return poolOf(factsAt(now)), nil
+		}},
+		fleetSrc: &fleetSource{cfg: row.FleetConfig, rev: row.FleetRevision},
+	}
+	f, ok := m.LatestLocalFacts()
+	require.True(t, ok)
+	assert.Equal(t, 16000, f.Mem.TotalMB)
+	assert.Equal(t, "mlab", f.Alias)
+
+	row.cfg.Source, row.rev = hostconfig.FleetSourceSSH, 2
+	_, ok = m.LatestLocalFacts()
+	assert.False(t, ok, "ssh source: nothing")
+	_, ok = (&Module{}).LatestLocalFacts()
+	assert.False(t, ok, "a module without the pool reader gives nothing")
+}
+
 // The module answers from wwd only while the row says pool and wwd has a reading; otherwise from its own sample.
 func TestModule_LatestHostFollowsTheSource(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)

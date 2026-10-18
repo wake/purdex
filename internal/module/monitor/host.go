@@ -97,6 +97,11 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 }
 
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
+	if pc, ok := state.collector.(interface{ poolCPU() (float64, bool) }); ok { // wwd's reading, when the pool is the source
+		if percent, ok := pc.poolCPU(); ok {
+			return &HostCPUMetrics{Percent: &percent}
+		}
+	}
 	if src, ok := state.collector.(hostCPUPercentSource); ok {
 		interval := time.Duration(state.cpuInterval.Load())
 		if interval <= 0 {

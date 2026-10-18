@@ -157,6 +157,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
 	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
 	m.findPoolHost(c)
+	c.Registry.Register(resources.LocalFactsKey, resources.LocalFactsReader(m))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
