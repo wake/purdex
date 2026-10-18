@@ -147,6 +147,9 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	var task *manifest.Task
 	if req.AdHoc != nil {
 		task = manifest.AdHocTask()
+		if task.Cwd, err = RelDir(root, req.Dir); err != nil { // it runs in the directory it was asked from
+			return nil, err
+		}
 	} else {
 		var perr error
 		if m, perr = manifest.Parse(src); perr != nil {

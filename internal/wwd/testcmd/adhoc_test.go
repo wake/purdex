@@ -75,6 +75,26 @@ func TestAnAdHocCommandRunsHereUnderAHeavySlotWithItsWordsAsTheArgvAndNoManifest
 	}
 }
 
+func TestAnAdHocCommandRunsInTheDirectoryItWasAskedFromAndIsRecordedThere(t *testing.T) {
+	root := noManifestRepo(t)
+	sub := filepath.Join(root, "pkg", "inner")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGate{}
+	rec := &capture{}
+	code, _, _ := run(t, Options{Args: args(t, "--adhoc", "--", "go", "test", "./..."), API: &fakeAPI{}, Gate: g, Recorder: rec, Dir: sub, Env: os.Environ()})
+	if code != 0 || g.calls != 1 {
+		t.Fatalf("code %d gate %d", code, g.calls)
+	}
+	if g.last.Dir != sub {
+		t.Fatalf("ran in %q, want %q: `./...` means the directory it is typed in", g.last.Dir, sub)
+	}
+	if len(rec.bodies) != 1 || rec.bodies[0].Snapshot.RelCwd != "pkg/inner" {
+		t.Fatalf("recorded %+v", rec.bodies)
+	}
+}
+
 func TestAnAdHocCommandPassesShellCharactersAsWords(t *testing.T) {
 	g := &fakeGate{}
 	run(t, Options{Args: args(t, "--adhoc", "--", "echo", "a|b", "$HOME", ";"), API: &fakeAPI{}, Gate: g, Dir: noManifestRepo(t), Env: os.Environ()})
