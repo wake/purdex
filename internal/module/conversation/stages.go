@@ -60,6 +60,7 @@ type stageRow struct {
 	at           time.Time
 	reason, mode string
 	seq          uint64 // the ledger's seq at this row's last change
+	attempt      uint64 // which request owns the row's writes: bumped by claim, so a request that lost the race cannot overwrite the winner
 
 	text     string // in flight only: what matching looks for; "" once dropped or over the cap
 	textFrom time.Time
@@ -89,6 +90,7 @@ type sessionStages struct {
 type stageLedger struct {
 	mu        sync.Mutex
 	sessions  map[string]*sessionStages
+	gseq      uint64 // the last seq handed out, over all sessions
 	textBytes int
 }
 
@@ -140,10 +142,11 @@ func (l *stageLedger) session(sid string) *sessionStages {
 	return s
 }
 
-// bump records a change of row r.
-func (s *sessionStages) bump(r *stageRow, now time.Time) {
-	s.seq++
-	r.seq = s.seq
+// bump records a change of row r. The seq is the ledger's, not the session's: it keeps rising when a session is swept and a
+// later message of the same session id starts a new one, so a connection's cursor from before still sorts below it.
+func (l *stageLedger) bump(s *sessionStages, r *stageRow, now time.Time) {
+	l.gseq++
+	s.seq, r.seq = l.gseq, l.gseq
 	r.changed = now
 }
 
@@ -154,15 +157,43 @@ func (l *stageLedger) dropText(r *stageRow) {
 
 // begin starts following an id: its text is kept for matching (within the caps). A known live id changes nothing; an id that
 // failed because nothing was sent (a lock-wait busy) starts again.
-func (l *stageLedger) begin(sid, id, text string, now time.Time) {
+func (l *stageLedger) begin(sid, id, text string, now time.Time) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.beginLocked(sid, id, text, now)
+}
+
+// claim is begin for the request that now holds the locks and is going to send: it takes ownership of the id's writes (the
+// token it returns is the one setAttempt wants), also from an earlier request of the same id that gave up waiting.
+func (l *stageLedger) claim(sid, id, text string, now time.Time) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.beginLocked(sid, id, text, now)
+	r := l.sessions[sid].rows[id]
+	r.attempt++
+	return r.attempt
+}
+
+// setAttempt is set for the request that owns the id: a write from a request that lost the id to a later claim is dropped.
+func (l *stageLedger) setAttempt(sid, id string, attempt uint64, stage, reason, mode string, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.sessions[sid]; s != nil {
+		if r := s.rows[id]; r != nil && r.attempt == attempt {
+			l.advanceLocked(s, r, stage, reason, mode, at)
+		}
+	}
+}
+
+func (l *stageLedger) beginLocked(sid, id, text string, now time.Time) uint64 {
 	l.sweepLocked(now)
 	s := l.session(sid)
+	var prev uint64
 	if r, ok := s.rows[id]; ok {
 		if r.stage != stageFailed {
-			return
+			return r.attempt
 		}
+		prev = r.attempt
 		l.dropText(r)
 		delete(s.rows, id)
 	}
@@ -170,14 +201,15 @@ func (l *stageLedger) begin(sid, id, text string, now time.Time) {
 		l.evictRowLocked(s)
 	}
 	s.arrival++
-	r := &stageRow{id: id, arrival: s.arrival, stage: stageReceived, at: now, textFrom: now}
+	r := &stageRow{id: id, arrival: s.arrival, stage: stageReceived, at: now, textFrom: now, attempt: prev + 1}
 	s.rows[id] = r
 	if len(text) <= maxStageText {
 		r.text = text
 		l.textBytes += len(text)
 		l.evictTextsLocked(r)
 	}
-	s.bump(r, now)
+	l.bump(s, r, now)
+	return r.attempt
 }
 
 // evictRowLocked drops the session's oldest finished id, or its oldest id when none has finished.
@@ -247,7 +279,7 @@ func (l *stageLedger) advanceLocked(s *sessionStages, r *stageRow, stage, reason
 		r.claim = nil
 		r.doneAt = at
 	}
-	s.bump(r, at)
+	l.bump(s, r, at)
 	return true
 }
 
@@ -523,21 +555,22 @@ func (l *stageLedger) snapshot(sid string, now time.Time) ([]stageJSON, uint64) 
 	l.sweepLocked(now)
 	s := l.sessions[sid]
 	if s == nil {
-		return []stageJSON{}, 0
+		return []stageJSON{}, l.gseq
 	}
 	out := make([]stageJSON, 0, len(s.rows))
 	for _, r := range s.sorted() {
 		out = append(out, r.json())
 	}
-	return out, s.seq
+	return out, l.gseq
 }
 
-// since is the stages that changed after seq (one entry per id, in the order they changed) and the seq to remember.
+// since is the stages that changed after seq (one entry per id, in the order they changed) and the seq to remember: the
+// cursor never goes back, and it stays where it was when nothing changed.
 func (l *stageLedger) since(sid string, after uint64, now time.Time) ([]stageJSON, uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.sessions[sid]
-	if s == nil || s.seq == after {
+	if s == nil || s.seq <= after {
 		return nil, after
 	}
 	var rs []*stageRow
@@ -545,6 +578,9 @@ func (l *stageLedger) since(sid string, after uint64, now time.Time) ([]stageJSO
 		if r.seq > after {
 			rs = append(rs, r)
 		}
+	}
+	if len(rs) == 0 {
+		return nil, after
 	}
 	sort.Slice(rs, func(i, j int) bool { return rs[i].seq < rs[j].seq })
 	out := make([]stageJSON, len(rs))
@@ -554,12 +590,9 @@ func (l *stageLedger) since(sid string, after uint64, now time.Time) ([]stageJSO
 	return out, s.seq
 }
 
-// seqOf is the ledger's current seq for the session.
+// seqOf is the ledger's current seq: a connection that starts here hears every later change of any session.
 func (l *stageLedger) seqOf(sid string) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if s := l.sessions[sid]; s != nil {
-		return s.seq
-	}
-	return 0
+	return l.gseq
 }
