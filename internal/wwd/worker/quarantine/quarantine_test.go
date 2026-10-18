@@ -18,9 +18,14 @@ type fakeChecker struct {
 	gone  map[string]bool
 	err   map[string]error
 	calls []string
+	// onGone runs in the middle of a check, without f.mu, so a test can do something else to the store while the answer is on its way.
+	onGone func()
 }
 
 func (f *fakeChecker) Gone(_ context.Context, unit string) (bool, error) {
+	if f.onGone != nil {
+		f.onGone()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, unit)
@@ -80,6 +85,13 @@ func (r *rig) entry(job string, keys ...string) Entry {
 	return Entry{Owner: "src/" + job, JobID: job, Origin: "mlab", ClaimID: "c-" + job, Dir: dir, Keys: keys, Unit: "wwd-" + job}
 }
 
+// add is Add the way a host with no guard calls it: the runner holds the keys of the job that just ended (taking them again is a no-op
+// when the owner already holds them).
+func (r *rig) add(s *Store, e Entry) error {
+	r.locks.Acquire(e.Owner, e.Keys, nil)
+	return s.Add(e)
+}
+
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 func markerFiles(t *testing.T, dir string) []string {
@@ -99,7 +111,7 @@ func TestAddWritesMarkerAtomically(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
 	e := r.entry("j1", "k1")
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	files := markerFiles(t, r.markers)
@@ -127,7 +139,7 @@ func TestAddRejectsBadEntry(t *testing.T) {
 		"no job id": {Owner: "o", Dir: filepath.Join(r.root, "d")},
 		"no dir":    {Owner: "o", JobID: "j"},
 	} {
-		if err := s.Add(e); err == nil {
+		if err := r.add(s, e); err == nil {
 			t.Errorf("%s: Add succeeded", name)
 		}
 	}
@@ -157,7 +169,7 @@ func TestStaleTmpFilesAreRemovedAtOpen(t *testing.T) {
 func TestRestoreReacquiresHoldsAfterRestart(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if err := s.Add(r.entry("j1", "k1", "k2")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1", "k2")); err != nil {
 		t.Fatal(err)
 	}
 	// restart: a fresh lock table and a fresh store over the same marker dir
@@ -179,7 +191,7 @@ func TestRestoreReacquiresHoldsAfterRestart(t *testing.T) {
 func TestRestoreKeepsMarkerWhenKeyTaken(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
 	r.locks = locks.New()
@@ -209,10 +221,11 @@ func TestRestoreKeepsMarkerWhenKeyTaken(t *testing.T) {
 func TestRestoreReportsAHoldWithExtraKeys(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if _, err := r.locks.Acquire("src/j1", []string{"k1", "k2"}, nil); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	r.locks.ReleaseOwner("src/j1") // a restart, then something took more keys under the same owner
+	if _, err := r.locks.Acquire("src/j1", []string{"k1", "k2"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Restore(); err == nil {
@@ -223,10 +236,11 @@ func TestRestoreReportsAHoldWithExtraKeys(t *testing.T) {
 func TestRestoreReportsAHoldWithOtherKeys(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if _, err := r.locks.Acquire("src/j1", []string{"other"}, nil); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	r.locks.ReleaseOwner("src/j1")
+	if _, err := r.locks.Acquire("src/j1", []string{"other"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Restore(); err == nil {
@@ -249,7 +263,7 @@ func TestAddIsAtomicAgainstASweepOfTheOlderEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(old); err != nil {
+	if err := r.add(s, old); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan int)
@@ -257,7 +271,7 @@ func TestAddIsAtomicAgainstASweepOfTheOlderEntry(t *testing.T) {
 	<-started // Sweep has its snapshot and is waiting in the checker
 	newer := old
 	newer.ClaimID = "second-claim"
-	if err := s.Add(newer); err != nil {
+	if err := r.add(s, newer); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -300,7 +314,7 @@ func TestSweepDoesNotUndoAnAddOfTheSameOwner(t *testing.T) {
 	newer := old
 	newer.ClaimID = "second-claim"
 	rc := &replacingChecker{onCall: func() {
-		if err := s.Add(newer); err != nil {
+		if err := r.add(s, newer); err != nil {
 			t.Error(err)
 		}
 	}}
@@ -309,7 +323,7 @@ func TestSweepDoesNotUndoAnAddOfTheSameOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(old); err != nil {
+	if err := r.add(s, old); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.Sweep(context.Background()); err != nil || n != 0 {
@@ -332,7 +346,7 @@ func TestSweepDoesNotUndoAnAddOfTheSameOwner(t *testing.T) {
 func TestMarkerThatIsASymlinkOrBreaksTheJobRelationIsIgnored(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
 	name := markerFiles(t, r.markers)[0]
@@ -381,7 +395,7 @@ func TestSymlinkedWorkRootFailsClosed(t *testing.T) {
 	e.Dir = filepath.Join(link, filepath.Base(e.Dir))
 	r.openOpts = []Option{WithWorkRoot(link)}
 	s := r.open()
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	r.checker.gone[e.Unit] = true
@@ -399,7 +413,7 @@ func TestRestoreAfterAddInSameProcessIsHarmless(t *testing.T) {
 	if _, err := r.locks.Acquire("src/j1", []string{"k1"}, nil); err != nil { // the runner's hold
 		t.Fatal(err)
 	}
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Restore(); err != nil {
@@ -420,7 +434,7 @@ func TestSweepClearsOnlyWhenUnitIsProvablyGone(t *testing.T) {
 		if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Add(e); err != nil {
+		if err := r.add(s, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -457,7 +471,7 @@ func TestSweepNeverClearsEntryWithoutUnit(t *testing.T) {
 	s := r.open()
 	e := r.entry("mac", "k1")
 	e.Unit = ""
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	r.checker.gone[""] = true
@@ -501,11 +515,8 @@ func TestSweepRefusesUnsafeDirs(t *testing.T) {
 	for name, dir := range cases {
 		e := Entry{Owner: "src/" + name, JobID: name, Dir: dir, Keys: []string{"k-" + name}, Unit: "wwd-" + name}
 		r.checker.gone[e.Unit] = true
-		if err := s.Add(e); err != nil {
+		if err := r.add(s, e); err != nil {
 			t.Fatalf("%s: Add: %v", name, err)
-		}
-		if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
-			t.Fatal(err)
 		}
 	}
 	n, err := s.Sweep(context.Background())
@@ -533,7 +544,7 @@ func TestSweepWithoutWorkRootFailsClosed(t *testing.T) {
 	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	r.checker.gone[e.Unit] = true
@@ -555,7 +566,7 @@ func TestSweepSurvivesAlreadyRemovedDir(t *testing.T) {
 	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(e.Dir); err != nil {
@@ -573,7 +584,7 @@ func TestSweepSurvivesAlreadyRemovedDir(t *testing.T) {
 func TestTamperedMarkerIsIgnoredNotObeyed(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
 	name := markerFiles(t, r.markers)[0]
@@ -612,7 +623,7 @@ func TestClear(t *testing.T) {
 		if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Add(e); err != nil {
+		if err := r.add(s, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -644,7 +655,7 @@ func TestClearKeepsUnsafeDirButReleases(t *testing.T) {
 	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Clear("x"); err != nil {
@@ -662,7 +673,7 @@ func TestQuarantinedReportsMarkedDirs(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
 	e := r.entry("j1")
-	if err := s.Add(e); err != nil {
+	if err := r.add(s, e); err != nil {
 		t.Fatal(err)
 	}
 	if !s.Quarantined(e.Dir) || !s.Quarantined(e.Dir+string(os.PathSeparator)) {
@@ -676,7 +687,7 @@ func TestQuarantinedReportsMarkedDirs(t *testing.T) {
 func TestHeldReturnsCopy(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
-	if err := s.Add(r.entry("j1", "k1")); err != nil {
+	if err := r.add(s, r.entry("j1", "k1")); err != nil {
 		t.Fatal(err)
 	}
 	h := s.Held()
@@ -722,7 +733,7 @@ func TestAddSettlesALiveEntryAndThenSweepClearsItOnceTheUnitIsGone(t *testing.T)
 	if err := s.Begin(e); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(e); err != nil { // the run ended and its unit could not be proven stopped
+	if err := r.add(s, e); err != nil { // the run ended and its unit could not be proven stopped
 		t.Fatal(err)
 	}
 	if n, _ := s.Sweep(context.Background()); n != 0 {
@@ -898,5 +909,34 @@ func TestClearRefusesARunningJobAndTakesNothingAwayFromIt(t *testing.T) {
 	}
 	if _, ok := r.locks.Holder("mysql"); ok || exists(e.Dir) || len(s.Held()) != 0 {
 		t.Fatal("cleared")
+	}
+}
+
+// (a): Add writes no marker for an owner that does not hold exactly the keys the marker names, whatever state the entry is in.
+func TestAddRefusesAnOwnerThatDoesNotHoldExactlyItsKeys(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("j1", "k1")
+	if err := s.Add(e); err == nil {
+		t.Fatal("no hold at all: want a refusal")
+	}
+	if len(markerFiles(t, r.markers)) != 0 || len(s.Held()) != 0 {
+		t.Fatalf("a refused Add left a marker %v or an entry", markerFiles(t, r.markers))
+	}
+	if _, err := r.locks.Acquire(e.Owner, []string{"k1", "k2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err == nil {
+		t.Fatal("more keys held than named: want a refusal")
+	}
+	r.locks.ReleaseOwner(e.Owner)
+	if _, err := r.locks.Acquire(e.Owner, []string{"other"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err == nil {
+		t.Fatal("other keys held: want a refusal")
+	}
+	if len(markerFiles(t, r.markers)) != 0 || len(s.Held()) != 0 {
+		t.Fatal("a refused Add changed something")
 	}
 }

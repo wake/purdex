@@ -48,7 +48,7 @@ type cell struct {
 var table = map[state]map[op]cell{
 	stNone: {
 		opBegin:     {after: stRunning, marker: true, dir: true},
-		opAdd:       {after: stQuarantined, marker: true, dir: true},
+		opAdd:       {anyErr: true, after: stNone, dir: true}, // no hold: a marker without its hold is refused
 		opSettle:    {after: stNone, dir: true},
 		opDiscard:   {after: stNone, dir: true},
 		opSweepGone: {after: stNone, dir: true},

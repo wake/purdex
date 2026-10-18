@@ -18,20 +18,41 @@
 //
 //	operation        none               running                          quarantined                      where
 //	Begin            -> running         refused (ErrExists)              refused (ErrExists)              Begin
-//	Add              -> quarantined     -> quarantined (marker rewritten) -> quarantined (rewritten)      Add
+//	Add              refused (the owner holds exactly Keys: -> quarantined; no hold: refused, nothing written)  Add
+//	                                    -> quarantined (marker rewritten) -> quarantined (rewritten)      Add
 //	Settle           no-op              -> quarantined (memory only)     no-op                            Settle
 //	Discard          no-op              -> none (marker, entry; not hold, not dir)  refused (ErrNotRunning) Discard
 //	Sweep, unit gone n/a                skipped (never asked)            -> none (dir, marker, hold)      retire
 //	Sweep, otherwise n/a                skipped                          unchanged                        retire
 //	Clear            refused (no entry) refused (ErrRunning)             -> none (dir if safe, marker, hold) retire
-//	Restore          n/a                skipped                          hold taken again (error if a key is held by another)  Restore
+//	Restore          n/a                skipped                          hold taken again (error if a key is held by another)  restoreOne
 //	Open (load)      -                  -                                every readable marker           Open
 //
-// Invariants (the tests check each after every cell of the table):
+// (Add from none is the host with no guard: the run ended without proof and the runner still holds the keys. It is allowed only when
+// the owner holds exactly the entry's keys; without the hold a marker would claim something that is not there.)
 //
-//	(a) an entry in the store has its marker on disk; a quarantined entry has its hold, or Restore/Sweep keeps reporting that it has not;
-//	(b) an entry that has been retired (Sweep, Clear) or discarded is not brought back by an operation that looked at it before: every
-//	    operation acts on the entry it saw (its generation) and on nothing else;
+// # How an operation is made
+//
+// One pattern for all of them. (1) Take a snapshot (entry, generation, running or not) or prepare the slow part, without the lock: the
+// unit check (Sweep: a systemctl call), the marker written to a temporary file and fsynced (Add, Begin). (2) Take the store lock and
+// look at the entry again: it must be there, with the generation the snapshot had, and in a state the table allows for this operation.
+// If not, give the whole operation up (delete the temporary file, change nothing); the next round starts again. (3) Under that lock
+// only: rename the marker (or remove it), change the entry, take or release the hold in the lock table. (4) After the lock: fsync the
+// marker directory, remove the job directory of the entry this commit removed (its name holds the claim's hash, so no new job uses it).
+//
+// Every transition (Begin, Add, Settle, Discard, retire) gives the entry a new generation, so a snapshot of an earlier moment of the
+// same owner, even of the same entry in an earlier state, never matches.
+//
+// Lock order: the store lock first, then the lock table (locks.Table). Nothing takes them the other way round, and nothing in the lock
+// table calls back into the store.
+//
+// Invariants (the tests check each after every cell of the table, and after every operation run in every outside-the-lock stretch of
+// every other):
+//
+//	(a) an entry in the store has its marker on disk, and a marker has its entry; a quarantined entry has its hold, or Restore/Sweep keeps
+//	    reporting that it has not; no marker is written for an owner that does not hold its keys;
+//	(b) an entry that has been retired (Sweep, Clear) or discarded is not brought back, and its hold is not taken again, by an operation
+//	    that looked at it before: every operation acts on the entry it saw (its generation) and on nothing else;
 //	(c) a running entry is never swept, cleared, or asked about its unit;
 //	(d) the hold is released only when the unit is proven gone (Sweep) or a human says so (Clear); Discard, Settle and Add never release it.
 package quarantine
@@ -98,13 +119,17 @@ type Store struct {
 	checker  UnitChecker
 	now      func() time.Time
 
+	// window, when set (tests only), runs in the stretch of Add and Begin that is outside the lock: after the marker file is prepared,
+	// before the lock is taken.
+	window func()
+
 	mu      sync.Mutex
 	gen     uint64
 	entries map[string]rec // by Owner
 }
 
-// rec is an entry with the generation Add gave it: Sweep and Clear work from a snapshot taken without the lock, and a later Add
-// of the same owner must not be undone by them.
+// rec is an entry with its generation, which every transition changes: Sweep, Clear and Restore work from a snapshot taken without the
+// lock, and a later transition of the same owner must not be undone, or acted on, by them.
 type rec struct {
 	e   Entry
 	gen uint64
@@ -208,19 +233,19 @@ func (e Entry) clone() Entry {
 	return e
 }
 
-// writeMarker writes the marker through a temporary file, fsync and rename, so a crash leaves either the old file or the whole
-// new one, never half of it.
-func (s *Store) writeMarker(e Entry) error {
+// prepareMarker writes the marker to a temporary file and fsyncs it, without the store lock: this is the slow part. The file is not
+// the marker until commitMarker renames it (under the lock, after the generation and state have been checked again); a crash leaves
+// either the old marker or the whole new one, never half of it. The caller removes the temporary file (dropTmp) if it is not committed.
+func (s *Store) prepareMarker(e Entry) (tmp string, err error) {
 	raw, err := json.Marshal(e)
 	if err != nil {
-		return err
+		return "", err
 	}
-	final := filepath.Join(s.dir, markerName(e.Owner))
 	f, err := os.CreateTemp(s.dir, markerName(e.Owner)+".tmp-")
 	if err != nil {
-		return err
+		return "", err
 	}
-	tmp := f.Name()
+	tmp = f.Name()
 	ok := false
 	defer func() {
 		if !ok {
@@ -229,26 +254,38 @@ func (s *Store) writeMarker(e Entry) error {
 		}
 	}()
 	if err := f.Chmod(0o600); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := f.Write(raw); err != nil {
-		return err
+		return "", err
 	}
 	if err := f.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		return err
+		return "", err
 	}
 	ok = true
-	if d, err := os.Open(s.dir); err == nil { // make the rename itself durable
+	return tmp, nil
+}
+
+// commitMarker renames the prepared file over the owner's marker. Under the store lock; the rename is one syscall. syncDir (outside the
+// lock) makes the rename itself durable.
+func (s *Store) commitMarker(tmp, owner string) error {
+	if err := os.Rename(tmp, filepath.Join(s.dir, markerName(owner))); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func dropTmp(tmp string) { os.Remove(tmp) }
+
+func (s *Store) syncDir() {
+	if d, err := os.Open(s.dir); err == nil {
 		d.Sync()
 		d.Close()
 	}
-	return nil
 }
 
 func (s *Store) removeMarker(owner string) error {
@@ -259,24 +296,111 @@ func (s *Store) removeMarker(owner string) error {
 	return nil
 }
 
-// Add writes the marker atomically and makes the entry quarantined (none, running or quarantined before). It does not touch the hold: the
-// runner keeps it. A host with no guard writes its markers with Add when a run has ended without proof; with a guard Settle does the
-// state change and nothing needs to be written again.
-func (s *Store) Add(e Entry) error { return s.put(e, false, false) }
+// Add writes the marker atomically and makes the entry quarantined (running or quarantined before). It is for a host with no guard, where
+// the run ended without proof and the runner still holds the keys: it refuses (and changes nothing) unless the owner holds exactly
+// e.Keys now, because a marker without its hold would let Restore and Sweep report a hold that was never there. With a guard Settle does
+// the state change and nothing needs to be written again. It does not take or release any hold.
+func (s *Store) Add(e Entry) error {
+	e, tmp, err := s.prepare(e)
+	if err != nil {
+		return err
+	}
+	if s.window != nil {
+		s.window()
+	}
+	s.mu.Lock()
+	if err := s.holdsExactly(e); err != nil {
+		s.mu.Unlock()
+		dropTmp(tmp)
+		return err
+	}
+	err = s.install(e, tmp, false)
+	s.mu.Unlock()
+	s.syncDir()
+	return err
+}
 
 // Begin writes the marker of a run that is about to start its sandbox unit, before the unit exists, and the entry is running. If this
 // process dies while the unit runs, the marker is what gives the job's lock keys back to the next process (Restore) and keeps its
 // workspace until the unit is gone (Sweep); a marker written after the run cannot do that. An entry that exists is not overwritten
 // (ErrExists). The run ends with Discard (the unit is proven gone) or Settle/Add (it is not).
-func (s *Store) Begin(e Entry) error { return s.put(e, true, true) }
+func (s *Store) Begin(e Entry) error {
+	e, tmp, err := s.prepare(e)
+	if err != nil {
+		return err
+	}
+	if s.window != nil {
+		s.window()
+	}
+	s.mu.Lock()
+	if _, exists := s.entries[e.Owner]; exists {
+		s.mu.Unlock()
+		dropTmp(tmp)
+		return fmt.Errorf("%w: %s", ErrExists, e.Owner)
+	}
+	err = s.install(e, tmp, true)
+	s.mu.Unlock()
+	s.syncDir()
+	return err
+}
 
-// Settle says the run of a running entry is over without its unit being proven gone: the entry becomes quarantined, so that Sweep clears
-// it once the unit is gone. Only memory changes (the marker has been on disk since Begin), so it cannot fail. Any other state: nothing.
+// prepare validates e and writes its marker to a temporary file, outside the lock.
+func (s *Store) prepare(e Entry) (Entry, string, error) {
+	if err := validate(e); err != nil {
+		return e, "", fmt.Errorf("quarantine: %w", err)
+	}
+	e = e.clone()
+	if e.Since.IsZero() {
+		e.Since = s.now()
+	}
+	tmp, err := s.prepareMarker(e)
+	if err != nil {
+		return e, "", fmt.Errorf("quarantine: %w", err)
+	}
+	return e, tmp, nil
+}
+
+// install renames the prepared marker into place and sets the entry with a new generation. s.mu held.
+func (s *Store) install(e Entry, tmp string, live bool) error {
+	if err := s.commitMarker(tmp, e.Owner); err != nil {
+		return fmt.Errorf("quarantine: %w", err)
+	}
+	s.gen++
+	s.entries[e.Owner] = rec{e: e, gen: s.gen, live: live}
+	return nil
+}
+
+// holdsExactly: the owner holds exactly e.Keys in the lock table. s.mu held (lock order: store, then table).
+func (s *Store) holdsExactly(e Entry) error {
+	want := map[string]bool{}
+	for _, k := range e.Keys {
+		want[k] = true
+	}
+	have := map[string]bool{}
+	for k, owner := range s.locks.Held() {
+		if owner == e.Owner {
+			have[k] = true
+		}
+	}
+	ok := len(want) == len(have)
+	for k := range want {
+		ok = ok && have[k]
+	}
+	if !ok {
+		return fmt.Errorf("quarantine: %s does not hold exactly the keys its marker names", e.Owner)
+	}
+	return nil
+}
+
+// Settle says the run of a running entry is over without its unit being proven gone: the entry becomes quarantined (and gets a new
+// generation, so an operation that saw it running cannot act on it as quarantined), so that Sweep clears it once the unit is gone. Only
+// memory changes (the marker has been on disk since Begin), so it cannot fail. Any other state: nothing.
 func (s *Store) Settle(owner string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if r, ok := s.entries[owner]; ok && r.live {
-		r.live = false
+		s.gen++
+		r.live, r.gen = false, s.gen
 		s.entries[owner] = r
 	}
 }
@@ -295,34 +419,13 @@ func (s *Store) Discard(owner string) error {
 	if !r.live {
 		return ErrNotRunning
 	}
-	r.live = false
+	s.gen++
+	r.live, r.gen = false, s.gen
 	s.entries[owner] = r
 	if err := s.removeMarker(owner); err != nil {
 		return fmt.Errorf("quarantine: %w", err)
 	}
 	delete(s.entries, owner)
-	return nil
-}
-
-// put is Begin (running, refusing an existing entry) and Add (quarantined, replacing it).
-func (s *Store) put(e Entry, live, refuseExisting bool) error {
-	if err := validate(e); err != nil {
-		return fmt.Errorf("quarantine: %w", err)
-	}
-	e = e.clone()
-	if e.Since.IsZero() {
-		e.Since = s.now()
-	}
-	s.mu.Lock() // marker and entry change together: a Sweep or Clear holding the older snapshot must not see one without the other
-	defer s.mu.Unlock()
-	if _, exists := s.entries[e.Owner]; exists && refuseExisting {
-		return fmt.Errorf("%w: %s", ErrExists, e.Owner)
-	}
-	if err := s.writeMarker(e); err != nil {
-		return fmt.Errorf("quarantine: %w", err)
-	}
-	s.gen++
-	s.entries[e.Owner] = rec{e: e, gen: s.gen, live: live}
 	return nil
 }
 
@@ -332,14 +435,22 @@ func (s *Store) put(e Entry, live, refuseExisting bool) error {
 func (s *Store) Restore() error {
 	var errs []error
 	for _, h := range s.snapshot() {
-		if h.live {
-			continue // running in this process: the hold is the runner's
-		}
-		if err := s.reacquire(h.e); err != nil {
+		if err := s.restoreOne(h); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// restoreOne takes the hold back for the entry h saw, under the store lock and only if that entry (same generation) is still there and
+// not running: an entry retired or settled since is not brought back by this call. s.locks is taken inside s.mu (the one lock order).
+func (s *Store) restoreOne(h snap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.entries[h.e.Owner]; !ok || r.gen != h.gen || r.live {
+		return nil // gone, replaced, or running here (the hold is the runner's)
+	}
+	return s.reacquire(h.e)
 }
 
 // reacquire takes the entry's keys unless the owner already holds exactly them.
@@ -440,43 +551,54 @@ func (s *Store) safeDir(dir string) error {
 	return nil
 }
 
-// drop removes the snapshot's marker and forgets the entry, then releases its hold, all under the store lock and only if the entry
-// has not been replaced meanwhile. The marker goes first: if it cannot be removed the entry and its hold stay, and the next Sweep
-// tries again.
-// retire ends an entry under the store's lock: the entry must still be the one h saw (same generation) and, for Sweep, not running; the
-// directory goes (only if it passes safeDir; a human's Clear carries on without removing an unsafe one, Sweep stops), then the marker,
-// then the entry and the hold. It is the only place an entry is removed with its hold, so (b), (c) and (d) are decided here.
+// retire ends an entry: under the store lock the entry must still be the one h saw (same generation, which every transition changes) and
+// not running; the directory must pass safeDir (a human's Clear carries on without removing an unsafe one, Sweep stops); then the
+// marker, the entry and the hold go. The directory is removed after the commit, and only the one this commit removed the entry of; its
+// name holds the claim's hash, so no new job uses it. It is the only place an entry is removed with its hold, so (b), (c) and (d) are
+// decided here. A false result with no error means the entry was no longer the one h saw.
 func (s *Store) retire(h snap, human bool) (retired bool, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	r, ok := s.entries[h.e.Owner]
 	if !ok || r.gen != h.gen {
-		return false, nil // retired or replaced since it was looked at
+		s.mu.Unlock()
+		return false, nil // retired, replaced or settled since it was looked at
 	}
 	if r.live {
+		s.mu.Unlock()
 		if human {
 			return false, fmt.Errorf("%w: %s", ErrRunning, h.e.JobID)
 		}
 		return false, nil
 	}
-	if derr := s.safeDir(h.e.Dir); derr == nil {
-		if rerr := os.RemoveAll(h.e.Dir); rerr != nil {
-			return false, fmt.Errorf("remove %s: %w", h.e.Dir, rerr)
+	removeDir := true
+	if derr := s.safeDir(r.e.Dir); derr != nil {
+		if !human {
+			s.mu.Unlock()
+			log.Printf("quarantine: refusing to clear %s: %v", h.e.Owner, derr)
+			return false, nil
 		}
-	} else if !human {
-		log.Printf("quarantine: refusing to clear %s: %v", h.e.Owner, derr)
-		return false, nil
+		removeDir = false
 	}
 	if err := s.removeMarker(h.e.Owner); err != nil {
+		s.mu.Unlock()
 		return false, err
 	}
 	delete(s.entries, h.e.Owner)
 	s.locks.ReleaseOwner(h.e.Owner)
+	dir := r.e.Dir
+	s.mu.Unlock()
+	s.syncDir()
+	if removeDir {
+		if rerr := os.RemoveAll(dir); rerr != nil {
+			return true, fmt.Errorf("remove %s: %w", dir, rerr)
+		}
+	}
 	return true, nil
 }
 
-// Sweep clears every quarantined entry whose unit the checker proves gone (see retire). A running entry is not looked at. An entry
-// without a unit, a checker error, an unsafe directory or a missing work root keeps everything.
+// Sweep clears every quarantined entry whose unit the checker proves gone (see retire). A running entry is not looked at. The unit check
+// (a systemctl call) runs without the lock; retire looks at the entry again before it acts on the answer. An entry without a unit, a
+// checker error, an unsafe directory or a missing work root keeps everything.
 func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 	var errs []error
 	for _, h := range s.snapshot() {
@@ -486,7 +608,7 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 		if h.live {
 			continue
 		}
-		if err := s.reacquire(h.e); err != nil { // a conflict that has since gone away
+		if err := s.restoreOne(h); err != nil { // a conflict that has since gone away
 			log.Print(err)
 		}
 		if h.e.Unit == "" {
@@ -500,19 +622,19 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 			continue
 		}
 		ok, rerr := s.retire(h, false)
-		if rerr != nil {
-			errs = append(errs, rerr)
-			continue
-		}
 		if ok {
 			cleared++
+		}
+		if rerr != nil {
+			errs = append(errs, rerr)
 		}
 	}
 	return cleared, errors.Join(errs...)
 }
 
 // Clear is the human release of quarantined entries: the hold, the marker and, when it passes safeDir, the directory go for each named
-// job. A job whose command is running is refused, and a job that is not in the store is reported, after the others have been handled.
+// job. A job whose command is running is refused, an entry that changed while Clear was looking at it is reported (nothing was cleared;
+// ask again), and a job that is not in the store is reported, after the others have been handled.
 func (s *Store) Clear(jobID ...string) error {
 	byJob := map[string][]snap{}
 	for _, h := range s.snapshot() {
@@ -526,8 +648,11 @@ func (s *Store) Clear(jobID ...string) error {
 			continue
 		}
 		for _, h := range es {
-			if _, err := s.retire(h, true); err != nil {
+			ok, err := s.retire(h, true)
+			if err != nil {
 				errs = append(errs, err)
+			} else if !ok {
+				errs = append(errs, fmt.Errorf("quarantine: the entry for job %q changed while it was being cleared, nothing was cleared: ask again", id))
 			}
 		}
 	}
