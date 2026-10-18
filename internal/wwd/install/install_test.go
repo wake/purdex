@@ -180,7 +180,7 @@ func TestSystemdUnit(t *testing.T) {
 		}
 	}
 	// The worker starts jobs with `sudo systemd-run` (spec §5); sudo refuses to run when no_new_privs is set, so the unit must not set
-	// it (NoNewPrivileges=yes), and anything that would imply it is kept out as well. The privilege boundary is sudoers (§12).
+	// it (NoNewPrivileges=yes), and anything that would imply it is kept out as well. The privilege boundary is sudoers (§11).
 	for _, banned := range []string{"NoNewPrivileges", "RestrictSUIDSGID", "SystemCallFilter", "SecureBits"} {
 		if strings.Contains(u, banned) {
 			t.Errorf("the unit must not set %s: it would stop sudo systemd-run (spec §5)", banned)

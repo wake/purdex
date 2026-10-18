@@ -74,7 +74,7 @@ const UnitSlice = "wwdd.slice"
 //
 // No NoNewPrivileges: the worker starts jobs through `sudo systemd-run` (spec §5),
 // and sudo refuses to run when no_new_privs is set. The privilege boundary is
-// sudoers (§12), not this flag; TestSystemdUnit keeps it out.
+// sudoers (§11), not this flag; TestSystemdUnit keeps it out.
 func Unit(o UnitOpts) string {
 	return fmt.Sprintf(`[Unit]
 Description=wwd - the pool's watcher/worker daemon

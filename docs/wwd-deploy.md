@@ -75,7 +75,7 @@ What the install does, all of it idempotent (a second run changes nothing and re
    `/etc/systemd/system/wwd.service` through `sudo install` (`Restart=always`, `Slice=wwdd.slice`,
    `CPUQuota=100%` (at most one core), `MemoryMax=512M`, `TasksMax=256`, `ProtectSystem=full`; deliberately no
    `NoNewPrivileges`: the worker starts jobs through `sudo systemd-run` (spec §5), which sudo refuses under that flag,
-   and the privilege boundary is sudoers, spec §12). wwd itself runs in
+   and the privilege boundary is sudoers, spec §11). wwd itself runs in
    **`wwdd.slice`**, so it does not sit in `system.slice` among the production services (livekit, mysql, …); the
    worker's jobs run in `wwd.slice` (spec §5), a different slice. The name has no hyphen on purpose: systemd takes
    `wwd-xxx.slice` for a child of `wwd.slice`, which would put wwd's own process in with the jobs. An install over a
