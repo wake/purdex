@@ -49,7 +49,7 @@ func TestTickBuildsAFullValidRecord(t *testing.T) {
 	if err := f.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if f.V != wire.Proto || f.HostID != "h1" || f.Alias != "mlab" || f.OSVersion != "26.6.2" || f.Platform == "" || f.Arch == "" || !f.At.Equal(s0) {
+	if f.V != wire.WriteProto || f.HostID != "h1" || f.Alias != "mlab" || f.OSVersion != "26.6.2" || f.Platform == "" || f.Arch == "" || !f.At.Equal(s0) {
 		t.Fatalf("identity: %+v", f)
 	}
 	if f.CPU.NCPU != 10 || f.Mem.TotalMB != 16384 || len(f.Disk) != 1 {

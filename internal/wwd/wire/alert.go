@@ -1,0 +1,150 @@
+package wire
+
+import (
+	"fmt"
+	"regexp"
+	"time"
+)
+
+// ---- holds (spec §13.4): the new fields of an Exception ----
+
+// HoldAllow lists what a hold still admits: a job whose class or whose repo is listed. Both lists empty: none.
+type HoldAllow struct {
+	Classes []JobClass `json:"classes"`
+	Repos   []string   `json:"repos"`
+}
+
+// HoldFlag marks a hold's purpose.
+type HoldFlag string
+
+const (
+	// HoldFlagRelease is a release hold: the host's light slots drop to 1 while it lasts (§13.3).
+	HoldFlagRelease HoldFlag = "release"
+	// HoldFlagExpectPressure is for a deliberate stress test: it suspends only the PSI part of the "mserv service" push.
+	HoldFlagExpectPressure HoldFlag = "expect_pressure"
+)
+
+func (f HoldFlag) Valid() bool { return f == HoldFlagRelease || f == HoldFlagExpectPressure }
+
+var reHoldRepo = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+func validateHoldFields(a *HoldAllow, flags []HoldFlag) error {
+	if a != nil {
+		for _, c := range a.Classes {
+			if !c.Valid() {
+				return fmt.Errorf("allow: invalid class %q", c)
+			}
+		}
+		for _, r := range a.Repos {
+			if !reHoldRepo.MatchString(r) {
+				return fmt.Errorf("allow: %q is not a repo name", r)
+			}
+		}
+	}
+	seen := map[HoldFlag]bool{}
+	for _, f := range flags {
+		if !f.Valid() {
+			return fmt.Errorf("invalid flag %q", f)
+		}
+		if seen[f] {
+			return fmt.Errorf("flag %q repeated", f)
+		}
+		seen[f] = true
+	}
+	return nil
+}
+
+// ---- alerts (spec §13.3) ----
+
+// AlertKind names the rule that raised an alert (the table in §13.3).
+type AlertKind string
+
+const (
+	AlertDiskLow        AlertKind = "disk_low"
+	AlertDiskFalling    AlertKind = "disk_falling"
+	AlertPressureHeld   AlertKind = "pressure_held"
+	AlertMservService   AlertKind = "mserv_service"
+	AlertWorkerCrash    AlertKind = "worker_crash_loop"
+	AlertSilence        AlertKind = "silence"
+	AlertThrash         AlertKind = "thrash"
+	AlertResidentGrowth AlertKind = "resident_growth"
+	AlertOrphans        AlertKind = "orphans"
+)
+
+func (k AlertKind) Valid() bool {
+	switch k {
+	case AlertDiskLow, AlertDiskFalling, AlertPressureHeld, AlertMservService, AlertWorkerCrash, AlertSilence,
+		AlertThrash, AlertResidentGrowth, AlertOrphans:
+		return true
+	}
+	return false
+}
+
+// AlertLevel is how an alert is delivered: pushed to the person at once, or gathered into the daily digest.
+type AlertLevel string
+
+const (
+	AlertPush   AlertLevel = "push"
+	AlertDigest AlertLevel = "digest"
+)
+
+func (l AlertLevel) Valid() bool { return l == AlertPush || l == AlertDigest }
+
+// MaxAlertKeyBytes bounds a key (it is a row key and appears in a push).
+const MaxAlertKeyBytes = 200
+
+// Alert is one row of a host's wwd.db `alerts` table. Key identifies it (the same key is one alert across time); Since is when it
+// began, Last the latest time its rule still held, ClearedAt when it stopped (null: active).
+type Alert struct {
+	Key       string     `json:"key"`
+	Kind      AlertKind  `json:"kind"`
+	Level     AlertLevel `json:"level"`
+	Since     time.Time  `json:"since"`
+	Last      time.Time  `json:"last"`
+	ClearedAt *time.Time `json:"cleared_at"`
+}
+
+func (a Alert) Validate() error {
+	if a.Key == "" || len(a.Key) > MaxAlertKeyBytes {
+		return fmt.Errorf("alert: the key must be 1 to %d bytes", MaxAlertKeyBytes)
+	}
+	if !a.Kind.Valid() {
+		return fmt.Errorf("alert: invalid kind %q", a.Kind)
+	}
+	if !a.Level.Valid() {
+		return fmt.Errorf("alert: invalid level %q", a.Level)
+	}
+	if a.Since.IsZero() || a.Last.IsZero() {
+		return fmt.Errorf("alert: since and last are required")
+	}
+	if a.Last.Before(a.Since) {
+		return fmt.Errorf("alert: last is before since")
+	}
+	if a.ClearedAt != nil && a.ClearedAt.Before(a.Since) {
+		return fmt.Errorf("alert: cleared_at is before since")
+	}
+	return nil
+}
+
+// AlertList is GET /v1/alerts: the host's alerts that are active (and recently cleared ones the reader needs to see clear).
+type AlertList struct {
+	Host   string  `json:"host"`
+	Alerts []Alert `json:"alerts"`
+}
+
+func (l AlertList) Validate() error {
+	if l.Host == "" {
+		return fmt.Errorf("alerts: missing host")
+	}
+	for i, a := range l.Alerts {
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("alerts[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// AlertEvent is the `alert` SSE event: only a hint that Host's list changed. The reader reads the list again.
+type AlertEvent struct {
+	Host string `json:"host"`
+}
