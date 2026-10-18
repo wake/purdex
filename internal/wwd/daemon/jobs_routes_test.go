@@ -208,8 +208,32 @@ func TestJobReadsForwardToAPeer(t *testing.T) {
 	assert.True(t, strings.HasPrefix(hdr.Get("Content-Type"), "text/plain"))
 	assert.Equal(t, "nosniff", hdr.Get("X-Content-Type-Options"))
 
+	code, raw, _ = local.socketDo(t, "GET", "/v1/jobs/"+sub.ID+"?host=air26", nil)
+	require.Equal(t, 200, code, "one job by id, from the remote queue")
+	got, err := wire.Decode[wire.Job](raw)
+	require.NoError(t, err)
+	assert.Equal(t, sub.ID, got.ID)
+	code, _, _ = local.socketDo(t, "GET", "/v1/jobs/"+sub.ID, nil)
+	assert.Equal(t, 404, code, "and the local queue has no such job")
+
+	code, _, _ = local.socketDo(t, "POST", "/v1/jobs/"+sub.ID+"/cancel?host=air26", nil)
+	assert.Equal(t, 200, code)
+	held, err := remote.q.Get(context.Background(), sub.ID)
+	require.NoError(t, err)
+	assert.Equal(t, wire.StateClaimed, held.State, "the remote job is held, so it was only asked to stop")
+	code, raw, _ = local.socketDo(t, "GET", "/v1/jobs/"+sub.ID+"?host=air26", nil)
+	require.Equal(t, 200, code)
+	assert.Equal(t, wire.StateClaimed, mustJob(t, raw).State)
+
 	code, _, _ = local.socketDo(t, "GET", "/v1/jobs?host=nowhere", nil)
 	assert.Equal(t, 404, code)
+}
+
+func mustJob(t *testing.T, raw []byte) wire.Job {
+	t.Helper()
+	j, err := wire.Decode[wire.Job](raw)
+	require.NoError(t, err)
+	return j
 }
 
 // A daemon built without a queue has no job routes: the TCP surface answers 404 behind the token, the socket keeps its 501 for a
