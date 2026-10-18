@@ -34,7 +34,6 @@ SOCK='$HOME/.local/share/wwd/wwd.sock'
 DB='$HOME/.local/share/wwd/wwd.db'
 RAN=/tmp/wwd-c2-ran.log          # the probe tasks append one line per run here, outside the workspace (darwin hosts)
 WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
-AIR19_BASE=0
 
 # ---- the cases (number, title, hosts, minutes, needs) --------------------------------------------------------
 catalog() {
@@ -172,13 +171,17 @@ jrelease() { printf '{"claim_id":"%s","reason":"reclaim"}' "$1"; }
 jworker() { printf '{"worker":"%s","labels":["os:darwin","arch:arm64"],"fingerprint":{}}' "$1"; }   # a real worker's labels: the job's must be a subset
 # db_q SQL: a read-only query of the origin's wwd.db (SQL with single quotes only)
 db_q() { if [ "$dry" -eq 1 ]; then say "? on mlab: sqlite3 -readonly: $1" >&2; echo 0; else q mlab "sqlite3 -readonly $DB \"$1\""; fi; }
-# air19_new: how many jobs air19 has claimed since the run began = the count of all jobs it ever claimed, minus the count at the start. This
-# does not depend on when a job was made, so a job queued before the run (--force) and claimed during it is counted too.
-AIR19_Q="select count(*) from jobs where claim_worker='air19'"
+# air19_new: how many jobs air19 claimed since the run began. Two independent sources, added: (1) the ids of jobs with claim_worker='air19' now
+# that were not in the list taken at the start (a clean-up of old rows cannot hide a new one; a job made before the run counts too);
+# (2) the lines in air19's own probe log, which was emptied at the start and which a job leaves even if it is taken back from air19 later
+AIR19_Q="select id from jobs where claim_worker='air19'"
 air19_new() {
-  a_n=$(db_q "$AIR19_Q")
-  case "$a_n" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
-  if [ "$a_n" -gt "$AIR19_BASE" ]; then echo $((a_n - AIR19_BASE)); else echo 0; fi
+  [ "$dry" -eq 1 ] && { echo 0; return 0; }
+  a_cur=$(db_q "$AIR19_Q") || { echo "?"; return 0; }
+  a_new=$(printf '%s\n' "$a_cur" | sort -u | comm -13 "$WORK/air19.base" - | grep -c . || true)
+  a_ran=$(q air19 "n=\$(grep -c 'job=' $RAN 2>/dev/null); echo \${n:-0}") || { echo "?"; return 0; }
+  case "$a_ran" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
+  echo $((a_new + a_ran))
 }
 mserv_dbs() { q mserv "mysql -N -e 'show databases' 2>/dev/null | grep -c '^wwd_' || true"; }     # TODO(first-run): the database naming and the credentials of mserv's test MySQL
 # the jobs this run made are listed in a file: submit runs in a $( ) subshell, which could not hand a variable back
@@ -236,8 +239,12 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
-  AIR19_BASE=$(db_q "$AIR19_Q"); case "$AIR19_BASE" in ''|*[!0-9]*) say "FAIL: cannot read the claims of air19 from wwd.db"; exit 1 ;; esac
   x mkdir -p "$WORK/repo" "$WORK/saved"
+  if [ "$dry" -eq 0 ]; then
+    pc_b=$(db_q "$AIR19_Q") || { say "FAIL: cannot read the claims of air19 from wwd.db"; exit 1; }
+    printf '%s\n' "$pc_b" | sort -u > "$WORK/air19.base"
+  fi
+  on air19 "rm -f $RAN"
   scratch_repo
 }
 # the scratch repo: probe tasks, one commit

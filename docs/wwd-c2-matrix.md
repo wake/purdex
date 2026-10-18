@@ -160,8 +160,10 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 
 ### 案例 14：air19 不 claim
 
-- 查 wwd.db：`select count(*) from jobs where claim_worker='air19'` 現在的值減去**執行開始時**的值（前置檢查記下）是 **0**；air19 的 worker 是關的。
-  這樣不看工作是什麼時候建立的，所以矩陣開始前就排進佇列、之後才被 air19 claim 的工作（`--force`）也會被數到。假設：wwd.db 的 `claim_worker` 在 claim 後就記著那台（第一次執行要核對，見 §8 第 6 項）。
+- 兩個獨立來源相加，總數必須是 **0**；另外 air19 的 worker 是關的。
+  (1) wwd.db：`select id from jobs where claim_worker='air19'` 現在的 id 清單，扣掉**執行開始時**記下的清單（不看工作何時建立，所以矩陣開始前排隊、之後才被 air19 claim 的工作也會數到；清掉舊資料列也抵銷不了新增）。
+  (2) air19 自己的 probe log（`/tmp/wwd-c2-ran.log`，開始時清空）：只要有任何一行，就表示 air19 真的跑過 probe，即使那個工作後來被別台接走、wwd.db 的 `claim_worker` 被覆寫也一樣。
+  兩者都不能抓到的：air19 claim 後立刻被收回、而且沒有跑到 probe 的短暫 claim（wwd.db 的列被覆寫）；要完整排除需要 claim 事件紀錄，見 §8 第 6 項。
 
 ## 5. probe 任務
 
@@ -225,7 +227,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 3. `PUT /v1/worker` 收的 body 形狀就是 `GET /v1/worker` 給的。
 4. 缺 log 時 `GET /v1/jobs/{id}/log` 回 404。
 5. 案例 12：被拒絕的遠端 task 最終的 state／reason 字樣（4e 定義）。
-6. 案例 14 與每個案例結尾的 air19 檢查：wwd.db 的 `jobs.claim_worker` 是否在 claim 後就記著 worker 名，以及 jobs 表是否會被清理（清理使數量變少，腳本把減少視為 0）。
+6. 案例 14 與每個案例結尾的 air19 檢查：wwd.db 的 `jobs.claim_worker` 在 claim 後是否記著 worker 名、reclaim 是否覆寫它；有沒有 claim 事件表或事件序號，有的話改用它（單調、不會被清理或覆寫抵銷）。
 7. 案例 13：per-job 資料庫的環境變數名（暫用 `DB_DATABASE`／`DB_HOST`／`DB_PORT`／`DB_USERNAME`／`DB_PASSWORD`）、mserv 測試 MySQL 的資料庫命名與登入方式。
 8. air26 非互動 shell 的 PATH 找得到 `pdx`（案例 8）。
 
