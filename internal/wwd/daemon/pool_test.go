@@ -48,7 +48,7 @@ func TestPoolPollsPeersAndKeepsLastKnownWhenOneGoesAway(t *testing.T) {
 	if a := byAlias["air26"]; !a.Reachable || a.Facts == nil || a.Facts.Alias != "air26" {
 		t.Errorf("air26: %+v", a)
 	}
-	if a := byAlias["air19"]; a.Reachable || a.Facts != nil || a.Info.Proto != wire.Proto || a.Info.Labels == nil {
+	if a := byAlias["air19"]; a.Reachable || a.Facts != nil || a.Info.Proto != wire.MinProto || a.Info.Labels == nil {
 		t.Errorf("a peer never reached: reachable=false, facts null, a valid info stub: %+v", a)
 	}
 	if err := (wire.Pool{Peers: got}).Validate(); err != nil {

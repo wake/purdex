@@ -32,6 +32,7 @@ import { ElectronSection } from '../../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { ProfileSection } from '../../components/settings/profile/ProfileSection'
+import { PersonasSectionHost } from '../../components/settings/personas/PersonasSectionHost'
 import { WorkerSettingsSection } from '../../components/settings/WorkerSettingsSection'
 import { WorkerSettingsPage } from '../../components/settings/WorkerSettingsPage'
 import { WorkerLiveTab } from '../../components/settings/WorkerLiveTab'
@@ -308,6 +309,7 @@ export function registerBuiltinModules(): void {
     component: InterfaceSectionHost,
   })
   registerSettingsSection({ id: 'profile', label: 'settings.section.profile', order: SETTINGS_ORDER.PROFILE, component: ProfileSection })
+  registerSettingsSection({ id: 'personas', label: 'settings.section.personas', order: SETTINGS_ORDER.PERSONAS, component: PersonasSectionHost })
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).

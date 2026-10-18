@@ -79,7 +79,7 @@ describe('the handoff chip on the panel rows', () => {
 })
 
 describe('the title-bar cell', () => {
-  const seat: TeamSeatView = { sessionId: 'A', title: 'title A', hostId: HOST, sessionCode: 'code-a-tm', role: 'member', tabId: 'ma', state: 'active', hostAlias: '', remote: false }
+  const seat: TeamSeatView = { sessionId: 'A', title: 'title A', address: 'mlab/A-xx', hostId: HOST, sessionCode: 'code-a-tm', role: 'member', tabId: 'ma', state: 'active', hostAlias: '', remote: false }
   it('carries the handoff in its tooltip only: no mark, no extra width', () => {
     render(<TeamCell teamKey={KEY} seat={seat} isActive={false} onOpen={() => {}} />)
     expect(screen.getByTestId('team-panel-cell').getAttribute('title')).not.toContain('已寫好接力檔')

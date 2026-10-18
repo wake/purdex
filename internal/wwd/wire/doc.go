@@ -6,8 +6,14 @@ package wire
 
 // Contract constants.
 const (
-	// Proto is the wire protocol version carried in facts (`v`) and /v1/info.
-	Proto = 1
+	// Proto is the highest wire protocol version this build reads, and what /v1/info announces (spec §13.1). 2 adds
+	// readers for Facts mem.decompress_rate and queue, Exception allow and flags, the Alert payloads and GET /v1/alerts.
+	Proto = 2
+	// MinProto is the oldest version a reader still takes: a v1 payload never has the fields proto 2 added.
+	MinProto = 1
+	// WriteProto is the `v` writers put in facts. It stays 1, and the new fields stay empty, until every pool host reports
+	// proto >= 2 in /v1/info (spec §13.1, the two phases); the PR that fills them raises it.
+	WriteProto = 1
 	// LeaseS and RenewS are the default relative lease and renewal seconds.
 	LeaseS = 60
 	RenewS = 15

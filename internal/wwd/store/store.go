@@ -20,7 +20,7 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // hostMinutesDDL (v2): one row per finished minute, the whole rollup record as
 // JSON (minutes.go).
@@ -33,6 +33,14 @@ const observationsIndexDDL = `CREATE INDEX IF NOT EXISTS observations_started ON
 // usageDDL (v4): one row per finished job, what it used and the host around it, as JSON (usage.go).
 const usageDDL = `CREATE TABLE IF NOT EXISTS job_usage (job_id TEXT PRIMARY KEY, ended_ms INTEGER NOT NULL, rec TEXT NOT NULL)`
 const usageIndexDDL = `CREATE INDEX IF NOT EXISTS job_usage_ended ON job_usage (ended_ms)`
+
+// startsDDL (v5): one row per wwd run (spec §13.1): when it started, which version, and how the run before it ended if that is known
+// (” when not). The rule "starts in the last hour" reads it. This PR makes the table; the start record is written by 8a-0.
+const startsDDL = `CREATE TABLE IF NOT EXISTS wwd_starts (id INTEGER PRIMARY KEY AUTOINCREMENT, started_ms INTEGER NOT NULL UNIQUE, version TEXT NOT NULL, prev_exit TEXT NOT NULL DEFAULT '')`
+
+// alertsDDL (v5): a host's alerts (spec §13.3). The key is one alert across time; cleared_ms is NULL while it is active. This PR
+// makes the table and reads it (ActiveAlerts); the rules that write it come in 8a-1 and 8a-2.
+const alertsDDL = `CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, kind TEXT NOT NULL, level TEXT NOT NULL, since_ms INTEGER NOT NULL, last_ms INTEGER NOT NULL, cleared_ms INTEGER, detail TEXT NOT NULL DEFAULT '')`
 
 // Store is the open wwd.db.
 type Store struct{ db *sql.DB }
@@ -84,6 +92,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			observationsIndexDDL,
 			usageDDL,
 			usageIndexDDL,
+			startsDDL,
+			alertsDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -113,6 +123,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if have < 4 { // v4: the usage of finished jobs
 			for _, stmt := range []string{usageDDL, usageIndexDDL} {
+				if _, err := tx.ExecContext(ctx, stmt); err != nil {
+					return err
+				}
+			}
+		}
+		if have < 5 { // v5: the start records and the alerts of spec §13 (every statement is IF NOT EXISTS: a re-run changes nothing)
+			for _, stmt := range []string{startsDDL, alertsDDL} {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
 					return err
 				}

@@ -121,6 +121,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send('badge:set', report, BADGE_DOC_ID),
   },
 
+  // Persona photo (name pool v2 plan P2): the main process fetches a PlaceCats/PlaceDog URL, which send no CORS headers,
+  // and answers a data URL. It refuses anything off its allowlist; the page calls it only after its own check.
+  fetchAvatar: (url: string): Promise<string> => ipcRenderer.invoke('avatar:fetch', url),
+
   // Deeplink (purdex://execution/<id>[?host=<hint>]) — main parses the OS
   // protocol URL and broadcasts here; the SPA resolver (P.12) navigates.
   onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => {

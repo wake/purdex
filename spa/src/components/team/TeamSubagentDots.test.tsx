@@ -13,7 +13,7 @@ vi.mock('./TeamSidebarBlock', () => ({
 }))
 
 const seat = (id: string, code: string): TeamSeatView => ({
-  sessionId: id, title: id, hostId: 'h1', sessionCode: code, role: 'member', tabId: null, state: 'active', hostAlias: '', remote: false,
+  sessionId: id, title: id, address: `mlab/${id}-xx`, hostId: 'h1', sessionCode: code, role: 'member', tabId: null, state: 'active', hostAlias: '', remote: false,
 })
 const ref = { id: 'a', type: 'cc', started_at: 1, source_pid: 0, source_start_time: '' }
 

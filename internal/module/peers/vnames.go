@@ -21,6 +21,8 @@ type PeerNameStore interface {
 	RenamePool(ctx context.Context, sessionID, oldName, newName string) (store.PeerNameEntry, bool, error)
 	Lookup(ctx context.Context, sessionIDs []string) (map[string]store.PeerNameEntry, error)
 	ByRefs(ctx context.Context, refs []string) (map[string]string, error)
+	// Aliases are the old names of renamed sessions (name pool v2 spec §6.3): routing reads them as data.
+	Aliases(ctx context.Context) ([]store.PeerNameAlias, error)
 }
 
 // ConversationNameReader reads the registry names recorded for conversations
@@ -35,6 +37,31 @@ type ConversationNameReader interface {
 func (m *Module) WithPeerNames(s PeerNameStore, convNames ConversationNameReader) *Module {
 	m.peerNames, m.convNames = s, convNames
 	return m
+}
+
+// aliasMap is the aliases routing resolves a name through (full alias name -> ref). It is read per local send, not cached: the
+// table holds at most a few hundred rows, a send is rare beside a rename, and a cache would need dropping on every rename path.
+// ok is false when the store did not answer: the caller must then treat the resolution as partial, because a miss may only be a
+// missing alias and must not fall through to a bare tmux session name of the same text (codex attack on #3435).
+func (m *Module) aliasMap(ctx context.Context) (refs, sessions map[string]string, ok bool) {
+	if m.peerNames == nil {
+		return nil, nil, true
+	}
+	ctx, cancel := context.WithTimeout(ctx, namerTimeout)
+	defer cancel()
+	rows, err := m.peerNames.Aliases(ctx)
+	if err != nil {
+		m.logf("peers: reading the name aliases failed, resolving this send as partial: %v", err)
+		return nil, nil, false
+	}
+	if len(rows) == 0 {
+		return nil, nil, true
+	}
+	refs, sessions = make(map[string]string, len(rows)), make(map[string]string, len(rows))
+	for _, a := range rows {
+		refs[a.Alias], sessions[a.Alias] = a.Ref, a.SessionID
+	}
+	return refs, sessions, true
 }
 
 // namerTimeout bounds naming outside an inventory pass (the self verbs, the

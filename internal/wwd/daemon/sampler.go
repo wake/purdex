@@ -31,6 +31,10 @@ type SamplerOptions struct {
 	WorkerEnabled            bool
 	Fault                    *fault.Hooks // test hooks (nil: none): the owner file and the zone override
 	OwnerRule                string       // free text shown in facts.worker.owner_rule ("" without an owner rule)
+	// GateHeavyFull, when set, says whether this host's pdx gate has all its heavy slots held (or cannot be read): headroom.heavy is then
+	// 0, because until WWD-6 a queue job runs outside the gate's slots (#3447). nil: this host has no gate to count. It is asked on every
+	// sample, outside the sampler's lock, and does file reads only.
+	GateHeavyFull func() bool
 	// State, when set, is where the worker settings and the exceptions come from
 	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
 	State *HostState
@@ -97,7 +101,7 @@ func (s *Sampler) Tick(now time.Time) {
 	reading, err := s.collector.Sample()
 	reading.At = now
 	var f wire.Facts
-	f.V, f.HostID, f.Alias, f.OSVersion = wire.Proto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
+	f.V, f.HostID, f.Alias, f.OSVersion = wire.WriteProto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
 	f.Exception = []wire.FactExc{}
@@ -119,17 +123,20 @@ func (s *Sampler) Tick(now time.Time) {
 		}
 		o.Active, o.Reason = true, "fault: owner_active_file"
 		f.Owner = &o
-	} else if f.Owner == nil && s.opts.OwnerRule == "" && s.opts.Fault.OwnerFileAbsent() {
-		// no owner rule on this host ([owner] off; with a rule a null block is a failed reading, and a yield must stay) and the file is
+	} else if f.Owner == nil && f.Worker.OwnerRule == "" && s.opts.Fault.OwnerFileAbsent() {
+		// no owner rule in force on this host (f.Worker.OwnerRule: what a PUT /v1/worker last set, the same thing the worker loop reads as
+		// "has an owner rule"; with a rule a null block is a failed reading, and a yield must stay) and the file is
 		// confirmed absent: a null block would not end a yield the file started (yield.Observe), so the block says the owner is away, with a
 		// reason that names the hook (jobusage ignores it, like the active one)
 		f.Owner = &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
 	}
+	gateFull := s.opts.GateHeavyFull != nil && s.opts.GateHeavyFull() // file reads: before the lock
 	s.mu.Lock()
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
 		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
+		GateHeavyFull: gateFull,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB

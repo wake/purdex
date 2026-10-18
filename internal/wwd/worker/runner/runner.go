@@ -14,6 +14,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
 )
@@ -61,15 +62,17 @@ func sameSet(a, b []string) bool {
 	return true
 }
 
-// Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL).
+// Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL). ref is the job as this
+// worker names it: the connection it came in on and its id (a job id is only unique per origin); every step gets it, so that whatever a
+// step names on this host (a database, a process mark, a unit) can be made from both parts.
 type Exec interface {
-	Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error)
+	Materialize(ctx context.Context, ref ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error)
 	// Prepare finds the job's task in the workspace's manifest (the snapshot's, not the worker's), checks the arguments and works out
 	// what to run. It runs after the workspace is made and before the job is started. A *Rejected means the job is not runnable as
 	// submitted; any other error is the host's trouble.
-	Prepare(ctx context.Context, job wire.Job, ws snapshot.Workspace) (Plan, error)
+	Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace) (Plan, error)
 	// Run runs the plan Prepare made; nothing is worked out again.
-	Run(ctx context.Context, job wire.Job, ws snapshot.Workspace, plan Plan) run.Result
+	Run(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, plan Plan) run.Result
 }
 
 // Plan is what to run, fixed once by Prepare.
@@ -224,7 +227,8 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, finish Finish, onClaim func(claimID string, reclaim func())) Ended {
 	job := cand.Job
 	ended := Ended{Source: cand.Source, Job: job}
-	owner := cand.Source + "/" + job.ID // a job id is only unique per origin; the table is host-wide
+	ref := ident.Ref{Source: cand.Source, ID: job.ID}
+	owner := ref.Key() // a job id is only unique per origin; the table is host-wide
 
 	var cr wire.ClaimResponse
 	var sent time.Time
@@ -281,11 +285,11 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 	var plan Plan
 	var runErr error
 	started := false
-	if ws, err = c.cfg.Exec.Materialize(runCtx, job, cr.ClaimID); err != nil {
+	if ws, err = c.cfg.Exec.Materialize(runCtx, ref, job, cr.ClaimID); err != nil {
 		runErr = err
 	} else if st.get() == stopNone && runCtx.Err() == nil {
 		var perr error
-		if plan, perr = c.cfg.Exec.Prepare(runCtx, job, ws); perr != nil {
+		if plan, perr = c.cfg.Exec.Prepare(runCtx, ref, job, ws); perr != nil {
 			runErr = perr
 		} else if st.get() == stopNone && runCtx.Err() == nil { // not stopped while the plan was made
 			serr := c.start(runCtx, origin, job.ID, cr.ClaimID, lease, st)
@@ -311,7 +315,7 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 			}
 		}
 		if runErr == nil {
-			res = c.cfg.Exec.Run(runCtx, job, ws, plan)
+			res = c.cfg.Exec.Run(runCtx, ref, job, ws, plan)
 			if g := c.cfg.Guard; g != nil {
 				g.End(info, res.Err != nil && res.Outcome != run.StartFailed)
 			}
