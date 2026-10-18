@@ -64,11 +64,15 @@ type Module struct {
 	src    eventSource          // the local wwd's event stream; nil: cl
 	cancel context.CancelFunc   // ends the stream loop
 	wg     sync.WaitGroup       // the stream loop
+	// where the last catch-up read stopped (memory only: a restarted daemon has no App connection that missed anything)
+	cursor, epoch string
+	based         bool
 }
 
 // eventSource is the part of the wwd client the stream loop reads; *client.Client is one.
 type eventSource interface {
 	Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) (done bool)) error
+	JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error)
 }
 
 func New() *Module {
