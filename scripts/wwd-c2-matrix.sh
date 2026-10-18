@@ -98,12 +98,14 @@ svc_up() {
   on "$1" "$su_c" || return 1                                                  # a failed start stays on the list
   DOWNED=$(echo "$DOWNED" | tr ' ' '\n' | grep -v "^$1\$" | tr '\n' ' ')     # only once it is up
 }
-# svc_pid_ok HOST PID: PID is a decimal number above 1 (0 and -1 would signal a whole group or every process) and is the wwd binary
+# svc_pid_ok HOST PID: PID is a decimal number above 1 (0 and -1 would signal a whole group or every process) and is the wwd binary.
+# Returns 0 for yes, 1 for "confirmed not wwd", 2 for "could not ask" (ssh or ps failed): a caller that must undo something keeps it then
 svc_pid_ok() {
   case "$2" in ''|*[!0-9]*) return 1 ;; esac
   [ "$2" -gt 1 ] || return 1
   [ "$dry" -eq 1 ] && return 0
-  on "$1" "ps -p $2 -o command= | grep -q '/wwd/bin/wwd'"
+  po_r=$(on "$1" "if ps -p $2 -o command= 2>/dev/null | grep -q '/wwd/bin/wwd'; then echo yes; else echo no; fi") || return 2
+  case "$po_r" in yes) return 0 ;; no) return 1 ;; *) return 2 ;; esac
 }
 STOPPED=""   # host:pid of each wwd this script froze
 svc_freeze() {
@@ -114,7 +116,12 @@ svc_freeze() {
 }
 svc_thaw() {
   fz_p=$(echo "$STOPPED" | tr ' ' '\n' | grep "^$1:" | head -1 | cut -d: -f2)
-  if svc_pid_ok "$1" "$fz_p"; then on "$1" "kill -CONT $fz_p" || return 1; else say "WARN: $1's wwd is no longer pid '$fz_p': no signal sent"; fi
+  svc_pid_ok "$1" "$fz_p" && po_rc=0 || po_rc=$?
+  case "$po_rc" in
+    0) on "$1" "kill -CONT $fz_p" || return 1 ;;
+    1) say "WARN: $1's wwd is no longer pid '$fz_p': no signal sent" ;;
+    *) say "WARN: could not ask $1 about pid '$fz_p': it may still be frozen"; return 1 ;;
+  esac
   STOPPED=$(echo "$STOPPED" | tr ' ' '\n' | grep -v "^$1:" | tr '\n' ' ')
 }
 
@@ -136,8 +143,15 @@ worker_set() {   # worker_set HOST true|false
 FAULTS=""; REMOTE_DIRS=""
 # a file that was there before this run is not ours: it is not registered, so nothing here removes it
 fault_on() {   # fault_on HOST PATH-ON-HOST
-  if [ "$dry" -eq 0 ] && on "$1" "[ -e $2 ]"; then say "WARN: $2 was already on $1: left as it is at the end"
-  else FAULTS="$FAULTS $1:$2"; fi
+  fo_r=absent
+  if [ "$dry" -eq 0 ]; then
+    fo_r=$(on "$1" "if [ -e $2 ]; then echo present; else echo absent; fi") || fo_r=error
+  fi
+  case "$fo_r" in
+    present) say "WARN: $2 was already on $1: left as it is at the end" ;;
+    absent) FAULTS="$FAULTS $1:$2" ;;
+    *) say "FAIL: could not tell whether $2 is on $1: nothing is made there"; exit 1 ;;
+  esac
   on "$1" "mkdir -p \$(dirname $2) && touch $2"
 }
 fault_off() {
