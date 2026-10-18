@@ -171,6 +171,21 @@ func TestReport_OldTimelineAloneWhenWWDIsNotTheSource(t *testing.T) {
 	assert.Equal(t, 10, r.get(t, "24h").Coverage.Minutes, "wwd has no minutes yet")
 }
 
+// Without resources.db and without minutes from wwd there is nothing to report from: 503, as it has always been.
+func TestReport_NoDatabaseAndNoPoolMinutesIs503(t *testing.T) {
+	r := newReportRig(t)
+	r.m.store = nil
+	rr := httptest.NewRecorder()
+	r.m.handleReport(rr, httptest.NewRequest(http.MethodGet, resources.ReportPath+"?since=24h", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code, "pool source, but wwd has no minutes")
+
+	r.row.cfg.Source, r.row.rev = hostconfig.FleetSourceSSH, 2
+	r.history = []wire.Facts{minuteFacts(0, 1, 8000, 1, wire.ZoneNormal, 0, 0)}
+	rr = httptest.NewRecorder()
+	r.m.handleReport(rr, httptest.NewRequest(http.MethodGet, resources.ReportPath+"?since=24h", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code, "ssh source: wwd's minutes are not used")
+}
+
 // Without resources.db (it did not open) the pool's minutes alone still make a report.
 func TestReport_PoolSourceWithoutTheOldDatabase(t *testing.T) {
 	r := newReportRig(t)
