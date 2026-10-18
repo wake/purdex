@@ -6,6 +6,8 @@ package jobexec
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -50,14 +52,13 @@ type Exec struct{ cfg Config }
 
 func New(cfg Config) *Exec { return &Exec{cfg: cfg} }
 
-// JobDir is the directory of one attempt of a job. The claim is part of the name: a later attempt of the same job never meets what an
-// earlier one left (a quarantined workspace may still be written to).
+// JobDir is the directory of one attempt of a job: a child of WorkRoot named by a hash of the origin, the job id and the whole claim.
+// Nothing of a job's identity is in the name as it is, so an id from a hostile origin ("../x") cannot lead out of WorkRoot, and two
+// origins with the same job id, or two claims with the same beginning, never share a directory (a quarantined workspace may still be
+// written to).
 func (e *Exec) JobDir(job wire.Job, claimID string) string {
-	short := claimID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return filepath.Join(e.cfg.WorkRoot, job.ID+"-"+short)
+	sum := sha256.Sum256([]byte(job.Origin + "\x00" + job.ID + "\x00" + claimID))
+	return filepath.Join(e.cfg.WorkRoot, hex.EncodeToString(sum[:16]))
 }
 
 func wsDir(base string) string  { return filepath.Join(base, "ws") }
@@ -73,9 +74,16 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 	if f == nil {
 		return snapshot.Workspace{}, fmt.Errorf("jobexec: no way to fetch a snapshot from origin %q", job.Origin)
 	}
+	if !wire.ValidClaimID(claimID) {
+		return snapshot.Workspace{}, fmt.Errorf("jobexec: invalid claim id")
+	}
 	base := e.JobDir(job, claimID)
-	if err := os.MkdirAll(base, 0o700); err != nil {
+	// the job directory is made new: one that is already there is another attempt's (or a quarantined one) and is left alone
+	if err := os.MkdirAll(e.cfg.WorkRoot, 0o700); err != nil {
 		return snapshot.Workspace{}, err
+	}
+	if err := os.Mkdir(base, 0o700); err != nil {
+		return snapshot.Workspace{}, fmt.Errorf("jobexec: the job directory cannot be made new: %w", err)
 	}
 	clone := ""
 	if e.cfg.ClonePath != nil {

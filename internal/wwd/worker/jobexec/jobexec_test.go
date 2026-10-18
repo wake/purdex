@@ -206,9 +206,67 @@ func (failFetcher) Fetch(context.Context, wire.Job, string, string, string) (sna
 func TestEachAttemptHasItsOwnDirectory(t *testing.T) {
 	e := newExec(t, failFetcher{})
 	a := e.JobDir(job("hello"), claimID)
-	b := e.JobDir(job("hello"), "ffffffffffffffffffffffffffffffff")
-	if a == b || filepath.Dir(a) != filepath.Dir(b) {
-		t.Fatalf("%s and %s: a later attempt must never meet what an earlier one left", a, b)
+	same := "01234567" + strings.Repeat("f", 24) // the same first eight characters
+	other := job("hello")
+	other.Origin = "air26"
+	for name, b := range map[string]string{
+		"another claim":                e.JobDir(job("hello"), "ffffffffffffffffffffffffffffffff"),
+		"a claim with the same start":  e.JobDir(job("hello"), same),
+		"the same job id on an origin": e.JobDir(other, claimID),
+	} {
+		if a == b || filepath.Dir(a) != filepath.Dir(b) {
+			t.Errorf("%s: %s and %s must be different children of the work root", name, a, b)
+		}
+	}
+}
+
+func TestAHostileJobIdCannotLeaveTheWorkRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(filepath.Dir(root), "outside-marker")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(outside)
+	e := New(Config{WorkRoot: filepath.Join(root, "jobs"), Fetchers: func(string) Fetcher { return failFetcher{} }})
+	for _, id := range []string{"../../outside-marker", "j_a/../../../outside-marker", "/etc", "..", "."} {
+		j := job("hello")
+		j.ID = id
+		dir := e.JobDir(j, claimID)
+		if filepath.Dir(dir) != filepath.Join(root, "jobs") {
+			t.Errorf("id %q: directory %s is not a direct child of the work root", id, dir)
+		}
+		_, _ = e.Materialize(context.Background(), j, claimID) // fails at the fetch and removes only what it made
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("something outside the work root was removed: %v", err)
+	}
+}
+
+func TestAnExistingJobDirectoryIsLeftAloneAndNotReused(t *testing.T) {
+	e := newExec(t, failFetcher{})
+	base := e.JobDir(job("hello"), claimID)
+	if err := os.MkdirAll(filepath.Join(base, "ws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(base, "ws", "still-written")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+		t.Fatal("a job directory that is already there must not be taken over")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("the earlier attempt's files were removed: %v", err)
+	}
+}
+
+func TestAnInvalidClaimIdIsRefusedBeforeAnythingIsMade(t *testing.T) {
+	e := newExec(t, failFetcher{})
+	if _, err := e.Materialize(context.Background(), job("hello"), "../x"); err == nil {
+		t.Fatal("want an error")
+	}
+	if entries, _ := os.ReadDir(e.cfg.WorkRoot); len(entries) != 0 {
+		t.Fatalf("made %v", entries)
 	}
 }
 
