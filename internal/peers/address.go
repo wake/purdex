@@ -355,11 +355,10 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		}
 		// An alias: the old name of a renamed session. It is consulted only here, after tier 1 missed, so a live holder of
 		// the name always wins; it resolves through the alias's ref by the ref path, whose conservatisms and lineage apply.
+		// A known alias is authoritative: its ref's answer is the answer, a miss included. It must not fall on to the bare
+		// tmux-name tier, where an unrelated session of the same text would take a message meant for the renamed one.
 		if ref, ok := aliasRef(snap, head); ok {
-			rec, err = resolveRefHead(records, ref, snap)
-			if !errors.Is(err, ErrNotFound) {
-				return rec, err
-			}
+			return resolveRefHead(records, ref, snap)
 		}
 
 		// Tiers 2/3: the ref, with or without its underscore. No ordering

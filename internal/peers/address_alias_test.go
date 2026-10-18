@@ -146,3 +146,17 @@ func TestResolve_TheBracketAliasPicksTheRowOfItsOwnSession(t *testing.T) {
 		t.Fatalf("no session mapping: got %v, want an AmbiguousError", err)
 	}
 }
+
+// A known alias is authoritative: when its session is gone, the answer is "not found", not a bare tmux session of the same
+// text (codex critic on #3435).
+func TestResolve_AKnownAliasWithNoLiveSessionNeverFallsThroughToATmuxName(t *testing.T) {
+	other := liveRow(refB, "purdex-wei", "", "purdex-adam", 2) // a tmux session that happens to be called like the alias
+	if _, err := Resolve([]PeerRecord{other}, "purdex-adam", aliases(map[string]string{"purdex-adam": refA})); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+	// with no alias row the same text is still a bare tmux session name (tier 4), as before
+	rec, err := Resolve([]PeerRecord{other}, "purdex-adam", ResolveSnapshot{})
+	if err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("no alias: pid=%d err=%v; tier 4 is unchanged", pidOf(rec), err)
+	}
+}
