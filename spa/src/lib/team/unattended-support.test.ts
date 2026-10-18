@@ -227,6 +227,22 @@ describe('startUnattendedSupport', () => {
     expect(fetchHostInfo).toHaveBeenCalledTimes(1)
   })
 
+  it("a read the quota fence starts (a panel reloads on the epoch) still sees the quota support the last connection learned", () => {
+    useUnattendedStore.getState().setQuotaSupport('h1', 'yes')
+    const seen: Array<string | undefined> = []
+    let epoch = useRelayQuotaStore.getState().epochs.h1 ?? 0
+    const off = useRelayQuotaStore.subscribe((s) => {
+      if ((s.epochs.h1 ?? 0) === epoch) return
+      epoch = s.epochs.h1 ?? 0
+      seen.push(useUnattendedStore.getState().byHost.h1?.quotaSupport) // what the reader decides its GET bracket from
+    })
+    stop = startUnattendedSupport()
+    useHostStore.getState().setRuntime('h1', { status: 'connected' })
+    off()
+    expect(seen).toEqual(['yes'])
+    expect(useUnattendedStore.getState().byHost.h1?.quotaSupport).toBe('unknown') // and is still unknown until the answer
+  })
+
   it('the capability absent → no (a daemon too old for the switch)', async () => {
     fetchHostInfo.mockResolvedValue(WITHOUT)
     stop = startUnattendedSupport()
