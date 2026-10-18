@@ -11,12 +11,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
+	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 	"github.com/wake/purdex/internal/wwd/worker/report"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 	"github.com/wake/purdex/internal/wwd/worker/yield"
@@ -48,6 +50,15 @@ type Sweeper interface {
 	Sweep(ctx context.Context, live []string) error
 }
 
+// Quarantine keeps the jobs whose command could not be proven stopped (package quarantine; *quarantine.Store is one). Their workspace and
+// lock keys stay held until the sandbox unit is proven gone, also across a restart.
+type Quarantine interface {
+	Add(quarantine.Entry) error
+	Restore() error
+	Sweep(ctx context.Context) (int, error)
+	Held() []quarantine.Entry
+}
+
 // Config is what the loop needs from its host.
 type Config struct {
 	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
@@ -73,6 +84,11 @@ type Config struct {
 	// leftovers must stay until they are proven gone).
 	Sweepers []Sweeper
 	Held     func() []string
+	// Quarantine is told of every job that ended quarantined (before its delivery), puts the holds back when the worker starts (Run takes
+	// nothing until that has worked) and is swept with the Sweepers; nil: none. Sandboxed says the host runs commands as systemd units
+	// (an entry then names its unit, which is what proves the command gone).
+	Quarantine Quarantine
+	Sandboxed  bool
 	// SweepEvery is the pause between two sweeps (a minute).
 	SweepEvery time.Duration
 
@@ -154,8 +170,14 @@ func (l *Loop) pruneLocked() {
 	}
 }
 
-// Run does rounds until ctx ends, then stops what is running (each job is given back with the lease alive) and returns.
-func (l *Loop) Run(ctx context.Context) {
+// Run does rounds until ctx ends, then stops what is running (each job is given back with the lease alive) and returns. It first puts the
+// holds of the quarantined jobs back (nothing may take a lock before that); when that fails the worker does not start and Run says why.
+func (l *Loop) Run(ctx context.Context) error {
+	if l.cfg.Quarantine != nil {
+		if err := l.cfg.Quarantine.Restore(); err != nil {
+			return fmt.Errorf("worker: the quarantined jobs' holds could not all be put back, the worker does not start: %w", err)
+		}
+	}
 	// The jobs do not run under ctx: when it ends they are stopped one by one and released, which needs their leases and their
 	// connections to be alive.
 	jobCtx, endJobs := context.WithCancel(context.WithoutCancel(ctx))
@@ -171,7 +193,7 @@ func (l *Loop) Run(ctx context.Context) {
 			l.stopAll(sctx, "the worker is ending")
 			cancel()
 			l.abandon(endJobs)
-			return
+			return nil
 		case <-t.C:
 		}
 	}
@@ -313,6 +335,7 @@ func (l *Loop) finish(byHost map[string]Origin) runner.Finish {
 		})
 	}
 	return func(ctx context.Context, e runner.Ended) {
+		l.quarantine(e) // the marker first: it must exist before anything slow (a release that is retried for minutes) happens
 		deliver(ctx, e)
 		l.record(e)
 	}
@@ -331,7 +354,7 @@ func (l *Loop) record(e runner.Ended) {
 }
 
 func (l *Loop) sweepIfDue(ctx context.Context) {
-	if len(l.cfg.Sweepers) == 0 || ctx.Err() != nil {
+	if (len(l.cfg.Sweepers) == 0 && l.cfg.Quarantine == nil) || ctx.Err() != nil {
 		return
 	}
 	l.mu.Lock()
@@ -347,6 +370,14 @@ func (l *Loop) sweepIfDue(ctx context.Context) {
 
 // Sweep runs every Sweeper once with the ids of the jobs this worker holds.
 func (l *Loop) Sweep(ctx context.Context) {
+	// the quarantine first: a unit proven gone frees its hold and workspace, and the other sweepers then see the job as not held
+	if q := l.cfg.Quarantine; q != nil {
+		if n, err := q.Sweep(ctx); err != nil {
+			l.cfg.Logf("worker: quarantine sweep: %v", err)
+		} else if n > 0 {
+			l.cfg.Logf("worker: quarantine: %d job(s) proven stopped and cleared", n)
+		}
+	}
 	l.mu.Lock()
 	l.pruneLocked()
 	live := make([]string, 0, len(l.running))
@@ -356,6 +387,11 @@ func (l *Loop) Sweep(ctx context.Context) {
 	l.mu.Unlock()
 	if l.cfg.Held != nil {
 		live = append(live, l.cfg.Held()...)
+	}
+	if q := l.cfg.Quarantine; q != nil {
+		for _, e := range q.Held() {
+			live = append(live, e.JobID)
+		}
 	}
 	for _, sw := range l.cfg.Sweepers {
 		if err := sw.Sweep(ctx, live); err != nil {
@@ -396,3 +432,21 @@ func (l *Loop) abandon(endJobs context.CancelFunc) {
 
 // killWait is how long a worker that is ending waits for the commands it ended to be gone (TERM, then KILL after 10 s).
 const killWait = 15 * time.Second
+
+// quarantine writes the marker of a job that ended quarantined. If it cannot be written the hold still stands in memory, but a restart would
+// lose it: that is logged loudly, nothing else can be done here.
+func (l *Loop) quarantine(e runner.Ended) {
+	if !e.Quarantined || l.cfg.Quarantine == nil {
+		return
+	}
+	ent := quarantine.Entry{
+		Owner: e.Source + "/" + e.Job.ID, JobID: e.Job.ID, Origin: e.Job.Origin, ClaimID: e.ClaimID,
+		Dir: filepath.Dir(e.Root), Keys: e.Job.Locks, Since: l.cfg.Now(),
+	}
+	if l.cfg.Sandboxed {
+		ent.Unit = "wwd-" + e.Job.ID
+	}
+	if err := l.cfg.Quarantine.Add(ent); err != nil {
+		l.cfg.Logf("worker: QUARANTINE MARKER NOT WRITTEN for %s (a restart would forget its hold and workspace): %v", ent.Owner, err)
+	}
+}
