@@ -77,9 +77,13 @@ type sessionStages struct {
 	arrival uint64
 	rows    map[string]*stageRow
 	// lossy: the feed's queue tracker once overflowed, so what it shows is a subset of Claude Code's queue and a row that is not
-	// there proves nothing. It stays set until the queue is seen empty with no id queued (the next time the two must agree).
-	lossy bool
-	used  map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
+	// there proves nothing. It stays set until the queue is seen empty with no id queued (the next time the two must agree), or
+	// stageTextTTL after the last overflow was seen (an id older than that has lost its text and is no longer judged anyway).
+	lossy      bool
+	lossySince time.Time
+	// usedFloor: items stamped at or before it are never matched again (their used marker was trimmed by count).
+	usedFloor int64
+	used      map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
 }
 
 type stageLedger struct {
@@ -300,8 +304,8 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 	}
 	switch {
 	case lossy:
-		s.lossy = true
-	case s.lossy && len(queue) == 0 && !queuedNow:
+		s.lossy, s.lossySince = true, now
+	case s.lossy && ((len(queue) == 0 && !queuedNow) || now.Sub(s.lossySince) > stageTextTTL):
 		s.lossy = false
 	}
 	items = l.pruneUsedLocked(s, rows, items)
@@ -400,7 +404,7 @@ func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items 
 	s.trimUsed()
 	kept := items[:0:0]
 	for _, it := range items {
-		if it.At >= minFrom {
+		if it.At >= minFrom && it.At > s.usedFloor {
 			kept = append(kept, it)
 		}
 	}
@@ -424,6 +428,7 @@ func (s *sessionStages) trimUsed() {
 	sort.Slice(all, func(i, j int) bool { return all[i].at < all[j].at })
 	for _, u := range all[:over] {
 		delete(s.used, u.id)
+		s.usedFloor = max(s.usedFloor, u.at) // so a trimmed item can never be matched a second time
 	}
 }
 

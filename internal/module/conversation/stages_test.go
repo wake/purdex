@@ -433,3 +433,45 @@ func TestStages_UsedItemsAreBoundedByCountWhateverTheTraffic(t *testing.T) {
 	}
 	assert.LessOrEqual(t, len(l.sessions["s"].used), maxStageUsed)
 }
+
+// An overflow seen long ago no longer blocks judging: ids that old have lost their text, and new ones are not at risk.
+func TestStages_LossyExpiresAfterTheTextTTL(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	l.set("s", "a", "entered", "", "fill", t0)
+	l.observe("s", []ccnorm.Queued{uq("x", t0)}, false, nil, t0.Add(time.Second))
+	l.observe("s", []ccnorm.Queued{uq("y", t0)}, true, nil, t0.Add(2*time.Second))
+	require.True(t, l.sessions["s"].lossy)
+	l.observe("s", []ccnorm.Queued{uq("y", t0)}, false, nil, t0.Add(stageTextTTL-time.Minute))
+	assert.True(t, l.sessions["s"].lossy, "still inside the window")
+	l.observe("s", []ccnorm.Queued{uq("y", t0)}, false, nil, t0.Add(stageTextTTL+time.Minute))
+	assert.False(t, l.sessions["s"].lossy)
+}
+
+// Trimming the used map by count must not let a trimmed item be given out a second time.
+func TestStages_ATrimmedUsedItemIsNeverMatchedAgain(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "pin", "pinned", t0)
+	l.set("s", "pin", "entered", "", "fill", t0)
+	first := item("it-first", "x", t0.Add(time.Millisecond))
+	l.begin("s", "first", "x", first.at())
+	l.set("s", "first", "entered", "", "fill", first.at())
+	l.observe("s", nil, false, []stageItem{first}, first.at())
+	require.Equal(t, "read", stageOf(t, &l, "s", "first").Stage)
+	for i := 0; i < maxStageUsed+5; i++ {
+		id := "f" + string(rune('A'+i%26)) + string(rune('a'+(i/26)%26)) + string(rune('0'+i/676))
+		at := t0.Add(time.Duration(i+10) * time.Millisecond)
+		l.begin("s", id, "x", at)
+		l.set("s", id, "entered", "", "fill", at)
+		l.observe("s", nil, false, []stageItem{item("it-"+id, "x", at)}, at)
+	}
+	_, still := l.sessions["s"].used["it-first"]
+	require.False(t, still, "the oldest marker was trimmed")
+	late := t0.Add(2 * time.Millisecond) // inside the idle window of the used item
+	l.begin("s", "late", "x", late)
+	l.set("s", "late", "entered", "", "fill", late)
+	l.observe("s", nil, false, []stageItem{first}, late) // the transcript offers the already used item again
+	assert.Equal(t, "entered", stageOf(t, &l, "s", "late").Stage)
+}
+
+func (i stageItem) at() time.Time { return time.UnixMilli(i.At) }
