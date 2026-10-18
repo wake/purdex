@@ -470,9 +470,6 @@ func copyDir(ctx context.Context, src, dst *os.Root, rel string) error {
 		}
 		des, rerr := dir.ReadDir(readBatch)
 		for _, de := range des {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			p := path.Join(rel, de.Name())
 			switch {
 			case de.IsDir():
