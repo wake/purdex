@@ -44,7 +44,7 @@ func TestE2E_HarnessReapsOnlyWhatADeadRunLeft(t *testing.T) {
 		return c
 	}
 	pidFile := func(d string, pid int) {
-		dir := filepath.Join(d, "ea", "work", "job1")
+		dir := filepath.Join(d, "ea", "work", "job1", ".home")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -148,6 +148,7 @@ func TestE2E_JobRunsOnThePeerWorker(t *testing.T) {
 	defer cancel()
 	job, err := a.api().WaitJob(ctx, id, nil)
 	if err != nil {
+		w.diagnose(a, id, pr.worker)
 		t.Fatalf("wait: %v", err)
 	}
 	if job.State != wire.StateSucceeded || job.Result == nil || job.Result.Exit == nil || *job.Result.Exit != 0 {
@@ -159,9 +160,15 @@ func TestE2E_JobRunsOnThePeerWorker(t *testing.T) {
 	if s := job.Result.Summary; s == nil || !strings.Contains(strings.Join(s.Tail, "\n"), "hi") {
 		t.Fatalf("summary = %+v", job.Result.Summary)
 	}
-	log, err := a.api().Log(ctx, id)
-	if err != nil || !strings.Contains(string(log), "hi") {
-		t.Fatalf("log = %q err=%v", log, err)
+	// the log is uploaded after the result (spec 4.3), so it arrives a moment later
+	var log []byte
+	var lerr error
+	eventually(t, "the log to reach the origin", 30*time.Second, func() bool {
+		log, lerr = a.api().Log(ctx, id)
+		return lerr == nil
+	})
+	if !strings.Contains(string(log), "hi") {
+		t.Fatalf("log = %q", log)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -117,7 +118,7 @@ func reapStale() {
 		for _, f := range pids {
 			signalIf(readPid(f), syscall.SIGKILL, func(c string) bool { return strings.Contains(c, d) && strings.Contains(c, "-config") })
 		}
-		sleepers, _ := filepath.Glob(filepath.Join(d, "*", "work", "*", "sleeper.pid"))
+		sleepers, _ := filepath.Glob(filepath.Join(d, "*", "work", "*", ".home", "sleeper.pid"))
 		for _, f := range sleepers {
 			signalIf(readPid(f), syscall.SIGKILL, func(c string) bool { return strings.TrimSpace(string(arg)) != "" && c == sleeper })
 		}
@@ -191,7 +192,7 @@ args = "none"
 labels = ["repo:e2erepo"]
 timeout = "5m"
 `)
-	w.write("sleeper.sh", "echo $$ > \"$HOME/sleeper.pid\"\nexec /bin/sleep "+w.sleepArg+"\n")
+	w.write("sleeper.sh", "mkdir -p \"$HOME\"\necho $$ > \"$HOME/sleeper.pid\"\nexec /bin/sleep "+w.sleepArg+"\n")
 	ident := []string{"-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid"}
 	w.git(w.repo, append(ident, "add", "-A")...)
 	w.git(w.repo, append(ident, "commit", "-q", "-m", "e2e")...)
@@ -405,7 +406,7 @@ func (p *proc) cleanup() {
 
 // sleeperPids are the pids the sleeper task wrote under this process's work root ($HOME of a job is its directory).
 func (p *proc) sleeperPids() []int {
-	files, _ := filepath.Glob(filepath.Join(p.workDir, "*", "sleeper.pid"))
+	files, _ := filepath.Glob(filepath.Join(p.workDir, "*", ".home", "sleeper.pid"))
 	var pids []int
 	for _, f := range files {
 		if n := readPid(f); n > 0 {
@@ -489,6 +490,40 @@ func (p *proc) workerOn(on bool) {
 	cur.Enabled = on
 	if _, err := p.api().SetWorker(ctx, cur); err != nil {
 		p.t.Fatal(err)
+	}
+}
+
+// diagnose logs what the daemons say about a job that did not do what the test waited for: the job on its origin, and each host's
+// info (labels, worker) and worker settings.
+func (w *world) diagnose(origin *proc, id string, hosts ...*proc) {
+	w.t.Helper()
+	if id != "" {
+		if j, err := origin.job(id); err == nil {
+			b, _ := json.Marshal(j)
+			w.t.Logf("job on %s: %s", origin.alias, b)
+		} else {
+			w.t.Logf("job on %s: %v", origin.alias, err)
+		}
+	}
+	for _, h := range append([]*proc{origin}, hosts...) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		info, ierr := h.api().Info(ctx)
+		set, werr := h.api().Worker(ctx)
+		cancel()
+		ib, _ := json.Marshal(info)
+		sb, _ := json.Marshal(set)
+		w.t.Logf("%s info=%s (err %v) worker=%s (err %v)", h.alias, ib, ierr, sb, werr)
+		pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, perr := h.api().Pool(pctx)
+		pcancel()
+		for _, peer := range pool.Peers {
+			var derived any
+			if peer.Facts != nil {
+				derived = peer.Facts.Derived
+			}
+			db, _ := json.Marshal(derived)
+			w.t.Logf("%s sees peer %s reachable=%v derived=%s (pool err %v)", h.alias, peer.Info.Alias, peer.Reachable, db, perr)
+		}
 	}
 }
 
