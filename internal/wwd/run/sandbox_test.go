@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -111,7 +112,7 @@ func TestSandboxArgvIsTheSpecCommand(t *testing.T) {
 	got := sandboxArgv(sb, "wwd-j_test1", "/ws", "/ws/sub", "/ws/.wwd-exit", 10*time.Minute, 10*time.Second, []string{"HOME=/ws/.home", "WWD_JOB=j_test1"}, "/usr/bin/go", []string{"test", "./..."})
 	want := []string{"systemd-run", "--wait", "--pipe", "--uid=wake", "--unit=wwd-j_test1", "--slice=wwd.slice",
 		"-p", "CPUQuota=200%", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "RuntimeMaxSec=660", "-p", "TimeoutStopSec=10",
-		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
+		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ProtectSystem=strict", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
 		"-p", "NoNewPrivileges=yes", "-p", "InaccessiblePaths=-/run/docker.sock",
 		"env", "-i", "HOME=/ws/.home", "WWD_JOB=j_test1", "nice", "-n", "10", "ionice", "-c3", "sh", "-c", exitWrapper, "/ws/.wwd-exit", "/usr/bin/go", "test", "./..."}
 	if !reflect.DeepEqual(got, want) {
@@ -519,5 +520,99 @@ func TestSandboxTheExitFileNameIsNewEveryRunAndIsRemoved(t *testing.T) {
 		if _, err := os.Stat(n); err == nil {
 			t.Errorf("%s was left behind", n)
 		}
+	}
+}
+
+func TestSandboxASystemdSetUpFailureIsNotTheTasksRedTest(t *testing.T) {
+	// 226/NAMESPACE (a ReadWritePaths entry that is not there) ends the unit as exit-code before the shell ran: no status file
+	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("exit", "226")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=226\nExecMainCode=1\n")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "no exit status file") {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxTheSameStatusFromTheCommandItselfIsItsResult(t *testing.T) {
+	// the command's own shell left 226 in the status file: the task really exited 226, and 199 and 244 are no systemd status
+	for _, code := range []string{"226", "199", "244"} {
+		w := newWorld(t)
+		w.set("exit", code)
+		w.set("wrapper-exit", code)
+		w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus="+code+"\nExecMainCode=1\n")
+		r := Run(context.Background(), sandboxSpec(t, w, "true"))
+		if r.Outcome != Exited || r.Err != nil {
+			t.Errorf("%s: result = %+v", code, r)
+		}
+	}
+	w := newWorld(t)
+	w.set("exit", "199")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=199\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != Exited || r.ExitCode != 199 {
+		t.Errorf("199 without a status file is still an exit: %+v", r)
+	}
+}
+
+func TestSandboxAnExtraWritablePathThatIsNotThereIsRefusedBeforeAnythingStarts(t *testing.T) {
+	w := newWorld(t)
+	w.sb.ReadWritePaths = []string{filepath.Join(t.TempDir(), "no-such-cache")}
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "no-such-cache") {
+		t.Fatalf("result = %+v", r)
+	}
+	if w.called(t, "systemd-run") {
+		t.Fatalf("nothing may be started: %q", w.calls(t))
+	}
+	w2 := newWorld(t)
+	w2.sb.ReadWritePaths = []string{t.TempDir()}
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != Exited {
+		t.Fatalf("an existing extra path is fine: %+v", r)
+	}
+}
+
+func TestSandboxStatus125WithoutAFileIsInfrastructureButWithAFileIsTheTasks(t *testing.T) {
+	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("exit", "125")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=125\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
+		t.Fatalf("no file: %+v", r)
+	}
+	w2 := newWorld(t)
+	w2.set("loaded", "")
+	w2.set("exit", "125")
+	w2.set("wrapper-exit", "125")
+	w2.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=125\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != Exited || r.ExitCode != 125 {
+		t.Fatalf("with the file the task really exited 125: %+v", r)
+	}
+}
+
+// The wrapper itself, run by the real shell: the command's code reaches the exit and the file; a file that cannot be written
+// makes it exit 125 and not the command's own code (which could be one of systemd's, 200..243).
+func TestExitWrapperRunBySh(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "status")
+	run := func(statusPath string, code string) int {
+		cmd := exec.Command("sh", "-c", exitWrapper, statusPath, "sh", "-c", "exit "+code)
+		err := cmd.Run()
+		if err == nil {
+			return 0
+		}
+		return err.(*exec.ExitError).ExitCode()
+	}
+	if got := run(file, "226"); got != 226 {
+		t.Fatalf("exit = %d, want the command's 226", got)
+	}
+	if b, _ := os.ReadFile(file); string(b) != "226" {
+		t.Fatalf("status file = %q", b)
+	}
+	if got := run(filepath.Join(dir, "no-such-dir", "status"), "226"); got != 125 {
+		t.Fatalf("exit = %d, want 125 when the file cannot be written", got)
+	}
+	if got := run(filepath.Join(dir, "no-such-dir", "status"), "0"); got != 125 {
+		t.Fatalf("exit = %d: even a success cannot be reported without its file", got)
 	}
 }
