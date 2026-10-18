@@ -133,14 +133,30 @@ func TestCommandSignatureNormalizesTempNames(t *testing.T) {
 		[]string{"bash", "/var/folders/ab/cd/T/build-a1b2c3d4e5.sh"}, []string{"bash", "/var/folders/ab/cd/T/build.9f8e7d6c5b.sh"})
 	same(t, "python3 train",
 		[]string{"python3", "/tmp/train-2026.py"}, []string{"python3", "/tmp/train-2027.py"})
-	same(t, "node run.js", []string{"node", "run-123.js"}, []string{"node", "run-456.js"}) // a bare word keeps its extension, loses the suffix
-	same(t, "python3 run", []string{"python3", "run-123"}, []string{"python3", "run-456"}) // no path and no extension
-	// real names stay
+	// the other shapes a throwaway name has: a whole uuid, an ISO date, a mktemp suffix of mixed letters and digits
+	same(t, "node job",
+		[]string{"node", "/tmp/job-3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b.js"}, []string{"node", "/tmp/job-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d.js"})
+	same(t, "bash backup",
+		[]string{"bash", "/tmp/backup-2026-10-18.sh"}, []string{"bash", "/tmp/backup-2026-10-19.sh"})
+	same(t, "bash tmp",
+		[]string{"bash", "/var/folders/ab/T/tmp.aB3dE9"}, []string{"bash", "/var/folders/ab/T/tmp.Qz7Lm2x"})
+	// outside a temp directory a number is part of the name: different jobs stay different
+	same(t, "pnpm release-2026", []string{"pnpm", "release-2026"})
+	same(t, "pnpm release-2027", []string{"pnpm", "release-2027"})
+	same(t, "tool node-180", []string{"tool", "node-180"})
+	same(t, "tool node-181", []string{"tool", "node-181"})
+	same(t, "tool build-a1b2c3d4e5", []string{"tool", "build-a1b2c3d4e5"})
+	same(t, "tool build-a1b2c3d4e6", []string{"tool", "build-a1b2c3d4e6"})
+	same(t, "node run-123", []string{"node", "scripts/run-123.js"}) // a relative path: not known to be throwaway
+	same(t, "node run-124", []string{"node", "scripts/run-124.js"})
+	same(t, "node run-123.js", []string{"node", "run-123.js"})
+	same(t, "python3 run-123", []string{"python3", "run-123"})
+	// real names stay, in a temp directory too
 	same(t, "node vitest", []string{"node", "/x/node_modules/.bin/vitest"})
-	same(t, "node es2020", []string{"node", "/x/es2020"})
-	same(t, "node deadbeef", []string{"node", "/x/deadbeef"})     // letters only: a word, not a random suffix
-	same(t, "node build-prod", []string{"node", "/x/build-prod"}) // not a counter
-	same(t, "node v8-12", []string{"node", "/x/v8-12"})           // two digits are a version, not a counter
+	same(t, "node es2020", []string{"node", "/tmp/es2020"})
+	same(t, "node deadbeef", []string{"node", "/tmp/deadbeef"})     // letters only: a word, not a random suffix
+	same(t, "node build-prod", []string{"node", "/tmp/build-prod"}) // not a counter
+	same(t, "node v8-12", []string{"node", "/tmp/v8-12"})           // two digits are a version, not a counter
 }
 
 func TestCommandSignature(t *testing.T) {

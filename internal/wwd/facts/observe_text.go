@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -178,12 +179,38 @@ var globalValueFlags = map[string]map[string]bool{
 	"yarn":    {"--cwd": true, "--cache-folder": true},
 }
 
-var reCounterSuffix = regexp.MustCompile(`[-_.][0-9a-fA-F]+$`)
+var (
+	reUUIDSuffix    = regexp.MustCompile(`[-_.][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	reDateSuffix    = regexp.MustCompile(`[-_.][0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+	reCounterSuffix = regexp.MustCompile(`[-_.][0-9a-fA-F]+$`)
+)
 
-// stripCounter takes a run counter or a random suffix off a file name stem ("run-123" -> "run", "build-a1b2c3d4e5" -> "build"), so
-// the same job started from a temp script is one signature. Only a separator followed by three or more digits, or by eight or more
-// hex digits with at least one digit among them, counts: "es2020", "deadbeef", "build-prod" and "v8-12" are names.
+// tempDirs are where a file is throwaway by where it lives. Only a name under one of them is normalized (tempPath): anywhere else
+// a number or a hash in a name is part of what the job is (a release, a version, a port).
+var tempDirs = []string{"/tmp/", "/private/tmp/", "/var/tmp/", "/var/folders/", "/private/var/folders/"}
+
+func tempPath(p string) bool {
+	for _, d := range tempDirs {
+		if strings.HasPrefix(p, d) {
+			return true
+		}
+	}
+	if td := os.TempDir(); strings.HasPrefix(td, "/") && strings.HasPrefix(p, strings.TrimSuffix(td, "/")+"/") {
+		return true
+	}
+	return false
+}
+
+// stripCounter takes a whole uuid, an ISO date, a run counter or a hash off the end of a throwaway file name stem ("run-123" ->
+// "run", "build-a1b2c3d4e5" -> "build", "backup-2026-10-18" -> "backup"), so the same job started from a temp script is one
+// signature. A counter is a separator and three or more digits; a hash is a separator and eight or more hex digits with at least one
+// digit: "es2020", "deadbeef", "build-prod" and "v8-12" are names. Call it for a name under a temp directory only.
 func stripCounter(stem string) string {
+	for _, re := range []*regexp.Regexp{reUUIDSuffix, reDateSuffix} {
+		if loc := re.FindStringIndex(stem); loc != nil && loc[0] > 0 {
+			return stem[:loc[0]]
+		}
+	}
 	loc := reCounterSuffix.FindStringIndex(stem)
 	if loc == nil || loc[0] == 0 {
 		return stem
@@ -240,12 +267,11 @@ func signature(clean []string, depth int) string {
 			if strings.HasSuffix(a, "/") || strings.HasPrefix(a, "./") || strings.HasPrefix(a, "../") || strings.HasPrefix(a, "~") {
 				continue // a path argument
 			}
-			ext := path.Ext(a)
-			a = stripCounter(strings.TrimSuffix(path.Base(a), ext)) // a script or tool path: its name, without a counter or random suffix
-		} else if ext := path.Ext(a); ext != "" && ext != a {
-			a = stripCounter(strings.TrimSuffix(a, ext)) + ext // a bare script name keeps its extension
-		} else if ext == "" {
-			a = stripCounter(a) // a bare name with none
+			temp := tempPath(a)
+			a = strings.TrimSuffix(path.Base(a), path.Ext(a)) // a script or tool path: its name
+			if temp {
+				a = stripCounter(a) // a throwaway script: without its counter or random suffix
+			}
 		}
 		if a = trimName(a); a != "" {
 			words = append(words, a)
