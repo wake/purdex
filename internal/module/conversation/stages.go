@@ -49,6 +49,11 @@ const (
 	stageItemAfter  = 30 * time.Second
 	// A queue row without a timestamp is dated by the Enter; an item may be stamped a hair before the daemon noted the Enter.
 	stageNoStampSlack = 500 * time.Millisecond
+	// stageItemQueueSkew: a queued id is read by an item stamped up to this long before its queue row. A queued_command attachment
+	// carries the time the person sent the text, which precedes the enqueue record the row comes from (#3452: 233 ms measured on
+	// alpha.754). It is only a floor against an older message with the same text, so it stays small: the item still goes to the
+	// oldest id first, and each item to one id only.
+	stageItemQueueSkew = 2 * time.Second
 	// maxStageUsed bounds the used-item map by count, whatever the traffic; the oldest go first.
 	maxStageUsed = 4096
 )
@@ -376,10 +381,10 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 	// 2. ids that left the queue are read by their items, oldest first
 	for _, r := range left {
 		text := normText(r.text)
-		// Claude Code writes the item after the row, so nothing older than the row is ours; a row with no timestamp is dated by
+		// The item is not older than the row by more than the skew (see stageItemQueueSkew); a row with no timestamp is dated by
 		// the Enter, with a hair of slack.
-		from := r.claim.at
-		if from <= 0 {
+		from := r.claim.at - stageItemQueueSkew.Milliseconds()
+		if r.claim.at <= 0 {
 			from = r.textFrom.UnixMilli() - stageNoStampSlack.Milliseconds()
 		}
 		for _, it := range items {

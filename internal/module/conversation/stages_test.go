@@ -383,21 +383,70 @@ func TestStages_QueuedIdsRetainNoTextBeyondTheCounted(t *testing.T) {
 	}
 }
 
-// A queued id is read only by an item stamped at or after its queue row: Claude Code writes the item after the row.
-func TestStages_QueuedIdIsReadOnlyByItemsFromTheRowOn(t *testing.T) {
+// A queued id is read by an item stamped no more than stageItemQueueSkew before its queue row: a queued_command attachment
+// carries the time the person sent the text, which is before the enqueue record that makes the row (#3452).
+func TestStages_QueuedIdIsReadOnlyByItemsWithinTheSkewOfTheRow(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		delta time.Duration
 		want  string
-	}{{"1 ms before the row", -time.Millisecond, "queued"}, {"at the row", 0, "read"}, {"after the row", time.Millisecond, "read"}} {
+	}{
+		{"past the skew before the row", -stageItemQueueSkew - time.Millisecond, "queued"},
+		{"at the skew before the row", -stageItemQueueSkew, "read"},
+		{"at the row", 0, "read"},
+		{"after the row", time.Millisecond, "read"},
+	} {
 		var l stageLedger
-		row := t0.Add(time.Second)
+		row := t0.Add(5 * time.Second)
 		l.begin("s", "a", "dup", t0)
 		l.set("s", "a", "entered", "", "fill", t0.Add(500*time.Millisecond))
-		l.observe("s", []ccnorm.Queued{uq("dup", row)}, false, nil, t0.Add(2*time.Second))
+		l.observe("s", []ccnorm.Queued{uq("dup", row)}, false, nil, t0.Add(6*time.Second))
 		require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, c.name)
-		l.observe("s", nil, false, []stageItem{item("u1", "dup", row.Add(c.delta))}, t0.Add(3*time.Second))
+		l.observe("s", nil, false, []stageItem{item("u1", "dup", row.Add(c.delta))}, t0.Add(8*time.Second))
 		assert.Equal(t, c.want, stageOf(t, &l, "s", "a").Stage, c.name)
+	}
+}
+
+// The timestamps measured on alpha.754 (#3452): the attachment 23:39:41.028, the enqueue record 23:39:41.261. The message was
+// absorbed mid-turn, so it exists only as the attachment, which is older than its row.
+func TestStages_AbsorbedMidTurnAttachmentOlderThanItsRowReads(t *testing.T) {
+	var l stageLedger
+	enter := t0.Add(41 * time.Second) // the seconds of the measured :41.028 / :41.261
+	row := enter.Add(261 * time.Millisecond)
+	l.begin("s", "a", "queued message D", enter)
+	l.set("s", "a", "entered", "", "fill", enter.Add(100*time.Millisecond))
+	l.observe("s", []ccnorm.Queued{uq("queued message D", row)}, false, nil, enter.Add(time.Second))
+	require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+	l.observe("s", nil, false, []stageItem{item("u1", "queued message D", enter.Add(28*time.Millisecond))}, enter.Add(5*time.Second))
+	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
+}
+
+// Two same-text messages queued next to each other, both items inside the skew of both rows: the oldest item goes to the
+// oldest id and each item to one id only, whether they leave in one look or in two.
+func TestStages_AdjacentSameTextQueuedIdsDoNotSwapInsideTheSkew(t *testing.T) {
+	for _, together := range []bool{true, false} {
+		var l stageLedger
+		l.begin("s", "a", "dup", t0)
+		l.set("s", "a", "entered", "", "fill", t0.Add(100*time.Millisecond))
+		l.begin("s", "b", "dup", t0.Add(300*time.Millisecond))
+		l.set("s", "b", "entered", "", "fill", t0.Add(400*time.Millisecond))
+		ra, rb := t0.Add(1000*time.Millisecond), t0.Add(1200*time.Millisecond)
+		l.observe("s", []ccnorm.Queued{uq("dup", ra), uq("dup", rb)}, false, nil, t0.Add(2*time.Second))
+		require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+		require.Equal(t, "queued", stageOf(t, &l, "s", "b").Stage)
+		ua, ub := item("u1", "dup", ra.Add(-230*time.Millisecond)), item("u2", "dup", rb.Add(-230*time.Millisecond))
+		if together {
+			l.observe("s", nil, false, []stageItem{ua, ub}, t0.Add(3*time.Second))
+			assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
+			assert.Equal(t, "read", stageOf(t, &l, "s", "b").Stage)
+			continue
+		}
+		// a leaves first; its item alone must not read b too
+		l.observe("s", []ccnorm.Queued{uq("dup", rb)}, false, []stageItem{ua}, t0.Add(3*time.Second))
+		assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
+		assert.Equal(t, "queued", stageOf(t, &l, "s", "b").Stage, "one item reads one id")
+		l.observe("s", nil, false, []stageItem{ua, ub}, t0.Add(4*time.Second))
+		assert.Equal(t, "read", stageOf(t, &l, "s", "b").Stage)
 	}
 }
 
