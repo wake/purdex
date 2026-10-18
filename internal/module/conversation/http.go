@@ -77,6 +77,8 @@ type snapshotJSON struct {
 	Header       headerJSON       `json:"header"`
 	Window       windowJSON       `json:"window"`
 	Cursor       string           `json:"cursor"`
+	// Stages is where each message this session was sent is on its way (stages.go); absent when the ledger holds none.
+	Stages []stageJSON `json:"stages,omitempty"`
 }
 
 func headerOf(h convfeed.Header) headerJSON {
@@ -232,6 +234,8 @@ func (m *Module) hostID() string {
 // snapshotBody builds the snapshot answer (the same body for HTTP and for a WebSocket's snapshot frame): the window
 // under the 4 MiB cap, the header and the cursor of one instant. On failure it returns the HTTP status and error code.
 func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *convmodel.Capabilities, turns, before int, around string, hasAround, reset bool) (body []byte, cursor string, status int, code string) {
+	m.observeStages(sid, entry)
+	stages, _ := m.stages.snapshot(sid, m.tuning().now())
 	// paired before the entry is locked for the view (UserMessages takes the same lock); it sizes the envelope
 	echo := m.echoIDs(sid, entry)
 	if echo == nil {
@@ -252,6 +256,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *c
 			Header: headerOf(h),
 			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore, Predecessor: pred},
 			Cursor: cursor,
+			Stages: stages,
 		}
 	}
 	envelope := func(h convfeed.Header, cursor string) func([]byte) bool {

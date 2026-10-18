@@ -167,24 +167,34 @@ describe('Up in an empty box calls the held messages back', () => {
 })
 
 describe('where Up stays the caret\'s', () => {
-  it('a box with text in it', () => {
+  it('a box with text in it, the caret not on the first line (MS2-4, L5: on the first line it takes the held message back in front of the draft)', () => {
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     type('held'); enter()
-    type('typing')
+    type('one\ntwo')
+    box().setSelectionRange(7, 7)
     expect(up()).toBe(true)
-    expect(box().value).toBe('typing')
+    expect(box().value).toBe('one\ntwo')
     expect(held()).toHaveLength(1)
   })
 
-  it('an empty box with an attachment chip showing', () => {
+  it('a box with text in it, the caret on the first line: the held message comes back in front of the draft (MS2-4, L5)', () => {
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    type('held'); enter()
+    type('typing')
+    expect(up()).toBe(false)
+    expect(box().value).toBe('held\ntyping')
+    expect(held()).toHaveLength(0)
+  })
+
+  it('a box with an attachment chip showing is a first line too: the held message comes back (MS2-4, L5)', () => {
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     type('held'); enter()
     writeDraft(KEY, '[Image #7]')
     addAttachment(KEY, chip())
     cleanup()
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
-    expect(up()).toBe(true)
-    expect(held()).toHaveLength(1)
+    expect(up()).toBe(false)
+    expect(held()).toHaveLength(0)
   })
 
   it('while an IME is composing', () => {

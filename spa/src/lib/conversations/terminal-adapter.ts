@@ -7,7 +7,7 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { findPane } from '../pane-tree'
 import type { DeckAdapter } from './deck-adapter'
-import { typedRecall, typedSendPort, type SubmitTarget } from './send'
+import { typedRecall, typedSendNow, typedSendPort, type SubmitTarget } from './send'
 
 /** How a terminal message comes back when Claude Code queued it: whenever it reads it, as `user` or `queued`. Same as a worker's. */
 const ECHO = { sources: ['user', 'queued'], afterMs: 10 * 60_000 } as const
@@ -39,6 +39,7 @@ export function terminalAdapter(hostId: string, sessionId: string, sessionCode?:
     canSend: (capabilities) => capabilities?.send === 'prompt' || capabilities?.send === 'keys',
     recall: true,
     takeBack: typedRecall(hostId, target),
+    sendNow: typedSendNow(hostId, target),
     // a message Claude Code queued while busy is written to the transcript when it reads it (source `queued`, no client_msg_id), minutes later
     port: () => ({ ...typedSendPort(hostId, sessionId, target), echo: ECHO }),
     upload: sessionCode ? (file, o) => agentUploadToPath(hostId, file, sessionCode, o) : null,

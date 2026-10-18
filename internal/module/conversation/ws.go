@@ -81,6 +81,8 @@ type wsConn struct {
 	sentRev uint64
 	// what the last capabilities frame (or the snapshot) said about sending: a change is pushed (U3-2)
 	caps capsKey
+	// the stage ledger's seq this connection has been told about (the snapshot sets it; a frame moves it)
+	stagesSeq uint64
 }
 
 // capsKey is the part of the capability table that moves while a conversation is open: whether a mod can take a prompt.
@@ -104,6 +106,24 @@ func (c *wsConn) pushCapsFor(h convfeed.Header) bool {
 		c.caps = k
 		return c.enqueue("conversation.capabilities", map[string]any{"capabilities": caps})
 	}
+	return true
+}
+
+// pushStages queues a conversation.stages frame with every stage that changed since this connection last heard: one frame per
+// tick at most, and none while nothing changed. Like a slow reader's changes, it waits while the send queue is half full.
+func (c *wsConn) pushStages() bool {
+	if len(c.out) >= cap(c.out)/2 {
+		return true
+	}
+	list, seq := c.m.stages.since(c.sid, c.stagesSeq, c.m.tuning().now())
+	if len(list) == 0 {
+		c.stagesSeq = seq
+		return true
+	}
+	if !c.enqueue("conversation.stages", map[string]any{"stages": list}) {
+		return false
+	}
+	c.stagesSeq = seq
 	return true
 }
 
@@ -305,12 +325,14 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 func (c *wsConn) sendSnapshot() bool {
 	caps := capsOf(c) // the table the snapshot says is also the baseline a later change is compared with
 	c.caps = capsKeyOf(caps)
+	seq := c.m.stages.seqOf(c.sid) // read before the snapshot reads the stages: a change in between is sent again, never lost
 	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {
 		log.Printf("[conversation] snapshot frame: %s", code)
 		return false
 	}
 	c.setPosition(cursor)
+	c.stagesSeq = seq
 	return c.enqueue("conversation.snapshot", json.RawMessage(body))
 }
 
@@ -346,7 +368,7 @@ func (c *wsConn) follow() {
 			return
 		case <-tick.C:
 		}
-		if !c.pushCaps() {
+		if !c.pushCaps() || !c.pushStages() { // before the quiet gate: a stage change is no transcript change
 			return
 		}
 		// A stream whose transcript did not grow, whose light, abort and background list cannot have changed (the agent module
@@ -383,6 +405,7 @@ func (c *wsConn) follow() {
 			}
 			c.m.applyAbort(c.entry, c.sid)
 			c.m.applyBackground(c.entry, c.sid)
+			c.m.observeStages(c.sid, c.entry)
 			return nil
 		})
 		if c.ctx.Err() != nil {
@@ -393,7 +416,7 @@ func (c *wsConn) follow() {
 			continue
 		}
 		passAt, passSize, passGen = preAt, preSize, preGen
-		if !c.push() {
+		if !c.push() || !c.pushStages() { // the pass may have moved ids to queued / read
 			return
 		}
 	}

@@ -50,15 +50,15 @@ type UserItem struct {
 	At               int64 // unix ms
 }
 
-// UserItems is every user message the person or the queue put into the conversation (source user or queued), oldest first,
-// read under the entry's lock. The message stages follow a sent message through it.
-func (e *Entry) UserItems() []UserItem {
+// UserItems is every user message stamped at or after minAt (unix ms) that the person or the queue put into the conversation
+// (source user or queued), oldest first, read under the entry's lock. The message stages follow a sent message through it.
+func (e *Entry) UserItems(minAt int64) []UserItem {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var out []UserItem
 	for _, t := range e.conv().Turns {
 		for _, it := range t.Items {
-			if it.User != nil && (it.User.Source == convmodel.SourceUser || it.User.Source == convmodel.SourceQueued) {
+			if it.User != nil && it.User.At >= minAt && (it.User.Source == convmodel.SourceUser || it.User.Source == convmodel.SourceQueued) {
 				out = append(out, UserItem{ID: it.User.ID, Text: it.User.Text, Source: string(it.User.Source), At: it.User.At})
 			}
 		}

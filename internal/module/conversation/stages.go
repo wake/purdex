@@ -82,6 +82,9 @@ type sessionStages struct {
 	// stageTextTTL after the last overflow was seen (an id older than that has lost its text and is no longer judged anyway).
 	lossy      bool
 	lossySince time.Time
+	// what the last observe saw: the transcript revision and the ledger seq after it (seenAlready)
+	obsRev string
+	obsSeq uint64
 	// usedFloor: items stamped at or before it are never matched again (their used marker was trimmed by count).
 	usedFloor int64
 	used      map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
@@ -406,28 +409,71 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 	s.trimUsed()
 }
 
-// pruneUsedLocked forgets the used items no id in flight could still be given (they are older than every window), and returns
-// the items that still could be: the matching below scans only those.
-func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items []stageItem) []stageItem {
-	var minFrom int64
-	found := false
+// windowFromOf is the time before which no item can be an in-flight id's message (ms): the earliest window start of the rows
+// that still wait for one. found is false when no id does.
+func windowFromOf(rows []*stageRow) (from int64, found bool) {
 	for _, r := range rows {
 		if terminalStage(r.stage) || r.text == "" {
 			continue
 		}
-		from := r.textFrom.UnixMilli()
+		f := r.textFrom.UnixMilli()
 		if r.claim != nil && r.claim.at > 0 {
-			from = r.claim.at
+			f = r.claim.at
 		}
-		if !found || from < minFrom {
-			minFrom, found = from, true
+		if !found || f < from {
+			from, found = f, true
 		}
 	}
+	return from - stageItemBefore.Milliseconds(), found
+}
+
+// windowFrom is windowFromOf for a session: the caller reads only the transcript items from there on.
+func (l *stageLedger) windowFrom(sid string) (int64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.sessions[sid]; s != nil {
+		return windowFromOf(s.sorted())
+	}
+	return 0, false
+}
+
+// seenAlready says the last observe of the session saw this transcript revision and the session's ledger has not changed since,
+// so another one would find nothing (the connections of one session share the work). An observer takes sessionSeq BEFORE it
+// reads anything and hands it to markSeen: a change that lands while it works (a new id entering) leaves the session's seq
+// ahead of the mark, so the next look still happens.
+func (l *stageLedger) seenAlready(sid, rev string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.sessions[sid]
+	return s != nil && s.obsRev != "" && s.obsRev == rev && s.obsSeq == s.seq
+}
+
+// sessionSeq is the seq of the session's last change (0 for a session the ledger does not hold).
+func (l *stageLedger) sessionSeq(sid string) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.sessions[sid]; s != nil {
+		return s.seq
+	}
+	return 0
+}
+
+func (l *stageLedger) markSeen(sid, rev string, seq uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.sessions[sid]; s != nil {
+		s.obsRev, s.obsSeq = rev, seq
+	}
+}
+
+// pruneUsedLocked forgets the used items no id in flight could still be given (they are older than every window), and returns
+// the items that still could be: the matching below scans only those.
+func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items []stageItem) []stageItem {
+	minFrom, found := windowFromOf(rows)
 	if !found {
 		clear(s.used)
 		return nil
 	}
-	minFrom -= stageItemBefore.Milliseconds()
 	for id, at := range s.used {
 		if at < minFrom {
 			delete(s.used, id)
@@ -595,4 +641,20 @@ func (l *stageLedger) seqOf(sid string) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.gseq
+}
+
+// inFlight says whether any id of the session could still change by matching (entered, unknown or queued, text kept).
+func (l *stageLedger) inFlight(sid string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.sessions[sid]
+	if s == nil {
+		return false
+	}
+	for _, r := range s.rows {
+		if r.stage == stageQueued || ((r.stage == stageEntered || r.stage == stageUnknown) && r.text != "") {
+			return true
+		}
+	}
+	return false
 }

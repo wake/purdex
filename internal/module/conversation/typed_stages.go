@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convmodel/ccnorm"
 )
 
 // How the typed routes feed the message stage ledger (stages.go). /submit writes received after the session and the owner are
@@ -73,4 +76,32 @@ func (m *Module) recordAnswer(sid, id string, tok uint64, w *stageWriter, now ti
 	if stage, reason, mode := stageOfAnswer(w.status, w.body.Bytes()); stage != "" {
 		m.stages.setAttempt(sid, id, tok, stage, reason, mode, now)
 	}
+}
+
+// observeStages lets the ledger compare the session's queue and user items with the ids still in flight. It reads the entry
+// only while some id could still change (a conversation of thousands of items is not walked for nothing).
+func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
+	if entry == nil || !m.stages.inFlight(sid) {
+		return
+	}
+	seq := m.stages.sessionSeq(sid) // before anything is read: what changes meanwhile is not covered by this look
+	rev := entry.Cursor()
+	if m.stages.seenAlready(sid, rev) { // another connection of this session already looked at this revision
+		return
+	}
+	from, ok := m.stages.windowFrom(sid)
+	if !ok {
+		return
+	}
+	var items []stageItem
+	for _, u := range entry.UserItems(from) {
+		items = append(items, stageItem{ID: u.ID, Text: u.Text, At: u.At})
+	}
+	if m.afterStageRead != nil {
+		m.afterStageRead()
+	}
+	h := entry.Header()
+	lossy := len(h.Queued)+h.HiddenQueued >= ccnorm.MaxQueueEntries // the feed's tracker dropped its oldest rows: absence proves nothing
+	m.stages.observe(sid, h.Queued, lossy, items, m.tuning().now())
+	m.stages.markSeen(sid, rev, seq)
 }

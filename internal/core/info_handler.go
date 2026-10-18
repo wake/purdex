@@ -111,6 +111,9 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "push.badge.v2")    // badge kinds (adopt, terminal-only asks, permission cards), c: keys, purdex.member, the member gate and prefs.muted; same condition as push.v1
 		out = append(out, "push.badge_bg.v1") // a card that closes sends the phones with prefs.badge_push a background badge push (apns-push-type background); same condition as push.v1
 	}
+	if c.moduleReady("conversation") {
+		out = append(out, "conversations.stages.v1") // conversation.stages WS frames and stages[] in conversation.snapshot: where each submitted client_msg_id is (received / filled / entered / queued / read / failed / unknown / recalled); only while the conversation module runs
+	}
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
 	}
