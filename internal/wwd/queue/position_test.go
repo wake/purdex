@@ -150,6 +150,18 @@ func TestPositionOnlyForQueuedJobs(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidPosition)
 }
 
+// Two jobs never share a manual number, even when one of them is claimed (and may come back to the queue with its number).
+func TestManualNumbersAreUniqueAcrossStates(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.distinct(t), f.distinct(t)
+	_, err := f.q.SetPosition(bg, a, wire.PositionFront)
+	require.NoError(t, err)
+	f.claim(t, a, "w1")
+	j, err := f.q.SetPosition(bg, b, wire.PositionFront)
+	require.NoError(t, err)
+	assert.Less(t, j.ManualSeq, f.get(t, a).ManualSeq, "b is in front of the claimed a, which may be released into the queue again")
+}
+
 // A job that goes back to the queue (a worker released it) keeps the place a person gave it, and the position survives a restart:
 // it is in the table.
 func TestPositionSurvivesReleaseAndReopen(t *testing.T) {
