@@ -8,6 +8,7 @@ package resources
 
 import (
 	"encoding/json"
+	"github.com/wake/purdex/internal/wwd/wire"
 	"time"
 )
 
@@ -70,6 +71,16 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 // HostReaderKey is the registry key of the HostReader the resources module offers: the latest host sample, for a reader that must
 // not sample (or fork) itself, such as a failure's detail naming the load it happened under.
 const HostReaderKey = "resources.host-reader"
+
+// LocalFactsKey is the registry key of the LocalFactsReader the resources module offers: wwd's facts of this host, for a reader
+// that shows more of them than HostUse carries (the monitor's disk). It answers only while the fleet row's source is "pool".
+const LocalFactsKey = "resources.local-facts"
+
+// LocalFactsReader is the latest fresh facts of this host from wwd; ok is false when the source is not the pool or wwd has none
+// within its 20 s (the reader then takes its own reading).
+type LocalFactsReader interface {
+	LatestLocalFacts() (facts wire.Facts, ok bool)
+}
 
 // HostReader is the latest published host reading; ok is false until a tick has published a usable one.
 type HostReader interface {

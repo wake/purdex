@@ -32,6 +32,7 @@ type poolHost struct {
 	at    time.Time // when the cached answer was read
 	have  bool
 	cache resources.HostDetail
+	facts *wire.Facts // the facts the cached reading was made from
 	ok    bool
 }
 
@@ -57,7 +58,7 @@ func (p *poolHost) detail() (resources.HostDetail, bool) {
 	pool, err := p.pool(context.Background())
 	now = p.now()
 	p.at, p.have = now, true
-	p.cache, p.ok = resources.HostDetail{}, false
+	p.cache, p.facts, p.ok = resources.HostDetail{}, nil, false
 	if err != nil || len(pool.Peers) == 0 || pool.Peers[0].Facts == nil {
 		return p.cache, false
 	}
@@ -65,8 +66,21 @@ func (p *poolHost) detail() (resources.HostDetail, bool) {
 	if now.Sub(f.At) >= poolHostStale {
 		return p.cache, false
 	}
-	p.cache, p.ok = hostDetailOf(f), true
+	p.cache, p.facts, p.ok = hostDetailOf(f), f, true
 	return p.cache, true
+}
+
+// factsNow is this host's fresh facts, ok false when wwd gives none.
+func (p *poolHost) factsNow() (wire.Facts, bool) {
+	if _, ok := p.detail(); !ok {
+		return wire.Facts{}, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.ok || p.facts == nil {
+		return wire.Facts{}, false
+	}
+	return *p.facts, true
 }
 
 // hostDetailOf maps facts onto the host reading. trend, zone_since and load15 are not in facts and stay unknown/zero; the
@@ -140,6 +154,14 @@ func (m *Module) poolDetail() (resources.HostDetail, bool) {
 		return resources.HostDetail{}, false
 	}
 	return m.pool.detail()
+}
+
+// LatestLocalFacts is resources.LocalFactsReader: wwd's facts of this host while the fleet row says pool.
+func (m *Module) LatestLocalFacts() (wire.Facts, bool) {
+	if m.pool == nil || !m.fleetSrc.isPool() {
+		return wire.Facts{}, false
+	}
+	return m.pool.factsNow()
 }
 
 // findPoolHost wires the pool reader and the fleet row's source. A hostconfig module that is not there leaves the own sample.
