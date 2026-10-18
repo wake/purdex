@@ -40,7 +40,9 @@ exit 99
 
 const fakeSystemctl = `#!/bin/sh
 echo "systemctl $*" >> "$FAKE/calls"
+n=$(cat "$FAKE/show-count" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$FAKE/show-count"
 if [ -e "$FAKE/show-fails" ]; then exit 1; fi
+[ "$(cat "$FAKE/show-fails-at" 2>/dev/null)" != "$n" ] || exit 1
 [ -e "$FAKE/no-unit" ] && { printf 'ActiveState=inactive\nLoadState=not-found\nResult=\n'; exit 0; }
 cat "$FAKE/show"
 if [ -e "$FAKE/stale" ]; then echo "InvocationID=old"; elif [ -e "$FAKE/created" ]; then echo "InvocationID=run2"; else echo "InvocationID=run1"; fi
@@ -379,9 +381,9 @@ func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
 }
 
 func TestSandboxCannotAskOrCannotClearIsStartFailed(t *testing.T) {
-	for _, mode := range []string{"show-fails", "reset-fails"} {
+	for _, mode := range []string{"show-fails", "reset-fails", "show-fails-at"} {
 		w := newWorld(t)
-		w.set(mode, "")
+		w.set(mode, "2") // show-fails-at: the second query, after the clearing, is the one that fails
 		if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
 			t.Errorf("%s: result = %+v", mode, r)
 		}

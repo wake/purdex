@@ -45,7 +45,11 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		res.Tail, res.LogCut, res.CaptureErr = cp.close()
 		return failStart(res, err)
 	}
-	before, _ = sb.show(unit) // the invocation the unit has now, if it is loaded still
+	// the invocation the unit has now, if it is loaded still; a failed query here would leave no base to compare with
+	if before, err = sb.show(unit); err != nil {
+		res.Tail, res.LogCut, res.CaptureErr = cp.close()
+		return failStart(res, err)
+	}
 
 	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
 	cmd := execstat.Command("wwd.run.sandbox", sb.SudoPath, argv...)
