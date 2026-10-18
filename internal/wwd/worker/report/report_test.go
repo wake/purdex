@@ -245,7 +245,25 @@ func TestARefusalEndsTheDeliveryAndSaysWhich(t *testing.T) {
 	assert.Contains(t, h.logs[0], "404")
 }
 
-// A result the origin refused is not followed by the log.
+// A result the origin refused (409: the claim is not live, 404: the job is gone) is not followed by the log: the log goes with the
+// claim, and a claim that is not live may not upload.
+func TestNoLogFollowsARefusedResult(t *testing.T) {
+	for name, refuse := range map[string]error{"409": &runner.Conflict{State: wire.StateFailed}, "404": runner.ErrNotFound} {
+		h := newHarness(t, Config{})
+		h.s.errs = []error{refuse}
+		h.fin(context.Background(), ended(runner.KindRan, run.Result{Outcome: run.Exited, LogPath: logFile(t, "x")}))
+		assert.Equal(t, []string{"result"}, h.s.calls, name)
+
+		h = newHarness(t, Config{})
+		h.s.errs = []error{refuse}
+		e := ended(runner.KindRejected, run.Result{})
+		e.Err = &runner.Rejected{Reason: "task_unknown"}
+		h.fin(context.Background(), e)
+		assert.Equal(t, []string{"result"}, h.s.calls, name+" (rejected)")
+	}
+}
+
+// A result the origin did not take (still down) is not followed by the log.
 func TestNoLogFollowsAResultThatWasNotTaken(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.s.always = errors.New("down")

@@ -217,9 +217,10 @@ func readCapped(path string) []byte {
 	return b
 }
 
-// postResult sends the result until it is taken, refused for good, or given up on; true means the origin has it (or has decided).
+// postResult sends the result until it is taken, refused for good, or given up on; true only when the origin took it. A refused result
+// (409, 404) means the claim is not live: the log is not sent either.
 func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, req wire.ResultRequest) bool {
-	return r.retry(ctx, e, "result", func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) })
+	return r.retry(ctx, e, "result", func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken
 }
 
 // putLog uploads the log with the claim of the run, re-opening it for every try. A log that is not there is not an error of the run.
@@ -246,37 +247,45 @@ func (r *Reporter) release(ctx context.Context, sink Sink, e runner.Ended, reaso
 	r.retry(ctx, e, "release", func(ctx context.Context) error { return sink.Release(ctx, e.Job.ID, req) })
 }
 
+// outcome is how a delivery ended.
+type outcome int
+
+const (
+	taken     outcome = iota // the origin took it
+	refused                  // the origin will not take it (409, 404): the claim is not live, nothing more is sent for it
+	abandoned                // RetryFor passed or ctx ended
+)
+
 // retry calls do until it succeeds, the origin refuses for good (a 409 or an unknown job: it has decided), RetryFor has passed, or ctx
-// ends (the lease is lost, or the worker is stopping). The pause between tries doubles up to MaxBackoff. It returns whether the origin
-// has taken the call or decided.
-func (r *Reporter) retry(ctx context.Context, e runner.Ended, what string, do func(ctx context.Context) error) bool {
+// ends (the lease is lost, or the worker is stopping). The pause between tries doubles up to MaxBackoff.
+func (r *Reporter) retry(ctx context.Context, e runner.Ended, what string, do func(ctx context.Context) error) outcome {
 	deadline := r.cfg.Now().Add(RetryFor)
 	pause := r.cfg.Backoff
 	for {
 		err := do(ctx)
 		if err == nil {
-			return true
+			return taken
 		}
 		var c *runner.Conflict
 		if errors.As(err, &c) {
 			r.cfg.Logf("report: 409: the origin of %s is in state %s, so this worker's claim %s is no longer live; the %s is dropped", e.Job.ID, c.State, e.ClaimID, what)
-			return true
+			return refused
 		}
 		if errors.Is(err, runner.ErrNotFound) {
 			r.cfg.Logf("report: 404: the origin no longer has job %s (claim %s); the %s is dropped", e.Job.ID, e.ClaimID, what)
-			return true
+			return refused
 		}
 		if ctx.Err() != nil {
 			r.cfg.Logf("report: %s of %s not delivered: %v", what, e.Job.ID, ctx.Err())
-			return false
+			return abandoned
 		}
 		if !r.cfg.Now().Add(pause).Before(deadline) {
 			r.cfg.Logf("report: %s of %s given up after %s: %v", what, e.Job.ID, RetryFor, err)
-			return false
+			return abandoned
 		}
 		if werr := r.cfg.Wait(ctx, pause); werr != nil {
 			r.cfg.Logf("report: %s of %s not delivered: %v", what, e.Job.ID, werr)
-			return false
+			return abandoned
 		}
 		if pause *= 2; pause > r.cfg.MaxBackoff {
 			pause = r.cfg.MaxBackoff
