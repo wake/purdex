@@ -160,3 +160,20 @@ func TestNoGuardOnAHostWithoutSandboxUnitsOrWithoutAStore(t *testing.T) {
 		t.Fatalf("guard %v", g)
 	}
 }
+
+func TestGuardEndKeepsTheMarkerOfAQuarantinedRunAndDropsOtherwise(t *testing.T) {
+	q := newQRig(t, newConn("mlab"))
+	g := NewGuard(q.store, true, time.Now, nil)
+	e := runner.Ended{Source: "mlab", Job: qjob("a", wire.ClassDev, 0, "mysql"), ClaimID: claimID, Root: filepath.Join(q.root, "a", "ws")}
+	if err := g.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	g.End(e, true)
+	if len(q.store.Held()) != 1 {
+		t.Fatal("a quarantined run's marker survives End: it is the only record until Finish settles it")
+	}
+	g.End(e, false)
+	if len(q.store.Held()) != 0 {
+		t.Fatal("a run whose unit is proven gone leaves no marker")
+	}
+}
