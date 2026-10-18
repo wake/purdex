@@ -165,12 +165,38 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 			assert.Equal(t, wantAction, r.Action, name+" / "+mode)
 			assert.Empty(t, r.Task, name)
 			assert.Equal(t, c.hint, r.Hint, name+" / "+mode)
+			if mode == "" {
+				assert.Equal(t, "advise", r.Mode, "no [entry] table is advise, and it says so")
+			}
 			if mode == "rewrite" {
 				assert.Equal(t, "rewrite", r.Mode)
 				assert.Contains(t, r.Reason, "ad-hoc", "rewrite says why it only advises")
 			}
 		}
 	}
+}
+
+// A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.
+func TestMatch_TheDirectoryDecidesForATaskWithoutArguments(t *testing.T) {
+	root := repo(t, "advise")
+	assert.Equal(t, ActionAdvise, Match(root, []string{"npx", "tsc", "-b", "--force"}).Action, "from the repo root, not from spa")
+	assert.Equal(t, ActionRewrite, Match(filepath.Join(root, "spa"), []string{"npx", "tsc", "-b", "--force"}).Action)
+	assert.Equal(t, ActionRewrite, Match(filepath.Join(root, "spa", "src"), []string{"npx", "tsc", "-b", "--force"}).Action, "from below it")
+}
+
+// A flag the task has, given another value, is another command; for a task that passes its arguments on it would otherwise be a
+// second value after the first.
+func TestMatch_ASameFlagWithAnotherValueIsNotTheTask(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".wwd"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte("[entry]\nmode = \"deny\"\n[tasks.go-pass]\nrun = \"go test -count=1\"\nargs = \"pass\"\nlocal = true\n"), 0o644))
+	r := Match(root, []string{"go", "test", "-count=1", "-run", "X"})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, []string{"-run", "X"}, r.Args)
+	r = Match(root, []string{"go", "test", "-run", "X"})
+	assert.Equal(t, ActionRewrite, r.Action, "the task's flag left out")
+	r = Match(root, []string{"go", "test", "-count=2", "-run", "X"})
+	assert.Equal(t, ActionDeny, r.Action, "-count=2 is not the task's -count=1")
 }
 
 // A call that is not a test or build command, no manifest, or a manifest that does not parse: left alone.
@@ -210,11 +236,13 @@ func TestMatch_ArgumentsAreChecked(t *testing.T) {
 		"outside the task":  {"pnpm", "vitest", "run", "../tests/ExampleTest.php"},
 		"an absolute path":  {"pnpm", "vitest", "run", filepath.Join(root, "tests", "ExampleTest.php")},
 		"an option as file": {"pnpm", "vitest", "run", "--", "src/a.test.ts"},
+		"an empty file":     {"pnpm", "vitest", "run", ""},
 	} {
 		r := Match(spa, argv)
 		assert.Equal(t, ActionDeny, r.Action, name)
 		assert.Empty(t, r.Task, name)
 	}
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", ""}).Action, "an empty package pattern")
 	r := Match(spa, []string{"pnpm", "vitest", "run", filepath.Join(spa, "src", "a.test.ts")})
 	assert.Equal(t, ActionRewrite, r.Action, "an absolute path inside the task's directory is fine")
 	assert.Equal(t, []string{"src/a.test.ts"}, r.Args)
