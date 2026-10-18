@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -43,6 +43,11 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
+		if have < 3 {
+			if err := migrateV2ToV3(ctx, c); err != nil {
+				return err
+			}
+		}
 		_, err := c.ExecContext(ctx, `UPDATE queue_schema SET version = ?`, schemaVersion)
 		return err
 	})
@@ -68,8 +73,23 @@ func migrateV1ToV2(ctx context.Context, c *sql.Conn) error {
 	return err
 }
 
-// createSchema is version 1 (git_pins, version 2, is created beside it for a new database). Every column of the whole state machine is here (claim, lease, result, log), so the claim and
-// result transitions need no migration when they land. Times are unix milliseconds on the origin's clock.
+// migrateV2ToV3 adds jobs.lapses, the number of times a job's lease ran out. It is counted apart from attempts (which also counts
+// infrastructure releases) because only lapses decide when a job is failed as lost. A database created by version 3 code has the column
+// already, so the step looks first.
+func migrateV2ToV3(ctx context.Context, c *sql.Conn) error {
+	var n int
+	if err := c.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'lapses'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := c.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+// createSchema is the tables of a new database, as of the current version (git_pins, version 2, and jobs.lapses, version 3, are in it).
+// Times are unix milliseconds on the origin's clock.
 func createSchema(ctx context.Context, c *sql.Conn) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS jobs (
@@ -101,6 +121,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			created_at       INTEGER NOT NULL,
 			state            TEXT NOT NULL,
 			attempts         INTEGER NOT NULL DEFAULT 0,
+			lapses           INTEGER NOT NULL DEFAULT 0,
 			claim_worker     TEXT,
 			claim_id         TEXT,
 			claim_since      INTEGER,
