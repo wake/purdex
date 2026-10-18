@@ -69,6 +69,15 @@ var harnessTags = [...]string{"task-notification", "system-reminder", "command-n
 
 func normSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// ShownQueued is the text the header shows for a queued user message: the message cut to maxQueuedText runes. A caller that
+// looks for its own message in the header's queue compares against this.
+func ShownQueued(text string) string {
+	if utf8.RuneCountInString(text) > maxQueuedText {
+		return string([]rune(text)[:maxQueuedText])
+	}
+	return text
+}
+
 func newQEntry(text string, at int64) qEntry {
 	e := qEntry{Queued: Queued{At: at, Source: queueSource(text)}, full: sha256.Sum256([]byte(normSpace(text)))}
 	shown := text
