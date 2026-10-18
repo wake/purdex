@@ -187,14 +187,17 @@ func procArgsDarwin(pid int, e *snapshotEntry, useCache bool) (string, []string,
 	if err != nil {
 		return "", nil, err
 	}
-	if useCache && !fast && !lookedUp {
+	if !fast && !lookedUp {
 		// ps ran in two forks, comm and then args. An exec keeps the pid and the start time, so a process that became another program
-		// between the lookup and now could have given the one answer half of each: it is neither read nor kept.
+		// between the lookup and now could have given the one answer half of each: it is neither returned nor kept. (A same-name exec is
+		// not seen here; the window is the two forks, and it is not kept longer than the cache's TTL for ReadCached.)
 		commAfter := kernComm(kp.Proc.P_comm[:])
 		if commAfter != commBefore {
 			return "", nil, fmt.Errorf("pid %d changed its command from %q to %q while ps read it: %w", pid, commBefore, commAfter, ErrProcessChanged)
 		}
-		psArgsPut(psArgsKey{pid, e.identity, commAfter}, exePath, argv)
+		if useCache {
+			psArgsPut(psArgsKey{pid, e.identity, commAfter}, exePath, argv)
+		}
 	}
 	return exePath, argv, nil
 }

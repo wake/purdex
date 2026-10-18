@@ -260,6 +260,11 @@ func TestPSArgsCache_AnswerIsACopy(t *testing.T) {
 // ps asks comm and then args. A process that execs in between, with the same pid and start time, would give one answer half of each: it
 // is told as a changed process, and nothing is kept for the program that is there now.
 func TestPSArgsCache_ExecDuringPSIsNeitherReturnedNorKept(t *testing.T) {
+	t.Run("ReadCached", func(t *testing.T) { execDuringPS(t, (*ProcessSnapshot).ReadCached) })
+	t.Run("ReadFresh", func(t *testing.T) { execDuringPS(t, (*ProcessSnapshot).ReadFresh) })
+}
+
+func execDuringPS(t *testing.T, read func(*ProcessSnapshot, int) (ProcessInfo, error)) {
 	psArgsReset()
 	t.Cleanup(psArgsReset)
 	pid := startHelper(t, []string{"snap-helper", "中文"})
@@ -282,8 +287,8 @@ func TestPSArgsCache_ExecDuringPSIsNeitherReturnedNorKept(t *testing.T) {
 	}
 	t.Cleanup(func() { runPS = origPS })
 
-	if _, err := snap.ReadCached(pid); !errors.Is(err, ErrProcessChanged) {
-		t.Fatalf("ReadCached across an exec = %v, want ErrProcessChanged", err)
+	if _, err := read(snap, pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("a read across an exec = %v, want ErrProcessChanged", err)
 	}
 	psArgsMu.Lock()
 	n := len(psArgsStore)
