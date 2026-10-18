@@ -142,6 +142,14 @@ func TestSendNow_ARefusalBeforeTheKeysIsNotRecorded(t *testing.T) {
 	assert.Equal(t, 1, re.sendNowKeys())
 }
 
+func TestSendNow_AGuardRefusalIsNotRecordedEither(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.keys.errs = []error{tmux.ErrPaneBusy} // copy mode: nothing was sent
+	answer(t, re.sendNow("sn11"), 409, "refused", "", "pane_busy")
+	sentNow(t, re.sendNow("sn11")) // same id, the person left copy mode: a fresh try
+	assert.Equal(t, 2, re.keys.n())
+}
+
 func TestSendNow_AKeysFailureIsUnknownAndRecorded(t *testing.T) {
 	re := newRecallEnv(t, queueRow("enqueue", "a"))
 	re.keys.errs = []error{errBoom}
