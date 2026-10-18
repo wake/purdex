@@ -478,6 +478,31 @@ func TestTrackerClassifiesEverySampleWhileTheIdentityIsNeverReadable(t *testing.
 	}
 }
 
+// Every failed read after a good one gets its one sample, not only the first.
+func TestTrackerGivesEachSeparateFailedReadItsSample(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	known := true
+	tr.ident = func(int) (string, bool) {
+		if !known {
+			return "", false
+		}
+		return "t1", true
+	}
+	h.add(200, 100, "node", []string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"})
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	known = false
+	step(tr, h, 1) // a first failed read
+	known = true
+	step(tr, h, 2) // recovered
+	known = false
+	h.args[200] = nil // a second, separate failure that also loses the arguments
+	step(tr, h, 3)
+	if len(tr.Live()) != 0 {
+		t.Fatalf("the second failed read lost the verdict: %+v", tr.Live())
+	}
+}
+
 // A long gap between samples (the machine slept, wwd was stopped) is not charged as CPU.
 func TestTrackerCapsAGapBetweenSamples(t *testing.T) {
 	h := newHost()

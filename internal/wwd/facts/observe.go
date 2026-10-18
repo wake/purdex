@@ -120,7 +120,11 @@ func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 	if v, ok := t.harness[k]; ok {
 		switch {
 		case id != "":
-			if v.ident == id { // the same process
+			if v.ident == id { // the same process: an earlier failed read is over, the next one gets its sample again
+				if v.unknownAt != 0 {
+					v.unknownAt = 0
+					t.harness[k] = v
+				}
 				return v.harness
 			}
 		case v.unknownAt == t.sample: // no identity to check by, and this sample already decided
