@@ -123,7 +123,7 @@ func TestHostStillValid(t *testing.T) {
 // Condition (4).
 func TestUnqualifiedHostAnswersOnlyItself(t *testing.T) {
 	e := entry() // made on mserv
-	h := HostNow{Labels: []string{"os:linux"}}
+	h := HostNow{Labels: []string{"os:linux"}, CurrentFingerprint: map[string]string{"go": "1.26.0"}}
 	q := query() // from mlab
 	if Answers(e, q, h) {
 		t.Fatal("an unqualified host's result answered another host")
@@ -134,6 +134,24 @@ func TestUnqualifiedHostAnswersOnlyItself(t *testing.T) {
 	}
 	if SameHostOnly(Entry{}, Query{}, HostNow{}) {
 		t.Fatal("empty hosts are not the same host")
+	}
+}
+
+// Condition (4) also compares the toolchain: a host with no standing that upgraded Go is not answered with a result from before.
+func TestUnqualifiedHostToolchainChangeIsAnotherJob(t *testing.T) {
+	q := query()
+	q.Host = "mserv"
+	h := HostNow{Labels: []string{"os:linux"}, CurrentFingerprint: map[string]string{"go": "1.26.0"}}
+	if !Answers(entry(), q, h) {
+		t.Fatal("an unchanged toolchain did not hit")
+	}
+	h.CurrentFingerprint = map[string]string{"go": "1.26.1"}
+	if Answers(entry(), q, h) {
+		t.Fatal("a changed toolchain hit a result from before the change")
+	}
+	h.CurrentFingerprint = nil
+	if Answers(entry(), q, h) {
+		t.Fatal("an unknown current toolchain hit")
 	}
 }
 
@@ -180,7 +198,7 @@ func TestMemberResultOnQualifiedHostAnswersLead(t *testing.T) {
 func TestSameHostStillNeedsSameWork(t *testing.T) {
 	q := query()
 	q.Host, q.Tree = "mserv", "t2"
-	if Answers(entry(), q, HostNow{Labels: []string{"os:linux"}}) {
+	if Answers(entry(), q, HostNow{Labels: []string{"os:linux"}, CurrentFingerprint: map[string]string{"go": "1.26.0"}}) {
 		t.Fatal("another tree answered")
 	}
 }
