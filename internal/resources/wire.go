@@ -88,6 +88,10 @@ type HostDetail struct {
 	Host HostUse `json:"host"`
 	// SampledAt is when the reading was taken, unix ms.
 	SampledAt int64 `json:"sampled_at"`
+	// SessionsRoom is wwd's derived "how many more sessions this host can take" (facts.derived.sessions_room); nil when the
+	// reading is not wwd's. It carries no judgement of this package's: the reader that decides whether another member may be
+	// opened asks for it.
+	SessionsRoom *int `json:"sessions_room,omitempty"`
 }
 
 // HostUse is the host-wide part of a Snapshot.
