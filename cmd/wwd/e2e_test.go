@@ -62,7 +62,19 @@ func newWorld(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(root) })
+	t.Cleanup(func() {
+		// A child of wwd that outlives it (the `go version` of the tool probe writes its telemetry under HOME as it ends) can
+		// recreate a directory while it is being removed: remove until nothing is left.
+		for i := 0; i < 10; i++ {
+			if os.RemoveAll(root) == nil {
+				if _, err := os.Stat(root); os.IsNotExist(err) {
+					return
+				}
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Errorf("could not remove %s", root)
+	})
 	w := &world{t: t, root: root, repo: filepath.Join(root, "e2erepo"), pool: filepath.Join(root, "pool.token")}
 	if err := os.WriteFile(w.pool, []byte(strings.Repeat("ab12", 16)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
