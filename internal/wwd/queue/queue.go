@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -67,12 +68,15 @@ type Queue struct {
 	pin  Pinner
 
 	leaseS, renewS int
-	maxLog         int64 // the most one uploaded log may be
+	maxLog         int64      // the most one uploaded log may be
+	logMu          sync.Mutex // an upload's putting its file in place and recording it, against the sweep removing files
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
 	// beforeLogCommit is a test hook: it runs after a log body has been received and before the transaction that puts it in place.
 	beforeLogCommit func()
+	// afterLogForget is a test hook: it runs after the sweep has committed the forgetting of old logs and before it removes their files.
+	afterLogForget func()
 	// afterTicket is a test hook: it runs inside the transaction right after the ticket was taken, before COMMIT.
 	afterTicket func()
 }

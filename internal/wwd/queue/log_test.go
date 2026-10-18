@@ -249,6 +249,25 @@ func TestFailedForgetKeepsTheLogFile(t *testing.T) {
 	assert.Equal(t, "x", f.readLog(t, id), "the file and the pointer to it are both still there")
 }
 
+// An upload recorded between the sweep's forgetting of an old log and its removal of the file is not lost: the file at that path is the
+// new one, and the sweep leaves it (3b-3b critic).
+func TestSweepDoesNotRemoveALogUploadedWhileItWasForgetting(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	require.NoError(t, f.putLog(t, id, c.ClaimID, "old\n"))
+	_, err := f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: ptr(0)})
+	require.NoError(t, err)
+	f.clk.Advance(3*24*time.Hour + time.Minute)
+
+	f.q.afterLogForget = func() { require.NoError(t, f.putLog(t, id, c.ClaimID, "new\n")) }
+	r, err := f.q.Sweep(bg)
+	require.NoError(t, err)
+	f.q.afterLogForget = nil
+	assert.Equal(t, 1, r.LogsRemoved, "the old log was forgotten")
+	assert.Equal(t, "new\n", f.readLog(t, id), "and the new one is still there")
+	assert.Equal(t, id+"/log", f.get(t, id).Result.Log)
+}
+
 type spyReader struct{ read bool }
 
 func (r *spyReader) Read([]byte) (int, error) { r.read = true; return 0, io.EOF }

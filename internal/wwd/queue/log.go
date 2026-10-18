@@ -58,6 +58,8 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	if q.beforeLogCommit != nil {
 		q.beforeLogCommit()
 	}
+	q.logMu.Lock() // an upload is put in place and recorded while the sweep's file removal waits (see sweepLogs)
+	defer q.logMu.Unlock()
 	// The new file replaces the old inside the transaction, with the old one kept beside it until the commit: a transaction that fails
 	// puts the old log back. A process that dies between the rename and the commit leaves the new file in place with the database still
 	// describing the old one (the log is the holder's latest upload either way; its size is read from the file, not the database); the
@@ -248,7 +250,22 @@ func (q *Queue) sweepLogs(ctx context.Context, now time.Time) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	q.removeLogFiles(ids)
+	if q.afterLogForget != nil {
+		q.afterLogForget()
+	}
+	// The files go now, but only of jobs that still have no log: an upload may have been recorded between the commit above and here, and
+	// its file is at the same path. Uploads put their file in place and record it under logMu, so under it the check cannot be stale.
+	q.logMu.Lock()
+	var gone []string
+	for _, id := range ids {
+		var has sql.NullInt64
+		switch err := q.db.QueryRowContext(ctx, `SELECT log_size FROM jobs WHERE id = ?`, id).Scan(&has); {
+		case errors.Is(err, sql.ErrNoRows), err == nil && !has.Valid:
+			gone = append(gone, id)
+		}
+	}
+	q.removeLogFiles(gone)
+	q.logMu.Unlock()
 	if q.opt.LogDir != "" {
 		left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
 		for _, p := range left {
