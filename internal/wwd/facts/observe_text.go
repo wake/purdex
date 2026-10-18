@@ -80,9 +80,14 @@ func scrubbed(argv []string) []string {
 }
 
 // hardToSplit says whether a script has syntax whose quoting a plain word split gets wrong: command substitution and parameter
-// expansion nest their own quotes, here-documents carry free text. The whole script is then masked rather than half-parsed.
+// expansion and process substitution nest their own quotes, $'..' has its own escapes, here-documents carry free text. The whole script is then masked rather than half-parsed.
 func hardToSplit(script string) bool {
-	return strings.ContainsAny(script, "`") || strings.Contains(script, "$(") || strings.Contains(script, "${") || strings.Contains(script, "<<")
+	for _, p := range []string{"`", "$(", "${", "<<", "<(", ">(", "$'"} {
+		if strings.Contains(script, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitShellWords splits on white space outside quotes and keeps the quote characters in the words, so a quoted value with spaces
