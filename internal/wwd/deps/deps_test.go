@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -675,4 +676,76 @@ func TestPrepare_TheCopyFallbackIsThroughHandlesToo(t *testing.T) {
 		_, serr = os.Stat(filepath.Join(c.Dir, r.Key, "spa/node_modules/poison"))
 		assert.True(t, os.IsNotExist(serr), "nothing from outside")
 	})
+}
+
+// The fallback reads a directory in batches, so a directory of a million entries is not held in memory whole: with a small batch every
+// entry of a big, flat, and nested tree still arrives, in modes and all, and a cancelled context stops the copy at once.
+func TestPrepare_TheCopyFallbackReadsInBatchesAndStopsWhenCancelled(t *testing.T) {
+	noCloneAt = true
+	oldBatch := readBatch
+	readBatch = 7
+	t.Cleanup(func() { noCloneAt = false; readBatch = oldBatch; testHook = nil })
+
+	big := func(ctx context.Context, ws string) error {
+		for i := 0; i < 100; i++ {
+			if err := os.WriteFile(filepath.Join(ws, "node_modules", "f"+strconv.Itoa(i)), []byte(strconv.Itoa(i)), 0o640); err != nil {
+				return err
+			}
+		}
+		require.NoError(t, os.MkdirAll(filepath.Join(ws, "node_modules/a/b/c"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ws, "node_modules/a/b/c/deep"), []byte("deep"), 0o600))
+		require.NoError(t, os.Chmod(filepath.Join(ws, "node_modules/a/b"), 0o500)) // a directory that cannot be written: its mode comes last
+		return nil
+	}
+	mk := func(install func(context.Context, string) error) (string, Spec) {
+		ws := workspace(t, "batches\n")
+		require.NoError(t, os.MkdirAll(filepath.Join(ws, "node_modules"), 0o755))
+		return ws, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp, Install: install}
+	}
+	c := newCache(t, 2)
+	ws1, sp := mk(big)
+	_, err := c.Prepare(context.Background(), ws1, sp)
+	require.NoError(t, err)
+	ws2, _ := mk(nil)
+	r, err := c.Prepare(context.Background(), ws2, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp})
+	require.NoError(t, err)
+	assert.True(t, r.Hit)
+	for i := 0; i < 100; i++ {
+		b, err := os.ReadFile(filepath.Join(ws2, "node_modules", "f"+strconv.Itoa(i)))
+		require.NoError(t, err)
+		assert.Equal(t, strconv.Itoa(i), string(b))
+	}
+	st, err := os.Stat(filepath.Join(ws2, "node_modules/f3"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), st.Mode().Perm())
+	st, err = os.Stat(filepath.Join(ws2, "node_modules/a/b"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o500), st.Mode().Perm(), "a directory's mode is set after it was filled")
+	b, err := os.ReadFile(filepath.Join(ws2, "node_modules/a/b/c/deep"))
+	require.NoError(t, err)
+	assert.Equal(t, "deep", string(b))
+	for _, d := range []string{ws1, ws2, c.Dir} { // so that the temp dirs can be removed
+		_ = os.Chmod(filepath.Join(d, "node_modules/a/b"), 0o755)
+	}
+	for _, e := range mustReadDir(t, c.Dir) {
+		_ = os.Chmod(filepath.Join(c.Dir, e, "node_modules/a/b"), 0o755)
+	}
+
+	// a cancelled context stops the copy before it starts on the tree
+	ws3, _ := mk(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = c.Prepare(ctx, ws3, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp})
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func mustReadDir(t *testing.T, dir string) []string {
+	t.Helper()
+	des, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var names []string
+	for _, de := range des {
+		names = append(names, de.Name())
+	}
+	return names
 }

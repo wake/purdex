@@ -441,65 +441,76 @@ func copyThroughRoots(ctx context.Context, root *os.Root, d, dir string, toCache
 	if testHook != nil {
 		testHook("before-copy") // the handles are open: what the names do from here on must not matter
 	}
-	type dirMode struct {
-		name string
-		mode fs.FileMode
+	if err := copyDir(ctx, src, dst, "."); err != nil {
+		return fmt.Errorf("deps: copy %s: %w", d, err)
 	}
-	var dirs []dirMode
-	err = fs.WalkDir(src.FS(), ".", func(p string, de fs.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
-		}
+	return nil
+}
+
+// readBatch is how many entries of a directory are read at a time: a directory of a million entries is then never in memory whole (fs.WalkDir
+// reads and sorts all of a directory's entries before it visits the first). (A variable so that a test can make it small.)
+var readBatch = 256
+
+// copyDir copies the directory rel of src into the directory rel of dst (which is there, empty), depth first, entry by entry. The type of
+// an entry is the one the directory read gave (no lstat by path); modes are read from open files. The directory's own mode is set last,
+// through its open handle: a directory that is not writable could not be filled.
+func copyDir(ctx context.Context, src, dst *os.Root, rel string) error {
+	dir, err := src.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	st, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if p == "." {
-			return nil
+		des, rerr := dir.ReadDir(readBatch)
+		for _, de := range des {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			p := path.Join(rel, de.Name())
+			switch {
+			case de.IsDir():
+				if err := dst.Mkdir(p, 0o755); err != nil {
+					return err
+				}
+				if err := copyDir(ctx, src, dst, p); err != nil {
+					return err
+				}
+			case de.Type().IsRegular():
+				if err := copyFile(src, dst, p); err != nil {
+					return err
+				}
+			case de.Type()&fs.ModeSymlink != 0:
+				target, err := src.Readlink(p)
+				if err != nil {
+					return err
+				}
+				if err := dst.Symlink(target, p); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("%s is not a directory, a file or a symlink", p)
+			}
 		}
-		// de.Info() is an lstat by path; the type from the directory read is enough, and a mode is read from the open file
-		switch {
-		case de.IsDir():
-			if err := dst.Mkdir(p, 0o755); err != nil {
-				return err
-			}
-			df, err := src.Open(p)
-			if err != nil {
-				return err
-			}
-			st, err := df.Stat()
-			df.Close()
-			if err != nil {
-				return err
-			}
-			dirs = append(dirs, dirMode{p, st.Mode().Perm()})
-		case de.Type().IsRegular():
-			return copyFile(src, dst, p)
-		case de.Type()&fs.ModeSymlink != 0:
-			target, err := src.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return dst.Symlink(target, p)
-		default:
-			return fmt.Errorf("deps: %s is not a directory, a file or a symlink", p)
+		if errors.Is(rerr, io.EOF) {
+			break
 		}
-		return nil
-	})
+		if rerr != nil {
+			return rerr
+		}
+	}
+	f, err := dst.OpenFile(rel, os.O_RDONLY, 0)
 	if err != nil {
-		return fmt.Errorf("deps: copy %s: %w", d, err)
+		return err
 	}
-	for i := len(dirs) - 1; i >= 0; i-- { // the modes of directories last, a directory that is not writable could not be filled
-		f, err := dst.OpenFile(dirs[i].name, os.O_RDONLY, 0)
-		if err != nil {
-			return err
-		}
-		err = f.Chmod(dirs[i].mode)
-		f.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	defer f.Close()
+	return f.Chmod(st.Mode().Perm())
 }
 
 // copyFile copies the file p from src to dst, with the mode of the source (read from its open file) set on the open copy.
