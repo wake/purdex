@@ -18,7 +18,7 @@ import { pausedLightText } from '../../lib/team/paused-text'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import type { JournalMember } from '../../lib/journal/types'
 import { useCoarseNow } from '../../hooks/useCoarseNow'
-import { leadLastLine, memberLastLine, memberTaskLine } from './member-lines'
+import { leadLastLine, memberLastLine, memberTaskLine, useLeadJournalRead } from './member-lines'
 import { useJournalStore } from '../../stores/useJournalStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -62,6 +62,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
   const readingTip = noAnswer ?? `${modelText} · ${r.effort ?? '—'} · ${ctxTip(r.ctx, t)}`
   const rowTip = away ? `${t('team.seat_not_in_app')}\n${readingTip}` : readingTip
   const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
+  useLeadJournalRead(seat.hostId, seat.sessionId, seat.role === 'lead')
   const leadLine = useJournalStore((s) => (seat.role === 'lead' ? leadLastLine(s, seat.hostId, seat.sessionId) : ''))
   // Who the row is (name pool v2): the persona by the code its address ends in. With none the avatar is initials on the host colour, same size, so the
   // layout does not move, and the title takes the name's place.

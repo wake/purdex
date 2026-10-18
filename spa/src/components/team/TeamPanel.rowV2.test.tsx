@@ -2,9 +2,13 @@
 // the light as its corner badge; line 1 is the muted agent icon (no light), the host badge, the NAME (semibold) and the title (muted, the first to give way). A seat with no
 // persona keeps the layout: initials on the host colour in the same 44 px, and the title as its name. Real stores; the icon and the host badge are mocked as in the other panel tests.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { vi } from 'vitest'
 
+const getJournal = vi.fn()
+vi.mock('../../lib/journal/api', () => ({
+  getJournal: (...a: unknown[]) => getJournal(...a), getJournalPage: vi.fn(), getJournalSessions: vi.fn(), getTasks: vi.fn(), getRoadmap: vi.fn(), getJournalMembers: vi.fn().mockResolvedValue({ kind: 'ok', value: [] }),
+}))
 vi.mock('./TeamSeatIcon', () => ({
   TeamSeatIcon: ({ light }: { light?: boolean }) => <span data-testid="seat-icon" data-light={String(light !== false)} />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -16,6 +20,8 @@ import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useJournalStore } from '../../stores/useJournalStore'
+import { parseJournalPage } from '../../lib/journal/parse'
+import { wirePage, wireEntry } from '../../lib/journal/fixtures'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { usePersonaStore } from '../../stores/usePersonaStore'
@@ -31,6 +37,7 @@ beforeEach(() => {
   resetTeamStores()
   usePersonaStore.setState({ byHost: {} })
   useJournalStore.getState().reset()
+  getJournal.mockReset()
   useShownHostsStore.setState({ ids: [HOST] })
   useI18nStore.getState().setLocale('zh-TW')
   seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }], activeTabId: 'lead' })
@@ -106,7 +113,7 @@ describe('a row of the full panel (v2)', () => {
 
 describe('the lead\'s second line (NA-0 design)', () => {
   const hold = (text: string) => useJournalStore.setState({
-    byHost: { [HOST]: { units: { 'team:t': { entries: [{ id: 'e1', text: 'older' }, { id: 'e2', text }] } as never }, unitOfSession: { L: 'team:t' } } },
+    byHost: { [HOST]: { units: { 'team:t': { entries: [{ id: 'e1', text: 'older' }, { id: 'e2', text }], staleAt: { entries: 0, tasks: 0, roadmap: 0 }, readAt: { entries: 1, tasks: 1, roadmap: 1 } } as never }, unitOfSession: { L: 'team:t' } } },
   } as never)
 
   it('is the first line of the newest entry the journal holds for the lead\'s unit', () => {
@@ -121,4 +128,21 @@ describe('the lead\'s second line (NA-0 design)', () => {
     hold('x')
     expect(within(row('A')).queryByTestId('team-panel-lead-line')).toBeNull()
   })
+
+  it('the panel reads the lead\'s journal itself: with nothing held it loads once the host serves it, and then shows the newest line', async () => {
+    getJournal.mockResolvedValue({ kind: 'ok', value: parseJournalPage(wirePage({ unit: { kind: 'team', id: 't', label: 't' }, entries: [wireEntry('e1', { text: 'did the first thing' }), wireEntry('e2', { at: 9_999_999_999_999, text: 'shipped the panel' })] })) })
+    mount()
+    expect(within(row('L')).queryByTestId('team-panel-lead-line')).toBeNull()
+    act(() => { useJournalStore.getState().setSupport(HOST, true) })
+    await waitFor(() => expect(within(row('L')).getByTestId('team-panel-lead-line')).toHaveTextContent('shipped the panel'))
+    expect(getJournal).toHaveBeenCalledTimes(1)
+    expect(getJournal.mock.calls[0][0]).toBe(HOST)
+  })
+
+  it('a host that does not serve the journal is never asked, and a member row asks nothing', async () => {
+    mount()
+    await new Promise((r) => setTimeout(r, 400))
+    expect(getJournal).not.toHaveBeenCalled()
+  })
 })
+
