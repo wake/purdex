@@ -141,6 +141,11 @@ interface Window {
     // over windows. Optional: an app build older than the SPA has no bridge, and the SPA then sends nothing.
     badge?: { set: (report: { sessions: string[]; cards: { id: string; session?: string; fallback: string }[] }) => void }
 
+    // Persona photo (name pool v2 plan P2): the main process fetches a PlaceCats/PlaceDog URL and answers a data URL, or
+    // rejects with an Error whose message starts `avatar-fetch:<code>`. Optional: an app build older than the SPA has no
+    // bridge, and the persona page then asks for an uploaded file instead.
+    fetchAvatar?: (url: string) => Promise<string>
+
     // Deeplink (purdex://execution/<id>[?host=<hint>]) — consumed by the P.12 resolver
     onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => () => void
 
