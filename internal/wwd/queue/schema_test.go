@@ -103,7 +103,7 @@ func TestAVersionTwoDatabaseGainsLapses(t *testing.T) {
 	require.NoError(t, f.db.QueryRow(`SELECT lapses FROM jobs WHERE id = ?`, id).Scan(&lapses))
 	assert.Equal(t, 0, lapses)
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 3, v)
+	assert.Equal(t, schemaVersion, v)
 
 	f.claim(t, id, "air26")
 	f.clk.Advance(61 * time.Second)

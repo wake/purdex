@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -45,6 +45,11 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		}
 		if have < 3 {
 			if err := migrateV2ToV3(ctx, c); err != nil {
+				return err
+			}
+		}
+		if have < 4 {
+			if err := migrateV3ToV4(ctx, c); err != nil {
 				return err
 			}
 		}
@@ -88,8 +93,61 @@ func migrateV2ToV3(ctx context.Context, c *sql.Conn) error {
 	return err
 }
 
-// createSchema is the tables of a new database, as of the current version (git_pins, version 2, and jobs.lapses, version 3, are in it).
-// Times are unix milliseconds on the origin's clock.
+// revStatements (version 4) are the origin's cursor: a counter that only goes up (job_rev, one row), jobs.rev holding the counter's value
+// at the job's last change, and the triggers that move it. A job gets the next number when it is inserted and when a column a client can
+// see changes (state, result, cancellation, supersession, log, claim); a lease renewal touches none of them. The counter is a table of its
+// own, not max(rev), so that deleting the newest job (retention) never lets its number be given out again. Writers are serialized by
+// BEGIN IMMEDIATE, so numbers are handed out, and become visible, in the order of the commits: a reader that has seen number n will never
+// see a lower one appear later. The triggers write only jobs.rev, which they do not list, so they do not fire themselves.
+var revStatements = []string{
+	`CREATE TABLE IF NOT EXISTS job_rev (n INTEGER NOT NULL)`,
+	`INSERT INTO job_rev (n) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM job_rev)`,
+	`CREATE INDEX IF NOT EXISTS jobs_rev ON jobs (rev)`,
+	`CREATE TRIGGER IF NOT EXISTS jobs_rev_ins AFTER INSERT ON jobs BEGIN
+		UPDATE job_rev SET n = n + 1;
+		UPDATE jobs SET rev = (SELECT n FROM job_rev) WHERE seq = NEW.seq;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS jobs_rev_upd AFTER UPDATE OF state, result, cancel_requested, superseded_by, log_size, claim_id ON jobs BEGIN
+		UPDATE job_rev SET n = n + 1;
+		UPDATE jobs SET rev = (SELECT n FROM job_rev) WHERE seq = NEW.seq;
+	END`,
+}
+
+// migrateV3ToV4 gives an existing database the cursor: the column, a number for every job in the order it was made (its seq, which only
+// goes up), the counter above the highest, then the triggers. It can run again: each step looks first.
+func migrateV3ToV4(ctx context.Context, c *sql.Conn) error {
+	var n int
+	if err := c.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'rev'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := c.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN rev INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	// the tables first, the backfill, and only then the triggers: a trigger that existed would number each backfilled job again
+	if _, err := c.ExecContext(ctx, revStatements[0]); err != nil {
+		return err
+	}
+	if _, err := c.ExecContext(ctx, revStatements[1]); err != nil {
+		return err
+	}
+	if _, err := c.ExecContext(ctx, `UPDATE jobs SET rev = seq WHERE rev = 0`); err != nil {
+		return err
+	}
+	if _, err := c.ExecContext(ctx, `UPDATE job_rev SET n = max(n, (SELECT coalesce(max(rev), 0) FROM jobs))`); err != nil {
+		return err
+	}
+	for _, stmt := range revStatements[2:] {
+		if _, err := c.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// createSchema is the tables of a new database, as of the current version (git_pins, version 2, jobs.lapses, version 3, and the cursor,
+// version 4, are in it). Times are unix milliseconds on the origin's clock.
 func createSchema(ctx context.Context, c *sql.Conn) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS jobs (
@@ -137,13 +195,19 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			local            INTEGER NOT NULL DEFAULT 0,
 			git_dir          TEXT NOT NULL DEFAULT '',
 			pinned           INTEGER NOT NULL DEFAULT 0,
-			updated_at       INTEGER NOT NULL
+			updated_at       INTEGER NOT NULL,
+			rev              INTEGER NOT NULL DEFAULT 0
 		)`,
 		gitPinsTable,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,
 		`CREATE INDEX IF NOT EXISTS jobs_supersede ON jobs (supersede_key) WHERE supersede_key != ''`,
 		`CREATE INDEX IF NOT EXISTS jobs_session ON jobs (sub_session, seq)`,
 	} {
+		if _, err := c.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range revStatements {
 		if _, err := c.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
