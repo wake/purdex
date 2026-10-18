@@ -196,6 +196,11 @@ func NewCollector(src Sources) *Collector {
 func (c *Collector) Sample() (Reading, error) {
 	now := c.src.Now()
 	r := Reading{At: now, Disk: []wire.Disk{}, Procs: []wire.Proc{}, Residents: []wire.Resident{}, Tools: wire.Tools{PHP: []string{}}}
+	if c.src.Procs == nil {
+		// no process source on this platform yet: null, not an empty list that says
+		// "read, and nothing runs" (spec §3.1: a field a platform cannot read is null)
+		r.Procs, r.Residents = nil, nil
+	}
 	if c.src.Tools != nil {
 		r.Tools = c.src.Tools()
 	}

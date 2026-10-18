@@ -92,25 +92,16 @@ func linuxMem() (RawMem, error) {
 	return m, nil
 }
 
-// productionPSI is the larger of system.slice and user.slice per field, nil when
-// neither can be read (a kernel without PSI or cgroup v2).
+// productionPSI is the larger of system.slice and user.slice per field. nil when
+// either cannot be read or parsed (a kernel without PSI or cgroup v2, a slice
+// missing): the unreadable one may be the one under pressure, so the other's
+// zeros prove nothing.
 func productionPSI() *wire.PSI {
-	var out *wire.PSI
-	for _, p := range productionSlices {
-		text, err := readFile(p)
-		if err != nil {
-			continue
-		}
-		s10, s60, f10, err := ParsePSI(text)
-		if err != nil {
-			continue
-		}
-		if out == nil {
-			out = &wire.PSI{}
-		}
-		out.Some10, out.Some60, out.Full10 = max(out.Some10, s10), max(out.Some60, s60), max(out.Full10, f10)
+	texts := make([]string, len(productionSlices))
+	for i, p := range productionSlices {
+		texts[i], _ = readFile(p) // unreadable stays "" and fails to parse
 	}
-	return out
+	return MergePSI(texts)
 }
 
 // linuxDisks reports the root file system and, when it is another one, the one
