@@ -47,9 +47,11 @@ type NameService interface {
     // Reservations (spec §5.2): in memory, under the pool lock that assignPooled and settlePoolCollisions take,
     // so reserving, releasing and counting held names are one atomic section (codex #2).
     // Rule 2 for the lead's team; "" = nothing free.
-    ReserveMember(ctx context.Context, leadSessionID, opID string, at time.Time) (code string, err error)
+    // tmuxName is the op's tmux session name (spawn_ops.tmux_name): the first naming pass finds the reservation by it
+    // (NP-0 result, path b′).
+    ReserveMember(ctx context.Context, leadSessionID, opID, tmuxName string, at time.Time) (code string, err error)
     // A remote spawn: the lead host chose. ErrNameTaken when the name is held here → the member host uses rule 3.
-    ReserveExact(ctx context.Context, code, opID string, at time.Time) error
+    ReserveExact(ctx context.Context, code, opID, tmuxName string, at time.Time) error
     ReleaseReservation(opID string) // registered, failed, voided, timed out, remote command expired; idempotent
 
     LeadCandidates(ctx context.Context, sessionID string) ([]LeadCandidate, error) // rule 1, "keep" first
@@ -69,7 +71,7 @@ type NameService interface {
 // Registered by the team module (codex #2): the open spawn ops that carry a pool_name, read once by the
 // name service after boot to rebuild its reservations. The peers module never opens team.db.
 type SpawnReservationReader interface {
-    OpenReservations(ctx context.Context) ([]Reservation, error) // {OpID, Code, CreatedAt}
+    OpenReservations(ctx context.Context) ([]Reservation, error) // {OpID, Code, TmuxName, CreatedAt}
 }
 ```
 
@@ -83,7 +85,7 @@ type SpawnReservationReader interface {
 
 | Phase | Who | Content | Depends on |
 |---|---|---|---|
-| NP-0 | daemon member | Measurement only (P5), result into this plan by a docs commit | — |
+| NP-0 | lead | Measurement only (P5). **Done 10-19**: the result is under「NP-0 measurement」 | — |
 | NP-1 | daemon member A | personas key, routes, validation, event, pool registry, picker, `journal.DisplayName` | §1 |
 | NP-2 | daemon member A | envelope `names`, sync apply, peer route | NP-1 |
 | NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1; NP-2 for its last task (`familiar`) |
@@ -116,6 +118,29 @@ type SpawnReservationReader interface {
 - Record whether `spawn_ops.session_id` is set at that pass (P5 a), and whether the owner map gives the pane, so that
   the tag can be read (P5 b).
 - Output: a short table appended to §2 of this plan, plus the chosen path.
+
+**Result (2026-10-19, 88; read-only on mlab's live DBs).** The measured spawn is the B-line member spawned at 04:5x,
+op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
+
+| Event | Time (ms, from `team.db` / `meta.db`) |
+|---|---|
+| `spawn_ops.created_at` (accepted) | …939105 |
+| `spawn_ops.launched_at` | …939458 |
+| **`peer_names.assigned_at` (first naming pass, `pool`)** | **…971939** |
+| `spawn_ops.updated_at` (`registered`, `session_id` written) | …972033 |
+
+- **(a) does not hold.** The session was named 94 ms *before* its op recorded the `session_id`, so the first naming
+  pass cannot find the op by session id.
+- **Chosen path: (b′), by tmux session name instead of the pane tag.**
+  - The inventory pass already has each tmux session's name and the owner of its pane, the session id
+    (`internal/module/peers/module.go:725-735`, `sessions` and `owners`).
+  - Each reservation also carries the op's `tmux_name`, unique per spawn (`tm-<op id prefix>`,
+    `spawn_ops.tmux_name`).
+  - `nameCandidate` gains `tmuxName`, and the pooled pick first asks the name service for a reservation with that
+    tmux name.
+  - No tmux call is added to the naming path.
+- **Contract change:** `ReserveMember` and `ReserveExact` take the op's `tmuxName` as well (§1.3). The reservation
+  reader returns it too.
 
 ### NP-1 (`internal/module/hostconfig`, `internal/peers`, `internal/module/peers`, `internal/journal`, `internal/core`)
 
@@ -193,7 +218,8 @@ type SpawnReservationReader interface {
 - The team module registers `SpawnReservationReader` (open ops with a `pool_name`) for the boot rebuild.
 - The remote `spawn` command carries `pool_name`, and the member host calls `ReserveExact`. `ErrNameTaken` → no
   reservation, and the spawn goes on.
-- Naming a spawned session uses the NP-0 path.
+- Naming a spawned session uses the NP-0 path (b′): the inventory's tmux session name matched against the
+  reservations' `tmuxName`.
 - Pairs (codex #3):
   - a local op reaching `registered` → `RecordPairCodes(lead code, op.pool_name)`;
   - a remote spawn → the same on the lead host, when `FinishRemoteSpawn` records the registration
@@ -286,6 +312,64 @@ type SpawnReservationReader interface {
 - A rasterised image under 32 KB for each style (vitest with a canvas stub: assert that the call is made at 128 px; the
   real size is checked once on the App by the lead).
 - The IPC allowlist (M: drop the host check).
+
+### NA-0 design (done 2026-10-19, 88, Opus)
+
+- The mock-ups are at https://pages.mlab.host/wake/purdex-b-line/team-v2.html (tailnet only). The page is not in the
+  repo, because it reads the user's private `personas.json`.
+- The rules below are the contract. The page shows them.
+- **Team panel v2 (NA-4)**
+  - Each row is a grid: a 44 px avatar spanning lines 1–2, then the body. The light moves to the avatar's bottom-right
+    corner (11 px, with a 2 px ring in the row's background).
+  - Line 1:
+    - the agent icon, kept at 13–14 px, muted, without a light;
+    - the host badge;
+    - the **name**, 13 px semibold;
+    - the title, muted, 11.5 px, the first thing to truncate;
+    - the lead / 未開 chips, the context ring and the workbook button, as today.
+  - Line 2:
+    - a member: the task line;
+    - the lead: the lead's own last journal line.
+  - Line 3 (the last exchange) follows in the body column; it does not indent under the avatar.
+  - **The settings block sits at the panel's bottom, always shown, on the lead's own team only.** It is a top border,
+    then three lines at 11.5 px:
+    - 「成員上限」 stepper and 「用了 N」;
+    - 「自動接力」 stepper | 「成員接力池」 stepper;
+    - 「資料夾」 chips (truncated) and a dashed `+`.
+    - Bottom rather than top, because members are the content and settings change rarely.
+  - Narrow panels (300 px): the title truncates first; the name never does.
+  - No persona: initials on the host colour in the avatar's place, same size, so the layout does not move.
+- **Sidebar (NA-5, NA-6)**
+  - The view toggle is a 30 px square button left of the home button: the profile icon in the workspace view; in the
+    task-group view, the team icon (`UsersThree` by default) with a pink outline.
+  - Session rows: an 18 px avatar replaces the agent icon, the light is at its top-right corner, then the host badge,
+    the **name** (semibold) and the title.
+  - Task-group view:
+    - a group header has a colour square (the team colour), the name (semibold), a count and a pencil on hover;
+    - a manual group's header is a lighter weight and carries the host badge (L9);
+    - members hang under the lead with the tree line of today's beads;
+    - 「未分組」 is last, after a divider.
+    - Double-click a header to rename it.
+- **Deck (NA-3, NA-2)**
+  - The turn header is `[16 px avatar] **Name** · model · time`.
+  - A speech start after a tool row or a thinking line gets `[14 px avatar] Name` in muted text, with no time.
+  - The peer caption is `來自 [16 px avatar] **Wei** · 04:12`; the full address is in its tooltip.
+- **Lead name card (NA-7)**
+  - A 「名字」 row in the lead approval dialog shows pills (a 22 px avatar and the name).
+  - 「保留目前的名字（X）」 comes first and is preselected.
+  - Then the groups 「當過 lead」 and 「預設 lead」. The rest sits behind 「更多…（N 位）」.
+  - A `name_taken` refresh shows a one-line notice above the pills.
+- **Persona page (NA-1b)**
+  - A 330 px list and a form.
+  - List rows: a 30 px avatar, the name (with a crown when `lead`), the code (muted), the source on the right.
+    Retired rows are at 45 % opacity, last.
+  - Form: a 96 px preview with the source dropdown and 「重畫」, then code (locked once created) / display name,
+    sex / nationality, personality, method, interests / 預設擔任 lead. Each field has a counter at the top right.
+    Buttons are 退休 and 儲存.
+- **Unattended log (NA-8)**
+  - Rows: an 18 px avatar, the name (the team name for a lead request), the kind, and a status tag: 自動通過 green,
+    你核准 blue, 你拒絕 red, 逾時 yellow. The time is on the right.
+  - Toggle events are a full-width pink-tinted row in bold: `無人值守開啟 · 由你 · 04:58`.
 
 ### NA-2 … NA-8
 
