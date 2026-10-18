@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -187,13 +188,25 @@ func run(cfgPath string) error {
 			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
 		})
 	})
-	defer svc.Stop(stop)
-	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
-	go fastLane.Run(ctx)  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	// What else makes a job's final event besides the worker: the HTTP servers (a peer's or the caller's result, release, cancel), the queue's
+	// sweeper (a lapsed lease) and the fast lane. At the end they are quiet before the recorder is stopped (Stop's quiesce): the servers closed
+	// with their requests answered (Running.Close waits for them, up to its own limit), the two goroutines returned.
+	var producers sync.WaitGroup
+	var httpRun *daemon.Running
+	defer svc.Stop(stop, func() {
+		if httpRun != nil {
+			_ = httpRun.Close()
+		}
+		producers.Wait()
+	})
+	producers.Add(2)
+	go func() { defer producers.Done(); sweepQueue(ctx, q) }() // lapsed leases, queue timeouts, retention
+	go func() { defer producers.Done(); fastLane.Run(ctx) }()  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
 	}
+	httpRun = run
 	log.Printf("wwd %s listening on %v and %s", buildinfo.Version, run.TCPAddrs(), cfg.SocketPath)
 	select {
 	case <-ctx.Done():

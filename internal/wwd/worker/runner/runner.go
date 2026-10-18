@@ -252,6 +252,9 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 			hold.Release()
 		}
 	}()
+	// The origin of the job is the connection it came in on, as the lock owner is. What the claim answer says is the other host's own
+	// text, and a peer can write any name in it; the executor chooses where to fetch the snapshot from by this name.
+	cr.Job.Origin = cand.Source
 	job, ended.Job, ended.ClaimID = cr.Job, cr.Job, cr.ClaimID
 
 	st := &state{}

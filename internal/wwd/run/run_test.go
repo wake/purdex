@@ -2,7 +2,9 @@ package run
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,7 +35,75 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 
-func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+// alive says whether the process is still running. A zombie (killed, not yet collected by its parent) is gone for this purpose, but
+// kill(pid, 0) still succeeds on it: on Linux /proc/<pid>/stat says which it is (#3383). macOS has no /proc and keeps the kill test.
+func alive(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if errors.Is(err, os.ErrNotExist) {
+		if _, perr := os.Stat("/proc/self/stat"); perr != nil {
+			return true // no /proc here (macOS): the kill test stands
+		}
+		return false // kill(pid, 0) saw a zombie, and init collected it before this read: gone
+	}
+	if err != nil {
+		return true
+	}
+	// "pid (comm) S ...": comm may hold spaces and parentheses, so the state is the field after the last ')'
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 || i+2 >= len(s) {
+		return true
+	}
+	return s[i+2] != 'Z'
+}
+
+// On every platform: a running process is alive, a waited-for one is not.
+func TestAliveSeesARunningProcessEverywhere(t *testing.T) {
+	if !alive(os.Getpid()) {
+		t.Fatal("this process is alive")
+	}
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	if !alive(pid) {
+		t.Fatal("a running child must count as alive")
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+	if alive(pid) {
+		t.Fatal("a killed and waited-for child must not count as alive")
+	}
+}
+
+func TestAliveCountsAZombieAsGone(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the zombie check is Linux only")
+	}
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	defer cmd.Wait()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && alive(pid) { // it exits at once and stays a zombie: nobody has waited for it
+		time.Sleep(10 * time.Millisecond)
+	}
+	if alive(pid) {
+		t.Fatal("an exited child that was not yet waited for must not count as alive")
+	}
+	if syscall.Kill(pid, 0) != nil {
+		t.Skip("the zombie was already collected")
+	}
+	if !alive(os.Getpid()) {
+		t.Fatal("this process is alive")
+	}
+}
 
 func TestRunExitCodeAndOutput(t *testing.T) {
 	s := spec(t, "sh", "-c", "echo out; echo err >&2; exit 3")
@@ -258,9 +328,15 @@ func TestChildThatIgnoresTermKeepsItsGraceAfterTheLeaderLeft(t *testing.T) {
 		t.Fatalf("the group was killed after %v, before KillAfter (%v)", d, s.KillAfter)
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	// KILL is delivered at once but the process leaves a moment later (and on Linux sits as a zombie until init collects it): wait
+	// for that before judging, or a slow host reads a child that is dying as one that survived (#3383)
+	for end := time.Now().Add(3 * time.Second); pid > 0 && alive(pid) && time.Now().Before(end); {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if pid > 0 && alive(pid) {
-		syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatal("the child survived KILL")
+		st, rerr := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		kerr := syscall.Kill(pid, 0)
+		t.Fatalf("the child survived KILL: pid=%d stat=%q readerr=%v kill0=%v", pid, st, rerr, kerr)
 	}
 }
 

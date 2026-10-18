@@ -99,7 +99,14 @@ type fakeExec struct {
 	ran         atomic.Int32
 	plan        atomic.Pointer[Plan]
 	order       *[]string
+	origins     []string // Job.Origin as Materialize, Prepare and Run each saw it
 	mu          sync.Mutex
+}
+
+func (e *fakeExec) sawOrigin(j wire.Job) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.origins = append(e.origins, j.Origin)
 }
 
 func (e *fakeExec) note(s string) {
@@ -110,21 +117,24 @@ func (e *fakeExec) note(s string) {
 	}
 }
 
-func (e *fakeExec) Materialize(ctx context.Context, _ wire.Job, _ string) (snapshot.Workspace, error) {
+func (e *fakeExec) Materialize(ctx context.Context, j wire.Job, _ string) (snapshot.Workspace, error) {
+	e.sawOrigin(j)
 	if e.materialize != nil {
 		return e.materialize(ctx)
 	}
 	return snapshot.Workspace{Dir: "/ws", Cleanup: func() error { e.cleaned.Add(1); e.note("cleanup"); return nil }}, nil
 }
 
-func (e *fakeExec) Prepare(context.Context, wire.Job, snapshot.Workspace) (Plan, error) {
+func (e *fakeExec) Prepare(_ context.Context, j wire.Job, _ snapshot.Workspace) (Plan, error) {
+	e.sawOrigin(j)
 	if e.prepare != nil {
 		return e.prepare()
 	}
 	return Plan{Argv: []string{"true"}, Dir: "/ws", Timeout: time.Minute}, nil
 }
 
-func (e *fakeExec) Run(ctx context.Context, _ wire.Job, _ snapshot.Workspace, plan Plan) run.Result {
+func (e *fakeExec) Run(ctx context.Context, j wire.Job, _ snapshot.Workspace, plan Plan) run.Result {
+	e.sawOrigin(j)
 	e.ran.Add(1)
 	e.plan.Store(&plan)
 	if e.run != nil {
@@ -802,5 +812,37 @@ func TestMaterializeOriginErrorIsKindOriginAndLocalFailureStaysInfra(t *testing.
 				t.Fatalf("kind=%s err=%v owners=%d", e.Kind, e.Err, tbl.Owners())
 			}
 		})
+	}
+}
+
+// The Origin of a job is the connection it came in on. The claim answer is the other host's JSON: a peer can write any name in it, and
+// the executor picks the place to get the snapshot from by that name (cmd/wwd/worker.go fetchers), so it must be the worker's own name
+// for the connection (cand.Source), as the lock owner already is.
+func TestTheJobIsNamedAfterTheConnectionNotAfterWhatTheOtherHostWroteInIt(t *testing.T) {
+	ex := &fakeExec{}
+	c, _ := newCtl(ex)
+	s := scored(testJob("named"))
+	s.Source = "air26"
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		j := claimed(id)
+		j.Origin = "somebody-else" // what a hostile peer writes
+		return wire.ClaimResponse{Job: j, ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	ended := c.Work(context.Background(), o, s, nil)
+	if ended.Kind != KindRan {
+		t.Fatalf("kind %v err %v", ended.Kind, ended.Err)
+	}
+	if ended.Job.Origin != "air26" {
+		t.Fatalf("Ended.Job.Origin = %q, want the connection's name", ended.Job.Origin)
+	}
+	ex.mu.Lock()
+	defer ex.mu.Unlock()
+	if len(ex.origins) != 3 {
+		t.Fatalf("the executor was called %d times (%v), want Materialize, Prepare and Run", len(ex.origins), ex.origins)
+	}
+	for _, got := range ex.origins {
+		if got != "air26" {
+			t.Fatalf("the executor saw Origin %q, want air26: %v", got, ex.origins)
+		}
 	}
 }

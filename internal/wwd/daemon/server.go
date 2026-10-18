@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -236,6 +237,8 @@ type Running struct {
 	tcp   []string
 	sock  string
 	errCh chan error
+	once  sync.Once
+	uln   net.Listener // the Unix listener: closing it unlinks the socket file
 }
 
 // Listen validates every address, binds the TCP listeners and the socket, and
@@ -296,6 +299,7 @@ func (d *Daemon) Listen(ctx context.Context, spec ListenSpec) (*Running, error) 
 		serve(ln, d.TCPHandler())
 	}
 	serve(uln, d.SocketHandler())
+	r.uln = uln
 	go func() { <-ctx.Done(); r.Close() }()
 	return r, nil
 }
@@ -340,14 +344,29 @@ func (r *Running) TCPAddrs() []string { return r.tcp }
 // Err reports a serve failure.
 func (r *Running) Err() <-chan error { return r.errCh }
 
-// Close stops both surfaces and removes the socket file.
+// closeGrace is how long Close lets the requests in flight finish.
+var closeGrace = 3 * time.Second
+
+// Close stops both surfaces (closing the Unix listener removes the socket file). It does this once: a second call (the shutdown that follows the context, and
+// the one main makes to be sure the servers are quiet) waits for the first to finish and does nothing more, so it cannot remove the
+// socket a new process has made since.
 func (r *Running) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	for _, s := range r.srvs {
-		_ = s.Shutdown(ctx)
-	}
-	_ = os.Remove(r.sock)
+	r.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), closeGrace)
+		defer cancel()
+		// The Unix listener is closed first, by us, whether or not its server has started to serve: that unlinks the socket file, once and
+		// before the requests in flight are waited for, so a new process may bind the path from then on and nothing here takes it away.
+		if r.uln != nil {
+			_ = r.uln.Close()
+		}
+		for _, s := range r.srvs {
+			if err := s.Shutdown(ctx); err != nil {
+				// the requests in flight did not finish in time: their connections are closed, which ends the contexts they run under (a handler
+				// that does not look at its context can still go on for a while; there is no bound on that)
+				_ = s.Close()
+			}
+		}
+	})
 	return nil
 }
 
