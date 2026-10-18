@@ -59,5 +59,6 @@ pdx wwd [status|pool]          # 本機 wwd 與各主機的狀態
 
 - **repo 有 tasks.toml、做的是它宣告的事**（測試、建置、lint）：用 `pdx test`。wwd 決定在哪跑、排不排隊。
 - **沒有 tasks.toml、或不是測試的重指令**（臨時的編譯、掃描）：照舊，指令交給 shim／`pdx gate`；若只是一條單純的指令又想留紀錄，可以用 `pdx test --adhoc`。
-- 不要把 `pdx test` 包在 `pdx gate -- …` 裡：本機執行的 `pdx test` 自己已經拿著閘門的名額，外面再包一層只會雙重排隊。
+- 直接呼叫 `pdx test` 不必自己再包 `pdx gate`：它自己會向閘門拿名額。
+- 但 `pdx test` 放在一段要整段佔一個名額的 script 裡（`pdx gate -- ./script.sh`，見 `pdx-gate`）時，**照 `pdx-gate` 的規矩保留外層 gate**：裡面的 `pdx test` 認得外層名額、沿用它而不重排。限制是名額的級別：heavy 名額底下的 light 指令（單檔快車道）沿用外層名額；light 名額底下的 heavy 指令（`--adhoc`）要自己另拿 heavy 名額。
 - 排隊時的規矩一樣：看到 mod 說明「已轉背景」就等通知，不重跑、不繞過。
