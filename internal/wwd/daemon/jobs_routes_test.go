@@ -182,13 +182,15 @@ func TestPositionIsLocalOnly(t *testing.T) {
 			assert.Contains(t, []int{404, 405}, code, "with the token the route still does not exist")
 		}
 	}
-	code, _, _ := h.socketDo(t, "POST", path+"?host=air26", wire.PositionRequest{Position: wire.PositionFront})
-	assert.Equal(t, 400, code, "no forwarding")
+	for _, q := range []string{"?host=air26", "?host=", "?host=&host=air26", "?host=air26&host=", "?host"} {
+		code, _, _ := h.socketDo(t, "POST", path+q, wire.PositionRequest{Position: wire.PositionFront})
+		assert.Equal(t, 400, code, "no forwarding, and no ?host= at all: "+q)
+	}
 	j, err := h.q.Get(context.Background(), sub.ID)
 	require.NoError(t, err)
 	assert.Equal(t, wire.Position(""), j.Manual, "nothing moved yet")
 
-	code, raw, _ = h.socketDo(t, "POST", path, wire.PositionRequest{Position: wire.PositionHold})
+	code, raw, _ := h.socketDo(t, "POST", path, wire.PositionRequest{Position: wire.PositionHold})
 	require.Equal(t, 200, code, string(raw))
 	j, err = h.q.Get(context.Background(), sub.ID)
 	require.NoError(t, err)

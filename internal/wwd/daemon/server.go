@@ -340,7 +340,7 @@ func (r *Running) Close() error {
 // localOnly refuses a request that names another host: the route acts on this host's queue and is not forwarded.
 func (d *Daemon) localOnly(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("host") != "" {
+		if r.URL.Query().Has("host") { // present at all: an empty or a repeated one is no more local than a named one
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this route acts on the local host only"})
 			return
 		}
