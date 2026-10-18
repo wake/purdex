@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
@@ -82,6 +83,7 @@ type Module struct {
 	keysSeen   keysLedger   // ids typed blind (no mod)
 	recalls    recallLedger // answers of recall requests that pressed Up (K-1b)
 	stages     stageLedger  // where each sent client_msg_id is on its way to the transcript
+	ready      atomic.Bool  // Init succeeded (Status)
 	finMu      sync.Mutex
 	finalising map[string]struct{} // ids with a finaliser running
 
@@ -162,6 +164,10 @@ func (m *Module) WithIndex(idx convfeed.IndexLookup) *Module {
 	return m
 }
 
+// Status makes the core's moduleReady("conversation") true from a successful Init, which is what announces
+// conversations.stages.v1 in /api/info.
+func (m *Module) Status() map[string]any { return map[string]any{"ready": m.ready.Load()} }
+
 func (m *Module) Name() string           { return "conversation" }
 func (m *Module) Dependencies() []string { return []string{"agent", "team"} }
 
@@ -200,6 +206,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.cache = convfeed.NewCache(convfeed.CacheOptions{})
 	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index, ExecOwners: execAdapter{m}}
 	c.Registry.Register(convturns.Key, convturns.Reader(m)) // the session workbook reads a session's last turns
+	m.ready.Store(true)
 	return nil
 }
 
