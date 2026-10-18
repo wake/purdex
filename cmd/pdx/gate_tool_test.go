@@ -50,7 +50,7 @@ func toolEnv(t *testing.T, tool, gateSection string) (real, cfgPath, gateDir str
 	return real, cfgPath, gateDir, got
 }
 
-const quietGate = "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n"
+const quietGate = noAdmission + "[gate.priority]\nmode = \"none\"\n"
 
 // A command the gate does not take in is exec'd at once, by the real binary found behind the shim, before any gate state exists.
 func TestGateTool_NoneIsExecedAtOnceAndTouchesNoGateState(t *testing.T) {

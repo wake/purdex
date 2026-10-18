@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,30 +29,43 @@ type queueWaiter struct {
 // first heavy command back while the host is under memory pressure or paging, so on a busy host (air26 runs other sessions' tests
 // and builds) the holder is never admitted and the helper's 5 s wait for "重 1/1 使用中" ends the test (#3241). These tests are of the
 // queue's order and ranks, not of admission, which the gate package tests with a pressure reader of its own.
-const queueGate = "[gate.slots]\nheavy = 1\n[gate.admission]\nenabled = false\ndisk_min_gb = 0\n"
+const queueGate = "[gate.slots]\nheavy = 1\n" + noAdmission
 
-// waitingGates holds the heavy slot with one command and queues n more behind it; release lets them all go.
+// waitingGates holds the heavy slot with one command and queues n more behind it; release lets them all go. The commands are
+// joined when the test ends (after the sentinel is written, before its directory is removed), so none outlives the test.
 func waitingGates(t *testing.T, cfg string, n int) (release func()) {
 	t.Helper()
 	gofile := filepath.Join(t.TempDir(), "go")
 	release = func() { _ = os.WriteFile(gofile, nil, 0o644) }
-	t.Cleanup(release)
-	started := make(chan struct{})
-	go func() {
-		var o, e bytes.Buffer
-		gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &o, &e)
-	}()
-	close(started)
+	var running []chan struct{}
+	spawn := func(argv ...string) {
+		done := make(chan struct{})
+		running = append(running, done)
+		go func() {
+			defer close(done)
+			var o, e bytes.Buffer
+			gateMain(append([]string{"--config", cfg, "--class", "heavy", "--fg", "--"}, argv...), &o, &e)
+		}()
+	}
+	t.Cleanup(func() {
+		release()
+		for _, done := range running {
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Errorf("a queued gate command did not end after the release")
+				return
+			}
+		}
+	})
+	spawn("sh", "-c", "while [ ! -e "+gofile+" ]; do sleep 0.02; done")
 	eventuallyOutput(t, func() bool {
 		var o, e bytes.Buffer
 		gateMain([]string{"status", "--config", cfg}, &o, &e)
 		return strings.Contains(o.String(), "重 1/1 使用中")
 	})
 	for i := 0; i < n; i++ {
-		go func() {
-			var o, e bytes.Buffer
-			gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "exit 0"}, &o, &e)
-		}()
+		spawn("sh", "-c", "exit 0")
 		want := i + 1
 		eventuallyOutput(t, func() bool { return len(listQueue(t, cfg)["heavy"]) == want })
 	}
