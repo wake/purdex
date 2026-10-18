@@ -6,8 +6,14 @@
 // draw into its canvas.
 import { photoRedirectAllowed, photoRouteOf } from './photo-allowlist'
 
+//
+// RESIDUAL RISK, accepted: the allowlist judges host NAMES. It cannot stop one of the three public hosts from resolving
+// (DNS, a CNAME) to a private address, because Electron's net.fetch gives no way to pin the address it connects to. That
+// needs control of those services' DNS; it is the same trust the user already puts in them by choosing their photos.
 export const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 export const MAX_HOPS = 3
+/** Photos being fetched at once, across all windows. A page asks for one at a time; more is a misbehaving renderer. */
+export const MAX_CONCURRENT = 2
 const TIMEOUT_MS = 15_000
 const RASTER = /^image\/(png|jpeg|webp|gif|avif)$/
 const REDIRECTS = new Set([301, 302, 303, 307, 308])
@@ -22,7 +28,12 @@ export interface AvatarFetchDeps {
   fetch: FetchLike
 }
 
-export type AvatarFetchFailure = 'bad-url' | 'redirect' | 'status' | 'type' | 'size' | 'network'
+export type AvatarFetchFailure = 'bad-url' | 'redirect' | 'status' | 'type' | 'size' | 'network' | 'busy'
+
+/** Stops the download of an answer that is being turned away; a server may otherwise keep sending. */
+function drop(res: Response): void {
+  void res.body?.cancel().catch(() => {})
+}
 
 export class AvatarFetchError extends Error {
   readonly code: AvatarFetchFailure
@@ -36,7 +47,10 @@ export class AvatarFetchError extends Error {
 /** The body, but never more than the cap: stops reading the moment it is over. */
 async function readCapped(res: Response): Promise<Uint8Array> {
   const declared = Number(res.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > MAX_AVATAR_BYTES) throw new AvatarFetchError('size', 'the photo is over 2 MB')
+  if (Number.isFinite(declared) && declared > MAX_AVATAR_BYTES) {
+    drop(res)
+    throw new AvatarFetchError('size', 'the photo is over 2 MB')
+  }
   if (!res.body) return new Uint8Array(await res.arrayBuffer()).slice(0, MAX_AVATAR_BYTES + 1)
   const reader = res.body.getReader()
   const chunks: Uint8Array[] = []
@@ -64,8 +78,9 @@ export async function fetchAvatar(url: string, deps: AvatarFetchDeps): Promise<s
     } catch {
       throw new AvatarFetchError('network', 'the photo could not be fetched')
     }
+    // Whatever is thrown below, the answer that is turned away stops downloading first.
     if (REDIRECTS.has(res.status)) {
-      void res.body?.cancel()
+      drop(res)
       const location = res.headers.get('location')
       let next: string
       try { next = new URL(location ?? '', current).toString() } catch { throw new AvatarFetchError('redirect', 'bad redirect') }
@@ -74,9 +89,15 @@ export async function fetchAvatar(url: string, deps: AvatarFetchDeps): Promise<s
       current = next
       continue
     }
-    if (res.status !== 200) throw new AvatarFetchError('status', `the photo host answered ${res.status}`)
+    if (res.status !== 200) {
+      drop(res)
+      throw new AvatarFetchError('status', `the photo host answered ${res.status}`)
+    }
     const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
-    if (!RASTER.test(type)) throw new AvatarFetchError('type', 'the address did not return a png/jpeg/webp/gif/avif image')
+    if (!RASTER.test(type)) {
+      drop(res)
+      throw new AvatarFetchError('type', 'the address did not return a png/jpeg/webp/gif/avif image')
+    }
     const bytes = await readCapped(res)
     if (bytes.byteLength > MAX_AVATAR_BYTES) throw new AvatarFetchError('size', 'the photo is over 2 MB')
     return `data:${type};base64,${Buffer.from(bytes).toString('base64')}`
@@ -88,10 +109,19 @@ export async function fetchAvatar(url: string, deps: AvatarFetchDeps): Promise<s
  * What the `avatar:fetch` channel calls. The argument comes from a renderer and is not trusted to be a string. A failure
  * is thrown as a plain `Error` whose message starts with the code: that is what survives `ipcRenderer.invoke`.
  */
+let inFlight = 0
+
 export async function handleAvatarFetch(raw: unknown, deps: AvatarFetchDeps): Promise<string> {
   try {
     if (typeof raw !== 'string') throw new AvatarFetchError('bad-url', 'the address must be a string')
-    return await fetchAvatar(raw, deps)
+    // A busy turn-away costs nothing: it is decided before any network work, and a slot is always handed back.
+    if (inFlight >= MAX_CONCURRENT) throw new AvatarFetchError('busy', 'too many photos are being fetched; try again')
+    inFlight++
+    try {
+      return await fetchAvatar(raw, deps)
+    } finally {
+      inFlight--
+    }
   } catch (e) {
     if (e instanceof AvatarFetchError) throw new Error(`avatar-fetch:${e.code}: ${e.message}`)
     throw new Error('avatar-fetch:network: the photo could not be fetched')

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fetchAvatar, handleAvatarFetch, AvatarFetchError, MAX_AVATAR_BYTES, MAX_HOPS, type FetchLike } from './avatar-fetch'
+import {
+  fetchAvatar, handleAvatarFetch, AvatarFetchError, MAX_AVATAR_BYTES, MAX_CONCURRENT, MAX_HOPS, type FetchLike,
+} from './avatar-fetch'
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
 
@@ -112,6 +114,64 @@ describe('fetchAvatar: each refusal', () => {
   it('turns a network failure into a code, not a raw error', async () => {
     const down = vi.fn<FetchLike>(async () => { throw new Error('ECONNRESET') })
     expect(await reason(fetchAvatar('https://placecats.com/1', { fetch: down }))).toBe('network')
+  })
+})
+
+describe('fetchAvatar: a refused answer is not left downloading', () => {
+  /** A response whose body is a stream that says when it was cancelled. */
+  function streamed(init: { status?: number; type?: string | null; length?: string; location?: string }) {
+    const state = { cancelled: false }
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) { c.enqueue(new Uint8Array(1024)) }, // would go on forever
+      cancel() { state.cancelled = true },
+    })
+    const headers = new Headers()
+    if (init.type !== null) headers.set('content-type', init.type ?? 'image/png')
+    if (init.length) headers.set('content-length', init.length)
+    if (init.location) headers.set('location', init.location)
+    return { state, res: new Response(body, { status: init.status ?? 200, headers }) }
+  }
+
+  const cases: [string, Parameters<typeof streamed>[0], string][] = [
+    ['a declared size over 2 MB', { length: String(MAX_AVATAR_BYTES + 1) }, 'size'],
+    ['a status that is not 200', { status: 404 }, 'status'],
+    ['a type that is not an image', { type: 'text/html' }, 'type'],
+    ['a redirect that leaves the list', { status: 302, location: 'https://evil.example/a' }, 'redirect'],
+    ['a redirect without a Location', { status: 302 }, 'redirect'],
+  ]
+  it.each(cases)('cancels the body for %s', async (_why, init, code) => {
+    const { state, res } = streamed(init)
+    expect(await reason(fetchAvatar('https://placecats.com/1', { fetch: fetchOf(res) }))).toBe(code)
+    await vi.waitFor(() => expect(state.cancelled).toBe(true))
+  })
+
+  it('cancels a body that keeps coming past the cap', async () => {
+    const { state, res } = streamed({}) // no content-length, endless
+    expect(await reason(fetchAvatar('https://placecats.com/1', { fetch: fetchOf(res) }))).toBe('size')
+    await vi.waitFor(() => expect(state.cancelled).toBe(true))
+  })
+})
+
+describe('handleAvatarFetch: bounded concurrency', () => {
+  it('lets MAX_CONCURRENT requests run and turns the next one away at once, then recovers', async () => {
+    const releases: (() => void)[] = []
+    const slow = vi.fn<FetchLike>(() => new Promise<Response>((resolve) => { releases.push(() => resolve(reply())) }))
+    const running = Array.from({ length: MAX_CONCURRENT }, () => handleAvatarFetch('https://placecats.com/1', { fetch: slow }))
+    await vi.waitFor(() => expect(slow).toHaveBeenCalledTimes(MAX_CONCURRENT))
+    await expect(handleAvatarFetch('https://placecats.com/2', { fetch: slow })).rejects.toThrow(/avatar-fetch:busy/)
+    expect(slow).toHaveBeenCalledTimes(MAX_CONCURRENT) // the turned-away one never reached the network
+    releases.forEach((r) => r())
+    await Promise.all(running)
+    const ok = await handleAvatarFetch('https://placecats.com/3', { fetch: fetchOf(reply()) })
+    expect(ok.startsWith('data:image/png')).toBe(true)
+  })
+
+  it('frees the slot when a request fails', async () => {
+    for (let i = 0; i < MAX_CONCURRENT + 2; i++) {
+      await handleAvatarFetch('https://example.com/x', { fetch: fetchOf() }).catch(() => {})
+    }
+    const ok = await handleAvatarFetch('https://placecats.com/1', { fetch: fetchOf(reply()) })
+    expect(ok.startsWith('data:image/png')).toBe(true)
   })
 })
 
