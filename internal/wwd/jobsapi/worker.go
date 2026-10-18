@@ -174,6 +174,10 @@ func (a *API) PutLog() http.HandlerFunc {
 			badRequest(w, "invalid claim_id")
 			return
 		}
+		if a.fault.LogUploadFail() { // test hook H1, off unless configured: the log is refused, the result is not touched
+			http.Error(w, "fault: log upload refused", http.StatusServiceUnavailable)
+			return
+		}
 		if err := a.q.PutLog(r.Context(), id, claimID, http.MaxBytesReader(w, r.Body, maxLogBody)); err != nil {
 			fail(w, err)
 			return

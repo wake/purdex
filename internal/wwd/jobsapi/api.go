@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -26,13 +27,17 @@ const (
 
 // API serves one queue.
 type API struct {
-	q *queue.Queue
+	q     *queue.Queue
+	fault *fault.Hooks // test hooks (nil: none)
 	// afterHead is a test hook: it runs in List after the head was read and before the list is.
 	afterHead func()
 }
 
 // New returns the API over q (the daemon's one queue).
 func New(q *queue.Queue) *API { return &API{q: q} }
+
+// WithFault is the API with the log-upload test hook (nil: none). The hook is for the C2 matrix and is off unless the config turns it on.
+func (a *API) WithFault(h *fault.Hooks) *API { a.fault = h; return a }
 
 var jobIDRe = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
 

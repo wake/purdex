@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/jobsapi"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
@@ -28,7 +29,8 @@ type Options struct {
 	HostID, Alias, Version string
 	Token                  string
 	WorkerEnabled          bool
-	Sampler                *Sampler // nil: the facts routes are not registered
+	Fault                  *fault.Hooks // test hooks (nil: none); /v1/info declares them
+	Sampler                *Sampler     // nil: the facts routes are not registered
 	Peers                  []PeerAddr
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
@@ -173,6 +175,7 @@ func (d *Daemon) info() wire.Info {
 		lbl = []string{"arch:" + runtime.GOARCH, "os:" + runtime.GOOS}
 	}
 	return wire.Info{
+		Fault:  d.opts.Fault.Declared(),
 		HostID: d.opts.HostID, Alias: d.opts.Alias, Version: d.opts.Version,
 		Proto: wire.Proto, Platform: runtime.GOOS, Arch: runtime.GOARCH,
 		Worker: wire.InfoWorker{Enabled: enabled},

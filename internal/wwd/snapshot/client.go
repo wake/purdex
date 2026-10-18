@@ -32,7 +32,9 @@ type Client struct {
 	base, token string
 	hc          *http.Client
 	retries     int
-	sleep       func(context.Context, time.Duration) error // a variable so that a test need not wait
+	// Delay, when set, runs before every fetch and ends it with its error (the fault hook H4 of the C2 matrix; nil in production).
+	Delay func(context.Context) error
+	sleep func(context.Context, time.Duration) error // a variable so that a test need not wait
 }
 
 // NewClient is a Client for the origin at base ("http://host:port"). There is no overall timeout: a tar is as long as it is; the
@@ -69,6 +71,11 @@ func (c *Client) Tar(ctx context.Context, jobID, claimID string) (io.ReadCloser,
 func (c *Client) get(ctx context.Context, jobID string, q url.Values) (io.ReadCloser, error) {
 	if err := validJobID(jobID); err != nil {
 		return nil, err
+	}
+	if c.Delay != nil {
+		if err := c.Delay(ctx); err != nil {
+			return nil, err
+		}
 	}
 	u := c.base + "/v1/jobs/" + url.PathEscape(jobID) + "/snapshot?" + q.Encode()
 	for attempt := 0; ; attempt++ {

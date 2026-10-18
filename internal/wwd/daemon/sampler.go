@@ -11,6 +11,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -28,7 +29,8 @@ type SamplerOptions struct {
 	Sources                  facts.Sources
 	Slots                    wire.Slots
 	WorkerEnabled            bool
-	OwnerRule                string // free text shown in facts.worker.owner_rule ("" without an owner rule)
+	Fault                    *fault.Hooks // test hooks (nil: none): the owner file and the zone override
+	OwnerRule                string       // free text shown in facts.worker.owner_rule ("" without an owner rule)
 	// State, when set, is where the worker settings and the exceptions come from
 	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
 	State *HostState
@@ -113,7 +115,7 @@ func (s *Sampler) Tick(now time.Time) {
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
-		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
+		OwnerActive: s.opts.Fault.OwnerActive(f.Owner != nil && f.Owner.Active), AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB
@@ -128,6 +130,7 @@ func (s *Sampler) Tick(now time.Time) {
 		}
 	}
 	f.Derived = derived.Compute(&s.latch, in)
+	f.Derived.ZoneOverride = s.opts.Fault.ZoneOverride()
 	s.ring.Add(f)
 	if done := s.addToMinute(f, err == nil); done != nil && s.opts.Minutes != nil {
 		s.unsaved = append(s.unsaved, *done)
