@@ -5,9 +5,10 @@
 #
 # Run from mlab (the origin), once wwd is deployed on the four hosts. Each case checks what it needs, makes one fault with the
 # service manager (never pfctl, iptables, sudoers or a firewall), waits, ends with read-only checks and prints PASS or FAIL
-# with the evidence; whatever it made (jobs, a scratch repo, a stopped wwd, a worker switch) is put back at the end, also on
-# ^C. --dry-run prints every step and runs none of them. This script has not been run on the hosts yet: the lines marked
-# TODO(first-run) are assumptions about names that wwd's routes and CLI fix when they land.
+# with the evidence; whatever it made (jobs, a scratch repo, a frozen wwd, a worker switch) is put back at the end, also on
+# ^C. --dry-run prints every step and runs none of them. This script has not been run on the hosts yet. Its names, codes and
+# counted attempts were checked against wwd main (806591dcb) by reading the code; what the code cannot say (a host's PATH, its mysql) is
+# checked at the start (precheck) or listed in docs/wwd-c2-matrix.md, section 8.
 set -eu
 
 dry=0; manual=0; force=0; list=0; all=0; keep=0; cases=""
@@ -39,7 +40,7 @@ WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
 catalog() {
   cat <<'EOF'
 1|two claims on one job|mlab air26|3||
-2|worker killed mid-job: lapse, second attempt, failed/lost|mlab air26|8||
+2|worker unreachable mid-job (wwd frozen): lapse, second attempt, failed/lost|mlab air26|8||
 3|delayed heartbeat: the old claim is refused|mlab air26|6||
 4|origin restarted mid-job|mlab air26|4||
 5|origin unreachable: snapshot fetch, mid-run, result upload|mlab air26|10|fault.snapshot_delay_s (5a only)|
@@ -76,7 +77,7 @@ q() {
   on "$q_h" "$@"
 }
 body_arg() { if [ $# -gt 0 ]; then printf -- "-H 'Content-Type: application/json' -d '%s'" "$1"; fi; }
-sock() { sk_h=$1; sk_m=$2; sk_p=$3; shift 3; q "$sk_h" "curl -sS --unix-socket $SOCK -X $sk_m $(body_arg "$@") http://wwd$sk_p"; }   # TODO(first-run): PUT /v1/worker takes the shape GET /v1/worker gives
+sock() { sk_h=$1; sk_m=$2; sk_p=$3; shift 3; q "$sk_h" "curl -sS --unix-socket $SOCK -X $sk_m $(body_arg "$@") http://wwd$sk_p"; }   # PUT /v1/worker takes the shape GET /v1/worker gives (strict decode, worker_routes.go)
 # tcp HOST METHOD PATH [BODY]: the pool route of HOST over the tailnet with the pool token (read from mlab's file, never printed)
 AUTH='-H "Authorization: Bearer $(cat $HOME/.config/wwd/pool.token)"'
 tcp() { tc_h=$1; tc_m=$2; tc_p=$3; shift 3; q mlab "curl -sS -o /dev/null -w '%{http_code}' -X $tc_m $AUTH $(body_arg "$@") --max-time 10 http://$(addr "$tc_h"):$PORT$tc_p"; }
@@ -87,16 +88,9 @@ tcp_bad() { if [ "$2" = wrong ]; then tx_a="-H 'Authorization: Bearer c2-wrong-t
 # ---- the service manager (the only way a wwd is stopped) -----------------------------------------------------------
 svc_pid() { if is_mac "$1"; then q "$1" "launchctl list gs.wake.wwd | awk -F' = ' '/\"PID\"/ {gsub(/;/,\"\",\$2); print \$2}'"; else q "$1" "systemctl show wwd.service -p MainPID --value"; fi; }
 svc_restart() { if is_mac "$1"; then on "$1" 'launchctl kickstart -k gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl restart wwd.service'; fi; }
-DOWNED=""   # hosts whose wwd this script took down and has not brought up: finish brings them up
-svc_down() {
-  DOWNED="$DOWNED $1"
-  if is_mac "$1"; then on "$1" 'launchctl bootout gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl stop wwd.service'; fi
-}
-svc_up() {
-  if is_mac "$1"; then su_c='launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else su_c='sudo systemctl start wwd.service'; fi
-  on "$1" "$su_c" || return 1                                                  # a failed start stays on the list
-  DOWNED=$(echo "$DOWNED" | tr ' ' '\n' | grep -v "^$1\$" | tr '\n' ' ')     # only once it is up
-}
+# A wwd is never stopped here: launchctl bootout and systemctl stop send SIGTERM, and wwd answers that by handing its jobs back with a
+# reclaim release, which counts no attempt (report.go KindShutdown, queue/claim.go). A lease only lapses when the wwd cannot talk, so a
+# wwd that must look dead is frozen (svc_freeze) and thawed (svc_thaw).
 # svc_pid_ok HOST PID: PID is a decimal number above 1 (0 and -1 would signal a whole group or every process) and is the wwd binary.
 # Returns 0 for yes, 1 for "confirmed not wwd", 2 for "could not ask" (ssh or ps failed): a caller that must undo something keeps it then
 svc_pid_ok() {
@@ -184,16 +178,20 @@ air19_new() {
   case "$a_ran" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
   echo $((a_new + a_ran))
 }
-mserv_dbs() { q mserv "mysql -N -e 'show databases' 2>/dev/null | grep -c '^wwd_' || true"; }     # TODO(first-run): the database naming and the credentials of mserv's test MySQL
+# mserv_dbs: how many job databases (wwd_ and 32 hex) mserv's test MySQL has. The databases are on the dev instance and only the wwd_admin
+# account of jobdb's client file may list them (CALL wwdctl.wwd_list_dbs(), docs/wwd-deploy.md); the default ~/.my.cnf is another instance and
+# would answer 0 whatever is there. When it cannot ask it prints ?, never 0.
+MSERV_ADMIN='$HOME/.config/wwd/mysql-admin.cnf'
+mserv_dbs() { q mserv "o=\$(mysql --defaults-extra-file=$MSERV_ADMIN -N -B -e 'CALL wwdctl.wwd_list_dbs()' 2>/dev/null) || { echo '?'; exit 0; }; printf '%s\n' \"\$o\" | grep -c '^wwd_' || true"; }
 # the jobs this run made are listed in a file: submit runs in a $( ) subshell, which could not hand a variable back
 track() { if [ "$dry" -eq 0 ]; then echo "${2:-mlab} $1" >> "$WORK/jobs"; fi; }     # track ID [ORIGIN]
-submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, the caller never waits  TODO(first-run): pdx test --detach --json prints {"id":...}
+submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, the caller never waits  (pdx test --detach --json prints an indented {"id":...})
   sb_t=$1; shift
   if [ "$dry" -eq 1 ]; then say "+ submit $sb_t $* (in the scratch repo)" >&2; echo "<$sb_t>"; return 0; fi
   sb_id=$(q mlab "cd $WORK/repo && pdx test --detach --json $sb_t $* | jq -r .id")
   track "$sb_id"; echo "$sb_id"
 }
-job() { sock mlab GET "/v1/jobs/$1"; }   # TODO(first-run): the job JSON of spec 4.1
+job() { sock mlab GET "/v1/jobs/$1"; }   # the job JSON of spec 4.1: .state, .result.{reason,host,started_at,superseded_by,summary}
 jf_on() { sock "$1" GET "/v1/jobs/$2" | jq -r "$3" 2>/dev/null || echo "?"; }     # jf_on ORIGIN ID '.state'
 jf() { jf_on "${WF_HOST:-mlab}" "$1" "$2"; }                                      # jf ID '.state' : on mlab, or on WF_HOST while wait_for_on runs
 wait_for_on() { WF_HOST=$1; shift; wf_r=0; wait_for "$@" || wf_r=$?; WF_HOST=mlab; return "$wf_r"; }
@@ -236,10 +234,15 @@ precheck() {
   done
   [ "$dry" -eq 1 ] || [ "$(echo "$pc_vers" | tr '|' '\n' | sort -u | grep -c .)" -eq 1 ] || { say "FAIL: the hosts run different wwd versions:$pc_vers"; exit 1; }
   if [ "$force" -eq 0 ]; then
-    pc_q=$(sock mlab GET '/v1/jobs?state=queued' | jq 'length' 2>/dev/null || echo 0)
+    pc_q=$(sock mlab GET '/v1/jobs?state=queued' | jq '.jobs | length' 2>/dev/null || echo 0)   # {"jobs":[...],"cursor":..,"epoch":..}
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
+  # case 8 submits from air26 over a non-interactive ssh: pdx has to be on that PATH
+  case " $cases " in *" 8 "*)
+    if [ "$dry" -eq 1 ]; then on air26 "command -v pdx"
+    else on air26 "command -v pdx" >/dev/null 2>&1 || { say "FAIL: pdx is not on air26's non-interactive PATH (case 8 submits from there)"; exit 1; }; fi ;;
+  esac
   x mkdir -p "$WORK/repo" "$WORK/saved"
   on air19 "rm -f $RAN"                       # first the log, then the list: the list is the moment the watching starts
   if [ "$dry" -eq 0 ]; then
@@ -326,8 +329,8 @@ summary = "plain"
 EOS
   cat > "$WORK/repo/scripts/db_probe.php" <<'EOS'
 <?php
-// Uses the database the job was given: connect, make a table, write, read back. TODO(first-run): the variable names of the per-job
-// database are fixed by 4e; these are the usual ones. Exit 0 only when the round trip worked.
+// Uses the database the job was given: connect, make a table, write, read back. The variable names are the DB_* set that jobdb gives a
+// task with db = "per-job" (jobdb.Info.Env). Exit 0 only when the round trip worked.
 foreach (getenv() as $k => $v) { if (preg_match('/^(DB_|WWD_DB)/', $k) && stripos($k, 'PASS') === false) echo "$k=$v\n"; }
 $db = getenv('DB_DATABASE') ?: getenv('WWD_DB_NAME');
 if (!$db) { fwrite(STDERR, "no database name in the environment\n"); exit(2); }
@@ -380,7 +383,6 @@ finish() {
   say "-- cleaning up"
   fn_bad=""     # what the clean-up could not do: said at the end, and the exit code is not 0
   for fn_pair in $STOPPED; do svc_thaw "${fn_pair%%:*}" || fn_bad="$fn_bad thaw:${fn_pair%%:*}"; done
-  for fn_h in $DOWNED; do svc_up "$fn_h" || fn_bad="$fn_bad start:$fn_h"; done
   if [ "$dry" -eq 1 ]; then say "+ PUT /v1/worker: put back the saved settings of every host it changed"
   else for fn_f in "$WORK"/saved/*; do
     case "$fn_f" in *.new) continue ;; esac
@@ -428,26 +430,30 @@ case_1() {
   fi
   check "one claim wins and one gets 409" "$codes" "200 409 "
   check "the job is claimed once" "$(jf "$pid" .state)" claimed
+  sock mlab POST "/v1/jobs/$pid/cancel" >/dev/null || true     # nobody renews that claim: do not leave it to lapse into the next case
 }
 
 case_2() {
   only_workers air26
   id=$(submit c2-sleep)
   wait_for "$id" .state running 90 || true
-  say "-- attempt 1: air26's wwd goes down with the job in it"
-  svc_down air26
+  # Not launchctl bootout / systemctl stop: that is SIGTERM, and wwd answers it by handing the job back with a reclaim release, which
+  # counts no attempt and never ends in failed/lost. A lease lapses only when the wwd cannot talk: a frozen one.
+  say "-- lapse 1: air26's wwd is frozen with the job in it, past the 60 s lease"
+  svc_freeze air26
   wait_for "$id" .state queued 150 || true
   check "lease lapsed, queued again" "$(jf "$id" .state)" queued
   check "attempts after the lapse" "$(attempts "$id")" 1
-  svc_up air26
+  svc_thaw air26                                    # its worker finds the lease gone, ends the command, and takes the job again
   wait_for "$id" .state running 120 || true
-  say "-- attempt 2: down again"
-  svc_down air26
+  say "-- lapse 2: frozen again"
+  svc_freeze air26
   wait_for "$id" .state failed 150 || true
   check "state after two lapses" "$(jf "$id" .state)" failed
   check "reason" "$(jf "$id" .result.reason)" lost
   check "attempts" "$(attempts "$id")" 2
-  svc_up air26
+  svc_thaw air26
+  nap 20                                            # the thawed worker sees the lease is gone and ends the command
   check "no process of the job is left on air26" "$(q air26 "ps eww -A | grep -c '[W]WD_JOB=$id' || true")" 0
 }
 
@@ -498,7 +504,10 @@ case_5() {
     svc_freeze mlab; nap 20; svc_thaw mlab
     wait_for "$id" .state succeeded 600 || true
     check "5a state" "$(jf "$id" .state)" succeeded
-    check "5a an infra release or a lapse was counted" "$(attempts "$id")" 1
+    # the worker's fetch waits on the frozen origin and goes on after the thaw: 20 s is under the 60 s lease, nothing lapses and no infra
+    # release is made, so nothing is counted. (A freeze over the lease, about 75 s, would count one.) Set fault.snapshot_delay_s to 5-10 s so the
+    # request is made inside the freeze.
+    check "5a the fetch waited and nothing lapsed (attempts)" "$(attempts "$id")" 0
   else say "SKIP 5a: $CASE_SKIP"; CASE_SKIP=""; fi
   say "-- 5b: the origin stops answering during the run, shorter than the lease, then longer"
   id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
@@ -514,7 +523,7 @@ case_5() {
   say "-- 5c: the origin stops answering when the command is ending (result upload)"
   id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
   nap 84
-  svc_freeze mlab; nap 40; svc_thaw mlab
+  svc_freeze mlab; nap 30; svc_thaw mlab                # the worker's deadline is 60 s after its last heartbeat (every 15 s): 30 s leaves room
   wait_for "$id" .state succeeded 200 || true
   check "5c state" "$(jf "$id" .state)" succeeded
   check "5c attempts" "$(attempts "$id")" 0
@@ -526,7 +535,7 @@ case_6() {
   id=$(submit c2-quick)
   wait_for "$id" .state succeeded 120 || true
   check "the result stands" "$(jf "$id" .state)" succeeded
-  check "the log is not there" "$(tcp mlab GET "/v1/jobs/$id/log")" 404   # TODO(first-run): the code for a missing log
+  check "the log is not there" "$(tcp mlab GET "/v1/jobs/$id/log")" 404   # no log row: ErrNotFound -> 404 (queue/log.go, jobsapi/api.go)
 }
 
 case_7() {
@@ -553,7 +562,7 @@ case_8() {
   only_workers
   rdir="${TMPDIR:-/tmp}/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
   x sh -c "tar -C $WORK -cf - repo | ssh air26 'mkdir -p $rdir && tar -C $rdir -xf -'"        # the scratch repo on air26: a second origin
-  ida=$(q air26 "cd $rdir/repo && pdx test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # TODO(first-run): pdx on air26's non-interactive PATH
+  ida=$(q air26 "cd $rdir/repo && pdx test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
   track "$ida" air26
   idm=$(submit c2-any)                      # the younger job, but its origin is the one under pressure
   worker_set mserv true                     # only now can anything be claimed
@@ -567,12 +576,13 @@ case_8() {
 
 case_9() {
   only_workers air26
-  say "-- interruptible: the older one is cancelled and recorded superseded"
+  say "-- interruptible: the older one is told to stop; the worker reports it cancelled and the origin records who superseded it"
   a=$(submit c2-sleep-int); wait_for "$a" .state running 90 || true
   b=$(submit c2-sleep-int)
-  wait_for "$a" .state superseded 60 || true
-  check "A state" "$(jf "$a" .state)" superseded
+  wait_for "$a" .state cancelled 60 || true
+  check "A state" "$(jf "$a" .state)" cancelled                  # superseded is the state only of a job that was still queued, or let go
   check "A reason" "$(jf "$a" .result.reason)" "superseded_by:$b"
+  check "A is marked superseded_by B" "$(jf "$a" .result.superseded_by)" "$b"
   sock mlab POST "/v1/jobs/$b/cancel" >/dev/null
   say "-- not interruptible: the older one runs to its end, its result keeps superseded_by"
   a=$(submit c2-sleep-noint); wait_for "$a" .state running 90 || true
@@ -617,19 +627,25 @@ case_12() {
   tree=$(q mlab "git -C $WORK/repo rev-parse HEAD^{tree}")
   base='{"repo":{"name":"c2","root":"'$cm'","remote":""},"snapshot":{"commit":"'$cm'","tree":"'$tree'","base":"'$cm'","rel_cwd":"."},"class":"dev","labels":["os:darwin"],"locks":[],"cacheable":false,"timeout_s":60,"supersede_key":"c2-12","interruptible":false,"queue_timeout_s":120,"adhoc":false,"submitter":{"session":"c2","ref":"_c2c2c2","team":"","host":"mlab"},"git_dir":"'"$WORK"'/repo/.git"'
   before_a=$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l'); before_m=$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')
-  for spec in 'undeclared|c2-undeclared|[]' 'bad option|c2-files|["--bad-option"]' 'path escape|c2-files|["../../etc/hosts"]' 'shell metacharacters|c2-files|["a;touch /tmp/wwd-c2-pwned"]'; do
-    name=${spec%%|*}; rest=${spec#*|}; task=${rest%%|*}; args=${rest#*|}
+  # name|task|args|the code the worker refuses with (remotejob.go): the origin takes all four (it does not read the manifest), the worker's
+  # Prepare refuses; the job ends failed with no reason field, and the code is the first word of the one line of summary.tail
+  for spec in 'undeclared|c2-undeclared|[]|task_unknown' 'bad option|c2-files|["--bad-option"]|args_invalid' 'path escape|c2-files|["../../etc/hosts"]|args_invalid' 'shell metacharacters|c2-files|["a;touch /tmp/wwd-c2-pwned"]|args_invalid'; do
+    name=${spec%%|*}; rest=${spec#*|}; task=${rest%%|*}; rest=${rest#*|}; args=${rest%%|*}; code=${rest#*|}
     body="$base,\"task\":\"$task\",\"args\":$args}"
-    id=$(sock mlab POST /v1/jobs "$body" | jq -r .id 2>/dev/null || echo "?")
+    id=$(sock mlab POST /v1/jobs "$body" | jq -r '.id // empty' 2>/dev/null || true)
+    [ "$dry" -eq 1 ] && id="<$name>"
+    case "$id" in j_*|"<"*) ;; *) check "$name: the origin took the submission (it answered with an id)" "no id" "an id"; continue ;; esac
     track "$id"
     wait_for "$id" .state failed 90 || true
-    check "$name: refused (state)" "$(jf "$id" .state)" failed        # TODO(first-run): the state and reason words of a refusal are 4e's; the matrix follows them
+    check "$name: refused (state)" "$(jf "$id" .state)" failed
+    check "$name: refusal code" "$(jf "$id" '(.result.summary.tail[0] // "") | split(":")[0]')" "$code"
     check "$name: nothing ran" "$(ran_count air26 "$id")$(ran_count mlab "$id")" 00
   done
+  nap 3                                                                 # the last job's workspace is removed after its result is posted
   check "no marker file was made on mlab" "$(q mlab 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
   check "no marker file was made on air26" "$(q air26 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
-  check "air26 made no workspace" "$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_a"
-  check "mlab made no workspace" "$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_m"
+  check "air26 left no workspace behind" "$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_a"
+  check "mlab left no workspace behind" "$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_m"
 }
 
 case_13() {
@@ -637,7 +653,14 @@ case_13() {
   id=$(submit c2-php-db)
   wait_for "$id" .state succeeded 200 || true
   check "php job state" "$(jf "$id" .state)" succeeded
-  check "its database is gone" "$(mserv_dbs)" 0
+  # the result is posted first and the workspace and the database are removed after it (runner: finish, then Cleanup; the drop is bounded at
+  # 30 s), so the answer is asked for until it is 0, at most 45 s
+  dn=0; left=$(mserv_dbs)
+  if [ "$dry" -eq 0 ]; then
+    while [ "$left" != 0 ] && [ "$dn" -lt $((45 * ${C2_TIMEOUT_SCALE:-1})) ]; do sleep 3; dn=$((dn + 3)); left=$(mserv_dbs); done
+  fi
+  check "its database is gone (within 45 s of the result)" "$left" 0
+  check "the job really had a database (control: its log has the round trip)" "$(sock mlab GET "/v1/jobs/$id/log" | grep -c 'db=wwd_[0-9a-f]\{32\} read=round-trip' || true)" 1
   # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's. The names carry
   # this run's tag, so both files are the run's alone: finish() removes them (also when the run is interrupted) and nothing that was
   # there before is touched.

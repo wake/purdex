@@ -1,8 +1,8 @@
 #!/bin/sh
 # Runs scripts/wwd-c2-matrix.sh for real (no --dry-run) against a fake world: ssh, curl, pdx and sqlite3 in PATH are stubs that answer
 # like a quiet wwd pool. It checks what a dry run cannot: the quoting of the commands, the JSON the script builds and reads, the wait
-# loops, PASS and FAIL and the exit code, and that the clean-up runs also after a FAIL. Only cases that send no signal are run here
-# (1, 2, 3, 4, 5, 7 stop or freeze a service: those are for the hosts).
+# loops, PASS and FAIL and the exit code, and that the clean-up runs also after a FAIL. A signal goes only to a fake wwd process made
+# here (cases 2 and 3); the cases that freeze or restart a real service (4, 5, 7 with a service) are for the hosts.
 set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
@@ -23,6 +23,7 @@ cat > "$bin/ssh" <<'EOF'
 while [ "$1" = "-o" ]; do shift 2; done
 STUB_HOST=$1; export STUB_HOST
 shift
+[ -z "${STUB:-}" ] || printf '%s: %s\n' "$STUB_HOST" "$*" >> "$STUB/ssh.log"      # what was asked of each host, for the tests that count signals
 [ -z "${STUB_SSH_FAIL:-}" ] || case "$*" in *"$STUB_SSH_FAIL"*) exit 255 ;; esac
 if [ -n "${STUB_SSH_PS_ONCE:-}" ]; then case "$*" in *"ps -p"*) [ ! -e "$STUB/ps-asked" ] || exit 255; : > "$STUB/ps-asked" ;; esac; fi
 exec sh -c "$*"
@@ -56,9 +57,13 @@ else
     "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}${STUB_ZONE:+',"fault":{"zone":true}'}'}' ;;
     "GET /v1/worker") resp=$STUB_WORKER_JSON ;;
     "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
-    "GET /v1/jobs?state=queued") resp='[]' ;;
-    "POST /v1/jobs") resp='{"id":"j_stub_post"}'; printf '%s\n' "$body" >> "$STUB/post.log" ;;
-    "GET /v1/jobs/"*) resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\",\"started_at\":\"$started\"}}" ;;
+    "GET /v1/jobs?state=queued") resp='{"jobs":['${STUB_QUEUED:+'{"id":"j_other"}'}'],"cursor":"0","epoch":"e"}' ;;
+    "POST /v1/jobs") if [ -n "${STUB_POST_NOID:-}" ]; then resp='{"error":"nope"}'; else resp='{"id":"j_stub_post"}'; fi; printf '%s\n' "$body" >> "$STUB/post.log" ;;
+    "GET /v1/jobs/"*"/log") if [ -n "${STUB_NO_ROUNDTRIP:-}" ]; then resp='no database here'; else resp='db=wwd_0123456789abcdef0123456789abcdef read=round-trip'; fi ;;
+    "GET /v1/jobs/"*)
+      # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
+      n=0; [ ! -f "$STUB/post.log" ] || n=$(wc -l < "$STUB/post.log" | tr -d ' '); if [ "$n" -le 1 ]; then word=task_unknown; else word=args_invalid; fi; word=${STUB_REFUSAL:-$word}
+      resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\",\"started_at\":\"$started\",\"summary\":{\"tail\":[\"$word: detail of the refusal\"]}}}" ;;
     "POST /v1/jobs/"*"/cancel") echo "$path" >> "$STUB/cancel.log" ;;
   esac
 fi
@@ -78,11 +83,10 @@ exit 0
 EOF
 cat > "$bin/launchctl" <<'EOF'
 #!/bin/sh
-# records each call; the first bootstrap fails (a service that does not come up at once); "list" gives STUB_PID
+# records each call; "list" gives STUB_PID
 echo "$*" >> "$STUB/launchctl.log"
 case "$1" in
   list) printf '{\n\t"PID" = %s;\n}\n' "$STUB_PID" ;;
-  bootstrap) [ -z "${STUB_BOOTSTRAP_FAIL:-}" ] || exit 1; [ -e "$STUB/bootstrap-failed-once" ] || { : > "$STUB/bootstrap-failed-once"; exit 1; } ;;
 esac
 exit 0
 EOF
@@ -98,14 +102,24 @@ case "$*" in
   *) echo 0 ;;
 esac
 EOF
-chmod +x "$bin/ssh" "$bin/curl" "$bin/pdx" "$bin/sqlite3" "$bin/launchctl"
+cat > "$bin/mysql" <<'EOF'
+#!/bin/sh
+# the dev instance's admin account lists the job databases through wwdctl; STUB_MYSQL_FAIL: it cannot connect; STUB_MYSQL_DBS: what is left
+echo "$*" >> "$STUB/mysql.log"
+[ -z "${STUB_MYSQL_FAIL:-}" ] || exit 1
+# STUB_MYSQL_GONE_AFTER=n: the database is there for the first n questions, then the drop has happened
+if [ -n "${STUB_MYSQL_GONE_AFTER:-}" ] && [ "$(wc -l < "$STUB/mysql.log" | tr -d ' ')" -gt "$STUB_MYSQL_GONE_AFTER" ]; then exit 0; fi
+case "$*" in *wwd_list_dbs*) [ -z "${STUB_MYSQL_DBS:-}" ] || echo "$STUB_MYSQL_DBS" ;; esac
+exit 0
+EOF
+chmod +x "$bin/ssh" "$bin/curl" "$bin/pdx" "$bin/sqlite3" "$bin/launchctl" "$bin/mysql"
 
 # an owner_rule with spaces, a single quote, double quotes: what broke the old way of keeping the settings
 worker_json='{"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":"idle 5 min; it'"'"'s \"mine\" now"}'
 export STUB_WORKER_JSON="$worker_json"
 
 run() {   # run STATE CASE... : the script for real, in the fake world; the output is in $tmp/out, the exit code is returned
-  rm -f "$stub"/*.log "$stub"/bootstrap-failed-once
+  rm -f "$stub"/*.log
   HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=$1 C2_TIMEOUT_SCALE=0 \
     sh "$matrix" --case "$2" > "$tmp/out" 2>&1
 }
@@ -116,10 +130,38 @@ hasnt() { if grep -q -- "$1" "$tmp/out"; then cat "$tmp/out" >&2; fail "$2: must
 run failed 12 || { cat "$tmp/out" >&2; fail "case 12 against a pool that refuses: exit code"; }
 has "PASS case 12" "case 12"
 has "ok   undeclared: refused (state)" "case 12"
+has "ok   undeclared: refusal code" "case 12"; has "ok   bad option: refusal code" "case 12"; has "ok   shell metacharacters: refusal code" "case 12"
 [ "$(grep -c '"task":"c2-undeclared"' "$stub/post.log")" -eq 1 ] || fail "case 12 must post the undeclared task once"
 grep -q '"args":\["../../etc/hosts"\]' "$stub/post.log" || fail "case 12 must post the path-escape argument as JSON"
 grep -q 'a;touch /tmp/wwd-c2-pwned' "$stub/post.log" || fail "case 12 must post the metacharacter argument"
 grep -q '"git_dir":"' "$stub/post.log" || fail "the submission must carry git_dir"
+
+# a refusal with another code than the case expects FAILs (every job is told args_invalid, so the undeclared task has the wrong one)
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB_REFUSAL=args_invalid C2_TIMEOUT_SCALE=0 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a wrong refusal code must make the exit code non-zero"
+has "FAIL undeclared: refusal code: got 'args_invalid', expected 'task_unknown'" "case 12 with a wrong code"
+# an origin that does not answer a submission with an id: each of the four FAILs at once and none goes on to wait for (or ask about) a job
+# that is not there
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB_POST_NOID=1 C2_TIMEOUT_SCALE=0 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a submission without an id must make the exit code non-zero"
+[ "$(grep -c 'FAIL .*: the origin took the submission' "$tmp/out")" -eq 4 ] || { cat "$tmp/out" >&2; fail "each of the four refusals must FAIL when there is no id"; }
+! grep -q 'refusal code' "$tmp/out" || fail "a submission without an id must not be checked for a refusal code"
+
+# precheck: the queue list is {"jobs":[...]}: a queued job makes the matrix refuse to start, an empty list does not
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_QUEUED=1 C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a queued job must stop the matrix before it starts"
+has "FAIL: 1 jobs are queued already" "precheck"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_QUEUED=1 C2_TIMEOUT_SCALE=0 sh "$matrix" --force --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "--force goes on with a queued job"; }
+# pdx on air26 (case 8 submits from there): not found there stops case 8's run; the other cases do not need it
+mkdir -p "$tmp/nopdx"; for c in ssh curl sqlite3 launchctl mysql; do cp "$bin/$c" "$tmp/nopdx/$c"; done
+rc=0
+HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "case 8 without pdx on air26 must stop"
+has "FAIL: pdx is not on air26's non-interactive PATH" "precheck pdx"
+HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 does not need pdx on air26"; }
 
 run expired 10 || { cat "$tmp/out" >&2; fail "case 10: exit code"; }
 has "PASS case 10" "case 10"; has "ok   pdx test exit code" "case 10"; has "ok   state" "case 10"
@@ -142,6 +184,8 @@ rm -f "$stub"/*.log
 python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$tmp/docker.sock" || fail "make a stand-in socket"
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" sh "$matrix" --keep --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13: exit code"; }
 has "PASS case 13" "case 13"
+grep -q 'defaults-extra-file=.*mysql-admin.cnf .*wwd_list_dbs' "$stub/mysql.log" || fail "case 13 must list the databases with the admin account through wwdctl: $(cat "$stub/mysql.log")"
+has "ok   the job really had a database" "case 13 control"
 kept=$(sed -n 's/^kept //p' "$tmp/out")
 [ -d "$kept/repo" ] || fail "--keep must leave the scratch repo"
 grep -q 'new PDO' "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must connect to the database"
@@ -149,6 +193,24 @@ grep -q "CREATE TABLE" "$kept/repo/scripts/db_probe.php" || fail "the PHP probe 
 grep -q "exit(\$v === 'round-trip' ? 0 : 1)" "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must exit non-zero when the round trip fails"
 grep -q 'db = "per-job"' "$kept/repo/.wwd/tasks.toml" || fail "the php task must ask for a per-job database"
 rm -rf "$kept"
+
+# case 13 when the databases cannot be listed: ? is not 0, so the case FAILs instead of passing on nothing
+for var in STUB_MYSQL_FAIL=1 STUB_MYSQL_DBS=wwd_0123456789abcdef0123456789abcdef STUB_NO_ROUNDTRIP=1; do
+  rc=0
+  env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" "$var" sh "$matrix" --case 13 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "case 13 with $var must FAIL"
+done
+env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_MYSQL_FAIL=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
+has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a mysql that cannot be asked"
+env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_NO_ROUNDTRIP=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
+has "FAIL the job really had a database" "case 13 control"
+
+# the database is removed after the result is posted: case 13 asks again until it is gone (here at the third question, 6 s)
+rm -f "$stub"/*.log
+env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=1 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" \
+  STUB_MYSQL_DBS=wwd_0123456789abcdef0123456789abcdef STUB_MYSQL_GONE_AFTER=2 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13 must wait for the drop"; }
+has "PASS case 13" "case 13 with a late drop"
+[ "$(wc -l < "$stub/mysql.log" | tr -d ' ')" -ge 3 ] || fail "case 13 must ask again while the database is there: $(cat "$stub/mysql.log")"
 
 # every worker setting the script changed is put back (the stub keeps what was PUT), the scratch repo is gone, the jobs are cancelled
 run succeeded 11 || fail "case 11 again"
@@ -158,20 +220,20 @@ run succeeded 11 || fail "case 11 again"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left in TMPDIR"
 [ -s "$stub/cancel.log" ] || fail "the jobs it made were not cancelled"
 
-# ---- a service this script took down comes back, also when the script stops in between ---------------------------------------------
-# case 2 takes air26's wwd down, then brings it up: the stub refuses the first bootstrap, so the script stops there (set -e)
+# ---- case 2 freezes air26's wwd twice and thaws it twice, and stops nothing --------------------------------------------------------------
+# a fake wwd (the pid the "service manager" gives): the signals the script sends are read from what it asked of air26
+mkdir -p "$tmp/wwd/bin"
+printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$tmp/wwd/bin/wwd"; chmod +x "$tmp/wwd/bin/wwd"
+"$tmp/wwd/bin/wwd" & fake2=$!
+rm -f "$stub"/*.log
 rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
-[ "$rc" -ne 0 ] || fail "case 2 must stop when the service does not come up"
-[ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 1 ] || fail "bootout should have been called once: $(cat "$stub/launchctl.log")"
-[ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must bootstrap the service again: $(cat "$stub/launchctl.log")"
-
-# the same case when every service comes up: two down, two up, and the clean-up brings nothing up again
-rm -f "$stub"/*.log; : > "$stub/bootstrap-failed-once"      # the stub's launchctl never fails now
-rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
-[ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 2 ] || fail "case 2 takes the service down twice: $(cat "$stub/launchctl.log")"
-[ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must not bring up a service that is up: $(cat "$stub/launchctl.log")"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+kill -CONT "$fake2" 2>/dev/null || true; kill -KILL "$fake2" 2>/dev/null || true
+[ "$(grep -c "^air26: kill -STOP $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 freezes air26's wwd twice (an exact pid)"; }
+[ "$(grep -c "^air26: kill -CONT $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 thaws air26's wwd twice"; }
+if [ -s "$stub/launchctl.log" ] && grep -qv '^list' "$stub/launchctl.log"; then fail "case 2 must not stop or start a service: $(cat "$stub/launchctl.log")"; fi
+has "ok   attempts after the lapse" "case 2"
+has "FAIL state after two lapses: got 'queued', expected 'failed'" "case 2 (the stub's job never fails: the check is made)"
 
 # the pid of a service must be a number above 1 and the wwd binary: 0 would signal a group
 for badpid in 0 1 "" abc 99999999; do
@@ -222,12 +284,7 @@ has "was already on air26" "case 7 with a file that was there"
 [ -e "$faultfile" ] || fail "a file that was there before the run was removed by the clean-up"
 rm -f "$faultfile"
 
-# a clean-up that cannot do its work does not end as a success: the host is named and the exit code is not 0
-rm -f "$stub"/*.log
-rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_BOOTSTRAP_FAIL=1 STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
-[ "$rc" -ne 0 ] || fail "a service that could not be brought up must make the exit code non-zero"
-has "the clean-up could not put back: start:air26" "persistent clean-up failure"
+# a clean-up that cannot do its work does not end as a success: the host is named and the exit code is not 0 (see the thaw tests below)
 
 # the question "is the file there?" fails (ssh down): the script stops, makes nothing, and the file that was there stays
 mkdir -p "$(dirname "$faultfile")"; : > "$faultfile"
