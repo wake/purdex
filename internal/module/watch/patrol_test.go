@@ -13,6 +13,7 @@ import (
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 type patrolRig struct {
@@ -179,6 +180,37 @@ func TestPatrol_TheSourcesAreTheRegistrysServices(t *testing.T) {
 	require.False(t, r.m.hostBusy())
 	_, ok := r.m.diskFreeGB()
 	require.True(t, ok, "the data dir's free space is read")
+}
+
+type localFactsFake struct {
+	f  wire.Facts
+	ok bool
+}
+
+func (l localFactsFake) LatestLocalFacts() (wire.Facts, bool) { return l.f, l.ok }
+
+// C1: with wwd's facts of this host the patrol reads the free disk from them (the root mount), and takes its own statfs only when
+// there are none.
+func TestPatrolDiskFreeFromFacts(t *testing.T) {
+	r := newPatrolRigWith(t, true)
+	r.m.psrc = nil
+	reg := r.m.core.Registry
+	facts := wire.Facts{Disk: []wire.Disk{{Mount: "/Volumes/x", FreeGB: 5}, {Mount: "/", FreeGB: 42.5}}}
+
+	reg.Register(resources.LocalFactsKey, localFactsFake{facts, true})
+	gb, ok := r.m.diskFreeGB()
+	require.True(t, ok)
+	require.Equal(t, 42.5, gb, "the root mount's free space from wwd")
+
+	// no root mount in the facts, or no facts: the own statfs
+	reg.Register(resources.LocalFactsKey, localFactsFake{wire.Facts{Disk: []wire.Disk{{Mount: "/Volumes/x", FreeGB: 5}}}, true})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotEqual(t, 5.0, gb)
+	reg.Register(resources.LocalFactsKey, localFactsFake{facts, false})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotEqual(t, 42.5, gb, "no fresh facts: statfs")
 }
 
 type atComputerFake bool

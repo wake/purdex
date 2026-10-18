@@ -90,6 +90,20 @@ func (m *Module) diskFreeGB() (float64, bool) {
 	if m.psrc != nil && m.psrc.diskFreeGB != nil {
 		return m.psrc.diskFreeGB()
 	}
+	// While wwd reads this host (the pool source) its facts have the disk: no statfs of our own (C1).
+	if m.core != nil && m.core.Registry != nil {
+		if svc, ok := m.core.Registry.Get(resources.LocalFactsKey); ok {
+			if r, ok := svc.(resources.LocalFactsReader); ok {
+				if f, ok := r.LatestLocalFacts(); ok {
+					for _, d := range f.Disk {
+						if d.Mount == "/" {
+							return d.FreeGB, true
+						}
+					}
+				}
+			}
+		}
+	}
 	dir := "/"
 	if m.core != nil && m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
 		dir = m.core.Cfg.DataDir
