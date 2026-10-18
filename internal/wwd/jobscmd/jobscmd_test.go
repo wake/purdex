@@ -198,6 +198,46 @@ func TestLog(t *testing.T) {
 	}
 }
 
+func TestOutputFromJobsAndOtherHostsNeverDrivesTheTerminal(t *testing.T) {
+	evil := job("j_evil", wire.StateRunning, 1)
+	evil.Task = "lint\x1b[2J"
+	evil.Origin = "mlab\r"
+	evil.Submitter.Session = "s\x1b]0;x\x07"
+	evil.Claim = &wire.Claim{Worker: "air26\x1b[31m", Attempt: 1}
+	f := &fakeAPI{jobs: []wire.Job{evil}, logBytes: []byte("ok\x1b[2J\rfake PASS\x07\nnext\n"),
+		info:   wire.Info{Alias: "ml\x1bab", Version: "1\x1b", Proto: 1, Labels: []string{"os:darwin\x1b[0m"}},
+		worker: wire.WorkerSettings{OwnerRule: "yield\x1b"},
+		pool:   wire.Pool{Peers: []wire.Peer{{Info: wire.Info{Alias: "peer\x1b[2J"}, Reachable: true}}}}
+	check := func(name, out string) {
+		t.Helper()
+		for _, bad := range []string{"\x1b", "\r", "\x07"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("%s: %q reached the output: %q", name, bad, out)
+			}
+		}
+	}
+	_, out, _ := runJobs(f, "ls", "--all")
+	check("ls", out)
+	_, out, _ = runJobs(f, "show", "j_evil")
+	check("show", out)
+	_, out, _ = runJobs(f, "log", "j_evil")
+	check("log", out)
+	if !strings.Contains(out, `\x1b[2J`) || !strings.Contains(out, "next") {
+		t.Errorf("log should show the escapes and keep its lines: %q", out)
+	}
+	_, out, _ = runWWD(f, "status")
+	check("status", out)
+	_, out, _ = runWWD(f, "pool")
+	check("pool", out)
+	// --raw is the opt-in for the bytes as they are; --json is data for a program
+	if _, out, _ := runJobs(f, "log", "j_evil", "--raw"); out != string(f.logBytes) {
+		t.Errorf("--raw changed the bytes: %q", out)
+	}
+	if _, out, _ := runJobs(f, "ls", "--all", "--json"); !strings.Contains(out, `\u001b`) || strings.ContainsRune(out, '\x1b') {
+		t.Errorf("json: %q", out)
+	}
+}
+
 func TestCancel(t *testing.T) {
 	f := &fakeAPI{waitJob: job("j_1", wire.StateCancelled, 1)}
 	code, out, _ := runJobs(f, "cancel", "j_1")

@@ -60,11 +60,11 @@ func (e Env) now() time.Time {
 
 const JobsUsage = `usage: pdx jobs [ls] [--all] [--state <state>] [--limit N] [--json]
        pdx jobs show <id> [--json]
-       pdx jobs log <id>
+       pdx jobs log <id> [--raw]
        pdx jobs cancel <id> [--wait]
   ls      the jobs of this session (--all: every job on this host), newest first; 20 unless --limit
   show    one job: state, where it ran, the summary
-  log     the stored log, as it was written (404 until the job has ended)
+  log     the stored log (404 until the job has ended); control characters are shown as \xNN, --raw writes the bytes as they are
   cancel  ask for the job to end; --wait waits for it to
 `
 
@@ -220,7 +220,7 @@ func jobsLs(ctx context.Context, args []string, env Env) int {
 	tw := tabwriter.NewWriter(env.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tTASK\tSTATE\tCLASS\tHOST\tAGE")
 	for _, j := range jobs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Task, j.State, j.Class, hostOf(j), age(env.now(), j.CreatedAt))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", testcmd.CleanLine(j.ID), testcmd.CleanLine(j.Task), j.State, j.Class, testcmd.CleanLine(hostOf(j)), age(env.now(), j.CreatedAt))
 	}
 	tw.Flush()
 	if more > 0 {
@@ -291,19 +291,19 @@ func jobsShow(ctx context.Context, args []string, env Env) int {
 	if by == "" {
 		by = "-"
 	}
-	fmt.Fprintf(env.Stdout, "class %s · from %s (session %s) · submitted %s ago\n", j.Class, j.Origin, by, age(env.now(), j.CreatedAt))
+	fmt.Fprintf(env.Stdout, "class %s · from %s (session %s) · submitted %s ago\n", j.Class, testcmd.CleanLine(j.Origin), testcmd.CleanLine(by), age(env.now(), j.CreatedAt))
 	if j.Claim != nil {
-		fmt.Fprintf(env.Stdout, "claimed by %s (attempt %d)\n", j.Claim.Worker, j.Claim.Attempt)
+		fmt.Fprintf(env.Stdout, "claimed by %s (attempt %d)\n", testcmd.CleanLine(j.Claim.Worker), j.Claim.Attempt)
 	}
 	return ExitOK
 }
 
 func jobsLog(ctx context.Context, args []string, env Env) int {
-	id, flags, code := oneID(env, args, JobsUsage)
+	id, flags, code := oneID(env, args, JobsUsage, "raw")
 	if code != 0 {
 		return code
 	}
-	if err := only(flags); err != nil {
+	if err := only(flags, "raw"); err != nil {
 		return usageErr(env, JobsUsage, err)
 	}
 	b, err := env.API.Log(ctx, id)
@@ -314,6 +314,9 @@ func jobsLog(ctx context.Context, args []string, env Env) int {
 			return ExitFailed
 		}
 		return fail(env, "jobs log", err)
+	}
+	if flags["raw"] == "" {
+		b = []byte(testcmd.Clean(string(b))) // a log is output of other programs: control characters are shown, not sent to the terminal
 	}
 	_, _ = env.Stdout.Write(b)
 	return ExitOK

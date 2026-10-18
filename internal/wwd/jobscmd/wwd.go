@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/testcmd"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -77,13 +78,13 @@ func wwdStatus(ctx context.Context, args []string, env Env) int {
 		writeJSON(env.Stdout, map[string]any{"info": info, "worker": w})
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "wwd %s  %s  (%s/%s, proto %d)\n", info.Alias, info.Version, info.Platform, info.Arch, info.Proto)
+	fmt.Fprintf(env.Stdout, "wwd %s  %s  (%s/%s, proto %d)\n", testcmd.CleanLine(info.Alias), testcmd.CleanLine(info.Version), testcmd.CleanLine(info.Platform), testcmd.CleanLine(info.Arch), info.Proto)
 	rule := w.OwnerRule
 	if rule == "" {
 		rule = "none"
 	}
-	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d  owner rule: %s\n", onOff(w.Enabled), w.Slots.Heavy, w.Slots.Light, rule)
-	fmt.Fprintf(env.Stdout, "labels %s\n", strings.Join(info.Labels, " "))
+	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d  owner rule: %s\n", onOff(w.Enabled), w.Slots.Heavy, w.Slots.Light, testcmd.CleanLine(rule))
+	fmt.Fprintf(env.Stdout, "labels %s\n", testcmd.CleanLine(strings.Join(info.Labels, " ")))
 	return ExitOK
 }
 
@@ -121,7 +122,7 @@ func wwdPool(ctx context.Context, args []string, env Env) int {
 		if !p.Reachable {
 			reach = "NO"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.Info.Alias, reach, zone, free, worker, running, factsAge)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", testcmd.CleanLine(p.Info.Alias), reach, zone, free, worker, running, factsAge)
 	}
 	tw.Flush()
 	return ExitOK
