@@ -1,0 +1,148 @@
+// spa/src/components/settings/personas/PersonasSection.tsx — Settings › Personas (name pool v2 spec §9.1): the list on the
+// left, one persona's form on the right. It edits the collection the App shows (the highest stamp), saves it whole on the
+// host that holds it, and says where it went. A persona is retired, never deleted (L5).
+//
+// The form edits a DRAFT held in `persona-draft-memory`, so what is half typed survives the settings tab being switched
+// away. Each draft remembers the `editBase()` it was opened on; `savePersonas` refuses a save whose base is no longer the
+// shown collection, and a save that comes back with no base (another copy won meanwhile) rebuilds the form from the shown
+// collection instead of carrying the old items forward.
+import { useMemo, useState } from 'react'
+import { useI18nStore } from '../../../stores/useI18nStore'
+import { useHostStore } from '../../../stores/useHostStore'
+import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
+import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
+import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
+import { forgetDraft, recallDraft, rememberDraft } from '../../../lib/names/persona-draft-memory'
+import { validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
+import { editBase, PersonaStaleError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
+import type { Persona } from '../../../lib/names/persona-types'
+import { PersonaForm } from './PersonaForm'
+import { PersonaList } from './PersonaList'
+
+const BTN =
+  'shrink-0 rounded-md border border-border-default px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+
+function blankPersona(): Persona {
+  return {
+    code: '', name: '', sex: '', lead: false, retired: false,
+    nationality: { code: '', zh: '', en: '' },
+    template: { name: '', name_zh: '', field_zh: '', field_en: '' },
+    personality: { zh: '', en: '' }, method: { zh: '', en: '' }, interests: { zh: '', en: '' },
+    avatar: { source: '' }, avatar_data: '', updated_at: 0,
+  }
+}
+
+interface Editing {
+  /** The persona's code; `''` while a new one is being made. */
+  key: string
+  draft: Persona
+  base: EditBase | null
+}
+
+export function PersonasSection() {
+  const t = useI18nStore((s) => s.t)
+  const collection = usePersonaStore((s) => currentCollection(s.byHost))
+  const nex = useNexHostStore((s) => s.byHost)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
+  const [issues, setIssues] = useState<PersonaIssue[]>([])
+  const [note, setNote] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  // Where a first collection would go: the first host that says it serves personas.
+  const fallbackHostId = useMemo(
+    () => hostOrder.find((id) => (nex[id]?.fetchedAt ?? 0) > 0 && selectPersonasV1(id)({ byHost: nex })) ?? null,
+    [hostOrder, nex],
+  )
+  const items = collection?.items ?? []
+  const unsupported = collection === null && fallbackHostId === null
+
+  const hold = (next: Editing | null) => {
+    setEditing(next)
+    if (next) rememberDraft(next)
+    else forgetDraft()
+  }
+
+  const open = (key: string) => {
+    const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
+    if (!p) return
+    setIssues([]); setNote(null); setError(null)
+    hold({ key, draft: structuredClone(p), base: editBase() })
+  }
+
+  /** Re-open `key` from the collection the App shows now (after another copy won, or a conflict). */
+  const rebuild = (key: string) => {
+    const now = usePersonaStore.getState().current()?.items.find((x) => x.code === key)
+    if (!now) { hold(null); setError(t('settings.personas.error.gone')); return }
+    hold({ key, draft: structuredClone(now), base: editBase() })
+    setNote(t('settings.personas.rebuilt'))
+  }
+
+  const save = async (draft: Persona) => {
+    if (!editing) return
+    const found = validatePersona(draft)
+    if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
+    setIssues(found)
+    setNote(null)
+    setError(null)
+    if (found.length > 0) { setError(t('settings.personas.error.invalid')); return }
+    const stamped = { ...draft, updated_at: Date.now() }
+    const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
+    setSaving(true)
+    try {
+      const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
+      if (res.base === null) { rebuild(draft.code); return }
+      hold({ key: draft.code, draft: stamped, base: res.base })
+      setNote(t('settings.personas.saved', { host: useHostStore.getState().hosts[res.hostId]?.name ?? res.hostId }))
+    } catch (e) {
+      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) rebuild(editing.key)
+      else if (e instanceof PersonaApiError) {
+        const row = e.rowIndex()
+        setError(row === null
+          ? t('settings.personas.error.whole', { message: e.message })
+          : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }))
+      } else setError(t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div data-testid="personas-section">
+      <h2 className="text-lg text-text-primary">{t('settings.section.personas')}</h2>
+      <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
+
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported} onClick={() => open('')}>
+          {t('settings.personas.new')}
+        </button>
+      </div>
+      {unsupported && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-unsupported">{t('settings.personas.unsupported')}</p>}
+
+      <div className="mt-3 grid grid-cols-[minmax(0,330px)_minmax(0,1fr)] gap-4">
+        <div>
+          {items.length === 0 && !unsupported && <p className="text-xs text-text-secondary">{t('settings.personas.empty')}</p>}
+          <PersonaList items={items} selected={editing?.key ?? null} onSelect={open} />
+        </div>
+        <div>
+          {editing ? (
+            <PersonaForm
+              draft={editing.draft}
+              isNew={editing.key === ''}
+              issues={issues}
+              saving={saving}
+              onChange={(draft) => hold({ ...editing, draft })}
+              onSave={() => void save(editing.draft)}
+              onToggleRetired={() => void save({ ...editing.draft, retired: !editing.draft.retired })}
+            />
+          ) : (
+            <p className="text-xs text-text-secondary">{t('settings.personas.form.pick')}</p>
+          )}
+          {note && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-note">{note}</p>}
+          {error && <p className="mt-2 text-xs text-red-500" data-testid="personas-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
