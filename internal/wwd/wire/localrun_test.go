@@ -89,17 +89,27 @@ func TestLocksBusyBody(t *testing.T) {
 	}
 	good := string(fixture(t, "locks_busy.json"))
 	for name, raw := range map[string]string{
-		"other reason":       strings.Replace(good, `"locks_busy"`, `"busy"`, 1),
-		"no keys":            strings.Replace(good, `["mysql:purdex"]`, `[]`, 1),
-		"no holders":         strings.Replace(good, `"holders": [{"key": "mysql:purdex", "job": "j_01JC0000000000000000000001"}]`, `"holders": []`, 1),
-		"holder of another":  strings.Replace(good, `"key": "mysql:purdex", "job"`, `"key": "other", "job"`, 1),
-		"holder without job": strings.Replace(good, `"j_01JC0000000000000000000001"`, `""`, 1),
+		"other reason":        strings.Replace(good, `"locks_busy"`, `"busy"`, 1),
+		"no keys":             strings.Replace(good, `["mysql:purdex"]`, `[]`, 1),
+		"two keys one holder": strings.Replace(strings.Replace(good, `["mysql:purdex"]`, `["mysql:purdex", "b"]`, 1), `"holders"`, `"holders"`, 1),
+		"holder of another":   strings.Replace(good, `"key": "mysql:purdex", "job"`, `"key": "other", "job"`, 1),
+		"holder without job":  strings.Replace(good, `"j_01JC0000000000000000000001"`, `""`, 1),
 	} {
 		if raw == good {
 			t.Fatalf("%s: replacement changed nothing", name)
 		}
 		if _, err := Decode[LocksBusy]([]byte(raw)); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// A daemon from before holders were named answers with the keys alone: still a lock conflict to wait on.
+func TestLocksBusyWithoutHoldersIsStillALockConflict(t *testing.T) {
+	for _, raw := range []string{`{"reason":"locks_busy","keys":["tmux"]}`, `{"reason":"locks_busy","keys":["tmux"],"holders":null}`, `{"reason":"locks_busy","keys":["tmux"],"holders":[]}`} {
+		b, err := Decode[LocksBusy]([]byte(raw))
+		if err != nil || len(b.Keys) != 1 {
+			t.Errorf("%s: %v", raw, err)
 		}
 	}
 }

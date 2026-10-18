@@ -193,6 +193,9 @@ func (b LocksBusy) Validate() error {
 	if len(b.Keys) == 0 {
 		return fmt.Errorf("locks busy: no keys")
 	}
+	if len(b.Holders) == 0 {
+		return nil // a daemon from before holders were named: the keys alone are enough to wait on
+	}
 	if len(b.Holders) != len(b.Keys) {
 		return fmt.Errorf("locks busy: %d holders for %d keys", len(b.Holders), len(b.Keys))
 	}
