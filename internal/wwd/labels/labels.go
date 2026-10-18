@@ -3,6 +3,7 @@
 package labels
 
 import (
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// reMinorSuffix is what may follow the minor's digits: nothing, or a Go-style
+// pre-release such as rc1 (go1.26rc1). Any other tail is not a version.
+var reMinorSuffix = regexp.MustCompile(`^((rc|beta|alpha)[0-9]{1,3})?$`)
 
 // maxVersionDigits bounds a version number: a label like tool:node24 never has
 // more than four digits, and anything longer is not a version.
@@ -51,7 +56,7 @@ func versionParts(v string, needMinor bool) (major, minor int, ok bool) {
 		end++
 	}
 	minor, ok = plainNumber(digits[:end])
-	if !ok {
+	if !ok || !reMinorSuffix.MatchString(digits[end:]) {
 		return 0, 0, false
 	}
 	return major, minor, true

@@ -66,6 +66,9 @@ func TestFromFactsRefusesMalformedVersions(t *testing.T) {
 		{"go overflow", wire.Tools{Go: s("1.99999999999999999999")}},
 		{"php bad minor", wire.Tools{PHP: []string{"8.x"}}},
 		{"php no minor", wire.Tools{PHP: []string{"8"}}},
+		{"go trailing garbage", wire.Tools{Go: s("1.26bad")}},
+		{"php trailing garbage", wire.Tools{PHP: []string{"8.4garbage"}}},
+		{"go odd prerelease", wire.Tools{Go: s("1.26rcx")}},
 		{"node negative", wire.Tools{Node: s("-24.1.0")}},
 		{"node huge", wire.Tools{Node: s("99999999999999999999.0")}},
 	} {
@@ -80,6 +83,10 @@ func TestFromFactsRefusesMalformedVersions(t *testing.T) {
 				t.Errorf("%s: fingerprint %s=%q", tc.name, k, fp[k])
 			}
 		}
+	}
+	// Go's own pre-release spelling is a version
+	if l, _ := FromFacts(rec(wire.Tools{Go: s("1.26rc1")})); !slices.Contains(l, "tool:go1.26") {
+		t.Errorf("go1.26rc1: %v", l)
 	}
 	// a pre-release suffix on a good version is fine
 	if l, _ := FromFacts(rec(wire.Tools{Node: s("24.14.0-rc1")})); !slices.Contains(l, "tool:node24") {
