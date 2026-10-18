@@ -16,6 +16,9 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
+// ErrTooLarge is inside the error of an answer over the limit the caller set (it is also an ErrBadResponse).
+var ErrTooLarge = errors.New("over the limit")
+
 // maxLogBody caps a job log read through Log (the runner caps what it stores at 64 MiB).
 const maxLogBody = 64 << 20
 
@@ -81,7 +84,7 @@ func (c *Client) sendRaw(ctx context.Context, method, path string, q url.Values,
 		return nil, &StatusError{Code: resp.StatusCode, Body: msg}
 	}
 	if int64(len(raw)) > limit {
-		return nil, fmt.Errorf("%w: the answer is over %d bytes", ErrBadResponse, limit)
+		return nil, fmt.Errorf("%w: the answer is over %d bytes: %w", ErrBadResponse, limit, ErrTooLarge)
 	}
 	return raw, nil
 }
@@ -179,6 +182,22 @@ func (c *Client) LogAt(ctx context.Context, host, id string) ([]byte, error) {
 	}
 	return c.send(ctx, http.MethodGet, "/v1/jobs/"+url.PathEscape(id)+"/log", hostQuery(host), nil, maxLogBody)
 }
+
+// LogAtMost is LogAt for a caller that wants the log only when it is small: at most max bytes are read, and a longer log is
+// (nil, true, nil) — it is not held in memory.
+func (c *Client) LogAtMost(ctx context.Context, host, id string, max int64) (log []byte, tooLarge bool, err error) {
+	if err := checkID(id); err != nil {
+		return nil, false, err
+	}
+	b, err := c.send(ctx, http.MethodGet, "/v1/jobs/"+url.PathEscape(id)+"/log", hostQuery(host), nil, max)
+	if errors.Is(err, ErrTooLarge) {
+		return nil, true, nil
+	}
+	return b, false, err
+}
+
+// ValidJobID reports whether id has the form of a job id (what the job routes take).
+func ValidJobID(id string) bool { return jobIDRe.MatchString(id) }
 
 // JobsPageQuery is a list read for the App: the filters of JobsQuery, the host the list is about, a cursor to read after, a limit.
 type JobsPageQuery struct {

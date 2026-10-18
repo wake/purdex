@@ -106,6 +106,16 @@ func (m *Module) slot(w http.ResponseWriter) (release func(), ok bool) {
 	}
 }
 
+// jobID reads and checks {id}: a malformed one is the caller's error, not wwd's.
+func jobID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.PathValue("id")
+	if !client.ValidJobID(id) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "not a job id")
+		return "", false
+	}
+	return id, true
+}
+
 // host reads and checks ?host=: "" is the local wwd's own.
 func host(w http.ResponseWriter, r *http.Request) (string, bool) {
 	h := r.URL.Query().Get("host")
@@ -168,12 +178,16 @@ func (m *Module) handleJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	id, ok := jobID(w, r)
+	if !ok {
+		return
+	}
 	release, ok := m.slot(w)
 	if !ok {
 		return
 	}
 	defer release()
-	cl, id := m.client(), r.PathValue("id")
+	cl := m.client()
 	job, err := cl.JobAt(r.Context(), h, id)
 	if err != nil {
 		writeWWDError(w, err)
@@ -181,11 +195,12 @@ func (m *Module) handleJob(w http.ResponseWriter, r *http.Request) {
 	}
 	detail := wire.JobDetail{Job: job}
 	if job.State.Terminal() {
-		b, err := cl.LogAt(r.Context(), h, id)
+		// at most maxDetailLog is read: a longer log is never held in memory here, it is told apart from "not stored" by the /log route
+		b, tooLarge, err := cl.LogAtMost(r.Context(), h, id, maxDetailLog)
 		var se *client.StatusError
 		switch {
 		case err == nil:
-			if len(b) <= maxDetailLog {
+			if !tooLarge {
 				s := string(b)
 				detail.Log = &s
 			}
@@ -204,12 +219,16 @@ func (m *Module) handleLog(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	id, ok := jobID(w, r)
+	if !ok {
+		return
+	}
 	release, ok := m.slot(w)
 	if !ok {
 		return
 	}
 	defer release()
-	b, err := m.client().LogAt(r.Context(), h, r.PathValue("id"))
+	b, err := m.client().LogAt(r.Context(), h, id)
 	if err != nil {
 		writeWWDError(w, err)
 		return

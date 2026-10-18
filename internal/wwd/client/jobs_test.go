@@ -254,6 +254,27 @@ func TestJobAtAndLogAt_NameTheHost(t *testing.T) {
 	}
 }
 
+func TestLogAtMost_ReadsAtMostTheLimitAndSaysWhenTheLogIsLonger(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs/{id}/log", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Repeat("x", 10))
+	})
+	c := New(fakeWWD(t, mux))
+	if b, big, err := c.LogAtMost(context.Background(), "", "j_a", 10); err != nil || big || len(b) != 10 {
+		t.Fatalf("at the limit: %d bytes, tooLarge %v, err %v", len(b), big, err)
+	}
+	b, big, err := c.LogAtMost(context.Background(), "", "j_a", 9)
+	if err != nil || !big || b != nil {
+		t.Fatalf("over the limit: %q, tooLarge %v, err %v", b, big, err)
+	}
+	if _, err := c.LogAt(context.Background(), "", "j_a"); err != nil { // the plain read still has its own large cap
+		t.Fatal(err)
+	}
+	if !ValidJobID("j_abc") || ValidJobID("abc") || ValidJobID("j_../x") {
+		t.Error("ValidJobID")
+	}
+}
+
 func TestJobLogCancel_PathsAndEscaping(t *testing.T) {
 	var paths []string
 	var mu sync.Mutex

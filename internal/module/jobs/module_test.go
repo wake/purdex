@@ -126,6 +126,7 @@ func TestList_RefusesABadQueryWithoutAskingWWD(t *testing.T) {
 		"/api/pool/jobs?state=nope", "/api/pool/jobs?limit=0", "/api/pool/jobs?limit=abc", "/api/pool/jobs?limit=1001",
 		"/api/pool/jobs?after=-1", "/api/pool/jobs?after=x", "/api/pool/jobs?host=" + strings.Repeat("a", 129), "/api/pool/jobs?host=a%00b",
 		"/api/pool/jobs/j_a?host=a%00b", "/api/pool/jobs/j_a/log?host=a%00b",
+		"/api/pool/jobs/foo", "/api/pool/jobs/foo/log", "/api/pool/jobs/j_%2e%2e", // not a job id: the caller's error, wwd is not asked
 	} {
 		rr := get(h, path)
 		assert.Equal(t, 400, rr.Code, path)
