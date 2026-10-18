@@ -19,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -35,6 +36,7 @@ type Config struct {
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
 	Observe     ObserveRule  `toml:"observe"`
+	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
@@ -101,6 +103,9 @@ func (c Config) validateWorker() error {
 	}
 	if v := c.Observe.MinCPUSeconds; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("observe.min_cpu_seconds is %g, it must be 0 (the default) or a finite number above it", v)
+	}
+	if err := c.Fault.Validate(); err != nil {
+		return err
 	}
 	if c.Observe.MinMemMB < 0 {
 		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)

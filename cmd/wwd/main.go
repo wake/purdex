@@ -21,6 +21,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/jobsapi"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
@@ -141,9 +142,10 @@ func run(cfgPath string) error {
 	}, st)
 	sources := facts.SystemSourcesWith(srcOpt)
 	sources.Observe = observer.Observe
+	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
-		Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
+		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
@@ -155,11 +157,11 @@ func run(cfgPath string) error {
 	}
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
-		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
+		Token: tok, Fault: hooks, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
 		State: state, Broker: broker, Queue: q, LocalRuns: fastLane, RepoSource: clones.NewSource(cfg.Repos).Names,
 		// the worker routes on the socket: the host's own worker and the fast-lane runners claim, heartbeat and report with them, and
 		// POST /v1/local-runs opens only together with them
-		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(q).WorkerRoutes(mux, false) },
+		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(q).WithFault(hooks).WorkerRoutes(mux, false) },
 		Observer:    observer,
 	})
 	sampler.SetOnFacts(d.OnFacts)

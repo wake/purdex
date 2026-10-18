@@ -167,9 +167,21 @@ type Slots struct {
 }
 
 type Derived struct {
-	Zone         Zone  `json:"zone"`
+	Zone Zone `json:"zone"`
+	// ZoneOverride is set only while a fault hook is on (fault.zone): the zone peers score this host's jobs by. Zone stays the real one,
+	// so every other reader (the Purdex gate feed, the app's host cell, headroom) is unaffected. Absent when no hook is on.
+	ZoneOverride Zone  `json:"zone_override,omitempty"`
 	Headroom     Slots `json:"headroom"`
 	SessionsRoom int   `json:"sessions_room"`
+}
+
+// PickZone is the zone a worker scores this origin's jobs by (spec 4.6 origin_bonus): the fault override when one is set, else Zone.
+// Nothing but a worker's pick reads it; every other reader uses Zone.
+func (d Derived) PickZone() Zone {
+	if d.ZoneOverride != "" {
+		return d.ZoneOverride
+	}
+	return d.Zone
 }
 
 // FactsWorker is a host's worker state as every reader sees it. OwnerRule is
@@ -186,6 +198,9 @@ type FactsWorker struct {
 func (f Facts) Validate() error {
 	if f.V != Proto {
 		return fmt.Errorf("facts: unsupported v %d", f.V)
+	}
+	if f.Derived.ZoneOverride != "" && !f.Derived.ZoneOverride.Valid() {
+		return fmt.Errorf("facts: invalid zone_override %q", f.Derived.ZoneOverride)
 	}
 	if !f.Derived.Zone.Valid() {
 		return fmt.Errorf("facts: invalid zone %q", f.Derived.Zone)

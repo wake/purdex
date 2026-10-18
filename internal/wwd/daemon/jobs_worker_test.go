@@ -28,7 +28,7 @@ type laneHost struct {
 	lane *localruns.Service
 }
 
-func newLaneHost(t *testing.T, withClaimRoutes bool) *laneHost {
+func newLaneHost(t *testing.T, withClaimRoutes bool, edit ...func(*Options)) *laneHost {
 	t.Helper()
 	dsn := "file:" + filepath.Join(t.TempDir(), "wwd.db") + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
@@ -44,6 +44,9 @@ func newLaneHost(t *testing.T, withClaimRoutes bool) *laneHost {
 	o := Options{HostID: "mlab-id", Alias: "mlab", Version: "v0", Token: testToken, Queue: q, LocalRuns: lane}
 	if withClaimRoutes {
 		o.ClaimRoutes = func(mux *http.ServeMux) { jobsapi.New(q).WorkerRoutes(mux, false) }
+	}
+	for _, e := range edit {
+		e(&o)
 	}
 	d := New(o)
 	dir, err := os.MkdirTemp("", "w")

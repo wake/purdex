@@ -21,6 +21,16 @@ type Info struct {
 	// Fingerprint is the OS version and every tool's full version (spec §7, §9);
 	// empty before the first facts record.
 	Fingerprint map[string]string `json:"fingerprint"`
+	// Fault says which test hooks this host runs with (docs/wwd-c2-matrix.md section 7); absent, the normal case, when none is on.
+	Fault *InfoFault `json:"fault,omitempty"`
+}
+
+// InfoFault is the hooks that are on. A reader decides from it whether a matrix case can run here.
+type InfoFault struct {
+	LogUploadFail   bool   `json:"log_upload_fail,omitempty"`
+	OwnerActiveFile bool   `json:"owner_active_file,omitempty"`
+	Zone            string `json:"zone,omitempty"`
+	SnapshotDelayS  int    `json:"snapshot_delay_s,omitempty"`
 }
 
 type InfoWorker struct {

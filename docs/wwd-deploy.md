@@ -145,3 +145,47 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   [--wwd-purge]` is the same.
 * `wwd.db` holds the worker settings, the exceptions and (from WWD-3) the queue. Its schemas now only grow by
   migration steps (`host_schema`, `queue_schema`): a newer wwd's database is refused by an older binary.
+
+## 6. Fault hooks for the C2 matrix (test hosts only, off by default)
+
+`docs/wwd-c2-matrix.md` §7 needs four hooks to make a host misbehave in one known way. They live in `[fault]` of
+`~/.config/wwd/config.toml` and **nothing else turns them on**: no route, no flag, no environment variable. A hook works only
+when `enabled = true` **and** its own key is set; a key without `enabled = true` makes wwd refuse to start (a typo that
+would silently do nothing is worth a loud failure).
+
+| Key | Hook | Case | Turn it on at |
+|---|---|---|---|
+| `log_upload_fail = true` | H1: the origin answers 503 to a log upload (a result upload is not touched) | 6 | mlab (origin) |
+| `owner_active_file = "/abs/path"` | H2: while the file exists the worker's headroom is empty, as if the owner were active: `facts.owner.active` becomes true (reason `fault: owner_active_file`), `sessions_room` keeps its real value | 7 | air26 |
+| `zone = "danger"` (or `warning`) | H3: `facts.derived.zone_override`. The real `zone` is unchanged, so the Purdex gate feed, the app's host cell and the headroom do not see it; only a worker's pick (`Derived.PickZone()`) scores by it | 8 | mlab |
+| `snapshot_delay_s = 20` | H4: the worker waits this long (≤ 3600) before a snapshot fetch | 5a | air26 (worker) |
+
+Every start with a hook on logs `wwd: FAULT HOOKS ARE ON`, and every trigger logs a line (H3 only at start: it applies to each
+sample). `GET /v1/info` has a `fault` object naming what is on; it is absent when nothing is. The matrix script reads it to
+decide SKIP.
+
+**Turn on** (per host, only the ones the cases you run need):
+
+```sh
+# mlab; air26 the same with its own keys. The file is the whole of it: edit, restart.
+printf '\n[fault]\nenabled = true\nlog_upload_fail = true\nzone = "danger"\n' >> ~/.config/wwd/config.toml
+launchctl kickstart -k gui/$(id -u)/gs.wake.wwd          # mserv: sudo systemctl restart wwd.service
+curl -sS --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq .fault
+```
+
+**Turn off** (after the run; do not leave a host with a hook on):
+
+```sh
+# delete the whole [fault] table from config.toml, then restart as above
+curl -sS --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq 'has("fault")'   # must print false
+rm -f ~/.local/share/wwd/fault/owner-active                                                  # H2's file, if the run made one
+```
+
+While H3 is on at mlab, `pdx wwd pool` and `/v1/facts` show a `zone_override` for it; nothing else on mlab changes (the gate
+keeps reading the real zone). While H2 is on at air26, `free` shows 0/0 for it, which is what a real active owner shows.
+
+**Which hooks work today.** H0, H1 and H2 work as soon as this is deployed. H3 and H4 only *declare* themselves in
+`/v1/info` until the worker side exists: H3's `zone_override` is read by the worker's pick (`Derived.PickZone()`, in the
+worker loop of WWD-4a-4b), and H4's delay is applied by the `snapshot.Client` the worker builds (WWD-4a-4c fills
+`Client.Delay` with `hooks.SnapshotDelay`). Until those merge, cases 8 and 5a cannot be run even with the keys set; check
+that both are in the deployed build before reading a pass or a fail from them.
