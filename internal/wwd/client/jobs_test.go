@@ -196,6 +196,35 @@ func TestWorkerAndExceptions(t *testing.T) {
 	}
 }
 
+func TestANoContentAnswerIsASuccessAndOtherStatusesAreNot(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /v1/exceptions/{name}", func(w http.ResponseWriter, r *http.Request) {
+		switch r.PathValue("name") {
+		case "gone":
+			w.WriteHeader(http.StatusNoContent) // what wwd answers to a delete that worked
+		case "missing":
+			http.Error(w, "no such exception", http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotModified)
+		}
+	})
+	mux.HandleFunc("POST /v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	c := New(fakeWWD(t, mux))
+	if err := c.StopException(context.Background(), "gone"); err != nil {
+		t.Fatalf("204: %v", err)
+	}
+	var se *StatusError
+	if err := c.StopException(context.Background(), "missing"); !errors.As(err, &se) || se.Code != 404 {
+		t.Fatalf("404: %v", err)
+	}
+	if err := c.StopException(context.Background(), "other"); !errors.As(err, &se) || se.Code != 304 {
+		t.Fatalf("a 3xx is not a success: %v", err)
+	}
+	if err := c.Cancel(context.Background(), "j_1"); err != nil {
+		t.Fatalf("202: %v", err)
+	}
+}
+
 func TestLog_TooLargeAnswerIsRefused(t *testing.T) {
 	old := 0
 	_ = old
