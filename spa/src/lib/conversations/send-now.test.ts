@@ -42,6 +42,14 @@ describe('sendNowTyped', () => {
     fetchMock.mockImplementation(() => json(404, { error: 'session_not_found' }))
     await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'refused', reason: 'session_not_found' })
   })
+  it.each([408, 418, 422])('a %i (a proxy or an answer outside the contract) may have come after the keys: unknown', async (status) => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('', { status })))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: `http_${status}` })
+  })
+  it('a 400 / 404 without a reason is not the contract either: unknown', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('{}', { status: 400 })))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: 'http_400' })
+  })
   it('a lost connection may have run; a daemon with no route (404 in plain text) is outdated', async () => {
     fetchMock.mockImplementation(() => Promise.reject(new Error('net')))
     await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: 'network' })
