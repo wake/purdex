@@ -80,6 +80,10 @@ type Module struct {
 	zoneSince time.Time
 	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the
 	// host (Init wires both).
+	// pageTotal is the running paging counter the gate's cache last got, and when (sampler goroutine only; see cachePressureFromFacts).
+	pageTotal   uint64
+	pageTotalAt time.Time
+
 	gateConfig func() gate.Config
 	gateCounts func() (heavy, light, waiting int, ok bool)
 	// minute is the host timeline's open minute (D-8.2).

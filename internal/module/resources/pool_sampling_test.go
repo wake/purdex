@@ -1,0 +1,170 @@
+package resourcesmod
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
+	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+// procSampler counts the two reads a sampler has: the whole host (sysctl, vm_stat, ps) and the process table alone (ps).
+type procSampler struct {
+	host, procs atomic.Int64
+}
+
+func (s *procSampler) Sample(context.Context) (resources.HostRaw, []resources.Proc, error) {
+	s.host.Add(1)
+	return goodRaw(), []resources.Proc{{PID: 1, Pcpu: 7}}, nil
+}
+
+func (s *procSampler) SampleProcs(context.Context) ([]resources.Proc, error) {
+	s.procs.Add(1)
+	return []resources.Proc{{PID: 1, Pcpu: 7}}, nil
+}
+
+// poolSampling is a zone rig whose fleet row says pool and whose wwd answers with the facts the test sets (nil: no facts).
+type poolSampling struct {
+	*zoneRig
+	s     *procSampler
+	facts atomic.Pointer[wire.Facts]
+	dir   string
+}
+
+func newPoolSampling(t *testing.T) *poolSampling {
+	t.Helper()
+	r := newZoneRig(t)
+	p := &poolSampling{zoneRig: r, s: &procSampler{}, dir: t.TempDir()}
+	r.m.sampler = p.s
+	r.m.gateConfig = nil
+	r.m.pool = &poolHost{now: r.m.now, pool: func(context.Context) (wire.Pool, error) {
+		f := p.facts.Load()
+		if f == nil {
+			return wire.Pool{}, nil
+		}
+		return poolOf(f), nil
+	}}
+	row := hostconfig.FleetConfig{Source: hostconfig.FleetSourcePool}
+	r.m.fleetSrc = &fleetSource{rev: func() (int64, error) { return 1, nil }, cfg: func() (hostconfig.FleetConfig, int64, error) { return row, 1, nil }}
+	return p
+}
+
+func (p *poolSampling) setFacts() {
+	f := factsAt(p.m.now())
+	p.facts.Store(f)
+}
+
+// With the pool as the source and a fresh reading of this host in wwd, the sampler reads the process table and nothing of the
+// host (no sysctl, no vm_stat), and the snapshot's host is wwd's: its zone, its figures.
+func TestPoolSampling_ReadsOnlyProcessesWhenWWDHasTheHost(t *testing.T) {
+	p := newPoolSampling(t)
+	p.setFacts()
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+
+	assert.Zero(t, p.s.host.Load(), "no host-level read")
+	assert.EqualValues(t, 1, p.s.procs.Load(), "the process table is still read")
+	s := p.m.latest.Load()
+	require.True(t, s.Available)
+	assert.Equal(t, "warning", s.Host.Zone, "wwd's zone")
+	assert.Equal(t, 10, s.Host.NCPU)
+	assert.Equal(t, 3.0, s.Host.PageRate)
+	assert.Equal(t, uint64(16000)<<20, s.Host.MemBytes)
+}
+
+// Facts that wwd cannot give (none, or too old) leave the sampler as it was: the whole host is read.
+func TestPoolSampling_FallsBackToTheOwnReadWithoutFacts(t *testing.T) {
+	p := newPoolSampling(t)
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.EqualValues(t, 1, p.s.host.Load(), "no facts: the own sample")
+	assert.Zero(t, p.s.procs.Load())
+
+	old := factsAt(p.m.now().Add(-time.Minute))
+	p.facts.Store(old)
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.EqualValues(t, 2, p.s.host.Load(), "stale facts are no reading")
+
+	p.setFacts()
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.EqualValues(t, 2, p.s.host.Load(), "fresh again: no further host read")
+	assert.EqualValues(t, 1, p.s.procs.Load())
+}
+
+// A source that is not the pool never uses wwd's facts.
+func TestPoolSampling_SshSourceKeepsTheOwnRead(t *testing.T) {
+	p := newPoolSampling(t)
+	p.setFacts()
+	row := hostconfig.FleetConfig{Source: "ssh"}
+	p.m.fleetSrc = &fleetSource{rev: func() (int64, error) { return 1, nil }, cfg: func() (hostconfig.FleetConfig, int64, error) { return row, 1, nil }}
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.EqualValues(t, 1, p.s.host.Load())
+	assert.Zero(t, p.s.procs.Load())
+}
+
+// A sampler that cannot read the process table alone (no SampleProcs) keeps the whole read, pool or not.
+func TestPoolSampling_SamplerWithoutProcsReadKeepsTheOwnRead(t *testing.T) {
+	p := newPoolSampling(t)
+	fs := &fakeSampler{}
+	p.m.sampler = fs
+	p.setFacts()
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.EqualValues(t, 1, fs.calls.Load())
+}
+
+// The pool tick writes no host_minutes (the report reads wwd's from its first minute on) and ends the minute that was open.
+func TestPoolSampling_WritesNoHostMinutes(t *testing.T) {
+	p := newPoolSampling(t)
+	st, err := openResourcesStore(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { st.Close() })
+	p.m.store = st
+
+	// Own reading first: a minute is open.
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	require.True(t, p.m.minute.open, "the own tick opened a minute")
+
+	p.setFacts()
+	for i := 0; i < 30; i++ { // 150 s: two minute borders
+		p.step()
+		p.setFacts()
+		require.False(t, p.m.tick(context.Background()))
+	}
+	assert.False(t, p.m.minute.open, "entering the pool ended the open minute")
+	rows, err := st.ReportMinutes(0, p.m.now().Add(time.Hour).UnixMilli())
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(rows), 1, "only the minute of the own reading was written")
+}
+
+// The gate's pressure cache is fed from wwd's facts: the level, and counters that add up to wwd's page-out rate.
+func TestPoolSampling_FeedsTheGateCacheFromFacts(t *testing.T) {
+	p := newPoolSampling(t)
+	cfg := gate.Defaults()
+	cfg.Dir = p.dir
+	p.m.gateConfig = func() gate.Config { return cfg }
+	for i := 0; i < 3; i++ {
+		p.step()
+		p.setFacts()
+		require.False(t, p.m.tick(context.Background()))
+	}
+	got := hostmem.Cache{Dir: p.dir}.Load().Samples
+	require.Len(t, got, 3)
+	assert.Equal(t, 2, got[2].Level, "wwd's pressure level")
+	dt := got[2].At - got[0].At
+	total := func(s hostmem.Sample) uint64 { return s.Pageouts + s.Swapouts }
+	rate := float64(total(got[2])-total(got[0])) / (float64(dt) / 1000)
+	assert.InDelta(t, 3.0, rate, 0.01, "the counters give wwd's rate (2 + 1 per second)")
+}

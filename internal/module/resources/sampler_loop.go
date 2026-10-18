@@ -9,6 +9,7 @@ import (
 
 	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 var errUnusableReading = errors.New("host reading is not usable (no cpu count or memory size, or a page count that overflows)")
@@ -59,7 +60,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// read) and again after it; see sessions.
 	before, beforeErr := m.readRoots(sctx)
 	sampledAt := m.now() // before the reads: the cache below never claims a reading is newer than it is
-	raw, procs, err := m.sampler.Sample(sctx)
+	raw, procs, pool, err := m.takeSample(sctx)
 	if ctx.Err() != nil {
 		return true // stopping: whatever the sampler said, it is not a failure
 	}
@@ -84,7 +85,11 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return false
 	}
 	m.watchNote("sampling", "")
-	m.cachePressure(raw, sampledAt)
+	if pool != nil {
+		m.cachePressureFromFacts(*pool, sampledAt)
+	} else {
+		m.cachePressure(raw, sampledAt)
+	}
 
 	sessions, agreed := m.sessions(sctx, raw, procs, before, beforeErr)
 	if watchOn {
@@ -98,10 +103,16 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	}
 	m.fails, m.degraded = 0, false
 	at := m.now()
-	host := resources.ComputeHost(raw)
-	host.Full = m.fullLatch.Update(host)
-	m.notePageRate(&host, raw, at)
-	m.noteZone(&host, at, set)
+	var host resources.HostUse
+	if pool != nil {
+		host = hostDetailOf(pool).Host // wwd's figures and wwd's zone; nothing of the host is worked out again here
+		host.Full = m.fullLatch.Update(host)
+	} else {
+		host = resources.ComputeHost(raw)
+		host.Full = m.fullLatch.Update(host)
+		m.notePageRate(&host, raw, at)
+		m.noteZone(&host, at, set)
+	}
 	m.publish(&resources.Snapshot{
 		SampledAt: at,
 		Available: true,
@@ -112,8 +123,44 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		SampleMS:  time.Since(began).Milliseconds(),
 	})
 	m.lastProcs.Store(&procs)
-	m.noteMinute(host, m.now())
+	if pool != nil {
+		m.endMinute() // the report reads wwd's minutes from its first one on: nothing more is written to host_minutes
+	} else {
+		m.noteMinute(host, m.now())
+	}
 	return false
+}
+
+// takeSample is the tick's reading. While the fleet row says pool and wwd has a fresh reading of this host, only the process
+// table is read (the load watcher and the session attribution need it) and the host figures are wwd's facts, returned as pool;
+// otherwise, or with a sampler that cannot read the process table alone, the whole host is read as it always was.
+func (m *Module) takeSample(ctx context.Context) (raw resources.HostRaw, procs []resources.Proc, pool *wire.Facts, err error) {
+	if ps, ok := m.sampler.(resources.ProcSampler); ok {
+		if f, ok := m.LatestLocalFacts(); ok {
+			procs, err = ps.SampleProcs(ctx)
+			if err != nil {
+				return resources.HostRaw{}, nil, nil, err
+			}
+			return rawOfFacts(f, procs), procs, &f, nil
+		}
+	}
+	raw, procs, err = m.sampler.Sample(ctx)
+	return raw, procs, nil, err
+}
+
+// rawOfFacts is the part of a host reading the session attribution and the watcher read, filled from wwd's facts: the core
+// count, the memory, the load and the pressure level. The page counts are bytes of one-byte pages, so that availableBytes is
+// wwd's available memory.
+func rawOfFacts(f wire.Facts, procs []resources.Proc) resources.HostRaw {
+	raw := resources.HostRaw{
+		Load1: f.CPU.Load1, Load5: f.CPU.Load5, NCPU: f.CPU.NCPU,
+		MemBytes: uint64(f.Mem.TotalMB) << 20, PageSize: 1, Free: uint64(max(f.Mem.AvailableMB, 0)) << 20,
+		Pressure: f.Mem.Pressure, MemorystatusLevel: -1,
+	}
+	for _, p := range procs {
+		raw.PcpuSum += p.Pcpu
+	}
+	return raw
 }
 
 // goOff is the tick of a module whose mode is off: no state of a run of failures, the open minute ended, "off" published.

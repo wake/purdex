@@ -7,6 +7,7 @@ import (
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // What the daemon reads of the gate (host-load-control spec §6, L2): the gate's config (the page rate at which it holds work
@@ -47,8 +48,32 @@ func (m *Module) cachePressure(raw resources.HostRaw, sampledAt time.Time) {
 	if m.gateConfig == nil || !raw.PageCounters || raw.Pressure <= 0 {
 		return
 	}
+	m.pageTotal, m.pageTotalAt = raw.Pageouts+raw.Swapouts, sampledAt
 	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
 		At: sampledAt.UnixMilli(), Level: raw.Pressure, Pageouts: raw.Pageouts, Swapouts: raw.Swapouts})
+}
+
+// cachePressureFromFacts is cachePressure while wwd's facts are the host reading: the level is wwd's, and the counters the gate
+// takes a rate from are a running total that grows by wwd's page-out and swap-out rate over the time since the last reading. It
+// starts from the last counter the own sampler saw, so a return to the own reading is not a jump. wwd gives no rate (the platform
+// has none) or no level: nothing is written, as for a reading that lacks them.
+func (m *Module) cachePressureFromFacts(f wire.Facts, sampledAt time.Time) {
+	if m.gateConfig == nil || f.Mem.Pressure <= 0 || (f.Mem.PageOutRate == nil && f.Mem.SwapOutRate == nil) {
+		return
+	}
+	rate := 0.0
+	if f.Mem.PageOutRate != nil {
+		rate += *f.Mem.PageOutRate
+	}
+	if f.Mem.SwapOutRate != nil {
+		rate += *f.Mem.SwapOutRate
+	}
+	if dt := sampledAt.Sub(m.pageTotalAt); !m.pageTotalAt.IsZero() && dt > 0 && rate > 0 {
+		m.pageTotal += uint64(rate * dt.Seconds())
+	}
+	m.pageTotalAt = sampledAt
+	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
+		At: sampledAt.UnixMilli(), Level: f.Mem.Pressure, Pageouts: m.pageTotal})
 }
 
 // slotCounts is how many heavy and light commands hold a slot right now, and how many wait. ok is false when the module has
