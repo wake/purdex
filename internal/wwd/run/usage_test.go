@@ -152,6 +152,51 @@ func TestSandboxedFailedRunKeepsItsUsage(t *testing.T) {
 	}
 }
 
+// The fourth line is how many processes the command left in the unit besides the wrapper.
+func TestParseStatusReadsTheLeftoverProcesses(t *testing.T) {
+	for in, want := range map[string]bool{"0\n1\n2\n1\n": true, "0\n1\n2\n5": true, "0\n1\n2\n0\n": false, "0\n1\n2\n": false, "0\n1\n2\n-1\n": false, "0\n1\n2\nx\n": false} {
+		_, u, got := parseStatus([]byte(in))
+		if !got || u.Leaked != want {
+			t.Errorf("%q: leaked %v, want %v", in, u.Leaked, want)
+		}
+	}
+	// the leftover count stands on its own: figures that could not be read do not hide it
+	if _, u, _ := parseStatus([]byte("0\n\n\n2\n")); !u.Leaked || u.CPUSeconds != nil {
+		t.Errorf("%+v", u)
+	}
+}
+
+func TestExitWrapperCountsTheProcessesLeftBesideItself(t *testing.T) {
+	// the count is made before the helpers that read the figures are forked, with the shell's own read
+	i, j := strings.Index(exitWrapper, "cgroup.procs"), strings.Index(exitWrapper, "$(sed -n 's/^usage_usec")
+	if i < 0 || j < 0 || i > j || !strings.Contains(exitWrapper, "while read -r _") {
+		t.Fatalf("the count must come first and use the shell's own read: %s", exitWrapper)
+	}
+}
+
+// An unsandboxed run that left a process in its group behind is marked; a clean one is not.
+func TestRunMarksALeakedProcessAsLowerBound(t *testing.T) {
+	r := Run(context.Background(), spec(t, "sh", "-c", "sleep 30 >/dev/null 2>&1 & exit 0"))
+	if r.Outcome != Exited || r.ExitCode != 0 || r.Usage.CPUSeconds == nil || !r.Usage.Leaked {
+		t.Fatalf("%+v %+v", r, r.Usage)
+	}
+	r = Run(context.Background(), spec(t, "true"))
+	if r.Usage.Leaked {
+		t.Fatalf("a clean run is not a leak: %+v", r.Usage)
+	}
+}
+
+// A sandboxed run takes the leftover count from the status file.
+func TestSandboxedRunMarksLeftoverProcessesAsLowerBound(t *testing.T) {
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "0\n2500000\n734003200\n2\n")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 || !r.Usage.Leaked || r.Usage.CPUSeconds == nil {
+		t.Fatalf("%+v %+v", r, r.Usage)
+	}
+}
+
 // User and system time both count.
 func TestRusageSecondsIsUserPlusSystem(t *testing.T) {
 	ru := &syscall.Rusage{Utime: syscall.Timeval{Sec: 1, Usec: 250000}, Stime: syscall.Timeval{Sec: 2, Usec: 250000}}

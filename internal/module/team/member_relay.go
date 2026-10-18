@@ -42,6 +42,7 @@ func (m *Module) approveMemberRelay(a team.Approval, c Close) (after team.Approv
 func (m *Module) afterMemberRelayApproved(a team.Approval) {
 	op, ok, err := m.store.RelayOpByRequest(a.ID)
 	if err != nil || !ok {
+		m.kickCommands() // a remote op's command was committed with the approval; not being able to read the op back must not delay it
 		m.logf("[team] member relay approval %s: its op is missing (ok=%v err=%v)", a.ID, ok, err)
 		return
 	}

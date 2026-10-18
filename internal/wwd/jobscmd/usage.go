@@ -131,6 +131,12 @@ func wwdUsage(ctx context.Context, args []string, env Env) int {
 		if u.Partial {
 			note = "partial"
 		}
+		if u.LowerBound {
+			if note != "" {
+				note += ","
+			}
+			note += "lower-bound"
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.0f\t%s\t%s\t%s\t%s\t%d/%d\t%s>%s\t%s\t%s\n",
 			u.EndedAt.Local().Format("01-02 15:04"), testcmd.CleanLine(u.JobID), testcmd.CleanLine(u.Task), u.SlotCharged, u.Source, u.Result,
 			u.Duration().Seconds(), figure(u.CPUSeconds, u.CPUSource == wire.CPUSampled), avgCell(u),

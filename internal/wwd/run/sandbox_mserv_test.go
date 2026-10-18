@@ -275,10 +275,23 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 		if r.Usage.MemPeakBytes == nil || *r.Usage.MemPeakBytes < 20<<20 {
 			t.Errorf("memory peak: %+v", r.Usage)
 		}
+		if r.Usage.Leaked {
+			t.Errorf("a clean task is not a leak (the wrapper's own helpers must not count): %+v", r.Usage)
+		}
 		// a failing task has its figures too
 		r = runSB(t, "N2", Sandbox{}, 120*time.Second, bg, "sh", "-c", "exit 3")
 		if r.Outcome != Exited || r.ExitCode != 3 || r.Usage.CPUSeconds == nil {
 			t.Errorf("failed task: %+v %+v", r.Result, r.Usage)
+		}
+	})
+	t.Run("O_leftover_process_marks_the_usage", func(t *testing.T) {
+		// a task that leaves a background process in the unit: the figures are read when the command returns, so they are a floor
+		r := runSB(t, "O", Sandbox{}, 120*time.Second, bg, "sh", "-c", "sleep 20 >/dev/null 2>&1 & exit 0")
+		if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil || !r.Usage.Leaked || r.Usage.CPUSeconds == nil {
+			t.Fatalf("%+v %+v", r.Result, r.Usage)
+		}
+		if f := failedUnits(t); f != "" {
+			t.Errorf("failed unit left: %s", f)
 		}
 	})
 	t.Run("Z_nothing_left", func(t *testing.T) {
