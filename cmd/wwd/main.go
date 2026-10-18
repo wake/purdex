@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -162,6 +164,8 @@ func run(cfgPath string) error {
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
+		// until WWD-6 a queue job is outside the gate's slots, so the host's own gate is counted (#3447)
+		GateHeavyFull: gateheld.New(gate.DefaultConfigPath(), log.Printf).HeavyFull,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {

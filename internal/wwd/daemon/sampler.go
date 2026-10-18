@@ -31,6 +31,10 @@ type SamplerOptions struct {
 	WorkerEnabled            bool
 	Fault                    *fault.Hooks // test hooks (nil: none): the owner file and the zone override
 	OwnerRule                string       // free text shown in facts.worker.owner_rule ("" without an owner rule)
+	// GateHeavyFull, when set, says whether this host's pdx gate has all its heavy slots held (or cannot be read): headroom.heavy is then
+	// 0, because until WWD-6 a queue job runs outside the gate's slots (#3447). nil: this host has no gate to count. It is asked on every
+	// sample, outside the sampler's lock, and does file reads only.
+	GateHeavyFull func() bool
 	// State, when set, is where the worker settings and the exceptions come from
 	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
 	State *HostState
@@ -125,11 +129,13 @@ func (s *Sampler) Tick(now time.Time) {
 		// reason that names the hook (jobusage ignores it, like the active one)
 		f.Owner = &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
 	}
+	gateFull := s.opts.GateHeavyFull != nil && s.opts.GateHeavyFull() // file reads: before the lock
 	s.mu.Lock()
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
 		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
+		GateHeavyFull: gateFull,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB
