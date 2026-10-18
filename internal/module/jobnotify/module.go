@@ -187,6 +187,11 @@ func (m *Module) handle(ctx context.Context, j wire.Job, retry bool) {
 	if !j.State.Terminal() || j.Submitter.Session == "" {
 		return
 	}
+	// A fast-lane job is its caller's own process: pdx test prints the outcome (and Claude Code reports a backgrounded one). Only
+	// a lost run is told, because its caller was killed and could not report.
+	if j.Local && !lost(j) {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.store.has(j.ID) {
@@ -201,13 +206,18 @@ func (m *Module) handle(ctx context.Context, j wire.Job, retry bool) {
 			m.logf("jobnotify: %s: %v (try %d, again later)", j.ID, err, m.tries[j.ID])
 			return
 		}
-		m.logf("jobnotify: %s: %v (given up)", j.ID, err)
+		m.logf("jobnotify: %s: session %s not told, given up after %d tries: %v", j.ID, j.Submitter.Session, maxTries, err)
 	}
 	delete(m.late, j.ID)
 	delete(m.tries, j.ID)
 	if err := m.store.mark(j.ID); err != nil {
 		m.logf("jobnotify: remember %s: %v", j.ID, err)
 	}
+}
+
+// lost reports whether the job failed because its runner was lost (the lease ran out).
+func lost(j wire.Job) bool {
+	return j.State == wire.StateFailed && j.Result != nil && j.Result.Reason == "lost"
 }
 
 // redoLoop tries again the notices that could not be delivered.

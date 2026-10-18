@@ -166,14 +166,23 @@ func TestADaemonRestartDoesNotTellAgain(t *testing.T) {
 	}
 }
 
-func TestAFastLaneJobIsToldLikeAnyOther(t *testing.T) {
+func TestAFastLaneJobIsToldOnlyWhenItWasLost(t *testing.T) {
 	s := &sent{}
 	m := newMod(t, &fakeSource{}, s)
-	local := job("j_local", wire.StateSucceeded, t0)
-	local.Local, local.Cacheable = true, false
-	m.onEvent(context.Background(), event(t, local))
-	if len(s.texts()) != 1 {
-		t.Fatalf("told %q", s.texts())
+	for _, st := range []wire.JobState{wire.StateSucceeded, wire.StateFailed, wire.StateCancelled} {
+		j := job("j_local_"+string(st), st, t0)
+		j.Local, j.Cacheable = true, false
+		m.onEvent(context.Background(), event(t, j))
+	}
+	if len(s.texts()) != 0 {
+		t.Fatalf("a fast-lane job that its caller reported was told: %q", s.texts())
+	}
+	l := job("j_lost", wire.StateFailed, t0)
+	l.Local, l.Cacheable = true, false
+	l.Result.Reason = "lost"
+	m.onEvent(context.Background(), event(t, l))
+	if got := s.texts(); len(got) != 1 || !strings.Contains(got[0], "j_lost") || !strings.Contains(got[0], "lost") {
+		t.Fatalf("told %q", got)
 	}
 }
 
