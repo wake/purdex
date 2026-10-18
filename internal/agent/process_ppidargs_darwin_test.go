@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/wake/purdex/internal/execstat"
 )
 
@@ -125,6 +127,30 @@ func TestProcessPPIDArgs_AnswersByErrorWhenPSMustDecide(t *testing.T) {
 	kernProcArgs2 = func(int) ([]byte, error) { return []byte{1}, nil }
 	if _, _, err := ProcessPPIDArgs(pid); err == nil {
 		t.Fatal("a corrupt buffer was answered")
+	}
+}
+
+// A pid reused within the same second has the same parent and the same start second; only the microseconds differ.
+func TestProcessPPIDArgs_ReusedPidInTheSameSecondIsRefused(t *testing.T) {
+	pid := startTree(t, 1, "/bin/sleep", "30")[0]
+	orig := kernProcPid
+	calls := 0
+	kernProcPid = func(p int) (*unix.KinfoProc, error) {
+		kp, err := orig(p)
+		if err == nil && kp != nil {
+			calls++
+			if calls > 1 {
+				kp.Proc.P_starttime.Usec++ // the replacement started a moment later, in the same second
+			}
+		}
+		return kp, err
+	}
+	defer func() { kernProcPid = orig }()
+	if _, _, err := ProcessPPIDArgs(pid); err == nil {
+		t.Fatal("a process that started at a different microsecond was taken for the same one")
+	}
+	if calls < 2 {
+		t.Fatalf("the identity was read %d times, want a read before and after the arguments", calls)
 	}
 }
 
