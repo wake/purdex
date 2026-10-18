@@ -92,6 +92,91 @@ func TestRedactCommandIsBoundedAndKeepsValidUTF8(t *testing.T) {
 	}
 }
 
+// $TMPDIR is a temp directory too, even when it is written with dot segments.
+func TestCommandSignatureTreatsTMPDIRAsATempDirectory(t *testing.T) {
+	t.Setenv("TMPDIR", "/home/u/work/../scratch")
+	for _, p := range []string{"/home/u/scratch/run-123.js", "/home/u/scratch/run-456.js"} {
+		if got := CommandSignature([]string{"node", p}); got != "node run" {
+			t.Errorf("CommandSignature(%q) = %q, want \"node run\"", p, got)
+		}
+	}
+	if got := CommandSignature([]string{"node", "/home/u/work/run-123.js"}); got != "node run-123" {
+		t.Errorf("outside it: %q", got)
+	}
+}
+
+// Global flags with a value, before the subcommand, do not hide it: different jobs must not fall into one signature.
+func TestCommandSignatureSkipsKnownGlobalFlagsOfATool(t *testing.T) {
+	for name, c := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"docker context build":                       {[]string{"docker", "--context", "prod", "build", "."}, "docker build"},
+		"docker context run":                         {[]string{"docker", "--context", "prod", "run", "--rm", "alpine"}, "docker run"},
+		"docker -H and a log level":                  {[]string{"docker", "-H", "tcp://10.0.0.5:2375", "-l", "debug", "compose", "up"}, "docker compose up"},
+		"kubectl namespace":                          {[]string{"kubectl", "-n", "kube-system", "get", "pods"}, "kubectl get pods"},
+		"kubectl context and config":                 {[]string{"kubectl", "--context", "c1", "--kubeconfig", "/x/cfg", "rollout", "status"}, "kubectl rollout status"},
+		"git -C and -c":                              {[]string{"git", "-C", "/x/repo", "-c", "core.x=1", "fetch", "origin"}, "git fetch origin"},
+		"pnpm filter":                                {[]string{"pnpm", "--filter", "web", "test", "--run"}, "pnpm test"},
+		"pnpm -C":                                    {[]string{"pnpm", "-C", "spa", "run", "build"}, "pnpm run build"},
+		"a flag with = needs no skip":                {[]string{"docker", "--context=prod", "build", "."}, "docker build"},
+		"an unknown flag still stops":                {[]string{"docker", "--debug", "build"}, "docker"},
+		"another tool's flag is not known":           {[]string{"swift", "-n", "x", "build"}, "swift"},
+		"the value of a known flag is the last word": {[]string{"docker", "--context"}, "docker"},
+	} {
+		if got := CommandSignature(c.argv); got != c.want {
+			t.Errorf("%s: CommandSignature(%q) = %q, want %q", name, c.argv, got, c.want)
+		}
+	}
+}
+
+// The same job run from a temp script with a counter or a random suffix is one signature.
+func TestCommandSignatureNormalizesTempNames(t *testing.T) {
+	same := func(t *testing.T, want string, argvs ...[]string) {
+		t.Helper()
+		for _, a := range argvs {
+			if got := CommandSignature(a); got != want {
+				t.Errorf("CommandSignature(%q) = %q, want %q", a, got, want)
+			}
+		}
+	}
+	same(t, "node run",
+		[]string{"node", "/tmp/run-123.js"}, []string{"node", "/tmp/run-456.js"}, []string{"node", "/private/tmp/run_98765.js"})
+	same(t, "bash build",
+		[]string{"bash", "/var/folders/ab/cd/T/build-a1b2c3d4e5.sh"}, []string{"bash", "/var/folders/ab/cd/T/build.9f8e7d6c5b.sh"})
+	same(t, "python3 train",
+		[]string{"python3", "/tmp/train-2026.py"}, []string{"python3", "/tmp/train-2027.py"})
+	// the other shapes a throwaway name has: a whole uuid, an ISO date, a mktemp suffix of mixed letters and digits
+	same(t, "node job",
+		[]string{"node", "/tmp/job-3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b.js"}, []string{"node", "/tmp/job-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d.js"})
+	same(t, "bash backup",
+		[]string{"bash", "/tmp/backup-2026-10-18.sh"}, []string{"bash", "/tmp/backup-2026-10-19.sh"})
+	same(t, "bash tmp",
+		[]string{"bash", "/var/folders/ab/T/tmp.aB3dE9"}, []string{"bash", "/var/folders/ab/T/tmp.Qz7Lm2x"})
+	// outside a temp directory a number is part of the name: different jobs stay different
+	same(t, "pnpm release-2026", []string{"pnpm", "release-2026"})
+	same(t, "pnpm release-2027", []string{"pnpm", "release-2027"})
+	same(t, "tool node-180", []string{"tool", "node-180"})
+	same(t, "tool node-181", []string{"tool", "node-181"})
+	same(t, "tool build-a1b2c3d4e5", []string{"tool", "build-a1b2c3d4e5"})
+	same(t, "tool build-a1b2c3d4e6", []string{"tool", "build-a1b2c3d4e6"})
+	same(t, "node run-123", []string{"node", "scripts/run-123.js"}) // a relative path: not known to be throwaway
+	same(t, "node run-124", []string{"node", "scripts/run-124.js"})
+	same(t, "node run-123.js", []string{"node", "run-123.js"})
+	same(t, "python3 run-123", []string{"python3", "run-123"})
+	// a path that only starts with a temp directory but leads out of it is not in it
+	same(t, "node release-2026", []string{"node", "/tmp/../opt/jobs/release-2026.js"})
+	same(t, "node release-2027", []string{"node", "/tmp/../opt/jobs/release-2027.js"})
+	same(t, "node run-123", []string{"node", "/tmp2/run-123.js"})         // a different directory with the same start
+	same(t, "node run", []string{"node", "/opt/../tmp/./sub/run-123.js"}) // and one that leads in
+	// real names stay, in a temp directory too
+	same(t, "node vitest", []string{"node", "/x/node_modules/.bin/vitest"})
+	same(t, "node es2020", []string{"node", "/tmp/es2020"})
+	same(t, "node deadbeef", []string{"node", "/tmp/deadbeef"})     // letters only: a word, not a random suffix
+	same(t, "node build-prod", []string{"node", "/tmp/build-prod"}) // not a counter
+	same(t, "node v8-12", []string{"node", "/tmp/v8-12"})           // two digits are a version, not a counter
+}
+
 func TestCommandSignature(t *testing.T) {
 	for name, c := range map[string]struct {
 		argv []string
