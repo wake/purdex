@@ -39,6 +39,9 @@ type Result struct {
 	// left out when the task takes none.
 	Task string   `json:"task,omitempty"`
 	Args []string `json:"args,omitempty"`
+	// Queued says a rewrite goes through the queue, where it may wait (the task does not take the local fast lane for this many
+	// arguments); the hook then runs the call in the background.
+	Queued bool `json:"queued,omitempty"`
 	// Mode is the manifest's [entry].mode when no task matched ("advise" when the manifest names none).
 	Mode string `json:"mode,omitempty"`
 	// Hint is the task nearest to the command, for the advice and the refusal.
@@ -71,7 +74,7 @@ func Match(cwd string, argv []string) Result {
 	for _, n := range names {
 		if args, ok := matchTask(root, cwd, canon, m.Tasks[n]); ok {
 			if found == nil || classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class) {
-				found = &Result{Action: ActionRewrite, Task: n, Args: args}
+				found = &Result{Action: ActionRewrite, Task: n, Args: args, Queued: !m.Tasks[n].Local.Permits(len(args))}
 			}
 		}
 	}

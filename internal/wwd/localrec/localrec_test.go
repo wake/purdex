@@ -141,6 +141,38 @@ func TestFinishUploadsTheLogThenPostsTheResult(t *testing.T) {
 	}
 }
 
+// The result carries the reason of a failed run when it is one a worker may post (oom, timeout, infra); the origin's own words and
+// every reason of a run that did not fail stay off it (the route refuses them).
+func TestFinishPostsOnlyTheReasonsAWorkerMay(t *testing.T) {
+	for name, tc := range map[string]struct {
+		state  wire.JobState
+		reason string
+		want   string
+	}{
+		"timeout":                  {wire.StateFailed, "timeout", "timeout"},
+		"infra":                    {wire.StateFailed, "infra", "infra"},
+		"oom":                      {wire.StateFailed, "oom", "oom"},
+		"lost is the origin's":     {wire.StateFailed, "lost", ""},
+		"queue_timeout":            {wire.StateFailed, "queue_timeout", ""},
+		"expired turned to failed": {wire.StateExpired, "queue_timeout", ""},
+		"no reason":                {wire.StateFailed, "", ""},
+		"a success has none":       {wire.StateSucceeded, "timeout", ""},
+		"cancelled has none":       {wire.StateCancelled, "infra", ""},
+	} {
+		api := newAPI()
+		h, _ := Recorder{API: api}.Register(context.Background(), body())
+		if err := h.Finish(context.Background(), fastlane.Outcome{State: tc.state, Reason: tc.reason}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(api.results) != 1 || api.results[0].Reason != tc.want {
+			t.Errorf("%s: posted reason %q, want %q", name, api.results[0].Reason, tc.want)
+		}
+		if err := api.results[0].Validate(); err != nil {
+			t.Errorf("%s: the route would refuse it: %v", name, err)
+		}
+	}
+}
+
 func TestFinishMapsAStateTheRouteDoesNotTake(t *testing.T) {
 	api := newAPI()
 	h, _ := Recorder{API: api}.Register(context.Background(), body())

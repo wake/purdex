@@ -130,6 +130,10 @@ func TestProcfsReaderSnapshotSizesCPUAndAttribution(t *testing.T) {
 	if job, ok := ctx.JobOf(11); !ok || job != "j_abc" {
 		t.Errorf("job marker from environ: %q %v", job, ok)
 	}
+	// no session id in the environments of this fake tree
+	if _, ok := ctx.EnvSessionOf(10); ok {
+		t.Error("no session id in the environment")
+	}
 	// 100 ticks of CPU in 10 s (clock tick = 10 ms) is 10 %
 	f.proc(10, 1, "node", 100, 500, 100<<20/pageMB, []string{"node", "vite"}, nil)
 	snap, _, err = r.Snapshot(t0.Add(10 * time.Second))

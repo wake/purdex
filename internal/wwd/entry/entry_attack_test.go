@@ -16,6 +16,37 @@ func writeManifest(t *testing.T, dir, src string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".wwd", "tasks.toml"), []byte(src), 0o644))
 }
 
+// A rewrite says whether the task goes to the queue (it may wait there) or takes the local fast lane (it runs here and now): the
+// manifest's `local`, for the number of arguments given.
+func TestMatch_ARewriteSaysWhetherItIsQueued(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, `
+[tasks.queued]
+run  = "go test -json {packages}"
+args = "packages"
+[tasks.local-any]
+run   = "vitest run {files}"
+args  = "files"
+local = true
+[tasks.local-two]
+run   = "jest {files}"
+args  = "files"
+local = "files<=2"
+[tasks.none]
+run  = "make lint"
+args = "none"
+`)
+	for _, f := range []string{"a.ts", "b.ts", "c.ts"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, f), []byte("x"), 0o644))
+	}
+	assert.True(t, Match(root, []string{"go", "test", "./..."}).Queued, "no local: through the queue")
+	assert.False(t, Match(root, []string{"vitest", "run", "a.ts", "b.ts", "c.ts"}).Queued, "local for any number of files")
+	assert.False(t, Match(root, []string{"jest", "a.ts", "b.ts"}).Queued, "two files are within files<=2")
+	assert.True(t, Match(root, []string{"jest", "a.ts", "b.ts", "c.ts"}).Queued, "three are not")
+	assert.True(t, Match(root, []string{"make", "lint"}).Queued)
+	assert.False(t, Match(root, []string{"ls"}).Queued, "only a rewrite says it")
+}
+
 // A flag the task has, and the value that goes with it, are left out together or given together: a bare number in the command is
 // not the value of a flag that is not there.
 func TestMatch_AFlagAndItsValueGoTogether(t *testing.T) {
