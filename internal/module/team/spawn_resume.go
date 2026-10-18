@@ -35,6 +35,7 @@ func (m *Module) resumeSpawns() {
 		m.logf("[team] boot: spawn ops: %v", err)
 		return
 	}
+	m.kickFacts()               // the listing may have failed a corrupt op of a remote lead, which queues a spawn_failed fact
 	m.reapOrphanSpawnSessions() // before any runner starts: a running op's session is then the runner's alone
 	for _, op := range ops {
 		if (op.Step == team.StepSessionCreated || op.Step == team.StepLaunched) && !m.sessions.SessionExists(op.TmuxName) {
