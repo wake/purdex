@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +51,9 @@ type Options struct {
 func Run(ctx context.Context, o Options) int {
 	if o.Args.List {
 		return list(ctx, o)
+	}
+	if o.Args.AdHoc {
+		return adHoc(ctx, o)
 	}
 	info, err := o.API.Info(ctx)
 	if err != nil {
@@ -155,56 +157,8 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 			body = p.Body
 		}
 	}
-	// The run's files stay after the command: the log path is printed, and wwd's sweep removes old ones.
-	out := ""
-	if o.LogDir != "" {
-		// one directory per run, created atomically: two runs of one task in one second never share files
-		if err := os.MkdirAll(o.LogDir, 0o700); err != nil {
-			fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
-			return ExitFailed, true
-		}
-		d, err := os.MkdirTemp(o.LogDir, fmt.Sprintf("%s-%s-", time.Now().Format("20060102-150405"), o.Args.Task))
-		if err != nil {
-			fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
-			return ExitFailed, true
-		}
-		out = d
-	}
-	res, err := runWhenFree(ctx, o, task, fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env, OutDir: out})
-	var argErr *fastlane.ArgError
-	switch {
-	case errors.Is(err, fastlane.ErrNotLocal):
-		return 0, false
-	case errors.Is(err, errWaitedOut):
-		r := Report{Task: o.Args.Task, State: wire.StateExpired, Reason: "queue_timeout", Local: true}
-		Print(o.Stdout, r, o.Args.JSON)
-		return ExitCode(r), true
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return ExitCancelled, true
-	case errors.As(err, &argErr):
-		fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
-		return ExitUsage, true
-	case err != nil:
-		fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
-		return ExitFailed, true
-	}
-	if out == "" {
-		defer res.Cleanup() // no place to keep the files: they go with the command
-		res.LogPath = ""
-	}
-	if res.Err != nil {
-		fmt.Fprintf(o.Stderr, "pdx test: %v\n", res.Err)
-	}
-	r := Report{ID: res.JobID, Task: o.Args.Task, State: res.State, Reason: res.Reason, Local: true, LogPath: res.LogPath, Summary: &res.Summary}
-	if res.State == wire.StateSucceeded || res.State == wire.StateFailed && res.Reason == "" || res.Reason == "timeout" {
-		e := res.Exit
-		r.Exit = &e
-	}
-	if res.JobID == "" {
-		r.Notes = append(r.Notes, "this run was not recorded: wwd has no fast-lane entry yet")
-	}
-	Print(o.Stdout, r, o.Args.JSON)
-	return ExitCode(r), true
+	req := fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env}
+	return runFast(ctx, o, task, req, o.Args.Task, "")
 }
 
 func list(ctx context.Context, o Options) int {

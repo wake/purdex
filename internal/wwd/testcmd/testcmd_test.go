@@ -158,11 +158,13 @@ type fakeGate struct {
 	code    int
 	out     string
 	waitMax time.Duration // the WaitMax of the last call
+	last    gate.Options  // the options of the last call
 }
 
 func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
 	g.calls++
 	g.waitMax = o.WaitMax
+	g.last = o
 	for _, kv := range o.Env {
 		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
 			o.Stderr.Write([]byte(gate.AdmittedMark(nonce)))
