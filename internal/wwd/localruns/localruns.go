@@ -28,6 +28,9 @@ type Queue interface {
 	RecordLocal(ctx context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error)
 	// Ended says which of ids are over: a job in a final state, or one the queue no longer has.
 	Ended(ctx context.Context, ids []string) (map[string]bool, error)
+	// Running lists the fast-lane jobs the queue holds in a state that is not final (claimed or running), with their locks. The
+	// service rebuilds the lock table from it after a restart: the runner of such a job may go on renewing its lease.
+	Running(ctx context.Context) ([]wire.Job, error)
 }
 
 // maxBody bounds a registration (a submission without a snapshot is small).
@@ -51,7 +54,11 @@ type Service struct {
 	mu    sync.Mutex
 	holds map[string]*locks.Hold // by job id
 	// early: jobs whose end was announced before the registration that made them returned (the event is faster than the answer).
-	early map[string]struct{}
+	// It is only filled while a registration is in flight (inflight > 0) and emptied when the last one is over: an end that no
+	// registration waits for needs nothing remembered (Reconcile covers a hold that outlives its job).
+	early    map[string]struct{}
+	inflight int
+	ready    bool // the table was rebuilt from the queue after the start; registrations wait for it
 }
 
 // New returns a service over the table and the queue.
@@ -92,6 +99,24 @@ func (s *Service) Handler() http.HandlerFunc {
 // Register checks the locks of req, has the queue record the run and holds the keys under the job's id. A *locks.BusyError means a
 // key is held (status 409); any other error comes with the status to answer with.
 func (s *Service) Register(ctx context.Context, req wire.LocalRunRequest) (wire.LocalRunResponse, int, error) {
+	s.mu.Lock()
+	if !s.ready {
+		s.mu.Unlock()
+		return wire.LocalRunResponse{}, http.StatusServiceUnavailable, errors.New("starting: the locks of the runs that were going on are not rebuilt yet")
+	}
+	s.inflight++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.inflight--; s.inflight == 0 {
+			clear(s.early) // no registration waits for an end that was announced early
+		}
+		s.mu.Unlock()
+	}()
+	return s.register(ctx, req)
+}
+
+func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.LocalRunResponse, int, error) {
 	// The keys are reserved before the queue names the job and are renamed to its id after: no other start can take them while the
 	// run is being recorded, and a cancel that names the job finds the keys.
 	if err := locks.ValidateKeys(req.Locks); err != nil {
@@ -111,11 +136,15 @@ func (s *Service) Register(ctx context.Context, req wire.LocalRunRequest) (wire.
 	case err != nil:
 		return wire.LocalRunResponse{}, http.StatusServiceUnavailable, fmt.Errorf("the queue could not record the run: %w", err)
 	}
-	if err := resp.Validate(); err != nil { // an answer the caller could not use: the run was recorded, so it is not undone here
+	if err := resp.Validate(); err != nil {
+		// The queue has the run as running and the caller will not get its claim: the lease lapses and the queue's reaper marks it
+		// lost. The keys are not held for a run nobody carries out.
+		s.Logf("localruns: %s was recorded but its claim is unusable (%v); it will lapse as lost", resp.ID, err)
 		hold.Release()
 		return wire.LocalRunResponse{}, http.StatusBadGateway, fmt.Errorf("the queue answered with an unusable claim: %w", err)
 	}
 	if err := hold.Rename(resp.ID); err != nil {
+		s.Logf("localruns: %s was recorded but its locks could not be named (%v); it will lapse as lost", resp.ID, err)
 		hold.Release()
 		return wire.LocalRunResponse{}, http.StatusInternalServerError, fmt.Errorf("the locks of %s: %w", resp.ID, err)
 	}
@@ -144,8 +173,8 @@ func (s *Service) end(id string) {
 	s.mu.Lock()
 	hold, ok := s.holds[id]
 	delete(s.holds, id)
-	if !ok {
-		if len(s.early) >= maxEarly { // an unbounded set would be a leak; the next comparison covers what is dropped
+	if !ok && s.inflight > 0 { // a registration may be about to return this job
+		if len(s.early) >= maxEarly { // bounded; the next comparison covers a hold that is missed
 			for k := range s.early {
 				delete(s.early, k)
 				break
@@ -176,9 +205,6 @@ func (s *Service) Held() []string {
 func (s *Service) Reconcile(ctx context.Context) error {
 	ids := s.Held()
 	if len(ids) == 0 {
-		s.mu.Lock()
-		clear(s.early) // nothing waits for them any more
-		s.mu.Unlock()
 		return nil
 	}
 	ended, err := s.Queue.Ended(ctx, ids)
@@ -199,8 +225,53 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// Run reconciles every ReconcileEvery until ctx ends.
+// Recover rebuilds the lock table after a start from the fast-lane jobs the queue still has as not final: their runners may go on
+// renewing their leases, and without their keys a new run could overlap them. Registrations are refused until it has succeeded.
+// It may be called again; a job already held is skipped.
+func (s *Service) Recover(ctx context.Context) error {
+	jobs, err := s.Queue.Running(ctx)
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		if !j.Local || j.State.Terminal() {
+			continue
+		}
+		s.mu.Lock()
+		_, have := s.holds[j.ID]
+		s.mu.Unlock()
+		if have {
+			continue
+		}
+		hold, err := s.Locks.Acquire(j.ID, j.Locks, nil)
+		if err != nil { // two running jobs that share a key (an older start), or keys that cannot be held: say so, do not stop
+			s.Logf("localruns: the locks of the running job %s were not rebuilt: %v", j.ID, err)
+			continue
+		}
+		s.mu.Lock()
+		s.holds[j.ID] = hold
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	s.ready = true
+	s.mu.Unlock()
+	return nil
+}
+
+// Run rebuilds the locks (retrying until the queue answers), then reconciles every ReconcileEvery until ctx ends.
 func (s *Service) Run(ctx context.Context) {
+	for ctx.Err() == nil {
+		err := s.Recover(ctx)
+		if err == nil {
+			break
+		}
+		s.Logf("localruns: rebuilding the locks from the queue: %v", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 	t := time.NewTicker(ReconcileEvery)
 	defer t.Stop()
 	for {

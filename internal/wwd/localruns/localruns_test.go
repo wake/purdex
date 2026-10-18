@@ -32,6 +32,9 @@ type fakeQueue struct {
 	ended  map[string]bool
 	endErr error
 	asked  [][]string
+	// running is what Running answers (the jobs the queue has as not final); runErr makes it fail
+	running []wire.Job
+	runErr  error
 }
 
 func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error) {
@@ -52,6 +55,12 @@ func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, wor
 		return wire.LocalRunResponse{ID: id}, nil
 	}
 	return wire.LocalRunResponse{ID: id, ClaimID: claim, LeaseS: 60, RenewS: 15}, nil
+}
+
+func (q *fakeQueue) Running(context.Context) ([]wire.Job, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.running, q.runErr
 }
 
 func (q *fakeQueue) Ended(_ context.Context, ids []string) (map[string]bool, error) {
@@ -99,6 +108,9 @@ func newService(q Queue) (*Service, *locks.Table) {
 	tb := locks.New()
 	s := New(tb, q, "mlab")
 	s.Logf = func(string, ...any) {}
+	if err := s.Recover(context.Background()); err != nil {
+		panic(err)
+	}
 	return s, tb
 }
 
@@ -341,5 +353,84 @@ func TestARunWithoutKeysIsRecordedAndHoldsNothingBack(t *testing.T) {
 	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: true, State: wire.StateSucceeded}})
 	if got := s.Held(); len(got) != 1 || got[0] != "j_local2" {
 		t.Fatalf("held %v", got)
+	}
+}
+
+func TestRegistrationsWaitForTheLocksToBeRebuiltAfterAStart(t *testing.T) {
+	q := &fakeQueue{runErr: errors.New("queue not up")}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusServiceUnavailable || len(q.calls) != 0 {
+		t.Fatalf("before the rebuild: status %d, queue asked %d times", rec.Code, len(q.calls))
+	}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a failed rebuild was reported as done")
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after a failed rebuild: status %d", rec.Code)
+	}
+	q.runErr = nil
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("after the rebuild: status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestARunningJobKeepsItsKeysAcrossARestart(t *testing.T) {
+	// the queue still has j_old running; the daemon starts again with an empty table
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_old", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_done", Local: true, State: wire.StateSucceeded, Locks: []string{"db"}},
+		{ID: "j_remote", Local: false, State: wire.StateRunning, Locks: []string{"net"}},
+	}}
+	s, tb := newService(q)
+	if o, _ := tb.Holder("tmux"); o != "j_old" {
+		t.Fatalf("holder of tmux = %q", o)
+	}
+	if _, ok := tb.Holder("db"); ok {
+		t.Error("a job that is over holds keys")
+	}
+	if _, ok := tb.Holder("net"); ok {
+		t.Error("a job that is not a fast-lane run was taken into the fast lane's table")
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusConflict {
+		t.Fatalf("a run for a key of the job that is still going: %d", rec.Code)
+	}
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_old", Local: true, State: wire.StateFailed}})
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("after its end: %d", rec.Code)
+	}
+	if err := s.Recover(context.Background()); err != nil { // a second rebuild skips what is held
+		t.Fatal(err)
+	}
+}
+
+func TestAnEndWithNoRegistrationInFlightIsNotRemembered(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_other", Local: true, State: wire.StateFailed}})
+	s.mu.Lock()
+	n := len(s.early)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d ends remembered with nobody waiting for them", n)
+	}
+}
+
+func TestAnEndAnnouncedWhileTheRegistrationIsInFlightSurvivesAReconcile(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	q.during = func(id string) {
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+		_ = s.Reconcile(context.Background()) // a comparison in the middle must not forget it
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("the keys of a job that had ended stayed held")
 	}
 }
