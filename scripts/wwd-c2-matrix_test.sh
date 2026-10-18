@@ -15,7 +15,13 @@ hasnt() { echo "$1" | grep -q -- "$2" && fail "$3: must not contain '$2'"; retur
 sh -n "$matrix" || fail "sh -n"
 if command -v dash >/dev/null 2>&1; then dash -n "$matrix" || fail "dash -n"; fi
 
-dry() { TMPDIR="$tmp" sh "$matrix" --dry-run "$@" 2>&1; }
+# spies in PATH: every command that would change something or reach a host records that it was called; a dry run calls none
+spy="$tmp/spy"; spylog="$tmp/spy.log"; mkdir -p "$spy"; : > "$spylog"
+for c in ssh curl pdx sqlite3 launchctl systemctl mkdir rm git sleep mv cp touch chmod; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$c" "$spylog" > "$spy/$c"; chmod +x "$spy/$c"
+done
+workdir="$tmp/work"; mkdir -p "$workdir"
+dry() { PATH="$spy:$PATH" TMPDIR="$workdir" sh "$matrix" --dry-run "$@" 2>&1; }
 
 # the list: fourteen cases, the four that need a hook say which
 out=$(sh "$matrix" --list)
@@ -35,7 +41,8 @@ if sh "$matrix" --nonsense >/dev/null 2>&1; then fail "an unknown flag must be r
 out=$(dry --all)
 has "$out" "passed: 1 2 3 4 5 6 7 8 9 10 11 12 13 14" "all cases"
 hasnt "$out" "FAIL" "all cases"
-[ -z "$(ls -A "$tmp")" ] || fail "a dry run made files in TMPDIR: $(ls -A "$tmp")"
+[ -z "$(ls -A "$workdir")" ] || fail "a dry run made files in TMPDIR: $(ls -A "$workdir")"
+[ ! -s "$spylog" ] || fail "a dry run called commands: $(head -5 "$spylog")"
 
 # nothing the brief forbids, in the script or in what it prints
 for bad in pkill killall pfctl iptables "kill -9" "kill -KILL" "chmod -R" "rm -rf /"; do

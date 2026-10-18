@@ -113,8 +113,9 @@ has "PASS case 14" "case 14"
 
 # every worker setting the script changed is put back (the stub keeps what was PUT), the scratch repo is gone, the jobs are cancelled
 run succeeded 11 || fail "case 11 again"
-[ -s "$stub/put.log" ] || fail "the worker settings were not put back"
-[ "$(grep -c '"enabled":false' "$stub/put.log")" -ge 1 ] || fail "the saved worker settings must be what GET gave"
+# case 11 sets three workers (mlab and air26 on, mserv off) and puts back three: six PUTs, the last three are what GET gave
+[ "$(wc -l < "$stub/put.log" | tr -d ' ')" -eq 6 ] || fail "expected 6 worker PUTs (3 set, 3 put back), got $(wc -l < "$stub/put.log")"
+[ "$(tail -3 "$stub/put.log" | grep -c '"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""')" -eq 3 ] || fail "the last three PUTs must be the settings GET gave"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left in TMPDIR"
 [ -s "$stub/cancel.log" ] || fail "the jobs it made were not cancelled"
 
