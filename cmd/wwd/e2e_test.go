@@ -167,7 +167,23 @@ func freePort(t *testing.T) int {
 	return 0
 }
 
+// start runs one wwd. A port picked here can be taken by another program between the pick and wwd's bind; when the process then
+// exits at start, another port is picked (up to three times). A port the caller gave is not retried.
 func (w *world) start(o procOpts, port int) *proc {
+	w.t.Helper()
+	for attempt := 1; ; attempt++ {
+		p, ok := w.launch(o, port)
+		if ok {
+			return p
+		}
+		if port != 0 || attempt == 3 {
+			w.t.Fatalf("%s exited at start:\n%s", o.alias, p.logTail())
+		}
+		w.t.Logf("%s exited at start (attempt %d), picking another port:\n%s", o.alias, attempt, p.logTail())
+	}
+}
+
+func (w *world) launch(o procOpts, port int) (*proc, bool) {
 	t := w.t
 	t.Helper()
 	home := filepath.Join(w.root, o.alias)
@@ -208,21 +224,20 @@ func (w *world) start(o procOpts, port int) *proc {
 	}
 	go func() { p.cmd.Wait(); logf.Close(); close(p.exited) }()
 	t.Cleanup(p.cleanup)
-	p.waitReady()
-	return p
+	return p, p.waitReady()
 }
 
 func (p *proc) api() *client.Client { return client.New(p.sock) }
 
 // waitReady waits for the socket to answer, and checks the answer is ours: an alias that is not the one this process was given
 // means the socket is somebody else's, and nothing more is done through it.
-func (p *proc) waitReady() {
+func (p *proc) waitReady() bool {
 	p.t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case <-p.exited:
-			p.t.Fatalf("%s exited at start:\n%s", p.alias, p.logTail())
+			return false
 		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -232,11 +247,12 @@ func (p *proc) waitReady() {
 			if info.Alias != p.alias {
 				p.t.Fatalf("socket %s answered as %q, want %q: not touching it", p.sock, info.Alias, p.alias)
 			}
-			return
+			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	p.t.Fatalf("%s not ready:\n%s", p.alias, p.logTail())
+	return false
 }
 
 func (p *proc) logTail() string {
