@@ -84,11 +84,20 @@ func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
 	if entry == nil || !m.stages.inFlight(sid) {
 		return
 	}
+	rev := entry.Cursor()
+	if m.stages.seenAlready(sid, rev) { // another connection of this session already looked at this revision
+		return
+	}
+	from, ok := m.stages.windowFrom(sid)
+	if !ok {
+		return
+	}
 	var items []stageItem
-	for _, u := range entry.UserItems() {
+	for _, u := range entry.UserItems(from) {
 		items = append(items, stageItem{ID: u.ID, Text: u.Text, At: u.At})
 	}
 	h := entry.Header()
 	lossy := len(h.Queued)+h.HiddenQueued >= ccnorm.MaxQueueEntries // the feed's tracker dropped its oldest rows: absence proves nothing
 	m.stages.observe(sid, h.Queued, lossy, items, m.tuning().now())
+	m.stages.markSeen(sid, rev)
 }

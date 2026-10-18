@@ -325,7 +325,6 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 func (c *wsConn) sendSnapshot() bool {
 	caps := capsOf(c) // the table the snapshot says is also the baseline a later change is compared with
 	c.caps = capsKeyOf(caps)
-	c.m.observeStages(c.sid, c.entry)
 	seq := c.m.stages.seqOf(c.sid) // read before the snapshot reads the stages: a change in between is sent again, never lost
 	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {

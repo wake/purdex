@@ -184,3 +184,21 @@ func TestModule_StatusReadyEndsWithStop(t *testing.T) {
 	require.NoError(t, m.Stop(t.Context()))
 	assert.Equal(t, false, m.Status()["ready"])
 }
+
+// The observer reads only the user items from the window on (UserItems(minAt)), not the whole history.
+func TestWSStages_UserItemsAreFilteredByTime(t *testing.T) {
+	e, _ := wsEnv(t)
+	p := e.transcript(idleTurns(1))
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "running", SeenAt: 1}}
+	appendRows(t, p, userRow("u-old", 100, "older"), userRow("u-new", 200, "newer"))
+	entry, release, err := e.mod.cache.Acquire(t.Context(), sid)
+	require.NoError(t, err)
+	defer release()
+	require.NoError(t, entry.Exclusive(t.Context(), func() error { return e.mod.refresh(t.Context(), entry, sid) }))
+	base := int64(1791378000000)
+	all := entry.UserItems(0)
+	late := entry.UserItems(base + 150_000)
+	require.GreaterOrEqual(t, len(all), 2)
+	require.Len(t, late, 1)
+	assert.Equal(t, "newer", late[0].Text)
+}
