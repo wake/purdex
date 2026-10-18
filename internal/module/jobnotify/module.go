@@ -163,7 +163,16 @@ func (m *Module) catchUp(ctx context.Context) {
 	for _, j := range ended {
 		m.handle(ctx, j, false)
 	}
-	if err := m.store.advance(began); err != nil {
+	// the window does not pass a job whose notice is still waiting: after a restart the catch-up must find it again
+	bound := began
+	m.mu.Lock()
+	for _, j := range m.late {
+		if j.Result != nil && j.Result.FinishedAt != nil && j.Result.FinishedAt.Before(bound) {
+			bound = j.Result.FinishedAt.Add(-time.Nanosecond)
+		}
+	}
+	m.mu.Unlock()
+	if err := m.store.advance(bound); err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
 	}
 }

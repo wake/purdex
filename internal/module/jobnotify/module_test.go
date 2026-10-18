@@ -194,6 +194,24 @@ func TestASessionWithoutAnInboxYetIsToldWhenItHasOne(t *testing.T) {
 	}
 }
 
+func TestANoticeNotYetDeliveredIsFoundAgainAfterARestart(t *testing.T) {
+	src := &fakeSource{jobs: map[wire.JobState][]wire.Job{wire.StateSucceeded: {job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}}
+	s := &sent{failFor: 1}
+	m := newMod(t, src, s)
+	m.now = func() time.Time { return t0.Add(time.Hour) }
+	m.catchUp(context.Background()) // the delivery fails and the window must stay before the job
+	if len(s.texts()) != 0 || !m.store.since().Before(t0.Add(time.Minute)) {
+		t.Fatalf("told %q, window %v", s.texts(), m.store.since())
+	}
+	m2 := newMod(t, src, s) // the daemon restarts: nothing is waiting in memory
+	m2.dir = m.dir
+	m2.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), t0.Add(2*time.Hour), m2.logf)
+	m2.catchUp(context.Background())
+	if len(s.texts()) != 1 {
+		t.Fatalf("told %q", s.texts())
+	}
+}
+
 func TestASessionThatNeverAnswersIsGivenUpAfterMaxTries(t *testing.T) {
 	s := &sent{failFor: 1000}
 	m := newMod(t, &fakeSource{}, s)
