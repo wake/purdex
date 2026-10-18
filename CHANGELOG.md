@@ -1,5 +1,79 @@
 # Changelog
 
+## [1.0.0-alpha.754] - 2026-10-19
+
+> daemon、`pdx` CLI 與 `wwd` 有改；**mod（`cmd/pdx/plugin/`）沒改，不用重跑 `pdx setup`**。Electron 與 753 相同。SPA 有改，並新增兩個依賴（`@dicebear/core`、`@dicebear/styles`），主 checkout 要先 `pnpm install`（dev server 與各 worktree 的 `node_modules` symlink 都讀它）。資料庫沒有 schema 變更：Purdex 的 hostconfig 多一個 `personas` key（舊版會忽略它），`wwd.db` 與 753 相同；退回 753 不需要還原。
+>
+> **C2 真機矩陣已在 753 上通過（14 格）**，這一版帶的是 C2 期間找到並修好的問題，以及各線已 merge 的功能。部署時四台的 worker 先一律關閉；mlab 與 air26 由 lead 在部署檢查通過後打開；mserv 要等三件事完成才開：purdex 的 `.wwd/tasks.toml` 每個非本機任務都標上 `os:darwin`、`wwd.slice` 設好 CPU 權重與上限、mserv 的人工送法停用；air19 照舊不開。mserv 的 `config.toml` 加上 `[tools] extra_path`（node toolchain），工作才找得到 node。
+>
+> 下一版（755）會帶 wire 契約 `proto` 2 的讀取端與 `wwd.db` 遷移（WWD-8a-c），那一版四台 wwd 與兩個 Purdex daemon 要同版部署；寫入新欄位的部分再晚一版（756）。
+
+### Fixed：wwd
+
+- **關機順序**：原本 worker 停止後就排空用量記錄器，但 HTTP servers、queue 的 sweeper、快車道還可能在那之後送出工作的終態事件，那一列用量就丟了。現在順序是 worker 停、這些生產者安靜（HTTP servers 關閉並答完在途請求，sweeper 與快車道返回）、記錄器排空、關 store。已知缺口：servers 的 3 秒關閉上限內沒答完的在途請求，其終態事件仍會丟；若還有 SSE 長連線，關機最多多等 3 秒（#3385）。
+- **job 的 origin 由連線決定**：worker claim 成功後，job 的 origin 一律取自設定檔裡該連線的名字，不再信 claim 回應裡對方自己填的字串，避免惡意 peer 填另一個 peer 的 alias 讓 worker 去那邊要快照。`JobDir` 的雜湊含 origin，所以目錄名會和升級前不同，舊目錄由隔離區 marker 記的路徑管理（#3386）。
+- **origin 自己的快照錯誤不再停權整個 repo**：origin 的 snapshot 路由因 commit 沒被 pin 等原因回 5xx 時，worker 改以 `reclaim` 歸還（不計 attempt），只對「這一個 job」退避（15 秒起、連續失敗加倍、上限 5 分鐘、只放記憶體），不再停權 (origin, repo) 5 分鐘；連不上、逾時、解壓、磁碟、git 錯誤仍算 infra。限制：origin 端的 `queue.Release` 目前不保存 detail，原因只寫在 worker 的 log；origin 一直拒絕的 job 會一直 queued，到 `queue_timeout`（預設 2 小時）變 `expired`（#3387）。
+- **測試**：`run` 測試的 `alive()` 不再把殭屍行程當成存活（Linux 讀 `/proc/<pid>/stat`，KILL 測試也最多等 3 秒），mserv 上連跑 40 次無失敗；僅測試改動（#3388）。
+
+### Added：wwd 的 `[tools] extra_path`
+
+- `config.toml` 新增 `[tools] extra_path`（絕對路徑或 `~/`；不存在的目錄啟動時跳過並記一行 log），放在預設工具目錄之前。facts 的工具探測與工作的 PATH 由同一份清單產生，改設定後重啟 wwd 即生效，不必重跑 install。起因是 mserv 上工作的 PATH 寫死在 systemd 單元，找不到 `~/Assist/toolchains.noindex/node/bin` 的 node。mserv 的設定與 wwd 重啟不在這張 PR，等 C2 結束後由部署時做（#3398）。
+
+### Changed：效能觀測
+
+- **ps 退路快取**：argv 含非可印 ASCII 而只有 ps 讀得出來的行程（例如啟動指令列帶長中文 prompt 的守門員），註冊表 liveness 這條路改用 `ProcessSnapshot.ReadCached`，最多沿用 60 秒內的 ps 答案，不再每次讀註冊表就 fork 兩次 ps（753 部署後約每分鐘 43～55 次）。快取鍵含 pid、啟動時間與核心指令名，上限 64 筆；身分每次仍核對，pid 已不在或被別的行程取得時在 fork 前就回 `ErrProcessChanged`。`ReadFresh` 不碰快取，範圍只有 peers liveness（#3390）。
+- **`tmux.read` 明細事件**：`tmux.read` 這個 tag 原樣保留，另外每次讀取記一個 execstat 事件 `tmux.read.<方法名>`（例如 `tmux.read.ListAllPanes`，共 16 個呼叫點），可從 `GET /api/debug/execstat` 的 `events` 看各路徑每分鐘幾次。只加觀測，不改行為（#3391）。
+
+### Fixed：C2 矩陣腳本
+
+- 修正第一次矩陣執行發現的問題：case 1 每個 claim 的輸出行補換行；case 8 找得到 air26 上的 pdx；等待 `running`／`claimed` 的前置條件改為硬性，沒達成就 `FAIL precondition not reached` 並結束該 case；跑在 air26 worker 的 case 先最多等 10 分鐘讓 owner 不再 active，否則 SKIP；`C2_RAN_LOG` 可移動探測 log 並檢查其值；air26 的 `owner_rule` 為空時 precheck 警告。僅腳本、測試與文件，沒有 Go 改動（#3401）。
+- 修正第二次執行發現的問題：case 8 在 air26 的暫存目錄改為 `/tmp/wwd-c2.r.$$`（原本落在 mlab 的 `TMPDIR` 而 Permission denied）；`fault.log_upload_fail` 啟用時，除非只跑 `--case 6`，precheck 一律拒絕執行；ssh 加 `ConnectTimeout` 20 秒，沒連上的連線重試一次，中途斷線的不重放，單一 case 因連線中斷只算該 case 失敗。僅腳本、測試與文件（#3425）。
+
+### Added：日誌 journal v5
+
+- **session 頁的 wire 與 store（JV-4a）**：新增 `getJournalSessions`、`getJournalPage` 與 `journal.sessions.v1` 能力探測；目前那頁仍是 `unit.entries`，其他 session 的頁放 `unit.pages`，每個 unit 最多保留 10 頁，被擠掉的下次顯示時重讀。換了 leader session（relay、`/clear`）時整頁換掉不併入。這張沒有畫面改動，沒有 capability 時行為完全不變（#3184）。
+- **日誌卡片的分頁（JV-4b）**：有 `journal.sessions.v1` 時，卡片出現頁首與底部上一頁／下一頁（邊界 disabled）、可重試的錯誤區塊；篩選只作用在該頁，待確認 band 與計數換頁不變。捲動位置以頁為單位記憶（每個 unit 最多 50 頁），目前在第幾頁切 tab 回來還在。沒有該 capability 時維持舊的「載入更早」。第一次讀就 503 時，卡片改為顯示錯誤而不是空白（#3185）。
+- **移除過渡用的 `pinned[]` 與 pin 路由**：daemon 不再送 `pinned[]`，entry 不再帶 `pinned`，`PUT /api/journal/pin` 不再註冊（由 410 `pin_removed` 改為 404）；舊檔 meta 裡的 `"pinned"` 仍可解析，欄位被忽略（#3394）。SPA 同步不再讀 `pinned[]`，待確認 band 只看 `confirms[]`，沒有該欄位的回應就沒有待確認項目；`confirmSupport` 只管核取方塊（#3397）。
+
+### Added：無人值守
+
+- **共用讀取器（JV-5b 1/3）**：新增 `lib/team/unattended-reader.ts`，作為讀取主機無人值守第一頁的唯一入口，無人值守面板與團隊設定共用。同一台主機同時只發一個請求（single-flight，後來者加入）、10 秒逾時；單一呼叫者中止只放掉自己，全部等待者都放掉才中止請求，且不算主機讀取失敗。額度的讀取結果存進 `relay-quota.ts` 的 `reads`，面板的額度列改從 store 畫；數字仍只來自 `confirmed`／`writes`（#3186）。
+- **讀取失敗的主機在額度區保留位置**：主機的無人值守頁讀取逾時時，額度區不再靜默漏掉該主機，改顯示它自己最後一次的讀取，沒有的話顯示「讀不到額度」（#3395）。
+
+### Added：訊息階段 MS2（daemon 與 Mac Deck）
+
+- **daemon 的階段帳本**：新增記憶體內的 `client_msg_id` 階段帳本（`received` < `filled` < `entered` < `queued` < `read`；終態 `read`／`failed`／`recalled`；`unknown` 仍可被比對推進），含比對規則與記憶體上限（每則文字 16 KiB、全部 2 MiB）。這張只有帳本與單元測試，不改行為（#3409）。
+- **typed 路由寫入階段**：`POST /api/sessions/{code}/submit` 依序寫入 `received`、`filled`，並依回應寫 `entered`／`failed`／`unknown`（keys 模式的 `text_left_in_terminal` 記為 `unknown`）；成功的 `recall` 把該 session 所有 `queued` 的 id 記為 `recalled`。重送的 id 不寫階段。這張仍沒有任何東西送到 client（#3420）。
+- **`conversation.stages` 與能力宣告**：WS 新增 `conversation.stages` frame，階段變動即使 transcript 沒變也會推送；`conversation.snapshot`（WS 與 HTTP）多一個 `stages`，重連後看得到訊息停在哪；宣告 `conversations.stages.v1`。不認得該 frame 的 client 會忽略，舊 daemon 不送（#3421）。
+- **send-now 路由**：新增 `POST /api/sessions/{code}/send-now`（手機可用），送出 Claude Code 自己的 Ctrl+X Ctrl+S；輸入框有草稿、有對話框等待、佇列為空、沒有 mod owner 等情況各有拒絕碼。宣告 conversation 的 `send_now: "keys"` 與主機的 `sessions.send_now.v1`。send-now 不新增階段，已排隊的訊息仍靠一般比對到 `read`。已知限制：mod 讀輸入框與送出按鍵之間的毫秒內，若有人在終端機打字，仍可能被一併送出（#3427）。
+- **Mac Deck 待送訊息的階段標記**：在宣告 `conversations.stages.v1` 的主機上，待送訊息以單一氣泡顯示階段（在本機、已到主機、在佇列、送不出：原因、不確定有沒有送到），確認只靠自己的 id 或 `read` 階段、不再靠文字比對；daemon 重啟後帳本遺失的訊息顯示「不確定有沒有送到」。沒有該 capability 時行為不變（#3410）。
+- **Mac Deck 的立刻送出按鍵**：Ctrl+Enter 或 1.5 秒內 Ctrl+X 接 Ctrl+S 呼叫 send-now，並顯示提示「已立刻送出佇列裡的訊息；如果 Claude 正在寫回應，這一輪會被中斷。」；各拒絕原因有各自文字，桌機輸入框有未送出的文字時不送出。Up 鍵在第一行（不只是空輸入框）時把佇列取回。需要 `send_now: "keys"` 才啟用，否則 Ctrl+Enter 仍是 Enter（#3415）。
+- **關閉階段模式時放掉階段**：主機重連到較舊或降版的 daemon 而關閉階段模式時，送出佇列的 entry 會清掉階段、已認領的列與讀取計時器，不再殘留階段標記（#3422）。
+
+### Added：角色 personas（姓名池 v2）
+
+- **hostconfig 的 personas（NP-1a）**：新增 `personas` 設定鍵與 `GET／PUT /api/hostconfig/personas`（以 revision 做 CAS，過期回 409 附現值，欄位不合回 400 並指出 index 與 field）；驗證代號、顯示名、文字長度、最多 64 個、recipe 2 KB、頭像 32 KB 且 128x128 以內等限制。`personas.v1` 能力在 NP-1b 才宣告（#3417）。
+- **姓名池與日誌跟隨 personas（NP-1b）**：名字池改為可替換的登錄表，「可挑選」只含啟用中的角色（沒有任何角色時退回內建 30 個名字），「可辨識」則包含已退休的角色，使用中的對話保留原名；日誌的 `DisplayName` 改顯示角色的顯示名。宣告 `personas.v1`（#3423）。
+- **App 端資料層（NA-1a）**：新增角色 store、`seatOf`／`useSeat`／`addressName` 與 `<Avatar>`（16／18／24／44，無圖時畫名字首字母加主機色）；只在 daemon 宣告 `personas.v1` 時才讀取，舊 daemon 不變。這張沒有新畫面（#3407）。
+- **角色限制、匯入與存檔邏輯（NA-1b-1）**：新增限制檢查、`personas.json` 匯入（乾跑摘要為新增／變更／未變／略過並附原因）、頭像 128 px 點陣化（WebP，不支援時 PNG，超過 32 KB 降畫質）與存回目前集合所在主機（409 時重讀後再丟出）。僅邏輯，頁面是下一張（#3411）。
+- **頭像繪製管線與 DiceBear 依賴（NA-1b-2a）**：新增 `@dicebear/core`、`@dicebear/styles`（精確版本）與六套款式，各自動態載入、不進主 chunk；照片網址只收 https 的 `picsum.photos`、`placecats.com`、`placedog.net`（後兩者需 NA-1c 的 `electronAPI.fetchAvatar`，沒有時請改用上傳）；頁尾授權資料標示 Micah 為 CC BY 4.0。頁面 UI 尚未接上（#3424）。
+
+### Fixed：介面
+
+- **拖放／貼上檔案的佔位符落在游標處**：拖入、貼上或用附件按鈕選取檔案後，`[Image #N]`（非圖片則為路徑行）會放在當下游標位置，並隨上傳期間的編輯移動，不再接在草稿結尾。同一次的多個檔案依檔案順序、以空白隔開。限制：拖放無法取得指標下的字元位置，改用輸入框的游標；位置靠比對編輯前後草稿推得，在邊緣遇到與鄰字相同的字元時可能偏一個字（#3400）。
+
+### Docs
+
+- wwd：WWD-5b～5d 的拆張與 10-19 裁定寫入 plan 與 spec，只有文件（#3389）。
+- wwd：WWD-8 的 spec §13（Advisor）與 plan 一節換成 lead 的設計原文，並保留三處待使用者確認（#3405）。
+- 訊息階段：step 2 的 plan（階段契約、send-now、Mac 按鍵、iOS 手勢），經 codex 審查後為 rev 2（#3396）。
+- 訊息階段：plan 的 L7 補上「有 stages 時只以 id 或主機的讀取確認」，避免沒有 id 的 transcript 項目以文字誤確認舊的未送出訊息（#3408）。
+- 姓名池 v2：團隊介面 v2 的 spec 與 plan，使用者決定為 U1～U19，codex 的 11 項發現已併入 rev 2（#3402）。
+- 姓名池 v2：plan 記錄 NP-0 的量測結果，保留以 op 的 tmux session 名找到預約的做法（#3403）。
+- 姓名池 v2：plan 加入 NA-0 的 App 端設計規則（#3406）。
+- 姓名池 v2：spec 改為匯入 personas 時逐欄位合併，不刪除、不退休，recipe 變更的頭像重畫（#3414）。
+- 姓名池 v2：spec 補上同步時保留僅存在於本機的代號，並以新的本機 stamp 重新發布合併結果（#3429）。
+
 ## [1.0.0-alpha.753] - 2026-10-19
 
 > daemon、`pdx` CLI、`wwd` 與 **mod**（`cmd/pdx/plugin/` 的 `gate.js`）有改，**兩台都要重跑 `pdx setup`**（`pdx.json` 的 `entry` 開關保留，預設關）。SPA 與 Electron 與 752 相同。Purdex 的 `jobnotify.db` 多一張表（`cursor_epoch`，`CREATE IF NOT EXISTS`，舊版可以忽略它），退回 752 不需要還原。**`wwd.db` 再往前遷移**（佇列 schema 4 → 6：變更游標的 epoch、手動插隊欄位；主機 store schema 3 → 4：工作用量表），752 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前會在每台留一份 `~/.local/share/wwd/wwd.db.pre-753`。wwd 與 Purdex 的 client 必須同版（回應多了必有的欄位，嚴格解碼的舊 client 會失敗）。
