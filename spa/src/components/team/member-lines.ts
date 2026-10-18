@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { taskKeyOfTask } from '../../lib/journal/tasks'
 import type { JournalMember } from '../../lib/journal/types'
 import { membersKey, staleKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
+import { selectUnit } from '../../stores/useJournalStore'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -33,6 +34,17 @@ export function useMemberFeed(leadHostId: string, leadSessionId: string, rosterK
     return () => clearTimeout(timer)
   }, [supported, leadHostId, leadSessionId, rosterKey, staleToken])
   return useMemo(() => (supported ? new Map((list ?? []).map((m) => [m.sessionId, m])) : null), [supported, list])
+}
+
+/**
+ * The lead's own last journal line (line 2 of the lead's row, NA-0 design): the first line of the newest entry of the team unit the journal holds for the
+ * lead's session; '' when none is held (the journal was not read for this team, or has no entry yet). Selectors answer a string, so a row re-renders only when the text moves.
+ */
+export function leadLastLine(state: Parameters<typeof selectUnit>[0], hostId: string, sessionId: string): string {
+  const entries = selectUnit(state, hostId, sessionId)?.entries
+  if (!entries || entries.length === 0) return ''
+  const newest = entries[entries.length - 1] // the store keeps the unit's entries sorted by (at, id)
+  return newest.text.split('\n')[0].trim()
 }
 
 /** How long ago, as the row says it: 剛剛 / N 分前 / N 小時前 / N 天前. A time in the future (clock skew) reads as 剛剛. */

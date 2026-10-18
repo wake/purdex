@@ -21,6 +21,8 @@ interface IconProps {
   size?: number
   /** Draw the seat's subagent dots to the icon's left (the panel's full rows, the sidebar beads and ghost lead row, like the sidebar's tab rows); the collapsed strip leaves them off. */
   subagents?: boolean
+  /** False: the icon alone, muted, with no light (the panel's rows draw the light on the avatar's corner: TeamSeatLight). Default true. */
+  light?: boolean
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -28,17 +30,17 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false }: IconProps) {
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, light = true }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
   return (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}
-      agentStatus={agentStatus}
+      agentStatus={light ? agentStatus : undefined}
       tabIndicatorStyle={tabIndicatorStyle}
       isActive={isActive}
       iconSize={size}
-      subagentRefs={subagents ? subagentRefs : []}
-      isUnread={isUnread}
+      subagentRefs={subagents && light ? subagentRefs : []}
+      isUnread={isUnread && light}
     />
   )
 }
