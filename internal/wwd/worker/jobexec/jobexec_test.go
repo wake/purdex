@@ -22,6 +22,13 @@ run     = "echo hello-from-the-job"
 args    = "none"
 summary = "plain"
 
+[tasks.envs]
+run     = "env"
+args    = "none"
+summary = "plain"
+env     = ["FOO=fixed-by-the-task"]
+timeout = "3m"
+
 [tasks.sub]
 run     = "pwd"
 cwd     = "sub"
@@ -241,5 +248,54 @@ func TestADeadlineEndsTheCommand(t *testing.T) {
 	res := e.Run(ctx, job("hello"), ws, plan)
 	if res.Outcome != run.Cancelled || time.Since(start) > 15*time.Second {
 		t.Fatalf("outcome %s after %v", res.Outcome, time.Since(start))
+	}
+}
+
+func TestTheCommandSeesTheTasksEnvAndAHomeInsideTheJobDirectory(t *testing.T) {
+	r, commit := repo(t)
+	e := newExec(t, &localFetcher{repo: r, commit: commit})
+	ctx := context.Background()
+	j := job("envs")
+	j.TimeoutS = 0
+	ws, err := e.Materialize(ctx, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	plan, err := e.Prepare(ctx, j, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Timeout != 3*time.Minute {
+		t.Fatalf("timeout %v: the snapshot task's own timeout rules when the job sets none", plan.Timeout)
+	}
+	res := e.Run(ctx, j, ws, plan)
+	log, _ := os.ReadFile(res.LogPath)
+	base := e.JobDir(j, claimID)
+	if !strings.Contains(string(log), "fixed-by-the-task") || !strings.Contains(string(log), filepath.Join(base, ".home")) {
+		t.Fatalf("log %q: want the task's env value and HOME under %s", log, base)
+	}
+}
+
+func TestTheJobsTimeoutCanOnlyShortenTheTasks(t *testing.T) {
+	r, commit := repo(t)
+	e := newExec(t, &localFetcher{repo: r, commit: commit})
+	ctx := context.Background()
+	j := job("envs")
+	j.TimeoutS = 5
+	ws, err := e.Materialize(ctx, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	plan, err := e.Prepare(ctx, j, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Argv = []string{"sleep", "30"}
+	start := time.Now()
+	res := e.Run(ctx, j, ws, plan)
+	if res.Outcome != run.TimedOut || time.Since(start) > 25*time.Second {
+		t.Fatalf("outcome %s after %v: the plan's timeout is the command's deadline", res.Outcome, time.Since(start))
 	}
 }
