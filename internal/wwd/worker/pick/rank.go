@@ -32,6 +32,9 @@ type Env struct {
 	// Suspended: this host could not run a job of this repo from this origin a moment ago (an infrastructure failure), so its jobs are
 	// skipped for a while. The origin is part of the key: one origin cannot make the host skip another origin's repo of the same name.
 	Suspended func(source, repo string) bool
+	// HeldOff: the origin of this job answered the request for its snapshot wrongly a moment ago (#3379), so this one job is skipped for a
+	// while, not the repo: the failure is the origin's and often one job's.
+	HeldOff func(source, id string) bool
 }
 
 // Scored is a claimable job with its score.
@@ -116,6 +119,9 @@ func Rank(cands []Candidate, env Env) []Scored {
 			continue
 		}
 		if env.Suspended != nil && env.Suspended(c.Source, j.Repo.Name) {
+			continue
+		}
+		if env.HeldOff != nil && env.HeldOff(c.Source, j.ID) {
 			continue
 		}
 		if j.Manual == wire.PositionHold {

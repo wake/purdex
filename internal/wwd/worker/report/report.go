@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/summary"
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
@@ -50,6 +51,11 @@ type Config struct {
 	// SuspendFor is how long a repo is held off after a job of it could not be run here (an infra release): the worker does not pick
 	// its jobs for that long (default 5 minutes), so a host that cannot run a repo does not claim and release it in a loop.
 	SuspendFor time.Duration
+	// OriginBackoff is how long a job is not picked again after its origin answered the snapshot request with an error that is the
+	// origin's (default 15 seconds); every failure of the same job in a row doubles it, up to OriginBackoffMax (default 5 minutes). The
+	// repo is not suspended for it: the failure is often one job's (a commit that is not pinned) and the host is fine. Without the pause
+	// the same job would be claimed and given back at the poll rate for as long as the origin stays wrong.
+	OriginBackoff, OriginBackoffMax time.Duration
 	// Summary builds the summary of a run that ended. Nil: built from the files the run left (see parse).
 	Summary func(runner.Ended) wire.Summary
 	Logf    func(format string, args ...any)
@@ -58,12 +64,22 @@ type Config struct {
 // repoKey is a repo of an origin: the repo name is the same across hosts, so it alone would let one origin hold off another's.
 type repoKey struct{ source, repo string }
 
+// jobKey is a job of an origin: job ids are made by each origin, so the origin is part of the key.
+type jobKey struct{ source, job string }
+
+// originHold is how long a job is held off and how many origin failures in a row led to it.
+type originHold struct {
+	until time.Time
+	wait  time.Duration // the wait this failure set
+}
+
 // Reporter delivers the outcome of jobs.
 type Reporter struct {
 	cfg Config
 
-	mu        sync.Mutex
-	suspended map[repoKey]time.Time // an origin's repo -> when the hold ends
+	mu         sync.Mutex
+	suspended  map[repoKey]time.Time // an origin's repo -> when the hold ends
+	originHeld map[jobKey]originHold // a job whose origin answered wrongly -> the hold (in memory: a restart starts again at the first wait)
 }
 
 // New returns a Reporter.
@@ -86,13 +102,22 @@ func New(cfg Config) *Reporter {
 	if cfg.SuspendFor <= 0 {
 		cfg.SuspendFor = 5 * time.Minute
 	}
+	if cfg.OriginBackoff <= 0 {
+		cfg.OriginBackoff = 15 * time.Second
+	}
+	if cfg.OriginBackoffMax < cfg.OriginBackoff {
+		cfg.OriginBackoffMax = 5 * time.Minute
+		if cfg.OriginBackoffMax < cfg.OriginBackoff {
+			cfg.OriginBackoffMax = cfg.OriginBackoff
+		}
+	}
 	if cfg.LogRetryFor <= 0 {
 		cfg.LogRetryFor = 2 * time.Minute
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Reporter{cfg: cfg, suspended: map[repoKey]time.Time{}}
+	return &Reporter{cfg: cfg, suspended: map[repoKey]time.Time{}, originHeld: map[jobKey]originHold{}}
 }
 
 func wait(ctx context.Context, d time.Duration) error {
@@ -130,6 +155,9 @@ func (r *Reporter) Delivery(sinks func(source string) Sink) func(ctx context.Con
 
 // deliver does what the kind of ending calls for, and says whether the origin took a result.
 func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool {
+	if e.Kind != runner.KindOrigin {
+		r.forgetHold(e.Source, e.Job.ID) // "in a row" ends: this job got its snapshot, whatever came of it
+	}
 	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
 	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
 	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
@@ -148,6 +176,8 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool 
 		return r.ran(ctx, sink, e)
 	case runner.KindInfra:
 		r.release(ctx, sink, e, wire.ReleaseInfra, e.Err)
+	case runner.KindOrigin:
+		r.originFailed(ctx, sink, e)
 	case runner.KindReclaimed, runner.KindShutdown:
 		// the owner took the machine (Running.Stop), or the worker is stopping: the claim goes back while the lease is still alive, so
 		// that a lease that lapses between the stop and the release cannot count an attempt
@@ -322,6 +352,83 @@ func (r *Reporter) release(ctx context.Context, sink Sink, e runner.Ended, reaso
 		req.Detail = clip(why.Error(), maxDetail)
 	}
 	r.retry(ctx, e, "release", func(ctx context.Context) error { return sink.Release(ctx, e.Job.ID, req) })
+}
+
+// originFailed gives back a job whose origin answered the snapshot request with an error of its own (#3379). It is not this host's
+// failure: the claim goes back with reason reclaim (no attempt counted, no hold-off of the repo) and the detail says it was the
+// origin's, with its status and the start of its words; the log says the same, because the origin does not keep the detail. The job,
+// not the repo, is then held off for a while.
+func (r *Reporter) originFailed(ctx context.Context, sink Sink, e runner.Ended) {
+	detail := originDetail(e.Err)
+	r.cfg.Logf("report: %s: %s for %s (%s)", e.Source, detail, e.Job.ID, e.Job.Repo.Name)
+	r.holdOff(e.Source, e.Job.ID)
+	req := wire.ReleaseRequest{ClaimID: e.ClaimID, Reason: wire.ReleaseReclaim, Detail: detail}
+	r.retry(ctx, e, "release", func(ctx context.Context) error { return sink.Release(ctx, e.Job.ID, req) })
+}
+
+// originDetail is what the origin said, for the release's detail and the log.
+func originDetail(err error) string {
+	var oe *snapshot.OriginError
+	switch {
+	case errors.As(err, &oe):
+		return fmt.Sprintf("origin snapshot %d: %s", oe.Status, clip(oe.Body, maxDetail))
+	case errors.Is(err, snapshot.ErrBusy):
+		return "origin snapshot busy"
+	case err != nil:
+		return "origin snapshot: " + clip(err.Error(), maxDetail)
+	}
+	return "origin snapshot: failed"
+}
+
+// holdOff holds a job of an origin off for the first wait, or twice the last one when it failed again before that was long over,
+// up to the longest. A hold that ended long ago starts again at the first wait. An origin failure is rare, so this is where the table
+// is swept of the holds that are long over.
+func (r *Reporter) holdOff(source, job string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.cfg.Now()
+	for k, h := range r.originHeld {
+		if r.longOver(now, h) {
+			delete(r.originHeld, k)
+		}
+	}
+	k := jobKey{source, job}
+	wait := r.cfg.OriginBackoff
+	if old, ok := r.originHeld[k]; ok && !r.longOver(now, old) {
+		wait = min(old.wait*2, r.cfg.OriginBackoffMax)
+	}
+	r.originHeld[k] = originHold{until: now.Add(wait), wait: wait}
+}
+
+// longOver says a hold ended more than the longest wait ago: its run of failures is over.
+func (r *Reporter) longOver(now time.Time, h originHold) bool {
+	return !now.Before(h.until.Add(r.cfg.OriginBackoffMax))
+}
+
+// forgetHold ends a job's run of origin failures.
+func (r *Reporter) forgetHold(source, job string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.originHeld, jobKey{source, job})
+}
+
+// HeldOff says whether the worker must not pick this job of source now: its origin answered the snapshot request wrongly less than the
+// wait ago. It is pick.Env.HeldOff, asked for every candidate of every round, so it looks at one entry (and forgets it when its hold is
+// long over); the sweep of the others is holdOff's.
+func (r *Reporter) HeldOff(source, job string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.cfg.Now()
+	k := jobKey{source, job}
+	h, ok := r.originHeld[k]
+	if !ok {
+		return false
+	}
+	if r.longOver(now, h) {
+		delete(r.originHeld, k)
+		return false
+	}
+	return now.Before(h.until)
 }
 
 // outcome is how a delivery ended.
