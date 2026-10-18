@@ -38,7 +38,8 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	if err == nil && activeState(before["ActiveState"]) {
 		err = fmt.Errorf("run: unit %s is already %s", unit, before["ActiveState"])
 	}
-	if err == nil {
+	if err == nil && before["LoadState"] != "not-found" {
+		// systemctl refuses reset-failed for a unit that is not loaded (exit 1): there is nothing to clear then
 		err = sb.control(unit, "reset-failed")
 	}
 	if err != nil {
@@ -98,9 +99,22 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 			runErr = fmt.Errorf("run: systemd-run ended but unit %s was still %s", unit, st)
 		}
 	}
-	// The Result must belong to the invocation this run started: the unit has an invocation id that is not the one it had before.
-	if stop == stopNone && (show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]) {
-		show = map[string]string{} // classify reads this as "no unit"
+	if stop == stopNone {
+		switch {
+		case show["LoadState"] == "not-found":
+			// A unit that ended well is unloaded by systemd as soon as it is inactive (only a failed one stays to be read; measured
+			// on mserv). systemd-run --wait ended with exit 0 then: that is the command's success. With any other exit, nothing
+			// was started.
+			if waitErr == nil {
+				show = map[string]string{"Result": "success", "ExecMainStatus": "0"}
+			} else {
+				show = map[string]string{} // classify reads this as "no unit"
+			}
+		case show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]:
+			// The Result must belong to the invocation this run started: a unit that is still there with the invocation it had
+			// before is an old one.
+			show = map[string]string{}
+		}
 	}
 	_ = sb.control(unit, "reset-failed") // after reading Result; harmless when the unit is already gone
 	res.FinishedAt = time.Now()

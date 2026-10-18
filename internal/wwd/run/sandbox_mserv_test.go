@@ -143,7 +143,8 @@ func TestMServ(t *testing.T) {
 		probe := "test -S /run/docker.sock && echo SOCKET_VISIBLE; docker ps >/dev/null 2>&1 && echo DOCKER_WORKS; " +
 			"curl -sS --max-time 3 --unix-socket /run/docker.sock http://localhost/version >/dev/null 2>&1 && echo CURL_WORKS; echo done"
 		r := runSB(t, "E", Sandbox{}, 60*time.Second, bg, "sh", "-c", probe)
-		for _, bad := range []string{"SOCKET_VISIBLE", "DOCKER_WORKS", "CURL_WORKS"} {
+		// InaccessiblePaths puts an inaccessible socket node over the path: test -S still says yes (measured), but nothing can connect
+		for _, bad := range []string{"DOCKER_WORKS", "CURL_WORKS"} {
 			if strings.Contains(r.out, bad) {
 				t.Errorf("sandbox: %s", bad)
 			}
@@ -187,9 +188,9 @@ mkdir -p p/tests && cd p &&
 cat > composer.json <<'EOF'
 {"require-dev":{"phpunit/phpunit":"^11"}}
 EOF
-cat > tests/T.php <<'EOF'
+cat > tests/ATest.php <<'EOF'
 <?php
-class T extends PHPUnit\Framework\TestCase { public function testA(): void { $this->assertTrue(true); } }
+class ATest extends PHPUnit\Framework\TestCase { public function testA(): void { $this->assertTrue(true); } }
 EOF
 php ../composer.phar install --no-interaction --no-progress 2>&1 | tail -2
 echo INSTALL_SECONDS=$(( $(date +%s) - s ))

@@ -28,7 +28,10 @@ case "$1" in
     exit "$(cat "$FAKE/exit" 2>/dev/null || echo 0)" ;;
   systemctl)
     echo "systemctl $*" >> "$FAKE/calls"
-    [ ! -e "$FAKE/reset-fails" ] || { [ "$2" != reset-failed ] || exit 1; }
+    if [ "$2" = reset-failed ]; then
+      [ ! -e "$FAKE/reset-fails" ] || exit 1
+      [ -e "$FAKE/loaded" ] || [ -e "$FAKE/created" ] || exit 1 # as systemctl does for a unit that is not loaded
+    fi
     if [ "$2" = stop ]; then
       [ -e "$FAKE/created" ] || exit 5   # no such unit yet
       [ -e "$FAKE/nostop" ] || : > "$FAKE/stopped"
@@ -43,8 +46,10 @@ echo "systemctl $*" >> "$FAKE/calls"
 n=$(cat "$FAKE/show-count" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$FAKE/show-count"
 if [ -e "$FAKE/show-fails" ]; then exit 1; fi
 [ "$(cat "$FAKE/show-fails-at" 2>/dev/null)" != "$n" ] || exit 1
+[ -e "$FAKE/gone" ] && { printf 'ActiveState=inactive\nLoadState=not-found\n'; exit 0; }
 [ -e "$FAKE/no-unit" ] && { printf 'ActiveState=inactive\nLoadState=not-found\nResult=\n'; exit 0; }
 cat "$FAKE/show"
+if [ -e "$FAKE/loaded" ] || [ -e "$FAKE/created" ]; then echo "LoadState=loaded"; else echo "LoadState=not-found"; fi
 if [ -e "$FAKE/stale" ]; then echo "InvocationID=old"; elif [ -e "$FAKE/created" ]; then echo "InvocationID=run2"; else echo "InvocationID=run1"; fi
 `
 
@@ -335,6 +340,8 @@ func TestSandboxRefusesToStartNextToARunningUnit(t *testing.T) {
 
 func TestSandboxClearsAnOldFailedUnitBeforeStarting(t *testing.T) {
 	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=1\n")
 	Run(context.Background(), sandboxSpec(t, w, "true"))
 	calls := w.calls(t)
 	first, run := -1, -1
@@ -371,6 +378,7 @@ func TestTaskEnvNameCannotBeAnOption(t *testing.T) {
 
 func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
 	w := newWorld(t)
+	w.set("loaded", "")
 	w.set("stale", "") // the unit keeps its old invocation id: systemd-run never made a new one
 	w.set("exit", "1")
 	w.set("show", "ActiveState=failed\nResult=oom-kill\nExecMainStatus=9\n")
@@ -383,6 +391,7 @@ func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
 func TestSandboxCannotAskOrCannotClearIsStartFailed(t *testing.T) {
 	for _, mode := range []string{"show-fails", "reset-fails", "show-fails-at"} {
 		w := newWorld(t)
+		w.set("loaded", "")
 		w.set(mode, "2") // show-fails-at: the second query, after the clearing, is the one that fails
 		if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
 			t.Errorf("%s: result = %+v", mode, r)
@@ -410,6 +419,42 @@ func TestSandboxAFailedQueryDoesNotProveTheUnitStopped(t *testing.T) {
 	}()
 	r := Run(context.Background(), s)
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "not proven stopped") {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxDoesNotClearAUnitThatIsNotLoaded(t *testing.T) {
+	// systemctl exits 1 for reset-failed on a unit that was never there: that must not stop a first run (found on mserv)
+	w := newWorld(t)
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 {
+		t.Fatalf("result = %+v", r)
+	}
+	first := w.calls(t)
+	for i, c := range first {
+		if strings.HasPrefix(c, "sudo systemd-run") {
+			for _, before := range first[:i] {
+				if strings.Contains(before, "reset-failed") {
+					t.Fatalf("reset-failed before the start for a unit that is not loaded: %q", first)
+				}
+			}
+		}
+	}
+}
+
+func TestSandboxASuccessfulUnitIsGoneAndExitZeroIsTheSuccess(t *testing.T) {
+	// measured on mserv: systemd unloads a unit that ended well at once, so there is no Result left to read
+	w := newWorld(t)
+	w.set("gone", "")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+		t.Fatalf("result = %+v", r)
+	}
+	// but if systemd-run itself failed, nothing was started: no unit and a non-zero exit is not a success
+	w2 := newWorld(t)
+	w2.set("gone", "")
+	w2.set("exit", "1")
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != StartFailed {
 		t.Fatalf("result = %+v", r)
 	}
 }
