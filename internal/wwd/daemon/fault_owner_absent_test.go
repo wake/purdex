@@ -68,6 +68,35 @@ func TestFaultOwnerFileAbsentDoesNotAnswerForAFailedReading(t *testing.T) {
 	}
 }
 
+// "No owner rule" is the rule in force (f.Worker.OwnerRule, which a PUT /v1/worker changes), not the one the daemon started with: the
+// matrix PUTs owner_rule "" and then the absent-file block must come, whatever the config said (#3449).
+func TestFaultOwnerFileAbsentFollowsTheRuleInForce(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "owner-active")
+	sampler := func(configRule, ruleInForce string) *Sampler {
+		st, err := NewHostState(HostStateOptions{Host: "h", OwnerRuleSupported: true, Initial: wire.WorkerSettings{Enabled: true, OwnerRule: ruleInForce}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		level := 1
+		return NewSampler(SamplerOptions{
+			HostID: "h1", Alias: "air26", OSVersion: "26.6.2", Fault: fault.New(fault.Config{Enabled: true, OwnerActiveFile: file}, nil),
+			Sources: fakeSources(&level, nil), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true, OwnerRule: configRule, State: st,
+		})
+	}
+	// started with a rule, the rule in force is "" (a PUT): no owner rule now, the file is absent -> away
+	s := sampler("hid<5m", "")
+	s.Tick(s0)
+	if f, _ := s.Latest(); f.Owner == nil || f.Owner.Active || !strings.HasPrefix(f.Owner.Reason, "fault:") {
+		t.Fatalf("rule in force empty, config has one: owner %+v", f.Owner)
+	}
+	// started without a rule, a rule in force (hid<5m): a null block is a failed reading, the yield stays
+	s = sampler("", "hid<5m")
+	s.Tick(s0)
+	if f, _ := s.Latest(); f.Owner != nil {
+		t.Fatalf("rule in force, config has none: owner %+v", f.Owner)
+	}
+}
+
 // A file that cannot be told about (here: its parent is a file, ENOTDIR) is not "absent": nothing is made up, so a yield stays.
 func TestFaultOwnerFileUnknownIsNotAway(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "a-file")
