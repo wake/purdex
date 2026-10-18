@@ -1,0 +1,78 @@
+#!/bin/sh
+# Test for scripts/wwd-c2-matrix.sh: the list, the arguments, and what a dry run prints for each case. A dry run runs nothing.
+set -eu
+
+script_dir=$(cd "$(dirname "$0")" && pwd)
+matrix="$script_dir/wwd-c2-matrix.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() { echo "FAIL: $1" >&2; exit 1; }
+has() { echo "$1" | grep -q -- "$2" || fail "$3: missing '$2'"; }
+hasnt() { echo "$1" | grep -q -- "$2" && fail "$3: must not contain '$2'"; return 0; }
+
+[ -f "$matrix" ] || fail "$matrix does not exist"
+sh -n "$matrix" || fail "sh -n"
+if command -v dash >/dev/null 2>&1; then dash -n "$matrix" || fail "dash -n"; fi
+
+dry() { TMPDIR="$tmp" sh "$matrix" --dry-run "$@" 2>&1; }
+
+# the list: fourteen cases, the four that need a hook say which
+out=$(sh "$matrix" --list)
+[ "$(echo "$out" | grep -c .)" -eq 14 ] || fail "--list must show 14 cases: $out"
+for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do echo "$out" | grep -q "^ *$n  " || fail "--list has no case $n"; done
+has "$out" "needs fault.log_upload_fail" "list"
+has "$out" "needs fault.zone" "list"
+has "$out" "needs fault.owner_active_file" "list"
+has "$out" "needs fault.snapshot_delay_s" "list"
+
+# arguments
+if sh "$matrix" >/dev/null 2>&1; then fail "no arguments must be refused"; fi
+if sh "$matrix" --dry-run --case 99 >/dev/null 2>&1; then fail "an unknown case must be refused"; fi
+if sh "$matrix" --nonsense >/dev/null 2>&1; then fail "an unknown flag must be refused"; fi
+
+# the whole matrix in a dry run: every case passes, nothing is made on this machine
+out=$(dry --all)
+has "$out" "passed: 1 2 3 4 5 6 7 8 9 10 11 12 13 14" "all cases"
+hasnt "$out" "FAIL" "all cases"
+[ -z "$(ls -A "$tmp")" ] || fail "a dry run made files in TMPDIR: $(ls -A "$tmp")"
+
+# nothing the brief forbids, in the script or in what it prints
+for bad in pkill killall pfctl iptables "kill -9" "kill -KILL" "chmod -R" "rm -rf /"; do
+  if grep -v '^#' "$matrix" | grep -q -- "$bad"; then fail "the script uses '$bad'"; fi
+done
+hasnt "$out" "sudoers" "all cases"
+# a signal goes to an exact pid that the service manager reported, never to a pattern
+echo "$out" | grep -E "kill -(STOP|CONT)" | grep -vq "kill -\(STOP\|CONT\) {}" && fail "a kill -STOP/-CONT must name the pid it got from the service manager"
+# the pool token is read on the host, never printed
+hasnt "$out" "Bearer [0-9a-f]\{16\}" "all cases"
+
+# case by case: the fault each one makes, and what it expects at the end
+out=$(dry --case 1);  has "$out" "fakeA" "case 1"; has "$out" "fakeB" "case 1"; has "$out" "expect: 200 409" "case 1"
+out=$(dry --case 2);  has "$out" "launchctl bootout" "case 2"; has "$out" "launchctl bootstrap" "case 2"; has "$out" "expect: lost" "case 2"; has "$out" "expect: failed" "case 2"
+out=$(dry --case 3);  has "$out" "kill -STOP" "case 3"; has "$out" "kill -CONT" "case 3"; has "$out" "heartbeat of the old claim (expect: 409)" "case 3"; has "$out" "result of the old claim (expect: 409)" "case 3"
+out=$(dry --case 4);  has "$out" "launchctl kickstart -k" "case 4"; has "$out" "expect: air26" "case 4"
+out=$(dry --case 5);  has "$out" "5b long" "case 5"; has "$out" "5c" "case 5"; has "$out" "needs hook fault.snapshot_delay_s" "case 5"
+out=$(dry --case 6);  has "$out" "needs hook fault.log_upload_fail" "case 6"
+out=$(dry --case 7);  has "$out" "fault/owner-active" "case 7"; hasnt "$out" ">> move the mouse" "case 7"
+out=$(dry --manual --case 7); has "$out" ">> move the mouse on air26" "case 7 --manual"
+out=$(dry --case 8);  has "$out" "needs hook fault.zone" "case 8"; has "$out" "air26" "case 8"
+out=$(dry --case 9);  has "$out" "superseded_by:" "case 9"; has "$out" "c2-sleep-noint" "case 9"
+out=$(dry --case 10); has "$out" "pdx test c2-expire" "case 10"; has "$out" "pdx test exit code (expect: 6)" "case 10"
+out=$(dry --case 11)
+for ip in 100.64.0.2 100.64.0.4 100.64.0.6 100.64.0.1; do has "$out" "$ip:7871/v1/info" "case 11 $ip"; done
+has "$out" "Bearer c2-wrong-token" "case 11"; has "$out" "(expect: 401)" "case 11"
+out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-option" "case 12"; has "$out" "../../etc/hosts" "case 12"; has "$out" "a;touch /tmp/wwd-c2-pwned" "case 12"
+out=$(dry --case 13); has "$out" "show databases" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
+out=$(dry --case 14); has "$out" "air19 claimed nothing (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
+
+# every case other than 14 also checks air19, and ends by putting back what it changed
+out=$(dry --case 4)
+has "$out" "air19 claimed nothing during case 4" "air19 rule"
+has "$out" "-- cleaning up" "cleanup"; has "$out" "rm -rf" "cleanup"; has "$out" "PUT" "cleanup (worker settings)"
+
+# only the cases asked for run
+out=$(dry --case 2,4)
+has "$out" "== case 2:" "selection"; has "$out" "== case 4:" "selection"; hasnt "$out" "== case 3:" "selection"
+
+echo "ok"
