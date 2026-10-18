@@ -139,3 +139,26 @@ func TestAlertHintIsNotReplayedAndReachesPeers(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 }
+
+// A change made while the gate was shut is never announced; once the gate opens, the next call (even an unchanged refresh) sends the
+// hint once, so a reader that stayed connected re-reads the list.
+func TestAlertBookHintsOnceAfterTheGateOpensForAMissedChange(t *testing.T) {
+	b := NewBroker()
+	ch, cancel := b.Subscribe(false)
+	defer cancel()
+	w := &fakeWriter{changed: true}
+	var open atomic.Bool
+	book := NewAlertBook(w, "mlab", b, open.Load, nil)
+	a := wire.Alert{Key: "disk_low:/", Kind: wire.AlertDiskLow, Level: wire.AlertPush}
+	book.Raise(a) // gate shut: missed
+	open.Store(true)
+	w.changed = false // the same alert again: nothing new in the table
+	book.Raise(a)
+	if _, got := alertHint(t, ch); !got {
+		t.Fatal("the missed change is announced once the gate is open")
+	}
+	book.Raise(a)
+	if _, got := alertHint(t, ch); got {
+		t.Fatal("announced only once")
+	}
+}

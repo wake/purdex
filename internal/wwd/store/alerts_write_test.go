@@ -3,6 +3,8 @@ package store
 import (
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,5 +133,37 @@ func TestClearedAlertsArePrunedAfterAWeek(t *testing.T) {
 	var n int
 	if err := s.DB().QueryRow(`SELECT count(*) FROM alerts`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v: the old cleared row goes on the next write", n, err)
+	}
+}
+
+// Many rules may raise the same key at once: a read-then-write transaction must not fail with SQLITE_BUSY, and exactly one call is the
+// change that created the alert.
+func TestRaiseAlertSameKeyConcurrent(t *testing.T) {
+	s := openAlerts(t)
+	const n = 16
+	var wg sync.WaitGroup
+	var created atomic.Int32
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			changed, err := s.RaiseAlert(diskLow("11.2 GB"), at0)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if changed {
+				created.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent raise: %v", err)
+	}
+	if created.Load() != 1 {
+		t.Fatalf("exactly one raise creates the alert, got %d", created.Load())
 	}
 }

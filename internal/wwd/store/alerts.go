@@ -50,6 +50,8 @@ func (s *Store) RaiseAlert(a wire.Alert, at time.Time) (changed bool, err error)
 	if err := a.Validate(); err != nil {
 		return false, err
 	}
+	s.alertMu.Lock()
+	defer s.alertMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err

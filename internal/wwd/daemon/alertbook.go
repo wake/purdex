@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -25,6 +26,9 @@ type AlertBook struct {
 	b    *Broker
 	open func() bool
 	now  func() time.Time
+
+	mu     sync.Mutex
+	missed bool // a change was made while the gate was shut, so no hint went out for it
 }
 
 // NewAlertBook returns the book of host. open is the proto 2 gate (nil: shut); now is the clock (nil: time.Now).
@@ -42,9 +46,7 @@ func (k *AlertBook) Raise(a wire.Alert) error {
 	if err != nil {
 		return err
 	}
-	if changed {
-		k.hint()
-	}
+	k.hint(changed)
 	return nil
 }
 
@@ -54,14 +56,21 @@ func (k *AlertBook) Clear(key string) error {
 	if err != nil {
 		return err
 	}
-	if changed {
-		k.hint()
-	}
+	k.hint(changed)
 	return nil
 }
 
-func (k *AlertBook) hint() {
-	if k.b != nil && k.open != nil && k.open() {
+// hint announces a change. A change made while the gate is shut is remembered, and the first call after the gate opens announces it
+// even when that call changed nothing, so a reader that stayed connected is not left with a list it never re-read.
+func (k *AlertBook) hint(changed bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.b == nil || k.open == nil || !k.open() {
+		k.missed = k.missed || changed
+		return
+	}
+	if changed || k.missed {
+		k.missed = false
 		k.b.PublishAlert(k.host)
 	}
 }
