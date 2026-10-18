@@ -34,10 +34,12 @@ type fakeConn struct {
 	jobs     map[string]wire.Job
 	claimErr map[string]error
 	readErr  error
-	claims   []string
-	starts   int
-	results  []wire.ResultRequest
-	releases []wire.ReleaseRequest
+	// releaseHangs makes a release wait for its context
+	releaseHangs bool
+	claims       []string
+	starts       int
+	results      []wire.ResultRequest
+	releases     []wire.ReleaseRequest
 }
 
 func newConn(host string, jobs ...wire.Job) *fakeConn {
@@ -96,6 +98,9 @@ func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) e
 func (c *fakeConn) PutLog(context.Context, string, string, io.Reader) error { return nil }
 
 func (c *fakeConn) Release(ctx context.Context, _ string, req wire.ReleaseRequest) error {
+	if c.releaseHangs {
+		<-ctx.Done() // an origin that does not answer: only the context ends the call
+	}
 	if err := ctx.Err(); err != nil {
 		return err // a release made under an ended context does not reach the origin
 	}
@@ -748,5 +753,23 @@ func TestAWorkerThatEndsWithAJobThatWillNotStopEndsItsCommandAndSaysSo(t *testin
 	}
 	if !said {
 		t.Fatalf("a job left behind at shutdown is named in the log: %v", r.logs)
+	}
+}
+
+func TestAWorkerThatEndsStopsRetryingReleasesThatDoNotAnswer(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	c.releaseHangs = true
+	r := newRig(t, c)
+	r.loop.cfg.ShutdownGrace = 3 * unit
+	r.ex.run = blockUntilDone
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.loop.Run(ctx); close(done) }()
+	waitFor(t, "a run", func() bool { return r.ex.ran.Load() == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run waited for a release that never answers: the jobs' contexts must be ended after the grace")
 	}
 }
