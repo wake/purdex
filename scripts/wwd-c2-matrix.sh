@@ -33,7 +33,11 @@ addr() { case "$1" in mlab) echo 100.64.0.2 ;; air26) echo 100.64.0.4 ;; mserv) 
 is_mac() { [ "$1" != mserv ]; }
 SOCK='$HOME/.local/share/wwd/wwd.sock'
 DB='$HOME/.local/share/wwd/wwd.db'
-RAN=/tmp/wwd-c2-ran.log          # the probe tasks append one line per run here, outside the workspace (darwin hosts)
+# the probe tasks append one line per run here, outside the workspace. C2_RAN_LOG moves it (the script's stub tests do, so that they never
+# touch the file of a matrix that is running); the probe task gets the same path, and it is expanded by the shell of the host it runs on.
+RAN="${C2_RAN_LOG:-/tmp/wwd-c2-ran.log}"
+# it goes into shell text of four hosts and into a sed replacement: plain path characters (and a literal $HOME) only
+case "$RAN" in *[!A-Za-z0-9_./\$-]*|'') echo "C2_RAN_LOG must be a path of letters, digits and _ . / - (or \$HOME/...): '$RAN'" >&2; exit 2 ;; esac
 WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
 
 # ---- the cases (number, title, hosts, minutes, needs) --------------------------------------------------------
@@ -199,6 +203,27 @@ submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, th
 job() { sock mlab GET "/v1/jobs/$1"; }   # the job JSON of spec 4.1: .state, .result.{reason,host,started_at,superseded_by,summary}
 jf_on() { sock "$1" GET "/v1/jobs/$2" | jq -r "$3" 2>/dev/null || echo "?"; }     # jf_on ORIGIN ID '.state'
 jf() { jf_on "${WF_HOST:-mlab}" "$1" "$2"; }                                      # jf ID '.state' : on mlab, or on WF_HOST while wait_for_on runs
+# precond ID JQEXPR WANT SECONDS : a state the case needs before its checks can mean anything ("running", "claimed"). If it is not reached
+# the case FAILs here, says what it saw (the job and air26's owner), and the caller returns: no later check may pass on a job that never
+# got there (2026-10-19: air26's owner was using the machine, c2-sleep was never claimed, and "queued again" passed as a lapse)
+precond() {
+  wait_for "$@" && return 0
+  pr_job=$(sock mlab GET "/v1/jobs/$1" 2>/dev/null | jq -c '{state, claim_worker: .claim.worker}' 2>/dev/null || true)
+  say "  FAIL precondition not reached: $1 $2 == $3 within $4 s -- the job: ${pr_job:-?}; air26 facts.owner: $(sock air26 GET /v1/facts 2>/dev/null | jq -c .owner 2>/dev/null || echo '?')"
+  CASE_FAILS=$((CASE_FAILS + 1))
+  return 1
+}
+# owner_idle : air26's worker yields to its owner (facts.owner.active: HID idle under 5 minutes, or a build of theirs), and an empty
+# owner_rule does not switch that off (it is the default rule), so a case that needs air26's worker waits here, up to 10 minutes.
+owner_idle() {
+  if [ "$dry" -eq 1 ]; then say "~ wait up to 600 s until air26's facts.owner.active is not true"; return 0; fi
+  oi_n=0; oi_max=$((600 * ${C2_TIMEOUT_SCALE:-1})); oi_said=0
+  while [ "$(sock air26 GET /v1/facts | jq -r '.owner.active' 2>/dev/null)" = true ]; do
+    [ "$oi_said" -eq 1 ] || { say "   waiting for air26's owner to be idle (up to 10 min; $(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null))"; oi_said=1; }
+    [ "$oi_n" -lt "$oi_max" ] || return 1
+    sleep 5; oi_n=$((oi_n + 5))
+  done
+}
 wait_for_on() { WF_HOST=$1; shift; wf_r=0; wait_for "$@" || wf_r=$?; WF_HOST=mlab; return "$wf_r"; }
 # attempts ID: the counted failures of the job in wwd.db (a lapse or an infra release counts, a reclaim does not): 0 for a job that
 # succeeded at once; the claim in hand is number attempts+1
@@ -229,6 +254,9 @@ need_fault() {   # need_fault HOST KEY : the hook is in this wwd (H0: /v1/info l
 ran_count() { if [ "$dry" -eq 1 ]; then echo 0; else q "$1" "n=\$(grep -c 'job=$2 ' $RAN 2>/dev/null); echo \${n:-0}"; fi; }
 
 # ---- before and after -----------------------------------------------------------------------------------------------
+# AIR26_FIND_PDX: the command that prints where pdx is on air26 (the first that exists); the $HOME is air26's own
+AIR26_FIND_PDX='command -v pdx || { [ -x "$HOME/.local/bin/pdx" ] && echo "$HOME/.local/bin/pdx"; } || { [ -x "$HOME/.config/pdx/bin/pdx" ] && echo "$HOME/.config/pdx/bin/pdx"; }'
+AIR26_PDX=pdx
 precheck() {
   say "-- preconditions"
   pc_vers=""
@@ -243,10 +271,19 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
-  # case 8 submits from air26 over a non-interactive ssh: pdx has to be on that PATH
+  # an empty owner_rule on air26 means [owner] is off (wwd.db may still hold hid<5m, which wwd only hides): the PUTs of this run store
+  # the empty one, so the rule has to be put back by hand afterwards
+  [ "$dry" -eq 1 ] || [ -n "$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)" ] || say "WARN: air26's owner_rule is empty ([owner] off?): this run stores it empty; put it back by hand afterwards (docs/wwd-c2-matrix.md, section 7.1)"
+  # case 8 submits from air26 over a non-interactive ssh, whose PATH has no pdx on a Mac (the shell reads .zshenv only): find it on the PATH,
+  # then in the two places pdx is installed, and say which one is used
   case " $cases " in *" 8 "*)
-    if [ "$dry" -eq 1 ]; then on air26 "command -v pdx"
-    else on air26 "command -v pdx" >/dev/null 2>&1 || { say "FAIL: pdx is not on air26's non-interactive PATH (case 8 submits from there)"; exit 1; }; fi ;;
+    if [ "$dry" -eq 1 ]; then on air26 "$AIR26_FIND_PDX"; AIR26_PDX=pdx
+    else
+      AIR26_PDX=$(on air26 "$AIR26_FIND_PDX" 2>/dev/null | head -1) || AIR26_PDX=""
+      case "$AIR26_PDX" in *[!A-Za-z0-9_./-]*) say "FAIL: the path of pdx on air26 has characters the script will not put into a command: '$AIR26_PDX'"; exit 1 ;; esac
+      [ -n "$AIR26_PDX" ] || { say "FAIL: pdx is not on air26's non-interactive PATH, nor in ~/.local/bin/pdx, nor in ~/.config/pdx/bin/pdx (case 8 submits from there)"; exit 1; }
+      say "   pdx on air26: $AIR26_PDX"
+    fi ;;
   esac
   x mkdir -p "$WORK/repo" "$WORK/saved"
   on air19 "rm -f $RAN"                       # first the log, then the list: the list is the moment the watching starts
@@ -264,7 +301,7 @@ scratch_repo() {
   cat > "$WORK/repo/scripts/probe.sh" <<'EOS'
 #!/bin/sh
 # probe.sh SECONDS EXIT : record the run outside the workspace, sleep, exit
-echo "job=${WWD_JOB:-?} host=$(hostname -s) start=$(date +%s)" >> /tmp/wwd-c2-ran.log 2>/dev/null || true
+echo "job=${WWD_JOB:-?} host=$(hostname -s) start=$(date +%s)" >> @RAN@ 2>/dev/null || true
 echo "host=$(hostname -s) job=${WWD_JOB:-?}"
 sleep "${1:-0}"
 exit "${2:-0}"
@@ -379,6 +416,7 @@ echo "sandbox probe done fail=$fail"
 exit "$fail"
 EOS
   sed -i.bak "s/@TAG@/$SB_TAG/g" "$WORK/repo/scripts/sandbox_probe.sh" && rm -f "$WORK/repo/scripts/sandbox_probe.sh.bak"
+  sed -i.bak "s|@RAN@|$RAN|g" "$WORK/repo/scripts/probe.sh" && rm -f "$WORK/repo/scripts/probe.sh.bak"
   ( cd "$WORK/repo" && git init -q . && git add -A && git -c user.name=c2 -c user.email=c2@localhost commit -q -m c2 )
 }
 
@@ -428,8 +466,10 @@ case_1() {
     say "+ two claims at once (fakeA, fakeB) on $pid over TCP with the pool token"; codes="200 409 "
   else
     mkdir -p "$WORK/out"
-    claim "$pid" fakeA | tail -1 > "$WORK/out/a" &
-    claim "$pid" fakeB | tail -1 > "$WORK/out/b" &
+    # claim prints the body, a newline and the code, and curl's code has no newline after it: the echo ends the line, or the two
+    # codes would run together in one file ("409200")
+    { claim "$pid" fakeA | tail -1; echo; } > "$WORK/out/a" &
+    { claim "$pid" fakeB | tail -1; echo; } > "$WORK/out/b" &
     wait
     codes=$(cat "$WORK/out/a" "$WORK/out/b" | sort | tr '\n' ' ')
   fi
@@ -441,7 +481,7 @@ case_1() {
 case_2() {
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   # Not launchctl bootout / systemctl stop: that is SIGTERM, and wwd answers it by handing the job back with a reclaim release, which
   # counts no attempt and never ends in failed/lost. A lease lapses only when the wwd cannot talk: a frozen one.
   say "-- lapse 1: air26's wwd is frozen with the job in it, past the 60 s lease"
@@ -450,7 +490,7 @@ case_2() {
   check "lease lapsed, queued again" "$(jf "$id" .state)" queued
   check "attempts after the lapse" "$(attempts "$id")" 1
   svc_thaw air26                                    # its worker finds the lease gone, ends the command, and takes the job again
-  wait_for "$id" .state running 120 || true
+  precond "$id" .state running 120 || return 0
   say "-- lapse 2: frozen again"
   svc_freeze air26
   wait_for "$id" .state failed 150 || true
@@ -477,7 +517,7 @@ case_3() {
   say "-- real: air26's wwd is frozen past its lease, then thawed"
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   svc_freeze air26
   worker_set mlab true
   nap 75
@@ -491,7 +531,7 @@ case_3() {
 case_4() {
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   say "-- the origin (mlab) restarts while air26 runs the job"
   svc_restart mlab
   wait_for "$id" .state succeeded 200 || true
@@ -505,7 +545,7 @@ case_5() {
   say "-- 5a: the origin stops answering when the worker has claimed (snapshot fetch)"
   if need_fault air26 snapshot_delay_s; then
     id=$(submit c2-quick)
-    wait_for "$id" .state claimed 60 || true
+    precond "$id" .state claimed 60 || return 0
     svc_freeze mlab; nap 20; svc_thaw mlab
     wait_for "$id" .state succeeded 600 || true
     check "5a state" "$(jf "$id" .state)" succeeded
@@ -515,18 +555,18 @@ case_5() {
     check "5a the fetch waited and nothing lapsed (attempts)" "$(attempts "$id")" 0
   else say "SKIP 5a: $CASE_SKIP"; CASE_SKIP=""; fi
   say "-- 5b: the origin stops answering during the run, shorter than the lease, then longer"
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   svc_freeze mlab; nap 30; svc_thaw mlab
   wait_for "$id" .state succeeded 200 || true
   check "5b short: state" "$(jf "$id" .state)" succeeded
   check "5b short: attempts" "$(attempts "$id")" 0
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   svc_freeze mlab; nap 90; svc_thaw mlab
   wait_for "$id" .state succeeded 400 || true
   check "5b long: state" "$(jf "$id" .state)" succeeded
   check "5b long: the lease lapsed once" "$(attempts "$id")" 1
   say "-- 5c: the origin stops answering when the command is ending (result upload)"
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   nap 84
   svc_freeze mlab; nap 30; svc_thaw mlab                # the worker's deadline is 60 s after its last heartbeat (every 15 s): 30 s leaves room
   wait_for "$id" .state succeeded 200 || true
@@ -548,7 +588,7 @@ case_7() {
   CASE_SKIP=""
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   worker_set mlab true
   if [ "$manual" -eq 1 ]; then say ">> move the mouse on air26 now (waiting up to 5 min for owner.active)"
   else fault_on air26 '$HOME/.local/share/wwd/fault/owner-active'; fi
@@ -567,7 +607,7 @@ case_8() {
   only_workers
   rdir="${TMPDIR:-/tmp}/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
   x sh -c "tar -C $WORK -cf - repo | ssh air26 'mkdir -p $rdir && tar -C $rdir -xf -'"        # the scratch repo on air26: a second origin
-  ida=$(q air26 "cd $rdir/repo && pdx test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
+  ida=$(q air26 "cd $rdir/repo && $AIR26_PDX test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
   track "$ida" air26
   idm=$(submit c2-any)                      # the younger job, but its origin is the one under pressure
   worker_set mserv true                     # only now can anything be claimed
@@ -582,7 +622,7 @@ case_8() {
 case_9() {
   only_workers air26
   say "-- interruptible: the older one is told to stop; the worker reports it cancelled and the origin records who superseded it"
-  a=$(submit c2-sleep-int); wait_for "$a" .state running 90 || true
+  a=$(submit c2-sleep-int); precond "$a" .state running 90 || return 0
   b=$(submit c2-sleep-int)
   wait_for "$a" .state cancelled 60 || true
   check "A state" "$(jf "$a" .state)" cancelled                  # superseded is the state only of a job that was still queued, or let go
@@ -590,7 +630,7 @@ case_9() {
   check "A is marked superseded_by B" "$(jf "$a" .result.superseded_by)" "$b"
   sock mlab POST "/v1/jobs/$b/cancel" >/dev/null
   say "-- not interruptible: the older one runs to its end, its result keeps superseded_by"
-  a=$(submit c2-sleep-noint); wait_for "$a" .state running 90 || true
+  a=$(submit c2-sleep-noint); precond "$a" .state running 90 || return 0
   b=$(submit c2-sleep-noint)
   wait_for "$a" .state succeeded 150 || true
   check "A ran to its end" "$(jf "$a" .state)" succeeded
@@ -705,7 +745,13 @@ precheck
 for run_case in $cases; do
   say ""; say "== case $run_case: $(catalog | awk -F'|' -v c="$run_case" '$1==c {print $2}') =="
   CASE_FAILS=0; CASE_SKIP=""
-  "case_$run_case"
+  # a case that runs a job on air26's worker needs its owner away
+  # (not 8: air26 is only a second origin there and its worker is off; not 11: it only sends tokens)
+  if [ "$run_case" != 8 ] && [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
+    CASE_SKIP="air26's owner stayed active for 10 minutes ($(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null)): its worker would not take the job"
+  else
+    "case_$run_case"
+  fi
   # the air19 rule holds in every case: it claimed nothing since the matrix began
   if [ "$run_case" != 14 ]; then
     check "air19 claimed nothing during case $run_case" "$(air19_new)" 0
