@@ -14,6 +14,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/fastlane"
+	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/submit"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -43,6 +44,9 @@ type Options struct {
 	LogDir string
 	// Recorder registers fast-lane runs with wwd; nil runs them unrecorded (until wwd's fast-lane entry exists).
 	Recorder fastlane.Recorder
+	// LockWait and LockPoll replace the task's queue_timeout and the two seconds between asks while a lock keeps the fast lane
+	// back (tests).
+	LockWait, LockPoll time.Duration
 }
 
 // Run is `pdx test`: it returns the process exit code.
@@ -52,6 +56,14 @@ func Run(ctx context.Context, o Options) int {
 	}
 	info, err := o.API.Info(ctx)
 	if err != nil {
+		// A wwd that is not there cannot record a run, but a task that may take the fast lane still runs here: that does not leave
+		// the host (spec D12).
+		if errors.Is(err, client.ErrUnavailable) && o.Gate != nil {
+			o.Recorder = nil
+			if code, took := fastLane(ctx, o, wire.Submitter{Session: o.Session, Ref: o.Ref, Team: o.Team}); took {
+				return code
+			}
+		}
 		return failWWD(o, err)
 	}
 	sub := wire.Submitter{Session: o.Session, Ref: o.Ref, Team: o.Team, Host: info.Alias}
@@ -124,7 +136,9 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 		return 0, false // not a local task: the queue path says what is wrong with an unknown one
 	}
 	if o.Args.Detach {
-		return 0, false // a detached run is a job of the queue, not of this process
+		// A task that takes the fast lane never goes to the queue (spec D12), and a detached run is a job of the queue.
+		fmt.Fprintln(o.Stderr, "pdx test: 單檔任務只在前景跑；要排進佇列請用 go-changed／spa-related")
+		return ExitUsage, true
 	}
 	// the same class rule as the queue's, whether or not this run is recorded
 	if _, err := submit.ResolveClass(task.Class, o.Args.Class); err != nil {
@@ -157,11 +171,17 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 		}
 		out = d
 	}
-	res, err := fastlane.Run(ctx, fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env, OutDir: out})
+	res, err := runWhenFree(ctx, o, task, fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env, OutDir: out})
 	var argErr *fastlane.ArgError
 	switch {
-	case errors.Is(err, fastlane.ErrNotLocal), errors.Is(err, fastlane.ErrLocksBusy):
+	case errors.Is(err, fastlane.ErrNotLocal):
 		return 0, false
+	case errors.Is(err, errWaitedOut):
+		r := Report{Task: o.Args.Task, State: wire.StateExpired, Reason: "queue_timeout", Local: true}
+		Print(o.Stdout, r, o.Args.JSON)
+		return ExitCode(r), true
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return ExitCancelled, true
 	case errors.As(err, &argErr):
 		fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
 		return ExitUsage, true
@@ -186,6 +206,56 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 	}
 	Print(o.Stdout, r, o.Args.JSON)
 	return ExitCode(r), true
+}
+
+// errWaitedOut: a lock stayed held for the whole queue_timeout of the task and nothing ran.
+var errWaitedOut = errors.New("a lock stayed held for the whole queue timeout")
+
+// lockPoll is how often a run that a held lock keeps back asks again.
+const lockPoll = 2 * time.Second
+
+// runWhenFree runs the fast lane, and while another job on this host holds a lock the task needs it waits here and asks again: a
+// task that takes the fast lane never goes to the queue (spec D12). The wait ends with the caller (ctx) or after the task's
+// queue_timeout (o.LockWait, when set, replaces it), which is the same limit a run waiting for a slot has.
+func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastlane.Request) (fastlane.Result, error) {
+	limit := task.QueueTimeout
+	if o.LockWait > 0 {
+		limit = o.LockWait
+	}
+	poll := lockPoll
+	if o.LockPoll > 0 {
+		poll = o.LockPoll
+	}
+	deadline := time.Now().Add(limit)
+	told := false
+	for {
+		// one deadline for the lock and the slot together: the gate waits for what is left of it, not for a whole queue_timeout
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fastlane.Result{}, errWaitedOut
+		}
+		t := *task
+		t.QueueTimeout = remaining
+		r := req
+		r.Task = &t
+		res, err := fastlane.Run(ctx, r)
+		if !errors.Is(err, fastlane.ErrLocksBusy) {
+			return res, err
+		}
+		if !told {
+			told = true
+			fmt.Fprintf(o.Stderr, "pdx test: 等待本機名額／lock：%v\n", err)
+		}
+		wait := min(poll, time.Until(deadline))
+		if wait <= 0 {
+			return fastlane.Result{}, errWaitedOut
+		}
+		select {
+		case <-ctx.Done():
+			return fastlane.Result{}, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 }
 
 func list(ctx context.Context, o Options) int {
