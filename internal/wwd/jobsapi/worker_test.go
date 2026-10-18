@@ -140,7 +140,8 @@ func TestPeerClaimOfAnAdHocJobIsRefused(t *testing.T) {
 	r := workerRig(t)
 	id := r.submit(t, func(s *wire.JobSubmission) { s.AdHoc = true })
 	w := call(r.peer, "POST", "/v1/jobs/"+id+"/claim", wire.ClaimRequest{Worker: "air26"})
-	assert.Equal(t, 404, w.Code)
+	require.Equal(t, 409, w.Code, "spec 4.4: a peer's claim of an ad-hoc job gets 409")
+	assert.Equal(t, wire.StateClaimed, decode[wire.Conflict409](t, w).State, "as if someone else had it: the worker tries the next")
 	j, err := r.q.Get(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, wire.StateQueued, j.State)
@@ -162,7 +163,9 @@ func TestClaimTakesOnlyAWellFormedRequestOfAQueuedJob(t *testing.T) {
 	w := call(r.peer, "POST", "/v1/jobs/"+id+"/claim", wire.ClaimRequest{Worker: "mserv"})
 	require.Equal(t, 409, w.Code, "first wins")
 	assert.Equal(t, wire.StateClaimed, decode[wire.Conflict409](t, w).State)
-	assert.Equal(t, 404, call(r.peer, "POST", "/v1/jobs/j_nope/claim", wire.ClaimRequest{Worker: "w"}).Code)
+	assert.Equal(t, 409, call(r.peer, "POST", "/v1/jobs/j_nope/claim", wire.ClaimRequest{Worker: "w"}).Code,
+		"a peer is told the same of a job that is hidden from it and of one that is not there: nothing to claim")
+	assert.Equal(t, 404, call(r.local, "POST", "/v1/jobs/j_nope/claim", wire.ClaimRequest{Worker: "w"}).Code, "the host's own worker is told the truth")
 }
 
 func TestBadClaimIDsAndBodies(t *testing.T) {

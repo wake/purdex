@@ -67,6 +67,12 @@ func (a *API) Claim(peer bool) http.HandlerFunc {
 		} else {
 			resp, err = a.q.Claim(r.Context(), id, req)
 		}
+		if peer && errors.Is(err, queue.ErrNotFound) {
+			// spec 4.4: a peer's claim of an ad-hoc or fast-lane job gets 409. It gets the same for a job that is not there, so the answer
+			// does not say which ids are the host's own; "claimed" tells the worker to try the next
+			writeJSON(w, http.StatusConflict, wire.Conflict409{State: wire.StateClaimed})
+			return
+		}
 		if err != nil {
 			fail(w, err)
 			return

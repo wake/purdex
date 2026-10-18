@@ -189,7 +189,7 @@ func TestPeerCannotClaimAnAdHocJobOverTCP(t *testing.T) {
 	sub, err := wire.Decode[wire.JobSubmissionResponse](raw)
 	require.NoError(t, err)
 	code, _, _ := h.tcpDo(t, "POST", "/v1/jobs/"+sub.ID+"/claim", "Bearer "+testToken, wire.ClaimRequest{Worker: "air26"})
-	assert.Equal(t, 404, code)
+	assert.Equal(t, 409, code)
 	j, err := h.q.Get(context.Background(), sub.ID)
 	require.NoError(t, err)
 	assert.Equal(t, wire.StateQueued, j.State, "the refused claim changed nothing")
