@@ -7,11 +7,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeExec records every statement and answers the two listing queries from its own lists.
 type fakeExec struct {
+	mu        sync.Mutex
+	sessions  []string      // ids answered to the processlist query
+	hold      chan struct{} // when set, the database listing waits for it to be closed (a Sweep that is half way)
+	held      chan struct{} // closed once a Run is waiting on hold
 	sql       []string
 	dead      []bool             // for each statement: was its context already cancelled
 	cancel    context.CancelFunc // called when failOn matches, as a caller cancelling half way would
@@ -22,6 +28,12 @@ type fakeExec struct {
 }
 
 func (f *fakeExec) Run(ctx context.Context, sql string) (string, error) {
+	if f.hold != nil && strings.Contains(sql, "information_schema.schemata") {
+		close(f.held)
+		<-f.hold
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.sql = append(f.sql, sql)
 	f.dead = append(f.dead, ctx.Err() != nil)
 	if f.failOn != "" && strings.Contains(sql, f.failOn) {
@@ -31,6 +43,8 @@ func (f *fakeExec) Run(ctx context.Context, sql string) (string, error) {
 		return "", f.failError
 	}
 	switch {
+	case strings.Contains(sql, "information_schema.processlist"):
+		return strings.Join(f.sessions, "\n"), nil
 	case strings.Contains(sql, "information_schema.schemata"):
 		return strings.Join(f.dbs, "\n"), nil
 	case strings.Contains(sql, "mysql.user"):
@@ -47,7 +61,7 @@ func TestNamesAreOpaqueDeterministicAndShortEnough(t *testing.T) {
 	if a != b || a == m.Name("j_abc.2") {
 		t.Fatalf("names must be stable per job and differ between jobs: %q %q", a, m.Name("j_abc.2"))
 	}
-	if !regexp.MustCompile(`^wwd_[0-9a-f]{16}$`).MatchString(a) || len(m.User("j_abc.1")) > 32 {
+	if !regexp.MustCompile(`^wwd_[0-9a-f]{32}$`).MatchString(a) || len(m.User("j_abc.1")) != 31 {
 		t.Fatalf("db %q user %q", a, m.User("j_abc.1"))
 	}
 }
@@ -142,7 +156,7 @@ func TestDropTriesEveryStatementAndReportsTheFirstError(t *testing.T) {
 func TestSweepDropsOnlyOurLeftoversThatNoLiveJobOwns(t *testing.T) {
 	m := New(&fakeExec{}, Config{})
 	live, dead := m.Name("j_live"), m.Name("j_dead")
-	f := &fakeExec{dbs: []string{live, dead, "wwd_notours", "mysql", "appdb"}, users: []string{m.User("j_live") + "\tlocalhost", m.User("j_dead") + "\tlocalhost", m.User("j_dead") + "\t10.0.0.%", "root\tlocalhost"}}
+	f := &fakeExec{sessions: []string{"77"}, dbs: []string{live, dead, "wwd_notours", "mysql", "appdb"}, users: []string{m.User("j_live") + "\tlocalhost", m.User("j_dead") + "\tlocalhost", m.User("j_dead") + "\t10.0.0.%", "root\tlocalhost"}}
 	m = New(f, Config{})
 	dropped, err := m.Sweep(context.Background(), []string{"j_live"})
 	if err != nil {
@@ -152,6 +166,9 @@ func TestSweepDropsOnlyOurLeftoversThatNoLiveJobOwns(t *testing.T) {
 	if !strings.Contains(sql, "DROP DATABASE IF EXISTS `"+dead+"`") || !strings.Contains(sql, "DROP USER IF EXISTS '"+m.User("j_dead")+"'@'localhost'") ||
 		!strings.Contains(sql, "DROP USER IF EXISTS '"+m.User("j_dead")+"'@'10.0.0.%'") {
 		t.Fatalf("the dead job's database and user must go:\n%s", sql)
+	}
+	if !strings.Contains(sql, "KILL CONNECTION 77") {
+		t.Fatalf("a leftover user's open connections must be ended before it is dropped:\n%s", sql)
 	}
 	for _, keep := range []string{live, m.User("j_live"), "wwd_notours", "`mysql`", "appdb", "'root'"} {
 		if strings.Contains(sql, "DROP DATABASE IF EXISTS `"+keep+"`") || strings.Contains(sql, "DROP USER IF EXISTS '"+keep+"'") {
@@ -242,4 +259,63 @@ func TestSweepNeverPutsAHostWithQuotesIntoAStatement(t *testing.T) {
 	if strings.Contains(f.all(), "DROP DATABASE mysql") {
 		t.Fatalf("a host read back from the server was used as it is:\n%s", f.all())
 	}
+}
+
+func TestUserHostsWithQuotesOrWildcardsAreRefused(t *testing.T) {
+	for _, h := range []string{"localhost' IDENTIFIED BY 'x'; DROP DATABASE mysql; --", "%", "a b", "a\nb", "h`", "x\\y", ""} {
+		f := &fakeExec{}
+		m := New(f, Config{UserHosts: []string{"localhost", h}})
+		if h == "" {
+			continue // empty means the default hosts
+		}
+		if _, err := m.Create(context.Background(), "j"); err == nil {
+			t.Errorf("%q: Create must refuse", h)
+		}
+		if m.Drop(context.Background(), "j") == nil {
+			t.Errorf("%q: Drop must refuse", h)
+		}
+		if _, err := m.Sweep(context.Background(), nil); err == nil {
+			t.Errorf("%q: Sweep must refuse", h)
+		}
+		if len(f.sql) != 0 {
+			t.Errorf("%q: nothing may be sent: %v", h, f.sql)
+		}
+	}
+}
+
+func TestDropEndsTheUsersConnectionsBeforeDroppingTheUser(t *testing.T) {
+	f := &fakeExec{sessions: []string{"11", "12", "13; DROP DATABASE x"}}
+	m := New(f, Config{})
+	if err := m.Drop(context.Background(), "j_test1"); err != nil {
+		t.Fatal(err)
+	}
+	sql := f.all()
+	k1, k2, du := strings.Index(sql, "KILL CONNECTION 11"), strings.Index(sql, "KILL CONNECTION 12"), strings.Index(sql, "DROP USER")
+	if k1 < 0 || k2 < 0 || du < 0 || k1 > du || k2 > du {
+		t.Fatalf("connections must be killed before the user goes:\n%s", sql)
+	}
+	if strings.Contains(sql, "DROP DATABASE x") {
+		t.Fatalf("a session id that is not a number was used:\n%s", sql)
+	}
+	if strings.Index(sql, "DROP DATABASE IF EXISTS") < du {
+		t.Fatalf("the database goes last:\n%s", sql)
+	}
+}
+
+func TestASweepInProgressHoldsBackACreate(t *testing.T) {
+	f := &fakeExec{hold: make(chan struct{}), held: make(chan struct{})}
+	m := New(f, Config{})
+	sweepDone := make(chan struct{})
+	go func() { _, _ = m.Sweep(context.Background(), nil); close(sweepDone) }()
+	<-f.held // the Sweep is half way: it has listed nothing yet
+	created := make(chan struct{})
+	go func() { _, _ = m.Create(context.Background(), "j_new"); close(created) }()
+	select {
+	case <-created:
+		t.Fatal("a Create ran while a Sweep was half way: the Sweep could remove what the Create made")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(f.hold)
+	<-sweepDone
+	<-created
 }

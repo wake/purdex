@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/execstat"
@@ -47,14 +48,28 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// Manager creates and removes the per-job databases.
+// Manager creates and removes the per-job databases. Create, Drop and Sweep are serialized, so a Sweep never removes what a
+// Create is making. The caller keeps two rules the Manager cannot enforce: Sweep runs before the worker takes its first job, and
+// Drop runs only after every process of the job is gone (the runner proved that), because a process that is still there can
+// connect again.
 type Manager struct {
+	mu  sync.Mutex
 	ex  Exec
 	cfg Config
+	err error // why the configuration cannot be used; every operation returns it
 }
 
-// New returns a Manager that sends its statements to ex.
-func New(ex Exec, cfg Config) *Manager { return &Manager{ex: ex, cfg: cfg.withDefaults()} }
+// New returns a Manager that sends its statements to ex. A configuration whose hosts are not plain host names or addresses is
+// not used: they go into statements, and the administrator's rights run them.
+func New(ex Exec, cfg Config) *Manager {
+	m := &Manager{ex: ex, cfg: cfg.withDefaults()}
+	for _, h := range m.cfg.UserHosts {
+		if !cfgHostRe.MatchString(h) {
+			m.err = fmt.Errorf("jobdb: the user host %q is not a plain host name or address", h)
+		}
+	}
+	return m
+}
 
 // Info is what a job needs to connect.
 type Info struct {
@@ -73,9 +88,11 @@ func (i Info) Env() []string {
 }
 
 var (
-	dbNameRe   = regexp.MustCompile(`^wwd_[0-9a-f]{16}$`)
-	userNameRe = regexp.MustCompile(`^wwdu_[0-9a-f]{12}$`)
+	dbNameRe   = regexp.MustCompile(`^wwd_[0-9a-f]{32}$`)
+	userNameRe = regexp.MustCompile(`^wwdu_[0-9a-f]{26}$`)
 	hostRe     = regexp.MustCompile(`^[A-Za-z0-9_.:%-]{1,255}$`) // a host read back from the server is checked before it is put in a statement
+	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,255}$`)  // a configured host: no wildcard either
+	idRe       = regexp.MustCompile(`^[0-9]{1,20}$`)
 )
 
 func digest(jobID string) string {
@@ -83,16 +100,21 @@ func digest(jobID string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// Name is the job's database name: opaque, stable for one job id, and always matched by dbNameRe.
-func (m *Manager) Name(jobID string) string { return "wwd_" + digest(jobID)[:16] }
+// Name is the job's database name: opaque, stable for one job id, 128 bits of its hash, and always matched by dbNameRe.
+func (m *Manager) Name(jobID string) string { return "wwd_" + digest(jobID)[:32] }
 
-// User is the job's MySQL user (at most 17 characters, MySQL allows 32).
-func (m *Manager) User(jobID string) string { return "wwdu_" + digest(jobID)[:12] }
+// User is the job's MySQL user: 104 bits of the hash, 31 characters (MySQL allows 32).
+func (m *Manager) User(jobID string) string { return "wwdu_" + digest(jobID)[:26] }
 
 // Create makes the job's database and user. Whatever an earlier run of the same job id left is dropped first, so the job starts
 // from an empty database; if a later statement fails, what was made is dropped again.
 func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
-	_ = m.Drop(ctx, jobID)
+	if m.err != nil {
+		return Info{}, m.err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_ = m.drop(ctx, jobID)
 	pw := make([]byte, 24)
 	if _, err := rand.Read(pw); err != nil {
 		return Info{}, err
@@ -108,7 +130,7 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 		if _, err := m.ex.Run(ctx, s); err != nil {
 			// the caller's context may be the very reason for the failure: the clean-up must not inherit its cancel
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			_ = m.Drop(cctx, jobID)
+			_ = m.drop(cctx, jobID)
 			cancel()
 			return Info{}, fmt.Errorf("jobdb: %s: %w", firstWords(s), err)
 		}
@@ -116,28 +138,73 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 	return info, nil
 }
 
-// Drop removes the job's database and users. It tries every statement and returns the first error.
+// Drop removes the job's database and users, and ends the user's open connections first (DROP USER leaves them alone). It tries
+// every statement and returns the first error.
 func (m *Manager) Drop(ctx context.Context, jobID string) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.drop(ctx, jobID)
+}
+
+func (m *Manager) drop(ctx context.Context, jobID string) error {
 	return m.dropNames(ctx, m.Name(jobID), m.User(jobID))
 }
 
 func (m *Manager) dropNames(ctx context.Context, db, user string) error {
 	var first error
-	stmts := []string{"DROP DATABASE IF EXISTS `" + db + "`"}
-	for _, h := range m.cfg.UserHosts {
-		stmts = append(stmts, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", user, h))
-	}
-	for _, s := range stmts {
-		if _, err := m.ex.Run(ctx, s); err != nil && first == nil {
-			first = fmt.Errorf("jobdb: %s: %w", firstWords(s), err)
+	note := func(err error) {
+		if err != nil && first == nil {
+			first = err
 		}
 	}
+	// the connections of the user, then the user, then the database
+	note(m.killConnections(ctx, user))
+	for _, h := range m.cfg.UserHosts {
+		note(m.dropUserAt(ctx, user, h))
+	}
+	note(m.dropDB(ctx, db))
 	return first
+}
+
+// killConnections ends the open connections of a user: DROP USER leaves them running with the rights they had.
+func (m *Manager) killConnections(ctx context.Context, user string) error {
+	out, err := m.ex.Run(ctx, fmt.Sprintf("SELECT id FROM information_schema.processlist WHERE user = '%s'", user))
+	if err != nil {
+		return fmt.Errorf("jobdb: list connections: %w", err)
+	}
+	for _, id := range lines(out) {
+		if idRe.MatchString(id) {
+			_, _ = m.ex.Run(ctx, "KILL CONNECTION "+id) // one that ended by itself in between is not a failure
+		}
+	}
+	return nil
+}
+
+func (m *Manager) dropUserAt(ctx context.Context, user, host string) error {
+	if _, err := m.ex.Run(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", user, host)); err != nil {
+		return fmt.Errorf("jobdb: DROP USER: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) dropDB(ctx context.Context, db string) error {
+	if _, err := m.ex.Run(ctx, "DROP DATABASE IF EXISTS `"+db+"`"); err != nil {
+		return fmt.Errorf("jobdb: DROP DATABASE: %w", err)
+	}
+	return nil
 }
 
 // Sweep removes the databases and users this package made for jobs that are not in live (a crash or a restart left them). Only
 // names of exactly our shape are touched: another database that happens to begin with wwd_ is not.
 func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, err error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	keepDB, keepUser := map[string]bool{}, map[string]bool{}
 	for _, id := range live {
 		keepDB[m.Name(id)], keepUser[m.User(id)] = true, true
@@ -158,7 +225,7 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	}
 	for _, db := range lines(dbOut) {
 		if dbNameRe.MatchString(db) && !keepDB[db] {
-			_, e := m.ex.Run(ctx, "DROP DATABASE IF EXISTS `"+db+"`")
+			e := m.dropDB(ctx, db)
 			note(e)
 			if e == nil {
 				dropped = append(dropped, db)
@@ -169,8 +236,8 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	for _, l := range lines(userOut) {
 		u, h, ok := strings.Cut(l, "\t")
 		if ok && userNameRe.MatchString(u) && hostRe.MatchString(h) && !keepUser[u] {
-			_, e := m.ex.Run(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", u, h))
-			note(e)
+			note(m.killConnections(ctx, u))
+			note(m.dropUserAt(ctx, u, h))
 		}
 	}
 	sort.Strings(dropped)
