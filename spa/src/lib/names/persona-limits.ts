@@ -1,0 +1,56 @@
+// spa/src/lib/names/persona-limits.ts — the limits the daemon checks on a persona (name pool v2 spec §4.1), mirrored so
+// the form can show counters and refuse before a PUT does. The daemon stays the authority.
+import type { Persona } from './persona-types'
+
+export const PERSONA_LIMITS = {
+  name: 24,
+  personality: 50,
+  method: 50,
+  interests: 10,
+  /** `avatar_data` as a string. */
+  avatarData: 32 * 1024,
+  /** The avatar recipe serialised. */
+  recipe: 2 * 1024,
+  /** Personas in a collection, retired ones included. */
+  count: 64,
+} as const
+
+export const CODE_RULE = /^[a-z]{3,12}$/
+const AVATAR_DATA = /^data:image\/(webp|png|jpeg);base64,/
+
+export interface PersonaIssue { field: string; message: string }
+
+/** zh counts runes; en counts whitespace-separated words (spec §4.1: "runes / words"). */
+export function countUnits(text: string, lang: 'zh' | 'en'): number {
+  if (lang === 'zh') return Array.from(text).length
+  return text.split(/\s+/).filter(Boolean).length
+}
+
+function printable(s: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return !/[\u0000-\u001f\u007f-\u009f]/.test(s)
+}
+
+export function validatePersona(p: Persona): PersonaIssue[] {
+  const out: PersonaIssue[] = []
+  if (!CODE_RULE.test(p.code)) out.push({ field: 'code', message: 'code must be 3-12 lowercase letters' })
+  const name = p.name.trim()
+  const nameLen = Array.from(name).length
+  if (nameLen < 1 || nameLen > PERSONA_LIMITS.name || !printable(name)) {
+    out.push({ field: 'name', message: `name must be 1-${PERSONA_LIMITS.name} printable characters` })
+  }
+  for (const key of ['personality', 'method', 'interests'] as const) {
+    for (const lang of ['zh', 'en'] as const) {
+      if (countUnits(p[key][lang], lang) > PERSONA_LIMITS[key]) {
+        out.push({ field: `${key}.${lang}`, message: `${key} (${lang}) is over ${PERSONA_LIMITS[key]}` })
+      }
+    }
+  }
+  if (p.avatar_data !== '' && (!AVATAR_DATA.test(p.avatar_data) || p.avatar_data.length > PERSONA_LIMITS.avatarData)) {
+    out.push({ field: 'avatar_data', message: 'avatar image must be a webp/png/jpeg data URL of at most 32 KB' })
+  }
+  if (JSON.stringify(p.avatar).length > PERSONA_LIMITS.recipe) {
+    out.push({ field: 'avatar', message: 'avatar recipe is over 2 KB' })
+  }
+  return out
+}
