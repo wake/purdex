@@ -37,6 +37,28 @@ func TestTheCommandsOutputGoesToTheTeeAsWellAsTheLog(t *testing.T) {
 	}
 }
 
+func TestTailCutOnlyWhenTheOutputIsLongerThanTheTail(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rows int
+		cut  bool
+	}{"short": {10, false}, "long": {40000, true}} {
+		g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+			for i := 0; i < tc.rows; i++ {
+				o.Stdout.Write([]byte("0123456789\n"))
+			}
+			return 0
+		}}
+		res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.TailCut != tc.cut || len(res.Tail) == 0 || len(res.Tail) > 64<<10 {
+			t.Errorf("%s: cut %v (want %v), tail %d bytes", name, res.TailCut, tc.cut, len(res.Tail))
+		}
+		res.Cleanup()
+	}
+}
+
 // stuck is a live reader that takes the first chunk and never returns (an open pipe nobody reads).
 type stuck struct{ release chan struct{} }
 

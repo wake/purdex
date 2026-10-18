@@ -113,7 +113,9 @@ type Result struct {
 	Cleanup func()
 	SumErr  error // why the summary could not be built, when it could not
 	// Tail is the end of the command's output (the last 64 KiB at most, kept in memory whatever the log's cap was).
-	Tail     []byte
+	Tail []byte
+	// TailCut says the output is longer than Tail, so Tail starts somewhere inside a line.
+	TailCut  bool
 	FinishAt time.Time
 }
 
@@ -210,6 +212,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	outTee.close()
 	errTee.close()
 	res.Tail = tail
+	if st, err := os.Stat(filepath.Join(out, "log")); err == nil {
+		res.TailCut = st.Size() > int64(len(tail)) // the log holds at least all of the tail; more means the tail is cut
+	}
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
 	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned))

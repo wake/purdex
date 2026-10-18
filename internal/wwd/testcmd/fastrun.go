@@ -62,7 +62,7 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 	}
 	var output []string
 	if live && o.Args.JSON {
-		output = tailLines(res.Tail, outputLines)
+		output = tailLines(res.Tail, res.TailCut, outputLines)
 	}
 	if out == "" {
 		defer res.Cleanup() // no place to keep the files: they go with the command
@@ -91,14 +91,14 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 	return ExitCode(r), true
 }
 
-// tailLines is the last n lines of b, which is the end of the output (cut anywhere, so a first line that may be partial is left
-// out when b is as long as the in-memory tail can be); nil when there is nothing.
-func tailLines(b []byte, n int) []string {
+// tailLines is the last n lines of b, the end of the output; when cut is set b starts inside a line and that first, partial line is
+// left out. nil when there is nothing.
+func tailLines(b []byte, cut bool, n int) []string {
 	if len(b) == 0 {
 		return nil
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(b) >= 64<<10 && len(lines) > 1 {
+	if cut && len(lines) > 1 {
 		lines = lines[1:]
 	}
 	if len(lines) > n {
