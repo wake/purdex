@@ -13,13 +13,20 @@ import { hostEndpointKey } from '../../stores/useHostConfigStore'
 
 export const PERSONAS_EVENT_TYPE = 'hostconfig.personas'
 
-function supported(hostId: string): boolean {
-  return selectPersonasV1(hostId)(useNexHostStore.getState())
+type NexState = ReturnType<typeof useNexHostStore.getState>
+
+/**
+ * The entry declares `personas.v1` AND was fetched from the daemon now answering. A stale entry (`fetchedAt` 0:
+ * invalidated by a reconnect and not yet refetched) keeps the old capabilities, which a downgraded daemon no longer
+ * has, so it never counts: the refetch landing is what triggers the load.
+ */
+function freshSupported(state: Pick<NexState, 'byHost'>, hostId: string): boolean {
+  return (state.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(state)
 }
 
-/** Loads now when the host's current capabilities declare `personas.v1`; otherwise does nothing. */
+/** Loads now when the host's fresh capabilities declare `personas.v1`; otherwise does nothing. */
 export async function loadPersonasIfSupported(hostId: string): Promise<void> {
-  if (supported(hostId)) await usePersonaStore.getState().load(hostId)
+  if (freshSupported(useNexHostStore.getState(), hostId)) await usePersonaStore.getState().load(hostId)
 }
 
 /** The event carries only `{revision}`; the collection is re-read whole. */
@@ -27,9 +34,13 @@ export function handlePersonasEvent(hostId: string): void {
   void loadPersonasIfSupported(hostId)
 }
 
-/** Asks for the capability entry; the Nex subscription below does the loading once it lands. */
+/**
+ * Asks for the capability entry; the Nex subscription below does the loading once it lands. Deferred to a microtask so
+ * the Nex store's own host-store subscriber (clear on an endpoint move, invalidate on reconnect) has already run,
+ * whichever order the two were started in: asking first would start a fetch against the entry about to be cleared.
+ */
 function ensureCapabilities(hostId: string): void {
-  void useNexHostStore.getState().ensure(hostId)
+  queueMicrotask(() => { void useNexHostStore.getState().ensure(hostId) })
 }
 
 export function startPersonaLoader(): () => void {
@@ -42,10 +53,10 @@ export function startPersonaLoader(): () => void {
 
   const stopNex = useNexHostStore.subscribe((next, prev) => {
     for (const hostId of Object.keys(next.byHost)) {
-      const now = selectPersonasV1(hostId)(next)
-      const before = selectPersonasV1(hostId)(prev)
-      if (now && (!before || next.byHost[hostId] !== prev.byHost[hostId])) void usePersonaStore.getState().load(hostId)
-      else if (!now && before) usePersonaStore.getState().forget(hostId) // the daemon stopped declaring it (downgrade)
+      if (next.byHost[hostId] === prev.byHost[hostId]) continue
+      if (freshSupported(next, hostId)) void usePersonaStore.getState().load(hostId)
+      // A refetch that no longer declares it: the daemon was downgraded.
+      else if ((next.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(prev)) usePersonaStore.getState().forget(hostId)
     }
   })
 
