@@ -232,18 +232,19 @@ func (m *Module) catchUp(ctx context.Context) {
 				return
 			}
 		}
-		if err := m.store.setCursor(page.Cursor); err != nil {
+		last := len(page.Jobs) < pageSize
+		if last && windowed {
+			err = m.store.finishFirstPass(page.Cursor) // the cursor and the end of the window, together
+		} else {
+			err = m.store.setCursor(page.Cursor)
+		}
+		if err != nil {
 			m.logf("jobnotify: catch-up cursor: %v", err)
 			return
 		}
 		cursor = page.Cursor
-		if len(page.Jobs) < pageSize {
+		if last {
 			break
-		}
-	}
-	if windowed {
-		if err := m.store.clearSince(); err != nil {
-			m.logf("jobnotify: catch-up window: %v", err)
 		}
 	}
 	m.wake()

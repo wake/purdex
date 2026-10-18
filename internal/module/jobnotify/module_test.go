@@ -535,6 +535,29 @@ func TestACatchUpThatCannotQueueAJobKeepsItsCursor(t *testing.T) {
 	}
 }
 
+// metaBreakingSource makes the window unwritable while the last page is read.
+type metaBreakingSource struct {
+	fakeSource
+	m *Module
+}
+
+func (b *metaBreakingSource) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	b.m.store.db.Exec(`DROP TABLE meta`)
+	return b.fakeSource.JobsAfter(ctx, after, limit)
+}
+
+// The cursor of the last page and the end of the first-pass window are one commit: if the window cannot be ended, the cursor does not
+// move either, so no restart can find a cursor with the window still in force (it would skip a job stamped by a slow clock).
+func TestTheLastCursorAndTheEndOfTheWindowAreOneCommit(t *testing.T) {
+	src := &metaBreakingSource{fakeSource: fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	src.m = m
+	m.catchUp(context.Background())
+	if c, ok, _ := m.store.cursor(); ok {
+		t.Fatalf("the cursor %q was committed although the window could not be ended", c)
+	}
+}
+
 func TestStopGivesUpAtItsDeadlineWhenAListIgnoresCancellation(t *testing.T) {
 	src := &blockingJobs{release: make(chan struct{}), entered: make(chan struct{})}
 	m := newMod(t, t.TempDir(), src, &sent{})

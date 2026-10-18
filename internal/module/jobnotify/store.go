@@ -149,12 +149,6 @@ func (s *store) setSince(t time.Time) error {
 	return err
 }
 
-// clearSince drops the first-pass window once a pass has read everything: the cursor is the position from then on.
-func (s *store) clearSince() error {
-	_, err := s.db.Exec(`DELETE FROM meta WHERE key = 'since'`)
-	return err
-}
-
 // cursor is wwd's position after the last page of the job list that was fully queued (false when there is none yet). It is opaque: only
 // wwd's own answers are stored, and they are sent back as they came.
 func (s *store) cursor() (string, bool, error) {
@@ -169,6 +163,23 @@ func (s *store) cursor() (string, bool, error) {
 func (s *store) setCursor(c string) error {
 	_, err := s.db.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c)
 	return err
+}
+
+// finishFirstPass stores the cursor of the last page and drops the first-pass window in one transaction: a crash between the two would
+// leave a cursor with the window still in force, and the next pass would skip a new job stamped by a slow clock.
+func (s *store) finishFirstPass(c string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM meta WHERE key = 'since'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // prune drops the rows that were last changed more than keep ago and are not pending. wwd keeps a job for as long as it keeps its
