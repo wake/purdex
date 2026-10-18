@@ -279,9 +279,13 @@ func TestHeartbeat409MeansLostAndEndsDelivery(t *testing.T) {
 	}
 	c, _ := newCtl(ex)
 	var finishCtxErr error
+	start := time.Now()
 	e := c.Work(context.Background(), o, scored(testJob("j")), func(ctx context.Context, e Ended) { finishCtxErr = ctx.Err() })
 	if e.Kind != KindLost || finishCtxErr == nil {
 		t.Fatalf("kind=%s finishCtxErr=%v: once the lease is gone nothing may be posted", e.Kind, finishCtxErr)
+	}
+	if d := time.Since(start); d > 3*unit {
+		t.Fatalf("took %v: a 409 means stop at once, not at the lease deadline (%v)", d, 5*unit)
 	}
 }
 
@@ -423,5 +427,61 @@ func TestRunGetsThePlanPrepareMade(t *testing.T) {
 	got := ex.plan.Load()
 	if got == nil || len(got.Argv) != 3 || got.Argv[2] != "./a" || got.Dir != want.Dir || got.Timeout != want.Timeout || got.TaskEnv[0] != "A=1" {
 		t.Fatalf("plan %+v", got)
+	}
+}
+
+func TestNotFoundOnHeartbeatOrStartIsLostAtOnce(t *testing.T) {
+	ex := &fakeExec{run: blockUntilDone}
+	o := &fakeOrigin{heartbeat: func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{}, ErrNotFound }}
+	c, _ := newCtl(ex)
+	start := time.Now()
+	if e := c.Work(context.Background(), o, scored(testJob("j")), nil); e.Kind != KindLost || time.Since(start) > 3*unit {
+		t.Fatalf("heartbeat: kind=%s after %v", e.Kind, time.Since(start))
+	}
+	ex2 := &fakeExec{}
+	o2 := &fakeOrigin{start: func() (wire.Lease, error) { return wire.Lease{}, ErrNotFound }}
+	if e := c.cfgWork(ex2, o2); e.Kind != KindLost || ex2.ran.Load() != 0 {
+		t.Fatalf("start: kind=%s ran=%d", e.Kind, ex2.ran.Load())
+	}
+}
+
+func (c *Controller) cfgWork(ex Exec, o Origin) Ended {
+	cc := New(Config{Worker: "mlab", Locks: locks.New(), Exec: ex, Unit: unit})
+	return cc.Work(context.Background(), o, scored(testJob("j")), nil)
+}
+
+func TestLostAfterCancelStillMeansLost(t *testing.T) {
+	// cancel is answered, the command takes a while to end, and meanwhile the lease is lost: nothing may be posted.
+	ex := &fakeExec{run: func(ctx context.Context) run.Result {
+		<-ctx.Done()
+		time.Sleep(6 * unit)
+		return run.Result{Outcome: run.Cancelled, ExitCode: -1}
+	}}
+	o := &fakeOrigin{heartbeat: func(n int) (wire.HeartbeatResponse, error) {
+		if n == 1 {
+			return wire.HeartbeatResponse{LeaseS: 5, RenewS: 1, Cancel: true}, nil
+		}
+		return wire.HeartbeatResponse{}, &Conflict{State: wire.StateQueued}
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j")), nil); e.Kind != KindLost {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+}
+
+func TestCancelDuringStartDoesNotRunTheCommand(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{
+		heartbeat: func(int) (wire.HeartbeatResponse, error) {
+			return wire.HeartbeatResponse{LeaseS: 5, RenewS: 1, Cancel: true}, nil
+		},
+		start: func() (wire.Lease, error) {
+			time.Sleep(3 * unit) // the heartbeat's cancel arrives while start is in flight
+			return wire.Lease{LeaseS: 5, RenewS: 1}, nil
+		},
+	}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j")), nil); e.Kind != KindCancelled || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s ran=%d", e.Kind, ex.ran.Load())
 	}
 }
