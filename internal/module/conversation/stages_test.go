@@ -486,6 +486,9 @@ func TestStages_TrimInsideOneMillisecondKeepsTheFloorBelowIt(t *testing.T) {
 	s.used["old"] = 50
 	s.trimUsed()
 	assert.Less(t, s.usedFloor, int64(100), "items of that millisecond that were never used must stay matchable")
+	assert.Len(t, s.used, maxStageUsed+2, "and every marker of that millisecond stays, so a used item is not handed out twice")
+	_, oldKept := s.used["old"]
+	assert.False(t, oldKept, "the strictly older marker is what went")
 
 	s2 := &sessionStages{used: map[string]int64{}}
 	for i := 0; i < maxStageUsed+2; i++ {

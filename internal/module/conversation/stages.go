@@ -426,15 +426,18 @@ func (s *sessionStages) trimUsed() {
 		all = append(all, usedAt{id, at})
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].at < all[j].at })
-	for _, u := range all[:over] {
-		delete(s.used, u.id)
-	}
-	// Nothing at or before the floor is matched again, so a trimmed item cannot be given out twice. When the cut falls inside
-	// one millisecond the floor stays below it, so items of that millisecond that were never used still can be (more than
-	// maxStageUsed matches inside one millisecond is not a real traffic shape).
-	cut := all[over-1].at
+	// Nothing at or before the floor is matched again, so a trimmed item cannot be given out twice. A cut that falls inside one
+	// millisecond keeps that whole millisecond (the map may run over by the items of one millisecond) and puts the floor just
+	// below it: its used items stay marked and its unused ones stay matchable.
+	cut, end := all[over-1].at, over
 	if over < len(all) && all[over].at == cut {
+		for end > 0 && all[end-1].at == cut {
+			end--
+		}
 		cut--
+	}
+	for _, u := range all[:end] {
+		delete(s.used, u.id)
 	}
 	s.usedFloor = max(s.usedFloor, cut)
 }
