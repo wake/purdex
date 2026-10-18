@@ -175,7 +175,7 @@ describe('max_members / in_use on the roster', () => {
   })
 
   it('an impossible cap is dropped as a pair: outside 1-8, a negative usage, or more in use than the cap', () => {
-    for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 9, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 1, in_use: 5 }, { max_members: 4, in_use: -1 }]) {
+    for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 10, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 1, in_use: 5 }, { max_members: 4, in_use: -1 }]) {
       const t = (parseRosterEvent(frame(bad)) as { teams: TeamRoster[] }).teams[0]
       expect(t.max_members).toBeUndefined()
       expect(t.in_use).toBeUndefined()

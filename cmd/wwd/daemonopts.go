@@ -37,6 +37,7 @@ func daemonOptions(p daemonParts) daemon.Options {
 		State: p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: clones.NewSource(p.Cfg.Repos).Names,
 		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(p.Queue).WithFault(p.Hooks).WorkerRoutes(mux, false) },
 		Observer:    p.Observer,
+		Alerts:      p.Store, // GET /v1/alerts (spec §13.3): read only until the alert rules write the table (8a-1, 8a-2)
 		Usage:       p.Store, // GET /v1/usage on the socket: what finished jobs used (rows are written by the job-end hook, WWD usage U3)
 	}
 }
