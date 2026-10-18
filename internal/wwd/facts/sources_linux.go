@@ -113,14 +113,18 @@ func productionPSI() *wire.PSI {
 }
 
 // linuxDisks reports the root file system and, when it is another one, the one
-// holding the home directory.
+// holding the home directory, each under its real mount point.
 func linuxDisks() ([]RawDisk, error) {
+	var points []string
+	if text, err := readFile("/proc/self/mountinfo"); err == nil {
+		points = ParseMountPoints(text)
+	}
 	paths := []string{"/"}
 	if home, err := os.UserHomeDir(); err == nil && home != "/" {
 		paths = append(paths, home)
 	}
 	var out []RawDisk
-	var seenFsid []unix.Fsid
+	seen := map[string]bool{}
 	var firstErr error
 	for _, p := range paths {
 		var st unix.Statfs_t
@@ -130,16 +134,13 @@ func linuxDisks() ([]RawDisk, error) {
 			}
 			continue
 		}
-		dup := false
-		for _, f := range seenFsid {
-			dup = dup || f == st.Fsid
-		}
-		if dup {
+		mount := MountOf(points, p)
+		if seen[mount] {
 			continue
 		}
-		seenFsid = append(seenFsid, st.Fsid)
+		seen[mount] = true
 		bs := uint64(st.Bsize)
-		out = append(out, RawDisk{Mount: p, TotalBytes: st.Blocks * bs, FreeBytes: st.Bfree * bs, AvailBytes: st.Bavail * bs})
+		out = append(out, RawDisk{Mount: mount, TotalBytes: st.Blocks * bs, FreeBytes: st.Bfree * bs, AvailBytes: st.Bavail * bs})
 	}
 	if len(out) == 0 {
 		return nil, firstErr
