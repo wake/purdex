@@ -1,120 +1,166 @@
 package jobnotify
 
 import (
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"sync"
+	"database/sql"
+	"fmt"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
-// maxKept bounds the ids remembered; a job older than the newest maxKept ended ones has long been told or never will be.
-const maxKept = 5000
+// Notice statuses.
+const (
+	statusPending = "pending"
+	statusSent    = "sent"
+	statusGivenUp = "given_up"
+)
 
-// state is wwd-notified.json: the jobs already told, and the time from which a reconnect looks for jobs it missed.
-type state struct {
-	Notified []string  `json:"notified"`
-	Since    time.Time `json:"since"`
+// maxTries is how many times a notice is tried in all: a session that was only just started may not have its inbox yet, one that
+// is not on this host never will. The count is stored, so a restart does not start it over.
+const maxTries = 6
+
+// keep is how long a notice row is kept after its last change, like the job it is about.
+const keep = 7 * 24 * time.Hour
+
+// overlap is how far behind the catch-up window a catch-up looks again. Looking twice at a job costs nothing (job_id is unique); a
+// window with no overlap would lose a job that ended while the previous catch-up was reading.
+const overlap = 10 * time.Minute
+
+// store is the notifier's outbox: one row per job to tell, unique by job id, so "told once" holds across reconnects, restarts and
+// overlapping catch-ups without any in-memory set.
+type store struct{ db *sql.DB }
+
+// notice is a row that is still to be delivered.
+type notice struct {
+	JobID, Session, Text string
+	Tries                int
 }
 
-// store is the notifier's memory (spec §10: once per job, also across a daemon restart). The notifier is its only writer.
-type store struct {
-	mu   sync.Mutex
-	path string
-	st   state
-	set  map[string]bool
-}
-
-// openStore reads path; a missing or unreadable file starts a fresh memory whose catch-up window begins at now, so the first run
-// does not tell a whole history.
-func openStore(path string, now time.Time, logf func(string, ...any)) *store {
-	s := &store{path: path, set: map[string]bool{}}
-	b, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		logf("jobnotify: %s cannot be read, starting with an empty memory: %v", path, err)
-	default:
-		if err := json.Unmarshal(b, &s.st); err != nil {
-			s.st = state{}
-			// keep the bad file for whoever looks, and start from an empty memory instead of failing the daemon
-			logf("jobnotify: %s is damaged (%v), moved to %s.bad; starting with an empty memory", path, err, path)
-			_ = os.Rename(path, path+".bad")
-		}
+func openStore(path string) (*store, error) {
+	dsn := path
+	if path != ":memory:" {
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
 	}
-	if s.st.Since.IsZero() {
-		s.st.Since = now
-	}
-	for _, id := range s.st.Notified {
-		s.set[id] = true
-	}
-	return s
-}
-
-func (s *store) has(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.set[id]
-}
-
-func (s *store) since() time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.st.Since
-}
-
-// mark records id as told and writes the file. The file is written after
-// the notice was handed over, so a crash in between tells a job twice at worst, never zero times.
-func (s *store) mark(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.set[id] {
-		s.set[id] = true
-		s.st.Notified = append(s.st.Notified, id)
-		if n := len(s.st.Notified); n > maxKept {
-			for _, old := range s.st.Notified[:n-maxKept] {
-				delete(s.set, old)
-			}
-			s.st.Notified = append([]string(nil), s.st.Notified[n-maxKept:]...)
-		}
-	}
-	return s.save()
-}
-
-// advance moves the catch-up window to at (never back) once a catch-up has looked at every state.
-func (s *store) advance(at time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !at.After(s.st.Since) {
-		return nil
-	}
-	s.st.Since = at
-	return s.save()
-}
-
-func (s *store) save() error {
-	b, err := json.Marshal(s.st)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("open job notice db: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
+	if path == ":memory:" {
+		db.SetMaxOpenConns(1)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".wwd-notified-*")
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS notices (
+			job_id      TEXT PRIMARY KEY,
+			session     TEXT    NOT NULL,
+			text        TEXT    NOT NULL,
+			state       TEXT    NOT NULL,
+			finished_at INTEGER NOT NULL,
+			status      TEXT    NOT NULL,
+			tries       INTEGER NOT NULL DEFAULT 0,
+			last_error  TEXT    NOT NULL DEFAULT '',
+			updated_at  INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS notices_status ON notices(status);
+		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job notice db: %w", err)
+	}
+	return &store{db: db}, nil
+}
+
+func (s *store) close() error { return s.db.Close() }
+
+// enqueue adds a pending notice for a job; false when the job already has a row (told, waiting or given up).
+func (s *store) enqueue(jobID, session, text, state string, finished, now time.Time) (bool, error) {
+	r, err := s.db.Exec(`INSERT OR IGNORE INTO notices(job_id, session, text, state, finished_at, status, tries, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, 0, ?)`, jobID, session, text, state, finished.UnixMilli(), statusPending, now.UnixMilli())
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, werr := tmp.Write(b)
-	serr := tmp.Sync()
-	cerr := tmp.Close()
-	if err := errors.Join(werr, serr, cerr); err != nil {
-		os.Remove(tmp.Name())
-		return err
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+// pending lists the notices still to be delivered, oldest first. A pending row that already used all its tries (a crash between
+// the stored try and its result) is closed as given up here, so it can neither be tried again nor stay pending for ever.
+func (s *store) pending(now time.Time) ([]notice, error) {
+	if _, err := s.db.Exec(`UPDATE notices SET status = ?, updated_at = ? WHERE status = ? AND tries >= ?`,
+		statusGivenUp, now.UnixMilli(), statusPending, maxTries); err != nil {
+		return nil, err
 	}
-	if err := os.Rename(tmp.Name(), s.path); err != nil {
-		os.Remove(tmp.Name())
-		return err
+	rows, err := s.db.Query(`SELECT job_id, session, text, tries FROM notices WHERE status = ? ORDER BY finished_at, job_id`, statusPending)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	defer rows.Close()
+	var out []notice
+	for rows.Next() {
+		var n notice
+		if err := rows.Scan(&n.JobID, &n.Session, &n.Text, &n.Tries); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// one returns the notice of a job when it is still pending.
+func (s *store) one(jobID string) (notice, bool, error) {
+	var n notice
+	err := s.db.QueryRow(`SELECT job_id, session, text, tries FROM notices WHERE job_id = ? AND status = ? AND tries < ?`,
+		jobID, statusPending, maxTries).Scan(&n.JobID, &n.Session, &n.Text, &n.Tries)
+	if err == sql.ErrNoRows {
+		return notice{}, false, nil
+	}
+	return n, err == nil, err
+}
+
+// beginTry stores that a try is about to be made and returns the number of tries including it. It is written before the send, so a
+// crash during the send still counts it.
+func (s *store) beginTry(jobID string, now time.Time) (int, error) {
+	var tries int
+	err := s.db.QueryRow(`UPDATE notices SET tries = tries + 1, updated_at = ? WHERE job_id = ? AND status = ? RETURNING tries`,
+		now.UnixMilli(), jobID, statusPending).Scan(&tries)
+	return tries, err
+}
+
+// settle sets a notice's status and last error; a failed try that still has tries left keeps it pending and only records the error.
+func (s *store) settle(jobID, status, lastErr string, now time.Time) error {
+	_, err := s.db.Exec(`UPDATE notices SET status = ?, last_error = ?, updated_at = ? WHERE job_id = ?`, status, lastErr, now.UnixMilli(), jobID)
+	return err
+}
+
+// status returns a job's row status ("" when it has none) and its tries.
+func (s *store) status(jobID string) (string, int, error) {
+	var st string
+	var tries int
+	err := s.db.QueryRow(`SELECT status, tries FROM notices WHERE job_id = ?`, jobID).Scan(&st, &tries)
+	if err == sql.ErrNoRows {
+		return "", 0, nil
+	}
+	return st, tries, err
+}
+
+// since is the catch-up window: the time the last complete catch-up began (false when there was none).
+func (s *store) since() (time.Time, bool, error) {
+	var ms int64
+	err := s.db.QueryRow(`SELECT value FROM meta WHERE key = 'since'`).Scan(&ms)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.UnixMilli(ms), true, nil
+}
+
+func (s *store) setSince(t time.Time) error {
+	_, err := s.db.Exec(`INSERT INTO meta(key, value) VALUES('since', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, t.UnixMilli())
+	return err
+}
+
+// prune drops the rows that were last changed more than keep ago and are not pending.
+func (s *store) prune(now time.Time) error {
+	_, err := s.db.Exec(`DELETE FROM notices WHERE status != ? AND updated_at < ?`, statusPending, now.Add(-keep).UnixMilli())
+	return err
 }
