@@ -171,12 +171,19 @@ func TestSystemdUnit(t *testing.T) {
 	for _, want := range []string{
 		"[Unit]", "After=network-online.target tailscaled.service", "[Service]", "User=wake",
 		"ExecStart=/home/wake/.local/share/wwd/bin/wwd -config /home/wake/.config/wwd/config.toml",
-		"Restart=always", "RestartSec=", "MemoryMax=", "TasksMax=", "NoNewPrivileges=yes", "[Install]", "WantedBy=multi-user.target",
+		"Restart=always", "RestartSec=", "MemoryMax=", "TasksMax=", "ProtectSystem=full", "[Install]", "WantedBy=multi-user.target",
 		"Environment=PATH=/usr/local/bin:/usr/bin",
 		"Slice=wwdd.slice", "CPUQuota=100%", "MemoryMax=512M", "TasksMax=256",
 	} {
 		if !strings.Contains(u, want) {
 			t.Errorf("unit lacks %q:\n%s", want, u)
+		}
+	}
+	// The worker starts jobs with `sudo systemd-run` (spec §5); sudo refuses to run when no_new_privs is set, so the unit must not set
+	// it (NoNewPrivileges=yes), and anything that would imply it is kept out as well. The privilege boundary is sudoers (§12).
+	for _, banned := range []string{"NoNewPrivileges", "RestrictSUIDSGID", "SystemCallFilter", "SecureBits"} {
+		if strings.Contains(u, banned) {
+			t.Errorf("the unit must not set %s: it would stop sudo systemd-run (spec §5)", banned)
 		}
 	}
 	// wwd itself is wwdd.slice; its jobs are wwd.slice (spec §5). A hyphenated name would make one the other's child, so the unit names
