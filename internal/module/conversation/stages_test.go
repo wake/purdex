@@ -333,6 +333,12 @@ func TestStages_UsedItemsAreForgottenWhenNoIdCouldStillMatchThem(t *testing.T) {
 	l.observe("s", nil, false, []stageItem{item("u1", "x", t0.Add(time.Second))}, t0.Add(2*time.Second))
 	require.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
 	assert.Len(t, l.sessions["s"].used, 1)
+	l.observe("s", nil, false, nil, t0.Add(3*time.Second)) // nothing is in flight any more: nothing can still match it
+	assert.Empty(t, l.sessions["s"].used)
+	l.begin("s", "c", "z", t0.Add(4*time.Second))
+	l.set("s", "c", "entered", "", "fill", t0.Add(4*time.Second))
+	l.observe("s", nil, false, []stageItem{item("u2", "nope", t0.Add(5*time.Second))}, t0.Add(5*time.Second))
+	l.sessions["s"].used["u1"] = ms(t0.Add(time.Second))
 	l.begin("s", "b", "y", t0.Add(time.Minute)) // an id in flight later: u1 is far older than anything it could match
 	l.set("s", "b", "entered", "", "fill", t0.Add(time.Minute))
 	l.observe("s", nil, false, nil, t0.Add(time.Minute+time.Second))
@@ -341,14 +347,17 @@ func TestStages_UsedItemsAreForgottenWhenNoIdCouldStillMatchThem(t *testing.T) {
 
 func TestStages_IdsPerSessionAreBounded(t *testing.T) {
 	var l stageLedger
-	l.begin("s", "first-done", "x", t0)
+	l.begin("s", "oldest-live", "x", t0)
+	l.begin("s", "first-done", "x", t0.Add(time.Millisecond))
 	l.set("s", "first-done", "failed", "r", "", t0)
-	for i := 0; i < maxStageRows; i++ {
+	for i := 0; i < maxStageRows-1; i++ {
 		l.begin("s", "id"+string(rune('A'+i%26))+string(rune('a'+i/26)), "y", t0.Add(time.Duration(i+1)*time.Millisecond))
 	}
 	assert.LessOrEqual(t, len(l.sessions["s"].rows), maxStageRows)
 	_, has := l.sessions["s"].rows["first-done"]
 	assert.False(t, has, "the finished id goes first")
+	_, live := l.sessions["s"].rows["oldest-live"]
+	assert.True(t, live, "an id still in flight is kept while a finished one can go")
 }
 
 // A queued id keeps no second copy of its text: the one counted copy is what the caps and the TTL act on.
