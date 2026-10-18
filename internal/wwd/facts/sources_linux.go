@@ -30,6 +30,7 @@ func SystemSourcesWith(SourceOptions) Sources {
 	return Sources{
 		Now:   time.Now,
 		Tools: systemTools(),
+		Procs: NewProcfsReader("/proc", DefaultSessionsDir()).Snapshot,
 		CPU:   linuxCPU,
 		Mem:   linuxMem,
 		Disks: linuxDisks,
