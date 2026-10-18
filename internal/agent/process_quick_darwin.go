@@ -45,7 +45,7 @@ func quickPPIDArgs(pid int) (int, []string, error) {
 	}
 	ppid2, id2, err := kernelProcIdentity(pid)
 	if err != nil || ppid2 != ppid || id2 != id {
-		return 0, nil, fmt.Errorf("pid %d changed while its arguments were read", pid)
+		return 0, nil, fmt.Errorf("pid %d changed while its arguments were read: %w", pid, ErrProcessChanged)
 	}
 	return ppid, argv, nil
 }

@@ -2,11 +2,14 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 func TestReadProcessInfo_UsesTheSysctlReadWithoutForking(t *testing.T) {
@@ -46,6 +49,27 @@ func TestReadProcessInfo_FallsBackToPSWhenTheSysctlReadFails(t *testing.T) {
 	hookForks.Store(0)
 	if _, err := readProcessInfo(os.Getpid()); err != nil || hookForks.Load() != 1 {
 		t.Fatalf("empty argv: err=%v forks=%d", err, hookForks.Load())
+	}
+}
+
+// A pid reused while its arguments were read must not be answered by ps for the replacement: no answer, no fork, and the sender
+// becomes uncertain.
+func TestReadProcessInfo_ChangedPidIsNotAskedOfPS(t *testing.T) {
+	orig := quickProcessInfo
+	t.Cleanup(func() { quickProcessInfo = orig })
+	quickProcessInfo = func(pid int) (int, []string, error) {
+		return 0, nil, fmt.Errorf("pid %d changed: %w", pid, agent.ErrProcessChanged)
+	}
+	hookForks.Store(0)
+	if _, err := readProcessInfo(os.Getpid()); err == nil {
+		t.Fatal("a changed pid was answered")
+	}
+	if n := hookForks.Load(); n != 0 {
+		t.Fatalf("forks = %d, want 0: ps must not be asked", n)
+	}
+	pid, uncertain := resolveAgentPID(os.Getpid())
+	if pid != os.Getpid() || !uncertain {
+		t.Fatalf("resolveAgentPID = %d, uncertain %v; want the pid, uncertain", pid, uncertain)
 	}
 }
 

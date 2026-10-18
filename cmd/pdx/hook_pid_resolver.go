@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,8 +68,13 @@ func resolveHookProvenance() hookProvenance {
 }
 
 func readProcessInfo(pid int) (procInfo, error) {
-	if ppid, argv, err := quickProcessInfo(pid); err == nil && len(argv) > 0 {
-		return procInfo{PID: pid, PPID: ppid, ExePath: argv[0], Argv: argv}, nil
+	qppid, qargv, qerr := quickProcessInfo(pid)
+	if qerr == nil && len(qargv) > 0 {
+		return procInfo{PID: pid, PPID: qppid, ExePath: qargv[0], Argv: qargv}, nil
+	}
+	if errors.Is(qerr, agent.ErrProcessChanged) {
+		// The pid was reused while it was read: ps would answer for the replacement. No answer makes the sender uncertain.
+		return procInfo{}, qerr
 	}
 	out, err := outputCounted(exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args="))
 	if err != nil {

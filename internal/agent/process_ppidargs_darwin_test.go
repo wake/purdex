@@ -146,8 +146,8 @@ func TestProcessPPIDArgs_ReusedPidInTheSameSecondIsRefused(t *testing.T) {
 		return kp, err
 	}
 	defer func() { kernProcPid = orig }()
-	if _, _, err := ProcessPPIDArgs(pid); err == nil {
-		t.Fatal("a process that started at a different microsecond was taken for the same one")
+	if _, _, err := ProcessPPIDArgs(pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("a process that started at a different microsecond was taken for the same one (err %v)", err)
 	}
 	if calls < 2 {
 		t.Fatalf("the identity was read %d times, want a read before and after the arguments", calls)
