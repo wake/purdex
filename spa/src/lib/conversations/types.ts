@@ -146,6 +146,8 @@ export interface Capabilities {
   background_tasks?: string
   peer_inbound?: string
   send?: string
+  /** `keys`: the daemon can send Claude Code's queue now (`POST …/send-now`, host capability `sessions.send_now.v1`); `not_wired`: it cannot. */
+  send_now?: string
   interrupt?: string
   steer?: string
   reasons?: Record<string, string>

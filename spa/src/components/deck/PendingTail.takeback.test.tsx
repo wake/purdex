@@ -7,7 +7,7 @@ import { forgetScrollMemosWithPrefix } from '../../lib/nex/transcript-scroll-mem
 import { emptyDoc } from '../../lib/conversations/model'
 import type { Header, HeaderQueued, Turn } from '../../lib/conversations/types'
 import type { ConversationEntry } from '../../stores/useConversationStore'
-import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
+import { clearAllDrafts, draftKey, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllCleared } from '../../lib/conversations/draft-clear'
 import { clearAllUploads } from '../../lib/conversations/attachment-upload'
@@ -216,12 +216,11 @@ describe('the keyboard', () => {
     expect(takeBack).not.toHaveBeenCalled()
   })
 
-  it('a draft already typed: Up is the caret\'s, nothing is taken back', () => {
+  it('a draft already typed, the caret on its first line: Up takes Claude Code\'s queue back (MS2-4, L5)', () => {
     mount(header([row('a')]))
     writeDraft(KEY, 'typed')
     type('typed')
     up()
-    expect(takeBack).not.toHaveBeenCalled()
-    expect(readDraft(KEY)).toBe('typed')
+    expect(takeBack).toHaveBeenCalledTimes(1)
   })
 })
