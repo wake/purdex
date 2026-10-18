@@ -257,7 +257,20 @@ func TestLifecycle_StopGivesUpAtItsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, m.Stop(ctx), context.DeadlineExceeded)
-	close(release)
+
+	// the old loop is still inside its read: a Start now would run a second loop beside it, so it is refused
+	require.Error(t, m.Start(context.Background()), "Start beside a loop that has not ended")
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	require.ErrorIs(t, m.Stop(ctx2), context.DeadlineExceeded, "a Stop that ran out of time can be repeated, and still waits for that loop")
+
+	close(release) // the stuck read ends; the loop sees its context is over and ends
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel3()
+	require.NoError(t, m.Stop(ctx3))
+	m.src = &streamSource{}
+	require.NoError(t, m.Start(context.Background()), "Start once the old loop has ended")
+	require.NoError(t, m.Stop(ctx3))
 }
 
 // blockedSource ignores the context until released (a stream read that is stuck).

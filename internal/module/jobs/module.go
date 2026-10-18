@@ -104,12 +104,20 @@ func (m *Module) Init(c *core.Core) error {
 }
 
 // Start opens the local wwd's event stream in the background; wwd not running is retried and never fails the daemon.
-// A second Start while it runs does nothing; a Start after Stop runs it again.
+// A second Start while it runs does nothing; a Start after Stop runs it again, but not while the loop of the earlier Start has still
+// not ended (a Stop whose ctx ran out leaves it ending): that Start is refused rather than run beside the old loop.
 func (m *Module) Start(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cancel != nil {
 		return nil
+	}
+	if m.done != nil {
+		select {
+		case <-m.done:
+		default:
+			return errors.New("jobs: the stream loop of the earlier Start has not ended yet")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -121,17 +129,20 @@ func (m *Module) Start(context.Context) error {
 	return nil
 }
 
-// Stop ends the stream loop and waits for it as long as ctx allows. Stopping a module that is not running does nothing.
+// Stop ends the stream loop and waits for it as long as ctx allows. The loop is remembered until it has ended, so a Stop that ran out
+// of time can be repeated and a Start does not begin a second loop beside it. Stopping a module that never ran does nothing.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.ready = false
 	cancel, done := m.cancel, m.done
-	m.cancel, m.done = nil, nil
+	m.cancel = nil
 	m.mu.Unlock()
-	if cancel == nil {
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
 		return nil
 	}
-	cancel()
 	select {
 	case <-done:
 		return nil
