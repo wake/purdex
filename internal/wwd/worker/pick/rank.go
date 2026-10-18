@@ -18,21 +18,6 @@ type Candidate struct {
 	Job    wire.Job
 }
 
-// PinMode is a manual position (spec §4.6): a person or the watcher moved a queued job.
-type PinMode string
-
-const (
-	PinFront PinMode = "front"
-	PinBack  PinMode = "back"
-	PinHold  PinMode = "hold"
-)
-
-// Pin is a job's manual position; Seq orders pins of the same mode, smallest first.
-type Pin struct {
-	Mode PinMode
-	Seq  int64
-}
-
 // Env is what the worker knows about its own host. A nil function means "no restriction" (or zero, for Estimate).
 type Env struct {
 	Now    time.Time
@@ -45,10 +30,6 @@ type Env struct {
 	// comes from the origin's tar (spec 5 Workspace), so a clone only earns warm_bonus.
 	Warm      func(wire.Job) bool
 	Suspended func(repo string) bool
-	// Pinned reads a job's manual position. It takes the Candidate, not the bare job, so the origin is visible: a job id is only unique
-	// per origin. It is an interface until wire.Job carries manual and manual_seq (the queue-side manual order, purdex-a-line); then Rank
-	// reads those two fields itself and this goes away.
-	Pinned func(Candidate) (Pin, bool)
 }
 
 // Scored is a claimable job with its score.
@@ -122,8 +103,6 @@ func Rank(cands []Candidate, env Env) []Scored {
 
 	type entry struct {
 		Scored
-		pin    Pin
-		pinned bool
 	}
 	var es []entry
 	for _, c := range cands {
@@ -137,13 +116,10 @@ func Rank(cands []Candidate, env Env) []Scored {
 		if env.Suspended != nil && env.Suspended(j.Repo.Name) {
 			continue
 		}
-		var e entry
-		if env.Pinned != nil {
-			e.pin, e.pinned = env.Pinned(c)
-		}
-		if e.pinned && e.pin.Mode == PinHold {
+		if j.Manual == wire.PositionHold {
 			continue
 		}
+		var e entry
 		wait := env.Now.Sub(j.CreatedAt).Minutes()
 		if wait < 0 {
 			wait = 0
@@ -170,13 +146,11 @@ func Rank(cands []Candidate, env Env) []Scored {
 
 	// group: 0 front, 1 normal, 2 back.
 	group := func(e entry) int {
-		if e.pinned {
-			switch e.pin.Mode {
-			case PinFront:
-				return 0
-			case PinBack:
-				return 2
-			}
+		switch e.Job.Manual {
+		case wire.PositionFront:
+			return 0
+		case wire.PositionBack:
+			return 2
 		}
 		return 1
 	}
@@ -185,8 +159,8 @@ func Rank(cands []Candidate, env Env) []Scored {
 		if ga, gb := group(a), group(b); ga != gb {
 			return ga < gb
 		}
-		if group(a) != 1 && a.pin.Seq != b.pin.Seq {
-			return a.pin.Seq < b.pin.Seq
+		if group(a) != 1 && a.Job.ManualSeq != b.Job.ManualSeq {
+			return a.Job.ManualSeq < b.Job.ManualSeq
 		}
 		if group(a) == 1 && a.Score != b.Score {
 			return a.Score > b.Score

@@ -80,10 +80,11 @@ func (o *fakeOrigin) count() (claims, starts, heartbeats int) {
 
 type fakeExec struct {
 	materialize func(ctx context.Context) (snapshot.Workspace, error)
-	validate    func() error
+	prepare     func() (Plan, error)
 	run         func(ctx context.Context) run.Result
 	cleaned     atomic.Int32
 	ran         atomic.Int32
+	plan        atomic.Pointer[Plan]
 	order       *[]string
 	mu          sync.Mutex
 }
@@ -103,15 +104,16 @@ func (e *fakeExec) Materialize(ctx context.Context, _ wire.Job, _ string) (snaps
 	return snapshot.Workspace{Dir: "/ws", Cleanup: func() error { e.cleaned.Add(1); e.note("cleanup"); return nil }}, nil
 }
 
-func (e *fakeExec) Validate(context.Context, wire.Job, snapshot.Workspace) error {
-	if e.validate != nil {
-		return e.validate()
+func (e *fakeExec) Prepare(context.Context, wire.Job, snapshot.Workspace) (Plan, error) {
+	if e.prepare != nil {
+		return e.prepare()
 	}
-	return nil
+	return Plan{Argv: []string{"true"}, Dir: "/ws", Timeout: time.Minute}, nil
 }
 
-func (e *fakeExec) Run(ctx context.Context, _ wire.Job, _ snapshot.Workspace) run.Result {
+func (e *fakeExec) Run(ctx context.Context, _ wire.Job, _ snapshot.Workspace, plan Plan) run.Result {
 	e.ran.Add(1)
+	e.plan.Store(&plan)
 	if e.run != nil {
 		return e.run(ctx)
 	}
@@ -322,7 +324,7 @@ func TestLeaseRunsFromBeforeTheClaimWasSent(t *testing.T) {
 }
 
 func TestRejectedIsNotStartedOrRun(t *testing.T) {
-	ex := &fakeExec{validate: func() error { return &Rejected{Reason: "unknown task"} }}
+	ex := &fakeExec{prepare: func() (Plan, error) { return Plan{}, &Rejected{Reason: "unknown task"} }}
 	o := &fakeOrigin{}
 	c, tbl := newCtl(ex)
 	e := c.Work(context.Background(), o, scored(testJob("j", "mysql")), nil)
@@ -336,7 +338,7 @@ func TestRejectedIsNotStartedOrRun(t *testing.T) {
 }
 
 func TestOtherValidateErrorIsInfra(t *testing.T) {
-	ex := &fakeExec{validate: func() error { return errors.New("manifest unreadable: disk") }}
+	ex := &fakeExec{prepare: func() (Plan, error) { return Plan{}, errors.New("manifest unreadable: disk") }}
 	c, _ := newCtl(ex)
 	if e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil); e.Kind != KindInfra {
 		t.Fatalf("kind=%s", e.Kind)
@@ -408,5 +410,18 @@ func TestNoGoroutineOutlivesWork(t *testing.T) {
 	time.Sleep(10 * unit)
 	if _, _, after := o.count(); after != before {
 		t.Fatalf("heartbeats went on after Work returned: %d → %d", before, after)
+	}
+}
+
+func TestRunGetsThePlanPrepareMade(t *testing.T) {
+	want := Plan{Argv: []string{"go", "test", "./a"}, Dir: "/ws/sub", Timeout: 3 * time.Minute, TaskEnv: []string{"A=1"}}
+	ex := &fakeExec{prepare: func() (Plan, error) { return want, nil }}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil); e.Kind != KindRan {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+	got := ex.plan.Load()
+	if got == nil || len(got.Argv) != 3 || got.Argv[2] != "./a" || got.Dir != want.Dir || got.Timeout != want.Timeout || got.TaskEnv[0] != "A=1" {
+		t.Fatalf("plan %+v", got)
 	}
 }

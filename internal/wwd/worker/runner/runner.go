@@ -38,13 +38,23 @@ type Origin interface {
 // Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL).
 type Exec interface {
 	Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error)
-	// Validate checks the task and its arguments against the workspace (the manifest in the snapshot) after it is made and before the
-	// job is started. A *Rejected means the job is not runnable as submitted; any other error is the host's trouble.
-	Validate(ctx context.Context, job wire.Job, ws snapshot.Workspace) error
-	Run(ctx context.Context, job wire.Job, ws snapshot.Workspace) run.Result
+	// Prepare finds the job's task in the workspace's manifest (the snapshot's, not the worker's), checks the arguments and works out
+	// what to run. It runs after the workspace is made and before the job is started. A *Rejected means the job is not runnable as
+	// submitted; any other error is the host's trouble.
+	Prepare(ctx context.Context, job wire.Job, ws snapshot.Workspace) (Plan, error)
+	// Run runs the plan Prepare made; nothing is worked out again.
+	Run(ctx context.Context, job wire.Job, ws snapshot.Workspace, plan Plan) run.Result
 }
 
-// Rejected is Validate's answer for a job that must not run: unknown task, arguments the manifest does not allow. The job fails, it is
+// Plan is what to run, fixed once by Prepare.
+type Plan struct {
+	Argv    []string
+	Dir     string
+	Timeout time.Duration
+	TaskEnv []string
+}
+
+// Rejected is Prepare's answer for a job that must not run: unknown task, arguments the manifest does not allow. The job fails, it is
 // not an infrastructure failure (nothing is retried and no host is held off).
 type Rejected struct{ Reason string }
 
@@ -67,7 +77,7 @@ const (
 	KindLost Kind = "lost"
 	// KindShutdown: the worker's own context ended while the job was held; the job should be released (reason reclaim).
 	KindShutdown Kind = "shutdown"
-	// KindRejected: Validate refused the job; nothing was started. Err is the *Rejected. The result to post is state failed with no
+	// KindRejected: Prepare refused the job; nothing was started. Err is the *Rejected. The result to post is state failed with no
 	// exit, the reason in summary.tail.
 	KindRejected Kind = "rejected"
 	// KindInfra: the host could not run the job (workspace could not be made, start refused by a transport failure…). Err says why;
@@ -186,13 +196,15 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 
 	var ws snapshot.Workspace
 	var res run.Result
+	var plan Plan
 	var runErr error
 	started := false
 	if ws, err = c.cfg.Exec.Materialize(runCtx, job, cr.ClaimID); err != nil {
 		runErr = err
 	} else if st.get() == stopNone && runCtx.Err() == nil {
-		if verr := c.cfg.Exec.Validate(runCtx, job, ws); verr != nil {
-			runErr = verr
+		var perr error
+		if plan, perr = c.cfg.Exec.Prepare(runCtx, job, ws); perr != nil {
+			runErr = perr
 		} else {
 			startSent := c.cfg.Now()
 			l, serr := origin.Start(runCtx, job.ID, cr.ClaimID)
@@ -208,7 +220,7 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		}
 	}
 	if started && st.get() == stopNone {
-		res = c.cfg.Exec.Run(runCtx, job, ws)
+		res = c.cfg.Exec.Run(runCtx, job, ws, plan)
 	}
 	hold.Release() // the command is gone: its lock keys are free again while the result is delivered
 
