@@ -3,6 +3,8 @@ package run
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,8 +58,15 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		return failStart(res, err)
 	}
 
-	exitFile := filepath.Join(spec.Workspace, ".wwd-exit")
-	_ = os.Remove(exitFile)
+	// the name is new for every run and not guessable: a task that has a file or a directory of the plain name cannot spoil the
+	// answer, and no old file can stand for this run
+	var rb [8]byte
+	if _, err := rand.Read(rb[:]); err != nil {
+		res.Tail, res.LogCut, res.CaptureErr = cp.close()
+		return failStart(res, err)
+	}
+	exitFile := filepath.Join(spec.Workspace, ".wwd-exit."+hex.EncodeToString(rb[:]))
+	defer os.Remove(exitFile)
 	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, exitFile, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
 	cmd := execstat.Command("wwd.run.sandbox", sb.SudoPath, argv...)
 	cmd.Dir = spec.Dir
@@ -122,7 +131,7 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 			default:
 				stop = stopCancel
 				if runErr == nil {
-					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside", unit)
+					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside, or the status file could not be written", unit)
 				}
 			}
 		case show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]:

@@ -245,6 +245,13 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 			t.Fatalf("result %+v took %s", r.Result, r.took)
 		}
 	})
+	t.Run("L_task_makes_the_plain_exit_name", func(t *testing.T) {
+		// a task that has its own ".wwd-exit" must not look like a stopped unit
+		r := runSB(t, "L", Sandbox{}, 60*time.Second, bg, "sh", "-c", "mkdir .wwd-exit; exit 0")
+		if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+			t.Fatalf("result %+v", r.Result)
+		}
+	})
 	t.Run("Z_nothing_left", func(t *testing.T) {
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed wwd-j_4d3 units left:\n%s", f)

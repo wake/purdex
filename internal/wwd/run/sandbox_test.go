@@ -21,7 +21,7 @@ case "$1" in
     if [ -e "$FAKE/err" ]; then cat "$FAKE/err" >&2; fi
     [ ! -e "$FAKE/late" ] || sleep 0.3
     : > "$FAKE/created"
-    ef=$(printf '%s\n' "$@" | grep -m1 '\.wwd-exit$')
+    ef=$(printf '%s\n' "$@" | grep -m1 '\.wwd-exit\.[0-9a-f]*$')
     if [ -e "$FAKE/wrapper-exit" ] && [ -n "$ef" ]; then cat "$FAKE/wrapper-exit" > "$ef"; fi
     if [ -e "$FAKE/hang" ]; then
       while [ ! -e "$FAKE/stopped" ]; do sleep 0.02; done
@@ -481,15 +481,43 @@ func TestSandboxTheExitFileCarriesTheCommandsOwnStatus(t *testing.T) {
 	}
 }
 
-func TestSandboxAStaleExitFileIsNotRead(t *testing.T) {
-	// a file left from an earlier run in the same workspace must not stand for this run
+func TestSandboxAFileOrDirectoryOfThePlainNameCannotSpoilTheAnswer(t *testing.T) {
+	// a stale file, or a task that makes ".wwd-exit" for its own reasons, is not the runner's status file (whose name is new every run)
 	w := newWorld(t)
 	w.set("gone", "")
+	w.set("wrapper-exit", "0")
 	s := sandboxSpec(t, w, "true")
-	if err := os.WriteFile(filepath.Join(s.Workspace, ".wwd-exit"), []byte("0"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(s.Workspace, ".wwd-exit"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := Run(context.Background(), s); r.Outcome == Exited {
-		t.Fatalf("an old exit file was read: %+v", r)
+	if r := Run(context.Background(), s); r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+		t.Fatalf("a directory of the plain name spoiled the answer: %+v", r)
+	}
+}
+
+func TestSandboxTheExitFileNameIsNewEveryRunAndIsRemoved(t *testing.T) {
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "0")
+	s := sandboxSpec(t, w, "true")
+	Run(context.Background(), s)
+	Run(context.Background(), s)
+	var names []string
+	for _, c := range w.calls(t) {
+		if strings.HasPrefix(c, "sudo systemd-run") {
+			for _, f := range strings.Fields(c) {
+				if strings.Contains(f, ".wwd-exit.") {
+					names = append(names, f)
+				}
+			}
+		}
+	}
+	if len(names) != 2 || names[0] == names[1] {
+		t.Fatalf("names = %v", names)
+	}
+	for _, n := range names {
+		if _, err := os.Stat(n); err == nil {
+			t.Errorf("%s was left behind", n)
+		}
 	}
 }

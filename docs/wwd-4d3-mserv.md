@@ -15,6 +15,7 @@
 | G | `ProtectSystem=strict` | see below |
 | H | cancel | TERM ignored by the job: Cancelled after 5.26 s (cancel at 2 s, then the 3 s grace, then KILL); no leftover |
 | I | same-name old failed unit | a failed `wwd-j_4d3-I` left behind; the next run of the same id is cleared first and reads its own result (Exited 0) |
+| L | task with its own `.wwd-exit` | a task that makes a directory `.wwd-exit` and exits 0 → Exited 0 (the runner's file has another, random name) |
 | K | stopped from outside | `systemctl stop` of the running unit by an operator: Cancelled after 1.55 s with `Err` "ended and left no exit status: it was stopped from outside" (systemd-run exits 0 and the unit disappears, so it must not read as a success) |
 | J | jobdb on the dev MySQL | **not run**: it needs the administrator account on mserv's MySQL, which is the user's decision |
 
@@ -36,7 +37,7 @@ Recommendation: add `ProtectSystem=strict` through `Sandbox.ExtraProperties` for
 ## What the real run found (both fixed in this PR; the fake `sudo`/`systemctl` of the unit tests had hidden them)
 
 1. `systemctl reset-failed` on a unit that was never loaded exits 1. The start-up clean-up treated that as "cannot clear" and refused to start every first run. Now it clears only when `LoadState` is not `not-found`.
-2. A unit that ended well is unloaded by systemd at once; only a failed one stays to be read. The Result of a successful job is therefore not there, and systemd-run's exit 0 cannot stand for it (a unit stopped from outside also leaves it with 0: scenario K). The command now runs under a one-line shell (`sh -c '"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"' <workspace>/.wwd-exit <command>`) that leaves its exit status in the workspace: unit gone and systemd-run exit 0 and the file says N → Exited N; no file → stopped from outside (Cancelled with an `Err`); a non-zero systemd-run exit → nothing was started. A failed unit still stays loaded and its Result is read from systemd as before. One consequence: a command killed by a signal that the shell survives now reads as exit 128+n instead of a Signal.
+2. A unit that ended well is unloaded by systemd at once; only a failed one stays to be read. The Result of a successful job is therefore not there, and systemd-run's exit 0 cannot stand for it (a unit stopped from outside also leaves it with 0: scenario K). The command now runs under a one-line shell (`sh -c '"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"' <workspace>/.wwd-exit.<16 random hex> <command>`; the name is new for every run, so a task's own `.wwd-exit` or an old file cannot stand for it, and the runner removes it) that leaves its exit status in the workspace: unit gone and systemd-run exit 0 and the file says N → Exited N; no file → stopped from outside, or the status file could not be written (Cancelled with an `Err`; either way an infrastructure failure for the caller); a non-zero systemd-run exit → nothing was started. A failed unit still stays loaded and its Result is read from systemd as before. One consequence: a command killed by a signal that the shell survives now reads as exit 128+n instead of a Signal.
 
 ## About the per-job database and at-inwin
 
