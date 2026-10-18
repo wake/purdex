@@ -138,7 +138,9 @@ func run(cfgPath string) error {
 		return err
 	}
 	// the owner rule follows the worker settings: PUT /v1/worker changes the idle limit at run time
-	var srcOpt facts.SourceOptions
+	// the tool directories of [tools] extra_path: one resolved list for the facts' tool probe and for the jobs' PATH
+	toolDirs := facts.ResolveExtraDirs(home, cfg.Tools.ExtraPath, log.Printf)
+	srcOpt := facts.SourceOptions{ToolDirs: toolDirs}
 	if cfg.Owner.Enabled {
 		srcOpt.Owner = &facts.OwnerConfig{}
 		srcOpt.OwnerMinutes = func() int {
@@ -183,7 +185,7 @@ func run(cfgPath string) error {
 	// defer runs before it, which was deferred earlier), also when run() failed.
 	svc := startServices(ctx, usage.Run, func(ctx context.Context) error {
 		return runWorker(ctx, workerInputs{
-			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb,
+			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb, Home: home, ToolDirs: toolDirs,
 			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers, FastLaneReady: fastLane.Ready,
 			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
 		})

@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
+	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/queue"
 	wrun "github.com/wake/purdex/internal/wwd/run"
@@ -78,6 +80,9 @@ type workerInputs struct {
 	Locks    *locks.Table // the one table: the fast lane's runs and the worker's claims take their keys from it
 	Store    *quarantine.Store
 	WorkRoot string // the real path openQuarantine returned
+	// Home and ToolDirs build the jobs' PATH (jobParentEnv); ToolDirs is the resolved [tools] extra_path, the same list the facts use.
+	Home     string
+	ToolDirs []string
 	Sandbox  *wrun.Sandbox
 	Settings func() wire.WorkerSettings
 	Latest   func() (wire.Facts, bool)
@@ -90,6 +95,22 @@ type workerInputs struct {
 	// FastLaneReady says the fast lane has rebuilt the keys of its runs that were going on (localruns.Service.Ready). The worker takes
 	// no job before that: it could otherwise be given a key a fast-lane run still holds. nil: no fast lane to wait for.
 	FastLaneReady func() bool
+}
+
+// jobParentEnv is the environment the jobs' allowed names are read from: the daemon's own, with PATH replaced by the tool list the
+// facts' tool probe searches (facts.ToolPath, the configured extra directories in front). Built at run time, so a change of
+// [tools] extra_path takes effect when wwd restarts, without touching the systemd unit or the LaunchAgent.
+func jobParentEnv(environ []string, home string, extra []string) []string {
+	path := ""
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "PATH="+facts.ToolPath(home, path, extra))
 }
 
 // hostGuard is the runner's guard, or an error when this host needs one and cannot have it.
@@ -184,7 +205,7 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		BackgroundDev: in.Cfg.Worker.BackgroundDev,
 		Sandbox:       in.Sandbox,
 		DB:            db,
-		ParentEnv:     os.Environ(),
+		ParentEnv:     jobParentEnv(os.Environ(), in.Home, in.ToolDirs),
 	})
 	labels, fingerprint := in.Labels()
 	ctl := runner.New(runner.Config{
