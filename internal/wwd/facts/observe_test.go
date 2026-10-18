@@ -365,6 +365,41 @@ func TestTrackerTreatsASameNameReusedPIDAsANewTree(t *testing.T) {
 	}
 }
 
+// The harness decision belongs to the process, not to its pid and name: a node that took the pid of a codex wrapper (and the
+// other way round) is classified again.
+func TestTrackerClassifiesAgainWhenASameNamedProcessTakesAPid(t *testing.T) {
+	codex := []string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"}
+	plain := []string{"node", "server.js"}
+
+	h, tr := newHost(), newTracker()
+	started := "t1"
+	tr.ident = func(int) (string, bool) { return started, true }
+	h.add(200, 100, "node", codex)
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	if len(tr.Live()) != 0 {
+		t.Fatal("a codex wrapper is never a tree")
+	}
+	started, h.args[200] = "t2", plain // an ordinary node holds the pid now
+	step(tr, h, 1)
+	if live := tr.Live(); len(live) != 1 || live[0].Signature != "node server.js" {
+		t.Fatalf("the ordinary node is a command and must not inherit the harness verdict: %+v", live)
+	}
+
+	h, tr = newHost(), newTracker()
+	started = "t1"
+	tr.ident = func(int) (string, bool) { return started, true }
+	h.add(200, 100, "node", plain)
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	started, h.args[200] = "t2", codex // a codex wrapper holds the pid now
+	step(tr, h, 1)
+	step(tr, h, 2)
+	if got := step(tr, h, 3); len(got) != 0 || len(tr.Live()) != 0 {
+		t.Fatalf("the wrapper is not the command that ran before: ended %+v live %+v", got, tr.Live())
+	}
+}
+
 // A long gap between samples (the machine slept, wwd was stopped) is not charged as CPU.
 func TestTrackerCapsAGapBetweenSamples(t *testing.T) {
 	h := newHost()

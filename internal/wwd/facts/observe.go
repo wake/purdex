@@ -92,22 +92,29 @@ func (t *tree) observation(host string, ended bool) wire.Observation {
 type Tracker struct {
 	cfg     ObserveConfig
 	live    map[treeKey]*tree
-	harness map[treeKey]bool
+	harness map[treeKey]harnessVerdict
 	lastAt  time.Time
 	// ident tells which process holds a pid (its start time); a tree whose root pid now has another one is a new tree. Tests replace it.
 	ident func(pid int) (string, bool)
 }
 
 func NewTracker(cfg ObserveConfig) *Tracker {
-	return &Tracker{cfg: cfg.withDefaults(), live: map[treeKey]*tree{}, harness: map[treeKey]bool{}, ident: ProcIdent}
+	return &Tracker{cfg: cfg.withDefaults(), live: map[treeKey]*tree{}, harness: map[treeKey]harnessVerdict{}, ident: ProcIdent}
+}
+
+type harnessVerdict struct {
+	harness bool
+	ident   string // the process's start identity when it was classified ("" when unknown)
 }
 
 // isHarness says whether p is part of codex's own machinery: named codex..., the app-server broker, or a node/python wrapper
-// running a script of the codex package. Cached by pid and name.
+// running a script of the codex package. Cached by pid, name and start identity (a pid
+// that went to another process of the same name is classified again).
 func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 	k := treeKey{p.PID, p.Name}
-	if v, ok := t.harness[k]; ok {
-		return v
+	id, _ := t.ident(p.PID)
+	if v, ok := t.harness[k]; ok && (id == "" || v.ident == "" || v.ident == id) {
+		return v.harness
 	}
 	h := strings.HasPrefix(strings.ToLower(path.Base(p.Name)), "codex") || kindOf(p, c) == "codex-broker"
 	if !h && c.ArgsOf != nil {
@@ -121,7 +128,7 @@ func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 			}
 		}
 	}
-	t.harness[k] = h
+	t.harness[k] = harnessVerdict{harness: h, ident: id}
 	return h
 }
 
@@ -176,10 +183,18 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 	// A tree that is being watched stays a tree while its root lives, even when the anchor above it has exited and the root went
 	// to pid 1: a long command outlives the shell that started it.
 	for k, tr := range t.live {
-		if p, ok := c.Table[k.pid]; ok && p.Name == k.name && !isRoot[k.pid] {
-			isRoot[k.pid] = true
-			via[k.pid] = tr.via
+		p, ok := c.Table[k.pid]
+		if !ok || p.Name != k.name || isRoot[k.pid] {
+			continue
 		}
+		if id, _ := t.ident(k.pid); id != "" && tr.ident != "" && id != tr.ident {
+			continue // another process holds the pid now
+		}
+		if t.isHarness(p, c) {
+			continue
+		}
+		isRoot[k.pid] = true
+		via[k.pid] = tr.via
 	}
 
 	var ended []wire.Observation
