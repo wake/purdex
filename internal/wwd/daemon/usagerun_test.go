@@ -197,6 +197,25 @@ func TestAQueueJobsFinalEventWritesTheRowUntilTheLoopReportsItsRuns(t *testing.T
 	}
 }
 
+// A run that goes back to the queue is not the job's end: the same job's next run collects its own samples and writes the row.
+func TestRecordRunAJobThatRunsAgainKeepsTheSecondRunsSamples(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	sampleJob(r, 0, wire.ZoneDanger, nil) // first run: released as infra
+	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob()})
+	sampleJob(r, 1, wire.ZoneNormal, nil) // the same job id again
+	sampleJob(r, 2, wire.ZoneNormal, nil)
+	r.RecordRun(ran(run.Result{Outcome: run.Exited}))
+	rows := drain(r, sink)
+	if len(rows) != 1 {
+		t.Fatalf("%d rows", len(rows))
+	}
+	u := rows[0]
+	if u.CPUSource != wire.CPUSampled || u.CPUSeconds == nil || *u.CPUSeconds < 19.9 || *u.CPUSeconds > 20.1 || u.ZoneWorst != wire.ZoneNormal ||
+		u.PeakCores == nil || *u.PeakCores != 2 {
+		t.Fatalf("the second run's own samples (2 samples x 5 s x 2 cores = 20 s, zone normal): %+v", u)
+	}
+}
+
 // Once the loop reports its runs (ForWorker), the final event of a queue job the worker ran does not write a row: the run's is the one.
 func TestAQueueJobsFinalEventWritesNoRowOnceTheLoopReportsItsRuns(t *testing.T) {
 	r, sink := newRec(ut0.Add(-time.Hour))

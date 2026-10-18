@@ -107,7 +107,8 @@ func (r *UsageRecorder) ranHere(j wire.Job) bool {
 }
 
 // ForWorker is for the worker loop's Config.Usage: the loop reports each run through RecordRun, and from now on a queue job is written
-// from its run, not from its final event.
+// from its run, not from its final event. It is called when the loop is wired, before the loop runs: it is not a switch to flip while
+// jobs are running (an event already on its way could still write its row first).
 func (r *UsageRecorder) ForWorker() *UsageRecorder {
 	r.workerRuns.Store(true)
 	return r

@@ -57,12 +57,15 @@ func runResult(e runner.Ended) (state wire.JobState, reason string, ok bool) {
 // runRow is the usage row of a run the worker made: the exact figures of run.Result where it has them, and what the 5 s samples saw
 // for the rest (the peak cores, the host around the job, and a CPU time or a memory peak the run could not give).
 func (r *UsageRecorder) runRow(e runner.Ended) (wire.JobUsage, bool) {
-	sm, seen := r.tr.Take(e.Job.ID) // takes it out even for a run that is not recorded, so nothing is kept for it
 	state, reason, ok := runResult(e)
 	rn := e.Run
 	if !ok || rn.StartedAt.IsZero() || rn.FinishedAt.IsZero() {
+		// not the job's end: it may run again, and its next run collects its own samples. What this run left is dropped, not taken (a taken
+		// job is one the tracker ignores from then on).
+		r.tr.Discard(e.Job.ID)
 		return wire.JobUsage{}, false
 	}
+	sm, seen := r.tr.Take(e.Job.ID)
 	started, ended := rn.StartedAt, rn.FinishedAt
 	if ended.Before(started) {
 		ended = started

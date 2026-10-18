@@ -231,6 +231,14 @@ func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 	return acc.JobSample, true
 }
 
+// Discard drops what was seen of a job without marking it taken: for a run that is not the job's end (the job goes back to the queue and
+// runs again), whose next run must collect its own samples. Take is for the end of the job.
+func (t *JobUsageTracker) Discard(jobID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.jobs, jobID)
+}
+
 // Len is how many jobs are being kept.
 func (t *JobUsageTracker) Len() int {
 	t.mu.Lock()

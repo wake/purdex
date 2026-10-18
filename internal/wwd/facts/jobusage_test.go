@@ -249,6 +249,22 @@ func TestJobUsageConcurrentTakeAndSample(t *testing.T) {
 	wg.Wait()
 }
 
+// Discard drops what was seen without ending the job: the same job's later samples start a new accumulator.
+func TestJobUsageDiscardIsNotTake(t *testing.T) {
+	h, tr := jobHost(), newJU()
+	sample(tr, h, 0, wire.ZoneNormal, nil)
+	tr.Discard("j_a")
+	if tr.Len() != 0 {
+		t.Fatalf("kept %d", tr.Len())
+	}
+	sample(tr, h, 1, wire.ZoneNormal, nil)
+	got, ok := tr.Take("j_a")
+	if !ok || got.Samples != 1 || !got.FirstSeen.Equal(ot0.Add(5*time.Second)) {
+		t.Fatalf("%+v %v", got, ok)
+	}
+	tr.Discard("j_never") // a job nobody saw: nothing to drop, and nothing remembered
+}
+
 // The owner unknown (no rule yet, or a fault hook) in the first sample does not hide what it shows later.
 func TestJobUsageOwnerKnownOnlyAfterTheStart(t *testing.T) {
 	here, away := &wire.OwnerState{Active: true, Reason: "hid"}, &wire.OwnerState{Active: false}
