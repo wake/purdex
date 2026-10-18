@@ -226,6 +226,18 @@ func (s *Store) Add(e Entry) error { return s.put(e, false) }
 // touch it. The run ends with Discard (the unit is proven gone: nothing to keep) or Add (it is not: quarantine it).
 func (s *Store) Begin(e Entry) error { return s.put(e, true) }
 
+// Settle says the run of a live entry is over without its unit being proven gone: the entry stops being live, so that Sweep clears it
+// once the unit is gone. Only memory changes (the marker has been on disk since Begin), so it cannot fail; an owner that is not live is
+// left as it is.
+func (s *Store) Settle(owner string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.entries[owner]; ok && r.live {
+		r.live = false
+		s.entries[owner] = r
+	}
+}
+
 // Discard forgets an entry whose run ended with its unit proven gone: the marker and the entry go. The hold is the runner's and the
 // directory the executor's, so neither is touched. An owner that is not in the store is not an error and its file, if any, is left
 // where it is (a marker that could not be read is kept on purpose for a human).

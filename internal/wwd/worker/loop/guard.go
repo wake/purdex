@@ -12,6 +12,7 @@ import (
 type Marker interface {
 	Begin(quarantine.Entry) error
 	Discard(owner string) error
+	Settle(owner string)
 }
 
 // entryOf is the quarantine entry of a job: its owner in the lock table, its job directory, its keys and, on a host that runs commands as
@@ -51,7 +52,11 @@ func (g guard) Begin(e runner.Ended) error { return g.m.Begin(entryOf(e, true, g
 
 func (g guard) End(e runner.Ended, quarantined bool) {
 	if quarantined {
-		return // the marker stays; the loop settles it when the run's ending reaches Finish
+		// The marker stays (it has been on disk since Begin). The run is over, so the entry stops being live now, in memory, where nothing
+		// can fail: a Sweep clears it once the unit is gone, whatever happens to the delivery of this ending (a lease that ended, a worker
+		// that is stopping).
+		g.m.Settle(e.Source + "/" + e.Job.ID)
+		return
 	}
 	if err := g.m.Discard(e.Source + "/" + e.Job.ID); err != nil && g.logf != nil {
 		g.logf("worker: the marker of %s/%s could not be dropped (it is cleared at the next sweep once the unit is gone): %v", e.Source, e.Job.ID, err)

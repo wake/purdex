@@ -136,6 +136,7 @@ type failingMarker struct{}
 
 func (failingMarker) Begin(quarantine.Entry) error { return errors.New("disk full") }
 func (failingMarker) Discard(string) error         { return nil }
+func (failingMarker) Settle(string)                {}
 
 func TestACommandIsNotStartedWhenItsMarkerCannotBeWritten(t *testing.T) {
 	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
@@ -175,5 +176,34 @@ func TestGuardEndKeepsTheMarkerOfAQuarantinedRunAndDropsOtherwise(t *testing.T) 
 	g.End(e, false)
 	if len(q.store.Held()) != 0 {
 		t.Fatal("a run whose unit is proven gone leaves no marker")
+	}
+}
+
+func TestAQuarantinedRunWhoseFinishNeverWritesIsStillSweptOnceItsUnitIsGone(t *testing.T) {
+	// the lease ended and the marker rewrite in Finish failed (or was given up): the entry must not stay live for the process's life
+	q := newQRig(t, newConn("mlab"))
+	g := NewGuard(q.store, true, time.Now, nil)
+	e := runner.Ended{Source: "mlab", Job: qjob("a", wire.ClassDev, 0, "mysql"), ClaimID: claimID, Root: filepath.Join(q.root, "a", "ws")}
+	if err := os.MkdirAll(e.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.tbl.Acquire("mlab/a", []string{"mysql"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	g.End(e, true) // and nothing else: no Add
+	q.units.mu.Lock()
+	q.units.gone["wwd-a"] = true
+	q.units.mu.Unlock()
+	if n, err := q.store.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("cleared %d err %v", n, err)
+	}
+	if _, ok := q.tbl.Holder("mysql"); ok {
+		t.Fatal("the hold goes with it")
+	}
+	if _, err := os.Stat(filepath.Join(q.root, "a")); !os.IsNotExist(err) {
+		t.Fatalf("the workspace goes: %v", err)
 	}
 }

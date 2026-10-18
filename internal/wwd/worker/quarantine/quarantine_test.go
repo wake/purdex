@@ -850,3 +850,28 @@ func TestADiscardThatFailsLeavesAnEntryASweepCanClear(t *testing.T) {
 		t.Fatalf("markers %v", markerFiles(t, r.markers))
 	}
 }
+
+func TestSettleMakesALiveEntrySweepableWithoutTouchingTheMarker(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	r.checker.gone["wwd-a"] = true
+	if n, _ := s.Sweep(context.Background()); n != 0 {
+		t.Fatal("still live")
+	}
+	before := markerFiles(t, r.markers)
+	s.Settle(e.Owner)
+	s.Settle("src/nobody") // not an entry: nothing
+	if got := markerFiles(t, r.markers); len(got) != len(before) {
+		t.Fatalf("markers %v → %v: Settle is memory only", before, got)
+	}
+	if n, err := s.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("cleared %d err %v: a settled entry is swept like any quarantined one", n, err)
+	}
+}
