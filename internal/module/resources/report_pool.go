@@ -39,6 +39,11 @@ func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute 
 		runLen = (carryRunS + 59) / 60
 		prevAt = recs[0].At.UnixMilli() - time.Minute.Milliseconds()
 	}
+	// statsCarry is the old run still to be added to wwd's own count: wwd's aggregate began at its first sample and so counts a run of its own
+	// even when the host was already full. It is taken only where the join is certain (see the stats branch); carryOpen says wwd's first
+	// start of it has not been taken away yet.
+	statsCarry, carryOpen := carryRunS, true
+	tickS := int(resources.SampleInterval / time.Second)
 	closeRun := func() {
 		if runLen > 0 && len(out) > 0 {
 			out[len(out)-1].FullLongestS = runLen * 60
@@ -54,11 +59,25 @@ func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute 
 		if st := f.Stats; st != nil {
 			// wwd counted this minute per 5 s sample: take it as it is. An approximated run ends on its last row before it, and the
 			// stats say themselves whether one goes on through it.
+			contiguous := prevAt != 0 && at-prevAt == time.Minute.Milliseconds()
 			closeRun()
-			out = append(out, statsMinute(m, st))
+			row := statsMinute(m, st)
+			// A run carried over from the old rows goes on through minutes that were full at every sample, and only those are certain: a
+			// minute full part of the time may have begun its run anywhere in it. Then wwd's first start is the old run's, and the lengths add.
+			if statsCarry > 0 && contiguous && st.SampledS > 0 && st.FullTicks*tickS >= st.SampledS {
+				if carryOpen {
+					row.FullStarts = max(st.FullStarts-1, 0)
+					carryOpen = false
+				}
+				row.FullLongestS = st.FullLongestS + statsCarry
+			} else {
+				statsCarry = 0
+			}
+			out = append(out, row)
 			prevAt = at
 			continue
 		}
+		statsCarry = 0 // an approximated minute handles the carry itself
 		full := f.CPU.NCPU > 0 && f.CPU.Load1 >= float64(f.CPU.NCPU) || m.Mem >= resources.MemFullPercent || f.Mem.Pressure >= 2
 		contiguous := prevAt != 0 && at-prevAt == time.Minute.Milliseconds()
 		switch {
@@ -105,6 +124,9 @@ func (m *Module) poolReportRecords(ctx context.Context, since, now time.Time) ([
 	}
 	var done []wire.Facts
 	for _, f := range resp.Records {
+		if f.Stats != nil && f.Stats.SampledS == 0 {
+			continue // wwd had no good sample in that minute: no data, as a minute the old timeline wrote no row for
+		}
 		if !f.At.Add(time.Minute).After(now) {
 			done = append(done, f)
 		}

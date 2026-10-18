@@ -2,6 +2,7 @@ package resourcesmod
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,4 +104,89 @@ func TestReport_StatsReachTheFigures(t *testing.T) {
 	assert.Equal(t, 1, rep.Full.Runs)
 	assert.Equal(t, 10, rep.Full.LongestS)
 	assert.InDelta(t, 2.0*5/120, rep.Full.Share, 1e-9, "2 full ticks of 5 s over the 2 covered minutes")
+}
+
+// wwd's stats for a minute that is full all through (every sample), the way a run carried over the join looks.
+func fullStatsMinute(i int, starts, longestS int) wire.Facts {
+	f := minuteFacts(i, 5, 8000, 1, wire.ZoneNormal, 0, 0)
+	f.Stats = statsOf(wire.MinuteStats{SampledS: 60, FullTicks: 12, FullStarts: starts, FullLongestS: longestS, NormalS: 60})
+	return f
+}
+
+// A full run that goes on from the old timeline into wwd's stats minutes is one run: wwd's first minute does not start it again, and
+// the length adds up across the join for as long as the minutes stay full all through.
+func TestReportMinutesOf_ACarriedRunJoinsTheFirstStatsMinutes(t *testing.T) {
+	recs := []wire.Facts{
+		fullStatsMinute(5, 1, 60),  // wwd's aggregate started this run itself at its first sample
+		fullStatsMinute(6, 0, 120), // and it goes on
+		fullStatsMinute(7, 0, 180),
+		minuteFacts(8, 1, 8000, 1, wire.ZoneNormal, 0, 0),
+	}
+	recs[3].Stats = statsOf(wire.MinuteStats{SampledS: 60, FullTicks: 4, FullLongestS: 200, NormalS: 60}) // the run ends inside this minute
+	got := reportMinutesOf(recs, 180)
+	assert.Zero(t, got[0].FullStarts, "the run started in the old rows")
+	assert.Equal(t, 240, got[0].FullLongestS, "180 s before and the minute")
+	assert.Zero(t, got[1].FullStarts)
+	assert.Equal(t, 300, got[1].FullLongestS)
+	assert.Equal(t, 360, got[2].FullLongestS)
+	assert.Equal(t, 200, got[3].FullLongestS, "a minute that is not full all through is wwd's own figure: the carry stops")
+}
+
+// Where the join cannot be proved to be one run, wwd's start stands: a first minute that was full only part of the time, or one that
+// does not follow the old rows directly.
+func TestReportMinutesOf_ACarryIsOnlyTakenWhereItIsCertain(t *testing.T) {
+	part := minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0)
+	part.Stats = statsOf(wire.MinuteStats{SampledS: 60, FullTicks: 6, FullStarts: 1, FullLongestS: 30, NormalS: 60})
+	got := reportMinutesOf([]wire.Facts{part}, 180)
+	assert.Equal(t, 1, got[0].FullStarts)
+	assert.Equal(t, 30, got[0].FullLongestS)
+
+	gap := fullStatsMinute(9, 1, 60) // the old rows ended at minute 4 (carry given for minute 5 only): not the minute right after
+	got = reportMinutesOf([]wire.Facts{minuteFacts(5, 1, 8000, 1, wire.ZoneNormal, 0, 0), gap}, 180)
+	assert.Equal(t, 1, got[1].FullStarts)
+	assert.Equal(t, 60, got[1].FullLongestS)
+}
+
+// A minute wwd had no good sample in is no data (the old timeline wrote no row for it): it is not a calm minute that dilutes the
+// share, and it breaks nothing.
+func TestReport_AMinuteWithNoGoodSampleIsLeftOut(t *testing.T) {
+	r := newReportRig(t)
+	a := fullStatsMinute(0, 1, 60)
+	empty := minuteFacts(1, 1, 8000, 1, wire.ZoneNormal, 0, 0)
+	empty.Stats = statsOf(wire.MinuteStats{}) // every sample of the minute failed
+	b := fullStatsMinute(2, 1, 60)
+	r.history = []wire.Facts{a, empty, b}
+	rep := r.get(t, "24h")
+	assert.Equal(t, 2, rep.Coverage.Minutes, "the empty minute is not a minute of coverage")
+	assert.InDelta(t, 1.0, rep.Full.Share, 1e-9, "both minutes with data were full all through")
+	assert.Equal(t, 2, rep.Full.Runs)
+}
+
+// The same, as the join sees it: an empty first minute cannot be the one that continues the old run, and the minutes before it stay
+// the old timeline's.
+func TestReport_AnEmptyFirstMinuteDoesNotMoveTheJoin(t *testing.T) {
+	r := newReportRig(t)
+	seedOld(t, r, poolDay0, 4, true) // old minutes 0..3
+	empty := minuteFacts(4, 1, 8000, 1, wire.ZoneNormal, 0, 0)
+	empty.Stats = statsOf(wire.MinuteStats{})
+	r.history = []wire.Facts{empty, fullStatsMinute(5, 1, 60)}
+	rep := r.get(t, "24h")
+	assert.Equal(t, 5, rep.Coverage.Minutes, "4 old minutes and wwd's minute 5; minute 4 has no data")
+}
+
+// The join through the handler: an old full run into wwd's stats minutes that are full all through is one run, as long as the whole.
+func TestReport_ARunAcrossTheJoinIsOneRunWithStats(t *testing.T) {
+	r := newReportRig(t)
+	for i := 0; i < 3; i++ { // old minutes 0..2, full, the length so far on each row
+		row := minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, SampledS: 60, FullLongestS: 60 * (i + 1)}
+		if i == 0 {
+			row.FullStarts = 1
+		}
+		require.NoError(t, r.m.store.InsertMinute(row))
+	}
+	r.history = []wire.Facts{fullStatsMinute(3, 1, 60), fullStatsMinute(4, 0, 120)}
+	rep := r.get(t, "24h")
+	assert.Equal(t, 5, rep.Coverage.Minutes)
+	assert.Equal(t, 1, rep.Full.Runs, "one run, not two")
+	assert.Equal(t, 300, rep.Full.LongestS, "3 old minutes and 2 of wwd's")
 }
