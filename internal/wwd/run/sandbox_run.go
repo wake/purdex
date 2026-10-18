@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -233,11 +234,35 @@ func (sb Sandbox) control(unit, verb string) error {
 // show reads the unit's properties; a unit that does not exist answers ActiveState=inactive, LoadState=not-found. The error is
 // the query's own failure (systemctl missing, timed out, refused).
 func (sb Sandbox) show(unit string) (map[string]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return sb.showContext(context.Background(), unit)
+}
+
+func (sb Sandbox) showContext(parent context.Context, unit string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	cmd := execstat.CommandContext(ctx, "wwd.run.sandbox", sb.SystemctlPath, "show", unit, "-p", "ActiveState,LoadState,InvocationID,Result,ExecMainStatus,ExecMainCode")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
 	return parseShow(out.String()), err
+}
+
+// Gone answers the quarantine store's question: is the unit provably not running? A unit that is not loaded, or that is inactive
+// or failed (a failed unit's processes are all gone), is. An answer that cannot be read — systemctl missing, refused, timed out,
+// or no ActiveState in it — is (false, err): the job stays quarantined.
+func (sb Sandbox) Gone(ctx context.Context, unit string) (bool, error) {
+	if unit == "" {
+		return false, errors.New("sandbox: empty unit")
+	}
+	show, err := sb.showContext(ctx, unit)
+	if err != nil {
+		return false, err
+	}
+	switch show["ActiveState"] {
+	case "inactive", "failed":
+		return true, nil
+	case "":
+		return false, fmt.Errorf("sandbox: systemctl show %s gave no ActiveState", unit)
+	}
+	return false, nil
 }

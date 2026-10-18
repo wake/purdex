@@ -100,8 +100,11 @@ type Task struct {
 	QueueTimeout  time.Duration
 	// Env entries are "NAME" (allow from the caller's environment) or
 	// "NAME=value" (fixed value).
-	Env     []string
-	DB      string
+	Env []string
+	DB  string
+	// DBEnv names the set of variables a per-job database is given as: DBEnvDB (DB_*, the default whenever DB is set) or DBEnvWPTests
+	// (WP_TESTS_DB_* and the table prefix, for WordPress's test suite). Empty when DB is.
+	DBEnv   string
 	Summary string
 	Qualify *Qualify
 
@@ -109,6 +112,12 @@ type Task struct {
 	// handed to a shell.
 	argv []word
 }
+
+// The two sets of variables a per-job database can be given as (jobdb.Info.Env and jobdb.Info.WPTestsEnv).
+const (
+	DBEnvDB      = "db"
+	DBEnvWPTests = "wptests"
+)
 
 type rawManifest struct {
 	Entry struct {
@@ -132,6 +141,7 @@ type rawTask struct {
 	QueueTimeout  string   `toml:"queue_timeout"`
 	Env           []string `toml:"env"`
 	DB            string   `toml:"db"`
+	DBEnv         *string  `toml:"db_env"` // a pointer: an empty string is a mistake, not an absent key
 	Summary       string   `toml:"summary"`
 	Qualify       *struct {
 		Args      []string `toml:"args"`
@@ -241,6 +251,18 @@ func buildTask(name string, rt rawTask) (*Task, error) {
 	}
 	if t.DB != "" && t.DB != "per-job" {
 		return nil, fmt.Errorf("db %q is not per-job", t.DB)
+	}
+	if rt.DBEnv != nil && t.DB == "" {
+		return nil, fmt.Errorf("db_env is for tasks with db = \"per-job\"")
+	}
+	if t.DB != "" {
+		t.DBEnv = DBEnvDB
+		if rt.DBEnv != nil {
+			t.DBEnv = *rt.DBEnv
+		}
+		if t.DBEnv != DBEnvDB && t.DBEnv != DBEnvWPTests {
+			return nil, fmt.Errorf("db_env %q is not %q or %q", t.DBEnv, DBEnvDB, DBEnvWPTests)
+		}
 	}
 	if t.argv, err = parseArgv(t.Run); err != nil {
 		return nil, err
@@ -403,7 +425,10 @@ func (t *Task) DefinitionHash() string {
 		Env     []string `json:"env"`
 		Args    ArgsKind `json:"args"`
 		Summary string   `json:"summary"`
-	}{t.Run, t.Cwd, env, t.Args, t.Summary})
+		// omitempty: a task without a database hashes as it did before these two existed
+		DB    string `json:"db,omitempty"`
+		DBEnv string `json:"db_env,omitempty"`
+	}{t.Run, t.Cwd, env, t.Args, t.Summary, t.DB, t.DBEnv})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

@@ -163,6 +163,7 @@ func run(cfgPath string) error {
 		// POST /v1/local-runs opens only together with them
 		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(q).WithFault(hooks).WorkerRoutes(mux, false) },
 		Observer:    observer,
+		Usage:       st, // GET /v1/usage on the socket: what finished jobs used (rows are written by the job-end hook, WWD usage U3)
 	})
 	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)

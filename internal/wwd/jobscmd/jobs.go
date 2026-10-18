@@ -41,6 +41,7 @@ type API interface {
 	SetWorker(ctx context.Context, s wire.WorkerSettings) (wire.WorkerSettings, error)
 	StartException(ctx context.Context, e wire.Exception) error
 	StopException(ctx context.Context, name string) error
+	Usage(ctx context.Context, q client.UsageQuery) (wire.UsageResponse, error)
 }
 
 // Env is what the commands need from their surroundings.

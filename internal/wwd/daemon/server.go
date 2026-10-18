@@ -49,7 +49,9 @@ type Options struct {
 	RepoSource func() []string
 	// Observer is this host's observation records (spec 8.4); the observation routes serve from it. nil: they are not registered.
 	Observer *Observer
-	// Now is the clock the observation routes take their default periods from. nil: time.Now.
+	// Usage is the store of finished jobs' usage; GET /v1/usage serves from it on the local socket. nil: the route is not registered.
+	Usage UsageStore
+	// Now is the clock the observation and usage routes take their default periods from. nil: time.Now.
 	Now func() time.Time
 }
 
@@ -130,6 +132,7 @@ func (d *Daemon) SocketHandler() http.Handler {
 	mux := http.NewServeMux()
 	d.routes(mux, false)
 	d.poolRoutes(mux)
+	d.usageRoutes(mux)
 	if d.opts.ClaimRoutes != nil {
 		d.opts.ClaimRoutes(mux)
 	}

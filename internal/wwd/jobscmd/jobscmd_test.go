@@ -33,7 +33,14 @@ type fakeAPI struct {
 	set       *wire.WorkerSettings
 	started   *wire.Exception
 	stopped   string
+	usage     wire.UsageResponse
+	usageQ    client.UsageQuery
 	err       error // returned by every call when set (wwd unreachable)
+}
+
+func (f *fakeAPI) Usage(_ context.Context, q client.UsageQuery) (wire.UsageResponse, error) {
+	f.usageQ = q
+	return f.usage, f.err
 }
 
 func (f *fakeAPI) Info(context.Context) (wire.Info, error) { return f.info, f.err }
@@ -298,7 +305,7 @@ func TestUnreachableWWDIsExit3Everywhere(t *testing.T) {
 			t.Errorf("jobs %v: %d %q", args, code, errOut)
 		}
 	}
-	for _, args := range [][]string{{"status"}, {"pool"}, {"worker", "on"}, {"exception", "stop", "x"}} {
+	for _, args := range [][]string{{"status"}, {"pool"}, {"usage"}, {"worker", "on"}, {"exception", "stop", "x"}} {
 		if code, _, _ := runWWD(f, args...); code != ExitNoWWD {
 			t.Errorf("wwd %v: %d", args, code)
 		}
