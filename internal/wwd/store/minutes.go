@@ -37,12 +37,15 @@ func (s *Store) SaveMinute(f wire.Facts) error {
 	return tx.Commit()
 }
 
-// SkippedRowsError says LoadMinutes left out N rows that did not decode; the
+// SkippedRowsError says LoadMinutes (or LoadObservations) left out N rows that did not decode; the
 // records returned with it are the rest.
-type SkippedRowsError struct{ N int }
+type SkippedRowsError struct {
+	N     int
+	Table string // the table the rows are in
+}
 
 func (e *SkippedRowsError) Error() string {
-	return fmt.Sprintf("store: %d host_minutes rows do not decode and were skipped", e.N)
+	return fmt.Sprintf("store: %d %s rows do not decode and were skipped", e.N, e.Table)
 }
 
 // LoadMinutes returns the stored rollups at or after since, oldest first. A row
@@ -72,7 +75,7 @@ func (s *Store) LoadMinutes(since time.Time) ([]wire.Facts, error) {
 		return nil, err
 	}
 	if skipped > 0 {
-		return out, &SkippedRowsError{N: skipped}
+		return out, &SkippedRowsError{N: skipped, Table: "host_minutes"}
 	}
 	return out, nil
 }
