@@ -254,8 +254,8 @@ func TestSweepNeverPutsAHostWithQuotesIntoAStatement(t *testing.T) {
 	m := New(&fakeExec{}, Config{})
 	f := &fakeExec{users: []string{m.User("j_dead") + "\tx'; DROP DATABASE mysql; --", m.User("j_dead") + "\t%"}}
 	m = New(f, Config{})
-	if _, err := m.Sweep(context.Background(), nil); err != nil {
-		t.Fatal(err)
+	if _, err := m.Sweep(context.Background(), nil); err == nil {
+		t.Fatal("a user whose host cannot be handled must be reported")
 	}
 	if strings.Contains(f.all(), "DROP DATABASE mysql") || strings.Contains(f.all(), "'%'") {
 		t.Fatalf("a host read back from the server was used as it is:\n%s", f.all())
@@ -495,5 +495,86 @@ func TestAHostLongerThanTheRoutinesAcceptIsRefusedAtTheConfiguration(t *testing.
 	}
 	if _, err := New(&fakeExec{}, Config{UserHosts: []string{strings.Repeat("a", 64)}}).Create(context.Background(), "j"); err != nil {
 		t.Fatalf("64 is fine: %v", err)
+	}
+}
+
+func TestSweepKeepsTheDatabaseOfAUserItCannotDropAndSaysSo(t *testing.T) {
+	m := New(&fakeExec{}, Config{})
+	long := strings.Repeat("h", 100) // a host an older version accepted (up to 255) and the routines now refuse
+	f := &fakeExec{dbs: []string{m.Name("j_stuck"), m.Name("j_dead")}, users: []string{m.User("j_stuck") + "\t" + long, m.User("j_dead") + "\tlocalhost"}}
+	m = New(f, Config{})
+	dropped, err := m.Sweep(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "drop it by hand") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(f.all(), "wwd_drop_db('"+m.Name("j_stuck")+"')") {
+		t.Fatalf("the database of a user that stays was dropped:\n%s", f.all())
+	}
+	if len(dropped) != 1 || dropped[0] != m.Name("j_dead") {
+		t.Fatalf("dropped = %v: the other job's database must still go", dropped)
+	}
+}
+
+func TestSweepKeepsTheDatabaseOfAUserWhoseConnectionsWillNotEnd(t *testing.T) {
+	m := New(&fakeExec{}, Config{})
+	f := &fakeExec{remaining: "3", dbs: []string{m.Name("j_dead")}, users: []string{m.User("j_dead") + "\tlocalhost"}}
+	m = New(f, Config{})
+	dropped, err := m.Sweep(context.Background(), nil)
+	if err == nil || len(dropped) != 0 {
+		t.Fatalf("dropped %v err %v", dropped, err)
+	}
+}
+
+// Every call the package makes has its arguments in the order of the routine's parameters in wwdctl.sql, and each argument is of the
+// shape that parameter is checked for there: the SQL signature is the contract, the Go call has to follow it.
+func TestEveryCallPassesItsArgumentsInTheOrderOfTheSQLSignature(t *testing.T) {
+	sigRe := regexp.MustCompile("(?m)PROCEDURE wwdctl\\.(wwd_[a-z_]+)\\((.*)\\)$")
+	params := map[string][]string{}
+	for _, m := range sigRe.FindAllStringSubmatch(ControlSQL, -1) {
+		var names []string
+		for _, p := range regexp.MustCompile(`IN (p_[a-z]+)`).FindAllStringSubmatch(m[2], -1) {
+			names = append(names, p[1])
+		}
+		params[m[1]] = names
+	}
+	shape := map[string]*regexp.Regexp{
+		"p_db": dbNameRe, "p_user": userNameRe, "p_pass": regexp.MustCompile(`^[0-9a-f]{48}$`), "p_host": cfgHostRe,
+	}
+	f := &fakeExec{dbs: []string{New(f0(), Config{}).Name("j_old")}, users: []string{New(f0(), Config{}).User("j_old") + "\tlocalhost"}}
+	m := New(f, Config{})
+	ctx := context.Background()
+	if _, err := m.Create(ctx, "j_1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Drop(ctx, "j_1")
+	_, _ = m.Sweep(ctx, nil)
+	callRe := regexp.MustCompile(`^CALL wwdctl\.(wwd_[a-z_]+)\((.*)\)$`)
+	seen := map[string]bool{}
+	for _, s := range f.sql {
+		c := callRe.FindStringSubmatch(s)
+		if c == nil {
+			t.Errorf("not a call: %q", s)
+			continue
+		}
+		var args []string
+		if c[2] != "" {
+			args = strings.Split(strings.Trim(c[2], "'"), "','")
+		}
+		want, ok := params[c[1]]
+		if !ok || len(args) != len(want) {
+			t.Errorf("%s: %d arguments for the parameters %v", c[1], len(args), want)
+			continue
+		}
+		for i, a := range args {
+			if !shape[want[i]].MatchString(a) {
+				t.Errorf("%s: argument %d (%q) is not a %s", c[1], i+1, a, want[i])
+			}
+		}
+		seen[c[1]] = true
+	}
+	for r := range params {
+		if !seen[r] {
+			t.Errorf("the routine %s was never called by Create, Drop or Sweep", r)
+		}
 	}
 }

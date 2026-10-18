@@ -249,16 +249,31 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 			first = e
 		}
 	}
-	// every user/host pair that is really there, whatever hosts the config named when it was made
+	// Every user/host pair that is really there, whatever hosts the config named when it was made. A user of our shape whose host the
+	// routines would refuse cannot be removed here: it is reported, and the database it belongs to is not dropped (a grant on a
+	// database name outlives the database, and would give the user the next database of that name).
+	stuck := map[string]bool{}
 	for _, l := range lines(userOut) {
 		u, h, ok := strings.Cut(l, "\t")
-		if ok && userNameRe.MatchString(u) && cfgHostRe.MatchString(h) && !keepUser[u] {
-			note(m.killConnections(ctx, u))
-			note(m.dropUserAt(ctx, u, h))
+		if !ok || !userNameRe.MatchString(u) || keepUser[u] {
+			continue
 		}
+		if !cfgHostRe.MatchString(h) {
+			stuck[u] = true
+			note(fmt.Errorf("jobdb: the user %s has the host %q, which cannot be dropped here: drop it by hand", u, h))
+			continue
+		}
+		if e := m.killConnections(ctx, u); e != nil {
+			stuck[u] = true
+			note(e)
+		}
+		note(m.dropUserAt(ctx, u, h))
 	}
 	for _, db := range lines(dbOut) {
 		if dbNameRe.MatchString(db) && !keepDB[db] {
+			if stuck["wwdu_"+db[4:30]] { // the user is the first 26 hex of its database's 32
+				continue
+			}
 			e := m.dropDB(ctx, db)
 			note(e)
 			if e == nil {
