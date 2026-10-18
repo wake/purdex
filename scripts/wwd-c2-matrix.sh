@@ -33,7 +33,9 @@ addr() { case "$1" in mlab) echo 100.64.0.2 ;; air26) echo 100.64.0.4 ;; mserv) 
 is_mac() { [ "$1" != mserv ]; }
 SOCK='$HOME/.local/share/wwd/wwd.sock'
 DB='$HOME/.local/share/wwd/wwd.db'
-RAN=/tmp/wwd-c2-ran.log          # the probe tasks append one line per run here, outside the workspace (darwin hosts)
+# the probe tasks append one line per run here, outside the workspace. C2_RAN_LOG moves it (the script's stub tests do, so that they never
+# touch the file of a matrix that is running); the probe task gets the same path, and it is expanded by the shell of the host it runs on.
+RAN="${C2_RAN_LOG:-/tmp/wwd-c2-ran.log}"
 WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
 
 # ---- the cases (number, title, hosts, minutes, needs) --------------------------------------------------------
@@ -229,6 +231,9 @@ need_fault() {   # need_fault HOST KEY : the hook is in this wwd (H0: /v1/info l
 ran_count() { if [ "$dry" -eq 1 ]; then echo 0; else q "$1" "n=\$(grep -c 'job=$2 ' $RAN 2>/dev/null); echo \${n:-0}"; fi; }
 
 # ---- before and after -----------------------------------------------------------------------------------------------
+# AIR26_FIND_PDX: the command that prints where pdx is on air26 (the first that exists); the $HOME is air26's own
+AIR26_FIND_PDX='command -v pdx || { [ -x "$HOME/.local/bin/pdx" ] && echo "$HOME/.local/bin/pdx"; } || { [ -x "$HOME/.config/pdx/bin/pdx" ] && echo "$HOME/.config/pdx/bin/pdx"; }'
+AIR26_PDX=pdx
 precheck() {
   say "-- preconditions"
   pc_vers=""
@@ -243,10 +248,15 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
-  # case 8 submits from air26 over a non-interactive ssh: pdx has to be on that PATH
+  # case 8 submits from air26 over a non-interactive ssh, whose PATH has no pdx on a Mac (the shell reads .zshenv only): find it on the PATH,
+  # then in the two places pdx is installed, and say which one is used
   case " $cases " in *" 8 "*)
-    if [ "$dry" -eq 1 ]; then on air26 "command -v pdx"
-    else on air26 "command -v pdx" >/dev/null 2>&1 || { say "FAIL: pdx is not on air26's non-interactive PATH (case 8 submits from there)"; exit 1; }; fi ;;
+    if [ "$dry" -eq 1 ]; then on air26 "$AIR26_FIND_PDX"; AIR26_PDX=pdx
+    else
+      AIR26_PDX=$(on air26 "$AIR26_FIND_PDX" 2>/dev/null | head -1) || AIR26_PDX=""
+      [ -n "$AIR26_PDX" ] || { say "FAIL: pdx is not on air26's non-interactive PATH, nor in ~/.local/bin/pdx, nor in ~/.config/pdx/bin/pdx (case 8 submits from there)"; exit 1; }
+      say "   pdx on air26: $AIR26_PDX"
+    fi ;;
   esac
   x mkdir -p "$WORK/repo" "$WORK/saved"
   on air19 "rm -f $RAN"                       # first the log, then the list: the list is the moment the watching starts
@@ -264,7 +274,7 @@ scratch_repo() {
   cat > "$WORK/repo/scripts/probe.sh" <<'EOS'
 #!/bin/sh
 # probe.sh SECONDS EXIT : record the run outside the workspace, sleep, exit
-echo "job=${WWD_JOB:-?} host=$(hostname -s) start=$(date +%s)" >> /tmp/wwd-c2-ran.log 2>/dev/null || true
+echo "job=${WWD_JOB:-?} host=$(hostname -s) start=$(date +%s)" >> @RAN@ 2>/dev/null || true
 echo "host=$(hostname -s) job=${WWD_JOB:-?}"
 sleep "${1:-0}"
 exit "${2:-0}"
@@ -379,6 +389,7 @@ echo "sandbox probe done fail=$fail"
 exit "$fail"
 EOS
   sed -i.bak "s/@TAG@/$SB_TAG/g" "$WORK/repo/scripts/sandbox_probe.sh" && rm -f "$WORK/repo/scripts/sandbox_probe.sh.bak"
+  sed -i.bak "s|@RAN@|$RAN|g" "$WORK/repo/scripts/probe.sh" && rm -f "$WORK/repo/scripts/probe.sh.bak"
   ( cd "$WORK/repo" && git init -q . && git add -A && git -c user.name=c2 -c user.email=c2@localhost commit -q -m c2 )
 }
 
@@ -428,8 +439,10 @@ case_1() {
     say "+ two claims at once (fakeA, fakeB) on $pid over TCP with the pool token"; codes="200 409 "
   else
     mkdir -p "$WORK/out"
-    claim "$pid" fakeA | tail -1 > "$WORK/out/a" &
-    claim "$pid" fakeB | tail -1 > "$WORK/out/b" &
+    # claim prints the body, a newline and the code, and curl's code has no newline after it: the echo ends the line, or the two
+    # codes would run together in one file ("409200")
+    { claim "$pid" fakeA | tail -1; echo; } > "$WORK/out/a" &
+    { claim "$pid" fakeB | tail -1; echo; } > "$WORK/out/b" &
     wait
     codes=$(cat "$WORK/out/a" "$WORK/out/b" | sort | tr '\n' ' ')
   fi
@@ -567,7 +580,7 @@ case_8() {
   only_workers
   rdir="${TMPDIR:-/tmp}/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
   x sh -c "tar -C $WORK -cf - repo | ssh air26 'mkdir -p $rdir && tar -C $rdir -xf -'"        # the scratch repo on air26: a second origin
-  ida=$(q air26 "cd $rdir/repo && pdx test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
+  ida=$(q air26 "cd $rdir/repo && $AIR26_PDX test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
   track "$ida" air26
   idm=$(submit c2-any)                      # the younger job, but its origin is the one under pressure
   worker_set mserv true                     # only now can anything be claimed
