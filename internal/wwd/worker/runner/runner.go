@@ -52,6 +52,10 @@ type Plan struct {
 	Dir     string
 	Timeout time.Duration
 	TaskEnv []string
+	// Summary is the task's summary kind (go-json, vitest-json, junit, plain) and OutDir the directory Run writes to (log, stdout,
+	// report.json, junit.xml): what the reporter needs to build the result's summary.
+	Summary string
+	OutDir  string
 }
 
 // Rejected is Prepare's answer for a job that must not run: unknown task, arguments the manifest does not allow. The job fails, it is
@@ -92,6 +96,8 @@ type Ended struct {
 	Job     wire.Job
 	ClaimID string
 	Run     run.Result // for KindRan, KindCancelled and KindLost, when the command started
+	Plan    Plan       // what Prepare made; zero when it failed or was not reached
+	Root    string     // the workspace root (ws.Dir); empty when no workspace was made
 	Err     error
 }
 
@@ -239,7 +245,7 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	default:
 		ended.Kind = KindRan
 	}
-	ended.Run = res
+	ended.Run, ended.Plan, ended.Root = res, plan, ws.Dir
 	if finish != nil {
 		finish(renewCtx, ended)
 	}

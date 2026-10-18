@@ -485,3 +485,33 @@ func TestCancelDuringStartDoesNotRunTheCommand(t *testing.T) {
 		t.Fatalf("kind=%s ran=%d", e.Kind, ex.ran.Load())
 	}
 }
+
+func TestStartsLeaseReplacesTheClaimsShorterOne(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result { time.Sleep(8 * unit); return run.Result{Outcome: run.Exited} }}
+	o := &fakeOrigin{
+		claim: func(id string) (wire.ClaimResponse, error) {
+			return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
+		},
+		start: func() (wire.Lease, error) { return wire.Lease{LeaseS: 40, RenewS: 50}, nil },
+	}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j")), nil); e.Kind != KindRan {
+		t.Fatalf("kind=%s: the lease start answers with is the one that counts from then on", e.Kind)
+	}
+}
+
+func TestEndedCarriesPlanAndRootForTheReporter(t *testing.T) {
+	want := Plan{Argv: []string{"go", "test"}, Dir: "/ws", Timeout: time.Minute, Summary: "go-json", OutDir: "/out/j"}
+	ex := &fakeExec{prepare: func() (Plan, error) { return want, nil }}
+	c, _ := newCtl(ex)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil)
+	if e.Kind != KindRan || e.Plan.Summary != "go-json" || e.Plan.OutDir != "/out/j" || e.Root != "/ws" {
+		t.Fatalf("ended %+v", e)
+	}
+	ex2 := &fakeExec{prepare: func() (Plan, error) { return Plan{}, &Rejected{Reason: "x"} }}
+	c2, _ := newCtl(ex2)
+	e = c2.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil)
+	if e.Kind != KindRejected || e.Plan.Summary != "" || e.Root != "/ws" {
+		t.Fatalf("rejected ended %+v", e)
+	}
+}
