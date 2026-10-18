@@ -32,9 +32,11 @@ func TestMinuteStatsValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, st := range map[string]MinuteStats{
-		"negative":           {SampledS: -1},
-		"zones over sampled": {SampledS: 60, NormalS: 40, WarningS: 30},
-		"ticks over sampled": {SampledS: 2, FullTicks: 3},
+		"negative":                       {SampledS: -1},
+		"zones over sampled":             {SampledS: 60, NormalS: 40, WarningS: 30},
+		"ticks over sampled":             {SampledS: 2, FullTicks: 3},
+		"ticks are samples, not seconds": {SampledS: 60, FullTicks: 13},
+		"starts over ticks":              {SampledS: 60, FullTicks: 2, FullStarts: 3},
 	} {
 		if err := st.Validate(); err == nil {
 			t.Errorf("%s: want an error", name)

@@ -30,6 +30,9 @@ type Facts struct {
 	Stats *MinuteStats `json:"stats,omitempty"`
 }
 
+// SampleIntervalS is the seconds one facts sample stands for (spec §3.1: one record every 5 s).
+const SampleIntervalS = 5
+
 // MinuteStats is worked out per 5 s sample inside wwd and totalled per minute (internal/wwd/derived.MinuteAgg).
 // SampledS counts the seconds that were really sampled (5 per sample), so a minute wwd started or restarted inside has
 // fewer than 60. Full is the "host is full" flag with its 0.9 hysteresis (derived.FullLatch, the same definition as
@@ -68,8 +71,11 @@ func (s MinuteStats) Validate() error {
 	if s.NormalS+s.WarningS+s.DangerS > s.SampledS {
 		return fmt.Errorf("stats: the zone seconds add up to more than sampled_s")
 	}
-	if s.FullTicks > s.SampledS {
-		return fmt.Errorf("stats: full_ticks is more than sampled_s")
+	if s.FullTicks*SampleIntervalS > s.SampledS {
+		return fmt.Errorf("stats: full_ticks (%d samples of %d s) is more than sampled_s", s.FullTicks, SampleIntervalS)
+	}
+	if s.FullStarts > s.FullTicks {
+		return fmt.Errorf("stats: full_starts is more than full_ticks")
 	}
 	return nil
 }
