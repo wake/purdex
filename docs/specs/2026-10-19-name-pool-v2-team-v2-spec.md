@@ -106,7 +106,17 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
   The recipe and the text fields beyond their sizes are opaque.
 - **At most 64 personas**, retired ones included. The personas route accepts a body of up to **4 MiB** (hostconfig's
   default is 1 MiB, `internal/module/hostconfig/handler.go:12`).
-- `personas.json` from the B-line page imports as-is: `id` → `code`, `name` → `name`, and the rest by the same names.
+- `personas.json` from the B-line page imports with the fields mapped by name: `id` → `code`, `name` → `name`, and the
+  rest by the same names.
+  - **Import merges, it never replaces** (decided 10-19 for NA-1b, after codex found that a literal replace lets an old or
+    partial file wipe personas).
+  - A new code is created. For an existing code, each field the file has overwrites the stored one; a field the file
+    lacks keeps its stored value, and nested objects are compared sub-field by sub-field.
+  - `retired` is never changed by an import. A code missing from the file is left alone: an import never deletes or
+    retires.
+  - Avatar: for an existing code whose recipe in the file differs from the stored one, the image is redrawn from the
+    file's recipe. An equal recipe keeps the stored image. A new code is always drawn.
+  - The dry-run summary counts new, changed and skipped personas, with the reason for each skip.
   It is the user's own data and is **not committed to the repo** (U7).
 
 ### 4.2 Storage and routes
