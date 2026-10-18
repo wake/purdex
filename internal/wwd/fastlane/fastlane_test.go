@@ -66,12 +66,17 @@ type fakeGate struct {
 	run   func(ctx context.Context, o gate.Options) int
 	// skipMark: the gate never admits the command (it printed no mark); a run func may print the mark itself later.
 	skipMark bool
+	// waitedOut is what the gate reports through Options.WaitedOut: the wait for a slot ran past WaitMax.
+	waitedOut bool
 }
 
 func (g *fakeGate) Run(ctx context.Context, o gate.Options) (int, error) {
 	g.mu.Lock()
 	g.calls = append(g.calls, o)
 	g.mu.Unlock()
+	if o.WaitedOut != nil {
+		*o.WaitedOut = g.waitedOut
+	}
 	// like the real gate: the admitted mark goes to the command's stderr right before the command starts
 	if !g.skipMark {
 		for _, kv := range o.Env {
@@ -381,12 +386,31 @@ func TestTheAdmittedMarkIsNotInTheOutput(t *testing.T) {
 	}
 }
 
+func TestAnInstantRefusalIsInfraWhateverTheQueueTimeout(t *testing.T) {
+	// a refusal for another cause (a broken gate directory, the disk floor) comes at once; with a short remaining queue timeout the
+	// old reading by elapsed time took it for the wait running out
+	tk := task(t, "one-file")
+	tk.QueueTimeout = time.Millisecond
+	rec := newRec()
+	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int {
+		time.Sleep(5 * time.Millisecond)
+		return gate.ExitRefused
+	}}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateFailed || res.Reason != "infra" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
 func TestAWaitThatOutlastsTheQueueTimeoutExpires(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.QueueTimeout = 200 * time.Millisecond
 	rec := newRec()
-	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int {
-		time.Sleep(300 * time.Millisecond)
+	g := &fakeGate{skipMark: true, waitedOut: true, run: func(context.Context, gate.Options) int {
 		return gate.ExitRefused
 	}}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
