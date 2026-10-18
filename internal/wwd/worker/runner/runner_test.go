@@ -13,6 +13,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
 )
@@ -99,7 +100,8 @@ type fakeExec struct {
 	ran         atomic.Int32
 	plan        atomic.Pointer[Plan]
 	order       *[]string
-	origins     []string // Job.Origin as Materialize, Prepare and Run each saw it
+	origins     []string    // Job.Origin as Materialize, Prepare and Run each saw it
+	refs        []ident.Ref // the ref Materialize, Prepare and Run each got
 	mu          sync.Mutex
 }
 
@@ -107,6 +109,12 @@ func (e *fakeExec) sawOrigin(j wire.Job) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.origins = append(e.origins, j.Origin)
+}
+
+func (e *fakeExec) sawRef(r ident.Ref) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.refs = append(e.refs, r)
 }
 
 func (e *fakeExec) note(s string) {
@@ -117,7 +125,8 @@ func (e *fakeExec) note(s string) {
 	}
 }
 
-func (e *fakeExec) Materialize(ctx context.Context, j wire.Job, _ string) (snapshot.Workspace, error) {
+func (e *fakeExec) Materialize(ctx context.Context, ref ident.Ref, j wire.Job, _ string) (snapshot.Workspace, error) {
+	e.sawRef(ref)
 	e.sawOrigin(j)
 	if e.materialize != nil {
 		return e.materialize(ctx)
@@ -125,7 +134,8 @@ func (e *fakeExec) Materialize(ctx context.Context, j wire.Job, _ string) (snaps
 	return snapshot.Workspace{Dir: "/ws", Cleanup: func() error { e.cleaned.Add(1); e.note("cleanup"); return nil }}, nil
 }
 
-func (e *fakeExec) Prepare(_ context.Context, j wire.Job, _ snapshot.Workspace) (Plan, error) {
+func (e *fakeExec) Prepare(_ context.Context, ref ident.Ref, j wire.Job, _ snapshot.Workspace) (Plan, error) {
+	e.sawRef(ref)
 	e.sawOrigin(j)
 	if e.prepare != nil {
 		return e.prepare()
@@ -133,7 +143,8 @@ func (e *fakeExec) Prepare(_ context.Context, j wire.Job, _ snapshot.Workspace) 
 	return Plan{Argv: []string{"true"}, Dir: "/ws", Timeout: time.Minute}, nil
 }
 
-func (e *fakeExec) Run(ctx context.Context, j wire.Job, _ snapshot.Workspace, plan Plan) run.Result {
+func (e *fakeExec) Run(ctx context.Context, ref ident.Ref, j wire.Job, _ snapshot.Workspace, plan Plan) run.Result {
+	e.sawRef(ref)
 	e.sawOrigin(j)
 	e.ran.Add(1)
 	e.plan.Store(&plan)
@@ -268,6 +279,30 @@ func TestSameJobIdOnTwoOriginsDoesNotCollide(t *testing.T) {
 	wg.Wait()
 	if kinds[0] != KindRan || kinds[1] != KindRan {
 		t.Fatalf("kinds %v", kinds)
+	}
+}
+
+// Every step of a job gets the job as the worker names it: the connection it came in on (cand.Source) and its id, whatever the job's JSON
+// says about its origin. Two connections with one id get two refs.
+func TestExecStepsGetTheConnectionAndTheID(t *testing.T) {
+	for _, src := range []string{"mlab", "air26", "a/b c"} {
+		ex := &fakeExec{}
+		c, _ := newCtl(ex)
+		s := scored(testJob("same"))
+		s.Source = src
+		s.Job.Origin = "someone-else" // what the peer wrote in the job: not the identity
+		if k := c.Work(context.Background(), &fakeOrigin{}, s, nil).Kind; k != KindRan {
+			t.Fatalf("%s: kind %s", src, k)
+		}
+		want := ident.Ref{Source: src, ID: "same"}
+		if len(ex.refs) != 3 {
+			t.Fatalf("%s: %d steps saw a ref, want 3 (materialize, prepare, run)", src, len(ex.refs))
+		}
+		for i, r := range ex.refs {
+			if r != want {
+				t.Errorf("%s: step %d got %+v, want %+v", src, i, r, want)
+			}
+		}
 	}
 }
 

@@ -23,8 +23,9 @@ type Config struct {
 	Enabled bool `toml:"enabled"`
 	// LogUploadFail (H1): the origin refuses a log upload. A result upload is not touched.
 	LogUploadFail bool `toml:"log_upload_fail"`
-	// OwnerActiveFile (H2): while this file exists the host's owner counts as active in the worker's headroom. The facts' owner
-	// block keeps the real answer.
+	// OwnerActiveFile (H2): while this file exists the host's owner counts as active: the facts' owner block says active (reason
+	// "fault: owner_active_file"), so the headroom empties and the worker yields. On a host with no owner rule the block says away
+	// ("fault: owner_active_file absent") while the file is absent, so that the yield can end (daemon/sampler.go).
 	OwnerActiveFile string `toml:"owner_active_file"`
 	// Zone (H3): the zone peers score this host's jobs by (facts.derived.zone_override). The real zone is not changed.
 	Zone string `toml:"zone"`
