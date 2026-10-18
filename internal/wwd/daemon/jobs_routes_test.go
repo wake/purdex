@@ -165,6 +165,44 @@ func TestSubmitIsRefusedOnTCP(t *testing.T) {
 	assert.Equal(t, 200, code)
 }
 
+// The manual place of a queued job is set on the socket only: TCP (with the token or without) does not have the route, and a ?host= on
+// the socket is refused instead of forwarded.
+func TestPositionIsLocalOnly(t *testing.T) {
+	h := newJobHost(t, "mlab")
+	_, raw, _ := h.socketDo(t, "POST", "/v1/jobs", submissionBody())
+	sub, err := wire.Decode[wire.JobSubmissionResponse](raw)
+	require.NoError(t, err)
+	path := "/v1/jobs/" + sub.ID + "/position"
+
+	for _, auth := range []string{"", "Bearer " + testToken} {
+		code, _, _ := h.tcpDo(t, "POST", path, auth, wire.PositionRequest{Position: wire.PositionFront})
+		if auth == "" {
+			assert.Equal(t, 401, code)
+		} else {
+			assert.Contains(t, []int{404, 405}, code, "with the token the route still does not exist")
+		}
+	}
+	for _, q := range []string{"?host=air26", "?host=", "?host=&host=air26", "?host=air26&host=", "?host"} {
+		code, _, _ := h.socketDo(t, "POST", path+q, wire.PositionRequest{Position: wire.PositionFront})
+		assert.Equal(t, 400, code, "no forwarding, and no ?host= at all: "+q)
+	}
+	j, err := h.q.Get(context.Background(), sub.ID)
+	require.NoError(t, err)
+	assert.Equal(t, wire.Position(""), j.Manual, "nothing moved yet")
+
+	code, raw, _ := h.socketDo(t, "POST", path, wire.PositionRequest{Position: wire.PositionHold})
+	require.Equal(t, 200, code, string(raw))
+	j, err = h.q.Get(context.Background(), sub.ID)
+	require.NoError(t, err)
+	assert.Equal(t, wire.PositionHold, j.Manual)
+	// a peer reads the place with the job
+	code, raw, _ = h.tcpDo(t, "GET", "/v1/jobs/"+sub.ID, "Bearer "+testToken, nil)
+	require.Equal(t, 200, code)
+	pj, err := wire.Decode[wire.Job](raw)
+	require.NoError(t, err)
+	assert.Equal(t, wire.PositionHold, pj.Manual)
+}
+
 // A peer's view through the real TCP server leaves out the host's ad-hoc jobs, in the list, by id and for cancel; the socket sees them.
 func TestAdHocJobsAreNotServedToPeers(t *testing.T) {
 	h := newJobHost(t, "mlab")

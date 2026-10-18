@@ -4,7 +4,7 @@
   "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
   "task": "spa-related", "args": ["src/a.ts"], "class": "merge",
   "labels": ["os:darwin", "repo:purdex"], "locks": [], "cacheable": true, "timeout_s": 1800,
-  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false,
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false, "manual": "", "manual_seq": 0,
   "supersede_key": "deadbeef:spa-related",
   "submitter": {"session": "s1", "ref": "_abc123", "team": "wwd", "host": "mlab"},
   "created_at": "2026-10-18T05:00:00+08:00", "state": "queued",

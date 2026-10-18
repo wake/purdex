@@ -139,6 +139,9 @@ func (d *Daemon) SocketHandler() http.Handler {
 	// Submission is local only (spec §4.4): a job is always submitted on its own host, so the TCP surface has no such route.
 	if d.opts.Queue != nil {
 		mux.HandleFunc("POST /v1/jobs", jobsapi.New(d.opts.Queue).Submit())
+		// The manual place of a queued job is set on the socket only (spec 4.6): the TCP surface has no such route, and a ?host= is not
+		// forwarded (the person moves a job on the host it is queued on).
+		mux.HandleFunc("POST /v1/jobs/{id}/position", d.localOnly(jobsapi.New(d.opts.Queue).Position()))
 	} else {
 		mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "job queue not implemented", http.StatusNotImplemented)
@@ -332,4 +335,15 @@ func (r *Running) Close() error {
 	}
 	_ = os.Remove(r.sock)
 	return nil
+}
+
+// localOnly refuses a request that names another host: the route acts on this host's queue and is not forwarded.
+func (d *Daemon) localOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("host") { // present at all: an empty or a repeated one is no more local than a named one
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this route acts on the local host only"})
+			return
+		}
+		h(w, r)
+	}
 }

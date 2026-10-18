@@ -190,6 +190,36 @@ func TestJobsAfter_AnotherConflictStaysAStatusError(t *testing.T) {
 	}
 }
 
+func TestSetPosition(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/jobs/{id}/position", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = r.URL.EscapedPath() + " " + string(b)
+		j := jobIn(t, r.PathValue("id"), wire.StateQueued)
+		j.Manual = wire.PositionFront
+		j.ManualSeq = -1
+		writeJSON(w, j)
+	})
+	c := New(fakeWWD(t, mux))
+	j, err := c.SetPosition(context.Background(), "j_01JC", wire.PositionFront)
+	if err != nil || j.Manual != wire.PositionFront || j.ManualSeq != -1 {
+		t.Fatalf("job %+v err %v", j, err)
+	}
+	if got != `/v1/jobs/j_01JC/position {"position":"front"}` {
+		t.Errorf("request %q", got)
+	}
+	got = ""
+	if _, err := c.SetPosition(context.Background(), "j_01JC", wire.Position("sideways")); err == nil || got != "" {
+		t.Errorf("a bad position was sent: %v %q", err, got)
+	}
+	for _, bad := range []string{"x/../position", "", "j_", "../x"} {
+		if _, err := c.SetPosition(context.Background(), bad, wire.PositionHold); err == nil || got != "" {
+			t.Errorf("SetPosition(%q) was sent", bad)
+		}
+	}
+}
+
 func TestJobsPage_SendsEveryFilterAndReturnsTheWholeAnswer(t *testing.T) {
 	var q map[string][]string
 	mux := http.NewServeMux()

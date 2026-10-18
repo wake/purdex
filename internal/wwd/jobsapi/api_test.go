@@ -63,6 +63,7 @@ func newRig(t *testing.T) *rig {
 		mux.HandleFunc("POST /v1/jobs/{id}/cancel", a.Cancel(peer))
 		if !peer {
 			mux.HandleFunc("POST /v1/jobs", a.Submit())
+			mux.HandleFunc("POST /v1/jobs/{id}/position", a.Position())
 		}
 		return mux
 	}
@@ -372,6 +373,40 @@ func TestCancel(t *testing.T) {
 	assert.Equal(t, wire.StateClaimed, decode[wire.Job](t, w).State)
 
 	assert.Equal(t, 404, call(r.local, "POST", "/v1/jobs/j_nope/cancel", nil).Code)
+}
+
+// POST /v1/jobs/{id}/position moves a queued job by hand: the answer is the job with its place; a bad body or position is a 400, a job
+// that is not queued a 409 with its state, an unknown one a 404, and nothing changes in any of those.
+func TestPosition(t *testing.T) {
+	r := newRig(t)
+	id := r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	w := call(r.local, "POST", "/v1/jobs/"+id+"/position", `{"position":"front"}`)
+	require.Equal(t, 200, w.Code, w.Body.String())
+	j := decode[wire.Job](t, w)
+	assert.Equal(t, wire.PositionFront, j.Manual)
+	assert.Less(t, j.ManualSeq, int64(0))
+
+	w = call(r.local, "POST", "/v1/jobs/"+id+"/position", `{"position":"hold"}`)
+	assert.Equal(t, wire.PositionHold, decode[wire.Job](t, w).Manual)
+	w = call(r.local, "POST", "/v1/jobs/"+id+"/position", `{"position":"normal"}`)
+	assert.Equal(t, wire.Position(""), decode[wire.Job](t, w).Manual)
+
+	for _, body := range []string{`{"position":"sideways"}`, `{"position":""}`, `{}`, `{"position":"front","extra":1}`, `nope`, ``} {
+		w = call(r.local, "POST", "/v1/jobs/"+id+"/position", body)
+		assert.Equal(t, 400, w.Code, body)
+	}
+	assert.Equal(t, wire.Position(""), decode[wire.Job](t, call(r.local, "GET", "/v1/jobs/"+id, nil)).Manual, "no bad request changed it")
+
+	assert.Equal(t, 404, call(r.local, "POST", "/v1/jobs/j_nope/position", `{"position":"front"}`).Code)
+	assert.Equal(t, 404, call(r.local, "POST", "/v1/jobs/x%2F..%2Fy/position", `{"position":"front"}`).Code)
+
+	_, err := r.q.Claim(context.Background(), id, wire.ClaimRequest{Worker: "air26"})
+	require.NoError(t, err)
+	w = call(r.local, "POST", "/v1/jobs/"+id+"/position", `{"position":"front"}`)
+	require.Equal(t, 409, w.Code)
+	assert.Equal(t, wire.StateClaimed, decode[wire.Conflict409](t, w).State)
+
+	assert.Equal(t, 404, call(r.peer, "POST", "/v1/jobs/"+id+"/position", `{"position":"front"}`).Code, "the peer surface has no such route")
 }
 
 // An error the caller cannot act on is a 500 that says so and nothing more: no SQL, no paths.
