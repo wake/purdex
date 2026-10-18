@@ -76,7 +76,9 @@ func (h *host) snapshot() (ProcSnapshot, ProcContext) {
 }
 
 func newTracker() *Tracker {
-	return NewTracker(ObserveConfig{Host: "mlab", MinCPUSeconds: 60, MinMemMB: 1024, Interval: 5 * time.Second})
+	tr := NewTracker(ObserveConfig{Host: "mlab", MinCPUSeconds: 60, MinMemMB: 1024, Interval: 5 * time.Second})
+	tr.ident = func(int) (string, bool) { return "", false } // the fake pids are not real processes
+	return tr
 }
 
 // step feeds the tracker one sample n*5 s after ot0.
@@ -261,6 +263,28 @@ func TestTrackerTreatsAReusedPIDAsANewTree(t *testing.T) {
 	}
 	if len(tr.Live()) != 0 {
 		t.Fatalf("the new, small tree is not over the threshold")
+	}
+}
+
+// The same name does not make it the same tree: the start identity of the root decides (a node that ends and another node that
+// takes its pid).
+func TestTrackerTreatsASameNameReusedPIDAsANewTree(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	started := "t1"
+	tr.ident = func(int) (string, bool) { return started, true }
+	h.add(200, 100, "node", []string{"node", "build.js"})
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	started = "t2" // another process holds pid 200 now, also named node
+	h.args[200] = []string{"node", "other.js"}
+	h.rec(200).FootprintBytes = mb(1500)
+	got := step(tr, h, 1)
+	if len(got) != 1 || got[0].Signature != "node build.js" || got[0].EndedAt == nil {
+		t.Fatalf("the first node tree ended: %+v", got)
+	}
+	live := tr.Live()
+	if len(live) != 1 || live[0].Signature != "node other.js" {
+		t.Fatalf("the second one is a tree of its own: %+v", live)
 	}
 }
 

@@ -58,6 +58,7 @@ type tree struct {
 	rootPID     int
 	started     time.Time
 	last        time.Time
+	ident       string // the root's start identity when the tree began ("" when unknown)
 	session     string
 	via         string
 	command     string
@@ -92,10 +93,12 @@ type Tracker struct {
 	live    map[treeKey]*tree
 	harness map[treeKey]bool
 	lastAt  time.Time
+	// ident tells which process holds a pid (its start time); a tree whose root pid now has another one is a new tree. Tests replace it.
+	ident func(pid int) (string, bool)
 }
 
 func NewTracker(cfg ObserveConfig) *Tracker {
-	return &Tracker{cfg: cfg.withDefaults(), live: map[treeKey]*tree{}, harness: map[treeKey]bool{}}
+	return &Tracker{cfg: cfg.withDefaults(), live: map[treeKey]*tree{}, harness: map[treeKey]bool{}, ident: ProcIdent}
 }
 
 // isHarness says whether p is part of codex's own machinery: named codex..., the app-server broker, or a node/python wrapper
@@ -166,6 +169,7 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 		}
 	}
 
+	var ended []wire.Observation
 	seen := make(map[treeKey]bool, len(isRoot))
 	for _, root := range snap.Procs {
 		if !isRoot[root.PID] {
@@ -191,6 +195,14 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 		k := treeKey{root.PID, root.Name}
 		seen[k] = true
 		tr := t.live[k]
+		id, _ := t.ident(root.PID)
+		if tr != nil && id != "" && tr.ident != "" && id != tr.ident { // the pid went to a new process of the same name
+			if tr.over(t.cfg) {
+				ended = append(ended, tr.observation(t.cfg.Host, true))
+			}
+			delete(t.live, k)
+			tr = nil
+		}
 		if tr == nil {
 			session, ok := sessionFor(root, c)
 			if !ok {
@@ -204,7 +216,7 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 				argv = []string{root.Name}
 			}
 			tr = &tree{
-				rootPID: root.PID, started: now, session: session, via: via[root.PID],
+				rootPID: root.PID, ident: id, started: now, session: session, via: via[root.PID],
 				command: RedactCommand(argv), signature: CommandSignature(argv),
 			}
 			t.live[k] = tr
@@ -216,7 +228,6 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 		tr.procsPeak = max(tr.procsPeak, n)
 	}
 
-	var ended []wire.Observation
 	for k, tr := range t.live {
 		if seen[k] {
 			continue
