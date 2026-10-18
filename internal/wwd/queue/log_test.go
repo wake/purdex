@@ -98,6 +98,12 @@ func TestStaleClaimUploadsNoLog(t *testing.T) {
 	err = f.putLog(t, "j_nope", old.ClaimID, "x")
 	assert.ErrorIs(t, err, ErrNotFound)
 
+	// a claim that is stale from the start is turned away before its body is read
+	spy := &spyReader{}
+	err = f.q.PutLog(bg, id, old.ClaimID, spy)
+	assert.Equal(t, wire.StateClaimed, conflictState(t, err))
+	assert.False(t, spy.read, "the body of a stale upload is not read")
+
 	entries, err := os.ReadDir(f.q.opt.LogDir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "one log file and no temporary leftovers")
@@ -127,6 +133,10 @@ func TestClaimThatGoesStaleDuringTheUploadKeepsTheHoldersLog(t *testing.T) {
 	require.NoError(t, f.putLog(t, id, fresh.ClaimID, "from the holder\n"))
 	assert.Equal(t, "from the holder\n", f.readLog(t, id))
 }
+
+type spyReader struct{ read bool }
+
+func (r *spyReader) Read([]byte) (int, error) { r.read = true; return 0, io.EOF }
 
 type failingReader struct{ n int }
 
