@@ -1221,7 +1221,9 @@ func (m *Module) projectPane(paneID string) (*SessionProjection, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = m.filterPaneOwnedProjectionFrames(paneID, frames)
+	if len(frames) > 0 {
+		frames = m.filterPaneFramesBy(paneID, frames, m.projectionPaneSnapshot(paneID))
+	}
 	projections := []SessionProjection{buildPaneProjection(paneID, frames)}
 	m.applyModOverlay(projections)
 	return &projections[0], nil
@@ -1244,8 +1246,26 @@ func (m *Module) filterProjectionFrames(frames []store.Frame, snap *paneSnapshot
 	return filtered
 }
 
-func (m *Module) filterPaneOwnedProjectionFrames(paneID string, frames []store.Frame) []store.Frame {
-	return m.filterPaneFramesBy(paneID, frames, nil)
+// projectionPaneSnapshot is the shared pane listing (#3092 A, at most paneSnapTTL old) that projectPane takes a pane's pid from, so a
+// hook event does not fork a display-message for it (#3316). It is nil — the pane's pid is read live, as before — when this module has
+// no shared listing (paneSnapTTL is 0: tests, no Init), tmux is absent, the listing failed or could only be a per-pane fallback. A
+// pane the cached listing does not know may be brand new, so it is listed once more (forced) before it is called unknown. Only the
+// projection (what the SPA shows of a pane) reads this way; verifyEvent, which decides whether a hook's sender is who it says it is,
+// still reads the pane's pid live: it is not handed a pid that may be two seconds old.
+func (m *Module) projectionPaneSnapshot(paneID string) *paneSnapshot {
+	if m == nil || m.tmux == nil || m.paneSnapTTL <= 0 {
+		return nil
+	}
+	snap, fromCache, err := m.cachedPaneSnapshot(false)
+	if err != nil || snap == nil || snap.fallback {
+		return nil
+	}
+	if _, listed := snap.panes[paneID]; !listed && fromCache {
+		if snap, _, err = m.cachedPaneSnapshot(true); err != nil || snap == nil || snap.fallback {
+			return nil
+		}
+	}
+	return snap
 }
 
 func (m *Module) filterPaneFramesBy(paneID string, frames []store.Frame, snap *paneSnapshot) []store.Frame {
