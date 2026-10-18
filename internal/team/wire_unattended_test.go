@@ -72,7 +72,7 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 		UnattendedState: UnattendedState{On: true, Since: 1000, ChangedAt: 1000, ChangedBy: by},
 		Approved:        []Approval{{ID: "a", Kind: KindLead, State: StateApproved, DecidedAt: 1500, DecidedBy: &Client{Kind: ClientKindUnattended, Label: UnattendedLabel}}},
 		Truncated:       true, NextBefore: 1500, Swept: 2, Pending: 1, ListFailed: true,
-		Log:             []UnattendedLogEntry{},
+		Log: []UnattendedLogEntry{},
 	}
 	raw, err := json.Marshal(full)
 	if err != nil {
