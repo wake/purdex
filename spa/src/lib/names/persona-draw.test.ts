@@ -8,7 +8,8 @@ import {
 } from './persona-draw'
 
 describe('renderDicebearSvg', () => {
-  it('draws an SVG for each of the six styles, deterministically from the seed', async () => {
+  // Loads all six style definitions (12–373 KB of JSON each) and draws twice: well over 5 s on a busy machine.
+  it('draws an SVG for each of the six styles, deterministically from the seed', { timeout: 30_000 }, async () => {
     for (const style of DICEBEAR_STYLES) {
       const a = await renderDicebearSvg({ source: style, seed: 'Hiro' })
       const b = await renderDicebearSvg({ source: style, seed: 'Hiro' })
