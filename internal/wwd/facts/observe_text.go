@@ -244,6 +244,8 @@ func signature(clean []string, depth int) string {
 			a = stripCounter(strings.TrimSuffix(path.Base(a), ext)) // a script or tool path: its name, without a counter or random suffix
 		} else if ext := path.Ext(a); ext != "" && ext != a {
 			a = stripCounter(strings.TrimSuffix(a, ext)) + ext // a bare script name keeps its extension
+		} else if ext == "" {
+			a = stripCounter(a) // a bare name with none
 		}
 		if a = trimName(a); a != "" {
 			words = append(words, a)

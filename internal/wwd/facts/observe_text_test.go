@@ -134,6 +134,7 @@ func TestCommandSignatureNormalizesTempNames(t *testing.T) {
 	same(t, "python3 train",
 		[]string{"python3", "/tmp/train-2026.py"}, []string{"python3", "/tmp/train-2027.py"})
 	same(t, "node run.js", []string{"node", "run-123.js"}, []string{"node", "run-456.js"}) // a bare word keeps its extension, loses the suffix
+	same(t, "python3 run", []string{"python3", "run-123"}, []string{"python3", "run-456"}) // no path and no extension
 	// real names stay
 	same(t, "node vitest", []string{"node", "/x/node_modules/.bin/vitest"})
 	same(t, "node es2020", []string{"node", "/x/es2020"})
