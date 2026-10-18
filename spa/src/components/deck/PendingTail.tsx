@@ -15,9 +15,6 @@ import { QueuedMessages, TakeBackSpinner } from './QueuedMessages'
 import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
 import { PENDING_USER_BOX, PENDING_USER_BOX_CHAT, PENDING_USER_CAPTION } from './UserBlock'
 
-/** The stages in which a message is on its way to, or in, Claude Code's queue: a header line with its text may be its row. */
-const IN_FLIGHT = new Set(['received', 'filled', 'entered', 'queued'])
-
 function HeaderQueuedLine({ item, onTakeBack, busy, layout }: { item: HeaderQueued; onTakeBack?: () => void; busy: boolean; layout: 'deck' | 'chat' }) {
   const t = useI18nStore((s) => s.t)
   if (item.source === 'peer') {
@@ -61,23 +58,13 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layou
   useEffect(() => { setHeaderUserRows(key, JSON.parse(userRowsSig) as HeaderRow[]) }, [key, userRowsSig])
   const shownEntries = entries.filter((e) => e.state !== 'superseded' && (!e.matched || e.stage !== undefined))
   // a row a staged entry stands for is not drawn a second time (one bubble per message)
-  // one to one: a row is covered by ONE claim, so a second row with the same text and stamp is still someone else's. A staged entry that has not claimed a row yet
-  // (the header frame came before the queue's effect ran) covers the first row with its text, so the two never show side by side for a render.
+  // one to one: a row is covered by ONE claim, so a second row with the same text and stamp is still someone else's
   const covered = queue.coveredRows().map((c) => ({ ...c, used: false }))
-  const unclaimed = new Map<string, number>()
-  for (const e of entries) {
-    if (e.stage === undefined || e.matched || e.state === 'superseded' || !IN_FLIGHT.has(e.stage.stage)) continue
-    const k = e.text.trimEnd()
-    unclaimed.set(k, (unclaimed.get(k) ?? 0) + 1)
-  }
   const rows = queued.filter((q) => {
     if (q.source === 'peer') return true
     if (isRowHidden(tb, q)) return false
-    const text = q.text.trimEnd()
-    const c = covered.find((x) => !x.used && x.at === q.at && x.text === text)
+    const c = covered.find((x) => !x.used && x.at === q.at && x.text === q.text.trimEnd())
     if (c) { c.used = true; return false }
-    const n = unclaimed.get(text) ?? 0
-    if (n > 0) { unclaimed.set(text, n - 1); return false }
     return true
   })
   if (rows.length === 0 && shownEntries.length === 0 && !tb.notice) return null
