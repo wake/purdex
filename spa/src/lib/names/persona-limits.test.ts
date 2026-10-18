@@ -26,6 +26,7 @@ describe('validatePersona', () => {
 
   it('checks the display name: 1..24 runes after trimming', () => {
     expect(fields(makePersona('hiro', { name: '   ' }))).toContain('name')
+    expect(fields(makePersona('hiro', { name: ' Hiro ' }))).toContain('name') // the wire shape is already trimmed
     expect(fields(makePersona('hiro', { name: 'x'.repeat(PERSONA_LIMITS.name + 1) }))).toContain('name')
     expect(fields(makePersona('hiro', { name: '字'.repeat(PERSONA_LIMITS.name) }))).not.toContain('name')
     expect(fields(makePersona('hiro', { name: 'a\u0007b' }))).toContain('name')
@@ -47,5 +48,8 @@ describe('validatePersona', () => {
   it('checks the avatar recipe against 2 KB', () => {
     const big = makePersona('hiro', { avatar: { source: 'micah', options: { x: 'y'.repeat(PERSONA_LIMITS.recipe) } } })
     expect(fields(big)).toContain('avatar')
+    // 700 CJK characters are 700 UTF-16 units but about 2.1 KB in UTF-8
+    const cjk = makePersona('hiro', { avatar: { source: 'micah', seed: '字'.repeat(700) } })
+    expect(fields(cjk)).toContain('avatar')
   })
 })

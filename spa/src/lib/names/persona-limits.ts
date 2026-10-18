@@ -34,9 +34,9 @@ function printable(s: string): boolean {
 export function validatePersona(p: Persona): PersonaIssue[] {
   const out: PersonaIssue[] = []
   if (!CODE_RULE.test(p.code)) out.push({ field: 'code', message: 'code must be 3-12 lowercase letters' })
-  const name = p.name.trim()
-  const nameLen = Array.from(name).length
-  if (nameLen < 1 || nameLen > PERSONA_LIMITS.name || !printable(name)) {
+  const name = p.name
+  const nameLen = Array.from(name.trim()).length
+  if (name !== name.trim() || nameLen < 1 || nameLen > PERSONA_LIMITS.name || !printable(name)) {
     out.push({ field: 'name', message: `name must be 1-${PERSONA_LIMITS.name} printable characters` })
   }
   for (const key of ['personality', 'method', 'interests'] as const) {
@@ -49,7 +49,7 @@ export function validatePersona(p: Persona): PersonaIssue[] {
   if (p.avatar_data !== '' && (!AVATAR_DATA.test(p.avatar_data) || p.avatar_data.length > PERSONA_LIMITS.avatarData)) {
     out.push({ field: 'avatar_data', message: 'avatar image must be a webp/png/jpeg data URL of at most 32 KB' })
   }
-  if (JSON.stringify(p.avatar).length > PERSONA_LIMITS.recipe) {
+  if (new TextEncoder().encode(JSON.stringify(p.avatar)).length > PERSONA_LIMITS.recipe) {
     out.push({ field: 'avatar', message: 'avatar recipe is over 2 KB' })
   }
   return out
