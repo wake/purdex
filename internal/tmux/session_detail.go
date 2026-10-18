@@ -48,7 +48,7 @@ var tmuxInstanceRe = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
 // no UTF-8 locale it rewrites every non-ASCII character of a name, title or path to "_" (a session called 工作 would be listed as "__"
 // and could no longer be addressed). -u makes tmux write UTF-8 whatever the locale, and the printable separator survives either way.
 func (r *RealExecutor) ListSessionsDetailed(ctx context.Context) ([]SessionDetail, bool, error) {
-	out, err := boundedRead(ctx, "-u", "list-sessions", "-F", detailFormat).Output()
+	out, err := boundedRead(ctx, "tmux.read.ListSessionsDetailed", "-u", "list-sessions", "-F", detailFormat).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
 			return nil, false, cerr

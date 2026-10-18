@@ -90,7 +90,7 @@ func (r *RealExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, o
 	if err != nil {
 		return "", "", err
 	}
-	out, err := boundedRead(ctx, args...).Output()
+	out, err := boundedRead(ctx, "tmux.read.NewSessionTaggedContext", args...).Output()
 	id, inst := parseCreatedSession(string(out))
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux new-session", err); cerr != nil {
@@ -108,7 +108,7 @@ func (r *RealExecutor) PaneIdentity(ctx context.Context, target, option string) 
 	if err != nil {
 		return PaneIdentity{}, err
 	}
-	out, err := boundedRead(ctx, args...).Output()
+	out, err := boundedRead(ctx, "tmux.read.PaneIdentity", args...).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux display-message", err); cerr != nil {
 			return PaneIdentity{}, cerr

@@ -209,24 +209,29 @@ type Executor interface {
 type observedCmd struct {
 	*execstat.Cmd // counted under a tag too (GET /api/debug/execstat), which the legacy counter below does not tell apart
 	counter       *execstat.Counter
+	// detail names, as an execstat event, which read this fork is ("tmux.read.ListAllPanes"): a literal at each call site, so the names
+	// stay a small fixed set. The "tmux.read" tag above is the total and is unchanged; the events are the same forks told apart (#3316),
+	// and are events rather than tags so that the report's sum does not count a fork twice. "" for a fork that is not one of the reads.
+	detail string
 }
 
 func tmuxCmd(args ...string) *observedCmd {
-	return &observedCmd{execstat.Command("tmux.cmd", "tmux", args...), &execstat.Tmux}
+	return &observedCmd{Cmd: execstat.Command("tmux.cmd", "tmux", args...), counter: &execstat.Tmux}
 }
 
-func tmuxCmdContext(ctx context.Context, args ...string) *observedCmd {
-	return &observedCmd{execstat.CommandContext(ctx, "tmux.read", "tmux", args...), &execstat.Tmux}
+func tmuxCmdContext(ctx context.Context, detail string, args ...string) *observedCmd {
+	return &observedCmd{Cmd: execstat.CommandContext(ctx, "tmux.read", "tmux", args...), counter: &execstat.Tmux, detail: detail}
 }
 
 func psCmd(args ...string) *observedCmd {
-	return &observedCmd{execstat.Command("tmux.ps", "ps", args...), &execstat.PS}
+	return &observedCmd{Cmd: execstat.Command("tmux.ps", "ps", args...), counter: &execstat.PS}
 }
 
 func (c *observedCmd) Output() ([]byte, error) {
 	t0 := time.Now()
 	out, err := c.Cmd.Output()
 	c.counter.Observe(time.Since(t0))
+	c.noteDetail()
 	return out, err
 }
 
@@ -234,7 +239,14 @@ func (c *observedCmd) Run() error {
 	t0 := time.Now()
 	err := c.Cmd.Run()
 	c.counter.Observe(time.Since(t0))
+	c.noteDetail()
 	return err
+}
+
+func (c *observedCmd) noteDetail() {
+	if c.detail != "" {
+		execstat.Event(c.detail)
+	}
 }
 
 type RealExecutor struct{}
@@ -249,8 +261,8 @@ const readWaitDelay = 500 * time.Millisecond
 
 // boundedRead builds a tmux invocation that is killed when ctx ends — the
 // reads above, and new-session, whose caller bounds it with a cap of its own.
-func boundedRead(ctx context.Context, args ...string) *observedCmd {
-	cmd := tmuxCmdContext(ctx, args...)
+func boundedRead(ctx context.Context, detail string, args ...string) *observedCmd {
+	cmd := tmuxCmdContext(ctx, detail, args...)
 	cmd.WaitDelay = readWaitDelay
 	return cmd
 }
@@ -269,7 +281,7 @@ func readCtxErr(ctx context.Context, op string, err error) error {
 }
 
 func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) {
-	out, err := boundedRead(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_created}\t#{session_path}").Output()
+	out, err := boundedRead(ctx, "tmux.read.ListSessions", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_created}\t#{session_path}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
 			return nil, cerr
@@ -328,7 +340,7 @@ func parseListSessionsOutput(out string) []TmuxSession {
 }
 
 func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
-	out, err := boundedRead(ctx, "display-message", "-p", "-t", activePaneTarget(sessionName), activePaneMetadataFormat).Output()
+	out, err := boundedRead(ctx, "tmux.read.ActivePaneMetadata", "display-message", "-p", "-t", activePaneTarget(sessionName), activePaneMetadataFormat).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux display-message", err); cerr != nil {
 			return TmuxPaneMetadata{}, cerr
@@ -417,7 +429,7 @@ func parseActivePaneMetadata(out string) (md TmuxPaneMetadata, ok bool) {
 func (r *RealExecutor) activePaneMetadataPerField(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
 	target := activePaneTarget(sessionName)
 	query := func(format string) (string, error) {
-		out, err := boundedRead(ctx, "display-message", "-p", "-t", target, format).Output()
+		out, err := boundedRead(ctx, "tmux.read.ActivePaneMetadataPerField", "display-message", "-p", "-t", target, format).Output()
 		if err != nil {
 			if cerr := readCtxErr(ctx, "tmux display-message "+format, err); cerr != nil {
 				return "", cerr
@@ -497,7 +509,7 @@ func (r *RealExecutor) NewSession(name, cwd string) error {
 }
 
 func (r *RealExecutor) NewSessionContext(ctx context.Context, name, cwd string) error {
-	err := boundedRead(ctx, newSessionCommand("new-session", "-d", "-s", name, "-c", cwd)...).Run()
+	err := boundedRead(ctx, "tmux.read.NewSessionContext", newSessionCommand("new-session", "-d", "-s", name, "-c", cwd)...).Run()
 	if err == nil {
 		return nil
 	}
@@ -530,7 +542,7 @@ func (r *RealExecutor) HasSession(name string) bool {
 }
 
 func (r *RealExecutor) HasSessionContext(ctx context.Context, name string) (bool, error) {
-	err := boundedRead(ctx, "has-session", "-t", "="+name).Run()
+	err := boundedRead(ctx, "tmux.read.HasSessionContext", "has-session", "-t", "="+name).Run()
 	if err == nil {
 		return true, nil
 	}
@@ -616,7 +628,7 @@ func (r *RealExecutor) PaneSessionName(target string) (string, error) {
 }
 
 func (r *RealExecutor) PaneSessionNameCtx(ctx context.Context, target string) (string, error) {
-	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{session_name}").Output()
+	out, err := boundedRead(ctx, "tmux.read.PaneSessionNameCtx", "display-message", "-p", "-t", target, "#{session_name}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux display-message session_name", err); cerr != nil {
 			return "", cerr
@@ -627,7 +639,7 @@ func (r *RealExecutor) PaneSessionNameCtx(ctx context.Context, target string) (s
 }
 
 func (r *RealExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
-	out, err := tmuxCmdContext(ctx, "display-message", "-p", "-t", target, "#{session_id}").Output()
+	out, err := tmuxCmdContext(ctx, "tmux.read.PaneSessionID", "display-message", "-p", "-t", target, "#{session_id}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message session_id: %w", err)
 	}
@@ -641,7 +653,7 @@ func (r *RealExecutor) PaneSessionID(ctx context.Context, target string) (string
 const listAllPanesFormat = "#{pane_id} #{session_id} #{pane_pid}"
 
 func (r *RealExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error) {
-	out, err := boundedRead(ctx, "list-panes", "-a", "-F", listAllPanesFormat).Output()
+	out, err := boundedRead(ctx, "tmux.read.ListAllPanes", "list-panes", "-a", "-F", listAllPanesFormat).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-panes -a", err); cerr != nil {
 			return nil, cerr
@@ -656,7 +668,7 @@ func (r *RealExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 }
 
 func (r *RealExecutor) ListPanePlacements(ctx context.Context) (map[string]PanePlacement, error) {
-	out, err := boundedRead(ctx, "list-panes", "-a", "-F", listPanePlacementsFormat).Output()
+	out, err := boundedRead(ctx, "tmux.read.ListPanePlacements", "list-panes", "-a", "-F", listPanePlacementsFormat).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-panes -a", err); cerr != nil {
 			return nil, cerr
@@ -722,7 +734,7 @@ func (r *RealExecutor) ActivePanePID(target string) (string, error) {
 }
 
 func (r *RealExecutor) ActivePanePIDCtx(ctx context.Context, target string) (string, error) {
-	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{pane_pid}").Output()
+	out, err := boundedRead(ctx, "tmux.read.ActivePanePIDCtx", "display-message", "-p", "-t", target, "#{pane_pid}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux display-message pane_pid", err); cerr != nil {
 			return "", cerr
@@ -837,7 +849,7 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 }
 
 func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, uint16, error) {
-	out, err := boundedRead(ctx, "display-message", "-p", "-t", target,
+	out, err := boundedRead(ctx, "tmux.read.WindowSize", "display-message", "-p", "-t", target,
 		"#{window_width} #{window_height}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "display-message window size", err); cerr != nil {
@@ -849,7 +861,7 @@ func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, u
 }
 
 func (r *RealExecutor) StatusRows(ctx context.Context, target string) (uint16, error) {
-	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{status}").Output()
+	out, err := boundedRead(ctx, "tmux.read.StatusRows", "display-message", "-p", "-t", target, "#{status}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "display-message status rows", err); cerr != nil {
 			return 0, cerr
@@ -912,7 +924,7 @@ func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
 }
 
 func (r *RealExecutor) ShowGlobalOption(ctx context.Context, option string) (string, error) {
-	out, err := tmuxCmdContext(ctx, "show-options", "-g", "-q", "-v", option).Output()
+	out, err := tmuxCmdContext(ctx, "tmux.read.ShowGlobalOption", "show-options", "-g", "-q", "-v", option).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
@@ -984,7 +996,7 @@ func (r *RealExecutor) ServerState() ServerState {
 	ctx, cancel := context.WithTimeout(context.Background(), serverStateTimeout)
 	defer cancel()
 	// Output() (not Run) so a failure's stderr lands in ExitError.Stderr.
-	_, err := boundedRead(ctx, "info").Output()
+	_, err := boundedRead(ctx, "tmux.read.ServerState", "info").Output()
 	if err == nil {
 		return ServerUp
 	}
