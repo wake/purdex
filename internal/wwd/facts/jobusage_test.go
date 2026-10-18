@@ -158,10 +158,26 @@ func TestJobUsageTakeHandsOutOnceAndOnlyWhatWasSeen(t *testing.T) {
 	if _, ok := tr.Take("j_a"); ok {
 		t.Fatal("taken once")
 	}
-	// a job that is taken and shows up again (a retry with the same id is not a thing, but a late process is) starts afresh
+	// a job ends once: its processes still in a later sample (a straggler) do not start a second row
 	sample(tr, h, 1, wire.ZoneNormal, nil)
-	if got, ok := tr.Take("j_a"); !ok || got.Samples != 1 || !got.FirstSeen.Equal(ot0.Add(5*time.Second)) {
-		t.Fatalf("%+v %v", got, ok)
+	if _, ok := tr.Take("j_a"); ok || tr.Len() != 0 {
+		t.Fatalf("a taken job came back: len %d", tr.Len())
+	}
+}
+
+// Take between a sample's Observe and its Commit (the job ended in that moment) leaves nothing behind for the job.
+func TestJobUsageTakeBetweenObserveAndCommitLeavesNoOrphan(t *testing.T) {
+	h, tr := jobHost(), newJU()
+	sample(tr, h, 0, wire.ZoneNormal, nil)
+	snap, ctx := h.snapshot()
+	now := ot0.Add(5 * time.Second)
+	tr.Observe(now, snap, ctx)
+	if _, ok := tr.Take("j_a"); !ok {
+		t.Fatal("seen")
+	}
+	tr.Commit(wire.Facts{At: now, Derived: wire.Derived{Zone: wire.ZoneNormal}})
+	if tr.Len() != 0 {
+		t.Fatalf("an orphan accumulator was made: %d", tr.Len())
 	}
 }
 

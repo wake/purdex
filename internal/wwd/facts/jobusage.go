@@ -64,6 +64,7 @@ type JobUsageTracker struct {
 
 	mu         sync.Mutex
 	jobs       map[string]*jobAcc
+	taken      map[string]time.Time // jobs Take handed out: a pending sample made before the Take must not bring them back
 	pending    map[string]*jobNow
 	pendingAt  time.Time
 	hasPending bool
@@ -75,7 +76,7 @@ func NewJobUsageTracker(started time.Time, interval time.Duration) *JobUsageTrac
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	return &JobUsageTracker{started: started, interval: interval, jobs: map[string]*jobAcc{}}
+	return &JobUsageTracker{started: started, interval: interval, jobs: map[string]*jobAcc{}, taken: map[string]time.Time{}}
 }
 
 // StartedAt is when this tracker began: a job that began before it has a sample that misses its first part (the row says partial).
@@ -135,6 +136,9 @@ func (t *JobUsageTracker) Commit(f wire.Facts) {
 	}
 	n := len(t.pending)
 	for id, cur := range t.pending {
+		if _, gone := t.taken[id]; gone {
+			continue
+		}
 		acc := t.jobs[id]
 		if acc == nil {
 			acc = &jobAcc{JobSample: JobSample{
@@ -168,6 +172,11 @@ func (t *JobUsageTracker) forget(now time.Time) {
 			delete(t.jobs, id)
 		}
 	}
+	for id, at := range t.taken {
+		if now.Sub(at) > jobUsageStale {
+			delete(t.taken, id)
+		}
+	}
 	for len(t.jobs) > jobUsageMaxJobs {
 		var oldest string
 		var at time.Time
@@ -185,6 +194,11 @@ func (t *JobUsageTracker) forget(now time.Time) {
 func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	at := t.lastAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	t.taken[jobID] = at // a job ends once: a sample of it made just before this Take is not its start
 	acc := t.jobs[jobID]
 	if acc == nil {
 		return JobSample{}, false
