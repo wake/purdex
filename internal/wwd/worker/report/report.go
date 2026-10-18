@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/summary"
@@ -46,13 +47,21 @@ type Config struct {
 	// lease's context: the result makes the job final, the next heartbeat is refused with a 409 and the lease's context ends, which would
 	// cut the retries short. The log still goes with the claim, and a 409 or 404 on the log itself ends it at once.
 	LogRetryFor time.Duration
+	// SuspendFor is how long a repo is held off after a job of it could not be run here (an infra release): the worker does not pick
+	// its jobs for that long (default 5 minutes), so a host that cannot run a repo does not claim and release it in a loop.
+	SuspendFor time.Duration
 	// Summary builds the summary of a run that ended. Nil: built from the files the run left (see parse).
 	Summary func(runner.Ended) wire.Summary
 	Logf    func(format string, args ...any)
 }
 
 // Reporter delivers the outcome of jobs.
-type Reporter struct{ cfg Config }
+type Reporter struct {
+	cfg Config
+
+	mu        sync.Mutex
+	suspended map[string]time.Time // repo name -> when the hold ends
+}
 
 // New returns a Reporter.
 func New(cfg Config) *Reporter {
@@ -71,13 +80,16 @@ func New(cfg Config) *Reporter {
 			cfg.MaxBackoff = cfg.Backoff
 		}
 	}
+	if cfg.SuspendFor <= 0 {
+		cfg.SuspendFor = 5 * time.Minute
+	}
 	if cfg.LogRetryFor <= 0 {
 		cfg.LogRetryFor = 2 * time.Minute
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Reporter{cfg: cfg}
+	return &Reporter{cfg: cfg, suspended: map[string]time.Time{}}
 }
 
 func wait(ctx context.Context, d time.Duration) error {
@@ -106,6 +118,13 @@ func (r *Reporter) Finish(sinks func(source string) Sink) runner.Finish {
 
 // deliver does what the kind of ending calls for.
 func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
+	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
+	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
+	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
+	if e.Run.Err != nil && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown) {
+		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command's unit was not proven stopped: %w", e.Run.Err))
+		return
+	}
 	switch e.Kind {
 	case runner.KindLost:
 		// the lease is gone: the origin has the job again or has failed it as lost; whatever this worker saw is not its to report
@@ -151,8 +170,11 @@ func (r *Reporter) ran(ctx context.Context, sink Sink, e runner.Ended) {
 	}
 	req := wire.ResultRequest{ClaimID: e.ClaimID, StartedAt: stamp(run.StartedAt), FinishedAt: stamp(run.FinishedAt)}
 	switch {
-	case run.Outcome == "timed_out":
+	case run.Outcome == "timed_out" || run.Reason == "timeout":
 		req.State, req.Reason = wire.StateFailed, "timeout"
+	case run.Reason == "oom":
+		// only the sandbox's unit can say so (Linux); a KILL signal alone is not an OOM, and without the unit's word it is a plain failure
+		req.State, req.Reason = wire.StateFailed, "oom"
 	case run.Outcome == "exited" && run.Signal == "" && run.ExitCode == 0:
 		req.State = wire.StateSucceeded
 		req.Exit = intp(0)
@@ -254,6 +276,9 @@ func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open f
 
 // release gives the claim back. why is told to the origin as the detail.
 func (r *Reporter) release(ctx context.Context, sink Sink, e runner.Ended, reason wire.ReleaseReason, why error) {
+	if reason == wire.ReleaseInfra {
+		r.suspend(e.Job.Repo.Name) // whether or not the origin takes the release: this host cannot run this repo now
+	}
 	req := wire.ReleaseRequest{ClaimID: e.ClaimID, Reason: reason}
 	if why != nil {
 		req.Detail = clip(why.Error(), maxDetail)
@@ -310,6 +335,32 @@ func (r *Reporter) retryFor(ctx context.Context, e runner.Ended, what string, bo
 			pause = r.cfg.MaxBackoff
 		}
 	}
+}
+
+// suspend holds a repo off for SuspendFor from now.
+func (r *Reporter) suspend(repo string) {
+	if repo == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.suspended[repo] = r.cfg.Now().Add(r.cfg.SuspendFor)
+}
+
+// Suspended says whether the worker must not pick jobs of repo now: a job of it ended in an infrastructure failure less than
+// SuspendFor ago. It is pick.Env.Suspended.
+func (r *Reporter) Suspended(repo string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	until, ok := r.suspended[repo]
+	if !ok {
+		return false
+	}
+	if !r.cfg.Now().Before(until) {
+		delete(r.suspended, repo)
+		return false
+	}
+	return true
 }
 
 func stamp(t time.Time) *time.Time {
