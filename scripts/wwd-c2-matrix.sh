@@ -141,7 +141,7 @@ worker_set() {   # worker_set HOST true|false
 }
 # a fault artifact on a host (a file the product reads): recorded before it is made, removed by finish
 FAULTS=""; REMOTE_DIRS=""
-SB_TAG=$$   # names the host /tmp files of case 13, so they are this run's alone (nothing pre-existing to spare or to delete)
+SB_TAG=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')   # names the host /tmp files of case 13, so they are this run's alone (nothing pre-existing to spare or to delete)
 # a file that was there before this run is not ours: it is made in one step that only creates (noclobber), the path is registered before
 # that step (an interruption in between still cleans up) and un-registered when the answer is "present" or "error"; if the answer never
 # came (ssh died) it is not removed either, since this run cannot say it made it
@@ -644,6 +644,8 @@ case_13() {
   fault_on mserv "/tmp/wwd-c2-sentinel.$SB_TAG"
   FAULTS="$FAULTS mserv:/tmp/wwd-c2-private.$SB_TAG"
   check "the host has a docker socket (else the probe's refusal proves nothing)" "$(q mserv "test -S ${C2_DOCKER_SOCK:-/run/docker.sock} && echo yes || echo no")" yes
+  # the control: outside the sandbox, the account the matrix logs in as (the job account on mserv, in the docker group) is answered
+  check "the host's docker socket answers the job's account, outside the sandbox (control)" "$(q mserv "${C2_DOCKER_PING:-curl -s --max-time 3 --unix-socket /run/docker.sock http://localhost/_ping}" 2>/dev/null)" OK
   sb=$(submit c2-sandbox)
   wait_for "$sb" .state succeeded 120 || true
   check "sandbox probe (no docker socket, nothing writable outside the workspace, own /tmp, no sudo)" "$(jf "$sb" .state)" succeeded

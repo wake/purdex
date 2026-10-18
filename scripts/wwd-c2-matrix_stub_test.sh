@@ -140,7 +140,7 @@ grep -q "claim_worker='air19'" "$stub/sql.log" || fail "case 14 must ask for the
 rm -f "$stub"/*.log
 # the stub's "mserv" is this machine: a real socket stands in for the docker socket the case asks the host for
 python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$tmp/docker.sock" || fail "make a stand-in socket"
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" sh "$matrix" --keep --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13: exit code"; }
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" sh "$matrix" --keep --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13: exit code"; }
 has "PASS case 13" "case 13"
 kept=$(sed -n 's/^kept //p' "$tmp/out")
 [ -d "$kept/repo" ] || fail "--keep must leave the scratch repo"
