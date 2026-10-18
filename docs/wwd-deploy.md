@@ -111,7 +111,34 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
 
 * Upgrade: build, then run `scripts/wwd-deploy.sh <host>` again (no token flag). Check
   `relays_active = 0` and that no wwd job is running first if you restart (`--no-restart` defers it).
-* Roll back: deploy the previous build the same way.
+  **Back up `wwd.db` first whenever the queue schema moves** (see the table below): the migration runs when the new wwd
+  starts and only goes forward.
+
+  ```sh
+  sqlite3 ~/.local/share/wwd/wwd.db ".backup '$HOME/.local/share/wwd/wwd.db.bak-$(date +%Y%m%d-%H%M)'"
+  ```
+
+  (`.backup` is safe while wwd runs; copying the file by hand is only right with wwd stopped, and then with its `-wal`
+  and `-shm` files.)
+* Roll back: deploy the previous build the same way. If the new build moved the queue schema, the old binary refuses
+  the migrated database (`queue_schema` newer than it knows), so a roll back across a schema step is: stop wwd,
+  put the backup back as `wwd.db` (remove the `-wal` and `-shm` files beside it), start the old build. Jobs
+  made since the backup are lost. **If the restored database has a `db_epoch` table (schema 5 or later), give it a
+  new epoch before wwd starts**, with wwd stopped:
+
+  ```sh
+  sqlite3 ~/.local/share/wwd/wwd.db "UPDATE db_epoch SET id = lower(hex(randomblob(16)));"
+  ```
+
+  The epoch names the database file's history. A restored copy has the epoch it had when the backup was made, and a
+  client (Purdex's `jobnotify`) that kept a cursor from before the restore would take it as still good once the
+  restored queue's counter has caught up with it, and then miss the changes below it. A new epoch makes every client
+  start again from `0`. (A backup older than schema 5 has no `db_epoch`; upgrading it again makes a new one.)
+* Queue schema steps (`queue_schema`; each only forward): 2 `git_pins` (3b-2b), 3 `jobs.lapses` (3b-3a), 4 the origin cursor
+  `jobs.rev`/`job_rev` and its triggers (3b-4a), 5 `db_epoch` (3b-4d). The wire grows with them: `GET /v1/jobs` answers
+  `{jobs, cursor, epoch}`, and a client that decodes strictly and does not know a field fails on it, so wwd and Purdex are
+  always deployed together (a short skew between wwd hosts, while the four are being upgraded one after the other,
+  only costs the peers' polling a few failed rounds).
 * Remove: `wwd uninstall` (service definition and binary go; config, token and `wwd.db` stay) or
   `wwd uninstall --purge` (everything under `~/.config/wwd` and `~/.local/share/wwd`). `pdx setup --wwd-remove
   [--wwd-purge]` is the same.
