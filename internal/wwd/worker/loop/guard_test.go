@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,4 +207,78 @@ func TestAQuarantinedRunWhoseFinishNeverWritesIsStillSweptOnceItsUnitIsGone(t *t
 	if _, err := os.Stat(filepath.Join(q.root, "a")); !os.IsNotExist(err) {
 		t.Fatalf("the workspace goes: %v", err)
 	}
+}
+
+// addCounting is a Quarantine that counts Add calls.
+type addCounting struct {
+	Quarantine
+	mu   sync.Mutex
+	adds int
+}
+
+func (a *addCounting) Add(e quarantine.Entry) error {
+	a.mu.Lock()
+	a.adds++
+	a.mu.Unlock()
+	return a.Quarantine.Add(e)
+}
+
+func TestWithAGuardTheFinishDoesNotWriteTheMarkerAgain(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := guarded(t, c)
+	ac := &addCounting{Quarantine: q.store}
+	q.loop.cfg.Quarantine = ac
+	q.loop.cfg.Guarded = true
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	if ac.adds != 0 {
+		t.Fatalf("%d Add calls: a write after a sweep had cleared the entry would bring it back without its hold", ac.adds)
+	}
+	if len(q.store.Held()) != 1 {
+		t.Fatal("the marker written by Begin is still the record")
+	}
+}
+
+func TestAClearedEntryIsNotBroughtBackByTheFinishOfItsRun(t *testing.T) {
+	// the order that mattered: End settles, a sweep clears (unit gone), and only then would the Add of the finishing run have come
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := guarded(t, c)
+	gate := make(chan struct{})
+	q.loop.cfg.Quarantine = &gatedAdd{Quarantine: q.store, gate: gate}
+	q.loop.cfg.Guarded = true
+	q.units.mu.Lock()
+	q.units.gone["wwd-stuck"] = true
+	q.units.mu.Unlock()
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	go q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the run to have ended", func() bool { return q.ex.ran.Load() == 1 && len(q.store.Held()) == 1 })
+	time.Sleep(3 * unit)
+	q.loop.Sweep(context.Background()) // the unit is gone: the entry, the directory and the hold go
+	close(gate)                        // an Add held back until now would bring the entry back
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	time.Sleep(3 * unit)
+	if n := len(q.store.Held()); n != 0 {
+		t.Fatalf("%d entries: the finish must not bring a cleared entry back", n)
+	}
+	if _, ok := q.tbl.Holder("mysql"); ok {
+		t.Fatal("the hold is gone with the entry")
+	}
+}
+
+// gatedAdd is a Quarantine whose Add waits for a gate.
+type gatedAdd struct {
+	Quarantine
+	gate chan struct{}
+}
+
+func (g *gatedAdd) Add(e quarantine.Entry) error {
+	<-g.gate
+	return g.Quarantine.Add(e)
 }

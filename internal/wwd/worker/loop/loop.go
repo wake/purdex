@@ -88,6 +88,10 @@ type Config struct {
 	// (an entry then names its unit, which is what proves the command gone).
 	Quarantine Quarantine
 	Sandboxed  bool
+	// Guarded says the runner has the guard (NewGuard) over the same store: the marker of a run has then been on disk since before its
+	// command started, and Finish does not write it again (a write after a sweep that had cleared the entry would bring it back without its
+	// hold).
+	Guarded bool
 	// SweepEvery is the pause between two sweeps (a minute). MarkerRetry is the pause between two tries to write a quarantine marker (5 s).
 	SweepEvery, MarkerRetry time.Duration
 
@@ -448,7 +452,7 @@ const killWait = 15 * time.Second
 // the lease is kept alive, and the job is not released until it is written: if ctx ends first (the lease was lost, or the worker ends),
 // nothing is delivered and the origin gets the job back only when the lease lapses, with the hold still standing in memory.
 func (l *Loop) quarantine(ctx context.Context, e runner.Ended) bool {
-	if !e.Quarantined || l.cfg.Quarantine == nil {
+	if !e.Quarantined || l.cfg.Quarantine == nil || l.cfg.Guarded {
 		return true
 	}
 	ent := entryOf(e, l.cfg.Sandboxed, l.cfg.Now())
