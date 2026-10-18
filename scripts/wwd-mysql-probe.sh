@@ -28,6 +28,17 @@ USER=wwdu_00000000000000000000000000
 PW=0123456789abcdef0123456789abcdef0123456789abcdef
 job() { MYSQL_PWD="$PW" mysql -N -B -u "$USER" -S "$socket" "$@" 2>/dev/null; }
 
+# The database and the user are of a fixed name, so a probe that was cut short (^C, a dropped ssh, kill) must not leave them: they are
+# dropped on every way out, the held connection is ended and waited for, and a run begins by dropping what an earlier one left.
+sleeper=""
+cleanup() {
+  [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null
+  adm -e "CALL wwdctl.wwd_kill_user('$USER'); CALL wwdctl.wwd_drop_user('$USER','localhost'); CALL wwdctl.wwd_drop_db('$DB')" >/dev/null || true
+}
+trap 'cleanup' EXIT
+trap 'cleanup; trap - EXIT; exit 130' INT HUP TERM
+cleanup
+
 # ---- what the administrator account must NOT be able to do --------------------------------------------------------------------
 refused() {
   if adm -e "$1" >/dev/null; then fail "was allowed: $2"; else ok "refused: $2"; fi
@@ -75,10 +86,12 @@ done
 
 # a connection that is held open is ended by wwd_kill_user, and the routine says none is left
 ( job -e "SELECT SLEEP(20)" >/dev/null ) &
+sleeper=$!
 sleep 1
 left=$(adm -e "CALL wwdctl.wwd_kill_user('$USER')")
 [ "$left" = 0 ] && ok "wwd_kill_user ended the open connection (remaining 0)" || fail "wwd_kill_user left: $left"
-wait
+wait "$sleeper" 2>/dev/null
+sleeper=""
 
 adm -e "CALL wwdctl.wwd_drop_user('$USER','localhost'); CALL wwdctl.wwd_drop_db('$DB')" && ok "drop the user and the database" || fail "drop"
 if [ -z "$(adm -e 'CALL wwdctl.wwd_list_dbs()')" ] && [ -z "$(adm -e 'CALL wwdctl.wwd_list_users()')" ]; then ok "nothing is left"; else fail "something is left"; fi

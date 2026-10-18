@@ -184,6 +184,12 @@ left are listed, not dropped, so let wwd sweep them first):
 ssh mserv 'sh /tmp/wwd-mysql-setup.sh --sql /tmp/wwdctl.sql remove'
 ```
 
+**What names prove.** The routines accept only names of the shapes wwd makes, so the account cannot touch a project's database, a
+`mysql` account or any name of another shape. A name of exactly the shape (`wwd_` + 32 hex) that some other party created would be
+taken as wwd's: wwd derives them from a SHA-256 of its own job ids, nobody else has a reason to make one, and planting one takes a
+right (`CREATE DATABASE`, `CREATE USER`) that is already more than this account has. That is the accepted limit; a registry of what
+wwd made (kept in `wwdctl`, written by the routines) would close it and is a follow-up if the instance ever gets other writers.
+
 By hand, if the script is not at hand: `DROP USER 'wwd_admin'@'localhost'; DROP DATABASE wwdctl;` as root on the dev socket
 (`sudo mysql -S /run/mysqld-dev/mysqld.sock`), and `rm ~/.config/wwd/mysql-admin.cnf`.
 
@@ -193,7 +199,8 @@ Check what the account may and may not do (it makes one database and one user of
 scp scripts/wwd-mysql-probe.sh mserv:/tmp/ && ssh mserv 'sh /tmp/wwd-mysql-probe.sh'
 ```
 
-It must end with `ALL OK`. It tries, as the account, what it must not do (`CREATE DATABASE`, `CREATE USER`, `KILL`, reading `mysql.user` or
+It must end with `ALL OK`. It drops its own database and user on every way out (an interrupt, a hang-up, a kill: `rc=130`, nothing
+left; checked on mserv) and a run begins by dropping what one that was killed with `SIGKILL`, which cannot be caught, left. It tries, as the account, what it must not do (`CREATE DATABASE`, `CREATE USER`, `KILL`, reading `mysql.user` or
 another project's table, the routines with another project's names, an upper-case hex digit, a final newline, quote injections in a
 name or a host, a user for a database that is not its own, a password that is not 48 hex), and then the whole life of a job's
 database: the job's user works in its own database, sees no other, is refused everything else, a held connection is ended by
