@@ -90,6 +90,9 @@ func signalIf(pid int, sig syscall.Signal, ok func(cmd string) bool) bool {
 	return syscall.Kill(pid, sig) == nil
 }
 
+// staleGrace is how long a directory without an owner.pid is left alone: its run may be between MkdirTemp and writing the file.
+const staleGrace = 2 * time.Minute
+
 // reapStale ends what an earlier run that died left behind, and removes its directories.
 func reapStale() {
 	if old, _ := filepath.Glob(filepath.Join(os.TempDir(), "wwde-bin*")); len(old) > 0 {
@@ -101,8 +104,12 @@ func reapStale() {
 	}
 	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), "wwde[0-9]*"))
 	for _, d := range dirs {
-		if owner := readPid(filepath.Join(d, "owner.pid")); owner > 0 && strings.Contains(cmdlineOf(owner), "wwd.test") {
+		owner := readPid(filepath.Join(d, "owner.pid"))
+		if owner > 0 && strings.Contains(cmdlineOf(owner), "wwd.test") {
 			continue // the run that owns it is alive (another session's)
+		}
+		if fi, err := os.Stat(d); owner == 0 && (err != nil || time.Since(fi.ModTime()) < staleGrace) {
+			continue // a run is still setting it up (newWorld makes the directory, then writes owner.pid)
 		}
 		arg, _ := os.ReadFile(filepath.Join(d, "sleep-arg"))
 		sleeper := "/bin/sleep " + strings.TrimSpace(string(arg))

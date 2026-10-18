@@ -91,6 +91,31 @@ func TestE2E_HarnessReapsOnlyWhatADeadRunLeft(t *testing.T) {
 	}
 }
 
+// A directory a run has just made and not yet given an owner.pid is not stale; an old one without is.
+func TestE2E_HarnessLeavesAFreshDirectoryWithoutAnOwnerAlone(t *testing.T) {
+	fresh, err := os.MkdirTemp("", "wwde")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(fresh) })
+	old, err := os.MkdirTemp("", "wwde")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(old) })
+	when := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(old, when, when); err != nil {
+		t.Fatal(err)
+	}
+	reapStale()
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("a directory still being set up by another run was removed")
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatal("an old directory without an owner was kept")
+	}
+}
+
 // The processes find each other: each reports the other reachable in its pool, through TCP with the shared token.
 func TestE2E_TwoDaemonsSeeEachOther(t *testing.T) {
 	w := newWorld(t)
