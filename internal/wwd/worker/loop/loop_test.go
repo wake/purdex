@@ -40,6 +40,7 @@ type fakeConn struct {
 	// releaseHangs makes a release wait for its context; onRelease is called when one arrives
 	releaseHangs bool
 	onRelease    func()
+	releaseTries int
 	claims       []string
 	starts       int
 	results      []wire.ResultRequest
@@ -102,6 +103,9 @@ func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) e
 func (c *fakeConn) PutLog(context.Context, string, string, io.Reader) error { return nil }
 
 func (c *fakeConn) Release(ctx context.Context, _ string, req wire.ReleaseRequest) error {
+	c.mu.Lock()
+	c.releaseTries++
+	c.mu.Unlock()
 	if c.onRelease != nil {
 		c.onRelease()
 	}
@@ -1039,12 +1043,16 @@ func TestAJobIsNotGivenBackUntilItsMarkerIsWritten(t *testing.T) {
 	f := &flakyQuarantine{Quarantine: q.store, fails: 3}
 	q.loop.cfg.Quarantine = f
 	q.ex.run = notProven
+	start := time.Now()
 	q.round()
 	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
 	q.loop.stopAll(context.Background(), "test")
 	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if time.Since(start) < 3*unit {
+		t.Fatalf("%v: the retries are paced", time.Since(start))
+	}
 	if f.tries != 4 || len(q.store.Held()) != 1 {
 		t.Fatalf("tries %d held %d: the marker is retried until it is written, and only then is the job released", f.tries, len(q.store.Held()))
 	}
@@ -1062,5 +1070,29 @@ func TestAJobWhoseMarkerCannotBeWrittenIsNeverReleased(t *testing.T) {
 	time.Sleep(20 * unit)
 	if _, rel, res := c.seen(); len(rel) != 0 || res != 0 {
 		t.Fatalf("releases %v results %d: another worker could run it next to a unit that may still be going", rel, res)
+	}
+}
+
+func TestAWorkerThatEndsWhileAMarkerCannotBeWrittenDoesNotTryToReleaseEither(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	q.loop.cfg.ShutdownGrace = 3 * unit
+	q.loop.cfg.Quarantine = &flakyQuarantine{Quarantine: q.store, fails: 1 << 30}
+	q.ex.run = notProven
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.releaseTries != 0 {
+		t.Fatalf("%d release attempts: a quarantined job with no marker is never given back, not even when the worker ends", c.releaseTries)
 	}
 }
