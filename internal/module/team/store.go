@@ -120,6 +120,8 @@ type Store struct {
 	// (since > 0); an error fails the list there (tests). nil in
 	// production.
 	beforeListAutoApproved func() error
+	// beforeListRecentDecisions, when set, runs as ListRecentDecisions starts; an error fails the list (tests). nil in production.
+	beforeListRecentDecisions func() error
 	// afterMaxMembersCount, when set, runs in SetMaxMembers right after the in_use count and before the write (tests: prove
 	// nothing can change the count in between). nil in production.
 	afterMaxMembersCount func()
@@ -205,7 +207,9 @@ func OpenStore(path string) (*Store, error) {
 		CREATE INDEX IF NOT EXISTS approval_requests_state_created
 			ON approval_requests (state, created_at);
 		CREATE INDEX IF NOT EXISTS approval_requests_state_decided
-			ON approval_requests (state, decided_at);`); err != nil {
+			ON approval_requests (state, decided_at);
+		CREATE INDEX IF NOT EXISTS approval_requests_state_deadline
+			ON approval_requests (state, deadline_at);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db: %w", err)
 	}

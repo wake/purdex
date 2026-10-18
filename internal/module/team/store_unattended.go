@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -225,6 +227,81 @@ func (s *Store) ListAutoApproved(since, before int64, limit int) (rows []team.Ap
 		return fail(err)
 	}
 	return append(page[:limit], rest...), len(older) > 0, nil
+}
+
+// decisionKinds is the kinds the unattended log covers (team.DecisionLogKind), as query arguments.
+var decisionKinds = []team.Kind{team.KindLead, team.KindAdopt, team.KindSelfRelay, team.KindMemberRelay, team.KindSpawnResources}
+
+// ListRecentDecisions is the newest limit decisions of the team approvals for the unattended log, whoever decided: approved,
+// denied and timeout rows of the log's kinds, and the lead / adopt requests the daemon refused while the switch was on
+// (cancelled with close_reason unattended_refused, which team.DecisionLogEntry lists as the denial it is). A withdrawn or
+// abandoned request, an open one and the chat prompts are not decisions. Newest first by the time the log shows: a timeout's
+// deadline_at, decided_at for the rest; the larger id first within one millisecond. Each state is read on its own index range
+// (state, decided_at / deadline_at) cut at limit, then merged, so the cost does not grow with the table. Never nil.
+func (s *Store) ListRecentDecisions(limit int) ([]team.Approval, error) {
+	if s.beforeListRecentDecisions != nil {
+		if err := s.beforeListRecentDecisions(); err != nil {
+			return nil, fmt.Errorf("list recent decisions: %w", err)
+		}
+	}
+	if limit < 1 {
+		return []team.Approval{}, nil
+	}
+	in := strings.TrimSuffix(strings.Repeat("?,", len(decisionKinds)), ",")
+	read := func(where, order string, args ...any) ([]team.Approval, error) {
+		a := make([]any, 0, len(decisionKinds)+len(args)+1)
+		for _, k := range decisionKinds {
+			a = append(a, string(k))
+		}
+		a = append(a, args...)
+		a = append(a, limit)
+		q, err := s.db.Query(`SELECT `+selectCols+` FROM approval_requests WHERE kind IN (`+in+`) AND `+where+` ORDER BY `+order+` DESC, id DESC LIMIT ?`, a...)
+		if err != nil {
+			return nil, err
+		}
+		defer q.Close()
+		var out []team.Approval
+		for q.Next() {
+			row, _, err := scanRow(q)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, row)
+		}
+		return out, q.Err()
+	}
+	all := []team.Approval{}
+	for _, r := range []struct {
+		where, order string
+		args         []any
+	}{
+		{`state = ?`, `decided_at`, []any{string(team.StateApproved)}},
+		{`state = ?`, `decided_at`, []any{string(team.StateDenied)}},
+		{`state = ? AND close_reason = ? AND kind IN ('lead', 'adopt')`, `decided_at`, []any{string(team.StateCancelled), team.ErrUnattendedRefused}},
+		{`state = ?`, `deadline_at`, []any{string(team.StateTimeout)}},
+	} {
+		rows, err := read(r.where, r.order, r.args...)
+		if err != nil {
+			return nil, fmt.Errorf("list recent decisions: %w", err)
+		}
+		all = append(all, rows...)
+	}
+	at := func(a team.Approval) int64 {
+		if a.State == team.StateTimeout {
+			return a.DeadlineAt
+		}
+		return a.DecidedAt
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if ai, aj := at(all[i]), at(all[j]); ai != aj {
+			return ai > aj
+		}
+		return all[i].ID > all[j].ID
+	})
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
 }
 
 // autoApprovedIn is the rows of query on tx, in its order. Never nil.
