@@ -33,7 +33,7 @@ shift
 # (it goes down once the first case has begun: the precheck wants every host)
 # STUB_SSH_DOWN_MATCH: only a command with this text in it (default: every command)
 if [ "${STUB_SSH_DOWN:-}" = "$STUB_HOST" ] && grep -q '^== case' "$STUB_OUT" 2>/dev/null && case "$*" in *"${STUB_SSH_DOWN_MATCH:-}"*) true ;; *) false ;; esac; then
-  if [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || [ ! -e "$STUB/down-once" ]; then [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || : > "$STUB/down-once"; echo "ssh: Connection timed out during banner exchange" >&2; exit 255; fi
+  if [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || [ ! -e "$STUB/down-once" ]; then [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || : > "$STUB/down-once"; echo "${STUB_SSH_DOWN_MSG:-ssh: Connection timed out during banner exchange}" >&2; exit 255; fi
 fi
 [ -z "${STUB_SSH_FAIL:-}" ] || case "$*" in *"$STUB_SSH_FAIL"*) exit 255 ;; esac
 if [ -n "${STUB_SSH_PS_ONCE:-}" ]; then case "$*" in *"ps -p"*) [ ! -e "$STUB/ps-asked" ] || exit 255; : > "$STUB/ps-asked" ;; esac; fi
@@ -355,7 +355,7 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" ST
 cat "$tmp/out" > "$stub/down.out"
 [ "$rc" -ne 0 ] || fail "a host that cannot be reached must make the exit code non-zero"
 has "PASS case 14" "case 14 does not need air26"
-has "FAIL ssh to air26 failed twice" "case 2 with air26 down"
+has "FAIL ssh to air26 was lost" "case 2 with air26 down"
 has "failed: 2" "the summary after an ssh failure"
 has "^FAIL case 2$" "a case whose host cannot be reached is FAILed"
 has "-- cleaning up" "the clean-up after an ssh failure"
@@ -371,8 +371,27 @@ rm -f "$stub"/*.log "$stub/down-once"
 rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "a lost connection alone must fail the case"
-has "FAIL ssh to air19 failed twice" "air19 down"
+has "FAIL ssh to air19 was lost" "air19 down"
 has "^FAIL case 14$" "air19 down"
+# a connection that broke after it was made may have run the command: it is not tried again, and the case FAILs
+rm -f "$stub"/*.log "$stub/down-once"
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_SSH_DOWN_ONCE=1 STUB_SSH_DOWN_MSG="client_loop: send disconnect: Broken pipe" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a connection that broke later must not be tried again"
+has "FAIL ssh to air19 was lost" "a broken connection"
+# a lost connection beats a SKIP: case 7 asks air26 for its hooks, and cannot
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air26 STUB_SSH_DOWN_MATCH=/v1/info STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 7 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "case 7 with air26 lost must not end well"
+has "^FAIL case 7$" "case 7 with air26 lost"
+hasnt "^SKIP case 7" "case 7 with air26 lost"
+# a connection lost in the last check of a case (air19's claims) is that case's, not the next one's
+rm -f "$stub"/*.log "$stub/down-once"
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH="grep -c 'job='" STUB_SSH_DOWN_ONCE=1 STUB_SSH_DOWN_MSG="client_loop: send disconnect: Broken pipe" STUB_STATE=expired C2_TIMEOUT_SCALE=0 sh "$matrix" --case 10,10 > "$tmp/out" 2>&1 || rc=$?
+[ "$(grep -c 'FAIL ssh to' "$tmp/out")" -eq 1 ] || { cat "$tmp/out" >&2; fail "one lost connection must be counted once, in its own case"; }
+[ "$(grep -c '^PASS case 10$' "$tmp/out")" -eq 1 ] || { cat "$tmp/out" >&2; fail "the case after it must not be blamed"; }
 # case 8 puts its scratch repo into a directory of air26's own: not under mlab's TMPDIR (the stub's TMPDIR is $tmp)
 rm -f "$stub"/*.log
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_ZONE=1 STUB_STATE=succeeded STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8"; }

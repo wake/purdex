@@ -73,15 +73,19 @@ on() {
   on_h=$1; shift
   if [ "$dry" -eq 1 ]; then say "+ on $on_h: $*"; return 0; fi
   if [ "$on_h" = mlab ]; then sh -c "$*"; return; fi
-  # ssh exits 255 when it could not connect (a banner timeout on a loaded host): once more after a pause. A second 255 is written down
-  # in $WORK/connfail (a $(...) cannot set a variable), and the case is FAILed for it after it ends (the go loop): a lost connection is
-  # not a result of the case, and the clean-up still runs.
+  # ssh exits 255 when it has no connection. Only a connection that was never made (the connect itself, or the banner of a loaded host:
+  # nothing has run on the host) is tried once more after a pause; a connection that broke later may have run the command, and a command
+  # must not run twice (a job submitted, a fault file made). Any 255 is written down in $WORK/connfail (a $(...) cannot set a variable):
+  # the go loop FAILs the case for it, a lost connection is not a result of the case, and the clean-up still runs.
   on_n=0
   while :; do
-    on_rc=0; ssh -o BatchMode=yes -o ConnectTimeout=20 "$on_h" "$*" || on_rc=$?
+    on_rc=0; ssh -o BatchMode=yes -o ConnectTimeout=20 "$on_h" "$*" 2> "$WORK.err" || on_rc=$?
+    cat "$WORK.err" >&2 2>/dev/null || true
     [ "$on_rc" -eq 255 ] || return "$on_rc"
-    if [ "$on_n" -ge 1 ]; then { echo "$on_h" >> "$WORK/connfail"; } 2>/dev/null || true; return 255; fi
-    on_n=$((on_n + 1)); sleep $((2 * ${C2_TIMEOUT_SCALE:-1}))
+    if [ "$on_n" -lt 1 ] && grep -q -E 'ssh: connect to host |banner exchange|Could not resolve hostname' "$WORK.err" 2>/dev/null; then
+      on_n=$((on_n + 1)); sleep $((2 * ${C2_TIMEOUT_SCALE:-1})); continue
+    fi
+    { echo "$on_h" >> "$WORK/connfail"; } 2>/dev/null || true; return 255
   done
 }
 # q HOST CMD: a read; its output is the answer (dry run: a placeholder)
@@ -456,6 +460,7 @@ finish() {
   fi
   for fn_d in $REMOTE_DIRS; do on "${fn_d%%:*}" "rm -rf ${fn_d#*:}" || true; done
   for fn_h in mlab air26 mserv air19; do on "$fn_h" "rm -f $RAN" || true; done
+  rm -f "$WORK.err"
   if [ "$keep" -eq 1 ]; then say "kept $WORK"; else x rm -rf "$WORK"; fi
   say ""
   say "passed:${PASSED:- -}  failed:${FAILED:- -}  skipped:${SKIPPED:- -}"
@@ -763,7 +768,7 @@ trap finish EXIT INT TERM
 precheck
 for run_case in $cases; do
   say ""; say "== case $run_case: $(catalog | awk -F'|' -v c="$run_case" '$1==c {print $2}') =="
-  CASE_FAILS=0; CASE_SKIP=""
+  CASE_FAILS=0; CASE_SKIP=""; rm -f "$WORK/connfail"
   # a case that runs a job on air26's worker needs its owner away
   # (not 8: air26 is only a second origin there and its worker is off; not 11: it only sends tokens)
   if [ "$run_case" != 8 ] && [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
@@ -773,15 +778,16 @@ for run_case in $cases; do
     set +e
     "case_$run_case"
     set -e
-    if [ -s "$WORK/connfail" ]; then
-      CASE_FAILS=$((CASE_FAILS + 1))
-      say "  FAIL ssh to $(sort -u "$WORK/connfail" | tr '\n' ' ')failed twice (the connection, not a result of this case)"
-      rm -f "$WORK/connfail"
-    fi
   fi
   # the air19 rule holds in every case: it claimed nothing since the matrix began
   if [ "$run_case" != 14 ]; then
     check "air19 claimed nothing during case $run_case" "$(air19_new)" 0
+  fi
+  # a connection that was lost anywhere in the case, its checks included, FAILs it (also a case that would have been a SKIP)
+  if [ -s "$WORK/connfail" ]; then
+    CASE_FAILS=$((CASE_FAILS + 1)); CASE_SKIP=""
+    say "  FAIL ssh to $(sort -u "$WORK/connfail" | tr '\n' ' ')was lost (the connection, not a result of this case)"
+    rm -f "$WORK/connfail"
   fi
   if [ -n "$CASE_SKIP" ]; then say "SKIP case $run_case: $CASE_SKIP"; SKIPPED="$SKIPPED $run_case"
   elif [ "$CASE_FAILS" -gt 0 ]; then say "FAIL case $run_case"; FAILED="$FAILED $run_case"
