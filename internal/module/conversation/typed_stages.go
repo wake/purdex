@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/wake/purdex/internal/convfeed"
 )
 
 // How the typed routes feed the message stage ledger (stages.go). /submit writes received after the session and the owner are
@@ -73,4 +75,17 @@ func (m *Module) recordAnswer(sid, id string, tok uint64, w *stageWriter, now ti
 	if stage, reason, mode := stageOfAnswer(w.status, w.body.Bytes()); stage != "" {
 		m.stages.setAttempt(sid, id, tok, stage, reason, mode, now)
 	}
+}
+
+// observeStages lets the ledger compare the session's queue and user items with the ids still in flight. It reads the entry
+// only while some id could still change (a conversation of thousands of items is not walked for nothing).
+func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
+	if entry == nil || !m.stages.inFlight(sid) {
+		return
+	}
+	var items []stageItem
+	for _, u := range entry.UserItems() {
+		items = append(items, stageItem{ID: u.ID, Text: u.Text, At: u.At})
+	}
+	m.stages.observe(sid, entry.Header().Queued, items, m.tuning().now())
 }

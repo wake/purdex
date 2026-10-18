@@ -596,3 +596,19 @@ func (l *stageLedger) seqOf(sid string) uint64 {
 	defer l.mu.Unlock()
 	return l.gseq
 }
+
+// inFlight says whether any id of the session could still change by matching (entered, unknown or queued, text kept).
+func (l *stageLedger) inFlight(sid string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.sessions[sid]
+	if s == nil {
+		return false
+	}
+	for _, r := range s.rows {
+		if r.stage == stageQueued || ((r.stage == stageEntered || r.stage == stageUnknown) && r.text != "") {
+			return true
+		}
+	}
+	return false
+}
