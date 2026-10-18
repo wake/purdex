@@ -15,7 +15,7 @@ import (
 
 // pdx gate status prints, and --json carries, who waits (#2941).
 func TestGate_StatusListsTheWaiters(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	gofile := filepath.Join(t.TempDir(), "go")
 	release := func() { _ = os.WriteFile(gofile, nil, 0o644) }
 	defer release()
@@ -73,7 +73,7 @@ func TestGate_StatusListsTheWaiters(t *testing.T) {
 
 // The flags may stand before or after the name / the setting (#2941).
 func TestGate_FlagsMayFollowTheWords(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, gateMain([]string{"set", "slots.heavy=2", "--config", cfg}, &out, &errb), errb.String())
 	assert.Equal(t, 0, gateMain([]string{"set", "--profile", "night", "slots.heavy=3", "--config", cfg}, &out, &errb), errb.String())
@@ -88,7 +88,7 @@ func TestGate_FlagsMayFollowTheWords(t *testing.T) {
 
 // release is built in: no table needed, and the command says so (#2941).
 func TestGate_ReleaseIsBuiltIn(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, gateMain([]string{"profile", "use", "release", "--config", cfg}, &out, &errb), errb.String())
 	assert.Contains(t, out.String(), "release 是內建的")

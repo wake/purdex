@@ -16,6 +16,12 @@ import (
 )
 
 // gateEnv points the gate at a temp directory with a small config, and keeps the host's claim out.
+// noAdmission is the [gate.admission] of the tests that hold or queue heavy commands and are not of admission. With admission on the
+// gate holds even a first heavy command while the host is under memory pressure or paging, so such a test fails on a busy host
+// (#3241); the gate package tests admission with a pressure reader of its own. (A bare [admission] after "[gate]" is a table of its
+// own, not gate.admission: it sets nothing.)
+const noAdmission = "[gate.admission]\nenabled = false\ndisk_min_gb = 0\n"
+
 func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	t.Helper()
 	dir = t.TempDir()
