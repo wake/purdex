@@ -86,6 +86,9 @@ type sender struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	stopMu  sync.RWMutex // Enqueue holds it shared, Stop takes it once to flip stopped: no job is accepted after Stop begins
+	stopped bool
 }
 
 func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
@@ -104,8 +107,15 @@ func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
 	}
 }
 
-// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute).
+// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute). A stopped sender
+// takes nothing and says so (false): no goroutine will ever send the job, and a caller that keeps state on the answer (the alert
+// push) must not count it as sent.
 func (s *sender) Enqueue(j Job) bool {
+	s.stopMu.RLock()
+	defer s.stopMu.RUnlock()
+	if s.stopped {
+		return false
+	}
 	select {
 	case s.queue <- j:
 		return true
@@ -141,6 +151,9 @@ func (s *sender) Start(ctx context.Context) {
 
 // Stop cancels the in-flight request and waits for the goroutine.
 func (s *sender) Stop() {
+	s.stopMu.Lock()
+	s.stopped = true
+	s.stopMu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 	}

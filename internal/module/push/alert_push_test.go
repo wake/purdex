@@ -54,6 +54,18 @@ func TestAlertPush_AlertHostAndLongCollapseID(t *testing.T) {
 	}
 }
 
+// A caller that read the sender just before Stop and enqueues after it must be told "not done": nothing will ever send that job, and
+// done=true would make the alert delivery module mark the alert delivered for good.
+func TestAlertPush_StoppedSenderIsNotDone(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	te.register(tokA, "zh-TW", "mlab")
+	snd := te.mod.sender.Load()
+	snd.Stop()
+	if snd.Enqueue(Job{DeviceIDs: []string{"d"}}) {
+		t.Fatal("a stopped sender accepted a job")
+	}
+}
+
 // A person at the computer needs no phone push: the alert is done (not retried) and nothing is sent.
 func TestAlertPush_NotSentWhenAtComputer(t *testing.T) {
 	te := newTriggerEnv(t, nil)
