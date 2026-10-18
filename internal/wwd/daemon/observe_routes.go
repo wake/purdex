@@ -72,7 +72,10 @@ func (d *Daemon) handleObservations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if s := r.URL.Query().Get("until"); s != "" { // a page back in time: what began at or before until
+	// A page back in time: what began at or before until. The timestamp alone is enough of a cursor because a tree's start is the
+	// sample that first saw it and the tracker keeps at most ObserveConfig.MaxLive (256) trees at once, so at most 256 records share
+	// one start, always fewer than a page (maxObservationsAnswer): every page moves back.
+	if s := r.URL.Query().Get("until"); s != "" {
 		until, err := time.Parse(time.RFC3339, s)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "until: " + err.Error()})
