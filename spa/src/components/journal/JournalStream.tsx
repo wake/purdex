@@ -13,6 +13,8 @@ interface Props {
   unitKey: string | null
   /** Names the unit the entries belong to; defaults to `host\0unitKey`. A change is a different list, not new events. */
   streamKey?: string
+  /** The session page shown (journal.sessions.v1); the scroll position is remembered per page. Omit without session pages. */
+  page?: string
   /** The entries to show (already filtered), oldest first. Keep the array stable between renders. */
   entries: readonly JournalEntry[]
   filter: string
@@ -22,9 +24,9 @@ interface Props {
   ctx: RowContext
 }
 
-export function JournalStream({ host, unitKey, streamKey, entries, filter, more, onLoadOlder, ctx }: Props) {
+export function JournalStream({ host, unitKey, streamKey, page, entries, filter, more, onLoadOlder, ctx }: Props) {
   const t = useI18nStore((s) => s.t)
-  const { ref, below, onScroll, toBottom, older } = useStreamScroll({ host, unitKey, streamKey, shown: entries, filter, more, loadOlder: onLoadOlder })
+  const { ref, below, onScroll, toBottom, older } = useStreamScroll({ host, unitKey, streamKey, page, shown: entries, filter, more, loadOlder: onLoadOlder })
   const items = useMemo(() => withDays(entries), [entries])
   return (
     <div className="relative flex-1 min-h-0">
