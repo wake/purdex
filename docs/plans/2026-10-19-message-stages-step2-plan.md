@@ -50,7 +50,7 @@
   - `Stage = {client_msg_id: string, stage: string, at: number /* unix ms */, reason?: string, mode?: "fill" | "keys"}`.
   - The frame carries only the stages that changed since the last frame of this connection.
   - It is pushed from `follow()` beside `pushCaps`, **before** the quiet gate (`internal/module/conversation/ws.go:349`, gate at `:356`), so a stage change shows without a transcript change.
-  - (rev 2, codex #7) The ledger numbers its changes with a per-session `seq`. Each connection keeps the seq it last sent; the snapshot sets that baseline.
+  - (rev 2, codex #7) The ledger numbers its changes with one ledger-global `seq` (it keeps rising when a session is swept and heard from again, so an older connection cursor still sorts below the new changes). Each connection keeps the seq it last sent and its cursor never moves back; the snapshot sets that baseline.
   - A tick sends a frame only when the ledger's seq is past the connection's, and the frame carries all of those changes at once. A quiet session sends nothing.
   - The WS queue holds 64 frames and an overflow closes the connection (`ws.go:111-124`). The cursor keeps stage frames within one per tick and only when something changed.
 - `conversation.snapshot` gains `stages: Stage[]`: the latest stage of every id of this session still in the ledger. Ids drop 10 minutes after a terminal stage (promptq `LedgerTTL`). A reconnect therefore sees where its messages are.
