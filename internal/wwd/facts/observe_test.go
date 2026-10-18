@@ -111,7 +111,7 @@ func TestTrackerRecordsAHeavyCommandUnderASessionWhenItEnds(t *testing.T) {
 	if o.Host != "mlab" || o.Session != "_sess01" || o.Via != wire.ObsViaSession || o.Signature != "pnpm vitest run" {
 		t.Fatalf("identity: %+v", o)
 	}
-	if strings.Contains(o.Command, "hunter2") || !strings.Contains(o.Command, "--token ***") {
+	if strings.Contains(o.Command, "hunter2") || !strings.Contains(o.Command, "--token <redacted>") {
 		t.Fatalf("the command must be redacted: %q", o.Command)
 	}
 	// 20 samples x 5 s x 3.0 cores = 300 CPU seconds
