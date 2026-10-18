@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { useImperativeHandle, useState } from 'react'
 import { JournalStream } from './JournalStream'
 import type { RowContext } from './JournalRow'
-import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
+import { clearViewMemos, patchViewMemo, readScrollMemo, readViewMemo } from '../../lib/journal/view-memory'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { JournalEntry } from '../../lib/journal/types'
 
@@ -26,22 +26,24 @@ const range = (from: number, to: number) => Array.from({ length: to - from + 1 }
 const ctx: RowContext = { personName: 'Wake', remoteUrl: '', selectedId: null, onToggleDetail: () => {} }
 
 /** The test pushes a new list (or switches the mounted stream to another unit) through this handle. */
-interface Handle { set: (e: JournalEntry[]) => void; switchTo: (unit: string, e: JournalEntry[]) => void }
+interface Handle { set: (e: JournalEntry[]) => void; switchTo: (unit: string, e: JournalEntry[]) => void; switchPage: (page: string, e: JournalEntry[]) => void }
 const handle: { current: Handle | null } = { current: null }
 let loadOlder = vi.fn<() => Promise<unknown>>()
 function Harness({ initial, more = false, filter = 'all' }: { initial: JournalEntry[]; more?: boolean; filter?: string }) {
-  const [state, setState] = useState({ unit: K, entries: initial })
+  const [state, setState] = useState<{ unit: string; entries: JournalEntry[]; page?: string }>({ unit: K, entries: initial })
   useImperativeHandle(handle as React.Ref<Handle>, () => ({
     set: (entries) => setState((s) => ({ ...s, entries })),
     switchTo: (unit, entries) => setState({ unit, entries }),
+    switchPage: (page, entries) => setState((s) => ({ ...s, page, entries })),
   }), [])
-  return <JournalStream host={H} unitKey={state.unit} entries={state.entries} filter={filter} more={more} onLoadOlder={loadOlder} ctx={ctx} />
+  return <JournalStream host={H} unitKey={state.unit} page={state.page} streamKey={state.page === undefined ? undefined : `${H}\0${state.unit}\0${state.page}`} entries={state.entries} filter={filter} more={more} onLoadOlder={loadOlder} ctx={ctx} />
 }
 const stream = () => screen.getByTestId('journal-stream')
 const top = () => stream().scrollTop
 const scrollTo = (n: number) => { stream().scrollTop = n; fireEvent.scroll(stream()) }
 const push = (e: JournalEntry[]) => act(() => { handle.current?.set(e) })
 const switchTo = (unit: string, e: JournalEntry[]) => act(() => { handle.current?.switchTo(unit, e) })
+const switchPage = (page: string, e: JournalEntry[]) => act(() => { handle.current?.switchPage(page, e) })
 
 beforeEach(() => {
   cleanup()
@@ -299,5 +301,38 @@ describe('what survives an unmount (the memo)', () => {
     expect(screen.getByTestId('journal-empty').textContent).toBe('Nothing in the journal yet')
     rerender(<Harness initial={[]} filter="confirm" />)
     expect(screen.getByTestId('journal-empty').textContent).toBe('No matching events')
+  })
+})
+
+describe('session pages: the scroll memory is per page', () => {
+  const other = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => entry(from + i, { id: `o${String(from + i).padStart(3, '0')}` }))
+  it('each page opens where it was left, and a page never seen opens at the bottom (M: one value per unit)', () => {
+    render(<Harness initial={range(1, 12)} />)
+    switchPage('p1', range(1, 12))
+    scrollTo(40)
+    switchPage('p2', other(1, 14))
+    expect(top()).toBe(maxTop(stream())) // not p1's 40
+    scrollTo(60)
+    switchPage('p1', range(1, 12))
+    expect(top()).toBe(40)
+    switchPage('p2', other(1, 14))
+    expect(top()).toBe(60)
+    expect(readScrollMemo(H, K, 'p1')).toEqual({ scroll: 40, pinnedToBottom: false })
+  })
+  it('the other page\'s whole list is not "new events"', () => {
+    render(<Harness initial={range(1, 12)} />)
+    switchPage('p1', range(1, 12))
+    scrollTo(40)
+    switchPage('p2', other(1, 20))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+    switchPage('p1', range(1, 12))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+  })
+  it('a live event on the page being read still counts for the pill', () => {
+    render(<Harness initial={range(1, 12)} />)
+    switchPage('p1', range(1, 12))
+    scrollTo(40)
+    push(range(1, 13))
+    expect(screen.getByTestId('journal-new-pill').textContent).toContain('1')
   })
 })

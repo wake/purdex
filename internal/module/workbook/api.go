@@ -160,7 +160,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/journal/tasks", m.handleJournalTasks)
 	mux.HandleFunc("GET /api/journal/roadmap", m.handleJournalRoadmap)
 	mux.HandleFunc("PUT /api/journal/confirm", m.handleJournalConfirm)
-	mux.HandleFunc("PUT /api/journal/pin", m.handleJournalPinGone)     // transition: 410 with a text for the old App
 	mux.HandleFunc("GET /api/journal/members", m.handleJournalMembers) // capability journal.members.v1
 }
 
