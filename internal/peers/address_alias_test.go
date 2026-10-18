@@ -99,6 +99,17 @@ func TestResolve_TheBracketCheckAcceptsAnAliasThroughTheLineage(t *testing.T) {
 	}
 }
 
+// A relayed successor is another session than the alias's: the owner check does not apply to the lineage match.
+func TestResolve_TheBracketAliasThroughTheLineageIgnoresTheAliasOwner(t *testing.T) {
+	succ := relayedRow(refB, "purdex-hiro", 2, refA)
+	succ.Agent.SessionID = "successor-sid"
+	snap := ResolveSnapshot{Aliases: map[string]string{"purdex-adam": refA}, AliasSessions: map[string]string{"purdex-adam": "old-sid"}}
+	rec, err := Resolve([]PeerRecord{succ}, "purdex-adam ["+refA[1:]+"]", snap)
+	if err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("pid=%d err=%v; the successor must answer although it is not the alias's own session", pidOf(rec), err)
+	}
+}
+
 // An alias that is not routable can never have produced an address: it must not resolve.
 func TestResolve_AnUnroutableAliasNeverResolves(t *testing.T) {
 	recs := []PeerRecord{liveRow(refA, "purdex-hiro", "", "", 1)}
