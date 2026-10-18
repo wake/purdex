@@ -126,6 +126,12 @@ func TestNormalize_UnknownAndLeadingOptions(t *testing.T) {
 		{[]string{"pnpm", "--filter", "spa", "exec", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"pnpm", "-C", "spa", "test"}, []string{"pnpm", "test"}},
 		{[]string{"pnpm", "-r", "exec", "vitest"}, []string{"vitest"}},
+		{[]string{"npm", "--workspace", "spa", "test"}, []string{"npm", "test"}},
+		{[]string{"npm", "--weird", "spa", "test"}, []string{"npm", "test"}}, // an option nobody told us about, read with its value
+		{[]string{"yarn", "--cwd", "spa", "test"}, []string{"yarn", "test"}},
+		{[]string{"bun", "--cwd", "spa", "run", "build"}, []string{"bun", "build"}},
+		{[]string{"pnpm", "--weird", "x", "exec", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"npm", "install", "test"}, []string{"npm", "install", "test"}}, // `test` here is a package, not the subcommand
 		{[]string{"pnpm", "exec", "--weird", "x", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"npx", "--weird", "x", "tsc", "-b"}, []string{"tsc", "-b"}},
 		{[]string{"npx", "--weird", "x", "foo"}, []string{"x", "foo"}},                            // nothing recognisable: left as it is, not a family command
