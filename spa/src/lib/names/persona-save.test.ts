@@ -80,6 +80,22 @@ describe('savePersonas', () => {
     expect(res.base).toBeNull() // the form must be rebuilt on h3's collection, not re-bound to it
   })
 
+  it('hands back no base when the same host moved past the revision this save wrote', async () => {
+    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
+    usePersonaStore.setState({
+      load: vi.fn(async () => {
+        // someone else wrote revision 9 on h2 before this save's reload ran
+        usePersonaStore.setState({
+          byHost: { ...usePersonaStore.getState().byHost, h2: { status: 'ready', collection: makeCollection(['theirs'], { at: 30, host: 'h2' }, 9) } },
+        })
+      }),
+    })
+    const res = await savePersonas([makePersona('hiro')], editBase(), 'h1')
+    expect(res.base).toBeNull()
+    // a null base cannot be used to save over what exists
+    await expect(savePersonas([makePersona('hiro')], res.base, 'h1')).rejects.toBeInstanceOf(PersonaStaleError)
+  })
+
   it('refuses when the same host moved to a newer revision under the form', async () => {
     const base = editBase()
     usePersonaStore.setState({

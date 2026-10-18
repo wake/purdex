@@ -62,16 +62,18 @@ export async function savePersonas(
   if (issues.length > 0) throw new PersonaValidationError(issues)
   if (!sameBase(base, editBase())) throw new PersonaStaleError()
   const hostId = base?.hostId ?? fallbackHostId
+  let written: { revision: number }
   try {
-    await putPersonas(hostId, items, base?.revision ?? 0)
+    written = await putPersonas(hostId, items, base?.revision ?? 0)
   } catch (e) {
     if (e instanceof PersonaConflictError) await usePersonaStore.getState().load(hostId)
     throw e
   }
   await usePersonaStore.getState().load(hostId)
-  // The reload moved the revision and stamp; a form that stays open continues from this base. It is the saved host's
-  // own, and only while that host's collection is still the shown one: when another host's newer copy won meanwhile,
-  // the open form's items were built on the old one, so there is no base to continue from and the page rebuilds it.
+  // The reload moved the revision and stamp; a form that stays open continues from this base. That is only right when
+  // the shown collection is exactly what this save wrote: the saved host, at the revision the PUT returned. If another
+  // host's newer copy won meanwhile, or the same host moved on to a later revision, the open form's items were built
+  // on something that has been replaced, so there is no base to continue from and the page rebuilds the form.
   const after = editBase()
-  return { hostId, base: after?.hostId === hostId ? after : null }
+  return { hostId, base: after?.hostId === hostId && after.revision === written.revision ? after : null }
 }
