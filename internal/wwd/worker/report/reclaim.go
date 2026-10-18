@@ -27,11 +27,14 @@ func (j job) Stop(ctx context.Context) error { return j.StopJob(ctx) }
 // releaser gives a job back (reason reclaim) to the sink of the origin it came from.
 type releaser struct {
 	sinks  func(source string) Sink
-	source map[string]string // job id -> origin
+	source map[heldKey]string // the origin of a held claim
 }
 
+// heldKey names a claim: a job id is unique only within its origin, the claim id is the attempt (the key yield.ReclaimAll hands back).
+type heldKey struct{ jobID, claimID string }
+
 func (r releaser) Release(ctx context.Context, jobID, claimID string) error {
-	sink := r.sinks(r.source[jobID])
+	sink := r.sinks(r.source[heldKey{jobID, claimID}])
 	if sink == nil {
 		return errors.New("no sink for the origin of " + jobID)
 	}
@@ -47,10 +50,10 @@ func (r releaser) Release(ctx context.Context, jobID, claimID string) error {
 // to its own origin (release, reason reclaim). A job whose stop failed is not given back (yield.ReclaimAll's rule); every error is
 // returned, and the worker tries again at its next reading of the owner.
 func (r *Reporter) Reclaim(ctx context.Context, jobs []Running, sinks func(source string) Sink) error {
-	rel := releaser{sinks: sinks, source: make(map[string]string, len(jobs))}
+	rel := releaser{sinks: sinks, source: make(map[heldKey]string, len(jobs))}
 	ys := make([]yield.Job, len(jobs))
 	for i, j := range jobs {
-		rel.source[j.JobID] = j.Source
+		rel.source[heldKey{j.JobID, j.Claim}] = j.Source
 		ys[i] = job{j}
 	}
 	return yield.ReclaimAll(ctx, ys, rel)
