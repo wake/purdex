@@ -23,7 +23,14 @@ func TestSystemSourcesReadThisLinuxHost(t *testing.T) {
 	if m.TotalMB <= 0 || m.AvailableMB <= 0 || m.AvailableMB > m.TotalMB {
 		t.Errorf("mem: %+v", m)
 	}
-	if m.Pressure != 1 && m.Pressure != 2 && m.Pressure != 4 {
+	// without both production slices' PSI (cgroup v1, a missing slice) the level
+	// is unknown (0) unless memory or swap already show trouble
+	if m.PSI == nil {
+		if m.Pressure != 0 && m.Pressure != 2 && m.Pressure != 4 {
+			t.Errorf("no PSI: pressure %d is neither unknown nor a warning", m.Pressure)
+		}
+	} else if m.Pressure != 1 && m.Pressure != 2 && m.Pressure != 4 && m.Pressure != 0 {
+		// 0 is possible on the first two samples when a worse level is still waiting out its 10 s
 		t.Errorf("pressure %d is not a level", m.Pressure)
 	}
 	if m.SwapUsedMB == nil || m.PageOutRate == nil || m.SwapOutRate == nil {
