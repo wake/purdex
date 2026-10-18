@@ -2,7 +2,7 @@
 // otherwise the name's first letter on the host colour.
 import { useState } from 'react'
 
-export type AvatarSize = 16 | 18 | 24 | 44
+export type AvatarSize = 16 | 18 | 22 | 24 | 44
 
 interface Props {
   size: AvatarSize

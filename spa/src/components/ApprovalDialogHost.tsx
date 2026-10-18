@@ -36,7 +36,9 @@ import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, maxMembersMax, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, maxMembersMax, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, type Grant, type LeadNameCandidate } from '../lib/team/types'
+import { fetchLeadNames } from '../lib/team/approval-api'
+import { LeadNameCard } from './LeadNameCard'
 import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
@@ -90,6 +92,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // prefilled with the requested one; while it is empty the placeholder says what the daemon will take from the name.
   const [teamLabel, setTeamLabel] = useState(payload.team_label ?? '')
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
+  // The 「名字」 row (name pool v2 §5.3): only for a lead request that carries a candidate list. The stored list is the fallback; a fresh one is read when the dialog
+  // opens and replaces it, and a `name_taken` answer brings another. The pick (null = 「保留」) is dropped when a refreshed list no longer has it.
+  const [leadNames, setLeadNames] = useState<LeadNameCandidate[] | undefined>(payload.lead_names)
+  const [pickedName, setPickedName] = useState<string | null>(null)
+  const [nameTaken, setNameTaken] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   // Nobody answered this card: no countdown, the session is paused (relay v2 App contract 3). Also true for a card held since
@@ -203,6 +210,19 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
+  const leadNameShown = approval.kind === 'lead' && leadNames !== undefined && leadNames.length > 0
+  const refreshLeadNames = (names: LeadNameCandidate[]) => {
+    setLeadNames(names)
+    setPickedName((p) => (p !== null && names.some((n) => n.code === p) ? p : null))
+  }
+  useEffect(() => {
+    if (approval.kind !== 'lead' || payload.lead_names === undefined) return
+    let live = true
+    fetchLeadNames(hostId, approval.id).then((names) => { if (live) refreshLeadNames(names) }, () => {}) // a failed read keeps the stored list
+    return () => { live = false }
+    // once per dialog: it is keyed by the approval
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const nameShown = !isSelfRelay && !isAdopt && !isMemberRelay && payload.team_name !== undefined
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
@@ -241,7 +261,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const decide = async (decision: Decision, reveal = false) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
-    const grant: Grant | undefined = !isSelfRelay && !isAdopt && !isMemberRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
+    const grant: Grant | undefined = !isSelfRelay && !isAdopt && !isMemberRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}), ...(leadNameShown && pickedName !== null ? { lead_name: pickedName } : {}) } : undefined
     if (!connected) {
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
@@ -252,7 +272,14 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     }
     inFlight.current = true
     setBusy(true)
-    const outcome = await submitDecision(hostId, approval, decision, grant, reveal ? { reveal } : {})
+    const outcome = await submitDecision(hostId, approval, decision, grant, {
+      ...(reveal ? { reveal } : {}),
+      onNameTaken: (names) => {
+        setNameTaken(true)
+        if (names !== undefined) refreshLeadNames(names)
+        else void fetchLeadNames(hostId, approval.id).then(refreshLeadNames, () => {})
+      },
+    })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
       inFlight.current = false
@@ -393,6 +420,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             <p data-testid="approval-self-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.self_relay_note')}</p>
           ) : (
             <>
+              {leadNameShown && leadNames !== undefined && (
+                <LeadNameCard hostId={hostId} currentName={approval.origin.name} names={leadNames} pick={pickedName} onPick={(c) => { setPickedName(c); setNameTaken(false) }} taken={nameTaken} disabled={locked} />
+              )}
               {nameShown && (
                 <>
                   <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
