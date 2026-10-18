@@ -6,6 +6,7 @@
 import { useMemo } from 'react'
 import { Desktop, Robot } from '@phosphor-icons/react'
 import { TabIcon } from '../TabIcon'
+import { SubagentDots } from '../SubagentDots'
 import { HostBadge } from '../HostBadge'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
 import { useHostLook } from '../../lib/host-look'
@@ -21,6 +22,8 @@ interface IconProps {
   size?: number
   /** Draw the seat's subagent dots to the icon's left (the panel's full rows, the sidebar beads and ghost lead row, like the sidebar's tab rows); the collapsed strip leaves them off. */
   subagents?: boolean
+  /** False: the icon alone, muted, with no light (the panel's rows draw the light on the avatar's corner: TeamSeatLight). Default true. */
+  light?: boolean
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -28,8 +31,18 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false }: IconProps) {
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, light = true }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
+  if (!light) {
+    // The icon alone (the light is the avatar's corner badge); the subagent dots, when asked for, still float to its left. Lights off hides them, as everywhere.
+    const Icon = agentIcon ?? DefaultBot
+    return (
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
+        <Icon size={size} className="flex-shrink-0" />
+        {subagents && tabIndicatorStyle !== 'icon' && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
+      </span>
+    )
+  }
   return (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}

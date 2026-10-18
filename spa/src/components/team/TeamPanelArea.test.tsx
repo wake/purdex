@@ -22,8 +22,8 @@ import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
 vi.mock('./TeamSeatIcon', () => ({
-  TeamSeatIcon: ({ sessionCode, subagents }: { sessionCode: string; subagents?: boolean }) => (
-    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} />
+  TeamSeatIcon: ({ sessionCode, subagents, light }: { sessionCode: string; subagents?: boolean; light?: boolean }) => (
+    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} data-light={String(light !== false)} />
   ),
   TeamSeatHostBadge: ({ hostId }: { hostId: string }) => <span data-testid="seat-host" data-host={hostId} />,
 }))
@@ -210,7 +210,7 @@ describe('full mode', () => {
     expect(rows().slice(1).every((r) => r.getAttribute('draggable') === 'true')).toBe(true)
   })
 
-  it('full rows follow the prototype: dots + light, host chip, title, the ring at the right end with no number; model / effort / context in the tooltip', () => {
+  it('full rows (v2): the icon without its light, the light on the avatar, host chip, title, the ring at the right end with no number; model / effort / context in the tooltip', () => {
     scene()
     readings((t) => {
       t.lead.model = 'claude-opus-5-5'
@@ -221,7 +221,8 @@ describe('full mode', () => {
     mount()
     const leadRow = rows()[0]
     const lead = within(leadRow)
-    expect(lead.getByTestId('seat-icon').getAttribute('data-subagents')).toBe('true') // the dots + light
+    expect(lead.getByTestId('seat-icon').getAttribute('data-light')).toBe('false') // team panel v2: the icon alone; the light is the avatar's corner badge
+    expect(within(lead.getByTestId('team-panel-avatar')).getByTestId('team-panel-light')).toBeTruthy()
     expect(lead.getByTestId('seat-host')).toBeTruthy()
     expect(lead.getByText('title L')).toBeTruthy()
     expect(lead.getByTestId('model-icon-opus')).toBeTruthy() // the model shape sits inside the ring
