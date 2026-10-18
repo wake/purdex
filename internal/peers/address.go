@@ -47,6 +47,10 @@ type ResolveSnapshot struct {
 	// the tmux-name tier or be reported as gone (lead-team-relay spec §8.4).
 	RegistryIncomplete bool
 	LineageUnavailable bool
+	// Aliases are the old names of renamed sessions (name pool v2 spec §6.3): full alias name -> the session's ref. Resolve reads
+	// them as data, after a name that no live row holds (tier 1 always wins), and goes on by the existing ref path, so a relayed
+	// successor is reached too. The bracket check accepts an alias of the ref it sits beside. Nil: no aliases.
+	Aliases map[string]string
 	// ExecutionsUnavailable is the envelope's executions_unavailable flag:
 	// the execution list could not be read, so the snapshot has no execution
 	// rows (peer mailbox spec §4.1). Any miss is ErrResolveNotReady under it
@@ -247,9 +251,10 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		// The name is still a check ON the ref, not a second way in past it:
 		// a name carried by no row with this ref is refused below, never
 		// delivered.
+		nameIs := func(r PeerRecord) bool { return r.Name == typedName || aliasOfRef(snap, typedName, ref) }
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
 			return NameAddressable(r) && RoutableName(r.Name) &&
-				r.Ref == ref && r.Name == typedName
+				r.Ref == ref && nameIs(r)
 		})
 		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
 			// The combined form with a relayed-from ref (lead-team-relay
@@ -261,7 +266,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			// below (the typed name is not the live owner's).
 			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
 				return NameAddressable(r) && RoutableName(r.Name) &&
-					hasPreviousRef(r, ref) && r.Name == typedName
+					hasPreviousRef(r, ref) && nameIs(r)
 			})
 		}
 		switch {
@@ -334,6 +339,14 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		if !errors.Is(err, ErrNotFound) {
 			return rec, err
 		}
+		// An alias: the old name of a renamed session. It is consulted only here, after tier 1 missed, so a live holder of
+		// the name always wins; it resolves through the alias's ref by the ref path, whose conservatisms and lineage apply.
+		if ref, ok := aliasRef(snap, head); ok {
+			rec, err = resolveRefHead(records, ref, snap)
+			if !errors.Is(err, ErrNotFound) {
+				return rec, err
+			}
+		}
 
 		// Tiers 2/3: the ref, with or without its underscore. No ordering
 		// rule is needed against tier 1: RoutableName forbids a ref-shaped
@@ -352,6 +365,27 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		return PeerRecord{}, ErrNotFound
 	}
 	return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == head })
+}
+
+// aliasRef is the ref a routable alias name stands for ("_" form), if the snapshot has it.
+func aliasRef(snap ResolveSnapshot, name string) (string, bool) {
+	if len(snap.Aliases) == 0 || !RoutableName(name) {
+		return "", false
+	}
+	ref, ok := snap.Aliases[name]
+	if !ok {
+		return "", false
+	}
+	if !strings.HasPrefix(ref, "_") {
+		ref = "_" + ref
+	}
+	return ref, IsRef(ref)
+}
+
+// aliasOfRef says name is an alias of exactly this ref (the bracket check's second way to accept a name).
+func aliasOfRef(snap ResolveSnapshot, name, ref string) bool {
+	got, ok := aliasRef(snap, name)
+	return ok && got == ref
 }
 
 // splitCombined splits "<name> [<ref>]" into its parts. ok is false for

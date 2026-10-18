@@ -21,6 +21,8 @@ type PeerNameStore interface {
 	RenamePool(ctx context.Context, sessionID, oldName, newName string) (store.PeerNameEntry, bool, error)
 	Lookup(ctx context.Context, sessionIDs []string) (map[string]store.PeerNameEntry, error)
 	ByRefs(ctx context.Context, refs []string) (map[string]string, error)
+	// Aliases are the old names of renamed sessions (name pool v2 spec §6.3): routing reads them as data.
+	Aliases(ctx context.Context) ([]store.PeerNameAlias, error)
 }
 
 // ConversationNameReader reads the registry names recorded for conversations
@@ -35,6 +37,30 @@ type ConversationNameReader interface {
 func (m *Module) WithPeerNames(s PeerNameStore, convNames ConversationNameReader) *Module {
 	m.peerNames, m.convNames = s, convNames
 	return m
+}
+
+// aliasMap is the aliases routing resolves a name through (full alias name -> ref). It is read per local send, not cached: the
+// table holds at most a few hundred rows, a send is rare beside a rename, and a cache would need dropping on every rename path.
+// A store that does not answer costs the send its alias lookup, never the send.
+func (m *Module) aliasMap(ctx context.Context) map[string]string {
+	if m.peerNames == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, namerTimeout)
+	defer cancel()
+	rows, err := m.peerNames.Aliases(ctx)
+	if err != nil {
+		m.logf("peers: reading the name aliases failed, sending without them: %v", err)
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(rows))
+	for _, a := range rows {
+		out[a.Alias] = a.Ref
+	}
+	return out
 }
 
 // namerTimeout bounds naming outside an inventory pass (the self verbs, the

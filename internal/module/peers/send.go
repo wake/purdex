@@ -391,6 +391,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			RegistryIncomplete:    len(local.UnknownRegistryFiles) > 0,
 			LineageUnavailable:    local.LineageUnavailable,
 			ExecutionsUnavailable: local.ExecutionsUnavailable,
+			Aliases:               m.aliasMap(r.Context()),
 		}
 	} else {
 		remoteRefused := func(text string) {
