@@ -17,6 +17,8 @@ type fakeExec struct {
 	mu        sync.Mutex
 	sessions  []string      // ids answered to the processlist query
 	stubborn  bool          // KILL leaves the sessions listed
+	lists     int           // how many processlist queries were answered
+	failList  int           // the processlist query with this number (1-based) fails
 	hold      chan struct{} // when set, the database listing waits for it to be closed (a Sweep that is half way)
 	held      chan struct{} // closed once a Run is waiting on hold
 	sql       []string
@@ -48,6 +50,10 @@ func (f *fakeExec) Run(ctx context.Context, sql string) (string, error) {
 	}
 	switch {
 	case strings.Contains(sql, "information_schema.processlist"):
+		f.lists++
+		if f.failList > 0 && f.lists == f.failList {
+			return "", errors.New("lost connection")
+		}
 		return strings.Join(f.sessions, "\n"), nil
 	case strings.HasPrefix(sql, "KILL CONNECTION") && !f.stubborn:
 		f.sessions = nil // the connections go when they are killed
@@ -350,5 +356,13 @@ func TestAKillThatFailsOrDoesNotWorkIsReported(t *testing.T) {
 	// every statement is still tried
 	if !strings.Contains(h.all(), "DROP DATABASE IF EXISTS") {
 		t.Fatalf("the rest of the clean-up must go on:\n%s", h.all())
+	}
+}
+
+func TestAFailedKillStaysVisibleWhenTheSecondListingFailsToo(t *testing.T) {
+	f := &fakeExec{sessions: []string{"5"}, failOn: "KILL CONNECTION", failError: errors.New("ERROR 1095: not owner"), failList: 2}
+	err := New(f, Config{}).Drop(context.Background(), "j")
+	if err == nil || !strings.Contains(err.Error(), "KILL CONNECTION 5") || !strings.Contains(err.Error(), "lost connection") {
+		t.Fatalf("both failures must be in the error: %v", err)
 	}
 }

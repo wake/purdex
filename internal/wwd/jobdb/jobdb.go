@@ -201,6 +201,8 @@ func (m *Manager) killConnections(ctx context.Context, user string) error {
 	}
 	left, err := list()
 	switch {
+	case err != nil && first != nil:
+		return errors.Join(first, err) // the failed KILL stays visible next to the failed query
 	case err != nil:
 		return err
 	case len(left) > 0 && first != nil:
