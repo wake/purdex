@@ -75,6 +75,9 @@ type Options struct {
 	// WaitMax, when above 0, is how long the command may wait for its slot: past it the gate ends the wait, runs nothing and exits with
 	// ExitRefused (a run sent from another host uses it to know that nothing started there).
 	WaitMax time.Duration
+	// WaitedOut, when set, is written when Run returns: true when the wait for a slot ran past WaitMax and that is why nothing
+	// ran, false for every other end (including a refusal for another cause, which also exits ExitRefused).
+	WaitedOut *bool
 	// Assist, when set, sends the command to that assist host once it has a ticket; a failure there brings the ticket back to its place.
 	// It is taken only on the queue path (a gate that is off, or a nested command, runs here and says so); who may go first is the
 	// caller's to decide (the automatic walk of X2b): this does not look at the order of the queue.
@@ -296,6 +299,9 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	d := &Decision{Time: started, Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session, Outcome: "interrupted"}
 	code, err := g.run(ctx, o, d)
 	d.Exit, d.Duration = code, g.Now().Sub(started).Seconds()
+	if o.WaitedOut != nil {
+		*o.WaitedOut = d.Outcome == "wait-max" && code == ExitRefused
+	}
 	if d.Outcome != "not-gated" { // the commands the gate does not hold are many and cheap: they leave no line and touch no file
 		g.record(d.dir, d)
 	}

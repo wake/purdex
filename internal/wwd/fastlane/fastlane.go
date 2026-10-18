@@ -187,11 +187,12 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		close(hbDone)
 	}
 	started := time.Now()
+	var waitedOut bool // the gate's own word that the wait for a slot ran out, which an exit 75 alone does not say
 	code, gateErr := req.Gate.Run(runCtx, gate.Options{
 		Argv: argv, Class: gate.ClassLight, ClassSource: "kind", Env: env,
 		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
-		WaitMax: task.QueueTimeout,
-		Stdout:  cp.Stdout(), Stderr: stderr,
+		WaitMax: task.QueueTimeout, WaitedOut: &waitedOut,
+		Stdout: cp.Stdout(), Stderr: stderr,
 	})
 	finished := time.Now()
 	if t := timer.Load(); t != nil {
@@ -208,7 +209,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
 	case timedOut.Load() && !notStarted.Load(): // a command that never started cannot have run out of time
 		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
-	case notRun && code == gate.ExitRefused && gateErr == nil && !notStarted.Load() && finished.Sub(started) >= task.QueueTimeout:
+	case notRun && code == gate.ExitRefused && gateErr == nil && !notStarted.Load() && waitedOut:
 		res.State, res.Reason, res.Exit = wire.StateExpired, "queue_timeout", -1 // waited for a slot as long as a queued job may
 	case notRun:
 		res.State, res.Reason = wire.StateFailed, "infra"
