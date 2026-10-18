@@ -65,9 +65,6 @@ func ParseArgs(argv []string) (Args, error) {
 			a.add(w)
 			continue
 		}
-		if !strings.HasPrefix(w, "-") || w == "-" {
-			before++
-		}
 		switch {
 		case w == "--":
 			rest = true
@@ -95,7 +92,8 @@ func ParseArgs(argv []string) (Args, error) {
 				return a, fmt.Errorf("--class must be dev, merge or release, got %q", v)
 			}
 		default:
-			a.add(w)
+			a.add(w) // not a known flag: a task name or argument; for --adhoc a word before --, which is refused
+			before++
 		}
 	}
 	switch {

@@ -24,6 +24,9 @@ func TestParseAdHocArgs(t *testing.T) {
 	if err != nil || got.JSON || got.Detach || !reflect.DeepEqual(got.Argv(), []string{"echo", "--json", "--detach", "--", "x"}) {
 		t.Fatalf("what follows -- is the command, flags included: %+v err %v", got, err)
 	}
+	if got, err := ParseArgs(strings.Fields("--adhoc -- --typo ok")); err != nil || !reflect.DeepEqual(got.Argv(), []string{"--typo", "ok"}) {
+		t.Fatalf("a flag-shaped first word after -- is the command: %+v err %v", got, err)
+	}
 	for _, line := range []string{
 		"--adhoc",                // no command
 		"--adhoc --",             // an empty command
@@ -31,7 +34,8 @@ func TestParseAdHocArgs(t *testing.T) {
 		"--adhoc --detach -- go", // never queued
 		"--adhoc --class dev -- go",
 		"--adhoc --list -- go",
-		"--adhoc lint -- go", // a word before --
+		"--adhoc lint -- go",        // a word before --
+		"--adhoc --typo -- echo ok", // a flag-shaped word before -- would take the command's place
 	} {
 		if _, err := ParseArgs(strings.Fields(line)); err == nil {
 			t.Errorf("%q: accepted", line)
