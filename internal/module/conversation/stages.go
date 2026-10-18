@@ -437,20 +437,32 @@ func (l *stageLedger) windowFrom(sid string) (int64, bool) {
 	return 0, false
 }
 
-// seenAlready says the last observe of the session saw this transcript revision and the ledger has not changed since, so
-// another one would find nothing (the connections of one session share the work). markSeen records an observe's inputs.
+// seenAlready says the last observe of the session saw this transcript revision and the session's ledger has not changed since,
+// so another one would find nothing (the connections of one session share the work). An observer takes sessionSeq BEFORE it
+// reads anything and hands it to markSeen: a change that lands while it works (a new id entering) leaves the session's seq
+// ahead of the mark, so the next look still happens.
 func (l *stageLedger) seenAlready(sid, rev string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.sessions[sid]
-	return s != nil && s.obsRev != "" && s.obsRev == rev && s.obsSeq == l.gseq
+	return s != nil && s.obsRev != "" && s.obsRev == rev && s.obsSeq == s.seq
 }
 
-func (l *stageLedger) markSeen(sid, rev string) {
+// sessionSeq is the seq of the session's last change (0 for a session the ledger does not hold).
+func (l *stageLedger) sessionSeq(sid string) uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if s := l.sessions[sid]; s != nil {
-		s.obsRev, s.obsSeq = rev, l.gseq
+		return s.seq
+	}
+	return 0
+}
+
+func (l *stageLedger) markSeen(sid, rev string, seq uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if s := l.sessions[sid]; s != nil {
+		s.obsRev, s.obsSeq = rev, seq
 	}
 }
 

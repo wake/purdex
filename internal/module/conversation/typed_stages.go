@@ -84,6 +84,7 @@ func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
 	if entry == nil || !m.stages.inFlight(sid) {
 		return
 	}
+	seq := m.stages.sessionSeq(sid) // before anything is read: what changes meanwhile is not covered by this look
 	rev := entry.Cursor()
 	if m.stages.seenAlready(sid, rev) { // another connection of this session already looked at this revision
 		return
@@ -99,5 +100,5 @@ func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
 	h := entry.Header()
 	lossy := len(h.Queued)+h.HiddenQueued >= ccnorm.MaxQueueEntries // the feed's tracker dropped its oldest rows: absence proves nothing
 	m.stages.observe(sid, h.Queued, lossy, items, m.tuning().now())
-	m.stages.markSeen(sid, rev)
+	m.stages.markSeen(sid, rev, seq)
 }
