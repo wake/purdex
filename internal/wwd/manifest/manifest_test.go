@@ -231,3 +231,41 @@ func TestPurdexManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestDBEnv(t *testing.T) {
+	m := mustParse(t, `
+[tasks.none]
+run = "x"
+args = "none"
+[tasks.plain]
+run = "x"
+args = "none"
+db = "per-job"
+[tasks.wp]
+run = "x"
+args = "none"
+db = "per-job"
+db_env = "wptests"
+[tasks.named]
+run = "x"
+args = "none"
+db = "per-job"
+db_env = "db"
+`)
+	for task, want := range map[string]string{"none": "", "plain": DBEnvDB, "wp": DBEnvWPTests, "named": DBEnvDB} {
+		if got := m.Tasks[task].DBEnv; got != want {
+			t.Errorf("%s: DBEnv = %q, want %q", task, got, want)
+		}
+	}
+	for name, src := range map[string]string{
+		"db_env without db":   "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb_env = \"wptests\"\n",
+		"unknown db_env":      "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb = \"per-job\"\ndb_env = \"laravel\"\n",
+		"empty db_env":        "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb = \"per-job\"\ndb_env = \"\"\n",
+		"db_env wrong case":   "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb = \"per-job\"\ndb_env = \"WPTESTS\"\n",
+		"empty db_env, no db": "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb_env = \"\"\n",
+	} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("%s: Parse succeeded, want error", name)
+		}
+	}
+}
