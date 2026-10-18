@@ -34,6 +34,13 @@ type RawMem struct {
 	NoSwapouts           bool // Swapouts could not be read: swap_out_rate is null
 	SwapUsedBytes        *uint64
 	CompressorBytes      *uint64
+
+	// Linux reads. AvailableBytes (MemAvailable) replaces Free + Inactive, and
+	// PSI is the production slices' pressure (nil: unreadable). Linux marks the
+	// reading so the level comes from the Linux mapping, not from Level.
+	Linux          bool
+	AvailableBytes uint64
+	PSI            *wire.PSI
 }
 
 // RawDisk is one mount: sizes in bytes. AvailBytes is what an unprivileged
@@ -61,6 +68,7 @@ func BuildCPU(prev *RawCPU, cur RawCPU) wire.CPU {
 // belongs to one goroutine.
 type MemBuilder struct {
 	pageouts, swapouts []hostmem.PageSample
+	linux              LinuxPressure
 }
 
 func NewMemBuilder() *MemBuilder { return &MemBuilder{} }
@@ -73,6 +81,15 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 		TotalMB:     int(raw.TotalBytes / mib),
 		AvailableMB: int((raw.Free + raw.Inactive) * raw.PageSize / mib),
 		Pressure:    raw.Level,
+	}
+	if raw.Linux {
+		m.AvailableMB = int(raw.AvailableBytes / mib)
+		m.PSI = raw.PSI
+		swapMB := 0
+		if raw.SwapUsedBytes != nil {
+			swapMB = int(*raw.SwapUsedBytes / mib)
+		}
+		m.Pressure = b.linux.Update(now, m.TotalMB, m.AvailableMB, swapMB, raw.PSI)
 	}
 	if raw.SwapUsedBytes != nil {
 		v := int(*raw.SwapUsedBytes / mib)
