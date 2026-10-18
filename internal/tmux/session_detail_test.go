@@ -104,9 +104,15 @@ func TestListSessionsDetailed_RealTmux(t *testing.T) {
 	for _, locale := range []string{"UTF-8", "none", "C"} {
 		t.Run(locale, func(t *testing.T) {
 			tm := privateTmux(t)
+			cjkDir := filepath.Join(os.TempDir(), "pdxsd-工作🙂")
+			require.NoError(t, os.MkdirAll(cjkDir, 0o755))
+			t.Cleanup(func() { os.RemoveAll(cjkDir) })
 			tm("new-session", "-d", "-s", "alpha", "-c", "/tmp", "sleep 120")
 			tm("new-session", "-d", "-s", "beta gamma", "-c", "/private/tmp", "sleep 120")
+			tm("new-session", "-d", "-s", "工作🙂 ü", "-c", cjkDir, "sleep 120")
 			tm("select-pane", "-t", "=alpha:", "-T", "my title")
+			tm("select-pane", "-t", "=工作🙂 ü:", "-T", "標題 ü 🙂")
+			tm("rename-window", "-t", "=工作🙂 ü:", "窗口 ü")
 			switch locale {
 			case "none":
 				unsetenv(t, "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE")
@@ -121,13 +127,13 @@ func TestListSessionsDetailed_RealTmux(t *testing.T) {
 			details, ok, err := r.ListSessionsDetailed(ctx)
 			require.NoError(t, err)
 			require.True(t, ok, "the detailed answer is trusted under locale %s", locale)
-			require.Len(t, details, 2)
+			require.Len(t, details, 3)
 
 			// the same values the separate reads give
 			plain, err := r.ListSessions(ctx)
 			if locale == "UTF-8" {
 				require.NoError(t, err)
-				require.Len(t, plain, 2)
+				require.Len(t, plain, 3)
 				for i := range plain {
 					assert.Equal(t, plain[i], details[i].TmuxSession)
 					md, err := r.ActivePaneMetadata(ctx, plain[i].Name)
@@ -142,8 +148,15 @@ func TestListSessionsDetailed_RealTmux(t *testing.T) {
 			assert.Equal(t, "my title", byName["alpha"].Pane.PaneTitle)
 			assert.Equal(t, "sleep", byName["alpha"].Pane.PaneCurrentCommand)
 			assert.Equal(t, "beta gamma", byName["beta gamma"].Name)
+			// non-ASCII text arrives as it is whatever the locale (tmux would turn it into "_" in a non-UTF-8 client without -u)
+			cjk, found := byName["工作🙂 ü"]
+			require.True(t, found, "the session called 工作🙂 ü is listed under that name; got %v", details)
+			assert.Equal(t, cjkDir, cjk.Cwd)
+			assert.Equal(t, "標題 ü 🙂", cjk.Pane.PaneTitle)
+			assert.Equal(t, "窗口 ü", cjk.Pane.WindowName)
 			assert.Regexp(t, `^\d+:\d+$`, byName["alpha"].Instance)
 			assert.Equal(t, byName["alpha"].Instance, byName["beta gamma"].Instance, "one server, one instance")
+			assert.Equal(t, byName["alpha"].Instance, cjk.Instance)
 			inst := tm("display-message", "-p", "#{pid}:#{start_time}")
 			assert.Equal(t, inst, byName["alpha"].Instance, "the instance string config.GetTmuxInstance reads")
 		})

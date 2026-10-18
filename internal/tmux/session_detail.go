@@ -30,7 +30,7 @@ type DetailLister interface {
 // detailSep separates the fields of the detailed answer. It is printable ASCII on purpose: tmux sanitises a -F answer by the
 // locale of its client, and where there is no UTF-8 locale (LANG, LC_ALL and LC_CTYPE all unset: a daemon started from the Finder)
 // it turns a TAB, and any other control character, into "_" — which would leave one field per line (the failure of 2026-09-14).
-// Printable ASCII passes through every locale. It cannot be told apart from text in a free-text field, so the parser checks the
+// Printable ASCII passes through every locale (the non-ASCII text of the fields is kept by -u, see ListSessionsDetailed). It cannot be told apart from text in a free-text field, so the parser checks the
 // field count, that the ids sit in their slots, and that no session appears twice, and refuses the whole answer otherwise.
 const detailSep = "|~|"
 
@@ -44,8 +44,11 @@ const detailFieldCount = 10
 
 var tmuxInstanceRe = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
 
+// ListSessionsDetailed runs list-sessions with -u: without it tmux sanitises the answer by the locale of its client, and where there is
+// no UTF-8 locale it rewrites every non-ASCII character of a name, title or path to "_" (a session called 工作 would be listed as "__"
+// and could no longer be addressed). -u makes tmux write UTF-8 whatever the locale, and the printable separator survives either way.
 func (r *RealExecutor) ListSessionsDetailed(ctx context.Context) ([]SessionDetail, bool, error) {
-	out, err := boundedRead(ctx, "list-sessions", "-F", detailFormat).Output()
+	out, err := boundedRead(ctx, "-u", "list-sessions", "-F", detailFormat).Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
 			return nil, false, cerr
