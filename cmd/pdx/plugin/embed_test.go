@@ -626,6 +626,7 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 		"pdx jobs show <id>", "pdx jobs log <id>", "pdx jobs cancel <id>",
 		"**不要重跑、不要自己加 `&`、`nohup`", // what to do with the mod's background note
 		"Ctrl-C 的意義看工作在哪",
+		"**排隊工作的前景等待被中斷，但工作本身還在跑**", "先 `pdx jobs show <id>` 看終態再決定", // 130 is also the interrupted wait: never resend blindly
 		"`pdx-gate`", "兩者並存", "不要把 `pdx test` 包在 `pdx gate -- …` 裡",
 	} {
 		if !strings.Contains(s, want) {
