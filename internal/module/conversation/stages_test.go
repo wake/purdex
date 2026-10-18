@@ -269,6 +269,17 @@ func TestStages_SinceReturnsOnlyNewChanges(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// A later frame carries only the id that changed after the connection's seq, not everything the ledger holds.
+func TestStages_SinceSecondFrameHoldsOnlyTheNewChange(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	_, seq := l.since("s", 0, t0)
+	l.begin("s", "b", "y", t0)
+	got, _ := l.since("s", seq, t0)
+	require.Len(t, got, 1)
+	assert.Equal(t, "b", got[0].ClientMsgID)
+}
+
 func TestStages_SnapshotBaselineDoesNotReplayOlderDeltas(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "a", "x", t0)
