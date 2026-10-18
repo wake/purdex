@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ type sink struct {
 	mu       sync.Mutex
 	errs     []error
 	always   error
+	onResult func() // runs when a result is taken (a test ends the lease's context here)
 	calls    []string
 	results  []wire.ResultRequest
 	releases []wire.ReleaseRequest
@@ -56,6 +58,9 @@ func (s *sink) Result(_ context.Context, id string, req wire.ResultRequest) erro
 		return err
 	}
 	s.results = append(s.results, req)
+	if s.onResult != nil {
+		s.onResult()
+	}
 	return nil
 }
 
@@ -345,4 +350,50 @@ func TestAReportThatCannotBeReadLeavesZeroCountsAndTheTail(t *testing.T) {
 	assert.Equal(t, []string{"boom"}, s.Tail)
 	assert.NotNil(t, s.Failures)
 	assert.True(t, strings.Contains(strings.Join(h.logs, "\n"), "summary"), "the unreadable report is logged")
+}
+
+// The result makes the job final, the next heartbeat is refused and the lease's context ends: the log that follows is retried under
+// its own, so a transient failure of the upload does not lose it.
+func TestTheLogIsRetriedAfterTheLeasesContextEnds(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, endLease := context.WithCancel(context.Background())
+	h.s.onResult = endLease
+	h.s.errs = []error{nil, errors.New("down"), errors.New("down"), nil} // the result; the log twice transient, then taken
+	h.fin(ctx, ended(runner.KindRan, run.Result{Outcome: run.Exited, LogPath: logFile(t, "line\n")}))
+	assert.Equal(t, []string{"result", "log", "log", "log"}, h.s.calls)
+	assert.Equal(t, []string{"line\n"}, h.s.logs)
+}
+
+// A 409 on the log itself is the origin saying the claim is not live: it stops there.
+func TestARefusedLogIsNotSentAgain(t *testing.T) {
+	h := newHarness(t, Config{})
+	h.s.errs = []error{nil, &runner.Conflict{State: wire.StateFailed}}
+	h.fin(context.Background(), ended(runner.KindRan, run.Result{Outcome: run.Exited, LogPath: logFile(t, "x")}))
+	assert.Equal(t, []string{"result", "log"}, h.s.calls)
+	require.NotEmpty(t, h.logs)
+	assert.Contains(t, h.logs[len(h.logs)-1], "409")
+}
+
+// The report and stdout files are the task's: a link (to anything the worker can read) and a pipe (which would block the worker) are
+// not read, and the summary has its zero counts and the tail.
+func TestSummaryInputsThatAreNotRegularFilesAreNotRead(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(secret, []byte(`{"numPassedTests":99,"numFailedTests":99}`), 0o600))
+	require.NoError(t, os.Symlink(secret, filepath.Join(dir, "report.json")))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(dir, "junit.xml"), 0o600))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(dir, "stdout"), 0o600))
+	h := newHarness(t, Config{})
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 1, StdoutPath: filepath.Join(dir, "stdout"), Tail: []byte("t\n")})
+	e.Plan = runner.Plan{Summary: "vitest-json", OutDir: dir}
+	done := make(chan struct{})
+	go func() { h.fin(context.Background(), e); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a pipe in the output directory blocked the reporter")
+	}
+	require.Len(t, h.s.results, 1)
+	s := h.s.results[0].Summary
+	assert.Zero(t, s.Passed+s.Failed, "the linked file was read")
 }

@@ -42,6 +42,10 @@ type Config struct {
 	Wait func(ctx context.Context, d time.Duration) error
 	// Backoff is the first pause between two tries and the longest one; the pause doubles from the first to the longest.
 	Backoff, MaxBackoff time.Duration
+	// LogRetryFor is how long the upload of the log is retried once the result is taken (default 2 minutes). It does not run under the
+	// lease's context: the result makes the job final, the next heartbeat is refused with a 409 and the lease's context ends, which would
+	// cut the retries short. The log still goes with the claim, and a 409 or 404 on the log itself ends it at once.
+	LogRetryFor time.Duration
 	// Summary builds the summary of a run that ended. Nil: built from the files the run left (see parse).
 	Summary func(runner.Ended) wire.Summary
 	Logf    func(format string, args ...any)
@@ -66,6 +70,9 @@ func New(cfg Config) *Reporter {
 		if cfg.MaxBackoff < cfg.Backoff {
 			cfg.MaxBackoff = cfg.Backoff
 		}
+	}
+	if cfg.LogRetryFor <= 0 {
+		cfg.LogRetryFor = 2 * time.Minute
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
@@ -206,8 +213,12 @@ func (r *Reporter) parse(e runner.Ended) wire.Summary {
 	return s
 }
 
-// readCapped reads a file up to maxReport bytes; a file that is not there is empty.
+// readCapped reads a regular file up to maxReport bytes. A file that is not there, a link, a pipe or a device is empty: the task wrote
+// these files, and a pipe would block the worker for ever.
 func readCapped(path string) []byte {
+	if st, err := os.Lstat(path); err != nil || !st.Mode().IsRegular() {
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -225,7 +236,10 @@ func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, re
 
 // putLog uploads the log with the claim of the run, re-opening it for every try. A log that is not there is not an error of the run.
 func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open func() (io.ReadCloser, error)) {
-	r.retry(ctx, e, "log", func(ctx context.Context) error {
+	// the lease's ctx may end any moment now (see Config.LogRetryFor): the upload has its own, bounded
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.LogRetryFor)
+	defer cancel()
+	r.retryFor(ctx, e, "log", r.cfg.LogRetryFor, func(ctx context.Context) error {
 		f, err := open()
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -259,7 +273,12 @@ const (
 // retry calls do until it succeeds, the origin refuses for good (a 409 or an unknown job: it has decided), RetryFor has passed, or ctx
 // ends (the lease is lost, or the worker is stopping). The pause between tries doubles up to MaxBackoff.
 func (r *Reporter) retry(ctx context.Context, e runner.Ended, what string, do func(ctx context.Context) error) outcome {
-	deadline := r.cfg.Now().Add(RetryFor)
+	return r.retryFor(ctx, e, what, RetryFor, do)
+}
+
+// retryFor is retry with its own bound.
+func (r *Reporter) retryFor(ctx context.Context, e runner.Ended, what string, bound time.Duration, do func(ctx context.Context) error) outcome {
+	deadline := r.cfg.Now().Add(bound)
 	pause := r.cfg.Backoff
 	for {
 		err := do(ctx)
@@ -280,7 +299,7 @@ func (r *Reporter) retry(ctx context.Context, e runner.Ended, what string, do fu
 			return abandoned
 		}
 		if !r.cfg.Now().Add(pause).Before(deadline) {
-			r.cfg.Logf("report: %s of %s given up after %s: %v", what, e.Job.ID, RetryFor, err)
+			r.cfg.Logf("report: %s of %s given up after %s: %v", what, e.Job.ID, bound, err)
 			return abandoned
 		}
 		if werr := r.cfg.Wait(ctx, pause); werr != nil {
