@@ -24,6 +24,14 @@ export const STALE_DEBOUNCE_MS = 300
 
 interface Target { hostId: string; sessionId: string }
 
+// The running loader's re-route, for a read the card makes itself (a retry): its answer is the card's to see, so a 409 in it reaches the loader here.
+let activeReroute: ((t: Target, r: LoadResult) => void) | null = null
+
+/** A card's own read of `hostId`/`sessionId` answered `r`: a 409 means the unit moved, and the active tab follows its new lead (as a loader read would). */
+export function rerouteOnRemote(hostId: string, sessionId: string, r: LoadResult): void {
+  activeReroute?.({ hostId, sessionId }, r)
+}
+
 export function startJournalLoader(): () => void {
   const loaded = new Set<string>() // `${host}\0${session}\0${gen}`
   const inflight = new Set<string>()
@@ -144,6 +152,16 @@ export function startJournalLoader(): () => void {
     await Promise.all(reads)
   }
 
+  const reroute = (t: Target, r: LoadResult) => {
+    if (stopped || r.kind !== 'remote') return
+    const origin = activeOrigin()
+    const reads = origin ? effective(origin) : null
+    if (!origin || !reads || reads.hostId !== t.hostId || reads.sessionId !== t.sessionId) return // not what the active tab reads
+    useJournalStore.getState().setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: r.leadHostId, leadSessionId: r.leadSessionId })
+    void ensure(origin)
+  }
+  activeReroute = reroute
+
   const stops = [
     useTabStore.subscribe((n, p) => {
       const layoutOf = (s: typeof n) => (s.activeTabId ? s.tabs[s.activeTabId]?.layout : undefined)
@@ -158,5 +176,5 @@ export function startJournalLoader(): () => void {
     }),
   ]
   sync()
-  return () => { stopped = true; stops.forEach((f) => f()); if (timer !== undefined) clearTimeout(timer) }
+  return () => { stopped = true; if (activeReroute === reroute) activeReroute = null; stops.forEach((f) => f()); if (timer !== undefined) clearTimeout(timer) }
 }

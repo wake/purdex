@@ -15,6 +15,7 @@ import { useViewMemo } from '../../lib/journal/use-view-memo'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { sessionKey, useJournalStore, type UnitState } from '../../stores/useJournalStore'
+import { rerouteOnRemote } from '../../lib/journal/journal-loader'
 import type { JournalEntry, SessionLink } from '../../lib/journal/types'
 
 const NO_ENTRIES: readonly JournalEntry[] = []
@@ -83,7 +84,7 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
   const errored = sessionMode && (onCurrent ? readFailed : pageFailed)
   const onRetry = useCallback(() => {
     if (readHost === undefined || readSession === undefined) return
-    if (onCurrent) void useJournalStore.getState().loadJournal(readHost, readSession)
+    if (onCurrent) void useJournalStore.getState().loadJournal(readHost, readSession).then((r) => rerouteOnRemote(readHost, readSession, r))
     else { setFailedPage(null); setRetry((n) => n + 1) }
   }, [readHost, readSession, onCurrent])
 
@@ -102,7 +103,7 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
     [sessionMode, readHost, readSession],
   )
   const retrySessions = useSingleFlight(`${readHost}\u0000${readSession}\u0000sessions`, useCallback(
-    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadSessions(readHost, readSession) : Promise.resolve()),
+    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadSessions(readHost, readSession).then((r) => rerouteOnRemote(readHost, readSession, r)) : Promise.resolve()),
     [readHost, readSession],
   ))
   const ctx: RowContext = useMemo(

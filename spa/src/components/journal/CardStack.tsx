@@ -27,6 +27,7 @@ import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJour
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
 import { patchViewMemo, readViewMemo, type ViewMemo } from '../../lib/journal/view-memory'
+import { rerouteOnRemote } from '../../lib/journal/journal-loader'
 
 /**
  * The width of the content box the stack floats in (its offset parent: the side bar and the activity bar already took theirs),
@@ -150,7 +151,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const readHost = target.read?.hostId
   const readSession = target.read?.sessionId
   const retryFirstRead = useSingleFlight(`${readHost}\u0000${readSession}`, useCallback(
-    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession) : Promise.resolve()),
+    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession).then((r) => rerouteOnRemote(readHost, readSession, r)) : Promise.resolve()),
     [readHost, readSession],
   ))
   const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])

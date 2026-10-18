@@ -11,7 +11,7 @@ vi.mock('./api', () => ({
   getRoadmap: (...a: unknown[]) => getRoadmap(...a),
 }))
 
-import { STALE_DEBOUNCE_MS, startJournalLoader } from './journal-loader'
+import { STALE_DEBOUNCE_MS, rerouteOnRemote, startJournalLoader } from './journal-loader'
 import { handleJournalEvent } from './journal-ws'
 import { parseJournalPage } from './parse'
 import { clearViewMemos } from './view-memory'
@@ -233,6 +233,42 @@ describe('a remote member follows its lead', () => {
     await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS)
     expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h2', 'lead-s'], ['h3', 'new-s']])
     expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3', sessionId: 'new-s' })
+  })
+})
+
+describe('a retry the card makes that answers 409', () => {
+  const remote = { kind: 'remote', leadHostId: 'dm-b', leadSessionId: 'lead-s' }
+  const moved = { kind: 'remote', leadHostId: 'dm-c', leadSessionId: 'new-s' } as const
+
+  it('hands the answer to the loader, which re-routes the active tab to the new lead', async () => {
+    useHostStore.setState({
+      hosts: { ...useHostStore.getState().hosts, h3: host('h3', '10.0.0.3', 'dm-c') },
+      runtime: { ...useHostStore.getState().runtime, h3: verified('10.0.0.3', 'dm-c') },
+    } as never)
+    store().setSupport('h3', true)
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    stop = startJournalLoader()
+    await flush()
+    getJournal.mockClear()
+    getJournal.mockImplementation(async () => okPage('team-2'))
+    rerouteOnRemote('h2', 'lead-s', moved)
+    await flush()
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3', sessionId: 'new-s' })
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h3', 'new-s']])
+  })
+
+  it('ignores an answer that is not a 409, one for a target the active tab does not read, and one with no loader running', async () => {
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    stop = startJournalLoader()
+    await flush()
+    getJournal.mockClear()
+    rerouteOnRemote('h2', 'lead-s', { kind: 'failed' } as never)
+    rerouteOnRemote('h2', 'other', moved)
+    await flush()
+    expect(getJournal).not.toHaveBeenCalled()
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h2', sessionId: 'lead-s' })
+    stop()
+    expect(() => rerouteOnRemote('h2', 'lead-s', moved)).not.toThrow()
   })
 })
 

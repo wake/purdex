@@ -15,6 +15,8 @@ vi.mock('../../lib/journal/api', () => ({
   getRoadmap: vi.fn(),
   setConfirmItem: vi.fn().mockResolvedValue({ kind: 'ok', value: true }),
 }))
+const rerouteOnRemote = vi.fn()
+vi.mock('../../lib/journal/journal-loader', () => ({ rerouteOnRemote: (...a: unknown[]) => rerouteOnRemote(...a) }))
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -334,6 +336,16 @@ describe('the chain of sessions failed (the current page read fine)', () => {
     expect(getJournalSessions).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.queryByTestId('journal-sessions-error')).toBeNull())
     expect(prev().disabled).toBe(false)
+  })
+  it('a retry of the chain that answers 409 hands the answer to the loader (the unit moved: the route follows its new lead)', async () => {
+    seedA({ sessions: null, sessionsFailed: true })
+    mount()
+    rerouteOnRemote.mockClear()
+    const moved = { kind: 'remote', leadHostId: 'dm-c', leadSessionId: 'new-s' }
+    getJournalSessions.mockResolvedValue(moved)
+    click(screen.getByTestId('journal-page-retry'))
+    await waitFor(() => expect(rerouteOnRemote).toHaveBeenCalledWith(HOST, 'SA', moved))
+    expect(screen.getByTestId('journal-sessions-error')).toBeTruthy() // and the chain stays failed until the new lead answers
   })
   it('a chain that was held and then failed to re-read: the error shows and 上一頁 / 下一頁 are both disabled (no walking an out-of-date chain); a good retry brings them back', async () => {
     seedA({ sessionsFailed: true })
