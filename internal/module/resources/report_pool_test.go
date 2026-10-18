@@ -190,12 +190,24 @@ func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
 		r.SampledS = 120
 		return r
 	}
+	unsampled := func(i int) minuteRow { // a row from before the sampled seconds were written
+		r := full(i)
+		r.FullStarts, r.SampledS = 0, 0
+		return r
+	}
+	partial := func(i int) minuteRow { // the sampler ran for 30 s of the minute, all of it full: it says nothing about the rest
+		r := full(i)
+		r.FullStarts, r.FullTicks, r.SampledS, r.FullLongestS = 0, 6, 30, 30
+		return r
+	}
 	for name, old := range map[string][]minuteRow{
 		"a calm minute before":      {full(0), calm(1)},
 		"a gap before":              {full(0)},
 		"one full tick before only": {full(0), brief(1)},
 		"eleven of twelve ticks":    {full(0), almost(1)},
 		"merged with calm ticks":    {full(0), merged(1)},
+		"no sampled seconds":        {full(0), unsampled(1)},
+		"half a minute, all full":   {full(0), partial(1)},
 	} {
 		r := newReportRig(t)
 		for _, row := range old {
