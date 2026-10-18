@@ -42,6 +42,18 @@ func TestSystemSourcesReadThisLinuxHost(t *testing.T) {
 	if len(r.Disk) == 0 || r.Disk[0].FreeGB < 0 {
 		t.Errorf("disk: %+v", r.Disk)
 	}
+	// the process table is read: this very test process is in it, sized in rss
+	if r.Procs == nil || r.Residents == nil {
+		t.Fatalf("procs and residents are lists on Linux now: %v %v", r.Procs, r.Residents)
+	}
+	for _, p := range r.Procs {
+		if p.MemKind != "rss" || p.PID <= 0 || p.Name == "" || p.CPUPct < 0 {
+			t.Errorf("proc: %+v", p)
+		}
+	}
+	if len(r.Procs) == 0 {
+		t.Error("no processes listed")
+	}
 	if r.Owner != nil {
 		t.Error("owner is null on Linux")
 	}

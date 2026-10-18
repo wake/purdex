@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 	"unsafe"
@@ -74,7 +73,6 @@ const (
 	rusageOffSys   = 24 // ri_system_time
 	rusageOffFoot  = 72 // ri_phys_footprint
 	procTableTries = 4
-	sessionRescan  = 30 * time.Second
 )
 
 // NewProcReader loads libSystem's proc_pid_rusage and mach_timebase_info.
@@ -327,13 +325,4 @@ func (r *ProcReader) dropStaleArgs() {
 			delete(r.kinds, k)
 		}
 	}
-}
-
-// DefaultSessionsDir is ~/.claude/sessions.
-func DefaultSessionsDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude", "sessions")
 }

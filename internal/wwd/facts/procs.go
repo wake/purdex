@@ -36,6 +36,9 @@ type ProcRec struct {
 	Name           string
 	CPUPct         float64
 	FootprintBytes uint64
+	// MemKind says what FootprintBytes is: "" is the physical footprint (macOS),
+	// "rss" the resident set (Linux has no footprint).
+	MemKind string
 }
 
 // ProcSnapshot is the whole process table at one moment.
@@ -207,9 +210,13 @@ func BuildProcs(s ProcSnapshot, c ProcContext, nMem, nCPU int) []wire.Proc {
 	c.ensureTable(s)
 	out := []wire.Proc{}
 	for _, p := range SelectTop(s.Procs, nMem, nCPU) {
+		kind := p.MemKind
+		if kind == "" {
+			kind = "footprint"
+		}
 		out = append(out, wire.Proc{
 			PID: p.PID, Name: p.Name, CPUPct: p.CPUPct, MemMB: int(p.FootprintBytes / mib),
-			MemKind: "footprint", Owner: Attribute(p, c),
+			MemKind: kind, Owner: Attribute(p, c),
 		})
 	}
 	return out
