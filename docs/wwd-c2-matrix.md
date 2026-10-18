@@ -29,7 +29,7 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 2. 建一個暫存 repo（`$TMPDIR/wwd-c2.<pid>/repo`，一個 commit，內含 probe 任務，見 §5）。
 3. 案例本身：用 `only_workers` 設定誰的 worker 開著，製造一個故障，等待，唯讀檢查，印 `ok`／`FAIL`。
 4. 每個案例結束都多一項檢查：**air19 從這次執行開始後沒有 claim 任何工作**。
-5. 結尾（也在 ^C、`exit`、SIGTERM 時）：恢復凍結的 wwd（`kill -CONT`）、把停掉的服務重新啟動、把改過的 worker 設定原樣 PUT 回去、刪掉建立的 fault 檔、取消它建的工作、刪除暫存與遠端暫存、刪掉各台的 `/tmp/wwd-c2-ran.log`。
+5. 結尾（也在 ^C、`exit`、SIGTERM 時）：恢復凍結的 wwd（`kill -CONT`）、把停掉的服務重新啟動、把改過的 worker 設定原樣 PUT 回去、刪掉建立的 fault 檔、取消它建的工作、刪除暫存與遠端暫存、刪掉四台的 `/tmp/wwd-c2-ran.log`。
    **會改變主機狀態的四項（解凍、重啟服務、還原 worker 設定、刪 fault 檔）做不到時，會列在結尾並讓結束碼是 1**（`FAIL: the clean-up could not put back: ...`），看到這行就要親自去那台主機看。
    取消工作、刪遠端暫存、刪 probe log 是 best-effort：失敗不會報也不影響結束碼；跑完後可用 §6 的指令順手確認。
 6. 結束碼：有案例 FAIL 或清理失敗是 1，否則 0。SKIP（缺掛鉤）不算失敗。
@@ -54,7 +54,7 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 
 ## 3. 數字（spec §4.2）
 
-租約 60 秒、續約 15 秒；結果上傳重試最久 10 分鐘；infra 失敗後該主機停 claim 5 分鐘；`queue_timeout` 預設 2 小時（probe 任務 `c2-expire` 設 20 秒）。
+租約 60 秒、續約 15 秒；結果上傳重試最久 10 分鐘；infra release 之後，該 host 對**該 repo** 暫停 claim 5 分鐘（不是整台停止，它仍可 claim 其他 repo 的工作）；`queue_timeout` 預設 2 小時（probe 任務 `c2-expire` 設 20 秒）。
 
 **`attempts` 的意思**：wwd.db 裡 `attempts` 是「已計入的失敗次數」（租約過期、infra 釋放算；reclaim 不算）。一次就成功是 0；手上這次 claim 的編號是 `attempts + 1`（`internal/wwd/queue/read.go`）。下表的 attempts 都是這個欄位。
 
@@ -149,17 +149,19 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 
 直接對 origin 的 socket `POST /v1/jobs` 四種不合法提交：未宣告的任務、`--bad-option`、`../../etc/hosts`、`a;touch /tmp/wwd-c2-pwned`。
 
-- 預期：每個都是 state `failed`（`TODO(first-run)`：拒絕的 state／reason 字樣是 4e 定義，現在假設 `failed`）；probe 檔沒有它們的行；`/tmp/wwd-c2-pwned` 不存在；air26 的 `~/.local/share/wwd/work` 目錄數沒變（沒有建工作區）。
+- 預期：每個都是 state `failed`（`TODO(first-run)`：拒絕的 state／reason 字樣是 4e 定義，現在假設 `failed`；腳本只查 state，不查 reason）；probe 檔在 mlab、air26 都沒有它們的行；`/tmp/wwd-c2-pwned` 在 **mlab 與 air26 都**不存在；兩台的 `~/.local/share/wwd/work` 目錄數都沒變（沒有建工作區）。
 
 ### 案例 13：mserv 的 PHP 與沙箱
 
 - 只開 mserv。(a) `c2-php-db`（需要 `db = "per-job"`）：PHP 腳本連上分到的資料庫、建表、寫、讀回，讀到 `round-trip` 才結束碼 0。預期 `succeeded`；結束後 mserv 上 `show databases` 沒有 `wwd_` 開頭的庫。
-  (b) `c2-sandbox`：沙箱內 **沒有** docker socket、不能寫工作區之外、`sudo` 不通、有私有 `/tmp`；預期 `succeeded`。
+  (b) `c2-sandbox`：探針在沙箱內檢查四件事，全部成立才結束碼 0：`/run/docker.sock` 不是 socket（碰不到）、`/home/wake` 底下寫不進去、`sudo -n true` 不通、`/tmp` 可寫；預期 `succeeded`。
+  **注意這個探針是最小版**：它只證明這四件事，**沒有**證明 `/tmp` 是私有的（與宿主分開），「不能寫工作區之外」也只探一個固定路徑。等 4d 的沙箱定案後要把探針收緊（宿主預置 sentinel 對照、多個 workspace 外的位置），在那之前不要把案例 13 當成沙箱隔離的完整證明。
   (c) `systemctl --failed` 沒有 `wwd-` 的 unit（工作的 transient unit 讀完 Result 就 `reset-failed`）。
 
 ### 案例 14：air19 不 claim
 
-- 查 wwd.db：這次執行開始之後 `claim_worker='air19'` 的工作數是 **0**；air19 的 worker 是關的。
+- 查 wwd.db：`claim_worker='air19' and created_at >= <這次執行開始的毫秒>` 的工作數是 **0**；air19 的 worker 是關的。
+  **這個查詢按「工作建立時間」過濾，不是按 claim 時間**：矩陣開始前就排進佇列、之後才被 air19 claim 的工作不會被數到。預設要求佇列是空的（前置檢查），所以正常情況不會發生；用 `--force` 時要自己留意。若 wwd.db 有 claim 時間欄位，第一次執行後應改用它（見 §8）。
 
 ## 5. probe 任務
 
@@ -170,33 +172,49 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 清理在 EXIT／INT／TERM 時會跑，但 `kill -9` 不會。逐台檢查：
 
 ```sh
-# 有沒有被凍結的 wwd（狀態是 T）：
-ssh <host> "ps -eo pid,stat,command | grep '[w]wd/bin/wwd'"
-ssh <host> "kill -CONT <pid>"                     # 只對這個確切 pid
-# 有沒有被停掉的服務：
-ssh <mac> 'launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'
-ssh mserv 'sudo systemctl start wwd.service'
-# worker 開關：看四台 GET /v1/worker，air19 必須是 enabled=false
-curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/worker
-# 殘留：
-ssh air26 'rm -f ~/.local/share/wwd/fault/owner-active /tmp/wwd-c2-ran.log'
-ls -d "${TMPDIR:-/tmp}"/wwd-c2.*                  # 暫存；其中 saved/<host> 是改動前的 worker 設定
+# 1. 有沒有被凍結的 wwd（ps 的狀態欄是 T），四台都看：
+for h in air26 mserv air19; do echo "== $h"; ssh $h "ps -eo pid,stat,command | grep '[w]wd/bin/wwd'"; done
+ps -eo pid,stat,command | grep '[w]wd/bin/wwd'                 # mlab 本機
+ssh <host> "kill -CONT <pid>"                                    # 只對這個確切 pid，沒有 pkill
+
+# 2. 有沒有被停掉的服務：
+launchctl list gs.wake.wwd                                        # mlab；air26／air19 前面加 ssh <host>
+launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist   # 沒在列表上才跑
+ssh mserv 'systemctl is-active wwd.service || sudo systemctl start wwd.service'
+
+# 3. worker 設定：四台各看一次。air19 必須是 enabled=false，其他台要回到矩陣之前的值
+for h in air26 mserv air19; do echo "== $h"; ssh $h 'curl -sS --unix-socket $HOME/.local/share/wwd/wwd.sock http://wwd/v1/worker'; done
+curl -sS --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/worker     # mlab
+
+# 4. 殘留（四台）：fault 檔與 probe log
+for h in air26 mserv air19; do ssh $h 'rm -f $HOME/.local/share/wwd/fault/owner-active /tmp/wwd-c2-ran.log'; done
+rm -f ~/.local/share/wwd/fault/owner-active /tmp/wwd-c2-ran.log
+ssh air26 'rm -rf ${TMPDIR:-/tmp}/wwd-c2.r.*'                   # 案例 8 傳去的暫存 repo
+ls -d "${TMPDIR:-/tmp}"/wwd-c2.*                                 # mlab 的暫存
 ```
 
-`$TMPDIR/wwd-c2.<pid>/saved/<host>` 存著該台改動前的 worker 設定（GET 的原文），要手動還原就 `PUT` 這個檔。
+`$TMPDIR/wwd-c2.<pid>/saved/<host>` 存著該台**改動前**的 worker 設定（`GET /v1/worker` 的原文）。這個目錄只在清理沒跑完（被 SIGKILL）或用了 `--keep` 時才會留下；正常結束就已經刪了。要手動還原某一台：
+
+```sh
+# mlab：
+curl -sS --unix-socket ~/.local/share/wwd/wwd.sock -X PUT -H 'Content-Type: application/json' -d @"$TMPDIR/wwd-c2.<pid>/saved/mlab" http://wwd/v1/worker
+# 其他台（把檔案從 stdin 餵過去，不經命令列）：
+ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'Content-Type: application/json' -d @- http://wwd/v1/worker" < "$TMPDIR/wwd-c2.<pid>/saved/<host>"
+```
 
 ## 7. 需要產品端掛鉤才能注入的情境（建議，交 lead 決定誰做）
 
 目前沒有這些掛鉤，案例 5a、6、7（不用 `--manual`）、8 會被 **SKIP**（不算失敗）。建議的最小掛鉤，**全部預設關**，要在設定檔明確打開（`[fault] enabled = true`），打開時 wwd 啟動與每次觸發都要大聲寫警告 log；只在測試用的主機打開。
 
-| 掛鉤 | 作用 | 給哪個案例 |
-|---|---|---|
-| H0 | `GET /v1/info` 多一個 `fault` 物件，宣告開了哪些掛鉤（`snapshot_delay_s`、`log_upload_fail`、`owner_active_file`、`zone`）。腳本靠它決定 SKIP | 全部 |
-| H1 `fault.log_upload_fail` | origin 拒收 log 上傳（結果上傳不受影響） | 6 |
-| H2 `fault.owner_active_file` | 檔案 `~/.local/share/wwd/fault/owner-active` 存在時，facts 的 `owner` 視為 active | 7 |
-| H3 `fault.zone` | 覆蓋 origin 的 derived zone（讓它是壓力 2） | 8 |
-| H4 `fault.snapshot_delay_s` | worker 取快照前延遲 N 秒，讓 5a 的凍結時機是確定的 | 5a |
-| H5（選配）`heartbeat_delay_s` | heartbeat 延遲，讓案例 3 的真實部分不用凍結整個 wwd | 3 |
+| 掛鉤 | 作用 | 案例 | 開在哪台（腳本查哪台的 `/v1/info`） |
+|---|---|---|---|
+| H0 | `GET /v1/info` 多一個 `fault` 物件，宣告開了哪些掛鉤。腳本靠它決定 SKIP | 5a、6、7、8（有用到掛鉤的案例） | 下面各掛鉤所在的台 |
+| H1 `fault.log_upload_fail` | origin 拒收 log 上傳（結果上傳不受影響） | 6 | mlab（origin） |
+| H2 `fault.owner_active_file` | 檔案 `~/.local/share/wwd/fault/owner-active` 存在時，facts 的 `owner` 視為 active | 7 | air26 |
+| H3 `fault.zone` | 覆蓋 origin 的 derived zone（讓它是壓力 2） | 8 | mlab |
+| H4 `fault.snapshot_delay_s` | worker 取快照前延遲 N 秒，讓 5a 的凍結時機是確定的 | 5a | air26（worker；延遲發生在它） |
+
+案例 3 的真實部分不需要 heartbeat 延遲掛鉤：它用 `kill -STOP` 凍結整個 wwd 達到同樣效果。
 
 不需要掛鉤的情境怎麼辦到：案例 1、3 的精確部分由腳本自己扮演 worker 對 origin 的 TCP 發 claim／heartbeat／result（所以那時所有真 worker 都先關）。
 
@@ -207,8 +225,9 @@ ls -d "${TMPDIR:-/tmp}"/wwd-c2.*                  # 暫存；其中 saved/<host>
 3. `PUT /v1/worker` 收的 body 形狀就是 `GET /v1/worker` 給的。
 4. 缺 log 時 `GET /v1/jobs/{id}/log` 回 404。
 5. 案例 12：被拒絕的遠端 task 最終的 state／reason 字樣（4e 定義）。
-6. 案例 13：per-job 資料庫的環境變數名（暫用 `DB_DATABASE`／`DB_HOST`／`DB_PORT`／`DB_USERNAME`／`DB_PASSWORD`）、mserv 測試 MySQL 的資料庫命名與登入方式。
-7. air26 非互動 shell 的 PATH 找得到 `pdx`（案例 8）。
+6. 案例 14 與每個案例結尾的 air19 檢查：wwd.db 有沒有 claim 時間（或事件版本）欄位，有的話改用它取代 `created_at`。
+7. 案例 13：per-job 資料庫的環境變數名（暫用 `DB_DATABASE`／`DB_HOST`／`DB_PORT`／`DB_USERNAME`／`DB_PASSWORD`）、mserv 測試 MySQL 的資料庫命名與登入方式。
+8. air26 非互動 shell 的 PATH 找得到 `pdx`（案例 8）。
 
 ## 9. 測試
 

@@ -358,7 +358,7 @@ finish() {
     while read -r fn_h fn_id; do sock "$fn_h" POST "/v1/jobs/$fn_id/cancel" >/dev/null 2>&1 || true; done < "$WORK/jobs"
   fi
   for fn_d in $REMOTE_DIRS; do on "${fn_d%%:*}" "rm -rf ${fn_d#*:}" || true; done
-  for fn_h in mlab air26 air19; do on "$fn_h" "rm -f $RAN" || true; done
+  for fn_h in mlab air26 mserv air19; do on "$fn_h" "rm -f $RAN" || true; done
   if [ "$keep" -eq 1 ]; then say "kept $WORK"; else x rm -rf "$WORK"; fi
   say ""
   say "passed:${PASSED:- -}  failed:${FAILED:- -}  skipped:${SKIPPED:- -}"
@@ -458,7 +458,7 @@ case_4() {
 case_5() {
   only_workers air26
   say "-- 5a: the origin stops answering when the worker has claimed (snapshot fetch)"
-  if need_fault mlab snapshot_delay_s; then
+  if need_fault air26 snapshot_delay_s; then
     id=$(submit c2-quick)
     wait_for "$id" .state claimed 60 || true
     svc_freeze mlab; nap 20; svc_thaw mlab
@@ -582,7 +582,7 @@ case_12() {
   cm=$(q mlab "git -C $WORK/repo rev-parse HEAD")
   tree=$(q mlab "git -C $WORK/repo rev-parse HEAD^{tree}")
   base='{"repo":{"name":"c2","root":"'$cm'","remote":""},"snapshot":{"commit":"'$cm'","tree":"'$tree'","base":"'$cm'","rel_cwd":"."},"class":"dev","labels":["os:darwin"],"locks":[],"cacheable":false,"timeout_s":60,"supersede_key":"c2-12","interruptible":false,"queue_timeout_s":120,"adhoc":false,"submitter":{"session":"c2","ref":"_c2c2c2","team":"","host":"mlab"},"git_dir":"'"$WORK"'/repo/.git"'
-  before=$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')
+  before_a=$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l'); before_m=$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')
   for spec in 'undeclared|c2-undeclared|[]' 'bad option|c2-files|["--bad-option"]' 'path escape|c2-files|["../../etc/hosts"]' 'shell metacharacters|c2-files|["a;touch /tmp/wwd-c2-pwned"]'; do
     name=${spec%%|*}; rest=${spec#*|}; task=${rest%%|*}; args=${rest#*|}
     body="$base,\"task\":\"$task\",\"args\":$args}"
@@ -592,8 +592,10 @@ case_12() {
     check "$name: refused (state)" "$(jf "$id" .state)" failed        # TODO(first-run): the state and reason words of a refusal are 4e's; the matrix follows them
     check "$name: nothing ran" "$(ran_count air26 "$id")$(ran_count mlab "$id")" 00
   done
-  check "no marker file was made" "$(q mlab 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
-  check "air26 made no workspace" "$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before"
+  check "no marker file was made on mlab" "$(q mlab 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
+  check "no marker file was made on air26" "$(q air26 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
+  check "air26 made no workspace" "$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_a"
+  check "mlab made no workspace" "$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_m"
 }
 
 case_13() {
