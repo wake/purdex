@@ -48,7 +48,7 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 	return Sources{
 		Procs: procs,
 		Owner: owner,
-		Tools: systemTools(),
+		Tools: systemTools(opt.ToolDirs),
 		Now:   time.Now,
 		CPU: func() (RawCPU, error) {
 			if mach == nil {

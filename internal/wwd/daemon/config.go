@@ -39,6 +39,7 @@ type Config struct {
 	Peers       []PeerConfig `toml:"peers"`
 	Observe     ObserveRule  `toml:"observe"`
 	JobDB       JobDBConfig  `toml:"jobdb"`
+	Tools       ToolsConfig  `toml:"tools"`
 	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
@@ -71,6 +72,28 @@ func (w WorkerConfig) Slots() wire.Slots {
 		s.Light = max(*w.Light, 0)
 	}
 	return s
+}
+
+// ToolsConfig is where this host keeps tools that are not on the default search path. ExtraPath holds absolute or ~/ directories; they
+// go in front of the default tool directories, for the facts' tool probe and for a job's PATH alike. A directory that does not exist
+// is skipped and logged when wwd starts (facts.ResolveExtraDirs), so one config can serve hosts that differ.
+type ToolsConfig struct {
+	ExtraPath []string `toml:"extra_path"`
+}
+
+func (c *Config) validateTools() error {
+	for i, p := range c.Tools.ExtraPath {
+		if p == "" || strings.ContainsRune(p, os.PathListSeparator) {
+			return fmt.Errorf("tools.extra_path: %q is not a single directory", p)
+		}
+		if p != "~" && !strings.HasPrefix(p, "~/") {
+			if !filepath.IsAbs(p) {
+				return fmt.Errorf("tools.extra_path: %q is not absolute (or ~/...)", p)
+			}
+			c.Tools.ExtraPath[i] = filepath.Clean(p)
+		}
+	}
+	return nil
 }
 
 // JobDBConfig is the per-job MySQL database (internal/wwd/jobdb). Off unless Enabled; a host without it rejects a task that asks
@@ -257,6 +280,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateJobDB(home); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateTools(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {

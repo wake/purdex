@@ -10,7 +10,6 @@ export const wirePage = (over: Record<string, unknown> = {}): Record<string, unk
   project: { name: 'purdex', remote_url: 'https://github.com/wake/purdex' },
   person_name: 'Wake',
   entries: [wireEntry('wb:1:1', { at: T0 }), wireEntry('wb:2:1', { at: T0 + 1000 })],
-  pinned: [],
   more: false,
   open_confirms: 0,
   ...over,

@@ -32,14 +32,14 @@ describe('parseEntry', () => {
 
 describe('parseJournalPage', () => {
   it('reads the envelope', () => {
-    const p = parseJournalPage(wirePage({ open_confirms: 2, more: true, pinned: [wireConfirm('wb:3:1')] }))
+    const p = parseJournalPage(wirePage({ open_confirms: 2, more: true }))
     expect(p).toMatchObject({ unit: { kind: 'team', id: 'tm1' }, project: { remoteUrl: 'https://github.com/wake/purdex' }, personName: 'Wake', more: true, openConfirms: 2 })
     expect(p?.entries).toHaveLength(2)
-    expect(p?.pinned).toHaveLength(1)
-    expect(p?.confirms).toBeNull() // an older daemon sends none
+    expect(p?.confirms).toBeNull() // none sent: no band
   })
-  it('reads confirms[] when sent, and ignores a per-entry pinned flag', () => {
+  it('reads confirms[] when sent, ignores a per-entry pinned flag and a top-level pinned[]', () => {
     const p = parseJournalPage(wirePage({ confirms: [wireConfirm('wb:4:1')], pinned: [wireConfirm('wb:4:1')] }))
+    expect(p).not.toHaveProperty('pinned')
     expect(p?.confirms).toHaveLength(1)
     expect(p?.confirms?.[0]).not.toHaveProperty('pinned')
   })

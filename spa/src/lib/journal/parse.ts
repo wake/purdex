@@ -90,14 +90,13 @@ export function parseJournalPage(v: unknown): JournalPage | null {
   if (v.person_name !== undefined && v.person_name !== null && !isStr(v.person_name)) return null
   if (typeof v.more !== 'boolean' || !isCount(v.open_confirms)) return null
   const entries = parseEntryList(v.entries)
-  const pinned = parseEntryList(v.pinned === undefined ? [] : v.pinned)
   const confirms = v.confirms === undefined || v.confirms === null ? null : parseEntryList(v.confirms)
-  if (!entries || !pinned || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
+  if (!entries || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
   // `page` and `truncated` are omitempty: ABSENT is '' / false, never an error and never a hint about the daemon's age; present with the wrong type is malformed.
   if (v.page !== undefined && !isStr(v.page)) return null
   if (v.truncated !== undefined && typeof v.truncated !== 'boolean') return null
   return {
-    unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, pinned, more: v.more, openConfirms: v.open_confirms,
+    unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, more: v.more, openConfirms: v.open_confirms,
     page: (v.page as string | undefined) ?? '', truncated: (v.truncated as boolean | undefined) ?? false,
   }
 }

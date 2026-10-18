@@ -12,6 +12,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
+# the probe log of the script under test is in the fake hosts' homes, never in /tmp: a matrix that is running on this machine keeps its own
+# file there. The literal $HOME is expanded by the shell of the host the probe runs on.
+C2_RAN_LOG='$HOME/wwd-c2-ran.log'; export C2_RAN_LOG
+
 # ---- the fake world -----------------------------------------------------------------------------------------------------
 bin="$tmp/bin"; home="$tmp/home"; stub="$tmp/stub"
 mkdir -p "$bin" "$home/.config/wwd" "$stub"
@@ -53,6 +57,10 @@ if [ "$tcp" -eq 1 ]; then
   printf '%s\n' "$method $path $body" >> "$STUB/tcp.log"
   [ "$auth" = "Bearer $(cat "$HOME/.config/wwd/pool.token")" ] || { code=401; resp='{"error":"unauthorized"}'; }
   if [ "$code" = 200 ] && [ "$method $path" = "POST /v1/jobs" ]; then code=404; fi
+  # a claim: the first of the claims on one job wins (mkdir is atomic), the others get 409, as wwd's compare-and-set does
+  if [ "$code" = 200 ]; then case "$method $path" in "POST /v1/jobs/"*"/claim")
+    cid=${path#/v1/jobs/}; cid=${cid%/claim}
+    mkdir "$STUB/claimed-$cid" 2>/dev/null || { code=409; resp='{"error":"claimed"}'; } ;; esac; fi
 else
   case "$method $path" in
     "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}${STUB_ZONE:+',"fault":{"zone":true}'}'}' ;;
@@ -65,9 +73,13 @@ else
         w="$wsh/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 &
       fi ;;
     "GET /v1/jobs/"*"/log") : > "$STUB/log-asked"; code=404; resp='no log' ;;      # a mlab with fault.log_upload_fail on has no log of a remote job
+    "GET /v1/facts") if [ -n "${STUB_OWNER_ACTIVE:-}" ]; then resp='{"owner":{"active":true,"reason":"hid","idle_s":3}}'; else resp='{"owner":{"active":false,"reason":"idle"}}'; fi ;;
     "GET /v1/jobs/"*)
+      # STUB_STATES="running queued ...": each look at a job gives the next word (the last one stays), for a case that goes through states
+      if [ -n "${STUB_STATES:-}" ]; then echo x >> "$STUB/states.log"; sn=$(wc -l < "$STUB/states.log" | tr -d ' '); STUB_STATE=$(echo $STUB_STATES | awk -v n="$sn" '{print (n > NF ? $NF : $n)}'); fi
       # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
       n=0; [ ! -f "$STUB/post.log" ] || n=$(wc -l < "$STUB/post.log" | tr -d ' '); if [ "$n" -le 1 ]; then word=task_unknown; else word=args_invalid; fi; word=${STUB_REFUSAL:-$word}
+      if [ -d "$STUB/claimed-${path#/v1/jobs/}" ]; then STUB_STATE=claimed; fi      # a job somebody claimed over TCP is claimed
       resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\",\"started_at\":\"$started\",\"summary\":{\"tail\":[\"$word: detail of the refusal\"]}}}" ;;
     "POST /v1/jobs/"*"/cancel") echo "$path" >> "$STUB/cancel.log" ;;
   esac
@@ -82,7 +94,13 @@ cat > "$bin/pdx" <<'EOF'
 # pdx test --detach --json TASK -> {"id":...}; pdx test c2-expire (foreground) -> exit 6
 [ "$1" = test ] || exit 2
 shift
-if [ "$1" = --detach ]; then shift 2; echo "{\"id\":\"j_stub_$1\"}"; exit 0; fi
+[ -z "${STUB:-}" ] || echo "$0 test $*" >> "$STUB/pdx.log"                       # which pdx was run, and with what
+if [ "$1" = --detach ]; then
+  shift 2
+  # STUB_RAN_ON_SUBMIT: the job's command runs at once, on the host this pdx runs on, and leaves its line in the probe log
+  [ -z "${STUB_RAN_ON_SUBMIT:-}" ] || echo "job=j_stub_$1 host=x start=0" >> "$HOME/wwd-c2-ran.log"
+  echo "{\"id\":\"j_stub_$1\"}"; exit 0
+fi
 [ "$1" = c2-expire ] && exit 6
 exit 0
 EOF
@@ -99,10 +117,10 @@ cat > "$bin/sqlite3" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB/sql.log"
 case "$*" in
-  *"select attempts"*) echo 1 ;;
+  *"select attempts"*) echo "${STUB_ATTEMPTS:-1}" ;;
   *"claim_worker='air19'"*)   # the first question is the list at the start (empty); later ones give a new id when STUB_AIR19_LATER is set
-    [ -e "$STUB/air19-asked" ] || { [ ! -e /tmp/wwd-c2-ran.log ] || : > "$STUB/order-bad"; }   # the probe log must be emptied before the list is taken
-    if [ -e "$STUB/air19-asked" ]; then [ -z "${STUB_AIR19_LATER:-}" ] || echo "$STUB_AIR19_LATER"; [ -z "${STUB_AIR19_PROBE:-}" ] || echo "job=x host=air19" >> /tmp/wwd-c2-ran.log; else : > "$STUB/air19-asked"; fi ;;
+    [ -e "$STUB/air19-asked" ] || { [ ! -e "$HOME/wwd-c2-ran.log" ] || : > "$STUB/order-bad"; }   # the probe log must be emptied before the list is taken
+    if [ -e "$STUB/air19-asked" ]; then [ -z "${STUB_AIR19_LATER:-}" ] || echo "$STUB_AIR19_LATER"; [ -z "${STUB_AIR19_PROBE:-}" ] || echo "job=x host=air19" >> "$HOME/wwd-c2-ran.log"; else : > "$STUB/air19-asked"; fi ;;
   *"select id"*) echo j_stub_exp ;;
   *) echo 0 ;;
 esac
@@ -193,7 +211,19 @@ mkdir -p "$tmp/nopdx"; for c in ssh curl sqlite3 launchctl mysql; do cp "$bin/$c
 rc=0
 HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "case 8 without pdx on air26 must stop"
-has "FAIL: pdx is not on air26's non-interactive PATH" "precheck pdx"
+has "FAIL: pdx is not on air26's non-interactive PATH, nor in ~/.local/bin/pdx, nor in ~/.config/pdx/bin/pdx" "precheck pdx (the message names the three places)"
+# pdx on air26 that is in neither of the PATH's places is found where it is installed; ~/.local/bin wins over ~/.config/pdx/bin
+for p in .config/pdx/bin .local/bin; do mkdir -p "$home/$p"; cp "$bin/pdx" "$home/$p/pdx"; done
+rm -f "$home/.local/bin/pdx"
+rm -f "$stub"/*.log
+HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_ZONE=1 STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || true
+has "pdx on air26: $home/.config/pdx/bin/pdx" "pdx only in ~/.config/pdx/bin"
+grep -q "^$home/.config/pdx/bin/pdx test --detach" "$stub/pdx.log" || fail "case 8 must submit with the pdx it found: $(cat "$stub/pdx.log" 2>/dev/null)"
+cp "$bin/pdx" "$home/.local/bin/pdx"
+rm -f "$stub"/*.log
+HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_ZONE=1 STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || true
+has "pdx on air26: $home/.local/bin/pdx" "pdx in both places"
+rm -rf "$home/.local" "$home/.config/pdx"
 HOME="$home" PATH="$tmp/nopdx:/usr/bin:/bin" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 does not need pdx on air26"; }
 
 run expired 10 || { cat "$tmp/out" >&2; fail "case 10: exit code"; }
@@ -266,13 +296,56 @@ printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$tmp/wwd/bin/wwd"; chmod +x "
 "$tmp/wwd/bin/wwd" & fake2=$!
 rm -f "$stub"/*.log
 rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATES="running queued queued running queued" C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
 kill -CONT "$fake2" 2>/dev/null || true; kill -KILL "$fake2" 2>/dev/null || true
 [ "$(grep -c "^air26: kill -STOP $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 freezes air26's wwd twice (an exact pid)"; }
 [ "$(grep -c "^air26: kill -CONT $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 thaws air26's wwd twice"; }
 if [ -s "$stub/launchctl.log" ] && grep -qv '^list' "$stub/launchctl.log"; then fail "case 2 must not stop or start a service: $(cat "$stub/launchctl.log")"; fi
 has "ok   attempts after the lapse" "case 2"
 has "FAIL state after two lapses: got 'queued', expected 'failed'" "case 2 (the stub's job never fails: the check is made)"
+
+# a job that is never running: the precondition FAILs, nothing is frozen, and no later check passes on it
+# (a live wwd of its own: with the one above gone, a freeze would be refused for another reason and this test would prove nothing)
+"$tmp/wwd/bin/wwd" & fakeq=$!
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fakeq" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+kill -CONT "$fakeq" 2>/dev/null || true; kill -KILL "$fakeq" 2>/dev/null || true
+[ "$rc" -ne 0 ] || fail "a job that never ran must make case 2 exit non-zero"
+has "FAIL precondition not reached: j_stub_c2-sleep .state == running" "case 2 without a running job"
+has "air26 facts.owner:" "the precondition failure says what air26's owner is"
+hasnt "ok   attempts after the lapse" "case 2 without a running job"
+hasnt "ok   lease lapsed" "case 2 without a running job"
+! grep -q "kill -STOP" "$stub/ssh.log" || fail "a job that never ran must not make the script freeze anything"
+
+# air26's owner is using the machine for the whole wait: the cases that need its worker are skipped with the reason, not FAILed
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "a skipped case is not a failure"; }
+has "waiting for air26's owner to be idle" "owner active"
+has "SKIP case 2: air26's owner stayed active" "owner active"
+[ ! -e "$stub/pdx.log" ] || fail "a skipped case must not submit a job: $(cat "$stub/pdx.log")"
+# an air26 whose owner_rule is empty: the precheck says the rule has to be put back by hand; with one, it says nothing
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_WORKER_JSON='{"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""}' STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 with an empty owner_rule"; }
+has "WARN: air26's owner_rule is empty" "precheck with an empty owner_rule"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14"; }
+hasnt "WARN: air26's owner_rule" "precheck with an owner_rule"
+# case 8 has air26 as an origin only (its worker is off): the owner does not matter, so it neither waits nor skips
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_ZONE=1 STUB_STATE=succeeded STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8 must run with air26's owner active"; }
+hasnt "waiting for air26's owner" "case 8"
+has "PASS case 8" "case 8 with air26's owner active"
+# a C2_RAN_LOG that would break the shell text is refused before anything is done
+for bad in '/tmp/a b' "/tmp/a'b" '/tmp/a&b' '/tmp/a|b'; do
+  rc=0
+  C2_RAN_LOG="$bad" HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "C2_RAN_LOG '$bad' must be refused with exit 2, got $rc"
+done
+# case 11 sends tokens only: it does not wait for the owner
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 11 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 11 must not wait for the owner"; }
+hasnt "waiting for air26's owner" "case 11"
 
 # the pid of a service must be a number above 1 and the wwd binary: 0 would signal a group
 for badpid in 0 1 "" abc 99999999; do
@@ -294,7 +367,16 @@ done
 
 # the fake workers claim with the labels of a real worker (the job's labels must be a subset), also in the exact part of case 1
 rm -f "$stub"/*.log
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 1 > "$tmp/out" 2>&1 || true
+rm -rf "$stub"/claimed-*
+# the job ran once (on mlab; air26 has a home of its own with no log), nothing was a lapse (attempts 0), and the race is exact
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_SPLIT_HOME=1 STUB_RAN_ON_SUBMIT=1 STUB_ATTEMPTS=0 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --keep --case 1 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 1: exit code"; }
+has "PASS case 1" "case 1"
+has "ok   one claim wins and one gets 409" "case 1"
+rm -f "$home/wwd-c2-ran.log"
+# the probe task of the scratch repo writes to the path C2_RAN_LOG gave, not to a fixed one
+probe=$(ls "$tmp"/wwd-c2.*/repo/scripts/probe.sh | head -1)
+grep -q '>> \$HOME/wwd-c2-ran.log ' "$probe" || fail "probe.sh must log to C2_RAN_LOG: $(grep '>>' "$probe")"
+rm -rf "$tmp"/wwd-c2.*
 [ "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" -ge 2 ] || fail "case 1 must send claims over TCP: $(cat "$stub/tcp.log" 2>/dev/null)"
 [ "$(grep ' /v1/jobs/.*/claim ' "$stub/tcp.log" | grep -c '"labels":\["os:darwin","arch:arm64"\]')" -eq "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" ] || fail "every claim must carry the worker labels: $(cat "$stub/tcp.log")"
 
@@ -371,7 +453,7 @@ has "FAIL air19 claimed nothing since this run began: got '1', expected '0'" "ca
 
 # the probe log of air19 is emptied BEFORE the list of its claims is taken (a probe line written in between would be lost)
 rm -f "$stub"/*.log "$stub/air19-asked" "$stub/order-bad"
-echo "job=old host=air19" > /tmp/wwd-c2-ran.log
+echo "job=old host=air19" > "$home/wwd-c2-ran.log"
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 on a quiet pool"; }
 [ ! -e "$stub/order-bad" ] || fail "the list of air19's claims was taken before its probe log was emptied"
 

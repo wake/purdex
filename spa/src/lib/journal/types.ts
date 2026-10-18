@@ -51,10 +51,8 @@ export interface JournalPage {
   personName: string
   /** Oldest first (the daemon sorts by (at, id); the store sorts again). */
   entries: JournalEntry[]
-  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none (it predates journal.confirm.v1). */
+  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none, which reads as no open 待確認. */
   confirms: JournalEntry[] | null
-  /** Newest first. The pre-confirm.v1 band: the band's source ONLY when the host does not declare journal.confirm.v1; otherwise ignored. */
-  pinned: JournalEntry[]
   /** There are older months before the oldest entry of this page. */
   more: boolean
   openConfirms: number

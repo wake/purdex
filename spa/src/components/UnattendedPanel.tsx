@@ -236,7 +236,9 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   const readOf = (h: string) => (pages[h].failed === undefined ? reads[h] : undefined)
   const quotaHosts: QuotaHostData[] = answered.filter((h) => supportOf[h]?.quotaSupport === 'yes')
     .flatMap((hostId): QuotaHostData[] => {
-      const r = readOf(hostId)
+      // A host whose page read failed (or timed out) keeps its place in the quota part: its own last read, else 「讀不到額度」,
+      // never a silent gap (#2891).
+      const r = readOf(hostId) ?? (pages[hostId].failed !== undefined ? reads[hostId] ?? { ok: false as const, code: pages[hostId].failed! } : undefined)
       if (r === undefined) return []
       return !r.ok || r.quotasFailed ? [{ hostId, failed: true }] : r.quotas !== undefined ? [{ hostId, rows: r.quotas }] : []
     })
