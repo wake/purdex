@@ -6,8 +6,18 @@
 > https://pages.mlab.host/wake/purdex-b-line/#d-names-team. The avatar layout mock-ups are at `avatar-layouts.html` and the
 > 32 sample characters at `personas.html` on the same site. Code facts are from main `7af59cc75`.
 >
-> 1f reviews §5 (team-module changes), §6.4 (lead names) and §8 (unattended log) before codex. Items marked **[待確認]**
-> are user-visible defaults that 88 chose while the user was away. They are listed again in §12.
+> 1f reviewed §5, §6.3–6.4 and §8 on 2026-10-19. Its eight points are folded in:
+> - the two-DB order of a lead rename (§5.3);
+> - the event table's DB and transaction (§8);
+> - the time of a timeout (§8);
+> - alias retention (§6.3);
+> - the relay skip and the rename notice (§6.4);
+> - ambiguous `/team` names (§5.3);
+> - reservations being local (§5.2);
+> - migrations and backups (plan §3).
+>
+> Items marked **[待確認]** are user-visible defaults that 88 chose while the user was away. They are listed again in
+> §12.
 
 ## 1. Problem
 
@@ -169,6 +179,10 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
   stores it on its own `spawn_ops` row. An older member host ignores the field and names the session by its own rules.
 - **Held names include live reservations:** ops not yet `registered`, not failed, and younger than 10 minutes. Two
   concurrent spawns never get the same name.
+- **A reservation is local to the daemon that holds it.** Other hosts do not see it. A cross-host clash is settled by
+  v1's "newcomer yields" rule, which applies the same way when a spawn outlives its 10 minutes (a slow remote spawn, a
+  spawn queued behind memory pressure). That degradation is accepted.
+- So the `→ Freya` that `pdx spawn` prints is the **reserved** name, not a guarantee. The text says 「預訂」.
 - **Naming the session:** on the first naming pass of a session born from a spawn op, the reserved name wins over a
   random pick. The link is the op id in the pane tag `@pdx_spawn_op` (`spawn_tmux.go:23,52`). The plan picks how
   `resolveNames` gets it (today's `nameCandidate` has no pane data, `internal/module/peers/vnames.go:49-53`).
@@ -177,15 +191,28 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 ### 5.3 Lead name at approval (U3, L8)
 
 - `Grant` gets `lead_name` (a code, optional). On approve, the daemon renames the lead session to `<base>-<code>`,
-  records the alias (§6.3) and writes a lead-history row. The rename and the team row go in one step: a rename failure
-  (the name was taken meanwhile) **refuses the approval** with `name_taken` and the dialog reopens with the list
-  refreshed.
+  records the alias (§6.3) and writes a lead-history row.
+- **Order.** The names are in the meta DB (`internal/store`, `cmd/pdx/main.go:298`) and the team row is in the team
+  DB (`internal/module/team/store.go:180`). These are two SQLite files, so there is no single transaction.
+  1. **Rename first**, a CAS in the meta DB (the rename and its alias row in one meta transaction). This is the only
+     step that can fail with `name_taken`. Then **the approval is refused for now**: it stays open, and the dialog
+     reopens with the list refreshed.
+  2. **Then the team row** (`CloseLeadApproved`).
+  3. If the team row fails, the daemon **renames back** by CAS and deletes the alias it just added.
+  4. The lead-history row is written **only after the team row succeeds**. Its failure is only logged.
+  - **A crash between steps 1 and 2** leaves the lead renamed, with no team and the approval still open. This is
+    harmless: on a retry, 「保留目前的名字」 is the new name.
+- The renamed lead gets a notice with its new address (§6.4).
 - Absent `lead_name` means the session keeps its name. It still gets a lead-history row when its name is a persona code.
 - `LeadPayload` gets `lead_names`: the candidate list at request time (§6.2 rule 1), so the dialog needs no extra
   call. The dialog refreshes it when it opens.
 - **The `/team` command** (`cmd/pdx/plugin/purdex/hooks/member.js:78` `parseTeamArgs`, `register.js:990` `teamCommand`):
   - The first word matches an active persona → it is `lead_name`, bound into the person token request, so the agent
     cannot drop it, and the rest is the note. The lead is created at once, as today.
+  - Matching is case-insensitive. The word is compared with each active persona's **code** and with the **first word
+    of its display name** (a display name with spaces can only match by its first word).
+  - **More than one persona matches** (display names may repeat) → this counts as **no match**: the card appears, and
+    the daemon never picks one.
   - No match → the request is created as a **normal lead approval with a card**, so the user picks the name. The
     person token is still used, so the decider is `person`.
 - Unattended mode refuses lead requests, as today (`UnattendedRefusable`, `wire_unattended.go:49`), so no lead is ever
@@ -207,7 +234,9 @@ CREATE TABLE IF NOT EXISTS name_pairs (lead_code TEXT NOT NULL, member_code TEXT
   last_at INTEGER NOT NULL, PRIMARY KEY (lead_code, member_code));
 ```
 
-- Written only through the name service: on lead approval (§5.3), and on member spawn acceptance and adopt (§5.2, §5.4).
+- Written only through the name service:
+  - on lead approval, after the team row succeeds (§5.3; a failure is only logged);
+  - on member spawn acceptance and on adopt (§5.2, §5.4).
 - A relay writes nothing: the successor inherits the name.
 - **Familiar** = every `name_leads.code` ∪ every `name_pairs.member_code`. Each daemon publishes its familiar set in
   the envelope (§4.3), capped at 64 codes, most recent first, and unions the other hosts' sets.
@@ -237,6 +266,8 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - Tier 1 always wins: when a live session holds the name, the alias is never consulted.
   - When a name is assigned anew, its alias row is deleted.
 - The bracket check (`name_mismatch`) accepts a name that is the session's current name or one of its aliases.
+- **Retention.** An alias is deleted once its session's lineage has had no live successor for 30 days. The table also
+  keeps at most 512 rows, and the oldest by `created_at` go first.
 
 ### 6.4 Old conversations (U5)
 
@@ -247,6 +278,13 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - a live member → rule 2 with its lead;
   - otherwise → rule 3.
 - The old name becomes an alias (§6.3). The row's source becomes `pool`.
+- **A session in a relay is skipped.** When `relays_active` includes it, it is not renamed until a later pass, after
+  the relay ends.
+- **The renamed session is told.** It gets a system notice, through the same channel as the `[pdx team]` notices, for
+  example 「你的地址改成 mlab/purdex-1f-wei，舊地址仍可用」. Agents write their own address into briefs and reports, so
+  without the notice they would keep using the old one. The same notice follows a lead rename at approval (§5.3).
+- The first save of personas renames every live conversation in one pass. This is expected; the relay skip and the
+  notices above apply to each one.
 - **[待確認]** This renames long-lived conversations, including 1f's and 88's own addresses. Their old addresses keep
   working.
 - The project `CLAUDE.md` sentence "已經有名字的舊對話維持原名" changes to this rule.
@@ -271,17 +309,29 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
 
 ## 8. Unattended v2 (U16; 1f reviews)
 
-- **Decision log:** the latest 30 decisions of the kinds in L11, newest first, by `decided_at`, whoever decided:
-  - unattended;
-  - the user approving;
-  - the user refusing;
-  - a deadline expiring, shown as 「逾時」.
+- **Decision log:** the latest 30 closed approvals of the kinds in L11, newest first, whoever decided. The states
+  are:
+  - `approved`, by unattended or by the user;
+  - `denied`, by the user, or by unattended refusing a lead or an adopt;
+  - `timeout`, shown as 「逾時」.
+  - `cancelled` (the requester withdrew) and `abandoned` (lease ran out, origin gone) are not decisions and are left
+    out.
+- **The time of an entry:**
+  - for `timeout`, the approval's `deadline_at`;
+  - for every other state, its `decided_at`.
+  - A timeout is recorded by the team sweeper (`internal/module/team/sweeper.go:206`, `CloseIfExpired` with
+    `StateTimeout`). It writes `decided_at` as the sweep time, which can be much later than the deadline after a daemon
+    restart. That is why the deadline is the timeout's time.
 - **On/off events:** a new table `unattended_events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, on INTEGER NOT NULL,
   by_json TEXT NOT NULL)`.
+  - It lives in the **hostconfig DB** (`host_config.db`, `internal/module/hostconfig/store.go:44`), the same file that
+    holds `KeyUnattended`.
   - It is written **in the same transaction** as `SetUnattended`'s CAS (`internal/module/hostconfig/unattended.go:112`),
-    so the state and its record cannot differ.
+    so the state and its record cannot differ. To make this possible, the store's `Put` gains an in-transaction
+    callback.
   - It keeps the newest 100 rows.
   - It is created by migration; no backfill (history before this version is not known).
+  - `GET /api/team/unattended` merges these rows with the team DB's decisions **when it reads**.
 - **Wire:** `GET /api/team/unattended` gets `log: [{at, type: "decision"|"toggle", ...}]`, the 30 newest of both kinds
   merged. Capability `team.decision_log.v1`. The current `approved` page stays for older Apps.
 - The App's panel shows the log in place of the auto-approved list. The cap column and the folders leave the panel for
@@ -418,7 +468,11 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 - **NP-4**
   - Two concurrent spawns never share a reserved name (M: no reservation in held).
   - A session born from the op takes the reserved name (M: ignore the tag → random).
-  - An approval whose name was taken meanwhile is refused with `name_taken` and leaves no team row.
+  - An approval whose name was taken meanwhile is refused with `name_taken`, leaves no team row, and the approval
+    stays open.
+  - A team-row failure after the rename renames back and removes the alias (M: skip the undo → renamed without a team).
+  - `ensureColumn` for `spawn_ops.pool_name` runs twice without error.
+  - Two personas sharing a display name's first word → `/team <that word>` gives the card (M: take the first match).
   - Cap 9 accepted and 10 refused; the CLI message says 1–9.
 - **NP-5**: a root in two groups is refused; a relayed session stays in its group.
 - **NP-6**
