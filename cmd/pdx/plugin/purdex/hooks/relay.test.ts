@@ -1505,7 +1505,10 @@ test('a report that keeps failing with 20 is re-sent 20 times, then dropped and 
   expect(f.logs.some((l) => l.includes('20 re-sends') && l.includes('relay report op-1 written'))).toBe(true)
 })
 
-test('the report queue holds 50: a 51st report pushes out the oldest (logged), which is never re-sent', async ($, on) => {
+// The 51 rounds are the point (the queue holds 50, so a 51st is the first to push one out) and they run on a mocked clock: there is no real
+// wait to remove. Each round is a few engine turns, about 3 s of CPU on an idle host, 5 s and over on a loaded one (#3353: 5070, 5101 and
+// 5093 ms against the default 5 s), so the test gets the 15 s the long tests of ask.test.ts use.
+test('the report queue holds 50: a 51st report pushes out the oldest (logged), which is never re-sent', { timeoutMs: 15000 }, async ($, on) => {
   const f = relayWorld(on, { usage: AT72 })
   const g = gated()
   let n = 0
