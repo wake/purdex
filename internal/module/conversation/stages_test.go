@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -475,3 +476,21 @@ func TestStages_ATrimmedUsedItemIsNeverMatchedAgain(t *testing.T) {
 }
 
 func (i stageItem) at() time.Time { return time.UnixMilli(i.At) }
+
+// A trim that cuts inside one millisecond must not shut out the unused items of that millisecond (codex re-review on #3409).
+func TestStages_TrimInsideOneMillisecondKeepsTheFloorBelowIt(t *testing.T) {
+	s := &sessionStages{used: map[string]int64{}}
+	for i := 0; i < maxStageUsed+2; i++ {
+		s.used[fmt.Sprintf("a%d", i)] = 100 // one busy millisecond
+	}
+	s.used["old"] = 50
+	s.trimUsed()
+	assert.Less(t, s.usedFloor, int64(100), "items of that millisecond that were never used must stay matchable")
+
+	s2 := &sessionStages{used: map[string]int64{}}
+	for i := 0; i < maxStageUsed+2; i++ {
+		s2.used[fmt.Sprintf("b%d", i)] = int64(i + 1)
+	}
+	s2.trimUsed()
+	assert.Equal(t, int64(2), s2.usedFloor, "a cut between milliseconds raises the floor to the last trimmed one")
+}

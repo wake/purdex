@@ -428,8 +428,15 @@ func (s *sessionStages) trimUsed() {
 	sort.Slice(all, func(i, j int) bool { return all[i].at < all[j].at })
 	for _, u := range all[:over] {
 		delete(s.used, u.id)
-		s.usedFloor = max(s.usedFloor, u.at) // so a trimmed item can never be matched a second time
 	}
+	// Nothing at or before the floor is matched again, so a trimmed item cannot be given out twice. When the cut falls inside
+	// one millisecond the floor stays below it, so items of that millisecond that were never used still can be (more than
+	// maxStageUsed matches inside one millisecond is not a real traffic shape).
+	cut := all[over-1].at
+	if over < len(all) && all[over].at == cut {
+		cut--
+	}
+	s.usedFloor = max(s.usedFloor, cut)
 }
 
 // readIdleLocked pairs ids that never queued with the items that are their messages: same text, the item inside the window
