@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 type procInfo struct {
@@ -30,6 +32,10 @@ var knownShims = map[string]bool{
 var readResolverProcessInfo = readProcessInfo
 var readResolverProcessStartTime = readProcessStartTime
 var getParentPID = os.Getppid
+
+// quickProcessInfo is the parent and argument fields of a pid read by sysctl (darwin, no fork). It errors wherever ps has to decide
+// (another platform, an argument area ps escapes, an unreadable one), and readProcessInfo then asks ps as it always did.
+var quickProcessInfo = agent.ProcessPPIDArgs
 
 func resolveAgentPID(startPpid int) (pid int, uncertain bool) {
 	current := startPpid
@@ -61,6 +67,9 @@ func resolveHookProvenance() hookProvenance {
 }
 
 func readProcessInfo(pid int) (procInfo, error) {
+	if ppid, argv, err := quickProcessInfo(pid); err == nil && len(argv) > 0 {
+		return procInfo{PID: pid, PPID: ppid, ExePath: argv[0], Argv: argv}, nil
+	}
 	out, err := outputCounted(exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args="))
 	if err != nil {
 		return procInfo{}, err
