@@ -305,6 +305,23 @@ func TestADeliveryIsGivenUpAfterTenMinutes(t *testing.T) {
 	assert.Contains(t, h.logs[len(h.logs)-1], "given up")
 }
 
+// Every failed try is logged with its error, not only the last one: the origin answering 500 to every log upload was silent for as
+// long as it lasted.
+func TestEveryFailedTryIsLoggedWithItsError(t *testing.T) {
+	h := newHarness(t, Config{Backoff: time.Second, MaxBackoff: 30 * time.Second})
+	h.s.always = errors.New("HTTP 500 from the origin")
+	h.fin(context.Background(), ended(runner.KindCancelled, run.Result{}))
+	tries := 0
+	for _, l := range h.logs {
+		if strings.Contains(l, "failed, trying again") {
+			tries++
+			assert.Contains(t, l, "HTTP 500 from the origin")
+			assert.Contains(t, l, "result")
+		}
+	}
+	assert.Greater(t, tries, 3, "logs: %v", h.logs)
+}
+
 func TestACancelledContextStopsTheDelivery(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.s.always = errors.New("down")

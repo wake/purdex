@@ -365,6 +365,9 @@ func (r *Reporter) retryFor(ctx context.Context, e runner.Ended, what string, bo
 			r.cfg.Logf("report: %s of %s given up after %s: %v", what, e.Job.ID, bound, err)
 			return abandoned
 		}
+		// every failed try says why: a delivery that keeps failing for ten minutes must not be silent until it gives up (the log upload
+		// that met a 500 on every try, for a missing directory, showed nothing)
+		r.cfg.Logf("report: %s of %s failed, trying again in %s: %v", what, e.Job.ID, pause, err)
 		if werr := r.cfg.Wait(ctx, pause); werr != nil {
 			r.cfg.Logf("report: %s of %s not delivered: %v", what, e.Job.ID, werr)
 			return abandoned

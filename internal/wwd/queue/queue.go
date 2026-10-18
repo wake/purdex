@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -107,6 +108,16 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	}
 	if q.leaseS < 0 || q.renewS < 0 || q.renewS >= q.leaseS {
 		return nil, fmt.Errorf("queue: Options.RenewS (%d) must be positive and shorter than LeaseS (%d)", q.renewS, q.leaseS)
+	}
+	if o.LogDir != "" {
+		// the log operations write into it; nothing else makes it, and an upload into a directory that is not there is a 500
+		if err := os.MkdirAll(o.LogDir, 0o700); err != nil {
+			return nil, fmt.Errorf("queue: Options.LogDir: %w", err)
+		}
+		// logs are written and removed by name inside it: a link standing in for the directory would send them elsewhere
+		if fi, err := os.Lstat(o.LogDir); err != nil || !fi.IsDir() {
+			return nil, fmt.Errorf("queue: Options.LogDir %s is not a directory of its own (a link, or not a directory): %v", o.LogDir, err)
+		}
 	}
 	if err := db.QueryRowContext(context.Background(), `SELECT id FROM db_epoch`).Scan(&q.epoch); err != nil {
 		return nil, fmt.Errorf("queue: the database has no epoch (is it migrated?): %w", err)

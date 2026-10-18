@@ -120,14 +120,11 @@ func run(cfgPath string) error {
 	var fastLane *localruns.Service
 	// what each job that ran here used, from the samples and the job's final event (spec 8.5); recording only
 	usage := daemon.NewUsageRecorder(alias, facts.NewJobUsageTracker(time.Now(), daemon.SampleInterval), st)
-	q, err := queue.New(st.DB(), queue.Options{
-		Origin: alias, LogDir: filepath.Join(cfg.DataDir, "joblogs"),
-		Publish: func(ev wire.JobEvent) {
-			broker.PublishJob(ev)
-			fastLane.OnJobEvent(ev)
-			usage.OnJobEvent(ev)
-		},
-	})
+	q, err := queue.New(st.DB(), queueOptions(alias, cfg.DataDir, func(ev wire.JobEvent) {
+		broker.PublishJob(ev)
+		fastLane.OnJobEvent(ev)
+		usage.OnJobEvent(ev)
+	}))
 	if err != nil {
 		return err
 	}
