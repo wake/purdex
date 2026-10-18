@@ -27,8 +27,7 @@ const (
 
 // CPUSource says where cpu_seconds came from: the process's rusage at exit (macOS, a job wwd ran itself), the sandbox unit's
 // cgroup (Linux), the integral of the 5 s samples (a fast-lane job, whose process wwd did not start), or CPUNone: nothing was
-// measured (a job shorter than a sample, one that never started, wwd restarted) and cpu_seconds is 0 because it is unknown, not
-// because the job used nothing.
+// measured (a job shorter than a sample, one that never started, wwd restarted) and cpu_seconds is null: unknown, not 0.
 type CPUSource string
 
 const (
@@ -39,7 +38,7 @@ const (
 )
 
 // Measure says whether a peak is the exact peak or the highest of the 5 s samples (which can miss a short spike), or MeasureNone:
-// no sample was taken and the figure is 0 because it is unknown.
+// no sample was taken and the figure is null: unknown, not 0.
 type Measure string
 
 const (
@@ -66,14 +65,15 @@ type JobUsage struct {
 
 	// CPUSeconds is user plus system time of the job's whole process tree. The duration and the average number of cores are not
 	// stored: they are worked out on read from the two times and this (Duration, AvgCores), so a row cannot contradict itself.
-	// PeakCores is the highest the tree's CPU use reached, in cores.
-	CPUSeconds       float64   `json:"cpu_seconds"`
+	// PeakCores is the highest the tree's CPU use reached, in cores; MemPeakMB the most memory the whole tree held at once.
+	// A figure nobody measured is null, never 0, and its source or measure says "none" (and only then): a reader that sums or
+	// averages the column leaves the unknown ones out by itself instead of counting them as nothing.
+	CPUSeconds       *float64  `json:"cpu_seconds"`
 	CPUSource        CPUSource `json:"cpu_source"`
-	PeakCores        float64   `json:"peak_cores"`
+	PeakCores        *float64  `json:"peak_cores"`
 	PeakCoresMeasure Measure   `json:"peak_cores_measure"`
-	// MemPeakMB is the most memory the whole tree held at once.
-	MemPeakMB      int     `json:"mem_peak_mb"`
-	MemPeakMeasure Measure `json:"mem_peak_measure"`
+	MemPeakMB        *int      `json:"mem_peak_mb"`
+	MemPeakMeasure   Measure   `json:"mem_peak_measure"`
 
 	// The host while it ran: jobs running here at the start and at most; the pressure zone at the start and the worst during.
 	JobsAtStart int  `json:"jobs_at_start"`
@@ -93,13 +93,13 @@ type JobUsage struct {
 // Duration is how long the job ran, from its two times.
 func (u JobUsage) Duration() time.Duration { return u.EndedAt.Sub(u.StartedAt) }
 
-// AvgCores is the CPU time over the run time: how many cores the job kept busy on average. 0 for a run with no length or no CPU
-// reading.
-func (u JobUsage) AvgCores() float64 {
-	if d := u.Duration().Seconds(); d > 0 && u.CPUSource != CPUNone {
-		return u.CPUSeconds / d
+// AvgCores is the CPU time over the run time: how many cores the job kept busy on average. ok is false for a run with no length or
+// no CPU reading.
+func (u JobUsage) AvgCores() (cores float64, ok bool) {
+	if d := u.Duration().Seconds(); d > 0 && u.CPUSeconds != nil {
+		return *u.CPUSeconds / d, true
 	}
-	return 0
+	return 0, false
 }
 
 func finiteNonNegative(name string, v float64) error {
@@ -130,20 +130,19 @@ func (u JobUsage) Validate() error {
 	if u.StartedAt.IsZero() || u.EndedAt.IsZero() || u.EndedAt.Before(u.StartedAt) {
 		return fmt.Errorf("usage: missing or reversed times")
 	}
-	for name, v := range map[string]float64{"cpu_seconds": u.CPUSeconds, "peak_cores": u.PeakCores} {
-		if err := finiteNonNegative(name, v); err != nil {
+	for name, v := range map[string]*float64{"cpu_seconds": u.CPUSeconds, "peak_cores": u.PeakCores} {
+		if v == nil {
+			continue
+		}
+		if err := finiteNonNegative(name, *v); err != nil {
 			return err
 		}
 	}
-	if u.MemPeakMB < 0 || u.JobsAtStart < 0 || u.JobsPeak < u.JobsAtStart {
+	if (u.MemPeakMB != nil && *u.MemPeakMB < 0) || u.JobsAtStart < 0 || u.JobsPeak < u.JobsAtStart {
 		return fmt.Errorf("usage: invalid memory or job counts")
 	}
 	switch u.CPUSource {
-	case CPUFromRusage, CPUFromUnit, CPUSampled:
-	case CPUNone:
-		if u.CPUSeconds != 0 {
-			return fmt.Errorf("usage: cpu_source none with cpu_seconds %v", u.CPUSeconds)
-		}
+	case CPUFromRusage, CPUFromUnit, CPUSampled, CPUNone:
 	default:
 		return fmt.Errorf("usage: invalid cpu_source %q", u.CPUSource)
 	}
@@ -152,8 +151,10 @@ func (u JobUsage) Validate() error {
 			return fmt.Errorf("usage: invalid %s %q", name, m)
 		}
 	}
-	if (u.PeakCoresMeasure == MeasureNone && u.PeakCores != 0) || (u.MemPeakMeasure == MeasureNone && u.MemPeakMB != 0) {
-		return fmt.Errorf("usage: a figure measured as none is 0")
+	// null goes with none and only with none: a value always says where it came from, and "none" always means null
+	if (u.CPUSeconds == nil) != (u.CPUSource == CPUNone) || (u.PeakCores == nil) != (u.PeakCoresMeasure == MeasureNone) ||
+		(u.MemPeakMB == nil) != (u.MemPeakMeasure == MeasureNone) {
+		return fmt.Errorf("usage: a figure is null exactly when its source or measure is none")
 	}
 	if !u.ZoneAtStart.Valid() || !u.ZoneWorst.Valid() {
 		return fmt.Errorf("usage: invalid zone")
