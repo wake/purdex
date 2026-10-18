@@ -159,6 +159,44 @@ func TestAnUnreadableGateIsFullAndLoggedOnce(t *testing.T) {
 	}
 }
 
+// A config file that cannot be parsed is a gate that cannot be read, even when the directory the defaults point at is not there (the
+// file named another one): the broken file is looked at before the directory, so it is never mistaken for "no gate".
+func TestABrokenConfigIsFullEvenWhereTheDefaultGateDirIsAbsent(t *testing.T) {
+	root := t.TempDir()
+	cfg := filepath.Join(root, "config.toml")
+	if err := os.WriteFile(cfg, []byte("[gate\nnot toml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PDX_GATE_DIR", filepath.Join(root, "no-such-gate"))
+	var l logs
+	if !New(cfg, l.logf).HeavyFull() {
+		t.Fatal("a broken config was taken for a host without a gate")
+	}
+	if l.n() != 1 {
+		t.Fatalf("log = %v", l.lines)
+	}
+}
+
+// The gate directory is there but its contents cannot be listed (gate.HeldSlots would skip every slot it cannot open and report
+// nothing held): that is a gate that cannot be read, not an empty one.
+func TestAGateDirThatCannotBeListedIsFull(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	cfg, dir := host(t, 2, "")
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	var l logs
+	if !New(cfg, l.logf).HeavyFull() {
+		t.Fatal("a gate directory that cannot be listed was not full")
+	}
+	if l.n() != 1 {
+		t.Fatalf("log = %v", l.lines)
+	}
+}
+
 // A gate directory that exists but is not a directory (or cannot be looked at) is a gate that cannot be read.
 func TestAGateDirThatIsAFileIsFull(t *testing.T) {
 	cfg, dir := host(t, 2, "")

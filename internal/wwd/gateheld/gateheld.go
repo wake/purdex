@@ -47,23 +47,28 @@ func New(path string, logf func(format string, args ...any)) *Reader {
 //   - Otherwise: the number of held heavy slots has reached the heavy slot count.
 func (r *Reader) HeavyFull() bool {
 	cfg, cfgErr := r.config()
-	if _, err := os.Stat(cfg.Dir); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			r.clearLog()
-			return false // no gate directory: this host has no gate
-		}
-		return r.unreadable("the gate directory " + cfg.Dir + " cannot be read: " + err.Error())
-	}
+	// A config file that cannot be parsed comes first: the directory the defaults then point at says nothing about a gate the file
+	// named another directory for. A host that has such a file has pdx, and so a gate; one without a gate has no config file at all.
 	if cfgErr != nil {
 		return r.unreadable(cfgErr.Error())
 	}
-	if !cfg.Enabled {
+	st, err := os.Stat(cfg.Dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		r.clearLog()
+		return false // no gate directory: this host has no gate
+	case err != nil:
+		return r.unreadable("the gate directory " + cfg.Dir + " cannot be read: " + err.Error())
+	case !cfg.Enabled:
 		r.clearLog()
 		return false
-	}
-	st, err := os.Stat(cfg.Dir)
-	if err == nil && !st.IsDir() {
+	case !st.IsDir():
 		return r.unreadable("the gate directory " + cfg.Dir + " is not a directory")
+	}
+	// gate.HeldSlots skips every slot file it cannot open and would report an empty gate: listing the directory first is what tells a
+	// gate with nothing held from one that cannot be looked at.
+	if _, err := os.ReadDir(cfg.Dir); err != nil {
+		return r.unreadable("the gate directory " + cfg.Dir + " cannot be listed: " + err.Error())
 	}
 	heavy, _ := gate.HeldSlots(cfg)
 	r.clearLog()
