@@ -217,8 +217,11 @@ func (m *Module) patrolLoop(ctx context.Context) {
 }
 
 // diskFreeFromFacts is the free space of the data directory's volume from wwd's facts of this host, ok false when there are none
-// (the source is not the pool, or wwd has none fresh), when the data directory is not under the home directory (facts do not list
-// its volume), or when no listed mount holds it.
+// (the source is not the pool, or wwd has none fresh), when the data directory is not under the home directory, or when the facts
+// list no disk. Facts list the root volume and the volume of the home directory, and the mount names they give are not comparable
+// with a path (macOS reports /System/Volumes/Data for /Users, a symlinked home is reported by its target), so which of them holds
+// the data directory is not worked out from the names: the lowest free space of the listed volumes is taken. The home volume is
+// always one of them, so a data disk that runs low is never missed; where the two share their space (macOS) they say the same.
 func (m *Module) diskFreeFromFacts() (float64, bool) {
 	if m.core == nil || m.core.Registry == nil {
 		return 0, false
@@ -232,7 +235,7 @@ func (m *Module) diskFreeFromFacts() (float64, bool) {
 		return 0, false
 	}
 	f, ok := r.LatestLocalFacts()
-	if !ok {
+	if !ok || len(f.Disk) == 0 {
 		return 0, false
 	}
 	dir := "/"
@@ -242,16 +245,11 @@ func (m *Module) diskFreeFromFacts() (float64, bool) {
 	if home, err := os.UserHomeDir(); err != nil || !underPath(dir, home) {
 		return 0, false
 	}
-	best, bestLen := -1, -1
-	for i, d := range f.Disk {
-		if underPath(dir, d.Mount) && len(d.Mount) > bestLen {
-			best, bestLen = i, len(d.Mount)
-		}
+	low := f.Disk[0].FreeGB
+	for _, d := range f.Disk[1:] {
+		low = min(low, d.FreeGB)
 	}
-	if best < 0 {
-		return 0, false
-	}
-	return f.Disk[best].FreeGB, true
+	return low, true
 }
 
 // underPath says dir is root or lies below it.
