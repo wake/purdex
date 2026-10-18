@@ -42,7 +42,10 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir()) // macOS: /var is a symlink, and the store refuses a work root that is not real
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &rig{
 		t: t, root: filepath.Join(base, "work"), markers: filepath.Join(base, "quarantine"),
 		locks: locks.New(), checker: &fakeChecker{gone: map[string]bool{}, err: map[string]error{}},
@@ -184,14 +187,149 @@ func TestRestoreKeepsMarkerWhenKeyTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := r.open()
-	if err := s2.Restore(); err != nil {
-		t.Fatal(err)
+	if err := s2.Restore(); err == nil {
+		t.Fatal("a conflict must be reported to the caller")
 	}
 	if len(markerFiles(t, r.markers)) != 1 || len(s2.Held()) != 1 {
 		t.Fatal("marker must stay when its key is taken")
 	}
 	if h, _ := r.locks.Holder("k1"); h != "src/intruder" {
 		t.Fatalf("Restore stole the key: holder %q", h)
+	}
+	// once the other holder is gone, the next Sweep takes the hold
+	r.locks.ReleaseOwner("src/intruder")
+	if _, err := s2.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := r.locks.Holder("k1"); h != "src/j1" {
+		t.Fatalf("Sweep did not retake the hold: holder %q", h)
+	}
+}
+
+func TestRestoreReportsAHoldWithOtherKeys(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	if _, err := r.locks.Acquire("src/j1", []string{"other"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(r.entry("j1", "k1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Restore(); err == nil {
+		t.Fatal("the owner holds different keys than the marker names: that must be reported")
+	}
+}
+
+// replacingChecker re-adds the entry while Sweep is asking about its unit.
+type replacingChecker struct {
+	onCall func()
+}
+
+func (c *replacingChecker) Gone(ctx context.Context, unit string) (bool, error) {
+	c.onCall()
+	return true, nil
+}
+
+func TestSweepDoesNotUndoAnAddOfTheSameOwner(t *testing.T) {
+	r := newRig(t)
+	old := r.entry("j1", "k1")
+	if _, err := r.locks.Acquire(old.Owner, old.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	var s *Store
+	newer := old
+	newer.ClaimID = "second-claim"
+	rc := &replacingChecker{onCall: func() {
+		if err := s.Add(newer); err != nil {
+			t.Error(err)
+		}
+	}}
+	var err error
+	s, err = Open(r.markers, r.locks, rc, func() time.Time { return r.now }, r.openOpts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(old); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.Sweep(context.Background()); err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v: the replaced entry must not be cleared", n, err)
+	}
+	if got := s.Held(); len(got) != 1 || got[0].ClaimID != "second-claim" {
+		t.Fatalf("Held = %+v", got)
+	}
+	if _, held := r.locks.Holder("k1"); !held {
+		t.Fatal("the newer entry lost its hold")
+	}
+	if len(markerFiles(t, r.markers)) != 1 {
+		t.Fatalf("marker files = %v", markerFiles(t, r.markers))
+	}
+	if !exists(old.Dir) {
+		t.Fatal("directory removed under the newer entry")
+	}
+}
+
+func TestMarkerThatIsASymlinkOrBreaksTheJobRelationIsIgnored(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	if err := s.Add(r.entry("j1", "k1")); err != nil {
+		t.Fatal(err)
+	}
+	name := markerFiles(t, r.markers)[0]
+	genuine := filepath.Join(r.markers, name)
+	raw, err := os.ReadFile(genuine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1. the marker file replaced by a symlink to a copy elsewhere
+	copyPath := filepath.Join(t.TempDir(), "copy.json")
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(genuine); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(copyPath, genuine); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.open().Held(); len(got) != 0 {
+		t.Fatalf("a symlinked marker was obeyed: %+v", got)
+	}
+	// 2. a unit that is not the job's own, written under the right file name
+	if err := os.Remove(genuine); err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(raw), `"Unit":"wwd-j1"`, `"Unit":"sshd"`, 1)
+	if bad == string(raw) {
+		t.Fatalf("test setup: unit not found in %s", raw)
+	}
+	if err := os.WriteFile(genuine, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.open().Held(); len(got) != 0 {
+		t.Fatalf("a marker naming someone else's unit was obeyed: %+v", got)
+	}
+}
+
+func TestSymlinkedWorkRootFailsClosed(t *testing.T) {
+	r := newRig(t)
+	link := filepath.Join(filepath.Dir(r.root), "work-link")
+	if err := os.Symlink(r.root, link); err != nil {
+		t.Fatal(err)
+	}
+	e := r.entry("j1", "k1")
+	e.Dir = filepath.Join(link, filepath.Base(e.Dir))
+	r.openOpts = []Option{WithWorkRoot(link)}
+	s := r.open()
+	if err := s.Add(e); err != nil {
+		t.Fatal(err)
+	}
+	r.checker.gone[e.Unit] = true
+	if n, _ := s.Sweep(context.Background()); n != 0 {
+		t.Fatalf("cleared %d under a symlinked work root", n)
+	}
+	if !exists(filepath.Join(r.root, "h-j1")) {
+		t.Fatal("directory removed through a symlinked work root")
 	}
 }
 

@@ -56,7 +56,15 @@ type Store struct {
 	now      func() time.Time
 
 	mu      sync.Mutex
-	entries map[string]Entry // by Owner
+	gen     uint64
+	entries map[string]rec // by Owner
+}
+
+// rec is an entry with the generation Add gave it: Sweep and Clear work from a snapshot taken without the lock, and a later Add
+// of the same owner must not be undone by them.
+type rec struct {
+	e   Entry
+	gen uint64
 }
 
 // Open prepares the marker directory dir and loads the markers in it. A marker that cannot be read, or whose file name does not
@@ -65,12 +73,19 @@ func Open(dir string, t *locks.Table, c UnitChecker, now func() time.Time, opts 
 	if dir == "" || t == nil || c == nil || now == nil {
 		return nil, errors.New("quarantine: Open needs a directory, a lock table, a unit checker and a clock")
 	}
-	s := &Store{dir: dir, locks: t, checker: c, now: now, entries: map[string]Entry{}}
+	s := &Store{dir: dir, locks: t, checker: c, now: now, entries: map[string]rec{}}
 	for _, o := range opts {
 		o(s)
 	}
 	if s.workRoot != "" {
 		s.workRoot = filepath.Clean(s.workRoot)
+		if real, err := filepath.EvalSymlinks(s.workRoot); err != nil || real != s.workRoot {
+			log.Printf("quarantine: work root %q is not a real, clean path (%v): directories will not be removed", s.workRoot, err)
+			s.workRoot = ""
+		}
+	}
+	if fi, err := os.Lstat(dir); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("quarantine: marker directory %q is a symlink", dir)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("quarantine: %w", err)
@@ -90,7 +105,8 @@ func Open(dir string, t *locks.Table, c UnitChecker, now func() time.Time, opts 
 				log.Printf("quarantine: ignoring marker %s: %v", name, err)
 				continue
 			}
-			s.entries[e.Owner] = e
+			s.gen++
+			s.entries[e.Owner] = rec{e: e, gen: s.gen}
 		}
 	}
 	return s, nil
@@ -102,6 +118,11 @@ func markerName(owner string) string {
 }
 
 func readMarker(path string) (Entry, error) {
+	if fi, err := os.Lstat(path); err != nil {
+		return Entry{}, err
+	} else if !fi.Mode().IsRegular() {
+		return Entry{}, errors.New("not a regular file")
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Entry{}, err
@@ -127,6 +148,10 @@ func validate(e Entry) error {
 		return errors.New("empty job id")
 	case e.Dir == "":
 		return errors.New("empty directory")
+	case !strings.HasSuffix(e.Owner, "/"+e.JobID):
+		return errors.New("owner does not end in the job id")
+	case e.Unit != "" && e.Unit != "wwd-"+e.JobID:
+		return errors.New("unit is not the job's own unit")
 	}
 	return nil
 }
@@ -200,46 +225,83 @@ func (s *Store) Add(e Entry) error {
 		return fmt.Errorf("quarantine: %w", err)
 	}
 	s.mu.Lock()
-	s.entries[e.Owner] = e
+	s.gen++
+	s.entries[e.Owner] = rec{e: e, gen: s.gen}
 	s.mu.Unlock()
 	return nil
 }
 
-// Restore puts the hold of every entry back after a restart. A key another owner already holds is logged and the marker stays:
-// the entry is still quarantined, and Sweep releases whatever it holds when the unit is gone.
+// Restore puts the hold of every entry back after a restart. Call it before anything else can take a lock: a key another owner
+// already holds is reported in the error (the marker stays, the entry stays quarantined, and Sweep tries again), because until
+// the hold is back the entry's other keys are not protected either (Acquire is all or none).
 func (s *Store) Restore() error {
-	for _, e := range s.snapshot() {
-		_, err := s.locks.Acquire(e.Owner, e.Keys, nil)
-		switch {
-		case err == nil, errors.Is(err, locks.ErrAlreadyHeld):
-		default:
-			log.Printf("quarantine: cannot restore the hold of %s: %v", e.Owner, err)
+	var errs []error
+	for _, h := range s.snapshot() {
+		if err := s.reacquire(h.e); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-func (s *Store) snapshot() []Entry {
+// reacquire takes the entry's keys unless the owner already holds exactly them.
+func (s *Store) reacquire(e Entry) error {
+	_, err := s.locks.Acquire(e.Owner, e.Keys, nil)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, locks.ErrAlreadyHeld):
+		for _, k := range e.Keys {
+			if h, ok := s.locks.Holder(k); !ok || h != e.Owner {
+				return fmt.Errorf("quarantine: %s holds other keys than its marker names", e.Owner)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("quarantine: cannot restore the hold of %s: %w", e.Owner, err)
+}
+
+type snap struct {
+	e   Entry
+	gen uint64
+}
+
+func (s *Store) snapshot() []snap {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Entry, 0, len(s.entries))
-	for _, e := range s.entries {
-		out = append(out, e.clone())
+	out := make([]snap, 0, len(s.entries))
+	for _, r := range s.entries {
+		out = append(out, snap{e: r.e.clone(), gen: r.gen})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Owner < out[j].Owner })
+	sort.Slice(out, func(i, j int) bool { return out[i].e.Owner < out[j].e.Owner })
 	return out
 }
 
+// current reports whether the snapshot's entry is still the one in the store.
+func (s *Store) current(h snap) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.entries[h.e.Owner]
+	return ok && r.gen == h.gen
+}
+
 // Held lists the entries, oldest owner name first. The slice and the keys in it are copies.
-func (s *Store) Held() []Entry { return s.snapshot() }
+func (s *Store) Held() []Entry {
+	snaps := s.snapshot()
+	out := make([]Entry, len(snaps))
+	for i, h := range snaps {
+		out[i] = h.e
+	}
+	return out
+}
 
 // Quarantined reports whether dir is the directory of an entry, so the generic leftover sweep skips it.
 func (s *Store) Quarantined(dir string) bool {
 	dir = filepath.Clean(dir)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, e := range s.entries {
-		if filepath.Clean(e.Dir) == dir {
+	for _, r := range s.entries {
+		if filepath.Clean(r.e.Dir) == dir {
 			return true
 		}
 	}
@@ -268,29 +330,41 @@ func (s *Store) safeDir(dir string) error {
 	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
 		return fmt.Errorf("%q is a symlink or not a directory", dir)
 	}
+	if real, err := filepath.EvalSymlinks(dir); err != nil || real != dir {
+		return fmt.Errorf("%q does not resolve to itself (%v)", dir, err)
+	}
 	return nil
 }
 
-// drop removes the entry's marker and forgets it, then releases its hold. The marker goes first: if it cannot be removed the
-// entry and its hold stay, and the next Sweep tries again.
-func (s *Store) drop(e Entry) error {
-	if err := s.removeMarker(e.Owner); err != nil {
-		return err
-	}
+// drop removes the snapshot's marker and forgets the entry, then releases its hold, all under the store lock and only if the entry
+// has not been replaced meanwhile. The marker goes first: if it cannot be removed the entry and its hold stay, and the next Sweep
+// tries again.
+func (s *Store) drop(h snap) (dropped bool, err error) {
 	s.mu.Lock()
-	delete(s.entries, e.Owner)
-	s.mu.Unlock()
-	s.locks.ReleaseOwner(e.Owner)
-	return nil
+	defer s.mu.Unlock()
+	r, ok := s.entries[h.e.Owner]
+	if !ok || r.gen != h.gen {
+		return false, nil
+	}
+	if err := s.removeMarker(h.e.Owner); err != nil {
+		return false, err
+	}
+	delete(s.entries, h.e.Owner)
+	s.locks.ReleaseOwner(h.e.Owner)
+	return true, nil
 }
 
 // Sweep clears every entry whose unit the checker proves gone: the directory is removed (only when it passes safeDir), then the
 // marker, then the hold. An entry without a unit, a checker error, an unsafe directory or a missing work root keeps everything.
 func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 	var errs []error
-	for _, e := range s.snapshot() {
+	for _, h := range s.snapshot() {
+		e := h.e
 		if ctx.Err() != nil {
 			return cleared, ctx.Err()
+		}
+		if err := s.reacquire(e); err != nil { // a conflict that has since gone away
+			log.Print(err)
 		}
 		if e.Unit == "" {
 			continue
@@ -306,15 +380,21 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 			log.Printf("quarantine: refusing to clear %s: %v", e.Owner, derr)
 			continue
 		}
+		if !s.current(h) { // Add replaced the entry while the unit was being checked
+			continue
+		}
 		if rerr := os.RemoveAll(e.Dir); rerr != nil {
 			errs = append(errs, fmt.Errorf("remove %s: %w", e.Dir, rerr))
 			continue
 		}
-		if derr := s.drop(e); derr != nil {
+		dropped, derr := s.drop(h)
+		if derr != nil {
 			errs = append(errs, derr)
 			continue
 		}
-		cleared++
+		if dropped {
+			cleared++
+		}
 	}
 	return cleared, errors.Join(errs...)
 }
@@ -322,9 +402,9 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 // Clear is the human release: the hold and the marker go for each named job. Its directory is removed too when it passes safeDir,
 // and otherwise left for the leftover sweep. A job that is not in the store is reported, after the others have been handled.
 func (s *Store) Clear(jobID ...string) error {
-	byJob := map[string][]Entry{}
-	for _, e := range s.snapshot() {
-		byJob[e.JobID] = append(byJob[e.JobID], e)
+	byJob := map[string][]snap{}
+	for _, h := range s.snapshot() {
+		byJob[h.e.JobID] = append(byJob[h.e.JobID], h)
 	}
 	var errs []error
 	for _, id := range jobID {
@@ -333,14 +413,14 @@ func (s *Store) Clear(jobID ...string) error {
 			errs = append(errs, fmt.Errorf("quarantine: no entry for job %q", id))
 			continue
 		}
-		for _, e := range es {
-			if s.safeDir(e.Dir) == nil {
-				if err := os.RemoveAll(e.Dir); err != nil {
-					errs = append(errs, fmt.Errorf("remove %s: %w", e.Dir, err))
+		for _, h := range es {
+			if s.current(h) && s.safeDir(h.e.Dir) == nil {
+				if err := os.RemoveAll(h.e.Dir); err != nil {
+					errs = append(errs, fmt.Errorf("remove %s: %w", h.e.Dir, err))
 					continue
 				}
 			}
-			if err := s.drop(e); err != nil {
+			if _, err := s.drop(h); err != nil {
 				errs = append(errs, err)
 			}
 		}
