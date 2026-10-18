@@ -196,8 +196,8 @@ func tempPath(p string) bool {
 			return true
 		}
 	}
-	if td := os.TempDir(); strings.HasPrefix(td, "/") && strings.HasPrefix(p, strings.TrimSuffix(td, "/")+"/") {
-		return true
+	if td := os.TempDir(); strings.HasPrefix(td, "/") && strings.HasPrefix(p, strings.TrimSuffix(path.Clean(td), "/")+"/") {
+		return true // this process's own temp directory ($TMPDIR), cleaned the same way
 	}
 	return false
 }

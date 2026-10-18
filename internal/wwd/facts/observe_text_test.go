@@ -92,6 +92,19 @@ func TestRedactCommandIsBoundedAndKeepsValidUTF8(t *testing.T) {
 	}
 }
 
+// $TMPDIR is a temp directory too, even when it is written with dot segments.
+func TestCommandSignatureTreatsTMPDIRAsATempDirectory(t *testing.T) {
+	t.Setenv("TMPDIR", "/home/u/work/../scratch")
+	for _, p := range []string{"/home/u/scratch/run-123.js", "/home/u/scratch/run-456.js"} {
+		if got := CommandSignature([]string{"node", p}); got != "node run" {
+			t.Errorf("CommandSignature(%q) = %q, want \"node run\"", p, got)
+		}
+	}
+	if got := CommandSignature([]string{"node", "/home/u/work/run-123.js"}); got != "node run-123" {
+		t.Errorf("outside it: %q", got)
+	}
+}
+
 // Global flags with a value, before the subcommand, do not hide it: different jobs must not fall into one signature.
 func TestCommandSignatureSkipsKnownGlobalFlagsOfATool(t *testing.T) {
 	for name, c := range map[string]struct {
