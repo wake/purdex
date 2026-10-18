@@ -262,6 +262,25 @@ func TestAlertEvent(t *testing.T) {
 	}
 }
 
+func TestPoolAtLeast(t *testing.T) {
+	peer := func(proto int) Peer { return Peer{Info: Info{Proto: proto}} }
+	for _, c := range []struct {
+		name  string
+		peers []Peer
+		ok    bool
+	}{
+		{"empty pool", nil, true},
+		{"all at 2", []Peer{peer(2), peer(2)}, true},
+		{"one at 1", []Peer{peer(2), peer(1)}, false},
+		{"a peer never reached carries the oldest proto", []Peer{peer(2), {Info: Info{Proto: MinProto}}}, false},
+		{"a rolled-back host shuts it again", []Peer{peer(2), peer(1), peer(2)}, false},
+	} {
+		if got := PoolAtLeast(c.peers, 2); got != c.ok {
+			t.Errorf("%s: %v, want %v", c.name, got, c.ok)
+		}
+	}
+}
+
 func TestQueueValidates(t *testing.T) {
 	js := strings.Replace(string(fixture(t, "facts_v2_darwin.json")), `"queued": 3`, `"queued": -1`, 1)
 	if _, err := Decode[Facts]([]byte(js)); err == nil {
