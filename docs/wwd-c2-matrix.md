@@ -26,6 +26,8 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 
 ### 每個案例的共同流程
 
+連線：對 air26／mserv／air19 的 ssh 逾時 20 秒，連不上（結束碼 255）會等 2 秒再試一次；還是連不上，**這一格 FAIL**（印 `FAIL ssh to <host> failed twice`，不是案例結果），腳本照常往下清理並印總結，不會中途結束。案例內的指令失敗不會讓整支腳本停下來（該案例的檢查會 FAIL）；清理由 `trap` 保證在任何結束路徑都跑。
+
 1. **前置檢查**：四台都連得到；四台的 wwd 版本與 proto 相同；佇列是空的（除非 `--force`）；air19 的 worker 是關的；要跑案例 8 時，在 air26 找得到 `pdx`（依序找非互動 shell 的 PATH、`~/.local/bin/pdx`、`~/.config/pdx/bin/pdx`，印出用的是哪一個）。
 2. 建一個暫存 repo（`$TMPDIR/wwd-c2.<pid>/repo`，一個 commit，內含 probe 任務，見 §5）。
 3. 要用 air26 的 worker 的案例（不含 8，air26 在那裡只是第二個 origin；不含 11，只送 token）開始前，先等 air26 的 `facts.owner.active` 不是 true，最多 10 分鐘（印 `waiting for air26's owner to be idle`）；等不到這個案例 SKIP 並寫原因，不算 FAIL。
@@ -230,12 +232,12 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 
 | 主機 | 加什麼 | 為什麼 |
 |---|---|---|
-| mlab | `[fault]`<br>`enabled = true`<br>`log_upload_fail = true`<br>`zone = "warning"` | H1（案例 6）、H3（案例 8）。副作用：整個矩陣期間，遠端 worker 對 mlab 的 log 上傳都被拒（結果不受影響，`GET …/log` 回 404）、mlab 作為 origin 的工作多 +200 分（只影響各 worker 偏好哪個 origin）。要把影響縮到最小，可以只在跑案例 6、8 之前加、跑完移除並重啟 |
+| mlab | `[fault]`<br>`enabled = true`<br>`zone = "warning"`<br>**`log_upload_fail = true` 只在跑案例 6 時加**（單獨 `--case 6`，跑完移除並重啟） | H3（案例 8）、H1（案例 6）。**H1 不能在其他案例開著**：worker 在結果送出後還要重試 log 上傳最多 2 分鐘，這段時間仍占著 heavy 名額（#3404），下一格就在 90 秒內 claim 不到（2026-10-19 重跑時案例 3、4 因此失敗）。腳本的 precheck 在 mlab 的 `/v1/info` 顯示 `log_upload_fail` 開著、又選了 6 以外的案例時直接 FAIL。mlab 作為 origin 的工作在 `zone = "warning"` 下多 +200 分（只影響各 worker 偏好哪個 origin） |
 | air26 | `[owner]`<br>`enabled = true`（正式設定本來就有，確認即可）<br>`[fault]`<br>`enabled = true`<br>`owner_active_file = "/Users/wake/.local/share/wwd/fault/owner-active"`<br>`snapshot_delay_s = 8` | H2（案例 7）、H4（案例 5a）。建議再加 `[owner] enabled = false`（跑完照樣由 `config.toml.pre-c2` 還原）：`[owner]` 開著時，使用者最近 5 分鐘有動 air26，worker 就不接工作（`owner_rule` 設空字串**不會**關掉它，空字串＝預設的 5 分鐘），案例會在「工作從沒進 running」處 FAIL 或 SKIP。關掉後 `BuildOwner` 不跑（`cmd/wwd/main.go` 不設 `srcOpt.Owner`，`facts/collector.go` 的 `Owner` 為 nil），案例 7 的 H2 檔案仍會讓 `facts.owner` 變 active（`daemon/sampler.go` 的 H2 區塊），`derived` 的 headroom 歸零，worker 讓位並 reclaim |
 | mserv | 不要有 `[fault]`。案例 13 需要：`[worker] sandbox_user = "<job 帳號>"`（非 root）；`[jobdb]`（`enabled = true`、`host`、`port`、`user_hosts`、`defaults_file = "~/.config/wwd/mysql-admin.cnf"`，檔案 0600、帳號 `wwd_admin`）；`wwd.slice` 不用預先建立 | 沙箱與 per-job 資料庫；見 `docs/wwd-deploy.md` |
 | air19 | 什麼都不加；worker 必須是關的（precheck 會檢查） | 整個矩陣它都不 claim |
 
-重啟後檢查（每台）：`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq .fault`，預期 mlab 是 `{"log_upload_fail":true,"zone":"warning"}`、air26 是 `{"owner_active_file":true,"snapshot_delay_s":8}`、mserv 與 air19 是 `null`；`GET /v1/worker` 在 air26 的 `owner_rule` 非空。
+重啟後檢查（每台）：`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq .fault`，預期 mlab 是 `{"zone":"warning"}`（案例 6 時多一個 `"log_upload_fail":true`）、air26 是 `{"owner_active_file":true,"snapshot_delay_s":8}`、mserv 與 air19 是 `null`；`GET /v1/worker` 在 air26 的 `owner_rule` 非空。
 
 **跑完之後**：把每台的 `config.toml.pre-c2` 放回 `config.toml`（沒有 `[fault]`），重啟 wwd，確認四台 `curl … /v1/info | jq 'has("fault")'` 都是 `false`；`GET /v1/worker` 與矩陣前一致（部署後預設四台都是關的）（**air26 的 `owner_rule` 例外，見下**）；矩陣的暫存、`/tmp/wwd-c2-ran.log`、`fault/owner-active` 腳本結尾已刪，用 §6 的指令確認即可。
 

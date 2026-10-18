@@ -154,11 +154,17 @@ func (m *Module) capabilitiesFor(sessionID, backend string, live bool) *convmode
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")
 		delete(c.Reasons, "interrupt")
+		if live { // send now needs the mod (to read the input) and a live pane to press the keys in
+			c.SendNow = "keys"
+		}
 	} else if live {
 		// a live terminal conversation with no mod owner: the daemon's submit route may type it through the pane (K-2 D1b).
 		// Declaration only; each request is still decided by /api/sessions/{code}/submit. interrupt stays not_wired.
 		c.Send = "keys"
 		delete(c.Reasons, "send")
+	}
+	if c.SendNow == "" {
+		c.Reasons["send_now"] = "not_wired"
 	}
 	return &c
 }

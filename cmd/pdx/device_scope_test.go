@@ -63,7 +63,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/pool/hosts", "GET /api/pool/facts/history", // the resource pool from wwd (read-only)
 		"GET /api/pool/jobs", "GET /api/pool/jobs/{id}", "GET /api/pool/jobs/{id}/log", // the pool's jobs (read-only)
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
-		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
+		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "POST /api/sessions/{code}/send-now", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
 		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
