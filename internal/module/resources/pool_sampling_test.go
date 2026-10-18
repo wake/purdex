@@ -19,6 +19,7 @@ import (
 // procSampler counts the two reads a sampler has: the whole host (sysctl, vm_stat, ps) and the process table alone (ps).
 type procSampler struct {
 	host, procs atomic.Int64
+	procsErr    atomic.Bool // SampleProcs fails
 }
 
 func (s *procSampler) Sample(context.Context) (resources.HostRaw, []resources.Proc, error) {
@@ -28,6 +29,9 @@ func (s *procSampler) Sample(context.Context) (resources.HostRaw, []resources.Pr
 
 func (s *procSampler) SampleProcs(context.Context) ([]resources.Proc, error) {
 	s.procs.Add(1)
+	if s.procsErr.Load() {
+		return nil, assert.AnError
+	}
 	return []resources.Proc{{PID: 1, Pcpu: 7}}, nil
 }
 
@@ -167,6 +171,65 @@ func TestPoolSampling_FeedsTheGateCacheFromFacts(t *testing.T) {
 	total := func(s hostmem.Sample) uint64 { return s.Pageouts + s.Swapouts }
 	rate := float64(total(got[2])-total(got[0])) / (float64(dt) / 1000)
 	assert.InDelta(t, 3.0, rate, 0.01, "the counters give wwd's rate (2 + 1 per second)")
+}
+
+// The counter goes on from the cache's own last one, whoever wrote it: another daemon's or a gate's high counter is not stepped
+// back to a private one (codex attack).
+func TestPoolSampling_CounterGoesOnFromTheSharedCache(t *testing.T) {
+	p := newPoolSampling(t)
+	cfg := gate.Defaults()
+	cfg.Dir = p.dir
+	p.m.gateConfig = func() gate.Config { return cfg }
+	p.step()
+	require.True(t, hostmem.Cache{Dir: p.dir}.Record(p.m.now(), hostmem.Sample{At: p.m.now().UnixMilli(), Level: 2, Pageouts: 900000, Swapouts: 100}))
+	p.step()
+	p.setFacts()
+	require.False(t, p.m.tick(context.Background()))
+	got := hostmem.Cache{Dir: p.dir}.Load().Samples
+	require.Len(t, got, 2)
+	assert.EqualValues(t, 900100+15, got[1].Pageouts+got[1].Swapouts, "the other writer's counter plus 5 s of 3 a second")
+}
+
+// The processes failing does not take the host reading with them: wwd's figures stay published and available, without sessions.
+func TestPoolSampling_ProcessTableFailureKeepsTheHostReading(t *testing.T) {
+	p := newPoolSampling(t)
+	p.s.procsErr.Store(true)
+	for i := 0; i < 5; i++ {
+		p.step()
+		p.setFacts()
+		require.False(t, p.m.tick(context.Background()))
+	}
+	s := p.m.latest.Load()
+	require.True(t, s.Available, "five failed ps reads, host still available")
+	assert.Equal(t, "warning", s.Host.Zone)
+	assert.Empty(t, s.Sessions)
+}
+
+// Back from wwd's reading, the zone and its start are the own sampler's again, not what the latch held before the pool.
+func TestPoolSampling_LeavingThePoolRestartsTheZone(t *testing.T) {
+	p := newPoolSampling(t)
+	own := &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		return zoneRaw(40, 1, 4), nil, nil // pressure 4: danger by the own reading
+	}}
+	p.m.sampler = own
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	first := p.m.latest.Load().Host
+	require.Equal(t, "danger", first.Zone)
+
+	p.m.sampler = p.s
+	for i := 0; i < 3; i++ {
+		p.step()
+		p.setFacts()
+		require.False(t, p.m.tick(context.Background()))
+	}
+	p.m.sampler = own
+	p.facts.Store(nil)
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	back := p.m.latest.Load().Host
+	assert.Equal(t, "danger", back.Zone)
+	assert.Greater(t, back.ZoneSince, first.ZoneSince, "the zone began again when the own reading came back")
 }
 
 // A paging rate under one page per tick still adds up: the fractions are carried, not cut off each tick (codex R1).

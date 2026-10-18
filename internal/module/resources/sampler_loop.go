@@ -85,6 +85,13 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return false
 	}
 	m.watchNote("sampling", "")
+	if pool == nil && m.fromPool {
+		// Back to the own reading: the zone and where it began were wwd's, not what this latch has seen.
+		m.zoneLatch.Update(0, 0, 0, false)
+		m.lastZone, m.zoneSince = resources.ZoneUnknown, time.Time{}
+		m.pageRing = nil
+	}
+	m.fromPool = pool != nil
 	if pool != nil {
 		m.cachePressureFromFacts(*pool, sampledAt)
 	} else {
@@ -138,9 +145,16 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 func (m *Module) takeSample(ctx context.Context) (raw resources.HostRaw, procs []resources.Proc, pool *wire.Facts, err error) {
 	if ps, ok := m.sampler.(resources.ProcSampler); ok {
 		if f, ok := m.LatestLocalFacts(); ok {
-			procs, err = ps.SampleProcs(ctx)
-			if err != nil {
-				return resources.HostRaw{}, nil, nil, err
+			procs, perr := ps.SampleProcs(ctx)
+			if perr != nil {
+				// The processes only serve the watcher and the attribution; wwd's reading of the host stands without them.
+				if !m.procsFailing {
+					m.procsFailing = true
+					m.logf("[resources] reading the process table failed (the host figures come from wwd): %v", perr)
+				}
+				procs = nil
+			} else {
+				m.procsFailing = false
 			}
 			return rawOfFacts(f, procs), procs, &f, nil
 		}

@@ -49,15 +49,15 @@ func (m *Module) cachePressure(raw resources.HostRaw, sampledAt time.Time) {
 	if m.gateConfig == nil || !raw.PageCounters || raw.Pressure <= 0 {
 		return
 	}
-	m.pageTotal, m.pageTotalAt = raw.Pageouts+raw.Swapouts, sampledAt
 	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
 		At: sampledAt.UnixMilli(), Level: raw.Pressure, Pageouts: raw.Pageouts, Swapouts: raw.Swapouts})
 }
 
 // cachePressureFromFacts is cachePressure while wwd's facts are the host reading: the level is wwd's, and the counters the gate
-// takes a rate from are a running total that grows by wwd's page-out and swap-out rate over the time since the last reading. It
-// starts from the last counter the own sampler saw, so a return to the own reading is not a jump. wwd gives no rate (the platform
-// has none) or no level: nothing is written, as for a reading that lacks them.
+// takes a rate from are the cache's own last counter plus wwd's page-out and swap-out rate over the time since that reading, so
+// whoever wrote the last one (this daemon from its own sampler, another daemon, a gate) the sequence goes on from it and never
+// goes back. wwd gives no rate (the platform has none) or no level, or the cache has no reading to go on from yet: the first
+// reading of a run is a counter of 0 with the level, and nothing is written for a reading that lacks the level or the rate.
 func (m *Module) cachePressureFromFacts(f wire.Facts, sampledAt time.Time) {
 	if m.gateConfig == nil || f.Mem.Pressure <= 0 || (f.Mem.PageOutRate == nil && f.Mem.SwapOutRate == nil) {
 		return
@@ -69,16 +69,24 @@ func (m *Module) cachePressureFromFacts(f wire.Facts, sampledAt time.Time) {
 	if f.Mem.SwapOutRate != nil {
 		rate += *f.Mem.SwapOutRate
 	}
-	if dt := sampledAt.Sub(m.pageTotalAt); !m.pageTotalAt.IsZero() && dt > 0 && rate > 0 {
-		m.pageFrac += rate * dt.Seconds() // the fraction a slow rate adds per tick is kept, not dropped
-		whole := math.Floor(m.pageFrac)
-		m.pageTotal += uint64(whole)
-		m.pageFrac -= whole
+	cache := hostmem.Cache{Dir: m.gateConfig().Dir}
+	var total uint64
+	if have := cache.Load().Samples; len(have) > 0 {
+		last := have[len(have)-1]
+		total = last.Pageouts + last.Swapouts
+		if dt := sampledAt.Sub(time.UnixMilli(last.At)); dt > 0 && dt <= factsCounterGap && rate > 0 {
+			m.pageFrac += rate * dt.Seconds() // the fraction a slow rate adds per tick is kept, not dropped
+			whole := math.Floor(m.pageFrac)
+			total += uint64(whole)
+			m.pageFrac -= whole
+		}
 	}
-	m.pageTotalAt = sampledAt
-	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
-		At: sampledAt.UnixMilli(), Level: f.Mem.Pressure, Pageouts: m.pageTotal})
+	cache.Record(sampledAt, hostmem.Sample{At: sampledAt.UnixMilli(), Level: f.Mem.Pressure, Pageouts: total})
 }
+
+// factsCounterGap is the longest gap between two cache readings over which the facts' rate is taken to have held; after a longer
+// one the counter goes on from where it was (the rate window of the readers is shorter than this anyway).
+const factsCounterGap = 15 * time.Second
 
 // slotCounts is how many heavy and light commands hold a slot right now, and how many wait. ok is false when the module has
 // no way to read them (a test's): the minute then records zeros, not a reading.
