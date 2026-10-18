@@ -93,6 +93,14 @@ func TestOnlyChangesAClientCanSeeMoveTheCursor(t *testing.T) {
 		do()
 		assert.Greater(t, f.head(t), h, what)
 	}
+	moved("a start (state alone changes: the claim is already there)", func() {
+		s := f.submit(t, f.noKey())
+		sc := f.claim(t, s, "air26")
+		h := f.head(t)
+		_, err := f.q.Start(bg, s, sc.ClaimID)
+		require.NoError(t, err)
+		assert.Greater(t, f.head(t), h)
+	})
 	moved("a cancel request", func() { _, err := f.q.Cancel(bg, id); require.NoError(t, err) })
 	moved("a log upload", func() { require.NoError(t, f.putLog(t, id, c.ClaimID, "x")) })
 	moved("the result", func() {
@@ -129,6 +137,7 @@ func TestACursorIsNeverReused(t *testing.T) {
 
 	_, err := f.db.Exec(`DELETE FROM jobs WHERE id = ?`, last)
 	require.NoError(t, err)
+	assert.GreaterOrEqual(t, f.head(t), cur, "the head does not go back when the newest job is deleted")
 	next := f.submit(t, f.noKey())
 
 	js, nc := f.after(t, cur)
