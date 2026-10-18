@@ -6,6 +6,7 @@ package run
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -57,6 +58,9 @@ func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, erro
 	}
 	for _, e := range taskEnv {
 		name, value, fixed := strings.Cut(e, "=")
+		if !envName.MatchString(name) {
+			return nil, fmt.Errorf("run: %q is not an environment variable name", name)
+		}
 		if fixedNames[name] || strings.HasPrefix(name, "WWD_") || strings.HasPrefix(name, "PDX_") {
 			return nil, fmt.Errorf("run: the task env may not set %s", name)
 		}
@@ -73,6 +77,9 @@ func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, erro
 	sort.Strings(out)
 	return out, nil
 }
+
+// envName is what a variable name may look like; a name such as "--unset=X" would be taken as an option by env(1).
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // envValue returns the value of name in an environment list ("" and false when absent).
 func envValue(env []string, name string) (string, bool) {
