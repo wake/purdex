@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestFaultZoneOverridesOnlyThePickValue(t *testing.T) {
 	}
 }
 
-// H2 empties the headroom like a real active owner, and leaves the owner block, and the sessions room, as they were.
+// H2 makes the owner block say active, which empties the headroom like a real active owner; the sessions room is not touched.
 func TestFaultOwnerFileEmptiesHeadroomOnly(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "owner-active")
 	level := 1
@@ -75,7 +76,7 @@ func TestFaultOwnerFileEmptiesHeadroomOnly(t *testing.T) {
 	}
 	s.Tick(s0.Add(5 * time.Second))
 	f, _ := s.Latest()
-	if f.Derived.Headroom != (wire.Slots{}) || f.Owner == nil || f.Owner.Active || f.Derived.SessionsRoom == 0 {
+	if f.Derived.Headroom != (wire.Slots{}) || f.Owner == nil || !f.Owner.Active || f.Derived.SessionsRoom == 0 {
 		t.Fatalf("file: derived %+v owner %+v", f.Derived, f.Owner)
 	}
 }
@@ -106,4 +107,26 @@ func TestFaultConfigOnlyFromTheFile(t *testing.T) {
 	if _, err := LoadConfig(p, t.TempDir()); err == nil {
 		t.Fatal("a hook without enabled loaded")
 	}
+}
+
+// H1 through the daemon as cmd/wwd wires it: a remote worker's log upload arrives on the TCP port, which is where the hook must be; the
+// result upload on the same claim is not touched.
+func TestFaultLogUploadFailOverTheRealTCPPort(t *testing.T) {
+	h := newLaneHost(t, true, func(o *Options) {
+		o.Fault = fault.New(fault.Config{Enabled: true, LogUploadFail: true}, nil)
+	})
+	_, raw, _ := h.socketDo(t, "POST", "/v1/jobs", submissionBody())
+	sub, err := wire.Decode[wire.JobSubmissionResponse](raw)
+	require.NoError(t, err)
+	auth := "Bearer " + testToken
+	code, raw, _ := h.tcpDo(t, "POST", "/v1/jobs/"+sub.ID+"/claim", auth, wire.ClaimRequest{Worker: "air26"})
+	require.Equal(t, 200, code, string(raw))
+	claim, err := wire.Decode[wire.ClaimResponse](raw)
+	require.NoError(t, err)
+	code, raw, _ = h.tcpDo(t, "POST", "/v1/jobs/"+sub.ID+"/start", auth, wire.StartRequest{ClaimID: claim.ClaimID})
+	require.Equal(t, 200, code, string(raw))
+	code, _, _ = h.tcpDo(t, "PUT", "/v1/jobs/"+sub.ID+"/log?claim_id="+claim.ClaimID, auth, nil)
+	require.Equal(t, 503, code)
+	code, raw, _ = h.tcpDo(t, "POST", "/v1/jobs/"+sub.ID+"/result", auth, wire.ResultRequest{ClaimID: claim.ClaimID, State: wire.StateSucceeded, Exit: new(int)})
+	require.Equal(t, 200, code, string(raw))
 }

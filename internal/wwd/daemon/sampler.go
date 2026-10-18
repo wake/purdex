@@ -111,11 +111,20 @@ func (s *Sampler) Tick(now time.Time) {
 		f.Exception, holds = snap.Exceptions, snap.Holds
 	}
 
+	if on := s.opts.Fault.OwnerActive(f.Owner != nil && f.Owner.Active); on && (f.Owner == nil || !f.Owner.Active) {
+		// test hook H2: the owner block says active (with a reason that names the hook), which is what the matrix waits for
+		o := wire.OwnerState{}
+		if f.Owner != nil {
+			o = *f.Owner
+		}
+		o.Active, o.Reason = true, "fault: owner_active_file"
+		f.Owner = &o
+	}
 	s.mu.Lock()
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
-		OwnerActive: s.opts.Fault.OwnerActive(f.Owner != nil && f.Owner.Active), AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
+		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB

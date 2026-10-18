@@ -103,7 +103,7 @@ func (d *Daemon) jobRoutes(mux *http.ServeMux, peer bool) {
 	if d.opts.Queue == nil {
 		return
 	}
-	a := jobsapi.New(d.opts.Queue)
+	a := jobsapi.New(d.opts.Queue).WithFault(d.opts.Fault) // the log upload a remote worker makes arrives here (test hook H1)
 	mux.HandleFunc("GET /v1/jobs", d.viaHost(peer, a.List(peer)))
 	mux.HandleFunc("GET /v1/jobs/{id}", d.viaHost(peer, a.Get(peer)))
 	mux.HandleFunc("GET /v1/jobs/{id}/log", d.viaHost(peer, a.Log(peer)))

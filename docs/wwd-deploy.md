@@ -156,7 +156,7 @@ would silently do nothing is worth a loud failure).
 | Key | Hook | Case | Turn it on at |
 |---|---|---|---|
 | `log_upload_fail = true` | H1: the origin answers 503 to a log upload (a result upload is not touched) | 6 | mlab (origin) |
-| `owner_active_file = "/abs/path"` | H2: while the file exists the worker's headroom is empty, as if the owner were active. `facts.owner` and `sessions_room` keep the real values | 7 | air26 |
+| `owner_active_file = "/abs/path"` | H2: while the file exists the worker's headroom is empty, as if the owner were active: `facts.owner.active` becomes true (reason `fault: owner_active_file`), `sessions_room` keeps its real value | 7 | air26 |
 | `zone = "danger"` (or `warning`) | H3: `facts.derived.zone_override`. The real `zone` is unchanged, so the Purdex gate feed, the app's host cell and the headroom do not see it; only a worker's pick (`Derived.PickZone()`) scores by it | 8 | mlab |
 | `snapshot_delay_s = 20` | H4: the worker waits this long (≤ 3600) before a snapshot fetch | 5a | air26 (worker) |
 
