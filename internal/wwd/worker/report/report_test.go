@@ -498,6 +498,9 @@ func (c *cancelOnFirst) Result(ctx context.Context, id string, req wire.ResultRe
 		c.mu.Unlock()
 		return context.Canceled
 	}
+	if err := ctx.Err(); err != nil {
+		return err // the confirming try must not run under the lease's ended context
+	}
 	return c.sink.Result(ctx, id, req) // a repeat: the origin answers with the first answer
 }
 
