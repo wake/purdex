@@ -504,6 +504,18 @@ test('with the switch off a line continuation is read as it always was: nothing 
   expect(r.ran[0].command).toBe('go \\\n test ./...')
 })
 
+test('a continuation inside double quotes joins the word too', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'] } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go "te\\\nst" ./...')
+  expect(r.ran[0].command).toBe("'pdx' test go-pkg ./...")
+})
+
+test('with the switch off the older steps still read a backslash-newline as they always did', async ($, on) => {
+  const r = rig(on, () => ok(FREE), () => BASH_OK, JSON.stringify({ pdx: 'pdx' }))
+  await bash($, 'go \\\n test ./...')
+  expect(wouldWaits(r)).toEqual([['pdx', 'gate', 'would-wait', '--auto', '--json', '--', 'go', '\n', 'test', './...']])
+})
+
 test('the final command and its background are checked as one: a queued rewrite with a direct tool binary falls back whole when the final form would change the verdict', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
   r.verdict = (command, bg) => (command.includes('gate --auto') && bg === true ? 'ask' : 'allow')

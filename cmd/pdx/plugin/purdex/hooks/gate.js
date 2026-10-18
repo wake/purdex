@@ -472,10 +472,10 @@ async function planGate($, e) {
       break
     }
   }
-  // The steps above were each checked against the form before them. When the entry changed the call and the older steps then went
-  // further (a prefix, the background), the form that will run is checked once against the call as it came, and anything but an
-  // equal verdict puts the whole call back as it was.
-  if ((asked !== e.command || entryBackground) && (command !== asked || background !== (wasBackground || entryBackground))) {
+  // The steps above were each checked against the form before them. When the entry changed the call, the form that will run (after
+  // the prefix and the background the older steps added) is checked once against the call as it came, and anything but an equal
+  // verdict puts the whole call back as it was.
+  if (asked !== e.command || entryBackground) {
     const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, background)])
     if (before === null || before !== after) {
       log($, 'the final form of the call would change the permission verdict (' + before + ' → ' + after + '): the call runs as it came')
