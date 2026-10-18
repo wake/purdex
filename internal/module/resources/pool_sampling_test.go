@@ -168,3 +168,56 @@ func TestPoolSampling_FeedsTheGateCacheFromFacts(t *testing.T) {
 	rate := float64(total(got[2])-total(got[0])) / (float64(dt) / 1000)
 	assert.InDelta(t, 3.0, rate, 0.01, "the counters give wwd's rate (2 + 1 per second)")
 }
+
+// The reading the session attribution and the watcher take from the facts is usable and carries wwd's figures.
+func TestRawOfFacts(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	raw := rawOfFacts(*factsAt(now), []resources.Proc{{PID: 1, Pcpu: 7}, {PID: 2, Pcpu: 3}})
+	assert.True(t, raw.Usable())
+	assert.Equal(t, 10, raw.NCPU)
+	assert.Equal(t, uint64(16000)<<20, raw.MemBytes)
+	assert.Equal(t, 2, raw.Pressure)
+	assert.Equal(t, 5.0, raw.Load1)
+	assert.Equal(t, 10.0, raw.PcpuSum)
+	assert.False(t, raw.PageCounters, "no counters are made up")
+}
+
+// The facts' counter starts where the own sampler's last one was, so going back to the own reading is not a jump.
+func TestPoolSampling_CounterContinuesFromTheOwnReading(t *testing.T) {
+	p := newPoolSampling(t)
+	cfg := gate.Defaults()
+	cfg.Dir = p.dir
+	p.m.gateConfig = func() gate.Config { return cfg }
+	p.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		return withPages(zoneRaw(40, 1, 2), 5000), nil, nil
+	}}
+	p.step()
+	require.False(t, p.m.tick(context.Background())) // no facts: the own reading, counter 5000
+	p.m.sampler = p.s
+	p.step()
+	p.setFacts()
+	require.False(t, p.m.tick(context.Background()))
+	got := hostmem.Cache{Dir: p.dir}.Load().Samples
+	require.Len(t, got, 2)
+	assert.EqualValues(t, 5000+15, got[1].Pageouts+got[1].Swapouts, "5000 plus 5 s of 3 pages a second")
+}
+
+// Facts without a pressure level, or without any paging rate, write nothing to the gate's cache.
+func TestPoolSampling_NothingCachedWithoutLevelOrRate(t *testing.T) {
+	for name, mut := range map[string]func(f *wire.Facts){
+		"no level": func(f *wire.Facts) { f.Mem.Pressure = 0 },
+		"no rate":  func(f *wire.Facts) { f.Mem.PageOutRate, f.Mem.SwapOutRate = nil, nil },
+	} {
+		p := newPoolSampling(t)
+		cfg := gate.Defaults()
+		cfg.Dir = p.dir
+		p.m.gateConfig = func() gate.Config { return cfg }
+		p.step()
+		f := factsAt(p.m.now())
+		mut(f)
+		p.facts.Store(f)
+		require.False(t, p.m.tick(context.Background()), name)
+		assert.EqualValues(t, 1, p.s.procs.Load(), name+": the facts were used")
+		assert.Empty(t, hostmem.Cache{Dir: p.dir}.Load().Samples, name)
+	}
+}
