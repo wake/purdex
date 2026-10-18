@@ -366,7 +366,7 @@ rm -f "$stub"/*.log "$stub/down-once"
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_SSH_DOWN_ONCE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "one lost connection must be tried again"; }
 hasnt "FAIL ssh to" "one lost connection"
 has "PASS case 14" "one lost connection"
-# air19 for good: the only thing wrong in case 14 is the connection, and that alone FAILs the case
+# air19 for good: the case FAILs, with the connection named
 rm -f "$stub"/*.log "$stub/down-once"
 rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
