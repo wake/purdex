@@ -253,6 +253,7 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 			OrphanAfter: watch.DefaultSettings().OrphanAfter, SlotLongAfter: gcfg.Lifetime.AlertAfter,
 		},
 	}
+	in.Host = m.watchHostSignals() // E2 reads wwd's pressure and paging while the fleet row's source is pool
 	events := rt.det.Pass(in)
 	recErr := ""
 	sink := m.eventSink()
