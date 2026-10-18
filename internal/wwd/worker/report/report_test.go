@@ -412,3 +412,67 @@ func TestSummaryInputsThatAreNotRegularFilesAreNotRead(t *testing.T) {
 	s := h.s.results[0].Summary
 	assert.Zero(t, s.Passed+s.Failed, "the linked file was read")
 }
+
+// delivery builds the harness's Delivery: whether the origin took the result.
+func (h *harness) delivery() func(context.Context, runner.Ended) bool {
+	return h.r.Delivery(func(string) Sink { return h.s })
+}
+
+func TestDeliveryIsTrueOnlyForAResultTheOriginTook(t *testing.T) {
+	ranOK := func(t *testing.T) runner.Ended {
+		return ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	}
+	t.Run("a result taken", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.True(t, h.delivery()(context.Background(), ranOK(t)))
+	})
+	t.Run("cancelled and rejected results taken", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.True(t, h.delivery()(context.Background(), ended(runner.KindCancelled, run.Result{Outcome: run.Cancelled})))
+		rej := ended(runner.KindRejected, run.Result{})
+		rej.Err = &runner.Rejected{Reason: "no such task"}
+		assert.True(t, h.delivery()(context.Background(), rej))
+	})
+	t.Run("a result the origin refuses", func(t *testing.T) {
+		for name, refuse := range map[string]error{"409": &runner.Conflict{State: wire.StateQueued}, "404": runner.ErrNotFound} {
+			h := newHarness(t, Config{})
+			h.s.errs = []error{refuse}
+			assert.False(t, h.delivery()(context.Background(), ranOK(t)), name)
+		}
+	})
+	t.Run("a result given up on", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		h.s.always = errors.New("connection refused")
+		assert.False(t, h.delivery()(context.Background(), ranOK(t)), "RetryFor passes with no answer")
+	})
+	t.Run("a result whose log is not taken is still a result", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		h.s.errs = []error{nil, &runner.Conflict{State: wire.StateFailed}} // the result is taken, the log is refused
+		assert.True(t, h.delivery()(context.Background(), ranOK(t)))
+	})
+	t.Run("a context that ended before anything was sent", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		h.s.always = errors.New("down")
+		assert.False(t, h.delivery()(ctx, ranOK(t)))
+	})
+	t.Run("no result at all is no delivery", func(t *testing.T) {
+		for _, e := range []runner.Ended{
+			ended(runner.KindLost, run.Result{Outcome: run.Exited}),
+			ended(runner.KindInfra, run.Result{}),
+			ended(runner.KindReclaimed, run.Result{Outcome: run.Cancelled}),
+			ended(runner.KindShutdown, run.Result{}),
+			ended(runner.KindRan, run.Result{Outcome: run.Exited, CaptureErr: errors.New("disk full")}),
+			ended(runner.KindRan, run.Result{Outcome: run.Exited, Err: errors.New("unit not proven stopped")}),
+			ended(runner.KindRan, run.Result{Outcome: run.StartFailed}),
+		} {
+			h := newHarness(t, Config{})
+			assert.False(t, h.delivery()(context.Background(), e), "%s", e.Kind)
+		}
+	})
+	t.Run("an origin with no sink", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.False(t, h.r.Delivery(func(string) Sink { return nil })(context.Background(), ranOK(t)))
+	})
+}

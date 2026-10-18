@@ -41,10 +41,13 @@ type fakeConn struct {
 	releaseHangs bool
 	onRelease    func()
 	releaseTries int
-	claims       []string
-	starts       int
-	results      []wire.ResultRequest
-	releases     []wire.ReleaseRequest
+	// resultErr makes every result refuse; resultTries counts the attempts
+	resultErr   error
+	resultTries int
+	claims      []string
+	starts      int
+	results     []wire.ResultRequest
+	releases    []wire.ReleaseRequest
 }
 
 func newConn(host string, jobs ...wire.Job) *fakeConn {
@@ -96,6 +99,10 @@ func (c *fakeConn) Heartbeat(context.Context, string, string) (wire.HeartbeatRes
 func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.resultTries++
+	if c.resultErr != nil {
+		return c.resultErr
+	}
 	c.results = append(c.results, req)
 	return nil
 }
@@ -1094,5 +1101,43 @@ func TestAWorkerThatEndsWhileAMarkerCannotBeWrittenDoesNotTryToReleaseEither(t *
 	defer c.mu.Unlock()
 	if c.releaseTries != 0 {
 		t.Fatalf("%d release attempts: a quarantined job with no marker is never given back, not even when the worker ends", c.releaseTries)
+	}
+}
+
+func TestARunWhoseResultTheOriginRefusedIsNotRecorded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		refuse error
+		want   int
+	}{"taken": {nil, 1}, "refused 409": {&runner.Conflict{State: wire.StateQueued}, 0}, "refused 404": {runner.ErrNotFound, 0}} {
+		c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+		c.resultErr = tc.refuse
+		r := newRig(t, c)
+		rec := &recorder{conn: c}
+		r.loop.cfg.Usage = rec
+		r.round()
+		waitFor(t, name+": the result attempt", func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.resultTries >= 1 })
+		time.Sleep(4 * unit)
+		rec.mu.Lock()
+		n := len(rec.got)
+		rec.mu.Unlock()
+		if n != tc.want {
+			t.Errorf("%s: recorded %d runs, want %d: only a run whose result the origin took is the job's run", name, n, tc.want)
+		}
+	}
+}
+
+func TestAReleasedJobIsNotRecorded(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	rec := &recorder{conn: c}
+	r.loop.cfg.Usage = rec
+	r.ex.materialize = func(wire.Job) error { return errors.New("disk full") } // infra: released, no result
+	r.round()
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	time.Sleep(4 * unit)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.got) != 0 {
+		t.Fatalf("recorded %d: a job that went back to the queue has no run to record yet", len(rec.got))
 	}
 }

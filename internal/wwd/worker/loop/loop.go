@@ -38,7 +38,7 @@ type Origin struct {
 	Zone   func() wire.Zone // the origin's zone for origin_bonus (pool facts' Derived.PickZone()); nil: unknown
 }
 
-// UsageRecorder is told, after a job's result is delivered and before its workspace goes, how the run went. It only records: it cannot
+// UsageRecorder is told, after a job's result was taken by its origin and before its workspace goes, how the run went. It only records: it cannot
 // change the outcome (a panic is logged, an error is not even possible).
 type UsageRecorder interface {
 	RecordRun(e runner.Ended)
@@ -328,9 +328,9 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 
 // finish is the runner.Finish of one job: the delivery (report), then the usage record.
 func (l *Loop) finish(byHost map[string]Origin) runner.Finish {
-	deliver := func(context.Context, runner.Ended) {}
+	deliver := func(context.Context, runner.Ended) bool { return false }
 	if l.cfg.Report != nil {
-		deliver = l.cfg.Report.Finish(func(source string) report.Sink {
+		deliver = l.cfg.Report.Delivery(func(source string) report.Sink {
 			if o, ok := byHost[source]; ok {
 				return o.Conn
 			}
@@ -343,8 +343,11 @@ func (l *Loop) finish(byHost map[string]Origin) runner.Finish {
 		if !l.quarantine(ctx, e) {
 			return
 		}
-		deliver(ctx, e)
-		l.record(e)
+		// What is recorded is the run whose result the origin took: a result it refused or never got means the job is run again, and that
+		// run is the job's (a record per job id, first one wins, would otherwise keep the wrong one).
+		if deliver(ctx, e) {
+			l.record(e)
+		}
 	}
 }
 
