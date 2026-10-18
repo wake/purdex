@@ -175,7 +175,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                     {(() => {
                       // the lead's team directories, a full-width line under the row (only when the daemon reports `roots`)
                       const team = r.is_lead ? rosters[h.hostId]?.find((x) => x.lead.session_id === r.session_id) : undefined
-                      return team?.roots !== undefined && team.roots_rev !== undefined ? <TeamRootsEditor hostId={h.hostId} team={team} /> : null
+                      return team?.roots !== undefined && team.roots_rev !== undefined ? <div className="col-span-full mb-1 pl-3"><TeamRootsEditor hostId={h.hostId} team={team} /></div> : null
                     })()}
                   </li>
                 )})}
