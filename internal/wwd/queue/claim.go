@@ -265,7 +265,10 @@ func loadHeld(ctx context.Context, c *sql.Conn, id string, forPeers bool) (held,
 }
 
 // live is nil when claimID is the claim the job is held under now; otherwise it is the 409 for the job's state, and the caller changes
-// nothing.
+// nothing. It does not look at the lease deadline, on purpose: a lease is taken back by the sweep's transaction (lapseLeases), which also
+// clears the claim, so until then nobody else holds the job and a late heartbeat or result from the one holder it has is honoured (the
+// worker retries a result for up to 10 minutes, spec 4.2). Once the sweep has run, the claim is stale and every call is a 409. Two
+// executions cannot overlap either way: a job is only ever claimed again after that transaction.
 func (h held) live(claimID string) error {
 	if (h.state == wire.StateClaimed || h.state == wire.StateRunning) && h.claimID.Valid && h.claimID.String == claimID {
 		return nil
@@ -316,8 +319,9 @@ func (q *Queue) lapseLeases(ctx context.Context, c *sql.Conn, nowMS int64, chang
 	return len(ids), nil
 }
 
-// extendHeldLeases gives every claimed or running job a full lease from now. wwd calls it when the queue starts, before the first sweep,
-// so workers that kept running while the origin was down can still renew (spec 4.2).
+// extendHeldLeases gives every claimed or running job a full lease from now. New calls it, so a queue opened at wwd's start does it
+// before the first sweep, and workers that kept running while the origin was down can still renew (spec 4.2). wwd opens one queue per
+// process; opening another over the same database is the same as a restart.
 func extendHeldLeases(ctx context.Context, db *sql.DB, nowMS int64, defaultLeaseS int) error {
 	_, err := db.ExecContext(ctx, `UPDATE jobs SET lease_deadline = ? + coalesce(lease_s, ?) * 1000 WHERE state IN ('claimed','running')`, nowMS, defaultLeaseS)
 	return err

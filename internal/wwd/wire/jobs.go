@@ -338,6 +338,9 @@ func (r ResultRequest) Validate() error {
 	if r.Reason != "" && !slices.Contains(ResultReasons, r.Reason) {
 		return fmt.Errorf("result: reason %q is not one a worker may post", r.Reason)
 	}
+	if r.Reason != "" && r.State != StateFailed {
+		return fmt.Errorf("result: reason %q goes with state failed, not %q", r.Reason, r.State)
+	}
 	return nil
 }
 

@@ -372,6 +372,20 @@ func TestResultReasonIsAWhitelist(t *testing.T) {
 	}
 }
 
+// A reason explains a failure: a success has none (spec 4.1), and oom, timeout and infra go only with failed. Mutation gate: no
+// cross-check → succeeded with oom is stored as it came.
+func TestResultReasonGoesOnlyWithFailed(t *testing.T) {
+	for _, st := range []wire.JobState{wire.StateSucceeded, wire.StateCancelled, wire.StateSuperseded} {
+		for _, r := range wire.ResultReasons {
+			assert.Error(t, wire.ResultRequest{ClaimID: wire.NewClaimID(), State: st, Reason: r}.Validate(), "%s with %s", st, r)
+		}
+		assert.NoError(t, wire.ResultRequest{ClaimID: wire.NewClaimID(), State: st}.Validate(), string(st))
+	}
+	for _, r := range wire.ResultReasons {
+		assert.NoError(t, wire.ResultRequest{ClaimID: wire.NewClaimID(), State: wire.StateFailed, Reason: r}.Validate(), r)
+	}
+}
+
 // A job that a newer submission superseded while it ran keeps the state its worker posted, with superseded_by and the reason that says so
 // (spec 4.2: a non-interruptible older job runs to its end).
 func TestResultOfASupersededRunningJobCarriesSupersededBy(t *testing.T) {
