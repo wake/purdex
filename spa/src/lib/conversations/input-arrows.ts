@@ -43,7 +43,7 @@ export function caretAtEdge(dir: ArrowDir, draft: string, selectionStart: number
 
 /** What an arrow press means for the input. */
 export type ArrowDecision =
-  /** Up in an empty box: call back every message the App still holds. */
+  /** Up in an empty box or on the first line of the draft: call back every message pending (the queue goes in front of the draft). */
   | 'take_back_all'
   /** Try a history step (it may still decline: nothing to walk to). */
   | 'history'
@@ -59,17 +59,20 @@ export interface ArrowFacts {
   walking: boolean
   /** `caretAtEdge` for this press. */
   atEdge: boolean
+  /** A draft that Esc just cleared is within its undo window: what comes back must not be written over it. */
+  clearedPending: boolean
   /** Asked only when everything before it says yes (it reads the queue). */
   canTakeBackAll: () => boolean
 }
 
 /**
- * The order is the rule: taking messages back comes first (Up, in an empty box, with something held); then the sent history — a shown history item
+ * The order is the rule: taking messages back comes first (Up, in an empty box or on the first line of the draft, with something to take back: MS2-4, L5,
+ * the terminal's own Up); then the sent history — a shown history item
  * is a step only with the caret on its first line (Up) / last line (Down), an edited one is an ordinary draft; a walk that is not on starts only
  * with Up in an empty box. Everything else is the caret's.
  */
 export function decideArrow(f: ArrowFacts): ArrowDecision {
-  if (f.dir === 'up' && f.recall && f.emptyBox && f.canTakeBackAll()) return 'take_back_all'
+  if (f.dir === 'up' && f.recall && (f.emptyBox || (f.atEdge && !f.clearedPending)) && f.canTakeBackAll()) return 'take_back_all'
   if (f.walking ? !f.atEdge : !(f.dir === 'up' && f.emptyBox)) return 'caret'
   return 'history'
 }
