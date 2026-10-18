@@ -92,6 +92,7 @@ echo "$*" >> "$STUB/sql.log"
 case "$*" in
   *"select attempts"*) echo 1 ;;
   *"claim_worker='air19'"*)   # the first question is the list at the start (empty); later ones give a new id when STUB_AIR19_LATER is set
+    [ -e "$STUB/air19-asked" ] || { [ ! -e /tmp/wwd-c2-ran.log ] || : > "$STUB/order-bad"; }   # the probe log must be emptied before the list is taken
     if [ -e "$STUB/air19-asked" ]; then [ -z "${STUB_AIR19_LATER:-}" ] || echo "$STUB_AIR19_LATER"; [ -z "${STUB_AIR19_PROBE:-}" ] || echo "job=x host=air19" >> /tmp/wwd-c2-ran.log; else : > "$STUB/air19-asked"; fi ;;
   *"select id"*) echo j_stub_exp ;;
   *) echo 0 ;;
@@ -269,6 +270,12 @@ rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_AIR19_PROBE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "a job that ran on air19 must make the exit code non-zero"
 has "FAIL air19 claimed nothing since this run began: got '1', expected '0'" "case 14 with a probe line on air19"
+
+# the probe log of air19 is emptied BEFORE the list of its claims is taken (a probe line written in between would be lost)
+rm -f "$stub"/*.log "$stub/air19-asked" "$stub/order-bad"
+echo "job=old host=air19" > /tmp/wwd-c2-ran.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 on a quiet pool"; }
+[ ! -e "$stub/order-bad" ] || fail "the list of air19's claims was taken before its probe log was emptied"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0

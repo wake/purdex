@@ -240,11 +240,11 @@ precheck() {
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
   x mkdir -p "$WORK/repo" "$WORK/saved"
+  on air19 "rm -f $RAN"                       # first the log, then the list: the list is the moment the watching starts
   if [ "$dry" -eq 0 ]; then
     pc_b=$(db_q "$AIR19_Q") || { say "FAIL: cannot read the claims of air19 from wwd.db"; exit 1; }
     printf '%s\n' "$pc_b" | sort -u > "$WORK/air19.base"
   fi
-  on air19 "rm -f $RAN"
   scratch_repo
 }
 # the scratch repo: probe tasks, one commit
