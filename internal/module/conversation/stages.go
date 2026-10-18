@@ -47,6 +47,10 @@ const (
 	// An id that never reached Claude Code's queue is read by an item stamped just before its Enter up to this long after.
 	stageItemBefore = 2 * time.Second
 	stageItemAfter  = 30 * time.Second
+	// A queue row without a timestamp is dated by the Enter; an item may be stamped a hair before the daemon noted the Enter.
+	stageNoStampSlack = 500 * time.Millisecond
+	// maxStageUsed bounds the used-item map by count, whatever the traffic; the oldest go first.
+	maxStageUsed = 4096
 )
 
 type stageRow struct {
@@ -72,7 +76,10 @@ type sessionStages struct {
 	seq     uint64
 	arrival uint64
 	rows    map[string]*stageRow
-	used    map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
+	// lossy: the feed's queue tracker once overflowed, so what it shows is a subset of Claude Code's queue and a row that is not
+	// there proves nothing. It stays set until the queue is seen empty with no id queued (the next time the two must agree).
+	lossy bool
+	used  map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
 }
 
 type stageLedger struct {
@@ -287,6 +294,16 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 		return
 	}
 	rows := s.sorted()
+	queuedNow := false
+	for _, r := range rows {
+		queuedNow = queuedNow || r.stage == stageQueued
+	}
+	switch {
+	case lossy:
+		s.lossy = true
+	case s.lossy && len(queue) == 0 && !queuedNow:
+		s.lossy = false
+	}
 	items = l.pruneUsedLocked(s, rows, items)
 
 	var qs []ccnorm.Queued
@@ -313,19 +330,21 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 		}
 		if i := take(normText(ccnorm.ShownQueued(r.text)), r.claim.at, 0); i >= 0 {
 			consumed[i] = true
-		} else if !lossy {
+		} else if !s.lossy {
 			left = append(left, r)
 		}
 	}
 	// 2. ids that left the queue are read by their items, oldest first
 	for _, r := range left {
 		text := normText(r.text)
-		from := r.claim.at // a row with no timestamp falls back to the Enter: an older same-text item is never ours
+		// Claude Code writes the item after the row, so nothing older than the row is ours; a row with no timestamp is dated by
+		// the Enter, with a hair of slack.
+		from := r.claim.at
 		if from <= 0 {
-			from = r.textFrom.UnixMilli()
+			from = r.textFrom.UnixMilli() - stageNoStampSlack.Milliseconds()
 		}
 		for _, it := range items {
-			if _, taken := s.used[it.ID]; taken || it.At < from-stageItemBefore.Milliseconds() || normText(it.Text) != text {
+			if _, taken := s.used[it.ID]; taken || it.At < from || normText(it.Text) != text {
 				continue
 			}
 			s.used[it.ID] = it.At
@@ -348,6 +367,7 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, ite
 		unclaimed = append(unclaimed, r)
 	}
 	l.readIdleLocked(s, unclaimed, items, now)
+	s.trimUsed()
 }
 
 // pruneUsedLocked forgets the used items no id in flight could still be given (they are older than every window), and returns
@@ -377,6 +397,7 @@ func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items 
 			delete(s.used, id)
 		}
 	}
+	s.trimUsed()
 	kept := items[:0:0]
 	for _, it := range items {
 		if it.At >= minFrom {
@@ -384,6 +405,26 @@ func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items 
 		}
 	}
 	return kept
+}
+
+// trimUsed keeps the used-item map within maxStageUsed entries, dropping the oldest items first.
+func (s *sessionStages) trimUsed() {
+	over := len(s.used) - maxStageUsed
+	if over <= 0 {
+		return
+	}
+	type usedAt struct {
+		id string
+		at int64
+	}
+	all := make([]usedAt, 0, len(s.used))
+	for id, at := range s.used {
+		all = append(all, usedAt{id, at})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at < all[j].at })
+	for _, u := range all[:over] {
+		delete(s.used, u.id)
+	}
 }
 
 // readIdleLocked pairs ids that never queued with the items that are their messages: same text, the item inside the window

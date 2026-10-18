@@ -323,7 +323,7 @@ func TestStages_ALossyQueueNeverJudgesAnIdToHaveLeft(t *testing.T) {
 	l.observe("s", nil, true, []stageItem{item("u1", "same", t0.Add(3*time.Second))}, t0.Add(4*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, "the row may only have been pushed out of the tracker")
 	l.observe("s", nil, false, []stageItem{item("u1", "same", t0.Add(3*time.Second))}, t0.Add(5*time.Second))
-	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage, "with a complete queue the same evidence reads it")
+	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, "and it stays unjudged until the queue is seen empty (see the sticky test)")
 }
 
 func TestStages_UsedItemsAreForgottenWhenNoIdCouldStillMatchThem(t *testing.T) {
@@ -380,4 +380,56 @@ func TestStages_QueuedIdsRetainNoTextBeyondTheCounted(t *testing.T) {
 	for _, r := range l.sessions["s"].rows {
 		assert.Empty(t, r.text)
 	}
+}
+
+// A queued id is read only by an item stamped at or after its queue row: Claude Code writes the item after the row.
+func TestStages_QueuedIdIsReadOnlyByItemsFromTheRowOn(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		delta time.Duration
+		want  string
+	}{{"1 ms before the row", -time.Millisecond, "queued"}, {"at the row", 0, "read"}, {"after the row", time.Millisecond, "read"}} {
+		var l stageLedger
+		row := t0.Add(time.Second)
+		l.begin("s", "a", "dup", t0)
+		l.set("s", "a", "entered", "", "fill", t0.Add(500*time.Millisecond))
+		l.observe("s", []ccnorm.Queued{uq("dup", row)}, false, nil, t0.Add(2*time.Second))
+		require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, c.name)
+		l.observe("s", nil, false, []stageItem{item("u1", "dup", row.Add(c.delta))}, t0.Add(3*time.Second))
+		assert.Equal(t, c.want, stageOf(t, &l, "s", "a").Stage, c.name)
+	}
+}
+
+// Once the tracker overflowed, the header shrinking back under the limit does not make a missing row proof of anything.
+func TestStages_LossyStaysUntilTheQueueIsSeenEmpty(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "same", t0)
+	l.set("s", "a", "entered", "", "fill", t0.Add(time.Second))
+	row := []ccnorm.Queued{uq("same", t0.Add(1100*time.Millisecond))}
+	l.observe("s", row, false, nil, t0.Add(2*time.Second))
+	require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+	l.observe("s", row, true, nil, t0.Add(3*time.Second)) // 50 rows: the oldest may have been pushed out
+	other := []ccnorm.Queued{uq("other", t0.Add(2*time.Second))}
+	l.observe("s", other, false, []stageItem{item("u1", "same", t0.Add(4*time.Second))}, t0.Add(5*time.Second)) // shrunk to 49 and our row is gone
+	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, "the overflow is remembered")
+	l.observe("s", nil, false, []stageItem{item("u1", "same", t0.Add(4*time.Second))}, t0.Add(6*time.Second))
+	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, "an empty header proves nothing while an id is still queued")
+	l.recallAll("s", t0.Add(7*time.Second)) // the person took the queue back: nothing is queued, the tracker is whole again
+	l.observe("s", nil, false, nil, t0.Add(8*time.Second))
+	assert.False(t, l.sessions["s"].lossy)
+}
+
+func TestStages_UsedItemsAreBoundedByCountWhateverTheTraffic(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "pin", "pinned", t0) // one old id in flight keeps every window open
+	l.set("s", "pin", "entered", "", "fill", t0)
+	n := maxStageUsed + 50
+	for i := 0; i < n; i++ {
+		id := "m" + string(rune('A'+i%26)) + string(rune('a'+(i/26)%26)) + string(rune('0'+i/676))
+		at := t0.Add(time.Duration(i+1) * time.Millisecond)
+		l.begin("s", id, "x", at)
+		l.set("s", id, "entered", "", "fill", at)
+		l.observe("s", nil, false, []stageItem{item("it-"+id, "x", at)}, at)
+	}
+	assert.LessOrEqual(t, len(l.sessions["s"].used), maxStageUsed)
 }
