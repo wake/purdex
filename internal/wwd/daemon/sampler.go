@@ -52,6 +52,7 @@ type Sampler struct {
 	opts      SamplerOptions
 	collector *facts.Collector
 	latch     derived.ZoneLatch
+	mstats    derived.MinuteAgg // the open minute's per-sample totals (guarded by mu)
 
 	mu      sync.RWMutex
 	ring    *facts.Ring
@@ -128,7 +129,7 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 	f.Derived = derived.Compute(&s.latch, in)
 	s.ring.Add(f)
-	if done := s.addToMinute(f); done != nil && s.opts.Minutes != nil {
+	if done := s.addToMinute(f, err == nil); done != nil && s.opts.Minutes != nil {
 		s.unsaved = append(s.unsaved, *done)
 		if over := len(s.unsaved) - maxUnsaved; over > 0 {
 			s.unsaved = s.unsaved[over:]
@@ -194,22 +195,28 @@ func (s *Sampler) logMinutes(what string, err error) {
 // addToMinute collects records of one wall-clock minute and turns a finished
 // minute into a rollup, which it returns (nil when no minute finished). The
 // caller holds the lock.
-func (s *Sampler) addToMinute(f wire.Facts) *wire.Facts {
+func (s *Sampler) addToMinute(f wire.Facts, ok bool) *wire.Facts {
 	m := f.At.Truncate(time.Minute)
 	var done *wire.Facts
 	if len(s.minute) > 0 {
 		open := s.minute[0].At.Truncate(time.Minute)
 		if m.Before(open) {
-			return nil // the clock was set back: a minute already summed is not summed twice
+			s.mstats.Break() // a run measured across the step would have a negative length
+			return nil       // the clock was set back: a minute already summed is not summed twice
 		}
 		if !m.Equal(open) {
 			r := facts.Rollup(s.minute)
+			st := s.mstats.Close()
+			r.Stats = &st
 			s.rollups.Add(r)
 			done = &r
 			s.minute = s.minute[:0]
 		}
 	}
 	s.minute = append(s.minute, facts.Clone(f))
+	if ok { // a sample that failed adds nothing to the minute's seconds
+		s.mstats.Add(f, SampleInterval)
+	}
 	return done
 }
 
@@ -251,6 +258,8 @@ func (s *Sampler) History(since time.Time, step string) []wire.Facts {
 	var live []wire.Facts // the minute being filled, as a partial one
 	if len(s.minute) > 0 {
 		if r := facts.Rollup(s.minute); !r.At.Before(since) {
+			st := s.mstats.Snapshot()
+			r.Stats = &st
 			live = []wire.Facts{r}
 		}
 	}

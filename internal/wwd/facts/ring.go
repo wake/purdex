@@ -73,10 +73,13 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	out.Mem.Pressure = 0
 	out.Mem.PageOutRate, out.Mem.SwapOutRate = nil, nil
 	out.Derived.Zone = wire.ZoneUnknown
+	out.Worker.Running = wire.Slots{}
 	for _, r := range recs {
 		l1 += r.CPU.Load1
 		l5 += r.CPU.Load5
 		idle += r.CPU.IdlePct
+		out.Worker.Running.Heavy = max(out.Worker.Running.Heavy, r.Worker.Running.Heavy)
+		out.Worker.Running.Light = max(out.Worker.Running.Light, r.Worker.Running.Light)
 		out.Mem.AvailableMB = min(out.Mem.AvailableMB, r.Mem.AvailableMB)
 		out.Mem.Pressure = max(out.Mem.Pressure, r.Mem.Pressure)
 		out.Mem.PageOutRate = maxPtr(out.Mem.PageOutRate, r.Mem.PageOutRate)

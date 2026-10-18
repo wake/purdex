@@ -25,6 +25,53 @@ type Facts struct {
 	Exception []FactExc   `json:"exceptions"`
 	Derived   Derived     `json:"derived"`
 	Worker    FactsWorker `json:"worker"`
+	// Stats is on a per-minute rollup only (a 5 s record has no "stats" key, and a minute stored before this existed
+	// decodes with it nil): what the minute's 5 s samples add up to, which the rollup record itself cannot say.
+	Stats *MinuteStats `json:"stats,omitempty"`
+}
+
+// MinuteStats is worked out per 5 s sample inside wwd and totalled per minute (internal/wwd/derived.MinuteAgg).
+// SampledS counts the seconds that were really sampled (5 per sample), so a minute wwd started or restarted inside has
+// fewer than 60. Full is the "host is full" flag with its 0.9 hysteresis (derived.FullLatch, the same definition as
+// resources.FullLatch): FullTicks the samples it was on, FullStarts its off-to-on transitions in the minute,
+// FullLongestS the longest run of it that was running in the minute (a run that began earlier counts, and may be longer
+// than the minute). Normal/Warning/DangerS are the seconds sampled in each zone (an unknown zone is in SampledS and in
+// none). The running maxima are the worker's. GateWaitingMax is null: wwd has no gate to count until the gate is folded
+// into it (WWD-8/9).
+type MinuteStats struct {
+	SampledS        int  `json:"sampled_s"`
+	FullTicks       int  `json:"full_ticks"`
+	FullStarts      int  `json:"full_starts"`
+	FullLongestS    int  `json:"full_longest_s"`
+	NormalS         int  `json:"normal_s"`
+	WarningS        int  `json:"warning_s"`
+	DangerS         int  `json:"danger_s"`
+	HeavyRunningMax int  `json:"heavy_running_max"`
+	LightRunningMax int  `json:"light_running_max"`
+	GateWaitingMax  *int `json:"gate_waiting_max"`
+}
+
+// Validate checks that the figures can be a minute's.
+func (s MinuteStats) Validate() error {
+	for name, v := range map[string]int{
+		"sampled_s": s.SampledS, "full_ticks": s.FullTicks, "full_starts": s.FullStarts, "full_longest_s": s.FullLongestS,
+		"normal_s": s.NormalS, "warning_s": s.WarningS, "danger_s": s.DangerS,
+		"heavy_running_max": s.HeavyRunningMax, "light_running_max": s.LightRunningMax,
+	} {
+		if v < 0 {
+			return fmt.Errorf("stats: %s is negative", name)
+		}
+	}
+	if s.GateWaitingMax != nil && *s.GateWaitingMax < 0 {
+		return fmt.Errorf("stats: gate_waiting_max is negative")
+	}
+	if s.NormalS+s.WarningS+s.DangerS > s.SampledS {
+		return fmt.Errorf("stats: the zone seconds add up to more than sampled_s")
+	}
+	if s.FullTicks > s.SampledS {
+		return fmt.Errorf("stats: full_ticks is more than sampled_s")
+	}
+	return nil
 }
 
 type CPU struct {
@@ -140,6 +187,11 @@ func (f Facts) Validate() error {
 	for i, p := range f.Procs {
 		if p.Owner != nil && !p.Owner.Kind.Valid() {
 			return fmt.Errorf("facts: procs[%d]: invalid owner kind %q", i, p.Owner.Kind)
+		}
+	}
+	if f.Stats != nil {
+		if err := f.Stats.Validate(); err != nil {
+			return fmt.Errorf("facts: %w", err)
 		}
 	}
 	return nil

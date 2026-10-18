@@ -55,6 +55,7 @@ func roundTrip[T any](t *testing.T, name string) T {
 func TestRoundTripFixtures(t *testing.T) {
 	roundTrip[Facts](t, "facts_darwin.json")
 	roundTrip[Facts](t, "facts_linux.json")
+	roundTrip[Facts](t, "facts_minute_stats.json")
 	roundTrip[Info](t, "info.json")
 	roundTrip[Pool](t, "pool.json")
 	roundTrip[FactsHistoryResponse](t, "facts_history_response.json")
