@@ -627,3 +627,36 @@ func TestRunSweepsOnItsOwnPause(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestSwitchingTheOwnerRuleOffWhileYieldingFreesTheWorker(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+		st.OwnerRule = "air26"
+		f.Owner = &wire.OwnerState{Active: true, Reason: "hid"}
+	})
+	r.round() // yielding
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { st.OwnerRule = ""; f.Owner = nil })
+	time.Sleep(2 * unit)
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: with the rule gone nobody is watched, and the worker must not stay stopped", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
+
+func TestSwitchingTheOwnerRuleOnMakesTheWorkerWaitForAReading(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.round() // no rule: takes the job... use a second job to see the next round
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	c.mu.Lock()
+	c.jobs["b"] = qjob("b", wire.ClassDev, 0)
+	c.mu.Unlock()
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { st.OwnerRule = "air26" }) // no reading yet
+	time.Sleep(2 * unit)
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: a host that has just been given an owner rule takes nothing before its first reading", claims)
+	}
+}

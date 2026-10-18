@@ -92,6 +92,8 @@ type Config struct {
 type Loop struct {
 	cfg Config
 	y   *yield.Yielder
+	// ownerRule is whether y was made for a host with an owner rule
+	ownerRule bool
 
 	mu        sync.Mutex
 	running   map[string]*runner.Running
@@ -178,8 +180,10 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	if l.cfg.Facts != nil {
 		facts = l.cfg.Facts()
 	}
-	if l.y == nil {
-		l.y = yield.New(l.cfg.Now, st.OwnerRule != "")
+	// owner_rule can be changed while the worker runs (PUT /v1/worker): a yielder made for the old setting would go on yielding to an
+	// owner nobody watches any more, or take jobs without a first reading, so it is made again when the setting flips
+	if rule := st.OwnerRule != ""; l.y == nil || rule != l.ownerRule {
+		l.y, l.ownerRule = yield.New(l.cfg.Now, rule), rule
 	}
 	var owner *wire.OwnerState
 	if facts != nil {
