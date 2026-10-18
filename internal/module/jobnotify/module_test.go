@@ -28,6 +28,7 @@ func job(id string, state wire.JobState, finished time.Time) wire.Job {
 		panic(err)
 	}
 	j.ID, j.State, j.Task, j.Submitter.Session = id, state, "lint", "sess-1"
+	j.CreatedAt = finished // wwd made it when it ended, unless a test says otherwise
 	if state.Terminal() {
 		code := 0
 		if state == wire.StateFailed {
@@ -307,9 +308,34 @@ func TestAJobStampedByASlowClockIsToldAfterTheFirstPass(t *testing.T) {
 	src := &fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
 	m := newMod(t, t.TempDir(), src, s)
 	m.catchUpNow()
-	src.log = append(src.log, job("j_slow", wire.StateSucceeded, t0.Add(-10*time.Hour))) // ended just now, stamped ten hours back
+	src.log = append(src.log, slowJob("j_slow")) // ended just now, stamped ten hours back
 	m.catchUpNow()
 	if got := strings.Join(s.texts(), "\n"); len(s.texts()) != 2 || !strings.Contains(got, "j_slow") {
+		t.Fatalf("told %q", s.texts())
+	}
+}
+
+// slowJob is a job wwd made after the module first ran and a worker ended with a clock ten hours behind.
+func slowJob(id string) wire.Job {
+	j := job(id, wire.StateSucceeded, t0.Add(-10*time.Hour))
+	j.CreatedAt = t0.Add(time.Minute)
+	return j
+}
+
+// A first pass that stopped part-way (the cursor of an earlier page is stored, the window is still in force) must not mistake a job
+// that is new for history because its worker's clock is slow: the window reads wwd's own created_at.
+func TestARestartInTheMiddleOfTheFirstPassStillTellsAJobFromASlowClock(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{log: []wire.Job{job("j_legacy", wire.StateSucceeded, t0.Add(-5*time.Hour)), slowJob("j_slow")}}
+	m := newMod(t, t.TempDir(), src, s)
+	if err := m.store.setCursor("1"); err != nil { // the first page was read and stored; then the process died
+		t.Fatal(err)
+	}
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window is not in force")
+	}
+	m.catchUpNow()
+	if got := strings.Join(s.texts(), "\n"); len(s.texts()) != 1 || !strings.Contains(got, "j_slow") {
 		t.Fatalf("told %q", s.texts())
 	}
 }

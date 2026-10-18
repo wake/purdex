@@ -197,7 +197,10 @@ const pageSize = 1000
 // the outbox ignores by job id. wwd answering without a cursor (a version that does not know ?after=) is an error, never "nothing new".
 //
 // Until the first pass has read everything, the legacy window (the time the module first ran, less the overlap) keeps the history
-// that was there before the module from being told: a job that ended before it is skipped.
+// that was there before the module from being told: a job made before it is skipped. The window reads the job's created_at, which
+// wwd's own clock stamps (a submission cannot carry it); the finished time may be a remote worker's, and a slow clock there must not
+// decide that a job which ended after a restart is history. The price: a job made over an hour before the module first ran that ends
+// after it is told by the event stream or not at all.
 func (m *Module) catchUp(ctx context.Context) {
 	cursor, have, err := m.store.cursor()
 	if err != nil {
@@ -222,8 +225,8 @@ func (m *Module) catchUp(ctx context.Context) {
 			return
 		}
 		for _, j := range page.Jobs {
-			if windowed && (j.Result == nil || j.Result.FinishedAt == nil || j.Result.FinishedAt.Before(floor)) {
-				continue
+			if windowed && j.CreatedAt.Before(floor) {
+				continue // made before this module first ran: history, not news
 			}
 			if _, err := m.enqueue(j); err != nil {
 				// the cursor stays before this page: the job is read again by the next catch-up
