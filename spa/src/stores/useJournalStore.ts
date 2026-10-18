@@ -9,8 +9,8 @@
 //
 // Data. A unit lives under `byHost[host].units[unitKey]` (`unitKey` = `<kind>:<id>` from the daemon's answer);
 // `unitOfSession` remembers which unit a session's answer named. Entries are merged by id and ALWAYS re-sorted by (at, id);
-// the 待確認 band (`confirms`) is the server's list of every open 待確認 of the unit, newest first (a host without journal.confirm.v1 sends
-// the old `pinned[]` instead, which then is the band). EVENTS NEVER FETCH: `markStale` only raises a flag, the loader decides
+// the 待確認 band (`confirms`) is the server's list of every open 待確認 of the unit, newest first (an answer without `confirms[]` has no
+// band). EVENTS NEVER FETCH: `markStale` only raises a flag, the loader decides
 // whether to read (journal-loader.ts). A flag is cleared by a read that STARTED after the event (`staleAt` > `readAt`
 // compare store-clock stamps), so an event landing during a read keeps the unit stale.
 // A read that lands after its host was forgotten (`epoch`) or its connection ended (`gens`) is dropped.
@@ -272,8 +272,8 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const held = h.units[key]
         // What the server says about an item wins over a pending optimistic check of it (the newest page speaks for the whole band).
         dropChecks(hostId, key, startedAt, older ? new Set(page.entries.map((e) => e.id)) : undefined)
-        // The band is `confirms[]` where the host declares journal.confirm.v1 (and sent it), else the old `pinned[]`.
-        const confirmBand = s.confirmSupport[hostId] === true && page.confirms !== null
+        // The band is `confirms[]`; an answer without it has no open 待確認.
+        const confirmBand = page.confirms !== null
         // A session page of ANOTHER leader session than the held current one (a relay or /clear happened) is a different list, not new rows.
         const paged = sessionMode && page.page !== ''
         const sameSession = !paged || held?.currentPage === page.page
@@ -294,7 +294,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const next: UnitState = {
           unit: page.unit, project: page.project, personName: page.personName, entries,
           // The band and the open count are the unit's live state: only the newest page carries them.
-          confirms: older ? (held?.confirms ?? []) : sortBand(confirmBand ? page.confirms! : page.pinned),
+          confirms: older ? (held?.confirms ?? []) : sortBand(page.confirms ?? []),
           openConfirms: older ? (held?.openConfirms ?? 0) : page.openConfirms,
           // `more` describes the OLDEST loaded entry: an older page sets it; a newest-page re-read keeps it once older months are held.
           more: paged ? false : older || !held || held.entries.length === 0 ? page.more : held.more,

@@ -28,7 +28,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 const page = (items: Array<[string, boolean]>) => {
   const openItems = items.filter(([, done]) => !done).length
   const c = wireConfirm('c1', { at: T0, pinned: openItems > 0, items: items.map(([text, done]) => ({ text, done })) })
-  return { kind: 'ok', value: parseJournalPage(wirePage({ unit: { kind: 'solo', id: 'u1', label: 'solo' }, entries: [c], pinned: openItems > 0 ? [c] : [], open_confirms: openItems })) }
+  return { kind: 'ok', value: parseJournalPage(wirePage({ unit: { kind: 'solo', id: 'u1', label: 'solo' }, entries: [c], confirms: openItems > 0 ? [c] : [], open_confirms: openItems })) }
 }
 const count = () => screen.queryByTestId('journal-journal-count')?.textContent ?? null
 const read = () => act(async () => { await useJournalStore.getState().loadJournal(HOST, 'S1') })
