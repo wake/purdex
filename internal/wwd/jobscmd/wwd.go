@@ -18,11 +18,13 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd worker on|off [--heavy N] [--light N]
        pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
        pdx wwd exception stop <name>
-  status     this host's wwd: version, labels, worker switch and slots
+       pdx wwd usage [--since <6h|7d|RFC3339> [--after <job id>]] [--limit N] [--json]
+  status    this host's wwd: version, labels, worker switch and slots
   pool       every host the pool knows: reachable, pressure zone, free slots, worker
   worker     switch this host's worker; --heavy / --light set the slot counts
   exception  tell wwd a dev server or packaging run is using the host: its worker takes no new heavy work (and no light work if
              --holds says light) until --until passes or --pid ends
+  usage      what this host's finished jobs used (CPU, cores, memory) and what the host was like around them; kept 30 days
 `
 
 // WWD is `pdx wwd`; it returns the exit code.
@@ -40,6 +42,8 @@ func WWD(ctx context.Context, args []string, env Env) int {
 		return wwdWorker(ctx, args, env)
 	case "exception":
 		return wwdException(ctx, args, env)
+	case "usage":
+		return wwdUsage(ctx, args, env)
 	case "help":
 		io.WriteString(env.Stdout, WWDUsage)
 		return ExitOK
