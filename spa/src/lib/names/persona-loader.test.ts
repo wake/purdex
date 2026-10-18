@@ -44,6 +44,18 @@ describe('persona loader', () => {
     await vi.waitFor(() => expect(usePersonaStore.getState().load).toHaveBeenCalledWith('h1'))
   })
 
+  it('forgets and reloads a connected host whose endpoint moved', async () => {
+    setCaps('h1', ['personas.v1'])
+    const host = (port: number) => ({ id: 'h1', ip: '10.0.0.1', port, token: 't' }) as never
+    useHostStore.setState({ hosts: { h1: host(7860) }, runtime: { h1: { status: 'connected' } as never } })
+    const stop = startPersonaLoader()
+    vi.mocked(usePersonaStore.getState().load).mockClear()
+    useHostStore.setState({ hosts: { h1: host(7861) } })
+    expect(usePersonaStore.getState().forget).toHaveBeenCalledWith('h1')
+    await vi.waitFor(() => expect(usePersonaStore.getState().load).toHaveBeenCalledWith('h1'))
+    stop()
+  })
+
   it('forgets a host that was removed', () => {
     const stop = startPersonaLoader()
     useHostStore.setState({ hosts: { h1: { id: 'h1' } as never }, runtime: {} })

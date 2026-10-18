@@ -4,6 +4,7 @@
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, selectPersonasV1 } from '../../stores/useNexHostStore'
 import { usePersonaStore } from '../../stores/usePersonaStore'
+import { hostEndpointKey } from '../../stores/useHostConfigStore'
 
 export const PERSONAS_EVENT_TYPE = 'hostconfig.personas'
 
@@ -28,7 +29,10 @@ export function startPersonaLoader(): () => void {
     }
     for (const hostId of Object.keys(next.hosts)) {
       const connected = next.runtime[hostId]?.status === 'connected'
-      if (connected && prev.runtime[hostId]?.status !== 'connected') void loadPersonasIfSupported(hostId)
+      // The cached copy belongs to the old daemon when the address, port or token moved under the same id.
+      const moved = !!prev.hosts[hostId] && hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])
+      if (moved) usePersonaStore.getState().forget(hostId)
+      if (connected && (moved || prev.runtime[hostId]?.status !== 'connected')) void loadPersonasIfSupported(hostId)
     }
   })
 }

@@ -55,6 +55,30 @@ describe('usePersonaStore', () => {
     expect(usePersonaStore.getState().byHost.h1).toEqual({ status: 'error', collection: c })
   })
 
+  it('drops an older response that lands after a newer one', async () => {
+    const older = makeCollection(['old'], { at: 1, host: 'h1' })
+    const newer = makeCollection(['new'], { at: 2, host: 'h1' })
+    let finishOlder!: (c: typeof older) => void
+    vi.mocked(fetchPersonas)
+      .mockImplementationOnce(() => new Promise((r) => { finishOlder = r }))
+      .mockResolvedValueOnce(newer)
+    const first = usePersonaStore.getState().load('h1')
+    await usePersonaStore.getState().load('h1')
+    finishOlder(older)
+    await first
+    expect(usePersonaStore.getState().byHost.h1.collection).toEqual(newer)
+  })
+
+  it('does not bring a host back when forget ran while its load was in flight', async () => {
+    let finish!: (c: ReturnType<typeof makeCollection>) => void
+    vi.mocked(fetchPersonas).mockImplementationOnce(() => new Promise((r) => { finish = r }))
+    const pending = usePersonaStore.getState().load('h1')
+    usePersonaStore.getState().forget('h1')
+    finish(makeCollection(['hiro']))
+    await pending
+    expect(usePersonaStore.getState().byHost.h1).toBeUndefined()
+  })
+
   it('forget drops the host', () => {
     usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: makeCollection(['hiro']) } } })
     usePersonaStore.getState().forget('h1')

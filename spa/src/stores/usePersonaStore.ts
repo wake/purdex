@@ -37,19 +37,37 @@ interface PersonaState {
   current: () => PersonaCollection | null
 }
 
+/**
+ * A load's answer is usable only while no newer load started and the host was not forgotten since: each `load` and
+ * `forget` takes the next number, and a response whose number is no longer the latest is dropped. Otherwise an older
+ * response landing late would overwrite a newer collection, and a removed or re-pointed host's old daemon would
+ * bring back what `forget` just dropped.
+ */
+const latest = new Map<string, number>()
+
+function bump(hostId: string): number {
+  const n = (latest.get(hostId) ?? 0) + 1
+  latest.set(hostId, n)
+  return n
+}
+
 export const usePersonaStore = create<PersonaState>()((set, get) => ({
   byHost: {},
   async load(hostId) {
+    const mine = bump(hostId)
     const prev = get().byHost[hostId]
     set((s) => ({ byHost: { ...s.byHost, [hostId]: { status: 'loading', collection: prev?.collection ?? null } } }))
     try {
       const collection = await fetchPersonas(hostId)
+      if (latest.get(hostId) !== mine) return
       set((s) => ({ byHost: { ...s.byHost, [hostId]: { status: 'ready', collection } } }))
     } catch {
+      if (latest.get(hostId) !== mine) return
       set((s) => ({ byHost: { ...s.byHost, [hostId]: { status: 'error', collection: s.byHost[hostId]?.collection ?? null } } }))
     }
   },
   forget(hostId) {
+    bump(hostId)
     set((s) => {
       const { [hostId]: _dropped, ...rest } = s.byHost
       return { byHost: rest }
