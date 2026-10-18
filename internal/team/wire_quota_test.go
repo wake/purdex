@@ -21,14 +21,14 @@ func TestWireQuota_JSONShapes(t *testing.T) {
 		{"view, provisional root", RelayQuotaView{SessionID: "s", RootSessionID: "s", PendingLineage: true},
 			`{"session_id":"s","root_session_id":"s","self_left":0,"member_pool_left":0,"rev":0,"pending_lineage":true,"updated_at":0}`},
 		{"numbers with a version", RelayQuota{SelfLeft: 1, Rev: 7}, `{"self_left":1,"member_pool_left":0,"rev":7}`},
-		{"unattended view with none live: [] not null", UnattendedView{Quotas: []SessionQuota{}}, `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":[],"held":null}`},
+		{"unattended view with none live: [] not null", UnattendedView{Quotas: []SessionQuota{}}, `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":[],"held":null,"log":[]}`},
 		{"team view with the lead's quota", TeamView{Team: Team{ID: "t"}, LeadRelayQuota: &RelayQuota{SelfLeft: 2, MemberPoolLeft: 1, Rev: 3}},
 			`{"team":{"id":"t","host_id":"","team_name":"","team_label":"","lead_session_id":"","lead_ref":"","grant":{"max_members":0,"roots":null},"request_id":"","created_at":0},"members":[],"lead_relay_quota":{"self_left":2,"member_pool_left":1,"rev":3}}`},
 		{"event", RelayQuotaEventValue{Op: "changed", RootSessionID: "r", RelayQuota: RelayQuota{MemberPoolLeft: 4}},
 			`{"op":"changed","root_session_id":"r","self_left":0,"member_pool_left":4,"rev":0}`},
 		{"session row", SessionQuota{SessionID: "s", RootSessionID: "r", Address: "a/_abc123", IsLead: true, RelayQuota: RelayQuota{SelfLeft: 2}},
 			`{"session_id":"s","root_session_id":"r","address":"a/_abc123","is_lead":true,"self_left":2,"member_pool_left":0,"rev":0}`},
-		{"unattended view whose quotas could not be read: null, never absent", UnattendedView{}, `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":null,"held":null}`},
+		{"unattended view whose quotas could not be read: null, never absent", UnattendedView{}, `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":null,"held":null,"log":[]}`},
 	} {
 		raw, err := json.Marshal(c.v)
 		if err != nil {
