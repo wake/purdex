@@ -30,7 +30,7 @@ func (m *Measure) readPool(ctx context.Context, now time.Time) {
 		m.lastPoolOK = now
 		m.inPool = map[string]bool{}
 		for _, key := range m.order {
-			m.inPool[key] = peerOfAlias(pool, m.hosts[key].fleetAlias) != nil
+			m.inPool[key] = poolServes(m.hosts[key], peerOfAlias(pool, m.hosts[key].fleetAlias), now)
 		}
 	default:
 		m.d.Logf("[fleet] reading the pool: %v", err)
@@ -101,6 +101,28 @@ func (m *Measure) syncSessions(ctx context.Context) {
 	}
 	m.stopSessions(stop)
 	m.startSessions(ctx, start)
+}
+
+// poolServes says whether the pool can read a host now: the peer is listed, wwd reaches it, and its facts are fresh. A host the pool
+// lists but cannot read (wwd is not installed there yet, or it stopped answering) stays with the old sources, ssh for a remote
+// one, so its state does not depend on wwd being there; it goes to the pool when the pool can read it, and back when it cannot.
+//
+// Fresh is judged on this daemon's clock: the facts' stamp is the peer's, so it is only watched for change. Facts whose stamp has
+// not changed for poolStaleAfter are stale, whatever the stamp says.
+func poolServes(h *hostRow, peer *wire.Peer, now time.Time) bool {
+	if peer == nil || !peer.Reachable || peer.Facts == nil {
+		return false
+	}
+	first := h.factsAt.IsZero()
+	if first || !peer.Facts.At.Equal(h.factsAt) {
+		h.factsAt = peer.Facts.At
+		// A stamp seen to change counts from now. One seen for the first time counts only when it is young by this clock: facts
+		// wwd cached from a peer that has stopped answering are as old as they are, and only a later change shows life.
+		if !first || now.Sub(peer.Facts.At) < poolStaleAfter {
+			h.factsMoved = now
+		}
+	}
+	return now.Sub(h.factsMoved) < poolStaleAfter // never moved: the zero time is far in the past
 }
 
 func peerOfAlias(p wire.Pool, alias string) *wire.Peer {

@@ -140,6 +140,8 @@ type hostRow struct {
 
 	// the pool source: the row reads from the pool's facts while poolOwned
 	poolOwned        bool
+	factsAt          time.Time // the stamp of the pool's facts for this host as last seen, and when (this clock) it last changed
+	factsMoved       time.Time
 	poolAt, poolSeen time.Time // the stamp of the newest facts, and when they were seen
 }
 
