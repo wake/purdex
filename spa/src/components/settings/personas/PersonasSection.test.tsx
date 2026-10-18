@@ -118,6 +118,51 @@ describe('PersonasSection', () => {
     expect(screen.getByTestId('personas-note').textContent).toMatch(/重新載入|reloaded/)
   })
 
+  it('keeps what was typed for a new persona when the save turns out stale', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockRejectedValueOnce(new PersonaStaleError())
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-new'))
+    fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'New One' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/重新載入|reloaded/)
+    expect((screen.getByTestId('persona-code').querySelector('input') as HTMLInputElement).value).toBe('newone')
+    expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('New One')
+    expect(screen.queryByTestId('personas-error')).toBeNull()
+  })
+
+  it('keeps a new persona that the shown collection did not take after a save with no base', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockImplementation(async () => ({ hostId: 'h1', base: null })) // another copy won; it lacks "newone"
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-new'))
+    fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'New One' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(screen.getByTestId('personas-note')).toBeTruthy())
+    expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('New One')
+  })
+
+  it('shows a nationality text that is over 200 characters on its own field', () => {
+    seed(['hiro'])
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.change(screen.getByTestId('persona-nationality-zh').querySelector('input')!, { target: { value: '字'.repeat(201) } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    expect(savePersonas).not.toHaveBeenCalled()
+    expect(screen.getByTestId('persona-nationality-zh').textContent).toMatch(/200/)
+  })
+
+  it('lists a problem in a field the form does not show (a template text) in the error', () => {
+    seed(['hiro'], { hiro: { template: { name: 'x'.repeat(201), name_zh: '', field_zh: '', field_en: '' } } })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.click(screen.getByTestId('persona-save'))
+    expect(savePersonas).not.toHaveBeenCalled()
+    expect(screen.getByTestId('personas-error').textContent).toContain('template.name')
+  })
+
   it('a stale or conflicting save reloads the persona and says so, without losing the page', async () => {
     seed(['hiro'])
     vi.mocked(savePersonas).mockRejectedValueOnce(new PersonaStaleError())

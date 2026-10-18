@@ -32,6 +32,9 @@ function blankPersona(): Persona {
   }
 }
 
+/** The issue fields the form draws a message on: code, name, the three bilingual texts, the nationality texts. */
+const FORM_FIELDS = /^(code|name|(personality|method|interests)\.(zh|en)|nationality\.(code|zh|en))$/
+
 interface Editing {
   /** The persona's code; `''` while a new one is being made. */
   key: string
@@ -71,11 +74,14 @@ export function PersonasSection() {
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
 
-  /** Re-open `key` from the collection the App shows now (after another copy won, or a conflict). */
-  const rebuild = (key: string) => {
+  /**
+   * Re-open `key` from the collection the App shows now (after another copy won, or a conflict). A stored persona can
+   * never leave the collection (L5), so a code that is not there is one being created: its draft is kept, on the new base,
+   * and the user saves it again. What was typed is never thrown away.
+   */
+  const rebuild = (key: string, typed: Persona) => {
     const now = usePersonaStore.getState().current()?.items.find((x) => x.code === key)
-    if (!now) { hold(null); setError(t('settings.personas.error.gone')); return }
-    hold({ key, draft: structuredClone(now), base: editBase() })
+    hold(now ? { key, draft: structuredClone(now), base: editBase() } : { key: '', draft: typed, base: editBase() })
     setNote(t('settings.personas.rebuilt'))
   }
 
@@ -86,17 +92,22 @@ export function PersonasSection() {
     setIssues(found)
     setNote(null)
     setError(null)
-    if (found.length > 0) { setError(t('settings.personas.error.invalid')); return }
+    if (found.length > 0) {
+      // Fields the form has no input for (template texts, the avatar) cannot be marked in red, so they are named here.
+      const hidden = found.filter((i) => !FORM_FIELDS.test(i.field)).map((i) => `${i.field}: ${i.message}`)
+      setError([t('settings.personas.error.invalid'), ...hidden].join(' '))
+      return
+    }
     const stamped = { ...draft, updated_at: Date.now() }
     const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
     setSaving(true)
     try {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
-      if (res.base === null) { rebuild(draft.code); return }
+      if (res.base === null) { rebuild(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
       setNote(t('settings.personas.saved', { host: useHostStore.getState().hosts[res.hostId]?.name ?? res.hostId }))
     } catch (e) {
-      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) rebuild(editing.key)
+      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) rebuild(editing.key, draft)
       else if (e instanceof PersonaApiError) {
         const row = e.rowIndex()
         setError(row === null

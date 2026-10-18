@@ -124,15 +124,19 @@ export function PersonaForm({ draft, isNew, issues, saving, avatarPicker, onChan
           </select>
         </Field>
         <div className="grid grid-cols-3 gap-2" data-testid="persona-nationality">
-          <Field label={t('settings.personas.field.nationality_code')}>
-            <input className={INPUT} value={draft.nationality.code} onChange={(e) => set({ nationality: { ...draft.nationality, code: e.target.value } })} />
-          </Field>
-          <Field label={`${t('settings.personas.field.nationality')} · ${t('settings.personas.field.zh')}`}>
-            <input className={INPUT} value={draft.nationality.zh} onChange={(e) => set({ nationality: { ...draft.nationality, zh: e.target.value } })} />
-          </Field>
-          <Field label={`${t('settings.personas.field.nationality')} · ${t('settings.personas.field.en')}`}>
-            <input className={INPUT} value={draft.nationality.en} onChange={(e) => set({ nationality: { ...draft.nationality, en: e.target.value } })} />
-          </Field>
+          {(['code', 'zh', 'en'] as const).map((k) => (
+            <Field
+              key={k}
+              label={k === 'code'
+                ? t('settings.personas.field.nationality_code')
+                : `${t('settings.personas.field.nationality')} · ${t(`settings.personas.field.${k}`)}`}
+              counter={{ n: Array.from(draft.nationality[k]).length, max: PERSONA_LIMITS.shortText }}
+              error={issueOf(`nationality.${k}`)}
+              testId={`persona-nationality-${k}`}
+            >
+              <input className={INPUT} value={draft.nationality[k]} onChange={(e) => set({ nationality: { ...draft.nationality, [k]: e.target.value } })} />
+            </Field>
+          ))}
         </div>
       </div>
 

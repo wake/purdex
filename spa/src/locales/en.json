@@ -2043,7 +2043,6 @@
   "settings.personas.error.whole": "Save failed: {{message}}",
   "settings.personas.error.row": "Save failed; “{{field}}” has a problem: {{message}}",
   "settings.personas.error.invalid": "Some fields break the rules; see the red text.",
-  "settings.personas.error.gone": "This persona no longer exists in the latest data.",
   "settings.profile.description": "A profile is one complete set of workspaces and tabs. The Home button shows the one on screen and switches between them.",
   "settings.profile.device_name": "This computer",
   "settings.profile.device_name_aria": "Computer name",
