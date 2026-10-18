@@ -18,6 +18,7 @@ import (
 	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/push"
 )
 
 // RoleViewKey is the registry key under which the module publishes its fleet.RoleView (the F-1c2 measuring side reads it).
@@ -96,6 +97,9 @@ func (m *Module) Init(c *core.Core) error {
 		}
 	}
 	m.engine = NewEngine(peerOf{m}, m.settings, m.now, m.logf, path, m.hostID())
+	// push_ready in the role answer: the push module registers its alert notifier only once it is ready and started, so its presence in
+	// the registry is the fact. It is asked at every answer, since the push module starts after this one.
+	m.engine.SetPushReady(func() bool { _, ok := c.Registry.Get(push.AlertNotifyKey); return ok })
 	c.Registry.Register(RoleViewKey, fleet.RoleView(m.engine))
 	m.measure = m.newMeasure()
 	m.engine.SetNewestAge(m.measure.NewestAge)

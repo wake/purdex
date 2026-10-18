@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/middleware"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	"github.com/wake/purdex/internal/push"
 )
 
 const ourID, peerID = "air26:aaaaaa", "mlab:bbbbbb"
@@ -126,6 +127,24 @@ func TestRoleRoute_NewestAgeWhenWired(t *testing.T) {
 	r.m.engine.SetNewestAge(age(1234 * time.Millisecond))
 	rr := r.post(pathRole, hostP, `{"to_host_id":"`+ourID+`","from_alias":"mlab","role":"standby","term":0}`)
 	require.Contains(t, rr.Body.String(), `"newest_age_ms":1234`)
+}
+
+// The role route says whether this daemon's push module is ready: the push module registers its alert notifier once it is ready and
+// started, so the answer follows the registry — false before, true after — and it is always there (never left out) in this module.
+func TestRoleRoute_PushReadyFollowsThePushModule(t *testing.T) {
+	r := newRig(t)
+	body := `{"to_host_id":"` + ourID + `","from_alias":"mlab","role":"standby","term":0}`
+	var a RoleAnswer
+	require.NoError(t, json.Unmarshal(r.post(pathRole, hostP, body).Body.Bytes(), &a))
+	require.NotNil(t, a.PushReady)
+	require.False(t, *a.PushReady, "no push module yet")
+	r.m.core.Registry.Register(push.AlertNotifyKey, struct{}{})
+	a = RoleAnswer{}
+	rr := r.post(pathRole, hostP, body)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &a))
+	require.NotNil(t, a.PushReady)
+	require.True(t, *a.PushReady)
+	require.Contains(t, rr.Body.String(), `"push_ready":true`)
 }
 
 func TestRoutes_WrongHost409(t *testing.T) {
