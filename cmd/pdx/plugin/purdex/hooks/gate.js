@@ -323,7 +323,6 @@ async function withDeadline($, work) {
 
 // ---- the wwd entry ----
 
-const ENTRY_ACTIONS = new Set(['none', 'rewrite', 'advise', 'deny'])
 // a word that needs no quoting in a shell
 const word = (s) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(String(s)) ? String(s) : sq(s))
 
@@ -358,7 +357,7 @@ async function askEntry($, cfg, c) {
     const r = await $.process.run([cfg.bin, 'entry', 'match', '--json', ...(c.cwd ? ['--cwd', c.cwd] : []), '--', ...c.argv], { timeoutMs: ASK_MS })
     if (!r || r.exitCode !== 0) return null
     const o = parse(String(r.stdout || '').trim())
-    if (!isObject(o) || !ENTRY_ACTIONS.has(o.action)) return null
+    if (!isObject(o)) return null // an action nobody knows is ignored below
     if (o.action === 'rewrite' && (typeof o.task !== 'string' || o.task === '' || (o.args !== undefined && !(Array.isArray(o.args) && o.args.every((x) => typeof x === 'string'))))) return null
     return o
   } catch (err) {

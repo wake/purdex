@@ -455,6 +455,32 @@ for (const [name, bad] of BAD_ENTRY) {
   })
 }
 
+test('a failing pdx whose stdout still reads as a rewrite is not believed', async ($, on) => {
+  const r = rig(on, (a) => (isEntry(a) ? ok(JSON.stringify(REWRITE_FILE), 3) : ok(FREE)), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go test ./...')
+  expect(r.ran[0].command).toBe('go test ./...')
+})
+
+test('two rewrites in one call are both made, each where its command stood', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'make lint': { action: 'rewrite', task: 'lint' }, 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'] } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'make lint && echo between && go test ./... | tail -3')
+  expect(r.ran[0].command).toBe("'pdx' test lint && echo between && 'pdx' test go-pkg ./... | tail -3")
+})
+
+test('a queued rewrite stays in the foreground when the background would change the permission verdict', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
+  r.verdict = (_command, bg) => (bg === true ? 'ask' : 'allow')
+  await bash($, 'go test ./...')
+  expect(r.ran[0].command).toBe("'pdx' test go-pkg ./...")
+  expect(r.ran[0].bg).toBeUndefined()
+})
+
+test('a rewrite and a direct tool binary in one call: both are made', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'npx vitest run src/a.test.ts': REWRITE_FILE }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'npx vitest run src/a.test.ts && ./vendor/bin/pest')
+  expect(r.ran[0].command).toBe("'pdx' test spa-file src/a.test.ts && 'pdx' gate --auto -- ./vendor/bin/pest")
+})
+
 test('a manifest that does not read is said, and the call goes on', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go test ./...': { action: 'none', broken: true, reason: 'manifest x: bad' } }), () => BASH_OK, ENTRY_ON)
   const out = await bash($, 'go test ./...')
