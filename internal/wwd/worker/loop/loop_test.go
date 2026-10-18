@@ -170,6 +170,8 @@ type rig struct {
 	st    wire.WorkerSettings
 	facts *wire.Facts
 	logs  []string
+	// freezeAt, when set, is the At of every facts record the loop reads (a sampler that has stopped); else it is "now".
+	freezeAt time.Time
 }
 
 func newRig(t *testing.T, conns ...*fakeConn) *rig {
@@ -181,7 +183,19 @@ func newRig(t *testing.T, conns ...*fakeConn) *rig {
 	rep := report.New(report.Config{Logf: func(string, ...any) {}})
 	r.loop = New(Config{
 		Settings: func() wire.WorkerSettings { r.mu.Lock(); defer r.mu.Unlock(); return r.st },
-		Facts:    func() *wire.Facts { r.mu.Lock(); defer r.mu.Unlock(); return r.facts },
+		Facts: func() *wire.Facts {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.facts == nil {
+				return nil
+			}
+			f := *r.facts
+			f.At = time.Now()
+			if !r.freezeAt.IsZero() {
+				f.At = r.freezeAt
+			}
+			return &f
+		},
 		Origins: func() []Origin {
 			var out []Origin
 			for _, c := range r.conns {
@@ -658,5 +672,81 @@ func TestSwitchingTheOwnerRuleOnMakesTheWorkerWaitForAReading(t *testing.T) {
 	r.round()
 	if claims, _, _ := c.seen(); len(claims) != 1 {
 		t.Fatalf("claims %v: a host that has just been given an owner rule takes nothing before its first reading", claims)
+	}
+}
+
+func TestASampleOlderThanTheLastClaimDoesNotOpenTheNextOne(t *testing.T) {
+	// the sampler has stopped: the same record, time going on. The first claim is allowed (nothing was claimed before), the second needs a
+	// sample taken after the first job could have shown in it
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.freezeAt = time.Now()
+	r.ex.run = blockUntilDone
+	r.round()
+	for i := 0; i < 3; i++ {
+		time.Sleep(2 * unit)
+		r.round()
+	}
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: the headroom of a sample older than the claim says nothing about the claimed job", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
+
+func TestStaleFactsStopTheWorkerTakingJobs(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.loop.cfg.FactsMaxAge = time.Second
+	r.freezeAt = time.Now().Add(-time.Minute)
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: a headroom last measured a minute ago is not a headroom", claims)
+	}
+	r.freezeAt = time.Now()
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: fresh facts, the worker takes the job", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
+
+func TestAWorkerThatEndsWithAJobThatWillNotStopEndsItsCommandAndSaysSo(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.loop.cfg.ShutdownGrace = 3 * unit
+	started := make(chan struct{}, 1)
+	endedByCtx := make(chan struct{})
+	var once sync.Once
+	r.ex.run = func(ctx context.Context, _ wire.Job) run.Result {
+		started <- struct{}{}
+		// ignores the first ask (Stop's), obeys the second (the context of the jobs being cancelled for good)
+		<-ctx.Done()
+		time.Sleep(10 * unit)
+		once.Do(func() { close(endedByCtx) })
+		return run.Result{Outcome: run.Cancelled}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.loop.Run(ctx); close(done) }()
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	select {
+	case <-endedByCtx:
+	default:
+		t.Fatal("Run returned while the command was still running")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	said := false
+	for _, l := range r.logs {
+		said = said || l == "worker: %s/%s did not stop within the shutdown grace; its commands are ended and the origin gets the job back when its lease lapses"
+	}
+	if !said {
+		t.Fatalf("a job left behind at shutdown is named in the log: %v", r.logs)
 	}
 }

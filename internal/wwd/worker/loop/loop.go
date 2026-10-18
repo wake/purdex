@@ -76,6 +76,9 @@ type Config struct {
 	// SweepEvery is the pause between two sweeps (a minute).
 	SweepEvery time.Duration
 
+	// FactsMaxAge is how old this host's facts may be for the worker to go on taking jobs (30 s: six samples); a sampler that has stopped
+	// must not leave the worker claiming against a headroom nobody has measured for a while.
+	FactsMaxAge time.Duration
 	// Interval is the pause between two rounds (2 s). Settle is the pause after a claim before the next one, so that the facts have
 	// seen the job (the headroom they carry is only true once the job's processes are in a sample); two facts samples by default.
 	Interval, Settle time.Duration
@@ -105,6 +108,9 @@ type Loop struct {
 func New(cfg Config) *Loop {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Second
+	}
+	if cfg.FactsMaxAge <= 0 {
+		cfg.FactsMaxAge = 6 * time.Duration(wire.SampleIntervalS) * time.Second
 	}
 	if cfg.Settle <= 0 {
 		cfg.Settle = 2 * time.Duration(wire.SampleIntervalS) * time.Second
@@ -164,6 +170,7 @@ func (l *Loop) Run(ctx context.Context) {
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), l.cfg.ShutdownGrace)
 			l.stopAll(sctx, "the worker is ending")
 			cancel()
+			l.abandon(endJobs)
 			return
 		case <-t.C:
 		}
@@ -206,7 +213,12 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	l.pruneLocked()
 	n, last := len(l.running), l.lastClaim
 	l.mu.Unlock()
-	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 || l.cfg.Now().Sub(last) < l.cfg.Settle {
+	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 {
+		return
+	}
+	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
+	// claim, and it must not be old (a sampler that has stopped leaves the last "there is room" standing).
+	if facts.At.Sub(last) < l.cfg.Settle || l.cfg.Now().Sub(facts.At) > l.cfg.FactsMaxAge {
 		return
 	}
 	l.claimOne(ctx, jobCtx)
@@ -350,3 +362,36 @@ func (l *Loop) Sweep(ctx context.Context) {
 		}
 	}
 }
+
+// abandon is what is left of a worker that is ending when the grace has passed: the jobs that did not stop in time lose their leases'
+// context (their commands are ended, they are not given back, their leases lapse at the origins) and are named in the log. A worker
+// must not wait for ever, but it must not leave a command running behind it either.
+func (l *Loop) abandon(endJobs context.CancelFunc) {
+	l.mu.Lock()
+	l.pruneLocked()
+	left := make([]*runner.Running, 0, len(l.running))
+	for _, r := range l.running {
+		left = append(left, r)
+	}
+	l.mu.Unlock()
+	if len(left) == 0 {
+		return
+	}
+	for _, r := range left {
+		l.cfg.Logf("worker: %s/%s did not stop within the shutdown grace; its commands are ended and the origin gets the job back when its lease lapses", r.Source(), r.ID())
+	}
+	endJobs()
+	deadline := time.NewTimer(killWait)
+	defer deadline.Stop()
+	for _, r := range left {
+		select {
+		case <-r.Done():
+		case <-deadline.C:
+			l.cfg.Logf("worker: %s/%s still had a command running when the worker ended", r.Source(), r.ID())
+			return
+		}
+	}
+}
+
+// killWait is how long a worker that is ending waits for the commands it ended to be gone (TERM, then KILL after 10 s).
+const killWait = 15 * time.Second
