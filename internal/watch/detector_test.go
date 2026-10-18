@@ -514,6 +514,40 @@ func TestE2_UnknownBreaksARunAndDoesNotRearm(t *testing.T) {
 	}
 }
 
+// The unknown in the middle of a re-arming spell starts the spell again (underSince is cleared too): 100 s low, an unknown, 40 s
+// low is not 120 s of low.
+func TestE2_UnknownRestartsTheRearmingSpell(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 30; i++ {
+		r.observe(HostSignals{Pressure: 2}) // fires
+	}
+	for i := 0; i < 20; i++ {
+		r.observe(HostSignals{Pressure: 1}) // 100 s of the 120 s to re-arm
+	}
+	r.observe(HostSignals{Pressure: 0})
+	for i := 0; i < 8; i++ {
+		r.observe(HostSignals{Pressure: 1}) // 40 s more
+	}
+	var again []Event
+	for i := 0; i < 60; i++ {
+		again = append(again, r.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Empty(t, again, "never re-armed: the low spells were 100 s and 40 s")
+}
+
+// The page rate's run breaks on a source flip too: 40 s over on the counters and 40 s over on wwd are not 60 s of either.
+func TestE2_APageRunDoesNotCrossASourceFlip(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 8; i++ {
+		r.raw.PageCounters = true
+		r.raw.Pageouts += 99 * uint64(tick/time.Second)
+		assert.Empty(t, r.pass())
+	}
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 1, PageRate: 99, PageRateKnown: true}))
+	}
+}
+
 // A run is one source's: a source flip breaks a run that has not fired, so no window is made of two sources; a run that has fired
 // stays fired (no second event for the same pressure).
 func TestE2_ASourceFlipBreaksAPendingRunButKeepsAFiredOne(t *testing.T) {
