@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -190,6 +191,24 @@ func (s *Sampler) addToMinute(f wire.Facts) *wire.Facts {
 	return done
 }
 
+// mergeMinutes is the stored minutes plus the in-memory ones the store does not
+// have (a minute finished a moment ago whose write has not committed, or whose
+// write failed), oldest first. Both inputs are oldest first.
+func mergeMinutes(stored, mem []wire.Facts) []wire.Facts {
+	have := make(map[int64]bool, len(stored))
+	for _, r := range stored {
+		have[r.At.UnixMilli()] = true
+	}
+	out := stored
+	for _, r := range mem {
+		if !have[r.At.UnixMilli()] {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
+	return out
+}
+
 // Latest is the newest record.
 func (s *Sampler) Latest() (wire.Facts, bool) {
 	s.mu.RLock()
@@ -217,7 +236,7 @@ func (s *Sampler) History(since time.Time, step string) []wire.Facts {
 	// read, this run's in-memory minutes are what there is
 	if st := s.opts.Minutes; st != nil {
 		if stored, err := st.LoadMinutes(since); err == nil {
-			out = stored
+			out = mergeMinutes(stored, out)
 		} else {
 			s.logMinutes("reading the minutes", err)
 		}

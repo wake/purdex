@@ -47,6 +47,25 @@ func TestFinishedMinutesSurviveARestart(t *testing.T) {
 	}
 }
 
+// a store that saves nothing but reads fine: a minute whose write failed (or has
+// not committed yet) is still answered from memory next to what the store has
+type emptyMinutes struct{}
+
+func (emptyMinutes) SaveMinute(wire.Facts) error                 { return errors.New("disk full") }
+func (emptyMinutes) LoadMinutes(time.Time) ([]wire.Facts, error) { return nil, nil }
+
+func TestMinuteWhoseWriteFailedIsNotLostFromTheHistory(t *testing.T) {
+	level := 1
+	a := samplerWithMinutes(&level, emptyMinutes{})
+	base := s0.Truncate(time.Minute)
+	for i := 0; i < 2*12+1; i++ {
+		a.Tick(base.Add(time.Duration(i) * SampleInterval))
+	}
+	if got := a.History(base, wire.Step1m); len(got) != 3 {
+		t.Fatalf("want the 2 unsaved minutes and the live one, got %d", len(got))
+	}
+}
+
 type brokenMinutes struct{}
 
 func (brokenMinutes) SaveMinute(wire.Facts) error { return errors.New("disk full") }
