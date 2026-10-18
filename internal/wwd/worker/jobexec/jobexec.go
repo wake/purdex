@@ -36,10 +36,11 @@ type Fetcher interface {
 
 // PerJobDB makes and removes the database of a job whose task asks for one (db = "per-job"). Create returns the connection settings under
 // every name a task may read (DB_* and WP_TESTS_DB_*); the task's db_env says which set it gets. Drop is idempotent. Sweep (the loop's
-// Sweeper) removes the databases of jobs this worker no longer holds.
+// Sweeper) removes the databases of jobs this worker no longer holds. A job is named by its key, "source/id" (worker/ident): a job id is
+// only unique per origin, and the databases of two jobs with one id must be two.
 type PerJobDB interface {
-	Create(ctx context.Context, jobID string) (map[string]string, error)
-	Drop(ctx context.Context, jobID string) error
+	Create(ctx context.Context, key string) (map[string]string, error)
+	Drop(ctx context.Context, key string) error
 }
 
 // dropTimeout is how long cleaning up a workspace waits for the removal of the job's database (Config.DropTimeout overrides it). The
@@ -93,7 +94,7 @@ func outDir(base string) string { return filepath.Join(base, "out") }
 
 // Materialize makes <JobDir>/ws. The returned Cleanup removes the whole job directory (the tree and the run's files), so that nothing of
 // a job stays behind once its result is delivered.
-func (e *Exec) Materialize(ctx context.Context, _ ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error) {
+func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error) {
 	var f Fetcher
 	if e.cfg.Fetchers != nil {
 		f = e.cfg.Fetchers(job.Origin)
@@ -122,7 +123,7 @@ func (e *Exec) Materialize(ctx context.Context, _ ident.Ref, job wire.Job, claim
 		return snapshot.Workspace{}, err
 	}
 	inner := ws.Cleanup
-	jobID := job.ID
+	key := ref.Key()
 	if filepath.Clean(ws.Dir) != wsDir(base) {
 		// Prepare and Run take the directory above the tree as the job's own (HOME, the run's files, a sandbox's writable path): a
 		// workspace anywhere else would widen that to whatever contains it
@@ -140,11 +141,11 @@ func (e *Exec) Materialize(ctx context.Context, _ ident.Ref, job wire.Job, claim
 		}
 		var dberr error
 		if _, had := e.dbJobs.LoadAndDelete(base); had && e.cfg.DB != nil {
-			dberr = e.dropBounded(jobID)
+			dberr = e.dropBounded(key)
 			if dberr != nil {
 				// the runner does not look at what Cleanup returns, so say it here. Cleanup runs once (it removes the worktree too); the
 				// loop's Sweeper removes the databases of jobs this worker no longer holds
-				log.Printf("jobexec: could not drop the database of %s, left for the sweep: %v", jobID, dberr)
+				log.Printf("jobexec: could not drop the database of %s, left for the sweep: %v", key, dberr)
 			}
 		}
 		return errors.Join(err, dberr, os.RemoveAll(base))
@@ -153,7 +154,7 @@ func (e *Exec) Materialize(ctx context.Context, _ ident.Ref, job wire.Job, claim
 
 // dropBounded removes the job's database and waits for it no longer than the drop timeout. A Drop that has not returned by then is left
 // to finish on its own (it has the same expired context) and the error says so; the loop's Sweeper removes the database later.
-func (e *Exec) dropBounded(jobID string) error {
+func (e *Exec) dropBounded(key string) error {
 	d := e.cfg.DropTimeout
 	if d <= 0 {
 		d = dropTimeout
@@ -161,18 +162,18 @@ func (e *Exec) dropBounded(jobID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- e.cfg.DB.Drop(ctx, jobID) }()
+	go func() { done <- e.cfg.DB.Drop(ctx, key) }()
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("per-job database %s: drop not finished in %s: %w", jobID, d, ctx.Err())
+		return fmt.Errorf("per-job database %s: drop not finished in %s: %w", key, d, ctx.Err())
 	}
 }
 
 // Prepare checks the job against the snapshot's manifest and works out the command (package remotejob). A job that does not fit is a
 // *runner.Rejected; anything else is the worker's own trouble.
-func (e *Exec) Prepare(ctx context.Context, _ ident.Ref, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
+func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
 	out := outDir(filepath.Dir(ws.Dir))
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return runner.Plan{}, err
@@ -187,7 +188,7 @@ func (e *Exec) Prepare(ctx context.Context, _ ident.Ref, job wire.Job, ws snapsh
 	}
 	env := p.Env
 	if p.Task.DB == "per-job" {
-		dbenv, err := e.makeDB(ctx, job, filepath.Dir(ws.Dir), p.Task.DBEnv)
+		dbenv, err := e.makeDB(ctx, ref, filepath.Dir(ws.Dir), p.Task.DBEnv)
 		if err != nil {
 			return runner.Plan{}, err
 		}
@@ -199,11 +200,11 @@ func (e *Exec) Prepare(ctx context.Context, _ ident.Ref, job wire.Job, ws snapsh
 // makeDB creates the job's database and returns the entries ("NAME=value", fixed values the task's env list cannot override) of the set
 // the task reads. Nothing is made for a job that did not pass the manifest's checks (this runs after them). A host with no per-job
 // database rejects the job: it is not something that would work on retry here.
-func (e *Exec) makeDB(ctx context.Context, job wire.Job, base, dbEnv string) ([]string, error) {
+func (e *Exec) makeDB(ctx context.Context, ref ident.Ref, base, dbEnv string) ([]string, error) {
 	if e.cfg.DB == nil {
 		return nil, &runner.Rejected{Reason: "db_unavailable: this host has no per-job database"}
 	}
-	all, err := e.cfg.DB.Create(ctx, job.ID)
+	all, err := e.cfg.DB.Create(ctx, ref.Key())
 	if err != nil {
 		return nil, fmt.Errorf("per-job database: %w", err)
 	}

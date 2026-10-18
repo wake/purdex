@@ -14,8 +14,8 @@ func NewPerJob(m *Manager) *PerJob { return &PerJob{m: m} }
 // Create makes the job's database and returns the connection settings under both names a task may read: DB_* and
 // WP_TESTS_DB_* (at-inwin-plugin's phpunit config, whose guard also wants the WWD_JOB mark the runner sets). A task reads the
 // set it needs; the other is unused. Both carry the same password.
-func (p *PerJob) Create(ctx context.Context, jobID string) (map[string]string, error) {
-	info, err := p.m.Create(ctx, jobID)
+func (p *PerJob) Create(ctx context.Context, key string) (map[string]string, error) {
+	info, err := p.m.Create(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func (p *PerJob) Create(ctx context.Context, jobID string) (map[string]string, e
 func ValidUserHost(h string) bool { return cfgHostRe.MatchString(h) }
 
 // Drop removes the job's database and users; one that is not there is not an error.
-func (p *PerJob) Drop(ctx context.Context, jobID string) error { return p.m.Drop(ctx, jobID) }
+func (p *PerJob) Drop(ctx context.Context, key string) error { return p.m.Drop(ctx, key) }
 
 // Sweep drops every per-job database whose job is not in live.
 func (p *PerJob) Sweep(ctx context.Context, live []string) error {
