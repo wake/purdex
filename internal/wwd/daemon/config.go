@@ -20,6 +20,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/jobdb"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -142,6 +143,20 @@ func (c *Config) validateJobDB(home string) error {
 	}
 	if !filepath.IsAbs(j.DefaultsFile) {
 		return fmt.Errorf("jobdb.defaults_file %q is not an absolute path", j.DefaultsFile)
+	}
+	// it holds the administrator's password: it must be there, be a plain file and be closed to group and others
+	fi, err := os.Stat(j.DefaultsFile)
+	if err != nil {
+		return fmt.Errorf("jobdb.defaults_file: %w", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("jobdb.defaults_file %s must be a regular file with mode 600 (it is %v)", j.DefaultsFile, fi.Mode())
+	}
+	// the same rule jobdb.New applies, so a bad host stops the start instead of the first job
+	for _, h := range j.UserHosts {
+		if !jobdb.ValidUserHost(h) {
+			return fmt.Errorf("jobdb.user_hosts: %q is not a plain host name or address", h)
+		}
 	}
 	return nil
 }

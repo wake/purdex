@@ -29,6 +29,9 @@ func (p *PerJob) Create(ctx context.Context, jobID string) (map[string]string, e
 	return env, nil
 }
 
+// ValidUserHost says whether h may be a configured user host (see New): a plain host name or address that the routines accept.
+func ValidUserHost(h string) bool { return cfgHostRe.MatchString(h) }
+
 // Drop removes the job's database and users; one that is not there is not an error.
 func (p *PerJob) Drop(ctx context.Context, jobID string) error { return p.m.Drop(ctx, jobID) }
 
