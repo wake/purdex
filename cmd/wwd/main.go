@@ -24,6 +24,12 @@ import (
 )
 
 func main() {
+	if handled, err := runInstallCmd(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatalf("wwd: %v", err)
+		}
+		return
+	}
 	cfgPath := flag.String("config", "", "config file (default ~/.config/wwd/config.toml)")
 	version := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
