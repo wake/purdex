@@ -84,6 +84,7 @@ func Print(w io.Writer, r Report, asJSON bool) {
 		_ = enc.Encode(r)
 		return
 	}
+	r = cleanReport(r) // what a job or another host wrote must not drive the terminal
 	where := r.Host
 	switch {
 	case r.Local:
@@ -143,6 +144,31 @@ func Print(w io.Writer, r Report, asJSON bool) {
 	case r.ID != "" && r.State != wire.StateExpired:
 		fmt.Fprintf(w, "log: pdx jobs log %s\n", r.ID)
 	}
+}
+
+// cleanReport is r with every text field made terminal-safe (a copy: the summary is not changed in place).
+func cleanReport(r Report) Report {
+	r.ID, r.Task, r.Reason, r.Host, r.LogPath = CleanLine(r.ID), CleanLine(r.Task), CleanLine(r.Reason), CleanLine(r.Host), CleanLine(r.LogPath)
+	if len(r.Notes) > 0 {
+		notes := make([]string, len(r.Notes))
+		for i, n := range r.Notes {
+			notes[i] = CleanLine(n)
+		}
+		r.Notes = notes
+	}
+	if r.Summary != nil {
+		s := *r.Summary
+		s.Failures = make([]wire.Failure, len(r.Summary.Failures))
+		for i, f := range r.Summary.Failures {
+			s.Failures[i] = wire.Failure{Name: CleanLine(f.Name), File: CleanLine(f.File), Message: Clean(f.Message)}
+		}
+		s.Tail = make([]string, len(r.Summary.Tail))
+		for i, l := range r.Summary.Tail {
+			s.Tail[i] = CleanLine(l)
+		}
+		r.Summary = &s
+	}
+	return r
 }
 
 func firstLines(s string, n int) string {
