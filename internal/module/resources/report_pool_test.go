@@ -40,7 +40,7 @@ func TestReportMinutesOf_MapsTheRollups(t *testing.T) {
 		minuteFacts(4, 1, 8000, 1, wire.ZoneUnknown, 0, 0), // calm again; zone unknown is not a sampled zone
 		minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0),  // a second run
 	}
-	got := reportMinutesOf(recs)
+	got := reportMinutesOf(recs, 0)
 	require.Len(t, got, 6)
 	assert.Equal(t, poolDay0.UnixMilli(), got[0].At)
 	assert.Equal(t, 50.0, got[0].Mem, "used share from the lowest available of the minute")
@@ -71,18 +71,29 @@ func TestReportMinutesOf_MapsTheRollups(t *testing.T) {
 
 // A run still going on at the end of the series is reported on its last row too.
 func TestReportMinutesOf_ARunOpenAtTheEnd(t *testing.T) {
-	got := reportMinutesOf([]wire.Facts{minuteFacts(0, 5, 8000, 1, wire.ZoneNormal, 0, 0), minuteFacts(1, 5, 8000, 1, wire.ZoneNormal, 0, 0)})
+	got := reportMinutesOf([]wire.Facts{minuteFacts(0, 5, 8000, 1, wire.ZoneNormal, 0, 0), minuteFacts(1, 5, 8000, 1, wire.ZoneNormal, 0, 0)}, 0)
 	assert.Equal(t, 120, got[1].FullLongestS)
 	assert.Zero(t, got[0].FullLongestS)
 }
 
 // A gap of minutes breaks a run: the host was not seen, so two full minutes either side of it are not one run.
 func TestReportMinutesOf_AGapBreaksARun(t *testing.T) {
-	got := reportMinutesOf([]wire.Facts{minuteFacts(0, 5, 8000, 1, wire.ZoneNormal, 0, 0), minuteFacts(3, 5, 8000, 1, wire.ZoneNormal, 0, 0)})
+	got := reportMinutesOf([]wire.Facts{minuteFacts(0, 5, 8000, 1, wire.ZoneNormal, 0, 0), minuteFacts(3, 5, 8000, 1, wire.ZoneNormal, 0, 0)}, 0)
 	assert.Equal(t, 1, got[0].FullStarts)
 	assert.Equal(t, 1, got[1].FullStarts)
 	assert.Equal(t, 60, got[0].FullLongestS)
 	assert.Equal(t, 60, got[1].FullLongestS)
+}
+
+// A full run that goes on from the old timeline into wwd's is one run: not counted twice, and its length adds up.
+func TestReportMinutesOf_ARunContinuesFromTheOldTimeline(t *testing.T) {
+	got := reportMinutesOf([]wire.Facts{minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0), minuteFacts(6, 5, 8000, 1, wire.ZoneNormal, 0, 0)}, 180)
+	assert.Zero(t, got[0].FullStarts, "the run started in the old rows")
+	assert.Equal(t, 300, got[1].FullLongestS, "180 s before and 2 minutes now")
+
+	got = reportMinutesOf([]wire.Facts{minuteFacts(5, 1, 8000, 1, wire.ZoneNormal, 0, 0)}, 180) // calm now: the carried run ended in the old rows
+	assert.Zero(t, got[0].FullLongestS)
+	assert.Zero(t, got[0].FullStarts)
 }
 
 // reportRig is a module with the resources.db rows of an old day, the pool reader, and a wwd that answers the 1 m history.
@@ -151,6 +162,37 @@ func TestReport_PoolSourceJoinsTheOldTimelineAndWWDs(t *testing.T) {
 	require.Len(t, r.asked, 1)
 	assert.Equal(t, wire.Step1m, r.asked[0].Step)
 	assert.Equal(t, r.now.Add(-24*time.Hour).Truncate(time.Second), r.asked[0].Since.Truncate(time.Second))
+}
+
+// The minute still filling is not a minute of the report: the rollup of it is partial and would count as a whole one.
+func TestReport_TheCurrentMinuteIsLeftOut(t *testing.T) {
+	r := newReportRig(t)
+	r.now = poolDay0.Add(3*time.Minute + 20*time.Second) // minute 3 is 20 s old
+	for i := 0; i < 4; i++ {
+		r.history = append(r.history, minuteFacts(i, 5, 8000, 1, wire.ZoneNormal, 0, 0))
+	}
+	rep := r.get(t, "24h")
+	assert.Equal(t, 3, rep.Coverage.Minutes, "minutes 0, 1 and 2")
+	assert.Equal(t, poolDay0.Add(2*time.Minute).UnixMilli(), rep.Coverage.To)
+}
+
+// The run that crosses from the old timeline into wwd's is one run in the report.
+func TestReport_ARunAcrossTheJoinIsOneRun(t *testing.T) {
+	r := newReportRig(t)
+	for i := 0; i < 3; i++ { // old minutes 0..2, full, the way the old sampler wrote a run: the length so far on each row
+		row := minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, FullLongestS: 60 * (i + 1)}
+		if i == 0 {
+			row.FullStarts = 1
+		}
+		require.NoError(t, r.m.store.InsertMinute(row))
+	}
+	for i := 3; i < 5; i++ { // wwd's minutes 3 and 4, full too
+		r.history = append(r.history, minuteFacts(i, 5, 8000, 1, wire.ZoneNormal, 0, 0))
+	}
+	rep := r.get(t, "24h")
+	assert.Equal(t, 5, rep.Coverage.Minutes)
+	assert.Equal(t, 1, rep.Full.Runs, "one run, not two")
+	assert.Equal(t, 300, rep.Full.LongestS, "5 minutes")
 }
 
 // The ssh source, or a wwd that cannot be asked, or one with no minutes yet: the report is the old timeline's alone.

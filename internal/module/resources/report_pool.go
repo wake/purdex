@@ -25,12 +25,19 @@ const fullTicksPerMinute = int(time.Minute / resources.SampleInterval)
 //     is a row of consecutive full minutes; its length is reported on its last row, a missing minute ends it;
 //   - the heavy and light running counts are the facts' worker.running of the minute; the queue (gate_waiting) is not in the facts;
 //   - the zone seconds are the whole minute in the minute's worst zone; an unknown zone is not sampled time.
-func reportMinutesOf(recs []wire.Facts) []resources.ReportMinute {
+//
+// carryRunS is the length, in seconds, of a full run that ends in the minute just before the first record (the old timeline's last
+// minute), 0 when there is none: a first record that is full goes on with it instead of starting a run of its own.
+func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute {
 	out := make([]resources.ReportMinute, 0, len(recs))
 	runLen := 0 // the open run: its length in minutes
 	var prevAt int64
+	if len(recs) > 0 && carryRunS > 0 {
+		runLen = (carryRunS + 59) / 60
+		prevAt = recs[0].At.UnixMilli() - time.Minute.Milliseconds()
+	}
 	closeRun := func() {
-		if runLen > 0 {
+		if runLen > 0 && len(out) > 0 {
 			out[len(out)-1].FullLongestS = runLen * 60
 		}
 		runLen = 0
@@ -73,9 +80,10 @@ func reportMinutesOf(recs []wire.Facts) []resources.ReportMinute {
 	return out
 }
 
-// poolReportMinutes is wwd's minutes from since on, ok false when the source is not the pool, wwd cannot be asked, or it has none
-// yet (the report is then the old timeline's alone).
-func (m *Module) poolReportMinutes(ctx context.Context, since time.Time) ([]resources.ReportMinute, bool) {
+// poolReportRecords is wwd's 1 m rollups from since on, without the minute still filling (its rollup is partial and would count as a
+// whole one). ok is false when the source is not the pool, wwd cannot be asked, or it has no finished minute yet (the report is then
+// the old timeline's alone).
+func (m *Module) poolReportRecords(ctx context.Context, since, now time.Time) ([]wire.Facts, bool) {
 	if m.pool == nil || m.pool.history == nil || !m.fleetSrc.isPool() {
 		return nil, false
 	}
@@ -84,8 +92,11 @@ func (m *Module) poolReportMinutes(ctx context.Context, since time.Time) ([]reso
 		m.logf("[resources] report: wwd history: %v: the report is the old timeline's alone", err)
 		return nil, false
 	}
-	if len(resp.Records) == 0 {
-		return nil, false
+	var done []wire.Facts
+	for _, f := range resp.Records {
+		if !f.At.Add(time.Minute).After(now) {
+			done = append(done, f)
+		}
 	}
-	return reportMinutesOf(resp.Records), true
+	return done, len(done) > 0
 }

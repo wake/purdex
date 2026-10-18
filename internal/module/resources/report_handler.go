@@ -74,10 +74,10 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 	now := m.now()
 	from, until := now.Add(-since).UnixMilli(), now.UnixMilli()+1
 	// While the source is the pool, wwd's minutes are the timeline from where they begin; the old rows count only before that.
-	pooled, fromPool := m.poolReportMinutes(r.Context(), now.Add(-since))
+	recs, fromPool := m.poolReportRecords(r.Context(), now.Add(-since), now)
 	oldUntil := until
 	if fromPool {
-		oldUntil = min(until, pooled[0].At)
+		oldUntil = min(until, recs[0].At.UnixMilli())
 	}
 	var minutes []resources.ReportMinute
 	if m.store != nil {
@@ -90,7 +90,14 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "resources.db is not open")
 		return
 	}
-	minutes = append(minutes, pooled...)
+	if fromPool {
+		// A full run that goes on from the old rows into wwd's is one run: the pooled rows carry on from its length.
+		carry := 0
+		if n := len(minutes); n > 0 && minutes[n-1].FullTicks > 0 && minutes[n-1].At == recs[0].At.UnixMilli()-time.Minute.Milliseconds() {
+			carry = max(minutes[n-1].FullLongestS, 60)
+		}
+		minutes = append(minutes, reportMinutesOf(recs, carry)...)
+	}
 	report := resources.BuildReport(from, now.UnixMilli(), minutes)
 	writeJSON(w, http.StatusOK, report)
 }
