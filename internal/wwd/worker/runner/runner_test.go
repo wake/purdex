@@ -655,3 +655,51 @@ func TestStartWaitingForTheLockSeesTheCancelTheHeartbeatAnswered(t *testing.T) {
 		t.Fatalf("kind=%s starts=%d ran=%d: a cancelled job must not be started", e.Kind, st, ex.ran.Load())
 	}
 }
+
+func TestRunErrQuarantinesWorkspaceAndLocks(t *testing.T) {
+	for _, oc := range []run.Outcome{run.Exited, run.TimedOut, run.Cancelled} {
+		ex := &fakeExec{run: func(ctx context.Context) run.Result {
+			return run.Result{Outcome: oc, Err: errors.New("could not confirm the unit stopped")}
+		}}
+		c, tbl := newCtl(ex)
+		e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+		if !e.Quarantined || ex.cleaned.Load() != 0 {
+			t.Errorf("%s: quarantined=%v cleaned=%d: the workspace must stay", oc, e.Quarantined, ex.cleaned.Load())
+		}
+		if _, held := tbl.Holder("mysql"); !held {
+			t.Errorf("%s: the lock keys must stay held", oc)
+		}
+	}
+}
+
+func TestStartFailedErrIsNotQuarantine(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result {
+		return run.Result{Outcome: run.StartFailed, Err: errors.New("not found")}
+	}}
+	c, tbl := newCtl(ex)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	if e.Quarantined || ex.cleaned.Load() != 1 || tbl.Owners() != 0 {
+		t.Fatalf("quarantined=%v cleaned=%d owners=%d", e.Quarantined, ex.cleaned.Load(), tbl.Owners())
+	}
+}
+
+func TestCleanRunIsNotQuarantined(t *testing.T) {
+	ex := &fakeExec{}
+	c, tbl := newCtl(ex)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	if e.Quarantined || ex.cleaned.Load() != 1 || tbl.Owners() != 0 {
+		t.Fatalf("quarantined=%v cleaned=%d owners=%d", e.Quarantined, ex.cleaned.Load(), tbl.Owners())
+	}
+}
+
+func TestRunPanicKeepsLocksAndWorkspace(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result { panic("boom") }}
+	c, tbl := newCtl(ex)
+	func() {
+		defer func() { _ = recover() }()
+		c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	}()
+	if _, held := tbl.Holder("mysql"); !held || ex.cleaned.Load() != 0 {
+		t.Fatalf("held=%v cleaned=%d: a Run that panicked proved nothing about its process tree", held, ex.cleaned.Load())
+	}
+}
