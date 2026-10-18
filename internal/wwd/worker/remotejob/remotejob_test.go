@@ -33,6 +33,24 @@ args    = "none"
 class   = "release"
 timeout = "20m"
 
+[tasks.tagged]
+run           = "make tagged"
+args          = "none"
+labels        = ["os:darwin", "repo:purdex"]
+locks         = ["db", "port:8080"]
+cacheable     = true
+interruptible = true
+
+[tasks.leaky]
+run  = "make leaky"
+args = "none"
+env  = ["SSH_AUTH_SOCK"]
+
+[tasks.homey]
+run  = "make homey"
+args = "none"
+env  = ["PDX_GATE_DIR=/elsewhere"]
+
 [tasks.scratch]
 run     = "sh run.sh"
 args    = "pass"
@@ -141,6 +159,58 @@ func TestRejections(t *testing.T) {
 		if got := code(t, err); got != c.want {
 			t.Errorf("%s: code %s, want %s (%v)", c.name, got, c.want, err)
 		}
+	}
+}
+
+// What the job carries about how it is run is the snapshot task's own, or the job is not run: a worker that took it for its labels or
+// its locks must not find them changed. Order does not matter; a missing, added or changed entry does.
+func TestTheJobsMetadataMustBeTheSnapshotTasks(t *testing.T) {
+	root := snapshot(t, tasks)
+	tagged := func(f func(*wire.Job)) wire.Job {
+		j := jobOf("tagged", wire.ClassDev)
+		j.Labels, j.Locks, j.Cacheable, j.Interruptible = []string{"repo:purdex", "os:darwin"}, []string{"port:8080", "db"}, true, true
+		f(&j)
+		return j
+	}
+	if _, err := Prepare(tagged(func(*wire.Job) {}), root, t.TempDir()); err != nil {
+		t.Fatalf("the task's own metadata, in another order: %v", err)
+	}
+	for name, f := range map[string]func(*wire.Job){
+		"labels cleared":    func(j *wire.Job) { j.Labels = nil },
+		"label added":       func(j *wire.Job) { j.Labels = append(j.Labels, "os:linux") },
+		"label changed":     func(j *wire.Job) { j.Labels[0] = "repo:other" },
+		"locks cleared":     func(j *wire.Job) { j.Locks = []string{} },
+		"lock dropped":      func(j *wire.Job) { j.Locks = []string{"db"} },
+		"cacheable off":     func(j *wire.Job) { j.Cacheable = false },
+		"not interruptible": func(j *wire.Job) { j.Interruptible = false },
+	} {
+		p, err := Prepare(tagged(f), root, t.TempDir())
+		if p != nil || code(t, err) != CodeMetaMismatch {
+			t.Errorf("%s: %v, %v", name, p, err)
+		}
+	}
+	// and a task that has none must not be given any
+	j := jobOf("lint", wire.ClassDev)
+	j.Locks = []string{"db"}
+	if _, err := Prepare(j, root, t.TempDir()); code(t, err) != CodeMetaMismatch {
+		t.Errorf("a lock the task does not have: %v", err)
+	}
+}
+
+// A remote task's env may take only a few names from the worker's own environment, and may not set the names the runner owns. A task
+// with a fixed value for any other name is fine.
+func TestRemoteEnvPolicy(t *testing.T) {
+	root := snapshot(t, tasks)
+	_, err := Prepare(jobOf("leaky", wire.ClassDev), root, t.TempDir())
+	if c := code(t, err); c != CodeEnvNotAllowed {
+		t.Errorf("SSH_AUTH_SOCK from the worker: %s", c)
+	}
+	_, err = Prepare(jobOf("homey", wire.ClassDev), root, t.TempDir())
+	if c := code(t, err); c != CodeEnvInvalid {
+		t.Errorf("a name the runner owns: %s", c)
+	}
+	if _, err := Prepare(jobOf("spa-file", wire.ClassDev, "src/a.test.ts"), snapshot(t, tasks, "spa/src/a.test.ts"), t.TempDir()); err != nil {
+		t.Errorf("PATH taken and CI fixed: %v", err)
 	}
 }
 

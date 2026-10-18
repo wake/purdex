@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/submit"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -28,7 +30,17 @@ const (
 	CodeClassAbove      = "class_above_task" // the job asks for a class above the task's own
 	CodeArgsInvalid     = "args_invalid"     // the arguments do not fit the task's args kind
 	CodeCwdOutside      = "cwd_outside"      // the task's working directory is not a directory inside the snapshot
+	CodeMetaMismatch    = "meta_mismatch"    // labels, locks, cacheable or interruptible are not the snapshot task's own
+	CodeEnvNotAllowed   = "env_not_allowed"  // the task's env takes a name from the worker's environment that a remote job may not have
+	CodeEnvInvalid      = "env_invalid"      // the task's env sets a name the runner owns (HOME, WWD_*, PDX_*, ...)
 )
+
+// inheritable are the names a remote task's env may take from the worker's own environment ("NAME" without a value). Anything else
+// the worker has (credentials, agent sockets, tokens) stays out of a job whose task came with a snapshot from another host. A task
+// may still set any other name to a fixed value ("NAME=value"). The list is the worker's policy, not the manifest's.
+var inheritable = map[string]bool{
+	"PATH": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TZ": true, "CI": true, "NO_COLOR": true, "FORCE_COLOR": true,
+}
 
 // Rejection is why a remote job is not run. It is the caller's reason to report; it is an error so a hook can return it as it is.
 type Rejection struct {
@@ -88,6 +100,14 @@ func Prepare(job wire.Job, root, out string) (*Plan, error) {
 	if !job.Class.Valid() || classRank[job.Class] > classRank[task.Class] {
 		return nil, reject(CodeClassAbove, "job asks for class %q, task %s allows %q at most", job.Class, task.Name, task.Class)
 	}
+	// What the job carries about how it is run must be what the snapshot's task says: the origin copied it at submit, and a worker
+	// that took the job for its labels or its locks must not find them changed in the job it runs.
+	if what := metaMismatch(job, task); what != "" {
+		return nil, reject(CodeMetaMismatch, "%s of job %s is not task %s's own", what, job.ID, task.Name)
+	}
+	if err := checkEnv(job.ID, out, task.Env); err != nil {
+		return nil, err
+	}
 	dir, err := cwdIn(root, task.Cwd)
 	if err != nil {
 		return nil, err
@@ -104,6 +124,43 @@ func Prepare(job wire.Job, root, out string) (*Plan, error) {
 		timeout = s // the origin may shorten a run, never lengthen it
 	}
 	return &Plan{Task: task, Argv: argv, Dir: dir, Timeout: timeout, Env: task.Env, Class: job.Class}, nil
+}
+
+// metaMismatch names the first field of the job that is not the task's own ("" when all are): labels and locks as sets, cacheable and
+// interruptible as they are.
+func metaMismatch(job wire.Job, task *manifest.Task) string {
+	switch {
+	case !sameSet(job.Labels, task.Labels):
+		return "labels"
+	case !sameSet(job.Locks, task.Locks):
+		return "locks"
+	case job.Cacheable != task.Cacheable:
+		return "cacheable"
+	case job.Interruptible != task.Interruptible:
+		return "interruptible"
+	}
+	return ""
+}
+
+func sameSet(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(slices.Compact(x), slices.Compact(y))
+}
+
+// checkEnv refuses a task env that takes a name from the worker's environment that is not inheritable, or sets one the runner owns.
+// The second check is the runner's own (run.BuildEnv), so the two cannot drift.
+func checkEnv(jobID, out string, env []string) error {
+	for _, e := range env {
+		if name, _, fixed := strings.Cut(e, "="); !fixed && !inheritable[name] {
+			return reject(CodeEnvNotAllowed, "env %q may not be taken from the worker's environment", name)
+		}
+	}
+	if _, err := run.BuildEnv(jobID, out, env, nil); err != nil {
+		return reject(CodeEnvInvalid, "%v", err)
+	}
+	return nil
 }
 
 // classRank orders the classes by how much they may ask for.
