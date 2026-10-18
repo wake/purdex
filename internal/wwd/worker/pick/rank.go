@@ -4,6 +4,7 @@
 package pick
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -36,9 +37,9 @@ type Pin struct {
 type Env struct {
 	Now    time.Time
 	Labels []string // this host's labels; a job's labels must be a subset
-	// SpeedFactor multiplies Estimate in size_penalty; 0 is taken as 1.
+	// SpeedFactor multiplies Estimate in size_penalty; anything not a positive finite number is taken as 1.
 	SpeedFactor float64
-	Estimate    func(wire.Job) float64 // the task's estimated minutes; nil = 0
+	Estimate    func(wire.Job) float64 // the task's estimated minutes; nil, negative, NaN or Inf = 0
 	Locked      func(keys []string) bool
 	// Warm: the repo clone and the dependency cache are on this host. A missing clone is not a reason to skip a job: the workspace then
 	// comes from the origin's tar (spec 5 Workspace), so a clone only earns warm_bonus.
@@ -71,6 +72,9 @@ func classRank(c wire.JobClass) float64 {
 	return 1
 }
 
+// finite: a score must be a number the comparator can order; NaN and Inf from a bad estimate are treated as "no estimate".
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
 func subset(need, have []string) bool {
 	for _, n := range need {
 		found := false
@@ -92,7 +96,7 @@ func subset(need, have []string) bool {
 // out. The input is not modified.
 func Rank(cands []Candidate, env Env) []Scored {
 	speed := env.SpeedFactor
-	if speed == 0 {
+	if !finite(speed) || speed <= 0 {
 		speed = 1
 	}
 	// same_session_penalty counts every earlier queued job of the submitter's session that is visible, claimable here or not.
@@ -152,7 +156,9 @@ func Rank(cands []Candidate, env Env) []Scored {
 			score += warmBonus
 		}
 		if env.Estimate != nil {
-			score -= speed * env.Estimate(j)
+			if est := env.Estimate(j); finite(est) && est > 0 {
+				score -= speed * est
+			}
 		}
 		score -= sameSessionWeight * float64(earlier(j))
 		e.Scored = Scored{Candidate: c, Score: score}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -96,22 +97,36 @@ func (s peerSource) Queued(ctx context.Context) ([]wire.Job, error) {
 	return out, nil
 }
 
-// Collect reads every source and tags each job with its origin and that origin's zone. A source that fails is left out and reported
-// by host: one unreachable peer must not stop the worker from serving the others.
+// Collect reads every source at once and tags each job with its origin and that origin's zone. The sources are read in parallel so
+// that one silent peer costs one timeout, not one per peer, and never delays the others; the result keeps the order of srcs. A source
+// that fails is left out and reported by host: one unreachable peer must not stop the worker from serving the others.
 func Collect(ctx context.Context, srcs []Source, zone func(host string) wire.Zone) ([]Candidate, map[string]error) {
+	type answer struct {
+		jobs []wire.Job
+		err  error
+	}
+	answers := make([]answer, len(srcs))
+	var wg sync.WaitGroup
+	for i, s := range srcs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			answers[i].jobs, answers[i].err = s.Queued(ctx)
+		}()
+	}
+	wg.Wait()
 	var cands []Candidate
 	errs := map[string]error{}
-	for _, s := range srcs {
-		jobs, err := s.Queued(ctx)
-		if err != nil {
-			errs[s.Host()] = err
+	for i, s := range srcs {
+		if answers[i].err != nil {
+			errs[s.Host()] = answers[i].err
 			continue
 		}
 		var z wire.Zone
 		if zone != nil {
 			z = zone(s.Host())
 		}
-		for _, j := range jobs {
+		for _, j := range answers[i].jobs {
 			cands = append(cands, Candidate{Source: s.Host(), Zone: z, Job: j})
 		}
 	}

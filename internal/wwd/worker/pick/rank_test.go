@@ -1,6 +1,7 @@
 package pick
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -206,4 +207,37 @@ func TestFutureCreatedAtDoesNotLowerScore(t *testing.T) {
 	if r[0].Score != 1000 {
 		t.Fatalf("score = %v, want 1000", r[0].Score)
 	}
+}
+
+func TestBadEstimateAndSpeedAreIgnored(t *testing.T) {
+	nan, inf := math.NaN(), math.Inf(1)
+	for name, c := range map[string]struct{ speed, est float64 }{
+		"nan estimate": {1, nan}, "inf estimate": {1, inf}, "negative estimate": {1, -50},
+		"nan speed": {nan, 10}, "inf speed": {inf, 10}, "negative speed": {-3, 10}, "zero speed": {0, 10},
+	} {
+		env := baseEnv()
+		env.SpeedFactor = c.speed
+		env.Estimate = func(wire.Job) float64 { return c.est }
+		r := Rank([]Candidate{cand(job("a", wire.ClassDev, 0))}, env)
+		want := 1000.0
+		if c.est == 10 {
+			want = 990 // a bad speed factor is 1, the estimate still counts
+		}
+		if len(r) != 1 || r[0].Score != want {
+			t.Errorf("%s: score = %v, want %v", name, r[0].Score, want)
+		}
+	}
+}
+
+func TestNaNEstimateDoesNotReorderOthers(t *testing.T) {
+	env := baseEnv()
+	env.Estimate = func(j wire.Job) float64 {
+		if j.ID == "bad" {
+			return math.NaN()
+		}
+		return 0
+	}
+	in := []Candidate{cand(job("low", wire.ClassDev, 0)), cand(job("bad", wire.ClassDev, time.Minute)), cand(job("high", wire.ClassMerge, 0))}
+	eq(t, ids(Rank(in, env)), []string{"high", "bad", "low"})
+	eq(t, ids(Rank([]Candidate{in[2], in[1], in[0]}, env)), []string{"high", "bad", "low"})
 }

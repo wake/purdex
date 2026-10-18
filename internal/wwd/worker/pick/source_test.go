@@ -159,3 +159,34 @@ func TestPeerSourceRefusesOversizedAnswer(t *testing.T) {
 		t.Fatal("want an error")
 	}
 }
+
+type slowSource struct {
+	host string
+	wait time.Duration
+}
+
+func (s slowSource) Host() string { return s.host }
+func (s slowSource) Queued(ctx context.Context) ([]wire.Job, error) {
+	select {
+	case <-time.After(s.wait):
+		return nil, context.DeadlineExceeded
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestCollectReadsInParallelAndKeepsOrder(t *testing.T) {
+	srcs := []Source{
+		slowSource{"s1", 300 * time.Millisecond}, slowSource{"s2", 300 * time.Millisecond}, slowSource{"s3", 300 * time.Millisecond},
+		fixedSource{host: "a", jobs: []wire.Job{job("x", wire.ClassDev, 0)}},
+		fixedSource{host: "b", jobs: []wire.Job{job("y", wire.ClassDev, 0)}},
+	}
+	start := time.Now()
+	cands, errs := Collect(context.Background(), srcs, nil)
+	if d := time.Since(start); d > 800*time.Millisecond {
+		t.Fatalf("three silent sources took %v: they were read one after another", d)
+	}
+	if len(errs) != 3 || len(cands) != 2 || cands[0].Source != "a" || cands[1].Source != "b" {
+		t.Fatalf("cands=%v errs=%v", cands, errs)
+	}
+}
