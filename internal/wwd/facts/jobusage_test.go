@@ -253,7 +253,7 @@ func TestJobUsageConcurrentTakeAndSample(t *testing.T) {
 func TestJobUsageDiscardIsNotTake(t *testing.T) {
 	h, tr := jobHost(), newJU()
 	sample(tr, h, 0, wire.ZoneNormal, nil)
-	tr.Discard("j_a")
+	tr.Discard("j_a", ot0.Add(time.Hour))
 	if tr.Len() != 0 {
 		t.Fatalf("kept %d", tr.Len())
 	}
@@ -262,7 +262,25 @@ func TestJobUsageDiscardIsNotTake(t *testing.T) {
 	if !ok || got.Samples != 1 || !got.FirstSeen.Equal(ot0.Add(5*time.Second)) {
 		t.Fatalf("%+v %v", got, ok)
 	}
-	tr.Discard("j_never") // a job nobody saw: nothing to drop, and nothing remembered
+	tr.Discard("j_never", ot0) // a job nobody saw: nothing to drop, and nothing remembered
+}
+
+// A discard for a run that ended at ot0+5 s drops an accumulator whose last sample is not after that, and leaves one that has a later
+// sample: the job was given out again before the call, and the later samples are the next run's.
+func TestJobUsageDiscardLeavesTheNextRunsSamples(t *testing.T) {
+	h, tr := jobHost(), newJU()
+	sample(tr, h, 0, wire.ZoneNormal, nil)
+	sample(tr, h, 1, wire.ZoneNormal, nil) // ot0+5 s: the old run's last
+	tr.Discard("j_a", ot0.Add(5*time.Second))
+	if tr.Len() != 0 {
+		t.Fatalf("an accumulator whose last sample is not after the run's end is dropped: %d", tr.Len())
+	}
+	sample(tr, h, 2, wire.ZoneNormal, nil)
+	sample(tr, h, 3, wire.ZoneNormal, nil) // ot0+15 s: after a run that ended at ot0+5 s
+	tr.Discard("j_a", ot0.Add(5*time.Second))
+	if got, ok := tr.Take("j_a"); !ok || got.Samples != 2 {
+		t.Fatalf("the next run's samples must stay: %+v %v", got, ok)
+	}
 }
 
 // The owner unknown (no rule yet, or a fault hook) in the first sample does not hide what it shows later.

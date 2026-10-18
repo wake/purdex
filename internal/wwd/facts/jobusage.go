@@ -232,11 +232,14 @@ func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 }
 
 // Discard drops what was seen of a job without marking it taken: for a run that is not the job's end (the job goes back to the queue and
-// runs again), whose next run must collect its own samples. Take is for the end of the job.
-func (t *JobUsageTracker) Discard(jobID string) {
+// runs again), whose next run must collect its own samples. Take is for the end of the job. upTo is when the run ended: an accumulator
+// with a sample after that already holds the next run's (the job was given out again before this call), and is left to it.
+func (t *JobUsageTracker) Discard(jobID string, upTo time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.jobs, jobID)
+	if acc := t.jobs[jobID]; acc != nil && !acc.LastSeen.After(upTo) {
+		delete(t.jobs, jobID)
+	}
 }
 
 // Len is how many jobs are being kept.

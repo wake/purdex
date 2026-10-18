@@ -176,7 +176,7 @@ func TestRecordRunResultMatchesWhatTheReporterPosts(t *testing.T) {
 func TestRecordRunForgetsTheSamplesOfARunItDoesNotRecord(t *testing.T) {
 	r, sink := newRec(ut0.Add(-time.Hour))
 	sampleJob(r, 0, wire.ZoneNormal, nil)
-	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob()})
+	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob(), Run: run.Result{FinishedAt: ut0.Add(time.Second)}})
 	if rows := drain(r, sink); len(rows) != 0 || r.tr.Len() != 0 {
 		t.Fatalf("%d rows, %d kept", len(rows), r.tr.Len())
 	}
@@ -197,11 +197,25 @@ func TestAQueueJobsFinalEventWritesTheRowUntilTheLoopReportsItsRuns(t *testing.T
 	}
 }
 
+// The job was given out again before the old run's record call: the next run's samples are not dropped with the old run's.
+func TestRecordRunADiscardForAnOldRunLeavesTheNextRunsSamples(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	sampleJob(r, 0, wire.ZoneDanger, nil)
+	sampleJob(r, 1, wire.ZoneNormal, nil) // the old run ended at ut0+1 s...
+	sampleJob(r, 3, wire.ZoneNormal, nil) // ...and the job is already running again
+	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob(), Run: run.Result{FinishedAt: ut0.Add(time.Second)}})
+	r.RecordRun(ran(run.Result{Outcome: run.Exited}))
+	rows := drain(r, sink)
+	if len(rows) != 1 || rows[0].CPUSource != wire.CPUSampled {
+		t.Fatalf("the samples of the run that was already going on were dropped: %+v", rows)
+	}
+}
+
 // A run that goes back to the queue is not the job's end: the same job's next run collects its own samples and writes the row.
 func TestRecordRunAJobThatRunsAgainKeepsTheSecondRunsSamples(t *testing.T) {
 	r, sink := newRec(ut0.Add(-time.Hour))
 	sampleJob(r, 0, wire.ZoneDanger, nil) // first run: released as infra
-	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob()})
+	r.RecordRun(runner.Ended{Kind: runner.KindInfra, Job: queueJob(), Run: run.Result{FinishedAt: ut0.Add(time.Second)}})
 	sampleJob(r, 1, wire.ZoneNormal, nil) // the same job id again
 	sampleJob(r, 2, wire.ZoneNormal, nil)
 	r.RecordRun(ran(run.Result{Outcome: run.Exited}))
