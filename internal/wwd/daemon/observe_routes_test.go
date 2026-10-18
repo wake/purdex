@@ -199,6 +199,44 @@ func TestObservationsAnswerIsBoundedAndSaysSo(t *testing.T) {
 	}
 }
 
+// The older ones are reachable: a truncated answer names where the next page ends (until, inclusive; a client drops repeats by id).
+func TestTruncatedObservationsCanBePagedBackToTheStart(t *testing.T) {
+	tr, st := &fakeTracker{}, &memStore{}
+	o := newObserver(tr, st)
+	total := maxObservationsAnswer + 50
+	feedMany(t, o, tr, total, func(int) string { return "make" })
+	d := New(Options{HostID: "id", Alias: "mlab", Version: "v0", Token: testToken, Observer: o, Now: func() time.Time { return obt0.Add(8 * 24 * time.Hour) }})
+
+	seen := map[string]bool{}
+	path := "/v1/observations"
+	for page := 0; page < 5; page++ {
+		w := do(d.SocketHandler(), "GET", path, "")
+		r, err := wire.Decode[wire.ObservationsResponse](w.Body.Bytes())
+		if err != nil || w.Code != 200 {
+			t.Fatalf("page %d: %d %s (%v)", page, w.Code, w.Body, err)
+		}
+		for _, ob := range r.Observations {
+			seen[ob.ID] = true
+		}
+		if !r.Truncated {
+			if r.NextUntil != nil {
+				t.Fatal("a last page names no next page")
+			}
+			break
+		}
+		if r.NextUntil == nil || !r.NextUntil.Equal(r.Observations[0].StartedAt) {
+			t.Fatalf("a truncated page ends at its oldest record: %+v", r.NextUntil)
+		}
+		path = "/v1/observations?" + url.Values{"until": {r.NextUntil.Format(time.RFC3339)}}.Encode()
+	}
+	if len(seen) != total {
+		t.Fatalf("every record reached through the pages: %d of %d", len(seen), total)
+	}
+	if w := do(d.SocketHandler(), "GET", "/v1/observations?until=soon", ""); w.Code != 400 {
+		t.Fatalf("a bad until: %d", w.Code)
+	}
+}
+
 func TestUndeclaredAnswerIsBoundedAndSaysSo(t *testing.T) {
 	tr, st := &fakeTracker{}, &memStore{}
 	o := newObserver(tr, st)

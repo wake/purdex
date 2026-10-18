@@ -72,11 +72,28 @@ func (d *Daemon) handleObservations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	truncated := len(obs) > maxObservationsAnswer
-	if truncated {
-		obs = obs[len(obs)-maxObservationsAnswer:] // oldest first: the newest are at the end
+	if s := r.URL.Query().Get("until"); s != "" { // a page back in time: what began at or before until
+		until, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "until: " + err.Error()})
+			return
+		}
+		kept := obs[:0:0]
+		for _, o := range obs {
+			if !o.StartedAt.After(until) {
+				kept = append(kept, o)
+			}
+		}
+		obs = kept
 	}
-	writeJSON(w, http.StatusOK, wire.ObservationsResponse{Host: d.opts.Alias, Since: since, Observations: obs, Truncated: truncated})
+	resp := wire.ObservationsResponse{Host: d.opts.Alias, Since: since}
+	if len(obs) > maxObservationsAnswer {
+		obs = obs[len(obs)-maxObservationsAnswer:] // oldest first: the newest are at the end
+		oldest := obs[0].StartedAt
+		resp.Truncated, resp.NextUntil = true, &oldest
+	}
+	resp.Observations = obs
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (d *Daemon) handleUndeclared(w http.ResponseWriter, r *http.Request) {
