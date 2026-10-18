@@ -70,9 +70,19 @@ func scrubbed(argv []string) []string {
 	argv = cleanArgv(argv)
 	out := redact.ScrubArgv(argv)
 	if i := shellScript(argv); i >= 0 {
-		out[i] = strings.Join(redact.ScrubArgv(splitShellWords(argv[i])), " ")
+		if hardToSplit(argv[i]) {
+			out[i] = redact.Mask // the words of the script cannot be told apart reliably: none of it is kept
+		} else {
+			out[i] = strings.Join(redact.ScrubArgv(splitShellWords(argv[i])), " ")
+		}
 	}
 	return out
+}
+
+// hardToSplit says whether a script has syntax whose quoting a plain word split gets wrong: command substitution and parameter
+// expansion nest their own quotes, here-documents carry free text. The whole script is then masked rather than half-parsed.
+func hardToSplit(script string) bool {
+	return strings.ContainsAny(script, "`") || strings.Contains(script, "$(") || strings.Contains(script, "${") || strings.Contains(script, "<<")
 }
 
 // splitShellWords splits on white space outside quotes and keeps the quote characters in the words, so a quoted value with spaces
@@ -220,7 +230,9 @@ func scriptSignature(script string, depth int, shell string) string {
 		if len(f) == 0 || shellPrelude[f[0]] {
 			continue
 		}
-		return signature(f, depth)
+		if sig := signature(f, depth); sig != "" {
+			return sig
+		}
 	}
 	return trimName(shell)
 }
