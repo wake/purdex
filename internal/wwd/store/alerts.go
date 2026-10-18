@@ -91,6 +91,8 @@ func (s *Store) RaiseAlert(a wire.Alert, at time.Time) (changed bool, err error)
 // ClearAlert records that the rule no longer holds and reports whether an active alert was cleared. The clear is never earlier than the
 // alert's last time (a clock that stepped back must not make cleared_at precede last).
 func (s *Store) ClearAlert(key string, at time.Time) (bool, error) {
+	s.alertMu.Lock() // a write between RaiseAlert's read and its write would make that upgrade fail with SQLITE_BUSY
+	defer s.alertMu.Unlock()
 	res, err := s.db.Exec(`UPDATE alerts SET cleared_ms = max(?, last_ms) WHERE key = ? AND cleared_ms IS NULL`, at.UnixMilli(), key)
 	if err != nil {
 		return false, err

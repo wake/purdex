@@ -167,3 +167,34 @@ func TestRaiseAlertSameKeyConcurrent(t *testing.T) {
 		t.Fatalf("exactly one raise creates the alert, got %d", created.Load())
 	}
 }
+
+// Raise and Clear of one key from different rules at once: neither may fail with SQLITE_BUSY.
+func TestRaiseAndClearAlertConcurrent(t *testing.T) {
+	s := openAlerts(t)
+	if _, err := s.RaiseAlert(diskLow("11.2 GB"), at0); err != nil {
+		t.Fatal(err)
+	}
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*n)
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := s.RaiseAlert(diskLow("11.2 GB"), at0.Add(time.Minute)); err != nil {
+				errs <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := s.ClearAlert(diskLow("").Key, at0.Add(time.Minute)); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent raise/clear: %v", err)
+	}
+}
