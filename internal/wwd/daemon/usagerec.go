@@ -30,6 +30,8 @@ type UsageRecorder struct {
 	sink UsageSaver
 	out  chan wire.JobUsage
 	logf func(format string, args ...any)
+	// workerRuns: the worker's loop reports its runs here (ForWorker), so a queue job's final event is not a second source of its row.
+	workerRuns atomic.Bool
 	// dropped counts the rows a full writer queue turned away; Run reports it (the callback itself does no logging).
 	dropped atomic.Int64
 }
@@ -93,10 +95,23 @@ func (r *UsageRecorder) save(u wire.JobUsage) {
 	}
 }
 
-// ranHere says the job's process tree was on this host: a fast-lane job always, a queue job when its result names this host (a job
-// another host's worker ran is recorded by that host).
+// ranHere says this recorder writes the job's row from its final event: a fast-lane job (its process is the caller's, so wwd has only the
+// samples), and, until the worker's loop reports its runs (ForWorker), a queue job whose result names this host. Once it does, a job the
+// worker ran is written from the run itself (RecordRun), where the exact figures are, and its final event is not used: the first row,
+// the one that stays, is never the less exact one.
 func (r *UsageRecorder) ranHere(j wire.Job) bool {
-	return j.Local || (j.Result != nil && j.Result.Host == r.host)
+	if j.Local {
+		return true
+	}
+	return !r.workerRuns.Load() && j.Result != nil && j.Result.Host == r.host
+}
+
+// ForWorker is for the worker loop's Config.Usage: the loop reports each run through RecordRun, and from now on a queue job is written
+// from its run, not from its final event. It is called when the loop is wired, before the loop runs: it is not a switch to flip while
+// jobs are running (an event already on its way could still write its row first).
+func (r *UsageRecorder) ForWorker() *UsageRecorder {
+	r.workerRuns.Store(true)
+	return r
 }
 
 // row is the usage row of a job's event; ok is false when there is nothing to record (not final, ran elsewhere, never ran).

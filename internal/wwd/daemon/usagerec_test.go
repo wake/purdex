@@ -49,10 +49,12 @@ func sampleJob(r *UsageRecorder, n int, zone wire.Zone, owner *wire.OwnerState) 
 	r.OnFacts(wire.Facts{At: now, Owner: owner, Derived: wire.Derived{Zone: zone}})
 }
 
+// finalJob is a fast-lane job's final event: the job a final event is the record of (a job the worker ran is recorded from the run,
+// RecordRun, in usagerun_test.go).
 func finalJob(state wire.JobState, start, end time.Time) wire.Job {
 	return wire.Job{
-		ID: "j_a", Repo: wire.Repo{Name: "purdex"}, Task: "go-test", Class: wire.ClassDev, State: state,
-		Result: &wire.Result{Host: "mlab", StartedAt: &start, FinishedAt: &end, Reason: "oom"},
+		ID: "j_a", Repo: wire.Repo{Name: "purdex"}, Task: "go-test", Class: wire.ClassDev, State: state, Local: true,
+		Result: &wire.Result{StartedAt: &start, FinishedAt: &end, Reason: "oom"},
 	}
 }
 
@@ -78,8 +80,8 @@ func TestUsageRecorderWritesTheRowOfAJobThatRanHere(t *testing.T) {
 	if err := u.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.SlotCharged != wire.SlotHeavy ||
-		u.Source != wire.UsageQueue || u.Result != wire.StateFailed || u.Reason != "oom" || u.Class != wire.ClassDev {
+	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.SlotCharged != wire.SlotLight ||
+		u.Source != wire.UsageFastLane || u.Result != wire.StateFailed || u.Reason != "oom" || u.Class != wire.ClassDev {
 		t.Fatalf("%+v", u)
 	}
 	// 3 samples x 5 s x 2 cores, 600 MB, sampled; the job began after wwd did: not partial
@@ -123,7 +125,7 @@ func TestUsageRecorderLeavesOutWhatDidNotRunHere(t *testing.T) {
 	running := finalJob(wire.StateRunning, ut0, ut0)
 	r.OnJobEvent(wire.JobEvent{Job: running}) // not final
 	elsewhere := finalJob(wire.StateSucceeded, ut0, ut0.Add(time.Second))
-	elsewhere.Result.Host = "air26" // that host's worker records it
+	elsewhere.Local, elsewhere.Result.Host = false, "air26" // a job the worker ran is recorded by RecordRun, not from its final event
 	r.OnJobEvent(wire.JobEvent{Job: elsewhere})
 	expired := finalJob(wire.StateExpired, ut0, ut0)
 	expired.Result = &wire.Result{Host: "mlab"} // never started

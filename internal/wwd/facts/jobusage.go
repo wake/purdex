@@ -231,6 +231,19 @@ func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 	return acc.JobSample, true
 }
 
+// Discard drops what was seen of a job without marking it taken: for a run that is not the job's end (the job goes back to the queue and
+// runs again), whose next run must collect its own samples. Take is for the end of the job.
+//
+// A job that is given out again and sampled before this call (its release accepted, picked in the next round, claimed, a workspace made,
+// a command started and one sample taken, all in the microseconds between the origin taking the release and the loop's call) would lose
+// those first samples with the old run's. The samples are per job id, not per run, so the two cannot be told apart once they are in one
+// accumulator; keeping the accumulator instead would put the old run's figures into the next row. The first is the smaller wrong.
+func (t *JobUsageTracker) Discard(jobID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.jobs, jobID)
+}
+
 // Len is how many jobs are being kept.
 func (t *JobUsageTracker) Len() int {
 	t.mu.Lock()
