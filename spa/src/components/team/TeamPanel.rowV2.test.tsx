@@ -66,6 +66,30 @@ describe('a row of the full panel (v2)', () => {
     expect(dot).toHaveAttribute('data-status', 'running')
   })
 
+  it('the name never gives way (no truncate, no shrink); the title is the one that truncates (design: 300 px)', () => {
+    const c = makeCollection(['xx'])
+    c.items[0] = makePersona('xx', { name: 'A Very Long Persona Name' })
+    usePersonaStore.setState({ byHost: { [HOST]: { status: 'ready', collection: c } } })
+    mount()
+    const name = within(row('A')).getByTestId('team-panel-seat-name')
+    expect(name.className).toMatch(/flex-shrink-0/)
+    expect(name.className).toMatch(/whitespace-nowrap/)
+    expect(name.className).not.toMatch(/truncate/)
+    expect(within(row('A')).getByTestId('team-panel-seat-title').className).toMatch(/truncate/)
+  })
+
+  it('the light\'s ring follows the row\'s own background: normal, hover, active', () => {
+    mount()
+    expect(row('A').className).toContain('[--seat-ring:var(--surface-secondary)]')
+    expect(row('A').className).toContain('hover:[--seat-ring:var(--surface-hover)]')
+    expect(row('L').className).toContain('[--seat-ring:var(--surface-active)]') // the lead's tab is the active one in this scene
+  })
+
+  it('the avatar is decoration for a screen reader: the name is read once, from the row', () => {
+    mount()
+    expect(within(row('A')).getByTestId('team-panel-avatar')).toHaveAttribute('aria-hidden', 'true')
+  })
+
   it('a seat with a persona: the persona\'s name (semibold) and the title after it (muted)', () => {
     const c = makeCollection(['xx'])
     c.items[0] = makePersona('xx', { name: 'Yuki', avatar_data: 'data:image/png;base64,AA==' }) // the fixture's seats are `mlab/<id>-xx`

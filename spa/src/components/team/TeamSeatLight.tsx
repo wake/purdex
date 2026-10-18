@@ -6,7 +6,8 @@ import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
 const SIZE = 11
 const UNREAD_COLOR = '#ef4444'
 
-export function TeamSeatLight({ hostId, sessionCode, ring }: { hostId: string; sessionCode: string; ring: string }) {
+/** The ring is the row's background: the row sets `--seat-ring` for its normal, hover and active looks. */
+export function TeamSeatLight({ hostId, sessionCode }: { hostId: string; sessionCode: string }) {
   const { agentStatus, isUnread, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode)
   if (agentStatus === undefined || tabIndicatorStyle === 'icon') return null // lights off: the icon-only setting
   const tinted = isUnread && agentStatus !== 'waiting' && agentStatus !== 'error' // unread never overrides ask or error
@@ -15,7 +16,7 @@ export function TeamSeatLight({ hostId, sessionCode, ring }: { hostId: string; s
       data-testid="team-panel-light-dot"
       data-status={agentStatus}
       className={`block rounded-full ${agentStatus === 'running' && !tinted ? 'animate-breathe' : ''}`}
-      style={{ width: SIZE, height: SIZE, backgroundColor: tinted ? UNREAD_COLOR : STATUS_COLORS[agentStatus], boxShadow: `0 0 0 2px ${ring}` }}
+      style={{ width: SIZE, height: SIZE, backgroundColor: tinted ? UNREAD_COLOR : STATUS_COLORS[agentStatus], boxShadow: '0 0 0 2px var(--seat-ring, var(--surface-secondary))' }}
     />
   )
 }

@@ -87,15 +87,16 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       {...drag}
       onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
       className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors cursor-pointer grid grid-cols-[44px_minmax(0,1fr)] gap-x-2.5 ${
-        isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+        // --seat-ring is the row's own background, so the light's ring follows it (normal, hover, active)
+        isActive ? 'bg-surface-active text-white [--seat-ring:var(--surface-active)]' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary [--seat-ring:var(--surface-secondary)] hover:[--seat-ring:var(--surface-hover)]'
       } ${dragging ? 'opacity-30' : ''}`}
     >
       {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
       {/* The avatar spans the row's lines; the light is its corner badge (a seat in transition dims it) */}
-      <div data-testid="team-panel-avatar" className="relative w-11 h-11 flex-shrink-0">
+      <div data-testid="team-panel-avatar" aria-hidden="true" className="relative w-11 h-11 flex-shrink-0">
         <Avatar size={44} code={persona?.code ?? ''} name={name} src={persona?.avatar} fallbackColor={faceColor} />
         <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -bottom-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} ring={isActive ? 'var(--surface-active)' : 'var(--surface-secondary)'} />
+          <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
         </span>
       </div>
       <div className="min-w-0">
@@ -110,7 +111,8 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
             {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
           </span>
         )}
-        <span data-testid="team-panel-seat-name" className="truncate min-w-0 text-[13px] font-semibold text-text-primary">{name}</span>
+        {/* the name never gives way (design: the title is the first to truncate) */}
+        <span data-testid="team-panel-seat-name" className="flex-shrink-0 whitespace-nowrap text-[13px] font-semibold text-text-primary">{name}</span>
         {showTitle && <span data-testid="team-panel-seat-title" className="truncate min-w-0 flex-1 text-[11.5px] text-text-muted">{seat.title}</span>}
         {!showTitle && <span className="flex-1" />}
         <HalfHandoffMark handoff={freshHandoff} variant="chip" />
