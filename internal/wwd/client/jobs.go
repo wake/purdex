@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -31,28 +32,35 @@ func call[T any](ctx context.Context, c *Client, method, path string, q url.Valu
 	return v, nil
 }
 
-// send does the request and returns the body of a 200/201 answer, at most limit bytes.
+// send does a JSON request (body may be nil) and returns the body of a 2xx answer, at most limit bytes.
 func (c *Client) send(ctx context.Context, method, path string, q url.Values, body any, limit int64) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout())
-	defer cancel()
-	u := "http://wwd" + path
-	if len(q) > 0 {
-		u += "?" + q.Encode()
-	}
 	var rd io.Reader
+	ctype := ""
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		rd = bytes.NewReader(b)
+		rd, ctype = bytes.NewReader(b), "application/json"
+	}
+	return c.sendRaw(ctx, method, path, q, rd, ctype, c.timeout(), limit)
+}
+
+// sendRaw does the request with the body as given, bounded by timeout, and returns the body of a 2xx answer, at most limit bytes.
+// A non-2xx answer is a *StatusError.
+func (c *Client) sendRaw(ctx context.Context, method, path string, q url.Values, rd io.Reader, ctype string, timeout time.Duration, limit int64) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	u := "http://wwd" + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
 		return nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
