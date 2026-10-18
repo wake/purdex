@@ -7,7 +7,7 @@ import { forgetScrollMemosWithPrefix } from '../../lib/nex/transcript-scroll-mem
 import { emptyDoc } from '../../lib/conversations/model'
 import type { Header, HeaderQueued, Turn } from '../../lib/conversations/types'
 import type { ConversationEntry } from '../../stores/useConversationStore'
-import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
+import { clearAllDrafts, draftKey, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllCleared } from '../../lib/conversations/draft-clear'
 import { clearAllUploads } from '../../lib/conversations/attachment-upload'
