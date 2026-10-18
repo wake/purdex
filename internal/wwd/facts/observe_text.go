@@ -166,6 +166,35 @@ func isScrubbed(a string) bool {
 	return strings.Contains(a, "<redacted>") || strings.Contains(a, redact.Mask)
 }
 
+// globalValueFlags are, per program, the flags that come before the subcommand and take a value in the next word ("docker --context
+// prod build"): they are skipped with their value so the subcommand is still found. A flag not listed ends the scan, as before.
+var globalValueFlags = map[string]map[string]bool{
+	"docker":  {"--context": true, "-c": true, "--host": true, "-H": true, "--config": true, "--log-level": true, "-l": true},
+	"kubectl": {"--context": true, "-n": true, "--namespace": true, "--kubeconfig": true, "--cluster": true, "--user": true, "-s": true, "--server": true},
+	"helm":    {"--kube-context": true, "-n": true, "--namespace": true, "--kubeconfig": true},
+	"git":     {"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true},
+	"pnpm":    {"--filter": true, "-F": true, "-C": true, "--dir": true, "--prefix": true},
+	"npm":     {"--prefix": true, "-C": true, "--workspace": true, "-w": true},
+	"yarn":    {"--cwd": true, "--cache-folder": true},
+}
+
+var reCounterSuffix = regexp.MustCompile(`[-_.][0-9a-fA-F]+$`)
+
+// stripCounter takes a run counter or a random suffix off a file name stem ("run-123" -> "run", "build-a1b2c3d4e5" -> "build"), so
+// the same job started from a temp script is one signature. Only a separator followed by three or more digits, or by eight or more
+// hex digits with at least one digit among them, counts: "es2020", "deadbeef", "build-prod" and "v8-12" are names.
+func stripCounter(stem string) string {
+	loc := reCounterSuffix.FindStringIndex(stem)
+	if loc == nil || loc[0] == 0 {
+		return stem
+	}
+	suffix := stem[loc[0]+1:]
+	if isNumber(suffix) && len(suffix) >= 3 || len(suffix) >= 8 && strings.ContainsAny(suffix, "0123456789") {
+		return stem[:loc[0]] // the regexp already holds the suffix to hex digits
+	}
+	return stem
+}
+
 func signature(clean []string, depth int) string {
 	if len(clean) == 0 || depth > 3 {
 		return ""
@@ -185,7 +214,9 @@ func signature(clean []string, depth int) string {
 		return scriptSignature(clean[i], depth+1, name)
 	}
 	words := []string{trimName(name)}
-	for _, a := range clean[1:] {
+	skip := globalValueFlags[name]
+	for i := 1; i < len(clean); i++ {
+		a := clean[i]
 		if len(words) == 3 {
 			break
 		}
@@ -196,16 +227,23 @@ func signature(clean []string, depth int) string {
 			if strings.Contains(a, "=") {
 				continue // a self-contained option before the words (node --max-old-space-size=4096 ...)
 			}
+			if skip[a] && i+1 < len(clean) {
+				i++ // a global flag of this tool and its value: the subcommand comes after
+				continue
+			}
 			break // a flag: what follows is its value or an argument, not a subcommand
 		}
-		if strings.Contains(a, "=") || isNumber(a) || strings.Contains(a, "://") {
+		if strings.Contains(a, "=") || isNumber(a) || strings.Contains(a, "://") || a == "." || a == ".." {
 			continue
 		}
 		if strings.Contains(a, "/") {
 			if strings.HasSuffix(a, "/") || strings.HasPrefix(a, "./") || strings.HasPrefix(a, "../") || strings.HasPrefix(a, "~") {
 				continue // a path argument
 			}
-			a = strings.TrimSuffix(path.Base(a), path.Ext(a)) // a script or tool path: its name
+			ext := path.Ext(a)
+			a = stripCounter(strings.TrimSuffix(path.Base(a), ext)) // a script or tool path: its name, without a counter or random suffix
+		} else if ext := path.Ext(a); ext != "" && ext != a {
+			a = stripCounter(strings.TrimSuffix(a, ext)) + ext // a bare script name keeps its extension
 		}
 		if a = trimName(a); a != "" {
 			words = append(words, a)
