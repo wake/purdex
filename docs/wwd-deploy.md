@@ -155,6 +155,35 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   `{jobs, cursor, epoch}`, and a client that decodes strictly and does not know a field fails on it, so wwd and Purdex are
   always deployed together (a short skew between wwd hosts, while the four are being upgraded one after the other,
   only costs the peers' polling a few failed rounds).
+* **Host schema step 5 and wire `proto` 2 (WWD-8 8a-c, spec §13.1)** — deploy **the four wwds and both Purdex daemons from the
+  same build**. The decoders are strict, so a release reaches the hosts one after another and the contract goes in two phases:
+  - *This release* (proto 2) only teaches every reader the new things: Facts `mem.decompress_rate` and `queue`, Exception `allow` /
+    `flags`, the `Alert` payloads, the `alert` event and `GET /v1/alerts`; `/v1/info` says `proto: 2`. Writers still send
+    `v: 1` with none of the new fields, so a host still on the old build is never shown a field it would reject. A reader takes
+    `404` on `/v1/alerts` as "no alerts yet" (an old host), and a facts record or info of a proto it does not know as an
+    unreachable peer.
+  - **The writers ship one release after the readers.** The readers (the wire contract, the v5 migration, `GET /v1/alerts`) go out
+    first and are deployed on all four wwds **and both Purdex daemons**; only when that release is everywhere does the release with the
+    writers go out (the signals, the alerts, the gate's users). The gate cannot do this alone: it sees the peer wwds, not the Purdex
+    daemon that reads the same host's wwd, and a Purdex daemon upgraded last would meet a v 2 facts record it cannot read. A writer PR
+    must not be merged or deployed in the same release as the reader PRs.
+  - *The writers' release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer is reachable and reports
+    `proto >= 2` (a peer that is down holds the gate shut, whatever its last info said). Until then `POST /v1/exceptions` refuses
+    `allow` and `flags` with 400, so no writer can show them to a proto 1 reader.
+    Check before relying on it: `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` on each host shows
+    `"proto":2`. A host rolled back below the contract shuts the gate again.
+  - `wwd.db` host schema 4 → 5 adds `wwd_starts` and `alerts` (both `IF NOT EXISTS`, so a second start changes nothing). Take the
+    online backup first, on each host, named for the version you are about to run:
+
+    ```sh
+    sqlite3 ~/.local/share/wwd/wwd.db ".backup '$HOME/.local/share/wwd/wwd.db.pre-<version>'"
+    ```
+
+    Restore (a roll back across this step: the old binary refuses a schema it does not know): stop wwd, put
+    `wwd.db.pre-<version>` back as `wwd.db`, remove the `-wal` and `-shm` files beside it, give it a new epoch (the command
+    above), start the old build. The rows of the two new tables are lost with the roll back (until 8a-1 they hold nothing).
+    Check after the upgrade: `sqlite3 ~/.local/share/wwd/wwd.db "SELECT version FROM host_schema; SELECT count(*) FROM alerts;"`
+    prints `5` and `0`.
 * Remove: `wwd uninstall` (service definition and binary go; config, token and `wwd.db` stay) or
   `wwd uninstall --purge` (everything under `~/.config/wwd` and `~/.local/share/wwd`). `pdx setup --wwd-remove
   [--wwd-purge]` is the same.

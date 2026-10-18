@@ -90,6 +90,12 @@ func (d *Daemon) handlePostException(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// Phase 1 of the contract (spec §13.1): readers know the hold fields, no writer fills them yet. Taking them here would publish
+	// them on SSE to a proto 1 reader and lose them at the next restart (wwd.db does not keep them). 8b-3 lifts this.
+	if e.Allow != nil || len(e.Flags) != 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "exception: allow and flags are not accepted yet (WWD-8 8b-3)"})
+		return
+	}
 	if _, err := d.opts.State.AddException(e); err != nil {
 		stateError(w, err)
 		return
