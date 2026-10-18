@@ -325,7 +325,9 @@ func TestARefusedPushIsRetriedAfterTheInterval(t *testing.T) {
 func TestDeliveryFollowsTheFleetRole(t *testing.T) {
 	e := newEnv(t)
 	role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
-	e.m.deliver = primaryOnly(role)
+	yes := true
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &yes}) // the primary can push
+	e.m.deliver = deliverRule(role)
 	e.src.set("mlab", diskLow("mlab"))
 	e.pass(t)
 	if e.ntf.count() != 0 {
@@ -352,8 +354,59 @@ func TestDeliveryFollowsTheFleetRole(t *testing.T) {
 
 // No fleet role at all (the fleet module is not there): nothing delivers, nothing panics.
 func TestNoFleetRoleMeansNoDelivery(t *testing.T) {
-	if primaryOnly(nil)() {
+	if deliverRule(nil)() {
 		t.Fatal("a daemon without a fleet role delivered")
+	}
+}
+
+// A standby with push ready also delivers when the primary cannot: it reported no push, reported nothing (an older daemon), did not
+// answer, or nothing has been asked yet. It does not when the primary reported its push ready; and an off daemon never does.
+func TestAStandbyDeliversWhenThePrimaryCannotPush(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		peer fleet.PeerPush
+		want bool
+	}{
+		{"primary can push", fleet.PeerPush{Known: true, Answered: true, Ready: &yes}, false},
+		{"primary reports no push", fleet.PeerPush{Known: true, Answered: true, Ready: &no}, true},
+		{"primary reports nothing (older daemon)", fleet.PeerPush{Known: true, Answered: true}, true},
+		{"primary does not answer", fleet.PeerPush{Known: true}, true},
+		{"not asked yet", fleet.PeerPush{}, true},
+	}
+	for _, c := range cases {
+		role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
+		role.SetPeerPush(c.peer)
+		if got := deliverRule(role)(); got != c.want {
+			t.Errorf("standby, %s: delivers=%v, want %v", c.name, got, c.want)
+		}
+	}
+	off := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleOff, Self: "mlab", Reason: "disabled"})
+	off.SetPeerPush(fleet.PeerPush{Known: true})
+	if deliverRule(off)() {
+		t.Error("an off daemon delivered")
+	}
+}
+
+// End to end through the pass: the primary (air26, no push) is the fleet primary, mlab is the standby with push ready. mlab tells the
+// alert; once the primary reports its push ready, mlab stops.
+func TestAStandbyWithPushPushesWhileThePrimaryHasNone(t *testing.T) {
+	e := newEnv(t)
+	role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
+	no := false
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &no})
+	e.m.deliver = deliverRule(role)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+	yes := true
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &yes})
+	e.now = e.now.Add(10 * time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("the standby kept pushing after the primary could: %d", e.ntf.count())
 	}
 }
 

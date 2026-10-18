@@ -91,7 +91,7 @@ func (m *Module) Init(c *core.Core) error {
 		if svc, ok := c.Registry.Get(fleetmod.RoleViewKey); ok {
 			rv, _ = svc.(fleet.RoleView)
 		}
-		m.deliver = primaryOnly(rv)
+		m.deliver = deliverRule(rv)
 	}
 	path := m.dbPath
 	if path == "" {
@@ -161,9 +161,30 @@ func (m *Module) loop(ctx context.Context) {
 	}
 }
 
-// primaryOnly is the deliverer rule: this daemon holds the fleet primary role. Without a role view (no fleet module) nobody delivers.
-func primaryOnly(rv fleet.RoleView) func() bool {
-	return func() bool { return rv != nil && rv.State().Role == fleet.RolePrimary }
+// deliverRule is who delivers (spec §13.3), before this daemon's own push module is asked (a daemon without one attempts nothing):
+//   - the fleet primary delivers;
+//   - a standby delivers too when the primary cannot send a phone push — it reported push_ready=false, reported nothing (an older
+//     daemon), did not answer, or has not been asked yet. Better both push (the phone shows one notification per collapse id) than
+//     none; fleet's election is what turns an unreachable primary into a new one, and that takeover needs no rule here;
+//   - an `off` daemon, and one without a role view (no fleet module), reads and does not push.
+func deliverRule(rv fleet.RoleView) func() bool {
+	return func() bool {
+		if rv == nil {
+			return false
+		}
+		switch rv.State().Role {
+		case fleet.RolePrimary:
+			return true
+		case fleet.RoleStandby:
+			v, ok := rv.(fleet.PeerPushView)
+			if !ok {
+				return false // no way to know what the primary can do: not a reason to push
+			}
+			p := v.PeerPush()
+			return !p.Known || !p.Answered || p.Ready == nil || !*p.Ready
+		}
+		return false
+	}
 }
 
 // pass reads every host's active alerts once and acts on them.
