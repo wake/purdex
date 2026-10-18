@@ -38,6 +38,20 @@ func TestNewKeepsAnExistingLogDirectory(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Job logs hold command output: a log directory that was there with open permissions is closed, not kept as it was.
+func TestNewClosesAnExistingLogDirectoryThatIsOpenToOthers(t *testing.T) {
+	db := openDB(t)
+	require.NoError(t, Migrate(context.Background(), db))
+	dir := filepath.Join(t.TempDir(), "joblogs")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o777))
+	_, err := New(db, Options{Origin: "mlab", LogDir: dir})
+	require.NoError(t, err)
+	fi, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
+}
+
 func TestNewRefusesALogDirectoryThatIsALink(t *testing.T) {
 	db := openDB(t)
 	require.NoError(t, Migrate(context.Background(), db))

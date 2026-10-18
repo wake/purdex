@@ -117,6 +117,12 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 		// logs are written and removed by name inside it: a link standing in for the directory would send them elsewhere
 		if fi, err := os.Lstat(o.LogDir); err != nil || !fi.IsDir() {
 			return nil, fmt.Errorf("queue: Options.LogDir %s is not a directory of its own (a link, or not a directory): %v", o.LogDir, err)
+		} else if fi.Mode().Perm()&0o077 != 0 {
+			// MkdirAll's mode only applies to what it makes: a directory that was there is closed to group and others too, because
+			// job logs hold command output
+			if err := os.Chmod(o.LogDir, 0o700); err != nil {
+				return nil, fmt.Errorf("queue: Options.LogDir %s is open to group or others and cannot be closed: %w", o.LogDir, err)
+			}
 		}
 	}
 	if err := db.QueryRowContext(context.Background(), `SELECT id FROM db_epoch`).Scan(&q.epoch); err != nil {
