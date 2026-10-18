@@ -152,6 +152,7 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 		"a flag no task has":        {spa, []string{"pnpm", "vitest", "run", "--watch"}, "spa-file"}, // two tasks are as near: the first name
 		"the wrong directory":       {func(r string) string { return r }, []string{"pnpm", "vitest", "run", "src/a.test.ts"}, "spa-file"},
 		"another go command":        {func(r string) string { return r }, []string{"go", "vet", "./..."}, "go-pkg"},
+		"a go flag":                 {func(r string) string { return r }, []string{"go", "test", "-v", "./internal/foo/"}, "go-pkg"},
 		"a package script":          {func(r string) string { return r }, []string{"pnpm", "test"}, ""},
 	}
 	for name, c := range cases {
