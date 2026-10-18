@@ -46,6 +46,8 @@ type Spec struct {
 	MaxLog    int64         // per-file capture cap; DefaultMaxLog when zero
 	// Procs finds processes by job mark for the sweep after the run; DefaultProcSource() when nil.
 	Procs ProcSource
+	// Sandbox, when set (Linux hosts), runs the command as a transient systemd service instead of a process group.
+	Sandbox *Sandbox
 }
 
 // Result is what the run left behind.
@@ -53,7 +55,8 @@ type Result struct {
 	Outcome    Outcome
 	ExitCode   int    // the exit status for Exited; -1 otherwise
 	Signal     string // the signal that ended it, for Exited by signal (an OOM kill shows as KILL)
-	Err        error  // why a StartFailed run did not start
+	Err        error  // why a StartFailed run did not start; a sandboxed run of any Outcome can carry one that says the unit was not proven stopped (an infrastructure failure: do not reuse the workspace)
+	Reason     string // "oom" or "timeout" when the sandbox's unit says so; empty otherwise
 	StartedAt  time.Time
 	FinishedAt time.Time
 	LogPath    string // stdout and stderr in arrival order
@@ -80,6 +83,11 @@ func Run(ctx context.Context, spec Spec) Result {
 	if len(spec.Argv) == 0 || spec.Argv[0] == "" {
 		return failStart(res, fmt.Errorf("run: empty command"))
 	}
+	if spec.Sandbox != nil {
+		if err := spec.Sandbox.validate(spec); err != nil {
+			return failStart(res, err)
+		}
+	}
 	if !filepath.IsAbs(spec.Dir) {
 		return failStart(res, fmt.Errorf("run: the working directory %q must be absolute", spec.Dir))
 	}
@@ -102,6 +110,9 @@ func Run(ctx context.Context, spec Spec) Result {
 	cp, err := newCapture(res.LogPath, res.StdoutPath, spec.MaxLog)
 	if err != nil {
 		return failStart(res, err)
+	}
+	if spec.Sandbox != nil {
+		return runSandboxed(ctx, spec, env, prog, cp, res)
 	}
 
 	cmd := execstat.Command("wwd.run", prog, spec.Argv[1:]...)
