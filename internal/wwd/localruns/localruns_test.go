@@ -1,0 +1,327 @@
+package localruns
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
+)
+
+const claim = "0123456789abcdef0123456789abcdef"
+
+// fakeQueue records the runs it is asked for; each gets the next id.
+type fakeQueue struct {
+	mu       sync.Mutex
+	n        int
+	calls    []wire.LocalRunRequest
+	workers  []string
+	err      error
+	badClaim bool
+	// during runs inside RecordLocal, before it answers (a job event faster than the answer).
+	during func(id string)
+	ended  map[string]bool
+	endErr error
+	asked  [][]string
+}
+
+func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error) {
+	q.mu.Lock()
+	q.calls = append(q.calls, req)
+	q.workers = append(q.workers, worker)
+	q.n++
+	id := "j_local" + string(rune('0'+q.n))
+	err, bad, during := q.err, q.badClaim, q.during
+	q.mu.Unlock()
+	if err != nil {
+		return wire.LocalRunResponse{}, err
+	}
+	if during != nil {
+		during(id)
+	}
+	if bad {
+		return wire.LocalRunResponse{ID: id}, nil
+	}
+	return wire.LocalRunResponse{ID: id, ClaimID: claim, LeaseS: 60, RenewS: 15}, nil
+}
+
+func (q *fakeQueue) Ended(_ context.Context, ids []string) (map[string]bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.asked = append(q.asked, append([]string(nil), ids...))
+	if q.endErr != nil {
+		return nil, q.endErr
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		out[id] = q.ended[id]
+	}
+	return out, nil
+}
+
+func request(t *testing.T, keys ...string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "wire", "testdata", "local_run_request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["locks"] = append([]string{}, keys...)
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wire.Decode[wire.LocalRunRequest](out); err != nil {
+		t.Fatalf("the test request is not valid: %v", err)
+	}
+	return out
+}
+
+func post(s *Service, body []byte) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/local-runs", bytes.NewReader(body)))
+	return rec
+}
+
+func newService(q Queue) (*Service, *locks.Table) {
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	return s, tb
+}
+
+func TestARunIsRecordedAndHoldsItsKeysUnderTheJobId(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux", "port:7860"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var resp wire.LocalRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.ID != "j_local1" || resp.ClaimID != claim || resp.LeaseS != 60 || resp.RenewS != 15 {
+		t.Fatalf("answer %+v err %v", resp, err)
+	}
+	if len(q.calls) != 1 || q.workers[0] != "mlab" || len(q.calls[0].Locks) != 2 {
+		t.Fatalf("the queue was asked %+v for %v", q.calls, q.workers)
+	}
+	if o, _ := tb.Holder("tmux"); o != "j_local1" {
+		t.Fatalf("holder of tmux = %q", o)
+	}
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local1" {
+		t.Fatalf("held %v", got)
+	}
+}
+
+func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	if _, err := tb.Acquire("j_remote", []string{"tmux", "db"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	rec := post(s, request(t, "tmux", "other", "db"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
+	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" {
+		t.Fatalf("body %s err %v", rec.Body, err)
+	}
+	if len(q.calls) != 0 {
+		t.Fatal("the queue recorded a run whose keys were held")
+	}
+	if _, ok := tb.Holder("other"); ok {
+		t.Fatal("a refused run kept the key that was free")
+	}
+}
+
+func TestAQueueThatCannotRecordReleasesTheKeysAndAnswers503(t *testing.T) {
+	q := &fakeQueue{err: errors.New("database is locked")}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("keys stayed held for a run that was not recorded")
+	}
+}
+
+func TestAnUnusableClaimReleasesTheKeys(t *testing.T) {
+	q := &fakeQueue{badClaim: true}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("keys stayed held")
+	}
+}
+
+func TestABadBodyIsA400AndTouchesNothing(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	for name, body := range map[string][]byte{
+		"not json":      []byte("{"),
+		"unknown field": []byte(`{"nope":1}`),
+		"empty":         nil,
+	} {
+		if rec := post(s, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d", name, rec.Code)
+		}
+	}
+	var m map[string]any
+	_ = json.Unmarshal(request(t), &m)
+	m["cacheable"] = true // a fast-lane run is never cacheable
+	b, _ := json.Marshal(m)
+	if rec := post(s, b); rec.Code != http.StatusBadRequest {
+		t.Errorf("cacheable: status %d", rec.Code)
+	}
+	if len(q.calls) != 0 || len(tb.Held()) != 0 {
+		t.Fatal("a refused request recorded or held something")
+	}
+}
+
+func TestATerminalLocalEventReleasesTheKeysAndOthersDoNot(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "tmux"))
+	ev := func(local bool, st wire.JobState) wire.JobEvent {
+		return wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: local, State: st}}
+	}
+	s.OnJobEvent(ev(true, wire.StateRunning))
+	s.OnJobEvent(ev(false, wire.StateFailed)) // a remote job of the same id is not this hold
+	if _, ok := tb.Holder("tmux"); !ok {
+		t.Fatal("keys were released by an event that does not end the run")
+	}
+	for _, st := range []wire.JobState{wire.StateSucceeded} {
+		s.OnJobEvent(ev(true, st))
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("the end of the run did not release its keys")
+	}
+	s.OnJobEvent(ev(true, wire.StateSucceeded)) // twice is harmless
+}
+
+func TestEveryFinalStateReleases(t *testing.T) {
+	for _, st := range []wire.JobState{wire.StateSucceeded, wire.StateFailed, wire.StateCancelled, wire.StateSuperseded, wire.StateExpired} {
+		q := &fakeQueue{}
+		s, tb := newService(q)
+		post(s, request(t, "tmux"))
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: true, State: st}})
+		if _, ok := tb.Holder("tmux"); ok {
+			t.Errorf("%s did not release", st)
+		}
+	}
+}
+
+func TestAnEventFasterThanTheAnswerReleasesAtOnce(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	q.during = func(id string) { // the job is recorded, ends and is announced before RecordLocal returns
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	}
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("keys of a job that had already ended stayed held")
+	}
+}
+
+func TestReconcileReleasesTheJobsTheQueueSaysAreOver(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "a"))
+	post(s, request(t, "b"))
+	post(s, request(t, "c"))
+	q.ended = map[string]bool{"j_local1": true, "j_local3": true}
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tb.Holder("a"); ok {
+		t.Error("a: not released")
+	}
+	if _, ok := tb.Holder("b"); !ok {
+		t.Error("b: released although the job goes on")
+	}
+	if _, ok := tb.Holder("c"); ok {
+		t.Error("c: not released")
+	}
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local2" {
+		t.Fatalf("held %v", got)
+	}
+}
+
+func TestReconcileThatCannotAskKeepsEverything(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "a"))
+	q.endErr = errors.New("queue busy")
+	if err := s.Reconcile(context.Background()); err == nil {
+		t.Fatal("the failure was not reported")
+	}
+	if _, ok := tb.Holder("a"); !ok {
+		t.Fatal("keys were released on a failed comparison")
+	}
+}
+
+func TestReconcileWithNothingHeldDoesNotAskTheQueue(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	if err := s.Reconcile(context.Background()); err != nil || len(q.asked) != 0 {
+		t.Fatalf("err %v asked %v", err, q.asked)
+	}
+}
+
+func TestTwoRunsForOneKeyAtOnceAreOneRecordAndOneRefusal(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	var ok, busy atomic.Int32
+	var wg sync.WaitGroup
+	body := request(t, "tmux")
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch post(s, body).Code {
+			case http.StatusOK:
+				ok.Add(1)
+			case http.StatusConflict:
+				busy.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok.Load() != 1 || busy.Load() != 7 || len(q.calls) != 1 {
+		t.Fatalf("recorded %d, refused %d, queue asked %d times", ok.Load(), busy.Load(), len(q.calls))
+	}
+}
+
+func TestARunWithoutKeysIsRecordedAndHoldsNothingBack(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	if rec := post(s, request(t)); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if rec := post(s, request(t)); rec.Code != http.StatusOK {
+		t.Fatalf("a second run with no keys: %d", rec.Code)
+	}
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: true, State: wire.StateSucceeded}})
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local2" {
+		t.Fatalf("held %v", got)
+	}
+}
