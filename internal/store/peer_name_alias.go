@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -96,6 +97,10 @@ func trimAliasesTx(ctx context.Context, tx *sql.Tx, keep int) error {
 	return err
 }
 
+// ErrOldNameReclaimed is UndoRename's answer when the name it would restore was taken by another session since the rename:
+// the compensation is refused rather than making two holders of one name.
+var ErrOldNameReclaimed = errors.New("peer name: the old name now belongs to another session")
+
 // UndoRename reverses a RenamePool whose follow-up failed or was lost (spec §5.3): it puts oldName back when the stored name
 // is still currentName (a compare-and-set, so a later rename wins), and deletes the alias that rename added. ok is false when
 // the name was no longer currentName; nothing changes then.
@@ -106,6 +111,13 @@ func (s *PeerNameStore) UndoRename(ctx context.Context, sessionID, currentName, 
 		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+	var holders int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM peer_names WHERE name = ? AND session_id <> ?`, oldName, sid).Scan(&holders); err != nil {
+		return false, err
+	}
+	if holders > 0 {
+		return false, ErrOldNameReclaimed
+	}
 	res, err := tx.ExecContext(ctx, `UPDATE peer_names SET name = ? WHERE session_id = ? AND name = ?`, oldName, sid, currentName)
 	if err != nil {
 		return false, err

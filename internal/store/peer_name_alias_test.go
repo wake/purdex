@@ -189,3 +189,20 @@ func TestPeerNameAliases_ARenameKeepsTheTableAtItsCap(t *testing.T) {
 	require.Len(t, all, MaxPeerNameAliases)
 	require.Equal(t, "n3", all[0].Alias, "the three oldest went")
 }
+
+// The old name was taken by another session between the rename and its compensation: the undo refuses (codex attack on #3435).
+func TestPeerNameAliases_UndoRenameRefusesWhenTheOldNameWasTakenMeanwhile(t *testing.T) {
+	s := aliasStore(t)
+	ctx := context.Background()
+	assignPool(t, s, alA, "purdex-adam")
+	_, _, err := s.RenamePool(ctx, alA, "purdex-adam", "purdex-hiro")
+	require.NoError(t, err)
+	assignPool(t, s, alB, "purdex-adam") // B is newly assigned the name A just left
+
+	ok, err := s.UndoRename(ctx, alA, "purdex-hiro", "purdex-adam")
+	require.ErrorIs(t, err, ErrOldNameReclaimed)
+	require.False(t, ok)
+	got, _ := s.Lookup(ctx, []string{alA, alB})
+	require.Equal(t, "purdex-hiro", got[alA].Name, "A keeps the name it has")
+	require.Equal(t, "purdex-adam", got[alB].Name)
+}

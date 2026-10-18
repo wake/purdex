@@ -115,3 +115,23 @@ func TestResolve_AnAliasNeverShadowsARef(t *testing.T) {
 		t.Fatalf("pid=%d err=%v; a ref resolves as a ref", pidOf(rec), err)
 	}
 }
+
+// Two live rows share a ref (a 36^6 collision): an alias that belonged to one session selects that row in the combined form,
+// instead of making both pass or the pair ambiguous (codex attack on #3435).
+func TestResolve_TheBracketAliasPicksTheRowOfItsOwnSession(t *testing.T) {
+	a := liveRow(refA, "purdex-hiro", "", "", 1)
+	a.Agent.SessionID = "aaaa-sid"
+	b := liveRow(refA, "purdex-wei", "", "", 2)
+	b.Agent.SessionID = "bbbb-sid"
+	snap := ResolveSnapshot{Aliases: map[string]string{"purdex-adam": refA}, AliasSessions: map[string]string{"purdex-adam": "BBBB-sid"}}
+	rec, err := Resolve([]PeerRecord{a, b}, "purdex-adam ["+refA[1:]+"]", snap)
+	if err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("pid=%d err=%v; the row of the alias's own session must answer", pidOf(rec), err)
+	}
+	// without the session mapping the pair stays ambiguous: fail closed, never a guess
+	var amb *AmbiguousError
+	snap.AliasSessions = nil
+	if _, err := Resolve([]PeerRecord{a, b}, "purdex-adam ["+refA[1:]+"]", snap); !errors.As(err, &amb) {
+		t.Fatalf("no session mapping: got %v, want an AmbiguousError", err)
+	}
+}

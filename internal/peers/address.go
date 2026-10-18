@@ -51,6 +51,9 @@ type ResolveSnapshot struct {
 	// them as data, after a name that no live row holds (tier 1 always wins), and goes on by the existing ref path, so a relayed
 	// successor is reached too. The bracket check accepts an alias of the ref it sits beside. Nil: no aliases.
 	Aliases map[string]string
+	// AliasSessions, when present, says which session each alias belonged to (alias -> session id). The combined form uses it
+	// to tell two live rows that share a ref apart: only the row of the alias's own session passes (codex attack on #3435).
+	AliasSessions map[string]string
 	// ExecutionsUnavailable is the envelope's executions_unavailable flag:
 	// the execution list could not be read, so the snapshot has no execution
 	// rows (peer mailbox spec §4.1). Any miss is ErrResolveNotReady under it
@@ -251,10 +254,21 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		// The name is still a check ON the ref, not a second way in past it:
 		// a name carried by no row with this ref is refused below, never
 		// delivered.
-		nameIs := func(r PeerRecord) bool { return r.Name == typedName || aliasOfRef(snap, typedName, ref) }
+		// An alias passes for a live row only when it is an alias of this ref and, where the snapshot says whose it was, of this
+		// row's session. A lineage match below cannot ask that: the successor is another session than the alias's.
+		nameIs := func(r PeerRecord, live bool) bool {
+			if r.Name == typedName {
+				return true
+			}
+			if !aliasOfRef(snap, typedName, ref) {
+				return false
+			}
+			owner := snap.AliasSessions[typedName]
+			return !live || owner == "" || (r.Agent != nil && strings.EqualFold(r.Agent.SessionID, owner))
+		}
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
 			return NameAddressable(r) && RoutableName(r.Name) &&
-				r.Ref == ref && nameIs(r)
+				r.Ref == ref && nameIs(r, true)
 		})
 		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
 			// The combined form with a relayed-from ref (lead-team-relay
@@ -266,7 +280,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			// below (the typed name is not the live owner's).
 			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
 				return NameAddressable(r) && RoutableName(r.Name) &&
-					hasPreviousRef(r, ref) && nameIs(r)
+					hasPreviousRef(r, ref) && nameIs(r, false)
 			})
 		}
 		switch {

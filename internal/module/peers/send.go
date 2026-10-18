@@ -391,7 +391,11 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			RegistryIncomplete:    len(local.UnknownRegistryFiles) > 0,
 			LineageUnavailable:    local.LineageUnavailable,
 			ExecutionsUnavailable: local.ExecutionsUnavailable,
-			Aliases:               m.aliasMap(r.Context()),
+		}
+		var aliasesOK bool
+		rsnap.Aliases, rsnap.AliasSessions, aliasesOK = m.aliasMap(r.Context())
+		if !aliasesOK { // without the alias table a miss proves nothing: not_ready, never a fallback to a tmux name
+			rsnap.Partial = true
 		}
 	} else {
 		remoteRefused := func(text string) {
