@@ -24,8 +24,19 @@ func testJob(id string, lockKeys ...string) wire.Job {
 		State: wire.StateQueued, Repo: wire.Repo{Name: "purdex"}, Locks: lockKeys}
 }
 
+// candidates remembers the job each scored() call made, so that a fake origin's default claim answers with the same job (its locks too).
+var candidates sync.Map
+
 func scored(j wire.Job) pick.Scored {
+	candidates.Store(j.ID, j)
 	return pick.Scored{Candidate: pick.Candidate{Source: "mlab", Job: j}}
+}
+
+func claimed(id string) wire.Job {
+	if j, ok := candidates.Load(id); ok {
+		return j.(wire.Job)
+	}
+	return testJob(id)
 }
 
 type fakeOrigin struct {
@@ -46,7 +57,7 @@ func (o *fakeOrigin) Claim(_ context.Context, id string, _ wire.ClaimRequest) (w
 	if f != nil {
 		return f(id)
 	}
-	return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
 }
 
 func (o *fakeOrigin) Start(context.Context, string, string) (wire.Lease, error) {
@@ -136,7 +147,7 @@ func TestHappyPathRenewsWhileRunningAndFinishesBeforeCleanup(t *testing.T) {
 	ex.run = func(ctx context.Context) run.Result { time.Sleep(6 * unit); return run.Result{Outcome: run.Exited} }
 	o := &fakeOrigin{}
 	o.claim = func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 1}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 4, RenewS: 1}, nil
 	}
 	c, tbl := newCtl(ex)
 	var finishedKind Kind
@@ -294,7 +305,7 @@ func TestNoRenewalBeforeOwnDeadlineStopsTheCommand(t *testing.T) {
 	o := &fakeOrigin{}
 	o.heartbeat = func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{}, errors.New("network down") }
 	o.claim = func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
 	}
 	c, _ := newCtl(ex)
 	start := time.Now()
@@ -317,7 +328,7 @@ func TestLeaseRunsFromBeforeTheClaimWasSent(t *testing.T) {
 	o.heartbeat = func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{}, errors.New("down") }
 	o.claim = func(id string) (wire.ClaimResponse, error) {
 		time.Sleep(10 * unit)
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 20, RenewS: 5}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 20, RenewS: 5}, nil
 	}
 	c, _ := newCtl(ex)
 	start := time.Now()
@@ -488,7 +499,7 @@ func TestStartsLeaseReplacesTheClaimsShorterOne(t *testing.T) {
 	ex := &fakeExec{run: func(ctx context.Context) run.Result { time.Sleep(8 * unit); return run.Result{Outcome: run.Exited} }}
 	o := &fakeOrigin{
 		claim: func(id string) (wire.ClaimResponse, error) {
-			return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
+			return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
 		},
 		start: func() (wire.Lease, error) { return wire.Lease{LeaseS: 40, RenewS: 50}, nil },
 	}
@@ -521,7 +532,7 @@ func TestHungHeartbeatCannotOutliveTheDeadline(t *testing.T) {
 		return wire.HeartbeatResponse{}, errors.New("unreachable in this test")
 	}
 	o.claim = func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
 	}
 	hang := make(chan struct{})
 	h := &hangingHeartbeat{fakeOrigin: o, hang: hang}
@@ -559,7 +570,7 @@ func TestShorterLeaseFromHeartbeatReplacesTheOlder(t *testing.T) {
 	o := &fakeOrigin{}
 	o.heartbeat = func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{LeaseS: 2, RenewS: 50}, nil }
 	o.claim = func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
 	}
 	c, _ := newCtl(ex)
 	start := time.Now()
@@ -576,7 +587,7 @@ func TestSlowHeartbeatAnswerCannotOverwriteStartsShorterLease(t *testing.T) {
 	ex.prepare = func() (Plan, error) { time.Sleep(3 * unit); return Plan{Argv: []string{"x"}}, nil }
 	o := &fakeOrigin{
 		claim: func(id string) (wire.ClaimResponse, error) {
-			return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+			return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
 		},
 		heartbeat: func(n int) (wire.HeartbeatResponse, error) {
 			time.Sleep(4 * unit)
@@ -617,7 +628,7 @@ func TestStartThatHangsPastTheLeaseIsLostNotInfra(t *testing.T) {
 	// the origin may have taken the start and the claim's lease may have lapsed meanwhile: the job may already be somebody else's.
 	ex := &fakeExec{}
 	o := &startHangs{fakeOrigin: &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
 	}}}
 	c, _ := newCtl(ex)
 	done := make(chan Ended, 1)
@@ -647,11 +658,123 @@ func TestStartWaitingForTheLockSeesTheCancelTheHeartbeatAnswered(t *testing.T) {
 		return wire.HeartbeatResponse{LeaseS: 30, RenewS: 50, Cancel: true}, nil
 	}}
 	o.claim = func(id string) (wire.ClaimResponse, error) {
-		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+		return wire.ClaimResponse{Job: claimed(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
 	}
 	c, _ := newCtl(ex)
 	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
 	if _, st, _ := o.count(); e.Kind != KindCancelled || st != 0 || ex.ran.Load() != 0 {
 		t.Fatalf("kind=%s starts=%d ran=%d: a cancelled job must not be started", e.Kind, st, ex.ran.Load())
+	}
+}
+
+func TestRunErrQuarantinesWorkspaceAndLocks(t *testing.T) {
+	for _, oc := range []run.Outcome{run.Exited, run.TimedOut, run.Cancelled} {
+		ex := &fakeExec{run: func(ctx context.Context) run.Result {
+			return run.Result{Outcome: oc, Err: errors.New("could not confirm the unit stopped")}
+		}}
+		c, tbl := newCtl(ex)
+		e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+		if !e.Quarantined || ex.cleaned.Load() != 0 {
+			t.Errorf("%s: quarantined=%v cleaned=%d: the workspace must stay", oc, e.Quarantined, ex.cleaned.Load())
+		}
+		if _, held := tbl.Holder("mysql"); !held {
+			t.Errorf("%s: the lock keys must stay held", oc)
+		}
+	}
+}
+
+func TestStartFailedErrIsNotQuarantine(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result {
+		return run.Result{Outcome: run.StartFailed, Err: errors.New("not found")}
+	}}
+	c, tbl := newCtl(ex)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	if e.Quarantined || ex.cleaned.Load() != 1 || tbl.Owners() != 0 {
+		t.Fatalf("quarantined=%v cleaned=%d owners=%d", e.Quarantined, ex.cleaned.Load(), tbl.Owners())
+	}
+}
+
+func TestCleanRunIsNotQuarantined(t *testing.T) {
+	ex := &fakeExec{}
+	c, tbl := newCtl(ex)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	if e.Quarantined || ex.cleaned.Load() != 1 || tbl.Owners() != 0 {
+		t.Fatalf("quarantined=%v cleaned=%d owners=%d", e.Quarantined, ex.cleaned.Load(), tbl.Owners())
+	}
+}
+
+func TestRunPanicKeepsLocksAndWorkspace(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result { panic("boom") }}
+	c, tbl := newCtl(ex)
+	func() {
+		defer func() { _ = recover() }()
+		c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	}()
+	if _, held := tbl.Holder("mysql"); !held || ex.cleaned.Load() != 0 {
+		t.Fatalf("held=%v cleaned=%d: a Run that panicked proved nothing about its process tree", held, ex.cleaned.Load())
+	}
+}
+
+type releasingOrigin struct {
+	*fakeOrigin
+	released chan wire.ReleaseRequest
+}
+
+func (o *releasingOrigin) Release(_ context.Context, _ string, req wire.ReleaseRequest) error {
+	o.released <- req
+	return nil
+}
+
+func TestClaimThatChangesLocksIsHandedBackAndNeverRuns(t *testing.T) {
+	ex := &fakeExec{}
+	o := &releasingOrigin{fakeOrigin: &fakeOrigin{}, released: make(chan wire.ReleaseRequest, 1)}
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "mysql", "tmux"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}
+	c, tbl := newCtl(ex)
+	e := c.Work(context.Background(), o, scored(testJob("j", "mysql")), nil)
+	if e.Kind != KindSkipped || e.Err == nil || ex.ran.Load() != 0 || tbl.Owners() != 0 {
+		t.Fatalf("kind=%s err=%v ran=%d owners=%d", e.Kind, e.Err, ex.ran.Load(), tbl.Owners())
+	}
+	select {
+	case req := <-o.released:
+		if req.ClaimID != claimID || req.Reason != wire.ReleaseInfra {
+			t.Fatalf("release %+v", req)
+		}
+	default:
+		t.Fatal("the claim of a job with other locks must be handed back")
+	}
+}
+
+func TestLocksAreComparedAsASet(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "tmux", "mysql", "tmux"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql", "tmux")), nil); e.Kind != KindRan {
+		t.Fatalf("kind=%s err=%v: same keys in another order are the same locks", e.Kind, e.Err)
+	}
+}
+
+func TestFewerLocksThanListedIsAlsoAMismatch(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "mysql"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql", "tmux")), nil); e.Kind != KindSkipped || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+}
+
+func TestOtherLockOfTheSameCountIsAMismatch(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "tmux"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql")), nil); e.Kind != KindSkipped || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s", e.Kind)
 	}
 }

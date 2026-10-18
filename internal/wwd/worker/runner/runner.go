@@ -35,6 +35,32 @@ type Origin interface {
 	Heartbeat(ctx context.Context, id, claimID string) (wire.HeartbeatResponse, error)
 }
 
+// releaser is what an Origin also is when it can hand a claim back (the host's own queue and a peer both can).
+type releaser interface {
+	Release(ctx context.Context, id string, req wire.ReleaseRequest) error
+}
+
+// sameSet reports whether a and b hold the same keys, whatever the order or repeats.
+func sameSet(a, b []string) bool {
+	set := func(l []string) map[string]bool {
+		m := make(map[string]bool, len(l))
+		for _, k := range l {
+			m[k] = true
+		}
+		return m
+	}
+	x, y := set(a), set(b)
+	if len(x) != len(y) {
+		return false
+	}
+	for k := range x {
+		if !y[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL).
 type Exec interface {
 	Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error)
@@ -98,7 +124,10 @@ type Ended struct {
 	Run     run.Result // for KindRan, KindCancelled and KindLost, when the command started
 	Plan    Plan       // what Prepare made; zero when it failed or was not reached
 	Root    string     // the workspace root (ws.Dir); empty when no workspace was made
-	Err     error
+	// Quarantined: the command ended with Run.Err set (its process tree could not be proven gone). The workspace is left in place and the
+	// lock keys stay held, for as long as this worker runs; the reporter releases the job as infra whatever Kind says.
+	Quarantined bool
+	Err         error
 }
 
 // Config is the worker's identity and collaborators.
@@ -178,13 +207,26 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		sent = c.cfg.Now()
 		var e error
 		cr, e = origin.Claim(ctx, job.ID, wire.ClaimRequest{Worker: c.cfg.Worker, Labels: c.cfg.Labels, Fingerprint: c.cfg.Fingerprint})
+		if e == nil && !sameSet(cr.Job.Locks, job.Locks) {
+			// The keys held are the ones the candidate listed. A job that comes back with other keys would run without holding its own: an
+			// origin that does that is wrong or hostile, and the claim is handed back.
+			e = fmt.Errorf("runner: claim of %s came back with locks %v, the candidate had %v", job.ID, cr.Job.Locks, job.Locks)
+			if rel, ok := origin.(releaser); ok {
+				_ = rel.Release(ctx, job.ID, wire.ReleaseRequest{ClaimID: cr.ClaimID, Reason: wire.ReleaseInfra, Detail: "locks changed between listing and claim"})
+			}
+		}
 		return e
 	})
 	if err != nil {
 		ended.Kind, ended.Err = KindSkipped, err
 		return ended
 	}
-	defer hold.Release()
+	quarantined := false
+	defer func() {
+		if !quarantined {
+			hold.Release()
+		}
+	}()
 	job, ended.Job, ended.ClaimID = cr.Job, cr.Job, cr.ClaimID
 
 	st := &state{}
@@ -226,9 +268,16 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		}
 	}
 	if started && st.get() == stopNone {
+		// fail closed: if Run panics, nothing proves its tree gone, so the lock keys must not be let go by the deferred release
+		quarantined = true
 		res = c.cfg.Exec.Run(runCtx, job, ws, plan)
 	}
-	hold.Release() // the command is gone: its lock keys are free again while the result is delivered
+	// A run that could not prove its process tree (a sandbox unit) gone may still be writing the workspace: the workspace stays and so do
+	// the lock keys, so no next job reuses either. (A start that failed never ran anything and is no such case.)
+	quarantined = res.Err != nil && res.Outcome != run.StartFailed
+	if !quarantined {
+		hold.Release() // the command is gone: its lock keys are free again while the result is delivered
+	}
 
 	var rej *Rejected
 	switch {
@@ -245,14 +294,14 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	default:
 		ended.Kind = KindRan
 	}
-	ended.Run, ended.Plan, ended.Root = res, plan, ws.Dir
+	ended.Run, ended.Plan, ended.Root, ended.Quarantined = res, plan, ws.Dir, quarantined
 	if finish != nil {
 		finish(renewCtx, ended)
 	}
 	if st.get() == stopLost {
 		ended.Kind = KindLost // lost while the result was being delivered: it was not delivered, whatever Kind said when Finish began
 	}
-	if ws.Cleanup != nil {
+	if ws.Cleanup != nil && !quarantined {
 		_ = ws.Cleanup()
 	}
 	endRenew()
