@@ -95,6 +95,11 @@ type Job struct {
 	State     JobState  `json:"state"`
 	Claim     *Claim    `json:"claim"`
 	Result    *Result   `json:"result"`
+	// Manual and ManualSeq are the manual place of a queued job (spec §4.6): "" (the score decides), front, back or hold. Held jobs are
+	// not handed out; fronts go before every scored job and backs after, each by ManualSeq, smallest first (a later front has a smaller
+	// one than the fronts before it, a later back a larger one). ManualSeq is 0 when Manual is empty or hold.
+	Manual    Position `json:"manual"`
+	ManualSeq int64    `json:"manual_seq"`
 }
 
 // JobSubmission is the body of POST /v1/jobs (local socket only, spec §4.4): what the submitter fixes. The origin assigns the
