@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convmodel/ccnorm"
 )
 
 // How the typed routes feed the message stage ledger (stages.go). /submit writes received after the session and the owner are
@@ -87,5 +88,7 @@ func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
 	for _, u := range entry.UserItems() {
 		items = append(items, stageItem{ID: u.ID, Text: u.Text, At: u.At})
 	}
-	m.stages.observe(sid, entry.Header().Queued, items, m.tuning().now())
+	h := entry.Header()
+	lossy := len(h.Queued)+h.HiddenQueued >= ccnorm.MaxQueueEntries // the feed's tracker dropped its oldest rows: absence proves nothing
+	m.stages.observe(sid, h.Queued, lossy, items, m.tuning().now())
 }

@@ -124,11 +124,13 @@ func TestWSStages_QueuedAndReadFollowTheTranscript(t *testing.T) {
 	e, _ := wsEnv(t)
 	p := e.transcript(idleTurns(1))
 	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "running", SeenAt: 1}}
+	// the transcript's rows are stamped in the test fixtures' epoch (http_test.go at()): the ledger's clock follows it
+	now := time.UnixMilli(1791378000000 + 80_000)
+	e.mod.tune.now = func() time.Time { return now }
 	srv := e.server()
 	c := e.connect(srv, "")
 	c.expect("conversation.snapshot")
 	c.expect("approvals.snapshot")
-	now := time.Now()
 	e.mod.stages.begin(sid, "a", "wait for it", now)
 	e.mod.stages.set(sid, "a", stageEntered, "", "fill", now)
 	c.expect("conversation.stages") // received .. entered, coalesced
