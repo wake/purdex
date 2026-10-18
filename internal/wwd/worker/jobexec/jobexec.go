@@ -95,6 +95,16 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 		return snapshot.Workspace{}, err
 	}
 	inner := ws.Cleanup
+	if filepath.Clean(ws.Dir) != wsDir(base) {
+		// Prepare and Run take the directory above the tree as the job's own (HOME, the run's files, a sandbox's writable path): a
+		// workspace anywhere else would widen that to whatever contains it
+		var cerr error
+		if inner != nil {
+			cerr = inner()
+		}
+		_ = os.RemoveAll(base)
+		return snapshot.Workspace{}, errors.Join(fmt.Errorf("jobexec: the fetcher made %q, not %q", ws.Dir, wsDir(base)), cerr)
+	}
 	return snapshot.Workspace{Dir: ws.Dir, Cleanup: func() error {
 		var err error
 		if inner != nil {

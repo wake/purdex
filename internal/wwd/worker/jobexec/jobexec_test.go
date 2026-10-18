@@ -373,3 +373,34 @@ func TestTheJobsTimeoutCanOnlyShortenTheTasks(t *testing.T) {
 		t.Fatalf("outcome %s after %v: the plan's timeout is the command's deadline", res.Outcome, time.Since(start))
 	}
 }
+
+type wrongPlaceFetcher struct {
+	dir     func(want string) string
+	cleaned *int
+}
+
+func (f wrongPlaceFetcher) Fetch(_ context.Context, _ wire.Job, _, _, dir string) (snapshot.Workspace, error) {
+	return snapshot.Workspace{Dir: f.dir(dir), Cleanup: func() error { *f.cleaned++; return nil }}, nil
+}
+
+func TestAWorkspaceInTheWrongPlaceIsRefusedAndCleanedUp(t *testing.T) {
+	root := t.TempDir()
+	for name, pick := range map[string]func(string) string{
+		"the work root":     func(string) string { return root },
+		"the job directory": func(want string) string { return filepath.Dir(want) },
+		"another place":     func(string) string { return "/tmp" },
+		"inside the tree":   func(want string) string { return filepath.Join(want, "sub") },
+	} {
+		cleaned := 0
+		e := New(Config{WorkRoot: root, Fetchers: func(string) Fetcher { return wrongPlaceFetcher{dir: pick, cleaned: &cleaned} }})
+		if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		if cleaned != 1 {
+			t.Errorf("%s: the fetcher's cleanup ran %d times, want 1", name, cleaned)
+		}
+		if _, err := os.Stat(e.JobDir(job("hello"), claimID)); !os.IsNotExist(err) {
+			t.Errorf("%s: the job directory stays: %v", name, err)
+		}
+	}
+}
