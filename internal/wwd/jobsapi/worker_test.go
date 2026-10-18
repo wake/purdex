@@ -86,10 +86,21 @@ func TestReleaseThroughTheRoute(t *testing.T) {
 	j, err := r.q.Get(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, wire.StateQueued, j.State)
+	attempts := func(id string) int {
+		var n int
+		require.NoError(t, r.db.QueryRow(`SELECT attempts FROM jobs WHERE id = ?`, id).Scan(&n))
+		return n
+	}
+	assert.Equal(t, 0, attempts(id), "a reclaim does not count as an attempt")
 
 	w = call(r.peer, "POST", "/v1/jobs/"+id+"/heartbeat", wire.HeartbeatRequest{ClaimID: c.ClaimID})
 	require.Equal(t, 409, w.Code)
 	assert.Equal(t, wire.StateQueued, decode[wire.Conflict409](t, w).State)
+
+	c2 := r.claim(t, r.peer, id, "mserv")
+	w = call(r.peer, "POST", "/v1/jobs/"+id+"/release", wire.ReleaseRequest{ClaimID: c2.ClaimID, Reason: wire.ReleaseInfra})
+	require.Equal(t, 200, w.Code)
+	assert.Equal(t, 1, attempts(id), "an infrastructure failure does")
 
 	w = call(r.peer, "POST", "/v1/jobs/"+id+"/release", wire.ReleaseRequest{ClaimID: c.ClaimID, Reason: "whatever"})
 	assert.Equal(t, 400, w.Code, "a release needs one of the two reasons")
@@ -172,6 +183,9 @@ func TestBadClaimIDsAndBodies(t *testing.T) {
 	} {
 		assert.Equal(t, 400, call(r.peer, tc.method, "/v1/jobs/"+id+tc.path, tc.body).Code, name)
 	}
+	// a body past the bound is refused as unreadable, not parsed: this claim is well-formed in every way but its size
+	huge := wire.ClaimRequest{Worker: "air26", Labels: []string{strings.Repeat("x", 2<<20)}}
+	assert.Equal(t, 400, call(r.peer, "POST", "/v1/jobs/"+r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })+"/claim", huge).Code)
 	assert.Equal(t, 404, call(r.peer, "POST", "/v1/jobs/..%2Fx/start", claimBody(c.ClaimID)).Code)
 	assert.Equal(t, 405, call(r.peer, "GET", "/v1/jobs/"+id+"/claim", nil).Code, "the worker routes take the verb the spec names")
 }
