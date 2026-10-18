@@ -21,6 +21,7 @@ printf 'stub-token-value' > "$home/.config/wwd/pool.token"
 cat > "$bin/ssh" <<'EOF'
 #!/bin/sh
 while [ "$1" = "-o" ]; do shift 2; done
+STUB_HOST=$1; export STUB_HOST
 shift
 exec sh -c "$*"
 EOF
@@ -43,17 +44,19 @@ done
 path=${url#http://*/}; path=/${path#/}
 tcp=0; case "$url" in http://wwd/*) ;; *) tcp=1; path=/${url#http://*:7871/} ;; esac
 code=200; resp='{}'
+started=""; case "${STUB_HOST:-mlab}" in air26) started=$STUB_START_AIR26 ;; *) started=$STUB_START_MLAB ;; esac
 if [ "$tcp" -eq 1 ]; then
+  printf '%s\n' "$method $path $body" >> "$STUB/tcp.log"
   [ "$auth" = "Bearer $(cat "$HOME/.config/wwd/pool.token")" ] || { code=401; resp='{"error":"unauthorized"}'; }
   if [ "$code" = 200 ] && [ "$method $path" = "POST /v1/jobs" ]; then code=404; fi
 else
   case "$method $path" in
-    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}'}' ;;
+    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}${STUB_ZONE:+',"fault":{"zone":true}'}'}' ;;
     "GET /v1/worker") resp=$STUB_WORKER_JSON ;;
     "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
     "GET /v1/jobs?state=queued") resp='[]' ;;
     "POST /v1/jobs") resp='{"id":"j_stub_post"}'; printf '%s\n' "$body" >> "$STUB/post.log" ;;
-    "GET /v1/jobs/"*) resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\"}}" ;;
+    "GET /v1/jobs/"*) resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\",\"started_at\":\"$started\"}}" ;;
     "POST /v1/jobs/"*"/cancel") echo "$path" >> "$STUB/cancel.log" ;;
   esac
 fi
@@ -169,6 +172,29 @@ for badpid in 0 1 "" abc 99999999; do
   [ "$rc" -ne 0 ] || fail "case 3 must stop when the pid is '$badpid'"
   has "is not the pid of wwd on air26" "pid '$badpid'"
 done
+
+# a ps that calls every pid the wwd binary: then only the number check can refuse 0 and 1 (a signal to 0 reaches a whole group)
+fakeps="$tmp/fakeps"; mkdir -p "$fakeps"
+printf '#!/bin/sh\necho /x/wwd/bin/wwd\n' > "$fakeps/ps"; chmod +x "$fakeps/ps"
+for badpid in 0 1 -1; do
+  rc=0
+  HOME="$home" PATH="$fakeps:$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$badpid" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 3 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "case 3 must stop when the pid is '$badpid', also if ps calls it wwd"
+  has "is not the pid of wwd on air26" "pid '$badpid' with a ps that agrees"
+done
+
+# the fake workers claim with the labels of a real worker (the job's labels must be a subset), also in the exact part of case 1
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 1 > "$tmp/out" 2>&1 || true
+[ "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" -ge 2 ] || fail "case 1 must send claims over TCP: $(cat "$stub/tcp.log" 2>/dev/null)"
+[ "$(grep ' /v1/jobs/.*/claim ' "$stub/tcp.log" | grep -c '"labels":\["os:darwin","arch:arm64"\]')" -eq "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" ] || fail "every claim must carry the worker labels: $(cat "$stub/tcp.log")"
+
+# case 8 compares the two start times: the job of mlab (the origin under pressure) must be first; if air26's came first, it FAILs
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_ZONE=1 STUB_START_MLAB=2026-10-18T10:00:05Z STUB_START_AIR26=2026-10-18T10:00:01Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 && fail "case 8 must FAIL when air26's job started first"
+has "FAIL" "case 8, air26 first"
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_ZONE=1 STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8 must PASS when mlab's job started first"; }
 
 # terminated while the owner-active file exists on air26 (case 7, not --manual): the file is gone afterwards
 faultfile="$home/.local/share/wwd/fault/owner-active"
