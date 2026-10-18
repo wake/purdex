@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -60,6 +61,7 @@ type fakeSource struct {
 	opened   chan struct{}
 	noCursor bool     // a wwd that does not know ?after=: it answers without a cursor
 	asked    []string // the cursors the module asked with
+	epoch    string   // the database's epoch, in every answer ("" as a wwd that predates epochs)
 }
 
 func (f *fakeSource) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) bool) error {
@@ -84,14 +86,17 @@ func (f *fakeSource) JobsAfter(_ context.Context, after string, limit int) (wire
 		return wire.JobsListResponse{}, errors.New("wwd answered without a cursor")
 	}
 	n, err := strconv.Atoi(after)
-	if err != nil || n > len(f.log) {
+	if err != nil {
 		return wire.JobsListResponse{}, fmt.Errorf("bad cursor %q", after)
+	}
+	if n > len(f.log) { // a cursor past the head: the database was made again
+		return wire.JobsListResponse{}, &client.CursorAheadError{CursorAhead: wire.CursorAhead{Reason: wire.CursorAheadReason, Head: strconv.Itoa(len(f.log)), Epoch: f.epoch}}
 	}
 	end := len(f.log)
 	if limit > 0 && n+limit < end {
 		end = n + limit
 	}
-	return wire.JobsListResponse{Jobs: append([]wire.Job(nil), f.log[n:end]...), Cursor: strconv.Itoa(end)}, nil
+	return wire.JobsListResponse{Jobs: append([]wire.Job(nil), f.log[n:end]...), Cursor: strconv.Itoa(end), Epoch: f.epoch}, nil
 }
 
 type sent struct {
@@ -328,7 +333,7 @@ func TestARestartInTheMiddleOfTheFirstPassStillTellsAJobFromASlowClock(t *testin
 	s := &sent{}
 	src := &fakeSource{log: []wire.Job{job("j_legacy", wire.StateSucceeded, t0.Add(-5*time.Hour)), slowJob("j_slow")}}
 	m := newMod(t, t.TempDir(), src, s)
-	if err := m.store.setCursor("1"); err != nil { // the first page was read and stored; then the process died
+	if err := m.store.setCursor("1", ""); err != nil { // the first page was read and stored; then the process died
 		t.Fatal(err)
 	}
 	if _, ok, _ := m.store.since(); !ok {
@@ -581,6 +586,106 @@ func TestTheLastCursorAndTheEndOfTheWindowAreOneCommit(t *testing.T) {
 	m.catchUp(context.Background())
 	if c, ok, _ := m.store.cursor(); ok {
 		t.Fatalf("the cursor %q was committed although the window could not be ended", c)
+	}
+}
+
+const (
+	epochA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	epochB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func TestTheEpochIsKeptWithTheCursor(t *testing.T) {
+	src := &fakeSource{epoch: epochA, log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	m.catchUpNow()
+	if e, _ := m.store.epoch(); e != epochA {
+		t.Fatalf("epoch %q", e)
+	}
+}
+
+// wwd.db was removed and made again (#3303): the epoch answered is another one, so the cursor means nothing. The module reads again from
+// the start with the first-pass window at now: the old database's history is not told, the new database's news is.
+func TestAnotherEpochStartsOverWithTheWindowAtNow(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{epoch: epochA, log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow()
+	src.epoch = epochB
+	src.log = []wire.Job{job("j_hist", wire.StateSucceeded, t0.Add(-5*time.Hour)), job("j_new", wire.StateSucceeded, t0.Add(2*time.Minute))}
+	src.asked = nil
+	m.catchUpNow()
+	got := strings.Join(s.texts(), "\n")
+	if len(s.texts()) != 2 || !strings.Contains(got, "j_a") || !strings.Contains(got, "j_new") || strings.Contains(got, "j_hist") {
+		t.Fatalf("told %q", s.texts())
+	}
+	if e, _ := m.store.epoch(); e != epochB {
+		t.Fatalf("epoch %q", e)
+	}
+	if c, _, _ := m.store.cursor(); c != "2" {
+		t.Fatalf("cursor %q", c)
+	}
+	if strings.Join(src.asked, ",") != "1,0" { // the old cursor, then the start over
+		t.Fatalf("asked with %v", src.asked)
+	}
+	if _, ok, _ := m.store.since(); ok {
+		t.Fatal("the window stayed after the pass that read everything")
+	}
+}
+
+func TestACursorPastTheHeadStartsOverToo(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{epoch: epochA, log: []wire.Job{
+		job("j_a", wire.StateSucceeded, t0.Add(time.Minute)), job("j_b", wire.StateSucceeded, t0.Add(time.Minute)), job("j_c", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow() // cursor 3
+	src.epoch, src.log = epochB, []wire.Job{job("j_new", wire.StateSucceeded, t0.Add(2*time.Minute))}
+	m.catchUpNow() // 3 is past the new head 1: wwd answers 409
+	if got := strings.Join(s.texts(), "\n"); len(s.texts()) != 4 || !strings.Contains(got, "j_new") {
+		t.Fatalf("told %q", s.texts())
+	}
+	if c, _, _ := m.store.cursor(); c != "1" {
+		t.Fatalf("cursor %q", c)
+	}
+}
+
+func TestAnEmptyEpochIsNotAChange(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}} // a wwd that predates epochs
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow()
+	src.epoch = epochA // upgraded: the epoch is adopted, nothing is read again
+	src.log = append(src.log, job("j_b", wire.StateSucceeded, t0.Add(2*time.Minute)))
+	src.asked = nil
+	m.catchUpNow()
+	if len(s.texts()) != 2 || strings.Join(src.asked, ",") != "1" {
+		t.Fatalf("told %q, asked with %v", s.texts(), src.asked)
+	}
+	if e, _ := m.store.epoch(); e != epochA {
+		t.Fatalf("epoch %q", e)
+	}
+}
+
+// alwaysAhead answers every read with a 409.
+type alwaysAhead struct{ fakeSource }
+
+func (a *alwaysAhead) JobsAfter(_ context.Context, after string, _ int) (wire.JobsListResponse, error) {
+	a.asked = append(a.asked, after)
+	return wire.JobsListResponse{}, &client.CursorAheadError{CursorAhead: wire.CursorAhead{Reason: wire.CursorAheadReason, Head: "0", Epoch: epochB}}
+}
+
+func TestAStartOverHappensOncePerCatchUp(t *testing.T) {
+	src := &alwaysAhead{}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	m.store.setCursor("5", epochA)
+	m.catchUp(context.Background())
+	if strings.Join(src.asked, ",") != "5,0" { // one start over, then it gives up until the next catch-up
+		t.Fatalf("asked with %v", src.asked)
+	}
+	if _, ok, _ := m.store.cursor(); ok {
+		t.Fatal("a cursor stayed from the old database")
+	}
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window was not put back")
 	}
 }
 

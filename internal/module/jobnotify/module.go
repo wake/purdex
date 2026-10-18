@@ -10,6 +10,7 @@ package jobnotify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -195,6 +196,9 @@ const pageSize = 1000
 // cursor is wwd's own (a position in its change log, never a time of a worker's) and moves only past a page whose jobs were all
 // queued, so a job that could not be queued is read again. A job comes back whenever it changes (a log uploaded after the end), which
 // the outbox ignores by job id. wwd answering without a cursor (a version that does not know ?after=) is an error, never "nothing new".
+// The cursor is kept with the epoch of wwd's database. An answer under another epoch, or a 409 for a cursor past wwd's head, means wwd.db
+// was made again: the cursor is dropped and the first-pass window starts again at now (startOver), so the new database's history is not
+// told and nothing new is missed. A wwd that gives no epoch (empty) is taken as it always was.
 //
 // Until the first pass has read everything, the legacy window (the time the module first ran, less the overlap) keeps the history
 // that was there before the module from being told: a job made before it is skipped. The window reads the job's created_at, which
@@ -210,17 +214,54 @@ func (m *Module) catchUp(ctx context.Context) {
 	if !have {
 		cursor = "0"
 	}
+	epoch, err := m.store.epoch()
+	if err != nil {
+		m.logf("jobnotify: catch-up epoch: %v", err)
+		return
+	}
 	since, windowed, err := m.store.since()
 	if err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
 		return
 	}
 	floor := since.Add(-overlap)
+	restarted := false
+	// startOver is for a wwd whose database is another one than the cursor was made by: the cursor is forgotten and the first-pass
+	// window is back at now. It happens once per catch-up; a second sign in the same pass is left to the next one.
+	startOver := func(why string) bool {
+		if restarted {
+			m.logf("jobnotify: catch-up: wwd's database changed again (%s); left to the next catch-up", why)
+			return false
+		}
+		restarted = true
+		now := m.now()
+		if err := m.store.restart(now); err != nil {
+			m.logf("jobnotify: catch-up restart: %v", err)
+			return false
+		}
+		m.logf("jobnotify: wwd's database is not the one the cursor was made by (%s): reading again from the start", why)
+		cursor, epoch, windowed, floor = "0", "", true, now.Add(-overlap)
+		return true
+	}
 	for {
 		page, err := m.src.JobsAfter(ctx, cursor, pageSize)
+		var ahead *client.CursorAheadError
+		if errors.As(err, &ahead) {
+			if startOver("cursor " + cursor + " is past its head " + ahead.Head) {
+				continue
+			}
+			return
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				m.logf("jobnotify: catch-up after %s: %v", cursor, err)
+			}
+			return
+		}
+		// another epoch than the stored one: this page was read from a database the cursor does not belong to, so none of it is used
+		if epoch != "" && page.Epoch != "" && page.Epoch != epoch {
+			if startOver("epoch " + page.Epoch + ", the cursor has " + epoch) {
+				continue
 			}
 			return
 		}
@@ -237,15 +278,18 @@ func (m *Module) catchUp(ctx context.Context) {
 		}
 		last := len(page.Jobs) < pageSize
 		if last && windowed {
-			err = m.store.finishFirstPass(page.Cursor) // the cursor and the end of the window, together
+			err = m.store.finishFirstPass(page.Cursor, page.Epoch) // the cursor and the end of the window, together
 		} else {
-			err = m.store.setCursor(page.Cursor)
+			err = m.store.setCursor(page.Cursor, page.Epoch)
 		}
 		if err != nil {
 			m.logf("jobnotify: catch-up cursor: %v", err)
 			return
 		}
 		cursor = page.Cursor
+		if page.Epoch != "" {
+			epoch = page.Epoch
+		}
 		if last {
 			break
 		}

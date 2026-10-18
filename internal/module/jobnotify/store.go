@@ -62,7 +62,8 @@ func openStore(path string) (*store, error) {
 		);
 		CREATE INDEX IF NOT EXISTS notices_status ON notices(status);
 		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-		CREATE TABLE IF NOT EXISTS cursor (id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT NOT NULL);`); err != nil {
+		CREATE TABLE IF NOT EXISTS cursor (id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS cursor_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch TEXT NOT NULL);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate job notice db: %w", err)
 	}
@@ -160,23 +161,73 @@ func (s *store) cursor() (string, bool, error) {
 	return c, err == nil, err
 }
 
-func (s *store) setCursor(c string) error {
-	_, err := s.db.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c)
+// epoch is the database epoch the stored cursor belongs to ("" when wwd gave none, as a wwd that predates epochs does).
+func (s *store) epoch() (string, error) {
+	var e string
+	err := s.db.QueryRow(`SELECT epoch FROM cursor_epoch WHERE id = 1`).Scan(&e)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return e, err
+}
+
+// putCursor writes the cursor and, when wwd named one, its epoch; the caller commits.
+func putCursor(tx *sql.Tx, c, epoch string) error {
+	if _, err := tx.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c); err != nil {
+		return err
+	}
+	if epoch == "" {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT INTO cursor_epoch(id, epoch) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET epoch = excluded.epoch`, epoch)
 	return err
 }
 
-// finishFirstPass stores the cursor of the last page and drops the first-pass window in one transaction: a crash between the two would
-// leave a cursor with the window still in force, and the next pass would skip a new job stamped by a slow clock.
-func (s *store) finishFirstPass(c string) error {
+// setCursor stores the cursor of a page that was fully queued, with the epoch of the database it came from, in one commit.
+func (s *store) setCursor(c, epoch string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c); err != nil {
+	if err := putCursor(tx, c, epoch); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// finishFirstPass stores the cursor of the last page and drops the first-pass window in one transaction: a crash between the two would
+// leave a cursor with the window still in force, and the next pass would skip a new job.
+func (s *store) finishFirstPass(c, epoch string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := putCursor(tx, c, epoch); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM meta WHERE key = 'since'`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// restart forgets the cursor and its epoch and puts the first-pass window back at now, in one commit: wwd's database is another one,
+// so what was read from the old one says nothing, and its history must not be told as news.
+func (s *store) restart(now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM cursor`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM cursor_epoch`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('since', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, now.UnixMilli()); err != nil {
 		return err
 	}
 	return tx.Commit()
