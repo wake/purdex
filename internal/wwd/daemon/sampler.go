@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log"
 	"runtime"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -57,8 +59,12 @@ type Sampler struct {
 	minute  []wire.Facts // records of the minute being filled
 	last    string       // the last sampling error logged, to log a change only
 
-	lastStore string // the last store error logged
+	lastStore string       // the last store error logged
+	unsaved   []wire.Facts // finished minutes not yet in the store, oldest first
 }
+
+// maxUnsaved bounds the minutes kept for retry: a day, the in-memory depth.
+const maxUnsaved = rollupMinutes
 
 func NewSampler(o SamplerOptions) *Sampler {
 	return &Sampler{
@@ -122,7 +128,13 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 	f.Derived = derived.Compute(&s.latch, in)
 	s.ring.Add(f)
-	done := s.addToMinute(f)
+	if done := s.addToMinute(f); done != nil && s.opts.Minutes != nil {
+		s.unsaved = append(s.unsaved, *done)
+		if over := len(s.unsaved) - maxUnsaved; over > 0 {
+			s.unsaved = s.unsaved[over:]
+		}
+	}
+	todo := append([]wire.Facts(nil), s.unsaved...)
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -132,10 +144,20 @@ func (s *Sampler) Tick(now time.Time) {
 	s.mu.Unlock()
 
 	// the write is outside the lock: a slow disk must not hold up the routes
-	if done != nil && s.opts.Minutes != nil {
-		if err := s.opts.Minutes.SaveMinute(*done); err != nil {
+	// and in order: a minute that failed is tried again on the next tick, before
+	// the ones after it
+	saved := 0
+	for _, r := range todo {
+		if err := s.opts.Minutes.SaveMinute(r); err != nil {
 			s.logMinutes("saving a minute", err)
+			break
 		}
+		saved++
+	}
+	if saved > 0 {
+		s.mu.Lock()
+		s.unsaved = s.unsaved[min(saved, len(s.unsaved)):]
+		s.mu.Unlock()
 	}
 
 	if changed && msg != "" {
@@ -191,18 +213,19 @@ func (s *Sampler) addToMinute(f wire.Facts) *wire.Facts {
 	return done
 }
 
-// mergeMinutes is the stored minutes plus the in-memory ones the store does not
-// have (a minute finished a moment ago whose write has not committed, or whose
-// write failed), oldest first. Both inputs are oldest first.
-func mergeMinutes(stored, mem []wire.Facts) []wire.Facts {
-	have := make(map[int64]bool, len(stored))
-	for _, r := range stored {
-		have[r.At.UnixMilli()] = true
-	}
-	out := stored
-	for _, r := range mem {
-		if !have[r.At.UnixMilli()] {
-			out = append(out, r)
+// mergeMinutes is one row per minute, oldest first, from several sources in any
+// order (a clock set back can repeat a minute): the first source that has a
+// minute wins it.
+func mergeMinutes(sources ...[]wire.Facts) []wire.Facts {
+	have := map[int64]bool{}
+	var out []wire.Facts
+	for _, src := range sources {
+		for _, r := range src {
+			k := r.At.Truncate(time.Minute).UnixMilli()
+			if !have[k] {
+				have[k] = true
+				out = append(out, r)
+			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
@@ -224,29 +247,28 @@ func (s *Sampler) History(since time.Time, step string) []wire.Facts {
 		defer s.mu.RUnlock()
 		return s.ring.Since(since)
 	}
-	out := s.rollups.Since(since)
-	var partial *wire.Facts
+	mem := s.rollups.Since(since)
+	var live []wire.Facts // the minute being filled, as a partial one
 	if len(s.minute) > 0 {
 		if r := facts.Rollup(s.minute); !r.At.Before(since) {
-			partial = &r
+			live = []wire.Facts{r}
 		}
 	}
 	s.mu.RUnlock()
-	// the store holds the minutes from before this run too; if it cannot be
-	// read, this run's in-memory minutes are what there is
+	// the store holds the minutes from before this run too and wins for a minute
+	// it has; this run's in-memory minutes fill in what it lacks (a write that
+	// failed or has not committed), or are all there is when it cannot be read
+	var stored []wire.Facts
 	if st := s.opts.Minutes; st != nil {
-		if stored, err := st.LoadMinutes(since); err == nil {
-			out = mergeMinutes(stored, out)
-		} else {
+		var err error
+		stored, err = st.LoadMinutes(since)
+		if err != nil {
 			s.logMinutes("reading the minutes", err)
+			var skipped *store.SkippedRowsError
+			if !errors.As(err, &skipped) {
+				stored = nil
+			}
 		}
 	}
-	if partial != nil {
-		// a restart inside this minute left an earlier half of it stored: the live one replaces it
-		for len(out) > 0 && out[len(out)-1].At.Equal(partial.At) {
-			out = out[:len(out)-1]
-		}
-		out = append(out, *partial)
-	}
-	return out
+	return mergeMinutes(stored, mem, live)
 }

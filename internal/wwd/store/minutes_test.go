@@ -18,7 +18,9 @@ func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SaveMinute(minuteRec(t0.Add(time.Minute), 9)); err != nil { // the same minute replaces
+	// the first write of a minute stays: a clock set back, then a restart, must not
+	// replace a whole minute with a part of it
+	if err := s.SaveMinute(minuteRec(t0.Add(time.Minute), 9)); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -31,7 +33,7 @@ func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("got %d err %v", len(got), err)
 	}
-	if !got[0].At.Equal(t0.Add(time.Minute)) || got[0].CPU.Load1 != 9 || got[1].CPU.Load1 != 2 {
+	if !got[0].At.Equal(t0.Add(time.Minute)) || got[0].CPU.Load1 != 1 || got[1].CPU.Load1 != 2 {
 		t.Fatalf("%+v", got)
 	}
 }
