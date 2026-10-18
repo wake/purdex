@@ -80,7 +80,7 @@ cat > "$bin/launchctl" <<'EOF'
 echo "$*" >> "$STUB/launchctl.log"
 case "$1" in
   list) printf '{\n\t"PID" = %s;\n}\n' "$STUB_PID" ;;
-  bootstrap) [ -e "$STUB/bootstrap-failed-once" ] || { : > "$STUB/bootstrap-failed-once"; exit 1; } ;;
+  bootstrap) [ -z "${STUB_BOOTSTRAP_FAIL:-}" ] || exit 1; [ -e "$STUB/bootstrap-failed-once" ] || { : > "$STUB/bootstrap-failed-once"; exit 1; } ;;
 esac
 exit 0
 EOF
@@ -206,6 +206,20 @@ n=0; while [ ! -e "$faultfile" ] && [ "$n" -lt 100 ]; do sleep 0.2; n=$((n + 1))
 kill -TERM "$pid"          # TERM: a background sh ignores INT
 wait "$pid" || true
 [ ! -e "$faultfile" ] || fail "the owner-active file was left on air26 after the script was terminated"
+
+# an owner-active file that was there before the run is not ours: it is still there afterwards
+mkdir -p "$(dirname "$faultfile")"; : > "$faultfile"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_FAULT=1 STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 7 > "$tmp/out" 2>&1 || true
+has "was already on air26" "case 7 with a file that was there"
+[ -e "$faultfile" ] || fail "a file that was there before the run was removed by the clean-up"
+rm -f "$faultfile"
+
+# a clean-up that cannot do its work does not end as a success: the host is named and the exit code is not 0
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_BOOTSTRAP_FAIL=1 STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a service that could not be brought up must make the exit code non-zero"
+has "the clean-up could not put back: start:air26" "persistent clean-up failure"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0

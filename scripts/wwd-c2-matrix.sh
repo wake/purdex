@@ -94,7 +94,8 @@ svc_down() {
   if is_mac "$1"; then on "$1" 'launchctl bootout gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl stop wwd.service'; fi
 }
 svc_up() {
-  if is_mac "$1"; then on "$1" 'launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else on "$1" 'sudo systemctl start wwd.service'; fi
+  if is_mac "$1"; then su_c='launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else su_c='sudo systemctl start wwd.service'; fi
+  on "$1" "$su_c" || return 1                                                  # a failed start stays on the list
   DOWNED=$(echo "$DOWNED" | tr ' ' '\n' | grep -v "^$1\$" | tr '\n' ' ')     # only once it is up
 }
 # svc_pid_ok HOST PID: PID is a decimal number above 1 (0 and -1 would signal a whole group or every process) and is the wwd binary
@@ -113,7 +114,7 @@ svc_freeze() {
 }
 svc_thaw() {
   fz_p=$(echo "$STOPPED" | tr ' ' '\n' | grep "^$1:" | head -1 | cut -d: -f2)
-  if svc_pid_ok "$1" "$fz_p"; then on "$1" "kill -CONT $fz_p"; else say "WARN: $1's wwd is no longer pid '$fz_p': no signal sent"; fi
+  if svc_pid_ok "$1" "$fz_p"; then on "$1" "kill -CONT $fz_p" || return 1; else say "WARN: $1's wwd is no longer pid '$fz_p': no signal sent"; fi
   STOPPED=$(echo "$STOPPED" | tr ' ' '\n' | grep -v "^$1:" | tr '\n' ' ')
 }
 
@@ -133,11 +134,17 @@ worker_set() {   # worker_set HOST true|false
 }
 # a fault artifact on a host (a file the product reads): recorded before it is made, removed by finish
 FAULTS=""; REMOTE_DIRS=""
+# a file that was there before this run is not ours: it is not registered, so nothing here removes it
 fault_on() {   # fault_on HOST PATH-ON-HOST
-  FAULTS="$FAULTS $1:$2"
+  if [ "$dry" -eq 0 ] && on "$1" "[ -e $2 ]"; then say "WARN: $2 was already on $1: left as it is at the end"
+  else FAULTS="$FAULTS $1:$2"; fi
   on "$1" "mkdir -p \$(dirname $2) && touch $2"
 }
-fault_off() { on "$1" "rm -f $2"; FAULTS=$(echo "$FAULTS" | tr ' ' '\n' | grep -v "^$1:$2\$" | tr '\n' ' '); }
+fault_off() {
+  case " $FAULTS " in *" $1:$2 "*) ;; *) return 0 ;; esac
+  on "$1" "rm -f $2" || return 1
+  FAULTS=$(echo "$FAULTS" | tr ' ' '\n' | grep -v "^$1:$2\$" | tr '\n' ' ')
+}
 only_workers() {   # only_workers HOST... : exactly these workers are on (air19 stays off in every case)
   for ow_h in mlab air26 mserv; do
     case " $* " in *" $ow_h "*) worker_set "$ow_h" true ;; *) worker_set "$ow_h" false ;; esac
@@ -321,14 +328,16 @@ finish() {
   fn_rc=$?
   trap - EXIT INT TERM
   say "-- cleaning up"
-  for fn_pair in $STOPPED; do svc_thaw "${fn_pair%%:*}" || true; done
-  for fn_h in $DOWNED; do svc_up "$fn_h" || true; done
+  fn_bad=""     # what the clean-up could not do: said at the end, and the exit code is not 0
+  for fn_pair in $STOPPED; do svc_thaw "${fn_pair%%:*}" || fn_bad="$fn_bad thaw:${fn_pair%%:*}"; done
+  for fn_h in $DOWNED; do svc_up "$fn_h" || fn_bad="$fn_bad start:$fn_h"; done
   if [ "$dry" -eq 1 ]; then say "+ PUT /v1/worker: put back the saved settings of every host it changed"
   else for fn_f in "$WORK"/saved/*; do
     case "$fn_f" in *.new) continue ;; esac
-    [ -f "$fn_f" ] && { put_worker "$(basename "$fn_f")" "$fn_f" >/dev/null || true; }
+    [ -f "$fn_f" ] || continue
+    put_worker "$(basename "$fn_f")" "$fn_f" >/dev/null || fn_bad="$fn_bad worker:$(basename "$fn_f")"
   done; fi
-  for fn_pair in $FAULTS; do on "${fn_pair%%:*}" "rm -f ${fn_pair#*:}" || true; done
+  for fn_pair in $FAULTS; do on "${fn_pair%%:*}" "rm -f ${fn_pair#*:}" || fn_bad="$fn_bad file:$fn_pair"; done
   if [ -f "$WORK/jobs" ]; then
     while read -r fn_h fn_id; do sock "$fn_h" POST "/v1/jobs/$fn_id/cancel" >/dev/null 2>&1 || true; done < "$WORK/jobs"
   fi
@@ -338,6 +347,7 @@ finish() {
   say ""
   say "passed:${PASSED:- -}  failed:${FAILED:- -}  skipped:${SKIPPED:- -}"
   [ -z "$FAILED" ] || fn_rc=1
+  [ -z "$fn_bad" ] || { say "FAIL: the clean-up could not put back:$fn_bad -- look at these hosts by hand"; fn_rc=1; }
   exit "$fn_rc"
 }
 
