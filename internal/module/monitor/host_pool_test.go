@@ -196,3 +196,31 @@ func TestPoolHostCollector_ASnapshotHasOneSource(t *testing.T) {
 	assert.Equal(t, uint64(200)<<30, *m.Disk.TotalBytes, "and wwd's disk")
 	assert.Equal(t, 1, asked, "decided once")
 }
+
+// Facts that cannot give every figure (a wwd older than the disk sizes) give none: the whole snapshot is the own collector's, not
+// wwd's CPU and memory with a local disk, and the facts are looked up once.
+func TestPoolHostCollector_UnusableFactsMeanOneFallbackSource(t *testing.T) {
+	asked := 0
+	c := newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) {
+		asked++
+		f, _ := factsOK()
+		f.Disk = []wire.Disk{{Mount: "/", FreeGB: 100, UsedPct: 50}} // no sizes yet
+		return f, true
+	})
+	m := collectHostMetrics(context.Background(), NewHostMetricsState(c))
+	assert.Equal(t, uint64(1000), *m.Memory.TotalBytes, "the own collector's memory, not wwd's")
+	assert.Equal(t, uint64(2000), *m.Disk.TotalBytes)
+	require.NotNil(t, m.CPU.UnavailableReason, "and the own CPU (pending on its first read), not wwd's")
+	assert.Equal(t, 1, asked)
+
+	asked = 0
+	c = newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) {
+		asked++
+		f, _ := factsOK()
+		f.Mem.TotalMB = 0
+		return f, true
+	})
+	m = collectHostMetrics(context.Background(), NewHostMetricsState(c))
+	assert.Equal(t, uint64(2000), *m.Disk.TotalBytes, "no memory total either: all of it is the own collector's")
+	assert.Equal(t, 1, asked)
+}

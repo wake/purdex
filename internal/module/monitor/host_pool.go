@@ -33,6 +33,9 @@ func newPoolHostCollector(fallback HostCollector, facts localFacts) HostCollecto
 // pinned is this collector with the source decided once: the facts as they are now, for every figure of one snapshot.
 func (c *poolHostCollector) pinned() HostCollector {
 	f, ok := c.facts()
+	if ok && !usable(f) {
+		ok = false // facts that cannot give every figure give none: one snapshot, one source
+	}
 	return newPoolHostCollector(c.fallback, func() (wire.Facts, bool) { return f, ok })
 }
 
@@ -66,6 +69,16 @@ func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, er
 		}
 	}
 	return c.fallback.CollectDisk(ctx)
+}
+
+// usable says whether facts can give all three figures of a snapshot: the memory total and the disk sizes (a wwd older than the
+// sizes, or a host that reports no disk, cannot).
+func usable(f wire.Facts) bool {
+	if f.Mem.TotalMB <= 0 {
+		return false
+	}
+	_, ok := diskSampleOf(f.Disk)
+	return ok
 }
 
 // diskSampleOf is the root mount's disk (else the first), the statfs figures the facts carry: total is Blocks x Bsize and avail
