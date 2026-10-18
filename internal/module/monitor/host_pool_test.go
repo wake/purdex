@@ -225,3 +225,32 @@ func TestPoolHostCollector_UnusableFactsMeanOneFallbackSource(t *testing.T) {
 	assert.Equal(t, uint64(2000), *m.Disk.TotalBytes, "no memory total either: all of it is the own collector's")
 	assert.Equal(t, 1, asked)
 }
+
+// A CPU that could not be read reaches the facts as zeros: that is not an idle of 0 % (a saturated host), it is no CPU, and the
+// snapshot is the own collector's as a whole.
+func TestPoolHostCollector_ACPUThatWasNotReadMeansTheOwnCollector(t *testing.T) {
+	for name, cpu := range map[string]wire.CPU{
+		"zeros":        {},
+		"no cpu count": {IdlePct: 40},
+		"idle over":    {NCPU: 4, IdlePct: 101},
+		"idle under":   {NCPU: 4, IdlePct: -1},
+	} {
+		c := newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) {
+			f, _ := factsOK()
+			f.CPU = cpu
+			return f, true
+		})
+		m := collectHostMetrics(context.Background(), NewHostMetricsState(c))
+		assert.Equal(t, uint64(1000), *m.Memory.TotalBytes, name)
+		assert.Equal(t, uint64(2000), *m.Disk.TotalBytes, name)
+		assert.Nil(t, m.CPU.Percent, name)
+	}
+	c := newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) { // a saturated host with its CPU read: 0 % idle is a reading
+		f, _ := factsOK()
+		f.CPU = wire.CPU{NCPU: 4, IdlePct: 0}
+		return f, true
+	})
+	m := collectHostMetrics(context.Background(), NewHostMetricsState(c))
+	require.NotNil(t, m.CPU.Percent)
+	assert.Equal(t, 100.0, *m.CPU.Percent)
+}

@@ -71,10 +71,10 @@ func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, er
 	return c.fallback.CollectDisk(ctx)
 }
 
-// usable says whether facts can give all three figures of a snapshot: the memory total and the disk sizes (a wwd older than the
-// sizes, or a host that reports no disk, cannot).
+// usable says whether facts can give all three figures of a snapshot: a CPU that was read, the memory total and the root disk's
+// sizes (a wwd older than the sizes, a host whose CPU read failed, or one that reports no root disk, cannot).
 func usable(f wire.Facts) bool {
-	if f.Mem.TotalMB <= 0 {
+	if f.Mem.TotalMB <= 0 || f.CPU.NCPU <= 0 || f.CPU.IdlePct < 0 || f.CPU.IdlePct > 100 { // a CPU that could not be read is all zeros, not idle
 		return false
 	}
 	_, ok := diskSampleOf(f.Disk)
