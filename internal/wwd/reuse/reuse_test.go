@@ -148,6 +148,18 @@ func TestDriftedEarnedHostDoesNotAnswerItself(t *testing.T) {
 	}
 }
 
+// A quarantined label's results are in dispute: they answer nobody, not even the host that made them.
+func TestQuarantinedHostDoesNotAnswerItself(t *testing.T) {
+	h := HostNow{Labels: []string{"os:linux"}, Quarantined: true}
+	for _, host := range []string{"mserv", "mlab"} {
+		q := query()
+		q.Host = host
+		if Answers(entry(), q, h) {
+			t.Fatalf("a quarantined host's result answered %s", host)
+		}
+	}
+}
+
 func TestDriftedReferenceHostDoesNotAnswerItself(t *testing.T) {
 	h := HostNow{Labels: []string{"os:linux"}, Reference: true, ReferenceFingerprint: map[string]string{"go": "1.27.0"}}
 	q := query()

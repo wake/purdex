@@ -84,6 +84,9 @@ type HostNow struct {
 	// Earned: it holds the task's earned label (state earned) and EarnedFingerprint is the one that label was earned with.
 	Earned            bool
 	EarnedFingerprint map[string]string
+	// Quarantined: it holds the task's label in state quarantined (it had standing and lost it to a disagreement). Not Earned, and
+	// not "no standing" either: its entries answer nobody until it is qualified again.
+	Quarantined bool
 	// Reference: it is the task's reference host and ReferenceFingerprint is its current fingerprint.
 	Reference            bool
 	ReferenceFingerprint map[string]string
@@ -116,9 +119,10 @@ func HostStillValid(e Entry, h HostNow) bool {
 
 // SameHostOnly is condition (4): an entry whose host has no standing for the task (it holds no earned label and is not the
 // reference) is answered only to a submission from that host. A host that does have standing but whose fingerprint no longer
-// matches is not here: its entries are stale, not private, so they answer nobody.
+// matches is not here: its entries are stale, not private, so they answer nobody. Nor is a quarantined host: its results are in
+// dispute.
 func SameHostOnly(e Entry, q Query, h HostNow) bool {
-	return !h.Earned && !h.Reference && e.Host != "" && e.Host == q.Host
+	return !h.Earned && !h.Reference && !h.Quarantined && e.Host != "" && e.Host == q.Host
 }
 
 // Answers says whether the entry answers the submission: (1) and (2) always, and then (3), or (4) when the host has no standing.
