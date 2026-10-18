@@ -124,7 +124,7 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
 	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
 	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
 	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
-	if e.Run.Err != nil && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown) {
+	if e.Run.Err != nil && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown || e.Kind == runner.KindReclaimed) {
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command's unit was not proven stopped: %w", e.Run.Err))
 		return
 	}

@@ -217,6 +217,13 @@ func TestAReclaimedJobIsReleasedAsReclaimWithoutAnAttempt(t *testing.T) {
 	assert.Empty(t, h.s.results)
 }
 
+func TestAReclaimedJobWhoseUnitWasNotProvenStoppedIsReleasedAsInfraNotReclaim(t *testing.T) {
+	h := newHarness(t, Config{})
+	h.fin(context.Background(), ended(runner.KindReclaimed, run.Result{Outcome: run.Cancelled, Err: errors.New("unit still active")}))
+	require.Len(t, h.s.releases, 1)
+	assert.Equal(t, wire.ReleaseInfra, h.s.releases[0].Reason, "a reclaim would queue it for another worker next to a command that may still run")
+}
+
 func TestShutdownAndInfraAreReleases(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.fin(context.Background(), ended(runner.KindShutdown, run.Result{}))
