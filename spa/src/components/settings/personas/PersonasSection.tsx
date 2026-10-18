@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
+import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
@@ -126,7 +127,8 @@ export function PersonasSection() {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
       if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
-      setNote(t('settings.personas.saved', { host: useHostStore.getState().hosts[res.hostId]?.name ?? res.hostId }))
+      // The host's name as the rest of the App shows it (`lib/host-look.ts`; a screen never reads `host.name` itself).
+      setNote(t('settings.personas.saved', { host: hostLabel(res.hostId, hostLookOf(res.hostId)) }))
     } catch (e) {
       if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
       else if (e instanceof PersonaValidationError) {

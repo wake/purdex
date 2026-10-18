@@ -16,7 +16,7 @@ interface Props {
 }
 
 /** Active personas first, retired ones after, each group in the collection's own order. */
-export function orderForList(items: Persona[]): Persona[] {
+function orderForList(items: Persona[]): Persona[] {
   return [...items.filter((p) => !p.retired), ...items.filter((p) => p.retired)]
 }
 
