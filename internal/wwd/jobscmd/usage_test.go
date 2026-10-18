@@ -73,7 +73,7 @@ func TestWWDUsageOptions(t *testing.T) {
 	if code, _, _ := runWWD(f, "usage", "--since", "2026-10-01T00:00:00+08:00"); code != 0 || !f.usageQ.Since.Equal(time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC)) {
 		t.Errorf("RFC 3339: %+v", f.usageQ)
 	}
-	for _, args := range [][]string{{"usage", "--since", "yesterday"}, {"usage", "--since", "-5h"}, {"usage", "--limit", "0"}, {"usage", "--limit", "x"}, {"usage", "extra"}, {"usage", "--bogus"}} {
+	for _, args := range [][]string{{"usage", "--since", "yesterday"}, {"usage", "--since", "-5h"}, {"usage", "--since", "106752d"}, {"usage", "--since", "99999999999999d"}, {"usage", "--limit", "0"}, {"usage", "--limit", "x"}, {"usage", "extra"}, {"usage", "--bogus"}} {
 		if code, _, errOut := runWWD(f, args...); code != ExitUsage || errOut == "" {
 			t.Errorf("%v: %d %q", args, code, errOut)
 		}

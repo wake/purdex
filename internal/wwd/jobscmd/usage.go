@@ -3,6 +3,7 @@ package jobscmd
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -18,7 +19,7 @@ func parseSince(v string, now time.Time) (time.Time, error) {
 	bad := fmt.Errorf("--since must be how far back (6h, 90m, 7d) or an RFC 3339 time, got %q", v)
 	if n, ok := strings.CutSuffix(v, "d"); ok {
 		days, err := strconv.Atoi(n)
-		if err != nil || days <= 0 {
+		if err != nil || days <= 0 || days > int(math.MaxInt64/int64(24*time.Hour)) { // more days than a Duration holds would wrap round to the future
 			return time.Time{}, bad
 		}
 		return now.Add(-time.Duration(days) * 24 * time.Hour), nil
