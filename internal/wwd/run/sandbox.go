@@ -24,12 +24,13 @@ type Sandbox struct {
 	MemoryMax         string   // default 4G (with no MemoryHigh: MemoryMax alone kills at once, MemoryHigh only throttles)
 	MemorySwapMax     string   // default 0
 	ReadWritePaths    []string // writable besides the workspace (a composer cache)
-	InaccessiblePaths []string // hidden besides /run/docker.sock, which is always hidden
+	InaccessiblePaths []string // hidden besides /run/docker.sock, which is always hidden when it exists
 	SudoPath          string   // default "sudo"
 	SystemctlPath     string   // default "systemctl" (show needs no root)
 }
 
-const dockerSocket = "/run/docker.sock"
+// the "-" makes a missing path (a host with no docker) harmless: without it systemd refuses to set up the unit's namespace
+const dockerSocket = "-/run/docker.sock"
 
 func (s Sandbox) withDefaults() Sandbox {
 	def := func(p *string, v string) {

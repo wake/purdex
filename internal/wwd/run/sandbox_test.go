@@ -92,7 +92,7 @@ func TestSandboxArgvIsTheSpecCommand(t *testing.T) {
 	want := []string{"systemd-run", "--wait", "--pipe", "--uid=wake", "--unit=wwd-j_test1", "--slice=wwd.slice",
 		"-p", "CPUQuota=200%", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "RuntimeMaxSec=660", "-p", "TimeoutStopSec=10",
 		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
-		"-p", "NoNewPrivileges=yes", "-p", "InaccessiblePaths=/run/docker.sock",
+		"-p", "NoNewPrivileges=yes", "-p", "InaccessiblePaths=-/run/docker.sock",
 		"env", "-i", "HOME=/ws/.home", "WWD_JOB=j_test1", "nice", "-n", "10", "ionice", "-c3", "/usr/bin/go", "test", "./..."}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
@@ -114,7 +114,7 @@ func TestSandboxArgvNoTimeoutHasNoRuntimeFuse(t *testing.T) {
 func TestSandboxExtraPathsAreAdded(t *testing.T) {
 	sb := Sandbox{User: "wake", ReadWritePaths: []string{"/var/cache/composer"}, InaccessiblePaths: []string{"/var/run/docker.sock"}}.withDefaults()
 	j := strings.Join(sandboxArgv(sb, "wwd-j", "/ws", "/ws", time.Minute, time.Second, nil, "/bin/true", nil), " ")
-	for _, want := range []string{"ReadWritePaths=/ws /var/cache/composer", "InaccessiblePaths=/run/docker.sock /var/run/docker.sock"} {
+	for _, want := range []string{"ReadWritePaths=/ws /var/cache/composer", "InaccessiblePaths=-/run/docker.sock /var/run/docker.sock"} {
 		if !strings.Contains(j, want) {
 			t.Fatalf("missing %q in %s", want, j)
 		}
