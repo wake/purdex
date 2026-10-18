@@ -18,6 +18,11 @@ const never = () => new Promise<never>(() => {})
 const PDX_JSON_CONFIG = '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx","config":"/tmp/pdx b/config.toml"}'
 
 type Call = string[]
+// The mod's settle cap (ask.js SETTLE_MS) as the engine sees it: the `ms` of every clock.sleep the mod asked for. The "never holds the
+// terminal answer" tests assert on this, not on the wall clock: a loaded host stretches a wall-clock bound (#3307) but not the number the
+// mod asked to sleep, and a mod that waits without the cap never returns (the test's own timeoutMs ends it red).
+const SETTLE_MS = 3000
+let sleeps: number[] = []
 type Resolver = ((v: unknown) => void) | null
 // session stands in for the engine: the id, the surfaces, pdx.json (absent by default, as
 // under `claude plugin test` on a dev machine), a real-time clock.sleep and ui.log. `fail`
@@ -27,7 +32,8 @@ function session(on: any, surfaces: string[] = ['terminal'], pdxJSON?: string, f
   on('session.id', fail === 'session.id' ? refuse : () => ({ value: 'sess-test' }))
   on('session.surfaces', fail === 'session.surfaces' ? refuse : () => ({ value: surfaces }))
   on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
-  on('clock.sleep', async (_$: any, e: any) => { await new Promise((r) => setTimeout(r, e.ms)); return { value: undefined } })
+  sleeps = []
+  on('clock.sleep', async (_$: any, e: any) => { sleeps.push(e.ms); await new Promise((r) => setTimeout(r, e.ms)); return { value: undefined } })
   const logs: { text: string; to: string }[] = []
   on('ui.log', (_$: any, e: any) => { logs.push({ text: e.text, to: e.to }); return { value: undefined } })
   return logs
@@ -546,11 +552,9 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
     return sub(e.argv) === 'begin' ? never() : ok('') // only begin hangs; `report --detach` exits at once
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
-  const t0 = Date.now()
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
-  expect(ms).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS]) // begin was waited for under the cap, and for nothing else
   // begin never replied: the row it may still open is reported by the tool use, detached (#1848)
   expect(calls.map(sub)).toEqual(['begin', 'report'])
   expect(calls[1]).toContain('--detach')
@@ -578,11 +582,9 @@ test('a daemon that does not answer the report never holds the terminal answer: 
     return ok('')
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
-  const t0 = Date.now()
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
-  expect(ms).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS]) // the report was waited for under the cap
   expect(report).not.toBeNull()
   expect(report!.slice(2, 5)).toEqual(['report', 'r6', 'answered_local'])
   expect(detached).not.toBeNull()
@@ -602,9 +604,8 @@ test('answered before begin returned, then a report that hangs ⇒ back within 5
     return ok('')
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => Promise.resolve(NATIVE_RED)) // answered at once
-  const t0 = Date.now()
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  expect(Date.now() - t0).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS]) // the hanging report was waited for under the cap (begin had answered by then)
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
   expect(detached).not.toBeNull()
   expect(detached!.slice(2, 5)).toEqual(['report', 'r7', 'answered_local'])
@@ -646,9 +647,9 @@ test('answered in the terminal while begin has not replied ⇒ back within 5 s, 
     return ok('')
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => setTimeout(() => res(NATIVE_RED), 50)))
-  const t0 = Date.now()
+  const t0 = Date.now() // the lower bound of --since below, not a timing bound
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  expect(Date.now() - t0).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS])
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
   expect(byToolUse).not.toBeNull()
   const a = byToolUse!
