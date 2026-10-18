@@ -10,7 +10,7 @@
 //  - a change for a turn older than the loaded `first_index` is ignored (it arrives again when the client pages back);
 //  - the cursor moves only on `conversation.*` live frames, never on a paging (`before=` / `around=`) answer.
 import type {
-  Capabilities, Change, ConversationApproval, ConversationItem, Header, Increment, Snapshot, Turn, TurnHeader, Window,
+  Capabilities, Change, ConversationApproval, ConversationItem, Header, Increment, Snapshot, Stage, Turn, TurnHeader, Window,
 } from './types'
 
 export interface ConversationDoc {
@@ -27,6 +27,8 @@ export interface ConversationDoc {
   totalTurns: number
   /** The open approvals of this conversation (the WebSocket's set; a snapshot replaces it). */
   approvals: ConversationApproval[]
+  /** The latest stage per client_msg_id the daemon reported (message stages); empty for a daemon without them. */
+  stages: Record<string, Stage>
   /**
    * Bumped by every replacing snapshot (a new epoch, a reset) and every jump. A paging or jump request remembers the generation it was
    * issued under and its answer is dropped if a snapshot has replaced the document since: a late page of the old epoch
@@ -36,7 +38,7 @@ export interface ConversationDoc {
 }
 
 export function emptyDoc(): ConversationDoc {
-  return { turns: [], header: null, capabilities: null, cursor: '', hasMoreBefore: false, detached: false, totalTurns: 0, approvals: [], generation: 0 }
+  return { turns: [], header: null, capabilities: null, cursor: '', hasMoreBefore: false, detached: false, totalTurns: 0, approvals: [], stages: {}, generation: 0 }
 }
 
 const byIndex = (a: { index: number }, b: { index: number }) => a.index - b.index
@@ -65,6 +67,7 @@ export function applySnapshot(doc: ConversationDoc, snap: Snapshot): Conversatio
     hasMoreBefore: snap.window.has_more_before,
     detached: false,
     totalTurns: snap.window.total_turns,
+    stages: snap.stages ? stagesOf(snap.stages) : doc.stages,
     generation: doc.generation + 1,
   }
 }
@@ -157,6 +160,39 @@ export function applyChanges(doc: ConversationDoc, inc: Increment): Conversation
 /** `conversation.header`: only the header (title, status, usage) changed. */
 export function applyHeader(doc: ConversationDoc, header: Header, cursor: string): ConversationDoc {
   return { ...doc, header, cursor }
+}
+
+const ORDER: Record<string, number> = { received: 1, filled: 2, entered: 3, queued: 4 }
+const TERMINAL = new Set(['read', 'failed', 'recalled'])
+
+/** Whether `next` may replace `held` for one id: stages only move forward, a terminal one stays, `unknown` stands in before the queue and may still advance. */
+function advances(held: Stage | undefined, next: Stage): boolean {
+  if (!held) return true
+  if (held.stage === next.stage) return held.at !== next.at || held.reason !== next.reason ? !TERMINAL.has(held.stage) : false
+  if (TERMINAL.has(held.stage)) return false
+  if (held.stage === 'unknown') return next.stage === 'queued' || next.stage === 'read' || next.stage === 'recalled' || next.stage === 'failed'
+  if (next.stage === 'unknown') return (ORDER[held.stage] ?? 0) <= ORDER.entered
+  const a = ORDER[held.stage]
+  const b = ORDER[next.stage]
+  if (a === undefined || b === undefined) return true // a stage this client does not know: the daemon's word
+  return b > a || TERMINAL.has(next.stage)
+}
+
+function stagesOf(list: readonly Stage[]): Record<string, Stage> {
+  const out: Record<string, Stage> = {}
+  for (const s of list) if (advances(out[s.client_msg_id], s)) out[s.client_msg_id] = s
+  return out
+}
+
+/** `conversation.stages`: the changed stages since the last frame. The same document comes back when nothing moved. */
+export function applyStages(doc: ConversationDoc, list: readonly Stage[]): ConversationDoc {
+  let stages = doc.stages
+  for (const s of list) {
+    if (!advances(stages[s.client_msg_id], s)) continue
+    if (stages === doc.stages) stages = { ...stages }
+    stages[s.client_msg_id] = s
+  }
+  return stages === doc.stages ? doc : { ...doc, stages }
 }
 
 export function applyCapabilities(doc: ConversationDoc, capabilities: Capabilities): ConversationDoc {
