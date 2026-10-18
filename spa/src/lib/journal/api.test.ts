@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const pinned = vi.fn<(hostId: string, path: string, init?: RequestInit) => Promise<Response>>()
 vi.mock('../host-api', () => ({ pinnedHostFetch: (h: string, p: string, i?: RequestInit) => pinned(h, p, i) }))
 
-import { getJournal, getRoadmap, getTasks, setConfirmItem } from './api'
+import { getJournal, getJournalPage, getJournalSessions, getRoadmap, getTasks, setConfirmItem } from './api'
 import { useHostStore } from '../../stores/useHostStore'
 import { wirePage, wireRoadmap, wireTasks } from './fixtures'
 
@@ -77,5 +77,38 @@ describe('tasks, roadmap, pin', () => {
   it('a hand check goes to a remote lead as a result too', async () => {
     pinned.mockResolvedValue(json(LEAD, 409))
     expect((await setConfirmItem('h1', 's', 'e', 0, false)).kind).toBe('remote')
+  })
+})
+
+describe('session pages (journal.sessions.v1)', () => {
+  it('reads the current session with NOTHING but the reader: no limit, no before, no page', async () => {
+    pinned.mockResolvedValue(json(wirePage()))
+    await getJournalPage('h1', 'sess/1')
+    const path = pinned.mock.calls[0][1]
+    expect(path).toBe('/api/journal?session_id=sess%2F1')
+    // A limit or a before makes the daemon read an old before-paging request instead of a session page.
+    expect(path).not.toContain('limit')
+    expect(path).not.toContain('before')
+  })
+  it('reads another session with only the page added', async () => {
+    pinned.mockResolvedValue(json(wirePage({ page: 'old-1' })))
+    const r = await getJournalPage('h1', 's', 'old-1')
+    const path = pinned.mock.calls[0][1]
+    expect(path).toBe('/api/journal?session_id=s&page=old-1')
+    expect(path).not.toContain('limit')
+    expect(path).not.toContain('before')
+    expect(r.kind === 'ok' && r.value.page).toBe('old-1')
+  })
+  it('a 503 throws (an error to show), it is not an empty page', async () => {
+    pinned.mockResolvedValue(json({ error: 'unavailable', detail: 'no lead' }, 503))
+    await expect(getJournalPage('h1', 's')).rejects.toMatchObject({ status: 503 })
+    await expect(getJournalSessions('h1', 's')).rejects.toMatchObject({ status: 503 })
+  })
+  it('lists the sessions of the reader', async () => {
+    pinned.mockResolvedValue(json({ sessions: [{ session_id: 'a', started_at: 1, ended_at: 2, via: 'root', current: false }, { session_id: 'b', started_at: 2, ended_at: 0, via: 'relay', current: true }], incomplete: true }))
+    const r = await getJournalSessions('h1', 'sess/1')
+    expect(pinned.mock.calls[0][1]).toBe('/api/journal/sessions?session_id=sess%2F1')
+    expect(r.kind === 'ok' && r.value.incomplete).toBe(true)
+    expect(r.kind === 'ok' && r.value.sessions.map((x) => x.sessionId)).toEqual(['a', 'b'])
   })
 })
