@@ -313,6 +313,64 @@ op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
   real size is checked once on the App by the lead).
 - The IPC allowlist (M: drop the host check).
 
+### NA-0 design (done 2026-10-19, 88, Opus)
+
+- The mock-ups are at https://pages.mlab.host/wake/purdex-b-line/team-v2.html (tailnet only). The page is not in the
+  repo, because it reads the user's private `personas.json`.
+- The rules below are the contract. The page shows them.
+- **Team panel v2 (NA-4)**
+  - Each row is a grid: a 44 px avatar spanning lines 1–2, then the body. The light moves to the avatar's bottom-right
+    corner (11 px, with a 2 px ring in the row's background).
+  - Line 1:
+    - the agent icon, kept at 13–14 px, muted, without a light;
+    - the host badge;
+    - the **name**, 13 px semibold;
+    - the title, muted, 11.5 px, the first thing to truncate;
+    - the lead / 未開 chips, the context ring and the workbook button, as today.
+  - Line 2:
+    - a member: the task line;
+    - the lead: the lead's own last journal line.
+  - Line 3 (the last exchange) follows in the body column; it does not indent under the avatar.
+  - **The settings block sits at the panel's bottom, always shown, on the lead's own team only.** It is a top border,
+    then three lines at 11.5 px:
+    - 「成員上限」 stepper and 「用了 N」;
+    - 「自動接力」 stepper | 「成員接力池」 stepper;
+    - 「資料夾」 chips (truncated) and a dashed `+`.
+    - Bottom rather than top, because members are the content and settings change rarely.
+  - Narrow panels (300 px): the title truncates first; the name never does.
+  - No persona: initials on the host colour in the avatar's place, same size, so the layout does not move.
+- **Sidebar (NA-5, NA-6)**
+  - The view toggle is a 30 px square button left of the home button: the profile icon in the workspace view; in the
+    task-group view, the team icon (`UsersThree` by default) with a pink outline.
+  - Session rows: an 18 px avatar replaces the agent icon, the light is at its top-right corner, then the host badge,
+    the **name** (semibold) and the title.
+  - Task-group view:
+    - a group header has a colour square (the team colour), the name (semibold), a count and a pencil on hover;
+    - a manual group's header is a lighter weight and carries the host badge (L9);
+    - members hang under the lead with the tree line of today's beads;
+    - 「未分組」 is last, after a divider.
+    - Double-click a header to rename it.
+- **Deck (NA-3, NA-2)**
+  - The turn header is `[16 px avatar] **Name** · model · time`.
+  - A speech start after a tool row or a thinking line gets `[14 px avatar] Name` in muted text, with no time.
+  - The peer caption is `來自 [16 px avatar] **Wei** · 04:12`; the full address is in its tooltip.
+- **Lead name card (NA-7)**
+  - A 「名字」 row in the lead approval dialog shows pills (a 22 px avatar and the name).
+  - 「保留目前的名字（X）」 comes first and is preselected.
+  - Then the groups 「當過 lead」 and 「預設 lead」. The rest sits behind 「更多…（N 位）」.
+  - A `name_taken` refresh shows a one-line notice above the pills.
+- **Persona page (NA-1b)**
+  - A 330 px list and a form.
+  - List rows: a 30 px avatar, the name (with a crown when `lead`), the code (muted), the source on the right.
+    Retired rows are at 45 % opacity, last.
+  - Form: a 96 px preview with the source dropdown and 「重畫」, then code (locked once created) / display name,
+    sex / nationality, personality, method, interests / 預設擔任 lead. Each field has a counter at the top right.
+    Buttons are 退休 and 儲存.
+- **Unattended log (NA-8)**
+  - Rows: an 18 px avatar, the name (the team name for a lead request), the kind, and a status tag: 自動通過 green,
+    你核准 blue, 你拒絕 red, 逾時 yellow. The time is on the right.
+  - Toggle events are a full-width pink-tinted row in bold: `無人值守開啟 · 由你 · 04:58`.
+
 ### NA-2 … NA-8
 
 - Each one follows spec §9.3–9.7. The places and files are listed there.
