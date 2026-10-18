@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package facts
 
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var errUnsupported = errors.New("facts: no host reads on this platform yet (Linux arrives in WWD-1c)")
+var errUnsupported = errors.New("facts: no host reads on this platform yet (only macOS and Linux are read)")
 
 // SystemSources on a platform without readers: every read fails, so a wwd built
 // there still starts and reports the failure.
