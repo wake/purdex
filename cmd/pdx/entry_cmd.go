@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/wake/purdex/internal/wwd/entry"
 )
@@ -57,6 +58,9 @@ loop:
 			return 2
 		}
 		cwd = wd
+	}
+	if abs, err := filepath.Abs(cwd); err == nil { // the manifest is looked for above the directory: a relative path would stop at "."
+		cwd = abs
 	}
 	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
 		fmt.Fprintf(stderr, "pdx entry match: %s is not a directory\n", cwd)
