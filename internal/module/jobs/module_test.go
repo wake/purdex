@@ -207,6 +207,7 @@ func TestLog_IsTextAnd404UntilItIsStored(t *testing.T) {
 	rr := get(h, "/api/pool/jobs/j_a/log")
 	require.Equal(t, 200, rr.Code)
 	assert.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
+	assert.Equal(t, "nosniff", rr.Header().Get("X-Content-Type-Options"), "a log is whatever a job printed")
 	assert.Equal(t, "line 1\nline 2\n", rr.Body.String())
 	rr = get(h, "/api/pool/jobs/j_b/log")
 	assert.Equal(t, 404, rr.Code)
@@ -263,6 +264,27 @@ func TestBusy_TurnsAwayWhatExceedsTheInFlightBound(t *testing.T) {
 		assert.Equal(t, 429, rr.Code, path)
 		assert.Equal(t, ErrBusy, errCode(rr), path)
 	}
+}
+
+// Full logs are bounded apart: with maxLogInFlight of them under way a third is turned away, while the list and a job's detail (which
+// read a small log at most) are not.
+func TestBusy_FullLogsHaveTheirOwnSmallBound(t *testing.T) {
+	m := New()
+	for i := 0; i < maxLogInFlight; i++ {
+		m.logs <- struct{}{}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, wire.JobsListResponse{Cursor: "0", Epoch: epoch})
+	})
+	m.cl = fakeWWD(t, mux)
+	routes := http.NewServeMux()
+	m.RegisterRoutes(routes)
+	rr := get(routes, "/api/pool/jobs/j_a/log")
+	assert.Equal(t, 429, rr.Code)
+	assert.Equal(t, ErrBusy, errCode(rr))
+	assert.Equal(t, 200, get(routes, "/api/pool/jobs").Code, "the list is not held up by the logs")
+	assert.Len(t, m.inflight, 0, "a refused log read gave its place back")
 }
 
 // The real module registered in a real core, asked through GET /api/info (the lesson of fleet.v1): jobs.v1 is declared while the

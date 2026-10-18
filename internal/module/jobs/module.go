@@ -34,6 +34,9 @@ const (
 	// maxInFlight bounds the wwd calls the jobs routes have under way at once: a paired phone may read them, and each call holds a
 	// socket and up to the client's body cap in memory, so a runaway client is turned away instead of queued.
 	maxInFlight = 8
+	// maxLogInFlight bounds the full-log reads among them: each holds a whole log (up to the client's 64 MiB cap) in memory while it
+	// is copied out, so eight at once would be half a GiB. The detail's small log is not counted (it reads at most maxDetailLog).
+	maxLogInFlight = 2
 	// defaultLimit is the page of a list that names none (wwd's own default is every job it keeps), maxLimit the most one asks for.
 	defaultLimit = 200
 	maxLimit     = 1000
@@ -49,9 +52,12 @@ type Module struct {
 	// cl is the local wwd's client; nil makes one for client.DefaultSocket() at Init.
 	cl       *client.Client
 	inflight chan struct{} // a semaphore of maxInFlight
+	logs     chan struct{} // a semaphore of maxLogInFlight, held by the /log route besides inflight
 }
 
-func New() *Module { return &Module{inflight: make(chan struct{}, maxInFlight)} }
+func New() *Module {
+	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight)}
+}
 
 func (m *Module) Name() string           { return "jobs" }
 func (m *Module) Dependencies() []string { return nil }
@@ -228,12 +234,20 @@ func (m *Module) handleLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	select {
+	case m.logs <- struct{}{}:
+		defer func() { <-m.logs }()
+	default:
+		writeErr(w, http.StatusTooManyRequests, ErrBusy, "too many full logs being read; retry")
+		return
+	}
 	b, err := m.client().LogAt(r.Context(), h, id)
 	if err != nil {
 		writeWWDError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff") // a log is whatever a job printed
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
 }
