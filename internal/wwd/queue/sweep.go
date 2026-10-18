@@ -27,6 +27,7 @@ const terminalStates = `'succeeded','failed','cancelled','superseded','expired'`
 // SweepResult counts what one Sweep did.
 type SweepResult struct {
 	Lapsed      int // held jobs whose lease ran out: requeued, or failed as lost
+	LogsRemoved int // logs kept past their 3 days, deleted
 	Expired     int // queued jobs that waited past their queue timeout
 	Unpinned    int // snapshots released for jobs that had ended
 	UnpinFailed int // unpins git refused: the mark stays and the next sweep tries again
@@ -50,6 +51,9 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 			return err
 		}
 		res.Lapsed = n
+		if res.LogsRemoved, err = q.sweepLogs(ctx, c, now, changed); err != nil {
+			return err
+		}
 		rows, err := c.QueryContext(ctx, `SELECT id FROM jobs WHERE state = 'queued'
 			AND created_at + (CASE WHEN queue_timeout_s > 0 THEN queue_timeout_s * 1000 ELSE ? END) < ? ORDER BY seq`,
 			defaultQueueTimeout.Milliseconds(), now.UnixMilli())

@@ -67,6 +67,7 @@ type Queue struct {
 	pin  Pinner
 
 	leaseS, renewS int
+	maxLog         int64 // the most one uploaded log may be
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
@@ -82,7 +83,7 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	if o.Origin == "" {
 		return nil, errors.New("queue: Options.Origin is required")
 	}
-	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer(), pin: o.Pinner, leaseS: o.LeaseS, renewS: o.RenewS}
+	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer(), pin: o.Pinner, leaseS: o.LeaseS, renewS: o.RenewS, maxLog: defaultMaxLog}
 	if q.now == nil {
 		q.now = time.Now
 	}
