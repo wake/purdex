@@ -84,7 +84,11 @@ func TestRegisterRefusesWhatWwdWouldRefuse(t *testing.T) {
 
 func TestBusyLocksBecomeErrLocksBusy(t *testing.T) {
 	api := newAPI()
-	api.regErr = &client.LocksBusyError{Keys: []string{"db"}}
+	api.regErr = &client.LocksBusyError{Keys: []string{"db"}, Holders: []wire.LockHolder{{Key: "db", Job: "j_07"}}}
+	_, err := (Recorder{API: api}).Register(context.Background(), body())
+	if err != nil && !strings.Contains(err.Error(), "db (held by j_07)") {
+		t.Fatalf("the wait names the job that holds the key: %v", err)
+	}
 	if _, err := (Recorder{API: api}).Register(context.Background(), body()); !errors.Is(err, fastlane.ErrLocksBusy) {
 		t.Fatalf("err = %v", err)
 	}

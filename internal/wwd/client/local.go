@@ -14,18 +14,29 @@ import (
 // ErrClaimLost: wwd no longer accepts the claim (409): the job ended or was given to someone else. The caller stops and discards.
 var ErrClaimLost = errors.New("wwd no longer accepts this claim")
 
-// LocksBusyError: RegisterLocal was refused because another job on the host holds a lock the run needs (409 with the keys).
-type LocksBusyError struct{ Keys []string }
+// LocksBusyError: RegisterLocal was refused because another job on the host holds a lock the run needs (409 with the keys and the
+// job that holds each).
+type LocksBusyError struct {
+	Keys    []string
+	Holders []wire.LockHolder
+}
 
-func (e *LocksBusyError) Error() string { return "locks busy: " + joinKeys(e.Keys) }
+func (e *LocksBusyError) Error() string { return "locks busy: " + e.Held() }
 
-func joinKeys(keys []string) string {
+// Held is the held keys with their holders, "tmux (held by j_01), db (held by j_02)".
+func (e *LocksBusyError) Held() string {
 	b := bytes.Buffer{}
-	for i, k := range keys {
+	for i, k := range e.Keys {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		b.WriteString(k)
+		for _, h := range e.Holders {
+			if h.Key == k {
+				b.WriteString(" (held by " + h.Job + ")")
+				break
+			}
+		}
 	}
 	return b.String()
 }
@@ -41,7 +52,7 @@ func (c *Client) RegisterLocal(ctx context.Context, req wire.LocalRunRequest) (w
 		var se *StatusError
 		if errors.As(err, &se) && se.Code == http.StatusConflict {
 			if b, derr := wire.Decode[wire.LocksBusy]([]byte(se.Body)); derr == nil {
-				return wire.LocalRunResponse{}, &LocksBusyError{Keys: b.Keys}
+				return wire.LocalRunResponse{}, &LocksBusyError{Keys: b.Keys, Holders: b.Holders}
 			}
 		}
 		return wire.LocalRunResponse{}, err

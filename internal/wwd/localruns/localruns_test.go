@@ -152,7 +152,8 @@ func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
-	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" {
+	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" ||
+		len(busy.Holders) != 2 || busy.Holders[0] != (wire.LockHolder{Key: "db", Job: "j_remote"}) || busy.Holders[1] != (wire.LockHolder{Key: "tmux", Job: "j_remote"}) {
 		t.Fatalf("body %s err %v", rec.Body, err)
 	}
 	if len(q.calls) != 0 {
@@ -160,6 +161,31 @@ func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
 	}
 	if _, ok := tb.Holder("other"); ok {
 		t.Fatal("a refused run kept the key that was free")
+	}
+}
+
+func TestAKeyOfARunStillBeingRecordedIsToldWithoutAProvisionalName(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	inside, release := make(chan struct{}), make(chan struct{})
+	q.during = func(string) { // the first run is inside RecordLocal: its keys are held under a provisional owner
+		close(inside)
+		<-release
+	}
+	first := make(chan int, 1)
+	go func() { first <- post(s, request(t, "tmux")).Code }()
+	<-inside
+	rec := post(s, request(t, "tmux"))
+	close(release)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
+	if err != nil || len(busy.Keys) != 1 || len(busy.Holders) != 0 || bytes.Contains(rec.Body.Bytes(), []byte("local:")) {
+		t.Fatalf("body %s err %v", rec.Body, err)
+	}
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("the first run: %d", code)
 	}
 }
 
