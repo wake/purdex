@@ -29,6 +29,10 @@ type Queue interface {
 	RecordLocal(ctx context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error)
 	// Ended says which of ids are over: a job in a final state, or one the queue no longer has.
 	Ended(ctx context.Context, ids []string) (map[string]bool, error)
+	// Result ends a job with the claim RecordLocal answered with (spec 4.3): a run that was recorded and cannot be handed to its
+	// caller is ended at once as failed, reason infra, instead of waiting for its lease to lapse. A stale claim is refused and
+	// changes nothing.
+	Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error)
 	// Running lists the fast-lane jobs the queue holds in a state that is not final (claimed or running), with their locks. The
 	// service rebuilds the lock table from it after a restart: the runner of such a job may go on renewing its lease.
 	Running(ctx context.Context) ([]wire.Job, error)
@@ -147,14 +151,13 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 		return wire.LocalRunResponse{}, http.StatusServiceUnavailable, fmt.Errorf("the queue could not record the run: %w", err)
 	}
 	if err := resp.Validate(); err != nil {
-		// The queue has the run as running and the caller will not get its claim: the lease lapses and the queue's reaper marks it
-		// lost. The keys are not held for a run nobody carries out.
-		s.Logf("localruns: %s was recorded but its claim is unusable (%v); it will lapse as lost", resp.ID, err)
+		// The queue has the run as running and the caller will not get its claim.
+		s.abandon(ctx, resp, fmt.Sprintf("its claim is unusable (%v)", err))
 		hold.Release()
 		return wire.LocalRunResponse{}, http.StatusBadGateway, fmt.Errorf("the queue answered with an unusable claim: %w", err)
 	}
 	if err := hold.Rename(resp.ID); err != nil {
-		s.Logf("localruns: %s was recorded but its locks could not be named (%v); it will lapse as lost", resp.ID, err)
+		s.abandon(ctx, resp, fmt.Sprintf("its locks could not be named (%v)", err))
 		hold.Release()
 		return wire.LocalRunResponse{}, http.StatusInternalServerError, fmt.Errorf("the locks of %s: %w", resp.ID, err)
 	}
@@ -168,6 +171,24 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 	s.holds[resp.ID] = hold
 	s.mu.Unlock()
 	return resp, http.StatusOK, nil
+}
+
+// abandon ends a run that was recorded and cannot be handed to its caller: failed, reason infra, with the claim the queue answered
+// with, so it does not stay running until its lease lapses. When that is not possible (no usable claim, or the queue refuses) the job
+// id is logged as an error and the lease lapse is left to mark it lost.
+func (s *Service) abandon(ctx context.Context, resp wire.LocalRunResponse, why string) {
+	if resp.ID == "" || !wire.ValidClaimID(resp.ClaimID) {
+		s.Logf("localruns: ERROR the run %q was recorded but %s, and it cannot be ended (no usable claim); its lease will lapse as lost", resp.ID, why)
+		return
+	}
+	// the caller's context may be the very reason for the failure: the end of the run gets its own short one
+	ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := s.Queue.Result(ectx, resp.ID, wire.ResultRequest{ClaimID: resp.ClaimID, State: wire.StateFailed, Reason: "infra"}); err != nil {
+		s.Logf("localruns: ERROR the run %s was recorded but %s, and ending it failed (%v); its lease will lapse as lost", resp.ID, why, err)
+		return
+	}
+	s.Logf("localruns: the run %s was recorded but %s; ended as failed (infra)", resp.ID, why)
 }
 
 // OnJobEvent is the queue's Publish: when a fast-lane job reaches a final state its keys are released.
