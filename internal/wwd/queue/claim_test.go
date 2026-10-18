@@ -277,6 +277,34 @@ func TestReleaseOfACancelledJobEndsIt(t *testing.T) {
 	assert.Equal(t, "cancelled", j.Result.Reason)
 }
 
+// A running job that a newer job superseded (its task is not interruptible, so it ran on) ends as superseded when its worker hands the
+// claim back or its lease lapses: the newer job is the one that counts, so the old one is not queued to run again.
+func TestReleaseAndLapseOfASupersededJobEndItAsSuperseded(t *testing.T) {
+	f := newFixture(t)
+	for _, how := range []string{"release", "lapse"} {
+		key := "k-" + how
+		old := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = key; s.Interruptible = false })
+		c := f.claim(t, old, "air26")
+		_, err := f.q.Start(bg, old, c.ClaimID)
+		require.NoError(t, err)
+		newer := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = key })
+
+		if how == "release" {
+			require.NoError(t, f.q.Release(bg, old, wire.ReleaseRequest{ClaimID: c.ClaimID, Reason: wire.ReleaseReclaim}))
+		} else {
+			f.clk.Advance(61 * time.Second)
+			_, err := f.q.Sweep(bg)
+			require.NoError(t, err)
+		}
+		j := f.get(t, old)
+		assert.Equal(t, wire.StateSuperseded, j.State, how)
+		require.NotNil(t, j.Result, how)
+		assert.Equal(t, "superseded_by:"+newer, j.Result.Reason, how)
+		require.NotNil(t, j.Result.SupersededBy, how)
+		assert.Equal(t, newer, *j.Result.SupersededBy, how)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // A result ends the job in the state the worker posted, with the worker's exit and summary; the origin records its own finish time and
