@@ -21,6 +21,9 @@ const (
 // framesNow is the clock of the roots cache, a seam for tests.
 var framesNow = time.Now
 
+// rootsAfterQuery runs between the table read and the filing of its copy: a seam for a test that lands a write in that gap.
+var rootsAfterQuery = func() {}
+
 type rootsEntry struct {
 	gen    uint64
 	at     time.Time
@@ -62,6 +65,7 @@ func (s *FramesStore) ListRootsBySessionIDCached(sessionID string) ([]Frame, err
 	if err != nil {
 		return nil, err
 	}
+	rootsAfterQuery()
 	s.roots.mu.Lock()
 	if s.roots.m == nil || len(s.roots.m) >= rootsCacheMax {
 		s.roots.m = map[string]rootsEntry{}

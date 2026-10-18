@@ -178,6 +178,27 @@ func TestRootsCache_EveryWritePathShowsAtOnce(t *testing.T) {
 	})
 }
 
+// A write that lands after the table was read but before the copy is filed must not leave a copy that hides it.
+func TestRootsCache_AWriteDuringTheReadIsNotHidden(t *testing.T) {
+	s := openTestFramesStore(t)
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	framesNow = func() time.Time { return now }
+	t.Cleanup(func() { framesNow = time.Now; rootsAfterQuery = func() {} })
+	f := rootsFrame(t, s, "%1", 100, "S1")
+	rootsAfterQuery = func() {
+		rootsAfterQuery = func() {}
+		if err := s.UpdateStatusAndLastSeen(f.FrameID, agentpkg.StatusRunning, 20); err != nil {
+			t.Error(err)
+		}
+	}
+	if got := cachedRoots(t, s, "S1"); got[0].Status != agentpkg.StatusIdle { // this read began before the write
+		t.Fatalf("first read: %q", got[0].Status)
+	}
+	if got := cachedRoots(t, s, "S1"); got[0].Status != agentpkg.StatusRunning {
+		t.Fatalf("the copy filed after the write hid it: %q", got[0].Status)
+	}
+}
+
 // A store built without the shared counter never serves a copy.
 func TestRootsCache_NoCounterNoCache(t *testing.T) {
 	s := openTestFramesStore(t)
