@@ -135,10 +135,11 @@ func TestPSArgsCache_ReusedPidFindsNoEntry(t *testing.T) {
 	psArgsReset()
 	t.Cleanup(psArgsReset)
 	pid := startHelper(t, []string{"snap-helper", "中文"})
+	forks := countPSForks(t) // before the first read: it empties the cache
 	snap := takeSnapshot(t)
 	readFresh(t, snap, pid) // kept for the process the snapshot saw
+	forks.Store(0)
 
-	forks := countPSForks(t)
 	orig := kernProcPid
 	kernProcPid = func(p int) (*unix.KinfoProc, error) {
 		kp, err := orig(p)
@@ -162,10 +163,11 @@ func TestPSArgsCache_ChangedCommandNameFindsNoEntry(t *testing.T) {
 	psArgsReset()
 	t.Cleanup(psArgsReset)
 	pid := startHelper(t, []string{"snap-helper", "中文"})
+	forks := countPSForks(t) // before the first read: it empties the cache
 	snap := takeSnapshot(t)
 	readFresh(t, snap, pid)
+	forks.Store(0)
 
-	forks := countPSForks(t)
 	orig := kernProcPid
 	kernProcPid = func(p int) (*unix.KinfoProc, error) {
 		kp, err := orig(p)
