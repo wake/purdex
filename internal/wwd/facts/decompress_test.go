@@ -70,3 +70,24 @@ func TestRollupKeepsTheWorstDecompressRateAndTheQueuePeak(t *testing.T) {
 		t.Errorf("a minute without the readings has none: %v %v", none.Mem.DecompressRate, none.Queue)
 	}
 }
+
+// R1: the gate shut part-way through a minute. The rollup's version is the last record's, so a v1 rollup must not carry the fields
+// the earlier v2 samples had; and a v2 rollup aggregates only the v2 samples.
+func TestRollupHonoursTheVersionOfItsLastRecord(t *testing.T) {
+	mk := func(at time.Duration, v int, rate float64, queued int) wire.Facts {
+		r := rec(t0.Add(at), 1, 1000, 1, wire.ZoneNormal)
+		r.V = v
+		if v >= 2 {
+			r.Mem.DecompressRate, r.Queue = fp(rate), &wire.Queue{Queued: queued}
+		}
+		return r
+	}
+	shutAtTheEnd := Rollup([]wire.Facts{mk(0, 2, 90, 5), mk(5*time.Second, 2, 40, 2), mk(10*time.Second, 1, 0, 0)})
+	if shutAtTheEnd.V != 1 || shutAtTheEnd.Mem.DecompressRate != nil || shutAtTheEnd.Queue != nil {
+		t.Fatalf("a v1 rollup carries v2 fields: %+v %v %v", shutAtTheEnd.V, shutAtTheEnd.Mem.DecompressRate, shutAtTheEnd.Queue)
+	}
+	openAtTheEnd := Rollup([]wire.Facts{mk(0, 1, 0, 0), mk(5*time.Second, 2, 40, 2), mk(10*time.Second, 2, 70, 1)})
+	if openAtTheEnd.V != 2 || openAtTheEnd.Mem.DecompressRate == nil || *openAtTheEnd.Mem.DecompressRate != 70 || openAtTheEnd.Queue == nil || openAtTheEnd.Queue.Queued != 2 {
+		t.Fatalf("a v2 rollup aggregates the v2 samples: %+v %v %v", openAtTheEnd.V, openAtTheEnd.Mem.DecompressRate, openAtTheEnd.Queue)
+	}
+}

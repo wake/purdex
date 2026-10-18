@@ -85,16 +85,21 @@ func Rollup(recs []wire.Facts) wire.Facts {
 		out.Mem.Pressure = max(out.Mem.Pressure, r.Mem.Pressure)
 		out.Mem.PageOutRate = maxPtr(out.Mem.PageOutRate, r.Mem.PageOutRate)
 		out.Mem.SwapOutRate = maxPtr(out.Mem.SwapOutRate, r.Mem.SwapOutRate)
-		out.Mem.DecompressRate = maxPtr(out.Mem.DecompressRate, r.Mem.DecompressRate)
-		if r.Queue != nil { // the peak of the minute
-			if out.Queue == nil {
-				out.Queue = &wire.Queue{}
+		if r.V >= wire.Proto { // only v 2 samples carry the proto 2 fields
+			out.Mem.DecompressRate = maxPtr(out.Mem.DecompressRate, r.Mem.DecompressRate)
+			if r.Queue != nil { // the peak of the minute
+				if out.Queue == nil {
+					out.Queue = &wire.Queue{}
+				}
+				out.Queue.Queued = max(out.Queue.Queued, r.Queue.Queued)
 			}
-			out.Queue.Queued = max(out.Queue.Queued, r.Queue.Queued)
 		}
 		if zoneRank(r.Derived.Zone) > zoneRank(out.Derived.Zone) {
 			out.Derived.Zone = r.Derived.Zone
 		}
+	}
+	if out.V < wire.Proto { // the rollup is the last record's version: a v1 minute carries none of the v 2 fields
+		out.Mem.DecompressRate, out.Queue = nil, nil
 	}
 	n := float64(len(recs))
 	out.CPU.Load1, out.CPU.Load5, out.CPU.IdlePct = l1/n, l5/n, idle/n
