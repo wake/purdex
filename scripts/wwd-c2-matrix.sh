@@ -104,7 +104,8 @@ svc_pid_ok() {
   case "$2" in ''|*[!0-9]*) return 1 ;; esac
   [ "$2" -gt 1 ] || return 1
   [ "$dry" -eq 1 ] && return 0
-  po_r=$(on "$1" "if ps -p $2 -o command= 2>/dev/null | grep -q '/wwd/bin/wwd'; then echo yes; else echo no; fi") || return 2
+  # ps exits 1 when there is no such pid (confirmed gone); any other failure of ps is "could not ask", not "not wwd"
+  po_r=$(on "$1" "po_o=\$(ps -p $2 -o command= 2>/dev/null); po_s=\$?; if [ \$po_s -gt 1 ]; then echo error; elif echo \"\$po_o\" | grep -q '/wwd/bin/wwd'; then echo yes; else echo no; fi") || return 2
   case "$po_r" in yes) return 0 ;; no) return 1 ;; *) return 2 ;; esac
 }
 STOPPED=""   # host:pid of each wwd this script froze
@@ -141,23 +142,24 @@ worker_set() {   # worker_set HOST true|false
 }
 # a fault artifact on a host (a file the product reads): recorded before it is made, removed by finish
 FAULTS=""; REMOTE_DIRS=""
-# a file that was there before this run is not ours: it is not registered, so nothing here removes it
+# a file that was there before this run is not ours: it is made in one step that only creates (noclobber), the path is registered before
+# that step (an interruption in between still cleans up) and un-registered when the answer is "present" or "error"; if the answer never
+# came (ssh died) it is not removed either, since this run cannot say it made it
 fault_on() {   # fault_on HOST PATH-ON-HOST
-  fo_r=absent
-  if [ "$dry" -eq 0 ]; then
-    fo_r=$(on "$1" "if [ -e $2 ]; then echo present; else echo absent; fi") || fo_r=error
-  fi
+  if [ "$dry" -eq 1 ]; then FAULTS="$FAULTS $1:$2"; on "$1" "mkdir -p \$(dirname $2) && touch $2"; return 0; fi
+  FAULTS="$FAULTS $1:$2"
+  fo_r=$(on "$1" "mkdir -p \$(dirname $2) && if ( set -C; : > $2 ) 2>/dev/null; then echo created; elif [ -e $2 ]; then echo present; else echo error; fi") || fo_r=lost
   case "$fo_r" in
-    present) say "WARN: $2 was already on $1: left as it is at the end" ;;
-    absent) FAULTS="$FAULTS $1:$2" ;;
-    *) say "FAIL: could not tell whether $2 is on $1: nothing is made there"; exit 1 ;;
+    created) ;;
+    present) fault_forget "$1" "$2"; say "WARN: $2 was already on $1: left as it is at the end" ;;
+    *) fault_forget "$1" "$2"; say "FAIL: could not make $2 on $1 ($fo_r): look at it by hand"; exit 1 ;;
   esac
-  on "$1" "mkdir -p \$(dirname $2) && touch $2"
 }
+fault_forget() { FAULTS=$(echo "$FAULTS" | tr ' ' '\n' | grep -v "^$1:$2\$" | tr '\n' ' '); }
 fault_off() {
   case " $FAULTS " in *" $1:$2 "*) ;; *) return 0 ;; esac
   on "$1" "rm -f $2" || return 1
-  FAULTS=$(echo "$FAULTS" | tr ' ' '\n' | grep -v "^$1:$2\$" | tr '\n' ' ')
+  fault_forget "$1" "$2"
 }
 only_workers() {   # only_workers HOST... : exactly these workers are on (air19 stays off in every case)
   for ow_h in mlab air26 mserv; do

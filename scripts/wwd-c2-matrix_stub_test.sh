@@ -226,9 +226,9 @@ has "the clean-up could not put back: start:air26" "persistent clean-up failure"
 # the question "is the file there?" fails (ssh down): the script stops, makes nothing, and the file that was there stays
 mkdir -p "$(dirname "$faultfile")"; : > "$faultfile"
 rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_FAULT=1 STUB_SSH_FAIL="[ -e" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 7 > "$tmp/out" 2>&1 || rc=$?
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_FAULT=1 STUB_SSH_FAIL="set -C" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 7 > "$tmp/out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "a failed probe must stop the script with a non-zero exit"
-has "could not tell whether" "case 7 with a failed probe"
+has "could not make" "case 7 with a failed probe"
 [ -e "$faultfile" ] || fail "a file that could not be probed was removed by the clean-up"
 rm -f "$faultfile"
 
@@ -242,6 +242,17 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fakewwd" ST
 kill -CONT "$fakewwd" 2>/dev/null || true; kill -KILL "$fakewwd" 2>/dev/null || true
 [ "$rc" -ne 0 ] || fail "a wwd that may still be frozen must make the exit code non-zero"
 has "the clean-up could not put back:.*thaw:air26" "thaw with a failed ps"
+
+# ssh works but ps itself fails at clean-up (exit 3): that is "could not ask", not "not wwd": the record stays and the exit is non-zero
+mkdir -p "$tmp/psbin"
+printf '#!/bin/sh\nif [ -e "$STUB/ps-asked" ]; then exit 3; fi\n: > "$STUB/ps-asked"\nexec /bin/ps "$@"\n' > "$tmp/psbin/ps"; chmod +x "$tmp/psbin/ps"
+"$tmp/wwd/bin/wwd" & fakewwd=$!
+rm -f "$stub"/*.log "$stub/ps-asked"
+rc=0
+HOME="$home" PATH="$tmp/psbin:$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fakewwd" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 3 > "$tmp/out" 2>&1 || rc=$?
+kill -CONT "$fakewwd" 2>/dev/null || true; kill -KILL "$fakewwd" 2>/dev/null || true
+[ "$rc" -ne 0 ] || fail "a ps that fails must make the exit code non-zero"
+has "the clean-up could not put back:.*thaw:air26" "thaw with a ps that fails"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0
