@@ -128,7 +128,8 @@ func TestNormalize_UnknownAndLeadingOptions(t *testing.T) {
 		{[]string{"pnpm", "-r", "exec", "vitest"}, []string{"vitest"}},
 		{[]string{"pnpm", "exec", "--weird", "x", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"npx", "--weird", "x", "tsc", "-b"}, []string{"tsc", "-b"}},
-		{[]string{"npx", "--weird", "x", "foo"}, []string{"x", "foo"}}, // nothing recognisable: left as it is, not a family command
+		{[]string{"npx", "--weird", "x", "foo"}, []string{"x", "foo"}},                            // nothing recognisable: left as it is, not a family command
+		{[]string{"npx", "vitest", "run", "go", "test"}, []string{"vitest", "run", "go", "test"}}, // the tool is where it stands: its arguments are not searched
 	} {
 		assert.Equal(t, c.want, normalize(c.in), c.in)
 	}

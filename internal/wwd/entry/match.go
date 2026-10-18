@@ -180,9 +180,6 @@ func noLinks(root, p string) bool {
 		return false
 	}
 	cur := root
-	if rel == "." {
-		return true
-	}
 	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
 		cur = filepath.Join(cur, seg)
 		st, err := os.Lstat(cur)
