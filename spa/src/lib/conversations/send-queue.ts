@@ -317,6 +317,7 @@ export class SendQueue {
       this.readTimers.clear()
     }
     this.emit()
+    this.pump() // a finished entry may have been the one being sent: the next must not wait for an event that will not come
   }
 
   /**

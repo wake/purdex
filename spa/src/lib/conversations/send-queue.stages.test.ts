@@ -208,4 +208,18 @@ describe('a host that stops reporting stages (a downgraded daemon)', () => {
     q.reconcile([user('u1', 'hi', 1_003_000)]) // the text settles it again
     expect(q.entries()).toHaveLength(0)
   })
+
+  it('finishing a read entry that is still being sent starts the next one (the queue does not stall)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const first = q.enqueue('one')
+    q.enqueue('two')
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // 'one' is out, its answer has not come
+    expect(calls.map((c) => c.text)).toEqual(['one'])
+    q.setStages(byId(st(first, 'read'))) // the stage frame beat the submit answer
+    q.setStagesMode(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.map((c) => c.text)).toEqual(['one', 'two'])
+  })
 })
