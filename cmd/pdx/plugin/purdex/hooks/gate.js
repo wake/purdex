@@ -380,6 +380,8 @@ async function askEntry($, cfg, c) {
 // makes of it, not what the hook reads
 const adhocPlain = (text) => !/[$`*?[\]{}~!\\]/.test(text)
 
+// (an input redirection anywhere in the call, `<`, a heredoc or a here-string, keeps the call as it is: the ad-hoc job's command has no
+// standard input, and the redirection would stay on pdx)
 const pdxAdhoc = (cfg, c) => sq(cfg.bin) + ' test --adhoc -- ' + c.argv.map(word).join(' ')
 
 const pdxTest = (cfg, a) => {
@@ -407,7 +409,7 @@ async function planEntry($, e, cfg, wasBackground) {
     if (a.action === 'deny' && !deny) {
       deny = 'Purdex mod 拒絕這個指令：這個 repo 的 .wwd/tasks.toml 規定測試與建置要用 pdx test 的 task（[entry].mode = deny）。' +
         (hint ? '最接近的是 pdx test ' + hint + ' …；' : '') + 'pdx test --list 列出全部。'
-    } else if (a.action === 'adhoc' && cands[i].clean && adhocPlain(e.command.slice(cands[i].at, cands[i].end))) {
+    } else if (a.action === 'adhoc' && cands[i].clean && adhocPlain(e.command.slice(cands[i].at, cands[i].end)) && !e.command.includes('<')) {
       rewrites.push({ c: cands[i], a, adhoc: true })
     } else if (a.action === 'advise' || a.action === 'adhoc') {
       // an ad-hoc answer for a command that cannot be turned into a job (a redirection, something the shell expands) is advice

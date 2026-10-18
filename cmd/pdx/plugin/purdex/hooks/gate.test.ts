@@ -625,8 +625,8 @@ test('adhoc: the words are quoted as they were typed, the environment words and 
   expect(entryCalls(r)[0].slice(4, 6)).toEqual(['--cwd', 'sub'])
 })
 
-for (const cmd of ['go vet $PKG', 'go vet ./internal/*', 'go vet `pwd`', 'go vet ~/x', 'go vet ./{a,b}', 'go vet ./a?', 'go vet ./[ab]', 'go vet ./a\\ b', "go vet './a*'"]) {
-  test(`adhoc: ${cmd} has words the shell would expand: it is advised and not rewritten`, async ($, on) => {
+for (const cmd of ['go vet < in.txt', 'go vet <<< data', 'go vet <<EOF\nx\nEOF', 'go vet $PKG', 'go vet ./internal/*', 'go vet `pwd`', 'go vet ~/x', 'go vet ./{a,b}', 'go vet ./a?', 'go vet ./[ab]', 'go vet ./a\\ b', "go vet './a*'"]) {
+  test(`adhoc: ${cmd} has words the shell would expand, or an input redirection: it is advised and not rewritten`, async ($, on) => {
     const r = rig(on, (a: string[]) => (isEntry(a) ? ok(JSON.stringify(ADHOC)) : ok(FREE)), () => BASH_OK, ENTRY_ON)
     const out = await bash($, cmd)
     expect(r.ran[0].command).toBe(cmd)
