@@ -422,20 +422,30 @@ func (d *Detector) pressureEvents(in Input) []Event {
 	set := in.Set
 	var events []Event
 	level := in.Raw.Pressure
+	if in.Host != nil {
+		level = in.Host.Pressure
+	}
 	if d.pressure.step(in.Now, set.PressureLevel > 0 && level >= set.PressureLevel, set.PressureTS, set.PressureTS) {
 		events = append(events, Event{Kind: KindPressureHigh, At: in.Now, Pressure: level,
 			Detail: fmt.Sprintf("pressure level %d for %s", level, set.PressureTS)})
 	}
 
 	rate, over := 0.0, false
-	if in.Raw.PageCounters {
+	switch {
+	case in.Host != nil: // wwd's rate: no counters to take a difference of, and the running baseline starts over when Raw is read again
+		d.havePages = false
+		if in.Host.PageRateKnown {
+			rate = in.Host.PageRate
+			over = set.PageRate > 0 && rate > set.PageRate
+		}
+	case in.Raw.PageCounters:
 		total := in.Raw.Pageouts + in.Raw.Swapouts
 		if d.havePages && in.Now.After(d.lastPagesAt) && total >= d.lastPages {
 			rate = float64(total-d.lastPages) / in.Now.Sub(d.lastPagesAt).Seconds()
 			over = set.PageRate > 0 && rate > set.PageRate
 		}
 		d.havePages, d.lastPages, d.lastPagesAt = true, total, in.Now // a counter that went back (a reboot) is a new baseline
-	} else {
+	default:
 		d.havePages = false
 	}
 	if d.pages.step(in.Now, over, set.PageTS, set.PageTS) {

@@ -27,6 +27,7 @@ type rig struct {
 	raw     resources.HostRaw
 	holders []gate.Holder
 	roots   []resources.Root
+	host    *HostSignals // wwd's pressure and paging, when the test wants E2 to read them
 	argv    map[int][]string
 	gates   map[int]bool // the pids the caller verified as a genuine pdx gate
 	cwd     map[int]string
@@ -45,7 +46,7 @@ func newRig(t *testing.T) *rig {
 
 // pass runs one pass at the current time and moves the clock on by a tick.
 func (r *rig) pass() []Event {
-	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Holders: r.holders, Roots: r.roots, Set: r.set,
+	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Host: r.host, Holders: r.holders, Roots: r.roots, Set: r.set,
 		Argv:    func(pid int) []string { return r.argv[pid] },
 		IsGate:  func(pid int) bool { return r.gates[pid] },
 		Cwd:     func(pid int) string { return r.cwd[pid] },
@@ -401,6 +402,55 @@ func TestE2_PageRateAboveTheRateForAWhile(t *testing.T) {
 	r4 := newRig(t) // no counters: no page-rate events however the pressure is
 	r4.raw.Pageouts = 1 << 40
 	assert.Empty(t, r4.run(10*time.Minute))
+}
+
+// E2 from wwd: the pressure level and the paging rate come from Input.Host and Raw's are not read.
+func TestE2_FromWWDSignals(t *testing.T) {
+	r := newRig(t) // wwd says level 2 (the default limit) while Raw says normal
+	r.raw = resources.HostRaw{Pressure: 1}
+	r.host = &HostSignals{Pressure: 2}
+	events := r.run(10 * time.Minute)
+	require.Len(t, events, 1)
+	assert.Equal(t, KindPressureHigh, events[0].Kind)
+	assert.Equal(t, 2, events[0].Pressure)
+
+	r2 := newRig(t) // Raw says level 4, wwd says normal: wwd wins
+	r2.raw = resources.HostRaw{Pressure: 4}
+	r2.host = &HostSignals{Pressure: 1}
+	assert.Empty(t, r2.run(10*time.Minute))
+
+	r3 := newRig(t) // the rate is wwd's own: above the limit fires, exactly the limit does not
+	r3.host = &HostSignals{PageRate: 51, PageRateKnown: true}
+	events = r3.run(3 * time.Minute)
+	require.Len(t, events, 1)
+	assert.InDelta(t, 51, events[0].PageRate, 0.001)
+	assert.Contains(t, events[0].Detail, "page rate 51/s")
+	r4 := newRig(t)
+	r4.host = &HostSignals{PageRate: 50, PageRateKnown: true}
+	assert.Empty(t, r4.run(5*time.Minute))
+
+	r5 := newRig(t) // a platform whose facts carry no rate: Raw's counters are not used instead
+	r5.raw = resources.HostRaw{PageCounters: true}
+	r5.host = &HostSignals{}
+	for i := 0; i < 60; i++ {
+		r5.raw.Pageouts += 1_000_000
+		assert.Empty(t, r5.pass())
+	}
+}
+
+// Back to Raw after wwd: the counters' baseline starts over, so the whole jump of the counters in between is not a rate.
+func TestE2_RawBaselineRestartsAfterWWD(t *testing.T) {
+	r := newRig(t)
+	r.raw = resources.HostRaw{PageCounters: true, Pageouts: 100}
+	r.pass() // baseline at 100
+	r.host = &HostSignals{PageRate: 1, PageRateKnown: true}
+	r.pass()
+	r.host = nil
+	r.raw.Pageouts = 100 + 10_000_000 // a long time of paging happened while wwd was the source
+	assert.Empty(t, r.pass(), "the first Raw pass after wwd is a new baseline, not a rate over the gap")
+	for i := 0; i < 40; i++ {
+		assert.Empty(t, r.pass(), "and no paging since")
+	}
 }
 
 // ---- E3, E4 ----

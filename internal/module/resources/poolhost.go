@@ -8,6 +8,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -162,6 +163,27 @@ func (m *Module) LatestLocalFacts() (wire.Facts, bool) {
 		return wire.Facts{}, false
 	}
 	return m.pool.factsNow()
+}
+
+// watchHostSignals is wwd's reading of this host's memory pressure and paging for the load watcher's E2, nil when the source is
+// not the pool or wwd has none (the detector then reads the sampler's own, as before). The paging rate is wwd's pageouts and
+// swapouts per second; a platform that gives neither leaves it unknown.
+func (m *Module) watchHostSignals() *watch.HostSignals {
+	f, ok := m.LatestLocalFacts()
+	if !ok {
+		return nil
+	}
+	h := &watch.HostSignals{Pressure: f.Mem.Pressure}
+	if f.Mem.PageOutRate != nil || f.Mem.SwapOutRate != nil {
+		h.PageRateKnown = true
+		if f.Mem.PageOutRate != nil {
+			h.PageRate += *f.Mem.PageOutRate
+		}
+		if f.Mem.SwapOutRate != nil {
+			h.PageRate += *f.Mem.SwapOutRate
+		}
+	}
+	return h
 }
 
 // findPoolHost wires the pool reader and the fleet row's source. A hostconfig module that is not there leaves the own sample.
