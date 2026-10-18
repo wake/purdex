@@ -43,8 +43,9 @@ type SamplerOptions struct {
 	// SignalsOpen says whether the proto 2 fields may be written (spec §13.1, phase 2): wire.PoolAtLeast over the pool's peers.
 	// nil is a shut gate. While shut a record is the v1 shape; while open it is v 2 and carries decompress_rate and queue.
 	SignalsOpen func() bool
-	// Queued is this host's queued jobs, for facts.queue (spec §13.2); nil: the record has no queue.
-	Queued func() int
+	// Queued is this host's queued jobs, for facts.queue (spec §13.2); nil: the record has no queue. An error leaves queue out of the
+	// record (unknown), never 0, and is logged once per change.
+	Queued func() (int, error)
 }
 
 // MinuteStore persists the per-minute rollups (store.Store).
@@ -67,6 +68,7 @@ type Sampler struct {
 	minute  []wire.Facts // records of the minute being filled
 	last    string       // the last sampling error logged, to log a change only
 
+	lastQueue string       // the last queue-count error logged
 	lastStore string       // the last store error logged
 	unsaved   []wire.Facts // finished minutes not yet in the store, oldest first
 }
@@ -110,7 +112,12 @@ func (s *Sampler) Tick(now time.Time) {
 	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
 		f.V = wire.Proto
 		if s.opts.Queued != nil {
-			f.Queue = &wire.Queue{Queued: max(s.opts.Queued(), 0)}
+			if n, err := s.opts.Queued(); err != nil {
+				s.logQueue(err)
+			} else {
+				s.logQueue(nil)
+				f.Queue = &wire.Queue{Queued: max(n, 0)}
+			}
 		}
 	} else {
 		f.Mem.DecompressRate, f.Queue = nil, nil
@@ -207,6 +214,21 @@ func (s *Sampler) SetOnFacts(fn func(wire.Facts)) {
 	s.mu.Unlock()
 }
 
+// logQueue logs a failure to count the queue once per change (nil clears it).
+func (s *Sampler) logQueue(err error) {
+	msg := ""
+	if err != nil {
+		msg = "counting the queued jobs for facts: " + err.Error()
+	}
+	s.mu.Lock()
+	changed := msg != s.lastQueue
+	s.lastQueue = msg
+	s.mu.Unlock()
+	if changed && msg != "" {
+		log.Printf("wwd: %s", msg)
+	}
+}
+
 // logMinutes logs a store failure once per change, like a sampling error.
 func (s *Sampler) logMinutes(what string, err error) {
 	msg := what + ": " + err.Error()
@@ -275,7 +297,23 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 
 // History returns the records at or after since: the 5 s ring (the last hour)
 // or the one-minute rollups, the minute being filled included as a partial one.
+// While the proto 2 gate is shut (spec §13.1) every record is handed out in the v1 shape, also those written while it was open and
+// those read back from wwd.db after a restart: a proto 1 reader refuses the whole answer on one field it does not know.
 func (s *Sampler) History(since time.Time, step string) []wire.Facts {
+	recs := s.history(since, step)
+	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
+		return recs
+	}
+	for i := range recs {
+		if recs[i].V != wire.WriteProto || recs[i].Mem.DecompressRate != nil || recs[i].Queue != nil {
+			recs[i] = facts.Clone(recs[i]) // a copy: the ring and the store keep what they were written as
+			recs[i].V, recs[i].Mem.DecompressRate, recs[i].Queue = wire.WriteProto, nil, nil
+		}
+	}
+	return recs
+}
+
+func (s *Sampler) history(since time.Time, step string) []wire.Facts {
 	s.mu.RLock()
 	if step != wire.Step1m {
 		defer s.mu.RUnlock()

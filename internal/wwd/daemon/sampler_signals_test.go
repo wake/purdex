@@ -35,7 +35,7 @@ func signalsSampler(level *int, open *atomic.Bool, queued *atomic.Int32) *Sample
 	return NewSampler(SamplerOptions{
 		HostID: "h1", Alias: "mlab", OSVersion: "26.6.2", Sources: withDecompress(level, 1000),
 		Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true,
-		SignalsOpen: open.Load, Queued: func() int { return int(queued.Load()) },
+		SignalsOpen: open.Load, Queued: func() (int, error) { return int(queued.Load()), nil },
 	})
 }
 
@@ -117,7 +117,7 @@ func TestRollupsFollowTheGate(t *testing.T) {
 // No gate function at all (a test, or a build before the wiring) is a shut gate.
 func TestNoGateFunctionIsAShutGate(t *testing.T) {
 	level := 1
-	s := NewSampler(SamplerOptions{HostID: "h1", Alias: "mlab", Sources: withDecompress(&level, 10), Queued: func() int { return 9 }})
+	s := NewSampler(SamplerOptions{HostID: "h1", Alias: "mlab", Sources: withDecompress(&level, 10), Queued: func() (int, error) { return 9, nil }})
 	tickAt(s, s0)
 	f, _ := s.Latest()
 	if f.V != wire.WriteProto || f.Queue != nil || f.Mem.DecompressRate != nil {

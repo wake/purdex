@@ -104,9 +104,8 @@ func run(cfgPath string) error {
 		return err
 	}
 	// one record per run, for the crash-loop rule (spec §13.1); a failure to write it must not stop the host from starting
-	if err := st.RecordStart(buildinfo.Version, ""); err != nil {
-		log.Printf("wwd: recording this start: %v", err)
-	}
+	startedAt := time.Now() // one stamp for every try, so a retry records the same start
+	recordStart(ctx, func() error { return st.RecordStartAt(startedAt, buildinfo.Version, "") }, startRetryDelays, log.Printf)
 	broker := daemon.NewBroker()
 	// The one lock table of this host: the fast lane's runs and the worker's claims take their keys from it. The quarantine store holds
 	// the keys of the jobs whose commands were not proven stopped; their holds go back before anything can take a lock, and a host that
@@ -169,13 +168,7 @@ func run(cfgPath string) error {
 		OwnerRule: ownerRule, State: state, Minutes: st,
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
 		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
-		Queued: func() int {
-			n, err := q.CountQueued(ctx)
-			if err != nil {
-				return 0
-			}
-			return n
-		},
+		Queued:      func() (int, error) { return q.CountQueued(ctx) },
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
