@@ -49,8 +49,9 @@ for bad in pkill killall pfctl iptables "kill -9" "kill -KILL" "chmod -R" "rm -r
   if grep -v '^#' "$matrix" | grep -q -- "$bad"; then fail "the script uses '$bad'"; fi
 done
 hasnt "$out" "sudoers" "all cases"
-# a signal goes to an exact pid that the service manager reported, never to a pattern
-echo "$out" | grep -E "kill -(STOP|CONT)" | grep -vq "kill -\(STOP\|CONT\) {}" && fail "a kill -STOP/-CONT must name the pid it got from the service manager"
+# a signal goes to an exact pid (a number above 1), never to a pattern or a group
+echo "$out" | grep -E "kill -(STOP|CONT)" | grep -vqE "kill -(STOP|CONT) [0-9]+$" && fail "a kill -STOP/-CONT must name an exact pid"
+echo "$out" | grep -qE "kill -(STOP|CONT) (0|-1|1)$" && fail "a signal to pid 0, 1 or -1 reaches a group or everything"
 # the pool token is read on the host, never printed
 hasnt "$out" "Bearer [0-9a-f]\{16\}" "all cases"
 
@@ -63,7 +64,7 @@ out=$(dry --case 5);  has "$out" "5b long" "case 5"; has "$out" "5c" "case 5"; h
 out=$(dry --case 6);  has "$out" "needs hook fault.log_upload_fail" "case 6"
 out=$(dry --case 7);  has "$out" "fault/owner-active" "case 7"; hasnt "$out" ">> move the mouse" "case 7"
 out=$(dry --manual --case 7); has "$out" ">> move the mouse on air26" "case 7 --manual"
-out=$(dry --case 8);  has "$out" "needs hook fault.zone" "case 8"; has "$out" "air26" "case 8"
+out=$(dry --case 8);  has "$out" "needs hook fault.zone" "case 8"; has "$out" "two origins" "case 8"; has "$out" "started first, on the same worker (expect: mlab)" "case 8"
 out=$(dry --case 9);  has "$out" "superseded_by:" "case 9"; has "$out" "c2-sleep-noint" "case 9"
 out=$(dry --case 10); has "$out" "pdx test c2-expire" "case 10"; has "$out" "pdx test exit code (expect: 6)" "case 10"
 out=$(dry --case 11)
@@ -72,6 +73,17 @@ has "$out" "Bearer c2-wrong-token" "case 11"; has "$out" "(expect: 401)" "case 1
 out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-option" "case 12"; has "$out" "../../etc/hosts" "case 12"; has "$out" "a;touch /tmp/wwd-c2-pwned" "case 12"
 out=$(dry --case 13); has "$out" "show databases" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
 out=$(dry --case 14); has "$out" "air19 claimed nothing since this run began (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
+
+# the counted attempts: 0 for a job that succeeded at once or was reclaimed, 1 after one lapse, 2 after two (then failed/lost)
+has "$(dry --case 1)" "attempts (expect: 0)" "case 1 attempts"
+has "$(dry --case 2)" "attempts after the lapse (expect: 1)" "case 2 attempts"
+has "$(dry --case 2)" "attempts (expect: 2)" "case 2 attempts"
+has "$(dry --case 3)" "attempts (expect: 1)" "case 3 attempts"
+has "$(dry --case 4)" "attempts (expect: 0)" "case 4 attempts"
+has "$(dry --case 5)" "5a an infra release or a lapse was counted (expect: 1)" "case 5a attempts"
+has "$(dry --case 5)" "5b short: attempts (expect: 0)" "case 5b short attempts"
+has "$(dry --case 5)" "5b long: the lease lapsed once (expect: 1)" "case 5b long attempts"
+has "$(dry --case 7)" "the reclaim did not count an attempt (expect: 0)" "case 7 attempts"
 
 # every case other than 14 also checks air19, and ends by putting back what it changed
 out=$(dry --case 4)

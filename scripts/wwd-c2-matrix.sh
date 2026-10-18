@@ -46,7 +46,7 @@ catalog() {
 5|origin unreachable: snapshot fetch, mid-run, result upload|mlab air26|10|fault.snapshot_delay_s (5a only)|
 6|result posted, log upload fails|mlab air26|3|fault.log_upload_fail|
 7|air26 owner returns: reclaim|mlab air26|4|fault.owner_active_file, or --manual|
-8|origin at pressure 2: its jobs are taken first|mlab air26|3|fault.zone|
+8|origin at pressure 2: its jobs are taken first|mlab air26 mserv|3|fault.zone|
 9|running job superseded (interruptible and not)|mlab air26|6||
 10|queue timeout|mlab|2||
 11|wrong pool token|mlab air26 mserv air19|1||
@@ -97,18 +97,47 @@ svc_up() {
   if is_mac "$1"; then on "$1" 'launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else on "$1" 'sudo systemctl start wwd.service'; fi
   DOWNED=$(echo "$DOWNED" | tr ' ' '\n' | grep -v "^$1\$" | tr '\n' ' ')     # only once it is up
 }
-STOPPED=""
-svc_freeze() { fz_p=$(svc_pid "$1"); STOPPED="$STOPPED $1:$fz_p"; on "$1" "kill -STOP $fz_p"; }   # an exact pid, from the service manager
-svc_thaw() { fz_p=$(svc_pid "$1"); on "$1" "kill -CONT $fz_p"; STOPPED=$(echo "$STOPPED" | tr ' ' '\n' | grep -v "^$1:" | tr '\n' ' '); }
+# svc_pid_ok HOST PID: PID is a decimal number above 1 (0 and -1 would signal a whole group or every process) and is the wwd binary
+svc_pid_ok() {
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$2" -gt 1 ] || return 1
+  [ "$dry" -eq 1 ] && return 0
+  on "$1" "ps -p $2 -o command= | grep -q '/wwd/bin/wwd'"
+}
+STOPPED=""   # host:pid of each wwd this script froze
+svc_freeze() {
+  fz_p=$(svc_pid "$1"); [ "$dry" -eq 1 ] && fz_p=4242        # a dry run has no service manager to ask
+  svc_pid_ok "$1" "$fz_p" || { say "FAIL: '$fz_p' is not the pid of wwd on $1: nothing is frozen"; exit 1; }
+  STOPPED="$STOPPED $1:$fz_p"
+  on "$1" "kill -STOP $fz_p"                                     # an exact pid, from the service manager
+}
+svc_thaw() {
+  fz_p=$(echo "$STOPPED" | tr ' ' '\n' | grep "^$1:" | head -1 | cut -d: -f2)
+  if svc_pid_ok "$1" "$fz_p"; then on "$1" "kill -CONT $fz_p"; else say "WARN: $1's wwd is no longer pid '$fz_p': no signal sent"; fi
+  STOPPED=$(echo "$STOPPED" | tr ' ' '\n' | grep -v "^$1:" | tr '\n' ' ')
+}
 
 # ---- the pool, workers, jobs -----------------------------------------------------------------------------------------
-SAVED=""   # host:json of each worker setting before this script changed it
+# worker settings: the first GET of each host is kept in $WORK/saved/HOST, and a PUT sends its body on stdin, so no character of an
+# owner_rule (spaces, quotes) can split or break a command line
+put_worker() {   # put_worker HOST FILE
+  if [ "$dry" -eq 1 ]; then say "+ on $1: PUT /v1/worker (the body from a file, on stdin)"; return 0; fi
+  on "$1" "curl -sS --unix-socket $SOCK -X PUT -H 'Content-Type: application/json' -d @- http://wwd/v1/worker" < "$2"
+}
 worker_set() {   # worker_set HOST true|false
   ws_cur=$(sock "$1" GET /v1/worker)
-  case " $SAVED " in *" $1:"*) ;; *) if [ "$dry" -eq 1 ]; then SAVED="$SAVED $1:<its-own-settings>"; else SAVED="$SAVED $1:$(echo "$ws_cur" | jq -c .)"; fi ;; esac
-  ws_new=$(echo "$ws_cur" | jq -c ".enabled=$2" 2>/dev/null || echo "{}")
-  sock "$1" PUT /v1/worker "$ws_new" >/dev/null
+  if [ "$dry" -eq 1 ]; then say "+ keep $1's worker settings, then enabled=$2"; put_worker "$1" /dev/null; return 0; fi
+  [ -e "$WORK/saved/$1" ] || printf '%s' "$ws_cur" > "$WORK/saved/$1"
+  printf '%s' "$ws_cur" | jq -c ".enabled=$2" > "$WORK/saved/$1.new"
+  put_worker "$1" "$WORK/saved/$1.new" >/dev/null
 }
+# a fault artifact on a host (a file the product reads): recorded before it is made, removed by finish
+FAULTS=""; REMOTE_DIRS=""
+fault_on() {   # fault_on HOST PATH-ON-HOST
+  FAULTS="$FAULTS $1:$2"
+  on "$1" "mkdir -p \$(dirname $2) && touch $2"
+}
+fault_off() { on "$1" "rm -f $2"; FAULTS=$(echo "$FAULTS" | tr ' ' '\n' | grep -v "^$1:$2\$" | tr '\n' ' '); }
 only_workers() {   # only_workers HOST... : exactly these workers are on (air19 stays off in every case)
   for ow_h in mlab air26 mserv; do
     case " $* " in *" $ow_h "*) worker_set "$ow_h" true ;; *) worker_set "$ow_h" false ;; esac
@@ -117,12 +146,12 @@ only_workers() {   # only_workers HOST... : exactly these workers are on (air19 
 jclaim() { printf '{"claim_id":"%s"}' "$1"; }
 jresult() { printf '{"claim_id":"%s","state":"succeeded","exit":0}' "$1"; }
 jrelease() { printf '{"claim_id":"%s","reason":"reclaim"}' "$1"; }
-jworker() { printf '{"worker":"%s","labels":["c2:probe-only"],"fingerprint":{}}' "$1"; }
+jworker() { printf '{"worker":"%s","labels":["os:darwin","arch:arm64"],"fingerprint":{}}' "$1"; }   # a real worker's labels: the job's must be a subset
 # db_q SQL: a read-only query of the origin's wwd.db (SQL with single quotes only)
 db_q() { if [ "$dry" -eq 1 ]; then say "? on mlab: sqlite3 -readonly: $1" >&2; echo 0; else q mlab "sqlite3 -readonly $DB \"$1\""; fi; }
 mserv_dbs() { q mserv "mysql -N -e 'show databases' 2>/dev/null | grep -c '^wwd_' || true"; }     # TODO(first-run): the database naming and the credentials of mserv's test MySQL
 # the jobs this run made are listed in a file: submit runs in a $( ) subshell, which could not hand a variable back
-track() { if [ "$dry" -eq 0 ]; then echo "$1" >> "$WORK/jobs"; fi; }
+track() { if [ "$dry" -eq 0 ]; then echo "${2:-mlab} $1" >> "$WORK/jobs"; fi; }     # track ID [ORIGIN]
 submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, the caller never waits  TODO(first-run): pdx test --detach --json prints {"id":...}
   sb_t=$1; shift
   if [ "$dry" -eq 1 ]; then say "+ submit $sb_t $* (in the scratch repo)" >&2; echo "<$sb_t>"; return 0; fi
@@ -130,7 +159,11 @@ submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, th
   track "$sb_id"; echo "$sb_id"
 }
 job() { sock mlab GET "/v1/jobs/$1"; }   # TODO(first-run): the job JSON of spec 4.1
-jf() { job "$1" | jq -r "$2" 2>/dev/null || echo "?"; }          # jf ID '.state'
+jf_on() { sock "$1" GET "/v1/jobs/$2" | jq -r "$3" 2>/dev/null || echo "?"; }     # jf_on ORIGIN ID '.state'
+jf() { jf_on "${WF_HOST:-mlab}" "$1" "$2"; }                                      # jf ID '.state' : on mlab, or on WF_HOST while wait_for_on runs
+wait_for_on() { WF_HOST=$1; shift; wf_r=0; wait_for "$@" || wf_r=$?; WF_HOST=mlab; return "$wf_r"; }
+# attempts ID: the counted failures of the job in wwd.db (a lapse or an infra release counts, a reclaim does not): 0 for a job that
+# succeeded at once; the claim in hand is number attempts+1
 attempts() { db_q "select attempts from jobs where id='$1'"; }
 wait_for() {   # wait_for ID JQEXPR WANT SECONDS
   if [ "$dry" -eq 1 ]; then say "~ wait up to $4 s until $1 $2 == $3"; return 0; fi
@@ -141,6 +174,8 @@ wait_for() {   # wait_for ID JQEXPR WANT SECONDS
     sleep 2; wf_n=$((wf_n + 2))
   done
 }
+
+nap() { if [ "$dry" -eq 1 ]; then say "~ wait $1 s"; else sleep $(($1 * ${C2_TIMEOUT_SCALE:-1})); fi; }
 
 # ---- checks -----------------------------------------------------------------------------------------------------
 FAILS=0; CASE_FAILS=0; CASE_SKIP=""; PASSED=""; FAILED=""; SKIPPED=""
@@ -171,13 +206,13 @@ precheck() {
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
   STARTED_MS=$(date +%s)000
-  x mkdir -p "$WORK/repo"
+  x mkdir -p "$WORK/repo" "$WORK/saved"
   scratch_repo
 }
 # the scratch repo: probe tasks, one commit
 scratch_repo() {
   say "-- scratch repo $WORK/repo"
-  [ "$dry" -eq 1 ] && { say "+ write .wwd/tasks.toml (c2-quick c2-sleep c2-sleep-int c2-sleep-noint c2-expire c2-files c2-php-db c2-sandbox) and scripts/*.sh, one commit"; return 0; }
+  [ "$dry" -eq 1 ] && { say "+ write .wwd/tasks.toml (c2-quick c2-any c2-sleep c2-sleep-int c2-sleep-noint c2-expire c2-files c2-php-db c2-sandbox) and scripts/*.sh, one commit"; return 0; }
   mkdir -p "$WORK/repo/.wwd" "$WORK/repo/scripts"
   cat > "$WORK/repo/scripts/probe.sh" <<'EOS'
 #!/bin/sh
@@ -202,6 +237,12 @@ args = "none"
 class = "dev"
 labels = ["os:darwin"]
 timeout = "10m"
+summary = "plain"
+[tasks.c2-any]
+run = "sh scripts/probe.sh 5 0"
+args = "none"
+class = "dev"
+labels = []
 summary = "plain"
 [tasks.c2-sleep-int]
 run = "sh scripts/probe.sh 120 0"
@@ -280,10 +321,18 @@ finish() {
   fn_rc=$?
   trap - EXIT INT TERM
   say "-- cleaning up"
-  for fn_pair in $STOPPED; do on "${fn_pair%%:*}" "kill -CONT ${fn_pair#*:}" || true; done
+  for fn_pair in $STOPPED; do svc_thaw "${fn_pair%%:*}" || true; done
   for fn_h in $DOWNED; do svc_up "$fn_h" || true; done
-  for fn_pair in $SAVED; do sock "${fn_pair%%:*}" PUT /v1/worker "${fn_pair#*:}" >/dev/null || true; done
-  for fn_id in $(cat "$WORK/jobs" 2>/dev/null); do sock mlab POST "/v1/jobs/$fn_id/cancel" >/dev/null 2>&1 || true; done
+  if [ "$dry" -eq 1 ]; then say "+ PUT /v1/worker: put back the saved settings of every host it changed"
+  else for fn_f in "$WORK"/saved/*; do
+    case "$fn_f" in *.new) continue ;; esac
+    [ -f "$fn_f" ] && { put_worker "$(basename "$fn_f")" "$fn_f" >/dev/null || true; }
+  done; fi
+  for fn_pair in $FAULTS; do on "${fn_pair%%:*}" "rm -f ${fn_pair#*:}" || true; done
+  if [ -f "$WORK/jobs" ]; then
+    while read -r fn_h fn_id; do sock "$fn_h" POST "/v1/jobs/$fn_id/cancel" >/dev/null 2>&1 || true; done < "$WORK/jobs"
+  fi
+  for fn_d in $REMOTE_DIRS; do on "${fn_d%%:*}" "rm -rf ${fn_d#*:}" || true; done
   for fn_h in mlab air26 air19; do on "$fn_h" "rm -f $RAN" || true; done
   if [ "$keep" -eq 1 ]; then say "kept $WORK"; else x rm -rf "$WORK"; fi
   say ""
@@ -293,7 +342,7 @@ finish() {
 }
 
 # ---- the cases ------------------------------------------------------------------------------------------------------
-# Fake workers: with a label no real worker has, the script itself plays the workers over TCP, which makes a race exact.
+# Fake workers: with every real worker switched off, the script itself plays the workers over TCP, which makes a race exact.
 claim() { tcp_body mlab POST "/v1/jobs/$1/claim" "$(jworker "$2")"; }   # prints body, newline, code
 
 case_1() {
@@ -304,7 +353,7 @@ case_1() {
   check "state" "$(jf "$id" .state)" succeeded
   n=$(( $(ran_count mlab "$id") + $(ran_count air26 "$id") ))
   check "the command ran once, on one host" "$n" 1
-  check "attempts" "$(attempts "$id")" 1
+  check "attempts" "$(attempts "$id")" 0
   say "-- exact: no real worker is on; two fake workers claim at the same moment"
   only_workers
   pid=$(submit c2-quick)
@@ -347,7 +396,7 @@ case_3() {
   only_workers
   pid=$(submit c2-quick)
   a=$(claim "$pid" fakeA); ca=$(echo "$a" | head -1 | jq -r .claim_id 2>/dev/null || echo "?")
-  [ "$dry" -eq 1 ] || sleep 75                               # past the 60 s lease: the origin takes the job back
+  nap 75                                                    # past the 60 s lease: the origin takes the job back
   b=$(claim "$pid" fakeB); cb=$(echo "$b" | head -1 | jq -r .claim_id 2>/dev/null || echo "?")
   check "the second claim is a new one" "$([ "$ca" != "$cb" ] && echo yes || echo no)" yes
   check "heartbeat of the old claim" "$(tcp mlab POST "/v1/jobs/$pid/heartbeat" "$(jclaim "$ca")")" 409
@@ -360,12 +409,12 @@ case_3() {
   wait_for "$id" .state running 90 || true
   svc_freeze air26
   worker_set mlab true
-  [ "$dry" -eq 1 ] || sleep 75
+  nap 75
   svc_thaw air26
   wait_for "$id" .state succeeded 240 || true
   check "state" "$(jf "$id" .state)" succeeded
   check "it finished on mlab, not on the thawed air26" "$(jf "$id" .result.host)" mlab
-  check "attempts" "$(attempts "$id")" 2
+  check "attempts" "$(attempts "$id")" 1
 }
 
 case_4() {
@@ -377,7 +426,7 @@ case_4() {
   wait_for "$id" .state succeeded 200 || true
   check "state" "$(jf "$id" .state)" succeeded
   check "host" "$(jf "$id" .result.host)" air26
-  check "attempts" "$(attempts "$id")" 1
+  check "attempts" "$(attempts "$id")" 0
 }
 
 case_5() {
@@ -386,29 +435,29 @@ case_5() {
   if need_fault mlab snapshot_delay_s; then
     id=$(submit c2-quick)
     wait_for "$id" .state claimed 60 || true
-    svc_freeze mlab; [ "$dry" -eq 1 ] || sleep 20; svc_thaw mlab
+    svc_freeze mlab; nap 20; svc_thaw mlab
     wait_for "$id" .state succeeded 600 || true
     check "5a state" "$(jf "$id" .state)" succeeded
-    check "5a an infra release or a lapse counted an attempt" "$(attempts "$id")" 2
+    check "5a an infra release or a lapse was counted" "$(attempts "$id")" 1
   else say "SKIP 5a: $CASE_SKIP"; CASE_SKIP=""; fi
   say "-- 5b: the origin stops answering during the run, shorter than the lease, then longer"
   id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
-  svc_freeze mlab; [ "$dry" -eq 1 ] || sleep 30; svc_thaw mlab
+  svc_freeze mlab; nap 30; svc_thaw mlab
   wait_for "$id" .state succeeded 200 || true
   check "5b short: state" "$(jf "$id" .state)" succeeded
-  check "5b short: attempts" "$(attempts "$id")" 1
+  check "5b short: attempts" "$(attempts "$id")" 0
   id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
-  svc_freeze mlab; [ "$dry" -eq 1 ] || sleep 90; svc_thaw mlab
+  svc_freeze mlab; nap 90; svc_thaw mlab
   wait_for "$id" .state succeeded 400 || true
   check "5b long: state" "$(jf "$id" .state)" succeeded
-  check "5b long: the lease lapsed once" "$(attempts "$id")" 2
+  check "5b long: the lease lapsed once" "$(attempts "$id")" 1
   say "-- 5c: the origin stops answering when the command is ending (result upload)"
   id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
-  [ "$dry" -eq 1 ] || sleep 84
-  svc_freeze mlab; [ "$dry" -eq 1 ] || sleep 40; svc_thaw mlab
+  nap 84
+  svc_freeze mlab; nap 40; svc_thaw mlab
   wait_for "$id" .state succeeded 200 || true
   check "5c state" "$(jf "$id" .state)" succeeded
-  check "5c attempts" "$(attempts "$id")" 1
+  check "5c attempts" "$(attempts "$id")" 0
 }
 
 case_6() {
@@ -428,21 +477,32 @@ case_7() {
   wait_for "$id" .state running 90 || true
   worker_set mlab true
   if [ "$manual" -eq 1 ]; then say ">> move the mouse on air26 now (waiting up to 5 min for owner.active)"
-  else on air26 'touch $HOME/.local/share/wwd/fault/owner-active'; fi
-  [ "$dry" -eq 1 ] || { n=0; while [ "$n" -lt 300 ] && [ "$(sock air26 GET /v1/facts | jq -r .owner.active)" != true ]; do sleep 2; n=$((n + 2)); done; }
+  else fault_on air26 '$HOME/.local/share/wwd/fault/owner-active'; fi
+  if [ "$dry" -eq 1 ]; then say "~ wait up to 300 s until air26's facts say owner.active"
+  else n=0; while [ "$n" -lt $((300 * ${C2_TIMEOUT_SCALE:-1})) ] && [ "$(sock air26 GET /v1/facts | jq -r .owner.active)" != true ]; do sleep 2; n=$((n + 2)); done; fi
   wait_for "$id" .result.host mlab 300 || true
   check "it ended on mlab" "$(jf "$id" .state)/$(jf "$id" .result.host)" succeeded/mlab
-  check "the reclaim did not count an attempt" "$(attempts "$id")" 1
+  check "the reclaim did not count an attempt" "$(attempts "$id")" 0
   check "no process of the job is left on air26" "$(q air26 "ps eww -A | grep -c '[W]WD_JOB=$id' || true")" 0
-  [ "$manual" -eq 1 ] || on air26 'rm -f $HOME/.local/share/wwd/fault/owner-active'
+  [ "$manual" -eq 1 ] || fault_off air26 '$HOME/.local/share/wwd/fault/owner-active'
 }
 
 case_8() {
   need_fault mlab zone || return 0
-  only_workers mlab air26
-  id1=$(submit c2-sleep); id2=$(submit c2-sleep)
-  wait_for "$id1" .state running 60 || true
-  check "the first job went to air26 (origin_bonus)" "$(jf "$id1" .claim.worker)" air26
+  say "-- one worker (mserv); two jobs queued at the same time from two origins; mlab's pressure is 2 (the hook)"
+  only_workers
+  rdir="${TMPDIR:-/tmp}/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
+  x sh -c "tar -C $WORK -cf - repo | ssh air26 'mkdir -p $rdir && tar -C $rdir -xf -'"        # the scratch repo on air26: a second origin
+  ida=$(q air26 "cd $rdir/repo && pdx test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # TODO(first-run): pdx on air26's non-interactive PATH
+  track "$ida" air26
+  idm=$(submit c2-any)                      # the younger job, but its origin is the one under pressure
+  worker_set mserv true                     # only now can anything be claimed
+  wait_for "$idm" .state succeeded 120 || true
+  wait_for_on air26 "$ida" .state succeeded 120 || true
+  sm=$(jf "$idm" .result.started_at); sa=$(jf_on air26 "$ida" .result.started_at)
+  first=$(printf '%s\n%s\n' "$sm" "$sa" | sort | head -1)
+  [ "$dry" -eq 1 ] && first=$sm
+  check "the job of the origin under pressure started first, on the same worker" "$([ "$first" = "$sm" ] && echo mlab || echo air26)" mlab
 }
 
 case_9() {

@@ -31,7 +31,7 @@ method=GET; body=""; auth=""; fmt=""; out=""; url=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -X) method=$2; shift ;;
-    -d) body=$2; shift ;;
+    -d) if [ "$2" = "@-" ]; then body=$(cat); else body=$2; fi; shift ;;
     -H) case "$2" in Authorization:*) auth=${2#Authorization: } ;; esac; shift ;;
     -w) fmt=$2; shift ;;
     -o) out=$2; shift ;;
@@ -48,11 +48,11 @@ if [ "$tcp" -eq 1 ]; then
   if [ "$code" = 200 ] && [ "$method $path" = "POST /v1/jobs" ]; then code=404; fi
 else
   case "$method $path" in
-    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}}' ;;
-    "GET /v1/worker") resp='{"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""}' ;;
-    "PUT /v1/worker") echo "$body" >> "$STUB/put.log" ;;
+    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}'}' ;;
+    "GET /v1/worker") resp=$STUB_WORKER_JSON ;;
+    "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
     "GET /v1/jobs?state=queued") resp='[]' ;;
-    "POST /v1/jobs") resp='{"id":"j_stub_post"}'; echo "$body" >> "$STUB/post.log" ;;
+    "POST /v1/jobs") resp='{"id":"j_stub_post"}'; printf '%s\n' "$body" >> "$STUB/post.log" ;;
     "GET /v1/jobs/"*) resp="{\"state\":\"$STUB_STATE\",\"claim\":{\"worker\":\"air26\"},\"result\":{\"host\":\"air26\",\"reason\":\"\"}}" ;;
     "POST /v1/jobs/"*"/cancel") echo "$path" >> "$STUB/cancel.log" ;;
   esac
@@ -73,9 +73,10 @@ exit 0
 EOF
 cat > "$bin/launchctl" <<'EOF'
 #!/bin/sh
-# records each call; the first bootstrap fails (a service that does not come up at once)
+# records each call; the first bootstrap fails (a service that does not come up at once); "list" gives STUB_PID
 echo "$*" >> "$STUB/launchctl.log"
 case "$1" in
+  list) printf '{\n\t"PID" = %s;\n}\n' "$STUB_PID" ;;
   bootstrap) [ -e "$STUB/bootstrap-failed-once" ] || { : > "$STUB/bootstrap-failed-once"; exit 1; } ;;
 esac
 exit 0
@@ -90,6 +91,10 @@ case "$*" in
 esac
 EOF
 chmod +x "$bin/ssh" "$bin/curl" "$bin/pdx" "$bin/sqlite3" "$bin/launchctl"
+
+# an owner_rule with spaces, a single quote, double quotes: what broke the old way of keeping the settings
+worker_json='{"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":"idle 5 min; it'"'"'s \"mine\" now"}'
+export STUB_WORKER_JSON="$worker_json"
 
 run() {   # run STATE CASE... : the script for real, in the fake world; the output is in $tmp/out, the exit code is returned
   rm -f "$stub"/*.log "$stub"/bootstrap-failed-once
@@ -138,7 +143,7 @@ rm -rf "$kept"
 run succeeded 11 || fail "case 11 again"
 # case 11 sets three workers (mlab and air26 on, mserv off) and puts back three: six PUTs, the last three are what GET gave
 [ "$(wc -l < "$stub/put.log" | tr -d ' ')" -eq 6 ] || fail "expected 6 worker PUTs (3 set, 3 put back), got $(wc -l < "$stub/put.log")"
-[ "$(tail -3 "$stub/put.log" | grep -c '"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""')" -eq 3 ] || fail "the last three PUTs must be the settings GET gave"
+[ "$(tail -3 "$stub/put.log" | grep -c -F "$worker_json")" -eq 3 ] || fail "the last three PUTs must be, byte for byte, the settings GET gave (spaces and quotes in the owner_rule included): $(tail -3 "$stub/put.log")"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left in TMPDIR"
 [ -s "$stub/cancel.log" ] || fail "the jobs it made were not cancelled"
 
@@ -156,6 +161,25 @@ rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
 [ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 2 ] || fail "case 2 takes the service down twice: $(cat "$stub/launchctl.log")"
 [ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must not bring up a service that is up: $(cat "$stub/launchctl.log")"
+
+# the pid of a service must be a number above 1 and the wwd binary: 0 would signal a group
+for badpid in 0 1 "" abc 99999999; do
+  rc=0
+  HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$badpid" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 3 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "case 3 must stop when the pid is '$badpid'"
+  has "is not the pid of wwd on air26" "pid '$badpid'"
+done
+
+# terminated while the owner-active file exists on air26 (case 7, not --manual): the file is gone afterwards
+faultfile="$home/.local/share/wwd/fault/owner-active"
+rm -f "$faultfile"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_FAULT=1 STUB_STATE=running C2_TIMEOUT_SCALE=1 sh "$matrix" --case 7 > "$tmp/out" 2>&1 &
+pid=$!
+n=0; while [ ! -e "$faultfile" ] && [ "$n" -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+[ -e "$faultfile" ] || { kill "$pid" 2>/dev/null || true; cat "$tmp/out" >&2; fail "case 7 never made the owner-active file"; }
+kill -TERM "$pid"          # TERM: a background sh ignores INT
+wait "$pid" || true
+[ ! -e "$faultfile" ] || fail "the owner-active file was left on air26 after the script was terminated"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0
