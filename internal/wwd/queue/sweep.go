@@ -27,7 +27,7 @@ const terminalStates = `'succeeded','failed','cancelled','superseded','expired'`
 // SweepResult counts what one Sweep did.
 type SweepResult struct {
 	Lapsed      int // held jobs whose lease ran out: requeued, or failed as lost
-	Expired    int // queued jobs that waited past their queue timeout
+	Expired     int // queued jobs that waited past their queue timeout
 	Unpinned    int // snapshots released for jobs that had ended
 	UnpinFailed int // unpins git refused: the mark stays and the next sweep tries again
 	Orphans     int // refs under refs/wwd/ with no live job, removed
