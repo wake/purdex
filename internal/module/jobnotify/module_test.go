@@ -665,6 +665,26 @@ func TestAnEmptyEpochIsNotAChange(t *testing.T) {
 	}
 }
 
+// A wwd put back to a version without epochs, over a database made again that is as long as the cursor: no 409 and no epoch to compare,
+// so the cursor cannot be trusted. Nothing is read and the cursor stays, until an epoch comes again.
+func TestAnAnswerWithoutAnEpochUnderAStoredEpochMovesNothing(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{epoch: epochA, log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute)), job("j_b", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow() // cursor 2, epoch A
+	src.epoch = ""
+	src.log = []wire.Job{job("j_x", wire.StateSucceeded, t0.Add(time.Minute)), job("j_y", wire.StateSucceeded, t0.Add(time.Minute)), job("j_z", wire.StateSucceeded, t0.Add(time.Minute))}
+	m.catchUpNow()
+	if c, _, _ := m.store.cursor(); c != "2" || len(s.texts()) != 2 {
+		t.Fatalf("cursor %q, told %q", c, s.texts())
+	}
+	src.epoch = epochB // the new wwd is back: now the change is seen and the new database is read from the start
+	m.catchUpNow()
+	if c, _, _ := m.store.cursor(); c != "3" || len(s.texts()) != 5 {
+		t.Fatalf("cursor %q, told %d", c, len(s.texts()))
+	}
+}
+
 // alwaysAhead answers every read with a 409.
 type alwaysAhead struct{ fakeSource }
 

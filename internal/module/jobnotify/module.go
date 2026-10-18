@@ -258,8 +258,14 @@ func (m *Module) catchUp(ctx context.Context) {
 			}
 			return
 		}
+		// An epoch is stored and the answer has none: a wwd that was put back to a version without epochs, whose database may be
+		// another one. Nothing can be said about this cursor, so nothing is read and nothing moves until an epoch comes again.
+		if epoch != "" && page.Epoch == "" {
+			m.logf("jobnotify: catch-up: wwd answered without an epoch although the cursor has %s; waiting for a wwd that has one", epoch)
+			return
+		}
 		// another epoch than the stored one: this page was read from a database the cursor does not belong to, so none of it is used
-		if epoch != "" && page.Epoch != "" && page.Epoch != epoch {
+		if epoch != "" && page.Epoch != epoch {
 			if startOver("epoch " + page.Epoch + ", the cursor has " + epoch) {
 				continue
 			}
