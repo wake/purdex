@@ -50,4 +50,27 @@ describe('persona-api', () => {
     expect(err).toBeInstanceOf(PersonaApiError)
     expect((err as PersonaApiError).status).toBe(400)
   })
+
+  it('keeps the item index and field of a 400, and the message', async () => {
+    vi.mocked(hostFetch).mockResolvedValue(json(400, { error: 'too long', index: 2, field: 'name' }))
+    const err = (await putPersonas('h1', [], 3).catch((e) => e)) as PersonaApiError
+    expect(err.index).toBe(2)
+    expect(err.field).toBe('name')
+    expect(err.message).toBe('too long')
+  })
+
+  it('index -1 means the whole collection (a stored code was removed), not a row', async () => {
+    vi.mocked(hostFetch).mockResolvedValue(json(400, { error: 'stored code "hiro" cannot be removed', index: -1 }))
+    const err = (await putPersonas('h1', [], 3).catch((e) => e)) as PersonaApiError
+    expect(err.index).toBe(-1)
+    expect(err.rowIndex()).toBeNull()
+  })
+
+  it('a 500 (an unreadable stored value) has no index', async () => {
+    vi.mocked(hostFetch).mockResolvedValue({ ok: false, status: 500, statusText: 'x', text: async () => 'stored value unreadable' } as Response)
+    const err = (await putPersonas('h1', [], 3).catch((e) => e)) as PersonaApiError
+    expect(err.status).toBe(500)
+    expect(err.index).toBeUndefined()
+    expect(err.rowIndex()).toBeNull()
+  })
 })

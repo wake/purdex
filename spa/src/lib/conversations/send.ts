@@ -161,6 +161,59 @@ export const typedRecall = (hostId: string, target: () => SubmitTarget | null) =
   return recallTyped(hostId, t, newClientMsgId())
 }
 
+/** How a send-now ended (mirrors the daemon's /send-now, plan §1.3): Claude Code's queue went out now, nothing was sent, or it may have. */
+export type SendNowOutcome =
+  | { kind: 'sent_now' }
+  /** The daemon declined (409 / 429, or no route): no keys were sent. */
+  | { kind: 'refused'; reason: string }
+  /** `200 unknown`, or no answer: the keys may have been pressed. Not retried by hand. */
+  | { kind: 'unknown'; reason: string }
+
+/** POST /api/sessions/{code}/send-now: `clientMsgId` is the user action's id (the daemon records the answer under it and replays it). */
+export async function sendNowTyped(hostId: string, target: SubmitTarget, clientMsgId: string): Promise<SendNowOutcome> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), SUBMIT_TIMEOUT_MS)
+  try {
+    const res = await pinnedHostFetch(hostId, `/api/sessions/${encodeURIComponent(target.code)}/send-now`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal,
+      body: JSON.stringify({ client_msg_id: clientMsgId, expected_tmux_instance: target.instance }),
+    })
+    let json: { outcome?: string; reason?: string; error?: string } | null = null
+    try { json = await res.json() } catch { /* no JSON body: the status alone */ }
+    const code = typeof json?.error === 'string' && json.error ? json.error : typeof json?.reason === 'string' ? json.reason : ''
+    if (res.ok) {
+      if (json?.outcome === 'sent_now') return { kind: 'sent_now' }
+      return { kind: 'unknown', reason: json?.outcome === 'unknown' && json.reason ? json.reason : 'unreadable' }
+    }
+    if (res.status === 404 && !code) return { kind: 'refused', reason: 'daemon_outdated' } // Go's mux: a daemon with no /send-now
+    // Only what the contract says ran nothing is a refusal: 409 / 429, and 400 / 404 that name a reason. Anything else (a 5xx, a proxy's 408, an
+    // unlisted status) may have come after the keys went out.
+    if (res.status === 409 || res.status === 429 || ((res.status === 400 || res.status === 404) && code !== '')) return { kind: 'refused', reason: code }
+    return { kind: 'unknown', reason: code || `http_${res.status}` }
+  } catch {
+    return { kind: 'unknown', reason: 'network' } // the request may have reached the daemon
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** The terminal's send-now: one NEW id per call (per user action); no target sends nothing. */
+export const typedSendNow = (hostId: string, target: () => SubmitTarget | null) => async (): Promise<SendNowOutcome> => {
+  const t = target()
+  if (!t || !t.code || !t.instance) return { kind: 'refused', reason: 'no_instance' }
+  return sendNowTyped(hostId, t, newClientMsgId())
+}
+
+const SEND_NOW_REASONS = new Set(['waiting', 'nothing_queued', 'input_not_empty', 'no_owner', 'generation', 'owner_changed', 'dialog_open', 'pane_busy', 'no_instance', 'daemon_outdated', 'busy'])
+
+/** The message for a send-now (i18n keys under deck.sendnow). `sent_now` says the reply in progress may be interrupted: that is what the keys do. */
+export function sendNowMessage(o: SendNowOutcome): OutcomeMessage {
+  if (o.kind === 'sent_now') return { key: 'deck.sendnow.done', tone: 'ok' }
+  if (o.kind === 'unknown') return { key: 'deck.sendnow.unknown', tone: 'warn' }
+  if (SEND_NOW_REASONS.has(o.reason)) return { key: `deck.sendnow.refused.${o.reason}`, tone: o.reason === 'busy' ? 'warn' : 'error' }
+  return { key: 'deck.sendnow.refused.other', params: { code: o.reason || '-' }, tone: 'error' }
+}
+
 const RECALL_REASONS = new Set(['input_not_empty', 'recall_mismatch', 'nothing_queued', 'recall_unsupported', 'recall_too_long', 'input_not_cleared', 'busy'])
 
 /** The message for a take-back that did not bring the text back (i18n keys under deck.recall). */

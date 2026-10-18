@@ -7,10 +7,20 @@ import type { Persona, PersonaCollection } from './persona-types'
 /** Non-2xx (status = HTTP status) or a refused request (status = 0). */
 export class PersonaApiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** A 400 body's `index`: the item at fault, or `-1` for the collection as a whole (a stored code was removed). */
+  readonly index?: number
+  readonly field?: string
+  constructor(status: number, message: string, detail: { index?: number; field?: string } = {}) {
     super(message)
     this.name = 'PersonaApiError'
     this.status = status
+    this.index = detail.index
+    this.field = detail.field
+  }
+
+  /** The row to point at, or `null` when the error belongs to the whole collection and not to one row. */
+  rowIndex(): number | null {
+    return this.index !== undefined && this.index >= 0 ? this.index : null
   }
 }
 
@@ -31,6 +41,16 @@ function assertKnownHost(hostId: string): void {
 async function failure(res: Response): Promise<PersonaApiError> {
   let text = ''
   try { text = (await res.text()).trim() } catch { /* body unreadable */ }
+  // A 400 is `{error, index, field}`; anything else is plain text.
+  try {
+    const body = JSON.parse(text) as { error?: unknown; index?: unknown; field?: unknown }
+    if (typeof body === 'object' && body !== null && typeof body.error === 'string') {
+      return new PersonaApiError(res.status, body.error, {
+        index: typeof body.index === 'number' ? body.index : undefined,
+        field: typeof body.field === 'string' ? body.field : undefined,
+      })
+    }
+  } catch { /* not JSON */ }
   return new PersonaApiError(res.status, text || `${res.status} ${res.statusText}`.trim())
 }
 
