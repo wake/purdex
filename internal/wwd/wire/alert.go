@@ -3,7 +3,10 @@ package wire
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ---- holds (spec §13.4): the new fields of an Exception ----
@@ -93,6 +96,29 @@ func (l AlertLevel) Valid() bool { return l == AlertPush || l == AlertDigest }
 // MaxAlertKeyBytes bounds a key (it is a row key and appears in a push).
 const MaxAlertKeyBytes = 200
 
+// MaxAlertDetailBytes bounds an alert's detail, the one line a person reads in the push ("mlab 剩 11.2 GB"). A writer cuts a longer
+// text with TruncateDetail; a reader refuses one over the limit.
+const MaxAlertDetailBytes = 200
+
+// TruncateDetail makes s fit a detail: control characters (a newline, a tab) are dropped, and the text is cut to at most
+// MaxAlertDetailBytes bytes without splitting a character.
+func TruncateDetail(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) <= MaxAlertDetailBytes {
+		return s
+	}
+	cut := MaxAlertDetailBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
 // Alert is one row of a host's wwd.db `alerts` table. Key identifies it (the same key is one alert across time); Since is when it
 // began, Last the latest time its rule still held, ClearedAt when it stopped (null: active).
 type Alert struct {
@@ -102,6 +128,8 @@ type Alert struct {
 	Since     time.Time  `json:"since"`
 	Last      time.Time  `json:"last"`
 	ClearedAt *time.Time `json:"cleared_at"`
+	// Detail is the one human-readable line for the push; omitted when empty, at most MaxAlertDetailBytes, no control characters.
+	Detail string `json:"detail,omitempty"`
 }
 
 func (a Alert) Validate() error {
@@ -113,6 +141,9 @@ func (a Alert) Validate() error {
 	}
 	if !a.Level.Valid() {
 		return fmt.Errorf("alert: invalid level %q", a.Level)
+	}
+	if len(a.Detail) > MaxAlertDetailBytes || strings.ContainsFunc(a.Detail, unicode.IsControl) || !utf8.ValidString(a.Detail) {
+		return fmt.Errorf("alert: the detail must be valid text without control characters, at most %d bytes", MaxAlertDetailBytes)
 	}
 	if a.Since.IsZero() || a.Last.IsZero() {
 		return fmt.Errorf("alert: since and last are required")

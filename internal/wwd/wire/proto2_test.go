@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
+
+var alertSince = time.Date(2026, 10, 19, 4, 0, 0, 0, time.UTC)
 
 // Spec §13.1 (WWD-8 8a-c): proto 2 teaches every reader the new fields and the new route; writers keep sending the v1 shape
 // until every pool host reports proto >= 2. These tests pin both halves of that.
@@ -161,6 +165,52 @@ func TestAlertListFixture(t *testing.T) {
 	}
 	if l.Alerts[0].Kind != AlertDiskLow || l.Alerts[0].Level != AlertPush || l.Alerts[1].Level != AlertDigest {
 		t.Fatalf("%+v", l.Alerts)
+	}
+}
+
+func TestAlertDetail(t *testing.T) {
+	l := roundTrip[AlertList](t, "alert_list.json")
+	if l.Alerts[0].Detail != "mlab 剩 11.2 GB" || l.Alerts[1].Detail != "" {
+		t.Fatalf("%+v", l.Alerts)
+	}
+	b, _ := json.Marshal(l.Alerts[1])
+	if strings.Contains(string(b), "detail") {
+		t.Errorf("an alert without a detail must not write the key: %s", b)
+	}
+	a := l.Alerts[0]
+	a.Detail = strings.Repeat("a", MaxAlertDetailBytes)
+	if err := a.Validate(); err != nil {
+		t.Errorf("exactly the limit: %v", err)
+	}
+	a.Detail += "a"
+	if err := a.Validate(); err == nil {
+		t.Error("over the limit accepted")
+	}
+	a.Detail = "ok\nmore"
+	if err := a.Validate(); err == nil {
+		t.Error("a control character in a push text was accepted")
+	}
+}
+
+func TestTruncateDetail(t *testing.T) {
+	if got := TruncateDetail("short"); got != "short" {
+		t.Errorf("%q", got)
+	}
+	long := strings.Repeat("a", MaxAlertDetailBytes+50)
+	if got := TruncateDetail(long); len(got) != MaxAlertDetailBytes {
+		t.Errorf("len %d", len(got))
+	}
+	// a cut never splits a character: 3-byte runes, limit 200 is not a multiple of 3
+	zh := strings.Repeat("剩", 100)
+	got := TruncateDetail(zh)
+	if len(got) > MaxAlertDetailBytes || !utf8.ValidString(got) || len(got) != 198 {
+		t.Errorf("len %d valid %v", len(got), utf8.ValidString(got))
+	}
+	if err := (Alert{Key: "k", Kind: AlertDiskLow, Level: AlertPush, Since: alertSince, Last: alertSince, Detail: got}).Validate(); err != nil {
+		t.Errorf("a truncated detail is valid: %v", err)
+	}
+	if got := TruncateDetail("ok\tmore\nlines"); strings.ContainsAny(got, "\t\n") {
+		t.Errorf("control characters must go: %q", got)
 	}
 }
 
