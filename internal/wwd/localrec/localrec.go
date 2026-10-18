@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/client"
@@ -45,7 +44,7 @@ func (r Recorder) Register(ctx context.Context, body submit.Body) (fastlane.Hand
 	var se *client.StatusError
 	switch {
 	case errors.As(err, &busy):
-		return nil, fmt.Errorf("%w: %s", fastlane.ErrLocksBusy, strings.Join(busy.Keys, ", "))
+		return nil, fmt.Errorf("%w: %s", fastlane.ErrLocksBusy, busy.Held())
 	case errors.As(err, &se) && (se.Code == http.StatusNotFound || se.Code == http.StatusMethodNotAllowed || se.Code == http.StatusNotImplemented):
 		return nil, fastlane.ErrUnrecorded // a wwd that does not have the route yet
 	case err != nil:

@@ -170,11 +170,18 @@ func (r LocalRunResponse) Validate() error {
 	return nil
 }
 
-// LocksBusy is the 409 body of a local-run registration whose lock keys are held on this host: the run is then queued the ordinary
-// way, not failed.
+// LocksBusy is the 409 body of a local-run registration whose lock keys are held on this host: the caller waits and asks again
+// (a fast-lane task never goes to the queue, D12). Keys are the held keys; Holders say which job holds each (spec §5.2).
 type LocksBusy struct {
-	Reason string   `json:"reason"`
-	Keys   []string `json:"keys"`
+	Reason  string       `json:"reason"`
+	Keys    []string     `json:"keys"`
+	Holders []LockHolder `json:"holders"`
+}
+
+// LockHolder is the job that holds a lock key.
+type LockHolder struct {
+	Key string `json:"key"`
+	Job string `json:"job"`
 }
 
 // LocksBusyReason is the only reason a LocksBusy carries.
@@ -186,6 +193,17 @@ func (b LocksBusy) Validate() error {
 	}
 	if len(b.Keys) == 0 {
 		return fmt.Errorf("locks busy: no keys")
+	}
+	if len(b.Holders) == 0 {
+		return nil // a daemon from before holders were named: the keys alone are enough to wait on
+	}
+	if len(b.Holders) != len(b.Keys) {
+		return fmt.Errorf("locks busy: %d holders for %d keys", len(b.Holders), len(b.Keys))
+	}
+	for i, h := range b.Holders {
+		if h.Key != b.Keys[i] || h.Job == "" {
+			return fmt.Errorf("locks busy: holder %d is %q/%q, want key %q and a job", i, h.Key, h.Job, b.Keys[i])
+		}
 	}
 	return nil
 }
