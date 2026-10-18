@@ -41,8 +41,9 @@ type PerJobDB interface {
 	Drop(ctx context.Context, jobID string) error
 }
 
-// dropTimeout is the context given to the removal of a job's database when its workspace is cleaned up (the SQL; a Drop that first
-// waits for the database manager's own lock is bounded by that lock, not by this).
+// dropTimeout is how long cleaning up a workspace waits for the removal of the job's database (Config.DropTimeout overrides it). The
+// runner cannot finish a job before Cleanup returns, and the database manager's Drop may first wait for the manager's own lock, which a
+// Sweep holds while it works, so the wait is bounded here and not left to the manager's context.
 const dropTimeout = 30 * time.Second
 
 // Config is what Exec needs from the worker.
@@ -59,6 +60,8 @@ type Config struct {
 	Sandbox *run.Sandbox
 	// DB is the per-job database; nil: this host has none, and a task that asks for one is rejected.
 	DB PerJobDB
+	// DropTimeout bounds the wait for DB.Drop at cleanup; zero is dropTimeout.
+	DropTimeout time.Duration
 	// ParentEnv is what allowed environment names are read from (os.Environ()).
 	ParentEnv []string
 	// Procs and KillAfter are passed to run.Run (the marker sweep's process source and the TERM→KILL grace); zero values are its defaults.
@@ -136,9 +139,7 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 		}
 		var dberr error
 		if _, had := e.dbJobs.LoadAndDelete(base); had && e.cfg.DB != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
-			dberr = e.cfg.DB.Drop(ctx, jobID)
-			cancel()
+			dberr = e.dropBounded(jobID)
 			if dberr != nil {
 				// the runner does not look at what Cleanup returns, so say it here. Cleanup runs once (it removes the worktree too); the
 				// loop's Sweeper removes the databases of jobs this worker no longer holds
@@ -147,6 +148,25 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 		}
 		return errors.Join(err, dberr, os.RemoveAll(base))
 	}}, nil
+}
+
+// dropBounded removes the job's database and waits for it no longer than the drop timeout. A Drop that has not returned by then is left
+// to finish on its own (it has the same expired context) and the error says so; the loop's Sweeper removes the database later.
+func (e *Exec) dropBounded(jobID string) error {
+	d := e.cfg.DropTimeout
+	if d <= 0 {
+		d = dropTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- e.cfg.DB.Drop(ctx, jobID) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("per-job database %s: drop not finished in %s: %w", jobID, d, ctx.Err())
+	}
 }
 
 // Prepare checks the job against the snapshot's manifest and works out the command (package remotejob). A job that does not fit is a

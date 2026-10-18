@@ -432,6 +432,7 @@ type fakeDB struct {
 	dropped   []string
 	createErr error
 	dropErr   error
+	dropGate  chan struct{} // when set, Drop waits for it to be closed (a database manager stuck behind its own lock)
 }
 
 func (f *fakeDB) Create(_ context.Context, id string) (map[string]string, error) {
@@ -448,6 +449,9 @@ func (f *fakeDB) Create(_ context.Context, id string) (map[string]string, error)
 }
 
 func (f *fakeDB) Drop(_ context.Context, id string) error {
+	if f.dropGate != nil {
+		<-f.dropGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dropped = append(f.dropped, id)
@@ -609,5 +613,40 @@ func TestADropThatFailsIsReportedByCleanupAndTheWorkspaceStillGoes(t *testing.T)
 	}
 	if _, serr := os.Stat(filepath.Dir(dir)); !os.IsNotExist(serr) {
 		t.Fatalf("the workspace stays although only the drop failed: %v", serr)
+	}
+}
+
+// The runner waits for Cleanup, and the manager's Drop can wait behind its own lock: Cleanup stops waiting after the drop timeout, says
+// so, and still removes the workspace.
+func TestACleanupDoesNotWaitForeverForADropThatIsStuck(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	db := &fakeDB{dropGate: gate}
+	r, commit := repo(t)
+	e := New(Config{
+		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: r, commit: commit} },
+		ParentEnv: os.Environ(), DB: db, DropTimeout: 100 * time.Millisecond,
+	})
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+		t.Fatal(err)
+	}
+	dir := ws.Dir
+	done := make(chan error, 1)
+	go func() { done <- ws.Cleanup() }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not finished") {
+			t.Fatalf("Cleanup err = %v, want the drop that did not finish", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Cleanup waited for a Drop that never returns")
+	}
+	if _, serr := os.Stat(filepath.Dir(dir)); !os.IsNotExist(serr) {
+		t.Fatalf("the workspace stays although only the drop was slow: %v", serr)
 	}
 }
