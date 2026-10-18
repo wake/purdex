@@ -52,6 +52,15 @@ cacheable = true
 timeout   = "30m"
 summary   = "go-json"
 
+# The mod's own tests (hooks/*.test.ts), which `go test` does not run. The whole mod directory: they are few and fast.
+[tasks.mod-hooks]
+run       = "claude plugin test cmd/pdx/plugin/purdex"
+args      = "none"
+class     = "merge"
+labels    = ["repo:purdex"]
+cacheable = true
+timeout   = "10m"
+
 # A change to a mod (hooks/*.js) runs all of cmd/pdx, plugin and daemonclient included: the plugin tests alone once let a red
 # sub-package through to the release.
 [tasks.mod-changed]
