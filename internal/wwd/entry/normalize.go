@@ -36,6 +36,31 @@ func dropOptions(w []string, valueOpts, shellOpts map[string]bool) (rest []strin
 	return w, true
 }
 
+// toTool is what a runner runs, once its options are off. An option this package does not know that takes a value leaves the value
+// where the program should be; when what is there is not a test or build command but one is further along, the command starts
+// there (a runner is never a way round the entry).
+func toTool(w []string) []string {
+	if isFamily(normalizeBin(w)) {
+		return w
+	}
+	for p := 1; p < len(w); p++ {
+		if isFamily(normalizeBin(w[p:])) {
+			return w[p:]
+		}
+	}
+	return w
+}
+
+// normalizeBin is w with a tool path in front of it reduced to the tool's name.
+func normalizeBin(w []string) []string {
+	if len(w) == 0 {
+		return nil
+	}
+	out := append([]string(nil), w...)
+	out[0] = binName(out[0])
+	return out
+}
+
 // normalize is the command as its tool sees it: the runners in front (npx, pnpm exec, yarn, bunx, a path into node_modules/.bin or
 // vendor/bin) are taken off, and `pnpm run build` is `pnpm build`. The manifest's words are put through the same, so both sides
 // speak the same way.
@@ -51,15 +76,19 @@ func normalize(argv []string) []string {
 		if !ok {
 			return w
 		}
-		w = rest
+		w = toTool(rest)
 	case "pnpm", "yarn", "npm", "bun":
+		// the package manager's own options come before its subcommand (`pnpm --filter spa exec vitest`)
+		if rest, ok := dropOptions(w[1:], pnpmExecValueOpt, nil); ok {
+			w = append([]string{w[0]}, rest...)
+		}
 		switch {
 		case len(w) > 1 && w[1] == "exec" && w[0] != "yarn":
 			rest, ok := dropOptions(w[2:], pnpmExecValueOpt, pnpmExecShellOpt)
 			if !ok {
 				return w
 			}
-			w = rest
+			w = toTool(rest)
 		case len(w) > 1 && pmBins[w[1]]:
 			w = w[1:]
 		case len(w) > 2 && w[1] == "run":

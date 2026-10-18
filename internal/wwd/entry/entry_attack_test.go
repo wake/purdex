@@ -89,6 +89,53 @@ func TestMatch_ASymbolicLinkIsNotAFile(t *testing.T) {
 	assert.Equal(t, ActionRewrite, Match(spa, []string{"pnpm", "vitest", "run", "src/a.test.ts"}).Action, "a plain file")
 }
 
+// The task's directory itself may not be a link either: a snapshot holds the link, not what it points at.
+func TestMatch_ALinkedTaskDirectoryIsNotMatched(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, "[entry]\nmode = \"deny\"\n[tasks.spa-file]\nrun = \"pnpm vitest run {files}\"\ncwd = \"spa\"\nargs = \"files\"\n[tasks.spa-all]\nrun = \"pnpm vitest run\"\ncwd = \"spa\"\nargs = \"none\"\n")
+	elsewhere := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(elsewhere, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(elsewhere, "src", "a.test.ts"), []byte("x"), 0o644))
+	require.NoError(t, os.Symlink(elsewhere, filepath.Join(root, "spa")))
+	spa := filepath.Join(root, "spa")
+	assert.Equal(t, ActionDeny, Match(spa, []string{"pnpm", "vitest", "run", "src/a.test.ts"}).Action, "a task directory that is a link out of the repository")
+	assert.Equal(t, ActionDeny, Match(spa, []string{"pnpm", "vitest", "run"}).Action, "and a task that takes no files in it")
+
+	inside := t.TempDir()
+	writeManifest(t, inside, "[entry]\nmode = \"deny\"\n[tasks.spa-all]\nrun = \"pnpm vitest run\"\ncwd = \"spa\"\nargs = \"none\"\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(inside, "real"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(inside, "real"), filepath.Join(inside, "spa")))
+	assert.Equal(t, ActionDeny, Match(filepath.Join(inside, "spa"), []string{"pnpm", "vitest", "run"}).Action, "a link to another place in the repository")
+}
+
+// A value that starts with a dot belongs to its flag, except at the very end of the task, where a pattern like ./... is the task's
+// own word.
+func TestMatch_ADottedValueBelongsToItsFlag(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, "[entry]\nmode = \"deny\"\n[tasks.t]\nrun = \"vitest run --config ./vitest.config.ts --silent\"\nargs = \"none\"\n")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run"}).Action, "the flag left out with its value")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "--config", "./vitest.config.ts", "--silent"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "--config", "./vitest.config.ts"}).Action, "without --silent")
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--config", "./other.ts"}).Action, "the same flag with another value")
+}
+
+// A runner with options in front of the tool is still the tool, also the options this package does not know and a package manager
+// whose own options come before exec.
+func TestNormalize_UnknownAndLeadingOptions(t *testing.T) {
+	for _, c := range []struct{ in, want []string }{
+		{[]string{"pnpm", "--filter", "spa", "exec", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"pnpm", "-C", "spa", "test"}, []string{"pnpm", "test"}},
+		{[]string{"pnpm", "-r", "exec", "vitest"}, []string{"vitest"}},
+		{[]string{"pnpm", "exec", "--weird", "x", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"npx", "--weird", "x", "tsc", "-b"}, []string{"tsc", "-b"}},
+		{[]string{"npx", "--weird", "x", "foo"}, []string{"x", "foo"}}, // nothing recognisable: left as it is, not a family command
+	} {
+		assert.Equal(t, c.want, normalize(c.in), c.in)
+	}
+	assert.False(t, isFamily(normalize([]string{"npx", "--weird", "x", "foo"})))
+	assert.True(t, isFamily(normalize([]string{"pnpm", "exec", "--weird", "x", "vitest", "run"})))
+}
+
 // A runner with options in front of the tool is still the tool: pnpm exec's `--`, its directory options, npx's options with values.
 func TestNormalize_RunnerOptions(t *testing.T) {
 	for _, c := range []struct{ in, want []string }{

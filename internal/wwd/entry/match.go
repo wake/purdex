@@ -47,7 +47,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 		j := k + 1
 		if !strings.Contains(tw[k], "=") { // a flag with its value in the next word: `-p 3`
-			for j < len(tw) && valueLike(tw[j]) {
+			for j < len(tw) && valueLike(tw[j], j == len(tw)-1) {
 				j++
 			}
 		}
@@ -62,7 +62,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 	}
 	rest := cmd[i:]
 	taskDir := filepath.Join(root, filepath.FromSlash(t.Cwd))
-	if !within(taskDir, cwd) {
+	if !within(taskDir, cwd) || !noLinks(root, taskDir) {
 		return nil, false
 	}
 	switch t.Args {
@@ -82,7 +82,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		if a == "" || strings.HasPrefix(a, "-") {
 			return nil, false
 		}
-		conv, ok := convertArg(t.Args, taskDir, cwd, a)
+		conv, ok := convertArg(t.Args, root, taskDir, cwd, a)
 		if !ok {
 			return nil, false
 		}
@@ -91,10 +91,11 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 	return out, true
 }
 
-// valueLike says whether a word after a flag can be its value: not another flag, and not a relative path or pattern (those are the
-// task's plain words, like the trailing ./... of `go test -timeout 30m ./...`).
-func valueLike(w string) bool {
-	return w != "" && !strings.HasPrefix(w, "-") && !strings.HasPrefix(w, ".")
+// valueLike says whether a word after a flag can be its value: not another flag, and, as the very last word of the task, not a
+// relative path or pattern (that is the task's own word, like the trailing ./... of `go test -timeout 30m ./...`; anywhere else a
+// value that starts with a dot, `--config ./x.ts`, is a value).
+func valueLike(w string, last bool) bool {
+	return w != "" && !strings.HasPrefix(w, "-") && !(last && strings.HasPrefix(w, "."))
 }
 
 func equal(a, b []string) bool {
@@ -118,7 +119,7 @@ func flagName(w string) string {
 // convertArg puts an argument as typed in cwd into the form `pdx test` takes: a file relative to the task's directory that is in
 // the working tree and has no symbolic link on the way (a queued job runs on a snapshot, which holds the link and not its target),
 // a package pattern relative to the task's directory (a pattern that is not a path is kept as it is).
-func convertArg(kind manifest.ArgsKind, taskDir, cwd, a string) (string, bool) {
+func convertArg(kind manifest.ArgsKind, root, taskDir, cwd, a string) (string, bool) {
 	if kind == manifest.ArgsPackages && !strings.HasPrefix(a, ".") && !filepath.IsAbs(a) {
 		return a, true
 	}
@@ -137,7 +138,7 @@ func convertArg(kind manifest.ArgsKind, taskDir, cwd, a string) (string, bool) {
 	rel = filepath.ToSlash(rel)
 	switch kind {
 	case manifest.ArgsFiles:
-		if !plainFile(taskDir, abs, rel) {
+		if !plainFile(root, abs) {
 			return "", false
 		}
 		return rel, true
@@ -162,22 +163,34 @@ func convertArg(kind manifest.ArgsKind, taskDir, cwd, a string) (string, bool) {
 	return out, true
 }
 
-// plainFile says whether abs is a regular file that lies where its path says: resolving every link on the way ends at the same
-// place below the task's directory.
-func plainFile(taskDir, abs, rel string) bool {
-	realDir, err := filepath.EvalSymlinks(taskDir)
-	if err != nil {
+// plainFile says whether abs is a regular file with no symbolic link on the way from the repository root: a queued job runs on a
+// snapshot, which holds a link and not what it points at.
+func plainFile(root, abs string) bool {
+	if !noLinks(root, abs) {
 		return false
 	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return false
-	}
-	if r, err := filepath.Rel(realDir, real); err != nil || filepath.ToSlash(r) != rel { // outside, or moved by a link on the way
-		return false
-	}
-	st, err := os.Stat(real)
+	st, err := os.Lstat(abs)
 	return err == nil && st.Mode().IsRegular()
+}
+
+// noLinks says whether every part of p below root (p itself included) exists and is not a symbolic link.
+func noLinks(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	cur := root
+	if rel == "." {
+		return true
+	}
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, seg)
+		st, err := os.Lstat(cur)
+		if err != nil || st.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // within says whether p is dir or below it.
