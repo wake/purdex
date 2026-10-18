@@ -109,6 +109,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"watch":           KeyWatch,
 		"probeHosts":      KeyProbeHosts,
 		"fleet":           KeyFleet,
+		"taskGroups":      KeyTaskGroups,
 	} {
 		e, err := m.store.Get(key)
 		if err != nil {
