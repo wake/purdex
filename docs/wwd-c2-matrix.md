@@ -30,7 +30,8 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 3. 案例本身：用 `only_workers` 設定誰的 worker 開著，製造一個故障，等待，唯讀檢查，印 `ok`／`FAIL`。
 4. 每個案例結束都多一項檢查：**air19 從這次執行開始後沒有 claim 任何工作**。
 5. 結尾（也在 ^C、`exit`、SIGTERM 時）：恢復凍結的 wwd（`kill -CONT`）、把停掉的服務重新啟動、把改過的 worker 設定原樣 PUT 回去、刪掉建立的 fault 檔、取消它建的工作、刪除暫存與遠端暫存、刪掉各台的 `/tmp/wwd-c2-ran.log`。
-   **清理做不到的項目會列在結尾，並讓結束碼是 1**（`FAIL: the clean-up could not put back: ...`）。看到這行就要親自去那台主機看。
+   **會改變主機狀態的四項（解凍、重啟服務、還原 worker 設定、刪 fault 檔）做不到時，會列在結尾並讓結束碼是 1**（`FAIL: the clean-up could not put back: ...`），看到這行就要親自去那台主機看。
+   取消工作、刪遠端暫存、刪 probe log 是 best-effort：失敗不會報也不影響結束碼；跑完後可用 §6 的指令順手確認。
 6. 結束碼：有案例 FAIL 或清理失敗是 1，否則 0。SKIP（缺掛鉤）不算失敗。
 
 ### 腳本會做與不會做的事
