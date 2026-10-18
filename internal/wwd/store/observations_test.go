@@ -10,6 +10,9 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
+// saveAt stores with the clock fixed two hours after t0, so the tests do not age out as real time passes.
+func saveAt(s *Store, o wire.Observation) error { return s.SaveObservationAt(o, t0.Add(2*time.Hour)) }
+
 func obsAt(start time.Time, pid int, sig string) wire.Observation {
 	end := start.Add(90 * time.Second)
 	return wire.Observation{
@@ -22,11 +25,11 @@ func TestObservationsPersistInOrderAndSurviveReopen(t *testing.T) {
 	s, p := open(t)
 	late, early := obsAt(t0.Add(time.Hour), 1, "go test"), obsAt(t0, 2, "pnpm vitest")
 	for _, o := range []wire.Observation{late, early} { // written out of order
-		if err := s.SaveObservation(o); err != nil {
+		if err := saveAt(s, o); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SaveObservation(early); err != nil { // the same observation again changes nothing
+	if err := saveAt(s, early); err != nil { // the same observation again changes nothing
 		t.Fatal(err)
 	}
 	s.Close()
@@ -50,22 +53,42 @@ func TestObservationsPersistInOrderAndSurviveReopen(t *testing.T) {
 
 func TestObservationsOlderThanRetentionArePruned(t *testing.T) {
 	s, _ := open(t)
-	old := obsAt(t0.Add(-ObservationRetention-time.Hour), 3, "make")
-	if err := s.SaveObservation(old); err != nil {
+	old := obsAt(t0, 3, "make")
+	if err := s.SaveObservationAt(old, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveObservation(obsAt(t0, 4, "go build")); err != nil { // a save prunes by the newest start
+	later := t0.Add(ObservationRetention + 2*time.Hour) // the clock, not the new record's start, sets the cutoff
+	if err := s.SaveObservationAt(obsAt(later, 4, "go build"), later); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.LoadObservations(old.StartedAt.Add(-time.Hour))
+	got, err := s.LoadObservations(t0.Add(-time.Hour))
 	if err != nil || len(got) != 1 || got[0].Signature != "go build" {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+}
+
+// A wrong start time cannot erase the history (a future one) or revive what has aged out (a stale retry).
+func TestObservationRetentionDoesNotFollowTheRecordsStart(t *testing.T) {
+	s, _ := open(t)
+	now := t0.Add(time.Hour)
+	if err := s.SaveObservationAt(obsAt(t0, 6, "go test"), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveObservationAt(obsAt(now.Add(30*24*time.Hour), 7, "future"), now); err == nil {
+		t.Fatal("a start a month ahead was stored")
+	}
+	if err := s.SaveObservationAt(obsAt(now.Add(-ObservationRetention-time.Hour), 8, "stale"), now); err != nil {
+		t.Fatal(err) // dropped quietly: it is already past the retention
+	}
+	got, err := s.LoadObservations(now.Add(-60 * 24 * time.Hour))
+	if err != nil || len(got) != 1 || got[0].Signature != "go test" {
 		t.Fatalf("got %+v err %v", got, err)
 	}
 }
 
 func TestObservationsReportAnUndecodableRow(t *testing.T) {
 	s, _ := open(t)
-	if err := s.SaveObservation(obsAt(t0, 5, "go test")); err != nil {
+	if err := saveAt(s, obsAt(t0, 5, "go test")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB().Exec(`INSERT INTO observations (id, started_ms, rec) VALUES ('o_bad', ?, 'not json')`, t0.Add(time.Minute).UnixMilli()); err != nil {
@@ -86,7 +109,7 @@ func TestSaveObservationRefusesAnInvalidOne(t *testing.T) {
 	s, _ := open(t)
 	o := obsAt(t0, 6, "go test")
 	o.Via = "docker"
-	if err := s.SaveObservation(o); err == nil {
+	if err := saveAt(s, o); err == nil {
 		t.Fatal("an invalid observation must not be stored")
 	}
 	if got, _ := s.LoadObservations(time.Time{}); len(got) != 0 {
@@ -119,7 +142,7 @@ func TestOpenMigratesV2ToV3(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.SaveObservation(obsAt(t0, 7, "go test")); err != nil {
+	if err := saveAt(s, obsAt(t0, 7, "go test")); err != nil {
 		t.Fatalf("observations after migration: %v", err)
 	}
 	if ws, ok, err := s.LoadWorker(); err != nil || !ok || ws.OwnerRule != "r" {

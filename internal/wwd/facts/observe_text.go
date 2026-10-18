@@ -76,13 +76,21 @@ func scrubbed(argv []string) []string {
 }
 
 // splitShellWords splits on white space outside quotes and keeps the quote characters in the words, so a quoted value with spaces
-// ('secret value') stays one word for the scrubber instead of leaving its tail behind. An unterminated quote runs to the end.
+// ('secret value') stays one word for the scrubber instead of leaving its tail behind. A backslash outside single quotes keeps the
+// next character in the word (first\ tail, \" inside a double quote). An unterminated quote runs to the end.
 func splitShellWords(s string) []string {
 	var words []string
 	var cur strings.Builder
 	var quote rune
+	escaped := false // the rune before was a backslash (outside single quotes): this one is part of the word whatever it is
 	for _, r := range s {
 		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\' && quote != '\'':
+			cur.WriteRune(r)
+			escaped = true
 		case quote != 0:
 			cur.WriteRune(r)
 			if r == quote {

@@ -31,6 +31,8 @@ func TestRedactCommandAndSignatureCarryNoSecret(t *testing.T) {
 		"a shell script":                      {[]string{"bash", "-c", "curl --token supersecretvalue1 https://x"}, "supersecretvalue1"},
 		"a quoted script value with a space":  {[]string{"bash", "-c", "curl --token 'first tailfragment' https://x"}, "tailfragment"},
 		"a double-quoted flag=value, spaced":  {[]string{"sh", "-lc", `tool --password="one tailfragment" go`}, "tailfragment"},
+		"a backslash-escaped space":           {[]string{"sh", "-c", `tool --password=first\ tailfragment go`}, "tailfragment"},
+		"an escaped quote inside quotes":      {[]string{"sh", "-c", `tool --token "a\" tailfragment" go`}, "tailfragment"},
 		"an unterminated quote in the script": {[]string{"bash", "-c", "curl --token 'first tailfragment"}, "tailfragment"},
 	} {
 		if got := RedactCommand(c.argv); strings.Contains(got, c.secret) {
