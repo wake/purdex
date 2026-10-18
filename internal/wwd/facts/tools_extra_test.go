@@ -31,6 +31,15 @@ func TestToolDirsPutsExtraInFrontWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestToolDirsNeverTakeAShimDirectoryFromExtra(t *testing.T) {
+	home := t.TempDir()
+	shims := filepath.Join(home, ".config", "pdx", "shims")
+	dirs := ToolDirs(home, "/usr/bin", []string{shims, "/srv/node/bin"})
+	if contains(dirs, shims) || dirs[0] != "/srv/node/bin" {
+		t.Errorf("a shim directory in extra_path must be dropped: %v", dirs)
+	}
+}
+
 func TestToolDirsWithoutExtraIsTheDefault(t *testing.T) {
 	home := t.TempDir()
 	if got, want := ToolDirs(home, "/usr/bin", nil), DefaultToolDirs(home, "/usr/bin"); strings.Join(got, ":") != strings.Join(want, ":") {

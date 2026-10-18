@@ -74,7 +74,12 @@ func DefaultToolDirs(home, pathEnv string) []string {
 // ToolDirs is DefaultToolDirs with the configured extra directories in front (an explicit setting wins). It is the one list both the
 // tool probe and a job's PATH are built from, so a tool the facts report is a tool a job finds.
 func ToolDirs(home, pathEnv string, extra []string) []string {
-	dirs := append([]string(nil), extra...)
+	var dirs []string
+	for _, d := range extra {
+		if !isShimDir(d) && !contains(dirs, d) { // a shim routes through the gate: never a real tool, for the probe or for a job
+			dirs = append(dirs, d)
+		}
+	}
 	for _, d := range DefaultToolDirs(home, pathEnv) {
 		if !contains(dirs, d) {
 			dirs = append(dirs, d)
