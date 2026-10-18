@@ -154,8 +154,7 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 ### 案例 13：mserv 的 PHP 與沙箱
 
 - 只開 mserv。(a) `c2-php-db`（需要 `db = "per-job"`）：PHP 腳本連上分到的資料庫、建表、寫、讀回，讀到 `round-trip` 才結束碼 0。預期 `succeeded`；結束後 mserv 上 `show databases` 沒有 `wwd_` 開頭的庫。
-  (b) `c2-sandbox`：探針在沙箱內檢查四件事，全部成立才結束碼 0：`/run/docker.sock` 不是 socket（碰不到）、`/home/wake` 底下寫不進去、`sudo -n true` 不通、`/tmp` 可寫；預期 `succeeded`。
-  **注意這個探針是最小版**：它只證明這四件事，**沒有**證明 `/tmp` 是私有的（與宿主分開），「不能寫工作區之外」也只探一個固定路徑。等 4d 的沙箱定案後要把探針收緊（宿主預置 sentinel 對照、多個 workspace 外的位置），在那之前不要把案例 13 當成沙箱隔離的完整證明。
+  (b) `c2-sandbox`：探針在沙箱內檢查，全部成立才結束碼 0：工作區（工作目錄）寫得進去（對照組，寫不進去就代表探針本身沒用）；`/run/docker.sock`、`/var/run/docker.sock` 都連不上（有 `curl` 時真的發 `/_ping` 請求、不得有回應；另外確認宿主上有 docker socket，並在沙箱外用矩陣登入的帳號（mserv 上就是工作帳號，在 docker 群組）發 `/_ping` 要得到 `OK`（對照組：沒有沙箱時是通的，沙箱內才不通；假設矩陣登入帳號＝工作帳號）。`InaccessiblePaths` 在原路徑留一個 mode 000 的 socket 替身，所以判斷的是「有沒有寫入權限」，不是存在與否）；`/home/wake`、`/etc`、`/usr/local`、`/usr/bin`、`/opt`、`/srv`、`/root`、`/var/lib`、`/var/log`、`/run` 都寫不進去（`ProtectSystem=strict`）；`sudo -n true` 不通；`/tmp` 可寫，且看不到案例事先放在宿主 `/tmp` 的 `wwd-c2-sentinel.<本次執行的標記>`。預期 `succeeded`；案例另外在宿主上確認工作寫的 `/tmp/wwd-c2-private.<標記>` 沒有出現在宿主的 `/tmp`（私有 `/tmp` 的雙向證明）。
   (c) `systemctl --failed` 沒有 `wwd-` 的 unit（工作的 transient unit 讀完 Result 就 `reset-failed`）。
 
 ### 案例 14：air19 不 claim
