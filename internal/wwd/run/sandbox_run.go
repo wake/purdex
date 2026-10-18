@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,7 +56,9 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		return failStart(res, err)
 	}
 
-	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
+	exitFile := filepath.Join(spec.Workspace, ".wwd-exit")
+	_ = os.Remove(exitFile)
+	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, exitFile, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
 	cmd := execstat.Command("wwd.run.sandbox", sb.SudoPath, argv...)
 	cmd.Dir = spec.Dir
 	cmd.Stdin = nil
@@ -103,12 +109,21 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		switch {
 		case show["LoadState"] == "not-found":
 			// A unit that ended well is unloaded by systemd as soon as it is inactive (only a failed one stays to be read; measured
-			// on mserv). systemd-run --wait ended with exit 0 then: that is the command's success. With any other exit, nothing
-			// was started.
-			if waitErr == nil {
+			// on mserv). What the command's wrapper left in the exit file is then the answer. systemd-run's own exit 0 is not: a
+			// unit stopped from outside also leaves it with 0.
+			code, got := readExit(exitFile)
+			switch {
+			case waitErr != nil:
+				show = map[string]string{} // classify reads this as "no unit": nothing was started
+			case got && code == 0:
 				show = map[string]string{"Result": "success", "ExecMainStatus": "0"}
-			} else {
-				show = map[string]string{} // classify reads this as "no unit"
+			case got:
+				show = map[string]string{"Result": "exit-code", "ExecMainStatus": strconv.Itoa(code)}
+			default:
+				stop = stopCancel
+				if runErr == nil {
+					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside", unit)
+				}
 			}
 		case show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]:
 			// The Result must belong to the invocation this run started: a unit that is still there with the invocation it had
@@ -173,6 +188,19 @@ func endUnit(sb Sandbox, unit string, clientPid int, done <-chan error, killAfte
 // activeState says whether a unit's ActiveState means "something may be running".
 func activeState(st string) bool {
 	return st == "active" || st == "activating" || st == "deactivating" || st == "reloading"
+}
+
+// readExit reads the exit status the wrapper left; got is false when there is none.
+func readExit(path string) (code int, got bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // control runs `sudo systemctl <verb> <unit>`; the callers that cannot do anything about a failure ignore it.

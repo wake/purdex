@@ -138,9 +138,12 @@ func (s Sandbox) validate(spec Spec) error {
 
 func unitName(jobID string) string { return "wwd-" + jobID }
 
+// exitWrapper runs "$@" and writes its exit status to the file named by $0.
+const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"`
+
 // sandboxArgv is the systemd-run command line (without the leading sudo). The environment is cleared with env -i and then set
 // from env, so nothing of the unit's default environment reaches the job.
-func sandboxArgv(sb Sandbox, unit, workspace, dir string, timeout, killAfter time.Duration, env []string, prog string, args []string) []string {
+func sandboxArgv(sb Sandbox, unit, workspace, dir, exitFile string, timeout, killAfter time.Duration, env []string, prog string, args []string) []string {
 	argv := []string{"systemd-run", "--wait", "--pipe", "--uid=" + sb.User, "--unit=" + unit, "--slice=" + sb.Slice,
 		"-p", "CPUQuota=" + sb.CPUQuota, "-p", "MemoryMax=" + sb.MemoryMax, "-p", "MemorySwapMax=" + sb.MemorySwapMax}
 	if timeout > 0 {
@@ -157,7 +160,10 @@ func sandboxArgv(sb Sandbox, unit, workspace, dir string, timeout, killAfter tim
 	}
 	argv = append(argv, "env", "-i")
 	argv = append(argv, env...)
-	argv = append(argv, "nice", "-n", "10", "ionice", "-c3", prog)
+	// The command runs under a one-line shell that leaves its exit status in exitFile ($0). A unit that ended well is unloaded by
+	// systemd at once, so its Result cannot be read; the file is what tells a job that finished from a unit stopped from outside
+	// (both leave systemd-run with exit 0).
+	argv = append(argv, "nice", "-n", "10", "ionice", "-c3", "sh", "-c", exitWrapper, exitFile, prog)
 	return append(argv, args...)
 }
 

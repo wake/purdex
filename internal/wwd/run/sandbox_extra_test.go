@@ -54,7 +54,7 @@ func TestExtraPropertiesAreCheckedForShape(t *testing.T) {
 
 func TestExtraPropertiesComeAfterTheFixedOnesAndBeforeTheCommand(t *testing.T) {
 	sb := Sandbox{User: "wake", ExtraProperties: []string{"ProtectSystem=strict"}}.withDefaults()
-	got := sandboxArgv(sb, "wwd-j", "/ws", "/ws", time.Minute, time.Second, nil, "/bin/true", nil)
+	got := sandboxArgv(sb, "wwd-j", "/ws", "/ws", "/ws/.wwd-exit", time.Minute, time.Second, nil, "/bin/true", nil)
 	j := strings.Join(got, " ")
 	i, e := strings.Index(j, "-p ProtectSystem=strict"), strings.Index(j, " env -i")
 	d := strings.Index(j, "InaccessiblePaths=")

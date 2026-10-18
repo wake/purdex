@@ -15,6 +15,7 @@
 | G | `ProtectSystem=strict` | see below |
 | H | cancel | TERM ignored by the job: Cancelled after 5.26 s (cancel at 2 s, then the 3 s grace, then KILL); no leftover |
 | I | same-name old failed unit | a failed `wwd-j_4d3-I` left behind; the next run of the same id is cleared first and reads its own result (Exited 0) |
+| K | stopped from outside | `systemctl stop` of the running unit by an operator: Cancelled after 1.55 s with `Err` "ended and left no exit status: it was stopped from outside" (systemd-run exits 0 and the unit disappears, so it must not read as a success) |
 | J | jobdb on the dev MySQL | **not run**: it needs the administrator account on mserv's MySQL, which is the user's decision |
 
 ### G: without and with `ProtectSystem=strict`
@@ -24,7 +25,7 @@
 | `/var/tmp/4d3-x` | wrote | wrote (`PrivateTmp` covers `/var/tmp`: the write is private, not denied) |
 | `/var/crash/4d3-x` (group `adm`) | wrote | **denied** |
 | `/var/log/installer/4d3-x` (group `adm`) | wrote | **denied** |
-| composer install of phpunit 11 into the workspace (empty cache, PHP 8.5.11, composer.phar fetched) | 6 s, `OK (1 test, 1 assertion)` | 6 s, `OK (1 test, 1 assertion)` |
+| composer install of phpunit 11 into the workspace (empty cache, PHP 8.5.11, composer.phar 2.10.3 fetched and checked against its published sha256) | 6 s, `OK (1 test, 1 assertion)` | 6 s, `OK (1 test, 1 assertion)` |
 
 `/opt` and `/usr/local` hold nothing `wake` owns, so there was nothing to probe there. `find -writable` also shows `/srv/stacks` and `/srv/backups` writable by `wake`; they were deliberately not probed (the second is real backup data), but `ProtectSystem=strict` makes the whole tree read-only by the same mechanism, so a job could not write there with it.
 A job's composer cache starts empty (HOME is in the workspace): 6–7 s for this project, not a visible cost.
@@ -35,7 +36,7 @@ Recommendation: add `ProtectSystem=strict` through `Sandbox.ExtraProperties` for
 ## What the real run found (both fixed in this PR; the fake `sudo`/`systemctl` of the unit tests had hidden them)
 
 1. `systemctl reset-failed` on a unit that was never loaded exits 1. The start-up clean-up treated that as "cannot clear" and refused to start every first run. Now it clears only when `LoadState` is not `not-found`.
-2. A unit that ended well is unloaded by systemd at once; only a failed one stays to be read. The Result of a successful job is therefore not there. Now: unit gone and `systemd-run --wait` exited 0 → success; unit gone and a non-zero exit → nothing was started.
+2. A unit that ended well is unloaded by systemd at once; only a failed one stays to be read. The Result of a successful job is therefore not there, and systemd-run's exit 0 cannot stand for it (a unit stopped from outside also leaves it with 0: scenario K). The command now runs under a one-line shell (`sh -c '"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"' <workspace>/.wwd-exit <command>`) that leaves its exit status in the workspace: unit gone and systemd-run exit 0 and the file says N → Exited N; no file → stopped from outside (Cancelled with an `Err`); a non-zero systemd-run exit → nothing was started. A failed unit still stays loaded and its Result is read from systemd as before. One consequence: a command killed by a signal that the shell survives now reads as exit 128+n instead of a Signal.
 
 ## About the per-job database and at-inwin
 

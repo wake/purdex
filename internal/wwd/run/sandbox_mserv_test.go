@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,19 @@ func failedUnits(t *testing.T) string {
 	return strings.Join(mine, "\n")
 }
 
+// rawUnit runs a script in a plain transient unit (no sandbox properties but the ones in extra), for the controls that need a unit
+// the runner would not make. The clean-up (stop, then reset-failed, of this one name) is registered before the unit starts, and the
+// unit has a runtime limit, so a test that is killed half way cannot leave it running.
+func rawUnit(t *testing.T, name string, runtimeSec int, extra, script string) string {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = exec.Command("sudo", "systemctl", "stop", name+".service").Run()
+		_ = exec.Command("sudo", "systemctl", "reset-failed", name+".service").Run()
+	})
+	out, _ := shOut("sudo systemd-run --wait --pipe --unit=" + name + " --slice=wwd.slice -p RuntimeMaxSec=" + strconv.Itoa(runtimeSec) + " " + extra + " sh -c '" + script + "'")
+	return out
+}
+
 func shOut(script string) (string, error) {
 	b, err := exec.Command("sh", "-c", script).CombinedOutput()
 	return string(b), err
@@ -122,8 +136,7 @@ func TestMServ(t *testing.T) {
 		}
 		// the RuntimeMaxSec fuse itself, on a real systemd: the unit's Result must read as a timeout
 		id := "wwd-j_4d3-C2"
-		t.Cleanup(func() { _ = exec.Command("sudo", "systemctl", "reset-failed", id+".service").Run() })
-		out, _ := shOut("sudo systemd-run --wait --pipe --unit=" + id + " --slice=wwd.slice -p RuntimeMaxSec=3 sleep 60")
+		out := rawUnit(t, id, 3, "", "sleep 60")
 		t.Logf("systemd-run said: %s", out)
 		sb := Sandbox{}.withDefaults()
 		show, err := sb.show(id)
@@ -140,7 +153,7 @@ func TestMServ(t *testing.T) {
 		}
 	})
 	t.Run("E_docker_socket", func(t *testing.T) {
-		probe := "test -S /run/docker.sock && echo SOCKET_VISIBLE; docker ps >/dev/null 2>&1 && echo DOCKER_WORKS; " +
+		probe := "test -S /run/docker.sock && echo SOCKET_VISIBLE; timeout 10 docker ps >/dev/null 2>&1 && echo DOCKER_WORKS; " +
 			"curl -sS --max-time 3 --unix-socket /run/docker.sock http://localhost/version >/dev/null 2>&1 && echo CURL_WORKS; echo done"
 		r := runSB(t, "E", Sandbox{}, 60*time.Second, bg, "sh", "-c", probe)
 		// InaccessiblePaths puts an inaccessible socket node over the path: test -S still says yes (measured), but nothing can connect
@@ -150,8 +163,7 @@ func TestMServ(t *testing.T) {
 			}
 		}
 		// the control: the same probe without the hidden path must reach it, or the probe proves nothing
-		out, _ := shOut("sudo systemd-run --wait --pipe --unit=wwd-j_4d3-E2 --slice=wwd.slice -p PrivateTmp=yes sh -c '" + probe + "'")
-		t.Cleanup(func() { _ = exec.Command("sudo", "systemctl", "reset-failed", "wwd-j_4d3-E2.service").Run() })
+		out := rawUnit(t, "wwd-j_4d3-E2", 60, "-p PrivateTmp=yes", probe)
 		t.Logf("control (socket not hidden): %s", out)
 		if !strings.Contains(out, "SOCKET_VISIBLE") {
 			t.Errorf("the control did not see the socket: the probe is not valid on this host")
@@ -181,9 +193,11 @@ func TestMServ(t *testing.T) {
 			t.Logf("%s: %s", name, r.out)
 		}
 		// a small composer project: install time and a passing test, without and with the property
-		// composer is not installed on mserv: its phar is fetched into the workspace (the cache then starts empty, as it will for a job)
+		// composer is not installed on mserv: version 2.10.3 of its phar is fetched into the workspace and checked against the sha256 that
+		// getcomposer.org publishes for it (the cache then starts empty, as it will for a job)
 		proj := `s=$(date +%s)
-curl -sS --max-time 60 -o composer.phar https://getcomposer.org/download/latest-stable/composer.phar &&
+curl -sS --max-time 60 -o composer.phar https://getcomposer.org/download/2.10.3/composer.phar &&
+echo "7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6  composer.phar" | sha256sum -c - &&
 mkdir -p p/tests && cd p &&
 cat > composer.json <<'EOF'
 {"require-dev":{"phpunit/phpunit":"^11"}}
@@ -212,12 +226,23 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 		}
 	})
 	t.Run("I_same_name_old_failed_unit", func(t *testing.T) {
-		id := "wwd-j_4d3-I"
-		t.Cleanup(func() { _ = exec.Command("sudo", "systemctl", "reset-failed", id+".service").Run() })
-		_, _ = shOut("sudo systemd-run --wait --pipe --unit=" + id + " --slice=wwd.slice sh -c 'exit 1'")
+		rawUnit(t, "wwd-j_4d3-I", 60, "", "exit 1") // leaves a failed unit of the name the runner is about to use
 		r := runSB(t, "I", Sandbox{}, 60*time.Second, bg, "true")
 		if r.Outcome != Exited || r.ExitCode != 0 {
 			t.Fatalf("an old failed unit's Result was read: %+v", r.Result)
+		}
+	})
+	t.Run("K_stopped_from_outside", func(t *testing.T) {
+		// an operator's `systemctl stop` makes systemd-run exit 0 and the successful unit disappear: it must not read as a success
+		name := "wwd-j_4d3-K.service"
+		t.Cleanup(func() { _ = exec.Command("sudo", "systemctl", "stop", name).Run() })
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			_ = exec.Command("sudo", "systemctl", "stop", name).Run()
+		}()
+		r := runSB(t, "K", Sandbox{}, 60*time.Second, bg, "sleep", "60")
+		if r.Outcome == Exited || r.Err == nil || !strings.Contains(r.Err.Error(), "stopped from outside") || r.took > 10*time.Second {
+			t.Fatalf("result %+v took %s", r.Result, r.took)
 		}
 	})
 	t.Run("Z_nothing_left", func(t *testing.T) {
