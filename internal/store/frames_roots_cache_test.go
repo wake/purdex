@@ -54,9 +54,12 @@ func TestRootsCache_ServesACopyUntilTheTTL(t *testing.T) {
 	if got := cachedRoots(t, s, "S1"); got[0].Status != "running" {
 		t.Fatalf("at the TTL the table should be read again, got %q", got[0].Status)
 	}
+	if _, err := s.db.Exec(`UPDATE agent_frames SET status = 'done' WHERE frame_id = ?`, f.FrameID); err != nil { // no touch
+		t.Fatal(err)
+	}
 	now = now.Add(-time.Hour) // a clock that stepped back is not a fresh copy
-	if got := cachedRoots(t, s, "S1"); got[0].Status != "running" {
-		t.Fatal("a copy from the future was served")
+	if got := cachedRoots(t, s, "S1"); got[0].Status != "done" {
+		t.Fatalf("a copy from the future was served: %q", got[0].Status)
 	}
 }
 
