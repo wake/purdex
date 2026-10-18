@@ -1,5 +1,5 @@
 // Guard (JV-3, spec U7 / §3.5): entry pinning is gone from the SPA. Nothing may call the pin route, no journal source may keep a pin
-// action, and no journal text may say 釘選. (`pinned` on the wire is still parsed, for the old-daemon band.)
+// action, and no journal text may say 釘選. (A top-level `pinned[]` on the wire is not read either.)
 import { describe, it, expect } from 'vitest'
 import en from '../../locales/en.json'
 import zh from '../../locales/zh-TW.json'
