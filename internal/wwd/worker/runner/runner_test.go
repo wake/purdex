@@ -767,3 +767,14 @@ func TestFewerLocksThanListedIsAlsoAMismatch(t *testing.T) {
 		t.Fatalf("kind=%s", e.Kind)
 	}
 }
+
+func TestOtherLockOfTheSameCountIsAMismatch(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id, "tmux"), ClaimID: claimID, LeaseS: 5, RenewS: 1}, nil
+	}}
+	c, _ := newCtl(ex)
+	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql")), nil); e.Kind != KindSkipped || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+}
