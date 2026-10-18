@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,7 +41,8 @@ type PerJobDB interface {
 	Drop(ctx context.Context, jobID string) error
 }
 
-// dropTimeout bounds the removal of a job's database when its workspace is cleaned up.
+// dropTimeout is the context given to the removal of a job's database when its workspace is cleaned up (the SQL; a Drop that first
+// waits for the database manager's own lock is bounded by that lock, not by this).
 const dropTimeout = 30 * time.Second
 
 // Config is what Exec needs from the worker.
@@ -137,6 +139,11 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 			ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
 			dberr = e.cfg.DB.Drop(ctx, jobID)
 			cancel()
+			if dberr != nil {
+				// the runner does not look at what Cleanup returns, so say it here. Cleanup runs once (it removes the worktree too); the
+				// loop's Sweeper removes the databases of jobs this worker no longer holds
+				log.Printf("jobexec: could not drop the database of %s, left for the sweep: %v", jobID, dberr)
+			}
 		}
 		return errors.Join(err, dberr, os.RemoveAll(base))
 	}}, nil
