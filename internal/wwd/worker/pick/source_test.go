@@ -1,6 +1,7 @@
 package pick
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -149,8 +150,10 @@ func TestPeerSourceDecodesStrictly(t *testing.T) {
 
 func TestPeerSourceRefusesOversizedAnswer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"jobs":[],"pad":"`))
-		_, _ = w.Write(make([]byte, maxAnswer))
+		// valid JSON that is only too long, so that a size limit is the one thing that can refuse it
+		_, _ = w.Write([]byte(`{"jobs":[]`))
+		_, _ = w.Write(bytes.Repeat([]byte(" "), maxAnswer))
+		_, _ = w.Write([]byte(`}`))
 	}))
 	defer srv.Close()
 	if _, err := NewPeerSource("p", srv.URL, "t", srv.Client()).Queued(context.Background()); err == nil {
