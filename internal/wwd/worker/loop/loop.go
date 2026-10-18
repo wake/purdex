@@ -302,6 +302,7 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 	}
 	if l.cfg.Report != nil {
 		env.Suspended = l.cfg.Report.Suspended
+		env.HeldOff = l.cfg.Report.HeldOff
 	}
 	ranked := pick.Rank(cands, env)
 	tries := 0

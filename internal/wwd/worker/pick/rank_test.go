@@ -270,3 +270,19 @@ func TestSuspendedIsPerOrigin(t *testing.T) {
 	r := Rank([]Candidate{{Source: "mlab", Job: mine}, {Source: "evil", Job: theirs}}, env)
 	eq(t, ids(r), []string{"mine"})
 }
+
+// A job whose origin answered wrongly a moment ago is skipped; another job of the same repo is not, and neither is the same id at
+// another origin (#3379).
+func TestHeldOffSkipsThatJobOnly(t *testing.T) {
+	env := baseEnv()
+	env.HeldOff = func(source, id string) bool { return source == "mlab" && id == "bad" }
+	bad, good, other := job("bad", wire.ClassDev, 0), job("good", wire.ClassDev, 0), job("bad", wire.ClassDev, 0)
+	r := Rank([]Candidate{{Source: "mlab", Job: bad}, {Source: "mlab", Job: good}, {Source: "evil", Job: other}}, env)
+	got := map[string]bool{}
+	for _, sc := range r {
+		got[sc.Source+"/"+sc.Job.ID] = true
+	}
+	if len(r) != 2 || !got["mlab/good"] || !got["evil/bad"] || got["mlab/bad"] {
+		t.Fatalf("ranked %v: want mlab/good and evil/bad only", got)
+	}
+}

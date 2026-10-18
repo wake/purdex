@@ -116,6 +116,10 @@ const (
 	// KindInfra: the host could not run the job (workspace could not be made, start refused by a transport failure…). Err says why;
 	// the job should be released (reason infra).
 	KindInfra Kind = "infra"
+	// KindOrigin: the origin answered in a way that is its own failure (a 5xx, an answer the snapshot client cannot act on, busy past
+	// the retries; snapshot.IsOriginSide) when the workspace was being made. Nothing is wrong with this host. Err is the origin's
+	// error; the job should go back with reason reclaim and the origin's words, and this host should not be held off the repo.
+	KindOrigin Kind = "origin"
 )
 
 // Ended is what Work reports.
@@ -329,6 +333,8 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 		ended.Kind = KindShutdown
 	case errors.As(runErr, &rej):
 		ended.Kind, ended.Err = KindRejected, runErr
+	case runErr != nil && snapshot.IsOriginSide(runErr):
+		ended.Kind, ended.Err = KindOrigin, runErr
 	case runErr != nil:
 		ended.Kind, ended.Err = KindInfra, runErr
 	default:

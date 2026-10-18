@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -776,5 +778,29 @@ func TestOtherLockOfTheSameCountIsAMismatch(t *testing.T) {
 	c, _ := newCtl(ex)
 	if e := c.Work(context.Background(), o, scored(testJob("j", "mysql")), nil); e.Kind != KindSkipped || ex.ran.Load() != 0 {
 		t.Fatalf("kind=%s", e.Kind)
+	}
+}
+
+// An answer from the origin that the snapshot client cannot act on is the origin's failure, not this host's (#3379): the kind says so,
+// with the origin's own words in Err; a failure of this host's own stays infra. The locks the job held are let go either way.
+func TestMaterializeOriginErrorIsKindOriginAndLocalFailureStaysInfra(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want Kind
+	}{
+		"5xx":     {&snapshot.OriginError{Status: 500, Body: "the commit of this job is not pinned"}, KindOrigin},
+		"busy":    {snapshot.ErrBusy, KindOrigin},
+		"wrapped": {fmt.Errorf("fetching: %w", &snapshot.OriginError{Status: 502, Body: "bad gateway"}), KindOrigin},
+		"disk":    {errors.New("disk full"), KindInfra},
+		"network": {&net.OpError{Op: "dial", Err: errors.New("connection refused")}, KindInfra},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ex := &fakeExec{materialize: func(context.Context) (snapshot.Workspace, error) { return snapshot.Workspace{}, tc.err }}
+			c, tbl := newCtl(ex)
+			e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "k")), nil)
+			if e.Kind != tc.want || !errors.Is(e.Err, tc.err) || tbl.Owners() != 0 {
+				t.Fatalf("kind=%s err=%v owners=%d", e.Kind, e.Err, tbl.Owners())
+			}
+		})
 	}
 }

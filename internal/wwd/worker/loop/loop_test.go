@@ -3,9 +3,11 @@ package loop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,26 +195,38 @@ func (q queuedAdapter) Queued(ctx context.Context, _ bool) ([]wire.Job, error) {
 }
 
 type rig struct {
-	conns []*fakeConn
-	zones map[string]wire.Zone
-	ex    *fakeExec
-	tbl   *locks.Table
-	loop  *Loop
-	mu    sync.Mutex
-	st    wire.WorkerSettings
-	facts *wire.Facts
-	logs  []string
+	conns   []*fakeConn
+	zones   map[string]wire.Zone
+	ex      *fakeExec
+	tbl     *locks.Table
+	loop    *Loop
+	mu      sync.Mutex
+	st      wire.WorkerSettings
+	facts   *wire.Facts
+	logs    []string
+	repLogs []string // what the reporter said
 	// freezeAt, when set, is the At of every facts record the loop reads (a sampler that has stopped); else it is "now".
 	freezeAt time.Time
 }
 
-func newRig(t *testing.T, conns ...*fakeConn) *rig {
+func newRig(t *testing.T, conns ...*fakeConn) *rig { return newRigWith(t, nil, conns...) }
+
+// newRigWith is newRig with the reporter's configuration changed by cfg (nil: as it is).
+func newRigWith(t *testing.T, cfg func(*report.Config), conns ...*fakeConn) *rig {
 	t.Helper()
 	r := &rig{conns: conns, zones: map[string]wire.Zone{}, ex: &fakeExec{}, tbl: locks.New()}
 	r.st = wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 2}}
 	r.facts = &wire.Facts{Derived: wire.Derived{Zone: wire.ZoneNormal, Headroom: wire.Slots{Heavy: 2, Light: 2}}}
 	ctl := runner.New(runner.Config{Worker: "mlab", Locks: r.tbl, Exec: r.ex, Unit: unit})
-	rep := report.New(report.Config{Logf: func(string, ...any) {}})
+	repCfg := report.Config{Logf: func(f string, a ...any) {
+		r.mu.Lock()
+		r.repLogs = append(r.repLogs, fmt.Sprintf(f, a...))
+		r.mu.Unlock()
+	}}
+	if cfg != nil {
+		cfg(&repCfg)
+	}
+	rep := report.New(repCfg)
 	r.loop = New(Config{
 		Settings: func() wire.WorkerSettings { r.mu.Lock(); defer r.mu.Unlock(); return r.st },
 		Facts: func() *wire.Facts {
@@ -1147,4 +1161,64 @@ func TestAReleasedJobIsNotRecorded(t *testing.T) {
 	if len(rec.got) != 0 {
 		t.Fatalf("recorded %d: a job that went back to the queue has no run to record yet", len(rec.got))
 	}
+}
+
+// The origin answers the snapshot request with a 500 for one job (#3379): the job goes back as a reclaim with the origin's words, this
+// host is not held off the repo (another job of it runs at once), the one job is not picked again until its wait is over, and then it
+// is tried again, in the same worker, with the same claim path.
+func TestAnOriginErrorGivesTheJobBackWithoutHoldingTheRepoOff(t *testing.T) {
+	bad, other := qjob("bad", wire.ClassDev, time.Minute), qjob("ok", wire.ClassDev, 0)
+	c := newConn("mlab", bad, other)
+	c.onRelease = func() { c.mu.Lock(); c.jobs[bad.ID] = bad; c.mu.Unlock() } // the origin puts a released job back in its queue
+	wait := 300 * unit
+	r := newRigWith(t, func(cfg *report.Config) { cfg.OriginBackoff, cfg.OriginBackoffMax = wait, wait }, c)
+	failing := true
+	r.ex.materialize = func(j wire.Job) error {
+		if j.ID == "bad" && failing {
+			return &snapshot.OriginError{Status: 500, Body: "the commit of this job is not pinned"}
+		}
+		return nil
+	}
+
+	r.round() // the older job first: the origin refuses its snapshot
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	claims, rel, _ := c.seen()
+	if claims[0] != "bad" || rel[0].Reason != wire.ReleaseReclaim || !strings.Contains(rel[0].Detail, "origin snapshot 500: the commit of this job is not pinned") {
+		t.Fatalf("claims %v release %+v", claims, rel[0])
+	}
+	if !r.logged("500") {
+		t.Fatalf("the origin's answer is not in the log: %v", r.repLogs)
+	}
+
+	time.Sleep(3 * unit)
+	r.round() // the repo is not suspended: the other job runs; the one the origin refused waits
+	waitFor(t, "the other job's result", func() bool { _, _, n := c.seen(); return n == 1 })
+	if claims, _, _ := c.seen(); len(claims) != 2 || claims[1] != "ok" {
+		t.Fatalf("claims %v: want bad, then ok", claims)
+	}
+
+	time.Sleep(3 * unit)
+	r.round() // still inside the wait: nothing is claimed
+	if claims, _, _ := c.seen(); len(claims) != 2 {
+		t.Fatalf("claims %v: the refused job is held off for its wait", claims)
+	}
+
+	failing = false
+	time.Sleep(wait)
+	r.round() // the wait is over, the origin is mended: the same job is claimed and runs
+	waitFor(t, "the job's result", func() bool { _, _, n := c.seen(); return n == 2 })
+	if claims, _, _ := c.seen(); len(claims) != 3 || claims[2] != "bad" {
+		t.Fatalf("claims %v: want the refused job again after its wait", claims)
+	}
+}
+
+func (r *rig) logged(sub string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.repLogs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
 }
