@@ -49,12 +49,21 @@ func OpenStore(path string) (*Store, error) {
 		db.SetMaxOpenConns(1)
 	}
 	s := &Store{db: db, now: func() int64 { return time.Now().UnixMilli() }}
+	// unattended_events: one row per change of the unattended switch (name pool v2 spec §8), written in the transaction of
+	// the switch's CAS (the column is `enabled`: `on` is an SQL keyword; the API's log entries still say `on`). No backfill: history
+	// before this version is not known.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS host_config (
 			key        TEXT PRIMARY KEY,
 			value      TEXT    NOT NULL,
 			revision   INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS unattended_events (
+			id      INTEGER PRIMARY KEY,
+			at      INTEGER NOT NULL,
+			enabled INTEGER NOT NULL,
+			by_json TEXT    NOT NULL
 		);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate host config db: %w", err)
@@ -106,6 +115,21 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // (busy_timeout) and then reads the committed revision. Same pattern as
 // internal/module/backup/store.go AppendSnapshot.
 func (s *Store) Put(key string, baseRevision int64, build func(cur Entry) (json.RawMessage, error)) (Entry, bool, error) {
+	return s.PutWith(key, baseRevision, build, nil)
+}
+
+// Execer is what PutWith's callback gets: the connection of the Put's own transaction (BEGIN IMMEDIATE on the dedicated
+// *sql.Conn), narrowed to the two calls the callback needs. It is deliberately not a *sql.Tx: switching Put to db.Begin would
+// turn concurrent CAS writes into SQLITE_BUSY_SNAPSHOT instead of a clean 409 (codex #8).
+type Execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// PutWith is Put with a callback that runs on the same connection, after the revision matched and the value was built, and
+// before the commit: what it writes is committed with the value or not at all. A callback that fails takes the whole write
+// back and its error is returned as it is (not a *ValidationError). It is not called for a write that lost the revision race.
+func (s *Store) PutWith(key string, baseRevision int64, build func(cur Entry) (json.RawMessage, error), within func(q Execer) error) (Entry, bool, error) {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -143,6 +167,11 @@ func (s *Store) Put(key string, baseRevision int64, build func(cur Entry) (json.
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, revision = excluded.revision, updated_at = excluded.updated_at`,
 		key, string(value), next.Revision, next.UpdatedAt); err != nil {
 		return Entry{}, false, fmt.Errorf("put host config %s: %w", key, err)
+	}
+	if within != nil {
+		if err := within(conn); err != nil {
+			return Entry{}, false, fmt.Errorf("put host config %s: %w", key, err) // the deferred ROLLBACK takes the value back too
+		}
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return Entry{}, false, fmt.Errorf("commit host config %s: %w", key, err)
