@@ -28,7 +28,20 @@ func EmitPathHint(
 	cwdFallback string,
 	now time.Time,
 ) {
-	hint, basename, ok := ExtractPathHint(rawEvent, eventName, agentID, sessionCode, cwdFallback, now)
+	EmitPathHintLazy(b, dedup, buf, rawEvent, eventName, agentID, sessionCode, func() string { return cwdFallback }, now)
+}
+
+// EmitPathHintLazy is EmitPathHint with a fallback that is only read when the event needs it (see ExtractPathHintLazy).
+func EmitPathHintLazy(
+	b pathHintBroadcaster,
+	dedup *PathHintDedupCache,
+	buf *PathHintRingBuffer,
+	rawEvent json.RawMessage,
+	eventName, agentID, sessionCode string,
+	cwdFallback func() string,
+	now time.Time,
+) {
+	hint, basename, ok := ExtractPathHintLazy(rawEvent, eventName, agentID, sessionCode, cwdFallback, now)
 	if !ok {
 		return
 	}

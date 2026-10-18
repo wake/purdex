@@ -80,6 +80,19 @@ func ExtractPathHint(
 	cwdFallback string,
 	now time.Time,
 ) (PathHint, string, bool) {
+	return ExtractPathHintLazy(rawEvent, eventName, agentID, sessionCode, func() string { return cwdFallback }, now)
+}
+
+// ExtractPathHintLazy is ExtractPathHint whose cwd fallback is only worked out when it is needed: the event is a file tool of
+// PreToolUse / PostToolUse that names an absolute path, and carries no `cwd` of its own. Reading the fallback costs a tmux read
+// (the session's cached cwd is a tmux listing), and almost every hook event has a cwd, so the common event never asks. A nil
+// cwdFallback is no fallback.
+func ExtractPathHintLazy(
+	rawEvent json.RawMessage,
+	eventName, agentID, sessionCode string,
+	cwdFallback func() string,
+	now time.Time,
+) (PathHint, string, bool) {
 	// cc-only path: only PdxPreToolUse / PdxPostToolUse carry tool input.
 	// Phase 1 cc emits Pdx-prefixed names; codex / opencode have no
 	// equivalent hook event (file-tool semantics aren't part of their
@@ -109,8 +122,8 @@ func ExtractPathHint(
 	}
 
 	cwd := normalizeCwd(ev.Cwd)
-	if cwd == "" {
-		cwd = normalizeCwd(cwdFallback)
+	if cwd == "" && cwdFallback != nil {
+		cwd = normalizeCwd(cwdFallback())
 	}
 	if cwd == "" || !filepath.IsAbs(cwd) || len(cwd) > MaxCwdBytes || hasControlOrNul(cwd) {
 		return PathHint{}, "", false

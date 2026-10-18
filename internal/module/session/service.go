@@ -70,17 +70,18 @@ func (m *SessionModule) ListSessionsContext(ctx context.Context) ([]SessionInfo,
 }
 
 func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error) {
-	execstat.Event("session-list-build") // a build costs 2 + N tmux reads today (probe dedupe plan D2)
-	sessions, err := m.tmux.ListSessions(ctx)
+	execstat.Event("session-list-build") // a build costs 1 tmux read when the executor can list the panes too, else 2 + N (probe dedupe plan D2, #3316)
+	read, err := m.readSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	sessions := read.sessions
 	execstat.SetGauge("sessions", int64(len(sessions)))
 
 	// Sampled once per list so every entry in one payload reports the same
 	// generation, and sampled here rather than on the watcher tick so a
 	// restart between two ticks is never labelled with the old generation.
-	instance := m.tmuxInstance(ctx)
+	instance := read.instanceOf(ctx, m)
 
 	// Build live ID set for orphan cleanup
 	liveIDs := make([]string, len(sessions))
@@ -100,7 +101,7 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 	m.branches.refresh(cwds)
 
 	result := make([]SessionInfo, 0, len(sessions))
-	for _, s := range sessions {
+	for i, s := range sessions {
 		code, err := EncodeSessionID(s.ID)
 		if err != nil {
 			log.Printf("session: skipping tmux session with invalid id %q: %v", s.ID, err)
@@ -116,7 +117,7 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 			TmuxInstance: instance,
 			Branch:       m.branches.get(s.Cwd),
 		}
-		if err := m.applyActivePaneMetadata(ctx, &info); err != nil {
+		if err := read.applyPane(ctx, m, i, &info); err != nil {
 			return nil, err
 		}
 
@@ -163,15 +164,16 @@ func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionIn
 		return nil, nil // invalid code → not found
 	}
 
-	sessions, err := m.tmux.ListSessions(ctx)
+	read, err := m.readSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	sessions := read.sessions
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("session get: %w", err)
 	}
 
-	for _, s := range sessions {
+	for i, s := range sessions {
 		if s.ID == tmuxID {
 			info := &SessionInfo{
 				Code:         code,
@@ -180,10 +182,10 @@ func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionIn
 				Exists:       true,
 				Mode:         "terminal",
 				Cwd:          s.Cwd,
-				TmuxInstance: m.tmuxInstance(ctx),
+				TmuxInstance: read.instanceOf(ctx, m),
 				Branch:       m.branches.get(s.Cwd), // cache read only; the list refreshes it
 			}
-			if err := m.applyActivePaneMetadata(ctx, info); err != nil {
+			if err := read.applyPane(ctx, m, i, info); err != nil {
 				return nil, err
 			}
 
@@ -211,6 +213,65 @@ func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionIn
 		return nil, fmt.Errorf("session get: %w", err)
 	}
 	return nil, nil
+}
+
+// sessionsRead is what one read of the tmux sessions gave: the sessions, the tmux server's instance, and — when the executor lists
+// the panes in the same invocation — each session's active-pane fields (details[i] is sessions[i]).
+type sessionsRead struct {
+	sessions []tmux.TmuxSession
+	instance string
+	haveInst bool                 // instance is known; false = probe it when it is needed (the old way)
+	details  []tmux.SessionDetail // nil when the sessions were read the old way
+}
+
+// instanceOf is the tmux server instance: the one the list came with, or — read the old way — a probe made now, when the caller needs
+// it (a lookup that finds nothing, or runs out of time, never pays for it).
+func (r *sessionsRead) instanceOf(ctx context.Context, m *SessionModule) string {
+	if !r.haveInst {
+		r.instance, r.haveInst = m.tmuxInstance(ctx), true
+	}
+	return r.instance
+}
+
+// readSessions reads the sessions. An executor that is a tmux.DetailLister reads the sessions, their active panes and the server
+// instance in ONE list-sessions (#3316: a build was 2 + N forks); its answer is used only when it could be trusted. Otherwise —
+// another kind of executor, or an answer that was not trustworthy (a locale that rewrote the separators) — the sessions are read as
+// they always were: a list, then the instance, then a display-message per session. The instance is taken from the same answer as the
+// list, so it is the generation of the very server that gave the list (a restart between two ticks is never labelled with the old
+// one); with no session to carry it, or read the old way, it is probed when the caller needs it (instanceOf).
+func (m *SessionModule) readSessions(ctx context.Context) (sessionsRead, error) {
+	if dl, ok := m.tmux.(tmux.DetailLister); ok {
+		details, trusted, err := dl.ListSessionsDetailed(ctx)
+		if err != nil {
+			return sessionsRead{}, err
+		}
+		if trusted {
+			r := sessionsRead{details: details, sessions: make([]tmux.TmuxSession, len(details))}
+			for i, d := range details {
+				r.sessions[i] = d.TmuxSession
+			}
+			if len(details) > 0 {
+				r.instance, r.haveInst = details[0].Instance, true
+			}
+			return r, nil
+		}
+	}
+	sessions, err := m.tmux.ListSessions(ctx)
+	if err != nil {
+		return sessionsRead{}, err
+	}
+	return sessionsRead{sessions: sessions}, nil
+}
+
+// applyPane fills the active-pane fields of session i: from the answer that listed it, or with a read of its own when the sessions were
+// read the old way.
+func (r *sessionsRead) applyPane(ctx context.Context, m *SessionModule, i int, info *SessionInfo) error {
+	if r.details == nil {
+		return m.applyActivePaneMetadata(ctx, info)
+	}
+	p := r.details[i].Pane
+	info.PaneTitle, info.WindowName, info.CurrentCommand = p.PaneTitle, p.WindowName, p.PaneCurrentCommand
+	return nil
 }
 
 // applyActivePaneMetadata fills the pane fields from tmux. A metadata read
