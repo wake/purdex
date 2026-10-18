@@ -3,6 +3,7 @@ package run
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ type Sandbox struct {
 	SudoPath          string   // default "sudo"
 	SystemctlPath     string   // default "systemctl" (show needs no root)
 	// ExtraProperties are more systemd properties ("Name=value"), only from extraAllowed: properties that take rights away. It is
-	// how a measurement adds ProtectSystem=strict without a code change; it cannot change what the sandbox sets, add a path, a
+	// how a measurement adds a hardening property without a code change; it cannot change what the sandbox sets, add a path, a
 	// capability, a group or an environment.
 	ExtraProperties []string
 }
@@ -32,7 +33,6 @@ type Sandbox struct {
 // enough: PrivateDevices=no or TasksMax=infinity would loosen what the host does by default. None of them sets a user, a group, a
 // path that becomes writable or visible, an environment, a capability or a command, and none is one the sandbox sets.
 var extraAllowed = map[string]func(v string) bool{
-	"ProtectSystem":          oneOf("yes", "full", "strict"),
 	"ProtectKernelTunables":  oneOf("yes"),
 	"ProtectKernelModules":   oneOf("yes"),
 	"ProtectKernelLogs":      oneOf("yes"),
@@ -136,10 +136,23 @@ func (s Sandbox) validate(spec Spec) error {
 	return nil
 }
 
+// checkExtraPaths refuses a start whose extra writable path is not there: systemd would fail to set the unit up (226/NAMESPACE) and
+// the failure would look like the task's own. The workspace is made by the runner and always exists.
+func (s Sandbox) checkExtraPaths() error {
+	for _, p := range s.ReadWritePaths {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("run: the sandbox's writable path %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
 func unitName(jobID string) string { return "wwd-" + jobID }
 
-// exitWrapper runs "$@" and writes its exit status to the file named by $0.
-const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"`
+// exitWrapper runs "$@" and writes its exit status to the file named by $0. When the file cannot be written (the workspace is full
+// or read-only) it exits 125, not the command's code: a code of the command's own could be read as one of systemd's (200..243), and
+// without the file the runner cannot tell what the command did. 125 with no file is therefore an infrastructure failure.
+const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0" || exit 125; exit "$rc"`
 
 // sandboxArgv is the systemd-run command line (without the leading sudo). The environment is cleared with env -i and then set
 // from env, so nothing of the unit's default environment reaches the job.
@@ -152,6 +165,9 @@ func sandboxArgv(sb Sandbox, unit, workspace, dir, exitFile string, timeout, kil
 	}
 	argv = append(argv, "-p", "TimeoutStopSec="+strconv.Itoa(ceilSeconds(killAfter)), // TERM, then KILL after this: as on macOS
 		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only",
+		// the whole file system read-only but the workspace (ReadWritePaths) and the private /tmp and /var/tmp (WWD-4d-3: it closed
+		// writes to /srv/backups, /srv/stacks, /var/crash and the like at no cost that was measured)
+		"-p", "ProtectSystem=strict",
 		"-p", "ReadWritePaths="+strings.Join(append([]string{workspace}, sb.ReadWritePaths...), " "),
 		"-p", "WorkingDirectory="+dir, "-p", "NoNewPrivileges=yes",
 		"-p", "InaccessiblePaths="+strings.Join(sb.InaccessiblePaths, " "))

@@ -20,7 +20,7 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // hostMinutesDDL (v2): one row per finished minute, the whole rollup record as
 // JSON (minutes.go).
@@ -29,6 +29,10 @@ const hostMinutesDDL = `CREATE TABLE IF NOT EXISTS host_minutes (at INTEGER PRIM
 // observationsDDL (v3): one row per finished undeclared heavy tree, the record as JSON (observations.go).
 const observationsDDL = `CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, started_ms INTEGER NOT NULL, rec TEXT NOT NULL)`
 const observationsIndexDDL = `CREATE INDEX IF NOT EXISTS observations_started ON observations (started_ms)`
+
+// usageDDL (v4): one row per finished job, what it used and the host around it, as JSON (usage.go).
+const usageDDL = `CREATE TABLE IF NOT EXISTS job_usage (job_id TEXT PRIMARY KEY, ended_ms INTEGER NOT NULL, rec TEXT NOT NULL)`
+const usageIndexDDL = `CREATE INDEX IF NOT EXISTS job_usage_ended ON job_usage (ended_ms)`
 
 // Store is the open wwd.db.
 type Store struct{ db *sql.DB }
@@ -78,6 +82,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			hostMinutesDDL,
 			observationsDDL,
 			observationsIndexDDL,
+			usageDDL,
+			usageIndexDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -100,6 +106,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if have < 3 { // v3: the observations of undeclared heavy trees
 			for _, stmt := range []string{observationsDDL, observationsIndexDDL} {
+				if _, err := tx.ExecContext(ctx, stmt); err != nil {
+					return err
+				}
+			}
+		}
+		if have < 4 { // v4: the usage of finished jobs
+			for _, stmt := range []string{usageDDL, usageIndexDDL} {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
 					return err
 				}
