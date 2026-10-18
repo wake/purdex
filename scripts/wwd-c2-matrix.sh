@@ -141,6 +141,7 @@ worker_set() {   # worker_set HOST true|false
 }
 # a fault artifact on a host (a file the product reads): recorded before it is made, removed by finish
 FAULTS=""; REMOTE_DIRS=""
+SB_TAG=$$   # names the host /tmp files of case 13, so they are this run's alone (nothing pre-existing to spare or to delete)
 # a file that was there before this run is not ours: it is made in one step that only creates (noclobber), the path is registered before
 # that step (an interruption in between still cleans up) and un-registered when the answer is "present" or "error"; if the answer never
 # came (ssh died) it is not removed either, since this run cannot say it made it
@@ -353,6 +354,9 @@ touch "./wwd-c2-inside.$$" 2>/dev/null && rm -f "./wwd-c2-inside.$$" || note "ca
 # so the test is "can this user connect" (write permission), not "does it exist" or "is it a socket" (either path)
 for s in /run/docker.sock /var/run/docker.sock; do
   [ -w "$s" ] && note "$s can be connected to"
+  if command -v curl >/dev/null 2>&1; then   # the real thing: a request over the socket must not get an answer
+    curl -s --max-time 3 --unix-socket "$s" http://localhost/_ping >/dev/null 2>&1 && note "$s answers a request"
+  fi
 done
 # nothing outside the workspace is writable: the home, the system, and the usual places a job might drop a file
 for d in /home/wake /etc /usr/local /usr/bin /opt /srv /root /var/lib /var/log /run; do
@@ -361,11 +365,12 @@ for d in /home/wake /etc /usr/local /usr/bin /opt /srv /root /var/lib /var/log /
 done
 sudo -n true 2>/dev/null && note "sudo works"
 # /tmp is the job's own: writable, and the host's sentinel (put there by the matrix) is not in it
-touch /tmp/wwd-c2-private 2>/dev/null || note "no writable /tmp"
-[ -e /tmp/wwd-c2-sentinel ] && note "the host's /tmp is visible"
+touch /tmp/wwd-c2-private.@TAG@ 2>/dev/null || note "no writable /tmp"
+[ -e /tmp/wwd-c2-sentinel.@TAG@ ] && note "the host's /tmp is visible"
 echo "sandbox probe done fail=$fail"
 exit "$fail"
 EOS
+  sed -i.bak "s/@TAG@/$SB_TAG/g" "$WORK/repo/scripts/sandbox_probe.sh" && rm -f "$WORK/repo/scripts/sandbox_probe.sh.bak"
   ( cd "$WORK/repo" && git init -q . && git add -A && git -c user.name=c2 -c user.email=c2@localhost commit -q -m c2 )
 }
 
@@ -633,22 +638,18 @@ case_13() {
   wait_for "$id" .state succeeded 200 || true
   check "php job state" "$(jf "$id" .state)" succeeded
   check "its database is gone" "$(mserv_dbs)" 0
-  # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's.
-  # Both files are the run's own to remove only if they were not there before (fault_on / FAULTS: finish() removes them, also
-  # when the run is interrupted); one that was already there is left as it is and the check that needs it is skipped.
-  fault_on mserv /tmp/wwd-c2-sentinel
-  priv_before=$(q mserv 'test -e /tmp/wwd-c2-private && echo yes || echo no')
-  [ "$priv_before" = no ] && FAULTS="$FAULTS mserv:/tmp/wwd-c2-private"
+  # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's. The names carry
+  # this run's tag, so both files are the run's alone: finish() removes them (also when the run is interrupted) and nothing that was
+  # there before is touched.
+  fault_on mserv "/tmp/wwd-c2-sentinel.$SB_TAG"
+  FAULTS="$FAULTS mserv:/tmp/wwd-c2-private.$SB_TAG"
+  check "the host has a docker socket (else the probe's refusal proves nothing)" "$(q mserv "test -S ${C2_DOCKER_SOCK:-/run/docker.sock} && echo yes || echo no")" yes
   sb=$(submit c2-sandbox)
   wait_for "$sb" .state succeeded 120 || true
   check "sandbox probe (no docker socket, nothing writable outside the workspace, own /tmp, no sudo)" "$(jf "$sb" .state)" succeeded
-  if [ "$priv_before" = no ]; then
-    check "the job's /tmp write did not reach the host" "$(q mserv 'test -e /tmp/wwd-c2-private && echo reached || echo private')" private
-  else
-    say "SKIP check: /tmp/wwd-c2-private was on mserv before this run"
-  fi
-  fault_off mserv /tmp/wwd-c2-sentinel || true
-  fault_off mserv /tmp/wwd-c2-private || true
+  check "the job's /tmp write did not reach the host" "$(q mserv "test -e /tmp/wwd-c2-private.$SB_TAG && echo reached || echo private")" private
+  fault_off mserv "/tmp/wwd-c2-sentinel.$SB_TAG" || true
+  fault_off mserv "/tmp/wwd-c2-private.$SB_TAG" || true
   check "no failed wwd unit is left" "$(q mserv "systemctl --failed --no-legend | grep -c 'wwd-' || true")" 0
 }
 
