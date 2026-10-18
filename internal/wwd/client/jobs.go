@@ -132,7 +132,7 @@ func (c *Client) JobsAfter(ctx context.Context, after string, limit int) (wire.J
 	return r, nil
 }
 
-var jobIDRe =regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
+var jobIDRe = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
 
 // checkID refuses anything that is not a job id before it can become part of a path.
 func checkID(id string) error {
