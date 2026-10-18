@@ -180,6 +180,44 @@ func TestModule_LatestLocalFactsFollowsTheSource(t *testing.T) {
 	assert.False(t, ok, "a module without the pool reader gives nothing")
 }
 
+// The watcher's E2 inputs from wwd: the pressure level, and the paging rate as pageouts + swapouts, unknown when the facts carry
+// neither; nothing at all when the source is not the pool or wwd has none.
+func TestModule_WatchHostSignals(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	row := &fakeFleetRow{cfg: hostconfig.FleetConfig{Source: hostconfig.FleetSourcePool}, rev: 1}
+	facts := factsAt(now) // pressure 2, pageouts 2/s, swapouts 1/s
+	build := func() *Module {
+		return &Module{
+			pool: &poolHost{now: func() time.Time { return now }, pool: func(context.Context) (wire.Pool, error) {
+				return poolOf(facts), nil
+			}},
+			fleetSrc: &fleetSource{cfg: row.FleetConfig, rev: row.FleetRevision},
+		}
+	}
+	h := build().watchHostSignals()
+	require.NotNil(t, h)
+	assert.Equal(t, 2, h.Pressure)
+	assert.True(t, h.PageRateKnown)
+	assert.Equal(t, 3.0, h.PageRate)
+
+	po := 4.0
+	facts = factsAt(now)
+	facts.Mem.PageOutRate, facts.Mem.SwapOutRate = &po, nil // only one of the two counters
+	h = build().watchHostSignals()
+	assert.True(t, h.PageRateKnown)
+	assert.Equal(t, 4.0, h.PageRate)
+
+	facts = factsAt(now)
+	facts.Mem.PageOutRate, facts.Mem.SwapOutRate = nil, nil // a platform with neither
+	h = build().watchHostSignals()
+	require.NotNil(t, h)
+	assert.False(t, h.PageRateKnown)
+	assert.Equal(t, 2, h.Pressure)
+
+	row.cfg.Source, row.rev = hostconfig.FleetSourceSSH, 2
+	assert.Nil(t, build().watchHostSignals(), "not the pool source: the detector reads the sampler's own")
+}
+
 // The module answers from wwd only while the row says pool and wwd has a reading; otherwise from its own sample.
 func TestModule_LatestHostFollowsTheSource(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)

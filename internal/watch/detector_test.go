@@ -431,7 +431,7 @@ func TestE2_FromWWDSignals(t *testing.T) {
 
 	r5 := newRig(t) // a platform whose facts carry no rate: Raw's counters are not used instead
 	r5.raw = resources.HostRaw{PageCounters: true}
-	r5.host = &HostSignals{}
+	r5.host = &HostSignals{PageRate: 1000} // an unknown rate is not read, whatever the field holds
 	for i := 0; i < 60; i++ {
 		r5.raw.Pageouts += 1_000_000
 		assert.Empty(t, r5.pass())
@@ -441,6 +441,7 @@ func TestE2_FromWWDSignals(t *testing.T) {
 // Back to Raw after wwd: the counters' baseline starts over, so the whole jump of the counters in between is not a rate.
 func TestE2_RawBaselineRestartsAfterWWD(t *testing.T) {
 	r := newRig(t)
+	r.set.PageTS = 0 // a single pass over the rate is an event, so the gap's jump would show at once
 	r.raw = resources.HostRaw{PageCounters: true, Pageouts: 100}
 	r.pass() // baseline at 100
 	r.host = &HostSignals{PageRate: 1, PageRateKnown: true}
