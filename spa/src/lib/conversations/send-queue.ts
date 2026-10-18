@@ -306,7 +306,18 @@ export class SendQueue {
   setStagesMode(on: boolean): void {
     if (this.stagesMode === on) return
     this.stagesMode = on
+    if (!on) {
+      // The host no longer reports stages (a downgraded daemon): what the entries held from the old one is not true any more, and today's matching takes over.
+      // An entry the daemon already called `read` is in the transcript by its word: it is finished here (its claimed row stays covered until the header lets it go).
+      const finished = this.list.filter((e) => e.stage?.stage === 'read')
+      for (const e of finished) { this.release(e); this.leave(e) }
+      if (finished.length > 0) this.list = this.list.filter((e) => !finished.includes(e))
+      for (const e of this.list) e.stage = undefined
+      for (const t of this.readTimers.values()) clearTimeout(t)
+      this.readTimers.clear()
+    }
     this.emit()
+    this.pump() // a finished entry may have been the one being sent: the next must not wait for an event that will not come
   }
 
   /**
