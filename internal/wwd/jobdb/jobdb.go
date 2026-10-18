@@ -107,7 +107,7 @@ func (i Info) Env() []string {
 var (
 	dbNameRe   = regexp.MustCompile(`^wwd_[0-9a-f]{32}$`)
 	userNameRe = regexp.MustCompile(`^wwdu_[0-9a-f]{26}$`)
-	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,255}$`) // a configured host: no wildcard either
+	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`) // a configured host: no wildcard either, and no longer than the routines accept (VARCHAR(64))
 )
 
 func digest(jobID string) string {
@@ -129,7 +129,11 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_ = m.drop(ctx, jobID)
+	// the earlier run's leftovers must be gone before anything is made: wwd_create_db leaves an existing database as it is, so a
+	// clean-up that failed would give the new user a database that still holds the old data
+	if err := m.drop(ctx, jobID); err != nil {
+		return Info{}, fmt.Errorf("jobdb: clear what an earlier run of %s left: %w", jobID, err)
+	}
 	pw := make([]byte, 24)
 	if _, err := rand.Read(pw); err != nil {
 		return Info{}, err

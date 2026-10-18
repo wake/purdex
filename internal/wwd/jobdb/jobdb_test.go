@@ -471,3 +471,29 @@ func stripComments(sql string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+func TestCreateStopsWhenWhatAnEarlierRunLeftCannotBeCleared(t *testing.T) {
+	// wwd_create_db leaves an existing database as it is: going on after a failed clean-up would give the new user the old data
+	f := &fakeExec{failOn: "wwd_drop_db", failError: errors.New("lost connection")}
+	if _, err := New(f, Config{}).Create(context.Background(), "j_test1"); err == nil || !strings.Contains(err.Error(), "clear what an earlier run") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(f.all(), "wwd_create_db") || strings.Contains(f.all(), "wwd_create_user") {
+		t.Fatalf("nothing may be made on a database that may still be there:\n%s", f.all())
+	}
+}
+
+func TestAHostLongerThanTheRoutinesAcceptIsRefusedAtTheConfiguration(t *testing.T) {
+	long := strings.Repeat("a", 65)
+	f := &fakeExec{}
+	m := New(f, Config{UserHosts: []string{"localhost", long}})
+	if _, err := m.Create(context.Background(), "j"); err == nil {
+		t.Fatal("a 65 character host must be refused: the routines take 64")
+	}
+	if len(f.sql) != 0 {
+		t.Fatalf("nothing may be sent: %v", f.sql)
+	}
+	if _, err := New(&fakeExec{}, Config{UserHosts: []string{strings.Repeat("a", 64)}}).Create(context.Background(), "j"); err != nil {
+		t.Fatalf("64 is fine: %v", err)
+	}
+}
