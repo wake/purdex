@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -137,6 +138,38 @@ func TestTypedStages_RefusedRecallChangesNothing(t *testing.T) {
 	assert.Equal(t, 409, re.recall("rc").Code)
 	_, again := re.mod.stages.snapshot(sid, now)
 	assert.Equal(t, seq, again)
+}
+
+// A request that waits for the locks and then finds a concurrent request already recorded its id is answered from the ledger
+// and writes no stage of its own: the request that recorded the id owns the stages.
+func TestTypedStages_ReplayUnderTheLocksWritesNothing(t *testing.T) {
+	te := newTEnv(t)
+	release, ok := te.mod.lockPaneAndSession(t.Context(), tOwner.TmuxPaneID, tOwner.SessionID, time.Second)
+	require.True(t, ok)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- te.submit("r1", "hello") }()
+	eventually(t, "the request has begun and waits for the locks", func() bool {
+		_, has := stagesOf(te.mod)["r1"]
+		return has
+	})
+	te.mod.keysSeen.put("r1", keysRow{handed: true, sid: tOwner.SessionID}, time.Now()) // the concurrent request recorded it
+	release()
+	answer(t, <-done, 200, "handed", "keys", "")
+	assert.Equal(t, stageReceived, stagesOf(te.mod)["r1"].Stage, "the replay answer is not a stage of this request")
+}
+
+// An unknown recall (Up pressed, nothing proven) takes nothing back: the ids stay queued.
+func TestTypedStages_UnknownRecallLeavesTheQueuedIdsAlone(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.tune(func(t *typedTuning) { t.recallSettle, t.recallReadBudget = 20*time.Millisecond, 60*time.Millisecond })
+	re.script(&script{seq: []string{""}, clearStatus: promptq.Accepted})
+	now := time.Now()
+	re.mod.stages.begin(sid, "q1", "a", now)
+	re.mod.stages.set(sid, "q1", stageEntered, "", "fill", now)
+	re.mod.stages.observe(sid, queuedFor(t, re.mod), false, nil, now)
+	require.Equal(t, stageQueued, stagesOf(re.mod)["q1"].Stage)
+	re.unknown(t, re.recall("rc"), "recall_empty")
+	assert.Equal(t, stageQueued, stagesOf(re.mod)["q1"].Stage)
 }
 
 var errBoom = assert.AnError
