@@ -56,8 +56,10 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layou
   // the rows the deck renders, for Up (is there a Claude Code queue to take back?) and to end the hide after a take-back once the header caught up
   const userRowsSig = JSON.stringify(queued.filter((q) => q.source !== 'peer').map((q) => ({ text: q.text, at: q.at })))
   useEffect(() => { setHeaderUserRows(key, JSON.parse(userRowsSig) as HeaderRow[]) }, [key, userRowsSig])
-  const shownEntries = entries.filter((e) => e.state !== 'superseded' && !e.matched)
-  const rows = queued.filter((q) => q.source === 'peer' || !isRowHidden(tb, q))
+  const shownEntries = entries.filter((e) => e.state !== 'superseded' && (!e.matched || e.stage !== undefined))
+  // a row a staged entry stands for is not drawn a second time (one bubble per message)
+  const covered = queue.coveredRows()
+  const rows = queued.filter((q) => q.source === 'peer' || (!isRowHidden(tb, q) && !covered.some((c) => c.at === q.at && c.text === q.text.trimEnd())))
   if (rows.length === 0 && shownEntries.length === 0 && !tb.notice) return null
   const takeBack = canTakeBack(key) ? () => { void takeBackQueued(key, queue) } : undefined
   return (

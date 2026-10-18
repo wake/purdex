@@ -8,6 +8,7 @@ import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { outcomeMessage } from '../../lib/conversations/send'
 import type { QueueEntry } from '../../lib/conversations/send-queue'
+import { stageMarkOf } from '../../lib/conversations/stage-mark'
 import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
 import { PENDING_USER_BOX, PENDING_USER_BOX_CHAT, PENDING_USER_CAPTION } from './UserBlock'
 
@@ -36,25 +37,27 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
   const chat = layout === 'chat'
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState<string | null>(null)
-  const shown = entries.filter((e) => e.state !== 'superseded' && !e.matched)
+  // a staged entry is THE bubble even while Claude Code's queue line renders its message (PendingTail covers that row instead)
+  const shown = entries.filter((e) => e.state !== 'superseded' && (!e.matched || e.stage !== undefined))
   if (shown.length === 0) return null
   const btn = 'rounded px-1.5 deck-t-down text-accent hover:underline'
   return (
     <div data-testid="queued-messages" className={className}>
       {shown.map((e) => {
+        const mark = e.stage ? stageMarkOf(e.stage) : null // the daemon's word on where it is (message stages); null for `read` (a normal message) and without stages
         const m = e.outcome && (e.state === 'maybe' || e.state === 'failed') ? outcomeMessage(e.outcome) : null
         const asking = confirming === e.id && e.state === 'maybe'
         // Until the transcript has it, the message keeps the not-yet-accepted frame. "Queued" is only ever said of what the App still holds (the send
         // buffer, with its Undo); a message already handed out says it is on its way, or sent.
         if (e.state === 'undo' || e.state === 'sending' || e.state === 'sent') {
-          const label = e.state === 'undo' ? t('deck.user.queued') : e.state === 'sending' ? t('deck.send.sending') : e.mode === 'keys' ? t('deck.send.handed_keys') : t('deck.send.accepted')
+          const label = e.stage ? (mark ? t(mark.key, mark.params) : '') : e.state === 'undo' ? t('deck.user.queued') : e.state === 'sending' ? t('deck.send.sending') : e.mode === 'keys' ? t('deck.send.handed_keys') : t('deck.send.accepted')
           // the whole block takes that entry back: the held one (no daemon call), or a handed one (Claude Code's queue)
           const held = e.state === 'undo' && canUndo
           const handed = e.state === 'sent' && e.mode !== undefined && !!onTakeBack
           const act = held ? activateProps(() => onUndo(e.id), t('deck.recall.title')) : handed ? activateProps(onTakeBack!, t('deck.recall.title')) : {}
           return (
             <div key={e.id} data-testid="queued-message" data-state={e.state} data-mode={e.mode} aria-busy={handed && busy ? true : undefined} {...act} className={`${chat ? PENDING_USER_BOX_CHAT : PENDING_USER_BOX} px-3 py-2 ${held || handed ? TAKE_BACK_BOX : ''}`}>
-              <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{label}{handed && busy && <> <TakeBackSpinner /></>}</div>
+              {(label !== '' || (handed && busy)) && <div data-testid="stage-mark" className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{label}{handed && busy && <> <TakeBackSpinner /></>}</div>}
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
               {e.state === 'undo' && canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={(ev) => { ev.stopPropagation(); onUndo(e.id) }}>{t('deck.send.undo')}</button>}
               {/* the transcript's row is what takes it away; one whose row never comes (or reads differently) must not leave it here for good */}
@@ -62,7 +65,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
             </div>
           )
         }
-        const caption = asking ? t('deck.send.resend_confirm') : m ? t(m.key, m.params) : t('deck.send.sending')
+        const caption = asking ? t('deck.send.resend_confirm') : mark ? t(mark.key, mark.params) : m ? t(m.key, m.params) : t('deck.send.sending')
         return (
           <div key={e.id} data-testid="queued-message" data-state={e.state} className={`${chat ? 'max-w-[80%] rounded-2xl rounded-br-sm' : 'rounded-lg'} border border-border-subtle bg-surface-secondary px-3 py-1.5`}>
             <div className={`deck-t-down ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
