@@ -90,6 +90,9 @@ func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+	if nosniff := resp.Header.Get("X-Content-Type-Options"); nosniff != "" { // a forwarded job log is text that must stay text
+		w.Header().Set("X-Content-Type-Options", nosniff)
+	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(answer)
 }

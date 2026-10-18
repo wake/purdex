@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/jobsapi"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
@@ -84,6 +85,21 @@ func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/events", d.handleEvents(peer))
 	d.factsRoutes(mux, peer)
 	d.workerRoutes(mux, peer)
+	d.jobRoutes(mux, peer)
+}
+
+// jobRoutes registers the job reads and cancel (spec 4.4) on both surfaces, from the process's one queue; a peer's view leaves out the
+// ad-hoc and fast-lane jobs. On the socket ?host=<alias> forwards the call to that host like the worker routes. Submission is not here:
+// it exists on the socket only (SocketHandler).
+func (d *Daemon) jobRoutes(mux *http.ServeMux, peer bool) {
+	if d.opts.Queue == nil {
+		return
+	}
+	a := jobsapi.New(d.opts.Queue)
+	mux.HandleFunc("GET /v1/jobs", d.viaHost(peer, a.List(peer)))
+	mux.HandleFunc("GET /v1/jobs/{id}", d.viaHost(peer, a.Get(peer)))
+	mux.HandleFunc("GET /v1/jobs/{id}/log", d.viaHost(peer, a.Log(peer)))
+	mux.HandleFunc("POST /v1/jobs/{id}/cancel", d.viaHost(peer, a.Cancel(peer)))
 }
 
 // TCPHandler serves the tailnet/loopback listeners: every request, including
@@ -108,10 +124,14 @@ func (d *Daemon) SocketHandler() http.Handler {
 	if d.opts.LocalRuns != nil && d.opts.ClaimRoutes != nil {
 		mux.HandleFunc("POST /v1/local-runs", d.opts.LocalRuns.Handler()) // socket only: a peer never records a run here
 	}
-	// Submission is local only (spec §4.4); the queue arrives in WWD-3b.
-	mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "job queue not implemented", http.StatusNotImplemented)
-	})
+	// Submission is local only (spec §4.4): a job is always submitted on its own host, so the TCP surface has no such route.
+	if d.opts.Queue != nil {
+		mux.HandleFunc("POST /v1/jobs", jobsapi.New(d.opts.Queue).Submit())
+	} else {
+		mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "job queue not implemented", http.StatusNotImplemented)
+		})
+	}
 	return mux
 }
 
