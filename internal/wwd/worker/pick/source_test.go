@@ -1,0 +1,114 @@
+package pick
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+type fakeQueue struct {
+	jobs     []wire.Job
+	forPeers bool
+}
+
+func (f *fakeQueue) Queued(_ context.Context, forPeers bool) ([]wire.Job, error) {
+	f.forPeers = forPeers
+	return f.jobs, nil
+}
+
+func TestLocalSourceReadsOwnQueueIncludingAdHoc(t *testing.T) {
+	q := &fakeQueue{jobs: []wire.Job{job("a", wire.ClassDev, 0)}}
+	s := NewLocalSource("mlab", q)
+	jobs, err := s.Queued(context.Background())
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "a" {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if q.forPeers {
+		t.Fatal("a worker reading its own queue must see ad-hoc jobs (spec 5): ForPeers must be false")
+	}
+	if s.Host() != "mlab" {
+		t.Fatalf("host %q", s.Host())
+	}
+}
+
+func TestPeerSourceSendsTokenAndQuery(t *testing.T) {
+	var gotAuth, gotPath, gotState string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotPath, gotState = r.Header.Get("Authorization"), r.URL.Path, r.URL.Query().Get("state")
+		_ = json.NewEncoder(w).Encode(wire.JobsListResponse{Jobs: []wire.Job{job("p", wire.ClassMerge, time.Minute)}})
+	}))
+	defer srv.Close()
+	s := NewPeerSource("air26", srv.URL+"/", "tok", srv.Client())
+	jobs, err := s.Queued(context.Background())
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "p" {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if gotAuth != "Bearer tok" || gotPath != "/v1/jobs" || gotState != "queued" {
+		t.Fatalf("auth=%q path=%q state=%q", gotAuth, gotPath, gotState)
+	}
+}
+
+func TestPeerSourceErrors(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusInternalServerError} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+		s := NewPeerSource("x", srv.URL, "tok", srv.Client())
+		if _, err := s.Queued(context.Background()); err == nil || !strings.Contains(err.Error(), "x") {
+			t.Fatalf("code %d: err = %v, want an error naming the peer", code, err)
+		}
+		srv.Close()
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("not json")) }))
+	defer srv.Close()
+	if _, err := NewPeerSource("x", srv.URL, "tok", srv.Client()).Queued(context.Background()); err == nil {
+		t.Fatal("garbage answer must be an error")
+	}
+}
+
+func TestPeerSourceDropsJobsNotQueuedOrNotItsOwn(t *testing.T) {
+	// a peer must never hand us an ad-hoc or local job (spec 4.4); if one slips through, it is dropped, not scored.
+	adhoc := job("adhoc", wire.ClassDev, 0)
+	adhoc.AdHoc = true
+	local := job("local", wire.ClassDev, 0)
+	local.Local = true
+	running := job("running", wire.ClassDev, 0)
+	running.State = wire.StateRunning
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(wire.JobsListResponse{Jobs: []wire.Job{adhoc, local, running, job("ok", wire.ClassDev, 0)}})
+	}))
+	defer srv.Close()
+	jobs, err := NewPeerSource("p", srv.URL, "t", srv.Client()).Queued(context.Background())
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "ok" {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+}
+
+type fixedSource struct {
+	host string
+	jobs []wire.Job
+	err  error
+}
+
+func (f fixedSource) Host() string { return f.host }
+func (f fixedSource) Queued(context.Context) ([]wire.Job, error) {
+	return f.jobs, f.err
+}
+
+func TestCollectSkipsFailingSourceAndReportsIt(t *testing.T) {
+	zones := map[string]wire.Zone{"b": wire.ZoneDanger}
+	cands, errs := Collect(context.Background(), []Source{
+		fixedSource{host: "a", err: context.DeadlineExceeded},
+		fixedSource{host: "b", jobs: []wire.Job{job("x", wire.ClassDev, 0)}},
+	}, func(h string) wire.Zone { return zones[h] })
+	if len(cands) != 1 || cands[0].Source != "b" || cands[0].Zone != wire.ZoneDanger {
+		t.Fatalf("cands=%v", cands)
+	}
+	if len(errs) != 1 || errs["a"] == nil {
+		t.Fatalf("errs=%v", errs)
+	}
+}
