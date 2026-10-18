@@ -27,7 +27,9 @@ const (
 // poolHost reads this host's facts from the pool. The local host is the first peer of wwd's pool.
 type poolHost struct {
 	pool func(ctx context.Context) (wire.Pool, error)
-	now  func() time.Time
+	// history is wwd's facts history (the report's minutes); nil in a test that does not read it.
+	history func(ctx context.Context, q wire.FactsHistoryQuery) (wire.FactsHistoryResponse, error)
+	now     func() time.Time
 
 	mu    sync.Mutex
 	at    time.Time // when the cached answer was read
@@ -38,7 +40,8 @@ type poolHost struct {
 }
 
 func newPoolHost() *poolHost {
-	return &poolHost{pool: client.New(client.DefaultSocket()).Pool, now: time.Now}
+	cl := client.New(client.DefaultSocket())
+	return &poolHost{pool: cl.Pool, history: cl.FactsHistory, now: time.Now}
 }
 
 // detail is this host's reading, ok false when wwd gives none that is fresh.

@@ -71,17 +71,26 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, msg)
 		return
 	}
-	if m.store == nil {
+	now := m.now()
+	from, until := now.Add(-since).UnixMilli(), now.UnixMilli()+1
+	// While the source is the pool, wwd's minutes are the timeline from where they begin; the old rows count only before that.
+	pooled, fromPool := m.poolReportMinutes(r.Context(), now.Add(-since))
+	oldUntil := until
+	if fromPool {
+		oldUntil = min(until, pooled[0].At)
+	}
+	var minutes []resources.ReportMinute
+	if m.store != nil {
+		var err error
+		if minutes, err = m.store.ReportMinutes(from, oldUntil); err != nil {
+			writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the report rows: "+err.Error())
+			return
+		}
+	} else if !fromPool {
 		writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "resources.db is not open")
 		return
 	}
-	now := m.now()
-	from, until := now.Add(-since).UnixMilli(), now.UnixMilli()+1
-	minutes, err := m.store.ReportMinutes(from, until)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the report rows: "+err.Error())
-		return
-	}
+	minutes = append(minutes, pooled...)
 	report := resources.BuildReport(from, now.UnixMilli(), minutes)
 	writeJSON(w, http.StatusOK, report)
 }
