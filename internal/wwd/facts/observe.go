@@ -94,6 +94,7 @@ type Tracker struct {
 	live    map[treeKey]*tree
 	harness map[treeKey]harnessVerdict
 	lastAt  time.Time
+	sample  int // counts Update calls
 	// ident tells which process holds a pid (its start time); a tree whose root pid now has another one is a new tree. Tests replace it.
 	ident func(pid int) (string, bool)
 }
@@ -105,6 +106,8 @@ func NewTracker(cfg ObserveConfig) *Tracker {
 type harnessVerdict struct {
 	harness bool
 	ident   string // the process's start identity when it was classified ("" when unknown)
+	// failedAt is the sample in which a failed identity read first let this verdict stand (0: none). Later samples reclassify.
+	failedAt int
 }
 
 // isHarness says whether p is part of codex's own machinery: named codex..., the app-server broker, or a node/python wrapper
@@ -113,8 +116,17 @@ type harnessVerdict struct {
 func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 	k := treeKey{p.PID, p.Name}
 	id, _ := t.ident(p.PID)
-	if v, ok := t.harness[k]; ok && (id == "" || v.ident == id) { // a read that fails now keeps the verdict; one that works must match what it was made for (a verdict made without an identity matches none) // a read that fails now keeps the verdict; one that works must match what it was made for (a verdict made without an identity matches none) // an unknown identity matches only an unknown one: the verdict is not carried across a read that failed
-		return v.harness
+	if v, ok := t.harness[k]; ok {
+		switch {
+		case v.ident == id: // the same process (or no identity to tell by, on either side)
+			return v.harness
+		case id == "": // a read that failed: the verdict stands for one sample, not for as long as the reads keep failing
+			if v.failedAt == 0 || v.failedAt == t.sample {
+				v.failedAt = t.sample
+				t.harness[k] = v
+				return v.harness
+			}
+		}
 	}
 	h := strings.HasPrefix(strings.ToLower(path.Base(p.Name)), "codex") || kindOf(p, c) == "codex-broker"
 	if !h && c.ArgsOf != nil {
@@ -137,6 +149,7 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 	if len(snap.Procs) == 0 { // a read that failed, not a machine with no processes: nothing ends because of it
 		return nil
 	}
+	t.sample++
 	c.ensureTable(snap)
 	dt := t.cfg.Interval
 	if !t.lastAt.IsZero() && now.After(t.lastAt) {

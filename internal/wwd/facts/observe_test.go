@@ -435,6 +435,31 @@ func TestTrackerKeepsAVerdictWhenTheIdentityReadFailsOnce(t *testing.T) {
 	}
 }
 
+// ...but only for one sample: when the reads keep failing the process is classified again from what can be read.
+func TestTrackerStopsKeepingAVerdictWhenTheIdentityReadKeepsFailing(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	known := true
+	tr.ident = func(int) (string, bool) {
+		if !known {
+			return "", false
+		}
+		return "t1", true
+	}
+	h.add(200, 100, "node", []string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"})
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	known = false
+	h.args[200] = []string{"node", "server.js"} // another node took the pid, and the identity cannot be read
+	step(tr, h, 1)
+	if len(tr.Live()) != 0 {
+		t.Fatalf("one failed read keeps the verdict: %+v", tr.Live())
+	}
+	step(tr, h, 2)
+	if live := tr.Live(); len(live) != 1 || live[0].Signature != "node server.js" {
+		t.Fatalf("a second failed read in a row classifies again: %+v", live)
+	}
+}
+
 // A long gap between samples (the machine slept, wwd was stopped) is not charged as CPU.
 func TestTrackerCapsAGapBetweenSamples(t *testing.T) {
 	h := newHost()
