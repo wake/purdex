@@ -260,9 +260,37 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 			t.Errorf("expected exit-code 226, got %v", show)
 		}
 	})
+	t.Run("N_usage_from_the_unit_cgroup", func(t *testing.T) {
+		// WWD usage U3b: the wrapper reads the unit's cpu.stat and memory.peak before it exits, though a unit that ended well is
+		// unloaded at once. About 0.5 s of CPU, and a shell variable of ~100 MB for the memory.
+		script := "i=0; while [ $i -lt 400000 ]; do i=$((i+1)); done; x=$(head -c 50000000 /dev/zero | tr '\\0' a); echo ${#x}"
+		r := runSB(t, "N", Sandbox{}, 120*time.Second, bg, "sh", "-c", script)
+		t.Logf("usage %+v cpu=%v mem=%v", r.Usage, deref(r.Usage.CPUSeconds), r.Usage.MemPeakBytes)
+		if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+			t.Fatalf("result %+v", r.Result)
+		}
+		if r.Usage.From != UsageUnit || r.Usage.CPUSeconds == nil || *r.Usage.CPUSeconds < 0.1 {
+			t.Errorf("cpu: %+v", r.Usage)
+		}
+		if r.Usage.MemPeakBytes == nil || *r.Usage.MemPeakBytes < 20<<20 {
+			t.Errorf("memory peak: %+v", r.Usage)
+		}
+		// a failing task has its figures too
+		r = runSB(t, "N2", Sandbox{}, 120*time.Second, bg, "sh", "-c", "exit 3")
+		if r.Outcome != Exited || r.ExitCode != 3 || r.Usage.CPUSeconds == nil {
+			t.Errorf("failed task: %+v %+v", r.Result, r.Usage)
+		}
+	})
 	t.Run("Z_nothing_left", func(t *testing.T) {
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed wwd-j_4d3 units left:\n%s", f)
 		}
 	})
+}
+
+func deref(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

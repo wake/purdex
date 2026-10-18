@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -153,7 +152,9 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	// 226/NAMESPACE, a missing program 203/EXEC, ... 200..243) end it before the command's shell ran, and the shell itself exits 125
 	// when it cannot write the status file. The shell leaves no file in either case, and a real exit of the task always has one (it
 	// writes it before it exits): so no file with one of these numbers is an infrastructure failure, not a red test.
-	if _, gotExit := readExit(exitFile); startErr == nil && stop == stopNone && res.Outcome == Exited && show["Result"] == "exit-code" &&
+	_, usage, gotExit := readStatus(exitFile)
+	res.Usage = usage // the wrapper wrote it before it exited, whatever the unit's Result says
+	if startErr == nil && stop == stopNone && res.Outcome == Exited && show["Result"] == "exit-code" &&
 		!gotExit && (res.ExitCode == 125 || (res.ExitCode >= 200 && res.ExitCode <= 243)) {
 		startErr = fmt.Errorf("run: unit %s ended with status %d and no exit status file: systemd could not set it up, or the status file could not be written", unit, res.ExitCode)
 		res.Outcome, res.ExitCode = StartFailed, -1
@@ -213,15 +214,17 @@ func activeState(st string) bool {
 
 // readExit reads the exit status the wrapper left; got is false when there is none.
 func readExit(path string) (code int, got bool) {
+	code, _, got = readStatus(path)
+	return code, got
+}
+
+// readStatus reads the whole status file: the exit status, and the unit's usage when the wrapper could read it (parseStatus).
+func readStatus(path string) (code int, u Usage, got bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, false
+		return 0, Usage{}, false
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+	return parseStatus(b)
 }
 
 // control runs `sudo systemctl <verb> <unit>`; the callers that cannot do anything about a failure ignore it.

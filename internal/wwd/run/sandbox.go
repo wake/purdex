@@ -149,10 +149,18 @@ func (s Sandbox) checkExtraPaths() error {
 
 func unitName(jobID string) string { return "wwd-" + jobID }
 
-// exitWrapper runs "$@" and writes its exit status to the file named by $0. When the file cannot be written (the workspace is full
-// or read-only) it exits 125, not the command's code: a code of the command's own could be read as one of systemd's (200..243), and
+// exitWrapper runs "$@" and writes its exit status to the file named by $0: the code on the first line, then (WWD usage U3b) what
+// the unit's own cgroup says the command used, read after it ended and before the shell exits: the CPU time in microseconds
+// (cpu.stat usage_usec) and the memory peak in bytes (memory.peak). A unit that ended well is unloaded by systemd at once, so
+// `systemctl show` cannot give these; the cgroup is still there while this shell runs. They are empty when they cannot be read
+// (no cgroup v2, memory.peak before Linux 5.19, no cgroup of its own): the run's usage is then unknown, never 0, and never the root
+// cgroup's (the guard below refuses "/"). Only the code decides anything. When the file cannot be written (the workspace is full or
+// read-only) it exits 125, not the command's code: a code of the command's own could be read as one of systemd's (200..243), and
 // without the file the runner cannot tell what the command did. 125 with no file is therefore an infrastructure failure.
-const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0" || exit 125; exit "$rc"`
+const exitWrapper = `"$@"; rc=$?; cpu=; mem=; cg=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null); ` +
+	`if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "/sys/fs/cgroup$cg" ]; then ` +
+	`cpu=$(sed -n 's/^usage_usec //p' "/sys/fs/cgroup$cg/cpu.stat" 2>/dev/null); mem=$(cat "/sys/fs/cgroup$cg/memory.peak" 2>/dev/null); fi; ` +
+	`printf '%s\n%s\n%s\n' "$rc" "$cpu" "$mem" > "$0" || exit 125; exit "$rc"`
 
 // sandboxArgv is the systemd-run command line (without the leading sudo). The environment is cleared with env -i and then set
 // from env, so nothing of the unit's default environment reaches the job.
