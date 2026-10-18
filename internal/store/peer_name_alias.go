@@ -111,6 +111,16 @@ func (s *PeerNameStore) UndoRename(ctx context.Context, sessionID, currentName, 
 		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+	var stored string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM peer_names WHERE session_id = ?`, sid).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if stored != currentName {
+		return false, nil
+	}
 	var holders int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM peer_names WHERE name = ? AND session_id <> ?`, oldName, sid).Scan(&holders); err != nil {
 		return false, err
@@ -126,7 +136,8 @@ func (s *PeerNameStore) UndoRename(ctx context.Context, sessionID, currentName, 
 	if err != nil || n != 1 {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE alias = ? AND session_id = ?`, oldName, sid); err != nil {
+	// oldName is a live name again: whichever session an alias of it points at, it must stop routing there
+	if _, err := tx.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE alias = ?`, oldName); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

@@ -206,3 +206,41 @@ func TestPeerNameAliases_UndoRenameRefusesWhenTheOldNameWasTakenMeanwhile(t *tes
 	require.Equal(t, "purdex-hiro", got[alA].Name, "A keeps the name it has")
 	require.Equal(t, "purdex-adam", got[alB].Name)
 }
+
+// B took the name A left, then renamed away: the alias now points at B. A's undo gets the name back, so no alias may keep
+// routing it to B (codex R1 on #3435 at f94c5afca).
+func TestPeerNameAliases_UndoRenameDropsAnAliasThatNowPointsAtAnotherSession(t *testing.T) {
+	s := aliasStore(t)
+	ctx := context.Background()
+	assignPool(t, s, alA, "purdex-adam")
+	_, _, err := s.RenamePool(ctx, alA, "purdex-adam", "purdex-hiro")
+	require.NoError(t, err)
+	assignPool(t, s, alB, "purdex-adam")
+	_, ok, err := s.RenamePool(ctx, alB, "purdex-adam", "purdex-wei")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = s.UndoRename(ctx, alA, "purdex-hiro", "purdex-adam")
+	require.NoError(t, err)
+	require.True(t, ok)
+	al, _ := s.Aliases(ctx)
+	for _, a := range al {
+		require.NotEqual(t, "purdex-adam", a.Alias, "the restored name is a live name, not an alias")
+	}
+}
+
+// A stale undo (the session was renamed again) is a failed CAS, not a name conflict, even when the old name is taken.
+func TestPeerNameAliases_StaleUndoIsNotAReclaimConflict(t *testing.T) {
+	s := aliasStore(t)
+	ctx := context.Background()
+	assignPool(t, s, alA, "purdex-adam")
+	_, _, err := s.RenamePool(ctx, alA, "purdex-adam", "purdex-hiro")
+	require.NoError(t, err)
+	_, _, err = s.RenamePool(ctx, alA, "purdex-hiro", "purdex-wei")
+	require.NoError(t, err)
+	assignPool(t, s, alB, "purdex-adam")
+
+	ok, err := s.UndoRename(ctx, alA, "purdex-hiro", "purdex-adam")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
