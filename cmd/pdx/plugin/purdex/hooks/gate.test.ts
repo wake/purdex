@@ -599,6 +599,61 @@ test('a deny holds for the repeats too, and an advise note is said once', async 
   expect(out.context.filter((x: string) => x.includes('pdx test go-pkg'))).toHaveLength(1)
 })
 
+// ---- ad-hoc (mode rewrite, no task declares the command): `pdx test --adhoc -- <argv…>` ----
+
+const ADHOC = { action: 'adhoc', mode: 'rewrite', hint: 'go-pkg' } // never queued: the fast lane (spec 8.3)
+
+test('adhoc: a plain command becomes pdx test --adhoc -- argv, stays in the foreground, and the note says it is ad-hoc', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go vet ./...')
+  expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./...")
+  expect(r.ran[0].bg).toBeUndefined() // its output streams as it runs, and the caller gets the real exit status
+  expect(out.context.join('\n')).toContain('[entry].mode = rewrite')
+})
+
+test('adhoc: a redirection among the words of the command is advised and not rewritten (the text is not just the command)', async ($, on) => {
+  const r = rig(on, (a: string[]) => (isEntry(a) ? ok(JSON.stringify(ADHOC)) : ok(FREE)), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go vet >/dev/null ./...')
+  expect(r.ran[0].command).toBe('go vet >/dev/null ./...')
+  expect(out.context.join('\n')).toContain('pdx test go-pkg')
+})
+
+test('adhoc: the words are quoted as they were typed, the environment words and a cd stay where they are', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test -run A B ./x': ADHOC }), () => BASH_OK, ENTRY_ON)
+  await bash($, "cd sub && FOO=1 go test -run 'A B' ./x")
+  expect(r.ran[0].command).toBe("cd sub && FOO=1 'pdx' test --adhoc -- go test -run 'A B' ./x")
+  expect(entryCalls(r)[0].slice(4, 6)).toEqual(['--cwd', 'sub'])
+})
+
+for (const cmd of ['go vet < in.txt', 'go vet <<< data', 'go vet <<EOF\nx\nEOF', 'go vet $PKG', 'go vet ./internal/*', 'go vet `pwd`', 'go vet ~/x', 'go vet ./{a,b}', 'go vet ./a?', 'go vet ./[ab]', 'go vet ./a\\ b', "go vet './a*'"]) {
+  test(`adhoc: ${cmd} has words the shell would expand, or an input redirection: it is advised and not rewritten`, async ($, on) => {
+    const r = rig(on, (a: string[]) => (isEntry(a) ? ok(JSON.stringify(ADHOC)) : ok(FREE)), () => BASH_OK, ENTRY_ON)
+    const out = await bash($, cmd)
+    expect(r.ran[0].command).toBe(cmd)
+    expect(out.context.join('\n')).toContain('pdx test go-pkg')
+  })
+}
+
+test('adhoc: a redirection after the command stays after it and now belongs to pdx test', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go vet ./... 2>&1 | tail -5')
+  expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./... 2>&1 | tail -5")
+})
+
+test('adhoc: the permission verdict would change → the call goes the old way', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC }), () => BASH_OK, ENTRY_ON)
+  r.verdict = (command) => (command.includes('--adhoc') ? 'ask' : 'allow')
+  await bash($, 'go vet ./...')
+  expect(r.ran[0].command).toBe('go vet ./...')
+})
+
+test('adhoc: a task match and an ad-hoc one in one call are both rewritten', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC, 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go vet ./... && go test ./...')
+  expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./... && 'pdx' test go-pkg ./...")
+  expect(out.context.join('\n')).not.toContain('[entry].mode = rewrite') // a task was part of it: the plain wording
+})
+
 // A cd carries to the commands after it only along `&&`: after `;`, `||`, a pipe or a newline the command runs wherever the shell
 // is when the cd did not happen, and the hook cannot tell which.
 const CD_UNSURE: [string, number][] = [
