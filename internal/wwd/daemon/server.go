@@ -45,6 +45,10 @@ type Options struct {
 	// repo:<name> labels). Called once per facts record: cheap, never blocking.
 	// nil: no repo labels.
 	RepoSource func() []string
+	// Observer is this host's observation records (spec 8.4); the observation routes serve from it. nil: they are not registered.
+	Observer *Observer
+	// Now is the clock the observation routes take their default periods from. nil: time.Now.
+	Now func() time.Time
 }
 
 // Daemon holds the state both HTTP surfaces serve.
@@ -87,6 +91,7 @@ func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	d.factsRoutes(mux, peer)
 	d.workerRoutes(mux, peer)
 	d.jobRoutes(mux, peer)
+	d.observeRoutes(mux, peer)
 }
 
 // jobRoutes registers the job reads and cancel (spec 4.4) on both surfaces, from the process's one queue; a peer's view leaves out the

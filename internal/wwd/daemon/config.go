@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type Config struct {
 	Worker      WorkerConfig `toml:"worker"`
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
+	Observe     ObserveRule  `toml:"observe"`
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
@@ -65,6 +67,13 @@ type OwnerRule struct {
 	IdleMinutes int  `toml:"idle_minutes"`
 }
 
+// ObserveRule is when a process tree that belongs to no job is recorded (spec §8.4): CPU seconds of the whole tree, or memory at
+// its peak. 0 (unset) takes the default (60 s, 1024 MB).
+type ObserveRule struct {
+	MinCPUSeconds float64 `toml:"min_cpu_seconds"`
+	MinMemMB      int     `toml:"min_mem_mb"`
+}
+
 // PeerConfig is another wwd of the pool: its alias and tailnet address
 // (host or host:port; the port defaults to 7871).
 type PeerConfig struct {
@@ -89,6 +98,12 @@ func (c Config) validateWorker() error {
 	}
 	if m := c.Owner.IdleMinutes; m < 0 || m > 9999 {
 		return fmt.Errorf("owner.idle_minutes is %d, it must be 0 (the default) or 1-9999", m)
+	}
+	if v := c.Observe.MinCPUSeconds; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("observe.min_cpu_seconds is %g, it must be 0 (the default) or a finite number above it", v)
+	}
+	if c.Observe.MinMemMB < 0 {
+		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)
 	}
 	return nil
 }
