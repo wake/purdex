@@ -212,3 +212,39 @@ func TestPSArgsCache_AnswerIsACopy(t *testing.T) {
 		t.Fatalf("second answer = %q, %v; want [a b]", again, ok)
 	}
 }
+
+// ps asks comm and then args. A process that execs in between, with the same pid and start time, would give one answer half of each: it
+// is told as a changed process, and nothing is kept for the program that is there now.
+func TestPSArgsCache_ExecDuringPSIsNeitherReturnedNorKept(t *testing.T) {
+	psArgsReset()
+	t.Cleanup(psArgsReset)
+	pid := startHelper(t, []string{"snap-helper", "中文"})
+	snap := takeSnapshot(t)
+
+	origKern := kernProcPid
+	execed := false
+	kernProcPid = func(p int) (*unix.KinfoProc, error) {
+		kp, err := origKern(p)
+		if err == nil && p == pid && execed {
+			kp.Proc.P_comm[0] ^= 0x20 // what the kernel says after the exec
+		}
+		return kp, err
+	}
+	t.Cleanup(func() { kernProcPid = origKern })
+	origPS := runPS
+	runPS = func(ctx context.Context, args ...string) ([]byte, error) {
+		execed = true // the exec happens while ps runs
+		return origPS(ctx, args...)
+	}
+	t.Cleanup(func() { runPS = origPS })
+
+	if _, err := snap.ReadFresh(pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("ReadFresh across an exec = %v, want ErrProcessChanged", err)
+	}
+	psArgsMu.Lock()
+	n := len(psArgsStore)
+	psArgsMu.Unlock()
+	if n != 0 {
+		t.Fatalf("the cache holds %d entries after a read across an exec, want 0", n)
+	}
+}

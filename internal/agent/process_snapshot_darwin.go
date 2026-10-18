@@ -146,6 +146,7 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 	var kp *unix.KinfoProc
 	var kerr error
 	lookedUp := false // kp and kerr are the check below, from a moment after which nothing was read
+	commBefore := ""  // the command name the process had when ps was about to be asked
 	if !fast {
 		// ps is what answers this one (readCommArgsPS). Its answer for the same process is kept for a while (process_args_cache_darwin.go);
 		// the process is looked up first because the key names it, and a hit reads nothing, so that same lookup is the check below.
@@ -158,6 +159,7 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 			exePath, argv, lookedUp = exe, av, true
 		}
 		if !lookedUp {
+			commBefore = kernComm(kp.Proc.P_comm[:])
 			exePath, argv, err = readCommArgsPS(pid)
 		}
 	}
@@ -174,7 +176,13 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 		return "", nil, err
 	}
 	if !fast && !lookedUp {
-		psArgsPut(psArgsKey{pid, e.identity, kernComm(kp.Proc.P_comm[:])}, exePath, argv)
+		// ps ran in two forks, comm and then args. An exec keeps the pid and the start time, so a process that became another program
+		// between the lookup and now could have given the one answer half of each: it is neither read nor kept.
+		commAfter := kernComm(kp.Proc.P_comm[:])
+		if commAfter != commBefore {
+			return "", nil, fmt.Errorf("pid %d changed its command from %q to %q while ps read it: %w", pid, commBefore, commAfter, ErrProcessChanged)
+		}
+		psArgsPut(psArgsKey{pid, e.identity, commAfter}, exePath, argv)
 	}
 	return exePath, argv, nil
 }
