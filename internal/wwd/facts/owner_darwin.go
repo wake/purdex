@@ -15,10 +15,13 @@ import (
 // IOHIDSystem service's HIDIdleTime (the figure `ioreg -c IOHIDSystem` prints, and
 // the one spec section 8 names), and the IORegistry root's IOConsoleLocked.
 //
-// It is deliberately not CGEventSourceSecondsSinceLastEventType: that counts events
-// software posts (remote control, automation) as input, so on a machine something
-// drives, the owner would look present for hours after the last real keypress. On
-// air26 the two read 1575 s and 24871 s at the same moment.
+// It is deliberately not CGEventSourceSecondsSinceLastEventType on the combined
+// session state: that counted some input that HIDIdleTime did not, so the owner
+// looked present for hours after the last real keypress. On air26 the two read
+// 1575 s and 24871 s at the same moment, every time. What posted those events was
+// not identified, and whether remote screen sharing moves HIDIdleTime is the spec's
+// measurement (section 8: "screen sharing reads as in use"), not something this
+// change claims either way.
 
 const (
 	cfNumberSInt64Type = 4             // kCFNumberSInt64Type
@@ -29,8 +32,11 @@ const (
 	frameworkCF        = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 	frameworkIOKit     = "/System/Library/Frameworks/IOKit.framework/IOKit"
 	consoleLockedKey   = "IOConsoleLocked"
-	errNoHIDSystem     = "no IOHIDSystem HIDIdleTime (idle time unavailable)"
 )
+
+// ErrNoHIDSystem: this machine has no IOHIDSystem service or it carries no HIDIdleTime (a virtual machine, a host with no input
+// device). The idle time is then unavailable, which is not a fault of the reading; any other error from IdleSeconds is one.
+var ErrNoHIDSystem = errors.New("no IOHIDSystem HIDIdleTime (idle time unavailable)")
 
 // DarwinOwnerSources are the real reads. An error means the frameworks could not
 // be loaded; the caller then runs without an owner rule.
@@ -83,11 +89,11 @@ func DarwinOwnerSources() (src OwnerSources, err error) {
 			// IOServiceMatching's dictionary is consumed by IOServiceGetMatchingService, so nothing is released for it
 			dict := matching(&hidClass[0])
 			if dict == 0 {
-				return 0, errors.New(errNoHIDSystem)
+				return 0, ErrNoHIDSystem
 			}
 			svc := service(ioKitMainPortNull, dict)
 			if svc == 0 {
-				return 0, errors.New(errNoHIDSystem)
+				return 0, ErrNoHIDSystem
 			}
 			defer ioRelease(svc)
 			k := mkString(0, (*byte)(unsafe.Pointer(&hidKey[0])), cfStringEncUTF8)
@@ -97,7 +103,7 @@ func DarwinOwnerSources() (src OwnerSources, err error) {
 			defer release(k)
 			v := property(svc, k, 0, 0)
 			if v == 0 {
-				return 0, errors.New(errNoHIDSystem)
+				return 0, ErrNoHIDSystem
 			}
 			defer release(v)
 			if typeOf(v) != numType() {

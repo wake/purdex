@@ -3,6 +3,7 @@
 package facts
 
 import (
+	"errors"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -28,8 +29,11 @@ func TestDarwinOwnerSourcesAgreeWithIoreg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := src.IdleSeconds(); err != nil {
-		t.Skipf("no window server session in this environment: %v", err)
+	// Only "this machine has no HID system" may skip. Any other error (a type, a binding, a parse) is a fault of the reading and fails.
+	if _, err := src.IdleSeconds(); errors.Is(err, ErrNoHIDSystem) {
+		t.Skipf("no IOHIDSystem HIDIdleTime on this machine: %v", err)
+	} else if err != nil {
+		t.Fatalf("idle: %v", err)
 	}
 	re := regexp.MustCompile(`"HIDIdleTime" = (\d+)`)
 	for attempt := 1; attempt <= idleAttempts; attempt++ {
