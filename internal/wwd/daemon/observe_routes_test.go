@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -168,7 +169,7 @@ func feedMany(t *testing.T, o *Observer, tr *fakeTracker, n int, sig func(i int)
 	for i := 0; i < n; i += 100 {
 		var batch []wire.Observation
 		for j := i; j < min(i+100, n); j++ {
-			batch = append(batch, ended("o"+time.Duration(j).String(), sig(j), 7*24*time.Hour+time.Duration(j)*time.Second, 61))
+			batch = append(batch, ended("o"+time.Duration(j).String(), sig(j), 7*24*time.Hour+time.Duration(j)*500*time.Millisecond+250*time.Millisecond, 61)) // fractions of a second, two to a second
 		}
 		tr.next = batch
 		o.Observe(obt0.Add(time.Duration(i)*time.Second), facts.ProcSnapshot{}, facts.ProcContext{})
@@ -203,7 +204,9 @@ func TestObservationsAnswerIsBoundedAndSaysSo(t *testing.T) {
 func TestTruncatedObservationsCanBePagedBackToTheStart(t *testing.T) {
 	tr, st := &fakeTracker{}, &memStore{}
 	o := newObserver(tr, st)
-	total := maxObservationsAnswer + 50
+	// the oldest record of the first page is the 52nd (x.75 s); the one before it began in the same second (x.25 s), which a
+	// next_until cut to whole seconds would skip
+	total := maxObservationsAnswer + 51
 	feedMany(t, o, tr, total, func(int) string { return "make" })
 	d := New(Options{HostID: "id", Alias: "mlab", Version: "v0", Token: testToken, Observer: o, Now: func() time.Time { return obt0.Add(8 * 24 * time.Hour) }})
 
@@ -227,7 +230,15 @@ func TestTruncatedObservationsCanBePagedBackToTheStart(t *testing.T) {
 		if r.NextUntil == nil || !r.NextUntil.Equal(r.Observations[0].StartedAt) {
 			t.Fatalf("a truncated page ends at its oldest record: %+v", r.NextUntil)
 		}
-		path = "/v1/observations?" + url.Values{"until": {r.NextUntil.Format(time.RFC3339)}}.Encode()
+		// next_until goes back exactly as the JSON carried it: re-formatting it to whole seconds would skip the records of that
+		// second that began before the boundary (the starts here have a fraction)
+		var raw struct {
+			NextUntil string `json:"next_until"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil || raw.NextUntil == "" {
+			t.Fatalf("next_until in the JSON: %v %s", err, w.Body)
+		}
+		path = "/v1/observations?" + url.Values{"until": {raw.NextUntil}}.Encode()
 	}
 	if len(seen) != total {
 		t.Fatalf("every record reached through the pages: %d of %d", len(seen), total)
