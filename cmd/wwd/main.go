@@ -109,11 +109,14 @@ func run(cfgPath string) error {
 	// One queue per process. Its job events go to the event stream and to the fast lane, which releases a finished run's keys.
 	// The lock table is the one every claim on this host takes its keys from.
 	var fastLane *localruns.Service
+	// what each job that ran here used, from the samples and the job's final event (spec 8.5); recording only
+	usage := daemon.NewUsageRecorder(alias, facts.NewJobUsageTracker(time.Now(), daemon.SampleInterval), st)
 	q, err := queue.New(st.DB(), queue.Options{
 		Origin: alias, LogDir: filepath.Join(cfg.DataDir, "joblogs"),
 		Publish: func(ev wire.JobEvent) {
 			broker.PublishJob(ev)
 			fastLane.OnJobEvent(ev)
+			usage.OnJobEvent(ev)
 		},
 	})
 	if err != nil {
@@ -141,7 +144,10 @@ func run(cfgPath string) error {
 		MinCPUSeconds: cfg.Observe.MinCPUSeconds, MinMemMB: cfg.Observe.MinMemMB, Interval: daemon.SampleInterval,
 	}, st)
 	sources := facts.SystemSourcesWith(srcOpt)
-	sources.Observe = observer.Observe
+	sources.Observe = func(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
+		observer.Observe(now, snap, c)
+		usage.Observe(now, snap, c)
+	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
@@ -165,7 +171,11 @@ func run(cfgPath string) error {
 		Observer:    observer,
 		Usage:       st, // GET /v1/usage on the socket: what finished jobs used (rows are written by the job-end hook, WWD usage U3)
 	})
-	sampler.SetOnFacts(d.OnFacts)
+	sampler.SetOnFacts(func(f wire.Facts) {
+		d.OnFacts(f)
+		usage.OnFacts(f)
+	})
+	go usage.Run(ctx)
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
