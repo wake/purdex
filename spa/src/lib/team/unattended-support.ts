@@ -33,6 +33,9 @@ export function startUnattendedSupport(): () => void {
   const probe = (hostId: string) => {
     const generation = ++counter
     current.set(hostId, generation)
+    // First, before the flags go unknown: the fence moves the quota epoch, which a panel answers by reading the host at once,
+    // and that read opens its GET bracket (so the new rows reach the store) only while the last answer still says quotas.
+    useRelayQuotaStore.getState().fence(hostId) // and the quota reads: a read out over the last connection writes nothing
     useUnattendedStore.getState().invalidateSupport(hostId) // what the last connection said is not this one's answer (every flag: #2309)
     useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
     useJournalStore.getState().fence(hostId) // and the journal: unknown until this answer, but its sticky last answer stays
@@ -109,6 +112,7 @@ export function startUnattendedSupport(): () => void {
           useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
           useJournalStore.getState().fence(hostId) // unknown now; the sticky answer stays so the journal UI does not flash back
           useJournalMembersStore.getState().fence(hostId)
+          useRelayQuotaStore.getState().fence(hostId) // a quota read out over this connection must not land either
         }
         continue
       }
