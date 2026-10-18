@@ -128,3 +128,43 @@ func TestAnInfraFailureStillSuspendsAndDoesNotHoldTheJobOff(t *testing.T) {
 	assert.True(t, h.r.Suspended("mlab", "purdex"))
 	assert.False(t, h.r.HeldOff("mlab", "j_a"))
 }
+
+// "In a row" means nothing happened to the job in between: a job that got its snapshot and ended some other way (here the owner took the
+// machine back) starts again at the first wait when the origin fails it later.
+func TestAnotherOutcomeOfTheSameJobEndsTheRun(t *testing.T) {
+	h := newHarness(t, Config{})
+	oe := &snapshot.OriginError{Status: 500}
+	h.fin(context.Background(), originEnded("purdex", "j_a", oe))
+	h.now = h.now.Add(15 * time.Second)
+	reclaimed := endedOf("purdex", runner.KindReclaimed, run.Result{})
+	reclaimed.Job.ID = "j_a"
+	h.fin(context.Background(), reclaimed)
+	assert.NotContains(t, h.r.originHeld, jobKey{"mlab", "j_a"}, "forgotten")
+	h.fin(context.Background(), originEnded("purdex", "j_a", oe))
+	h.now = h.now.Add(15 * time.Second)
+	assert.False(t, h.r.HeldOff("mlab", "j_a"), "the first wait again, 15 s, not 30")
+	// another job's outcome leaves this one's run alone
+	h.fin(context.Background(), originEnded("purdex", "j_a", oe))
+	other := endedOf("purdex", runner.KindShutdown, run.Result{})
+	other.Job.ID = "j_b"
+	h.fin(context.Background(), other)
+	assert.Contains(t, h.r.originHeld, jobKey{"mlab", "j_a"})
+}
+
+// The scan that drops long-over holds is the write path's (an origin failure is rare); the question "is this job held off" is asked for
+// every candidate of every round and looks at one entry: it forgets that entry when its hold is long over and no other.
+func TestHeldOffLooksAtOneEntry(t *testing.T) {
+	h := newHarness(t, Config{})
+	oe := &snapshot.OriginError{Status: 500}
+	for _, id := range []string{"j_1", "j_2", "j_3"} {
+		h.fin(context.Background(), originEnded("purdex", id, oe))
+	}
+	h.now = h.now.Add(time.Hour)
+	assert.False(t, h.r.HeldOff("mlab", "j_1"))
+	assert.NotContains(t, h.r.originHeld, jobKey{"mlab", "j_1"}, "the one asked about is forgotten")
+	assert.Contains(t, h.r.originHeld, jobKey{"mlab", "j_2"}, "the others wait for the next failure's sweep")
+	assert.Contains(t, h.r.originHeld, jobKey{"mlab", "j_3"})
+	h.fin(context.Background(), originEnded("purdex", "j_4", oe)) // a failure sweeps what is long over
+	assert.Len(t, h.r.originHeld, 1)
+	assert.Contains(t, h.r.originHeld, jobKey{"mlab", "j_4"})
+}

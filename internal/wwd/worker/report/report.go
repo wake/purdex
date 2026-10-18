@@ -155,6 +155,9 @@ func (r *Reporter) Delivery(sinks func(source string) Sink) func(ctx context.Con
 
 // deliver does what the kind of ending calls for, and says whether the origin took a result.
 func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool {
+	if e.Kind != runner.KindOrigin {
+		r.forgetHold(e.Source, e.Job.ID) // "in a row" ends: this job got its snapshot, whatever came of it
+	}
 	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
 	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
 	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
@@ -378,33 +381,54 @@ func originDetail(err error) string {
 }
 
 // holdOff holds a job of an origin off for the first wait, or twice the last one when it failed again before that was long over,
-// up to the longest. A hold that ended long ago starts again at the first wait.
+// up to the longest. A hold that ended long ago starts again at the first wait. An origin failure is rare, so this is where the table
+// is swept of the holds that are long over.
 func (r *Reporter) holdOff(source, job string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.cfg.Now()
+	for k, h := range r.originHeld {
+		if r.longOver(now, h) {
+			delete(r.originHeld, k)
+		}
+	}
 	k := jobKey{source, job}
 	wait := r.cfg.OriginBackoff
-	if old, ok := r.originHeld[k]; ok && now.Before(old.until.Add(r.cfg.OriginBackoffMax)) {
+	if old, ok := r.originHeld[k]; ok && !r.longOver(now, old) {
 		wait = min(old.wait*2, r.cfg.OriginBackoffMax)
 	}
 	r.originHeld[k] = originHold{until: now.Add(wait), wait: wait}
 }
 
+// longOver says a hold ended more than the longest wait ago: its run of failures is over.
+func (r *Reporter) longOver(now time.Time, h originHold) bool {
+	return !now.Before(h.until.Add(r.cfg.OriginBackoffMax))
+}
+
+// forgetHold ends a job's run of origin failures.
+func (r *Reporter) forgetHold(source, job string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.originHeld, jobKey{source, job})
+}
+
 // HeldOff says whether the worker must not pick this job of source now: its origin answered the snapshot request wrongly less than the
-// wait ago. It is pick.Env.HeldOff. The entry of a job whose hold is long over (a longest wait past its end) is forgotten, which is what
-// bounds the table; a failure after that starts at the first wait again.
+// wait ago. It is pick.Env.HeldOff, asked for every candidate of every round, so it looks at one entry (and forgets it when its hold is
+// long over); the sweep of the others is holdOff's.
 func (r *Reporter) HeldOff(source, job string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.cfg.Now()
-	for k, h := range r.originHeld { // a few entries at most: one per job the origin has failed on lately
-		if !now.Before(h.until.Add(r.cfg.OriginBackoffMax)) {
-			delete(r.originHeld, k)
-		}
+	k := jobKey{source, job}
+	h, ok := r.originHeld[k]
+	if !ok {
+		return false
 	}
-	h, ok := r.originHeld[jobKey{source, job}]
-	return ok && now.Before(h.until)
+	if r.longOver(now, h) {
+		delete(r.originHeld, k)
+		return false
+	}
+	return now.Before(h.until)
 }
 
 // outcome is how a delivery ended.
