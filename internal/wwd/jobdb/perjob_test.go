@@ -2,9 +2,41 @@ package jobdb
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
+
+// A caller with a deadline is not held past it by an operation that holds the lock (#3372).
+func TestOperationsGiveUpWaitingForTheLockWhenTheContextEnds(t *testing.T) {
+	ex := &fakeExec{}
+	m := New(ex, Config{})
+	m.sem <- struct{}{} // another operation is stuck inside
+	for name, run := range map[string]func(ctx context.Context) error{
+		"Create": func(ctx context.Context) error { _, err := m.Create(ctx, "j_a"); return err },
+		"Drop":   func(ctx context.Context) error { return m.Drop(ctx, "j_a") },
+		"Sweep":  func(ctx context.Context) error { _, err := m.Sweep(ctx, nil); return err },
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		start := time.Now()
+		err := run(ctx)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: err = %v, want a deadline error", name, err)
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("%s waited %v", name, d)
+		}
+	}
+	if ex.all() != "" {
+		t.Errorf("nothing may be sent while the lock is not held:\n%s", ex.all())
+	}
+	<-m.sem
+	if err := m.Drop(context.Background(), "j_a"); err != nil {
+		t.Errorf("after the lock is free: %v", err)
+	}
+}
 
 func TestPerJobCreateReturnsBothEnvNamings(t *testing.T) {
 	ex := &fakeExec{}
