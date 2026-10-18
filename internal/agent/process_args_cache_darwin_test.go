@@ -21,11 +21,11 @@ func cacheClock(t *testing.T) *time.Time {
 	return &now
 }
 
-func readFresh(t *testing.T, snap *ProcessSnapshot, pid int) ProcessInfo {
+func readCached(t *testing.T, snap *ProcessSnapshot, pid int) ProcessInfo {
 	t.Helper()
-	info, err := snap.ReadFresh(pid)
+	info, err := snap.ReadCached(pid)
 	if err != nil {
-		t.Fatalf("ReadFresh(%d): %v", pid, err)
+		t.Fatalf("ReadCached(%d): %v", pid, err)
 	}
 	return info
 }
@@ -39,14 +39,14 @@ func TestPSArgsCache_ExoticArgvIsReadByPSOnce(t *testing.T) {
 	forks := countPSForks(t)
 	snap := takeSnapshot(t)
 
-	first := readFresh(t, snap, pid)
+	first := readCached(t, snap, pid)
 	if got := forks.Load(); got != 2 {
-		t.Fatalf("first ReadFresh of a non-ASCII argv forked ps %d times, want 2 (comm, args)", got)
+		t.Fatalf("first ReadCached of a non-ASCII argv forked ps %d times, want 2 (comm, args)", got)
 	}
 	forks.Store(0)
-	second := readFresh(t, snap, pid)
+	second := readCached(t, snap, pid)
 	if got := forks.Load(); got != 0 {
-		t.Fatalf("second ReadFresh forked ps %d times, want 0 (kept)", got)
+		t.Fatalf("second ReadCached forked ps %d times, want 0 (kept)", got)
 	}
 	if first.ExePath != second.ExePath || !slices.Equal(first.Argv, second.Argv) || !first.StartTime.Equal(second.StartTime) {
 		t.Fatalf("a hit says %+v, the read said %+v", second, first)
@@ -60,6 +60,50 @@ func TestPSArgsCache_ExoticArgvIsReadByPSOnce(t *testing.T) {
 	}
 }
 
+// ReadFresh is for a caller that classifies by Argv: it asks ps on every call and keeps nothing, however often it is asked.
+func TestPSArgsCache_ReadFreshNeverUsesIt(t *testing.T) {
+	psArgsReset()
+	t.Cleanup(psArgsReset)
+	pid := startHelper(t, []string{"snap-helper", "中文"})
+	forks := countPSForks(t)
+	snap := takeSnapshot(t)
+	for i := 1; i <= 2; i++ {
+		forks.Store(0)
+		if _, err := snap.ReadFresh(pid); err != nil {
+			t.Fatalf("ReadFresh #%d: %v", i, err)
+		}
+		if got := forks.Load(); got != 2 {
+			t.Fatalf("ReadFresh #%d forked ps %d times, want 2 (comm, args) every time", i, got)
+		}
+	}
+	psArgsMu.Lock()
+	n := len(psArgsStore)
+	psArgsMu.Unlock()
+	if n != 0 {
+		t.Fatalf("ReadFresh left %d entries in the cache, want 0", n)
+	}
+}
+
+// The registry's liveness reads through the shared view: that is the caller the cache is for.
+func TestPSArgsCache_SharedViewReadIsTheCachedRead(t *testing.T) {
+	psArgsReset()
+	t.Cleanup(psArgsReset)
+	pid := startHelper(t, []string{"snap-helper", "中文"})
+	forks := countPSForks(t)
+	view := SharedProcessView{}
+	waitFor(t, "the shared table to see the helper", func() bool { return view.Alive(pid) })
+	if _, err := view.Read(pid); err != nil {
+		t.Fatalf("view.Read: %v", err)
+	}
+	forks.Store(0)
+	if _, err := view.Read(pid); err != nil {
+		t.Fatalf("second view.Read: %v", err)
+	}
+	if got := forks.Load(); got != 0 {
+		t.Fatalf("the second SharedProcessView.Read forked ps %d times, want 0", got)
+	}
+}
+
 // Only what the fast path cannot answer comes to the cache.
 func TestPSArgsCache_AnArgvTheFastPathTakesIsNotKept(t *testing.T) {
 	psArgsReset()
@@ -67,10 +111,10 @@ func TestPSArgsCache_AnArgvTheFastPathTakesIsNotKept(t *testing.T) {
 	pid := startProcess(t, exec.Command("sleep", "30"))
 	forks := countPSForks(t)
 	snap := takeSnapshot(t)
-	readFresh(t, snap, pid)
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
+	readCached(t, snap, pid)
 	if got := forks.Load(); got != 0 {
-		t.Fatalf("ReadFresh of an ASCII argv forked ps %d times, want 0", got)
+		t.Fatalf("ReadCached of an ASCII argv forked ps %d times, want 0", got)
 	}
 	psArgsMu.Lock()
 	n := len(psArgsStore)
@@ -89,15 +133,15 @@ func TestPSArgsCache_AnswerExpires(t *testing.T) {
 	forks := countPSForks(t)
 	snap := takeSnapshot(t)
 
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	forks.Store(0)
 	*now = now.Add(psArgsCacheTTL - time.Second)
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	if got := forks.Load(); got != 0 {
 		t.Fatalf("a read just inside the TTL forked ps %d times, want 0", got)
 	}
 	*now = now.Add(2 * time.Second)
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	if got := forks.Load(); got != 2 {
 		t.Fatalf("a read after the TTL forked ps %d times, want 2 (read again)", got)
 	}
@@ -112,8 +156,8 @@ func TestPSArgsCache_FailureIsNotKept(t *testing.T) {
 
 	orig := runPS
 	runPS = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("ps is not available") }
-	if _, err := snap.ReadFresh(pid); err == nil {
-		t.Fatal("ReadFresh succeeded though ps failed")
+	if _, err := snap.ReadCached(pid); err == nil {
+		t.Fatal("ReadCached succeeded though ps failed")
 	}
 	runPS = orig
 	psArgsMu.Lock()
@@ -123,7 +167,7 @@ func TestPSArgsCache_FailureIsNotKept(t *testing.T) {
 		t.Fatalf("the cache holds %d entries after a ps failure, want 0", n)
 	}
 	forks := countPSForks(t)
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	if got := forks.Load(); got != 2 {
 		t.Fatalf("the read after the failure forked ps %d times, want 2", got)
 	}
@@ -137,7 +181,7 @@ func TestPSArgsCache_ReusedPidFindsNoEntry(t *testing.T) {
 	pid := startHelper(t, []string{"snap-helper", "中文"})
 	forks := countPSForks(t) // before the first read: it empties the cache
 	snap := takeSnapshot(t)
-	readFresh(t, snap, pid) // kept for the process the snapshot saw
+	readCached(t, snap, pid) // kept for the process the snapshot saw
 	forks.Store(0)
 
 	orig := kernProcPid
@@ -150,8 +194,8 @@ func TestPSArgsCache_ReusedPidFindsNoEntry(t *testing.T) {
 	}
 	t.Cleanup(func() { kernProcPid = orig })
 
-	if _, err := snap.ReadFresh(pid); !errors.Is(err, ErrProcessChanged) {
-		t.Fatalf("ReadFresh of a reused pid = %v, want ErrProcessChanged", err)
+	if _, err := snap.ReadCached(pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("ReadCached of a reused pid = %v, want ErrProcessChanged", err)
 	}
 	if got := forks.Load(); got != 0 {
 		t.Fatalf("a reused pid forked ps %d times, want 0 (the answer cannot change)", got)
@@ -165,7 +209,7 @@ func TestPSArgsCache_ChangedCommandNameFindsNoEntry(t *testing.T) {
 	pid := startHelper(t, []string{"snap-helper", "中文"})
 	forks := countPSForks(t) // before the first read: it empties the cache
 	snap := takeSnapshot(t)
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	forks.Store(0)
 
 	orig := kernProcPid
@@ -178,7 +222,7 @@ func TestPSArgsCache_ChangedCommandNameFindsNoEntry(t *testing.T) {
 	}
 	t.Cleanup(func() { kernProcPid = orig })
 
-	readFresh(t, snap, pid)
+	readCached(t, snap, pid)
 	if got := forks.Load(); got != 2 {
 		t.Fatalf("a process whose command name changed forked ps %d times, want 2 (read again)", got)
 	}
@@ -238,8 +282,8 @@ func TestPSArgsCache_ExecDuringPSIsNeitherReturnedNorKept(t *testing.T) {
 	}
 	t.Cleanup(func() { runPS = origPS })
 
-	if _, err := snap.ReadFresh(pid); !errors.Is(err, ErrProcessChanged) {
-		t.Fatalf("ReadFresh across an exec = %v, want ErrProcessChanged", err)
+	if _, err := snap.ReadCached(pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("ReadCached across an exec = %v, want ErrProcessChanged", err)
 	}
 	psArgsMu.Lock()
 	n := len(psArgsStore)

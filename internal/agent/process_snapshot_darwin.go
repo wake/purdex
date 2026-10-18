@@ -141,6 +141,16 @@ func newDarwinEntry(pid, ppid int, sec int64, usec int32) *snapshotEntry {
 // read later than the table, and a PID reused in between would otherwise put
 // one process's argv next to another's PPID and start time.
 func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
+	return procArgsDarwin(pid, e, false)
+}
+
+// procArgsCachedPlatform is procArgsPlatform, except that for an argv only ps can read the answer of an earlier call may be returned
+// (ReadCached; process_args_cache_darwin.go).
+func procArgsCachedPlatform(pid int, e *snapshotEntry) (string, []string, error) {
+	return procArgsDarwin(pid, e, true)
+}
+
+func procArgsDarwin(pid int, e *snapshotEntry, useCache bool) (string, []string, error) {
 	exePath, argv, fast := readCommArgsFast(pid)
 	var err error
 	var kp *unix.KinfoProc
@@ -155,8 +165,10 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 			// The check below would say so after two forks that cannot change the answer.
 			return "", nil, procChanged(pid, e, kp, kerr)
 		}
-		if exe, av, hit := psArgsGet(psArgsKey{pid, e.identity, kernComm(kp.Proc.P_comm[:])}); hit {
-			exePath, argv, lookedUp = exe, av, true
+		if useCache {
+			if exe, av, hit := psArgsGet(psArgsKey{pid, e.identity, kernComm(kp.Proc.P_comm[:])}); hit {
+				exePath, argv, lookedUp = exe, av, true
+			}
 		}
 		if !lookedUp {
 			commBefore = kernComm(kp.Proc.P_comm[:])
@@ -175,7 +187,7 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if !fast && !lookedUp {
+	if useCache && !fast && !lookedUp {
 		// ps ran in two forks, comm and then args. An exec keeps the pid and the start time, so a process that became another program
 		// between the lookup and now could have given the one answer half of each: it is neither read nor kept.
 		commAfter := kernComm(kp.Proc.P_comm[:])
