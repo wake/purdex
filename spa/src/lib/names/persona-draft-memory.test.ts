@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   rememberDraft, recallDraft, forgetDraft, clearDraftMemory, beginSave, endSave, savePending, subscribeSave,
+  getOutcome, setOutcome,
 } from './persona-draft-memory'
 import { makePersona } from './__fixtures__/personas'
 
@@ -39,6 +40,28 @@ describe('persona draft memory', () => {
     beginSave()
     clearDraftMemory()
     expect(savePending()).toBe(false)
+  })
+
+  it('holds the outcome of the last save and tells subscribers, with a stable snapshot between changes', () => {
+    let calls = 0
+    const stop = subscribeSave(() => { calls++ })
+    expect(getOutcome()).toEqual({ note: null, error: null })
+    const before = getOutcome()
+    expect(getOutcome()).toBe(before) // useSyncExternalStore needs the same object until something changes
+    setOutcome({ note: 'saved' })
+    expect(getOutcome()).toEqual({ note: 'saved', error: null })
+    setOutcome({ error: 'boom' })
+    expect(getOutcome()).toEqual({ note: 'saved', error: 'boom' })
+    setOutcome({ note: null, error: null })
+    expect(getOutcome()).toEqual({ note: null, error: null })
+    expect(calls).toBe(3)
+    stop()
+  })
+
+  it('clearDraftMemory clears the outcome too', () => {
+    setOutcome({ note: 'x', error: 'y' })
+    clearDraftMemory()
+    expect(getOutcome()).toEqual({ note: null, error: null })
   })
 
   it('forgets it', () => {

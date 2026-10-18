@@ -176,6 +176,41 @@ describe('PersonasSection', () => {
     expect((input() as HTMLInputElement).value).toBe('Saved Name')
   })
 
+  it.each([
+    ['an API failure', () => new PersonaApiError(400, 'too long', { index: 0, field: 'name' }), 'personas-error', /too long/],
+    ['a whole-collection failure (index -1)', () => new PersonaApiError(400, 'cannot be removed', { index: -1 }), 'personas-error', /cannot be removed/],
+    ['a stale save', () => new PersonaStaleError(), 'personas-note', /保留|kept/],
+    ['a conflict', () => new PersonaConflictError(makeCollection(['hiro'], { at: 9, host: 'h1' }, 6)), 'personas-note', /保留|kept/],
+  ])('still tells the user about %s that came back while the page was away', async (_why, make, testId, text) => {
+    seed(['hiro'])
+    let fail!: (e: Error) => void
+    vi.mocked(savePersonas).mockImplementation(() => new Promise((_r, rej) => { fail = rej }))
+    const first = render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    first.unmount()
+    render(<PersonasSection />)
+    fail(make())
+    expect((await screen.findByTestId(testId)).textContent).toMatch(text)
+  })
+
+  it('shows the "saved" note on the page that was re-entered, and drops it when the user starts something new', async () => {
+    seed(['hiro', 'emma'])
+    let done!: (r: { hostId: string; base: { hostId: string; revision: number; stamp: { at: number; host: string } } }) => void
+    vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { done = r as typeof done }))
+    const first = render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    first.unmount()
+    render(<PersonasSection />)
+    done({ hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    expect((await screen.findByTestId('personas-note')).textContent).toContain('mlab')
+    fireEvent.click(screen.getByTestId('persona-row-emma'))
+    expect(screen.queryByTestId('personas-note')).toBeNull()
+  })
+
   it('stops "New persona" at 64 personas (retired ones count) and says why', () => {
     const codes = Array.from({ length: 64 }, (_, i) => 'a' + String.fromCharCode(97 + (i % 26)) + String.fromCharCode(97 + Math.floor(i / 26)))
     seed(codes, { [codes[0]]: { retired: true } })

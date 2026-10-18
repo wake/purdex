@@ -65,8 +65,28 @@ export function subscribeSave(fn: () => void): () => void {
   return () => { listeners.delete(fn) }
 }
 
+// What the last save said, held with the lock for the same reason: a save that finishes while the page is away reports
+// its result (saved, kept your input, failed) to whoever is mounted when it ends. A component's own state would drop it.
+// `getOutcome` returns the same object until something changes, as `useSyncExternalStore` needs.
+export interface SaveOutcome {
+  note: string | null
+  error: string | null
+}
+
+let outcome: SaveOutcome = { note: null, error: null }
+
+export function getOutcome(): SaveOutcome {
+  return outcome
+}
+
+export function setOutcome(next: Partial<SaveOutcome>): void {
+  outcome = { ...outcome, ...next }
+  notify()
+}
+
 /** Test-only. */
 export function clearDraftMemory(): void {
   held = null
   pending = false
+  outcome = { note: null, error: null }
 }

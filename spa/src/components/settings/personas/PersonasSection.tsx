@@ -14,7 +14,7 @@ import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostSto
 import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
-  beginSave, endSave, forgetDraft, recallDraft, rememberDraft, savePending, subscribeSave,
+  beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
 } from '../../../lib/names/persona-draft-memory'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
@@ -52,8 +52,9 @@ export function PersonasSection() {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
   const [issues, setIssues] = useState<PersonaIssue[]>([])
-  const [note, setNote] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // The note and the error of the last save live outside the component with the lock: a save that ends while this page
+  // is away reports to whichever instance is mounted when it does.
+  const { note, error } = useSyncExternalStore(subscribeSave, getOutcome)
   // Held outside the component (see persona-draft-memory): a save that is still out when the page is left and re-entered
   // keeps this instance locked too.
   const saving = useSyncExternalStore(subscribeSave, savePending)
@@ -84,7 +85,7 @@ export function PersonasSection() {
   const open = (key: string) => {
     const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
     if (!p) return
-    setIssues([]); setNote(null); setError(null)
+    setIssues([]); setOutcome({ note: null, error: null })
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
 
@@ -97,14 +98,14 @@ export function PersonasSection() {
   const keepTyped = (key: string, typed: Persona) => {
     const stored = usePersonaStore.getState().current()?.items.some((x) => x.code === key)
     hold({ key: stored ? key : '', draft: typed, base: editBase() })
-    setNote(t('settings.personas.kept'))
+    setOutcome({ note: t('settings.personas.kept') })
   }
 
   /** A save went through, but the shown collection is no longer the one it wrote: show what is shown now. */
   const showShown = (key: string, saved: Persona) => {
     const now = usePersonaStore.getState().current()?.items.find((x) => x.code === key)
     hold(now ? { key, draft: structuredClone(now), base: editBase() } : { key: '', draft: saved, base: editBase() })
-    setNote(t('settings.personas.rebuilt'))
+    setOutcome({ note: t('settings.personas.rebuilt') })
   }
 
   const save = async (draft: Persona) => {
@@ -112,12 +113,11 @@ export function PersonasSection() {
     const found = validatePersona(draft)
     if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
     setIssues(found)
-    setNote(null)
-    setError(null)
+    setOutcome({ note: null, error: null })
     if (found.length > 0) {
       // Fields the form has no input for (template texts, the avatar) cannot be marked in red, so they are named here.
       const hidden = found.filter((i) => !FORM_FIELDS.test(i.field)).map((i) => `${i.field}: ${i.message}`)
-      setError([t('settings.personas.error.invalid'), ...hidden].join(' '))
+      setOutcome({ error: [t('settings.personas.error.invalid'), ...hidden].join(' ') })
       return
     }
     const stamped = { ...draft, updated_at: Date.now() }
@@ -128,17 +128,19 @@ export function PersonasSection() {
       if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
       // The host's name as the rest of the App shows it (`lib/host-look.ts`; a screen never reads `host.name` itself).
-      setNote(t('settings.personas.saved', { host: hostLabel(res.hostId, hostLookOf(res.hostId)) }))
+      setOutcome({ note: t('settings.personas.saved', { host: hostLabel(res.hostId, hostLookOf(res.hostId)) }) })
     } catch (e) {
       if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
       else if (e instanceof PersonaValidationError) {
-        setError([t('settings.personas.error.invalid'), ...e.issues.map((i) => `${i.field}: ${i.message}`)].join(' '))
+        setOutcome({ error: [t('settings.personas.error.invalid'), ...e.issues.map((i) => `${i.field}: ${i.message}`)].join(' ') })
       } else if (e instanceof PersonaApiError) {
         const row = e.rowIndex()
-        setError(row === null
-          ? t('settings.personas.error.whole', { message: e.message })
-          : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }))
-      } else setError(t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }))
+        setOutcome({
+          error: row === null
+            ? t('settings.personas.error.whole', { message: e.message })
+            : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }),
+        })
+      } else setOutcome({ error: t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }) })
     } finally {
       endSave()
     }
