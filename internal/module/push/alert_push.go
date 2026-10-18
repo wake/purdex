@@ -1,6 +1,9 @@
 package push
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+
 	"github.com/wake/purdex/internal/push"
 )
 
@@ -32,7 +35,22 @@ func (m *Module) NotifyAlert(p push.AlertPush) bool {
 		ids[i] = d.DeviceID
 	}
 	// An alert is no one's approval and belongs to no session: the Job carries no Approval, so the sender resolves no session_code.
+	// host_id is the host that sends (the one a tap can open); the host the alert is about goes in alert_host.
+	cid := alertCollapseID(p.CollapseID)
 	return snd.Enqueue(Job{DeviceIDs: ids, Make: func(push.Device) (push.Content, bool) {
-		return push.Content{Title: p.Title, Kind: "alert", CollapseID: p.CollapseID}, true
+		return push.Content{Title: p.Title, Kind: "alert", CollapseID: cid, AlertHost: p.Host}, true
 	}})
+}
+
+// maxCollapseIDBytes is what APNs accepts in apns-collapse-id.
+const maxCollapseIDBytes = 64
+
+// alertCollapseID returns id when APNs takes it, else a stable short stand-in (an alert key may be 200 bytes): the same alert keeps
+// the same id, so it still replaces its earlier push on the phone.
+func alertCollapseID(id string) string {
+	if len(id) <= maxCollapseIDBytes {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return "alert:" + hex.EncodeToString(sum[:16])
 }
