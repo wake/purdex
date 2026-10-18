@@ -190,6 +190,91 @@ func TestJobsAfter_AnotherConflictStaysAStatusError(t *testing.T) {
 	}
 }
 
+func TestJobsPage_SendsEveryFilterAndReturnsTheWholeAnswer(t *testing.T) {
+	var q map[string][]string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		q = r.URL.Query()
+		writeJSON(w, wire.JobsListResponse{Jobs: []wire.Job{jobIn(t, "j_a", wire.StateQueued)}, Cursor: "9", Epoch: testEpoch})
+	})
+	r, err := New(fakeWWD(t, mux)).JobsPage(context.Background(), JobsPageQuery{
+		JobsQuery: JobsQuery{State: wire.StateQueued, Session: "s1"}, Host: "air19", After: "4", Limit: 25})
+	if err != nil || len(r.Jobs) != 1 || r.Cursor != "9" || r.Epoch != testEpoch {
+		t.Fatalf("answer %+v err %v", r, err)
+	}
+	for k, want := range map[string]string{"state": "queued", "submitter.session": "s1", "host": "air19", "after": "4", "limit": "25"} {
+		if len(q[k]) != 1 || q[k][0] != want {
+			t.Errorf("%s = %v, want %s", k, q[k], want)
+		}
+	}
+	if _, err := New(fakeWWD(t, mux)).JobsPage(context.Background(), JobsPageQuery{After: "x"}); err == nil {
+		t.Error("a bad cursor was sent")
+	}
+}
+
+func TestJobsPage_ACursorAheadIsTyped(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(wire.CursorAhead{Reason: wire.CursorAheadReason, Head: "3", Epoch: testEpoch})
+	})
+	_, err := New(fakeWWD(t, mux)).JobsPage(context.Background(), JobsPageQuery{After: "900"})
+	var ca *CursorAheadError
+	if !errors.As(err, &ca) || ca.Head != "3" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestJobAtAndLogAt_NameTheHost(t *testing.T) {
+	var got []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, "job:"+r.URL.Query().Get("host"))
+		writeJSON(w, jobIn(t, "j_a", wire.StateRunning))
+	})
+	mux.HandleFunc("GET /v1/jobs/{id}/log", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, "log:"+r.URL.Query().Get("host"))
+		io.WriteString(w, "text")
+	})
+	c := New(fakeWWD(t, mux))
+	if _, err := c.JobAt(context.Background(), "air19", "j_a"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := c.LogAt(context.Background(), "air19", "j_a"); err != nil || string(b) != "text" {
+		t.Fatalf("log %q err %v", b, err)
+	}
+	if _, err := c.Job(context.Background(), "j_a"); err != nil { // the local wwd's own: no host
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "job:air19,log:air19,job:" {
+		t.Fatalf("calls %v", got)
+	}
+	if _, err := c.JobAt(context.Background(), "air19", "../x"); err == nil {
+		t.Error("a bad job id was sent")
+	}
+}
+
+func TestLogAtMost_ReadsAtMostTheLimitAndSaysWhenTheLogIsLonger(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs/{id}/log", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Repeat("x", 10))
+	})
+	c := New(fakeWWD(t, mux))
+	if b, big, err := c.LogAtMost(context.Background(), "", "j_a", 10); err != nil || big || len(b) != 10 {
+		t.Fatalf("at the limit: %d bytes, tooLarge %v, err %v", len(b), big, err)
+	}
+	b, big, err := c.LogAtMost(context.Background(), "", "j_a", 9)
+	if err != nil || !big || b != nil {
+		t.Fatalf("over the limit: %q, tooLarge %v, err %v", b, big, err)
+	}
+	if _, err := c.LogAt(context.Background(), "", "j_a"); err != nil { // the plain read still has its own large cap
+		t.Fatal(err)
+	}
+	if !ValidJobID("j_abc") || ValidJobID("abc") || ValidJobID("j_../x") {
+		t.Error("ValidJobID")
+	}
+}
+
 func TestJobLogCancel_PathsAndEscaping(t *testing.T) {
 	var paths []string
 	var mu sync.Mutex
