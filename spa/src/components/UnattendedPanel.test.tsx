@@ -545,6 +545,20 @@ describe('UnattendedPanel relay quota', () => {
     expect(screen.getAllByTestId('quota-host-heading').map((h) => h.textContent)).toEqual(['mlab', 'air26'])
   })
 
+  it('a host whose read failed or timed out still has its quota place: 「讀不到額度」 beside the named failure (#2891), the other host\'s rows stay', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useUnattendedStore.getState().setQuotaSupport(B, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [])
+    mockedGet.mockImplementation((hostId) => hostId === B ? new Promise<UnattendedView>(() => {}) : Promise.resolve(page([], { quotas: [] })))
+    open([A, B])
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('air26：無法讀取（timeout）')
+    expect(screen.getByTestId('quota-unreadable')).toHaveTextContent('air26：讀不到額度')
+    expect(screen.getByTestId('quota-none')).toHaveTextContent('沒有可設定的 session')
+  })
+
   it('the held section only when held is non-empty, newest first; the approved list below is unchanged', async () => {
     useUnattendedStore.getState().setQuotaSupport(A, 'yes')
     useTeamRosterStore.getState().apply(A, [])
