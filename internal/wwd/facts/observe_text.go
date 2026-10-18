@@ -7,21 +7,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/redact"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // What an observation keeps of a command line, and the short form the undeclared list groups by. A command line can hold a secret
-// (a token on the command line is common), and it is stored and served to the pool, so it is redacted before it is kept.
-
-var (
-	// a flag whose next argument (or =value) is a secret
-	reSecretFlag = regexp.MustCompile(`(?i)^-{1,2}(token|secret|password|passwd|pwd|pass|api[-_]?key|apikey|key|auth|authorization|bearer|cookie|credentials?|private[-_]?key|access[-_]?key)s?$`)
-	// NAME=value with a secret-looking name
-	reSecretName = regexp.MustCompile(`(?i)(token|secret|password|passwd|api_?key|auth|credential|bearer|cookie|private_?key|access_?key)`)
-	reAuthScheme = regexp.MustCompile(`(?i)\b(bearer|basic)\s+\S+`)
-	reURLUser    = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@`)
-	reTokenShape = regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}`)
-)
+// (a token on the command line is common), and it is stored for 14 days and served to the pool, so it is scrubbed before it is kept.
+// The scrubbing is internal/redact's (the gate's holder records and the load watcher use the same): the shape of a command line
+// first (flags and variables that name a secret, credential headers, the password in a URL), then every word through the transcript
+// scrubber (bearer tokens, sk-, ghp_, xox, AWS key ids, Purdex tokens, long mixed runs).
 
 func dropControl(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -30,6 +24,17 @@ func dropControl(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// cleanArgv drops control characters and empty words.
+func cleanArgv(argv []string) []string {
+	out := make([]string, 0, len(argv))
+	for _, a := range argv {
+		if a = dropControl(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func isNumber(s string) bool {
@@ -44,59 +49,38 @@ func isNumber(s string) bool {
 	return true
 }
 
-// redactToken hides what looks like a secret inside one argument.
-func redactToken(s string) string {
-	s = reURLUser.ReplaceAllString(s, "${1}***@")
-	s = reAuthScheme.ReplaceAllString(s, "$1 ***")
-	return reTokenShape.ReplaceAllString(s, "***")
-}
+var shellCommands = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "fish": true, "ksh": true}
 
-// RedactCommand is argv as one line with secrets hidden, control characters dropped and at most wire.MaxObservationCommand
-// characters (a cut one ends in "…"). Hidden: the value of a flag like --token/--password/--api-key (as the next argument or after
-// "="), NAME=value where NAME looks like a secret, "Bearer ..." and "Basic ..." credentials, the user:password of a URL, and a few
-// well-known token shapes. It is a best effort for the usual ways a secret reaches a command line, not a promise.
-func RedactCommand(argv []string) string {
-	out := make([]string, 0, len(argv))
-	hideNext, keepNumber := false, false
-	for _, raw := range argv {
-		a := dropControl(raw)
-		if a == "" {
-			continue
-		}
-		if hideNext {
-			numeric := keepNumber && isNumber(a)
-			hideNext, keepNumber = false, false
-			if !strings.HasPrefix(a, "-") && !numeric {
-				out = append(out, "***")
-				continue
-			}
-		}
-		switch {
-		case reSecretFlag.MatchString(a):
-			out = append(out, a)
-			hideNext = true
-		case a == "-p": // mysql -p <password>, but also ssh -p <port>: a number is no secret, so it is kept
-			out = append(out, a)
-			hideNext, keepNumber = true, true
-		case strings.HasPrefix(a, "-") && strings.Contains(a, "="):
-			name, _, _ := strings.Cut(a, "=")
-			if reSecretFlag.MatchString(name) {
-				out = append(out, name+"=***")
-			} else {
-				out = append(out, redactToken(a))
-			}
-		case !strings.HasPrefix(a, "-") && strings.Contains(a, "="):
-			name, _, _ := strings.Cut(a, "=")
-			if reSecretName.MatchString(name) && !strings.ContainsAny(name, "/ ") {
-				out = append(out, name+"=***")
-			} else {
-				out = append(out, redactToken(a))
-			}
-		default:
-			out = append(out, redactToken(a))
+// shellScript finds the script of `sh -c <script>` (any of -c, -lc, -ic, ...): its index in argv, or -1.
+func shellScript(argv []string) int {
+	if len(argv) < 3 || !shellCommands[path.Base(argv[0])] {
+		return -1
+	}
+	for i := 1; i+1 < len(argv); i++ {
+		if strings.HasPrefix(argv[i], "-") && !strings.HasPrefix(argv[i], "--") && strings.Contains(argv[i], "c") {
+			return i + 1
 		}
 	}
-	return cut(strings.Join(out, " "), wire.MaxObservationCommand)
+	return -1
+}
+
+// scrubbed is argv with the secrets in it replaced. The script of a `sh -c` is one word to the scrubber, which cannot see the flags
+// inside it, so its words are scrubbed as a command line of their own.
+func scrubbed(argv []string) []string {
+	argv = cleanArgv(argv)
+	out := redact.ScrubArgv(argv)
+	if i := shellScript(argv); i >= 0 {
+		out[i] = strings.Join(redact.ScrubArgv(strings.Fields(argv[i])), " ")
+	}
+	return out
+}
+
+// RedactCommand is argv as one line with secrets replaced (internal/redact), control characters dropped and at most
+// wire.MaxObservationCommand characters (a cut one ends in "…"). The scrubbing comes before the cut, so a secret far into a long
+// word does not survive in its first characters. It is a best effort for the usual ways a secret reaches a command line, not a
+// promise.
+func RedactCommand(argv []string) string {
+	return cut(strings.Join(scrubbed(argv), " "), wire.MaxObservationCommand)
 }
 
 func cut(s string, max int) string {
@@ -107,7 +91,6 @@ func cut(s string, max int) string {
 	return string(r[:max-1]) + "…"
 }
 
-var shellCommands = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "fish": true, "ksh": true}
 var shellPrelude = map[string]bool{"cd": true, "export": true, "set": true, "source": true, ".": true, "unset": true, "ulimit": true, "umask": true, "true": true, "[": true}
 
 const maxSignatureName = 32
@@ -115,22 +98,21 @@ const maxSignatureName = 32
 // CommandSignature is the short form of a command the undeclared list groups by: the program and up to two words after it, the way
 // a person names a command ("pnpm vitest run", "go test", "swift build"). Flags and what follows them, numbers, paths and
 // KEY=value arguments are left out; env prefixes are looked through; for "bash -c <script>" it is the script's first real command.
-// "unknown" when argv names nothing.
+// It is made from the scrubbed command line, so a secret given as a bare word is not in it. "unknown" when argv names nothing.
 func CommandSignature(argv []string) string {
-	sig := signature(argv, 0)
+	sig := signature(scrubbed(argv), 0)
 	if sig == "" {
 		return "unknown"
 	}
 	return sig
 }
 
-func signature(argv []string, depth int) string {
-	clean := make([]string, 0, len(argv))
-	for _, a := range argv {
-		if a = dropControl(a); a != "" {
-			clean = append(clean, a)
-		}
-	}
+// isScrubbed says whether a word is a replacement the scrubber made (or holds one).
+func isScrubbed(a string) bool {
+	return strings.Contains(a, "<redacted>") || strings.Contains(a, redact.Mask)
+}
+
+func signature(clean []string, depth int) string {
 	if len(clean) == 0 || depth > 3 {
 		return ""
 	}
@@ -142,20 +124,19 @@ func signature(argv []string, depth int) string {
 		return signature(clean[i:], depth+1)
 	}
 	name := path.Base(clean[0])
-	if name == "." || name == "/" {
+	if name == "." || name == "/" || isScrubbed(name) {
 		return ""
 	}
-	if shellCommands[name] {
-		for i := 1; i+1 < len(clean); i++ {
-			if strings.HasPrefix(clean[i], "-") && strings.Contains(clean[i], "c") && !strings.HasPrefix(clean[i], "--") {
-				return scriptSignature(clean[i+1], depth+1, name)
-			}
-		}
+	if i := shellScript(clean); i >= 0 {
+		return scriptSignature(clean[i], depth+1, name)
 	}
 	words := []string{trimName(name)}
 	for _, a := range clean[1:] {
 		if len(words) == 3 {
 			break
+		}
+		if isScrubbed(a) {
+			continue // a secret given as a bare word is not a word of the command
 		}
 		if strings.HasPrefix(a, "-") {
 			if strings.Contains(a, "=") {
