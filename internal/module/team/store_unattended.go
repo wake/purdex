@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -232,12 +231,30 @@ func (s *Store) ListAutoApproved(since, before int64, limit int) (rows []team.Ap
 // decisionKinds is the kinds the unattended log covers (team.DecisionLogKind), as query arguments.
 var decisionKinds = []team.Kind{team.KindLead, team.KindAdopt, team.KindSelfRelay, team.KindMemberRelay, team.KindSpawnResources}
 
+// The where of ListRecentDecisions' reads (state, kind), and of the daemon's refusals: the literal close_reason, so the partial
+// index approval_requests_refused applies.
+const (
+	decisionsByState = `state = ? AND kind = ?`
+	decisionsRefused = `kind = ? AND close_reason = '` + team.ErrUnattendedRefused + `' AND state = ?`
+)
+
+// recentDecisionsQuery is one read of ListRecentDecisions: the rows of where, newest by order first, cut at its last argument.
+func recentDecisionsQuery(where, order string) string {
+	table := `approval_requests`
+	if where == decisionsRefused {
+		// left alone the planner walks (state, kind, decided_at) over every withdrawn request and filters the reason
+		table += ` INDEXED BY approval_requests_refused`
+	}
+	return `SELECT ` + selectCols + ` FROM ` + table + ` WHERE ` + where + ` ORDER BY ` + order + ` DESC, id DESC LIMIT ?`
+}
+
 // ListRecentDecisions is the newest limit decisions of the team approvals for the unattended log, whoever decided: approved,
 // denied and timeout rows of the log's kinds, and the lead / adopt requests the daemon refused while the switch was on
 // (cancelled with close_reason unattended_refused, which team.DecisionLogEntry lists as the denial it is). A withdrawn or
 // abandoned request, an open one and the chat prompts are not decisions. Newest first by the time the log shows: a timeout's
-// deadline_at, decided_at for the rest; the larger id first within one millisecond. Each state is read on its own index range
-// (state, decided_at / deadline_at) cut at limit, then merged, so the cost does not grow with the table. Never nil.
+// deadline_at, decided_at for the rest; the larger id first within one millisecond. Each kind and state is read on its own index
+// range (state, kind, decided_at / deadline_at; the refusals on a partial index) cut at limit, then merged, so the cost does not
+// grow with the table, nor with the chat prompts in it. Never nil.
 func (s *Store) ListRecentDecisions(limit int) ([]team.Approval, error) {
 	if s.beforeListRecentDecisions != nil {
 		if err := s.beforeListRecentDecisions(); err != nil {
@@ -247,15 +264,8 @@ func (s *Store) ListRecentDecisions(limit int) ([]team.Approval, error) {
 	if limit < 1 {
 		return []team.Approval{}, nil
 	}
-	in := strings.TrimSuffix(strings.Repeat("?,", len(decisionKinds)), ",")
 	read := func(where, order string, args ...any) ([]team.Approval, error) {
-		a := make([]any, 0, len(decisionKinds)+len(args)+1)
-		for _, k := range decisionKinds {
-			a = append(a, string(k))
-		}
-		a = append(a, args...)
-		a = append(a, limit)
-		q, err := s.db.Query(`SELECT `+selectCols+` FROM approval_requests WHERE kind IN (`+in+`) AND `+where+` ORDER BY `+order+` DESC, id DESC LIMIT ?`, a...)
+		q, err := s.db.Query(recentDecisionsQuery(where, order), append(args, limit)...)
 		if err != nil {
 			return nil, err
 		}
@@ -270,21 +280,32 @@ func (s *Store) ListRecentDecisions(limit int) ([]team.Approval, error) {
 		}
 		return out, q.Err()
 	}
+	// One read per kind and state, each on its own index range, so the chat prompts (many, and not in the log) are never
+	// walked to reach a team decision.
 	all := []team.Approval{}
-	for _, r := range []struct {
-		where, order string
-		args         []any
-	}{
-		{`state = ?`, `decided_at`, []any{string(team.StateApproved)}},
-		{`state = ?`, `decided_at`, []any{string(team.StateDenied)}},
-		{`state = ? AND close_reason = ? AND kind IN ('lead', 'adopt')`, `decided_at`, []any{string(team.StateCancelled), team.ErrUnattendedRefused}},
-		{`state = ?`, `deadline_at`, []any{string(team.StateTimeout)}},
-	} {
-		rows, err := read(r.where, r.order, r.args...)
-		if err != nil {
-			return nil, fmt.Errorf("list recent decisions: %w", err)
+	for _, k := range decisionKinds {
+		reads := []struct {
+			where, order string
+			args         []any
+		}{
+			{decisionsByState, `decided_at`, []any{string(team.StateApproved), string(k)}},
+			{decisionsByState, `decided_at`, []any{string(team.StateDenied), string(k)}},
+			{decisionsByState, `deadline_at`, []any{string(team.StateTimeout), string(k)}},
 		}
-		all = append(all, rows...)
+		if team.UnattendedRefusable(k) {
+			// the literal, so the partial index approval_requests_refused applies
+			reads = append(reads, struct {
+				where, order string
+				args         []any
+			}{decisionsRefused, `decided_at`, []any{string(k), string(team.StateCancelled)}})
+		}
+		for _, r := range reads {
+			rows, err := read(r.where, r.order, r.args...)
+			if err != nil {
+				return nil, fmt.Errorf("list recent decisions: %w", err)
+			}
+			all = append(all, rows...)
+		}
 	}
 	at := func(a team.Approval) int64 {
 		if a.State == team.StateTimeout {

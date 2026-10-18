@@ -3,6 +3,7 @@ package teammod
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -105,5 +106,38 @@ func TestListRecentDecisions_EmptyIsNotNil(t *testing.T) {
 	rows, err := openTestStore(t).ListRecentDecisions(30)
 	if err != nil || rows == nil || len(rows) != 0 {
 		t.Fatalf("rows = %#v, err = %v, want empty non-nil", rows, err)
+	}
+}
+
+// Every read of ListRecentDecisions is a range scan of an index that holds its state and kind (or the partial index of the
+// refusals), never a walk of the whole state, which the chat prompts fill. Mutation gate: read by state alone → red.
+func TestListRecentDecisions_ReadsUseTheirOwnIndex(t *testing.T) {
+	s := openTestStore(t)
+	for _, c := range []struct {
+		where, order, index string
+		args                []any
+	}{
+		{decisionsByState, "decided_at", "approval_requests_state_kind_decided", []any{"approved", "lead"}},
+		{decisionsByState, "deadline_at", "approval_requests_state_kind_deadline", []any{"timeout", "lead"}},
+		{decisionsRefused, "decided_at", "approval_requests_refused", []any{"lead", "cancelled"}},
+	} {
+		q, err := s.db.Query(`EXPLAIN QUERY PLAN `+recentDecisionsQuery(c.where, c.order), append(c.args, 30)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan []string
+		for q.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := q.Scan(&id, &parent, &unused, &detail); err != nil {
+				q.Close()
+				t.Fatal(err)
+			}
+			plan = append(plan, detail)
+		}
+		q.Close()
+		if !strings.Contains(strings.Join(plan, "\n"), "USING INDEX "+c.index) {
+			t.Errorf("plan %q does not use %s", plan, c.index)
+		}
 	}
 }
