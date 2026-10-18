@@ -76,16 +76,17 @@ type Module struct {
 	subSem    chan struct{}
 
 	// typed submit (K-1a-2)
-	td         *typedDeps   // nil: the daemon's services; tests inject
-	tune       typedTuning  // zero: the spec's timings
-	locks      sidLocks     // by Claude Code session id, shared by both submit routes
-	paneLocks  sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
-	keysSeen   keysLedger   // ids typed blind (no mod)
-	recalls    recallLedger // answers of recall requests that pressed Up (K-1b)
-	stages     stageLedger  // where each sent client_msg_id is on its way to the transcript
-	ready      atomic.Bool  // Init succeeded (Status)
-	finMu      sync.Mutex
-	finalising map[string]struct{} // ids with a finaliser running
+	td             *typedDeps   // nil: the daemon's services; tests inject
+	tune           typedTuning  // zero: the spec's timings
+	locks          sidLocks     // by Claude Code session id, shared by both submit routes
+	paneLocks      sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
+	keysSeen       keysLedger   // ids typed blind (no mod)
+	recalls        recallLedger // answers of recall requests that pressed Up (K-1b)
+	stages         stageLedger  // where each sent client_msg_id is on its way to the transcript
+	ready          atomic.Bool  // Init succeeded (Status)
+	afterStageRead func()       // test seam: runs in the stage observer after it read the items, before it compares them
+	finMu          sync.Mutex
+	finalising     map[string]struct{} // ids with a finaliser running
 
 	mu      sync.Mutex
 	cur     *generation // the latest Start's (kept after Stop: its context is cancelled, so nothing is admitted)

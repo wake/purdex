@@ -202,3 +202,27 @@ func TestWSStages_UserItemsAreFilteredByTime(t *testing.T) {
 	require.Len(t, late, 1)
 	assert.Equal(t, "newer", late[0].Text)
 }
+
+// An id that enters while the observer is between reading and comparing is not covered by that look: the next one happens even
+// though the transcript did not change (codex critic on #3421).
+func TestWSStages_AnIdThatEntersMidLookIsLookedAtNext(t *testing.T) {
+	e, _ := wsEnv(t)
+	p := e.transcript(idleTurns(1))
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "running", SeenAt: 1}}
+	entry, release, err := e.mod.cache.Acquire(t.Context(), sid)
+	require.NoError(t, err)
+	defer release()
+	require.NoError(t, entry.Exclusive(t.Context(), func() error { return e.mod.refresh(t.Context(), entry, sid) }))
+	now := time.Now()
+	e.mod.stages.begin(sid, "first", "x", now)
+	e.mod.stages.set(sid, "first", stageEntered, "", "fill", now)
+	e.mod.afterStageRead = func() {
+		e.mod.afterStageRead = nil
+		e.mod.stages.begin(sid, "late", "y", now)
+		e.mod.stages.set(sid, "late", stageEntered, "", "fill", now)
+	}
+	e.mod.observeStages(sid, entry)
+	assert.False(t, e.mod.stages.seenAlready(sid, entry.Cursor()), "the late id was not part of that look")
+	e.mod.observeStages(sid, entry)
+	assert.True(t, e.mod.stages.seenAlready(sid, entry.Cursor()), "a quiet look settles")
+}

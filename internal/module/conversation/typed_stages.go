@@ -97,6 +97,9 @@ func (m *Module) observeStages(sid string, entry *convfeed.Entry) {
 	for _, u := range entry.UserItems(from) {
 		items = append(items, stageItem{ID: u.ID, Text: u.Text, At: u.At})
 	}
+	if m.afterStageRead != nil {
+		m.afterStageRead()
+	}
 	h := entry.Header()
 	lossy := len(h.Queued)+h.HiddenQueued >= ccnorm.MaxQueueEntries // the feed's tracker dropped its oldest rows: absence proves nothing
 	m.stages.observe(sid, h.Queued, lossy, items, m.tuning().now())
