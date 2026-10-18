@@ -37,14 +37,20 @@ func TestTheCommandsOutputGoesToTheTeeAsWellAsTheLog(t *testing.T) {
 	}
 }
 
-func TestTailCutOnlyWhenTheOutputIsLongerThanTheTail(t *testing.T) {
+func TestTailCutOnlyWhenTheTailStartsInsideALine(t *testing.T) {
 	for name, tc := range map[string]struct {
+		line string // one line of output, with its newline
 		rows int
 		cut  bool
-	}{"short": {10, false}, "long": {40000, true}} {
+	}{
+		"short":                        {"0123456789\n", 10, false},
+		"longer, tail inside a line":   {"0123456789\n", 40000, true},      // 11 bytes: 65536 is not a multiple
+		"longer, tail at a line start": {"012345678901234\n", 8000, false}, // 16 bytes: the cut falls on a line boundary
+		"exactly the tail":             {"012345678901234\n", 4096, false}, // 64 KiB of output, all of it kept
+	} {
 		g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
 			for i := 0; i < tc.rows; i++ {
-				o.Stdout.Write([]byte("0123456789\n"))
+				o.Stdout.Write([]byte(tc.line))
 			}
 			return 0
 		}}

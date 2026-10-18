@@ -208,13 +208,11 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if t := timer.Load(); t != nil {
 		t.Stop()
 	}
-	tail, _, capErr := cp.Close()
+	tail, logCut, capErr := cp.Close()
 	outTee.close()
 	errTee.close()
 	res.Tail = tail
-	if st, err := os.Stat(filepath.Join(out, "log")); err == nil {
-		res.TailCut = st.Size() > int64(len(tail)) // the log holds at least all of the tail; more means the tail is cut
-	}
+	res.TailCut = tailCut(filepath.Join(out, "log"), len(tail), logCut)
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
 	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned))
@@ -495,4 +493,27 @@ func (t *teeWriter) close() {
 	case <-t.done:
 	case <-time.After(teeFlush):
 	}
+}
+
+// tailCut says whether the in-memory tail of n bytes starts inside a line: the output is longer than the tail and the byte before the
+// tail is not a newline. The byte is read from the log, which holds the whole output unless it hit its cap (logCut), and then the
+// start of the tail cannot be told, so it counts as cut.
+func tailCut(logPath string, n int, logCut bool) bool {
+	st, err := os.Stat(logPath)
+	if err != nil || st.Size() <= int64(n) {
+		return false // the log is the tail: all of the output
+	}
+	if logCut {
+		return true
+	}
+	f, err := os.Open(logPath)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	var b [1]byte
+	if _, err := f.ReadAt(b[:], st.Size()-int64(n)-1); err != nil {
+		return true
+	}
+	return b[0] != '\n'
 }
