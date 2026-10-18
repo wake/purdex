@@ -2,6 +2,7 @@ package submit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,6 +210,31 @@ func TestPrepareRefusesWhenTheDirectoryIsSwappedBeforeTheBaseQuery(t *testing.T)
 	t.Cleanup(func() { beforeGit = nil })
 	if _, err := Prepare(context.Background(), Request{Dir: link, Task: "lint"}); err == nil {
 		t.Fatal("a directory swapped before the base query was accepted")
+	}
+}
+
+func TestPrepareLocalOnlyAnUnbornBranchIsNoCommit(t *testing.T) {
+	// a branch without a commit is ErrNoCommit
+	unborn, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, unborn, "init", "-q", "-b", "main")
+	write(t, filepath.Join(unborn, ".wwd/tasks.toml"), testManifest)
+	_, err = Prepare(context.Background(), Request{Dir: unborn, Task: "spa-file", Args: []string{"src/a.test.ts"}, Local: true})
+	if !errors.Is(err, ErrNoCommit) || !IsUsage(err) {
+		t.Fatalf("unborn: %v", err)
+	}
+	// a repository with commits whose HEAD git cannot resolve (damaged objects, say) is not "no commit"
+	dir := newRepo(t)
+	fake := filepath.Join(t.TempDir(), "git")
+	write(t, fake, "#!/bin/sh\ncase \"$*\" in *'HEAD^{commit}'*) echo 'fatal: bad object' >&2; exit 128;; esac\nexec git \"$@\"\n")
+	if err := os.Chmod(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/a.test.ts"}, Local: true, Git: fake})
+	if err == nil || errors.Is(err, ErrNoCommit) || IsUsage(err) {
+		t.Fatalf("a HEAD that cannot be resolved: %v", err)
 	}
 }
 

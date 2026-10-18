@@ -519,6 +519,29 @@ func TestBusyLocksSendALocalTaskThroughTheQueue(t *testing.T) {
 	}
 }
 
+type neverRecorder struct{ t *testing.T }
+
+func (r neverRecorder) Register(context.Context, submit.Body) (fastlane.Handle, error) {
+	r.t.Error("a run with nothing to record against was registered")
+	return nil, fastlane.ErrUnrecorded
+}
+
+func TestARepositoryWithoutACommitRunsTheLocalTaskUnrecorded(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "init", "-q", "-b", "main")
+	os.MkdirAll(filepath.Join(dir, ".wwd"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".wwd/tasks.toml"), []byte(manifestSrc), 0o644)
+	os.WriteFile(filepath.Join(dir, "a.test.ts"), []byte("x"), 0o644)
+	g := &fakeGate{}
+	code, out, errOut := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Dir: dir, Recorder: neverRecorder{t}, Env: os.Environ()})
+	if code != 0 || g.calls != 1 {
+		t.Fatalf("code %d gate %d\n%s\n%s", code, g.calls, out, errOut)
+	}
+}
+
 func TestListShowsTheTasks(t *testing.T) {
 	code, out, _ := run(t, Options{Args: args(t, "--list"), API: &fakeAPI{}})
 	if code != 0 || !strings.Contains(out, "one-file") || !strings.Contains(out, "lint") || !strings.Contains(out, "local") {

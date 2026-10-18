@@ -249,6 +249,20 @@ func TestBusyLocksSendTheCallToTheQueue(t *testing.T) {
 	}
 }
 
+func TestAWwdThatCannotRecordStillRunsTheCommandUnrecorded(t *testing.T) {
+	g := &fakeGate{run: func(context.Context, gate.Options) int { return 0 }}
+	rec := newRec()
+	rec.err = ErrUnrecorded
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "go-pkg"), Args: []string{"./a"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if len(g.calls) != 1 || res.JobID != "" || res.State != wire.StateSucceeded {
+		t.Fatalf("calls %d result %+v", len(g.calls), res)
+	}
+}
+
 func TestTaskFixedEnvIsSetOverTheCallersAndTheRestOfItStays(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.Env = []string{"CI=1", "KEEP", "WWD_JOB=other", "PDX_GATE_DIR=/x", "FIXED=a=b"}
@@ -701,6 +715,52 @@ func TestALeaseThatCannotBeRenewedEndsTheCommandAsLost(t *testing.T) {
 	defer res.Cleanup()
 	if res.State != wire.StateFailed || res.Reason != "lost" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestAClaimWwdNoLongerAcceptsEndsTheCommandAtOnce(t *testing.T) {
+	rec := newRec()
+	rec.h.every, rec.h.lease = 10*time.Millisecond, time.Hour // the lease alone would take an hour to run out
+	rec.h.heartbeat = func() (bool, error) { return false, ErrStale }
+	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	tk := task(t, "one-file")
+	tk.Timeout = 10 * time.Second
+	start := time.Now()
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateFailed || res.Reason != "lost" || time.Since(start) > 3*time.Second {
+		t.Fatalf("result %+v after %v", res, time.Since(start))
+	}
+}
+
+func TestAStaleHeartbeatDoesNotCutShortTheDeliveryOfTheResult(t *testing.T) {
+	rec := newRec()
+	rec.h.every, rec.h.lease = 10*time.Millisecond, time.Hour
+	rec.h.heartbeat = func() (bool, error) { return false, ErrStale }
+	tries := 0
+	rec.h.finishFn = func() error { // the first reply is lost although the result was committed
+		if tries++; tries == 1 {
+			time.Sleep(50 * time.Millisecond) // a heartbeat meets the terminal job meanwhile
+			return errors.New("connection reset")
+		}
+		return nil
+	}
+	oldB, oldF := deliverBackoff, deliverFor
+	deliverBackoff, deliverFor = time.Millisecond, time.Minute
+	defer func() { deliverBackoff, deliverFor = oldB, oldF }()
+	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	tk := task(t, "one-file")
+	tk.Timeout = 10 * time.Second
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err != nil || tries != 2 {
+		t.Fatalf("err %v after %d tries", res.Err, tries)
 	}
 }
 
