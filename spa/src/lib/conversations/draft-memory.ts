@@ -3,6 +3,7 @@
 // Memory only, like the scroll memo: a reload starts empty. Keyed by the pane (the caller's pane key).
 
 import { adapterOf } from './deck-adapter'
+import { rebaseAnchors } from './insertion-anchor'
 
 const drafts = new Map<string, string>()
 
@@ -14,6 +15,7 @@ export const readDraft = (key: string): string | undefined => { const own = adap
 
 /** Every change of the box lands here; an empty box forgets (a send ends up here too). */
 export function writeDraft(key: string, text: string): void {
+  rebaseAnchors(key, readDraft(key) ?? '', text) // the insertion points of the uploads on their way follow the edit
   const own = adapterOf(key)?.draft
   if (own) { own.write(text); return }
   if (text === '') drafts.delete(key)
