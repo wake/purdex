@@ -460,7 +460,10 @@ finish() {
   fi
   for fn_d in $REMOTE_DIRS; do on "${fn_d%%:*}" "rm -rf ${fn_d#*:}" || true; done
   for fn_h in mlab air26 mserv air19; do on "$fn_h" "rm -f $RAN" || true; done
-  rm -f "$WORK.err"
+  # the three things above that change a host fail the exit code when they cannot be done; the rest is best-effort, but a lost connection
+  # there is said, so that nobody believes the scratch directories and probe logs are gone
+  [ ! -s "$WORK/connfail" ] || say "WARN: ssh to $(sort -u "$WORK/connfail" | tr '\n' ' ')was lost during the clean-up: a scratch directory (/tmp/wwd-c2.r.*) or the probe log ($RAN) may be left there"
+  [ "$dry" -eq 1 ] || rm -f "$WORK.err"
   if [ "$keep" -eq 1 ]; then say "kept $WORK"; else x rm -rf "$WORK"; fi
   say ""
   say "passed:${PASSED:- -}  failed:${FAILED:- -}  skipped:${SKIPPED:- -}"
@@ -768,7 +771,7 @@ trap finish EXIT INT TERM
 precheck
 for run_case in $cases; do
   say ""; say "== case $run_case: $(catalog | awk -F'|' -v c="$run_case" '$1==c {print $2}') =="
-  CASE_FAILS=0; CASE_SKIP=""; rm -f "$WORK/connfail"
+  CASE_FAILS=0; CASE_SKIP=""; [ "$dry" -eq 1 ] || rm -f "$WORK/connfail"
   # a case that runs a job on air26's worker needs its owner away
   # (not 8: air26 is only a second origin there and its worker is off; not 11: it only sends tokens)
   if [ "$run_case" != 8 ] && [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then

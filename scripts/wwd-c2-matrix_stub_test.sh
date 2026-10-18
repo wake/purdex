@@ -379,6 +379,10 @@ rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_SSH_DOWN_ONCE=1 STUB_SSH_DOWN_MSG="client_loop: send disconnect: Broken pipe" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "a connection that broke later must not be tried again"
 has "FAIL ssh to air19 was lost" "a broken connection"
+# a connection lost during the clean-up (the probe log of air26 is removed there): said, and the run is not called clean
+rm -f "$stub"/*.log "$stub/down-once"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air26 STUB_SSH_DOWN_MATCH="wwd-c2-ran.log" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || true
+has "WARN: ssh to air26 was lost during the clean-up" "a connection lost in the clean-up"
 # a lost connection beats a SKIP: case 7 asks air26 for its hooks, and cannot
 rm -f "$stub"/*.log
 rc=0
