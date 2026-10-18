@@ -334,6 +334,16 @@ func writePdxJSON(root, pdxPath, dataDir, cfgPath string) error {
 	if sock, ok := modevents.ResolveSocketPath(dataDir); ok {
 		m["mod_socket"] = sock
 	}
+	// "entry" is the one key the installer does not own: the switch of the wwd entry in the mod's gate hook, set apart from the
+	// install. A rewrite keeps it (a string only), or `pdx setup` would turn the entry off each time it ran.
+	// (read from the installed folder, whether this write goes there or to a staging folder that replaces it)
+	if cur, err := os.ReadFile(filepath.Join(PluginRoot(dataDir), "pdx.json")); err == nil {
+		var old map[string]json.RawMessage
+		var v string
+		if json.Unmarshal(cur, &old) == nil && json.Unmarshal(old["entry"], &v) == nil && v != "" {
+			m["entry"] = v
+		}
+	}
 	b, _ := json.Marshal(m)
 	// Unchanged content is not written: a write would reload the mod in every open session (#2403).
 	if cur, err := os.ReadFile(filepath.Join(root, "pdx.json")); err == nil && bytes.Equal(cur, append(b, '\n')) {

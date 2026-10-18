@@ -177,6 +177,9 @@ func endHeld(ctx context.Context, c *sql.Conn, h held, state wire.JobState, res 
 	if res.FinishedAt == nil {
 		res.FinishedAt = &fin
 	}
+	if h.hasLog && res.Log == "" {
+		res.Log = h.id + "/log" // the log came before the result: the result points at it
+	}
 	if h.supersededBy.Valid {
 		by := h.supersededBy.String
 		res.SupersededBy = &by
@@ -242,6 +245,7 @@ type held struct {
 	lapses          int
 	cancelRequested bool
 	local           bool
+	hasLog          bool
 	supersededBy    sql.NullString
 }
 
@@ -250,17 +254,19 @@ func loadHeld(ctx context.Context, c *sql.Conn, id string, forPeers bool) (held,
 	var state string
 	var worker sql.NullString
 	var cancel, local int
-	query := `SELECT state, claim_id, result_claim_id, claim_worker, attempts, lapses, cancel_requested, local, superseded_by FROM jobs WHERE id = ?`
+	var logSize sql.NullInt64
+	query := `SELECT state, claim_id, result_claim_id, claim_worker, attempts, lapses, cancel_requested, local, superseded_by, log_size FROM jobs WHERE id = ?`
 	if forPeers {
 		query += ` AND adhoc = 0 AND local = 0`
 	}
-	switch err := c.QueryRowContext(ctx, query, id).Scan(&state, &h.claimID, &h.resultClaimID, &worker, &h.attempts, &h.lapses, &cancel, &local, &h.supersededBy); {
+	switch err := c.QueryRowContext(ctx, query, id).Scan(&state, &h.claimID, &h.resultClaimID, &worker, &h.attempts, &h.lapses, &cancel, &local, &h.supersededBy, &logSize); {
 	case errors.Is(err, sql.ErrNoRows):
 		return held{}, ErrNotFound
 	case err != nil:
 		return held{}, err
 	}
 	h.state, h.worker, h.cancelRequested, h.local = wire.JobState(state), worker.String, cancel == 1, local == 1
+	h.hasLog = logSize.Valid
 	return h, nil
 }
 

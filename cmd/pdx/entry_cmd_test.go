@@ -76,6 +76,26 @@ func TestEntryMatch_UsageErrors(t *testing.T) {
 	}
 }
 
+// A relative --cwd is read from the process's own directory, and the manifest is still found above it.
+func TestEntryMatch_ARelativeCwd(t *testing.T) {
+	root := entryRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "spa", "src"), 0o755))
+	t.Chdir(root)
+	for _, cwd := range []string{"spa", "spa/src", "./spa", "."} {
+		code, out, errs := callEntry(t, "match", "--json", "--cwd", cwd, "--", "make", "lint")
+		require.Equal(t, 0, code, errs)
+		var r entry.Result
+		require.NoError(t, json.Unmarshal([]byte(out), &r))
+		assert.Equal(t, entry.ActionRewrite, r.Action, cwd)
+	}
+	t.Chdir(filepath.Join(root, "spa"))
+	code, out, _ := callEntry(t, "match", "--json", "--cwd", "src", "--", "make", "lint")
+	require.Equal(t, 0, code)
+	var r entry.Result
+	require.NoError(t, json.Unmarshal([]byte(out), &r))
+	assert.Equal(t, entry.ActionRewrite, r.Action, "from below the root, with a relative path")
+}
+
 // The cwd defaults to the process's own.
 func TestEntryMatch_DefaultCwd(t *testing.T) {
 	root := entryRepo(t)
