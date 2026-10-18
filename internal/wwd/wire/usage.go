@@ -26,21 +26,26 @@ const (
 )
 
 // CPUSource says where cpu_seconds came from: the process's rusage at exit (macOS, a job wwd ran itself), the sandbox unit's
-// CPUUsageNSec (Linux), or the integral of the 5 s samples (a fast-lane job, whose process wwd did not start).
+// cgroup (Linux), the integral of the 5 s samples (a fast-lane job, whose process wwd did not start), or CPUNone: nothing was
+// measured (a job shorter than a sample, one that never started, wwd restarted) and cpu_seconds is 0 because it is unknown, not
+// because the job used nothing.
 type CPUSource string
 
 const (
 	CPUFromRusage CPUSource = "rusage"
 	CPUFromUnit   CPUSource = "unit"
 	CPUSampled    CPUSource = "sampled"
+	CPUNone       CPUSource = "none"
 )
 
-// Measure says whether a peak is the exact peak or the highest of the 5 s samples (which can miss a short spike).
+// Measure says whether a peak is the exact peak or the highest of the 5 s samples (which can miss a short spike), or MeasureNone:
+// no sample was taken and the figure is 0 because it is unknown.
 type Measure string
 
 const (
 	MeasureExact   Measure = "exact"
 	MeasureSampled Measure = "sampled"
+	MeasureNone    Measure = "none"
 )
 
 // JobUsage is one finished job's usage and the host's state around it. One row per job; the host that ran it writes it.
@@ -58,13 +63,12 @@ type JobUsage struct {
 
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
-	DurationS float64   `json:"duration_s"`
 
-	// CPUSeconds is user plus system time of the job's whole process tree. AvgCores is CPUSeconds over DurationS, worked out when the
-	// row is written (not on read), 0 for a zero duration. PeakCores is the highest the tree's CPU use reached, in cores.
+	// CPUSeconds is user plus system time of the job's whole process tree. The duration and the average number of cores are not
+	// stored: they are worked out on read from the two times and this (Duration, AvgCores), so a row cannot contradict itself.
+	// PeakCores is the highest the tree's CPU use reached, in cores.
 	CPUSeconds       float64   `json:"cpu_seconds"`
 	CPUSource        CPUSource `json:"cpu_source"`
-	AvgCores         float64   `json:"avg_cores"`
 	PeakCores        float64   `json:"peak_cores"`
 	PeakCoresMeasure Measure   `json:"peak_cores_measure"`
 	// MemPeakMB is the most memory the whole tree held at once.
@@ -84,6 +88,18 @@ type JobUsage struct {
 	// Partial says the sampled figures miss the beginning of the run: wwd was restarted while the job ran, so the part before is not in
 	// them. An exact figure (rusage, unit) is whole whatever Partial says.
 	Partial bool `json:"partial"`
+}
+
+// Duration is how long the job ran, from its two times.
+func (u JobUsage) Duration() time.Duration { return u.EndedAt.Sub(u.StartedAt) }
+
+// AvgCores is the CPU time over the run time: how many cores the job kept busy on average. 0 for a run with no length or no CPU
+// reading.
+func (u JobUsage) AvgCores() float64 {
+	if d := u.Duration().Seconds(); d > 0 && u.CPUSource != CPUNone {
+		return u.CPUSeconds / d
+	}
+	return 0
 }
 
 func finiteNonNegative(name string, v float64) error {
@@ -114,7 +130,7 @@ func (u JobUsage) Validate() error {
 	if u.StartedAt.IsZero() || u.EndedAt.IsZero() || u.EndedAt.Before(u.StartedAt) {
 		return fmt.Errorf("usage: missing or reversed times")
 	}
-	for name, v := range map[string]float64{"duration_s": u.DurationS, "cpu_seconds": u.CPUSeconds, "avg_cores": u.AvgCores, "peak_cores": u.PeakCores} {
+	for name, v := range map[string]float64{"cpu_seconds": u.CPUSeconds, "peak_cores": u.PeakCores} {
 		if err := finiteNonNegative(name, v); err != nil {
 			return err
 		}
@@ -124,13 +140,20 @@ func (u JobUsage) Validate() error {
 	}
 	switch u.CPUSource {
 	case CPUFromRusage, CPUFromUnit, CPUSampled:
+	case CPUNone:
+		if u.CPUSeconds != 0 {
+			return fmt.Errorf("usage: cpu_source none with cpu_seconds %v", u.CPUSeconds)
+		}
 	default:
 		return fmt.Errorf("usage: invalid cpu_source %q", u.CPUSource)
 	}
 	for name, m := range map[string]Measure{"peak_cores_measure": u.PeakCoresMeasure, "mem_peak_measure": u.MemPeakMeasure} {
-		if m != MeasureExact && m != MeasureSampled {
+		if m != MeasureExact && m != MeasureSampled && m != MeasureNone {
 			return fmt.Errorf("usage: invalid %s %q", name, m)
 		}
+	}
+	if (u.PeakCoresMeasure == MeasureNone && u.PeakCores != 0) || (u.MemPeakMeasure == MeasureNone && u.MemPeakMB != 0) {
+		return fmt.Errorf("usage: a figure measured as none is 0")
 	}
 	if !u.ZoneAtStart.Valid() || !u.ZoneWorst.Valid() {
 		return fmt.Errorf("usage: invalid zone")
@@ -144,23 +167,28 @@ func (u JobUsage) Validate() error {
 	return nil
 }
 
-// UsageResponse is GET /v1/usage: the rows whose job ended at or after Since, oldest first, at most the asked limit. Truncated says
-// there are more after the last one; NextSince is then the end time of the last row, to ask again with (inclusive, so a row can come
-// twice: drop repeats by job_id).
+// UsageResponse is GET /v1/usage: the rows whose job ended at or after Since, oldest first (ties by job id), at most the asked limit.
+// Truncated says there are more after the last one; NextSince and NextAfter are then the end time and the job id of the last row: ask
+// again with since=<NextSince>&after=<NextAfter> to get the rows after it, none twice and none skipped however many ended in the
+// same millisecond. Send them back as they came (NextSince has a fraction of a second).
 type UsageResponse struct {
 	Host      string     `json:"host"`
 	Since     time.Time  `json:"since"`
 	Records   []JobUsage `json:"records"`
 	Truncated bool       `json:"truncated"`
 	NextSince *time.Time `json:"next_since"`
+	NextAfter *string    `json:"next_after"`
 }
 
 func (r UsageResponse) Validate() error {
 	if r.Host == "" {
 		return fmt.Errorf("usage: missing host")
 	}
-	if r.Truncated != (r.NextSince != nil) {
-		return fmt.Errorf("usage: truncated and next_since go together")
+	if r.Truncated != (r.NextSince != nil) || r.Truncated != (r.NextAfter != nil) {
+		return fmt.Errorf("usage: truncated, next_since and next_after go together")
+	}
+	if r.NextAfter != nil && *r.NextAfter == "" {
+		return fmt.Errorf("usage: empty next_after")
 	}
 	for i, u := range r.Records {
 		if err := u.Validate(); err != nil {

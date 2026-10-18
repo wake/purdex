@@ -15,8 +15,8 @@ func usageEnding(id string, end time.Time) wire.JobUsage {
 	return wire.JobUsage{
 		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", Slot: wire.SlotHeavy, Class: wire.ClassDev,
 		Source: wire.UsageQueue, Result: wire.StateSucceeded,
-		StartedAt: end.Add(-time.Minute), EndedAt: end, DurationS: 60,
-		CPUSeconds: 120, CPUSource: wire.CPUFromRusage, AvgCores: 2, PeakCores: 3, PeakCoresMeasure: wire.MeasureSampled,
+		StartedAt: end.Add(-time.Minute), EndedAt: end,
+		CPUSeconds: 120, CPUSource: wire.CPUFromRusage, PeakCores: 3, PeakCoresMeasure: wire.MeasureSampled,
 		MemPeakMB: 900, MemPeakMeasure: wire.MeasureSampled,
 		JobsAtStart: 0, JobsPeak: 1, ZoneAtStart: wire.ZoneNormal, ZoneWorst: wire.ZoneNormal, OwnerAtStart: &no, OwnerSeen: &no,
 	}
@@ -41,11 +41,11 @@ func TestUsagePersistsInOrderAndSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	got, more, err := s2.LoadUsage(t0, 10)
+	got, more, err := s2.LoadUsage(t0, "", 10)
 	if err != nil || more || len(got) != 2 || got[0].JobID != "j_early" || got[1].JobID != "j_late" || got[0].OwnerSeen == nil {
 		t.Fatalf("%+v more %v err %v", got, more, err)
 	}
-	if got, _, _ := s2.LoadUsage(t0.Add(time.Minute), 10); len(got) != 1 || got[0].JobID != "j_late" {
+	if got, _, _ := s2.LoadUsage(t0.Add(time.Minute), "", 10); len(got) != 1 || got[0].JobID != "j_late" {
 		t.Fatalf("since: %+v", got)
 	}
 }
@@ -57,11 +57,11 @@ func TestUsageLimitSaysThereIsMore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, more, err := s.LoadUsage(t0, 3)
+	got, more, err := s.LoadUsage(t0, "", 3)
 	if err != nil || !more || len(got) != 3 || got[0].JobID != "j_0" || got[2].JobID != "j_2" {
 		t.Fatalf("%+v more %v err %v", got, more, err)
 	}
-	got, more, _ = s.LoadUsage(t0, 5)
+	got, more, _ = s.LoadUsage(t0, "", 5)
 	if more || len(got) != 5 {
 		t.Fatalf("exactly the limit is not more: %d %v", len(got), more)
 	}
@@ -75,7 +75,7 @@ func TestUsageTiesOrderByJobID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, _, _ := s.LoadUsage(t0, 10)
+	got, _, _ := s.LoadUsage(t0, "", 10)
 	if len(got) != 3 || got[0].JobID != "j_a" || got[1].JobID != "j_b" || got[2].JobID != "j_c" {
 		t.Fatalf("%+v", got)
 	}
@@ -92,7 +92,7 @@ func TestUsageRetentionFollowsTheClock(t *testing.T) {
 	if err := s.SaveUsageAt(usageEnding("j_new", now.Add(-time.Hour)), now); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), 10); len(got) != 1 || got[0].JobID != "j_new" {
+	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), "", 10); len(got) != 1 || got[0].JobID != "j_new" {
 		t.Fatalf("the old row is pruned by the clock: %+v", got)
 	}
 	// a row already past the retention is not stored; one ending in the far future is refused
@@ -102,7 +102,7 @@ func TestUsageRetentionFollowsTheClock(t *testing.T) {
 	if err := s.SaveUsageAt(usageEnding("j_future", now.Add(30*24*time.Hour)), now); err == nil {
 		t.Fatal("a job that ends a month ahead was stored")
 	}
-	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), 10); len(got) != 1 {
+	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), "", 10); len(got) != 1 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -117,8 +117,62 @@ func TestUsageStaleWriteStillPrunes(t *testing.T) {
 	if err := s.SaveUsageAt(usageEnding("j_stale", t0.Add(24*time.Hour)), later); err != nil { // too old to store
 		t.Fatal(err)
 	}
-	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), 10); len(got) != 0 {
+	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), "", 10); len(got) != 0 {
 		t.Fatalf("the aged-out row is still there: %+v", got)
+	}
+}
+
+// Jobs that ended in one millisecond are paged through one at a time without a repeat and without a skip: the cursor is the end
+// time and the job id.
+func TestUsagePagesThroughJobsThatEndedInTheSameMillisecond(t *testing.T) {
+	s, _ := open(t)
+	for _, id := range []string{"j_c", "j_a", "j_b"} {
+		if err := saveUsageNow(s, usageEnding(id, t0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := saveUsageNow(s, usageEnding("j_later", t0.Add(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	since, after := t0, ""
+	for page := 0; page < 10; page++ {
+		got, more, err := s.LoadUsage(since, after, 1) // a page of one: the hardest case
+		if err != nil || len(got) != 1 {
+			t.Fatalf("page %d: %+v err %v", page, got, err)
+		}
+		seen = append(seen, got[0].JobID)
+		if !more {
+			break
+		}
+		since, after = got[0].EndedAt, got[0].JobID
+	}
+	if fmt.Sprint(seen) != "[j_a j_b j_c j_later]" {
+		t.Fatalf("every job once, in order: %v", seen)
+	}
+}
+
+// A row that does not decode neither fills a page nor stands between a page and the good rows behind it.
+func TestUsageDamagedRowsDoNotUseUpALimit(t *testing.T) {
+	s, _ := open(t)
+	for i, id := range []string{"j_1", "j_2", "j_3"} {
+		if err := saveUsageNow(s, usageEnding(id, t0.Add(time.Duration(2*i+1)*time.Minute))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ { // three damaged rows in front of the good ones
+		if _, err := s.DB().Exec(`INSERT INTO job_usage (job_id, ended_ms, rec) VALUES (?, ?, 'not json')`, fmt.Sprintf("j_bad%d", i), t0.Add(time.Duration(i)*time.Second).UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, more, err := s.LoadUsage(t0, "", 2)
+	var skipped *SkippedRowsError
+	if !errors.As(err, &skipped) || skipped.N != 3 || len(got) != 2 || got[0].JobID != "j_1" || got[1].JobID != "j_2" || !more {
+		t.Fatalf("the good rows fill the page: %+v more %v err %v", got, more, err)
+	}
+	got, more, _ = s.LoadUsage(got[1].EndedAt, got[1].JobID, 2)
+	if len(got) != 1 || got[0].JobID != "j_3" || more {
+		t.Fatalf("%+v %v", got, more)
 	}
 }
 
@@ -129,7 +183,7 @@ func TestSaveUsageRefusesAnInvalidRow(t *testing.T) {
 	if err := saveUsageNow(s, u); err == nil {
 		t.Fatal("an invalid row was stored")
 	}
-	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), 10); len(got) != 0 {
+	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), "", 10); len(got) != 0 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -142,7 +196,7 @@ func TestUsageReportsAnUndecodableRow(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO job_usage (job_id, ended_ms, rec) VALUES ('j_bad', ?, 'not json')`, t0.Add(time.Minute).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := s.LoadUsage(t0.Add(-time.Hour), 10)
+	got, _, err := s.LoadUsage(t0.Add(-time.Hour), "", 10)
 	var skipped *SkippedRowsError
 	if !errors.As(err, &skipped) || skipped.N != 1 || skipped.Table != "job_usage" || len(got) != 1 || got[0].JobID != "j_ok" {
 		t.Fatalf("%+v err %v", got, err)

@@ -50,34 +50,40 @@ func (s *Store) SaveUsageAt(u wire.JobUsage, now time.Time) error {
 	return tx.Commit()
 }
 
-// LoadUsage returns the rows whose job ended at or after since, oldest first (ties by job id), at most limit of them; more says there
-// are rows after the last one. A row that no longer decodes or validates is skipped and reported as a *SkippedRowsError next to the
-// rows.
-func (s *Store) LoadUsage(since time.Time, limit int) (out []wire.JobUsage, more bool, err error) {
+// LoadUsage returns the rows after a cursor, oldest first (by end time, ties by job id), at most limit of them. The cursor is
+// (since, after): with after empty, the rows whose job ended at or after since; with after set (a job id), the rows after that
+// one, so a page that stopped inside jobs that ended in the same millisecond goes on exactly where it stopped. more says there are
+// rows after the last one returned. Only rows that decode count toward limit: a row that no longer decodes or validates is skipped,
+// not counted, and reported as a *SkippedRowsError next to the rows, so damaged rows can neither fill a page nor hide the good ones
+// behind them.
+func (s *Store) LoadUsage(since time.Time, after string, limit int) (out []wire.JobUsage, more bool, err error) {
 	if limit <= 0 {
 		return nil, false, fmt.Errorf("store: usage limit %d", limit)
 	}
-	rows, err := s.db.Query(`SELECT rec FROM job_usage WHERE ended_ms >= ? ORDER BY ended_ms, job_id LIMIT ?`, since.UnixMilli(), limit+1)
+	ms := since.UnixMilli()
+	q, args := `SELECT rec FROM job_usage WHERE ended_ms >= ? ORDER BY ended_ms, job_id`, []any{ms}
+	if after != "" {
+		q, args = `SELECT rec FROM job_usage WHERE (ended_ms > ? OR (ended_ms = ? AND job_id > ?)) ORDER BY ended_ms, job_id`, []any{ms, ms, after}
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
 	skipped := 0
-	n := 0
 	for rows.Next() {
 		var rec string
 		if err := rows.Scan(&rec); err != nil {
 			return nil, false, err
 		}
-		n++
-		if n > limit { // the extra row only says there is more
-			more = true
-			break
-		}
 		u, err := wire.Decode[wire.JobUsage]([]byte(rec))
 		if err != nil {
 			skipped++
 			continue
+		}
+		if len(out) == limit { // one more good row only says there is more
+			more = true
+			break
 		}
 		out = append(out, u)
 	}

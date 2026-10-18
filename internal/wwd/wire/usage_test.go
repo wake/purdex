@@ -14,8 +14,8 @@ func goodUsage() JobUsage {
 	return JobUsage{
 		JobID: "j_01JC", Host: "air26", Repo: "purdex", Task: "go-test", Slot: SlotHeavy, Class: ClassDev,
 		Source: UsageQueue, Result: StateSucceeded,
-		StartedAt: usageT0, EndedAt: usageT0.Add(90 * time.Second), DurationS: 90,
-		CPUSeconds: 270, CPUSource: CPUFromRusage, AvgCores: 3,
+		StartedAt: usageT0, EndedAt: usageT0.Add(90 * time.Second),
+		CPUSeconds: 270, CPUSource: CPUFromRusage,
 		PeakCores: 5.5, PeakCoresMeasure: MeasureSampled,
 		MemPeakMB: 2100, MemPeakMeasure: MeasureSampled,
 		JobsAtStart: 1, JobsPeak: 3, ZoneAtStart: ZoneNormal, ZoneWorst: ZoneWarning,
@@ -54,11 +54,9 @@ func TestJobUsageRefusesWhatCannotBeRight(t *testing.T) {
 		"a job still running":         func(u *JobUsage) { u.Result = StateRunning },
 		"no start":                    func(u *JobUsage) { u.StartedAt = time.Time{} },
 		"ended before it began":       func(u *JobUsage) { u.EndedAt = u.StartedAt.Add(-time.Second) },
-		"negative duration":           func(u *JobUsage) { u.DurationS = -1 },
 		"negative cpu":                func(u *JobUsage) { u.CPUSeconds = -1 },
 		"nan cpu":                     func(u *JobUsage) { u.CPUSeconds = nan },
 		"infinite cores":              func(u *JobUsage) { u.PeakCores = math.Inf(1) },
-		"negative average":            func(u *JobUsage) { u.AvgCores = -0.5 },
 		"negative memory":             func(u *JobUsage) { u.MemPeakMB = -1 },
 		"an unknown cpu source":       func(u *JobUsage) { u.CPUSource = "guess" },
 		"an unknown cores measure":    func(u *JobUsage) { u.PeakCoresMeasure = "rusage" },
@@ -75,6 +73,42 @@ func TestJobUsageRefusesWhatCannotBeRight(t *testing.T) {
 		if u.Validate() == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// A figure nobody measured is said so, not written as a measured 0.
+func TestJobUsageNoneMeansUnknownAndIsZero(t *testing.T) {
+	u := goodUsage()
+	u.CPUSource, u.CPUSeconds = CPUNone, 0
+	u.PeakCoresMeasure, u.PeakCores = MeasureNone, 0
+	u.MemPeakMeasure, u.MemPeakMB = MeasureNone, 0
+	if err := u.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if u.AvgCores() != 0 {
+		t.Fatalf("no CPU reading, no average: %v", u.AvgCores())
+	}
+	for name, mut := range map[string]func(*JobUsage){
+		"cpu none with seconds":    func(u *JobUsage) { u.CPUSeconds = 3 },
+		"cores none with a value":  func(u *JobUsage) { u.PeakCores = 1 },
+		"memory none with a value": func(u *JobUsage) { u.MemPeakMB = 5 },
+	} {
+		v := u
+		mut(&v)
+		if v.Validate() == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestJobUsageDurationAndAverageComeFromTheRow(t *testing.T) {
+	u := goodUsage() // 90 s, 270 CPU s
+	if u.Duration() != 90*time.Second || u.AvgCores() != 3 {
+		t.Fatalf("%v %v", u.Duration(), u.AvgCores())
+	}
+	u.EndedAt = u.StartedAt
+	if u.AvgCores() != 0 {
+		t.Fatalf("a zero-length run has no average: %v", u.AvgCores())
 	}
 }
 
@@ -118,11 +152,21 @@ func TestUsageResponseValidates(t *testing.T) {
 	if r.Validate() == nil {
 		t.Fatal("truncated names where the next page starts")
 	}
-	next := usageT0
+	next, after := usageT0, "j_01JC"
 	r.NextSince = &next
+	if r.Validate() == nil {
+		t.Fatal("the time alone is not a cursor: ties need the job id")
+	}
+	r.NextAfter = &after
 	if err := r.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	empty := ""
+	r.NextAfter = &empty
+	if r.Validate() == nil {
+		t.Fatal("an empty next_after")
+	}
+	r.NextAfter = &after
 	r.Truncated = false
 	if r.Validate() == nil {
 		t.Fatal("a whole answer has no next page")
