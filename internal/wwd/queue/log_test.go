@@ -134,6 +134,79 @@ func TestClaimThatGoesStaleDuringTheUploadKeepsTheHoldersLog(t *testing.T) {
 	assert.Equal(t, "from the holder\n", f.readLog(t, id))
 }
 
+// When the transaction that records an upload fails, the log that was there comes back: the new file is not left in its place, and no
+// backup is left beside it (3b-3b R1). The failure is made by taking away the column the update writes.
+func TestFailedCommitRestoresTheOldLog(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	require.NoError(t, f.putLog(t, id, c.ClaimID, "old and good\n"))
+
+	f.q.beforeLogCommit = func() {
+		_, err := f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_at TO log_at_gone`)
+		require.NoError(t, err)
+	}
+	err := f.putLog(t, id, c.ClaimID, "new but never recorded\n")
+	require.Error(t, err)
+	f.q.beforeLogCommit = nil
+	_, err = f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_at_gone TO log_at`)
+	require.NoError(t, err)
+
+	assert.Equal(t, "old and good\n", f.readLog(t, id))
+	entries, err := os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "only the log itself")
+
+	// and a first upload that fails leaves no file at all
+	id2, c2 := f.running(t)
+	f.q.beforeLogCommit = func() {
+		_, err := f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_at TO log_at_gone`)
+		require.NoError(t, err)
+	}
+	require.Error(t, f.putLog(t, id2, c2.ClaimID, "never recorded\n"))
+	f.q.beforeLogCommit = nil
+	_, err = f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_at_gone TO log_at`)
+	require.NoError(t, err)
+	_, _, err = f.q.OpenLog(bg, id2, false)
+	assert.ErrorIs(t, err, ErrNotFound)
+	entries, err = os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+// A job deleted at the end of its 7 days takes its log with it, even a log uploaded late enough to be younger than 3 days; and upload
+// leftovers a crash left (a temporary file, a backup) are cleared once they are an hour old (3b-3b R1).
+func TestDeletingAJobDeletesItsLogAndLeftoversAreCleared(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	_, err := f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: ptr(0)})
+	require.NoError(t, err)
+	f.clk.Advance(6*24*time.Hour + 23*time.Hour) // nearly 7 days after it ended
+	require.NoError(t, f.putLog(t, id, c.ClaimID, "very late\n"))
+
+	stale := filepath.Join(f.q.opt.LogDir, ".upload-crashed")
+	fresh := filepath.Join(f.q.opt.LogDir, ".upload-in-flight")
+	require.NoError(t, os.WriteFile(stale, []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(fresh, []byte("x"), 0o600))
+	old := f.clk.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(stale, old, old))
+	require.NoError(t, os.Chtimes(fresh, f.clk.Now(), f.clk.Now()))
+	_, err = f.q.Sweep(bg)
+	require.NoError(t, err)
+	_, err = os.Stat(stale)
+	assert.ErrorIs(t, err, os.ErrNotExist, "an old leftover goes")
+	_, err = os.Stat(fresh)
+	assert.NoError(t, err, "an upload that may be in flight stays")
+	_ = os.Remove(fresh)
+
+	f.clk.Advance(2 * time.Hour) // the job is now past 7 days; its log is not past 3
+	r, err := f.q.Sweep(bg)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Deleted)
+	entries, err := os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the log went with the job")
+}
+
 type spyReader struct{ read bool }
 
 func (r *spyReader) Read([]byte) (int, error) { r.read = true; return 0, io.EOF }

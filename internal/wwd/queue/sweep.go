@@ -88,6 +88,7 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 	res.Unpinned, res.UnpinFailed = q.settlePins(ctx)
 
 	// retention: only ended jobs whose snapshot is released; one still marked waits for its unpin
+	q.removeLogsOfJobsBeingDeleted(ctx, now.Add(-retention).UnixMilli())
 	r, err := q.db.ExecContext(ctx, `DELETE FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
 		AND coalesce(finished_at, updated_at) < ?`, now.Add(-retention).UnixMilli())
 	if err != nil {

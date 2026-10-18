@@ -58,7 +58,11 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	if q.beforeLogCommit != nil {
 		q.beforeLogCommit()
 	}
-	return q.write(ctx, func(c *sql.Conn, changed *[]string) error {
+	// The new file replaces the old inside the transaction, with the old one kept beside it until the commit: a transaction that fails
+	// puts the old log back, so what is on disk is never a log the database does not know about.
+	final, backup := q.logPath(id), tmp.Name()+".prev"
+	var placed, hadOld bool
+	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
 			return err
@@ -66,9 +70,15 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 		if err := h.mayLog(claimID); err != nil {
 			return err
 		}
-		if err := os.Rename(tmp.Name(), q.logPath(id)); err != nil {
+		if err := os.Rename(final, backup); err == nil {
+			hadOld = true
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		if err := os.Rename(tmp.Name(), final); err != nil {
+			return err
+		}
+		placed = true
 		if _, err := c.ExecContext(ctx, `UPDATE jobs SET log_size = ?, log_at = ? WHERE id = ?`, n, q.now().UnixMilli(), id); err != nil {
 			return err
 		}
@@ -80,6 +90,19 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 		}
 		return nil
 	})
+	if err != nil {
+		if placed {
+			_ = os.Remove(final)
+		}
+		if hadOld {
+			_ = os.Rename(backup, final)
+		}
+		return err
+	}
+	if hadOld {
+		_ = os.Remove(backup)
+	}
+	return nil
 }
 
 func (q *Queue) checkLogRight(ctx context.Context, id, claimID string) error {
@@ -145,9 +168,47 @@ func validLogID(id string) bool {
 	return id != "" && id != "." && id != ".." && filepath.Base(id) == id
 }
 
+// uploadLeftover: a temporary file (or backup) of an upload older than this is a crash's, not an upload in flight.
+const uploadLeftover = time.Hour
+
+// removeLogsOfJobsBeingDeleted deletes the log files of the jobs the retention is about to delete: a log uploaded late can be younger
+// than its 3 days when its job reaches its 7, and with the row gone nothing would ever find the file.
+func (q *Queue) removeLogsOfJobsBeingDeleted(ctx context.Context, cutoffMS int64) {
+	if q.opt.LogDir == "" {
+		return
+	}
+	rows, err := q.db.QueryContext(ctx, `SELECT id FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
+		AND coalesce(finished_at, updated_at) < ? AND log_size IS NOT NULL`, cutoffMS)
+	if err != nil {
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		if validLogID(id) {
+			_ = os.Remove(q.logPath(id))
+		}
+	}
+}
+
 // sweepLogs deletes the logs kept longer than logRetention, forgets them on their jobs and takes the pointer out of the results. The file
-// goes first: a job that still points at a file that is gone is only a log that will not open, and the next sweep clears it.
+// goes first: a job that still points at a file that is gone is only a log that will not open, and the next sweep clears it. It also
+// clears the leftovers of uploads a crash cut short.
 func (q *Queue) sweepLogs(ctx context.Context, c *sql.Conn, now time.Time, changed *[]string) (int, error) {
+	if q.opt.LogDir != "" {
+		left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
+		for _, p := range left {
+			if st, err := os.Stat(p); err == nil && now.Sub(st.ModTime()) > uploadLeftover {
+				_ = os.Remove(p)
+			}
+		}
+	}
 	rows, err := c.QueryContext(ctx, `SELECT id FROM jobs WHERE log_at IS NOT NULL AND log_at < ? ORDER BY seq`, now.Add(-logRetention).UnixMilli())
 	if err != nil {
 		return 0, err
