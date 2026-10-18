@@ -49,7 +49,7 @@ func (m *Module) cachePressure(raw resources.HostRaw, sampledAt time.Time) {
 	if m.gateConfig == nil || !raw.PageCounters || raw.Pressure <= 0 {
 		return
 	}
-	m.pageTotal, m.pageFrac, m.pageTotalAt = raw.Pageouts+raw.Swapouts, 0, sampledAt
+	m.pageTotal, m.pageTotalAt = raw.Pageouts+raw.Swapouts, sampledAt
 	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
 		At: sampledAt.UnixMilli(), Level: raw.Pressure, Pageouts: raw.Pageouts, Swapouts: raw.Swapouts})
 }
