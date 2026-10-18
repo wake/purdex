@@ -15,7 +15,7 @@ import (
 // scripts where the runner looks for them, so the argument lists, the outcome mapping and the clean-up are checked on any host.
 
 const fakeSudo = `#!/bin/sh
-echo "sudo $*" >> "$FAKE/calls"
+printf '%s\n' "sudo $*" >> "$FAKE/calls" # not echo: the wrapper's script has a \n in it, which some shells' echo would expand
 case "$1" in
   systemd-run)
     cat "$FAKE/out" 2>/dev/null
@@ -606,7 +606,7 @@ func TestExitWrapperRunBySh(t *testing.T) {
 	if got := run(file, "226"); got != 226 {
 		t.Fatalf("exit = %d, want the command's 226", got)
 	}
-	if b, _ := os.ReadFile(file); string(b) != "226" {
+	if b, _ := os.ReadFile(file); !strings.HasPrefix(string(b), "226\n") { // the code first, then the unit's figures (empty off Linux)
 		t.Fatalf("status file = %q", b)
 	}
 	if got := run(filepath.Join(dir, "no-such-dir", "status"), "226"); got != 125 {

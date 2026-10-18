@@ -70,6 +70,9 @@ type Result struct {
 	// leaks processes, and the log says so. SweepErr is why the scan could not run (the job's result is unaffected).
 	Escaped  []int
 	SweepErr error
+	// Usage is what the run used (CPU time; for a sandbox unit also the memory peak). Recording only: it is the zero value when
+	// nothing was measured, and nothing reads it to decide what a run's result is.
+	Usage Usage
 }
 
 // Run starts the command, waits for it, and ends its whole process group on timeout or cancel (TERM, then KILL after
@@ -171,6 +174,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	}
 	res.FinishedAt = time.Now()
 	res.Tail, res.LogCut, res.CaptureErr = cp.close()
+	res.Usage = rusageUsage(cmd.ProcessState) // set once Wait returned, which every branch above waited for
 
 	if res.Outcome == Exited {
 		var ee *exec.ExitError
