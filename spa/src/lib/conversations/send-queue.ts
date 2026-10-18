@@ -11,7 +11,7 @@ import { mayHaveRun, newClientMsgId, type SendOutcome, type SendPort } from './s
 import { revokePreviewUrl, type Attachment } from './attachment-memory'
 import { adapterOf } from './deck-adapter'
 import { normalizePrompt } from './send-plan'
-import type { UserItem } from './types'
+import type { Stage, UserItem } from './types'
 
 export const UNDO_MS = 1500
 // The daemon's echo pairing window (internal/promptq/echo.go): a row may be stamped 2 s before the hand-out, up to 30 s after
@@ -24,11 +24,21 @@ const BUSY_RETRY_BASE_MS = 1000
 const BUSY_RETRIES = 3
 // A message the daemon handed over (`handed`) that is neither on Claude Code's queue line nor echoed by the transcript after this long is `maybe`.
 const HANDED_SEEN_MS = 10_000
+// A message the daemon reports `read` is in the transcript; the transcript frame is a moment behind, so the entry (shown without a mark) waits for its echo this long.
+export const READ_GRACE_MS = 5000
 
 /** What the box held when the message was sent: the draft as typed (`[Image #N]` placeholders and all) and its chips (previews still alive). */
 export interface HeldDraft {
   draft: string
   chips: readonly Attachment[]
+}
+
+/** The daemon's word on where the entry's message is (message stages): the stage of its newest id that has one (L1). */
+export interface StageMark {
+  stage: string
+  at: number
+  reason?: string
+  mode?: 'fill' | 'keys'
 }
 
 export type EntryState = 'undo' | 'sending' | 'sent' | 'maybe' | 'failed' | 'superseded'
@@ -61,6 +71,8 @@ export interface QueueEntry {
   matched?: boolean
   /** The `at` of the header row this entry claimed, kept after the row is gone (the order Claude Code reads its queue in). Unset = never claimed. */
   claimAt?: number
+  /** Set while the daemon reports stages for this message (`conversations.stages.v1`); absent = today's matching. The entry is then THE bubble: a row it claimed is covered, not the entry. */
+  stage?: StageMark
 }
 
 /** A row of Claude Code's own queue line, identified by (text, at). */
@@ -86,6 +98,13 @@ export class SendQueue {
   /** Per `handed` entry: the timer that turns it `maybe` when nothing showed it. */
   private seen = new Map<string, ReturnType<typeof setTimeout>>()
   private retiredDone: (() => void) | null = null
+  /** Per entry reported `read`: the timer that lets it go if the transcript's echo never settles it. */
+  private readTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Header rows that a staged entry claimed before it left, while the header still lists them (no second copy of a message that moved on). */
+  private spent: HeaderRow[] = []
+  private covered: readonly HeaderRow[] = []
+  /** The host's daemon reports stages (`conversations.stages.v1`): a message is confirmed by its own id or its `read` stage, never by its text. */
+  private stagesMode = false
   private listeners = new Set<() => void>()
 
   private readonly port: SendPort
@@ -107,6 +126,16 @@ export class SendQueue {
   private clearSeen(): void {
     for (const t of this.seen.values()) clearTimeout(t)
     this.seen.clear()
+    for (const t of this.readTimers.values()) clearTimeout(t)
+    this.readTimers.clear()
+  }
+
+  /** The header rows a staged entry stands for (claimed now, or claimed before it left and still listed): PendingTail does not draw them. */
+  coveredRows = (): readonly HeaderRow[] => this.covered
+
+  /** A staged entry leaves the list: the row it claimed stays covered until the header stops listing it. */
+  private leave(e: QueueEntry): void {
+    if (e.stage !== undefined && e.matched && e.claimAt !== undefined) this.spent.push({ text: e.text.trimEnd(), at: e.claimAt })
   }
 
   private emit(): void {
@@ -115,6 +144,11 @@ export class SendQueue {
     for (const [id, t] of [...this.seen]) {
       if (!this.list.some((e) => e.id === id && e.state === 'sent')) { clearTimeout(t); this.seen.delete(id) }
     }
+    for (const [id, t] of [...this.readTimers]) {
+      if (!this.list.some((e) => e.id === id && e.stage?.stage === 'read')) { clearTimeout(t); this.readTimers.delete(id) }
+    }
+    const rows = [...this.list.filter((e) => e.stage !== undefined && e.matched && e.claimAt !== undefined).map((e) => ({ text: e.text.trimEnd(), at: e.claimAt! })), ...this.spent]
+    if (rows.length !== this.covered.length || rows.some((r, i) => r.text !== this.covered[i].text || r.at !== this.covered[i].at)) this.covered = rows
     this.view = this.list.map((e) => ({ ...e }))
     this.listeners.forEach((l) => l())
   }
@@ -187,7 +221,7 @@ export class SendQueue {
   }
 
   dismiss(id: string): void {
-    for (const x of this.list) if (x.id === id && x.state !== 'sending') this.release(x)
+    for (const x of this.list) if (x.id === id && x.state !== 'sending') { this.release(x); this.leave(x) }
     this.list = this.list.filter((x) => x.id !== id || x.state === 'sending')
     this.emit()
   }
@@ -204,6 +238,8 @@ export class SendQueue {
     const rest = rows.map((r) => ({ text: r.text.trimEnd(), at: r.at, used: false }))
     const handed = this.list.filter((e) => e.state === 'sent' && e.mode !== undefined)
     let changed = false
+    const stillListed = this.spent.filter((sp) => rest.some((r) => r.at === sp.at && r.text === sp.text))
+    if (stillListed.length !== this.spent.length) { this.spent = stillListed; changed = true }
     for (const e of this.list) if (!handed.includes(e) && e.matched) { e.matched = false; changed = true }
     // 1. a claim stands while its row is rendered
     for (const e of handed) {
@@ -235,6 +271,61 @@ export class SendQueue {
     e.outcome = { kind: 'unknown', reason: 'not_seen' }
   }
 
+  /** Whether the host reports stages. On, the transcript's text is no longer a way to confirm a message (a terminal-typed twin has no id and would take an older message's place). */
+  setStagesMode(on: boolean): void {
+    if (this.stagesMode === on) return
+    this.stagesMode = on
+  }
+
+  /**
+   * The daemon's stages by client_msg_id (message stages, `conversations.stages.v1`). An entry's stage is the stage of its NEWEST id that has one (L1: a busy
+   * retry's new id takes over from an earlier id's terminal `failed/busy`). An entry none of whose ids has a stage is untouched (today's matching).
+   * `read` leaves the entry without a mark until the transcript's echo settles it (or `READ_GRACE_MS`); `recalled` takes it off. Idempotent.
+   */
+  setStages(stages: Readonly<Record<string, Stage>>): void {
+    let changed = false
+    const gone = new Set<QueueEntry>()
+    for (const e of this.list) {
+      if (e.state === 'superseded') continue
+      let s: Stage | undefined
+      for (let i = e.ids.length - 1; i >= 0 && !s; i--) s = stages[e.ids[i]]
+      if (!s) {
+        // The ledger lost what it had told (the daemon restarted): where the message is is not known any more, and its text must not settle it.
+        if (this.stagesMode && e.stage !== undefined && e.stage.stage !== 'unknown' && e.stage.stage !== 'read') {
+          e.stage = { stage: 'unknown', at: this.now(), reason: 'ledger_lost' }
+          if (e.state === 'sent') this.markUnseen(e)
+          changed = true
+        }
+        continue
+      }
+      const same = e.stage && e.stage.stage === s.stage && e.stage.at === s.at && e.stage.reason === s.reason && e.stage.mode === s.mode
+      if (same) continue
+      if (s.stage === 'recalled') { gone.add(e); continue }
+      e.stage = { stage: s.stage, at: s.at, ...(s.reason !== undefined ? { reason: s.reason } : {}), ...(s.mode !== undefined ? { mode: s.mode } : {}) }
+      changed = true
+      if (s.stage === 'read' && !this.readTimers.has(e.id)) this.readTimers.set(e.id, setTimeout(() => this.readGraceOver(e), READ_GRACE_MS))
+    }
+    if (gone.size > 0) {
+      for (const e of gone) { this.release(e); this.leave(e) }
+      this.list = this.list.filter((x) => !gone.has(x))
+      changed = true
+    }
+    if (!changed) return
+    this.emit()
+    if (gone.size > 0) this.pump()
+  }
+
+  /** `read` and the transcript's echo never settled the entry: it is in the transcript by the daemon's word, so it goes. */
+  private readGraceOver(e: QueueEntry): void {
+    this.readTimers.delete(e.id)
+    if (this.disposed || !this.list.includes(e)) return
+    this.release(e)
+    this.leave(e)
+    this.list = this.list.filter((x) => x !== e)
+    this.emit()
+    this.pump()
+  }
+
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
   reconcile(items: readonly UserItem[]): void {
     const sources = this.port.echo?.sources ?? ['user']
@@ -254,7 +345,7 @@ export class SendQueue {
     //    is read in order), else the nearest unclaimed one;
     //  - a `user` row: only the nearest entry that never claimed a header row.
     const refOf = (e: QueueEntry) => e.handedAt ?? e.startedAt
-    const rows = users.filter((u) => !this.claimed.has(u.id) && u.client_msg_id == null).sort((a, b) => a.at - b.at)
+    const rows = this.stagesMode ? [] : users.filter((u) => !this.claimed.has(u.id) && u.client_msg_id == null).sort((a, b) => a.at - b.at)
     for (const u of rows) {
       const fits = (e: QueueEntry): boolean => {
         if (e.state === 'sending' || done.has(e) || normalizePrompt(u.text) !== e.text || u.at < refOf(e) - ECHO_BEFORE_MS) return false
@@ -269,7 +360,7 @@ export class SendQueue {
       if (pick) take(pick, u)
     }
     if (done.size === 0) return
-    for (const x of done) this.release(x)
+    for (const x of done) { this.release(x); this.leave(x) }
     this.list = this.list.filter((x) => !done.has(x))
     this.emit()
     this.pump()
