@@ -220,6 +220,17 @@ func (s *fakeScheduler) after(d time.Duration, fn func()) (stop func()) {
 	}
 }
 
+// snapshot is the retries scheduled now, left scheduled.
+func (s *fakeScheduler) snapshot() []func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]func(), 0, len(s.pending))
+	for _, fn := range s.pending {
+		out = append(out, fn)
+	}
+	return out
+}
+
 // runPending runs what is scheduled now, oldest first (a retry may schedule the next one), and reports how many ran.
 func (s *fakeScheduler) runPending() int {
 	s.mu.Lock()
@@ -285,11 +296,15 @@ func TestPersonaPool_TheRetriesAreBoundedAndStopWithTheBinding(t *testing.T) {
 	f2 := &fakePersonas{err: errors.New("busy")}
 	cancel := e.m.bindPersonas(f2)
 	require.Equal(t, 1, sched2.total)
+	fired := sched2.snapshot() // a timer that had already fired and waits for the lock when the binding stops
 	cancel()
 	f2.err = nil
 	f2.set = personas.Set{Items: []personas.Persona{pp("mia", "Mia", false)}}
-	sched2.runPending()
-	assert.NotEqual(t, []string{"mia"}, ipeers.PickablePool(), "a stopped binding still applied a retry")
+	assert.Equal(t, 0, sched2.runPending(), "cancel left a retry scheduled")
+	for _, fn := range fired {
+		fn()
+	}
+	assert.NotEqual(t, []string{"mia"}, ipeers.PickablePool(), "a stopped binding still applied a retry that had already fired")
 }
 
 // A change of the collection rebuilds the pool; a read that fails keeps the pool as it was.
