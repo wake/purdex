@@ -11,10 +11,13 @@ package wwdalerts
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,10 +250,10 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		return // the push side is not up: no attempt is spent
 	}
 	if d, ok := m.store.delivery(host, a.Key); ok && d.Since == a.Since.UnixMilli() {
-		if d.Sent > 0 && now.Sub(time.UnixMilli(d.Sent)) < deliveredFor {
+		if d.Sent > 0 && within(now, d.Sent, deliveredFor) {
 			return
 		}
-		if d.Attempt > 0 && now.Sub(time.UnixMilli(d.Attempt)) < attemptEvery {
+		if d.Attempt > 0 && within(now, d.Attempt, attemptEvery) {
 			return
 		}
 	}
@@ -262,7 +265,7 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	since := a.Since
 	key := a.Key
 	ntf.NotifyAlert(push.AlertPush{
-		CollapseID: "alert:" + host + ":" + a.Key,
+		CollapseID: collapseID(host, a.Key),
 		Title:      title(host, a),
 		Host:       host,
 		Sent: func() {
@@ -271,6 +274,24 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 			}
 		},
 	})
+}
+
+// within reports whether the stored time at (unix ms) is less than window before now. A time in the future (the clock stepped back after
+// it was written, and the ledger survives restarts) is not within: it is spent, so a stepped-back clock cannot stretch a window.
+func within(now time.Time, at int64, window time.Duration) bool {
+	d := now.Sub(time.UnixMilli(at))
+	return d >= 0 && d < window
+}
+
+// collapseID is the id a phone uses to show one notification per alert: alert:<host>:<key>. A host name may hold a colon, and then
+// two different alerts could read the same joined, so that form is used only when the host has none and is otherwise a hash of the
+// host and key with the host's length in front.
+func collapseID(host, key string) string {
+	if !strings.Contains(host, ":") {
+		return "alert:" + host + ":" + key
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s", len(host), host, key)))
+	return "alert:" + hex.EncodeToString(sum[:16])
 }
 
 // title is the line the person reads: the alert's own text, which names the host, or the host and the rule when it has none.

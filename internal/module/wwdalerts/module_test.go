@@ -357,6 +357,35 @@ func TestNoFleetRoleMeansNoDelivery(t *testing.T) {
 	}
 }
 
+// Two different alerts must never share a collapse id (the phone shows one notification per id): host "a" with key "b:c" and host
+// "a:b" with key "c" are not the same alert, although joined by colons they read alike.
+func TestCollapseIDsOfDifferentAlertsDiffer(t *testing.T) {
+	if collapseID("a", "b:c") == collapseID("a:b", "c") {
+		t.Fatal("two different alerts share a collapse id")
+	}
+	if got := collapseID("mserv", "disk_low:/"); got != "alert:mserv:disk_low:/" {
+		t.Fatalf("the plain form is lost: %q", got)
+	}
+}
+
+// A clock that stepped back after an attempt or a delivery was written must not stretch the windows: a time in the future is spent.
+func TestAClockThatSteppedBackDoesNotStretchTheWindows(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t) // attempt at t0
+	e.now = t0.Add(-time.Hour)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("attempts = %d: an attempt stamped in the future still silenced the alert", e.ntf.count())
+	}
+	e.ntf.confirm(1) // delivered at t0 - 1h
+	e.now = t0.Add(-3 * time.Hour)
+	e.pass(t)
+	if e.ntf.count() != 3 {
+		t.Fatalf("attempts = %d: a delivery stamped in the future still silenced the alert", e.ntf.count())
+	}
+}
+
 // The push module is not there (no notifier in the registry yet): nothing is attempted, and nothing is counted as an attempt.
 func TestNoPushModuleMeansNoAttempt(t *testing.T) {
 	e := newEnv(t)
