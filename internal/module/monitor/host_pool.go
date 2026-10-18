@@ -30,6 +30,12 @@ func newPoolHostCollector(fallback HostCollector, facts localFacts) HostCollecto
 	return c
 }
 
+// pinned is this collector with the source decided once: the facts as they are now, for every figure of one snapshot.
+func (c *poolHostCollector) pinned() HostCollector {
+	f, ok := c.facts()
+	return newPoolHostCollector(c.fallback, func() (wire.Facts, bool) { return f, ok })
+}
+
 func (c *poolHostCollector) CollectCPU(ctx context.Context) (HostCPUSample, error) {
 	return c.fallback.CollectCPU(ctx)
 }

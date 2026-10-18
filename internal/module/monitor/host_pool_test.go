@@ -178,3 +178,20 @@ func TestPoolHostCollector_TheDeltaBaselineRestartsAfterWWD(t *testing.T) {
 	require.NotNil(t, m.CPU.UnavailableReason)
 	assert.Equal(t, hostCPUPendingReason, *m.CPU.UnavailableReason, "the own baseline starts over")
 }
+
+// One snapshot has one source: a source that flips between the three reads of a snapshot does not mix them.
+func TestPoolHostCollector_ASnapshotHasOneSource(t *testing.T) {
+	var asked int
+	c := newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) {
+		asked++
+		if asked == 1 { // the first look says pool, every later one says not
+			return factsOK()
+		}
+		return factsNone()
+	})
+	m := collectHostMetrics(context.Background(), NewHostMetricsState(c))
+	require.NotNil(t, m.CPU.Percent, "wwd's CPU")
+	assert.Equal(t, uint64(16000)<<20, *m.Memory.TotalBytes, "and wwd's memory, not the own collector's")
+	assert.InDelta(t, 200.0*(1<<30), float64(*m.Disk.TotalBytes), 1<<20, "and wwd's disk")
+	assert.Equal(t, 1, asked, "decided once")
+}
