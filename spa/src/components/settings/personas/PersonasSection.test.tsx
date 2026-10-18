@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 
 vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-save')>()), savePersonas: vi.fn() }))
 
-import { savePersonas, PersonaStaleError } from '../../../lib/names/persona-save'
+import { savePersonas, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
@@ -118,6 +118,62 @@ describe('PersonasSection', () => {
     expect(screen.getByTestId('personas-note').textContent).toMatch(/重新載入|reloaded/)
   })
 
+  it('keeps what was typed for an existing persona when the save turns out stale or conflicting, on the new base', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockImplementationOnce(async () => {
+      seed(['hiro'], { hiro: { name: 'Their Edit' } }) // another host won meanwhile
+      throw new PersonaStaleError()
+    })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'My Edit' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/保留|kept/)
+    expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('My Edit')
+    // the next save goes out on the NEW base, not the one the form was opened with
+    vi.mocked(savePersonas).mockResolvedValueOnce({ hostId: 'h1', base: { hostId: 'h1', revision: 9, stamp: { at: 9, host: 'h1' } } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(savePersonas).mock.calls[1][1]).toEqual({ hostId: 'h1', revision: 4, stamp: { at: 5, host: 'h1' } })
+    expect(vi.mocked(savePersonas).mock.calls[1][0][0].name).toBe('My Edit')
+  })
+
+  it('stops editing, switching and a second save while a save is in flight, and applies nothing stale', async () => {
+    seed(['hiro', 'emma'])
+    let finish!: (r: { hostId: string; base: null }) => void
+    vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('persona-name').querySelector('input')!.matches(':disabled')).toBe(true) // via the fieldset
+    expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('persona-row-emma') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(screen.getByTestId('persona-form')) // a second submit while the first is pending
+    expect(savePersonas).toHaveBeenCalledTimes(1)
+    finish({ hostId: 'h1', base: null })
+    await waitFor(() => expect(screen.getByTestId('persona-name').querySelector('input')!.matches(':disabled')).toBe(false))
+  })
+
+  it('stops "New persona" at 64 personas (retired ones count) and says why', () => {
+    const codes = Array.from({ length: 64 }, (_, i) => 'a' + String.fromCharCode(97 + (i % 26)) + String.fromCharCode(97 + Math.floor(i / 26)))
+    seed(codes, { [codes[0]]: { retired: true } })
+    render(<PersonasSection />)
+    expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('personas-cap').textContent).toMatch(/64/)
+  })
+
+  it('shows a collection-level validation failure from savePersonas in words, not as an unknown error', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockRejectedValue(new PersonaValidationError([{ field: 'olga.nationality.zh', message: 'over 200 characters' }]))
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.click(screen.getByTestId('persona-save'))
+    const err = (await screen.findByTestId('personas-error')).textContent!
+    expect(err).toMatch(/不合規定|break the rules/)
+    expect(err).toContain('olga.nationality.zh')
+  })
+
   it('keeps what was typed for a new persona when the save turns out stale', async () => {
     seed(['hiro'])
     vi.mocked(savePersonas).mockRejectedValueOnce(new PersonaStaleError())
@@ -126,7 +182,7 @@ describe('PersonasSection', () => {
     fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
     fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'New One' } })
     fireEvent.click(screen.getByTestId('persona-save'))
-    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/重新載入|reloaded/)
+    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/保留|kept/)
     expect((screen.getByTestId('persona-code').querySelector('input') as HTMLInputElement).value).toBe('newone')
     expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('New One')
     expect(screen.queryByTestId('personas-error')).toBeNull()
@@ -169,7 +225,7 @@ describe('PersonasSection', () => {
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
     fireEvent.click(screen.getByTestId('persona-save'))
-    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/重新載入|reloaded/)
+    expect((await screen.findByTestId('personas-note')).textContent).toMatch(/保留|kept/)
     vi.mocked(savePersonas).mockRejectedValueOnce(new PersonaConflictError(makeCollection(['hiro'], { at: 9, host: 'h1' }, 6)))
     fireEvent.click(screen.getByTestId('persona-save'))
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))

@@ -6,15 +6,15 @@
 // away. Each draft remembers the `editBase()` it was opened on; `savePersonas` refuses a save whose base is no longer the
 // shown collection, and a save that comes back with no base (another copy won meanwhile) rebuilds the form from the shown
 // collection instead of carrying the old items forward.
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import { forgetDraft, recallDraft, rememberDraft } from '../../../lib/names/persona-draft-memory'
-import { validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
-import { editBase, PersonaStaleError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
+import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
+import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
 import { PersonaForm } from './PersonaForm'
 import { PersonaList } from './PersonaList'
@@ -60,6 +60,8 @@ export function PersonasSection() {
   )
   const items = collection?.items ?? []
   const unsupported = collection === null && fallbackHostId === null
+  // Retired personas keep their codes for good (L5), so they count towards the daemon's 64.
+  const atCap = items.length >= PERSONA_LIMITS.count
 
   const hold = (next: Editing | null) => {
     setEditing(next)
@@ -75,18 +77,29 @@ export function PersonasSection() {
   }
 
   /**
-   * Re-open `key` from the collection the App shows now (after another copy won, or a conflict). A stored persona can
-   * never leave the collection (L5), so a code that is not there is one being created: its draft is kept, on the new base,
-   * and the user saves it again. What was typed is never thrown away.
+   * A save came back stale, or lost the compare-and-set: another copy of the collection is now the shown one. What the
+   * user typed is KEPT and moved onto the new base; the next save then writes it over this persona, while every other
+   * persona stays at the shown (newer) collection. A persona that is not in the shown collection is one being created,
+   * so it goes on as a new one. Nothing typed is thrown away, and the note says what saving again will do.
    */
-  const rebuild = (key: string, typed: Persona) => {
+  const keepTyped = (key: string, typed: Persona) => {
+    const stored = usePersonaStore.getState().current()?.items.some((x) => x.code === key)
+    hold({ key: stored ? key : '', draft: typed, base: editBase() })
+    setNote(t('settings.personas.kept'))
+  }
+
+  /** A save went through, but the shown collection is no longer the one it wrote: show what is shown now. */
+  const showShown = (key: string, saved: Persona) => {
     const now = usePersonaStore.getState().current()?.items.find((x) => x.code === key)
-    hold(now ? { key, draft: structuredClone(now), base: editBase() } : { key: '', draft: typed, base: editBase() })
+    hold(now ? { key, draft: structuredClone(now), base: editBase() } : { key: '', draft: saved, base: editBase() })
     setNote(t('settings.personas.rebuilt'))
   }
 
+  // A synchronous guard: `saving` state is only seen on the next render, a double submit can arrive before that.
+  const inFlight = useRef(false)
+
   const save = async (draft: Persona) => {
-    if (!editing) return
+    if (!editing || inFlight.current) return
     const found = validatePersona(draft)
     if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
     setIssues(found)
@@ -100,21 +113,25 @@ export function PersonasSection() {
     }
     const stamped = { ...draft, updated_at: Date.now() }
     const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
+    inFlight.current = true
     setSaving(true)
     try {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
-      if (res.base === null) { rebuild(draft.code, stamped); return }
+      if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
       setNote(t('settings.personas.saved', { host: useHostStore.getState().hosts[res.hostId]?.name ?? res.hostId }))
     } catch (e) {
-      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) rebuild(editing.key, draft)
-      else if (e instanceof PersonaApiError) {
+      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
+      else if (e instanceof PersonaValidationError) {
+        setError([t('settings.personas.error.invalid'), ...e.issues.map((i) => `${i.field}: ${i.message}`)].join(' '))
+      } else if (e instanceof PersonaApiError) {
         const row = e.rowIndex()
         setError(row === null
           ? t('settings.personas.error.whole', { message: e.message })
           : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }))
       } else setError(t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }))
     } finally {
+      inFlight.current = false
       setSaving(false)
     }
   }
@@ -125,16 +142,17 @@ export function PersonasSection() {
       <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
 
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported} onClick={() => open('')}>
+        <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving} onClick={() => open('')}>
           {t('settings.personas.new')}
         </button>
       </div>
+      {atCap && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-cap">{t('settings.personas.cap')}</p>}
       {unsupported && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-unsupported">{t('settings.personas.unsupported')}</p>}
 
       <div className="mt-3 grid grid-cols-[minmax(0,330px)_minmax(0,1fr)] gap-4">
         <div>
           {items.length === 0 && !unsupported && <p className="text-xs text-text-secondary">{t('settings.personas.empty')}</p>}
-          <PersonaList items={items} selected={editing?.key ?? null} onSelect={open} />
+          <PersonaList items={items} selected={editing?.key ?? null} disabled={saving} onSelect={open} />
         </div>
         <div>
           {editing ? (

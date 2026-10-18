@@ -89,6 +89,8 @@ export function PersonaForm({ draft, isNew, issues, saving, avatarPicker, onChan
       data-testid="persona-form"
       onSubmit={(e) => { e.preventDefault(); if (!saving) onSave() }}
     >
+      {/* While a save is in flight nothing can be edited: its answer is applied to exactly what was sent. */}
+      <fieldset disabled={saving} className="flex flex-col gap-3 border-0 p-0 m-0 min-w-0">
       <div className="flex items-center gap-3">
         <Avatar size={96} code={draft.code || '?'} name={draft.name} src={draft.avatar_data} fallbackColor={personaColor(draft.code)} />
         <div className="min-w-0 flex-1">{avatarPicker}</div>
@@ -159,6 +161,7 @@ export function PersonaForm({ draft, isNew, issues, saving, avatarPicker, onChan
           {t('settings.personas.save')}
         </button>
       </div>
+      </fieldset>
     </form>
   )
 }

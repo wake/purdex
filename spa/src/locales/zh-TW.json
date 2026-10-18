@@ -2040,6 +2040,8 @@
   "settings.personas.restore": "恢復",
   "settings.personas.saved": "已存在 {{host}}，半分鐘內同步到其他主機",
   "settings.personas.rebuilt": "別處有更新的角色資料，已重新載入這個角色，請再確認一次再儲存。",
+  "settings.personas.kept": "別處有更新的角色資料。你輸入的內容已保留；再按儲存，這個角色會以你的內容為準，其他角色維持最新版。",
+  "settings.personas.cap": "已經有 64 個角色（含已退休的），不能再新增。",
   "settings.personas.error.whole": "儲存失敗：{{message}}",
   "settings.personas.error.row": "儲存失敗，「{{field}}」有問題：{{message}}",
   "settings.personas.error.invalid": "有欄位不合規定，請看紅字。",

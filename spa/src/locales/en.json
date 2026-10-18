@@ -2040,6 +2040,8 @@
   "settings.personas.restore": "Restore",
   "settings.personas.saved": "Saved on {{host}}; it syncs to the other hosts within 30 seconds",
   "settings.personas.rebuilt": "Newer persona data arrived from elsewhere and this persona was reloaded. Check it again before saving.",
+  "settings.personas.kept": "Newer persona data arrived from elsewhere. What you typed is kept; saving again makes this persona yours, and the other personas stay at their latest.",
+  "settings.personas.cap": "There are already 64 personas (retired ones included); no more can be added.",
   "settings.personas.error.whole": "Save failed: {{message}}",
   "settings.personas.error.row": "Save failed; “{{field}}” has a problem: {{message}}",
   "settings.personas.error.invalid": "Some fields break the rules; see the red text.",

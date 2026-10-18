@@ -1,7 +1,8 @@
 // spa/src/lib/names/persona-draft-memory.ts — the persona form's unsaved draft, kept outside the component. A settings
 // page unmounts when its tab is switched away (`useTabAlivePool` keeps nothing alive by default), and a component's own
 // `useState` would lose what the user was typing; this holds it for the page to restore (CLAUDE.md, tab-hosted checklist).
-// Memory only: a draft does not survive a reload, and it is never sent anywhere.
+// Memory only: a draft does not survive a reload, and it is never sent anywhere. One slot is enough: the Personas page
+// is a section of the global settings tab, which opens as a singleton (`openSingletonTab`), so a window has one at a time.
 import type { EditBase } from './persona-save'
 import type { Persona } from './persona-types'
 

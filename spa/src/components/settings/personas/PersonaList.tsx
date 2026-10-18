@@ -10,6 +10,8 @@ interface Props {
   items: Persona[]
   /** The selected persona's code; `''` for a persona being created (it has no row yet). */
   selected: string | null
+  /** A save is in flight: the selection stays where it is until the answer lands. */
+  disabled?: boolean
   onSelect: (code: string) => void
 }
 
@@ -18,7 +20,7 @@ export function orderForList(items: Persona[]): Persona[] {
   return [...items.filter((p) => !p.retired), ...items.filter((p) => p.retired)]
 }
 
-export function PersonaList({ items, selected, onSelect }: Props) {
+export function PersonaList({ items, selected, disabled = false, onSelect }: Props) {
   const t = useI18nStore((s) => s.t)
   return (
     <ul className="flex flex-col gap-0.5" data-testid="persona-list">
@@ -26,6 +28,7 @@ export function PersonaList({ items, selected, onSelect }: Props) {
         <li key={p.code}>
           <button
             type="button"
+            disabled={disabled}
             onClick={() => onSelect(p.code)}
             aria-current={selected === p.code ? 'true' : undefined}
             data-testid={`persona-row-${p.code}`}
