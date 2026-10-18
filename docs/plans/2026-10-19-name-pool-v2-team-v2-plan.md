@@ -47,9 +47,11 @@ type NameService interface {
     // Reservations (spec §5.2): in memory, under the pool lock that assignPooled and settlePoolCollisions take,
     // so reserving, releasing and counting held names are one atomic section (codex #2).
     // Rule 2 for the lead's team; "" = nothing free.
-    ReserveMember(ctx context.Context, leadSessionID, opID string, at time.Time) (code string, err error)
+    // tmuxName is the op's tmux session name (spawn_ops.tmux_name): the first naming pass finds the reservation by it
+    // (NP-0 result, path b′).
+    ReserveMember(ctx context.Context, leadSessionID, opID, tmuxName string, at time.Time) (code string, err error)
     // A remote spawn: the lead host chose. ErrNameTaken when the name is held here → the member host uses rule 3.
-    ReserveExact(ctx context.Context, code, opID string, at time.Time) error
+    ReserveExact(ctx context.Context, code, opID, tmuxName string, at time.Time) error
     ReleaseReservation(opID string) // registered, failed, voided, timed out, remote command expired; idempotent
 
     LeadCandidates(ctx context.Context, sessionID string) ([]LeadCandidate, error) // rule 1, "keep" first
@@ -69,7 +71,7 @@ type NameService interface {
 // Registered by the team module (codex #2): the open spawn ops that carry a pool_name, read once by the
 // name service after boot to rebuild its reservations. The peers module never opens team.db.
 type SpawnReservationReader interface {
-    OpenReservations(ctx context.Context) ([]Reservation, error) // {OpID, Code, CreatedAt}
+    OpenReservations(ctx context.Context) ([]Reservation, error) // {OpID, Code, TmuxName, CreatedAt}
 }
 ```
 
@@ -83,7 +85,7 @@ type SpawnReservationReader interface {
 
 | Phase | Who | Content | Depends on |
 |---|---|---|---|
-| NP-0 | daemon member | Measurement only (P5), result into this plan by a docs commit | — |
+| NP-0 | lead | Measurement only (P5). **Done 10-19**: the result is under「NP-0 measurement」 | — |
 | NP-1 | daemon member A | personas key, routes, validation, event, pool registry, picker, `journal.DisplayName` | §1 |
 | NP-2 | daemon member A | envelope `names`, sync apply, peer route | NP-1 |
 | NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1; NP-2 for its last task (`familiar`) |
@@ -116,6 +118,29 @@ type SpawnReservationReader interface {
 - Record whether `spawn_ops.session_id` is set at that pass (P5 a), and whether the owner map gives the pane, so that
   the tag can be read (P5 b).
 - Output: a short table appended to §2 of this plan, plus the chosen path.
+
+**Result (2026-10-19, 88; read-only on mlab's live DBs).** The measured spawn is the B-line member spawned at 04:5x,
+op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
+
+| Event | Time (ms, from `team.db` / `meta.db`) |
+|---|---|
+| `spawn_ops.created_at` (accepted) | …939105 |
+| `spawn_ops.launched_at` | …939458 |
+| **`peer_names.assigned_at` (first naming pass, `pool`)** | **…971939** |
+| `spawn_ops.updated_at` (`registered`, `session_id` written) | …972033 |
+
+- **(a) does not hold.** The session was named 94 ms *before* its op recorded the `session_id`, so the first naming
+  pass cannot find the op by session id.
+- **Chosen path: (b′), by tmux session name instead of the pane tag.**
+  - The inventory pass already has each tmux session's name and the owner of its pane, the session id
+    (`internal/module/peers/module.go:725-735`, `sessions` and `owners`).
+  - Each reservation also carries the op's `tmux_name`, unique per spawn (`tm-<op id prefix>`,
+    `spawn_ops.tmux_name`).
+  - `nameCandidate` gains `tmuxName`, and the pooled pick first asks the name service for a reservation with that
+    tmux name.
+  - No tmux call is added to the naming path.
+- **Contract change:** `ReserveMember` and `ReserveExact` take the op's `tmuxName` as well (§1.3). The reservation
+  reader returns it too.
 
 ### NP-1 (`internal/module/hostconfig`, `internal/peers`, `internal/module/peers`, `internal/journal`, `internal/core`)
 
@@ -193,7 +218,8 @@ type SpawnReservationReader interface {
 - The team module registers `SpawnReservationReader` (open ops with a `pool_name`) for the boot rebuild.
 - The remote `spawn` command carries `pool_name`, and the member host calls `ReserveExact`. `ErrNameTaken` → no
   reservation, and the spawn goes on.
-- Naming a spawned session uses the NP-0 path.
+- Naming a spawned session uses the NP-0 path (b′): the inventory's tmux session name matched against the
+  reservations' `tmuxName`.
 - Pairs (codex #3):
   - a local op reaching `registered` → `RecordPairCodes(lead code, op.pool_name)`;
   - a remote spawn → the same on the lead host, when `FinishRemoteSpawn` records the registration
