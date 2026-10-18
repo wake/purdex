@@ -164,8 +164,11 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 			root := repo(t, mode)
 			r := Match(c.cwd(root), c.argv)
 			wantAction := Action(mode)
-			if mode == "" || mode == "rewrite" {
-				wantAction = ActionAdvise // no ad-hoc entry yet: rewrite is advised; an absent [entry] is advise
+			switch mode {
+			case "":
+				wantAction = ActionAdvise // an absent [entry] is advise
+			case "rewrite":
+				wantAction = ActionAdhoc // an undeclared command runs as an ad-hoc job
 			}
 			assert.Equal(t, wantAction, r.Action, name+" / "+mode)
 			assert.Empty(t, r.Task, name)
@@ -175,7 +178,10 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 			}
 			if mode == "rewrite" {
 				assert.Equal(t, "rewrite", r.Mode)
-				assert.Contains(t, r.Reason, "ad-hoc", "rewrite says why it only advises")
+				assert.True(t, r.Queued, "an ad-hoc job takes a heavy slot and may wait for it")
+				assert.Empty(t, r.Reason, "nothing is held back: the command runs as ad-hoc")
+			} else {
+				assert.False(t, r.Queued, "only the ad-hoc answer says it")
 			}
 		}
 	}

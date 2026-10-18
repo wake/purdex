@@ -375,6 +375,13 @@ async function askEntry($, cfg, c) {
   }
 }
 
+// an ad-hoc job runs the argv as it is typed; the words are quoted again, so a command whose words the shell would still have to
+// work on (a variable, a substitution, a glob, a brace, a tilde, a backslash) is not turned into one: its text is what the shell
+// makes of it, not what the hook reads
+const adhocPlain = (text) => !/[$`*?[\]{}~!\\]/.test(text)
+
+const pdxAdhoc = (cfg, c) => sq(cfg.bin) + ' test --adhoc -- ' + c.argv.map(word).join(' ')
+
 const pdxTest = (cfg, a) => {
   const args = Array.isArray(a.args) ? a.args : []
   return sq(cfg.bin) + ' test ' + word(a.task) + (args.length ? (args.some((x) => x.startsWith('-')) ? ' -- ' : ' ') + args.map(word).join(' ') : '')
@@ -400,7 +407,10 @@ async function planEntry($, e, cfg, wasBackground) {
     if (a.action === 'deny' && !deny) {
       deny = 'Purdex mod 拒絕這個指令：這個 repo 的 .wwd/tasks.toml 規定測試與建置要用 pdx test 的 task（[entry].mode = deny）。' +
         (hint ? '最接近的是 pdx test ' + hint + ' …；' : '') + 'pdx test --list 列出全部。'
-    } else if (a.action === 'advise') {
+    } else if (a.action === 'adhoc' && cands[i].clean && adhocPlain(e.command.slice(cands[i].at, cands[i].end))) {
+      rewrites.push({ c: cands[i], a, adhoc: true })
+    } else if (a.action === 'advise' || a.action === 'adhoc') {
+      // an ad-hoc answer for a command that cannot be turned into a job (a redirection, something the shell expands) is advice
       notes.push('Purdex mod：這個指令沒有對應的 .wwd/tasks.toml task，照常執行。' + (hint ? '建議改用 pdx test ' + hint + ' …；' : '') + 'pdx test --list 列出全部。')
     } else if (a.action === 'rewrite' && cands[i].clean) {
       rewrites.push({ c: cands[i], a })
@@ -410,7 +420,7 @@ async function planEntry($, e, cfg, wasBackground) {
   if (deny) return { deny }
   if (rewrites.length === 0) return notes.length ? { command: e.command, background: wasBackground, notes } : null
   let command = e.command
-  for (const { c, a } of rewrites.sort((x, y) => y.c.at - x.c.at)) command = command.slice(0, c.at) + pdxTest(cfg, a) + command.slice(c.end)
+  for (const { c, a, adhoc } of rewrites.sort((x, y) => y.c.at - x.c.at)) command = command.slice(0, c.at) + (adhoc ? pdxAdhoc(cfg, c) : pdxTest(cfg, a)) + command.slice(c.end)
   const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, wasBackground)])
   if (before === null || before !== after) {
     log($, 'the rewrite to pdx test would change the permission verdict (' + before + ' → ' + after + '): the call goes the old way')
@@ -422,7 +432,10 @@ async function planEntry($, e, cfg, wasBackground) {
     const [b2, a2] = await Promise.all([verdict($, e.command, false), verdict($, command, true)])
     if (b2 !== null && b2 === a2) background = true
   }
-  notes.unshift('Purdex mod 依這個 repo 的 .wwd/tasks.toml 把測試／建置指令改成 pdx test，實際執行的是：' + command +
+  const onlyAdhoc = rewrites.every((r) => r.adhoc)
+  notes.unshift((onlyAdhoc
+    ? 'Purdex mod 依這個 repo 的 .wwd/tasks.toml（[entry].mode = rewrite）把沒有對應 task 的測試／建置指令改成 pdx test --adhoc 執行（占用 heavy 名額，不是 task），實際執行的是：'
+    : 'Purdex mod 依這個 repo 的 .wwd/tasks.toml 把測試／建置指令改成 pdx test，實際執行的是：') + command +
     (background && !wasBackground ? '。這個 task 要排佇列，所以整段改成背景執行：它輪到時會自己開始，整段跑完時你會收到通知與輸出；在那之前不要假設它做完了，不要重跑。' : ''))
   return { command, background, notes }
 }
