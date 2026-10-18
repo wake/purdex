@@ -209,10 +209,12 @@ func TestALostJobSendsNothing(t *testing.T) {
 	assert.Empty(t, h.s.calls)
 }
 
-func TestAReclaimedJobSendsNothingTheLoopGivesTheClaimBack(t *testing.T) {
+func TestAReclaimedJobIsReleasedAsReclaimWithoutAnAttempt(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.fin(context.Background(), ended(runner.KindReclaimed, run.Result{Outcome: run.Cancelled}))
-	assert.Empty(t, h.s.calls)
+	require.Len(t, h.s.releases, 1)
+	assert.Equal(t, wire.ReleaseReclaim, h.s.releases[0].Reason)
+	assert.Empty(t, h.s.results)
 }
 
 func TestShutdownAndInfraAreReleases(t *testing.T) {

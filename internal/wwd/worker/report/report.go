@@ -139,9 +139,9 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
 		r.ran(ctx, sink, e)
 	case runner.KindInfra:
 		r.release(ctx, sink, e, wire.ReleaseInfra, e.Err)
-	case runner.KindReclaimed:
-		// the owner took the machine: the loop gives the claim back after it has stopped the job (yield.ReclaimAll)
-	case runner.KindShutdown:
+	case runner.KindReclaimed, runner.KindShutdown:
+		// the owner took the machine (Running.Stop), or the worker is stopping: the claim goes back while the lease is still alive, so
+		// that a lease that lapses between the stop and the release cannot count an attempt
 		r.release(ctx, sink, e, wire.ReleaseReclaim, nil)
 	default:
 		r.cfg.Logf("report: %s of %s is not something to report", e.Kind, e.Job.ID)

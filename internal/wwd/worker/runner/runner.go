@@ -107,8 +107,8 @@ const (
 	KindLost Kind = "lost"
 	// KindShutdown: the worker's own context ended while the job was held; the job should be released (reason reclaim).
 	KindShutdown Kind = "shutdown"
-	// KindReclaimed: the worker's owner asked for the machine (Running.Stop); the command was ended. Nothing is delivered for it: the
-	// caller gives the claim back (yield.ReclaimAll, reason reclaim) once Stop has returned.
+	// KindReclaimed: the worker's owner asked for the machine (Running.Stop); the command was ended. Finish gives the claim back (reason
+	// reclaim) while the lease is still alive, then Stop returns.
 	KindReclaimed Kind = "reclaimed"
 	// KindRejected: Prepare refused the job; nothing was started. Err is the *Rejected. The result to post is state failed with no
 	// exit, the reason in summary.tail.
@@ -512,10 +512,10 @@ func (r *Running) Source() string  { return r.source }
 func (r *Running) ID() string      { return r.id }
 func (r *Running) ClaimID() string { return r.claimID }
 
-// Stop ends the job's command at the owner's request and returns once the job is over. The lease is kept alive until then, so that the
-// caller can give the claim back (reclaim) afterwards. A job that cannot be proven stopped (Quarantined) is an error: it must not be
-// given back, another worker could start it next to a command that may still be running. Stopping a job that is already over is not an
-// error unless it was quarantined.
+// Stop ends the job's command at the owner's request and returns once the job is over. The lease is kept alive until Finish has returned:
+// Finish is what gives the claim back (KindReclaimed), so that no lease can lapse between the stop and the release. A job that cannot be
+// proven stopped (Quarantined) is an error: whatever Finish did, it must not be taken for stopped. Stopping a job that is already over is
+// not an error unless it was quarantined.
 func (r *Running) Stop(ctx context.Context) error {
 	if r.Claimed() && r.reclaim != nil {
 		r.reclaim()
