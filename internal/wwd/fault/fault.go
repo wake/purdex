@@ -110,10 +110,16 @@ func (h *Hooks) OwnerActive(real bool) bool {
 	return true
 }
 
-// OwnerFileNamed says whether H2 is named. A host with no owner rule has a null owner block, and a worker that yielded stays yielded on a
-// null block, so with the hook named the sampler fills in an "away" block while the file is absent (daemon/sampler.go).
-func (h *Hooks) OwnerFileNamed() bool {
-	return h != nil && h.cfg.Enabled && h.cfg.OwnerActiveFile != ""
+// OwnerFileAbsent is the other half of H2: true only when the hook is named and the file is confirmed not to be there (ENOENT). A file
+// that cannot be told about (permission, I/O) is neither there nor absent: false, so that nothing is made up. A host with no owner rule has
+// a null owner block, and a worker that yielded stays yielded on a null block, so the sampler fills in an "away" block on this
+// (daemon/sampler.go).
+func (h *Hooks) OwnerFileAbsent() bool {
+	if h == nil || !h.cfg.Enabled || h.cfg.OwnerActiveFile == "" {
+		return false
+	}
+	_, err := os.Stat(h.cfg.OwnerActiveFile)
+	return err != nil && os.IsNotExist(err)
 }
 
 // ZoneOverride is H3: the zone peers score by instead of the real one, or "" when none.

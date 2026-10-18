@@ -54,6 +54,34 @@ func TestFaultOwnerFileAbsentKeepsARealOwnerBlock(t *testing.T) {
 	}
 }
 
+// A host that has an owner rule and whose reading failed this time (null block) is not "away": the yield stays.
+func TestFaultOwnerFileAbsentDoesNotAnswerForAFailedReading(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "owner-active")
+	level := 1
+	s := NewSampler(SamplerOptions{
+		HostID: "h1", Alias: "air26", OSVersion: "26.6.2", Fault: fault.New(fault.Config{Enabled: true, OwnerActiveFile: file}, nil),
+		Sources: fakeSources(&level, nil), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true, OwnerRule: "hid<5m",
+	})
+	s.Tick(s0)
+	if f, _ := s.Latest(); f.Owner != nil {
+		t.Fatalf("owner %+v", f.Owner)
+	}
+}
+
+// A file that cannot be told about (here: its parent is a file, ENOTDIR) is not "absent": nothing is made up, so a yield stays.
+func TestFaultOwnerFileUnknownIsNotAway(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	level := 1
+	s := faultSampler(fault.New(fault.Config{Enabled: true, OwnerActiveFile: filepath.Join(parent, "owner-active")}, nil), &level, nil)
+	s.Tick(s0)
+	if f, _ := s.Latest(); f.Owner != nil {
+		t.Fatalf("owner %+v", f.Owner)
+	}
+}
+
 // Another hook, or none, leaves a host without an owner rule with a null owner block.
 func TestFaultOtherHooksLeaveTheOwnerNull(t *testing.T) {
 	level := 1
