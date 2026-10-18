@@ -206,6 +206,20 @@ func TestRestoreKeepsMarkerWhenKeyTaken(t *testing.T) {
 	}
 }
 
+func TestRestoreReportsAHoldWithExtraKeys(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	if _, err := r.locks.Acquire("src/j1", []string{"k1", "k2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(r.entry("j1", "k1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Restore(); err == nil {
+		t.Fatal("the owner holds more keys than the marker names: releasing it would free keys the marker never owned")
+	}
+}
+
 func TestRestoreReportsAHoldWithOtherKeys(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
@@ -218,6 +232,52 @@ func TestRestoreReportsAHoldWithOtherKeys(t *testing.T) {
 	if err := s.Restore(); err == nil {
 		t.Fatal("the owner holds different keys than the marker names: that must be reported")
 	}
+}
+
+// While Add is between writing the marker and updating the entry, a Sweep that holds the older snapshot must wait, not delete
+// the marker that was just written.
+func TestAddIsAtomicAgainstASweepOfTheOlderEntry(t *testing.T) {
+	r := newRig(t)
+	old := r.entry("j1", "k1")
+	if _, err := r.locks.Acquire(old.Owner, old.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	rc := &blockingChecker{started: started, release: release}
+	s, err := Open(r.markers, r.locks, rc, func() time.Time { return r.now }, r.openOpts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(old); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int)
+	go func() { n, _ := s.Sweep(context.Background()); done <- n }()
+	<-started // Sweep has its snapshot and is waiting in the checker
+	newer := old
+	newer.ClaimID = "second-claim"
+	if err := s.Add(newer); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if n := <-done; n != 0 {
+		t.Fatalf("the older snapshot cleared %d", n)
+	}
+	if len(markerFiles(t, r.markers)) != 1 || len(s.Held()) != 1 {
+		t.Fatalf("marker or entry lost: %v %v", markerFiles(t, r.markers), s.Held())
+	}
+	if s2 := r.open(); len(s2.Held()) != 1 || s2.Held()[0].ClaimID != "second-claim" {
+		t.Fatalf("the newer marker did not survive a restart: %+v", s2.Held())
+	}
+}
+
+type blockingChecker struct{ started, release chan struct{} }
+
+func (c *blockingChecker) Gone(ctx context.Context, unit string) (bool, error) {
+	close(c.started)
+	<-c.release
+	return true, nil
 }
 
 // replacingChecker re-adds the entry while Sweep is asking about its unit.

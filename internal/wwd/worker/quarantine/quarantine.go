@@ -221,13 +221,13 @@ func (s *Store) Add(e Entry) error {
 	if e.Since.IsZero() {
 		e.Since = s.now()
 	}
+	s.mu.Lock() // marker and entry change together: a Sweep or Clear holding the older snapshot must not see one without the other
+	defer s.mu.Unlock()
 	if err := s.writeMarker(e); err != nil {
 		return fmt.Errorf("quarantine: %w", err)
 	}
-	s.mu.Lock()
 	s.gen++
 	s.entries[e.Owner] = rec{e: e, gen: s.gen}
-	s.mu.Unlock()
 	return nil
 }
 
@@ -251,8 +251,21 @@ func (s *Store) reacquire(e Entry) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, locks.ErrAlreadyHeld):
+		want := map[string]bool{}
 		for _, k := range e.Keys {
-			if h, ok := s.locks.Holder(k); !ok || h != e.Owner {
+			want[k] = true
+		}
+		have := map[string]bool{}
+		for k, owner := range s.locks.Held() {
+			if owner == e.Owner {
+				have[k] = true
+			}
+		}
+		if len(want) != len(have) {
+			return fmt.Errorf("quarantine: %s holds other keys than its marker names", e.Owner)
+		}
+		for k := range want {
+			if !have[k] {
 				return fmt.Errorf("quarantine: %s holds other keys than its marker names", e.Owner)
 			}
 		}
