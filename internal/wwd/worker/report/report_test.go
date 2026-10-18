@@ -209,6 +209,12 @@ func TestALostJobSendsNothing(t *testing.T) {
 	assert.Empty(t, h.s.calls)
 }
 
+func TestAReclaimedJobSendsNothingTheLoopGivesTheClaimBack(t *testing.T) {
+	h := newHarness(t, Config{})
+	h.fin(context.Background(), ended(runner.KindReclaimed, run.Result{Outcome: run.Cancelled}))
+	assert.Empty(t, h.s.calls)
+}
+
 func TestShutdownAndInfraAreReleases(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.fin(context.Background(), ended(runner.KindShutdown, run.Result{}))
