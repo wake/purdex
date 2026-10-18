@@ -110,6 +110,46 @@ func TestJobs_SendsTheFiltersAndDecodes(t *testing.T) {
 	}
 }
 
+func TestJobsAfter_SendsTheCursorAndReturnsTheNextOne(t *testing.T) {
+	var q map[string][]string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		q = r.URL.Query()
+		writeJSON(w, wire.JobsListResponse{Jobs: []wire.Job{jobIn(t, "j_a", wire.StateSucceeded)}, Cursor: "42"})
+	})
+	r, err := New(fakeWWD(t, mux)).JobsAfter(context.Background(), "0", 500)
+	if err != nil || len(r.Jobs) != 1 || r.Cursor != "42" {
+		t.Fatalf("answer %+v err %v", r, err)
+	}
+	if q["after"][0] != "0" || q["limit"][0] != "500" || len(q) != 2 {
+		t.Fatalf("query = %v", q)
+	}
+	if _, err := New(fakeWWD(t, mux)).JobsAfter(context.Background(), "42", 0); err != nil || q["after"][0] != "42" || len(q["limit"]) != 0 {
+		t.Fatalf("a zero limit must send none: %v %v", q, err)
+	}
+}
+
+func TestJobsAfter_RefusesABadCursorAndAnAnswerWithoutOne(t *testing.T) {
+	asked := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		asked = true
+		writeJSON(w, wire.JobsListResponse{Jobs: []wire.Job{jobIn(t, "j_a", wire.StateSucceeded)}}) // a server that ignores ?after=
+	})
+	c := New(fakeWWD(t, mux))
+	for _, bad := range []string{"", "-1", "abc", "1.5"} {
+		if _, err := c.JobsAfter(context.Background(), bad, 0); err == nil {
+			t.Errorf("cursor %q was accepted", bad)
+		}
+	}
+	if asked {
+		t.Fatal("a bad cursor reached the server")
+	}
+	if _, err := c.JobsAfter(context.Background(), "0", 0); err == nil || !strings.Contains(err.Error(), "cursor") {
+		t.Fatalf("an answer with no cursor must be an error, not an empty list: %v", err)
+	}
+}
+
 func TestJobLogCancel_PathsAndEscaping(t *testing.T) {
 	var paths []string
 	var mu sync.Mutex

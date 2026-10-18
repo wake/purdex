@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -28,6 +28,7 @@ func job(id string, state wire.JobState, finished time.Time) wire.Job {
 		panic(err)
 	}
 	j.ID, j.State, j.Task, j.Submitter.Session = id, state, "lint", "sess-1"
+	j.CreatedAt = finished // wwd made it when it ended, unless a test says otherwise
 	if state.Terminal() {
 		code := 0
 		if state == wire.StateFailed {
@@ -52,10 +53,13 @@ func event(t *testing.T, j wire.Job) wire.Event {
 	return wire.Event{Type: wire.EventJob, Data: b}
 }
 
+// fakeSource is wwd as the module sees it: an event stream and a change log, whose cursor is the number of entries already read.
 type fakeSource struct {
-	events []wire.Event
-	jobs   map[wire.JobState][]wire.Job
-	opened chan struct{}
+	events   []wire.Event
+	log      []wire.Job // the changes, oldest first; a job that changes again is appended again
+	opened   chan struct{}
+	noCursor bool     // a wwd that does not know ?after=: it answers without a cursor
+	asked    []string // the cursors the module asked with
 }
 
 func (f *fakeSource) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) bool) error {
@@ -74,8 +78,20 @@ func (f *fakeSource) Watch(ctx context.Context, ready chan<- struct{}, fn func(w
 	return ctx.Err()
 }
 
-func (f *fakeSource) Jobs(_ context.Context, q client.JobsQuery) ([]wire.Job, error) {
-	return f.jobs[q.State], nil
+func (f *fakeSource) JobsAfter(_ context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	f.asked = append(f.asked, after)
+	if f.noCursor {
+		return wire.JobsListResponse{}, errors.New("wwd answered without a cursor")
+	}
+	n, err := strconv.Atoi(after)
+	if err != nil || n > len(f.log) {
+		return wire.JobsListResponse{}, fmt.Errorf("bad cursor %q", after)
+	}
+	end := len(f.log)
+	if limit > 0 && n+limit < end {
+		end = n + limit
+	}
+	return wire.JobsListResponse{Jobs: append([]wire.Job(nil), f.log[n:end]...), Cursor: strconv.Itoa(end)}, nil
 }
 
 type sent struct {
@@ -126,8 +142,10 @@ func newMod(t *testing.T, dir string, src source, s *sent) *Module {
 	}
 	t.Cleanup(func() { st.close() })
 	m.store = st
-	if _, ok, _ := st.since(); !ok {
-		st.setSince(t0)
+	if _, haveCursor, _ := st.cursor(); !haveCursor {
+		if _, ok, _ := st.since(); !ok {
+			st.setSince(t0) // the first run's window, like Init
+		}
 	}
 	return m
 }
@@ -258,12 +276,12 @@ func TestACrashBetweenTheStoredTryAndItsResultStillCountsTheTry(t *testing.T) {
 	}
 }
 
-func TestCatchUpTellsWhatEndedInTheWindowAndOverlapsNeverSendTwice(t *testing.T) {
+func TestTheFirstCatchUpTellsWhatEndedInTheWindowAndRepeatsNeverSendTwice(t *testing.T) {
 	s := &sent{}
-	src := &fakeSource{jobs: map[wire.JobState][]wire.Job{
-		wire.StateSucceeded: {job("j_old", wire.StateSucceeded, t0.Add(-3*time.Hour)), job("j_new", wire.StateSucceeded, t0.Add(time.Minute)),
-			job("j_edge", wire.StateSucceeded, t0.Add(-30*time.Minute))}, // inside the overlap
-		wire.StateFailed: {job("j_f", wire.StateFailed, t0.Add(2*time.Minute))},
+	src := &fakeSource{log: []wire.Job{
+		job("j_old", wire.StateSucceeded, t0.Add(-3*time.Hour)), job("j_new", wire.StateSucceeded, t0.Add(time.Minute)),
+		job("j_edge", wire.StateSucceeded, t0.Add(-30*time.Minute)), // inside the overlap
+		job("j_f", wire.StateFailed, t0.Add(2*time.Minute)),
 	}}
 	m := newMod(t, t.TempDir(), src, s)
 	m.catchUpNow()
@@ -272,29 +290,119 @@ func TestCatchUpTellsWhatEndedInTheWindowAndOverlapsNeverSendTwice(t *testing.T)
 	if len(s.texts()) != 3 || strings.Contains(got, "j_old") || !strings.Contains(got, "j_new") || !strings.Contains(got, "j_f") || !strings.Contains(got, "j_edge") {
 		t.Fatalf("told %q", s.texts())
 	}
+	if c, ok, _ := m.store.cursor(); !ok || c != "4" {
+		t.Fatalf("cursor %q %v, want 4", c, ok)
+	}
+	if _, ok, _ := m.store.since(); ok {
+		t.Fatal("the first-pass window stayed after a pass that read everything")
+	}
+	if want := []string{"0", "4"}; strings.Join(src.asked, ",") != strings.Join(want, ",") {
+		t.Fatalf("asked with %v, want %v", src.asked, want)
+	}
 }
 
-func TestANoticeNotDeliveredIsStillSentAfterTheWindowMovedPastIt(t *testing.T) {
+// The reason for the cursor (#3251): a job whose worker's clock runs hours behind has a finished time far in the past. Once the first
+// pass is over, nothing about the time decides what is new, so it is told.
+func TestAJobStampedByASlowClockIsToldAfterTheFirstPass(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow()
+	src.log = append(src.log, slowJob("j_slow")) // ended just now, stamped ten hours back
+	m.catchUpNow()
+	if got := strings.Join(s.texts(), "\n"); len(s.texts()) != 2 || !strings.Contains(got, "j_slow") {
+		t.Fatalf("told %q", s.texts())
+	}
+}
+
+// slowJob is a job wwd made after the module first ran and a worker ended with a clock ten hours behind.
+func slowJob(id string) wire.Job {
+	j := job(id, wire.StateSucceeded, t0.Add(-10*time.Hour))
+	j.CreatedAt = t0.Add(time.Minute)
+	return j
+}
+
+// A first pass that stopped part-way (the cursor of an earlier page is stored, the window is still in force) must not mistake a job
+// that is new for history because its worker's clock is slow: the window reads wwd's own created_at.
+func TestARestartInTheMiddleOfTheFirstPassStillTellsAJobFromASlowClock(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{log: []wire.Job{job("j_legacy", wire.StateSucceeded, t0.Add(-5*time.Hour)), slowJob("j_slow")}}
+	m := newMod(t, t.TempDir(), src, s)
+	if err := m.store.setCursor("1"); err != nil { // the first page was read and stored; then the process died
+		t.Fatal(err)
+	}
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window is not in force")
+	}
+	m.catchUpNow()
+	if got := strings.Join(s.texts(), "\n"); len(s.texts()) != 1 || !strings.Contains(got, "j_slow") {
+		t.Fatalf("told %q", s.texts())
+	}
+}
+
+func TestAJobThatChangesAfterItEndedIsToldOnce(t *testing.T) {
+	s := &sent{}
+	ended := job("j_a", wire.StateSucceeded, t0.Add(time.Minute))
+	src := &fakeSource{log: []wire.Job{ended}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow()
+	src.log = append(src.log, ended) // its log was uploaded after the end: wwd lists the job again
+	m.catchUpNow()
+	if len(s.texts()) != 1 {
+		t.Fatalf("told %q", s.texts())
+	}
+}
+
+func TestACursorSurvivesARestartAndIsAskedWith(t *testing.T) {
 	dir := t.TempDir()
-	src := &fakeSource{jobs: map[wire.JobState][]wire.Job{wire.StateSucceeded: {job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}}
+	src := &fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
+	s := &sent{}
+	m := newMod(t, dir, src, s)
+	m.catchUpNow()
+	m.store.close()
+	m2 := newMod(t, dir, src, s)
+	src.asked = nil
+	m2.catchUpNow()
+	if strings.Join(src.asked, ",") != "1" || len(s.texts()) != 1 {
+		t.Fatalf("asked with %v, told %q", src.asked, s.texts())
+	}
+	if _, ok, _ := m2.store.since(); ok {
+		t.Fatal("a restart brought the first-pass window back")
+	}
+}
+
+func TestAWwdWithoutACursorLeavesEverythingWhereItWas(t *testing.T) {
+	s := &sent{}
+	src := &fakeSource{noCursor: true, log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
+	m := newMod(t, t.TempDir(), src, s)
+	m.catchUpNow()
+	if _, ok, _ := m.store.cursor(); ok || len(s.texts()) != 0 {
+		t.Fatalf("a cursor was stored or a notice sent: %q", s.texts())
+	}
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window was dropped although the pass did not read everything")
+	}
+}
+
+func TestANoticeNotDeliveredIsStillSentAfterTheCursorMovedPastIt(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}
 	s := &sent{failFor: 1}
 	m := newMod(t, dir, src, s)
-	now := t0.Add(time.Hour)
-	m.now = func() time.Time { return now }
-	m.catchUpNow() // the delivery fails; the window moves on to now
-	if since, _, _ := m.store.since(); !since.Equal(now) || len(s.texts()) != 0 {
-		t.Fatalf("window %v, told %q", since, s.texts())
+	m.catchUpNow() // the delivery fails; the cursor moves on
+	if c, _, _ := m.store.cursor(); c != "1" || len(s.texts()) != 0 {
+		t.Fatalf("cursor %q, told %q", c, s.texts())
 	}
 	m.store.close()
-	m2 := newMod(t, dir, &fakeSource{}, s) // a restart; the job is far behind the window and the list has nothing new
-	m2.now = func() time.Time { return now.Add(time.Hour) }
+	m2 := newMod(t, dir, &fakeSource{}, s) // a restart; the job is behind the cursor and wwd has nothing new
+	m2.now = func() time.Time { return t0.Add(time.Hour) }
 	m2.deliverPending(context.Background(), false)
 	if len(s.texts()) != 1 {
 		t.Fatalf("told %q", s.texts())
 	}
 }
 
-func TestMoreThanFiveThousandJobsAreNotToldAgain(t *testing.T) {
+func TestMoreThanOnePageOfJobsAreNotToldAgain(t *testing.T) {
 	s := &sent{}
 	var many []wire.Job
 	base := job("j_base", wire.StateSucceeded, t0.Add(time.Second))
@@ -303,7 +411,7 @@ func TestMoreThanFiveThousandJobsAreNotToldAgain(t *testing.T) {
 		j.ID = fmt.Sprintf("j_%05d", i)
 		many = append(many, j)
 	}
-	src := &fakeSource{jobs: map[wire.JobState][]wire.Job{wire.StateSucceeded: many}}
+	src := &fakeSource{log: many}
 	m := newMod(t, t.TempDir(), src, s)
 	mem, err := openStore(":memory:") // 15 000 statements: a file would take half a minute under -race
 	if err != nil {
@@ -326,10 +434,16 @@ func TestMoreThanFiveThousandJobsAreNotToldAgain(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	m.catchUpNow() // a reconnect lists the same backlog again
+	m.catchUpNow() // a reconnect lists the same backlog again, in six pages
 	m.deliverPending(context.Background(), false)
 	if n := len(s.texts()); n != 0 {
 		t.Fatalf("told %d jobs that were already told", n)
+	}
+	if want := "0,1000,2000,3000,4000,5000"; strings.Join(src.asked, ",") != want {
+		t.Fatalf("asked with %v, want %s", src.asked, want)
+	}
+	if c, _, _ := mem.cursor(); c != "5100" {
+		t.Fatalf("cursor %q", c)
 	}
 }
 
@@ -340,7 +454,6 @@ func TestOldRowsAreDroppedByAgeAndPendingOnesAreKept(t *testing.T) {
 	m.enqueue(job("j_wait", wire.StateSucceeded, t0))
 	m.deliverPending(context.Background(), true) // both fail (failFor) and stay pending
 	m.store.settle("j_old", statusSent, "", t0)
-	m.store.setSince(t0.Add(keep))
 	if err := m.store.prune(t0.Add(keep + time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -352,36 +465,36 @@ func TestOldRowsAreDroppedByAgeAndPendingOnesAreKept(t *testing.T) {
 	}
 }
 
-type failingSource struct {
-	fakeSource
-	failState wire.JobState
-}
-
-func (f *failingSource) Jobs(ctx context.Context, q client.JobsQuery) ([]wire.Job, error) {
-	if q.State == f.failState {
-		return nil, errors.New("wwd busy")
-	}
-	return f.fakeSource.Jobs(ctx, q)
-}
-
-func TestAFailedListLeavesTheCatchUpWindowWhereItWas(t *testing.T) {
+func TestAFailedReadLeavesTheCursorAndTheWindowWhereTheyWere(t *testing.T) {
 	s := &sent{}
-	src := &failingSource{failState: wire.StateFailed, fakeSource: fakeSource{jobs: map[wire.JobState][]wire.Job{
-		wire.StateSucceeded: {job("j_ok", wire.StateSucceeded, t0.Add(time.Minute))},
-		wire.StateFailed:    {job("j_f", wire.StateFailed, t0.Add(time.Minute))},
+	src := &failingSource{fail: true, fakeSource: fakeSource{log: []wire.Job{
+		job("j_ok", wire.StateSucceeded, t0.Add(time.Minute)), job("j_f", wire.StateFailed, t0.Add(time.Minute)),
 	}}}
 	m := newMod(t, t.TempDir(), src, s)
-	now := t0.Add(time.Hour)
-	m.now = func() time.Time { return now }
 	m.catchUpNow()
-	if since, _, _ := m.store.since(); !since.Equal(t0) || len(s.texts()) != 0 {
-		t.Fatalf("window %v, told %q", since, s.texts())
+	if _, ok, _ := m.store.cursor(); ok || len(s.texts()) != 0 {
+		t.Fatalf("a cursor was stored, told %q", s.texts())
 	}
-	src.failState = ""
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window was dropped by a pass that failed")
+	}
+	src.fail = false
 	m.catchUpNow()
-	if since, _, _ := m.store.since(); len(s.texts()) != 2 || !since.Equal(now) {
-		t.Fatalf("window %v, told %q", since, s.texts())
+	if c, _, _ := m.store.cursor(); len(s.texts()) != 2 || c != "2" {
+		t.Fatalf("cursor %q, told %q", c, s.texts())
 	}
+}
+
+type failingSource struct {
+	fakeSource
+	fail bool
+}
+
+func (f *failingSource) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	if f.fail {
+		return wire.JobsListResponse{}, errors.New("wwd busy")
+	}
+	return f.fakeSource.JobsAfter(ctx, after, limit)
 }
 
 func TestStopWaitsForACatchUpInFlight(t *testing.T) {
@@ -418,10 +531,10 @@ type blockingJobs struct {
 	once    sync.Once
 }
 
-func (b *blockingJobs) Jobs(context.Context, client.JobsQuery) ([]wire.Job, error) {
+func (b *blockingJobs) JobsAfter(context.Context, string, int) (wire.JobsListResponse, error) {
 	b.once.Do(func() { close(b.entered) })
 	<-b.release
-	return nil, nil
+	return wire.JobsListResponse{Cursor: "0"}, nil
 }
 
 type breakingSource struct {
@@ -429,24 +542,45 @@ type breakingSource struct {
 	m *Module
 }
 
-// Jobs lists a job and, as it does, makes the outbox unwritable.
-func (b *breakingSource) Jobs(ctx context.Context, q client.JobsQuery) ([]wire.Job, error) {
-	if q.State == wire.StateSucceeded {
-		b.m.store.db.Exec(`DROP TABLE notices`)
-	}
-	return b.fakeSource.Jobs(ctx, q)
+// JobsAfter lists a job and, as it does, makes the outbox unwritable.
+func (b *breakingSource) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	b.m.store.db.Exec(`DROP TABLE notices`)
+	return b.fakeSource.JobsAfter(ctx, after, limit)
 }
 
-func TestACatchUpThatCannotQueueAJobKeepsItsWindow(t *testing.T) {
-	src := &breakingSource{fakeSource: fakeSource{jobs: map[wire.JobState][]wire.Job{
-		wire.StateSucceeded: {job("j_a", wire.StateSucceeded, t0.Add(time.Minute))},
-	}}}
+func TestACatchUpThatCannotQueueAJobKeepsItsCursor(t *testing.T) {
+	src := &breakingSource{fakeSource: fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}}
 	m := newMod(t, t.TempDir(), src, &sent{})
 	src.m = m
-	m.now = func() time.Time { return t0.Add(3 * time.Hour) }
 	m.catchUp(context.Background())
-	if since, _, _ := m.store.since(); !since.Equal(t0) {
-		t.Fatalf("the window moved to %v although a job was not queued", since)
+	if _, ok, _ := m.store.cursor(); ok {
+		t.Fatal("the cursor moved although a job was not queued")
+	}
+	if _, ok, _ := m.store.since(); !ok {
+		t.Fatal("the window was dropped although a job was not queued")
+	}
+}
+
+// metaBreakingSource makes the window unwritable while the last page is read.
+type metaBreakingSource struct {
+	fakeSource
+	m *Module
+}
+
+func (b *metaBreakingSource) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	b.m.store.db.Exec(`DROP TABLE meta`)
+	return b.fakeSource.JobsAfter(ctx, after, limit)
+}
+
+// The cursor of the last page and the end of the first-pass window are one commit: if the window cannot be ended, the cursor does not
+// move either, so no restart can find a cursor with the window still in force (it would skip a job stamped by a slow clock).
+func TestTheLastCursorAndTheEndOfTheWindowAreOneCommit(t *testing.T) {
+	src := &metaBreakingSource{fakeSource: fakeSource{log: []wire.Job{job("j_a", wire.StateSucceeded, t0.Add(time.Minute))}}}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	src.m = m
+	m.catchUp(context.Background())
+	if c, ok, _ := m.store.cursor(); ok {
+		t.Fatalf("the cursor %q was committed although the window could not be ended", c)
 	}
 }
 
@@ -528,19 +662,6 @@ func TestASlowSendDoesNotHoldTheEventStream(t *testing.T) {
 		t.Fatal("the delivery loop did not end with its context")
 	}
 	close(block)
-}
-
-func TestPruneKeepsTheRowsAnOldWindowCouldStillListAgain(t *testing.T) {
-	m := newMod(t, t.TempDir(), &fakeSource{}, &sent{})
-	m.enqueue(job("j_a", wire.StateSucceeded, t0))
-	m.store.settle("j_a", statusSent, "", t0)
-	// the daemon was down for eight days: the window is still t0
-	if err := m.store.prune(t0.Add(8 * 24 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if st, _, _ := m.store.status("j_a"); st != statusSent {
-		t.Fatalf("the dedup row of a job the catch-up can list again was dropped: %q", st)
-	}
 }
 
 func TestTheModuleDoesNotStartWithoutAWindowItCanWrite(t *testing.T) {
