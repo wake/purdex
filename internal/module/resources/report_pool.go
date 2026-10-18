@@ -43,7 +43,6 @@ func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute 
 	// even when the host was already full. It is taken only where the join is certain (see the stats branch); carryOpen says wwd's first
 	// start of it has not been taken away yet.
 	statsCarry, carryOpen := carryRunS, true
-	tickS := int(resources.SampleInterval / time.Second)
 	closeRun := func() {
 		if runLen > 0 && len(out) > 0 {
 			out[len(out)-1].FullLongestS = runLen * 60
@@ -63,8 +62,9 @@ func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute 
 			closeRun()
 			row := statsMinute(m, st)
 			// A run carried over from the old rows goes on through minutes that were full at every sample, and only those are certain: a
-			// minute full part of the time may have begun its run anywhere in it. Then wwd's first start is the old run's, and the lengths add.
-			if statsCarry > 0 && contiguous && st.SampledS > 0 && st.FullTicks*tickS >= st.SampledS {
+			// minute full part of the time may have begun its run anywhere in it, and one wwd was only partly up for (SampledS < 60) says nothing of
+			// the seconds it did not see. Then wwd's first start is the old run's, and the lengths add.
+			if statsCarry > 0 && contiguous && st.SampledS >= 60 && st.FullTicks >= fullTicksPerMinute {
 				if carryOpen {
 					row.FullStarts = max(st.FullStarts-1, 0)
 					carryOpen = false

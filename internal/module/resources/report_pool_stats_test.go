@@ -190,3 +190,13 @@ func TestReport_ARunAcrossTheJoinIsOneRunWithStats(t *testing.T) {
 	assert.Equal(t, 1, rep.Full.Runs, "one run, not two")
 	assert.Equal(t, 300, rep.Full.LongestS, "3 old minutes and 2 of wwd's")
 }
+
+// A first minute wwd was only partly up for (it started 40 s in) proves nothing about the 40 s it did not see: every sample it took was
+// full, yet it is not joined to the old run.
+func TestReportMinutesOf_APartlySampledFirstMinuteIsNotJoined(t *testing.T) {
+	f := minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0)
+	f.Stats = statsOf(wire.MinuteStats{SampledS: 20, FullTicks: 4, FullStarts: 1, FullLongestS: 20, NormalS: 20})
+	got := reportMinutesOf([]wire.Facts{f}, 180)
+	assert.Equal(t, 1, got[0].FullStarts, "wwd's start stands")
+	assert.Equal(t, 20, got[0].FullLongestS, "and no old length is added")
+}
