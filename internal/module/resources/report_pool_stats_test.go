@@ -200,3 +200,13 @@ func TestReportMinutesOf_APartlySampledFirstMinuteIsNotJoined(t *testing.T) {
 	assert.Equal(t, 1, got[0].FullStarts, "wwd's start stands")
 	assert.Equal(t, 20, got[0].FullLongestS, "and no old length is added")
 }
+
+// A minute with more than 60 s sampled (the clock stepped back inside it) that has calm samples among its 12 full ticks was not full
+// at every sample: it is not joined to the old run either.
+func TestReportMinutesOf_AnOversampledMinuteWithCalmSamplesIsNotJoined(t *testing.T) {
+	f := minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0)
+	f.Stats = statsOf(wire.MinuteStats{SampledS: 70, FullTicks: 12, FullStarts: 1, FullLongestS: 60, NormalS: 70})
+	got := reportMinutesOf([]wire.Facts{f}, 180)
+	assert.Equal(t, 1, got[0].FullStarts)
+	assert.Equal(t, 60, got[0].FullLongestS)
+}
