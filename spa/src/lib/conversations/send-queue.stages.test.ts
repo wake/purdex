@@ -178,3 +178,48 @@ describe('a host that reports stages: confirmed by id or by read, never by text'
     expect(q.entries()[0].stage?.stage).toBe('queued')
   })
 })
+
+describe('a host that stops reporting stages (a downgraded daemon)', () => {
+  it('an entry the daemon already said was read is finished, not turned back into a pending one; its row stays covered until the header lets it go', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const id = await handedOne(q, calls)
+    q.setStages(byId(st(id, 'queued')))
+    q.setHeaderQueue([{ text: 'hi', at: 1_002_000 }])
+    q.setStages(byId(st(id, 'read')))
+    q.setStagesMode(false)
+    expect(q.entries()).toHaveLength(0)
+    expect(q.coveredRows()).toEqual([{ text: 'hi', at: 1_002_000 }])
+    await vi.advanceTimersByTimeAsync(READ_GRACE_MS) // and no timer is left to fire on it
+    q.setHeaderQueue([])
+    expect(q.coveredRows()).toEqual([])
+  })
+
+  it('an entry still on its way lets go of the stage it held and is left to today\'s matching', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const id = await handedOne(q, calls)
+    q.setStages(byId(st(id, 'queued')))
+    q.setStagesMode(false)
+    expect(q.entries()[0].stage).toBeUndefined()
+    expect(q.entries()[0].stagesHost).toBeUndefined()
+    q.reconcile([user('u1', 'hi', 1_003_000)]) // the text settles it again
+    expect(q.entries()).toHaveLength(0)
+  })
+
+  it('finishing a read entry that is still being sent starts the next one (the queue does not stall)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const first = q.enqueue('one')
+    q.enqueue('two')
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // 'one' is out, its answer has not come
+    expect(calls.map((c) => c.text)).toEqual(['one'])
+    q.setStages(byId(st(first, 'read'))) // the stage frame beat the submit answer
+    q.setStagesMode(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.map((c) => c.text)).toEqual(['one', 'two'])
+  })
+})
