@@ -155,6 +155,27 @@ describe('PersonasSection', () => {
     await waitFor(() => expect(screen.getByTestId('persona-name').querySelector('input')!.matches(':disabled')).toBe(false))
   })
 
+  it('stays locked when the page is left and re-entered while a save is in flight, and picks up the result', async () => {
+    seed(['hiro'])
+    let finish!: (r: { hostId: string; base: null }) => void
+    vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
+    const first = render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Saved Name' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    first.unmount() // another settings section was chosen
+    render(<PersonasSection />) // and the user came back
+    const input = () => screen.getByTestId('persona-name').querySelector('input')!
+    expect(input().matches(':disabled')).toBe(true)
+    fireEvent.submit(screen.getByTestId('persona-form'))
+    expect(savePersonas).toHaveBeenCalledTimes(1) // no second write
+    seed(['hiro'], { hiro: { name: 'Saved Name' } }) // what the daemon now holds
+    finish({ hostId: 'h1', base: null })
+    await waitFor(() => expect(input().matches(':disabled')).toBe(false))
+    expect((input() as HTMLInputElement).value).toBe('Saved Name')
+  })
+
   it('stops "New persona" at 64 personas (retired ones count) and says why', () => {
     const codes = Array.from({ length: 64 }, (_, i) => 'a' + String.fromCharCode(97 + (i % 26)) + String.fromCharCode(97 + Math.floor(i / 26)))
     seed(codes, { [codes[0]]: { retired: true } })

@@ -32,7 +32,41 @@ export function forgetDraft(): void {
   held = null
 }
 
+// A save in flight is held here, not in the component, for the same reason as the draft: choosing another settings
+// section unmounts the page, and coming back builds a new instance whose own flag would read "nothing pending" while the
+// request is still out. Whoever mounts reads `savePending()` and stays locked until `endSave()`.
+let pending = false
+const listeners = new Set<() => void>()
+
+function notify(): void {
+  for (const fn of [...listeners]) fn()
+}
+
+export function savePending(): boolean {
+  return pending
+}
+
+/** Claims the one save slot; `false` when a save is already in flight. */
+export function beginSave(): boolean {
+  if (pending) return false
+  pending = true
+  notify()
+  return true
+}
+
+export function endSave(): void {
+  if (!pending) return
+  pending = false
+  notify()
+}
+
+export function subscribeSave(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => { listeners.delete(fn) }
+}
+
 /** Test-only. */
 export function clearDraftMemory(): void {
   held = null
+  pending = false
 }

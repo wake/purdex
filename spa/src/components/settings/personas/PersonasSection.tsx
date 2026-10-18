@@ -6,13 +6,15 @@
 // away. Each draft remembers the `editBase()` it was opened on; `savePersonas` refuses a save whose base is no longer the
 // shown collection, and a save that comes back with no base (another copy won meanwhile) rebuilds the form from the shown
 // collection instead of carrying the old items forward.
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
-import { forgetDraft, recallDraft, rememberDraft } from '../../../lib/names/persona-draft-memory'
+import {
+  beginSave, endSave, forgetDraft, recallDraft, rememberDraft, savePending, subscribeSave,
+} from '../../../lib/names/persona-draft-memory'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
@@ -51,7 +53,16 @@ export function PersonasSection() {
   const [issues, setIssues] = useState<PersonaIssue[]>([])
   const [note, setNote] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  // Held outside the component (see persona-draft-memory): a save that is still out when the page is left and re-entered
+  // keeps this instance locked too.
+  const saving = useSyncExternalStore(subscribeSave, savePending)
+
+  // A save that ended while this instance was unmounted wrote its result to the draft memory; take it from there.
+  const wasSaving = useRef(saving)
+  useEffect(() => {
+    if (wasSaving.current && !saving) setEditing(recallDraft())
+    wasSaving.current = saving
+  }, [saving])
 
   // Where a first collection would go: the first host that says it serves personas.
   const fallbackHostId = useMemo(
@@ -95,11 +106,8 @@ export function PersonasSection() {
     setNote(t('settings.personas.rebuilt'))
   }
 
-  // A synchronous guard: `saving` state is only seen on the next render, a double submit can arrive before that.
-  const inFlight = useRef(false)
-
   const save = async (draft: Persona) => {
-    if (!editing || inFlight.current) return
+    if (!editing || savePending()) return // read straight from the slot: a double submit can beat the next render
     const found = validatePersona(draft)
     if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
     setIssues(found)
@@ -113,8 +121,7 @@ export function PersonasSection() {
     }
     const stamped = { ...draft, updated_at: Date.now() }
     const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
-    inFlight.current = true
-    setSaving(true)
+    if (!beginSave()) return
     try {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
       if (res.base === null) { showShown(draft.code, stamped); return }
@@ -131,8 +138,7 @@ export function PersonasSection() {
           : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }))
       } else setError(t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }))
     } finally {
-      inFlight.current = false
-      setSaving(false)
+      endSave()
     }
   }
 
