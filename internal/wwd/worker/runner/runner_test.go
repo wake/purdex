@@ -612,3 +612,29 @@ func TestLeaseLostWhileFinishRunsMakesTheResultLost(t *testing.T) {
 		t.Fatalf("kind=%s: a result that could not be delivered because the lease went is lost", e.Kind)
 	}
 }
+
+func TestStartThatHangsPastTheLeaseIsLostNotInfra(t *testing.T) {
+	// the origin may have taken the start and the claim's lease may have lapsed meanwhile: the job may already be somebody else's.
+	ex := &fakeExec{}
+	o := &startHangs{fakeOrigin: &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
+	}}}
+	c, _ := newCtl(ex)
+	done := make(chan Ended, 1)
+	go func() { done <- c.Work(context.Background(), o, scored(testJob("j")), nil) }()
+	select {
+	case e := <-done:
+		if e.Kind != KindLost || ex.ran.Load() != 0 {
+			t.Fatalf("kind=%s err=%v ran=%d", e.Kind, e.Err, ex.ran.Load())
+		}
+	case <-time.After(30 * unit):
+		t.Fatal("a start that never answers outlived the lease deadline")
+	}
+}
+
+type startHangs struct{ *fakeOrigin }
+
+func (s *startHangs) Start(ctx context.Context, _, _ string) (wire.Lease, error) {
+	<-ctx.Done()
+	return wire.Lease{}, ctx.Err()
+}
