@@ -24,6 +24,7 @@ type Report struct {
 	Summary  *wire.Summary `json:"summary"`
 	LogPath  string        `json:"log_path,omitempty"` // a fast-lane run's log on this host
 	Notes    []string      `json:"notes,omitempty"`    // things the caller should know (the run was not recorded, …)
+	Output   []string      `json:"output,omitempty"`   // the end of an undeclared command's output (--json only; otherwise it is streamed)
 }
 
 // ReportOfJob is the report of a queue job in a terminal state.
