@@ -50,6 +50,9 @@ func TestLogOfALiveClaimThenResult(t *testing.T) {
 	assert.Equal(t, "first\n", f.readLog(t, id))
 	require.NoError(t, f.putLog(t, id, c.ClaimID, "second attempt\n"))
 	assert.Equal(t, "second attempt\n", f.readLog(t, id), "a new upload replaces the old")
+	entries, err := os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "and the old one is not kept beside it")
 	var size, at int64
 	require.NoError(t, f.db.QueryRow(`SELECT log_size, log_at FROM jobs WHERE id = ?`, id).Scan(&size, &at))
 	assert.EqualValues(t, len("second attempt\n"), size)
