@@ -24,6 +24,12 @@ type queueWaiter struct {
 	RankReason string `json:"rank_reason"`
 }
 
+// queueGate is the config of the tests that queue commands behind a holder. Admission is off: with it on, the gate holds even the
+// first heavy command back while the host is under memory pressure or paging, so on a busy host (air26 runs other sessions' tests
+// and builds) the holder is never admitted and the helper's 5 s wait for "重 1/1 使用中" ends the test (#3241). These tests are of the
+// queue's order and ranks, not of admission, which the gate package tests with a pressure reader of its own.
+const queueGate = "[gate.slots]\nheavy = 1\n[gate.admission]\nenabled = false\ndisk_min_gb = 0\n"
+
 // waitingGates holds the heavy slot with one command and queues n more behind it; release lets them all go.
 func waitingGates(t *testing.T, cfg string, n int) (release func()) {
 	t.Helper()
@@ -64,7 +70,7 @@ func listQueue(t *testing.T, cfg string) map[string][]queueWaiter {
 // The list shows the waiters in serving order with their rank; a move prints old → new; the move is seen by the list and the status.
 // Mutation gates: the rank not written → list shows normal (red); no old → new line → red.
 func TestGateQueue_MoveAndList(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 1\n[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, queueGate)
 	t.Setenv("PDX_SESSION_ID", "")
 	release := waitingGates(t, cfg, 2)
 	q := listQueue(t, cfg)["heavy"]
@@ -107,7 +113,7 @@ func TestGateQueue_MoveAndList(t *testing.T) {
 // The refusals: no reason, a reason that is not one short line, --until without hold or in the past or not a time, an unknown ticket
 // (the others still go on and the exit code is 1), an unknown rank word falls to the usage.
 func TestGateQueue_Refusals(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 1\n[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, queueGate)
 	release := waitingGates(t, cfg, 1)
 	defer release()
 	ticket := listQueue(t, cfg)["heavy"][0].Ticket
