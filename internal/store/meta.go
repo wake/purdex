@@ -111,6 +111,13 @@ func migrateMetaDB(db *sql.DB) error {
 	if err := migratePeerNames(db); err != nil {
 		return err
 	}
+	// name pool v2: aliases of renamed sessions (peer_name_alias.go) and who was a lead / who worked for whom (name_history.go)
+	if err := migratePeerNameAliases(db); err != nil {
+		return err
+	}
+	if err := migrateNameHistory(db); err != nil {
+		return err
+	}
 
 	// peer_labels: one self-declared display label per conversation
 	// (sessionId); label is NULL after a release so the row keeps carrying
