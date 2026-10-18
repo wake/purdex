@@ -35,7 +35,7 @@ func TestWWDUsagePrintsATableThatSaysWhatIsSampled(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("%d %q", code, errOut)
 	}
-	for _, want := range []string{"j_01JC", "go-test", "fast_lane", "heavy", "270.0~", "5.5~", "2100~", "partial", "normal>warning", "away>seen"} {
+	for _, want := range []string{"j_01JC", "go-test", "fast_lane", "heavy", "270.0~", "3.0~", "5.5~", "2100~", "partial", "normal>warning", "away>seen"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}

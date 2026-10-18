@@ -62,7 +62,7 @@ func memFigure(v *int, sampled bool) string {
 
 func avgCell(u wire.JobUsage) string {
 	if a, ok := u.AvgCores(); ok {
-		return fmt.Sprintf("%.1f", a)
+		return mark(fmt.Sprintf("%.1f", a), u.CPUSource == wire.CPUSampled) // worked out from the CPU seconds: as exact as they are
 	}
 	return "-"
 }
