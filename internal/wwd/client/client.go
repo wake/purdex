@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -120,6 +121,45 @@ func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, e
 		return zero, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
 	return v, nil
+}
+
+// MutateTimeout bounds a change: wwd may forward it to another host over the tailnet (its own forwarding limit is 10 s).
+const MutateTimeout = 12 * time.Second
+
+// maxMutateAnswer caps the answer of a change (a worker setting or an exception is tiny).
+const maxMutateAnswer = 64 << 10
+
+// Mutate sends a change to the local wwd and returns its answer as it is: the status and the body, whatever the status.
+// host names the host the change is about; the local wwd applies it itself or forwards it to that peer (spec §10). Only a
+// call that got no answer is an error (ErrUnavailable).
+func (c *Client) Mutate(ctx context.Context, method, path, host string, body []byte) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, MutateTimeout)
+	defer cancel()
+	u := "http://wwd" + path + "?" + url.Values{"host": {host}}.Encode()
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, rd)
+	if err != nil {
+		return 0, nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxMutateAnswer+1))
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: reading the answer: %v", ErrUnavailable, err)
+	}
+	if len(b) > maxMutateAnswer {
+		return 0, nil, fmt.Errorf("%w: the answer is over %d bytes", ErrBadResponse, maxMutateAnswer)
+	}
+	return resp.StatusCode, b, nil
 }
 
 // Info is GET /v1/info.
