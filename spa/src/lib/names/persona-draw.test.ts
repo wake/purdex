@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./persona-raster', () => ({ rasterizeAvatar: vi.fn(() => 'data:image/webp;base64,RENDERED'), AVATAR_PX: 128 }))
 
 import { rasterizeAvatar } from './persona-raster'
 import {
-  DICEBEAR_STYLES, renderDicebearSvg, photoRouteOf, drawRecipe, PersonaDrawError,
+  DICEBEAR_STYLES, renderDicebearSvg, drawRecipe, PersonaDrawError,
 } from './persona-draw'
 
 describe('renderDicebearSvg', () => {
@@ -40,20 +40,49 @@ describe('renderDicebearSvg', () => {
   })
 })
 
-describe('photoRouteOf', () => {
-  it('routes https URLs of the allowed hosts: Picsum straight, the others through the main process', () => {
-    expect(photoRouteOf('https://picsum.photos/seed/hiro/128')).toBe('fetch')
-    expect(photoRouteOf('https://placecats.com/128/128')).toBe('ipc')
-    expect(photoRouteOf('https://placedog.net/128')).toBe('ipc')
+describe('a Picsum photo fetched from the page', () => {
+  const okBody = () => new Blob([new Uint8Array(8)], { type: 'image/jpeg' })
+  const reply = (over: Partial<{ ok: boolean; url: string; type: string; blob: Blob }> = {}) =>
+    ({
+      ok: over.ok ?? true,
+      url: over.url ?? 'https://fastly.picsum.photos/id/1/128/128.jpg',
+      headers: { get: () => over.type ?? 'image/jpeg' },
+      blob: async () => over.blob ?? okBody(),
+    }) as unknown as Response
+  const image = { width: 128, height: 128 } as CanvasImageSource & { width: number; height: number }
+
+  beforeEach(() => {
+    vi.mocked(rasterizeAvatar).mockClear()
+    vi.stubGlobal('fetch', vi.fn(async () => reply()))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('is fetched without credentials or referrer, and drawn', async () => {
+    await drawRecipe({ source: 'photo', url: 'https://picsum.photos/seed/hiro/128' }, { loadImage: async () => image })
+    expect(fetch).toHaveBeenCalledWith('https://picsum.photos/seed/hiro/128', expect.objectContaining({ credentials: 'omit', referrerPolicy: 'no-referrer' }))
+    expect(rasterizeAvatar).toHaveBeenCalled()
   })
 
-  it('refuses anything else: http, other hosts, look-alike hosts, junk', () => {
-    expect(photoRouteOf('http://picsum.photos/x')).toBeNull()
-    expect(photoRouteOf('https://example.com/a.png')).toBeNull()
-    expect(photoRouteOf('https://picsum.photos.evil.com/x')).toBeNull()
-    expect(photoRouteOf('https://evil.com/?u=https://picsum.photos/')).toBeNull()
-    expect(photoRouteOf('https://user@picsum.photos/x')).toBeNull()
-    expect(photoRouteOf('not a url')).toBeNull()
+  it('is refused when the redirect landed off the list', async () => {
+    vi.mocked(fetch).mockResolvedValue(reply({ url: 'https://internal.example/secret.png' }))
+    const err = await drawRecipe({ source: 'photo', url: 'https://picsum.photos/x' }, { loadImage: async () => image }).catch((e) => e)
+    expect((err as PersonaDrawError).code).toBe('bad-url')
+    expect(rasterizeAvatar).not.toHaveBeenCalled()
+  })
+
+  it('is refused when it is not an image, or is over 2 MB', async () => {
+    vi.mocked(fetch).mockResolvedValue(reply({ type: 'text/html' }))
+    const notImage = await drawRecipe({ source: 'photo', url: 'https://picsum.photos/x' }, { loadImage: async () => image }).catch((e) => e)
+    expect((notImage as PersonaDrawError).code).toBe('upload-needed')
+    vi.mocked(fetch).mockResolvedValue(reply({ blob: new Blob([new Uint8Array(2 * 1024 * 1024 + 1)], { type: 'image/jpeg' }) }))
+    const big = await drawRecipe({ source: 'photo', url: 'https://picsum.photos/x' }, { loadImage: async () => image }).catch((e) => e)
+    expect((big as PersonaDrawError).code).toBe('upload-needed')
+  })
+
+  it('refuses a URL with an explicit port before any request', async () => {
+    const err = await drawRecipe({ source: 'photo', url: 'https://picsum.photos:443/x' }, { loadImage: async () => image }).catch((e) => e)
+    expect((err as PersonaDrawError).code).toBe('bad-url')
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
 

@@ -1,6 +1,7 @@
 // spa/src/lib/names/persona-draw.ts — draws a persona's avatar from its recipe into the 128 px raster that is stored
 // (name pool v2 spec §9.1). DiceBear is imported only here and only dynamically, so it lives in the persona page's lazy
 // chunk and never reaches the main one (plan P3); `persona-draw-guard.test.ts` holds that line.
+import { photoRedirectAllowed, photoRouteOf } from './photo-allowlist'
 import { rasterizeAvatar } from './persona-raster'
 import type { PersonaAvatarRecipe } from './persona-types'
 
@@ -45,22 +46,8 @@ export async function renderDicebearSvg(recipe: PersonaAvatarRecipe): Promise<st
   }
 }
 
-const PHOTO_FETCH_HOSTS = new Set(['picsum.photos'])
-const PHOTO_IPC_HOSTS = new Set(['placecats.com', 'placedog.net'])
-
-/**
- * How a photo URL may be fetched: `fetch` from the page (Picsum sends CORS headers), `ipc` through the Electron main
- * process (PlaceCats and PlaceDog do not), or `null` when it may not be fetched at all. https only, an allowed host
- * exactly, no credentials or port in the URL. The main process repeats this check; this one only saves a round trip.
- */
-export function photoRouteOf(url: string): 'fetch' | 'ipc' | null {
-  let u: URL
-  try { u = new URL(url) } catch { return null }
-  if (u.protocol !== 'https:' || u.username !== '' || u.password !== '' || u.port !== '') return null
-  if (PHOTO_FETCH_HOSTS.has(u.hostname)) return 'fetch'
-  if (PHOTO_IPC_HOSTS.has(u.hostname)) return 'ipc'
-  return null
-}
+/** The photo cap, the same 2 MB the main process enforces on the files it fetches. */
+const PHOTO_MAX_BYTES = 2 * 1024 * 1024
 
 export type DrawableImage = CanvasImageSource & { width: number; height: number }
 
@@ -98,13 +85,20 @@ async function photoDataUrl(url: string, deps: DrawDeps): Promise<string> {
   const route = photoRouteOf(url)
   if (route === null) throw new PersonaDrawError('bad-url', 'this photo address is not allowed')
   if (route === 'fetch') {
+    let res: Response
     try {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(String(res.status))
-      return await blobToDataUrl(await res.blob())
+      res = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' })
     } catch {
       throw new PersonaDrawError('upload-needed', 'the photo could not be fetched; upload a file instead')
     }
+    // The browser followed any redirect already; where it ended must still be on the list.
+    if (!photoRedirectAllowed(res.url)) throw new PersonaDrawError('bad-url', 'the photo address redirected off the allowed list')
+    if (!res.ok || !(res.headers.get('content-type') ?? '').startsWith('image/')) {
+      throw new PersonaDrawError('upload-needed', 'the address did not return an image; upload a file instead')
+    }
+    const blob = await res.blob()
+    if (blob.size > PHOTO_MAX_BYTES) throw new PersonaDrawError('upload-needed', 'the photo is over 2 MB; upload a smaller file')
+    return await blobToDataUrl(blob)
   }
   const viaApp = 'ipcFetch' in deps ? deps.ipcFetch : appIpcFetch()
   if (!viaApp) throw new PersonaDrawError('upload-needed', 'this photo source needs the App; upload a file instead')

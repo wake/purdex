@@ -17,9 +17,24 @@ describe('DiceBear stays in the lazy chunk', () => {
   const root = join(__dirname, '..', '..')
   const files = sourceFiles(root)
 
+  // `import x from '…'`, `import { x } from '…'`, `export … from '…'`, a bare side-effect `import '…'`, and `require('…')`.
+  const STATIC = /^\s*(?:(?:import|export)\s[^'"\n]*from\s+|import\s+|.*\brequire\(\s*)['"]@dicebear\//m
+
   it('is never imported statically', () => {
-    const offenders = files.filter((f) => /^\s*(import|export)\s[^'"\n]*from\s+['"]@dicebear\//m.test(readFileSync(f, 'utf8')))
+    const offenders = files.filter((f) => STATIC.test(readFileSync(f, 'utf8')))
     expect(offenders).toEqual([])
+  })
+
+  it('the static check really does see every static form', () => {
+    for (const line of [
+      "import { Avatar } from '@dicebear/core'",
+      "import core from '@dicebear/core'",
+      "export * from '@dicebear/core'",
+      "export { Avatar } from '@dicebear/core'",
+      "import '@dicebear/core'",
+      "const a = require('@dicebear/core')",
+    ]) expect(STATIC.test(line)).toBe(true)
+    expect(STATIC.test("const m = await import('@dicebear/core')")).toBe(false)
   })
 
   it('is imported dynamically only by persona-draw.ts', () => {
