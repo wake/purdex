@@ -36,6 +36,13 @@ args    = "none"
 summary = "plain"
 db      = "per-job"
 
+[tasks.dbover]
+run     = "env"
+args    = "none"
+summary = "plain"
+db      = "per-job"
+env     = ["DB_HOST=evil.example"]
+
 [tasks.wptask]
 run     = "env"
 args    = "none"
@@ -553,5 +560,31 @@ func TestAQuarantinedWorkspaceKeepsItsDatabase(t *testing.T) {
 	// (no Cleanup)
 	if len(db.dropped) != 0 {
 		t.Fatalf("dropped %v", db.dropped)
+	}
+}
+
+// BuildEnv lets a later entry win, so the database's values come after the task's own env list: a manifest that lists DB_HOST (or names
+// it, to take the host's) never points the job at another database.
+func TestThePerJobDatabaseValuesComeAfterTheTasksOwnEnvEntries(t *testing.T) {
+	db := &fakeDB{}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbover"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	plan, err := e.Prepare(ctx, job("dbover"), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := ""
+	for _, kv := range plan.TaskEnv {
+		if strings.HasPrefix(kv, "DB_HOST=") {
+			last = kv
+		}
+	}
+	if last != "DB_HOST=127.0.0.1" {
+		t.Fatalf("the last DB_HOST entry is %q in %v: the job's own database must win over the task's env list", last, plan.TaskEnv)
 	}
 }
