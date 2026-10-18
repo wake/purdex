@@ -2,6 +2,7 @@ package watchmod
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -189,28 +190,54 @@ type localFactsFake struct {
 
 func (l localFactsFake) LatestLocalFacts() (wire.Facts, bool) { return l.f, l.ok }
 
-// C1: with wwd's facts of this host the patrol reads the free disk from them (the root mount), and takes its own statfs only when
-// there are none.
+// C1: with wwd's facts of this host the patrol reads the free disk from them: the listed mount that holds the data directory, the
+// longest one, when the data directory is under home. Otherwise (no fresh facts, a data directory elsewhere, no mount holds it) it
+// takes its own statfs.
 func TestPatrolDiskFreeFromFacts(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
 	r := newPatrolRigWith(t, true)
 	r.m.psrc = nil
 	reg := r.m.core.Registry
-	facts := wire.Facts{Disk: []wire.Disk{{Mount: "/Volumes/x", FreeGB: 5}, {Mount: "/", FreeGB: 42.5}}}
+	r.m.core.Cfg.DataDir = home
+	rootAndHome := wire.Facts{Disk: []wire.Disk{{Mount: "/", FreeGB: 42.5}, {Mount: home, FreeGB: 7.5}}}
+	rootOnly := wire.Facts{Disk: []wire.Disk{{Mount: "/", FreeGB: 42.5}}}
 
-	reg.Register(resources.LocalFactsKey, localFactsFake{facts, true})
+	reg.Register(resources.LocalFactsKey, localFactsFake{rootAndHome, true})
 	gb, ok := r.m.diskFreeGB()
 	require.True(t, ok)
-	require.Equal(t, 42.5, gb, "the root mount's free space from wwd")
+	require.Equal(t, 7.5, gb, "the home volume holds the data directory, not the root one")
 
-	// no root mount in the facts, or no facts: the own statfs
+	reg.Register(resources.LocalFactsKey, localFactsFake{rootOnly, true})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.Equal(t, 42.5, gb, "home is on the root volume")
+
+	reg.Register(resources.LocalFactsKey, localFactsFake{rootAndHome, false})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotContains(t, []float64{42.5, 7.5}, gb, "no fresh facts: statfs")
+
+	r.m.core.Cfg.DataDir = t.TempDir() // not under home: facts do not list its volume
+	reg.Register(resources.LocalFactsKey, localFactsFake{rootAndHome, true})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotContains(t, []float64{42.5, 7.5}, gb, "a data directory outside home is statfs'd")
+
+	r.m.core.Cfg.DataDir = home
 	reg.Register(resources.LocalFactsKey, localFactsFake{wire.Facts{Disk: []wire.Disk{{Mount: "/Volumes/x", FreeGB: 5}}}, true})
 	gb, ok = r.m.diskFreeGB()
 	require.True(t, ok)
-	require.NotEqual(t, 5.0, gb)
-	reg.Register(resources.LocalFactsKey, localFactsFake{facts, false})
-	gb, ok = r.m.diskFreeGB()
-	require.True(t, ok)
-	require.NotEqual(t, 42.5, gb, "no fresh facts: statfs")
+	require.NotEqual(t, 5.0, gb, "no listed mount holds it: statfs")
+}
+
+func TestUnderPath(t *testing.T) {
+	require.True(t, underPath("/a/b", "/a"))
+	require.True(t, underPath("/a", "/a"))
+	require.True(t, underPath("/a/b", "/"))
+	require.False(t, underPath("/ab", "/a"), "a path boundary, not a string prefix")
+	require.False(t, underPath("/a", "/a/b"))
+	require.False(t, underPath("/a", ""))
 }
 
 type atComputerFake bool

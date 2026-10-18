@@ -3,6 +3,8 @@ package watchmod
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -90,19 +92,10 @@ func (m *Module) diskFreeGB() (float64, bool) {
 	if m.psrc != nil && m.psrc.diskFreeGB != nil {
 		return m.psrc.diskFreeGB()
 	}
-	// While wwd reads this host (the pool source) its facts have the disk: no statfs of our own (C1).
-	if m.core != nil && m.core.Registry != nil {
-		if svc, ok := m.core.Registry.Get(resources.LocalFactsKey); ok {
-			if r, ok := svc.(resources.LocalFactsReader); ok {
-				if f, ok := r.LatestLocalFacts(); ok {
-					for _, d := range f.Disk {
-						if d.Mount == "/" {
-							return d.FreeGB, true
-						}
-					}
-				}
-			}
-		}
+	// While wwd reads this host (the pool source) its facts have the disk: no statfs of our own (C1). Facts list the volume of the
+	// home directory and the root volume, so the data directory's own is the one whose mount holds it, when it is under home.
+	if gb, ok := m.diskFreeFromFacts(); ok {
+		return gb, true
 	}
 	dir := "/"
 	if m.core != nil && m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
@@ -221,4 +214,51 @@ func (m *Module) patrolLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// diskFreeFromFacts is the free space of the data directory's volume from wwd's facts of this host, ok false when there are none
+// (the source is not the pool, or wwd has none fresh), when the data directory is not under the home directory (facts do not list
+// its volume), or when no listed mount holds it.
+func (m *Module) diskFreeFromFacts() (float64, bool) {
+	if m.core == nil || m.core.Registry == nil {
+		return 0, false
+	}
+	svc, ok := m.core.Registry.Get(resources.LocalFactsKey)
+	if !ok {
+		return 0, false
+	}
+	r, ok := svc.(resources.LocalFactsReader)
+	if !ok {
+		return 0, false
+	}
+	f, ok := r.LatestLocalFacts()
+	if !ok {
+		return 0, false
+	}
+	dir := "/"
+	if m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
+		dir = m.core.Cfg.DataDir
+	}
+	if home, err := os.UserHomeDir(); err != nil || !underPath(dir, home) {
+		return 0, false
+	}
+	best, bestLen := -1, -1
+	for i, d := range f.Disk {
+		if underPath(dir, d.Mount) && len(d.Mount) > bestLen {
+			best, bestLen = i, len(d.Mount)
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return f.Disk[best].FreeGB, true
+}
+
+// underPath says dir is root or lies below it.
+func underPath(dir, root string) bool {
+	if root == "" {
+		return false
+	}
+	root = strings.TrimRight(root, "/")
+	return dir == root || strings.HasPrefix(dir, root+"/") || root == ""
 }
