@@ -3,18 +3,22 @@
 // would run one more heavy job on a host whose gate is already full.
 //
 // Nothing here goes over the network: the gate's own slot records and locks are read from its directory (gate.HeldSlots), with the
-// settings loaded the way the gate loads them (gate.Load of the config file).
+// settings loaded the way the gate loads them (gate.Load of the config file, on every look: a file of a few lines, every few seconds).
 package gateheld
 
 import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sync"
-	"time"
 
 	"github.com/wake/purdex/internal/gate"
 )
+
+// heavyLock is the name of a heavy slot's lock file in the gate directory (gate's Pool.slotPath).
+var heavyLock = regexp.MustCompile(`^heavy-[0-9]+\.lock$`)
 
 // Reader answers HeavyFull for one host's gate.
 type Reader struct {
@@ -22,12 +26,6 @@ type Reader struct {
 	logf func(format string, args ...any)
 
 	mu      sync.Mutex
-	loaded  bool
-	cfg     gate.Config
-	cfgErr  error
-	mtime   time.Time
-	size    int64
-	missing bool   // the config file is not there (the gate's defaults apply)
 	lastLog string // the problem last logged; "" when the gate was readable at the last look
 }
 
@@ -42,11 +40,12 @@ func New(path string, logf func(format string, args ...any)) *Reader {
 // HeavyFull reports whether the gate's heavy slots are all held (or it has none to give), so that a worker takes no new heavy job.
 //
 //   - A host without a gate — no gate directory, or the gate turned off — is not affected: false.
-//   - A gate that is there but cannot be read — the directory cannot be looked at, or the settings cannot be parsed — counts as full:
-//     better one job fewer than one more on a host whose state is not known. That is logged once per change of the problem.
+//   - A gate that is there but cannot be read — the settings cannot be parsed, the directory cannot be looked at or listed, or a heavy
+//     lock file in it cannot be opened — counts as full: better one job fewer than one more on a host whose state is not known. That is
+//     logged once per change of the problem.
 //   - Otherwise: the number of held heavy slots has reached the heavy slot count.
 func (r *Reader) HeavyFull() bool {
-	cfg, cfgErr := r.config()
+	cfg, cfgErr := gate.Load(r.path)
 	// A config file that cannot be parsed comes first: the directory the defaults then point at says nothing about a gate the file
 	// named another directory for. A host that has such a file has pdx, and so a gate; one without a gate has no config file at all.
 	if cfgErr != nil {
@@ -65,33 +64,25 @@ func (r *Reader) HeavyFull() bool {
 	case !st.IsDir():
 		return r.unreadable("the gate directory " + cfg.Dir + " is not a directory")
 	}
-	// gate.HeldSlots skips every slot file it cannot open and would report an empty gate: listing the directory first is what tells a
-	// gate with nothing held from one that cannot be looked at.
-	if _, err := os.ReadDir(cfg.Dir); err != nil {
+	// gate.HeldSlots skips every slot file it cannot open and would report fewer held slots, or an empty gate: so what it would skip is
+	// looked at first. A gate with nothing held is not the same as one that cannot be looked at.
+	entries, err := os.ReadDir(cfg.Dir)
+	if err != nil {
 		return r.unreadable("the gate directory " + cfg.Dir + " cannot be listed: " + err.Error())
+	}
+	for _, e := range entries {
+		if !heavyLock.MatchString(e.Name()) {
+			continue
+		}
+		f, err := os.OpenFile(filepath.Join(cfg.Dir, e.Name()), os.O_RDWR, 0)
+		if err != nil {
+			return r.unreadable("the gate's lock file " + e.Name() + " cannot be opened: " + err.Error())
+		}
+		_ = f.Close()
 	}
 	heavy, _ := gate.HeldSlots(cfg)
 	r.clearLog()
 	return len(heavy) >= cfg.Slots.Size(gate.ClassHeavy)
-}
-
-// config loads the gate's settings, again only when the file changed (the config is looked at every sample).
-func (r *Reader) config() (gate.Config, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, err := os.Stat(r.path)
-	switch {
-	case err != nil && r.loaded && r.missing:
-		return r.cfg, r.cfgErr // still not there
-	case err == nil && r.loaded && !r.missing && st.ModTime().Equal(r.mtime) && st.Size() == r.size:
-		return r.cfg, r.cfgErr
-	}
-	r.cfg, r.cfgErr = gate.Load(r.path)
-	r.loaded, r.missing = true, err != nil
-	if err == nil {
-		r.mtime, r.size = st.ModTime(), st.Size()
-	}
-	return r.cfg, r.cfgErr
 }
 
 func (r *Reader) unreadable(why string) bool {

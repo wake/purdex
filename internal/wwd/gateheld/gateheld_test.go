@@ -3,6 +3,7 @@ package gateheld
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -146,8 +147,6 @@ func TestAnUnreadableGateIsFullAndLoggedOnce(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	future := time.Now().Add(time.Hour)
-	_ = os.Chtimes(cfg, future, future) // the change is noticed even when size and second match
 	if r.HeavyFull() {
 		t.Fatal("a repaired gate is still full")
 	}
@@ -194,6 +193,63 @@ func TestAGateDirThatCannotBeListedIsFull(t *testing.T) {
 	}
 	if l.n() != 1 {
 		t.Fatalf("log = %v", l.lines)
+	}
+}
+
+// The directory can be listed but a heavy lock file cannot be opened: gate.HeldSlots skips it and would count one held slot fewer, which
+// is the wrong way to be wrong. It counts as a gate that cannot be read.
+func TestAHeavyLockFileThatCannotBeOpenedIsFull(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens any file")
+	}
+	cfg, dir := host(t, 2, "")
+	slots := take(t, dir, 1)
+	lock := filepath.Join(dir, "heavy-"+itoa(slots[0].K)+".lock")
+	if err := os.Chmod(lock, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lock, 0o644) })
+	var l logs
+	if !New(cfg, l.logf).HeavyFull() {
+		t.Fatal("a lock file that cannot be opened was not full")
+	}
+	if l.n() != 1 {
+		t.Fatalf("log = %v", l.lines)
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// The settings are read afresh on every look, so a file rewritten with the same size and time is not a stale answer.
+func TestTheConfigIsReadAfreshEveryLook(t *testing.T) {
+	cfg, dir := host(t, 1, "")
+	take(t, dir, 1)
+	var l logs
+	r := New(cfg, l.logf)
+	if !r.HeavyFull() {
+		t.Fatal("one of one held is not full")
+	}
+	info, err := os.Stat(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the same length, the same time stamps, but two heavy slots now
+	changed := []byte(strings.Replace(string(body), "heavy = 1", "heavy = 2", 1))
+	if len(changed) != len(body) {
+		t.Fatal("the test needs a same-length rewrite")
+	}
+	if err := os.WriteFile(cfg, changed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(cfg, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if r.HeavyFull() {
+		t.Fatal("the reader kept the old settings")
 	}
 }
 
