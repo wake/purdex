@@ -13,5 +13,6 @@
       "claim": null, "result": null
     }
   ],
-  "cursor": "42"
+  "cursor": "42",
+  "epoch": "0123456789abcdef0123456789abcdef"
 }

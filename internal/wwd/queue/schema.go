@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -50,6 +50,11 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		}
 		if have < 4 {
 			if err := migrateV3ToV4(ctx, c); err != nil {
+				return err
+			}
+		}
+		if have < 5 {
+			if err := migrateV4ToV5(ctx, c); err != nil {
 				return err
 			}
 		}
@@ -113,6 +118,24 @@ var revStatements = []string{
 	END`,
 }
 
+// epochStatements (version 5) give the database a name that is made once, with its tables, and never again: one row of 32 hex digits. A
+// client that keeps a cursor keeps this with it, and a database that was removed and made again has another, which tells the client its
+// cursor is of no use here. The insert only happens when the table is empty, so running it again (a migration repeated) keeps the first.
+var epochStatements = []string{
+	`CREATE TABLE IF NOT EXISTS db_epoch (id TEXT NOT NULL)`,
+	`INSERT INTO db_epoch (id) SELECT lower(hex(randomblob(16))) WHERE NOT EXISTS (SELECT 1 FROM db_epoch)`,
+}
+
+// migrateV4ToV5 gives an existing database its epoch.
+func migrateV4ToV5(ctx context.Context, c *sql.Conn) error {
+	for _, stmt := range epochStatements {
+		if _, err := c.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // migrateV3ToV4 gives an existing database the cursor: the column, a number for every job in the order it was made (its seq, which only
 // goes up), the counter above the highest, then the triggers. It can run again: each step looks first.
 func migrateV3ToV4(ctx context.Context, c *sql.Conn) error {
@@ -146,8 +169,8 @@ func migrateV3ToV4(ctx context.Context, c *sql.Conn) error {
 	return nil
 }
 
-// createSchema is the tables of a new database, as of the current version (git_pins, version 2, jobs.lapses, version 3, and the cursor,
-// version 4, are in it). Times are unix milliseconds on the origin's clock.
+// createSchema is the tables of a new database, as of the current version (git_pins, version 2, jobs.lapses, version 3, the cursor,
+// version 4, and the epoch, version 5, are in it). Times are unix milliseconds on the origin's clock.
 func createSchema(ctx context.Context, c *sql.Conn) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS jobs (
@@ -207,7 +230,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			return err
 		}
 	}
-	for _, stmt := range revStatements {
+	for _, stmt := range append(append([]string{}, revStatements...), epochStatements...) {
 		if _, err := c.ExecContext(ctx, stmt); err != nil {
 			return err
 		}

@@ -69,6 +69,7 @@ type Queue struct {
 
 	leaseS, renewS int
 	maxLog         int64      // the most one uploaded log may be
+	epoch          string     // the database's name (db_epoch), read once: it never changes
 	logMu          sync.Mutex // an upload's putting its file in place and recording it, against the sweep removing files
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
@@ -106,6 +107,9 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	}
 	if q.leaseS < 0 || q.renewS < 0 || q.renewS >= q.leaseS {
 		return nil, fmt.Errorf("queue: Options.RenewS (%d) must be positive and shorter than LeaseS (%d)", q.renewS, q.leaseS)
+	}
+	if err := db.QueryRowContext(context.Background(), `SELECT id FROM db_epoch`).Scan(&q.epoch); err != nil {
+		return nil, fmt.Errorf("queue: the database has no epoch (is it migrated?): %w", err)
 	}
 	// a restart gives the jobs workers still hold a full lease before the first sweep can lapse them (spec 4.2)
 	if err := extendHeldLeases(context.Background(), db, q.now().UnixMilli(), q.leaseS); err != nil {

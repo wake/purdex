@@ -120,12 +120,28 @@ func (a *API) List(peer bool) http.HandlerFunc {
 			badRequest(w, "invalid cursor")
 			return
 		}
+		epoch, err := a.q.Epoch(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
 		jobs, cursor, err := a.q.ListAfter(r.Context(), after, f)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, wire.JobsListResponse{Jobs: jobs, Cursor: queue.CursorString(cursor)})
+		// A cursor past the last change cannot be one this database made. It is asked after the read: the head is then at least as far as
+		// anything the read could have shown, so a cursor that was valid when the request came in is never refused for a race.
+		head, err := a.q.Head(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if after > head {
+			writeJSON(w, http.StatusConflict, wire.CursorAhead{Reason: wire.CursorAheadReason, Head: queue.CursorString(head), Epoch: epoch})
+			return
+		}
+		writeJSON(w, http.StatusOK, wire.JobsListResponse{Jobs: jobs, Cursor: queue.CursorString(cursor), Epoch: epoch})
 	}
 }
 
