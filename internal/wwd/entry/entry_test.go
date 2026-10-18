@@ -69,6 +69,10 @@ func TestNormalize(t *testing.T) {
 	for _, c := range []struct{ in, want []string }{
 		{[]string{"npx", "vitest", "run", "a"}, []string{"vitest", "run", "a"}},
 		{[]string{"npx", "-y", "vitest"}, []string{"vitest"}},
+		{[]string{"npx", "--package", "vitest", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"npx", "-p", "vitest", "-y", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"npx", "--package=vitest", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"npx", "-c", "vitest run"}, []string{"npx", "-c", "vitest run"}},
 		{[]string{"pnpm", "exec", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"pnpm", "vitest", "run"}, []string{"vitest", "run"}},
 		{[]string{"pnpm", "tsc", "-b"}, []string{"tsc", "-b"}},
@@ -175,6 +179,70 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The repository's own manifest, as the hook will meet it: what a developer types most is the development task, not the merge one
+// of the same shape.
+func TestMatch_ThePurdexManifest(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	require.NoError(t, err)
+	r := Match(root, []string{"go", "test", "./internal/wwd/entry/"})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, "go-pkg", r.Task)
+	assert.Equal(t, []string{"./internal/wwd/entry/"}, r.Args)
+	r = Match(filepath.Join(root, "spa"), []string{"npx", "vitest", "run", "src/lib/fleet/parse.test.ts"})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, "spa-file", r.Task)
+	assert.Equal(t, []string{"src/lib/fleet/parse.test.ts"}, r.Args)
+	r = Match(filepath.Join(root, "spa"), []string{"pnpm", "tsc", "-b"})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, "tsc", r.Task)
+}
+
+// Two tasks of one shape (a development one and a merge one): a command typed by hand is the lowest class, then the first name.
+func TestMatch_SameShapeTakesTheLowestClass(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".wwd"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte(`
+[tasks.a-merge]
+run   = "go test -json {packages}"
+args  = "packages"
+class = "merge"
+[tasks.b-release]
+run   = "go test -json {packages}"
+args  = "packages"
+class = "release"
+[tasks.z-dev]
+run   = "go test -json {packages}"
+args  = "packages"
+[tasks.y-dev]
+run   = "go test -json {packages}"
+args  = "packages"
+`), 0o644))
+	r := Match(root, []string{"go", "test", "./..."})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, "y-dev", r.Task, "dev before merge and release, then the first name")
+}
+
+// A flag whose value is an output file of the worker's is the task's alone: a caller who types it is not running the task.
+func TestMatch_OutputFlagsAreNotTheCallers(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".wwd"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte(`
+[entry]
+mode = "deny"
+[tasks.go-junit]
+run  = "go test -junitfile {junit} {packages}"
+args = "packages"
+[tasks.vt]
+run  = "vitest run --outputFile={report} {files}"
+args = "files"
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.test.ts"), []byte("x"), 0o644))
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "./pkg"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml", "./pkg"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "a.test.ts"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--outputFile=out.json", "a.test.ts"}).Action)
 }
 
 // A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.

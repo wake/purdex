@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // ManifestPath is the manifest's place in a repository.
@@ -60,10 +61,18 @@ func Match(cwd string, argv []string) Result {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// Tasks of one shape (a development task and a merge task that run the same command) are told apart by class: a command typed by
+	// hand is the lowest one, and the first name among equals.
+	var found *Result
 	for _, n := range names {
 		if args, ok := matchTask(root, cwd, canon, m.Tasks[n]); ok {
-			return Result{Action: ActionRewrite, Task: n, Args: args}
+			if found == nil || classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class) {
+				found = &Result{Action: ActionRewrite, Task: n, Args: args}
+			}
 		}
+	}
+	if found != nil {
+		return *found
 	}
 	mode := string(m.Entry.Mode)
 	if mode == "" {
@@ -117,10 +126,18 @@ func normalize(argv []string) []string {
 	w[0] = binName(w[0])
 	switch w[0] {
 	case "npx", "bunx":
-		w = w[1:]
-		for len(w) > 0 && strings.HasPrefix(w[0], "-") && w[0] != "--" {
-			w = w[1:]
+		rest := w[1:]
+		for len(rest) > 0 && strings.HasPrefix(rest[0], "-") && rest[0] != "--" {
+			switch rest[0] {
+			case "-c", "--call": // a shell string: not a command to read
+				return w
+			case "-p", "--package": // the package is the option's value, not the command
+				rest = rest[min(2, len(rest)):]
+			default:
+				rest = rest[1:]
+			}
 		}
+		w = rest
 	case "pnpm", "yarn", "npm", "bun":
 		switch {
 		case len(w) > 1 && w[1] == "exec" && w[0] != "yarn":
@@ -183,10 +200,24 @@ func isFamily(c []string) bool {
 // have, a flag in particular, is not the task. What is left after the task's words is the arguments, which must be what the task
 // takes.
 func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool) {
-	var lits []string
-	for _, w := range t.Shape() {
-		if w.Kind == manifest.ShapeLiteral {
+	var lits, owned []string
+	shape := t.Shape()
+	for k, w := range shape {
+		switch {
+		case w.Kind == manifest.ShapeLiteral:
 			lits = append(lits, w.Text)
+			if k+1 < len(shape) && shape[k+1].Kind == manifest.ShapeOutput && shape[k+1].Text == "" {
+				owned = append(owned, w.Text) // `-junitfile {junit}`: the flag and the value are the worker's
+			}
+		case w.Kind == manifest.ShapeOutput && w.Text != "":
+			owned = append(owned, w.Text) // `--outputFile={report}`
+		}
+	}
+	for _, c := range cmd {
+		for _, o := range owned {
+			if c == o || (strings.HasSuffix(o, "=") && strings.HasPrefix(c, o)) || strings.HasPrefix(c, o+"=") {
+				return nil, false
+			}
 		}
 	}
 	tw := normalize(lits)
@@ -279,6 +310,18 @@ func convertArg(kind manifest.ArgsKind, taskDir, cwd, a string) (string, bool) {
 		out += "/"
 	}
 	return out, true
+}
+
+// classRank orders the job classes: a development task before a merge task before a release one (a task's class is the most a
+// caller may ask for; an unset one is dev).
+func classRank(c wire.JobClass) int {
+	switch c {
+	case wire.ClassMerge:
+		return 1
+	case wire.ClassRelease:
+		return 2
+	}
+	return 0
 }
 
 // within says whether p is dir or below it.
