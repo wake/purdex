@@ -164,6 +164,40 @@ func TestReport_PoolSourceJoinsTheOldTimelineAndWWDs(t *testing.T) {
 	assert.Equal(t, r.now.Add(-24*time.Hour).Truncate(time.Second), r.asked[0].Since.Truncate(time.Second))
 }
 
+// The carried run counts only when the old timeline's last minute was full and is the minute right before wwd's first: a calm
+// minute, or a gap, makes wwd's full minute a run of its own.
+func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
+	full := func(i int) minuteRow {
+		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, FullLongestS: 60, FullStarts: 1}
+	}
+	calm := func(i int) minuteRow {
+		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40}
+	}
+	for name, old := range map[string][]minuteRow{
+		"a calm minute before": {full(0), calm(1)},
+		"a gap before":         {full(0)},
+	} {
+		r := newReportRig(t)
+		for _, row := range old {
+			require.NoError(t, r.m.store.InsertMinute(row))
+		}
+		start := 2
+		if name == "a gap before" {
+			start = 5
+		}
+		r.history = []wire.Facts{minuteFacts(start, 5, 8000, 1, wire.ZoneNormal, 0, 0)}
+		rep := r.get(t, "24h")
+		assert.Equal(t, 2, rep.Full.Runs, name)
+		assert.Equal(t, 60, rep.Full.LongestS, name)
+	}
+}
+
+// A carried length that is not whole minutes rounds up: 90 s is two minutes, and the first full minute makes it three.
+func TestReportMinutesOf_ACarryRoundsUp(t *testing.T) {
+	got := reportMinutesOf([]wire.Facts{minuteFacts(5, 5, 8000, 1, wire.ZoneNormal, 0, 0)}, 90)
+	assert.Equal(t, 180, got[0].FullLongestS)
+}
+
 // The minute still filling is not a minute of the report: the rollup of it is partial and would count as a whole one.
 func TestReport_TheCurrentMinuteIsLeftOut(t *testing.T) {
 	r := newReportRig(t)
