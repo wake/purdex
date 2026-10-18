@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -109,7 +111,28 @@ func (c *Client) Jobs(ctx context.Context, f JobsQuery) ([]wire.Job, error) {
 	return r.Jobs, err
 }
 
-var jobIDRe = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
+// JobsAfter is GET /v1/jobs?after=<cursor>: the jobs that changed after the cursor (oldest change first, each once, in the state it is
+// in now) and the cursor to ask with next. The first cursor is "0". limit 0 leaves the server's default. An answer with no cursor is an
+// error: a server that does not know ?after= would list everything, and that must not be taken for "nothing new".
+func (c *Client) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
+	if !wire.ValidCursor(after) {
+		return wire.JobsListResponse{}, fmt.Errorf("invalid cursor %q", after)
+	}
+	q := url.Values{"after": {after}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	r, err := call[wire.JobsListResponse](ctx, c, http.MethodGet, "/v1/jobs", q, nil)
+	if err != nil {
+		return wire.JobsListResponse{}, err
+	}
+	if r.Cursor == "" {
+		return wire.JobsListResponse{}, errors.New("wwd answered without a cursor: it does not support ?after=")
+	}
+	return r, nil
+}
+
+var jobIDRe =regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
 
 // checkID refuses anything that is not a job id before it can become part of a path.
 func checkID(id string) error {
