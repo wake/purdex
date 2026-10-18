@@ -155,7 +155,7 @@ func TestTieBreaksByCreatedAtThenID(t *testing.T) {
 func TestFilters(t *testing.T) {
 	env := baseEnv()
 	env.Locked = func(keys []string) bool { return len(keys) > 0 && keys[0] == "mysql" }
-	env.Suspended = func(repo string) bool { return repo == "paused" }
+	env.Suspended = func(source, repo string) bool { return source == "mlab" && repo == "paused" }
 	locked := job("locked", wire.ClassDev, 0)
 	locked.Locks = []string{"mysql"}
 	label := job("label", wire.ClassDev, 0)
@@ -259,4 +259,14 @@ func TestNaNEstimateDoesNotReorderOthers(t *testing.T) {
 	in := []Candidate{cand(job("low", wire.ClassDev, 0)), cand(job("bad", wire.ClassDev, time.Minute)), cand(job("high", wire.ClassMerge, 0))}
 	eq(t, ids(Rank(in, env)), []string{"high", "bad", "low"})
 	eq(t, ids(Rank([]Candidate{in[2], in[1], in[0]}, env)), []string{"high", "bad", "low"})
+}
+
+// The hold is on an origin's repo, not on the name: the same repo name from another origin is still picked.
+func TestSuspendedIsPerOrigin(t *testing.T) {
+	env := baseEnv()
+	env.Suspended = func(source, repo string) bool { return source == "evil" && repo == "purdex" }
+	mine, theirs := job("mine", wire.ClassDev, 0), job("theirs", wire.ClassDev, 0)
+	mine.Repo.Name, theirs.Repo.Name = "purdex", "purdex"
+	r := Rank([]Candidate{{Source: "mlab", Job: mine}, {Source: "evil", Job: theirs}}, env)
+	eq(t, ids(r), []string{"mine"})
 }
