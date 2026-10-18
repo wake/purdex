@@ -356,6 +356,7 @@ cat "$tmp/out" > "$stub/down.out"
 has "PASS case 14" "case 14 does not need air26"
 has "FAIL ssh to air26 failed twice" "case 2 with air26 down"
 has "failed: 2" "the summary after an ssh failure"
+has "^FAIL case 2$" "a case whose host cannot be reached is FAILed"
 has "-- cleaning up" "the clean-up after an ssh failure"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left after an ssh failure"
 # one lost connection is tried again, and the case goes on as if nothing had happened
