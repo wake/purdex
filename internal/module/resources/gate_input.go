@@ -1,6 +1,7 @@
 package resourcesmod
 
 import (
+	"math"
 	"os"
 	"time"
 
@@ -48,7 +49,7 @@ func (m *Module) cachePressure(raw resources.HostRaw, sampledAt time.Time) {
 	if m.gateConfig == nil || !raw.PageCounters || raw.Pressure <= 0 {
 		return
 	}
-	m.pageTotal, m.pageTotalAt = raw.Pageouts+raw.Swapouts, sampledAt
+	m.pageTotal, m.pageFrac, m.pageTotalAt = raw.Pageouts+raw.Swapouts, 0, sampledAt
 	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{
 		At: sampledAt.UnixMilli(), Level: raw.Pressure, Pageouts: raw.Pageouts, Swapouts: raw.Swapouts})
 }
@@ -69,7 +70,10 @@ func (m *Module) cachePressureFromFacts(f wire.Facts, sampledAt time.Time) {
 		rate += *f.Mem.SwapOutRate
 	}
 	if dt := sampledAt.Sub(m.pageTotalAt); !m.pageTotalAt.IsZero() && dt > 0 && rate > 0 {
-		m.pageTotal += uint64(rate * dt.Seconds())
+		m.pageFrac += rate * dt.Seconds() // the fraction a slow rate adds per tick is kept, not dropped
+		whole := math.Floor(m.pageFrac)
+		m.pageTotal += uint64(whole)
+		m.pageFrac -= whole
 	}
 	m.pageTotalAt = sampledAt
 	hostmem.Cache{Dir: m.gateConfig().Dir}.Record(sampledAt, hostmem.Sample{

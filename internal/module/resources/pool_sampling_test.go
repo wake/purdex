@@ -169,6 +169,35 @@ func TestPoolSampling_FeedsTheGateCacheFromFacts(t *testing.T) {
 	assert.InDelta(t, 3.0, rate, 0.01, "the counters give wwd's rate (2 + 1 per second)")
 }
 
+// A paging rate under one page per tick still adds up: the fractions are carried, not cut off each tick (codex R1).
+func TestPoolSampling_SlowRateIsNotTruncated(t *testing.T) {
+	p := newPoolSampling(t)
+	cfg := gate.Defaults()
+	cfg.Dir = p.dir
+	p.m.gateConfig = func() gate.Config { return cfg }
+	for i := 0; i < 11; i++ {
+		p.step()
+		f := factsAt(p.m.now())
+		slow, none := 0.1, 0.0
+		f.Mem.PageOutRate, f.Mem.SwapOutRate = &slow, &none
+		p.facts.Store(f)
+		require.False(t, p.m.tick(context.Background()))
+	}
+	got := hostmem.Cache{Dir: p.dir}.Load().Samples
+	require.NotEmpty(t, got)
+	last := got[len(got)-1]
+	assert.EqualValues(t, 5, last.Pageouts+last.Swapouts, "ten intervals of 5 s at 0.1 a second")
+}
+
+// The summed pcpu of the process table is still published in pool mode (the P3 calibration reads pcpu_total).
+func TestPoolSampling_KeepsPcpuTotal(t *testing.T) {
+	p := newPoolSampling(t)
+	p.setFacts()
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.InDelta(t, 0.7, p.m.latest.Load().Host.PcpuTotal, 0.001, "7 % of one core on 10 cores")
+}
+
 // The reading the session attribution and the watcher take from the facts is usable and carries wwd's figures.
 func TestRawOfFacts(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)

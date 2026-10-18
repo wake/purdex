@@ -82,6 +82,7 @@ type Module struct {
 	// host (Init wires both).
 	// pageTotal is the running paging counter the gate's cache last got, and when (sampler goroutine only; see cachePressureFromFacts).
 	pageTotal   uint64
+	pageFrac    float64
 	pageTotalAt time.Time
 
 	gateConfig func() gate.Config

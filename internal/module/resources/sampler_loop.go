@@ -105,7 +105,8 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	at := m.now()
 	var host resources.HostUse
 	if pool != nil {
-		host = hostDetailOf(pool).Host // wwd's figures and wwd's zone; nothing of the host is worked out again here
+		host = hostDetailOf(pool).Host                   // wwd's figures and wwd's zone; nothing of the host is worked out again here
+		host.PcpuTotal = raw.PcpuSum / float64(raw.NCPU) // the process table is still ours (P3's calibration reads it)
 		host.Full = m.fullLatch.Update(host)
 	} else {
 		host = resources.ComputeHost(raw)
