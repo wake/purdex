@@ -28,6 +28,7 @@ case "$1" in
     exit "$(cat "$FAKE/exit" 2>/dev/null || echo 0)" ;;
   systemctl)
     echo "systemctl $*" >> "$FAKE/calls"
+    [ ! -e "$FAKE/reset-fails" ] || { [ "$2" != reset-failed ] || exit 1; }
     if [ "$2" = stop ]; then
       [ -e "$FAKE/created" ] || exit 5   # no such unit yet
       [ -e "$FAKE/nostop" ] || : > "$FAKE/stopped"
@@ -39,8 +40,10 @@ exit 99
 
 const fakeSystemctl = `#!/bin/sh
 echo "systemctl $*" >> "$FAKE/calls"
-[ -e "$FAKE/no-unit" ] && { echo "Result="; exit 0; }
+if [ -e "$FAKE/show-fails" ]; then exit 1; fi
+[ -e "$FAKE/no-unit" ] && { printf 'ActiveState=inactive\nLoadState=not-found\nResult=\n'; exit 0; }
 cat "$FAKE/show"
+if [ -e "$FAKE/stale" ]; then echo "InvocationID=old"; elif [ -e "$FAKE/created" ]; then echo "InvocationID=run2"; else echo "InvocationID=run1"; fi
 `
 
 type fakeWorld struct {
@@ -181,7 +184,7 @@ func TestSandboxRunExitCodeOutputAndCleanUp(t *testing.T) {
 	if log := readFile(t, r.LogPath); !strings.Contains(log, "hello\n") || !strings.Contains(log, "oops\n") {
 		t.Fatalf("log = %q", log)
 	}
-	if !w.called(t, "systemctl show wwd-j_test1 -p ActiveState,Result,ExecMainStatus,ExecMainCode") {
+	if !w.called(t, "systemctl show wwd-j_test1 -p ActiveState,LoadState,InvocationID,Result,ExecMainStatus,ExecMainCode") {
 		t.Fatalf("the outcome must come from the unit: %q", w.calls(t))
 	}
 	calls := w.calls(t)
@@ -361,5 +364,50 @@ func TestTaskEnvNameCannotBeAnOption(t *testing.T) {
 		if r := Run(context.Background(), s); r.Outcome != StartFailed {
 			t.Errorf("%q: result = %+v", e, r)
 		}
+	}
+}
+
+func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
+	w := newWorld(t)
+	w.set("stale", "") // the unit keeps its old invocation id: systemd-run never made a new one
+	w.set("exit", "1")
+	w.set("show", "ActiveState=failed\nResult=oom-kill\nExecMainStatus=9\n")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Reason == "oom" {
+		t.Fatalf("an old unit's Result was taken as this run's: %+v", r)
+	}
+}
+
+func TestSandboxCannotAskOrCannotClearIsStartFailed(t *testing.T) {
+	for _, mode := range []string{"show-fails", "reset-fails"} {
+		w := newWorld(t)
+		w.set(mode, "")
+		if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
+			t.Errorf("%s: result = %+v", mode, r)
+		}
+		if w.called(t, "systemd-run") {
+			t.Errorf("%s: nothing may be started: %q", mode, w.calls(t))
+		}
+	}
+}
+
+func TestSandboxAFailedQueryDoesNotProveTheUnitStopped(t *testing.T) {
+	w := newWorld(t)
+	w.set("hang", "")
+	s := sandboxSpec(t, w, "sleep", "60")
+	s.Timeout = 100 * time.Millisecond
+	// the unit looks fine before the run; once it exists the queries fail: the stop cannot be proven
+	go func() {
+		for i := 0; i < 400; i++ {
+			if _, err := os.Stat(filepath.Join(w.dir, "created")); err == nil {
+				w.set("show-fails", "")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	r := Run(context.Background(), s)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "not proven stopped") {
+		t.Fatalf("result = %+v", r)
 	}
 }

@@ -55,7 +55,7 @@ type Result struct {
 	Outcome    Outcome
 	ExitCode   int    // the exit status for Exited; -1 otherwise
 	Signal     string // the signal that ended it, for Exited by signal (an OOM kill shows as KILL)
-	Err        error  // why a StartFailed run did not start
+	Err        error  // why a StartFailed run did not start; a sandboxed run of any Outcome can carry one that says the unit was not proven stopped (an infrastructure failure: do not reuse the workspace)
 	Reason     string // "oom" or "timeout" when the sandbox's unit says so; empty otherwise
 	StartedAt  time.Time
 	FinishedAt time.Time

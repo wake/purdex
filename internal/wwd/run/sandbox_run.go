@@ -32,11 +32,20 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	}
 	// A unit of this name left from an earlier run of the same job (a lease lapse, then a re-run) would be read as this run's
 	// result: clear it first, and refuse to start next to one that is still running.
-	if st := sb.show(unit)["ActiveState"]; activeState(st) {
-		res.Tail, res.LogCut, res.CaptureErr = cp.close()
-		return failStart(res, fmt.Errorf("run: unit %s is already %s", unit, st))
+	// A failure to ask, or to clear, is a failure to start: a result read next to a unit that could not be cleared could belong to
+	// the earlier run.
+	before, err := sb.show(unit)
+	if err == nil && activeState(before["ActiveState"]) {
+		err = fmt.Errorf("run: unit %s is already %s", unit, before["ActiveState"])
 	}
-	_ = sb.control(unit, "reset-failed")
+	if err == nil {
+		err = sb.control(unit, "reset-failed")
+	}
+	if err != nil {
+		res.Tail, res.LogCut, res.CaptureErr = cp.close()
+		return failStart(res, err)
+	}
+	before, _ = sb.show(unit) // the invocation the unit has now, if it is loaded still
 
 	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
 	cmd := execstat.Command("wwd.run.sandbox", sb.SudoPath, argv...)
@@ -73,7 +82,10 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	if stop != stopNone {
 		waitErr, runErr = endUnit(sb, unit, cmd.Process.Pid, done, killAfter)
 	}
-	show := sb.show(unit)
+	show, showErr := sb.show(unit)
+	if showErr != nil && runErr == nil {
+		runErr = fmt.Errorf("run: cannot read unit %s: %w", unit, showErr)
+	}
 	if st := show["ActiveState"]; stop == stopNone && activeState(st) {
 		// the client went away but the service is still there
 		stop = stopCancel
@@ -81,6 +93,10 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		if runErr == nil {
 			runErr = fmt.Errorf("run: systemd-run ended but unit %s was still %s", unit, st)
 		}
+	}
+	// The Result must belong to the invocation this run started: the unit has an invocation id that is not the one it had before.
+	if stop == stopNone && (show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]) {
+		show = map[string]string{} // classify reads this as "no unit"
 	}
 	_ = sb.control(unit, "reset-failed") // after reading Result; harmless when the unit is already gone
 	res.FinishedAt = time.Now()
@@ -122,12 +138,14 @@ func endUnit(sb Sandbox, unit string, clientPid int, done <-chan error, killAfte
 		}
 	}
 	for end := time.Now().Add(settle); ; {
-		st := sb.show(unit)["ActiveState"]
-		if !activeState(st) {
+		m, err := sb.show(unit)
+		st := m["ActiveState"]
+		// stopped is only what systemd said: an answer that failed or that has no state proves nothing
+		if err == nil && st != "" && !activeState(st) {
 			return waitErr, nil
 		}
 		if !time.Now().Before(end) {
-			return waitErr, fmt.Errorf("run: unit %s is still %s after the stop: the job may still be running", unit, st)
+			return waitErr, fmt.Errorf("run: unit %s is not proven stopped after the stop (state %q, query error %v): the job may still be running", unit, st, err)
 		}
 		_ = sb.control(unit, "stop")
 		time.Sleep(stopRetry)
@@ -146,12 +164,14 @@ func (sb Sandbox) control(unit, verb string) error {
 	return execstat.CommandContext(ctx, "wwd.run.sandbox", sb.SudoPath, "systemctl", verb, unit).Run()
 }
 
-func (sb Sandbox) show(unit string) map[string]string {
+// show reads the unit's properties; a unit that does not exist answers ActiveState=inactive, LoadState=not-found. The error is
+// the query's own failure (systemctl missing, timed out, refused).
+func (sb Sandbox) show(unit string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := execstat.CommandContext(ctx, "wwd.run.sandbox", sb.SystemctlPath, "show", unit, "-p", "ActiveState,Result,ExecMainStatus,ExecMainCode")
+	cmd := execstat.CommandContext(ctx, "wwd.run.sandbox", sb.SystemctlPath, "show", unit, "-p", "ActiveState,LoadState,InvocationID,Result,ExecMainStatus,ExecMainCode")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	_ = cmd.Run()
-	return parseShow(out.String())
+	err := cmd.Run()
+	return parseShow(out.String()), err
 }
