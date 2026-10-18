@@ -145,6 +145,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("gate") {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
 	}
+	if c.moduleReady("hostconfig") {
+		out = append(out, "personas.v1") // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
+	}
 	return out
 }
 

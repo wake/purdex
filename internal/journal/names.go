@@ -3,8 +3,6 @@ package journal
 import (
 	"regexp"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 )
@@ -12,17 +10,18 @@ import (
 // DefaultPersonName is what the journal calls the person when `[journal] person_name` is not set.
 const DefaultPersonName = "使用者"
 
-// DisplayName is how the journal writes a session: the pool name with its first letter upper-cased when the virtual
-// name ends in one (purdex-3f-adam -> Adam), else the virtual name itself (an old purdex-88-b8 stays as it is). Any
-// `<host>/` prefix is removed first, so an address and a bare name give the same result.
+// DisplayName is how the journal writes a session: the display name of its pool name when the virtual name ends in one
+// (purdex-3f-adam -> Adam; purdex-3f-hiro -> the persona's name, retired or not), else the virtual name itself (an old
+// purdex-88-b8 stays as it is). Any `<host>/` prefix is removed first, so an address and a bare name give the same result.
 func DisplayName(virtualName string) string {
 	name := strings.TrimSpace(virtualName)
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
 		name = name[i+1:]
 	}
 	if pool, ok := ipeers.PoolNameOf(name); ok {
-		r, n := utf8.DecodeRuneInString(pool)
-		return string(unicode.ToUpper(r)) + pool[n:]
+		if display, ok := ipeers.PoolDisplayName(pool); ok {
+			return display
+		}
 	}
 	return name
 }
