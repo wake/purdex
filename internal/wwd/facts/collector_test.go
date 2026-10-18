@@ -138,6 +138,9 @@ func TestBuildDisk(t *testing.T) {
 	if d := got[0].UsedPct - want; d > 0.05 || d < -0.05 {
 		t.Errorf("used_pct %v want %v", got[0].UsedPct, want)
 	}
+	if got[0].TotalBytes != 245<<30 || got[0].AvailBytes != 17<<30 {
+		t.Errorf("statfs sizes: total %d avail %d", got[0].TotalBytes, got[0].AvailBytes)
+	}
 	if BuildDisk(nil) == nil {
 		t.Errorf("empty disk list must be [] not null")
 	}

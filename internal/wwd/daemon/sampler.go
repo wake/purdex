@@ -32,6 +32,15 @@ type SamplerOptions struct {
 	// OnFacts, when set, is called with every new record (outside the sampler's
 	// lock). It must not block.
 	OnFacts func(wire.Facts)
+	// Minutes, when set, keeps the finished one-minute rollups (wwd.db) and
+	// answers the 1m history from them; without it they live in memory only.
+	Minutes MinuteStore
+}
+
+// MinuteStore persists the per-minute rollups (store.Store).
+type MinuteStore interface {
+	SaveMinute(wire.Facts) error
+	LoadMinutes(since time.Time) ([]wire.Facts, error)
 }
 
 // Sampler takes one facts record per interval, judges it (derived), keeps the
@@ -46,6 +55,8 @@ type Sampler struct {
 	rollups *facts.Ring
 	minute  []wire.Facts // records of the minute being filled
 	last    string       // the last sampling error logged, to log a change only
+
+	lastStore string // the last store error logged
 }
 
 func NewSampler(o SamplerOptions) *Sampler {
@@ -110,7 +121,7 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 	f.Derived = derived.Compute(&s.latch, in)
 	s.ring.Add(f)
-	s.addToMinute(f)
+	done := s.addToMinute(f)
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -118,6 +129,13 @@ func (s *Sampler) Tick(now time.Time) {
 	changed := msg != s.last
 	s.last = msg
 	s.mu.Unlock()
+
+	// the write is outside the lock: a slow disk must not hold up the routes
+	if done != nil && s.opts.Minutes != nil {
+		if err := s.opts.Minutes.SaveMinute(*done); err != nil {
+			s.logMinutes("saving a minute", err)
+		}
+	}
 
 	if changed && msg != "" {
 		log.Printf("wwd: sampling: %s", msg)
@@ -138,21 +156,38 @@ func (s *Sampler) SetOnFacts(fn func(wire.Facts)) {
 	s.mu.Unlock()
 }
 
+// logMinutes logs a store failure once per change, like a sampling error.
+func (s *Sampler) logMinutes(what string, err error) {
+	msg := what + ": " + err.Error()
+	s.mu.Lock()
+	changed := msg != s.lastStore
+	s.lastStore = msg
+	s.mu.Unlock()
+	if changed {
+		log.Printf("wwd: %s", msg)
+	}
+}
+
 // addToMinute collects records of one wall-clock minute and turns a finished
-// minute into a rollup. The caller holds the lock.
-func (s *Sampler) addToMinute(f wire.Facts) {
+// minute into a rollup, which it returns (nil when no minute finished). The
+// caller holds the lock.
+func (s *Sampler) addToMinute(f wire.Facts) *wire.Facts {
 	m := f.At.Truncate(time.Minute)
+	var done *wire.Facts
 	if len(s.minute) > 0 {
 		open := s.minute[0].At.Truncate(time.Minute)
 		if m.Before(open) {
-			return // the clock was set back: a minute already summed is not summed twice
+			return nil // the clock was set back: a minute already summed is not summed twice
 		}
 		if !m.Equal(open) {
-			s.rollups.Add(facts.Rollup(s.minute))
+			r := facts.Rollup(s.minute)
+			s.rollups.Add(r)
+			done = &r
 			s.minute = s.minute[:0]
 		}
 	}
 	s.minute = append(s.minute, facts.Clone(f))
+	return done
 }
 
 // Latest is the newest record.
@@ -166,15 +201,33 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 // or the one-minute rollups, the minute being filled included as a partial one.
 func (s *Sampler) History(since time.Time, step string) []wire.Facts {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if step != wire.Step1m {
+		defer s.mu.RUnlock()
 		return s.ring.Since(since)
 	}
 	out := s.rollups.Since(since)
+	var partial *wire.Facts
 	if len(s.minute) > 0 {
 		if r := facts.Rollup(s.minute); !r.At.Before(since) {
-			out = append(out, r)
+			partial = &r
 		}
+	}
+	s.mu.RUnlock()
+	// the store holds the minutes from before this run too; if it cannot be
+	// read, this run's in-memory minutes are what there is
+	if st := s.opts.Minutes; st != nil {
+		if stored, err := st.LoadMinutes(since); err == nil {
+			out = stored
+		} else {
+			s.logMinutes("reading the minutes", err)
+		}
+	}
+	if partial != nil {
+		// a restart inside this minute left an earlier half of it stored: the live one replaces it
+		for len(out) > 0 && out[len(out)-1].At.Equal(partial.At) {
+			out = out[:len(out)-1]
+		}
+		out = append(out, *partial)
 	}
 	return out
 }

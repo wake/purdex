@@ -133,7 +133,7 @@ func BuildDisk(raw []RawDisk) []wire.Disk {
 		if used+d.AvailBytes > 0 {
 			pct = 100 * float64(used) / float64(used+d.AvailBytes)
 		}
-		out = append(out, wire.Disk{Mount: d.Mount, FreeGB: float64(d.AvailBytes) / (1 << 30), UsedPct: pct})
+		out = append(out, wire.Disk{Mount: d.Mount, FreeGB: float64(d.AvailBytes) / (1 << 30), UsedPct: pct, TotalBytes: d.TotalBytes, AvailBytes: d.AvailBytes})
 	}
 	return out
 }

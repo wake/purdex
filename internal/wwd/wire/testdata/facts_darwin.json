@@ -4,7 +4,7 @@
   "cpu": {"ncpu": 10, "load1": 4.7, "load5": 5.1, "idle_pct": 62.0},
   "mem": {"total_mb": 16384, "available_mb": 843, "pressure": 1, "page_out_rate": 0, "swap_out_rate": 0,
           "swap_used_mb": 2100, "compressor_mb": 2300, "psi": null},
-  "disk": [{"mount": "/", "free_gb": 17.2, "used_pct": 92.4}],
+  "disk": [{"mount": "/", "free_gb": 17.2, "used_pct": 92.4, "total_bytes": 245107195904, "avail_bytes": 18467692544}],
   "procs": [
     {"pid": 123, "name": "node", "cpu_pct": 88, "mem_mb": 910, "mem_kind": "footprint",
      "owner": {"kind": "job", "id": "j_01JC", "session": "s1"}},
