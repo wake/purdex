@@ -2389,7 +2389,7 @@
   "approval.dialog.team_label_invalid_width": "At most 10 wide (a Chinese character counts 2, so about 5)",
   "approval.dialog.team_label_invalid_chars": "At most 64 bytes, and only printable characters",
   "approval.dialog.team_label_invalid_invisible": "Needs at least one visible character",
-  "approval.dialog.max_members": "Max members (1–8)",
+  "approval.dialog.max_members": "Max members (1–{{max}})",
   "approval.dialog.max_members_requested": "lead asked for {{n}}",
   "approval.dialog.max_members_range": "Enter a whole number from 1 to {{max}}",
   "approval.dialog.roots": "Allowed roots (one per line)",

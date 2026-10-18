@@ -28,6 +28,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { AdoptionWaitCard } from './AdoptionWaitCard'
@@ -35,7 +36,7 @@ import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, maxMembersMax, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
@@ -77,7 +78,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const isMemberRelay = approval.kind === 'member_relay'
   const memberRelay = memberRelayNames(approval)
   const adopt = adoptPayloadOf(approval)
-  const payload = leadPayloadOf(approval)
+  // The member ceiling follows the host that asked: 9 against team.max_members.v2, else 8 (name pool v2 §5.1).
+  const ceiling = maxMembersMax(useUnattendedStore((s) => s.byHost[hostId]?.maxMembersV2Support === 'yes'))
+  const payload = leadPayloadOf(approval, ceiling)
   const relay = selfRelayPayloadOf(approval)
   const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
   // Shown only when the payload has a team_name (a daemon that knows names, D-N10), prefilled with the requested one.
@@ -196,7 +199,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   }, [minimized])
 
   const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
-  const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
+  const membersOk = Number.isInteger(members) && members >= 1 && members <= ceiling
   const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
@@ -438,11 +441,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 </>
               )}
               <label className={`${nameShown || labelShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
-                {t('approval.dialog.max_members')}
+                {t('approval.dialog.max_members', { max: ceiling })}
                 <input
                   type="number"
                   min={1}
-                  max={MAX_MAX_MEMBERS}
+                  max={ceiling}
                   step={1}
                   value={maxMembers}
                   disabled={locked}
@@ -457,7 +460,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 )}
               </label>
               {!membersOk && (
-                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.max_members_range', { max: ceiling })}</p>
               )}
               <label className="mt-2 block text-xs text-text-secondary">
                 {t('approval.dialog.roots')}

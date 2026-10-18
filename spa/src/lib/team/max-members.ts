@@ -13,7 +13,8 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import type { TeamRoster } from './roster'
-import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type MaxMembersView } from './types'
+import { MAX_MEMBERS_MIN, maxMembersMax, type MaxMembersView } from './types'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
 
 export const teamKey = (hostId: string, teamId: string): string => `${hostId}\u0000${teamId}`
 
@@ -98,7 +99,7 @@ const teamOf = (hostId: string, teamId: string): TeamRoster | undefined => useTe
 
 /**
  * Send the cap. Ignored while a request for the team is out, when the host is gone, or for a value the daemon would
- * refuse anyway (outside 1-8, or below the members in use). The answer is shown through the roster; if a roster event
+ * refuse anyway (outside 1-8, or 1-9 against a daemon with team.max_members.v2, or below the members in use). The answer is shown through the roster; if a roster event
  * changed THIS team's numbers at any moment while the request was out, that event is at least as new as this answer (the
  * daemon emits it after the write) and the answer is not applied over it. Events about other teams do not matter.
  */
@@ -109,7 +110,7 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
   const identity = deps.identity(hostId)
   if (identity === null) return
   const before = teamOf(hostId, teamId)
-  if (!Number.isInteger(value) || value < MAX_MEMBERS_MIN || value > MAX_MEMBERS_MAX || value < (before?.in_use ?? 0)) return
+  if (!Number.isInteger(value) || value < MAX_MEMBERS_MIN || value > maxMembersMax(useUnattendedStore.getState().byHost[hostId]?.maxMembersV2Support === 'yes') || value < (before?.in_use ?? 0)) return
   // A request out to the daemon the host means now holds the team; one out to an earlier daemon does not.
   if (store.inflight[key]?.identity === identity) return
   const token = ++nextToken
