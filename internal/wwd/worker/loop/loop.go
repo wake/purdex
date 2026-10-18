@@ -42,6 +42,12 @@ type UsageRecorder interface {
 	RecordRun(e runner.Ended)
 }
 
+// Sweeper cleans up what jobs leave outside the worker (a per-job database): given the ids of every job this worker still holds, it removes
+// whatever belongs to any other. A failure is logged and tried again at the next sweep.
+type Sweeper interface {
+	Sweep(ctx context.Context, live []string) error
+}
+
 // Config is what the loop needs from its host.
 type Config struct {
 	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
@@ -63,6 +69,12 @@ type Config struct {
 	Estimate    func(wire.Job) float64
 	// Usage is told how each run went (see UsageRecorder); nil: nothing is recorded.
 	Usage UsageRecorder
+	// Sweepers are run every SweepEvery with the ids of the jobs the worker holds: the ones it runs, and Held() (quarantined ones, whose
+	// leftovers must stay until they are proven gone).
+	Sweepers []Sweeper
+	Held     func() []string
+	// SweepEvery is the pause between two sweeps (a minute).
+	SweepEvery time.Duration
 
 	// Interval is the pause between two rounds (2 s). Settle is the pause after a claim before the next one, so that the facts have
 	// seen the job (the headroom they carry is only true once the job's processes are in a sample); two facts samples by default.
@@ -84,6 +96,7 @@ type Loop struct {
 	mu        sync.Mutex
 	running   map[string]*runner.Running
 	lastClaim time.Time
+	lastSweep time.Time
 }
 
 // New returns a Loop; the zero values of the durations are the defaults.
@@ -93,6 +106,9 @@ func New(cfg Config) *Loop {
 	}
 	if cfg.Settle <= 0 {
 		cfg.Settle = 2 * time.Duration(wire.SampleIntervalS) * time.Second
+	}
+	if cfg.SweepEvery <= 0 {
+		cfg.SweepEvery = time.Minute
 	}
 	if cfg.StopTimeout <= 0 {
 		cfg.StopTimeout = 60 * time.Second
@@ -140,6 +156,7 @@ func (l *Loop) Run(ctx context.Context) {
 	defer t.Stop()
 	for {
 		l.Round(ctx, jobCtx)
+		l.sweepIfDue(ctx)
 		select {
 		case <-ctx.Done():
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), l.cfg.ShutdownGrace)
@@ -294,4 +311,38 @@ func (l *Loop) record(e runner.Ended) {
 		}
 	}()
 	l.cfg.Usage.RecordRun(e)
+}
+
+func (l *Loop) sweepIfDue(ctx context.Context) {
+	if len(l.cfg.Sweepers) == 0 || ctx.Err() != nil {
+		return
+	}
+	l.mu.Lock()
+	due := l.cfg.Now().Sub(l.lastSweep) >= l.cfg.SweepEvery
+	if due {
+		l.lastSweep = l.cfg.Now()
+	}
+	l.mu.Unlock()
+	if due {
+		l.Sweep(ctx)
+	}
+}
+
+// Sweep runs every Sweeper once with the ids of the jobs this worker holds.
+func (l *Loop) Sweep(ctx context.Context) {
+	l.mu.Lock()
+	l.pruneLocked()
+	live := make([]string, 0, len(l.running))
+	for _, r := range l.running {
+		live = append(live, r.ID())
+	}
+	l.mu.Unlock()
+	if l.cfg.Held != nil {
+		live = append(live, l.cfg.Held()...)
+	}
+	for _, sw := range l.cfg.Sweepers {
+		if err := sw.Sweep(ctx, live); err != nil {
+			l.cfg.Logf("worker: sweep: %v", err)
+		}
+	}
 }

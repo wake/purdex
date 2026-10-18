@@ -95,7 +95,10 @@ func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) e
 
 func (c *fakeConn) PutLog(context.Context, string, string, io.Reader) error { return nil }
 
-func (c *fakeConn) Release(_ context.Context, _ string, req wire.ReleaseRequest) error {
+func (c *fakeConn) Release(ctx context.Context, _ string, req wire.ReleaseRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err // a release made under an ended context does not reach the origin
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.releases = append(c.releases, req)
@@ -484,14 +487,18 @@ func TestRunDoesRoundsAndThenStopsAndGivesBackOnShutdown(t *testing.T) {
 }
 
 type recorder struct {
-	mu    sync.Mutex
-	got   []runner.Ended
-	panic bool
+	mu        sync.Mutex
+	got       []runner.Ended
+	panic     bool
+	conn      *fakeConn
+	delivered int
 }
 
 func (r *recorder) RecordRun(e runner.Ended) {
+	_, _, n := r.conn.seen()
 	r.mu.Lock()
 	r.got = append(r.got, e)
+	r.delivered = n
 	r.mu.Unlock()
 	if r.panic {
 		panic("recorder broke")
@@ -502,7 +509,7 @@ func TestTheUsageRecorderSeesTheWholeRunAfterTheResultAndCannotHurtIt(t *testing
 	for _, boom := range []bool{false, true} {
 		c := newConn("mlab", qjob("a", wire.ClassDev, 0))
 		r := newRig(t, c)
-		rec := &recorder{panic: boom}
+		rec := &recorder{panic: boom, conn: c}
 		r.loop.cfg.Usage = rec
 		r.ex.run = func(ctx context.Context, _ wire.Job) run.Result {
 			return run.Result{Outcome: run.Exited, ExitCode: 3, LogPath: "/out/log", Tail: []byte("t")}
@@ -513,8 +520,96 @@ func TestTheUsageRecorderSeesTheWholeRunAfterTheResultAndCannotHurtIt(t *testing
 		rec.mu.Lock()
 		e := rec.got[0]
 		rec.mu.Unlock()
+		rec.mu.Lock()
+		delivered := rec.delivered
+		rec.mu.Unlock()
+		if delivered != 1 {
+			t.Fatalf("the recorder ran with %d results delivered: it comes after the delivery", delivered)
+		}
 		if results != 1 || e.Kind != runner.KindRan || e.Run.ExitCode != 3 || e.Run.LogPath != "/out/log" || string(e.Run.Tail) != "t" {
 			t.Fatalf("panic=%v results=%d ended %+v: the result is delivered first and the whole run.Result reaches the recorder", boom, results, e)
 		}
+	}
+}
+
+func TestNoUsageRecorderMeansNoRecording(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	time.Sleep(2 * unit)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.logs {
+		if l == "worker: recording the run of %s: %v" {
+			t.Fatal("with no recorder nothing may be attempted, not even a recovered panic")
+		}
+	}
+}
+
+type fakeSweeper struct {
+	mu    sync.Mutex
+	calls [][]string
+	err   error
+}
+
+func (f *fakeSweeper) Sweep(_ context.Context, live []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, append([]string(nil), live...))
+	return f.err
+}
+
+func TestSweepGetsEveryJobTheWorkerHolds(t *testing.T) {
+	c := newConn("mlab", qjob("running", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.ex.run = blockUntilDone
+	sw := &fakeSweeper{err: errors.New("db down")}
+	r.loop.cfg.Sweepers = []Sweeper{sw}
+	r.loop.cfg.Held = func() []string { return []string{"quarantined"} }
+	r.round()
+	waitFor(t, "a run", func() bool { return r.ex.ran.Load() == 1 })
+	r.loop.Sweep(context.Background())
+	r.loop.stopAll(context.Background(), "test")
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if len(sw.calls) != 1 || len(sw.calls[0]) != 2 {
+		t.Fatalf("sweep calls %v", sw.calls)
+	}
+	got := map[string]bool{sw.calls[0][0]: true, sw.calls[0][1]: true}
+	if !got["running"] || !got["quarantined"] {
+		t.Fatalf("live %v: what runs and what is quarantined must both be kept", sw.calls[0])
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	logged := false
+	for _, l := range r.logs {
+		logged = logged || l == "worker: sweep: %v"
+	}
+	if !logged {
+		t.Fatal("a failing sweep is logged")
+	}
+}
+
+func TestSweepsRunOnTheirOwnPauseNotEveryRound(t *testing.T) {
+	r := newRig(t, newConn("mlab"))
+	sw := &fakeSweeper{}
+	r.loop.cfg.Sweepers = []Sweeper{sw}
+	r.loop.cfg.SweepEvery = time.Hour
+	r.loop.sweepIfDue(context.Background())
+	r.loop.sweepIfDue(context.Background())
+	sw.mu.Lock()
+	n := len(sw.calls)
+	sw.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d sweeps, want 1 within the pause", n)
+	}
+	r.loop.cfg.SweepEvery = time.Nanosecond
+	time.Sleep(unit)
+	r.loop.sweepIfDue(context.Background())
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if len(sw.calls) != 2 {
+		t.Fatalf("%d sweeps, want one more after the pause", len(sw.calls))
 	}
 }
