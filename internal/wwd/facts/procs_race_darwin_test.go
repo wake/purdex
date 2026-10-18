@@ -108,6 +108,47 @@ func TestEveryReportedRowIsCheckedHoweverManyPidsChangedHands(t *testing.T) {
 	}
 }
 
+// The CPU arithmetic, exactly, with staged rusage values and the Apple Silicon
+// timebase (125/3): user and system time both count, ticks become nanoseconds with
+// numer/denom the right way round, and the share is over the wall time between the
+// two snapshots. A real-process test cannot check this to better than a wide band
+// (R2 of the CPU-share test fix); this one fails for a halved or doubled figure, a
+// missing system time or a wrong time difference.
+func TestCPUShareArithmeticIsExact(t *testing.T) {
+	id := ident{sec: 100, usec: 1}
+	rows := []tableRow{{ProcRec: ProcRec{PID: 10, PPID: 1, Name: "p"}, id: id}}
+	r := fakeReader(rows, map[int]ident{10: id}, 1<<20)
+	r.numer, r.denom = 125, 3 // 1 tick = 125/3 ns; 24e6 ticks = 1e9 ns
+	var user, sys uint64
+	r.rusage = func(pid int32, flavor int32, b unsafe.Pointer) int32 {
+		buf := unsafe.Slice((*byte)(b), 512)
+		binary.LittleEndian.PutUint64(buf[rusageOffUser:], user)
+		binary.LittleEndian.PutUint64(buf[rusageOffSys:], sys)
+		binary.LittleEndian.PutUint64(buf[rusageOffFoot:], 1<<20)
+		return 0
+	}
+	t0 := time.Date(2026, 10, 18, 6, 0, 0, 0, time.UTC)
+	user, sys = 100_000_000, 50_000_000
+	if _, _, err := r.Snapshot(t0); err != nil {
+		t.Fatal(err)
+	}
+	user += 16_000_000 // together 24e6 ticks = 1 s of CPU...
+	sys += 8_000_000
+	snap, _, err := r.Snapshot(t0.Add(2 * time.Second)) // ...over 2 s of wall time
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Procs[0].CPUPct; got < 49.999 || got > 50.001 {
+		t.Fatalf("cpu share %v, want 50 (1 s of CPU in 2 s)", got)
+	}
+	// only user time moves: the share is its part alone (a dropped system time would not show here, the line above covers it)
+	user += 24_000_000
+	snap, _, _ = r.Snapshot(t0.Add(3 * time.Second))
+	if got := snap.Procs[0].CPUPct; got < 99.999 || got > 100.001 {
+		t.Fatalf("cpu share %v, want 100 (1 s of CPU in 1 s)", got)
+	}
+}
+
 func TestCPUDeltaNeedsTheSameFullStartTime(t *testing.T) {
 	a := ident{sec: 100, usec: 1}
 	rows := []tableRow{{ProcRec: ProcRec{PID: 10, PPID: 1, Name: "p"}, id: a}}

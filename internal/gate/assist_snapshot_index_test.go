@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +54,26 @@ func TestSnapshot_ATrackedFileTheIgnoreRulesMatchIsKept(t *testing.T) {
 	require.NoError(t, os.Remove(dir+"/keep.log"))
 	info, files = snapFiles(t, dir)
 	assert.ElementsMatch(t, []string{".gitignore", "a.txt", "conf.txt"}, files, "deleted in the tree: gone from the snapshot")
+}
+
+// git's "racily clean" rule: an entry whose file time is not older than the index file's might have been changed after the index was
+// written without its stat information showing it, so git compares the content. The copy of the index must keep the original's file
+// time, or a same-size edit made in the same second as the last index write (an agent that edits a file right after a commit or a
+// `git add`) reads as unchanged from the copy and the snapshot holds the old content.
+func TestSnapshot_ASameSizeEditInTheSecondOfTheIndexWriteIsInTheSnapshot(t *testing.T) {
+	dir := ignoredRepo(t)
+	stamp := time.Now().Truncate(time.Second).Add(-time.Hour)
+	// the file as committed, with a fixed time; the index entry records it
+	require.NoError(t, os.Chtimes(dir+"/a.txt", stamp, stamp))
+	gitIn(t, dir, "update-index", "--refresh")
+	// the same-size edit that leaves the file's size and time as they were: only the content differs
+	writeFile(t, dir+"/a.txt", "a2\n", 0o644)
+	require.NoError(t, os.Chtimes(dir+"/a.txt", stamp, stamp))
+	// the index file is as old as the entry: the entry is racily clean for git, which then reads the content
+	require.NoError(t, os.Chtimes(dir+"/.git/index", stamp, stamp))
+
+	info, _ := snapFiles(t, dir)
+	assert.Equal(t, "a2", gitIn(t, dir, "show", info.SHA+":a.txt"), "the edit made in the second of the index write is in the snapshot")
 }
 
 // skip-worktree and assume-unchanged entries are copied with their flags, and `add -A` does not look at a flagged entry: the snapshot
