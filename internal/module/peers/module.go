@@ -252,8 +252,10 @@ type Module struct {
 	reapWG     sync.WaitGroup
 	// personaCancel stops following the hostconfig personas (personas_pool.go); set by Start, called by Stop.
 	personaCancel func()
-	workers       sync.WaitGroup
-	replySem      chan struct{}
+	// afterFunc is the test seam of the personas read's retry (time.AfterFunc when nil).
+	afterFunc func(time.Duration, func()) (stop func())
+	workers   sync.WaitGroup
+	replySem  chan struct{}
 
 	// warnedVersions dedupes the one-shot "Claude Code newer than verified"
 	// log line (localEnvelope) by version string: sync.Map since it is

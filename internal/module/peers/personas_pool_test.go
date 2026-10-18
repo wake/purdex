@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/config"
@@ -191,6 +193,103 @@ func (b *blockingPersonas) Personas() (personas.Set, error) {
 		return b.sets[0], nil
 	}
 	return b.sets[1], nil
+}
+
+// fakeScheduler stands in for time.AfterFunc: the test decides when a retry runs.
+type fakeScheduler struct {
+	mu      sync.Mutex
+	pending map[int]func()
+	delays  []time.Duration
+	total   int
+}
+
+func (s *fakeScheduler) after(d time.Duration, fn func()) (stop func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.total++
+	id := s.total
+	if s.pending == nil {
+		s.pending = map[int]func(){}
+	}
+	s.pending[id] = fn
+	s.delays = append(s.delays, d)
+	return func() {
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+	}
+}
+
+// runPending runs what is scheduled now, oldest first (a retry may schedule the next one), and reports how many ran.
+func (s *fakeScheduler) runPending() int {
+	s.mu.Lock()
+	ids := make([]int, 0, len(s.pending))
+	for id := range s.pending {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	fns := make([]func(), 0, len(ids))
+	for _, id := range ids {
+		fns = append(fns, s.pending[id])
+		delete(s.pending, id)
+	}
+	s.mu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
+	return len(fns)
+}
+
+// The change is told once; a read that fails then must not leave the pool on the older set until the next change: it is
+// retried, with a delay that grows, until it reads (NP-1b R2).
+// Mutation gate: do not schedule a retry -> the pool stays on the older set -> red.
+func TestPersonaPool_AFailedReadIsRetriedUntilItSucceeds(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	sched := &fakeScheduler{}
+	e.m.afterFunc = sched.after
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{pp("anna", "Anna", false)}}}
+	e.m.bindPersonas(f)
+	require.Equal(t, []string{"anna"}, ipeers.PickablePool())
+
+	f.err = errors.New("database is busy")
+	f.change(pp("hiro", "Hiro", false)) // the PUT: the one notification, and the read of it fails
+	require.Equal(t, []string{"anna"}, ipeers.PickablePool(), "the failed read keeps the pool as it was")
+	require.Equal(t, 1, sched.runPending(), "no retry was scheduled")
+	require.Equal(t, []string{"anna"}, ipeers.PickablePool(), "a retry that fails again changes nothing")
+
+	f.err = nil
+	require.Equal(t, 1, sched.runPending(), "the failed retry did not schedule the next")
+	assert.Equal(t, []string{"hiro"}, ipeers.PickablePool(), "the pool did not converge on the stored set")
+	assert.Equal(t, 0, sched.runPending(), "a successful read leaves no retry behind")
+	require.GreaterOrEqual(t, len(sched.delays), 2)
+	assert.Greater(t, sched.delays[1], sched.delays[0], "the delay does not grow")
+}
+
+// A read that never works is retried a bounded number of times, then given up (the next change starts over); a stopped
+// binding retries nothing.
+// Mutation gate: no bound -> red; a retry that ignores the stop -> red.
+func TestPersonaPool_TheRetriesAreBoundedAndStopWithTheBinding(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	sched := &fakeScheduler{}
+	e.m.afterFunc = sched.after
+	f := &fakePersonas{err: errors.New("stored personas do not read")}
+	e.m.bindPersonas(f) // the first read fails too
+	for i := 0; i < 100 && sched.runPending() > 0; i++ {
+	}
+	assert.Equal(t, personaRetryMax, sched.total, "the retries are not bounded by personaRetryMax")
+
+	sched2 := &fakeScheduler{}
+	e.m.afterFunc = sched2.after
+	f2 := &fakePersonas{err: errors.New("busy")}
+	cancel := e.m.bindPersonas(f2)
+	require.Equal(t, 1, sched2.total)
+	cancel()
+	f2.err = nil
+	f2.set = personas.Set{Items: []personas.Persona{pp("mia", "Mia", false)}}
+	sched2.runPending()
+	assert.NotEqual(t, []string{"mia"}, ipeers.PickablePool(), "a stopped binding still applied a retry")
 }
 
 // A change of the collection rebuilds the pool; a read that fails keeps the pool as it was.

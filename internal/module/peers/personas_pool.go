@@ -6,6 +6,7 @@ package peers
 import (
 	"log"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -36,27 +37,69 @@ func buildPool(set personas.Set) (recognised map[string]string, pickable []strin
 	return recognised, pickable
 }
 
-// bindPersonas applies the collection now and again on every change; a read that fails keeps the pool as it is (the stored
-// value's codes are reserved, so guessing an empty pool would be worse). The returned function stops following.
+// personaRetryMax bounds the retries of a read that fails: the delays double from a second up to half a minute, so a read that
+// never works (a stored value that does not read) is given up after about two minutes; the next change starts over.
+const personaRetryMax = 8
+
+func personaRetryDelay(attempt int) time.Duration {
+	return min(time.Second<<attempt, 30*time.Second)
+}
+
+// bindPersonas applies the collection now and again on every change. The returned function stops following.
 //
-// The hostconfig module tells its readers from goroutines of their own, so two changes can arrive out of order. Reading, building
-// and swapping are one step under a mutex, and the read happens inside it: whichever callback runs last reads the last stored
-// set, so the pool never ends on an older one.
+//   - The hostconfig module tells its readers from goroutines of their own, so two changes can arrive out of order. Reading,
+//     building and swapping are one step under a mutex, and the read happens inside it: whichever callback runs last reads the
+//     last stored set, so the pool never ends on an older one.
+//   - A read that fails keeps the pool as it is (the stored value's codes are reserved, so guessing an empty pool would be
+//     worse), and is retried with a growing delay, because a change is told only once. A read that works makes a pending
+//     retry moot.
 func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
 	var mu sync.Mutex
-	apply := func() {
+	var stopped bool
+	var stopRetry func()
+	var apply func(attempt int)
+	apply = func(attempt int) {
 		mu.Lock()
 		defer mu.Unlock()
+		if stopped {
+			return
+		}
+		if stopRetry != nil {
+			stopRetry()
+			stopRetry = nil
+		}
 		set, err := r.Personas()
 		if err != nil {
 			log.Printf("[peers] personas: %v; the name pool keeps what it had", err)
+			if attempt < personaRetryMax {
+				stopRetry = m.schedule(personaRetryDelay(attempt), func() { apply(attempt + 1) })
+			}
 			return
 		}
 		recognised, pickable := buildPool(set)
 		ipeers.SetPool(recognised, pickable)
 	}
-	apply()
-	return r.OnPersonasChange(apply)
+	apply(0)
+	unsubscribe := r.OnPersonasChange(func() { apply(0) })
+	return func() {
+		unsubscribe()
+		mu.Lock()
+		stopped = true
+		if stopRetry != nil {
+			stopRetry()
+			stopRetry = nil
+		}
+		mu.Unlock()
+	}
+}
+
+// schedule runs fn after d; the returned function cancels it. afterFunc is the test seam.
+func (m *Module) schedule(d time.Duration, fn func()) (stop func()) {
+	if m.afterFunc != nil {
+		return m.afterFunc(d, fn)
+	}
+	t := time.AfterFunc(d, fn)
+	return func() { t.Stop() }
 }
 
 // startPersonaPool follows the hostconfig module's personas, when there is one (a test build without it keeps the built-in
