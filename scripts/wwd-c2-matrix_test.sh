@@ -60,7 +60,7 @@ out=$(dry --case 1);  has "$out" "fakeA" "case 1"; has "$out" "fakeB" "case 1"; 
 out=$(dry --case 2);  has "$out" "launchctl bootout" "case 2"; has "$out" "launchctl bootstrap" "case 2"; has "$out" "expect: lost" "case 2"; has "$out" "expect: failed" "case 2"
 out=$(dry --case 3);  has "$out" "kill -STOP" "case 3"; has "$out" "kill -CONT" "case 3"; has "$out" "heartbeat of the old claim (expect: 409)" "case 3"; has "$out" "result of the old claim (expect: 409)" "case 3"
 out=$(dry --case 4);  has "$out" "launchctl kickstart -k" "case 4"; has "$out" "expect: air26" "case 4"
-out=$(dry --case 5);  has "$out" "5b long" "case 5"; has "$out" "5c" "case 5"; has "$out" "needs hook fault.snapshot_delay_s" "case 5"
+out=$(dry --case 5);  has "$out" "5b long" "case 5"; has "$out" "5c" "case 5"; has "$out" "needs hook fault.snapshot_delay_s on air26" "case 5"
 out=$(dry --case 6);  has "$out" "needs hook fault.log_upload_fail" "case 6"
 out=$(dry --case 7);  has "$out" "fault/owner-active" "case 7"; hasnt "$out" ">> move the mouse" "case 7"
 out=$(dry --manual --case 7); has "$out" ">> move the mouse on air26" "case 7 --manual"
@@ -71,6 +71,7 @@ out=$(dry --case 11)
 for ip in 100.64.0.2 100.64.0.4 100.64.0.6 100.64.0.1; do has "$out" "$ip:7871/v1/info" "case 11 $ip"; done
 has "$out" "Bearer c2-wrong-token" "case 11"; has "$out" "(expect: 401)" "case 11"
 out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-option" "case 12"; has "$out" "../../etc/hosts" "case 12"; has "$out" "a;touch /tmp/wwd-c2-pwned" "case 12"
+has "$out" "mlab made no workspace" "case 12"; has "$out" "no marker file was made on air26" "case 12"
 out=$(dry --case 13); has "$out" "show databases" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
 out=$(dry --case 14); has "$out" "air19 claimed nothing since this run began (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
 
@@ -89,6 +90,7 @@ has "$(dry --case 7)" "the reclaim did not count an attempt (expect: 0)" "case 7
 out=$(dry --case 4)
 has "$out" "air19 claimed nothing during case 4" "air19 rule"
 has "$out" "-- cleaning up" "cleanup"; has "$out" "rm -rf" "cleanup"; has "$out" "PUT" "cleanup (worker settings)"
+has "$out" "on mserv: rm -f /tmp/wwd-c2-ran.log" "cleanup (the probe log of every host)"
 
 # only the cases asked for run
 out=$(dry --case 2,4)
