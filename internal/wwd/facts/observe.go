@@ -58,6 +58,7 @@ type tree struct {
 	rootPID     int
 	started     time.Time
 	last        time.Time
+	missed      int    // samples in a row the root was not seen
 	ident       string // the root's start identity when the tree began ("" when unknown)
 	session     string
 	via         string
@@ -126,6 +127,9 @@ func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 
 // Update takes the sample taken at now and returns the trees that ended since the last one and were over a threshold.
 func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire.Observation {
+	if len(snap.Procs) == 0 { // a read that failed, not a machine with no processes: nothing ends because of it
+		return nil
+	}
 	c.ensureTable(snap)
 	dt := t.cfg.Interval
 	if !t.lastAt.IsZero() && now.After(t.lastAt) {
@@ -169,6 +173,15 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 		}
 	}
 
+	// A tree that is being watched stays a tree while its root lives, even when the anchor above it has exited and the root went
+	// to pid 1: a long command outlives the shell that started it.
+	for k, tr := range t.live {
+		if p, ok := c.Table[k.pid]; ok && p.Name == k.name && !isRoot[k.pid] {
+			isRoot[k.pid] = true
+			via[k.pid] = tr.via
+		}
+	}
+
 	var ended []wire.Observation
 	seen := make(map[treeKey]bool, len(isRoot))
 	for _, root := range snap.Procs {
@@ -187,7 +200,7 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 			mem += p.FootprintBytes
 			n++
 			for _, ch := range children[pid] {
-				if !isRoot[ch] { // another tree starts there
+				if !isRoot[ch] && !t.notACommand(c.Table[ch], c) { // another tree starts there, or it is not this command's
 					stack = append(stack, ch)
 				}
 			}
@@ -230,6 +243,10 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 
 	for k, tr := range t.live {
 		if seen[k] {
+			tr.missed = 0
+			continue
+		}
+		if tr.missed++; tr.missed < observeMissedSamples { // one sample without it may be a read that missed the process
 			continue
 		}
 		if tr.over(t.cfg) {
@@ -246,6 +263,19 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 	t.bound()
 	sortObservations(ended)
 	return ended
+}
+
+// observeMissedSamples is how many samples in a row a tree's root must be absent before the tree is taken as ended.
+const observeMissedSamples = 2
+
+// notACommand says whether a process below a tree's root is something the tree does not own: a job's process (it is that job's), a
+// resident (a dev server is not a command, spec section 9) or part of codex's harness. Its whole subtree stays out of the totals.
+func (t *Tracker) notACommand(p ProcRec, c ProcContext) bool {
+	if t.isHarness(p, c) || kindOf(p, c) != "" {
+		return true
+	}
+	_, isJob := jobAbove(p, c)
+	return isJob
 }
 
 func pidPresent(table map[int]ProcRec, k treeKey) bool {

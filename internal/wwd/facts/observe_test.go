@@ -81,6 +81,16 @@ func newTracker() *Tracker {
 	return tr
 }
 
+// gone feeds the two samples without the tree that it takes to end one: the first must end nothing (a read can miss a process), the
+// second returns what ended.
+func gone(t *testing.T, tr *Tracker, h *host, n int) []wire.Observation {
+	t.Helper()
+	if early := step(tr, h, n); len(early) != 0 {
+		t.Fatalf("one sample without the tree must not end it: %+v", early)
+	}
+	return step(tr, h, n+1)
+}
+
 // step feeds the tracker one sample n*5 s after ot0.
 func step(tr *Tracker, h *host, n int) []wire.Observation {
 	snap, ctx := h.snapshot()
@@ -105,7 +115,7 @@ func TestTrackerRecordsAHeavyCommandUnderASessionWhenItEnds(t *testing.T) {
 		t.Fatalf("a running tree over the threshold is listed live: %+v", live)
 	}
 	h.remove(200, 201, 202)
-	got = step(tr, h, 20)
+	got = gone(t, tr, h, 20)
 	if len(got) != 1 {
 		t.Fatalf("want one observation, got %+v", got)
 	}
@@ -153,7 +163,7 @@ func TestTrackerRecordsATreeThatHoldsALotOfMemory(t *testing.T) {
 	h.rec(200).FootprintBytes = mb(1500)
 	step(tr, h, 0)
 	h.remove(200)
-	got := step(tr, h, 1)
+	got := gone(t, tr, h, 1)
 	if len(got) != 1 || got[0].MemPeakMB != 1500 || got[0].CPUSeconds != 0 {
 		t.Fatalf("memory alone is enough: %+v", got)
 	}
@@ -177,7 +187,7 @@ func TestTrackerRecordsACodexCommandViaCodexAndSkipsTheHarness(t *testing.T) {
 		t.Fatalf("live: %+v", live)
 	}
 	h.remove(800, 801)
-	got := step(tr, h, 8)
+	got := gone(t, tr, h, 8)
 	if len(got) != 1 {
 		t.Fatalf("want the command's tree only, got %+v", got)
 	}
@@ -234,6 +244,73 @@ func TestTrackerSkipsJobsResidentsAndStrangers(t *testing.T) {
 	}
 }
 
+// A job or a resident started below a command is not the command's: its subtree stays out of the totals.
+func TestTrackerLeavesJobAndResidentSubtreesOutOfACommandsTotals(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "zsh", []string{"zsh", "-c", "make all"}) // the command, small itself
+	h.add(201, 200, "node", []string{"node", "worker.js"})    // a job it started
+	h.jobs[201] = "j_01JC"
+	h.add(202, 201, "node", []string{"node", "job-child.js"})
+	h.add(210, 200, "node", []string{"node", "/x/node_modules/.bin/vite", "--port", "5174"}) // a dev server: a resident
+	h.add(211, 210, "node", []string{"node", "esbuild"})
+	for n := 0; n < 20; n++ {
+		for _, pid := range []int{201, 202, 210, 211} {
+			h.rec(pid).CPUPct, h.rec(pid).FootprintBytes = 200, mb(900)
+		}
+		step(tr, h, n)
+	}
+	if live := tr.Live(); len(live) != 0 {
+		t.Fatalf("the heavy processes belong to a job and a resident, not to the command: %+v", live)
+	}
+}
+
+// A sample that failed to read (empty) ends nothing, and one sample without the root is not the end of its tree.
+func TestTrackerSurvivesAnEmptyOrPartialSample(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "swift-frontend", []string{"swift-frontend", "-c"})
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	if got := tr.Update(ot0.Add(5*time.Second), ProcSnapshot{}, ProcContext{}); len(got) != 0 {
+		t.Fatalf("an empty read ended something: %+v", got)
+	}
+	rec := *h.rec(200)
+	h.remove(200)
+	if got := step(tr, h, 2); len(got) != 0 { // the root missing once
+		t.Fatalf("one miss ended the tree: %+v", got)
+	}
+	h.procs = append(h.procs, rec) // it was only a missed read
+	h.rec(200).FootprintBytes = mb(1500)
+	if got := step(tr, h, 3); len(got) != 0 {
+		t.Fatalf("%+v", got)
+	}
+	h.remove(200)
+	step(tr, h, 4)
+	got := step(tr, h, 5)
+	if len(got) != 1 || !got[0].StartedAt.Equal(ot0) {
+		t.Fatalf("one tree from the first sample to the end, got %+v", got)
+	}
+}
+
+// A long command outlives the shell that started it: its root goes to pid 1 and is still the same tree.
+func TestTrackerFollowsARootThatWasReparentedToPid1(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "make", []string{"make", "build"})
+	for n := 0; n < 3; n++ {
+		h.rec(200).CPUPct = 100
+		step(tr, h, n)
+	}
+	h.rec(200).PPID = 1 // the shell above it exited
+	for n := 3; n < 20; n++ {
+		h.rec(200).CPUPct = 100
+		step(tr, h, n)
+	}
+	h.remove(200)
+	got := gone(t, tr, h, 20)
+	if len(got) != 1 || got[0].CPUSeconds < 90 || got[0].Signature != "make build" || !got[0].StartedAt.Equal(ot0) {
+		t.Fatalf("both phases belong to one record, got %+v", got)
+	}
+}
+
 // A harness child with no session to name is recorded as 'orphan', not dropped.
 func TestTrackerRecordsAnUnnamedCodexChildAsOrphan(t *testing.T) {
 	h, tr := newHost(), newTracker()
@@ -257,7 +334,7 @@ func TestTrackerTreatsAReusedPIDAsANewTree(t *testing.T) {
 	step(tr, h, 0)
 	h.rec(200).Name, h.args[200] = "ruby", []string{"ruby", "x.rb"} // same pid, a different program, in the very next sample
 	h.rec(200).FootprintBytes = mb(10)
-	got := step(tr, h, 1)
+	got := gone(t, tr, h, 1)
 	if len(got) != 1 || got[0].Signature != "make build" {
 		t.Fatalf("the make tree ended: %+v", got)
 	}
