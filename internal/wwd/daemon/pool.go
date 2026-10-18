@@ -44,7 +44,7 @@ func NewPoolPoller(peers []PeerAddr, token string, client *http.Client) *PoolPol
 	}
 	p := &PoolPoller{peers: peers, token: token, client: client, state: make([]wire.Peer, len(peers))}
 	for i, a := range peers {
-		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.Proto, Labels: []string{}}}
+		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.Proto, Labels: []string{}, Fingerprint: map[string]string{}}}
 	}
 	return p
 }

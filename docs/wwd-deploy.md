@@ -57,6 +57,18 @@ What the install does, all of it idempotent (a second run changes nothing and re
 2. writes `~/.config/wwd/config.toml` for that host if there is none — alias, tailnet address, worker
    switch and slots, the owner rule on air26, and the other three hosts as `[[peers]]`; an existing config is
    never overwritten;
+   **Prepared clones** are not written for you: to give a host `repo:<name>` labels, add a `[repos]` table to
+   its `config.toml` and restart wwd (`name = "<clone path>"`, absolute or `~/`):
+
+   ```toml
+   [repos]
+   purdex = "~/Assist/purdex"
+   mlab   = "~/Assist/mlab"
+   ```
+
+   A path counts only if it is a directory you own that holds a `.git`; otherwise that label is simply not
+   given (no error). The check runs with every facts record, so a clone that appears or disappears changes
+   the labels (a `labels` event) within 5 s. `GET /v1/info` shows the labels and the toolchain fingerprint;
 3. copies the token (above);
 4. writes the service definition — `~/Library/LaunchAgents/gs.wake.wwd.plist` (`KeepAlive`, `RunAtLoad`, log
    in `~/.local/share/wwd/wwd.log`, a PATH that finds go, node, pnpm and PHP) or, on mserv,
