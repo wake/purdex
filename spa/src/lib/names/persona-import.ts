@@ -12,6 +12,11 @@ export interface ImportPlan {
   changed: Persona[]
   unchanged: number
   skipped: SkippedEntry[]
+  /**
+   * Codes whose image must be drawn again from the recipe now in `result` (the file's recipe is new or differs).
+   * Their `avatar_data` is still the old image until the page has redrawn it; each counts as changed or added.
+   */
+  redraw: string[]
   /** The whole collection after the import, in the order: existing ones, then the added. */
   result: Persona[]
 }
@@ -53,20 +58,34 @@ function fromRaw(r: Raw, existing: Persona | undefined, now: number): Persona {
     personality: mix(obj(r.personality), existing?.personality, ['zh', 'en']),
     method: mix(obj(r.method), existing?.method, ['zh', 'en']),
     interests: mix(obj(r.interests), existing?.interests, ['zh', 'en']),
-    avatar: existing?.avatar ?? (typeof r.avatar === 'object' && r.avatar !== null ? (r.avatar as Persona['avatar']) : { source: '' }),
+    avatar: fileRecipe(r) ?? existing?.avatar ?? { source: '' },
     avatar_data: existing?.avatar_data ?? '',
     updated_at: now,
   }
 }
 
+/** The recipe an entry carries, or `undefined` when it has none. */
+function fileRecipe(r: Raw): Persona['avatar'] | undefined {
+  return typeof r.avatar === 'object' && r.avatar !== null && !Array.isArray(r.avatar) ? (r.avatar as Persona['avatar']) : undefined
+}
+
+/** JSON with object keys sorted, so two recipes that differ only in key order compare equal. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
+  if (typeof v === 'object' && v !== null) {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Raw)[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
 function sameContent(a: Persona, b: Persona): boolean {
-  return JSON.stringify({ ...a, updated_at: 0 }) === JSON.stringify({ ...b, updated_at: 0 })
+  return canonical({ ...a, updated_at: 0 }) === canonical({ ...b, updated_at: 0 })
 }
 
 export function planImport(existing: Persona[], entries: Raw[], now = Date.now()): ImportPlan {
   const byCode = new Map(existing.map((p) => [p.code, p]))
   const seen = new Set<string>()
-  const plan: ImportPlan = { added: [], changed: [], unchanged: 0, skipped: [], result: [...existing] }
+  const plan: ImportPlan = { added: [], changed: [], unchanged: 0, skipped: [], redraw: [], result: [...existing] }
   entries.forEach((r, index) => {
     const code = str(r.id) || str(r.code)
     if (!CODE_RULE.test(code)) { plan.skipped.push({ index, code, reason: 'code' }); return }
@@ -76,15 +95,20 @@ export function planImport(existing: Persona[], entries: Raw[], now = Date.now()
     const next = fromRaw(r, before, now)
     const issue = validatePersona(next)[0]
     if (issue) { plan.skipped.push({ index, code, reason: 'invalid', detail: issue.field }); return }
+    // A recipe in the file that differs from the stored one is drawn again; a persona without one shows initials.
+    const recipe = fileRecipe(r)
+    const redraw = recipe !== undefined && canonical(recipe) !== canonical(before?.avatar)
     if (!before) {
       if (plan.result.length >= PERSONA_LIMITS.count) { plan.skipped.push({ index, code, reason: 'full' }); return }
       plan.added.push(next)
       plan.result.push(next)
+      if (redraw) plan.redraw.push(code)
     } else if (sameContent(before, next)) {
       plan.unchanged++
     } else {
       plan.changed.push(next)
       plan.result[plan.result.findIndex((p) => p.code === code)] = next
+      if (redraw) plan.redraw.push(code)
     }
   })
   return plan

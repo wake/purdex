@@ -50,6 +50,22 @@ describe('planImport', () => {
     })
   })
 
+  it('redraws when the file recipe differs from the stored one, and keeps the image when it is the same', () => {
+    const recipe = { source: 'micah', seed: 'Hiro', options: { b: 1, a: 2 } }
+    const png = 'data:image/png;base64,iVBORw0KGgo='
+    const existing = [makePersona('hiro', { avatar: recipe, avatar_data: png }), makePersona('emma', { avatar: { source: 'shapes', seed: 'emma' }, avatar_data: png })]
+    const plan = planImport(existing, [
+      raw('hiro', { avatar: { source: 'micah', seed: 'Hiro', options: { a: 2, b: 1 } } }), // same recipe, keys in another order
+      raw('emma', { avatar: { source: 'clay', seed: 'emma' } }), // a different style
+      raw('olga', { avatar: { source: 'lorelei', seed: 'Olga' } }), // new code
+      raw('lena'), // new code, no recipe: initials, nothing to draw
+    ])
+    expect(plan.redraw).toEqual(['emma', 'olga'])
+    expect(plan.result.find((p) => p.code === 'emma')).toMatchObject({ avatar: { source: 'clay' }, avatar_data: png }) // old image stays until redrawn
+    expect(plan.changed.map((p) => p.code)).toContain('emma')
+    expect(plan.result.find((p) => p.code === 'hiro')?.avatar_data).toBe(png)
+  })
+
   it('treats a nested object field by field the same way', () => {
     const existing = [makePersona('hiro', { nationality: { code: 'JP', zh: '日本', en: 'Japan' } })]
     const plan = planImport(existing, [{ id: 'hiro', name: 'Hiro', nationality: { zh: '東瀛' } }])
