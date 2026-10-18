@@ -135,9 +135,15 @@ func run(cfgPath string) error {
 			return m
 		}
 	}
+	// the observation records (spec 8.4): the sampler hands each process table to the observer, the routes read it back
+	observer := daemon.NewObserver(alias, facts.ObserveConfig{
+		MinCPUSeconds: cfg.Observe.MinCPUSeconds, MinMemMB: cfg.Observe.MinMemMB, Interval: daemon.SampleInterval,
+	}, st)
+	sources := facts.SystemSourcesWith(srcOpt)
+	sources.Observe = observer.Observe
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
-		Sources: facts.SystemSourcesWith(srcOpt), Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
+		Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
@@ -154,6 +160,7 @@ func run(cfgPath string) error {
 		// the worker routes on the socket: the host's own worker and the fast-lane runners claim, heartbeat and report with them, and
 		// POST /v1/local-runs opens only together with them
 		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(q).WorkerRoutes(mux, false) },
+		Observer:    observer,
 	})
 	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
