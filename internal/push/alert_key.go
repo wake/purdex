@@ -1,0 +1,20 @@
+package push
+
+// AlertNotifyKey is the service-registry key under which the push module publishes its AlertNotifier: the module that delivers the
+// wwd host alerts (WWD-8a, spec §13) asks, in process, for one phone push per alert.
+const AlertNotifyKey = "push.alert-notifier"
+
+// AlertPush is one phone push of a host alert. CollapseID is alert:<host>:<key>, so a repeat of the same alert replaces the earlier
+// one on the phone.
+type AlertPush struct {
+	CollapseID string
+	Title      string // the alert's text, already in the person's language
+	Host       string
+}
+
+// AlertNotifier is how the alert delivery module asks for a phone push, in process. NotifyAlert says done when the push was queued or
+// deliberately not sent (a person at the computer needs no phone push; no device means nobody to tell), and false when the push
+// side is not up or its queue is full: the caller keeps the alert undelivered and tries again.
+type AlertNotifier interface {
+	NotifyAlert(p AlertPush) bool
+}
