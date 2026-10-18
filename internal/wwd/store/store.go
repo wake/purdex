@@ -20,7 +20,11 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 1
+const schemaVersion = 2
+
+// hostMinutesDDL (v2): one row per finished minute, the whole rollup record as
+// JSON (minutes.go).
+const hostMinutesDDL = `CREATE TABLE IF NOT EXISTS host_minutes (at INTEGER PRIMARY KEY, rec TEXT NOT NULL)`
 
 // Store is the open wwd.db.
 type Store struct{ db *sql.DB }
@@ -67,6 +71,7 @@ func (s *Store) migrate(ctx context.Context) error {
 				name TEXT PRIMARY KEY,
 				until_ms INTEGER, pid INTEGER, pid_ident TEXT NOT NULL DEFAULT '',
 				holds TEXT NOT NULL, since_ms INTEGER NOT NULL)`,
+			hostMinutesDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -81,7 +86,17 @@ func (s *Store) migrate(ctx context.Context) error {
 		if have > schemaVersion {
 			return fmt.Errorf("store: wwd.db has host schema %d, this wwd knows %d: a newer wwd wrote it", have, schemaVersion)
 		}
-		// have < schemaVersion: the cases of the migrations go here, one per version step
+		// have < schemaVersion: one case per version step
+		if have < 2 { // v2: the per-minute rollups
+			if _, err := tx.ExecContext(ctx, hostMinutesDDL); err != nil {
+				return err
+			}
+		}
+		if have < schemaVersion {
+			if _, err := tx.ExecContext(ctx, `UPDATE host_schema SET version = ?`, schemaVersion); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit()
 }

@@ -57,6 +57,10 @@ type Disk struct {
 	Mount   string  `json:"mount"`
 	FreeGB  float64 `json:"free_gb"`
 	UsedPct float64 `json:"used_pct"`
+	// statfs as read: the size of the file system and what an unprivileged user
+	// can still take, so a reader need not infer them from used_pct.
+	TotalBytes uint64 `json:"total_bytes"`
+	AvailBytes uint64 `json:"avail_bytes"`
 }
 
 type Proc struct {
