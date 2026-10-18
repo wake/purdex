@@ -113,8 +113,9 @@ type procfsPrev struct {
 
 // procfsArgs is a process's argv and the job marker found in its environment.
 type procfsArgs struct {
-	argv []string
-	job  string
+	argv    []string
+	job     string
+	session string // the ref of the session in the environment (SessionEnvKey); "" when none
 }
 
 type procfsKey struct {
@@ -218,7 +219,7 @@ func (r *ProcfsReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error
 	}
 	r.prev = cur
 	r.dropStale()
-	return snap, ProcContext{JobOf: r.jobOf, SessionOf: r.sessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
+	return snap, ProcContext{JobOf: r.jobOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
 }
 
 // stillSame reports whether pid still names the process that began at start.
@@ -244,7 +245,11 @@ func (r *ProcfsReader) loadArgs(pid int) procfsArgs {
 		a.argv = ParseNULList(b)
 	}
 	if b, err := r.read(pid, "environ"); err == nil {
-		a.job, _ = JobFromEnv(ParseNULList(b)) // the environment itself is never kept
+		env := ParseNULList(b)
+		a.job, _ = JobFromEnv(env) // the environment itself is never kept
+		if id, ok := SessionIDFromEnv(env); ok {
+			a.session = sessionRef(id) // only the ref is kept
+		}
 	}
 	if !r.stillSame(pid, start) {
 		return procfsArgs{}
@@ -258,6 +263,11 @@ func (r *ProcfsReader) argsOf(pid int) []string { return r.loadArgs(pid).argv }
 func (r *ProcfsReader) jobOf(pid int) (string, bool) {
 	j := r.loadArgs(pid).job
 	return j, j != ""
+}
+
+func (r *ProcfsReader) envSessionOf(pid int) (string, bool) {
+	s := r.loadArgs(pid).session
+	return s, s != ""
 }
 
 func (r *ProcfsReader) kindOf(p ProcRec) string {

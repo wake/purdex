@@ -19,7 +19,7 @@ func TestProcReaderRealTable(t *testing.T) {
 	// The test binary stands in for a job's tool: the kernel shows the
 	// environment of ordinary binaries but hides it for system ones (/bin/sleep).
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperSleep")
-	cmd.Env = append(os.Environ(), "WWD_JOB=j_smoke", "WWD_FACTS_HELPER=1")
+	cmd.Env = append(os.Environ(), "WWD_JOB=j_smoke", "WWD_FACTS_HELPER=1", SessionEnvKey+"=7c1f2a9e-5b3d-4e68-9a0c-1d2e3f4a5b6c")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +58,10 @@ func TestProcReaderRealTable(t *testing.T) {
 	}
 	if _, ok := ctx.JobOf(os.Getpid()); ok {
 		t.Fatal("the test process has no marker")
+	}
+	// the child carries a session id in its environment; only its ref comes back
+	if ref, ok := ctx.EnvSessionOf(child.PID); !ok || ref != sessionRef("7c1f2a9e-5b3d-4e68-9a0c-1d2e3f4a5b6c") {
+		t.Fatalf("env session: %q %v", ref, ok)
 	}
 	if args := ctx.ArgsOf(child.PID); len(args) != 2 || args[1] != "-test.run=TestHelperSleep" {
 		t.Fatalf("args %v", args)

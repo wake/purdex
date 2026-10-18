@@ -29,6 +29,24 @@ func JobFromEnv(env []string) (string, bool) {
 	return "", false
 }
 
+// SessionEnvKey is the variable a Claude Code session puts in the environment of everything it starts. A helper that outlives its
+// parent (the codex broker is reparented to pid 1) keeps it, so it still says whose it is.
+const SessionEnvKey = "CLAUDE_CODE_SESSION_ID"
+
+var reSessionID = regexp.MustCompile(`^[0-9A-Za-z_-]{8,64}$`)
+
+// SessionIDFromEnv returns the Claude Code session id out of a process environment (KEY=VALUE). It is the only value read from
+// an environment besides the job marker, and nothing else of it is kept. Facts are observations: a same-user process can set it
+// to anything (spec section 11 does not defend against that).
+func SessionIDFromEnv(env []string) (string, bool) {
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, SessionEnvKey+"="); ok && reSessionID.MatchString(v) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // ProcRec is one process as the reader saw it. FootprintBytes is the
 // physical footprint (what Activity Monitor calls Memory).
 type ProcRec struct {
@@ -52,7 +70,10 @@ type ProcContext struct {
 	Table     map[int]ProcRec
 	JobOf     func(pid int) (string, bool)
 	SessionOf func(pid int) (string, bool) // pid is a Claude Code session process: its ref
-	ArgsOf    func(pid int) []string
+	// EnvSessionOf is the ref of the session in the process's own environment (SessionEnvKey). Optional. It is asked only for a
+	// process with no session above it, and the reader reads each environment once per process (with the job marker).
+	EnvSessionOf func(pid int) (string, bool)
+	ArgsOf       func(pid int) []string
 	// KindOf is the resident kind of a process, cached by the reader (a process's
 	// kind does not change). Optional: when nil it is computed from ArgsOf.
 	KindOf func(p ProcRec) string
@@ -136,6 +157,29 @@ func sessionAbove(p ProcRec, c ProcContext) (string, bool) {
 	return "", false
 }
 
+// sessionFor is the session a process belongs to: the one above it, else (for a helper that was reparented away from its session)
+// the one in its own environment or in the nearest ancestor's that has one. ok is false when nobody can be named.
+func sessionFor(p ProcRec, c ProcContext) (string, bool) {
+	if ref, ok := sessionAbove(p, c); ok {
+		return ref, true
+	}
+	if c.EnvSessionOf == nil {
+		return "", false
+	}
+	cur := p
+	for depth := 0; depth < 64; depth++ {
+		if ref, ok := c.EnvSessionOf(cur.PID); ok {
+			return ref, true
+		}
+		next, ok := c.Table[cur.PPID]
+		if !ok || cur.PPID <= 1 || next.PID == cur.PID {
+			return "", false
+		}
+		cur = next
+	}
+	return "", false
+}
+
 // jobAbove finds the wwd job a process belongs to: its own marker, or the
 // nearest ancestor's. The kernel hides the environment of system binaries
 // (/bin/sleep, /bin/sh), so a marker-less child of a job is still the job's.
@@ -170,7 +214,7 @@ func Attribute(p ProcRec, c ProcContext) *wire.ProcOwner {
 	if id, ok := jobAbove(p, c); ok {
 		return &wire.ProcOwner{Kind: wire.OwnerJob, ID: id}
 	}
-	session, hasSession := sessionAbove(p, c)
+	session, hasSession := sessionFor(p, c)
 	if c.SessionOf != nil {
 		if ref, ok := c.SessionOf(p.PID); ok {
 			return &wire.ProcOwner{Kind: wire.OwnerSession, Session: ref}
@@ -237,7 +281,7 @@ func BuildResidents(s ProcSnapshot, c ProcContext) []wire.Resident {
 		if _, isJob := jobAbove(p, c); isJob {
 			continue // residents are the non-job helpers (spec §3.1)
 		}
-		session, ok := sessionAbove(p, c)
+		session, ok := sessionFor(p, c)
 		if !ok {
 			session = "orphan"
 		}
