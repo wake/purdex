@@ -13,15 +13,21 @@ import (
 // fakeExec records every statement and answers the two listing queries from its own lists.
 type fakeExec struct {
 	sql       []string
+	dead      []bool             // for each statement: was its context already cancelled
+	cancel    context.CancelFunc // called when failOn matches, as a caller cancelling half way would
 	dbs       []string
 	users     []string
 	failOn    string
 	failError error
 }
 
-func (f *fakeExec) Run(_ context.Context, sql string) (string, error) {
+func (f *fakeExec) Run(ctx context.Context, sql string) (string, error) {
 	f.sql = append(f.sql, sql)
+	f.dead = append(f.dead, ctx.Err() != nil)
 	if f.failOn != "" && strings.Contains(sql, f.failOn) {
+		if f.cancel != nil {
+			f.cancel()
+		}
 		return "", f.failError
 	}
 	switch {
@@ -136,14 +142,15 @@ func TestDropTriesEveryStatementAndReportsTheFirstError(t *testing.T) {
 func TestSweepDropsOnlyOurLeftoversThatNoLiveJobOwns(t *testing.T) {
 	m := New(&fakeExec{}, Config{})
 	live, dead := m.Name("j_live"), m.Name("j_dead")
-	f := &fakeExec{dbs: []string{live, dead, "wwd_notours", "mysql", "appdb"}, users: []string{m.User("j_live"), m.User("j_dead"), "root"}}
+	f := &fakeExec{dbs: []string{live, dead, "wwd_notours", "mysql", "appdb"}, users: []string{m.User("j_live") + "\tlocalhost", m.User("j_dead") + "\tlocalhost", m.User("j_dead") + "\t10.0.0.%", "root\tlocalhost"}}
 	m = New(f, Config{})
 	dropped, err := m.Sweep(context.Background(), []string{"j_live"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := f.all()
-	if !strings.Contains(sql, "DROP DATABASE IF EXISTS `"+dead+"`") || !strings.Contains(sql, "DROP USER IF EXISTS '"+m.User("j_dead")+"'@'localhost'") {
+	if !strings.Contains(sql, "DROP DATABASE IF EXISTS `"+dead+"`") || !strings.Contains(sql, "DROP USER IF EXISTS '"+m.User("j_dead")+"'@'localhost'") ||
+		!strings.Contains(sql, "DROP USER IF EXISTS '"+m.User("j_dead")+"'@'10.0.0.%'") {
 		t.Fatalf("the dead job's database and user must go:\n%s", sql)
 	}
 	for _, keep := range []string{live, m.User("j_live"), "wwd_notours", "`mysql`", "appdb", "'root'"} {
@@ -166,27 +173,51 @@ func TestEnvNamesTheDatabaseAndKeepsThePasswordOutOfTheName(t *testing.T) {
 	}
 }
 
-func TestCLIExecRunsMysqlWithTheDefaultsFileAndTheStatementAsOneArgument(t *testing.T) {
+func TestCLIExecSendsTheStatementOnStdinAndNotAsAnArgument(t *testing.T) {
 	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE/args\"\necho one\necho two\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE/args\"\ncat > \"$FAKE/stdin\"\necho one\necho two\n"
 	if err := os.WriteFile(filepath.Join(dir, "mysql"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("FAKE", dir)
 	ex := CLI{Binary: filepath.Join(dir, "mysql"), DefaultsFile: "/etc/wwd/admin.cnf"}
-	out, err := ex.Run(context.Background(), "SELECT 1; DROP DATABASE x")
+	const sql = "CREATE USER 'u'@'localhost' IDENTIFIED BY 'sekrit0123'"
+	out, err := ex.Run(context.Background(), sql)
 	if err != nil || out != "one\ntwo\n" {
 		t.Fatalf("out %q err %v", out, err)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "args"))
-	args := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if args[0] != "--defaults-extra-file=/etc/wwd/admin.cnf" || args[len(args)-1] != "SELECT 1; DROP DATABASE x" {
+	if args := strings.Split(strings.TrimSpace(string(b)), "\n"); args[0] != "--defaults-extra-file=/etc/wwd/admin.cnf" {
 		t.Fatalf("args = %q", args)
 	}
-	for _, a := range args {
-		if strings.Contains(a, "password") {
-			t.Fatalf("no password on the command line: %q", args)
+	if strings.Contains(string(b), "sekrit0123") || strings.Contains(string(b), "CREATE") {
+		t.Fatalf("the statement, and so the password, must not be an argument: %q", b)
+	}
+	in, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if !strings.Contains(string(in), sql) {
+		t.Fatalf("stdin = %q", in)
+	}
+}
+
+func TestCreateCleanUpSurvivesACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &fakeExec{failOn: "GRANT", failError: errors.New("cancelled"), cancel: cancel}
+	m := New(f, Config{})
+	if _, err := m.Create(ctx, "j_test1"); err == nil {
+		t.Fatal("expected an error")
+	}
+	n := 0
+	for i, s := range f.sql {
+		if strings.HasPrefix(s, "DROP") && i > 5 {
+			n++
+			if f.dead[i] {
+				t.Fatalf("the clean-up ran on a cancelled context: %q", s)
+			}
 		}
+	}
+	if n == 0 {
+		t.Fatalf("clean-up missing:\n%s", f.all())
 	}
 }
 
@@ -198,5 +229,17 @@ func TestCLIExecErrorCarriesMysqlsOwnMessage(t *testing.T) {
 	_, err := CLI{Binary: filepath.Join(dir, "mysql")}.Run(context.Background(), "SELECT 1")
 	if err == nil || !strings.Contains(err.Error(), "ERROR 1045 denied") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSweepNeverPutsAHostWithQuotesIntoAStatement(t *testing.T) {
+	m := New(&fakeExec{}, Config{})
+	f := &fakeExec{users: []string{m.User("j_dead") + "\tx'; DROP DATABASE mysql; --"}}
+	m = New(f, Config{})
+	if _, err := m.Sweep(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.all(), "DROP DATABASE mysql") {
+		t.Fatalf("a host read back from the server was used as it is:\n%s", f.all())
 	}
 }

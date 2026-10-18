@@ -75,6 +75,7 @@ func (i Info) Env() []string {
 var (
 	dbNameRe   = regexp.MustCompile(`^wwd_[0-9a-f]{16}$`)
 	userNameRe = regexp.MustCompile(`^wwdu_[0-9a-f]{12}$`)
+	hostRe     = regexp.MustCompile(`^[A-Za-z0-9_.:%-]{1,255}$`) // a host read back from the server is checked before it is put in a statement
 )
 
 func digest(jobID string) string {
@@ -105,7 +106,10 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 	}
 	for _, s := range stmts {
 		if _, err := m.ex.Run(ctx, s); err != nil {
-			_ = m.Drop(ctx, jobID)
+			// the caller's context may be the very reason for the failure: the clean-up must not inherit its cancel
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			_ = m.Drop(cctx, jobID)
+			cancel()
 			return Info{}, fmt.Errorf("jobdb: %s: %w", firstWords(s), err)
 		}
 	}
@@ -142,7 +146,7 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	if err != nil {
 		return nil, fmt.Errorf("jobdb: list databases: %w", err)
 	}
-	userOut, err := m.ex.Run(ctx, `SELECT DISTINCT user FROM mysql.user WHERE user LIKE 'wwdu\_%'`)
+	userOut, err := m.ex.Run(ctx, `SELECT user, host FROM mysql.user WHERE user LIKE 'wwdu\_%'`)
 	if err != nil {
 		return nil, fmt.Errorf("jobdb: list users: %w", err)
 	}
@@ -161,12 +165,12 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 			}
 		}
 	}
-	for _, u := range lines(userOut) {
-		if userNameRe.MatchString(u) && !keepUser[u] {
-			for _, h := range m.cfg.UserHosts {
-				_, e := m.ex.Run(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", u, h))
-				note(e)
-			}
+	// every user/host pair that is really there, whatever hosts the config named when it was made
+	for _, l := range lines(userOut) {
+		u, h, ok := strings.Cut(l, "\t")
+		if ok && userNameRe.MatchString(u) && hostRe.MatchString(h) && !keepUser[u] {
+			_, e := m.ex.Run(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", u, h))
+			note(e)
 		}
 	}
 	sort.Strings(dropped)
@@ -193,7 +197,7 @@ func firstWords(s string) string {
 }
 
 // CLI runs statements with the mysql client. DefaultsFile (an administrator's [client] section: user, password, socket or host)
-// is passed as --defaults-extra-file, so no secret is on the command line.
+// is passed as --defaults-extra-file, and the statements are read from standard input, so no secret is on the command line.
 type CLI struct {
 	Binary       string // default "mysql"
 	DefaultsFile string
@@ -215,8 +219,10 @@ func (c CLI) Run(ctx context.Context, sql string) (string, error) {
 	if c.DefaultsFile != "" {
 		args = append(args, "--defaults-extra-file="+c.DefaultsFile) // must be the first option
 	}
-	args = append(args, "-N", "-B", "-e", sql)
+	// the statements go in on standard input: CREATE USER holds a password, and an argument shows in the process list
+	args = append(args, "-N", "-B")
 	cmd := execstat.CommandContext(ctx, "wwd.jobdb", bin, args...)
+	cmd.Stdin = strings.NewReader(sql + ";\n")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
