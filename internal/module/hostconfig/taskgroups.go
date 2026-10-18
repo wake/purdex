@@ -40,13 +40,14 @@ type TaskGroup struct {
 	UpdatedAt int64    `json:"updated_at"`
 }
 
+// taskGroupIn is a row as it arrives. The times are pointers: a missing or null time must not read as the time 0.
 type taskGroupIn struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	Color     string   `json:"color"`
 	Roots     []string `json:"roots"`
-	CreatedAt int64    `json:"created_at"`
-	UpdatedAt int64    `json:"updated_at"`
+	CreatedAt *int64   `json:"created_at"`
+	UpdatedAt *int64   `json:"updated_at"`
 }
 
 // taskGroupState is what the rows kept so far hold: the rules that span rows (an id once, a root in one group).
@@ -63,6 +64,10 @@ func newTaskGroupState() *taskGroupState {
 // roots only once the whole row passes. An empty id is generated (8 hex, avoiding the ids kept and reserved) when generate is
 // set, else the row is refused: the lenient read must answer the same id every time.
 func checkTaskGroup(in json.RawMessage, st *taskGroupState, reserved map[string]bool, generate bool) (TaskGroup, error) {
+	// the same rule as the PUT body's (the shared handler checks every object in it): the last of two equal keys must not win
+	if err := rejectDuplicateKeys(in); err != nil {
+		return TaskGroup{}, fmt.Errorf("invalid task group: %v", err)
+	}
 	var r taskGroupIn
 	if err := strictDecode(in, &r); err != nil {
 		return TaskGroup{}, fmt.Errorf("invalid task group: %v", err)
@@ -85,8 +90,8 @@ func checkTaskGroup(in json.RawMessage, st *taskGroupState, reserved map[string]
 	if r.Color != "" && !hexColorPattern.MatchString(r.Color) {
 		return TaskGroup{}, fmt.Errorf("color must be #rrggbb, got %q", r.Color)
 	}
-	if r.CreatedAt < 0 || r.UpdatedAt < 0 {
-		return TaskGroup{}, errors.New("created_at and updated_at must not be negative")
+	if r.CreatedAt == nil || r.UpdatedAt == nil || *r.CreatedAt < 0 || *r.UpdatedAt < 0 {
+		return TaskGroup{}, errors.New("created_at and updated_at are required: integers, not negative")
 	}
 	if len(r.Roots) > maxTaskGroupRoots {
 		return TaskGroup{}, fmt.Errorf("at most %d roots in a group", maxTaskGroupRoots)
@@ -118,7 +123,7 @@ func checkTaskGroup(in json.RawMessage, st *taskGroupState, reserved map[string]
 	for _, root := range roots {
 		st.owner[root] = id
 	}
-	return TaskGroup{ID: id, Name: name, Color: r.Color, Roots: roots, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}, nil
+	return TaskGroup{ID: id, Name: name, Color: r.Color, Roots: roots, CreatedAt: *r.CreatedAt, UpdatedAt: *r.UpdatedAt}, nil
 }
 
 // normalizeTaskGroups validates a PUT body: an array of at most 32 groups, all passing. A group keeps the id it sends and gets

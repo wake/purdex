@@ -105,6 +105,16 @@ func TestTaskGroups_Refusals(t *testing.T) {
 	extra["members"] = []string{"x"}
 	badTime := group("aaaa1111", "A", "r1")
 	badTime["created_at"] = -1
+	// the times are part of the shape: missing, null, a string, a float and an overflow are not the time 0 or a time at all
+	withTime := func(field string, v any, drop bool) map[string]any {
+		g := group("aaaa1111", "A", "r1")
+		if drop {
+			delete(g, field)
+		} else {
+			g[field] = v
+		}
+		return g
+	}
 	cases := map[string][]any{
 		"33 groups":                  many,
 		"65 roots in a group":        {group("aaaa1111", "A", roots65...)},
@@ -120,6 +130,13 @@ func TestTaskGroups_Refusals(t *testing.T) {
 		"a bad colour":               {badColor},
 		"a field that is not known":  {extra},
 		"a negative time":            {badTime},
+		"created_at missing":         {withTime("created_at", nil, true)},
+		"created_at null":            {withTime("created_at", nil, false)},
+		"updated_at missing":         {withTime("updated_at", nil, true)},
+		"updated_at null":            {withTime("updated_at", nil, false)},
+		"updated_at a string":        {withTime("updated_at", "1760000000000", false)},
+		"created_at a float":         {withTime("created_at", 1.5, false)},
+		"created_at overflows":       {withTime("created_at", json.RawMessage("99999999999999999999"), false)},
 	}
 	for name, items := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -174,6 +191,28 @@ func TestTaskGroups_TheLenientReadDropsASecondOwnerOfARoot(t *testing.T) {
 	assert.Equal(t, "aaaa1111", got.Items[0].ID)
 	require.NotNil(t, got.Dropped)
 	assert.Equal(t, 1, got.Dropped.Count)
+}
+
+// A duplicate key inside a row is refused by the PUT (the shared handler checks the whole body), so the lenient read must not
+// keep the last value of it either: the row is dropped and counted (NP-5 R2).
+// Mutation gate: no duplicate-key check in the row rules -> the read keeps the row -> red.
+func TestTaskGroups_ADuplicateKeyInARowIsRefusedByTheReadToo(t *testing.T) {
+	m := newTestModule(t)
+	row := `{"id":"aaaa1111","id":"bbbb2222","name":"A","roots":[],"created_at":1,"updated_at":1}`
+	_, ok, err := m.store.Put(KeyTaskGroups, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage("[" + row + "]"), nil })
+	require.NoError(t, err)
+	require.True(t, ok)
+	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
+	var all map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &all))
+	var got groupsAnswer
+	require.NoError(t, json.Unmarshal(all["taskGroups"], &got))
+	assert.Empty(t, got.Items, "the read kept a row with a duplicate key")
+	require.NotNil(t, got.Dropped)
+	assert.Equal(t, 1, got.Dropped.Count)
+
+	put := serve(m, http.MethodPut, "/api/hostconfig/task-groups", `{"items":[`+row+`],"baseRevision":1}`)
+	assert.Equal(t, http.StatusBadRequest, put.Code, "the PUT took the same row")
 }
 
 // The real module registered in a real core, asked through GET /api/info (the lesson of fleet.v1): task_groups.v1 is declared
