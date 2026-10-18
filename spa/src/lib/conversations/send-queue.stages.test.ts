@@ -51,7 +51,7 @@ describe('the stage of an entry', () => {
     const q = new SendQueue(port)
     const id = q.enqueue('hi')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'refused', reason: 'busy' })
+    calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 })
     await flush()
     await vi.advanceTimersByTimeAsync(1000) // the retry goes out under a new id
     expect(calls).toHaveLength(2)
