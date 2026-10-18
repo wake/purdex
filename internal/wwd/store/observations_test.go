@@ -149,7 +149,10 @@ func TestOpenMigratesV2ToV3(t *testing.T) {
 		t.Fatalf("old rows kept: %+v %v %v", ws, ok, err)
 	}
 	var v int
-	if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != 3 {
+	if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != schemaVersion { // a step run in order lands on the current version
 		t.Fatalf("version %d err %v", v, err)
+	}
+	if err := saveUsageNow(s, usageEnding("j_after", t0)); err != nil { // and the later steps ran too
+		t.Fatalf("usage after migration from 2: %v", err)
 	}
 }
