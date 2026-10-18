@@ -163,6 +163,10 @@ func (q *Queue) letGo(ctx context.Context, c *sql.Conn, h held, counted int, lap
 			claim_id = NULL, claim_since = NULL, lease_deadline = NULL, lease_s = NULL, updated_at = ? WHERE id = ?`, counted, b2i(lapsed), now, h.id)
 		return err
 	}
+	// the counts are kept when the job ends too: the attempt and the lapse that ended it are part of its history
+	if _, err := c.ExecContext(ctx, `UPDATE jobs SET attempts = attempts + ?, lapses = lapses + ? WHERE id = ?`, counted, b2i(lapsed), h.id); err != nil {
+		return err
+	}
 	return endHeld(ctx, c, h, state, res, "", now)
 }
 

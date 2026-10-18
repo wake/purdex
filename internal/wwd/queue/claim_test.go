@@ -471,6 +471,10 @@ func TestInfraReleasesDoNotBringLostCloser(t *testing.T) {
 	j := f.get(t, id)
 	assert.Equal(t, wire.StateFailed, j.State, "the second lapse fails it")
 	assert.Equal(t, "lost", j.Result.Reason)
+	var lapses int
+	require.NoError(t, f.db.QueryRow(`SELECT lapses FROM jobs WHERE id = ?`, id).Scan(&lapses))
+	assert.Equal(t, 2, lapses, "the lapse that ended it is counted too")
+	assert.Equal(t, 4, f.attempts(t, id))
 }
 
 // A fast-lane job is never requeued: its lease lapsing fails it as lost at once, and a release ends it with the release's reason.
