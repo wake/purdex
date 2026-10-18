@@ -683,11 +683,22 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		}
 	}
 
-	instance := m.tmuxInstanceWithin(invCtx)
-
 	sessions, err := m.listSessionsWithin(invCtx)
 	if err != nil {
 		return writeError(err.Error())
+	}
+	// The generation the list was read under is the "before" sample: it travels with the list (the same tmux invocation, #3316), so
+	// it is the very server that gave the sessions — a restart between a probe and the list can no longer straddle them — and costs
+	// no probe of its own. With no session to carry it, or a provider that does not stamp one, it is probed as it always was.
+	instance := ""
+	for _, s := range sessions {
+		if s.TmuxInstance != "" {
+			instance = s.TmuxInstance
+			break
+		}
+	}
+	if instance == "" {
+		instance = m.tmuxInstanceWithin(invCtx)
 	}
 
 	// ONE read of the process table per pass, shared by the registry read and

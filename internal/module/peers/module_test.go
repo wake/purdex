@@ -545,8 +545,8 @@ func TestLocalEnvelope_ProbesAndListShareOneBudget(t *testing.T) {
 	if !strings.Contains(env.Error, context.DeadlineExceeded.Error()) {
 		t.Errorf("error = %q, want the budget's deadline error", env.Error)
 	}
-	if n := sessions.instanceCtxCalls.Load(); n != 1 {
-		t.Errorf("context-aware probes = %d, want 1 (the list failed before the second)", n)
+	if n := sessions.instanceCtxCalls.Load(); n != 0 {
+		t.Errorf("context-aware probes = %d, want 0 (the list is read first now, and failed before either probe)", n)
 	}
 }
 
