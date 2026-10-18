@@ -215,3 +215,62 @@ func TestASweepAnswerForAReplacedEntryIsNotApplied(t *testing.T) {
 		t.Fatal("the new run's hold and directory stay")
 	}
 }
+
+// A snapshot of an entry that was cleared and came back under other keys does not take the old keys, and does not fail on the new ones.
+func TestARestoreOfAnOlderGenerationDoesNotTouchTheNewerEntry(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := setUp(t, r, s, stQuarantined)
+	r.locks.ReleaseOwner(e.Owner) // a restart
+	h := s.snapshot()[0]
+	if err := s.Clear("a"); err != nil {
+		t.Fatal(err)
+	}
+	e2 := r.entry("a", "redis")
+	if _, err := r.locks.Acquire(e2.Owner, e2.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e2); err != nil {
+		t.Fatal(err)
+	}
+	s.Settle(e2.Owner)
+	if err := s.restoreOne(h); err != nil {
+		t.Fatalf("the old snapshot acted on the newer entry: %v", err)
+	}
+	if _, ok := r.locks.Holder("mysql"); ok {
+		t.Fatal("the old entry's key was taken")
+	}
+}
+
+// A running entry's hold is the runner's: Restore does not take it back for the runner.
+func TestRestoreLeavesTheHoldOfARunningEntryToTheRunner(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := setUp(t, r, s, stRunning)
+	r.locks.ReleaseOwner(e.Owner)
+	if err := s.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.locks.Holder("mysql"); ok {
+		t.Fatal("Restore took the hold of a running entry")
+	}
+}
+
+// A Clear whose entry changed while it was looking at it says so, and clears nothing.
+func TestAClearOfAnEntryThatChangedSaysSo(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := setUp(t, r, s, stQuarantined)
+	s.window = func() {
+		s.window = nil
+		if err := s.Add(e); err != nil { // rewritten: a new generation
+			t.Error(err)
+		}
+	}
+	if err := s.Clear("a"); err == nil {
+		t.Fatal("want an error: the entry changed, nothing was cleared")
+	}
+	if observe(s, e.Owner) != stQuarantined || !exists(e.Dir) {
+		t.Fatal("the entry stays")
+	}
+}

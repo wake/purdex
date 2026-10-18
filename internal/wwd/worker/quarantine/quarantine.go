@@ -119,8 +119,8 @@ type Store struct {
 	checker  UnitChecker
 	now      func() time.Time
 
-	// window, when set (tests only), runs in the stretch of Add and Begin that is outside the lock: after the marker file is prepared,
-	// before the lock is taken.
+	// window, when set (tests only), runs in the stretch of Add, Begin and Clear that is outside the lock: after the marker file is
+	// prepared (or the snapshot taken), before the lock is taken.
 	window func()
 
 	mu      sync.Mutex
@@ -639,6 +639,9 @@ func (s *Store) Clear(jobID ...string) error {
 	byJob := map[string][]snap{}
 	for _, h := range s.snapshot() {
 		byJob[h.e.JobID] = append(byJob[h.e.JobID], h)
+	}
+	if s.window != nil {
+		s.window()
 	}
 	var errs []error
 	for _, id := range jobID {
