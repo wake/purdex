@@ -172,11 +172,19 @@ func TestGuardEndKeepsTheMarkerOfAQuarantinedRunAndDropsOtherwise(t *testing.T) 
 	}
 	g.End(e, true)
 	if len(q.store.Held()) != 1 {
-		t.Fatal("a quarantined run's marker survives End: it is the only record until Finish settles it")
+		t.Fatal("a quarantined run's marker survives End: it is the only record")
 	}
-	g.End(e, false)
-	if len(q.store.Held()) != 0 {
-		t.Fatal("a run whose unit is proven gone leaves no marker")
+	g.End(e, false) // a call that does not fit (the entry is quarantined, not running): the record is kept
+	if len(q.store.Held()) != 1 {
+		t.Fatal("End(false) on a quarantined entry must not delete the quarantine record")
+	}
+	e2 := runner.Ended{Source: "mlab", Job: qjob("b", wire.ClassDev, 0, "tmux"), ClaimID: claimID, Root: filepath.Join(q.root, "b", "ws")}
+	if err := g.Begin(e2); err != nil {
+		t.Fatal(err)
+	}
+	g.End(e2, false)
+	if len(q.store.Held()) != 1 {
+		t.Fatal("a run whose unit is proven gone leaves no marker (only a's is left)")
 	}
 }
 
