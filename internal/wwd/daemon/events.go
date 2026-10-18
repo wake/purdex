@@ -124,6 +124,13 @@ func (b *Broker) PublishJob(ev wire.JobEvent) {
 	}
 }
 
+// PublishLabels announces that this host's labels changed.
+func (b *Broker) PublishLabels(ev wire.LabelsEvent) {
+	if e, ok := envelope(wire.EventLabels, ev); ok {
+		b.publish(e, false)
+	}
+}
+
 // PublishException and PublishWorker are for WWD-1f.
 func (b *Broker) PublishException(ev wire.ExceptionEvent) {
 	if e, ok := envelope(wire.EventException, ev); ok {

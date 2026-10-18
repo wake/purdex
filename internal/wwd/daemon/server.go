@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -28,6 +29,10 @@ type Options struct {
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
 	Broker                 *Broker      // the event broker (shared with State); nil: a new one
+	// RepoSource lists the repos this host has a prepared clone of (they become
+	// repo:<name> labels). Called once per facts record: cheap, never blocking.
+	// nil: no repo labels.
+	RepoSource func() []string
 }
 
 // Daemon holds the state both HTTP surfaces serve.
@@ -36,6 +41,7 @@ type Daemon struct {
 	broker *Broker
 	pool   *PoolPoller
 	fwd    *http.Client
+	labels labels.Tracker
 }
 
 func New(o Options) *Daemon {
@@ -109,11 +115,34 @@ func (d *Daemon) info() wire.Info {
 	if d.opts.State != nil {
 		enabled = d.opts.State.Worker().Enabled // the switch can be flipped at run time
 	}
+	lbl, fp := d.labels.Current()
+	if len(lbl) == 0 { // no facts record yet: what the build says
+		lbl = []string{"arch:" + runtime.GOARCH, "os:" + runtime.GOOS}
+	}
 	return wire.Info{
 		HostID: d.opts.HostID, Alias: d.opts.Alias, Version: d.opts.Version,
 		Proto: wire.Proto, Platform: runtime.GOOS, Arch: runtime.GOARCH,
 		Worker: wire.InfoWorker{Enabled: enabled},
-		Labels: []string{"os:" + runtime.GOOS, "arch:" + runtime.GOARCH},
+		Labels: lbl, Fingerprint: fp,
+	}
+}
+
+// OnFacts takes a new facts record (the sampler's OnFacts): it announces the
+// record, refreshes the labels and the fingerprint, and announces the labels
+// only when they really changed.
+func (d *Daemon) OnFacts(f wire.Facts) {
+	d.broker.PublishFacts(f)
+	var repos []string
+	if d.opts.RepoSource != nil {
+		for _, r := range d.opts.RepoSource() {
+			if r != "" {
+				repos = append(repos, "repo:"+r)
+			}
+		}
+	}
+	if d.labels.Update(f, repos...) {
+		l, _ := d.labels.Current()
+		d.broker.PublishLabels(wire.LabelsEvent{Host: d.opts.Alias, Labels: l})
 	}
 }
 

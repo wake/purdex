@@ -1,6 +1,6 @@
 {"hosts": [{
   "info": {"host_id": "h-air19", "alias": "air19", "version": "0.1.0", "proto": 1, "platform": "darwin", "arch": "amd64",
-           "worker": {"enabled": false}, "labels": []},
+           "worker": {"enabled": false}, "labels": [], "fingerprint": {}},
   "facts": null,
   "worker": {"enabled": false, "slots": {"heavy": 0, "light": 0}, "owner_rule": ""},
   "labels": [], "reachable": false}]}

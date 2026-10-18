@@ -17,6 +17,9 @@ type Info struct {
 	Arch     string     `json:"arch"`
 	Worker   InfoWorker `json:"worker"`
 	Labels   []string   `json:"labels"`
+	// Fingerprint is the OS version and every tool's full version (spec §7, §9);
+	// empty before the first facts record.
+	Fingerprint map[string]string `json:"fingerprint"`
 }
 
 type InfoWorker struct {

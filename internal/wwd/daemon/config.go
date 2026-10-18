@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,6 +33,10 @@ type Config struct {
 	Worker      WorkerConfig `toml:"worker"`
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
+	// Repos lists the prepared clones of this host: repo name = clone path
+	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
+	// verified it; the verified repos become repo:<name> labels.
+	Repos map[string]string `toml:"repos"`
 }
 
 // WorkerConfig is the worker's starting settings. Heavy and Light are slots; an
@@ -110,6 +115,26 @@ func (c Config) validatePeers() error {
 	return nil
 }
 
+var reRepoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// validateRepos checks the names (they become label text) and expands ~/ in the
+// paths, which must then be absolute.
+func (c *Config) validateRepos(home string) error {
+	for name, p := range c.Repos {
+		if !reRepoName.MatchString(name) {
+			return fmt.Errorf("repos: name %q is not a plain repo name (letters, digits, . _ -)", name)
+		}
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("repos: %s: path %q is not absolute", name, p)
+		}
+		c.Repos[name] = filepath.Clean(p)
+	}
+	return nil
+}
+
 // DefaultConfigPath is ~/.config/wwd/config.toml.
 func DefaultConfigPath(home string) string {
 	return filepath.Join(home, ".config", "wwd", "config.toml")
@@ -137,6 +162,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validatePeers(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateRepos(home); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {

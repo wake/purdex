@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/queue"
@@ -127,9 +128,9 @@ func run(cfgPath string) error {
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
 		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
-		State: state, Broker: broker,
+		State: state, Broker: broker, RepoSource: clones.NewSource(cfg.Repos).Names,
 	})
-	sampler.SetOnFacts(d.Events().PublishFacts)
+	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})

@@ -1,2 +1,3 @@
 {"host_id": "h-mlab", "alias": "mlab", "version": "0.1.0", "proto": 1, "platform": "darwin", "arch": "arm64",
- "worker": {"enabled": true}, "labels": ["os:darwin", "arch:arm64", "repo:purdex"]}
+ "worker": {"enabled": true}, "labels": ["os:darwin", "arch:arm64", "repo:purdex"],
+ "fingerprint": {"os_version": "26.6.2", "node": "24.14.0", "go": "1.26.0"}}
