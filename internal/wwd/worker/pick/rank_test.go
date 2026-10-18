@@ -1,0 +1,260 @@
+package pick
+
+import (
+	"math"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+
+func job(id string, class wire.JobClass, age time.Duration) wire.Job {
+	return wire.Job{
+		ID: id, Origin: "mlab", Task: "test", Snapshot: wire.Snapshot{Commit: "abc"}, Class: class, CreatedAt: t0.Add(-age), State: wire.StateQueued,
+		Repo: wire.Repo{Name: "purdex"}, Labels: []string{"go"},
+		Submitter: wire.Submitter{Session: "s-" + id},
+	}
+}
+
+func cand(j wire.Job) Candidate { return Candidate{Source: "mlab", Job: j} }
+
+func baseEnv() Env {
+	return Env{Now: t0, Labels: []string{"go", "node"}, SpeedFactor: 1}
+}
+
+func ids(r []Scored) []string {
+	var out []string
+	for _, s := range r {
+		out = append(out, s.Job.ID)
+	}
+	return out
+}
+
+func eq(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+}
+
+func TestClassDominatesWait(t *testing.T) {
+	// a dev job that waited 10 hours (600 points) still loses to a fresh merge job (1000 points ahead).
+	r := Rank([]Candidate{cand(job("dev", wire.ClassDev, 10*time.Hour)), cand(job("merge", wire.ClassMerge, 0)), cand(job("rel", wire.ClassRelease, 0))}, baseEnv())
+	eq(t, ids(r), []string{"rel", "merge", "dev"})
+}
+
+func TestWaitMinutesAddUp(t *testing.T) {
+	r := Rank([]Candidate{cand(job("young", wire.ClassDev, time.Minute)), cand(job("old", wire.ClassDev, 30*time.Minute))}, baseEnv())
+	eq(t, ids(r), []string{"old", "young"})
+	if r[0].Score != 1000+30 {
+		t.Fatalf("score = %v, want 1030", r[0].Score)
+	}
+}
+
+func TestOriginBonusByZone(t *testing.T) {
+	a := cand(job("a", wire.ClassDev, 0))
+	b := cand(job("b", wire.ClassDev, 0))
+	b.Zone = wire.ZoneWarning
+	c := cand(job("c", wire.ClassDev, 0))
+	c.Zone = wire.ZoneDanger
+	r := Rank([]Candidate{a, b, c}, baseEnv())
+	eq(t, ids(r), []string{"c", "b", "a"})
+	if r[0].Score != 1400 || r[1].Score != 1200 || r[2].Score != 1000 {
+		t.Fatalf("scores %v %v %v", r[0].Score, r[1].Score, r[2].Score)
+	}
+}
+
+func TestMissingCloneIsNotAFilter(t *testing.T) {
+	// no clone here: the workspace comes from the origin's tar (spec 5), so the job stays claimable, only without warm_bonus.
+	env := baseEnv()
+	env.Warm = func(j wire.Job) bool { return false }
+	r := Rank([]Candidate{cand(job("far", wire.ClassDev, 0))}, env)
+	eq(t, ids(r), []string{"far"})
+}
+
+func TestWarmBonus(t *testing.T) {
+	env := baseEnv()
+	env.Warm = func(j wire.Job) bool { return j.ID == "w" }
+	r := Rank([]Candidate{cand(job("c", wire.ClassDev, time.Minute)), cand(job("w", wire.ClassDev, 0))}, env)
+	eq(t, ids(r), []string{"w", "c"})
+	if r[0].Score != 1050 {
+		t.Fatalf("score = %v", r[0].Score)
+	}
+}
+
+func TestSizePenaltyUsesSpeedFactorAndEstimate(t *testing.T) {
+	env := baseEnv()
+	env.SpeedFactor = 2
+	env.Estimate = func(j wire.Job) float64 {
+		if j.ID == "big" {
+			return 20
+		}
+		return 1
+	}
+	r := Rank([]Candidate{cand(job("big", wire.ClassDev, 0)), cand(job("small", wire.ClassDev, 0))}, env)
+	eq(t, ids(r), []string{"small", "big"})
+	if r[1].Score != 1000-40 {
+		t.Fatalf("big score = %v, want 960", r[1].Score)
+	}
+}
+
+func TestSameSessionPenaltyCountsEarlierQueuedJobs(t *testing.T) {
+	mk := func(id string, age time.Duration) Candidate {
+		j := job(id, wire.ClassDev, age)
+		j.Submitter.Session = "same"
+		return cand(j)
+	}
+	r := Rank([]Candidate{mk("third", 0), mk("first", 3*time.Minute), mk("second", 2*time.Minute)}, baseEnv())
+	scores := map[string]float64{}
+	for _, s := range r {
+		scores[s.Job.ID] = s.Score
+	}
+	if scores["first"] != 1000+3 || scores["second"] != 1000+2-30 || scores["third"] != 1000-60 {
+		t.Fatalf("scores %v", scores)
+	}
+}
+
+func TestSamePenaltyCountsJobsThatCannotRunHere(t *testing.T) {
+	// the penalty is about the submitter's queue, not about what this host can run.
+	other := job("other", wire.ClassDev, 5*time.Minute)
+	other.Labels = []string{"php"}
+	other.Submitter.Session = "same"
+	mine := job("mine", wire.ClassDev, 0)
+	mine.Submitter.Session = "same"
+	r := Rank([]Candidate{cand(other), cand(mine)}, baseEnv())
+	eq(t, ids(r), []string{"mine"})
+	if r[0].Score != 1000-30 {
+		t.Fatalf("score = %v", r[0].Score)
+	}
+}
+
+func TestTieBreaksByCreatedAtThenID(t *testing.T) {
+	a := job("b", wire.ClassDev, 0)
+	b := job("a", wire.ClassDev, 0)
+	r := Rank([]Candidate{cand(a), cand(b)}, baseEnv())
+	eq(t, ids(r), []string{"a", "b"})
+
+	// equal score by different route: created_at breaks it, the older first.
+	older := job("older", wire.ClassDev, 0)
+	older.CreatedAt = t0.Add(-30 * time.Second)
+	newer := job("newer", wire.ClassDev, 0)
+	newer.CreatedAt = t0.Add(-30*time.Second + 1)
+	env := baseEnv()
+	env.Now = t0.Add(-30 * time.Second) // wait_minutes whole-number floor makes both 0
+	r = Rank([]Candidate{cand(newer), cand(older)}, env)
+	eq(t, ids(r), []string{"older", "newer"})
+}
+
+func TestFilters(t *testing.T) {
+	env := baseEnv()
+	env.Locked = func(keys []string) bool { return len(keys) > 0 && keys[0] == "mysql" }
+	env.Suspended = func(repo string) bool { return repo == "paused" }
+	locked := job("locked", wire.ClassDev, 0)
+	locked.Locks = []string{"mysql"}
+	label := job("label", wire.ClassDev, 0)
+	label.Labels = []string{"php"}
+	paused := job("paused", wire.ClassDev, 0)
+	paused.Repo.Name = "paused"
+	claimed := job("claimed", wire.ClassDev, 0)
+	claimed.State = wire.StateClaimed
+	ok := job("ok", wire.ClassDev, 0)
+	r := Rank([]Candidate{cand(locked), cand(label), cand(paused), cand(claimed), cand(ok)}, env)
+	eq(t, ids(r), []string{"ok"})
+}
+
+func TestNoLabelsRequiredAlwaysRuns(t *testing.T) {
+	j := job("x", wire.ClassDev, 0)
+	j.Labels = nil
+	env := baseEnv()
+	env.Labels = nil
+	eq(t, ids(Rank([]Candidate{cand(j)}, env)), []string{"x"})
+}
+
+func TestPinnedOrder(t *testing.T) {
+	env := baseEnv()
+	pins := map[string]Pin{
+		"mlab/f2": {Mode: PinFront, Seq: 2}, "mlab/f1": {Mode: PinFront, Seq: 1},
+		"mlab/b2": {Mode: PinBack, Seq: 4}, "mlab/b1": {Mode: PinBack, Seq: 3},
+		"mlab/h": {Mode: PinHold, Seq: 9},
+	}
+	env.Pinned = func(c Candidate) (Pin, bool) { p, ok := pins[c.Source+"/"+c.Job.ID]; return p, ok }
+	r := Rank([]Candidate{
+		cand(job("b2", wire.ClassRelease, time.Hour)), cand(job("n-dev", wire.ClassDev, 0)), cand(job("f2", wire.ClassDev, 0)),
+		cand(job("h", wire.ClassRelease, time.Hour)), cand(job("n-merge", wire.ClassMerge, 0)),
+		cand(job("f1", wire.ClassDev, 0)), cand(job("b1", wire.ClassRelease, time.Hour)),
+	}, env)
+	eq(t, ids(r), []string{"f1", "f2", "n-merge", "n-dev", "b1", "b2"})
+}
+
+func TestRankDoesNotMutateInput(t *testing.T) {
+	in := []Candidate{cand(job("a", wire.ClassDev, 0)), cand(job("b", wire.ClassRelease, 0))}
+	Rank(in, baseEnv())
+	if in[0].Job.ID != "a" || in[1].Job.ID != "b" {
+		t.Fatalf("input reordered: %v", in)
+	}
+}
+
+func TestFutureCreatedAtDoesNotLowerScore(t *testing.T) {
+	// clock skew between hosts can put created_at ahead of now; wait is never negative.
+	r := Rank([]Candidate{cand(job("skew", wire.ClassDev, -5*time.Minute))}, baseEnv())
+	if r[0].Score != 1000 {
+		t.Fatalf("score = %v, want 1000", r[0].Score)
+	}
+}
+
+func TestBadEstimateAndSpeedAreIgnored(t *testing.T) {
+	nan, inf := math.NaN(), math.Inf(1)
+	for name, c := range map[string]struct{ speed, est float64 }{
+		"nan estimate": {1, nan}, "inf estimate": {1, inf}, "negative estimate": {1, -50},
+		"nan speed": {nan, 10}, "inf speed": {inf, 10}, "negative speed": {-3, 10}, "zero speed": {0, 10},
+	} {
+		env := baseEnv()
+		env.SpeedFactor = c.speed
+		env.Estimate = func(wire.Job) float64 { return c.est }
+		r := Rank([]Candidate{cand(job("a", wire.ClassDev, 0))}, env)
+		want := 1000.0
+		if c.est == 10 {
+			want = 990 // a bad speed factor is 1, the estimate still counts
+		}
+		if len(r) != 1 || r[0].Score != want {
+			t.Errorf("%s: score = %v, want %v", name, r[0].Score, want)
+		}
+	}
+}
+
+func TestNaNEstimateDoesNotReorderOthers(t *testing.T) {
+	env := baseEnv()
+	env.Estimate = func(j wire.Job) float64 {
+		if j.ID == "bad" {
+			return math.NaN()
+		}
+		return 0
+	}
+	in := []Candidate{cand(job("low", wire.ClassDev, 0)), cand(job("bad", wire.ClassDev, time.Minute)), cand(job("high", wire.ClassMerge, 0))}
+	eq(t, ids(Rank(in, env)), []string{"high", "bad", "low"})
+	eq(t, ids(Rank([]Candidate{in[2], in[1], in[0]}, env)), []string{"high", "bad", "low"})
+}
+
+func TestPinIsPerOrigin(t *testing.T) {
+	// the same job id on two origins: only the one on the pinned origin is held.
+	env := baseEnv()
+	env.Pinned = func(c Candidate) (Pin, bool) {
+		if c.Source == "air26" && c.Job.ID == "same" {
+			return Pin{Mode: PinHold}, true
+		}
+		return Pin{}, false
+	}
+	a := Candidate{Source: "air26", Job: job("same", wire.ClassDev, 0)}
+	b := Candidate{Source: "mlab", Job: job("same", wire.ClassDev, 0)}
+	r := Rank([]Candidate{a, b}, env)
+	if len(r) != 1 || r[0].Source != "mlab" {
+		t.Fatalf("got %+v", r)
+	}
+}
