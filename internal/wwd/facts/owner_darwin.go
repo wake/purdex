@@ -88,8 +88,8 @@ func DarwinOwnerSources() (src OwnerSources, err error) {
 		IdleSeconds: func() (float64, error) {
 			// IOServiceMatching's dictionary is consumed by IOServiceGetMatchingService, so nothing is released for it
 			dict := matching(&hidClass[0])
-			if dict == 0 {
-				return 0, ErrNoHIDSystem
+			if dict == 0 { // an allocation or binding failure, not a machine without an HID system
+				return 0, errors.New("IOServiceMatching failed")
 			}
 			svc := service(ioKitMainPortNull, dict)
 			if svc == 0 {
