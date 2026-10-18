@@ -481,6 +481,37 @@ test('a rewrite and a direct tool binary in one call: both are made', async ($, 
   expect(r.ran[0].command).toBe("'pdx' test spa-file src/a.test.ts && 'pdx' gate --auto -- ./vendor/bin/pest")
 })
 
+// Bash removes a backslash and a newline before it splits words: `go \<newline> test` is `go test`, `te\<newline>st` is `test`.
+for (const cmd of ['go \\\n test ./...', 'go \\\ntest ./...', 'g\\\no test ./...', 'go test \\\n  ./...']) {
+  test(`a line continuation does not hide the command: ${JSON.stringify(cmd)}`, async ($, on) => {
+    const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'] } }), () => BASH_OK, ENTRY_ON)
+    await bash($, cmd)
+    expect(r.ran[0].command).toBe("'pdx' test go-pkg ./...")
+  })
+}
+
+test('a line continuation does not hide a command from deny either', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'deny', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go \\\n test ./...')
+  expect(out.deny).toContain('pdx test go-pkg')
+  expect(r.ran).toEqual([])
+})
+
+test('with the switch off a line continuation is read as it always was: nothing is asked', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'deny', hint: 'go-pkg' } }), () => BASH_OK, JSON.stringify({ pdx: 'pdx' }))
+  await bash($, 'go \\\n test ./...')
+  expect(entryCalls(r)).toEqual([])
+  expect(r.ran[0].command).toBe('go \\\n test ./...')
+})
+
+test('the final command and its background are checked as one: a queued rewrite with a direct tool binary falls back whole when the final form would change the verdict', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
+  r.verdict = (command, bg) => (command.includes('gate --auto') && bg === true ? 'ask' : 'allow')
+  await bash($, 'go test ./... && ./vendor/bin/pest')
+  expect(r.ran[0].command).toBe('go test ./... && ./vendor/bin/pest')
+  expect(r.ran[0].bg).toBeUndefined()
+})
+
 test('a manifest that does not read is said, and the call goes on', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go test ./...': { action: 'none', broken: true, reason: 'manifest x: bad' } }), () => BASH_OK, ENTRY_ON)
   const out = await bash($, 'go test ./...')

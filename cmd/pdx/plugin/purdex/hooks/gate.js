@@ -28,8 +28,9 @@ const BARE = /[<>&]$/
 
 // scan splits a command into segments of words. A word records the text between its quotes and where it
 // sits in the original string. Returns null when the command cannot be parsed (an open quote) or has a
-// backgrounding `&`.
-function scan(cmd) {
+// backgrounding `&`. With `continuation`, a backslash and a newline are removed as the shell removes them before it splits words
+// (the entry reads commands that way; the older steps read them as they always did).
+function scan(cmd, continuation = false) {
   const segments = []
   let words = []
   let cur = null // {text, start, end, redirect}
@@ -64,6 +65,7 @@ function scan(cmd) {
     }
     if (quote === '"') {
       if (c === '"') quote = ''
+      else if (continuation && c === '\\' && cmd[i + 1] === '\n') i++
       else if (c === '\\' && i + 1 < cmd.length) { push(cmd[++i], i) }
       else push(c, i)
       continue
@@ -74,6 +76,7 @@ function scan(cmd) {
       cur.quoted = true
       continue
     }
+    if (continuation && c === '\\' && cmd[i + 1] === '\n') { i++; continue }
     if (c === '\\' && i + 1 < cmd.length) { push(cmd[++i], i); continue }
     if (c === ' ' || c === '\t') { endWord(i); continue }
     if (c === '\n') {
@@ -240,8 +243,8 @@ function headOf(words) {
 
 // readCommand splits a Bash command into the commands in it. null for what cannot be read or that goes to the
 // background by itself (`&`): those are left exactly as they are.
-export function readCommand(command) {
-  const segs = scan(command)
+export function readCommand(command, continuation = false) {
+  const segs = scan(command, continuation)
   if (!segs) return null
   const out = []
   for (const words of segs) {
@@ -333,7 +336,7 @@ const word = (s) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(String(s)) ? String(s) : sq
 // and the hook cannot tell). Every occurrence is a candidate; the ones with one key share an answer.
 export function entryCandidates(command) {
   if (command.includes('(')) return [] // a subshell or a substitution: where a cd applies is not something to guess
-  const cmds = readCommand(command)
+  const cmds = readCommand(command, true)
   if (!cmds) return []
   const out = []
   let cwd = ''
@@ -467,6 +470,16 @@ async function planGate($, e) {
       notes.push('Purdex mod 把這個 Bash 呼叫（整段，包括它前後接的指令）改成背景執行：主機負載控制現在要讓其中的重指令排隊。' + (typeof w.note === 'string' ? w.note + ' ' : '') +
         '它輪到時會自己開始，整段跑完時你會收到通知與輸出；在那之前不要假設它做完了，不要重跑，也不要自己加 & 繞過排隊。')
       break
+    }
+  }
+  // The steps above were each checked against the form before them. When the entry changed the call and the older steps then went
+  // further (a prefix, the background), the form that will run is checked once against the call as it came, and anything but an
+  // equal verdict puts the whole call back as it was.
+  if ((asked !== e.command || entryBackground) && (command !== asked || background !== (wasBackground || entryBackground))) {
+    const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, background)])
+    if (before === null || before !== after) {
+      log($, 'the final form of the call would change the permission verdict (' + before + ' → ' + after + '): the call runs as it came')
+      return null
     }
   }
   if (command === e.command && background === wasBackground && notes.length === 0) return null
