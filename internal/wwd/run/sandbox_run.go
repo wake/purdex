@@ -148,12 +148,13 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 
 	var startErr error
 	res.Outcome, res.ExitCode, res.Signal, res.Reason, startErr = classify(show, stop)
-	// systemd's own set-up failures (a missing ReadWritePaths entry is 226/NAMESPACE, a missing program 203/EXEC, ...) end the unit as
-	// exit-code 200..243 before the command's shell ran: if the shell left no status file the command never ran, so this is not
-	// the task's result but an infrastructure failure, and the caller must not count it as a red test
+	// Two ways a unit ends as exit-code without the command's result: systemd's own set-up failures (a missing ReadWritePaths entry is
+	// 226/NAMESPACE, a missing program 203/EXEC, ... 200..243) end it before the command's shell ran, and the shell itself exits 125
+	// when it cannot write the status file. The shell leaves no file in either case, and a real exit of the task always has one (it
+	// writes it before it exits): so no file with one of these numbers is an infrastructure failure, not a red test.
 	if _, gotExit := readExit(exitFile); startErr == nil && stop == stopNone && res.Outcome == Exited && show["Result"] == "exit-code" &&
-		!gotExit && res.ExitCode >= 200 && res.ExitCode <= 243 {
-		startErr = fmt.Errorf("run: systemd could not set unit %s up (status %d, before the command ran)", unit, res.ExitCode)
+		!gotExit && (res.ExitCode == 125 || (res.ExitCode >= 200 && res.ExitCode <= 243)) {
+		startErr = fmt.Errorf("run: unit %s ended with status %d and no exit status file: systemd could not set it up, or the status file could not be written", unit, res.ExitCode)
 		res.Outcome, res.ExitCode = StartFailed, -1
 	}
 	switch {

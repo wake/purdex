@@ -149,8 +149,10 @@ func (s Sandbox) checkExtraPaths() error {
 
 func unitName(jobID string) string { return "wwd-" + jobID }
 
-// exitWrapper runs "$@" and writes its exit status to the file named by $0.
-const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0"; exit "$rc"`
+// exitWrapper runs "$@" and writes its exit status to the file named by $0. When the file cannot be written (the workspace is full
+// or read-only) it exits 125, not the command's code: a code of the command's own could be read as one of systemd's (200..243), and
+// without the file the runner cannot tell what the command did. 125 with no file is therefore an infrastructure failure.
+const exitWrapper = `"$@"; rc=$?; printf %s "$rc" > "$0" || exit 125; exit "$rc"`
 
 // sandboxArgv is the systemd-run command line (without the leading sudo). The environment is cleared with env -i and then set
 // from env, so nothing of the unit's default environment reaches the job.

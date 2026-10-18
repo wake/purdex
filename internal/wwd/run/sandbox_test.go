@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -529,7 +530,7 @@ func TestSandboxASystemdSetUpFailureIsNotTheTasksRedTest(t *testing.T) {
 	w.set("exit", "226")
 	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=226\nExecMainCode=1\n")
 	r := Run(context.Background(), sandboxSpec(t, w, "true"))
-	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "could not set unit") {
+	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "no exit status file") {
 		t.Fatalf("result = %+v", r)
 	}
 }
@@ -568,5 +569,50 @@ func TestSandboxAnExtraWritablePathThatIsNotThereIsRefusedBeforeAnythingStarts(t
 	w2.sb.ReadWritePaths = []string{t.TempDir()}
 	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != Exited {
 		t.Fatalf("an existing extra path is fine: %+v", r)
+	}
+}
+
+func TestSandboxStatus125WithoutAFileIsInfrastructureButWithAFileIsTheTasks(t *testing.T) {
+	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("exit", "125")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=125\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
+		t.Fatalf("no file: %+v", r)
+	}
+	w2 := newWorld(t)
+	w2.set("loaded", "")
+	w2.set("exit", "125")
+	w2.set("wrapper-exit", "125")
+	w2.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=125\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != Exited || r.ExitCode != 125 {
+		t.Fatalf("with the file the task really exited 125: %+v", r)
+	}
+}
+
+// The wrapper itself, run by the real shell: the command's code reaches the exit and the file; a file that cannot be written
+// makes it exit 125 and not the command's own code (which could be one of systemd's, 200..243).
+func TestExitWrapperRunBySh(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "status")
+	run := func(statusPath string, code string) int {
+		cmd := exec.Command("sh", "-c", exitWrapper, statusPath, "sh", "-c", "exit "+code)
+		err := cmd.Run()
+		if err == nil {
+			return 0
+		}
+		return err.(*exec.ExitError).ExitCode()
+	}
+	if got := run(file, "226"); got != 226 {
+		t.Fatalf("exit = %d, want the command's 226", got)
+	}
+	if b, _ := os.ReadFile(file); string(b) != "226" {
+		t.Fatalf("status file = %q", b)
+	}
+	if got := run(filepath.Join(dir, "no-such-dir", "status"), "226"); got != 125 {
+		t.Fatalf("exit = %d, want 125 when the file cannot be written", got)
+	}
+	if got := run(filepath.Join(dir, "no-such-dir", "status"), "0"); got != 125 {
+		t.Fatalf("exit = %d: even a success cannot be reported without its file", got)
 	}
 }
