@@ -1,10 +1,19 @@
 package fleetmod
 
 import (
+	"context"
 	"os"
 
 	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/wwd/client"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// poolSource reads the pool from the local wwd socket. It is asked only while the fleet row's source is "pool" (hostconfig
+// fleet.source), a setting the Measure re-reads whenever the row changes, so flipping it needs no restart.
+func poolSource() func(context.Context) (wire.Pool, error) {
+	return client.New(client.DefaultSocket()).Pool
+}
 
 // newMeasure builds the measuring side from what Init resolved: the role engine, the local source, the pairing, the
 // events broadcaster and the hostconfig readers. A reader that is not in the registry leaves its part empty (no probe
@@ -13,7 +22,7 @@ func (m *Module) newMeasure() *Measure {
 	home, _ := os.UserHomeDir()
 	d := Deps{
 		Home: home, Local: m.local, Role: m.engine, Events: m.core.Events,
-		SelfHostID: m.hostID, Logf: m.logf,
+		SelfHostID: m.hostID, Logf: m.logf, Pool: poolSource(),
 	}
 	if m.caller != nil {
 		d.PeerHostID = m.caller.HostIDOf

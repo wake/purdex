@@ -129,7 +129,7 @@ func rootUses(ctx context.Context, q interface {
 		WHERE team_id = ? AND host_id = ? AND state IN ('active', 'joining', 'releasing', 'killing')`, teamID, hostID); err != nil {
 		return nil, err
 	}
-	if err := collect(team.RootUseSpawn, `SELECT '', o.cwd FROM spawn_ops o WHERE o.team_id = ? AND o.state = 'running'
+	if err := collect(team.RootUseSpawn, `SELECT '', o.cwd FROM spawn_ops o WHERE o.team_id = ? AND o.state IN ('running', 'awaiting_resources')
 		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state IN ('active', 'joining', 'releasing', 'killing'))`, teamID); err != nil {
 		return nil, err
 	}

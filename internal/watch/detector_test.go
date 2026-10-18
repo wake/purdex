@@ -27,6 +27,7 @@ type rig struct {
 	raw     resources.HostRaw
 	holders []gate.Holder
 	roots   []resources.Root
+	host    *HostSignals // wwd's pressure and paging, when the test wants E2 to read them
 	argv    map[int][]string
 	gates   map[int]bool // the pids the caller verified as a genuine pdx gate
 	cwd     map[int]string
@@ -45,7 +46,7 @@ func newRig(t *testing.T) *rig {
 
 // pass runs one pass at the current time and moves the clock on by a tick.
 func (r *rig) pass() []Event {
-	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Holders: r.holders, Roots: r.roots, Set: r.set,
+	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Host: r.host, Holders: r.holders, Roots: r.roots, Set: r.set,
 		Argv:    func(pid int) []string { return r.argv[pid] },
 		IsGate:  func(pid int) bool { return r.gates[pid] },
 		Cwd:     func(pid int) string { return r.cwd[pid] },
@@ -401,6 +402,190 @@ func TestE2_PageRateAboveTheRateForAWhile(t *testing.T) {
 	r4 := newRig(t) // no counters: no page-rate events however the pressure is
 	r4.raw.Pageouts = 1 << 40
 	assert.Empty(t, r4.run(10*time.Minute))
+}
+
+// E2 from wwd: the pressure level and the paging rate come from Input.Host and Raw's are not read.
+func TestE2_FromWWDSignals(t *testing.T) {
+	observing := func(r *rig, h HostSignals, d time.Duration) []Event { // a new fact every pass
+		var all []Event
+		for end := r.now.Add(d); r.now.Before(end); {
+			all = append(all, r.observe(h)...)
+		}
+		return all
+	}
+	r := newRig(t) // wwd says level 2 (the default limit) while Raw says normal
+	r.raw = resources.HostRaw{Pressure: 1}
+	events := observing(r, HostSignals{Pressure: 2}, 10*time.Minute)
+	require.Len(t, events, 1)
+	assert.Equal(t, KindPressureHigh, events[0].Kind)
+	assert.Equal(t, 2, events[0].Pressure)
+
+	r2 := newRig(t) // Raw says level 4, wwd says normal: wwd wins
+	r2.raw = resources.HostRaw{Pressure: 4}
+	assert.Empty(t, observing(r2, HostSignals{Pressure: 1}, 10*time.Minute))
+
+	r3 := newRig(t) // the rate is wwd's own: above the limit fires, exactly the limit does not
+	events = observing(r3, HostSignals{Pressure: 1, PageRate: 51, PageRateKnown: true}, 3*time.Minute)
+	require.Len(t, events, 1)
+	assert.InDelta(t, 51, events[0].PageRate, 0.001)
+	assert.Contains(t, events[0].Detail, "page rate 51/s")
+	r4 := newRig(t)
+	assert.Empty(t, observing(r4, HostSignals{Pressure: 1, PageRate: 50, PageRateKnown: true}, 5*time.Minute))
+
+	r5 := newRig(t) // a platform whose facts carry no rate: Raw's counters are not used instead
+	r5.raw = resources.HostRaw{PageCounters: true}
+	for i := 0; i < 60; i++ {
+		r5.raw.Pageouts += 1_000_000
+		assert.Empty(t, r5.observe(HostSignals{Pressure: 1, PageRate: 1000}), "an unknown rate is not read, whatever the field holds")
+	}
+}
+
+// observe makes one pass with a new wwd observation (stamped now), the way a fresh fact arrives.
+func (r *rig) observe(h HostSignals) []Event {
+	h.At = r.now
+	r.host = &h
+	return r.pass()
+}
+
+// A fact that is only seen again is not a new observation: a stopped wwd (or a pool answer repeated within its 20 s) does not make
+// one high sample last for the whole window.
+func TestE2_ARepeatedFactIsNotANewObservation(t *testing.T) {
+	r := newRig(t)
+	r.host = &HostSignals{Pressure: 2, At: t0}
+	var events []Event
+	for i := 0; i < 60; i++ { // five minutes of passes over the one fact
+		events = append(events, r.pass()...)
+	}
+	assert.Empty(t, events)
+
+	r2 := newRig(t) // the same level, a new fact each pass: an event
+	var events2 []Event
+	for i := 0; i < 60; i++ {
+		events2 = append(events2, r2.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Len(t, events2, 1)
+}
+
+// Unknown is not low: it breaks a run that has not been confirmed, and it does not count towards re-arming a fired one.
+func TestE2_UnknownBreaksARunAndDoesNotRearm(t *testing.T) {
+	r := newRig(t) // 100 s of level 2, one unknown, then 100 s more: no run of 120 s, so no event
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+	assert.Empty(t, r.observe(HostSignals{Pressure: 0}))
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+
+	r2 := newRig(t) // fired, then a long unknown, then high again: no second event (it never saw the pressure go down)
+	var fired []Event
+	for i := 0; i < 30; i++ {
+		fired = append(fired, r2.observe(HostSignals{Pressure: 2})...)
+	}
+	require.Len(t, fired, 1)
+	for i := 0; i < 120; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 0}))
+	}
+	for i := 0; i < 60; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 2}), "no event for a pressure that was never seen to end")
+	}
+
+	r3 := newRig(t) // the same with a real low spell in between: a second event
+	for i := 0; i < 30; i++ {
+		r3.observe(HostSignals{Pressure: 2})
+	}
+	for i := 0; i < 120; i++ {
+		r3.observe(HostSignals{Pressure: 1})
+	}
+	var again []Event
+	for i := 0; i < 60; i++ {
+		again = append(again, r3.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Len(t, again, 1)
+
+	r4 := newRig(t) // the page rate is the same: an unknown rate breaks the run
+	r4.set.PageTS = time.Minute
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r4.observe(HostSignals{PageRate: 99, PageRateKnown: true}))
+	}
+	assert.Empty(t, r4.observe(HostSignals{}))
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r4.observe(HostSignals{PageRate: 99, PageRateKnown: true}))
+	}
+}
+
+// The unknown in the middle of a re-arming spell starts the spell again (underSince is cleared too): 100 s low, an unknown, 40 s
+// low is not 120 s of low.
+func TestE2_UnknownRestartsTheRearmingSpell(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 30; i++ {
+		r.observe(HostSignals{Pressure: 2}) // fires
+	}
+	for i := 0; i < 20; i++ {
+		r.observe(HostSignals{Pressure: 1}) // 100 s of the 120 s to re-arm
+	}
+	r.observe(HostSignals{Pressure: 0})
+	for i := 0; i < 8; i++ {
+		r.observe(HostSignals{Pressure: 1}) // 40 s more
+	}
+	var again []Event
+	for i := 0; i < 60; i++ {
+		again = append(again, r.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Empty(t, again, "never re-armed: the low spells were 100 s and 40 s")
+}
+
+// The page rate's run breaks on a source flip too: 40 s over on the counters and 40 s over on wwd are not 60 s of either.
+func TestE2_APageRunDoesNotCrossASourceFlip(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 8; i++ {
+		r.raw.PageCounters = true
+		r.raw.Pageouts += 99 * uint64(tick/time.Second)
+		assert.Empty(t, r.pass())
+	}
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 1, PageRate: 99, PageRateKnown: true}))
+	}
+}
+
+// A run is one source's: a source flip breaks a run that has not fired, so no window is made of two sources; a run that has fired
+// stays fired (no second event for the same pressure).
+func TestE2_ASourceFlipBreaksAPendingRunButKeepsAFiredOne(t *testing.T) {
+	r := newRig(t) // 100 s of Raw level 2, then wwd level 2 for 100 s: neither source has a full 120 s
+	r.raw = resources.HostRaw{Pressure: 2}
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.pass())
+	}
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+
+	r2 := newRig(t) // fired on Raw, then the source flips while it is still high: no second event
+	r2.raw = resources.HostRaw{Pressure: 2}
+	var fired []Event
+	for i := 0; i < 30; i++ {
+		fired = append(fired, r2.pass()...)
+	}
+	require.Len(t, fired, 1)
+	for i := 0; i < 60; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 2}))
+	}
+}
+
+// Back to Raw after wwd: the counters' baseline starts over, so the whole jump of the counters in between is not a rate.
+func TestE2_RawBaselineRestartsAfterWWD(t *testing.T) {
+	r := newRig(t)
+	r.set.PageTS = 0 // a single pass over the rate is an event, so the gap's jump would show at once
+	r.raw = resources.HostRaw{PageCounters: true, Pageouts: 100}
+	r.pass() // baseline at 100
+	r.host = &HostSignals{PageRate: 1, PageRateKnown: true}
+	r.pass()
+	r.host = nil
+	r.raw.Pageouts = 100 + 10_000_000 // a long time of paging happened while wwd was the source
+	assert.Empty(t, r.pass(), "the first Raw pass after wwd is a new baseline, not a rate over the gap")
+	for i := 0; i < 40; i++ {
+		assert.Empty(t, r.pass(), "and no paging since")
+	}
 }
 
 // ---- E3, E4 ----

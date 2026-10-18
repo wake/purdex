@@ -98,8 +98,8 @@ func SharedProcessSnapshot(ctx context.Context) (*ProcessSnapshot, error) {
 	}
 }
 
-// SharedProcessView is a ProcessView whose Read re-checks the process on every call (ReadFresh: a PID reused inside the TTL
-// is not answered with its predecessor's arguments) and whose every question goes to SharedProcessSnapshot: it never holds a table of its own,
+// SharedProcessView is a ProcessView whose Read re-checks the process on every call (ReadCached: a PID reused inside the TTL
+// is not answered with its predecessor's arguments; the arguments of a process only ps can read may be up to psArgsCacheTTL old) and whose every question goes to SharedProcessSnapshot: it never holds a table of its own,
 // so a long-lived reader (the peers module's Liveness) always asks the table of the moment, which is at most a TTL old.
 type SharedProcessView struct{}
 
@@ -135,6 +135,6 @@ func (v SharedProcessView) PPID(pid int) (p int, err error) {
 }
 
 func (v SharedProcessView) Read(pid int) (info ProcessInfo, err error) {
-	err = v.with(func(snap *ProcessSnapshot) (e error) { info, e = snap.ReadFresh(pid); return })
+	err = v.with(func(snap *ProcessSnapshot) (e error) { info, e = snap.ReadCached(pid); return })
 	return
 }

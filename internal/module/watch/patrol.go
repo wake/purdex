@@ -3,6 +3,7 @@ package watchmod
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"syscall"
 	"time"
@@ -89,6 +90,11 @@ func (m *Module) hostBusy() bool {
 func (m *Module) diskFreeGB() (float64, bool) {
 	if m.psrc != nil && m.psrc.diskFreeGB != nil {
 		return m.psrc.diskFreeGB()
+	}
+	// While wwd reads this host (the pool source) its facts have the disk: no statfs of our own (C1). Facts list the volume of the
+	// home directory and the root volume, so the data directory's own is the one whose mount holds it, when it is under home.
+	if gb, ok := m.diskFreeFromFacts(); ok {
+		return gb, true
 	}
 	dir := "/"
 	if m.core != nil && m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
@@ -207,4 +213,51 @@ func (m *Module) patrolLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// diskFreeFromFacts is the free space of the data directory's volume from wwd's facts of this host, ok false when there are none
+// (the source is not the pool, or wwd has none fresh), when the facts list no disk, or when the data directory is not on a volume
+// they list. Facts list the root volume and the volume of the home directory; their mount names are not comparable with a path
+// (macOS reports /System/Volumes/Data for /Users, a symlinked home by its target), so which of them holds the data directory is not
+// worked out from the names: the directory is on a listed volume when it has the device of home or of the root (a stat, no
+// sampling), and then the lowest free space of the listed volumes is taken (where the two share their space, as on macOS, they say
+// the same). A data directory on any other device, a separate mount or a link out, keeps the own statfs.
+func (m *Module) diskFreeFromFacts() (float64, bool) {
+	if m.core == nil || m.core.Registry == nil {
+		return 0, false
+	}
+	svc, ok := m.core.Registry.Get(resources.LocalFactsKey)
+	if !ok {
+		return 0, false
+	}
+	r, ok := svc.(resources.LocalFactsReader)
+	if !ok {
+		return 0, false
+	}
+	f, ok := r.LatestLocalFacts()
+	if !ok || len(f.Disk) == 0 {
+		return 0, false
+	}
+	dir := "/"
+	if m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
+		dir = m.core.Cfg.DataDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !(sameDevice(dir, home) || sameDevice(dir, "/")) {
+		return 0, false
+	}
+	low := f.Disk[0].FreeGB
+	for _, d := range f.Disk[1:] {
+		low = min(low, d.FreeGB)
+	}
+	return low, true
+}
+
+// sameDevice says both paths exist and are on the same device. stat follows links, so a link out to another volume is on that one.
+func sameDevice(a, b string) bool {
+	var sa, sb syscall.Stat_t
+	if syscall.Stat(a, &sa) != nil || syscall.Stat(b, &sb) != nil {
+		return false
+	}
+	return sa.Dev == sb.Dev
 }

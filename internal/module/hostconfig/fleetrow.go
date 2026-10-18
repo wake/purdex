@@ -24,7 +24,17 @@ type FleetConfig struct {
 	Order        []string `json:"order"`
 	PeerSSHAlias string   `json:"peer_ssh_alias"`
 	Enabled      bool     `json:"enabled"`
+	// Source says where the fleet's readings come from: "ssh" (or left out) = the SSH sessions and the own host's sampler as they
+	// always were; "pool" = wwd's pool, with a host the pool does not list yet still read over SSH (WWD-2b). Read on every
+	// change of the row, so flipping it needs no restart.
+	Source string `json:"source,omitempty"`
 }
+
+// Fleet sources.
+const (
+	FleetSourceSSH  = "ssh"
+	FleetSourcePool = "pool"
+)
 
 // DefaultFleetConfig is the row of a never-written key.
 func DefaultFleetConfig() FleetConfig {
@@ -64,6 +74,7 @@ func parseFleet(raw json.RawMessage, lenient bool) (cfg FleetConfig, reason stri
 		Order        *[]string       `json:"order"`
 		PeerSSHAlias json.RawMessage `json:"peer_ssh_alias"` // raw: a null is not "left out"
 		Enabled      json.RawMessage `json:"enabled"`
+		Source       json.RawMessage `json:"source"`
 	}
 	if err := strictDecode(raw, &in); err != nil {
 		return FleetConfig{}, "", fmt.Errorf("fleet: %v", err)
@@ -107,6 +118,13 @@ func parseFleet(raw json.RawMessage, lenient bool) (cfg FleetConfig, reason stri
 		default:
 			return FleetConfig{}, "", errors.New("enabled must be true or false")
 		}
+	}
+	if in.Source != nil {
+		var src string
+		if err := json.Unmarshal(in.Source, &src); err != nil || (src != FleetSourceSSH && src != FleetSourcePool) {
+			return FleetConfig{}, "", errors.New(`source must be "ssh" or "pool"`)
+		}
+		out.Source = src
 	}
 	return out, reason, nil
 }

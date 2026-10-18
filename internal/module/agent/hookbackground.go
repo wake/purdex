@@ -99,7 +99,7 @@ func (m *Module) BackgroundWork(sessionID string) (HookBackground, bool) {
 	if m == nil || m.frames == nil || sessionID == "" {
 		return HookBackground{}, false
 	}
-	frames, err := m.frames.ListRootsBySessionID(sessionID)
+	frames, err := m.frames.ListRootsBySessionIDCached(sessionID)
 	if err != nil {
 		return HookBackground{}, false
 	}

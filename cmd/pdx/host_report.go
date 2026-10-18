@@ -121,6 +121,13 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 		return
 	}
 	fmt.Fprintf(w, "timeline  %d minute rows, %s → %s\n", r.Coverage.Minutes, reportTime(r.Coverage.From, loc), reportTime(r.Coverage.To, loc))
+	switch r.Approx {
+	case "":
+	case resources.ReportApproxWWDStats:
+		fmt.Fprintf(w, "note      part of the period is from wwd's minute stats: full and the zone figures are counted per 5 s sample; the highest load1 is a minute's average, and the gate's queue is not counted\n")
+	default:
+		fmt.Fprintf(w, "note      part of the period is from wwd's minute rollups: the full and zone figures are approximate (a minute counts as full, or in its worst zone, as a whole)\n")
+	}
 	fmt.Fprintf(w, "full      %.1f%% of the time, %d runs, longest %ds\n", r.Full.Share*100, r.Full.Runs, r.Full.LongestS)
 	fmt.Fprintf(w, "heavy     %d minutes with a heavy command running (most at once %d), highest load1 %.2f, highest memory %.1f%%\n",
 		r.Heavy.Minutes, r.Heavy.MaxRunning, r.Heavy.MaxLoad1, r.Heavy.MaxMem)

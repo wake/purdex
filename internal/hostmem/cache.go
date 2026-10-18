@@ -127,3 +127,29 @@ func (c Cache) Record(now time.Time, cur Sample) bool {
 	_, written := c.Append(now, cur)
 	return written
 }
+
+// RecordNext is Record for a reading that is worked out from the cache's last one (a counter that goes on from it): next is given
+// the last reading as it is once the lock is held, so no writer can come in between the read and the write, and says whether to
+// write what it returns. The same rules as Record: nothing is written when someone else holds the lock, or when the reading is
+// not newer than the last.
+func (c Cache) RecordNext(now time.Time, next func(last Sample, have bool) (Sample, bool)) bool {
+	if os.MkdirAll(c.Dir, 0o755) != nil {
+		return false
+	}
+	unlock, got := c.TryLock()
+	defer unlock()
+	if !got {
+		return false
+	}
+	var last Sample
+	have := c.Load().Samples
+	if len(have) > 0 {
+		last = have[len(have)-1]
+	}
+	cur, ok := next(last, len(have) > 0)
+	if !ok || (len(have) > 0 && last.At >= cur.At) {
+		return false
+	}
+	_, written := c.Append(now, cur)
+	return written
+}

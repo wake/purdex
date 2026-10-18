@@ -8,6 +8,7 @@ package resources
 
 import (
 	"encoding/json"
+	"github.com/wake/purdex/internal/wwd/wire"
 	"time"
 )
 
@@ -41,9 +42,8 @@ const (
 // what the module falls back to when it cannot read or store its settings.
 const ModeMeasure = "measure"
 
-// Snapshot is one reading of the host. Mode is the host setting's mode. From
-// P1 the lease routes' GET also fills Leases, Waiters and Recent; they are
-// omitted when empty, so a host with no leases reads as in P0.
+// Snapshot is one reading of the host. Mode is the host setting's mode. (The lease lists it once carried - leases, waiters,
+// recent, positions, gap_until - went with the lease routes, WWD-0a.)
 type Snapshot struct {
 	SampledAt time.Time    `json:"sampled_at"`
 	Available bool         `json:"available"`
@@ -52,17 +52,6 @@ type Snapshot struct {
 	Host      HostUse      `json:"host"`
 	Sessions  []SessionUse `json:"sessions"`
 	Mode      string       `json:"mode"`
-	// Leases are the held leases, Waiters the queue (FIFO) and Recent the
-	// last ended leases, newest first.
-	Leases  []LeaseView  `json:"leases,omitempty"`
-	Waiters []WaiterView `json:"waiters,omitempty"`
-	Recent  []RecentView `json:"recent,omitempty"`
-	// Positions are the live positions of mode lease, oldest first (amendment
-	// A); Waiters keeps only the wait-mode rows that have no position.
-	Positions []PositionView `json:"positions,omitempty"`
-	// GapUntil is when the pause after the last grant ends, unix ms; absent
-	// when no gap is running (in advise it is the shadow's).
-	GapUntil int64 `json:"gap_until,omitempty"`
 	// Samples is the ring of the last 10 minutes, oldest first; only when
 	// asked for with ?samples=1.
 	Samples []TrendPoint `json:"samples,omitempty"`
@@ -83,9 +72,37 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 // not sample (or fork) itself, such as a failure's detail naming the load it happened under.
 const HostReaderKey = "resources.host-reader"
 
+// LocalFactsKey is the registry key of the LocalFactsReader the resources module offers: wwd's facts of this host, for a reader
+// that shows more of them than HostUse carries (the monitor's disk). It answers only while the fleet row's source is "pool".
+const LocalFactsKey = "resources.local-facts"
+
+// LocalFactsReader is the latest fresh facts of this host from wwd; ok is false when the source is not the pool or wwd has none
+// within its 20 s (the reader then takes its own reading).
+type LocalFactsReader interface {
+	LatestLocalFacts() (facts wire.Facts, ok bool)
+}
+
 // HostReader is the latest published host reading; ok is false until a tick has published a usable one.
 type HostReader interface {
 	LatestHost() (host HostUse, ok bool)
+}
+
+// HostDetailReader is what a reader that needs the situation behind the zone asks for (the spawn resource card, RT-5a): the
+// latest host reading with its sample time. The object registered under HostReaderKey offers it too, so there is one key; a
+// reader type-asserts for it and treats its absence as "unknown".
+type HostDetailReader interface {
+	LatestHostDetail() (HostDetail, bool)
+}
+
+// HostDetail is the host part of the latest snapshot. (It carried the held leases and the queue until WWD-0a removed them.)
+type HostDetail struct {
+	Host HostUse `json:"host"`
+	// SampledAt is when the reading was taken, unix ms.
+	SampledAt int64 `json:"sampled_at"`
+	// SessionsRoom is wwd's derived "how many more sessions this host can take" (facts.derived.sessions_room); nil when the
+	// reading is not wwd's. It carries no judgement of this package's: the reader that decides whether another member may be
+	// opened asks for it.
+	SessionsRoom *int `json:"sessions_room,omitempty"`
 }
 
 // HostUse is the host-wide part of a Snapshot.
@@ -146,4 +163,19 @@ type SessionUse struct {
 	// Pcpu is the raw sum of pcpu; 100 is one core.
 	Pcpu  float64 `json:"pcpu"`
 	Procs int     `json:"procs"`
+}
+
+// EventType is the WS host event that carries the snapshot.
+const EventType = "resources.changed"
+
+// Error codes of the resources routes, in APIError.Error.
+const (
+	ErrBadRequest = "bad_request"
+	ErrNotReady   = "not_ready" // the daemon is stopping, or resources.db is not open
+)
+
+// APIError is the body of a refused request: {"error": code, "detail": text}.
+type APIError struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail,omitempty"`
 }

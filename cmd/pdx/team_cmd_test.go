@@ -157,6 +157,9 @@ func spawnOp(req team.SpawnRequest, state team.SpawnState, reason string) answer
 
 func spawnDone(req team.SpawnRequest) answer    { return spawnOp(req, team.SpawnDone, "") }
 func spawnRunning(req team.SpawnRequest) answer { return spawnOp(req, team.SpawnRunning, "") }
+func spawnAwaiting(req team.SpawnRequest) answer {
+	return spawnOp(req, team.SpawnAwaitingResources, "")
+}
 func spawnFailed(reason string) func(team.SpawnRequest) answer {
 	return func(req team.SpawnRequest) answer { return spawnOp(req, team.SpawnFailed, reason) }
 }
@@ -286,6 +289,18 @@ func TestSpawnCmd_ModelAndEffortReachTheRequest(t *testing.T) {
 func isCanonicalUUIDv4ForTest(s string) bool {
 	_, err := team.SpawnTmuxName(s)
 	return err == nil
+}
+
+// RT-5a: an op that waits for the person's resource card is not settled: the CLI keeps posting the same body (each post renews the
+// card's lease), and the op's end is what it reports.
+func TestSpawnCmd_PostsAgainWhileAwaitingResources(t *testing.T) {
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnAwaiting, spawnAwaiting, spawnDone}}
+	if code, _, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet"); code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if len(d.spawnReq) != 3 || d.spawnReq[0] != d.spawnReq[1] || d.spawnReq[1] != d.spawnReq[2] {
+		t.Errorf("spawn requests = %+v, want the same body three times", d.spawnReq)
+	}
 }
 
 // While the op runs the CLI posts the same body again (the daemon joins);

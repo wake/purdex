@@ -33,6 +33,37 @@ func TestLightStatus_FollowsOnlyTheNamedFrame(t *testing.T) {
 	}
 }
 
+// The roots read behind the light is cached for a second; a write to the frame shows at the next read, a process that died shows at
+// once (the pid check is not cached), and a deleted frame is nobody.
+func TestLightStatus_WritesShowAtTheNextRead(t *testing.T) {
+	m, _, _ := newProvenanceQueryModule(t)
+	a := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 10, "sess-1", "/w")
+	withLivePids(t, map[int]string{100: "t100"})
+	if got, ok := m.LightStatus("sess-1", a.FrameID); !ok || got != string(agentpkg.StatusIdle) {
+		t.Fatalf("first read: %q %v", got, ok)
+	}
+	if err := m.frames.UpdateStatusAndLastSeen(a.FrameID, agentpkg.StatusRunning, 20); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.LightStatus("sess-1", a.FrameID); got != string(agentpkg.StatusRunning) {
+		t.Fatalf("after a status write: %q, want running", got)
+	}
+	withLivePids(t, map[int]string{}) // the process is gone, the copy of the table is not
+	if got, ok := m.LightStatus("sess-1", a.FrameID); ok {
+		t.Fatalf("a dead process: %q", got)
+	}
+	withLivePids(t, map[int]string{100: "t100"})
+	if _, ok := m.LightStatus("sess-1", a.FrameID); !ok {
+		t.Fatal("alive again")
+	}
+	if err := m.frames.Delete(a.FrameID); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := m.LightStatus("sess-1", a.FrameID); ok {
+		t.Fatalf("a deleted frame: %q", got)
+	}
+}
+
 func TestLightStatus_OtherSessionsOtherAgentsAndEmptyAreNobody(t *testing.T) {
 	m, _, _ := newProvenanceQueryModule(t)
 	codex := seedIdentityFrame(t, m, "%5", "codex", 100, "t100", 10, "sess-1", "/w")

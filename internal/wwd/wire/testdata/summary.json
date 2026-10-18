@@ -1,0 +1,2 @@
+{"passed": 3, "failed": 1, "skipped": 0,
+ "failures": [{"name": "TestX", "file": "x_test.go", "message": "got 1 want 2"}], "tail": ["FAIL", "exit status 1"]}

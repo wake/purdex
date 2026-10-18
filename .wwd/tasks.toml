@@ -1,0 +1,136 @@
+# Purdex's wwd task manifest (docs/specs/2026-10-18-wwd-spec.md §6).
+# The test tiers of CLAUDE.md written as tasks: development, merge, release.
+
+[entry]
+mode = "advise"
+
+# ---- development: only what was changed; single-file runs stay on the local fast lane ----
+
+[tasks.spa-file]
+run     = "pnpm vitest run --reporter=json --outputFile={report} {files}"
+cwd     = "spa"
+args    = "files"
+local   = true
+summary = "vitest-json"
+
+[tasks.go-pkg]
+run     = "go test -json {packages}"
+args    = "packages"
+local   = true
+summary = "go-json"
+
+# ---- merge: affected tests, lint, guards ----
+
+[tasks.spa-related]
+run       = "pnpm vitest related --run --reporter=json --outputFile={report} {files}"
+cwd       = "spa"
+args      = "files"
+class     = "merge"
+labels    = ["os:darwin", "repo:purdex"]
+deps      = ["pnpm-lock.yaml"]
+cacheable = true
+timeout   = "30m"
+summary   = "vitest-json"
+qualify   = { args = ["src/lib/fleet/parse.test.ts"], reference = "air26" }
+
+[tasks.go-changed]
+run       = "go test -json {packages}"
+args      = "packages"
+class     = "merge"
+labels    = ["repo:purdex"]
+cacheable = true
+timeout   = "30m"
+summary   = "go-json"
+
+# For a change to a lock or a goroutine: the race detector on the changed packages only.
+[tasks.go-race]
+run       = "go test -race -json {packages}"
+args      = "packages"
+class     = "merge"
+labels    = ["repo:purdex"]
+cacheable = true
+timeout   = "30m"
+summary   = "go-json"
+
+# The mod's own tests (hooks/*.test.ts), which `go test` does not run. The whole mod directory: they are few and fast.
+[tasks.mod-hooks]
+run       = "claude plugin test cmd/pdx/plugin/purdex"
+args      = "none"
+class     = "merge"
+labels    = ["repo:purdex"]
+cacheable = true
+timeout   = "10m"
+
+# A change to a mod (hooks/*.js) runs all of cmd/pdx, plugin and daemonclient included: the plugin tests alone once let a red
+# sub-package through to the release.
+[tasks.mod-changed]
+run       = "go test -json ./cmd/pdx/..."
+args      = "none"
+class     = "merge"
+labels    = ["repo:purdex"]
+cacheable = true
+timeout   = "30m"
+summary   = "go-json"
+
+[tasks.tsc]
+run       = "pnpm tsc -b"
+cwd       = "spa"
+args      = "none"
+class     = "merge"
+deps      = ["pnpm-lock.yaml"]
+cacheable = true
+timeout   = "30m"
+
+[tasks.lint]
+run       = "make lint"
+args      = "none"
+class     = "merge"
+cacheable = true
+timeout   = "20m"
+
+# Runs on its own, never with -run: the guard test scans every package.
+[tasks.execstat-guard]
+run       = "go test -json ./internal/execstat/"
+args      = "none"
+class     = "merge"
+cacheable = true
+timeout   = "10m"
+summary   = "go-json"
+
+# ---- release: the whole suite, once per version ----
+
+[tasks.go-all]
+run           = "go test -json -p 3 -timeout 30m ./..."
+args          = "none"
+class         = "release"
+cacheable     = true
+interruptible = false
+timeout       = "60m"
+summary       = "go-json"
+
+[tasks.spa-full]
+run           = "pnpm vitest run --maxWorkers=3 --reporter=json --outputFile={report}"
+cwd           = "spa"
+args          = "none"
+class         = "release"
+deps          = ["pnpm-lock.yaml"]
+cacheable     = true
+timeout       = "60m"
+summary       = "vitest-json"
+
+[tasks.tsc-force]
+run       = "pnpm tsc -b --force"
+cwd       = "spa"
+args      = "none"
+class     = "release"
+deps      = ["pnpm-lock.yaml"]
+cacheable = true
+timeout   = "30m"
+
+[tasks.mod-all]
+run       = "go test -json ./cmd/pdx/..."
+args      = "none"
+class     = "release"
+cacheable = true
+timeout   = "30m"
+summary   = "go-json"

@@ -60,6 +60,9 @@ type Input struct {
 	Now   time.Time
 	Procs []resources.Proc // the sampler's process table (with Comm)
 	Raw   resources.HostRaw
+	// Host, when set, is wwd's reading of the host's memory pressure and paging for E2 (the fleet row's source is "pool"): the
+	// detector then uses it instead of Raw's pressure level and its running counters. nil: Raw, as always.
+	Host *HostSignals
 	// Holders are the held slots of both gate pools (gate.Pool.Held), Orphaned set where the gate that took the slot is gone.
 	Holders []gate.Holder
 	// Roots are the sessions' root processes, already checked against a reused pid by the caller; the detector only uses them
@@ -112,6 +115,16 @@ type Event struct {
 	Slot      string // "heavy-1"
 	HolderPID int    // the gate's pid in the slot record
 	LockPIDs  []int  // E3: the processes that hold the lock
+}
+
+// HostSignals are the two host figures E2 reads, as wwd gives them: the memory pressure level (1, 2 or 4; 0 unknown) and the
+// pages written out per second (pageouts + swapouts), which wwd has already turned into a rate.
+type HostSignals struct {
+	Pressure      int
+	PageRate      float64
+	PageRateKnown bool // wwd's facts carry no paging rate on every platform
+	// At is when wwd took the facts. A pass over facts it has already seen is not a new observation.
+	At time.Time
 }
 
 // Memory is what the detector keeps across passes and, in the persistent implementation, across restarts.

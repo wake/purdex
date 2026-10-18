@@ -124,7 +124,7 @@ func (s *ProcessSnapshot) PPID(pid int) (int, error) {
 }
 
 func (s *ProcessSnapshot) Read(pid int) (ProcessInfo, error) {
-	return s.read(pid, false)
+	return s.read(pid, false, procArgsPlatform)
 }
 
 // ReadFresh is Read without the kept answer: the arguments are read, and the process re-checked against the one the table
@@ -132,10 +132,19 @@ func (s *ProcessSnapshot) Read(pid int) (ProcessInfo, error) {
 // so a PID reused after an earlier Read is not answered with the old process's arguments. It costs the same fork-free
 // argument-area read Read costs once.
 func (s *ProcessSnapshot) ReadFresh(pid int) (ProcessInfo, error) {
-	return s.read(pid, true)
+	return s.read(pid, true, procArgsPlatform)
 }
 
-func (s *ProcessSnapshot) read(pid int, fresh bool) (ProcessInfo, error) {
+// ReadCached is ReadFresh for a caller that can take an argv up to psArgsCacheTTL old for one kind of process: the ones whose arguments only
+// ps can read (a non-ASCII argv, another user's process, a zombie; darwin). For those, ps's answer is kept for the process (pid, start time
+// and command name) instead of being asked again by every call (process_args_cache_darwin.go). Every other process is read exactly as
+// ReadFresh reads it, and the process is re-checked on every call. A caller that classifies by Argv and needs the arguments of this moment
+// uses ReadFresh.
+func (s *ProcessSnapshot) ReadCached(pid int) (ProcessInfo, error) {
+	return s.read(pid, true, procArgsCachedPlatform)
+}
+
+func (s *ProcessSnapshot) read(pid int, fresh bool, readArgs func(int, *snapshotEntry) (string, []string, error)) (ProcessInfo, error) {
 	e, err := s.entry(pid)
 	if err != nil {
 		return ProcessInfo{}, err
@@ -147,7 +156,7 @@ func (s *ProcessSnapshot) read(pid int, fresh bool) (ProcessInfo, error) {
 		// Nothing is kept and no lock is held: the platform read may fall back to a `ps` that is slow, and a snapshot shared by
 		// the whole daemon must not make every other PID's reader wait for it. procArgsPlatform reads only what the snapshot
 		// fixed when it was taken.
-		exe, argv, err := procArgsPlatform(pid, e)
+		exe, argv, err := readArgs(pid, e)
 		if err != nil {
 			return ProcessInfo{}, err
 		}

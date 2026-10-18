@@ -1,0 +1,11 @@
+{"type": "facts", "data": {
+  "v": 1, "host_id": "h-mserv", "alias": "mserv", "at": "2026-10-18T05:00:00+08:00",
+  "platform": "linux", "arch": "amd64", "os_version": "Ubuntu 26.04.1",
+  "cpu": {"ncpu": 4, "load1": 0.5, "load5": 0.4, "idle_pct": 91.0},
+  "mem": {"total_mb": 16000, "available_mb": 9000, "pressure": 0, "page_out_rate": null, "swap_out_rate": null,
+          "swap_used_mb": 0, "compressor_mb": null, "psi": null},
+  "disk": [], "procs": [], "residents": [],
+  "tools": {"go": null, "node": null, "pnpm": null, "php": null, "xcode": null},
+  "owner": null, "exceptions": [],
+  "derived": {"zone": "unknown", "headroom": {"heavy": 0, "light": 0}, "sessions_room": 0},
+  "worker": {"enabled": false, "slots": {"heavy": 0, "light": 0}, "running": {"heavy": 0, "light": 0}, "owner_rule": ""}}}

@@ -1,0 +1,756 @@
+package localruns
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
+)
+
+const claim = "0123456789abcdef0123456789abcdef"
+
+// fakeQueue records the runs it is asked for; each gets the next id.
+type fakeQueue struct {
+	mu       sync.Mutex
+	n        int
+	calls    []wire.LocalRunRequest
+	workers  []string
+	err      error
+	badClaim bool
+	badLease bool // a valid claim with a lease of zero
+	// during runs inside RecordLocal, before it answers (a job event faster than the answer).
+	during func(id string)
+	ended  map[string]bool
+	endErr error
+	asked  [][]string
+	// running is what Running answers (the jobs the queue has as not final); runErr makes it fail
+	running   []wire.Job
+	results   []wire.ResultRequest // the Result calls
+	resultIDs []string
+	resultErr error
+	runErr    error
+	afterList func()
+}
+
+func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error) {
+	q.mu.Lock()
+	q.calls = append(q.calls, req)
+	q.workers = append(q.workers, worker)
+	q.n++
+	id := "j_local" + string(rune('0'+q.n))
+	err, bad, during := q.err, q.badClaim, q.during
+	q.mu.Unlock()
+	if err != nil {
+		return wire.LocalRunResponse{}, err
+	}
+	if during != nil {
+		during(id)
+	}
+	if bad {
+		return wire.LocalRunResponse{ID: id}, nil
+	}
+	if q.badLease {
+		return wire.LocalRunResponse{ID: id, ClaimID: claim}, nil
+	}
+	return wire.LocalRunResponse{ID: id, ClaimID: claim, LeaseS: 60, RenewS: 15}, nil
+}
+
+func (q *fakeQueue) Result(_ context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.results = append(q.results, req)
+	q.resultIDs = append(q.resultIDs, id)
+	return wire.Job{ID: id}, q.resultErr
+}
+
+func (q *fakeQueue) Running(context.Context) ([]wire.Job, error) {
+	q.mu.Lock()
+	jobs, err, hook := q.running, q.runErr, q.afterList
+	q.mu.Unlock()
+	if hook != nil {
+		hook() // runs after the queue answered and before the caller has installed anything
+	}
+	return jobs, err
+}
+
+func (q *fakeQueue) Ended(_ context.Context, ids []string) (map[string]bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.asked = append(q.asked, append([]string(nil), ids...))
+	if q.endErr != nil {
+		return nil, q.endErr
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		out[id] = q.ended[id]
+	}
+	return out, nil
+}
+
+func request(t *testing.T, keys ...string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "wire", "testdata", "local_run_request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["locks"] = append([]string{}, keys...)
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wire.Decode[wire.LocalRunRequest](out); err != nil {
+		t.Fatalf("the test request is not valid: %v", err)
+	}
+	return out
+}
+
+func post(s *Service, body []byte) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/local-runs", bytes.NewReader(body)))
+	return rec
+}
+
+func newService(q Queue) (*Service, *locks.Table) {
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if err := s.Recover(context.Background()); err != nil {
+		panic(err)
+	}
+	return s, tb
+}
+
+func TestARunIsRecordedAndHoldsItsKeysUnderTheJobId(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux", "port:7860"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var resp wire.LocalRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.ID != "j_local1" || resp.ClaimID != claim || resp.LeaseS != 60 || resp.RenewS != 15 {
+		t.Fatalf("answer %+v err %v", resp, err)
+	}
+	if len(q.calls) != 1 || q.workers[0] != "mlab" || len(q.calls[0].Locks) != 2 {
+		t.Fatalf("the queue was asked %+v for %v", q.calls, q.workers)
+	}
+	if o, _ := tb.Holder("tmux"); o != "j_local1" {
+		t.Fatalf("holder of tmux = %q", o)
+	}
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local1" {
+		t.Fatalf("held %v", got)
+	}
+}
+
+func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	if _, err := tb.Acquire("j_remote", []string{"tmux", "db"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	rec := post(s, request(t, "tmux", "other", "db"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
+	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" ||
+		len(busy.Holders) != 2 || busy.Holders[0] != (wire.LockHolder{Key: "db", Job: "j_remote"}) || busy.Holders[1] != (wire.LockHolder{Key: "tmux", Job: "j_remote"}) {
+		t.Fatalf("body %s err %v", rec.Body, err)
+	}
+	if len(q.calls) != 0 {
+		t.Fatal("the queue recorded a run whose keys were held")
+	}
+	if _, ok := tb.Holder("other"); ok {
+		t.Fatal("a refused run kept the key that was free")
+	}
+}
+
+func TestAKeyOfARunStillBeingRecordedIsToldWithoutAProvisionalName(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	inside, release := make(chan struct{}), make(chan struct{})
+	q.during = func(string) { // the first run is inside RecordLocal: its keys are held under a provisional owner
+		close(inside)
+		<-release
+	}
+	first := make(chan int, 1)
+	go func() { first <- post(s, request(t, "tmux")).Code }()
+	<-inside
+	rec := post(s, request(t, "tmux"))
+	close(release)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
+	if err != nil || len(busy.Keys) != 1 || len(busy.Holders) != 0 || bytes.Contains(rec.Body.Bytes(), []byte("local:")) {
+		t.Fatalf("body %s err %v", rec.Body, err)
+	}
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("the first run: %d", code)
+	}
+}
+
+func TestAQueueThatCannotRecordReleasesTheKeysAndAnswers503(t *testing.T) {
+	q := &fakeQueue{err: errors.New("database is locked")}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("keys stayed held for a run that was not recorded")
+	}
+}
+
+func TestAnUnusableClaimReleasesTheKeys(t *testing.T) {
+	q := &fakeQueue{badClaim: true}
+	s, tb := newService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("keys stayed held")
+	}
+}
+
+// logged returns a service whose log lines are collected.
+func loggedService(q Queue) (*Service, *locks.Table, func() string) {
+	s, tb := newService(q)
+	var mu sync.Mutex
+	var lines []string
+	s.Logf = func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(f, a...))
+	}
+	return s, tb, func() string { mu.Lock(); defer mu.Unlock(); return strings.Join(lines, "\n") }
+}
+
+func TestARecordedRunWithAnUnusableLeaseIsEndedAsInfraWithItsClaim(t *testing.T) {
+	q := &fakeQueue{badLease: true}
+	s, tb, logs := loggedService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(q.results) != 1 || q.resultIDs[0] != "j_local1" || q.results[0].ClaimID != claim || q.results[0].State != wire.StateFailed || q.results[0].Reason != "infra" {
+		t.Fatalf("the run was not ended: %+v for %v", q.results, q.resultIDs)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("keys stayed held")
+	}
+	if !strings.Contains(logs(), "j_local1") || strings.Contains(logs(), "ERROR") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestARunWhoseLocksCannotBeNamedIsNotEndedAndLoggedAsAnError(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb, logs := loggedService(q)
+	if _, err := tb.Acquire("j_local1", []string{"other"}, nil); err != nil { // the name the queue will give is taken: Rename fails
+		t.Fatal(err)
+	}
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(q.results) != 0 {
+		t.Fatalf("the run was ended, which would release the other run's keys: %+v", q.results)
+	}
+	if o, _ := tb.Holder("other"); o != "j_local1" {
+		t.Fatal("the keys of the run that already has the id were touched")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+// endingQueue announces the end of a job the way the real queue does: the job event is published before Result returns.
+type endingQueue struct {
+	*fakeQueue
+	svc *Service
+}
+
+func (q *endingQueue) Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	j, err := q.fakeQueue.Result(ctx, id, req)
+	q.svc.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	return j, err
+}
+
+func TestAnAbandonedRunWithTheIdOfAnotherRunIsNotEndedAndLeavesItsKeys(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, logs := loggedService(q)
+	q.svc = s
+	// run 1 is a normal registration; the queue then gives the next run the same id with a lease it cannot use
+	base.badLease = false
+	if rec := post(s, request(t, "db")); rec.Code != http.StatusOK {
+		t.Fatalf("first run: %d", rec.Code)
+	}
+	base.mu.Lock()
+	base.n = 0 // the next id is j_local1 again
+	base.badLease = true
+	base.mu.Unlock()
+	post(s, request(t, "tmux"))
+	if len(base.results) != 0 {
+		t.Fatalf("the colliding run was ended, which releases the other run's keys: %+v", base.results)
+	}
+	if o, _ := tb.Holder("db"); o != "j_local1" {
+		t.Fatal("the keys of the run that has the id were released")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "already in use") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestEndingAnAbandonedRunThroughTheQueueLeavesNothingBehind(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, _ := loggedService(q)
+	q.svc = s
+	post(s, request(t, "tmux"))
+	if len(base.results) != 1 {
+		t.Fatalf("results %+v", base.results)
+	}
+	s.mu.Lock()
+	early, holds := len(s.early), len(s.holds)
+	s.mu.Unlock()
+	if _, ok := tb.Holder("tmux"); ok || early != 0 || holds != 0 {
+		t.Fatalf("left behind: holder %v, early %d, holds %d", ok, early, holds)
+	}
+}
+
+func TestAnAbandonedRunThatCannotBeEndedIsLoggedAsAnErrorWithItsJobId(t *testing.T) {
+	q := &fakeQueue{badLease: true, resultErr: errors.New("claim is stale")}
+	s, _, logs := loggedService(q)
+	post(s, request(t, "tmux"))
+	if len(q.results) != 1 || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") || !strings.Contains(logs(), "claim is stale") {
+		t.Fatalf("results %d, log %q", len(q.results), logs())
+	}
+}
+
+func TestARunWithNoUsableClaimIsLoggedAsAnErrorAndNotEnded(t *testing.T) {
+	q := &fakeQueue{badClaim: true}
+	s, _, logs := loggedService(q)
+	post(s, request(t, "tmux"))
+	if len(q.results) != 0 {
+		t.Fatalf("a result was posted without a claim: %+v", q.results)
+	}
+	if !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestABadBodyIsA400AndTouchesNothing(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	for name, body := range map[string][]byte{
+		"not json":      []byte("{"),
+		"unknown field": []byte(`{"nope":1}`),
+		"empty":         nil,
+	} {
+		if rec := post(s, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d", name, rec.Code)
+		}
+	}
+	var m map[string]any
+	_ = json.Unmarshal(request(t), &m)
+	m["cacheable"] = true // a fast-lane run is never cacheable
+	b, _ := json.Marshal(m)
+	if rec := post(s, b); rec.Code != http.StatusBadRequest {
+		t.Errorf("cacheable: status %d", rec.Code)
+	}
+	if len(q.calls) != 0 || len(tb.Held()) != 0 {
+		t.Fatal("a refused request recorded or held something")
+	}
+}
+
+func TestMalformedLockKeysAreA400NotAnOutage(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	for name, keys := range map[string][]string{"empty": {""}, "newline": {"a\nb"}, "repeated": {"k", "k"}} {
+		b := request(t)
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		m["locks"] = keys
+		b, _ = json.Marshal(m)
+		if rec := post(s, b); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+	}
+	if len(q.calls) != 0 || len(tb.Held()) != 0 {
+		t.Fatal("a malformed request recorded or held something")
+	}
+}
+
+func TestATerminalLocalEventReleasesTheKeysAndOthersDoNot(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "tmux"))
+	ev := func(local bool, st wire.JobState) wire.JobEvent {
+		return wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: local, State: st}}
+	}
+	s.OnJobEvent(ev(true, wire.StateRunning))
+	s.OnJobEvent(ev(false, wire.StateFailed)) // a remote job of the same id is not this hold
+	if _, ok := tb.Holder("tmux"); !ok {
+		t.Fatal("keys were released by an event that does not end the run")
+	}
+	for _, st := range []wire.JobState{wire.StateSucceeded} {
+		s.OnJobEvent(ev(true, st))
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("the end of the run did not release its keys")
+	}
+	s.OnJobEvent(ev(true, wire.StateSucceeded)) // twice is harmless
+}
+
+func TestEveryFinalStateReleases(t *testing.T) {
+	for _, st := range []wire.JobState{wire.StateSucceeded, wire.StateFailed, wire.StateCancelled, wire.StateSuperseded, wire.StateExpired} {
+		q := &fakeQueue{}
+		s, tb := newService(q)
+		post(s, request(t, "tmux"))
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: true, State: st}})
+		if _, ok := tb.Holder("tmux"); ok {
+			t.Errorf("%s did not release", st)
+		}
+	}
+}
+
+func TestAnEventFasterThanTheAnswerReleasesAtOnce(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	q.during = func(id string) { // the job is recorded, ends and is announced before RecordLocal returns
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	}
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("keys of a job that had already ended stayed held")
+	}
+}
+
+func TestReconcileReleasesTheJobsTheQueueSaysAreOver(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "a"))
+	post(s, request(t, "b"))
+	post(s, request(t, "c"))
+	q.ended = map[string]bool{"j_local1": true, "j_local3": true}
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tb.Holder("a"); ok {
+		t.Error("a: not released")
+	}
+	if _, ok := tb.Holder("b"); !ok {
+		t.Error("b: released although the job goes on")
+	}
+	if _, ok := tb.Holder("c"); ok {
+		t.Error("c: not released")
+	}
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local2" {
+		t.Fatalf("held %v", got)
+	}
+}
+
+func TestReconcileThatCannotAskKeepsEverything(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	post(s, request(t, "a"))
+	q.endErr = errors.New("queue busy")
+	if err := s.Reconcile(context.Background()); err == nil {
+		t.Fatal("the failure was not reported")
+	}
+	if _, ok := tb.Holder("a"); !ok {
+		t.Fatal("keys were released on a failed comparison")
+	}
+}
+
+func TestReconcileWithNothingHeldDoesNotAskTheQueue(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	if err := s.Reconcile(context.Background()); err != nil || len(q.asked) != 0 {
+		t.Fatalf("err %v asked %v", err, q.asked)
+	}
+}
+
+func TestTwoRunsForOneKeyAtOnceAreOneRecordAndOneRefusal(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	var ok, busy atomic.Int32
+	var wg sync.WaitGroup
+	body := request(t, "tmux")
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch post(s, body).Code {
+			case http.StatusOK:
+				ok.Add(1)
+			case http.StatusConflict:
+				busy.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok.Load() != 1 || busy.Load() != 7 || len(q.calls) != 1 {
+		t.Fatalf("recorded %d, refused %d, queue asked %d times", ok.Load(), busy.Load(), len(q.calls))
+	}
+}
+
+func TestARunWithoutKeysIsRecordedAndHoldsNothingBack(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	if rec := post(s, request(t)); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if rec := post(s, request(t)); rec.Code != http.StatusOK {
+		t.Fatalf("a second run with no keys: %d", rec.Code)
+	}
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_local1", Local: true, State: wire.StateSucceeded}})
+	if got := s.Held(); len(got) != 1 || got[0] != "j_local2" {
+		t.Fatalf("held %v", got)
+	}
+}
+
+func TestRegistrationsWaitForTheLocksToBeRebuiltAfterAStart(t *testing.T) {
+	q := &fakeQueue{runErr: errors.New("queue not up")}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusServiceUnavailable || len(q.calls) != 0 {
+		t.Fatalf("before the rebuild: status %d, queue asked %d times", rec.Code, len(q.calls))
+	}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a failed rebuild was reported as done")
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("after a failed rebuild: status %d", rec.Code)
+	}
+	q.runErr = nil
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("after the rebuild: status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestARunningJobKeepsItsKeysAcrossARestart(t *testing.T) {
+	// the queue still has j_old running; the daemon starts again with an empty table
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_old", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_done", Local: true, State: wire.StateSucceeded, Locks: []string{"db"}},
+		{ID: "j_remote", Local: false, State: wire.StateRunning, Locks: []string{"net"}},
+	}}
+	s, tb := newService(q)
+	if o, _ := tb.Holder("tmux"); o != "j_old" {
+		t.Fatalf("holder of tmux = %q", o)
+	}
+	if _, ok := tb.Holder("db"); ok {
+		t.Error("a job that is over holds keys")
+	}
+	if _, ok := tb.Holder("net"); ok {
+		t.Error("a job that is not a fast-lane run was taken into the fast lane's table")
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusConflict {
+		t.Fatalf("a run for a key of the job that is still going: %d", rec.Code)
+	}
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_old", Local: true, State: wire.StateFailed}})
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("after its end: %d", rec.Code)
+	}
+	q.mu.Lock()
+	q.running = nil // j_old is over for the queue too
+	q.mu.Unlock()
+	if err := s.Recover(context.Background()); err != nil { // a second rebuild is harmless
+		t.Fatal(err)
+	}
+}
+
+func TestAnEndWithNoRegistrationInFlightIsNotRemembered(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_other", Local: true, State: wire.StateFailed}})
+	s.mu.Lock()
+	n := len(s.early)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d ends remembered with nobody waiting for them", n)
+	}
+}
+
+func TestAnEndAnnouncedWhileTheRegistrationIsInFlightSurvivesAReconcile(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	q.during = func(id string) {
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+		_ = s.Reconcile(context.Background()) // a comparison in the middle must not forget it
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("the keys of a job that had ended stayed held")
+	}
+}
+
+func TestRecoverThatCannotAccountForAJobKeepsTheLaneClosed(t *testing.T) {
+	// two running jobs share a key (an older start): only one can hold it
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_a", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_b", Local: true, State: wire.StateRunning, Locks: []string{"tmux", "db"}},
+	}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a job whose keys could not be taken was passed over")
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the lane opened with a job unaccounted for: %d", rec.Code)
+	}
+	// j_a's lease lapses and the queue marks it over: the next rebuild accounts for every running job
+	q.mu.Lock()
+	q.running = q.running[1:]
+	q.mu.Unlock()
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_a", Local: true, State: wire.StateFailed}})
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusConflict {
+		t.Fatalf("j_b's keys must be held: %d", rec.Code)
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusOK {
+		t.Fatalf("the lane did not open: %d", rec.Code)
+	}
+}
+
+func TestRecoverDoesNotTakeTheKeysOfAJobThatEndedWhileItListed(t *testing.T) {
+	q := &fakeQueue{running: []wire.Job{{ID: "j_old", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}}}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	q.afterList = func() { // the job ends after the queue listed it and before its keys are taken
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_old", Local: true, State: wire.StateSucceeded}})
+	}
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("the keys of a job that had ended were rebuilt")
+	}
+}
+
+func TestARepeatedRebuildThatFailsClosesTheLaneAgain(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q) // the lane is open
+	if _, err := tb.Acquire("j_worker", []string{"tmux"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	q.mu.Lock()
+	q.running = []wire.Job{{ID: "j_new", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}}}
+	q.mu.Unlock()
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a job that could not be accounted for was passed over")
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the lane stayed open: %d", rec.Code)
+	}
+}
+
+// interleavingQueue runs hook inside Result, before the final job event: the window between abandon's check of the id and the event.
+type interleavingQueue struct {
+	*fakeQueue
+	svc  *Service
+	hook func()
+}
+
+func (q *interleavingQueue) Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	if q.hook != nil {
+		q.hook()
+	}
+	j, err := q.fakeQueue.Result(ctx, id, req)
+	q.svc.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	return j, err
+}
+
+func TestARegistrationThatGetsTheIdOfARunBeingAbandonedIsRefusedAndNothingIsReleased(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &interleavingQueue{fakeQueue: base}
+	s, tb, _ := loggedService(q)
+	q.svc = s
+	q.hook = func() {
+		// meanwhile the queue gives another run the same id, with a good lease
+		base.mu.Lock()
+		base.n = 0
+		base.badLease = false
+		base.mu.Unlock()
+		if rec := post(s, request(t, "db")); rec.Code == http.StatusOK {
+			t.Errorf("the registration with the id being ended was accepted")
+		}
+	}
+	post(s, request(t, "tmux")) // recorded with an unusable lease: abandoned
+	if len(base.results) != 1 {
+		t.Fatalf("the abandoned run was not ended: %+v", base.results)
+	}
+	if _, ok := tb.Holder("db"); ok {
+		t.Fatal("the refused registration kept its keys")
+	}
+	if len(s.Held()) != 0 {
+		t.Fatalf("holds left: %v", s.Held())
+	}
+}
+
+// Ready is false until Recover has accounted for every running job, and again while a repeat of it is going on: whoever else takes
+// keys from the same table (the worker) waits for it.
+func TestReadyIsTrueOnlyOnceTheKeysOfTheRunningJobsAreBack(t *testing.T) {
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_a", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_b", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+	}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if s.Ready() {
+		t.Fatal("ready before any Recover")
+	}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("two running jobs share a key")
+	}
+	if s.Ready() {
+		t.Fatal("ready with a job unaccounted for")
+	}
+	q.mu.Lock()
+	q.running = q.running[1:]
+	q.mu.Unlock()
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_a", Local: true, State: wire.StateFailed}})
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Ready() {
+		t.Fatal("not ready after a complete Recover")
+	}
+	if _, ok := tb.Holder("tmux"); !ok {
+		t.Fatal("the running job's key is back")
+	}
+}

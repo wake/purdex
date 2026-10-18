@@ -60,19 +60,16 @@ func (m *Module) enableDiskGuard() {
 	}
 }
 
-// diskPreflight runs before the locked part of a pass. wait says the caller is a request that is about to be answered: it
-// waits for the trim it starts, so its grant is made after it. The sampler and the sweeper pass false and never wait.
-func (m *Module) diskPreflight(ctx context.Context, wait bool) {
-	if m.diskFree == nil || m.goCacheDir == nil || m.store == nil {
-		return
-	}
-	waiting, err := m.store.Waiting()
-	if err != nil {
+// diskPreflight checks the volume of the Go build cache for work of the given kinds, and trims the cache when it is low. wait
+// says the caller is about to let the work start: it waits for the trim it starts. Nothing calls it since the lease pass that
+// did was removed (WWD-0a); the guard is kept, dormant, for the wwd to take over.
+func (m *Module) diskPreflight(ctx context.Context, kinds []string, wait bool) {
+	if m.diskFree == nil || m.goCacheDir == nil {
 		return
 	}
 	heavy := false
-	for _, w := range waiting {
-		if diskGuardedKinds[w.Kind] {
+	for _, k := range kinds {
+		if diskGuardedKinds[k] {
 			heavy = true
 			break
 		}
@@ -136,10 +133,6 @@ func (m *Module) startTrim(dir string, free int64) (started bool, done <-chan st
 			m.disk.mu.Lock()
 			m.disk.trimming = false
 			m.disk.mu.Unlock()
-			// The guarded leases that waited for this walk are granted now, with the disk judged after it.
-			if m.runCtx.Err() == nil {
-				m.admissionPass(m.runCtx, "")
-			}
 		}()
 		if m.trimHook != nil {
 			m.trimHook()
@@ -211,13 +204,6 @@ func (m *Module) recordGrantWarning(id, kind string) {
 		delete(m.disk.grants, m.disk.grantOrder[0])
 		m.disk.grantOrder = m.disk.grantOrder[1:]
 	}
-}
-
-// warnFor is the warning a lease answer carries: the one it was granted with, if any.
-func (m *Module) warnFor(row leaseRow) string {
-	m.disk.mu.Lock()
-	defer m.disk.mu.Unlock()
-	return m.disk.grants[row.ID]
 }
 
 // hexDir says whether name is one of the cache's entry directories: exactly two lower-case hex digits.

@@ -11,6 +11,8 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 type TmuxPane struct {
@@ -56,6 +58,7 @@ type Module struct {
 	core            *core.Core
 	now             func() time.Time
 	hostState       *HostMetricsState
+	defaultHost     bool // the host collector is the monitor's own (not a test's): Init wraps it for the pool source
 	sessionProvider sessionProvider
 
 	snapshotMu     sync.Mutex
@@ -78,9 +81,10 @@ func New(opts ...Option) *Module {
 		ProcessTableCollector: NewProcessTableCollector(nil),
 	}
 	m := &Module{
-		collectors: collectors,
-		now:        time.Now,
-		hostState:  NewHostMetricsState(collectors.HostCollector),
+		collectors:  collectors,
+		now:         time.Now,
+		hostState:   NewHostMetricsState(collectors.HostCollector),
+		defaultHost: true,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -92,6 +96,7 @@ func WithCollectors(collectors Collectors) Option {
 	return func(m *Module) {
 		m.collectors = collectors
 		m.hostState = NewHostMetricsState(collectors.HostCollector)
+		m.defaultHost = false // an injected collector is a test's: it is not wrapped
 	}
 }
 
@@ -113,6 +118,12 @@ func (m *Module) Dependencies() []string { return []string{"session"} }
 
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	if m.defaultHost && m.collectors.HostCollector != nil {
+		// While the fleet row says pool, the host part of the snapshot is wwd's (host_pool.go); the resources module offers the
+		// facts, looked up on each call (it may Init after this module).
+		m.collectors.HostCollector = newPoolHostCollector(m.collectors.HostCollector, m.localFacts)
+		m.hostState = NewHostMetricsState(m.collectors.HostCollector)
+	}
 	if m.sessionProvider == nil && c != nil && c.Registry != nil {
 		if svc, ok := c.Registry.Get(session.RegistryKey); ok {
 			if provider, ok := svc.(sessionProvider); ok {
@@ -461,4 +472,21 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// localFacts is this host's fresh facts from the resources module (resources.LocalFactsKey), ok false when the fleet row's source
+// is not the pool, wwd has none, or no such module is registered.
+func (m *Module) localFacts() (wire.Facts, bool) {
+	if m.core == nil || m.core.Registry == nil {
+		return wire.Facts{}, false
+	}
+	svc, ok := m.core.Registry.Get(resources.LocalFactsKey)
+	if !ok {
+		return wire.Facts{}, false
+	}
+	r, ok := svc.(resources.LocalFactsReader)
+	if !ok {
+		return wire.Facts{}, false
+	}
+	return r.LatestLocalFacts()
 }

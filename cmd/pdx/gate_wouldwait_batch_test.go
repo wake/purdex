@@ -25,7 +25,7 @@ func wouldWaitBatchOf(t *testing.T, cfg string, argvs [][]string) []map[string]a
 // The answer for each command is the one it would have had asked alone, whatever the state of the gate: free, and with a heavy
 // slot held (the commands of that class wait, the others do not).
 func TestGate_WouldWaitBatchAnswersAsOneByOne(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	argvs := [][]string{{"go", "test", "./..."}, {"ls", "-la"}, {"./node_modules/.bin/tsc", "-b"}, {"pnpm", "run", "build"}, {"git", "status"}}
 	same := func(label string) {
 		t.Helper()
@@ -63,7 +63,7 @@ func TestGate_WouldWaitBatchAnswersAsOneByOne(t *testing.T) {
 
 // Text output: one line per command, in order.
 func TestGate_WouldWaitBatchTextHasALinePerCommand(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	require.Equal(t, 0, gateMain([]string{"would-wait", "--auto-batch", `[["ls"],["go","test"]]`, "--config", cfg}, &out, &errb), errb.String())
 	assert.Equal(t, "no\nno\n", out.String())
@@ -71,7 +71,7 @@ func TestGate_WouldWaitBatchTextHasALinePerCommand(t *testing.T) {
 
 // Anything that is not a non-empty list of non-empty argv lists, or that is mixed with the other forms, is a usage error.
 func TestGate_WouldWaitBatchUsageErrors(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	for _, args := range [][]string{
 		{"would-wait", "--auto-batch", "", "--config", cfg},
 		{"would-wait", "--auto-batch", "not json", "--config", cfg},

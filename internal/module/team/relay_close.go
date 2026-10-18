@@ -21,6 +21,10 @@ func reasonSuffix(op team.RelayOp) string {
 // the op is re-derived from its row by reconcileAwaitingOp at the next
 // begin of that session and by the boot reconciliation (P5a-2b).
 func (m *Module) afterClose(a team.Approval, rep *RelayReport) {
+	if a.Kind == team.KindSpawnResources { // its op is a spawn, not a relay (RT-5a)
+		m.afterSpawnCard(a)
+		return
+	}
 	if a.Kind != team.KindSelfRelay {
 		return
 	}

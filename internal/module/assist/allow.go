@@ -251,6 +251,7 @@ type hostRow struct {
 	Ready   bool   `json:"ready"`
 	Allowed bool   `json:"allowed"`
 	Usable  bool   `json:"usable"`
+	Gen     int    `json:"gen"` // the generation of the host's record this row was worked out for (a reader compares it with the record it uses)
 	Why     string `json:"why,omitempty"`
 }
 
@@ -271,7 +272,7 @@ func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
 	rows := []hostRow{}
 	for _, alias := range sortedHosts(f) {
 		h := f.Hosts[alias]
-		row := hostRow{Host: alias, On: h.On, Allowed: gate.AllowedFor(f, alias, entries)}
+		row := hostRow{Host: alias, On: h.On, Gen: h.Gen, Allowed: gate.AllowedFor(f, alias, entries)}
 		if repo == "" {
 			row.Why = "this directory is not in a git repository"
 		} else {

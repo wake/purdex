@@ -11,6 +11,7 @@ import (
 	leaf "github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // This file is the aggregator: the newest reading of every host, kept in memory only (spec §2.5: nothing a sample says is
@@ -49,6 +50,10 @@ type Deps struct {
 	SelfHostID func() string
 	PeerHostID func(alias string) string // the daemon host id of a peer alias, "" when unknown
 	Events     Pusher
+	// Pool reads wwd's pool (spec §9). It is used only while the fleet row's source is "pool"; a host the pool lists then takes
+	// its readings from the pool's facts, any other host (or all of them, while wwd cannot be asked) from the SSH sessions and the
+	// LocalSource as always. Nil = the pool is never asked.
+	Pool func(ctx context.Context) (wire.Pool, error)
 	// Disk is the own host's disk figures, as of the fleet's mount; nil = leaf.LocalDisk (percentage only).
 	Disk func() (usedPct, freeGB float64, ok bool)
 	Logf func(format string, args ...any)
@@ -132,6 +137,12 @@ type hostRow struct {
 	ownAt   time.Time // At of the newest local reading seen
 	ownSlow time.Time
 	ownSeen time.Time // when it was seen (receive time)
+
+	// the pool source: the row reads from the pool's facts while poolOwned
+	poolOwned        bool
+	factsAt          time.Time // the stamp of the pool's facts for this host as last seen, and when (this clock) it last changed
+	factsMoved       time.Time
+	poolAt, poolSeen time.Time // the stamp of the newest facts, and when they were seen
 }
 
 // Measure is the measuring side: while this daemon is primary it reads its own host from the LocalSource, keeps one SSH
@@ -166,6 +177,15 @@ type Measure struct {
 	probeRev   int64
 	fleetRev   int64
 	nextConfig time.Time
+	// the pool source (pool_source.go), also touched only by the goroutine that runs reconcile
+	want       []desired
+	poolMode   bool            // the fleet row says source = "pool"
+	inPool     map[string]bool // the hosts (by row key) the pool lists, as of the last good answer
+	lastPoolOK time.Time
+	// localOn says the LocalSource's 1 s tick is running, localSince when it was started; both touched only by the goroutine that
+	// runs the tick (and by activate/deactivate, which wait for it).
+	localOn    bool
+	localSince time.Time
 }
 
 type liveSession struct {
@@ -197,6 +217,7 @@ func (m *Measure) resetLocked() {
 	m.lookSig = map[string]string{}
 	m.lookLeft = map[string]int{}
 	m.sessions = map[string]*liveSession{}
+	m.inPool, m.lastPoolOK = nil, time.Time{}
 	m.haveRev = false
 }
 
@@ -250,8 +271,11 @@ func (m *Measure) activateLocked() {
 	m.mu.Lock()
 	m.resetLocked()
 	m.mu.Unlock()
-	m.d.Local.Start()
+	m.localOn = false
 	m.reconcile(ctx, true)
+	if !m.poolMode {
+		m.startLocal() // as it always was; in pool mode the first tick decides, once it knows whether the pool serves this host
+	}
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -282,7 +306,7 @@ func (m *Measure) deactivateLocked() {
 		go func(s *session) { defer sw.Done(); s.stop() }(ls.s)
 	}
 	sw.Wait()
-	m.d.Local.Stop()
+	m.stopLocal()
 	m.active = false
 	m.mu.Lock()
 	m.resetLocked()
@@ -353,6 +377,7 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 	}
 	m.probeRev, m.fleetRev, m.haveRev = prevRev, fleetRev, true
 
+	m.poolMode = m.d.Pool != nil && fc.Source == hostconfig.FleetSourcePool
 	var want []desired
 	want = append(want, desired{key: "self", kind: KindDaemon, fleetAlias: st.Self, staticID: m.d.SelfHostID()})
 	if fc.PeerSSHAlias != "" {
@@ -368,6 +393,7 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 			name: p.Name, icon: p.Icon, weight: p.IconWeight, colors: p.Colors})
 	}
 
+	m.want = want
 	// Decide under the lock, stop sessions outside it (a stopping session's sink call takes the lock).
 	var stop []*session
 	var start []desired
@@ -398,21 +424,32 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 		h.kind, h.fleetAlias, h.staticID, h.sshAlias = w.kind, w.fleetAlias, w.staticID, w.ssh
 		h.name, h.icon, h.iconWeight, h.colors = w.name, w.icon, w.weight, w.colors
 		m.order = append(m.order, w.key)
-		if w.ssh != "" {
+		if w.ssh != "" && !m.poolMode { // in pool mode the tick starts the sessions of the hosts the pool does not list
 			if _, running := m.sessions[w.key]; !running {
 				start = append(start, w)
 			}
 		}
+		if !m.poolMode {
+			m.releaseLocked(h)
+		}
 	}
 	m.mu.Unlock()
 
-	// Cancel all first, then wait side by side (like deactivateLocked): the tick is held for one grace, not one per host.
+	m.stopSessions(stop)
+	m.startSessions(ctx, start)
+}
+
+// stopSessions cancels all first, then waits side by side (like deactivateLocked): the tick is held for one grace, not one per host.
+func (m *Measure) stopSessions(stop []*session) {
 	var sw sync.WaitGroup
 	for _, s := range stop {
 		sw.Add(1)
 		go func(s *session) { defer sw.Done(); s.stop() }(s)
 	}
 	sw.Wait()
+}
+
+func (m *Measure) startSessions(ctx context.Context, start []desired) {
 	for _, w := range start {
 		m.mu.Lock()
 		h := m.hosts[w.key]
@@ -517,7 +554,8 @@ func (m *Measure) readLocal(now time.Time) {
 	if h == nil {
 		return
 	}
-	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) {
+	// A reading the source kept from before it was (re)started is not this host's now: the pool had it for the time between.
+	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) && !f.At.Before(m.localSince) {
 		h.ownAt, h.ownSeen = f.At, now
 		h.os = localOS()
 		pct, free, dok := m.disk()
@@ -529,7 +567,7 @@ func (m *Measure) readLocal(now time.Time) {
 		h.status, h.code, h.lastOK = leaf.StatusOK, leaf.CodeNone, now
 		m.noteReadingLocked(now)
 	}
-	if s, ok := m.d.Local.Slow(); ok && s.At.After(h.ownSlow) {
+	if s, ok := m.d.Local.Slow(); ok && s.At.After(h.ownSlow) && !s.At.Before(m.localSince) {
 		h.ownSlow = s.At
 		m.applySlowLocked(h, s.TopCPU, s.TopMem, s.Gate, true, now) // the local gate status always carries its Admission
 	}
@@ -557,6 +595,33 @@ func (m *Measure) tick(ctx context.Context) {
 		return
 	}
 	m.reconcile(ctx, false)
-	m.readLocal(m.clock.Now())
+	if m.poolMode {
+		m.readPool(ctx, m.clock.Now())
+		m.syncSessions(ctx)
+	}
+	if m.poolMode && m.inPool["self"] {
+		m.stopLocal() // wwd reads this host: the FastReader's sysctls are not run for a figure nobody takes (C1)
+	} else {
+		m.startLocal()
+		m.readLocal(m.clock.Now())
+	}
 	m.push()
+}
+
+// startLocal starts the LocalSource's tick unless it is running.
+func (m *Measure) startLocal() {
+	if m.localOn {
+		return
+	}
+	m.localOn, m.localSince = true, m.clock.Now()
+	m.d.Local.Start()
+}
+
+// stopLocal stops it unless it is not running.
+func (m *Measure) stopLocal() {
+	if !m.localOn {
+		return
+	}
+	m.localOn = false
+	m.d.Local.Stop()
 }
