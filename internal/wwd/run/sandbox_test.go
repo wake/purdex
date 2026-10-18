@@ -19,6 +19,8 @@ case "$1" in
   systemd-run)
     cat "$FAKE/out" 2>/dev/null
     if [ -e "$FAKE/err" ]; then cat "$FAKE/err" >&2; fi
+    [ ! -e "$FAKE/late" ] || sleep 0.3
+    : > "$FAKE/created"
     if [ -e "$FAKE/hang" ]; then
       while [ ! -e "$FAKE/stopped" ]; do sleep 0.02; done
       exit 0
@@ -26,7 +28,10 @@ case "$1" in
     exit "$(cat "$FAKE/exit" 2>/dev/null || echo 0)" ;;
   systemctl)
     echo "systemctl $*" >> "$FAKE/calls"
-    [ "$2" != stop ] || : > "$FAKE/stopped"
+    if [ "$2" = stop ]; then
+      [ -e "$FAKE/created" ] || exit 5   # no such unit yet
+      [ -e "$FAKE/nostop" ] || : > "$FAKE/stopped"
+    fi
     exit 0 ;;
 esac
 exit 99
@@ -52,6 +57,9 @@ func newWorld(t *testing.T) *fakeWorld {
 		}
 	}
 	t.Setenv("FAKE", dir)
+	oldRetry, oldGrace, oldSettle := stopRetry, stopGrace, settle
+	stopRetry, stopGrace, settle = 50*time.Millisecond, 300*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { stopRetry, stopGrace, settle = oldRetry, oldGrace, oldSettle })
 	w := &fakeWorld{dir: dir, sb: &Sandbox{User: "wake", SudoPath: filepath.Join(dir, "sudo"), SystemctlPath: filepath.Join(dir, "systemctl")}}
 	w.set("show", "ActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainCode=1\n")
 	return w
@@ -262,5 +270,96 @@ func TestSandboxNeedsAUser(t *testing.T) {
 	w.sb.User = ""
 	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
 		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxStopBeforeTheUnitExistsIsSentAgain(t *testing.T) {
+	w := newWorld(t)
+	w.set("hang", "")
+	w.set("late", "") // systemd-run makes the unit 0.3 s after it started: the first stop finds nothing
+	s := sandboxSpec(t, w, "sleep", "60")
+	s.Timeout = 100 * time.Millisecond
+	r := Run(context.Background(), s)
+	if r.Outcome != TimedOut || r.Err != nil {
+		t.Fatalf("result = %+v", r)
+	}
+	n := 0
+	for _, c := range w.calls(t) {
+		if strings.HasPrefix(c, "sudo systemctl stop") {
+			n++
+		}
+	}
+	if n < 2 {
+		t.Fatalf("the stop must be sent again until the unit is there: %d stops in %q", n, w.calls(t))
+	}
+}
+
+func TestSandboxAStopThatNeverWorksIsAnError(t *testing.T) {
+	w := newWorld(t)
+	w.set("hang", "")
+	w.set("nostop", "")
+	s := sandboxSpec(t, w, "sleep", "60")
+	s.Timeout = 100 * time.Millisecond
+	// the unit looks free before it is made and active after: it never goes inactive
+	go func() {
+		for i := 0; i < 400; i++ {
+			if _, err := os.Stat(filepath.Join(w.dir, "created")); err == nil {
+				w.set("show", "ActiveState=active\nResult=success\n")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	r := Run(context.Background(), s)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "may still be running") {
+		t.Fatalf("a unit that cannot be proven stopped is an error, not a clean timeout: %+v", r)
+	}
+}
+
+func TestSandboxRefusesToStartNextToARunningUnit(t *testing.T) {
+	w := newWorld(t)
+	w.set("show", "ActiveState=active\nResult=success\n")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Err == nil {
+		t.Fatalf("result = %+v", r)
+	}
+	if w.called(t, "systemd-run") {
+		t.Fatalf("nothing may be started: %q", w.calls(t))
+	}
+}
+
+func TestSandboxClearsAnOldFailedUnitBeforeStarting(t *testing.T) {
+	w := newWorld(t)
+	Run(context.Background(), sandboxSpec(t, w, "true"))
+	calls := w.calls(t)
+	first, run := -1, -1
+	for i, c := range calls {
+		if strings.HasPrefix(c, "sudo systemctl reset-failed") && first < 0 {
+			first = i
+		}
+		if strings.HasPrefix(c, "sudo systemd-run") && run < 0 {
+			run = i
+		}
+	}
+	if first < 0 || run < 0 || first > run {
+		t.Fatalf("an old unit of the same name must be cleared before the new one starts, or its Result is read as this run's: %q", calls)
+	}
+}
+
+func TestSandboxRefusesAPathWithWhiteSpace(t *testing.T) {
+	w := newWorld(t)
+	w.sb.ReadWritePaths = []string{"/var/cache/my cache"}
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestTaskEnvNameCannotBeAnOption(t *testing.T) {
+	for _, e := range []string{"--unset=WWD_JOB=1", "-i=1", "A B=1", "1A=1"} {
+		s := spec(t, "true")
+		s.TaskEnv = []string{e}
+		if r := Run(context.Background(), s); r.Outcome != StartFailed {
+			t.Errorf("%q: result = %+v", e, r)
+		}
 	}
 }

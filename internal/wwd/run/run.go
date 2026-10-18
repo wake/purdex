@@ -84,7 +84,7 @@ func Run(ctx context.Context, spec Spec) Result {
 		return failStart(res, fmt.Errorf("run: empty command"))
 	}
 	if spec.Sandbox != nil {
-		if err := spec.Sandbox.validate(spec.JobID); err != nil {
+		if err := spec.Sandbox.validate(spec); err != nil {
 			return failStart(res, err)
 		}
 	}
