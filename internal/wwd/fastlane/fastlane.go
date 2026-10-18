@@ -103,15 +103,17 @@ type Request struct {
 
 // Result is how the run ended.
 type Result struct {
-	JobID    string
-	State    wire.JobState
-	Exit     int // the command's exit status; ExitTimeout when it ran out of time
-	Summary  wire.Summary
-	Reason   string
-	LogPath  string
-	Err      error // a failure of the lane itself (the gate refused, the record could not be made): no test result
-	Cleanup  func()
-	SumErr   error // why the summary could not be built, when it could not
+	JobID   string
+	State   wire.JobState
+	Exit    int // the command's exit status; ExitTimeout when it ran out of time
+	Summary wire.Summary
+	Reason  string
+	LogPath string
+	Err     error // a failure of the lane itself (the gate refused, the record could not be made): no test result
+	Cleanup func()
+	SumErr  error // why the summary could not be built, when it could not
+	// Tail is the end of the command's output (the last 64 KiB at most, kept in memory whatever the log's cap was).
+	Tail     []byte
 	FinishAt time.Time
 }
 
@@ -171,7 +173,8 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	var timer atomic.Pointer[time.Timer]
 	nonce := newNonce()
 	env = append(env, gate.AdmittedMarkEnv+"="+nonce)
-	stderr := &admitFilter{w: tee(cp.Stderr(), req.TeeStderr), admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
+	outTee, errTee := newTee(cp.Stdout(), req.TeeStdout), newTee(cp.Stderr(), req.TeeStderr)
+	stderr := &admitFilter{w: errTee, admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
 		onAdmitted: func() {
 			admitted.Store(true)
 			timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
@@ -197,13 +200,16 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		Argv: argv, Class: gateClass(req.GateClass), ClassSource: "kind", Env: env,
 		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
 		WaitMax: task.QueueTimeout, WaitedOut: &waitedOut,
-		Stdout: tee(cp.Stdout(), req.TeeStdout), Stderr: stderr,
+		Stdout: outTee, Stderr: stderr,
 	})
 	finished := time.Now()
 	if t := timer.Load(); t != nil {
 		t.Stop()
 	}
 	tail, _, capErr := cp.Close()
+	outTee.close()
+	errTee.close()
+	res.Tail = tail
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
 	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned))
@@ -431,18 +437,57 @@ func gateClass(c gate.Class) gate.Class {
 	return c
 }
 
-// tee writes to w and, best effort, to extra: the log is the output's first place, and a reader that fails does not matter.
-func tee(w, extra io.Writer) io.Writer {
-	if extra == nil {
-		return w
-	}
-	return teeWriter{w: w, extra: extra}
+// teeBuffer is how many chunks of output a live reader may fall behind before chunks are dropped for it.
+const teeBuffer = 1024
+
+// teeFlush is how long the end of a run waits for a live reader to take what is left.
+const teeFlush = 2 * time.Second
+
+// teeWriter is the writer the command's output goes to: the log first, always; and, when a live reader is given, a copy for it
+// that never holds the command back. The copy goes through a buffer to a goroutine; a reader that stalls (an open pipe nobody
+// reads) fills the buffer and loses chunks — the log has everything — instead of blocking the gate's copy of the output.
+type teeWriter struct {
+	w     io.Writer
+	extra io.Writer
+	ch    chan []byte
+	done  chan struct{}
 }
 
-type teeWriter struct{ w, extra io.Writer }
+func newTee(w, extra io.Writer) *teeWriter {
+	t := &teeWriter{w: w, extra: extra}
+	if extra == nil {
+		return t
+	}
+	t.ch, t.done = make(chan []byte, teeBuffer), make(chan struct{})
+	go func() {
+		defer close(t.done)
+		for p := range t.ch {
+			_, _ = t.extra.Write(p)
+		}
+	}()
+	return t
+}
 
-func (t teeWriter) Write(p []byte) (int, error) {
+func (t *teeWriter) Write(p []byte) (int, error) {
 	n, err := t.w.Write(p)
-	_, _ = t.extra.Write(p[:n])
+	if t.ch != nil && n > 0 {
+		select {
+		case t.ch <- append([]byte(nil), p[:n]...):
+		default: // the reader is behind: the log keeps it
+		}
+	}
 	return n, err
+}
+
+// close ends the live copy: what is buffered is given to the reader for up to teeFlush, then the goroutine is left to the reader
+// (a reader that never returns costs one goroutine, not the run).
+func (t *teeWriter) close() {
+	if t.ch == nil {
+		return
+	}
+	close(t.ch)
+	select {
+	case <-t.done:
+	case <-time.After(teeFlush):
+	}
 }

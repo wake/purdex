@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -61,10 +60,9 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 		fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
 		return ExitFailed, true
 	}
-	logPath := res.LogPath
 	var output []string
 	if live && o.Args.JSON {
-		output = tailLines(logPath, outputLines) // before the files go
+		output = tailLines(res.Tail, outputLines)
 	}
 	if out == "" {
 		defer res.Cleanup() // no place to keep the files: they go with the command
@@ -93,35 +91,18 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 	return ExitCode(r), true
 }
 
-// tailLines is the last n lines of the file at path (its last 64 KiB at most); nil when it cannot be read.
-func tailLines(path string, n int) []string {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil
-	}
-	const window = 64 << 10
-	off := int64(0)
-	if st.Size() > window {
-		off = st.Size() - window
-	}
-	b := make([]byte, st.Size()-off)
-	if _, err := f.ReadAt(b, off); err != nil && err != io.EOF {
+// tailLines is the last n lines of b, which is the end of the output (cut anywhere, so a first line that may be partial is left
+// out when b is as long as the in-memory tail can be); nil when there is nothing.
+func tailLines(b []byte, n int) []string {
+	if len(b) == 0 {
 		return nil
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if off > 0 && len(lines) > 0 {
-		lines = lines[1:] // the first line is cut
+	if len(b) >= 64<<10 && len(lines) > 1 {
+		lines = lines[1:]
 	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
-	}
-	if len(lines) == 1 && lines[0] == "" {
-		return nil
 	}
 	return lines
 }

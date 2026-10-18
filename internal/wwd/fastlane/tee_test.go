@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/gate"
 )
@@ -33,6 +34,44 @@ func TestTheCommandsOutputGoesToTheTeeAsWellAsTheLog(t *testing.T) {
 	log, _ := os.ReadFile(res.LogPath)
 	if !strings.Contains(string(log), "to stdout") || !strings.Contains(string(log), "to stderr") {
 		t.Fatalf("the log lost what the tee got: %q", log)
+	}
+}
+
+// stuck is a live reader that takes the first chunk and never returns (an open pipe nobody reads).
+type stuck struct{ release chan struct{} }
+
+func (s *stuck) Write(p []byte) (int, error) { <-s.release; return len(p), nil }
+
+func TestATeeThatStallsNeitherHoldsTheCommandNorLosesTheLog(t *testing.T) {
+	const lines = 5000 // far more chunks than the buffer of a live reader
+	g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+		for i := 0; i < lines; i++ {
+			o.Stdout.Write([]byte("row\n"))
+		}
+		return 0
+	}}
+	st := &stuck{release: make(chan struct{})}
+	defer close(st.release)
+	done := make(chan Result, 1)
+	go func() {
+		res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, TeeStdout: st})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	select {
+	case res := <-done:
+		defer res.Cleanup()
+		log, _ := os.ReadFile(res.LogPath)
+		if got := strings.Count(string(log), "row\n"); got != lines {
+			t.Fatalf("the log has %d of %d rows", got, lines)
+		}
+		if len(res.Tail) == 0 {
+			t.Fatal("the end of the output was not returned")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("a stalled live reader held the command")
 	}
 }
 
