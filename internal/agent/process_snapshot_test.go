@@ -38,6 +38,9 @@ func init() {
 func countPSForks(t *testing.T) *atomic.Int64 {
 	t.Helper()
 	var n atomic.Int64
+	// An answer another test kept for this pid would hide the forks a test counts.
+	psArgsReset()
+	t.Cleanup(psArgsReset)
 	orig := runPS
 	runPS = func(ctx context.Context, args ...string) ([]byte, error) {
 		n.Add(1)

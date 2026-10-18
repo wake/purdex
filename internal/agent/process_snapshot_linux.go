@@ -66,6 +66,11 @@ func snapshotProcessesPlatform(ctx context.Context) (map[int]*snapshotEntry, err
 // reader does, with its errors, then checks that the PID still names the
 // process the snapshot saw: a PID reused in between would otherwise lend its
 // exe and cmdline to the table's PPID and start time.
+// procArgsCachedPlatform is procArgsPlatform: nothing on Linux forks ps for a process's arguments, so there is nothing to keep.
+func procArgsCachedPlatform(pid int, e *snapshotEntry) (string, []string, error) {
+	return procArgsPlatform(pid, e)
+}
+
 func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 	if e.identity.unknown {
 		return "", nil, fmt.Errorf("pid %d: the snapshot could not pin its process: %w", pid, ErrProcessChanged)
