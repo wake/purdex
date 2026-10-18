@@ -55,7 +55,9 @@ function sameBase(a: EditBase | null, b: EditBase | null): boolean {
  * the newer edits, so nothing is sent. `fallbackHostId` is where a first collection goes when no host has one yet.
  * A conflict (the host's copy moved) is rethrown after the store re-read that host.
  */
-export async function savePersonas(items: Persona[], base: EditBase | null, fallbackHostId: string): Promise<{ hostId: string }> {
+export async function savePersonas(
+  items: Persona[], base: EditBase | null, fallbackHostId: string,
+): Promise<{ hostId: string; base: EditBase | null }> {
   const issues = collectionIssues(items)
   if (issues.length > 0) throw new PersonaValidationError(issues)
   if (!sameBase(base, editBase())) throw new PersonaStaleError()
@@ -67,5 +69,6 @@ export async function savePersonas(items: Persona[], base: EditBase | null, fall
     throw e
   }
   await usePersonaStore.getState().load(hostId)
-  return { hostId }
+  // The reload moved the revision and stamp; a form that stays open continues from this base.
+  return { hostId, base: editBase() }
 }

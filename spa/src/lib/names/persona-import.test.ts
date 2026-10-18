@@ -50,6 +50,12 @@ describe('planImport', () => {
     })
   })
 
+  it('treats a nested object field by field the same way', () => {
+    const existing = [makePersona('hiro', { nationality: { code: 'JP', zh: '日本', en: 'Japan' } })]
+    const plan = planImport(existing, [{ id: 'hiro', name: 'Hiro', nationality: { zh: '東瀛' } }])
+    expect(plan.result[0].nationality).toEqual({ code: 'JP', zh: '東瀛', en: 'Japan' })
+  })
+
   it('skips what would pass 64 personas, with a reason', () => {
     const existing = Array.from({ length: 63 }, (_, i) => makePersona(`aa${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`))
     const plan = planImport(existing, [raw('newa'), raw('newb')])

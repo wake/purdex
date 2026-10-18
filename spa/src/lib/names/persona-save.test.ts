@@ -48,6 +48,21 @@ describe('savePersonas', () => {
     expect(putPersonas).not.toHaveBeenCalled()
   })
 
+  it('returns the refreshed base, so a second save from the same open form is not stale', async () => {
+    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
+    // the real store would now hold the saved collection at revision 8 with a newer stamp
+    const reload = vi.fn(async () => {
+      usePersonaStore.setState({
+        byHost: { ...usePersonaStore.getState().byHost, h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 20, host: 'h2' }, 8) } },
+      })
+    })
+    usePersonaStore.setState({ load: reload })
+    const first = await savePersonas([makePersona('hiro')], editBase(), 'h1')
+    expect(first.base).toMatchObject({ hostId: 'h2', revision: 8, stamp: { at: 20, host: 'h2' } })
+    await savePersonas([makePersona('hiro', { name: 'Hiro Two' })], first.base, 'h1')
+    expect(putPersonas).toHaveBeenLastCalledWith('h2', expect.anything(), 8)
+  })
+
   it('refuses when the same host moved to a newer revision under the form', async () => {
     const base = editBase()
     usePersonaStore.setState({
