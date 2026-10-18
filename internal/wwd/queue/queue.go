@@ -71,6 +71,8 @@ type Queue struct {
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
+	// beforeLogCommit is a test hook: it runs after a log body has been received and before the transaction that puts it in place.
+	beforeLogCommit func()
 	// afterTicket is a test hook: it runs inside the transaction right after the ticket was taken, before COMMIT.
 	afterTicket func()
 }

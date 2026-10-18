@@ -142,16 +142,35 @@ func TestEnded(t *testing.T) {
 // More ids than one SQL statement takes are answered in pieces.
 func TestEndedWithManyIDs(t *testing.T) {
 	f := newFixture(t)
-	live := f.recordLocal(t)
-	ids := []string{live.ID}
+	// a job that is not over sits first, last and on each side of the piece boundaries, so a piece that is skipped or cut short shows
+	var live []string
+	for i := 0; i < 5; i++ {
+		live = append(live, f.recordLocal(t).ID)
+	}
+	var ids []string
 	for i := 0; i < 1500; i++ {
-		ids = append(ids, fmt.Sprintf("j_gone%d", i))
+		switch i {
+		case 0:
+			ids = append(ids, live[0])
+		case endedChunk - 1:
+			ids = append(ids, live[1])
+		case endedChunk:
+			ids = append(ids, live[2])
+		case 2*endedChunk + 1:
+			ids = append(ids, live[3])
+		case 1499:
+			ids = append(ids, live[4])
+		default:
+			ids = append(ids, fmt.Sprintf("j_gone%d", i))
+		}
 	}
 	got, err := f.q.Ended(bg, ids)
 	require.NoError(t, err)
-	require.Len(t, got, 1501)
-	assert.False(t, got[live.ID])
-	assert.True(t, got["j_gone1499"])
+	require.Len(t, got, 1500)
+	for _, id := range live {
+		assert.False(t, got[id], id)
+	}
+	assert.True(t, got["j_gone7"])
 }
 
 // LiveClaim is the snapshot route's question: it answers for the live claim only, with what the route needs, and a stale or unknown claim

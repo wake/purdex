@@ -103,6 +103,31 @@ func TestStaleClaimUploadsNoLog(t *testing.T) {
 	assert.Len(t, entries, 1, "one log file and no temporary leftovers")
 }
 
+// The claim is checked again in the transaction that puts the log in place: one that went stale while its body was coming (the lease
+// lapsed and another worker claimed the job) does not replace the log of the holder, and leaves no file behind.
+func TestClaimThatGoesStaleDuringTheUploadKeepsTheHoldersLog(t *testing.T) {
+	f := newFixture(t)
+	id, old := f.running(t)
+	var fresh wire.ClaimResponse
+	f.q.beforeLogCommit = func() {
+		f.clk.Advance(61 * time.Second)
+		_, err := f.q.Sweep(bg)
+		require.NoError(t, err)
+		fresh = f.claim(t, id, "mserv")
+	}
+	err := f.putLog(t, id, old.ClaimID, "from the old holder\n")
+	assert.Equal(t, wire.StateClaimed, conflictState(t, err))
+	f.q.beforeLogCommit = nil
+	_, _, err = f.q.OpenLog(bg, id, false)
+	assert.ErrorIs(t, err, ErrNotFound, "nothing was stored")
+	entries, err := os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	require.NoError(t, f.putLog(t, id, fresh.ClaimID, "from the holder\n"))
+	assert.Equal(t, "from the holder\n", f.readLog(t, id))
+}
+
 type failingReader struct{ n int }
 
 func (r *failingReader) Read(p []byte) (int, error) {

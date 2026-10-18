@@ -55,6 +55,9 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	if n > q.maxLog {
 		return ErrLogTooLarge
 	}
+	if q.beforeLogCommit != nil {
+		q.beforeLogCommit()
+	}
 	return q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
