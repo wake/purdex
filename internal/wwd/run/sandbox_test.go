@@ -21,6 +21,8 @@ case "$1" in
     if [ -e "$FAKE/err" ]; then cat "$FAKE/err" >&2; fi
     [ ! -e "$FAKE/late" ] || sleep 0.3
     : > "$FAKE/created"
+    ef=$(printf '%s\n' "$@" | grep -m1 '\.wwd-exit\.[0-9a-f]*$')
+    if [ -e "$FAKE/wrapper-exit" ] && [ -n "$ef" ]; then cat "$FAKE/wrapper-exit" > "$ef"; fi
     if [ -e "$FAKE/hang" ]; then
       while [ ! -e "$FAKE/stopped" ]; do sleep 0.02; done
       exit 0
@@ -28,7 +30,10 @@ case "$1" in
     exit "$(cat "$FAKE/exit" 2>/dev/null || echo 0)" ;;
   systemctl)
     echo "systemctl $*" >> "$FAKE/calls"
-    [ ! -e "$FAKE/reset-fails" ] || { [ "$2" != reset-failed ] || exit 1; }
+    if [ "$2" = reset-failed ]; then
+      [ ! -e "$FAKE/reset-fails" ] || exit 1
+      [ -e "$FAKE/loaded" ] || [ -e "$FAKE/created" ] || exit 1 # as systemctl does for a unit that is not loaded
+    fi
     if [ "$2" = stop ]; then
       [ -e "$FAKE/created" ] || exit 5   # no such unit yet
       [ -e "$FAKE/nostop" ] || : > "$FAKE/stopped"
@@ -43,8 +48,10 @@ echo "systemctl $*" >> "$FAKE/calls"
 n=$(cat "$FAKE/show-count" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$FAKE/show-count"
 if [ -e "$FAKE/show-fails" ]; then exit 1; fi
 [ "$(cat "$FAKE/show-fails-at" 2>/dev/null)" != "$n" ] || exit 1
+[ -e "$FAKE/gone" ] && { printf 'ActiveState=inactive\nLoadState=not-found\n'; exit 0; }
 [ -e "$FAKE/no-unit" ] && { printf 'ActiveState=inactive\nLoadState=not-found\nResult=\n'; exit 0; }
 cat "$FAKE/show"
+if [ -e "$FAKE/loaded" ] || [ -e "$FAKE/created" ]; then echo "LoadState=loaded"; else echo "LoadState=not-found"; fi
 if [ -e "$FAKE/stale" ]; then echo "InvocationID=old"; elif [ -e "$FAKE/created" ]; then echo "InvocationID=run2"; else echo "InvocationID=run1"; fi
 `
 
@@ -101,12 +108,12 @@ func sandboxSpec(t *testing.T, w *fakeWorld, argv ...string) Spec {
 
 func TestSandboxArgvIsTheSpecCommand(t *testing.T) {
 	sb := Sandbox{User: "wake"}.withDefaults()
-	got := sandboxArgv(sb, "wwd-j_test1", "/ws", "/ws/sub", 10*time.Minute, 10*time.Second, []string{"HOME=/ws/.home", "WWD_JOB=j_test1"}, "/usr/bin/go", []string{"test", "./..."})
+	got := sandboxArgv(sb, "wwd-j_test1", "/ws", "/ws/sub", "/ws/.wwd-exit", 10*time.Minute, 10*time.Second, []string{"HOME=/ws/.home", "WWD_JOB=j_test1"}, "/usr/bin/go", []string{"test", "./..."})
 	want := []string{"systemd-run", "--wait", "--pipe", "--uid=wake", "--unit=wwd-j_test1", "--slice=wwd.slice",
 		"-p", "CPUQuota=200%", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "RuntimeMaxSec=660", "-p", "TimeoutStopSec=10",
 		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
 		"-p", "NoNewPrivileges=yes", "-p", "InaccessiblePaths=-/run/docker.sock",
-		"env", "-i", "HOME=/ws/.home", "WWD_JOB=j_test1", "nice", "-n", "10", "ionice", "-c3", "/usr/bin/go", "test", "./..."}
+		"env", "-i", "HOME=/ws/.home", "WWD_JOB=j_test1", "nice", "-n", "10", "ionice", "-c3", "sh", "-c", exitWrapper, "/ws/.wwd-exit", "/usr/bin/go", "test", "./..."}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
 	}
@@ -118,7 +125,7 @@ func TestSandboxArgvIsTheSpecCommand(t *testing.T) {
 }
 
 func TestSandboxArgvNoTimeoutHasNoRuntimeFuse(t *testing.T) {
-	got := sandboxArgv(Sandbox{User: "wake"}.withDefaults(), "wwd-j", "/ws", "/ws", 0, time.Second, nil, "/bin/true", nil)
+	got := sandboxArgv(Sandbox{User: "wake"}.withDefaults(), "wwd-j", "/ws", "/ws", "/ws/.wwd-exit", 0, time.Second, nil, "/bin/true", nil)
 	if strings.Contains(strings.Join(got, " "), "RuntimeMaxSec") {
 		t.Fatalf("a job without a timeout has no fuse: %q", got)
 	}
@@ -126,7 +133,7 @@ func TestSandboxArgvNoTimeoutHasNoRuntimeFuse(t *testing.T) {
 
 func TestSandboxExtraPathsAreAdded(t *testing.T) {
 	sb := Sandbox{User: "wake", ReadWritePaths: []string{"/var/cache/composer"}, InaccessiblePaths: []string{"/var/run/docker.sock"}}.withDefaults()
-	j := strings.Join(sandboxArgv(sb, "wwd-j", "/ws", "/ws", time.Minute, time.Second, nil, "/bin/true", nil), " ")
+	j := strings.Join(sandboxArgv(sb, "wwd-j", "/ws", "/ws", "/ws/.wwd-exit", time.Minute, time.Second, nil, "/bin/true", nil), " ")
 	for _, want := range []string{"ReadWritePaths=/ws /var/cache/composer", "InaccessiblePaths=-/run/docker.sock /var/run/docker.sock"} {
 		if !strings.Contains(j, want) {
 			t.Fatalf("missing %q in %s", want, j)
@@ -335,6 +342,8 @@ func TestSandboxRefusesToStartNextToARunningUnit(t *testing.T) {
 
 func TestSandboxClearsAnOldFailedUnitBeforeStarting(t *testing.T) {
 	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=1\n")
 	Run(context.Background(), sandboxSpec(t, w, "true"))
 	calls := w.calls(t)
 	first, run := -1, -1
@@ -371,6 +380,7 @@ func TestTaskEnvNameCannotBeAnOption(t *testing.T) {
 
 func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
 	w := newWorld(t)
+	w.set("loaded", "")
 	w.set("stale", "") // the unit keeps its old invocation id: systemd-run never made a new one
 	w.set("exit", "1")
 	w.set("show", "ActiveState=failed\nResult=oom-kill\nExecMainStatus=9\n")
@@ -383,6 +393,7 @@ func TestSandboxAResultOfAnOldInvocationIsNotThisRuns(t *testing.T) {
 func TestSandboxCannotAskOrCannotClearIsStartFailed(t *testing.T) {
 	for _, mode := range []string{"show-fails", "reset-fails", "show-fails-at"} {
 		w := newWorld(t)
+		w.set("loaded", "")
 		w.set(mode, "2") // show-fails-at: the second query, after the clearing, is the one that fails
 		if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != StartFailed {
 			t.Errorf("%s: result = %+v", mode, r)
@@ -411,5 +422,102 @@ func TestSandboxAFailedQueryDoesNotProveTheUnitStopped(t *testing.T) {
 	r := Run(context.Background(), s)
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "not proven stopped") {
 		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxDoesNotClearAUnitThatIsNotLoaded(t *testing.T) {
+	// systemctl exits 1 for reset-failed on a unit that was never there: that must not stop a first run (found on mserv)
+	w := newWorld(t)
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 {
+		t.Fatalf("result = %+v", r)
+	}
+	first := w.calls(t)
+	for i, c := range first {
+		if strings.HasPrefix(c, "sudo systemd-run") {
+			for _, before := range first[:i] {
+				if strings.Contains(before, "reset-failed") {
+					t.Fatalf("reset-failed before the start for a unit that is not loaded: %q", first)
+				}
+			}
+		}
+	}
+}
+
+func TestSandboxASuccessfulUnitIsGoneAndExitZeroIsTheSuccess(t *testing.T) {
+	// measured on mserv: systemd unloads a unit that ended well at once, so there is no Result left to read
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "0") // what the one-line shell around the command leaves behind
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+		t.Fatalf("result = %+v", r)
+	}
+	// but if systemd-run itself failed, nothing was started: no unit and a non-zero exit is not a success
+	w2 := newWorld(t)
+	w2.set("gone", "")
+	w2.set("exit", "1")
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != StartFailed {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxAUnitStoppedFromOutsideIsNotASuccess(t *testing.T) {
+	// a stop makes systemd-run exit 0 and the (successful) unit disappear; only the exit file shows the command did not finish
+	w := newWorld(t)
+	w.set("gone", "")
+	r := Run(context.Background(), sandboxSpec(t, w, "sleep", "60"))
+	if r.Outcome == Exited || r.Err == nil || !strings.Contains(r.Err.Error(), "stopped from outside") {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxTheExitFileCarriesTheCommandsOwnStatus(t *testing.T) {
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "7")
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != Exited || r.ExitCode != 7 {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxAFileOrDirectoryOfThePlainNameCannotSpoilTheAnswer(t *testing.T) {
+	// a stale file, or a task that makes ".wwd-exit" for its own reasons, is not the runner's status file (whose name is new every run)
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "0")
+	s := sandboxSpec(t, w, "true")
+	if err := os.Mkdir(filepath.Join(s.Workspace, ".wwd-exit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := Run(context.Background(), s); r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+		t.Fatalf("a directory of the plain name spoiled the answer: %+v", r)
+	}
+}
+
+func TestSandboxTheExitFileNameIsNewEveryRunAndIsRemoved(t *testing.T) {
+	w := newWorld(t)
+	w.set("gone", "")
+	w.set("wrapper-exit", "0")
+	s := sandboxSpec(t, w, "true")
+	Run(context.Background(), s)
+	Run(context.Background(), s)
+	var names []string
+	for _, c := range w.calls(t) {
+		if strings.HasPrefix(c, "sudo systemd-run") {
+			for _, f := range strings.Fields(c) {
+				if strings.Contains(f, ".wwd-exit.") {
+					names = append(names, f)
+				}
+			}
+		}
+	}
+	if len(names) != 2 || names[0] == names[1] {
+		t.Fatalf("names = %v", names)
+	}
+	for _, n := range names {
+		if _, err := os.Stat(n); err == nil {
+			t.Errorf("%s was left behind", n)
+		}
 	}
 }

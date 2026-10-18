@@ -3,7 +3,13 @@ package run
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,7 +44,8 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	if err == nil && activeState(before["ActiveState"]) {
 		err = fmt.Errorf("run: unit %s is already %s", unit, before["ActiveState"])
 	}
-	if err == nil {
+	if err == nil && before["LoadState"] != "not-found" {
+		// systemctl refuses reset-failed for a unit that is not loaded (exit 1): there is nothing to clear then
 		err = sb.control(unit, "reset-failed")
 	}
 	if err != nil {
@@ -51,7 +58,18 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 		return failStart(res, err)
 	}
 
-	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
+	// the name is new for every run and not guessable: a task that has a file or a directory of the plain name cannot spoil the
+	// answer, and no old file can stand for this run. It tells a finished job from a unit stopped from outside; it is not a boundary
+	// against the task itself: a task that reads its parent's command line and writes the file ahead only says it succeeded, which
+	// it can do by exiting 0 (spec §11: jobs are declared tasks of our own repos, and a same-user process is not defended against).
+	var rb [8]byte
+	if _, err := rand.Read(rb[:]); err != nil {
+		res.Tail, res.LogCut, res.CaptureErr = cp.close()
+		return failStart(res, err)
+	}
+	exitFile := filepath.Join(spec.Workspace, ".wwd-exit."+hex.EncodeToString(rb[:]))
+	defer os.Remove(exitFile)
+	argv := sandboxArgv(sb, unit, spec.Workspace, spec.Dir, exitFile, spec.Timeout, killAfter, env, prog, spec.Argv[1:])
 	cmd := execstat.Command("wwd.run.sandbox", sb.SudoPath, argv...)
 	cmd.Dir = spec.Dir
 	cmd.Stdin = nil
@@ -98,9 +116,31 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 			runErr = fmt.Errorf("run: systemd-run ended but unit %s was still %s", unit, st)
 		}
 	}
-	// The Result must belong to the invocation this run started: the unit has an invocation id that is not the one it had before.
-	if stop == stopNone && (show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]) {
-		show = map[string]string{} // classify reads this as "no unit"
+	if stop == stopNone {
+		switch {
+		case show["LoadState"] == "not-found":
+			// A unit that ended well is unloaded by systemd as soon as it is inactive (only a failed one stays to be read; measured
+			// on mserv). What the command's wrapper left in the exit file is then the answer. systemd-run's own exit 0 is not: a
+			// unit stopped from outside also leaves it with 0.
+			code, got := readExit(exitFile)
+			switch {
+			case waitErr != nil:
+				show = map[string]string{} // classify reads this as "no unit": nothing was started
+			case got && code == 0:
+				show = map[string]string{"Result": "success", "ExecMainStatus": "0"}
+			case got:
+				show = map[string]string{"Result": "exit-code", "ExecMainStatus": strconv.Itoa(code)}
+			default:
+				stop = stopCancel
+				if runErr == nil {
+					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside, or the status file could not be written", unit)
+				}
+			}
+		case show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]:
+			// The Result must belong to the invocation this run started: a unit that is still there with the invocation it had
+			// before is an old one.
+			show = map[string]string{}
+		}
 	}
 	_ = sb.control(unit, "reset-failed") // after reading Result; harmless when the unit is already gone
 	res.FinishedAt = time.Now()
@@ -159,6 +199,19 @@ func endUnit(sb Sandbox, unit string, clientPid int, done <-chan error, killAfte
 // activeState says whether a unit's ActiveState means "something may be running".
 func activeState(st string) bool {
 	return st == "active" || st == "activating" || st == "deactivating" || st == "reloading"
+}
+
+// readExit reads the exit status the wrapper left; got is false when there is none.
+func readExit(path string) (code int, got bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // control runs `sudo systemctl <verb> <unit>`; the callers that cannot do anything about a failure ignore it.
