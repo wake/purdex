@@ -195,6 +195,29 @@ func (b *blockingPersonas) Personas() (personas.Set, error) {
 	return b.sets[1], nil
 }
 
+// orderedPersonas records the order of the subscription and the reads.
+type orderedPersonas struct{ events []string }
+
+func (o *orderedPersonas) Personas() (personas.Set, error) {
+	o.events = append(o.events, "read")
+	return personas.Set{}, nil
+}
+func (o *orderedPersonas) OnPersonasChange(func()) func() {
+	o.events = append(o.events, "subscribe")
+	return func() {}
+}
+
+// A PUT that lands between the first read and the subscription would be told to nobody: the binding subscribes first, then
+// reads (NP-1b R2).
+// Mutation gate: read before subscribing -> red.
+func TestPersonaPool_SubscribesBeforeTheFirstRead(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	o := &orderedPersonas{}
+	e.m.bindPersonas(o)
+	require.Equal(t, []string{"subscribe", "read"}, o.events)
+}
+
 // fakeScheduler stands in for time.AfterFunc: the test decides when a retry runs.
 type fakeScheduler struct {
 	mu      sync.Mutex

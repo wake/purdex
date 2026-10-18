@@ -79,8 +79,10 @@ func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
 		recognised, pickable := buildPool(set)
 		ipeers.SetPool(recognised, pickable)
 	}
-	apply(0)
+	// Subscribe first, then read: a change that lands between the two would be told to nobody, and the first read may predate it.
+	// A change told before the read finishes only makes the read run once more, and it reads the stored set again.
 	unsubscribe := r.OnPersonasChange(func() { apply(0) })
+	apply(0)
 	return func() {
 		unsubscribe()
 		mu.Lock()
