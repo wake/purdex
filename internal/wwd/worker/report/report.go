@@ -139,6 +139,8 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
 		r.ran(ctx, sink, e)
 	case runner.KindInfra:
 		r.release(ctx, sink, e, wire.ReleaseInfra, e.Err)
+	case runner.KindReclaimed:
+		// the owner took the machine: the loop gives the claim back after it has stopped the job (yield.ReclaimAll)
 	case runner.KindShutdown:
 		r.release(ctx, sink, e, wire.ReleaseReclaim, nil)
 	default:
