@@ -169,7 +169,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const dropEl = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!upload || !dropEl.current) return
-    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files, box.current?.selectionStart ?? undefined))
+    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files, caret()))
   }, [dKey, upload])
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
