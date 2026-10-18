@@ -141,6 +141,16 @@ func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// the servers are serving (a Serve that starts after Shutdown closes its listener late, and that unlinks the path under the test)
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	resp, err := c.Get("http://wwd/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	c.CloseIdleConnections()
 	run.Close()
 	if _, err := os.Lstat(sock); err == nil {
 		t.Fatal("the first Close left the socket")
