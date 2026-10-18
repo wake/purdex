@@ -35,6 +35,32 @@ type Origin interface {
 	Heartbeat(ctx context.Context, id, claimID string) (wire.HeartbeatResponse, error)
 }
 
+// releaser is what an Origin also is when it can hand a claim back (the host's own queue and a peer both can).
+type releaser interface {
+	Release(ctx context.Context, id string, req wire.ReleaseRequest) error
+}
+
+// sameSet reports whether a and b hold the same keys, whatever the order or repeats.
+func sameSet(a, b []string) bool {
+	set := func(l []string) map[string]bool {
+		m := make(map[string]bool, len(l))
+		for _, k := range l {
+			m[k] = true
+		}
+		return m
+	}
+	x, y := set(a), set(b)
+	if len(x) != len(y) {
+		return false
+	}
+	for k := range x {
+		if !y[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL).
 type Exec interface {
 	Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error)
@@ -181,6 +207,14 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		sent = c.cfg.Now()
 		var e error
 		cr, e = origin.Claim(ctx, job.ID, wire.ClaimRequest{Worker: c.cfg.Worker, Labels: c.cfg.Labels, Fingerprint: c.cfg.Fingerprint})
+		if e == nil && !sameSet(cr.Job.Locks, job.Locks) {
+			// The keys held are the ones the candidate listed. A job that comes back with other keys would run without holding its own: an
+			// origin that does that is wrong or hostile, and the claim is handed back.
+			e = fmt.Errorf("runner: claim of %s came back with locks %v, the candidate had %v", job.ID, cr.Job.Locks, job.Locks)
+			if rel, ok := origin.(releaser); ok {
+				_ = rel.Release(ctx, job.ID, wire.ReleaseRequest{ClaimID: cr.ClaimID, Reason: wire.ReleaseInfra, Detail: "locks changed between listing and claim"})
+			}
+		}
 		return e
 	})
 	if err != nil {
