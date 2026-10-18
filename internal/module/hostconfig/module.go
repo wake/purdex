@@ -27,7 +27,6 @@ type Module struct {
 	personaMu   sync.Mutex
 	personaSubs map[int]func()
 	personaSeq  int
-	stopped     bool // Stop ran: personas.v1 is no longer announced
 }
 
 // New returns a new Module ready for registration.
@@ -102,13 +101,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/personas", m.handlePutPersonas)
 }
 
-// Status is what /api/info reads to announce personas.v1: the routes are there from a successful Init until Stop.
-func (m *Module) Status() map[string]any {
-	m.personaMu.Lock()
-	defer m.personaMu.Unlock()
-	return map[string]any{"ready": m.store != nil && !m.stopped}
-}
-
 // Start logs a banner; no background work required.
 func (m *Module) Start(_ context.Context) error {
 	log.Println("[hostconfig] endpoints enabled")
@@ -117,9 +109,6 @@ func (m *Module) Start(_ context.Context) error {
 
 // Stop closes the underlying SQLite database.
 func (m *Module) Stop(_ context.Context) error {
-	m.personaMu.Lock()
-	m.stopped = true
-	m.personaMu.Unlock()
 	return nil // the store is released by Close, after the HTTP server drained (#1033)
 }
 

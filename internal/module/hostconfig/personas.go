@@ -56,7 +56,7 @@ func printable(s string) bool {
 
 // normalizePersonas checks a PUT body's items (spec §4.1) and returns them as they are stored: names trimmed, the picture
 // and recipe sizes bounded. A retired persona keeps its code reserved, so uniqueness spans active and retired alike.
-func normalizePersonas(raw json.RawMessage) ([]personas.Persona, error) {
+func normalizePersonas(raw json.RawMessage, stored []personas.Persona) ([]personas.Persona, error) {
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return nil, err
 	}
@@ -109,6 +109,12 @@ func normalizePersonas(raw json.RawMessage) ([]personas.Persona, error) {
 			return nil, bad("avatar_data", err.Error())
 		}
 		out = append(out, p)
+	}
+	// Deleting retires (spec L5): a stored code never leaves the collection, so no other persona can ever take it.
+	for _, old := range stored {
+		if !seen[old.Code] {
+			return nil, &personaError{Index: -1, Field: "code", Msg: old.Code + " is stored and cannot be removed; retire it instead"}
+		}
 	}
 	return out, nil
 }
@@ -182,8 +188,9 @@ func (m *Module) handlePutPersonas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var marshalErr error
-	entry, stored, err := m.store.Put(KeyPersonas, *req.BaseRevision, func(Entry) (json.RawMessage, error) {
-		items, err := normalizePersonas(req.Items)
+	entry, stored, err := m.store.Put(KeyPersonas, *req.BaseRevision, func(cur Entry) (json.RawMessage, error) {
+		have, _ := personasOf(cur) // a stored value that does not read keeps no codes
+		items, err := normalizePersonas(req.Items, have.Items)
 		if err != nil {
 			return nil, err
 		}

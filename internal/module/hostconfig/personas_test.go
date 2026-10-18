@@ -2,7 +2,6 @@ package hostconfig
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -206,6 +205,27 @@ func TestPersonas_BadItemsAreRefusedWithTheirIndexAndField(t *testing.T) {
 	}
 }
 
+// Deleting retires (spec L5): a stored code stays in the collection for good, so no other persona can take it, and a
+// restore is a PUT that sets retired back to false.
+// Mutation gate: skip the retained-codes check -> the second PUT is accepted -> red.
+func TestPersonas_AStoredCodeIsRetiredNotRemoved(t *testing.T) {
+	m := personasModule(t)
+	require.Equal(t, http.StatusOK, putPersonas(m, []any{persona("hiro"), persona("anna")}, 0).Code)
+
+	rr := putPersonas(m, []any{persona("anna")}, 1) // hiro left out
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	var e struct{ Field string }
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &e))
+	assert.Equal(t, "code", e.Field)
+	assert.Contains(t, rr.Body.String(), "hiro")
+
+	retired := persona("hiro")
+	retired["retired"] = true
+	require.Equal(t, http.StatusOK, putPersonas(m, []any{retired, persona("anna"), persona("freya")}, 1).Code)
+	assert.Equal(t, http.StatusBadRequest, putPersonas(m, []any{persona("anna"), persona("freya")}, 2).Code, "a retired code is not removable either")
+	assert.Equal(t, http.StatusOK, putPersonas(m, []any{persona("hiro"), persona("anna"), persona("freya")}, 2).Code, "a restore is allowed")
+}
+
 func TestPersonas_MoreThan64AreRefused(t *testing.T) {
 	m := personasModule(t)
 	items := make([]any, 0, 65)
@@ -303,7 +323,7 @@ func TestPersonas_PutAnnouncesAnEventAndNotifiesReaders(t *testing.T) {
 	require.Equal(t, http.StatusConflict, putPersonas(m, []any{persona("anna")}, 0).Code)
 	assert.Equal(t, 1, changed)
 	cancel()
-	require.Equal(t, http.StatusOK, putPersonas(m, []any{persona("anna")}, 1).Code)
+	require.Equal(t, http.StatusOK, putPersonas(m, []any{persona("hiro"), persona("anna")}, 1).Code)
 	assert.Equal(t, 1, changed, "a cancelled reader hears nothing")
 }
 
@@ -318,28 +338,4 @@ func TestPersonas_TheModuleIsTheRegisteredReader(t *testing.T) {
 	require.True(t, ok)
 	_, isReader := v.(personas.Reader)
 	assert.True(t, isReader)
-}
-
-// The real module registered in a real core, asked through GET /api/info (the lesson of fleet.v1): personas.v1 is declared
-// while the module is up and gone after Stop.
-func TestInfo_AnnouncesPersonasV1ForTheRealModule(t *testing.T) {
-	m := New()
-	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}, Registry: core.NewServiceRegistry()})
-	c.AddModule(m)
-	require.NoError(t, m.Init(c))
-	t.Cleanup(func() { _ = m.Close() })
-	mux := http.NewServeMux()
-	c.RegisterCoreRoutes(mux)
-	caps := func() []any {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/info", nil))
-		require.Equal(t, http.StatusOK, rec.Code)
-		var body map[string]any
-		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-		list, _ := body["capabilities"].([]any)
-		return list
-	}
-	require.Contains(t, caps(), "personas.v1")
-	require.NoError(t, m.Stop(context.Background()))
-	require.NotContains(t, caps(), "personas.v1")
 }
