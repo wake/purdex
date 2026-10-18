@@ -59,7 +59,9 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 	}
 
 	// the name is new for every run and not guessable: a task that has a file or a directory of the plain name cannot spoil the
-	// answer, and no old file can stand for this run
+	// answer, and no old file can stand for this run. It tells a finished job from a unit stopped from outside; it is not a boundary
+	// against the task itself: a task that reads its parent's command line and writes the file ahead only says it succeeded, which
+	// it can do by exiting 0 (spec §11: jobs are declared tasks of our own repos, and a same-user process is not defended against).
 	var rb [8]byte
 	if _, err := rand.Read(rb[:]); err != nil {
 		res.Tail, res.LogCut, res.CaptureErr = cp.close()
