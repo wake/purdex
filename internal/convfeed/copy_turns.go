@@ -43,6 +43,29 @@ type UserMessage struct {
 	At   int64 // unix ms
 }
 
+// UserItem is a user message of the conversation with the source Claude Code read it from: "user" (typed, or a send now) or
+// "queued" (taken from Claude Code's own queue at a tool boundary).
+type UserItem struct {
+	ID, Text, Source string
+	At               int64 // unix ms
+}
+
+// UserItems is every user message the person or the queue put into the conversation (source user or queued), oldest first,
+// read under the entry's lock. The message stages follow a sent message through it.
+func (e *Entry) UserItems() []UserItem {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []UserItem
+	for _, t := range e.conv().Turns {
+		for _, it := range t.Items {
+			if it.User != nil && (it.User.Source == convmodel.SourceUser || it.User.Source == convmodel.SourceQueued) {
+				out = append(out, UserItem{ID: it.User.ID, Text: it.User.Text, Source: string(it.User.Source), At: it.User.At})
+			}
+		}
+	}
+	return out
+}
+
 // UserMessages is every source=user message of the whole conversation (oldest first), read under the entry's lock. The echo
 // pairing needs the whole session, not the window or the increment being answered: a request already paired with an older
 // message must not be handed to a later one with the same text.
