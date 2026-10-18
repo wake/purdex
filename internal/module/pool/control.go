@@ -4,8 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
@@ -19,16 +19,18 @@ const ErrWWDRejected = "wwd_rejected"
 // maxControlBody caps a change's body: a worker setting or an exception is a few hundred bytes.
 const maxControlBody = 64 << 10
 
-// reAlias is a host alias as it may reach wwd's ?host= parameter: no characters that would add a parameter or a path.
-var reAlias = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-
-// exceptionName is an exception name as it may be a path segment: not empty, bounded, no separator or control character.
-func exceptionName(s string) bool {
-	if s == "" || s == "." || s == ".." || len(s) > 128 {
-		return false
-	}
-	return !strings.ContainsAny(s, "/\\?#%\x00") && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
+// plainText is a string that can be one value of a query or one path segment once escaped: not empty, bounded, valid UTF-8,
+// no control character. Nothing else is restricted: wwd accepts any non-empty alias in its peer config, so any alias the
+// pool lists must be changeable, and client.Mutate escapes the host (and the name) so it can add neither a parameter nor
+// a path.
+func plainText(s string) bool {
+	return s != "" && len(s) <= 128 && utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
+
+func validAlias(s string) bool { return plainText(s) }
+
+// exceptionName adds to plainText that it is not a dot segment.
+func exceptionName(s string) bool { return plainText(s) && s != "." && s != ".." }
 
 func (m *Module) registerControl(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/pool/hosts/{alias}/worker", m.handlePutWorker)
@@ -65,8 +67,8 @@ func (m *Module) handlePutWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	alias := r.PathValue("alias")
-	if !reAlias.MatchString(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is not a plain alias")
+	if !validAlias(alias) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -85,8 +87,8 @@ func (m *Module) handlePostException(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	alias := r.PathValue("alias")
-	if !reAlias.MatchString(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is not a plain alias")
+	if !validAlias(alias) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -105,8 +107,8 @@ func (m *Module) handleDeleteException(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	alias, name := r.PathValue("alias"), r.PathValue("name")
-	if !reAlias.MatchString(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is not a plain alias")
+	if !validAlias(alias) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
 		return
 	}
 	if !exceptionName(name) {

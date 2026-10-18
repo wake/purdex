@@ -131,15 +131,44 @@ func TestControl_RefusesWhatWWDShouldNeverSee(t *testing.T) {
 		{"PUT", "/api/pool/hosts/air26/worker", `{"enabled":true,"surprise":1}`},
 		{"PUT", "/api/pool/hosts/air26/worker", strings.Repeat("x", 70000)},
 		{"POST", "/api/pool/hosts/air26/exceptions", `{}`},
-		{"PUT", "/api/pool/hosts/a%26host=other/worker", workerJSON},   // an alias that would add a query parameter
-		{"PUT", "/api/pool/hosts/a%2Fb/worker", workerJSON},            // or a path
-		{"DELETE", "/api/pool/hosts/air26/exceptions/..%2F..%2Fx", ""}, // an exception name that climbs
+		{"PUT", "/api/pool/hosts/a%00b/worker", workerJSON},                            // a control character in the alias
+		{"PUT", "/api/pool/hosts/" + strings.Repeat("a", 129) + "/worker", workerJSON}, // an alias no config would hold
+		{"DELETE", "/api/pool/hosts/air26/exceptions/%0a", ""},
 	} {
 		rr := send(mux, c.method, c.path, c.body, asAdmin)
 		assert.Equal(t, 400, rr.Code, "%s %s -> %s", c.method, c.path, rr.Body.String())
 		assert.Equal(t, "bad_request", errCode(rr))
 	}
 	assert.Empty(t, s.all())
+}
+
+func TestExceptionNameAndAliasRules(t *testing.T) {
+	for _, bad := range []string{"", "a\nb", "a\x00b", "\xff\xfe", strings.Repeat("x", 129)} {
+		assert.False(t, exceptionName(bad), "%q", bad)
+		assert.False(t, validAlias(bad), "%q", bad)
+	}
+	for _, ok := range []string{"pkg", "a/b c", "-x", "électron", "a..b", strings.Repeat("x", 128)} {
+		assert.True(t, exceptionName(ok), "%q", ok)
+		assert.True(t, validAlias(ok), "%q", ok)
+	}
+	assert.False(t, exceptionName("."))
+	assert.False(t, exceptionName(".."))
+	assert.True(t, validAlias(".."), "a dot name is not a path here: the alias goes in a query")
+}
+
+// wwd accepts any non-empty alias in its peer config, so any alias the pool lists can be changed; the host reaches wwd as
+// one query value however odd it is, and an exception name as one path segment.
+func TestControl_AnyAliasWWDAcceptsIsPassedAsOneValue(t *testing.T) {
+	var s seen
+	mux := newModule(t, controlWWD(t, &s, 200, 200, 204, workerJSON))
+	rr := send(mux, "PUT", "/api/pool/hosts/-air%2026%26host=x%2Fy%C3%A9/worker", workerJSON, asAdmin)
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	rr = send(mux, "DELETE", "/api/pool/hosts/mserv/exceptions/a%2Fb%20c", "", asAdmin)
+	require.Equal(t, 204, rr.Code, rr.Body.String())
+	got := s.all()
+	require.Len(t, got, 2)
+	assert.Equal(t, "PUT /v1/worker host=-air 26&host=x/yé "+workerJSON, got[0], "one host value, nothing added")
+	assert.Equal(t, "DELETE /v1/exceptions/a/b c host=mserv ", got[1])
 }
 
 func TestControl_WWDAnswersAreRelayedWithTheirMeaning(t *testing.T) {
