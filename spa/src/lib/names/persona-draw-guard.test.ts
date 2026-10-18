@@ -2,27 +2,32 @@
 // static `import ... from '@dicebear/...'` anywhere in the SPA: only `import('@dicebear/...')` inside persona-draw.ts
 // (plan P3). A static import anywhere would pull it into whichever chunk imports that file.
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const p = join(dir, name)
-    if (statSync(p).isDirectory()) return sourceFiles(p)
-    return /\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) ? [p] : []
-  })
-}
+// Every non-test source file, raw (the same way `lib/shown-hosts.import-guard.test.ts` reads them; `tsconfig.app.json`
+// has no node types, so no `node:fs`). Keys are `/src/…` paths.
+const SOURCES = import.meta.glob<string>(['/src/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.d.ts'], {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+})
+
+// `import x from '…'`, `import { x } from '…'`, `export … from '…'`, a bare side-effect `import '…'`, and `require('…')`.
+const STATIC = /^\s*(?:(?:import|export)\s[^'"\n]*from\s+|import\s+|.*\brequire\(\s*)['"]@dicebear\//m
+const DYNAMIC = /import\(\s*['"]@dicebear\//
+// A runtime import of persona-draw; a type-only import is erased by the compiler and carries nothing.
+const RUNTIME_DRAW =
+  /^\s*(import|export)\s+(?!type\b)[^'"\n]*from\s+['"][^'"]*persona-draw['"]|import\(\s*['"][^'"]*persona-draw['"]/m
+
+const paths = Object.keys(SOURCES).filter((p) => p !== '/src/lib/names/persona-draw-guard.test.ts')
 
 describe('DiceBear stays in the lazy chunk', () => {
-  const root = join(__dirname, '..', '..')
-  const files = sourceFiles(root)
-
-  // `import x from '…'`, `import { x } from '…'`, `export … from '…'`, a bare side-effect `import '…'`, and `require('…')`.
-  const STATIC = /^\s*(?:(?:import|export)\s[^'"\n]*from\s+|import\s+|.*\brequire\(\s*)['"]@dicebear\//m
+  it('reads the source tree', () => {
+    expect(paths).toContain('/src/lib/names/persona-draw.ts')
+    expect(paths.length).toBeGreaterThan(100)
+  })
 
   it('is never imported statically', () => {
-    const offenders = files.filter((f) => STATIC.test(readFileSync(f, 'utf8')))
-    expect(offenders).toEqual([])
+    expect(paths.filter((p) => STATIC.test(SOURCES[p]))).toEqual([])
   })
 
   it('the static check really does see every static form', () => {
@@ -38,26 +43,18 @@ describe('DiceBear stays in the lazy chunk', () => {
   })
 
   it('is imported dynamically only by persona-draw.ts', () => {
-    const users = files
-      .filter((f) => /import\(\s*['"]@dicebear\//.test(readFileSync(f, 'utf8')))
-      .map((f) => f.slice(root.length + 1))
-    expect(users).toEqual(['lib/names/persona-draw.ts'])
+    expect(paths.filter((p) => DYNAMIC.test(SOURCES[p]))).toEqual(['/src/lib/names/persona-draw.ts'])
   })
 
-  it('and persona-draw.ts is imported by no file that the main chunk loads', () => {
-    // Only the persona page (NA-1b-2b) may import it at runtime; until it exists, nobody does. A type-only import is
-    // erased by the compiler and carries nothing, so it does not count (persona-credits.ts uses one).
-    const runtimeImport = /^\s*(import|export)\s+(?!type\b)[^'"\n]*from\s+['"][^'"]*persona-draw['"]|import\(\s*['"][^'"]*persona-draw['"]/m
-    const importers = files
-      .filter((f) => !f.endsWith('persona-draw.ts') && runtimeImport.test(readFileSync(f, 'utf8')))
-      .map((f) => f.slice(root.length + 1))
-    for (const f of importers) expect(f).toMatch(/^components\/settings\/personas\//)
+  it('persona-draw.ts is imported at runtime by nothing outside the persona page', () => {
+    // Until the page (NA-1b-2b) exists, nobody does.
+    const importers = paths.filter((p) => p !== '/src/lib/names/persona-draw.ts' && RUNTIME_DRAW.test(SOURCES[p]))
+    for (const p of importers) expect(p).toMatch(/^\/src\/components\/settings\/personas\//)
   })
 
-  it('the importer check really does see a runtime import and skips a type-only one', () => {
-    const runtimeImport = /^\s*(import|export)\s+(?!type\b)[^'"\n]*from\s+['"][^'"]*persona-draw['"]|import\(\s*['"][^'"]*persona-draw['"]/m
-    expect(runtimeImport.test("import { drawRecipe } from './persona-draw'")).toBe(true)
-    expect(runtimeImport.test("const m = await import('../../lib/names/persona-draw')")).toBe(true)
-    expect(runtimeImport.test("import type { DicebearStyle } from './persona-draw'")).toBe(false)
+  it('the importer check sees a runtime import and skips a type-only one', () => {
+    expect(RUNTIME_DRAW.test("import { drawRecipe } from './persona-draw'")).toBe(true)
+    expect(RUNTIME_DRAW.test("const m = await import('../../lib/names/persona-draw')")).toBe(true)
+    expect(RUNTIME_DRAW.test("import type { DicebearStyle } from './persona-draw'")).toBe(false)
   })
 })
