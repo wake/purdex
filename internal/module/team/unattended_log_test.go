@@ -77,6 +77,32 @@ func TestUnattendedLog_CappedAtThirtyNewest(t *testing.T) {
 	}
 }
 
+// Decisions and toggles together can pass the cap although each is cut at 30 on its own: the merged log is cut again, newest
+// first. Mutation gate: no cut after the merge → red.
+func TestUnattendedLog_MergedLogIsCutAtThirty(t *testing.T) {
+	f := newFixture(t)
+	f.realUnattended()
+	for i := 0; i < 25; i++ {
+		putDecisionRow(t, f.m.store, fmt.Sprintf("d-%02d", i), team.KindLead, team.StateApproved, int64(1000+i), 9999, "")
+	}
+	for i := 0; i < 25; i++ {
+		f.clock.Store(int64(3000 + i))
+		f.switchTo(i%2 == 0)
+	}
+	_, v, _ := f.getUnattended("")
+	if len(v.Log) != team.DecisionLogMax {
+		t.Fatalf("log has %d entries, want %d", len(v.Log), team.DecisionLogMax)
+	}
+	for i, e := range v.Log[:25] {
+		if e.Type != team.LogTypeToggle || e.At != int64(3024-i) {
+			t.Fatalf("entry %d = %+v, want the toggle at %d", i, e, 3024-i)
+		}
+	}
+	if last := v.Log[len(v.Log)-1]; last.Type != team.LogTypeDecision || last.At != 1020 {
+		t.Fatalf("last = %+v, want the decision at 1020", last)
+	}
+}
+
 // The fixture's fake switch keeps no records: the log is the decisions alone, and an empty one is [] not null.
 func TestUnattendedLog_FakeSwitchHasNoToggles(t *testing.T) {
 	f := newFixture(t)
