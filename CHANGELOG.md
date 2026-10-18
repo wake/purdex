@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.751] - 2026-10-18
+
+> daemon、`pdx` CLI 與 `wwd` 有改；SPA、mod（`hooks/`、`cmd/pdx/plugin/`）與 Electron 與 750 相同，**不需要重跑 `pdx setup`**。Purdex 的資料庫沒有變，退回 750 不需要還原。**`wwd.db` 的佇列 schema 升到 v3**（新增租約失效次數），只能往前遷移，750 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前已在每台留一份 `~/.local/share/wwd/wwd.db.pre-751`，要退回 750 的 wwd 時用它還原。mserv 的 `wwd.service` 改進 `wwdd.slice`（重跑安裝會更新 unit）。
+
+### Fixed：pool 模式
+
+- **pool 讀不到的主機留在 SSH**：切到 `fleet.source = pool` 時，某台主機只要在 pool 裡沒有可讀的新鮮資料（沒列出、列著但連不上、還沒有資料、停止更新），那一台就繼續用原本的 SSH 探測（daemon 自己那台用本機取樣），pool 恢復後再自動切回，切換期間不會兩邊同時探。750 在 C1 切換時，還沒裝 wwd 的 air19 因此被顯示成離線，這版修好；「新鮮」看的是對方時間戳最後一次變動的時刻，不拿對方的時鐘跟本機比（#3283）。
+- **pool 模式的 `pdx host report` 不再是近似值**：wwd 的每分鐘彙整帶有逐樣本的統計時，報表直接用它（full 的次數與最長持續、各壓力區的秒數、執行中工作的峰值）；只有更早、沒有統計的分鐘才用 750 的近似算法，報表與 CLI 的備註分成兩種（#3272）。
+
+### Changed：wwd
+
+- **「主人在用」改讀 `IOHIDSystem` 的 `HIDIdleTime`**（air26 的 owner 規則 1）：原本讀的 CoreGraphics 數值在 air26 上每次都比 `ioreg` 小很多（1575 秒對 24871 秒），會讓 worker 以為主人一直在用；改讀之後與 `ioreg` 一致，跟 spec 的寫法相同（#3280）。
+- **mserv 的 `wwd.service` 進 `wwdd.slice`**：與 mysql、livekit 等正式服務所在的 `system.slice`，以及 wwd 工作的 `wwd.slice` 分開；加上 `CPUQuota=100%`，保留 `MemoryMax=512M`、`TasksMax=256`；不再設 `NoNewPrivileges`，之後的工作要經 `sudo systemd-run` 啟動（#3275）。
+
+### Added：wwd 的佇列與本機執行
+
+- **跨主機工作的租約**（WWD-3b-3a）：`claim`、`start`、`heartbeat`、`release`、`result`，租約失效由佇列的清掃處理，來源重啟有寬限；`attempts` 計每一次退回與失效，「2 次就判遺失」只算租約失效；已要求取消或已被取代的工作在退回或失效時直接結束、不重排（#3278）。這些在 C2 驗收前還沒有主機會去接工作。
+- **`/v1/local-runs`（快車道工作登記到 wwd）的伺服端**：先查本機 lock 表，被占時回 `409` 並列出佔著的 job（`holders`），工作結束的事件釋放 lock，定期對帳；尚未接進 daemon（#3270、#3274）。
+- **`pdx test --adhoc -- <指令…>`**：未宣告的指令當作 ad-hoc 工作，只在本機、走閘門的重名額、不經 shell、不送佇列，輸出即時印出；`--detach` 會被拒絕（exit 4）（#3276）。
+- **`pdx entry match`**（接替 `hooks/gate.js` 的第一半，WWD-6a-1）：依 repo 的 `.wwd/tasks.toml` 判斷一個測試／建置指令該改寫成哪個 `pdx test` 任務；hook 還沒接上，行為不變（#3273）。
+
+### 文件
+
+- spec：租約到清掃時才結束、失效次數與嘗試次數分開計、保留手動插隊、`wwdd.slice`、`--adhoc`、pool 單一主機退回 SSH（#3282）；owner 規則只寫量到的事實（#3285）。
+
+### 發版測試
+
+- 切點 `4377b97c7`，air26：`go test -p 3 -timeout 30m ./...` 109 個套件全部重新跑過、全過；`make lint`（含 `GOOS=linux go vet` 的 wwd）通過。go test 與 lint 依序只用一格重名額，另一格留給同時在跑的 iOS UI 測試。
+- mserv（Linux x86_64）：在 mlab 交叉編譯 `internal/wwd/{facts,derived,labels,clones}` 的測試，帶 `testdata` 在 mserv 執行，全過。
+- SPA、mod 與 Electron 與 750 相同，沿用 750 的結果（vitest 1074 個檔、19743 條，`tsc -b --force`）。
+
 ## [1.0.0-alpha.750] - 2026-10-18
 
 > daemon、`pdx` CLI、SPA 有改，另外多了一支新的執行檔 `wwd`（`make build-wwd` 產出 `bin/wwd-<os>-<arch>`）；mod（`hooks/`、`skills/`）與 Electron 沒有改（`git diff 3e5023921..origin/main` 在這兩處為空）。mod 沒變，**不需要為 mod 重跑 `pdx setup`**；但 wwd 不會自己裝上：一般的 `pdx setup` 不碰 wwd，要用 `pdx setup --wwd --wwd-alias <主機名> [--wwd-binary <路徑>]`（mlab、air26）或 `scripts/wwd-deploy.sh [--token-file <檔>] <主機>`（含 mserv、air19）安裝，細節見 `docs/wwd-deploy.md`。不裝 wwd 時，這一版的行為與 749 相同，只是 daemon 少了租約。
