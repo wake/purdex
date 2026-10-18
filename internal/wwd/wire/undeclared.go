@@ -12,6 +12,11 @@ type ObservationsResponse struct {
 	Host         string        `json:"host"`
 	Since        time.Time     `json:"since"`
 	Observations []Observation `json:"observations"`
+	// Truncated says the period held more than one answer carries: the newest are here, the oldest were left out. NextUntil is then
+	// the start of the oldest record here: ask again with until=<NextUntil> (inclusive, so a record may come twice: drop repeats by
+	// id) to get the ones before. Null when the answer is whole.
+	Truncated bool       `json:"truncated"`
+	NextUntil *time.Time `json:"next_until"`
 }
 
 func (r ObservationsResponse) Validate() error {
@@ -44,6 +49,8 @@ type UndeclaredResponse struct {
 	Host   string            `json:"host"`
 	Since  time.Time         `json:"since"`
 	Groups []UndeclaredGroup `json:"groups"`
+	// Truncated says there were more groups than one answer carries: the biggest by CPU are here.
+	Truncated bool `json:"truncated"`
 }
 
 func (r UndeclaredResponse) Validate() error {
