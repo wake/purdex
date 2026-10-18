@@ -42,6 +42,8 @@ const (
 	stageTerminalTTL = promptq.LedgerTTL
 	// stageIdleTTL: an id that never finished is forgotten this long after its last change.
 	stageIdleTTL = time.Hour
+	// maxStageRows bounds the ids of one session (and so the work of one observe): past it the oldest finished id goes first.
+	maxStageRows = 512
 	// An id that never reached Claude Code's queue is read by an item stamped just before its Enter up to this long after.
 	stageItemBefore = 2 * time.Second
 	stageItemAfter  = 30 * time.Second
@@ -62,18 +64,15 @@ type stageRow struct {
 	changed  time.Time
 }
 
-// stageClaim names a header queue row: Claude Code gives the rows no id, so a row is its text and its enqueue time.
-type stageClaim struct {
-	shown string // whitespace-normalised text as the header shows it (cut to the header's limit)
-	text  string // whitespace-normalised full text, which the transcript's items carry
-	at    int64
-}
+// stageClaim names a header queue row: Claude Code gives the rows no id, so a row is its text (the id's own, kept once in
+// stageRow.text) and its enqueue time.
+type stageClaim struct{ at int64 }
 
 type sessionStages struct {
 	seq     uint64
 	arrival uint64
 	rows    map[string]*stageRow
-	used    map[string]struct{} // user item ids already given to an id
+	used    map[string]int64 // user item ids already given to an id, with the item's time (pruned with the ids that could still match)
 }
 
 type stageLedger struct {
@@ -124,7 +123,7 @@ func (l *stageLedger) session(sid string) *sessionStages {
 	}
 	s := l.sessions[sid]
 	if s == nil {
-		s = &sessionStages{rows: map[string]*stageRow{}, used: map[string]struct{}{}}
+		s = &sessionStages{rows: map[string]*stageRow{}, used: map[string]int64{}}
 		l.sessions[sid] = s
 	}
 	return s
@@ -156,6 +155,9 @@ func (l *stageLedger) begin(sid, id, text string, now time.Time) {
 		l.dropText(r)
 		delete(s.rows, id)
 	}
+	if len(s.rows) >= maxStageRows {
+		l.evictRowLocked(s)
+	}
 	s.arrival++
 	r := &stageRow{id: id, arrival: s.arrival, stage: stageReceived, at: now, textFrom: now}
 	s.rows[id] = r
@@ -165,6 +167,24 @@ func (l *stageLedger) begin(sid, id, text string, now time.Time) {
 		l.evictTextsLocked(r)
 	}
 	s.bump(r, now)
+}
+
+// evictRowLocked drops the session's oldest finished id, or its oldest id when none has finished.
+func (l *stageLedger) evictRowLocked(s *sessionStages) {
+	var victim *stageRow
+	for _, r := range s.sorted() {
+		if terminalStage(r.stage) {
+			victim = r
+			break
+		}
+		if victim == nil {
+			victim = r
+		}
+	}
+	if victim != nil {
+		l.dropText(victim)
+		delete(s.rows, victim.id)
+	}
 }
 
 // evictTextsLocked drops the oldest in-flight texts (never keep's) until the total is under the cap.
@@ -255,8 +275,10 @@ func normText(s string) string { return strings.Join(strings.Fields(s), " ") }
 //     order, never time distance, so the same text sent twice cannot swap);
 //   - an id that never reached the queue is read by the unused item with its text nearest to its Enter, inside a window.
 //
-// It also drops texts that outlived stageTextTTL and finished or idle ids that outlived theirs.
-func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, items []stageItem, now time.Time) {
+// lossy says the queue may be missing rows (the feed keeps at most ccnorm.MaxQueueEntries): a row that is not there then proves
+// nothing, so no queued id is judged to have left. It also drops texts that outlived stageTextTTL and finished or idle ids
+// that outlived theirs.
+func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, lossy bool, items []stageItem, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.sweepLocked(now)
@@ -265,6 +287,7 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, items []stageIt
 		return
 	}
 	rows := s.sorted()
+	items = l.pruneUsedLocked(s, rows, items)
 
 	var qs []ccnorm.Queued
 	for _, q := range queue {
@@ -285,53 +308,82 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, items []stageIt
 	// 1. queued ids: is their row still there?
 	var left []*stageRow
 	for _, r := range rows {
-		if r.stage != stageQueued || r.claim == nil {
+		if r.stage != stageQueued || r.claim == nil || r.text == "" {
 			continue
 		}
-		if i := take(r.claim.shown, r.claim.at, 0); i >= 0 {
+		if i := take(normText(ccnorm.ShownQueued(r.text)), r.claim.at, 0); i >= 0 {
 			consumed[i] = true
-		} else {
+		} else if !lossy {
 			left = append(left, r)
 		}
 	}
 	// 2. ids that left the queue are read by their items, oldest first
 	for _, r := range left {
+		text := normText(r.text)
+		from := r.claim.at // a row with no timestamp falls back to the Enter: an older same-text item is never ours
+		if from <= 0 {
+			from = r.textFrom.UnixMilli()
+		}
 		for _, it := range items {
-			if _, taken := s.used[it.ID]; taken || normText(it.Text) != r.claim.text {
+			if _, taken := s.used[it.ID]; taken || it.At < from-stageItemBefore.Milliseconds() || normText(it.Text) != text {
 				continue
 			}
-			from := r.claim.at // a row with no timestamp falls back to the Enter: an older same-text item is never ours
-			if from <= 0 {
-				from = r.textFrom.UnixMilli()
-			}
-			if it.At < from-stageItemBefore.Milliseconds() {
-				continue
-			}
-			s.used[it.ID] = struct{}{}
+			s.used[it.ID] = it.At
 			l.advanceLocked(s, r, stageRead, "", "", now)
 			break
 		}
 	}
 	// 3. entered / unknown ids claim a queue row, or are read straight away
-	var open []*stageRow
-	for _, r := range rows {
-		if (r.stage == stageEntered || r.stage == stageUnknown) && r.text != "" {
-			open = append(open, r)
-		}
-	}
 	var unclaimed []*stageRow
-	for _, r := range open {
-		text := normText(r.text)
-		shown := normText(ccnorm.ShownQueued(r.text))
-		if i := take(shown, -1, r.textFrom.UnixMilli()-stageItemBefore.Milliseconds()); i >= 0 {
+	for _, r := range rows {
+		if (r.stage != stageEntered && r.stage != stageUnknown) || r.text == "" {
+			continue
+		}
+		if i := take(normText(ccnorm.ShownQueued(r.text)), -1, r.textFrom.UnixMilli()-stageItemBefore.Milliseconds()); i >= 0 {
 			consumed[i] = true
-			r.claim = &stageClaim{shown: shown, text: text, at: qs[i].At}
+			r.claim = &stageClaim{at: qs[i].At}
 			l.advanceLocked(s, r, stageQueued, "", "", now)
 			continue
 		}
 		unclaimed = append(unclaimed, r)
 	}
 	l.readIdleLocked(s, unclaimed, items, now)
+}
+
+// pruneUsedLocked forgets the used items no id in flight could still be given (they are older than every window), and returns
+// the items that still could be: the matching below scans only those.
+func (l *stageLedger) pruneUsedLocked(s *sessionStages, rows []*stageRow, items []stageItem) []stageItem {
+	var minFrom int64
+	found := false
+	for _, r := range rows {
+		if terminalStage(r.stage) || r.text == "" {
+			continue
+		}
+		from := r.textFrom.UnixMilli()
+		if r.claim != nil && r.claim.at > 0 {
+			from = r.claim.at
+		}
+		if !found || from < minFrom {
+			minFrom, found = from, true
+		}
+	}
+	if !found {
+		clear(s.used)
+		return nil
+	}
+	minFrom -= stageItemBefore.Milliseconds()
+	for id, at := range s.used {
+		if at < minFrom {
+			delete(s.used, id)
+		}
+	}
+	kept := items[:0:0]
+	for _, it := range items {
+		if it.At >= minFrom {
+			kept = append(kept, it)
+		}
+	}
+	return kept
 }
 
 // readIdleLocked pairs ids that never queued with the items that are their messages: same text, the item inside the window
@@ -376,7 +428,7 @@ func (l *stageLedger) readIdleLocked(s *sessionStages, rows []*stageRow, items [
 		if _, taken := s.used[id]; taken {
 			continue
 		}
-		s.used[id] = struct{}{}
+		s.used[id] = items[p.it].At
 		done[p.r.id] = true
 		l.advanceLocked(s, p.r, stageRead, "", "", now)
 	}

@@ -46,7 +46,7 @@ func TestStages_FillTransitionsToRead(t *testing.T) {
 	assert.Equal(t, "entered", got.Stage)
 	assert.Equal(t, "fill", got.Mode)
 	// an idle session: the user item shows up a moment later, no queue row at all
-	l.observe("s", nil, []stageItem{item("u1", "hello", t0.Add(400*time.Millisecond))}, t0.Add(500*time.Millisecond))
+	l.observe("s", nil, false, []stageItem{item("u1", "hello", t0.Add(400*time.Millisecond))}, t0.Add(500*time.Millisecond))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
 }
 
@@ -54,7 +54,7 @@ func TestStages_KeysModeKeepsTextAndReads(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "k", "typed blind", t0)
 	l.set("s", "k", "entered", "", "keys", t0.Add(time.Second))
-	l.observe("s", nil, []stageItem{item("u1", "typed blind", t0.Add(1500*time.Millisecond))}, t0.Add(2*time.Second))
+	l.observe("s", nil, false, []stageItem{item("u1", "typed blind", t0.Add(1500*time.Millisecond))}, t0.Add(2*time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "k").Stage)
 }
 
@@ -64,13 +64,13 @@ func TestStages_BusyQueuedThenReadFiveMinutesLater(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "a", "later", t0)
 	l.set("s", "a", "entered", "", "fill", t0.Add(time.Second))
-	l.observe("s", []ccnorm.Queued{uq("later", t0.Add(1100*time.Millisecond))}, nil, t0.Add(2*time.Second))
+	l.observe("s", []ccnorm.Queued{uq("later", t0.Add(1100*time.Millisecond))}, false, nil, t0.Add(2*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
 	// still queued after a while: nothing changes
-	l.observe("s", []ccnorm.Queued{uq("later", t0.Add(1100*time.Millisecond))}, nil, t0.Add(2*time.Minute))
+	l.observe("s", []ccnorm.Queued{uq("later", t0.Add(1100*time.Millisecond))}, false, nil, t0.Add(2*time.Minute))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
 	// the row left the queue (remove + queued_command): an item of source queued, five minutes after the Enter
-	l.observe("s", nil, []stageItem{item("u9", "later", t0.Add(5*time.Minute))}, t0.Add(5*time.Minute+time.Second))
+	l.observe("s", nil, false, []stageItem{item("u9", "later", t0.Add(5*time.Minute))}, t0.Add(5*time.Minute+time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
 }
 
@@ -82,10 +82,10 @@ func TestStages_SendNowShapeReads(t *testing.T) {
 		l.set("s", id, "entered", "", "fill", t0.Add(time.Duration(i+1)*time.Second))
 	}
 	q := []ccnorm.Queued{uq("msg-a", t0.Add(1100*time.Millisecond)), uq("msg-b", t0.Add(2100*time.Millisecond))}
-	l.observe("s", q, nil, t0.Add(3*time.Second))
+	l.observe("s", q, false, nil, t0.Add(3*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "b").Stage)
-	l.observe("s", nil, []stageItem{item("u1", "msg-a", t0.Add(10*time.Second)), item("u2", "msg-b", t0.Add(10*time.Second))}, t0.Add(11*time.Second))
+	l.observe("s", nil, false, []stageItem{item("u1", "msg-a", t0.Add(10*time.Second)), item("u2", "msg-b", t0.Add(10*time.Second))}, t0.Add(11*time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
 	assert.Equal(t, "read", stageOf(t, &l, "s", "b").Stage)
 }
@@ -95,12 +95,12 @@ func TestStages_OlderSameTextItemDoesNotReadAQueuedId(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "a", "again", t0)
 	l.set("s", "a", "entered", "", "fill", t0.Add(time.Second))
-	l.observe("s", []ccnorm.Queued{{Text: "again", Source: ccnorm.QueuedUser}}, nil, t0.Add(2*time.Second))
+	l.observe("s", []ccnorm.Queued{{Text: "again", Source: ccnorm.QueuedUser}}, false, nil, t0.Add(2*time.Second))
 	require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
 	old := item("u0", "again", t0.Add(-time.Hour)) // typed an hour ago
-	l.observe("s", nil, []stageItem{old}, t0.Add(3*time.Second))
+	l.observe("s", nil, false, []stageItem{old}, t0.Add(3*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
-	l.observe("s", nil, []stageItem{old, item("u1", "again", t0.Add(2500*time.Millisecond))}, t0.Add(4*time.Second))
+	l.observe("s", nil, false, []stageItem{old, item("u1", "again", t0.Add(2500*time.Millisecond))}, t0.Add(4*time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
 }
 
@@ -115,12 +115,12 @@ func TestStages_FailedCarriesReasonAndUnknownAdvancesByMatching(t *testing.T) {
 	l.begin("s", "u", "maybe", t0)
 	l.set("s", "u", "unknown", "mod_timeout", "fill", t0.Add(time.Second))
 	assert.Equal(t, "unknown", stageOf(t, &l, "s", "u").Stage)
-	l.observe("s", []ccnorm.Queued{uq("maybe", t0.Add(2*time.Second))}, nil, t0.Add(3*time.Second))
+	l.observe("s", []ccnorm.Queued{uq("maybe", t0.Add(2*time.Second))}, false, nil, t0.Add(3*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "u").Stage, "an unknown id may still be claimed by the queue")
 
 	l.begin("s", "u2", "maybe two", t0)
 	l.set("s", "u2", "unknown", "x", "keys", t0.Add(time.Second))
-	l.observe("s", nil, []stageItem{item("i", "maybe two", t0.Add(2*time.Second))}, t0.Add(3*time.Second))
+	l.observe("s", nil, false, []stageItem{item("i", "maybe two", t0.Add(2*time.Second))}, t0.Add(3*time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "u2").Stage)
 }
 
@@ -158,7 +158,7 @@ func TestStages_BusyRetryIdsAreIndependent(t *testing.T) {
 	l.set("s", "id0", "failed", "busy", "", t0.Add(time.Second))
 	l.begin("s", "id1", "msg", t0.Add(2*time.Second))
 	l.set("s", "id1", "entered", "", "fill", t0.Add(3*time.Second))
-	l.observe("s", nil, []stageItem{item("u", "msg", t0.Add(3500*time.Millisecond))}, t0.Add(4*time.Second))
+	l.observe("s", nil, false, []stageItem{item("u", "msg", t0.Add(3500*time.Millisecond))}, t0.Add(4*time.Second))
 	assert.Equal(t, "failed", stageOf(t, &l, "s", "id0").Stage)
 	assert.Equal(t, "read", stageOf(t, &l, "s", "id1").Stage)
 }
@@ -169,7 +169,7 @@ func TestStages_RecallTakesBackEveryQueuedIdOnly(t *testing.T) {
 		l.begin("s", id, "m-"+id, t0)
 		l.set("s", id, "entered", "", "fill", t0.Add(time.Second))
 	}
-	l.observe("s", []ccnorm.Queued{uq("m-a", t0.Add(1100*time.Millisecond)), uq("m-b", t0.Add(1200*time.Millisecond))}, nil, t0.Add(2*time.Second))
+	l.observe("s", []ccnorm.Queued{uq("m-a", t0.Add(1100*time.Millisecond)), uq("m-b", t0.Add(1200*time.Millisecond))}, false, nil, t0.Add(2*time.Second))
 	l.begin("s", "c", "m-c", t0.Add(3*time.Second))
 	l.set("s", "c", "entered", "", "fill", t0.Add(3*time.Second)) // not queued yet
 	l.recallAll("s", t0.Add(4*time.Second))
@@ -189,11 +189,11 @@ func TestStages_SameTextTwiceReadsInQueueOrder(t *testing.T) {
 	l.begin("s", "new", "same", t0.Add(10*time.Second))
 	l.set("s", "new", "entered", "", "fill", t0.Add(11*time.Second))
 	both := []ccnorm.Queued{uq("same", t0.Add(1100*time.Millisecond)), uq("same", t0.Add(11100*time.Millisecond))}
-	l.observe("s", both, nil, t0.Add(12*time.Second))
+	l.observe("s", both, false, nil, t0.Add(12*time.Second))
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "old").Stage)
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "new").Stage)
 	// the first row leaves the queue; its item is stamped much closer to the NEW id's Enter than to the old one's
-	l.observe("s", both[1:], []stageItem{item("u1", "same", t0.Add(10500*time.Millisecond))}, t0.Add(13*time.Second))
+	l.observe("s", both[1:], false, []stageItem{item("u1", "same", t0.Add(10500*time.Millisecond))}, t0.Add(13*time.Second))
 	assert.Equal(t, "read", stageOf(t, &l, "s", "old").Stage)
 	assert.Equal(t, "queued", stageOf(t, &l, "s", "new").Stage)
 }
@@ -205,7 +205,7 @@ func TestStages_OneItemOneId(t *testing.T) {
 		l.begin("s", id, "dup", t0)
 		l.set("s", id, "entered", "", "fill", t0.Add(time.Second))
 	}
-	l.observe("s", nil, []stageItem{item("u1", "dup", t0.Add(1500*time.Millisecond))}, t0.Add(2*time.Second))
+	l.observe("s", nil, false, []stageItem{item("u1", "dup", t0.Add(1500*time.Millisecond))}, t0.Add(2*time.Second))
 	reads := 0
 	for _, id := range []string{"a", "b"} {
 		if stageOf(t, &l, "s", id).Stage == "read" {
@@ -242,7 +242,7 @@ func TestStages_TextDroppedAfterThirtyMinutes(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "a", "slow", t0)
 	l.set("s", "a", "entered", "", "fill", t0)
-	l.observe("s", nil, nil, t0.Add(31*time.Minute))
+	l.observe("s", nil, false, nil, t0.Add(31*time.Minute))
 	assert.Zero(t, l.textBytes)
 	assert.Equal(t, "entered", stageOf(t, &l, "s", "a").Stage, "the stage stays, only the text goes")
 }
@@ -309,4 +309,66 @@ func TestStages_SessionsAreSeparate(t *testing.T) {
 	l.begin("s1", "a", "x", t0)
 	all, _ := l.snapshot("s2", t0)
 	assert.Empty(t, all)
+}
+
+// The feed's queue tracker keeps at most ccnorm.MaxQueueEntries rows: when it may have dropped older ones, a row that is not
+// there proves nothing, and a later item with the same text must not read the id (codex attack on #3409).
+func TestStages_ALossyQueueNeverJudgesAnIdToHaveLeft(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "same", t0)
+	l.set("s", "a", "entered", "", "fill", t0.Add(time.Second))
+	q := []ccnorm.Queued{uq("same", t0.Add(1100*time.Millisecond))}
+	l.observe("s", q, false, nil, t0.Add(2*time.Second))
+	require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+	l.observe("s", nil, true, []stageItem{item("u1", "same", t0.Add(3*time.Second))}, t0.Add(4*time.Second))
+	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage, "the row may only have been pushed out of the tracker")
+	l.observe("s", nil, false, []stageItem{item("u1", "same", t0.Add(3*time.Second))}, t0.Add(5*time.Second))
+	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage, "with a complete queue the same evidence reads it")
+}
+
+func TestStages_UsedItemsAreForgottenWhenNoIdCouldStillMatchThem(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	l.set("s", "a", "entered", "", "fill", t0)
+	l.observe("s", nil, false, []stageItem{item("u1", "x", t0.Add(time.Second))}, t0.Add(2*time.Second))
+	require.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
+	assert.Len(t, l.sessions["s"].used, 1)
+	l.begin("s", "b", "y", t0.Add(time.Minute)) // an id in flight later: u1 is far older than anything it could match
+	l.set("s", "b", "entered", "", "fill", t0.Add(time.Minute))
+	l.observe("s", nil, false, nil, t0.Add(time.Minute+time.Second))
+	assert.Empty(t, l.sessions["s"].used)
+}
+
+func TestStages_IdsPerSessionAreBounded(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "first-done", "x", t0)
+	l.set("s", "first-done", "failed", "r", "", t0)
+	for i := 0; i < maxStageRows; i++ {
+		l.begin("s", "id"+string(rune('A'+i%26))+string(rune('a'+i/26)), "y", t0.Add(time.Duration(i+1)*time.Millisecond))
+	}
+	assert.LessOrEqual(t, len(l.sessions["s"].rows), maxStageRows)
+	_, has := l.sessions["s"].rows["first-done"]
+	assert.False(t, has, "the finished id goes first")
+}
+
+// A queued id keeps no second copy of its text: the one counted copy is what the caps and the TTL act on.
+func TestStages_QueuedIdsRetainNoTextBeyondTheCounted(t *testing.T) {
+	var l stageLedger
+	big := strings.Repeat("q", maxStageText)
+	var q []ccnorm.Queued
+	for i := 0; i < 5; i++ {
+		id := "id" + string(rune('a'+i))
+		text := big + string(rune('a'+i))
+		text = text[1:] // keep each text distinct but exactly at the cap
+		l.begin("s", id, text, t0)
+		l.set("s", id, "entered", "", "fill", t0)
+		q = append(q, uq(text, t0))
+	}
+	l.observe("s", q, false, nil, t0.Add(time.Second))
+	assert.Equal(t, 5*maxStageText, l.textBytes)
+	l.observe("s", q, false, nil, t0.Add(31*time.Minute))
+	assert.Zero(t, l.textBytes, "after the TTL nothing of the texts is left, claims included")
+	for _, r := range l.sessions["s"].rows {
+		assert.Empty(t, r.text)
+	}
 }

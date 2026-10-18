@@ -18,6 +18,9 @@ const (
 	maxQueuedText   = 2000 // runes of text kept and shown
 )
 
+// MaxQueueEntries is how many rows the feed's queue tracker keeps: with that many (hidden ones included) it may have lost older rows.
+const MaxQueueEntries = maxQueueEntries
+
 // MaxQueuedText is the cap (in runes) of a queued text the feed keeps: a text at the cap may have been cut.
 const MaxQueuedText = maxQueuedText
 
