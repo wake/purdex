@@ -164,6 +164,31 @@ func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
 	}
 }
 
+func TestAKeyOfARunStillBeingRecordedIsToldWithoutAProvisionalName(t *testing.T) {
+	q := &fakeQueue{}
+	s, _ := newService(q)
+	inside, release := make(chan struct{}), make(chan struct{})
+	q.during = func(string) { // the first run is inside RecordLocal: its keys are held under a provisional owner
+		close(inside)
+		<-release
+	}
+	first := make(chan int, 1)
+	go func() { first <- post(s, request(t, "tmux")).Code }()
+	<-inside
+	rec := post(s, request(t, "tmux"))
+	close(release)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
+	if err != nil || len(busy.Keys) != 1 || len(busy.Holders) != 0 || bytes.Contains(rec.Body.Bytes(), []byte("local:")) {
+		t.Fatalf("body %s err %v", rec.Body, err)
+	}
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("the first run: %d", code)
+	}
+}
+
 func TestAQueueThatCannotRecordReleasesTheKeysAndAnswers503(t *testing.T) {
 	q := &fakeQueue{err: errors.New("database is locked")}
 	s, tb := newService(q)

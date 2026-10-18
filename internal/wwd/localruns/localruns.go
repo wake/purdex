@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,9 @@ type Queue interface {
 	// service rebuilds the lock table from it after a restart: the runner of such a job may go on renewing its lease.
 	Running(ctx context.Context) ([]wire.Job, error)
 }
+
+// provisionalPrefix names the owner of keys reserved for a run the queue has not named yet; it is never a job id.
+const provisionalPrefix = "local:"
 
 // maxBody bounds a registration (a submission without a snapshot is small).
 const maxBody = 1 << 20
@@ -85,8 +89,13 @@ func (s *Service) Handler() http.HandlerFunc {
 		case errors.As(err, &busy):
 			keys := make([]string, len(busy.Conflicts))
 			holders := make([]wire.LockHolder, len(busy.Conflicts))
+			provisional := false
 			for i, c := range busy.Conflicts {
 				keys[i], holders[i] = c.Key, wire.LockHolder{Key: c.Key, Job: c.Holder}
+				provisional = provisional || strings.HasPrefix(c.Holder, provisionalPrefix)
+			}
+			if provisional {
+				holders = nil // a run still being recorded has no job id yet: the keys alone are told
 			}
 			writeJSON(w, http.StatusConflict, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: keys, Holders: holders})
 		case err != nil:
@@ -123,7 +132,7 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 	if err := locks.ValidateKeys(req.Locks); err != nil {
 		return wire.LocalRunResponse{}, http.StatusBadRequest, err // the request is malformed; the queue is not the problem
 	}
-	owner := fmt.Sprintf("local:%d", s.seq.Add(1))
+	owner := fmt.Sprintf("%s%d", provisionalPrefix, s.seq.Add(1))
 	var resp wire.LocalRunResponse
 	hold, err := s.Locks.Acquire(owner, req.Locks, func() error {
 		var rerr error
