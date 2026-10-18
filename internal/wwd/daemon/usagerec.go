@@ -93,11 +93,10 @@ func (r *UsageRecorder) save(u wire.JobUsage) {
 	}
 }
 
-// ranHere says the job's process tree was on this host: a fast-lane job always, a queue job when its result names this host (a job
-// another host's worker ran is recorded by that host).
-func (r *UsageRecorder) ranHere(j wire.Job) bool {
-	return j.Local || (j.Result != nil && j.Result.Host == r.host)
-}
+// ranHere says this recorder writes the job's row from its final event: a fast-lane job (its process is the caller's, so wwd has only the
+// samples). A job the worker ran is written from the run itself (RecordRun), where the exact figures are: the queue's final event
+// of such a job is not used, so the first row, the one that stays, is never the less exact one.
+func (r *UsageRecorder) ranHere(j wire.Job) bool { return j.Local }
 
 // row is the usage row of a job's event; ok is false when there is nothing to record (not final, ran elsewhere, never ran).
 func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
