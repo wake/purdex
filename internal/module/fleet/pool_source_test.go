@@ -347,6 +347,17 @@ func TestPoolSource_StaleFactsFallBackToSSHAndRecover(t *testing.T) {
 	exclusive("recovered")
 }
 
+// wwd says reachable but has no facts yet (a peer just reached): that is not a reading either.
+func TestPoolSource_ReachableWithoutFactsIsNotServed(t *testing.T) {
+	r, fp := newPoolRig(t)
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal),
+		{Info: wire.Info{HostID: "air26-id", Alias: "air26"}, Facts: nil, Reachable: true}}}, nil)
+	r.start()
+	r.tick()
+	assert.True(t, r.hasSession("peer"))
+	assert.False(t, r.m.hosts["peer"].poolOwned)
+}
+
 // The own host listed without usable facts is read by the local source as before, and does not go offline for it.
 func TestPoolSource_OwnHostListedWithoutFactsStaysLocal(t *testing.T) {
 	r, fp := newPoolRig(t)
