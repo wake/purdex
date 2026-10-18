@@ -182,6 +182,19 @@ func (c *Client) Cancel(ctx context.Context, id string) error {
 	return err
 }
 
+// SetPosition is POST /v1/jobs/{id}/position (spec 4.6): the manual place of a queued job on this host. It returns the job as it is
+// then; a job that is not queued is a StatusError 409.
+func (c *Client) SetPosition(ctx context.Context, id string, p wire.Position) (wire.Job, error) {
+	if err := checkID(id); err != nil {
+		return wire.Job{}, err
+	}
+	req := wire.PositionRequest{Position: p}
+	if err := req.Validate(); err != nil {
+		return wire.Job{}, err
+	}
+	return call[wire.Job](ctx, c, http.MethodPost, "/v1/jobs/"+url.PathEscape(id)+"/position", nil, req)
+}
+
 // Worker is GET /v1/worker: this host's worker switch and slots.
 func (c *Client) Worker(ctx context.Context) (wire.WorkerSettings, error) {
 	return call[wire.WorkerSettings](ctx, c, http.MethodGet, "/v1/worker", nil, nil)

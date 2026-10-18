@@ -326,6 +326,18 @@ type ReleaseRequest struct {
 	Detail  string        `json:"detail"`
 }
 
+// PositionRequest is the body of POST /v1/jobs/{id}/position (local socket only, spec §4.6): the manual place to put a queued job in.
+type PositionRequest struct {
+	Position Position `json:"position"`
+}
+
+func (r PositionRequest) Validate() error {
+	if !r.Position.ValidRequest() {
+		return fmt.Errorf("position %q is not front, back, hold or normal", r.Position)
+	}
+	return nil
+}
+
 func (r ReleaseRequest) Validate() error {
 	if err := checkClaimID(r.ClaimID); err != nil {
 		return err

@@ -199,6 +199,37 @@ func (a *API) Log(peer bool) http.HandlerFunc {
 	}
 }
 
+// Position is POST /v1/jobs/{id}/position with a wire.PositionRequest: the manual place of a queued job (spec 4.6). The answer is the job
+// as it is then; a job that is not queued is a 409 with its state. Mount it on the socket only: the place is the person's to set on
+// the host the job is queued on.
+func (a *API) Position() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := jobID(w, r)
+		if !ok {
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+		if err != nil {
+			badRequest(w, "request body too large or unreadable")
+			return
+		}
+		req, err := wire.Decode[wire.PositionRequest](body)
+		if err == nil {
+			err = req.Validate()
+		}
+		if err != nil {
+			badRequest(w, err.Error())
+			return
+		}
+		j, err := a.q.SetPosition(r.Context(), id, req.Position)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, j)
+	}
+}
+
 // Cancel is POST /v1/jobs/{id}/cancel: a queued job ends at once, a held one is asked to stop at its next heartbeat. The answer is the job
 // as it is then; a job that has ended is a 409 with its state.
 func (a *API) Cancel(peer bool) http.HandlerFunc {

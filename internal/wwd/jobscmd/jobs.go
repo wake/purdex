@@ -35,6 +35,7 @@ type API interface {
 	Job(ctx context.Context, id string) (wire.Job, error)
 	Log(ctx context.Context, id string) ([]byte, error)
 	Cancel(ctx context.Context, id string) error
+	SetPosition(ctx context.Context, id string, p wire.Position) (wire.Job, error)
 	WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)) (wire.Job, error)
 	Worker(ctx context.Context) (wire.WorkerSettings, error)
 	SetWorker(ctx context.Context, s wire.WorkerSettings) (wire.WorkerSettings, error)
@@ -62,10 +63,13 @@ const JobsUsage = `usage: pdx jobs [ls] [--all] [--state <state>] [--limit N] [-
        pdx jobs show <id> [--json]
        pdx jobs log <id> [--raw]
        pdx jobs cancel <id> [--wait]
+       pdx jobs move <id> front|back|hold|normal
   ls      the jobs of this session (--all: every job on this host), newest first; 20 unless --limit
   show    one job: state, where it ran, the summary
   log     the stored log (404 until the job has ended); control characters are shown as \xNN, --raw writes the bytes as they are
   cancel  ask for the job to end; --wait waits for it to
+  move    put a queued job by hand: front (before every other job), back (after every other job), hold (no worker is handed it) or
+          normal (the score decides again); only a queued job, on this host
 `
 
 // Jobs is `pdx jobs`; it returns the exit code.
@@ -83,6 +87,8 @@ func Jobs(ctx context.Context, args []string, env Env) int {
 		return jobsLog(ctx, args, env)
 	case "cancel":
 		return jobsCancel(ctx, args, env)
+	case "move":
+		return jobsMove(ctx, args, env)
 	case "help":
 		io.WriteString(env.Stdout, JobsUsage)
 		return ExitOK
@@ -346,5 +352,25 @@ func jobsCancel(ctx context.Context, args []string, env Env) int {
 		return fail(env, "jobs cancel", err)
 	}
 	fmt.Fprintf(env.Stdout, "%s: %s\n", id, j.State)
+	return ExitOK
+}
+
+func jobsMove(ctx context.Context, args []string, env Env) int {
+	if len(args) != 2 {
+		return usageErr(env, JobsUsage, errors.New("move needs a job id and front, back, hold or normal"))
+	}
+	id, p := args[0], wire.Position(args[1])
+	if !p.ValidRequest() {
+		return usageErr(env, JobsUsage, fmt.Errorf("%q is not front, back, hold or normal", args[1]))
+	}
+	j, err := env.API.SetPosition(ctx, id, p)
+	if err != nil {
+		return fail(env, "jobs move", err)
+	}
+	place := string(j.Manual)
+	if place == "" {
+		place = "normal"
+	}
+	fmt.Fprintf(env.Stdout, "%s: %s\n", id, place)
 	return ExitOK
 }
