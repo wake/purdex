@@ -21,13 +21,15 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 | `--manual` | 需要「主人回來」的案例（7）改成請人移動 air26 的滑鼠，不用掛鉤 |
 | `--force` | 佇列裡已經有工作也照跑（預設要求佇列是空的） |
 | `--keep` | 結束時留下暫存目錄（印出路徑），除錯用 |
+| `C2_RAN_LOG` | 環境變數，換掉 probe 記錄檔的路徑（預設 `/tmp/wwd-c2-ran.log`）；腳本的 stub 測試用它，免得碰到正在跑的矩陣的檔案。值是字面字串，由各主機的 shell 展開（例 `'$HOME/wwd-c2-ran.log'`） |
 | `C2_TIMEOUT_SCALE=0` | 環境變數，把所有等待縮成 0，只給腳本自己的 stub 測試用，真機不要設 |
 
 ### 每個案例的共同流程
 
-1. **前置檢查**：四台都連得到；四台的 wwd 版本與 proto 相同；佇列是空的（除非 `--force`）；air19 的 worker 是關的；要跑案例 8 時，air26 的非互動 shell 找得到 `pdx`。
+1. **前置檢查**：四台都連得到；四台的 wwd 版本與 proto 相同；佇列是空的（除非 `--force`）；air19 的 worker 是關的；要跑案例 8 時，在 air26 找得到 `pdx`（依序找非互動 shell 的 PATH、`~/.local/bin/pdx`、`~/.config/pdx/bin/pdx`，印出用的是哪一個）。
 2. 建一個暫存 repo（`$TMPDIR/wwd-c2.<pid>/repo`，一個 commit，內含 probe 任務，見 §5）。
-3. 案例本身：用 `only_workers` 設定誰的 worker 開著，製造一個故障，等待，唯讀檢查，印 `ok`／`FAIL`。
+3. 要用 air26 的 worker 的案例（除了 11）開始前，先等 air26 的 `facts.owner.active` 不是 true，最多 10 分鐘（印 `waiting for air26's owner to be idle`）；等不到這個案例 SKIP 並寫原因，不算 FAIL。
+   案例本身：用 `only_workers` 設定誰的 worker 開著，製造一個故障，等待，唯讀檢查，印 `ok`／`FAIL`。「等到 running／claimed」是硬前置：等不到就 `FAIL precondition not reached`（附該工作與 air26 owner 的狀態），這個案例剩下的檢查不做，不會出現建立在沒發生的事情上的 `ok`。
 4. 每個案例結束都多一項檢查：**air19 從這次執行開始後沒有 claim 任何工作**。
 5. 結尾（也在 ^C、`exit`、SIGTERM 時）：恢復凍結的 wwd（`kill -CONT`）、把改過的 worker 設定原樣 PUT 回去、刪掉建立的 fault 檔、取消它建的工作、刪除暫存與遠端暫存、刪掉四台的 `/tmp/wwd-c2-ran.log`。
    **會改變主機狀態的三項（解凍、還原 worker 設定、刪 fault 檔）做不到時，會列在結尾並讓結束碼是 1**（`FAIL: the clean-up could not put back: ...`），看到這行就要親自去那台主機看。
@@ -212,7 +214,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 |---|---|---|---|---|
 | H0 | （無，自動） | `GET /v1/info` 多一個 `fault` 物件，宣告開了哪些掛鉤（沒開任何掛鉤時整個 `fault` 欄位不存在）。腳本靠它決定 SKIP | 5a、6、7、8 | 下面各掛鉤所在的台 |
 | H1 | `log_upload_fail = true` | origin 拒收 log 上傳（TCP 上的 `PUT /v1/jobs/{id}/log` 回 503；結果上傳不受影響） | 6 | mlab（origin） |
-| H2 | `owner_active_file = "<絕對路徑>"` | 該檔案存在時，facts 的 `owner` 視為 active。**值必須是字面的絕對路徑**：TOML 不展開 `~`、`$HOME`，`/v1/info` 也只回 `true`，不帶路徑。腳本建立與刪除的是 `$HOME/.local/share/wwd/fault/owner-active`，所以 air26 的設定要寫成它展開後的路徑（`/Users/wake/.local/share/wwd/fault/owner-active`）。worker 只有在 owner rule 開著（`[owner] enabled = true`）時才會讓位，air26 的正式設定本來就是開的 | 7 | air26 |
+| H2 | `owner_active_file = "<絕對路徑>"` | 該檔案存在時，facts 的 `owner` 視為 active。**值必須是字面的絕對路徑**：TOML 不展開 `~`、`$HOME`，`/v1/info` 也只回 `true`，不帶路徑。腳本建立與刪除的是 `$HOME/.local/share/wwd/fault/owner-active`，所以 air26 的設定要寫成它展開後的路徑（`/Users/wake/.local/share/wwd/fault/owner-active`）。worker 讓位看的是 facts 的 `owner.active`，與 `[owner]` 開不開無關（`yield.Observe`、`loop.Round`）；`[owner] enabled = false` 時 HID 不再被讀，只剩這個檔案能讓 owner 變 active，所以使用者在 air26 工作不會干擾其他案例（見下） | 7 | air26 |
 | H3 | `zone = "warning"` | 覆蓋 origin 的 derived zone。值是 zone 名（`normal`／`warning`／`danger`），**不是數字**：壓力 2 就是 `warning`（origin_bonus +200，`danger` +400）。只對「worker 把它當 peer 讀」生效，案例 8 的 worker 是 mserv，成立 | 8 | mlab |
 | H4 | `snapshot_delay_s = N`（0～3600） | worker 向 origin 取快照前等 N 秒，讓 5a 的凍結時機是確定的。**建議 5～10**（小於 5a 的 20 秒凍結窗口） | 5a | air26（worker；延遲發生在它） |
 
@@ -229,7 +231,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 | 主機 | 加什麼 | 為什麼 |
 |---|---|---|
 | mlab | `[fault]`<br>`enabled = true`<br>`log_upload_fail = true`<br>`zone = "warning"` | H1（案例 6）、H3（案例 8）。副作用：整個矩陣期間，遠端 worker 對 mlab 的 log 上傳都被拒（結果不受影響，`GET …/log` 回 404）、mlab 作為 origin 的工作多 +200 分（只影響各 worker 偏好哪個 origin）。要把影響縮到最小，可以只在跑案例 6、8 之前加、跑完移除並重啟 |
-| air26 | `[owner]`<br>`enabled = true`（正式設定本來就有，確認即可）<br>`[fault]`<br>`enabled = true`<br>`owner_active_file = "/Users/wake/.local/share/wwd/fault/owner-active"`<br>`snapshot_delay_s = 8` | H2（案例 7）、H4（案例 5a）。沒有 `[owner]` 時 worker 不會讓位，案例 7 會等不到 reclaim |
+| air26 | `[owner]`<br>`enabled = true`（正式設定本來就有，確認即可）<br>`[fault]`<br>`enabled = true`<br>`owner_active_file = "/Users/wake/.local/share/wwd/fault/owner-active"`<br>`snapshot_delay_s = 8` | H2（案例 7）、H4（案例 5a）。建議再加 `[owner] enabled = false`（跑完照樣由 `config.toml.pre-c2` 還原）：`[owner]` 開著時，使用者最近 5 分鐘有動 air26，worker 就不接工作（`owner_rule` 設空字串**不會**關掉它，空字串＝預設的 5 分鐘），案例會在「工作從沒進 running」處 FAIL 或 SKIP。關掉後 `BuildOwner` 不跑（`cmd/wwd/main.go` 不設 `srcOpt.Owner`，`facts/collector.go` 的 `Owner` 為 nil），案例 7 的 H2 檔案仍會讓 `facts.owner` 變 active（`daemon/sampler.go` 的 H2 區塊），`derived` 的 headroom 歸零，worker 讓位並 reclaim |
 | mserv | 不要有 `[fault]`。案例 13 需要：`[worker] sandbox_user = "<job 帳號>"`（非 root）；`[jobdb]`（`enabled = true`、`host`、`port`、`user_hosts`、`defaults_file = "~/.config/wwd/mysql-admin.cnf"`，檔案 0600、帳號 `wwd_admin`）；`wwd.slice` 不用預先建立 | 沙箱與 per-job 資料庫；見 `docs/wwd-deploy.md` |
 | air19 | 什麼都不加；worker 必須是關的（precheck 會檢查） | 整個矩陣它都不 claim |
 
@@ -248,7 +250,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 5. 案例 12 被拒絕的 state／reason：state `failed`、`reason` 空、代碼在 `summary.tail[0]`（`task_unknown`／`args_invalid`）：**已改**，腳本現在檢查代碼。
 6. 案例 14 與每個案例結尾的 air19 檢查：`jobs.claim_worker` 在 claim 時寫入（值是該 wwd 的 alias），工作 requeue 時（租約過期、reclaim、infra 釋放）清成 NULL，結束時不清；**沒有 claim 事件表**。所以 air19 claim 後立刻被收回、又沒跑到 probe 的短暫 claim 仍抓不到，腳本的第二個來源（air19 自己的 probe log）要保留。
 7. 案例 13：per-job 資料庫的環境變數是 `DB_CONNECTION／DB_HOST／DB_PORT／DB_DATABASE／DB_USERNAME／DB_PASSWORD`（預設 `db_env`）：**對**；庫名 `wwd_` 加 32 位十六進位、使用者 `wwdu_` 加 26 位。登入方式**已改**（見案例 13）。
-8. air26 非互動 shell 的 PATH 找得到 `pdx`（案例 8）：程式碼無法確定，是主機環境；precheck 在要跑案例 8 時檢查，找不到就 FAIL 並指出原因。
+8. air26 找得到 `pdx`（案例 8）：非互動 ssh 的 PATH 在 Mac 上沒有 pdx（只讀 `.zshenv`），所以 precheck 依序找 PATH、`~/.local/bin/pdx`、`~/.config/pdx/bin/pdx`，印出 `pdx on air26: <路徑>`，案例 8 用這個路徑；三處都沒有就 FAIL 並列出三處。
 
 第一次真機執行仍要留意的：
 - 案例 5a、7 依賴 §7.1 的 fault 設定（路徑要是字面絕對路徑，zone 要是 `warning`）；設定錯誤的樣子是「掛鉤看起來開了、案例卻沒有效果」，開始前先看 `/v1/info` 的 `fault`。

@@ -201,6 +201,27 @@ submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, th
 job() { sock mlab GET "/v1/jobs/$1"; }   # the job JSON of spec 4.1: .state, .result.{reason,host,started_at,superseded_by,summary}
 jf_on() { sock "$1" GET "/v1/jobs/$2" | jq -r "$3" 2>/dev/null || echo "?"; }     # jf_on ORIGIN ID '.state'
 jf() { jf_on "${WF_HOST:-mlab}" "$1" "$2"; }                                      # jf ID '.state' : on mlab, or on WF_HOST while wait_for_on runs
+# precond ID JQEXPR WANT SECONDS : a state the case needs before its checks can mean anything ("running", "claimed"). If it is not reached
+# the case FAILs here, says what it saw (the job and air26's owner), and the caller returns: no later check may pass on a job that never
+# got there (2026-10-19: air26's owner was using the machine, c2-sleep was never claimed, and "queued again" passed as a lapse)
+precond() {
+  wait_for "$@" && return 0
+  pr_job=$(sock mlab GET "/v1/jobs/$1" 2>/dev/null | jq -c '{state, claim_worker: .claim.worker}' 2>/dev/null || true)
+  say "  FAIL precondition not reached: $1 $2 == $3 within $4 s -- the job: ${pr_job:-?}; air26 facts.owner: $(sock air26 GET /v1/facts 2>/dev/null | jq -c .owner 2>/dev/null || echo '?')"
+  CASE_FAILS=$((CASE_FAILS + 1))
+  return 1
+}
+# owner_idle : air26's worker yields to its owner (facts.owner.active: HID idle under 5 minutes, or a build of theirs), and an empty
+# owner_rule does not switch that off (it is the default rule), so a case that needs air26's worker waits here, up to 10 minutes.
+owner_idle() {
+  if [ "$dry" -eq 1 ]; then say "~ wait up to 600 s until air26's facts.owner.active is not true"; return 0; fi
+  oi_n=0; oi_max=$((600 * ${C2_TIMEOUT_SCALE:-1})); oi_said=0
+  while [ "$(sock air26 GET /v1/facts | jq -r '.owner.active' 2>/dev/null)" = true ]; do
+    [ "$oi_said" -eq 1 ] || { say "   waiting for air26's owner to be idle (up to 10 min; $(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null))"; oi_said=1; }
+    [ "$oi_n" -lt "$oi_max" ] || return 1
+    sleep 5; oi_n=$((oi_n + 5))
+  done
+}
 wait_for_on() { WF_HOST=$1; shift; wf_r=0; wait_for "$@" || wf_r=$?; WF_HOST=mlab; return "$wf_r"; }
 # attempts ID: the counted failures of the job in wwd.db (a lapse or an infra release counts, a reclaim does not): 0 for a job that
 # succeeded at once; the claim in hand is number attempts+1
@@ -454,7 +475,7 @@ case_1() {
 case_2() {
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   # Not launchctl bootout / systemctl stop: that is SIGTERM, and wwd answers it by handing the job back with a reclaim release, which
   # counts no attempt and never ends in failed/lost. A lease lapses only when the wwd cannot talk: a frozen one.
   say "-- lapse 1: air26's wwd is frozen with the job in it, past the 60 s lease"
@@ -463,7 +484,7 @@ case_2() {
   check "lease lapsed, queued again" "$(jf "$id" .state)" queued
   check "attempts after the lapse" "$(attempts "$id")" 1
   svc_thaw air26                                    # its worker finds the lease gone, ends the command, and takes the job again
-  wait_for "$id" .state running 120 || true
+  precond "$id" .state running 120 || return 0
   say "-- lapse 2: frozen again"
   svc_freeze air26
   wait_for "$id" .state failed 150 || true
@@ -490,7 +511,7 @@ case_3() {
   say "-- real: air26's wwd is frozen past its lease, then thawed"
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   svc_freeze air26
   worker_set mlab true
   nap 75
@@ -504,7 +525,7 @@ case_3() {
 case_4() {
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   say "-- the origin (mlab) restarts while air26 runs the job"
   svc_restart mlab
   wait_for "$id" .state succeeded 200 || true
@@ -518,7 +539,7 @@ case_5() {
   say "-- 5a: the origin stops answering when the worker has claimed (snapshot fetch)"
   if need_fault air26 snapshot_delay_s; then
     id=$(submit c2-quick)
-    wait_for "$id" .state claimed 60 || true
+    precond "$id" .state claimed 60 || return 0
     svc_freeze mlab; nap 20; svc_thaw mlab
     wait_for "$id" .state succeeded 600 || true
     check "5a state" "$(jf "$id" .state)" succeeded
@@ -528,18 +549,18 @@ case_5() {
     check "5a the fetch waited and nothing lapsed (attempts)" "$(attempts "$id")" 0
   else say "SKIP 5a: $CASE_SKIP"; CASE_SKIP=""; fi
   say "-- 5b: the origin stops answering during the run, shorter than the lease, then longer"
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   svc_freeze mlab; nap 30; svc_thaw mlab
   wait_for "$id" .state succeeded 200 || true
   check "5b short: state" "$(jf "$id" .state)" succeeded
   check "5b short: attempts" "$(attempts "$id")" 0
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   svc_freeze mlab; nap 90; svc_thaw mlab
   wait_for "$id" .state succeeded 400 || true
   check "5b long: state" "$(jf "$id" .state)" succeeded
   check "5b long: the lease lapsed once" "$(attempts "$id")" 1
   say "-- 5c: the origin stops answering when the command is ending (result upload)"
-  id=$(submit c2-sleep); wait_for "$id" .state running 90 || true
+  id=$(submit c2-sleep); precond "$id" .state running 90 || return 0
   nap 84
   svc_freeze mlab; nap 30; svc_thaw mlab                # the worker's deadline is 60 s after its last heartbeat (every 15 s): 30 s leaves room
   wait_for "$id" .state succeeded 200 || true
@@ -561,7 +582,7 @@ case_7() {
   CASE_SKIP=""
   only_workers air26
   id=$(submit c2-sleep)
-  wait_for "$id" .state running 90 || true
+  precond "$id" .state running 90 || return 0
   worker_set mlab true
   if [ "$manual" -eq 1 ]; then say ">> move the mouse on air26 now (waiting up to 5 min for owner.active)"
   else fault_on air26 '$HOME/.local/share/wwd/fault/owner-active'; fi
@@ -595,7 +616,7 @@ case_8() {
 case_9() {
   only_workers air26
   say "-- interruptible: the older one is told to stop; the worker reports it cancelled and the origin records who superseded it"
-  a=$(submit c2-sleep-int); wait_for "$a" .state running 90 || true
+  a=$(submit c2-sleep-int); precond "$a" .state running 90 || return 0
   b=$(submit c2-sleep-int)
   wait_for "$a" .state cancelled 60 || true
   check "A state" "$(jf "$a" .state)" cancelled                  # superseded is the state only of a job that was still queued, or let go
@@ -603,7 +624,7 @@ case_9() {
   check "A is marked superseded_by B" "$(jf "$a" .result.superseded_by)" "$b"
   sock mlab POST "/v1/jobs/$b/cancel" >/dev/null
   say "-- not interruptible: the older one runs to its end, its result keeps superseded_by"
-  a=$(submit c2-sleep-noint); wait_for "$a" .state running 90 || true
+  a=$(submit c2-sleep-noint); precond "$a" .state running 90 || return 0
   b=$(submit c2-sleep-noint)
   wait_for "$a" .state succeeded 150 || true
   check "A ran to its end" "$(jf "$a" .state)" succeeded
@@ -718,7 +739,12 @@ precheck
 for run_case in $cases; do
   say ""; say "== case $run_case: $(catalog | awk -F'|' -v c="$run_case" '$1==c {print $2}') =="
   CASE_FAILS=0; CASE_SKIP=""
-  "case_$run_case"
+  # a case that runs a job on air26's worker needs its owner away (case 11 only sends tokens)
+  if [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
+    CASE_SKIP="air26's owner stayed active for 10 minutes ($(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null)): its worker would not take the job"
+  else
+    "case_$run_case"
+  fi
   # the air19 rule holds in every case: it claimed nothing since the matrix began
   if [ "$run_case" != 14 ]; then
     check "air19 claimed nothing during case $run_case" "$(air19_new)" 0

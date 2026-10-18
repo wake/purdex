@@ -73,7 +73,10 @@ else
         w="$wsh/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 &
       fi ;;
     "GET /v1/jobs/"*"/log") : > "$STUB/log-asked"; code=404; resp='no log' ;;      # a mlab with fault.log_upload_fail on has no log of a remote job
+    "GET /v1/facts") if [ -n "${STUB_OWNER_ACTIVE:-}" ]; then resp='{"owner":{"active":true,"reason":"hid","idle_s":3}}'; else resp='{"owner":{"active":false,"reason":"idle"}}'; fi ;;
     "GET /v1/jobs/"*)
+      # STUB_STATES="running queued ...": each look at a job gives the next word (the last one stays), for a case that goes through states
+      if [ -n "${STUB_STATES:-}" ]; then echo x >> "$STUB/states.log"; sn=$(wc -l < "$STUB/states.log" | tr -d ' '); STUB_STATE=$(echo $STUB_STATES | awk -v n="$sn" '{print (n > NF ? $NF : $n)}'); fi
       # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
       n=0; [ ! -f "$STUB/post.log" ] || n=$(wc -l < "$STUB/post.log" | tr -d ' '); if [ "$n" -le 1 ]; then word=task_unknown; else word=args_invalid; fi; word=${STUB_REFUSAL:-$word}
       if [ -d "$STUB/claimed-${path#/v1/jobs/}" ]; then STUB_STATE=claimed; fi      # a job somebody claimed over TCP is claimed
@@ -293,13 +296,37 @@ printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$tmp/wwd/bin/wwd"; chmod +x "
 "$tmp/wwd/bin/wwd" & fake2=$!
 rm -f "$stub"/*.log
 rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATES="running queued queued running queued" C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
 kill -CONT "$fake2" 2>/dev/null || true; kill -KILL "$fake2" 2>/dev/null || true
 [ "$(grep -c "^air26: kill -STOP $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 freezes air26's wwd twice (an exact pid)"; }
 [ "$(grep -c "^air26: kill -CONT $fake2\$" "$stub/ssh.log")" -eq 2 ] || { cat "$stub/ssh.log" >&2; fail "case 2 thaws air26's wwd twice"; }
 if [ -s "$stub/launchctl.log" ] && grep -qv '^list' "$stub/launchctl.log"; then fail "case 2 must not stop or start a service: $(cat "$stub/launchctl.log")"; fi
 has "ok   attempts after the lapse" "case 2"
 has "FAIL state after two lapses: got 'queued', expected 'failed'" "case 2 (the stub's job never fails: the check is made)"
+
+# a job that is never running: the precondition FAILs, nothing is frozen, and no later check passes on it
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a job that never ran must make case 2 exit non-zero"
+has "FAIL precondition not reached: j_stub_c2-sleep .state == running" "case 2 without a running job"
+has "air26 facts.owner:" "the precondition failure says what air26's owner is"
+hasnt "ok   attempts after the lapse" "case 2 without a running job"
+hasnt "ok   lease lapsed" "case 2 without a running job"
+! grep -q "kill -STOP" "$stub/ssh.log" || fail "a job that never ran must not make the script freeze anything"
+
+# air26's owner is using the machine for the whole wait: the cases that need its worker are skipped with the reason, not FAILed
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "a skipped case is not a failure"; }
+has "waiting for air26's owner to be idle" "owner active"
+has "SKIP case 2: air26's owner stayed active" "owner active"
+[ ! -e "$stub/pdx.log" ] || fail "a skipped case must not submit a job: $(cat "$stub/pdx.log")"
+# case 11 sends tokens only: it does not wait for the owner
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 11 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 11 must not wait for the owner"; }
+hasnt "waiting for air26's owner" "case 11"
 
 # the pid of a service must be a number above 1 and the wwd binary: 0 would signal a group
 for badpid in 0 1 "" abc 99999999; do
