@@ -58,21 +58,29 @@ func (m *Module) UnattendedEvents(limit int) ([]team.UnattendedToggle, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("limit %d is not positive", limit)
 	}
-	rows, err := m.store.db.Query(`SELECT at, enabled, by_json FROM unattended_events ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := m.store.db.Query(`SELECT id, at, enabled, by_json FROM unattended_events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []team.UnattendedToggle{}
 	for rows.Next() {
+		var id int64
 		var t team.UnattendedToggle
 		var on int
 		var by string
-		if err := rows.Scan(&t.At, &on, &by); err != nil {
+		if err := rows.Scan(&id, &t.At, &on, &by); err != nil {
 			return nil, err
 		}
 		t.On = on != 0
-		if json.Unmarshal([]byte(by), &t.By) != nil {
+		// A damaged row is left out, not allowed to take the list down (it is a display), and not left out silently either: the
+		// log names its id so it can be found and repaired. A client without a kind or a label is damaged too.
+		if err := json.Unmarshal([]byte(by), &t.By); err != nil {
+			log.Printf("[hostconfig] unattended event %d is damaged, left out of the list: %v", id, err)
+			continue
+		}
+		if blank(t.By.Kind) || blank(t.By.Label) {
+			log.Printf("[hostconfig] unattended event %d is damaged, left out of the list: the client has no kind or no label", id)
 			continue
 		}
 		out = append(out, t)

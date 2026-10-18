@@ -1,11 +1,13 @@
 package hostconfig
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -93,6 +95,62 @@ func TestStore_PutWithRunsInTheTransactionOfThePut(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+// The callback holds the connection of an open transaction, and ending or reshaping that transaction is not its to do: a
+// COMMIT, ROLLBACK, BEGIN, END, SAVEPOINT or RELEASE (alone, after another statement, in any case) is refused as a callback
+// failure, so a write can never be reported as failed with its data committed (NP-6a R2).
+// Mutation gate: hand the callback the bare connection -> the COMMIT goes through and the value stays written -> red.
+func TestStore_PutWithRefusesTransactionControlInTheCallback(t *testing.T) {
+	for _, stmt := range []string{
+		"COMMIT", "commit", "  Commit;", "END", "end transaction", "ROLLBACK", "BEGIN", "BEGIN IMMEDIATE", "SAVEPOINT s", "RELEASE s",
+		`INSERT INTO unattended_events (at, enabled, by_json) VALUES (9, 1, '{}'); COMMIT`,
+		"/* sneaky */ COMMIT", "-- sneaky\nCOMMIT",
+	} {
+		t.Run(stmt, func(t *testing.T) {
+			s, err := OpenStore(":memory:")
+			require.NoError(t, err)
+			t.Cleanup(func() { s.Close() })
+			_, ok, err := s.PutWith("k", 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`1`), nil }, func(q Execer) error {
+				_, err := q.ExecContext(context.Background(), stmt)
+				return err
+			})
+			require.Error(t, err, "the callback ended its transaction")
+			assert.False(t, ok)
+			e, err := s.Get("k")
+			require.NoError(t, err)
+			assert.Nil(t, e.Value, "the value stayed written")
+			assert.Empty(t, eventRows(t, s), "what the callback wrote stayed")
+			// the connection is usable afterwards: the next write goes through
+			_, ok, err = s.Put("k", 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`2`), nil })
+			require.NoError(t, err)
+			assert.True(t, ok)
+		})
+	}
+}
+
+// A record whose client cannot be read is left out of the list, and said so in the log with its id: the list is a display
+// and one damaged row must not take the whole panel down, but it must not vanish without a trace either. `null`, `{}` and a
+// client without a kind or a label are damaged too.
+// Mutation gate: keep an unreadable row -> red; drop it without a log line -> red; accept {} -> red.
+func TestUnattendedEvents_ADamagedRowIsLoggedAndLeftOut(t *testing.T) {
+	m := newTestModule(t)
+	for i, by := range []string{`{"kind":"app","label":"ok"}`, `not json`, `null`, `{}`, `{"kind":"app"}`, `{"label":"x"}`, `{"kind":"app","label":"also ok"}`} {
+		_, err := m.store.db.Exec(`INSERT INTO unattended_events (id, at, enabled, by_json) VALUES (?, ?, 1, ?)`, i+1, (i+1)*10, by)
+		require.NoError(t, err)
+	}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	got, err := m.UnattendedEvents(30)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "also ok", got[0].By.Label)
+	assert.Equal(t, "ok", got[1].By.Label)
+	for _, id := range []string{"2", "3", "4", "5", "6"} {
+		assert.Contains(t, buf.String(), "event "+id+" ", "the damaged row %s was left out without a log line", id)
+	}
 }
 
 // A switch change and its record commit together: a record that cannot be written leaves the switch where it was.

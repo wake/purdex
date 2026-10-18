@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -126,6 +127,46 @@ type Execer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// guardedConn is the Put's connection as its callback gets it. The callback holds an open transaction that is not its own, so a
+// statement that ends or reshapes it (BEGIN, COMMIT, END, ROLLBACK, SAVEPOINT, RELEASE), or a string that carries more than one
+// statement, is refused: with it a write could be reported as failed after its data was committed. A refusal is the
+// callback's failure, so the Put rolls back. (Write the SQL as one statement, with arguments for values.)
+type guardedConn struct{ c *sql.Conn }
+
+var errTxControl = errors.New("a PutWith callback runs inside the Put's transaction: one statement, and no transaction control")
+
+// guardStatement says whether a callback may run query.
+func guardStatement(query string) error {
+	s := strings.TrimSpace(query)
+	s = strings.TrimSpace(strings.TrimSuffix(s, ";"))
+	if s == "" || strings.Contains(s, ";") {
+		return errTxControl
+	}
+	if c := s[0]; !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') { // a comment, or anything that hides the first word
+		return errTxControl
+	}
+	switch strings.ToUpper(strings.FieldsFunc(s, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') })[0]) {
+	case "BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE":
+		return errTxControl
+	}
+	return nil
+}
+
+func (g guardedConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if err := guardStatement(query); err != nil {
+		return nil, err
+	}
+	return g.c.ExecContext(ctx, query, args...)
+}
+
+func (g guardedConn) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if err := guardStatement(query); err != nil {
+		// a *sql.Row cannot be made with an error: ask for a table that is not there, so the Scan fails
+		return g.c.QueryRowContext(ctx, `SELECT 1 FROM "pdx: refused statement in a PutWith callback"`)
+	}
+	return g.c.QueryRowContext(ctx, query, args...)
+}
+
 // PutWith is Put with a callback that runs on the same connection, after the revision matched and the value was built, and
 // before the commit: what it writes is committed with the value or not at all. A callback that fails takes the whole write
 // back and its error is returned as it is (not a *ValidationError). It is not called for a write that lost the revision race.
@@ -169,7 +210,7 @@ func (s *Store) PutWith(key string, baseRevision int64, build func(cur Entry) (j
 		return Entry{}, false, fmt.Errorf("put host config %s: %w", key, err)
 	}
 	if within != nil {
-		if err := within(conn); err != nil {
+		if err := within(guardedConn{conn}); err != nil {
 			return Entry{}, false, fmt.Errorf("put host config %s: %w", key, err) // the deferred ROLLBACK takes the value back too
 		}
 	}
