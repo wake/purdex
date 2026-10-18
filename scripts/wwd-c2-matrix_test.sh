@@ -70,6 +70,7 @@ out=$(dry --case 8);  has "$out" "needs hook fault.zone" "case 8"; has "$out" "t
 out=$(dry --case 9);  has "$out" "superseded_by:" "case 9"; has "$out" "c2-sleep-noint" "case 9"
 has "$out" "A state (expect: cancelled)" "case 9: an interruptible job that is superseded ends cancelled"; hasnt "$out" "A state (expect: superseded)" "case 9"
 has "$out" "A is marked superseded_by B" "case 9"
+has "$out" "until .* .state == cancelled" "case 9 waits for the interruptible job to be cancelled"; hasnt "$out" ".state == superseded" "case 9 must not wait for superseded"
 out=$(dry --case 10); has "$out" "pdx test c2-expire" "case 10"; has "$out" "pdx test exit code (expect: 6)" "case 10"
 out=$(dry --case 11)
 for ip in 100.64.0.2 100.64.0.4 100.64.0.6 100.64.0.1; do has "$out" "$ip:7871/v1/info" "case 11 $ip"; done
