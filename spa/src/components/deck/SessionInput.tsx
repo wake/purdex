@@ -14,11 +14,12 @@ import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
-import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
+import { DestructiveGuard, outcomeMessage, sendNowMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
 import { isWalking, stepHistory } from '../../lib/conversations/input-history'
 import { arrowDir, caretAtEdge, decideArrow, isEmptyBox } from '../../lib/conversations/input-arrows'
+import { sendNowKey } from '../../lib/conversations/send-now-keys'
 import { subscribeRecall } from '../../lib/conversations/draft-recall'
 import { canTakeBack, canTakeBackAll, takeBackAll, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { Capabilities } from '../../lib/conversations/types'
@@ -99,6 +100,10 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const [draft, setDraft] = useState(() => readDraft(dKey) ?? '')
   const [hint, setHint] = useState<OutcomeMessage | null>(null)
   const guard = useRef(new DestructiveGuard())
+  // Send now (D8): Ctrl+Enter, or Ctrl+X then Ctrl+S inside the chord window. The live capability decides: without it Ctrl+Enter is a plain Enter.
+  const canSendNow = adapter.sendNow !== undefined && capabilities?.send_now === 'keys'
+  const chordAt = useRef<number | null>(null)
+  const sendNowOut = useRef(false)
   const [chips, setChips] = useState<readonly Attachment[]>(() => readAttachments(dKey))
   const fileInput = useRef<HTMLInputElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
@@ -202,6 +207,11 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const undo = (id: string) => { takeBackHeld(dKey, queue, id) }
   const tb = useTakeBackState(dKey)
   const interrupt = async () => setHint(outcomeMessage(await queue.interrupt()))
+  const sendNow = async () => {
+    if (!adapter.sendNow || sendNowOut.current) return // one request at a time, however many presses
+    sendNowOut.current = true
+    try { setHint(sendNowMessage(await adapter.sendNow())) } finally { sendNowOut.current = false }
+  }
 
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
@@ -265,6 +275,11 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               onKeyDown={(e) => {
                 // a key pressed while an IME is composing belongs to the IME (Esc cancels the composition, not the draft)
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                if (canSendNow) {
+                  const k = sendNowKey(e, chordAt.current, Date.now())
+                  chordAt.current = k.armedAt
+                  if (k.action === 'send_now') { e.preventDefault(); void sendNow(); return }
+                }
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return }
                 // Esc clears the draft and its attachments (undo for a few seconds); with nothing to clear it does nothing at all
                 if (e.key === 'Escape' && (draft !== '' || uploading.length > 0)) { // what is on screen (hidden chips ride along with a clear, but do not by themselves take an Esc)
