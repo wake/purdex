@@ -584,6 +584,14 @@ test('the same command in two directories is two questions', async ($, on) => {
   expect(entryCalls(r).map((c) => c[5])).toEqual(['a', 'a/../b'])
 })
 
+test('an answer for a known directory is not borrowed by the same command where the directory is unknown', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-all' } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'cd a && go test ./... ; echo x ; go test ./...')
+  // the second go test runs wherever the shell is if the cd failed: it is left as it is
+  expect(r.ran[0].command).toBe("cd a && 'pdx' test go-all ; echo x ; go test ./...")
+  expect(entryCalls(r)).toHaveLength(1)
+})
+
 test('a deny holds for the repeats too, and an advise note is said once', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go test ./...': { action: 'advise', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
   const out = await bash($, 'go test ./... ; go test ./...')

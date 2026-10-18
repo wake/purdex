@@ -389,7 +389,7 @@ async function planEntry($, e, cfg, wasBackground) {
   const firsts = []
   for (const c of cands) if (!firsts.some((f) => f.key === c.key)) firsts.push(c)
   const byKey = new Map(await Promise.all(firsts.slice(0, MAX_ASKS).map(async (c) => [c.key, await askEntry($, cfg, c)])))
-  const answers = cands.map((c) => byKey.get(c.key) ?? null)
+  const answers = cands.map((c) => (c.ok ? byKey.get(c.key) ?? null : null)) // where the directory is unknown, no answer is borrowed
   const notes = []
   const rewrites = []
   let deny = null
