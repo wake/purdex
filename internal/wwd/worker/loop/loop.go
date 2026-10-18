@@ -1,0 +1,398 @@
+// Package loop is the worker's main loop (spec §5 Loop, Capacity, Owner reclaim): every couple of seconds, when the host may take a job,
+// it reads the queued jobs of every origin, scores them (package pick), and claims the best one it can get (package runner). It also
+// keeps the jobs it runs: when the owner takes the machine back it stops them all and gives them back.
+//
+// The loop decides whether to claim; it never decides what a job is (the snapshot's manifest does, package remotejob) or how it ended
+// (package report). Everything it reads about the host comes in through Config as functions, so it is the same code on mlab, air26 and
+// mserv and a test can drive it with a fake clock.
+package loop
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
+	"github.com/wake/purdex/internal/wwd/worker/pick"
+	"github.com/wake/purdex/internal/wwd/worker/report"
+	"github.com/wake/purdex/internal/wwd/worker/runner"
+	"github.com/wake/purdex/internal/wwd/worker/yield"
+)
+
+// Conn is one origin as the loop uses it: claim, start and renew (runner), and the delivery of what came of it (report).
+type Conn interface {
+	runner.Origin
+	report.Sink
+}
+
+// Origin is one queue the worker takes jobs from: this host's own and each peer's.
+type Origin struct {
+	Host   string      // the origin's host id (Candidate.Source, the key of its suspension and of its locks owner)
+	Reader pick.Source // where its queued jobs are read from
+	Conn   Conn
+	Zone   func() wire.Zone // the origin's zone for origin_bonus (pool facts' Derived.PickZone()); nil: unknown
+}
+
+// UsageRecorder is told, after a job's result is delivered and before its workspace goes, how the run went. It only records: it cannot
+// change the outcome (a panic is logged, an error is not even possible).
+type UsageRecorder interface {
+	RecordRun(e runner.Ended)
+}
+
+// Sweeper cleans up what jobs leave outside the worker (a per-job database): given the ids of every job this worker still holds, it removes
+// whatever belongs to any other. A failure is logged and tried again at the next sweep.
+type Sweeper interface {
+	Sweep(ctx context.Context, live []string) error
+}
+
+// Config is what the loop needs from its host.
+type Config struct {
+	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
+	Settings func() wire.WorkerSettings
+	// Facts is this host's latest facts record; nil until the first sample (the loop then takes nothing).
+	Facts func() *wire.Facts
+	// Origins is every queue to read: this host's own first, then the peers'. It is called once a round, so a peer that comes and goes
+	// is followed.
+	Origins func() []Origin
+	// Labels are this host's labels (a job's must be a subset).
+	Labels func() []string
+	Locks  *locks.Table
+	Ctl    *runner.Controller
+	Report *report.Reporter
+	// Warm says the repo clone and its dependency cache are here (warm_bonus); nil: nothing is warm.
+	Warm func(wire.Job) bool
+	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none.
+	SpeedFactor float64
+	Estimate    func(wire.Job) float64
+	// Usage is told how each run went (see UsageRecorder); nil: nothing is recorded.
+	Usage UsageRecorder
+	// Sweepers are run every SweepEvery with the ids of the jobs the worker holds: the ones it runs, and Held() (quarantined ones, whose
+	// leftovers must stay until they are proven gone).
+	Sweepers []Sweeper
+	Held     func() []string
+	// SweepEvery is the pause between two sweeps (a minute).
+	SweepEvery time.Duration
+
+	// FactsMaxAge is how old this host's facts may be for the worker to go on taking jobs (30 s: six samples); a sampler that has stopped
+	// must not leave the worker claiming against a headroom nobody has measured for a while.
+	FactsMaxAge time.Duration
+	// Interval is the pause between two rounds (2 s). Settle is the pause after a claim before the next one, so that the facts have
+	// seen the job (the headroom they carry is only true once the job's processes are in a sample); two facts samples by default.
+	Interval, Settle time.Duration
+	// StopTimeout is how long one stop of the running jobs waits (an owner is waiting for the machine); a job that has not ended by
+	// then is asked again at the next round. ShutdownGrace is the same for a worker that is ending.
+	StopTimeout, ShutdownGrace time.Duration
+	// MaxTries is how many candidates one round tries to claim before it waits for the next (a 409 goes to the next candidate).
+	MaxTries int
+	Now      func() time.Time
+	Logf     func(format string, args ...any)
+}
+
+// Loop is the worker.
+type Loop struct {
+	cfg Config
+	y   *yield.Yielder
+	// ownerRule is whether y was made for a host with an owner rule
+	ownerRule bool
+
+	mu        sync.Mutex
+	running   map[string]*runner.Running
+	lastClaim time.Time
+	lastSweep time.Time
+}
+
+// New returns a Loop; the zero values of the durations are the defaults.
+func New(cfg Config) *Loop {
+	if cfg.Interval <= 0 {
+		cfg.Interval = 2 * time.Second
+	}
+	if cfg.FactsMaxAge <= 0 {
+		cfg.FactsMaxAge = 6 * time.Duration(wire.SampleIntervalS) * time.Second
+	}
+	if cfg.Settle <= 0 {
+		cfg.Settle = 2 * time.Duration(wire.SampleIntervalS) * time.Second
+	}
+	if cfg.SweepEvery <= 0 {
+		cfg.SweepEvery = time.Minute
+	}
+	if cfg.StopTimeout <= 0 {
+		cfg.StopTimeout = 60 * time.Second
+	}
+	if cfg.ShutdownGrace <= 0 {
+		cfg.ShutdownGrace = 30 * time.Second
+	}
+	if cfg.MaxTries <= 0 {
+		cfg.MaxTries = 8
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = log.Printf
+	}
+	return &Loop{cfg: cfg, running: map[string]*runner.Running{}}
+}
+
+// Running is how many jobs the worker is running now.
+func (l *Loop) Running() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked()
+	return len(l.running)
+}
+
+func (l *Loop) pruneLocked() {
+	for k, r := range l.running {
+		select {
+		case <-r.Done():
+			delete(l.running, k)
+		default:
+		}
+	}
+}
+
+// Run does rounds until ctx ends, then stops what is running (each job is given back with the lease alive) and returns.
+func (l *Loop) Run(ctx context.Context) {
+	// The jobs do not run under ctx: when it ends they are stopped one by one and released, which needs their leases and their
+	// connections to be alive.
+	jobCtx, endJobs := context.WithCancel(context.WithoutCancel(ctx))
+	defer endJobs()
+	t := time.NewTicker(l.cfg.Interval)
+	defer t.Stop()
+	for {
+		l.Round(ctx, jobCtx)
+		l.sweepIfDue(ctx)
+		select {
+		case <-ctx.Done():
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), l.cfg.ShutdownGrace)
+			l.stopAll(sctx, "the worker is ending")
+			cancel()
+			l.abandon(endJobs)
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// Round is one pass: follow the owner, and take a job when there is room for one. ctx ends the round; jobCtx is what claimed jobs run under.
+func (l *Loop) Round(ctx, jobCtx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	st := l.cfg.Settings()
+	var facts *wire.Facts
+	if l.cfg.Facts != nil {
+		facts = l.cfg.Facts()
+	}
+	// owner_rule can be changed while the worker runs (PUT /v1/worker): a yielder made for the old setting would go on yielding to an
+	// owner nobody watches any more, or take jobs without a first reading, so it is made again when the setting flips
+	if rule := st.OwnerRule != ""; l.y == nil || rule != l.ownerRule {
+		l.y, l.ownerRule = yield.New(l.cfg.Now, rule), rule
+	}
+	var owner *wire.OwnerState
+	if facts != nil {
+		owner = facts.Owner
+	}
+	d, changed := l.y.Observe(owner)
+	if changed {
+		l.cfg.Logf("worker: owner yield %v (%s)", d.Reclaim, d.Reason)
+	}
+	if d.Reclaim {
+		sctx, cancel := context.WithTimeout(ctx, l.cfg.StopTimeout)
+		l.stopAll(sctx, "the owner is using the machine ("+d.Reason+")")
+		cancel()
+		return
+	}
+	if !st.Enabled || !d.MayClaim || facts == nil {
+		return
+	}
+	l.mu.Lock()
+	l.pruneLocked()
+	n, last := len(l.running), l.lastClaim
+	l.mu.Unlock()
+	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 {
+		return
+	}
+	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
+	// claim, and it must not be old (a sampler that has stopped leaves the last "there is room" standing).
+	// A sample "from the future" (the clock was set back after it was taken) is as little to be trusted as an old one.
+	if age := l.cfg.Now().Sub(facts.At); age < 0 || age > l.cfg.FactsMaxAge || facts.At.Sub(last) < l.cfg.Settle {
+		return
+	}
+	l.claimOne(ctx, jobCtx)
+}
+
+// stopAll stops every running job at once and waits for them (Running.Stop: the command ends, Finish gives the claim back, the lease is
+// kept until then). One that cannot be proven stopped is logged; it is not given back and stays tracked until it ends.
+func (l *Loop) stopAll(ctx context.Context, why string) {
+	l.mu.Lock()
+	jobs := make([]*runner.Running, 0, len(l.running))
+	for _, r := range l.running {
+		jobs = append(jobs, r)
+	}
+	l.mu.Unlock()
+	if len(jobs) == 0 {
+		return
+	}
+	l.cfg.Logf("worker: stopping %d job(s): %s", len(jobs), why)
+	var wg sync.WaitGroup
+	for _, r := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := r.Stop(ctx); err != nil {
+				l.cfg.Logf("worker: stop %s/%s: %v", r.Source(), r.ID(), err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (l *Loop) claimOne(ctx, jobCtx context.Context) {
+	origins := l.cfg.Origins()
+	byHost := make(map[string]Origin, len(origins))
+	srcs := make([]pick.Source, 0, len(origins))
+	for _, o := range origins {
+		byHost[o.Host] = o
+		srcs = append(srcs, o.Reader)
+	}
+	cands, errs := pick.Collect(ctx, srcs, func(host string) wire.Zone {
+		if o := byHost[host]; o.Zone != nil {
+			return o.Zone()
+		}
+		return ""
+	})
+	for host, err := range errs {
+		l.cfg.Logf("worker: reading the queue of %s: %v", host, err)
+	}
+	env := pick.Env{
+		Now: l.cfg.Now(), Labels: l.cfg.Labels(), SpeedFactor: l.cfg.SpeedFactor, Estimate: l.cfg.Estimate, Warm: l.cfg.Warm,
+		Locked: func(keys []string) bool { return len(l.cfg.Locks.Conflicts(keys)) > 0 },
+	}
+	if l.cfg.Report != nil {
+		env.Suspended = l.cfg.Report.Suspended
+	}
+	ranked := pick.Rank(cands, env)
+	tries := 0
+	for _, sc := range ranked {
+		if tries >= l.cfg.MaxTries || ctx.Err() != nil {
+			return
+		}
+		tries++
+		o, ok := byHost[sc.Source]
+		if !ok {
+			continue
+		}
+		r := l.cfg.Ctl.Start(jobCtx, o.Conn, sc, l.finish(byHost))
+		if r.Claimed() {
+			l.mu.Lock()
+			l.running[sc.Source+"/"+sc.Job.ID] = r
+			l.lastClaim = l.cfg.Now()
+			l.mu.Unlock()
+			return
+		}
+		// not taken (someone else was first, the job is held, its locks are busy, the origin did not answer): the next candidate
+		if e := r.Ended(); e.Err != nil {
+			l.cfg.Logf("worker: %s/%s not claimed: %v", sc.Source, sc.Job.ID, e.Err)
+		}
+	}
+}
+
+// finish is the runner.Finish of one job: the delivery (report), then the usage record.
+func (l *Loop) finish(byHost map[string]Origin) runner.Finish {
+	deliver := func(context.Context, runner.Ended) {}
+	if l.cfg.Report != nil {
+		deliver = l.cfg.Report.Finish(func(source string) report.Sink {
+			if o, ok := byHost[source]; ok {
+				return o.Conn
+			}
+			return nil
+		})
+	}
+	return func(ctx context.Context, e runner.Ended) {
+		deliver(ctx, e)
+		l.record(e)
+	}
+}
+
+func (l *Loop) record(e runner.Ended) {
+	if l.cfg.Usage == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			l.cfg.Logf("worker: recording the run of %s: %v", e.Job.ID, fmt.Sprint(p))
+		}
+	}()
+	l.cfg.Usage.RecordRun(e)
+}
+
+func (l *Loop) sweepIfDue(ctx context.Context) {
+	if len(l.cfg.Sweepers) == 0 || ctx.Err() != nil {
+		return
+	}
+	l.mu.Lock()
+	due := l.cfg.Now().Sub(l.lastSweep) >= l.cfg.SweepEvery
+	if due {
+		l.lastSweep = l.cfg.Now()
+	}
+	l.mu.Unlock()
+	if due {
+		l.Sweep(ctx)
+	}
+}
+
+// Sweep runs every Sweeper once with the ids of the jobs this worker holds.
+func (l *Loop) Sweep(ctx context.Context) {
+	l.mu.Lock()
+	l.pruneLocked()
+	live := make([]string, 0, len(l.running))
+	for _, r := range l.running {
+		live = append(live, r.ID())
+	}
+	l.mu.Unlock()
+	if l.cfg.Held != nil {
+		live = append(live, l.cfg.Held()...)
+	}
+	for _, sw := range l.cfg.Sweepers {
+		if err := sw.Sweep(ctx, live); err != nil {
+			l.cfg.Logf("worker: sweep: %v", err)
+		}
+	}
+}
+
+// abandon is what is left of a worker that is ending when the grace has passed: the jobs that did not stop in time lose their leases'
+// context (their commands are ended, they are not given back, their leases lapse at the origins) and are named in the log. A worker
+// must not wait for ever, but it must not leave a command running behind it either.
+func (l *Loop) abandon(endJobs context.CancelFunc) {
+	l.mu.Lock()
+	l.pruneLocked()
+	left := make([]*runner.Running, 0, len(l.running))
+	for _, r := range l.running {
+		left = append(left, r)
+	}
+	l.mu.Unlock()
+	if len(left) == 0 {
+		return
+	}
+	for _, r := range left {
+		l.cfg.Logf("worker: %s/%s did not stop within the shutdown grace; its commands are ended and the origin gets the job back when its lease lapses", r.Source(), r.ID())
+	}
+	endJobs()
+	deadline := time.NewTimer(killWait)
+	defer deadline.Stop()
+	for _, r := range left {
+		select {
+		case <-r.Done():
+		case <-deadline.C:
+			l.cfg.Logf("worker: %s/%s still had a command running when the worker ended", r.Source(), r.ID())
+			return
+		}
+	}
+}
+
+// killWait is how long a worker that is ending waits for the commands it ended to be gone (TERM, then KILL after 10 s).
+const killWait = 15 * time.Second
