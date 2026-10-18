@@ -178,6 +178,9 @@ func TestAlertListValidates(t *testing.T) {
 		{"empty key", `{"host":"mlab","alerts":[` + strings.Replace(a, `"key":"k"`, `"key":""`, 1) + `]}`, false},
 		{"last before since", `{"host":"mlab","alerts":[` + strings.Replace(a, `"last":"2026-10-19T04:10:00+08:00"`, `"last":"2026-10-19T03:00:00+08:00"`, 1) + `]}`, false},
 		{"unknown field", `{"host":"mlab","alerts":[],"x":1}`, false},
+		// cleared_at is when it stopped: not before the last time the rule still held (R1)
+		{"cleared between since and last", `{"host":"mlab","alerts":[` + strings.Replace(a, `"cleared_at":null`, `"cleared_at":"2026-10-19T04:05:00+08:00"`, 1) + `]}`, false},
+		{"cleared at last", `{"host":"mlab","alerts":[` + strings.Replace(a, `"cleared_at":null`, `"cleared_at":"2026-10-19T04:10:00+08:00"`, 1) + `]}`, true},
 	} {
 		_, err := Decode[AlertList]([]byte(c.js))
 		if (err == nil) != c.ok {
@@ -200,6 +203,12 @@ func TestAlertEvent(t *testing.T) {
 	}
 	if _, err := Decode[Event]([]byte(`{"type":"alert","data":{"host":"mlab","alerts":[]}}`)); err == nil {
 		t.Fatal("the alert event is only a hint: a list in it must be refused")
+	}
+	// it must say which host's list to read again (R1)
+	for _, js := range []string{`{"type":"alert","data":{"host":""}}`, `{"type":"alert","data":{}}`} {
+		if _, err := Decode[Event]([]byte(js)); err == nil {
+			t.Fatalf("an alert event without a host was accepted: %s", js)
+		}
 	}
 }
 

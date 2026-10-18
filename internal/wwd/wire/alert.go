@@ -120,8 +120,8 @@ func (a Alert) Validate() error {
 	if a.Last.Before(a.Since) {
 		return fmt.Errorf("alert: last is before since")
 	}
-	if a.ClearedAt != nil && a.ClearedAt.Before(a.Since) {
-		return fmt.Errorf("alert: cleared_at is before since")
+	if a.ClearedAt != nil && a.ClearedAt.Before(a.Last) {
+		return fmt.Errorf("alert: cleared_at is before last, the latest time its rule still held")
 	}
 	return nil
 }
@@ -147,4 +147,11 @@ func (l AlertList) Validate() error {
 // AlertEvent is the `alert` SSE event: only a hint that Host's list changed. The reader reads the list again.
 type AlertEvent struct {
 	Host string `json:"host"`
+}
+
+func (e AlertEvent) Validate() error {
+	if e.Host == "" {
+		return fmt.Errorf("alert event: missing host")
+	}
+	return nil
 }
