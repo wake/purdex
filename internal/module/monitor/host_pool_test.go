@@ -17,10 +17,13 @@ import (
 type ownHost struct {
 	closed  bool
 	cpuSeen int
+	reads   uint64
 }
 
+// CollectCPU counts up, so that two reads always have a delta (a constant counter would read "pending" for ever).
 func (o *ownHost) CollectCPU(context.Context) (HostCPUSample, error) {
-	return HostCPUSample{Idle: 1, Total: 2}, nil
+	o.reads++
+	return HostCPUSample{Idle: 10 * o.reads, Total: 20 * o.reads}, nil
 }
 func (o *ownHost) CollectMemory(context.Context) (HostMemorySample, error) {
 	return HostMemorySample{TotalBytes: 1000, UsedBytes: 100}, nil
