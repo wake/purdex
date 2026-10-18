@@ -114,15 +114,19 @@ func HostStillValid(e Entry, h HostNow) bool {
 	return h.Reference && sameFingerprint(h.ReferenceFingerprint, e.Fingerprint)
 }
 
-// SameHostOnly is condition (4): an entry whose host meets neither part of (3) is answered only to a submission from that host.
-func SameHostOnly(e Entry, q Query) bool { return e.Host != "" && e.Host == q.Host }
+// SameHostOnly is condition (4): an entry whose host has no standing for the task (it holds no earned label and is not the
+// reference) is answered only to a submission from that host. A host that does have standing but whose fingerprint no longer
+// matches is not here: its entries are stale, not private, so they answer nobody.
+func SameHostOnly(e Entry, q Query, h HostNow) bool {
+	return !h.Earned && !h.Reference && e.Host != "" && e.Host == q.Host
+}
 
-// Answers says whether the entry answers the submission: (1) and (2) always, and then (3), or (4) when (3) does not hold.
+// Answers says whether the entry answers the submission: (1) and (2) always, and then (3), or (4) when the host has no standing.
 func Answers(e Entry, q Query, h HostNow) bool {
 	if !SameWork(e, q) || !HostCoversLabels(h, q.Labels) {
 		return false
 	}
-	return HostStillValid(e, h) || SameHostOnly(e, q)
+	return HostStillValid(e, h) || SameHostOnly(e, q, h)
 }
 
 // sameFingerprint is equality of two fingerprints; an empty fingerprint never matches (a host that reported nothing proves nothing).

@@ -132,8 +132,28 @@ func TestUnqualifiedHostAnswersOnlyItself(t *testing.T) {
 	if !Answers(e, q, h) {
 		t.Fatal("an unqualified host's result did not answer itself")
 	}
-	if SameHostOnly(Entry{}, Query{}) {
+	if SameHostOnly(Entry{}, Query{}, HostNow{}) {
 		t.Fatal("empty hosts are not the same host")
+	}
+}
+
+// A host with standing whose fingerprint drifted answers nobody, not even itself: its entries are stale, not private.
+func TestDriftedEarnedHostDoesNotAnswerItself(t *testing.T) {
+	h := validHost()
+	h.EarnedFingerprint = map[string]string{"go": "1.26.1"}
+	q := query()
+	q.Host = "mserv"
+	if Answers(entry(), q, h) {
+		t.Fatal("an earned host that drifted answered itself")
+	}
+}
+
+func TestDriftedReferenceHostDoesNotAnswerItself(t *testing.T) {
+	h := HostNow{Labels: []string{"os:linux"}, Reference: true, ReferenceFingerprint: map[string]string{"go": "1.27.0"}}
+	q := query()
+	q.Host = "mserv"
+	if Answers(entry(), q, h) {
+		t.Fatal("a reference host that drifted answered itself")
 	}
 }
 
