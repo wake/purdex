@@ -34,9 +34,10 @@ type swapPoint struct {
 // and holds the history the debounce and the swap-growth rule need. One value
 // belongs to one goroutine.
 type LinuxPressure struct {
-	level   int
-	pending int // the level waiting to be taken, 0 when none
-	since   time.Time
+	level   int // 0: unknown
+	pending int // the level waiting to be taken, valid while waiting
+	waiting bool
+	since   time.Time // when pending was first called for
 	swap    []swapPoint
 }
 
@@ -65,35 +66,35 @@ func (p *LinuxPressure) target(now time.Time, totalMB, availMB, swapUsedMB int, 
 		return 4
 	case warn:
 		return 2
+	case psi == nil:
+		// memory and swap can show trouble without PSI but cannot prove calm: with
+		// no production-slice pressure to read (cgroup v1, PSI off) the level is unknown
+		return 0
 	}
 	return 1
 }
 
 // Update takes a reading and returns the level: a worse one is taken after it has
 // held for riseAfter, a better one after fallAfter, so a single spike moves
-// nothing. The first reading sets the level at once.
+// nothing. Each new level has its own clock: the wait starts over whenever the
+// level the readings call for changes. Unknown (0) and a calm first reading
+// are taken at once; a first reading that is already 2 or 4 waits like any
+// rise, the level staying unknown (0) until it has held.
 func (p *LinuxPressure) Update(now time.Time, totalMB, availMB, swapUsedMB int, psi *wire.PSI) int {
 	t := p.target(now, totalMB, availMB, swapUsedMB, psi)
-	if p.level == 0 {
-		p.level = t
+	if t == p.level || t == 0 || (p.level == 0 && t == 1) {
+		p.level, p.waiting = t, false
 		return p.level
 	}
-	if t == p.level {
-		p.pending = 0
-		return p.level
+	if !p.waiting || p.pending != t {
+		p.pending, p.since, p.waiting = t, now, true
 	}
-	up := t > p.level
-	// the wait runs while the readings keep pointing the same way
-	if p.pending == 0 || (p.pending > p.level) != up {
-		p.since = now
-	}
-	p.pending = t
 	wait := fallAfter
-	if up {
+	if t > p.level {
 		wait = riseAfter
 	}
 	if now.Sub(p.since) >= wait {
-		p.level, p.pending = t, 0
+		p.level, p.waiting = t, false
 	}
 	return p.level
 }

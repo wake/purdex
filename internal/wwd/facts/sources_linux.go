@@ -5,6 +5,7 @@ package facts
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -121,6 +122,10 @@ func linuxDisks() ([]RawDisk, error) {
 	}
 	paths := []string{"/"}
 	if home, err := os.UserHomeDir(); err == nil && home != "/" {
+		// statfs follows a symlinked home, so the mount is looked up for where it points
+		if real, err := filepath.EvalSymlinks(home); err == nil {
+			home = real
+		}
 		paths = append(paths, home)
 	}
 	var out []RawDisk

@@ -86,7 +86,9 @@ func TestLinuxPressureThresholds(t *testing.T) {
 		want        int
 	}{
 		{"idle", 12800, 0, &wire.PSI{}, 1},
-		{"no psi at all, plenty of memory", 12800, 0, nil, 1},
+		{"no psi at all, plenty of memory: unknown, not calm", 12800, 0, nil, 0},
+		{"no psi, but available is low: still a warning", 3200, 0, nil, 2},
+		{"no psi, but swap is over: still a warning", 12800, 600, nil, 2},
 		{"some10 at the line", 12800, 0, &wire.PSI{Some10: 10}, 2},
 		{"some10 below it", 12800, 0, &wire.PSI{Some10: 9.9}, 1},
 		{"full10 at 1", 12800, 0, &wire.PSI{Full10: 1}, 2},
@@ -99,9 +101,10 @@ func TestLinuxPressureThresholds(t *testing.T) {
 	}
 	for _, c := range cases {
 		var p LinuxPressure
-		lv, _ := feed(&p, total, c.avail, c.swap, c.psi, 1, lt0)
-		if lv[0] != c.want {
-			t.Errorf("%s: level %d, want %d", c.name, lv[0], c.want)
+		// three readings 5 s apart: a worse level has held 10 s by the third
+		lv, _ := feed(&p, total, c.avail, c.swap, c.psi, 3, lt0)
+		if lv[2] != c.want {
+			t.Errorf("%s: level %d, want %d (%v)", c.name, lv[2], c.want, lv)
 		}
 	}
 }
