@@ -69,6 +69,20 @@ What the install does, all of it idempotent (a second run changes nothing and re
    A path counts only if it is a directory you own that holds a `.git`; otherwise that label is simply not
    given (no error). The check runs with every facts record, so a clone that appears or disappears changes
    the labels (a `labels` event) within 5 s. `GET /v1/info` shows the labels and the toolchain fingerprint;
+   **Tools outside the default search path** (for example a toolchain under `~/Assist`): add a `[tools]` table to
+   `config.toml` and restart wwd. The directories go in front of the default tool directories, for the facts' tool probe and
+   for every job's PATH (one list, so a tool the facts report is a tool a job finds). Install does not need to run again: the
+   jobs' PATH is built at start, not read from the unit's `Environment=PATH`. A directory that does not exist on the host is
+   skipped, with one line in the log:
+
+   ```toml
+   [tools]
+   extra_path = ["~/Assist/toolchains.noindex/node/bin"]
+   ```
+
+   **mserv** needs exactly this entry (node v24.14.0 lives there; without it a job cannot run `node`, and the at-inwin
+   `UUIDProcessingTest` fails). After editing, restart wwd (`sudo systemctl restart wwd`, after the release gate and the
+   guardian's go-ahead) and check that the host's facts record shows `tools.node`;
 3. copies the token (above);
 4. writes the service definition — `~/Library/LaunchAgents/gs.wake.wwd.plist` (`KeepAlive`, `RunAtLoad`, log
    in `~/.local/share/wwd/wwd.log`, a PATH that finds go, node, pnpm and PHP) or, on mserv,
