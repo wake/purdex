@@ -347,6 +347,35 @@ func TestPoolSource_StaleFactsFallBackToSSHAndRecover(t *testing.T) {
 	exclusive("recovered")
 }
 
+// Freshness is judged by this daemon's own clock: a peer whose clock is minutes behind (or ahead) still serves while its facts keep
+// changing, and stops serving when they stop changing, whatever the stamps say.
+func TestPoolSource_FreshnessIsByWhenTheStampLastChanged(t *testing.T) {
+	r, fp := newPoolRig(t)
+	skew := -5 * time.Minute // air26's clock is five minutes behind
+	air := func() wire.Peer { return peerOK("air26", r.fc.Now().Add(skew), 50, 1, wire.ZoneNormal) }
+	self := func() wire.Peer { return peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal) }
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), air()}}, nil)
+	r.start()
+	r.tick()
+	r.tick()
+	for i := 0; i < 8; i++ { // a minute of facts that keep moving
+		r.fc.Advance(5 * time.Second)
+		fp.set(wire.Pool{Peers: []wire.Peer{self(), air()}}, nil)
+		r.tick()
+		assert.True(t, r.m.hosts["peer"].poolOwned, "a behind clock does not stop the pool serving a host whose facts move")
+		assert.False(t, r.hasSession("peer"))
+	}
+	frozen := air()
+	for i := 0; i < 6; i++ { // the stamp stops changing
+		r.fc.Advance(5 * time.Second)
+		fp.set(wire.Pool{Peers: []wire.Peer{self(), frozen}}, nil)
+		r.tick()
+	}
+	r.tick()
+	assert.True(t, r.hasSession("peer"), "a stamp that has not changed for 20 s is stale, the stamp's own age aside")
+	assert.False(t, r.m.hosts["peer"].poolOwned)
+}
+
 // wwd says reachable but has no facts yet (a peer just reached): that is not a reading either.
 func TestPoolSource_ReachableWithoutFactsIsNotServed(t *testing.T) {
 	r, fp := newPoolRig(t)
