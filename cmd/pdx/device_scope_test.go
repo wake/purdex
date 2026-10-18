@@ -120,6 +120,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
 		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
+		{"PUT", "/api/pool/hosts/air26/worker"}, {"POST", "/api/pool/hosts/air26/exceptions"}, {"DELETE", "/api/pool/hosts/air26/exceptions/pkg"}, // changing a host's worker is the admin's, not a phone's
 		{"POST", "/api/journal"}, {"PUT", "/api/journal/pin"}, {"GET", "/api/journal/confirm"}, {"DELETE", "/api/journal/confirm"}, {"PUT", "/api/journal/members"}, {"GET", "/api/journal/other"}, // only the five journal routes
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)

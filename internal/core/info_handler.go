@@ -133,7 +133,8 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "watch.v1") // GET /api/watch/status, /events, /unhandled, POST /api/watch/ack, the watch.changed and watch.events pushes
 	}
 	if c.moduleReady("pool") {
-		out = append(out, "pool.v1") // GET /api/pool/hosts, GET /api/pool/facts/history (the resource pool from the local wwd; 503 wwd_unavailable while wwd is not running)
+		out = append(out, "pool.v1")         // GET /api/pool/hosts, GET /api/pool/facts/history (the resource pool from the local wwd; 503 wwd_unavailable while wwd is not running)
+		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
 	}
 	if c.moduleReady("gate") {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
