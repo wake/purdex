@@ -148,6 +148,16 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 - Two edits on two hosts within one refresh window: the later stamp wins as a whole, and the other edit is lost. This
   is acceptable for one user editing in one place. The persona page says "saved on <host>, syncs to other hosts within
   30 s".
+- **Codes are never lost (decided 10-19 for NP-2).** A code is never deleted (L5), so a newer collection that lacks a
+  code the local one has simply never learned of it. For example, a persona created on host A that has not synced yet
+  when host B saves an edit.
+  - The daemon applying the newer collection keeps each local-only persona **unchanged** (not retired: the user may
+    have just created it). It stores the merged result under a **new local stamp**, so that the merge propagates back.
+  - The other host then fetches the merged set, finds nothing missing, and stores it with that stamp. Both converge in
+    at most two refreshes.
+  - For a code both collections have, the newer collection's content wins, retired state included.
+  - The App still reads one whole collection, the highest stamp (§9.2). This union happens only in the daemon, and only
+    for codes, which can never be deleted.
 - The peer route answers only paired hosts. A host that has not answered for 5 minutes is skipped, as in v1.
 
 ### 4.4 The pool in the daemon

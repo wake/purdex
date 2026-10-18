@@ -112,6 +112,7 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "push.badge_bg.v1") // a card that closes sends the phones with prefs.badge_push a background badge push (apns-push-type background); same condition as push.v1
 	}
 	if c.moduleReady("conversation") {
+		out = append(out, "sessions.send_now.v1")    // POST /api/sessions/{code}/send-now {client_msg_id, expected_tmux_instance}: Claude Code's send now (Ctrl+X Ctrl+S) for its queued messages; answers sent_now / refused + reason / unknown; conversation capabilities send_now: "keys"; only while the conversation module runs
 		out = append(out, "conversations.stages.v1") // conversation.stages WS frames and stages[] in conversation.snapshot: where each submitted client_msg_id is (received / filled / entered / queued / read / failed / unknown / recalled); only while the conversation module runs
 	}
 	if c.moduleReady("devices") {
@@ -144,6 +145,9 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("gate") {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
+	}
+	if c.moduleReady("hostconfig") {
+		out = append(out, "personas.v1") // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
 	}
 	return out
 }

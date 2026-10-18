@@ -2,6 +2,7 @@ package hostconfig
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -466,6 +467,30 @@ func TestPersonas_ABrokenWebPIsRefused(t *testing.T) {
 			assert.Contains(t, rr.Body.String(), "avatar_data")
 		})
 	}
+}
+
+// The real module registered in a real core, asked through GET /api/info (the lesson of fleet.v1): personas.v1 is declared
+// while the module is up and gone after Stop. Mutation gate: drop Status() or answer ready false -> red.
+func TestInfo_AnnouncesPersonasV1ForTheRealModule(t *testing.T) {
+	m := New()
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}, Registry: core.NewServiceRegistry()})
+	c.AddModule(m)
+	require.NoError(t, m.Init(c))
+	t.Cleanup(func() { _ = m.Close() })
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	caps := func() []any {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/info", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+		list, _ := body["capabilities"].([]any)
+		return list
+	}
+	require.Contains(t, caps(), "personas.v1")
+	require.NoError(t, m.Stop(context.Background()))
+	require.NotContains(t, caps(), "personas.v1")
 }
 
 // Mutation gate: refuse the Reader on the module -> the registry value does not satisfy personas.Reader -> red.

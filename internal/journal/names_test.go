@@ -3,6 +3,8 @@ package journal
 import (
 	"testing"
 	"time"
+
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 func TestDisplayName(t *testing.T) {
@@ -20,6 +22,29 @@ func TestDisplayName(t *testing.T) {
 		if got := DisplayName(c.in); got != c.want {
 			t.Errorf("DisplayName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// A persona's code is a pool name for the journal too, shown by its display name; a retired one still is; the built-in
+// names stay as they were.
+// Mutation gate: capitalise the code instead of reading the display name -> "Hiro" for "Hiro Tanaka" -> red.
+func TestDisplayName_PersonasShowTheirDisplayName(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	ipeers.SetPool(map[string]string{"hiro": "Hiro Tanaka", "anna": "Anna K.", "adam": "Adam"}, []string{"hiro"})
+	for _, c := range []struct{ in, want string }{
+		{"mlab/purdex-3f-hiro", "Hiro Tanaka"},
+		{"purdex-3f-hiro", "Hiro Tanaka"},
+		{"mlab/purdex-3f-anna", "Anna K."}, // retired: not picked, still shown
+		{"mlab/purdex-3f-adam", "Adam"},
+		{"purdex-88-b8", "purdex-88-b8"},
+		{"mlab/purdex-3f-kenji", "purdex-3f-kenji"}, // not listed in this pool: an ordinary name
+	} {
+		if got := DisplayName(c.in); got != c.want {
+			t.Errorf("DisplayName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := RewritePeerPrefixes("[mlab/purdex-3f-hiro → mlab/purdex-88-b8] hi"); got != "[Hiro Tanaka → purdex-88-b8] hi" {
+		t.Errorf("RewritePeerPrefixes = %q", got)
 	}
 }
 

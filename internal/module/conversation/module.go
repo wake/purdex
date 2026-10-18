@@ -82,6 +82,7 @@ type Module struct {
 	paneLocks      sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
 	keysSeen       keysLedger   // ids typed blind (no mod)
 	recalls        recallLedger // answers of recall requests that pressed Up (K-1b)
+	sendNows       recallLedger // answers of send-now requests that pressed the keys (MS2-2), keyed like recalls
 	stages         stageLedger  // where each sent client_msg_id is on its way to the transcript
 	ready          atomic.Bool  // Init succeeded (Status)
 	afterStageRead func()       // test seam: runs in the stage observer after it read the items, before it compares them
@@ -217,8 +218,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/submit", m.handleSubmit) // through the session's mod (U3-0b); not a device route
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/interrupt", m.handleInterrupt)
-	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit) // typing into Claude Code (K-1a-2); a device route
-	mux.HandleFunc("POST /api/sessions/{code}/recall", m.handleSessionRecall) // take the queued messages back into the app (K-1b); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit)    // typing into Claude Code (K-1a-2); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/recall", m.handleSessionRecall)    // take the queued messages back into the app (K-1b); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/send-now", m.handleSessionSendNow) // Claude Code's send now: its queued messages go out at once (MS2-2); a device route
 }
 
 // Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.
