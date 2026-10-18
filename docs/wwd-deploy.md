@@ -162,7 +162,12 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     `v: 1` with none of the new fields, so a host still on the old build is never shown a field it would reject. A reader takes
     `404` on `/v1/alerts` as "no alerts yet" (an old host), and a facts record or info of a proto it does not know as an
     unreachable peer.
-  - *A later release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer is reachable and reports
+  - **The writers ship one release after the readers.** The readers (the wire contract, the v5 migration, `GET /v1/alerts`) go out
+    first and are deployed on all four wwds **and both Purdex daemons**; only when that release is everywhere does the release with the
+    writers go out (the signals, the alerts, the gate's users). The gate cannot do this alone: it sees the peer wwds, not the Purdex
+    daemon that reads the same host's wwd, and a Purdex daemon upgraded last would meet a v 2 facts record it cannot read. A writer PR
+    must not be merged or deployed in the same release as the reader PRs.
+  - *The writers' release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer is reachable and reports
     `proto >= 2` (a peer that is down holds the gate shut, whatever its last info said). Until then `POST /v1/exceptions` refuses
     `allow` and `flags` with 400, so no writer can show them to a proto 1 reader.
     Check before relying on it: `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` on each host shows

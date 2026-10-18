@@ -36,8 +36,7 @@ const usageIndexDDL = `CREATE INDEX IF NOT EXISTS job_usage_ended ON job_usage (
 
 // startsDDL (v5): one row per wwd run (spec §13.1): when it started, which version, and how the run before it ended if that is known
 // (” when not). The rule "starts in the last hour" reads it. This PR makes the table; the start record is written by 8a-0.
-const startsDDL = `CREATE TABLE IF NOT EXISTS wwd_starts (id INTEGER PRIMARY KEY AUTOINCREMENT, started_ms INTEGER NOT NULL, version TEXT NOT NULL, prev_exit TEXT NOT NULL DEFAULT '')`
-const startsIndexDDL = `CREATE INDEX IF NOT EXISTS wwd_starts_started ON wwd_starts (started_ms)`
+const startsDDL = `CREATE TABLE IF NOT EXISTS wwd_starts (id INTEGER PRIMARY KEY AUTOINCREMENT, started_ms INTEGER NOT NULL UNIQUE, version TEXT NOT NULL, prev_exit TEXT NOT NULL DEFAULT '')`
 
 // alertsDDL (v5): a host's alerts (spec §13.3). The key is one alert across time; cleared_ms is NULL while it is active. This PR
 // makes the table and reads it (ActiveAlerts); the rules that write it come in 8a-1 and 8a-2.
@@ -94,7 +93,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			usageDDL,
 			usageIndexDDL,
 			startsDDL,
-			startsIndexDDL,
 			alertsDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -131,7 +129,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			}
 		}
 		if have < 5 { // v5: the start records and the alerts of spec §13 (every statement is IF NOT EXISTS: a re-run changes nothing)
-			for _, stmt := range []string{startsDDL, startsIndexDDL, alertsDDL} {
+			for _, stmt := range []string{startsDDL, alertsDDL} {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
 					return err
 				}

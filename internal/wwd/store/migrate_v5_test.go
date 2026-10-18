@@ -195,4 +195,16 @@ func TestStartsTableShape(t *testing.T) {
 	if err := s.DB().QueryRow(`SELECT prev_exit FROM wwd_starts WHERE started_ms = 1000`).Scan(&prev); err != nil || prev != "" {
 		t.Fatalf("previous exit defaults to empty (unknown): %q %v", prev, err)
 	}
+	// one start is one row: a second record of the same instant is refused by the table (the writer uses INSERT OR IGNORE, so a
+	// retried write is not counted twice)
+	if _, err := s.DB().Exec(`INSERT INTO wwd_starts (started_ms, version) VALUES (1000, 'again')`); err == nil {
+		t.Fatal("two starts at the same millisecond were both stored")
+	}
+	if _, err := s.DB().Exec(`INSERT OR IGNORE INTO wwd_starts (started_ms, version) VALUES (1000, 'again')`); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.DB().QueryRow(`SELECT count(*) FROM wwd_starts`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
 }
