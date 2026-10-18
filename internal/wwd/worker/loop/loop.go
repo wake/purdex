@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -452,13 +451,7 @@ func (l *Loop) quarantine(ctx context.Context, e runner.Ended) bool {
 	if !e.Quarantined || l.cfg.Quarantine == nil {
 		return true
 	}
-	ent := quarantine.Entry{
-		Owner: e.Source + "/" + e.Job.ID, JobID: e.Job.ID, Origin: e.Job.Origin, ClaimID: e.ClaimID,
-		Dir: filepath.Dir(e.Root), Keys: e.Job.Locks, Since: l.cfg.Now(),
-	}
-	if l.cfg.Sandboxed {
-		ent.Unit = "wwd-" + e.Job.ID
-	}
+	ent := entryOf(e, l.cfg.Sandboxed, l.cfg.Now())
 	for {
 		err := l.cfg.Quarantine.Add(ent)
 		if err == nil {

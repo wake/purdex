@@ -133,6 +133,15 @@ type Ended struct {
 	Err         error
 }
 
+// Guard makes the command's run durable around the one moment nothing in memory can be trusted: the command (a sandbox unit) is going
+// and this process may die. Begin is called right before Exec.Run, End right after it returns; Begin failing means the command is not
+// started (the job goes back as an infrastructure failure). End says whether the run could not be proven stopped (quarantined): the
+// guard then keeps what it wrote, otherwise it forgets it. If Run panics, End is not called and what Begin wrote stays.
+type Guard interface {
+	Begin(e Ended) error
+	End(e Ended, quarantined bool)
+}
+
 // Config is the worker's identity and collaborators.
 type Config struct {
 	Worker      string
@@ -140,6 +149,8 @@ type Config struct {
 	Fingerprint map[string]string
 	Locks       *locks.Table
 	Exec        Exec
+	// Guard is called around Exec.Run (see Guard); nil: nothing is written around a run.
+	Guard Guard
 	// Unit is what lease_s and renew_s are counted in (time.Second; a test makes it small).
 	Unit time.Duration
 	// Now is the monotonic clock (time.Now).
@@ -286,7 +297,18 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 	if started && st.get() == stopNone {
 		// fail closed: if Run panics, nothing proves its tree gone, so the lock keys must not be let go by the deferred release
 		quarantined = true
-		res = c.cfg.Exec.Run(runCtx, job, ws, plan)
+		info := Ended{Source: cand.Source, Job: job, ClaimID: cr.ClaimID, Plan: plan, Root: ws.Dir}
+		if g := c.cfg.Guard; g != nil {
+			if gerr := g.Begin(info); gerr != nil {
+				runErr, quarantined = fmt.Errorf("guard: %w", gerr), false // nothing was started: there is nothing to keep
+			}
+		}
+		if runErr == nil {
+			res = c.cfg.Exec.Run(runCtx, job, ws, plan)
+			if g := c.cfg.Guard; g != nil {
+				g.End(info, res.Err != nil && res.Outcome != run.StartFailed)
+			}
+		}
 	}
 	// A run that could not prove its process tree (a sandbox unit) gone may still be writing the workspace: the workspace stays and so do
 	// the lock keys, so no next job reuses either. (A start that failed never ran anything and is no such case.)
