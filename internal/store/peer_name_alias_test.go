@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -164,4 +165,27 @@ func TestPeerNameAliases_MigrationRunsTwice(t *testing.T) {
 	m, _ := openConvStore(t)
 	require.NoError(t, migrateMetaDB(m.db))
 	require.NoError(t, migrateMetaDB(m.db))
+}
+
+// The size cap holds from the first rename on: the rename that adds the 513th alias drops the oldest (spec §6.3, codex review
+// of #3435).
+func TestPeerNameAliases_ARenameKeepsTheTableAtItsCap(t *testing.T) {
+	s := aliasStore(t)
+	ctx := context.Background()
+	assignPool(t, s, alA, "n0")
+	i := 0
+	aliasClock = func() int64 { i++; return int64(i) }
+	t.Cleanup(func() { aliasClock = nil })
+	prev := "n0"
+	for k := 1; k <= MaxPeerNameAliases+3; k++ {
+		next := fmt.Sprintf("n%d", k)
+		_, ok, err := s.RenamePool(ctx, alA, prev, next)
+		require.NoError(t, err)
+		require.True(t, ok)
+		prev = next
+	}
+	all, err := s.Aliases(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, MaxPeerNameAliases)
+	require.Equal(t, "n3", all[0].Alias, "the three oldest went")
 }

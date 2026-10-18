@@ -73,16 +73,27 @@ func (s *PeerNameStore) DeleteAliases(ctx context.Context, aliases []string) err
 	return nil
 }
 
+// MaxPeerNameAliases is the most alias rows the table keeps (spec §6.3); the oldest by created_at go first.
+const MaxPeerNameAliases = 512
+
+const trimAliasesSQL = `
+	DELETE FROM peer_name_aliases WHERE alias IN (
+		SELECT alias FROM peer_name_aliases ORDER BY created_at DESC, alias DESC LIMIT -1 OFFSET ?)`
+
 // TrimAliases keeps the newest keep rows (by created_at) and deletes the rest; it returns how many it deleted.
 func (s *PeerNameStore) TrimAliases(ctx context.Context, keep int) (int, error) {
-	res, err := s.db.ExecContext(ctx, `
-		DELETE FROM peer_name_aliases WHERE alias IN (
-			SELECT alias FROM peer_name_aliases ORDER BY created_at DESC, alias DESC LIMIT -1 OFFSET ?)`, keep)
+	res, err := s.db.ExecContext(ctx, trimAliasesSQL, keep)
 	if err != nil {
 		return 0, err
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+// trimAliasesTx is TrimAliases inside the rename's transaction.
+func trimAliasesTx(ctx context.Context, tx *sql.Tx, keep int) error {
+	_, err := tx.ExecContext(ctx, trimAliasesSQL, keep)
+	return err
 }
 
 // UndoRename reverses a RenamePool whose follow-up failed or was lost (spec §5.3): it puts oldName back when the stored name

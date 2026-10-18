@@ -172,6 +172,9 @@ func (s *PeerNameStore) RenamePool(ctx context.Context, sessionID, oldName, newN
 		if _, err := tx.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE alias = ?`, newName); err != nil {
 			return PeerNameEntry{}, false, err
 		}
+		if err := trimAliasesTx(ctx, tx, MaxPeerNameAliases); err != nil { // the size cap holds from the first rename on (spec §6.3)
+			return PeerNameEntry{}, false, err
+		}
 	}
 	var e PeerNameEntry
 	switch err := tx.QueryRowContext(ctx, `SELECT name, source FROM peer_names WHERE session_id = ?`, sid).
