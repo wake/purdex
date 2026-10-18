@@ -190,16 +190,22 @@ func TestReadLogCutsToTheEnd(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "log")
 	big := strings.Repeat("a", maxLog) + "THE END"
 	os.WriteFile(p, []byte(big), 0o600)
-	b := readLog(p)
-	if len(b) != maxLog || !strings.HasSuffix(string(b), "THE END") {
+	b, err := readLog(p)
+	if err != nil || len(b) != maxLog || !strings.HasSuffix(string(b), "THE END") {
 		t.Fatalf("len %d, ends %q", len(b), string(b[len(b)-7:]))
 	}
-	if readLog("") != nil || readLog(filepath.Join(t.TempDir(), "none")) != nil {
-		t.Fatal("a missing log must be nil")
+	if b, err := readLog(""); b != nil || err != nil {
+		t.Fatal("no path is no log")
+	}
+	if b, err := readLog(filepath.Join(t.TempDir(), "none")); b != nil || err != nil {
+		t.Fatal("a missing file is no log")
+	}
+	if _, err := readLog(t.TempDir()); err == nil { // a directory exists and cannot be read
+		t.Fatal("an unreadable log must be an error")
 	}
 	empty := filepath.Join(t.TempDir(), "e")
 	os.WriteFile(empty, nil, 0o600)
-	if readLog(empty) != nil {
+	if b, _ := readLog(empty); b != nil {
 		t.Fatal("an empty log is not uploaded")
 	}
 }

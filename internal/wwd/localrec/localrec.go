@@ -5,6 +5,7 @@ package localrec
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -74,7 +75,11 @@ func (h *handle) Heartbeat(ctx context.Context) (bool, error) {
 // stored is an error, so the caller retries before the result closes the job. Both calls are idempotent for the claim, so
 // the caller may retry the whole of Finish.
 func (h *handle) Finish(ctx context.Context, o fastlane.Outcome) error {
-	if log := readLog(o.LogPath); log != nil {
+	log, err := readLog(o.LogPath)
+	if err != nil {
+		return err
+	}
+	if log != nil {
 		if err := h.api.PutLog(ctx, h.resp.ID, h.resp.ClaimID, log); err != nil {
 			if errors.Is(err, client.ErrClaimLost) {
 				return fastlane.ErrStale
@@ -87,7 +92,7 @@ func (h *handle) Finish(ctx context.Context, o fastlane.Outcome) error {
 		state = wire.StateFailed
 	}
 	summary := o.Summary
-	err := h.api.PostResult(ctx, h.resp.ID, wire.ResultRequest{
+	err = h.api.PostResult(ctx, h.resp.ID, wire.ResultRequest{
 		ClaimID: h.resp.ClaimID, State: state, Exit: o.Exit, Summary: &summary, StartedAt: ptr(o.StartedAt), FinishedAt: ptr(o.FinishedAt),
 	})
 	if errors.Is(err, client.ErrClaimLost) {
@@ -104,28 +109,37 @@ func ptr(t time.Time) *time.Time {
 	return &u
 }
 
-// readLog is the log at path, its last maxLog bytes when it is longer; nil when it cannot be read or is empty.
-func readLog(path string) []byte {
+// readLog is the log at path, its last maxLog bytes when it is longer. No path, no file or an empty file is no log (nil, nil); a
+// log that exists and cannot be read is an error, which Finish passes on so that the result is not posted without it.
+func readLog(path string) ([]byte, error) {
 	if path == "" {
-		return nil
+		return nil, nil
 	}
 	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
-	if err != nil || st.Size() == 0 {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() == 0 {
+		return nil, nil
 	}
 	size := st.Size()
 	if size > maxLog {
-		if _, err := f.Seek(size-maxLog, 0); err != nil {
-			return nil
+		if _, err := f.Seek(size-maxLog, io.SeekStart); err != nil {
+			return nil, err
 		}
 		size = maxLog
 	}
 	b := make([]byte, size)
-	n, _ := f.Read(b)
-	return b[:n]
+	if _, err := io.ReadFull(f, b); err != nil {
+		return nil, err
+	}
+	return b, nil
 }

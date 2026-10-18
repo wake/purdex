@@ -133,10 +133,14 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 	var body submit.Body
 	if o.Recorder != nil {
 		p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, Task: o.Args.Task, Args: o.Args.TaskArgs, Class: o.Args.Class, Submitter: sub, Git: o.GitBin, Local: true})
-		if err != nil {
+		switch {
+		case errors.Is(err, submit.ErrNoCommit): // nothing to record against: the run goes on unrecorded
+			o.Recorder = nil
+		case err != nil:
 			return failPrepare(o, err), true
+		default:
+			body = p.Body
 		}
-		body = p.Body
 	}
 	// The run's files stay after the command: the log path is printed, and wwd's sweep removes old ones.
 	out := ""

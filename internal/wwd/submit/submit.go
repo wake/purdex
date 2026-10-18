@@ -33,6 +33,9 @@ type UsageError struct{ Err error }
 func (e *UsageError) Error() string { return e.Err.Error() }
 func (e *UsageError) Unwrap() error { return e.Err }
 
+// ErrNoCommit: the repository has no commit, so a local run cannot be recorded against one (the run itself needs none).
+var ErrNoCommit = errors.New("the repository has no commit to record a local run against")
+
 func usagef(format string, a ...any) error { return &UsageError{Err: fmt.Errorf(format, a...)} }
 
 // IsUsage reports whether err is a UsageError.
@@ -105,7 +108,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		// the file in the tree (the command runs against that tree).
 		head, err := g.run(ctx, "rev-parse", "--verify", "-q", "HEAD^{commit}")
 		if err != nil || head == "" {
-			return nil, usagef("the repository has no commit to record a local run against")
+			return nil, &UsageError{Err: ErrNoCommit}
 		}
 		snap = gate.SnapshotInfo{SHA: head, Root: root, Rel: "."}
 		if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
