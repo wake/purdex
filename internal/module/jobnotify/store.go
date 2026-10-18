@@ -22,9 +22,10 @@ const maxTries = 6
 // keep is how long a notice row is kept after its last change, like the job it is about.
 const keep = 7 * 24 * time.Hour
 
-// overlap is how far behind the catch-up window a catch-up looks again. Looking twice at a job costs nothing (job_id is unique); a
-// window with no overlap would lose a job that ended while the previous catch-up was reading.
-const overlap = 10 * time.Minute
+// overlap is how far behind the catch-up window a catch-up looks again. Looking twice at a job costs nothing (job_id is unique). It
+// covers a job that ended while the previous catch-up was reading, and a finished time stamped by a worker whose clock runs behind
+// this host's; the window is a hint, so a worker more than an hour behind could still be missed (see the PR).
+const overlap = time.Hour
 
 // store is the notifier's outbox: one row per job to tell, unique by job id, so "told once" holds across reconnects, restarts and
 // overlapping catch-ups without any in-memory set.
@@ -104,17 +105,6 @@ func (s *store) pending(now time.Time) ([]notice, error) {
 	return out, rows.Err()
 }
 
-// one returns the notice of a job when it is still pending.
-func (s *store) one(jobID string) (notice, bool, error) {
-	var n notice
-	err := s.db.QueryRow(`SELECT job_id, session, text, tries FROM notices WHERE job_id = ? AND status = ? AND tries < ?`,
-		jobID, statusPending, maxTries).Scan(&n.JobID, &n.Session, &n.Text, &n.Tries)
-	if err == sql.ErrNoRows {
-		return notice{}, false, nil
-	}
-	return n, err == nil, err
-}
-
 // beginTry stores that a try is about to be made and returns the number of tries including it. It is written before the send, so a
 // crash during the send still counts it.
 func (s *store) beginTry(jobID string, now time.Time) (int, error) {
@@ -159,8 +149,21 @@ func (s *store) setSince(t time.Time) error {
 	return err
 }
 
-// prune drops the rows that were last changed more than keep ago and are not pending.
+// prune drops the rows that were last changed more than keep ago and are not pending. A row is also kept while the catch-up could
+// still list its job again (its finished time is not before the window less the overlap): after a daemon that was down for longer
+// than keep, the window is old and the rows it covers are the dedup of whatever wwd still lists.
 func (s *store) prune(now time.Time) error {
-	_, err := s.db.Exec(`DELETE FROM notices WHERE status != ? AND updated_at < ?`, statusPending, now.Add(-keep).UnixMilli())
+	cutoff := now.Add(-keep)
+	since, ok, err := s.since()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if w := since.Add(-overlap); w.Before(cutoff) {
+		cutoff = w
+	}
+	_, err = s.db.Exec(`DELETE FROM notices WHERE status != ? AND updated_at < ? AND finished_at < ?`, statusPending, cutoff.UnixMilli(), cutoff.UnixMilli())
 	return err
 }

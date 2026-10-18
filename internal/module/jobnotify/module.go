@@ -4,7 +4,8 @@
 //
 // Every notice goes through an outbox table (store.go): a job that ended is inserted once, by job id, and delivered from there with
 // its tries counted in the table. Nothing about "already told" lives in memory or in a time cursor, so reconnects, restarts and
-// overlapping catch-ups can neither lose a notice nor send it twice.
+// overlapping catch-ups can neither lose a notice nor send it twice. One window remains: a crash after a send succeeded and before
+// its row says so sends that notice once more (at-least-once); the try was counted first, so it cannot repeat for ever.
 package jobnotify
 
 import (
@@ -41,7 +42,9 @@ type Module struct {
 	retry  time.Duration // the pause before the event stream is opened again
 	redo   time.Duration // how often the notices still pending are delivered
 
-	mu     sync.Mutex // serialises delivery: an event, a catch-up and the redo loop never send one notice twice
+	// kick asks the delivery loop for a pass. That loop is the only sender, so a notice is never sent twice at once and a slow send
+	// never holds the event stream (whose callback only queues).
+	kick   chan struct{}
 	store  *store
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -49,7 +52,7 @@ type Module struct {
 
 // New returns the module with production defaults.
 func New() *Module {
-	return &Module{logf: log.Printf, now: time.Now, retry: 5 * time.Second, redo: 30 * time.Second}
+	return &Module{logf: log.Printf, now: time.Now, retry: 5 * time.Second, redo: 30 * time.Second, kick: make(chan struct{}, 1)}
 }
 
 func (m *Module) Name() string           { return "jobnotify" }
@@ -75,9 +78,16 @@ func (m *Module) Init(c *core.Core) error {
 		return err
 	}
 	m.store = st
-	if _, ok, err := st.since(); err == nil && !ok {
-		// the first run starts now: it does not tell a whole history
-		_ = st.setSince(m.now())
+	// the first run starts now: it does not tell a whole history. Without a window that was written there is no safe start, so the
+	// module does not start at all.
+	if _, ok, err := st.since(); err != nil {
+		st.close()
+		return fmt.Errorf("job notice window: %w", err)
+	} else if !ok {
+		if err := st.setSince(m.now()); err != nil {
+			st.close()
+			return fmt.Errorf("job notice window: %w", err)
+		}
 	}
 	return nil
 }
@@ -150,8 +160,8 @@ func (m *Module) onEvent(ctx context.Context, ev wire.Event) {
 	if err != nil {
 		return
 	}
-	if id, ok := m.enqueue(je.Job); ok {
-		m.deliverOne(ctx, id)
+	if _, ok := m.enqueue(je.Job); ok {
+		m.wake() // the stream's callback only queues: a slow send must not stop it reading
 	}
 }
 
@@ -191,7 +201,7 @@ func (m *Module) catchUp(ctx context.Context) {
 	if err := m.store.setSince(began); err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
 	}
-	m.deliverPending(ctx)
+	m.wake()
 }
 
 // enqueue puts the notice of a job that ended into the outbox, once. A fast-lane job is its caller's own process: pdx test prints
@@ -217,24 +227,17 @@ func lost(j wire.Job) bool {
 	return j.State == wire.StateFailed && j.Result != nil && j.Result.Reason == "lost"
 }
 
-// deliverOne makes the first try of a notice just queued.
-func (m *Module) deliverOne(ctx context.Context, id string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n, ok, err := m.store.one(id)
-	if err != nil {
-		m.logf("jobnotify: read %s: %v", id, err)
-		return
-	}
-	if ok {
-		m.try(ctx, n)
+// wake asks the delivery loop for a pass over the notices not yet tried.
+func (m *Module) wake() {
+	select {
+	case m.kick <- struct{}{}:
+	default:
 	}
 }
 
-// deliverPending tries every notice still pending (those that failed before, after a restart or a failed try).
-func (m *Module) deliverPending(ctx context.Context) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// deliverPending tries the notices still pending; fresh limits it to those never tried (a pass after an event or a catch-up), so a
+// burst of events does not spend the tries of the notices that failed. It runs only in the delivery loop (and in tests).
+func (m *Module) deliverPending(ctx context.Context, fresh bool) {
 	list, err := m.store.pending(m.now())
 	if err != nil {
 		m.logf("jobnotify: pending notices: %v", err)
@@ -243,6 +246,9 @@ func (m *Module) deliverPending(ctx context.Context) {
 	for _, n := range list {
 		if ctx.Err() != nil {
 			return
+		}
+		if fresh && n.Tries > 0 {
+			continue
 		}
 		m.try(ctx, n)
 	}
@@ -276,15 +282,21 @@ func (m *Module) try(ctx context.Context, n notice) {
 func (m *Module) redoLoop(ctx context.Context) {
 	t := time.NewTicker(m.redo)
 	defer t.Stop()
-	for {
-		m.deliverPending(ctx)
+	pass := func() {
+		m.deliverPending(ctx, false)
 		if err := m.store.prune(m.now()); err != nil {
 			m.logf("jobnotify: prune: %v", err)
 		}
+	}
+	pass()
+	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			pass()
+		case <-m.kick:
+			m.deliverPending(ctx, true)
 		}
 	}
 }
