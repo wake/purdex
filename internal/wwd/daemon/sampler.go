@@ -97,7 +97,7 @@ func (s *Sampler) Tick(now time.Time) {
 	reading, err := s.collector.Sample()
 	reading.At = now
 	var f wire.Facts
-	f.V, f.HostID, f.Alias, f.OSVersion = wire.Proto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
+	f.V, f.HostID, f.Alias, f.OSVersion = wire.WriteProto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
 	f.Exception = []wire.FactExc{}

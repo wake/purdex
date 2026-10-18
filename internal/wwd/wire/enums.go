@@ -139,11 +139,12 @@ const (
 	EventLabels    EventType = "labels"
 	EventException EventType = "exception"
 	EventWorker    EventType = "worker"
+	EventAlert     EventType = "alert" // a hint that a host's alert list changed (spec §13.3); proto 2
 )
 
 func (t EventType) Valid() bool {
 	switch t {
-	case EventFacts, EventJob, EventLabels, EventException, EventWorker:
+	case EventFacts, EventJob, EventLabels, EventException, EventWorker, EventAlert:
 		return true
 	}
 	return false
