@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -337,7 +338,13 @@ type ResultRequest struct {
 	Summary    *Summary   `json:"summary"`
 	StartedAt  *time.Time `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// Reason is why a run failed, in the words a worker may write: oom, timeout or infra (spec 4.1). Empty is the normal case. The
+	// origin's own words (lost, queue_timeout, superseded_by:<id>) are not accepted here.
+	Reason string `json:"reason,omitempty"`
 }
+
+// ResultReasons are the reasons a worker may post.
+var ResultReasons = []string{"oom", "timeout", "infra"}
 
 func (r ResultRequest) Validate() error {
 	if err := checkClaimID(r.ClaimID); err != nil {
@@ -345,6 +352,12 @@ func (r ResultRequest) Validate() error {
 	}
 	if !r.State.ResultState() {
 		return fmt.Errorf("result: state %q cannot be posted", r.State)
+	}
+	if r.Reason != "" && !slices.Contains(ResultReasons, r.Reason) {
+		return fmt.Errorf("result: reason %q is not one a worker may post", r.Reason)
+	}
+	if r.Reason != "" && r.State != StateFailed {
+		return fmt.Errorf("result: reason %q goes with state failed, not %q", r.Reason, r.State)
 	}
 	return nil
 }
