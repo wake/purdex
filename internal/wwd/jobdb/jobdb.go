@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +24,12 @@ import (
 
 	"github.com/wake/purdex/internal/execstat"
 )
+
+// ControlSQL installs the routines every statement of this package is a call of, in the database wwdctl; the administrator account
+// holds EXECUTE on that database and nothing else. scripts/wwd-mysql-setup.sh installs it; docs/wwd-deploy.md says how.
+//
+//go:embed wwdctl.sql
+var ControlSQL string
 
 // Exec runs one SQL statement as the administrator and returns its output, one row per line.
 type Exec interface {
@@ -100,9 +107,7 @@ func (i Info) Env() []string {
 var (
 	dbNameRe   = regexp.MustCompile(`^wwd_[0-9a-f]{32}$`)
 	userNameRe = regexp.MustCompile(`^wwdu_[0-9a-f]{26}$`)
-	hostRe     = regexp.MustCompile(`^[A-Za-z0-9_.:%-]{1,255}$`) // a host read back from the server is checked before it is put in a statement
-	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,255}$`)  // a configured host: no wildcard either
-	idRe       = regexp.MustCompile(`^[0-9]{1,20}$`)
+	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,255}$`) // a configured host: no wildcard either
 )
 
 func digest(jobID string) string {
@@ -130,11 +135,9 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 		return Info{}, err
 	}
 	info := Info{Host: m.cfg.Host, Port: m.cfg.Port, Database: m.Name(jobID), User: m.User(jobID), Password: hex.EncodeToString(pw)}
-	stmts := []string{"CREATE DATABASE `" + info.Database + "`"}
+	stmts := []string{call("wwd_create_db", info.Database)}
 	for _, h := range m.cfg.UserHosts {
-		stmts = append(stmts,
-			fmt.Sprintf("CREATE USER '%s'@'%s' IDENTIFIED BY '%s'", info.User, h, info.Password),
-			fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%s'", info.Database, info.User, h))
+		stmts = append(stmts, call("wwd_create_user", info.User, info.Password, h, info.Database))
 	}
 	for _, s := range stmts {
 		if _, err := m.ex.Run(ctx, s); err != nil {
@@ -179,62 +182,41 @@ func (m *Manager) dropNames(ctx context.Context, db, user string) error {
 	return first
 }
 
-// killConnections ends the open connections of a user: DROP USER leaves them running with the rights they had. A connection that
-// is already gone ("Unknown thread id") is fine; any other failure is returned, and so is a connection that is still listed
-// afterwards.
+// killConnections ends the open connections of a user: DROP USER leaves them running with the rights they had. The routine answers
+// how many are still listed afterwards; anything but 0 is an error.
 func (m *Manager) killConnections(ctx context.Context, user string) error {
-	list := func() ([]string, error) {
-		out, err := m.ex.Run(ctx, fmt.Sprintf("SELECT id FROM information_schema.processlist WHERE user = '%s'", user))
-		if err != nil {
-			return nil, fmt.Errorf("jobdb: list connections: %w", err)
-		}
-		var ids []string
-		for _, id := range lines(out) {
-			if idRe.MatchString(id) {
-				ids = append(ids, id)
-			}
-		}
-		return ids, nil
-	}
-	ids, err := list()
+	out, err := m.ex.Run(ctx, call("wwd_kill_user", user))
 	if err != nil {
-		return err
+		return fmt.Errorf("jobdb: end the connections of %s: %w", user, err)
 	}
-	var first error
-	for _, id := range ids {
-		if _, err := m.ex.Run(ctx, "KILL CONNECTION "+id); err != nil && !strings.Contains(err.Error(), "Unknown thread id") && first == nil {
-			first = fmt.Errorf("jobdb: KILL CONNECTION %s: %w", id, err)
-		}
+	if n := strings.TrimSpace(out); n != "0" {
+		return fmt.Errorf("jobdb: %q connection(s) of %s are still open after KILL", n, user)
 	}
-	if len(ids) == 0 {
-		return nil
-	}
-	left, err := list()
-	switch {
-	case err != nil && first != nil:
-		return errors.Join(first, err) // the failed KILL stays visible next to the failed query
-	case err != nil:
-		return err
-	case len(left) > 0 && first != nil:
-		return first // the failed KILL is the reason they are still there
-	case len(left) > 0:
-		return fmt.Errorf("jobdb: %d connection(s) of %s are still open after KILL", len(left), user)
-	}
-	return first
+	return nil
 }
 
 func (m *Manager) dropUserAt(ctx context.Context, user, host string) error {
-	if _, err := m.ex.Run(ctx, fmt.Sprintf("DROP USER IF EXISTS '%s'@'%s'", user, host)); err != nil {
-		return fmt.Errorf("jobdb: DROP USER: %w", err)
+	if _, err := m.ex.Run(ctx, call("wwd_drop_user", user, host)); err != nil {
+		return fmt.Errorf("jobdb: drop user: %w", err)
 	}
 	return nil
 }
 
 func (m *Manager) dropDB(ctx context.Context, db string) error {
-	if _, err := m.ex.Run(ctx, "DROP DATABASE IF EXISTS `"+db+"`"); err != nil {
-		return fmt.Errorf("jobdb: DROP DATABASE: %w", err)
+	if _, err := m.ex.Run(ctx, call("wwd_drop_db", db)); err != nil {
+		return fmt.Errorf("jobdb: drop database: %w", err)
 	}
 	return nil
+}
+
+// call is a statement that runs one of the routines of wwdctl.sql. Its arguments are hash-derived names, hex secrets and checked
+// hosts; the routine checks them again, so a wrong one is refused there as well.
+func call(routine string, args ...string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = "'" + a + "'"
+	}
+	return "CALL wwdctl." + routine + "(" + strings.Join(q, ",") + ")"
 }
 
 // Sweep removes the databases and users this package made for jobs that are not in live (a crash or a restart left them). Only
@@ -249,11 +231,11 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	for _, id := range live {
 		keepDB[m.Name(id)], keepUser[m.User(id)] = true, true
 	}
-	dbOut, err := m.ex.Run(ctx, `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'wwd\_%'`)
+	dbOut, err := m.ex.Run(ctx, call("wwd_list_dbs"))
 	if err != nil {
 		return nil, fmt.Errorf("jobdb: list databases: %w", err)
 	}
-	userOut, err := m.ex.Run(ctx, `SELECT user, host FROM mysql.user WHERE user LIKE 'wwdu\_%'`)
+	userOut, err := m.ex.Run(ctx, call("wwd_list_users"))
 	if err != nil {
 		return nil, fmt.Errorf("jobdb: list users: %w", err)
 	}
@@ -266,7 +248,7 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	// every user/host pair that is really there, whatever hosts the config named when it was made
 	for _, l := range lines(userOut) {
 		u, h, ok := strings.Cut(l, "\t")
-		if ok && userNameRe.MatchString(u) && hostRe.MatchString(h) && !keepUser[u] {
+		if ok && userNameRe.MatchString(u) && cfgHostRe.MatchString(h) && !keepUser[u] {
 			note(m.killConnections(ctx, u))
 			note(m.dropUserAt(ctx, u, h))
 		}
@@ -294,13 +276,12 @@ func lines(s string) []string {
 	return out
 }
 
-// firstWords names a statement in an error without its password.
+// firstWords names a statement in an error without its arguments: a CALL of wwd_create_user carries a password.
 func firstWords(s string) string {
-	f := strings.Fields(s)
-	if len(f) > 2 {
-		f = f[:2]
+	if i := strings.IndexByte(s, '('); i >= 0 {
+		s = s[:i]
 	}
-	return strings.Join(f, " ")
+	return strings.TrimSpace(s)
 }
 
 // CLI runs statements with the mysql client. DefaultsFile (an administrator's [client] section: user, password, socket or host)
