@@ -1,6 +1,6 @@
 // spa/src/components/team/TeamSeatLight.tsx — a seat's light as the corner badge of its avatar (team panel v2, NA-0 design): an 11 px dot with a 2 px ring in the row's
 // background. The same status, unread tint and "lights off" rule as the tab rows (TabStatusIndicator, TabIcon); a seat with no known status shows no dot.
-import { STATUS_COLORS } from '../TabStatusIndicator'
+import { STATUS_COLORS } from '../status-colors'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
 
 const SIZE = 11

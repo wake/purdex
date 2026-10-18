@@ -66,7 +66,7 @@ describe('a row of the full panel (v2)', () => {
 
   it('the light shows the seat\'s status, with the ring in the row\'s colour', () => {
     mount()
-    useUISettingsStore.setState({ tabIndicatorStyle: 'overlay' })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
     const ck = compositeKey(HOST, 'code-a-tm') // the fixture's session codes are `code-<tmux name>`
     act(() => { useAgentStore.setState((s) => ({ statuses: { ...s.statuses, [ck]: 'running' } })) })
     const dot = within(row('A')).getByTestId('team-panel-light-dot')

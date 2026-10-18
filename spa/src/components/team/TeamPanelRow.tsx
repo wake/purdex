@@ -113,7 +113,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
           </span>
         )}
         {/* the name never gives way (design: the title is the first to truncate) */}
-        <span data-testid="team-panel-seat-name" className="flex-shrink-0 whitespace-nowrap text-[13px] font-semibold text-text-primary">{name}</span>
+        <span data-testid="team-panel-seat-name" className={`${showTitle ? 'flex-shrink-0 whitespace-nowrap' : 'truncate min-w-0'} text-[13px] font-semibold text-text-primary`}>{name}</span>
         {showTitle && <span data-testid="team-panel-seat-title" className="truncate min-w-0 flex-1 text-[11.5px] text-text-muted">{seat.title}</span>}
         {!showTitle && <span className="flex-1" />}
         <HalfHandoffMark handoff={freshHandoff} variant="chip" />

@@ -1,6 +1,7 @@
 // spa/src/components/TabStatusIndicator.tsx
 import { HandPalm, WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
+import { STATUS_COLORS } from './status-colors'
 import { useI18nStore } from '../stores/useI18nStore'
 
 /** Render mode — orthogonal to the tab-level indicator style. */
@@ -20,13 +21,6 @@ interface Props {
    * only running / idle); replace shows the caller's separate pip. The hand itself stays the warning colour.
    */
   awaitingApproval?: boolean
-}
-
-export const STATUS_COLORS: Record<AgentStatus, string> = {
-  running: '#4ade80',
-  waiting: '#facc15',
-  idle: '#6b7280',
-  error: '#ef4444',
 }
 
 const UNREAD_COLOR = '#ef4444'
