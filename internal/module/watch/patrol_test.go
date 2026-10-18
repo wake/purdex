@@ -2,6 +2,8 @@ package watchmod
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 type patrolRig struct {
@@ -179,6 +182,64 @@ func TestPatrol_TheSourcesAreTheRegistrysServices(t *testing.T) {
 	require.False(t, r.m.hostBusy())
 	_, ok := r.m.diskFreeGB()
 	require.True(t, ok, "the data dir's free space is read")
+}
+
+type localFactsFake struct {
+	f  wire.Facts
+	ok bool
+}
+
+func (l localFactsFake) LatestLocalFacts() (wire.Facts, bool) { return l.f, l.ok }
+
+// C1: with wwd's facts of this host the patrol reads the free disk from them: the lowest of the listed volumes (the home volume is
+// one of them, and the mount names cannot be matched against a path), when the data directory is under home. Otherwise (no fresh
+// facts, no disk listed, a data directory elsewhere) it takes its own statfs.
+func TestPatrolDiskFreeFromFacts(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	r := newPatrolRigWith(t, true)
+	r.m.psrc = nil
+	reg := r.m.core.Registry
+	r.m.core.Cfg.DataDir = home
+	// the names macOS gives: the Data volume for /Users, then the sealed root
+	two := wire.Facts{Disk: []wire.Disk{{Mount: "/System/Volumes/Data", FreeGB: 7.5}, {Mount: "/", FreeGB: 42.5}}}
+	swapped := wire.Facts{Disk: []wire.Disk{{Mount: "/", FreeGB: 42.5}, {Mount: "/home", FreeGB: 7.5}}}
+	one := wire.Facts{Disk: []wire.Disk{{Mount: "/", FreeGB: 42.5}}}
+
+	for name, f := range map[string]wire.Facts{"data volume first": two, "home partition second": swapped} {
+		reg.Register(resources.LocalFactsKey, localFactsFake{f, true})
+		gb, ok := r.m.diskFreeGB()
+		require.True(t, ok, name)
+		require.Equal(t, 7.5, gb, name+": the lowest, which is the volume that runs low")
+	}
+	reg.Register(resources.LocalFactsKey, localFactsFake{one, true})
+	gb, ok := r.m.diskFreeGB()
+	require.True(t, ok)
+	require.Equal(t, 42.5, gb)
+
+	reg.Register(resources.LocalFactsKey, localFactsFake{two, false})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotContains(t, []float64{42.5, 7.5}, gb, "no fresh facts: statfs")
+
+	reg.Register(resources.LocalFactsKey, localFactsFake{wire.Facts{}, true})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotContains(t, []float64{42.5, 7.5}, gb, "no disk listed: statfs")
+
+	r.m.core.Cfg.DataDir = "/dev" // another device than home and the root: facts do not list its volume
+	reg.Register(resources.LocalFactsKey, localFactsFake{two, true})
+	gb, ok = r.m.diskFreeGB()
+	require.True(t, ok)
+	require.NotContains(t, []float64{42.5, 7.5}, gb, "a data directory outside home is statfs'd")
+}
+
+func TestSameDevice(t *testing.T) {
+	dir := t.TempDir()
+	require.True(t, sameDevice(dir, dir))
+	require.True(t, sameDevice(dir, filepath.Join(dir, ".")))
+	require.False(t, sameDevice(dir, filepath.Join(dir, "missing")), "a path that is not there is on no device")
+	require.False(t, sameDevice(dir, "/dev"), "devfs is its own device")
 }
 
 type atComputerFake bool
