@@ -344,6 +344,8 @@
   "team.panel.members": "{{count}} 位成員",
   "team.panel.to_titlebar": "收進標題列",
   "team.settings.cap": "成員上限",
+  "team.settings.folders": "資料夾",
+  "team.settings.folders_add": "新增或移除資料夾",
   "team.settings.in_use": "用了 {{n}}",
   "team.settings.loading": "讀取中…",
   "team.settings.quota_failed": "讀不到額度（{{code}}）",

@@ -344,6 +344,8 @@
   "team.panel.members": "{{count}} members",
   "team.panel.to_titlebar": "Move to title bar",
   "team.settings.cap": "Member cap",
+  "team.settings.folders": "Folders",
+  "team.settings.folders_add": "Add or remove folders",
   "team.settings.in_use": "{{n}} in use",
   "team.settings.loading": "Reading…",
   "team.settings.quota_failed": "Could not read the quota ({{code}})",

@@ -5,7 +5,8 @@
 //   - 「自動接力」 stepper | 「成員接力池」 stepper: the lead's own auto-relay quota and its member pool — the unattended panel's steppers over the same store and
 //     writer, so one value per chain shows in both places at once. The quota rows are not in the roster: showing the block reads the host's unattended view through
 //     the shared reader (unattended-reader.ts: it joins a read already out) into the store; the line says 「讀取中…」 until a read has landed and the error line when
-//     the last one failed.
+//     the last one failed;
+//   - 「資料夾」 chips (the team's roots, truncated) and a dashed +: the + opens the roots editor (TeamRootsEditor) under them.
 // The cap reads what it read in the unattended panel (the roster's `max_members` / `in_use`). Part of a tab-hosted panel: it keeps no state of its own that must survive
 // a tab switch — what it shows lives in the stores.
 import { useEffect } from 'react'
@@ -17,6 +18,7 @@ import { readFirstPage, watchHost } from '../../lib/team/unattended-reader'
 import type { TeamRoster } from '../../lib/team/roster'
 import { useTeamSettingsOffer } from './team-settings'
 import { CapStepper, QuotaStepper } from './Steppers'
+import { TeamFoldersLine } from './TeamFoldersLine'
 
 export interface TeamSettingsTarget {
   /** The lead's host. */
@@ -31,7 +33,7 @@ export function TeamSettingsBlock({ hostId, teamId, name }: TeamSettingsTarget) 
   const t = useI18nStore((s) => s.t)
   const offer = useTeamSettingsOffer(hostId, teamId)
   const team = offer.team
-  if (team === undefined || !(offer.cap || offer.quota)) return null
+  if (team === undefined || !(offer.cap || offer.quota || offer.folders)) return null
   return (
     <div data-testid="team-settings-block" className="border-t border-border-subtle px-3 py-2 flex flex-col gap-1.5 text-[11.5px]">
       {offer.cap && (
@@ -41,6 +43,7 @@ export function TeamSettingsBlock({ hostId, teamId, name }: TeamSettingsTarget) 
         </div>
       )}
       {offer.quota && <QuotaLine hostId={hostId} team={team} name={name} />}
+      {offer.folders && <TeamFoldersLine hostId={hostId} team={team} />}
     </div>
   )
 }
