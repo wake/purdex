@@ -81,23 +81,20 @@ func usable(f wire.Facts) bool {
 	return ok
 }
 
-// diskSampleOf is the root mount's disk (else the first), the statfs figures the facts carry: total is Blocks x Bsize and avail
-// is Bavail x Bsize, so used is total less avail, the same arithmetic as the monitor's own collector.
+// diskSampleOf is the root mount's disk, the statfs figures the facts carry: total is Blocks x Bsize and avail is Bavail x Bsize,
+// so used is total less avail, the same arithmetic as the monitor's own collector, which reads "/". Facts without that mount (or
+// without sizes) give nothing: another filesystem's figures are not the root's.
 func diskSampleOf(ds []wire.Disk) (HostDiskSample, bool) {
-	if len(ds) == 0 {
-		return HostDiskSample{}, false
-	}
-	d := ds[0]
-	for _, x := range ds {
-		if x.Mount == "/" {
-			d = x
-			break
+	for _, d := range ds {
+		if d.Mount != "/" {
+			continue
 		}
+		if d.TotalBytes == 0 || d.AvailBytes > d.TotalBytes {
+			return HostDiskSample{}, false
+		}
+		return HostDiskSample{TotalBytes: d.TotalBytes, UsedBytes: d.TotalBytes - d.AvailBytes}, true
 	}
-	if d.TotalBytes == 0 || d.AvailBytes > d.TotalBytes {
-		return HostDiskSample{}, false
-	}
-	return HostDiskSample{TotalBytes: d.TotalBytes, UsedBytes: d.TotalBytes - d.AvailBytes}, true
+	return HostDiskSample{}, false
 }
 
 // Close ends what the fallback keeps running (the darwin CPU sampler).

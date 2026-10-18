@@ -116,6 +116,7 @@ func TestDiskSampleOf(t *testing.T) {
 		"no sizes yet":      {{Mount: "/", FreeGB: 10, UsedPct: 5}},
 		"avail over total":  {{Mount: "/", TotalBytes: 100, AvailBytes: 101}},
 		"zero total, avail": {{Mount: "/", TotalBytes: 0, AvailBytes: 5}},
+		"no root mount":     {{Mount: "/home", TotalBytes: 1000, AvailBytes: 500}},
 	} {
 		_, ok := diskSampleOf(ds)
 		assert.False(t, ok, name)
@@ -125,9 +126,9 @@ func TestDiskSampleOf(t *testing.T) {
 	s, ok := diskSampleOf([]wire.Disk{{Mount: "/a", TotalBytes: 1000, AvailBytes: 200}, {Mount: "/", TotalBytes: 500, AvailBytes: 100}})
 	require.True(t, ok)
 	assert.Equal(t, HostDiskSample{TotalBytes: 500, UsedBytes: 400}, s, "the root mount")
-	s, ok = diskSampleOf([]wire.Disk{{Mount: "/a", TotalBytes: 1000, AvailBytes: 1000}})
+	s, ok = diskSampleOf([]wire.Disk{{Mount: "/", TotalBytes: 1000, AvailBytes: 1000}})
 	require.True(t, ok, "an empty disk is a valid reading")
-	assert.Equal(t, HostDiskSample{TotalBytes: 1000, UsedBytes: 0}, s, "no root mount: the first")
+	assert.Equal(t, HostDiskSample{TotalBytes: 1000, UsedBytes: 0}, s)
 }
 
 type fakeLocalFacts struct{}
