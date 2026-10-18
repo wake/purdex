@@ -11,14 +11,17 @@ import (
 // The report from wwd's minutes (WWD-2d): while the fleet row's source is "pool", GET /api/resources/report joins the retired
 // timeline (resources.db host_minutes, up to where wwd's begins) with the per-minute rollups wwd keeps in wwd.db, read through its
 // 1 m facts history. wwd's rows are whole facts records, so the old rows cannot be copied into wwd.db without inventing facts;
-// they are read from where they are and the two meet at the first minute wwd has. Judgements stay wwd's: the zone of a minute is
-// the worst zone wwd saw in it.
+// they are read from where they are and the two meet at the first minute wwd has. A wwd minute that carries wwd's per-sample stats
+// (wire.MinuteStats, #3267) is mapped straight from them; one from before that is worked out from its one record, below.
 
 // fullTicksPerMinute is the sampler ticks in a minute: a minute the host was full counts as all of them (the rollup keeps one
 // record per minute, so a part of a minute cannot be told).
 const fullTicksPerMinute = int(time.Minute / resources.SampleInterval)
 
 // reportMinutesOf maps wwd's minute rollups (oldest first) onto the report's minute rows.
+//
+// A rollup that carries wwd's per-sample stats is taken from them as they are (statsMinute), and ends any approximated run before it. For the
+// minutes without stats (from before wwd kept them):
 //
 //   - load1 and the memory share are the rollup's (the average load, the share at the lowest available memory of the minute);
 //   - a minute is full on the daemon's own rule (load1 >= ncpu, memory >= resources.MemFullPercent, or pressure >= 2), and a run
@@ -47,6 +50,14 @@ func reportMinutesOf(recs []wire.Facts, carryRunS int) []resources.ReportMinute 
 		m := resources.ReportMinute{At: at, Load1: f.CPU.Load1, HeavyRunning: f.Worker.Running.Heavy, LightRunning: f.Worker.Running.Light}
 		if f.Mem.TotalMB > 0 {
 			m.Mem = 100 * float64(max(f.Mem.TotalMB-f.Mem.AvailableMB, 0)) / float64(f.Mem.TotalMB)
+		}
+		if st := f.Stats; st != nil {
+			// wwd counted this minute per 5 s sample: take it as it is. An approximated run ends on its last row before it, and the
+			// stats say themselves whether one goes on through it.
+			closeRun()
+			out = append(out, statsMinute(m, st))
+			prevAt = at
+			continue
 		}
 		full := f.CPU.NCPU > 0 && f.CPU.Load1 >= float64(f.CPU.NCPU) || m.Mem >= resources.MemFullPercent || f.Mem.Pressure >= 2
 		contiguous := prevAt != 0 && at-prevAt == time.Minute.Milliseconds()
@@ -107,4 +118,18 @@ func (m *Module) poolReportRecords(ctx context.Context, since, now time.Time) ([
 func wholeMinuteFull(m resources.ReportMinute) bool {
 	tick := int(resources.SampleInterval / time.Second)
 	return m.FullTicks >= fullTicksPerMinute && m.SampledS > 0 && m.FullTicks*tick >= m.SampledS
+}
+
+// statsMinute is the minute row made from wwd's per-sample stats: the seconds sampled, the full ticks, starts and longest run, the
+// seconds in each zone and the running peaks are wwd's own counts. A null gate figure (wwd has no gate to count yet) is no waiting
+// counted. m carries what the stats do not have: the minute's load1 (its average) and memory share.
+func statsMinute(m resources.ReportMinute, st *wire.MinuteStats) resources.ReportMinute {
+	m.SampledS, m.NormalS, m.WarningS, m.DangerS = st.SampledS, st.NormalS, st.WarningS, st.DangerS
+	m.FullTicks, m.FullStarts, m.FullLongestS = st.FullTicks, st.FullStarts, st.FullLongestS
+	m.HeavyRunning, m.LightRunning = st.HeavyRunningMax, st.LightRunningMax
+	m.GateWaiting = 0
+	if st.GateWaitingMax != nil {
+		m.GateWaiting = *st.GateWaitingMax
+	}
+	return m
 }

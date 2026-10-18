@@ -34,8 +34,14 @@ type Report struct {
 	Approx string `json:"approx,omitempty"`
 }
 
-// ReportApproxWWD is Report.Approx for a report that includes minutes from wwd's rollups.
+// ReportApproxWWD is Report.Approx for a report that includes minutes from wwd's rollups that carry no per-sample stats (full and the
+// zone shares of those minutes are approximations).
 const ReportApproxWWD = "wwd_minute_rollups"
+
+// ReportApproxWWDStats is Report.Approx for a report whose wwd minutes all carry wwd's per-sample stats: full, the zone shares and the
+// running peaks are counted per 5 s sample as the daemon's own timeline did; what is left is that a minute's load1 is the minute's
+// average (not its peak) and that the gate's queue is not counted (wwd has no gate yet).
+const ReportApproxWWDStats = "wwd_minute_stats"
 
 // ReportZones is the share of sampled time in each zone, from the minute rows
 // that carry sampled_s. Minutes is how many rows counted: a row written before

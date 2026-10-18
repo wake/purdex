@@ -55,6 +55,14 @@ func TestReport_TextNamesTheApproximation(t *testing.T) {
 	formatReport(&approx, rep, time.UTC)
 	assert.Contains(t, approx.String(), "approximate")
 	assert.Contains(t, approx.String(), "full")
+
+	// the same report whose wwd minutes all carry stats names what is left, not the old approximation
+	rep.Approx = resources.ReportApproxWWDStats
+	var counted bytes.Buffer
+	formatReport(&counted, rep, time.UTC)
+	assert.NotContains(t, counted.String(), "approximate")
+	assert.Contains(t, counted.String(), "per 5 s sample")
+	assert.Contains(t, counted.String(), "average")
 }
 
 // An empty report says so instead of printing zeros as if they were data.
