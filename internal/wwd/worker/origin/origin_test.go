@@ -220,3 +220,14 @@ func TestPeerAnswerIsDecodedStrictly(t *testing.T) {
 	_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
 	assert.Error(t, err, "an answer with a field wire does not know is not wwd's")
 }
+
+func TestPeerRefusesAnAnswerOverTheLimitEvenWhenItsPrefixIsValid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := `{"lease_s":60,"renew_s":15,"cancel":false}`
+		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(strings.Repeat(" ", maxAnswerSize))) // trailing whitespace is valid JSON; only the size can refuse it
+	}))
+	defer srv.Close()
+	_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
+	assert.Error(t, err)
+}

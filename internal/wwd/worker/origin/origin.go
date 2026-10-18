@@ -113,9 +113,12 @@ func (p *Peer) do(ctx context.Context, method, path string, q url.Values, body i
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswerSize))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswerSize+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(raw) > maxAnswerSize {
+		return nil, fmt.Errorf("origin: %s %s: answer over %d bytes", method, path, maxAnswerSize)
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
