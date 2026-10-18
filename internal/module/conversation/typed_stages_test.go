@@ -172,6 +172,19 @@ func TestTypedStages_UnknownRecallLeavesTheQueuedIdsAlone(t *testing.T) {
 	assert.Equal(t, stageQueued, stagesOf(re.mod)["q1"].Stage)
 }
 
+// Two overlapping requests with one id: the one that waited out the locks marks the id failed/busy while the other, which got
+// the locks, sends. The sender's stages stand (codex R1 on #3420).
+func TestTypedStages_AnEarlierRequestThatGaveUpCannotOverwriteTheSender(t *testing.T) {
+	te := newTEnv(t)
+	te.fm.onFill = func(promptq.Job) (promptq.Outcome, bool) {
+		// the other request of this id gives up now, with the token it began with
+		te.mod.stages.setAttempt(sid, "o1", 1, stageFailed, "busy", "", time.Now())
+		return promptq.Outcome{Status: promptq.Accepted, FilledAt: time.Now().UnixMilli()}, true
+	}
+	answer(t, te.submit("o1", "hello"), 200, "handed", "fill", "")
+	assert.Equal(t, stageEntered, stagesOf(te.mod)["o1"].Stage)
+}
+
 var errBoom = assert.AnError
 
 func queuedFor(t *testing.T, m *Module) []ccnorm.Queued {

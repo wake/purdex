@@ -505,3 +505,45 @@ func TestStages_TrimInsideOneMillisecondKeepsTheFloorBelowIt(t *testing.T) {
 	s2.trimUsed()
 	assert.Equal(t, int64(2), s2.usedFloor, "a cut between milliseconds raises the floor to the last trimmed one")
 }
+
+// The request that holds the locks owns the id's stages: one that gave up earlier cannot overwrite them (codex R1 on #3420).
+func TestStages_ALaterClaimOwnsTheWrites(t *testing.T) {
+	var l stageLedger
+	first := l.begin("s", "a", "x", t0)
+	second := l.claim("s", "a", "x", t0.Add(time.Second))
+	require.NotEqual(t, first, second)
+	l.setAttempt("s", "a", second, "entered", "", "fill", t0.Add(2*time.Second))
+	l.setAttempt("s", "a", first, "failed", "busy", "", t0.Add(3*time.Second)) // the request that timed out at the locks, late
+	assert.Equal(t, "entered", stageOf(t, &l, "s", "a").Stage)
+	// and the earlier request's failure still stands when nobody claimed the id after it
+	l.begin("s", "b", "y", t0)
+	l.setAttempt("s", "b", 1, "failed", "busy", "", t0)
+	assert.Equal(t, "failed", stageOf(t, &l, "s", "b").Stage)
+	// a claim also revives an id an earlier request marked failed
+	third := l.claim("s", "b", "y", t0.Add(time.Second))
+	l.setAttempt("s", "b", third, "entered", "", "fill", t0.Add(2*time.Second))
+	assert.Equal(t, "entered", stageOf(t, &l, "s", "b").Stage)
+}
+
+// A session the ledger swept and then heard from again keeps counting upwards, so a long-lived connection with an older
+// cursor still gets the new stages (review of #3409 by olga).
+func TestStages_SeqSurvivesASweptSession(t *testing.T) {
+	var l stageLedger
+	for i := 0; i < 5; i++ { // push the cursor up
+		l.begin("s", fmt.Sprintf("old%d", i), "x", t0)
+		l.set("s", fmt.Sprintf("old%d", i), "failed", "r", "", t0)
+	}
+	_, cursor := l.snapshot("s", t0)
+	require.Greater(t, cursor, uint64(3))
+	l.snapshot("s", t0.Add(time.Hour)) // everything expired: the session is gone
+	_, gone := l.sessions["s"]
+	require.False(t, gone)
+	l.begin("s", "new", "y", t0.Add(time.Hour))
+	got, seq := l.since("s", cursor, t0.Add(time.Hour))
+	require.Len(t, got, 1, "the connection with the older cursor still hears the new id")
+	assert.Equal(t, "new", got[0].ClientMsgID)
+	assert.Greater(t, seq, cursor)
+	// and a connection never moves its cursor back when nothing changed
+	_, same := l.since("s", seq+10, t0.Add(time.Hour))
+	assert.Equal(t, seq+10, same)
+}

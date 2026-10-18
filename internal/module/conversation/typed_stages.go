@@ -66,11 +66,11 @@ func stageOfAnswer(status int, body []byte) (stage, reason, mode string) {
 }
 
 // recordAnswer moves the id to the stage its answer stands for.
-func (m *Module) recordAnswer(sid, id string, w *stageWriter, now time.Time) {
+func (m *Module) recordAnswer(sid, id string, tok uint64, w *stageWriter, now time.Time) {
 	if w.status == 0 {
 		return
 	}
 	if stage, reason, mode := stageOfAnswer(w.status, w.body.Bytes()); stage != "" {
-		m.stages.set(sid, id, stage, reason, mode, now)
+		m.stages.setAttempt(sid, id, tok, stage, reason, mode, now)
 	}
 }
