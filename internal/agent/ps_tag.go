@@ -44,18 +44,27 @@ const psModulePrefix = "github.com/wake/purdex/internal/"
 const psAgentPkg = psModulePrefix + "agent."
 
 // psCaller is the function that asked for the fork: the first frame of the stack that is not this package, the runtime or the counter.
-// "" when there is none within the frames looked at.
+// A fork made on a goroutine this package started itself (the start-text recalibration every 15 s) has only this package's frames, so
+// the outermost of them — the goroutine's own function — names it. "" only when the stack has no function of the daemon at all.
 func psCaller() string {
 	var pcs [24]uintptr
 	n := runtime.Callers(3, pcs[:]) // psCaller, the tag's caller, then runPS
 	frames := runtime.CallersFrames(pcs[:n])
+	outermostAgent := ""
 	for {
 		f, more := frames.Next()
-		if fn := f.Function; fn != "" && !strings.HasPrefix(fn, psAgentPkg) && !strings.HasPrefix(fn, "runtime.") &&
-			!strings.HasPrefix(fn, psModulePrefix+"execstat.") {
+		fn := f.Function
+		switch {
+		case fn == "" || strings.HasPrefix(fn, "runtime.") || strings.HasPrefix(fn, psModulePrefix+"execstat."):
+		case strings.HasPrefix(fn, psAgentPkg):
+			outermostAgent = fn
+		default:
 			return psShortCaller(fn)
 		}
 		if !more {
+			if outermostAgent != "" {
+				return psShortCaller(outermostAgent)
+			}
 			return ""
 		}
 	}

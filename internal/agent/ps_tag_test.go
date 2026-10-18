@@ -54,5 +54,16 @@ func TestPsTagNamesTheCaller(t *testing.T) {
 	}
 }
 
+// A fork made on a goroutine of this package's own (nothing of another package on its stack) is named by the goroutine's function, not
+// left without a who: the periodic start-text recalibration is such a fork.
+func TestPsTagOnAGoroutineOfThePackageItself(t *testing.T) {
+	done := make(chan string)
+	go func() { done <- psTagFromHere([]string{"-p", "1", "-o", "lstart="}) }()
+	tag := <-done
+	if !strings.HasPrefix(tag, "agent.ps.start@agent.TestPsTagOnAGoroutineOfThePackageItself") {
+		t.Errorf("tag = %q, want agent.ps.start@agent.TestPsTagOnAGoroutineOfThePackageItself (the goroutine's function)", tag)
+	}
+}
+
 // psTagFromHere is psTag called one frame down, as runPS calls it.
 func psTagFromHere(args []string) string { return psTag(args) }
