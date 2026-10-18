@@ -990,3 +990,25 @@ func TestANonQuarantinedJobWritesNoMarker(t *testing.T) {
 		t.Fatalf("held %+v", held)
 	}
 }
+
+func TestRunSweepsTheQuarantineByItselfEvenWithNoOtherSweeper(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := newQRig(t, c)
+	q.ex.run = notProven
+	q.loop.cfg.SweepEvery = unit
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	// the owner's reclaim is not needed: stop the job the way a shutdown would not, by asking it to end through its Running
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the quarantine", func() bool { return len(q.store.Held()) == 1 })
+	q.units.mu.Lock()
+	q.units.gone["wwd-stuck"] = true
+	q.units.mu.Unlock()
+	waitFor(t, "the clear", func() bool { return len(q.store.Held()) == 0 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
