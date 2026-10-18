@@ -5,6 +5,7 @@ package peers
 
 import (
 	"log"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -37,8 +38,15 @@ func buildPool(set personas.Set) (recognised map[string]string, pickable []strin
 
 // bindPersonas applies the collection now and again on every change; a read that fails keeps the pool as it is (the stored
 // value's codes are reserved, so guessing an empty pool would be worse). The returned function stops following.
+//
+// The hostconfig module tells its readers from goroutines of their own, so two changes can arrive out of order. Reading, building
+// and swapping are one step under a mutex, and the read happens inside it: whichever callback runs last reads the last stored
+// set, so the pool never ends on an older one.
 func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
+	var mu sync.Mutex
 	apply := func() {
+		mu.Lock()
+		defer mu.Unlock()
 		set, err := r.Personas()
 		if err != nil {
 			log.Printf("[peers] personas: %v; the name pool keeps what it had", err)

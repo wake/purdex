@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,6 +132,65 @@ func TestPersonaPool_APutThroughTheRealHostconfigReachesThePoolAndTheJournal(t *
 	if got := journal.DisplayName("mlab/purdex-3f-hiro"); got != "Hiro Tanaka" {
 		t.Errorf("the journal shows %q, want the persona's display name", got)
 	}
+}
+
+// The hostconfig module tells its readers from goroutines of their own, so two changes can be applied out of order: the pool
+// must end up as the LAST stored set, whichever callback finishes last (NP-1b R2).
+// Mutation gate: drop the mutex of bindPersonas -> the older read overwrites the newer pool -> red.
+func TestPersonaPool_ConcurrentChangesEndOnTheLatestSet(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	older := personas.Set{Items: []personas.Persona{pp("anna", "Anna", false)}}
+	newer := personas.Set{Items: []personas.Persona{pp("hiro", "Hiro", false)}}
+	r := &blockingPersonas{first: make(chan struct{}), release: make(chan struct{}), sets: []personas.Set{older, newer}}
+	e.m.bindPersonas(r) // the binding's own first read, before the reader is armed, is an empty set
+	r.arm()             // from now on: the 1st read returns older and waits to be released, the 2nd returns newer
+	done := make(chan struct{}, 2)
+	go func() { r.fire(); done <- struct{}{} }() // callback A: reads older, then waits
+	<-r.first                                    // A is inside Personas()
+	go func() { r.fire(); done <- struct{}{} }() // callback B: reads newer, and finishes first when nothing orders them
+	time.Sleep(50 * time.Millisecond)            // let B run as far as it can
+	close(r.release)                             // now A finishes
+	<-done
+	<-done
+	if got := ipeers.PickablePool(); !slices.Equal(got, []string{"hiro"}) {
+		t.Fatalf("the pool is %v after the older callback finished last, want the latest set [hiro]", got)
+	}
+}
+
+// blockingPersonas is a Reader whose reads are numbered: the 1st armed read returns sets[0] and waits for release, the
+// next returns sets[1].
+type blockingPersonas struct {
+	first   chan struct{}
+	release chan struct{}
+	sets    []personas.Set
+	mu      sync.Mutex
+	calls   int
+	armed   bool
+	fn      func()
+}
+
+func (b *blockingPersonas) arm()  { b.mu.Lock(); b.armed, b.calls = true, 0; b.mu.Unlock() }
+func (b *blockingPersonas) fire() { b.fn() }
+func (b *blockingPersonas) OnPersonasChange(fn func()) func() {
+	b.fn = fn
+	return func() {}
+}
+func (b *blockingPersonas) Personas() (personas.Set, error) {
+	b.mu.Lock()
+	if !b.armed {
+		b.mu.Unlock()
+		return personas.Set{}, nil
+	}
+	b.calls++
+	n := b.calls
+	b.mu.Unlock()
+	if n == 1 {
+		close(b.first)
+		<-b.release
+		return b.sets[0], nil
+	}
+	return b.sets[1], nil
 }
 
 // A change of the collection rebuilds the pool; a read that fails keeps the pool as it was.
