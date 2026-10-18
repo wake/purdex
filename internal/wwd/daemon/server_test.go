@@ -164,6 +164,60 @@ func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
 	}
 }
 
+// A new process binds the path while the old one is still answering its last request (its listener is closed and the path is free):
+// the old Close, when it ends, does not take the new socket away.
+func TestRunningCloseDoesNotRemoveASocketBoundDuringTheShutdown(t *testing.T) {
+	dir, err := os.MkdirTemp("", "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release // the last request, still being answered
+	})}
+	go srv.Serve(ln)
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	go c.Get("http://wwd/")
+	<-started
+	run := &Running{srvs: []*http.Server{srv}, sock: sock}
+	closed := make(chan struct{})
+	go func() { run.Close(); close(closed) }()
+	for i := 0; ; i++ { // the old listener is closed when its path is free
+		if _, err := os.Lstat(sock); err != nil {
+			break
+		}
+		if i > 500 {
+			t.Fatal("the old listener did not close")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	newLn, err := net.Listen("unix", sock) // the new process
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newLn.Close()
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("the old Close took the new process's socket: %v", err)
+	}
+	conn.Close()
+}
+
 // A request that is not done when the grace ends has its connection closed, which ends the context it runs under; Close returns
 // then, and not before the grace (the request is given its time).
 func TestRunningCloseEndsTheContextOfARequestThatOutlastsTheGrace(t *testing.T) {

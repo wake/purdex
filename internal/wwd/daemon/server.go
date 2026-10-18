@@ -238,6 +238,7 @@ type Running struct {
 	sock  string
 	errCh chan error
 	once  sync.Once
+	uln   net.Listener // the Unix listener: closing it unlinks the socket file
 }
 
 // Listen validates every address, binds the TCP listeners and the socket, and
@@ -298,6 +299,7 @@ func (d *Daemon) Listen(ctx context.Context, spec ListenSpec) (*Running, error) 
 		serve(ln, d.TCPHandler())
 	}
 	serve(uln, d.SocketHandler())
+	r.uln = uln
 	go func() { <-ctx.Done(); r.Close() }()
 	return r, nil
 }
@@ -345,13 +347,18 @@ func (r *Running) Err() <-chan error { return r.errCh }
 // closeGrace is how long Close lets the requests in flight finish.
 var closeGrace = 3 * time.Second
 
-// Close stops both surfaces and removes the socket file. It does this once: a second call (the shutdown that follows the context, and
+// Close stops both surfaces (closing the Unix listener removes the socket file). It does this once: a second call (the shutdown that follows the context, and
 // the one main makes to be sure the servers are quiet) waits for the first to finish and does nothing more, so it cannot remove the
 // socket a new process has made since.
 func (r *Running) Close() error {
 	r.once.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), closeGrace)
 		defer cancel()
+		// The Unix listener is closed first, by us, whether or not its server has started to serve: that unlinks the socket file, once and
+		// before the requests in flight are waited for, so a new process may bind the path from then on and nothing here takes it away.
+		if r.uln != nil {
+			_ = r.uln.Close()
+		}
 		for _, s := range r.srvs {
 			if err := s.Shutdown(ctx); err != nil {
 				// the requests in flight did not finish in time: their connections are closed, which ends the contexts they run under (a handler
@@ -359,7 +366,6 @@ func (r *Running) Close() error {
 				_ = s.Close()
 			}
 		}
-		_ = os.Remove(r.sock)
 	})
 	return nil
 }
