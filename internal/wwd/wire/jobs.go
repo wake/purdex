@@ -226,6 +226,14 @@ func (j Job) Validate() error {
 	if j.Local && j.Cacheable {
 		return fmt.Errorf("job: a local job is never cacheable")
 	}
+	if !j.Manual.ValidOnJob() {
+		return fmt.Errorf("job: invalid manual place %q", j.Manual)
+	}
+	// the number fits the place: none and hold have none, a front is below zero and a back above it
+	if (j.Manual == "" || j.Manual == PositionHold) != (j.ManualSeq == 0) ||
+		(j.Manual == PositionFront && j.ManualSeq > 0) || (j.Manual == PositionBack && j.ManualSeq < 0) {
+		return fmt.Errorf("job: manual_seq %d does not fit the place %q", j.ManualSeq, j.Manual)
+	}
 	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
 	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
 }
