@@ -108,7 +108,8 @@ func TestPoolHostCollector_CloseReachesTheFallback(t *testing.T) {
 func TestDiskSampleOf(t *testing.T) {
 	for name, ds := range map[string][]wire.Disk{
 		"none":       nil,
-		"zero used":  {{Mount: "/", FreeGB: 10, UsedPct: 0}},
+		"nothing":    {{Mount: "/", FreeGB: 0, UsedPct: 0}},
+		"negative %": {{Mount: "/", FreeGB: 10, UsedPct: -1}},
 		"full":       {{Mount: "/", FreeGB: 0, UsedPct: 100}},
 		"negative":   {{Mount: "/", FreeGB: -1, UsedPct: 10}},
 		"over 100 %": {{Mount: "/", FreeGB: 1, UsedPct: 120}},
@@ -116,7 +117,11 @@ func TestDiskSampleOf(t *testing.T) {
 		_, ok := diskSampleOf(ds)
 		assert.False(t, ok, name)
 	}
-	s, ok := diskSampleOf([]wire.Disk{{Mount: "/a", FreeGB: 1, UsedPct: 50}})
+	s, ok := diskSampleOf([]wire.Disk{{Mount: "/", FreeGB: 10, UsedPct: 0}})
+	require.True(t, ok, "an empty disk is a valid reading")
+	assert.Equal(t, uint64(10)<<30, s.TotalBytes)
+	assert.Zero(t, s.UsedBytes)
+	s, ok = diskSampleOf([]wire.Disk{{Mount: "/a", FreeGB: 1, UsedPct: 50}})
 	require.True(t, ok)
 	assert.InDelta(t, 2.0*(1<<30), float64(s.TotalBytes), 1<<10, "no root mount: the first")
 }
@@ -147,4 +152,26 @@ func TestModule_WrapsTheDefaultHostCollectorAndLooksTheFactsUp(t *testing.T) {
 	require.False(t, injected.defaultHost)
 	require.NoError(t, injected.Init(c))
 	assert.Same(t, own, injected.collectors.HostCollector, "a test's collector is left alone")
+}
+
+// Leaving the pool source starts the own delta collector afresh: its first reading is pending, not an average over the whole
+// time wwd was the source.
+func TestPoolHostCollector_TheDeltaBaselineRestartsAfterWWD(t *testing.T) {
+	have := false
+	c := newPoolHostCollector(&ownHost{}, func() (wire.Facts, bool) {
+		if have {
+			return factsOK()
+		}
+		return factsNone()
+	})
+	state := NewHostMetricsState(c)
+	m := collectHostMetrics(context.Background(), state)
+	require.Equal(t, hostCPUPendingReason, *m.CPU.UnavailableReason, "first own reading: pending")
+	have = true
+	m = collectHostMetrics(context.Background(), state)
+	require.NotNil(t, m.CPU.Percent, "wwd's reading")
+	have = false
+	m = collectHostMetrics(context.Background(), state)
+	require.NotNil(t, m.CPU.UnavailableReason)
+	assert.Equal(t, hostCPUPendingReason, *m.CPU.UnavailableReason, "the own baseline starts over")
 }

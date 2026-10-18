@@ -73,11 +73,14 @@ func diskSampleOf(ds []wire.Disk) (HostDiskSample, bool) {
 			break
 		}
 	}
-	if d.UsedPct <= 0 || d.UsedPct >= 100 || d.FreeGB < 0 {
+	if d.UsedPct < 0 || d.UsedPct >= 100 || d.FreeGB < 0 {
 		return HostDiskSample{}, false
 	}
 	free := d.FreeGB * (1 << 30)
 	total := free / (1 - d.UsedPct/100)
+	if total <= 0 {
+		return HostDiskSample{}, false
+	}
 	return HostDiskSample{TotalBytes: uint64(total), UsedBytes: uint64(total - free)}, true
 }
 

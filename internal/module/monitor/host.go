@@ -99,6 +99,7 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
 	if pc, ok := state.collector.(interface{ poolCPU() (float64, bool) }); ok { // wwd's reading, when the pool is the source
 		if percent, ok := pc.poolCPU(); ok {
+			state.previous = nil // the delta baseline of the own collector is old by the time it is needed again: start it afresh
 			return &HostCPUMetrics{Percent: &percent}
 		}
 	}
