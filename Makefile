@@ -32,6 +32,8 @@ lint:
 	@unformatted=$$(gofmt -l cmd internal); \
 	if [ -n "$$unformatted" ]; then echo "gofmt needed (run gofmt -w):"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
+	# wwd also runs on mserv (Linux): the *_linux.go files are not seen by the vet above
+	GOOS=linux GOARCH=amd64 go vet ./internal/wwd/... ./cmd/wwd/
 
 clean:
 	rm -rf bin/
