@@ -63,6 +63,23 @@ describe('savePersonas', () => {
     expect(putPersonas).toHaveBeenLastCalledWith('h2', expect.anything(), 8)
   })
 
+  it('does not hand back a base for another host when a newer collection won during the reload', async () => {
+    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
+    usePersonaStore.setState({
+      load: vi.fn(async () => {
+        usePersonaStore.setState({
+          byHost: {
+            ...usePersonaStore.getState().byHost,
+            h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 20, host: 'h2' }, 8) },
+            h3: { status: 'ready', collection: makeCollection(['fresh'], { at: 50, host: 'h3' }, 2) },
+          },
+        })
+      }),
+    })
+    const res = await savePersonas([makePersona('hiro')], editBase(), 'h1')
+    expect(res.base).toBeNull() // the form must be rebuilt on h3's collection, not re-bound to it
+  })
+
   it('refuses when the same host moved to a newer revision under the form', async () => {
     const base = editBase()
     usePersonaStore.setState({

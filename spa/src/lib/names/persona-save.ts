@@ -69,6 +69,9 @@ export async function savePersonas(
     throw e
   }
   await usePersonaStore.getState().load(hostId)
-  // The reload moved the revision and stamp; a form that stays open continues from this base.
-  return { hostId, base: editBase() }
+  // The reload moved the revision and stamp; a form that stays open continues from this base. It is the saved host's
+  // own, and only while that host's collection is still the shown one: when another host's newer copy won meanwhile,
+  // the open form's items were built on the old one, so there is no base to continue from and the page rebuilds it.
+  const after = editBase()
+  return { hostId, base: after?.hostId === hostId ? after : null }
 }
