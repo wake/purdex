@@ -125,12 +125,20 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 }
 
-// Close closes the database.
+// Close closes the database once the loops have ended. The core calls it after every Stop, also after one that timed out, so a loop
+// that is still stuck in a call is waited for a moment and the database is then left to the process's end rather than closed under it.
 func (m *Module) Close() error {
-	if m.store != nil {
-		return m.store.close()
+	if m.store == nil {
+		return nil
 	}
-	return nil
+	ended := make(chan struct{})
+	go func() { m.wg.Wait(); close(ended) }()
+	select {
+	case <-ended:
+		return m.store.close()
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("jobnotify: a loop is still running, database left open")
+	}
 }
 
 // run keeps the event stream open: wwd not running, or a stream that ended, is retried; every (re)connect first looks for jobs

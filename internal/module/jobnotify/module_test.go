@@ -462,8 +462,17 @@ func TestStopGivesUpAtItsDeadlineWhenAListIgnoresCancellation(t *testing.T) {
 	if err := m.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Stop = %v", err)
 	}
+	// the core calls Close after a Stop that timed out: with the loop still stuck, the database must stay open under it
+	closed := make(chan error, 1)
+	go func() { closed <- m.Close() }()
+	time.Sleep(100 * time.Millisecond)
+	if _, _, err := m.store.since(); err != nil {
+		t.Fatalf("the database was closed under a running loop: %v", err)
+	}
 	close(src.release)
-	m.Stop(context.Background()) // now it ends
+	if err := <-closed; err != nil {
+		t.Fatalf("Close after the loops ended: %v", err)
+	}
 }
 
 func TestTheStreamIsOpenedAgainAndTellsWhatArrives(t *testing.T) {
