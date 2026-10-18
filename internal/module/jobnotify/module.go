@@ -34,10 +34,14 @@ type Module struct {
 	now   func() time.Time
 	dir   string
 	src   source
-	send  func(sessionID, text string) error
+	send  func(ctx context.Context, sessionID, text string) error
 	retry time.Duration // the pause before the event stream is opened again
+	// redo is how often notices that could not be delivered are tried again, up to maxTries in all.
+	redo time.Duration
 
 	mu     sync.Mutex // serialises handling: an event and a catch-up never tell one job twice
+	tries  map[string]int
+	late   map[string]wire.Job // jobs whose notice could not be delivered yet, by id
 	store  *store
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -45,7 +49,7 @@ type Module struct {
 
 // New returns the module with production defaults.
 func New() *Module {
-	return &Module{logf: log.Printf, now: time.Now, dir: gate.DefaultDir(), retry: 5 * time.Second}
+	return &Module{logf: log.Printf, now: time.Now, dir: gate.DefaultDir(), retry: 5 * time.Second, redo: 30 * time.Second}
 }
 
 func (m *Module) Name() string           { return "jobnotify" }
@@ -56,13 +60,14 @@ func (m *Module) Init(c *core.Core) error {
 		m.src = client.New(client.DefaultSocket())
 	}
 	if m.send == nil {
-		m.send = func(sessionID, text string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		m.send = func(ctx context.Context, sessionID, text string) error {
+			ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			return peersmod.NotifySelf(ctx, c, m.logf, sessionID, text)
 		}
 	}
-	m.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), m.now())
+	m.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), m.now(), m.logf)
+	m.tries, m.late = map[string]int{}, map[string]wire.Job{}
 	return nil
 }
 
@@ -71,10 +76,14 @@ func (m *Module) RegisterRoutes(*http.ServeMux) {}
 func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	m.wg.Add(1)
+	m.wg.Add(2)
 	go func() {
 		defer m.wg.Done()
 		m.run(ctx)
+	}()
+	go func() {
+		defer m.wg.Done()
+		m.redoLoop(ctx)
 	}()
 	return nil
 }
@@ -93,7 +102,10 @@ func (m *Module) run(ctx context.Context) {
 	for ctx.Err() == nil {
 		ready := make(chan struct{})
 		done := make(chan struct{})
+		var cu sync.WaitGroup
+		cu.Add(1)
 		go func() {
+			defer cu.Done()
 			select {
 			case <-ready:
 				m.catchUp(ctx) // after the stream is open, so a job ending right now is in the stream or in the list
@@ -101,10 +113,11 @@ func (m *Module) run(ctx context.Context) {
 			}
 		}()
 		err := m.src.Watch(ctx, ready, func(ev wire.Event) bool {
-			m.onEvent(ev)
+			m.onEvent(ctx, ev)
 			return false
 		})
 		close(done)
+		cu.Wait() // a catch-up in flight ends with the context, before this loop (and Stop) go on
 		if err != nil && ctx.Err() == nil {
 			m.logf("jobnotify: wwd events: %v", err)
 		}
@@ -115,7 +128,7 @@ func (m *Module) run(ctx context.Context) {
 	}
 }
 
-func (m *Module) onEvent(ev wire.Event) {
+func (m *Module) onEvent(ctx context.Context, ev wire.Event) {
 	if ev.Type != wire.EventJob {
 		return
 	}
@@ -123,7 +136,7 @@ func (m *Module) onEvent(ev wire.Event) {
 	if err != nil {
 		return
 	}
-	m.handle(je.Job)
+	m.handle(ctx, je.Job, false)
 }
 
 // catchUp tells the jobs that ended since the last complete catch-up and were not told. Every state is listed before anything is
@@ -148,17 +161,21 @@ func (m *Module) catchUp(ctx context.Context) {
 		}
 	}
 	for _, j := range ended {
-		m.handle(j)
+		m.handle(ctx, j, false)
 	}
 	if err := m.store.advance(began); err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
 	}
 }
 
-// handle tells the submitter of a job that ended, once. A fast-lane job is its caller's own process: that process prints the
-// outcome, so it is not told again. A session that is not live on this host cannot be reached, which is not an error to keep trying.
-func (m *Module) handle(j wire.Job) {
-	if !j.State.Terminal() || j.Local || j.Submitter.Session == "" {
+// maxTries is how many times a notice is tried in all: a session that was only just started may not have its inbox yet, one that
+// is not on this host never will.
+const maxTries = 6
+
+// handle tells the submitter of a job that ended, once. A notice that cannot be delivered is tried again by redoLoop, up to
+// maxTries; then it is given up (a session that is not live on this host cannot be reached) and the job counts as told.
+func (m *Module) handle(ctx context.Context, j wire.Job, retry bool) {
+	if !j.State.Terminal() || j.Submitter.Session == "" {
 		return
 	}
 	m.mu.Lock()
@@ -166,11 +183,47 @@ func (m *Module) handle(j wire.Job) {
 	if m.store.has(j.ID) {
 		return
 	}
-	if err := m.send(j.Submitter.Session, Text(j)); err != nil {
-		m.logf("jobnotify: %s: %v", j.ID, err)
+	if _, waiting := m.late[j.ID]; waiting && !retry {
+		return // redoLoop owns it
 	}
+	if err := m.send(ctx, j.Submitter.Session, Text(j)); err != nil {
+		if m.tries[j.ID]++; m.tries[j.ID] < maxTries && ctx.Err() == nil {
+			m.late[j.ID] = j
+			m.logf("jobnotify: %s: %v (try %d, again later)", j.ID, err, m.tries[j.ID])
+			return
+		}
+		m.logf("jobnotify: %s: %v (given up)", j.ID, err)
+	}
+	delete(m.late, j.ID)
+	delete(m.tries, j.ID)
 	if err := m.store.mark(j.ID); err != nil {
 		m.logf("jobnotify: remember %s: %v", j.ID, err)
+	}
+}
+
+// redoLoop tries again the notices that could not be delivered.
+func (m *Module) redoLoop(ctx context.Context) {
+	t := time.NewTicker(m.redo)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.redoOnce(ctx)
+		}
+	}
+}
+
+func (m *Module) redoOnce(ctx context.Context) {
+	m.mu.Lock()
+	jobs := make([]wire.Job, 0, len(m.late))
+	for _, j := range m.late {
+		jobs = append(jobs, j)
+	}
+	m.mu.Unlock()
+	for _, j := range jobs {
+		m.handle(ctx, j, true)
 	}
 }
 

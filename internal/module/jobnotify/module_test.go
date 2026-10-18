@@ -81,11 +81,17 @@ type sent struct {
 	mu   sync.Mutex
 	list []string
 	err  error
+	// failFor is how many of the next sends fail (the session has no inbox yet)
+	failFor int
 }
 
-func (s *sent) send(session, text string) error {
+func (s *sent) send(_ context.Context, session, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failFor > 0 {
+		s.failFor--
+		return errors.New("no live inbox yet")
+	}
 	s.list = append(s.list, session+"|"+text)
 	return s.err
 }
@@ -102,8 +108,9 @@ func newMod(t *testing.T, src source, s *sent) *Module {
 	m.logf = func(string, ...any) {}
 	m.now = func() time.Time { return t0 }
 	m.dir = t.TempDir()
-	m.src, m.send, m.retry = src, s.send, time.Millisecond
-	m.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), t0)
+	m.src, m.send, m.retry, m.redo = src, s.send, time.Millisecond, time.Millisecond
+	m.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), t0, m.logf)
+	m.tries, m.late = map[string]int{}, map[string]wire.Job{}
 	return m
 }
 
@@ -111,7 +118,7 @@ func TestAJobEndedIsToldOnceHoweverManyEventsCarryIt(t *testing.T) {
 	s := &sent{}
 	m := newMod(t, &fakeSource{}, s)
 	for i := 0; i < 3; i++ {
-		m.onEvent(event(t, job("j_a", wire.StateFailed, t0)))
+		m.onEvent(context.Background(), event(t, job("j_a", wire.StateFailed, t0)))
 	}
 	got := s.texts()
 	if len(got) != 1 || !strings.HasPrefix(got[0], "sess-1|[wwd] lint 失敗（exit 1）（j_a）") {
@@ -123,11 +130,11 @@ func TestEveryTerminalStateIsToldAndOthersAreNot(t *testing.T) {
 	s := &sent{}
 	m := newMod(t, &fakeSource{}, s)
 	for i, st := range []wire.JobState{wire.StateSucceeded, wire.StateFailed, wire.StateCancelled, wire.StateSuperseded, wire.StateExpired} {
-		m.onEvent(event(t, job("j_"+string(rune('a'+i)), st, t0)))
+		m.onEvent(context.Background(), event(t, job("j_"+string(rune('a'+i)), st, t0)))
 	}
 	hit := job("j_hit", wire.StateSucceeded, t0)
 	hit.Result.CacheHit = true
-	m.onEvent(event(t, hit))
+	m.onEvent(context.Background(), event(t, hit))
 	if n := len(s.texts()); n != 6 {
 		t.Fatalf("told %d: %q", n, s.texts())
 	}
@@ -135,41 +142,125 @@ func TestEveryTerminalStateIsToldAndOthersAreNot(t *testing.T) {
 		t.Fatalf("cache hit text %q", s.texts()[5])
 	}
 	for _, st := range []wire.JobState{wire.StateQueued, wire.StateRunning} {
-		m.onEvent(event(t, job("j_live_"+string(st), st, t0)))
+		m.onEvent(context.Background(), event(t, job("j_live_"+string(st), st, t0)))
 	}
-	local := job("j_local", wire.StateSucceeded, t0)
-	local.Local = true
-	m.onEvent(event(t, local))
 	noSession := job("j_nosess", wire.StateSucceeded, t0)
 	noSession.Submitter.Session = ""
-	m.onEvent(event(t, noSession))
-	m.onEvent(wire.Event{Type: wire.EventFacts, Data: json.RawMessage(`{}`)})
+	m.onEvent(context.Background(), event(t, noSession))
+	m.onEvent(context.Background(), wire.Event{Type: wire.EventFacts, Data: json.RawMessage(`{}`)})
 	if n := len(s.texts()); n != 6 {
-		t.Fatalf("a job that had not ended, a fast-lane job, a job without a session or another event was told: %q", s.texts())
+		t.Fatalf("a job that had not ended, a job without a session or another event was told: %q", s.texts())
 	}
 }
 
 func TestADaemonRestartDoesNotTellAgain(t *testing.T) {
 	s := &sent{}
 	m := newMod(t, &fakeSource{}, s)
-	m.onEvent(event(t, job("j_a", wire.StateSucceeded, t0.Add(time.Minute))))
+	m.onEvent(context.Background(), event(t, job("j_a", wire.StateSucceeded, t0.Add(time.Minute))))
 	m2 := newMod(t, &fakeSource{}, s)
 	m2.dir = m.dir
-	m2.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), t0.Add(time.Hour))
-	m2.onEvent(event(t, job("j_a", wire.StateSucceeded, t0.Add(time.Minute))))
+	m2.store = openStore(filepath.Join(m.dir, "wwd-notified.json"), t0.Add(time.Hour), m.logf)
+	m2.onEvent(context.Background(), event(t, job("j_a", wire.StateSucceeded, t0.Add(time.Minute))))
 	if n := len(s.texts()); n != 1 {
 		t.Fatalf("told %d times: %q", n, s.texts())
 	}
 }
 
-func TestAnUnreachableSessionIsNotRetriedForever(t *testing.T) {
-	s := &sent{err: errors.New("the watcher has no live inbox")}
+func TestAFastLaneJobIsToldLikeAnyOther(t *testing.T) {
+	s := &sent{}
 	m := newMod(t, &fakeSource{}, s)
-	m.onEvent(event(t, job("j_a", wire.StateSucceeded, t0)))
-	m.onEvent(event(t, job("j_a", wire.StateSucceeded, t0)))
-	if n := len(s.texts()); n != 1 {
-		t.Fatalf("tried %d times", n)
+	local := job("j_local", wire.StateSucceeded, t0)
+	local.Local, local.Cacheable = true, false
+	m.onEvent(context.Background(), event(t, local))
+	if len(s.texts()) != 1 {
+		t.Fatalf("told %q", s.texts())
 	}
+}
+
+func TestASessionWithoutAnInboxYetIsToldWhenItHasOne(t *testing.T) {
+	s := &sent{failFor: 2}
+	m := newMod(t, &fakeSource{}, s)
+	ctx := context.Background()
+	m.onEvent(ctx, event(t, job("j_a", wire.StateSucceeded, t0)))
+	m.onEvent(ctx, event(t, job("j_a", wire.StateSucceeded, t0))) // the same event again does not count as another try
+	if m.store.has("j_a") {
+		t.Fatal("a notice that was not delivered was remembered as told")
+	}
+	m.redoOnce(ctx)
+	m.redoOnce(ctx)
+	m.redoOnce(ctx)
+	if got := s.texts(); len(got) != 1 || !m.store.has("j_a") || len(m.late) != 0 {
+		t.Fatalf("told %q, remembered %v, waiting %d", got, m.store.has("j_a"), len(m.late))
+	}
+}
+
+func TestASessionThatNeverAnswersIsGivenUpAfterMaxTries(t *testing.T) {
+	s := &sent{failFor: 1000}
+	m := newMod(t, &fakeSource{}, s)
+	ctx := context.Background()
+	m.onEvent(ctx, event(t, job("j_a", wire.StateSucceeded, t0)))
+	for i := 0; i < maxTries+3; i++ {
+		m.redoOnce(ctx)
+	}
+	if left := 1000 - s.failFor; left != maxTries || !m.store.has("j_a") {
+		t.Fatalf("tried %d times, remembered %v", left, m.store.has("j_a"))
+	}
+}
+
+func TestADamagedMemoryFileIsKeptAsideAndTheModuleStartsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wwd-notified.json")
+	if err := os.WriteFile(path, []byte(`{"notified": ["j_a"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := openStore(path, t0, func(string, ...any) {})
+	if st.has("j_a") || !st.since().Equal(t0) {
+		t.Fatal("a damaged file was believed")
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("the damaged file was not kept: %v", err)
+	}
+}
+
+func TestStopWaitsForACatchUpInFlight(t *testing.T) {
+	s := &sent{}
+	gate := make(chan struct{})
+	src := &blockingJobs{fakeSource: fakeSource{}, release: gate, entered: make(chan struct{})}
+	m := newMod(t, src, s)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-src.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no catch-up began")
+	}
+	stopped := make(chan struct{})
+	go func() { m.Stop(context.Background()); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a catch-up was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return after the catch-up ended")
+	}
+}
+
+type blockingJobs struct {
+	fakeSource
+	release chan struct{}
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingJobs) Jobs(ctx context.Context, q client.JobsQuery) ([]wire.Job, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil, nil
 }
 
 func TestCatchUpTellsOnlyWhatEndedSinceTheLastOneHandled(t *testing.T) {

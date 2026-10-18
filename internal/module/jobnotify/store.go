@@ -28,10 +28,20 @@ type store struct {
 
 // openStore reads path; a missing or unreadable file starts a fresh memory whose catch-up window begins at now, so the first run
 // does not tell a whole history.
-func openStore(path string, now time.Time) *store {
+func openStore(path string, now time.Time, logf func(string, ...any)) *store {
 	s := &store{path: path, set: map[string]bool{}}
-	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &s.st)
+	b, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		logf("jobnotify: %s cannot be read, starting with an empty memory: %v", path, err)
+	default:
+		if err := json.Unmarshal(b, &s.st); err != nil {
+			s.st = state{}
+			// keep the bad file for whoever looks, and start from an empty memory instead of failing the daemon
+			logf("jobnotify: %s is damaged (%v), moved to %s.bad; starting with an empty memory", path, err, path)
+			_ = os.Rename(path, path+".bad")
+		}
 	}
 	if s.st.Since.IsZero() {
 		s.st.Since = now
@@ -96,8 +106,9 @@ func (s *store) save() error {
 		return err
 	}
 	_, werr := tmp.Write(b)
+	serr := tmp.Sync()
 	cerr := tmp.Close()
-	if err := errors.Join(werr, cerr); err != nil {
+	if err := errors.Join(werr, serr, cerr); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}
