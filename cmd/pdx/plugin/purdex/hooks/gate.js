@@ -30,7 +30,7 @@ const BARE = /[<>&]$/
 // sits in the original string. Returns null when the command cannot be parsed (an open quote) or has a
 // backgrounding `&`. With `continuation`, a backslash and a newline are removed as the shell removes them before it splits words
 // (the entry reads commands that way; the older steps read them as they always did).
-function scan(cmd, continuation = false) {
+function scan(cmd, continuation) {
   const segments = []
   let words = []
   let cur = null // {text, start, end, redirect}
