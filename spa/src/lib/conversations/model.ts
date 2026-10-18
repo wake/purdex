@@ -67,7 +67,7 @@ export function applySnapshot(doc: ConversationDoc, snap: Snapshot): Conversatio
     hasMoreBefore: snap.window.has_more_before,
     detached: false,
     totalTurns: snap.window.total_turns,
-    stages: snap.stages ? stagesOf(snap.stages) : doc.stages,
+    stages: stagesOf(snap.stages ?? []), // absent = an older daemon, or an empty ledger: what the last epoch held is not this one's
     generation: doc.generation + 1,
   }
 }

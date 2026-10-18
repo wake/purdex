@@ -54,7 +54,8 @@ describe('applySnapshot stages', () => {
     const d = applySnapshot(before, snap([st('new', 'filled')]))
     expect(Object.keys(d.stages)).toEqual(['new'])
   })
-  it('a snapshot without stages (an older daemon) leaves none', () => {
-    expect(applySnapshot(emptyDoc(), snap()).stages).toEqual({})
+  it('a snapshot without stages (an older daemon, or a restarted one with an empty ledger) clears the held ones: the last epoch\'s ledger is not this one\'s', () => {
+    const before = applyStages(emptyDoc(), [st('old', 'queued')])
+    expect(applySnapshot(before, snap()).stages).toEqual({})
   })
 })
