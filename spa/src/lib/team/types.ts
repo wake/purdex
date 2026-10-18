@@ -19,7 +19,7 @@ export const isHookKind = (kind: string): kind is HookKind => HOOK_KINDS.include
 
 /** Spec §6.1–§6.2 limits (`team.DefaultMaxMembers`, `team.MaxMaxMembers`). */
 export const DEFAULT_MAX_MEMBERS = 3
-export const MAX_MAX_MEMBERS = 9
+export const MAX_MAX_MEMBERS = 8 // the v1 ceiling and the default of a lead request's display; the v2 ceiling is `maxMembersMax(true)`
 
 /**
  * `APIError.error` as the daemon writes it: the `Err*` constants of `wire.go` plus the module's own
@@ -355,12 +355,12 @@ export function adoptTargetLabel(p: AdoptPayload): string {
   return p.title !== '' ? p.title : p.target_name !== '' ? p.target_name : p.target_ref
 }
 
-/** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap 9 (a v1 daemon clamps to 8 itself); roots default `[origin.cwd]`. */
-export function leadPayloadOf(a: Approval): LeadPayload {
+/** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap `ceiling` (8; a host with team.max_members.v2 passes 9); roots default `[origin.cwd]`. */
+export function leadPayloadOf(a: Approval, ceiling: number = MAX_MAX_MEMBERS): LeadPayload {
   const p = isRecord(a.payload) ? a.payload : {}
   const reason = typeof p.reason === 'string' ? p.reason : ''
   const rawMembers = typeof p.max_members === 'number' && Number.isFinite(p.max_members) ? Math.trunc(p.max_members) : 0
-  const max_members = rawMembers <= 0 ? DEFAULT_MAX_MEMBERS : Math.min(rawMembers, MAX_MAX_MEMBERS)
+  const max_members = rawMembers <= 0 ? DEFAULT_MAX_MEMBERS : Math.min(rawMembers, ceiling)
   const roots = Array.isArray(p.roots) ? p.roots.filter((r): r is string => typeof r === 'string' && r !== '') : []
   const lead: LeadPayload = { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
   if (typeof p.team_name === 'string') lead.team_name = p.team_name
@@ -431,7 +431,10 @@ export const MAX_MEMBERS_MAX_V2 = 9
 export const TEAM_MAX_MEMBERS_V2_CAPABILITY = 'team.max_members.v2'
 export const maxMembersMax = (v2: boolean): number => (v2 ? MAX_MEMBERS_MAX_V2 : MAX_MEMBERS_MAX_V1)
 
-/** A cap and its usage as the daemon can truthfully report them: 1-9 members allowed (only a v2 daemon says 9), 0..cap in use. */
+/**
+ * A cap and its usage as the daemon can truthfully report them: 1-9 members allowed, 0..cap in use. A report is the daemon's own fact, so it is judged against the
+ * highest ceiling any daemon has (only a v2 daemon says 9): the host's capability probe may not have answered when the first roster frame arrives.
+ */
 export function isCapPair(maxMembers: unknown, inUse: unknown): maxMembers is number {
   return Number.isInteger(maxMembers) && Number.isInteger(inUse)
     && (maxMembers as number) >= MAX_MEMBERS_MIN && (maxMembers as number) <= MAX_MEMBERS_MAX_V2

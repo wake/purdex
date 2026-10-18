@@ -17,9 +17,10 @@ describe('what a daemon reports', () => {
     expect(isCapPair(9, 10)).toBe(false)
     expect(isCapPair(10, 1)).toBe(false)
   })
-  it('a lead request that asks for 9 members keeps 9', () => {
-    const a = { payload: { max_members: 9 }, origin: { cwd: '/x' } } as unknown as Approval
-    expect(leadPayloadOf(a).max_members).toBe(9)
-    expect(leadPayloadOf({ payload: { max_members: 12 }, origin: { cwd: '/x' } } as unknown as Approval).max_members).toBe(9)
+  it('a lead request keeps the ceiling it is given: 8 by default, 9 for a v2 host', () => {
+    const ask = (n: number) => ({ payload: { max_members: n }, origin: { cwd: '/x' } }) as unknown as Approval
+    expect(leadPayloadOf(ask(9)).max_members).toBe(8)
+    expect(leadPayloadOf(ask(9), maxMembersMax(true)).max_members).toBe(9)
+    expect(leadPayloadOf(ask(12), maxMembersMax(true)).max_members).toBe(9)
   })
 })
