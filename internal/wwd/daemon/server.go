@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/labels"
+	"github.com/wake/purdex/internal/wwd/localruns"
+	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -29,6 +31,11 @@ type Options struct {
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
 	Broker                 *Broker      // the event broker (shared with State); nil: a new one
+	// Queue is this host's job queue (one per process); the job routes serve from it. nil: no queue.
+	Queue *queue.Queue
+	// LocalRuns serves POST /v1/local-runs on the socket (the fast lane, spec 5.2); main builds it over Queue and feeds it the
+	// queue's job events. nil: the route is not registered.
+	LocalRuns *localruns.Service
 	// RepoSource lists the repos this host has a prepared clone of (they become
 	// repo:<name> labels). Called once per facts record: cheap, never blocking.
 	// nil: no repo labels.
@@ -90,6 +97,9 @@ func (d *Daemon) SocketHandler() http.Handler {
 	mux := http.NewServeMux()
 	d.routes(mux, false)
 	d.poolRoutes(mux)
+	if d.opts.LocalRuns != nil {
+		mux.HandleFunc("POST /v1/local-runs", d.opts.LocalRuns.Handler()) // socket only: a peer never records a run here
+	}
 	// Submission is local only (spec §4.4); the queue arrives in WWD-3b.
 	mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job queue not implemented", http.StatusNotImplemented)

@@ -19,9 +19,11 @@ import (
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
 )
 
 func main() {
@@ -100,6 +102,20 @@ func run(cfgPath string) error {
 		return err
 	}
 	broker := daemon.NewBroker()
+	// One queue per process. Its job events go to the event stream and to the fast lane, which releases a finished run's keys.
+	// The lock table is the one every claim on this host takes its keys from.
+	var fastLane *localruns.Service
+	q, err := queue.New(st.DB(), queue.Options{
+		Origin: alias, LogDir: filepath.Join(cfg.DataDir, "joblogs"),
+		Publish: func(ev wire.JobEvent) {
+			broker.PublishJob(ev)
+			fastLane.OnJobEvent(ev)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	fastLane = localruns.New(locks.New(), localruns.FromQueue(q), alias)
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
 		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
 		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
@@ -131,11 +147,12 @@ func run(cfgPath string) error {
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
 		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
-		State: state, Broker: broker, RepoSource: clones.NewSource(cfg.Repos).Names,
+		State: state, Broker: broker, Queue: q, LocalRuns: fastLane, RepoSource: clones.NewSource(cfg.Repos).Names,
 	})
 	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
+	go fastLane.Run(ctx) // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
