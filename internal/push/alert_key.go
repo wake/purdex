@@ -16,6 +16,13 @@ type AlertPush struct {
 	Sent func()
 }
 
+// AlertReadiness is the second face of the registered AlertNotifier: whether it can queue a push right now. The registry has no way to
+// remove a service, so the notifier stays registered after the push module stops; this tells the difference. A notifier that does not
+// have it is taken as not ready.
+type AlertReadiness interface {
+	AlertReady() bool
+}
+
 // AlertNotifier is how the alert delivery module asks for a phone push, in process. NotifyAlert says done when the push was queued or
 // deliberately not sent (a person at the computer needs no phone push; no device means nobody to tell), and false when the push
 // side is not up or its queue is full: the caller keeps the alert undelivered and tries again. "done" is not "delivered": see Sent.

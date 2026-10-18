@@ -82,8 +82,7 @@ func (m *Module) Init(c *core.Core) error {
 			if !ok {
 				return nil, false
 			}
-			n, ok := svc.(push.AlertNotifier)
-			return n, ok
+			return readyNotifier(svc)
 		}
 	}
 	if m.deliver == nil {
@@ -159,6 +158,19 @@ func (m *Module) loop(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// readyNotifier is the registered service as a notifier that can be asked now. The registry keeps a service after its module stops, so a
+// notifier that says it is not ready is not asked: no attempt is spent on it.
+func readyNotifier(svc any) (push.AlertNotifier, bool) {
+	n, ok := svc.(push.AlertNotifier)
+	if !ok {
+		return nil, false
+	}
+	if r, ok := svc.(push.AlertReadiness); ok && !r.AlertReady() {
+		return nil, false
+	}
+	return n, true
 }
 
 // deliverRule is who delivers (spec §13.3), before this daemon's own push module is asked (a daemon without one attempts nothing):

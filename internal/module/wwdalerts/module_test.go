@@ -439,6 +439,31 @@ func TestAClockThatSteppedBackDoesNotStretchTheWindows(t *testing.T) {
 	}
 }
 
+// The registry keeps the push module's notifier after the module stops. One that says it is not ready is not asked.
+type readinessNotifier struct {
+	fakeNotifier
+	ready bool
+}
+
+func (r *readinessNotifier) AlertReady() bool { return r.ready }
+
+func TestAStoppedPushModuleIsNotAsked(t *testing.T) {
+	n := &readinessNotifier{ready: true}
+	if _, ok := readyNotifier(n); !ok {
+		t.Fatal("a ready notifier was refused")
+	}
+	n.ready = false
+	if _, ok := readyNotifier(n); ok {
+		t.Fatal("a notifier that is not ready was asked")
+	}
+	if _, ok := readyNotifier(struct{}{}); ok {
+		t.Fatal("something that is not a notifier was taken for one")
+	}
+	if _, ok := readyNotifier(&fakeNotifier{}); !ok {
+		t.Fatal("a notifier with no readiness is taken as asked-able")
+	}
+}
+
 // The push module is not there (no notifier in the registry yet): nothing is attempted, and nothing is counted as an attempt.
 func TestNoPushModuleMeansNoAttempt(t *testing.T) {
 	e := newEnv(t)

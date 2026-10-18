@@ -97,9 +97,17 @@ func (m *Module) Init(c *core.Core) error {
 		}
 	}
 	m.engine = NewEngine(peerOf{m}, m.settings, m.now, m.logf, path, m.hostID())
-	// push_ready in the role answer: the push module registers its alert notifier only once it is ready and started, so its presence in
-	// the registry is the fact. It is asked at every answer, since the push module starts after this one.
-	m.engine.SetPushReady(func() bool { _, ok := c.Registry.Get(push.AlertNotifyKey); return ok })
+	// push_ready in the role answer: the push module's alert notifier is in the registry and says it can queue a push now (the registry
+	// keeps a service after the module stops, so presence alone is not the fact). Asked at every answer, since the push module starts
+	// after this one.
+	m.engine.SetPushReady(func() bool {
+		svc, ok := c.Registry.Get(push.AlertNotifyKey)
+		if !ok {
+			return false
+		}
+		r, ok := svc.(push.AlertReadiness)
+		return ok && r.AlertReady()
+	})
 	c.Registry.Register(RoleViewKey, fleet.RoleView(m.engine))
 	m.measure = m.newMeasure()
 	m.engine.SetNewestAge(m.measure.NewestAge)

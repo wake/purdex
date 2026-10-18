@@ -70,6 +70,37 @@ func TestPeerPush_StandbyRecordsWhatThePrimaryReported(t *testing.T) {
 	require.Nil(t, got.Ready)
 }
 
+// What was recorded about the other daemon belongs to the role it was seen from. When this daemon's role changes (a takeover, a step down
+// to a primary that calls in) the record is unknown until the next call: unknown makes a standby deliver, so a stale "the primary can
+// push" can never leave an alert with nobody to tell it. A call that only repeats the same role does not clear it.
+func TestPeerPush_ARoleChangeMakesTheRecordUnknown(t *testing.T) {
+	p := newPair(t)
+	p.b.Startup(ctx())
+	p.a.Startup(ctx())
+	yes := true
+	p.a.SetPushReady(func() bool { return yes })
+	p.b.Beat(ctx())
+	require.NotNil(t, p.b.PeerPush().Ready)
+
+	// the primary calling in again, same role: the record stays
+	p.b.HandleRole(RoleRequest{FromAlias: "air26", Role: fleet.RolePrimary, Term: p.a.State().Term, Order: []string{"air26", "mlab"}})
+	require.Equal(t, fleet.RoleStandby, p.b.State().Role)
+	require.NotNil(t, p.b.PeerPush().Ready, "the same role does not clear what was seen")
+
+	// b takes over (air26 not reachable)...
+	p.ba.setDown(true)
+	p.b.Beat(ctx())
+	require.Equal(t, fleet.RolePrimary, p.b.State().Role)
+	p.ba.setDown(false)
+	// ...and a primary with a higher term calls in: b steps down, and what it saw of air26 under the old role says nothing now
+	p.b.HandleRole(RoleRequest{FromAlias: "air26", Role: fleet.RolePrimary, Term: 99, Order: []string{"air26", "mlab"}})
+	require.Equal(t, fleet.RoleStandby, p.b.State().Role)
+	require.Equal(t, fleet.PeerPush{}, p.b.PeerPush(), "unknown after the role changed")
+
+	p.b.Beat(ctx()) // the next call fills it again
+	require.True(t, p.b.PeerPush().Known)
+}
+
 // Before any call to the other daemon has completed, nothing is known.
 func TestPeerPush_UnknownBeforeTheFirstCall(t *testing.T) {
 	p := newPair(t)
