@@ -101,7 +101,13 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	report := resources.BuildReport(from, now.UnixMilli(), minutes)
 	if fromPool {
-		report.Approx = resources.ReportApproxWWD
+		report.Approx = resources.ReportApproxWWDStats
+		for _, f := range recs {
+			if f.Stats == nil { // a minute from before wwd kept the stats: its figures are approximations
+				report.Approx = resources.ReportApproxWWD
+				break
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, report)
 }
