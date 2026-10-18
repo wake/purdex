@@ -673,6 +673,80 @@ func TestQuarantinedReportsMarkedDirs(t *testing.T) {
 	}
 }
 
+func TestDiscardDropsTheMarkerAndTheEntryOnly(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("j1", "k1")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil { // the runner's hold
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Discard(e.Owner); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Held()) != 0 || len(markerFiles(t, r.markers)) != 0 {
+		t.Fatalf("entry or marker left: %v %v", s.Held(), markerFiles(t, r.markers))
+	}
+	if h, ok := r.locks.Holder("k1"); !ok || h != e.Owner {
+		t.Fatalf("Discard touched the hold: %q %v", h, ok)
+	}
+	if !exists(e.Dir) {
+		t.Fatal("Discard removed the directory")
+	}
+	// after a restart nothing is put back
+	r.locks = locks.New()
+	s2 := r.open()
+	if err := s2.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := r.locks.Holder("k1"); held {
+		t.Fatal("Restore took the hold of a discarded entry")
+	}
+	if s2.Quarantined(e.Dir) {
+		t.Fatal("a discarded entry still marks its directory")
+	}
+}
+
+func TestDiscardOfAnUnknownOwnerIsNotAnError(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	if err := s.Discard("src/nobody"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A Sweep that took its snapshot before the Discard must not release the hold of what was discarded meanwhile (the generation is
+// the entry's, and it is gone).
+func TestDiscardDuringASweepLeavesTheHoldAlone(t *testing.T) {
+	r := newRig(t)
+	e := r.entry("j1", "k1")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	var s *Store
+	rc := &replacingChecker{onCall: func() {
+		if err := s.Discard(e.Owner); err != nil {
+			t.Error(err)
+		}
+	}}
+	var err error
+	s, err = Open(r.markers, r.locks, rc, func() time.Time { return r.now }, r.openOpts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.Sweep(context.Background()); err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v: a discarded entry is not cleared", n, err)
+	}
+	if h, ok := r.locks.Holder("k1"); !ok || h != e.Owner {
+		t.Fatalf("the sweep released a hold that Discard left to its owner: %q %v", h, ok)
+	}
+}
+
 func TestHeldReturnsCopy(t *testing.T) {
 	r := newRig(t)
 	s := r.open()

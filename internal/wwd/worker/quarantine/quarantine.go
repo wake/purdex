@@ -412,6 +412,21 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 	return cleared, errors.Join(errs...)
 }
 
+// Discard takes back an entry that turned out not to be needed: the worker writes a marker before it runs a job in a sandbox (so a
+// wwd killed mid-run still has one), and when the run ends with the unit proven stopped there is nothing to keep. Only the marker
+// and the in-memory entry go. The hold belongs to the runner, which releases it itself, and the directory to the workspace cleanup:
+// neither is touched here. An owner without an entry is not an error. It takes the same lock as Sweep and Clear, so a Sweep that
+// looked at the entry before this does not release a hold or drop a marker for it afterwards (its generation is gone).
+func (s *Store) Discard(owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.removeMarker(owner); err != nil {
+		return fmt.Errorf("quarantine: discard %s: %w", owner, err)
+	}
+	delete(s.entries, owner)
+	return nil
+}
+
 // Clear is the human release: the hold and the marker go for each named job. Its directory is removed too when it passes safeDir,
 // and otherwise left for the leftover sweep. A job that is not in the store is reported, after the others have been handled.
 func (s *Store) Clear(jobID ...string) error {
