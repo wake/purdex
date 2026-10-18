@@ -65,6 +65,10 @@ type Store struct {
 type rec struct {
 	e   Entry
 	gen uint64
+	// live: the job this entry stands for is running in this process right now (Begin wrote it before the sandbox unit was started and
+	// nothing has settled it yet). Sweep leaves a live entry alone: its unit may not exist yet, and "no unit" would be read as "gone".
+	// An entry loaded from disk is never live: the process that wrote it is not this one.
+	live bool
 }
 
 // Open prepares the marker directory dir and loads the markers in it. A marker that cannot be read, or whose file name does not
@@ -212,8 +216,33 @@ func (s *Store) removeMarker(owner string) error {
 	return nil
 }
 
-// Add writes the marker atomically. It does not touch the hold: the runner keeps it.
-func (s *Store) Add(e Entry) error {
+// Add writes the marker atomically. It does not touch the hold: the runner keeps it. An entry that Begin made live stops being live: Add
+// is what says the run is over and could not be proven stopped.
+func (s *Store) Add(e Entry) error { return s.put(e, false) }
+
+// Begin writes the marker of a run that is about to start its sandbox unit, before the unit exists. If this process dies while the unit
+// runs, the marker is what gives the job's lock keys back to the next process (Restore) and keeps its workspace until the unit is gone
+// (Sweep); that is the one thing a marker written after the run cannot do. While the run goes on the entry is live and Sweep does not
+// touch it. The run ends with Discard (the unit is proven gone: nothing to keep) or Add (it is not: quarantine it).
+func (s *Store) Begin(e Entry) error { return s.put(e, true) }
+
+// Discard forgets an entry whose run ended with its unit proven gone: the marker and the entry go. The hold is the runner's and the
+// directory the executor's, so neither is touched. An owner that is not in the store is not an error and its file, if any, is left
+// where it is (a marker that could not be read is kept on purpose for a human).
+func (s *Store) Discard(owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.entries[owner]; !ok {
+		return nil
+	}
+	if err := s.removeMarker(owner); err != nil {
+		return fmt.Errorf("quarantine: %w", err)
+	}
+	delete(s.entries, owner)
+	return nil
+}
+
+func (s *Store) put(e Entry, live bool) error {
 	if err := validate(e); err != nil {
 		return fmt.Errorf("quarantine: %w", err)
 	}
@@ -227,7 +256,7 @@ func (s *Store) Add(e Entry) error {
 		return fmt.Errorf("quarantine: %w", err)
 	}
 	s.gen++
-	s.entries[e.Owner] = rec{e: e, gen: s.gen}
+	s.entries[e.Owner] = rec{e: e, gen: s.gen, live: live}
 	return nil
 }
 
@@ -275,8 +304,9 @@ func (s *Store) reacquire(e Entry) error {
 }
 
 type snap struct {
-	e   Entry
-	gen uint64
+	e    Entry
+	gen  uint64
+	live bool
 }
 
 func (s *Store) snapshot() []snap {
@@ -284,7 +314,7 @@ func (s *Store) snapshot() []snap {
 	defer s.mu.Unlock()
 	out := make([]snap, 0, len(s.entries))
 	for _, r := range s.entries {
-		out = append(out, snap{e: r.e.clone(), gen: r.gen})
+		out = append(out, snap{e: r.e.clone(), gen: r.gen, live: r.live})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].e.Owner < out[j].e.Owner })
 	return out
@@ -375,6 +405,9 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 		e := h.e
 		if ctx.Err() != nil {
 			return cleared, ctx.Err()
+		}
+		if h.live {
+			continue // its run is going on in this process: the runner holds the keys, and its unit may not have started yet
 		}
 		if err := s.reacquire(e); err != nil { // a conflict that has since gone away
 			log.Print(err)

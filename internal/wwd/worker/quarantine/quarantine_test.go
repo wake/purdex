@@ -686,3 +686,135 @@ func TestHeldReturnsCopy(t *testing.T) {
 		t.Fatalf("caller changed the store: %+v", got)
 	}
 }
+
+func TestBeginWritesTheMarkerBeforeAnyUnitExistsAndSweepLeavesALiveEntryAlone(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil { // the runner's hold while the job runs
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if len(markerFiles(t, r.markers)) != 1 {
+		t.Fatalf("markers %v: Begin writes the marker at once", markerFiles(t, r.markers))
+	}
+	r.checker.gone["wwd-a"] = true // the unit does not exist yet: "absent" must not be read as "stopped" for a run that is starting
+	if n, err := s.Sweep(context.Background()); err != nil || n != 0 {
+		t.Fatalf("cleared %d err %v: a live entry is not swept", n, err)
+	}
+	if _, ok := r.locks.Holder("mysql"); !ok || !exists(e.Dir) || len(markerFiles(t, r.markers)) != 1 {
+		t.Fatal("the hold, the directory and the marker all stay")
+	}
+	if len(r.checker.calls) != 0 {
+		t.Fatalf("the checker was asked about %v: nothing is asked about a run that is going on", r.checker.calls)
+	}
+}
+
+func TestAddSettlesALiveEntryAndThenSweepClearsItOnceTheUnitIsGone(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err != nil { // the run ended and its unit could not be proven stopped
+		t.Fatal(err)
+	}
+	if n, _ := s.Sweep(context.Background()); n != 0 {
+		t.Fatal("the unit is not gone")
+	}
+	r.checker.gone["wwd-a"] = true
+	if n, err := s.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("cleared %d err %v: once settled, a quarantined entry is cleared like any", n, err)
+	}
+	if _, ok := r.locks.Holder("mysql"); ok || exists(e.Dir) {
+		t.Fatal("the hold and the directory go with it")
+	}
+}
+
+func TestAnEntryLoadedFromDiskIsNeverLive(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if err := s.Begin(e); err != nil { // this process dies while the job runs
+		t.Fatal(err)
+	}
+	s2 := r.open() // the next process
+	if err := s2.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.locks.Holder("mysql"); !ok {
+		t.Fatal("Restore puts the keys of a run that was going on back")
+	}
+	if n, _ := s2.Sweep(context.Background()); n != 0 {
+		t.Fatal("the unit is still running")
+	}
+	r.checker.gone["wwd-a"] = true
+	if n, err := s2.Sweep(context.Background()); err != nil || n != 1 || exists(e.Dir) {
+		t.Fatalf("cleared %d err %v: with the unit gone the leftovers of a killed daemon's job go", n, err)
+	}
+}
+
+func TestDiscardForgetsTheMarkerButNeverTheHoldOrTheDirectory(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Discard(e.Owner); err != nil {
+		t.Fatal(err)
+	}
+	if len(markerFiles(t, r.markers)) != 0 || len(s.Held()) != 0 {
+		t.Fatalf("markers %v held %v", markerFiles(t, r.markers), s.Held())
+	}
+	if _, ok := r.locks.Holder("mysql"); !ok || !exists(e.Dir) {
+		t.Fatal("the hold is the runner's and the directory the executor's")
+	}
+	s2 := r.open() // a restart finds nothing to put back
+	if err := s2.Restore(); err != nil || len(s2.Held()) != 0 {
+		t.Fatalf("restore err %v held %v", err, s2.Held())
+	}
+}
+
+func TestDiscardOfAnUnknownOwnerIsNothingAndLeavesAnUnreadableMarkerForAHuman(t *testing.T) {
+	r := newRig(t)
+	if err := os.MkdirAll(r.markers, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(r.markers, markerName("src/broken"))
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := r.open()
+	if err := s.Discard("src/broken"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Discard("src/nobody"); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(bad) {
+		t.Fatal("a marker that could not be read is kept on purpose; Discard only drops entries it loaded")
+	}
+}
+
+func TestBeginRejectsABadEntryLikeAddDoes(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a")
+	e.Unit = "wwd-other"
+	if err := s.Begin(e); err == nil {
+		t.Fatal("want an error")
+	}
+	if len(markerFiles(t, r.markers)) != 0 {
+		t.Fatal("nothing written")
+	}
+}
