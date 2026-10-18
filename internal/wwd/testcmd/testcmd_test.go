@@ -154,13 +154,15 @@ func doneJob(state wire.JobState, exit *int, reason string, sum *wire.Summary) w
 func ip(i int) *int { return &i }
 
 type fakeGate struct {
-	calls int
-	code  int
-	out   string
+	calls   int
+	code    int
+	out     string
+	waitMax time.Duration // the WaitMax of the last call
 }
 
 func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
 	g.calls++
+	g.waitMax = o.WaitMax
 	for _, kv := range o.Env {
 		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
 			o.Stderr.Write([]byte(gate.AdmittedMark(nonce)))
@@ -538,6 +540,30 @@ func TestBusyLocksMakeALocalTaskWaitHereAndNeverQueueIt(t *testing.T) {
 	}
 	if strings.Count(errOut, "等待本機名額／lock") != 1 || !strings.Contains(errOut, "tmux") {
 		t.Fatalf("the wait is told once, with the keys: %q", errOut)
+	}
+}
+
+func TestALockFreedJustBeforeTheDeadlineIsStillTaken(t *testing.T) {
+	// a deadline shorter than one poll: the wait ends at the deadline and asks once more
+	g := &fakeGate{}
+	rec := &busyRecorder{busy: 1}
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Hour, LockWait: 60 * time.Millisecond})
+	if code != 0 || g.calls != 1 || rec.calls != 2 {
+		t.Fatalf("code %d gate %d registers %d", code, g.calls, rec.calls)
+	}
+}
+
+func TestTheLockWaitAndTheSlotWaitShareOneQueueTimeout(t *testing.T) {
+	g := &fakeGate{}
+	rec := &busyRecorder{busy: 2}
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: 20 * time.Millisecond, LockWait: 5 * time.Second})
+	if code != 0 || g.calls != 1 {
+		t.Fatalf("code %d gate %d", code, g.calls)
+	}
+	if g.waitMax <= 0 || g.waitMax >= 5*time.Second {
+		t.Fatalf("the gate may wait for what is left of the timeout, not for all of it: %v", g.waitMax)
 	}
 }
 
