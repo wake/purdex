@@ -178,10 +178,16 @@ func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
 		r.FullTicks, r.FullLongestS, r.FullStarts = 1, 5, 0
 		return r
 	}
+	almost := func(i int) minuteRow { // 11 of the 12 ticks: the last one was calm, so the run did not reach the next minute
+		r := brief(i)
+		r.FullTicks, r.FullLongestS = fullTicksPerMinute-1, 55
+		return r
+	}
 	for name, old := range map[string][]minuteRow{
 		"a calm minute before":      {full(0), calm(1)},
 		"a gap before":              {full(0)},
 		"one full tick before only": {full(0), brief(1)},
+		"eleven of twelve ticks":    {full(0), almost(1)},
 	} {
 		r := newReportRig(t)
 		for _, row := range old {
