@@ -8,6 +8,7 @@
 //
 // The primary pane of a tab is `getPrimaryPane`'s: the first leaf in layout pre-order. `Seat.paneIndex` is the
 // pre-order index of the pane that shows the seat in its chosen tab, so 0 is the primary pane.
+import { addressName } from '../names/seat'
 import type { Tab } from '../../types/tab'
 import type { Session } from '../host-api'
 import { collectLeaves } from '../pane-tree'
@@ -117,8 +118,7 @@ export function seatHostOf(
 /** The seat's display name: title, else the name part of the address (after the last `/`), else the ref. */
 export function labelOf(s: RosterSession): string {
   if (s.title) return s.title
-  const name = s.address.slice(s.address.lastIndexOf('/') + 1)
-  return name || s.ref
+  return addressName(s.address) || s.ref
 }
 
 interface Candidate {

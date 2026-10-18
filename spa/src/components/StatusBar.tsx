@@ -20,6 +20,7 @@ import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
 import { keepFocus } from '../lib/keep-focus'
 import { uploadFailureText } from '../lib/upload-failure'
+import { addressName } from '../lib/names/seat'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -63,9 +64,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
 function peerIdText(row: PeerRow | null): { display: string; value: string } {
   const address = row?.address ?? ''
   if (address === '') return { display: '', value: '' }
-  // The host is the address's first segment; the name is everything after it.
-  const slash = address.indexOf('/')
-  const name = slash === -1 ? address : address.slice(slash + 1)
+  const name = addressName(address)
   const ref = row?.ref ?? ''
   // A session whose registry name is not routable is addressed by its ref, so
   // the address already ends in it and there is no name to bracket: appending
