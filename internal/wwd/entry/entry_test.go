@@ -243,6 +243,25 @@ args = "files"
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml", "./pkg"}).Action)
 	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "a.test.ts"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--outputFile=out.json", "a.test.ts"}).Action)
+
+	// a task that passes its arguments on would otherwise take the output flag as one of them
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte(`
+[entry]
+mode = "deny"
+[tasks.vt-pass]
+run   = "vitest run --outputFile={report}"
+args  = "pass"
+local = true
+[tasks.go-pass]
+run   = "go test -junitfile {junit}"
+args  = "pass"
+local = true
+`), 0o644))
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "-t", "x"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--outputFile=out.json"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-run", "X"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile=out.xml"}).Action)
 }
 
 // A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.
