@@ -98,15 +98,7 @@ func webpSize(b []byte) (int, int, error) {
 		bits := binary.LittleEndian.Uint32(b[21:25])
 		return int(bits&0x3fff) + 1, int((bits>>14)&0x3fff) + 1, nil
 	case "VP8X":
-		if size < 10 || end+8 > len(b) {
-			return 0, 0, bad
-		}
-		switch string(b[end : end+4]) {
-		case "VP8 ", "VP8L", "ALPH", "ANIM":
-		default:
-			return 0, 0, bad
-		}
-		if next := int(binary.LittleEndian.Uint32(b[end+4 : end+8])); end+8+next > len(b) {
+		if size < 10 || !webpHasPicture(b, end) {
 			return 0, 0, bad
 		}
 		w := int(b[24]) | int(b[25])<<8 | int(b[26])<<16
@@ -114,4 +106,33 @@ func webpSize(b []byte) (int, int, error) {
 		return w + 1, h + 1, nil
 	}
 	return 0, 0, bad
+}
+
+// webpHasPicture walks the chunks of an extended WebP from `at` to the end of the file, every one inside it: the file must
+// hold a still picture (a VP8 or VP8L chunk, alpha and the metadata chunks allowed before it) or an animation (ANIM, then a
+// frame ANMF big enough for its own header). Any other chunk makes the container unreadable for the App.
+func webpHasPicture(b []byte, at int) bool {
+	animated := false
+	for at+8 <= len(b) {
+		n := int(binary.LittleEndian.Uint32(b[at+4 : at+8]))
+		next := at + 8 + n + n%2
+		if n < 0 || next > len(b) {
+			return false
+		}
+		switch string(b[at : at+4]) {
+		case "VP8 ":
+			return n >= 10
+		case "VP8L":
+			return n >= 5
+		case "ANIM":
+			animated = n >= 6
+		case "ANMF":
+			return animated && n >= 16
+		case "ALPH", "ICCP", "EXIF", "XMP ":
+		default:
+			return false
+		}
+		at = next
+	}
+	return false
 }

@@ -82,13 +82,15 @@ func webpLosslessChunk(w, h int) []byte {
 
 func webpLossless(w, h int) []byte { return webpFile(webpLosslessChunk(w, h)) }
 
-func webpExtended(w, h int) []byte {
+func webpExtendedWith(w, h int, chunks ...[]byte) []byte {
 	p := make([]byte, 10)
 	put24 := func(at, v int) { p[at], p[at+1], p[at+2] = byte(v), byte(v>>8), byte(v>>16) }
 	put24(4, w-1)
 	put24(7, h-1)
-	return webpFile(webpChunk("VP8X", p), webpLosslessChunk(w, h))
+	return webpFile(append([][]byte{webpChunk("VP8X", p)}, chunks...)...)
 }
+
+func webpExtended(w, h int) []byte { return webpExtendedWith(w, h, webpLosslessChunk(w, h)) }
 
 func webpLossy(w, h int) []byte {
 	p := []byte{0, 0, 0, 0x9d, 0x01, 0x2a, 0, 0, 0, 0}
@@ -269,6 +271,8 @@ func TestPersonas_PicturesOfThe3SupportedFormatsAreKept(t *testing.T) {
 		"jpeg":          uri("image/jpeg", jpegBytes(t, 64, 64)),
 		"webp lossless": uri("image/webp", webpLossless(128, 128)),
 		"webp extended": uri("image/webp", webpExtended(128, 128)),
+		"webp alpha":    uri("image/webp", webpExtendedWith(128, 128, webpChunk("ALPH", make([]byte, 6)), webpLosslessChunk(128, 128))),
+		"webp animated": uri("image/webp", webpExtendedWith(128, 128, webpChunk("ANIM", make([]byte, 6)), webpChunk("ANMF", make([]byte, 20)))),
 		"webp lossy":    uri("image/webp", webpLossy(100, 100)),
 		"none":          "",
 	} {
@@ -430,16 +434,27 @@ func TestPersonas_ABrokenWebPIsRefused(t *testing.T) {
 	extAlone := webpFile(webpChunk("VP8X", make([]byte, 10)))
 	extBadNext := webpFile(webpChunk("VP8X", make([]byte, 10)), webpChunk("JUNK", make([]byte, 10)))
 	smallLossy := webpFile(webpChunk("VP8 ", []byte{0, 0, 0, 0x9d, 0x01, 0x2a}))
+	ext := webpChunk("VP8X", make([]byte, 10))
+	extAlphaOnly := webpFile(ext, webpChunk("ALPH", make([]byte, 6)))
+	extAnimOnly := webpFile(ext, webpChunk("ANIM", make([]byte, 6)))
+	extAnimNoFrame := webpFile(ext, webpChunk("ANIM", make([]byte, 6)), webpChunk("EXIF", make([]byte, 4)))
+	extCutFrame := webpFile(ext, webpChunk("ANIM", make([]byte, 6)), webpChunk("ANMF", make([]byte, 4)))
+	extAlphaThenJunk := webpFile(ext, webpChunk("ALPH", make([]byte, 6)), webpChunk("JUNK", make([]byte, 6)))
 	cases := map[string][]byte{
-		"truncated":                              good[:len(good)-3],
-		"the RIFF size disagrees":                badRiff,
-		"a chunk bigger than a file":             bigChunk,
-		"no lossless signature":                  noSignature,
-		"an extended header alone":               extAlone,
-		"an extended header, no picture chunk":   extBadNext,
-		"a lossy chunk too small for its header": smallLossy,
-		"trailing bytes":                         append(append([]byte(nil), good...), 1, 2, 3, 4),
-		"not RIFF":                               append([]byte("RIFX"), good[4:]...),
+		"truncated":                                                good[:len(good)-3],
+		"the RIFF size disagrees":                                  badRiff,
+		"a chunk bigger than a file":                               bigChunk,
+		"no lossless signature":                                    noSignature,
+		"an extended header alone":                                 extAlone,
+		"an extended header, no picture chunk":                     extBadNext,
+		"a lossy chunk too small for its header":                   smallLossy,
+		"an extended header with alpha and no picture":             extAlphaOnly,
+		"an extended header with an animation header and no frame": extAnimOnly,
+		"an animation header followed by something else":           extAnimNoFrame,
+		"an animation frame too small for its header":              extCutFrame,
+		"alpha followed by an unknown chunk":                       extAlphaThenJunk,
+		"trailing bytes":                                           append(append([]byte(nil), good...), 1, 2, 3, 4),
+		"not RIFF":                                                 append([]byte("RIFX"), good[4:]...),
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
