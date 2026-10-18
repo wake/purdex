@@ -51,7 +51,11 @@ func (p *poolHost) detail() (resources.HostDetail, bool) {
 		}
 		return p.cache, p.ok
 	}
+	// The read is made under the lock on purpose: readers that arrive meanwhile wait for this one read and then find its answer
+	// (or its failure) cached, instead of each making a read of their own. The cache is stamped when the read ends, so a read
+	// that was slow does not make the next waiter's look stale.
 	pool, err := p.pool(context.Background())
+	now = p.now()
 	p.at, p.have = now, true
 	p.cache, p.ok = resources.HostDetail{}, false
 	if err != nil || len(pool.Peers) == 0 || pool.Peers[0].Facts == nil {

@@ -93,6 +93,30 @@ func TestPoolHost_CachesForTheTTL(t *testing.T) {
 	assert.EqualValues(t, 2, calls.Load())
 }
 
+// A slow wwd costs the readers ONE wait, not one each: the read that ends later than the TTL after it began still answers the
+// readers that queued behind it.
+func TestPoolHost_ASlowReadIsSharedByTheWaiters(t *testing.T) {
+	start := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	var clock atomic.Int64 // ns after start
+	var calls atomic.Int32
+	p := &poolHost{
+		now: func() time.Time { return start.Add(time.Duration(clock.Load())) },
+		pool: func(context.Context) (wire.Pool, error) {
+			calls.Add(1)
+			clock.Add(int64(1500 * time.Millisecond)) // the read takes longer than the TTL
+			return poolOf(factsAt(start.Add(1500 * time.Millisecond))), nil
+		},
+	}
+	done := make(chan bool, 8)
+	for i := 0; i < 8; i++ {
+		go func() { _, ok := p.detail(); done <- ok }()
+	}
+	for i := 0; i < 8; i++ {
+		assert.True(t, <-done)
+	}
+	assert.EqualValues(t, 1, calls.Load(), "one read for all eight readers")
+}
+
 // A reading served from the cache is judged by its age now: facts that turn 20 s old inside the TTL stop being a reading.
 func TestPoolHost_ACachedReadingStillExpires(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
