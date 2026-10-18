@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/jobsapi"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -149,6 +151,9 @@ func run(cfgPath string) error {
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
 		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
 		State: state, Broker: broker, Queue: q, LocalRuns: fastLane, RepoSource: clones.NewSource(cfg.Repos).Names,
+		// the worker routes on the socket: the host's own worker and the fast-lane runners claim, heartbeat and report with them, and
+		// POST /v1/local-runs opens only together with them
+		ClaimRoutes: func(mux *http.ServeMux) { jobsapi.New(q).WorkerRoutes(mux, false) },
 	})
 	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
