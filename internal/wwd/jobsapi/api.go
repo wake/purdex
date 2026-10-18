@@ -25,7 +25,11 @@ const (
 )
 
 // API serves one queue.
-type API struct{ q *queue.Queue }
+type API struct {
+	q *queue.Queue
+	// afterHead is a test hook: it runs in List after the head was read and before the list is.
+	afterHead func()
+}
 
 // New returns the API over q (the daemon's one queue).
 func New(q *queue.Queue) *API { return &API{q: q} }
@@ -125,20 +129,24 @@ func (a *API) List(peer bool) http.HandlerFunc {
 			fail(w, err)
 			return
 		}
-		jobs, cursor, err := a.q.ListAfter(r.Context(), after, f)
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		// A cursor past the last change cannot be one this database made. It is asked after the read: the head is then at least as far as
-		// anything the read could have shown, so a cursor that was valid when the request came in is never refused for a race.
+		// A cursor past the last change cannot be one this database made. The head is read first, and the cursor is judged on it: the head
+		// only grows, so a cursor this database handed out is never past it, and a write that lands while the list is read cannot make a
+		// cursor from another database look good after the fact (the changes below it would be skipped for ever).
 		head, err := a.q.Head(r.Context())
 		if err != nil {
 			fail(w, err)
 			return
 		}
+		if a.afterHead != nil {
+			a.afterHead()
+		}
 		if after > head {
 			writeJSON(w, http.StatusConflict, wire.CursorAhead{Reason: wire.CursorAheadReason, Head: queue.CursorString(head), Epoch: epoch})
+			return
+		}
+		jobs, cursor, err := a.q.ListAfter(r.Context(), after, f)
+		if err != nil {
+			fail(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, wire.JobsListResponse{Jobs: jobs, Cursor: queue.CursorString(cursor), Epoch: epoch})
