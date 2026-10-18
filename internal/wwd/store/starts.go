@@ -25,7 +25,8 @@ func (s *Store) RecordStartAt(at time.Time, version, prevExit string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO wwd_starts (started_ms, version, prev_exit) VALUES (?, ?, ?)`,
+	// OR IGNORE on the unique started_ms: a write tried again with the same stamp (the start-up retry) is not a second start
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO wwd_starts (started_ms, version, prev_exit) VALUES (?, ?, ?)`,
 		at.UnixMilli(), oneLine(version, 80), oneLine(prevExit, wire.MaxAlertDetailBytes)); err != nil {
 		return err
 	}

@@ -54,6 +54,26 @@ func TestRecordStartKeepsVersionAndPreviousExit(t *testing.T) {
 	}
 }
 
+// A start is recorded once however many times its write is tried (the retry of a transient failure uses the same stamp): the second
+// try changes nothing, and does not fail.
+func TestRecordStartIsIdempotentForTheSameStart(t *testing.T) {
+	s := openStarts(t)
+	for i := 0; i < 3; i++ {
+		if err := s.RecordStartAt(st0, "v1", ""); err != nil {
+			t.Fatalf("try %d: %v", i, err)
+		}
+	}
+	if n, _ := s.StartsSince(st0.Add(-time.Hour)); n != 1 {
+		t.Fatalf("n=%d: a retried start is counted once", n)
+	}
+	if err := s.RecordStartAt(st0.Add(time.Millisecond), "v1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.StartsSince(st0.Add(-time.Hour)); n != 2 {
+		t.Fatalf("n=%d: another instant is another start", n)
+	}
+}
+
 // The table is a short history for the rule, not a log: rows older than a week go on the next start.
 func TestRecordStartPrunesOldRows(t *testing.T) {
 	s := openStarts(t)
