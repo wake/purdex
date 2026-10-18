@@ -71,18 +71,28 @@ if [ "$1" = --detach ]; then shift 2; echo "{\"id\":\"j_stub_$1\"}"; exit 0; fi
 [ "$1" = c2-expire ] && exit 6
 exit 0
 EOF
+cat > "$bin/launchctl" <<'EOF'
+#!/bin/sh
+# records each call; the first bootstrap fails (a service that does not come up at once)
+echo "$*" >> "$STUB/launchctl.log"
+case "$1" in
+  bootstrap) [ -e "$STUB/bootstrap-failed-once" ] || { : > "$STUB/bootstrap-failed-once"; exit 1; } ;;
+esac
+exit 0
+EOF
 cat > "$bin/sqlite3" <<'EOF'
 #!/bin/sh
+echo "$*" >> "$STUB/sql.log"
 case "$*" in
   *"select attempts"*) echo 1 ;;
   *"select id"*) echo j_stub_exp ;;
   *) echo 0 ;;
 esac
 EOF
-chmod +x "$bin/ssh" "$bin/curl" "$bin/pdx" "$bin/sqlite3"
+chmod +x "$bin/ssh" "$bin/curl" "$bin/pdx" "$bin/sqlite3" "$bin/launchctl"
 
 run() {   # run STATE CASE... : the script for real, in the fake world; the output is in $tmp/out, the exit code is returned
-  rm -f "$stub"/*.log
+  rm -f "$stub"/*.log "$stub"/bootstrap-failed-once
   HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=$1 C2_TIMEOUT_SCALE=0 \
     sh "$matrix" --case "$2" > "$tmp/out" 2>&1
 }
@@ -110,6 +120,19 @@ hasnt "stub-token-value" "case 11 (the token must never be printed)"
 
 run succeeded 14 || { cat "$tmp/out" >&2; fail "case 14: exit code"; }
 has "PASS case 14" "case 14"
+grep -q "claim_worker='air19' and created_at >=" "$stub/sql.log" || fail "case 14 must count only the claims since this run began"
+
+# case 13 with --keep: the scratch repo stays, and the PHP probe really uses its database
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --keep --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13: exit code"; }
+has "PASS case 13" "case 13"
+kept=$(sed -n 's/^kept //p' "$tmp/out")
+[ -d "$kept/repo" ] || fail "--keep must leave the scratch repo"
+grep -q 'new PDO' "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must connect to the database"
+grep -q "CREATE TABLE" "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must write to the database"
+grep -q "exit(\$v === 'round-trip' ? 0 : 1)" "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must exit non-zero when the round trip fails"
+grep -q 'db = "per-job"' "$kept/repo/.wwd/tasks.toml" || fail "the php task must ask for a per-job database"
+rm -rf "$kept"
 
 # every worker setting the script changed is put back (the stub keeps what was PUT), the scratch repo is gone, the jobs are cancelled
 run succeeded 11 || fail "case 11 again"
@@ -118,6 +141,14 @@ run succeeded 11 || fail "case 11 again"
 [ "$(tail -3 "$stub/put.log" | grep -c '"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""')" -eq 3 ] || fail "the last three PUTs must be the settings GET gave"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left in TMPDIR"
 [ -s "$stub/cancel.log" ] || fail "the jobs it made were not cancelled"
+
+# ---- a service this script took down comes back, also when the script stops in between ---------------------------------------------
+# case 2 takes air26's wwd down, then brings it up: the stub refuses the first bootstrap, so the script stops there (set -e)
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "case 2 must stop when the service does not come up"
+[ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 1 ] || fail "bootout should have been called once: $(cat "$stub/launchctl.log")"
+[ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must bootstrap the service again: $(cat "$stub/launchctl.log")"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0

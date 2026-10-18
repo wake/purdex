@@ -71,7 +71,7 @@ for ip in 100.64.0.2 100.64.0.4 100.64.0.6 100.64.0.1; do has "$out" "$ip:7871/v
 has "$out" "Bearer c2-wrong-token" "case 11"; has "$out" "(expect: 401)" "case 11"
 out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-option" "case 12"; has "$out" "../../etc/hosts" "case 12"; has "$out" "a;touch /tmp/wwd-c2-pwned" "case 12"
 out=$(dry --case 13); has "$out" "show databases" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
-out=$(dry --case 14); has "$out" "air19 claimed nothing (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
+out=$(dry --case 14); has "$out" "air19 claimed nothing since this run began (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
 
 # every case other than 14 also checks air19, and ends by putting back what it changed
 out=$(dry --case 4)

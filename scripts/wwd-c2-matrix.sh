@@ -10,12 +10,13 @@
 # TODO(first-run) are assumptions about names that wwd's routes and CLI fix when they land.
 set -eu
 
-dry=0; manual=0; force=0; list=0; all=0; cases=""
+dry=0; manual=0; force=0; list=0; all=0; keep=0; cases=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) dry=1 ;;
     --manual) manual=1 ;;
     --force) force=1 ;;
+    --keep) keep=1 ;;
     --list) list=1 ;;
     --all) all=1 ;;
     --case) shift; cases="$cases ${1:-}" ;;
@@ -87,8 +88,15 @@ tcp_bad() { if [ "$2" = wrong ]; then tx_a="-H 'Authorization: Bearer c2-wrong-t
 # ---- the service manager (the only way a wwd is stopped) -----------------------------------------------------------
 svc_pid() { if is_mac "$1"; then q "$1" "launchctl list gs.wake.wwd | awk -F' = ' '/\"PID\"/ {gsub(/;/,\"\",\$2); print \$2}'"; else q "$1" "systemctl show wwd.service -p MainPID --value"; fi; }
 svc_restart() { if is_mac "$1"; then on "$1" 'launchctl kickstart -k gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl restart wwd.service'; fi; }
-svc_down() { if is_mac "$1"; then on "$1" 'launchctl bootout gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl stop wwd.service'; fi; }
-svc_up() { if is_mac "$1"; then on "$1" 'launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else on "$1" 'sudo systemctl start wwd.service'; fi; }
+DOWNED=""   # hosts whose wwd this script took down and has not brought up: finish brings them up
+svc_down() {
+  DOWNED="$DOWNED $1"
+  if is_mac "$1"; then on "$1" 'launchctl bootout gui/$(id -u)/gs.wake.wwd'; else on "$1" 'sudo systemctl stop wwd.service'; fi
+}
+svc_up() {
+  if is_mac "$1"; then on "$1" 'launchctl bootstrap gui/$(id -u) $HOME/Library/LaunchAgents/gs.wake.wwd.plist'; else on "$1" 'sudo systemctl start wwd.service'; fi
+  DOWNED=$(echo "$DOWNED" | tr ' ' '\n' | grep -v "^$1\$" | tr '\n' ' ')     # only once it is up
+}
 STOPPED=""
 svc_freeze() { fz_p=$(svc_pid "$1"); STOPPED="$STOPPED $1:$fz_p"; on "$1" "kill -STOP $fz_p"; }   # an exact pid, from the service manager
 svc_thaw() { fz_p=$(svc_pid "$1"); on "$1" "kill -CONT $fz_p"; STOPPED=$(echo "$STOPPED" | tr ' ' '\n' | grep -v "^$1:" | tr '\n' ' '); }
@@ -238,8 +246,21 @@ summary = "plain"
 EOS
   cat > "$WORK/repo/scripts/db_probe.php" <<'EOS'
 <?php
-// TODO(first-run): the names of the per-job database variables are fixed by 4e; this prints them and uses the first one it finds
-foreach (getenv() as $k => $v) { if (preg_match('/^(DB_|WWD_DB)/', $k)) echo "$k=$v\n"; }
+// Uses the database the job was given: connect, make a table, write, read back. TODO(first-run): the variable names of the per-job
+// database are fixed by 4e; these are the usual ones. Exit 0 only when the round trip worked.
+foreach (getenv() as $k => $v) { if (preg_match('/^(DB_|WWD_DB)/', $k) && stripos($k, 'PASS') === false) echo "$k=$v\n"; }
+$db = getenv('DB_DATABASE') ?: getenv('WWD_DB_NAME');
+if (!$db) { fwrite(STDERR, "no database name in the environment\n"); exit(2); }
+if (!extension_loaded('pdo_mysql')) { fwrite(STDERR, "no pdo_mysql\n"); exit(3); }
+try {
+  $pdo = new PDO(sprintf('mysql:host=%s;port=%s;dbname=%s', getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_PORT') ?: '3306', $db),
+                 getenv('DB_USERNAME') ?: 'root', getenv('DB_PASSWORD') ?: '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+  $pdo->exec('CREATE TABLE c2_probe (id INT PRIMARY KEY, v VARCHAR(20))');
+  $pdo->exec("INSERT INTO c2_probe VALUES (1, 'round-trip')");
+  $v = $pdo->query('SELECT v FROM c2_probe WHERE id = 1')->fetchColumn();
+  echo "db=$db read=$v\n";
+  exit($v === 'round-trip' ? 0 : 1);
+} catch (Throwable $e) { fwrite(STDERR, $e->getMessage() . "\n"); exit(4); }
 EOS
   cat > "$WORK/repo/scripts/sandbox_probe.sh" <<'EOS'
 #!/bin/sh
@@ -260,10 +281,11 @@ finish() {
   trap - EXIT INT TERM
   say "-- cleaning up"
   for fn_pair in $STOPPED; do on "${fn_pair%%:*}" "kill -CONT ${fn_pair#*:}" || true; done
+  for fn_h in $DOWNED; do svc_up "$fn_h" || true; done
   for fn_pair in $SAVED; do sock "${fn_pair%%:*}" PUT /v1/worker "${fn_pair#*:}" >/dev/null || true; done
   for fn_id in $(cat "$WORK/jobs" 2>/dev/null); do sock mlab POST "/v1/jobs/$fn_id/cancel" >/dev/null 2>&1 || true; done
   for fn_h in mlab air26 air19; do on "$fn_h" "rm -f $RAN" || true; done
-  x rm -rf "$WORK"
+  if [ "$keep" -eq 1 ]; then say "kept $WORK"; else x rm -rf "$WORK"; fi
   say ""
   say "passed:${PASSED:- -}  failed:${FAILED:- -}  skipped:${SKIPPED:- -}"
   [ -z "$FAILED" ] || fn_rc=1
@@ -501,7 +523,7 @@ case_13() {
 }
 
 case_14() {
-  check "air19 claimed nothing" "$(db_q "select count(*) from jobs where claim_worker='air19'")" 0
+  check "air19 claimed nothing since this run began" "$(db_q "select count(*) from jobs where claim_worker='air19' and created_at >= $STARTED_MS")" 0
   check "air19's worker is off" "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" false
 }
 
