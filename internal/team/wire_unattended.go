@@ -56,6 +56,22 @@ type UnattendedState struct {
 	ChangedBy *Client `json:"changed_by,omitempty"` // who changed it last; Addr is set by the daemon
 }
 
+// UnattendedToggle is one on/off event of the switch (name pool v2 spec §8): when, which way, and by whom (the client's kind and
+// label; the address is not kept). The hostconfig module records one with every change of the switch, in the same
+// transaction.
+type UnattendedToggle struct {
+	At int64  `json:"at"` // unix ms of the change
+	On bool   `json:"on"`
+	By Client `json:"by"`
+}
+
+// UnattendedEventLister is the read side of those records, asserted on the registry value of the hostconfig module next to
+// UnattendedStore.
+type UnattendedEventLister interface {
+	// UnattendedEvents is the newest limit events, newest first. Never nil.
+	UnattendedEvents(limit int) ([]UnattendedToggle, error)
+}
+
 // UnattendedPutRequest is PUT /api/team/unattended. On is a pointer so a
 // missing field is told from false.
 type UnattendedPutRequest struct {
