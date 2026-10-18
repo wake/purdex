@@ -28,6 +28,13 @@ type Sampler interface {
 	Sample(ctx context.Context) (HostRaw, []Proc, error)
 }
 
+// ProcSampler is a Sampler that can also read the process table alone: one ps, no sysctl and no vm_stat. A module whose host
+// figures come from elsewhere (wwd's facts) still needs the processes for the load watcher and the session attribution.
+type ProcSampler interface {
+	Sampler
+	SampleProcs(ctx context.Context) ([]Proc, error)
+}
+
 // forkTimeout bounds each forked command.
 const forkTimeout = 2 * time.Second
 
@@ -101,13 +108,7 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 		return raw, nil, fmt.Errorf("vm_stat: page counts overflow (%d + %d + %d pages of %d bytes)", vm.Free, vm.Inactive, vm.Speculative, vm.PageSize)
 	}
 
-	// LC_ALL=C keeps the decimal point a point in pcpu.
-	psOut, err := s.fork(ctx, []string{"LC_ALL=C"}, "ps", "-axo", "pid=,ppid=,pcpu=,rss=,ucomm=")
-	if err != nil {
-		return raw, nil, fmt.Errorf("ps: %w", err)
-	}
-	procs, skipped, err := parsePS(string(psOut))
-	s.psSkipped.Add(uint64(skipped))
+	procs, err := s.SampleProcs(ctx)
 	if err != nil {
 		return raw, nil, err
 	}
@@ -115,6 +116,21 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 		raw.PcpuSum += p.Pcpu
 	}
 	return raw, procs, nil
+}
+
+// SampleProcs reads the process table: one ps.
+func (s *sysSampler) SampleProcs(ctx context.Context) ([]Proc, error) {
+	// LC_ALL=C keeps the decimal point a point in pcpu.
+	psOut, err := s.fork(ctx, []string{"LC_ALL=C"}, "ps", "-axo", "pid=,ppid=,pcpu=,rss=,ucomm=")
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	procs, skipped, err := parsePS(string(psOut))
+	s.psSkipped.Add(uint64(skipped))
+	if err != nil {
+		return nil, err
+	}
+	return procs, nil
 }
 
 func (s *sysSampler) fork(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
