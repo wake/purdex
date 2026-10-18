@@ -1,0 +1,371 @@
+package wwdalerts
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/fleet"
+	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+var t0 = time.Date(2026, 10, 19, 8, 0, 0, 0, time.UTC)
+
+// fakeSrc is the local wwd: its own alias, its pool, and each host's alert list.
+type fakeSrc struct {
+	mu    sync.Mutex
+	self  string
+	peers []string
+	lists map[string][]wire.Alert // by host alias
+	known map[string]bool         // absent = known
+	errs  map[string]error
+}
+
+func (f *fakeSrc) Info(context.Context) (wire.Info, error) { return wire.Info{Alias: f.self}, nil }
+
+func (f *fakeSrc) Pool(context.Context) (wire.Pool, error) {
+	var p wire.Pool
+	for _, a := range f.peers {
+		p.Peers = append(p.Peers, wire.Peer{Info: wire.Info{Alias: a}, Reachable: true})
+	}
+	return p, nil
+}
+
+func (f *fakeSrc) Alerts(_ context.Context, host string) (wire.AlertList, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if host == "" {
+		host = f.self
+	}
+	if err := f.errs[host]; err != nil {
+		return wire.AlertList{}, false, err
+	}
+	if k, ok := f.known[host]; ok && !k {
+		return wire.AlertList{Host: host, Alerts: []wire.Alert{}}, false, nil
+	}
+	return wire.AlertList{Host: host, Alerts: append([]wire.Alert{}, f.lists[host]...)}, true, nil
+}
+
+func (f *fakeSrc) set(host string, as ...wire.Alert) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lists == nil {
+		f.lists = map[string][]wire.Alert{}
+	}
+	f.lists[host] = as
+}
+
+// fakeNotifier records the pushes and keeps each Sent so a test decides when APNs "took" it.
+type fakeNotifier struct {
+	mu    sync.Mutex
+	got   []push.AlertPush
+	done  bool // what NotifyAlert answers
+	sents []func()
+}
+
+func (n *fakeNotifier) NotifyAlert(p push.AlertPush) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.got = append(n.got, p)
+	n.sents = append(n.sents, p.Sent)
+	return n.done
+}
+
+func (n *fakeNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.got)
+}
+
+// confirm makes APNs "take" the idx-th push.
+func (n *fakeNotifier) confirm(idx int) {
+	n.mu.Lock()
+	f := n.sents[idx]
+	n.mu.Unlock()
+	f()
+}
+
+type env struct {
+	m     *Module
+	src   *fakeSrc
+	ntf   *fakeNotifier
+	now   time.Time
+	deliv bool
+	db    string
+}
+
+func newEnv(t *testing.T) *env {
+	t.Helper()
+	e := &env{src: &fakeSrc{self: "mlab"}, ntf: &fakeNotifier{done: true}, now: t0, deliv: true, db: filepath.Join(t.TempDir(), "wwdalerts.db")}
+	e.m = e.module(t)
+	return e
+}
+
+// module builds a module over the env's database (a second call is "the daemon restarted").
+func (e *env) module(t *testing.T) *Module {
+	t.Helper()
+	st, err := openStore(e.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.close() })
+	return &Module{
+		logf:    t.Logf,
+		now:     func() time.Time { return e.now },
+		src:     e.src,
+		store:   st,
+		notify:  func() (push.AlertNotifier, bool) { return e.ntf, true },
+		deliver: func() bool { return e.deliv },
+	}
+}
+
+func (e *env) pass(t *testing.T) {
+	t.Helper()
+	e.m.pass(context.Background())
+}
+
+func diskLow(host string) wire.Alert {
+	return wire.Alert{Key: "disk_low:/", Kind: wire.AlertDiskLow, Level: wire.AlertPush, Since: t0, Last: t0, Detail: host + " 剩 9.8 GB"}
+}
+
+// A pushed alert goes to the push module once per attempt, with the collapse id alert:<host>:<key> and the alert's own line as the
+// title; it is not "delivered" until the push module says APNs took it (Sent).
+func TestPushLevelAlertGoesThroughThePushModuleAndIsDeliveredOnSent(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"mserv"}
+	e.src.set("mserv", diskLow("mserv"))
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+	p := e.ntf.got[0]
+	if p.CollapseID != "alert:mserv:disk_low:/" || p.Host != "mserv" || p.Title != "[wwd] mserv 剩 9.8 GB" {
+		t.Fatalf("push = %+v", p)
+	}
+	if st, _ := e.m.store.delivery("mserv", "disk_low:/"); st.Sent != 0 {
+		t.Fatalf("recorded as delivered before Sent: %+v", st)
+	}
+	e.ntf.confirm(0)
+	st, ok := e.m.store.delivery("mserv", "disk_low:/")
+	if !ok || st.Sent != e.now.UnixMilli() {
+		t.Fatalf("not recorded after Sent: %+v %v", st, ok)
+	}
+}
+
+// Delivered within the hour: not pushed again, whatever the passes. After the hour, an alert that still holds is told again.
+func TestADeliveredAlertIsNotPushedAgainWithinTheHour(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.confirm(0)
+	for i := 0; i < 100; i++ {
+		e.now = e.now.Add(30 * time.Second)
+		e.pass(t)
+	}
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushed again within the hour: %d", e.ntf.count())
+	}
+	e.now = t0.Add(time.Hour + time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("still active after an hour, pushes = %d", e.ntf.count())
+	}
+}
+
+// Sent never comes (a person at the computer, no device, APNs down): the module may not queue the alert on every pass. At most one
+// attempt per 5 minutes, so at most 12 in an hour.
+func TestWithoutSentAtMostTwelveAttemptsAnHour(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	for i := 0; i < 120; i++ { // a pass every 30 s for an hour, the last one at 59m30s
+		e.pass(t)
+		e.now = e.now.Add(30 * time.Second)
+	}
+	if n := e.ntf.count(); n != 12 {
+		t.Fatalf("attempts in an hour = %d, want 12", n)
+	}
+}
+
+// The attempt time is stored: a restart (a new module over the same database) does not make an attempt a minute after the last one.
+func TestTheAttemptIntervalSurvivesARestart(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	e.m = e.module(t)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("attempts = %d, a restart must not retry within 5 minutes", e.ntf.count())
+	}
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("attempts = %d, want a retry after 5 minutes", e.ntf.count())
+	}
+}
+
+// A delivery is remembered across a restart too (the restart pass tells nothing again within the hour).
+func TestADeliveryIsRememberedAcrossARestart(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.confirm(0)
+	e.now = e.now.Add(10 * time.Minute)
+	e.m = e.module(t)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+}
+
+// An alert that cleared and holds again is a new one: it is told at once, even within the hour of the earlier delivery.
+func TestAClearedAndRaisedAgainAlertIsPushedAtOnce(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.confirm(0)
+	e.now = e.now.Add(time.Minute)
+	e.src.set("mlab") // cleared
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	again := diskLow("mlab")
+	again.Since = e.now
+	e.src.set("mlab", again)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("pushes = %d, a new alert is told at once", e.ntf.count())
+	}
+}
+
+// Only the deliverer pushes; the other daemon reads and gathers the digest, and tells nothing.
+func TestOnlyTheDelivererPushes(t *testing.T) {
+	e := newEnv(t)
+	e.deliv = false
+	d := diskLow("mlab")
+	dg := wire.Alert{Key: "orphans:/tmp", Kind: wire.AlertOrphans, Level: wire.AlertDigest, Since: t0, Last: t0, Detail: "3 個孤兒行程"}
+	e.src.set("mlab", d, dg)
+	e.pass(t)
+	if e.ntf.count() != 0 {
+		t.Fatalf("a daemon that is not the deliverer pushed %d", e.ntf.count())
+	}
+	if n, _ := e.m.store.digestCount(); n != 1 {
+		t.Fatalf("digest rows = %d", n)
+	}
+	e.deliv = true // it becomes the deliverer: the alert still holds and is told
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes after takeover = %d", e.ntf.count())
+	}
+}
+
+// A digest-level alert is gathered, never pushed, and a repeat of it is one row.
+func TestADigestAlertIsGatheredNotPushed(t *testing.T) {
+	e := newEnv(t)
+	dg := wire.Alert{Key: "orphans:/tmp", Kind: wire.AlertOrphans, Level: wire.AlertDigest, Since: t0, Last: t0, Detail: "3 個孤兒行程"}
+	e.src.set("mlab", dg)
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	dg.Last = e.now
+	e.src.set("mlab", dg)
+	e.pass(t)
+	if e.ntf.count() != 0 {
+		t.Fatal("a digest alert was pushed")
+	}
+	if n, _ := e.m.store.digestCount(); n != 1 {
+		t.Fatalf("digest rows = %d, want one row for the alert", n)
+	}
+}
+
+// A host whose list cannot be read is skipped without forgetting it: the others go on, and when it answers again an alert that was
+// delivered is not told a second time.
+func TestAHostThatCannotBeReadKeepsItsLedger(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"mserv"}
+	e.src.set("mserv", diskLow("mserv"))
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.confirm(0)
+	e.ntf.confirm(1)
+	e.src.errs = map[string]error{"mserv": errors.New("pool read failed")}
+	e.now = e.now.Add(2 * time.Minute)
+	e.pass(t)
+	e.src.errs = nil
+	e.now = e.now.Add(2 * time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("pushes = %d: an unreadable host must not look cleared", e.ntf.count())
+	}
+}
+
+// The push module not asking done (queue full, not started): the attempt is counted all the same, so a push side that is down is not
+// asked every pass, and nothing is recorded as delivered.
+func TestARefusedPushIsRetriedAfterTheInterval(t *testing.T) {
+	e := newEnv(t)
+	e.ntf.done = false
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("attempts = %d", e.ntf.count())
+	}
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("attempts = %d, want a retry after the interval", e.ntf.count())
+	}
+}
+
+// The deliverer is the daemon holding the fleet primary role. A standby (or off) reads and tells nothing; when the primary is lost and
+// the standby takes over, the alerts that still hold are told then; when it steps down again it stops.
+func TestDeliveryFollowsTheFleetRole(t *testing.T) {
+	e := newEnv(t)
+	role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
+	e.m.deliver = primaryOnly(role)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if e.ntf.count() != 0 {
+		t.Fatalf("a standby pushed %d", e.ntf.count())
+	}
+	role.Set(fleet.RoleState{Role: fleet.RolePrimary, Term: 2, Self: "mlab"}) // the primary was lost: the standby took over
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes after the takeover = %d", e.ntf.count())
+	}
+	e.ntf.confirm(0)
+	role.Set(fleet.RoleState{Role: fleet.RoleStandby, Term: 3, Self: "mlab", Primary: "air26"})
+	e.now = e.now.Add(2 * time.Hour)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("a daemon that stepped down pushed again: %d", e.ntf.count())
+	}
+	role.Set(fleet.RoleState{Role: fleet.RoleOff, Self: "mlab", Reason: "disabled"})
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("an off daemon pushed: %d", e.ntf.count())
+	}
+}
+
+// No fleet role at all (the fleet module is not there): nothing delivers, nothing panics.
+func TestNoFleetRoleMeansNoDelivery(t *testing.T) {
+	if primaryOnly(nil)() {
+		t.Fatal("a daemon without a fleet role delivered")
+	}
+}
+
+// The push module is not there (no notifier in the registry yet): nothing is attempted, and nothing is counted as an attempt.
+func TestNoPushModuleMeansNoAttempt(t *testing.T) {
+	e := newEnv(t)
+	e.m.notify = func() (push.AlertNotifier, bool) { return nil, false }
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.m.notify = func() (push.AlertNotifier, bool) { return e.ntf, true }
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d: the first pass must not have used up the interval", e.ntf.count())
+	}
+}
