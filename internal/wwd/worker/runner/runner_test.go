@@ -691,3 +691,15 @@ func TestCleanRunIsNotQuarantined(t *testing.T) {
 		t.Fatalf("quarantined=%v cleaned=%d owners=%d", e.Quarantined, ex.cleaned.Load(), tbl.Owners())
 	}
 }
+
+func TestRunPanicKeepsLocksAndWorkspace(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result { panic("boom") }}
+	c, tbl := newCtl(ex)
+	func() {
+		defer func() { _ = recover() }()
+		c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	}()
+	if _, held := tbl.Holder("mysql"); !held || ex.cleaned.Load() != 0 {
+		t.Fatalf("held=%v cleaned=%d: a Run that panicked proved nothing about its process tree", held, ex.cleaned.Load())
+	}
+}

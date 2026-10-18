@@ -234,6 +234,8 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		}
 	}
 	if started && st.get() == stopNone {
+		// fail closed: if Run panics, nothing proves its tree gone, so the lock keys must not be let go by the deferred release
+		quarantined = true
 		res = c.cfg.Exec.Run(runCtx, job, ws, plan)
 	}
 	// A run that could not prove its process tree (a sandbox unit) gone may still be writing the workspace: the workspace stays and so do
