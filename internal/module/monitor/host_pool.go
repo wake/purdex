@@ -91,10 +91,8 @@ func (c *poolHostCollector) Close() {
 // poolPercentCollector is poolHostCollector for a fallback that reports the CPU percentage itself.
 type poolPercentCollector struct{ *poolHostCollector }
 
+// CPUPercent is the fallback's own reading; collectHostCPU asks poolCPU first, so this is reached only without wwd's.
 func (c *poolPercentCollector) CPUPercent(interval time.Duration) (float64, error) {
-	if p, ok := c.poolCPU(); ok {
-		return p, nil
-	}
 	src, ok := c.fallback.(hostCPUPercentSource)
 	if !ok {
 		return 0, errors.New("no cpu source")
