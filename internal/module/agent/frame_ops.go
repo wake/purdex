@@ -1261,8 +1261,15 @@ func (m *Module) projectionPaneSnapshot(paneID string) *paneSnapshot {
 		return nil
 	}
 	if _, listed := snap.panes[paneID]; !listed && fromCache {
+		gen := m.tmuxGen.Load()
+		if m.snapCache.recentlyAbsent(paneID, m.paneSnapTTL, gen) {
+			return snap // listed again a moment ago and not there: the pane is not tmux's, as the live read would say
+		}
 		if snap, _, err = m.cachedPaneSnapshot(true); err != nil || snap == nil || snap.fallback {
 			return nil
+		}
+		if _, listed := snap.panes[paneID]; !listed {
+			m.snapCache.noteAbsent(paneID, m.paneSnapTTL, gen)
 		}
 	}
 	return snap

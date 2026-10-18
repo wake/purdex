@@ -28,6 +28,45 @@ type paneSnapCache struct {
 	taken  time.Time
 	gen    uint64 // m.tmuxGen when the fork started
 	flight *snapFlight
+	// absent: panes a forced listing did not list, so a projection of a pane that tmux does not know (a frame left behind by a pane that
+	// is gone) does not force another listing at every event; an entry holds for the TTL and until the layout generation moves (#3316 C).
+	absent map[string]absentPane
+}
+
+type absentPane struct {
+	at  time.Time
+	gen uint64
+}
+
+// maxAbsentPanes bounds the absent map; past it the expired entries are dropped.
+const maxAbsentPanes = 256
+
+// recentlyAbsent says a forced listing within ttl, in the current layout generation, did not list the pane.
+func (c *paneSnapCache) recentlyAbsent(paneID string, ttl time.Duration, gen uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a, ok := c.absent[paneID]
+	return ok && a.gen == gen && time.Since(a.at) <= ttl
+}
+
+// noteAbsent records the pane as not listed by a listing taken now.
+func (c *paneSnapCache) noteAbsent(paneID string, ttl time.Duration, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.absent == nil {
+		c.absent = make(map[string]absentPane)
+	}
+	if len(c.absent) >= maxAbsentPanes {
+		for id, a := range c.absent {
+			if a.gen != gen || time.Since(a.at) > ttl {
+				delete(c.absent, id)
+			}
+		}
+		if len(c.absent) >= maxAbsentPanes {
+			return // a flood of unknown panes: not remembered, each is still answered
+		}
+	}
+	c.absent[paneID] = absentPane{at: time.Now(), gen: gen}
 }
 
 // snapFlight is one in-progress fork other readers may wait on.
