@@ -638,3 +638,20 @@ func (s *startHangs) Start(ctx context.Context, _, _ string) (wire.Lease, error)
 	<-ctx.Done()
 	return wire.Lease{}, ctx.Err()
 }
+
+func TestStartWaitingForTheLockSeesTheCancelTheHeartbeatAnswered(t *testing.T) {
+	// the heartbeat is in flight (and holds the call lock) when Prepare finishes, so Start waits; the heartbeat answers cancel.
+	ex := &fakeExec{prepare: func() (Plan, error) { time.Sleep(2 * unit); return Plan{Argv: []string{"x"}}, nil }}
+	o := &fakeOrigin{heartbeat: func(int) (wire.HeartbeatResponse, error) {
+		time.Sleep(5 * unit)
+		return wire.HeartbeatResponse{LeaseS: 30, RenewS: 50, Cancel: true}, nil
+	}}
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+	}
+	c, _ := newCtl(ex)
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if _, st, _ := o.count(); e.Kind != KindCancelled || st != 0 || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s starts=%d ran=%d: a cancelled job must not be started", e.Kind, st, ex.ran.Load())
+	}
+}

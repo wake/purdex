@@ -212,8 +212,10 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		if plan, perr = c.cfg.Exec.Prepare(runCtx, job, ws); perr != nil {
 			runErr = perr
 		} else if st.get() == stopNone && runCtx.Err() == nil { // not stopped while the plan was made
-			serr := c.start(runCtx, origin, job.ID, cr.ClaimID, lease)
+			serr := c.start(runCtx, origin, job.ID, cr.ClaimID, lease, st)
 			switch {
+			case errors.Is(serr, errStopped):
+				// the reason is in st; Kind comes from there
 			case serr == nil:
 				started = true
 			case isConflict(serr) || c.expired(lease):
@@ -259,9 +261,14 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 }
 
 // start is origin.Start under the lease's call lock, bounded by the lease deadline, applying the lease it answers with.
-func (c *Controller) start(ctx context.Context, origin Origin, id, claimID string, l *leaseClock) error {
+func (c *Controller) start(ctx context.Context, origin Origin, id, claimID string, l *leaseClock, st *state) error {
 	l.call.Lock()
 	defer l.call.Unlock()
+	// A heartbeat that held the lock before us may have answered cancel (applied before it let go of the lock): then the job must not
+	// be started at all.
+	if st.get() != stopNone || ctx.Err() != nil {
+		return errStopped
+	}
 	deadline, _ := l.get()
 	sctx, end := context.WithDeadline(ctx, deadline)
 	defer end()
@@ -278,6 +285,9 @@ func (c *Controller) expired(l *leaseClock) bool {
 	deadline, _ := l.get()
 	return !c.cfg.Now().Before(deadline)
 }
+
+// errStopped: start was not called because the job was already cancelled or lost.
+var errStopped = errors.New("runner: stopped before start")
 
 func isConflict(err error) bool {
 	var c *Conflict
@@ -361,14 +371,15 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 		endHB()
 		if err == nil {
 			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
-		}
-		l.call.Unlock()
-		switch {
-		case err == nil:
+			// cancel is applied before the lock is let go, so that a start waiting for it sees it
 			if resp.Cancel && st.get() == stopNone {
 				st.set(stopCancelled)
 				endRun() // the command ends; the lease goes on being renewed while the cancelled result is posted
 			}
+		}
+		l.call.Unlock()
+		switch {
+		case err == nil:
 		case isConflict(err):
 			st.set(stopLost)
 			endRun()
