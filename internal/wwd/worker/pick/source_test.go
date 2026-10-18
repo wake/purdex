@@ -56,7 +56,10 @@ func TestPeerSourceSendsTokenAndQuery(t *testing.T) {
 
 func TestPeerSourceErrors(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusInternalServerError} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+			_ = json.NewEncoder(w).Encode(wire.JobsListResponse{Jobs: []wire.Job{job("leak", wire.ClassDev, 0)}}) // a well-formed body must still not be trusted
+		}))
 		s := NewPeerSource("x", srv.URL, "tok", srv.Client())
 		if _, err := s.Queued(context.Background()); err == nil || !strings.Contains(err.Error(), "x") {
 			t.Fatalf("code %d: err = %v, want an error naming the peer", code, err)

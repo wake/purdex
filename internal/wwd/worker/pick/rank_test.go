@@ -194,3 +194,11 @@ func TestRankDoesNotMutateInput(t *testing.T) {
 		t.Fatalf("input reordered: %v", in)
 	}
 }
+
+func TestFutureCreatedAtDoesNotLowerScore(t *testing.T) {
+	// clock skew between hosts can put created_at ahead of now; wait is never negative.
+	r := Rank([]Candidate{cand(job("skew", wire.ClassDev, -5*time.Minute))}, baseEnv())
+	if r[0].Score != 1000 {
+		t.Fatalf("score = %v, want 1000", r[0].Score)
+	}
+}
