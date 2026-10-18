@@ -23,6 +23,8 @@ type Call = string[]
 // not move with the host's load (#3307: a 5 s wall-clock bound read 5038 and 5266 ms on a loaded host). (2) The whole call is back
 // within BACK_MS of the wall clock: a backstop for a wait added after the cap, which `sleeps` cannot see. It is far above SETTLE_MS (a
 // loaded host stretched 3 s to 5.3 s), below the tests' 15 s timeoutMs, and an unbounded wait (30 s grace) is red either way.
+// What this cannot see: an extra wait of a few seconds that does not go through clock.sleep. On a loaded host that is
+// indistinguishable from the load itself, so the contract these tests hold is "the cap is applied exactly" plus "not held past BACK_MS".
 const SETTLE_MS = 3000
 const BACK_MS = 8000
 let sleeps: number[] = []
@@ -545,7 +547,7 @@ test('a row closed another way (abandoned) ⇒ the native dialog runs on alone, 
 // `pdx ask begin` against a daemon that is down answers exit 20 only after the client's 30 s
 // grace; here it never answers inside the test. The native answer comes back within the mod's
 // settle cap (3 s), measured in real time. Mutation gate: wait for begin without the cap → red.
-test('a daemon that does not answer begin (down: exit 20 only after its 30 s grace) never holds the terminal answer: back within 5 s', { timeoutMs: 15000 }, async ($, on) => {
+test('a daemon that does not answer begin (down: exit 20 only after its 30 s grace) never holds the terminal answer: back at the settle cap (3 s)', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   const calls: Call[] = []
   let answerNative: Resolver = null
@@ -569,12 +571,12 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
 
 // The same bound for the report: the row is open, the person answers, and the daemon then stops
 // answering. The report is sent (its call is out before the answer goes back), but the answer is
-// back within 5 s. Mutation gate: wait for the report without the cap (an unbounded wait) → red.
+// back at the settle cap. Mutation gate: wait for the report without the cap (an unbounded wait) → red.
 // A report still out after SETTLE_MS is handed to `pdx ask report --detach` (a process of
 // its own that lands it after the hook returned — P8a-2 R2: a report lost after a remote
 // CAS would leave the cards on the remote answer). Mutation gate: drop the detach → the
 // `detached` assertions are red.
-test('a daemon that does not answer the report never holds the terminal answer: back within 5 s, the report detached', { timeoutMs: 15000 }, async ($, on) => {
+test('a daemon that does not answer the report never holds the terminal answer: back at the settle cap, the report detached', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   let answerNative: Resolver = null
   let report: Call | null = null
@@ -602,7 +604,7 @@ test('a daemon that does not answer the report never holds the terminal answer: 
   expect(JSON.parse(detached![detached!.indexOf('--hook') + 1])).toEqual({ answers: { '紅還是藍？': '紅' } })
 })
 
-test('answered before begin returned, then a report that hangs ⇒ back within 5 s and the report detached', { timeoutMs: 15000 }, async ($, on) => {
+test('answered before begin returned, then a report that hangs ⇒ back at the settle cap and the report detached', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   let detached: Call | null = null
   on('process.run', (_$: any, e: any) => {
@@ -644,7 +646,7 @@ test('a healthy report is not detached', async ($, on) => {
 // answer it first: the report goes out by the tool use, detached, with the time taken BEFORE begin was called (`--since`), so it
 // lands on the begin's row whenever that appears. Mutation gates: no by-tool-use report → `byToolUse` stays null (red); `--since`
 // taken after begin → the value differs (red).
-test('answered in the terminal while begin has not replied ⇒ back within 5 s, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
+test('answered in the terminal while begin has not replied ⇒ back at the settle cap, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   // The engine's clock is another clock domain and can be far from the wall clock: --since is the REAL time (the daemon's
   // created_at is), taken just before begin is called. Mutation gate: read the engine clock (or take it after begin) → red.
