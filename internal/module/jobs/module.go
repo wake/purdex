@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -53,33 +55,100 @@ type Module struct {
 	cl       *client.Client
 	inflight chan struct{} // a semaphore of maxInFlight
 	logs     chan struct{} // a semaphore of maxLogInFlight, held by the /log route besides inflight
+
+	// jobs.changed (events.go)
+	core   *core.Core
+	logf   func(format string, args ...any)
+	retry  time.Duration        // the pause before the event stream is opened again
+	emit   func(core.HostEvent) // where jobs.changed goes; nil: the core's host events
+	src    eventSource          // the local wwd's event stream; nil: cl
+	cancel context.CancelFunc   // ends the stream loop
+	done   chan struct{}        // closed when that loop has ended
+	// where the last catch-up read stopped (memory only: a restarted daemon has no App connection that missed anything)
+	cursor, epoch string
+	based         bool
+}
+
+// eventSource is the part of the wwd client the stream loop reads; *client.Client is one.
+type eventSource interface {
+	Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) (done bool)) error
+	JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error)
 }
 
 func New() *Module {
-	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight)}
+	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight), logf: log.Printf, retry: retryEvery}
+}
+
+func (m *Module) source() eventSource {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.src != nil {
+		return m.src
+	}
+	return m.cl
 }
 
 func (m *Module) Name() string           { return "jobs" }
 func (m *Module) Dependencies() []string { return nil }
 
 // Init never fails: wwd is a separate process that may start later than this daemon.
-func (m *Module) Init(*core.Core) error {
+func (m *Module) Init(c *core.Core) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cl == nil {
 		m.cl = client.New(client.DefaultSocket())
 	}
+	m.core = c
 	m.ready = true
 	return nil
 }
 
-func (m *Module) Start(context.Context) error { return nil }
+// Start opens the local wwd's event stream in the background; wwd not running is retried and never fails the daemon.
+// A second Start while it runs does nothing; a Start after Stop runs it again, but not while the loop of the earlier Start has still
+// not ended (a Stop whose ctx ran out leaves it ending): that Start is refused rather than run beside the old loop.
+func (m *Module) Start(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		return nil
+	}
+	if m.done != nil {
+		select {
+		case <-m.done:
+		default:
+			return errors.New("jobs: the stream loop of the earlier Start has not ended yet")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.cancel, m.done, m.ready = cancel, done, true
+	go func() {
+		defer close(done)
+		m.watch(ctx)
+	}()
+	return nil
+}
 
-func (m *Module) Stop(context.Context) error {
+// Stop ends the stream loop and waits for it as long as ctx allows. The loop is remembered until it has ended, so a Stop that ran out
+// of time can be repeated and a Start does not begin a second loop beside it. Stopping a module that never ran does nothing.
+func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.ready = false
+	cancel, done := m.cancel, m.done
+	m.cancel = nil
 	m.mu.Unlock()
-	return nil
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Status is what /api/info reads to announce jobs.v1 (the API exists; whether wwd is up is each call's answer).
