@@ -153,6 +153,9 @@ type Sources struct {
 	// Owner is the "owner is active" rule (air26 only; nil elsewhere: owner stays
 	// null). It sees the process table of the same sample.
 	Owner func(ProcSnapshot, ProcContext) *wire.OwnerState
+	// Observe gets the whole process table of every sample whose process read worked (nil: nobody watches the trees). It runs on
+	// the sampling goroutine, after the other builders, with the context's table already built; it must not keep the snapshot.
+	Observe func(now time.Time, snap ProcSnapshot, c ProcContext)
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -230,6 +233,9 @@ func (c *Collector) Sample() (Reading, error) {
 			r.Residents = BuildResidents(snap, ctx)
 			if c.src.Owner != nil {
 				r.Owner = c.src.Owner(snap, ctx)
+			}
+			if c.src.Observe != nil {
+				c.src.Observe(now, snap, ctx)
 			}
 		}
 	}

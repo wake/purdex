@@ -51,7 +51,10 @@ func badRequest(w http.ResponseWriter, msg string) {
 // not be shown a path.
 func fail(w http.ResponseWriter, err error) {
 	var ce *queue.ConflictError
+	var tooBig *http.MaxBytesError
 	switch {
+	case errors.Is(err, queue.ErrLogTooLarge), errors.As(err, &tooBig):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "the log is too large"})
 	case errors.Is(err, queue.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 	case errors.As(err, &ce):

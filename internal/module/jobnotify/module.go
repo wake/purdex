@@ -26,11 +26,8 @@ import (
 // source is the part of the wwd client the module reads; *client.Client is one.
 type source interface {
 	Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) (done bool)) error
-	Jobs(ctx context.Context, f client.JobsQuery) ([]wire.Job, error)
+	JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error)
 }
-
-// terminalStates are the states a catch-up asks the list for.
-var terminalStates = []wire.JobState{wire.StateSucceeded, wire.StateFailed, wire.StateCancelled, wire.StateSuperseded, wire.StateExpired}
 
 // Module is the job-completion notifier.
 type Module struct {
@@ -78,15 +75,20 @@ func (m *Module) Init(c *core.Core) error {
 		return err
 	}
 	m.store = st
-	// the first run starts now: it does not tell a whole history. Without a window that was written there is no safe start, so the
-	// module does not start at all.
-	if _, ok, err := st.since(); err != nil {
+	// the first run starts now: it does not tell a whole history. With neither a cursor nor a window written there is no safe start,
+	// so the module writes the window (the time now) and, if that cannot be done, does not start at all.
+	if _, haveCursor, err := st.cursor(); err != nil {
 		st.close()
-		return fmt.Errorf("job notice window: %w", err)
-	} else if !ok {
-		if err := st.setSince(m.now()); err != nil {
+		return fmt.Errorf("job notice cursor: %w", err)
+	} else if !haveCursor {
+		if _, ok, err := st.since(); err != nil {
 			st.close()
 			return fmt.Errorf("job notice window: %w", err)
+		} else if !ok {
+			if err := st.setSince(m.now()); err != nil {
+				st.close()
+				return fmt.Errorf("job notice window: %w", err)
+			}
 		}
 	}
 	return nil
@@ -186,46 +188,67 @@ func (m *Module) onEvent(ctx context.Context, ev wire.Event) {
 	}
 }
 
-// catchUp finds the jobs that ended since the last complete catch-up, less the overlap, and queues the ones not yet in the outbox.
-// Every state is listed before anything is queued, and the window moves only when all of them were read. The window is only a
-// hint of how far back to look: what was already queued is ignored by job id, and what was queued but not delivered is kept by the
-// outbox whatever the window does.
+// pageSize is how many changed jobs one catch-up read asks for.
+const pageSize = 1000
+
+// catchUp reads what changed in wwd since the cursor it stored, page by page, and queues the ended jobs not yet in the outbox. The
+// cursor is wwd's own (a position in its change log, never a time of a worker's) and moves only past a page whose jobs were all
+// queued, so a job that could not be queued is read again. A job comes back whenever it changes (a log uploaded after the end), which
+// the outbox ignores by job id. wwd answering without a cursor (a version that does not know ?after=) is an error, never "nothing new".
+//
+// Until the first pass has read everything, the legacy window (the time the module first ran, less the overlap) keeps the history
+// that was there before the module from being told: a job made before it is skipped. The window reads the job's created_at, which
+// wwd's own clock stamps (a submission cannot carry it); the finished time may be a remote worker's, and a slow clock there must not
+// decide that a job which ended after a restart is history. The price: a job made over an hour before the module first ran that ends
+// after it is told by the event stream or not at all.
 func (m *Module) catchUp(ctx context.Context) {
-	began := m.now()
-	since, ok, err := m.store.since()
+	cursor, have, err := m.store.cursor()
+	if err != nil {
+		m.logf("jobnotify: catch-up cursor: %v", err)
+		return
+	}
+	if !have {
+		cursor = "0"
+	}
+	since, windowed, err := m.store.since()
 	if err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
 		return
 	}
-	from := time.Time{}
-	if ok {
-		from = since.Add(-overlap)
-	}
-	var ended []wire.Job
-	for _, st := range terminalStates {
-		jobs, err := m.src.Jobs(ctx, client.JobsQuery{State: st})
+	floor := since.Add(-overlap)
+	for {
+		page, err := m.src.JobsAfter(ctx, cursor, pageSize)
 		if err != nil {
 			if ctx.Err() == nil {
-				m.logf("jobnotify: catch-up %s: %v", st, err)
+				m.logf("jobnotify: catch-up after %s: %v", cursor, err)
 			}
 			return
 		}
-		for _, j := range jobs {
-			if j.Result != nil && j.Result.FinishedAt != nil && !j.Result.FinishedAt.Before(from) {
-				ended = append(ended, j)
+		for _, j := range page.Jobs {
+			if windowed && j.CreatedAt.Before(floor) {
+				continue // made before this module first ran: history, not news
+			}
+			if _, err := m.enqueue(j); err != nil {
+				// the cursor stays before this page: the job is read again by the next catch-up
+				m.logf("jobnotify: catch-up could not queue %s, cursor kept: %v", j.ID, err)
+				m.wake()
+				return
 			}
 		}
-	}
-	for _, j := range ended {
-		if _, err := m.enqueue(j); err != nil {
-			// a job that is not in the outbox must stay inside the window of the next catch-up
-			m.logf("jobnotify: catch-up could not queue %s, window kept: %v", j.ID, err)
-			m.wake()
+		last := len(page.Jobs) < pageSize
+		if last && windowed {
+			err = m.store.finishFirstPass(page.Cursor) // the cursor and the end of the window, together
+		} else {
+			err = m.store.setCursor(page.Cursor)
+		}
+		if err != nil {
+			m.logf("jobnotify: catch-up cursor: %v", err)
 			return
 		}
-	}
-	if err := m.store.setSince(began); err != nil {
-		m.logf("jobnotify: catch-up window: %v", err)
+		cursor = page.Cursor
+		if last {
+			break
+		}
 	}
 	m.wake()
 }
