@@ -92,6 +92,8 @@ type Request struct {
 	// Recorder may be nil: the run is then not recorded and holds no lock.
 	Recorder Recorder
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
+	// GateClass is the slot the run takes: "" is the light slot of a declared task, an undeclared command takes a heavy one.
+	GateClass gate.Class
 	// OutDir holds the log and report files; a temporary directory when empty (removed by the caller via Result.Cleanup).
 	OutDir string
 }
@@ -189,7 +191,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	var waitedOut bool // the gate's own word that the wait for a slot ran out, which an exit 75 alone does not say
 	code, gateErr := req.Gate.Run(runCtx, gate.Options{
-		Argv: argv, Class: gate.ClassLight, ClassSource: "kind", Env: env,
+		Argv: argv, Class: gateClass(req.GateClass), ClassSource: "kind", Env: env,
 		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
 		WaitMax: task.QueueTimeout, WaitedOut: &waitedOut,
 		Stdout: cp.Stdout(), Stderr: stderr,
@@ -416,4 +418,12 @@ func buildSummary(task *manifest.Task, out, report, junit string, tail []byte) (
 func lines(b []byte) []string {
 	s, _ := summary.Parse("plain", summary.Input{Log: b})
 	return s.Tail
+}
+
+// gateClass is the slot class of a run: light unless the request names another.
+func gateClass(c gate.Class) gate.Class {
+	if c == "" {
+		return gate.ClassLight
+	}
+	return c
 }
