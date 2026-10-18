@@ -42,10 +42,11 @@ type ToolsReader struct {
 }
 
 // NewToolsReader is a reader over this host's usual places.
-func NewToolsReader(home, pathEnv string) *ToolsReader {
+// extra is the config's [tools] extra_path after ResolveExtraDirs; the job PATH comes from the same ToolDirs call.
+func NewToolsReader(home, pathEnv string, extra []string) *ToolsReader {
 	return &ToolsReader{
 		Run: defaultRun, Now: time.Now, TTL: 10 * time.Minute,
-		PathDirs:    DefaultToolDirs(home, pathEnv),
+		PathDirs:    ToolDirs(home, pathEnv, extra),
 		PHPDirs:     []string{filepath.Join(home, "Library", "Application Support", "Herd", "bin"), "/opt/homebrew/bin", "/usr/local/bin"},
 		XcodePlists: []string{"/Applications/Xcode.app/Contents/version.plist"},
 	}
@@ -68,6 +69,49 @@ func DefaultToolDirs(home, pathEnv string) []string {
 		add(d)
 	}
 	return dirs
+}
+
+// ToolDirs is DefaultToolDirs with the configured extra directories in front (an explicit setting wins). It is the one list both the
+// tool probe and a job's PATH are built from, so a tool the facts report is a tool a job finds.
+func ToolDirs(home, pathEnv string, extra []string) []string {
+	var dirs []string
+	for _, d := range extra {
+		if !isShimDir(d) && !contains(dirs, d) { // a shim routes through the gate: never a real tool, for the probe or for a job
+			dirs = append(dirs, d)
+		}
+	}
+	for _, d := range DefaultToolDirs(home, pathEnv) {
+		if !contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// ToolPath is ToolDirs as a PATH value.
+func ToolPath(home, pathEnv string, extra []string) string {
+	return strings.Join(ToolDirs(home, pathEnv, extra), string(os.PathListSeparator))
+}
+
+// ResolveExtraDirs turns the config's extra_path entries (absolute, or ~/ for home) into the directories that exist. A missing
+// entry, or one that is not a directory, is skipped and logged once.
+func ResolveExtraDirs(home string, entries []string, logf func(format string, args ...any)) []string {
+	var out []string
+	for _, e := range entries {
+		p := e
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+		p = filepath.Clean(p)
+		if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
+			logf("wwd: tools.extra_path: skipping %s (not a directory on this host)", p)
+			continue
+		}
+		if !contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func contains(s []string, v string) bool {

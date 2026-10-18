@@ -10,12 +10,13 @@ import (
 
 // systemTools is the toolchain reader for this host, nil when the home
 // directory is unknown.
-func systemTools() func() wire.Tools {
+// extra is the resolved [tools] extra_path.
+func systemTools(extra []string) func() wire.Tools {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	return Background(NewToolsReader(home, os.Getenv("PATH")), time.Now)
+	return Background(NewToolsReader(home, os.Getenv("PATH"), extra), time.Now)
 }
 
 // Background wraps a ToolsReader so the sampling loop never waits for it: asking

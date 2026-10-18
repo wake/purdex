@@ -25,11 +25,11 @@ var productionSlices = []string{
 func SystemSources() Sources { return SystemSourcesWith(SourceOptions{}) }
 
 // SystemSourcesWith is SystemSources; the owner rule is macOS only, so the
-// options change nothing here and owner stays null.
-func SystemSourcesWith(SourceOptions) Sources {
+// options change nothing here but the tool directories, and owner stays null.
+func SystemSourcesWith(opt SourceOptions) Sources {
 	return Sources{
 		Now:   time.Now,
-		Tools: systemTools(),
+		Tools: systemTools(opt.ToolDirs),
 		Procs: NewProcfsReader("/proc", DefaultSessionsDir()).Snapshot,
 		CPU:   linuxCPU,
 		Mem:   linuxMem,
