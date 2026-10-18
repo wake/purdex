@@ -906,9 +906,13 @@ func TestTheMarkerExistsWhenTheDeliveryStarts(t *testing.T) {
 func TestRunDoesNotStartWhenTheHoldsCannotBePutBack(t *testing.T) {
 	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
 	q := newQRig(t, c)
+	if _, err := q.tbl.Acquire("mlab/old", []string{"mysql"}, nil); err != nil { // the runner's hold of the job that ended
+		t.Fatal(err)
+	}
 	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Keys: []string{"mysql"}}); err != nil {
 		t.Fatal(err)
 	}
+	q.tbl.ReleaseOwner("mlab/old")                                                   // a restart: the marker is on disk, the hold is not
 	if _, err := q.tbl.Acquire("someone-else", []string{"mysql"}, nil); err != nil { // a key the old entry needs is taken
 		t.Fatal(err)
 	}
@@ -924,6 +928,9 @@ func TestRunDoesNotStartWhenTheHoldsCannotBePutBack(t *testing.T) {
 func TestRestartPutsTheQuarantinedHoldsBackBeforeAnyClaim(t *testing.T) {
 	c := newConn("mlab", qjob("needs-mysql", wire.ClassDev, 0, "mysql"), qjob("free", wire.ClassDev, time.Minute))
 	q := newQRig(t, c)
+	if _, err := q.tbl.Acquire("mlab/old", []string{"mysql"}, nil); err != nil { // the runner's hold of the job that ended
+		t.Fatal(err)
+	}
 	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Keys: []string{"mysql"}, Unit: "wwd-old"}); err != nil {
 		t.Fatal(err)
 	}

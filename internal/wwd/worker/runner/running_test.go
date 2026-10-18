@@ -9,6 +9,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
 )
 
 func TestStartReturnsOnceTheClaimIsTakenAndTheJobGoesOn(t *testing.T) {
@@ -191,5 +192,140 @@ func TestALostLeaseAfterAReclaimStaysLost(t *testing.T) {
 	_ = r.Stop(context.Background())
 	if k := r.Ended().Kind; k != KindLost {
 		t.Fatalf("kind=%s: nothing may be given back once the origin has the job again", k)
+	}
+}
+
+type fakeGuard struct {
+	mu       sync.Mutex
+	begin    func() error
+	events   []string
+	quar     []bool
+	ranAtEnd int32
+	ex       *fakeExec
+}
+
+func (g *fakeGuard) Begin(e Ended) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.events = append(g.events, "begin:"+e.Job.ID+":"+e.Root+":"+e.ClaimID)
+	if g.begin != nil {
+		return g.begin()
+	}
+	return nil
+}
+
+func (g *fakeGuard) End(e Ended, quarantined bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.events = append(g.events, "end")
+	g.quar = append(g.quar, quarantined)
+	if g.ex != nil {
+		g.ranAtEnd = g.ex.ran.Load()
+	}
+}
+
+func newGuarded(ex Exec, g Guard) (*Controller, *locks.Table) {
+	t := locks.New()
+	return New(Config{Worker: "mlab", Locks: t, Exec: ex, Guard: g, Unit: unit}), t
+}
+
+func TestTheGuardWrapsTheRunBeginBeforeAndEndAfter(t *testing.T) {
+	ex := &fakeExec{}
+	g := &fakeGuard{ex: ex}
+	c, _ := newGuarded(ex, g)
+	if e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil); e.Kind != KindRan {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.events) != 2 || g.events[0] != "begin:j:/ws:"+claimID || g.events[1] != "end" || g.quar[0] {
+		t.Fatalf("events %v quarantined %v", g.events, g.quar)
+	}
+	if g.ranAtEnd != 1 {
+		t.Fatal("End comes after the command has run")
+	}
+}
+
+func TestTheGuardIsToldWhenTheRunCouldNotBeProvenStopped(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result {
+		return run.Result{Outcome: run.Exited, Err: errors.New("unit not proven stopped")}
+	}}
+	g := &fakeGuard{}
+	c, tbl := newGuarded(ex, g)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !e.Quarantined || len(g.quar) != 1 || !g.quar[0] {
+		t.Fatalf("quarantined=%v guard %v", e.Quarantined, g.quar)
+	}
+	if _, held := tbl.Holder("mysql"); !held {
+		t.Fatal("the hold stays")
+	}
+}
+
+func TestAStartFailedRunIsNotQuarantinedForTheGuardEither(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result {
+		return run.Result{Outcome: run.StartFailed, Err: errors.New("not found")}
+	}}
+	g := &fakeGuard{}
+	c, _ := newGuarded(ex, g)
+	c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.quar) != 1 || g.quar[0] {
+		t.Fatalf("guard %v: a command that never started has nothing to keep", g.quar)
+	}
+}
+
+func TestACommandIsNotStartedWhenTheGuardCannotWriteItsMarker(t *testing.T) {
+	ex := &fakeExec{}
+	g := &fakeGuard{begin: func() error { return errors.New("disk full") }}
+	c, tbl := newGuarded(ex, g)
+	e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if e.Kind != KindInfra || ex.ran.Load() != 0 || e.Quarantined || len(g.quar) != 0 {
+		t.Fatalf("kind=%s ran=%d quarantined=%v end=%v: no marker, no unit", e.Kind, ex.ran.Load(), e.Quarantined, g.quar)
+	}
+	if tbl.Owners() != 0 {
+		t.Fatal("nothing ran: the keys are free")
+	}
+}
+
+func TestAPanickingRunLeavesTheGuardsMarkerAndTheHold(t *testing.T) {
+	ex := &fakeExec{run: func(ctx context.Context) run.Result { panic("boom") }}
+	g := &fakeGuard{}
+	c, tbl := newGuarded(ex, g)
+	func() {
+		defer func() { _ = recover() }()
+		c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j", "mysql")), nil)
+	}()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.events) != 1 {
+		t.Fatalf("events %v: End is not called after a panic, so what Begin wrote stays", g.events)
+	}
+	if _, held := tbl.Holder("mysql"); !held {
+		t.Fatal("the hold stays")
+	}
+}
+
+func TestNoGuardNoCalls(t *testing.T) {
+	c, _ := newCtl(&fakeExec{})
+	if e := c.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil); e.Kind != KindRan {
+		t.Fatalf("kind=%s", e.Kind)
+	}
+}
+
+func TestACommandIsNotStartedForAJobThatWasStoppedBeforeTheGuardWasAsked(t *testing.T) {
+	ex := &fakeExec{prepare: func() (Plan, error) { time.Sleep(3 * unit); return Plan{Argv: []string{"x"}}, nil }}
+	g := &fakeGuard{}
+	c, _ := newGuarded(ex, g)
+	r := c.Start(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil)
+	_ = r.Stop(context.Background())
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.events) != 0 || ex.ran.Load() != 0 {
+		t.Fatalf("events %v ran %d: a job stopped before its run writes no marker", g.events, ex.ran.Load())
 	}
 }
