@@ -157,7 +157,9 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 		return wire.LocalRunResponse{}, http.StatusBadGateway, fmt.Errorf("the queue answered with an unusable claim: %w", err)
 	}
 	if err := hold.Rename(resp.ID); err != nil {
-		s.abandon(ctx, resp, fmt.Sprintf("its locks could not be named (%v)", err))
+		// The id is already the owner of keys: the queue named two runs alike, which it never does. The run is NOT ended here: its
+		// final job event would release, by that id, the keys of the other run that holds it.
+		s.Logf("localruns: ERROR the run %s was recorded but its locks could not be named (%v); it is not ended (that would release the keys of the run that already has this id), its lease will lapse as lost", resp.ID, err)
 		hold.Release()
 		return wire.LocalRunResponse{}, http.StatusInternalServerError, fmt.Errorf("the locks of %s: %w", resp.ID, err)
 	}

@@ -29,6 +29,7 @@ type fakeQueue struct {
 	workers  []string
 	err      error
 	badClaim bool
+	badLease bool // a valid claim with a lease of zero
 	// during runs inside RecordLocal, before it answers (a job event faster than the answer).
 	during func(id string)
 	ended  map[string]bool
@@ -59,6 +60,9 @@ func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, wor
 	}
 	if bad {
 		return wire.LocalRunResponse{ID: id}, nil
+	}
+	if q.badLease {
+		return wire.LocalRunResponse{ID: id, ClaimID: claim}, nil
 	}
 	return wire.LocalRunResponse{ID: id, ClaimID: claim, LeaseS: 60, RenewS: 15}, nil
 }
@@ -239,14 +243,11 @@ func loggedService(q Queue) (*Service, *locks.Table, func() string) {
 	return s, tb, func() string { mu.Lock(); defer mu.Unlock(); return strings.Join(lines, "\n") }
 }
 
-func TestARecordedRunWhoseLocksCannotBeNamedIsEndedAsInfraWithItsClaim(t *testing.T) {
-	q := &fakeQueue{}
+func TestARecordedRunWithAnUnusableLeaseIsEndedAsInfraWithItsClaim(t *testing.T) {
+	q := &fakeQueue{badLease: true}
 	s, tb, logs := loggedService(q)
-	if _, err := tb.Acquire("j_local1", []string{"other"}, nil); err != nil { // the name the queue will give is taken: Rename fails
-		t.Fatal(err)
-	}
 	rec := post(s, request(t, "tmux"))
-	if rec.Code != http.StatusInternalServerError {
+	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	if len(q.results) != 1 || q.resultIDs[0] != "j_local1" || q.results[0].ClaimID != claim || q.results[0].State != wire.StateFailed || q.results[0].Reason != "infra" {
@@ -260,12 +261,30 @@ func TestARecordedRunWhoseLocksCannotBeNamedIsEndedAsInfraWithItsClaim(t *testin
 	}
 }
 
-func TestAnAbandonedRunThatCannotBeEndedIsLoggedAsAnErrorWithItsJobId(t *testing.T) {
-	q := &fakeQueue{resultErr: errors.New("claim is stale")}
+func TestARunWhoseLocksCannotBeNamedIsNotEndedAndLoggedAsAnError(t *testing.T) {
+	q := &fakeQueue{}
 	s, tb, logs := loggedService(q)
-	if _, err := tb.Acquire("j_local1", []string{"other"}, nil); err != nil {
+	if _, err := tb.Acquire("j_local1", []string{"other"}, nil); err != nil { // the name the queue will give is taken: Rename fails
 		t.Fatal(err)
 	}
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(q.results) != 0 {
+		t.Fatalf("the run was ended, which would release the other run's keys: %+v", q.results)
+	}
+	if o, _ := tb.Holder("other"); o != "j_local1" {
+		t.Fatal("the keys of the run that already has the id were touched")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestAnAbandonedRunThatCannotBeEndedIsLoggedAsAnErrorWithItsJobId(t *testing.T) {
+	q := &fakeQueue{badLease: true, resultErr: errors.New("claim is stale")}
+	s, _, logs := loggedService(q)
 	post(s, request(t, "tmux"))
 	if len(q.results) != 1 || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") || !strings.Contains(logs(), "claim is stale") {
 		t.Fatalf("results %d, log %q", len(q.results), logs())
