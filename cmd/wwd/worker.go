@@ -87,6 +87,9 @@ type workerInputs struct {
 	DB       perJobDB           // nil: this host has no per-job database
 	Hooks    *fault.Hooks
 	Logf     func(string, ...any)
+	// FastLaneReady says the fast lane has rebuilt the keys of its runs that were going on (localruns.Service.Ready). The worker takes
+	// no job before that: it could otherwise be given a key a fast-lane run still holds. nil: no fast lane to wait for.
+	FastLaneReady func() bool
 }
 
 // hostGuard is the runner's guard, or an error when this host needs one and cannot have it.
@@ -225,13 +228,12 @@ func peerZone(peers func() []wire.Peer, alias string) wire.Zone {
 	return ""
 }
 
-// waitFirstFacts waits for the sampler's first record (the runner claims with the host's labels and toolchain fingerprint, which come
-// from the facts) or for ctx to end.
-func waitFirstFacts(ctx context.Context, latest func() (wire.Facts, bool)) bool {
+// waitUntil waits for ready to be true (looking every 200 ms) or for ctx to end; false when ctx ended first.
+func waitUntil(ctx context.Context, ready func() bool) bool {
 	t := time.NewTicker(200 * time.Millisecond)
 	defer t.Stop()
 	for {
-		if _, ok := latest(); ok {
+		if ready() {
 			return true
 		}
 		select {
@@ -242,10 +244,19 @@ func waitFirstFacts(ctx context.Context, latest func() (wire.Facts, bool)) bool 
 	}
 }
 
-// runWorker builds the worker once the host has facts and runs it until ctx ends. It returns when the loop has stopped what it ran (the
+// startable says the worker may be built now: the sampler has its first facts record (the runner claims with the host's labels and
+// toolchain fingerprint, which come from the facts) and the fast lane has its keys back.
+func startable(in workerInputs) bool {
+	if _, ok := in.Latest(); !ok {
+		return false
+	}
+	return in.FastLaneReady == nil || in.FastLaneReady()
+}
+
+// runWorker builds the worker once the host has facts and the fast lane has its keys, and runs it until ctx ends. It returns when the loop has stopped what it ran (the
 // caller closes the queue and the database after that), and returns the error that kept the worker from starting.
 func runWorker(ctx context.Context, in workerInputs) error {
-	if !waitFirstFacts(ctx, in.Latest) {
+	if !waitUntil(ctx, func() bool { return startable(in) }) {
 		return nil
 	}
 	cfg, err := loopConfig(in)

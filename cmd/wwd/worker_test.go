@@ -212,16 +212,37 @@ func TestSandboxForIsNilWithoutAUser(t *testing.T) {
 	}
 }
 
-func TestWaitFirstFactsReturnsWhenThereAreFactsOrTheContextEnds(t *testing.T) {
+func TestWaitUntilReturnsWhenReadyOrTheContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if waitFirstFacts(ctx, func() (wire.Facts, bool) { return wire.Facts{}, false }) {
+	if waitUntil(ctx, func() bool { return false }) {
 		t.Fatal("a context that has ended")
 	}
 	n := 0
-	ok := waitFirstFacts(context.Background(), func() (wire.Facts, bool) { n++; return wire.Facts{}, n > 2 })
+	ok := waitUntil(context.Background(), func() bool { n++; return n > 2 })
 	if !ok || n != 3 {
 		t.Fatalf("ok %v after %d looks", ok, n)
+	}
+}
+
+// The worker takes no job before the fast lane has its keys back, and none before the first facts.
+func TestTheWorkerWaitsForTheFirstFactsAndTheFastLane(t *testing.T) {
+	in, _ := inputs(t, nil, true)
+	if startable(in) {
+		t.Fatal("no facts yet")
+	}
+	in.Latest = func() (wire.Facts, bool) { return wire.Facts{}, true }
+	if !startable(in) {
+		t.Fatal("facts, and no fast lane to wait for")
+	}
+	ready := false
+	in.FastLaneReady = func() bool { return ready }
+	if startable(in) {
+		t.Fatal("the fast lane has not rebuilt its keys: the worker could be given one a running fast-lane job holds")
+	}
+	ready = true
+	if !startable(in) {
+		t.Fatal("facts and the fast lane is ready")
 	}
 }
 

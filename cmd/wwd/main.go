@@ -178,29 +178,21 @@ func run(cfgPath string) error {
 		d.OnFacts(f)
 		usage.OnFacts(f)
 	})
-	usageDone := make(chan struct{})
-	go func() { usage.Run(ctx); close(usageDone) }()
-	defer func() { stop(); <-usageDone }() // runs before st.Close (it was deferred earlier): the queued rows are written first, also when run() failed
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
-	// The worker: takes jobs from this host's queue and the peers', runs them, reports. It is stopped first at the end (before the usage
-	// recorder and the database go): it gives its running jobs back and records their usage.
-	workerDone := make(chan struct{})
-	workerErr := make(chan error, 1)
-	go func() {
-		defer close(workerDone)
-		err := runWorker(ctx, workerInputs{
+	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
+	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
+	// defer runs before it, which was deferred earlier), also when run() failed.
+	svc := startServices(ctx, usage.Run, func(ctx context.Context) error {
+		return runWorker(ctx, workerInputs{
 			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb,
-			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers,
+			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers, FastLaneReady: fastLane.Ready,
 			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
 		})
-		if err != nil && ctx.Err() == nil {
-			workerErr <- err
-		}
-	}()
-	defer func() { stop(); <-workerDone }() // runs before the usage recorder stops and before st.Close
-	go sweepQueue(ctx, q)                   // lapsed leases, queue timeouts, retention
-	go fastLane.Run(ctx)                    // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	})
+	defer svc.Stop(stop)
+	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
+	go fastLane.Run(ctx)  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
@@ -211,7 +203,7 @@ func run(cfgPath string) error {
 		return nil
 	case err := <-run.Err():
 		return err
-	case err := <-workerErr:
+	case err := <-svc.Err():
 		return err // the worker could not start: wwd does not run half-way
 	}
 }
