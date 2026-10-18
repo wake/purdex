@@ -182,9 +182,25 @@ func TestRecordRunForgetsTheSamplesOfARunItDoesNotRecord(t *testing.T) {
 	}
 }
 
-// The final event of a queue job the worker ran does not write a row: the run's (RecordRun) is the one.
-func TestAQueueJobsFinalEventWritesNoRow(t *testing.T) {
+// Until the worker's loop reports its runs, a queue job whose result names this host is written from its final event, as before.
+func TestAQueueJobsFinalEventWritesTheRowUntilTheLoopReportsItsRuns(t *testing.T) {
 	r, sink := newRec(ut0.Add(-time.Hour))
+	sampleJob(r, 0, wire.ZoneNormal, nil)
+	j := queueJob()
+	j.State = wire.StateSucceeded
+	start, end := ut0, ut0.Add(12*time.Second)
+	j.Result = &wire.Result{Host: "mlab", StartedAt: &start, FinishedAt: &end}
+	r.OnJobEvent(wire.JobEvent{Job: j})
+	rows := drain(r, sink)
+	if len(rows) != 1 || rows[0].Source != wire.UsageQueue || rows[0].SlotCharged != wire.SlotHeavy || rows[0].CPUSource != wire.CPUSampled {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// Once the loop reports its runs (ForWorker), the final event of a queue job the worker ran does not write a row: the run's is the one.
+func TestAQueueJobsFinalEventWritesNoRowOnceTheLoopReportsItsRuns(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	r.ForWorker()
 	sampleJob(r, 0, wire.ZoneNormal, nil)
 	j := queueJob()
 	j.State = wire.StateSucceeded

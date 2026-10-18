@@ -10,6 +10,9 @@ import (
 // workspace goes). A job the worker ran here, for this host's queue or a peer's, is recorded from here and only from here: the exact
 // figures (the process's rusage, the sandbox unit's cgroup) are in run.Result, which neither the queue's final event nor a peer
 // has. It never blocks (the row is queued for the writer, like OnJobEvent's).
+//
+// The caller must call it only for a run whose result the origin accepted (the loop's finish, once the reporter says delivered): a row
+// is the job's first and only one, so a run the origin did not take, which the job may be given again after, must not write it.
 func (r *UsageRecorder) RecordRun(e runner.Ended) {
 	u, ok := r.runRow(e)
 	if !ok {
