@@ -177,20 +177,39 @@ func TestNoLabelsRequiredAlwaysRuns(t *testing.T) {
 	eq(t, ids(Rank([]Candidate{cand(j)}, env)), []string{"x"})
 }
 
-func TestPinnedOrder(t *testing.T) {
-	env := baseEnv()
-	pins := map[string]Pin{
-		"mlab/f2": {Mode: PinFront, Seq: 2}, "mlab/f1": {Mode: PinFront, Seq: 1},
-		"mlab/b2": {Mode: PinBack, Seq: 4}, "mlab/b1": {Mode: PinBack, Seq: 3},
-		"mlab/h": {Mode: PinHold, Seq: 9},
-	}
-	env.Pinned = func(c Candidate) (Pin, bool) { p, ok := pins[c.Source+"/"+c.Job.ID]; return p, ok }
+func manual(j wire.Job, pos wire.Position, seq int64) wire.Job {
+	j.Manual, j.ManualSeq = pos, seq
+	return j
+}
+
+func TestManualOrder(t *testing.T) {
+	// front by manual_seq ascending (a later front has the smaller one), then the scored jobs, then back by manual_seq ascending.
 	r := Rank([]Candidate{
-		cand(job("b2", wire.ClassRelease, time.Hour)), cand(job("n-dev", wire.ClassDev, 0)), cand(job("f2", wire.ClassDev, 0)),
-		cand(job("h", wire.ClassRelease, time.Hour)), cand(job("n-merge", wire.ClassMerge, 0)),
-		cand(job("f1", wire.ClassDev, 0)), cand(job("b1", wire.ClassRelease, time.Hour)),
-	}, env)
+		cand(manual(job("b2", wire.ClassRelease, time.Hour), wire.PositionBack, 4)), cand(job("n-dev", wire.ClassDev, 0)),
+		cand(manual(job("f2", wire.ClassDev, 0), wire.PositionFront, -1)),
+		cand(manual(job("h", wire.ClassRelease, time.Hour), wire.PositionHold, 0)), cand(job("n-merge", wire.ClassMerge, 0)),
+		cand(manual(job("f1", wire.ClassDev, 0), wire.PositionFront, -2)), cand(manual(job("b1", wire.ClassRelease, time.Hour), wire.PositionBack, 3)),
+	}, baseEnv())
 	eq(t, ids(r), []string{"f1", "f2", "n-merge", "n-dev", "b1", "b2"})
+}
+
+func TestHeldJobIsNeverChosenEvenAloneOrWithTopClass(t *testing.T) {
+	r := Rank([]Candidate{cand(manual(job("h", wire.ClassRelease, 10*time.Hour), wire.PositionHold, 0))}, baseEnv())
+	if len(r) != 0 {
+		t.Fatalf("got %v", ids(r))
+	}
+}
+
+func TestFrontDoesNotBypassFilters(t *testing.T) {
+	env := baseEnv()
+	env.Locked = func([]string) bool { return true }
+	j := manual(job("f", wire.ClassDev, 0), wire.PositionFront, -1)
+	j.Locks = []string{"mysql"}
+	php := manual(job("php", wire.ClassDev, 0), wire.PositionFront, -2)
+	php.Labels = []string{"php"}
+	if r := Rank([]Candidate{cand(j), cand(php)}, env); len(r) != 0 {
+		t.Fatalf("a front place must not make a job runnable that is not: %v", ids(r))
+	}
 }
 
 func TestRankDoesNotMutateInput(t *testing.T) {
@@ -240,21 +259,4 @@ func TestNaNEstimateDoesNotReorderOthers(t *testing.T) {
 	in := []Candidate{cand(job("low", wire.ClassDev, 0)), cand(job("bad", wire.ClassDev, time.Minute)), cand(job("high", wire.ClassMerge, 0))}
 	eq(t, ids(Rank(in, env)), []string{"high", "bad", "low"})
 	eq(t, ids(Rank([]Candidate{in[2], in[1], in[0]}, env)), []string{"high", "bad", "low"})
-}
-
-func TestPinIsPerOrigin(t *testing.T) {
-	// the same job id on two origins: only the one on the pinned origin is held.
-	env := baseEnv()
-	env.Pinned = func(c Candidate) (Pin, bool) {
-		if c.Source == "air26" && c.Job.ID == "same" {
-			return Pin{Mode: PinHold}, true
-		}
-		return Pin{}, false
-	}
-	a := Candidate{Source: "air26", Job: job("same", wire.ClassDev, 0)}
-	b := Candidate{Source: "mlab", Job: job("same", wire.ClassDev, 0)}
-	r := Rank([]Candidate{a, b}, env)
-	if len(r) != 1 || r[0].Source != "mlab" {
-		t.Fatalf("got %+v", r)
-	}
 }
