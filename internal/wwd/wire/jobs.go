@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -222,6 +223,10 @@ func (j Job) Validate() error {
 	}
 	if j.ID == "" || j.Origin == "" {
 		return fmt.Errorf("job: missing id or origin")
+	}
+	if strings.Contains(j.ID, "/") {
+		// a worker names a job "source/id" (worker/ident): an alias may hold a slash, so an id that did too would make two jobs one key
+		return fmt.Errorf("job: id %q holds a slash", j.ID)
 	}
 	if j.Local && j.Cacheable {
 		return fmt.Errorf("job: a local job is never cacheable")

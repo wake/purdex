@@ -14,6 +14,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
@@ -109,6 +110,9 @@ func newExec(t *testing.T, f Fetcher) *Exec {
 	})
 }
 
+// testRef is the job as the worker names it; jobexec does not use it yet (#3373 PR1 only passes it down).
+var testRef = ident.Ref{Source: "mlab", ID: "j_test"}
+
 func job(task string) wire.Job {
 	return wire.Job{ID: "j_a1", Origin: "mlab", Task: task, Class: wire.ClassDev, Repo: wire.Repo{Name: "purdex"}, Snapshot: wire.Snapshot{Commit: "x"}, TimeoutS: 60}
 }
@@ -119,7 +123,7 @@ func TestAJobFromSnapshotToCleanup(t *testing.T) {
 	e := newExec(t, f)
 	ctx := context.Background()
 
-	ws, err := e.Materialize(ctx, job("hello"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("hello"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +135,7 @@ func TestAJobFromSnapshotToCleanup(t *testing.T) {
 		t.Fatalf("the snapshot's tree is not in the workspace: %v", err)
 	}
 
-	plan, err := e.Prepare(ctx, job("hello"), ws)
+	plan, err := e.Prepare(ctx, testRef, job("hello"), ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +143,7 @@ func TestAJobFromSnapshotToCleanup(t *testing.T) {
 		t.Fatalf("plan %+v", plan)
 	}
 
-	res := e.Run(ctx, job("hello"), ws, plan)
+	res := e.Run(ctx, testRef, job("hello"), ws, plan)
 	if res.Outcome != run.Exited || res.ExitCode != 0 || res.Err != nil {
 		t.Fatalf("result %+v", res)
 	}
@@ -169,12 +173,12 @@ func TestTheTaskRunsInItsOwnDirectoryOfTheSnapshot(t *testing.T) {
 	r, commit := repo(t)
 	e := newExec(t, &localFetcher{repo: r, commit: commit})
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("sub"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("sub"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	plan, err := e.Prepare(ctx, job("sub"), ws)
+	plan, err := e.Prepare(ctx, testRef, job("sub"), ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,12 +195,12 @@ func TestAJobThatDoesNotFitIsRejectedNotAnInfraFailure(t *testing.T) {
 	r, commit := repo(t)
 	e := newExec(t, &localFetcher{repo: r, commit: commit})
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("nope"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("nope"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	_, err = e.Prepare(ctx, job("nope"), ws)
+	_, err = e.Prepare(ctx, testRef, job("nope"), ws)
 	var rej *runner.Rejected
 	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "task") {
 		t.Fatalf("err = %v", err)
@@ -205,12 +209,12 @@ func TestAJobThatDoesNotFitIsRejectedNotAnInfraFailure(t *testing.T) {
 
 func TestMaterializeWithoutAFetcherOrWhenItFailsLeavesNothing(t *testing.T) {
 	e := New(Config{WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return nil }})
-	if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+	if _, err := e.Materialize(context.Background(), testRef, job("hello"), claimID); err == nil {
 		t.Fatal("an origin nobody can fetch from must be an error")
 	}
 	bad := failFetcher{}
 	e = newExec(t, bad)
-	if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+	if _, err := e.Materialize(context.Background(), testRef, job("hello"), claimID); err == nil {
 		t.Fatal("want the fetch error")
 	}
 	if _, err := os.Stat(e.JobDir(job("hello"), claimID)); !os.IsNotExist(err) {
@@ -257,7 +261,7 @@ func TestAHostileJobIdCannotLeaveTheWorkRoot(t *testing.T) {
 		if filepath.Dir(dir) != filepath.Join(root, "jobs") {
 			t.Errorf("id %q: directory %s is not a direct child of the work root", id, dir)
 		}
-		_, _ = e.Materialize(context.Background(), j, claimID) // fails at the fetch and removes only what it made
+		_, _ = e.Materialize(context.Background(), testRef, j, claimID) // fails at the fetch and removes only what it made
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatalf("something outside the work root was removed: %v", err)
@@ -274,7 +278,7 @@ func TestAnExistingJobDirectoryIsLeftAloneAndNotReused(t *testing.T) {
 	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+	if _, err := e.Materialize(context.Background(), testRef, job("hello"), claimID); err == nil {
 		t.Fatal("a job directory that is already there must not be taken over")
 	}
 	if _, err := os.Stat(keep); err != nil {
@@ -292,7 +296,7 @@ func (c *countFetcher) Fetch(context.Context, wire.Job, string, string, string) 
 func TestAnInvalidClaimIdIsRefusedBeforeAnythingIsMade(t *testing.T) {
 	f := &countFetcher{}
 	e := newExec(t, f)
-	if _, err := e.Materialize(context.Background(), job("hello"), "../x"); err == nil || f.calls != 0 {
+	if _, err := e.Materialize(context.Background(), testRef, job("hello"), "../x"); err == nil || f.calls != 0 {
 		t.Fatalf("err %v, fetches %d: nothing may be fetched for a claim id that is not one", err, f.calls)
 	}
 }
@@ -300,7 +304,7 @@ func TestAnInvalidClaimIdIsRefusedBeforeAnythingIsMade(t *testing.T) {
 func TestTheWorkRootIsMadeWhenItIsNotThereYet(t *testing.T) {
 	r, commit := repo(t)
 	e := New(Config{WorkRoot: filepath.Join(t.TempDir(), "var", "jobs"), Fetchers: func(string) Fetcher { return &localFetcher{repo: r, commit: commit} }})
-	ws, err := e.Materialize(context.Background(), job("hello"), claimID)
+	ws, err := e.Materialize(context.Background(), testRef, job("hello"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +318,7 @@ func TestTheClonePathReachesTheFetcher(t *testing.T) {
 		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return f },
 		ClonePath: func(name string) (string, bool) { return "/clones/" + name, true },
 	})
-	ws, err := e.Materialize(context.Background(), job("hello"), claimID)
+	ws, err := e.Materialize(context.Background(), testRef, job("hello"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,18 +333,18 @@ func TestADeadlineEndsTheCommand(t *testing.T) {
 	e := newExec(t, &localFetcher{repo: r, commit: commit})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	ws, err := e.Materialize(context.Background(), job("hello"), claimID)
+	ws, err := e.Materialize(context.Background(), testRef, job("hello"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	plan, err := e.Prepare(context.Background(), job("hello"), ws)
+	plan, err := e.Prepare(context.Background(), testRef, job("hello"), ws)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan.Argv = []string{"sleep", "30"}
 	start := time.Now()
-	res := e.Run(ctx, job("hello"), ws, plan)
+	res := e.Run(ctx, testRef, job("hello"), ws, plan)
 	if res.Outcome != run.Cancelled || time.Since(start) > 15*time.Second {
 		t.Fatalf("outcome %s after %v", res.Outcome, time.Since(start))
 	}
@@ -352,19 +356,19 @@ func TestTheCommandSeesTheTasksEnvAndAHomeInsideTheJobDirectory(t *testing.T) {
 	ctx := context.Background()
 	j := job("envs")
 	j.TimeoutS = 0
-	ws, err := e.Materialize(ctx, j, claimID)
+	ws, err := e.Materialize(ctx, testRef, j, claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	plan, err := e.Prepare(ctx, j, ws)
+	plan, err := e.Prepare(ctx, testRef, j, ws)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.Timeout != 3*time.Minute {
 		t.Fatalf("timeout %v: the snapshot task's own timeout rules when the job sets none", plan.Timeout)
 	}
-	res := e.Run(ctx, j, ws, plan)
+	res := e.Run(ctx, testRef, j, ws, plan)
 	log, _ := os.ReadFile(res.LogPath)
 	base := e.JobDir(j, claimID)
 	if !strings.Contains(string(log), "fixed-by-the-task") || !strings.Contains(string(log), filepath.Join(base, ".home")) {
@@ -378,18 +382,18 @@ func TestTheJobsTimeoutCanOnlyShortenTheTasks(t *testing.T) {
 	ctx := context.Background()
 	j := job("envs")
 	j.TimeoutS = 5
-	ws, err := e.Materialize(ctx, j, claimID)
+	ws, err := e.Materialize(ctx, testRef, j, claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	plan, err := e.Prepare(ctx, j, ws)
+	plan, err := e.Prepare(ctx, testRef, j, ws)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan.Argv = []string{"sleep", "30"}
 	start := time.Now()
-	res := e.Run(ctx, j, ws, plan)
+	res := e.Run(ctx, testRef, j, ws, plan)
 	if res.Outcome != run.TimedOut || time.Since(start) > 25*time.Second {
 		t.Fatalf("outcome %s after %v: the plan's timeout is the command's deadline", res.Outcome, time.Since(start))
 	}
@@ -414,7 +418,7 @@ func TestAWorkspaceInTheWrongPlaceIsRefusedAndCleanedUp(t *testing.T) {
 	} {
 		cleaned := 0
 		e := New(Config{WorkRoot: root, Fetchers: func(string) Fetcher { return wrongPlaceFetcher{dir: pick, cleaned: &cleaned} }})
-		if _, err := e.Materialize(context.Background(), job("hello"), claimID); err == nil {
+		if _, err := e.Materialize(context.Background(), testRef, job("hello"), claimID); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 		if cleaned != 1 {
@@ -475,11 +479,11 @@ func TestATaskThatAsksForADatabaseGetsOneOfItsOwnAndOnlyTheNamesItReads(t *testi
 		"dbtask": {"DB_HOST=127.0.0.1", "WP_TESTS_DB_NAME"}, "wptask": {"WP_TESTS_DB_NAME=wwd_x", "DB_HOST"},
 	} {
 		j := job(task)
-		ws, err := e.Materialize(ctx, j, claimID)
+		ws, err := e.Materialize(ctx, testRef, j, claimID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan, err := e.Prepare(ctx, j, ws)
+		plan, err := e.Prepare(ctx, testRef, j, ws)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -502,11 +506,11 @@ func TestATaskWithNoDatabaseCreatesNoneAndDropsNone(t *testing.T) {
 	db := &fakeDB{}
 	e, _, _ := dbExec(t, db)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("hello"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("hello"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Prepare(ctx, job("hello"), ws); err != nil {
+	if _, err := e.Prepare(ctx, testRef, job("hello"), ws); err != nil {
 		t.Fatal(err)
 	}
 	_ = ws.Cleanup()
@@ -518,12 +522,12 @@ func TestATaskWithNoDatabaseCreatesNoneAndDropsNone(t *testing.T) {
 func TestAHostWithoutADatabaseRejectsTheTask(t *testing.T) {
 	e, _, _ := dbExec(t, nil)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbtask"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	_, err = e.Prepare(ctx, job("dbtask"), ws)
+	_, err = e.Prepare(ctx, testRef, job("dbtask"), ws)
 	var rej *runner.Rejected
 	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "db_unavailable") {
 		t.Fatalf("err = %v", err)
@@ -534,11 +538,11 @@ func TestADatabaseThatCannotBeMadeIsTheHostsTroubleNotTheJobs(t *testing.T) {
 	db := &fakeDB{createErr: errors.New("mysql down")}
 	e, _, _ := dbExec(t, db)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbtask"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = e.Prepare(ctx, job("dbtask"), ws)
+	_, err = e.Prepare(ctx, testRef, job("dbtask"), ws)
 	var rej *runner.Rejected
 	if err == nil || errors.As(err, &rej) {
 		t.Fatalf("err = %v: a database that could not be made is an infrastructure failure, not a rejection", err)
@@ -555,11 +559,11 @@ func TestAQuarantinedWorkspaceKeepsItsDatabase(t *testing.T) {
 	db := &fakeDB{}
 	e, _, _ := dbExec(t, db)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbtask"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+	if _, err := e.Prepare(ctx, testRef, job("dbtask"), ws); err != nil {
 		t.Fatal(err)
 	}
 	// (no Cleanup)
@@ -574,12 +578,12 @@ func TestThePerJobDatabaseValuesComeAfterTheTasksOwnEnvEntries(t *testing.T) {
 	db := &fakeDB{}
 	e, _, _ := dbExec(t, db)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbover"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbover"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.Cleanup()
-	plan, err := e.Prepare(ctx, job("dbover"), ws)
+	plan, err := e.Prepare(ctx, testRef, job("dbover"), ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,11 +603,11 @@ func TestADropThatFailsIsReportedByCleanupAndTheWorkspaceStillGoes(t *testing.T)
 	db := &fakeDB{dropErr: errors.New("mysql down")}
 	e, _, _ := dbExec(t, db)
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbtask"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+	if _, err := e.Prepare(ctx, testRef, job("dbtask"), ws); err != nil {
 		t.Fatal(err)
 	}
 	dir := ws.Dir
@@ -628,11 +632,11 @@ func TestACleanupDoesNotWaitForeverForADropThatIsStuck(t *testing.T) {
 		ParentEnv: os.Environ(), DB: db, DropTimeout: 100 * time.Millisecond,
 	})
 	ctx := context.Background()
-	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	ws, err := e.Materialize(ctx, testRef, job("dbtask"), claimID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+	if _, err := e.Prepare(ctx, testRef, job("dbtask"), ws); err != nil {
 		t.Fatal(err)
 	}
 	dir := ws.Dir

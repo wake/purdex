@@ -83,10 +83,30 @@ func (s *PeerNameStore) Assign(ctx context.Context, sessionID, ref, name, source
 		source != PeerNameSourcePool:
 		return PeerNameEntry{}, fmt.Errorf("peer name: unknown source %q", source)
 	}
-	return s.writeThenRead(ctx, sid, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PeerNameEntry{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO peer_names (session_id, ref, name, source, assigned_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO NOTHING`,
 		sid, ipeers.RefID(sid), name, source, nowMs)
+	if err != nil {
+		return PeerNameEntry{}, err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 1 {
+		// the name is assigned anew: it is no longer an alias of whoever held it before (name pool v2 spec §6.3)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE alias = ?`, name); err != nil {
+			return PeerNameEntry{}, err
+		}
+	}
+	var e PeerNameEntry
+	if err := tx.QueryRowContext(ctx, `SELECT name, source FROM peer_names WHERE session_id = ?`, sid).
+		Scan(&e.Name, &e.Source); err != nil {
+		return PeerNameEntry{}, fmt.Errorf("peer name %s: %w", sid, err)
+	}
+	return e, tx.Commit()
 }
 
 // AdoptLineage renames sessionID to its relay predecessor's name, once: a row
@@ -139,6 +159,22 @@ func (s *PeerNameStore) RenamePool(ctx context.Context, sessionID, oldName, newN
 	n, err := res.RowsAffected()
 	if err != nil {
 		return PeerNameEntry{}, false, err
+	}
+	if n == 1 {
+		// the old name stays routable as an alias of this session, and the new one stops being anyone's alias (spec §6.3)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO peer_name_aliases (alias, session_id, ref, created_at)
+			SELECT ?, session_id, ref, ? FROM peer_names WHERE session_id = ?
+			ON CONFLICT(alias) DO UPDATE SET session_id = excluded.session_id, ref = excluded.ref, created_at = excluded.created_at`,
+			oldName, aliasNow(), sid); err != nil {
+			return PeerNameEntry{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE alias = ?`, newName); err != nil {
+			return PeerNameEntry{}, false, err
+		}
+		if err := trimAliasesTx(ctx, tx, MaxPeerNameAliases); err != nil { // the size cap holds from the first rename on (spec §6.3)
+			return PeerNameEntry{}, false, err
+		}
 	}
 	var e PeerNameEntry
 	switch err := tx.QueryRowContext(ctx, `SELECT name, source FROM peer_names WHERE session_id = ?`, sid).

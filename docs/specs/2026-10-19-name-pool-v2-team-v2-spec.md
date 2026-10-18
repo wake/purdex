@@ -317,6 +317,13 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
     `ResolveSnapshot.Aliases` map (full alias → ref) (codex #4). Its one production caller (`send.go:451`) fills the
     map from a meta-DB reader, cached and invalidated on each rename.
   - Tier 1 always wins: when a live session holds the name, the alias is never consulted.
+  - **A known alias is authoritative.** Once the alias row is found, the answer of its ref is the answer, a miss included:
+    it does not fall on to the bare tmux-name tier, where an unrelated session of the same text would take the message.
+  - **Fail closed.** When the alias table cannot be read, the local resolution counts as partial (`not_ready`): a miss may
+    only be a missing alias. A live name still resolves.
+  - `ResolveSnapshot` also carries `AliasSessions` (alias → the session id it belonged to). In the combined form, a live row
+    with the alias's ref passes only when it is that session (two live rows can share a ref); the lineage match asks no
+    owner, because a relayed successor is another session.
   - When a name is assigned anew, its alias row is deleted.
 - The bracket check (`name_mismatch`) accepts a name that is the session's current name or one of its aliases.
 - **Retention.** An alias is deleted once its session's lineage has had no live successor for 30 days. The table also

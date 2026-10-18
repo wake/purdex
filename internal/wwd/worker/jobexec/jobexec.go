@@ -22,6 +22,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/qos"
 	"github.com/wake/purdex/internal/wwd/worker/remotejob"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
@@ -92,7 +93,7 @@ func outDir(base string) string { return filepath.Join(base, "out") }
 
 // Materialize makes <JobDir>/ws. The returned Cleanup removes the whole job directory (the tree and the run's files), so that nothing of
 // a job stays behind once its result is delivered.
-func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error) {
+func (e *Exec) Materialize(ctx context.Context, _ ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error) {
 	var f Fetcher
 	if e.cfg.Fetchers != nil {
 		f = e.cfg.Fetchers(job.Origin)
@@ -171,7 +172,7 @@ func (e *Exec) dropBounded(jobID string) error {
 
 // Prepare checks the job against the snapshot's manifest and works out the command (package remotejob). A job that does not fit is a
 // *runner.Rejected; anything else is the worker's own trouble.
-func (e *Exec) Prepare(ctx context.Context, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
+func (e *Exec) Prepare(ctx context.Context, _ ident.Ref, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
 	out := outDir(filepath.Dir(ws.Dir))
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return runner.Plan{}, err
@@ -222,7 +223,7 @@ func (e *Exec) makeDB(ctx context.Context, job wire.Job, base, dbEnv string) ([]
 }
 
 // Run runs the plan: dev jobs under background QoS where the host asks for it, as a systemd service where there is a Sandbox.
-func (e *Exec) Run(ctx context.Context, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Result {
+func (e *Exec) Run(ctx context.Context, _ ident.Ref, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Result {
 	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, plan.Argv)
 	return run.Run(ctx, run.Spec{
 		JobID: job.ID, Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.cfg.ParentEnv,
