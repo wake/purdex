@@ -315,10 +315,14 @@ func TestForwardedLogIsWholeOrVisiblyBroken(t *testing.T) {
 			time.Sleep(400 * time.Millisecond)
 			_, _ = w.Write(payload[half:])
 		}))
-		code, got, err := readLog(t, srv, path)
+		resp, err := http.Get(srv.URL + path)
 		require.NoError(t, err)
-		assert.Equal(t, 200, code)
+		defer resp.Body.Close()
+		got, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, 200, resp.StatusCode)
 		assert.True(t, bytes.Equal(payload, got))
+		assert.EqualValues(t, len(payload), resp.ContentLength, "the answer states the length the peer stated")
 	})
 
 	t.Run("peer stops short", func(t *testing.T) {
