@@ -210,6 +210,7 @@ func TestEachAttemptHasItsOwnDirectory(t *testing.T) {
 	other := job("hello")
 	other.Origin = "air26"
 	for name, b := range map[string]string{
+		"another job id":               e.JobDir(func() wire.Job { j := job("hello"); j.ID = "j_other"; return j }(), claimID),
 		"another claim":                e.JobDir(job("hello"), "ffffffffffffffffffffffffffffffff"),
 		"a claim with the same start":  e.JobDir(job("hello"), same),
 		"the same job id on an origin": e.JobDir(other, claimID),
@@ -260,14 +261,29 @@ func TestAnExistingJobDirectoryIsLeftAloneAndNotReused(t *testing.T) {
 	}
 }
 
+type countFetcher struct{ calls int }
+
+func (c *countFetcher) Fetch(context.Context, wire.Job, string, string, string) (snapshot.Workspace, error) {
+	c.calls++
+	return snapshot.Workspace{}, errors.New("fetched")
+}
+
 func TestAnInvalidClaimIdIsRefusedBeforeAnythingIsMade(t *testing.T) {
-	e := newExec(t, failFetcher{})
-	if _, err := e.Materialize(context.Background(), job("hello"), "../x"); err == nil {
-		t.Fatal("want an error")
+	f := &countFetcher{}
+	e := newExec(t, f)
+	if _, err := e.Materialize(context.Background(), job("hello"), "../x"); err == nil || f.calls != 0 {
+		t.Fatalf("err %v, fetches %d: nothing may be fetched for a claim id that is not one", err, f.calls)
 	}
-	if entries, _ := os.ReadDir(e.cfg.WorkRoot); len(entries) != 0 {
-		t.Fatalf("made %v", entries)
+}
+
+func TestTheWorkRootIsMadeWhenItIsNotThereYet(t *testing.T) {
+	r, commit := repo(t)
+	e := New(Config{WorkRoot: filepath.Join(t.TempDir(), "var", "jobs"), Fetchers: func(string) Fetcher { return &localFetcher{repo: r, commit: commit} }})
+	ws, err := e.Materialize(context.Background(), job("hello"), claimID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer ws.Cleanup()
 }
 
 func TestTheClonePathReachesTheFetcher(t *testing.T) {
