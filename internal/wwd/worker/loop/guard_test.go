@@ -167,6 +167,9 @@ func TestGuardEndKeepsTheMarkerOfAQuarantinedRunAndDropsOtherwise(t *testing.T) 
 	q := newQRig(t, newConn("mlab"))
 	g := NewGuard(q.store, true, time.Now, nil)
 	e := runner.Ended{Source: "mlab", Job: qjob("a", wire.ClassDev, 0, "mysql"), ClaimID: claimID, Root: filepath.Join(q.root, "a", "ws")}
+	if _, err := q.tbl.Acquire("mlab/a", []string{"mysql"}, nil); err != nil { // the runner takes the keys before the guard's Begin
+		t.Fatal(err)
+	}
 	if err := g.Begin(e); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +182,9 @@ func TestGuardEndKeepsTheMarkerOfAQuarantinedRunAndDropsOtherwise(t *testing.T) 
 		t.Fatal("End(false) on a quarantined entry must not delete the quarantine record")
 	}
 	e2 := runner.Ended{Source: "mlab", Job: qjob("b", wire.ClassDev, 0, "tmux"), ClaimID: claimID, Root: filepath.Join(q.root, "b", "ws")}
+	if _, err := q.tbl.Acquire("mlab/b", []string{"tmux"}, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := g.Begin(e2); err != nil {
 		t.Fatal(err)
 	}

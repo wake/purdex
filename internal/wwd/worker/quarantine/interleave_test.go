@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every operation A that does something outside the store lock (Sweep asks the unit checker; Clear, Restore and Sweep look at a snapshot
-// first; Add and Begin prepare the marker file first) is stopped in that stretch, and each operation B is run in it. Whatever A does
+// first; Add and Begin have no such stretch, see below) is stopped in that stretch, and each operation B is run in it. Whatever A does
 // next, the invariants of the package doc must hold. The outcome of A and B themselves is not compared (either may be refused); the
 // invariants are.
 
@@ -61,12 +62,6 @@ func runInterleaving(t *testing.T, iv interleaving, b op) {
 			runB()
 			s.restoreOne(h)
 		}
-	case "Add (marker prepared)":
-		s.window = runB
-		s.Add(e)
-	case "Begin (marker prepared)":
-		s.window = runB
-		s.Begin(e)
 	default:
 		t.Fatalf("unknown A %q", iv.a)
 	}
@@ -124,7 +119,7 @@ func checkInvariants(t *testing.T, r *rig, s *Store, e Entry, iv interleaving, b
 				t.Errorf("(a) %s holds %s, which its marker does not name", e.Owner, k)
 			}
 		}
-	} else if len(holds) > 0 && b != opDiscard && !(iv.a == "Add (marker prepared)" || iv.a == "Begin (marker prepared)") {
+	} else if len(holds) > 0 && b != opDiscard {
 		// (b) no entry: no hold either, except the runner's own after a Discard
 		t.Errorf("(b) %s has no entry but holds %v", e.Owner, holds)
 	}
@@ -141,9 +136,6 @@ func TestEveryOperationInEveryOutsideTheLockStretchKeepsTheInvariants(t *testing
 		{a: "Clear (snapshot)", start: stRunning},
 		{a: "Clear (snapshot)", start: stQuarantined},
 		{a: "Restore (snapshot)", start: stQuarantined, restart: true},
-		{a: "Add (marker prepared)", start: stRunning},
-		{a: "Add (marker prepared)", start: stQuarantined},
-		{a: "Begin (marker prepared)", start: stNone},
 	}
 	bs := []op{opBegin, opAdd, opSettle, opDiscard, opSweepGone, opSweepNot, opClear, opRestore}
 	for _, iv := range as {
@@ -273,4 +265,107 @@ func TestAClearOfAnEntryThatChangedSaysSo(t *testing.T) {
 	if observe(s, e.Owner) != stQuarantined || !exists(e.Dir) {
 		t.Fatal("the entry stays")
 	}
+}
+
+// Add and Begin are done whole under the store lock: nothing runs between their check and their commit, so there is no stretch in which
+// to put another operation. (Clear's window hook is the only one there is; it is never called by Add or Begin.)
+func TestAddAndBeginHaveNoStretchOutsideTheLock(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	called := false
+	s.window = func() { called = true }
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("Add or Begin called the outside-the-lock hook: they have a stretch outside the lock again")
+	}
+	// the lock is held for the whole of them: a goroutine that takes it waits until they are done
+	s.mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- s.Add(e) }()
+	select {
+	case <-done:
+		t.Fatal("Add finished while the store lock was held by someone else")
+	case <-time.After(50 * time.Millisecond):
+	}
+	s.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Begin writes no marker for an owner that does not hold exactly its keys (the hold was released before it got the lock, or never taken).
+func TestBeginRefusesAnOwnerThatDoesNotHoldItsKeys(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if err := s.Begin(e); err == nil {
+		t.Fatal("no hold: want a refusal")
+	}
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.locks.ReleaseOwner(e.Owner)
+	if err := s.Begin(e); err == nil {
+		t.Fatal("hold released: want a refusal")
+	}
+	if len(markerFiles(t, r.markers)) != 0 || len(s.Held()) != 0 {
+		t.Fatalf("a refused Begin left a marker %v or an entry", markerFiles(t, r.markers))
+	}
+}
+
+// The old Add that was prepared before a Clear and a newer Add cannot overwrite the newer entry: Add has no prepared state to carry over.
+// Written as the sequence: Add(A) | Clear | hold again | Add(B) | Add(A) again is a new, checked call.
+func TestACompletedAddCannotBeReplayedOverANewerEntry(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := setUp(t, r, s, stQuarantined)
+	if err := s.Clear("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err == nil { // the hold was given back by Clear
+		t.Fatal("an Add for a cleared owner with no hold must be refused")
+	}
+	b := r.entry("a", "mysql")
+	b.ClaimID = "newer"
+	if err := r.add(s, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(e); err != nil { // same owner and keys, checked afresh: it is a new write, not a stale one
+		t.Fatal(err)
+	}
+	if got := s.Held(); len(got) != 1 || got[0].ClaimID != e.ClaimID {
+		t.Fatalf("held %v", got)
+	}
+}
+
+// A Sweep and a Clear and an Add running at the same time keep the invariants (run with -race).
+func TestConcurrentOperationsKeepTheInvariants(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := setUp(t, r, s, stQuarantined)
+	r.checker.gone["wwd-a"] = true
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 40; i++ {
+			r.add(s, e)
+			s.Settle(e.Owner)
+			s.Restore()
+		}
+	}()
+	for i := 0; i < 40; i++ {
+		s.Sweep(context.Background())
+		s.Clear("a")
+	}
+	<-done
+	checkInvariants(t, r, s, e, interleaving{a: "concurrent", start: stQuarantined}, opAdd)
 }

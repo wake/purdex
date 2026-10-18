@@ -912,7 +912,7 @@ func TestRunDoesNotStartWhenTheHoldsCannotBePutBack(t *testing.T) {
 	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Keys: []string{"mysql"}}); err != nil {
 		t.Fatal(err)
 	}
-	q.tbl.ReleaseOwner("mlab/old") // a restart: the marker is on disk, the hold is not
+	q.tbl.ReleaseOwner("mlab/old")                                                   // a restart: the marker is on disk, the hold is not
 	if _, err := q.tbl.Acquire("someone-else", []string{"mysql"}, nil); err != nil { // a key the old entry needs is taken
 		t.Fatal(err)
 	}

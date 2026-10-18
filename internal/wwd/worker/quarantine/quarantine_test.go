@@ -752,10 +752,14 @@ func TestAnEntryLoadedFromDiskIsNeverLive(t *testing.T) {
 	r := newRig(t)
 	s := r.open()
 	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil { // the runner's hold
+		t.Fatal(err)
+	}
 	if err := s.Begin(e); err != nil { // this process dies while the job runs
 		t.Fatal(err)
 	}
-	s2 := r.open() // the next process
+	r.locks.ReleaseOwner(e.Owner) // the hold dies with the process
+	s2 := r.open()                // the next process
 	if err := s2.Restore(); err != nil {
 		t.Fatal(err)
 	}
