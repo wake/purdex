@@ -53,6 +53,22 @@ func TestReadCountsUnderItsNameAndStaysInTheTotal(t *testing.T) {
 	}
 }
 
+// A tmux that cannot be started is a failed start in the total, not a fork; the details must not count it either, or they add up to more
+// than the total.
+func TestDetailDoesNotCountATmuxThatCouldNotStart(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no tmux in it
+	execstat.ResetTags()
+	if _, err := (&tmux.RealExecutor{}).ListAllPanes(context.Background()); err == nil {
+		t.Fatal("ListAllPanes succeeded with no tmux")
+	}
+	if got := series(execstat.Events(), "tmux.read.ListAllPanes").Total; got != 0 {
+		t.Fatalf("event tmux.read.ListAllPanes = %d for a tmux that could not start, want 0", got)
+	}
+	if got := series(execstat.Tags(), "tmux.read").Total; got != 0 {
+		t.Fatalf("tag tmux.read = %d for a tmux that could not start, want 0 (a failed start)", got)
+	}
+}
+
 // A read that does not fork tmux counts nothing; a fork that is not one of the reads (tmux.cmd) is not in the detail.
 func TestDetailIsOnlyOfReads(t *testing.T) {
 	stubTmux(t, "#!/bin/sh\nexit 0\n")

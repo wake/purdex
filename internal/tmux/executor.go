@@ -243,8 +243,10 @@ func (c *observedCmd) Run() error {
 	return err
 }
 
+// noteDetail counts the read under its name once the child has started, as the "tmux.read" tag counts it: a tmux that could not be
+// started is a failed start there, not a fork, so the details add up to the total.
 func (c *observedCmd) noteDetail() {
-	if c.detail != "" {
+	if c.detail != "" && c.Cmd.Process != nil {
 		execstat.Event(c.detail)
 	}
 }
