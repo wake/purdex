@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/fastlane"
@@ -12,10 +14,19 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
+// outputLines is how much of the end of a run's log a JSON report of an undeclared command carries.
+const outputLines = 200
+
 // runFast runs req on the fast lane (waiting here for a held lock), keeps its files, and prints the report; took is false only when
 // the lane does not allow the task. label names the run in the report and in the name of its directory; note is added to the
-// report when not empty.
-func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.Request, label, note string) (code int, took bool) {
+// report when not empty. live is for a caller that has to see the command's output (an undeclared command, whose caller has no other
+// way to read it): the output goes to this process's stdout and stderr as it is written and the report follows on stderr, so
+// stdout stays the command's own; with --json nothing is streamed and the one JSON object on stdout carries the end of the output.
+func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.Request, label, note string, live bool) (code int, took bool) {
+	stream := live && !o.Args.JSON
+	if stream {
+		req.TeeStdout, req.TeeStderr = o.Stdout, o.Stderr
+	}
 	// The run's files stay after the command: the log path is printed, and wwd's sweep removes old ones.
 	out := ""
 	if o.LogDir != "" {
@@ -50,6 +61,11 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 		fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
 		return ExitFailed, true
 	}
+	logPath := res.LogPath
+	var output []string
+	if live && o.Args.JSON {
+		output = tailLines(logPath, outputLines) // before the files go
+	}
 	if out == "" {
 		defer res.Cleanup() // no place to keep the files: they go with the command
 		res.LogPath = ""
@@ -68,6 +84,44 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 	if note != "" {
 		r.Notes = append(r.Notes, note)
 	}
-	Print(o.Stdout, r, o.Args.JSON)
+	r.Output = output
+	if stream {
+		Print(o.Stderr, r, false) // the command's output was stdout's; the end of the run is told apart from it
+	} else {
+		Print(o.Stdout, r, o.Args.JSON)
+	}
 	return ExitCode(r), true
+}
+
+// tailLines is the last n lines of the file at path (its last 64 KiB at most); nil when it cannot be read.
+func tailLines(path string, n int) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	const window = 64 << 10
+	off := int64(0)
+	if st.Size() > window {
+		off = st.Size() - window
+	}
+	b := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(b, off); err != nil && err != io.EOF {
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if off > 0 && len(lines) > 0 {
+		lines = lines[1:] // the first line is cut
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+	return lines
 }

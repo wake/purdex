@@ -94,6 +94,9 @@ type Request struct {
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
 	// GateClass is the slot the run takes: "" is the light slot of a declared task, an undeclared command takes a heavy one.
 	GateClass gate.Class
+	// TeeStdout and TeeStderr, when set, also receive the command's output as it is written (the log keeps it as well): a caller
+	// that has to show the output has it live. A tee that fails or stalls never stops the command.
+	TeeStdout, TeeStderr io.Writer
 	// OutDir holds the log and report files; a temporary directory when empty (removed by the caller via Result.Cleanup).
 	OutDir string
 }
@@ -168,7 +171,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	var timer atomic.Pointer[time.Timer]
 	nonce := newNonce()
 	env = append(env, gate.AdmittedMarkEnv+"="+nonce)
-	stderr := &admitFilter{w: cp.Stderr(), admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
+	stderr := &admitFilter{w: tee(cp.Stderr(), req.TeeStderr), admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
 		onAdmitted: func() {
 			admitted.Store(true)
 			timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
@@ -194,7 +197,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		Argv: argv, Class: gateClass(req.GateClass), ClassSource: "kind", Env: env,
 		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
 		WaitMax: task.QueueTimeout, WaitedOut: &waitedOut,
-		Stdout: cp.Stdout(), Stderr: stderr,
+		Stdout: tee(cp.Stdout(), req.TeeStdout), Stderr: stderr,
 	})
 	finished := time.Now()
 	if t := timer.Load(); t != nil {
@@ -426,4 +429,20 @@ func gateClass(c gate.Class) gate.Class {
 		return gate.ClassLight
 	}
 	return c
+}
+
+// tee writes to w and, best effort, to extra: the log is the output's first place, and a reader that fails does not matter.
+func tee(w, extra io.Writer) io.Writer {
+	if extra == nil {
+		return w
+	}
+	return teeWriter{w: w, extra: extra}
+}
+
+type teeWriter struct{ w, extra io.Writer }
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	_, _ = t.extra.Write(p[:n])
+	return n, err
 }

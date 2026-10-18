@@ -2,6 +2,7 @@ package testcmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/submit"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 func TestParseAdHocArgs(t *testing.T) {
@@ -61,10 +63,10 @@ func noManifestRepo(t *testing.T) string {
 }
 
 func TestAnAdHocCommandRunsHereUnderAHeavySlotWithItsWordsAsTheArgvAndNoManifest(t *testing.T) {
-	g := &fakeGate{}
+	g := &fakeGate{out: "vet: all good\n"}
 	rec := &capture{}
 	api := &fakeAPI{}
-	code, out, _ := run(t, Options{Args: args(t, "--adhoc", "--", "go", "vet", "./..."), API: api, Gate: g, Recorder: rec, Dir: noManifestRepo(t), Env: os.Environ()})
+	code, out, errOut := run(t, Options{Args: args(t, "--adhoc", "--", "go", "vet", "./..."), API: api, Gate: g, Recorder: rec, Dir: noManifestRepo(t), Env: os.Environ()})
 	if code != 0 || g.calls != 1 || api.submitted != 0 {
 		t.Fatalf("code %d gate %d submitted %d\n%s", code, g.calls, api.submitted, out)
 	}
@@ -74,8 +76,50 @@ func TestAnAdHocCommandRunsHereUnderAHeavySlotWithItsWordsAsTheArgvAndNoManifest
 	if len(rec.bodies) != 1 || !rec.bodies[0].AdHoc || rec.bodies[0].Task != "adhoc" || rec.bodies[0].Cacheable || len(rec.bodies[0].Locks) != 0 {
 		t.Fatalf("recorded %+v", rec.bodies)
 	}
-	if !strings.Contains(out, "undeclared command") {
-		t.Fatalf("the report does not say it was undeclared:\n%s", out)
+	if out != "vet: all good\n" || !strings.Contains(errOut, "undeclared command") {
+		t.Fatalf("stdout is the command's own output and the report goes to stderr:\nstdout %q\nstderr %q", out, errOut)
+	}
+}
+
+func TestAnAdHocCommandWithJSONKeepsStdoutOneObjectThatCarriesTheEndOfTheOutput(t *testing.T) {
+	g := &fakeGate{out: "line 1\nline 2\nFAIL: boom\n", code: 1}
+	code, out, errOut := run(t, Options{Args: args(t, "--adhoc", "--json", "--", "go", "build"), API: &fakeAPI{}, Gate: g, Dir: noManifestRepo(t), LogDir: t.TempDir(), Env: os.Environ()})
+	if code != 1 {
+		t.Fatalf("code %d", code)
+	}
+	var r Report
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("stdout is not one JSON object: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(r.Output, []string{"line 1", "line 2", "FAIL: boom"}) || r.State != wire.StateFailed {
+		t.Fatalf("report %+v", r)
+	}
+	if strings.Contains(errOut, "FAIL: boom") {
+		t.Fatalf("the output was streamed although --json was asked: %q", errOut)
+	}
+}
+
+func TestAnAdHocCommandsOutputOfALongRunIsCutToItsEnd(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 500; i++ {
+		fmt.Fprintf(&b, "row %d\n", i)
+	}
+	g := &fakeGate{out: b.String()}
+	_, out, _ := run(t, Options{Args: args(t, "--adhoc", "--json", "--", "x"), API: &fakeAPI{}, Gate: g, Dir: noManifestRepo(t), Env: os.Environ()})
+	var r Report
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Output) != 200 || r.Output[0] != "row 301" || r.Output[199] != "row 500" {
+		t.Fatalf("%d lines, first %q last %q", len(r.Output), r.Output[0], r.Output[len(r.Output)-1])
+	}
+}
+
+func TestADeclaredTaskStillKeepsItsOutputInTheLogAndPrintsOnlyTheSummary(t *testing.T) {
+	g := &fakeGate{out: "noisy output\n"}
+	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Env: os.Environ()})
+	if strings.Contains(out, "noisy output") {
+		t.Fatalf("a declared task streamed its output: %q", out)
 	}
 }
 
