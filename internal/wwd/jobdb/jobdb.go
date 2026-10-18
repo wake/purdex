@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/execstat"
@@ -61,7 +60,7 @@ func (c Config) withDefaults() Config {
 // Drop runs only after every process of the job is gone (the runner proved that), because a process that is still there can
 // connect again.
 type Manager struct {
-	mu  sync.Mutex
+	sem chan struct{} // the lock, as a channel so that waiting for it can end with the caller's context
 	ex  Exec
 	cfg Config
 	err error // why the configuration cannot be used; every operation returns it
@@ -70,7 +69,7 @@ type Manager struct {
 // New returns a Manager that sends its statements to ex. A configuration whose hosts are not plain host names or addresses is
 // not used: they go into statements, and the administrator's rights run them.
 func New(ex Exec, cfg Config) *Manager {
-	m := &Manager{ex: ex, cfg: cfg.withDefaults()}
+	m := &Manager{sem: make(chan struct{}, 1), ex: ex, cfg: cfg.withDefaults()}
 	for _, h := range m.cfg.UserHosts {
 		if !cfgHostRe.MatchString(h) {
 			m.err = fmt.Errorf("jobdb: the user host %q is not a plain host name or address", h)
@@ -127,8 +126,10 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 	if m.err != nil {
 		return Info{}, m.err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.lock(ctx); err != nil {
+		return Info{}, err
+	}
+	defer m.unlock()
 	// the earlier run's leftovers must be gone before anything is made: wwd_create_db leaves an existing database as it is, so a
 	// clean-up that failed would give the new user a database that still holds the old data
 	if err := m.drop(ctx, jobID); err != nil {
@@ -161,8 +162,10 @@ func (m *Manager) Drop(ctx context.Context, jobID string) error {
 	if m.err != nil {
 		return m.err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.lock(ctx); err != nil {
+		return err
+	}
+	defer m.unlock()
 	return m.drop(ctx, jobID)
 }
 
@@ -240,8 +243,10 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	if m.err != nil {
 		return nil, m.err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := m.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer m.unlock()
 	keepDB, keepUser := map[string]bool{}, map[string]bool{}
 	for _, id := range live {
 		keepDB[m.Name(id)], keepUser[m.User(id)] = true, true
@@ -355,3 +360,16 @@ func (c CLI) Run(ctx context.Context, sql string) (string, error) {
 	}
 	return out.String(), nil
 }
+
+// lock waits for the Manager's lock, or for the caller's context to end: a caller with a deadline (the runner's clean-up) is not
+// held past it by an operation that is slow or stuck.
+func (m *Manager) lock(ctx context.Context) error {
+	select {
+	case m.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("jobdb: waiting for another operation: %w", ctx.Err())
+	}
+}
+
+func (m *Manager) unlock() { <-m.sem }
