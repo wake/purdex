@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -108,7 +109,12 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		// the file in the tree (the command runs against that tree).
 		head, err := g.run(ctx, "rev-parse", "--verify", "-q", "HEAD^{commit}")
 		if err != nil || head == "" {
-			return nil, &UsageError{Err: ErrNoCommit}
+			if g.unborn(ctx) {
+				return nil, &UsageError{Err: ErrNoCommit}
+			}
+			// a HEAD that cannot be resolved for any other reason (damaged objects, permissions) is not "no commit": the run must
+			// not go on unrecorded and past the lock table
+			return nil, fmt.Errorf("cannot resolve HEAD: %v", err)
 		}
 		snap = gate.SnapshotInfo{SHA: head, Root: root, Rel: "."}
 		if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
@@ -293,6 +299,18 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// unborn reports whether HEAD names a branch that has no commit yet: HEAD is a symbolic ref and that ref is absent (git exits 1
+// for exactly that; any other failure is not an unborn branch).
+func (g *gitRunner) unborn(ctx context.Context) bool {
+	ref, err := g.run(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil || ref == "" {
+		return false
+	}
+	_, err = g.run(ctx, "show-ref", "--verify", "-q", ref)
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && ee.ExitCode() == 1
 }
 
 // exists reports whether path (relative to the repo root) is in the snapshot commit.
