@@ -818,3 +818,35 @@ func TestBeginRejectsABadEntryLikeAddDoes(t *testing.T) {
 		t.Fatal("nothing written")
 	}
 }
+
+func TestADiscardThatFailsLeavesAnEntryASweepCanClear(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not stop root")
+	}
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.markers, 0o500); err != nil { // the marker cannot be removed
+		t.Fatal(err)
+	}
+	if err := s.Discard(e.Owner); err == nil {
+		_ = os.Chmod(r.markers, 0o700)
+		t.Skip("this file system let the marker go")
+	}
+	if err := os.Chmod(r.markers, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.checker.gone["wwd-a"] = true
+	if n, err := s.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("cleared %d err %v: the run is over, so a failed Discard must not leave the entry live for ever", n, err)
+	}
+	if len(markerFiles(t, r.markers)) != 0 {
+		t.Fatalf("markers %v", markerFiles(t, r.markers))
+	}
+}

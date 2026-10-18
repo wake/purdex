@@ -232,9 +232,14 @@ func (s *Store) Begin(e Entry) error { return s.put(e, true) }
 func (s *Store) Discard(owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.entries[owner]; !ok {
+	r, ok := s.entries[owner]
+	if !ok {
 		return nil
 	}
+	// The run is over whatever happens next: an entry whose marker could not be removed is no longer live, so that Sweep can clear it
+	// once its unit is gone (a live entry is never swept, and would hold the job's keys at the next start for nothing).
+	r.live = false
+	s.entries[owner] = r
 	if err := s.removeMarker(owner); err != nil {
 		return fmt.Errorf("quarantine: %w", err)
 	}
