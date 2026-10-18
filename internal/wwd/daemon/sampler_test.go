@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,17 @@ func TestTickBuildsAFullValidRecord(t *testing.T) {
 	if f.CPU.NCPU != 10 || f.Mem.TotalMB != 16384 || len(f.Disk) != 1 {
 		t.Fatalf("readings: %+v", f)
 	}
+	// the writer is still gated (spec §13.1): none of the proto 2 fields is in the record, so a proto 1 reader's strict decode
+	// is never shown one
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"decompress_rate", `"queue"`, `"allow"`, `"flags"`} {
+		if strings.Contains(string(b), k) {
+			t.Fatalf("the ungated writer wrote %s: %s", k, b)
+		}
+	}
 	if f.Derived.Zone != wire.ZoneNormal || f.Derived.Headroom != (wire.Slots{Heavy: 1, Light: 2}) || f.Derived.SessionsRoom == 0 {
 		t.Fatalf("derived: %+v", f.Derived)
 	}
@@ -65,7 +77,7 @@ func TestTickBuildsAFullValidRecord(t *testing.T) {
 		t.Fatalf("exceptions %#v owner %+v", f.Exception, f.Owner)
 	}
 	// the record round-trips through the contract decoder
-	b, _ := json.Marshal(f)
+	b, _ = json.Marshal(f)
 	if _, err := wire.Decode[wire.Facts](b); err != nil {
 		t.Fatal(err)
 	}
