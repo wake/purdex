@@ -279,11 +279,11 @@ func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, re
 	if out == abandoned && ctx.Err() != nil && (errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded)) {
 		// A try was cut short by the lease's context ending: the origin may have taken the result and the answer been lost with the
 		// context (a heartbeat that met the finished job and ended the lease is how it happens). A result is idempotent per claim, so one
-		// more try, on a context of its own and short, settles it: the origin answers a repeat with the first answer, or, if the claim
+		// try (retried for a few seconds), on a context of its own, settles it: the origin answers a repeat with the first answer, or, if the claim
 		// really is gone, with a 409.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), confirmTimeout)
 		defer cancel()
-		if err := sink.Result(cctx, e.Job.ID, req); err == nil {
+		if r.retryFor(cctx, e, "result confirmation", confirmTimeout, func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken {
 			r.cfg.Logf("report: the result of %s was taken after all (confirmed once its lease had ended)", e.Job.ID)
 			return true
 		}

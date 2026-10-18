@@ -549,3 +549,18 @@ func TestNoConfirmingTryWhenNothingWasTriedOrTheOriginAlreadyDecided(t *testing.
 		t.Fatalf("%d calls after a 409: the origin decided, nothing is sent again", n)
 	}
 }
+
+func TestTheConfirmationSurvivesATransientFailure(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	h.s.errs = []error{errors.New("503")} // the first confirming try fails, the second is answered with the first answer
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if !d(ctx, e) {
+		t.Fatal("the origin took the result and a repeat answers with it: a transient failure of one confirming try must not lose the record")
+	}
+	if cs.n != 3 {
+		t.Fatalf("%d result calls, want the lost one and two confirming", cs.n)
+	}
+}
