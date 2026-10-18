@@ -8,10 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -259,6 +262,107 @@ func TestAForwardedLogBeyondTheAnswerCapComesThrough(t *testing.T) {
 	// the other answers keep their cap, and a log that is not there is the peer's own 404
 	code, _, _ = local.socketDo(t, "GET", "/v1/jobs/j_nope/log?host=air26", nil)
 	assert.Equal(t, 404, code)
+}
+
+// socketOver serves a daemon's socket handler on a real listener, so a connection the handler aborts is a real one.
+func socketOver(t *testing.T, peers ...PeerAddr) *httptest.Server {
+	t.Helper()
+	dsn := "file:" + filepath.Join(t.TempDir(), "wwd.db") + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, queue.Migrate(context.Background(), db))
+	q, err := queue.New(db, queue.Options{Origin: "mlab", LogDir: t.TempDir()})
+	require.NoError(t, err)
+	d := New(Options{HostID: "h", Alias: "mlab", Version: "v0", Token: testToken, Queue: q, Peers: peers,
+		HTTPClient: &http.Client{Timeout: 100 * time.Millisecond, CheckRedirect: noRedirect}}) // a client far shorter than a log takes
+	srv := httptest.NewServer(d.SocketHandler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// readLog reads the forwarded log and says how the read ended.
+func readLog(t *testing.T, srv *httptest.Server, path string) (status int, body []byte, readErr error) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, readErr = io.ReadAll(resp.Body)
+	return resp.StatusCode, body, readErr
+}
+
+// A job log is a long answer from a peer, and what reaches the caller is whole or visibly broken, never a shorter text that looks
+// finished: it is not held to the ten seconds of the other answers (here, a client of 100 ms still gets a log that takes 400 ms), it
+// carries the length the peer stated, and when the peer stops short, stalls past the log's own time, or states no length, the read fails
+// or the answer is a 502 (3b-4b R2).
+func TestForwardedLogIsWholeOrVisiblyBroken(t *testing.T) {
+	const size = 1 << 20
+	payload := bytes.Repeat([]byte("log line\n"), size/9)
+	peerFor := func(h http.HandlerFunc) PeerAddr {
+		p := httptest.NewServer(h)
+		t.Cleanup(p.Close)
+		return PeerAddr{Alias: "air26", HostPort: p.Listener.Addr().String()}
+	}
+	path := "/v1/jobs/j_abc/log?host=air26"
+
+	t.Run("slow but whole", func(t *testing.T) {
+		srv := socketOver(t, peerFor(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			half := len(payload) / 2
+			_, _ = w.Write(payload[:half])
+			w.(http.Flusher).Flush()
+			time.Sleep(400 * time.Millisecond)
+			_, _ = w.Write(payload[half:])
+		}))
+		code, got, err := readLog(t, srv, path)
+		require.NoError(t, err)
+		assert.Equal(t, 200, code)
+		assert.True(t, bytes.Equal(payload, got))
+	})
+
+	t.Run("peer stops short", func(t *testing.T) {
+		srv := socketOver(t, peerFor(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			_, _ = w.Write(payload[:1000])
+		}))
+		_, got, err := readLog(t, srv, path)
+		assert.Error(t, err, "a short log must not read as a complete one")
+		assert.Less(t, len(got), len(payload))
+	})
+
+	t.Run("peer stalls past the log time", func(t *testing.T) {
+		old := logForwardTimeout
+		logForwardTimeout = 300 * time.Millisecond
+		t.Cleanup(func() { logForwardTimeout = old })
+		srv := socketOver(t, peerFor(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			_, _ = w.Write(payload[:1000])
+			w.(http.Flusher).Flush()
+			time.Sleep(2 * time.Second)
+			_, _ = w.Write(payload[1000:])
+		}))
+		_, _, err := readLog(t, srv, path)
+		assert.Error(t, err)
+	})
+
+	t.Run("peer states no length", func(t *testing.T) {
+		srv := socketOver(t, peerFor(func(w http.ResponseWriter, r *http.Request) {
+			w.(http.Flusher).Flush() // chunked: no Content-Length
+			_, _ = w.Write(payload[:100])
+		}))
+		code, _, _ := readLog(t, srv, path)
+		assert.Equal(t, 502, code)
+	})
+
+	t.Run("peer states a length no log can have", func(t *testing.T) {
+		srv := socketOver(t, peerFor(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(maxForwardedLog+1))
+			w.(http.Flusher).Flush()
+		}))
+		code, _, _ := readLog(t, srv, path)
+		assert.Equal(t, 502, code)
+	})
 }
 
 // A daemon built without a queue has no job routes: the TCP surface answers 404 behind the token, the socket keeps its 501 for a

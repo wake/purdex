@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -62,7 +63,15 @@ func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, 
 	q := r.URL.Query()
 	q.Del("host")
 	u := url.URL{Scheme: "http", Host: peer.HostPort, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: q.Encode()}
-	ctx, cancel := context.WithTimeout(r.Context(), forwardTimeout)
+	// a job log is a long answer: it gets its own, longer time (the whole transfer, not a stall), on the request and on the client
+	timeout, client := forwardTimeout, d.client()
+	if isJobLog(r) {
+		timeout = logForwardTimeout
+		lc := *client
+		lc.Timeout = timeout
+		client = &lc
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	var rd io.Reader
 	if body != nil {
@@ -77,19 +86,14 @@ func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+d.opts.Token)
-	resp, err := d.client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK && isJobLog(r) {
-		// a job log may be far bigger than the answers this forwards (the queue keeps up to 64 MiB), and it is text to pass on as it
-		// comes, not something to hold: it is streamed, up to the most the queue could have stored
-		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxForwardedLog))
+		d.streamLog(w, resp, peer)
 		return
 	}
 	answer, err := readCapped(resp.Body)
@@ -108,6 +112,28 @@ func (d *Daemon) client() *http.Client { return d.fwd }
 
 // maxForwardedLog is the most of a job log that is passed on: what the queue accepts as one log (queue's 64 MiB).
 const maxForwardedLog = 64 << 20
+
+// logForwardTimeout is the time a whole job log may take to arrive from a peer (64 MiB at 0.5 MB/s). A var so a test can shorten it.
+var logForwardTimeout = 2 * time.Minute
+
+// streamLog passes a peer's job log on as it arrives, without holding it. The peer states the length (its handler always does), and so
+// does this answer: a log that stops short, or goes over, is not a log that looks whole. The status is already sent when that is found,
+// so the connection is aborted, and the caller sees a failed read rather than a shorter text with a 200. A peer that does not state a
+// length, or states one over the most a log can be, is a 502 before anything is sent.
+func (d *Daemon) streamLog(w http.ResponseWriter, resp *http.Response, peer PeerAddr) {
+	n := resp.ContentLength
+	if n < 0 || n > maxForwardedLog {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": "the log has no usable length"})
+		return
+	}
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.FormatInt(n, 10))
+	w.WriteHeader(http.StatusOK)
+	if got, err := io.Copy(w, resp.Body); err != nil || got != n {
+		panic(http.ErrAbortHandler) // the server closes the connection without a clean end; the caller's read fails
+	}
+}
 
 // isJobLog reports whether r is GET /v1/jobs/{id}/log.
 func isJobLog(r *http.Request) bool {
