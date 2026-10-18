@@ -250,6 +250,32 @@ func TestPoolSampling_LeavingThePoolRestartsTheZone(t *testing.T) {
 	assert.Greater(t, back.ZoneSince, first.ZoneSince, "the zone began again when the own reading came back")
 }
 
+// The trend window does not run across the time wwd's reading stood in: the samples from before the pool are dropped.
+func TestPoolSampling_LeavingThePoolEmptiesTheTrendRing(t *testing.T) {
+	p := newPoolSampling(t)
+	own := &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		return zoneRaw(40, 1, 1), nil, nil
+	}}
+	p.m.sampler = own
+	for i := 0; i < 4; i++ {
+		p.step()
+		require.False(t, p.m.tick(context.Background()))
+	}
+	require.Len(t, p.m.ringCopy(), 4)
+
+	p.m.sampler = p.s
+	p.step()
+	p.setFacts()
+	require.False(t, p.m.tick(context.Background()))
+	assert.Len(t, p.m.ringCopy(), 4, "wwd's reading adds nothing, and the ring is not touched while it stands in")
+
+	p.m.sampler = own
+	p.facts.Store(nil)
+	p.step()
+	require.False(t, p.m.tick(context.Background()))
+	assert.Len(t, p.m.ringCopy(), 1, "only the first own reading after the pool")
+}
+
 // A paging rate under one page per tick still adds up: the fractions are carried, not cut off each tick (codex R1).
 func TestPoolSampling_SlowRateIsNotTruncated(t *testing.T) {
 	p := newPoolSampling(t)

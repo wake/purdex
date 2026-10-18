@@ -90,6 +90,9 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.zoneLatch.Update(0, 0, 0, false)
 		m.lastZone, m.zoneSince = resources.ZoneUnknown, time.Time{}
 		m.pageRing = nil
+		m.ringMu.Lock()
+		m.ring = resources.Ring{} // the trend window would run across the time wwd's reading stood in for it
+		m.ringMu.Unlock()
 	}
 	m.fromPool = pool != nil
 	if pool != nil {

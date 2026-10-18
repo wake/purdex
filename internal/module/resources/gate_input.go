@@ -69,19 +69,19 @@ func (m *Module) cachePressureFromFacts(f wire.Facts, sampledAt time.Time) {
 	if f.Mem.SwapOutRate != nil {
 		rate += *f.Mem.SwapOutRate
 	}
-	cache := hostmem.Cache{Dir: m.gateConfig().Dir}
-	var total uint64
-	if have := cache.Load().Samples; len(have) > 0 {
-		last := have[len(have)-1]
-		total = last.Pageouts + last.Swapouts
-		if dt := sampledAt.Sub(time.UnixMilli(last.At)); dt > 0 && dt <= factsCounterGap && rate > 0 {
-			m.pageFrac += rate * dt.Seconds() // the fraction a slow rate adds per tick is kept, not dropped
-			whole := math.Floor(m.pageFrac)
-			total += uint64(whole)
-			m.pageFrac -= whole
+	hostmem.Cache{Dir: m.gateConfig().Dir}.RecordNext(sampledAt, func(last hostmem.Sample, have bool) (hostmem.Sample, bool) {
+		var total uint64
+		if have {
+			total = last.Pageouts + last.Swapouts
+			if dt := sampledAt.Sub(time.UnixMilli(last.At)); dt > 0 && dt <= factsCounterGap && rate > 0 {
+				m.pageFrac += rate * dt.Seconds() // the fraction a slow rate adds per tick is kept, not dropped
+				whole := math.Floor(m.pageFrac)
+				total += uint64(whole)
+				m.pageFrac -= whole
+			}
 		}
-	}
-	cache.Record(sampledAt, hostmem.Sample{At: sampledAt.UnixMilli(), Level: f.Mem.Pressure, Pageouts: total})
+		return hostmem.Sample{At: sampledAt.UnixMilli(), Level: f.Mem.Pressure, Pageouts: total}, true
+	})
 }
 
 // factsCounterGap is the longest gap between two cache readings over which the facts' rate is taken to have held; after a longer
