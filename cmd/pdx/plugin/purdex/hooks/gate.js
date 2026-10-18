@@ -10,6 +10,12 @@
 //    place in the queue, "it starts by itself and you will be told, do not run it again". A call that can start at once
 //    stays in the foreground. The hook asks pdx; it keeps no copy of the gate's rules.
 //
+// 3. With the wwd entry switched on (the "entry" key of pdx.json, off by default; spec §8.2) a test or build command is first shown
+//    to `pdx entry match`, which knows the repo's task manifest: a command that is a declared task is run as `pdx test <task> …`
+//    (in the background when the task goes through the queue), one that is not is advised or refused as the manifest's
+//    [entry].mode says. The commands advised stay on the paths above. With the switch off none of this runs and the hook is what
+//    it was.
+//
 // Everything fails open: a pdx that does not answer, an answer that is not JSON, a throw while planning — the call runs as
 // it was. The planning is finished before `next` is called, and nothing after `next` can run the tool twice.
 //
@@ -22,8 +28,9 @@ const BARE = /[<>&]$/
 
 // scan splits a command into segments of words. A word records the text between its quotes and where it
 // sits in the original string. Returns null when the command cannot be parsed (an open quote) or has a
-// backgrounding `&`.
-function scan(cmd) {
+// backgrounding `&`. With `continuation`, a backslash and a newline are removed as the shell removes them before it splits words
+// (the entry reads commands that way; the older steps read them as they always did).
+function scan(cmd, continuation) {
   const segments = []
   let words = []
   let cur = null // {text, start, end, redirect}
@@ -58,6 +65,7 @@ function scan(cmd) {
     }
     if (quote === '"') {
       if (c === '"') quote = ''
+      else if (continuation && c === '\\' && cmd[i + 1] === '\n') i++
       else if (c === '\\' && i + 1 < cmd.length) { push(cmd[++i], i) }
       else push(c, i)
       continue
@@ -68,6 +76,7 @@ function scan(cmd) {
       cur.quoted = true
       continue
     }
+    if (continuation && c === '\\' && cmd[i + 1] === '\n') { i++; continue }
     if (c === '\\' && i + 1 < cmd.length) { push(cmd[++i], i); continue }
     if (c === ' ' || c === '\t') { endWord(i); continue }
     if (c === '\n') {
@@ -193,6 +202,7 @@ async function gateConfig($) {
   return {
     bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
     config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
+    entry: isObject(cfg) && typeof cfg.entry === 'string' && cfg.entry !== '', // the wwd entry switch
   }
 }
 
@@ -221,14 +231,20 @@ function headOf(words) {
   }
   if (k >= words.length) return null
   const rest = []
-  for (let j = k; j < words.length; j++) if (live(j)) rest.push(words[j].text)
-  return { at: words[k].start, first: words[k].text, argv: rest }
+  let last = k
+  let dead = -1 // the first redirection word (or the file it takes) after the command word
+  for (let j = k; j < words.length; j++) {
+    if (live(j)) { rest.push(words[j].text); last = j } else if (dead < 0) dead = j
+  }
+  // clean: no redirection among the words of the command, so its text from `at` to `end` is the command and nothing else (one
+  // after the last word, `2>&1`, stays where it is when the command is replaced)
+  return { at: words[k].start, end: words[last].end, clean: dead < 0 || dead > last, first: words[k].text, argv: rest }
 }
 
 // readCommand splits a Bash command into the commands in it. null for what cannot be read or that goes to the
 // background by itself (`&`): those are left exactly as they are.
-export function readCommand(command) {
-  const segs = scan(command)
+export function readCommand(command, continuation = false) {
+  const segs = scan(command, continuation)
   if (!segs) return null
   const out = []
   for (const words of segs) {
@@ -308,6 +324,109 @@ async function withDeadline($, work) {
   return Promise.race([work, cap])
 }
 
+// ---- the wwd entry ----
+
+// a word that needs no quoting in a shell
+const word = (s) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(String(s)) ? String(s) : sq(s))
+
+// entryCandidates are the commands of a call that the entry is asked about, in order, with where each stands in the text and the
+// directory it runs in as far as `cd` words say (a relative one is pdx's to resolve from the session's directory), and a key naming
+// the command and that directory. ok is false when the directory cannot be known: a cd the hook cannot read, or a command that is
+// not reached by `&&` from the cd before it (after `cd x ; go test` or `cd x || go test` the test runs in x only if the cd worked,
+// and the hook cannot tell). Every occurrence is a candidate; the ones with one key share an answer.
+export function entryCandidates(command) {
+  if (command.includes('(')) return [] // a subshell or a substitution: where a cd applies is not something to guess
+  const cmds = readCommand(command, true)
+  if (!cmds) return []
+  const out = []
+  let cwd = ''
+  let ok = true
+  let cded = false // a cd has changed the directory: from here on only `&&` carries it
+  let prevEnd = -1
+  for (const c of cmds) {
+    // between the two commands: `&&`, then at most the environment words and wrappers that headOf skips before the command word
+    if (cded && !/^\s*&&(\s|$)/.test(command.slice(prevEnd, c.at))) ok = false
+    prevEnd = c.end
+    if (base(c.first) === 'cd') {
+      const d = c.argv[1]
+      if (c.argv.length !== 2 || !/^[A-Za-z0-9_@%+=:,./-]+$/.test(d) || d === '-') ok = false
+      else { cwd = d.startsWith('/') ? d : cwd ? cwd.replace(/\/$/, '') + '/' + d : d; cded = true }
+      continue
+    }
+    if (!TOOLS.has(base(c.first)) && !isGatedBin(c)) continue
+    out.push({ ...c, cwd, ok, key: JSON.stringify([cwd, c.argv]) })
+  }
+  return out
+}
+
+// askEntry is `pdx entry match`'s answer for one command, or null (no answer is "leave it").
+async function askEntry($, cfg, c) {
+  if (!c.ok) return null
+  try {
+    const r = await $.process.run([cfg.bin, 'entry', 'match', '--json', ...(c.cwd ? ['--cwd', c.cwd] : []), '--', ...c.argv], { timeoutMs: ASK_MS })
+    if (!r || r.exitCode !== 0) return null
+    const o = parse(String(r.stdout || '').trim())
+    if (!isObject(o)) return null // an action nobody knows is ignored below
+    if (o.action === 'rewrite' && (typeof o.task !== 'string' || o.task === '' || (o.args !== undefined && !(Array.isArray(o.args) && o.args.every((x) => typeof x === 'string'))))) return null
+    return o
+  } catch (err) {
+    log($, 'entry match failed: ' + (err && err.message ? err.message : String(err)))
+    return null
+  }
+}
+
+const pdxTest = (cfg, a) => {
+  const args = Array.isArray(a.args) ? a.args : []
+  return sq(cfg.bin) + ' test ' + word(a.task) + (args.length ? (args.some((x) => x.startsWith('-')) ? ' -- ' : ' ') + args.map(word).join(' ') : '')
+}
+
+// planEntry is what the entry makes of a call: { deny } to refuse it, or { command, background, notes } (notes only when nothing
+// is replaced), or null for nothing to do. The replacement is not made when it would change the permission verdict.
+async function planEntry($, e, cfg, wasBackground) {
+  const cands = entryCandidates(e.command)
+  if (cands.length === 0) return null
+  // one question for each command in each directory, at most MAX_ASKS of them; its answer holds for every place it stands
+  const firsts = []
+  for (const c of cands) if (!firsts.some((f) => f.key === c.key)) firsts.push(c)
+  const byKey = new Map(await Promise.all(firsts.slice(0, MAX_ASKS).map(async (c) => [c.key, await askEntry($, cfg, c)])))
+  const answers = cands.map((c) => (c.ok ? byKey.get(c.key) ?? null : null)) // where the directory is unknown, no answer is borrowed
+  const notes = []
+  const rewrites = []
+  let deny = null
+  answers.forEach((a, i) => {
+    if (!a) return
+    if (a.broken === true) notes.push('Purdex mod：這個 repo 的 .wwd/tasks.toml 讀不了（' + (a.reason ?? '') + '），測試／建置指令先照常走。')
+    const hint = typeof a.hint === 'string' && a.hint ? a.hint : ''
+    if (a.action === 'deny' && !deny) {
+      deny = 'Purdex mod 拒絕這個指令：這個 repo 的 .wwd/tasks.toml 規定測試與建置要用 pdx test 的 task（[entry].mode = deny）。' +
+        (hint ? '最接近的是 pdx test ' + hint + ' …；' : '') + 'pdx test --list 列出全部。'
+    } else if (a.action === 'advise') {
+      notes.push('Purdex mod：這個指令沒有對應的 .wwd/tasks.toml task，照常執行。' + (hint ? '建議改用 pdx test ' + hint + ' …；' : '') + 'pdx test --list 列出全部。')
+    } else if (a.action === 'rewrite' && cands[i].clean) {
+      rewrites.push({ c: cands[i], a })
+    }
+  })
+  notes.splice(0, notes.length, ...new Set(notes)) // a command that stands twice says its piece once
+  if (deny) return { deny }
+  if (rewrites.length === 0) return notes.length ? { command: e.command, background: wasBackground, notes } : null
+  let command = e.command
+  for (const { c, a } of rewrites.sort((x, y) => y.c.at - x.c.at)) command = command.slice(0, c.at) + pdxTest(cfg, a) + command.slice(c.end)
+  const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, wasBackground)])
+  if (before === null || before !== after) {
+    log($, 'the rewrite to pdx test would change the permission verdict (' + before + ' → ' + after + '): the call goes the old way')
+    return notes.length ? { command: e.command, background: wasBackground, notes } : null
+  }
+  let background = wasBackground
+  const queued = rewrites.some((r) => r.a.queued === true)
+  if (queued && !wasBackground) {
+    const [b2, a2] = await Promise.all([verdict($, e.command, false), verdict($, command, true)])
+    if (b2 !== null && b2 === a2) background = true
+  }
+  notes.unshift('Purdex mod 依這個 repo 的 .wwd/tasks.toml 把測試／建置指令改成 pdx test，實際執行的是：' + command +
+    (background && !wasBackground ? '。這個 task 要排佇列，所以整段改成背景執行：它輪到時會自己開始，整段跑完時你會收到通知與輸出；在那之前不要假設它做完了，不要重跑。' : ''))
+  return { command, background, notes }
+}
+
 // planGate is everything decided before the call runs: the command to run, whether to run it in the background, and the
 // notes for the model. A plan that is null (or throws) means the call runs as it is.
 async function planGate($, e) {
@@ -316,10 +435,18 @@ async function planGate($, e) {
   const wasBackground = e.run_in_background === true
   let command = e.command
   const notes = []
+  let entryBackground = false
+  let asked = e.command // the command the older steps work on: the call as it came, or as the entry made it
+  if (cfg.entry) {
+    let ep = null
+    try { ep = await planEntry($, e, cfg, wasBackground) } catch (err) { log($, 'entry failed, the call goes the old way: ' + (err && err.message ? err.message : String(err))) }
+    if (ep && ep.deny) return { deny: ep.deny }
+    if (ep) { command = ep.command; asked = ep.command; entryBackground = ep.background && !wasBackground; notes.push(...ep.notes) }
+  }
   const prefixed = prefixGated(command, sq(cfg.bin) + ' gate' + (cfg.config ? ' --config ' + sq(cfg.config) : '') + ' --auto -- ')
   if (prefixed.changed) {
     // A prefix can change what the engine asks permission for: then the call is left as it is.
-    const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, prefixed.command, wasBackground)])
+    const [before, after] = await Promise.all([verdict($, asked, wasBackground), verdict($, prefixed.command, wasBackground)])
     if (before !== null && before === after) {
       command = prefixed.command
       notes.push('Purdex mod 把直接呼叫 node_modules/.bin 或 vendor/bin 的指令交給 pdx gate（主機負載控制），實際執行的是：' + command)
@@ -327,9 +454,9 @@ async function planGate($, e) {
       log($, 'the prefix would change the permission verdict (' + before + ' → ' + after + '): the call runs as it is')
     }
   }
-  let background = wasBackground
-  if (!wasBackground) {
-    const cands = gatedCandidates(e.command)
+  let background = wasBackground || entryBackground
+  if (!background) {
+    const cands = gatedCandidates(asked)
     const answers = await askWouldWaitAll($, cfg, cands)
     for (const w of answers) {
       if (!w || w.would_wait !== true) continue
@@ -345,7 +472,17 @@ async function planGate($, e) {
       break
     }
   }
-  if (command === e.command && background === wasBackground) return null
+  // The steps above were each checked against the form before them. When the entry changed the call, the form that will run (after
+  // the prefix and the background the older steps added) is checked once against the call as it came, and anything but an equal
+  // verdict puts the whole call back as it was.
+  if (asked !== e.command || entryBackground) {
+    const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, background)])
+    if (before === null || before !== after) {
+      log($, 'the final form of the call would change the permission verdict (' + before + ' → ' + after + '): the call runs as it came')
+      return null
+    }
+  }
+  if (command === e.command && background === wasBackground && notes.length === 0) return null
   return { command, background, notes }
 }
 
@@ -354,6 +491,7 @@ export function registerGate(on) {
     let plan = null
     try { plan = await withDeadline($, planGate($, e)) } catch (err) { log($, 'planning failed, the call runs as it is: ' + (err && err.message ? err.message : String(err))) }
     if (!plan) return next(e)
+    if (plan.deny) return { deny: plan.deny }
     const r = await next({ ...e, command: plan.command, ...(plan.background ? { run_in_background: true } : {}) })
     if (!r || typeof r !== 'object' || 'deny' in r) return r
     return withNotes(r, plan.notes)
