@@ -498,24 +498,88 @@ func TestNonLocalTasksAndDetachedRunsGoThroughTheQueue(t *testing.T) {
 	if code, _, _ := run(t, Options{Args: args(t, "lint"), API: api, Gate: g, Env: os.Environ()}); code != 0 || g.calls != 0 || api.submitted != 1 {
 		t.Fatalf("a non-local task: code %d gate %d submitted %d", code, g.calls, api.submitted)
 	}
-	api = &fakeAPI{}
-	if code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts", "--detach"), API: api, Gate: g, Env: os.Environ()}); code != 0 || g.calls != 0 || api.submitted != 1 {
-		t.Fatalf("a detached local task: code %d gate %d submitted %d", code, g.calls, api.submitted)
+}
+
+func TestADetachedLocalTaskIsRefusedAndNeverQueued(t *testing.T) {
+	g := &fakeGate{}
+	api := &fakeAPI{}
+	code, _, errOut := run(t, Options{Args: args(t, "one-file", "a.test.ts", "--detach"), API: api, Gate: g, Recorder: neverRecorder{t}, Env: os.Environ()})
+	if code != ExitUsage || g.calls != 0 || api.submitted != 0 || !strings.Contains(errOut, "只在前景跑") {
+		t.Fatalf("code %d gate %d submitted %d err %q", code, g.calls, api.submitted, errOut)
 	}
 }
 
-type busyRecorder struct{}
-
-func (busyRecorder) Register(context.Context, submit.Body) (fastlane.Handle, error) {
-	return nil, fastlane.ErrLocksBusy
+// busyRecorder refuses the first busy calls with a lock conflict, then lets the run through (unrecorded).
+type busyRecorder struct {
+	busy   int
+	calls  int
+	onBusy func(call int) // called on each refusal (tests cancel the caller from here)
 }
 
-func TestBusyLocksSendALocalTaskThroughTheQueue(t *testing.T) {
+func (r *busyRecorder) Register(context.Context, submit.Body) (fastlane.Handle, error) {
+	r.calls++
+	if r.calls <= r.busy {
+		if r.onBusy != nil {
+			r.onBusy(r.calls)
+		}
+		return nil, fmt.Errorf("%w: tmux", fastlane.ErrLocksBusy)
+	}
+	return nil, fastlane.ErrUnrecorded
+}
+
+func TestBusyLocksMakeALocalTaskWaitHereAndNeverQueueIt(t *testing.T) {
 	g := &fakeGate{}
-	api := &fakeAPI{job: doneJob(wire.StateSucceeded, ip(0), "", nil)}
-	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: busyRecorder{}, Env: os.Environ()})
-	if code != 0 || g.calls != 0 || api.submitted != 1 {
+	api := &fakeAPI{}
+	rec := &busyRecorder{busy: 2}
+	code, _, errOut := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if code != 0 || g.calls != 1 || api.submitted != 0 || rec.calls != 3 {
+		t.Fatalf("code %d gate %d submitted %d registers %d", code, g.calls, api.submitted, rec.calls)
+	}
+	if strings.Count(errOut, "等待本機名額／lock") != 1 || !strings.Contains(errOut, "tmux") {
+		t.Fatalf("the wait is told once, with the keys: %q", errOut)
+	}
+}
+
+func TestALockHeldForTheWholeQueueTimeoutEndsExpiredAndNothingRunsOrQueues(t *testing.T) {
+	g := &fakeGate{}
+	api := &fakeAPI{}
+	rec := &busyRecorder{busy: 1 << 30}
+	code, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: 30 * time.Millisecond})
+	if code != ExitExpired || g.calls != 0 || api.submitted != 0 || !strings.Contains(out, "expired") {
+		t.Fatalf("code %d gate %d submitted %d\n%s", code, g.calls, api.submitted, out)
+	}
+}
+
+func TestTheCallerLeavingEndsTheWaitForALock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	g := &fakeGate{}
+	api := &fakeAPI{}
+	rec := &busyRecorder{busy: 1 << 30, onBusy: func(call int) {
+		if call == 2 {
+			cancel()
+		}
+	}}
+	var so, se bytes.Buffer
+	code := Run(ctx, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: rec, Env: os.Environ(), Dir: sharedRepo,
+		Stdout: &so, Stderr: &se, LockPoll: 5 * time.Millisecond, LockWait: time.Minute})
+	if code != ExitCancelled || g.calls != 0 || api.submitted != 0 {
 		t.Fatalf("code %d gate %d submitted %d", code, g.calls, api.submitted)
+	}
+}
+
+func TestAWwdThatIsNotThereStillRunsALocalTaskHere(t *testing.T) {
+	g := &fakeGate{}
+	api := &fakeAPI{infoErr: fmt.Errorf("%w: dial unix: no such file", client.ErrUnavailable)}
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: neverRecorder{t}, Env: os.Environ()})
+	if code != 0 || g.calls != 1 || api.submitted != 0 {
+		t.Fatalf("code %d gate %d submitted %d", code, g.calls, api.submitted)
+	}
+	// a task that cannot take the fast lane still needs wwd
+	code, _, _ = run(t, Options{Args: args(t, "lint"), API: api, Gate: g, Env: os.Environ()})
+	if code != ExitNoWWD || g.calls != 1 {
+		t.Fatalf("a queued task without wwd: code %d gate %d", code, g.calls)
 	}
 }
 
