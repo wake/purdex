@@ -68,7 +68,9 @@
 
 ### 發版測試
 
-- （待 lead 於發版測試後填寫。）
+- 切點 `c9286a83f`，air26：vitest 全套 1074 個檔、19743 條全過（`--maxWorkers=3`），`tsc -b --force` 通過；`go test -p 3 -timeout 30m ./...` 全過，`make lint`（含 `GOOS=linux go vet` 的 wwd）通過。
+- mserv（Linux x86_64，wwd 第一次安裝的主機）：在 mlab 交叉編譯 `internal/wwd/{facts,derived,labels,clones}` 的測試，在 mserv 執行全過（facts 59 條，含讀這台真實 `/proc` 的 `TestSystemSourcesReadThisLinuxHost`）。第一次跑時 facts 有一條紅，是發版腳本沒把 `testdata` 一起帶過去，不是程式的問題；帶上後重跑全過，腳本已修。
+- mod（`hooks/`、`skills/`）與 Electron 與 749 相同，沿用 749 的結果。
 
 ## [1.0.0-alpha.749] - 2026-10-17
 
