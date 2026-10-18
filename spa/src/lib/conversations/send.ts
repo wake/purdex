@@ -186,6 +186,8 @@ export async function sendNowTyped(hostId: string, target: SubmitTarget, clientM
       return { kind: 'unknown', reason: json?.outcome === 'unknown' && json.reason ? json.reason : 'unreadable' }
     }
     if (res.status === 404 && !code) return { kind: 'refused', reason: 'daemon_outdated' } // Go's mux: a daemon with no /send-now
+    // Only what the contract says ran nothing is a refusal (409 / 429, and 400 / 404 with a reason). A 5xx may come after the keys went out.
+    if (res.status >= 500) return { kind: 'unknown', reason: code || `http_${res.status}` }
     return { kind: 'refused', reason: code }
   } catch {
     return { kind: 'unknown', reason: 'network' } // the request may have reached the daemon

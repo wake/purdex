@@ -30,6 +30,18 @@ describe('sendNowTyped', () => {
     fetchMock.mockImplementation(() => json(200, {}))
     await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: 'unreadable' })
   })
+  it.each([500, 502, 503])('a %i may have come after the keys: unknown, not 「nothing was sent」', async (status) => {
+    fetchMock.mockImplementation(() => json(status, { error: 'keys_failed' }))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: 'keys_failed' })
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('bad gateway', { status })))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: `http_${status}` })
+  })
+  it('a 400 / a 404 with an error code is the daemon declining before any keys: refused', async () => {
+    fetchMock.mockImplementation(() => json(400, { error: 'bad_request' }))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'refused', reason: 'bad_request' })
+    fetchMock.mockImplementation(() => json(404, { error: 'session_not_found' }))
+    await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'refused', reason: 'session_not_found' })
+  })
   it('a lost connection may have run; a daemon with no route (404 in plain text) is outdated', async () => {
     fetchMock.mockImplementation(() => Promise.reject(new Error('net')))
     await expect(sendNowTyped('h', T, 'c1')).resolves.toEqual({ kind: 'unknown', reason: 'network' })

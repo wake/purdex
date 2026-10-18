@@ -275,13 +275,15 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (!e.clipboardData.getData('text/plain')) e.preventDefault()
                 attach(files)
               }}
+              onBlur={() => { chordAt.current = null }} // a Ctrl+X armed here is not a chord that Ctrl+S may finish from somewhere else
               onKeyDown={(e) => {
                 // a key pressed while an IME is composing belongs to the IME (Esc cancels the composition, not the draft)
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return
                 if (canSendNow) {
                   const k = sendNowKey(e, chordAt.current, Date.now())
                   chordAt.current = k.armedAt
-                  if (k.action === 'send_now') { e.preventDefault(); void sendNow(); return }
+                  // a held key repeats keydown: it is one press (the repeats neither send again nor fall into the plain Enter)
+                  if (k.action === 'send_now') { e.preventDefault(); if (!e.repeat) void sendNow(); return }
                 }
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return }
                 // Esc clears the draft and its attachments (undo for a few seconds); with nothing to clear it does nothing at all

@@ -71,6 +71,24 @@ describe('send now by key', () => {
     await act(async () => { release(new Response(JSON.stringify({ outcome: 'sent_now' }))); await vi.advanceTimersByTimeAsync(0) })
   })
 
+  it('a held key (repeat) is one send now, even when the answer comes back before the next repeat', async () => {
+    mount()
+    await act(async () => { ctrl('Enter'); await vi.advanceTimersByTimeAsync(0) })
+    expect(calls('send-now')).toHaveLength(1)
+    await act(async () => { fireEvent.keyDown(box(), { key: 'Enter', ctrlKey: true, repeat: true }); await vi.advanceTimersByTimeAsync(0) })
+    expect(calls('send-now')).toHaveLength(1)
+    expect(calls('submit')).toHaveLength(0) // and the repeat does not fall into the plain Enter either
+  })
+
+  it('Ctrl+X, then the box loses focus: a Ctrl+S that comes back inside 1.5 s is not a send now', async () => {
+    mount()
+    ctrl('x')
+    fireEvent.blur(box())
+    fireEvent.focus(box())
+    await act(async () => { ctrl('s'); await vi.advanceTimersByTimeAsync(0) })
+    expect(calls('send-now')).toHaveLength(0)
+  })
+
   it.each([
     ['input_not_empty', 'The desktop input box has unsent text'],
     ['waiting', 'Waiting for you in the terminal'],
