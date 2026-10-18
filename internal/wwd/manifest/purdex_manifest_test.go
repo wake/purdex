@@ -2,21 +2,21 @@ package manifest
 
 import (
 	"slices"
+	"sort"
 	"testing"
 )
 
 // aClassTasks are the tasks that may run on a host other than a Mac because they have been qualified there (spec §7: the `qualify`
-// pair earns `task:<repo>/<task>`). None yet: a task is added here together with its `qualify` and the host's label, never alone.
+// pair earns `task:<repo>/<task>`). None yet: a task is added here together with its `qualify` and the earned label in its labels, never
+// alone.
 var aClassTasks = map[string]bool{}
 
-// Purdex's own manifest: every task that can leave the local machine needs os:darwin, or mserv (os:linux, with a worker on) would claim
-// tsc, lint, the whole Go and SPA suites and fail them for what its machine lacks. Only a task on the A-class list, which also has a
-// qualify, may go without.
-func TestPurdexManifestTasksAreMacOnlyUnlessQualified(t *testing.T) {
-	m, err := Load("../../../.wwd/tasks.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
+// macOnlyViolations names the tasks of m that can run on a host other than a Mac without being qualified there: a task that can leave the
+// local machine needs os:darwin, or mserv (os:linux, with a worker on) would claim tsc, lint, the whole Go and SPA suites and fail them
+// for what its machine lacks. Only a task on the A-class list may go without, and only with a `qualify` AND the earned label
+// task:purdex/<name> in its labels (a `qualify` alone limits nobody: a job is claimable by any host that has the job's labels).
+func macOnlyViolations(m *Manifest, aClass map[string]bool) []string {
+	var bad []string
 	for name, task := range m.Tasks {
 		if task.Local.Allowed && task.Local.Max < 0 {
 			continue // always local: it never becomes a job
@@ -24,9 +24,44 @@ func TestPurdexManifestTasksAreMacOnlyUnlessQualified(t *testing.T) {
 		if slices.Contains(task.Labels, "os:darwin") {
 			continue
 		}
-		if aClassTasks[name] && task.Qualify != nil {
+		if aClass[name] && task.Qualify != nil && slices.Contains(task.Labels, "task:purdex/"+name) {
 			continue
 		}
-		t.Errorf("task %q can run on another host and has no os:darwin label (labels %v)", name, task.Labels)
+		bad = append(bad, name)
+	}
+	sort.Strings(bad)
+	return bad
+}
+
+func TestPurdexManifestTasksAreMacOnlyUnlessQualified(t *testing.T) {
+	m, err := Load("../../../.wwd/tasks.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Tasks) < 10 {
+		t.Fatalf("the manifest has %d tasks: the test would prove nothing", len(m.Tasks))
+	}
+	if bad := macOnlyViolations(m, aClassTasks); len(bad) > 0 {
+		t.Errorf("tasks that can run on another host and have no os:darwin label: %v", bad)
+	}
+}
+
+func TestMacOnlyViolationsRules(t *testing.T) {
+	q := &Qualify{Args: []string{"a"}, Reference: "air26"}
+	m := &Manifest{Tasks: map[string]*Task{
+		"mac":             {Labels: []string{"os:darwin", "repo:purdex"}},
+		"bare":            {},
+		"local-always":    {Local: LocalPolicy{Allowed: true, Max: -1}},
+		"local-capped":    {Local: LocalPolicy{Allowed: true, Max: 3}},
+		"a-with-earned":   {Labels: []string{"repo:purdex", "task:purdex/a-with-earned"}, Qualify: q},
+		"a-no-qualify":    {Labels: []string{"repo:purdex", "task:purdex/a-no-qualify"}},
+		"a-no-earned":     {Labels: []string{"repo:purdex"}, Qualify: q},
+		"not-on-the-list": {Labels: []string{"repo:purdex", "task:purdex/not-on-the-list"}, Qualify: q},
+	}}
+	aClass := map[string]bool{"a-with-earned": true, "a-no-qualify": true, "a-no-earned": true}
+	got := macOnlyViolations(m, aClass)
+	want := []string{"a-no-earned", "a-no-qualify", "bare", "local-capped", "not-on-the-list"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("violations %v, want %v", got, want)
 	}
 }
