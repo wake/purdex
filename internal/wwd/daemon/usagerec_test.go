@@ -78,7 +78,7 @@ func TestUsageRecorderWritesTheRowOfAJobThatRanHere(t *testing.T) {
 	if err := u.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.Slot != wire.SlotLight ||
+	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.Slot != wire.SlotHeavy ||
 		u.Source != wire.UsageQueue || u.Result != wire.StateFailed || u.Reason != "oom" || u.Class != wire.ClassDev {
 		t.Fatalf("%+v", u)
 	}
@@ -184,6 +184,17 @@ func TestUsageRecorderFastLaneAndAdHocJobs(t *testing.T) {
 	r.OnJobEvent(wire.JobEvent{Job: j})
 	rows := drain(r, sink)
 	if len(rows) != 1 || rows[0].Source != wire.UsageFastLane || rows[0].Slot != wire.SlotHeavy {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// A declared task through the fast lane takes the light slot; a queue job the worker runs is charged a heavy one.
+func TestUsageRecorderSlotIsWhatTheHostCharged(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	j := finalJob(wire.StateSucceeded, ut0, ut0.Add(time.Second))
+	j.Local, j.Result.Host = true, ""
+	r.OnJobEvent(wire.JobEvent{Job: j})
+	if rows := drain(r, sink); len(rows) != 1 || rows[0].Slot != wire.SlotLight || rows[0].Source != wire.UsageFastLane {
 		t.Fatalf("%+v", rows)
 	}
 }

@@ -156,10 +156,14 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 	return u, true
 }
 
-// slotOf is the gate slot the job took: an undeclared command takes a heavy one, a declared task a light one (fastlane.Request).
+// slotOf is the slot the job was charged, which is a rule of the host's admission today and not a property of the job (wire.Job has no
+// slot, nor does a manifest): a queue job the worker runs takes a heavy slot (worker/loop: it claims only while running < Slots.Heavy
+// and the headroom has a heavy slot; lease, 10-18); a fast-lane job takes the slot its request named, a heavy one for an undeclared
+// command (adhoc) and a light one for a declared task (fastlane.Request.GateClass). When the admission rule changes, this changes
+// with it (a loop.SlotOf, if the worker side makes one).
 func slotOf(j wire.Job) wire.Slot {
-	if j.AdHoc {
-		return wire.SlotHeavy
+	if j.Local && !j.AdHoc {
+		return wire.SlotLight
 	}
-	return wire.SlotLight
+	return wire.SlotHeavy
 }
