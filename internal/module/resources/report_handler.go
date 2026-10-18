@@ -71,17 +71,37 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, msg)
 		return
 	}
-	if m.store == nil {
+	now := m.now()
+	from, until := now.Add(-since).UnixMilli(), now.UnixMilli()+1
+	// While the source is the pool, wwd's minutes are the timeline from where they begin; the old rows count only before that.
+	recs, fromPool := m.poolReportRecords(r.Context(), now.Add(-since), now)
+	oldUntil := until
+	if fromPool {
+		oldUntil = min(until, recs[0].At.UnixMilli())
+	}
+	var minutes []resources.ReportMinute
+	if m.store != nil {
+		var err error
+		if minutes, err = m.store.ReportMinutes(from, oldUntil); err != nil {
+			writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the report rows: "+err.Error())
+			return
+		}
+	} else if !fromPool {
 		writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "resources.db is not open")
 		return
 	}
-	now := m.now()
-	from, until := now.Add(-since).UnixMilli(), now.UnixMilli()+1
-	minutes, err := m.store.ReportMinutes(from, until)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the report rows: "+err.Error())
-		return
+	if fromPool {
+		// A full run that goes on from the old rows into wwd's is one run: the pooled rows carry on from its length. Only an old minute
+		// that was full all through proves it (a single full tick at its start says nothing about its end).
+		carry := 0
+		if n := len(minutes); n > 0 && wholeMinuteFull(minutes[n-1]) && minutes[n-1].At == recs[0].At.UnixMilli()-time.Minute.Milliseconds() {
+			carry = max(minutes[n-1].FullLongestS, 60)
+		}
+		minutes = append(minutes, reportMinutesOf(recs, carry)...)
 	}
 	report := resources.BuildReport(from, now.UnixMilli(), minutes)
+	if fromPool {
+		report.Approx = resources.ReportApproxWWD
+	}
 	writeJSON(w, http.StatusOK, report)
 }
