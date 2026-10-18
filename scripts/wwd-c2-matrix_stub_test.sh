@@ -58,7 +58,8 @@ else
     "GET /v1/worker") resp=$STUB_WORKER_JSON ;;
     "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
     "GET /v1/jobs?state=queued") resp='{"jobs":['${STUB_QUEUED:+'{"id":"j_other"}'}'],"cursor":"0","epoch":"e"}' ;;
-    "POST /v1/jobs") if [ -n "${STUB_POST_NOID:-}" ]; then resp='{"error":"nope"}'; else resp='{"id":"j_stub_post"}'; fi; printf '%s\n' "$body" >> "$STUB/post.log" ;;
+    "POST /v1/jobs") if [ -n "${STUB_POST_NOID:-}" ]; then resp='{"error":"nope"}'; else resp='{"id":"j_stub_post"}'; fi; printf '%s\n' "$body" >> "$STUB/post.log"
+      if [ -n "${STUB_WS_LINGER:-}" ]; then w="$HOME/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 & fi ;;
     "GET /v1/jobs/"*"/log") if [ -n "${STUB_NO_ROUNDTRIP:-}" ]; then resp='no database here'; else resp='db=wwd_0123456789abcdef0123456789abcdef read=round-trip'; fi ;;
     "GET /v1/jobs/"*)
       # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
@@ -149,6 +150,20 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB
 [ "$(grep -c 'FAIL .*: the origin took the submission' "$tmp/out")" -eq 4 ] || { cat "$tmp/out" >&2; fail "each of the four refusals must FAIL when there is no id"; }
 ! grep -q 'refusal code' "$tmp/out" || fail "a submission without an id must not be checked for a refusal code"
 
+# a workspace that is removed a few seconds after the result is posted is waited for (it is not a failure), up to 30 s; one that stays is
+mkdir -p "$home/.local/share/wwd/work"
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB_WS_LINGER=5 C2_TIMEOUT_SCALE=1 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "a workspace removed 5 s after the last result must not fail case 12"; }
+has "ok   air26 left no workspace behind" "case 12 with a slow clean-up"
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB_WS_LINGER=600 C2_TIMEOUT_SCALE=0 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a workspace that stays must fail case 12"
+has "FAIL .* left no workspace behind" "case 12 with a workspace that stays"
+sleep 1; rm -rf "$home/.local/share/wwd/work"/*
+
 # precheck: the queue list is {"jobs":[...]}: a queued job makes the matrix refuse to start, an empty list does not
 rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded STUB_QUEUED=1 C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
@@ -204,6 +219,12 @@ env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeed
 has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a mysql that cannot be asked"
 env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_NO_ROUNDTRIP=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
 has "FAIL the job really had a database" "case 13 control"
+
+# another job's database stays on the instance for ever: the case judges its own, which is gone
+rm -f "$stub"/*.log
+env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" \
+  STUB_MYSQL_DBS=wwd_ffffffffffffffffffffffffffffffff sh "$matrix" --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13 must not fail on the database of another job"; }
+has "PASS case 13" "case 13 beside another job's database"
 
 # the database is removed after the result is posted: case 13 asks again until it is gone (here at the third question, 6 s)
 rm -f "$stub"/*.log

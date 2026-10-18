@@ -76,10 +76,10 @@ out=$(dry --case 11)
 for ip in 100.64.0.2 100.64.0.4 100.64.0.6 100.64.0.1; do has "$out" "$ip:7871/v1/info" "case 11 $ip"; done
 has "$out" "Bearer c2-wrong-token" "case 11"; has "$out" "(expect: 401)" "case 11"
 out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-option" "case 12"; has "$out" "../../etc/hosts" "case 12"; has "$out" "a;touch /tmp/wwd-c2-pwned" "case 12"
-has "$out" "mlab left no workspace behind" "case 12"; has "$out" "no marker file was made on air26" "case 12"
-has "$out" "~ wait 3 s" "case 12 waits for the last workspace to go before it counts them"; has "$out" "undeclared: refusal code (expect: task_unknown)" "case 12"; has "$out" "bad option: refusal code (expect: args_invalid)" "case 12"
+has "$out" "mlab left no workspace behind (within 30 s)" "case 12"; has "$out" "no marker file was made on air26" "case 12"
+has "$out" "undeclared: refusal code (expect: task_unknown)" "case 12"; has "$out" "bad option: refusal code (expect: args_invalid)" "case 12"
 has "$out" "shell metacharacters: refusal code (expect: args_invalid)" "case 12"
-out=$(dry --case 13); has "$out" "CALL wwdctl.wwd_list_dbs()" "case 13"; has "$out" "mysql-admin.cnf" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
+out=$(dry --case 13); has "$out" "CALL wwdctl.wwd_list_dbs()" "case 13"; has "$out" "grep -c -x 'wwd_0123456789abcdef0123456789abcdef'" "case 13 asks about the case's own database by name"; has "$out" "mysql-admin.cnf" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
 hasnt "$out" "show databases" "case 13 asks the dev instance's admin account, not the default one"
 has "$out" "its database is gone (within 45 s of the result) (expect: 0)" "case 13"; has "$out" "the job really had a database" "case 13"
 out=$(dry --case 14); has "$out" "air19 claimed nothing since this run began (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"

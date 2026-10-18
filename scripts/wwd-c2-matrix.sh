@@ -178,11 +178,12 @@ air19_new() {
   case "$a_ran" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
   echo $((a_new + a_ran))
 }
-# mserv_dbs: how many job databases (wwd_ and 32 hex) mserv's test MySQL has. The databases are on the dev instance and only the wwd_admin
-# account of jobdb's client file may list them (CALL wwdctl.wwd_list_dbs(), docs/wwd-deploy.md); the default ~/.my.cnf is another instance and
-# would answer 0 whatever is there. When it cannot ask it prints ?, never 0.
+# mserv_db NAME: 1 if the job database NAME (wwd_ and 32 hex) is on mserv's test MySQL, 0 if not. The databases are on the dev instance and
+# only the wwd_admin account of jobdb's client file may list them (CALL wwdctl.wwd_list_dbs(), docs/wwd-deploy.md); the default ~/.my.cnf is
+# another instance and would answer 0 whatever is there. When it cannot ask it prints ?, never 0. It asks about the one database of the case:
+# another job's database on the instance (a run with --force, a leftover) is not this case's to judge.
 MSERV_ADMIN='$HOME/.config/wwd/mysql-admin.cnf'
-mserv_dbs() { q mserv "o=\$(mysql --defaults-extra-file=$MSERV_ADMIN -N -B -e 'CALL wwdctl.wwd_list_dbs()' 2>/dev/null) || { echo '?'; exit 0; }; printf '%s\n' \"\$o\" | grep -c '^wwd_' || true"; }
+mserv_db() { q mserv "o=\$(mysql --defaults-extra-file=$MSERV_ADMIN -N -B -e 'CALL wwdctl.wwd_list_dbs()' 2>/dev/null) || { echo '?'; exit 0; }; printf '%s\n' \"\$o\" | grep -c -x '$1' || true"; }
 # the jobs this run made are listed in a file: submit runs in a $( ) subshell, which could not hand a variable back
 track() { if [ "$dry" -eq 0 ]; then echo "${2:-mlab} $1" >> "$WORK/jobs"; fi; }     # track ID [ORIGIN]
 submit() {   # submit TASK [ARGS...] -> the job id; runs in the scratch repo, the caller never waits  (pdx test --detach --json prints an indented {"id":...})
@@ -641,11 +642,20 @@ case_12() {
     check "$name: refusal code" "$(jf "$id" '(.result.summary.tail[0] // "") | split(":")[0]')" "$code"
     check "$name: nothing ran" "$(ran_count air26 "$id")$(ran_count mlab "$id")" 00
   done
-  nap 3                                                                 # the last job's workspace is removed after its result is posted
+  # a job's workspace is removed after its result is posted (runner: finish, then Cleanup): ask again until both hosts are back to the
+  # count they had, at most 30 s
+  now_a=$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l'); now_m=$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')
+  wn=0
+  if [ "$dry" -eq 0 ]; then
+    while { [ "$now_a" != "$before_a" ] || [ "$now_m" != "$before_m" ]; } && [ "$wn" -lt $((30 * ${C2_TIMEOUT_SCALE:-1})) ]; do
+      sleep 2; wn=$((wn + 2))
+      now_a=$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l'); now_m=$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')
+    done
+  fi
   check "no marker file was made on mlab" "$(q mlab 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
   check "no marker file was made on air26" "$(q air26 'test -e /tmp/wwd-c2-pwned && echo made || echo none')" none
-  check "air26 left no workspace behind" "$(q air26 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_a"
-  check "mlab left no workspace behind" "$(q mlab 'ls $HOME/.local/share/wwd/work 2>/dev/null | wc -l')" "$before_m"
+  check "air26 left no workspace behind (within 30 s)" "$now_a" "$before_a"
+  check "mlab left no workspace behind (within 30 s)" "$now_m" "$before_m"
 }
 
 case_13() {
@@ -655,12 +665,17 @@ case_13() {
   check "php job state" "$(jf "$id" .state)" succeeded
   # the result is posted first and the workspace and the database are removed after it (runner: finish, then Cleanup; the drop is bounded at
   # 30 s), so the answer is asked for until it is 0, at most 45 s
-  dn=0; left=$(mserv_dbs)
-  if [ "$dry" -eq 0 ]; then
-    while [ "$left" != 0 ] && [ "$dn" -lt $((45 * ${C2_TIMEOUT_SCALE:-1})) ]; do sleep 3; dn=$((dn + 3)); left=$(mserv_dbs); done
+  # the database's name is in the job's log (db_probe.php prints it with the round trip): that is the control that the job had one, and
+  # the one database to ask about
+  dbn=$(sock mlab GET "/v1/jobs/$id/log" | grep -o 'db=wwd_[0-9a-f]\{32\} read=round-trip' | head -1 | cut -d' ' -f1 | cut -d= -f2 || true)
+  [ "$dry" -eq 1 ] && dbn=wwd_0123456789abcdef0123456789abcdef
+  check "the job really had a database (control: its log names it with the round trip)" "$([ -n "$dbn" ] && echo named || echo none)" named
+  if [ -n "$dbn" ]; then left=$(mserv_db "$dbn"); else left="?"; fi
+  dn=0
+  if [ "$dry" -eq 0 ] && [ -n "$dbn" ]; then
+    while [ "$left" != 0 ] && [ "$dn" -lt $((45 * ${C2_TIMEOUT_SCALE:-1})) ]; do sleep 3; dn=$((dn + 3)); left=$(mserv_db "$dbn"); done
   fi
   check "its database is gone (within 45 s of the result)" "$left" 0
-  check "the job really had a database (control: its log has the round trip)" "$(sock mlab GET "/v1/jobs/$id/log" | grep -c 'db=wwd_[0-9a-f]\{32\} read=round-trip' || true)" 1
   # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's. The names carry
   # this run's tag, so both files are the run's alone: finish() removes them (also when the run is interrupted) and nothing that was
   # there before is touched.
