@@ -145,3 +145,60 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   [--wwd-purge]` is the same.
 * `wwd.db` holds the worker settings, the exceptions and (from WWD-3) the queue. Its schemas now only grow by
   migration steps (`host_schema`, `queue_schema`): a newer wwd's database is refused by an older binary.
+
+## 6. MySQL for per-job databases (mserv only)
+
+A task with `db = "per-job"` gets its own database on the **MySQL dev instance of mserv** (`mysql-dev.service`, port `3307`; the
+database `internal/wwd/jobdb` makes and drops for every job). That instance also holds other projects' development
+databases, so wwd does not get a powerful account. MySQL cannot limit `CREATE USER`, `KILL` or the process list to names with a
+prefix (those privileges are global), so the account holds **no global privilege**:
+
+* The database `wwdctl` holds seven routines (`internal/wwd/jobdb/wwdctl.sql`): `wwd_create_db`, `wwd_create_user`, `wwd_kill_user`,
+  `wwd_drop_user`, `wwd_drop_db`, `wwd_list_dbs`, `wwd_list_users`. Each runs as `root` (`SQL SECURITY DEFINER`) after checking every
+  argument against the exact shapes wwd makes: a database `wwd_` + 32 lower-case hex, a user `wwdu_` + 26 hex (the first 26 of its
+  database's hash, so a user can only be given its own database), a password of 48 hex, a plain host (letters, digits and `. _ : -`,
+  no wildcard). The checks are anchored at both ends (`\A ... \z`), case sensitive and length checked; a wrong argument is refused
+  with `SIGNAL`, before any statement is built.
+* The account is `wwd_admin`@`localhost` with `GRANT EXECUTE ON wwdctl.*` and nothing else. Its password is random (48 hex) and
+  lives only in the client file `~/.config/wwd/mysql-admin.cnf` (mode `0600`, readable by `wake` alone), which `wwd`'s `CLI` passes
+  to the `mysql` client with `--defaults-extra-file`; the statements go on standard input, so no secret is on a command line.
+* A job's user gets `GRANT ALL PRIVILEGES` on its own database (no `GRANT OPTION`) from `localhost` and the addresses in
+  `jobdb.Config.UserHosts` (at-inwin connects to `100.64.0.6:3307`, so that address is in the list).
+
+Install (run on mserv, as `wake`; it uses `sudo mysql` for the root account, which has socket authentication):
+
+```sh
+scp scripts/wwd-mysql-setup.sh internal/wwd/jobdb/wwdctl.sql mserv:/tmp/
+ssh mserv 'sh /tmp/wwd-mysql-setup.sh --dry-run --sql /tmp/wwdctl.sql install'   # shows every statement; no password
+ssh mserv 'sh /tmp/wwd-mysql-setup.sh --sql /tmp/wwdctl.sql install'
+```
+
+It loads the routines (replacing the old ones, so it is also how a changed `wwdctl.sql` is deployed), makes the account only when
+the client file does not already work, writes the client file, calls one routine as the account, and prints the account's grants.
+Check later with `... status`.
+
+Remove (the account and the database `wwdctl`, hence every routine, and the client file; databases and users of jobs that are
+left are listed, not dropped, so let wwd sweep them first):
+
+```sh
+ssh mserv 'sh /tmp/wwd-mysql-setup.sh --sql /tmp/wwdctl.sql remove'
+```
+
+By hand, if the script is not at hand: `DROP USER 'wwd_admin'@'localhost'; DROP DATABASE wwdctl;` as root on the dev socket
+(`sudo mysql -S /run/mysqld-dev/mysqld.sock`), and `rm ~/.config/wwd/mysql-admin.cnf`.
+
+Check what the account may and may not do (it makes one database and one user of the right shape and drops them again; 38 checks):
+
+```sh
+scp scripts/wwd-mysql-probe.sh mserv:/tmp/ && ssh mserv 'sh /tmp/wwd-mysql-probe.sh'
+```
+
+It must end with `ALL OK`. It tries, as the account, what it must not do (`CREATE DATABASE`, `CREATE USER`, `KILL`, reading `mysql.user` or
+another project's table, the routines with another project's names, an upper-case hex digit, a final newline, quote injections in a
+name or a host, a user for a database that is not its own, a password that is not 48 hex), and then the whole life of a job's
+database: the job's user works in its own database, sees no other, is refused everything else, a held connection is ended by
+`wwd_kill_user`, and nothing is left. The first install on mserv (2026-10-18) found that MySQL 8.4 refuses `BINARY expr REGEXP`; the
+routines use `REGEXP_LIKE(expr, pattern, 'c')`.
+
+`go test -c -tags mserv ./internal/wwd/jobdb/` makes the end-to-end test of the Go side (scenario J: Create over `100.64.0.6:3307`, a
+re-run starts empty, Drop ends a held connection, Sweep keeps what a live job owns); run it on mserv with `WWD_MSERV_E2E=1`.
