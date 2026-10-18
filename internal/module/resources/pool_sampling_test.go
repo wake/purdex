@@ -190,6 +190,24 @@ func TestPoolSampling_CounterGoesOnFromTheSharedCache(t *testing.T) {
 	assert.EqualValues(t, 900100+15, got[1].Pageouts+got[1].Swapouts, "the other writer's counter plus 5 s of 3 a second")
 }
 
+// After a long gap (the cache's last reading is minutes old) the rate is not taken to have held over it: the counter goes on
+// from where it was.
+func TestPoolSampling_NoCounterGrowthOverALongGap(t *testing.T) {
+	p := newPoolSampling(t)
+	cfg := gate.Defaults()
+	cfg.Dir = p.dir
+	p.m.gateConfig = func() gate.Config { return cfg }
+	old := p.m.now().Add(-5 * time.Minute)
+	require.True(t, hostmem.Cache{Dir: p.dir}.Record(old, hostmem.Sample{At: old.UnixMilli(), Level: 2, Pageouts: 1000}))
+	p.step()
+	p.setFacts()
+	require.False(t, p.m.tick(context.Background()))
+	got := hostmem.Cache{Dir: p.dir}.Load().Samples
+	require.NotEmpty(t, got)
+	last := got[len(got)-1]
+	assert.EqualValues(t, 1000, last.Pageouts+last.Swapouts, "3 pages a second over 5 minutes is not added")
+}
+
 // The processes failing does not take the host reading with them: wwd's figures stay published and available, without sessions.
 func TestPoolSampling_ProcessTableFailureKeepsTheHostReading(t *testing.T) {
 	p := newPoolSampling(t)
