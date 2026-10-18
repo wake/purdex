@@ -177,12 +177,23 @@ func (m *Manager) dropNames(ctx context.Context, db, user string) error {
 			first = err
 		}
 	}
-	// the connections of the user, then the user, then the database
-	note(m.killConnections(ctx, user))
-	for _, h := range m.cfg.UserHosts {
-		note(m.dropUserAt(ctx, user, h))
+	// The connections of the user, then the user, then the database. Every step is tried, but the database goes only when the user is
+	// gone and its connections with it: a database-level grant outlives the database, and would give the user the next database of
+	// that name (a Sweep, later, tries again).
+	clean := true
+	if e := m.killConnections(ctx, user); e != nil {
+		note(e)
+		clean = false
 	}
-	note(m.dropDB(ctx, db))
+	for _, h := range m.cfg.UserHosts {
+		if e := m.dropUserAt(ctx, user, h); e != nil {
+			note(e)
+			clean = false
+		}
+	}
+	if clean {
+		note(m.dropDB(ctx, db))
+	}
 	return first
 }
 
@@ -267,7 +278,10 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 			stuck[u] = true
 			note(e)
 		}
-		note(m.dropUserAt(ctx, u, h))
+		if e := m.dropUserAt(ctx, u, h); e != nil {
+			stuck[u] = true
+			note(e)
+		}
 	}
 	for _, db := range lines(dbOut) {
 		if dbNameRe.MatchString(db) && !keepDB[db] {

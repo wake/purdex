@@ -202,8 +202,11 @@ func TestDropTriesEveryStatementAndReportsTheFirstError(t *testing.T) {
 	if err := m.Drop(context.Background(), "j_test1"); err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(f.all(), "wwd_drop_db") {
-		t.Fatalf("the database must go even when a user could not:\n%s", f.all())
+	if strings.Contains(f.all(), "wwd_drop_db") {
+		t.Fatalf("the database must stay while a user of it could not be dropped:\n%s", f.all())
+	}
+	if strings.Count(f.all(), "wwd_drop_user") != 2 {
+		t.Fatalf("every user host is still tried:\n%s", f.all())
 	}
 }
 
@@ -212,8 +215,8 @@ func TestAKillThatFailsOrLeavesConnectionsIsReported(t *testing.T) {
 	if err := New(f, Config{}).Drop(context.Background(), "j"); err == nil || !strings.Contains(err.Error(), "end the connections") {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(f.all(), "wwd_drop_db") {
-		t.Fatalf("the rest of the clean-up must go on:\n%s", f.all())
+	if !strings.Contains(f.all(), "wwd_drop_user") || strings.Contains(f.all(), "wwd_drop_db") {
+		t.Fatalf("the users are still dropped, the database stays while connections may remain:\n%s", f.all())
 	}
 	g := &fakeExec{remaining: "2"}
 	if err := New(g, Config{}).Drop(context.Background(), "j"); err == nil || !strings.Contains(err.Error(), "still open") {
@@ -576,5 +579,23 @@ func TestEveryCallPassesItsArgumentsInTheOrderOfTheSQLSignature(t *testing.T) {
 		if !seen[r] {
 			t.Errorf("the routine %s was never called by Create, Drop or Sweep", r)
 		}
+	}
+}
+
+func TestSweepKeepsTheDatabaseOfAUserWhoseDropFailed(t *testing.T) {
+	m := New(&fakeExec{}, Config{})
+	f := &fakeExec{failOn: "wwd_drop_user('" + m.User("j_stuck"), failError: errors.New("lost connection"),
+		dbs:   []string{m.Name("j_stuck"), m.Name("j_dead")},
+		users: []string{m.User("j_stuck") + "\tlocalhost", m.User("j_dead") + "\tlocalhost"}}
+	m = New(f, Config{})
+	dropped, err := m.Sweep(context.Background(), nil)
+	if err == nil {
+		t.Fatal("the failed drop must be reported")
+	}
+	if strings.Contains(f.all(), "wwd_drop_db('"+m.Name("j_stuck")+"')") {
+		t.Fatalf("the database of a user that stays was dropped:\n%s", f.all())
+	}
+	if len(dropped) != 1 || dropped[0] != m.Name("j_dead") {
+		t.Fatalf("dropped = %v: the other job's leftovers must still go", dropped)
 	}
 }
