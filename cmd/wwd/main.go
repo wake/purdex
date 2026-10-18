@@ -154,7 +154,7 @@ func run(cfgPath string) error {
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
-	go fastLane.Run(ctx) // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	go fastLane.Run(ctx)  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
