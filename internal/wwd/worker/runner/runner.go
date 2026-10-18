@@ -192,7 +192,7 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	defer endRenew()
 	runCtx, endRun := context.WithCancel(renewCtx) // the work: ends on cancel or loss
 	defer endRun()
-	lease := &leaseClock{deadline: c.deadlineFor(sent, cr.LeaseS), renewAt: sent.Add(time.Duration(cr.RenewS) * c.cfg.Unit)}
+	lease := &leaseClock{changed: make(chan struct{}, 1), deadline: c.deadlineFor(sent, cr.LeaseS), renewAt: sent.Add(time.Duration(cr.RenewS) * c.cfg.Unit)}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -211,15 +211,13 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		var perr error
 		if plan, perr = c.cfg.Exec.Prepare(runCtx, job, ws); perr != nil {
 			runErr = perr
-		} else {
-			startSent := c.cfg.Now()
-			l, serr := origin.Start(runCtx, job.ID, cr.ClaimID)
+		} else if st.get() == stopNone && runCtx.Err() == nil { // not stopped while the plan was made
+			serr := c.start(runCtx, origin, job.ID, cr.ClaimID, lease)
 			switch {
 			case serr == nil:
-				lease.extend(c.deadlineFor(startSent, l.LeaseS), startSent.Add(time.Duration(l.RenewS)*c.cfg.Unit))
 				started = true
-			case isConflict(serr):
-				st.set(stopLost)
+			case isConflict(serr) || c.expired(lease):
+				st.set(stopLost) // refused, or the call ran into the lease deadline: the origin may already have given the job away
 			default:
 				runErr = fmt.Errorf("start: %w", serr)
 			}
@@ -249,12 +247,36 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	if finish != nil {
 		finish(renewCtx, ended)
 	}
+	if st.get() == stopLost {
+		ended.Kind = KindLost // lost while the result was being delivered: it was not delivered, whatever Kind said when Finish began
+	}
 	if ws.Cleanup != nil {
 		_ = ws.Cleanup()
 	}
 	endRenew()
 	wg.Wait()
 	return ended
+}
+
+// start is origin.Start under the lease's call lock, bounded by the lease deadline, applying the lease it answers with.
+func (c *Controller) start(ctx context.Context, origin Origin, id, claimID string, l *leaseClock) error {
+	l.call.Lock()
+	defer l.call.Unlock()
+	deadline, _ := l.get()
+	sctx, end := context.WithDeadline(ctx, deadline)
+	defer end()
+	sent := c.cfg.Now()
+	resp, err := origin.Start(sctx, id, claimID)
+	if err != nil {
+		return err
+	}
+	l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
+	return nil
+}
+
+func (c *Controller) expired(l *leaseClock) bool {
+	deadline, _ := l.get()
+	return !c.cfg.Now().Before(deadline)
 }
 
 func isConflict(err error) bool {
@@ -264,9 +286,15 @@ func isConflict(err error) bool {
 
 // leaseClock is the worker's own view of its lease: when it must have been renewed by, and when to renew next.
 type leaseClock struct {
+	// call serialises the calls that carry a lease (start, heartbeat): with one in flight at a time their answers come back in the order
+	// the origin made them, so the newest answer is always the last one applied. Two in flight could be applied in the wrong order and
+	// leave the worker a longer lease than the origin's.
+	call     sync.Mutex
 	mu       sync.Mutex
 	deadline time.Time
 	renewAt  time.Time
+	// changed wakes the renew loop when start moves the lease while it sleeps toward the old deadline.
+	changed chan struct{}
 }
 
 func (l *leaseClock) extend(deadline, renewAt time.Time) {
@@ -276,6 +304,10 @@ func (l *leaseClock) extend(deadline, renewAt time.Time) {
 	// must not be outlived
 	l.deadline = deadline
 	l.renewAt = renewAt
+	select {
+	case l.changed <- struct{}{}:
+	default:
+	}
 }
 
 func (l *leaseClock) get() (deadline, renewAt time.Time) {
@@ -298,6 +330,9 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-l.changed:
+			timer.Stop()
+			continue // the lease moved: work out the next wake-up again
 		case <-timer.C:
 		}
 		now := c.cfg.Now()
@@ -310,14 +345,26 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 		if now.Before(renewAt) {
 			continue
 		}
+		l.call.Lock()
+		deadline, _ = l.get() // a start that held the lock may have moved it
+		if !c.cfg.Now().Before(deadline) {
+			l.call.Unlock()
+			st.set(stopLost)
+			endRun()
+			endRenew()
+			return
+		}
 		sent := c.cfg.Now()
 		// the call itself is bound by the lease deadline: a connection that hangs must not keep the command alive past it
 		hbCtx, endHB := context.WithDeadline(ctx, deadline)
 		resp, err := origin.Heartbeat(hbCtx, id, claimID)
 		endHB()
+		if err == nil {
+			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
+		}
+		l.call.Unlock()
 		switch {
 		case err == nil:
-			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
 			if resp.Cancel && st.get() == stopNone {
 				st.set(stopCancelled)
 				endRun() // the command ends; the lease goes on being renewed while the cancelled result is posted
