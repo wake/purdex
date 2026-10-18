@@ -33,8 +33,9 @@ type fakeQueue struct {
 	endErr error
 	asked  [][]string
 	// running is what Running answers (the jobs the queue has as not final); runErr makes it fail
-	running []wire.Job
-	runErr  error
+	running   []wire.Job
+	runErr    error
+	afterList func()
 }
 
 func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, worker string) (wire.LocalRunResponse, error) {
@@ -59,8 +60,12 @@ func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, wor
 
 func (q *fakeQueue) Running(context.Context) ([]wire.Job, error) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.running, q.runErr
+	jobs, err, hook := q.running, q.runErr, q.afterList
+	q.mu.Unlock()
+	if hook != nil {
+		hook() // runs after the queue answered and before the caller has installed anything
+	}
+	return jobs, err
 }
 
 func (q *fakeQueue) Ended(_ context.Context, ids []string) (map[string]bool, error) {
@@ -403,7 +408,10 @@ func TestARunningJobKeepsItsKeysAcrossARestart(t *testing.T) {
 	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusOK {
 		t.Fatalf("after its end: %d", rec.Code)
 	}
-	if err := s.Recover(context.Background()); err != nil { // a second rebuild skips what is held
+	q.mu.Lock()
+	q.running = nil // j_old is over for the queue too
+	q.mu.Unlock()
+	if err := s.Recover(context.Background()); err != nil { // a second rebuild is harmless
 		t.Fatal(err)
 	}
 }
@@ -432,5 +440,52 @@ func TestAnEndAnnouncedWhileTheRegistrationIsInFlightSurvivesAReconcile(t *testi
 	}
 	if _, ok := tb.Holder("tmux"); ok {
 		t.Fatal("the keys of a job that had ended stayed held")
+	}
+}
+
+func TestRecoverThatCannotAccountForAJobKeepsTheLaneClosed(t *testing.T) {
+	// two running jobs share a key (an older start): only one can hold it
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_a", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_b", Local: true, State: wire.StateRunning, Locks: []string{"tmux", "db"}},
+	}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a job whose keys could not be taken was passed over")
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the lane opened with a job unaccounted for: %d", rec.Code)
+	}
+	// j_a's lease lapses and the queue marks it over: the next rebuild accounts for every running job
+	q.mu.Lock()
+	q.running = q.running[1:]
+	q.mu.Unlock()
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_a", Local: true, State: wire.StateFailed}})
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(s, request(t, "tmux")); rec.Code != http.StatusConflict {
+		t.Fatalf("j_b's keys must be held: %d", rec.Code)
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusOK {
+		t.Fatalf("the lane did not open: %d", rec.Code)
+	}
+}
+
+func TestRecoverDoesNotTakeTheKeysOfAJobThatEndedWhileItListed(t *testing.T) {
+	q := &fakeQueue{running: []wire.Job{{ID: "j_old", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}}}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	q.afterList = func() { // the job ends after the queue listed it and before its keys are taken
+		s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_old", Local: true, State: wire.StateSucceeded}})
+	}
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tb.Holder("tmux"); ok || len(s.Held()) != 0 {
+		t.Fatal("the keys of a job that had ended were rebuilt")
 	}
 }

@@ -226,31 +226,56 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 // Recover rebuilds the lock table after a start from the fast-lane jobs the queue still has as not final: their runners may go on
-// renewing their leases, and without their keys a new run could overlap them. Registrations are refused until it has succeeded.
-// It may be called again; a job already held is skipped.
+// renewing their leases, and without their keys a new run could overlap them. Registrations are refused until every one of them is
+// accounted for: a job whose keys cannot be taken (another running job already has one of them, the keys are malformed) is an
+// error, and the lane stays closed — Run asks again, and it opens when that job's lease has lapsed. It may be called again; a job
+// already held is skipped.
 func (s *Service) Recover(ctx context.Context) error {
+	// A registration-like window: an end announced while the list is read and installed is remembered, so the lock of a job that
+	// has already ended is not built.
+	s.mu.Lock()
+	s.inflight++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.inflight--; s.inflight == 0 {
+			clear(s.early)
+		}
+		s.mu.Unlock()
+	}()
 	jobs, err := s.Queue.Running(ctx)
 	if err != nil {
 		return err
 	}
+	var failed []string
 	for _, j := range jobs {
 		if !j.Local || j.State.Terminal() {
 			continue
 		}
 		s.mu.Lock()
 		_, have := s.holds[j.ID]
+		_, over := s.early[j.ID]
 		s.mu.Unlock()
-		if have {
+		if have || over {
 			continue
 		}
 		hold, err := s.Locks.Acquire(j.ID, j.Locks, nil)
-		if err != nil { // two running jobs that share a key (an older start), or keys that cannot be held: say so, do not stop
+		if err != nil {
 			s.Logf("localruns: the locks of the running job %s were not rebuilt: %v", j.ID, err)
+			failed = append(failed, j.ID)
 			continue
 		}
 		s.mu.Lock()
+		if _, over := s.early[j.ID]; over { // it ended while its keys were being taken
+			s.mu.Unlock()
+			hold.Release()
+			continue
+		}
 		s.holds[j.ID] = hold
 		s.mu.Unlock()
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("the locks of %d running jobs could not be rebuilt (%v): the fast lane stays closed", len(failed), failed)
 	}
 	s.mu.Lock()
 	s.ready = true
