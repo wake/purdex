@@ -160,9 +160,6 @@ func TestADaemonRestartDoesNotTellAgain(t *testing.T) {
 	if n := len(s.texts()); n != 1 {
 		t.Fatalf("told %d times: %q", n, s.texts())
 	}
-	if !m2.store.since().Equal(t0.Add(time.Minute)) {
-		t.Fatalf("the catch-up window starts at %v", m2.store.since())
-	}
 }
 
 func TestAnUnreachableSessionIsNotRetriedForever(t *testing.T) {
@@ -187,6 +184,38 @@ func TestCatchUpTellsOnlyWhatEndedSinceTheLastOneHandled(t *testing.T) {
 	got := strings.Join(s.texts(), "\n")
 	if len(s.texts()) != 2 || strings.Contains(got, "j_old") || !strings.Contains(got, "j_new") || !strings.Contains(got, "j_f") {
 		t.Fatalf("told %q", s.texts())
+	}
+}
+
+type failingSource struct {
+	fakeSource
+	failState wire.JobState
+}
+
+func (f *failingSource) Jobs(ctx context.Context, q client.JobsQuery) ([]wire.Job, error) {
+	if q.State == f.failState {
+		return nil, errors.New("wwd busy")
+	}
+	return f.fakeSource.Jobs(ctx, q)
+}
+
+func TestAFailedListLeavesTheCatchUpWindowWhereItWas(t *testing.T) {
+	s := &sent{}
+	src := &failingSource{failState: wire.StateFailed, fakeSource: fakeSource{jobs: map[wire.JobState][]wire.Job{
+		wire.StateSucceeded: {job("j_ok", wire.StateSucceeded, t0.Add(time.Minute))},
+		wire.StateFailed:    {job("j_f", wire.StateFailed, t0.Add(time.Minute))},
+	}}}
+	m := newMod(t, src, s)
+	now := t0.Add(time.Hour)
+	m.now = func() time.Time { return now }
+	m.catchUp(context.Background())
+	if !m.store.since().Equal(t0) || len(s.texts()) != 0 {
+		t.Fatalf("window %v, told %q", m.store.since(), s.texts())
+	}
+	src.failState = ""
+	m.catchUp(context.Background())
+	if len(s.texts()) != 2 || !m.store.since().Equal(now) {
+		t.Fatalf("window %v, told %q", m.store.since(), s.texts())
 	}
 }
 

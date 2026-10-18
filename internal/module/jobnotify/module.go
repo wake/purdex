@@ -126,9 +126,13 @@ func (m *Module) onEvent(ev wire.Event) {
 	m.handle(je.Job)
 }
 
-// catchUp tells the jobs that ended since the last one handled and were not told.
+// catchUp tells the jobs that ended since the last complete catch-up and were not told. Every state is listed before anything is
+// handled, and the window moves only when all of them were read: a list that failed leaves the window where it was, so the next
+// try still sees what ended meanwhile. The window moves to when this catch-up began, not to what the events carried.
 func (m *Module) catchUp(ctx context.Context) {
+	began := m.now()
 	since := m.store.since()
+	var ended []wire.Job
 	for _, st := range terminalStates {
 		jobs, err := m.src.Jobs(ctx, client.JobsQuery{State: st})
 		if err != nil {
@@ -139,9 +143,15 @@ func (m *Module) catchUp(ctx context.Context) {
 		}
 		for _, j := range jobs {
 			if j.Result != nil && j.Result.FinishedAt != nil && j.Result.FinishedAt.After(since) {
-				m.handle(j)
+				ended = append(ended, j)
 			}
 		}
+	}
+	for _, j := range ended {
+		m.handle(j)
+	}
+	if err := m.store.advance(began); err != nil {
+		m.logf("jobnotify: catch-up window: %v", err)
 	}
 }
 
@@ -159,11 +169,7 @@ func (m *Module) handle(j wire.Job) {
 	if err := m.send(j.Submitter.Session, Text(j)); err != nil {
 		m.logf("jobnotify: %s: %v", j.ID, err)
 	}
-	at := m.now()
-	if j.Result != nil && j.Result.FinishedAt != nil {
-		at = *j.Result.FinishedAt
-	}
-	if err := m.store.mark(j.ID, at); err != nil {
+	if err := m.store.mark(j.ID); err != nil {
 		m.logf("jobnotify: remember %s: %v", j.ID, err)
 	}
 }

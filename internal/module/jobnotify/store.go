@@ -54,9 +54,9 @@ func (s *store) since() time.Time {
 	return s.st.Since
 }
 
-// mark records id as told (and moves the catch-up window to at when that is later) and writes the file. The file is written after
+// mark records id as told and writes the file. The file is written after
 // the notice was handed over, so a crash in between tells a job twice at worst, never zero times.
-func (s *store) mark(id string, at time.Time) error {
+func (s *store) mark(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.set[id] {
@@ -69,9 +69,21 @@ func (s *store) mark(id string, at time.Time) error {
 			s.st.Notified = append([]string(nil), s.st.Notified[n-maxKept:]...)
 		}
 	}
-	if at.After(s.st.Since) {
-		s.st.Since = at
+	return s.save()
+}
+
+// advance moves the catch-up window to at (never back) once a catch-up has looked at every state.
+func (s *store) advance(at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !at.After(s.st.Since) {
+		return nil
 	}
+	s.st.Since = at
+	return s.save()
+}
+
+func (s *store) save() error {
 	b, err := json.Marshal(s.st)
 	if err != nil {
 		return err
