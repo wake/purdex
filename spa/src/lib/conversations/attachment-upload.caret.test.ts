@@ -162,3 +162,38 @@ describe('the point is kept outside the input, per key', () => {
     expect(readDraft(KEY) ?? '').not.toContain('[Image')
   })
 })
+
+describe('an edit that repeats the text next to it (the real caret of the edit settles where it was)', () => {
+  it('text typed at the start that repeats the draft: the point moves with it', async () => {
+    writeDraft(KEY, 'foo foo')
+    const h = held('a.png')
+    startUploads(KEY, upload, [png('a.png')], 3)
+    writeDraft(KEY, 'foo foo foo', 4) // "foo " typed at the start, the caret ends up behind it
+    await h.land('a.png')
+    expect(readDraft(KEY)).toBe(`foo foo [Image #${seqOf('a.png')}] foo`)
+  })
+  it('a repeated character typed just before the point: the point moves with it', async () => {
+    writeDraft(KEY, 'aa')
+    const h = held('a.png')
+    startUploads(KEY, upload, [png('a.png')], 1)
+    writeDraft(KEY, 'aaa', 2) // typed between the two a, at the point: the caret is behind it
+    await h.land('a.png')
+    expect(readDraft(KEY)).toBe(`aa [Image #${seqOf('a.png')}] a`)
+  })
+  it('a delete next to a repeat: the point is pulled back by what was removed', async () => {
+    writeDraft(KEY, 'foo foo bar')
+    const h = held('a.png')
+    startUploads(KEY, upload, [png('a.png')], 5)
+    writeDraft(KEY, 'foo bar', 0) // the first "foo " removed, the caret at the start
+    await h.land('a.png')
+    expect(readDraft(KEY)).toBe(`f [Image #${seqOf('a.png')}] oo bar`)
+  })
+  it('a caret that does not fit the change (a hint from somewhere else) falls back to the comparison of the two drafts', async () => {
+    writeDraft(KEY, 'hello world')
+    const h = held('a.png')
+    startUploads(KEY, upload, [png('a.png')], 5)
+    writeDraft(KEY, 'XYZ hello world', 2)
+    await h.land('a.png')
+    expect(readDraft(KEY)).toBe(`XYZ hello [Image #${seqOf('a.png')}] world`)
+  })
+})

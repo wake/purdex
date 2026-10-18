@@ -148,7 +148,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
   const noMod = !adapter.canSend(capabilities)
-  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
+  const change = (v: string, caret?: number) => { setDraft(v); writeDraft(dKey, v, caret); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
   const canUndoClear = useHasCleared(dKey)
   const restoreCleared = () => {
     const text = undoClear(dKey)
@@ -256,7 +256,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               value={draft}
               rows={1}
               placeholder={lockedReason ?? t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
-              onChange={(e) => change(e.target.value)}
+              onChange={(e) => change(e.target.value, e.target.selectionStart)}
               onPaste={(e) => {
                 // only files are taken over; a plain-text paste goes into the box as usual
                 const files = [...e.clipboardData.files]

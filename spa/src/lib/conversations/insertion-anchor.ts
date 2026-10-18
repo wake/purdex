@@ -39,14 +39,27 @@ export function closeAnchor(key: string, id: string): void {
 
 export const hasAnchor = (key: string, id: string): boolean => (anchors.get(key) ?? []).some((a) => a.id === id)
 
-/** The draft of `key` went from `from` to `to`: every open point moves with the one edit between them (common head and tail cut away). */
-export function rebaseAnchors(key: string, from: string, to: string): void {
+/**
+ * The draft of `key` went from `from` to `to`: every open point moves with the one edit between them. The edit is found by cutting
+ * away the common head and tail, which cannot tell where it was when it repeats the text beside it ("foo foo" typed "foo " at the
+ * start looks like "foo " added at the end). `caret`, the box's own caret after a typed or pasted change, ends the edit: the tail
+ * after it is what the change left alone. A caret that does not fit the change is ignored.
+ */
+export function rebaseAnchors(key: string, from: string, to: string, caret?: number): void {
   const list = anchors.get(key)
   if (!list || landing || from === to) return
+  let tail = -1
+  if (caret !== undefined && caret >= 0 && caret <= to.length) {
+    const kept = to.length - caret
+    if (kept <= from.length && from.endsWith(to.slice(caret))) tail = kept
+  }
   let head = 0
-  while (head < from.length && head < to.length && from[head] === to[head]) head++
-  let tail = 0
-  while (tail < from.length - head && tail < to.length - head && from[from.length - 1 - tail] === to[to.length - 1 - tail]) tail++
+  const room = tail >= 0 ? Math.min(from.length, to.length) - tail : Infinity
+  while (head < from.length && head < to.length && head < room && from[head] === to[head]) head++
+  if (tail < 0) {
+    tail = 0
+    while (tail < from.length - head && tail < to.length - head && from[from.length - 1 - tail] === to[to.length - 1 - tail]) tail++
+  }
   const oldMid = from.length - head - tail
   const newMid = to.length - head - tail
   for (const a of list) a.pos = shiftOffset(a.pos, head, oldMid, newMid)

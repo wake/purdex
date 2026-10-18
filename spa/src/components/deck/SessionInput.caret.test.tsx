@@ -19,6 +19,12 @@ const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
 const png = (name = 'shot.png') => new File(['x'], name, { type: 'image/png' })
 const flush = () => act(async () => { for (let i = 0; i < 4; i++) await Promise.resolve() })
 const type = (value: string, caret: number) => { fireEvent.change(box(), { target: { value } }); box().setSelectionRange(caret, caret) }
+/** A change as the browser makes it: the value changes and the caret is left where the edit ended (jsdom would put it at the end). */
+const typeAt = (value: string, caret: number) => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), value)
+  box().setSelectionRange(caret, caret)
+  fireEvent.input(box())
+}
 
 /** Uploads that land only when `land()` says so. */
 function held() {
@@ -57,7 +63,7 @@ describe('SessionInput: the placeholder goes where the caret was', () => {
     const up = held()
     type('helloworld', 5)
     fireEvent.paste(box(), { clipboardData: { files: [png()], getData: () => 'XX', types: ['Files', 'text/plain'] } })
-    fireEvent.change(box(), { target: { value: 'helloXXworld' } }) // what the browser's own paste does next
+    typeAt('helloXXworld', 7) // what the browser's own paste does next
     await up.land()
     expect(box().value).toBe('helloXX [Image #1] world')
   })
@@ -85,9 +91,19 @@ describe('SessionInput: the placeholder goes where the caret was', () => {
     const up = held()
     type('helloworld', 5)
     fireEvent.drop(screen.getByTestId('session-input-drop'), { dataTransfer: { files: [png()], types: ['Files'] } })
-    fireEvent.change(box(), { target: { value: '>> helloworld' } })
+    typeAt('>> helloworld', 3)
     await up.land()
     expect(box().value).toBe('>> hello [Image #1] world')
+  })
+
+  it('typing text that repeats the draft before the point: the box\'s own caret tells where the edit was', async () => {
+    render(ui())
+    const up = held()
+    type('foo foo', 3)
+    fireEvent.drop(screen.getByTestId('session-input-drop'), { dataTransfer: { files: [png()], types: ['Files'] } })
+    typeAt('foo foo foo', 4) // "foo " typed at the start
+    await up.land()
+    expect(box().value).toBe('foo foo [Image #1] foo')
   })
 
   it('two pictures dropped together stay in order at the one point', async () => {
