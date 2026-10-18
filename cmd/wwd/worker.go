@@ -99,7 +99,8 @@ type workerInputs struct {
 
 // jobParentEnv is the environment the jobs' allowed names are read from: the daemon's own, with PATH replaced by the tool list the
 // facts' tool probe searches (facts.ToolPath, the configured extra directories in front). Built at run time, so a change of
-// [tools] extra_path takes effect when wwd restarts, without touching the systemd unit or the LaunchAgent.
+// [tools] extra_path takes effect when wwd restarts, without touching the systemd unit or the LaunchAgent. It is the worker's jobs
+// only: a fast-lane run keeps its caller's environment.
 func jobParentEnv(environ []string, home string, extra []string) []string {
 	path := ""
 	out := make([]string, 0, len(environ)+1)

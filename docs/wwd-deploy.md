@@ -71,7 +71,8 @@ What the install does, all of it idempotent (a second run changes nothing and re
    the labels (a `labels` event) within 5 s. `GET /v1/info` shows the labels and the toolchain fingerprint;
    **Tools outside the default search path** (for example a toolchain under `~/Assist`): add a `[tools]` table to
    `config.toml` and restart wwd. The directories go in front of the default tool directories, for the facts' tool probe and
-   for every job's PATH (one list, so a tool the facts report is a tool a job finds). Install does not need to run again: the
+   for every worker job's PATH (one list, so a tool the facts report is a tool a job finds). A local fast-lane run keeps the
+   caller's own environment and PATH, as before; the PHP probe also looks in Herd's own directory, which is not on a job's PATH. Install does not need to run again: the
    jobs' PATH is built at start, not read from the unit's `Environment=PATH`. A directory that does not exist on the host is
    skipped, with one line in the log:
 
