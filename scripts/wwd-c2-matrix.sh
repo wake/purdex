@@ -269,6 +269,9 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
+  # an empty owner_rule on air26 means [owner] is off (wwd.db may still hold hid<5m, which wwd only hides): the PUTs of this run store
+  # the empty one, so the rule has to be put back by hand afterwards
+  [ "$dry" -eq 1 ] || [ -n "$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)" ] || say "WARN: air26's owner_rule is empty ([owner] off?): this run stores it empty; put it back by hand afterwards (docs/wwd-c2-matrix.md, section 7.1)"
   # case 8 submits from air26 over a non-interactive ssh, whose PATH has no pdx on a Mac (the shell reads .zshenv only): find it on the PATH,
   # then in the two places pdx is installed, and say which one is used
   case " $cases " in *" 8 "*)

@@ -237,7 +237,13 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 
 重啟後檢查（每台）：`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq .fault`，預期 mlab 是 `{"log_upload_fail":true,"zone":"warning"}`、air26 是 `{"owner_active_file":true,"snapshot_delay_s":8}`、mserv 與 air19 是 `null`；`GET /v1/worker` 在 air26 的 `owner_rule` 非空。
 
-**跑完之後**：把每台的 `config.toml.pre-c2` 放回 `config.toml`（沒有 `[fault]`），重啟 wwd，確認四台 `curl … /v1/info | jq 'has("fault")'` 都是 `false`；`GET /v1/worker` 與矩陣前一致（部署後預設四台都是關的）；矩陣的暫存、`/tmp/wwd-c2-ran.log`、`fault/owner-active` 腳本結尾已刪，用 §6 的指令確認即可。
+**跑完之後**：把每台的 `config.toml.pre-c2` 放回 `config.toml`（沒有 `[fault]`），重啟 wwd，確認四台 `curl … /v1/info | jq 'has("fault")'` 都是 `false`；`GET /v1/worker` 與矩陣前一致（部署後預設四台都是關的）（**air26 的 `owner_rule` 例外，見下**）；矩陣的暫存、`/tmp/wwd-c2-ran.log`、`fault/owner-active` 腳本結尾已刪，用 §6 的指令確認即可。
+
+**air26 的 `owner_rule`（`[owner] enabled = false` 的副作用）**（只讀程式碼的結論，`internal/wwd/daemon/hoststate.go`）：
+- 重啟時 wwd.db 裡存的 `hid<5m` 不會讓 wwd 起不來：`NewHostState` 對從 DB 讀到的設定走 `sane`（hoststate.go:172），`checkWorker` 因 `OwnerRuleSupported=false` 拒絕非空的 owner_rule（:161），`sane` 只在記憶體裡把它清成 `""` 並 log（`owner_rule cleared`），**不會回寫 DB**。
+- 所以矩陣期間 `GET /v1/worker` 回 `owner_rule: ""`；腳本一開始存下的就是 `""`，結尾 PUT 回去的也是 `""`，不會被拒（`SetWorker` 的檢查對空字串放行）。
+- 但腳本在矩陣中途用 PUT 開關 worker，每次改動都會 `SaveWorker`（:185-），那一筆存的 `owner_rule` 是 `""`，**會把 DB 裡的 `hid<5m` 蓋掉**。所以跑完、把 `[owner] enabled = true` 放回並重啟之後，air26 的 `owner_rule` 是 `""`（規則本身仍照預設 5 分鐘運作，但 `facts.worker.owner_rule` 是空的，worker 也少了「第一次讀數前不接工作」的保護）。
+- 跑完要補一步：把 `[owner]` 放回並重啟 wwd 後，`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/worker | jq '.owner_rule = "hid<5m"' | curl --unix-socket ~/.local/share/wwd/wwd.sock -X PUT -d @- http://wwd/v1/worker`，再確認 `GET /v1/worker` 的 `owner_rule` 是 `hid<5m`。腳本在 precheck 看到 air26 的 `owner_rule` 是空的時會印一行提醒。
 
 ## 8. 已對照程式碼核對的假設，與第一次真機執行要留意的
 

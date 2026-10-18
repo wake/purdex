@@ -305,9 +305,12 @@ has "ok   attempts after the lapse" "case 2"
 has "FAIL state after two lapses: got 'queued', expected 'failed'" "case 2 (the stub's job never fails: the check is made)"
 
 # a job that is never running: the precondition FAILs, nothing is frozen, and no later check passes on it
+# (a live wwd of its own: with the one above gone, a freeze would be refused for another reason and this test would prove nothing)
+"$tmp/wwd/bin/wwd" & fakeq=$!
 rm -f "$stub"/*.log
 rc=0
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fake2" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$fakeq" STUB_STATE=queued C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+kill -CONT "$fakeq" 2>/dev/null || true; kill -KILL "$fakeq" 2>/dev/null || true
 [ "$rc" -ne 0 ] || fail "a job that never ran must make case 2 exit non-zero"
 has "FAIL precondition not reached: j_stub_c2-sleep .state == running" "case 2 without a running job"
 has "air26 facts.owner:" "the precondition failure says what air26's owner is"
@@ -323,6 +326,11 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 ST
 has "waiting for air26's owner to be idle" "owner active"
 has "SKIP case 2: air26's owner stayed active" "owner active"
 [ ! -e "$stub/pdx.log" ] || fail "a skipped case must not submit a job: $(cat "$stub/pdx.log")"
+# an air26 whose owner_rule is empty: the precheck says the rule has to be put back by hand; with one, it says nothing
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_WORKER_JSON='{"enabled":false,"slots":{"heavy":1,"light":1},"owner_rule":""}' STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14 with an empty owner_rule"; }
+has "WARN: air26's owner_rule is empty" "precheck with an empty owner_rule"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 14"; }
+hasnt "WARN: air26's owner_rule" "precheck with an owner_rule"
 # case 11 sends tokens only: it does not wait for the owner
 rm -f "$stub"/*.log
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 11 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 11 must not wait for the owner"; }
@@ -350,10 +358,14 @@ done
 rm -f "$stub"/*.log
 rm -rf "$stub"/claimed-*
 # the job ran once (on mlab; air26 has a home of its own with no log), nothing was a lapse (attempts 0), and the race is exact
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_SPLIT_HOME=1 STUB_RAN_ON_SUBMIT=1 STUB_ATTEMPTS=0 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 1 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 1: exit code"; }
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_SPLIT_HOME=1 STUB_RAN_ON_SUBMIT=1 STUB_ATTEMPTS=0 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --keep --case 1 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 1: exit code"; }
 has "PASS case 1" "case 1"
 has "ok   one claim wins and one gets 409" "case 1"
 rm -f "$home/wwd-c2-ran.log"
+# the probe task of the scratch repo writes to the path C2_RAN_LOG gave, not to a fixed one
+probe=$(ls "$tmp"/wwd-c2.*/repo/scripts/probe.sh | head -1)
+grep -q '>> \$HOME/wwd-c2-ran.log ' "$probe" || fail "probe.sh must log to C2_RAN_LOG: $(grep '>>' "$probe")"
+rm -rf "$tmp"/wwd-c2.*
 [ "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" -ge 2 ] || fail "case 1 must send claims over TCP: $(cat "$stub/tcp.log" 2>/dev/null)"
 [ "$(grep ' /v1/jobs/.*/claim ' "$stub/tcp.log" | grep -c '"labels":\["os:darwin","arch:arm64"\]')" -eq "$(grep -c ' /v1/jobs/.*/claim ' "$stub/tcp.log")" ] || fail "every claim must carry the worker labels: $(cat "$stub/tcp.log")"
 
