@@ -40,10 +40,11 @@ type Env struct {
 	SpeedFactor float64
 	Estimate    func(wire.Job) float64 // the task's estimated minutes; nil = 0
 	Locked      func(keys []string) bool
-	HasClone    func(repo string) bool
-	Warm        func(wire.Job) bool // the repo clone and the dependency cache are on this host
-	Suspended   func(repo string) bool
-	Pinned      func(wire.Job) (Pin, bool)
+	// Warm: the repo clone and the dependency cache are on this host. A missing clone is not a reason to skip a job: the workspace then
+	// comes from the origin's tar (spec 5 Workspace), so a clone only earns warm_bonus.
+	Warm      func(wire.Job) bool
+	Suspended func(repo string) bool
+	Pinned    func(wire.Job) (Pin, bool)
 }
 
 // Scored is a claimable job with its score.
@@ -124,9 +125,6 @@ func Rank(cands []Candidate, env Env) []Scored {
 			continue
 		}
 		if env.Locked != nil && env.Locked(j.Locks) {
-			continue
-		}
-		if env.HasClone != nil && !env.HasClone(j.Repo.Name) {
 			continue
 		}
 		if env.Suspended != nil && env.Suspended(j.Repo.Name) {

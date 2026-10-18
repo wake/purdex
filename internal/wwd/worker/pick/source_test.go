@@ -115,3 +115,45 @@ func TestCollectSkipsFailingSourceAndReportsIt(t *testing.T) {
 		t.Fatalf("errs=%v", errs)
 	}
 }
+
+func TestPeerSourceTimesOutOnSilentPeer(t *testing.T) {
+	old := peerTimeout
+	peerTimeout = 100 * time.Millisecond
+	defer func() { peerTimeout = old }()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+	start := time.Now()
+	if _, err := NewPeerSource("slow", srv.URL, "t", nil).Queued(context.Background()); err == nil {
+		t.Fatal("a peer that never answers must be an error")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("took %v", time.Since(start))
+	}
+}
+
+func TestPeerSourceDecodesStrictly(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown field": `{"jobs":[],"surprise":1}`,
+		"trailing data": `{"jobs":[]} {}`,
+		"bad cursor":    `{"jobs":[],"cursor":"x"}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+		if _, err := NewPeerSource("p", srv.URL, "t", srv.Client()).Queued(context.Background()); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		srv.Close()
+	}
+}
+
+func TestPeerSourceRefusesOversizedAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jobs":[],"pad":"`))
+		_, _ = w.Write(make([]byte, maxAnswer))
+	}))
+	defer srv.Close()
+	if _, err := NewPeerSource("p", srv.URL, "t", srv.Client()).Queued(context.Background()); err == nil {
+		t.Fatal("want an error")
+	}
+}

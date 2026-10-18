@@ -2,11 +2,11 @@ package pick
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -37,6 +37,8 @@ func (s localSource) Queued(ctx context.Context) ([]wire.Job, error) {
 	return s.q.Queued(ctx, false)
 }
 
+const maxAnswer = 32 << 20
+
 type peerSource struct {
 	host, base, token string
 	hc                *http.Client
@@ -45,14 +47,20 @@ type peerSource struct {
 // NewPeerSource reads another host's queue over TCP with the pool token (spec 4.3). hc may be nil.
 func NewPeerSource(host, base, token string, hc *http.Client) Source {
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = &http.Client{}
 	}
 	return peerSource{host: host, base: strings.TrimRight(base, "/"), token: token, hc: hc}
 }
 
 func (s peerSource) Host() string { return s.host }
 
+// peerTimeout bounds one read of a peer's queue: a peer that accepts the connection and then says nothing must not stop the worker
+// from serving this host and the other peers.
+var peerTimeout = 10 * time.Second
+
 func (s peerSource) Queued(ctx context.Context) ([]wire.Job, error) {
+	ctx, cancel := context.WithTimeout(ctx, peerTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base+"/v1/jobs?state=queued", nil)
 	if err != nil {
 		return nil, fmt.Errorf("peer %s: %w", s.host, err)
@@ -67,8 +75,15 @@ func (s peerSource) Queued(ctx context.Context) ([]wire.Job, error) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil, fmt.Errorf("peer %s: GET /v1/jobs: HTTP %d", s.host, resp.StatusCode)
 	}
-	var r wire.JobsListResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&r); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer+1))
+	if err != nil {
+		return nil, fmt.Errorf("peer %s: %w", s.host, err)
+	}
+	if len(body) > maxAnswer {
+		return nil, fmt.Errorf("peer %s: jobs answer over %d bytes", s.host, maxAnswer)
+	}
+	r, err := wire.Decode[wire.JobsListResponse](body)
+	if err != nil {
 		return nil, fmt.Errorf("peer %s: bad jobs answer: %w", s.host, err)
 	}
 	// A peer never lists ad-hoc or fast-lane jobs (spec 4.4); one that does is not ours to claim.

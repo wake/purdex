@@ -11,7 +11,7 @@ var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
 func job(id string, class wire.JobClass, age time.Duration) wire.Job {
 	return wire.Job{
-		ID: id, Class: class, CreatedAt: t0.Add(-age), State: wire.StateQueued,
+		ID: id, Origin: "mlab", Task: "test", Snapshot: wire.Snapshot{Commit: "abc"}, Class: class, CreatedAt: t0.Add(-age), State: wire.StateQueued,
 		Repo: wire.Repo{Name: "purdex"}, Labels: []string{"go"},
 		Submitter: wire.Submitter{Session: "s-" + id},
 	}
@@ -68,6 +68,14 @@ func TestOriginBonusByZone(t *testing.T) {
 	if r[0].Score != 1400 || r[1].Score != 1200 || r[2].Score != 1000 {
 		t.Fatalf("scores %v %v %v", r[0].Score, r[1].Score, r[2].Score)
 	}
+}
+
+func TestMissingCloneIsNotAFilter(t *testing.T) {
+	// no clone here: the workspace comes from the origin's tar (spec 5), so the job stays claimable, only without warm_bonus.
+	env := baseEnv()
+	env.Warm = func(j wire.Job) bool { return false }
+	r := Rank([]Candidate{cand(job("far", wire.ClassDev, 0))}, env)
+	eq(t, ids(r), []string{"far"})
 }
 
 func TestWarmBonus(t *testing.T) {
@@ -146,20 +154,17 @@ func TestTieBreaksByCreatedAtThenID(t *testing.T) {
 func TestFilters(t *testing.T) {
 	env := baseEnv()
 	env.Locked = func(keys []string) bool { return len(keys) > 0 && keys[0] == "mysql" }
-	env.HasClone = func(repo string) bool { return repo != "noclone" }
 	env.Suspended = func(repo string) bool { return repo == "paused" }
 	locked := job("locked", wire.ClassDev, 0)
 	locked.Locks = []string{"mysql"}
 	label := job("label", wire.ClassDev, 0)
 	label.Labels = []string{"php"}
-	noclone := job("noclone", wire.ClassDev, 0)
-	noclone.Repo.Name = "noclone"
 	paused := job("paused", wire.ClassDev, 0)
 	paused.Repo.Name = "paused"
 	claimed := job("claimed", wire.ClassDev, 0)
 	claimed.State = wire.StateClaimed
 	ok := job("ok", wire.ClassDev, 0)
-	r := Rank([]Candidate{cand(locked), cand(label), cand(noclone), cand(paused), cand(claimed), cand(ok)}, env)
+	r := Rank([]Candidate{cand(locked), cand(label), cand(paused), cand(claimed), cand(ok)}, env)
 	eq(t, ids(r), []string{"ok"})
 }
 
