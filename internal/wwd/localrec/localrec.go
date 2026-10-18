@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/client"
@@ -95,11 +96,22 @@ func (h *handle) Finish(ctx context.Context, o fastlane.Outcome) error {
 	summary := o.Summary
 	err = h.api.PostResult(ctx, h.resp.ID, wire.ResultRequest{
 		ClaimID: h.resp.ClaimID, State: state, Exit: o.Exit, Summary: &summary, StartedAt: ptr(o.StartedAt), FinishedAt: ptr(o.FinishedAt),
+		Reason: resultReason(state, o.Reason),
 	})
 	if errors.Is(err, client.ErrClaimLost) {
 		return fastlane.ErrStale
 	}
 	return err
+}
+
+// resultReason is the reason a run may post with its result: only a failed run has one, and only the words a worker may write
+// (wire.ResultReasons: oom, timeout, infra). The origin's own words — lost, queue_timeout — are not accepted from the runner; a
+// lost run is marked by the origin when the lease lapses.
+func resultReason(state wire.JobState, reason string) string {
+	if state != wire.StateFailed || !slices.Contains(wire.ResultReasons, reason) {
+		return ""
+	}
+	return reason
 }
 
 func ptr(t time.Time) *time.Time {

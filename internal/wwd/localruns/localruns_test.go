@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +29,7 @@ type fakeQueue struct {
 	workers  []string
 	err      error
 	badClaim bool
+	badLease bool // a valid claim with a lease of zero
 	// during runs inside RecordLocal, before it answers (a job event faster than the answer).
 	during func(id string)
 	ended  map[string]bool
@@ -34,6 +37,9 @@ type fakeQueue struct {
 	asked  [][]string
 	// running is what Running answers (the jobs the queue has as not final); runErr makes it fail
 	running   []wire.Job
+	results   []wire.ResultRequest // the Result calls
+	resultIDs []string
+	resultErr error
 	runErr    error
 	afterList func()
 }
@@ -55,7 +61,18 @@ func (q *fakeQueue) RecordLocal(_ context.Context, req wire.LocalRunRequest, wor
 	if bad {
 		return wire.LocalRunResponse{ID: id}, nil
 	}
+	if q.badLease {
+		return wire.LocalRunResponse{ID: id, ClaimID: claim}, nil
+	}
 	return wire.LocalRunResponse{ID: id, ClaimID: claim, LeaseS: 60, RenewS: 15}, nil
+}
+
+func (q *fakeQueue) Result(_ context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.results = append(q.results, req)
+	q.resultIDs = append(q.resultIDs, id)
+	return wire.Job{ID: id}, q.resultErr
 }
 
 func (q *fakeQueue) Running(context.Context) ([]wire.Job, error) {
@@ -210,6 +227,134 @@ func TestAnUnusableClaimReleasesTheKeys(t *testing.T) {
 	}
 	if _, ok := tb.Holder("tmux"); ok {
 		t.Fatal("keys stayed held")
+	}
+}
+
+// logged returns a service whose log lines are collected.
+func loggedService(q Queue) (*Service, *locks.Table, func() string) {
+	s, tb := newService(q)
+	var mu sync.Mutex
+	var lines []string
+	s.Logf = func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(f, a...))
+	}
+	return s, tb, func() string { mu.Lock(); defer mu.Unlock(); return strings.Join(lines, "\n") }
+}
+
+func TestARecordedRunWithAnUnusableLeaseIsEndedAsInfraWithItsClaim(t *testing.T) {
+	q := &fakeQueue{badLease: true}
+	s, tb, logs := loggedService(q)
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(q.results) != 1 || q.resultIDs[0] != "j_local1" || q.results[0].ClaimID != claim || q.results[0].State != wire.StateFailed || q.results[0].Reason != "infra" {
+		t.Fatalf("the run was not ended: %+v for %v", q.results, q.resultIDs)
+	}
+	if _, ok := tb.Holder("tmux"); ok {
+		t.Fatal("keys stayed held")
+	}
+	if !strings.Contains(logs(), "j_local1") || strings.Contains(logs(), "ERROR") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestARunWhoseLocksCannotBeNamedIsNotEndedAndLoggedAsAnError(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb, logs := loggedService(q)
+	if _, err := tb.Acquire("j_local1", []string{"other"}, nil); err != nil { // the name the queue will give is taken: Rename fails
+		t.Fatal(err)
+	}
+	rec := post(s, request(t, "tmux"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if len(q.results) != 0 {
+		t.Fatalf("the run was ended, which would release the other run's keys: %+v", q.results)
+	}
+	if o, _ := tb.Holder("other"); o != "j_local1" {
+		t.Fatal("the keys of the run that already has the id were touched")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+// endingQueue announces the end of a job the way the real queue does: the job event is published before Result returns.
+type endingQueue struct {
+	*fakeQueue
+	svc *Service
+}
+
+func (q *endingQueue) Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	j, err := q.fakeQueue.Result(ctx, id, req)
+	q.svc.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	return j, err
+}
+
+func TestAnAbandonedRunWithTheIdOfAnotherRunIsNotEndedAndLeavesItsKeys(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, logs := loggedService(q)
+	q.svc = s
+	// run 1 is a normal registration; the queue then gives the next run the same id with a lease it cannot use
+	base.badLease = false
+	if rec := post(s, request(t, "db")); rec.Code != http.StatusOK {
+		t.Fatalf("first run: %d", rec.Code)
+	}
+	base.mu.Lock()
+	base.n = 0 // the next id is j_local1 again
+	base.badLease = true
+	base.mu.Unlock()
+	post(s, request(t, "tmux"))
+	if len(base.results) != 0 {
+		t.Fatalf("the colliding run was ended, which releases the other run's keys: %+v", base.results)
+	}
+	if o, _ := tb.Holder("db"); o != "j_local1" {
+		t.Fatal("the keys of the run that has the id were released")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "already in use") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestEndingAnAbandonedRunThroughTheQueueLeavesNothingBehind(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, _ := loggedService(q)
+	q.svc = s
+	post(s, request(t, "tmux"))
+	if len(base.results) != 1 {
+		t.Fatalf("results %+v", base.results)
+	}
+	s.mu.Lock()
+	early, holds := len(s.early), len(s.holds)
+	s.mu.Unlock()
+	if _, ok := tb.Holder("tmux"); ok || early != 0 || holds != 0 {
+		t.Fatalf("left behind: holder %v, early %d, holds %d", ok, early, holds)
+	}
+}
+
+func TestAnAbandonedRunThatCannotBeEndedIsLoggedAsAnErrorWithItsJobId(t *testing.T) {
+	q := &fakeQueue{badLease: true, resultErr: errors.New("claim is stale")}
+	s, _, logs := loggedService(q)
+	post(s, request(t, "tmux"))
+	if len(q.results) != 1 || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") || !strings.Contains(logs(), "claim is stale") {
+		t.Fatalf("results %d, log %q", len(q.results), logs())
+	}
+}
+
+func TestARunWithNoUsableClaimIsLoggedAsAnErrorAndNotEnded(t *testing.T) {
+	q := &fakeQueue{badClaim: true}
+	s, _, logs := loggedService(q)
+	post(s, request(t, "tmux"))
+	if len(q.results) != 0 {
+		t.Fatalf("a result was posted without a claim: %+v", q.results)
+	}
+	if !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "j_local1") {
+		t.Fatalf("log: %q", logs())
 	}
 }
 
