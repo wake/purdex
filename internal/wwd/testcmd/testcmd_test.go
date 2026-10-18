@@ -554,6 +554,26 @@ func TestALockFreedJustBeforeTheDeadlineIsStillTaken(t *testing.T) {
 	}
 }
 
+func TestAnAskThatCrossesTheDeadlineIsFollowedByTheLastAsk(t *testing.T) {
+	g := &fakeGate{}
+	rec := &busyRecorder{busy: 1, onBusy: func(int) { time.Sleep(80 * time.Millisecond) }} // the refusal comes after the deadline
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Hour, LockWait: 30 * time.Millisecond})
+	if code != 0 || g.calls != 1 || rec.calls != 2 {
+		t.Fatalf("code %d gate %d registers %d", code, g.calls, rec.calls)
+	}
+}
+
+func TestAnInstantGateRefusalOnTheLastAskIsNotATimeout(t *testing.T) {
+	g := &fakeGate{code: gate.ExitRefused}
+	rec := &busyRecorder{busy: 1, onBusy: func(int) { time.Sleep(80 * time.Millisecond) }}
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Hour, LockWait: 30 * time.Millisecond})
+	if code == ExitExpired || g.calls != 1 {
+		t.Fatalf("a refusal that came at once was taken for the wait running out: code %d gate %d", code, g.calls)
+	}
+}
+
 func TestTheLockWaitAndTheSlotWaitShareOneQueueTimeout(t *testing.T) {
 	g := &fakeGate{}
 	rec := &busyRecorder{busy: 2}

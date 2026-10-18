@@ -235,7 +235,10 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 			if final {
 				return fastlane.Result{}, errWaitedOut
 			}
-			final, remaining = true, time.Millisecond // the lock may have been freed just before the deadline: one last ask
+			// The lock may have been freed just before the deadline: one last ask. Its slot wait is a second, not less: fastlane
+			// takes a refusal that came after the whole wait for the wait running out, and an instant refusal for another cause
+			// must not look like that.
+			final, remaining = true, time.Second
 		}
 		t := *task
 		t.QueueTimeout = remaining
@@ -250,8 +253,11 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 			fmt.Fprintf(o.Stderr, "pdx test: 等待本機名額／lock：%v\n", err)
 		}
 		wait := min(poll, time.Until(deadline))
-		if wait <= 0 {
-			return fastlane.Result{}, errWaitedOut
+		if wait <= 0 { // the deadline passed during the ask itself: the top of the loop makes the one last ask
+			if final {
+				return fastlane.Result{}, errWaitedOut
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
