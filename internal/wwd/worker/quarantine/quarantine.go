@@ -462,7 +462,7 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 	return cleared, errors.Join(errs...)
 }
 
-// Clear is the human release: the hold and the marker go for each named job. Its directory is removed too when it passes safeDir,
+// Clear is the human release: the hold and the marker go for each named job (a job whose command is running in this process is refused). Its directory is removed too when it passes safeDir,
 // and otherwise left for the leftover sweep. A job that is not in the store is reported, after the others have been handled.
 func (s *Store) Clear(jobID ...string) error {
 	byJob := map[string][]snap{}
@@ -477,6 +477,12 @@ func (s *Store) Clear(jobID ...string) error {
 			continue
 		}
 		for _, h := range es {
+			if h.live {
+				// its command is going in this process: clearing it would take away the keys and the workspace of a command that is
+				// running, and the run's ending could no longer be quarantined
+				errs = append(errs, fmt.Errorf("quarantine: job %q is running, it cannot be cleared", id))
+				continue
+			}
 			if s.current(h) && s.safeDir(h.e.Dir) == nil {
 				if err := os.RemoveAll(h.e.Dir); err != nil {
 					errs = append(errs, fmt.Errorf("remove %s: %w", h.e.Dir, err))

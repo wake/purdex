@@ -875,3 +875,28 @@ func TestSettleMakesALiveEntrySweepableWithoutTouchingTheMarker(t *testing.T) {
 		t.Fatalf("cleared %d err %v: a settled entry is swept like any quarantined one", n, err)
 	}
 }
+
+func TestClearRefusesARunningJobAndTakesNothingAwayFromIt(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("a", "mysql")
+	if _, err := r.locks.Acquire(e.Owner, e.Keys, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Begin(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Clear("a"); err == nil {
+		t.Fatal("a running job cannot be cleared")
+	}
+	if _, ok := r.locks.Holder("mysql"); !ok || !exists(e.Dir) || len(markerFiles(t, r.markers)) != 1 || len(s.Held()) != 1 {
+		t.Fatal("its hold, directory, marker and entry all stay")
+	}
+	s.Settle(e.Owner) // its run ended without proof
+	if err := s.Clear("a"); err != nil {
+		t.Fatalf("once it is a quarantined entry a human may clear it: %v", err)
+	}
+	if _, ok := r.locks.Holder("mysql"); ok || exists(e.Dir) || len(s.Held()) != 0 {
+		t.Fatal("cleared")
+	}
+}
