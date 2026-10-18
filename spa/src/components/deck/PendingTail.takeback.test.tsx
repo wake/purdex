@@ -216,12 +216,11 @@ describe('the keyboard', () => {
     expect(takeBack).not.toHaveBeenCalled()
   })
 
-  it('a draft already typed: Up is the caret\'s, nothing is taken back', () => {
+  it('a draft already typed, the caret on its first line: Up takes Claude Code\'s queue back (MS2-4, L5)', () => {
     mount(header([row('a')]))
     writeDraft(KEY, 'typed')
     type('typed')
     up()
-    expect(takeBack).not.toHaveBeenCalled()
-    expect(readDraft(KEY)).toBe('typed')
+    expect(takeBack).toHaveBeenCalledTimes(1)
   })
 })

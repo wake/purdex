@@ -59,6 +59,8 @@ export interface ArrowFacts {
   walking: boolean
   /** `caretAtEdge` for this press. */
   atEdge: boolean
+  /** A draft that Esc just cleared is within its undo window: what comes back must not be written over it. */
+  clearedPending: boolean
   /** Asked only when everything before it says yes (it reads the queue). */
   canTakeBackAll: () => boolean
 }
@@ -70,7 +72,7 @@ export interface ArrowFacts {
  * with Up in an empty box. Everything else is the caret's.
  */
 export function decideArrow(f: ArrowFacts): ArrowDecision {
-  if (f.dir === 'up' && f.recall && (f.emptyBox || f.atEdge) && f.canTakeBackAll()) return 'take_back_all'
+  if (f.dir === 'up' && f.recall && (f.emptyBox || (f.atEdge && !f.clearedPending)) && f.canTakeBackAll()) return 'take_back_all'
   if (f.walking ? !f.atEdge : !(f.dir === 'up' && f.emptyBox)) return 'caret'
   return 'history'
 }

@@ -57,7 +57,7 @@ describe('caretAtEdge', () => {
 
 describe('decideArrow', () => {
   const facts = (over: Partial<ArrowFacts> = {}): ArrowFacts => ({
-    dir: 'up', recall: true, emptyBox: true, walking: false, atEdge: true, canTakeBackAll: () => true, ...over,
+    dir: 'up', recall: true, emptyBox: true, walking: false, atEdge: true, clearedPending: false, canTakeBackAll: () => true, ...over,
   })
 
   it('Up in an empty box with something held: take it all back — before any history', () => {
@@ -90,6 +90,10 @@ describe('decideArrow', () => {
     }
     expect(decideArrow(facts({ dir: 'down', emptyBox: false, walking: false, atEdge: true }))).toBe('caret')
     expect(decideArrow(facts({ dir: 'up', emptyBox: false, walking: false, atEdge: false }))).toBe('caret') // not on the first line
+  })
+
+  it('a draft that Esc just cleared keeps its undo window: Up on its first line takes nothing back', () => {
+    expect(decideArrow(facts({ emptyBox: false, atEdge: true, clearedPending: true }))).toBe('caret')
   })
 
   it('Up on the first line of a box with text takes the queue back first, before the history; with nothing to take back it is as before (MS2-4, L5)', () => {

@@ -303,7 +303,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 const emptyBox = isEmptyBox({ draft, shownChips: shown.length, uploading: uploading.length, hasCleared: hasCleared(dKey) }) // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                 const decision = decideArrow({
                   dir, recall: adapter.recall, emptyBox, walking: isWalking(dKey, draft),
-                  atEdge: caretAtEdge(dir, draft, el.selectionStart, el.selectionEnd),
+                  atEdge: caretAtEdge(dir, draft, el.selectionStart, el.selectionEnd), clearedPending: hasCleared(dKey),
                   canTakeBackAll: () => canTakeBackAll(dKey, queue),
                 })
                 if (decision === 'take_back_all') {
