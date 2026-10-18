@@ -161,12 +161,15 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.
-  const attach = (files: readonly File[]) => { if (upload) startUploads(dKey, upload, files) }
+  // The placeholders land at the caret the box has when the files come in (a drop has no better point to offer: a textarea cannot say
+  // which character is under the pointer), and follow the edits made while they upload (lib/conversations/insertion-anchor).
+  const caret = () => box.current?.selectionStart ?? undefined
+  const attach = (files: readonly File[]) => { if (upload) startUploads(dKey, upload, files, caret()) }
   // the pane takes a drop anywhere on it and hands the files to this input (usePaneFileDrop)
   const dropEl = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!upload || !dropEl.current) return
-    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files))
+    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files, box.current?.selectionStart ?? undefined))
   }, [dKey, upload])
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
