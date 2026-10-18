@@ -677,3 +677,46 @@ func TestARepeatedRebuildThatFailsClosesTheLaneAgain(t *testing.T) {
 		t.Fatalf("the lane stayed open: %d", rec.Code)
 	}
 }
+
+// interleavingQueue runs hook inside Result, before the final job event: the window between abandon's check of the id and the event.
+type interleavingQueue struct {
+	*fakeQueue
+	svc  *Service
+	hook func()
+}
+
+func (q *interleavingQueue) Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	if q.hook != nil {
+		q.hook()
+	}
+	j, err := q.fakeQueue.Result(ctx, id, req)
+	q.svc.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	return j, err
+}
+
+func TestARegistrationThatGetsTheIdOfARunBeingAbandonedIsRefusedAndNothingIsReleased(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &interleavingQueue{fakeQueue: base}
+	s, tb, _ := loggedService(q)
+	q.svc = s
+	q.hook = func() {
+		// meanwhile the queue gives another run the same id, with a good lease
+		base.mu.Lock()
+		base.n = 0
+		base.badLease = false
+		base.mu.Unlock()
+		if rec := post(s, request(t, "db")); rec.Code == http.StatusOK {
+			t.Errorf("the registration with the id being ended was accepted")
+		}
+	}
+	post(s, request(t, "tmux")) // recorded with an unusable lease: abandoned
+	if len(base.results) != 1 {
+		t.Fatalf("the abandoned run was not ended: %+v", base.results)
+	}
+	if _, ok := tb.Holder("db"); ok {
+		t.Fatal("the refused registration kept its keys")
+	}
+	if len(s.Held()) != 0 {
+		t.Fatalf("holds left: %v", s.Held())
+	}
+}

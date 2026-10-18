@@ -66,12 +66,15 @@ type Service struct {
 	// registration waits for needs nothing remembered (Reconcile covers a hold that outlives its job).
 	early    map[string]struct{}
 	inflight int
-	ready    bool // the table was rebuilt from the queue after the start; registrations wait for it
+	// abandoning: ids of recorded runs being ended by abandon. A registration that gets one of them is refused: the end's final job
+	// event releases by id, so a hold installed under it meanwhile would be released with it.
+	abandoning map[string]struct{}
+	ready      bool // the table was rebuilt from the queue after the start; registrations wait for it
 }
 
 // New returns a service over the table and the queue.
 func New(t *locks.Table, q Queue, worker string) *Service {
-	return &Service{Locks: t, Queue: q, Worker: worker, Logf: log.Printf, holds: map[string]*locks.Hold{}, early: map[string]struct{}{}}
+	return &Service{Locks: t, Queue: q, Worker: worker, Logf: log.Printf, holds: map[string]*locks.Hold{}, early: map[string]struct{}{}, abandoning: map[string]struct{}{}}
 }
 
 // Handler is POST /v1/local-runs. Register it on the socket mux only: a peer never records a run here.
@@ -164,6 +167,12 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 		return wire.LocalRunResponse{}, http.StatusInternalServerError, fmt.Errorf("the locks of %s: %w", resp.ID, err)
 	}
 	s.mu.Lock()
+	if _, ending := s.abandoning[resp.ID]; ending {
+		s.mu.Unlock()
+		s.Logf("localruns: ERROR the run %s was recorded but its id is being ended here as an abandoned run; its keys are not held, its lease will lapse as lost", resp.ID)
+		hold.Release()
+		return wire.LocalRunResponse{}, http.StatusInternalServerError, fmt.Errorf("the locks of %s: the id is being ended as another run", resp.ID)
+	}
 	if _, over := s.early[resp.ID]; over {
 		delete(s.early, resp.ID)
 		s.mu.Unlock()
@@ -183,12 +192,13 @@ func (s *Service) abandon(ctx context.Context, resp wire.LocalRunResponse, why s
 		s.Logf("localruns: ERROR the run %q was recorded but %s, and it cannot be ended (no usable claim); its lease will lapse as lost", resp.ID, why)
 		return
 	}
-	if s.idInUse(resp.ID) {
+	if !s.beginAbandon(resp.ID) {
 		// The queue gave this run the id of one that holds keys here. Ending it would publish a final job event, and the event
 		// releases by id: the keys of the run that really has the id.
 		s.Logf("localruns: ERROR the run %s was recorded but %s, and its id is already in use here; it is not ended (that would release the keys of the run that has this id), its lease will lapse as lost", resp.ID, why)
 		return
 	}
+	defer s.endAbandon(resp.ID)
 	// the caller's context may be the very reason for the failure: the end of the run gets its own short one
 	ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -199,12 +209,27 @@ func (s *Service) abandon(ctx context.Context, resp wire.LocalRunResponse, why s
 	s.Logf("localruns: the run %s was recorded but %s; ended as failed (infra)", resp.ID, why)
 }
 
-// idInUse says whether id is the owner of keys held here, or of a hold of this service.
-func (s *Service) idInUse(id string) bool {
+// beginAbandon reserves id for the end of an abandoned run, atomically with the check that no hold here has it; false: it is in use.
+// A registration that is given the id from now until endAbandon is refused (register).
+func (s *Service) beginAbandon(id string) bool {
 	s.mu.Lock()
-	_, ok := s.holds[id]
+	defer s.mu.Unlock()
+	if s.idInUse(id) {
+		return false
+	}
+	s.abandoning[id] = struct{}{}
+	return true
+}
+
+func (s *Service) endAbandon(id string) {
+	s.mu.Lock()
+	delete(s.abandoning, id)
 	s.mu.Unlock()
-	if ok {
+}
+
+// idInUse says whether id is the owner of keys held here, or of a hold of this service. s.mu is held.
+func (s *Service) idInUse(id string) bool {
+	if _, ok := s.holds[id]; ok {
 		return true
 	}
 	for _, owner := range s.Locks.Held() {

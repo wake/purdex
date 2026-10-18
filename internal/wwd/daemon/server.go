@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/labels"
+	"github.com/wake/purdex/internal/wwd/localruns"
+	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -29,6 +31,14 @@ type Options struct {
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
 	Broker                 *Broker      // the event broker (shared with State); nil: a new one
+	// Queue is this host's job queue (one per process); the job routes serve from it. nil: no queue.
+	Queue *queue.Queue
+	// LocalRuns serves POST /v1/local-runs on the socket (the fast lane, spec 5.2); main builds it over Queue and feeds it the
+	// queue's job events. nil: the route is not registered.
+	LocalRuns *localruns.Service
+	// ClaimRoutes registers the claim routes (heartbeat, result, log) on the socket mux. POST /v1/local-runs is registered only
+	// when this is set too. nil: neither exists.
+	ClaimRoutes func(mux *http.ServeMux)
 	// RepoSource lists the repos this host has a prepared clone of (they become
 	// repo:<name> labels). Called once per facts record: cheap, never blocking.
 	// nil: no repo labels.
@@ -90,6 +100,14 @@ func (d *Daemon) SocketHandler() http.Handler {
 	mux := http.NewServeMux()
 	d.routes(mux, false)
 	d.poolRoutes(mux)
+	if d.opts.ClaimRoutes != nil {
+		d.opts.ClaimRoutes(mux)
+	}
+	// The fast lane hands out a claim its runner heartbeats and reports with, so it opens only together with the claim routes: a
+	// daemon without them answers 404 and the caller runs the task locally without recording it.
+	if d.opts.LocalRuns != nil && d.opts.ClaimRoutes != nil {
+		mux.HandleFunc("POST /v1/local-runs", d.opts.LocalRuns.Handler()) // socket only: a peer never records a run here
+	}
 	// Submission is local only (spec §4.4); the queue arrives in WWD-3b.
 	mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job queue not implemented", http.StatusNotImplemented)
