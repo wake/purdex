@@ -27,10 +27,12 @@ func TestRegisterServeModules_ConversationAnnouncesStages(t *testing.T) {
 		return body.Capabilities
 	}
 	assert.NotContains(t, caps(), "conversations.stages.v1", "not announced before the module has initialised")
+	assert.NotContains(t, caps(), "sessions.send_now.v1")
 
 	require.NoError(t, c.InitModules())
 	st, ok := c.ModuleStatus("conversation")
 	require.True(t, ok, "the conversation module has no Status")
 	assert.Equal(t, true, st["ready"])
 	assert.Contains(t, caps(), "conversations.stages.v1")
+	assert.Contains(t, caps(), "sessions.send_now.v1")
 }

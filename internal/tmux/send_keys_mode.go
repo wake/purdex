@@ -11,6 +11,10 @@ import (
 // KeyEnter is the byte Claude Code reads as Enter.
 const KeyEnter = "\r"
 
+// KeySendNow is Ctrl+X Ctrl+S, Claude Code's own "send now" (default chat:sendNow): the queued messages go out at once and the turn
+// that is running is interrupted. Both bytes travel in one send-keys; a lone Ctrl+S does nothing (measured, spec §4.1, MS2-0).
+const KeySendNow = "\x18\x13"
+
 // KeyUp is the Up arrow (ESC [ A) as Claude Code's input reads it: on an empty input it pops the queued messages (K-1b).
 const KeyUp = "\x1b[A"
 
