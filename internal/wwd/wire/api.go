@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 )
 
@@ -242,11 +243,23 @@ func (r PoolHostsResponse) Validate() error {
 	return nil
 }
 
+// JobsListResponse is the answer to GET /v1/jobs. Cursor is the origin's position after the last change the answer carries: sent back as
+// ?after=<cursor> it returns the jobs that changed since, each once, in the state it is in now. It is a decimal string made on the
+// origin (never a time of a worker's) that the client treats as opaque. It is empty only in an answer that is not a cursor read.
 type JobsListResponse struct {
-	Jobs []Job `json:"jobs"`
+	Jobs   []Job  `json:"jobs"`
+	Cursor string `json:"cursor"`
 }
 
+var cursorRe = regexp.MustCompile(`^[0-9]{1,18}$`)
+
+// ValidCursor reports whether s has the form of a cursor (what ?after= takes and JobsListResponse.Cursor carries).
+func ValidCursor(s string) bool { return cursorRe.MatchString(s) }
+
 func (r JobsListResponse) Validate() error {
+	if r.Cursor != "" && !ValidCursor(r.Cursor) {
+		return fmt.Errorf("jobs list: invalid cursor %q", r.Cursor)
+	}
 	for i, j := range r.Jobs {
 		if err := j.Validate(); err != nil {
 			return fmt.Errorf("jobs[%d]: %w", i, err)
