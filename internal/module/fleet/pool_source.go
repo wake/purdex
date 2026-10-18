@@ -120,11 +120,9 @@ func poolServes(h *hostRow, peer *wire.Peer, now time.Time) bool {
 		// wwd cached from a peer that has stopped answering are as old as they are, and only a later change shows life.
 		if !first || now.Sub(peer.Facts.At) < poolStaleAfter {
 			h.factsMoved = now
-		} else {
-			h.factsMoved = time.Time{}
 		}
 	}
-	return !h.factsMoved.IsZero() && now.Sub(h.factsMoved) < poolStaleAfter
+	return now.Sub(h.factsMoved) < poolStaleAfter // never moved: the zero time is far in the past
 }
 
 func peerOfAlias(p wire.Pool, alias string) *wire.Peer {

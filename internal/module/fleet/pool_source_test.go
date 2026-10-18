@@ -399,6 +399,19 @@ func TestPoolSource_OldFactsSeenFirstAreNotServedUntilTheyMove(t *testing.T) {
 	assert.False(t, r.hasSession("peer"))
 }
 
+// How old is old: facts first seen 30 s old by this clock are not young (the limit is 20 s), 10 s old are.
+func TestPoolSource_TheFirstLookIsYoungUnderTwentySeconds(t *testing.T) {
+	for age, served := range map[time.Duration]bool{10 * time.Second: true, 30 * time.Second: false} {
+		r, fp := newPoolRig(t)
+		fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal), peerOK("air26", r.fc.Now().Add(-age), 50, 1, wire.ZoneNormal)}}, nil)
+		r.start()
+		r.tick()
+		r.tick()
+		assert.Equal(t, served, r.m.hosts["peer"].poolOwned, age.String())
+		assert.Equal(t, !served, r.hasSession("peer"), age.String())
+	}
+}
+
 // wwd says reachable but has no facts yet (a peer just reached): that is not a reading either.
 func TestPoolSource_ReachableWithoutFactsIsNotServed(t *testing.T) {
 	r, fp := newPoolRig(t)
