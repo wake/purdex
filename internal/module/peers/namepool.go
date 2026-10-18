@@ -114,10 +114,12 @@ func (m *Module) heldPoolNames(ctx context.Context, picked map[string]bool) (map
 	return held, nil
 }
 
-// freePoolNames is the pool minus held, in pool order.
+// freePoolNames is the pickable pool (the active personas, or the built-in names while there are none) minus held, in pool
+// order.
 func freePoolNames(held map[string]bool) []string {
-	free := make([]string, 0, len(ipeers.NamePool))
-	for _, n := range ipeers.NamePool {
+	pickable := ipeers.PickablePool()
+	free := make([]string, 0, len(pickable))
+	for _, n := range pickable {
 		if !held[n] {
 			free = append(free, n)
 		}
