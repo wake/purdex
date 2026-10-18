@@ -3,6 +3,7 @@ package run
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -130,6 +131,17 @@ func (s Sandbox) validate(spec Spec) error {
 		}
 		if !tightens(value) {
 			return fmt.Errorf("run: %s=%s would not take anything away: only a tightening value is accepted", name, value)
+		}
+	}
+	return nil
+}
+
+// checkExtraPaths refuses a start whose extra writable path is not there: systemd would fail to set the unit up (226/NAMESPACE) and
+// the failure would look like the task's own. The workspace is made by the runner and always exists.
+func (s Sandbox) checkExtraPaths() error {
+	for _, p := range s.ReadWritePaths {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("run: the sandbox's writable path %s: %w", p, err)
 		}
 	}
 	return nil

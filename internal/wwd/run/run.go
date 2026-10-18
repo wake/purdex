@@ -87,6 +87,9 @@ func Run(ctx context.Context, spec Spec) Result {
 		if err := spec.Sandbox.validate(spec); err != nil {
 			return failStart(res, err)
 		}
+		if err := spec.Sandbox.checkExtraPaths(); err != nil {
+			return failStart(res, err)
+		}
 	}
 	if !filepath.IsAbs(spec.Dir) {
 		return failStart(res, fmt.Errorf("run: the working directory %q must be absolute", spec.Dir))

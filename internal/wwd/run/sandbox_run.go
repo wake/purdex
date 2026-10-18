@@ -148,6 +148,14 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 
 	var startErr error
 	res.Outcome, res.ExitCode, res.Signal, res.Reason, startErr = classify(show, stop)
+	// systemd's own set-up failures (a missing ReadWritePaths entry is 226/NAMESPACE, a missing program 203/EXEC, ...) end the unit as
+	// exit-code 200..243 before the command's shell ran: if the shell left no status file the command never ran, so this is not
+	// the task's result but an infrastructure failure, and the caller must not count it as a red test
+	if _, gotExit := readExit(exitFile); startErr == nil && stop == stopNone && res.Outcome == Exited && show["Result"] == "exit-code" &&
+		!gotExit && res.ExitCode >= 200 && res.ExitCode <= 243 {
+		startErr = fmt.Errorf("run: systemd could not set unit %s up (status %d, before the command ran)", unit, res.ExitCode)
+		res.Outcome, res.ExitCode = StartFailed, -1
+	}
 	switch {
 	case startErr != nil:
 		res.Err = startErr

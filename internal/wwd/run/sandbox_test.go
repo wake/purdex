@@ -521,3 +521,52 @@ func TestSandboxTheExitFileNameIsNewEveryRunAndIsRemoved(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxASystemdSetUpFailureIsNotTheTasksRedTest(t *testing.T) {
+	// 226/NAMESPACE (a ReadWritePaths entry that is not there) ends the unit as exit-code before the shell ran: no status file
+	w := newWorld(t)
+	w.set("loaded", "")
+	w.set("exit", "226")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=226\nExecMainCode=1\n")
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "could not set unit") {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSandboxTheSameStatusFromTheCommandItselfIsItsResult(t *testing.T) {
+	// the command's own shell left 226 in the status file: the task really exited 226, and 199 and 244 are no systemd status
+	for _, code := range []string{"226", "199", "244"} {
+		w := newWorld(t)
+		w.set("exit", code)
+		w.set("wrapper-exit", code)
+		w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus="+code+"\nExecMainCode=1\n")
+		r := Run(context.Background(), sandboxSpec(t, w, "true"))
+		if r.Outcome != Exited || r.Err != nil {
+			t.Errorf("%s: result = %+v", code, r)
+		}
+	}
+	w := newWorld(t)
+	w.set("exit", "199")
+	w.set("show", "ActiveState=failed\nResult=exit-code\nExecMainStatus=199\nExecMainCode=1\n")
+	if r := Run(context.Background(), sandboxSpec(t, w, "true")); r.Outcome != Exited || r.ExitCode != 199 {
+		t.Errorf("199 without a status file is still an exit: %+v", r)
+	}
+}
+
+func TestSandboxAnExtraWritablePathThatIsNotThereIsRefusedBeforeAnythingStarts(t *testing.T) {
+	w := newWorld(t)
+	w.sb.ReadWritePaths = []string{filepath.Join(t.TempDir(), "no-such-cache")}
+	r := Run(context.Background(), sandboxSpec(t, w, "true"))
+	if r.Outcome != StartFailed || r.Err == nil || !strings.Contains(r.Err.Error(), "no-such-cache") {
+		t.Fatalf("result = %+v", r)
+	}
+	if w.called(t, "systemd-run") {
+		t.Fatalf("nothing may be started: %q", w.calls(t))
+	}
+	w2 := newWorld(t)
+	w2.sb.ReadWritePaths = []string{t.TempDir()}
+	if r := Run(context.Background(), sandboxSpec(t, w2, "true")); r.Outcome != Exited {
+		t.Fatalf("an existing extra path is fine: %+v", r)
+	}
+}

@@ -249,6 +249,17 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 			t.Fatalf("result %+v", r.Result)
 		}
 	})
+	t.Run("M_missing_writable_path_is_226", func(t *testing.T) {
+		// the premise of Run's start-up check and of the 200..243 rule: a ReadWritePaths entry that does not exist ends the unit as
+		// exit-code 226 (NAMESPACE) before the command runs
+		id := "wwd-j_4d3-M"
+		rawUnit(t, id, 60, "-p ProtectSystem=strict -p ReadWritePaths=/no-such-dir-4d3", "true")
+		show, err := Sandbox{}.withDefaults().show(id)
+		t.Logf("show=%v err=%v", show, err)
+		if show["Result"] != "exit-code" || show["ExecMainStatus"] != "226" {
+			t.Errorf("expected exit-code 226, got %v", show)
+		}
+	})
 	t.Run("Z_nothing_left", func(t *testing.T) {
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed wwd-j_4d3 units left:\n%s", f)
