@@ -33,6 +33,9 @@ func newPoolHostCollector(fallback HostCollector, facts localFacts) HostCollecto
 // pinned is this collector with the source decided once: the facts as they are now, for every figure of one snapshot.
 func (c *poolHostCollector) pinned() HostCollector {
 	f, ok := c.facts()
+	if ok && !usable(f) {
+		ok = false // facts that cannot give every figure give none: one snapshot, one source
+	}
 	return newPoolHostCollector(c.fallback, func() (wire.Facts, bool) { return f, ok })
 }
 
@@ -57,8 +60,8 @@ func (c *poolHostCollector) CollectMemory(ctx context.Context) (HostMemorySample
 	return c.fallback.CollectMemory(ctx)
 }
 
-// CollectDisk reads the root mount's disk from the facts. They carry the free space and the used share, not the size, so the
-// size is worked out from the two; a disk that does not add up is left to the fallback.
+// CollectDisk reads the root mount's disk from the facts; a disk the facts cannot give (a wwd that does not send the sizes yet) is
+// left to the fallback.
 func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, error) {
 	if f, ok := c.facts(); ok {
 		if s, ok := diskSampleOf(f.Disk); ok {
@@ -68,26 +71,30 @@ func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, er
 	return c.fallback.CollectDisk(ctx)
 }
 
+// usable says whether facts can give all three figures of a snapshot: a CPU that was read, the memory total and the root disk's
+// sizes (a wwd older than the sizes, a host whose CPU read failed, or one that reports no root disk, cannot).
+func usable(f wire.Facts) bool {
+	if f.Mem.TotalMB <= 0 || f.CPU.NCPU <= 0 || f.CPU.IdlePct < 0 || f.CPU.IdlePct > 100 { // a CPU that could not be read is all zeros, not idle
+		return false
+	}
+	_, ok := diskSampleOf(f.Disk)
+	return ok
+}
+
+// diskSampleOf is the root mount's disk, the statfs figures the facts carry: total is Blocks x Bsize and avail is Bavail x Bsize,
+// so used is total less avail, the same arithmetic as the monitor's own collector, which reads "/". Facts without that mount (or
+// without sizes) give nothing: another filesystem's figures are not the root's.
 func diskSampleOf(ds []wire.Disk) (HostDiskSample, bool) {
-	if len(ds) == 0 {
-		return HostDiskSample{}, false
-	}
-	d := ds[0]
-	for _, x := range ds {
-		if x.Mount == "/" {
-			d = x
-			break
+	for _, d := range ds {
+		if d.Mount != "/" {
+			continue
 		}
+		if d.TotalBytes == 0 || d.AvailBytes > d.TotalBytes {
+			return HostDiskSample{}, false
+		}
+		return HostDiskSample{TotalBytes: d.TotalBytes, UsedBytes: d.TotalBytes - d.AvailBytes}, true
 	}
-	if d.UsedPct < 0 || d.UsedPct >= 100 || d.FreeGB < 0 {
-		return HostDiskSample{}, false
-	}
-	free := d.FreeGB * (1 << 30)
-	total := free / (1 - d.UsedPct/100)
-	if total <= 0 {
-		return HostDiskSample{}, false
-	}
-	return HostDiskSample{TotalBytes: uint64(total), UsedBytes: uint64(total - free)}, true
+	return HostDiskSample{}, false
 }
 
 // Close ends what the fallback keeps running (the darwin CPU sampler).
