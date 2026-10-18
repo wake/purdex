@@ -10,12 +10,20 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 bin="$tmp/bin"; mkdir -p "$bin"
 printf '#!/bin/sh\necho "sudo $*" >> "$LOG/cmds"\nexec "$@"\n' > "$bin/sudo"
-# the fake mysql: records its arguments and its standard input; a call with a client file (--defaults-extra-file=F) works when F is there
+# the fake mysql: records its arguments and its standard input; a call with a client file (--defaults-extra-file=F) works when F is there;
+# SHOW GRANTS answers the two grants the script makes, plus a global one when FAKE_DRIFT=1 (an account that was given more later)
 cat > "$bin/mysql" <<'EOF'
 #!/bin/sh
 echo "mysql $*" >> "$LOG/cmds"
 case "$1" in
   --defaults-extra-file=*) [ -f "${1#--defaults-extra-file=}" ] && exit 0; exit 1 ;;
+esac
+case "$*" in
+  *"SHOW GRANTS"*)
+    echo "GRANT USAGE ON *.* TO \`wwd_admin\`@\`localhost\`"
+    echo "GRANT EXECUTE ON \`wwdctl\`.* TO \`wwd_admin\`@\`localhost\`"
+    [ "${FAKE_DRIFT:-0}" = 1 ] && echo "GRANT CREATE USER ON *.* TO \`wwd_admin\`@\`localhost\`"
+    exit 0 ;;
 esac
 if [ ! -t 0 ]; then cat >> "$LOG/stdin"; fi
 exit 0
@@ -59,6 +67,13 @@ if echo "$out" | grep -q "$pw"; then fail "the password was printed"; fi
 run install >/dev/null 2>&1
 grep -q "CREATE USER" "$LOG/stdin" && fail "a working account was made again"
 [ "$(sed -n 's/^password=//p' "$df")" = "$pw" ] || fail "the password changed"
+
+# install again when the account has been given more than it should (grants that drifted): it is made again, with a new password
+: > "$LOG/stdin"
+FAKE_DRIFT=1 run install >/dev/null 2>&1
+grep -q "CREATE USER 'wwd_admin'@'localhost'" "$LOG/stdin" || fail "an account with a drifted grant was kept"
+[ "$(sed -n 's/^password=//p' "$df")" != "$pw" ] || fail "the password did not change with the account"
+pw=$(sed -n 's/^password=//p' "$df")
 
 # remove: the account and the database wwdctl go, and the client file
 : > "$LOG/stdin"

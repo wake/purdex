@@ -43,8 +43,12 @@ install)
   [ -r "$sql_file" ] || { echo "cannot read $sql_file" >&2; exit 1; }
   echo "-- loading $sql_file"
   if [ "$dry" -eq 1 ]; then echo "+ sudo mysql -S $socket < $sql_file"; else sudo mysql -S "$socket" < "$sql_file"; fi
-  if [ "$dry" -eq 0 ] && [ -f "$defaults_file" ] && mysql --defaults-extra-file="$defaults_file" -N -B -e 'CALL wwdctl.wwd_list_dbs()' >/dev/null 2>&1; then
-    echo "-- the account and its client file $defaults_file work: left as they are"
+  # An account that exists is left alone only when its client file works AND its grants are exactly the two this script makes
+  # (USAGE on *.*, which MySQL lists for every account and gives nothing, and EXECUTE on wwdctl): grants that drifted are not kept.
+  want="GRANT EXECUTE ON \`wwdctl\`.* TO \`wwd_admin\`@\`localhost\`|GRANT USAGE ON *.* TO \`wwd_admin\`@\`localhost\`|"
+  if [ "$dry" -eq 0 ] && [ -f "$defaults_file" ] && mysql --defaults-extra-file="$defaults_file" -N -B -e 'CALL wwdctl.wwd_list_dbs()' >/dev/null 2>&1 &&
+     [ "$(sudo mysql -S "$socket" -N -B -e "SHOW GRANTS FOR 'wwd_admin'@'localhost'" 2>/dev/null | sort | tr '\n' '|')" = "$want" ]; then
+    echo "-- the account, its grants and its client file $defaults_file are right: left as they are"
   else
     echo "-- making the account wwd_admin@localhost and $defaults_file"
     pw=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
