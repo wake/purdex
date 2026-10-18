@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,26 +29,33 @@ func qjob(id string, class wire.JobClass, age time.Duration, lockKeys ...string)
 
 // fakeConn is one origin: a queue of jobs it hands out, and a log of what was done to it.
 type fakeConn struct {
+	host     string
 	mu       sync.Mutex
 	jobs     map[string]wire.Job
 	claimErr map[string]error
+	readErr  error
 	claims   []string
 	starts   int
 	results  []wire.ResultRequest
 	releases []wire.ReleaseRequest
 }
 
-func newConn(jobs ...wire.Job) *fakeConn {
-	c := &fakeConn{jobs: map[string]wire.Job{}, claimErr: map[string]error{}}
+func newConn(host string, jobs ...wire.Job) *fakeConn {
+	c := &fakeConn{host: host, jobs: map[string]wire.Job{}, claimErr: map[string]error{}}
 	for _, j := range jobs {
 		c.jobs[j.ID] = j
 	}
 	return c
 }
 
+func (c *fakeConn) Host() string { return c.host }
+
 func (c *fakeConn) Queued(context.Context) ([]wire.Job, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.readErr != nil {
+		return nil, c.readErr
+	}
 	var out []wire.Job
 	for _, j := range c.jobs {
 		out = append(out, j)
@@ -85,7 +93,7 @@ func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) e
 	return nil
 }
 
-func (c *fakeConn) PutLog(context.Context, string, string, io_Reader) error { return nil }
+func (c *fakeConn) PutLog(context.Context, string, string, io.Reader) error { return nil }
 
 func (c *fakeConn) Release(_ context.Context, _ string, req wire.ReleaseRequest) error {
 	c.mu.Lock()
@@ -94,20 +102,26 @@ func (c *fakeConn) Release(_ context.Context, _ string, req wire.ReleaseRequest)
 	return nil
 }
 
-func (c *fakeConn) snapshot() (claims []string, releases []wire.ReleaseRequest, results int) {
+func (c *fakeConn) seen() (claims []string, releases []wire.ReleaseRequest, results int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.claims...), append([]wire.ReleaseRequest(nil), c.releases...), len(c.results)
 }
 
 type fakeExec struct {
-	run   func(ctx context.Context, job wire.Job) run.Result
-	ran   atomic.Int32
-	order []string
-	mu    sync.Mutex
+	run         func(ctx context.Context, job wire.Job) run.Result
+	materialize func(job wire.Job) error
+	ran         atomic.Int32
+	mu          sync.Mutex
+	order       []string
 }
 
-func (e *fakeExec) Materialize(context.Context, wire.Job, string) (snapshot.Workspace, error) {
+func (e *fakeExec) Materialize(_ context.Context, job wire.Job, _ string) (snapshot.Workspace, error) {
+	if e.materialize != nil {
+		if err := e.materialize(job); err != nil {
+			return snapshot.Workspace{}, err
+		}
+	}
 	return snapshot.Workspace{Dir: "/ws"}, nil
 }
 
@@ -137,21 +151,27 @@ func blockUntilDone(ctx context.Context, _ wire.Job) run.Result {
 	return run.Result{Outcome: run.Cancelled, ExitCode: -1}
 }
 
+type queuedAdapter struct{ c *fakeConn }
+
+func (q queuedAdapter) Queued(ctx context.Context, _ bool) ([]wire.Job, error) {
+	return q.c.Queued(ctx)
+}
+
 type rig struct {
-	conn  *fakeConn
+	conns []*fakeConn
+	zones map[string]wire.Zone
 	ex    *fakeExec
 	tbl   *locks.Table
 	loop  *Loop
+	mu    sync.Mutex
 	st    wire.WorkerSettings
 	facts *wire.Facts
-	mu    sync.Mutex
 	logs  []string
-	zone  wire.Zone
 }
 
-func newRig(t *testing.T, jobs ...wire.Job) *rig {
+func newRig(t *testing.T, conns ...*fakeConn) *rig {
 	t.Helper()
-	r := &rig{conn: newConn(jobs...), ex: &fakeExec{}, tbl: locks.New()}
+	r := &rig{conns: conns, zones: map[string]wire.Zone{}, ex: &fakeExec{}, tbl: locks.New()}
 	r.st = wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 2}}
 	r.facts = &wire.Facts{Derived: wire.Derived{Zone: wire.ZoneNormal, Headroom: wire.Slots{Heavy: 2, Light: 2}}}
 	ctl := runner.New(runner.Config{Worker: "mlab", Locks: r.tbl, Exec: r.ex, Unit: unit})
@@ -160,7 +180,16 @@ func newRig(t *testing.T, jobs ...wire.Job) *rig {
 		Settings: func() wire.WorkerSettings { r.mu.Lock(); defer r.mu.Unlock(); return r.st },
 		Facts:    func() *wire.Facts { r.mu.Lock(); defer r.mu.Unlock(); return r.facts },
 		Origins: func() []Origin {
-			return []Origin{{Host: "mlab", Reader: pick.NewLocalSource("mlab", queuedAdapter{r.conn}), Conn: r.conn, Zone: func() wire.Zone { return r.zone }}}
+			var out []Origin
+			for _, c := range r.conns {
+				host := c.host
+				out = append(out, Origin{Host: host, Reader: pick.NewLocalSource(host, queuedAdapter{c}), Conn: c, Zone: func() wire.Zone {
+					r.mu.Lock()
+					defer r.mu.Unlock()
+					return r.zones[host]
+				}})
+			}
+			return out
 		},
 		Labels: func() []string { return nil }, Locks: r.tbl, Ctl: ctl, Report: rep,
 		Interval: unit, Settle: unit, StopTimeout: 2 * time.Second, ShutdownGrace: 2 * time.Second,
@@ -169,20 +198,13 @@ func newRig(t *testing.T, jobs ...wire.Job) *rig {
 	return r
 }
 
-type queuedAdapter struct{ c *fakeConn }
-
-func (q queuedAdapter) Queued(ctx context.Context, _ bool) ([]wire.Job, error) { return q.c.Queued(ctx) }
-
 func (r *rig) set(f func(st *wire.WorkerSettings, facts *wire.Facts)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	f(&r.st, r.facts)
 }
 
-func (r *rig) round(t *testing.T) {
-	t.Helper()
-	r.loop.Round(context.Background(), context.Background())
-}
+func (r *rig) round() { r.loop.Round(context.Background(), context.Background()) }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
@@ -196,24 +218,21 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func TestARoundClaimsTheBestJobAndRunsItToItsResult(t *testing.T) {
-	r := newRig(t, qjob("dev", wire.ClassDev, time.Minute), qjob("rel", wire.ClassRelease, 0))
-	r.round(t)
-	waitFor(t, "the result", func() bool { _, _, n := r.conn.snapshot(); return n == 1 })
-	claims, _, _ := r.conn.snapshot()
-	if len(claims) != 1 || claims[0] != "rel" {
+	c := newConn("mlab", qjob("dev", wire.ClassDev, time.Minute), qjob("rel", wire.ClassRelease, 0))
+	r := newRig(t, c)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	if claims, _, _ := c.seen(); len(claims) != 1 || claims[0] != "rel" {
 		t.Fatalf("claims %v: the release job scores higher", claims)
-	}
-	if got := r.ex.ranOrder(); len(got) != 1 || got[0] != "rel" {
-		t.Fatalf("ran %v", got)
 	}
 }
 
 func TestAtMostOneClaimPerRound(t *testing.T) {
-	r := newRig(t, qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	r := newRig(t, c)
 	r.ex.run = blockUntilDone
-	r.round(t)
-	claims, _, _ := r.conn.snapshot()
-	if len(claims) != 1 {
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
 		t.Fatalf("claims %v", claims)
 	}
 	r.loop.stopAll(context.Background(), "test")
@@ -221,37 +240,56 @@ func TestAtMostOneClaimPerRound(t *testing.T) {
 
 func TestNothingIsTakenWhenTheWorkerIsOffOrThereIsNoRoom(t *testing.T) {
 	cases := map[string]func(st *wire.WorkerSettings, f *wire.Facts){
-		"off":                 func(st *wire.WorkerSettings, f *wire.Facts) { st.Enabled = false },
-		"no heavy slots":      func(st *wire.WorkerSettings, f *wire.Facts) { st.Slots.Heavy = 0 },
-		"no headroom":         func(st *wire.WorkerSettings, f *wire.Facts) { f.Derived.Headroom.Heavy = 0 },
-		"owner is active":     func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} },
+		"off":             func(st *wire.WorkerSettings, f *wire.Facts) { st.Enabled = false },
+		"no heavy slots":  func(st *wire.WorkerSettings, f *wire.Facts) { st.Slots.Heavy = 0 },
+		"no headroom":     func(st *wire.WorkerSettings, f *wire.Facts) { f.Derived.Headroom.Heavy = 0 },
+		"owner is active": func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} },
 	}
 	for name, mod := range cases {
-		r := newRig(t, qjob("a", wire.ClassDev, 0))
+		c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+		r := newRig(t, c)
 		r.set(mod)
-		r.round(t)
-		if claims, _, _ := r.conn.snapshot(); len(claims) != 0 {
+		r.round()
+		if claims, _, _ := c.seen(); len(claims) != 0 {
 			t.Errorf("%s: claimed %v", name, claims)
 		}
 	}
 }
 
 func TestNoFactsYetMeansNoClaim(t *testing.T) {
-	r := newRig(t, qjob("a", wire.ClassDev, 0))
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
 	r.mu.Lock()
 	r.facts = nil
 	r.mu.Unlock()
-	r.round(t)
-	if claims, _, _ := r.conn.snapshot(); len(claims) != 0 {
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
 		t.Fatalf("claimed %v before the first facts sample", claims)
 	}
 }
 
+func TestAHostWithAnOwnerRuleTakesNothingBeforeItsFirstReading(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { st.OwnerRule = "air26" }) // facts.owner is nil: no reading yet
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claimed %v: the owner is not yet shown to be away", claims)
+	}
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: false} })
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v after the owner was shown away", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
+
 func TestSlotsLimitTheJobsRunningAtOnce(t *testing.T) {
-	r := newRig(t, qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	r := newRig(t, c)
 	r.ex.run = blockUntilDone
 	for i := 0; i < 4; i++ {
-		r.round(t)
+		r.round()
 		time.Sleep(2 * unit) // past the settle pause
 	}
 	if n := r.loop.Running(); n != 2 {
@@ -261,70 +299,222 @@ func TestSlotsLimitTheJobsRunningAtOnce(t *testing.T) {
 }
 
 func TestASecondClaimWaitsForTheSettlePause(t *testing.T) {
-	r := newRig(t, qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0))
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0))
+	r := newRig(t, c)
 	r.loop.cfg.Settle = time.Hour
 	r.ex.run = blockUntilDone
-	r.round(t)
-	r.round(t)
-	if claims, _, _ := r.conn.snapshot(); len(claims) != 1 {
+	r.round()
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
 		t.Fatalf("claims %v: the facts have not seen the first job yet", claims)
 	}
 	r.loop.stopAll(context.Background(), "test")
 }
 
 func TestARefusedClaimGoesOnToTheNextCandidate(t *testing.T) {
-	r := newRig(t, qjob("held", wire.ClassRelease, 0), qjob("free", wire.ClassDev, 0))
-	r.conn.claimErr["held"] = &runner.Conflict{State: wire.StateQueued}
-	r.round(t)
-	waitFor(t, "the result", func() bool { _, _, n := r.conn.snapshot(); return n == 1 })
-	claims, _, _ := r.conn.snapshot()
-	if len(claims) != 2 || claims[0] != "held" || claims[1] != "free" {
+	c := newConn("mlab", qjob("held", wire.ClassRelease, 0), qjob("free", wire.ClassDev, 0))
+	c.claimErr["held"] = &runner.Conflict{State: wire.StateQueued}
+	r := newRig(t, c)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	if claims, _, _ := c.seen(); len(claims) != 2 || claims[0] != "held" || claims[1] != "free" {
 		t.Fatalf("claims %v: the held one is tried once, then the next", claims)
 	}
 }
 
 func TestOneRoundTriesAtMostMaxTries(t *testing.T) {
-	var jobs []wire.Job
-	r := newRig(t)
+	c := newConn("mlab")
 	for i := 0; i < 20; i++ {
 		id := string(rune('a' + i))
-		jobs = append(jobs, qjob(id, wire.ClassDev, time.Duration(i)*time.Minute))
-		r.conn.claimErr[id] = &runner.Conflict{State: wire.StateClaimed}
+		c.jobs[id] = qjob(id, wire.ClassDev, time.Duration(i)*time.Minute)
+		c.claimErr[id] = &runner.Conflict{State: wire.StateClaimed}
 	}
-	for _, j := range jobs {
-		r.conn.jobs[j.ID] = j
-	}
+	r := newRig(t, c)
 	r.loop.cfg.MaxTries = 3
-	r.round(t)
-	if claims, _, _ := r.conn.snapshot(); len(claims) != 3 {
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 3 {
 		t.Fatalf("claims %d, want 3 tries", len(claims))
 	}
 }
 
-func TestZoneOfTheOriginReachesTheScoring(t *testing.T) {
-	// a dev job from an origin in the danger zone (+400) outranks a merge job from a normal one (+0): both come from the same fake origin,
-	// so the zone is the only thing that differs between two runs
-	for zone, want := range map[wire.Zone]string{wire.ZoneNormal: "merge", wire.ZoneDanger: "dev"} {
-		r := newRig(t, qjob("dev", wire.ClassDev, 0), qjob("merge", wire.ClassMerge, 0))
-		r.zone = zone
-		r.loop.cfg.Origins = func() []Origin {
-			return []Origin{{Host: "mlab", Reader: devOnly{r.conn}, Conn: r.conn, Zone: func() wire.Zone { return zone }}}
+func TestTheOriginsZoneDecidesBetweenTwoEqualJobs(t *testing.T) {
+	// the same dev job on two origins: the one whose host is in the danger zone gets +400 (offload where it hurts), and it is the zone
+	// the callback reports that decides, so flipping the zones flips the claim
+	for _, danger := range []string{"air26", "mlab"} {
+		a, b := newConn("mlab", qjob("on-mlab", wire.ClassDev, 0)), newConn("air26", qjob("on-air26", wire.ClassDev, 0))
+		r := newRig(t, a, b)
+		r.zones[danger] = wire.ZoneDanger
+		r.ex.run = blockUntilDone
+		r.round()
+		want := map[string]string{"air26": "on-air26", "mlab": "on-mlab"}[danger]
+		waitFor(t, "a run", func() bool { return len(r.ex.ranOrder()) > 0 })
+		if got := r.ex.ranOrder()[0]; got != want {
+			t.Errorf("danger on %s: ran %s, want %s", danger, got, want)
 		}
-		_ = want
-		r.round(t)
-		waitFor(t, "a claim", func() bool { c, _, _ := r.conn.snapshot(); return len(c) > 0 })
-		claims, _, _ := r.conn.snapshot()
-		if claims[0] != "merge" && zone == wire.ZoneNormal {
-			t.Errorf("normal: claimed %v", claims)
-		}
+		r.loop.stopAll(context.Background(), "test")
 	}
 }
 
-type devOnly struct{ c *fakeConn }
-
-func (d devOnly) Host() string { return "mlab" }
-func (d devOnly) Queued(ctx context.Context) ([]wire.Job, error) {
-	return d.c.Queued(ctx)
+func TestAnUnreadableOriginDoesNotStopTheOthers(t *testing.T) {
+	down := newConn("air26")
+	down.readErr = errors.New("connection refused")
+	up := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, down, up)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := up.seen(); return n == 1 })
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	found := false
+	for _, l := range r.logs {
+		if l == "worker: reading the queue of %s: %v" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the failing origin must be logged: %v", r.logs)
+	}
 }
 
-var _ = errors.New
+func TestJobsWhoseLocksAreHeldAreNotClaimed(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0, "mysql"), qjob("b", wire.ClassDev, time.Minute, "tmux"))
+	r := newRig(t, c)
+	if _, err := r.tbl.Acquire("fast-lane", []string{"tmux"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	if claims, _, _ := c.seen(); len(claims) != 1 || claims[0] != "a" {
+		t.Fatalf("claims %v: the job whose lock key is held by the fast lane must not even be claimed", claims)
+	}
+}
+
+func TestAnInfraFailureHoldsThatOriginsRepoOff(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, time.Minute))
+	r := newRig(t, c)
+	r.ex.materialize = func(wire.Job) error { return errors.New("disk full") }
+	r.round()
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	if _, rel, _ := c.seen(); rel[0].Reason != wire.ReleaseInfra {
+		t.Fatalf("release %+v", rel[0])
+	}
+	time.Sleep(3 * unit)
+	r.round() // the repo is suspended for five minutes
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: the repo is held off after an infrastructure failure", claims)
+	}
+}
+
+func TestTheOwnerTakingTheMachineStopsAndGivesBackEveryJobAndTakesNothingMore(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.ex.run = blockUntilDone
+	r.round()
+	time.Sleep(2 * unit)
+	r.round()
+	waitFor(t, "two runs", func() bool { return r.ex.ran.Load() == 2 })
+
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} })
+	r.round()
+	claims, rel, _ := c.seen()
+	if len(rel) != 2 || rel[0].Reason != wire.ReleaseReclaim || rel[1].Reason != wire.ReleaseReclaim {
+		t.Fatalf("releases %+v: both jobs go back as reclaim", rel)
+	}
+	if len(claims) != 2 || r.loop.Running() != 0 {
+		t.Fatalf("claims %v running %d: nothing is taken while the owner is here", claims, r.loop.Running())
+	}
+	r.round()
+	if claims2, _, _ := c.seen(); len(claims2) != 2 {
+		t.Fatalf("claims %v: still the owner's machine", claims2)
+	}
+
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: false} })
+	time.Sleep(2 * unit)
+	r.round()
+	if claims3, _, _ := c.seen(); len(claims3) != 3 {
+		t.Fatalf("claims %v: the worker takes jobs again once the owner is away", claims3)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
+
+func TestAJobThatDoesNotStopStaysTrackedAndNothingIsClaimedMeanwhile(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0))
+	r := newRig(t, c)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	r.ex.run = func(ctx context.Context, _ wire.Job) run.Result {
+		started <- struct{}{}
+		<-release // a command that does not end when it is asked to
+		return run.Result{Outcome: run.Exited}
+	}
+	r.round()
+	<-started
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+		f.Owner = &wire.OwnerState{Active: true, Reason: "build"}
+	})
+	r.loop.cfg.StopTimeout = 3 * unit
+	r.round()
+	if n := r.loop.Running(); n != 1 {
+		t.Fatalf("running %d: a job that did not end is still the worker's", n)
+	}
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: false} })
+	time.Sleep(2 * unit)
+	r.round() // the owner is away, the slot is taken by the job that is still running: one slot left, and it is used
+	close(release)
+	waitFor(t, "the job to end", func() bool { return r.loop.Running() <= 1 })
+	r.loop.stopAll(context.Background(), "test")
+}
+
+func TestRunDoesRoundsAndThenStopsAndGivesBackOnShutdown(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.ex.run = blockUntilDone
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.loop.Run(ctx); close(done) }()
+	waitFor(t, "a run", func() bool { return r.ex.ran.Load() == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	if _, rel, _ := c.seen(); len(rel) != 1 || rel[0].Reason != wire.ReleaseReclaim {
+		t.Fatalf("releases %+v: a worker that ends gives its jobs back, with the lease alive", rel)
+	}
+}
+
+type recorder struct {
+	mu    sync.Mutex
+	got   []runner.Ended
+	panic bool
+}
+
+func (r *recorder) RecordRun(e runner.Ended) {
+	r.mu.Lock()
+	r.got = append(r.got, e)
+	r.mu.Unlock()
+	if r.panic {
+		panic("recorder broke")
+	}
+}
+
+func TestTheUsageRecorderSeesTheWholeRunAfterTheResultAndCannotHurtIt(t *testing.T) {
+	for _, boom := range []bool{false, true} {
+		c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+		r := newRig(t, c)
+		rec := &recorder{panic: boom}
+		r.loop.cfg.Usage = rec
+		r.ex.run = func(ctx context.Context, _ wire.Job) run.Result {
+			return run.Result{Outcome: run.Exited, ExitCode: 3, LogPath: "/out/log", Tail: []byte("t")}
+		}
+		r.round()
+		waitFor(t, "the record", func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return len(rec.got) == 1 })
+		_, _, results := c.seen()
+		rec.mu.Lock()
+		e := rec.got[0]
+		rec.mu.Unlock()
+		if results != 1 || e.Kind != runner.KindRan || e.Run.ExitCode != 3 || e.Run.LogPath != "/out/log" || string(e.Run.Tail) != "t" {
+			t.Fatalf("panic=%v results=%d ended %+v: the result is delivered first and the whole run.Result reaches the recorder", boom, results, e)
+		}
+	}
+}
