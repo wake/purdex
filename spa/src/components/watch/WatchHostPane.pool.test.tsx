@@ -144,12 +144,12 @@ describe('WatchHostPane on the pool — a host wwd reads', () => {
 })
 
 describe('WatchHostPane on the pool — a host wwd does not read', () => {
-  it('keeps "measured by", says wwd is not answering, and keeps the fleet\'s process tables', async () => {
+  it('keeps "measured by", says wwd is unreachable, and keeps the fleet\'s process tables', async () => {
     load([host('d-a', { alias: 'air26' })])
     fetchPoolHosts.mockResolvedValue([])
     await renderPane()
     expect(screen.getByTestId('measure-source').textContent).toContain(t('watch.host.measured', { alias: 'air26' }))
-    expect(screen.getByTestId('avail-row').textContent).toContain('wwd is not answering')
+    expect(screen.getByTestId('avail-row').textContent).toContain('wwd is unreachable')
     expect(screen.queryByTestId('residents')).toBeNull()
   })
 })

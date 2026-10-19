@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PoolCellExtra } from '../../lib/pool/cell-model'
 import type { PoolException } from '../../lib/pool/types'
-import { headroomReasonLines } from '../../lib/pool/words'
+import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
 
 function Item({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
@@ -24,7 +24,7 @@ export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; e
   if (pool.state === 'fallback') {
     return (
       <div data-testid="avail-row" className="mb-5 rounded-lg border border-border-subtle px-4 py-3 text-sm text-text-muted">
-        {pool.since !== null ? t('pool.card.fallback', { time: hhmm(pool.since) }) : t('pool.card.fallback_nosince')}
+        {fallbackWord(t, pool.reason, pool.since)}
       </div>
     )
   }
