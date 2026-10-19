@@ -479,11 +479,12 @@ func TestATaskThatAsksForADatabaseGetsOneOfItsOwnAndOnlyTheNamesItReads(t *testi
 		"dbtask": {"DB_HOST=127.0.0.1", "WP_TESTS_DB_NAME"}, "wptask": {"WP_TESTS_DB_NAME=wwd_x", "DB_HOST"},
 	} {
 		j := job(task)
-		ws, err := e.Materialize(ctx, testRef, j, claimID)
+		ref := ident.Ref{Source: "air26", ID: j.ID}
+		ws, err := e.Materialize(ctx, ref, j, claimID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan, err := e.Prepare(ctx, testRef, j, ws)
+		plan, err := e.Prepare(ctx, ref, j, ws)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -497,8 +498,45 @@ func TestATaskThatAsksForADatabaseGetsOneOfItsOwnAndOnlyTheNamesItReads(t *testi
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if len(db.created) != 2 || len(db.dropped) != 2 || db.dropped[0] != "j_a1" {
+	// the database is named by the key, "source/id", not by the id alone
+	if len(db.created) != 2 || len(db.dropped) != 2 || db.created[0] != "air26/"+job("dbtask").ID || db.dropped[0] != db.created[0] {
 		t.Fatalf("created %v dropped %v: the database goes with the workspace", db.created, db.dropped)
+	}
+}
+
+// Two origins can send the same id: each job gets a database of its own (a Create is by key), and the clean-up of one drops its own.
+func TestTwoOriginsWithOneIDGetTwoDatabases(t *testing.T) {
+	db := &fakeDB{}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	j := job("dbtask")
+	var cleanups []func() error
+	for _, src := range []string{"air26", "mserv"} {
+		ref := ident.Ref{Source: src, ID: j.ID}
+		jj := j
+		jj.Origin = src // the job is named after the connection it came in on (#3386); its directory is made from that
+		ws, err := e.Materialize(ctx, ref, jj, claimID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Prepare(ctx, ref, jj, ws); err != nil {
+			t.Fatal(err)
+		}
+		cleanups = append(cleanups, ws.Cleanup)
+	}
+	db.mu.Lock()
+	created := append([]string(nil), db.created...)
+	db.mu.Unlock()
+	if len(created) != 2 || created[0] == created[1] || created[0] != "air26/"+j.ID || created[1] != "mserv/"+j.ID {
+		t.Fatalf("created %v: one id from two connections must be two databases", created)
+	}
+	if err := cleanups[1](); err != nil {
+		t.Fatal(err)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if len(db.dropped) != 1 || db.dropped[0] != "mserv/"+j.ID {
+		t.Fatalf("dropped %v: the clean-up of one job drops its own database only", db.dropped)
 	}
 }
 

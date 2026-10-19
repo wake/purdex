@@ -639,7 +639,7 @@ func TestSweepGetsEveryJobTheWorkerHolds(t *testing.T) {
 		t.Fatalf("sweep calls %v", sw.calls)
 	}
 	got := map[string]bool{sw.calls[0][0]: true, sw.calls[0][1]: true}
-	if !got["running"] || !got["quarantined"] {
+	if !got["mlab/running"] || !got["quarantined"] {
 		t.Fatalf("live %v: what runs and what is quarantined must both be kept", sw.calls[0])
 	}
 	r.mu.Lock()
@@ -989,7 +989,7 @@ func TestSweepClearsAQuarantinedJobOnceItsUnitIsGoneAndOtherSweepersSeeItAsHeldU
 	sw.mu.Lock()
 	first := sw.calls[0]
 	sw.mu.Unlock()
-	if len(first) != 1 || first[0] != "stuck" {
+	if len(first) != 1 || first[0] != "mlab/stuck" {
 		t.Fatalf("live %v: a quarantined job's leftovers (its database) must be kept", first)
 	}
 	if _, ok := q.tbl.Holder("mysql"); !ok {

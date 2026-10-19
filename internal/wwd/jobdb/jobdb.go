@@ -109,20 +109,37 @@ var (
 	cfgHostRe  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`) // a configured host: no wildcard either, and no longer than the routines accept (VARCHAR(64))
 )
 
-func digest(jobID string) string {
-	h := sha256.Sum256([]byte(jobID))
+func digest(s string) string {
+	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
 }
 
-// Name is the job's database name: opaque, stable for one job id, 128 bits of its hash, and always matched by dbNameRe.
-func (m *Manager) Name(jobID string) string { return "wwd_" + digest(jobID)[:32] }
+// A job is named by its key, "source/id" (worker/ident): a job id is only unique per origin, and one worker takes jobs from several, so
+// two jobs with one id must not share a database (the second Create would drop the first's, and either's clean-up the other's).
+
+// Name is the job's database name: opaque, stable for one key, 128 bits of its hash, and always matched by dbNameRe.
+func (m *Manager) Name(key string) string { return "wwd_" + digest(key)[:32] }
 
 // User is the job's MySQL user: 104 bits of the hash, 31 characters (MySQL allows 32).
-func (m *Manager) User(jobID string) string { return "wwdu_" + digest(jobID)[:26] }
+func (m *Manager) User(key string) string { return "wwdu_" + digest(key)[:26] }
 
-// Create makes the job's database and user. Whatever an earlier run of the same job id left is dropped first, so the job starts
+// legacyName and legacyUser are the names an earlier wwd gave, from the job id alone. A database made before the upgrade has one, and a
+// job that is still held (a quarantined one, whose command may still be running) still uses it: Sweep keeps both names of a live job.
+// Removed in the next release.
+func legacyName(key string) string { return "wwd_" + digest(idOf(key))[:32] }
+func legacyUser(key string) string { return "wwdu_" + digest(idOf(key))[:26] }
+
+// idOf is the id part of a key: what follows the last slash (an id holds none; an alias may). A string with no slash is its own id.
+func idOf(key string) string {
+	if i := strings.LastIndexByte(key, '/'); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
+// Create makes the job's database and user. Whatever an earlier run of the same key left is dropped first, so the job starts
 // from an empty database; if a later statement fails, what was made is dropped again.
-func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
+func (m *Manager) Create(ctx context.Context, key string) (Info, error) {
 	if m.err != nil {
 		return Info{}, m.err
 	}
@@ -132,14 +149,14 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 	defer m.unlock()
 	// the earlier run's leftovers must be gone before anything is made: wwd_create_db leaves an existing database as it is, so a
 	// clean-up that failed would give the new user a database that still holds the old data
-	if err := m.drop(ctx, jobID); err != nil {
-		return Info{}, fmt.Errorf("jobdb: clear what an earlier run of %s left: %w", jobID, err)
+	if err := m.drop(ctx, key); err != nil {
+		return Info{}, fmt.Errorf("jobdb: clear what an earlier run of %s left: %w", key, err)
 	}
 	pw := make([]byte, 24)
 	if _, err := rand.Read(pw); err != nil {
 		return Info{}, err
 	}
-	info := Info{Host: m.cfg.Host, Port: m.cfg.Port, Database: m.Name(jobID), User: m.User(jobID), Password: hex.EncodeToString(pw)}
+	info := Info{Host: m.cfg.Host, Port: m.cfg.Port, Database: m.Name(key), User: m.User(key), Password: hex.EncodeToString(pw)}
 	stmts := []string{call("wwd_create_db", info.Database)}
 	for _, h := range m.cfg.UserHosts {
 		stmts = append(stmts, call("wwd_create_user", info.User, info.Password, h, info.Database))
@@ -148,7 +165,7 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 		if _, err := m.ex.Run(ctx, s); err != nil {
 			// the caller's context may be the very reason for the failure: the clean-up must not inherit its cancel
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			_ = m.drop(cctx, jobID)
+			_ = m.drop(cctx, key)
 			cancel()
 			return Info{}, fmt.Errorf("jobdb: %s: %w", firstWords(s), err)
 		}
@@ -158,7 +175,7 @@ func (m *Manager) Create(ctx context.Context, jobID string) (Info, error) {
 
 // Drop removes the job's database and users, and ends the user's open connections first (DROP USER leaves them alone). It tries
 // every statement and returns the first error.
-func (m *Manager) Drop(ctx context.Context, jobID string) error {
+func (m *Manager) Drop(ctx context.Context, key string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -166,11 +183,11 @@ func (m *Manager) Drop(ctx context.Context, jobID string) error {
 		return err
 	}
 	defer m.unlock()
-	return m.drop(ctx, jobID)
+	return m.drop(ctx, key)
 }
 
-func (m *Manager) drop(ctx context.Context, jobID string) error {
-	return m.dropNames(ctx, m.Name(jobID), m.User(jobID))
+func (m *Manager) drop(ctx context.Context, key string) error {
+	return m.dropNames(ctx, m.Name(key), m.User(key))
 }
 
 func (m *Manager) dropNames(ctx context.Context, db, user string) error {
@@ -237,8 +254,9 @@ func call(routine string, args ...string) string {
 	return "CALL wwdctl." + routine + "(" + strings.Join(q, ",") + ")"
 }
 
-// Sweep removes the databases and users this package made for jobs that are not in live (a crash or a restart left them). Only
-// names of exactly our shape are touched: another database that happens to begin with wwd_ is not.
+// Sweep removes the databases and users this package made for jobs that are not in live, a list of keys (a crash or a restart left
+// them). A live job keeps both its names: the one from its key and the older one from its id alone (legacyName). Only names of exactly
+// our shape are touched: another database that happens to begin with wwd_ is not.
 func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, err error) {
 	if m.err != nil {
 		return nil, m.err
@@ -248,8 +266,9 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 	}
 	defer m.unlock()
 	keepDB, keepUser := map[string]bool{}, map[string]bool{}
-	for _, id := range live {
-		keepDB[m.Name(id)], keepUser[m.User(id)] = true, true
+	for _, key := range live {
+		keepDB[m.Name(key)], keepUser[m.User(key)] = true, true
+		keepDB[legacyName(key)], keepUser[legacyUser(key)] = true, true
 	}
 	dbOut, err := m.ex.Run(ctx, call("wwd_list_dbs"))
 	if err != nil {
