@@ -5,7 +5,7 @@
 // offline; without a pool view at all the fleet host is returned as it is.
 import type { FleetHostView } from '../fleet/store'
 import type { FleetFast } from '../fleet/types'
-import type { PoolHostView } from './host-view'
+import type { FallbackReason, PoolHostView } from './host-view'
 import type { HeadroomReasons, PoolFacts, PoolHost, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
 
 export interface PoolCellExtra {
@@ -24,6 +24,8 @@ export interface PoolCellExtra {
   psi: { some10: number; full10: number } | null
   /** Fallback: when the pool last read the host (ms). */
   since: number | null
+  /** Fallback: why the pool does not read it (wwd unreachable, or answering with old facts); null otherwise. */
+  reason: FallbackReason | null
 }
 
 export interface PoolCellModel {
@@ -56,7 +58,7 @@ function factsToFast(f: PoolFacts, load: number): FleetFast {
 
 export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, pool: PoolHost | null): PoolCellModel {
   if (!view) return { view: fleet, pool: null }
-  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null }
+  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null, reason: null }
   if (view.state === 'live') {
     const f = view.facts
     return {
@@ -65,10 +67,10 @@ export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, p
         state: 'live', zone: f.derived.zone, load: pool?.load ?? null,
         worker: { enabled: f.worker.enabled, slots: f.worker.slots, running: f.worker.running },
         headroom: f.derived.headroom, reasons: pool?.headroom_reasons ?? null, sessionsRoom: f.derived.sessions_room, owner: f.owner,
-        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, since: null,
+        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, since: null, reason: null,
       },
     }
   }
-  if (view.state === 'fallback') return { view: fleet, pool: { ...none, state: 'fallback', since: view.since } }
+  if (view.state === 'fallback') return { view: fleet, pool: { ...none, state: 'fallback', since: view.since, reason: view.reason } }
   return { view: { ...fleet, status: 'offline', fast: null, last_ok_at: view.lastOkAt }, pool: { ...none, state: 'offline', since: null } }
 }

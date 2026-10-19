@@ -7,6 +7,9 @@ import type { PoolFacts, PoolHost } from './types'
 /** Facts older than this are not a live reading. */
 export const LIVE_MS = 30_000
 
+/** Why the pool does not read a host that the fleet still does: wwd (or the link to it) does not answer, or it answers but its facts stopped. */
+export type FallbackReason = 'unreachable' | 'stale'
+
 export interface PoolHostViewInput {
   alias: string
   /** The host as the pool lists it, or null when the pool does not (wwd down, or it never listed this host). */
@@ -21,13 +24,15 @@ export interface PoolHostViewInput {
 
 export type PoolHostView =
   | { state: 'live'; alias: string; pool: PoolHost; facts: PoolFacts }
-  | { state: 'fallback'; alias: string; fleet: FleetHost; since: number | null }
+  | { state: 'fallback'; alias: string; fleet: FleetHost; since: number | null; reason: FallbackReason }
   | { state: 'offline'; alias: string; lastOkAt: number | null }
 
 export function poolHostView(input: PoolHostViewInput, now: number): PoolHostView {
   const { alias, pool, fleet, fleetStale, poolLastOk } = input
   if (pool?.reachable && pool.facts && now - pool.facts.at <= LIVE_MS) return { state: 'live', alias, pool, facts: pool.facts }
-  if (fleet && fleet.status === 'ok' && fleet.fast && !fleetStale) return { state: 'fallback', alias, fleet, since: poolLastOk }
+  // a peer that stopped answering keeps its last facts, so `reachable` decides before the age of the facts does
+  const reason: FallbackReason = pool?.reachable ? 'stale' : 'unreachable'
+  if (fleet && fleet.status === 'ok' && fleet.fast && !fleetStale) return { state: 'fallback', alias, fleet, since: poolLastOk, reason }
   const lastOk = [poolLastOk, fleet?.last_ok_at ?? null].filter((t): t is number => t !== null)
   return { state: 'offline', alias, lastOkAt: lastOk.length ? Math.max(...lastOk) : null }
 }

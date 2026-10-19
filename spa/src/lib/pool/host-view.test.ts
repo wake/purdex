@@ -61,6 +61,24 @@ describe('poolHostView', () => {
     expect(w).toMatchObject({ state: 'offline', lastOkAt: 12000 })
   })
 
+  // 8a-3b: the fallback says which of the two it is, since they are looked at in different places (wwd or the link to it / wwd's sampling)
+  it('fallback reason: wwd cannot be reached, or the pool does not list the host → unreachable', () => {
+    const a = poolHostView(input({ pool: poolHost({ reachable: false }) }), NOW)
+    const b = poolHostView(input({ pool: null }), NOW)
+    expect(a).toMatchObject({ state: 'fallback', reason: 'unreachable' })
+    expect(b).toMatchObject({ state: 'fallback', reason: 'unreachable' })
+  })
+
+  it('fallback reason: wwd answers but its facts are older than 30 s, or it has none yet → stale', () => {
+    expect(poolHostView(input(), facts.at + LIVE_MS + 1)).toMatchObject({ state: 'fallback', reason: 'stale' })
+    expect(poolHostView(input({ pool: poolHost({ facts: null }) }), NOW)).toMatchObject({ state: 'fallback', reason: 'stale' })
+  })
+
+  it('fallback reason: unreachable wins over old facts (a peer that stopped answering keeps its last facts)', () => {
+    const v = poolHostView(input({ pool: poolHost({ reachable: false }) }), facts.at + LIVE_MS + 1)
+    expect(v).toMatchObject({ state: 'fallback', reason: 'unreachable' })
+  })
+
   it('offline with no history at all has no last-ok', () => {
     expect(poolHostView(input({ pool: null, fleet: null }), NOW)).toEqual({ state: 'offline', alias: 'mlab', lastOkAt: null })
   })
