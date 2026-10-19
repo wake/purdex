@@ -156,7 +156,7 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
       </span>
       {indicator === 'ring' ? (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.id}`} data-zone={zone}>
-          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[pool?.zone ?? f.zone] : undefined} noShape />
+          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[pool?.zone ?? f.zone] : undefined} muted={!!f && pool?.zone === 'unknown'} noShape />
         </span>
       ) : (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.id}`} data-zone={zone}>

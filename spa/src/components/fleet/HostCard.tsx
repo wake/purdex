@@ -64,10 +64,13 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
   const unknown = t('pool.card.unknown')
   const w = pool.worker
   const wordsOf = (n: number, list: string[] | undefined) => (n === 0 && list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : null)
-  // Each class at 0 shows its own reasons; the same words for both are shown once.
+  // Each class at 0 shows its own reasons, labelled with the class; the same words for both are shown once, labelled for both.
   const heavyWords = pool.headroom ? wordsOf(pool.headroom.heavy, pool.reasons?.heavy) : null
   const lightWords = pool.headroom ? wordsOf(pool.headroom.light, pool.reasons?.light) : null
-  const reasonLines = [heavyWords, lightWords === heavyWords ? null : lightWords].filter((w): w is string => w !== null)
+  const line = (cls: 'heavy' | 'light' | 'both', words: string) => t('pool.card.reason_line', { cls: t(`pool.card.class.${cls}`), reason: words })
+  const reasonLines = heavyWords !== null && heavyWords === lightWords
+    ? [line('both', heavyWords)]
+    : [heavyWords !== null ? line('heavy', heavyWords) : null, lightWords !== null ? line('light', lightWords) : null].filter((w): w is string => w !== null)
   return (
     <div className="mt-1.5 pt-1.5 border-t border-border-subtle">
       <PoolRow id="worker" label={t('pool.card.worker')}>
