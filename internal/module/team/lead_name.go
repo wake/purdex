@@ -75,11 +75,6 @@ func (m *Module) approveLead(a team.Approval, c Close) (after team.Approval, won
 		unlock := m.approvalLocks.lock(a.ID)
 		defer unlock()
 		if code != "" {
-			ns := m.nameService()
-			if ns == nil {
-				err = errLeadNameNoService
-				return
-			}
 			// the state read before the lock may be stale: a closed request is nobody's to rename for
 			cur, ok, gerr := m.store.Get(a.ID)
 			if gerr != nil {
@@ -94,21 +89,10 @@ func (m *Module) approveLead(a team.Approval, c Close) (after team.Approval, won
 				after = cur
 				return
 			}
-			ctx, cancel := context.WithTimeout(m.stopCtx, leadNameTimeout)
-			old, rerr := ns.RenameForLead(ctx, a.Origin.SessionID, code)
-			cancel()
-			switch {
-			case errors.Is(rerr, ipeers.ErrNameTaken):
-				err = errLeadNameTaken
-				return
-			case errors.Is(rerr, ipeers.ErrNameUnknown):
-				err = errLeadNameUnknown
-				return
-			case rerr != nil:
-				err = fmt.Errorf("rename for lead: %w", rerr)
+			if oldName, err = m.renameForLead(a.Origin.SessionID, code); err != nil {
 				return
 			}
-			oldName, renamed = old, true
+			renamed = true
 		}
 		t := leadTeamOf(a, *c.Grant, c.DecidedAt)
 		after, won, err = m.closeWith(a.ID, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(a.ID, c, t) })
@@ -119,17 +103,44 @@ func (m *Module) approveLead(a team.Approval, c Close) (after team.Approval, won
 	if err != nil || !won {
 		return after, won, err
 	}
+	m.afterLeadApproved(a.ID, a.Origin.SessionID, oldName, code, renamed)
+	return after, won, nil
+}
+
+// renameForLead is the rename step of an approval that names its lead: the name service's answer, mapped to the errors the
+// handlers answer (errLeadNameTaken, errLeadNameUnknown, errLeadNameNoService). The caller holds the approval's lock.
+func (m *Module) renameForLead(sessionID, code string) (oldName string, err error) {
+	ns := m.nameService()
+	if ns == nil {
+		return "", errLeadNameNoService
+	}
+	ctx, cancel := context.WithTimeout(m.stopCtx, leadNameTimeout)
+	defer cancel()
+	old, rerr := ns.RenameForLead(ctx, sessionID, code)
+	switch {
+	case errors.Is(rerr, ipeers.ErrNameTaken):
+		return "", errLeadNameTaken
+	case errors.Is(rerr, ipeers.ErrNameUnknown):
+		return "", errLeadNameUnknown
+	case rerr != nil:
+		return "", fmt.Errorf("rename for lead: %w", rerr)
+	}
+	return old, nil
+}
+
+// afterLeadApproved is what follows a lead approval that stands: the lead-history row (a failure is only logged) and, when the
+// approval renamed the session, the notice of its new address. Run it without the approval's lock.
+func (m *Module) afterLeadApproved(approvalID, sessionID, oldName, code string, renamed bool) {
 	if ns := m.nameService(); ns != nil {
 		ctx, cancel := context.WithTimeout(m.stopCtx, leadNameTimeout)
-		if rerr := ns.RecordLead(ctx, a.Origin.SessionID); rerr != nil {
-			m.logf("[team] approval %s: record lead %s: %v", a.ID, a.Origin.SessionID, rerr)
+		if rerr := ns.RecordLead(ctx, sessionID); rerr != nil {
+			m.logf("[team] approval %s: record lead %s: %v", approvalID, sessionID, rerr)
 		}
 		cancel()
 	}
 	if renamed {
-		m.noticeLeadRenamed(a.Origin.SessionID, oldName, code)
+		m.noticeLeadRenamed(sessionID, oldName, code)
 	}
-	return after, won, nil
 }
 
 // undoLeadRename gives the old name back. Nothing to undo is a normal answer, and a refused or failed undo changes nothing about
@@ -156,22 +167,25 @@ func (m *Module) noticeLeadRenamed(sessionID, oldName, code string) {
 	if !ok || newName == oldName || m.selfNotice == nil {
 		return
 	}
-	inbox, ok, err := m.origins.InboxOf(sessionID)
-	if err != nil || !ok {
-		m.logf("[team] lead rename notice to %s: no live inbox (%v)", sessionID, err)
-		return
-	}
-	alias, _ := m.selfHost()
-	ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
-	defer cancel()
-	req := ipeers.SendRequest{
-		To:          alias + "/" + ipeers.RefID(sessionID),
-		Text:        fmt.Sprintf(leadRenameNoticeFmt, alias+"/"+newName, alias+"/"+oldName),
-		OriginInbox: inbox,
-	}
-	if _, err := m.selfNotice.SendSelfNotice(ctx, req); err != nil {
-		m.logf("[team] lead rename notice to %s: %v", sessionID, err)
-	}
+	// The send runs on its own goroutine: the callers of the person paths hold createMu, which is never held across a send.
+	go func() {
+		inbox, ok, err := m.origins.InboxOf(sessionID)
+		if err != nil || !ok {
+			m.logf("[team] lead rename notice to %s: no live inbox (%v)", sessionID, err)
+			return
+		}
+		alias, _ := m.selfHost()
+		ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
+		defer cancel()
+		req := ipeers.SendRequest{
+			To:          alias + "/" + ipeers.RefID(sessionID),
+			Text:        fmt.Sprintf(leadRenameNoticeFmt, alias+"/"+newName, alias+"/"+oldName),
+			OriginInbox: inbox,
+		}
+		if _, err := m.selfNotice.SendSelfNotice(ctx, req); err != nil {
+			m.logf("[team] lead rename notice to %s: %v", sessionID, err)
+		}
+	}()
 }
 
 // leadNewName is the name RenameForLead gives the session: the old name without its suffix (a pool name, or the two ref
