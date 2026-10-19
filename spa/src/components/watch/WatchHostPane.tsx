@@ -33,6 +33,7 @@ import { ResidentsTable } from './ResidentsTable'
 import { MetricRow, TimeAxis } from './MetricChart'
 import { QueueSection } from './QueueSection'
 import { WatchSettings } from './WatchSettings'
+import { HostJobs } from './jobs/HostJobs'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
@@ -180,6 +181,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} rev={seriesRev} />
         </Section>
         {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
+        {view.kind === 'daemon' && poolHost && <HostJobs host={poolHost} />}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={live ? topProcs(live.procs).cpu : (view.slow?.top_cpu ?? [])} unit="cpu" offline={offline} />
