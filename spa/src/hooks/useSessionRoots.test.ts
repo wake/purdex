@@ -11,6 +11,7 @@ vi.mock('../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: string) =
 
 import { useSessionRoots, ROOT_REREAD_DEBOUNCE_MS } from './useSessionRoots'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
+import { useHostStore } from '../stores/useHostStore'
 import type { SessionQuota } from '../lib/team/types'
 
 const q = (session_id: string, root_session_id: string): SessionQuota => ({ session_id, root_session_id, title: '', address: `mlab/${session_id}`, is_lead: false, self_left: 0, member_pool_left: 0, rev: 1 })
@@ -106,6 +107,19 @@ describe('useSessionRoots', () => {
     expect(readFirstPage).not.toHaveBeenCalled()
     act(() => { useRelayQuotaStore.getState().forgetHost('h1') }) // what a disconnect/reconnect does: read gone, epoch moved
     expect(readFirstPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('a daemon mismatch that shows up while a debounced read is pending cancels it', () => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '1', port: 1, token: 't', daemonId: 'D1' } }, hostOrder: ['h1'], runtime: {} } as never)
+    setRead('h1', [q('S1', 'ROOT')])
+    const { rerender } = renderHook(({ wants }) => useSessionRoots(true, wants), { initialProps: { wants: [want('h1', 'S1')] } })
+    rerender({ wants: [want('h1', 'S1'), want('h1', 'NEW')] })
+    act(() => {
+      supported.delete('h1') // what the loader's gate answers once the host's endpoint answers as another daemon
+      useHostStore.setState({ runtime: { h1: { status: 'connected', daemonIdMismatch: { stored: 'D1', observed: 'D2', endpoint: '1:1' } } } } as never)
+    })
+    act(() => { vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS * 3) })
+    expect(readFirstPage).not.toHaveBeenCalled()
   })
 
   it('closing the view cancels a pending debounced read', () => {

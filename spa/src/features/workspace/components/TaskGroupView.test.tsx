@@ -185,6 +185,15 @@ describe('the task-group view', () => {
     expect(readFirstPage).toHaveBeenCalledWith('h1')
   })
 
+  it('reads the groups again once a daemon mismatch on a connected host is gone', () => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0, daemonId: 'D1' } } } as never)
+    mount()
+    act(() => { useHostStore.setState({ runtime: { h1: { status: 'connected', daemonIdMismatch: { stored: 'D1', observed: 'D2', endpoint: '1:1' } } } } as never) })
+    loadIfSupported.mockClear()
+    act(() => { useHostStore.setState({ runtime: { h1: { status: 'connected' } } } as never) })
+    expect(loadIfSupported).toHaveBeenCalledWith('h1')
+  })
+
   it('shows an empty line when there is no session at all', () => {
     useTabStore.setState({ tabs: {} } as never)
     useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: [], activeTabId: null, moduleConfig: {} }] } as never)

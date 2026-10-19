@@ -9,7 +9,7 @@
 import { useEffect, useMemo } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useHostStore } from '../../../stores/useHostStore'
+import { daemonMismatchKey, useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
 import { useWorkspaceStore } from '../store'
@@ -41,6 +41,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
+  const mismatched = useHostStore(daemonMismatchKey)
   const nex = useNexHostStore((s) => s.byHost)
   const groupsByHost = useTaskGroupsStore((s) => s.byHost)
   const teams = useTeamViews()
@@ -71,7 +72,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       if (taskGroupsSupported(hostId)) void loadTaskGroupsIfSupported(hostId)
       else queueMicrotask(() => { void useNexHostStore.getState().ensure(hostId) })
     }
-  }, [connectedKey, capsKey])
+  }, [connectedKey, capsKey, mismatched])
 
   const wanted = useMemo<WantedSession[]>(
     () => sessionTabs.filter((s): s is SessionTab & { agentSessionId: string } => s.agentSessionId !== null).map((s) => ({ hostId: s.hostId, agentSessionId: s.agentSessionId })),
@@ -89,8 +90,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       out[hostId] = { groups: entry.groups, unsafe }
     }
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `nex` and `runtime` (a daemon mismatch) move the capability gate
-  }, [groupsByHost, nex, runtime])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `nex` and `mismatched` (a daemon mismatch) move the capability gate
+  }, [groupsByHost, nex, mismatched])
 
   const view = useMemo<GroupSection[]>(
     () => buildGroupView({ tabs: sessionTabs, teams, manual, rootOf: roots.rootOf, hostOrder }),

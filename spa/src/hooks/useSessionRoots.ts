@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
 import { readFirstPage } from '../lib/team/unattended-reader'
 import { taskGroupsSupported } from '../lib/task-groups/loader'
+import { daemonMismatchKey, useHostStore } from '../stores/useHostStore'
 
 export const ROOT_REREAD_DEBOUNCE_MS = 800
 
@@ -25,6 +26,7 @@ export interface SessionRoots {
 
 export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession[]): SessionRoots {
   const reads = useRelayQuotaStore((s) => s.reads)
+  const mismatched = useHostStore(daemonMismatchKey) // `taskGroupsSupported` answers false for these: a change re-derives what to read
 
   const index = useMemo(() => {
     const byHost = new Map<string, Map<string, string>>()
@@ -43,7 +45,7 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
     const hosts = new Set<string>()
     for (const w of wanted) if (taskGroupsSupported(w.hostId) && reads[w.hostId] === undefined) hosts.add(w.hostId)
     return [...hosts].sort().join('\n')
-  }, [enabled, wanted, reads])
+  }, [enabled, wanted, reads, mismatched])
   useEffect(() => {
     if (unread === '') return
     for (const hostId of unread.split('\n')) {
@@ -62,7 +64,7 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
       keys.push(`${w.hostId}\n${w.agentSessionId}`)
     }
     return keys.sort().join('\n\n')
-  }, [enabled, wanted, index])
+  }, [enabled, wanted, index, mismatched])
   useEffect(() => {
     if (unknown === '') return
     const fresh = unknown.split('\n\n').map((key) => key.split('\n') as [string, string]).filter(([hostId, id]) => !asked.current.get(hostId)?.has(id))
