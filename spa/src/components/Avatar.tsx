@@ -3,6 +3,9 @@
 import { useState } from 'react'
 
 /** 16–44 are the places an avatar sits beside text (22 the lead name card's pills); 32 is the persona list row and 96 the persona form's preview. */
+/** The disc behind a picture: the persona drawings are transparent, so without it the circle (and the face on a dark theme) is lost. The NA-0 design's `.av`. */
+export const AVATAR_BACKING = '#dfe4ea'
+
 export type AvatarSize = 14 | 16 | 18 | 22 | 24 | 32 | 44 | 96
 
 interface Props {
@@ -29,7 +32,7 @@ export function Avatar({ size, code, name, src, fallbackColor, className = '', d
         src={src}
         draggable={false}
         onError={() => setFailed(src)}
-        style={box}
+        style={{ ...box, backgroundColor: AVATAR_BACKING }}
         className={`shrink-0 rounded-full object-cover ring-1 ring-border-subtle ${className}`}
       />
     )
