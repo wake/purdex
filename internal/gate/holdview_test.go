@@ -76,11 +76,28 @@ func TestHold_LightWaitsOnlyForAHoldThatListsLight(t *testing.T) {
 	assert.Equal(t, "hold:hold-l", w.Reason)
 }
 
-func TestHold_AnOrdinaryExceptionIsNotAHoldForTheGate(t *testing.T) {
+// A plain `pdx wwd hold` (no allow, no flags) is the same on the wire as an ordinary exception, and both are what the headroom is decided by
+// (spec §3, §13.4): heavy waits for it, light only when it lists light.
+func TestHold_APlainHoldOrExceptionMakesHeavyWait(t *testing.T) {
 	g, f := holdGate(t)
-	f.set(wire.Exception{Name: "app-dev-package", Holds: []wire.Hold{wire.HoldHeavy, wire.HoldLight}})
-	assert.False(t, g.WouldWait(ClassHeavy).Wait)
+	f.set(wire.Exception{Name: "hold-plain", Holds: []wire.Hold{wire.HoldHeavy}}) // Allow nil, no flags
+	w := g.WouldWait(ClassHeavy)
+	assert.True(t, w.Wait)
+	assert.Equal(t, "hold:hold-plain", w.Reason)
+}
+
+func TestHold_APlainHoldThatListsOnlyHeavyLeavesLight(t *testing.T) {
+	g, f := holdGate(t)
+	f.set(wire.Exception{Name: "hold-plain", Holds: []wire.Hold{wire.HoldHeavy}})
 	assert.False(t, g.WouldWait(ClassLight).Wait)
+}
+
+func TestHold_APlainHoldThatListsLightMakesLightWait(t *testing.T) {
+	g, f := holdGate(t)
+	f.set(wire.Exception{Name: "hold-plain", Holds: []wire.Hold{wire.HoldHeavy, wire.HoldLight}})
+	w := g.WouldWait(ClassLight)
+	assert.True(t, w.Wait)
+	assert.Equal(t, "hold:hold-plain", w.Reason)
 }
 
 func TestHold_ReleaseTakesTheLightSlotsDownToOne(t *testing.T) {

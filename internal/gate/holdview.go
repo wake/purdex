@@ -66,11 +66,10 @@ func (v HoldView) Release() bool {
 func holdViewOf(list []wire.Exception) HoldView {
 	v := HoldView{}
 	for _, e := range list {
-		release := slices.Contains(e.Flags, wire.HoldFlagRelease)
-		if e.Allow == nil && !release { // an ordinary exception is not a hold; it holds through the headroom
-			continue
-		}
-		v.Holds = append(v.Holds, HoldInfo{Name: e.Name, Light: slices.Contains(e.Holds, wire.HoldLight), Release: release})
+		// Every exception counts: "a hold is an Exception" (spec §13.4), and a plain `pdx wwd hold` is the same on the wire as an ordinary
+		// exception (no allow, no flags). The gate waits as the headroom is decided (spec §3): any exception takes the heavy room to 0, one
+		// that lists light takes the light room too.
+		v.Holds = append(v.Holds, HoldInfo{Name: e.Name, Light: slices.Contains(e.Holds, wire.HoldLight), Release: slices.Contains(e.Flags, wire.HoldFlagRelease)})
 	}
 	return v
 }
