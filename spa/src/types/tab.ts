@@ -152,6 +152,7 @@ export type PaneContent =
   // global, and deliberately NOT named `hostId`, so no generic reader of a pane's `hostId` takes it for an App host.
   | { kind: 'watch-guardian' }
   | { kind: 'watch-events' }
+  | { kind: 'watch-jobs' }
   | { kind: 'watch-host'; fleetHostId: string }
   | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode; fromTitle?: string }
 

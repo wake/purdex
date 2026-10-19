@@ -1,0 +1,98 @@
+// spa/src/components/watch/jobs/JobsPane.tsx — the 工作 tab of the watcher area (plan "WWD-7 design", Jobs tab): 「佇列與執行中」 (lanes per host, then the queue) and 「歷史」. It only reads: the jobs are the jobs
+// store's (the driver keeps it, `watchJobs` makes it poll the origins no daemon announces while this is mounted), the hosts are the pool's.
+//
+// Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the mode lives in `lib/pool/jobs-view-memory`, not in component state. The jobs themselves are in the store, outside the pane.
+import { useEffect, useMemo, useState } from 'react'
+import type { PaneRendererProps } from '../../../lib/module-registry'
+import { useI18nStore } from '../../../stores/useI18nStore'
+import { SegmentControl } from '../../settings/SegmentControl'
+import { useJobsStore } from '../../../lib/pool/jobs-store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { useRunPool } from '../../../lib/pool/use-cell-models'
+import { watchJobs } from '../../../lib/pool/jobs-driver-live'
+import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
+import { historyOf, resultText, resultWord } from '../../../lib/pool/jobs-view'
+import { errorTextKey } from '../../../lib/pool/words'
+import { readJobsMode, writeJobsMode, type JobsMode } from '../../../lib/pool/jobs-view-memory'
+import type { PoolJob } from '../../../lib/pool/jobs-types'
+import { JobLanes, jobLine } from './JobLanes'
+import { JobQueue } from './JobQueue'
+
+/** One interval for the elapsed and waited times, cleared on unmount. */
+function useNowEverySecond(): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return now
+}
+
+const KNOWN_STATES = ['succeeded', 'failed', 'cancelled', 'superseded', 'expired']
+
+/** 歷史, plainly: the newest ended jobs. 7b1-2b replaces it with the table, its filters and the view memory of the selection and the scroll. */
+function HistoryList({ jobs }: { jobs: PoolJob[] }) {
+  const t = useI18nStore((s) => s.t)
+  const rows = useMemo(() => historyOf(jobs, {}).slice(0, 200), [jobs])
+  if (rows.length === 0) return <p data-testid="job-history-none" className="text-xs text-text-muted">{t('watch.jobs.history.none')}</p>
+  return (
+    <ul data-testid="job-history" className="flex flex-col">
+      {rows.map((j) => (
+        <li key={`${j.origin}/${j.id}`} data-testid="job-history-row" data-state={j.state} className="flex items-center gap-2 border-b border-border-subtle/50 py-1.5 text-xs">
+          <span className="w-16 shrink-0 text-text-secondary">{KNOWN_STATES.includes(j.state) ? t(`watch.jobs.state.${j.state}`) : j.state}</span>
+          <span className="flex-1 min-w-0 truncate font-mono text-text-primary" title={jobLine(j)}>{jobLine(j)}</span>
+          <span className="shrink-0 text-text-muted">{resultText(resultWord(j), t)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+export function JobsPane(_props: PaneRendererProps) {
+  const t = useI18nStore((s) => s.t)
+  useRunPool()
+  useEffect(() => watchJobs(), [])
+  const now = useNowEverySecond()
+  const hosts = usePoolStore((s) => s.hosts)
+  const oldDaemon = usePoolStore((s) => s.oldDaemon)
+  const byOrigin = useJobsStore((s) => s.byOrigin)
+  const errors = useJobsStore((s) => s.errors)
+  // The tab outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
+  const [mode, setModeState] = useState<JobsMode>(() => readJobsMode())
+  const setMode = (m: JobsMode) => { writeJobsMode(m); setModeState(m) }
+
+  const jobs = useMemo(() => Object.values(byOrigin).flatMap((o) => Object.values(o.jobs)), [byOrigin])
+  const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
+  const entries = useMemo(() => queueEntries(jobs, now, hosts), [jobs, now, hosts])
+  const failed = Object.entries(errors).flatMap(([origin, e]) => {
+    const key = e ? errorTextKey(e.code) : null
+    return key ? [{ origin, text: t(key) }] : []
+  })
+
+  return (
+    <div data-testid="jobs-pane" className="h-full overflow-y-auto p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-3 text-xs">
+        <span role="group" aria-label={t('watch.jobs.mode_label')} data-testid="jobs-mode">
+          <SegmentControl
+            options={[{ value: 'live', label: t('watch.jobs.mode.live') }, { value: 'history', label: t('watch.jobs.mode.history') }]}
+            value={mode} onChange={setMode}
+          />
+        </span>
+        {mode === 'live' && <span data-testid="jobs-count" className="tabular-nums text-text-secondary">{t('watch.jobs.queue.count', { n: entries.length })}</span>}
+      </div>
+      {failed.map((f) => <p key={f.origin} data-testid="jobs-error" className="text-xs text-status-warning-text">{f.origin}：{f.text}</p>)}
+      {oldDaemon && jobs.length === 0 && <p data-testid="jobs-no-pool" className="text-xs text-text-muted">{t('watch.jobs.no_pool')}</p>}
+      {mode === 'live'
+        ? (
+          <>
+            <JobLanes lanes={lanes} now={now} />
+            <div>
+              <h3 className="mb-1.5 text-xs font-medium text-text-secondary">{t('watch.jobs.queue.title')}</h3>
+              <JobQueue entries={entries} now={now} />
+            </div>
+          </>
+        )
+        : <HistoryList jobs={jobs} />}
+    </div>
+  )
+}
