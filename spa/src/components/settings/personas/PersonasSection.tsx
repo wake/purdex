@@ -64,7 +64,7 @@ export function PersonasSection() {
   const [issues, setIssues] = useState<PersonaIssue[]>([])
   const [pickerEpoch, setPickerEpoch] = useState(0)
   // The first persona on a source that has none renames every live conversation; the user is asked once, here.
-  const [confirm, setConfirm] = useState<{ hostId: string } | null>(null)
+  const [confirm, setConfirm] = useState<{ hostId: string; personas: Persona[] } | null>(null)
   // The note and the error of the last save live outside the component with the lock: a save that ends while this page
   // is away reports to whichever instance is mounted when it does.
   const { note, error } = useSyncExternalStore(subscribeSave, getOutcome)
@@ -182,7 +182,7 @@ export function PersonasSection() {
     // change under a save that is waiting.
     const target = editing.base?.hostId ?? fallbackHostId ?? ''
     if (!confirmed && items.length === 0 && next.length > 0 && target !== '') {
-      setConfirm({ hostId: target })
+      setConfirm({ hostId: target, personas: next })
       return
     }
     setConfirm(null)
@@ -238,7 +238,7 @@ export function PersonasSection() {
           )}
           {confirm && editing && !readOnly && (
             <div className="mt-2">
-              <FirstSaveConfirm hostId={confirm.hostId} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
+              <FirstSaveConfirm hostId={confirm.hostId} personas={confirm.personas} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
             </div>
           )}
           {note && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-note">{note}</p>}
