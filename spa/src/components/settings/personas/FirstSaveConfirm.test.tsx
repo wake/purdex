@@ -70,4 +70,13 @@ describe('FirstSaveConfirm', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 350)) })
     expect(fetchRenamePreview).toHaveBeenCalledTimes(1)
   })
+
+  it('asks again when a persona is retired in the form, since a retired code cannot be picked', async () => {
+    vi.mocked(fetchRenamePreview).mockResolvedValueOnce(4).mockResolvedValueOnce(1)
+    const view = mount()
+    await waitFor(() => expect(text()).toContain('4'))
+    view.rerender(<FirstSaveConfirm hostId="h1" personas={[makePersona('hiro', { retired: true })]} onConfirm={() => {}} onCancel={() => {}} />)
+    await waitFor(() => expect(text()).toMatch(/\b1 (of|個)/)) // not toContain('1'): the host label "h1" has one
+    expect(vi.mocked(fetchRenamePreview).mock.calls[1][1][0].retired).toBe(true)
+  })
 })
