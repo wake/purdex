@@ -1,5 +1,6 @@
 // spa/src/components/watch/jobs/JobQueue.tsx — the queue of 「佇列與執行中」 in *display order* (not a promise of the next claim: each worker scores for itself). A card says the class, `repo task args`, where it was sent from, by which session,
 // how long it has waited (yellow past 2 minutes), its labels, and — in red — when no host with its worker on can take it. A held job is dimmed and last.
+import type { ReactNode } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { jobLine, type QueueEntry } from '../../../lib/pool/jobs-lanes'
@@ -7,7 +8,14 @@ import { jobKey } from '../../../lib/pool/jobs-view-memory'
 
 const KNOWN_CLASSES = ['release', 'merge', 'dev']
 
-function QueueCard({ entry, now, selected, onSelect }: { entry: QueueEntry; now: number; selected: boolean; onSelect: (key: string | null) => void }) {
+/** The card's body: a button that selects the job where a press means something, else a plain block. */
+function Press({ selected, onSelect, jobId, children }: { selected: boolean; onSelect?: (key: string | null) => void; jobId: string; children: ReactNode }) {
+  return onSelect
+    ? <button type="button" aria-pressed={selected} onClick={() => onSelect(selected ? null : jobId)} className="block w-full cursor-pointer px-2.5 py-1.5 text-left">{children}</button>
+    : <div className="px-2.5 py-1.5">{children}</div>
+}
+
+function QueueCard({ entry, now, selected, onSelect }: { entry: QueueEntry; now: number; selected: boolean; onSelect?: (key: string | null) => void }) {
   const t = useI18nStore((s) => s.t)
   const { job, held, noHost, long } = entry
   const cls = KNOWN_CLASSES.includes(job.class) ? t(`watch.jobs.class.${job.class}`) : job.class
@@ -18,7 +26,7 @@ function QueueCard({ entry, now, selected, onSelect }: { entry: QueueEntry; now:
       data-testid="job-queued" data-job-id={job.id} data-held={held || undefined} title={jobLine(job)}
       className={`rounded-md border bg-surface-secondary text-xs ${selected ? 'border-border-active' : 'border-border-default'} ${held ? 'opacity-50' : ''}`}
     >
-      <button type="button" aria-pressed={selected} onClick={() => onSelect(selected ? null : jobKey(job.origin, job.id))} className="block w-full cursor-pointer px-2.5 py-1.5 text-left">
+      <Press selected={selected} onSelect={onSelect} jobId={jobKey(job.origin, job.id)}>
       <div className="flex items-center gap-2 min-w-0">
         <span data-testid="job-class" className="shrink-0 rounded border border-current px-1.5 text-[10px] leading-4 text-text-secondary">{cls}</span>
         {tag && <span data-testid="job-tag" className="shrink-0 rounded border border-current px-1.5 text-[10px] leading-4 text-text-muted">{t(tag)}</span>}
@@ -34,12 +42,13 @@ function QueueCard({ entry, now, selected, onSelect }: { entry: QueueEntry; now:
         {job.labels.map((l) => <span key={l} className="rounded border border-border-default px-1">{l}</span>)}
       </div>
       {labels && <div data-testid="job-no-host" className="mt-0.5 text-[11px] text-status-error-text">{labels}</div>}
-      </button>
+      </Press>
     </li>
   )
 }
 
-export function JobQueue({ entries, now, selected, onSelect }: { entries: QueueEntry[]; now: number; selected: string | null; onSelect: (key: string | null) => void }) {
+/** `selected` and `onSelect` are the jobs tab's (a card can be pressed to open the job); without them (the host tab) a card is only shown. */
+export function JobQueue({ entries, now, selected = null, onSelect }: { entries: QueueEntry[]; now: number; selected?: string | null; onSelect?: (key: string | null) => void }) {
   const t = useI18nStore((s) => s.t)
   if (entries.length === 0) return <p data-testid="job-queue-none" className="text-xs text-text-muted">{t('watch.jobs.queue.none')}</p>
   return (

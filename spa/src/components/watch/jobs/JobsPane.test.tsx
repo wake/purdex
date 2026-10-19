@@ -8,6 +8,9 @@ vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(() => new Promise
 vi.mock('../../../lib/pool/use-cell-models', () => ({ useRunPool: vi.fn() }))
 
 import { JobsPane } from './JobsPane'
+import { JobLanes } from './JobLanes'
+import { JobQueue } from './JobQueue'
+import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { useJobsStore } from '../../../lib/pool/jobs-store'
@@ -271,5 +274,15 @@ describe('the detail beside the list', () => {
     mount()
     expect(screen.queryByTestId('job-detail')).toBeNull()
     expect(screen.queryByTestId('jobs-error')).toBeNull()
+  })
+})
+
+describe('the cards where nothing can be selected (the host tab)', () => {
+  it('without a selection to make, a queue card and a lane card are shown but are not buttons', () => {
+    const running = job('r1', { state: 'running', claim: claim('mlab') })
+    render(<><JobLanes lanes={laneModels([host('mlab')], [running])} now={NOW} /><JobQueue entries={queueEntries([job('q1')], NOW, [host('mlab')])} now={NOW} /></>)
+    expect(screen.getByTestId('job-queued')).toBeInTheDocument()
+    expect(screen.getByTestId('job-running')).toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 })

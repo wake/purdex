@@ -8,29 +8,33 @@ import { jobLine, type LaneModel } from '../../../lib/pool/jobs-lanes'
 import { jobKey } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 
-const CARD = 'shrink-0 flex items-center gap-1.5 h-7 w-[200px] px-2 rounded-md text-xs font-mono cursor-pointer text-left'
-type Pick = { selected: string | null; onSelect: (key: string | null) => void }
+const CARD = 'shrink-0 flex items-center gap-1.5 h-7 w-[200px] px-2 rounded-md text-xs font-mono text-left'
+/** Where the cards can be pressed (the jobs tab): the selected job and what a press does. Without it (the host tab) a card is only shown. */
+type Pick = { selected?: string | null; onSelect?: (key: string | null) => void }
 
 function JobCard({ job, now, selected, onSelect }: { job: PoolJob; now: number } & Pick) {
   const t = useI18nStore((s) => s.t)
   const preparing = job.state === 'claimed'
   const key = jobKey(job.origin, job.id)
   const on = selected === key
-  return (
-    <button
-      type="button" aria-pressed={on} onClick={() => onSelect(on ? null : key)}
-      data-testid={preparing ? 'job-preparing' : 'job-running'} data-job-id={job.id} title={jobLine(job)}
-      className={`${preparing
-        ? `${CARD} border border-dashed border-status-success-text bg-transparent`
-        : `${CARD} border border-status-success-text bg-status-success-text/12`} ${on ? 'ring-1 ring-border-active' : ''}`}
-    >
+  const common = {
+    'data-testid': preparing ? 'job-preparing' : 'job-running', 'data-job-id': job.id, title: jobLine(job),
+    className: `${preparing
+      ? `${CARD} border border-dashed border-status-success-text bg-transparent`
+      : `${CARD} border border-status-success-text bg-status-success-text/12`} ${onSelect ? 'cursor-pointer' : 'cursor-default'} ${on ? 'ring-1 ring-border-active' : ''}`,
+  }
+  const body = (
+    <>
       {!preparing && <span data-testid="job-dot" aria-hidden="true" className="shrink-0 w-1.5 h-1.5 rounded-full bg-status-success-text animate-breathe motion-reduce:animate-none" />}
       <span className="flex-1 min-w-0 truncate text-text-primary">{jobLine(job)}</span>
       {job.local && <span data-testid="job-fast-lane" className="shrink-0 font-sans text-[10px] text-text-muted">{t('watch.jobs.fast_lane')}</span>}
       {preparing && <span className="shrink-0 font-sans text-[10px] text-text-secondary">{t('watch.jobs.preparing')}</span>}
       <span className="shrink-0 tabular-nums text-text-secondary">{mss(job.claim?.since ?? null, now)}</span>
-    </button>
+    </>
   )
+  return onSelect
+    ? <button type="button" aria-pressed={on} onClick={() => onSelect(on ? null : key)} {...common}>{body}</button>
+    : <div {...common}>{body}</div>
 }
 
 function Lane({ lane, now, selected, onSelect }: { lane: LaneModel; now: number } & Pick) {
