@@ -8,6 +8,7 @@ import (
 	"context"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -82,8 +83,14 @@ func (m *Module) liveRefs(ctx context.Context) (refs map[string]bool, whole bool
 		return m.aliasLiveRefs(ctx)
 	}
 	snap := m.configSnapshot()
-	env := m.localEnvelope(ctx, snap.hostID, snap.alias)
-	if !env.OK || env.Partial || env.LineageUnavailable {
+	return envelopeLiveRefs(m.localEnvelope(ctx, snap.hostID, snap.alias))
+}
+
+// envelopeLiveRefs is liveRefs over one local envelope. A session and an execution are both named and can both leave an alias, so
+// an inventory missing either (executions_unavailable), or its relay lineage, or any row (partial), may only be missing a
+// successor: whole is false.
+func envelopeLiveRefs(env ipeers.Envelope) (refs map[string]bool, whole bool) {
+	if !env.OK || env.Partial || env.LineageUnavailable || env.ExecutionsUnavailable {
 		return nil, false
 	}
 	refs = map[string]bool{}

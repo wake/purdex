@@ -136,6 +136,28 @@ func TestRetainAliases_ANameStoreWithoutRetentionIsSkipped(t *testing.T) {
 	m.retainAliases(context.Background())
 }
 
+// The refs an inventory answers to are its rows' own and the ones they took over from; an inventory that cannot vouch for its
+// rows — partial, lineage unreadable, executions unreadable (an execution is named and aliased like a session), or not ok — is
+// no basis for a deletion. Mutation gate: drop any one of the four conditions → red; ignore previous refs → red.
+func TestEnvelopeLiveRefs_OnlyAnInventoryThatCanVouchCounts(t *testing.T) {
+	rows := []ipeers.PeerRecord{{Ref: "_aaaaaa", PreviousRefs: []string{"_bbbbbb", "_cccccc"}}, {Ref: "_dddddd"}, {Ref: ""}}
+	whole := ipeers.Envelope{OK: true, Peers: rows}
+	refs, ok := envelopeLiveRefs(whole)
+	if !ok || len(refs) != 4 || !refs["_aaaaaa"] || !refs["_bbbbbb"] || !refs["_cccccc"] || !refs["_dddddd"] {
+		t.Fatalf("refs = %v ok = %v, want the four refs of a whole inventory", refs, ok)
+	}
+	for name, env := range map[string]ipeers.Envelope{
+		"not ok":                 {OK: false, Peers: rows},
+		"partial":                {OK: true, Partial: true, Peers: rows},
+		"lineage unavailable":    {OK: true, LineageUnavailable: true, Peers: rows},
+		"executions unavailable": {OK: true, ExecutionsUnavailable: true, Peers: rows},
+	} {
+		if refs, ok := envelopeLiveRefs(env); ok || refs != nil {
+			t.Errorf("%s: refs = %v ok = %v, want none", name, refs, ok)
+		}
+	}
+}
+
 // Start begins the loop: a Module with a retaining name store runs a pass after the first delay without anything calling it.
 // Mutation gate: Start does not start the loop → red.
 func TestModuleStart_StartsTheAliasRetentionLoop(t *testing.T) {
