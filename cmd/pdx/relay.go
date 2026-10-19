@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -389,6 +390,21 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
 		return code
+	}
+	if leadNameGiven || req.Card {
+		// A daemon that did not announce team.lead_name.v1 decodes the two fields and drops them: it would mint a plain token, and a
+		// request the person meant to wait on the card would be granted at once. So this fails closed, and a token without the flags
+		// asks nothing more (the /team of before names, against any daemon).
+		var info struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if _, err := client.Do(ctx, http.MethodGet, "/api/info", nil, &info); err != nil {
+			return relayReportErr(err, stdout, stderr)
+		}
+		if !slices.Contains(info.Capabilities, team.CapabilityLeadName) {
+			fmt.Fprintf(stderr, "pdx relay: 這個 daemon 沒有公告 %s，不送 --lead-name／--card（會被忽略）unsupported\n", team.CapabilityLeadName)
+			return ExitUnsupported
+		}
 	}
 	var res team.PersonResponse
 	if _, err := client.Do(ctx, http.MethodPost, team.PersonRoute, req, &res); err != nil {

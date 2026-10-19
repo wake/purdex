@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -101,6 +102,23 @@ func TestNamesCmd_AFailedReadIsANonZeroExit(t *testing.T) {
 		code, stdout, _ := driveNames(t, d, "--json")
 		if code == ExitOK || strings.TrimSpace(stdout) != "" {
 			t.Errorf("%s: code=%d stdout=%q, want a failure with no output", name, code, stdout)
+		}
+	}
+}
+
+// main.go dispatches `names` to runNames and the Commands line names it (codex attack of NP-4d). Mutation gate: drop either → red.
+func TestDispatch_Names(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	if !strings.Contains(s, "case \"names\":\n\t\trunNames(os.Args[2:])\n") {
+		t.Error("main.go does not dispatch \"names\" to runNames")
+	}
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, "Commands:") && !strings.Contains(l, " names,") {
+			t.Errorf("the Commands line does not list names: %s", l)
 		}
 	}
 }
