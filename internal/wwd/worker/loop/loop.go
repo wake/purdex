@@ -271,11 +271,7 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	l.mu.Unlock()
 	// The headroom is 0 while any exception is on, a hold with `allow` included (so every outside reader waits). The worker knows what
 	// `allow` means: when the selective holds are the only thing in the way it may still take a job they list, and only those (claimOne).
-	selective := false
-	if facts.Derived.Headroom.Heavy < 1 {
-		selective = derived.HeavyRoomForAllowed(*facts) >= 1
-	}
-	if n >= st.Slots.Heavy || (facts.Derived.Headroom.Heavy < 1 && !selective) {
+	if n >= st.Slots.Heavy || !heavyRoom(facts) {
 		return
 	}
 	// a quarantined job whose command may still run must be counted by the gate before anything new is claimed (a restart takes these
@@ -290,6 +286,12 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 		return
 	}
 	l.claimOne(ctx, jobCtx, facts.Exception)
+}
+
+// heavyRoom says whether the facts leave room for a heavy job: the headroom, or (while only holds with `allow` are in the way) the room
+// they leave, with the jobs they list the only ones to take.
+func heavyRoom(f *wire.Facts) bool {
+	return f.Derived.Headroom.Heavy >= 1 || derived.HeavyRoomForAllowed(*f) >= 1
 }
 
 // stopAll stops every running job at once and waits for them (Running.Stop: the command ends, Finish gives the claim back, the lease is
@@ -372,6 +374,18 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 			return
 		}
 		tries++
+		// The facts are read again before each try: a sample taken while the queues were read (or since the last try) may carry a hold made
+		// since the round began. A hold made after the newest sample is not seen until the next one (spec §13.4: it is in force for the
+		// worker at the latest when the next sample shows it).
+		if l.cfg.Facts != nil {
+			f := l.cfg.Facts()
+			if f == nil || !heavyRoom(f) {
+				return
+			}
+			if !derived.AdmitsJob(f.Exception, sc.Job.Class, sc.Job.Repo.Name) {
+				continue
+			}
+		}
 		o, ok := byHost[sc.Source]
 		if !ok {
 			continue

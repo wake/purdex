@@ -113,3 +113,48 @@ func TestAHoldDoesNotOpenWhatElseIsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A sample taken while the round was reading the queues may carry a hold made since the round began: the facts are read again before the
+// try, so the job is not started. (A hold made after the newest sample is not seen until the next one: spec §13.4.)
+func TestAHoldThatAppearsWhileTheQueuesAreReadStopsTheTry(t *testing.T) {
+	plain := func(r *rig) {
+		r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+			f.Exception = []wire.FactExc{{Name: "dev-server"}}
+			f.Derived.Headroom = wire.Slots{}
+		})
+	}
+	second := func(r *rig) {
+		r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+			b := allowing([]wire.JobClass{wire.ClassMerge}, nil)
+			b.Name = "hold-b"
+			f.Exception = append(f.Exception, b)
+		})
+	}
+	cases := map[string]struct {
+		start func(r *rig)
+		later func(r *rig)
+	}{
+		"a plain exception":                   {start: func(r *rig) {}, later: plain},
+		"a second hold that does not list it": {start: func(r *rig) { r.holdFacts(allowing([]wire.JobClass{wire.ClassRelease}, nil)) }, later: second},
+	}
+	for name, c := range cases {
+		conn := newConn("mlab", qjob("rel", wire.ClassRelease, 0))
+		r := newRig(t, conn)
+		c.start(r)
+		conn.onQueued = func() { c.later(r) }
+		if got := claimsAfterARound(t, r, conn); len(got) != 0 {
+			t.Errorf("%s: claimed %v", name, got)
+		}
+	}
+}
+
+// ...and the same round with nothing changed still claims (the second reading must not be a second way to refuse).
+func TestTheSecondReadingOfTheFactsRefusesNothingByItself(t *testing.T) {
+	conn := newConn("mlab", qjob("rel", wire.ClassRelease, 0))
+	r := newRig(t, conn)
+	r.holdFacts(allowing([]wire.JobClass{wire.ClassRelease}, nil))
+	conn.onQueued = func() {}
+	if got := claimsAfterARound(t, r, conn); len(got) != 1 || got[0] != "rel" {
+		t.Fatalf("claimed %v", got)
+	}
+}
