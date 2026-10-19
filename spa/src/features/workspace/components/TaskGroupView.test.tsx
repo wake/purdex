@@ -354,7 +354,7 @@ describe('dragging a session onto a group (NA-6c)', () => {
     expect(putTaskGroups).not.toHaveBeenCalled()
   })
 
-  it('a session of another host cannot be dropped on this host\'s group', () => {
+  it('a session of a host that cannot serve groups is not draggable at all (the other-host rule itself is in drag.test)', () => {
     useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 }, h2: { id: 'h2', name: 'air', ip: '2', port: 1, token: 't', order: 1 } }, hostOrder: ['h1', 'h2'], runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } } as never)
     useTabStore.setState({ tabs: { t9: tab('t9', 'S9', 'AG9', 'h2') }, activeTabId: null } as never)
     useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t9'], activeTabId: null, moduleConfig: {} }] } as never)
