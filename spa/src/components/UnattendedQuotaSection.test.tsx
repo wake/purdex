@@ -100,6 +100,21 @@ describe('which sessions get a row', () => {
     expect(rowsText()[1]).toContain('T2')
     usePersonaStore.setState({ byHost: {} })
   })
+
+  // The label reads the persona store without subscribing, so the section subscribes itself: a persona that loads (or is edited) after the first draw reaches the screen
+  // (mutation: drop usePersonaRevision() from the section → the name stays the title).
+  it('a persona collection that arrives after the first draw changes the label', () => {
+    useTeamRosterStore.getState().apply(A, [])
+    usePersonaStore.setState({ byHost: {} })
+    show([{ hostId: A, rows: [q('p1', { title: 'review', address: 'mlab/purdex-1f-kenji' })] }])
+    expect(rowsText()[0]).toContain('review')
+    expect(rowsText()[0]).not.toContain('Kenji')
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji' })
+    act(() => { usePersonaStore.setState({ byHost: { [A]: { status: 'ready', collection: c } } }) })
+    expect(rowsText()[0]).toContain('Kenji · review')
+    usePersonaStore.setState({ byHost: {} })
+  })
 })
 
 describe('the row', () => {

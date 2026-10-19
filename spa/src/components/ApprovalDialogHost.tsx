@@ -41,6 +41,7 @@ import { fetchLeadNames } from '../lib/team/approval-api'
 import { LeadNameCard } from './LeadNameCard'
 import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { startUnansweredReread } from '../lib/team/approval-reread'
+import { usePersonaRevision } from '../lib/names/seat'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
 import { submitDecision, subscribeNameTaken } from '../lib/team/approval-decide'
@@ -68,6 +69,7 @@ export function ApprovalDialogHost() {
 
 function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimized: boolean }) {
   const { hostId, approval } = entry
+  usePersonaRevision() // the label below reads the persona store without subscribing: redraw when it loads or changes
   const t = useI18nStore((s) => s.t)
   const hostName = hostLabel(hostId, useHostLook(hostId))
   const connected = useHostStore((s) => s.runtime[hostId]?.status === 'connected')
