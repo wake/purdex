@@ -4,7 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -192,5 +195,46 @@ func TestRemoteSpawnPoolName_ABadFieldIsRefused(t *testing.T) {
 		if _, found, _ := f.m.store.GetSpawnOp(cmdUUID1); found || len(n.exact) != 0 {
 			t.Fatalf("%s: a refused command left an op (%v) or reserved %+v", name, found, n.exact)
 		}
+	}
+}
+
+// codex R2 on #3532: two copies of one command that overlap. The first fails after its reservation and releases; the second, which was
+// waiting, commits the op. The name must end up reserved: the failed copy's release may not come between the second's reserve and its
+// commit. Mutation gate: no serialisation of reserve → apply → release → red.
+func TestRemoteSpawnPoolName_TwoCopiesOfACommandKeepTheNameOfTheOneThatCommits(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	n := withNames(f, "")
+	f.holdRunners()
+	var calls atomic.Int32
+	aInside := make(chan struct{})
+	f.m.store.failBeforeCommandLog = func() error {
+		if calls.Add(1) == 1 {
+			close(aInside)
+			time.Sleep(300 * time.Millisecond) // the second copy arrives meanwhile
+			return errors.New("injected failure of the first copy")
+		}
+		return nil
+	}
+	c := poolSpawnCommand(cmdUUID1, root, "mia")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	codes := make([]int, 2)
+	go func() { defer wg.Done(); codes[0], _ = f.postCmd(leadPrincipal(), c) }()
+	<-aInside
+	go func() { defer wg.Done(); codes[1], _ = f.postCmd(leadPrincipal(), c) }()
+	wg.Wait()
+	if codes[0] != http.StatusInternalServerError || codes[1] != http.StatusOK {
+		t.Fatalf("codes = %v, want the first copy to fail and the second to commit", codes)
+	}
+	op, found, _ := f.m.store.GetSpawnOp(cmdUUID1)
+	if !found || op.PoolName != "mia" {
+		t.Fatalf("op = %+v found=%v, want it committed with pool_name mia", op, found)
+	}
+	n.mu.Lock()
+	last := n.events[len(n.events)-1]
+	events := append([]string(nil), n.events...)
+	n.mu.Unlock()
+	if last != "reserve:"+cmdUUID1 {
+		t.Fatalf("events = %v, want the name reserved when the dust settles (the last event a reserve)", events)
 	}
 }

@@ -30,6 +30,7 @@ type fakeNames struct {
 	released           map[string]int
 	exactErr           error // what ReserveExact answers
 	exact              []exactCall
+	events             []string // "reserve:<op>" and "release:<op>", in the order they happened
 }
 
 type exactCall struct{ code, op, tmux string }
@@ -38,6 +39,7 @@ func (n *fakeNames) ReserveExact(_ context.Context, code, op, tmux string, _ tim
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.exact = append(n.exact, exactCall{code, op, tmux})
+	n.events = append(n.events, "reserve:"+op)
 	return n.exactErr
 }
 
@@ -55,6 +57,7 @@ func (n *fakeNames) ReleaseReservation(op string) {
 		n.released = map[string]int{}
 	}
 	n.released[op]++
+	n.events = append(n.events, "release:"+op)
 }
 
 func (n *fakeNames) releasedOps() []string {
