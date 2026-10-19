@@ -22,7 +22,7 @@ func TestAdvisorRulesListsEachRuleOnceWithItsKnownResidents(t *testing.T) {
 			growth = g
 		}
 	}
-	for _, want := range []wire.AlertKind{wire.AlertDiskLow, wire.AlertDiskFalling, wire.AlertWorkerCrash, wire.AlertPressureHeld, wire.AlertThrash, wire.AlertResidentGrowth, wire.AlertMservService} {
+	for _, want := range []wire.AlertKind{wire.AlertDiskLow, wire.AlertDiskFalling, wire.AlertWorkerCrash, wire.AlertPressureHeld, wire.AlertThrash, wire.AlertResidentGrowth, wire.AlertMservService, wire.AlertOrphans} {
 		if !seen[want] {
 			t.Errorf("rule %q is not in the list", want)
 		}

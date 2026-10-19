@@ -208,7 +208,7 @@ func (r *ProcfsReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error
 		ticks := a.UTime + a.STime
 		p := ProcRec{
 			PID: pid, PPID: a.PPID, UID: uid, Name: a.Comm,
-			FootprintBytes: a.RSSPages * r.pageSize, MemKind: "rss",
+			FootprintBytes: a.RSSPages * r.pageSize, MemKind: "rss", Start: r.startTime(a.Start),
 		}
 		if old, ok := r.prev[pid]; ok && old.start == a.Start && now.After(old.at) && ticks >= old.ticks {
 			secs := float64(ticks-old.ticks) / procClockTick
@@ -220,7 +220,35 @@ func (r *ProcfsReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error
 	}
 	r.prev = cur
 	r.dropStale()
-	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
+	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf, Fresh: r.fresh}, nil
+}
+
+// startTime is the wall-clock time of a start in clock ticks since boot; zero while the boot time is not known.
+func (r *ProcfsReader) startTime(ticks uint64) time.Time {
+	if r.btime == 0 {
+		return time.Time{}
+	}
+	return time.Unix(r.btime, 0).Add(time.Duration(ticks) * (time.Second / procClockTick))
+}
+
+// fresh lists the processes as they are now from their stat files alone (pid, parent, name, start): no uid, no figures, no argv, and none
+// of the reader's state touched. A process that exits while it is read is left out.
+func (r *ProcfsReader) fresh() ([]ProcRec, error) {
+	ents, err := os.ReadDir(r.root)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", r.root, err)
+	}
+	out := make([]ProcRec, 0, len(ents))
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 0 || !e.IsDir() {
+			continue
+		}
+		if s, ok := r.stat(pid); ok {
+			out = append(out, ProcRec{PID: pid, PPID: s.PPID, Name: s.Comm, Start: r.startTime(s.Start)})
+		}
+	}
+	return out, nil
 }
 
 // stillSame reports whether pid still names the process that began at start.

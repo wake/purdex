@@ -6,11 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/advisor"
 	"github.com/wake/purdex/internal/wwd/daemon"
+	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/orphans"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -24,6 +27,8 @@ type advisorInputs struct {
 	Sampler  *daemon.Sampler
 	// Known is [advisor] known_residents: the residents whose large footprint is expected here.
 	Known []string
+	// Orphans is the latest process scan (internal/wwd/orphans); it returns nil before the first one.
+	Orphans func() *advisor.OrphanReport
 }
 
 // advisorRules are the rules this build judges (spec §13.3 except silence, thrash's broker hand-off and the incidents of 8b); the live
@@ -31,7 +36,7 @@ type advisorInputs struct {
 func advisorRules(known []string) []advisor.Rule {
 	return []advisor.Rule{
 		advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{},
-		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known}, advisor.MservService{},
+		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known}, advisor.MservService{}, advisor.Orphans{},
 	}
 }
 
@@ -48,6 +53,7 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			Now: time.Now(), Facts: f, WorkRoot: in.WorkRoot,
 			Minutes:     func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step1m) },
 			Recent:      in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
+			Orphans:     in.Orphans,
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
@@ -55,10 +61,46 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 	advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known)...).Run(ctx)
 }
 
+// runOrphansScan is `wwd orphans-scan`: the orphans scan once, right now, on this host's own process table, printed. There is no recorded
+// history of the process table to replay, so this is how the rule is checked against a real host before it is relied on. It only lists;
+// the fork-loop line is one burst of table reads (the daemon needs the same loop above the limit for ten minutes before it pushes).
+func runOrphansScan(measure int) error {
+	src := facts.SystemSourcesWith(facts.SourceOptions{})
+	now := time.Now()
+	snap, ctx, err := src.Procs(now)
+	if err != nil {
+		return fmt.Errorf("orphans-scan: %w", err)
+	}
+	s := orphans.New(orphans.Config{UID: os.Getuid()})
+	s.Observe(now, snap, ctx)
+	r := s.Report()
+	fmt.Printf("scanned %d processes as uid %d at %s\n", len(snap.Procs), os.Getuid(), now.Format(time.RFC3339))
+	fmt.Printf("dev orphans (ppid 1, under a dev path, older than %s): %d\n", orphans.MinAge, len(r.Procs))
+	for _, p := range r.Procs {
+		fmt.Printf("  pid %-7d %-12s %-12s age %s\n", p.PID, p.Kind, p.Name, p.Age.Round(time.Minute))
+	}
+	fmt.Printf("fork loops (ppid-1 shell, > %.0f children/s in one burst): %d\n", orphans.LoopRate, len(r.Loops))
+	for _, l := range r.Loops {
+		fmt.Printf("  pid %-7d %-12s %.0f children/s\n", l.PID, l.Name, l.Rate)
+	}
+	if measure > 0 {
+		measureOrphans(snap, ctx, measure)
+	}
+	return nil
+}
+
 // runAdvisorCmd handles `wwd alerts-replay --db <copy of wwd.db> [--days 7] [--work-root <dir>]`: it counts what the alert rules would have
 // raised over the recorded minutes and starts of a COPY of the database (never the live file), the number each rule's PR states before it
 // is switched on. It reports whether args named it.
 func runAdvisorCmd(args []string) (handled bool, err error) {
+	if len(args) > 0 && args[0] == "orphans-scan" {
+		fs := flag.NewFlagSet("orphans-scan", flag.ContinueOnError)
+		measure := fs.Int("measure", 0, "also measure the scan's wall and CPU time over this many runs")
+		if err := fs.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		return true, runOrphansScan(*measure)
+	}
 	if len(args) == 0 || args[0] != "alerts-replay" {
 		return false, nil
 	}

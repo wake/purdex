@@ -51,6 +51,9 @@ type ident struct {
 	usec int32
 }
 
+// time is the process's start as a time.
+func (i ident) time() time.Time { return time.Unix(i.sec, int64(i.usec)*1000) }
+
 type cpuPrev struct {
 	id ident
 	ns uint64
@@ -187,6 +190,7 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	snap := ProcSnapshot{Procs: make([]ProcRec, 0, len(rows))}
 	for _, row := range rows {
 		p := row.ProcRec
+		p.Start = row.id.time()
 		r.idents[p.PID] = row.id
 		if foot, ns, ok := r.usage(p.PID); ok {
 			p.FootprintBytes = foot
@@ -226,7 +230,23 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	}
 	r.prev = cur
 	r.dropStaleArgs()
-	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
+	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf, Fresh: r.fresh}, nil
+}
+
+// fresh is the process table as it is now: one sysctl, none of the per-process reads (rusage, argv) a snapshot makes, and none of its
+// state touched, so it can be asked several times a second.
+func (r *ProcReader) fresh() ([]ProcRec, error) {
+	rows, err := r.table()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProcRec, 0, len(rows))
+	for _, row := range rows {
+		p := row.ProcRec
+		p.Start = row.id.time()
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // kindOf is the resident kind of a process, computed once per process (by pid
