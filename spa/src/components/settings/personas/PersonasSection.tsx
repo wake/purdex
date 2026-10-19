@@ -20,6 +20,7 @@ import {
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
+import { forgetAvatarOptionsText } from '../../../lib/names/avatar-options-memory'
 import { AvatarPicker } from './AvatarPicker'
 import { FirstSaveConfirm } from './FirstSaveConfirm'
 import { PersonaForm } from './PersonaForm'
@@ -60,6 +61,7 @@ export function PersonasSection() {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
   const [issues, setIssues] = useState<PersonaIssue[]>([])
+  const [pickerEpoch, setPickerEpoch] = useState(0)
   // The first persona on a source that has none renames every live conversation; the user is asked once, here.
   const [confirm, setConfirm] = useState<{ hostId: string } | null>(null)
   // The note and the error of the last save live outside the component with the lock: a save that ends while this page
@@ -105,6 +107,10 @@ export function PersonasSection() {
     const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
     if (!p) return
     setIssues([]); setOutcome({ note: null, error: null }); setConfirm(null)
+    // Every new persona has the key '', so React would keep one picker (and its source, seed and options) for the next
+    // new persona too; a new epoch makes each opening a fresh picker, and the half-typed options of the last are dropped.
+    forgetAvatarOptionsText(key)
+    setPickerEpoch((n) => n + 1)
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
 
@@ -211,7 +217,7 @@ export function PersonasSection() {
               isNew={editing.key === ''}
               issues={issues}
               saving={saving}
-              avatarPicker={<AvatarPicker key={editing.key} slot={editing.key} recipe={editing.draft.avatar} disabled={saving} onChange={setAvatar} />}
+              avatarPicker={<AvatarPicker key={`${editing.key}#${pickerEpoch}`} slot={editing.key} recipe={editing.draft.avatar} disabled={saving} onChange={setAvatar} />}
               onChange={(draft) => hold({ ...editing, draft })}
               onSave={() => void save(editing.draft)}
               onToggleRetired={() => void save({ ...editing.draft, retired: !editing.draft.retired })}

@@ -66,7 +66,6 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
     if (timer.current) clearTimeout(timer.current)
     latest.current++
   }, [])
-
   const run = async (next: PersonaAvatarRecipe, deps?: { file?: Blob }) => {
     const mine = ++latest.current
     setDrawing(true)
@@ -84,9 +83,20 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
     }
   }
 
+  /**
+   * Any change of input ends what is drawing or waiting: its answer is for something no longer on screen, and it may come
+   * back before the new draw starts (the pause below), or never be replaced (a photo, an upload, text that is not valid
+   * options start no draw of their own).
+   */
+  const cancel = () => {
+    if (timer.current) clearTimeout(timer.current)
+    latest.current++
+    setDrawing(false)
+  }
+
   /** A DiceBear recipe is drawn once the user stops typing; anything else waits for its own action. */
   const schedule = (nextSource: string, nextSeed: string, nextOptionsText: string) => {
-    if (timer.current) clearTimeout(timer.current)
+    cancel()
     const options = parseOptions(nextOptionsText)
     if (!isStyle(nextSource) || options === null) return
     timer.current = setTimeout(() => void run(recipeOf(nextSource, nextSeed, options, '')), DEBOUNCE_MS)
@@ -95,10 +105,8 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
   const changeSource = (next: string) => {
     setSource(next)
     setError(null)
-    if (timer.current) clearTimeout(timer.current)
+    cancel()
     if (next === '') {
-      latest.current++ // an answer still on its way belongs to the source that was just left
-      setDrawing(false)
       onChange({ source: '' }, '')
       return
     }
@@ -147,7 +155,7 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
         <div className="flex items-end gap-2">
           <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-text-secondary">
             <span>{t('settings.personas.avatar.url')}</span>
-            <input data-testid="avatar-url" className={INPUT} value={url} disabled={disabled} onChange={(e) => setUrl(e.target.value)} />
+            <input data-testid="avatar-url" className={INPUT} value={url} disabled={disabled} onChange={(e) => { cancel(); setUrl(e.target.value) }} />
           </label>
           <button type="button" className={BTN} data-testid="avatar-fetch" disabled={disabled || url.trim() === ''} onClick={() => void run(recipeOf('photo', '', undefined, url.trim()))}>
             {t('settings.personas.avatar.fetch')}

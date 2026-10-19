@@ -12,6 +12,11 @@ export function rememberAvatarOptionsText(slot: string, text: string): void {
   held.set(slot, text)
 }
 
+/** A persona being opened afresh starts from its own recipe, not from what an earlier one with the same slot left. */
+export function forgetAvatarOptionsText(slot: string): void {
+  held.delete(slot)
+}
+
 export function clearAvatarOptionsMemory(): void {
   held.clear()
 }

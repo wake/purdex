@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-libra
 vi.mock('../../../lib/names/persona-draw', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-draw')>()), drawRecipe: vi.fn() }))
 
 import { drawRecipe, PersonaDrawError } from '../../../lib/names/persona-draw'
-import { clearAvatarOptionsMemory } from '../../../lib/names/avatar-options-memory'
+import { clearAvatarOptionsMemory, forgetAvatarOptionsText } from '../../../lib/names/avatar-options-memory'
 import { AvatarPicker } from './AvatarPicker'
 
 const DATA = 'data:image/webp;base64,AAAA'
@@ -97,6 +97,30 @@ describe('AvatarPicker', () => {
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ source: 'lorelei', seed: 'two' }, 'data:image/webp;base64,NEW'))
     await act(async () => { finishFirst('data:image/webp;base64,OLD') })
     expect(onChange).toHaveBeenLastCalledWith({ source: 'lorelei', seed: 'two' }, 'data:image/webp;base64,NEW')
+  })
+
+  it.each([
+    ['the source is switched to a photo, which starts no draw of its own', () => fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'photo' } })],
+    ['the options become text that is not valid JSON', () => fireEvent.change(screen.getByTestId('avatar-options'), { target: { value: '{"x":' } })],
+    ['the seed is edited, before the new draw has started', () => fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'again' } })],
+  ])('drops a draw that is out when %s', async (_name, change) => {
+    let finish!: (v: string) => void
+    vi.mocked(drawRecipe).mockImplementationOnce(() => new Promise<string>((r) => { finish = r }))
+    const { onChange } = setup({ source: 'lorelei', seed: 's' })
+    fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'first' } })
+    await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+    change()
+    await act(async () => { finish(DATA) })
+    expect(onChange).not.toHaveBeenCalledWith(expect.anything(), DATA)
+  })
+
+  it('does not carry the half-typed options of one new persona into the next', () => {
+    const first = render(<AvatarPicker slot="" recipe={{ source: 'micah' }} disabled={false} onChange={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('avatar-options'), { target: { value: '{"a": 1}' } })
+    first.unmount()
+    forgetAvatarOptionsText('') // what opening a new persona does
+    render(<AvatarPicker slot="" recipe={{ source: 'micah' }} disabled={false} onChange={vi.fn()} />)
+    expect((screen.getByTestId('avatar-options') as HTMLTextAreaElement).value).toBe('')
   })
 
   it('drops a draw that is still out when the picker goes away', async () => {

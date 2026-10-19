@@ -312,6 +312,20 @@ describe('PersonasSection', () => {
       expect(saved).toMatchObject({ name: 'Hiro Two', avatar: { source: 'lorelei', seed: 'hiro' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ' })
     })
 
+    it('a second new persona starts with a fresh picker, not the first one\'s source, seed and options', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-new'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'micah' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'first-seed' } })
+      fireEvent.change(screen.getByTestId('avatar-options'), { target: { value: '{"a": 1}' } })
+      fireEvent.click(screen.getByTestId('persona-new')) // "New" again: another blank persona
+      expect((screen.getByTestId('avatar-source') as HTMLSelectElement).value).toBe('')
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'micah' } })
+      expect((screen.getByTestId('avatar-seed') as HTMLInputElement).value).toBe('')
+      expect((screen.getByTestId('avatar-options') as HTMLTextAreaElement).value).toBe('')
+    })
+
     it('does not put an old persona\'s image into the one opened next', async () => {
       seed(['hiro', 'emma'])
       vi.mocked(drawRecipe).mockReset()
