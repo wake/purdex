@@ -254,7 +254,8 @@ func (m *Module) pass(ctx context.Context) {
 	defer func() {
 		// what is reported is who really sends: the rule names this daemon and its own push module can be asked (#3573). The rule itself
 		// is left alone: a standby still takes over for a primary whose push it cannot see.
-		deliverer := m.deliver()
+		// and whose wwd it can read: a daemon that cannot read its own wwd hands delivery over (AlertsReadable, #3605), so it is not the sender (#3631)
+		deliverer := m.deliver() && m.AlertsReadable()
 		if deliverer {
 			_, deliverer = m.notify()
 		}
