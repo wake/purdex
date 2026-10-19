@@ -1,15 +1,15 @@
 // spa/src/lib/pool/job-detail.ts — one job's detail (plan "WWD-7 design", Jobs tab, detail panel): what its log area says, and the read of the detail with its log. Read on open and again when the job itself changes (its state or its stored
 // log — `jobs.changed` re-reads the job in the store, and that is what moves these); never polled. The log is the detail's own up to 1 MiB; a larger one is read on demand from `/log`.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from './store'
 import { PoolReadError } from './api'
-import { busyDelayMs, type PoolError } from './errors'
+import { backoffMs, busyDelayMs, type PoolError } from './errors'
 import { fetchJob, fetchJobLog } from './jobs-api'
 import { liveTopology } from './jobs-driver-live'
 import { candidates } from './jobs-driver'
-import { jobSourceFor, type JobSource } from './jobs-store'
+import type { JobSource } from './jobs-store'
 import { isEnded, type PoolJob } from './jobs-types'
 
 /** A log is uploaded after the result: within this long of the end its absence is "still uploading", later it is gone. */
@@ -28,40 +28,35 @@ export function logNote(job: PoolJob, inline: string | null, now: number): LogNo
   return now - r.finished_at < LOG_UPLOAD_GRACE_MS ? 'uploading' : 'expired'
 }
 
-/** The daemon to ask about a job: its origin's own, else the first that announces `jobs.v1` forwards (`?host=`). null: none connected. */
-export function detailSource(origin: string) {
-  const topo = liveTopology()
-  return jobSourceFor(origin, topo.ownDaemon, topo.forwarders[0] ?? null)
-}
-
 /** No connected daemon announces `jobs.v1`: the same as a daemon that does not answer. */
 const NO_DAEMON: PoolError = { code: 'no_answer', action: 'next_source' }
-const errorOf =(e: unknown): PoolError => (e instanceof PoolReadError ? e.poolError : { code: 'unknown', action: 'log' })
+const errorOf = (e: unknown): PoolError => (e instanceof PoolReadError ? e.poolError : { code: 'unknown', action: 'log' })
 
 export type DetailRead = { phase: 'loading' } | { phase: 'ready'; log: string | null } | { phase: 'error'; error: PoolError }
 export type FullLogRead = { phase: 'idle' } | { phase: 'loading' } | { phase: 'ready'; text: string } | { phase: 'error'; error: PoolError }
 
-/** A busy daemon is asked again this many times (after 1–2 s each) before the failure is shown. */
-const BUSY_RETRIES = 2
+/** A busy daemon, or a host that fails for the moment, is asked again this many times (after 1–2 s, or 2 s, 4 s: errors.ts) before the failure is shown. */
+const RETRIES = 2
 
 /**
  * One read of a job's detail or log, by the error table's actions (spec §10, as the jobs driver): no answer, `wwd_unavailable` or a bad answer → the next source that can answer for the origin (its own daemon, then each forwarder);
- * `busy` → the same source again after 1–2 s; anything else is the answer. `alive` says whether anyone still waits for it (a panel that closed or moved on stops the retries).
+ * `busy` → the same source again after 1–2 s, and `wwd_error`／`host_unreachable` (a host failing for the moment) → the same source again after the back-off of the table (2 s, then 4 s), each at most twice more; anything else is the answer. `alive` says whether anyone still waits for it (a panel that closed or moved on stops the retries).
  */
 async function readFromSources<T>(origin: string, path: string, alive: () => boolean, call: (s: JobSource) => Promise<T>): Promise<T> {
   const sources = candidates(origin, liveTopology())
   if (sources.length === 0) throw new PoolReadError(path, null, NO_DAEMON)
   let last: unknown
   for (const source of sources) {
-    for (let busy = 0; ; busy++) {
+    for (let again = 0; ; again++) {
       try {
         return await call(source)
       } catch (e) {
         last = e
         const action = e instanceof PoolReadError ? e.poolError.action : 'log'
         if (!alive()) throw e
-        if (action === 'retry_same' && busy < BUSY_RETRIES) {
-          await new Promise((r) => setTimeout(r, busyDelayMs(Math.random())))
+        const wait = action === 'retry_same' ? busyDelayMs(Math.random()) : action === 'backoff' ? backoffMs(again) : null
+        if (wait !== null && again < RETRIES) {
+          await new Promise((r) => setTimeout(r, wait))
           if (!alive()) throw e
           continue
         }
@@ -74,8 +69,8 @@ async function readFromSources<T>(origin: string, path: string, alive: () => boo
 }
 
 /**
- * The source of `origin`'s reads, as a string that changes only when the source does. The inputs of `liveTopology` (the pool's hosts, the connections, the cached capabilities, the App's hosts) are subscribed to,
- * so the source is worked out again when any of them changes; a change that leaves the source as it was changes nothing.
+ * The sources of `origin`'s reads (all of them, in order: a failover goes down the list), as a string that changes only when the list does. The inputs of `liveTopology` (the pool's hosts, the connections, the cached capabilities,
+ * the App's hosts) are subscribed to, so the list is worked out again when any of them changes; a change that leaves it as it was changes nothing.
  */
 function useDetailSourceSig(origin: string): string {
   const hosts = usePoolStore((s) => s.hosts)
@@ -83,9 +78,8 @@ function useDetailSourceSig(origin: string): string {
   const runtime = useHostStore((s) => s.runtime)
   const appHosts = useHostStore((s) => s.hosts)
   return useMemo(() => {
-    const s = detailSource(origin)
-    return s ? `${s.daemonId}\u0001${s.host ?? ''}` : ''
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the four stores are what detailSource reads (through liveTopology); they are the reason to work it out again
+    return candidates(origin, liveTopology()).map((s) => `${s.daemonId}\u0001${s.host ?? ''}`).join('\u0002')
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the four stores are what liveTopology reads; they are the reason to work the list out again
   }, [origin, hosts, caps, runtime, appHosts])
 }
 
@@ -111,12 +105,17 @@ export function useJobDetail(job: PoolJob): { detail: DetailRead; full: FullLogR
     return () => { live = false }
   }, [origin, id, tag])
 
+  // The full log's request: only the newest one, for the picture it was asked under, may answer. A press makes a new one; the panel closing or the picture changing (the job, its state or the source) lets go of the one running.
+  const fullToken = useRef(0)
+  useEffect(() => () => { fullToken.current += 1 }, [tag])
   const loadFull = useCallback(() => {
+    const mine = ++fullToken.current
+    const alive = () => fullToken.current === mine
     setFullGot({ tag, read: { phase: 'loading' } })
-    const read = readFromSources(origin, `/api/pool/jobs/${id}/log`, () => true, (s) => fetchJobLog(s.daemonId, id, s.host))
+    const read = readFromSources(origin, `/api/pool/jobs/${id}/log`, alive, (s) => fetchJobLog(s.daemonId, id, s.host))
     read.then(
-      (text) => setFullGot({ tag, read: { phase: 'ready', text } }),
-      (e) => setFullGot({ tag, read: { phase: 'error', error: errorOf(e) } }),
+      (text) => { if (alive()) setFullGot({ tag, read: { phase: 'ready', text } }) },
+      (e) => { if (alive()) setFullGot({ tag, read: { phase: 'error', error: errorOf(e) } }) },
     )
   }, [origin, id, tag])
 

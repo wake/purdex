@@ -5,8 +5,8 @@ import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testi
 vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(), fetchJobLog: vi.fn() }))
 vi.mock('../../../lib/pool/jobs-driver-live', () => ({ liveTopology: vi.fn() }))
 vi.mock('../../../lib/open-session-tab', () => ({ activateTabPane: vi.fn() }))
-// a busy daemon is asked again after 1–2 s; the tests do not wait
-vi.mock('../../../lib/pool/errors', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/errors')>()), busyDelayMs: () => 0 }))
+// a busy daemon (1–2 s) or a failing host (2 s, 4 s) is asked again after a wait; the tests do not wait
+vi.mock('../../../lib/pool/errors', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/errors')>()), busyDelayMs: () => 0, backoffMs: () => 0 }))
 
 import { JobDetail } from './JobDetail'
 import { fetchJob, fetchJobLog } from '../../../lib/pool/jobs-api'
@@ -247,7 +247,7 @@ describe('the read', () => {
     expect(fetchJob).not.toHaveBeenCalled()
   })
 
-  const failing = (code: 'no_answer' | 'busy' | 'wwd_unavailable' | 'not_found', action: 'next_source' | 'retry_same' | 'none') => new PoolReadError('/api/pool/jobs/j1', code === 'no_answer' ? null : 503, { code, action })
+  const failing = (code: 'no_answer' | 'busy' | 'wwd_unavailable' | 'not_found' | 'wwd_error', action: 'next_source' | 'retry_same' | 'backoff' | 'none') => new PoolReadError('/api/pool/jobs/j1', code === 'no_answer' ? null : 503, { code, action })
 
   it('a source that does not answer is skipped: the next daemon that can forward is asked, in order', async () => {
     vi.mocked(liveTopology).mockReturnValue({ origins: ['mserv'], ownDaemon: {}, forwarders: ['d-1', 'd-2'] })
@@ -299,6 +299,63 @@ describe('the read', () => {
     fireEvent.click(await screen.findByTestId('job-log-load'))
     expect(await screen.findByTestId('job-log')).toHaveTextContent('big, from the second')
     expect(vi.mocked(fetchJobLog).mock.calls.map((c) => c[0])).toEqual(['d-1', 'd-2'])
+  })
+
+  it('a host that fails for the moment (wwd_error, the table\'s back-off) is asked again, the same daemon, and the answer is then shown; one that keeps failing shows the failure after three asks', async () => {
+    const j = job()
+    vi.mocked(fetchJob).mockRejectedValueOnce(failing('wwd_error', 'backoff')).mockResolvedValueOnce({ job: j, log: 'recovered' })
+    mount(j)
+    expect(await screen.findByTestId('job-log')).toHaveTextContent('recovered')
+    expect(vi.mocked(fetchJob).mock.calls.map((c) => c[0])).toEqual(['d-mlab', 'd-mlab'])
+    cleanup()
+    vi.mocked(fetchJob).mockReset(); vi.mocked(fetchJob).mockRejectedValue(failing('wwd_error', 'backoff'))
+    mount(j)
+    expect(await screen.findByTestId('job-detail-error')).toHaveTextContent('mlab')
+    expect(fetchJob).toHaveBeenCalledTimes(3)
+  })
+
+  it('a daemon that arrives behind the first one (the first source stays the same) is asked too: the failure that stood is read again', async () => {
+    vi.mocked(liveTopology).mockReturnValue({ origins: ['mserv'], ownDaemon: {}, forwarders: ['d-1'] })
+    const j = job({ origin: 'mserv' })
+    vi.mocked(fetchJob).mockRejectedValue(failing('no_answer', 'next_source'))
+    mount(j)
+    expect(await screen.findByTestId('job-detail-error')).toBeInTheDocument()
+    vi.mocked(fetchJob).mockReset()
+    vi.mocked(fetchJob).mockRejectedValueOnce(failing('no_answer', 'next_source')).mockResolvedValueOnce({ job: j, log: 'from the new one' })
+    vi.mocked(liveTopology).mockReturnValue({ origins: ['mserv'], ownDaemon: {}, forwarders: ['d-1', 'd-2'] })
+    act(() => { usePoolStore.setState({ hosts: [] }) })
+    expect(await screen.findByTestId('job-log')).toHaveTextContent('from the new one')
+    expect(vi.mocked(fetchJob).mock.calls.map((c) => c[0])).toEqual(['d-1', 'd-2'])
+  })
+
+  it('the full log: a request still running when the panel moves to another job does not answer for it', async () => {
+    const a = job({ id: 'a' })
+    const b = job({ id: 'b' })
+    vi.mocked(fetchJob).mockImplementation(async (_d, id) => ({ job: id === 'a' ? a : b, log: null }))
+    let resolveA: (t: string) => void = () => {}
+    vi.mocked(fetchJobLog).mockImplementationOnce(() => new Promise<string>((r) => { resolveA = r }))
+    const view = render(<JobDetail job={a} now={NOW} onClose={() => {}} />)
+    fireEvent.click(await screen.findByTestId('job-log-load'))
+    view.rerender(<JobDetail job={b} now={NOW} onClose={() => {}} />)
+    expect(await screen.findByTestId('job-log-load')).not.toBeDisabled()
+    // the new job's own request answers first; the old one answers after it, and must not take its place
+    vi.mocked(fetchJobLog).mockResolvedValueOnce('B\'s big log')
+    fireEvent.click(screen.getByTestId('job-log-load'))
+    expect(await screen.findByTestId('job-log')).toHaveTextContent('B\'s big log')
+    await act(async () => { resolveA('A\'s big log') })
+    expect(screen.getByTestId('job-log')).toHaveTextContent('B\'s big log')
+    expect(screen.queryByTestId('job-log-load')).toBeNull()
+  })
+
+  it('the full log: closing the panel while a busy daemon is being waited on stops the asking', async () => {
+    const j = job()
+    ready(j, null)
+    vi.mocked(fetchJobLog).mockRejectedValue(failing('busy', 'retry_same'))
+    const view = mount(j)
+    fireEvent.click(await screen.findByTestId('job-log-load'))
+    view.unmount()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchJobLog).toHaveBeenCalledTimes(1)
   })
 
   it('a daemon that arrives while the panel is open is asked: a read that had none does not stay failed', async () => {
