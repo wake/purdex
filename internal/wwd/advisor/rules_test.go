@@ -120,6 +120,25 @@ func TestDiskFalling_NeedsHalfAnHourOfHistory(t *testing.T) {
 	}
 }
 
+// A fall measured on two far-apart points with a hole between them, or on records from after now, is not a slope.
+func TestDiskFalling_AHoleOrTheFutureIsNotASlope(t *testing.T) {
+	// 3 GB/h from 23 GB would hold, but only the two ends are there
+	h := history(60, 23, 3)
+	sparse := []wire.Facts{h[0], h[1], h[len(h)-1]}
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, sparse)); v.Holds {
+		t.Fatalf("three records over an hour gave a slope: %+v", v)
+	}
+	// records after now are ignored: a clock stepped back leaves later minutes in the store
+	future := history(60, 23, 3)
+	for i := 1; i <= 30; i++ {
+		future = append(future, diskFacts(t0.Add(time.Duration(i)*time.Minute), "/Users", 1))
+	}
+	flat := inputWith(40, append(history(60, 40, 0), future[len(future)-30:]...))
+	if v, _ := (DiskFalling{}).Eval(flat); v.Holds {
+		t.Fatalf("future records gave a slope: %+v", v)
+	}
+}
+
 func TestWorkerCrashLoop_ThreeStartsInAnHour(t *testing.T) {
 	for n, want := range map[int]bool{0: false, 2: false, 3: true, 7: true} {
 		in := Input{Now: t0, StartsSince: func(since time.Time) (int, error) {

@@ -23,6 +23,9 @@ const (
 	// slopeWindow is the span the fall is measured over, and slopeMinSpan the least the history must cover for a slope to count.
 	slopeWindow  = time.Hour
 	slopeMinSpan = 30 * time.Minute
+	// slopeMinSamples is the fewest minutes the slope may stand on: a hour holds about 60, and one with a hole in it (the mount missing for a
+	// while, the daemon down) would otherwise extrapolate two far-apart points six hours ahead.
+	slopeMinSamples = 20
 )
 
 // workVolume is the facts' disk that holds root: the longest mount that is root itself or a directory above it (whole path components,
@@ -102,7 +105,12 @@ func fallRate(in Input, mount string) (float64, bool) {
 	var first, last wire.Facts
 	var have bool
 	var firstFree, lastFree float64
+	n := 0
 	for _, f := range in.Minutes(in.Now.Add(-slopeWindow)) {
+		// only the past, in order: a record after now (the clock stepped back) or out of order is not part of the fall
+		if f.At.After(in.Now) || (have && !f.At.After(last.At)) {
+			continue
+		}
 		free, ok := freeOf(f, mount)
 		if !ok {
 			continue
@@ -111,9 +119,10 @@ func fallRate(in Input, mount string) (float64, bool) {
 			first, firstFree, have = f, free, true
 		}
 		last, lastFree = f, free
+		n++
 	}
 	span := last.At.Sub(first.At)
-	if !have || span < slopeMinSpan {
+	if !have || span < slopeMinSpan || n < slopeMinSamples {
 		return 0, false
 	}
 	return (firstFree - lastFree) / span.Hours(), true

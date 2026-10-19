@@ -14,6 +14,7 @@ type fakeWriter struct {
 	cleared []string
 	changed bool // what Raise and Clear answer
 	err     error
+	active  []wire.Alert // what ActiveAlerts answers
 }
 
 func (f *fakeWriter) RaiseAlert(a wire.Alert, at time.Time) (bool, error) {
@@ -24,6 +25,22 @@ func (f *fakeWriter) RaiseAlert(a wire.Alert, at time.Time) (bool, error) {
 func (f *fakeWriter) ClearAlert(key string, at time.Time) (bool, error) {
 	f.cleared = append(f.cleared, key)
 	return f.changed, f.err
+}
+
+func (f *fakeWriter) ActiveAlerts() ([]wire.Alert, error) { return f.active, f.err }
+
+// Active is the keys of what the table holds active, read fresh each time.
+func TestAlertBook_ActiveIsWhatTheTableHolds(t *testing.T) {
+	w := &fakeWriter{active: []wire.Alert{{Key: "a"}, {Key: "b"}}}
+	book := NewAlertBook(w, "mlab", nil, nil, nil)
+	got, err := book.Active()
+	if err != nil || len(got) != 2 || !got["a"] || !got["b"] {
+		t.Fatalf("%v %v", got, err)
+	}
+	w.err = errors.New("locked")
+	if _, err := book.Active(); err == nil {
+		t.Fatal("an unreadable table must be an error, not an empty set")
+	}
 }
 
 func alertHint(t *testing.T, ch <-chan wire.Event) (wire.AlertEvent, bool) {

@@ -12,6 +12,7 @@ import (
 type AlertWriter interface {
 	RaiseAlert(a wire.Alert, at time.Time) (changed bool, err error)
 	ClearAlert(key string, at time.Time) (changed bool, err error)
+	ActiveAlerts() ([]wire.Alert, error)
 }
 
 // AlertBook is what the alert rules (spec §13.3) call: it keeps the host's alerts in the table and tells the event stream when the list
@@ -48,6 +49,19 @@ func (k *AlertBook) Raise(a wire.Alert) error {
 	}
 	k.hint(changed)
 	return nil
+}
+
+// Active is the keys of the alerts that are active in the table now. It is the truth about what is raised, whoever raised or cleared it.
+func (k *AlertBook) Active() (map[string]bool, error) {
+	as, err := k.w.ActiveAlerts()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(as))
+	for _, a := range as {
+		out[a.Key] = true
+	}
+	return out, nil
 }
 
 // Clear records that the rule with this key no longer holds.

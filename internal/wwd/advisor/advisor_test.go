@@ -12,10 +12,22 @@ var t0 = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 
 // fakeBook records what the evaluator raised and cleared.
 type fakeBook struct {
-	active  map[string]wire.Alert
-	raised  int
-	cleared int
-	err     error
+	active    map[string]wire.Alert
+	raised    int
+	cleared   int
+	err       error
+	activeErr error
+}
+
+func (b *fakeBook) Active() (map[string]bool, error) {
+	if b.activeErr != nil {
+		return nil, b.activeErr
+	}
+	out := map[string]bool{}
+	for k := range b.active {
+		out[k] = true
+	}
+	return out, nil
 }
 
 func newBook() *fakeBook { return &fakeBook{active: map[string]wire.Alert{}} }
@@ -85,20 +97,40 @@ func TestEvaluator_ARuleThatErrorsLeavesTheAlertAsItWas(t *testing.T) {
 	}
 }
 
-// An alert that was active before the daemon restarted keeps its clearing margin: 12.2 GB is still "low" for a disk disk_low raised on.
-func TestEvaluator_SeededAlertKeepsItsHysteresis(t *testing.T) {
+// What is raised is read from the table at every pass: an alert that was active before a restart keeps its clearing margin (12.2 GB is
+// still "low" for a disk disk_low raised on), and one somebody else cleared is not raised again by a stale belief.
+func TestEvaluator_HysteresisFollowsTheTable(t *testing.T) {
 	b := newBook()
 	in := inputWith(12.2, nil)
-	for _, seeded := range []bool{false, true} {
-		b.active = map[string]wire.Alert{}
-		ev := NewEvaluator(b, func() (Input, bool) { return in, true }, nil, DiskLow{})
-		if seeded {
-			ev.SeedRaised([]string{"disk_low"})
-		}
-		ev.Pass()
-		if _, held := b.active["disk_low"]; held != seeded {
-			t.Fatalf("seeded=%v: held=%v", seeded, held)
-		}
+	ev := NewEvaluator(b, func() (Input, bool) { return in, true }, nil, DiskLow{})
+	ev.Pass()
+	if len(b.active) != 0 {
+		t.Fatalf("12.2 GB raised afresh: %+v", b.active)
+	}
+	b.active["disk_low"] = wire.Alert{Key: "disk_low"} // active in the table, as after a restart
+	ev.Pass()
+	if _, held := b.active["disk_low"]; !held {
+		t.Fatal("12.2 GB cleared an alert that is active")
+	}
+	delete(b.active, "disk_low") // cleared by someone else
+	ev.Pass()
+	if len(b.active) != 0 {
+		t.Fatalf("raised again from a stale belief: %+v", b.active)
+	}
+}
+
+// When the table cannot be read nothing is judged (no raise, no clear), and the failure is logged once.
+func TestEvaluator_AnUnreadableTableJudgesNothing(t *testing.T) {
+	b := newBook()
+	b.active["disk_low"] = wire.Alert{Key: "disk_low"}
+	b.activeErr = errors.New("locked")
+	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Key: "disk_low"}}
+	n := 0
+	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(string, ...any) { n++ }, r)
+	ev.Pass()
+	ev.Pass()
+	if _, held := b.active["disk_low"]; !held || n != 1 {
+		t.Fatalf("held=%v logged=%d", held, n)
 	}
 }
 

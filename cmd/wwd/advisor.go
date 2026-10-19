@@ -40,18 +40,7 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
-	ev := advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{})
-	// what was active before this start is still held raised, so a restart does not skip a rule's clearing margin
-	if active, err := in.Store.ActiveAlerts(); err != nil {
-		log.Printf("advisor: the active alerts could not be read: %v", err)
-	} else {
-		keys := make([]string, len(active))
-		for i, a := range active {
-			keys[i] = a.Key
-		}
-		ev.SeedRaised(keys)
-	}
-	ev.Run(ctx)
+	advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{}).Run(ctx)
 }
 
 // runAdvisorCmd handles `wwd alerts-replay --db <copy of wwd.db> [--days 7] [--work-root <dir>]`: it counts what the alert rules would have

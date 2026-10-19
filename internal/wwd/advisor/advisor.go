@@ -47,6 +47,8 @@ type Rule interface {
 type Book interface {
 	Raise(wire.Alert) error
 	Clear(key string) error
+	// Active is the keys active in the table now.
+	Active() (map[string]bool, error)
 }
 
 // Evaluator runs the rules over the host's facts, on a clock of its own.
@@ -56,9 +58,8 @@ type Evaluator struct {
 	logf  func(string, ...any)
 	rules []Rule
 
-	mu     sync.Mutex
-	last   map[wire.AlertKind]string // the last failure logged per rule, to log a change only
-	raised map[string]bool           // the keys this evaluator holds raised; after a restart it starts empty
+	mu   sync.Mutex
+	last map[wire.AlertKind]string // the last failure logged per rule, to log a change only
 }
 
 // NewEvaluator returns an evaluator of rules. input says what to judge on now (false: nothing sampled yet); logf may be nil.
@@ -66,16 +67,7 @@ func NewEvaluator(book Book, input func() (Input, bool), logf func(string, ...an
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Evaluator{book: book, input: input, logf: logf, rules: rules, last: map[wire.AlertKind]string{}, raised: map[string]bool{}}
-}
-
-// SeedRaised tells the evaluator which alerts are already active (those in the table when the daemon started), before the first Pass.
-func (e *Evaluator) SeedRaised(keys []string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, k := range keys {
-		e.raised[k] = true
-	}
+	return &Evaluator{book: book, input: input, logf: logf, rules: rules, last: map[wire.AlertKind]string{}}
 }
 
 // Every is how often Run judges. The spec's shortest window is a minute; a push waits for the poll of the deliverer (30 s) anyway.
@@ -101,7 +93,15 @@ func (e *Evaluator) Pass() {
 	if !ok {
 		return
 	}
-	in.Raised = func(key string) bool { e.mu.Lock(); defer e.mu.Unlock(); return e.raised[key] }
+	// what is raised is read from the table at every pass, so a restart, or an alert cleared by someone else, cannot leave the evaluator
+	// believing something else; when the table cannot be read nothing is judged
+	active, err := e.book.Active()
+	if err != nil {
+		e.fail("", "read the active alerts", err)
+		return
+	}
+	e.ok("")
+	in.Raised = func(key string) bool { return active[key] }
 	for _, r := range e.rules {
 		v, err := r.Eval(in)
 		if err != nil {
@@ -117,9 +117,6 @@ func (e *Evaluator) Pass() {
 			e.fail(r.Kind(), "write", err)
 			continue
 		}
-		e.mu.Lock()
-		e.raised[v.Key] = v.Holds
-		e.mu.Unlock()
 		e.ok(r.Kind())
 	}
 }
