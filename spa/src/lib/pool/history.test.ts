@@ -9,7 +9,7 @@ const fetchFactsHistory = vi.fn()
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
 
 import { PoolReadError } from './api'
-import { loadFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS } from './history'
+import { loadFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS, FACTS_HISTORY_SKEW_MS } from './history'
 
 const darwin = parseFacts(darwinJson)!
 const NOW = Date.UTC(2026, 9, 18, 5, 10, 0)
@@ -25,7 +25,7 @@ describe('loadFactsHistory', () => {
     fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(20, {}, 'normal', 90), rec(15, {}, 'warning', 20), rec(10, {}, 'danger', 5)] })
     const out = await loadFactsHistory('d1', 'air26', 'f-air26', NOW)
     expect(out).toBe('ok')
-    expect(fetchFactsHistory).toHaveBeenCalledWith('d1', 'air26', new Date(NOW - FACTS_HISTORY_MS).toISOString(), '5s')
+    expect(fetchFactsHistory).toHaveBeenCalledWith('d1', 'air26', new Date(NOW - FACTS_HISTORY_MS - FACTS_HISTORY_SKEW_MS).toISOString(), '5s')
     expect(fleetHistory.series('f-air26', 'cpu', '5m', NOW).map((p) => p.avg)).toEqual([10, 80, 95])
     expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal', 'warning', 'danger'])
   })
@@ -63,6 +63,35 @@ describe('loadFactsHistory', () => {
     await loadFactsHistory('d1', 'air19', 'f-air19', NOW)
     expect(readHistoryLoad('f-air19')).toBe('host_not_local')
     expect(readHistoryLoad('f-other')).toBe('idle')
+  })
+})
+
+describe('overlapping loads of one host', () => {
+  const later = <T,>() => { let ok!: (v: T) => void; let no!: (e: unknown) => void; const p = new Promise<T>((a, b) => { ok = a; no = b }); return { p, ok, no } }
+
+  it('the later load owns the memory: an older one that comes back after it changes nothing', async () => {
+    const slow = later<unknown>()
+    fetchFactsHistory.mockReturnValueOnce(slow.p)
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(20, {}, 'normal', 90)] })
+    const first = loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    const second = loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    expect(await second).toBe('ok')
+    slow.no(refused('host_not_local'))
+    await first
+    expect(readHistoryLoad('f-air26')).toBe('ok')
+    expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal'])
+  })
+
+  it('an older load that has data does not write it over the later one\'s', async () => {
+    const slow = later<unknown>()
+    fetchFactsHistory.mockReturnValueOnce(slow.p)
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(20, {}, 'normal', 90)] })
+    const first = loadFactsHistory('d1', 'old-alias', 'f-air26', NOW)
+    await loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    slow.ok({ step: '5s', records: [rec(15, {}, 'danger', 5)] })
+    await first
+    expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal'])
+    expect(fleetHistory.series('f-air26', 'cpu', '5m', NOW).map((p) => p.avg)).toEqual([10])
   })
 })
 

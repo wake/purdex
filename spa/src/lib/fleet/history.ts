@@ -85,6 +85,9 @@ export class FleetHistory {
       const add = readings.filter((r) => !have.has(r.at)).map((r) => ({ t: r.at, v: r[item] }))
       tr.raw = [...tr.raw, ...add].filter((p) => p.t >= newest - RAW_MS).sort((a, b) => a.t - b.t)
     }
+    // `record()` takes a reading only if it is newer than `lastAt`: with the cursor left behind, a live reading at (or before) the newest seeded
+    // time would be added after it, doubled or out of order.
+    if (readings.length > 0) hh.lastAt = Math.max(hh.lastAt, ...readings.map((r) => r.at))
   }
 
   series(hostId: string, item: HistoryItem, range: HistoryRange, now: number = Date.now()): HistoryPoint[] {

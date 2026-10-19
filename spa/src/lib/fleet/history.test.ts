@@ -132,6 +132,21 @@ describe('FleetHistory.seedRaw (the 5 min range filled from the daemon\'s histor
     expect(h.bucketCount('h')).toBe(1)
   })
 
+  it('after a seed, a live reading at the same time as the newest seeded one is not added twice', () => {
+    const h = new FleetHistory()
+    h.seedRaw('h', [seed(0, 10), seed(5, 20)], at(6))
+    h.record('h', fast({ at: at(5), cpu: 77 }))
+    expect(h.series('h', 'cpu', '5m', at(6)).map((p) => [p.t, p.avg])).toEqual([[at(0), 10], [at(5), 20]])
+  })
+
+  it('after a seed, a live reading older than the newest seeded one is ignored, a newer one follows in order', () => {
+    const h = new FleetHistory()
+    h.seedRaw('h', [seed(0, 10), seed(5, 20)], at(6))
+    h.record('h', fast({ at: at(3), cpu: 77 }))
+    h.record('h', fast({ at: at(7), cpu: 30 }))
+    expect(h.series('h', 'cpu', '5m', at(8)).map((p) => [p.t, p.avg])).toEqual([[at(0), 10], [at(5), 20], [at(7), 30]])
+  })
+
   it('a reading dated ahead of this App\'s clock is not placed: it must not wipe the history nor empty the chart', () => {
     const h = new FleetHistory()
     h.record('h', fast({ at: at(10), cpu: 50 }))
