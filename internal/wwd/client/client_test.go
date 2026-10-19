@@ -190,10 +190,19 @@ func TestRouteMissing(t *testing.T) {
 	if !errors.As(err, &se) || se.Code != 404 || RouteMissing(err) {
 		t.Fatalf("an unknown host: err = %v, want a 404 that is not RouteMissing", err)
 	}
-	for _, e := range []error{nil, ErrUnavailable, &StatusError{Code: 500, Body: "404 page not found"}} {
+	for _, e := range []error{
+		nil, ErrUnavailable, &StatusError{Code: 500, Body: "404 page not found"},
+		&StatusError{Code: 404, Body: "<html>502 Bad Gateway: not found</html>"}, // a proxy's page
+		&StatusError{Code: 404, Body: `{"error":"no such series"}`},              // another route's reason
+		&StatusError{Code: 404, Body: `{"error":"Unknown Host"}`},                // not even the unknown-host spelling
+		&StatusError{Code: 404, Body: "404 page not found, but more"},
+	} {
 		if RouteMissing(e) {
 			t.Errorf("RouteMissing(%v) = true", e)
 		}
+	}
+	if !RouteMissing(&StatusError{Code: 404, Body: "404 page not found\n"}) {
+		t.Error("net/http's own 404 (with its newline) is a missing route")
 	}
 }
 

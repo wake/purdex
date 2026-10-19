@@ -75,6 +75,8 @@ func (d *Daemon) handleFactsSeries(peer bool) http.HandlerFunc {
 		if d.forwardedOrRefused(w, r, peer) {
 			return
 		}
-		writeJSON(w, http.StatusOK, wire.SeriesOf(wire.FactsHistoryResponse{Step: q.Step, Records: d.opts.Sampler.History(q.Since, q.Step)}, q.Limit))
+		// one record more than the limit is read, to know whether the oldest were cut
+		recs := d.opts.Sampler.HistoryLatest(q.Since, q.Step, q.Limit+1)
+		writeJSON(w, http.StatusOK, wire.SeriesOf(wire.FactsHistoryResponse{Step: q.Step, Records: recs}, q.Limit))
 	}
 }

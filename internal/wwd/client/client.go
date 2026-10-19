@@ -188,11 +188,15 @@ func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire
 	return getLimit[wire.FactsSeriesResponse](ctx, c, "/v1/facts/series", q.Values(), timeout, maxBody)
 }
 
-// RouteMissing says err is a wwd (or the peer behind it) that has no such route: net/http's plain 404. A 404 that names an unknown
-// host is a JSON body {"error":"unknown host"} and is not this; neither is any other error.
+// notFoundBody is what net/http's mux answers for a path it has no handler for.
+const notFoundBody = "404 page not found"
+
+// RouteMissing says err is a wwd (or the peer behind it) that has no such route: exactly net/http's own 404 for an unknown path.
+// Any other 404 (a JSON {"error":"unknown host"}, a proxy's page, another route's reason) is the answer it is and is not this, so that
+// it is never mistaken for an old release and answered by asking again for ten times the data.
 func RouteMissing(err error) bool {
 	var se *StatusError
-	return errors.As(err, &se) && se.Code == http.StatusNotFound && !strings.Contains(se.Body, "unknown host")
+	return errors.As(err, &se) && se.Code == http.StatusNotFound && strings.TrimSpace(se.Body) == notFoundBody
 }
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about

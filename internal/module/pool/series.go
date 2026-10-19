@@ -79,6 +79,10 @@ func (m *Module) handleSeries(w http.ResponseWriter, r *http.Request) {
 		// a wwd without that route (an older release, here or on the peer) answers 404, and then the full history is fetched and cut here
 		sr, err := m.client().FactsSeries(ctx, wire.FactsSeriesQuery{FactsHistoryQuery: hq, Limit: seriesMaxPoints})
 		if err == nil {
+			// the 2000-point contract of this route is held here too, whatever a wwd of another release answered to the limit
+			if over := len(sr.Points) - seriesMaxPoints; over > 0 {
+				sr.Points, sr.Truncated = sr.Points[over:], true
+			}
 			return sr, nil
 		}
 		if !client.RouteMissing(err) {

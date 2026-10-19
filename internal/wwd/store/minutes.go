@@ -52,7 +52,20 @@ func (e *SkippedRowsError) Error() string {
 // that no longer decodes is skipped, so one bad minute does not hide the rest,
 // and reported as a *SkippedRowsError next to the records.
 func (s *Store) LoadMinutes(since time.Time) ([]wire.Facts, error) {
-	rows, err := s.db.Query(`SELECT rec FROM host_minutes WHERE at >= ? ORDER BY at`, since.UnixMilli())
+	return s.loadMinutes(`SELECT rec FROM host_minutes WHERE at >= ? ORDER BY at`, since.UnixMilli())
+}
+
+// LoadMinutesLatest is LoadMinutes for the newest n minutes only (still oldest first): a chart of a long window reads as many rows
+// as it has points, not every minute since. n of 0 or less reads none.
+func (s *Store) LoadMinutesLatest(since time.Time, n int) ([]wire.Facts, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	return s.loadMinutes(`SELECT rec FROM (SELECT at, rec FROM host_minutes WHERE at >= ? ORDER BY at DESC LIMIT ?) ORDER BY at`, since.UnixMilli(), n)
+}
+
+func (s *Store) loadMinutes(query string, args ...any) ([]wire.Facts, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

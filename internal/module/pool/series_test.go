@@ -168,6 +168,26 @@ func TestSeriesRouteAsksWWDForTheCutSeries(t *testing.T) {
 	assert.Zero(t, history, "the full history is the fallback, not the first ask")
 }
 
+// The route's 2000 points hold even when the wwd behind it ignores the limit.
+func TestSeriesRouteKeepsTheLatest2000OfAnOverlongAnswer(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	over := wire.FactsSeriesResponse{Step: "1m", Points: make([]wire.SeriesPoint, seriesMaxPoints+5)}
+	for i := range over.Points {
+		over.Points[i] = wire.SeriesPoint{At: t0.Add(time.Duration(i) * time.Minute), Zone: wire.ZoneNormal}
+	}
+	body, err := json.Marshal(over)
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/facts/series?since=24h")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	var got SeriesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Len(t, got.Points, seriesMaxPoints)
+	assert.True(t, got.Truncated)
+	assert.Equal(t, t0.Add(5*time.Minute), got.Points[0].At, "the oldest 5 are the ones left out")
+}
+
 // An unknown host is the caller's mistake, not a missing route: it is passed on as wwd_rejected 404 and the history is not tried.
 // A wwd that has no series route (an older release) is the fallback: the full history is fetched and cut here.
 func TestSeriesRouteFallsBackOnlyWhenTheRouteIsMissing(t *testing.T) {
