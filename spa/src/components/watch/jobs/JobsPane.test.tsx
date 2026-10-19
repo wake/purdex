@@ -239,6 +239,23 @@ describe('the detail beside the list', () => {
     expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('h1')
   })
 
+  it('the same id from two origins is two cards (an id is only unique within the host that queued it): each opens its own job, and no key is duplicated', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    usePoolStore.setState({ hosts: [host('mlab'), host('mserv')] })
+    withJobs(job('same', { origin: 'mlab' }), job('same', { origin: 'mserv', created_at: NOW - 500 }), job('run', { origin: 'mlab', state: 'running', claim: claim('mlab') }), job('run', { origin: 'mserv', state: 'running', claim: claim('mlab') }))
+    mount()
+    const queued = within(screen.getByTestId('job-queue')).getAllByRole('button')
+    expect(queued).toHaveLength(2)
+    fireEvent.click(queued[1])
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mserv')
+    const running = within(screen.getByTestId('job-lane-mlab')).getAllByTestId('job-running')
+    expect(running).toHaveLength(2)
+    fireEvent.click(running[0])
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mlab')
+    expect(errors.mock.calls.flat().join(' ')).not.toContain('same key')
+    errors.mockRestore()
+  })
+
   it('the close button closes it, and the selection goes with it', () => {
     withJobs(job('q1'))
     mount()

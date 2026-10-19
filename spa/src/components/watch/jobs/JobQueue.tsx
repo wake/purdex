@@ -44,7 +44,7 @@ export function JobQueue({ entries, now, selected, onSelect }: { entries: QueueE
   if (entries.length === 0) return <p data-testid="job-queue-none" className="text-xs text-text-muted">{t('watch.jobs.queue.none')}</p>
   return (
     <ul data-testid="job-queue" className="flex flex-col gap-1.5">
-      {entries.map((e) => <QueueCard key={e.job.id} entry={e} now={now} selected={selected === jobKey(e.job.origin, e.job.id)} onSelect={onSelect} />)}
+      {entries.map((e) => <QueueCard key={jobKey(e.job.origin, e.job.id)} entry={e} now={now} selected={selected === jobKey(e.job.origin, e.job.id)} onSelect={onSelect} />)}
     </ul>
   )
 }

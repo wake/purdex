@@ -3261,6 +3261,7 @@
   "watch.jobs.detail.title": "Job detail",
   "watch.jobs.detail.close": "Close detail",
   "watch.jobs.detail.read_error": "Cannot read this job's detail",
+  "watch.jobs.detail.read_unavailable": "Cannot read this job: no wwd answered",
   "watch.jobs.detail.failures": "Failures",
   "watch.jobs.detail.tail": "Output tail",
   "watch.jobs.detail.log": "Log",

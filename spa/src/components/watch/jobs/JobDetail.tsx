@@ -43,7 +43,12 @@ export function JobDetail({ job, now, onClose }: { job: PoolJob; now: number; on
   const note = logNote(job, inline, now)
   const host = jobRanOn(job)
   const result = resultText(resultWord(job), t)
-  const errorLine = (e: PoolError): string => { const k = errorTextKey(e.code); return k ? t(k) : t('watch.jobs.detail.read_error') }
+  // `pool.error.unavailable` names the daemon the pool falls back to — not a thing a job's detail has — so the detail says it in its own words; the host-failing line names the job's origin.
+  const errorLine = (e: PoolError): string => {
+    if (e.code === 'no_answer' || e.code === 'wwd_unavailable') return t('watch.jobs.detail.read_unavailable')
+    const k = errorTextKey(e.code)
+    return k ? t(k, { host: job.origin }) : t('watch.jobs.detail.read_error')
+  }
   const ranFor = r?.started_at != null && r.finished_at != null ? mss(r.started_at, r.finished_at) : isEnded(job.state) ? '—' : mss(job.claim?.since ?? null, now)
 
   return (

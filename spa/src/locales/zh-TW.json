@@ -3261,6 +3261,7 @@
   "watch.jobs.detail.title": "工作詳情",
   "watch.jobs.detail.close": "關閉詳情",
   "watch.jobs.detail.read_error": "讀不到這件工作的詳情",
+  "watch.jobs.detail.read_unavailable": "讀不到這件工作：沒有 wwd 回應",
   "watch.jobs.detail.failures": "失敗的項目",
   "watch.jobs.detail.tail": "輸出尾段",
   "watch.jobs.detail.log": "log",

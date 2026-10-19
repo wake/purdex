@@ -5,10 +5,11 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from './store'
 import { PoolReadError } from './api'
-import type { PoolError } from './errors'
+import { busyDelayMs, type PoolError } from './errors'
 import { fetchJob, fetchJobLog } from './jobs-api'
 import { liveTopology } from './jobs-driver-live'
-import { jobSourceFor } from './jobs-store'
+import { candidates } from './jobs-driver'
+import { jobSourceFor, type JobSource } from './jobs-store'
 import { isEnded, type PoolJob } from './jobs-types'
 
 /** A log is uploaded after the result: within this long of the end its absence is "still uploading", later it is gone. */
@@ -40,6 +41,38 @@ const errorOf =(e: unknown): PoolError => (e instanceof PoolReadError ? e.poolEr
 export type DetailRead = { phase: 'loading' } | { phase: 'ready'; log: string | null } | { phase: 'error'; error: PoolError }
 export type FullLogRead = { phase: 'idle' } | { phase: 'loading' } | { phase: 'ready'; text: string } | { phase: 'error'; error: PoolError }
 
+/** A busy daemon is asked again this many times (after 1–2 s each) before the failure is shown. */
+const BUSY_RETRIES = 2
+
+/**
+ * One read of a job's detail or log, by the error table's actions (spec §10, as the jobs driver): no answer, `wwd_unavailable` or a bad answer → the next source that can answer for the origin (its own daemon, then each forwarder);
+ * `busy` → the same source again after 1–2 s; anything else is the answer. `alive` says whether anyone still waits for it (a panel that closed or moved on stops the retries).
+ */
+async function readFromSources<T>(origin: string, path: string, alive: () => boolean, call: (s: JobSource) => Promise<T>): Promise<T> {
+  const sources = candidates(origin, liveTopology())
+  if (sources.length === 0) throw new PoolReadError(path, null, NO_DAEMON)
+  let last: unknown
+  for (const source of sources) {
+    for (let busy = 0; ; busy++) {
+      try {
+        return await call(source)
+      } catch (e) {
+        last = e
+        const action = e instanceof PoolReadError ? e.poolError.action : 'log'
+        if (!alive()) throw e
+        if (action === 'retry_same' && busy < BUSY_RETRIES) {
+          await new Promise((r) => setTimeout(r, busyDelayMs(Math.random())))
+          if (!alive()) throw e
+          continue
+        }
+        if (action === 'next_source') break
+        throw e
+      }
+    }
+  }
+  throw last
+}
+
 /**
  * The source of `origin`'s reads, as a string that changes only when the source does. The inputs of `liveTopology` (the pool's hosts, the connections, the cached capabilities, the App's hosts) are subscribed to,
  * so the source is worked out again when any of them changes; a change that leaves the source as it was changes nothing.
@@ -70,8 +103,7 @@ export function useJobDetail(job: PoolJob): { detail: DetailRead; full: FullLogR
 
   useEffect(() => {
     let live = true
-    const source = detailSource(origin)
-    const read = source === null ? Promise.reject(new PoolReadError(`/api/pool/jobs/${id}`, null, NO_DAEMON)) : fetchJob(source.daemonId, id, source.host)
+    const read = readFromSources(origin, `/api/pool/jobs/${id}`, () => live, (s) => fetchJob(s.daemonId, id, s.host))
     read.then(
       (d) => { if (live) setGot({ tag, read: { phase: 'ready', log: d.log } }) },
       (e) => { if (live) setGot({ tag, read: { phase: 'error', error: errorOf(e) } }) },
@@ -80,9 +112,8 @@ export function useJobDetail(job: PoolJob): { detail: DetailRead; full: FullLogR
   }, [origin, id, tag])
 
   const loadFull = useCallback(() => {
-    const source = detailSource(origin)
     setFullGot({ tag, read: { phase: 'loading' } })
-    const read = source === null ? Promise.reject(new PoolReadError(`/api/pool/jobs/${id}/log`, null, NO_DAEMON)) : fetchJobLog(source.daemonId, id, source.host)
+    const read = readFromSources(origin, `/api/pool/jobs/${id}/log`, () => true, (s) => fetchJobLog(s.daemonId, id, s.host))
     read.then(
       (text) => setFullGot({ tag, read: { phase: 'ready', text } }),
       (e) => setFullGot({ tag, read: { phase: 'error', error: errorOf(e) } }),

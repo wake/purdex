@@ -45,7 +45,7 @@ function Lane({ lane, now, selected, onSelect }: { lane: LaneModel; now: number 
       </div>
       <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5">
         {lane.off && lane.jobs.length === 0 && <span data-testid="job-lane-off" className="text-xs text-text-muted">{t('watch.jobs.lane.off')}</span>}
-        {lane.jobs.map((j) => <JobCard key={j.id} job={j} now={now} selected={selected} onSelect={onSelect} />)}
+        {lane.jobs.map((j) => <JobCard key={jobKey(j.origin, j.id)} job={j} now={now} selected={selected} onSelect={onSelect} />)}
         {!lane.off && Array.from({ length: free }).map((_, i) => (
           <div key={`free${i}`} data-testid="job-free" className="shrink-0 h-7 w-[200px] rounded-md border border-dashed border-border-default grid place-items-center text-[10px] text-text-muted">{t('watch.queue.free')}</div>
         ))}
