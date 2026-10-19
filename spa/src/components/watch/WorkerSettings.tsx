@@ -88,6 +88,18 @@ function OwnerRuleBox({ alias, rule, disabled, onCommit, onStep }: { alias: stri
   )
 }
 
+/** What `to` changed against `from`, field by field. */
+function changedFields(from: PoolWorker, to: PoolWorker): Fields {
+  const out: Fields = {}
+  if (to.enabled !== from.enabled) out.enabled = to.enabled
+  if (to.owner_rule !== from.owner_rule) out.owner_rule = to.owner_rule
+  const slots: Partial<PoolWorker['slots']> = {}
+  if (to.slots.heavy !== from.slots.heavy) slots.heavy = to.slots.heavy
+  if (to.slots.light !== from.slots.light) slots.light = to.slots.light
+  if (Object.keys(slots).length > 0) out.slots = slots
+  return out
+}
+
 /** The settings of one pool host, by its alias. Renders nothing the reader can act on until a connected daemon announces `pool.control.v1`. */
 export function WorkerSettings({ alias }: { alias: string }) {
   const t = useI18nStore((s) => s.t)
@@ -106,6 +118,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
   const [wanted, setWanted] = useState<PoolWorker | null>(null)
   const wantedRef = useRef<PoolWorker | null>(null)
   const inFlight = useRef(false)
+  const lastField = useRef<Field>('enabled') // the row of the latest press: a PUT that fails is shown under the row that asked for it last
   const [failure, setFailure] = useState<Failure | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
   const [, redraw] = useState(0) // a 403 is remembered per daemon (control-api); this only draws it
@@ -144,18 +157,24 @@ export function WorkerSettings({ alias }: { alias: string }) {
     const fields = typeof patch === 'function' ? patch(base) : patch
     const next: PoolWorker = { ...base, ...fields, slots: { ...base.slots, ...fields.slots } }
     wantedRef.current = next
+    lastField.current = field
     setWanted(next)
     setFailure(null)
     if (inFlight.current) return // the PUT in the air is followed by one with whatever is wanted by then
     inFlight.current = true
     const chainBase = pending?.base ?? current // what the rows were before this run of changes: they are marked as touched against it
     const baseAt = host.facts?.at ?? null
+    // the PUT in the air: what a failure is about (its row, and what it changed against what it was built on, which is what a retry asks again)
+    let attempt: { settings: PoolWorker; built: PoolWorker; field: Field } | null = null
+    let built: PoolWorker = pending?.sent ?? current
     try {
       for (;;) {
         const sending: PoolWorker | null = wantedRef.current
         const target = controlSource(usePoolStore.getState().sourceHostId)
         if (sending === null || target === null) break
+        attempt = { settings: sending, built, field: lastField.current }
         await putWorker(target, alias, sending)
+        built = sending
         setPending({ sent: sending, base: chainBase, at: Date.now(), baseAt })
         setLate(false)
         void usePoolStore.getState().readOnce() // the facts that carry it, sooner than the next poll
@@ -164,10 +183,12 @@ export function WorkerSettings({ alias }: { alias: string }) {
     } catch (e) {
       const err = e instanceof PoolChangeError ? e : null
       const action = err?.poolError.action
+      const failed = attempt ?? { settings: next, built: base, field }
+      const again = (): Fields => changedFields(failed.built, failed.settings) // laid on the settings as they are at the click
       if (action === 'read_only') redraw((n) => n + 1)
-      else if (err?.poolError.code === 'wwd_rejected') setFailure({ field, text: err.detail || t('pool.worker.rejected') })
-      else if (err?.poolError.code === 'bad_request') setFailure({ field, text: t('pool.worker.bad_request') })
-      else setFailure({ field, text: t('pool.worker.no_answer', { alias, reason: err?.detail ?? '' }), patch })
+      else if (err?.poolError.code === 'wwd_rejected') setFailure({ field: failed.field, text: err.detail || t('pool.worker.rejected') })
+      else if (err?.poolError.code === 'bad_request') setFailure({ field: failed.field, text: t('pool.worker.bad_request') })
+      else setFailure({ field: failed.field, text: t('pool.worker.no_answer', { alias, reason: err?.detail ?? '' }), patch: again })
     } finally {
       // what was wanted and not sent goes back to what the host has (the refusal is shown under the row)
       inFlight.current = false

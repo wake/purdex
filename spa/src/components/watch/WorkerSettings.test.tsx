@@ -169,6 +169,25 @@ describe('WorkerSettings', () => {
     expect(screen.getByTestId('pool-worker-slots-heavy-value')).toHaveTextContent('4')
   })
 
+  it('a later PUT of a run that fails is shown under the row that asked for it last, and its retry asks again what that PUT changed', async () => {
+    const answers: Array<(r: Response) => void> = []
+    hostFetch.mockImplementation(() => new Promise<Response>((resolve) => { answers.push(resolve) }))
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pool-worker-slots-heavy-inc')) // PUT 1 goes out: heavy 2
+      fireEvent.click(screen.getByTestId('pool-worker-slots-light-inc')) // queued: heavy 2, light 3
+    })
+    await act(async () => { answers[0](reply(200, { ok: true })) }) // PUT 2 goes out
+    expect(lastPut().body.slots).toEqual({ heavy: 2, light: 3 })
+    await act(async () => { answers[1](reply(502, { error: 'wwd_error', detail: 'timeout' })) })
+    expect(screen.getByTestId('pool-worker-error-light')).toBeInTheDocument() // the row of the last press, not the first
+    expect(screen.queryByTestId('pool-worker-error-heavy')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByTestId('pool-worker-retry-light')) })
+    expect(hostFetch).toHaveBeenCalledTimes(3)
+    expect(lastPut().body.slots).toEqual({ heavy: 2, light: 3 }) // light 3 again on top of heavy 2, which the first PUT had already set
+  })
+
   it('a refused PUT drops what was queued behind it and the rows go back to what the host has', async () => {
     const answers: Array<(r: Response) => void> = []
     hostFetch.mockImplementation(() => new Promise<Response>((resolve) => { answers.push(resolve) }))
