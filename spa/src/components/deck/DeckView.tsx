@@ -77,6 +77,9 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   const firstUser = firstUserId(turn.items, turn.omitted_items)
   // Where the agent starts speaking again after a tool or a thought (spec §9.4): only a persona's conversation draws a line for it.
   const speechStarts = useMemo(() => (seat ? speechStartIds(turn.items, { afterOmitted: !!turn.omitted_items }) : null), [seat, turn.items, turn.omitted_items])
+  // The turn's head line: today's rule (the first agent text in view) for a conversation that is no persona; a persona's goes to the first speech start that is CERTAIN (a turn that left its first items out may
+  // open mid-run, and a head on that continuation would claim a start it does not know).
+  const headerId = speechStarts ? turn.items.find((item) => speechStarts.has(item.id))?.id : firstAgentId
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return
@@ -95,7 +98,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
       {turn.omitted_items ? (
         <div data-testid="deck-omitted" className="deck-t-down text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
-      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} seat={seat} speechStart={speechStarts?.has(item.id) ?? false} midTurn={item.type === 'user' && item.id !== firstUser} />)}
+      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === headerId} seat={seat} speechStart={speechStarts?.has(item.id) ?? false} midTurn={item.type === 'user' && item.id !== firstUser} />)}
       <DoneTurnLine turn={turn} background={background} />
       {turn.error && <div data-testid="deck-turn-error" className="deck-t-down text-status-error">{turn.error.message}</div>}
     </section>

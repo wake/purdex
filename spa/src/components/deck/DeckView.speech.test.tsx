@@ -62,6 +62,36 @@ describe('the deck of a persona', () => {
   })
 })
 
+describe('a turn that left its first items out (omitted_items)', () => {
+  const truncated = (items: ConversationItem[]): ConversationEntry => {
+    const e = entry(items)
+    e.doc.turns[0] = { ...e.doc.turns[0], omitted_items: 5 }
+    return e
+  }
+
+  it('the full head goes to the first start that is certain, not to the continuation cut off at the edge', () => {
+    render(<DeckView {...props} seat={ann} entry={truncated([text('a', 5), step('s1', 6), text('b', 7)])} />)
+    const heads = screen.getAllByTestId('deck-agent-header')
+    expect(heads).toHaveLength(1)
+    // it sits on b (after the tool), not on a: the text above the tool may be the tail of a run that began in the omitted part
+    expect(heads[0].closest('[data-testid="deck-agent-text"]')).toHaveTextContent('said b')
+    expect(screen.queryAllByTestId('deck-speech-line')).toHaveLength(0)
+  })
+
+  it('no certain start in view: no persona head at all', () => {
+    render(<DeckView {...props} seat={ann} entry={truncated([text('a', 5), text('b', 6)])} />)
+    expect(screen.queryAllByTestId('deck-agent-header')).toHaveLength(0)
+    expect(screen.queryAllByTestId('deck-speech-line')).toHaveLength(0)
+  })
+
+  it('a conversation that is no persona keeps today\'s head on the first visible text', () => {
+    render(<DeckView {...props} seat={null} entry={truncated([text('a', 5), step('s1', 6), text('b', 7)])} />)
+    const heads = screen.getAllByTestId('deck-agent-header')
+    expect(heads).toHaveLength(1)
+    expect(heads[0].closest('[data-testid="deck-agent-text"]')).toHaveTextContent('said a')
+  })
+})
+
 describe('the pane hands the persona to the deck', () => {
   it('DeckPane\'s `seat` reaches the head line', () => {
     const base = { paneId: 'p-speech', isActive: true, isFocusTarget: false, onSwitchToTerminal: () => {} }
