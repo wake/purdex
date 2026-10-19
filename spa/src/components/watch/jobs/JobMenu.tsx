@@ -74,7 +74,7 @@ export function JobMenu({ job, onNotice }: { job: PoolJob; onNotice: (n: MenuNot
   const cancel = actions.find((a) => a.kind === 'cancel')
   const items: MenuEntry[] = confirming && cancel
     ? [
-      { id: 'ask', label: t('watch.jobs.menu.confirm_title'), disabled: true },
+      { id: 'ask', label: t('watch.jobs.menu.confirm_title'), disabled: true, onSelect: () => {} },
       { divider: true },
       { id: 'yes', label: t('watch.jobs.menu.confirm_yes'), testId: 'job-menu-confirm-yes', onSelect: () => { void run(cancel) } },
       { id: 'no', label: t('watch.jobs.menu.confirm_no'), testId: 'job-menu-confirm-no', onSelect: () => { setConfirming(false); setOpen(false) } },
