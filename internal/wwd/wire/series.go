@@ -42,6 +42,11 @@ func (r FactsSeriesResponse) Validate() error {
 	if len(r.Points) > SeriesMaxPoints {
 		return fmt.Errorf("series: %d points is over the limit of %d", len(r.Points), SeriesMaxPoints)
 	}
+	for i, p := range r.Points { // what a full history refuses record by record (Facts.Validate), so does a series point by point
+		if !p.Zone.Valid() {
+			return fmt.Errorf("series: points[%d]: invalid zone %q", i, p.Zone)
+		}
+	}
 	return nil
 }
 

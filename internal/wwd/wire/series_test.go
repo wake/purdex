@@ -89,6 +89,12 @@ func TestSeriesResponseValidate(t *testing.T) {
 	if err := (FactsSeriesResponse{Step: Step1m, Points: []SeriesPoint{}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if err := (FactsSeriesResponse{Step: Step1m, Points: []SeriesPoint{{Zone: ZoneNormal}, {Zone: "melting"}}}).Validate(); err == nil {
+		t.Error("a point with an unknown zone must be refused")
+	}
+	if err := (FactsSeriesResponse{Step: Step1m, Points: []SeriesPoint{{Zone: ZoneNormal}, {Zone: ZoneUnknown}}}).Validate(); err != nil {
+		t.Errorf("the four zones are valid: %v", err)
+	}
 	if err := (FactsSeriesResponse{Step: "2m"}).Validate(); err == nil {
 		t.Error("a bad step must be refused")
 	}
