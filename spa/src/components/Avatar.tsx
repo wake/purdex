@@ -2,8 +2,8 @@
 // otherwise the name's first letter on the host colour.
 import { useState } from 'react'
 
-/** 16–44 are the places an avatar sits beside text; 32 is the persona list row and 96 the persona form's preview. */
-export type AvatarSize = 16 | 18 | 24 | 32 | 44 | 96
+/** 16–44 are the places an avatar sits beside text (22 the lead name card's pills); 32 is the persona list row and 96 the persona form's preview. */
+export type AvatarSize = 16 | 18 | 22 | 24 | 32 | 44 | 96
 
 interface Props {
   size: AvatarSize
