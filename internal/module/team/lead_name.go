@@ -31,17 +31,6 @@ var leadCodePattern = regexp.MustCompile(`^[a-z]{3,12}$`)
 // leadNameTimeout bounds one call into the name service (each takes its pool lock and writes meta.db once).
 const leadNameTimeout = 10 * time.Second
 
-// nameService is the peers module's NameService, looked up when used (the peers module may register after this one); nil when
-// there is none.
-func (m *Module) nameService() ipeers.NameService {
-	svc, ok := m.core.Registry.Get(ipeers.NameServiceKey)
-	if !ok {
-		return nil
-	}
-	ns, _ := svc.(ipeers.NameService)
-	return ns
-}
-
 // leadNamesNow is the list the card reads: an empty (non-nil) list when no persona exists, an error when there is no name
 // service or it cannot be read.
 func (m *Module) leadNamesNow(sessionID string) ([]team.LeadName, error) {

@@ -15,8 +15,8 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// fakeNames is the NameService of these tests: it records every call in order, and its hooks let a test act inside a rename.
-type fakeNames struct {
+// fakeLeadNames is the NameService of these tests: it records every call in order, and its hooks let a test act inside a rename.
+type fakeLeadNames struct {
 	mu      sync.Mutex
 	calls   []string
 	cands   []ipeers.LeadCandidate
@@ -28,19 +28,19 @@ type fakeNames struct {
 	undoErr, recordErr error
 }
 
-func (n *fakeNames) note(s string) {
+func (n *fakeLeadNames) note(s string) {
 	n.mu.Lock()
 	n.calls = append(n.calls, s)
 	n.mu.Unlock()
 }
 
-func (n *fakeNames) log() []string {
+func (n *fakeLeadNames) log() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]string(nil), n.calls...)
 }
 
-func (n *fakeNames) count(prefix string) int {
+func (n *fakeLeadNames) count(prefix string) int {
 	c := 0
 	for _, s := range n.log() {
 		if strings.HasPrefix(s, prefix) {
@@ -50,12 +50,12 @@ func (n *fakeNames) count(prefix string) int {
 	return c
 }
 
-func (n *fakeNames) LeadCandidates(_ context.Context, sid string) ([]ipeers.LeadCandidate, error) {
+func (n *fakeLeadNames) LeadCandidates(_ context.Context, sid string) ([]ipeers.LeadCandidate, error) {
 	n.note("cands:" + sid)
 	return n.cands, n.candErr
 }
 
-func (n *fakeNames) RenameForLead(_ context.Context, sid, code string) (string, error) {
+func (n *fakeLeadNames) RenameForLead(_ context.Context, sid, code string) (string, error) {
 	n.note("rename:" + sid + ":" + code)
 	if n.rename != nil {
 		if err := n.rename(sid, code); err != nil {
@@ -65,27 +65,27 @@ func (n *fakeNames) RenameForLead(_ context.Context, sid, code string) (string, 
 	return n.old, nil
 }
 
-func (n *fakeNames) UndoRenameForLead(_ context.Context, sid, old string) error {
+func (n *fakeLeadNames) UndoRenameForLead(_ context.Context, sid, old string) error {
 	n.note("undo:" + sid + ":" + old)
 	return n.undoErr
 }
 
-func (n *fakeNames) RecordLead(_ context.Context, sid string) error {
+func (n *fakeLeadNames) RecordLead(_ context.Context, sid string) error {
 	n.note("record:" + sid)
 	return n.recordErr
 }
 
-func (n *fakeNames) RecordPairCodes(context.Context, string, string) error { return nil }
-func (n *fakeNames) CodeOf(context.Context, string) (string, bool)         { return "", false }
-func (n *fakeNames) ReserveMember(context.Context, string, string, string, time.Time) (string, error) {
+func (n *fakeLeadNames) RecordPairCodes(context.Context, string, string) error { return nil }
+func (n *fakeLeadNames) CodeOf(context.Context, string) (string, bool)         { return "", false }
+func (n *fakeLeadNames) ReserveMember(context.Context, string, string, string, time.Time) (string, error) {
 	return "", nil
 }
-func (n *fakeNames) ReserveExact(context.Context, string, string, string, time.Time) error {
+func (n *fakeLeadNames) ReserveExact(context.Context, string, string, string, time.Time) error {
 	return nil
 }
-func (n *fakeNames) ReleaseReservation(string) {}
+func (n *fakeLeadNames) ReleaseReservation(string) {}
 
-var _ ipeers.NameService = (*fakeNames)(nil)
+var _ ipeers.NameService = (*fakeLeadNames)(nil)
 
 var leadCands = []ipeers.LeadCandidate{
 	{Code: "adam", Keep: true, Name: "Adam", Kind: team.LeadNameKeep},
@@ -94,8 +94,8 @@ var leadCands = []ipeers.LeadCandidate{
 }
 
 // withNames registers a fake name service whose old name is "purdex-88-b8" (the lead sid-1's current one).
-func withNames(f *fixture) *fakeNames {
-	n := &fakeNames{cands: leadCands, old: "purdex-88-" + ipeers.RefID("sid-1")[1:3]}
+func withLeadNames(f *fixture) *fakeLeadNames {
+	n := &fakeLeadNames{cands: leadCands, old: "purdex-88-" + ipeers.RefID("sid-1")[1:3]}
 	f.core.Registry.Register(ipeers.NameServiceKey, n)
 	return n
 }
@@ -109,7 +109,7 @@ func (f *fixture) decideLead(id, code string) (int, []byte) {
 
 func TestLeadName_RenameComesBeforeTheTeamRow(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	n.rename = func(sid, code string) error {
 		if _, found, err := f.m.store.LiveTeamByLead(sid); err != nil || found {
@@ -135,7 +135,7 @@ func TestLeadName_EveryCandidateIsAccepted(t *testing.T) {
 	for _, c := range leadCands {
 		t.Run(c.Code, func(t *testing.T) {
 			f := newFixture(t)
-			withNames(f)
+			withLeadNames(f)
 			f.create(uid(1))
 			if code, body := f.decideLead(uid(1), c.Code); code != 200 {
 				t.Fatalf("decide with %q: %d %s", c.Code, code, body)
@@ -146,7 +146,7 @@ func TestLeadName_EveryCandidateIsAccepted(t *testing.T) {
 
 func TestLeadName_NoLeadNameStillRecordsTheLead(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", team.DecideRequest{Decision: "approve", Client: leadAppClient}); code != 200 {
 		t.Fatalf("decide: %d %s", code, body)
@@ -158,7 +158,7 @@ func TestLeadName_NoLeadNameStillRecordsTheLead(t *testing.T) {
 
 func TestLeadName_RecordFailureOnlyLogs(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	n.recordErr = errors.New("meta.db locked")
 	f.create(uid(1))
 	if code, body := f.decideLead(uid(1), "kenji"); code != 200 {
@@ -168,7 +168,7 @@ func TestLeadName_RecordFailureOnlyLogs(t *testing.T) {
 
 func TestLeadName_Taken(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	n.rename = func(string, string) error { return ipeers.ErrNameTaken }
 	f.create(uid(1))
 	code, body := f.decideLead(uid(1), "kenji")
@@ -187,7 +187,7 @@ func TestLeadName_Taken(t *testing.T) {
 // When the list cannot be refreshed after a name_taken, the body carries the one the request was made with.
 func TestLeadName_TakenWithUnreadableListFallsBackToTheStoredOne(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	n.rename = func(string, string) error { n.candErr = errors.New("meta.db locked"); return ipeers.ErrNameTaken }
 	code, body := f.decideLead(uid(1), "kenji")
@@ -199,7 +199,7 @@ func TestLeadName_TakenWithUnreadableListFallsBackToTheStoredOne(t *testing.T) {
 
 func TestLeadName_UnknownAndMalformedCodes(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	n.rename = func(string, string) error { return ipeers.ErrNameUnknown }
 	f.create(uid(1))
 	if code, body := f.decideLead(uid(1), "nobody"); code != 400 || decodeErr(t, body).Error != team.ErrBadRequest {
@@ -229,7 +229,7 @@ func TestLeadName_NoNameServiceIs400(t *testing.T) {
 
 func TestLeadName_DenyIgnoresTheName(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	code, _ := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide",
 		team.DecideRequest{Decision: "deny", Grant: &team.Grant{LeadName: "kenji"}, Client: leadAppClient})
@@ -243,7 +243,7 @@ func TestLeadName_LostCloseUndoesTheRename(t *testing.T) {
 	for name, undoErr := range map[string]error{"nothing to undo": nil, "old name taken": ipeers.ErrNameTaken, "other error": errors.New("meta.db locked")} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			n := withNames(f)
+			n := withLeadNames(f)
 			n.undoErr = undoErr
 			f.create(uid(1))
 			n.rename = func(string, string) error { // someone else's close lands between the rename and ours
@@ -268,7 +268,7 @@ func TestLeadName_CloseErrorUndoesTheRename(t *testing.T) {
 	for name, undoErr := range map[string]error{"nothing to undo": nil, "old name taken": ipeers.ErrNameTaken, "other error": errors.New("meta.db locked")} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			n := withNames(f)
+			n := withLeadNames(f)
 			n.undoErr = undoErr
 			f.create(uid(1))
 			n.rename = func(string, string) error {
@@ -290,7 +290,7 @@ func TestLeadName_CloseErrorUndoesTheRename(t *testing.T) {
 // and renames nothing.
 func TestLeadName_ConcurrentDecidesRenameOnce(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
@@ -334,7 +334,7 @@ func TestLeadName_SweeperCloseWaitsForTheApprovalLock(t *testing.T) {
 
 func TestLeadName_NoticeToTheRenamedSession(t *testing.T) {
 	f := newFixture(t)
-	n := withNames(f)
+	n := withLeadNames(f)
 	f.create(uid(1))
 	if code, body := f.decideLead(uid(1), "kenji"); code != 200 {
 		t.Fatalf("decide: %d %s", code, body)
@@ -361,7 +361,7 @@ func TestLeadName_NoticeToTheRenamedSession(t *testing.T) {
 
 func TestLeadName_NoticeFailureDoesNotFailTheDecide(t *testing.T) {
 	f := newFixture(t)
-	withNames(f)
+	withLeadNames(f)
 	f.sender.err = errors.New("inbox gone")
 	f.create(uid(1))
 	if code, body := f.decideLead(uid(1), "kenji"); code != 200 {
@@ -380,7 +380,7 @@ func TestLeadName_CreateFillsTheNames(t *testing.T) {
 	}
 	t.Run("with the service", func(t *testing.T) {
 		f := newFixture(t)
-		withNames(f)
+		withLeadNames(f)
 		got, isNil := leadNamesOf(f)
 		if isNil || len(got) != 3 || got[0].Code != "adam" || got[0].Kind != team.LeadNameKeep {
 			t.Fatalf("lead_names = %+v", got)
@@ -394,7 +394,7 @@ func TestLeadName_CreateFillsTheNames(t *testing.T) {
 	})
 	t.Run("read error is null and the request is created", func(t *testing.T) {
 		f := newFixture(t)
-		n := withNames(f)
+		n := withLeadNames(f)
 		n.candErr = errors.New("meta.db locked")
 		if _, isNil := leadNamesOf(f); !isNil {
 			t.Fatal("lead_names is not null after a read error")
@@ -402,7 +402,7 @@ func TestLeadName_CreateFillsTheNames(t *testing.T) {
 	})
 	t.Run("no persona is an empty list", func(t *testing.T) {
 		f := newFixture(t)
-		n := withNames(f)
+		n := withLeadNames(f)
 		n.cands = nil
 		got, isNil := leadNamesOf(f)
 		if isNil || len(got) != 0 {
@@ -415,14 +415,14 @@ func TestLeadName_Route(t *testing.T) {
 	path := func(id string) string { return "/api/team/approvals/" + id + "/lead-names" }
 	t.Run("unknown id", func(t *testing.T) {
 		f := newFixture(t)
-		withNames(f)
+		withLeadNames(f)
 		if code, body := f.do(http.MethodGet, path("nope"), nil); code != 404 || decodeErr(t, body).Error != team.ErrNotFound {
 			t.Fatalf("%d %s", code, body)
 		}
 	})
 	t.Run("closed", func(t *testing.T) {
 		f := newFixture(t)
-		withNames(f)
+		withLeadNames(f)
 		f.create(uid(1))
 		f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", team.DecideRequest{Decision: "deny", Client: leadAppClient})
 		if code, body := f.do(http.MethodGet, path(uid(1)), nil); code != 409 || decodeErr(t, body).Error != team.ErrNotOpen {
@@ -431,7 +431,7 @@ func TestLeadName_Route(t *testing.T) {
 	})
 	t.Run("not a lead request", func(t *testing.T) {
 		f := newFixture(t)
-		withNames(f)
+		withLeadNames(f)
 		f.create(uid(1))
 		if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET kind = 'self_relay' WHERE id = ?`, uid(1)); err != nil {
 			t.Fatal(err)
@@ -449,7 +449,7 @@ func TestLeadName_Route(t *testing.T) {
 	})
 	t.Run("read error is not an empty list", func(t *testing.T) {
 		f := newFixture(t)
-		n := withNames(f)
+		n := withLeadNames(f)
 		f.create(uid(1))
 		n.candErr = errors.New("meta.db locked")
 		if code, body := f.do(http.MethodGet, path(uid(1)), nil); code != 503 || decodeErr(t, body).Error != team.ErrNotReady {
@@ -458,7 +458,7 @@ func TestLeadName_Route(t *testing.T) {
 	})
 	t.Run("the list now", func(t *testing.T) {
 		f := newFixture(t)
-		n := withNames(f)
+		n := withLeadNames(f)
 		f.create(uid(1))
 		n.cands = leadCands[1:]
 		code, body := f.do(http.MethodGet, path(uid(1)), nil)
