@@ -3,6 +3,9 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-libra
 
 vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-save')>()), savePersonas: vi.fn() }))
 
+vi.mock('../../../lib/names/persona-draw', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-draw')>()), drawRecipe: vi.fn() }))
+
+import { drawRecipe } from '../../../lib/names/persona-draw'
 import { savePersonas, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import { usePersonaStore } from '../../../stores/usePersonaStore'
@@ -278,6 +281,56 @@ describe('PersonasSection', () => {
     const err = (await screen.findByTestId('personas-error')).textContent!
     expect(err).toMatch(/不合規定|break the rules/)
     expect(err).toContain('olga.nationality.zh')
+  })
+
+  describe('the avatar', () => {
+    it('does not draw anything just because a persona is opened', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      expect(screen.getByTestId('avatar-picker')).toBeTruthy()
+      expect(drawRecipe).not.toHaveBeenCalled()
+    })
+
+    it('saves the recipe with the image that was drawn, and keeps what was typed meanwhile', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset()
+      let finish!: (v: string) => void
+      vi.mocked(drawRecipe).mockImplementation(() => new Promise<string>((r) => { finish = r }))
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'hiro' } })
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      // the draw is out; the name is edited before it comes back
+      fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
+      await act(async () => { finish('data:image/webp;base64,UklGRgAAAABXRUJQ') })
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      const saved = vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'hiro')!
+      expect(saved).toMatchObject({ name: 'Hiro Two', avatar: { source: 'lorelei', seed: 'hiro' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ' })
+    })
+
+    it('does not put an old persona\'s image into the one opened next', async () => {
+      seed(['hiro', 'emma'])
+      vi.mocked(drawRecipe).mockReset()
+      let finish!: (v: string) => void
+      vi.mocked(drawRecipe).mockImplementation(() => new Promise<string>((r) => { finish = r }))
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'photo' } })
+      fireEvent.change(screen.getByTestId('avatar-url'), { target: { value: 'https://picsum.photos/seed/x/200' } })
+      fireEvent.click(screen.getByTestId('avatar-fetch'))
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      fireEvent.click(screen.getByTestId('persona-row-emma')) // hiro's draw is still out
+      await act(async () => { finish('data:image/webp;base64,UklGRgAAAABXRUJQ') })
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      const emma = vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'emma')!
+      expect(emma.avatar_data).not.toBe('data:image/webp;base64,UklGRgAAAABXRUJQ')
+    })
   })
 
   describe('the source host', () => {

@@ -20,6 +20,7 @@ import {
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
+import { AvatarPicker } from './AvatarPicker'
 import { FirstSaveConfirm } from './FirstSaveConfirm'
 import { PersonaForm } from './PersonaForm'
 import { PersonaList } from './PersonaList'
@@ -89,6 +90,15 @@ export function PersonasSection() {
     setEditing(next)
     if (next) rememberDraft(next)
     else forgetDraft()
+  }
+
+  // A draw finishes later than the click that asked for it, so the avatar is put into the draft as it is NOW (typing in
+  // another field meanwhile must survive), not into the one the picker saw when it started.
+  const editingNow = useRef(editing)
+  editingNow.current = editing
+  const setAvatar = (avatar: Persona['avatar'], avatarData: string) => {
+    const cur = editingNow.current
+    if (cur) hold({ ...cur, draft: { ...cur.draft, avatar, avatar_data: avatarData } })
   }
 
   const open = (key: string) => {
@@ -201,6 +211,7 @@ export function PersonasSection() {
               isNew={editing.key === ''}
               issues={issues}
               saving={saving}
+              avatarPicker={<AvatarPicker key={editing.key} slot={editing.key} recipe={editing.draft.avatar} disabled={saving} onChange={setAvatar} />}
               onChange={(draft) => hold({ ...editing, draft })}
               onSave={() => void save(editing.draft)}
               onToggleRetired={() => void save({ ...editing.draft, retired: !editing.draft.retired })}
