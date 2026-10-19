@@ -14,8 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/slicecfg"
 )
 
 // RunFunc runs a command (launchctl, sudo systemctl…). The default counts the
@@ -81,17 +84,23 @@ func (i *Installer) unitPath() string {
 	return systemUnitPath
 }
 
+// sliceDropInPath is the drop-in that limits wwd.slice, beside the unit (Linux only).
+func (i *Installer) sliceDropInPath() string {
+	return filepath.Join(filepath.Dir(i.unitPath()), "wwd.slice.d", "10-wwd-limits.conf")
+}
+
 func (i *Installer) activeStamp() string { return filepath.Join(i.DataDir(), "active.sha256") }
 
-// generation names the binary and the service definition as they are on disk.
+// generation names the binary, the service definition and (on Linux) the slice drop-in as they are on disk.
 func (i *Installer) generation() string {
-	def := i.PlistPath()
+	def, slice := i.PlistPath(), ""
 	if i.GOOS == "linux" {
 		def = i.unitPath()
+		slice, _ = fileHash(i.sliceDropInPath())
 	}
 	b, _ := fileHash(i.BinPath())
 	d, _ := fileHash(def)
-	return b + ":" + d
+	return b + ":" + d + ":" + slice
 }
 
 // activatedStamp is the generation last activated successfully ("" if none).
@@ -155,6 +164,13 @@ func (i *Installer) Install(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// what is written to the files systemd reads as root is checked before anything is changed
+	var limits slicecfg.Limits
+	if i.GOOS == "linux" {
+		if limits, err = i.sliceLimits(); err != nil {
+			return err
+		}
+	}
 	bin, err := os.ReadFile(i.Binary)
 	if err != nil {
 		return fmt.Errorf("install: the binary to install: %w", err)
@@ -205,12 +221,15 @@ func (i *Installer) Install(ctx context.Context) error {
 		}
 	}
 
-	var changed, defChanged bool
+	var changed, defChanged, sliceChanged bool
 	switch i.GOOS {
 	case "darwin":
 		defChanged, err = i.writePlist()
 	case "linux":
 		defChanged, err = i.writeUnit(ctx)
+		if err == nil {
+			sliceChanged, err = i.writeSlice(ctx, limits)
+		}
 	}
 	if err != nil {
 		return err
@@ -219,12 +238,13 @@ func (i *Installer) Install(ctx context.Context) error {
 	// the stamp says which generation was last activated successfully
 	gen := i.generation()
 	if !i.DryRun && !i.NoRestart {
-		last := strings.SplitN(i.activatedStamp()+":", ":", 3)
-		cur := strings.SplitN(gen, ":", 2)
+		last := strings.SplitN(i.activatedStamp()+"::", ":", 4)
+		cur := strings.SplitN(gen, ":", 3)
 		binChanged = binChanged || last[0] != cur[0]
 		defChanged = defChanged || last[1] != cur[1]
+		sliceChanged = sliceChanged || last[2] != cur[2] // systemd has not read this drop-in yet (the last run may have failed to reload)
 	}
-	changed = binChanged || defChanged
+	changed = binChanged || defChanged || sliceChanged
 
 	if i.DryRun {
 		return nil
@@ -232,9 +252,12 @@ func (i *Installer) Install(ctx context.Context) error {
 	if i.NoRestart {
 		if changed {
 			i.say("installed; the running service was not touched (--no-restart). Restart it when it is safe: %s", i.restartHint())
+			if sliceChanged {
+				i.say("the wwd.slice limits are written but systemd has not read them: sudo systemctl daemon-reload")
+			}
 		}
 	} else {
-		if err := i.activate(ctx, binChanged, defChanged); err != nil {
+		if err := i.activate(ctx, binChanged, defChanged, sliceChanged); err != nil {
 			return err
 		}
 		if err := writeAtomic(i.activeStamp(), []byte(gen+"\n"), 0o644); err != nil {
@@ -299,8 +322,53 @@ func (i *Installer) writeUnit(ctx context.Context) (changed bool, err error) {
 	return true, nil
 }
 
-// activate starts or restarts the service as far as the change needs it.
-func (i *Installer) activate(ctx context.Context, binChanged, defChanged bool) error {
+// sliceLimits are the wwd.slice limits this host asks for: [slice] of its config.toml, the defaults for what it does not say. A config
+// that does not parse is an error here: wwd would not start on it either.
+func (i *Installer) sliceLimits() (slicecfg.Limits, error) {
+	var c struct {
+		Slice slicecfg.Limits `toml:"slice"`
+	}
+	b, err := os.ReadFile(i.ConfigPath())
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return c.Slice, nil
+	case err != nil:
+		return c.Slice, fmt.Errorf("install: the config: %w", err)
+	}
+	if _, err := toml.Decode(string(b), &c); err != nil {
+		return c.Slice, fmt.Errorf("install: the config %s: %w", i.ConfigPath(), err)
+	}
+	if err := c.Slice.Validate(); err != nil {
+		return c.Slice, fmt.Errorf("install: the config %s: %w", i.ConfigPath(), err)
+	}
+	return c.Slice, nil
+}
+
+// writeSlice installs the drop-in that limits wwd.slice, the slice the worker's jobs run in (#3549). It is read by systemd on the next
+// daemon-reload; the running wwd is not restarted for it.
+func (i *Installer) writeSlice(ctx context.Context, l slicecfg.Limits) (changed bool, err error) {
+	text := slicecfg.DropIn(l)
+	if b, err := os.ReadFile(i.sliceDropInPath()); err == nil && hashBytes(b) == hashBytes([]byte(text)) {
+		return false, nil
+	}
+	i.step("install the wwd.slice limits %s (sudo)", i.sliceDropInPath())
+	if i.DryRun {
+		return true, nil
+	}
+	tmp := filepath.Join(i.DataDir(), "wwd.slice.new")
+	if err := writeAtomic(tmp, []byte(text), 0o644); err != nil {
+		return false, err
+	}
+	defer os.Remove(tmp)
+	if out, err := i.run()(ctx, "wwd.install.slice", "sudo", "install", "-D", "-m", "0644", tmp, i.sliceDropInPath()); err != nil {
+		return false, fmt.Errorf("install the slice limits: %w: %s", err, bytes.TrimSpace(out))
+	}
+	return true, nil
+}
+
+// activate starts or restarts the service as far as the change needs it. sliceChanged makes systemd read the wwd.slice limits; it does
+// not restart anything.
+func (i *Installer) activate(ctx context.Context, binChanged, defChanged, sliceChanged bool) error {
 	run := i.run()
 	do := func(tag, name string, args ...string) error {
 		if out, err := run(ctx, tag, name, args...); err != nil {
@@ -325,6 +393,12 @@ func (i *Installer) activate(ctx context.Context, binChanged, defChanged bool) e
 			return do("wwd.install.kickstart", "launchctl", "kickstart", "-k", target)
 		}
 		return nil
+	}
+	if sliceChanged && !defChanged { // a new unit is followed by its own daemon-reload below
+		i.say("have systemd read the wwd.slice limits")
+		if err := do("wwd.install.reload", "sudo", "systemctl", "daemon-reload"); err != nil {
+			return err
+		}
 	}
 	switch {
 	case defChanged:
@@ -400,6 +474,7 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 		}
 		for _, c := range [][]string{
 			{"wwd.uninstall.rm", "sudo", "rm", "-f", i.unitPath()},
+			{"wwd.uninstall.rm-slice", "sudo", "rm", "-f", i.sliceDropInPath()},
 			{"wwd.uninstall.reload", "sudo", "systemctl", "daemon-reload"},
 		} {
 			if out, err := run(ctx, c[0], c[1], c[2:]...); err != nil {

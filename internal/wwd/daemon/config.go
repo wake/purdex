@@ -23,6 +23,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/jobdb"
+	"github.com/wake/purdex/internal/wwd/slicecfg"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -43,6 +44,9 @@ type Config struct {
 	JobDB       JobDBConfig  `toml:"jobdb"`
 	Tools       ToolsConfig  `toml:"tools"`
 	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
+	// Slice is the limits `wwd install` writes for wwd.slice on a Linux host (#3549). The daemon does not use it; it is a known key so
+	// that an operator's override does not stop wwd from starting.
+	Slice slicecfg.Limits `toml:"slice"`
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
@@ -308,6 +312,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateTools(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.Slice.Validate(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {

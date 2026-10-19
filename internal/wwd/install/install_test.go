@@ -50,6 +50,17 @@ func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]
 		}
 		return nil, os.WriteFile(args[4], b, 0o644)
 	}
+	// sudo install -D -m 0644 <src> <dest>: the same, making the directories of dest (the slice drop-in)
+	if name == "sudo" && len(args) == 6 && args[0] == "install" && args[1] == "-D" {
+		b, err := os.ReadFile(args[4])
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(args[5]), 0o755); err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(args[5], b, 0o644)
+	}
 	if name == "sudo" && len(args) == 3 && args[0] == "rm" {
 		return nil, os.RemoveAll(args[2])
 	}
@@ -431,6 +442,8 @@ func TestInstallLinuxUsesSudoSystemd(t *testing.T) {
 	var order []string
 	for _, c := range f.calls {
 		switch {
+		case strings.HasPrefix(c, "sudo install") && strings.Contains(c, "wwd.slice.d"):
+			order = append(order, "slice")
 		case strings.HasPrefix(c, "sudo install"):
 			order = append(order, "unit")
 		case strings.HasPrefix(c, "sudo systemctl daemon-reload"):
@@ -441,7 +454,7 @@ func TestInstallLinuxUsesSudoSystemd(t *testing.T) {
 			order = append(order, "start")
 		}
 	}
-	if strings.Join(order, ",") != "unit,reload,enable,start" {
+	if strings.Join(order, ",") != "unit,slice,reload,enable,start" {
 		t.Errorf("order %v in %v", order, f.calls)
 	}
 	if !f.has("sudo install -m 0644") {
