@@ -236,6 +236,38 @@ func TestPrepare_AWorkspaceMembersDependenciesAreKeptAndCloned(t *testing.T) {
 	}
 }
 
+// Spec.Inputs: files an install reads besides the lockfile are part of the key; a file that is not there counts as absent (and is not the
+// same as an empty one); a path that is not plain is refused.
+func TestPlan_InputsAreHashedIntoTheKey(t *testing.T) {
+	key := func(files map[string]string, inputs ...string) string {
+		ws := workspace(t, "lock: v1\n")
+		for rel, body := range files {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(ws, rel)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ws, rel), []byte(body), 0o644))
+		}
+		k, _, err := plan(ws, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Inputs: inputs, Fingerprint: fp})
+		require.NoError(t, err)
+		return k
+	}
+	none := key(nil)
+	assert.Equal(t, none, key(map[string]string{"package.json": "{}"}), "a file that is not named is not read")
+	a := key(map[string]string{"package.json": `{"a":1}`}, "package.json")
+	b := key(map[string]string{"package.json": `{"a":2}`}, "package.json")
+	assert.NotEqual(t, a, b, "the content decides")
+	assert.NotEqual(t, a, none)
+	absent := key(nil, "package.json")
+	empty := key(map[string]string{"package.json": ""}, "package.json")
+	assert.NotEqual(t, absent, empty, "absent is not empty")
+	assert.NotEqual(t, absent, none, "naming a file that is absent is not naming none")
+	assert.Equal(t, key(map[string]string{"a": "1", "b": "2"}, "a", "b"), key(map[string]string{"a": "1", "b": "2"}, "b", "a"), "the order of the list is not part of it")
+
+	for _, bad := range []string{"../x", "/etc/passwd", `a\b`, "a//b", "a/../b"} {
+		_, _, err := plan(workspace(t, "x\n"), Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Inputs: []string{bad}, Fingerprint: fp})
+		require.Error(t, err, bad)
+		assert.Contains(t, err.Error(), "not a file this cache can hash", bad)
+	}
+}
+
 func TestPrepare_AnInstallWithoutTheDirectoryIsAnError(t *testing.T) {
 	c := newCache(t, 2)
 	_, err := c.Prepare(context.Background(), workspace(t, "y\n"), spec(&installer{skip: true}))

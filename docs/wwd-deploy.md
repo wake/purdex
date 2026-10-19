@@ -411,8 +411,15 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
 * **Where**: `deps_root` (default `<data_dir>/deps`) holds `entries/` (the cache) and the package managers' own download caches
   (`pnpm-store`, `npm-cache`, `yarn-cache`, `composer-cache`), which an install that has to happen starts from. Keep it on the same volume
   as `work_root` (APFS clonefile / reflink; elsewhere a copy). The directory is made when a job first needs it, so a host that never runs a
-  task with `deps` (mlab's worker off, say) never gets one. On Linux the sandbox is widened for the install only: `deps_root` is writable,
-  nothing else is.
+  task with `deps` (mlab's worker off, say) never gets one. On Linux the sandbox is widened for the install only, and only for the package
+  manager's own download cache (`pnpm-store` …): the installed sets (`entries/`) and the locks are not writable for an install script, so
+  one job's script cannot change what other jobs are given.
+* **The key** is the lockfile's content, the install command, the versions of the tools that run it, the platform, **and** what else an
+  install reads: next to each lockfile `package.json`, `.npmrc`, `.yarnrc(.yml)`, `pnpm-workspace.yaml`, `composer.json`, each pnpm member's
+  `package.json`, and the task's fixed `env` values. A change to the root package's scripts is another entry. A remote task may not take a
+  name from the worker's own environment (`env_not_allowed`), so a token that lives in the worker's environment does not reach an install.
+* **The download caches are bounded**: `[worker] deps_store_max_mb` (default 4096) per package manager; one over it is emptied before the
+  next install that needs it (never under another install that is using it).
 * **Disk**: `[worker] deps_keep` (default 2, 1 to 50) is how many installed sets are kept; each is a whole `node_modules`/`vendor` tree
   (purdex's SPA is several hundred MB), and the download cache comes on top. Set it to 1 on a host short of disk. The oldest set is removed
   when a newer one is filed; removing `deps_root` by hand is safe (the next job installs again).

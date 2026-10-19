@@ -37,6 +37,10 @@ type Spec struct {
 	// monorepo's one lockfile installs under every member. Each is a path in the workspace whose last element is node_modules or vendor, and
 	// each must exist once the install is done. They are part of the key.
 	Dirs []string
+	// Inputs are workspace files, besides the lockfiles, that an install reads and so decide what it makes: the package manifests, the package
+	// manager's configuration, a workspace's definition. Each is hashed into the key (a file that is not there counts as absent), so that two
+	// workspaces with one lockfile and different manifests or scripts do not share an entry.
+	Inputs []string
 	// Fingerprint says how the dependencies are made: the install command and flags, the package manager's version, the Node (or PHP)
 	// version whose ABI native modules are built for. It is part of the key, so the same lockfile installed another way is another
 	// entry, and it is required: a cache that cannot tell installs apart would serve the wrong one.
@@ -130,6 +134,26 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 		if !seen[d] {
 			seen[d] = true
 			dirs = append(dirs, d)
+		}
+	}
+	inputs := append([]string(nil), spec.Inputs...)
+	sort.Strings(inputs)
+	for _, f := range inputs {
+		if !filepath.IsLocal(f) || path.IsAbs(f) || strings.Contains(f, `\`) || path.Clean(f) != f {
+			return "", nil, fmt.Errorf("deps: %q is not a file this cache can hash", f)
+		}
+		if err := plainPath(ws, path.Dir(f)); err != nil {
+			return "", nil, err
+		}
+		b, err := root.ReadFile(f)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			fmt.Fprintf(h, "input\x00%d\x00%s\x00absent\x00", len(f), f)
+		case err != nil:
+			return "", nil, fmt.Errorf("deps: %w", err)
+		default:
+			fmt.Fprintf(h, "input\x00%d\x00%s\x00%d\x00", len(f), f, len(b))
+			h.Write(b)
 		}
 	}
 	sort.Strings(dirs)

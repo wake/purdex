@@ -52,6 +52,8 @@ func TestMServDepsInstallRunsInTheSandboxWithOnlyTheCacheWritable(t *testing.T) 
   install)
     echo ran >> "$npm_config_store_dir/ran.log"
     if ( echo x > `+outside+` ) 2>/dev/null; then echo written > node_modules.outside; else echo denied > .outside-result; fi
+    if ( echo x > "$npm_config_store_dir/../entries/poisoned" ) 2>/dev/null; then echo written > .entries-result; else echo denied > .entries-result; fi
+    if ( echo x > "$npm_config_store_dir/../pnpm-store.lock" ) 2>/dev/null; then echo written > .lock-result; else echo denied > .lock-result; fi
     mkdir -p node_modules/pkg && echo installed > node_modules/pkg/index.js
     mkdir -p spa/node_modules/dep && echo workspace > spa/node_modules/dep/index.js;;
 esac
@@ -84,6 +86,11 @@ esac
 	res, err := os.ReadFile(filepath.Join(ws1, ".outside-result"))
 	require.NoError(t, err)
 	assert.Equal(t, "denied\n", string(res), "the install could not write outside the workspace and the cache")
+	for _, name := range []string{".entries-result", ".lock-result"} {
+		r, err := os.ReadFile(filepath.Join(ws1, name))
+		require.NoError(t, err)
+		assert.Equal(t, "denied\n", string(r), "the install could not write the installed sets or the locks in deps_root (%s)", name)
+	}
 	_, err = os.Stat(outside)
 	assert.True(t, os.IsNotExist(err), "nothing was written outside")
 	ran, err := os.ReadFile(filepath.Join(depsDir, "pnpm-store", "ran.log"))

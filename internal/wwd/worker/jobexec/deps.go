@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -100,7 +101,7 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 		}
 		in = append(in, i)
 	}
-	fingerprint, err := e.depsFingerprint(ctx, in)
+	fingerprint, err := e.depsFingerprint(ctx, in, taskEnv)
 	if err != nil {
 		return err
 	}
@@ -108,7 +109,7 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 	if err != nil {
 		return err
 	}
-	spec := deps.Spec{Lockfiles: lockfiles, Dirs: dirs, Fingerprint: fingerprint}
+	spec := deps.Spec{Lockfiles: lockfiles, Dirs: dirs, Inputs: depsInputs(lockfiles, dirs), Fingerprint: fingerprint}
 	key, err := cache.Key(ws.Dir, spec)
 	if err != nil {
 		return err
@@ -141,13 +142,19 @@ func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return err
 		}
-		res := run.Run(ctx, e.installSpec(ref, job, ws, lf, in[i], taskEnv, cacheDir))
-		switch {
-		case res.Outcome == run.Exited && res.ExitCode == 0 && res.Err == nil:
-		case res.Err != nil:
-			return fmt.Errorf("install %s: %w", lf, res.Err)
-		default:
-			return fmt.Errorf("install %s: %s (exit %d)%s", lf, res.Outcome, res.ExitCode, installTail(res.Tail))
+		err := withStore(cacheDir, e.storeMax(), func() error {
+			res := run.Run(ctx, e.installSpec(ref, job, ws, lf, in[i], taskEnv, cacheDir))
+			switch {
+			case res.Outcome == run.Exited && res.ExitCode == 0 && res.Err == nil:
+				return nil
+			case res.Err != nil:
+				return fmt.Errorf("install %s: %w", lf, res.Err)
+			default:
+				return fmt.Errorf("install %s: %s (exit %d)%s", lf, res.Outcome, res.ExitCode, installTail(res.Tail))
+			}
+		})
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -163,18 +170,19 @@ func (e *Exec) installSpec(ref ident.Ref, job wire.Job, ws snapshot.Workspace, l
 	return run.Spec{
 		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: filepath.Join(ws.Dir, filepath.FromSlash(path.Dir(lockfile))), Workspace: base,
 		TaskEnv: append(append([]string(nil), taskEnv...), in.cacheEnv+"="+cacheDir), ParentEnv: e.cfg.ParentEnv, Timeout: depsInstallTimeout,
-		KillAfter: e.cfg.KillAfter, OutDir: filepath.Join(outDir(base), "deps-install"), Procs: e.cfg.Procs, Sandbox: depsSandbox(e.cfg.Sandbox, e.cfg.DepsDir),
+		KillAfter: e.cfg.KillAfter, OutDir: filepath.Join(outDir(base), "deps-install"), Procs: e.cfg.Procs, Sandbox: depsSandbox(e.cfg.Sandbox, cacheDir),
 	}
 }
 
-// depsSandbox is the sandbox of an install: the job's own, and the download caches (outside the workspace, which is all a sandboxed command may
-// write) let through. The sandbox of the job itself is not touched.
-func depsSandbox(sb *run.Sandbox, depsDir string) *run.Sandbox {
+// depsSandbox is the sandbox of an install: the job's own, and the package manager's own download cache (outside the workspace, which is all a
+// sandboxed command may write) let through. Not the cache directory as a whole: the installed sets and their locks are in it, and an
+// install script must not be able to change what other jobs are given. The sandbox of the job itself is not touched.
+func depsSandbox(sb *run.Sandbox, cacheDir string) *run.Sandbox {
 	if sb == nil {
 		return nil
 	}
 	c := *sb
-	c.ReadWritePaths = append(append([]string(nil), c.ReadWritePaths...), depsDir)
+	c.ReadWritePaths = append(append([]string(nil), c.ReadWritePaths...), cacheDir)
 	return &c
 }
 
@@ -190,8 +198,13 @@ func installTail(tail []byte) string {
 }
 
 // depsFingerprint is what the install depends on besides the lockfiles: the commands and the versions of the tools that run them.
-func (e *Exec) depsFingerprint(ctx context.Context, in []installer) (string, error) {
+func (e *Exec) depsFingerprint(ctx context.Context, in []installer, taskEnv []string) (string, error) {
 	var parts []string
+	envs := append([]string(nil), taskEnv...) // what the install is told besides: a proxy or a registry setting changes what it makes
+	sort.Strings(envs)
+	for _, kv := range envs {
+		parts = append(parts, "env "+kv)
+	}
 	seen := map[string]bool{}
 	for _, i := range in {
 		parts = append(parts, strings.Join(i.argv, " "))
@@ -279,6 +292,32 @@ func (e *Exec) depsNow() time.Time {
 		return e.deps.now()
 	}
 	return time.Now()
+}
+
+// depsInputs are the files, besides the lockfiles, that an install reads: next to each lockfile the package manifests, the package manager's
+// configuration and a workspace's definition, and the manifest of each workspace member (dirs are the members' node_modules). A file that
+// is not there is hashed as absent. The root package's own scripts and .npmrc are not functions of the lockfile, so without them two
+// snapshots with one lockfile would share an installed tree that one of them made differently.
+func depsInputs(lockfiles, memberDirs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(dir, name string) {
+		p := path.Join(dir, name)
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, lf := range lockfiles {
+		d := path.Dir(lf)
+		for _, n := range []string{"package.json", ".npmrc", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "composer.json"} {
+			add(d, n)
+		}
+	}
+	for _, m := range memberDirs {
+		add(path.Dir(m), "package.json")
+	}
+	return out
 }
 
 // workspaceDirs are the node_modules of the members of a pnpm workspace: one lockfile at the root installs dependencies under every

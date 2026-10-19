@@ -75,6 +75,8 @@ type Config struct {
 	// deps cannot be prepared on this worker. The directory is made when a job first needs it.
 	DepsDir  string
 	DepsKeep int
+	// DepsStoreMaxMB bounds each package manager's download cache in DepsDir; one over it is emptied before the next install (4096 when zero).
+	DepsStoreMaxMB int
 }
 
 // Exec implements runner.Exec.

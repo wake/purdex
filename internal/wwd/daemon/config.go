@@ -74,6 +74,8 @@ type WorkerConfig struct {
 	// DepsKeep is how many installed dependency sets the cache keeps (default 2; a set is a node_modules or vendor tree, hundreds of MB for a
 	// large project). 1 on a host short of disk.
 	DepsKeep int `toml:"deps_keep"`
+	// DepsStoreMaxMB bounds each package manager's download cache under deps_root (default 4096): one over it is emptied before the next install.
+	DepsStoreMaxMB int `toml:"deps_store_max_mb"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -175,6 +177,9 @@ func (c Config) validateWorker() error {
 	}
 	if c.Worker.DepsKeep < 0 || c.Worker.DepsKeep > 50 {
 		return fmt.Errorf("worker.deps_keep is %d, it must be 0 (the default, 2) or 1-50", c.Worker.DepsKeep)
+	}
+	if c.Worker.DepsStoreMaxMB < 0 || c.Worker.DepsStoreMaxMB > 1_000_000 {
+		return fmt.Errorf("worker.deps_store_max_mb is %d, it must be 0 (the default, 4096) or 1-1000000", c.Worker.DepsStoreMaxMB)
 	}
 	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)

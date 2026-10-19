@@ -73,6 +73,15 @@ func TestConfigReadsTheDependencyCacheSettings(t *testing.T) {
 			t.Errorf("deps_keep = %s accepted (err %v)", bad, err)
 		}
 	}
+	c, err = load(t, "[worker]\ndeps_store_max_mb = 512\n")
+	if err != nil || c.Worker.DepsStoreMaxMB != 512 {
+		t.Fatalf("deps_store_max_mb: %+v %v", c.Worker, err)
+	}
+	for _, bad := range []string{"-1", "1000001"} {
+		if _, err := load(t, "[worker]\ndeps_store_max_mb = "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "deps_store_max_mb") {
+			t.Errorf("deps_store_max_mb = %s accepted (err %v)", bad, err)
+		}
+	}
 }
 
 func TestConfigChecksTheSandboxUser(t *testing.T) {
