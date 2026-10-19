@@ -58,7 +58,7 @@ func (r *Reader) TakeHeavy() (*Held, TakeStatus) {
 	// The gate's own admission, the rule a heavy command meets before it gets a slot: the pressure and page-rate lines of
 	// [gate.admission] as configured (they may be stricter than the zone the worker follows) and the free-disk floor. Running work is
 	// never touched; this only keeps a new job from starting where the gate would hold a new command.
-	if a := r.admission(cfg); a.Held {
+	if a := r.admit(cfg); a.Held {
 		r.logHold(a.Reason)
 		return nil, HeldByHost
 	}

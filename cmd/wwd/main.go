@@ -168,7 +168,7 @@ func run(cfgPath string) error {
 	var d *daemon.Daemon                      // the sampler's gate reads its pool, which exists once the daemon does
 	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
 	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
-	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf)
+	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf).WithWorkDir(workRoot) // the jobs' disk is the work root's
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,

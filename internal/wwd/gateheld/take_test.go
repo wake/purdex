@@ -150,6 +150,43 @@ func TestTakeHeavyAsksTheGatesAdmissionFirst(t *testing.T) {
 	}
 }
 
+// The real admission, end to end: with the pressure lines at their widest, only the disk floor can hold, and the free space it is held
+// against is the work directory's (WithWorkDir), checked beside $TMPDIR.
+func TestTakeHeavyHeldByTheDiskFloorOfTheWorkDir(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gate")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(floorGB string) string {
+		p := filepath.Join(root, "config-"+floorGB+".toml")
+		body := "[gate]\ndir = \"" + dir + "\"\n\n[gate.slots]\nheavy = 2\n\n[gate.admission]\nmax_pressure_level = 4\nmax_page_rate = 1000000000\ndisk_min_gb = " + floorGB + "\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	t.Setenv("PDX_GATE_DIR", "")
+	t.Setenv("TMPDIR", root) // a floor no disk meets is met by neither directory; the work dir is the one the reason comes from
+	var l logs
+	r := New(write("1000000"), l.logf).WithWorkDir(root)
+	if s, st := r.TakeHeavy(); st != HeldByHost || s != nil {
+		t.Fatalf("a floor no disk can meet: %v %v", s, st)
+	}
+	if l.n() != 1 {
+		t.Fatalf("logged %d lines", l.n())
+	}
+	if h := heldBy(t, dir); len(h) != 0 {
+		t.Fatalf("nothing taken: %+v", h)
+	}
+	r = New(write("0"), nil).WithWorkDir(root) // no floor at all
+	s, st := r.TakeHeavy()
+	if st != Taken || s == nil {
+		t.Fatalf("no floor: %v %v", s, st)
+	}
+	s.Release()
+}
+
 // The default admission is the gate's own, with a config that disables it: nothing holds (the tests above put theirs in; this keeps the
 // real call honest).
 func TestTakeHeavyDefaultAdmissionIsTheGatesOwn(t *testing.T) {

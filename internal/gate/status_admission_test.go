@@ -106,6 +106,25 @@ func TestAdmissionIsStatusAdmissionWithoutTheRest(t *testing.T) {
 	assert.Equal(t, AdmissionState{}, g.Admission())
 }
 
+// AdmissionFor looks at the directory it is given (a worker's work root on another volume), not at the working directory: the free space
+// of that directory is what holds it.
+func TestAdmissionForCountsTheGivenDirectory(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) {
+		c.Admission.Enabled, c.Admission.MaxPressureLevel, c.Admission.PageRateAuto, c.Admission.MaxPageRate, c.Admission.DiskMinGB = true, 1, false, 100, 10
+	})
+	g.Pressure = peekOnly{Pressure{Level: 1}, true}
+	g.DiskFree = func(p string) (int64, error) {
+		if p == "/small-volume/work" {
+			return 3 << 30, nil
+		}
+		return 100 << 30, nil
+	}
+	assert.Equal(t, AdmissionState{}, g.AdmissionFor("/big-volume/work"))
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 3 GB < 10"}, g.AdmissionFor("/small-volume/work"))
+	assert.Equal(t, AdmissionState{}, g.Admission(), "the working directory is on the big volume")
+}
+
 // The state in Status and the decision a start takes come from one function: on the same reading they agree.
 func TestStatus_AdmissionAgreesWithWouldWait(t *testing.T) {
 	g, _ := testGate(t)
