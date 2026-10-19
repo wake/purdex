@@ -198,6 +198,13 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	push["configured"] = pushConfigured
 
+	// wwdalerts: the module's own Status ({push: "on"|"off", deliverer, suppressed}, docs/wwd-deploy.md §7), or null while the module is not
+	// mounted. Not a core-computed shape like nex and push: nothing here is the core's to add.
+	var wwdalerts any
+	if st, ok := c.ModuleStatus("wwdalerts"); ok {
+		wwdalerts = st
+	}
+
 	info := map[string]any{
 		"host_id":        hostID,
 		"tmux_instance":  config.GetTmuxInstance(),
@@ -207,6 +214,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"arch":           runtime.GOARCH,
 		"nex":            nex,
 		"push":           push,
+		"wwdalerts":      wwdalerts,
 		"capabilities":   c.capabilityList(),
 		"last_shutdown":  nil,
 	}

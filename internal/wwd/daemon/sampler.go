@@ -75,6 +75,18 @@ type Sampler struct {
 	lastQueue string       // the last queue-count error logged
 	lastStore string       // the last store error logged
 	unsaved   []wire.Facts // finished minutes not yet in the store, oldest first
+
+	// signals is the last hour of the memory readings this host's own alert rules judge thrash by, kept as read: the proto 2 gate drops
+	// decompress_rate from every record that leaves the sampler (ring, rollups, store, events), but a local rule must not go blind when a
+	// peer is unreachable (spec §13.1: alerts are not behind the gate). It is never served or stored (guarded by mu).
+	signals []localSignal
+}
+
+// localSignal is one sample's compressor size and decompress rate, as read (nil: not read).
+type localSignal struct {
+	at           time.Time
+	compressorMB *int
+	rate         *float64
 }
 
 // maxUnsaved bounds the minutes kept for retry: a day, the in-memory depth.
@@ -111,6 +123,7 @@ func (s *Sampler) Tick(now time.Time) {
 	f.V, f.HostID, f.Alias, f.OSVersion = wire.WriteProto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
+	local := localSignal{at: now, compressorMB: f.Mem.CompressorMB, rate: f.Mem.DecompressRate} // before the gate below drops the rate
 	// The proto 2 fields: written only while every pool host reads them (the gate), else the record is the v1 shape and the
 	// readings are dropped here, before the record reaches the ring, the minute rollups, the store or the event stream.
 	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
@@ -175,6 +188,10 @@ func (s *Sampler) Tick(now time.Time) {
 	f.Derived = derived.Compute(&s.latch, in)
 	f.Derived.ZoneOverride = s.opts.Fault.ZoneOverride()
 	s.ring.Add(f)
+	s.signals = append(s.signals, local)
+	if over := len(s.signals) - ringRecords; over > 0 {
+		s.signals = s.signals[over:]
+	}
 	if done := s.addToMinute(f, err == nil); done != nil && s.opts.Minutes != nil {
 		s.unsaved = append(s.unsaved, *done)
 		if over := len(s.unsaved) - maxUnsaved; over > 0 {
@@ -216,6 +233,31 @@ func (s *Sampler) Tick(now time.Time) {
 	if on != nil {
 		on(facts.Clone(f))
 	}
+}
+
+// LocalRecent is the samples at or after since (oldest first) as this host's own alert rules judge them: the compressor size and the
+// decompress rate as read, whether or not the proto 2 gate lets the rate into the records others see. A record here carries only At,
+// Platform and those two memory fields; it is for in-process rules and must not be served, stored or sent.
+func (s *Sampler) LocalRecent(since time.Time) []wire.Facts {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []wire.Facts
+	for _, g := range s.signals {
+		if g.at.Before(since) {
+			continue
+		}
+		f := wire.Facts{At: g.at, Platform: runtime.GOOS}
+		if g.compressorMB != nil {
+			v := *g.compressorMB
+			f.Mem.CompressorMB = &v
+		}
+		if g.rate != nil {
+			v := *g.rate
+			f.Mem.DecompressRate = &v
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // SetOnFacts sets the function called with every new record (the daemon's event

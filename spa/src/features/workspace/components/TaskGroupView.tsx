@@ -29,6 +29,7 @@ import { openTeamSeat } from '../../../lib/team/team-actions'
 import { InlineTab } from './InlineTab'
 import { TaskGroupHeader } from './TaskGroupHeader'
 import { TeamGroupHeader } from './TeamGroupHeader'
+import { useGroupDrag } from './useGroupDrag'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 
 interface Props {
@@ -142,6 +143,22 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({ hostId: s.hostId, root, entry: groupsByHost[s.hostId], currentGroupId: groupId, t, report: setNotice }))
   }
 
+  // Dragging a solo session: onto a group of its host files it there, onto 「未分組」 takes it out (lib/task-groups/drag.ts). A team seat is not draggable and a team takes no drop (L10).
+  const groupOfTab = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const sec of view) if (sec.kind === 'manual') for (const r of sec.rows) if (r.tabId !== null) m.set(r.tabId, sec.group.id)
+    return m
+  }, [view])
+  const drag = useGroupDrag({
+    sourceOf: (tabId) => {
+      const s = sessionOfTab.get(tabId)
+      if (!s || !taskGroupsSupported(s.hostId)) return null
+      return { hostId: s.hostId, root: s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId), currentGroupId: groupOfTab.get(tabId) ?? null }
+    },
+    entryOf: (hostId) => groupsByHost[hostId], t, onNotice: setNotice, onResult: done,
+  })
+  const lit = (key: string) => (drag.over === key ? ' rounded-md ring-1 ring-border-active' : '')
+
   const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
     const seat = row.seat
@@ -154,7 +171,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
-      return seat ? inner : <div key={row.key} onContextMenu={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
+      return seat ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
     }
     // A team seat no open tab shows: listed, and a click opens it.
     return (
@@ -204,7 +221,10 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
         if (section.kind === 'manual') {
           const collapsed = section.rows.length === 0
           return (
-            <section key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className="flex flex-col">
+            <section
+              key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.group.id)}`}
+              {...drag.targetProps({ kind: 'group', hostId: section.hostId, groupId: section.group.id })}
+            >
               <TaskGroupHeader
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
                 host={hostLabel(section.hostId, hostLookOf(section.hostId))}
@@ -216,7 +236,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           )
         }
         return (
-          <section key="ungrouped" data-testid="task-group-ungrouped" className="flex flex-col">
+          <section key="ungrouped" data-testid="task-group-ungrouped" className={`flex flex-col${lit('ungrouped')}`} {...drag.targetProps({ kind: 'ungrouped' })}>
             {i > 0 && <div className="mx-3 my-1 h-px bg-border-default" />}
             <TaskGroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} count={section.rows.length} muted />
             {section.rows.map((r) => renderRow(r))}
