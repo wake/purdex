@@ -8,7 +8,7 @@ vi.mock('@dnd-kit/sortable', () => ({
   useSortable: () => ({ attributes: {}, listeners: {}, setNodeRef: vi.fn(), transform: null, transition: null, isDragging: false }),
 }))
 vi.mock('../lib/icon-path-cache', () => ({ getIconPath: (n: string, w: string) => `M ${n} ${w}`, isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve() }))
-const loadIfSupported = vi.fn(async () => {})
+const loadIfSupported = vi.fn(async (_hostId: string) => {})
 vi.mock('../../../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: string) => h === 'h1', loadTaskGroupsIfSupported: (h: string) => loadIfSupported(h) }))
 const readFirstPage = vi.fn(async (_hostId: string) => ({}))
 vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: vi.fn() }))
