@@ -157,7 +157,7 @@ func checkEnv(jobID, out string, env []string) error {
 			return reject(CodeEnvNotAllowed, "env %q may not be taken from the worker's environment", name)
 		}
 	}
-	if _, err := run.BuildEnv(jobID, out, env, nil); err != nil {
+	if _, err := run.BuildEnv(jobID, "", out, env, nil); err != nil {
 		return reject(CodeEnvInvalid, "%v", err)
 	}
 	return nil

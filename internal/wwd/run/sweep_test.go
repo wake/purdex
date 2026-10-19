@@ -14,7 +14,7 @@ import (
 
 type fakeSource func(jobID string) ([]int, error)
 
-func (f fakeSource) JobProcesses(jobID string) ([]int, error) { return f(jobID) }
+func (f fakeSource) JobProcesses(_, jobID string) ([]int, error) { return f(jobID) }
 
 // victim starts a process of the test's own that ignores TERM, in a group of its own, and reaps it in the background.
 func victim(t *testing.T) (pid int, gone func() bool) {
@@ -132,7 +132,7 @@ func TestSweepIsBoundedInTime(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
 	start := time.Now()
-	pids, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-block; return nil, nil }), "j_test1", 100*time.Millisecond)
+	pids, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-block; return nil, nil }), "", "j_test1", 100*time.Millisecond)
 	if err == nil || pids != nil {
 		t.Fatalf("a table that never answers must give an error: %v %v", pids, err)
 	}
@@ -147,7 +147,7 @@ func TestAbandonedSweepSignalsNobodyWhenTheScanReturnsLate(t *testing.T) {
 	sweepSlack = 100 * time.Millisecond
 	defer func() { sweepSlack = old }()
 	release := make(chan struct{})
-	_, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-release; return []int{pid}, nil }), "j_test1", 100*time.Millisecond)
+	_, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-release; return []int{pid}, nil }), "", "j_test1", 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("want a time budget error")
 	}

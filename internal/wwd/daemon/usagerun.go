@@ -3,6 +3,7 @@ package daemon
 import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
@@ -62,10 +63,10 @@ func (r *UsageRecorder) runRow(e runner.Ended) (wire.JobUsage, bool) {
 	if !ok || rn.StartedAt.IsZero() || rn.FinishedAt.IsZero() {
 		// not the job's end: it may run again, and its next run collects its own samples. What this run left is dropped, not taken (a taken
 		// job is one the tracker ignores from then on).
-		r.tr.Discard(e.Job.ID)
+		r.tr.DiscardMark(ident.OriginTag(e.Source), e.Job.ID)
 		return wire.JobUsage{}, false
 	}
-	sm, seen := r.tr.Take(e.Job.ID)
+	sm, seen := r.tr.TakeMark(ident.OriginTag(e.Source), e.Job.ID)
 	started, ended := rn.StartedAt, rn.FinishedAt
 	if ended.Before(started) {
 		ended = started

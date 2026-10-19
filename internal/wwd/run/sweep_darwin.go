@@ -13,9 +13,9 @@ func DefaultProcSource() ProcSource { return factsSource{} }
 
 type factsSource struct{}
 
-// JobProcesses scans the whole table and keeps the processes whose environment names the job. A reader belongs to one
-// goroutine, so each scan makes its own.
-func (factsSource) JobProcesses(jobID string) ([]int, error) {
+// JobProcesses scans the whole table and keeps the processes whose environment names the job (see ProcSource for the origin tag). A
+// reader belongs to one goroutine, so each scan makes its own.
+func (factsSource) JobProcesses(tag, jobID string) ([]int, error) {
 	r, err := facts.NewProcReader("")
 	if err != nil {
 		return nil, err
@@ -27,7 +27,9 @@ func (factsSource) JobProcesses(jobID string) ([]int, error) {
 	var pids []int
 	for _, p := range snap.Procs {
 		if j, ok := ctx.JobOf(p.PID); ok && j == jobID {
-			pids = append(pids, p.PID)
+			if o, has := ctx.OriginOf(p.PID); tag == "" || !has || o == tag {
+				pids = append(pids, p.PID)
+			}
 		}
 	}
 	return pids, nil

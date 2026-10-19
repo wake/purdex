@@ -17,6 +17,8 @@ type host struct {
 	procs []ProcRec
 	args  map[int][]string
 	jobs  map[int]string
+	// origins are the origin tags of the job marks, by pid (a pid with none has an old mark)
+	origins map[int]string
 }
 
 func newHost() *host {
@@ -65,6 +67,10 @@ func (h *host) snapshot() (ProcSnapshot, ProcContext) {
 		JobOf: func(pid int) (string, bool) {
 			j, ok := h.jobs[pid]
 			return j, ok
+		},
+		OriginOf: func(pid int) (string, bool) {
+			o, ok := h.origins[pid]
+			return o, ok
 		},
 		SessionOf: func(pid int) (string, bool) { return "_sess01", pid == 100 },
 		ArgsOf:    func(pid int) []string { return h.args[pid] },

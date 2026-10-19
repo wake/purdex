@@ -224,10 +224,10 @@ func (e *Exec) makeDB(ctx context.Context, ref ident.Ref, base, dbEnv string) ([
 }
 
 // Run runs the plan: dev jobs under background QoS where the host asks for it, as a systemd service where there is a Sandbox.
-func (e *Exec) Run(ctx context.Context, _ ident.Ref, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Result {
+func (e *Exec) Run(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Result {
 	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, plan.Argv)
 	return run.Run(ctx, run.Spec{
-		JobID: job.ID, Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.cfg.ParentEnv,
+		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.cfg.ParentEnv,
 		Timeout: plan.Timeout, KillAfter: e.cfg.KillAfter, OutDir: plan.OutDir, Procs: e.cfg.Procs, Sandbox: e.cfg.Sandbox,
 	})
 }
