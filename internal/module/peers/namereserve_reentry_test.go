@@ -2,6 +2,7 @@ package peers
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -104,6 +105,9 @@ func TestReservations_AReadStillRunningIsNotStartedTwice(t *testing.T) {
 		})
 	}
 	assert.EqualValues(t, 1, rd.calls.Load(), "the reader was started once, not once per naming")
+	// 1f: the degradation is not silent, and it is said once per stuck read, not at every use
+	assert.Equal(t, 1, e.loggedCount("did not finish"), "the give-up is logged once")
+	assert.Equal(t, 1, e.loggedCount("still running"), "the skipped rebuilds are logged once, not at every naming")
 	close(block)
 	select {
 	case <-rd.done:
@@ -121,4 +125,17 @@ func TestReservations_AReadStillRunningIsNotStartedTwice(t *testing.T) {
 	}
 	assert.NoError(t, e.m.ReserveExact(context.Background(), "mia", "op-1", "tm-op-1", tNow), "the same op again: a success")
 	assert.EqualValues(t, 2, rd.calls.Load())
+	assert.Equal(t, 1, e.loggedCount("still running"), "a read that returned re-arms the note, and nothing new was skipped")
+}
+
+func (e *poolEnv) loggedCount(sub string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	for _, l := range e.logs {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
 }
