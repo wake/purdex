@@ -36,7 +36,15 @@ func ok0() wire.ResultRequest {
 	return wire.ResultRequest{State: wire.StateSucceeded, Exit: &zero}
 }
 
+// postResult is a worker that uploads its log and then posts the result (a result with no log is not offered for reuse).
 func (f *fixture) postResult(t *testing.T, id, claimID string, edit ...func(*wire.ResultRequest)) {
+	t.Helper()
+	require.NoError(t, f.putLog(t, id, claimID, "log\n"))
+	f.postResultNoLog(t, id, claimID, edit...)
+}
+
+// postResultNoLog posts the result and nothing else: the log, if there is one, comes after.
+func (f *fixture) postResultNoLog(t *testing.T, id, claimID string, edit ...func(*wire.ResultRequest)) {
 	t.Helper()
 	r := ok0()
 	r.ClaimID = claimID
@@ -140,6 +148,58 @@ func TestARunReplacedWhileItRanIsNotOffered(t *testing.T) {
 	f.submit(t) // the newer submission with the same key
 	f.postResult(t, id, c.ClaimID)
 	assert.Empty(t, o.jobs)
+}
+
+// A result is kept for reuse with its log, whichever of the two the worker sends first: a result posted first is offered when its log
+// is in (the log is what the result points at), a result posted after its log is offered when it is posted. Never twice for one pair,
+// and a log uploaded again later does not offer it again.
+func TestAResultIsOfferedOnceItsLogIsIn(t *testing.T) {
+	t.Run("the result first, the log after", func(t *testing.T) {
+		f := newFixture(t)
+		o := f.offers()
+		id := f.submit(t, func(s *wire.JobSubmission) { s.DefHash = "def1" })
+		c := f.claimAs(t, id, "mserv", lblA, fpA)
+		f.postResultNoLog(t, id, c.ClaimID)
+		assert.Empty(t, o.jobs, "no log yet: nothing to point at")
+		require.NoError(t, f.putLog(t, id, c.ClaimID, "late log\n"))
+		require.Len(t, o.jobs, 1)
+		assert.Equal(t, id+"/log", o.jobs[0].Result.Log, "offered with the log it points at")
+		assert.Equal(t, Produced{DefHash: "def1", Labels: lblA, Fingerprint: fpA}, o.prod[0])
+		require.NoError(t, f.putLog(t, id, c.ClaimID, "uploaded again\n"))
+		assert.Len(t, o.jobs, 1, "a log replaced later does not offer the result again")
+	})
+	t.Run("the log first, the result after", func(t *testing.T) {
+		f := newFixture(t)
+		o := f.offers()
+		id := f.submit(t, func(s *wire.JobSubmission) { s.DefHash = "def1" })
+		c := f.claimAs(t, id, "mserv", lblA, fpA)
+		require.NoError(t, f.putLog(t, id, c.ClaimID, "log\n"))
+		assert.Empty(t, o.jobs, "the job has not ended")
+		f.postResultNoLog(t, id, c.ClaimID)
+		require.Len(t, o.jobs, 1)
+		assert.Equal(t, id+"/log", o.jobs[0].Result.Log)
+		require.NoError(t, f.putLog(t, id, c.ClaimID, "again\n"))
+		assert.Len(t, o.jobs, 1)
+	})
+	t.Run("no log ever comes", func(t *testing.T) {
+		f := newFixture(t)
+		o := f.offers()
+		id := f.submit(t)
+		c := f.claimAs(t, id, "mserv", lblA, fpA)
+		f.postResultNoLog(t, id, c.ClaimID)
+		f.postResultNoLog(t, id, c.ClaimID) // and the echo
+		assert.Empty(t, o.jobs, "a result with no log is not kept for reuse")
+	})
+	t.Run("a log of a job that failed offers nothing", func(t *testing.T) {
+		f := newFixture(t)
+		o := f.offers()
+		id := f.submit(t)
+		c := f.claimAs(t, id, "mserv", lblA, fpA)
+		one := 1
+		f.postResultNoLog(t, id, c.ClaimID, func(r *wire.ResultRequest) { r.State, r.Exit = wire.StateFailed, &one })
+		require.NoError(t, f.putLog(t, id, c.ClaimID, "log\n"))
+		assert.Empty(t, o.jobs)
+	})
 }
 
 // A worker that said nothing about itself is offered with nothing: the daemon will not file it.

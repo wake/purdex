@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 const (
@@ -68,6 +70,9 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	// being replaced.
 	final, backup := q.logPath(id), tmp.Name()+".prev"
 	var placed, hadOld bool
+	var late wire.Job // the job whose result was posted before its log, as it is once the log is in
+	var lateProduced Produced
+	offer := false
 	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
@@ -93,6 +98,15 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 				return err
 			}
 			*changed = append(*changed, id)
+			if !h.hasLog { // the first log of an ended job: its result could not be offered for reuse without one (see offerResult)
+				if late, err = getOn(ctx, c, id, false); err != nil {
+					return err
+				}
+				if lateProduced, err = producedOn(ctx, c, id); err != nil {
+					return err
+				}
+				offer = true
+			}
 		}
 		return nil
 	})
@@ -107,6 +121,9 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	}
 	if hadOld {
 		_ = os.Remove(backup)
+	}
+	if offer {
+		q.offerResult(ctx, late, lateProduced)
 	}
 	return nil
 }
