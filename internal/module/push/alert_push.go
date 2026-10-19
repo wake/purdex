@@ -44,7 +44,7 @@ func (m *Module) NotifyAlert(p push.AlertPush) bool {
 	// An alert is no one's approval and belongs to no session: the Job carries no Approval, so the sender resolves no session_code.
 	// host_id is the host that sends (the one a tap can open); the host the alert is about goes in alert_host.
 	cid := alertCollapseID(p.CollapseID)
-	return snd.Enqueue(Job{DeviceIDs: ids, OnSent: p.Sent, Make: func(push.Device) (push.Content, bool) {
+	return snd.Enqueue(Job{DeviceIDs: ids, OnSent: p.Sent, StillWanted: p.StillWanted, OnRecalled: p.Recalled, Make: func(push.Device) (push.Content, bool) {
 		return push.Content{Title: p.Title, Kind: "alert", CollapseID: cid, AlertHost: p.Host}, true
 	}})
 }

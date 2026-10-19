@@ -3,7 +3,9 @@ package wwdalerts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,11 +98,34 @@ type env struct {
 	now   time.Time
 	deliv bool
 	db    string
+	// the wwd_alerts.push switch as the module reads it: on (the other tests), off, or unreadable
+	push    bool
+	pushErr error
+	logMu   sync.Mutex
+	logs    []string
+}
+
+func (e *env) logf(format string, args ...any) {
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+	e.logs = append(e.logs, fmt.Sprintf(format, args...))
+}
+
+func (e *env) logCount(sub string) int {
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+	n := 0
+	for _, l := range e.logs {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	e := &env{src: &fakeSrc{self: "mlab"}, ntf: &fakeNotifier{done: true}, now: t0, deliv: true, db: filepath.Join(t.TempDir(), "wwdalerts.db")}
+	e := &env{src: &fakeSrc{self: "mlab"}, ntf: &fakeNotifier{done: true}, now: t0, deliv: true, push: true, db: filepath.Join(t.TempDir(), "wwdalerts.db")}
 	e.m = e.module(t)
 	return e
 }
@@ -114,12 +139,13 @@ func (e *env) module(t *testing.T) *Module {
 	}
 	t.Cleanup(func() { st.close() })
 	return &Module{
-		logf:    t.Logf,
+		logf:    func(f string, a ...any) { t.Logf(f, a...); e.logf(f, a...) },
 		now:     func() time.Time { return e.now },
 		src:     e.src,
 		store:   st,
 		notify:  func() (push.AlertNotifier, bool) { return e.ntf, true },
 		deliver: func() bool { return e.deliv },
+		pushOn:  func() (bool, error) { return e.push, e.pushErr },
 	}
 }
 
@@ -436,6 +462,163 @@ func TestAClockThatSteppedBackDoesNotStretchTheWindows(t *testing.T) {
 	e.pass(t)
 	if e.ntf.count() != 3 {
 		t.Fatalf("attempts = %d: a delivery stamped in the future still silenced the alert", e.ntf.count())
+	}
+}
+
+// WWD-8a-2a-0: the wwd_alerts.push switch. Off (the default): the alerts are read, the digest ones are gathered, and not one push-level
+// alert is handed to the push module — no attempt, no ledger row, nothing recorded as sent — so that when the switch is turned on the
+// alerts that still hold are pushed by the rules, not held back as if they had been told.
+func TestPushOffGathersTheDigestAndTouchesNeitherThePushModuleNorTheLedger(t *testing.T) {
+	e := newEnv(t)
+	e.push = false
+	dg := wire.Alert{Key: "orphans:/tmp", Kind: wire.AlertOrphans, Level: wire.AlertDigest, Since: t0, Last: t0, Detail: "3 個孤兒行程"}
+	e.src.set("mlab", diskLow("mlab"), dg)
+	for i := 0; i < 5; i++ {
+		e.pass(t)
+		e.now = e.now.Add(time.Minute)
+	}
+	if e.ntf.count() != 0 {
+		t.Fatalf("the push module was asked %d times with the switch off", e.ntf.count())
+	}
+	if _, ok := e.m.store.delivery("mlab", "disk_low:/"); ok {
+		t.Fatal("the ledger holds a row for an alert that was not pushed")
+	}
+	if n, _ := e.m.store.digestCount(); n != 1 {
+		t.Fatalf("digest rows = %d, the digest is gathered whatever the switch says", n)
+	}
+	if st := e.m.Status(); st["push"] != "off" || st["suppressed"] != 1 {
+		t.Fatalf("status = %v", st)
+	}
+}
+
+// Turning it on: the next pass pushes what still holds, once; turning it off and on again within the hour of a confirmed delivery
+// pushes nothing more.
+func TestTurningPushOnPushesWhatStillHoldsAndOnlyOnce(t *testing.T) {
+	e := newEnv(t)
+	e.push = false
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.push = true
+	e.now = e.now.Add(time.Second)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes after turning on = %d", e.ntf.count())
+	}
+	e.ntf.confirm(0)
+	e.push = false
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	e.push = true
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d: off and on again must not tell a delivered alert twice", e.ntf.count())
+	}
+	if st := e.m.Status(); st["push"] != "on" || st["suppressed"] != 0 {
+		t.Fatalf("status = %v", st)
+	}
+}
+
+// A switch that cannot be read counts as off (the stop is the safe side), and the problem is logged once, not every pass.
+func TestAnUnreadablePushSwitchIsOffAndLoggedOnce(t *testing.T) {
+	e := newEnv(t)
+	e.pushErr = errors.New("host_config.db is damaged")
+	e.src.set("mlab", diskLow("mlab"))
+	for i := 0; i < 4; i++ {
+		e.pass(t)
+		e.now = e.now.Add(time.Minute)
+	}
+	if e.ntf.count() != 0 {
+		t.Fatalf("pushed %d with the switch unreadable", e.ntf.count())
+	}
+	if n := e.logCount("host_config.db is damaged"); n != 1 {
+		t.Fatalf("the problem was logged %d times", n)
+	}
+	if st := e.m.Status(); st["push"] != "off" {
+		t.Fatalf("status = %v", st)
+	}
+}
+
+// The state of the switch is logged when it changes, not on every pass.
+func TestThePushSwitchIsLoggedWhenItChanges(t *testing.T) {
+	e := newEnv(t)
+	e.push = false
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.pass(t)
+	if n := e.logCount("push is off"); n != 1 {
+		t.Fatalf("off logged %d times", n)
+	}
+	e.push = true
+	e.pass(t)
+	e.pass(t)
+	if n := e.logCount("push is on"); n != 1 {
+		t.Fatalf("on logged %d times", n)
+	}
+}
+
+// A push handed over while the switch was on, and still waiting in the push module's queue when it is turned off, is not sent: the
+// push module asks StillWanted just before sending, and it follows the switch.
+func TestAQueuedPushIsNotSentOnceTheSwitchIsTurnedOff(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+	e.ntf.mu.Lock()
+	wanted := e.ntf.got[0].StillWanted
+	e.ntf.mu.Unlock()
+	if wanted == nil {
+		t.Fatal("the push carries no way to be asked again")
+	}
+	if !wanted() {
+		t.Fatal("not wanted while the switch is on")
+	}
+	e.push = false
+	if wanted() {
+		t.Fatal("still wanted after the switch was turned off")
+	}
+	e.pushErr = errors.New("unreadable")
+	e.push = true
+	if wanted() {
+		t.Fatal("still wanted with the switch unreadable")
+	}
+}
+
+// A push taken back before anything was sent hands the attempt back: Recalled puts the ledger as it was, so turning the switch on again
+// is not held back for the 5-minute interval.
+func TestARecalledPushDoesNotHoldTheAlertBack(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.mu.Lock()
+	recalled := e.ntf.got[0].Recalled
+	e.ntf.mu.Unlock()
+	if recalled == nil {
+		t.Fatal("the push carries no way to be told it was taken back")
+	}
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d: the attempt interval should hold it back", e.ntf.count())
+	}
+	recalled()
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("pushes = %d: a recalled attempt should not hold it back", e.ntf.count())
+	}
+}
+
+// A daemon that is not the deliverer says so, and counts nothing as held back by the switch.
+func TestStatusSaysWhetherThisDaemonIsTheDeliverer(t *testing.T) {
+	e := newEnv(t)
+	e.deliv = false
+	e.push = false
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	st := e.m.Status()
+	if st["deliverer"] != false || st["suppressed"] != 0 {
+		t.Fatalf("status = %v", st)
 	}
 }
 

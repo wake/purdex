@@ -306,3 +306,23 @@ routines use `REGEXP_LIKE(expr, pattern, 'c')`.
 
 `go test -c -tags mserv ./internal/wwd/jobdb/` makes the end-to-end test of the Go side (scenario J: Create over `100.64.0.6:3307`, a
 re-run starts empty, Drop ends a held connection, Sweep keeps what a live job owns); run it on mserv with `WWD_MSERV_E2E=1`.
+
+## 7. Phone pushes of the wwd alerts (the switch)
+
+The alerts the wwd rules raise (spec §13.3) are written to each host's `wwd.db` and read by the Purdex daemons, which gather the
+`digest` ones and send the `push` ones to the phone through the push module. **Sending to the phone is off by default.** It is the host
+setting `wwd_alerts` with one field, `push`, kept by each Purdex daemon for itself (mlab's and air26's are separate: whichever of the two
+holds the fleet `primary` role, or takes over for a primary without a push module, is the one that sends).
+
+```sh
+# turn on / off (needs the admin token; baseRevision is the row's current revision, GET /api/hostconfig key wwdAlerts)
+curl -sS -X PUT "$DAEMON/api/hostconfig/wwd_alerts" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"items":{"push":true},"baseRevision":0}'
+```
+
+**To stop the pushes now, set `push` to `false` on both daemons.** It is read at every push, so nothing needs a restart, and it is read
+again just before each push leaves the push module's queue, so what still waits there is taken back too. The one thing it cannot recall
+is a request that is already on its way to APNs at that moment. A setting that cannot be read counts as off. While it is off the alerts are still written, shown by `GET /v1/alerts` and gathered for the digest;
+nothing is recorded as sent, so alerts that still hold when it is turned on again are sent then. `/api/info` shows the state under
+`wwdalerts`: `{push: "on"|"off", deliverer: true|false, suppressed: <push-level alerts held back in the last pass>}`, and the daemon's
+log has one line each time the state changes.

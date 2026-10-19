@@ -1,5 +1,74 @@
 # Changelog
 
+## [1.0.0-alpha.756] - 2026-10-19
+
+> daemon、`pdx` CLI 與 `wwd` 有改；**mod 有改（`cmd/pdx/plugin/purdex/skills/pdx-watch/SKILL.md`），要重跑 `pdx setup`**，hook 程式沒有改。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 755 相同。
+>
+> **WWD-8a 的寫入端**：facts 開始填 proto 2 的欄位（`mem.decompress_rate`、`queue.queued`），只在所有主機都回報 proto ≥ 2 時才寫（755 已讓四台都是 proto 2，所以這一版一上線就生效）。告警的儲存、手機推播與投遞模組（含 primary 沒有推播時由 standby 接手）都已就位，但這一版**沒有任何告警規則**（規則在 8a-2），所以不會寫入任何告警，也不會推播。
+>
+> **資料庫**：`wwd.db` 的 host schema 由 5 升到 6（`earned_labels`、`result_cache`）。舊版會拒絕開 schema 6，所以**退回 755 時要還原 `wwd.db.pre-756` 並換一個新的 epoch，而且退版前隔離區必須是空的**：per-job 資料庫改用新的名稱，舊版的清掃會把它們刪掉（步驟見 `docs/wwd-deploy.md` §5）。Purdex 這邊：`team.db` 加了三個索引，`meta.db` 的 `peer_name_aliases` 加了 `last_live_at` 欄位（有預設值）；舊版都不受影響，退回不必還原。
+>
+> **pdx test 準備開放**：守門員現在認得 wwd 的佇列工作（只記錄、不叫醒），`pdx test`／`pdx jobs` 送出的工作也會帶上送件人的 session，完成通知找得到對話。部署並在真機上確認後，lead 會廣播 pdx test 可以使用。
+>
+> **worker**：部署時四台的 worker 先一律關閉；mlab 與 air26 由 lead 在部署檢查通過後打開；mserv 要等 #3441 完成才開；air19 照舊不開。
+>
+> 下一版（757）會帶 WWD-5 的 digest 讀取端，wire 的 `proto` 升到 3；部署時每台主機都要先升 Purdex、再升 wwd。
+
+### Added：wwd 告警與訊號（WWD-8a 寫入端）
+
+- **三個新訊號與啟動紀錄（8a-0）**：wwd 開始寫出 `v: 2` 的 facts，新增 `mem.decompress_rate`（macOS 讀 `host_statistics64` 的 decompressions，以和 page-out 相同的視窗算每秒差值，一分鐘取最大值；Linux 沒有這個欄位）與 `queue.queued`（state=queued 的工作數，一分鐘取尖峰；讀不到時省略，不寫 0），以及每次啟動寫一列的 `wwd_starts`（版本與前一次結束方式，保留 7 天，供之後的 crash-loop 規則使用）。寫入有閘門：只有 `wire.PoolAtLeast(peers, 2)` 成立，也就是所有 peer 都回報 proto ≥ 2 時才寫，閘門關著時照舊寫 v1 形狀。這一張必須晚於讀取端（755）一版出貨，755 已完成（#3419）。
+- **wwd 端的告警寫入與 alert 事件（8a-1a）**：store 新增 `RaiseAlert`、`ClearAlert`，告警保留 7 天，`cleared_at` 不得早於 `last`，過長的 detail 截斷而不拒絕；daemon 的 `AlertBook` 寫表後，只有內容有變更且訊號閘門開著，才發出 `alert` 事件（也送給 peer 訂閱者）。這一版沒有任何規則會呼叫它，所以不會產生告警（#3426）。
+- **告警的手機推播（8a-1b）**：push 模組實作 `AlertNotifier`，替 wwd 告警送手機推播；人在電腦前時略過，沒有裝置時視為完成，push 尚未啟動或佇列滿時回報未送出。這一版還沒有呼叫端，既有推播路徑不變（#3428）。
+- **告警投遞模組 `wwdalerts`（8a-1c-i）**：每 30 秒經本機 wwd 讀每台主機的 `GET /v1/alerts`；只有持有 fleet `primary` 角色的 daemon 會推播，standby 只讀並收 digest。「已投遞」只在 push 模組確認 APNs 收下（`Sent`）時才寫進 ledger；沒有確認時，同一個告警最多每 5 分鐘交給 push 一次、一小時內最多 12 次，確認送出後一小時內不再推，一小時後仍 active 才再推，消失後再次出現視為新實例並立刻推。讀不到的主機略過，不當成已解除。`digest` 級只寫進 `digest` 表（保留 14 天）。使用自己的資料庫 `wwdalerts.db`。**必須與 8a-1c-ii 同版出貨**（#3434）。
+- **primary 沒有推播時由 standby 接手（8a-1c-ii）**：fleet 的 role 回覆多一個可省略欄位 `push_ready`，舊版會忽略它、新版讀到舊版的回覆視為沒回報；沒有新增路由。值取自 push 模組是否仍就緒（模組停掉後視為未就緒）。引擎記下對方的回覆，綁角色世代，角色改變後舊紀錄視為未知，未知時 standby 接手。fleet 的 `order` 是 `[air26, mlab]`，primary 不固定，所以 air26 當 primary 又沒有 `[push]` 時需要這一條（#3445）。
+
+### Added：wwd 資格與結果重用（WWD-5）
+
+- **`wwd.db` host schema 6（5-0）**：新增 `earned_labels` 與 `result_cache`（含兩個索引），新庫直接是 v6，v5 檔開啟時補表並保留舊列。這一張只有 DDL 與遷移。部署前四台要先備份 `wwd.db`（#3448）。
+- **earned 標籤進廣告，`host:<alias>`（5b-1）**：每台 wwd 廣告 `host:<alias>`（只縮小誰能接，不給權限）；earned 的 task 標籤進廣告，quarantined 的不進。reference 主機不用配對就持有 `task:<repo>/<task>`（有該 repo 與任務要求的全部標籤才給）。earned 集合在兩筆 facts 之間改變時重算，只在變動時送 labels 事件。新增只走本機 socket 的 `GET /v1/earned-labels`（#3468）。
+- **reference 主機的標籤取自 manifest，`pdx wwd labels`（5b-1b）**：wwd 從本機各 clone 的 `.wwd/tasks.toml` 讀出 `qualify.reference` 的任務，reference 主機才會真的廣告 `task:<repo>/<task>`（依檔案 mtime／size 快取，壞掉的 manifest 視同沒有）。新增 `pdx wwd labels [--json]` 列出 earned／quarantined 與各自的 fingerprint（#3472）。
+- **結果快取的讀寫（5d-1b）**：`result_cache` 上限 10,000 筆（最舊先出），超過 3 天視為沒有（剛好 3 天仍命中）；新增依標籤刪除（漂移撤銷標籤時用）與清理，並有測試釘住「cache ≤ log ≤ job 的保留期」。已知限制：quarantined 的標籤不會被廣告，所以之後隔離標籤的一方必須同時刪除該標籤的快取。這一版還沒有呼叫端，行為不變（#3476）。
+- **資格觸發規則與配對比較（5b-2a）**：新套件 `internal/wwd/qualify`，純函式：`Check`／`Decide`／`Manual` 判斷何時該為某任務啟動一對（自動重試要等 fingerprint 改變或滿 24 小時），`Compare` 判斷一對是否一致（exit 狀態、通過與失敗數量、失敗集合相同；任一半缺結果、主機不符或摘要被截斷則作廢）。這一版還沒有呼叫端，行為不變。已知限制：`wire.Summary` 只有通過數量、沒有通過清單，跑了不同測試卻通過同樣數量的兩台分不出來；補救是通過清單的 digest，分兩版出（757 讀取端、之後寫入端），**5b-2c 不得早於寫入端上線**（#3487）。
+
+### Changed：wwd
+
+- **per-job 資料庫改用 key `source/id` 命名（#3373 PR2）**：job id 只在發出它的 origin 內唯一，所以 per-job MySQL 資料庫與使用者改由 key 的摘要命名；名稱形狀（`^wwd_[0-9a-f]{32}$`、`^wwdu_[0-9a-f]{26}$`）、SQL 與設定都不變。清掃會同時保留一個仍存活 key 的新舊兩種名稱，避免升級後第一次清掃把仍被持有的舊資料庫（例如隔離中的工作）當成殘留刪掉；舊名稱的相容在下一版移除。這也是退版前隔離區必須為空的原因（#3462）。
+- **工作的行程標記加上 `WWD_ORIGIN`（#3373 PR3a）**：除了 `WWD_JOB=<id>`，行程環境多一個 `WWD_ORIGIN=<16 位十六進位>`，讓同一個 id 來自兩個 origin 的工作可以區分；任務自己的環境不能設定它。清掃與用量取樣都改用 `tag:id`。沒有 wire 與 schema 變動，不用升 `proto`。舊版 wwd 啟動、升級後仍在跑的指令沒有 `WWD_ORIGIN`，過渡期內仍會被認得，這條過渡規則下一版移除（#3465 追蹤）（#3481）。
+
+### Fixed：wwd
+
+- **reference 任務的 repo 與自己的 task 標籤不再被當成環境需求（5b-1c）**：5b-1b 把任務標籤裡的 `repo:<repo>` 與 `task:<repo>/<task>` 也當成非環境需求，使真實的 purdex manifest（例如 `spa-related`）在 reference 主機上永遠不會被持有。現在知道 repo 名時會把這兩種標籤從需求拿掉，外來的 `task:`、`host:`、別的 `repo:` 仍讓任務失敗（#3485）。
+
+### Added：pdx、watch 與 pool API
+
+- **守門員認得 wwd 的佇列工作（#3447 2/2）**：wwd worker 的佇列工作不在閘門名額內，原本每件都會被 `unmanaged_heavy` 抓到而叫醒守門員。現在以行程環境的 `WWD_JOB` 判斷，標籤為新的 `wwd_job`，指令與簽章照樣記錄，但立即標成已處理（備註「wwd 佇列工作（名額外），只記錄」），不進送出佇列、不喚醒守門員、不計入未處理；用 `pdx watch log` 查看。標記判斷失敗時退回一般路徑。`pdx-watch` 的 SKILL.md 標籤表補了一行，**所以要重跑 `pdx setup`**（#3461）。
+- **另一台主機的歷史經本機 wwd 轉送，新增 `GET /api/pool/facts/series`（WWD-7a 第 1 張）**：`GET /api/pool/facts/history?host=<alias>` 現在會經本機 wwd 轉送，不再回 501 `host_not_local`；wwd 的 4xx 以原狀態與 `wwd_rejected` 回傳，其他仍是 502 `wwd_error`。新增 `GET /api/pool/facts/series`（能力 `pool.series.v1`）把歷史精簡成圖表需要的點，`since` 可為 RFC 3339 時間或相對長度（最遠 14 天），`step` 預設視窗 ≤ 2 小時為 5 秒、否則 1 分鐘，最多 2000 點（保留最新的，`truncated` 標示）；已加入配對裝置的允許清單。已知限制：wwd 轉送上限 8 MiB，另一台主機的 series 約只能到 1 小時，本機約 1.5 天，不是路由接受的 14 天（#3489 追蹤）。wwd 的 wire 沒有改動（#3490）。
+
+### Fixed：pdx
+
+- **`pdx test`／`pdx jobs` 的 submitter session 讀得到了（#3477）**：原本只讀 `PDX_SESSION_ID`，而沒有任何地方設定它，所以 `submitter.session` 一律是空字串，完成通知對不到對話、App 分頁的排隊標記對不到分頁，`pdx jobs` 預設「只列這個 session 的工作」的過濾也形同虛設。現在依序讀 `CLAUDE_CODE_SESSION_ID`、`CLAUDE_SESSION_ID`（舊名），三處（閘門、`pdx test`、`pdx jobs`）共用同一份讀取；`PDX_SESSION_ID` 仍可在 `pdx` 端明確覆寫，閘門不讀它。環境值需 8～64 字元的 `[0-9A-Za-z_-]`，否則視為沒設。尚未驗證子行程／subagent 是否沿用同一個 session id，需真機確認（#3484）。
+
+### Added：姓名池 v2
+
+- **挑名規則（NP-3b）**：以純函式實作三條挑名規則（lead 候選順序、member 優先挑與 lead 配對過的名字、其他人先挑新面孔再挑與 lead 配對最少的名字；配對次數相同時依 pool 順序，不隨機）。這一版它還沒有被正式程式碼呼叫（#3464）。
+- **命名流程改用規則 3 與名字歷史（NP-3c-1）**：新進對話優先從沒用過的名字隨機挑，其次挑與任一 lead 配對最少的，lead:true 的角色排最後；舊的「在所有空名字中隨機」取消。名字歷史讀不到時照舊挑並記一行 log。與上一版的差別：沒有歷史也沒有 lead:true 角色時，行為與先前相同（對所有空名字隨機挑）。其他主機的熟悉名字集合留待 NP-3d 接上（#3471）。
+- **名字服務（NP-3c-2）**：peers 模組實作並登記 `NameService`：lead 候選名單、為 lead 改名（檢查代號是否為啟用中的角色、是否已被本機或其他主機占用，比對與別名在同一個 meta 交易中完成）、可還原的撤銷、記錄 lead 與配對。成員名字的預留在 NP-4。目前由團隊模組呼叫的部分還沒接上（#3483）。
+- **別名保留與 envelope 的熟悉名字（NP-3d）**：`peer_name_aliases` 加上 `last_live_at`；每次啟動一分鐘後與其後每小時做一次清理，別名本身或其繼任者仍活著就更新時間，30 天沒有活動的刪除，總數上限 512。只有清單完整可信時才會刪。envelope 的 `names.familiar` 帶本機最近 64 個代號，讀不到時回報 `names.unavailable`（#3488）。
+- **成員上限提高到 9，新增 `team.max_members.v2`（NP-4a）**：團隊建立、`PUT /api/team/max-members` 與 CLI `--max-members` 的範圍由 1～8 改為 1～9；既有團隊已存的 8 以下的值不會被改寫。無人值守 lead 的成員上限（3）不變。舊 App 只看得到 v1 能力，仍維持 8（#3469）。
+- **無人值守視圖的決策日誌（NP-6b）**：`GET`／`PUT /api/team/unattended` 多一個 `log`（能力 `team.decision_log.v1`），最新 30 筆、新到舊，合併團隊申請的決策（不論誰決定）與開關的開／關紀錄；舊的 `approved` 分頁不變，舊 App 照常運作。無人值守模式拒絕的 lead／adopt 申請在日誌中列為 `denied`；申請人撤回、放棄、尚未決定與聊天提示不列入（#3460）。
+
+### Added：團隊介面 v2 與 App
+
+- **lead 核准視窗的名字卡（NA-7）**：payload 帶 `lead_names` 時，核准視窗多一列「名字」：22px 頭像加名字，「保留目前的名字」第一個且預設選取，接著「當過 lead」「預設 lead」，其餘收在「更多…」。只有選了保留以外的名字才送 `grant.lead_name`。遇到 409 `name_taken` 會用回應刷新候選並提示，不跳失敗 toast；離線選名、重連重送被拒時也會通知開著的卡片刷新（#3467）。
+- **無人值守面板拿掉上限欄與資料夾（NA-8a）**：兩者已在團隊面板底部的設定區塊，面板的額度列固定三欄；接力額度兩邊都保留（#3470）。
+- **無人值守面板改顯示決策日誌（NA-8b）**：有 `log` 的主機顯示日誌（跨主機合併、最新 30 條、可捲動），每列有 18px 頭像、名字、類型、狀態標籤與時間，開關事件以粉紅底粗體整列顯示；顯示不只一台主機時每列標主機。沒有 `log` 的舊 daemon 維持原本的「自動通過的申請」清單與「顯示更多」，讀不到的主機照舊點名（#3475）。
+- **側欄檢視切換鈕與 `teamIcon`（NA-5a）**：側欄檢視切換鈕從 Home 按鈕拆出，外觀設定新增 `teamIcon`（預設 `UsersThree`）與 `sidebarView`。**整個可見部分在程式常數閘門後面，預設關**（NA-6 拿掉閘門），所以這一版使用者看不到任何變化（#3486）。
+- **側欄 session 列戴 persona 頭像（NA-5b）**：session 列的 agent 圖示換成 persona 頭像，燈號改成頭像右上角的 overlay（未讀色、等待核准的手、subagent 點、queue 符號都保留）；認不出 persona 的維持 agent 圖示。判斷只讀 App 已有的資料、不發請求：先看團隊 roster（比對 tmux session 名稱與世代），沒有再用該主機已快取的 `/api/peers` 列（世代相符才採用）。已知限制：單獨 session、不是 team 成員、且該主機的 peers 還沒被抓過時仍是 agent 圖示（#3492）。
+
+### 文件
+
+- **WWD-7（App 端的 wwd）設計**：在 wwd plan 補上 WWD-7 的設計章節（單一主機狀態、輪詢與歷史範圍、PR 切分）。僅文件（#3482）。
+
 ## [1.0.0-alpha.755] - 2026-10-19
 
 > daemon、`pdx` CLI 與 `wwd` 有改；**mod（`cmd/pdx/plugin/`）沒改，不用重跑 `pdx setup`**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 有改（#3443 頭像抓圖 IPC），但頁面上的照片選擇介面要等 NA-1b-2c，這一版不跑 `electron:build` 打包；dev update 偵測到原始碼變了會自己建置。
