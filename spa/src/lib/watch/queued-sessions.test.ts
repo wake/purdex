@@ -111,6 +111,14 @@ describe('queuedJobsBySession', () => {
     expect(m.get('s-two')![0].place).toBe(1)
   })
 
+  it('a queued job with no session still holds a place in the display order (it is in the queue, only no tab shows it)', () => {
+    const m = queuedJobsBySession([
+      job('old', { class: 'release', created_at: 3000, submitter: { session: '', ref: '', team: '', host: '' } }),
+      job('mine', { created_at: 1000 }),
+    ], 4000, hosts)
+    expect(m.get('s-one')!.map((x) => [x.jobId, x.place])).toEqual([['mine', 2]])
+  })
+
   it('two sessions do not see each other\'s jobs', () => {
     const m = queuedJobsBySession([job('a'), job('b', { submitter: { session: 'S-TWO', ref: '', team: '', host: '' } })], 5000, hosts)
     expect(m.get('s-one')!.map((x) => x.jobId)).toEqual(['a'])

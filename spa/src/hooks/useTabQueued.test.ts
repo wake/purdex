@@ -53,6 +53,18 @@ describe('useTabQueued with pool jobs', () => {
     expect([...renderHook(() => useTabQueued([pane('k1', 'SESS-1')])).result.current.keys]).toEqual([])
   })
 
+  it('a pane gets only the jobs of its own session, though another session\'s job comes first', () => {
+    seed([
+      job('theirs', { submitter: { session: 'SESS-2', ref: '', team: '', host: '' }, state: 'running', claim: { worker: 'air26', attempt: 1, since: 1 } }),
+      job('mine'),
+    ])
+    const { result } = renderHook(() => useTabQueued([pane('k1', 'SESS-1')]))
+    expect(result.current.jobs.map((j) => j.jobId)).toEqual(['mine'])
+    const two = renderHook(() => useTabQueued([pane('k1', 'SESS-1'), pane('k2', 'SESS-2')])).result.current
+    expect(two.jobs.map((j) => j.jobId).sort()).toEqual(['mine', 'theirs'])
+    expect([...two.keys].sort()).toEqual(['k1', 'k2'])
+  })
+
   it('lights up when the job arrives and goes out when it ends', () => {
     const { result } = renderHook(() => useTabQueued([pane('k1', 'SESS-1')]))
     expect(result.current.keys.size).toBe(0)
