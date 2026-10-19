@@ -50,6 +50,18 @@ describe('the queue in display order', () => {
     expect(idsOf(displayOrder(jobs, now, noZone))).toEqual(['front1', 'front2', 'score-high', 'score-low', 'back1', 'back2', 'hold'])
   })
 
+  it('pins with the same manual_seq (each origin counts its own) go by created_at, then id, as the worker does', () => {
+    const jobs = [
+      job('a-late', { manual: 'front', manual_seq: 1, origin: 'x', created_at: 9 }),
+      job('z-early', { manual: 'front', manual_seq: 1, origin: 'y', created_at: 3 }),
+      job('b-back-late', { manual: 'back', manual_seq: 2, created_at: 8 }),
+      job('y-back-early', { manual: 'back', manual_seq: 2, created_at: 2 }),
+      job('m-same-1', { manual: 'hold', manual_seq: 4, created_at: 5 }),
+      job('l-same-2', { manual: 'hold', manual_seq: 4, created_at: 5 }),
+    ]
+    expect(idsOf(displayOrder(jobs, now, noZone))).toEqual(['z-early', 'a-late', 'y-back-early', 'b-back-late', 'l-same-2', 'm-same-1'])
+  })
+
   it('only queued jobs are in the queue', () => {
     const jobs = [job('q'), job('c', { state: 'claimed' }), job('r', { state: 'running' }), job('d', { state: 'succeeded' })]
     expect(idsOf(displayOrder(jobs, now, noZone))).toEqual(['q'])

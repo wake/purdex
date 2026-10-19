@@ -23,7 +23,8 @@ export function baseScore(job: PoolJob, now: number, zone: PoolZone | undefined,
   return CLASS_WEIGHT * classRank(job.class) + waited + bonus - SAME_SESSION_WEIGHT * earlier
 }
 
-const bySeq = (a: PoolJob, b: PoolJob) => a.manual_seq - b.manual_seq || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+/** Pins by `manual_seq`; each origin counts its own, so equal numbers are normal: then by `created_at`, then id (as the worker's ranking does). */
+const bySeq = (a: PoolJob, b: PoolJob) => a.manual_seq - b.manual_seq || a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 /** The queued jobs of every origin in display order. `zoneOf` is the zone of an origin (undefined when it is not known). */
 export function displayOrder(jobs: readonly PoolJob[], now: number, zoneOf: (origin: string) => PoolZone | undefined): PoolJob[] {
