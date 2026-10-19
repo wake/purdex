@@ -119,6 +119,8 @@ func main() {
 		runAssist(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
+	case "names":
+		runNames(os.Args[2:])
 	case "task":
 		runTask(os.Args[2:])
 	case "report":

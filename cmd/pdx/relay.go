@@ -364,10 +364,14 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 	var req team.PersonRequest
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.StringVar(&req.Command, "command", "", "")
+	fs.StringVar(&req.LeadName, "lead-name", "", "")
+	fs.BoolVar(&req.Card, "card", false, "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
 	}
+	leadNameGiven := false
+	fs.Visit(func(f *flag.Flag) { leadNameGiven = leadNameGiven || f.Name == "lead-name" })
 	switch {
 	case fs.NArg() != 0:
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
@@ -375,6 +379,12 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 		return relayUsageErr(stderr, "--session 不能為空")
 	case team.PersonTTLS(req.Command) == 0:
 		return relayUsageErr(stderr, "--command must be relay, adopt, lead or spawn")
+	case (leadNameGiven || req.Card) && req.Command != team.PersonCmdLead:
+		return relayUsageErr(stderr, "--lead-name and --card belong to --command lead")
+	case leadNameGiven && req.Card:
+		return relayUsageErr(stderr, "--lead-name and --card exclude each other")
+	case leadNameGiven && !leadNameCode.MatchString(req.LeadName):
+		return relayUsageErr(stderr, "--lead-name must be a persona code: 2 to 16 lower-case letters")
 	}
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
