@@ -6,6 +6,8 @@ import { TeamRootsEditor } from './TeamRootsEditor'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { usePersonaStore } from '../../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useRelayQuotaStore } from '../../lib/team/relay-quota'
 import { useMaxMembersStore, teamKey } from '../../lib/team/max-members'
@@ -138,6 +140,20 @@ describe('the roots editor', () => {
     expect(lines[1]).toContain('/b/y')
     expect(lines[2]).toContain('/b/z')
     expect(screen.getAllByTestId('roots-row')).toHaveLength(2)
+  })
+
+  // The member is named by the persona behind its daemon address (spec §9.3); the fixture's address is `mlab/m-xx`, so the code is `xx`.
+  it('409 roots_in_use: a member that is a persona is named by it', async () => {
+    const c = makeCollection(['xx'])
+    c.items[0] = makePersona('xx', { name: 'Xia' })
+    usePersonaStore.setState({ byHost: { [H]: { status: 'ready', collection: c } } })
+    configureRoots({ put: async () => { throw err(409, 'roots_in_use', { detail: 'x', in_use: [{ root: '/b', kind: 'member', ref: '_abc123', cwd: '/b/x' }] }) } })
+    show()
+    await act(async () => { fireEvent.click(screen.getAllByTestId('roots-remove')[1]) })
+    const line = screen.getAllByTestId('roots-in-use-item')[0].textContent ?? ''
+    expect(line).toContain('Xia')
+    expect(line).not.toContain('worker-1')
+    usePersonaStore.setState({ byHost: {} })
   })
 
   it('404: says the team ended', async () => {
