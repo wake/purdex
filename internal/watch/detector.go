@@ -402,6 +402,9 @@ func (d *Detector) treeEvent(in Input, tab *table, root int, st *treeState) Even
 	ev.Argv = argv
 	ev.Signature = Signature(argv)
 	ev.Label = labelOf(argv, ev.Session != "")
+	if tab.hasJobMark(root, in.JobMark) {
+		ev.Label = LabelWWDJob // whatever the gate would have said of its command: it is the worker's own job
+	}
 	if ev.Signature != "" {
 		ev.New = d.mem.Sighting(ev.Signature, in.Now)
 	}
