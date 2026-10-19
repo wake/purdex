@@ -10,9 +10,40 @@ import { ApprovalApiError, send } from './approval-api'
 import { clientDescriptor } from './client-label'
 import { hostIdentityNow } from './quota-host'
 import { parseRelayQuotaView, parseSessionQuotas } from './relay-quota-wire'
-import { isApproval, isCapPair, isUnattendedState, isUnknownKindRow, type Approval, type MaxMembersView, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
+import { isApproval, isCapPair, isUnattendedState, isUnknownKindRow, type Approval, type Client, type LogDecisionState, type Origin, type UnattendedLogEntry, type MaxMembersView, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
 
 export const UNATTENDED_PATH = '/api/team/unattended'
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const CLIENT_KINDS: readonly string[] = ['app', 'terminal', 'unattended', 'person']
+const LOG_STATES: readonly string[] = ['approved', 'denied', 'timeout']
+
+function clientOf(v: unknown): Client | undefined {
+  return isRec(v) && typeof v.kind === 'string' && CLIENT_KINDS.includes(v.kind) && typeof v.label === 'string' ? { kind: v.kind as Client['kind'], label: v.label } : undefined
+}
+
+/**
+ * `log` as the panel draws it: the entries of a known shape, in the daemon's order. The log is a courtesy next to the quotas, so a
+ * broken entry is left out (a later daemon's type, a missing origin) and never fails the whole answer; `undefined` when `log` is not
+ * an array at all (an older daemon: the panel keeps the `approved` list).
+ */
+export function parseUnattendedLog(raw: unknown): UnattendedLogEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: UnattendedLogEntry[] = []
+  for (const e of raw) {
+    if (!isRec(e) || !isFiniteNumber(e.at)) continue
+    if (e.type === 'toggle') {
+      const by = clientOf(e.by)
+      if (typeof e.on === 'boolean' && by !== undefined) out.push({ type: 'toggle', at: e.at, on: e.on, by })
+    } else if (e.type === 'decision') {
+      const o = e.origin
+      if (typeof e.kind !== 'string' || typeof e.state !== 'string' || !LOG_STATES.includes(e.state) || !isRec(o) || typeof o.session_id !== 'string' || typeof o.name !== 'string' || typeof o.ref !== 'string') continue
+      const decided_by = clientOf(e.decided_by)
+      out.push({ type: 'decision', at: e.at, kind: e.kind, origin: o as unknown as Origin, state: e.state as LogDecisionState, ...(decided_by !== undefined ? { decided_by } : {}) })
+    }
+  }
+  return out
+}
 
 export interface UnattendedPageQuery {
   /** `next_before` of the previous page; absent = the newest. */
@@ -60,6 +91,7 @@ function viewOf(raw: unknown): UnattendedView {
     quotas = parseSessionQuotas(r.quotas) ?? undefined
     quotasFailed = quotas === undefined
   }
+  const log = parseUnattendedLog(r.log)
   let held: Approval[] | undefined
   if (Array.isArray(r.held)) {
     const rows: Approval[] = []
@@ -86,6 +118,7 @@ function viewOf(raw: unknown): UnattendedView {
     ...(quotas !== undefined ? { quotas } : {}),
     ...(quotasFailed ? { quotasFailed: true } : {}),
     ...(held !== undefined ? { held } : {}),
+    ...(log !== undefined ? { log } : {}),
   }
 }
 
