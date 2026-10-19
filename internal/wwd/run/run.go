@@ -34,7 +34,10 @@ const (
 
 // Spec is one command to run.
 type Spec struct {
-	JobID     string
+	JobID string
+	// Origin is the tag of the connection the job came in on (worker/ident.OriginTag of the source), put into the mark as WWD_ORIGIN;
+	// "" for a run with none (the mark is then the old kind, which any origin's sweep also matches during the transition).
+	Origin    string
 	Argv      []string // already rendered; started directly, never through a shell
 	Dir       string   // the working directory (absolute)
 	Workspace string   // the workspace root; HOME, TMPDIR and XDG_* point inside it
@@ -79,7 +82,7 @@ type Result struct {
 // KillAfter). When it returns, no process of the group is left.
 func Run(ctx context.Context, spec Spec) Result {
 	res := Result{ExitCode: -1}
-	env, err := BuildEnv(spec.JobID, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
+	env, err := BuildEnv(spec.JobID, spec.Origin, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
 	if err != nil {
 		return failStart(res, err)
 	}
@@ -169,7 +172,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	if src == nil {
 		src = DefaultProcSource()
 	}
-	res.Escaped, res.SweepErr = sweepBounded(src, spec.JobID, killAfter)
+	res.Escaped, res.SweepErr = sweepBounded(src, spec.Origin, spec.JobID, killAfter)
 	if len(res.Escaped) > 0 {
 		cp.note(escapedNote(res.Escaped))
 	}
