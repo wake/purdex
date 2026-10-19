@@ -9,6 +9,7 @@ vi.mock('../../stores/useTaskGroupsStore', () => {
 
 import { useTaskGroupsStore } from '../../stores/useTaskGroupsStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { loadTaskGroupsIfSupported, taskGroupsSupported } from './loader'
 
 const entry = (caps: string[], fetchedAt = 1) => ({ phase: 'ready', daemonCapabilities: caps, fetchedAt }) as never
@@ -37,5 +38,16 @@ describe('task groups loader', () => {
     expect(taskGroupsSupported('h1')).toBe(false)
     await loadTaskGroupsIfSupported('h1')
     expect(load()).not.toHaveBeenCalled()
+  })
+
+  it('asks nothing of a host whose endpoint answers as another daemon (daemonId mismatch), and asks again once that is gone', async () => {
+    setEntry('h1', ['task_groups.v1'])
+    const h = { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, token: 't', daemonId: 'D1' }
+    useHostStore.setState({ hosts: { h1: h } as never, runtime: { h1: { status: 'connected', daemonIdMismatch: { stored: 'D1', observed: 'D2', endpoint: '10.0.0.1:7860' } } } as never })
+    expect(taskGroupsSupported('h1')).toBe(false)
+    await loadTaskGroupsIfSupported('h1')
+    expect(load()).not.toHaveBeenCalled()
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } as never })
+    expect(taskGroupsSupported('h1')).toBe(true)
   })
 })

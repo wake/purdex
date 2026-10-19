@@ -1,6 +1,6 @@
 // spa/src/features/workspace/components/HomeRow.viewToggle.test.tsx — the sidebar's view toggle, split off the Home button (name pool v2 spec §9.6, NA-5): a 30 px square button left of Home that switches
-// between the workspace view (the profile icon) and the task-group view (the team icon, pink outline). It is behind the NA-5 → NA-6 gate: closed, the row is exactly today's.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// between the workspace view (the profile icon) and the task-group view (the team icon, pink outline).
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { HomeRow } from './HomeRow'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
@@ -8,15 +8,11 @@ import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { taskGroupView } from '../lib/task-group-view'
 
 const WORLD = { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }
 const toggle = () => screen.getByTestId('sidebar-view-toggle')
 const logoIn = (el: HTMLElement) => el.querySelector('img[src="/icons/logo-transparent.png"]')
 const renderRow = (onSelectHome = vi.fn()) => { render(<HomeRow isActive={false} onSelectHome={onSelectHome} />); return onSelectHome }
-
-// The gate as shipped: the closed-gate tests rely on it, they do not set it.
-const SHIPPED = taskGroupView.enabled
 
 beforeEach(() => {
   cleanup()
@@ -26,19 +22,8 @@ beforeEach(() => {
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   useProfileSwitcherStore.getState().setOpen(false)
 })
-afterEach(() => { taskGroupView.enabled = SHIPPED })
-
-describe('the gate is closed (until NA-6)', () => {
-  it('there is no toggle, and the profile icon stays inside the Home button as it always was', () => {
-    renderRow()
-    expect(screen.queryByTestId('sidebar-view-toggle')).toBeNull()
-    expect(logoIn(screen.getByTestId('home-button'))).not.toBeNull()
-  })
-})
 
 describe('the toggle', () => {
-  beforeEach(() => { taskGroupView.enabled = true })
-
   it('is a 30 px square button before the Home button, and the profile icon leaves Home for it', () => {
     renderRow()
     expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['sidebar-view-toggle', 'home-button', 'watch-shield'])
