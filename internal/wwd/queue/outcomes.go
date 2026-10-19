@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -34,7 +36,7 @@ type Outcome struct {
 	DefHash  string    // the task's definition hash as submitted
 	OK       bool      // the command exited 0
 	Standing string    // StandingEarned or StandingReference
-	At       time.Time // when it was recorded, on the origin's clock (retention counts from it)
+	At       time.Time // when it ended, on the origin's clock (retention counts from it)
 }
 
 func (o Outcome) validate() error {
@@ -70,128 +72,122 @@ func (o Outcome) workKey() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// RecordOutcome writes the outcome and, in the same transaction, a disagreement for each pair it makes with an earlier outcome of the same
-// work from another host that came out differently. Of a pair, the label to be quarantined is the non-reference host's; when neither is
-// the reference (both earned) both labels are, because nobody can tell which of the two is wrong (spec §7). Only the most recent earlier
-// outcome of each other host is paired, so a long run of outcomes does not become a long run of disagreements. The same job again is
-// the same outcome (nothing is written twice). Returns the disagreements it wrote.
+// RecordOutcome writes the outcome and the disagreements it makes (see recordOutcomeOn) in a transaction of its own. A job's own end
+// records its outcome inside the transaction that ends it (Result), so this is for what is not a job's end.
 func (q *Queue) RecordOutcome(ctx context.Context, o Outcome) ([]wire.Disagreement, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
-	key := o.workKey()
-	at := o.At.UnixMilli()
 	var written []wire.Disagreement
-	err := q.writeOnly(ctx, func(c *sql.Conn, _ *[]string) error {
-		written = nil
-		res, err := c.ExecContext(ctx, `INSERT OR IGNORE INTO task_outcomes (job_id, work_key, host, label, tree, task, ok, standing, at)
-			VALUES (?,?,?,?,?,?,?,?,?)`, o.JobID, key, o.Host, o.Label, o.Tree, o.Task, b2i(o.OK), o.Standing, at)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return nil // this job was recorded before
-		}
-		// the latest outcome of each other host is the one to compare with: the host's earlier ones are superseded by it (a host that passed
-		// and then failed agrees with a failing host), so the latest is chosen first and only then is it asked whether it differs
-		rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes
-			WHERE work_key = ? AND host != ? ORDER BY seq DESC`, key, o.Host)
-		if err != nil {
-			return err
-		}
-		type earlier struct{ job, host, standing string }
-		var pairs []earlier
-		seen := map[string]bool{}
-		for rows.Next() {
-			var e earlier
-			var ok int
-			if err := rows.Scan(&e.job, &e.host, &e.standing, &ok); err != nil {
-				rows.Close()
-				return err
-			}
-			if seen[e.host] {
-				continue
-			}
-			seen[e.host] = true
-			if ok != b2i(o.OK) {
-				pairs = append(pairs, e)
-			}
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		for _, e := range pairs {
-			for _, quarantine := range quarantined(o, e.host, e.standing) {
-				other := e.host
-				if quarantine == e.host {
-					other = o.Host
-				}
-				r, err := c.ExecContext(ctx, `INSERT OR IGNORE INTO outcome_disagreements (host, label, other_host, tree, task, job_old, job_new, at)
-					VALUES (?,?,?,?,?,?,?,?)`, quarantine, o.Label, other, o.Tree, o.Task, e.job, o.JobID, at)
-				if err != nil {
-					return err
-				}
-				if n, _ := r.RowsAffected(); n > 0 {
-					id, _ := r.LastInsertId()
-					written = append(written, wire.Disagreement{ID: id, Label: o.Label, Host: quarantine, OtherHost: other, Tree: o.Tree, Task: o.Task,
-						Jobs: [2]string{e.job, o.JobID}, At: o.At})
-				}
-			}
-		}
-		return nil
+	err := q.writeOnly(ctx, func(c *sql.Conn, _ *[]string) (err error) {
+		written, err = recordOutcomeOn(ctx, c, o)
+		return err
 	})
 	return written, err
 }
 
-// EndedJob is a job that ended with an outcome to compare, with what its claim said about the host.
-type EndedJob struct {
-	Job      wire.Job
-	Produced Produced
-}
-
-// UnrecordedOutcomes lists, newest first and at most limit of them, the jobs that ended within the last window with an outcome to compare
-// (see comparable) and have no row in task_outcomes. The outcome of a job is written after its result is committed, and that write can
-// fail (a locked database): the worker's repeat of the result is an echo and offers nothing again, and a restart forgets it. The jobs
-// themselves keep everything the record needs, so the daemon asks for these now and then and records them again. Recording is
-// idempotent. A job whose host has no standing for the task is listed every time until it leaves the window, which is why the list is
-// bounded and newest first: a pile of them cannot keep the recent ones from being seen.
-func (q *Queue) UnrecordedOutcomes(ctx context.Context, window time.Duration, limit int) ([]EndedJob, error) {
-	cutoff := q.now().Add(-window).UnixMilli()
-	rows, err := q.db.QueryContext(ctx, `SELECT id FROM jobs
-		WHERE state IN ('succeeded','failed') AND cacheable = 1 AND local = 0 AND adhoc = 0 AND def_hash != '' AND claim_labels != ''
-		  AND finished_at >= ? AND NOT EXISTS (SELECT 1 FROM task_outcomes o WHERE o.job_id = jobs.id)
-		ORDER BY seq DESC LIMIT ?`, cutoff, limit)
+// recordOutcomeOn writes the outcome on the connection of a transaction and, in it, a disagreement for each pair it makes with an earlier
+// outcome of the same work from another host that came out differently. Of a pair, the label to be quarantined is the non-reference
+// host's; when neither is the reference (both earned) both labels are, because nobody can tell which of the two is wrong (spec §7). Each
+// other host is compared by its latest outcome of the work, so a long run of outcomes does not become a long run of disagreements and a
+// host's earlier outcomes do not count once it has a later one. The same job again is the same outcome (nothing is written twice).
+func recordOutcomeOn(ctx context.Context, c *sql.Conn, o Outcome) ([]wire.Disagreement, error) {
+	key := o.workKey()
+	at := o.At.UnixMilli()
+	res, err := c.ExecContext(ctx, `INSERT OR IGNORE INTO task_outcomes (job_id, work_key, host, label, tree, task, ok, standing, at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, o.JobID, key, o.Host, o.Label, o.Tree, o.Task, b2i(o.OK), o.Standing, at)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil // this job was recorded before
+	}
+	// the latest outcome of each other host is the one to compare with, so it is chosen first and only then asked whether it differs
+	rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes
+		WHERE work_key = ? AND host != ? ORDER BY seq DESC`, key, o.Host)
+	if err != nil {
+		return nil, err
+	}
+	type earlier struct{ job, host, standing string }
+	var pairs []earlier
+	seen := map[string]bool{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var e earlier
+		var ok int
+		if err := rows.Scan(&e.job, &e.host, &e.standing, &ok); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		if seen[e.host] {
+			continue
+		}
+		seen[e.host] = true
+		if ok != b2i(o.OK) {
+			pairs = append(pairs, e)
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	var out []EndedJob
-	for _, id := range ids {
-		j, err := q.Get(ctx, id)
-		if err != nil {
-			continue // gone since (retention)
+	var written []wire.Disagreement
+	for _, e := range pairs {
+		for _, quarantine := range quarantined(o, e.host, e.standing) {
+			other := e.host
+			if quarantine == e.host {
+				other = o.Host
+			}
+			r, err := c.ExecContext(ctx, `INSERT OR IGNORE INTO outcome_disagreements (host, label, other_host, tree, task, job_old, job_new, at)
+				VALUES (?,?,?,?,?,?,?,?)`, quarantine, o.Label, other, o.Tree, o.Task, e.job, o.JobID, at)
+			if err != nil {
+				return nil, err
+			}
+			if n, _ := r.RowsAffected(); n > 0 {
+				id, _ := r.LastInsertId()
+				written = append(written, wire.Disagreement{ID: id, Label: o.Label, Host: quarantine, OtherHost: other, Tree: o.Tree, Task: o.Task,
+					Jobs: [2]string{e.job, o.JobID}, At: o.At})
+			}
 		}
-		if !comparable(j) {
-			continue
-		}
-		p, err := producedOn(ctx, q.db, id)
-		if err != nil {
-			continue
-		}
-		out = append(out, EndedJob{Job: j, Produced: p})
 	}
-	return out, nil
+	return written, nil
+}
+
+// recordEndedOutcome records, in the transaction that ends the job, how it came out (spec §7): when the job has an outcome to compare (see
+// comparable) and its host vouches for the task: the claim's own labels held the task's label (earned), or the host is the task's
+// reference. It is the same transaction as the end, so the outcome cannot be lost to a failure after the result is taken, and it is dated
+// and judged as of the end: by the origin's clock, and by the reference as it was then (reference is asked before the transaction, since
+// finding it may read manifests, which is not done with the write lock held). A host with neither is not compared: it has no label to
+// lose. A job from before the definition hash was kept, or a claim that said nothing, is not recorded.
+func (q *Queue) recordEndedOutcome(ctx context.Context, c *sql.Conn, j wire.Job, p Produced, reference string) error {
+	if !comparable(j) || p.DefHash == "" || len(p.Labels) == 0 || j.Result.Host == "" {
+		return nil
+	}
+	label := "task:" + j.Repo.Name + "/" + j.Task
+	var standing string
+	switch {
+	case reference != "" && j.Result.Host == reference:
+		standing = StandingReference
+	case slices.Contains(p.Labels, label):
+		standing = StandingEarned
+	default:
+		return nil
+	}
+	o := Outcome{JobID: j.ID, Host: j.Result.Host, Label: label, Tree: j.Snapshot.Tree, Task: j.Task, Args: j.Args, DefHash: p.DefHash,
+		OK: *j.Result.Exit == 0, Standing: standing, At: q.now()}
+	if err := o.validate(); err != nil {
+		// something about the job cannot be recorded (a label that is not a task label, a host name that is not one): not worth failing the
+		// end of the job over, and recording it again would fail the same way
+		log.Printf("queue: outcome of %s was not recorded: %v", j.ID, err)
+		return nil
+	}
+	found, err := recordOutcomeOn(ctx, c, o)
+	if err != nil {
+		return err
+	}
+	for _, f := range found {
+		log.Printf("queue: outcomes: %s disagrees with %s on %s (tree %s): jobs %s and %s; the label of %s is to be quarantined",
+			f.Host, f.OtherHost, f.Label, f.Tree, f.Jobs[0], f.Jobs[1], f.Host)
+	}
+	return nil
 }
 
 // Origin is the alias of the host this queue belongs to: the one that records the outcomes it offers.

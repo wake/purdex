@@ -212,6 +212,7 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 	var out wire.Job
 	var produced Produced
 	ended := false // this call ended the job: not the echo of a result posted before
+	reference := q.referenceOf(ctx, id)
 	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
@@ -234,7 +235,12 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		}
 		ended = true
 		out, err = getOn(ctx, c, id, false)
-		return err
+		if err != nil {
+			return err
+		}
+		// how it came out is recorded in this transaction: it cannot be lost to a failure after the result is taken, and it is dated and
+		// judged as of this end
+		return q.recordEndedOutcome(ctx, c, out, produced, reference)
 	})
 	if err != nil {
 		return wire.Job{}, err
@@ -243,6 +249,19 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		q.offerResult(ctx, out, produced)
 	}
 	return out, nil
+}
+
+// referenceOf is the task's reference host for a job, as Options.ReferenceHost says, asked before the transaction that ends the job (it may
+// read manifests; not with the write lock held). "" when there is no hook, no such job, or no reference.
+func (q *Queue) referenceOf(ctx context.Context, id string) string {
+	if q.opt.ReferenceHost == nil {
+		return ""
+	}
+	var repo, task string
+	if err := q.db.QueryRowContext(ctx, `SELECT repo_name, task FROM jobs WHERE id = ?`, id).Scan(&repo, &task); err != nil {
+		return ""
+	}
+	return q.opt.ReferenceHost(repo, task)
 }
 
 // held is the part of a job row that decides who may do what to it.

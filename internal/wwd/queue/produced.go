@@ -69,22 +69,17 @@ func comparable(j wire.Job) bool {
 		r != nil && !r.CacheHit && r.SupersededBy == nil && r.Exit != nil
 }
 
-// offerResult tells Options.OnSucceeded (a reusable success) and Options.OnEnded (an outcome to compare) about a job that has just ended in
-// this call (never an echo of an earlier result), once the end is committed. What a callback does cannot change the answer to the worker.
+// offerResult tells Options.OnSucceeded about a job that has just ended in this call (never an echo of an earlier result), once the end is
+// committed. What the callback does cannot change the answer to the worker. (The outcome of the job is not offered: it is recorded inside
+// the transaction of the end, see recordEndedOutcome.)
 func (q *Queue) offerResult(ctx context.Context, j wire.Job, p Produced) {
-	ctx = context.WithoutCancel(ctx)
-	call := func(what string, fn func()) {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("queue: result of %s was not offered (%s): %v", j.ID, what, r)
-			}
-		}()
-		fn()
+	if q.opt.OnSucceeded == nil || !reusable(j) {
+		return
 	}
-	if q.opt.OnSucceeded != nil && reusable(j) {
-		call("reuse", func() { q.opt.OnSucceeded(ctx, j, p) })
-	}
-	if q.opt.OnEnded != nil && comparable(j) {
-		call("outcome", func() { q.opt.OnEnded(ctx, j, p) })
-	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("queue: result of %s was not offered for reuse: %v", j.ID, r)
+		}
+	}()
+	q.opt.OnSucceeded(context.WithoutCancel(ctx), j, p)
 }
