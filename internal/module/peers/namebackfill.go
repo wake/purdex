@@ -55,12 +55,11 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	if m.namePicker == nil || m.peerNames == nil {
 		return
 	}
-	// The scan reads the pool and the persona codes of one generation (bindPersonas holds the write side while it publishes both).
+	// The scan is a prefilter and may read a collection that is being applied (the pool of the new one, the persona codes of the
+	// old); backfillOne looks at each candidate again under the generation lock, which is where it matters.
 	var cands []candidate
 	seen := map[string]bool{}
-	m.poolGen.RLock()
 	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
-		m.poolGen.RUnlock()
 		return // no personas: the built-in names are the pool and nothing is old
 	}
 	for _, e := range entries {
@@ -78,7 +77,6 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 		}
 		cands = append(cands, candidate{entry: e, name: name})
 	}
-	m.poolGen.RUnlock()
 	if m.afterBackfillScan != nil {
 		m.afterBackfillScan()
 	}
