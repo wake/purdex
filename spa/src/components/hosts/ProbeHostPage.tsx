@@ -5,6 +5,8 @@ import { ProbeHostEditor } from './ProbeHostEditor'
 import { ProbeBadge, ProbeStatusDot } from './probe-rows'
 import { useProbeRows } from './use-probe-rows'
 import { useProbeEditor } from './useProbeEditor'
+import { usePoolHostRows } from '../../lib/pool/use-pool-host-rows'
+import { PoolHostPage } from './PoolHostPage'
 
 /**
  * One probe host's own entry on the Hosts page (fleet spec §8.2): a header (badge, name, the zone word or 離線, which daemon
@@ -22,6 +24,9 @@ export function ProbeHostPage({ probeId }: { probeId: string }) {
   const row = useProbeRows().find((r) => r.id === probeId)
   const entry = entries.find((e) => e.id === probeId)
   const mine = session && session.initial.id === probeId ? session : null
+  // On the resource pool the page is the pool host page, the editor under 「樣式與 SSH 備援」; a new, unsaved host has no pool row yet.
+  const pool = usePoolHostRows()
+  const poolRow = pool.active ? pool.rows.find((r) => r.id === probeId) : undefined
 
   const remove = async () => {
     drafts().setDeleting(null)
@@ -36,23 +41,8 @@ export function ProbeHostPage({ probeId }: { probeId: string }) {
   const zoneWord = !host ? t('fleet_hosts.status.unknown') : host.status !== 'ok' ? t('fleet.zone.offline') : host.fast ? t(`fleet.zone.${host.fast.zone}`) : t('fleet.no_data')
   const primaryAlias = (primaryHostId && entry?.aliases[primaryHostId]) || host?.alias || ''
 
-  return (
-    <div data-testid="probe-page" data-probe-id={probeId}>
-      <div className="flex items-center gap-3 mb-4">
-        <ProbeBadge row={row ?? { icon: mine?.draft.icon ?? '', iconWeight: mine?.draft.icon_weight ?? '', colors: mine?.draft.colors }} box={28} />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 data-testid="probe-page-name" className="text-base font-semibold truncate">{name}</h2>
-            <ProbeStatusDot status={row?.status ?? 'unknown'} />
-            <span data-testid="probe-page-zone" className="text-xs text-text-secondary">{zoneWord}</span>
-          </div>
-          <div className="text-xs text-text-muted">
-            {primaryAlias && <span data-testid="probe-page-measured">{t('fleet_hosts.entry.measured_by', { alias: primaryAlias })}</span>}
-            {offline && host?.last_ok_at ? <span data-testid="probe-page-last-ok"> · {t('fleet_hosts.entry.last_ok', { time: new Date(host.last_ok_at).toLocaleString() })}</span> : null}
-          </div>
-        </div>
-      </div>
-
+  const editing = (
+    <>
       <ProbeHostEditor probeId={probeId} />
 
       {entry && (
@@ -71,6 +61,29 @@ export function ProbeHostPage({ probeId }: { probeId: string }) {
           )}
         </div>
       )}
+    </>
+  )
+
+  if (poolRow) return <PoolHostPage row={poolRow}>{editing}</PoolHostPage>
+
+  return (
+    <div data-testid="probe-page" data-probe-id={probeId}>
+      <div className="flex items-center gap-3 mb-4">
+        <ProbeBadge row={row ?? { icon: mine?.draft.icon ?? '', iconWeight: mine?.draft.icon_weight ?? '', colors: mine?.draft.colors }} box={28} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 data-testid="probe-page-name" className="text-base font-semibold truncate">{name}</h2>
+            <ProbeStatusDot status={row?.status ?? 'unknown'} />
+            <span data-testid="probe-page-zone" className="text-xs text-text-secondary">{zoneWord}</span>
+          </div>
+          <div className="text-xs text-text-muted">
+            {primaryAlias && <span data-testid="probe-page-measured">{t('fleet_hosts.entry.measured_by', { alias: primaryAlias })}</span>}
+            {offline && host?.last_ok_at ? <span data-testid="probe-page-last-ok"> · {t('fleet_hosts.entry.last_ok', { time: new Date(host.last_ok_at).toLocaleString() })}</span> : null}
+          </div>
+        </div>
+      </div>
+
+      {editing}
     </div>
   )
 }

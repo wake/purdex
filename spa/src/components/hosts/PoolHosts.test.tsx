@@ -4,6 +4,9 @@ import { render, screen, fireEvent, cleanup, within, act } from '@testing-librar
 import { HostSidebar } from './HostSidebar'
 import { PoolHostsSection } from './PoolHostsSection'
 import { ProbeHostsSection } from './ProbeHostsSection'
+import { ProbeHostPage } from './ProbeHostPage'
+import { PoolHostRoute } from './PoolHostRoute'
+import { useFleetDraftStore } from '../../lib/fleet/config-draft'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
@@ -119,7 +122,7 @@ describe('the sidebar group', () => {
     expect(within(screen.getByTestId('pool-item-p-air19')).getByTestId('pool-status').getAttribute('data-dot')).toBe('error')
   })
 
-  it('a probe host opens its own entry; a daemon host opens that host\'s overview', async () => {
+  it('a probe host opens its own entry; a daemon host opens its pool host page', async () => {
     livePool()
     const p = props()
     render(<HostSidebar {...p} />)
@@ -127,7 +130,7 @@ describe('the sidebar group', () => {
     fireEvent.click(screen.getByTestId('pool-item-p-mserv'))
     expect(p.onSelect).toHaveBeenLastCalledWith('probe:p-mserv', '')
     fireEvent.click(screen.getByTestId('pool-item-d-mlab'))
-    expect(p.onSelect).toHaveBeenLastCalledWith(HOST_ID, 'overview')
+    expect(p.onSelect).toHaveBeenLastCalledWith('pool:d-mlab', '')
   })
 
   it('capability gate: no daemon announces pool.v1 → the observed-hosts group as it was', async () => {
@@ -236,5 +239,79 @@ describe('the section on an older daemon', () => {
     expect(screen.queryByTestId('probe-hosts-section')).toBeNull()
     expect(screen.queryByTestId('pool-old-daemon')).toBeNull()
     expect(screen.getByTestId('pool-hosts-section')).toBeTruthy()
+  })
+})
+
+describe('the pool host page on the Hosts page', () => {
+  it('a probe host: the pool host page with the style editor under 「樣式與 SSH 備援」', async () => {
+    livePool()
+    useFleetDraftStore.getState().selectProbe({ id: 'p-mserv', isNew: false })
+    render(<ProbeHostPage probeId="p-mserv" />)
+    await flush()
+    expect(screen.getByTestId('pool-page')).toBeTruthy()
+    expect(screen.queryByTestId('probe-page')).toBeNull()
+    expect(screen.getByTestId('pool-page-style').textContent).toContain('Style and SSH fallback')
+  })
+
+  it('no pool.v1: the probe page as it was', async () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: { phase: 'ready', daemonCapabilities: [] } } } as never)
+    render(<ProbeHostPage probeId="p-mserv" />)
+    await flush()
+    expect(screen.getByTestId('probe-page')).toBeTruthy()
+    expect(screen.queryByTestId('pool-page')).toBeNull()
+  })
+
+  it('a daemon host: its pool host page without the style editor', async () => {
+    livePool()
+    render(<PoolHostRoute id="d-mlab" />)
+    await flush()
+    expect(screen.getByTestId('pool-page-name').textContent).toBe('mlab')
+    expect(screen.queryByTestId('pool-page-style')).toBeNull()
+  })
+
+  it('a host wwd is silent for shows the fleet\'s readings, not the pool\'s old facts', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+    render(<PoolHostRoute id="d-air26" />)
+    await flush()
+    const now = screen.getByTestId('pool-page-now')
+    expect(within(now).getByTestId('pool-page-cpu').textContent).toBe('CPU 5%')
+    expect(within(now).getByTestId('pool-page-mem').textContent).toBe('Memory 40%')
+    expect(within(now).getByTestId('pool-page-disk').textContent).toContain('Disk 30% used')
+  })
+
+  it('a live host shows what wwd read', async () => {
+    livePool()
+    render(<PoolHostRoute id="d-mlab" />)
+    await flush()
+    const cpu = Math.round(100 - darwin.cpu.idle_pct)
+    expect(within(screen.getByTestId('pool-page-now')).getByTestId('pool-page-cpu').textContent).toBe(`CPU ${cpu}%`)
+  })
+
+  it('a selected host that left the list drops the selection, so the page falls back to the host it showed before', async () => {
+    livePool()
+    useFleetDraftStore.getState().selectPool('d-gone')
+    render(<PoolHostRoute id="d-gone" />)
+    await flush()
+    expect(useFleetDraftStore.getState().selectedPool).toBeNull()
+  })
+
+  it('a selection is kept while the pool has not answered yet', async () => {
+    useFleetDraftStore.getState().selectPool('d-mlab')
+    render(<PoolHostRoute id="d-mlab" />)
+    await flush()
+    expect(useFleetDraftStore.getState().selectedPool).toBe('d-mlab')
+  })
+
+  it('picking a pool host drops the probe selection and the other way round', () => {
+    const d = useFleetDraftStore.getState
+    d().selectProbe({ id: 'p-mserv', isNew: false })
+    d().selectPool('d-mlab')
+    expect(d().selectedProbe).toBeNull()
+    expect(d().selectedPool).toBe('d-mlab')
+    d().selectProbe({ id: 'p-air19', isNew: false })
+    expect(d().selectedPool).toBeNull()
+    d().selectPool('d-mlab')
+    d().selectProbe(null)
+    expect(d().selectedPool).toBeNull()
   })
 })

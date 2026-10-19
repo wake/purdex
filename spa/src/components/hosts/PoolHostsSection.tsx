@@ -1,7 +1,7 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import { olderThanNewest } from '../../lib/pool/version'
 import { usePoolHostRows, type PoolHostRow } from '../../lib/pool/use-pool-host-rows'
-import { zoneKey } from '../../lib/pool/words'
+import { statusWord } from './pool-status-word'
 import { selectProbeGuarded } from './useProbeEditor'
 import { ProbeBadge } from './probe-rows'
 import { PoolStatusDot } from './PoolStatusDot'
@@ -37,17 +37,6 @@ export function PoolHostsSection() {
       </table>
     </div>
   )
-}
-
-/** The status words of a row: the zone while the pool reads the host, else why it does not. */
-function statusWord(t: (k: string, p?: Record<string, string | number>) => string, r: PoolHostRow): string {
-  if (r.state === 'live') return t(zoneKey(r.zone ?? 'normal'))
-  if (r.state === 'fallback') {
-    return r.since !== null
-      ? t('pool.card.fallback', { time: new Date(r.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
-      : t('pool.card.fallback_nosince')
-  }
-  return r.dot === 'error' ? t('fleet_hosts.status.error') : t('fleet.zone.offline')
 }
 
 function PoolHostTableRow({ row: r, behind }: { row: PoolHostRow; behind: boolean }) {
