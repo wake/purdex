@@ -64,8 +64,10 @@ func TestExceptions_TheErrorsAreTheOnesTheOtherReadsHave(t *testing.T) {
 	assert.Equal(t, n, len(s.all()))
 }
 
-// The answer is the golden the App copies (internal/wwd/wire/testdata): what wwd lists, wrapped as {host, known, exceptions}.
-func TestExceptions_AnswerIsTheGoldenTheAppCopies(t *testing.T) {
+// The answer means what the golden the App copies says (internal/wwd/wire/testdata): what wwd lists, wrapped as {host, known, exceptions}.
+// The comparison is of the JSON value (keys, types, values), not of the bytes: the golden is indented for reading, the daemon writes
+// compact JSON. What the App's fixtures-sync compares is the copied file with this file, not the daemon's bytes.
+func TestExceptions_AnswerMeansTheGoldenTheAppCopies(t *testing.T) {
 	golden, err := os.ReadFile("../../wwd/wire/testdata/pool_host_exceptions.json")
 	require.NoError(t, err)
 	var g struct {
