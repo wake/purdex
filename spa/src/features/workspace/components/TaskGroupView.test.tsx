@@ -188,14 +188,42 @@ describe('the task-group view', () => {
       expect(openTeamSeat).toHaveBeenCalledWith(expect.any(String), 'M')
     })
 
-    it('a seat with no persona and no tab keeps the agent icon, dimmed', () => {
+    it('a seat with no persona and no tab keeps the default agent icon, dimmed', () => {
       personas()
       useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-gone', { address: 'mlab/work-nobody' })]) as never])
       mount()
       const closed = within(screen.getByTestId('task-group-team')).getByTestId('task-group-seat-closed')
-      expect(within(closed).getByTestId('task-group-seat-icon')).toBeInTheDocument()
+      expect(within(closed).getByTestId('team-bead-bot')).toBeInTheDocument() // the default agent icon, as the team panel's beads draw it
       expect(within(closed).queryByRole('img')).toBeNull()
       expect(closed.className).toContain('opacity-60')
+    })
+
+    const closedSeat = () => within(screen.getByTestId('task-group-team')).getByTestId('task-group-seat-closed')
+    const gone = () => {
+      useSessionStore.setState({ sessions: { h1: [{ code: 'S1', name: 'name-S1' }, { code: 'S9', name: 'name-gone' }] as never } })
+      useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-gone', { address: 'mlab/work-nobody' })]) as never])
+    }
+
+    it('a closed seat whose session has an agent type shows that agent icon, not the default one', () => {
+      gone()
+      useAgentStore.setState({ agentTypes: { 'h1:S9': 'cc' } } as never)
+      mount()
+      expect(within(closedSeat()).queryByTestId('team-bead-bot')).toBeNull()
+    })
+
+    it('the host badge of a closed seat follows the agent type: terminal colours when the session has one, console otherwise', () => {
+      useUISettingsStore.setState({ hostBadgeSidebarEnabled: true } as never)
+      useHostStore.setState((s) => ({ hosts: { h1: { ...s.hosts.h1, colors: { console: { main: { color: '#ff0000', alpha: 100 } }, terminal: { main: { color: '#0000ff', alpha: 100 } } } } } }) as never)
+      gone()
+      const main = () => closedSeat().querySelector<HTMLElement>('[data-testid="host-badge"]')!.style.getPropertyValue('--hb-main')
+      mount()
+      const consoleColor = main()
+      cleanup()
+      useAgentStore.setState({ agentTypes: { 'h1:S9': 'cc' } } as never)
+      mount()
+      expect(consoleColor).not.toBe('')
+      expect(main()).not.toBe('')
+      expect(main()).not.toBe(consoleColor)
     })
 
     it('a seat row with a tab: the name is dimmed unless active, and the title after it is the tab title, not the seat label', () => {

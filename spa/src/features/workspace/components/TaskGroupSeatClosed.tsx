@@ -1,42 +1,34 @@
-// spa/src/features/workspace/components/TaskGroupSeatClosed.tsx — a team seat no open tab shows, in the task-group view: dressed like InlineTab's persona row (avatar, host badge, bold name, label) but dimmed, and a click opens the seat.
+// spa/src/features/workspace/components/TaskGroupSeatClosed.tsx — a team seat no open tab shows, in the task-group view: dressed like InlineTab's row (avatar or agent icon with its light, host badge, bold name, label) but dimmed, and a click opens the seat.
+// The agent store is keyed by (hostId, sessionCode), so the icon, light and host badge come from the team panel's seat pieces, which read it without a tab.
 import { Avatar } from '../../../components/Avatar'
-import { HostBadge } from '../../../components/HostBadge'
+import { TeamSeatIcon, TeamSeatHostBadge } from '../../../components/team/TeamSeatIcon'
 import { useSeat } from '../../../lib/names/seat'
-import { useHostLook } from '../../../lib/host-look'
-import { hasHostBadge, resolveHostBadge } from '../../../lib/host-color'
-import { ICON_MAP } from '../../../components/tab-icon-map'
+import { useSessionStore } from '../../../stores/useSessionStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 
 interface Props {
   address: string
   label: string
-  /** The SPA host the seat lives on; null = a host this Mac lacks (no badge). */
+  /** The SPA host the seat lives on; null = a host this Mac lacks (neutral host glyph, no light). */
   hostId: string | null
+  /** The seat's tmux session name; with the host it names the session whose code keys the agent store. */
+  tmuxSession?: string
   onOpen?: () => void
 }
 
-export function TaskGroupSeatClosed({ address, label, hostId, onOpen }: Props) {
+export function TaskGroupSeatClosed({ address, label, hostId, tmuxSession, onOpen }: Props) {
   const seat = useSeat(address)
   const badgeEnabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
-  const badgeLineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
-  const badgeBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
-  const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
-  const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
-  // No persona: the agent icon, as an open row without one keeps (spec 9.6). No tab means no agent type is known, so the session's plain icon.
-  const PlainIcon = ICON_MAP.TerminalWindow
-  const look = useHostLook(hostId)
-  const badge = hostId === null ? null : resolveHostBadge(look, 'console')
+  // name -> code as the team panel reads it (the first row of a name wins); '' while the session is not listed.
+  const code = useSessionStore((s) => (hostId !== null && tmuxSession ? s.sessions[hostId]?.find((r) => r.name === tmuxSession)?.code ?? '' : ''))
+  const host = hostId ?? ''
   return (
     <button
       type="button" data-testid="task-group-seat-closed" onClick={onOpen} title={address}
       className="group mx-2 flex items-center gap-1.5 pl-[18px] pr-1.5 py-1 text-left text-xs text-text-muted opacity-60 cursor-pointer hover:bg-surface-hover hover:opacity-100 rounded-md"
     >
-      {seat !== null
-        ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} />
-        : <span data-testid="task-group-seat-icon" className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center"><PlainIcon size={14} className="flex-shrink-0" /></span>}
-      {badgeEnabled && badge !== null && hasHostBadge(badge) && (
-        <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={badgeBox} inset={badgeInset} radius={badgeRadius} lineColor={badgeLineColor} />
-      )}
+      <TeamSeatIcon hostId={host} sessionCode={code} subagents avatar={seat !== null ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} /> : undefined} />
+      {badgeEnabled && <TeamSeatHostBadge hostId={host} sessionCode={code} />}
       <span className="min-w-0 flex-1 truncate">
         {seat !== null ? (
           <>
