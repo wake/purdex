@@ -103,7 +103,7 @@ export function teamKeyOf(hostId: string, teamId: string): string {
   return `${hostId}\u0000${teamId}`
 }
 
-const sessionKey = (hostId: string, name: string) => `${hostId}\u0000${name}`
+export const sessionKey = (hostId: string, name: string) => `${hostId}\u0000${name}`
 
 /** The SPA host a session of `team` lives on, and whether that is another host than the lead's. A member whose `host_id` is
  *  another host's lives there: the SPA host that daemon id maps to, else null (not configured). */

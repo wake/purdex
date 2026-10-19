@@ -99,4 +99,39 @@ describe('buildGroupView', () => {
     const t = v[0]
     expect(t.kind === 'team' && t.members.map((r) => [r.seatId, r.tabId])).toEqual([['M', null]])
   })
+
+  describe('a session two tabs show (team first)', () => {
+    const named = (tabId: string, agentSessionId: string | null, sessionName: string) => tab(tabId, 'h1', agentSessionId, { sessionName })
+    const named_seat = (role: 'lead' | 'member', id: string, tabId: string | null) => seat(role, id, tabId, { session: { session_id: id, ref: `_${id}`, address: `mlab/${id}`, live: true, tmux_session: `tm-${id}` } as Seat['session'] })
+
+    it('the extra tab showing a seat session is in no group and not under ungrouped', () => {
+      const v = buildGroupView({
+        tabs: [named('t1', 'M', 'tm-M'), named('t2', 'M', 'tm-M')],
+        teams: [team('a', named_seat('lead', 'L', null), [named_seat('member', 'M', 't1')])],
+        manual: {}, rootOf: (_h, s) => s, hostOrder: ['h1'],
+      })
+      expect(v.map((s) => s.kind)).toEqual(['team'])
+    })
+
+    it('a manual group listing the session root does not pick up the extra tab', () => {
+      const v = buildGroupView({
+        tabs: [named('t1', 'M', 'tm-M'), named('t2', 'M', 'tm-M')],
+        teams: [team('a', named_seat('lead', 'L', null), [named_seat('member', 'M', 't1')])],
+        manual: { h1: { groups: [group('g1', ['M'])], unsafe: null } }, rootOf: (_h, s) => s, hostOrder: ['h1'],
+      })
+      const m = v.find((s) => s.kind === 'manual')
+      expect(m && m.kind === 'manual' && m.rows).toEqual([])
+      expect(v.find((s) => s.kind === 'ungrouped')).toBeUndefined()
+    })
+
+    it('a session in no team keeps both tabs', () => {
+      const v = buildGroupView({
+        tabs: [named('t1', 'S', 'tm-S'), named('t2', 'S', 'tm-S')],
+        teams: [team('a', named_seat('lead', 'L', null), [named_seat('member', 'M', null)])],
+        manual: {}, rootOf: noRoot, hostOrder: ['h1'],
+      })
+      const u = v.find((s) => s.kind === 'ungrouped')
+      expect(u && u.kind === 'ungrouped' && u.rows.map((r) => r.tabId)).toEqual(['t1', 't2'])
+    })
+  })
 })
