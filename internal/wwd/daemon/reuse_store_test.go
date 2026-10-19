@@ -85,13 +85,18 @@ func TestAResultIsNotFiledWhenAnythingIsMissingOrDoubtful(t *testing.T) {
 		p     queue.Produced
 		job   func(*wire.Job)
 	}{
-		"no fingerprint in the claim":   {now: good, reach: true, p: queue.Produced{DefHash: "def1", Labels: mservLabels}},
-		"no definition hash":            {now: good, reach: true, p: queue.Produced{Labels: mservLabels, Fingerprint: fpMserv}},
-		"no os label":                   {now: good, reach: true, p: queue.Produced{DefHash: "def1", Labels: []string{"arch:amd64"}, Fingerprint: fpMserv}},
-		"the host moved while it ran":   {now: moved, reach: true, p: producedBy(good)},
-		"the host cannot be asked":      {now: good, reach: false, p: producedBy(good)},
-		"a host the pool does not know": {now: good, reach: true, p: producedBy(good), job: func(j *wire.Job) { j.Result.Host = "elsewhere" }},
-		"no result":                     {now: good, reach: true, p: producedBy(good), job: func(j *wire.Job) { j.Result = nil }},
+		"no fingerprint in the claim": {now: good, reach: true, p: queue.Produced{DefHash: "def1", Labels: mservLabels}},
+		"no definition hash":          {now: good, reach: true, p: queue.Produced{Labels: mservLabels, Fingerprint: fpMserv}},
+		"no os label":                 {now: good, reach: true, p: queue.Produced{DefHash: "def1", Labels: []string{"arch:amd64"}, Fingerprint: fpMserv}},
+		"the host moved while it ran": {now: moved, reach: true, p: producedBy(good)},
+		// the same toolchain, but the task label it claimed under is gone (revoked, quarantined) or is there now and was not: its standing
+		// changed while the job ran, and the result is not filed under the standing of the claim (the entry would come back to life if the
+		// host earned the label again with the same fingerprint)
+		"the label was taken away while it ran": {now: peerInfo("mserv", "linux", []string{"os:linux", "arch:amd64"}, fpMserv), reach: true, p: producedBy(good)},
+		"the label was earned while it ran":     {now: good, reach: true, p: queue.Produced{DefHash: "def1", Labels: []string{"os:linux", "arch:amd64"}, Fingerprint: fpMserv}},
+		"the host cannot be asked":              {now: good, reach: false, p: producedBy(good)},
+		"a host the pool does not know":         {now: good, reach: true, p: producedBy(good), job: func(j *wire.Job) { j.Result.Host = "elsewhere" }},
+		"no result":                             {now: good, reach: true, p: producedBy(good), job: func(j *wire.Job) { j.Result = nil }},
 	} {
 		cache := &mapCache{rows: map[string]store.CacheEntry{}}
 		d := New(Options{Alias: "mlab", Peers: []PeerAddr{{Alias: "mserv", HostPort: "x:1"}}, ResultCache: cache})

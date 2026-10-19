@@ -151,7 +151,11 @@ type Guard interface {
 
 // Config is the worker's identity and collaborators.
 type Config struct {
-	Worker      string
+	Worker string
+	// Facts is what the worker says about itself in each claim: its labels and its full toolchain fingerprint as they are at that moment.
+	// They are read at every claim, not once at start: the first facts record comes after the worker does, and a label can be earned or
+	// taken away later, and the origin files a result under what the claim said (spec §4.5, WWD-5d-2b). Nil: Labels and Fingerprint below.
+	Facts       func() ([]string, map[string]string)
 	Labels      []string
 	Fingerprint map[string]string
 	Locks       *locks.Table
@@ -235,7 +239,11 @@ func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, 
 	hold, err := c.cfg.Locks.Acquire(owner, job.Locks, func() error {
 		sent = c.cfg.Now()
 		var e error
-		cr, e = origin.Claim(ctx, job.ID, wire.ClaimRequest{Worker: c.cfg.Worker, Labels: c.cfg.Labels, Fingerprint: c.cfg.Fingerprint})
+		labels, fingerprint := c.cfg.Labels, c.cfg.Fingerprint
+		if c.cfg.Facts != nil {
+			labels, fingerprint = c.cfg.Facts()
+		}
+		cr, e = origin.Claim(ctx, job.ID, wire.ClaimRequest{Worker: c.cfg.Worker, Labels: labels, Fingerprint: fingerprint})
 		if e == nil && !sameSet(cr.Job.Locks, job.Locks) {
 			// The keys held are the ones the candidate listed. A job that comes back with other keys would run without holding its own: an
 			// origin that does that is wrong or hostile, and the claim is handed back.
