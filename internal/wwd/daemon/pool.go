@@ -33,8 +33,13 @@ type PoolPoller struct {
 	token  string
 	client *http.Client
 
+	now func() time.Time
+
 	mu    sync.RWMutex
 	state []wire.Peer // in config order
+	// downSince is when each peer last stopped answering (in config order): the start of the first failed poll after an answer, or this
+	// poller's creation for a peer never reached. Zero: it answers now. The silence rules (spec §13.3) judge "unreachable for ≥ 3 min" on it.
+	downSince []time.Time
 }
 
 // NewPoolPoller polls peers with the pool token. client may be nil.
@@ -42,8 +47,10 @@ func NewPoolPoller(peers []PeerAddr, token string, client *http.Client) *PoolPol
 	if client == nil {
 		client = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
 	}
-	p := &PoolPoller{peers: peers, token: token, client: client, state: make([]wire.Peer, len(peers))}
+	p := &PoolPoller{peers: peers, token: token, client: client, now: time.Now, state: make([]wire.Peer, len(peers)), downSince: make([]time.Time, len(peers))}
+	born := p.now()
 	for i, a := range peers {
+		p.downSince[i] = born
 		// a peer never reached claims the oldest proto: the writers gate on every host reporting proto >= 2 (spec §13.1)
 		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.MinProto, Labels: []string{}, Fingerprint: map[string]string{}}}
 	}
@@ -79,6 +86,7 @@ func (p *PoolPoller) PollOnce(ctx context.Context) {
 }
 
 func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
+	started := p.now()
 	info, err := get[wire.Info](ctx, p.client, p.peers[i], p.token, "/v1/info")
 	if err != nil || info.Alias != p.peers[i].Alias {
 		// The configured address and alias are the trust boundary: this catches a
@@ -86,7 +94,7 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		// defend against a compromised peer, which holds the shared pool token anyway
 		// and is outside the threat model (spec §11).
 		p.mu.Lock()
-		p.state[i].Reachable = false
+		p.markDown(i, started)
 		p.mu.Unlock()
 		return
 	}
@@ -95,16 +103,42 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ferr == nil && (facts.HostID != info.HostID || facts.Alias != info.Alias) {
-		p.state[i].Reachable = false // facts of another host: keep the last verified view
+		p.markDown(i, started) // facts of another host: keep the last verified view
 		return
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
+	p.downSince[i] = time.Time{}
 	switch {
 	case ferr == nil:
 		p.state[i].Facts = &facts
 	case p.state[i].Facts != nil && p.state[i].Facts.HostID != info.HostID:
 		p.state[i].Facts = nil // another host now answers under this alias: its predecessor's facts are not its
 	}
+}
+
+// markDown records that peer i did not answer; the caller holds mu. The time it has been silent counts from the first failure, not the latest.
+func (p *PoolPoller) markDown(i int, at time.Time) {
+	p.state[i].Reachable = false
+	if p.downSince[i].IsZero() {
+		p.downSince[i] = at
+	}
+}
+
+// PeerDown is one peer's reachability for the silence rules: Since is when it stopped answering (zero: it answers).
+type PeerDown struct {
+	Alias string
+	Since time.Time
+}
+
+// Downs lists every configured peer with the time it has been unreachable since, in config order.
+func (p *PoolPoller) Downs() []PeerDown {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]PeerDown, len(p.peers))
+	for i, a := range p.peers {
+		out[i] = PeerDown{Alias: a.Alias, Since: p.downSince[i]}
+	}
+	return out
 }
 
 var errTooLarge = fmt.Errorf("peer answer is larger than %d bytes", maxPeerBytes)
