@@ -249,12 +249,15 @@ func (m *Module) pass(ctx context.Context) {
 		}
 		return
 	}
+	allRead := true
+	silent := map[string]bool{} // the silence:<host> keys active on any list read this pass
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
 		if err != nil || !known {
+			allRead = false
 			// An unreadable host is not a cleared one: its ledger is kept, so the alerts it still has are not told a second time when it
 			// answers again.
 			if err != nil && ctx.Err() == nil {
@@ -263,6 +266,22 @@ func (m *Module) pass(ctx context.Context) {
 			continue
 		}
 		m.handle(h.alias, list.Alerts)
+		for _, a := range list.Alerts {
+			if a.ClearedAt == nil && sharedLedger(a) {
+				silent[a.Key] = true
+			}
+		}
+	}
+	// a silence alert is one failure however many wwds noticed it: its ledger row goes when no list holds it any more — judged only when
+	// every list was read, since one that could not be read may still hold it
+	if allRead {
+		keys := make([]string, 0, len(silent))
+		for k := range silent {
+			keys = append(keys, k)
+		}
+		if err := m.store.forgetExcept(silenceLedger, keys); err != nil {
+			m.logf("wwdalerts: ledger %s: %v", silenceLedger, err)
+		}
 	}
 	if err := m.store.prune(m.now()); err != nil {
 		m.logf("wwdalerts: prune: %v", err)
@@ -331,8 +350,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !ok {
 		return // the push side is not up: no attempt is spent
 	}
+	// a silence alert ("silence:mserv") is the same failure on every wwd's list that noticed it: one ledger row and one collapse id for the
+	// failure, not one per observer (spec §13.3: a duplicate only during a failover or a partition, and those are separate deliverers)
+	about := host
+	if sharedLedger(a) {
+		about, host = strings.TrimPrefix(a.Key, "silence:"), silenceLedger
+	}
 	prev, hadRow := m.store.delivery(host, a.Key)
-	if hadRow && prev.Since == a.Since.UnixMilli() {
+	// the observers raise it at slightly different times, so for the shared row the row's existence is the episode, not its start time
+	if hadRow && (prev.Since == a.Since.UnixMilli() || host == silenceLedger) {
 		if prev.Sent > 0 && within(now, prev.Sent, deliveredFor) {
 			return
 		}
@@ -349,8 +375,8 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	key := a.Key
 	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
-		Title:      title(host, a),
-		Host:       host,
+		Title:      title(about, a),
+		Host:       about,
 		// the switch is asked again just before the push goes out: turning it off also takes back what still waits in the queue
 		StillWanted: m.pushEnabled,
 		// nothing was sent: the attempt written above goes back, so turning the switch on again is not held back for the interval
@@ -381,6 +407,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 func within(now time.Time, at int64, window time.Duration) bool {
 	d := now.Sub(time.UnixMilli(at))
 	return d >= 0 && d < window
+}
+
+// silenceLedger stands in for the host in the ledger and the collapse id of the silence alerts about a wwd (key silence:<alias>), which
+// every wwd that lost the peer raises on its own list.
+const silenceLedger = "(silence)"
+
+// sharedLedger says whether the alert is one of those.
+func sharedLedger(a wire.Alert) bool {
+	return a.Kind == wire.AlertSilence && strings.HasPrefix(a.Key, "silence:")
 }
 
 // collapseID is the id a phone uses to show one notification per alert: alert:<host>:<key>. A host name may hold a colon, and then
