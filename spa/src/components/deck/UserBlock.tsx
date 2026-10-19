@@ -11,6 +11,9 @@ import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { UserText } from './UserText'
 import { CjkText } from './CjkText'
 import { usePeerCollapse } from './usePeerCollapse'
+import { ConversationHostContext } from './conversation-host'
+import { SEAT_MARK, SeatSentence } from '../SeatSentence'
+import { isVerifiedPeer } from '../../lib/names/seat'
 
 // Three tones (c9d9c7-52 pt 4/7): the person's words are the loudest — an accent frame on a firmer tint; a peer's message is a teal frame on a faint
 // tint with its body one step quieter; a system notice (task report, wake-up, a mod's notice) is the grey of the system rows, dashed and quieter still.
@@ -45,11 +48,13 @@ export function UserBlock(props: BlockProps) {
 function UserBox({ item, midTurn, fold }: BlockProps & { fold?: Fold }) {
   const t = useI18nStore((s) => s.t)
   const scope = useContext(SearchScopeContext)
+  const hostId = useContext(ConversationHostContext)
   const cap = userCaption(item, midTurn)
   const caption =
     cap.kind === 'you' ? t('deck.user.you', { time: cap.time })
     : cap.kind === 'delivered' ? t('deck.user.delivered', { time: cap.time })
-    : cap.kind === 'from' ? t('deck.user.from', { name: cap.name, time: cap.time })
+    // a message from another session names the person (spec §9.3); a mod's notice (kind plugin) is no person, and a sender the transport did not establish (unverified: its name is only what the message text says) never borrows a persona's face
+    : cap.kind === 'from' ? (!isVerifiedPeer(item) ? t('deck.user.from', { name: cap.name, time: cap.time }) : <SeatSentence template={t('deck.user.from', { name: SEAT_MARK, time: cap.time })} address={cap.name} fallback={cap.name} hostId={hostId} />)
     : cap.kind === 'background' ? t('deck.user.background')
     : t('deck.user.schedule')
   const bash = item.source === 'bash'
