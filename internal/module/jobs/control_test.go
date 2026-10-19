@@ -150,6 +150,43 @@ func TestControlRefusesWhatWWDShouldNeverSee(t *testing.T) {
 	assert.Empty(t, s.all())
 }
 
+// A position is set on one host, so the host it names must be one clear value: an empty or repeated one is not "the local host".
+func TestPositionRefusesAnEmptyOrRepeatedHost(t *testing.T) {
+	var s seen
+	mux := newMux(t, controlWWD(t, &s, 200, ""))
+	for _, q := range []string{"?host=", "?host=&host=mlab", "?host=mlab&host=air26", "?host=mlab&host=mlab"} {
+		rr := post(mux, "/api/pool/jobs/j_a/position"+q, `{"position":"front"}`, asAdmin)
+		assert.Equal(t, 400, rr.Code, q)
+		assert.Equal(t, "bad_request", errCode(rr), q)
+	}
+	assert.Empty(t, s.all(), "wwd is never asked")
+}
+
+// The reads a paired phone may make cannot use up the places a cancel needs.
+func TestControlHasItsOwnInFlightPlaces(t *testing.T) {
+	var s seen
+	m := New()
+	m.cl = controlWWD(t, &s, 200, "")
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	for i := 0; i < cap(m.inflight); i++ { // every read place taken
+		m.inflight <- struct{}{}
+	}
+	assert.Equal(t, 429, get(mux, "/api/pool/jobs").Code, "the reads are turned away")
+	rr := post(mux, "/api/pool/jobs/j_a/cancel", "", asAdmin)
+	assert.Equal(t, 200, rr.Code, rr.Body.String())
+	rr = post(mux, "/api/pool/jobs/j_a/position", `{"position":"front"}`, asAdmin)
+	assert.Equal(t, 200, rr.Code, rr.Body.String())
+
+	for i := 0; i < cap(m.control); i++ { // and the control places are their own bound
+		m.control <- struct{}{}
+	}
+	rr = post(mux, "/api/pool/jobs/j_a/cancel", "", asAdmin)
+	assert.Equal(t, 429, rr.Code)
+	assert.Equal(t, ErrBusy, errCode(rr))
+}
+
 func TestControlRelaysWWDsOwnRefusalWithItsStatus(t *testing.T) {
 	var s seen
 	// a job that has ended is wwd's 409

@@ -42,6 +42,17 @@ func adminOnly(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// controlSlot takes a place of the changes' own; false means the caller was answered 429.
+func (m *Module) controlSlot(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case m.control <- struct{}{}:
+		return func() { <-m.control }, true
+	default:
+		writeErr(w, http.StatusTooManyRequests, ErrBusy, "too many job changes in flight; retry")
+		return nil, false
+	}
+}
+
 // writeChangeError answers a failed change: wwd's own 4xx keeps its status as wwd_rejected (the App reads "the job had ended" from a
 // 409), everything else is what a failed read is.
 func writeChangeError(w http.ResponseWriter, err error) {
@@ -75,7 +86,7 @@ func (m *Module) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	release, ok := m.slot(w)
+	release, ok := m.controlSlot(w)
 	if !ok {
 		return
 	}
@@ -98,6 +109,12 @@ func (m *Module) handlePosition(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// a host that is named is one clear value: an empty or a repeated one is not "the local host" (wwd's position route refuses any host
+	// it is given, and a muddled request must not become a change on the wrong host)
+	if hs := r.URL.Query()["host"]; len(hs) > 1 || (len(hs) == 1 && hs[0] == "") {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is given more than once, or is empty")
+		return
+	}
 	id, ok := jobID(w, r)
 	if !ok {
 		return
@@ -112,7 +129,7 @@ func (m *Module) handlePosition(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "position: "+err.Error())
 		return
 	}
-	release, ok := m.slot(w)
+	release, ok := m.controlSlot(w)
 	if !ok {
 		return
 	}

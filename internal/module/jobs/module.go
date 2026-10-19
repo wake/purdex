@@ -39,6 +39,9 @@ const (
 	// maxLogInFlight bounds the full-log reads among them: each holds a whole log (up to the client's 64 MiB cap) in memory while it
 	// is copied out, so eight at once would be half a GiB. The detail's small log is not counted (it reads at most maxDetailLog).
 	maxLogInFlight = 2
+	// maxControlInFlight bounds the changes (a cancel, a position) under way at once. They have places of their own: a paired phone may
+	// read, and its reads must not use up the places an admin's cancel needs.
+	maxControlInFlight = 4
 	// defaultLimit is the page of a list that names none (wwd's own default is every job it keeps), maxLimit the most one asks for.
 	defaultLimit = 200
 	maxLimit     = 1000
@@ -55,6 +58,7 @@ type Module struct {
 	cl       *client.Client
 	inflight chan struct{} // a semaphore of maxInFlight
 	logs     chan struct{} // a semaphore of maxLogInFlight, held by the /log route besides inflight
+	control  chan struct{} // a semaphore of maxControlInFlight, for the cancel and position routes only
 
 	// jobs.changed (events.go)
 	core   *core.Core
@@ -76,7 +80,7 @@ type eventSource interface {
 }
 
 func New() *Module {
-	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight), logf: log.Printf, retry: retryEvery}
+	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight), control: make(chan struct{}, maxControlInFlight), logf: log.Printf, retry: retryEvery}
 }
 
 func (m *Module) source() eventSource {
