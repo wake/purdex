@@ -214,7 +214,7 @@ func TestAQuarantinedJobKeepsItsGateSlotUntilTheSweepClearsIt(t *testing.T) {
 		t.Fatalf("not proven gone: free=%d", free)
 	}
 	q.units.mu.Lock()
-	q.units.gone["wwd-stuck"] = true
+	q.units.gone[mlabUnit("stuck")] = true
 	q.units.mu.Unlock()
 	q.loop.Sweep(context.Background())
 	if free, _, s := g.state(); free != 1 || s[0].released != 1 {

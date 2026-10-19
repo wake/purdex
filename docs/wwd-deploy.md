@@ -150,7 +150,8 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   restored queue's counter has caught up with it, and then miss the changes below it. A new epoch makes every client
   start again from `0`. (A backup older than schema 5 has no `db_epoch`; upgrading it again makes a new one.)
 * **Before any roll back: the quarantine must be empty** (#3373 PR2, from the build where the per-job database is named by
-  `source/id`). A job whose command was not proven stopped sits in the quarantine with its per-job database, and the older wwd's
+  `source/id`; and again from PR3b, where the sandbox unit is named `wwd-<origin tag>-<id>` and an older build's quarantine
+  check refuses a marker whose `Unit` is not exactly `wwd-<id>`, so it would not load the new markers at all). A job whose command was not proven stopped sits in the quarantine with its per-job database, and the older wwd's
   database sweep knows only the names made from the job id alone: it would drop the new-named database of a job that may still be
   running. Do this on each host, in this order, before you start the old build:
 
