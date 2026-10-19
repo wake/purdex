@@ -155,7 +155,8 @@ func TestControlRefusesWhatWWDShouldNeverSee(t *testing.T) {
 func TestControlRefusesAnEmptyOrRepeatedHost(t *testing.T) {
 	var s seen
 	mux := newMux(t, controlWWD(t, &s, 200, ""))
-	for _, q := range []string{"?host=", "?host=&host=mlab", "?host=&host=air26", "?host=mlab&host=air26", "?host=air26&host=air26"} {
+	for _, q := range []string{"?host=", "?host=&host=mlab", "?host=&host=air26", "?host=mlab&host=air26", "?host=air26&host=air26",
+		"?host=air26;x=y", "?host=air26&x=%zz"} { // a query that does not parse is not a request without a host
 		for _, rt := range [][2]string{
 			{"/api/pool/jobs/j_a/position", `{"position":"front"}`},
 			{"/api/pool/jobs/j_a/cancel", ""},

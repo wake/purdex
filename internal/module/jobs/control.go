@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/wake/purdex/internal/devices"
@@ -56,7 +57,14 @@ func (m *Module) controlSlot(w http.ResponseWriter) (release func(), ok bool) {
 // controlHost is host() for a change: when ?host= is there it is one clear, non-empty value. wwd takes an empty host (or the first of two)
 // as the local one, so a muddled request would become a change on the wrong host, and a change is not undone. "" is only "no host".
 func controlHost(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if hs := r.URL.Query()["host"]; len(hs) > 1 || (len(hs) == 1 && hs[0] == "") {
+	// url.Values from r.URL.Query() silently drops a pair that does not parse (an unescaped ";"), which would turn "?host=air26;x=y" into a
+	// request with no host: parse here and refuse an error instead
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the query does not parse")
+		return "", false
+	}
+	if hs := q["host"]; len(hs) > 1 || (len(hs) == 1 && hs[0] == "") {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is given more than once, or is empty")
 		return "", false
 	}
