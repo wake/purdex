@@ -75,7 +75,7 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
             aria-describedby={edit?.blocked ? `${reasonId}-name` : undefined}
             onDoubleClick={onDoubleClickName ?? start}
             onKeyDown={interactive ? (e) => {
-              if ((e.key === 'Enter' || e.key === 'F2') && !e.nativeEvent.isComposing) { e.preventDefault(); (onDoubleClickName ?? start)() }
+              if ((e.key === 'Enter' || e.key === ' ' || e.key === 'F2') && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); (onDoubleClickName ?? start)() }
             } : undefined}
             className={nameClass}
           >

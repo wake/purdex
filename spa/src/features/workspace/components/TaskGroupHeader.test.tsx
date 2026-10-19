@@ -70,8 +70,15 @@ describe('rename in place', () => {
     name().focus()
     expect(document.activeElement).toBe(name())
     fireEvent.keyDown(name(), { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(name(), { key: 'Enter', keyCode: 229 })
     expect(screen.queryByTestId('task-group-name-input')).toBeNull()
     fireEvent.keyDown(name(), { key: 'F2' })
+    expect(input()).toHaveValue('Old')
+  })
+
+  it('Space opens it as well, as a button does', () => {
+    render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit: vi.fn() }} />)
+    fireEvent.keyDown(name(), { key: ' ' })
     expect(input()).toHaveValue('Old')
   })
 
