@@ -58,8 +58,6 @@ type Evaluator struct {
 	logf  func(string, ...any)
 	rules []Rule
 
-	gate func() bool // the proto 2 writer gate (spec §13.1); nil: shut
-
 	mu   sync.Mutex
 	last map[wire.AlertKind]string // the last failure logged per rule, to log a change only
 }
@@ -71,10 +69,6 @@ func NewEvaluator(book Book, input func() (Input, bool), logf func(string, ...an
 	}
 	return &Evaluator{book: book, input: input, logf: logf, rules: rules, last: map[wire.AlertKind]string{}}
 }
-
-// SetGate sets the writer gate of spec §13.1: the Alert payload is new, so it is written only while every pool host reports proto >= 2, and
-// a rolled-back host shuts it again. While it is shut nothing is judged, raised or cleared. Without a gate the evaluator stays shut.
-func (e *Evaluator) SetGate(open func() bool) { e.gate = open }
 
 // Every is how often Run judges. The spec's shortest window is a minute; a push waits for the poll of the deliverer (30 s) anyway.
 const Every = 30 * time.Second
@@ -93,11 +87,9 @@ func (e *Evaluator) Run(ctx context.Context) {
 	}
 }
 
-// Pass judges every rule once.
+// Pass judges every rule once. It does not wait for the proto 2 writer gate: alerts are not behind it (spec §13.1), so an unreachable
+// host cannot silence the others' alerts.
 func (e *Evaluator) Pass() {
-	if e.gate == nil || !e.gate() {
-		return
-	}
 	in, ok := e.input()
 	if !ok {
 		return
@@ -116,9 +108,6 @@ func (e *Evaluator) Pass() {
 		if err != nil {
 			e.fail(r.Kind(), "judge", err)
 			continue
-		}
-		if !e.gate() { // asked again at the write: judging takes time and the pool can change meanwhile
-			return
 		}
 		if v.Holds {
 			err = e.book.Raise(wire.Alert{Key: v.Key, Kind: r.Kind(), Level: v.Level, Detail: v.Detail})
