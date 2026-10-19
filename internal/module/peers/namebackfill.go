@@ -130,13 +130,14 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 // have changed since the scan, and a name that is now a persona code is left alone. ok is true when a notice is owed.
 func (m *Module) backfillOne(ctx context.Context, c candidate, picked map[string]bool, names map[string]string) (renameNotice, bool) {
 	sid := c.entry.SessionID
+	// One generation from the held names to the write: a collection published meanwhile waits for this read lock.
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
 	held, err := m.heldPoolNames(ctx, picked)
 	if err != nil {
 		m.logf("peers: name backfill: cannot read the held names, %s keeps %s this pass: %v", sid, c.name, err)
 		return renameNotice{}, false
 	}
-	m.poolGen.RLock()
-	defer m.poolGen.RUnlock()
 	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
 		return renameNotice{}, false
 	}

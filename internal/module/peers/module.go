@@ -295,8 +295,6 @@ type Module struct {
 	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
 	poolGen            sync.RWMutex
 	afterPoolPublished func()
-	// beforeLeadRename is a test seam in RenameForLead, after the held check and before the generation read lock.
-	beforeLeadRename func()
 	// inLeadRename is a test seam in RenameForLead, under the generation read lock, between the pickable check and the write.
 	inLeadRename func()
 	// noticeSend sends the rename notice of the backfill; nil is the in-process SendSelfNotice (namebackfill.go). A test seam.
