@@ -32,7 +32,7 @@ type Options struct {
 	Gate   fastlane.Gater // runs a fast-lane command under a gate slot; nil disables the fast lane
 	Env    []string       // the caller's environment (the fast lane's command keeps it)
 	GitBin string
-	// Session names the caller's agent session for the job record (PDX_SESSION_ID); may be empty.
+	// Session names the caller's agent session for the job record (cmd/pdx reads it with gate.SessionFromEnv); may be empty.
 	Session string
 	Ref     string
 	Team    string
