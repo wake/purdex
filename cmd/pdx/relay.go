@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -364,10 +365,14 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 	var req team.PersonRequest
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.StringVar(&req.Command, "command", "", "")
+	fs.StringVar(&req.LeadName, "lead-name", "", "")
+	fs.BoolVar(&req.Card, "card", false, "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
 	}
+	leadNameGiven := false
+	fs.Visit(func(f *flag.Flag) { leadNameGiven = leadNameGiven || f.Name == "lead-name" })
 	switch {
 	case fs.NArg() != 0:
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
@@ -375,14 +380,41 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 		return relayUsageErr(stderr, "--session 不能為空")
 	case team.PersonTTLS(req.Command) == 0:
 		return relayUsageErr(stderr, "--command must be relay, adopt, lead or spawn")
+	case (leadNameGiven || req.Card) && req.Command != team.PersonCmdLead:
+		return relayUsageErr(stderr, "--lead-name and --card belong to --command lead")
+	case leadNameGiven && req.Card:
+		return relayUsageErr(stderr, "--lead-name and --card exclude each other")
+	case leadNameGiven && !leadNameCode.MatchString(req.LeadName):
+		return relayUsageErr(stderr, "--lead-name must be a persona code: 2 to 16 lower-case letters")
 	}
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
 		return code
 	}
+	if leadNameGiven || req.Card {
+		// A daemon that did not announce team.lead_name.v1 decodes the two fields and drops them: it would mint a plain token, and a
+		// request the person meant to wait on the card would be granted at once. So this fails closed, and a token without the flags
+		// asks nothing more (the /team of before names, against any daemon).
+		var info struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if _, err := client.Do(ctx, http.MethodGet, "/api/info", nil, &info); err != nil {
+			return relayReportErr(err, stdout, stderr)
+		}
+		if !slices.Contains(info.Capabilities, team.CapabilityLeadName) {
+			fmt.Fprintf(stderr, "pdx relay: 這個 daemon 沒有公告 %s，不送 --lead-name／--card（會被忽略）unsupported\n", team.CapabilityLeadName)
+			return ExitUnsupported
+		}
+	}
 	var res team.PersonResponse
 	if _, err := client.Do(ctx, http.MethodPost, team.PersonRoute, req, &res); err != nil {
 		return relayReportErr(err, stdout, stderr)
+	}
+	if (leadNameGiven || req.Card) && (res.LeadName != req.LeadName || res.Card != req.Card) {
+		// The capability check above and this request are two requests; a daemon that drops the fields would have minted a plain
+		// token. Print none: the mod then has no token and creates no request.
+		fmt.Fprintf(stderr, "pdx relay: daemon 簽發的 token 沒有綁定 --lead-name／--card（沒有回聲），不輸出 token unsupported\n")
+		return ExitUnsupported
 	}
 	return relayPrintJSON(stdout, stderr, res)
 }

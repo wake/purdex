@@ -715,6 +715,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		// RT-1c: the person's own commands act at once, their token is exact and single-use, and the rules the daemon cannot yet enforce (#2774).
 		"are **the person's own commands** and they act at once", "A person's `/relay` in a member relays that member at once",
 		"put that exact token on the command it names", "**Never invent, guess, store or reuse a token**", "`person_token_invalid`",
+		// name pool v2 §5.3: /team <name> names the lead, a bare /team or /team <note> asks for a card the person answers.
+		"`/team <name> [note]` names the lead", "asks for a **card**", "Never approve the card yourself",
 		"**Never type into your own terminal to run a slash command**", "never call Purdex.app's routes to approve something",
 		// RT-1b: unattended mode refuses an agent's own lead request and adopt.
 		"your own `pdx lead request` and `pdx adopt` are **refused**", "`unattended_refused`",

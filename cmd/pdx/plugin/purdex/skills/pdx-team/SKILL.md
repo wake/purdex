@@ -21,6 +21,7 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 ## Commands the person types: `/team …` and `/relay`
 
 - `/team`, `/team <note>`, `/team spawn <task> [--model m] [--effort e]`, `/team adopt <ref>`, `/team release <ref>`, `/team kill <ref>` and `/relay` are **the person's own commands** and they act at once: no card, no click, no quota, whatever the unattended switch. A person's `/relay` in a member relays that member at once.
+- On a daemon that lets the person name the lead, `/team <name> [note]` names the lead (the name is bound to the token; you cannot change it), and a bare `/team` or `/team <note>` that names no one asks for a **card**: the request then waits for the person to pick the name and approve on the card, so run it in the foreground and wait for the answer. The mod's prompt says which of the two it is. Never approve the card yourself.
 - When the mod's prompt gives you `--person <token>` (after `/team` or `/team spawn`), put that exact token on the command it names (`pdx lead request --person <token> …`, `pdx spawn --person <token> …`). **Never invent, guess, store or reuse a token**; it is good for one command, for a few minutes. If the answer is `person_token_invalid`, tell the user to type the command again.
 - **Never type into your own terminal to run a slash command** (no `tmux send-keys`, no send-keys route) and never call Purdex.app's routes to approve something or to switch a mode. The daemon cannot stop you yet; the rule is yours to keep.
 
