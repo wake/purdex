@@ -21,28 +21,35 @@ import (
 
 func previewCodes() []string { return []string{"hiro", "anna", "mia"} }
 
+// previewN is the number the App shows: the codes are all pickable.
+func previewN(e *backfillEnv, codes []string) (int, error) {
+	_, n, err := e.m.renamePreview(context.Background(), codes, codes)
+	return n, err
+}
+
 // A live conversation with no tmux session row (a headless one) is a registry entry like any other: it is renamed, so it is counted.
 // This is the contract the App's own count broke. Mutation gate: skip the entries that have no session row → red (0).
 func TestRenamePreview_CountsLiveRegistryEntriesThatHaveNoSessionRow(t *testing.T) {
 	e := newBackfillEnv(t)
 	e.live(poolSidA, e.refName(poolSidA)) // no session row anywhere: only a registry entry and a stored name
 	e.live(poolSidB, "scratch-1")
-	n, err := e.m.renamePreview(context.Background(), previewCodes())
+	n, err := previewN(e, previewCodes())
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 }
 
-// The preview and the backfill are one judgement: whatever the backfill renames in a pass is what the preview counted (while the
-// collection has a free name for each; with fewer personas than conversations the pass renames fewer than the preview counted).
+// The preview and the backfill are one judgement: whatever the backfill renames in a pass is what the preview counted, including
+// when the collection has fewer free names than old conversations (the pool runs out and the rest keep their names).
 // Mutation gate: count a name that already ends in a code → the numbers differ → red.
 func TestRenamePreview_IsTheCountTheBackfillThenRenames(t *testing.T) {
 	e := newBackfillEnv(t)
 	entries := []ipeers.Entry{
 		e.live(poolSidA, e.refName(poolSidA)), // old ref-suffix name: renamed
 		e.live(poolSidB, "scratch-1"),         // old free name: renamed
-		e.live(poolSidC, "purdex-54-anna"),    // already ends in a persona code: kept
+		e.live(poolSidC, "purdex-54-anna"),    // already ends in a persona code: kept, and anna is held by it
+		e.live(poolSidD, "scratch-2"),         // a third old name, but hiro and mia are the only names left: it keeps its own
 	}
-	want, err := e.m.renamePreview(context.Background(), previewCodes())
+	want, err := previewN(e, previewCodes())
 	require.NoError(t, err)
 	before := map[string]string{}
 	for _, en := range entries {
@@ -66,12 +73,12 @@ func TestRenamePreview_LeavesOutWhatTheBackfillLeavesOut(t *testing.T) {
 	e.live(poolSidA, "purdex-54-mia") // ends in a proposed code
 	b := e.start(poolSidB, tLate)     // live, never named
 	_ = b
-	n, err := e.m.renamePreview(context.Background(), previewCodes())
+	n, err := previewN(e, previewCodes())
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 
 	// the same name with a code that is not in the proposed collection is old
-	n, err = e.m.renamePreview(context.Background(), []string{"hiro"})
+	n, err = previewN(e, []string{"hiro"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "purdex-54-mia is old when mia is not among the codes being saved")
 }
@@ -81,7 +88,7 @@ func TestRenamePreview_MatchesTheLastSegmentOnly(t *testing.T) {
 	e := newBackfillEnv(t)
 	e.live(poolSidA, "mia-notes") // 'mia' is not the last segment
 	e.live(poolSidB, "x-anna-y")  // neither
-	n, err := e.m.renamePreview(context.Background(), previewCodes())
+	n, err := previewN(e, previewCodes())
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 }
@@ -98,9 +105,17 @@ func TestRenamePreview_Route(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var out struct {
 		WouldRename int `json:"would_rename"`
+		Candidates  int `json:"candidates"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
 	assert.Equal(t, 1, out.WouldRename)
+	assert.Equal(t, 1, out.Candidates)
+	// pickable absent: every code is pickable; present and empty: none is
+	w = post(`{"codes":["hiro"],"pickable":[]}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, 0, out.WouldRename)
+	assert.Equal(t, 1, out.Candidates)
 
 	assert.Equal(t, http.StatusBadRequest, post(`not json`).Code)
 	assert.Equal(t, http.StatusBadRequest, post(`{"codes":["ok","`+strings.Repeat("a", 200)+`"]}`).Code, "a code over the limit")
@@ -127,4 +142,26 @@ func TestBackfillCandidates_TheJudgementTheBackfillAndThePreviewShare(t *testing
 		sids = append(sids, c.entry.SessionID)
 	}
 	assert.ElementsMatch(t, []string{"s-dup", "s-old"}, sids)
+}
+
+// Fewer free names than old conversations (codex R1 on #3568): the count is what can actually be renamed, and the candidates are
+// reported beside it. Mutation gate: return the candidates as would_rename → red.
+func TestRenamePreview_CountsNoMoreThanTheFreeNames(t *testing.T) {
+	e := newBackfillEnv(t)
+	e.live(poolSidA, "scratch-1")
+	e.live(poolSidB, "scratch-2")
+	e.live(poolSidC, "scratch-3")
+	cands, would, err := e.m.renamePreview(context.Background(), []string{"hiro", "anna", "mia"}, []string{"hiro", "anna"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, cands)
+	assert.Equal(t, 2, would, "two pickable names for three old conversations")
+
+	// a pickable name already held by a live conversation is not free; a retired code (in codes, not pickable) is never given out
+	e.live(poolSidD, "purdex-54-hiro")
+	_, would, err = e.m.renamePreview(context.Background(), []string{"hiro", "anna", "mia"}, []string{"hiro", "anna"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, would, "hiro is held, only anna is left")
+	_, would, err = e.m.renamePreview(context.Background(), []string{"hiro"}, []string{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, would, "nothing pickable: nothing can be renamed")
 }

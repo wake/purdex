@@ -25,15 +25,18 @@ const (
 	previewBodyLimit  = 1 << 20
 )
 
-// renamePreview is how many live conversations the backfill would look at if a collection with these codes were saved now: the
-// first pass's work, counted (a conversation in a relay is left to a later pass but is renamed in the end, so it is counted).
-func (m *Module) renamePreview(ctx context.Context, codes []string) (int, error) {
+// renamePreview counts, for a collection whose codes are codes and whose active (pickable) codes are pickable: candidates, the live
+// conversations the backfill would look at, and wouldRename, how many of them it can actually rename — no more than there are
+// pickable names no live conversation holds, because the pool runs out and the rest keep their own names. A conversation in a relay
+// is left to a later pass but is renamed in the end, so it is counted. Names held by another host's snapshot or by a reservation
+// are not known here; they can only make the real number smaller.
+func (m *Module) renamePreview(ctx context.Context, codes, pickable []string) (candidates, wouldRename int, err error) {
 	if m.peerNames == nil {
-		return 0, errNoNameStore
+		return 0, 0, errNoNameStore
 	}
 	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	sids := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -43,7 +46,7 @@ func (m *Module) renamePreview(ctx context.Context, codes []string) (int, error)
 	}
 	rows, err := m.peerNames.Lookup(ctx, sids)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	names := make(map[string]string, len(entries))
 	for _, e := range entries {
@@ -60,34 +63,53 @@ func (m *Module) renamePreview(ctx context.Context, codes []string) (int, error)
 		i := strings.LastIndexByte(name, '-')
 		return i >= 0 && set[name[i+1:]]
 	}
-	return len(backfillCandidates(entries, m.proxyPIDs(), names, hasCode)), nil
+	cands := backfillCandidates(entries, m.proxyPIDs(), names, hasCode)
+	// the pickable names a live conversation already holds (its name ends in one) are not free
+	pick := make(map[string]bool, len(pickable))
+	for _, c := range pickable {
+		pick[c] = true
+	}
+	held := map[string]bool{}
+	for _, name := range names {
+		if i := strings.LastIndexByte(name, '-'); i >= 0 && pick[name[i+1:]] {
+			held[name[i+1:]] = true
+		}
+	}
+	free := len(pick) - len(held)
+	return len(cands), min(len(cands), free), nil
 }
 
-// handleRenamePreview is POST /api/peers/rename-preview {codes: [...]} → {would_rename: N}.
+// handleRenamePreview is POST /api/peers/rename-preview {codes, pickable?} → {would_rename, candidates}.
 func (m *Module) handleRenamePreview(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Codes []string `json:"codes"`
+		// Pickable are the active codes (the names the picker may give out); absent means every code is, present and empty none is.
+		Pickable *[]string `json:"pickable"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, previewBodyLimit)).Decode(&req); err != nil {
 		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(req.Codes) > previewMaxCodes {
+	pickable := req.Codes
+	if req.Pickable != nil {
+		pickable = *req.Pickable
+	}
+	if len(req.Codes) > previewMaxCodes || len(pickable) > previewMaxCodes {
 		http.Error(w, "too many codes", http.StatusBadRequest)
 		return
 	}
-	for _, c := range req.Codes {
+	for _, c := range append(append([]string(nil), req.Codes...), pickable...) {
 		if len(c) > previewMaxCodeLen {
 			http.Error(w, "a code is too long", http.StatusBadRequest)
 			return
 		}
 	}
-	n, err := m.renamePreview(r.Context(), req.Codes)
+	cands, would, err := m.renamePreview(r.Context(), req.Codes, pickable)
 	if err != nil {
 		m.logf("peers: rename preview: %v", err)
 		http.Error(w, "the names are not available", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int{"would_rename": n})
+	_ = json.NewEncoder(w).Encode(map[string]int{"would_rename": would, "candidates": cands})
 }
