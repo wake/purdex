@@ -2,6 +2,7 @@ package orphans
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,6 +382,25 @@ func TestScanner_ALongBreakEndsTheRun(t *testing.T) {
 	s.Observe(calledAt, withChild(shell), bursting(shell, 8).context())
 	if r := s.Report(); len(r.Loops) != 1 || !r.Loops[0].Since.Equal(calledAt) {
 		t.Fatalf("the new run did not start at the scan: %+v", r.Loops)
+	}
+}
+
+// The gap between checks is wall-clock time: a time.Now() carries a monotonic reading that does not advance while the machine sleeps, and Sub
+// uses it, so a sleep would not show. The scanner keeps its last check without that reading (a test cannot make a machine sleep, so this
+// pins the property that matters: what is compared has none).
+func TestScanner_TheGapIsWallClockTime(t *testing.T) {
+	now := time.Now() // with a monotonic reading
+	if !strings.Contains(now.String(), "m=") {
+		t.Skip("this clock carries no monotonic reading")
+	}
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	s.Observe(now, withChild(shell), (&ctxOf{tables: [][]facts.ProcRec{{shell}}}).context())
+	s.mu.Lock()
+	last := s.lastCheck
+	s.mu.Unlock()
+	if last.IsZero() || strings.Contains(last.String(), "m=") {
+		t.Fatalf("the last check kept a monotonic reading: %q", last.String())
 	}
 }
 

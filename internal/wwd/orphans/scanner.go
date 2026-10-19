@@ -189,9 +189,11 @@ var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true
 func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
 	s.mu.Lock()
 	prev := s.lastCheck
-	s.lastCheck = now
+	// Round(0) drops the monotonic reading a time.Now() carries: Sub would otherwise use it, and the monotonic clock does not advance while
+	// the machine sleeps, so a three-hour sleep would look like a few seconds. The gap is wall-clock time.
+	s.lastCheck = now.Round(0)
 	s.mu.Unlock()
-	if !prev.IsZero() && now.Sub(prev) > maxCheckGap {
+	if !prev.IsZero() && now.Round(0).Sub(prev) > maxCheckGap {
 		s.resetLoops() // the checks were interrupted (a sleep, a stalled sampler): what came before is not continuous with what comes now
 	}
 	if c.Fresh == nil {
