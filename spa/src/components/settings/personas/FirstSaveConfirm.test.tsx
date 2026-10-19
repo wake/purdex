@@ -79,4 +79,15 @@ describe('FirstSaveConfirm', () => {
     await waitFor(() => expect(text()).toMatch(/\b1 (of|個)/)) // not toContain('1'): the host label "h1" has one
     expect(vi.mocked(fetchRenamePreview).mock.calls[1][1][0].retired).toBe(true)
   })
+
+  it('names no number when the host read fails and the daemon cannot answer, though old rows are cached', async () => {
+    usePeerStore.setState({
+      refresh: vi.fn(async () => { usePeerStore.setState({ byHost: { h1: { ...usePeerStore.getState().byHost.h1, error: 'down' } } }) }),
+    })
+    vi.mocked(fetchRenamePreview).mockResolvedValue(null)
+    mount()
+    await waitFor(() => expect(fetchRenamePreview).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+    expect(counted()).toBe(false)
+  })
 })
