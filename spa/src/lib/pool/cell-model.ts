@@ -37,7 +37,7 @@ export function matchPoolHost(hosts: PoolHost[], v: Pick<FleetHostView, 'alias' 
 }
 
 /** The facts as the fleet's fast reading, which the cell and the card already draw. `zone` is a placeholder for `unknown`. */
-function factsToFast(f: PoolFacts, load: number): FleetFast {
+export function factsToFast(f: PoolFacts, load: number): FleetFast {
   const fullest = f.disk.reduce<PoolFacts['disk'][number] | null>((best, d) => (best === null || d.used_pct > best.used_pct ? d : best), null)
   return {
     at: f.at,
