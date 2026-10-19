@@ -557,6 +557,35 @@ func TestThePushSwitchIsLoggedWhenItChanges(t *testing.T) {
 	}
 }
 
+// A push handed over while the switch was on, and still waiting in the push module's queue when it is turned off, is not sent: the
+// push module asks StillWanted just before sending, and it follows the switch.
+func TestAQueuedPushIsNotSentOnceTheSwitchIsTurnedOff(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+	e.ntf.mu.Lock()
+	wanted := e.ntf.got[0].StillWanted
+	e.ntf.mu.Unlock()
+	if wanted == nil {
+		t.Fatal("the push carries no way to be asked again")
+	}
+	if !wanted() {
+		t.Fatal("not wanted while the switch is on")
+	}
+	e.push = false
+	if wanted() {
+		t.Fatal("still wanted after the switch was turned off")
+	}
+	e.pushErr = errors.New("unreadable")
+	e.push = true
+	if wanted() {
+		t.Fatal("still wanted with the switch unreadable")
+	}
+}
+
 // A daemon that is not the deliverer says so, and counts nothing as held back by the switch.
 func TestStatusSaysWhetherThisDaemonIsTheDeliverer(t *testing.T) {
 	e := newEnv(t)

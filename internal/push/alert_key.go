@@ -14,6 +14,10 @@ type AlertPush struct {
 	// least one device. It is never called for a push that was skipped, refused, dropped on a full queue, or lost when the sender
 	// stopped with the job still queued — so a delivery ledger records on Sent, never on NotifyAlert's answer. nil = not wanted.
 	Sent func()
+	// StillWanted, when set, is asked by the sender just before each device's push goes out, not only when the push is queued: false
+	// drops it (and Sent is then not called for it). It lets a caller that was told to stop (the wwd_alerts.push switch) take back what
+	// still waits in the queue; a request already on its way to APNs cannot be recalled. nil = always wanted.
+	StillWanted func() bool
 }
 
 // AlertReadiness is the second face of the registered AlertNotifier: whether it can queue a push right now. The registry has no way to

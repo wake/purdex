@@ -45,6 +45,9 @@ func (m *Module) NotifyAlert(p push.AlertPush) bool {
 	// host_id is the host that sends (the one a tap can open); the host the alert is about goes in alert_host.
 	cid := alertCollapseID(p.CollapseID)
 	return snd.Enqueue(Job{DeviceIDs: ids, OnSent: p.Sent, Make: func(push.Device) (push.Content, bool) {
+		if p.StillWanted != nil && !p.StillWanted() {
+			return push.Content{}, false // the caller took it back while it waited in the queue
+		}
 		return push.Content{Title: p.Title, Kind: "alert", CollapseID: cid, AlertHost: p.Host}, true
 	}})
 }

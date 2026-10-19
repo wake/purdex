@@ -298,8 +298,9 @@ curl -sS -X PUT "$DAEMON/api/hostconfig/wwd_alerts" -H "Authorization: Bearer $A
   -d '{"items":{"push":true},"baseRevision":0}'
 ```
 
-**To stop the pushes now, set `push` to `false` on both daemons.** It is read at every push, so nothing needs a restart. A setting
-that cannot be read counts as off. While it is off the alerts are still written, shown by `GET /v1/alerts` and gathered for the digest;
+**To stop the pushes now, set `push` to `false` on both daemons.** It is read at every push, so nothing needs a restart, and it is read
+again just before each push leaves the push module's queue, so what still waits there is taken back too. The one thing it cannot recall
+is a request that is already on its way to APNs at that moment. A setting that cannot be read counts as off. While it is off the alerts are still written, shown by `GET /v1/alerts` and gathered for the digest;
 nothing is recorded as sent, so alerts that still hold when it is turned on again are sent then. `/api/info` shows the state under
 `wwdalerts`: `{push: "on"|"off", deliverer: true|false, suppressed: <push-level alerts held back in the last pass>}`, and the daemon's
 log has one line each time the state changes.

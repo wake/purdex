@@ -345,6 +345,8 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		CollapseID: collapseID(host, a.Key),
 		Title:      title(host, a),
 		Host:       host,
+		// the switch is asked again just before the push goes out: turning it off also takes back what still waits in the queue
+		StillWanted: m.pushEnabled,
 		Sent: func() {
 			if err := m.store.markSent(host, key, since, m.now()); err != nil {
 				m.logf("wwdalerts: record delivery %s/%s: %v", host, key, err)
@@ -396,7 +398,7 @@ func (m *Module) pushEnabled() bool {
 	case on:
 		line = "wwdalerts: push is on (wwd_alerts.push)"
 	default:
-		line = "wwdalerts: push is off (wwd_alerts.push is false): alerts are written and gathered, none is sent to the phone"
+		line = "wwdalerts: push is off (wwd_alerts.push is false): alerts are written and gathered, no new push is sent to the phone (one already on its way to APNs cannot be recalled)"
 	}
 	m.smu.Lock()
 	m.pushState = map[bool]string{true: "on", false: "off"}[on]
