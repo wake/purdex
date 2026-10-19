@@ -570,3 +570,32 @@ func TestABrokenManifestKeepsTheRetryMemory(t *testing.T) {
 		t.Fatal("the retry memory of a task that is gone was kept")
 	}
 }
+
+// A pair that matched is not voided by a manifest that cannot be read at the moment it is settled: it stays, and is settled (and earns the
+// label) on the first look after the manifest can be read again.
+func TestAMatchWaitsOutAManifestThatCannotBeReadJustNow(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.now = r.now.Add(3 * time.Minute)
+	r.src.tasks, r.src.tasksErr = nil, errors.New("unreadable just now")
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 1 || len(rec) != 0 || len(r.st.rows) != 0 {
+		t.Fatalf("%+v %+v %+v", inf, rec, r.st.rows)
+	}
+	r.src.tasks, r.src.tasksErr = []Task{tsc}, nil
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 0 || len(rec) != 1 || rec[0].Outcome != OutcomeMatch || len(r.st.rows) != 1 {
+		t.Fatalf("%+v %+v %+v", inf, rec, r.st.rows)
+	}
+	// and a task that is known to be gone (the read worked) is still void
+	r2 := newRig(t, tsc)
+	r2.c.Tick(ctx())
+	r2.finishPair(goodRes("mserv"), goodRes("air26"))
+	r2.now = r2.now.Add(3 * time.Minute)
+	r2.src.tasks = nil
+	r2.c.Settle(ctx())
+	if _, rec := r2.c.Status(); len(rec) != 1 || rec[0].Outcome != OutcomeVoid {
+		t.Fatalf("%+v", rec)
+	}
+}

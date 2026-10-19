@@ -296,7 +296,11 @@ func (c *Coordinator) settle(ctx context.Context) {
 		ranC, ranR := ranToAnExit(cj), ranToAnExit(rj)
 		switch {
 		case cDone && rDone:
-			c.finish(label, p, Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result}))
+			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result})
+			if v.Outcome == OutcomeMatch && c.taskHiddenByUnreadableManifest(p) {
+				continue // a match is not thrown away for a manifest that cannot be read just now: look again on the next tick
+			}
+			c.finish(label, p, v)
 		case (cDone && !ranC) || (rDone && !ranR):
 			// one half ended without running (cancelled, superseded, expired): the pair is void, and the other half is not worth waiting for
 			c.cancelQuietly(ctx, p, cDone, rDone)
@@ -343,6 +347,21 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 		c.last[label] = Attempt{At: now, Outcome: v.Outcome, Fingerprint: p.fp}
 	}
 	c.remember(Record{Label: label, Outcome: v.Outcome, Why: v.Why, At: now, Candidate: p.cand, Reference: p.ref})
+}
+
+// taskHiddenByUnreadableManifest says whether the task cannot be seen now only because a manifest could not be read (so whether it is
+// still the same task is not known yet, as opposed to known to be gone or changed).
+func (c *Coordinator) taskHiddenByUnreadableManifest(p *openPair) bool {
+	tasks, err := c.cfg.Source.Tasks()
+	if err == nil {
+		return false
+	}
+	for _, t := range tasks {
+		if t.Label() == p.task.Label() {
+			return false
+		}
+	}
+	return true
 }
 
 // stillTheSameTask says whether the task is, now, the one the pair was queued for: the same repo, name, reference, qualify args, needs and
