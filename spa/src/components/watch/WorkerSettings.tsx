@@ -90,7 +90,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
-  const [deniedNow, setDeniedNow] = useState(false)
+  const [, redraw] = useState(0) // a 403 is remembered per daemon (control-api); this only draws it
 
   const current: PoolWorker | null = host ? (host.facts?.worker ?? host.worker) : null
 
@@ -114,7 +114,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
     )
   }
 
-  const readOnly = deniedNow || controlDenied(source)
+  const readOnly = controlDenied(source)
   const shown: PoolWorker = pending?.sent ?? current
   const locked = busy || readOnly
   const running = host.facts?.worker.running ?? { heavy: 0, light: 0 }
@@ -132,7 +132,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
     } catch (e) {
       const err = e instanceof PoolChangeError ? e : null
       const action = err?.poolError.action
-      if (action === 'read_only') { setDeniedNow(true); return }
+      if (action === 'read_only') { redraw((n) => n + 1); return }
       if (err?.poolError.code === 'wwd_rejected') setFailure({ field, text: err.detail || t('pool.worker.rejected') })
       else if (err?.poolError.code === 'bad_request') setFailure({ field, text: t('pool.worker.bad_request') })
       else setFailure({ field, text: t('pool.worker.no_answer', { alias, reason: err?.detail ?? '' }), retry: () => { void change(field, patch) } })

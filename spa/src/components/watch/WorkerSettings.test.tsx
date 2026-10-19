@@ -166,6 +166,23 @@ describe('WorkerSettings', () => {
     expect(screen.getByTestId('pool-worker-slots-heavy-value').closest('[inert]')).not.toBeNull()
   })
 
+  it('read only belongs to the daemon that refused: when another daemon becomes the source, it is judged again', async () => {
+    hostFetch.mockResolvedValueOnce(reply(403, { error: 'forbidden', detail: 'admin token only' }))
+    useHostStore.setState({
+      hosts: { [CFG]: { id: CFG, name: CFG, ip: '1', port: 1, token: 't', order: 0 }, 'cfg-b': { id: 'cfg-b', name: 'b', ip: '2', port: 1, token: 'u', order: 1 } },
+      hostOrder: [CFG, 'cfg-b'], runtime: { [CFG]: { status: 'connected' }, 'cfg-b': { status: 'connected' } },
+    } as never)
+    useNexHostStore.setState({ byHost: { [CFG]: { phase: 'ready', daemonCapabilities: ['pool.v1', 'pool.control.v1'] }, 'cfg-b': { phase: 'ready', daemonCapabilities: ['pool.control.v1'] } } } as never)
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await click('pool-worker-slots-heavy-inc')
+    expect(screen.getByTestId('pool-worker-readonly')).toBeInTheDocument()
+    act(() => { useHostStore.setState({ runtime: { [CFG]: { status: 'disconnected' }, 'cfg-b': { status: 'connected' } } } as never) })
+    expect(screen.queryByTestId('pool-worker-readonly')).toBeNull()
+    await click('pool-worker-slots-heavy-inc')
+    expect(hostFetch.mock.calls.at(-1)![0]).toBe('cfg-b')
+  })
+
   it('the owner rule: hid<N>m is edited as minutes, anything else as the text it is, and a bad number is not sent', async () => {
     setHost(mlab())
     render(<WorkerSettings alias="mlab" />)
