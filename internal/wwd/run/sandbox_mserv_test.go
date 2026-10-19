@@ -350,7 +350,7 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 			wg.Add(1)
 			go func() {
 				defer wg.Done() // also when runSBOrigin ends this goroutine (t.Fatal): the run then stays the zero value and fails below
-				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "sleep 3; cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; echo pwd=$PWD; echo $WWD_ORIGIN > marker; cat marker")
+				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; echo pwd=$PWD; touch seen-$WWD_ORIGIN; sleep 3; echo files=$(ls | grep ^seen- | tr '\\n' ',')")
 			}()
 		}
 		wg.Wait()
@@ -360,10 +360,11 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 				t.Errorf("origin %s: result %+v", tag, r.Result)
 				continue
 			}
-			// the unit, the origin mark and the workspace (named after the tag by runSBOrigin) are this origin's own, and the marker file
-			// it wrote and read back holds its own tag: a shared workspace would let the other origin's write show up here
+			// the unit, the origin mark and the workspace (named after the tag by runSBOrigin) are this origin's own, and after both runs
+			// have made their seen-<tag> file (3 s apart from the listing, both runs started together) the directory holds only its own:
+			// a shared workspace lists both files, whatever the scheduling
 			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) ||
-				!strings.Contains(r.out, "/ws-Q-"+tag+"\n") || !strings.Contains(r.out, "\n"+tag+"\n") || strings.Contains(r.out, other) {
+				!strings.Contains(r.out, "/ws-Q-"+tag+"\n") || !strings.Contains(r.out, "files=seen-"+tag+",\n") || strings.Contains(r.out, other) {
 				t.Errorf("origin %s ran in the wrong unit or workspace:\n%s", tag, r.out)
 			}
 		}
