@@ -17,21 +17,34 @@ export class PoolReadError extends Error {
   }
 }
 
-async function readJson(hostId: string, path: string, kind: PoolCallKind = 'read'): Promise<unknown> {
+/** The answer's body as text, or the classified failure. `kind` says whether a refusal belongs to a read or to a change. */
+async function readBody(hostId: string, path: string, kind: PoolCallKind): Promise<string> {
   let res: Response
   try {
     res = await hostFetch(hostId, path)
   } catch {
     throw new PoolReadError(path, null, classify(null, null, kind))
   }
-  let body: unknown = null
-  try { body = await res.json() } catch { /* a body that is not JSON is classified by its status */ }
-  if (!res.ok) throw new PoolReadError(path, res.status, classify(res.status, body, kind))
-  return body
+  let text = ''
+  try { text = await res.text() } catch { /* a body that cannot be read is classified by its status */ }
+  if (!res.ok) {
+    let body: unknown = null
+    try { body = JSON.parse(text) } catch { /* a body that is not JSON is classified by its status */ }
+    throw new PoolReadError(path, res.status, classify(res.status, body, kind))
+  }
+  return text
 }
 
+export async function readJson(hostId: string, path: string, kind: PoolCallKind = 'read'): Promise<unknown> {
+  const text = await readBody(hostId, path, kind)
+  try { return JSON.parse(text) } catch { return null }
+}
+
+/** A plain-text answer (a job's log). */
+export const readText = (hostId: string, path: string, kind: PoolCallKind = 'read'): Promise<string> => readBody(hostId, path, kind)
+
 /** `unreadable` is an answer that parsed as nothing: the daemon is outside the contract, like wwd_bad_response. */
-const unreadable = (path: string) => new PoolReadError(path, 200, { code: 'wwd_bad_response', action: 'next_source' })
+export const unreadable = (path: string) => new PoolReadError(path, 200, { code: 'wwd_bad_response', action: 'next_source' })
 
 export async function fetchPoolHosts(hostId: string): Promise<PoolHost[]> {
   const path = '/api/pool/hosts'
