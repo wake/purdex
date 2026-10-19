@@ -70,6 +70,11 @@ type Module struct {
 	deliverer      bool       // whether this daemon was the deliverer at the last pass
 	suppressed     int        // push-level alerts the switch held back in the last pass
 	passSuppressed int        // the same, being counted in the pass that is running
+
+	// the silence alerts' episodes (pass runs on one goroutine): which silence: keys each list held when it was last read, and the instance
+	// (a time on this daemon's clock) of the failure each key is about now
+	lastHeld map[string]map[string]bool // host alias -> its silence: keys
+	episode  map[string]time.Time
 }
 
 // New returns the module with production defaults.
@@ -242,13 +247,15 @@ func (m *Module) pass(ctx context.Context) {
 		m.deliverer, m.suppressed = deliverer, m.passSuppressed
 		m.smu.Unlock()
 	}()
-	hosts, err := m.hosts(ctx)
+	hosts, whole, err := m.hosts(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
 		}
 		return
 	}
+	// every list is read before any is acted on, so a silence alert is judged on all of them at once
+	var lists []gotList
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
@@ -262,32 +269,121 @@ func (m *Module) pass(ctx context.Context) {
 			}
 			continue
 		}
-		m.handle(h.alias, list.Alerts)
+		lists = append(lists, gotList{h.alias, list.Alerts})
+	}
+	present := map[string]bool{} // the hosts that are in the pool now
+	for _, h := range hosts {
+		present[h.alias] = true
+	}
+	m.markEpisodes(lists2(lists), present, whole)
+	for _, l := range lists {
+		m.handle(l.alias, l.alerts)
 	}
 	if err := m.store.prune(m.now()); err != nil {
 		m.logf("wwdalerts: prune: %v", err)
 	}
 }
 
+// markEpisodes decides, from the lists read this pass, which failure each silence:<host> key is about. Every wwd that loses a peer raises
+// the same key on its own list, so it is one failure however many noticed it. It goes on while some list that held it before still holds
+// it — a list that could not be read this pass keeps what it held, so a blip in reading is not the end. When no list holds it
+// continuously (it cleared everywhere, or another wwd noticed afresh after the first one's alert was gone) a new failure begins, told at
+// once: a duplicate is preferred to a failure not told (spec §13.3). Only this daemon's own observations and clock are compared, never a
+// wwd's Since against this daemon's time.
+func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]bool, poolWhole bool) {
+	first := m.lastHeld == nil
+	if first {
+		m.lastHeld = map[string]map[string]bool{}
+		m.episode = map[string]time.Time{}
+	}
+	if poolWhole {
+		// a host that is not in the pool any more takes what it held with it: coming back it is a new observer, not a continuation
+		for h := range m.lastHeld {
+			if !inPool[h] {
+				delete(m.lastHeld, h)
+			}
+		}
+	}
+	now := m.now()
+	nowHeld := map[string]map[string]bool{}
+	earliest := map[string]time.Time{} // key -> the earliest Since on the lists (a wwd's clock; used only for the first look after a restart)
+	for host, alerts := range lists {
+		held := map[string]bool{}
+		for _, a := range alerts {
+			if a.ClearedAt == nil && sharedLedger(a) {
+				held[a.Key] = true
+				if t, ok := earliest[a.Key]; !ok || a.Since.Before(t) {
+					earliest[a.Key] = a.Since
+				}
+			}
+		}
+		nowHeld[host] = held
+	}
+	keys := map[string]bool{}
+	for _, held := range nowHeld {
+		for k := range held {
+			keys[k] = true
+		}
+	}
+	for k := range keys {
+		continuing := false
+		for h, held := range nowHeld {
+			if held[k] && m.lastHeld[h][k] {
+				continuing = true
+			}
+		}
+		if continuing {
+			continue
+		}
+		// The first look after a start has no history of its own. The ledger knows the failure it last told: the same one while a list's
+		// alert was raised no later than that push (a wwd's clock against this one's, used only here); one raised after it began while
+		// this daemon was down, and is told.
+		_, known := m.episode[k]
+		if row, had := m.store.delivery(silenceLedger, k); had && !known && !earliest[k].After(time.UnixMilli(row.Attempt)) {
+			m.episode[k] = time.UnixMilli(row.Since)
+		} else {
+			m.episode[k] = now
+		}
+	}
+	for h, held := range nowHeld {
+		m.lastHeld[h] = held
+	}
+}
+
+func lists2(lists []gotList) map[string][]wire.Alert {
+	out := make(map[string][]wire.Alert, len(lists))
+	for _, l := range lists {
+		out[l.alias] = l.alerts
+	}
+	return out
+}
+
+// gotList is one host's active alerts as read this pass.
+type gotList struct {
+	alias  string
+	alerts []wire.Alert
+}
+
 type hostRef struct{ alias, ask string }
 
-// hosts lists the local host (asked with "") and every peer of its pool.
-func (m *Module) hosts(ctx context.Context) ([]hostRef, error) {
+// hosts lists the local host (asked with "") and every peer of its pool. whole is false when the pool could not be read, so the list is
+// only the local host.
+func (m *Module) hosts(ctx context.Context) (out []hostRef, whole bool, err error) {
 	info, err := m.src.Info(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	out := []hostRef{{alias: info.Alias, ask: ""}}
+	out = []hostRef{{alias: info.Alias, ask: ""}}
 	pool, err := m.src.Pool(ctx)
 	if err != nil {
-		return out, nil // the pool unreadable: the local host's alerts are still read
+		return out, false, nil // the pool unreadable: the local host's alerts are still read
 	}
 	for _, p := range pool.Peers {
 		if p.Info.Alias != "" && p.Info.Alias != info.Alias {
 			out = append(out, hostRef{alias: p.Info.Alias, ask: p.Info.Alias})
 		}
 	}
-	return out, nil
+	return out, true, nil
 }
 
 // handle acts on one host's active alerts: gathers the digest ones, pushes the push ones that are due, and forgets the ledger rows of
@@ -331,8 +427,17 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !ok {
 		return // the push side is not up: no attempt is spent
 	}
+	// a silence alert ("silence:mserv") is the same failure on every wwd's list that noticed it: one ledger row and one collapse id for the
+	// failure, not one per observer (spec §13.3: a duplicate only during a failover or a partition, and those are separate deliverers);
+	// which failure it is, markEpisodes decided
+	about := host
+	since := a.Since
+	if sharedLedger(a) {
+		about, host = strings.TrimPrefix(a.Key, "silence:"), silenceLedger
+		since = m.episode[a.Key]
+	}
 	prev, hadRow := m.store.delivery(host, a.Key)
-	if hadRow && prev.Since == a.Since.UnixMilli() {
+	if hadRow && prev.Since == since.UnixMilli() {
 		if prev.Sent > 0 && within(now, prev.Sent, deliveredFor) {
 			return
 		}
@@ -341,16 +446,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		}
 	}
 	// the attempt is written before the push module is asked, so a restart in the middle cannot ask again at once
-	if err := m.store.beginAttempt(host, a.Key, a.Since, now); err != nil {
+	if err := m.store.beginAttempt(host, a.Key, since, now); err != nil {
 		m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
 		return
 	}
-	since := a.Since
 	key := a.Key
 	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
-		Title:      title(host, a),
-		Host:       host,
+		Title:      title(about, a),
+		Host:       about,
 		// the switch is asked again just before the push goes out: turning it off also takes back what still waits in the queue
 		StillWanted: m.pushEnabled,
 		// nothing was sent: the attempt written above goes back, so turning the switch on again is not held back for the interval
@@ -369,7 +473,7 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	// above must not hold the alert back for the interval. A false from a module that is still up (its queue is full) keeps the attempt.
 	if !queued {
 		if r, ok := ntf.(push.AlertReadiness); ok && !r.AlertReady() {
-			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow, a.Since, now); err != nil {
+			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow, since, now); err != nil {
 				m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
 			}
 		}
@@ -381,6 +485,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 func within(now time.Time, at int64, window time.Duration) bool {
 	d := now.Sub(time.UnixMilli(at))
 	return d >= 0 && d < window
+}
+
+// silenceLedger stands in for the host in the ledger and the collapse id of the silence alerts about a wwd (key silence:<alias>), which
+// every wwd that lost the peer raises on its own list.
+const silenceLedger = "(silence)"
+
+// sharedLedger says whether the alert is one of those.
+func sharedLedger(a wire.Alert) bool {
+	return a.Kind == wire.AlertSilence && strings.HasPrefix(a.Key, "silence:")
 }
 
 // collapseID is the id a phone uses to show one notification per alert: alert:<host>:<key>. A host name may hold a colon, and then

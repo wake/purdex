@@ -171,5 +171,5 @@ func TestAVersionSixDatabaseGainsTheReuseColumns(t *testing.T) {
 	assert.Equal(t, [3]string{}, [3]string{def, lbl, fp})
 	var v int
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 7, v)
+	assert.Equal(t, schemaVersion, v)
 }

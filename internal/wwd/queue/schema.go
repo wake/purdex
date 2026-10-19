@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -68,9 +68,61 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
+		if have < 8 {
+			if err := migrateV7ToV8(ctx, c); err != nil {
+				return err
+			}
+		}
 		_, err := c.ExecContext(ctx, `UPDATE queue_schema SET version = ?`, schemaVersion)
 		return err
 	})
+}
+
+// outcomeStatements (version 8) are the origin's record of how declared tasks ended on the hosts that vouch for them, and of the pairs of
+// different outcomes for the same work (spec §7 Disagreement). task_outcomes has one row per ended job that is compared; work_key is
+// the hash of what the work was (snapshot tree, task, arguments, definition), so two rows with one work_key are the same work. A
+// disagreement row is written when the later outcome of a pair is recorded, one row for each host whose label is to be quarantined.
+// Both go with the jobs they describe, after the same retention. The tables are only added: a database brought back to version 7 by an
+// older wwd is refused by that wwd (it checks the version), so going back means restoring the backup made before the upgrade.
+var outcomeStatements = []string{
+	`CREATE TABLE IF NOT EXISTS task_outcomes (
+		seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+		job_id    TEXT NOT NULL UNIQUE,
+		work_key  TEXT NOT NULL,
+		host      TEXT NOT NULL,
+		label     TEXT NOT NULL,
+		tree      TEXT NOT NULL,
+		task      TEXT NOT NULL,
+		ok        INTEGER NOT NULL,
+		standing  TEXT NOT NULL,
+		at        INTEGER NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS task_outcomes_work_host ON task_outcomes (work_key, host, seq)`,
+	`CREATE INDEX IF NOT EXISTS task_outcomes_at ON task_outcomes (at)`,
+	`CREATE TABLE IF NOT EXISTS outcome_disagreements (
+		seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+		host       TEXT NOT NULL,
+		label      TEXT NOT NULL,
+		other_host TEXT NOT NULL,
+		tree       TEXT NOT NULL,
+		task       TEXT NOT NULL,
+		job_old    TEXT NOT NULL,
+		job_new    TEXT NOT NULL,
+		at         INTEGER NOT NULL,
+		UNIQUE (host, job_old, job_new)
+	)`,
+	`CREATE INDEX IF NOT EXISTS outcome_disagreements_host ON outcome_disagreements (host, seq)`,
+	`CREATE INDEX IF NOT EXISTS outcome_disagreements_at ON outcome_disagreements (at)`,
+}
+
+// migrateV7ToV8 adds the outcome tables. It can run again: every statement is IF NOT EXISTS.
+func migrateV7ToV8(ctx context.Context, c *sql.Conn) error {
+	for _, stmt := range outcomeStatements {
+		if _, err := c.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resultReuseColumns (version 7) are what a stored result is filed under (spec §4.5), kept on the job: the definition hash of the task as
@@ -316,7 +368,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			return err
 		}
 	}
-	for _, stmt := range append(append([]string{}, revStatements...), epochStatements...) {
+	for _, stmt := range append(append(append([]string{}, revStatements...), epochStatements...), outcomeStatements...) {
 		if _, err := c.ExecContext(ctx, stmt); err != nil {
 			return err
 		}

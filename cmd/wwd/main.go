@@ -146,6 +146,13 @@ func run(cfgPath string) error {
 			d.FileResult(ctx, j, p)
 		}
 	}
+	// how a job came out is recorded in the transaction that ends it, judged by the reference host of that moment (spec §7)
+	qopts.ReferenceHost = func(repo, task string) string {
+		if d == nil {
+			return ""
+		}
+		return d.ReferenceHost(repo, task)
+	}
 	q, err := queue.New(st.DB(), qopts)
 	if err != nil {
 		return err

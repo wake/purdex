@@ -35,7 +35,9 @@ func claimFacts(req wire.ClaimRequest) (labels, fingerprint string) {
 
 // producedOn reads what the claim that holds the job said about itself. A value that does not decode is treated as not said: the result is
 // then simply not filed.
-func producedOn(ctx context.Context, c *sql.Conn, id string) (Produced, error) {
+func producedOn(ctx context.Context, c interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, id string) (Produced, error) {
 	var p Produced
 	var labels, fp string
 	if err := c.QueryRowContext(ctx, `SELECT def_hash, claim_labels, claim_fingerprint FROM jobs WHERE id = ?`, id).Scan(&p.DefHash, &labels, &fp); err != nil {
@@ -58,8 +60,18 @@ func reusable(j wire.Job) bool {
 		r != nil && !r.CacheHit && r.SupersededBy == nil && r.Exit != nil && *r.Exit == 0
 }
 
+// comparable says whether a job that has just ended has an outcome to compare with the same work's on another host (spec §7): a worker's
+// success or failure of a declared, cacheable task, with an exit of its own, not replaced by a newer submission while it ran, and not an
+// answer from a stored result. A cancel, a timeout or an infrastructure error says nothing of the host's toolchain.
+func comparable(j wire.Job) bool {
+	r := j.Result
+	return (j.State == wire.StateSucceeded || j.State == wire.StateFailed) && j.Cacheable && !j.Local && !j.AdHoc &&
+		r != nil && !r.CacheHit && r.SupersededBy == nil && r.Exit != nil
+}
+
 // offerResult tells Options.OnSucceeded about a job that has just ended in this call (never an echo of an earlier result), once the end is
-// committed. What the callback does cannot change the answer to the worker: it is told nothing of a failure.
+// committed. What the callback does cannot change the answer to the worker. (The outcome of the job is not offered: it is recorded inside
+// the transaction of the end, see recordEndedOutcome.)
 func (q *Queue) offerResult(ctx context.Context, j wire.Job, p Produced) {
 	if q.opt.OnSucceeded == nil || !reusable(j) {
 		return

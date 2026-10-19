@@ -130,6 +130,20 @@ type PeerDown struct {
 	Since time.Time
 }
 
+// SetClock replaces the clock the unreachable-since times are read from (a test drives time by hand); a peer not reached yet counts from
+// the moment of the call. Call it before the first poll.
+func (p *PoolPoller) SetClock(now func() time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.now = now
+	born := now()
+	for i := range p.downSince {
+		if !p.downSince[i].IsZero() {
+			p.downSince[i] = born
+		}
+	}
+}
+
 // Downs lists every configured peer with the time it has been unreachable since, in config order.
 func (p *PoolPoller) Downs() []PeerDown {
 	p.mu.RLock()

@@ -754,7 +754,9 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	if procsErr != nil {
 		m.logf("peers: inventory: process snapshot failed, the registry reads each process itself: %v", procsErr)
 	} else {
-		live = inventoryLiveness(m.liveness, procs)
+		// The pass runs twice per local message and its table is its own, so Read would fork ps for every ps-only process each time:
+		// agentpkg.CachedReads keeps ps's answer (60s, keyed pid+start+comm). The owner pass below still reads procs itself.
+		live = inventoryLiveness(m.liveness, agentpkg.CachedReads(procs))
 	}
 
 	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, live)

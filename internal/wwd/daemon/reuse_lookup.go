@@ -19,6 +19,9 @@ type ResultCache interface {
 	PutCacheEntry(c store.CacheEntry, now time.Time) error
 }
 
+// ReferenceHost is referenceHost for the queue (Options.ReferenceHost): the reference of a task at the moment a job of it ends.
+func (d *Daemon) ReferenceHost(repo, task string) string { return d.referenceHost(repo, task) }
+
 // referenceHost is the alias of the host that is the task's reference ("" for a task none names), from the manifests of this host's repos.
 func (d *Daemon) referenceHost(repo, task string) string {
 	if d.opts.ReferenceTasks == nil {
