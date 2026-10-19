@@ -31,6 +31,24 @@ type renameNotice struct {
 	sid, inbox, oldName, newName string
 }
 
+// candidate is a live conversation the backfill may rename: its registry entry, its stored name, and its seat once read.
+type candidate struct {
+	entry ipeers.Entry
+	name  string
+	seat  team.Seat
+}
+
+// seatRank orders the backfill: a lead before its members, members before the rest.
+func seatRank(role string) int {
+	switch role {
+	case team.SeatLead:
+		return 0
+	case team.SeatMember:
+		return 1
+	}
+	return 2
+}
+
 // backfillPersonaNames renames the live conversations of the pass whose name has no persona code; names is updated for each
 // rename (keyed by session id as the pass keys it), selfAlias is this host's alias for the address in the notice.
 func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entry, proxyPIDs map[int]bool, names map[string]string, selfAlias string) {
@@ -39,10 +57,6 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	}
 	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
 		return // no personas: the built-in names are the pool and nothing is old
-	}
-	type candidate struct {
-		entry ipeers.Entry
-		name  string
 	}
 	var cands []candidate
 	seen := map[string]bool{}
@@ -59,7 +73,7 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 		if code, ok := ipeers.PoolNameOf(name); ok && m.isPersonaCode(code) {
 			continue
 		}
-		cands = append(cands, candidate{e, name})
+		cands = append(cands, candidate{entry: e, name: name})
 	}
 	if len(cands) == 0 {
 		return
@@ -76,8 +90,7 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	}
 	defer unlock()
 
-	var notices []renameNotice
-	picked := map[string]bool{}
+	ready := make([]candidate, 0, len(cands))
 	for _, c := range cands {
 		sid := c.entry.SessionID
 		if inRelay, err := m.sessionInRelay(sid); err != nil {
@@ -91,6 +104,17 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 			m.logf("peers: name backfill: cannot read the seat of %s, left for the next pass: %v", sid, err)
 			continue
 		}
+		c.seat = seat
+		ready = append(ready, c)
+	}
+	// Leads first, then members, then the rest (session ids within each): a member follows its lead's persona code, which this
+	// very pass may have just given.
+	sort.SliceStable(ready, func(i, j int) bool { return seatRank(ready[i].seat.Role) < seatRank(ready[j].seat.Role) })
+
+	var notices []renameNotice
+	picked := map[string]bool{}
+	for _, c := range ready {
+		sid, seat := c.entry.SessionID, c.seat
 		held, err := m.heldPoolNames(ctx, picked)
 		if err != nil {
 			m.logf("peers: name backfill: cannot read the held names, %s keeps %s this pass: %v", sid, c.name, err)

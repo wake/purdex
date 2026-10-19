@@ -213,6 +213,21 @@ func TestBackfill_AMemberTakesAFreeNameItWorkedWithItsLeadBefore(t *testing.T) {
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidB), "rule 2 step 1: paired with hiro, though anna is first in the pool")
 }
 
+// The leads of the pass are named first, whatever the session ids: a member whose id sorts before its lead's still reads the
+// lead's new persona code (codex R1 on NP-3c-3).
+func TestBackfill_LeadsAreNamedBeforeTheirMembersWhateverTheSessionIds(t *testing.T) {
+	e := newBackfillEnv(t)
+	ctx := context.Background()
+	mem := e.live(poolSidA, e.refName(poolSidA)) // sorts first
+	lead := e.live(poolSidB, e.refName(poolSidB))
+	e.team.seats[poolSidB] = team.Seat{Role: team.SeatLead, TeamID: "t1"}
+	e.team.seats[poolSidA] = team.Seat{Role: team.SeatMember, TeamID: "t1", LeadSessionID: poolSidB}
+	require.NoError(t, e.meta.NameHistory().RecordPair(ctx, "hiro", "mia", 5))
+	e.backfill(mem, lead)
+	assert.Equal(t, "purdex-54-hiro", e.storedName(poolSidB), "the lead takes the first lead:true candidate")
+	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "the member follows the lead's new code, not rule 3")
+}
+
 func TestBackfill_AMemberOfARemoteLeadTakesRule3(t *testing.T) {
 	e := newBackfillEnv(t)
 	mem := e.live(poolSidB, e.refName(poolSidB))
