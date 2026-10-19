@@ -55,6 +55,8 @@ type fakeConn struct {
 	starts      int
 	results     []wire.ResultRequest
 	releases    []wire.ReleaseRequest
+	// onQueued is called, without the lock, each time the queue is read (a test changes the world while a round collects)
+	onQueued func()
 }
 
 func newConn(host string, jobs ...wire.Job) *fakeConn {
@@ -68,6 +70,9 @@ func newConn(host string, jobs ...wire.Job) *fakeConn {
 func (c *fakeConn) Host() string { return c.host }
 
 func (c *fakeConn) Queued(context.Context) ([]wire.Job, error) {
+	if c.onQueued != nil {
+		c.onQueued()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.readErr != nil {

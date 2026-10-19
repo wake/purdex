@@ -170,6 +170,23 @@ func TestFilters(t *testing.T) {
 	eq(t, ids(r), []string{"ok"})
 }
 
+// A hold with `allow` (spec §13.4) lets through only the jobs it lists; the worker says which in Env.Admit. A job it refuses is out of the
+// ranking altogether, so it is neither tried nor claimed; the others keep their order.
+func TestAdmitFiltersTheRanking(t *testing.T) {
+	env := baseEnv()
+	rel := job("rel", wire.ClassRelease, 0)
+	dev := job("dev", wire.ClassDev, time.Hour) // the oldest, which would win without the filter
+	merge := job("merge", wire.ClassMerge, 0)
+	env.Admit = func(j wire.Job) bool { return j.Class == wire.ClassRelease || j.Class == wire.ClassMerge }
+	eq(t, ids(Rank([]Candidate{cand(dev), cand(merge), cand(rel)}, env)), []string{"rel", "merge"})
+	env.Admit = func(wire.Job) bool { return false }
+	if r := Rank([]Candidate{cand(dev), cand(rel)}, env); len(r) != 0 {
+		t.Fatalf("a hold that admits nothing: %v", ids(r))
+	}
+	env.Admit = nil // no selective hold: no restriction
+	eq(t, ids(Rank([]Candidate{cand(dev), cand(rel)}, env)), []string{"rel", "dev"})
+}
+
 func TestNoLabelsRequiredAlwaysRuns(t *testing.T) {
 	j := job("x", wire.ClassDev, 0)
 	j.Labels = nil
