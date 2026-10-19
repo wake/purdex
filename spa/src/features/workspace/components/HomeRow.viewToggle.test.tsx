@@ -1,5 +1,5 @@
 // spa/src/features/workspace/components/HomeRow.viewToggle.test.tsx — the sidebar's view toggle, split off the Home button (name pool v2 spec §9.6, NA-5): a 30 px square button left of Home that switches
-// between the workspace view (the profile icon) and the task-group view (the team icon, pink outline).
+// between the workspace view (the profile icon) and the task-group view (the team icon).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { HomeRow } from './HomeRow'
@@ -40,14 +40,25 @@ describe('the toggle', () => {
     expect(toggle()).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('a click switches to the task-group view (the flag is the store\'s), and the icon becomes the team icon with a pink outline', () => {
+  it('a click switches to the task-group view (the flag is the store\'s), and the icon becomes the team icon', () => {
     renderRow()
     fireEvent.click(toggle())
     expect(useTeamUiStore.getState().sidebarView).toBe('groups')
     expect(toggle()).toHaveAttribute('aria-pressed', 'true')
     const icon = within(toggle()).getByTestId('sidebar-view-team-icon')
     expect(icon).toHaveAttribute('data-icon', 'UsersThree')
-    expect(toggle().className).toContain('ring-pink')
+  })
+
+  it('wears no frame in either view, and the same hover in both: the state is the icon and aria-pressed', () => {
+    renderRow()
+    const workspaceView = toggle().className
+    fireEvent.click(toggle())
+    const groupView = toggle().className
+    for (const cls of [workspaceView, groupView]) {
+      expect(cls.split(/\s+/).filter((c) => c.startsWith('ring') || c.startsWith('outline') || c.startsWith('border'))).toEqual([]) // no frame of its own: only the keyboard focus ring (focus-visible:ring-1) is allowed
+      expect(cls).toContain('hover:bg-surface-hover')
+    }
+    expect(groupView).toBe(workspaceView)
   })
 
   it('the team icon is the profile\'s own when it chose one; a second click goes back to the workspace view', () => {
@@ -58,6 +69,31 @@ describe('the toggle', () => {
     fireEvent.click(toggle())
     expect(useTeamUiStore.getState().sidebarView).toBe('workspace')
     expect(within(toggle()).queryByTestId('sidebar-view-team-icon')).toBeNull()
+  })
+
+  it('the team icon wears its own weight, standing alone (the default UsersThree too)', () => {
+    useLocalProfilesStore.getState().setProfileAppearance('master', { teamIconWeight: 'fill' })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    renderRow()
+    const icon = within(toggle()).getByTestId('sidebar-view-team-icon')
+    expect(icon).toHaveAttribute('data-icon', 'UsersThree')
+    expect(icon).toHaveAttribute('data-weight', 'fill')
+  })
+
+  it('the team icon is in teamColor; with none set it follows the profile colour; with neither it has no colour of its own', () => {
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    const icon = () => screen.getByTestId('sidebar-view-team-icon')
+    useLocalProfilesStore.getState().setProfileAppearance('master', { icon: 'Star', color: '#ff0000', teamColor: '#00ff00' })
+    renderRow()
+    expect(icon().style.color).toBe('rgb(0, 255, 0)')
+    cleanup()
+    useLocalProfilesStore.getState().setProfileAppearance('master', { teamColor: null })
+    renderRow()
+    expect(icon().style.color).toBe('rgb(255, 0, 0)') // the profile's colour: the same as its profile icon
+    cleanup()
+    useLocalProfilesStore.getState().setProfileAppearance('master', { color: null })
+    renderRow()
+    expect(icon().style.color).toBe('')
   })
 
   it('has one name whichever view is on, and aria-pressed says which', () => {
