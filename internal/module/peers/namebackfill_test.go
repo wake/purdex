@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -226,6 +227,80 @@ func TestBackfill_LeadsAreNamedBeforeTheirMembersWhateverTheSessionIds(t *testin
 	e.backfill(mem, lead)
 	assert.Equal(t, "purdex-54-hiro", e.storedName(poolSidB), "the lead takes the first lead:true candidate")
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "the member follows the lead's new code, not rule 3")
+}
+
+// A collection that is being applied is seen whole or not at all (codex R2 on NP-3c-3): a name that the new collection makes a
+// persona code is not an old name, however the pass is timed against the publish.
+func TestBackfill_ACollectionBeingAppliedIsSeenWholeByTheScan(t *testing.T) {
+	e := newBackfillEnv(t)
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false)}}}
+	e.m.bindPersonas(f)
+	a := e.live(poolSidA, "purdex-54-zoe") // zoe is no persona yet
+
+	inGap, release := make(chan struct{}), make(chan struct{})
+	e.m.afterPoolPublished = func() { close(inGap); <-release }
+	changed := make(chan struct{})
+	go func() {
+		f.change(leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false), pp("zoe", "Zoe", false))
+		close(changed)
+	}()
+	<-inGap // the new pool (zoe recognised) is out, the new code set is not yet
+
+	done := make(chan struct{})
+	go func() {
+		e.backfill(a)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the backfill ran while the collection was half applied")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	<-changed
+	<-done
+	assert.Equal(t, "purdex-54-zoe", e.storedName(poolSidA), "zoe is a persona by the time the pass looks")
+}
+
+// The candidates are checked again at the rename: a collection that gives the name a persona code between the scan and the write
+// leaves the session alone.
+func TestBackfill_ACandidateIsCheckedAgainAtTheRename(t *testing.T) {
+	e := newBackfillEnv(t)
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false)}}}
+	e.m.bindPersonas(f)
+	a := e.live(poolSidA, "purdex-54-zoe")
+	e.m.afterBackfillScan = func() {
+		f.change(leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false), pp("zoe", "Zoe", false))
+	}
+	e.backfill(a)
+	assert.Equal(t, "purdex-54-zoe", e.storedName(poolSidA))
+	assert.Empty(t, e.sent())
+}
+
+// The notice workers are admitted and closed under one lock: a notice that was admitted before Stop is joined by Stop, and none
+// starts after it (codex R2 on NP-3c-3).
+func TestBackfill_StopJoinsANoticeThatWasAdmittedJustBeforeIt(t *testing.T) {
+	e := newBackfillEnv(t)
+	inGap, release := make(chan struct{}), make(chan struct{})
+	e.m.beforeNoticeAdmit = func() { close(inGap); <-release }
+	n := []renameNotice{{sid: poolSidA, inbox: "/tmp/x.sock", oldName: "purdex-54-a1", newName: "purdex-54-anna"}}
+	go e.m.sendRenameNotices(n, "mlab")
+	<-inGap // checked, not yet added
+
+	stopped := make(chan struct{})
+	go func() {
+		_ = e.m.Stop(context.Background())
+		close(stopped)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	<-stopped
+	assert.Len(t, e.sent(), 1, "Stop did not return before the admitted notice went out")
+
+	e.m.beforeNoticeAdmit = nil
+	e.m.sendRenameNotices(n, "mlab") // after Stop: nothing starts
+	e.m.workers.Wait()
+	assert.Len(t, e.sent(), 1)
 }
 
 func TestBackfill_AMemberOfARemoteLeadTakesRule3(t *testing.T) {

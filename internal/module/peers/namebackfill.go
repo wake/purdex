@@ -55,11 +55,14 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	if m.namePicker == nil || m.peerNames == nil {
 		return
 	}
-	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
-		return // no personas: the built-in names are the pool and nothing is old
-	}
+	// The scan reads the pool and the persona codes of one generation (bindPersonas holds the write side while it publishes both).
 	var cands []candidate
 	seen := map[string]bool{}
+	m.poolGen.RLock()
+	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
+		m.poolGen.RUnlock()
+		return // no personas: the built-in names are the pool and nothing is old
+	}
 	for _, e := range entries {
 		key := strings.ToLower(e.SessionID)
 		if key == "" || e.IsProxy || proxyPIDs[e.PID] || seen[key] {
@@ -74,6 +77,10 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 			continue
 		}
 		cands = append(cands, candidate{entry: e, name: name})
+	}
+	m.poolGen.RUnlock()
+	if m.afterBackfillScan != nil {
+		m.afterBackfillScan()
 	}
 	if len(cands) == 0 {
 		return
@@ -114,45 +121,62 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	var notices []renameNotice
 	picked := map[string]bool{}
 	for _, c := range ready {
-		sid, seat := c.entry.SessionID, c.seat
-		held, err := m.heldPoolNames(ctx, picked)
-		if err != nil {
-			m.logf("peers: name backfill: cannot read the held names, %s keeps %s this pass: %v", sid, c.name, err)
-			continue
+		if n, ok := m.backfillOne(ctx, c, picked, names); ok {
+			notices = append(notices, n)
 		}
-		pick, ok := m.backfillPick(ctx, held, c.name, seat)
-		if !ok {
-			continue
-		}
-		newName, ok := ipeers.VirtualNameWith(nameBase(c.name, sid), pick)
-		if !ok || newName == c.name {
-			continue
-		}
-		row, won, err := m.peerNames.RenamePool(ctx, sid, c.name, newName)
-		switch {
-		case err != nil:
-			m.logf("peers: name backfill: renaming %s from %s failed, it keeps its name this pass: %v", sid, c.name, err)
-			continue
-		case !won:
-			m.logf("peers: name backfill: %s changed under the rename of %s, keeping what is stored", sid, c.name)
-			continue
-		}
-		picked[pick] = true
-		if ipeers.RoutableName(row.Name) {
-			names[sid] = row.Name
-		}
-		if c.entry.Inbox == "" {
-			m.logf("peers: name backfill: %s has no inbox, it is renamed to %s but not told", sid, row.Name)
-			continue
-		}
-		notices = append(notices, renameNotice{sid: sid, inbox: c.entry.Inbox, oldName: c.name, newName: row.Name})
 	}
 	m.sendRenameNotices(notices, selfAlias)
 }
 
-// backfillPick chooses the code for a session of the given seat; held is the held pool names. ok is false when nothing fits.
+// backfillOne names one candidate, under the generation read lock from the look at its name to the write: the collection may
+// have changed since the scan, and a name that is now a persona code is left alone. ok is true when a notice is owed.
+func (m *Module) backfillOne(ctx context.Context, c candidate, picked map[string]bool, names map[string]string) (renameNotice, bool) {
+	sid := c.entry.SessionID
+	held, err := m.heldPoolNames(ctx, picked)
+	if err != nil {
+		m.logf("peers: name backfill: cannot read the held names, %s keeps %s this pass: %v", sid, c.name, err)
+		return renameNotice{}, false
+	}
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
+	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
+		return renameNotice{}, false
+	}
+	if code, ok := ipeers.PoolNameOf(c.name); ok && m.isPersonaCode(code) {
+		return renameNotice{}, false
+	}
+	pick, ok := m.backfillPick(ctx, held, c.name, c.seat)
+	if !ok {
+		return renameNotice{}, false
+	}
+	newName, ok := ipeers.VirtualNameWith(nameBase(c.name, sid), pick)
+	if !ok || newName == c.name {
+		return renameNotice{}, false
+	}
+	row, won, err := m.peerNames.RenamePool(ctx, sid, c.name, newName)
+	switch {
+	case err != nil:
+		m.logf("peers: name backfill: renaming %s from %s failed, it keeps its name this pass: %v", sid, c.name, err)
+		return renameNotice{}, false
+	case !won:
+		m.logf("peers: name backfill: %s changed under the rename of %s, keeping what is stored", sid, c.name)
+		return renameNotice{}, false
+	}
+	picked[pick] = true
+	if ipeers.RoutableName(row.Name) {
+		names[sid] = row.Name
+	}
+	if c.entry.Inbox == "" {
+		m.logf("peers: name backfill: %s has no inbox, it is renamed to %s but not told", sid, row.Name)
+		return renameNotice{}, false
+	}
+	return renameNotice{sid: sid, inbox: c.entry.Inbox, oldName: c.name, newName: row.Name}, true
+}
+
+// backfillPick chooses the code for a session of the given seat; held is the held pool names. ok is false when nothing fits. The
+// caller holds the generation read lock.
 func (m *Module) backfillPick(ctx context.Context, held map[string]bool, name string, seat team.Seat) (string, bool) {
-	in := m.inputFor(ctx, held)
+	in := m.inputForLocked(ctx, held)
 	own, _ := ipeers.PoolNameOf(name)
 	switch seat.Role {
 	case team.SeatLead:
@@ -200,10 +224,20 @@ func (m *Module) sessionInRelay(sessionID string) (bool, error) {
 // sendRenameNotices tells each renamed session from its own goroutine, so the pass never waits for N sends; a failure is only
 // logged (the old address keeps working, a session that missed the notice loses nothing but the news).
 func (m *Module) sendRenameNotices(notices []renameNotice, selfAlias string) {
-	if len(notices) == 0 || m.stopCtx.Err() != nil {
+	if len(notices) == 0 {
 		return
 	}
+	// Admission and Stop's close share a lock, so no worker is added once Stop has started to wait.
+	m.noticeMu.Lock()
+	if m.noticeClosed || m.stopCtx.Err() != nil {
+		m.noticeMu.Unlock()
+		return
+	}
+	if m.beforeNoticeAdmit != nil {
+		m.beforeNoticeAdmit()
+	}
 	m.workers.Add(1)
+	m.noticeMu.Unlock()
 	go func() {
 		defer m.workers.Done()
 		for _, n := range notices {

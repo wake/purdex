@@ -301,6 +301,12 @@ type Module struct {
 	inLeadRename func()
 	// noticeSend sends the rename notice of the backfill; nil is the in-process SendSelfNotice (namebackfill.go). A test seam.
 	noticeSend func(ctx context.Context, req ipeers.SendRequest) error
+	// noticeMu admits the backfill's notice workers and is closed by Stop (namebackfill.go); the other two are test seams: one after the
+	// backfill's scan, one between the admission check and the worker's Add.
+	noticeMu          sync.Mutex
+	noticeClosed      bool
+	afterBackfillScan func()
+	beforeNoticeAdmit func()
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.

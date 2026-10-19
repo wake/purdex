@@ -80,5 +80,11 @@ func (m *Module) pickOther(ctx context.Context, held map[string]bool) (string, b
 func (m *Module) inputFor(ctx context.Context, held map[string]bool) nameRuleInput {
 	m.poolGen.RLock()
 	defer m.poolGen.RUnlock()
+	return m.inputForLocked(ctx, held)
+}
+
+// inputForLocked is inputFor for a caller that already holds the generation read lock (it must not take it again: a writer
+// waiting between the two would deadlock them).
+func (m *Module) inputForLocked(ctx context.Context, held map[string]bool) nameRuleInput {
 	return m.ruleInput(ctx, freePoolNames(held))
 }
