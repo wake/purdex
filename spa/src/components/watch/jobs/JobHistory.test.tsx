@@ -1,8 +1,9 @@
 // spa/src/components/watch/jobs/JobHistory.test.tsx — 歷史: the ended jobs as a table (newest first), filtered by state group, the host a job ran on and its repo; a row can be selected. The filters, the selection and the scroll are the view memory's.
+import { useState } from 'react'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { JobHistory } from './JobHistory'
-import { clearJobsViewMemory, readHistoryFilter, readSelectedJob, readHistoryScroll, writeHistoryFilter, writeHistoryScroll } from '../../../lib/pool/jobs-view-memory'
+import { clearJobsViewMemory, readHistoryFilter, readSelectedJob, readHistoryScroll, writeHistoryFilter, writeHistoryScroll, writeSelectedJob } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
@@ -17,6 +18,11 @@ const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
 })
 const result = (over: Partial<NonNullable<PoolJob['result']>> = {}): NonNullable<PoolJob['result']> => (
   { exit: 0, summary: null, log: '', host: 'mserv', started_at: at(9), finished_at: at(9, 3), cache_hit: false, reason: '', superseded_by: null, ...over })
+/** What the pane does around the table: the selection is the pane's, kept in the view memory. */
+function Harness({ jobs, now }: { jobs: PoolJob[]; now: number }) {
+  const [selected, setSelected] = useState<string | null>(() => readSelectedJob())
+  return <JobHistory jobs={jobs} now={now} selected={selected} onSelect={(k) => { writeSelectedJob(k); setSelected(k) }} />
+}
 const ids = () => screen.getAllByTestId('job-history-row').map((r) => r.getAttribute('data-job-id'))
 
 const JOBS = [
@@ -33,12 +39,12 @@ afterEach(() => { cleanup(); clearJobsViewMemory() })
 
 describe('the table', () => {
   it('the ended jobs, newest first; a job that is still going is not in it', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     expect(ids()).toEqual(['ok', 'bad', 'cx', 'sup', 'late'])
   })
 
   it('a row says the state, the job, the host it ran on, when it ended, how long it took and the result in words', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const bad = screen.getAllByTestId('job-history-row').find((r) => r.getAttribute('data-job-id') === 'bad')!
     expect(bad).toHaveAttribute('data-state', 'failed')
     expect(within(bad).getByTestId('job-history-state')).toHaveTextContent(t('watch.jobs.state.failed'))
@@ -50,7 +56,7 @@ describe('the table', () => {
   })
 
   it('a job that never ran has no host and no duration: 「—」', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const sup = screen.getAllByTestId('job-history-row').find((r) => r.getAttribute('data-job-id') === 'sup')!
     expect(within(sup).getByTestId('job-history-host')).toHaveTextContent('—')
     expect(within(sup).getByTestId('job-history-took')).toHaveTextContent('—')
@@ -58,9 +64,9 @@ describe('the table', () => {
   })
 
   it('says how many there are; with none, that there are none', () => {
-    const { rerender } = render(<JobHistory jobs={JOBS} now={NOW} />)
+    const { rerender } = render(<Harness jobs={JOBS} now={NOW} />)
     expect(screen.getByTestId('job-history-count')).toHaveTextContent(t('watch.jobs.history.count', { n: 5 }))
-    rerender(<JobHistory jobs={[]} now={NOW} />)
+    rerender(<Harness jobs={[]} now={NOW} />)
     expect(screen.getByTestId('job-history-none')).toHaveTextContent(t('watch.jobs.history.none'))
   })
 })
@@ -69,7 +75,7 @@ describe('the filters', () => {
   const pick = (testId: string, name: string) => fireEvent.click(within(screen.getByTestId(testId)).getByRole('button', { name }))
 
   it('the state groups: 失敗 / 成功 / 取消與取代 / 逾時 / 全部', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     pick('job-filter-group', t('watch.jobs.filter.group.failed'))
     expect(ids()).toEqual(['bad'])
     pick('job-filter-group', t('watch.jobs.filter.group.cancelled'))
@@ -84,7 +90,7 @@ describe('the filters', () => {
   })
 
   it('the host is the one the job ran on (jobs that never ran are in 全部 only); the repo is the repo', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const host = screen.getByLabelText(t('watch.jobs.filter.host')) as HTMLSelectElement
     expect(Array.from(host.options).map((o) => o.value)).toEqual(['', 'air26', 'mserv'])
     fireEvent.change(host, { target: { value: 'mserv' } })
@@ -97,7 +103,7 @@ describe('the filters', () => {
   })
 
   it('the three together; nothing matching says so, and the filter can be taken off', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     pick('job-filter-group', t('watch.jobs.filter.group.failed'))
     fireEvent.change(screen.getByLabelText(t('watch.jobs.filter.host')), { target: { value: 'mserv' } })
     expect(screen.queryAllByTestId('job-history-row')).toHaveLength(0)
@@ -107,7 +113,7 @@ describe('the filters', () => {
   })
 
   it('a choice goes to the view memory at once', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     pick('job-filter-group', t('watch.jobs.filter.group.failed'))
     fireEvent.change(screen.getByLabelText(t('watch.jobs.filter.repo')), { target: { value: 'mlab' } })
     expect(readHistoryFilter()).toEqual({ group: 'failed', host: '', repo: 'mlab' })
@@ -115,7 +121,7 @@ describe('the filters', () => {
 
   it('a remembered filter is applied when the table comes back; one whose host has gone from the jobs is still shown as chosen, with an empty table', () => {
     writeHistoryFilter({ group: 'all', host: 'gone-host', repo: '' })
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const host = screen.getByLabelText(t('watch.jobs.filter.host')) as HTMLSelectElement
     expect(host.value).toBe('gone-host')
     expect(screen.queryAllByTestId('job-history-row')).toHaveLength(0)
@@ -126,7 +132,7 @@ describe('the filters', () => {
 
 describe('the selection', () => {
   it('a click selects a row (and goes to the view memory); a click on the selected one lets go; only one is selected', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const row = (id: string) => screen.getAllByTestId('job-history-row').find((r) => r.getAttribute('data-job-id') === id)!
     fireEvent.click(row('bad'))
     expect(row('bad')).toHaveAttribute('aria-pressed', 'true')
@@ -141,24 +147,24 @@ describe('the selection', () => {
 
   it('the same id from two origins are two jobs', () => {
     const twins = [job('same', { origin: 'mlab', result: result() }), job('same', { origin: 'air26', result: result({ finished_at: at(8) }) })]
-    render(<JobHistory jobs={twins} now={NOW} />)
+    render(<Harness jobs={twins} now={NOW} />)
     fireEvent.click(screen.getAllByTestId('job-history-row')[1])
     expect(readSelectedJob()).toBe('air26/same')
     expect(screen.getAllByTestId('job-history-row').map((r) => r.getAttribute('aria-pressed'))).toEqual(['false', 'true'])
   })
 
   it('a remembered selection is shown when the table comes back', () => {
-    const { unmount } = render(<JobHistory jobs={JOBS} now={NOW} />)
+    const { unmount } = render(<Harness jobs={JOBS} now={NOW} />)
     fireEvent.click(screen.getAllByTestId('job-history-row')[2])
     unmount()
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     expect(screen.getAllByTestId('job-history-row')[2]).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
 describe('the keyboard', () => {
   it('a row is a button the keyboard can reach and press (Enter and Space press a button), not only a click target', () => {
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     for (const row of screen.getAllByTestId('job-history-row')) {
       expect(row.tagName).toBe('BUTTON')
       expect(row).not.toBeDisabled()
@@ -170,15 +176,15 @@ describe('the keyboard', () => {
 describe('the scroll', () => {
   it('rows that arrive after the table was shown still get the saved position (the box is only there once there are rows)', () => {
     writeHistoryScroll(90)
-    const view = render(<JobHistory jobs={[]} now={NOW} />)
+    const view = render(<Harness jobs={[]} now={NOW} />)
     expect(screen.queryByTestId('job-history-scroll')).toBeNull()
-    view.rerender(<JobHistory jobs={JOBS} now={NOW} />)
+    view.rerender(<Harness jobs={JOBS} now={NOW} />)
     expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(90)
   })
 
   it('a box that comes back after the filter emptied the table starts where the reader last left it, as the memory says', () => {
     writeHistoryScroll(90)
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     const box = screen.getByTestId('job-history-scroll')
     box.scrollTop = 10
     fireEvent.scroll(box)
@@ -190,13 +196,13 @@ describe('the scroll', () => {
   })
 
   it('the scroll position goes to the view memory and is put back when the table comes back', () => {
-    const first = render(<JobHistory jobs={JOBS} now={NOW} />)
+    const first = render(<Harness jobs={JOBS} now={NOW} />)
     const box = screen.getByTestId('job-history-scroll')
     box.scrollTop = 80
     fireEvent.scroll(box)
     expect(readHistoryScroll()).toBe(80)
     first.unmount()
-    render(<JobHistory jobs={JOBS} now={NOW} />)
+    render(<Harness jobs={JOBS} now={NOW} />)
     expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(80)
   })
 })

@@ -1,5 +1,5 @@
 // spa/src/components/watch/jobs/JobHistory.tsx — 歷史 of the jobs tab (plan "WWD-7 design", Jobs tab): the newest ended jobs of every origin as a table — the state, the job, the host it ran on, when it ended, how long it took, and the result in words — under
-// three filters: the state group (全部／失敗／成功／取消與取代／逾時), the host a job ran on and its repo. A row can be selected (7b1-3 opens its detail).
+// three filters: the state group (全部／失敗／成功／取消與取代／逾時), the host a job ran on and its repo. A row can be selected (the pane opens its detail; the selection is the pane's, with the queue's and the lanes' cards).
 //
 // Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the filters, the selected job and the scroll position live in `lib/pool/jobs-view-memory`, not in component state.
 import { useCallback, useMemo, useState } from 'react'
@@ -8,7 +8,7 @@ import { mss } from '../../../lib/watch/queue-time'
 import { STATE_GROUPS, historyHosts, historyOf, historyRepos, jobRanOn, resultText, resultWord, whenText } from '../../../lib/pool/jobs-view'
 import { jobLine } from '../../../lib/pool/jobs-lanes'
 import {
-  jobKey, readHistoryFilter, readHistoryScroll, readSelectedJob, writeHistoryFilter, writeHistoryScroll, writeSelectedJob, type HistoryFilterChoice,
+  jobKey, readHistoryFilter, readHistoryScroll, writeHistoryFilter, writeHistoryScroll, type HistoryFilterChoice,
 } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 
@@ -25,17 +25,16 @@ function withCurrent(choices: string[], current: string): string[] {
   return current === '' || choices.includes(current) ? choices : [...choices, current]
 }
 
-export function JobHistory({ jobs, now }: { jobs: PoolJob[]; now: number }) {
+export function JobHistory({ jobs, now, selected, onSelect }: { jobs: PoolJob[]; now: number; selected: string | null; onSelect: (key: string | null) => void }) {
   const t = useI18nStore((s) => s.t)
   // The tab outlives this component: the memory is the source, the state only re-renders.
   const [choice, setChoiceState] = useState<HistoryFilterChoice>(() => readHistoryFilter())
-  const [selected, setSelectedState] = useState<string | null>(() => readSelectedJob())
   // The box is only there while there are rows — which may be after the tab was shown (the jobs arrive by polling), or again after a filter emptied the table — so the position the memory holds is put back each time a box appears.
   const boxRef = useCallback((el: HTMLDivElement | null) => {
     if (el) el.scrollTop = readHistoryScroll()
   }, [])
   const setChoice = (next: HistoryFilterChoice) => { writeHistoryFilter(next); setChoiceState(next) }
-  const select = (key: string | null) => { writeSelectedJob(key); setSelectedState(key) }
+  const select = onSelect
 
   const rows = useMemo(() => historyOf(jobs, {
     group: choice.group === 'all' ? undefined : choice.group,

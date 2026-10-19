@@ -3,15 +3,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 
 const release = vi.fn()
-vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => release), jobsDaemons: () => [] }))
+vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => release), jobsDaemons: () => [], liveTopology: () => ({ origins: ['mlab'], ownDaemon: { mlab: 'd-mlab' }, forwarders: ['d-mlab'] }) }))
+vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(() => new Promise(() => {})), fetchJobLog: vi.fn() }))
 vi.mock('../../../lib/pool/use-cell-models', () => ({ useRunPool: vi.fn() }))
 
 import { JobsPane } from './JobsPane'
+import { JobLanes } from './JobLanes'
+import { JobQueue } from './JobQueue'
+import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { useJobsStore } from '../../../lib/pool/jobs-store'
 import { usePoolStore } from '../../../lib/pool/store'
-import { clearJobsViewMemory, readJobsMode } from '../../../lib/pool/jobs-view-memory'
+import { clearJobsViewMemory, readJobsMode, readSelectedJob, writeSelectedJob } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 import type { PoolHost } from '../../../lib/pool/types'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -217,5 +221,68 @@ describe('the pane around the store', () => {
     useJobsStore.setState({ errors: { mserv: { code: 'host_unreachable', action: 'backoff' } } })
     mount()
     expect(screen.getByTestId('jobs-error')).toHaveTextContent(`mserv：${t('pool.error.host_failing')}`)
+  })
+})
+
+describe('the detail beside the list', () => {
+  const finished = (id: string) => job(id, { state: 'failed', result: { exit: 1, summary: null, log: '', host: 'mlab', started_at: NOW - 60_000, finished_at: NOW - 1000, cache_hit: false, reason: '', superseded_by: null } })
+
+  it('a queued card, a running card and a history row each open the job\'s detail; the same press lets go', () => {
+    withJobs(job('q1'), job('r1', { state: 'running', claim: claim('mlab') }), finished('h1'))
+    mount()
+    expect(screen.queryByTestId('job-detail')).toBeNull()
+    fireEvent.click(within(screen.getByTestId('job-queue')).getAllByRole('button')[0])
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('q1')
+    fireEvent.click(within(screen.getByTestId('job-lane-mlab')).getByTestId('job-running'))
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('r1')
+    fireEvent.click(within(screen.getByTestId('job-lane-mlab')).getByTestId('job-running'))
+    expect(screen.queryByTestId('job-detail')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.mode.history') }))
+    fireEvent.click(screen.getByTestId('job-history-row'))
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('h1')
+  })
+
+  it('the same id from two origins is two cards (an id is only unique within the host that queued it): each opens its own job, and no key is duplicated', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    usePoolStore.setState({ hosts: [host('mlab'), host('mserv')] })
+    withJobs(job('same', { origin: 'mlab' }), job('same', { origin: 'mserv', created_at: NOW - 500 }), job('run', { origin: 'mlab', state: 'running', claim: claim('mlab') }), job('run', { origin: 'mserv', state: 'running', claim: claim('mlab') }))
+    mount()
+    const queued = within(screen.getByTestId('job-queue')).getAllByRole('button')
+    expect(queued).toHaveLength(2)
+    fireEvent.click(queued[1])
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mserv')
+    const running = within(screen.getByTestId('job-lane-mlab')).getAllByTestId('job-running')
+    expect(running).toHaveLength(2)
+    fireEvent.click(running[0])
+    expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mlab')
+    expect(errors.mock.calls.flat().join(' ')).not.toContain('same key')
+    errors.mockRestore()
+  })
+
+  it('the close button closes it, and the selection goes with it', () => {
+    withJobs(job('q1'))
+    mount()
+    fireEvent.click(within(screen.getByTestId('job-queue')).getAllByRole('button')[0])
+    fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.detail.close') }))
+    expect(screen.queryByTestId('job-detail')).toBeNull()
+    expect(readSelectedJob()).toBeNull()
+  })
+
+  it('a selected job the store no longer has opens nothing (and is not an error)', () => {
+    withJobs(job('q1'))
+    writeSelectedJob('mlab/gone')
+    mount()
+    expect(screen.queryByTestId('job-detail')).toBeNull()
+    expect(screen.queryByTestId('jobs-error')).toBeNull()
+  })
+})
+
+describe('the cards where nothing can be selected (the host tab)', () => {
+  it('without a selection to make, a queue card and a lane card are shown but are not buttons', () => {
+    const running = job('r1', { state: 'running', claim: claim('mlab') })
+    render(<><JobLanes lanes={laneModels([host('mlab')], [running])} now={NOW} /><JobQueue entries={queueEntries([job('q1')], NOW, [host('mlab')])} now={NOW} /></>)
+    expect(screen.getByTestId('job-queued')).toBeInTheDocument()
+    expect(screen.getByTestId('job-running')).toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 })
