@@ -8,7 +8,7 @@ import (
 )
 
 func minuteRec(at time.Time, load float64) wire.Facts {
-	return wire.Facts{V: wire.Proto, HostID: "h1", Alias: "mlab", At: at, CPU: wire.CPU{Load1: load}}
+	return wire.Facts{V: wire.FactsProto, HostID: "h1", Alias: "mlab", At: at, CPU: wire.CPU{Load1: load}}
 }
 
 func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {

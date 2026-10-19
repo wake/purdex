@@ -20,6 +20,12 @@ var deviceAllowed = map[string]bool{
 	// the resource pool (wwd spec §10), read-only: the hosts with their facts, and a host's facts history
 	"GET /api/pool/hosts":         true,
 	"GET /api/pool/facts/history": true,
+	"GET /api/pool/facts/series":  true, // the same history cut down to what a chart draws (capability pool.series.v1)
+	// the pool's jobs (wwd spec §10), read-only like the hosts: the list, one job, its log. A phone sees the same job fields (task, args,
+	// summary, log) as the Mac App; both are the user's own devices (spec §11).
+	"GET /api/pool/jobs":          true,
+	"GET /api/pool/jobs/{id}":     true,
+	"GET /api/pool/jobs/{id}/log": true,
 	// WebSockets: host events, terminal (and ?mirror=1), conversations
 	"/ws/host-events":                               true,
 	"/ws/terminal/{code}":                           true,
@@ -31,6 +37,7 @@ var deviceAllowed = map[string]bool{
 	"POST /api/sessions/{code}/launch":     true, // ... and the choice (resume / start fresh)
 	"POST /api/sessions/{code}/submit":     true, // typing into Claude Code through the daemon's guard (K-1a-2)
 	"POST /api/sessions/{code}/recall":     true, // take the queued messages back out of Claude Code's input (K-1b)
+	"POST /api/sessions/{code}/send-now":   true, // send Claude Code's queued messages at once (MS2-2)
 	"POST /api/sessions/{code}/read":       true, // read sync (badge spec §7): the phone opened a session; the cursor it read through
 	"GET /api/sessions/{code}/provenance":  true,
 	"GET /api/sessions/{code}/transcript":  true,

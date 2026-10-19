@@ -4,6 +4,8 @@
 export const JOURNAL_CAPABILITY = 'journal.v1'
 /** Hand checks (`PUT /api/journal/confirm`) and the page's `confirms[]` band (JV-1a). */
 export const JOURNAL_CONFIRM_CAPABILITY = 'journal.confirm.v1'
+/** Session pages (`GET /api/journal/sessions`, `?page=`): the journal is read one leader session at a time (JV-1b). */
+export const JOURNAL_SESSIONS_CAPABILITY = 'journal.sessions.v1'
 /** `GET /api/journal/members` (JV-1c; journal-v5 spec §4.3): what the team panel's member rows show on their 2nd and 3rd line. */
 export const JOURNAL_MEMBERS_CAPABILITY = 'journal.members.v1'
 
@@ -49,13 +51,24 @@ export interface JournalPage {
   personName: string
   /** Oldest first (the daemon sorts by (at, id); the store sorts again). */
   entries: JournalEntry[]
-  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none (it predates journal.confirm.v1). */
+  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none, which reads as no open 待確認. */
   confirms: JournalEntry[] | null
-  /** Newest first. The pre-confirm.v1 band: the band's source ONLY when the host does not declare journal.confirm.v1; otherwise ignored. */
-  pinned: JournalEntry[]
   /** There are older months before the oldest entry of this page. */
   more: boolean
   openConfirms: number
+  /** Session pages only: the leader session the entries belong to; '' = the daemon sent none (omitempty). */
+  page: string
+  /** Session pages only: the page held more than the daemon's cap and the newest are kept (omitempty, absent = false). */
+  truncated: boolean
+}
+
+/** One leader session of the unit's chain (`GET /api/journal/sessions`); times are epoch ms, `endedAt` 0 on the current one. */
+export interface SessionLink { sessionId: string; startedAt: number; endedAt: number; via: 'root' | 'relay' | 'clear'; current: boolean }
+export interface JournalSessions {
+  /** Oldest first. */
+  sessions: SessionLink[]
+  /** A predecessor reader is not registered: sessions older than the first listed may be missing. */
+  incomplete: boolean
 }
 
 export interface JournalTask {

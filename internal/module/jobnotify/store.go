@@ -22,9 +22,8 @@ const maxTries = 6
 // keep is how long a notice row is kept after its last change, like the job it is about.
 const keep = 7 * 24 * time.Hour
 
-// overlap is how far behind the catch-up window a catch-up looks again. Looking twice at a job costs nothing (job_id is unique). It
-// covers a job that ended while the previous catch-up was reading, and a finished time stamped by a worker whose clock runs behind
-// this host's; the window is a hint, so a worker more than an hour behind could still be missed (see the PR).
+// overlap is how far behind the legacy window the first catch-up pass still looks. It applies only until that pass has read everything
+// wwd has (see catchUp): from then on the origin's cursor decides what is new, and no time stamp of a worker's does.
 const overlap = time.Hour
 
 // store is the notifier's outbox: one row per job to tell, unique by job id, so "told once" holds across reconnects, restarts and
@@ -62,7 +61,9 @@ func openStore(path string) (*store, error) {
 			updated_at  INTEGER NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS notices_status ON notices(status);
-		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);`); err != nil {
+		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+		CREATE TABLE IF NOT EXISTS cursor (id INTEGER PRIMARY KEY CHECK (id = 1), cursor TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS cursor_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch TEXT NOT NULL);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate job notice db: %w", err)
 	}
@@ -149,21 +150,93 @@ func (s *store) setSince(t time.Time) error {
 	return err
 }
 
-// prune drops the rows that were last changed more than keep ago and are not pending. A row is also kept while the catch-up could
-// still list its job again (its finished time is not before the window less the overlap): after a daemon that was down for longer
-// than keep, the window is old and the rows it covers are the dedup of whatever wwd still lists.
-func (s *store) prune(now time.Time) error {
-	cutoff := now.Add(-keep)
-	since, ok, err := s.since()
+// cursor is wwd's position after the last page of the job list that was fully queued (false when there is none yet). It is opaque: only
+// wwd's own answers are stored, and they are sent back as they came.
+func (s *store) cursor() (string, bool, error) {
+	var c string
+	err := s.db.QueryRow(`SELECT cursor FROM cursor WHERE id = 1`).Scan(&c)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return c, err == nil, err
+}
+
+// epoch is the database epoch the stored cursor belongs to ("" when wwd gave none, as a wwd that predates epochs does).
+func (s *store) epoch() (string, error) {
+	var e string
+	err := s.db.QueryRow(`SELECT epoch FROM cursor_epoch WHERE id = 1`).Scan(&e)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return e, err
+}
+
+// putCursor writes the cursor and, when wwd named one, its epoch; the caller commits.
+func putCursor(tx *sql.Tx, c, epoch string) error {
+	if _, err := tx.Exec(`INSERT INTO cursor(id, cursor) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`, c); err != nil {
+		return err
+	}
+	if epoch == "" {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT INTO cursor_epoch(id, epoch) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET epoch = excluded.epoch`, epoch)
+	return err
+}
+
+// setCursor stores the cursor of a page that was fully queued, with the epoch of the database it came from, in one commit.
+func (s *store) setCursor(c, epoch string) error {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return nil
+	defer tx.Rollback()
+	if err := putCursor(tx, c, epoch); err != nil {
+		return err
 	}
-	if w := since.Add(-overlap); w.Before(cutoff) {
-		cutoff = w
+	return tx.Commit()
+}
+
+// finishFirstPass stores the cursor of the last page and drops the first-pass window in one transaction: a crash between the two would
+// leave a cursor with the window still in force, and the next pass would skip a new job.
+func (s *store) finishFirstPass(c, epoch string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-	_, err = s.db.Exec(`DELETE FROM notices WHERE status != ? AND updated_at < ? AND finished_at < ?`, statusPending, cutoff.UnixMilli(), cutoff.UnixMilli())
+	defer tx.Rollback()
+	if err := putCursor(tx, c, epoch); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM meta WHERE key = 'since'`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// restart forgets the cursor and its epoch and puts the first-pass window back at now, in one commit: wwd's database is another one,
+// so what was read from the old one says nothing, and its history must not be told as news.
+func (s *store) restart(now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM cursor`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM cursor_epoch`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('since', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, now.UnixMilli()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// prune drops the rows that were last changed more than keep ago and are not pending. wwd keeps a job for as long as it keeps its
+// row here, and lists it again only when it changes (a log uploaded after the end), so a row this old is no longer anybody's dedup.
+func (s *store) prune(now time.Time) error {
+	cutoff := now.Add(-keep).UnixMilli()
+	_, err := s.db.Exec(`DELETE FROM notices WHERE status != ? AND updated_at < ? AND finished_at < ?`, statusPending, cutoff, cutoff)
 	return err
 }

@@ -35,7 +35,9 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.reapWG.Add(1)
 	go m.reapLoop()
+	m.startPersonaPool()
 	m.startNamePoolRefresher()
+	m.startAliasRetention()
 	return nil
 }
 
@@ -64,6 +66,9 @@ func (m *Module) reapLoop() {
 // no reply worker can be added) → join the reply workers that were
 // already running. Idempotent.
 func (m *Module) Stop(context.Context) error {
+	if m.personaCancel != nil {
+		m.personaCancel()
+	}
 	m.stopCancel()
 	m.reapWG.Wait()
 	if m.helpers != nil {

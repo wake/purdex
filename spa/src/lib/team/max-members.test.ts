@@ -4,6 +4,7 @@ import { configureMaxMembers, resetMaxMembers, setMaxMembers, teamKey, useMaxMem
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import type { RosterSession, TeamRoster } from './roster'
 import type { MaxMembersView } from './types'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
 
 // The cap stepper's write path: absolute value, one request per team, no optimistic value, failures toast.
 
@@ -21,6 +22,7 @@ let identity: string | null
 
 beforeEach(() => {
   resetMaxMembers()
+  useUnattendedStore.getState().reset()
   useTeamRosterStore.getState().reset()
   useTeamRosterStore.getState().apply(H, [team('t1'), team('t2')])
   calls = []
@@ -135,13 +137,23 @@ describe('setMaxMembers', () => {
   })
 
   it.each([
-    ['below 1', 0], ['above 8', 9], ['not an integer', 2.5], ['NaN', Number.NaN],
+    ['below 1', 0], ['above 8 for a v1 daemon', 9], ['not an integer', 2.5], ['NaN', Number.NaN],
     ['below the members in use', 1],
   ])('a value the daemon would refuse is not sent: %s', (_n, value) => {
     useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 3, in_use: 2 })])
     void setMaxMembers(target, value)
     expect(calls).toHaveLength(0)
     expect(useMaxMembersStore.getState().inflight).toEqual({})
+  })
+
+  it('against a daemon with team.max_members.v2 the cap may go to 9, and not beyond', () => {
+    useUnattendedStore.getState().setMaxMembersV2Support(H, 'yes')
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 8, in_use: 2 })])
+    void setMaxMembers(target, 9)
+    expect(calls.map((c) => c.value)).toEqual([9])
+    calls[0].resolve({ team_id: 't1', max_members: 9, in_use: 2 })
+    void setMaxMembers(target, 10)
+    expect(calls).toHaveLength(1)
   })
 
   it('the edges are sent: the members in use, and 8', () => {

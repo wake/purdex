@@ -141,46 +141,115 @@ func newDarwinEntry(pid, ppid int, sec int64, usec int32) *snapshotEntry {
 // read later than the table, and a PID reused in between would otherwise put
 // one process's argv next to another's PPID and start time.
 func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
-	exePath, argv, err := readCommArgs(pid)
-	// The check runs even when the read failed: a process that exited after
-	// the snapshot also fails the read, and the caller has to be able to tell
-	// "the snapshot's process went away" from "this process is unreadable".
-	kp, kerr := kernProcPid(pid)
-	if kerr != nil || kp == nil {
-		return "", nil, fmt.Errorf("pid %d is gone: %w", pid, ErrProcessChanged)
+	return procArgsDarwin(pid, e, false)
+}
+
+// procArgsCachedPlatform is procArgsPlatform, except that for an argv only ps can read the answer of an earlier call may be returned
+// (ReadCached; process_args_cache_darwin.go).
+func procArgsCachedPlatform(pid int, e *snapshotEntry) (string, []string, error) {
+	return procArgsDarwin(pid, e, true)
+}
+
+func procArgsDarwin(pid int, e *snapshotEntry, useCache bool) (string, []string, error) {
+	exePath, argv, fast := readCommArgsFast(pid)
+	var err error
+	var kp *unix.KinfoProc
+	var kerr error
+	lookedUp := false // kp and kerr are the check below, from a moment after which nothing was read
+	commBefore := ""  // the command name the process had when ps was about to be asked
+	if !fast {
+		// ps is what answers this one (readCommArgsPS). Its answer for the same process is kept for a while (process_args_cache_darwin.go);
+		// the process is looked up first because the key names it, and a hit reads nothing, so that same lookup is the check below.
+		kp, kerr = kernProcPid(pid)
+		if kerr != nil || kp == nil || procIdentityOf(kp) != e.identity {
+			// The check below would say so after two forks that cannot change the answer.
+			return "", nil, procChanged(pid, e, kp, kerr)
+		}
+		if useCache {
+			if exe, av, hit := psArgsGet(psArgsKey{pid, e.identity, kernComm(kp.Proc.P_comm[:])}); hit {
+				exePath, argv, lookedUp = exe, av, true
+			}
+		}
+		if !lookedUp {
+			commBefore = kernComm(kp.Proc.P_comm[:])
+			exePath, argv, err = readCommArgsPS(pid)
+		}
 	}
-	if now := (procIdentity{sec: kp.Proc.P_starttime.Sec, usec: kp.Proc.P_starttime.Usec}); now != e.identity {
-		return "", nil, fmt.Errorf("pid %d now started at %d.%06d, snapshot saw %d.%06d: %w",
-			pid, now.sec, now.usec, e.identity.sec, e.identity.usec, ErrProcessChanged)
+	if !lookedUp {
+		// The check runs even when the read failed: a process that exited after
+		// the snapshot also fails the read, and the caller has to be able to tell
+		// "the snapshot's process went away" from "this process is unreadable".
+		kp, kerr = kernProcPid(pid)
+	}
+	if kerr != nil || kp == nil || procIdentityOf(kp) != e.identity {
+		return "", nil, procChanged(pid, e, kp, kerr)
 	}
 	if err != nil {
 		return "", nil, err
 	}
+	if !fast && !lookedUp {
+		// ps ran in two forks, comm and then args. An exec keeps the pid and the start time, so a process that became another program
+		// between the lookup and now could have given the one answer half of each: it is neither returned nor kept. (A same-name exec is
+		// not seen here; the window is the two forks, and it is not kept longer than the cache's TTL for ReadCached.)
+		commAfter := kernComm(kp.Proc.P_comm[:])
+		if commAfter != commBefore {
+			return "", nil, fmt.Errorf("pid %d changed its command from %q to %q while ps read it: %w", pid, commBefore, commAfter, ErrProcessChanged)
+		}
+		if useCache {
+			psArgsPut(psArgsKey{pid, e.identity, commAfter}, exePath, argv)
+		}
+	}
 	return exePath, argv, nil
 }
 
-// readCommArgs answers what readCommArgsPS would, without forking when that
-// is provably the same answer. ps prints printable ASCII verbatim (measured);
-// every other byte goes through an escaping that is not one rule (TAB becomes
+// procChanged is the error for a pid that is gone or is another process than the snapshot saw. kp is nil when kerr is not.
+func procChanged(pid int, e *snapshotEntry, kp *unix.KinfoProc, kerr error) error {
+	if kerr != nil || kp == nil {
+		return fmt.Errorf("pid %d is gone: %w", pid, ErrProcessChanged)
+	}
+	now := procIdentityOf(kp)
+	return fmt.Errorf("pid %d now started at %d.%06d, snapshot saw %d.%06d: %w",
+		pid, now.sec, now.usec, e.identity.sec, e.identity.usec, ErrProcessChanged)
+}
+
+func procIdentityOf(kp *unix.KinfoProc) procIdentity {
+	return procIdentity{sec: kp.Proc.P_starttime.Sec, usec: kp.Proc.P_starttime.Usec}
+}
+
+// readCommArgsFast answers what readCommArgsPS would, without forking, when that is provably the same answer. ps prints printable ASCII
+// verbatim (measured); every other byte goes through an escaping that is not one rule (TAB becomes
 // \011, DEL ^?, 0x80 M^@, some invisible Unicode is rewritten, CJK and emoji
 // are not), so it is not re-implemented here: any such argv, any argument
 // area the kernel refuses (another user's process, a zombie) and any buffer
-// the parser rejects go to ps itself.
+// the parser rejects are not answered (ok is false) and go to ps itself.
+func readCommArgsFast(pid int) (exePath string, argv []string, ok bool) {
+	buf, err := kernProcArgs2(pid)
+	if err != nil {
+		return "", nil, false
+	}
+	args, parsed := parseProcArgs(buf)
+	if !parsed || !printableASCII(args) {
+		return "", nil, false
+	}
+	// ps's comm is argv[0] and its args are the strings joined by a
+	// space; the same normalisation then turns them into fields.
+	exePath, err = exePathFromComm(pid, args[0])
+	if err != nil {
+		return "", nil, false
+	}
+	argv, err = argvFromArgs(pid, strings.Join(args, " "))
+	if err != nil {
+		// An argv the normalisation refuses is rare enough that ps gets
+		// the last word on it, errors included.
+		return "", nil, false
+	}
+	return exePath, argv, true
+}
+
+// readCommArgs is readCommArgsFast, with ps for what it does not answer.
 func readCommArgs(pid int) (string, []string, error) {
-	if buf, err := kernProcArgs2(pid); err == nil {
-		if args, ok := parseProcArgs(buf); ok && printableASCII(args) {
-			// ps's comm is argv[0] and its args are the strings joined by a
-			// space; the same normalisation then turns them into fields.
-			exePath, err := exePathFromComm(pid, args[0])
-			if err == nil {
-				argv, err := argvFromArgs(pid, strings.Join(args, " "))
-				if err == nil {
-					return exePath, argv, nil
-				}
-			}
-			// An argv the normalisation refuses is rare enough that ps gets
-			// the last word on it, errors included.
-		}
+	if exePath, argv, ok := readCommArgsFast(pid); ok {
+		return exePath, argv, nil
 	}
 	return readCommArgsPS(pid)
 }

@@ -19,10 +19,10 @@ const psLstartLayout = "Mon Jan _2 15:04:05 2006"
 var runPS = defaultRunPS
 
 // defaultRunPS forks ps and records the fork in execstat.PS (count and wall
-// time, success or failure; never the arguments or output).
+// time, success or failure; never the arguments or output) and under a tag that says what it asked and who asked (psTag, #3316).
 func defaultRunPS(ctx context.Context, args ...string) ([]byte, error) {
 	t0 := time.Now()
-	out, err := execstat.CommandContext(ctx, "agent.ps", "ps", args...).Output()
+	out, err := execstat.CommandContext(ctx, psTag(args), "ps", args...).Output()
 	execstat.PS.Observe(time.Since(t0))
 	return out, err
 }

@@ -398,3 +398,32 @@ func TestSampler_KeepsThePageCounters(t *testing.T) {
 		t.Errorf("counters = %v, free = %d; want unknown counters and the memory figures intact", raw.PageCounters, raw.Free)
 	}
 }
+
+// SampleProcs is the process table alone: one ps, and not one sysctl or vm_stat.
+func TestSampler_SampleProcsForksOnlyPS(t *testing.T) {
+	f := &fakeHost{psOut: "  100     1  50.0  1000 launchd\n  101   100  25.5  2000 Chrome\n  oops\n"}
+	f.install(t)
+	sysctlRaw = func(string) ([]byte, error) { t.Error("sysctl read"); return nil, errors.New("no") }
+	sysctlU32 = func(string) (uint32, error) { t.Error("sysctl read"); return 0, errors.New("no") }
+	sysctlU64 = func(string) (uint64, error) { t.Error("sysctl read"); return 0, errors.New("no") }
+	s := &sysSampler{}
+	var _ ProcSampler = s
+	procs, err := s.SampleProcs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(procs) != 2 || procs[1].Comm != "Chrome" {
+		t.Fatalf("procs = %+v", procs)
+	}
+	if len(f.cmds) != 1 || f.cmds[0].name != "ps" {
+		t.Fatalf("commands = %+v, want one ps", f.cmds)
+	}
+	if s.PSLinesSkipped() != 1 {
+		t.Errorf("skipped = %d, want 1", s.PSLinesSkipped())
+	}
+
+	f.psErr = errors.New("boom")
+	if _, err := s.SampleProcs(context.Background()); err == nil {
+		t.Error("a failed ps must be an error")
+	}
+}

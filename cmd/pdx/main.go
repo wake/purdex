@@ -34,6 +34,7 @@ import (
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	jobnotifymod "github.com/wake/purdex/internal/module/jobnotify"
+	jobsmod "github.com/wake/purdex/internal/module/jobs"
 	"github.com/wake/purdex/internal/module/logs"
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/monitor"
@@ -48,6 +49,7 @@ import (
 	teammod "github.com/wake/purdex/internal/module/team"
 	watchmod "github.com/wake/purdex/internal/module/watch"
 	workbookmod "github.com/wake/purdex/internal/module/workbook"
+	wwdalertsmod "github.com/wake/purdex/internal/module/wwdalerts"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 	"github.com/wake/purdex/internal/tmuxenv"
@@ -470,6 +472,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// instead of two ref characters (name pool spec); deploy every host
 		// together, uniqueness across hosts holds only when all run it.
 		peersMod.WithNamePool(peersmod.RandomNamePicker())
+		// The picking rules read who has been a lead and who worked with whom (name pool v2 spec §6.2).
+		peersMod.WithNameHistory(meta.NameHistory())
+		// ...and the codes the other hosts publish in their envelopes (names.familiar): the module's own snapshot of them.
+		peersMod.WithFamiliarSource(peersMod)
 	}
 	c.AddModule(peersMod)
 	// resources samples the host on its own ticker; it reads the session
@@ -478,9 +484,11 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(watchmod.New())
 	c.AddModule(gatemod.New()) // the gate's decision history (A1)
 	c.AddModule(poolmod.New()) // the resource pool, read from the local wwd (WWD-2a)
+	c.AddModule(jobsmod.New()) // the pool's jobs, read from the local wwd (WWD-2e)
 	c.AddModule(assistmod.New())
 	c.AddModule(jobnotifymod.New()) // tells a job's submitter when it ends (WWD-3f)
 	c.AddModule(fleetmod.New())     // the fleet status: primary / standby roles (F-1b2)
+	c.AddModule(wwdalertsmod.New()) // delivers the wwd host alerts: the fleet primary pushes them through the push module (WWD-8a-1c)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation

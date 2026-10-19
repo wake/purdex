@@ -38,7 +38,7 @@ func ptr[T any](v T) *T { return &v }
 
 func factsOf(alias string, at time.Time, cpuIdle float64, pressure int, zone wire.Zone) *wire.Facts {
 	return &wire.Facts{
-		V: wire.Proto, HostID: alias + "-id", Alias: alias, At: at, Platform: "darwin",
+		V: wire.FactsProto, HostID: alias + "-id", Alias: alias, At: at, Platform: "darwin",
 		CPU:     wire.CPU{NCPU: 10, Load1: 2, IdlePct: cpuIdle},
 		Mem:     wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: pressure, PageOutRate: ptr(3.0)},
 		Disk:    []wire.Disk{{Mount: "/", FreeGB: 120, UsedPct: 40}},

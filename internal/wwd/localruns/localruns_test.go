@@ -720,3 +720,37 @@ func TestARegistrationThatGetsTheIdOfARunBeingAbandonedIsRefusedAndNothingIsRele
 		t.Fatalf("holds left: %v", s.Held())
 	}
 }
+
+// Ready is false until Recover has accounted for every running job, and again while a repeat of it is going on: whoever else takes
+// keys from the same table (the worker) waits for it.
+func TestReadyIsTrueOnlyOnceTheKeysOfTheRunningJobsAreBack(t *testing.T) {
+	q := &fakeQueue{running: []wire.Job{
+		{ID: "j_a", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+		{ID: "j_b", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}},
+	}}
+	tb := locks.New()
+	s := New(tb, q, "mlab")
+	s.Logf = func(string, ...any) {}
+	if s.Ready() {
+		t.Fatal("ready before any Recover")
+	}
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("two running jobs share a key")
+	}
+	if s.Ready() {
+		t.Fatal("ready with a job unaccounted for")
+	}
+	q.mu.Lock()
+	q.running = q.running[1:]
+	q.mu.Unlock()
+	s.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: "j_a", Local: true, State: wire.StateFailed}})
+	if err := s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Ready() {
+		t.Fatal("not ready after a complete Recover")
+	}
+	if _, ok := tb.Holder("tmux"); !ok {
+		t.Fatal("the running job's key is back")
+	}
+}

@@ -77,3 +77,33 @@ sends the queue; it does not take it back.
 - **iOS**: the stage marks from the events; hold to send now (D5); double-tap twice to take back (D6).
 - **Mac**: the same marks; Ctrl+Enter / Ctrl+X Ctrl+S and Up-on-the-first-line in the Deck input (D8).
 - Who: daemon by 53-pe (B line, `internal/module/conversation` past 1f), Mac by a subagent, iOS by the iOS member.
+
+### 4.1 MS2-0 measurements (2026-10-19)
+
+Claude Code 2.1.302 (`claude --model haiku`), tmux 3.6a, an isolated `tmux -L ms2` server. Transcript rows are the
+`queue-operation` / `user` / `attachment` rows of the session's `.jsonl`. Without send now, a queued message is read at the next
+tool boundary of the running turn (`queue-operation remove` + `attachment queued_command`) or, during plain text generation,
+when the turn ends.
+
+| # | Situation | Bytes sent | Rows added to the transcript | Behaviour | Conclusion |
+|---|---|---|---|---|---|
+| 0 | Baseline: two queued during a busy turn, no keys | none | `enqueue` x2, then after the next `tool_result`: `remove` x2 + two `attachment queued_command` | read at the next tool boundary, same turn | the ordinary shape |
+| 1 | Two queued during text generation, send now | `18 13` | `enqueue` x2, `dequeue` x2 (no text), two `user` rows | the generation is **interrupted** (the half answer is cut; the model says the earlier text broke off); both messages are read in one new request; the screen hint "ctrl+x ctrl+s to send now" goes away with the queue | works; the shape is `dequeue` + `user` |
+| 1b | Same, but a short tool finishes first | `18 13` | the baseline shape (`remove` + `queued_command`) | no visible difference: the tool boundary came first | send now differs only for long generations / tools |
+| 2 | Draft in Claude Code's input + two queued | `18 13` | `enqueue` A, B, **`enqueue` draft**, `dequeue` x3, three `user` rows | the **draft is sent too** (queued, then flushed with the rest) | the daemon must refuse on a non-empty input (D7) |
+| 3 | Permission dialog open + two queued | `18 13` | none | swallowed by the dialog: the dialog stays, the command does not run, the queue is untouched; on Esc the queue flushes (`dequeue` x2, interrupted-for-tool-use marker, two `user` rows) | harmless but sends nothing; refuse as `waiting` |
+| 4 | Empty queue, idle, empty input | `18 13` | none | no change | no-op |
+| 4b | Empty queue, busy | `18 13` | none | the turn is not interrupted | no-op |
+| 5 | Ctrl+Enter as CSI-u, two queued | `1b 5b 31 33 3b 35 75` | same as 1 | tmux delivers the bytes unchanged; same effect as 1 | usable fallback |
+| 6 | Lone Ctrl+S | `13` | none | not eaten as XOFF (the tty is `-ixon` while Claude Code runs; `ixon` with stop `^S` only at the shell prompt); the screen keeps updating; nothing happens | no XOFF risk; both bytes must travel in one `send-keys` |
+
+**Chosen bytes for send now: `\x18\x13` (Ctrl+X Ctrl+S)**, Claude Code's default `chat:sendNow` binding, which its own screen hints.
+Fallback: `\x1b[13;5u`.
+
+**Mod runtime (rev 2 question).** The type declarations of 2.1.302 offer no way to trigger send now from a mod: `$.command.run` runs
+slash commands only, `chat:sendNow` is only a keybinding action name, a UI Button's `action` is a chord the person presses, and
+`$.prompt.submit` waits for the session to be idle. D7 therefore uses the plan's fallback: read Claude Code's input under the pane
+and session locks, then send the keys with nothing in between.
+
+**Matching shapes.** Both must be recognised: an ordinary queue read (`remove` + `attachment queued_command`) and a send now
+(`dequeue` + real `user` rows).

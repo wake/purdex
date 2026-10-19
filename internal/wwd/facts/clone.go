@@ -29,9 +29,15 @@ func Clone(f wire.Facts) wire.Facts {
 		st.GateWaitingMax = clonePtr(st.GateWaitingMax)
 		out.Stats = &st
 	}
+	out.Queue = clonePtr(f.Queue)
 	out.Exception = make([]wire.FactExc, len(f.Exception))
 	for i, e := range f.Exception {
 		e.Until = clonePtr(e.Until)
+		if e.Allow != nil {
+			a := wire.HoldAllow{Classes: cloneSlice(e.Allow.Classes), Repos: cloneSlice(e.Allow.Repos)}
+			e.Allow = &a
+		}
+		e.Flags = cloneSlice(e.Flags)
 		out.Exception[i] = e
 	}
 	if f.Exception == nil {
@@ -44,6 +50,7 @@ func cloneMem(m wire.Mem) wire.Mem {
 	m.PageOutRate, m.SwapOutRate = clonePtr(m.PageOutRate), clonePtr(m.SwapOutRate)
 	m.SwapUsedMB, m.CompressorMB = clonePtr(m.SwapUsedMB), clonePtr(m.CompressorMB)
 	m.PSI = clonePtr(m.PSI)
+	m.DecompressRate = clonePtr(m.DecompressRate)
 	return m
 }
 

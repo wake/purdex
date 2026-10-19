@@ -8,16 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/jobdb"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -33,6 +37,10 @@ type Config struct {
 	Worker      WorkerConfig `toml:"worker"`
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
+	Observe     ObserveRule  `toml:"observe"`
+	JobDB       JobDBConfig  `toml:"jobdb"`
+	Tools       ToolsConfig  `toml:"tools"`
+	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
@@ -45,6 +53,13 @@ type WorkerConfig struct {
 	Enabled bool `toml:"enabled"`
 	Heavy   *int `toml:"heavy"`
 	Light   *int `toml:"light"`
+	// BackgroundDev runs dev jobs under macOS background QoS (mlab; spec §5 Platform limits).
+	BackgroundDev bool `toml:"background_dev"`
+	// SpeedFactor is this host's speed against the reference host for size_penalty (spec §4.6); 0 means none.
+	SpeedFactor float64 `toml:"speed_factor"`
+	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
+	// sandbox, the command runs as a process group of the daemon's own account.
+	SandboxUser string `toml:"sandbox_user"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -59,10 +74,49 @@ func (w WorkerConfig) Slots() wire.Slots {
 	return s
 }
 
+// ToolsConfig is where this host keeps tools that are not on the default search path. ExtraPath holds absolute or ~/ directories; they
+// go in front of the default tool directories, for the facts' tool probe and for a job's PATH alike. A directory that does not exist
+// is skipped and logged when wwd starts (facts.ResolveExtraDirs), so one config can serve hosts that differ.
+type ToolsConfig struct {
+	ExtraPath []string `toml:"extra_path"`
+}
+
+func (c *Config) validateTools() error {
+	for i, p := range c.Tools.ExtraPath {
+		if p == "" || strings.ContainsRune(p, os.PathListSeparator) {
+			return fmt.Errorf("tools.extra_path: %q is not a single directory", p)
+		}
+		if p != "~" && !strings.HasPrefix(p, "~/") {
+			if !filepath.IsAbs(p) {
+				return fmt.Errorf("tools.extra_path: %q is not absolute (or ~/...)", p)
+			}
+			c.Tools.ExtraPath[i] = filepath.Clean(p)
+		}
+	}
+	return nil
+}
+
+// JobDBConfig is the per-job MySQL database (internal/wwd/jobdb). Off unless Enabled; a host without it rejects a task that asks
+// for db "per-job". DefaultsFile is the administrator's mysql [client] file (the wwd_admin account, 600).
+type JobDBConfig struct {
+	Enabled      bool     `toml:"enabled"`
+	Host         string   `toml:"host"`
+	Port         int      `toml:"port"`
+	UserHosts    []string `toml:"user_hosts"`
+	DefaultsFile string   `toml:"defaults_file"`
+}
+
 // OwnerRule turns the "owner is active" rule on (air26 only).
 type OwnerRule struct {
 	Enabled     bool `toml:"enabled"`
 	IdleMinutes int  `toml:"idle_minutes"`
+}
+
+// ObserveRule is when a process tree that belongs to no job is recorded (spec §8.4): CPU seconds of the whole tree, or memory at
+// its peak. 0 (unset) takes the default (60 s, 1024 MB).
+type ObserveRule struct {
+	MinCPUSeconds float64 `toml:"min_cpu_seconds"`
+	MinMemMB      int     `toml:"min_mem_mb"`
 }
 
 // PeerConfig is another wwd of the pool: its alias and tailnet address
@@ -80,6 +134,8 @@ func (p PeerConfig) HostPort() string {
 	return net.JoinHostPort(p.Addr, strconv.Itoa(wire.Port))
 }
 
+var reSandboxUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
 func (c Config) validateWorker() error {
 	if c.Worker.Heavy != nil && *c.Worker.Heavy < 0 {
 		return fmt.Errorf("worker.heavy is %d, slots cannot be negative", *c.Worker.Heavy)
@@ -87,8 +143,64 @@ func (c Config) validateWorker() error {
 	if c.Worker.Light != nil && *c.Worker.Light < 0 {
 		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
 	}
+	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)
+	}
+	if u := c.Worker.SandboxUser; u != "" {
+		if runtime.GOOS != "linux" {
+			return fmt.Errorf("worker.sandbox_user is for Linux hosts (systemd units); this host is %s", runtime.GOOS)
+		}
+		if !reSandboxUser.MatchString(u) || u == "root" {
+			return fmt.Errorf("worker.sandbox_user %q is not a plain non-root account name", u)
+		}
+	}
 	if m := c.Owner.IdleMinutes; m < 0 || m > 9999 {
 		return fmt.Errorf("owner.idle_minutes is %d, it must be 0 (the default) or 1-9999", m)
+	}
+	if v := c.Observe.MinCPUSeconds; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("observe.min_cpu_seconds is %g, it must be 0 (the default) or a finite number above it", v)
+	}
+	if err := c.Fault.Validate(); err != nil {
+		return err
+	}
+	if c.Observe.MinMemMB < 0 {
+		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)
+	}
+	return nil
+}
+
+// validateJobDB checks the per-job database settings when they are on, and expands ~/ in the defaults file. The administrator's
+// credentials are never a default: without a defaults file the mysql client would take whatever account it finds.
+func (c *Config) validateJobDB(home string) error {
+	j := &c.JobDB
+	if !j.Enabled {
+		return nil
+	}
+	if j.Port < 0 || j.Port > 65535 {
+		return fmt.Errorf("jobdb.port is %d", j.Port)
+	}
+	if j.DefaultsFile == "" {
+		return fmt.Errorf("jobdb.defaults_file is empty; name the wwd_admin client file")
+	}
+	if j.DefaultsFile == "~" || strings.HasPrefix(j.DefaultsFile, "~/") {
+		j.DefaultsFile = filepath.Join(home, strings.TrimPrefix(j.DefaultsFile, "~"))
+	}
+	if !filepath.IsAbs(j.DefaultsFile) {
+		return fmt.Errorf("jobdb.defaults_file %q is not an absolute path", j.DefaultsFile)
+	}
+	// it holds the administrator's password: it must be there, be a plain file and be closed to group and others
+	fi, err := os.Stat(j.DefaultsFile)
+	if err != nil {
+		return fmt.Errorf("jobdb.defaults_file: %w", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("jobdb.defaults_file %s must be a regular file with mode 600 (it is %v)", j.DefaultsFile, fi.Mode())
+	}
+	// the same rule jobdb.New applies, so a bad host stops the start instead of the first job
+	for _, h := range j.UserHosts {
+		if !jobdb.ValidUserHost(h) {
+			return fmt.Errorf("jobdb.user_hosts: %q is not a plain host name or address", h)
+		}
 	}
 	return nil
 }
@@ -165,6 +277,12 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateRepos(home); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateJobDB(home); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateTools(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {

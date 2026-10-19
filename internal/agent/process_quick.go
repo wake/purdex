@@ -34,6 +34,16 @@ func ProcessPPID(pid int) (int, error) {
 	return ppid, nil
 }
 
+// ProcessPPIDArgs is pid's parent and the fields of `ps -p <pid> -o ppid= -o args=` (the args split on white space, as the ps
+// reader does), read by sysctl where that gives the same fields. Any error, including "no such read on this platform" and an
+// argument area that ps would print differently, means the caller should ask ps; it is never a statement that the pid is gone.
+func ProcessPPIDArgs(pid int) (ppid int, argv []string, err error) {
+	if pid <= 0 {
+		return 0, nil, fmt.Errorf("invalid pid %d", pid)
+	}
+	return quickPPIDArgs(pid)
+}
+
 // ProcessStartText is the text `ps -p <pid> -o lstart=` prints, trimmed: what store.Frame.ProcessStartTime holds. Where the
 // kernel's p_starttime formats to exactly that text in this process's locale and zone (startTextFast) it is read by sysctl,
 // with no fork; otherwise ps is asked, counted in execstat.PS. A pid that is gone is an error.

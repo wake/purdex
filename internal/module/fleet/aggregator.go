@@ -182,6 +182,10 @@ type Measure struct {
 	poolMode   bool            // the fleet row says source = "pool"
 	inPool     map[string]bool // the hosts (by row key) the pool lists, as of the last good answer
 	lastPoolOK time.Time
+	// localOn says the LocalSource's 1 s tick is running, localSince when it was started; both touched only by the goroutine that
+	// runs the tick (and by activate/deactivate, which wait for it).
+	localOn    bool
+	localSince time.Time
 }
 
 type liveSession struct {
@@ -267,8 +271,11 @@ func (m *Measure) activateLocked() {
 	m.mu.Lock()
 	m.resetLocked()
 	m.mu.Unlock()
-	m.d.Local.Start()
+	m.localOn = false
 	m.reconcile(ctx, true)
+	if !m.poolMode {
+		m.startLocal() // as it always was; in pool mode the first tick decides, once it knows whether the pool serves this host
+	}
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -299,7 +306,7 @@ func (m *Measure) deactivateLocked() {
 		go func(s *session) { defer sw.Done(); s.stop() }(ls.s)
 	}
 	sw.Wait()
-	m.d.Local.Stop()
+	m.stopLocal()
 	m.active = false
 	m.mu.Lock()
 	m.resetLocked()
@@ -547,7 +554,8 @@ func (m *Measure) readLocal(now time.Time) {
 	if h == nil {
 		return
 	}
-	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) {
+	// A reading the source kept from before it was (re)started is not this host's now: the pool had it for the time between.
+	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) && !f.At.Before(m.localSince) {
 		h.ownAt, h.ownSeen = f.At, now
 		h.os = localOS()
 		pct, free, dok := m.disk()
@@ -559,7 +567,7 @@ func (m *Measure) readLocal(now time.Time) {
 		h.status, h.code, h.lastOK = leaf.StatusOK, leaf.CodeNone, now
 		m.noteReadingLocked(now)
 	}
-	if s, ok := m.d.Local.Slow(); ok && s.At.After(h.ownSlow) {
+	if s, ok := m.d.Local.Slow(); ok && s.At.After(h.ownSlow) && !s.At.Before(m.localSince) {
 		h.ownSlow = s.At
 		m.applySlowLocked(h, s.TopCPU, s.TopMem, s.Gate, true, now) // the local gate status always carries its Admission
 	}
@@ -591,8 +599,29 @@ func (m *Measure) tick(ctx context.Context) {
 		m.readPool(ctx, m.clock.Now())
 		m.syncSessions(ctx)
 	}
-	if !m.poolMode || !m.inPool["self"] {
+	if m.poolMode && m.inPool["self"] {
+		m.stopLocal() // wwd reads this host: the FastReader's sysctls are not run for a figure nobody takes (C1)
+	} else {
+		m.startLocal()
 		m.readLocal(m.clock.Now())
 	}
 	m.push()
+}
+
+// startLocal starts the LocalSource's tick unless it is running.
+func (m *Measure) startLocal() {
+	if m.localOn {
+		return
+	}
+	m.localOn, m.localSince = true, m.clock.Now()
+	m.d.Local.Start()
+}
+
+// stopLocal stops it unless it is not running.
+func (m *Measure) stopLocal() {
+	if !m.localOn {
+		return
+	}
+	m.localOn = false
+	m.d.Local.Stop()
 }

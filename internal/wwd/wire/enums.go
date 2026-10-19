@@ -54,6 +54,31 @@ func (c JobClass) Valid() bool {
 	return false
 }
 
+// Position is a queued job's manual place (spec §4.6, "Manual order"). On a job the empty string is no manual place (the worker's score
+// decides); the four names are what a request may ask for, and "normal" in a request clears the place.
+type Position string
+
+const (
+	PositionNormal Position = "normal" // request only: no manual place
+	PositionFront  Position = "front"  // before every scored job, the latest asked first
+	PositionBack   Position = "back"   // behind every scored job, the latest asked last
+	PositionHold   Position = "hold"   // not handed to any worker until let go
+)
+
+// ValidRequest says p is a position a request may ask for.
+func (p Position) ValidRequest() bool {
+	switch p {
+	case PositionNormal, PositionFront, PositionBack, PositionHold:
+		return true
+	}
+	return false
+}
+
+// ValidOnJob says p is a position a job may carry: none, front, back or hold.
+func (p Position) ValidOnJob() bool {
+	return p == "" || (p != PositionNormal && p.ValidRequest())
+}
+
 // JobState is a job's state (spec §4.2).
 type JobState string
 
@@ -114,11 +139,12 @@ const (
 	EventLabels    EventType = "labels"
 	EventException EventType = "exception"
 	EventWorker    EventType = "worker"
+	EventAlert     EventType = "alert" // a hint that a host's alert list changed (spec §13.3); proto 2
 )
 
 func (t EventType) Valid() bool {
 	switch t {
-	case EventFacts, EventJob, EventLabels, EventException, EventWorker:
+	case EventFacts, EventJob, EventLabels, EventException, EventWorker, EventAlert:
 		return true
 	}
 	return false

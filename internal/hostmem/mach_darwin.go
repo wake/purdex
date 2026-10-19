@@ -31,6 +31,9 @@ const (
 // purgeable_count u32 @88, speculative_count u32 @92.
 const vmOffSpeculative = 92
 
+// decompressions u64 @96 (after speculative_count at 92, which pads to 96): the compressor's pages brought back since boot.
+const vmOffDecompressions = 96
+
 // Mach is the loaded Mach entry points. One value is safe for one goroutine at a time.
 type Mach struct {
 	hostSelf   func() uint32
@@ -100,6 +103,7 @@ func (m *Mach) CPUTicks() (busy, total uint64, err error) {
 type VMCounters struct {
 	Free, Inactive, Speculative uint64 // pages
 	Pageouts                    uint64 // pages written out since boot
+	Decompressions              uint64 // compressed pages brought back since boot (vm_stat's "Decompressions")
 }
 
 // VM reads the page counts and the pageout counter.
@@ -108,11 +112,11 @@ func (m *Mach) VM() (VMCounters, error) {
 	if kr := m.vmStats(m.host, hostVMInfo64, &m.vmStatsBuf[0], &count); kr != 0 {
 		return VMCounters{}, fmt.Errorf("host_statistics64: kern_return %d", kr)
 	}
-	if count*4 < vmOffSpeculative+4 {
+	if count*4 < vmOffDecompressions+8 {
 		return VMCounters{}, fmt.Errorf("host_statistics64: %d words", count)
 	}
 	b := unsafe.Slice((*byte)(unsafe.Pointer(&m.vmStatsBuf[0])), vmStatsWords*4)
 	u32 := func(off int) uint64 { return uint64(*(*uint32)(unsafe.Pointer(&b[off]))) }
 	u64 := func(off int) uint64 { return *(*uint64)(unsafe.Pointer(&b[off])) }
-	return VMCounters{Free: u32(vmOffFree), Inactive: u32(vmOffInactive), Speculative: u32(vmOffSpeculative), Pageouts: u64(vmOffPageouts)}, nil
+	return VMCounters{Free: u32(vmOffFree), Inactive: u32(vmOffInactive), Speculative: u32(vmOffSpeculative), Pageouts: u64(vmOffPageouts), Decompressions: u64(vmOffDecompressions)}, nil
 }

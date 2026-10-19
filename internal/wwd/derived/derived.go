@@ -81,31 +81,15 @@ type Input struct {
 	Exceptions    []Hold
 	AvailableMB   int
 	CompressorMB  int // memory held by the compressor (0 where there is none)
+	// GateHeavyFull: the pdx gate on this host has all its heavy slots held (or cannot be read). Until WWD-6 a queue job is outside the
+	// gate's slots, so a full gate stops new heavy work here; the job already running is not touched (#3447).
+	GateHeavyFull bool
 }
 
 // Compute is the derived block of a facts record. l keeps the zone between
-// calls (one latch per host).
+// calls (one latch per host). Headroom is decided by the reasons of reasons.go.
 func Compute(l *ZoneLatch, in Input) wire.Derived {
-	zone := l.Update(in.Pressure, in.PageRate, in.RateLimit, in.PressureKnown)
-	holdHeavy, holdLight := false, false
-	for _, e := range in.Exceptions {
-		holdHeavy = true
-		holdLight = holdLight || e.Light
-	}
-	d := wire.Derived{Zone: zone}
-	if zone == wire.ZoneNormal && !holdHeavy && !in.OwnerActive {
-		d.Headroom.Heavy = free(in.Slots.Heavy, in.Running.Heavy)
-	}
-	if zone != wire.ZoneDanger && !holdLight && !in.OwnerActive {
-		d.Headroom.Light = free(in.Slots.Light, in.Running.Light)
-	}
-	if zone == wire.ZoneNormal {
-		// Initial formula (spec §16, tuned by observation): available memory, less the
-		// reserve and a quarter of what the compressor already holds (squeezed
-		// memory comes back as pressure when sessions grow), over 512 MB a session.
-		usable := in.AvailableMB - sessionReserveMB - in.CompressorMB/4
-		d.SessionsRoom = min(max(usable/sessionMB, 0), sessionsCap)
-	}
+	d, _ := ComputeWithReasons(l, in)
 	return d
 }
 

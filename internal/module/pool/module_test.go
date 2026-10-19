@@ -116,6 +116,69 @@ func TestHosts_MapsThePoolToTheAppShape(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"labels":[]`, "labels are [] not null")
 }
 
+// A host with facts is judged in Go, once: the codes that say why its headroom is 0, and its composite load with the reading that
+// drives it. A host without facts has neither (null).
+func TestHosts_ReasonsAndLoad(t *testing.T) {
+	info, err := wire.Decode[wire.Info](fixture(t, "info.json"))
+	require.NoError(t, err)
+	f, err := wire.Decode[wire.Facts](fixture(t, "facts_darwin.json"))
+	require.NoError(t, err)
+	f.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, Running: wire.Slots{Heavy: 2}}
+	f.Derived = wire.Derived{Zone: wire.ZoneWarning, Headroom: wire.Slots{Light: 3}}
+	f.Exception = []wire.FactExc{}
+	f.Owner = nil
+	f.CPU = wire.CPU{NCPU: 10, IdlePct: 20}
+	f.Mem = wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: 1}
+	f.Disk = []wire.Disk{{Mount: "/", UsedPct: 40}, {Mount: "/data", UsedPct: 91}}
+	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
+	body, err := json.Marshal(wire.Pool{Peers: []wire.Peer{{Info: info, Facts: &f, Reachable: true}, {Info: air19, Reachable: false}}})
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/hosts")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	got, err := wire.Decode[wire.PoolHostsResponse](rr.Body.Bytes())
+	require.NoError(t, err)
+	mlab, air := got.Hosts[0], got.Hosts[1]
+	require.NotNil(t, mlab.HeadroomReasons)
+	assert.Equal(t, []string{"zone_warning", "slots_full"}, mlab.HeadroomReasons.Heavy)
+	assert.Equal(t, []string{}, mlab.HeadroomReasons.Light)
+	require.NotNil(t, mlab.Load)
+	assert.InDelta(t, 91, mlab.Load.Score, 0.01, "the fullest disk, over 85, is the largest of: cpu 80, mem 75, level 30")
+	assert.Equal(t, wire.LoadDriverDisk, mlab.Load.Driver)
+	assert.Nil(t, air.HeadroomReasons)
+	assert.Nil(t, air.Load)
+	assert.Contains(t, rr.Body.String(), `"headroom_reasons":null`)
+}
+
+// How the load reads a record: cpu from idle (not at all where no cpu count was read), memory from total and available, paging from
+// page-out plus swap-out, the disk from the fullest mount.
+func TestLoadOf(t *testing.T) {
+	f64 := func(v float64) *float64 { return &v }
+	var f wire.Facts
+	f.CPU = wire.CPU{NCPU: 8, IdlePct: 70}
+	f.Mem = wire.Mem{TotalMB: 1000, AvailableMB: 900, Pressure: 1, PageOutRate: f64(30), SwapOutRate: f64(40)}
+	l := loadOf(f)
+	assert.Equal(t, wire.LoadDriverPaging, l.Driver, "30 + 40 pages/s")
+	assert.InDelta(t, 70, l.Score, 0.01)
+	f.CPU = wire.CPU{} // the cpu was not read: idle 0 is not "fully busy"
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = nil, nil
+	l = loadOf(f)
+	assert.Equal(t, wire.LoadDriverLevel, l.Driver)
+	assert.InDelta(t, 30, l.Score, 0.01)
+	f.Mem.TotalMB = 0 // no total: memory is not judged
+	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
+	// two valid, finite readings must not add up to +Inf (JSON cannot carry it, and one peer would fail the whole answer)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(1e308), f64(1e308)
+	l = loadOf(f)
+	assert.Equal(t, wire.LoadDriverPaging, l.Driver)
+	assert.Equal(t, 100.0, l.Score)
+	_, err := json.Marshal(l)
+	assert.NoError(t, err)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(-5), f64(-1e308) // negative: it counts for nothing
+	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
+}
+
 // wwd not running: 503 wwd_unavailable. wwd answering garbage: 502 wwd_bad_response. wwd answering an error: 502 wwd_error.
 func TestHosts_WWDAbsentOrBrokenAnswersAClearStatus(t *testing.T) {
 	absent := newModule(t, client.New(filepath.Join(t.TempDir(), "none.sock")))
@@ -138,11 +201,10 @@ func TestHosts_WWDAbsentOrBrokenAnswersAClearStatus(t *testing.T) {
 
 // History of the local host: the query is forwarded (since defaults to an hour back, step to 5s) and the answer is wwd's.
 func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
-	var since, step string
+	var since, step, host string
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", serve(fixture(t, "info.json")))
 	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
-		since, step = r.URL.Query().Get("since"), r.URL.Query().Get("step")
+		since, step, host = r.URL.Query().Get("since"), r.URL.Query().Get("step"), r.URL.Query().Get("host")
 		serve(fixture(t, "facts_history_response.json"))(w, r)
 	})
 	m := newModule(t, fakeWWD(t, mux))
@@ -151,6 +213,7 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 	require.Equal(t, 200, rr.Code, rr.Body.String())
 	assert.Equal(t, "2026-10-18T01:00:00Z", since)
 	assert.Equal(t, "1m", step)
+	assert.Equal(t, "mlab", host, "the host goes to the local wwd, which answers for itself or forwards")
 	got, err := wire.Decode[wire.FactsHistoryResponse](rr.Body.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, "1m", got.Step)
@@ -158,6 +221,7 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 
 	// no host, no since, no step: the local host, the last hour, 5 s
 	rr = call(m, "/api/pool/facts/history")
+	assert.Equal(t, "", host, "no host asked, none sent")
 	require.Equal(t, 200, rr.Code, rr.Body.String())
 	assert.Equal(t, "2026-10-18T11:00:00Z", since)
 	assert.Equal(t, "5s", step)
@@ -166,9 +230,8 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 	assert.Equal(t, 200, call(m, "/api/pool/facts/history?host=h-mlab").Code)
 }
 
-func TestHistory_BadQueryAndOtherHost(t *testing.T) {
+func TestHistory_BadQuery(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", serve(fixture(t, "info.json")))
 	mux.HandleFunc("GET /v1/facts/history", serve(fixture(t, "facts_history_response.json")))
 	m := newModule(t, fakeWWD(t, mux))
 	for _, q := range []string{"?since=yesterday", "?step=2m", "?since=2026-10-18"} {
@@ -176,9 +239,41 @@ func TestHistory_BadQueryAndOtherHost(t *testing.T) {
 		assert.Equal(t, 400, rr.Code, q)
 		assert.Equal(t, ErrBadRequest, errCode(rr), q)
 	}
-	rr := call(m, "/api/pool/facts/history?host=air19")
-	assert.Equal(t, 501, rr.Code)
-	assert.Equal(t, ErrHostNotLocal, errCode(rr))
+}
+
+// The history of another host goes through the local wwd: its answer is the App's, a 4xx of wwd's (an alias it does not know is 404) is
+// passed on as wwd_rejected with its status, a peer that cannot be reached is wwd's 502 and stays 502 wwd_error.
+func TestHistory_AnotherHostThroughTheLocalWWD(t *testing.T) {
+	var asked []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
+		h := r.URL.Query().Get("host")
+		asked = append(asked, h)
+		switch h {
+		case "nowhere":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"unknown host","host":"nowhere"}`))
+		case "air19":
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte(`{"host":"air19","reason":"dial tcp: refused"}`))
+		default:
+			serve([]byte(`{"step":"1m","records":[]}`))(w, r)
+		}
+	})
+	m := newModule(t, fakeWWD(t, mux))
+
+	rr := call(m, "/api/pool/facts/history?host=mserv&step=1m")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Contains(t, rr.Body.String(), `"step":"1m"`)
+
+	rr = call(m, "/api/pool/facts/history?host=nowhere")
+	assert.Equal(t, 404, rr.Code)
+	assert.Equal(t, ErrWWDRejected, errCode(rr))
+
+	rr = call(m, "/api/pool/facts/history?host=air19")
+	assert.Equal(t, 502, rr.Code)
+	assert.Equal(t, ErrWWDError, errCode(rr))
+	assert.Equal(t, []string{"mserv", "nowhere", "air19"}, asked)
 }
 
 func TestHistory_WWDAbsent(t *testing.T) {
@@ -220,8 +315,12 @@ func TestInfo_AnnouncesPoolV1ForTheRealModule(t *testing.T) {
 		return list
 	}
 	require.Contains(t, caps(), "pool.v1")
+	require.Contains(t, caps(), "pool.series.v1")
+	require.Contains(t, caps(), "pool.assess.v1")
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "pool.v1")
+	require.NotContains(t, caps(), "pool.series.v1")
+	require.NotContains(t, caps(), "pool.assess.v1")
 }
 
 // A wwd that answers records as null still gives the App an array.

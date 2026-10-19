@@ -14,11 +14,12 @@ import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
-import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
+import { DestructiveGuard, outcomeMessage, sendNowMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
 import { isWalking, stepHistory } from '../../lib/conversations/input-history'
 import { arrowDir, caretAtEdge, decideArrow, isEmptyBox } from '../../lib/conversations/input-arrows'
+import { sendNowKey } from '../../lib/conversations/send-now-keys'
 import { subscribeRecall } from '../../lib/conversations/draft-recall'
 import { canTakeBack, canTakeBackAll, takeBackAll, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { Capabilities } from '../../lib/conversations/types'
@@ -99,6 +100,10 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const [draft, setDraft] = useState(() => readDraft(dKey) ?? '')
   const [hint, setHint] = useState<OutcomeMessage | null>(null)
   const guard = useRef(new DestructiveGuard())
+  // Send now (D8): Ctrl+Enter, or Ctrl+X then Ctrl+S inside the chord window. The live capability decides: without it Ctrl+Enter is a plain Enter.
+  const canSendNow = adapter.sendNow !== undefined && capabilities?.send_now === 'keys'
+  const chordAt = useRef<number | null>(null)
+  const sendNowOut = useRef(false)
   const [chips, setChips] = useState<readonly Attachment[]>(() => readAttachments(dKey))
   const fileInput = useRef<HTMLInputElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
@@ -148,7 +153,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
   const noMod = !adapter.canSend(capabilities)
-  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
+  const change = (v: string, caret?: number) => { setDraft(v); writeDraft(dKey, v, caret); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
   const canUndoClear = useHasCleared(dKey)
   const restoreCleared = () => {
     const text = undoClear(dKey)
@@ -161,12 +166,15 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.
-  const attach = (files: readonly File[]) => { if (upload) startUploads(dKey, upload, files) }
+  // The placeholders land at the caret the box has when the files come in (a drop has no better point to offer: a textarea cannot say
+  // which character is under the pointer), and follow the edits made while they upload (lib/conversations/insertion-anchor).
+  const caret = () => box.current?.selectionStart ?? undefined
+  const attach = (files: readonly File[]) => { if (upload) startUploads(dKey, upload, files, caret()) }
   // the pane takes a drop anywhere on it and hands the files to this input (usePaneFileDrop)
   const dropEl = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!upload || !dropEl.current) return
-    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files))
+    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files, caret()))
   }, [dKey, upload])
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
@@ -202,6 +210,11 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const undo = (id: string) => { takeBackHeld(dKey, queue, id) }
   const tb = useTakeBackState(dKey)
   const interrupt = async () => setHint(outcomeMessage(await queue.interrupt()))
+  const sendNow = async () => {
+    if (!adapter.sendNow || sendNowOut.current) return // one request at a time, however many presses
+    sendNowOut.current = true
+    try { setHint(sendNowMessage(await adapter.sendNow())) } finally { sendNowOut.current = false }
+  }
 
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
@@ -253,7 +266,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               value={draft}
               rows={1}
               placeholder={lockedReason ?? t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
-              onChange={(e) => change(e.target.value)}
+              onChange={(e) => change(e.target.value, e.target.selectionStart)}
               onPaste={(e) => {
                 // only files are taken over; a plain-text paste goes into the box as usual
                 const files = [...e.clipboardData.files]
@@ -262,9 +275,16 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (!e.clipboardData.getData('text/plain')) e.preventDefault()
                 attach(files)
               }}
+              onBlur={() => { chordAt.current = null }} // a Ctrl+X armed here is not a chord that Ctrl+S may finish from somewhere else
               onKeyDown={(e) => {
                 // a key pressed while an IME is composing belongs to the IME (Esc cancels the composition, not the draft)
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                if (canSendNow) {
+                  const k = sendNowKey(e, chordAt.current, Date.now())
+                  chordAt.current = k.armedAt
+                  // a held key repeats keydown: it is one press (the repeats neither send again nor fall into the plain Enter)
+                  if (k.action === 'send_now') { e.preventDefault(); if (!e.repeat) void sendNow(); return }
+                }
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return }
                 // Esc clears the draft and its attachments (undo for a few seconds); with nothing to clear it does nothing at all
                 if (e.key === 'Escape' && (draft !== '' || uploading.length > 0)) { // what is on screen (hidden chips ride along with a clear, but do not by themselves take an Esc)
@@ -283,7 +303,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 const emptyBox = isEmptyBox({ draft, shownChips: shown.length, uploading: uploading.length, hasCleared: hasCleared(dKey) }) // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                 const decision = decideArrow({
                   dir, recall: adapter.recall, emptyBox, walking: isWalking(dKey, draft),
-                  atEdge: caretAtEdge(dir, draft, el.selectionStart, el.selectionEnd),
+                  atEdge: caretAtEdge(dir, draft, el.selectionStart, el.selectionEnd), clearedPending: hasCleared(dKey),
                   canTakeBackAll: () => canTakeBackAll(dKey, queue),
                 })
                 if (decision === 'take_back_all') {

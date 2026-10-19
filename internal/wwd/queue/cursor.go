@@ -23,6 +23,10 @@ func ParseCursor(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
+// Epoch names the database this queue is over (wire.JobsListResponse.Epoch): made with its tables and never changed, so a cursor is
+// only meaningful under the epoch it was made in.
+func (q *Queue) Epoch(context.Context) (string, error) { return q.epoch, nil }
+
 // Head is the cursor at this moment: the number of the last change. A client that wants only what happens from now on starts from it.
 func (q *Queue) Head(ctx context.Context) (int64, error) {
 	var n int64

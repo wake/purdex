@@ -46,6 +46,15 @@ type Job struct {
 	// closed while the job was queued). An open set that cannot be read does not drop it: a missed request is not recoverable,
 	// a stale notification is cleaned by the close badge push.
 	DropIfClosed bool
+	// OnSent is called once, on the sender's goroutine, after the device loop, when APNs accepted the push on at least one device.
+	// A job that is skipped, refused or never processed does not call it. nil = none.
+	OnSent func()
+	// StillWanted, when set, is asked before each device's request and again before the one retry of it: false drops what has not
+	// gone out yet. A request already on its way to APNs cannot be recalled. nil = always wanted.
+	StillWanted func() bool
+	// OnRecalled is called once, after the device loop, when StillWanted took the job back before any request went out: nothing was
+	// sent, so the caller can give back what it wrote for the attempt. It is not called once a request was made. nil = none.
+	OnRecalled func()
 }
 
 // JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
@@ -86,6 +95,9 @@ type sender struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	stopMu  sync.RWMutex // Enqueue holds it shared, Stop takes it once to flip stopped: no job is accepted after Stop begins
+	stopped bool
 }
 
 func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
@@ -104,8 +116,15 @@ func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
 	}
 }
 
-// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute).
+// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute). A stopped sender
+// takes nothing and says so (false): no goroutine will ever send the job, and a caller that keeps state on the answer (the alert
+// push) must not count it as sent.
 func (s *sender) Enqueue(j Job) bool {
+	s.stopMu.RLock()
+	defer s.stopMu.RUnlock()
+	if s.stopped {
+		return false
+	}
 	select {
 	case s.queue <- j:
 		return true
@@ -141,6 +160,9 @@ func (s *sender) Start(ctx context.Context) {
 
 // Stop cancels the in-flight request and waits for the goroutine.
 func (s *sender) Stop() {
+	s.stopMu.Lock()
+	s.stopped = true
+	s.stopMu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -160,12 +182,28 @@ func (s *sender) process(ctx context.Context, j Job) {
 		log.Printf("[push] approval %s not pushed: dropped_at_send (its card closed while the push was queued)", shortID(j.Approval.ID))
 		return
 	}
+	accepted := false
+	defer func() {
+		if accepted && j.OnSent != nil {
+			j.OnSent()
+		}
+	}()
+	requested, recalled := false, false
+	defer func() {
+		if recalled && !requested && j.OnRecalled != nil {
+			j.OnRecalled()
+		}
+	}()
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
 			return
 		}
 		d, ok := s.book.Get(id)
 		if !ok {
+			continue
+		}
+		if j.StillWanted != nil && !j.StillWanted() {
+			recalled = true // the caller took it back while it waited in the queue
 			continue
 		}
 		content, ok := j.Make(d)
@@ -198,8 +236,12 @@ func (s *sender) process(ctx context.Context, j Job) {
 		if content.Background { // a silent badge update: its own push type and priority, and nothing to replace on the phone
 			h.PushType, h.Priority, h.CollapseID = "background", 5, ""
 		}
-		res := s.sendWithRetry(ctx, d, h, payload)
+		requested = true
+		res := s.sendWithRetry(ctx, d, h, payload, j.StillWanted)
 		s.finish(ctx, d, res)
+		if res.Class == apns.OK {
+			accepted = true
+		}
 		if syncs && res.Class == apns.OK {
 			s.reads.Sent(d.DeviceID, carried)
 		}
@@ -208,7 +250,7 @@ func (s *sender) process(ctx context.Context, j Job) {
 
 // sendWithRetry is one send plus the single retry the spec allows: a renewed provider token after a 403 about it, or one
 // pause of 2 s after a 429 / 5xx / network error.
-func (s *sender) sendWithRetry(ctx context.Context, d push.Device, h apns.Headers, payload []byte) apns.Result {
+func (s *sender) sendWithRetry(ctx context.Context, d push.Device, h apns.Headers, payload []byte, wanted func() bool) apns.Result {
 	res := s.apns.Send(ctx, d.Env, d.Token, h, payload)
 	// A registration dropped meanwhile (its phone was revoked) is not sent the retry. The one request already in flight when
 	// the revoke lands cannot be recalled.
@@ -216,13 +258,14 @@ func (s *sender) sendWithRetry(ctx context.Context, d push.Device, h apns.Header
 	switch res.Class {
 	case apns.JWTRejected:
 		s.apns.Invalidate()
-		if !stillRegistered() {
+		if !stillRegistered() || (wanted != nil && !wanted()) {
 			return res
 		}
 		return s.apns.Send(ctx, d.Env, d.Token, h, payload)
 	case apns.RetryLater:
 		s.sleep(ctx, retryAfter)
-		if ctx.Err() != nil || !stillRegistered() {
+		// the retry is a new request: the caller's wanted is asked again before it
+		if ctx.Err() != nil || !stillRegistered() || (wanted != nil && !wanted()) {
 			return res
 		}
 		return s.apns.Send(ctx, d.Env, d.Token, h, payload)

@@ -3,4 +3,4 @@
            "worker": {"enabled": false}, "labels": [], "fingerprint": {}},
   "facts": null,
   "worker": {"enabled": false, "slots": {"heavy": 0, "light": 0}, "owner_rule": ""},
-  "labels": [], "reachable": false}]}
+  "labels": [], "reachable": false, "headroom_reasons": null, "load": null}]}

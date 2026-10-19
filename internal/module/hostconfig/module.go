@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
+	"github.com/wake/purdex/internal/alertsettings"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/personas"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/watchsettings"
 	"github.com/wake/purdex/internal/workbooksettings"
@@ -20,6 +23,12 @@ type Module struct {
 	home  func() (string, error) // daemon user's home; injectable for tests
 
 	beforeUnattendedPut func() // test seam: between SetUnattended's read and its CAS; nil in production
+
+	personaNow  func() int64 // ms; the stamp of a save; nil = the clock (tests)
+	personaMu   sync.Mutex
+	personaSubs map[int]func()
+	personaSeq  int
+	stopped     bool // Stop ran: personas.v1 is no longer announced
 }
 
 // New returns a new Module ready for registration.
@@ -60,6 +69,10 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(ProbeHostsKey, m)
 	// ... and the fleet row through this one.
 	c.Registry.Register(FleetConfigKey, m)
+	// ... and the personas (name pool v2 spec §4) through this one.
+	c.Registry.Register(personas.Key, m)
+	// ... and the wwd alert delivery's switch through this one (WWD-8a-2a-0).
+	c.Registry.Register(alertsettings.Key, m)
 	return nil
 }
 
@@ -74,6 +87,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte, _ Entry) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte, _ Entry) (any, error) { return normalizeRelayQuota(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/wwd_alerts", m.putHandler(KeyWwdAlerts, func(raw []byte, _ Entry) (any, error) { return normalizeWwdAlerts(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, cur Entry) (any, error) {
 		stored := watchsettings.Default()
 		if len(cur.Value) > 0 {
@@ -86,7 +100,18 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/probe-hosts", m.putHandler(KeyProbeHosts, func(raw []byte, cur Entry) (any, error) { return normalizeProbeHosts(raw, cur) }))
 	mux.HandleFunc("PUT /api/hostconfig/fleet", m.putHandler(KeyFleet, func(raw []byte, _ Entry) (any, error) { return normalizeFleet(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte, _ Entry) (any, error) { return normalizeResources(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/task-groups", m.putHandler(KeyTaskGroups, func(raw []byte, cur Entry) (any, error) { return normalizeTaskGroups(raw, cur) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
+	// the personas have a route of their own (4 MiB body, a stamp, an event) and are not in GET /api/hostconfig
+	mux.HandleFunc("GET /api/hostconfig/personas", m.handleGetPersonas)
+	mux.HandleFunc("PUT /api/hostconfig/personas", m.handlePutPersonas)
+}
+
+// Status is what /api/info reads to announce personas.v1: the routes are there from a successful Init until Stop.
+func (m *Module) Status() map[string]any {
+	m.personaMu.Lock()
+	defer m.personaMu.Unlock()
+	return map[string]any{"ready": m.store != nil && !m.stopped}
 }
 
 // Start logs a banner; no background work required.
@@ -97,6 +122,9 @@ func (m *Module) Start(_ context.Context) error {
 
 // Stop closes the underlying SQLite database.
 func (m *Module) Stop(_ context.Context) error {
+	m.personaMu.Lock()
+	m.stopped = true
+	m.personaMu.Unlock()
 	return nil // the store is released by Close, after the HTTP server drained (#1033)
 }
 

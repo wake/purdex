@@ -32,8 +32,12 @@ type RawMem struct {
 	Pageouts, Swapouts   uint64
 	NoPageouts           bool // Pageouts could not be read: page_out_rate is null
 	NoSwapouts           bool // Swapouts could not be read: swap_out_rate is null
-	SwapUsedBytes        *uint64
-	CompressorBytes      *uint64
+	// Decompressions is the compressor's running count of pages brought back since boot (macOS); HaveDecompressions says it was read.
+	// Without it the decompress rate is absent (Linux has PSI instead).
+	Decompressions     uint64
+	HaveDecompressions bool
+	SwapUsedBytes      *uint64
+	CompressorBytes    *uint64
 
 	// Linux reads. AvailableBytes (MemAvailable) replaces Free + Inactive, and
 	// PSI is the production slices' pressure (nil: unreadable). Linux marks the
@@ -68,6 +72,7 @@ func BuildCPU(prev *RawCPU, cur RawCPU) wire.CPU {
 // belongs to one goroutine.
 type MemBuilder struct {
 	pageouts, swapouts []hostmem.PageSample
+	decompressions     []hostmem.PageSample
 	linux              LinuxPressure
 }
 
@@ -106,6 +111,10 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 	if !raw.NoSwapouts {
 		so := b.rate(&b.swapouts, now, raw.Swapouts)
 		m.SwapOutRate = &so
+	}
+	if raw.HaveDecompressions {
+		dr := b.rate(&b.decompressions, now, raw.Decompressions)
+		m.DecompressRate = &dr
 	}
 	return m
 }
@@ -153,6 +162,9 @@ type Sources struct {
 	// Owner is the "owner is active" rule (air26 only; nil elsewhere: owner stays
 	// null). It sees the process table of the same sample.
 	Owner func(ProcSnapshot, ProcContext) *wire.OwnerState
+	// Observe gets the whole process table of every sample whose process read worked (nil: nobody watches the trees). It runs on
+	// the sampling goroutine, after the other builders, with the context's table already built; it must not keep the snapshot.
+	Observe func(now time.Time, snap ProcSnapshot, c ProcContext)
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -230,6 +242,9 @@ func (c *Collector) Sample() (Reading, error) {
 			r.Residents = BuildResidents(snap, ctx)
 			if c.src.Owner != nil {
 				r.Owner = c.src.Owner(snap, ctx)
+			}
+			if c.src.Observe != nil {
+				c.src.Observe(now, snap, ctx)
 			}
 		}
 	}

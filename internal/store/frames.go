@@ -44,6 +44,10 @@ type FramesStore struct {
 	// identitySeq hands out the versions UpdateSessionIdentity orders by. See
 	// NextIdentitySeq.
 	identitySeq atomic.Int64
+	// gen counts the writes to agent_frames made through this store (touch). It is shared by every FramesStore over the same
+	// database (AgentEventStore.Frames), and the roots cache is valid only for the generation it was read at.
+	gen   *atomic.Uint64
+	roots rootsCache
 }
 
 // NextIdentitySeq allocates the version for one identity write.
@@ -226,6 +230,7 @@ func clearStaleSubagentsJSON(db *sql.DB) error {
 }
 
 func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	existing, err := s.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
 	if err != nil {
 		return Frame{}, err
@@ -444,6 +449,7 @@ func (s *FramesStore) ListByPanes(paneIDs []string) ([]Frame, error) {
 }
 
 func (s *FramesStore) Delete(frameID string) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	_, err := s.db.Exec(`DELETE FROM agent_frames WHERE frame_id = ?`, frameID)
 	return err
 }
@@ -461,6 +467,7 @@ func (s *FramesStore) Delete(frameID string) error {
 // critic C1). A late SessionEnd of an older run therefore claims and deletes
 // nothing, whether the newer run's identity is written yet or not.
 func (s *FramesStore) ClaimDelete(frameID, sessionID string) (bool, error) {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(
 		`DELETE FROM agent_frames WHERE frame_id = ? AND (? = '' OR session_id = ?)`,
 		frameID, sessionID, sessionID,
@@ -480,6 +487,7 @@ func (s *FramesStore) ClaimDelete(frameID, sessionID string) (bool, error) {
 // last_seen_at and cause this DELETE to match 0 rows, returning (false, nil).
 // Caller should treat (false, nil) as "frame got refreshed, skip this sweep".
 func (s *FramesStore) DeleteIfUnchanged(frameID string, lastSeenAt int64) (bool, error) {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(`DELETE FROM agent_frames WHERE frame_id = ? AND last_seen_at = ?`, frameID, lastSeenAt)
 	if err != nil {
 		return false, err
@@ -497,6 +505,7 @@ func (s *FramesStore) DeleteIfUnchanged(frameID string, lastSeenAt int64) (bool,
 // so would clobber concurrent Subagents mutations (see #632 R7). Returns
 // sql.ErrNoRows if the frame does not exist.
 func (s *FramesStore) UpdateStatusAndLastSeen(frameID string, status agentpkg.Status, lastSeenAt int64) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(`
 		UPDATE agent_frames SET status = ?, last_seen_at = ?
 		WHERE frame_id = ?
@@ -545,6 +554,7 @@ var ErrIdentityOutOfOrder = errors.New("identity event is older than the stored 
 // the mutation and this call is normal, and callers may swallow it — and
 // ErrIdentityOutOfOrder if the row already holds a newer event's identity.
 func (s *FramesStore) UpdateSessionIdentity(frameID, sessionID, cwd string, seq int64) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	if sessionID == "" && cwd == "" {
 		return nil
 	}
@@ -608,6 +618,7 @@ func (s *FramesStore) SessionTransition(frameID string) (cur, prev string, found
 // nothing. Called on its own with a newer seq, it would make an older
 // identity write still in flight look stale.
 func (s *FramesStore) SetTranscriptPath(frameID, path string, seq int64) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	if path == "" {
 		return nil
 	}
@@ -648,6 +659,7 @@ func (s *FramesStore) classifyIdentityMiss(frameID string) error {
 // concurrent proxy/native subagent mutations on the same row (#632 R8).
 // Returns sql.ErrNoRows if the frame does not exist.
 func (s *FramesStore) UpdateHookPath(frame Frame) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(`
 		UPDATE agent_frames SET
 			agent_type = ?,
@@ -681,6 +693,7 @@ func (s *FramesStore) UpdateHookPath(frame Frame) error {
 // sender will emit its own SubagentStart afterward if still relevant.
 // Returns sql.ErrNoRows if the frame does not exist.
 func (s *FramesStore) UpdateHookPathAndResetSubagents(frame Frame) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(`
 		UPDATE agent_frames SET
 			agent_type = ?,
@@ -717,6 +730,7 @@ func (s *FramesStore) UpdateHookPathAndResetSubagents(frame Frame) error {
 // frame.FrameID must be set. Caller retries by reloading the row, re-merging
 // the subagents list against the new baseline, and calling again.
 func (s *FramesStore) UpsertIfUnchanged(frame Frame, expectedLastSeenAt int64) (bool, Frame, error) {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	if frame.FrameID == "" {
 		return false, Frame{}, fmt.Errorf("UpsertIfUnchanged: frame.FrameID required")
 	}

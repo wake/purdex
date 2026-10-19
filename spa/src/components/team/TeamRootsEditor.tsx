@@ -52,7 +52,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
   const boxError = err?.kind === 'bad_request' && (err.index === null || err.index >= roots.length) ? err.detail : null
 
   return (
-    <div data-testid="roots-editor" className="col-span-full mb-1 flex flex-col gap-1 pl-3">
+    <div data-testid="roots-editor" className="flex flex-col gap-1">
       <div className="text-text-muted">{t('unattended.roots.label')}</div>
       <ul className="flex flex-col gap-0.5">
         {roots.map((root, i) => (

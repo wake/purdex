@@ -114,7 +114,6 @@ type jEntry struct {
 	Refs   []string `json:"refs"`
 	Items  []jItem  `json:"items"`
 	Detail string   `json:"detail"`
-	Pinned bool     `json:"pinned"`
 }
 
 type jPage struct {
@@ -129,7 +128,6 @@ type jPage struct {
 	} `json:"project"`
 	PersonName   string   `json:"person_name"`
 	Entries      []jEntry `json:"entries"`
-	Pinned       []jEntry `json:"pinned"`
 	Confirms     []jEntry `json:"confirms"`
 	More         bool     `json:"more"`
 	OpenConfirms int      `json:"open_confirms"`

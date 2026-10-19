@@ -708,14 +708,14 @@ func TestCreate_Rejections(t *testing.T) {
 		t.Fatalf("%d events after rejected creates", n)
 	}
 
-	// Caps: max_members 20 → 8, wait_s 999 → 600; relative roots resolve against cwd.
+	// Caps: max_members 20 → 9, wait_s 999 → 600; relative roots resolve against cwd.
 	capped := f.createReq(uid(10))
 	capped.MaxMembers, capped.WaitS, capped.Roots = 20, 999, []string{"sub/../a", "/abs/b/"}
 	code, body := f.do(http.MethodPost, "/api/team/approvals", capped)
 	a := decodeApproval(t, body)
 	var p team.LeadPayload
 	_ = json.Unmarshal(a.Payload, &p)
-	if code != 201 || p.MaxMembers != 8 || a.DeadlineAt != 1_000_000+600_000 || len(p.Roots) != 2 || p.Roots[0] != "/w/a" || p.Roots[1] != "/abs/b" {
+	if code != 201 || p.MaxMembers != 9 || a.DeadlineAt != 1_000_000+600_000 || len(p.Roots) != 2 || p.Roots[0] != "/w/a" || p.Roots[1] != "/abs/b" {
 		t.Fatalf("capped: %d %+v payload=%+v", code, a, p)
 	}
 
@@ -1181,7 +1181,7 @@ func TestDecide_ApproveDenyAlreadyDecided(t *testing.T) {
 		t.Fatal("fourth create")
 	}
 	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(4)+"/decide", team.DecideRequest{Decision: "approve", Grant: &team.Grant{MaxMembers: 20}, Client: client})
-	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 8 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
+	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 9 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
 		t.Fatalf("approve with a capped grant: %d %+v grant=%+v", code, a, a.Grant)
 	}
 	f.events()

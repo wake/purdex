@@ -7,10 +7,15 @@
 // A shown host that cannot be reached (`unreachableIds`) is not asked but named above the list: its daemon may still be
 // approving. When no host can be reached there is no list to be empty, so only those lines show.
 //
+// A host whose daemon sends `log` (`team.decision_log.v1`, name pool v2 spec §8) is shown by it instead (UnattendedLogSection: the latest 30 decisions of the team approvals and the
+// switch's own records, newest first across hosts); the list above stays for the hosts that do not, and names the hosts that could not be read or reached either way.
+//
 // Above that list (relay quota spec §3.5, plan RQ-A): 「接力額度」 (UnattendedQuotaSection: a stepper per session, for hosts
 // whose daemon lists `team.relay_quota.v1`) and 「額度用完，等你核准」 (UnattendedHeldSection, only when the daemon sent held
-// requests). The first page's `quotas` seed the quota store (relay-quota.ts) between its beginGet / endGet, so events
-// that arrive while the GET is out are applied after it.
+// requests). The first page is read through the shared reader (unattended-reader.ts, journal v5 §3.9): it joins a read the
+// team settings already has out, seeds the quota store between its beginGet / endGet (events that arrive while the GET is
+// out are applied after it), and keeps the page's quota part as the host's last read, which these two sections draw from
+// (so a re-read made for either panel shows in both).
 //
 // Not tab-hosted: opened by a click of UnattendedButton's ▾ and gone when closed. The loaded pages are this
 // component's own state — closing drops them and every open fetches afresh (a stale list would hide what the daemon
@@ -20,6 +25,8 @@ import { FloatingPanel } from './FloatingPanel'
 import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSection'
 import { UnattendedPausedSection } from './UnattendedPausedSection'
 import { UnattendedHeldSection, type HeldRow } from './UnattendedHeldSection'
+import { UnattendedLogSection } from './UnattendedLogSection'
+import { mergeLogs } from '../lib/team/unattended-log'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
@@ -27,11 +34,11 @@ import { ApprovalApiError } from '../lib/team/approval-api'
 import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-format'
 import { getUnattended } from '../lib/team/unattended-api'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
-import { registerRefetch } from '../lib/team/relay-quota-writer'
+import { HOST_READ_TIMEOUT_MS, readFirstPage, watchHost } from '../lib/team/unattended-reader'
 import { hostIdentityNow } from '../lib/team/quota-host'
 import { useHostStore } from '../stores/useHostStore'
 import { sinceText } from '../lib/team/time-text'
-import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
+import type { Approval, UnattendedLogEntry, UnattendedView } from '../lib/team/types'
 
 const PANEL_WIDTH = 480
 
@@ -42,19 +49,16 @@ interface HostPages {
   nextBefore?: number
   /** The switch's last turn-on (ms), 0 = never. */
   since: number
+  /** The host's log (`team.decision_log.v1`), when its daemon sends one: it then stands in for this host's `rows` in the panel. */
+  log?: UnattendedLogEntry[]
+  /** The first read failed: nothing is known of this host, so it is neither a log host nor a list host (it is named in the notes). */
+  unread?: boolean
   /** The code of the last failed read (kept with the rows loaded before it); absent = the last read worked. */
   failed?: string
-  /** Relay quota (the first page's): the rows, or `quotasFailed` when the daemon's array was null / malformed; `held` rows. */
-  quotas?: readonly SessionQuota[]
-  quotasFailed?: boolean
-  held?: readonly Approval[]
 }
 
 const timeOf = (a: Approval) => a.decided_at ?? a.created_at
 const codeOf = (e: unknown) => (e instanceof ApprovalApiError ? e.code : 'error')
-
-/** How long one host may take to answer a page before it is named as failed (`timeout`) instead of holding the panel. */
-export const HOST_READ_TIMEOUT_MS = 10_000
 
 /**
  * What one effect setup owns: every request and timer it started, and whether it was cancelled. A cancelled setup is
@@ -65,6 +69,13 @@ class Lifecycle {
   cancelled = false
   private readonly controllers = new Set<AbortController>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+
+  /** A signal for one shared read (unattended-reader.ts): aborted with this lifecycle, or earlier by `drop`. */
+  join(): { signal: AbortSignal; drop: () => void } {
+    const ctl = new AbortController()
+    this.controllers.add(ctl)
+    return { signal: ctl.signal, drop: () => { this.controllers.delete(ctl); ctl.abort() } }
+  }
 
   /** Start a bounded request owned by this lifecycle. */
   track(): { ctl: AbortController; arm: (ms: number, onTimeout: () => void) => () => void } {
@@ -88,16 +99,17 @@ class Lifecycle {
 }
 
 /**
- * One host's page, bounded: a host that has not answered in `HOST_READ_TIMEOUT_MS` fails as `timeout` (its request is
- * aborted) so a single silent daemon never keeps the others' rows, or the panel's busy state, hostage. The request and
- * its timer belong to `life`: cancelling it aborts the request (rejecting as `aborted`) and clears the timer.
+ * One host's NEXT page (「顯示更多」; the first page is the shared reader's), bounded: a host that has not answered in
+ * `HOST_READ_TIMEOUT_MS` fails as `timeout` (its request is aborted) so a single silent daemon never keeps the others'
+ * rows hostage. The request and its timer belong to `life`: cancelling it aborts the request (rejecting as `aborted`) and
+ * clears the timer.
  */
-function readPage(life: Lifecycle, hostId: string, before: number | undefined): Promise<UnattendedView> {
+function readPage(life: Lifecycle, hostId: string, before: number): Promise<UnattendedView> {
   const { ctl, arm } = life.track()
   return new Promise<UnattendedView>((resolve, reject) => {
     ctl.signal.addEventListener('abort', () => reject(new ApprovalApiError(0, 'aborted')), { once: true })
     const done = arm(HOST_READ_TIMEOUT_MS, () => { reject(new ApprovalApiError(0, 'timeout')); ctl.abort() })
-    getUnattended(hostId, before === undefined ? undefined : { before }, ctl.signal).then(
+    getUnattended(hostId, { before }, ctl.signal).then(
       // `list_failed` is the PUT's flag (the daemon's GET never sets it): if it ever comes, `approved` says nothing.
       (v) => { done(); if (v.list_failed === true) reject(new ApprovalApiError(200, 'list_failed')); else resolve(v) },
       (e: unknown) => { done(); reject(e) },
@@ -105,16 +117,8 @@ function readPage(life: Lifecycle, hostId: string, before: number | undefined): 
   })
 }
 
-function quotaPart(v: UnattendedView): Pick<HostPages, 'quotas' | 'quotasFailed' | 'held'> {
-  return {
-    ...(v.quotas !== undefined ? { quotas: v.quotas } : {}),
-    ...(v.quotasFailed ? { quotasFailed: true } : {}),
-    ...(v.held !== undefined ? { held: v.held } : {}),
-  }
-}
-
 function firstPage(v: UnattendedView): HostPages {
-  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since, ...quotaPart(v) }
+  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since, ...(v.log !== undefined ? { log: v.log } : {}) }
 }
 
 const quotaHostOf = (hostId: string): boolean => useUnattendedStore.getState().byHost[hostId]?.quotaSupport === 'yes'
@@ -149,19 +153,25 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     const disposers: Array<() => void> = []
     for (const hostId of hosts) {
       // A GET belongs to the daemon (endpoint + token) it was made to. If the host is re-pointed while it is out, its answer
-      // is the old daemon's: it is not shown, the quota store ignores its end (the epoch moved), and the host is read again.
+      // is the old daemon's: it is not shown, the quota store ignores its end (the epoch moved), the panel lets that read
+      // go, and the host is read again.
       let gen = 0
+      let drop: (() => void) | undefined
       const load = () => {
         const mine = ++gen
+        // The previous read is let go only after this one has joined: two loads in a row share one read.
+        const previous = drop
+        drop = undefined
         const identity = hostIdentityNow(hostId)
-        if (identity === null) { setPages((cur) => { const { [hostId]: _gone, ...rest } = cur; return rest }); return }
-        const quotas = quotaHostOf(hostId)
-        const epoch = quotas ? useRelayQuotaStore.getState().beginGet(hostId) : 0
+        if (identity === null) { previous?.(); setPages((cur) => { const { [hostId]: _gone, ...rest } = cur; return rest }); return }
+        const join = life.join()
+        drop = join.drop
         const current = () => !life.cancelled && mine === gen && hostIdentityNow(hostId) === identity
-        void readPage(life, hostId, undefined).then(
-          (v) => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null, epoch); return firstPage(v) },
-          (e: unknown): HostPages => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, null, epoch); return { rows: [], since: 0, failed: codeOf(e) } },
+        void readFirstPage(hostId, join.signal).then(
+          firstPage,
+          (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e), unread: true }),
         ).then((p) => { if (current()) setPages((cur) => ({ ...cur, [hostId]: p })) })
+        previous?.()
       }
       load()
       let seen = hostIdentityNow(hostId)
@@ -173,18 +183,20 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         useRelayQuotaStore.getState().forgetHost(hostId)
         load()
       }))
-      if (quotaHostOf(hostId)) {
-        // After a write that went to a provisional root (`pending_lineage`) the writer asks for this host's view again.
-        disposers.push(registerRefetch(hostId, () => {
-          const identity = hostIdentityNow(hostId)
-          if (identity === null) return
-          const epoch = useRelayQuotaStore.getState().beginGet(hostId)
-          void readPage(life, hostId, undefined).then(
-            (v) => { useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null, epoch); if (!life.cancelled && hostIdentityNow(hostId) === identity) setPages((cur) => ({ ...cur, [hostId]: { ...cur[hostId], quotas: v.quotas, quotasFailed: v.quotasFailed, held: v.held } })) },
-            () => { useRelayQuotaStore.getState().endGet(hostId, null, epoch) },
-          )
-        }))
-      }
+      // A new connection generation of the same daemon (a disconnect or a reconnect fences the quota store): the host's last
+      // read is gone and a read still out writes nothing, so the host is read again — unless it is known to be down.
+      let epoch = useRelayQuotaStore.getState().epochs[hostId] ?? 0
+      disposers.push(useRelayQuotaStore.subscribe((s) => {
+        const now = s.epochs[hostId] ?? 0
+        if (now === epoch) return
+        epoch = now
+        if (hostIdentityNow(hostId) !== seen) return // a re-point: the subscription above reads it
+        const status = useHostStore.getState().runtime[hostId]?.status
+        if (status === undefined || status === 'connected') load()
+      }))
+      // After a write that went to a provisional root (`pending_lineage`) the writer asks for this host's view again: a fresh
+      // read through the reader, whose answer reaches this panel (and the team settings) through the store's `reads`.
+      if (quotaHostOf(hostId)) disposers.push(watchHost(hostId))
     }
     return () => { life.cancel(); for (const d of disposers) d(); if (lifeRef.current === life) lifeRef.current = null }
   }, [hosts])
@@ -193,7 +205,8 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     const life = lifeRef.current
     if (pagingNow.current || life === null || life.cancelled) return
     // Only the hosts that said "more" (and whose cursor we hold): a host at its last page is not asked again.
-    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined)
+    // a log host's `approved` page is the older App's: it is not asked for, and a host that could not be read has no cursor
+    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined && pages[h].log === undefined)
     if (todo.length === 0) return
     pagingNow.current = true
     setPaging(true)
@@ -204,7 +217,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
       const identity = hostIdentityNow(hostId)
       const lifetime = lifetimes.current[hostId] ?? 0
       try {
-        const v = await readPage(life, hostId, pages[hostId].nextBefore)
+        const v = await readPage(life, hostId, pages[hostId].nextBefore!) // `todo` holds only the hosts with a cursor
         patch = (cur) => ({ ...cur, rows: [...cur.rows, ...v.approved], nextBefore: v.truncated ? v.next_before : undefined, failed: undefined })
       } catch (e) {
         const failed = codeOf(e)
@@ -222,18 +235,32 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   // Busy only while nothing has come back (no hosts to ask = nothing to wait for); "empty" only once every host has.
   const busy = hosts.length > 0 && answered.length === 0
   const settled = answered.length === hosts.length
-  const merged = answered.flatMap((hostId) => pages[hostId].rows.map((a) => ({ hostId, a })))
+  // A host whose daemon sends a log is shown by it (the latest 30 decisions and the switch's records); the "approved since you left" list stays for the hosts that do not.
+  const logHosts = answered.filter((h) => pages[h].log !== undefined)
+  const listHosts = answered.filter((h) => pages[h].log === undefined && pages[h].unread !== true)
+  const logRows = mergeLogs(logHosts.map((hostId) => ({ hostId, log: pages[hostId].log! })))
+  const merged = listHosts.flatMap((hostId) => pages[hostId].rows.map((a) => ({ hostId, a })))
     .sort((x, y) => timeOf(y.a) - timeOf(x.a))
   const failed = answered.filter((h) => pages[h].failed !== undefined)
-  const since = Math.min(...answered.map((h) => pages[h].since).filter((s) => s > 0))
-  const hasMore = answered.some((h) => pages[h].nextBefore !== undefined)
+  const since = Math.min(...listHosts.map((h) => pages[h].since).filter((s) => s > 0))
+  const hasMore = listHosts.some((h) => pages[h].nextBefore !== undefined)
+  // The list's own section: for hosts without a log, and wherever it names a host it could not read or reach (those lines belong to the panel, not to a list). With no host
+  // answered yet it is today's empty panel.
+  const showList = logHosts.length === 0 || listHosts.length > 0
+  const showNotes = showList || failed.length > 0 || unreachable.length > 0
   const supportOf = useUnattendedStore((s) => s.byHost)
-  const quotaHosts: QuotaHostData[] = answered.filter((h) => supportOf[h]?.quotaSupport === 'yes' && pages[h].failed === undefined)
+  // The quota part is the host's LAST read (the store's), shown once this panel's own first read of it came back.
+  const reads = useRelayQuotaStore((s) => s.reads)
+  const readOf = (h: string) => (pages[h].failed === undefined ? reads[h] : undefined)
+  const quotaHosts: QuotaHostData[] = answered.filter((h) => supportOf[h]?.quotaSupport === 'yes')
     .flatMap((hostId): QuotaHostData[] => {
-      const p = pages[hostId]
-      return p.quotasFailed ? [{ hostId, failed: true }] : p.quotas !== undefined ? [{ hostId, rows: p.quotas }] : []
+      // A host whose page read failed (or timed out) keeps its place in the quota part: its own last read, else 「讀不到額度」,
+      // never a silent gap (#2891).
+      const r = readOf(hostId) ?? (pages[hostId].failed !== undefined ? reads[hostId] ?? { ok: false as const, code: pages[hostId].failed! } : undefined)
+      if (r === undefined) return []
+      return !r.ok || r.quotasFailed ? [{ hostId, failed: true }] : r.quotas !== undefined ? [{ hostId, rows: r.quotas }] : []
     })
-  const held: HeldRow[] = answered.flatMap((hostId) => (pages[hostId].held ?? []).map((a) => ({ hostId, a })))
+  const held: HeldRow[] = answered.flatMap((hostId) => { const r = readOf(hostId); return r?.ok ? (r.held ?? []).map((a) => ({ hostId, a })) : [] })
 
   return (
     <FloatingPanel title={t('unattended.panel.title')} anchorRef={anchorRef} onClose={onClose} width={PANEL_WIDTH} placement="below" testId="unattended-panel">
@@ -242,12 +269,13 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         <UnattendedPausedSection hostIds={hosts} />
         <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
         <UnattendedHeldSection rows={held} />
-        <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
-          <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>
-          {Number.isFinite(since) && (
+        {logHosts.length > 0 && <UnattendedLogSection rows={logRows} multiHost={hosts.length + unreachable.length > 1} />}
+        {showNotes && <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
+          {showList && <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>}
+          {showList && Number.isFinite(since) && (
             <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
           )}
-          {settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
+          {showList && settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
             <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
           )}
           {unreachable.map((hostId) => (
@@ -280,7 +308,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
               {t('unattended.panel.more')}
             </button>
           )}
-        </section>
+        </section>}
       </div>
     </FloatingPanel>
   )

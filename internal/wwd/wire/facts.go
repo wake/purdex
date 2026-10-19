@@ -28,6 +28,8 @@ type Facts struct {
 	// Stats is on a per-minute rollup only (a 5 s record has no "stats" key, and a minute stored before this existed
 	// decodes with it nil): what the minute's 5 s samples add up to, which the rollup record itself cannot say.
 	Stats *MinuteStats `json:"stats,omitempty"`
+	// Queue is this host's queued jobs (spec §13.2); absent before proto 2 writers fill it.
+	Queue *Queue `json:"queue,omitempty"`
 }
 
 // SampleIntervalS is the seconds one facts sample stands for (spec §3.1: one record every 5 s).
@@ -98,6 +100,15 @@ type Mem struct {
 	SwapUsedMB   *int     `json:"swap_used_mb"`
 	CompressorMB *int     `json:"compressor_mb"`
 	PSI          *PSI     `json:"psi"`
+	// DecompressRate is the compressor's decompressions per second (macOS; spec §13.2). Absent where it is not read, and
+	// in every record until the writers are gated on proto 2 (§13.1); omitted rather than null so a proto 1 reader is
+	// never shown it.
+	DecompressRate *float64 `json:"decompress_rate,omitempty"`
+}
+
+// Queue is this host's queue as facts show it (spec §13.2). Absent until the writers are gated on proto 2.
+type Queue struct {
+	Queued int `json:"queued"`
 }
 
 type PSI struct {
@@ -159,6 +170,9 @@ type FactExc struct {
 	Name  string     `json:"name"`
 	Since time.Time  `json:"since"`
 	Until *time.Time `json:"until"` // null for pid-bound exceptions
+	// Allow and Flags are the exception's hold fields (spec §13.4), shown so every reader sees a hold from the pool facts.
+	Allow *HoldAllow `json:"allow,omitempty"`
+	Flags []HoldFlag `json:"flags,omitempty"`
 }
 
 type Slots struct {
@@ -167,9 +181,21 @@ type Slots struct {
 }
 
 type Derived struct {
-	Zone         Zone  `json:"zone"`
+	Zone Zone `json:"zone"`
+	// ZoneOverride is set only while a fault hook is on (fault.zone): the zone peers score this host's jobs by. Zone stays the real one,
+	// so every other reader (the Purdex gate feed, the app's host cell, headroom) is unaffected. Absent when no hook is on.
+	ZoneOverride Zone  `json:"zone_override,omitempty"`
 	Headroom     Slots `json:"headroom"`
 	SessionsRoom int   `json:"sessions_room"`
+}
+
+// PickZone is the zone a worker scores this origin's jobs by (spec 4.6 origin_bonus): the fault override when one is set, else Zone.
+// Nothing but a worker's pick reads it; every other reader uses Zone.
+func (d Derived) PickZone() Zone {
+	if d.ZoneOverride != "" {
+		return d.ZoneOverride
+	}
+	return d.Zone
 }
 
 // FactsWorker is a host's worker state as every reader sees it. OwnerRule is
@@ -184,8 +210,22 @@ type FactsWorker struct {
 
 // Validate checks the version and enumerations.
 func (f Facts) Validate() error {
-	if f.V != Proto {
+	if f.V < MinProto || f.V > FactsProto {
 		return fmt.Errorf("facts: unsupported v %d", f.V)
+	}
+	if f.Mem.DecompressRate != nil && *f.Mem.DecompressRate < 0 {
+		return fmt.Errorf("facts: negative decompress_rate")
+	}
+	if f.Queue != nil && f.Queue.Queued < 0 {
+		return fmt.Errorf("facts: negative queue.queued")
+	}
+	for i, e := range f.Exception {
+		if err := validateHoldFields(e.Allow, e.Flags); err != nil {
+			return fmt.Errorf("facts: exceptions[%d]: %w", i, err)
+		}
+	}
+	if f.Derived.ZoneOverride != "" && !f.Derived.ZoneOverride.Valid() {
+		return fmt.Errorf("facts: invalid zone_override %q", f.Derived.ZoneOverride)
 	}
 	if !f.Derived.Zone.Valid() {
 		return fmt.Errorf("facts: invalid zone %q", f.Derived.Zone)

@@ -3,9 +3,7 @@
 // its members' relays draw from. The numbers belong to the chain (everything is keyed by (host, root)), so two rows of one
 // root show the same numbers and a click on either writes the same thing (relay-quota.ts / relay-quota-writer.ts).
 //
-// A lead's row may carry a third group, 「上限 − N +」, the team's member cap (`PUT /api/team/max-members`): shown only
-// when the host lists `team.max_members.v1` and the roster has the team the row leads (its `max_members` / `in_use`).
-// − stops at max(1, members in use), + at 8; one request per team at a time (the buttons are disabled meanwhile).
+// The member cap and the team's folders are the team panel's now (TeamSettingsBlock, name pool v2 spec §8, U13); this section keeps the quotas (L12).
 //
 // Which sessions: every `quotas` row that is NOT a member in any loaded roster (all hosts: a member of a lead on another
 // host is still a member). While a row's own host has no roster yet, that host shows one muted line instead of rows
@@ -13,15 +11,13 @@
 import { Fragment } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
-import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { shownValue, useRelayQuotaStore } from '../lib/team/relay-quota'
 import { setQuota } from '../lib/team/relay-quota-writer'
-import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
-import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
+import type { RelayQuotaField, SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
-import { TeamRootsEditor } from './team/TeamRootsEditor'
+import { addressName } from '../lib/names/seat'
 import { NumberField } from './team/NumberField'
 
 /** One host's share of the section. */
@@ -44,8 +40,7 @@ const MAX = 99
 /** The name a solo row shows: its title, else the name part of its address (`<alias>/<name>`). */
 function plainName(r: SessionQuota): string {
   if (r.title !== undefined && r.title !== '') return r.title
-  const slash = r.address.indexOf('/')
-  return slash >= 0 ? r.address.slice(slash + 1) : r.address
+  return addressName(r.address)
 }
 
 /** What a row is called: a lead by its team's name (U15, the lead's title after it), anyone else by `plainName`. */
@@ -93,42 +88,9 @@ function Stepper({ hostId, row, name, field, label }: { hostId: string; row: Ses
   )
 }
 
-/** The team a lead row leads, when the cap can be shown: the host lists the capability and the roster carries the cap. */
-function capTeam(rosters: Record<string, TeamRoster[]>, supported: boolean, hostId: string, row: SessionQuota): TeamRoster | undefined {
-  if (!supported || !row.is_lead) return undefined
-  const t = rosters[hostId]?.find((x) => x.lead.session_id === row.session_id)
-  return t !== undefined && t.max_members !== undefined && t.in_use !== undefined ? t : undefined
-}
-
-function CapStepper({ hostId, team, label }: { hostId: string; team: TeamRoster; label: string }) {
-  const t = useI18nStore((s) => s.t)
-  const busy = useMaxMembersStore((s) => s.inflight[teamKey(hostId, team.id)] !== undefined)
-  const value = team.max_members as number
-  const inUse = team.in_use as number
-  const write = (next: number) => { void setMaxMembers({ hostId, teamId: team.id, label }, next) }
-  // why − is off: the daemon will not take the cap below the members in use (409 max_below_in_use), nor below 1
-  const floor = Math.max(MAX_MEMBERS_MIN, inUse)
-  const minusReason = value <= inUse ? t('unattended.cap.minus_in_use', { n: String(inUse) }) : t('unattended.cap.minus_min', { n: String(MAX_MEMBERS_MIN) })
-  return (
-    <span className="inline-flex items-center gap-1" data-testid="cap-stepper" title={t('unattended.cap.in_use', { n: String(inUse) })}>
-      <span className="text-text-muted">{t('unattended.cap.label')}</span>
-      <StepButton sign="−" label={t('unattended.cap.minus')} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
-      <NumberField
-        testId="cap-value" ariaLabel={t('unattended.cap.label')} value={value} disabled={busy}
-        validate={(n) => (n < MAX_MEMBERS_MIN || n > MAX_MEMBERS_MAX
-          ? t('unattended.field.range', { min: String(MAX_MEMBERS_MIN), max: String(MAX_MEMBERS_MAX) })
-          : n < inUse ? t('unattended.cap.below', { n: String(inUse) }) : null)}
-        onCommit={write}
-      />
-      <StepButton sign="+" label={t('unattended.cap.plus')} disabled={busy || value >= MAX_MEMBERS_MAX} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(MAX_MEMBERS_MAX) })} onClick={() => write(value + 1)} />
-    </span>
-  )
-}
-
 export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSectionProps) {
   const t = useI18nStore((s) => s.t)
   const rosters = useTeamRosterStore((s) => s.byHost)
-  const support = useUnattendedStore((s) => s.byHost)
   if (hosts.length === 0) return null
 
   const members = new Set<string>()
@@ -149,13 +111,10 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
           const own = h.rows.filter((r) => !members.has(r.session_id))
           const looks = new Map(own.map((r) => [r.session_id, lookOf(rosters, r)] as const)) // one roster scan per row
           const rows = own.sort(order(looks))
-          const capOn = support[h.hostId]?.maxMembersSupport === 'yes'
-          const caps = new Map(rows.map((r) => [r.session_id, capTeam(rosters, capOn, h.hostId, r)] as const))
-          const withCap = [...caps.values()].some((x) => x !== undefined) // a fourth column only where some row has one
           body = rows.length === 0
             ? <div data-testid="quota-none" className="text-text-muted">{t('unattended.quota.none')}</div>
             : (
-              <ul className={`grid ${withCap ? 'grid-cols-[minmax(0,1fr)_auto_auto_auto]' : 'grid-cols-[minmax(0,1fr)_auto_auto]'} items-center gap-x-3 gap-y-1`}>
+              <ul className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1">
                 {rows.map((r) => { const look = looks.get(r.session_id) as Look; return (
                   <li key={`${r.session_id}`} data-testid="quota-row" data-session={r.session_id} className="contents">
                     <span className="block min-w-0 truncate text-text-primary" title={look.team ? `${look.name}${look.title !== undefined ? `\n${look.title}` : ''}` : `${look.name}\n${r.address}`}>
@@ -165,17 +124,6 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                     {r.is_lead
                       ? <Stepper name={look.name} hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
                       : <span data-testid="quota-pool-cell-empty" />}
-                    {withCap && (() => {
-                      const team = caps.get(r.session_id)
-                      return team !== undefined
-                        ? <CapStepper hostId={h.hostId} team={team} label={look.name} />
-                        : <span data-testid="cap-cell-empty" />
-                    })()}
-                    {(() => {
-                      // the lead's team directories, a full-width line under the row (only when the daemon reports `roots`)
-                      const team = r.is_lead ? rosters[h.hostId]?.find((x) => x.lead.session_id === r.session_id) : undefined
-                      return team?.roots !== undefined && team.roots_rev !== undefined ? <TeamRootsEditor hostId={h.hostId} team={team} /> : null
-                    })()}
                   </li>
                 )})}
               </ul>

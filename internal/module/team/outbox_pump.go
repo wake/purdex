@@ -28,6 +28,10 @@ const (
 	pumpBackoffBase = 30 * time.Second
 	pumpBackoffCap  = 10 * time.Minute
 	pumpTick        = time.Second
+	// outboxSafetyTick is the commands and facts pumps' own long poll. A pass is made on every kick (right after the cause
+	// committed) and once when the pump starts; the tick only finds what a kick missed, and an entry whose backoff ran out
+	// (backoffs are 30 s and up). pumpTick stays for the remote notice pump, which has no kick at its sources.
+	outboxSafetyTick = 5 * time.Second
 )
 
 // outboxEntry is the part of an outbox row the pump needs.
@@ -108,13 +112,18 @@ type outboxPump struct {
 	caps    map[string]cachedCaps
 	mu      sync.Mutex
 	running map[string]bool
+	// missed is set when a pass found a host's drain still running: whatever the kick announced may have been committed after
+	// that drain's last look at the queue, so the drain asks for one more pass when it ends.
+	missed bool
+	// tick is the safety poll (a field so a test can make it long).
+	tick time.Duration
 	// stuck remembers, per host, the last error text logged, so a host that stays down logs once per change.
 	stuck map[string]string
 }
 
 func newOutboxPump(name string, caller hostCaller, store outboxStore, now func() int64, logf func(string, ...any), ctx context.Context, wg *sync.WaitGroup) *outboxPump {
 	return &outboxPump{name: name, caller: caller, store: store, now: now, logf: logf, ctx: ctx, wg: wg,
-		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}, caps: map[string]cachedCaps{}}
+		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}, caps: map[string]cachedCaps{}, tick: outboxSafetyTick}
 }
 
 // cachedCaps is a host's capabilities and when they were read.
@@ -161,11 +170,16 @@ func (p *outboxPump) kick() {
 	}
 }
 
-// run is the pump's goroutine: a pass on every kick and every tick, until the context ends.
+// run is the pump's goroutine: a pass at once (what was pending before the pump started, or became pending before it did), then
+// one on every kick and every safety tick, until the context ends.
 func (p *outboxPump) run() {
 	defer p.wg.Done()
-	ticker := time.NewTicker(pumpTick)
+	ticker := time.NewTicker(p.tick)
 	defer ticker.Stop()
+	if p.ctx.Err() != nil {
+		return
+	}
+	p.pass()
 	for {
 		select {
 		case <-p.ctx.Done():
@@ -196,6 +210,7 @@ func (p *outboxPump) pass() {
 	for _, h := range hosts {
 		p.mu.Lock()
 		if p.running[h] || p.ctx.Err() != nil {
+			p.missed = p.missed || p.running[h]
 			p.mu.Unlock()
 			continue
 		}
@@ -209,7 +224,12 @@ func (p *outboxPump) pass() {
 			defer func() {
 				p.mu.Lock()
 				delete(p.running, h)
+				again := p.missed
+				p.missed = false
 				p.mu.Unlock()
+				if again {
+					p.kick() // a pass skipped this host while it was draining: look at the queue once more
+				}
 			}()
 			p.drain(h)
 		}(h)

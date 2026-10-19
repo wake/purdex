@@ -7,15 +7,17 @@ import { draftKey } from '../lib/conversations/draft-memory'
 import { unboundSendPort } from '../lib/conversations/send'
 import { setHistorySource } from '../lib/conversations/input-history'
 import { sendQueueFor } from '../lib/conversations/send-queue'
-import type { ConversationItem, HeaderQueued, UserItem } from '../lib/conversations/types'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
+import type { ConversationItem, HeaderQueued, Stage, UserItem } from '../lib/conversations/types'
 
 const NO_LINES: readonly HeaderQueued[] = []
+const NO_STAGES: Readonly<Record<string, Stage>> = {}
 
 /**
  * `sessionId` '' (the conversation is not ready) drives nothing and creates no queue. `headerQueued` is what the deck actually renders of Claude
  * Code's queue (`shownHeaderQueue`: nothing while the conversation is idle), so an entry is hidden only while a line really stands for it.
  */
-export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: string, items: readonly ConversationItem[], headerQueued: readonly HeaderQueued[] = NO_LINES): void {
+export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: string, items: readonly ConversationItem[], headerQueued: readonly HeaderQueued[] = NO_LINES, stages: Readonly<Record<string, Stage>> = NO_STAGES): void {
   const key = sessionId ? draftKey(paneKey, hostId, sessionId) : ''
   const queue = key ? sendQueueFor(key, () => unboundSendPort(hostId, sessionId)) : null
   const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
@@ -24,6 +26,15 @@ export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: s
   // the header is a new object on every frame: depend on what the lines say
   const linesSig = JSON.stringify(headerQueued.filter((q) => q.source === 'user').map((q) => ({ text: q.text, at: q.at })))
 
+  // A host that lists conversations.stages.v1 (or one whose stages are already flowing) confirms a message by its id or its `read` stage, never by its text.
+  // `unknown` (a reconnect's probe has not answered) is not a `no`: the mode stays as it was until the host says yes or no.
+  const stagesSupport = useUnattendedStore((s) => s.byHost[hostId]?.stagesSupport)
+  const stagesFlowing = Object.keys(stages).length > 0
+  useEffect(() => {
+    if (!queue) return
+    if (stagesSupport === 'yes' || stagesFlowing) queue.setStagesMode(true)
+    else if (stagesSupport === 'no') queue.setStagesMode(false)
+  }, [queue, stagesSupport, stagesFlowing])
   // Reported on mount and on change, and again whenever the queue itself changes (a message handed over may already be on the line).
   useEffect(() => {
     if (!queue) return
@@ -37,4 +48,10 @@ export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: s
     queue.reconcile(users)
     return queue.subscribe(() => queue.reconcile(users))
   }, [queue, users])
+  // The daemon's stages (conversations.stages.v1) per client_msg_id: they decide where each message of the queue is; without them the matching above is all there is.
+  useEffect(() => {
+    if (!queue) return
+    queue.setStages(stages)
+    return queue.subscribe(() => queue.setStages(stages))
+  }, [queue, stages])
 }

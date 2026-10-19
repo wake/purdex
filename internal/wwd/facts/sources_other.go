@@ -14,7 +14,7 @@ var errUnsupported = errors.New("facts: no host reads on this platform yet (only
 func SystemSources() Sources {
 	return Sources{
 		Now:   time.Now,
-		Tools: systemTools(),
+		Tools: systemTools(nil),
 		CPU:   func() (RawCPU, error) { return RawCPU{}, errUnsupported },
 		Mem:   func() (RawMem, error) { return RawMem{}, errUnsupported },
 		Disks: func() ([]RawDisk, error) { return nil, errUnsupported },
@@ -22,4 +22,8 @@ func SystemSources() Sources {
 }
 
 // SystemSourcesWith is SystemSources; the options are for macOS.
-func SystemSourcesWith(SourceOptions) Sources { return SystemSources() }
+func SystemSourcesWith(opt SourceOptions) Sources {
+	s := SystemSources()
+	s.Tools = systemTools(opt.ToolDirs)
+	return s
+}

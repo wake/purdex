@@ -67,6 +67,8 @@ var capabilities = []string{
 	"team.person.v1",          // person-typed commands: person tokens, direct /relay, decided_by.kind person, unattended_refused, PUT unattended refused (RT-1)
 	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
 	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
+	"team.decision_log.v1",    // GET / PUT /api/team/unattended carry `log`: the latest team decisions and the switch's on/off records, newest first (NP-6b)
+	"team.max_members.v2",     // the member cap's ceiling is 9, not 8: PUT /api/team/max-members, max_members on a lead request, pdx lead request --max-members (NP-4a)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
@@ -111,6 +113,10 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "push.badge.v2")    // badge kinds (adopt, terminal-only asks, permission cards), c: keys, purdex.member, the member gate and prefs.muted; same condition as push.v1
 		out = append(out, "push.badge_bg.v1") // a card that closes sends the phones with prefs.badge_push a background badge push (apns-push-type background); same condition as push.v1
 	}
+	if c.moduleReady("conversation") {
+		out = append(out, "sessions.send_now.v1")    // POST /api/sessions/{code}/send-now {client_msg_id, expected_tmux_instance}: Claude Code's send now (Ctrl+X Ctrl+S) for its queued messages; answers sent_now / refused + reason / unknown; conversation capabilities send_now: "keys"; only while the conversation module runs
+		out = append(out, "conversations.stages.v1") // conversation.stages WS frames and stages[] in conversation.snapshot: where each submitted client_msg_id is (received / filled / entered / queued / read / failed / unknown / recalled); only while the conversation module runs
+	}
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
 	}
@@ -134,10 +140,19 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("pool") {
 		out = append(out, "pool.v1")         // GET /api/pool/hosts, GET /api/pool/facts/history (the resource pool from the local wwd; 503 wwd_unavailable while wwd is not running)
+		out = append(out, "pool.series.v1")  // GET /api/pool/facts/series?host=&since=&step=: the history of a host cut down to the points a chart draws (at most 2000, the latest kept); same condition as pool.v1
+		out = append(out, "pool.assess.v1")  // GET /api/pool/hosts: each host with facts also has headroom_reasons {heavy, light} (why a side's headroom is 0) and load {score, driver}; same condition as pool.v1
 		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
+	}
+	if c.moduleReady("jobs") {
+		out = append(out, "jobs.v1") // GET /api/pool/jobs, /api/pool/jobs/{id}, /api/pool/jobs/{id}/log (wwd's jobs, read through the local wwd; ?host= for another host; 503 wwd_unavailable while wwd is not running)
 	}
 	if c.moduleReady("gate") {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
+	}
+	if c.moduleReady("hostconfig") {
+		out = append(out, "personas.v1")    // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
+		out = append(out, "task_groups.v1") // PUT /api/hostconfig/task-groups and taskGroups in GET /api/hostconfig: the sidebar's manual task groups, per host (name pool v2, NP-5); same condition as personas.v1
 	}
 	return out
 }

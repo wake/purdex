@@ -27,12 +27,40 @@ var (
 	ErrBusy = errors.New("snapshot: the origin is busy")
 )
 
+// maxOriginBody bounds the part of an origin's answer an OriginError keeps in its message.
+const maxOriginBody = 200
+
+// OriginError is an answer the origin gave that the client cannot act on: a 5xx (the commit of the job is not pinned, a broken
+// store), a 4xx it did not expect, a 422 it does not know. The failure is the origin's, not this host's (#3379): a caller that holds
+// the job back for this host's sake (the infrastructure hold-off) has no reason to, and a retry later may find it mended.
+type OriginError struct {
+	Status int
+	Body   string
+}
+
+func (e *OriginError) Error() string {
+	b := e.Body
+	if len(b) > maxOriginBody {
+		b = b[:maxOriginBody] + "…"
+	}
+	return fmt.Sprintf("snapshot: the origin answered %d: %s", e.Status, b)
+}
+
+// IsOriginSide says whether err is the origin's: an OriginError, or the origin too busy (ErrBusy) past the retries. A connection that
+// could not be made or broke is not: whose network that is cannot be told from here.
+func IsOriginSide(err error) bool {
+	var oe *OriginError
+	return errors.As(err, &oe) || errors.Is(err, ErrBusy)
+}
+
 // Client fetches snapshots from one origin with the pool token.
 type Client struct {
 	base, token string
 	hc          *http.Client
 	retries     int
-	sleep       func(context.Context, time.Duration) error // a variable so that a test need not wait
+	// Delay, when set, runs before every fetch and ends it with its error (the fault hook H4 of the C2 matrix; nil in production).
+	Delay func(context.Context) error
+	sleep func(context.Context, time.Duration) error // a variable so that a test need not wait
 }
 
 // NewClient is a Client for the origin at base ("http://host:port"). There is no overall timeout: a tar is as long as it is; the
@@ -69,6 +97,11 @@ func (c *Client) Tar(ctx context.Context, jobID, claimID string) (io.ReadCloser,
 func (c *Client) get(ctx context.Context, jobID string, q url.Values) (io.ReadCloser, error) {
 	if err := validJobID(jobID); err != nil {
 		return nil, err
+	}
+	if c.Delay != nil {
+		if err := c.Delay(ctx); err != nil {
+			return nil, err
+		}
 	}
 	u := c.base + "/v1/jobs/" + url.PathEscape(jobID) + "/snapshot?" + q.Encode()
 	for attempt := 0; ; attempt++ {
@@ -114,6 +147,6 @@ func (c *Client) get(ctx context.Context, jobID string, q url.Values) (io.ReadCl
 			}
 			continue
 		}
-		return nil, fmt.Errorf("snapshot: the origin answered %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, &OriginError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 }

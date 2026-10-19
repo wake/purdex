@@ -16,21 +16,34 @@ import (
 var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
 type fakeAPI struct {
-	jobs      []wire.Job
-	query     client.JobsQuery
-	jobErr    error
-	logBytes  []byte
-	logErr    error
-	cancelErr error
-	cancelled []string
-	waitJob   wire.Job
-	info      wire.Info
-	pool      wire.Pool
-	worker    wire.WorkerSettings
-	set       *wire.WorkerSettings
-	started   *wire.Exception
-	stopped   string
-	err       error // returned by every call when set (wwd unreachable)
+	earned wire.EarnedLabelList
+	// earnedUnknown: the wwd answered 404 for the earned-labels route (it predates it)
+	earnedUnknown bool
+	jobs          []wire.Job
+	query         client.JobsQuery
+	jobErr        error
+	logBytes      []byte
+	logErr        error
+	cancelErr     error
+	cancelled     []string
+	moved         []string
+	moveJob       wire.Job
+	moveErr       error
+	waitJob       wire.Job
+	info          wire.Info
+	pool          wire.Pool
+	worker        wire.WorkerSettings
+	set           *wire.WorkerSettings
+	started       *wire.Exception
+	stopped       string
+	usage         wire.UsageResponse
+	usageQ        client.UsageQuery
+	err           error // returned by every call when set (wwd unreachable)
+}
+
+func (f *fakeAPI) Usage(_ context.Context, q client.UsageQuery) (wire.UsageResponse, error) {
+	f.usageQ = q
+	return f.usage, f.err
 }
 
 func (f *fakeAPI) Info(context.Context) (wire.Info, error) { return f.info, f.err }
@@ -57,6 +70,14 @@ func (f *fakeAPI) Cancel(_ context.Context, id string) error {
 	f.cancelled = append(f.cancelled, id)
 	return firstErr(f.cancelErr, f.err)
 }
+func (f *fakeAPI) SetPosition(_ context.Context, id string, p wire.Position) (wire.Job, error) {
+	f.moved = append(f.moved, id+" "+string(p))
+	j := f.moveJob
+	if p != wire.PositionNormal {
+		j.Manual = p
+	}
+	return j, firstErr(f.moveErr, f.err)
+}
 func (f *fakeAPI) WaitJob(context.Context, string, func(wire.Job)) (wire.Job, error) {
 	return f.waitJob, f.err
 }
@@ -72,6 +93,10 @@ func (f *fakeAPI) StartException(_ context.Context, e wire.Exception) error {
 func (f *fakeAPI) StopException(_ context.Context, name string) error {
 	f.stopped = name
 	return f.err
+}
+
+func (f *fakeAPI) EarnedLabels(context.Context) (wire.EarnedLabelList, bool, error) {
+	return f.earned, !f.earnedUnknown, f.err
 }
 
 func firstErr(errs ...error) error {
@@ -254,14 +279,40 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+func TestMove(t *testing.T) {
+	f := &fakeAPI{}
+	for _, p := range []string{"front", "back", "hold", "normal"} {
+		code, out, _ := runJobs(f, "move", "j_1", p)
+		if code != 0 || !strings.Contains(out, "j_1: "+p) {
+			t.Errorf("move %s: code %d out %q", p, code, out)
+		}
+	}
+	if fmt.Sprint(f.moved) != "[j_1 front j_1 back j_1 hold j_1 normal]" {
+		t.Errorf("moved %v", f.moved)
+	}
+	f.moved = nil
+	for _, args := range [][]string{{"move"}, {"move", "j_1"}, {"move", "j_1", "sideways"}, {"move", "j_1", "front", "extra"}} {
+		if code, _, errOut := runJobs(f, args...); code != ExitUsage || errOut == "" {
+			t.Errorf("%v: code %d %q", args, code, errOut)
+		}
+	}
+	if len(f.moved) != 0 {
+		t.Errorf("a bad call reached wwd: %v", f.moved)
+	}
+	f.moveErr = &client.StatusError{Code: 409, Body: `{"state":"running"}`}
+	if code, _, errOut := runJobs(f, "move", "j_1", "front"); code != ExitFailed || errOut == "" {
+		t.Fatalf("a refusal: %d %q", code, errOut)
+	}
+}
+
 func TestUnreachableWWDIsExit3Everywhere(t *testing.T) {
 	f := &fakeAPI{err: fmt.Errorf("%w: dial", client.ErrUnavailable)}
-	for _, args := range [][]string{{"ls"}, {"show", "j_1"}, {"log", "j_1"}, {"cancel", "j_1"}} {
+	for _, args := range [][]string{{"ls"}, {"show", "j_1"}, {"log", "j_1"}, {"cancel", "j_1"}, {"move", "j_1", "front"}} {
 		if code, _, errOut := runJobs(f, args...); code != ExitNoWWD || !strings.Contains(errOut, "wwd is not running") {
 			t.Errorf("jobs %v: %d %q", args, code, errOut)
 		}
 	}
-	for _, args := range [][]string{{"status"}, {"pool"}, {"worker", "on"}, {"exception", "stop", "x"}} {
+	for _, args := range [][]string{{"status"}, {"pool"}, {"usage"}, {"worker", "on"}, {"exception", "stop", "x"}} {
 		if code, _, _ := runWWD(f, args...); code != ExitNoWWD {
 			t.Errorf("wwd %v: %d", args, code)
 		}

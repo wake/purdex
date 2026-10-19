@@ -137,6 +137,40 @@ func TestCache_RecordIntoAnUnwritableDirectory(t *testing.T) {
 	assert.False(t, c.Record(time.Now(), Sample{At: time.Now().UnixMilli(), Level: 1}))
 }
 
+// RecordNext hands the builder the last reading as it stands under the lock, and never writes a reading that is not newer.
+func TestCache_RecordNextBuildsFromTheLockedLast(t *testing.T) {
+	c := Cache{Dir: t.TempDir()}
+	t0 := time.Unix(10_000, 0)
+
+	var sawHave bool
+	assert.True(t, c.RecordNext(t0, func(last Sample, have bool) (Sample, bool) {
+		sawHave = have
+		return sampleAt(t0, 0, 1, 7), true
+	}))
+	assert.False(t, sawHave, "an empty cache has no last")
+
+	t1 := t0.Add(5 * time.Second)
+	assert.True(t, c.RecordNext(t1, func(last Sample, have bool) (Sample, bool) {
+		require.True(t, have)
+		assert.EqualValues(t, 14, last.Pageouts+last.Swapouts)
+		return Sample{At: t1.UnixMilli(), Level: 2, Pageouts: last.Pageouts + last.Swapouts + 10}, true
+	}))
+	got := c.Load().Samples
+	require.Len(t, got, 2)
+	assert.EqualValues(t, 24, got[1].Pageouts)
+
+	assert.False(t, c.RecordNext(t1, func(Sample, bool) (Sample, bool) { return sampleAt(t0, 5, 3, 99), true }), "not newer than the last")
+	assert.False(t, c.RecordNext(t1.Add(time.Second), func(Sample, bool) (Sample, bool) { return Sample{}, false }), "the builder declined")
+	assert.Len(t, c.Load().Samples, 2)
+
+	unlock, got2 := c.TryLock()
+	require.True(t, got2)
+	called := false
+	assert.False(t, c.RecordNext(t1.Add(time.Second), func(Sample, bool) (Sample, bool) { called = true; return sampleAt(t0, 6, 1, 1), true }))
+	unlock()
+	assert.False(t, called, "someone else holds the lock: the builder is not even asked")
+}
+
 // A write that fails is reported as not written, and leaves the cache as it was.
 func TestCache_RecordReportsAWriteThatFailed(t *testing.T) {
 	dir := t.TempDir()

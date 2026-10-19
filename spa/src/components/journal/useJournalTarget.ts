@@ -3,7 +3,7 @@
 // Same origin as the loader (journal-loader.ts): the tab's own `cc` session; a team tab with no `cc` leaf falls back to the
 // lead's host for the support check only (no unit is loaded for it).
 import { useLayoutEffect, useMemo } from 'react'
-import { migrateViewMemo } from '../../lib/journal/view-memory'
+import { forgetViewMemo, hasViewMemo, migrateViewMemo } from '../../lib/journal/view-memory'
 import { ownSessionOf } from '../team/own-workbook'
 import { useTitleBarTeam } from '../team/useTitleBarTeam'
 import type { TeamPanelTeam } from '../team/team-display'
@@ -26,6 +26,8 @@ export interface JournalTarget {
   unitKey: string | null
   /** The lead lives on a daemon this App has no host for. */
   unreachableHost: string | null
+  /** No unit yet and the daemon's last session-page read failed (its 503: no lead, a chain error): the card says so instead of showing nothing. */
+  loadFailed: boolean
   /** Where this tab's view memo lives (host, key); null until a unit (or the unreachable stand-in) exists. */
   memoHost: string | null
   memoKey: string | null
@@ -45,13 +47,21 @@ export function useJournalTarget(): JournalTarget {
   const unit = useJournalStore((s) => (read ? selectUnit(s, read.hostId, read.sessionId) : undefined))
   const unitKey = unit ? unitKeyOf(unit.unit) : null
   const unreachableHost = route?.kind === 'unreachable' ? route.leadHostId : null
+  const loadFailed = useJournalStore((s) => read !== null && unit === undefined && s.readFailed[sessionKey(read.hostId, read.sessionId)] === true)
   // The view memo's key: the unit, or — where the lead's daemon is not connected — a stand-in so the card can still be opened to say so.
-  const memoKey = unitKey ?? (unreachableHost !== null ? `unreachable:${unreachableHost}` : null)
+  const memoKey = unitKey ?? (unreachableHost !== null ? `unreachable:${unreachableHost}` : loadFailed && read ? `failed:${read.sessionId}` : null)
   // The route resolved from `unreachable`: the stand-in's view state (open, widths, filter, scroll) moves to the resolved unit, once.
   // Stateless: the follow route still names the lead's daemon; every caller of this hook runs it, the move is idempotent.
   const standIn = route?.kind === 'follow' && origin ? `unreachable:${route.leadHostId}` : null
   useLayoutEffect(() => {
     if (standIn !== null && origin && read && unitKey !== null) migrateViewMemo(origin.hostId, standIn, read.hostId, unitKey)
   }, [standIn, origin, read?.hostId, unitKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  return { hostId, journalHost, team, origin, read, unit, unitKey, unreachableHost, memoHost: read?.hostId ?? origin?.hostId ?? null, memoKey }
+  // Same for the stand-in of a first read that failed (`failed:<session>`): once the unit exists the card stays open with its state, and the
+  // stand-in goes (a target that already holds state keeps it; the source is dropped either way).
+  const failedStandIn = read ? `failed:${read.sessionId}` : null
+  useLayoutEffect(() => {
+    if (failedStandIn === null || !read || unitKey === null || !hasViewMemo(read.hostId, failedStandIn)) return
+    if (!migrateViewMemo(read.hostId, failedStandIn, read.hostId, unitKey)) forgetViewMemo(read.hostId, failedStandIn)
+  }, [failedStandIn, read?.hostId, unitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  return { hostId, journalHost, team, origin, read, unit, unitKey, unreachableHost, loadFailed, memoHost: read?.hostId ?? origin?.hostId ?? null, memoKey }
 }

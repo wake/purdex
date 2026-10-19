@@ -14,7 +14,28 @@ import (
 // share JobFromEnv as the one check for "this belongs to a wwd job".
 const JobMarkerEnv = "WWD_JOB"
 
+// OriginMarkerEnv is the second part of the mark: the tag of the connection the job came in on (worker/ident.OriginTag of the
+// worker's source: 16 hex characters). A job id is only unique per origin, so the mark of a job is (tag, id). WWD_JOB keeps its value.
+const OriginMarkerEnv = "WWD_ORIGIN"
+
 var reJobID = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
+var reOriginTag = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// MarkFromEnv returns the whole mark out of a process environment: the origin tag and the job id. ok needs a job id. A missing or
+// malformed WWD_ORIGIN gives tag "": the mark of a process started before the origin was added (a command that outlived an upgrade),
+// which matches any origin during the transition (#3373).
+func MarkFromEnv(env []string) (tag, id string, ok bool) {
+	id, ok = JobFromEnv(env)
+	if !ok {
+		return "", "", false
+	}
+	for _, kv := range env {
+		if v, found := strings.CutPrefix(kv, OriginMarkerEnv+"="); found && reOriginTag.MatchString(v) {
+			return v, id, true
+		}
+	}
+	return "", id, true
+}
 
 // JobFromEnv returns the job id out of a process environment (KEY=VALUE). The
 // value must look like a job id (`j_` and up to 64 id characters); anything else
@@ -34,6 +55,10 @@ func JobFromEnv(env []string) (string, bool) {
 const SessionEnvKey = "CLAUDE_CODE_SESSION_ID"
 
 var reSessionID = regexp.MustCompile(`^[0-9A-Za-z_-]{8,64}$`)
+
+// ValidSessionID says whether s looks like a session id: 8 to 64 characters of letters, digits, `_` and `-` (a Claude Code session id is a
+// UUID). It is the one rule for a session id taken from an environment, here and where `pdx test` and `pdx jobs` name the submitter's.
+func ValidSessionID(s string) bool { return reSessionID.MatchString(s) }
 
 // SessionIDFromEnv returns the Claude Code session id out of a process environment (KEY=VALUE). It is the only value read from
 // an environment besides the job marker, and nothing else of it is kept. Facts are observations: a same-user process can set it
@@ -67,8 +92,11 @@ type ProcSnapshot struct{ Procs []ProcRec }
 // matter (the selected ones, and the residents scan). Table is filled from the
 // snapshot when nil.
 type ProcContext struct {
-	Table     map[int]ProcRec
-	JobOf     func(pid int) (string, bool)
+	Table map[int]ProcRec
+	JobOf func(pid int) (string, bool)
+	// OriginOf is the origin tag in the process's own mark (WWD_ORIGIN); ok is false for a process with none. Optional: a nil one means
+	// every mark is the old kind.
+	OriginOf  func(pid int) (string, bool)
 	SessionOf func(pid int) (string, bool) // pid is a Claude Code session process: its ref
 	// EnvSessionOf is the ref of the session in the process's own environment (SessionEnvKey). Optional. It is asked only for a
 	// process with no session above it, and the reader reads each environment once per process (with the job marker).
@@ -185,26 +213,35 @@ func sessionFor(p ProcRec, c ProcContext) (string, bool) {
 // (/bin/sleep, /bin/sh), so a marker-less child of a job is still the job's.
 // The walk stops at a Claude Code session process.
 func jobAbove(p ProcRec, c ProcContext) (string, bool) {
+	_, id, ok := jobMarkAbove(p, c)
+	return id, ok
+}
+
+// jobMarkAbove is jobAbove with the origin tag of the process that carries the mark ("" when its mark has none).
+func jobMarkAbove(p ProcRec, c ProcContext) (tag, id string, ok bool) {
 	if c.JobOf == nil {
-		return "", false
+		return "", "", false
 	}
 	cur := p
 	for depth := 0; depth < 64; depth++ {
 		if id, ok := c.JobOf(cur.PID); ok {
-			return id, true
+			if c.OriginOf != nil {
+				tag, _ = c.OriginOf(cur.PID)
+			}
+			return tag, id, true
 		}
 		if c.SessionOf != nil {
 			if _, ok := c.SessionOf(cur.PID); ok {
-				return "", false
+				return "", "", false
 			}
 		}
 		next, ok := c.Table[cur.PPID]
 		if !ok || cur.PPID <= 1 || next.PID == cur.PID {
-			return "", false
+			return "", "", false
 		}
 		cur = next
 	}
-	return "", false
+	return "", "", false
 }
 
 // Attribute says whose a process is: a wwd job's tree (the marker), a session's

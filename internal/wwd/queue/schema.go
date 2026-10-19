@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 4
+const schemaVersion = 6
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -50,6 +50,16 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		}
 		if have < 4 {
 			if err := migrateV3ToV4(ctx, c); err != nil {
+				return err
+			}
+		}
+		if have < 5 {
+			if err := migrateV4ToV5(ctx, c); err != nil {
+				return err
+			}
+		}
+		if have < 6 {
+			if err := migrateV5ToV6(ctx, c); err != nil {
 				return err
 			}
 		}
@@ -107,10 +117,72 @@ var revStatements = []string{
 		UPDATE job_rev SET n = n + 1;
 		UPDATE jobs SET rev = (SELECT n FROM job_rev) WHERE seq = NEW.seq;
 	END`,
-	`CREATE TRIGGER IF NOT EXISTS jobs_rev_upd AFTER UPDATE OF state, result, cancel_requested, superseded_by, log_size, claim_id ON jobs BEGIN
+	revUpdTrigger(revColumns),
+}
+
+// revColumns are the columns whose change moves jobs.rev; revColumnsV4 are the ones before version 6 added the manual place (a database
+// brought forward from version 3 gets the trigger with the full list at step 4, which SQLite accepts before the columns exist, and
+// step 6 replaces it all the same).
+const (
+	revColumnsV4 = `state, result, cancel_requested, superseded_by, log_size, claim_id`
+	revColumns   = revColumnsV4 + `, manual, manual_seq`
+)
+
+func revUpdTrigger(cols string) string {
+	return `CREATE TRIGGER IF NOT EXISTS jobs_rev_upd AFTER UPDATE OF ` + cols + ` ON jobs BEGIN
 		UPDATE job_rev SET n = n + 1;
 		UPDATE jobs SET rev = (SELECT n FROM job_rev) WHERE seq = NEW.seq;
-	END`,
+	END`
+}
+
+// migrateV5ToV6 adds the manual place (jobs.manual, jobs.manual_seq) and makes the rev trigger watch them; CREATE TRIGGER IF NOT EXISTS
+// does not replace an existing trigger, so the old one is dropped first. It can run again: each column is looked for first.
+func migrateV5ToV6(ctx context.Context, c *sql.Conn) error {
+	for _, col := range []struct{ name, def string }{
+		{"manual", `TEXT NOT NULL DEFAULT ''`},
+		{"manual_seq", `INTEGER NOT NULL DEFAULT 0`},
+	} {
+		var n int
+		if err := c.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('jobs') WHERE name = ?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := c.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+col.name+` `+col.def); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := c.ExecContext(ctx, `DROP TRIGGER IF EXISTS jobs_rev_upd`); err != nil {
+		return err
+	}
+	_, err := c.ExecContext(ctx, revUpdTrigger(revColumns))
+	return err
+}
+
+// epochStatements (version 5) give the database a name that is made once, with its tables, and never again: one row of 32 hex digits. A
+// client that keeps a cursor keeps this with it, and a database that was removed and made again has another, which tells the client its
+// cursor is of no use here. The insert only happens when the table is empty, so running it again (a migration repeated) keeps the first.
+//
+// The epoch is the history of the database FILE. Putting back an older copy of wwd.db puts back its epoch, and a client whose cursor is
+// ahead of that copy's head is only told so (409) until the head catches up to it; after that the cursor is taken and the changes below
+// it are missed. So a restore is not complete until its epoch is replaced:
+//
+//	UPDATE db_epoch SET id = lower(hex(randomblob(16)));
+//
+// (an operator's step in the restore procedure, with wwd stopped). Nothing here can tell a restore from a restart.
+var epochStatements = []string{
+	`CREATE TABLE IF NOT EXISTS db_epoch (id TEXT NOT NULL)`,
+	`INSERT INTO db_epoch (id) SELECT lower(hex(randomblob(16))) WHERE NOT EXISTS (SELECT 1 FROM db_epoch)`,
+}
+
+// migrateV4ToV5 gives an existing database its epoch.
+func migrateV4ToV5(ctx context.Context, c *sql.Conn) error {
+	for _, stmt := range epochStatements {
+		if _, err := c.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV3ToV4 gives an existing database the cursor: the column, a number for every job in the order it was made (its seq, which only
@@ -146,8 +218,8 @@ func migrateV3ToV4(ctx context.Context, c *sql.Conn) error {
 	return nil
 }
 
-// createSchema is the tables of a new database, as of the current version (git_pins, version 2, jobs.lapses, version 3, and the cursor,
-// version 4, are in it). Times are unix milliseconds on the origin's clock.
+// createSchema is the tables of a new database, as of the current version (git_pins, version 2, jobs.lapses, version 3, the cursor,
+// version 4, the epoch, version 5, and the manual place, version 6, are in it). Times are unix milliseconds on the origin's clock.
 func createSchema(ctx context.Context, c *sql.Conn) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS jobs (
@@ -196,7 +268,9 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			git_dir          TEXT NOT NULL DEFAULT '',
 			pinned           INTEGER NOT NULL DEFAULT 0,
 			updated_at       INTEGER NOT NULL,
-			rev              INTEGER NOT NULL DEFAULT 0
+			rev              INTEGER NOT NULL DEFAULT 0,
+			manual           TEXT NOT NULL DEFAULT '',
+			manual_seq       INTEGER NOT NULL DEFAULT 0
 		)`,
 		gitPinsTable,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,
@@ -207,7 +281,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			return err
 		}
 	}
-	for _, stmt := range revStatements {
+	for _, stmt := range append(append([]string{}, revStatements...), epochStatements...) {
 		if _, err := c.ExecContext(ctx, stmt); err != nil {
 			return err
 		}

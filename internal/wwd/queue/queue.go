@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -69,6 +70,7 @@ type Queue struct {
 
 	leaseS, renewS int
 	maxLog         int64      // the most one uploaded log may be
+	epoch          string     // the database's name (db_epoch), read once: it never changes
 	logMu          sync.Mutex // an upload's putting its file in place and recording it, against the sweep removing files
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
@@ -106,6 +108,25 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	}
 	if q.leaseS < 0 || q.renewS < 0 || q.renewS >= q.leaseS {
 		return nil, fmt.Errorf("queue: Options.RenewS (%d) must be positive and shorter than LeaseS (%d)", q.renewS, q.leaseS)
+	}
+	if o.LogDir != "" {
+		// the log operations write into it; nothing else makes it, and an upload into a directory that is not there is a 500
+		if err := os.MkdirAll(o.LogDir, 0o700); err != nil {
+			return nil, fmt.Errorf("queue: Options.LogDir: %w", err)
+		}
+		// logs are written and removed by name inside it: a link standing in for the directory would send them elsewhere
+		if fi, err := os.Lstat(o.LogDir); err != nil || !fi.IsDir() {
+			return nil, fmt.Errorf("queue: Options.LogDir %s is not a directory of its own (a link, or not a directory): %v", o.LogDir, err)
+		} else if fi.Mode().Perm()&0o077 != 0 {
+			// MkdirAll's mode only applies to what it makes: a directory that was there is closed to group and others too, because
+			// job logs hold command output
+			if err := os.Chmod(o.LogDir, 0o700); err != nil {
+				return nil, fmt.Errorf("queue: Options.LogDir %s is open to group or others and cannot be closed: %w", o.LogDir, err)
+			}
+		}
+	}
+	if err := db.QueryRowContext(context.Background(), `SELECT id FROM db_epoch`).Scan(&q.epoch); err != nil {
+		return nil, fmt.Errorf("queue: the database has no epoch (is it migrated?): %w", err)
 	}
 	// a restart gives the jobs workers still hold a full lease before the first sweep can lapse them (spec 4.2)
 	if err := extendHeldLeases(context.Background(), db, q.now().UnixMilli(), q.leaseS); err != nil {

@@ -3,7 +3,7 @@
 // (the caller turns it into a bad_response). Nothing here is lenient: a field of the wrong type is a malformed row.
 import {
   CHANGED_WHAT, ENTRY_KINDS, MEMBER_TASK_STATES, ROADMAP_STATUSES, TASK_STATES,
-  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalMember, type JournalProject, type JournalTask, type MemberTaskState,
+  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalSessions, type SessionLink, type JournalMember, type JournalProject, type JournalTask, type MemberTaskState,
   type JournalUnit, type RemoteLead, type RoadmapFeature, type RoadmapStage, type RoadmapStatus, type TaskState,
 } from './types'
 
@@ -90,10 +90,30 @@ export function parseJournalPage(v: unknown): JournalPage | null {
   if (v.person_name !== undefined && v.person_name !== null && !isStr(v.person_name)) return null
   if (typeof v.more !== 'boolean' || !isCount(v.open_confirms)) return null
   const entries = parseEntryList(v.entries)
-  const pinned = parseEntryList(v.pinned === undefined ? [] : v.pinned)
   const confirms = v.confirms === undefined || v.confirms === null ? null : parseEntryList(v.confirms)
-  if (!entries || !pinned || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
-  return { unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, pinned, more: v.more, openConfirms: v.open_confirms }
+  if (!entries || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
+  // `page` and `truncated` are omitempty: ABSENT is '' / false, never an error and never a hint about the daemon's age; present with the wrong type is malformed.
+  if (v.page !== undefined && !isStr(v.page)) return null
+  if (v.truncated !== undefined && typeof v.truncated !== 'boolean') return null
+  return {
+    unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, more: v.more, openConfirms: v.open_confirms,
+    page: (v.page as string | undefined) ?? '', truncated: (v.truncated as boolean | undefined) ?? false,
+  }
+}
+
+const VIAS = ['root', 'relay', 'clear'] as const
+
+/** `GET /api/journal/sessions` → the chain oldest first; null when the envelope is not the wire shape. */
+export function parseSessions(v: unknown): JournalSessions | null {
+  if (!isRec(v) || !Array.isArray(v.sessions)) return null
+  const sessions: SessionLink[] = []
+  for (const raw of v.sessions) {
+    if (!isRec(raw) || !isNonEmpty(raw.session_id) || !isMs(raw.started_at) || !isMs(raw.ended_at) || typeof raw.current !== 'boolean'
+      || !isStr(raw.via) || !(VIAS as readonly string[]).includes(raw.via)) { warnOnce('dropping a session: not {session_id, started_at, ended_at, via, current}'); continue }
+    sessions.push({ sessionId: raw.session_id, startedAt: raw.started_at, endedAt: raw.ended_at, via: raw.via as SessionLink['via'], current: raw.current })
+  }
+  if (v.incomplete !== undefined && typeof v.incomplete !== 'boolean') return null
+  return { sessions, incomplete: v.incomplete === true }
 }
 
 function parseTask(v: unknown): JournalTask | string {

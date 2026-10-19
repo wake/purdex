@@ -80,6 +80,13 @@ type Module struct {
 	zoneSince time.Time
 	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the
 	// host (Init wires both).
+	// pageFrac is the part of a page the facts' rate added since the last whole one (sampler goroutine only; see cachePressureFromFacts).
+	pageFrac float64
+	// procsFailing says the process table read failed on the last pool tick (logged once per run).
+	procsFailing bool
+	// fromPool is whether the last tick's host figures were wwd's (sampler goroutine only).
+	fromPool bool
+
 	gateConfig func() gate.Config
 	gateCounts func() (heavy, light, waiting int, ok bool)
 	// minute is the host timeline's open minute (D-8.2).

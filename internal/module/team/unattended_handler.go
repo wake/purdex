@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -64,11 +65,47 @@ func (m *Module) fillUnattendedPage(v *team.UnattendedView, before int64, limit 
 		m.logf("[team] unattended list: %v", err)
 		return err
 	}
-	v.Approved, v.Truncated = rows, truncated
+	log, err := m.unattendedLog()
+	if err != nil {
+		m.logf("[team] unattended log: %v", err)
+		return err
+	}
+	v.Approved, v.Truncated, v.Log = rows, truncated, log
 	if truncated {
 		v.NextBefore = rows[len(rows)-1].DecidedAt
 	}
 	return nil
+}
+
+// unattendedLog is `log`: the latest decisions of the team approvals and the switch's own on/off events, merged newest first
+// (a decision before a toggle of the same millisecond), at most team.DecisionLogMax. A switch store that keeps no event records
+// (the module's own fake) contributes no toggles.
+func (m *Module) unattendedLog() ([]team.UnattendedLogEntry, error) {
+	rows, err := m.store.ListRecentDecisions(team.DecisionLogMax)
+	if err != nil {
+		return nil, err
+	}
+	log := []team.UnattendedLogEntry{}
+	for _, a := range rows {
+		if e, ok := team.DecisionLogEntry(a); ok {
+			log = append(log, e)
+		}
+	}
+	if l, ok := m.unattended.(team.UnattendedEventLister); ok {
+		toggles, err := l.UnattendedEvents(team.DecisionLogMax)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range toggles {
+			on := t.On
+			log = append(log, team.UnattendedLogEntry{At: t.At, Type: team.LogTypeToggle, On: &on, By: &team.Client{Kind: t.By.Kind, Label: t.By.Label}})
+		}
+	}
+	sort.SliceStable(log, func(i, j int) bool { return log[i].At > log[j].At })
+	if len(log) > team.DecisionLogMax {
+		log = log[:team.DecisionLogMax]
+	}
+	return log, nil
 }
 
 // handleUnattendedPut is PUT /api/team/unattended {on, client}: the App

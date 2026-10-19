@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
@@ -75,14 +76,18 @@ type Module struct {
 	subSem    chan struct{}
 
 	// typed submit (K-1a-2)
-	td         *typedDeps   // nil: the daemon's services; tests inject
-	tune       typedTuning  // zero: the spec's timings
-	locks      sidLocks     // by Claude Code session id, shared by both submit routes
-	paneLocks  sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
-	keysSeen   keysLedger   // ids typed blind (no mod)
-	recalls    recallLedger // answers of recall requests that pressed Up (K-1b)
-	finMu      sync.Mutex
-	finalising map[string]struct{} // ids with a finaliser running
+	td             *typedDeps   // nil: the daemon's services; tests inject
+	tune           typedTuning  // zero: the spec's timings
+	locks          sidLocks     // by Claude Code session id, shared by both submit routes
+	paneLocks      sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
+	keysSeen       keysLedger   // ids typed blind (no mod)
+	recalls        recallLedger // answers of recall requests that pressed Up (K-1b)
+	sendNows       recallLedger // answers of send-now requests that pressed the keys (MS2-2), keyed like recalls
+	stages         stageLedger  // where each sent client_msg_id is on its way to the transcript
+	ready          atomic.Bool  // Init succeeded (Status)
+	afterStageRead func()       // test seam: runs in the stage observer after it read the items, before it compares them
+	finMu          sync.Mutex
+	finalising     map[string]struct{} // ids with a finaliser running
 
 	mu      sync.Mutex
 	cur     *generation // the latest Start's (kept after Stop: its context is cancelled, so nothing is admitted)
@@ -161,6 +166,10 @@ func (m *Module) WithIndex(idx convfeed.IndexLookup) *Module {
 	return m
 }
 
+// Status makes the core's moduleReady("conversation") true from a successful Init, which is what announces
+// conversations.stages.v1 in /api/info.
+func (m *Module) Status() map[string]any { return map[string]any{"ready": m.ready.Load()} }
+
 func (m *Module) Name() string           { return "conversation" }
 func (m *Module) Dependencies() []string { return []string{"agent", "team"} }
 
@@ -199,6 +208,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.cache = convfeed.NewCache(convfeed.CacheOptions{})
 	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index, ExecOwners: execAdapter{m}}
 	c.Registry.Register(convturns.Key, convturns.Reader(m)) // the session workbook reads a session's last turns
+	m.ready.Store(true)
 	return nil
 }
 
@@ -208,8 +218,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/submit", m.handleSubmit) // through the session's mod (U3-0b); not a device route
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/interrupt", m.handleInterrupt)
-	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit) // typing into Claude Code (K-1a-2); a device route
-	mux.HandleFunc("POST /api/sessions/{code}/recall", m.handleSessionRecall) // take the queued messages back into the app (K-1b); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit)    // typing into Claude Code (K-1a-2); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/recall", m.handleSessionRecall)    // take the queued messages back into the app (K-1b); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/send-now", m.handleSessionSendNow) // Claude Code's send now: its queued messages go out at once (MS2-2); a device route
 }
 
 // Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.
@@ -238,6 +249,7 @@ func (m *Module) Start(ctx context.Context) error {
 // Stop ends the current lifetime: its sweeper and its WebSockets, and waits for both (or for ctx). The module counts as
 // running until the sweeper has returned, so a concurrent Start does not start a second one.
 func (m *Module) Stop(ctx context.Context) error {
+	m.ready.Store(false) // the capabilities that follow Status stop being announced as the module stops
 	m.mu.Lock()
 	g := m.cur
 	if g != nil {

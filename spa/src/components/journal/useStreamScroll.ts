@@ -3,7 +3,7 @@
 // and keeps the reading position. `scroll` and `pinnedToBottom` are the unit's view memo (Tab-hosted rule: the stream unmounts on
 // a tab switch and opens exactly where it was); the pill's count is transient.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
+import { patchScrollMemo, readScrollMemo } from '../../lib/journal/view-memory'
 import type { JournalEntry } from '../../lib/journal/types'
 
 /** Within this many px of the end counts as "at the bottom" / "at the top". */
@@ -18,6 +18,8 @@ interface Opts {
   unitKey: string | null
   /** Names the unit the list belongs to (`host\0unitKey`): a different key is a different list, not new events. */
   streamKey?: string
+  /** The session page shown (journal.sessions.v1): scroll and pinned-to-bottom are remembered per page. '' = no session pages. */
+  page?: string
   /** What the stream shows (filtered), oldest first. */
   shown: readonly JournalEntry[]
   filter: string
@@ -38,7 +40,7 @@ function rowTop(el: HTMLElement, id: string): number | null {
   return null
 }
 
-export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey}`, shown, filter, more, loadOlder }: Opts) {
+export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey}`, page = '', shown, filter, more, loadOlder }: Opts) {
   const ref = useRef<HTMLDivElement>(null)
   const [below, setBelow] = useState(0)
   const prev = useRef<readonly JournalEntry[]>(shown)
@@ -63,19 +65,19 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
 
   const save = useCallback(() => {
     dirty.current = false
-    if (host !== null && unitKey !== null) patchViewMemo(host, unitKey, { scroll: lastTop.current, pinnedToBottom: lastAtBottom.current })
-  }, [host, unitKey])
+    if (host !== null && unitKey !== null) patchScrollMemo(host, unitKey, page, { scroll: lastTop.current, pinnedToBottom: lastAtBottom.current })
+  }, [host, unitKey, page])
 
   // Opening: the bottom when the reader left it there (or never scrolled), else where they were.
   useLayoutEffect(() => {
     const el = ref.current
     if (!el || host === null || unitKey === null) return
-    const m = readViewMemo(host, unitKey)
+    const m = readScrollMemo(host, unitKey, page)
     el.scrollTop = m.pinnedToBottom ? el.scrollHeight : m.scroll
     lastTop.current = el.scrollTop
     lastAtBottom.current = m.pinnedToBottom
     return () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } if (dirty.current) save() }
-  }, [host, unitKey, save])
+  }, [host, unitKey, page, save])
 
   // A different filter shows a different list: start at its bottom.
   useLayoutEffect(() => {
@@ -123,10 +125,10 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     }
     // New entries at the end follow the reader at the bottom, else they are counted for the pill.
     if (shown[shown.length - 1]?.id === old[old.length - 1]?.id) return
-    const pinned = host !== null && unitKey !== null ? readViewMemo(host, unitKey).pinnedToBottom : true
+    const pinned = host !== null && unitKey !== null ? readScrollMemo(host, unitKey, page).pinnedToBottom : true
     if (pinned) { el.scrollTop = el.scrollHeight; lastTop.current = el.scrollTop }
     else setBelow((b) => b + appended(old, shown))
-  }, [shown, host, unitKey, streamKey])
+  }, [shown, host, unitKey, page, streamKey])
 
   const run = useCallback(() => {
     const el = ref.current

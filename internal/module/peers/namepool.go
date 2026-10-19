@@ -114,27 +114,17 @@ func (m *Module) heldPoolNames(ctx context.Context, picked map[string]bool) (map
 	return held, nil
 }
 
-// freePoolNames is the pool minus held, in pool order.
+// freePoolNames is the pickable pool (the active personas, or the built-in names while there are none) minus held, in pool
+// order.
 func freePoolNames(held map[string]bool) []string {
-	free := make([]string, 0, len(ipeers.NamePool))
-	for _, n := range ipeers.NamePool {
+	pickable := ipeers.PickablePool()
+	free := make([]string, 0, len(pickable))
+	for _, n := range pickable {
 		if !held[n] {
 			free = append(free, n)
 		}
 	}
 	return free
-}
-
-// pickFrom asks the picker for one of free; a picker that answers something
-// else gets free[0]. free must not be empty.
-func (m *Module) pickFrom(free []string) string {
-	p := m.namePicker.Pick(free)
-	for _, n := range free {
-		if n == p {
-			return p
-		}
-	}
-	return free[0]
 }
 
 // assignPooled stores the name of a conversation seen for the first time:
@@ -164,8 +154,8 @@ func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refS
 		return store.PeerNameEntry{}, err
 	}
 	name, source := refName, refSource
-	if free := freePoolNames(held); len(free) > 0 {
-		if n, ok := ipeers.VirtualNameWith(base, m.pickFrom(free)); ok {
+	if pick, ok := m.pickOther(ctx, held); ok {
+		if n, ok := ipeers.VirtualNameWith(base, pick); ok {
 			name, source = n, store.PeerNameSourcePool
 		}
 	} else {
@@ -289,8 +279,8 @@ func (m *Module) settlePoolCollisions(ctx context.Context, entries []ipeers.Entr
 		}
 		base := strings.TrimSuffix(l.name, "-"+l.pool)
 		var newName string
-		if free := freePoolNames(held); len(free) > 0 {
-			newName, _ = ipeers.VirtualNameWith(base, m.pickFrom(free))
+		if pick, ok := m.pickOther(ctx, held); ok {
+			newName, _ = ipeers.VirtualNameWith(base, pick)
 		} else {
 			newName, _ = ipeers.VirtualName(base, l.ref)
 		}

@@ -196,12 +196,12 @@ func TestCreate_PersonLeadRefusalInTheTransactionIs409NothingWritten(t *testing.
 // Mutation gate: cap the click's grant too → red.
 func TestDecide_ClickGrantIsNotCapped(t *testing.T) {
 	f := newFixture(t)
-	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.MaxMembers = 8 }
+	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.MaxMembers = 9 }
 	f.create(uid(1))
 	if code, body := f.decide(uid(1), "approve"); code != http.StatusOK {
 		t.Fatalf("decide: %d %s", code, body)
 	}
-	f.assertTeamGrant("sid-1", 8, []string{"/w"})
+	f.assertTeamGrant("sid-1", 9, []string{"/w"})
 }
 
 // Rule 2: begin while the switch is on writes the op claimed and the row
@@ -322,7 +322,7 @@ func TestCreate_SwitchOnRacesCreateNeverOpen(t *testing.T) {
 // S-7 (RT-1b): a person-granted lead gets the default member cap and the origin's cwd as its only folder, whatever the request
 // asked. Mutation gate: honour the request's max_members / roots → red.
 func TestPersonLeadGrant_IsThreeAndTheCwd(t *testing.T) {
-	for _, asked := range []int{0, 1, 5, 8} {
+	for _, asked := range []int{0, 1, 5, 9} {
 		f := newFixture(t)
 		f.personLead()
 		f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.MaxMembers, r.Roots = asked, []string{"/w/a"} })

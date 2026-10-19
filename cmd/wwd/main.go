@@ -13,13 +13,16 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
-	"github.com/wake/purdex/internal/wwd/clones"
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -102,21 +105,36 @@ func run(cfgPath string) error {
 	if err := queue.Migrate(ctx, st.DB()); err != nil {
 		return err
 	}
+	// one record per run, for the crash-loop rule (spec §13.1); a failure to write it must not stop the host from starting
+	startedAt := time.Now() // one stamp for every try, so a retry records the same start
+	recordStart(ctx, func() error { return st.RecordStartAt(startedAt, buildinfo.Version, "") }, startRetryDelays, log.Printf)
 	broker := daemon.NewBroker()
-	// One queue per process. Its job events go to the event stream and to the fast lane, which releases a finished run's keys.
-	// The lock table is the one every claim on this host takes its keys from.
-	var fastLane *localruns.Service
-	q, err := queue.New(st.DB(), queue.Options{
-		Origin: alias, LogDir: filepath.Join(cfg.DataDir, "joblogs"),
-		Publish: func(ev wire.JobEvent) {
-			broker.PublishJob(ev)
-			fastLane.OnJobEvent(ev)
-		},
-	})
+	// The one lock table of this host: the fast lane's runs and the worker's claims take their keys from it. The quarantine store holds
+	// the keys of the jobs whose commands were not proven stopped; their holds go back before anything can take a lock, and a host that
+	// cannot put them all back does not start (a key another owner took would let a second job run beside the first one's leftovers).
+	tbl := locks.New()
+	sb := sandboxFor(cfg.Worker)
+	qstore, workRoot, err := openQuarantine(cfg, tbl, sb)
 	if err != nil {
 		return err
 	}
-	fastLane = localruns.New(locks.New(), localruns.FromQueue(q), alias)
+	if err := qstore.Restore(); err != nil {
+		return fmt.Errorf("worker: the quarantined jobs' holds could not all be put back, wwd does not start: %w", err)
+	}
+	// One queue per process. Its job events go to the event stream and to the fast lane, which releases a finished run's keys.
+	// The lock table is the one every claim on this host takes its keys from.
+	var fastLane *localruns.Service
+	// what each job that ran here used, from the samples and the job's final event (spec 8.5); recording only
+	usage := daemon.NewUsageRecorder(alias, facts.NewJobUsageTracker(time.Now(), daemon.SampleInterval), st)
+	q, err := queue.New(st.DB(), queueOptions(alias, cfg.DataDir, func(ev wire.JobEvent) {
+		broker.PublishJob(ev)
+		fastLane.OnJobEvent(ev)
+		usage.OnJobEvent(ev)
+	}))
+	if err != nil {
+		return err
+	}
+	fastLane = localruns.New(tbl, localruns.FromQueue(q), alias)
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
 		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
 		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
@@ -125,7 +143,9 @@ func run(cfgPath string) error {
 		return err
 	}
 	// the owner rule follows the worker settings: PUT /v1/worker changes the idle limit at run time
-	var srcOpt facts.SourceOptions
+	// the tool directories of [tools] extra_path: one resolved list for the facts' tool probe and for the jobs' PATH
+	toolDirs := facts.ResolveExtraDirs(home, cfg.Tools.ExtraPath, log.Printf)
+	srcOpt := facts.SourceOptions{ToolDirs: toolDirs}
 	if cfg.Owner.Enabled {
 		srcOpt.Owner = &facts.OwnerConfig{}
 		srcOpt.OwnerMinutes = func() int {
@@ -133,10 +153,26 @@ func run(cfgPath string) error {
 			return m
 		}
 	}
+	// the observation records (spec 8.4): the sampler hands each process table to the observer, the routes read it back
+	observer := daemon.NewObserver(alias, facts.ObserveConfig{
+		MinCPUSeconds: cfg.Observe.MinCPUSeconds, MinMemMB: cfg.Observe.MinMemMB, Interval: daemon.SampleInterval,
+	}, st)
+	sources := facts.SystemSourcesWith(srcOpt)
+	sources.Observe = func(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
+		observer.Observe(now, snap, c)
+		usage.Observe(now, snap, c)
+	}
+	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
+	var d *daemon.Daemon                      // the sampler's gate reads its pool, which exists once the daemon does
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
-		Sources: facts.SystemSourcesWith(srcOpt), Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
+		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
+		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
+		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
+		Queued:      func() (int, error) { return q.CountQueued(ctx) },
+		// until WWD-6 a queue job is outside the gate's slots, so the host's own gate is counted (#3447)
+		GateHeavyFull: gateheld.New(gate.DefaultConfigPath(), log.Printf).HeavyFull,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
@@ -145,26 +181,53 @@ func run(cfgPath string) error {
 		}
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
-	d := daemon.New(daemon.Options{
-		HostID: hostID, Alias: alias, Version: buildinfo.Version,
-		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
-		State: state, Broker: broker, Queue: q, LocalRuns: fastLane, RepoSource: clones.NewSource(cfg.Repos).Names,
+	d = daemon.New(daemonOptions(daemonParts{
+		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
+		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st,
+	}))
+	sampler.SetOnFacts(func(f wire.Facts) {
+		d.OnFacts(f)
+		usage.OnFacts(f)
 	})
-	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
-	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
-	go fastLane.Run(ctx)  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
+	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
+	// defer runs before it, which was deferred earlier), also when run() failed.
+	svc := startServices(ctx, usage.Run, func(ctx context.Context) error {
+		return runWorker(ctx, workerInputs{
+			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb, Home: home, ToolDirs: toolDirs,
+			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers, FastLaneReady: fastLane.Ready,
+			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
+		})
+	})
+	// What else makes a job's final event besides the worker: the HTTP servers (a peer's or the caller's result, release, cancel), the queue's
+	// sweeper (a lapsed lease) and the fast lane. At the end they are quiet before the recorder is stopped (Stop's quiesce): the servers closed
+	// with their requests answered (Running.Close waits for them, up to its own limit), the two goroutines returned.
+	var producers sync.WaitGroup
+	var httpRun *daemon.Running
+	defer svc.Stop(stop, func() {
+		if httpRun != nil {
+			_ = httpRun.Close()
+		}
+		producers.Wait()
+	})
+	producers.Add(2)
+	go func() { defer producers.Done(); sweepQueue(ctx, q) }() // lapsed leases, queue timeouts, retention
+	go func() { defer producers.Done(); fastLane.Run(ctx) }()  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
 	}
+	httpRun = run
 	log.Printf("wwd %s listening on %v and %s", buildinfo.Version, run.TCPAddrs(), cfg.SocketPath)
 	select {
 	case <-ctx.Done():
 		return nil
 	case err := <-run.Err():
 		return err
+	case err := <-svc.Err():
+		return err // the worker could not start: wwd does not run half-way
 	}
 }
 

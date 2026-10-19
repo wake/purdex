@@ -28,6 +28,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { AdoptionWaitCard } from './AdoptionWaitCard'
@@ -35,12 +36,14 @@ import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, maxMembersMax, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, type Grant, type LeadNameCandidate } from '../lib/team/types'
+import { fetchLeadNames } from '../lib/team/approval-api'
+import { LeadNameCard } from './LeadNameCard'
 import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
-import { submitDecision } from '../lib/team/approval-decide'
+import { submitDecision, subscribeNameTaken } from '../lib/team/approval-decide'
 import { parseOriginTmux } from '../lib/team/approval-goto'
 import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 
@@ -77,7 +80,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const isMemberRelay = approval.kind === 'member_relay'
   const memberRelay = memberRelayNames(approval)
   const adopt = adoptPayloadOf(approval)
-  const payload = leadPayloadOf(approval)
+  // The member ceiling follows the host that asked: 9 against team.max_members.v2, else 8 (name pool v2 §5.1).
+  const ceiling = maxMembersMax(useUnattendedStore((s) => s.byHost[hostId]?.maxMembersV2Support === 'yes'))
+  const payload = leadPayloadOf(approval, ceiling)
   const relay = selfRelayPayloadOf(approval)
   const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
   // Shown only when the payload has a team_name (a daemon that knows names, D-N10), prefilled with the requested one.
@@ -87,6 +92,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // prefilled with the requested one; while it is empty the placeholder says what the daemon will take from the name.
   const [teamLabel, setTeamLabel] = useState(payload.team_label ?? '')
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
+  // The 「名字」 row (name pool v2 §5.3): only for a lead request that carries a candidate list. The stored list is the fallback; a fresh one is read when the dialog
+  // opens and replaces it, and a `name_taken` answer brings another. The pick (null = 「保留」) is dropped when a refreshed list no longer has it.
+  const [leadNames, setLeadNames] = useState<LeadNameCandidate[] | undefined>(payload.lead_names)
+  const [pickedName, setPickedName] = useState<string | null>(null)
+  const [nameTaken, setNameTaken] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   // Nobody answered this card: no countdown, the session is paused (relay v2 App contract 3). Also true for a card held since
@@ -196,10 +206,40 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   }, [minimized])
 
   const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
-  const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
+  const membersOk = Number.isInteger(members) && members >= 1 && members <= ceiling
   const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
+  const leadNameShown = approval.kind === 'lead' && leadNames !== undefined && leadNames.length > 0
+  // Every list that lands bumps the generation; a read that went out earlier and comes back after a newer list (the open-time read after a `name_taken`) is dropped.
+  const namesGen = useRef(0)
+  const refreshLeadNames = (names: LeadNameCandidate[]) => {
+    namesGen.current += 1
+    setLeadNames(names)
+    setPickedName((p) => (p !== null && names.some((n) => n.code === p) ? p : null))
+  }
+  useEffect(() => {
+    if (approval.kind !== 'lead' || payload.lead_names === undefined) return
+    let live = true
+    const gen = namesGen.current
+    fetchLeadNames(hostId, approval.id).then((names) => { if (live && namesGen.current === gen) refreshLeadNames(names) }, () => {}) // a failed read keeps the stored list
+    return () => { live = false }
+    // once per dialog: it is keyed by the approval
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // The card's answer to a `name_taken`: the list from the refusal (or read again when it came without one), the pick dropped when it is gone, one line above the pills.
+  const onNameTaken = (names: LeadNameCandidate[] | undefined) => {
+    setNameTaken(true)
+    if (names !== undefined) refreshLeadNames(names)
+    else {
+      const gen = namesGen.current
+      void fetchLeadNames(hostId, approval.id).then((fresh) => { if (namesGen.current === gen) refreshLeadNames(fresh) }, () => {})
+    }
+  }
+  // A decision made offline is sent by the reconnect, not by this dialog: its refusal reaches the card the same way.
+  const onTakenRef = useRef(onNameTaken)
+  onTakenRef.current = onNameTaken
+  useEffect(() => subscribeNameTaken((h, id, names) => { if (h === hostId && id === approval.id) onTakenRef.current(names) }), [hostId, approval.id])
   const nameShown = !isSelfRelay && !isAdopt && !isMemberRelay && payload.team_name !== undefined
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
@@ -238,7 +278,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const decide = async (decision: Decision, reveal = false) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
-    const grant: Grant | undefined = !isSelfRelay && !isAdopt && !isMemberRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
+    const grant: Grant | undefined = !isSelfRelay && !isAdopt && !isMemberRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}), ...(leadNameShown && pickedName !== null ? { lead_name: pickedName } : {}) } : undefined
     if (!connected) {
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
@@ -249,7 +289,10 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     }
     inFlight.current = true
     setBusy(true)
-    const outcome = await submitDecision(hostId, approval, decision, grant, reveal ? { reveal } : {})
+    const outcome = await submitDecision(hostId, approval, decision, grant, {
+      ...(reveal ? { reveal } : {}),
+      onNameTaken,
+    })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
       inFlight.current = false
@@ -390,6 +433,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             <p data-testid="approval-self-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.self_relay_note')}</p>
           ) : (
             <>
+              {leadNameShown && leadNames !== undefined && (
+                <LeadNameCard hostId={hostId} currentName={approval.origin.name} names={leadNames} pick={pickedName} onPick={(c) => { setPickedName(c); setNameTaken(false) }} taken={nameTaken} disabled={locked} />
+              )}
               {nameShown && (
                 <>
                   <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
@@ -438,11 +484,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 </>
               )}
               <label className={`${nameShown || labelShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
-                {t('approval.dialog.max_members')}
+                {t('approval.dialog.max_members', { max: ceiling })}
                 <input
                   type="number"
                   min={1}
-                  max={MAX_MAX_MEMBERS}
+                  max={ceiling}
                   step={1}
                   value={maxMembers}
                   disabled={locked}
@@ -457,7 +503,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 )}
               </label>
               {!membersOk && (
-                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.max_members_range', { max: ceiling })}</p>
               )}
               <label className="mt-2 block text-xs text-text-secondary">
                 {t('approval.dialog.roots')}

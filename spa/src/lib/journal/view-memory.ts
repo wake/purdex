@@ -23,11 +23,20 @@ export interface ViewMemo {
   pinnedToBottom: boolean
   /** The 待確認 entry whose detail is open (an entry id), if any. */
   detailId: string | null
+  /** Session pages (journal.sessions.v1): the leader session shown; null = follow the current one. */
+  page: string | null
+  /** Where the stream was on each session page (by leader session id): one value per PAGE, not per unit. */
+  pageScroll: Record<string, ScrollMemo>
   /** The last copy of the open detail's entry that the unit held: kept once the entry leaves the band and the stream (every item answered). */
   lastDetail: JournalEntry | null
 }
 
+/** Where a stream was left: `scroll` is scrollTop, `pinnedToBottom` that it was at its end (it opens there and follows new entries). */
+export interface ScrollMemo { scroll: number; pinnedToBottom: boolean }
+
 export const MAX_VIEW_MEMOS = 200
+/** Pages with a remembered scroll position per unit: the least recently saved past this are forgotten (they open at the bottom). */
+export const MAX_PAGE_SCROLLS = 50
 
 /** A change counter + listeners, so a component can follow a unit's memo (`useViewMemo`) while the memo itself stays outside React. */
 let rev = 0
@@ -43,7 +52,7 @@ const keyOf = (hostId: string, unitKey: string): string => `${hostId}${SEP}${uni
 
 export const initialViewMemo = (): ViewMemo => ({
   journalOpen: false, roadmapOpen: false, tasksOpen: false, fixed: { journal: false, roadmap: false, tasks: false }, widths: { journal: null, roadmap: null, tasks: null },
-  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null, lastDetail: null,
+  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null, lastDetail: null, page: null, pageScroll: {},
 })
 
 export function readViewMemo(hostId: string, unitKey: string): ViewMemo {
@@ -64,6 +73,21 @@ export function patchViewMemo(hostId: string, unitKey: string, patch: Partial<Vi
   bump()
 }
 
+/** The stream's place on session page `page` of a unit ('' = no session pages: the unit's own `scroll` / `pinnedToBottom`). A page never seen opens at the bottom. */
+export function readScrollMemo(hostId: string, unitKey: string, page: string): ScrollMemo {
+  const m = readViewMemo(hostId, unitKey)
+  if (page === '') return { scroll: m.scroll, pinnedToBottom: m.pinnedToBottom }
+  return m.pageScroll[page] ?? { scroll: 0, pinnedToBottom: true }
+}
+
+export function patchScrollMemo(hostId: string, unitKey: string, page: string, v: ScrollMemo): void {
+  if (page === '') { patchViewMemo(hostId, unitKey, v); return }
+  const { [page]: _old, ...rest } = readViewMemo(hostId, unitKey).pageScroll
+  const pageScroll = { ...rest, [page]: v }
+  for (const old of Object.keys(pageScroll).slice(0, Math.max(0, Object.keys(pageScroll).length - MAX_PAGE_SCROLLS))) delete pageScroll[old]
+  patchViewMemo(hostId, unitKey, { pageScroll })
+}
+
 /** Move a memo to another key in one step (the unreachable stand-in -> the resolved unit). Nothing to move, or the target already
  *  holds state: no-op (the source is then left alone). Returns whether it moved. */
 export function migrateViewMemo(fromHost: string, fromKey: string, toHost: string, toKey: string): boolean {
@@ -75,6 +99,10 @@ export function migrateViewMemo(fromHost: string, fromKey: string, toHost: strin
   memos.set(to, m)
   bump()
   return true
+}
+
+export function hasViewMemo(hostId: string, unitKey: string): boolean {
+  return memos.has(keyOf(hostId, unitKey))
 }
 
 export function forgetViewMemo(hostId: string, unitKey: string): void {

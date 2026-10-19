@@ -21,6 +21,16 @@ type Info struct {
 	// Fingerprint is the OS version and every tool's full version (spec §7, §9);
 	// empty before the first facts record.
 	Fingerprint map[string]string `json:"fingerprint"`
+	// Fault says which test hooks this host runs with (docs/wwd-c2-matrix.md section 7); absent, the normal case, when none is on.
+	Fault *InfoFault `json:"fault,omitempty"`
+}
+
+// InfoFault is the hooks that are on. A reader decides from it whether a matrix case can run here.
+type InfoFault struct {
+	LogUploadFail   bool   `json:"log_upload_fail,omitempty"`
+	OwnerActiveFile bool   `json:"owner_active_file,omitempty"`
+	Zone            string `json:"zone,omitempty"`
+	SnapshotDelayS  int    `json:"snapshot_delay_s,omitempty"`
 }
 
 type InfoWorker struct {
@@ -28,7 +38,7 @@ type InfoWorker struct {
 }
 
 func (i Info) Validate() error {
-	if i.Proto != Proto {
+	if i.Proto < MinProto || i.Proto > Proto {
 		return fmt.Errorf("info: unsupported proto %d", i.Proto)
 	}
 	return nil
@@ -67,10 +77,12 @@ const (
 	Step5s = "5s"
 )
 
-// FactsHistoryQuery is GET /v1/facts/history?since=&step=.
+// FactsHistoryQuery is GET /v1/facts/history?since=&step=. Host, when set, is the alias of another host of the pool: on the socket the
+// local wwd forwards the question to it (spec §10); it is not part of what ParseFactsHistoryQuery reads (the route takes it apart).
 type FactsHistoryQuery struct {
 	Since time.Time
 	Step  string
+	Host  string
 }
 
 // ParseFactsHistoryQuery parses the query string; step defaults to 5s.
@@ -92,7 +104,11 @@ func ParseFactsHistoryQuery(v url.Values) (FactsHistoryQuery, error) {
 }
 
 func (q FactsHistoryQuery) Values() url.Values {
-	return url.Values{"since": {q.Since.Format(time.RFC3339)}, "step": {q.Step}}
+	v := url.Values{"since": {q.Since.Format(time.RFC3339)}, "step": {q.Step}}
+	if q.Host != "" {
+		v.Set("host", q.Host)
+	}
+	return v
 }
 
 type FactsHistoryResponse struct {
@@ -163,7 +179,7 @@ func (e Event) Validate() error {
 }
 
 // DecodeData strictly decodes Data into the type for e.Type (Facts, JobEvent,
-// LabelsEvent, ExceptionEvent or WorkerEvent, by value).
+// LabelsEvent, ExceptionEvent, WorkerEvent or AlertEvent, by value).
 func (e Event) DecodeData() (any, error) {
 	switch e.Type {
 	case EventFacts:
@@ -176,6 +192,8 @@ func (e Event) DecodeData() (any, error) {
 		return Decode[ExceptionEvent](e.Data)
 	case EventWorker:
 		return Decode[WorkerEvent](e.Data)
+	case EventAlert:
+		return Decode[AlertEvent](e.Data)
 	}
 	return nil, fmt.Errorf("event: invalid type %q", e.Type)
 }
@@ -194,6 +212,10 @@ type Exception struct {
 	Until *time.Time `json:"until"`
 	PID   *int       `json:"pid"`
 	Holds []Hold     `json:"holds"`
+	// Allow and Flags make an exception a hold (spec §13.4). Absent, the exception means what it always meant. Present,
+	// the worker admits a job only if its class or its repo is listed (both lists empty: none).
+	Allow *HoldAllow `json:"allow,omitempty"`
+	Flags []HoldFlag `json:"flags,omitempty"`
 }
 
 func (e Exception) Validate() error {
@@ -211,18 +233,47 @@ func (e Exception) Validate() error {
 			return fmt.Errorf("exception: invalid hold %q", h)
 		}
 	}
+	if err := validateHoldFields(e.Allow, e.Flags); err != nil {
+		return fmt.Errorf("exception: %w", err)
+	}
 	return nil
 }
 
 // ---- Purdex daemon API for the App (spec §10) ----
 
-// PoolHost is one host in GET /api/pool/hosts.
+// HeadroomReasons says why a side of a host's headroom is 0: the codes of spec §3.2 in this order, worker_off, zone_warning |
+// zone_danger | zone_unknown, exception:<name>, owner_active, slots_full, gate_full (and unknown for a side at 0 that a faulty record does not explain). An empty list means there is room. Both lists are
+// never null.
+type HeadroomReasons struct {
+	Heavy []string `json:"heavy"`
+	Light []string `json:"light"`
+}
+
+// Load drivers: the reading that holds a host's composite load up (internal/fleet.LoadScore).
+const (
+	LoadDriverCPU    = "cpu"
+	LoadDriverMem    = "mem"
+	LoadDriverLevel  = "pressure"
+	LoadDriverPaging = "paging"
+	LoadDriverDisk   = "disk"
+)
+
+// HostLoad is a host's composite load, 0-100, and the reading that is the largest of those it is made of.
+type HostLoad struct {
+	Score  float64 `json:"score"`
+	Driver string  `json:"driver"`
+}
+
+// PoolHost is one host in GET /api/pool/hosts. HeadroomReasons and Load come from the latest facts and are null for a host that has
+// none (capability pool.assess.v1).
 type PoolHost struct {
-	Info      Info           `json:"info"`
-	Facts     *Facts         `json:"facts"`
-	Worker    WorkerSettings `json:"worker"`
-	Labels    []string       `json:"labels"`
-	Reachable bool           `json:"reachable"`
+	Info            Info             `json:"info"`
+	Facts           *Facts           `json:"facts"`
+	Worker          WorkerSettings   `json:"worker"`
+	Labels          []string         `json:"labels"`
+	Reachable       bool             `json:"reachable"`
+	HeadroomReasons *HeadroomReasons `json:"headroom_reasons"`
+	Load            *HostLoad        `json:"load"`
 }
 
 type PoolHostsResponse struct {
@@ -246,9 +297,14 @@ func (r PoolHostsResponse) Validate() error {
 // JobsListResponse is the answer to GET /v1/jobs. Cursor is the origin's position after the last change the answer carries: sent back as
 // ?after=<cursor> it returns the jobs that changed since, each once, in the state it is in now. It is a decimal string made on the
 // origin (never a time of a worker's) that the client treats as opaque. It is empty only in an answer that is not a cursor read.
+//
+// Epoch names the database the cursor belongs to: it is made when the queue's tables are created and never changes after, so a wwd.db
+// that was removed and made again has another one. A client keeps it with its cursor, and a cursor kept under a different epoch means
+// nothing here: it starts again from "0". It is empty only from a server that predates it.
 type JobsListResponse struct {
 	Jobs   []Job  `json:"jobs"`
 	Cursor string `json:"cursor"`
+	Epoch  string `json:"epoch"`
 }
 
 var cursorRe = regexp.MustCompile(`^[0-9]{1,18}$`)
@@ -256,9 +312,41 @@ var cursorRe = regexp.MustCompile(`^[0-9]{1,18}$`)
 // ValidCursor reports whether s has the form of a cursor (what ?after= takes and JobsListResponse.Cursor carries).
 func ValidCursor(s string) bool { return cursorRe.MatchString(s) }
 
+var epochRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// ValidEpoch reports whether s has the form of a database epoch.
+func ValidEpoch(s string) bool { return epochRe.MatchString(s) }
+
+// CursorAheadReason is the only reason a CursorAhead carries.
+const CursorAheadReason = "cursor_ahead"
+
+// CursorAhead is the 409 body of GET /v1/jobs?after=<cursor> when the cursor is past the origin's last change: it was made by another
+// database (this one was removed and made again), so reading from it would find nothing, forever. Head and Epoch are this database's;
+// the client starts again from "0" under the new epoch.
+type CursorAhead struct {
+	Reason string `json:"reason"`
+	Head   string `json:"head"`
+	Epoch  string `json:"epoch"`
+}
+
+func (c CursorAhead) Validate() error {
+	switch {
+	case c.Reason != CursorAheadReason:
+		return fmt.Errorf("cursor ahead: unexpected reason %q", c.Reason)
+	case !ValidCursor(c.Head):
+		return fmt.Errorf("cursor ahead: invalid head %q", c.Head)
+	case !ValidEpoch(c.Epoch):
+		return fmt.Errorf("cursor ahead: invalid epoch %q", c.Epoch)
+	}
+	return nil
+}
+
 func (r JobsListResponse) Validate() error {
 	if r.Cursor != "" && !ValidCursor(r.Cursor) {
 		return fmt.Errorf("jobs list: invalid cursor %q", r.Cursor)
+	}
+	if r.Epoch != "" && !ValidEpoch(r.Epoch) {
+		return fmt.Errorf("jobs list: invalid epoch %q", r.Epoch)
 	}
 	for i, j := range r.Jobs {
 		if err := j.Validate(); err != nil {

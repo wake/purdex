@@ -16,7 +16,7 @@ import { CardStack } from './CardStack'
 import { TabContent } from '../TabContent'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
-import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
+import { ccTabOf, seedUnit, setJournalHost, setSessionsSupport } from '../../lib/journal/__tests__/journal-fixture'
 import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
 import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
@@ -211,6 +211,37 @@ describe('the card stack unmounted and mounted again', () => {
     r.rerender(<Shell stack />)
     setActive('a')
     expectArranged()
+  })
+})
+
+describe('session pages across tab switches', () => {
+  const OLD = Array.from({ length: 14 }, (_, i) => ({ ...taskEntry(i + 1), id: `o${String(i + 1).padStart(3, '0')}` }))
+  const link = (sessionId: string, startedAt: number, endedAt: number, current: boolean) => ({ sessionId, startedAt, endedAt, via: 'relay' as const, current })
+  beforeEach(() => {
+    setSessionsSupport(HOST, true)
+    seedUnit(HOST, 'SA', SOLO_A, {
+      entries: TASKS, confirms: [CONFIRM], openConfirms: 1, tasks: [], roadmap: [], currentPage: 's2',
+      sessions: [link('s1', AT, AT + 1000, false), link('s2', AT + 1000, 0, true)],
+      pages: { s1: { entries: OLD, truncated: false, readAt: 5 } },
+    })
+  })
+  it('the page being read and each page\'s own scroll position come back (M: one scroll value per unit)', () => {
+    render(<Shell />)
+    stream().scrollTop = 40
+    fireEvent.scroll(stream())
+    fireEvent.click(screen.getByTestId('journal-page-prev'))
+    expect(within(stream()).getAllByTestId('journal-entry')).toHaveLength(14)
+    expect(stream().scrollTop).toBe(maxTop(stream())) // a page not seen before opens at its bottom
+    stream().scrollTop = 120
+    fireEvent.scroll(stream())
+    awayAndBack()
+    expect(readViewMemo(HOST, 'solo:a').page).toBe('s1')
+    expect(within(stream()).getAllByTestId('journal-entry')).toHaveLength(14)
+    expect(screen.getByTestId('journal-page-header').textContent).not.toContain('Current')
+    expect(stream().scrollTop).toBe(120)
+    fireEvent.click(screen.getByTestId('journal-page-next'))
+    expect(within(stream()).getAllByTestId('journal-entry')).toHaveLength(12)
+    expect(stream().scrollTop).toBe(40) // the current page was left at 40, not at 120
   })
 })
 

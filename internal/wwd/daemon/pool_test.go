@@ -48,7 +48,7 @@ func TestPoolPollsPeersAndKeepsLastKnownWhenOneGoesAway(t *testing.T) {
 	if a := byAlias["air26"]; !a.Reachable || a.Facts == nil || a.Facts.Alias != "air26" {
 		t.Errorf("air26: %+v", a)
 	}
-	if a := byAlias["air19"]; a.Reachable || a.Facts != nil || a.Info.Proto != wire.Proto || a.Info.Labels == nil {
+	if a := byAlias["air19"]; a.Reachable || a.Facts != nil || a.Info.Proto != wire.MinProto || a.Info.Labels == nil {
 		t.Errorf("a peer never reached: reachable=false, facts null, a valid info stub: %+v", a)
 	}
 	if err := (wire.Pool{Peers: got}).Validate(); err != nil {
@@ -84,7 +84,7 @@ func TestPoolRefusesAPeerThatAnswersAsSomeoneElse(t *testing.T) {
 		case "/v1/info":
 			writeJSON(w, 200, wire.Info{HostID: "id-mserv", Alias: "mserv", Version: "v", Proto: wire.Proto, Platform: "linux", Arch: "amd64", Labels: []string{}})
 		case "/v1/facts":
-			f := wire.Facts{V: wire.Proto, HostID: "id-mserv", Alias: factsAlias.Load().(string), Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0}
+			f := wire.Facts{V: wire.FactsProto, HostID: "id-mserv", Alias: factsAlias.Load().(string), Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0}
 			writeJSON(w, 200, f)
 		}
 	}))
@@ -116,7 +116,7 @@ func TestPoolDropsFactsOfAReplacedHost(t *testing.T) {
 				http.Error(w, "no sample yet", http.StatusServiceUnavailable)
 				return
 			}
-			writeJSON(w, 200, wire.Facts{V: wire.Proto, HostID: id.Load().(string), Alias: "mserv", Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0})
+			writeJSON(w, 200, wire.Facts{V: wire.FactsProto, HostID: id.Load().(string), Alias: "mserv", Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0})
 		}
 	}))
 	defer srv.Close()

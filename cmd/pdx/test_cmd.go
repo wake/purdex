@@ -44,7 +44,7 @@ func testMain(args []string, stdout, stderr io.Writer) int {
 	api := client.New(client.DefaultSocket())
 	o := testcmd.Options{
 		Args: a, Dir: dir, API: api, Env: os.Environ(),
-		Session: os.Getenv("PDX_SESSION_ID"), Stdout: stdout, Stderr: stderr,
+		Session: submitterSession(), Stdout: stdout, Stderr: stderr,
 		Recorder: localrec.Recorder{API: api}, // a wwd without the local-runs route runs the command unrecorded
 	}
 	if home, err := os.UserHomeDir(); err == nil {

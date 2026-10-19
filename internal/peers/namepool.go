@@ -16,25 +16,20 @@ var NamePool = [...]string{
 	"erik", "freya", "ivan", "olga", "kofi", "amara", "tiago", "julia", "budi", "linh",
 }
 
-var poolNames = func() map[string]bool {
-	m := make(map[string]bool, len(NamePool))
-	for _, n := range NamePool {
-		m[n] = true
-	}
-	return m
-}()
-
 // PoolNameOf reports the pool name a virtual name ends with: the segment
-// after its last '-', when that segment is a whole pool name. A base that
-// merely contains a pool word ("anna-tools-k3") and a ref suffix
-// ("purdex-3f-vq") are not pool names.
+// after its last '-', when that segment is a whole recognised pool name (the
+// built-in list, or the personas once the peers module has loaded them: see
+// poolreg.go). A base that merely contains a pool word ("anna-tools-k3") and
+// a ref suffix ("purdex-3f-vq") are not pool names.
 func PoolNameOf(virtualName string) (string, bool) {
 	i := strings.LastIndexByte(virtualName, '-')
 	if i < 0 {
 		return "", false
 	}
-	if n := virtualName[i+1:]; poolNames[n] {
-		return n, true
+	if n := virtualName[i+1:]; n != "" {
+		if _, ok := loadPool().recognised[n]; ok {
+			return n, true
+		}
 	}
 	return "", false
 }

@@ -34,7 +34,10 @@ const (
 
 // Spec is one command to run.
 type Spec struct {
-	JobID     string
+	JobID string
+	// Origin is the tag of the connection the job came in on (worker/ident.OriginTag of the source), put into the mark as WWD_ORIGIN;
+	// "" for a run with none (the mark is then the old kind, which any origin's sweep also matches during the transition).
+	Origin    string
 	Argv      []string // already rendered; started directly, never through a shell
 	Dir       string   // the working directory (absolute)
 	Workspace string   // the workspace root; HOME, TMPDIR and XDG_* point inside it
@@ -46,6 +49,8 @@ type Spec struct {
 	MaxLog    int64         // per-file capture cap; DefaultMaxLog when zero
 	// Procs finds processes by job mark for the sweep after the run; DefaultProcSource() when nil.
 	Procs ProcSource
+	// Sandbox, when set (Linux hosts), runs the command as a transient systemd service instead of a process group.
+	Sandbox *Sandbox
 }
 
 // Result is what the run left behind.
@@ -53,7 +58,8 @@ type Result struct {
 	Outcome    Outcome
 	ExitCode   int    // the exit status for Exited; -1 otherwise
 	Signal     string // the signal that ended it, for Exited by signal (an OOM kill shows as KILL)
-	Err        error  // why a StartFailed run did not start
+	Err        error  // why a StartFailed run did not start; a sandboxed run of any Outcome can carry one that says the unit was not proven stopped (an infrastructure failure: do not reuse the workspace)
+	Reason     string // "oom" or "timeout" when the sandbox's unit says so; empty otherwise
 	StartedAt  time.Time
 	FinishedAt time.Time
 	LogPath    string // stdout and stderr in arrival order
@@ -67,18 +73,29 @@ type Result struct {
 	// leaks processes, and the log says so. SweepErr is why the scan could not run (the job's result is unaffected).
 	Escaped  []int
 	SweepErr error
+	// Usage is what the run used (CPU time; for a sandbox unit also the memory peak). Recording only: it is the zero value when
+	// nothing was measured, and nothing reads it to decide what a run's result is.
+	Usage Usage
 }
 
 // Run starts the command, waits for it, and ends its whole process group on timeout or cancel (TERM, then KILL after
 // KillAfter). When it returns, no process of the group is left.
 func Run(ctx context.Context, spec Spec) Result {
 	res := Result{ExitCode: -1}
-	env, err := BuildEnv(spec.JobID, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
+	env, err := BuildEnv(spec.JobID, spec.Origin, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
 	if err != nil {
 		return failStart(res, err)
 	}
 	if len(spec.Argv) == 0 || spec.Argv[0] == "" {
 		return failStart(res, fmt.Errorf("run: empty command"))
+	}
+	if spec.Sandbox != nil {
+		if err := spec.Sandbox.validate(spec); err != nil {
+			return failStart(res, err)
+		}
+		if err := spec.Sandbox.checkExtraPaths(); err != nil {
+			return failStart(res, err)
+		}
 	}
 	if !filepath.IsAbs(spec.Dir) {
 		return failStart(res, fmt.Errorf("run: the working directory %q must be absolute", spec.Dir))
@@ -102,6 +119,9 @@ func Run(ctx context.Context, spec Spec) Result {
 	cp, err := newCapture(res.LogPath, res.StdoutPath, spec.MaxLog)
 	if err != nil {
 		return failStart(res, err)
+	}
+	if spec.Sandbox != nil {
+		return runSandboxed(ctx, spec, env, prog, cp, res)
 	}
 
 	cmd := execstat.Command("wwd.run", prog, spec.Argv[1:]...)
@@ -145,18 +165,21 @@ func Run(ctx context.Context, spec Spec) Result {
 		waitErr = endGroup(pgid, killAfter, done)
 	}
 	// The leader is gone; anything it left behind in the group goes too.
+	strays := syscall.Kill(-pgid, 0) == nil // someone is still in the group: what it used from here on is in no figure
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	// Then whatever left the group (a daemonized tmux server, vite, playwright) but kept the job mark.
 	src := spec.Procs
 	if src == nil {
 		src = DefaultProcSource()
 	}
-	res.Escaped, res.SweepErr = sweepBounded(src, spec.JobID, killAfter)
+	res.Escaped, res.SweepErr = sweepBounded(src, spec.Origin, spec.JobID, killAfter)
 	if len(res.Escaped) > 0 {
 		cp.note(escapedNote(res.Escaped))
 	}
 	res.FinishedAt = time.Now()
 	res.Tail, res.LogCut, res.CaptureErr = cp.close()
+	res.Usage = rusageUsage(cmd.ProcessState) // set once Wait returned, which every branch above waited for
+	res.Usage.Leaked = strays || len(res.Escaped) > 0
 
 	if res.Outcome == Exited {
 		var ee *exec.ExitError

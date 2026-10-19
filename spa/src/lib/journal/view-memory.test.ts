@@ -1,6 +1,6 @@
 // spa/src/lib/journal/view-memory.test.ts — per-unit view memory retention (J-2a T-2a.5).
 import { beforeEach, describe, expect, it } from 'vitest'
-import { MAX_VIEW_MEMOS, clearViewMemos, forgetViewMemo, forgetViewMemosOfHost, initialViewMemo, patchViewMemo, readViewMemo, viewMemoCount } from './view-memory'
+import { MAX_VIEW_MEMOS, clearViewMemos, forgetViewMemo, forgetViewMemosOfHost, initialViewMemo, patchScrollMemo, patchViewMemo, readScrollMemo, readViewMemo, viewMemoCount, MAX_PAGE_SCROLLS } from './view-memory'
 
 beforeEach(() => clearViewMemos())
 
@@ -47,5 +47,33 @@ describe('journal view memory', () => {
     patchViewMemo('h2', 'a', { journalOpen: true })
     forgetViewMemosOfHost('h')
     expect(readViewMemo('h2', 'a').journalOpen).toBe(true)
+  })
+})
+
+describe('scroll memory per session page', () => {
+  it('each page keeps its own place; a page never seen opens at the bottom', () => {
+    patchScrollMemo('h', 'u', 'p1', { scroll: 40, pinnedToBottom: false })
+    patchScrollMemo('h', 'u', 'p2', { scroll: 90, pinnedToBottom: true })
+    expect(readScrollMemo('h', 'u', 'p1')).toEqual({ scroll: 40, pinnedToBottom: false })
+    expect(readScrollMemo('h', 'u', 'p2')).toEqual({ scroll: 90, pinnedToBottom: true })
+    expect(readScrollMemo('h', 'u', 'p3')).toEqual({ scroll: 0, pinnedToBottom: true })
+  })
+  it('the unit\'s own scroll is the no-session-pages place and is not a page\'s', () => {
+    patchScrollMemo('h', 'u', '', { scroll: 7, pinnedToBottom: false })
+    expect(readViewMemo('h', 'u')).toMatchObject({ scroll: 7, pinnedToBottom: false })
+    expect(readScrollMemo('h', 'u', 'p1')).toEqual({ scroll: 0, pinnedToBottom: true })
+  })
+  it('units are separate and the page choice is remembered per unit', () => {
+    patchScrollMemo('h', 'a', 'p1', { scroll: 5, pinnedToBottom: false })
+    patchViewMemo('h', 'a', { page: 'p1' })
+    expect(readScrollMemo('h', 'b', 'p1')).toEqual({ scroll: 0, pinnedToBottom: true })
+    expect(readViewMemo('h', 'b').page).toBeNull()
+    expect(readViewMemo('h', 'a').page).toBe('p1')
+  })
+  it('is bounded per unit', () => {
+    for (let i = 0; i < MAX_PAGE_SCROLLS + 3; i++) patchScrollMemo('h', 'u', `p${i}`, { scroll: i + 1, pinnedToBottom: false })
+    expect(Object.keys(readViewMemo('h', 'u').pageScroll)).toHaveLength(MAX_PAGE_SCROLLS)
+    expect(readScrollMemo('h', 'u', 'p0')).toEqual({ scroll: 0, pinnedToBottom: true })
+    expect(readScrollMemo('h', 'u', `p${MAX_PAGE_SCROLLS + 2}`).scroll).toBe(MAX_PAGE_SCROLLS + 3)
   })
 })

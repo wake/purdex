@@ -12,6 +12,7 @@ import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useRelayQuotaStore, quotaKey } from '../lib/team/relay-quota'
 import { refetchHost, resetWriter } from '../lib/team/relay-quota-writer'
+import { readFirstPage, resetReader } from '../lib/team/unattended-reader'
 import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
 vi.mock('../lib/team/unattended-api', () => ({ getUnattended: vi.fn() }))
@@ -487,6 +488,7 @@ describe('UnattendedPanel relay quota', () => {
     useTeamRosterStore.getState().reset()
     useRelayQuotaStore.getState().reset()
     resetWriter()
+    resetReader()
   })
 
   it('no quota section for a host without the capability, even if its view happens to carry rows', async () => {
@@ -543,6 +545,20 @@ describe('UnattendedPanel relay quota', () => {
     expect(screen.getAllByTestId('quota-host-heading').map((h) => h.textContent)).toEqual(['mlab', 'air26'])
   })
 
+  it('a host whose read failed or timed out still has its quota place: 「讀不到額度」 beside the named failure (#2891), the other host\'s rows stay', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useUnattendedStore.getState().setQuotaSupport(B, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [])
+    mockedGet.mockImplementation((hostId) => hostId === B ? new Promise<UnattendedView>(() => {}) : Promise.resolve(page([], { quotas: [] })))
+    open([A, B])
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('air26：無法讀取（timeout）')
+    expect(screen.getByTestId('quota-unreadable')).toHaveTextContent('air26：讀不到額度')
+    expect(screen.getByTestId('quota-none')).toHaveTextContent('沒有可設定的 session')
+  })
+
   it('the held section only when held is non-empty, newest first; the approved list below is unchanged', async () => {
     useUnattendedStore.getState().setQuotaSupport(A, 'yes')
     useTeamRosterStore.getState().apply(A, [])
@@ -574,6 +590,53 @@ describe('UnattendedPanel relay quota', () => {
     expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p9')
     expect(screen.queryByTestId('quota-unreadable')).toBeNull()
     expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'real-root')]?.self_left).toBe(6)
+  })
+
+  // journal v5 §3.9: one reader shared with the team settings, single-flight per host.
+  it('joins a read of the host already out (the team settings\'): one request, and its rows show here', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    let release!: (v: UnattendedView) => void
+    mockedGet.mockReturnValue(new Promise<UnattendedView>((r) => { release = r }))
+    const elsewhere = readFirstPage(A) // the team settings opened first
+    open([A])
+    await flush()
+    expect(mockedGet).toHaveBeenCalledTimes(1)
+    await act(async () => { release(page([approved('a1', at(9, 0))], { quotas: [quota('p1')] })) })
+    await elsewhere
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    expect(rows()).toEqual(['mlab：sess-a1 · 接力申請 · 09:00'])
+  })
+
+  it('a re-read made for the team settings shows here too (the rows are the host\'s last read)', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p1')] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p2')] }))
+    await act(async () => { await readFirstPage(A) })
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['p2'])
+  })
+
+  it('a new connection generation (a reconnect) reads the open panel\'s host again; a host known to be down is not asked', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p1')] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    const generation = (status: 'connected' | 'disconnected') => act(() => {
+      useHostStore.setState((s) => ({ runtime: { ...s.runtime, [A]: { status } } }))
+      useRelayQuotaStore.getState().fence(A) // what unattended-support.ts does on the same change
+    })
+    generation('disconnected')
+    await flush()
+    expect(mockedGet).toHaveBeenCalledTimes(1)
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p2')] }))
+    generation('connected')
+    await flush()
+    expect(mockedGet).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['p2'])
   })
 
   it('closing the panel unregisters the re-read', async () => {

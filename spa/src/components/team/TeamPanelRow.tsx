@@ -2,6 +2,11 @@
 import { Notebook } from '@phosphor-icons/react'
 import type { TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
+import { TeamSeatLight } from './TeamSeatLight'
+import { Avatar } from '../Avatar'
+import { useSeat } from '../../lib/names/seat'
+import { useHostLook } from '../../lib/host-look'
+import { resolveHostColors } from '../../lib/host-color'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
@@ -13,7 +18,8 @@ import { pausedLightText } from '../../lib/team/paused-text'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import type { JournalMember } from '../../lib/journal/types'
 import { useCoarseNow } from '../../hooks/useCoarseNow'
-import { memberLastLine, memberTaskLine } from './member-lines'
+import { leadLastLine, memberLastLine, memberTaskLine, useLeadJournalRead } from './member-lines'
+import { useJournalStore } from '../../stores/useJournalStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
@@ -56,6 +62,15 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
   const readingTip = noAnswer ?? `${modelText} · ${r.effort ?? '—'} · ${ctxTip(r.ctx, t)}`
   const rowTip = away ? `${t('team.seat_not_in_app')}\n${readingTip}` : readingTip
   const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
+  useLeadJournalRead(seat.hostId, seat.sessionId, seat.role === 'lead')
+  const leadLine = useJournalStore((s) => (seat.role === 'lead' ? leadLastLine(s, seat.hostId, seat.sessionId) : ''))
+  // Who the row is (name pool v2): the persona by the code its address ends in. With none the avatar is initials on the host colour, same size, so the
+  // layout does not move, and the title takes the name's place.
+  const persona = useSeat(seat.address)
+  const look = useHostLook(seat.hostId === '' ? null : seat.hostId)
+  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? color
+  const name = persona?.name ?? seat.title
+  const showTitle = persona !== null && seat.title !== '' && seat.title !== persona.name
   return (
     <div
       role="button"
@@ -72,15 +87,24 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       onKeyDown={(e) => { if (e.key === 'Enter') open() }}
       {...drag}
       onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
-      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors cursor-pointer ${
-        isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors cursor-pointer grid grid-cols-[44px_minmax(0,1fr)] gap-x-2.5 ${
+        // --seat-ring is the row's own background, so the light's ring follows it (normal, hover, active)
+        isActive ? 'bg-surface-active text-white [--seat-ring:var(--surface-active)]' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary [--seat-ring:var(--surface-secondary)] hover:[--seat-ring:var(--surface-hover)]'
       } ${dragging ? 'opacity-30' : ''}`}
     >
       {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
-      {/* Line 1: subagent dots (drawn by the icon, to its left) -> bot + light -> host chip -> title -> lead / unopened */}
-      <div className="flex items-center gap-1.5 pl-1.5">
-        <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex items-center gap-1.5 ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents />
+      {/* The avatar spans the row's lines; the light is its corner badge (a seat in transition dims it) */}
+      <div data-testid="team-panel-avatar" aria-hidden="true" className="relative w-11 h-11 flex-shrink-0">
+        <Avatar size={44} code={persona?.code ?? ''} name={name} src={persona?.avatar} fallbackColor={faceColor} />
+        <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -bottom-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
+          <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
+        </span>
+      </div>
+      <div className="min-w-0">
+      {/* Line 1: agent icon (muted, no light) -> host badge -> host chip -> name -> title -> lead / unopened -> ring -> workbook */}
+      <div className="flex items-center gap-1.5">
+        <span className={`inline-flex items-center gap-1.5 text-text-muted ${transition !== null ? 'opacity-40' : ''}`}>
+          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents light={false} />
           <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
         </span>
         {seat.remote && (
@@ -88,7 +112,10 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
             {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
           </span>
         )}
-        <span className="truncate min-w-0 flex-1">{seat.title}</span>
+        {/* the name never gives way (design: the title is the first to truncate) */}
+        <span data-testid="team-panel-seat-name" className={`${showTitle ? 'flex-shrink-0 whitespace-nowrap' : 'truncate min-w-0'} text-[13px] font-semibold text-text-primary`}>{name}</span>
+        {showTitle && <span data-testid="team-panel-seat-title" className="truncate min-w-0 flex-1 text-[11.5px] text-text-muted">{seat.title}</span>}
+        {!showTitle && <span className="flex-1" />}
         <HalfHandoffMark handoff={freshHandoff} variant="chip" />
         {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
@@ -119,7 +146,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       </div>
       {/* 被擋下 (UP-5b): the roster row says it is paused; the chip's 解除 goes to the host the seat lives on. */}
       {paused && (
-        <div data-testid="team-panel-paused" className="pl-[26px] mt-1 flex items-center gap-2 text-[11px] leading-[16px] text-status-warning-text">
+        <div data-testid="team-panel-paused" className="mt-1 flex items-center gap-2 text-[11px] leading-[16px] text-status-warning-text">
           <span className="min-w-0 flex-1 truncate">{pausedLightText(t, paused.causes, 0, seat.role)}</span>
           {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} causes={paused.causes} />}
         </div>
@@ -127,19 +154,24 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       {/* Lines 2 and 3 from the leader's journal (JV-2, U3): the member's current task and state; its last report to the leader.
           A part the daemon left out is left out; with neither the row stays as it was. */}
       {member?.task && (
-        <div data-testid="team-panel-member-task" title={member.task.title} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
+        <div data-testid="team-panel-member-task" title={member.task.title} className="mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
           {memberTaskLine(t, member.task)}
         </div>
       )}
       {member?.last && (
         <MemberLastLine last={member.last} />
       )}
+      {/* The lead's line 2: its own last journal line (the lead has no member task; a team the journal has not read shows none) */}
+      {leadLine !== '' && (
+        <div data-testid="team-panel-lead-line" title={leadLine} className="mt-1 text-[11px] leading-[16px] text-text-secondary truncate">{leadLine}</div>
+      )}
       {/* Line 2 (older hosts): the task (only with a workbook that has a status); without one the row stays one line */}
       {task !== '' && (
-        <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
+        <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
           {task}
         </div>
       )}
+      </div>
     </div>
   )
 }
@@ -149,7 +181,7 @@ function MemberLastLine({ last }: { last: NonNullable<JournalMember['last']> }) 
   const t = useI18nStore((s) => s.t)
   const now = useCoarseNow()
   return (
-    <div data-testid="team-panel-member-last" title={last.text} className="pl-[26px] mt-0.5 text-[11px] leading-[16px] text-text-muted truncate">
+    <div data-testid="team-panel-member-last" title={last.text} className="mt-0.5 text-[11px] leading-[16px] text-text-muted truncate">
       {memberLastLine(t, last, now)}
     </div>
   )
