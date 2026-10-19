@@ -7,7 +7,7 @@ import type { PoolFacts } from '../../lib/pool/types'
 import type { PoolReadings } from '../../lib/pool/use-pool-host-rows'
 import { ProbeBadge } from './probe-rows'
 import { PoolStatusDot } from './PoolStatusDot'
-import { statusWord } from './PoolHostsSection'
+import { statusWord } from './pool-status-word'
 
 /**
  * A resource pool host's own page (plan WWD-7, 7a-3b): the header (badge, name, light, status word; wwd version, proto, platform,
