@@ -38,6 +38,9 @@ const maxInFlight = 8
 const (
 	answerTTL = time.Second
 	maxCached = 16
+	// maxCachedBody is the largest answer that is kept: a raw history can be megabytes, and 16 of those held until the next store would be
+	// memory for nothing (a series is a few hundred KB).
+	maxCachedBody = 2 << 20
 )
 
 type cachedAnswer struct {
@@ -235,7 +238,7 @@ func (m *Module) cachedLocked(key string) ([]byte, bool) {
 func (m *Module) store(key string, body []byte) {
 	m.flightMu.Lock()
 	defer m.flightMu.Unlock()
-	if m.cache == nil {
+	if m.cache == nil || len(body) > maxCachedBody {
 		return
 	}
 	if len(m.cache) >= maxCached {

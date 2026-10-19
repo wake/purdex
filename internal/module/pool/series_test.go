@@ -66,6 +66,22 @@ func TestSeriesOfProjectsEachRecordToAPoint(t *testing.T) {
 	assert.Equal(t, wire.ZoneWarning, q.Zone)
 }
 
+// wwd answers oldest first, but the cut must not depend on it: records out of order still lose the oldest, and come out oldest first.
+func TestSeriesOfCutsByTimeNotByPosition(t *testing.T) {
+	base := baseFacts(t)
+	t0 := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	recs := make([]wire.Facts, seriesMaxPoints+3)
+	for i := range recs {
+		recs[i] = rec(base, t0.Add(time.Duration(i)*time.Minute), wire.ZoneNormal, 50, 1, 1, nil, nil, wire.Slots{})
+	}
+	newest := recs[len(recs)-1].At
+	recs[0], recs[len(recs)-1] = recs[len(recs)-1], recs[0] // the newest first, the oldest last
+	got := seriesOf(wire.FactsHistoryResponse{Step: "1m", Records: recs})
+	require.Len(t, got.Points, seriesMaxPoints)
+	assert.Equal(t, t0.Add(3*time.Minute), got.Points[0].At)
+	assert.Equal(t, newest, got.Points[len(got.Points)-1].At)
+}
+
 func TestSeriesOfKeepsTheLatestPointsWithinTheCap(t *testing.T) {
 	base := baseFacts(t)
 	t0 := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)

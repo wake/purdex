@@ -48,3 +48,23 @@ func TestSeriesCacheKeysTheHostAndTheWindow(t *testing.T) {
 	assert.Equal(t, 1, calls["mserv|2026-10-18T11:00:00Z|5s"], "the same question twice is one wwd call")
 	assert.Equal(t, 2, len(calls))
 }
+
+// A big answer is not kept: a raw history of megabytes would sit in the cache until the next store, so asking twice is two wwd calls.
+func TestBigAnswersAreNotCached(t *testing.T) {
+	base := baseFacts(t)
+	t0 := time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC)
+	recs := []wire.Facts{rec(base, t0, wire.ZoneNormal, 10, 1, 1, nil, nil, wire.Slots{})}
+	for len(historyOf("1m", recs...)) <= maxCachedBody {
+		recs = append(recs, recs[0])
+	}
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		serve(historyOf("1m", recs...))(w, r)
+	})
+	m := newModule(t, fakeWWD(t, mux))
+	require.Equal(t, 200, call(m, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
+	require.Equal(t, 200, call(m, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
+	assert.Equal(t, 2, calls)
+}

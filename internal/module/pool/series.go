@@ -3,6 +3,7 @@ package poolmod
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -46,6 +47,10 @@ type SeriesResponse struct {
 // seriesOf projects a history onto points, and keeps the latest seriesMaxPoints of them.
 func seriesOf(h wire.FactsHistoryResponse) SeriesResponse {
 	recs := h.Records
+	if !slices.IsSortedFunc(recs, func(a, b wire.Facts) int { return a.At.Compare(b.At) }) { // wwd answers oldest first; do not trust it with what is cut
+		recs = slices.Clone(recs)
+		slices.SortStableFunc(recs, func(a, b wire.Facts) int { return a.At.Compare(b.At) })
+	}
 	out := SeriesResponse{Step: h.Step, Points: make([]SeriesPoint, 0, min(len(recs), seriesMaxPoints))}
 	if len(recs) > seriesMaxPoints {
 		recs, out.Truncated = recs[len(recs)-seriesMaxPoints:], true

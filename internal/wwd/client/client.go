@@ -179,7 +179,7 @@ func (c *Client) Pool(ctx context.Context) (wire.Pool, error) {
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
 // 10 MB, which the general cap would refuse.
-const maxHistoryBody = 32 << 20
+const maxHistoryBody = 16 << 20
 
 // FactsHistory is GET /v1/facts/history. A history of another host (q.Host) may be forwarded by the local wwd, whose own forwarding limit
 // is 10 s, so that call is bounded by MutateTimeout rather than the short default.
