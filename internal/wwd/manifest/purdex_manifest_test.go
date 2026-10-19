@@ -1,8 +1,11 @@
 package manifest
 
 import (
+	"os"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +65,65 @@ func TestMacOnlyViolationsRules(t *testing.T) {
 	want := []string{"a-no-earned", "a-no-qualify", "bare", "local-capped", "not-on-the-list"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("violations %v, want %v", got, want)
+	}
+}
+
+// The node and pnpm labels the SPA tasks carry: the worker advertises the major only (internal/wwd/labels/labels.go), so these are the
+// exact strings a host has. A wrong major here leaves a task that no host can take, so they are checked whole, not by prefix.
+const (
+	nodeLabel = "tool:node24"
+	pnpmLabel = "tool:pnpm10"
+)
+
+// toolNeeds says which tool: labels a task has to carry, from what it runs: a task that runs go (go test, make lint's gofmt and go vet)
+// needs the Go of the repo's go.mod, and one that runs pnpm needs node and pnpm. goLabel is "tool:go<major>.<minor>".
+func toolNeeds(task *Task, goLabel string) []string {
+	var need []string
+	if strings.Contains(task.Run, "go test") || strings.HasPrefix(task.Run, "make lint") {
+		need = append(need, goLabel)
+	}
+	if strings.Contains(task.Run, "pnpm ") {
+		need = append(need, nodeLabel, pnpmLabel)
+	}
+	return need
+}
+
+// A host without the tool must not claim the task (#3546): a task that runs go or pnpm carries the tool: labels for them, so a Mac whose
+// worker has no go on its PATH never gets a job that fails for it. The Go label is the go.mod's major.minor, so raising Go makes this test
+// red until the manifest is changed with it (the order is in docs/wwd-deploy.md).
+func TestPurdexManifestTasksCarryTheToolsTheyRun(t *testing.T) {
+	m, err := Load("../../../.wwd/tasks.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile("../../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mm := regexp.MustCompile(`(?m)^go (\d+)\.(\d+)`).FindSubmatch(b)
+	if mm == nil {
+		t.Fatal("no go directive in go.mod")
+	}
+	goLabel := "tool:go" + string(mm[1]) + "." + string(mm[2])
+	checked := 0
+	for name, task := range m.Tasks {
+		if task.Local.Allowed && task.Local.Max < 0 {
+			continue
+		}
+		for _, need := range toolNeeds(task, goLabel) {
+			checked++
+			if !slices.Contains(task.Labels, need) {
+				t.Errorf("task %s runs %q and has no %s label (labels %v)", name, task.Run, need, task.Labels)
+			}
+		}
+		for _, l := range task.Labels { // a tool: label the task has no need of, or one with another version, is a task nobody can take
+			if strings.HasPrefix(l, "tool:") && !slices.Contains(toolNeeds(task, goLabel), l) {
+				t.Errorf("task %s carries %s, which is not what it runs needs (%v)", name, l, toolNeeds(task, goLabel))
+			}
+		}
+	}
+	if checked < 8 {
+		t.Fatalf("only %d tool needs were checked: the test would prove nothing", checked)
 	}
 }
 
