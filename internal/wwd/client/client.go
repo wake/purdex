@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -175,6 +176,23 @@ func (c *Client) Info(ctx context.Context) (wire.Info, error) {
 // Pool is GET /v1/pool: this wwd's view of every peer.
 func (c *Client) Pool(ctx context.Context) (wire.Pool, error) {
 	return get[wire.Pool](ctx, c, "/v1/pool", nil)
+}
+
+// FactsSeries is GET /v1/facts/series: the host that has the data cuts its history to the points a chart draws. Like the history, a
+// call that names another host waits for wwd's forwarding. A wwd that does not have the route answers 404: see RouteMissing.
+func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire.FactsSeriesResponse, error) {
+	timeout := c.timeout()
+	if q.Host != "" && timeout < MutateTimeout {
+		timeout = MutateTimeout
+	}
+	return getLimit[wire.FactsSeriesResponse](ctx, c, "/v1/facts/series", q.Values(), timeout, maxBody)
+}
+
+// RouteMissing says err is a wwd (or the peer behind it) that has no such route: net/http's plain 404. A 404 that names an unknown
+// host is a JSON body {"error":"unknown host"} and is not this; neither is any other error.
+func RouteMissing(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusNotFound && !strings.Contains(se.Body, "unknown host")
 }
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
