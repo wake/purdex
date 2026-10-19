@@ -334,6 +334,7 @@ describe('TabContextMenu stays below the title bar (#1801)', () => {
       const off = screen.getByTestId('tab-menu-extra-two')
       expect(off).toHaveAttribute('aria-disabled', 'true')
       expect(off).toHaveAttribute('title', 'reading')
+      expect(off).toHaveAccessibleDescription('reading') // a screen reader gets the reason too, not only the tooltip
       off.focus()
       expect(document.activeElement).toBe(off) // focusable: the reason is reachable from the keyboard
       fireEvent.click(off)

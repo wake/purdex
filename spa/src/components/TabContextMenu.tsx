@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 import { useTeamDisplay } from './team/team-display'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
@@ -71,6 +71,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
 
   // Rows a surface put on top for this tab (the task-group view's); gone when the menu is.
   const extras = useTabMenuExtrasStore((s) => (s.tabId === tab.id ? s.items : NO_EXTRAS))
+  const reasonId = useId()
   useEffect(() => () => useTabMenuExtrasStore.getState().clear(), [])
 
   useEffect(() => {
@@ -135,13 +136,15 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
       {extras.length > 0 && (
         <>
           {extras.map((x) => (
-            // aria-disabled, not `disabled`: a disabled button takes no focus, so a keyboard user would never reach the reason in its title.
+            // aria-disabled, not `disabled`: a disabled button takes no focus, so a keyboard user would never reach the reason. The reason is the tooltip for the pointer and, for a screen reader, a hidden description.
             <button
               key={x.key} data-testid={`tab-menu-extra-${x.key}`} aria-disabled={x.disabled ? true : undefined} title={x.title}
+              aria-describedby={x.disabled && x.title ? `${reasonId}-${x.key}` : undefined}
               onClick={() => { if (x.disabled) return; x.onSelect(); onClose() }}
               className={`w-full text-left px-3 py-1.5 transition-colors ${x.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'}`}
             >
               {x.label}
+              {x.disabled && x.title && <span id={`${reasonId}-${x.key}`} className="sr-only">{x.title}</span>}
             </button>
           ))}
           <div className="border-t border-border-default my-1" />
