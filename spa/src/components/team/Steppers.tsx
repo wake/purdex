@@ -8,6 +8,8 @@
 // − stops at max(1, members in use), + at 8 (9 against a host with team.max_members.v2); one request per team at a time (the buttons are disabled meanwhile); no
 // optimistic number: it shows the roster's `max_members`.
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookResolver } from '../../lib/host-look'
 import { shownValue, useRelayQuotaStore } from '../../lib/team/relay-quota'
 import { setQuota } from '../../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../../lib/team/max-members'
@@ -29,21 +31,28 @@ function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; 
   )
 }
 
-/** `name` is the row's name for the writer's toasts; `label` the text before the number. */
+/**
+ * `name` is the row's name (the writer's toasts, and the buttons' and the box's accessible names, with the host's after it when there is more than one host); `label` the text before the number. The two buttons read "Increase <label> quota (<name>)": two steppers of
+ * one screen (the auto relay and the member pool, and every row or team beside them) must not both be called just 「增加」 to a screen reader or to voice control.
+ */
 export function QuotaStepper({ hostId, row, name, field, label }: { hostId: string; row: SessionQuota; name: string; field: RelayQuotaField; label: string }) {
   const t = useI18nStore((s) => s.t)
+  // With more than one host the same row name can be on two of them, and the host heading above the rows is no part of a button's name: the subject says the host too.
+  const lookOf = useHostLookResolver()
+  const manyHosts = useHostStore((s) => s.hostOrder.length > 1)
+  const subject = manyHosts ? `${name} · ${lookOf(hostId).name || hostId}` : name
   const value = useRelayQuotaStore((s) => shownValue(s, hostId, row.root_session_id, field, row[field]))
   const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: name }, field, next)
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
-      <StepButton sign="−" label={t('unattended.quota.minus')} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
+      <StepButton sign="−" label={t('unattended.quota.step_minus', { field: label, name: subject })} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
       <NumberField
-        testId="quota-value" ariaLabel={label} value={value}
+        testId="quota-value" ariaLabel={t('unattended.quota.value_name', { field: label, name: subject })} value={value}
         validate={(n) => (n > QUOTA_MAX ? t('unattended.field.range', { min: '0', max: String(QUOTA_MAX) }) : null)}
         onCommit={write}
       />
-      <StepButton sign="+" label={t('unattended.quota.plus')} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
+      <StepButton sign="+" label={t('unattended.quota.step_plus', { field: label, name: subject })} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
     </span>
   )
 }
