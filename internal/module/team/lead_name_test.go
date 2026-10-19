@@ -26,6 +26,10 @@ type fakeLeadNames struct {
 	old    string
 	// undoErr is what UndoRenameForLead returns; recordErr what RecordLead returns.
 	undoErr, recordErr error
+	// codes is what CodeOf answers by session id, reserve what ReserveMember gives, pairErr what RecordPairCodes returns (NP-4 B).
+	codes   map[string]string
+	reserve string
+	pairErr error
 }
 
 func (n *fakeLeadNames) note(s string) {
@@ -75,10 +79,18 @@ func (n *fakeLeadNames) RecordLead(_ context.Context, sid string) error {
 	return n.recordErr
 }
 
-func (n *fakeLeadNames) RecordPairCodes(context.Context, string, string) error { return nil }
-func (n *fakeLeadNames) CodeOf(context.Context, string) (string, bool)         { return "", false }
+func (n *fakeLeadNames) RecordPairCodes(_ context.Context, lead, member string) error {
+	n.note("pair:" + lead + ":" + member)
+	return n.pairErr
+}
+
+func (n *fakeLeadNames) CodeOf(_ context.Context, sid string) (string, bool) {
+	code, ok := n.codes[sid]
+	return code, ok
+}
+
 func (n *fakeLeadNames) ReserveMember(context.Context, string, string, string, time.Time) (string, error) {
-	return "", nil
+	return n.reserve, nil
 }
 func (n *fakeLeadNames) ReserveExact(context.Context, string, string, string, time.Time) error {
 	return nil

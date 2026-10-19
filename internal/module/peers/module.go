@@ -449,6 +449,7 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/peers", m.handlePeers)
 	mux.HandleFunc("GET /api/peers/hosts", m.handleListHosts)
+	mux.HandleFunc("POST /api/peers/rename-preview", m.handleRenamePreview) // how many live conversations a first persona save would rename (#3520)
 	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)

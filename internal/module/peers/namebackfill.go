@@ -49,6 +49,27 @@ func seatRank(role string) int {
 	return 2
 }
 
+// backfillCandidates is the judgement of which live conversations the backfill looks at, shared with the rename preview: every live
+// registry entry (a tmux session row is not needed) but one with no session id, a proxy (by flag or by pid), a duplicate session id,
+// one with no name, and one whose name already ends in a persona code (hasCode says so).
+func backfillCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, names map[string]string, hasCode func(name string) bool) []candidate {
+	var cands []candidate
+	seen := map[string]bool{}
+	for _, e := range entries {
+		key := strings.ToLower(e.SessionID)
+		if key == "" || e.IsProxy || proxyPIDs[e.PID] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		name := names[e.SessionID]
+		if name == "" || hasCode(name) {
+			continue
+		}
+		cands = append(cands, candidate{entry: e, name: name})
+	}
+	return cands
+}
+
 // backfillPersonaNames renames the live conversations of the pass whose name has no persona code; names is updated for each
 // rename (keyed by session id as the pass keys it), selfAlias is this host's alias for the address in the notice.
 func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entry, proxyPIDs map[int]bool, names map[string]string, selfAlias string) {
@@ -57,26 +78,13 @@ func (m *Module) backfillPersonaNames(ctx context.Context, entries []ipeers.Entr
 	}
 	// The scan is a prefilter and may read a collection that is being applied (the pool of the new one, the persona codes of the
 	// old); backfillOne looks at each candidate again under the generation lock, which is where it matters.
-	var cands []candidate
-	seen := map[string]bool{}
 	if p := m.personaCodes.Load(); p == nil || len(*p) == 0 {
 		return // no personas: the built-in names are the pool and nothing is old
 	}
-	for _, e := range entries {
-		key := strings.ToLower(e.SessionID)
-		if key == "" || e.IsProxy || proxyPIDs[e.PID] || seen[key] {
-			continue
-		}
-		seen[key] = true
-		name := names[e.SessionID]
-		if name == "" {
-			continue
-		}
-		if code, ok := ipeers.PoolNameOf(name); ok && m.isPersonaCode(code) {
-			continue
-		}
-		cands = append(cands, candidate{entry: e, name: name})
-	}
+	cands := backfillCandidates(entries, proxyPIDs, names, func(name string) bool {
+		code, ok := ipeers.PoolNameOf(name)
+		return ok && m.isPersonaCode(code)
+	})
 	if m.afterBackfillScan != nil {
 		m.afterBackfillScan()
 	}

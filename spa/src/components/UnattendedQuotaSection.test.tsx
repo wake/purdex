@@ -7,6 +7,8 @@ import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSec
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import { usePersonaStore } from '../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../lib/names/__fixtures__/personas'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
 import { leadNameBySession } from '../lib/team/lead-name'
 import { setQuota } from '../lib/team/relay-quota-writer'
@@ -85,6 +87,33 @@ describe('which sessions get a row', () => {
     show([{ hostId: A, rows: [noTitle as SessionQuota] }])
     expect(rowsText()[0]).toContain('worker-7-ab')
     expect(rowsText()[0]).not.toContain('mlab/')
+  })
+
+  // A persona is called by its name with the title after it (name pool v2 spec §9.3); a lead row keeps its team's name.
+  it('a solo session that is a persona shows its name, the title after it', () => {
+    useTeamRosterStore.getState().apply(A, [])
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji' })
+    usePersonaStore.setState({ byHost: { [A]: { status: 'ready', collection: c } } })
+    show([{ hostId: A, rows: [q('p1', { title: 'review', address: 'mlab/purdex-1f-kenji' }), q('p2', { title: 'T2', address: 'mlab/purdex-1f-ghost' })] }])
+    expect(rowsText()[0]).toContain('Kenji · review')
+    expect(rowsText()[1]).toContain('T2')
+    usePersonaStore.setState({ byHost: {} })
+  })
+
+  // The label reads the persona store without subscribing, so the section subscribes itself: a persona that loads (or is edited) after the first draw reaches the screen
+  // (mutation: drop usePersonaRevision() from the section → the name stays the title).
+  it('a persona collection that arrives after the first draw changes the label', () => {
+    useTeamRosterStore.getState().apply(A, [])
+    usePersonaStore.setState({ byHost: {} })
+    show([{ hostId: A, rows: [q('p1', { title: 'review', address: 'mlab/purdex-1f-kenji' })] }])
+    expect(rowsText()[0]).toContain('review')
+    expect(rowsText()[0]).not.toContain('Kenji')
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji' })
+    act(() => { usePersonaStore.setState({ byHost: { [A]: { status: 'ready', collection: c } } }) })
+    expect(rowsText()[0]).toContain('Kenji · review')
+    usePersonaStore.setState({ byHost: {} })
   })
 })
 

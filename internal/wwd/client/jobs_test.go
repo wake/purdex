@@ -284,6 +284,37 @@ func TestJobAtAndLogAt_NameTheHost(t *testing.T) {
 	}
 }
 
+func TestCancelAt_NamesTheHostAndReturnsTheJob(t *testing.T) {
+	var got []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		if r.PathValue("id") == "j_done" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		writeJSON(w, jobIn(t, "j_a", wire.StateCancelled))
+	})
+	c := New(fakeWWD(t, mux))
+	j, err := c.CancelAt(context.Background(), "air19", "j_a")
+	if err != nil || j.State != wire.StateCancelled {
+		t.Fatalf("job %+v err %v", j, err)
+	}
+	if _, err := c.CancelAt(context.Background(), "", "j_a"); err != nil { // the local wwd's own: no host
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "/v1/jobs/j_a/cancel?host=air19,/v1/jobs/j_a/cancel?" {
+		t.Fatalf("calls %v", got)
+	}
+	var se *StatusError
+	if _, err := c.CancelAt(context.Background(), "", "j_done"); !errors.As(err, &se) || se.Code != http.StatusConflict {
+		t.Errorf("a job that has ended is a 409 StatusError, got %v", err)
+	}
+	if _, err := c.CancelAt(context.Background(), "air19", "../x"); err == nil {
+		t.Error("a bad job id was sent")
+	}
+}
+
 func TestLogAtMost_ReadsAtMostTheLimitAndSaysWhenTheLogIsLonger(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/jobs/{id}/log", func(w http.ResponseWriter, r *http.Request) {

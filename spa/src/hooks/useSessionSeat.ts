@@ -8,7 +8,7 @@
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { usePeerStore } from '../stores/usePeerStore'
-import { useSeat, type Seat } from '../lib/names/seat'
+import { seatOf, useSeat, type Seat } from '../lib/names/seat'
 import type { TeamRoster } from '../lib/team/roster'
 import { sameGeneration } from './usePeerInfo'
 
@@ -42,4 +42,21 @@ export function useSessionSeat(hostId: string, sessionCode: string | undefined, 
     return row && sameGeneration(instance, row.tmuxInstance) ? row.address : null
   })
   return useSeat(fromRoster ?? fromPeers ?? '')
+}
+
+/**
+ * The same answer as the hook, read once from the stores' current state, for code that is not a render (a desktop notification's title). It uses the same pieces — the roster's seat, the peers
+ * row of the same generation, `seatOf` — and like the hook never asks for anything: a session no store knows yet has no seat, and the caller keeps its tmux name.
+ */
+export function sessionSeatNow(hostId: string, sessionCode: string): Seat | null {
+  const sessions = useSessionStore.getState().sessions
+  const session = Object.hasOwn(sessions, hostId) ? sessions[hostId]?.find((x) => x.code === sessionCode) : undefined
+  const name = session?.name ?? ''
+  const instance = session?.tmux_instance ?? ''
+  const rosters = useTeamRosterStore.getState().byHost
+  const fromRoster = rosterAddress(Object.hasOwn(rosters, hostId) ? rosters[hostId] : undefined, name, instance)
+  const peers = usePeerStore.getState().byHost
+  const row = Object.hasOwn(peers, hostId) ? peers[hostId]?.rows[sessionCode] : undefined
+  const fromPeers = row && sameGeneration(instance, row.tmuxInstance) ? row.address : null
+  return seatOf(fromRoster ?? fromPeers ?? '')
 }
