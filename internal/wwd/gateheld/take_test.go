@@ -138,7 +138,7 @@ func TestTakeHeavyAsksTheGatesAdmissionFirst(t *testing.T) {
 		t.Fatalf("after the hold: %v %v", s, st)
 	}
 	s.Release()
-	hold = gate.AdmissionState{Held: true, Reason: "disk 8 GB < 10"}
+	hold = gate.AdmissionState{Held: true, Reason: "page rate 20/s >= 10/s"} // the same reason after a calm spell is news again
 	if _, st := r.TakeHeavy(); st != HeldByHost || l.n() != 2 {
 		t.Fatalf("a hold again is logged again: %v, %d lines", st, l.n())
 	}
