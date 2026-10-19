@@ -169,6 +169,17 @@ func TestNameService_UndoWithoutARecordOfTheRenameDoesNothing(t *testing.T) {
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "harmless: on a retry, keeping the current name is the new name")
 }
 
+func TestNameService_RenameForLeadThatLosesTheCompareAndSetIsLost(t *testing.T) {
+	e := svcEnv(t)
+	e.m.peerNames = renameStore{PeerNameStore: e.m.peerNames, answer: func(string) (store.PeerNameEntry, bool, error) {
+		return store.PeerNameEntry{Name: "purdex-54-hiro"}, false, nil // another rename got there first
+	}}
+	_, err := e.m.RenameForLead(context.Background(), poolSidA, "mia")
+	assert.ErrorIs(t, err, ipeers.ErrNameLost)
+	_, recorded := e.m.leadRenames.get(nameSID(poolSidA))
+	assert.False(t, recorded, "a rename that did not happen leaves nothing to undo")
+}
+
 func TestNameService_RecordLeadWritesOnlyForAPersonaName(t *testing.T) {
 	e := svcEnv(t)
 	ctx := context.Background()
