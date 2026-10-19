@@ -152,18 +152,32 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
 * **Before any roll back: the quarantine must be empty** (#3373 PR2, from the build where the per-job database is named by
   `source/id`). A job whose command was not proven stopped sits in the quarantine with its per-job database, and the older wwd's
   database sweep knows only the names made from the job id alone: it would drop the new-named database of a job that may still be
-  running. Look on each host before you start the old build:
+  running. Do this on each host, in this order, before you start the old build:
 
-  ```sh
-  ls ~/.local/share/wwd/quarantine/*.json 2>/dev/null | wc -l      # 0 = nothing is quarantined
-  ```
+  1. Stop the worker taking jobs, so that no new entry can appear while you look, and see that nothing is running:
 
-  (one `*.json` marker per quarantined job; `ls ~/.local/share/wwd/quarantine/` shows the files, and the log line `worker:
-  quarantine: ... proven stopped and cleared` shows entries leaving). With one or more markers: wait for them to clear (the
-  quarantine sweep removes an entry once its unit is proven gone), or deal with the job first (the marker is JSON; its `Unit` field names the systemd unit: stop that
-  unit by hand and let the quarantine sweep clear the entry), and only then roll back. Today this concerns **mserv alone**, the only host with per-job
-  databases (`[jobdb]`); the other three have no database to lose. Going forward, new build over old, needs none of this: a sweep
-  of the new build keeps the old names of a held job.
+     ```sh
+     S="--unix-socket $HOME/.local/share/wwd/wwd.sock"
+     curl -sS $S http://wwd/v1/worker | jq '.enabled=false' | curl -sS $S -X PUT -d @- http://wwd/v1/worker
+     curl -sS $S http://wwd/v1/facts | jq -c .worker.running      # wait for {"heavy":0,"light":0}
+     ```
+
+  2. Count the quarantine markers (one `*.json` per quarantined job):
+
+     ```sh
+     find "$HOME/.local/share/wwd/quarantine" -maxdepth 1 -name '*.json' | wc -l
+     ```
+
+     `0` is the only answer that lets you go on. If `find` prints any error (a permission, a missing path that should be there),
+     the answer is *unknown*: do not go on. A host that never had a quarantine directory has no markers; `find` says
+     "No such file" for it, which is the one error you can read as `0`.
+  3. With one or more markers: do not roll back yet. The quarantine sweep removes an entry once its unit is proven gone, and the
+     worker being off does not stop that sweep, so wait for the count to reach `0`, or deal with the job first (the marker is JSON; its
+     `Unit` field names the systemd unit: stop that unit by hand and let the sweep clear the entry). Then count again.
+  4. Only now stop wwd and install the old build. Do not turn the worker back on in the new build in between.
+
+  Today this concerns **mserv alone**, the only host with per-job databases (`[jobdb]`); the other three have no database to lose.
+  Going forward, new build over old, needs none of this: a sweep of the new build keeps the old names of a held job.
 * Queue schema steps (`queue_schema`; each only forward): 2 `git_pins` (3b-2b), 3 `jobs.lapses` (3b-3a), 4 the origin cursor
   `jobs.rev`/`job_rev` and its triggers (3b-4a), 5 `db_epoch` (3b-4d), 6 `jobs.manual`/`jobs.manual_seq` (manual order; the rev trigger is
   replaced to watch them). The wire grows with them: `GET /v1/jobs` answers
