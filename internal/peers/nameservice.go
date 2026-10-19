@@ -25,6 +25,13 @@ var (
 type LeadCandidate struct {
 	Code string `json:"code"`
 	Keep bool   `json:"keep,omitempty"`
+	// Name is the display name of the persona (the code's display name; the built-in names are capitalised).
+	Name string `json:"name"`
+	// Kind says why it is offered: "keep" (the session's current name), "former" (it has been a lead), "lead" (a lead:true
+	// persona) or "other".
+	Kind string `json:"kind"`
+	// LastAt is when a "former" lead last was one (ms); 0 for the other kinds.
+	LastAt int64 `json:"last_at"`
 }
 
 // NameService is the team module's door to the names (name pool v2 spec §5.3, §6): the lead name card, the rename at approval

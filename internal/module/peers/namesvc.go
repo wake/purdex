@@ -126,8 +126,9 @@ func (m *Module) LeadCandidates(ctx context.Context, sessionID string) ([]ipeers
 		return nil, err
 	}
 	var out []ipeers.LeadCandidate
-	for _, c := range leadCandidates(in, keep) {
-		out = append(out, ipeers.LeadCandidate{Code: c, Keep: c == keep})
+	for _, c := range leadCandidatesWithKind(in, keep) {
+		name, _ := ipeers.PoolDisplayName(c.code)
+		out = append(out, ipeers.LeadCandidate{Code: c.code, Keep: c.code == keep, Name: name, Kind: c.kind, LastAt: c.lastAt})
 	}
 	return out, nil
 }
