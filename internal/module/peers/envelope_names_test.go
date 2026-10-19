@@ -120,7 +120,7 @@ func TestLocalEnvelope_AHistoryThatCannotBeReadSaysUnavailable(t *testing.T) {
 	}
 	// and a readable one never carries the flag
 	ok, _ := json.Marshal(envelopeWithHistory(t, &envelopeHistory{codes: []string{"hiro"}}))
-	if strings.Contains(string(ok), "unavailable") {
-		t.Fatalf("a readable history carries the flag: %s", ok)
+	if !strings.Contains(string(ok), `"names":{"familiar":["hiro"]}`) {
+		t.Fatalf("a readable history's names = %s, want the codes and no flag", ok)
 	}
 }
