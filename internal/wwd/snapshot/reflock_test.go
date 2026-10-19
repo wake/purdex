@@ -129,3 +129,22 @@ func TestFetchBundleWaitsOutARefLockLongerThanGitsOwnWait(t *testing.T) {
 	require.NoError(t, fetchBundle(context.Background(), clone, PinRef("j_f"), f))
 	assert.Equal(t, snap, pinned(context.Background(), clone, "j_f"))
 }
+
+// A context that ends while the tries wait is the answer, not the lock error before it: the caller tells a cancelled call from a git fault
+// by errors.Is, and the lock error is kept in the text.
+func TestACancelDuringTheWaitIsTheContextsError(t *testing.T) {
+	old := refLockBackoff
+	refLockBackoff = 5 * time.Second
+	defer func() { refLockBackoff = old }()
+	repo, _, snap := origin(t)
+	release := lockRef(t, repo, "j_cancel")
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := Pin(ctx, repo, "j_cancel", snap)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "cannot lock ref")
+	assert.Less(t, time.Since(start), 4*time.Second, "the wait ended with the context, not after the backoff")
+}

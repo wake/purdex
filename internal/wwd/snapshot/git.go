@@ -107,7 +107,7 @@ func gitRefWrite(ctx context.Context, tag, repoDir string, args ...string) ([]by
 	for try := 0; try < refLockTries && isRefLockError(err); try++ {
 		select {
 		case <-ctx.Done():
-			return nil, err
+			return nil, fmt.Errorf("%w (after %v)", ctx.Err(), err)
 		case <-time.After(refLockBackoff):
 		}
 		out, err = git(ctx, tag, repoDir, args...)
