@@ -40,7 +40,7 @@ export function controlSource(preferred: string | null): string | null {
   return hostOrder.find(can) ?? null
 }
 
-async function send(hostId: string, method: string, path: string, body?: unknown): Promise<unknown> {
+export async function send(hostId: string, method: string, path: string, body?: unknown): Promise<unknown> {
   let res: Response
   try {
     res = await hostFetch(hostId, path, {
