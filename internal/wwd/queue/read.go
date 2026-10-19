@@ -57,6 +57,13 @@ func (q *Queue) List(ctx context.Context, f Filter) ([]wire.Job, error) {
 	return jobs, err
 }
 
+// CountQueued is the number of jobs waiting in the queue (state queued), for facts.queue.queued (spec §13.2).
+func (q *Queue) CountQueued(ctx context.Context) (int, error) {
+	var n int
+	err := q.db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE state = ?`, string(wire.StateQueued)).Scan(&n)
+	return n, err
+}
+
 // revScanner lets scanJob read a row that has the job's rev after the job's columns.
 type revScanner struct {
 	r   scanner

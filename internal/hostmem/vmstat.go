@@ -19,6 +19,9 @@ type VMStat struct {
 	PageSize, Free, Inactive, Speculative uint64
 	// Pageouts and Swapouts are the running counters of pages written out since boot.
 	Pageouts, Swapouts uint64
+	// Decompressions is the running count of compressed pages brought back since boot (0 when the line is not in the output; no check
+	// needs it: the rate is worked out only where the counter was read).
+	Decompressions uint64
 	// HaveMemory: the page size and the free, inactive and speculative counts were there. HaveCounters: both counters were.
 	HaveMemory, HaveCounters bool
 }
@@ -57,6 +60,8 @@ func ParseVMStat(raw []byte) (VMStat, error) {
 			dst, saw = &v.Pageouts, &sawPageouts
 		case "Swapouts":
 			dst, saw = &v.Swapouts, &sawSwapouts
+		case "Decompressions":
+			dst, saw = &v.Decompressions, new(bool)
 		default:
 			continue
 		}

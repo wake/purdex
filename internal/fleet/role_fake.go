@@ -8,6 +8,7 @@ type FakeRole struct {
 	notif sync.Mutex // serialises notification so callbacks never run concurrently
 	state RoleState
 	cbs   []func(RoleState)
+	peer  PeerPush
 }
 
 func NewFakeRole(initial RoleState) *FakeRole { return &FakeRole{state: initial} }
@@ -22,6 +23,19 @@ func (f *FakeRole) OnChange(fn func(RoleState)) {
 	f.mu.Lock()
 	f.cbs = append(f.cbs, fn)
 	f.mu.Unlock()
+}
+
+// SetPeerPush sets what PeerPush answers (the zero value: nothing known).
+func (f *FakeRole) SetPeerPush(p PeerPush) {
+	f.mu.Lock()
+	f.peer = p
+	f.mu.Unlock()
+}
+
+func (f *FakeRole) PeerPush() PeerPush {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peer
 }
 
 func (f *FakeRole) Set(s RoleState) {

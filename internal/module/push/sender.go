@@ -46,6 +46,9 @@ type Job struct {
 	// closed while the job was queued). An open set that cannot be read does not drop it: a missed request is not recoverable,
 	// a stale notification is cleaned by the close badge push.
 	DropIfClosed bool
+	// OnSent is called once, on the sender's goroutine, after the device loop, when APNs accepted the push on at least one device.
+	// A job that is skipped, refused or never processed does not call it. nil = none.
+	OnSent func()
 }
 
 // JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
@@ -86,6 +89,9 @@ type sender struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	stopMu  sync.RWMutex // Enqueue holds it shared, Stop takes it once to flip stopped: no job is accepted after Stop begins
+	stopped bool
 }
 
 func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
@@ -104,8 +110,15 @@ func newSender(book deviceBook, a apnsClient, hostID, topic string) *sender {
 	}
 }
 
-// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute).
+// Enqueue hands a job over without ever blocking: a full queue drops it (counted, logged at most once a minute). A stopped sender
+// takes nothing and says so (false): no goroutine will ever send the job, and a caller that keeps state on the answer (the alert
+// push) must not count it as sent.
 func (s *sender) Enqueue(j Job) bool {
+	s.stopMu.RLock()
+	defer s.stopMu.RUnlock()
+	if s.stopped {
+		return false
+	}
 	select {
 	case s.queue <- j:
 		return true
@@ -141,6 +154,9 @@ func (s *sender) Start(ctx context.Context) {
 
 // Stop cancels the in-flight request and waits for the goroutine.
 func (s *sender) Stop() {
+	s.stopMu.Lock()
+	s.stopped = true
+	s.stopMu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -160,6 +176,12 @@ func (s *sender) process(ctx context.Context, j Job) {
 		log.Printf("[push] approval %s not pushed: dropped_at_send (its card closed while the push was queued)", shortID(j.Approval.ID))
 		return
 	}
+	accepted := false
+	defer func() {
+		if accepted && j.OnSent != nil {
+			j.OnSent()
+		}
+	}()
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
 			return
@@ -200,6 +222,9 @@ func (s *sender) process(ctx context.Context, j Job) {
 		}
 		res := s.sendWithRetry(ctx, d, h, payload)
 		s.finish(ctx, d, res)
+		if res.Class == apns.OK {
+			accepted = true
+		}
 		if syncs && res.Class == apns.OK {
 			s.reads.Sent(d.DeviceID, carried)
 		}
