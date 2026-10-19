@@ -11,7 +11,11 @@ vi.mock('./lib/storage-backup/backup-auto-trigger', () => ({ startBackupAutoTrig
 vi.mock('./lib/host-config-loader', () => ({ startHostConfigLoader: vi.fn() }))
 vi.mock('./lib/names/persona-loader', () => ({ startPersonaLoader: vi.fn() }))
 vi.mock('./lib/host-lifecycle', () => ({ startPeerCacheInvalidation: vi.fn() }))
-vi.mock('./stores/useNexHostStore', () => ({ startNexHostInvalidation: vi.fn() }))
+// The store itself stays real: the watcher area's start-up subscribes to it (the jobs tab appears once a daemon announces `jobs.v1`).
+vi.mock('./stores/useNexHostStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./stores/useNexHostStore')>()),
+  startNexHostInvalidation: vi.fn(),
+}))
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
 vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))

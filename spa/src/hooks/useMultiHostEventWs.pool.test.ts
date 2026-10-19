@@ -16,7 +16,7 @@ vi.mock('../lib/host-api', async (orig) => ({
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn() }))
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn(() => ({ close: vi.fn() })) }))
 vi.mock('../lib/team/approval-ws', () => ({ handleApprovalEvent: vi.fn() }))
-vi.mock('../lib/pool/jobs-driver-live', () => ({ jobsDriver: { jobChanged: vi.fn(async () => {}), hostOpened: vi.fn() } }))
+vi.mock('../lib/pool/jobs-driver-live', () => ({ jobsDriver: { jobChanged: vi.fn(async () => {}), hostOpened: vi.fn() }, startJobsCatchUp: vi.fn(() => () => {}) }))
 
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
 const { usePoolStore } = await import('../lib/pool/store')

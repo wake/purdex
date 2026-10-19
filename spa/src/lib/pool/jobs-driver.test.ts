@@ -213,6 +213,52 @@ describe('a host-events connection that opened (or came back)', () => {
   })
 })
 
+describe('a connection that opened before its daemon counted as a source', () => {
+  it('is caught up once the daemon counts (its capabilities were read again), even for an origin already read and clean, and only once', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: [] }
+    have.add('mlab')
+    const d = driver()
+    d.sync()
+    d.hostOpened('h-mlab') // the cache was stale: no source yet
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).not.toHaveBeenCalled()
+    d.retryOpened() // still no source: nothing, and it keeps waiting
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).not.toHaveBeenCalled()
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab'] }
+    d.retryOpened()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read.mock.calls.map(src)).toEqual(['h-mlab'])
+    d.retryOpened()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).toHaveBeenCalledTimes(1)
+  })
+
+  it('the last view going away does not forget it: the catch-up does not need a view', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: [] }
+    have.add('mlab')
+    const d = driver()
+    const release = d.watch()
+    d.hostOpened('h-mlab') // too early
+    release() // the view closes before the capabilities arrive
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab'] }
+    d.retryOpened()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read.mock.calls.map(src)).toEqual(['h-mlab'])
+  })
+
+  it('a daemon that answers for no origin yet keeps waiting; stop forgets it', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: [] }
+    const d = driver()
+    d.hostOpened('h-x')
+    d.stop()
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-x' }, forwarders: ['h-x'] }
+    d.retryOpened()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).not.toHaveBeenCalled()
+  })
+})
+
 describe('what appears later is read', () => {
   it('an origin the store has not got is read when the topology shows it; one it has is left alone', async () => {
     have.add('mlab')

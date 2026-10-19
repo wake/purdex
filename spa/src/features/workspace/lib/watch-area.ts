@@ -10,10 +10,12 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore } from '../../../lib/fleet/store'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
-import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
 import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
 import { anyHostDeclaresWatch } from '../../../lib/watch/events-store'
 import { useHostStore } from '../../../stores/useHostStore'
+import { useNexHostStore } from '../../../stores/useNexHostStore'
+import { jobsDaemons } from '../../../lib/pool/jobs-driver-live'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { tmuxSessionContent } from '../../../lib/open-session-tab'
 
@@ -58,6 +60,7 @@ function dropTab(tabId: string): void {
 
 const GUARDIAN_PANEL: PaneContent = { kind: 'watch-guardian' }
 const EVENTS_PANE: PaneContent = { kind: 'watch-events' }
+const JOBS_PANE: PaneContent = { kind: 'watch-jobs' }
 
 interface GuardianWish {
   wanted: PaneContent
@@ -151,6 +154,24 @@ export function createWatchReconciler(): WatchReconciler {
     }
   }
 
+  /**
+   * The jobs tab (WWD-7b1): made, right after the events tab (else the guardian tab), once a connected daemon announces `jobs.v1`.
+   * Only created, never removed — a daemon that drops for a moment must not take a tab the reader may have moved or synced.
+   */
+  const reconcileJobs = (): void => {
+    const exists = WATCH_JOBS_TAB_ID in useTabStore.getState().tabs
+    if (!exists && jobsDaemons().length === 0) return
+    if (!exists) useTabStore.getState().addTab(hostTab(WATCH_JOBS_TAB_ID, JOBS_PANE))
+    const area = () => useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
+    if (!area().tabs.includes(WATCH_JOBS_TAB_ID)) {
+      useWorkspaceStore.getState().addTabToWorkspace(WATCH_WORKSPACE_ID, WATCH_JOBS_TAB_ID)
+      // After the guardian and events tabs when it is created; after that the reader's order stands.
+      const rest = area().tabs.filter((id) => id !== WATCH_JOBS_TAB_ID && id !== WATCH_GUARDIAN_TAB_ID && id !== WATCH_EVENTS_TAB_ID)
+      const head = [WATCH_GUARDIAN_TAB_ID, WATCH_EVENTS_TAB_ID].filter((id) => area().tabs.includes(id))
+      useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [...head, WATCH_JOBS_TAB_ID, ...rest])
+    }
+  }
+
   const reconcile = (view: WatchFleetView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
@@ -182,9 +203,10 @@ export function createWatchReconciler(): WatchReconciler {
       if (!isWatchTabId(id) && returnTo) useWorkspaceStore.getState().insertTab(id, returnTo)
     }
 
-    // 2b. The guardian and events tabs, with or without a fleet view.
+    // 2b. The guardian, events and jobs tabs, with or without a fleet view.
     reconcileGuardian()
     reconcileEvents()
+    reconcileJobs()
 
     // 3. Host tabs, only with a fleet view; without one they are left as they are.
     if (!view) return null
@@ -276,6 +298,7 @@ export function startWatchArea(): () => void {
   const unsubscribe = [
     useFleetStore.subscribe(run), useWorkspaceStore.subscribe(run), useTabStore.subscribe(run),
     useWatchStatusStore.subscribe(run), useSessionStore.subscribe(run), // the guardian pane follows where the watcher is
+    useNexHostStore.subscribe(run), useHostStore.subscribe(run), // the jobs tab appears once a connected daemon announces `jobs.v1`
   ]
   run()
   return () => {

@@ -8,9 +8,10 @@
  */
 export const WATCH_WORKSPACE_ID = 'watch'
 
-/** Fixed tab ids: `watch-guardian`, `watch-events`, `watch-host-<fleet id>`. Generated ids never contain `-`. */
+/** Fixed tab ids: `watch-guardian`, `watch-events`, `watch-jobs`, `watch-host-<fleet id>`. Generated ids never contain `-`. */
 export const WATCH_GUARDIAN_TAB_ID = 'watch-guardian'
 export const WATCH_EVENTS_TAB_ID = 'watch-events'
+export const WATCH_JOBS_TAB_ID = 'watch-jobs'
 const WATCH_HOST_TAB_PREFIX = 'watch-host-'
 
 export const watchHostTabId = (fleetHostId: string): string => `${WATCH_HOST_TAB_PREFIX}${fleetHostId}`
