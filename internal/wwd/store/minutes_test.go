@@ -38,6 +38,22 @@ func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {
 	}
 }
 
+func TestNewestMinute(t *testing.T) {
+	s, _ := open(t)
+	if _, ok, err := s.NewestMinute(); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	for _, i := range []int{0, 5, 2} {
+		if err := s.SaveMinute(minuteRec(t0.Add(time.Duration(i)*time.Minute), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at, ok, err := s.NewestMinute()
+	if err != nil || !ok || !at.Equal(t0.Add(5*time.Minute)) {
+		t.Fatalf("%v %v %v", at, ok, err)
+	}
+}
+
 // LoadMinutesLatest reads only the newest n minutes at or after since (oldest first), so a chart's cost is its point count and not the
 // fourteen days behind it.
 func TestLoadMinutesLatestReadsOnlyTheNewestN(t *testing.T) {

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +13,7 @@ type fakeWriter struct {
 	cleared []string
 	changed bool // what Raise and Clear answer
 	err     error
+	active  []wire.Alert // what ActiveAlerts answers
 }
 
 func (f *fakeWriter) RaiseAlert(a wire.Alert, at time.Time) (bool, error) {
@@ -24,6 +24,22 @@ func (f *fakeWriter) RaiseAlert(a wire.Alert, at time.Time) (bool, error) {
 func (f *fakeWriter) ClearAlert(key string, at time.Time) (bool, error) {
 	f.cleared = append(f.cleared, key)
 	return f.changed, f.err
+}
+
+func (f *fakeWriter) ActiveAlerts() ([]wire.Alert, error) { return f.active, f.err }
+
+// Active is the keys of what the table holds active, read fresh each time.
+func TestAlertBook_ActiveIsWhatTheTableHolds(t *testing.T) {
+	w := &fakeWriter{active: []wire.Alert{{Key: "a"}, {Key: "b"}}}
+	book := NewAlertBook(w, "mlab", nil, nil)
+	got, err := book.Active()
+	if err != nil || len(got) != 2 || !got["a"] || !got["b"] {
+		t.Fatalf("%v %v", got, err)
+	}
+	w.err = errors.New("locked")
+	if _, err := book.Active(); err == nil {
+		t.Fatal("an unreadable table must be an error, not an empty set")
+	}
 }
 
 func alertHint(t *testing.T, ch <-chan wire.Event) (wire.AlertEvent, bool) {
@@ -43,28 +59,16 @@ func alertHint(t *testing.T, ch <-chan wire.Event) (wire.AlertEvent, bool) {
 	}
 }
 
-// Spec §13.3: the alert event is only a hint that a host's list changed; it is a new event type, so it is sent only while the proto 2
-// gate is open (a proto 1 reader of /v1/events would reject the type). The table is written either way.
-func TestAlertBookHintsOnlyWhenTheGateIsOpenAndSomethingChanged(t *testing.T) {
+// Spec §13.3: the alert event is only a hint that a host's list changed. Alerts are not behind the proto 2 gate (§13.1): the table is
+// written and the hint goes out whenever something a reader would notice changed, and not for a refresh.
+func TestAlertBookHintsWhenSomethingChanged(t *testing.T) {
 	b := NewBroker()
 	ch, cancel := b.Subscribe(false)
 	defer cancel()
 	w := &fakeWriter{changed: true}
-	var open atomic.Bool
-	book := NewAlertBook(w, "mlab", b, open.Load, nil)
+	book := NewAlertBook(w, "mlab", b, nil)
 	a := wire.Alert{Key: "disk_low:/", Kind: wire.AlertDiskLow, Level: wire.AlertPush}
 
-	if err := book.Raise(a); err != nil {
-		t.Fatal(err)
-	}
-	if _, got := alertHint(t, ch); got {
-		t.Fatal("a hint went out with the gate shut")
-	}
-	if len(w.raised) != 1 {
-		t.Fatal("the table is written whatever the gate says")
-	}
-
-	open.Store(true)
 	if err := book.Raise(a); err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +91,8 @@ func TestAlertBookHintsOnlyWhenTheGateIsOpenAndSomethingChanged(t *testing.T) {
 	if _, got := alertHint(t, ch); !got {
 		t.Fatal("a clear is a change")
 	}
-	if len(w.cleared) != 1 || w.cleared[0] != "disk_low:/" {
-		t.Fatalf("%v", w.cleared)
+	if len(w.raised) != 2 || len(w.cleared) != 1 || w.cleared[0] != "disk_low:/" {
+		t.Fatalf("raised %v cleared %v", w.raised, w.cleared)
 	}
 }
 
@@ -97,7 +101,7 @@ func TestAlertBookWriteFailureIsReturnedAndSaysNothing(t *testing.T) {
 	ch, cancel := b.Subscribe(false)
 	defer cancel()
 	w := &fakeWriter{changed: true, err: errors.New("database is locked")}
-	book := NewAlertBook(w, "mlab", b, func() bool { return true }, nil)
+	book := NewAlertBook(w, "mlab", b, nil)
 	if err := book.Raise(wire.Alert{Key: "k", Kind: wire.AlertThrash, Level: wire.AlertDigest}); err == nil {
 		t.Fatal("the failure was swallowed")
 	}
@@ -109,27 +113,31 @@ func TestAlertBookWriteFailureIsReturnedAndSaysNothing(t *testing.T) {
 	}
 }
 
-// No gate function is a shut gate.
-func TestAlertBookWithoutAGateNeverHints(t *testing.T) {
-	b := NewBroker()
-	ch, cancel := b.Subscribe(false)
-	defer cancel()
-	book := NewAlertBook(&fakeWriter{changed: true}, "mlab", b, nil, nil)
-	_ = book.Raise(wire.Alert{Key: "k", Kind: wire.AlertThrash, Level: wire.AlertDigest})
-	if _, got := alertHint(t, ch); got {
-		t.Fatal("hint without a gate")
+// No broker: the table is still written, nothing is announced.
+func TestAlertBookWithoutABrokerStillWrites(t *testing.T) {
+	w := &fakeWriter{changed: true}
+	book := NewAlertBook(w, "mlab", nil, nil)
+	if err := book.Raise(wire.Alert{Key: "k", Kind: wire.AlertThrash, Level: wire.AlertDigest}); err != nil || len(w.raised) != 1 {
+		t.Fatalf("%v %v", err, w.raised)
 	}
 }
 
-// The hint is not cached for a late subscriber (it reads the list when it starts), and it reaches TCP subscribers too: an alert is not a
-// local-only thing like an ad-hoc job.
-func TestAlertHintIsNotReplayedAndReachesPeers(t *testing.T) {
+// The hint goes to the socket stream only: a peer's TCP stream never carries it (an older peer's decoder would refuse the new type), and
+// it is not cached for a late subscriber (who reads the list when it starts).
+func TestAlertHintIsSocketOnlyAndNotReplayed(t *testing.T) {
 	b := NewBroker()
 	peerCh, cancelPeer := b.Subscribe(true)
 	defer cancelPeer()
+	localCh, cancelLocal := b.Subscribe(false)
+	defer cancelLocal()
 	b.PublishAlert("mlab")
-	if h, got := alertHint(t, peerCh); !got || h.Host != "mlab" {
-		t.Fatalf("a peer stream must get the hint: %+v %v", h, got)
+	if h, got := alertHint(t, localCh); !got || h.Host != "mlab" {
+		t.Fatalf("the socket stream must get the hint: %+v %v", h, got)
+	}
+	select {
+	case e := <-peerCh:
+		t.Fatalf("a peer stream was sent a %q event", e.Type)
+	case <-time.After(30 * time.Millisecond):
 	}
 	late, cancelLate := b.Subscribe(false)
 	defer cancelLate()
@@ -137,28 +145,5 @@ func TestAlertHintIsNotReplayedAndReachesPeers(t *testing.T) {
 	case e := <-late:
 		t.Fatalf("a new stream started with a cached %q event", e.Type)
 	case <-time.After(30 * time.Millisecond):
-	}
-}
-
-// A change made while the gate was shut is never announced; once the gate opens, the next call (even an unchanged refresh) sends the
-// hint once, so a reader that stayed connected re-reads the list.
-func TestAlertBookHintsOnceAfterTheGateOpensForAMissedChange(t *testing.T) {
-	b := NewBroker()
-	ch, cancel := b.Subscribe(false)
-	defer cancel()
-	w := &fakeWriter{changed: true}
-	var open atomic.Bool
-	book := NewAlertBook(w, "mlab", b, open.Load, nil)
-	a := wire.Alert{Key: "disk_low:/", Kind: wire.AlertDiskLow, Level: wire.AlertPush}
-	book.Raise(a) // gate shut: missed
-	open.Store(true)
-	w.changed = false // the same alert again: nothing new in the table
-	book.Raise(a)
-	if _, got := alertHint(t, ch); !got {
-		t.Fatal("the missed change is announced once the gate is open")
-	}
-	book.Raise(a)
-	if _, got := alertHint(t, ch); got {
-		t.Fatal("announced only once")
 	}
 }
