@@ -59,6 +59,7 @@ func (s *refTaskSource) Tasks() []labels.RefTask {
 		}
 		for _, t := range c.tasks {
 			t.Repo = name
+			t.Needs = environmentNeeds(name, t.Task, t.Needs)
 			out = append(out, t)
 		}
 	}
@@ -94,6 +95,21 @@ func readManifest(root string) (file string, b []byte, ok bool) {
 		return "", nil, false
 	}
 	return file, b, true
+}
+
+// environmentNeeds is the labels of a task that are conditions of the host: a task's manifest labels also name its own repo
+// (repo:<repo>, which labels.ReferenceLabels checks on its own) and, for a task that may run on other hosts, its own earned label
+// (task:<repo>/<task>, what this host is about to hold), and neither is a need. What is left goes on as it is, so a label that is
+// not an environment label (a foreign task:, host:, anything else) still keeps the task from being held.
+func environmentNeeds(repo, task string, needs []string) []string {
+	out := make([]string, 0, len(needs))
+	for _, n := range needs {
+		if n == "repo:"+repo || n == labels.TaskLabel(repo, task) {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func referenceTasks(src []byte) []labels.RefTask {
