@@ -3,10 +3,13 @@
 // list); a click opens one line per message with its sender, 「（未驗證）」 after an unverified one. The whole line is
 // dimmed one step only when EVERY message is unverified. A plugin sender reads 「<name> plugin」. Whether it is open lives
 // in the pane's fold memory (the chat unmounts with its tab).
+import { useContext, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { UserItem } from '../../lib/conversations/types'
 import { useFold } from '../room/fold-context'
 import { usePeerCollapse } from './usePeerCollapse'
+import { ConversationHostContext } from './conversation-host'
+import { SEAT_MARK, SeatSentence } from '../SeatSentence'
 
 const PREVIEW_CHARS = 40
 
@@ -18,12 +21,12 @@ function peerPreview(text: string): { text: string; cut: boolean } {
 }
 
 /** One opened message: the same three-line fold as the deck's peer block (its own fold key, so opening the list does not open every message). */
-function PeerItemBody({ id, text }: { id: string; text: string }) {
+function PeerItemBody({ id, text, node }: { id: string; text: string; node: ReactNode }) {
   const { bodyRef, bodyId, collapsible, toggleProps, boxClass, boxProps, bodyClass } = usePeerCollapse(`${id}:peerfold`, text)
   return (
     <div data-testid="chat-peer-item" className={`${boxClass} text-text-secondary`} {...boxProps}>
       {collapsible && <button type="button" {...toggleProps} />}
-      <div ref={bodyRef} id={bodyId} className={`whitespace-pre-wrap break-words ${bodyClass}`}>{text}</div>
+      <div ref={bodyRef} id={bodyId} className={`whitespace-pre-wrap break-words ${bodyClass}`}>{node}</div>
     </div>
   )
 }
@@ -31,12 +34,17 @@ function PeerItemBody({ id, text }: { id: string; text: string }) {
 export function PeerLine({ items }: { items: UserItem[] }) {
   const t = useI18nStore((s) => s.t)
   const [open, toggle] = useFold(`${items[0].id}:peer`)
-  const sender = (i: UserItem) => (i.from?.kind === 'plugin' ? t('chat.peer.plugin', { name: i.from.name ?? '' }) : (i.from?.name ?? i.from?.kind ?? ''))
+  const hostId = useContext(ConversationHostContext)
+  // A message from another session names the person (spec §9.3): the sentence is translated with the mark where the sender goes, and the sender
+  // becomes `[avatar] Name` when it is a persona; a mod's own notice (from kind plugin) is no person. `plain` is the same sentence without faces.
+  const plain = (i: UserItem) => (i.from?.kind === 'plugin' ? t('chat.peer.plugin', { name: i.from.name ?? '' }) : (i.from?.name ?? i.from?.kind ?? ''))
+  const sender = (i: UserItem) => (i.from?.kind === 'plugin' ? plain(i) : SEAT_MARK)
+  const withSeat = (template: string, i: UserItem) => <SeatSentence template={template} address={i.from?.name ?? ''} fallback={plain(i)} hostId={hostId} />
   const dim = items.every((i) => i.from?.unverified === true)
   const flag = (i: UserItem) => (i.from?.unverified === true ? t('chat.peer.unverified') : '')
   const one = items.length === 1 ? peerPreview(items[0].text) : null
   const head = one
-    ? t('chat.peer.single', { name: sender(items[0]), flag: flag(items[0]), text: one.text, more: one.cut ? '…' : '' })
+    ? withSeat(t('chat.peer.single', { name: sender(items[0]), flag: flag(items[0]), text: one.text, more: one.cut ? '…' : '' }), items[0])
     : t('chat.peer.many', { n: items.length })
   return (
     <div data-testid="chat-peer" data-count={items.length} className={`deck-t-down text-text-muted ${dim ? 'opacity-60' : ''}`}>
@@ -46,7 +54,7 @@ export function PeerLine({ items }: { items: UserItem[] }) {
       {open && (
         <div className="mt-1 space-y-1 border-l border-border-subtle pl-3">
           {items.map((i) => (
-            <PeerItemBody key={i.id} id={i.id} text={t('chat.peer.item', { sender: sender(i), flag: flag(i), text: i.text })} />
+            <PeerItemBody key={i.id} id={i.id} text={t('chat.peer.item', { sender: plain(i), flag: flag(i), text: i.text })} node={withSeat(t('chat.peer.item', { sender: sender(i), flag: flag(i), text: i.text }), i)} />
           ))}
         </div>
       )}

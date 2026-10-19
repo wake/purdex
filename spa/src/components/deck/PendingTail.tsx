@@ -3,7 +3,7 @@
 //  - header.queued: messages typed in the terminal (or sent by a peer) while a turn runs, in Claude Code's queue. Accent-framed like the person's first-cut block; a user row is clickable (K-2b: it takes Claude Code's
 //    queue back through the daemon's /recall, all of it at once); a peer's keeps its teal, faded, not clickable. Only while the conversation runs or waits for the person: an idle one has an empty queue.
 //  - the App's send queue (QueuedMessages): the same frame with Undo, Up in an empty box calls them back.
-import { useEffect } from 'react'
+import { useContext, useEffect } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { unboundSendPort } from '../../lib/conversations/send'
@@ -14,13 +14,17 @@ import { adapterOf } from '../../lib/conversations/deck-adapter'
 import { QueuedMessages, TakeBackSpinner } from './QueuedMessages'
 import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
 import { PENDING_USER_BOX, PENDING_USER_BOX_CHAT, PENDING_USER_CAPTION } from './UserBlock'
+import { ConversationHostContext } from './conversation-host'
+import { SEAT_MARK, SeatSentence } from '../SeatSentence'
 
 function HeaderQueuedLine({ item, onTakeBack, busy, layout }: { item: HeaderQueued; onTakeBack?: () => void; busy: boolean; layout: 'deck' | 'chat' }) {
   const t = useI18nStore((s) => s.t)
+  const hostId = useContext(ConversationHostContext)
   if (item.source === 'peer') {
+    const from = item.from || t('deck.user.peer')
     return (
       <div data-testid="header-queued" data-source="peer" className="rounded-md border border-peer/40 bg-peer/5 px-3 py-2 opacity-70">
-        <div className="mb-1 deck-t-down font-medium text-peer">{t('deck.user.from_queued', { name: item.from || t('deck.user.peer') })}</div>
+        <div className="mb-1 deck-t-down font-medium text-peer">{item.from ? <SeatSentence template={t('deck.user.from_queued', { name: SEAT_MARK })} address={item.from} fallback={item.from} hostId={hostId} /> : t('deck.user.from_queued', { name: from })}</div>
         <div className="whitespace-pre-wrap break-words deck-t-up text-text-secondary">{item.text}</div>
       </div>
     )
