@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,4 +111,36 @@ func TestPoolRules_TheLeadFlagsFollowThePersonas(t *testing.T) {
 	assert.Equal(t, map[string]bool{"hiro": true}, m.leadCodes())
 	f.change(pp("hiro", "Hiro", false), leadP("anna"))
 	assert.Equal(t, map[string]bool{"anna": true}, m.leadCodes(), "the flag moved with the collection")
+}
+
+// The pool and the lead flags of a collection are published together: a pick that starts while the collection is being
+// applied waits for it and sees one generation, never the new pool with the old flags (codex R2 on NP-3c-1).
+func TestPoolRules_APickNeverSeesTheNewPoolWithTheOldLeadFlags(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", false)}}}
+	e.m.bindPersonas(f)
+
+	inGap, release := make(chan struct{}), make(chan struct{})
+	e.m.afterPoolPublished = func() { close(inGap); <-release }
+	changed := make(chan struct{})
+	go func() { // hiro is a plain persona now and anna the lead
+		f.change(pp("hiro", "Hiro", false), leadP("anna"))
+		close(changed)
+	}()
+	<-inGap // the new pool is out, the new flags are not yet
+
+	picked := make(chan string, 1)
+	go func() {
+		got, _ := e.m.pickOther(context.Background(), map[string]bool{})
+		picked <- got
+	}()
+	select {
+	case got := <-picked:
+		t.Fatalf("picked %q while the collection was half applied", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	<-changed
+	assert.Equal(t, "hiro", <-picked, "the new generation: anna is the lead now, hiro the newcomer")
 }

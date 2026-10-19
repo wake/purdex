@@ -154,7 +154,7 @@ func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refS
 		return store.PeerNameEntry{}, err
 	}
 	name, source := refName, refSource
-	if pick, ok := m.pickOther(ctx, freePoolNames(held)); ok {
+	if pick, ok := m.pickOther(ctx, held); ok {
 		if n, ok := ipeers.VirtualNameWith(base, pick); ok {
 			name, source = n, store.PeerNameSourcePool
 		}
@@ -279,7 +279,7 @@ func (m *Module) settlePoolCollisions(ctx context.Context, entries []ipeers.Entr
 		}
 		base := strings.TrimSuffix(l.name, "-"+l.pool)
 		var newName string
-		if pick, ok := m.pickOther(ctx, freePoolNames(held)); ok {
+		if pick, ok := m.pickOther(ctx, held); ok {
 			newName, _ = ipeers.VirtualNameWith(base, pick)
 		} else {
 			newName, _ = ipeers.VirtualName(base, l.ref)

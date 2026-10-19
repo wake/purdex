@@ -88,9 +88,14 @@ func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
 			return
 		}
 		recognised, pickable := buildPool(set)
-		ipeers.SetPool(recognised, pickable)
 		leads := leadSet(set)
+		m.poolGen.Lock() // the pool and its lead flags go out together (pickOther reads both under the read side)
+		ipeers.SetPool(recognised, pickable)
+		if m.afterPoolPublished != nil {
+			m.afterPoolPublished()
+		}
 		m.leads.Store(&leads)
+		m.poolGen.Unlock()
 	}
 	// Subscribe first, then read: a change that lands between the two would be told to nobody, and the first read may predate it.
 	// A change told before the read finishes only makes the read run once more, and it reads the stored set again.

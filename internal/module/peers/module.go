@@ -287,6 +287,10 @@ type Module struct {
 	nameHistory NameHistoryReader
 	familiar    FamiliarSource
 	leads       atomic.Pointer[map[string]bool]
+	// poolGen makes the pool and the lead flags of one persona collection visible together: bindPersonas holds the write side
+	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
+	poolGen            sync.RWMutex
+	afterPoolPublished func()
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.

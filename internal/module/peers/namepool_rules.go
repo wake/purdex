@@ -64,6 +64,10 @@ func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
 }
 
 // pickOther is rule 3, for a conversation that is not a team member and not a lead's card: ok is false when nothing is free.
-func (m *Module) pickOther(ctx context.Context, free []string) (string, bool) {
-	return pickForOther(m.ruleInput(ctx, free))
+// The free names (the pickable pool minus held) and the lead flags are read under one read lock, so a collection that is being
+// applied is seen whole or not at all (bindPersonas holds the write side while it publishes both).
+func (m *Module) pickOther(ctx context.Context, held map[string]bool) (string, bool) {
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
+	return pickForOther(m.ruleInput(ctx, freePoolNames(held)))
 }
