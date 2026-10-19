@@ -327,3 +327,19 @@ is a request that is already on its way to APNs at that moment. A setting that c
 nothing is recorded as sent, so alerts that still hold when it is turned on again are sent then. `/api/info` shows the state under
 `wwdalerts`: `{push: "on"|"off", deliverer: true|false, suppressed: <push-level alerts held back in the last pass>}`, and the daemon's
 log has one line each time the state changes.
+
+## 8. Known residents (the "resident growth" rule)
+
+"Resident growth" (spec §13.3) reports a single `system` or `resident` process whose own footprint is at least max(4 GB, 25 % of RAM), the
+iOS simulator's processes excluded. A process whose large size is normal on a host can be named in that host's wwd config, and is then
+**not reported while the host has at least 50 % of its memory available and the swap in use did not grow over the last 10 minutes**;
+when either fails, or the swap trend cannot be read, it is reported as any other.
+
+```toml
+[advisor]
+known_residents = ["OrbStack Helper", "mysqld"]   # process names as the facts show them; empty (the default): none is known
+```
+
+wwd reads it at start, so a change needs `wwd` restarted. Nothing is known until a host lists it, so every large resident is reported at first.
+`wwd alerts-replay --db <copy of wwd.db> --work-root <dir> --known "OrbStack Helper,mysqld"` shows what the rules would have raised over the
+recorded minutes; copy the database first (`sqlite3 <live wwd.db> ".backup <copy>"`), never point it at the live file.
