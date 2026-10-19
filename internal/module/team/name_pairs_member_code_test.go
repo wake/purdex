@@ -104,3 +104,25 @@ func TestCommands_AdoptOutcomeSaysWhenTheTargetHasNoCode(t *testing.T) {
 }
 
 func strp(s string) *string { return &s }
+
+// A local target's code comes from its session, else from the virtual address the request recorded — not from the registry's raw name,
+// which a rename leaves behind (codex critic on #3556). Mutation gate: fall back to TargetName → red.
+func TestNamePairsAdopt_ALocalTargetFallsBackToItsAddressNotItsRawName(t *testing.T) {
+	f := newFixture(t)
+	n := leadHostNames(f)
+	ipeers.SetPool(map[string]string{"anna": "Anna", "mia": "Mia", "hiro": "Hiro"}, []string{"anna", "mia", "hiro"})
+	t.Cleanup(ipeers.ResetPool)
+	// no code for far-sid: the lookup by session finds none, so the address decides
+	f.m.recordAdoptPair(team.AdoptPayload{TeamID: uid(1), LeadSessionID: "sid-1", TargetSessionID: "far-sid", TargetName: "purdex-88-hiro", TargetAddress: "mlab/scratch"}, "ap-1")
+	if n.count("pair:") != 0 {
+		t.Fatalf("calls = %v, want none: the address says no persona, the raw name is stale", n.log())
+	}
+	f.m.recordAdoptPair(team.AdoptPayload{TeamID: uid(1), LeadSessionID: "sid-1", TargetSessionID: "far-sid", TargetName: "scratch", TargetAddress: "mlab/purdex-88-mia"}, "ap-2")
+	if n.count("pair:anna:mia") != 1 || n.count("pair:") != 1 {
+		t.Fatalf("calls = %v, want the pair under the address's code", n.log())
+	}
+	f.m.recordAdoptPair(team.AdoptPayload{TeamID: uid(1), LeadSessionID: "sid-1", TargetSessionID: "far-sid", TargetName: "purdex-88-hiro", TargetAddress: "mlab/_abc123"}, "ap-3")
+	if n.count("pair:") != 1 {
+		t.Fatalf("calls = %v, want none for a ref-form address", n.log())
+	}
+}

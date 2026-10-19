@@ -152,13 +152,17 @@ func (m *Module) recordAdoptPairAs(p team.AdoptPayload, approvalID string, repor
 	switch {
 	case reported != nil:
 		memberCode = *reported
-	default:
-		if p.TargetHostID == "" {
-			memberCode = m.sessionCode(p.TargetSessionID)
-		}
+	case p.TargetHostID == "":
+		// a target on this host: its code now, else the virtual address the request recorded (TargetName is the registry's raw
+		// name, which a rename leaves behind)
+		memberCode = m.sessionCode(p.TargetSessionID)
 		if memberCode == "" {
-			memberCode = addressCode(p.TargetName)
+			memberCode = addressCode(p.TargetAddress)
 		}
+	default:
+		// an older member host that cannot say: the name the peer snapshot gave when the request was made (the lead host only has
+		// a ref-form address for a remote target). A rename between the request and the apply is the residual risk of old hosts.
+		memberCode = addressCode(p.TargetName)
 	}
 	m.recordPair(m.sessionCode(p.LeadSessionID), memberCode, "adopt "+approvalID)
 }
