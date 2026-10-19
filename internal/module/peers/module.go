@@ -292,6 +292,11 @@ type Module struct {
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
 	putHostAfterSnapshot func()
+
+	// aliasRetentionFirst / aliasRetentionEvery override the retention loop's timing, and aliasLiveRefs replaces its inventory
+	// read (tests; alias_retention.go). Zero / nil in production.
+	aliasRetentionFirst, aliasRetentionEvery time.Duration
+	aliasLiveRefs                            func(context.Context) (map[string]bool, bool)
 }
 
 // New constructs a peers Module with production defaults over audit (the
