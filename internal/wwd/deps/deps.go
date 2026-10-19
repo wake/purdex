@@ -33,6 +33,10 @@ var dirOf = map[string]string{
 // no entry for them. Install runs in the workspace (its directory is the argument) and is the caller's: it knows the package manager.
 type Spec struct {
 	Lockfiles []string
+	// Dirs are directories of installed dependencies besides the one next to each lockfile: a workspace member's node_modules, which a
+	// monorepo's one lockfile installs under every member. Each is a path in the workspace whose last element is node_modules or vendor, and
+	// each must exist once the install is done. They are part of the key.
+	Dirs []string
 	// Fingerprint says how the dependencies are made: the install command and flags, the package manager's version, the Node (or PHP)
 	// version whose ABI native modules are built for. It is part of the key, so the same lockfile installed another way is another
 	// entry, and it is required: a cache that cannot tell installs apart would serve the wrong one.
@@ -113,8 +117,30 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 		fmt.Fprintf(h, "%s\x00%d\x00", f, len(b))
 		h.Write(b)
 	}
+	extra := append([]string(nil), spec.Dirs...)
+	sort.Strings(extra)
+	for _, d := range extra {
+		if b := path.Base(d); (b != "node_modules" && b != "vendor") || !filepath.IsLocal(d) || path.IsAbs(d) || strings.Contains(d, `\`) || path.Clean(d) != d {
+			return "", nil, fmt.Errorf("deps: %q is not a directory of dependencies this cache knows", d)
+		}
+		if err := plainPath(ws, d); err != nil {
+			return "", nil, err
+		}
+		fmt.Fprintf(h, "dir\x00%d\x00%s\x00", len(d), d)
+		if !seen[d] {
+			seen[d] = true
+			dirs = append(dirs, d)
+		}
+	}
 	sort.Strings(dirs)
 	return hex.EncodeToString(h.Sum(nil))[:24], dirs, nil
+}
+
+// Key is the cache key of the workspace's lockfiles under spec: what Prepare files them under. A caller that wants to know the key before it
+// installs (to remember that an install of it has failed) asks here.
+func (c *Cache) Key(ws string, spec Spec) (string, error) {
+	key, _, err := plan(ws, spec)
+	return key, err
 }
 
 // Prepare puts the dependencies of the workspace in place: cloned from the cache when it has the entry, else installed (once, however

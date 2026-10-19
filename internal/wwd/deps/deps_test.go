@@ -188,6 +188,54 @@ func TestPrepare_AFailedInstallLeavesNoEntry(t *testing.T) {
 }
 
 // An install that did not make the directory is an error, not an empty entry.
+// A monorepo's one lockfile installs under its members too: the directories named in Spec.Dirs are installed, kept and cloned with the
+// root's, are part of the key, and each must be there when the install is done.
+func TestPrepare_AWorkspaceMembersDependenciesAreKeptAndCloned(t *testing.T) {
+	c := newCache(t, 2)
+	member := func(ctx context.Context, ws string) error {
+		in := &installer{}
+		if err := in.install(ctx, ws); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(ws, "spa/node_modules"), 0o755); err != nil {
+			return err
+		}
+		return os.Symlink("../../node_modules/pkg", filepath.Join(ws, "spa/node_modules/pkg"))
+	}
+	sp := Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{"spa/node_modules"}, Fingerprint: fp, Install: member}
+	ws1 := workspace(t, "lock: v1\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(ws1, "spa"), 0o755))
+	r1, err := c.Prepare(context.Background(), ws1, sp)
+	require.NoError(t, err)
+	assert.False(t, r1.Hit)
+
+	ws2 := workspace(t, "lock: v1\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(ws2, "spa"), 0o755))
+	r2, err := c.Prepare(context.Background(), ws2, sp)
+	require.NoError(t, err)
+	assert.True(t, r2.Hit)
+	link, err := os.Readlink(filepath.Join(ws2, "spa/node_modules/pkg"))
+	require.NoError(t, err, "the member's node_modules came with the clone")
+	assert.Equal(t, "../../node_modules/pkg", link)
+
+	// the same lockfile without the member is another key: a set made without it is not served
+	ws3 := workspace(t, "lock: v1\n")
+	rootOnly, err := c.Prepare(context.Background(), ws3, spec(&installer{}))
+	require.NoError(t, err)
+	assert.NotEqual(t, r1.Key, rootOnly.Key)
+
+	// a member that the install did not make is an error, and so is a directory the cache does not know
+	ws4 := workspace(t, "other\n")
+	_, err = c.Prepare(context.Background(), ws4, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{"spa/node_modules"}, Fingerprint: fp, Install: (&installer{}).install})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not make")
+	for _, bad := range []string{"../x/node_modules", "/abs/node_modules", "spa/lib", "spa//node_modules", `a\b/node_modules`, "spa/../node_modules"} {
+		_, err = c.Prepare(context.Background(), workspace(t, "z\n"), Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{bad}, Fingerprint: fp, Install: (&installer{}).install})
+		require.Error(t, err, bad)
+		assert.Contains(t, err.Error(), "not a directory of dependencies", bad)
+	}
+}
+
 func TestPrepare_AnInstallWithoutTheDirectoryIsAnError(t *testing.T) {
 	c := newCache(t, 2)
 	_, err := c.Prepare(context.Background(), workspace(t, "y\n"), spec(&installer{skip: true}))

@@ -51,6 +51,30 @@ func TestConfigRejectsABadSpeedFactor(t *testing.T) {
 	}
 }
 
+// The dependency cache: its directory is <data_dir>/deps unless set, and it keeps 2 sets unless worker.deps_keep says (1 on a host short
+// of disk); a count that cannot be is refused.
+func TestConfigReadsTheDependencyCacheSettings(t *testing.T) {
+	c, err := load(t, "[worker]\nenabled = true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DepsRoot != c.DataDir+"/deps" || c.Worker.DepsKeep != 0 {
+		t.Fatalf("defaults: deps_root %q deps_keep %d (data_dir %q)", c.DepsRoot, c.Worker.DepsKeep, c.DataDir)
+	}
+	c, err = load(t, "deps_root = \"/data/deps\"\n[worker]\nenabled = true\ndeps_keep = 1\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DepsRoot != "/data/deps" || c.Worker.DepsKeep != 1 {
+		t.Fatalf("set: deps_root %q deps_keep %d", c.DepsRoot, c.Worker.DepsKeep)
+	}
+	for _, bad := range []string{"-1", "51"} {
+		if _, err := load(t, "[worker]\ndeps_keep = "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "deps_keep") {
+			t.Errorf("deps_keep = %s accepted (err %v)", bad, err)
+		}
+	}
+}
+
 func TestConfigChecksTheSandboxUser(t *testing.T) {
 	for _, bad := range []string{`"root"`, `""x`, `"a b"`, `"-x"`, `"Name"`} {
 		if _, err := load(t, "[worker]\nsandbox_user = "+bad+"\n"); err == nil {

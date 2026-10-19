@@ -394,3 +394,29 @@ alert_unreachable = false       # default true; air19 is a laptop that sleeps
   Purdex daemon reads every host's list every 30 s, so a silence that long means the daemon is down. Do not set it on mserv or air19: they
   have no Purdex daemon and would be told about a partner they never had.
 * Removing a peer from `[[peers]]`, or turning its alert off, while its alert is raised leaves that row in `alerts`, because no rule judges it any more; clear it by hand in `wwd.db` (known gap: a peer removed from the config is rare).
+
+## 10. Installed dependencies in a job (the dependency cache; #3620)
+
+A task that declares `deps = ["pnpm-lock.yaml"]` (or `package-lock.json`, `yarn.lock`, `composer.lock`) gets its `node_modules` / `vendor`
+before its command starts: the worker clones them from a cache keyed by the lockfile's contents plus the install command and the versions
+of the tools that run it (`pnpm`/`node`, `npm`/`node`, `yarn`/`node`, `composer`/`php`, found on the job's PATH); a key it has not seen is
+installed once, in that job's workspace, and filed. The install runs under the job's own limits (the sandbox on Linux, background QoS, the
+clean environment, the job's workspace as HOME) and its log is `<out>/deps-install`, apart from the job's.
+
+* **A pnpm workspace** (purdex: the root lockfile installs under `spa` and `electron` too): the `node_modules` of each member the lockfile's
+  `importers` give dependencies to is kept and cloned with the root's (the task runs in `spa`, and `vitest` is there). npm/yarn/composer
+  workspaces are not read for members (only the directory next to the lockfile is kept).
+* **The install needs the network** (the package registry): a host that cannot reach it cannot install a key it has no entry for. The first
+  job of a lockfile on a host pays the install (minutes for the SPA); later ones clone (seconds).
+* **Where**: `deps_root` (default `<data_dir>/deps`) holds `entries/` (the cache) and the package managers' own download caches
+  (`pnpm-store`, `npm-cache`, `yarn-cache`, `composer-cache`), which an install that has to happen starts from. Keep it on the same volume
+  as `work_root` (APFS clonefile / reflink; elsewhere a copy). The directory is made when a job first needs it, so a host that never runs a
+  task with `deps` (mlab's worker off, say) never gets one. On Linux the sandbox is widened for the install only: `deps_root` is writable,
+  nothing else is.
+* **Disk**: `[worker] deps_keep` (default 2, 1 to 50) is how many installed sets are kept; each is a whole `node_modules`/`vendor` tree
+  (purdex's SPA is several hundred MB), and the download cache comes on top. Set it to 1 on a host short of disk. The oldest set is removed
+  when a newer one is filed; removing `deps_root` by hand is safe (the next job installs again).
+* **An install that fails** is the worker's trouble: the job goes back to the queue (and the repo is held off on that origin for a while, as
+  for any infrastructure failure). The same key failing **twice in a row on a host** ends the next job of it: failed with no exit and the
+  reason `deps_install_failed: …` (which no outcome and no qualification counts), and the host does not try that key again for 10 minutes.
+  Restarting wwd forgets this. A cancelled job or a stopping worker is not a failure of the install.

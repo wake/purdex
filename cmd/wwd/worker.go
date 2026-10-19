@@ -209,6 +209,8 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		Sandbox:       in.Sandbox,
 		DB:            db,
 		ParentEnv:     jobParentEnv(os.Environ(), in.Home, in.ToolDirs),
+		DepsDir:       in.Cfg.DepsRoot,
+		DepsKeep:      in.Cfg.Worker.DepsKeep,
 	})
 	// the claim says what the host is at the time of the claim (in.Labels), not what it was when the worker started: that is before the first
 	// facts record, with no tool labels and a fingerprint of the OS version only, and no result made under it could be filed for reuse
