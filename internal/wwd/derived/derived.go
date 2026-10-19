@@ -65,8 +65,19 @@ func (l *ZoneLatch) Update(level int, rate, rateLimit float64, available bool) w
 // Hold is an active exception as headroom sees it: it always holds heavy work,
 // and light work too when Light is set.
 type Hold struct {
-	Name  string
-	Light bool
+	Name    string
+	Light   bool
+	Release bool // a release hold (spec §13.3): the light slots drop to 1 while it lasts
+}
+
+// releaseLightSlots is the light slots a release hold leaves: min(setting, 1). facts' worker.slots still shows the setting.
+func releaseLightSlots(slots int, holds []Hold) int {
+	for _, h := range holds {
+		if h.Release {
+			return min(slots, 1)
+		}
+	}
+	return slots
 }
 
 // Input is what the judgement needs from the rest of the record.

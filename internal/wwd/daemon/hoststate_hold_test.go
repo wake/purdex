@@ -90,3 +90,30 @@ func TestHoldFieldsAreCopiedOut(t *testing.T) {
 		t.Fatalf("the hold was changed from outside: %+v", got)
 	}
 }
+
+// 8b-3 PR-C: headroom learns of a release hold through Holds() (the light slots drop to 1 while it lasts); a hold without the flag does
+// not carry it, and it is gone once the hold is stopped.
+func TestHoldsCarryTheReleaseFlag(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.st.AddException(holdExc()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.st.AddException(exc("plain", 3600e9, wire.HoldHeavy)); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, h := range r.st.Holds() {
+		got[h.Name] = h.Release
+	}
+	if len(got) != 2 || !got["release-hold"] || got["plain"] {
+		t.Fatalf("holds %+v", got)
+	}
+	if ok, err := r.st.RemoveException("release-hold"); err != nil || !ok {
+		t.Fatalf("remove: ok=%v err=%v", ok, err)
+	}
+	for _, h := range r.st.Holds() {
+		if h.Release {
+			t.Fatalf("a stopped release hold is still in force: %+v", h)
+		}
+	}
+}

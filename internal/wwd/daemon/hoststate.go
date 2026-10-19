@@ -6,6 +6,7 @@ import (
 	"log"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -393,6 +394,7 @@ func (s *HostState) holdsLocked() []derived.Hold {
 		for _, x := range e.Exception.Holds {
 			h.Light = h.Light || x == wire.HoldLight
 		}
+		h.Release = slices.Contains(e.Exception.Flags, wire.HoldFlagRelease)
 		out = append(out, h)
 	}
 	return out

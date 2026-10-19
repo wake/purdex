@@ -83,6 +83,18 @@ func TestHeadroom(t *testing.T) {
 		{"an exception holds heavy", func(i *Input) { i.Exceptions = []Hold{{Name: "app-dev-package"}} }, 0, 2},
 		{"an exception that also holds light", func(i *Input) { i.Exceptions = []Hold{{Name: "x", Light: true}} }, 0, 0},
 		{"two exceptions, one holds light", func(i *Input) { i.Exceptions = []Hold{{Name: "a"}, {Name: "b", Light: true}} }, 0, 0},
+		// 8b-3 PR-C: a release hold takes the light slots down to one while it lasts (spec §13.3); a plain hold does not
+		{"a release hold caps the light slots at 1", func(i *Input) { i.Exceptions = []Hold{{Name: "r", Release: true}} }, 0, 1},
+		{"a release hold counts what runs against its one slot", func(i *Input) {
+			i.Exceptions = []Hold{{Name: "r", Release: true}}
+			i.Running = wire.Slots{Light: 1}
+		}, 0, 0},
+		{"a release hold does not raise a smaller setting", func(i *Input) {
+			i.Exceptions = []Hold{{Name: "r", Release: true}}
+			i.Slots = wire.Slots{Light: 0}
+		}, 0, 0},
+		{"a release hold that also holds light still stops light", func(i *Input) { i.Exceptions = []Hold{{Name: "r", Light: true, Release: true}} }, 0, 0},
+		{"a hold without release leaves the light slots", func(i *Input) { i.Exceptions = []Hold{{Name: "p"}} }, 0, 2},
 		{"page rate at the limit is a warning", func(i *Input) { i.PageRate = 50 }, 0, 2},
 		{"mserv sized slots", func(i *Input) { i.Slots = wire.Slots{Heavy: 0, Light: 1} }, 0, 1},
 		// #3447: during the migration a queue job is outside the gate's slots, so a gate whose heavy slots are all held stops new heavy

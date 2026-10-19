@@ -124,7 +124,12 @@ func (g *Gate) WouldWait(class Class) WouldWait {
 		w.HeldBy = holderLine(oldest, now)
 	}
 	free := cfg.Slots.Size(class) - len(held)
+	holdName, holding := g.holdView(cfg.Dir).Waits(class)
 	switch {
+	case holding: // a hold of the local wwd (holdview.go): no 5-minute hold, the next look sees it again
+		w.Wait, w.Reason = true, "hold:"+holdName
+		w.Note = holdLine(class, holdName)
+		return w
 	case cfg.Slots.Paused(class):
 		w.Wait, w.Reason = true, "paused"
 		w.Note = pausedLine(class)

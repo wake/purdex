@@ -116,7 +116,7 @@ func ComputeWithReasons(l *ZoneLatch, in Input) (wire.Derived, wire.HeadroomReas
 	zone := l.Update(in.Pressure, in.PageRate, in.RateLimit, in.PressureKnown)
 	j := judgement{
 		zone: zone, holds: in.Exceptions, owner: in.OwnerActive, gateFull: in.GateHeavyFull,
-		free: wire.Slots{Heavy: free(in.Slots.Heavy, in.Running.Heavy), Light: free(in.Slots.Light, in.Running.Light)},
+		free: wire.Slots{Heavy: free(in.Slots.Heavy, in.Running.Heavy), Light: free(releaseLightSlots(in.Slots.Light, in.Exceptions), in.Running.Light)},
 	}
 	r := j.reasons()
 	d := wire.Derived{Zone: zone}
