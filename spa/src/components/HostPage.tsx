@@ -14,6 +14,7 @@ import { ShareHostsDialog } from './hosts/ShareHostsDialog'
 import { PairPhoneDialog } from './hosts/PairPhoneDialog'
 import { PairedPhonesSection } from './hosts/PairedPhonesSection'
 import { ProbeHostPage } from './hosts/ProbeHostPage'
+import { PoolHostRoute } from './hosts/PoolHostRoute'
 import { leaveProbeDraft, selectProbeGuarded, startNewProbe } from './hosts/useProbeEditor'
 import { useFleetDraftStore } from '../lib/fleet/config-draft'
 
@@ -277,6 +278,8 @@ export function HostPage({ isActive }: PaneRendererProps) {
   // tab switch keeps it. Only the sidebar's own choices leave it (`leaveProbeDraft` asks about unsaved changes first): the
   // route's canonical rewrite when hosts hydrate late must not close it.
   const selectedProbe = useFleetDraftStore((s) => s.selectedProbe)
+  // A pool host with a daemon (mlab, air26) has its page here too, without the style editor (7a-3b).
+  const selectedPool = useFleetDraftStore((s) => s.selectedPool)
   // The path this page itself last asked for (canonical rewrite, sidebar pick); everything else is not an outside navigation.
   const ownPath = useRef<string | null>(null)
   // An outside navigation (session launcher, headless launcher, hidden pane) is a host URL this page did not ask for. It
@@ -292,9 +295,9 @@ export function HostPage({ isActive }: PaneRendererProps) {
   useEffect(() => {
     if (!pendingOutside.current || !isActive) return
     pendingOutside.current = false
-    if (!selectedProbe) return
+    if (!selectedProbe && !selectedPool) return
     if (leaveProbeDraft(null)) useFleetDraftStore.getState().selectProbe(null)
-  }, [isActive, location, selectedProbe])
+  }, [isActive, location, selectedProbe, selectedPool])
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
   // and pass it to every helper.  preResolveHostId, resolveSelection, and
@@ -395,11 +398,18 @@ export function HostPage({ isActive }: PaneRendererProps) {
   return (
     <div className="flex h-full">
       <HostSidebar
-        selectedHostId={selectedProbe ? '' : (selection?.hostId ?? '')}
+        selectedHostId={selectedProbe || selectedPool ? '' : (selection?.hostId ?? '')}
         selectedSubPage={sidebarSubPage}
         selectedProbeId={selectedProbe?.id ?? null}
+        selectedPoolId={selectedPool}
         onAddProbe={() => { if (startNewProbe()) setShowPaired(false) }}
         onSelect={(hostId, subPage) => {
+          if (hostId.startsWith('pool:')) {
+            if (selectedProbe && !leaveProbeDraft(null)) return
+            useFleetDraftStore.getState().selectPool(hostId.slice('pool:'.length))
+            setShowPaired(false)
+            return
+          }
           if (hostId.startsWith('probe:')) {
             if (selectProbeGuarded({ id: hostId.slice('probe:'.length), isNew: false })) setShowPaired(false)
             return
@@ -420,10 +430,10 @@ export function HostPage({ isActive }: PaneRendererProps) {
           useFleetDraftStore.getState().selectProbe(null)
           setShowPaired(true)
         }}
-        pairedPhonesActive={showPaired && !selectedProbe}
+        pairedPhonesActive={showPaired && !selectedProbe && !selectedPool}
       />
       <div className="flex-1 overflow-y-auto p-6">
-        {selectedProbe ? <ProbeHostPage key={selectedProbe.id} probeId={selectedProbe.id} /> : showPaired ? <PairedPhonesSection /> : renderContent()}
+        {selectedProbe ? <ProbeHostPage key={selectedProbe.id} probeId={selectedProbe.id} /> : selectedPool ? <PoolHostRoute id={selectedPool} /> : showPaired ? <PairedPhonesSection /> : renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
       {showShare && <ShareHostsDialog onClose={() => setShowShare(false)} />}
