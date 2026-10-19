@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.0.0-alpha.757] - 2026-10-19
+
+> daemon、`pdx` CLI 與 `wwd` 有改；**mod 有改（hooks 的 `member.js`／`register.js`，skills 的 `pdx-team`／`pdx-test`），要重跑 `pdx setup`**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 756 相同。
+>
+> **wire 的 `proto` 升到 3（WWD-5b-2r，讀取端）**：每台 wwd 與兩台 Purdex daemon 都認得 job 結果裡的新欄位 `summary.passed_digest`，`/v1/info` 回報 `"proto":3`；這一版沒有任何地方寫入這個欄位，寫入端在下一版。facts 的版本從這一版起不再等於 protocol 版本，仍然是 `v: 2`。**部署順序：先升兩台 Purdex daemon，再連續升四台 wwd。** 反過來的話，舊版 Purdex 會拒絕新版 wwd 的 pool 回覆，`/api/pool/hosts`、facts 歷史與 fleet 畫面會回「bad response」，直到 Purdex 也升級為止（見 `docs/wwd-deploy.md`）。
+>
+> **告警開始寫入，手機推播預設關閉**：8a-2a 的三條規則（磁碟空間不足、磁碟空間持續下降、wwd 反覆崩潰重啟）上線後，告警會寫進每台主機的 `wwd.db`，用 `GET /v1/alerts` 看得到。手機推播由 host 設定 `wwd_alerts.push` 控制，**預設關閉**，等使用者決定後才開；關著時不送任何推播，開關方式見 `docs/wwd-deploy.md` §7。
+>
+> **資料庫**：這一版沒有 schema 變動，`wwd.db` 仍是 host schema 6，Purdex 這邊也沒有新表或索引。部署前照樣備份四台的 `wwd.db`；**退回 756 時照 `docs/wwd-deploy.md` §5：還原 `wwd.db.pre-757`、換一個新的 epoch，而且退版前隔離區必須是空的。**
+>
+> **閘門**：wwd worker 在有閘門的主機上執行佇列工作時，會占用一個閘門的重名額（#3513），避免佇列工作與各線的互動測試同時把主機吃滿。
+>
+> **worker**：部署時四台的 worker 先一律關閉；mlab 與 air26 由 lead 在部署檢查通過後打開；mserv 要等 #3441 完成才開；air19 照舊不開。
+>
+> 下一版（758）預計帶 digest 的寫入端（5b-2w）；它出貨前，資格配對不會啟動。
+
+### Added：wwd 資格與結果重用（WWD-5）
+
+- **通過測試清單的 digest，只有讀取端（5b-2r）**：job 結果的 `summary` 多一個可省略的欄位 `passed_digest`（格式 `sha256:<64 位十六進位>`），`wire.Proto` 由 2 升到 3；facts 的版本另外拆成 `wire.FactsProto = 2`，所以 proto 3 的建置仍寫 `v: 2` 的 facts，不會被 proto 2 的主機拒收。資格比對時，兩邊都有摘要而任一邊缺 digest 一律判不一致，不退回只比數量。這一版沒有任何地方寫入 digest，寫入端（5b-2w）隔一版出貨。部署要讓四台 wwd 與兩台 Purdex daemon 快速依序升級，升版空檔裡 proto 2 的主機會把 proto 3 的 `/v1/info` 當成連不到的 peer，閘門暫時關閉（#3491）。
+- **資格認證的協調器 `qualify.Coordinator`（5b-2b）**：負責替候選主機與 reference 主機各啟動一半同一個 snapshot 的測試，兩半都跑完才比對；一致就記下 earned 標籤並重新廣告，不一致或有一半沒跑完就作廢並取消另一半，自動重試要等工具鏈指紋改變或滿 24 小時，人工要求不受此限。已知限制：這一版是函式庫，不接任何線（有測試釘住沒有人 import 它），進行中的一對與重試等待只在記憶體，重啟會忘記；自動觸發的接線在 5b-2c，不得早於 5b-2w（#3494）。
+- **漂移會撤銷 earned 標籤（5c-1）**：一個標籤只看 `os_version` 與它任務需要的工具；工具消失、當初沒記到或版本變了都算漂移，漂移時刪掉該標籤，並只刪這台自己做出的結果快取（不動 reference 主機做出、仍有效的條目），再重算一次廣告。不認識的任務不算漂移，已隔離的不再檢查；表只有個別壞列時照常處理，其他讀取錯誤則什麼都不撤銷。已知限制：5b-2c 之前沒有任何路徑授予 earned 標籤，所以這條撤銷路徑在正式環境暫時沒有東西可撤（#3500）。
+
+### Added：wwd 告警（WWD-8a-2）
+
+- **告警推播到手機的開關（8a-2a-0）**：hostconfig 新增 `wwd_alerts` 一列，內容恰好是 `{"push": bool}`，預設 `false`，以 `PUT /api/hostconfig/wwd_alerts` 設定，`GET /api/hostconfig` 多一個 `wwdAlerts` 欄位。投遞模組每次推播前都會讀它，關著、讀不到或解析失敗時一律不推播，也不寫嘗試時間與 ledger，所以打開的那一刻仍在作用中的 push 級告警會依原規則推出去；digest 級照收。`/api/info` 裡可看到目前是關是開與被壓下的告警數。每台 daemon 各存各的，投遞者是 primary 或接手的 standby，止血時兩台都要關（#3474）。
+- **告警規則框架與三條規則（8a-2a）**：新增 `advisor` 的規則評估器，每 30 秒判一次：工作磁碟剩餘低於 12 GB（push 級，回到 12.5 GB 才清除）、磁碟空間持續下降（digest 級，剩餘低於 14 GB，或一小時內每小時少 2 GB 以上且照此速度六小時後會低於 10 GB）、wwd 一小時內啟動三次以上（push 級）。判斷不了時既不發告警也不清除，只記一次日誌。告警不放在 proto 2 閘門後，`GET /v1/alerts` 看得到；`alert` 事件只送本機 socket，不再送到 peer 的 TCP 串流。新增 `wwd alerts-replay --db <副本> --work-root <dir>`，只讀資料庫副本，用歷史資料重播規則，方便調門檻（#3504）。
+
+### Added：wwd 與 pool
+
+- **pool 的主機格資料（#3478 三張中的第 2 張）**：`GET /api/pool/hosts` 對有 facts 的主機多回 `headroom_reasons`（heavy 與 light 各自沒有餘裕的原因，依序為 `worker_off`、`zone_*`、`exception:<name>`、`owner_active`、`slots_full`、`gate_full`；空清單代表有餘裕）與 `load`（0 到 100 的綜合分數與最大的來源）；沒有 facts 的主機兩者為 null，能力為 `pool.assess.v1`。facts 的 wire 沒有改（#3496）。
+- **圖表資料改由 wwd 就地裁切（#3478 三張中的第 3 張）**：wwd 新增唯讀路由 `GET /v1/facts/series`，擁有資料的那台主機直接回圖表點（最多 21,600 點，超過保留最新並標示截斷），一天的 1 分鐘資料約 300 KB，不再把 10 MB 的紀錄傳過 tailnet；Purdex 的 `GET /api/pool/facts/series` 先問這條路由，只有 wwd 回標準的 404 才退回舊的抓全部歷史再裁切，其他錯誤不會被當成退路重試。已知限制：舊版 wwd 沒有這條路由時仍走較貴的舊路徑（#3505）。
+- **wwd worker 的佇列工作占用閘門名額（#3513）**：有 pdx 閘門的主機上，worker 每執行一件佇列工作就占用一個 heavy 名額，工作結束才釋放，讓閘門與 worker 只有一本帳；先前閘門 0/2 時 worker 領一件、閘門還會再放兩件進來，變成三件。閘門自己的放行條件（壓力、換頁速率與磁碟剩餘）優先，在擋新 heavy 指令時不領件。無法確認已停止而被隔離的工作會一直占著名額直到隔離解除，重啟後會先補回再領件。沒有閘門的主機不受影響（#3509 一併關閉）。
+- **App 端 pool 資料層（WWD-7a-1a）**：新增 `lib/pool/`，包含 wire 型別、寬鬆解析（壞列整列丟棄、不認識的 zone 讀成 `unknown`）、`/api/pool/*` 的讀取、錯誤分類與代碼對應文字表，兩種語系都補了文字。目前沒有任何畫面使用，所以沒有 `pool.v1` 時畫面不變。已知限制：`headroom_reasons` 與 `load` 還沒有對照 #3496 的實際 fixture 驗證，計畫中提到的 10-19 真實快照不在 repo，沒有涵蓋（#3497）。
+
+### Added：姓名池與 peers（NP-3／NP-4）
+
+- **舊對話依角色改名並通知（NP-3c-3）**：角色池建立後，名字不是以角色代號結尾的存活本機對話（包含 `kenji` 這類內建名與 `purdex-88-b8` 這類帶 ref 的名字）會被改名：存活的 lead 取候選順序第一個，本機 lead 的成員挑與該 lead 配對過的名字，其他人挑新面孔。改名採比較後設定，舊名成為別名仍可送達；接力中或讀不到座位狀態的對話跳過，下一輪再處理。被改名的對話會收到一則給自己的通知，說明新地址與舊地址仍有效，通知失敗只記日誌。團隊模組為此多了接力守門讀取介面（`RelayGuard`），本機成員的座位也會帶出 lead 的 session（#3493）。
+- **成員名字在派工時預訂（NP-4 A1）**：名字服務新增預訂與釋放，預訂算進已占用的名字、10 分鐘自然失效、開機時從團隊模組重建，且第一次命名時會依 tmux session 名取回預訂，避免新成員被別人搶走已指定的名字。團隊模組端的呼叫另開一張（#3507）。
+- **`/team <name>` 與 `pdx names`（NP-4d，mod 端）**：新增 `pdx names [--json]` 列出啟用中的角色；`pdx relay person … --command lead` 多了互斥的 `--lead-name <code>`（2 到 16 個小寫字母）與 `--card`。在一般 session 輸入 `/team <name>`，名字剛好對上一個角色就直接建立並綁定該名字，沒有角色或對上多個角色（daemon 不替人挑）就走核准卡等人決定；單打 `/team` 在非 lead 的 session 走核准卡，在 lead 內仍是看名冊。代理收到的提示會說明名字已綁定或要等卡片、不得自行核准。已知限制：daemon 端（儲存 `lead_name`／`card` 與核准時改名）在下一張，需要重跑 `pdx setup`（#3508）。
+- **lead 候選帶名稱、類別與最後時間（NP-4c-0）**：`LeadCandidate` 多了 `name`（顯示名，查不到時退回代號）、`kind`（keep、former、lead、other，也是排序依據）與 `last_at`（只有 former 有值），給核准卡使用，六個方法的簽名不變。顯示名在 pool generation 鎖內查，避免候選與名字跨世代不一致（#3514）。
+
+### Added：App
+
+- **手動任務編組的資料層（NA-6a）**：App 端新增手動任務編組的讀、寫與每主機快取，只在 daemon 宣告 `task_groups.v1` 時才讀。寫入以 revision 把關，每主機一次一筆，衝突時在 daemon 的副本上重做一次；若 daemon 丟掉了某些列或存的值不是清單，可見清單不完整，為避免整份寫回抹掉其餘資料，一律拒絕寫入。主機被移除或換位址後，排隊中與重試中的寫入不再送出。成員以 lineage root session id 存，App 從 `GET /api/team/unattended` 的 quotas 取得。這一版不接任何 UI，合併後沒有可見變化（#3495）。
+- **姓名池正本主機與角色複製（NA-1d PR-A）**：新增每台裝置自己的正本主機設定（不同步、不進 Profile），角色以正本為準；正本離線時退回 stamp 最高的那台並標示唯讀。存檔先寫正本，再複製到其他已連線且宣告 `personas.v1` 的主機，被拒時把多出的角色補進正本再複製，最多兩輪；每次讀完一台也會比內容，不同就把正本補過去，存檔提示會列出複製失敗的主機。已知限制：選擇正本主機的下拉、「正本離線」說明與第一次存角色的確認在下一張，這一版單獨上線時一律用固定的預設值（主機順序第一台）（#3498）。
+- **側欄改為唯讀編組檢視（NA-6b）**：側欄依序顯示團隊組、各主機的手動組與未分組，團隊優先；一個 tab 代表它第一個存活的 tmux 窗格所屬的 session，不是 session 的 tab 不列出，無法確認安全的主機顯示說明行。原本的閘門刪除，所以主頁切換鈕與外觀編輯器的團隊圖示列永遠顯示。團隊座位列開啟座位自己的 tab，不顯示關閉鈕、中鍵也不會關掉整個分割 tab。已知限制：本版純唯讀，右鍵、拖曳與改名在 NA-6c（#3511）。
+
+### Changed：文件與 skill
+
+- **新增 `pdx-test` skill 草稿（WWD-6b）**：寫給 agent 看，說明何時用 `pdx test`、單檔走本機快車道、沒有 task 時用 `--adhoc`、等待與取消的行為、結束碼表（與程式逐一對照），以及與 `pdx-gate` 並存到 WWD-9 為止的分工；不要把 `pdx test` 包在 `pdx gate` 裡。CLAUDE.md 與 brief 範本暫不引用，等跨主機 `pdx test` 在 C2 驗收後才引用（#3296）。
+
 ## [1.0.0-alpha.756] - 2026-10-19
 
 > daemon、`pdx` CLI 與 `wwd` 有改；**mod 有改（`cmd/pdx/plugin/purdex/skills/pdx-watch/SKILL.md`），要重跑 `pdx setup`**，hook 程式沒有改。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 755 相同。

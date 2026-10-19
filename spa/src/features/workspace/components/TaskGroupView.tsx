@@ -6,18 +6,20 @@
 // A session is a tab showing a tmux session; its row is the sidebar's own InlineTab (avatar, light, title as in the workspace view), not draggable here. A team seat no open tab shows is listed and not openable.
 // A click switches to the session's workspace and tab (the same handler as the workspace view). Which group a solo session is in is decided by its lineage root (hooks/useSessionRoots.ts); until the
 // root is read it is 未分組 for the display. What it reads — each connected host's groups, the roots — it reads only while this view is mounted, i.e. open.
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { daemonMismatchKey, useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
+import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/task-groups/loader'
+import { rowMenuItems } from '../../../lib/task-groups/row-menu'
 import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
@@ -45,6 +47,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const nex = useNexHostStore((s) => s.byHost)
   const groupsByHost = useTaskGroupsStore((s) => s.byHost)
   const teams = useTeamViews()
+  // The last refusal of an edit, in words, until dismissed or replaced by the next action.
+  const [notice, setNotice] = useState<string | null>(null)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
   const sessionTabs = useMemo<SessionTab[]>(() => {
@@ -99,18 +103,29 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   )
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
-  const renderRow = (row: GroupRow, teamKey?: string, isLead = false) => {
+  const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])
+  // A solo session's right-click menu gets the task-group rows on top (a team seat is filed by its team, L10). Set as the click bubbles up from the row, i.e. AFTER the tab menu's own handler cleared whatever an
+  // earlier menu left; a host that cannot serve groups, or a tab that is no session, gets none.
+  const offerGroupMenu = (tabId: string, groupId: string | null) => {
+    const s = sessionOfTab.get(tabId)
+    if (!s || !taskGroupsSupported(s.hostId)) { useTabMenuExtrasStore.getState().clear(); return }
+    const root = s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId)
+    useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({ hostId: s.hostId, root, entry: groupsByHost[s.hostId], currentGroupId: groupId, t, report: setNotice }))
+  }
+
+  const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
     const seat = row.seat
     const openSeat = seat && teamKey ? () => { openTeamSeat(teamKey, seat.session.session_id) } : undefined
     if (tab) {
-      return (
+      const inner = (
         <InlineTab
           key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag leadOfTeam={isLead ? teamKey : undefined}
           seatOverride={seat ? { address: seat.session.address, title: seat.label } : undefined}
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
+      return seat ? inner : <div key={row.key} onContextMenu={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
     }
     // A team seat no open tab shows: listed, and a click opens it.
     return (
@@ -129,6 +144,12 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
 
   return (
     <div data-testid="task-group-view" className="flex flex-col gap-1">
+      {notice !== null && (
+        <div data-testid="task-group-notice" role="alert" className="mx-3 my-0.5 flex items-start gap-1.5 text-[11px] text-status-warning-text">
+          <span className="min-w-0 flex-1">{notice}</span>
+          <button type="button" aria-label={t('taskgroups.notice_close')} onClick={() => setNotice(null)} className="shrink-0 cursor-pointer text-text-muted hover:text-text-primary">×</button>
+        </div>
+      )}
       {view.map((section, i) => {
         if (section.kind === 'unsafe') {
           return (
@@ -159,7 +180,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
                 host={hostLabel(section.hostId, hostLookOf(section.hostId))}
               />
-              {!collapsed && section.rows.map((r) => renderRow(r))}
+              {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.group.id))}
             </section>
           )
         }

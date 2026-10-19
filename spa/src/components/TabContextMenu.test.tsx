@@ -5,6 +5,7 @@ import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTabMenuExtrasStore } from '../stores/useTabMenuExtrasStore'
 
 function makeSessionTab(mode: 'terminal' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
   const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'tst001', mode, cachedName: '', tmuxInstance: '' }, { pinned: opts?.pinned })
@@ -316,5 +317,37 @@ describe('TabContextMenu stays below the title bar (#1801)', () => {
     const el = container.firstElementChild as HTMLElement
     // React assigns the camelCase property, which jsdom keeps as is (see FloatingPanel.test.tsx).
     expect((el.style as unknown as { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag')
+  })
+
+  // --- Rows a surface puts on top (the task-group view's) ---
+  describe('extra rows', () => {
+    afterEach(() => { useTabMenuExtrasStore.getState().clear() })
+
+    it('shows the rows set for this tab on top, runs one and closes', () => {
+      const tab = makeSessionTab()
+      const onSelect = vi.fn()
+      useTabMenuExtrasStore.getState().set(tab.id, [{ key: 'one', label: 'Put in group', onSelect }, { key: 'two', label: 'Not now', onSelect: vi.fn(), disabled: true, title: 'reading' }])
+      const props = renderMenu({ tab })
+      fireEvent.click(screen.getByTestId('tab-menu-extra-one'))
+      expect(onSelect).toHaveBeenCalledTimes(1)
+      expect(props.onClose).toHaveBeenCalled()
+      const off = screen.getByTestId('tab-menu-extra-two')
+      expect(off).toHaveAttribute('aria-disabled', 'true')
+      expect(off).toHaveAttribute('title', 'reading')
+      expect(off).toHaveAccessibleDescription('reading') // a screen reader gets the reason too, not only the tooltip
+      expect(off).toHaveAccessibleName('Not now') // ... and the reason does not leak into the row's name
+      off.focus()
+      expect(document.activeElement).toBe(off) // focusable: the reason is reachable from the keyboard
+      fireEvent.click(off)
+      expect(props.onClose).toHaveBeenCalledTimes(1) // a disabled row does nothing and does not close the menu
+    })
+
+    it('ignores rows set for another tab, and clears them when the menu goes away', () => {
+      useTabMenuExtrasStore.getState().set('someone-else', [{ key: 'one', label: 'Put in group', onSelect: vi.fn() }])
+      const { unmount } = render(<TabContextMenu tab={makeSessionTab()} position={{ x: 1, y: 1 }} onClose={vi.fn()} onAction={vi.fn()} hasOtherUnlocked hasRightUnlocked />)
+      expect(screen.queryByTestId('tab-menu-extra-one')).toBeNull()
+      unmount()
+      expect(useTabMenuExtrasStore.getState().items).toEqual([])
+    })
   })
 })

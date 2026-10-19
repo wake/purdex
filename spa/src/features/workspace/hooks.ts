@@ -8,6 +8,7 @@ import { closeTab } from '../../lib/tab-lifecycle'
 import { clearTabMoving, markTabsMoving } from '../../lib/team/moving-tabs'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useTabMenuExtrasStore } from '../../stores/useTabMenuExtrasStore'
 import type { Tab, PaneContent, PaneRebuildRecord, TerminatedReason } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 import type { RebuildEditableField } from '../../components/RebuildActionSet'
@@ -153,6 +154,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
+    // Rows a surface put on the previous tab menu are not this one's; the task-group view sets its own after this runs (it listens a level up).
+    useTabMenuExtrasStore.getState().clear()
     const tab = tabs[tabId]
     if (tab) setContextMenu({ tab, position: { x: e.clientX, y: e.clientY } })
   }, [tabs])

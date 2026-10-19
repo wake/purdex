@@ -20,8 +20,10 @@ import {
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
+import { FirstSaveConfirm } from './FirstSaveConfirm'
 import { PersonaForm } from './PersonaForm'
 import { PersonaList } from './PersonaList'
+import { PersonaSourcePicker } from './PersonaSourcePicker'
 
 const BTN =
   'shrink-0 rounded-md border border-border-default px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
@@ -57,6 +59,8 @@ export function PersonasSection() {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
   const [issues, setIssues] = useState<PersonaIssue[]>([])
+  // The first persona on a source that has none renames every live conversation; the user is asked once, here.
+  const [confirm, setConfirm] = useState<{ hostId: string } | null>(null)
   // The note and the error of the last save live outside the component with the lock: a save that ends while this page
   // is away reports to whichever instance is mounted when it does.
   const { note, error } = useSyncExternalStore(subscribeSave, getOutcome)
@@ -71,11 +75,11 @@ export function PersonasSection() {
     wasSaving.current = saving
   }, [saving])
 
-  // Where a first collection would go: the first host that says it serves personas.
-  const fallbackHostId = useMemo(
-    () => hostOrder.find((id) => (nex[id]?.fetchedAt ?? 0) > 0 && selectPersonasV1(id)({ byHost: nex })) ?? null,
-    [hostOrder, nex],
-  )
+  // Where a first collection would go: the source when it serves personas, else the first host that says it does.
+  const fallbackHostId = useMemo(() => {
+    const serves = (id: string) => (nex[id]?.fetchedAt ?? 0) > 0 && selectPersonasV1(id)({ byHost: nex })
+    return (sourceId !== null && serves(sourceId) ? sourceId : hostOrder.find(serves)) ?? null
+  }, [sourceId, hostOrder, nex])
   const items = collection?.items ?? []
   const unsupported = collection === null && fallbackHostId === null
   // Retired personas keep their codes for good (L5), so they count towards the daemon's 64.
@@ -90,9 +94,12 @@ export function PersonasSection() {
   const open = (key: string) => {
     const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
     if (!p) return
-    setIssues([]); setOutcome({ note: null, error: null })
+    setIssues([]); setOutcome({ note: null, error: null }); setConfirm(null)
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
+
+  // A notice asked about one source; another source (the user changed it, or the old one dropped) is another question.
+  useEffect(() => { setConfirm(null) }, [sourceId])
 
   /**
    * A save came back stale, or lost the compare-and-set: another copy of the collection is now the shown one. What the
@@ -113,7 +120,7 @@ export function PersonasSection() {
     setOutcome({ note: t('settings.personas.rebuilt') })
   }
 
-  const save = async (draft: Persona) => {
+  const save = async (draft: Persona, confirmed = false) => {
     if (!editing || savePending()) return // read straight from the slot: a double submit can beat the next render
     const found = validatePersona(draft)
     if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
@@ -127,6 +134,17 @@ export function PersonasSection() {
     }
     const stamped = { ...draft, updated_at: Date.now() }
     const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
+    // The first persona on a source that has none: the daemon starts naming its live conversations after personas. Asked
+    // once, and always: the number shown comes from the inventory of session rows, but the daemon renames every live
+    // conversation, including ones without a session row, so even a count of 0 does not prove nobody is renamed.
+    // Nothing is awaited here: the lock below is taken in the same turn as the click, so the form and the source cannot
+    // change under a save that is waiting.
+    const target = editing.base?.hostId ?? fallbackHostId ?? ''
+    if (!confirmed && items.length === 0 && next.length > 0 && target !== '') {
+      setConfirm({ hostId: target })
+      return
+    }
+    setConfirm(null)
     if (!beginSave()) return
     try {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
@@ -167,6 +185,7 @@ export function PersonasSection() {
           {t('settings.personas.new')}
         </button>
       </div>
+      <PersonaSourcePicker sourceId={sourceId} offline={readOnly} disabled={saving} />
       {atCap && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-cap">{t('settings.personas.cap')}</p>}
       {unsupported && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-unsupported">{t('settings.personas.unsupported')}</p>}
 
@@ -188,6 +207,11 @@ export function PersonasSection() {
             />
           ) : (
             <p className="text-xs text-text-secondary">{t('settings.personas.form.pick')}</p>
+          )}
+          {confirm && editing && !readOnly && (
+            <div className="mt-2">
+              <FirstSaveConfirm hostId={confirm.hostId} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
+            </div>
           )}
           {note && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-note">{note}</p>}
           {error && <p className="mt-2 text-xs text-red-500" data-testid="personas-error">{error}</p>}
