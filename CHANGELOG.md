@@ -1,5 +1,69 @@
 # Changelog
 
+## [1.0.0-alpha.758] - 2026-10-19
+
+> daemon、`pdx` CLI 與 `wwd` 有改；**mod 沒有改，不用重跑 `pdx setup`**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 757 相同。
+>
+> **測試結果開始重用（WWD-5d）**：`pdx test` 送出宣告的任務時，會先查同一份程式碼、同一個任務定義、在有資格的主機上 3 天內跑過的結果；查到就直接回傳，不再重跑。要強制重跑時加 `--no-cache`。結果只在「做出結果當下主機沒有漂移」時才寫入，主機讀不到 facts 時一律不寫。
+>
+> **部署順序：先升兩台 Purdex daemon，再緊接著升四台 wwd。** 758 的 `pdx` 送出宣告任務時會帶新欄位 `def_hash`，757 的 wwd 會以 400 拒絕；這只發生在「同一台的 Purdex 已升、wwd 還沒升」的那幾分鐘。wire 的 `proto` 仍是 3，主機之間沒有格式變動。
+>
+> **資料庫**：`wwd.db` 裡 queue 的 schema 從 6 升到 7（jobs 加 `def_hash`、`claim_labels`、`claim_fingerprint`），host schema 仍是 6；Purdex 這邊沒有新表或索引。757 的 wwd 會拒絕開 queue schema 7，所以**退回 757 時要照 `docs/wwd-deploy.md` §5 還原 `wwd.db.pre-758`、換一個新的 epoch，而且退版前隔離區必須是空的。**
+>
+> **告警規則補齊大部分**：新增 pressure held、thrash、resident growth（記憶體）、mserv service（只在 Linux）與 orphans（開發用的孤兒行程與 fork 迴圈，只列出、絕不 kill）。告警照樣只寫入、手機推播仍預設關閉；`/api/info` 現在看得到投遞狀態（`wwdalerts`）。
+>
+> **`/team <名字>` 開始生效**：daemon 公告 `team.lead_name.v1`，在一般 session 輸入 `/team <名字>` 就會建立並綁定該名字的 lead（對不上或對上多個角色時走核准卡）。**第一次在姓名池存角色時，會一次替所有存活的對話改名**（舊名字仍可送達），88 會在使用者送測前另外說明。
+>
+> **worker**：部署時四台的 worker 先一律關閉；mlab 與 air26 由 lead 在部署檢查通過後打開。mserv 的設定這一版加上 `explicit_labels_only`（只接明確標給它的工作），但 worker 仍然關著，要等 #3549（`wwd.slice` 上限與人工送法停用）完成、守門員同意才開；air19 照舊不開。
+>
+> 部署後另外補了一個部署設定的缺口（不在程式碼裡）：air26 的 wwd 設定加了 `[tools]`（go）與 `[repos]`（purdex），要求 `repo:purdex` 的 `pdx test` 任務現在都會送到 air26 跑（#3546）。
+
+### Added：wwd 結果重用（WWD-5d）
+
+- **送件時先查已存的結果（WWD-5d-2a，讀取端）**：`pdx test` 送出宣告的任務時，daemon 會對本機與每台可達的 peer 查「同一份程式碼、同一個任務定義」是否已有結果；命中就讓 job 直接成為成功並標記 `cache_hit`，log 指向原本那個 job，不再重跑。條目必須來自被問的那台主機，讀不到或 peer 不可達一律當作沒命中。新增 `pdx test --no-cache` 強制重跑（不能與 `--list`、`--adhoc` 併用）；`def_hash`、`no_cache` 只走本機 socket，不進 job、不傳給 peer。已知限制：peer 的隔離狀態在 5c-2 之前尚未驗證（#3522）。
+- **成功結果存進快取（WWD-5d-2b，寫入端）**：宣告任務第一次跑成功，就以「做出結果那次 claim 當下」worker 自述的標籤與指紋存一筆條目，之後同一個 snapshot 的送件就會命中。只有可快取、非本機、非 adhoc、非快取命中、沒被取代且 exit 0 的結果才會寫，且主機讀不到 facts 時一律不寫。**queue 的 schema 從 6 升到 7**（jobs 加 `def_hash`、`claim_labels`、`claim_fingerprint`），舊的工作這三欄是空的，其結果不會被存；回退舊版 wwd 要還原升級前的 `wwd.db` 備份，部署前先備份（#3548）。
+
+### Added：wwd 告警規則（WWD-8a-2）
+
+- **記憶體壓力與常駐成長三條規則（8a-2b）**：新增 pressure held（push 級，連續 5 個完整分鐘都在 warning 以上且 swap 增加至少 1 GB）、thrash（digest 級，compressor 超過 4096 MB 且解壓速率過高、持續 60 秒以上）與 resident growth，並含已知常駐行程的抑制。取樣不足、缺欄位或重播時一律「未判斷」，不誤報也不清除既有告警；Linux 上不適用的規則視為不成立（#3516）。
+- **mserv service 規則（8a-2c-1）**：只在 Linux 上判斷（push 級）。PSI `some avg60` 連續兩個完整分鐘達 10 以上且最新讀數仍高，或最新一筆可用記憶體低於 1.5 GiB 就告警；`expect_pressure` 暫停只影響 PSI 這一半，低記憶體照報。同一張也更新了 spec 的 mserv service 與 orphans 兩列（#3538）。
+- **orphans 規則（8a-2c-2）**：列出使用者自己的、ppid 為 1、啟動超過 2 小時且屬於開發路徑（worktree、scratch、pdx 暫存、測試用 wwd、playwright、codex-broker）的孤兒行程，以及 ppid 為 1 的 shell fork 迴圈。**只列出，絕不 kill**。為此 facts 的行程紀錄多了啟動時間，並新增只讀行程表的 `Fresh()`，一秒內多次呼叫也很便宜（#3544）。
+- **`/api/info` 看得到 `wwdalerts`（#3535）**：見下方 Fixed。
+
+### Added：wwd worker 與隔離
+
+- **worker 的 `explicit_labels_only`（#3441）**：設定 `[worker] explicit_labels_only = true`（預設關閉）後，worker 只接標籤含 `os:` 或 `task:<repo>/<task>` 的工作，沒有標籤的舊 commit 工作一律不接。mserv 的設定這一版會開啟（#3533）。
+- **沙箱 unit 帶來源標籤，隔離區處理同名 id（#3373 PR3b）**：job id 只在做出它的來源內唯一，所以沙箱 unit 改名為 `wwd-<來源標籤>-<job id>`（標籤是連線名稱 SHA-256 的前 16 個十六進位字元；沒有標籤時維持舊名）。隔離區現在同時認兩種 unit 名，`Clear` 遇到有歧義的 id 會拒絕，不會清錯。沒有 wire 或 schema 變動（#3528）。
+- **來源標籤沙箱的 mserv 真機測試（#3529）**：新增兩個只在 mserv 上跑的情境（build tag `mserv && linux`，平常不跑）：unit 名稱與環境變數正確，以及兩個來源用同一個 job id 同時跑時各在自己的 unit。不驗 workspace 隔離，因為測試的路徑是 helper 依標籤命名的，證明不了正式碼；結果記在 `docs/wwd-4d3-mserv.md`（#3547）。
+
+### Added：App 的 pool 資料層與任務編組（WWD-7a／NA-6c）
+
+- **pool store 與主機視圖（WWD-7a-1b）**：新增 `usePoolStore`，每 5 秒向第一台已連線且宣告 `pool.v1` 的 daemon 讀 `/api/pool/hosts`；失敗時依類型換下一台、短暫重試或退避（2、4、8…最長 30 秒）並保留最後的資料，全部失敗則每台主機退回 fleet 顯示。畫面隱藏時不讀取、不計時。這一張沒有 UI，也沒有任何地方掛載，沒有 `pool.v1` 時畫面不變（#3512）。
+- **右鍵把 session 加入、新建、移出任務編組（NA-6c-1）**：側欄右鍵選單多出對應的列，並有上限（最多 32 組、64 個 root、一個 root 只在一組、名稱 1–64 bytes）。寫入必須取得真正的 lineage root，拿不到就不寫、不拿 session 自己的 id 冒充；主機有讀不了的列或資料還在讀取時，列照樣出現但停用並說明原因（#3523）。
+- **組名就地改名、清除空組、team 標題開編輯表單（NA-6c-2）**：手動組名稱雙擊（或 Enter／Space／F2）就地改名；沒有在線 session 的組可「清除」，這是破壞性操作，畫面確認、寫入前重讀在線 session、寫入時再驗，三道防線任一不成立都拒絕（#3527）。
+- **拖曳 solo session 到任務組或「未分組」（NA-6c-3）**：只能拖到同一台主機的手動組；主機的編組不能編輯或 root 還在讀取時，放下仍被接住但不寫入，並以通知說明原因。team 的席位不可拖（#3534）。
+
+### Added：team 與姓名池
+
+- **lead 在核准時選名字（NP-4c C1）**：核准 lead 申請時可帶 `lead_name`（3–12 個小寫英文字母）。流程是先改名、關閉申請，失敗或輸掉競爭就還原改名；名字被占用回 409 `name_taken` 並附目前清單，申請維持開啟。核准流程以 per-approval 鎖串行化（#3521）。
+- **`/team <名字>` 開始生效（NP-4c C2）**：daemon 公告 `team.lead_name.v1`；人員的 token 可帶 `lead_name` 或核准卡 `card`（兩者互斥），綁定以 token 為準，請求自己改不了。名字對上就直接建立並綁定該名字的 lead，對不上或對上多個角色時走核准卡。第一次在姓名池存角色時，會一次替所有存活的對話改名（舊名字仍可送達）（#3536）。
+- **本機 spawn 受理時預訂成員名字（NP-4 A2a）**：受理時先預訂名字，`pdx spawn` 在 stderr 印一次「→ 名字（預訂）」。結束點（註冊完成、失敗、中止、被別人先結束、team 結束、資源卡被拒、啟動逾時）都會釋放預訂，每個結束點都有測試（#3524）。
+- **遠端 spawn 帶成員名字（NP-4 A2b）**：lead 主機挑名字後立即釋放，只有成員主機持有預訂；名字隨 `spawn` 指令送出，舊版成員主機會忽略這個欄位。指令被拒、過期、出錯或重放時 op 已結束，都會釋放（#3532）。
+
+### Added：App 的角色與指揮台
+
+- **角色頁的正本主機與第一次存檔確認（NA-1d PR-B）**：新增正本主機下拉（只列已宣告 `personas.v1` 的主機，選擇只存在這台裝置、不同步），正本連不上時頁面以一行說明原因。第一次存角色一律先白話告知「至少 N 個現有的對話會改用角色名字，舊地址照樣送得到」，取消則不送出。第一次存的目的地改為正本主機（若宣告 `personas.v1`）（#3517）。
+- **角色頭像選擇器（NA-1b-2c-1）**：來源可選首字母、六種 DiceBear 樣式、照片網址或上傳檔案；DiceBear 停手 400 ms 後才畫，照片網址要按「取得照片」才連線。開啟既有角色不會重畫，過時或離開頁面的繪製結果不會套到別的角色上。匯入對話框與頁尾授權在下一張（#3541）。
+- **指揮台的說話開頭顯示角色頭像與名字（NA-3）**：對話的 agent 是角色時，回合的第一個說話開頭顯示頭像、名字、模型與時間，之後工具或思考之後再說話的開頭在文字上方多一行淡色的頭像與名字。不是角色的對話完全維持原樣（#3539）。
+
+### Fixed：告警與 info
+
+- **`/api/info` 補上 `wwdalerts`（#3526）**：推播開關是開是關、這台是不是投遞者、被壓下幾則，之前在 `/api/info` 完全看不到（只有模組內有 `Status()`，core 沒有去問）。現在回應一律有 `wwdalerts` 欄位，模組沒掛載或沒有 `Status()` 時為 `null`；補了「真模組註冊進 core 後 `/api/info` 看得到」的測試（#3535）。
+
+### Changed：文件
+
+- **WWD-7 設計的使用者答案**：Q1–Q6 寫進 WWD plan：worker 開關只在主機分頁設定；主機格右上角的數字暫時不動（7a-2 不加數字、7b1-4 不做數字與顏色，之後整體重新設計）；工作清單在守門員專區「工作」分頁；關 worker 時正在跑的跑完；只有取消正在跑的才需確認；spec 的 exception 在 App 叫「暫停」，時長 1／3／8 小時或自訂結束時間，App 字串不出現「例外」。純文件（#3557）。
+
 ## [1.0.0-alpha.757] - 2026-10-19
 
 > daemon、`pdx` CLI 與 `wwd` 有改；**mod 有改（hooks 的 `member.js`／`register.js`，skills 的 `pdx-team`／`pdx-test`），要重跑 `pdx setup`**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 756 相同。
