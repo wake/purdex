@@ -202,9 +202,16 @@ sync mechanisms. Nothing of NP-2 merged. The text below is kept only as a record
 - Backfill (spec §6.4) is a pass after `settlePoolCollisions` (`module.go:866`) that renames under the pool lock.
   - A live lead is known from the seat reader (`team.SeatRole`, `internal/team/seat.go:17-21`), through core.
   - Without the team module, everything uses rule 3.
-  - It skips a session that is in `relays_active`.
-  - It sends each renamed session the notice, through the `[pdx team]` notice channel. NP-3 confirms which channel
-    reaches a session that is not a team seat, and records it here.
+  - It skips a session that is in `relays_active`, through a new `team.RelayGuard` (`InRelay(sessionID)`, registered by the
+    team module under `team.RelayGuardKey`): any relay op that is not done, failed or cancelled, with the session as the
+    old session or as the new one. A role or relay state that cannot be read leaves the session for the next pass.
+  - The role comes from the existing `team.SeatReader`; `Seat.LeadSessionID` is now also filled for a local member (the lead
+    of its team), which rule 2 needs to read that lead's pairs.
+  - **The notice channel (decided in NP-3c-3).** It sends each renamed session the notice through the peers module's
+    in-process `SendSelfNotice` (`internal/module/peers/sender.go`), the sender of the `[pdx team]` notices that skips the
+    self-target refusal: from the session's own inbox (its live registry entry) to itself, by ref. It does not need a team
+    seat, so it reaches any live session. The text is `renameNoticeFmt` (`namebackfill.go`). It goes out from a goroutine after
+    the rename, so the naming pass never waits for the sends; a failure is only logged (the old address keeps working).
 - Alias retention (spec §6.3) runs once per hour: lineage dead for 30 days, and a cap of 512 rows.
 - **Last task, after NP-2 has merged:** the envelope's `familiar` (the last 64 codes from `name_leads` ∪
   `name_pairs.member_code`), recorded per host by the snapshot, and the union used by rules 2 and 3 (codex #9).

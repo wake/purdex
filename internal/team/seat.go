@@ -23,8 +23,9 @@ const (
 )
 
 // Seat is where a session sits in a team right now. TeamID is the team's id on the lead's host (for a remote member,
-// the one it joined); empty for SeatNone. For SeatMemberRemote only, LeadHostID is the lead's host (its daemon host id) and
-// LeadSessionID the lead's session on that host, as recorded when the member joined: where the team's journal can be asked.
+// the one it joined); empty for SeatNone. LeadSessionID is the lead's session: for a local member, the lead of its team on this
+// host; for SeatMemberRemote, the lead's session on the other host, as recorded when the member joined, and LeadHostID is that
+// host (its daemon host id): where the team's journal can be asked.
 type Seat struct {
 	TeamID        string
 	Role          string
@@ -36,6 +37,16 @@ type Seat struct {
 // error, never none.
 type SeatReader interface {
 	SeatOf(sessionID string) (Seat, error)
+}
+
+// RelayGuardKey is the service-registry key of the RelayGuard.
+const RelayGuardKey = "team.relay-guard"
+
+// RelayGuard says whether a session is in a relay that has not finished (any state but done, failed or cancelled), as the
+// session being relayed or as the new session it produced. The name backfill leaves such a session alone until the relay ends.
+// A store error is an error, never false.
+type RelayGuard interface {
+	InRelay(sessionID string) (bool, error)
 }
 
 // PredecessorReaderKey is the service-registry key of the PredecessorReader.
