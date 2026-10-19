@@ -51,3 +51,9 @@ export function seatLabel(address: string, title?: string): string | null {
   const t = title?.trim() ?? ''
   return t !== '' ? `${seat.name} · ${t}` : seat.name
 }
+
+/** Whether a message's sender may be shown as a person: another session whose identity the transport established. A mod's notice (kind plugin) is no person, and an
+ *  `unverified` sender is only what the message text says (the daemon's own caveat): its name is never resolved to a persona's face. */
+export function isVerifiedPeer(item: { from?: { kind: string; name?: string; unverified?: boolean } }): boolean {
+  return item.from?.kind === 'peer' && item.from.unverified !== true
+}

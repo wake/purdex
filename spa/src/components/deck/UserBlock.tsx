@@ -12,7 +12,8 @@ import { UserText } from './UserText'
 import { CjkText } from './CjkText'
 import { usePeerCollapse } from './usePeerCollapse'
 import { ConversationHostContext } from './conversation-host'
-import { SEAT_MARK, SeatSentence, isVerifiedPeer } from '../SeatSentence'
+import { SEAT_MARK, SeatSentence } from '../SeatSentence'
+import { isVerifiedPeer } from '../../lib/names/seat'
 
 // Three tones (c9d9c7-52 pt 4/7): the person's words are the loudest — an accent frame on a firmer tint; a peer's message is a teal frame on a faint
 // tint with its body one step quieter; a system notice (task report, wake-up, a mod's notice) is the grey of the system rows, dashed and quieter still.
