@@ -1,0 +1,215 @@
+// Package orphans watches the host's process table for what a developer's machine leaks (spec §13.3 "orphans"): processes the launcher
+// adopted (ppid 1) that sit under a dev path and have outlived their work, and ppid-1 shell loops that keep creating children (#3416: twelve
+// leaked test loops forked more than 500 times a second for days). It only looks. Nothing in this package can signal a process.
+package orphans
+
+import (
+	"path"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/advisor"
+	"github.com/wake/purdex/internal/wwd/facts"
+)
+
+// The numbers of the rule (spec §13.3).
+const (
+	// MinAge is how long a dev-path process must have lived to count as left behind.
+	MinAge = 2 * time.Hour
+	// LoopRate is the children per second above which a shell is a fork loop.
+	LoopRate = 10.0
+	// CheckEvery is how often the loop check is made. It reads the process table many times in a few hundred milliseconds, so it is not
+	// made on every 5 s sample.
+	CheckEvery = 30 * time.Second
+
+	burstReads = 25
+	burstGap   = 10 * time.Millisecond
+	// burstFloor keeps the measured window from being shorter than the reads that were really made, whatever the clock says.
+	burstFloor = 100 * time.Millisecond
+	maxListed  = 100
+)
+
+// Config is the scanner's settings.
+type Config struct {
+	// UID is the user whose processes are looked at: the one wwd runs as.
+	UID int
+}
+
+// Scanner takes a process snapshot at a time (Observe, from the sampler's hook) and keeps the latest report (Report). Observe and Report
+// may be called from different goroutines.
+type Scanner struct {
+	cfg Config
+
+	// seams
+	sleep func(time.Duration)
+	clock func() time.Time
+
+	mu        sync.Mutex
+	report    *advisor.OrphanReport
+	loops     map[loopKey]*loopState
+	lastCheck time.Time
+}
+
+type loopKey struct {
+	pid   int
+	start time.Time
+}
+
+type loopState struct {
+	name  string
+	since time.Time
+	rate  float64
+}
+
+// New returns a scanner.
+func New(cfg Config) *Scanner {
+	return &Scanner{cfg: cfg, sleep: time.Sleep, clock: time.Now, loops: map[loopKey]*loopState{}}
+}
+
+// Report is the latest scan, or nil before the first one has run. The caller may keep it.
+func (s *Scanner) Report() *advisor.OrphanReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.report == nil {
+		return nil
+	}
+	r := *s.report
+	r.Procs = append([]advisor.OrphanProc(nil), r.Procs...)
+	r.Loops = append([]advisor.ForkLoop(nil), r.Loops...)
+	return &r
+}
+
+// Observe is the sampler's hook: the dev-path scan is made on every call, the loop check at most every CheckEvery.
+func (s *Scanner) Observe(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
+	procs := s.devOrphans(now, snap, c)
+	s.mu.Lock()
+	check := s.lastCheck.IsZero() || now.Sub(s.lastCheck) >= CheckEvery
+	s.mu.Unlock()
+	if check {
+		s.checkLoops(now, snap, c)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rep := &advisor.OrphanReport{At: now, Procs: procs}
+	for k, l := range s.loops {
+		rep.Loops = append(rep.Loops, advisor.ForkLoop{PID: k.pid, Name: l.name, Rate: l.rate, Since: l.since})
+	}
+	sort.Slice(rep.Loops, func(i, j int) bool { return rep.Loops[i].Rate > rep.Loops[j].Rate })
+	s.report = rep
+}
+
+// devOrphans lists the user's ppid-1 processes older than MinAge that sit under a dev path.
+func (s *Scanner) devOrphans(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) []advisor.OrphanProc {
+	var out []advisor.OrphanProc
+	for _, p := range snap.Procs {
+		if p.PPID != 1 || p.UID != s.cfg.UID || p.Start.IsZero() || now.Sub(p.Start) < MinAge {
+			continue // a start time that is not known cannot be called old
+		}
+		var argv []string
+		if c.ArgsOf != nil {
+			argv = c.ArgsOf(p.PID)
+		}
+		var kind string
+		if c.KindOf != nil {
+			kind = c.KindOf(p)
+		}
+		if k := devKind(p.Name, argv, kind); k != "" {
+			out = append(out, advisor.OrphanProc{PID: p.PID, Name: p.Name, Kind: k, Age: now.Sub(p.Start)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Age > out[j].Age })
+	if len(out) > maxListed {
+		out = out[:maxListed]
+	}
+	return out
+}
+
+// devKind says which dev path a process belongs to ("" when none): the resident kinds the facts already know (a playwright cli, a codex
+// broker), then the path in its argv.
+func devKind(name string, argv []string, residentKind string) string {
+	switch residentKind {
+	case "playwright":
+		return "playwright"
+	case "codex-broker":
+		return "codex-broker"
+	}
+	text := strings.ToLower(name + " " + strings.Join(argv, " "))
+	switch {
+	case strings.Contains(text, "/worktrees/"):
+		return "worktree"
+	case strings.Contains(text, "/.scratch/"):
+		return "scratch"
+	case strings.Contains(text, "/tmp/pdx"):
+		return "pdx-tmp"
+	}
+	if len(argv) > 0 && path.Base(argv[0]) == "wwd" && (strings.Contains(argv[0], "/tmp/") || strings.Contains(argv[0], "/var/folders/")) {
+		return "test-wwd"
+	}
+	return ""
+}
+
+var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true}
+
+// checkLoops measures the user's ppid-1 shells that have a child: a burst of table reads a few milliseconds apart counts the distinct
+// children each shell began during it. A shell above LoopRate keeps the time it was first seen above it; one that is quiet, or gone, is
+// dropped, so a new run starts over.
+func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
+	s.mu.Lock()
+	s.lastCheck = now
+	s.mu.Unlock()
+	if c.Fresh == nil {
+		return
+	}
+	// every ppid-1 shell of the user's, whether or not it has a child at this instant: the faster the loop, the shorter its child lives and the
+	// less likely a snapshot is to catch one. The burst is one set of table reads for all of them.
+	suspects := map[int]facts.ProcRec{}
+	for _, p := range snap.Procs {
+		if p.PPID == 1 && p.UID == s.cfg.UID && shells[p.Name] {
+			suspects[p.PID] = p
+		}
+	}
+	if len(suspects) == 0 {
+		s.mu.Lock()
+		s.loops = map[loopKey]*loopState{} // no shell left to be a loop
+		s.mu.Unlock()
+		return
+	}
+	began := s.clock()
+	seen := map[int]map[int]bool{}
+	for pid := range suspects {
+		seen[pid] = map[int]bool{}
+	}
+	for i := 0; i < burstReads; i++ {
+		rows, err := c.Fresh()
+		if err != nil {
+			return // a table that cannot be read says nothing: the states stay as they were
+		}
+		for _, r := range rows {
+			if m, ok := seen[r.PPID]; ok && (r.Start.IsZero() || !r.Start.Before(began)) {
+				m[r.PID] = true // a child that began during the burst; ones that were already there are not forks of it
+			}
+		}
+		if i < burstReads-1 {
+			s.sleep(burstGap)
+		}
+	}
+	window := max(s.clock().Sub(began), burstFloor)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := map[loopKey]*loopState{}
+	for pid, p := range suspects {
+		rate := float64(len(seen[pid])) / window.Seconds()
+		if rate <= LoopRate {
+			continue
+		}
+		k := loopKey{pid: pid, start: p.Start}
+		st := &loopState{name: p.Name, since: now, rate: rate}
+		if old, ok := s.loops[k]; ok {
+			st.since = old.since
+		}
+		next[k] = st
+	}
+	s.loops = next
+}
