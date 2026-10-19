@@ -165,6 +165,11 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
 
   (`.backup` is safe while wwd runs; copying the file by hand is only right with wwd stopped, and then with its `-wal`
   and `-shm` files.)
+* **The host schema moves too** (`host_schema` in `wwd.db`; 7 since 8b-3: two nullable columns on `exceptions` for a hold's `allow`
+  and `flags`). An older wwd refuses a file whose host schema is newer than it knows (`wwd.db has host schema 7, this wwd knows 6: a
+  newer wwd wrote it`), exactly as it does for the queue schema, so the same back-up and the same roll back apply to it: **a roll
+  back across a host-schema step is a restore of the backup**, and a hold made since the backup is lost with it. Check what a host has
+  with `sqlite3 -readonly ~/.local/share/wwd/wwd.db "select version from host_schema"`.
 * Roll back: deploy the previous build the same way. If the new build moved the queue schema, the old binary refuses
   the migrated database (`queue_schema` newer than it knows), so a roll back across a schema step is: stop wwd,
   put the backup back as `wwd.db` (remove the `-wal` and `-shm` files beside it), start the old build. Jobs

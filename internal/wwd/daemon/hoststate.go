@@ -340,6 +340,10 @@ func (s *HostState) activeLocked() []wire.FactExc {
 			u := *e.Exception.Until
 			fe.Until = &u
 		}
+		if a := e.Exception.Allow; a != nil { // a hold: every reader sees it from the facts (spec §13.4)
+			fe.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+		}
+		fe.Flags = append([]wire.HoldFlag(nil), e.Exception.Flags...)
 		out = append(out, fe)
 	}
 	return out
@@ -354,8 +358,12 @@ func (s *HostState) Exceptions() []wire.Exception {
 	out := make([]wire.Exception, 0, len(s.excs))
 	for _, e := range s.sorted() {
 		x := e.Exception
-		if x.Holds == nil {
-			x.Holds = []wire.Hold{}
+		x.Holds = append([]wire.Hold{}, x.Holds...) // copies: a reader that changes what it was given does not change the hold
+		if a := x.Allow; a != nil {
+			x.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+		}
+		if len(x.Flags) > 0 {
+			x.Flags = append([]wire.HoldFlag(nil), x.Flags...)
 		}
 		out = append(out, x)
 	}
