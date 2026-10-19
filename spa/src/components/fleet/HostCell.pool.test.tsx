@@ -89,20 +89,22 @@ describe('HostCell on the pool — the running dot', () => {
   })
 })
 
-describe('HostCell on the pool — the count', () => {
-  it('is the queued jobs of this host, always muted', () => {
+// The count at the badge's top right is left as it is today (the user, WWD-7 Q2: "to be reworked as a whole later"): facts' queued
+// jobs add no number to it. On the pool a live host has no gate queue, so today's count does not show either.
+describe('HostCell on the pool — the top-right count is left alone', () => {
+  it('queued jobs in the facts draw no number', () => {
     show(cell(poolHost({ facts: factsWith({ queue: { queued: 4 } }) })))
-    expect(count()).toHaveTextContent('4')
-    expect(count()!.className).toContain('bg-text-muted')
-    expect(count()!.className).not.toContain('bg-status-')
+    expect(count()).toBeNull()
   })
-  it('is absent when facts carry no queue, or it is empty', () => {
+  it('no queue in the facts, none either', () => {
     show(cell(poolHost()))
     expect(count()).toBeNull()
   })
-  it('is absent at 0', () => {
-    show(cell(poolHost({ facts: factsWith({ queue: { queued: 0 } }) })))
-    expect(count()).toBeNull()
+  it('a fallback host keeps today\'s gate-queue count', () => {
+    const waiters = Array.from({ length: 2 }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', session: '', since: 0 }))
+    const slow = { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, holders: [], waiters, longest_wait_s: 30, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } }
+    show(cell(null, { fleet: fleetHost({ slow }) }))
+    expect(count()).toHaveTextContent('2')
   })
 })
 

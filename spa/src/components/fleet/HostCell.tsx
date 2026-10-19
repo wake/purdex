@@ -95,9 +95,8 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
   const off = isOffline(view)
   const f = off ? null : view.fast
   const zone: PoolZone | 'offline' | 'nodata' = off ? 'offline' : f ? (pool?.zone ?? f.zone) : 'nodata'
-  // A breathing dot while this host's worker runs something; the count is the jobs it submitted that still wait (muted, 0 shows nothing).
+  // A breathing dot while this host's worker runs something; the count at the badge's top right is left as it is today (the user, WWD-7 Q2: reworked as a whole later).
   const running = !off && pool?.worker ? pool.worker.running.heavy + pool.worker.running.light > 0 : false
-  const queued = !off ? (pool?.queued ?? 0) : 0
   const q = view.kind === 'daemon' && !off ? view.slow?.queue : undefined
   const waiting = q?.waiters.length ?? 0
   const narrow = variant === 'narrow'
@@ -151,7 +150,6 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} bright />
         </span>
         {running && <span data-testid={`worker-running-${view.id}`} className="pointer-events-none absolute -bottom-px -right-px size-[6px] rounded-full bg-status-success animate-breathe" />}
-        {queued > 0 && <CountBadge n={queued} size="sm" className="pointer-events-none bg-text-muted text-white" testId={`queue-badge-${view.id}`} />}
         {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={`pointer-events-none ${queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)}`} testId={`queue-badge-${view.id}`} />}
       </span>
       {indicator === 'ring' ? (

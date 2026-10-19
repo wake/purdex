@@ -57,11 +57,6 @@ describe('poolCellModel — live', () => {
     expect(model(poolHost({ headroom_reasons: { heavy: ['gate_full'], light: [] } }))!.pool!.reasons).toEqual({ heavy: ['gate_full'], light: [] })
   })
 
-  it('queued comes from facts.queue, and is null while it is absent', () => {
-    expect(model(poolHost())!.pool!.queued).toBeNull()
-    expect(model(poolHost({ facts: { ...darwin, queue: { queued: 3 } } }))!.pool!.queued).toBe(3)
-  })
-
   it('the zone unknown is kept for the cell, whatever the placeholder in the readings', () => {
     const m = model(poolHost({ facts: linux }), fleet(), {})
     expect(m.pool?.zone).toBe('unknown')
@@ -83,7 +78,7 @@ describe('poolCellModel — fallback and offline', () => {
     const f = fleet()
     const m = model(null, f, { poolLastOk: NOW - 60_000 })
     expect(m.view).toBe(f)
-    expect(m.pool).toMatchObject({ state: 'fallback', since: NOW - 60_000, worker: null, headroom: null, queued: null })
+    expect(m.pool).toMatchObject({ state: 'fallback', since: NOW - 60_000, worker: null, headroom: null })
   })
 
   it('offline: the host reads as offline, with the newer last-ok', () => {

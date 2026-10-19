@@ -20,8 +20,6 @@ export interface PoolCellExtra {
   reasons: HeadroomReasons | null
   sessionsRoom: number | null
   owner: PoolOwner | null
-  /** Jobs this host submitted that are still queued; null while facts do not carry it. */
-  queued: number | null
   /** Linux only. */
   psi: { some10: number; full10: number } | null
   /** Fallback: when the pool last read the host (ms). */
@@ -58,7 +56,7 @@ function factsToFast(f: PoolFacts, load: number): FleetFast {
 
 export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, pool: PoolHost | null): PoolCellModel {
   if (!view) return { view: fleet, pool: null }
-  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, queued: null, psi: null, zone: null }
+  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null }
   if (view.state === 'live') {
     const f = view.facts
     return {
@@ -67,7 +65,7 @@ export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, p
         state: 'live', zone: f.derived.zone, load: pool?.load ?? null,
         worker: { enabled: f.worker.enabled, slots: f.worker.slots, running: f.worker.running },
         headroom: f.derived.headroom, reasons: pool?.headroom_reasons ?? null, sessionsRoom: f.derived.sessions_room, owner: f.owner,
-        queued: f.queue?.queued ?? null, psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, since: null,
+        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, since: null,
       },
     }
   }

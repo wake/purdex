@@ -69,13 +69,13 @@ describe('FleetCells — the capability gate', () => {
 describe('FleetCells — on the pool', () => {
   beforeEach(() => { useNexHostStore.setState({ byHost: { [A]: { phase: 'ready', daemonCapabilities: ['pool.v1'] } } } as never) })
 
-  it('a host the pool lists is drawn from its facts: the running dot and the muted count appear', async () => {
+  it('a host the pool lists is drawn from its facts: the running dot appears, and the queued jobs add no number', async () => {
     fetchPoolHosts.mockResolvedValue([mlab({ facts: { ...darwin, at: Date.now(), queue: { queued: 2 }, worker: { ...darwin.worker, running: { heavy: 0, light: 1 } } } })])
     answer()
     render(<FleetCells variant="wide" />)
     await flush()
     expect(screen.getByTestId('worker-running-d-a')).toBeTruthy()
-    expect(screen.getByTestId('queue-badge-d-a')).toHaveTextContent('2')
+    expect(screen.queryByTestId('queue-badge-d-a')).toBeNull()
   })
 
   it('an empty list from the pool is an answer: the fleet host is drawn as a fallback, with the pool part, not as before', async () => {
