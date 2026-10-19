@@ -177,9 +177,8 @@ func hostTools() Tools {
 // Config is the settings as last read.
 func (g *Gate) Config() Config {
 	g.st.mu.RLock()
-	cfg := g.st.cfg
-	g.st.mu.RUnlock()
-	return g.effective(cfg)
+	defer g.st.mu.RUnlock()
+	return g.st.cfg
 }
 
 // SetConfig changes the settings the gate holds (what Load would otherwise bring).
@@ -196,7 +195,7 @@ func (g *Gate) refresh() Config {
 		g.st.mu.Lock()
 		g.st.cfg = c
 		g.st.mu.Unlock()
-		return g.effective(c)
+		return c
 	}
 	return g.Config()
 }
