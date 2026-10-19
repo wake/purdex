@@ -19,6 +19,16 @@ type personToken struct {
 	expires  int64 // unix ms
 	minted   int64
 	consumed bool
+	// leadName and card are what a lead token is bound to (name pool v2 spec §5.3): the persona code the person typed, or a request
+	// that waits on the card. At most one; the request that uses the token cannot change either.
+	leadName string
+	card     bool
+}
+
+// personBind is what mint binds a lead token to.
+type personBind struct {
+	leadName string
+	card     bool
 }
 
 // personTokens is the module's table of live person tokens, under its own mutex (never held with createMu's work).
@@ -30,11 +40,16 @@ type personTokens struct {
 // mint adds a token for (session, command) good for ttlS seconds from now and returns it. At most team.PersonMaxLive unspent
 // tokens of one session stay: the oldest is dropped. Spent and expired ones are swept here.
 func (p *personTokens) mint(session, command string, ttlS int, now int64) personToken {
+	return p.mintBound(session, command, ttlS, now, personBind{})
+}
+
+// mintBound is mint for a token bound to a lead name or a card.
+func (p *personTokens) mintBound(session, command string, ttlS int, now int64, b personBind) personToken {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		panic("person token: " + err.Error()) // crypto/rand does not fail on a working system
 	}
-	t := &personToken{token: hex.EncodeToString(raw[:]), session: session, command: command, expires: now + int64(ttlS)*1000, minted: now}
+	t := &personToken{token: hex.EncodeToString(raw[:]), session: session, command: command, expires: now + int64(ttlS)*1000, minted: now, leadName: b.leadName, card: b.card}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prune(now)
@@ -104,6 +119,16 @@ func (p *personTokens) valid(session, command, token string, now int64) bool {
 	return p.find(session, command, token, now) != nil
 }
 
+// binding is what a live token for this session and command is bound to; the zero value for any other token.
+func (p *personTokens) binding(session, command, token string, now int64) personBind {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if o := p.find(session, command, token, now); o != nil {
+		return personBind{leadName: o.leadName, card: o.card}
+	}
+	return personBind{}
+}
+
 // spend removes the token (it is used). Unknown tokens are ignored.
 func (p *personTokens) spend(token string) {
 	p.mu.Lock()
@@ -154,6 +179,23 @@ func (m *Module) handlePerson(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id and a command of relay, adopt, lead or spawn are required", nil)
 		return
 	}
+	// A lead name or a card belongs to the lead command only, and a request has at most one of them (spec §5.3).
+	if req.LeadName != "" || req.Card {
+		switch {
+		case req.Command != team.PersonCmdLead:
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "lead_name and card belong to the lead command", nil)
+			return
+		case req.LeadName != "" && req.Card:
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "lead_name and card are exclusive", nil)
+			return
+		case req.LeadName != "" && !leadCodePattern.MatchString(req.LeadName):
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "lead_name must be a persona code (3-12 lowercase letters)", nil)
+			return
+		case req.LeadName != "" && m.nameService() == nil:
+			m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the name service is not available; retry", nil)
+			return
+		}
+	}
 	_, ok, err := m.origins.ResolveOriginBySession(req.SessionID)
 	if err != nil {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
@@ -163,6 +205,7 @@ func (m *Module) handlePerson(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusNotFound, team.ErrUnknownSession, "session_id is not a live Claude Code session on this host", nil)
 		return
 	}
-	t := m.persons.mint(req.SessionID, req.Command, ttl, m.now())
-	m.writeJSON(w, http.StatusOK, team.PersonResponse{Token: t.token, ExpiresAt: t.expires})
+	t := m.persons.mintBound(req.SessionID, req.Command, ttl, m.now(), personBind{leadName: req.LeadName, card: req.Card})
+	// the answer echoes what the token is bound to: the CLI prints no token whose answer does not (see team.PersonResponse)
+	m.writeJSON(w, http.StatusOK, team.PersonResponse{Token: t.token, ExpiresAt: t.expires, LeadName: t.leadName, Card: t.card})
 }
