@@ -25,7 +25,8 @@ import { FloatingPanel } from './FloatingPanel'
 import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSection'
 import { UnattendedPausedSection } from './UnattendedPausedSection'
 import { UnattendedHeldSection, type HeldRow } from './UnattendedHeldSection'
-import { UnattendedLogSection, mergeLogs } from './UnattendedLogSection'
+import { UnattendedLogSection } from './UnattendedLogSection'
+import { mergeLogs } from '../lib/team/unattended-log'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
@@ -204,7 +205,8 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     const life = lifeRef.current
     if (pagingNow.current || life === null || life.cancelled) return
     // Only the hosts that said "more" (and whose cursor we hold): a host at its last page is not asked again.
-    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined)
+    // a log host's `approved` page is the older App's: it is not asked for, and a host that could not be read has no cursor
+    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined && pages[h].log === undefined)
     if (todo.length === 0) return
     pagingNow.current = true
     setPaging(true)

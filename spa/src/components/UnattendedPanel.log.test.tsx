@@ -2,7 +2,7 @@
 // a status tag, the switch's records in bold on a pink row, newest first across hosts, the newest 30, scrollable; a host without `log` keeps today's list; a mixed set shows both.
 // The real panel over the real stores; only the API is mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createRef } from 'react'
 import { UnattendedPanel } from './UnattendedPanel'
 import { useHostStore } from '../stores/useHostStore'
@@ -166,6 +166,34 @@ describe('the log in the unattended panel', () => {
     await waitFor(() => expect(screen.getByTestId('unattended-host-failed')).toBeInTheDocument())
     expect(screen.queryByTestId('unattended-approved-title')).toBeNull()
     expect(logRows()).toHaveLength(1)
+  })
+})
+
+describe('a decision without a decider', () => {
+  it('approved or denied with no decided_by is shown plain, on neither the person nor the daemon; a timeout is not that', async () => {
+    mockedGet.mockResolvedValue(page({ log: [
+      decision('a', at(10, 0), 'approved', null),
+      decision('b', at(9, 0), 'denied', null),
+      decision('c', at(8, 0), 'timeout', null),
+    ] }))
+    open([A])
+    await waitFor(() => expect(logRows()).toHaveLength(3))
+    expect([0, 1, 2].map((i) => [tagOf(logRows()[i]).textContent, tagOf(logRows()[i]).getAttribute('data-tone')])).toEqual([['已核准', 'muted'], ['已拒絕', 'muted'], ['逾時', 'yellow']])
+  })
+})
+
+describe('「顯示更多」 with a log host and a list host', () => {
+  it('asks only the list host for its next page', async () => {
+    mockedGet.mockImplementation(async (hostId, q) => {
+      if (hostId === A) return page({ log: [decision('a', at(10, 0), 'approved', 'unattended')], truncated: true, next_before: 5 })
+      return page({ approved: [legacy('b1', at(9, 0))], truncated: q?.before === undefined, ...(q?.before === undefined ? { next_before: 7 } : {}) })
+    })
+    open([A, B])
+    const more = await screen.findByTestId('unattended-more')
+    mockedGet.mockClear()
+    fireEvent.click(more)
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled())
+    expect(mockedGet.mock.calls.map(([h, q]) => [h, q?.before])).toEqual([[B, 7]])
   })
 })
 

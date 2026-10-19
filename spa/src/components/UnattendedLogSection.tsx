@@ -11,31 +11,10 @@ import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-fo
 import { leadNameBySession } from '../lib/team/lead-name'
 import { useSeat } from '../lib/names/seat'
 import { sinceText } from '../lib/team/time-text'
-import type { ApprovalKind, Client, UnattendedLogDecision, UnattendedLogEntry } from '../lib/team/types'
-
-export interface LogRow { hostId: string; entry: UnattendedLogEntry }
-
-/** The newest `max` entries of every host's log, newest first. */
-export function mergeLogs(logs: readonly { hostId: string; log: readonly UnattendedLogEntry[] }[], max = 30): LogRow[] {
-  return logs.flatMap(({ hostId, log }) => log.map((entry) => ({ hostId, entry }))).sort((a, b) => b.entry.at - a.entry.at).slice(0, max)
-}
+import { TAG_CLASS, tagOf, type LogRow } from '../lib/team/unattended-log'
+import type { ApprovalKind, Client, UnattendedLogDecision } from '../lib/team/types'
 
 type T = (key: string, params?: Record<string, string | number>) => string
-
-const TAG_CLASS = {
-  green: 'bg-status-success/15 text-status-success-text',
-  blue: 'bg-accent/15 text-accent',
-  red: 'bg-status-error/15 text-status-error-text',
-  yellow: 'bg-status-warning/20 text-status-warning-text',
-} as const
-
-/** The status tag of a decision: who decided matters for approved and denied (the daemon on its own, or the person). */
-export function tagOf(e: UnattendedLogDecision, t: T): { text: string; tone: keyof typeof TAG_CLASS } {
-  const auto = e.decided_by?.kind === 'unattended'
-  if (e.state === 'timeout') return { text: t('unattended.log.tag_timeout'), tone: 'yellow' }
-  if (e.state === 'approved') return auto ? { text: t('unattended.log.tag_auto_approved'), tone: 'green' } : { text: t('unattended.log.tag_approved'), tone: 'blue' }
-  return auto ? { text: t('unattended.log.tag_auto_refused'), tone: 'red' } : { text: t('unattended.log.tag_refused'), tone: 'red' }
-}
 
 const KNOWN_KINDS: readonly string[] = ['lead', 'self_relay', 'member_relay', 'adopt']
 function kindText(t: T, kind: string): string {
