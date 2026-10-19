@@ -51,4 +51,23 @@ describe('FirstSaveConfirm', () => {
     answer(4)
     await waitFor(() => expect(text()).toContain('4'))
   })
+
+  it('asks again with the set that is now in the form when its codes change while the question is open', async () => {
+    vi.mocked(fetchRenamePreview).mockResolvedValueOnce(2).mockResolvedValueOnce(5)
+    const view = mount()
+    await waitFor(() => expect(text()).toContain('2'))
+    view.rerender(<FirstSaveConfirm hostId="h1" personas={[makePersona('hiro'), makePersona('emma')]} onConfirm={() => {}} onCancel={() => {}} />)
+    await waitFor(() => expect(text()).toContain('5'))
+    expect(vi.mocked(fetchRenamePreview).mock.calls[1][1].map((p) => p.code)).toEqual(['hiro', 'emma'])
+    expect(counted()).toBe(true)
+  })
+
+  it('does not ask again for an edit that cannot change the count', async () => {
+    vi.mocked(fetchRenamePreview).mockResolvedValue(3)
+    const view = mount()
+    await waitFor(() => expect(text()).toContain('3'))
+    view.rerender(<FirstSaveConfirm hostId="h1" personas={[makePersona('hiro', { name: 'Hiro Changed' })]} onConfirm={() => {}} onCancel={() => {}} />)
+    await act(async () => { await new Promise((r) => setTimeout(r, 350)) })
+    expect(fetchRenamePreview).toHaveBeenCalledTimes(1)
+  })
 })
