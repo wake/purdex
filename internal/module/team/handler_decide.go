@@ -72,6 +72,13 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Grant != nil {
+			if req.Grant.LeadName != "" {
+				if !leadCodePattern.MatchString(req.Grant.LeadName) {
+					m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "lead_name must be a persona code (3-12 lowercase letters)", nil)
+					return
+				}
+				g.LeadName = req.Grant.LeadName
+			}
 			g.MaxMembers = normaliseMaxMembers(req.Grant.MaxMembers, g.MaxMembers)
 			if len(req.Grant.Roots) > 0 {
 				roots, err := normaliseRoots(req.Grant.Roots, a.Origin.Cwd)
@@ -116,6 +123,9 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, ErrNoSuchApproval) {
 		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if m.writeLeadNameErr(w, a.Origin.SessionID, err) {
 		return
 	}
 	if errors.Is(err, ErrLeadHasTeam) {
