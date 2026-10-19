@@ -287,11 +287,19 @@ describe('the pool host page on the Hosts page', () => {
     expect(within(screen.getByTestId('pool-page-now')).getByTestId('pool-page-cpu').textContent).toBe(`CPU ${cpu}%`)
   })
 
-  it('a host that left the list shows nothing', async () => {
+  it('a selected host that left the list drops the selection, so the page falls back to the host it showed before', async () => {
     livePool()
-    const { container } = render(<PoolHostRoute id="d-gone" />)
+    useFleetDraftStore.getState().selectPool('d-gone')
+    render(<PoolHostRoute id="d-gone" />)
     await flush()
-    expect(container.textContent).toBe('')
+    expect(useFleetDraftStore.getState().selectedPool).toBeNull()
+  })
+
+  it('a selection is kept while the pool has not answered yet', async () => {
+    useFleetDraftStore.getState().selectPool('d-mlab')
+    render(<PoolHostRoute id="d-mlab" />)
+    await flush()
+    expect(useFleetDraftStore.getState().selectedPool).toBe('d-mlab')
   })
 
   it('picking a pool host drops the probe selection and the other way round', () => {
