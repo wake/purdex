@@ -36,23 +36,29 @@ export function toPoints(points: HistoryPoint[], now: number, range: HistoryRang
   const n = points.length
   const step = (j: number): number => Math.min(cap, Math.max(base, points[j + 1].t - points[j].t))
   // In a long range the expected step is the one around the pair, not one for the whole range: a 70 s outage in a run of 10 s buckets is a hole,
-  // the same 60 s between two minute points (or where the two kinds meet) is not. A neighbouring step only counts when the step behind it is of
-  // the same size (a run of minute points): one odd step beside another cannot vouch for it, so two outages in a row are both holes.
-  const side = (j: number, far: number): number | null => {
+  // the same 60 s between two minute points (or where the two kinds meet) is not. A neighbouring step counts when the step behind it is of the same
+  // size (a run of minute points): one odd step beside another cannot vouch for it, so two outages in a row are both holes. At the edge of the data
+  // there is no step behind: such a neighbour counts only when no step has been vouched for and it is of the pair's own size (a short run of minute points).
+  const similar = (x: number, y: number): boolean => Math.max(x, y) / Math.min(x, y) <= 2
+  const side = (j: number, far: number): { v: number; ok: boolean | null } | null => {
     if (j < 0 || j >= n - 1) return null
-    const v = step(j)
-    if (far < 0 || far >= n - 1) return base
-    const f = step(far)
-    return Math.max(v, f) / Math.min(v, f) <= 2 ? v : base
+    return { v: step(j), ok: far < 0 || far >= n - 1 ? null : similar(step(j), step(far)) }
+  }
+  const expectedStep = (i: number): number => {
+    const sides = [side(i - 2, i - 3), side(i, i + 1)].filter((v) => v !== null)
+    if (sides.length === 0) return cap
+    const vouched = sides.filter((v) => v.ok === true)
+    if (vouched.length > 0) return Math.max(...vouched.map((v) => v.v))
+    const own = step(i - 1)
+    const edge = sides.filter((v) => v.ok === null && similar(v.v, own))
+    return edge.length > 0 ? Math.max(...edge.map((v) => v.v)) : base
   }
   const out: SPt[] = []
   for (let i = 0; i < n; i++) {
     const q = points[i]
     if (i > 0) {
       const prev = points[i - 1].t
-      const sides = [side(i - 2, i - 3), side(i, i + 1)].filter((v): v is number => v !== null)
-      const expected = sides.length > 0 ? Math.max(...sides) : cap
-      if (q.t - prev > GAP_STEPS * expected) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
+      if (q.t - prev > GAP_STEPS * expectedStep(i)) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
     }
     const unknown = opts.unknownZero === true && q.max <= 0
     out.push({ x: (q.t - from) / span, v: unknown ? Number.NaN : q.avg, p: unknown ? Number.NaN : q.max })

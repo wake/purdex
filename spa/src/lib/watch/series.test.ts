@@ -60,6 +60,18 @@ describe('toPoints — the spacing of the data', () => {
     expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(2)
   })
 
+  it('a short run of minute points is one line: three points, jitter of 55–70 s, and three minute points meeting 10 s buckets', () => {
+    const at = (secs: number[]) => secs.map((s) => ({ t: now - 600_000 + s * 1000, avg: s, max: s }))
+    expect(toPoints(at([0, 60, 120]), now, '1h').some((p) => Number.isNaN(p.v))).toBe(false)
+    expect(toPoints(at([0, 55, 125, 190]), now, '1h').some((p) => Number.isNaN(p.v))).toBe(false)
+    expect(toPoints(at([0, 60, 120, 180, 190, 200, 210]), now, '1h').some((p) => Number.isNaN(p.v))).toBe(false)
+  })
+
+  it('at the edge of the data a neighbouring step of another size does not vouch: 29 s then 70 s are both outages', () => {
+    const t = [0, 29, 99].map((s) => ({ t: now - 300_000 + s * 1000, avg: s, max: s }))
+    expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(2)
+  })
+
   it('10 s buckets follow 1 minute points: the 60 s step between the two kinds is not a hole', () => {
     const minute = every(60_000, 5).map((p) => ({ ...p, t: p.t - 110_000 })) // its last point is 60 s before the first bucket
     const buckets = every(10_000, 6)
