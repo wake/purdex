@@ -2362,8 +2362,15 @@ describe('the dev hook: local profiles (P3b has no UI; the real-machine acceptan
     expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy' })
     expect(profiles.setAppearance(copy.id, { iconWeight: 'fill', icon: 'Cube' })).toEqual({ ok: true })
     expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy', icon: 'Cube', iconWeight: 'fill' })
+    // the team icon (name pool v2 §9.6) reads back the same for the master and for a slave, and clears
+    expect(profiles.setAppearance(copy.id, { teamIcon: 'Flag' })).toEqual({ ok: true })
+    expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy', icon: 'Cube', iconWeight: 'fill', teamIcon: 'Flag' })
+    expect(profiles.setAppearance('master', { teamIcon: 'Rocket' })).toEqual({ ok: true })
+    expect(profiles.appearance('master')).toMatchObject({ teamIcon: 'Rocket' })
+    expect(profiles.setAppearance(copy.id, { teamIcon: null })).toEqual({ ok: true })
+    expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy', icon: 'Cube', iconWeight: 'fill' })
     expect(profiles.appearance('nope')).toBeNull()
-    expect(profiles.setAppearance('master', { name: null, icon: null, color: null })).toEqual({ ok: true })
+    expect(profiles.setAppearance('master', { name: null, icon: null, color: null, teamIcon: null })).toEqual({ ok: true })
   })
 
   it('list / copyMaster / switch / world / rename / saveScreen / remove / promote are the functions of switch-active.ts', async () => {

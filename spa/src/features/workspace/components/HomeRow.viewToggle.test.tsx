@@ -75,11 +75,13 @@ describe('the toggle', () => {
     expect(within(toggle()).queryByTestId('sidebar-view-team-icon')).toBeNull()
   })
 
-  it('says what a click does, in words', () => {
+  it('has one name whichever view is on, and aria-pressed says which', () => {
     renderRow()
-    expect(toggle()).toHaveAccessibleName('切換到任務編組檢視')
+    expect(toggle()).toHaveAccessibleName('任務編組檢視')
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(toggle())
-    expect(toggle()).toHaveAccessibleName('切換到工作區檢視')
+    expect(toggle()).toHaveAccessibleName('任務編組檢視')
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('does not touch Home: a click on the toggle selects nothing', () => {

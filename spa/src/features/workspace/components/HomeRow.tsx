@@ -24,7 +24,8 @@ function ViewToggle({ appearance }: { appearance: ReturnType<typeof useProfileSw
   const view = useTeamUiStore((s) => s.sidebarView)
   const setView = useTeamUiStore((s) => s.setSidebarView)
   const groups = view === 'groups'
-  const label = t(groups ? 'sidebar.view.to_workspace' : 'sidebar.view.to_groups')
+  // A fixed name with aria-pressed (a two-state toggle): the name does not change with the state it already reports.
+  const label = t('sidebar.view.toggle')
   return (
     <button
       type="button"
