@@ -522,6 +522,18 @@ func TestRunLeadCmd_DefaultsLeaveMaxMembersAndRootsToDaemon(t *testing.T) {
 	}
 }
 
+// --max-members takes up to the ceiling, 9 (name pool v2 §5.1), and reaches the body as given; 10 is refused above.
+// Mutation gate: the ceiling back to 8 → red.
+func TestRunLeadCmd_MaxMembersNineIsAccepted(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 9}})
+	if code, _, stderr := driveLead(t, context.Background(), d, "--reason", "r", "--max-members", "9"); code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if creates, _, _, _ := d.snapshot(); len(creates) != 1 || creates[0].MaxMembers != 9 {
+		t.Errorf("create body = %+v, want max_members 9", creates)
+	}
+}
+
 // D-N2: --name is trimmed and sent as team_name; no --name (or a blank one)
 // leaves the key out of the body altogether (omitempty, D-N1).
 func TestRunLeadCmd_NameReachesTheRequestBody(t *testing.T) {

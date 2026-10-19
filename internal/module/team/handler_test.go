@@ -1181,7 +1181,7 @@ func TestDecide_ApproveDenyAlreadyDecided(t *testing.T) {
 		t.Fatal("fourth create")
 	}
 	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(4)+"/decide", team.DecideRequest{Decision: "approve", Grant: &team.Grant{MaxMembers: 20}, Client: client})
-	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 8 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
+	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 9 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
 		t.Fatalf("approve with a capped grant: %d %+v grant=%+v", code, a, a.Grant)
 	}
 	f.events()
