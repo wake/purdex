@@ -211,6 +211,20 @@ func TestSender_ARetryIsNotMadeOnceTheJobIsTakenBack(t *testing.T) {
 	}
 }
 
+// The immediate retry after a rejected provider token is a new request too.
+func TestSender_AJWTRetryIsNotMadeOnceTheJobIsTakenBack(t *testing.T) {
+	d := device(strings.Repeat("a1", 32), "en", "mlab")
+	book := newBook(d)
+	a := &fakeAPNS{script: []apns.Result{{Class: apns.JWTRejected, Status: 403, Reason: "InvalidProviderToken"}, {Class: apns.OK, Status: 200}}}
+	var calls int
+	j := leadJob(d.DeviceID)
+	j.StillWanted = func() bool { calls++; return calls <= 1 } // wanted before the first request, taken back before the retry
+	runOne(t, newTestSender(book, a, &slept{}), j)
+	if a.count() != 1 {
+		t.Fatalf("calls = %d", a.count())
+	}
+}
+
 // A job taken back before any request went out calls OnRecalled once and sends nothing; one still wanted does not call it.
 func TestSender_OnRecalledOnlyWhenNothingWasRequested(t *testing.T) {
 	d := device(strings.Repeat("a1", 32), "en", "mlab")

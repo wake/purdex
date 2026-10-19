@@ -258,7 +258,7 @@ func (s *sender) sendWithRetry(ctx context.Context, d push.Device, h apns.Header
 	switch res.Class {
 	case apns.JWTRejected:
 		s.apns.Invalidate()
-		if !stillRegistered() {
+		if !stillRegistered() || (wanted != nil && !wanted()) {
 			return res
 		}
 		return s.apns.Send(ctx, d.Env, d.Token, h, payload)
