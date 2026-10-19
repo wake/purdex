@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/wwd/client"
@@ -131,9 +132,18 @@ func wwdHold(ctx context.Context, args []string, env Env) int {
 	if reason == "" || utf8.RuneCountInString(reason) > maxReason {
 		return usageErr(env, WWDUsage, fmt.Errorf("--reason is needed (1 to %d characters): what the host is kept quiet for", maxReason))
 	}
+	// the reason goes into the output and into holds.log as one line: a newline or an escape in it would write lines of its own
+	if hasControl(reason) {
+		return usageErr(env, WWDUsage, fmt.Errorf("--reason must be one line of plain text (no newline or other control character)"))
+	}
 	until := env.now().Add(d).UTC()
 	e := wire.Exception{Name: holdName(reason), Until: &until, Holds: []wire.Hold{wire.HoldHeavy, wire.HoldLight}}
 	classes, repos := rep["allow-class"], rep["allow-repo"]
+	for _, r := range repos {
+		if hasControl(r) {
+			return usageErr(env, WWDUsage, fmt.Errorf("--allow-repo %q holds a control character", r))
+		}
+	}
 	if len(classes) > 0 || len(repos) > 0 {
 		a := wire.HoldAllow{Classes: []wire.JobClass{}, Repos: slices.Clone(repos)}
 		if a.Repos == nil {
@@ -173,20 +183,31 @@ func wwdHold(ctx context.Context, args []string, env Env) int {
 		fmt.Fprintf(env.Log, "%s hold %s on %s until %s: %s\n", env.now().UTC().Format(time.RFC3339), e.Name, host, until.Format(time.RFC3339), reason)
 	}
 
-	polls := int(env.holdWait() / holdPoll)
-	for i := 0; ; i++ {
-		seen, err := holdShows(ctx, env.API, host, e)
-		if err != nil {
-			return fail(env, "wwd hold", err)
-		}
+	// The wait is a deadline, on the real clock for the calls (ctx) and on the command's own clock for the loop: a pool that answers slowly
+	// does not stretch it, and a reading that fails is tried again until the deadline, when the last error is told.
+	deadline := env.now().Add(env.holdWait())
+	wctx, cancel := context.WithTimeout(ctx, env.holdWait())
+	defer cancel()
+	var lastErr error
+	for {
+		seen, err := holdShows(wctx, env.API, host, e)
 		if seen {
 			break
 		}
-		if i >= polls || ctx.Err() != nil {
-			fmt.Fprintf(env.Stderr, "pdx wwd hold: %s is saved on %s but does not show in its facts after %s: it is not known to be in force (the worker decides from the facts); look at `pdx wwd pool` and ask again, or end it with `pdx wwd exception stop %s`\n", e.Name, host, env.holdWait(), e.Name)
+		lastErr = err
+		if !env.now().Before(deadline) || wctx.Err() != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintf(env.Stderr, "pdx wwd hold: interrupted; %s is saved on %s and not known to be in force\n", e.Name, host)
+				return ExitFailed
+			}
+			why := "it does not show in its facts"
+			if lastErr != nil {
+				why = fmt.Sprintf("its facts could not be read (%v)", lastErr)
+			}
+			fmt.Fprintf(env.Stderr, "pdx wwd hold: %s is saved on %s but, after %s, %s: it is not known to be in force (the worker decides from the facts); look at `pdx wwd pool` and ask again, or end it with `pdx wwd exception stop %s --host %s`\n", e.Name, host, env.holdWait(), why, e.Name, host)
 			return ExitFailed
 		}
-		env.sleep(ctx, holdPoll)
+		env.sleep(wctx, holdPoll)
 	}
 	fmt.Fprintf(env.Stdout, "hold %s in force on %s until %s  (%s)\n", e.Name, host, until.Format(time.RFC3339), reason)
 	fmt.Fprintf(env.Stdout, "  admits %s\n", describeAllow(e.Allow))
@@ -250,3 +271,8 @@ func sameAllow(a, b *wire.HoldAllow) bool {
 }
 
 func sameFlags(a, b []wire.HoldFlag) bool { return slices.Equal(a, b) }
+
+// hasControl says whether s holds a control character (a newline, an escape, the C1 range).
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, unicode.IsControl) >= 0
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/wake/purdex/internal/wwd/client"
@@ -22,11 +23,11 @@ func wwdCommand(args []string, f func(context.Context, []string, jobscmd.Env) in
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	env := jobscmd.Env{API: client.New(client.DefaultSocket()), Session: submitterSession(), Stdout: os.Stdout, Stderr: os.Stderr}
-	// `pdx wwd hold` keeps the full reason of each hold here (the exception's name holds only a slug of it); no log is no reason to refuse
-	if lg, err := os.OpenFile(filepath.Join(filepath.Dir(client.DefaultSocket()), "holds.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		defer lg.Close()
-		env.Log = lg
-	}
+	// `pdx wwd hold` keeps the full reason of each hold here (the exception's name holds only a slug of it). The file is opened by the first
+	// line written, so the other commands that come through here never touch it.
+	log := &lazyLog{path: filepath.Join(filepath.Dir(client.DefaultSocket()), "holds.log")}
+	defer log.Close()
+	env.Log = log
 	return f(ctx, args, env)
 }
 
@@ -41,4 +42,39 @@ func submitterSession() string {
 		}
 	}
 	return ""
+}
+
+// lazyLog is an append-only file opened by its first Write. A file that cannot be opened loses the line quietly: a command does not fail
+// for its log.
+type lazyLog struct {
+	path string
+	mu   sync.Mutex
+	f    *os.File
+	dead bool
+}
+
+func (l *lazyLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil && !l.dead {
+		if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err == nil {
+			l.f, err = os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		}
+		l.dead = l.f == nil
+	}
+	if l.f == nil {
+		return len(p), nil
+	}
+	return l.f.Write(p)
+}
+
+func (l *lazyLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
 }
