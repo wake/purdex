@@ -9,6 +9,7 @@ import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { usePersonaSourceStore } from '../../../stores/usePersonaSourceStore'
+import { usePeerStore, emptyPeerHostEntry } from '../../../stores/usePeerStore'
 import { clearDraftMemory } from '../../../lib/names/persona-draft-memory'
 import { makeCollection, makePersona } from '../../../lib/names/__fixtures__/personas'
 import { PersonasSection } from './PersonasSection'
@@ -30,6 +31,7 @@ describe('PersonasSection', () => {
     useNexHostStore.setState({ byHost: { h1: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never } })
     usePersonaStore.setState({ byHost: {}, load: vi.fn(async () => {}) })
     usePersonaSourceStore.setState({ hostId: null })
+    usePeerStore.setState({ byHost: {}, refresh: vi.fn(async () => {}) })
   })
 
   it('lists active personas first, retired last and dimmed, with the lead mark', () => {
@@ -276,6 +278,109 @@ describe('PersonasSection', () => {
     const err = (await screen.findByTestId('personas-error')).textContent!
     expect(err).toMatch(/不合規定|break the rules/)
     expect(err).toContain('olga.nationality.zh')
+  })
+
+  describe('the source host', () => {
+    it('offers the hosts of this device and remembers the choice for this device only', () => {
+      useHostStore.setState({
+        hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+        runtime: { h1: { status: 'connected' } as never, h2: { status: 'connected' } as never },
+      })
+      seed(['hiro'])
+      render(<PersonasSection />)
+      const select = screen.getByTestId('persona-source-select') as HTMLSelectElement
+      expect(Array.from(select.options).map((o) => o.value)).toEqual(['h1', 'h2'])
+      expect(select.value).toBe('h1')
+      fireEvent.change(select, { target: { value: 'h2' } })
+      expect(usePersonaSourceStore.getState().hostId).toBe('h2')
+    })
+
+    it('says the source is offline and shows the stand-in copy without editing', () => {
+      useHostStore.setState({
+        hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+        runtime: { h1: { status: 'disconnected' } as never, h2: { status: 'connected' } as never },
+      })
+      usePersonaSourceStore.setState({ hostId: 'h1' })
+      usePersonaStore.setState({ byHost: { h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 5, host: 'h2' }, 4) } } })
+      render(<PersonasSection />)
+      expect(screen.getByTestId('personas-source-offline')).toBeTruthy()
+      expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    it('says nothing about being offline while the source answers', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      expect(screen.queryByTestId('personas-source-offline')).toBeNull()
+    })
+  })
+
+  describe('the first persona on a source that has none', () => {
+    const peers = (refs: string[]) =>
+      usePeerStore.setState({
+        byHost: {
+          h1: {
+            ...emptyPeerHostEntry(), fetchedAt: 5,
+            rows: Object.fromEntries(refs.map((r, i) => [`s${i}`, { address: `h1/x-${i}`, ref: r, title: '', titleSource: '', deliverable: true, reason: '', tmuxInstance: '', agent: null }])),
+          },
+        },
+        refresh: vi.fn(async () => {}),
+      })
+    const fillNew = () => {
+      fireEvent.click(screen.getByTestId('persona-new'))
+      fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
+      fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'New One' } })
+      fireEvent.click(screen.getByTestId('persona-save'))
+    }
+
+    it('asks first, with the number of live conversations, and sends nothing until confirmed', async () => {
+      seed([])
+      peers(['_aaaaaa', '_bbbbbb', '_cccccc', ''])
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fillNew()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).toContain('3')
+      expect(savePersonas).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByTestId('persona-first-save-confirm'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    })
+
+    it('sends nothing when the user cancels', async () => {
+      seed([])
+      peers(['_aaaaaa'])
+      render(<PersonasSection />)
+      fillNew()
+      fireEvent.click(await screen.findByTestId('persona-first-save-cancel'))
+      expect(screen.queryByTestId('persona-first-save')).toBeNull()
+      expect(savePersonas).not.toHaveBeenCalled()
+    })
+
+    it('names no number when the conversation list is not known', async () => {
+      seed([])
+      usePeerStore.setState({ byHost: {}, refresh: vi.fn(async () => {}) })
+      render(<PersonasSection />)
+      fillNew()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
+    })
+
+    it('does not ask when there is no conversation to rename', async () => {
+      seed([])
+      peers([''])
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fillNew()
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      expect(screen.queryByTestId('persona-first-save')).toBeNull()
+    })
+
+    it('does not ask again once the source has personas', async () => {
+      seed(['hiro'])
+      peers(['_aaaaaa', '_bbbbbb'])
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fillNew()
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      expect(screen.queryByTestId('persona-first-save')).toBeNull()
+    })
   })
 
   it('keeps what was typed for a new persona when the save turns out stale', async () => {
