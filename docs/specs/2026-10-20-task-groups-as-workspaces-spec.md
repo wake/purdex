@@ -1,11 +1,14 @@
 # Task groups as a workspace-level layer — spec (2026-10-20)
 
-Owner: B line lead (88). Status: draft r3.
+Owner: B line lead (88). Status: draft r4.
 - r1 → r2: codex plan review `task-mvfs2clf-c2dr4g` (a new world section needed its own world fence, slave-copy remap and
   apply fence) → groups ride the existing `settings` section, a tab's place rides its own tab.
 - r2 → r3: an independent Opus review (codex quota exhausted until 10-25): explicit field copy and type checks in the tabs
   applier, "absent = cleared", local ids in stores with wire translation at the section edge, string ranks, no automatic
   writes besides one, a single definition of a tab's group, PRs split to size.
+- r3 → r4: the same reviewer's incremental pass: members sorted in wire form at build time, both new places in the host
+  re-resolve / removal rewrite, the automatic write inside the `setActiveTab` action (never a rehydrate), bounded ranks,
+  pinned seat tabs counted as the team's everywhere.
 
 The sidebar's task-group view (name pool v2 spec, NP2 §7, U11) stops being a second listing of the same tabs and becomes
 a layer **parallel to workspaces**: a group has its own tabs in the top bar, its own tab order, its own active tab, and it
@@ -51,8 +54,10 @@ NP2 L10 stays: membership is keyed by lineage root, and a session in a live team
   id>\0<team id>`), `group\0<group id>`, or `ungrouped`. Stores on the device hold the **local** form, so a team's group
   key and its `memberOrder` / `collapsed` key (`TeamView.key`) convert by adding or removing the prefix. Only the
   section builders and appliers see wire ids (§4).
-- **A tab's seat**: the first pane in pre-order (pinned or not) whose session is a live team seat's session —
-  `seatOfTab`, one function used by the sidebar, the bar and the selection.
+- **A tab's seat**: the first pane in pre-order whose session is a live team seat's session, **pinned tabs included**.
+  `buildTeamIndex` gains this map beside `byTabId` (which keeps excluding pinned tabs for the workspace view's run
+  drawing, TI); the sidebar, the group bar, the selection and the panel routing (`panelTeam`) read the inclusive one, so
+  a pinned seat tab is the team's everywhere and shows the team panel.
 - **A tab's agent session**: the first `tmux-session` pane in pre-order carrying `rebuild.agent.sessionId`, live or
   ended. The id stays on the pane after the agent exits, so a tab keeps its root — and its group — after its session
   ends. A tab with neither a seat nor an agent session is a **plain tab**.
@@ -73,17 +78,20 @@ interface ManualGroupsState {
   groups: Record<string, {
     name: string                                    // 1–64 bytes, printable (today's rule)
     color?: string                                  // #rrggbb
-    members: Array<{ host: string; root: string }>  // LOCAL host id + lineage root; kept sorted; a (host, root) in at most one group
+    members: Array<{ host: string; root: string }>  // LOCAL host id + lineage root; a (host, root) in at most one group
     createdAt: number
   }>
 }
 ```
 
-- **Host ids**: local in the store; the settings builder writes them as wire ids and the applier reads them back, the way
-  `purdex-host-settings` keys are handled (settings ordinal 5). A wire id this device does not know is kept as received
-  and matches nothing until the host is known (the layout rule).
-- Limits 32 groups, 64 members each; group ids 8 hex. Members are stored sorted, so two devices adding the same members
-  in a different order build the same payload.
+- **Host ids**: local in the store; the settings builder writes them as wire ids (`sections.ts`, beside the
+  `purdex-host-settings` branch) and `settingsFromWire` reads them back. A wire id this device does not know is kept as
+  received and matches nothing until the host is known. The store joins the host re-resolve rewrite (`host-reresolve.ts`
+  `planRewrite` and its re-read list), so a kept wire id becomes local when the host is recognised, and a removed host's
+  local id becomes its wire id (`host-lifecycle.ts` → `rewriteHostRefs`), exactly like the other host-bearing stores.
+- Limits 32 groups, 64 members each; group ids 8 hex. **Members are sorted by (wire host, root) when the section is
+  built**, after translation — local ids differ per device, so sorting in the store would make two devices rebuild
+  different payloads and push each other's back forever. The store only removes duplicates.
 - `SECTION_SCHEMA_ORDINAL.settings` 11 → 12. An ordinal-11 payload has no `purdex-task-groups`: applying it clears the
   store (the ordinal-11 precedent, "absent = cleared"); the executor only lands an older-shape payload on a clean local
   section (`executor.ts` header), so nothing local is lost.
@@ -97,13 +105,17 @@ Two optional tab fields, listed in `PROJECTIONS.tabs` (`tabs.*.group`, `tabs.*.g
 
 - `group?: string` — the tab's **placement**, a group key (§3). Read only when rules 1–2 (§5) do not place the tab.
 - `groupRank?: string` — the tab's position in its group's bar: a fractional-index string (`lib/task-groups/rank.ts`,
-  `rankBetween(a, b)`), so moving one tab writes one tab and nothing is ever renumbered. No rank → after the ranked tabs,
-  in workspace order.
+  `rankBetween(a, b)`), so moving one tab writes one tab. Inserting again and again at one spot lengthens the string, so
+  the generator keeps ranks ≤ 32 characters: at that point it re-ranks the group's tabs evenly (rare; several tab
+  writes). The payload check accepts up to 128 — one shared constant module holds both limits. No rank → after the ranked
+  tabs, in workspace order.
 
 The tabs applier copies them explicitly (`applyTabs` builds each tab field by field: `group` / `groupRank` are copied when
-present, **absent = cleared**), and `isTabsPayload` checks their types (`string`, bounded length; `group` must parse as a
-group key). The team host id inside `group` goes through the same local ↔ wire translation as the pane layouts
-(`layoutToWire` / `layoutFromWire`), so a host whose daemon id arrives later needs no re-keying. Riding the tab, the
+present, **absent = cleared**), and `isTabsPayload` checks their types (`string`, the limits above; `group` must parse
+as a group key) — before any translation runs. The team host id inside `group` is translated like the pane layouts: to
+wire in the builder beside `layoutToWire` (`sections.ts`), back in `tabsFromWire` beside `layoutFromWire` (run by
+`apply-to-stores` before `applyTabs`), and the re-resolve / host-removal rewrite (`rewriteTabsHosts`, parked worlds)
+rewrites it with the layouts. Riding the tab, the
 fields are carried by the world switch (park / restore pass the tab objects), 「複製為 slave」 (`structuredClone`; group
 keys name no tabs, so nothing is remapped), local-only interface tabs (kept whole on apply), and the Electron tab
 transfer between windows (the tab's JSON). `SECTION_SCHEMA_ORDINAL.tabs` 4 → 5, "absent = cleared" as in §4.1.
@@ -130,8 +142,8 @@ A session's lineage root never changes, so the App keeps the roots it reads (`GE
 device-local persisted cache `(local host id, agent session id) → root` (`lib/task-groups/root-cache.ts`, plain
 reader `rootOf`). A lifecycle of its own — not the sidebar view — reads the roots of the session tabs whenever the
 task-group view is on, gated on the endpoint's capability `team.relay_quota.v1`; it drops a host's entries when the host
-is removed or its daemon id mismatches, and entries no tab refers to. Writing a member still needs a root read from the
-daemon (NP2 §7: never a session's own id).
+is removed or its daemon id mismatches, and entries no tab of any world (on screen or parked) refers to. Writing a member
+still needs a root read from the daemon (NP2 §7: never a session's own id).
 
 ## 5. Which group a tab is in
 
@@ -144,12 +156,15 @@ daemon (NP2 §7: never a session's own id).
 
 Watcher-area tabs are skipped before rule 1 (§3).
 
-**The one automatic write** (everything else is a user action): in the task-group view, when a tab becomes the active tab
-of a window, and it is matched by none of rules 1–3, has no `group`, is not a watcher-area tab, and was created less than
-10 s ago (`createdAt`), it is placed in the selected group (a team or a manual group; never 「未分組」). This covers every
-way a tab is opened there — new tab, a pane detached into a tab, a split — without a factory, while tabs that arrive with
-their own fields (another window, a reopened tab, a sync, a restore) or old unplaced tabs are left alone. Only the window
-where the activation happened writes; an apply never activates a tab, so a sync never triggers it.
+**The one automatic write** (everything else is a user action). It runs inside the `setActiveTab` **action** of this
+window — every call, a repeat of the current id included — through a hook the placement module registers on the tab
+store. It never runs for `addTab`'s implicit activation (a tab added while none is active), nor for state that arrives by
+persist rehydrate (other windows share `activeTabId` through localStorage), an apply, a restore or a world switch: those
+set state without calling the action. When it runs, the **effective** view is the task-group view (§6), and the tab is
+matched by none of rules 1–3, has no `group`, is not a watcher-area tab (`isWatchTabId`), and was created less than 10 s
+ago by this device's clock, the tab is placed in the selected group (a team or a manual group; never 「未分組」). This
+covers every way a tab is opened there — new tab, a pane detached into a tab — without a tab factory, while tabs that
+arrive with their own fields (another window, a reopened tab) or old unplaced tabs are left alone.
 
 User writes:
 - moving a tab to another group in the sidebar (§6.1): a tab with an agent session becomes a member (root required) and
@@ -189,14 +204,17 @@ The view exists in the wide sidebar (as today). When the sidebar is narrow or th
 
 - Per device: `selectedGroup`, each group's last active tab, and the last selection per view (§6.3). Tab ids are
   world-specific: one that no longer exists falls back as below.
-- **Selection follows the active tab**: in the task-group view, whenever a window's active tab changes (a click, a
-  notification, search, the panel, ⌘-keys), `selectedGroup` becomes `groupOfTab` of it (after the automatic write).
+- **Selection follows the active tab**: in the effective task-group view, whenever the active tab changes (a click, a
+  notification, search, the panel, ⌘-keys, a rehydrate from another window), `selectedGroup` becomes `groupOfTab` of it
+  — after the automatic write when there was one. A watcher-area active tab leaves the selection as it is (the watcher
+  area shows instead of the bar).
 - Selecting a group from the sidebar activates its last active tab, else its first tab; an **empty group** sets the
   active tab to none and shows the empty state, as an empty workspace does.
 - The bar of a **manual group or 「未分組」**: every tab of the group, pinned tabs first, each zone by `groupRank`.
-- The bar of a **team**: pinned tabs first; then the lead; then each seat in the device's member order, a seat's tabs
-  together (its chosen tab first); then the plain tabs placed in the team by `groupRank`. The member collapse
-  (`useTeamUiStore.collapsed`) is not applied here — D1 lists every tab. No run frame.
+- The bar of a **team**: the lead first (pinned or not — never draggable); then the other pinned tabs by `groupRank`;
+  then each seat in the device's member order, a seat's tabs together (its chosen tab first); then the plain tabs placed
+  in the team by `groupRank`. The member collapse (`useTeamUiStore.collapsed`) is applied neither to the bar nor to the
+  shortcut range here — D1 lists every tab. No run frame.
 - The range drives close-others, close-right, ⌘1–9, prev/next, ⌘W's ownership check, the empty state and the merge-into-
   tab targets. `getVisibleTabIds` takes the view; it computes the group range outside React (`currentTeamState()`, the
   group store, the root cache).
@@ -234,13 +252,14 @@ Each ≤ 800 lines / ≤ 20 files including tests. All SPA except TG-6.
 | Phase | Scope |
 |---|---|
 | TG-0b | #3662: seat rows without a tab, persona name colour, title prefers the tab's title, header outline. |
-| TG-1a | `group-key.ts`, `rank.ts`; `useManualGroupsStore` in the settings projection with host translation, ordinal 12. |
-| TG-1b | Tab fields `group` / `groupRank`: types, setters, projection, ordinal 5, applier copy + type checks, team-host translation; the purdex-ios check. |
-| TG-2a | New edits and actions on the new store (beside the old ones); root cache and its lifecycle. |
+| TG-1a | `group-key.ts`; `useManualGroupsStore` in the settings projection with host translation, wire-sorted members, the re-resolve / removal rewrite; ordinal 12. |
+| TG-1b | `rank.ts`; tab fields `group` / `groupRank`: types, setters, projection, ordinal 5, applier copy + type checks, team-host translation and rewrite; the purdex-ios check. |
+| TG-2a | New edits and actions on the new store (beside the old ones). |
+| TG-2r | Root cache and its lifecycle out of React; `useSessionRoots` as a reader. |
 | TG-2b | The sidebar view on the new store (no per-host blocks); drag and row menu across hosts. |
-| TG-2c | Delete the SPA's hostconfig path and the old store; guard that nothing imports them. |
-| TG-3a | `useGroupViewStore`; selection follows the active tab; header chevron / click / focus; group states; view-switch memory. |
-| TG-3b | `seatOfTab` and `groupOfTab` (§3, §5) under the sidebar; the one automatic write. |
+| TG-2c | Delete the SPA's hostconfig path and the old store; guard that nothing imports them. A pure deletion: the line limit counts additions only. |
+| TG-3a | `useGroupViewStore`; header chevron / click / focus; group states; view-switch memory. |
+| TG-3b | The inclusive seat map in `buildTeamIndex` (panel routing on it); `groupOfTab` (§5) under the sidebar; selection follows the active tab; the one automatic write in `setActiveTab`. Team-module files: 1f releases. |
 | TG-3c | Header menu (rename, colour, delete); + new group. |
 | TG-3d | Row drag in the sidebar. |
 | TG-4a | The range: `getVisibleTabIds` with the view and every caller; the narrow / left rule. |
@@ -256,3 +275,5 @@ Each ≤ 800 lines / ≤ 20 files including tests. All SPA except TG-6.
 3. Member order stays per device (`memberOrder`); plain-tab ranks sync.
 4. The automatic write's 10 s window: a tab opened and activated later than that, in a group, stays in 「未分組」 until
    the user moves it.
+5. Rank re-balancing at the 32-character cap writes several tabs, possibly in several `tabs.<workspace>` sections; it is
+   rare by construction.
