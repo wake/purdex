@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/alertsettings"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/fleet"
 	fleetmod "github.com/wake/purdex/internal/module/fleet"
@@ -56,9 +58,17 @@ type Module struct {
 	core    *core.Core
 	notify  func() (push.AlertNotifier, bool) // the push module's notifier, asked at each pass (it registers when it starts)
 	deliver func() bool                       // whether this daemon is the deliverer now
+	pushOn  func() (bool, error)              // the host setting wwd_alerts.push; an error is read as off
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	smu            sync.Mutex // guards the status below, which /api/info reads from another goroutine
+	pushState      string     // "on" or "off" as of the last look at the switch; "" before the first
+	pushLogged     string     // the line logged for it last, so a state is logged when it changes and not at every look
+	deliverer      bool       // whether this daemon was the deliverer at the last pass
+	suppressed     int        // push-level alerts the switch held back in the last pass
+	passSuppressed int        // the same, being counted in the pass that is running
 }
 
 // New returns the module with production defaults.
@@ -83,6 +93,20 @@ func (m *Module) Init(c *core.Core) error {
 				return nil, false
 			}
 			return readyNotifier(svc)
+		}
+	}
+	if m.pushOn == nil {
+		m.pushOn = func() (bool, error) {
+			svc, ok := c.Registry.Get(alertsettings.Key)
+			if !ok {
+				return false, errors.New("the hostconfig module is not running")
+			}
+			r, ok := svc.(alertsettings.Reader)
+			if !ok {
+				return false, errors.New("the hostconfig module does not serve the setting")
+			}
+			s, err := r.WwdAlertsSettings()
+			return s.Push, err
 		}
 	}
 	if m.deliver == nil {
@@ -201,6 +225,17 @@ func deliverRule(rv fleet.RoleView) func() bool {
 
 // pass reads every host's active alerts once and acts on them.
 func (m *Module) pass(ctx context.Context) {
+	// the status: whether this daemon delivers and what the switch says, looked at once per pass even when no alert exists
+	m.smu.Lock()
+	m.passSuppressed = 0
+	m.smu.Unlock()
+	m.pushEnabled()
+	defer func() {
+		deliverer := m.deliver()
+		m.smu.Lock()
+		m.deliverer, m.suppressed = deliverer, m.passSuppressed
+		m.smu.Unlock()
+	}()
 	hosts, err := m.hosts(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -278,6 +313,14 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !m.deliver() {
 		return
 	}
+	// The switch is read at every push (hostconfig keeps it cached), so turning it off stops the next push, not the next restart. Off
+	// touches nothing: no attempt, no ledger row, nothing recorded as sent — the alerts that still hold are pushed when it is turned on.
+	if !m.pushEnabled() {
+		m.smu.Lock()
+		m.passSuppressed++
+		m.smu.Unlock()
+		return
+	}
 	ntf, ok := m.notify()
 	if !ok {
 		return // the push side is not up: no attempt is spent
@@ -335,6 +378,47 @@ func collapseID(host, key string) string {
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s", len(host), host, key)))
 	return "alert:" + hex.EncodeToString(sum[:16])
+}
+
+// pushEnabled reads the switch wwd_alerts.push. Off, unreadable and "no hostconfig here" are all off. The state is remembered for Status,
+// and logged when it changes (an unreadable switch: when the reason changes), not at every look.
+func (m *Module) pushEnabled() bool {
+	on, err := false, error(nil)
+	if m.pushOn != nil {
+		on, err = m.pushOn()
+	} else {
+		err = errors.New("the setting is not wired")
+	}
+	var line string
+	switch {
+	case err != nil:
+		on, line = false, "wwdalerts: push is off, the wwd_alerts.push setting cannot be read: "+err.Error()
+	case on:
+		line = "wwdalerts: push is on (wwd_alerts.push)"
+	default:
+		line = "wwdalerts: push is off (wwd_alerts.push is false): alerts are written and gathered, none is sent to the phone"
+	}
+	m.smu.Lock()
+	m.pushState = map[bool]string{true: "on", false: "off"}[on]
+	changed := m.pushLogged != line
+	m.pushLogged = line
+	m.smu.Unlock()
+	if changed {
+		m.logf("%s", line)
+	}
+	return on
+}
+
+// Status is what /api/info reports for the module: whether pushes to the phone are on, whether this daemon is the deliverer, and how
+// many push-level alerts the switch held back in the last pass.
+func (m *Module) Status() map[string]any {
+	m.smu.Lock()
+	defer m.smu.Unlock()
+	state := m.pushState
+	if state == "" {
+		state = "off" // not looked at yet: off is what it is until a pass says otherwise
+	}
+	return map[string]any{"push": state, "deliverer": m.deliverer, "suppressed": m.suppressed}
 }
 
 // title is the line the person reads: the alert's own text, which names the host, or the host and the rule when it has none.
