@@ -121,19 +121,37 @@ func TestHoldFailsWhenTheFactsNeverShowIt(t *testing.T) {
 	}
 }
 
-// The facts must show *this* hold: a hold of the same name made before (other allow, other end) does not count.
+// The facts must show *this* hold: a hold of the same name made before does not count. Each field is tried alone (the other three are
+// the same), so a comparison that leaves one out is caught.
 func TestHoldWaitsForTheMatchingHoldNotJustTheName(t *testing.T) {
-	h := newHold("air26")
-	h.shown = func(e wire.Exception) wire.FactExc {
-		old := t0.Add(5 * time.Minute)
-		return wire.FactExc{Name: e.Name, Since: t0, Until: &old, Allow: &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassDev}, Repos: []string{}}}
+	stale := map[string]func(wire.Exception) wire.FactExc{
+		"another end": func(e wire.Exception) wire.FactExc {
+			u := e.Until.Add(5 * time.Minute)
+			return wire.FactExc{Name: e.Name, Since: t0, Until: &u, Allow: e.Allow, Flags: e.Flags}
+		},
+		"another allow": func(e wire.Exception) wire.FactExc {
+			return wire.FactExc{Name: e.Name, Since: t0, Until: e.Until, Allow: &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassDev}, Repos: []string{}}, Flags: e.Flags}
+		},
+		"no allow": func(e wire.Exception) wire.FactExc {
+			return wire.FactExc{Name: e.Name, Since: t0, Until: e.Until, Flags: e.Flags}
+		},
+		"other flags": func(e wire.Exception) wire.FactExc {
+			return wire.FactExc{Name: e.Name, Since: t0, Until: e.Until, Allow: e.Allow, Flags: []wire.HoldFlag{wire.HoldFlagExpectPressure}}
+		},
+		"no flags": func(e wire.Exception) wire.FactExc {
+			return wire.FactExc{Name: e.Name, Since: t0, Until: e.Until, Allow: e.Allow}
+		},
 	}
-	code, _, errOut, _ := runHold(h, "air26", "--for", "1h", "--reason", "stress", "--allow-class", "release")
-	if code == ExitOK {
-		t.Fatalf("an older hold of the same name was taken for this one")
-	}
-	if !strings.Contains(errOut, "facts") {
-		t.Errorf("message: %q", errOut)
+	for name, shown := range stale {
+		h := newHold("air26")
+		h.shown = shown
+		code, _, errOut, _ := runHold(h, "air26", "--for", "1h", "--reason", "stress", "--allow-class", "release", "--release")
+		if code == ExitOK {
+			t.Errorf("%s: an older hold of the same name was taken for this one", name)
+		}
+		if !strings.Contains(errOut, "facts") {
+			t.Errorf("%s: message: %q", name, errOut)
+		}
 	}
 }
 
