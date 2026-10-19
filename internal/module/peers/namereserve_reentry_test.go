@@ -3,6 +3,7 @@ package peers
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 // released, whatever the reader does with its context.
 
 type reentrantReader struct {
-	call func() // runs inside the first OpenReservations only (a later rebuild attempt finds it done)
-	once sync.Once
-	done chan struct{}
+	call  func() // runs inside the first OpenReservations only (a later rebuild attempt finds it done)
+	once  sync.Once
+	done  chan struct{}
+	calls atomic.Int32
 }
 
 func (r *reentrantReader) OpenReservations(context.Context) ([]ipeers.Reservation, error) {
+	r.calls.Add(1)
 	r.once.Do(func() {
 		defer close(r.done)
 		r.call()
@@ -87,4 +90,35 @@ func TestReservations_AReaderThatNeverReturnsIsGivenUpAndTriedAgainAtTheNextUse(
 	rebuilt := e.m.reservations.rebuilt
 	e.m.reservations.mu.Unlock()
 	assert.False(t, rebuilt, "a rebuild that timed out is tried again at the next use")
+}
+
+// codex R2 on #3524: a read given up on is not started again while it is still running, or a reader that never returns would
+// leave one goroutine per naming. Mutation gate: no in-flight guard → red.
+func TestReservations_AReadStillRunningIsNotStartedTwice(t *testing.T) {
+	block := make(chan struct{})
+	e, rd := reentrantEnv(t, func(e *poolEnv) {})
+	rd.call = func() { <-block }
+	for i, id := range []string{"op-1", "op-2", "op-1"} {
+		finishesIn(t, 5*time.Second, "ReserveExact", func() {
+			assert.NoError(t, e.m.ReserveExact(context.Background(), []string{"mia", "anna", "mia"}[i], id, "tm-"+id, tNow))
+		})
+	}
+	assert.EqualValues(t, 1, rd.calls.Load(), "the reader was started once, not once per naming")
+	close(block)
+	select {
+	case <-rd.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reader never ended")
+	}
+	// the stuck read ended: the next naming reads again
+	deadline := time.After(5 * time.Second)
+	for e.m.reservations.reading() {
+		select {
+		case <-deadline:
+			t.Fatal("the in-flight mark was never cleared")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	assert.NoError(t, e.m.ReserveExact(context.Background(), "mia", "op-1", "tm-op-1", tNow), "the same op again: a success")
+	assert.EqualValues(t, 2, rd.calls.Load())
 }

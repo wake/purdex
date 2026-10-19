@@ -254,3 +254,23 @@ func TestSpawnPoolName_TheStartTimeoutReleasesItWithoutTheReaper(t *testing.T) {
 		t.Fatalf("released = %v, want op 1 name given back by the timeout itself", got)
 	}
 }
+
+// codex R2 on #3524: a stored row that fails its checks is failed at boot by ListRunningSpawnOps, outside every runner; its name goes back
+// with it. Mutation gate: no spawnsEnded there → red.
+func TestSpawnPoolName_ACorruptRunningRowFailedAtBootReleasesIt(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	n := withNames(f, "mia")
+	id := f.acceptOp(1, root, namedOp)
+	if _, err := f.m.store.db.Exec(`UPDATE spawn_ops SET cwd = "" WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.ListRunningSpawnOps(f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if op, _, _ := f.m.store.GetSpawnOp(id); op.State != team.SpawnFailed {
+		t.Fatalf("op = %+v, want the corrupt row failed", op)
+	}
+	if got := n.releasedOps(); len(got) != 1 || got[0] != id {
+		t.Fatalf("released = %v, want op 1 name given back", got)
+	}
+}

@@ -37,10 +37,11 @@ func (r reservation) liveAt(now time.Time) bool { return now.Sub(r.at) <= reserv
 // reservationBook is the reservations in memory. Its own mutex is short: ReleaseReservation takes only that, never the pool lock
 // (releasing can only free a name, so a pick that read the book a moment before is safe).
 type reservationBook struct {
-	mu      sync.Mutex
-	byOp    map[string]reservation
-	rebuilt bool // the team module's open ops were read (or there is no reader)
-	tried   bool // a rebuild was tried in this pool-lock section
+	mu       sync.Mutex
+	byOp     map[string]reservation
+	rebuilt  bool // the team module's open ops were read (or there is no reader)
+	tried    bool // a rebuild was tried in this pool-lock section
+	inFlight bool // a read of the open ops is still in flight (one that timed out is not cancelled: it is not started twice)
 }
 
 func (b *reservationBook) put(r reservation) {
@@ -141,6 +142,29 @@ func (b *reservationBook) shouldTry() bool {
 	return true
 }
 
+// beginRead says whether a read may start: not while an earlier one, given up on at its deadline, has not returned.
+func (b *reservationBook) beginRead() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.inFlight {
+		return false
+	}
+	b.inFlight = true
+	return true
+}
+
+func (b *reservationBook) reading() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.inFlight
+}
+
+func (b *reservationBook) endRead() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.inFlight = false
+}
+
 func (b *reservationBook) markRebuilt() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -194,6 +218,9 @@ func (m *Module) readOpenReservations(ctx context.Context, reader ipeers.SpawnRe
 	if timeout <= 0 {
 		timeout = reservationReadTimeout
 	}
+	if !m.reservations.beginRead() {
+		return nil, errors.New("the previous read of the open spawn ops has not returned")
+	}
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	type result struct {
@@ -202,6 +229,7 @@ func (m *Module) readOpenReservations(ctx context.Context, reader ipeers.SpawnRe
 	}
 	done := make(chan result, 1)
 	go func() {
+		defer m.reservations.endRead()
 		list, err := reader.OpenReservations(rctx)
 		done <- result{list, err}
 	}()

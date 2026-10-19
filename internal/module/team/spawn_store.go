@@ -462,8 +462,12 @@ func (s *Store) ListRunningSpawnOps(now int64) ([]spawnRow, error) {
 	}
 	rows.Close() // before writing: an in-memory store has one connection
 	for id, bad := range corrupt {
-		if _, err := s.FailSpawnOp(id, team.SpawnReasonAbandoned, now); err != nil {
+		won, err := s.FailSpawnOp(id, team.SpawnReasonAbandoned, now)
+		if err != nil {
 			return nil, err
+		}
+		if won {
+			s.spawnsEnded([]string{id}) // its reserved member name, if the name service rebuilt one, goes back
 		}
 		log.Printf("[team] spawn op %s: stored row is corrupt (%v); failed %s", id, bad, team.SpawnReasonAbandoned)
 	}
