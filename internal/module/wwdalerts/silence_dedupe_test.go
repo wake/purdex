@@ -129,6 +129,25 @@ func TestSilenceAcrossARestart(t *testing.T) {
 	assert.Equal(t, 2, e.ntf.count(), "raised after the last push: a new failure")
 }
 
+// The first look after a restart may miss the list (the wwd is not ready yet): the one after it is still the first look at that failure.
+func TestSilenceARestartWhoseFirstReadFailsStillJoinsTheLedger(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab", silenceOf("mserv", t0))
+	e.src.set("air26")
+	e.pass(t)
+	e.ntf.confirm(0)
+
+	e.m = e.module(t)
+	e.src.errs = map[string]error{"mlab": errors.New("not ready"), "air26": errors.New("not ready")}
+	e.now = e.now.Add(time.Minute)
+	e.pass(t) // nothing could be read
+	e.src.errs = nil
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "the same failure, seen for the first time on the second pass")
+}
+
 // A host that left the pool takes what it held with it: back in the pool and holding the key again is a new observer, and the failure it
 // shows is told.
 func TestSilenceAHostThatLeftAndCameBackIsANewObserver(t *testing.T) {

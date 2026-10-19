@@ -338,7 +338,8 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 		// The first look after a start has no history of its own. The ledger knows the failure it last told: the same one while a list's
 		// alert was raised no later than that push (a wwd's clock against this one's, used only here); one raised after it began while
 		// this daemon was down, and is told.
-		if row, had := m.store.delivery(silenceLedger, k); had && first && !earliest[k].After(time.UnixMilli(row.Attempt)) {
+		_, known := m.episode[k]
+		if row, had := m.store.delivery(silenceLedger, k); had && !known && !earliest[k].After(time.UnixMilli(row.Attempt)) {
 			m.episode[k] = time.UnixMilli(row.Since)
 		} else {
 			m.episode[k] = now
