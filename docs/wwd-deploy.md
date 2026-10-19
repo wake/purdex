@@ -343,3 +343,24 @@ known_residents = ["OrbStack Helper", "mysqld"]   # process names as the facts s
 wwd reads it at start, so a change needs `wwd` restarted. Nothing is known until a host lists it, so every large resident is reported at first.
 `wwd alerts-replay --db <copy of wwd.db> --work-root <dir> --known "OrbStack Helper,mysqld"` shows what the rules would have raised over the
 recorded minutes; copy the database first (`sqlite3 <live wwd.db> ".backup <copy>"`), never point it at the live file.
+
+## 9. Silence settings (spec §13.3, 8a-3)
+
+Two settings decide which absences a host's wwd tells. Both are read at start, so a change needs `wwd` restarted.
+
+```toml
+[advisor]
+partner_check = true            # only on a host that runs a Purdex daemon (mlab, air26); default false
+
+[[peers]]
+alias = "air19"
+addr  = "100.64.0.1"
+alert_unreachable = false       # default true; air19 is a laptop that sleeps
+```
+
+* A peer whose pool reads have failed for **3 minutes** (one number for every host, mserv included) raises `silence:<alias>` on this host's
+  list; it clears as soon as the peer answers. A wwd that has just started counts a peer it has not reached yet from its own start.
+* With `partner_check`, a Purdex daemon that has not read this host's alerts on the socket for 3 minutes raises `partner_down`. Every
+  Purdex daemon reads every host's list every 30 s, so a silence that long means the daemon is down. Do not set it on mserv or air19: they
+  have no Purdex daemon and would be told about a partner they never had.
+* Removing a peer from `[[peers]]`, or turning its alert off, while its alert is raised leaves that row in `alerts`, because no rule judges it any more; clear it by hand in `wwd.db` (known gap: a peer removed from the config is rare).

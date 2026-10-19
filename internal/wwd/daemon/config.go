@@ -128,14 +128,23 @@ type ObserveRule struct {
 // grow. Empty (the default): none is known, every large resident is reported.
 type AdvisorRule struct {
 	KnownResidents []string `toml:"known_residents"`
+	// PartnerCheck turns on the partner check of the silence rules (spec §13.3): this wwd tells when the Purdex daemon of its own host has
+	// not read its alerts for 3 minutes. Only a host that runs a Purdex daemon (mlab, air26) sets it; the default is off, since a host
+	// without one (mserv, air19) would otherwise be told it has lost a partner it never had.
+	PartnerCheck bool `toml:"partner_check"`
 }
 
 // PeerConfig is another wwd of the pool: its alias and tailnet address
-// (host or host:port; the port defaults to 7871).
+// (host or host:port; the port defaults to 7871). AlertUnreachable (spec §13.3 silence) says whether this host raises an alert when the
+// peer has not answered for 3 minutes; the default is on, and air19 (a laptop that sleeps) sets it to false.
 type PeerConfig struct {
-	Alias string `toml:"alias"`
-	Addr  string `toml:"addr"`
+	Alias            string `toml:"alias"`
+	Addr             string `toml:"addr"`
+	AlertUnreachable *bool  `toml:"alert_unreachable"`
 }
+
+// AlertsUnreachable is AlertUnreachable with its default (on).
+func (p PeerConfig) AlertsUnreachable() bool { return p.AlertUnreachable == nil || *p.AlertUnreachable }
 
 // HostPort is the address with the default port filled in.
 func (p PeerConfig) HostPort() string {
