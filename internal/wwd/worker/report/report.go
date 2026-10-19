@@ -58,7 +58,10 @@ type Config struct {
 	OriginBackoff, OriginBackoffMax time.Duration
 	// Summary builds the summary of a run that ended. Nil: built from the files the run left (see parse).
 	Summary func(runner.Ended) wire.Summary
-	Logf    func(format string, args ...any)
+	// Digest says whether a summary may carry PassedDigest (WWD-5b-2w): true only while every host of the pool is reachable and reads the
+	// field (wire.PoolAtLeast(peers, 3)). Asked once per summary. Nil: never.
+	Digest func() bool
+	Logf   func(format string, args ...any)
 }
 
 // repoKey is a repo of an origin: the repo name is the same across hosts, so it alone would let one origin hold off another's.
@@ -271,7 +274,7 @@ func (r *Reporter) parse(e runner.Ended) wire.Summary {
 	if kind == "" {
 		kind = "plain"
 	}
-	in := summary.Input{Log: e.Run.Tail, Root: e.Root}
+	in := summary.Input{Log: e.Run.Tail, Root: e.Root, Digest: r.cfg.Digest != nil && r.cfg.Digest()}
 	if e.Run.StdoutPath != "" {
 		in.Stdout = readCapped(e.Run.StdoutPath)
 	}

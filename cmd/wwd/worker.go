@@ -224,11 +224,13 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 			}
 			return &f
 		},
-		Origins:            func() []loop.Origin { return origins },
-		Labels:             func() []string { l, _ := in.Labels(); return l },
-		Locks:              in.Locks,
-		Ctl:                ctl,
-		Report:             report.New(report.Config{Logf: logf}),
+		Origins: func() []loop.Origin { return origins },
+		Labels:  func() []string { l, _ := in.Labels(); return l },
+		Locks:   in.Locks,
+		Ctl:     ctl,
+		Report: report.New(report.Config{Logf: logf, Digest: func() bool { // a summary carries the passed-test digest only while no host of the pool would reject it
+			return in.Peers != nil && wire.PoolAtLeast(in.Peers(), wire.PassedDigestProto)
+		}}),
 		Warm:               func(j wire.Job) bool { _, ok := repos.Path(j.Repo.Name); return ok },
 		SpeedFactor:        in.Cfg.Worker.SpeedFactor,
 		ExplicitLabelsOnly: in.Cfg.Worker.ExplicitLabelsOnly,

@@ -34,6 +34,7 @@ func parseVitest(in Input) (wire.Summary, error) {
 		return s, fmt.Errorf("vitest-json: %w", err)
 	}
 	var unknown error
+	passed := newPassedSet(in.Digest)
 	for _, suite := range r.TestResults {
 		file := rel(in.Root, suite.Name)
 		suiteFailed := false
@@ -41,6 +42,11 @@ func parseVitest(in Input) (wire.Summary, error) {
 			switch a.Status {
 			case "passed":
 				s.Passed++
+				name := a.FullName
+				if name == "" {
+					name = a.Title
+				}
+				passed.add(file, name)
 			case "failed":
 				s.Failed++
 				suiteFailed = true
@@ -62,6 +68,9 @@ func parseVitest(in Input) (wire.Summary, error) {
 			s.Failed++
 			addFailure(&s, wire.Failure{Name: file, File: file, Message: suite.Message})
 		}
+	}
+	if unknown == nil { // a status the parser does not know may hide a pass: the set is not trusted
+		s.PassedDigest = passed.digest()
 	}
 	return s, unknown
 }

@@ -37,9 +37,11 @@ func parseJunit(in Input) (wire.Summary, error) {
 	}
 	dec := xml.NewDecoder(bytes.NewReader(in.Junit))
 	depth := 0
+	passed := newPassedSet(in.Digest)
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
+			s.PassedDigest = passed.digest()
 			return s, nil
 		}
 		if err != nil {
@@ -57,7 +59,7 @@ func parseJunit(in Input) (wire.Summary, error) {
 				if err := dec.DecodeElement(&c, &t); err != nil {
 					return s, fmt.Errorf("junit: %w", err)
 				}
-				addCase(&s, c, in.Root)
+				addCase(&s, c, in.Root, passed)
 			}
 		case xml.EndElement:
 			if t.Name.Local == "testsuite" || t.Name.Local == "testsuites" {
@@ -67,7 +69,7 @@ func parseJunit(in Input) (wire.Summary, error) {
 	}
 }
 
-func addCase(s *wire.Summary, c junitCase, root string) {
+func addCase(s *wire.Summary, c junitCase, root string, passed *passedSet) {
 	p := c.Failure
 	if p == nil {
 		p = c.Error
@@ -92,5 +94,6 @@ func addCase(s *wire.Summary, c junitCase, root string) {
 		s.Skipped++
 	default:
 		s.Passed++
+		passed.add(c.Classname, c.Name)
 	}
 }
