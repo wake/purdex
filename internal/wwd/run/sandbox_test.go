@@ -207,6 +207,38 @@ func TestSandboxRunExitCodeOutputAndCleanUp(t *testing.T) {
 	}
 }
 
+// A job id is only unique per origin, so the unit carries the origin's tag: two origins that send j_test1 get two units (systemd-run
+// refuses a second unit of one name, and Gone would read the other job's unit as this one's). A run with no origin keeps the old name.
+func TestUnitNameCarriesTheOriginTag(t *testing.T) {
+	if got := UnitName("", "j_1"); got != "wwd-j_1" {
+		t.Fatalf("no origin: %q", got)
+	}
+	a, b := UnitName("aaaaaaaaaaaaaaaa", "j_1"), UnitName("bbbbbbbbbbbbbbbb", "j_1")
+	if a != "wwd-aaaaaaaaaaaaaaaa-j_1" || b != "wwd-bbbbbbbbbbbbbbbb-j_1" || a == b {
+		t.Fatalf("two origins, one id: %q %q", a, b)
+	}
+}
+
+func TestSandboxRunUsesTheUnitOfItsOrigin(t *testing.T) {
+	w := newWorld(t)
+	w.set("show", "ActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainCode=1\n")
+	s := sandboxSpec(t, w, "true")
+	s.Origin = "0123456789abcdef"
+	r := Run(context.Background(), s)
+	if r.Outcome != Exited {
+		t.Fatalf("result = %+v", r)
+	}
+	unit := "wwd-0123456789abcdef-j_test1"
+	for _, want := range []string{"--unit=" + unit, "systemctl show " + unit + " ", "reset-failed " + unit} {
+		if !w.called(t, want) {
+			t.Fatalf("missing %q in %q", want, w.calls(t))
+		}
+	}
+	if w.called(t, "--unit=wwd-j_test1") {
+		t.Fatalf("the old name must not be used for a run that has an origin: %q", w.calls(t))
+	}
+}
+
 func TestSandboxOOMIsKilledWithReason(t *testing.T) {
 	w := newWorld(t)
 	w.set("exit", "1") // systemd-run exits 1 for an OOM kill as it does for a timeout: only the unit's Result tells them apart

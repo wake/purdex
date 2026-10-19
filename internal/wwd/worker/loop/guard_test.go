@@ -36,7 +36,7 @@ func TestAMarkerExistsWhileASandboxedCommandRunsAndIsGoneWhenItEndedCleanly(t *t
 	q.round()
 	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
 	held := q.store.Held()
-	if len(held) != 1 || held[0].Owner != "mlab/a" || held[0].Unit != "wwd-a" || held[0].Dir != filepath.Join(q.root, "a") || len(held[0].Keys) != 1 {
+	if len(held) != 1 || held[0].Owner != "mlab/a" || held[0].Unit != mlabUnit("a") || held[0].Dir != filepath.Join(q.root, "a") || len(held[0].Keys) != 1 {
 		t.Fatalf("held %+v: the marker is there before the command can end", held)
 	}
 	if files, _ := os.ReadDir(q.mdir); len(files) != 1 {
@@ -76,7 +76,7 @@ func TestADaemonThatDiesWhileACommandRunsLeavesItsKeysAndWorkspaceToTheNextOne(t
 		t.Fatalf("the workspace stays while the unit runs: %v", err)
 	}
 	q.units.mu.Lock()
-	q.units.gone["wwd-a"] = true
+	q.units.gone[mlabUnit("a")] = true
 	q.units.mu.Unlock()
 	if n, err := store2.Sweep(context.Background()); err != nil || n != 1 {
 		t.Fatalf("cleared %d err %v", n, err)
@@ -95,7 +95,7 @@ func TestARunningJobsMarkerIsNotSweptEvenIfItsUnitIsNotThereYet(t *testing.T) {
 	q := guarded(t, c)
 	q.ex.run = blockUntilDone
 	q.units.mu.Lock()
-	q.units.gone["wwd-a"] = true // no unit yet / already gone: absent
+	q.units.gone[mlabUnit("a")] = true // no unit yet / already gone: absent
 	q.units.mu.Unlock()
 	q.round()
 	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
@@ -125,7 +125,7 @@ func TestAQuarantinedRunKeepsItsMarkerThroughTheGuardAndTheFinish(t *testing.T) 
 		t.Fatal("not gone yet")
 	}
 	q.units.mu.Lock()
-	q.units.gone["wwd-stuck"] = true
+	q.units.gone[mlabUnit("stuck")] = true
 	q.units.mu.Unlock()
 	q.loop.Sweep(context.Background())
 	if len(q.store.Held()) != 0 {
@@ -210,7 +210,7 @@ func TestAQuarantinedRunWhoseFinishNeverWritesIsStillSweptOnceItsUnitIsGone(t *t
 	}
 	g.End(e, true) // and nothing else: no Add
 	q.units.mu.Lock()
-	q.units.gone["wwd-a"] = true
+	q.units.gone[mlabUnit("a")] = true
 	q.units.mu.Unlock()
 	if n, err := q.store.Sweep(context.Background()); err != nil || n != 1 {
 		t.Fatalf("cleared %d err %v", n, err)
@@ -266,7 +266,7 @@ func TestAClearedEntryIsNotBroughtBackByTheFinishOfItsRun(t *testing.T) {
 	q.loop.cfg.Quarantine = &gatedAdd{Quarantine: q.store, gate: gate}
 	q.loop.cfg.Guarded = true
 	q.units.mu.Lock()
-	q.units.gone["wwd-stuck"] = true
+	q.units.gone[mlabUnit("stuck")] = true
 	q.units.mu.Unlock()
 	q.ex.run = notProven
 	q.round()
