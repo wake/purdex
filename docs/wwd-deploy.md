@@ -170,6 +170,11 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   newer wwd wrote it`), exactly as it does for the queue schema, so the same back-up and the same roll back apply to it: **a roll
   back across a host-schema step is a restore of the backup**, and a hold made since the backup is lost with it. Check what a host has
   with `sqlite3 -readonly ~/.local/share/wwd/wwd.db "select version from host_schema"`.
+  **That refusal covers an older wwd that starts after the migration, not one that already has the file open**: a running v6 wwd does not
+  look at `host_schema` again, and its `SaveException` leaves the new columns alone, so a same-named plain exception written by it over a
+  hold would keep the hold's `allow` and `flags`. So **the old wwd must be stopped before the new one starts** (`systemctl restart`,
+  `launchctl kickstart -k` and the roll back below all stop it first), and **never run two wwd on one `wwd.db`**: the second one
+  migrates in `store.Open` and only then fails to bind its port (wwd has no single-instance lock; #3630).
 * Roll back: deploy the previous build the same way. If the new build moved the queue schema, the old binary refuses
   the migrated database (`queue_schema` newer than it knows), so a roll back across a schema step is: stop wwd,
   put the backup back as `wwd.db` (remove the `-wal` and `-shm` files beside it), start the old build. Jobs
