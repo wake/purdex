@@ -88,7 +88,7 @@ func (n *fakeNames) ReleaseReservation(string) {}
 var _ ipeers.NameService = (*fakeNames)(nil)
 
 var leadCands = []ipeers.LeadCandidate{
-	{Code: "b8", Keep: true, Name: "B8", Kind: team.LeadNameKeep},
+	{Code: "adam", Keep: true, Name: "Adam", Kind: team.LeadNameKeep},
 	{Code: "kenji", Name: "Kenji", Kind: team.LeadNameFormer, LastAt: 5},
 	{Code: "emma", Name: "Emma", Kind: team.LeadNameOther},
 }
@@ -127,6 +127,20 @@ func TestLeadName_RenameComesBeforeTheTeamRow(t *testing.T) {
 	}
 	if got := n.log(); len(got) < 3 || got[1] != "rename:sid-1:kenji" || got[2] != "record:sid-1" {
 		t.Fatalf("calls = %v (want rename then record)", got)
+	}
+}
+
+// Every candidate the list offers can be picked, the "keep" one included (the spec's code shape is 3-12 lowercase letters).
+func TestLeadName_EveryCandidateIsAccepted(t *testing.T) {
+	for _, c := range leadCands {
+		t.Run(c.Code, func(t *testing.T) {
+			f := newFixture(t)
+			withNames(f)
+			f.create(uid(1))
+			if code, body := f.decideLead(uid(1), c.Code); code != 200 {
+				t.Fatalf("decide with %q: %d %s", c.Code, code, body)
+			}
+		})
 	}
 }
 
@@ -355,7 +369,7 @@ func TestLeadName_CreateFillsTheNames(t *testing.T) {
 		f := newFixture(t)
 		withNames(f)
 		got, isNil := leadNamesOf(f)
-		if isNil || len(got) != 3 || got[0].Code != "b8" || got[0].Kind != team.LeadNameKeep {
+		if isNil || len(got) != 3 || got[0].Code != "adam" || got[0].Kind != team.LeadNameKeep {
 			t.Fatalf("lead_names = %+v", got)
 		}
 	})
