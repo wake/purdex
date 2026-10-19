@@ -23,9 +23,9 @@ import (
 // Locking: Tick and Request hold the coordinator's lock while they prepare a snapshot (git) and read and write the queue, so the caller
 // runs them in a goroutine of their own, never inside another lock (not in the daemon's labels lock, which Granted takes). cmd/wwd wires it so.
 //
-// State is in memory. A restart forgets the pairs in flight (their two jobs go on and finish, unobserved) and the rate rule's memory
-// (the next automatic try may come before 24 h); a new pair for the same task supersedes the old jobs by their supersede keys, so a
-// restart does not leave two pairs running.
+// The pairs in flight are in memory: a restart forgets them (their two jobs go on and finish, unobserved). The rate rule's memory (the last
+// unsuccessful attempt of each task) is in the store and is read back by New, so a restart does not bring a retry forward. A new pair for the
+// same task supersedes the old jobs by their supersede keys, so a restart does not leave two pairs running.
 
 // Queue is the part of the origin's queue the coordinator uses (*queue.Queue).
 type Queue interface {
@@ -34,10 +34,14 @@ type Queue interface {
 	Cancel(ctx context.Context, id string) (wire.Job, error)
 }
 
-// Store is the earned-label table (store.Store).
+// Store is the earned-label table and the last unsuccessful attempt of each task (store.Store): the first is what the host holds, the second
+// is what keeps the 24 h wait of spec §7 across a restart.
 type Store interface {
 	EarnedLabels() ([]wire.EarnedLabel, error)
 	SaveEarnedLabel(wire.EarnedLabel) error
+	QualifyAttempts() ([]store.QualifyAttempt, error)
+	SaveQualifyAttempt(store.QualifyAttempt) error
+	DeleteQualifyAttempt(label string) error
 }
 
 // Source is what the coordinator reads of this host.
@@ -108,7 +112,33 @@ func New(cfg Config) *Coordinator {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Coordinator{cfg: cfg, pairs: map[string]*openPair{}, last: map[string]Attempt{}}
+	c := &Coordinator{cfg: cfg, pairs: map[string]*openPair{}, last: map[string]Attempt{}}
+	// the memory of the last unsuccessful attempts is the store's: a restart does not give a task its retry back before its time
+	rows, err := cfg.Store.QualifyAttempts()
+	var damaged *store.SkippedRowsError
+	if err != nil && !errors.As(err, &damaged) {
+		log.Printf("wwd: qualify: reading the last attempts (the retry waits start empty): %v", err)
+	}
+	for _, r := range rows {
+		c.last[r.Label] = Attempt{At: r.At, Outcome: Outcome(r.Outcome), Fingerprint: r.Fingerprint}
+	}
+	return c
+}
+
+// rememberAttempt keeps the last unsuccessful attempt of the task, in memory and in the store.
+func (c *Coordinator) rememberAttempt(label string, a Attempt) {
+	c.last[label] = a
+	if err := c.cfg.Store.SaveQualifyAttempt(store.QualifyAttempt{Label: label, Outcome: string(a.Outcome), Fingerprint: a.Fingerprint, At: a.At}); err != nil {
+		log.Printf("wwd: qualify %s: saving the attempt (a restart would forget its retry wait): %v", label, err)
+	}
+}
+
+// forgetAttempt drops the memory of the task's last attempt (the label was earned, or the task is gone).
+func (c *Coordinator) forgetAttempt(label string) {
+	delete(c.last, label)
+	if err := c.cfg.Store.DeleteQualifyAttempt(label); err != nil {
+		log.Printf("wwd: qualify %s: deleting the attempt: %v", label, err)
+	}
 }
 
 // Settle only settles the pairs that are done (a pair a person started by hand needs no tick to finish); it starts nothing.
@@ -163,7 +193,7 @@ func (c *Coordinator) forgetGoneTasks(tasks []Task) {
 	}
 	for l := range c.last {
 		if !have[l] {
-			delete(c.last, l)
+			c.forgetAttempt(l)
 		}
 	}
 }
@@ -337,14 +367,14 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 			log.Printf("wwd: qualify %s: saving the label: %v", label, err)
 			v = Verdict{Outcome: OutcomeVoid, Why: "saving the label failed: " + err.Error()}
 		} else {
-			delete(c.last, label)
+			c.forgetAttempt(label)
 			if c.cfg.Granted != nil {
 				c.cfg.Granted()
 			}
 		}
 	}
 	if v.Outcome != OutcomeMatch {
-		c.last[label] = Attempt{At: now, Outcome: v.Outcome, Fingerprint: p.fp}
+		c.rememberAttempt(label, Attempt{At: now, Outcome: v.Outcome, Fingerprint: p.fp})
 	}
 	c.remember(Record{Label: label, Outcome: v.Outcome, Why: v.Why, At: now, Candidate: p.cand, Reference: p.ref})
 }
@@ -379,7 +409,7 @@ func (c *Coordinator) stillTheSameTask(p *openPair) bool {
 // note records a pair that never got going.
 func (c *Coordinator) note(t Task, o Outcome, why, cand, ref string, fp map[string]string) {
 	now := c.cfg.Now()
-	c.last[t.Label()] = Attempt{At: now, Outcome: o, Fingerprint: fp}
+	c.rememberAttempt(t.Label(), Attempt{At: now, Outcome: o, Fingerprint: fp})
 	c.remember(Record{Label: t.Label(), Outcome: o, Why: why, At: now, Candidate: cand, Reference: ref})
 }
 
