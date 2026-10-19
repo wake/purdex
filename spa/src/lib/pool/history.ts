@@ -21,8 +21,12 @@ export const readZones = (fleetHostId: string): ZonePoint[] => zones.get(fleetHo
 export const readHistoryLoad = (fleetHostId: string): HistoryLoad => loads.get(fleetHostId) ?? 'idle'
 export const clearZoneMemory = (): void => { zones.clear(); loads.clear() }
 
-/** One sample's zone: time order, once per time (the first stays), only the last 5 minutes. */
-export function recordZone(fleetHostId: string, t: number, zone: PoolZone): void {
+/** A sample dated more than this ahead of now (the daemon's clock is ahead) cannot be placed and is dropped (the fleet history does the same). */
+const FUTURE_TOLERANCE_MS = 5_000
+
+/** One sample's zone: time order, once per time (the first stays), only the last 5 minutes, and not from the future. */
+export function recordZone(fleetHostId: string, t: number, zone: PoolZone, now: number = Date.now()): void {
+  if (t > now + FUTURE_TOLERANCE_MS) return
   const have = zones.get(fleetHostId) ?? []
   if (have.some((p) => p.t === t)) return
   const all = [...have, { t, zone }].sort((a, b) => a.t - b.t)
@@ -38,8 +42,8 @@ export async function loadFactsHistory(sourceHostId: string, alias: string, flee
   let out: HistoryLoad
   try {
     const h = await fetchFactsHistory(sourceHostId, alias, new Date(now - FACTS_HISTORY_MS).toISOString(), '5s')
-    fleetHistory.seedRaw(fleetHostId, h.records.map((f) => factsToFast(f, 0)))
-    for (const f of h.records) recordZone(fleetHostId, f.at, f.derived.zone)
+    fleetHistory.seedRaw(fleetHostId, h.records.map((f) => factsToFast(f, 0)), now)
+    for (const f of h.records) recordZone(fleetHostId, f.at, f.derived.zone, now)
     out = 'ok'
   } catch (e) {
     out = e instanceof PoolReadError && e.poolError.code === 'host_not_local' ? 'host_not_local' : 'error'

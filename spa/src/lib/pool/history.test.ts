@@ -66,6 +66,22 @@ describe('loadFactsHistory', () => {
   })
 })
 
+describe('zone points and a daemon whose clock is ahead', () => {
+  it('a sample dated far ahead of now is ignored, so it cannot push the window past the real ones', () => {
+    recordZone('h', NOW - 20_000, 'warning', NOW)
+    recordZone('h', NOW + 600_000, 'danger', NOW)
+    recordZone('h', NOW - 10_000, 'normal', NOW)
+    expect(readZones('h')).toEqual([{ t: NOW - 20_000, zone: 'warning' }, { t: NOW - 10_000, zone: 'normal' }])
+  })
+
+  it('loading the history drops the ahead-dated records and keeps the rest', async () => {
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(20, {}, 'normal', 90), rec(-600, {}, 'danger', 5)] })
+    await loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal'])
+    expect(fleetHistory.series('f-air26', 'cpu', '5m', NOW).map((p) => p.avg)).toEqual([10])
+  })
+})
+
 describe('zone points', () => {
   it('are kept in time order, once per time, and only the last 5 minutes', () => {
     recordZone('h', NOW, 'normal')

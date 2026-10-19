@@ -66,9 +66,12 @@ export class FleetHistory {
   /**
    * Readings the daemon already has (its 5 s history, read when the host tab opens) put into the raw 5 minute track, before and among the
    * ones this App collected. A time already there keeps its own value; what is older than the raw window is dropped; the 10 s buckets (1 h
-   * and longer) are not touched, they stay what this App saw. Readings carry the five charted items, `load` is not charted.
+   * and longer) are not touched, they stay what this App saw. Readings carry the five charted items, `load` is not charted. A reading dated
+   * more than a few seconds ahead of `now` (the daemon's clock is ahead) cannot be placed on this App's time line and is dropped: kept, it
+   * would be taken for the newest and wipe the history this App has, and the chart would cut it off as being in the future.
    */
-  seedRaw(hostId: string, readings: Array<Pick<FleetFast, 'at' | 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>>): void {
+  seedRaw(hostId: string, all: Array<Pick<FleetFast, 'at' | 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>>, now: number = Date.now()): void {
+    const readings = all.filter((r) => r.at <= now + FUTURE_TOLERANCE_MS)
     let hh = this.hosts.get(hostId)
     if (!hh) {
       hh = { lastAt: -Infinity, lastRawAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
