@@ -37,6 +37,9 @@ type Input struct {
 	Junit  []byte // the {junit} file (junit)
 	// Root is the workspace directory; absolute file names under it are shortened to be relative.
 	Root string
+	// Digest asks for Summary.PassedDigest (WWD-5b-2w): the caller sets it only while every host of the pool reads the field (proto >= 3).
+	// The digest is left empty for a "plain" summary (no per-test ids) and for a report that was not read whole and without a problem.
+	Digest bool
 }
 
 // Parse builds the summary for the task's summary kind. It always returns a usable summary: when the report cannot be read

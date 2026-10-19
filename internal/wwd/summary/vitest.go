@@ -34,23 +34,36 @@ func parseVitest(in Input) (wire.Summary, error) {
 		return s, fmt.Errorf("vitest-json: %w", err)
 	}
 	var unknown error
+	passed := newPassedSet(in.Digest)
 	for _, suite := range r.TestResults {
 		file := rel(in.Root, suite.Name)
+		// rel folds a directory outside the workspace away: two files of that base name would be one, for a passed test and for a failed one
+		// alike (qualification compares a failure by its name and file), so such a suite has no identity to put in a digest
+		folded := strings.HasPrefix(file, outside)
 		suiteFailed := false
 		for _, a := range suite.AssertionResults {
+			name := a.FullName
+			if name == "" {
+				name = a.Title
+			}
 			switch a.Status {
 			case "passed":
 				s.Passed++
+				if folded {
+					passed.taint()
+				}
+				passed.add(file, name)
 			case "failed":
 				s.Failed++
 				suiteFailed = true
-				name := a.FullName
-				if name == "" {
-					name = a.Title
+				if folded {
+					passed.taint()
 				}
+				passed.failedTest(file, name)
 				addFailure(&s, wire.Failure{Name: name, File: file, Message: strings.Join(a.FailureMessages, "\n")})
 			case "pending", "skipped", "todo", "disabled":
 				s.Skipped++
+				passed.skippedTest(file, name)
 			default:
 				// schema drift or a damaged report: counting it as skipped would look trustworthy and be wrong
 				if unknown == nil {
@@ -60,8 +73,15 @@ func parseVitest(in Input) (wire.Summary, error) {
 		}
 		if !suiteFailed && suite.Status == "failed" {
 			s.Failed++
+			if folded {
+				passed.taint()
+			}
+			passed.failedTest("<suite>", file)
 			addFailure(&s, wire.Failure{Name: file, File: file, Message: suite.Message})
 		}
+	}
+	if unknown == nil { // a status the parser does not know may hide a pass: the set is not trusted
+		s.PassedDigest = passed.digest()
 	}
 	return s, unknown
 }
