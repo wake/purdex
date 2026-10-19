@@ -67,12 +67,39 @@ func (b *reservationBook) byTmux(tmuxName string, now time.Time) (reservation, b
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var best reservation
+	found := false
 	for _, r := range b.byOp {
-		if r.tmuxName == tmuxName && r.liveAt(now) {
-			return r, true
+		if r.tmuxName != tmuxName || !r.liveAt(now) {
+			continue
+		}
+		// a tmux session name is unique in one tmux server, so two open ops under one name is a fault; the pick must not
+		// depend on map order, so the older op (then the smaller id) wins
+		if !found || r.at.Before(best.at) || (r.at.Equal(best.at) && r.opID < best.opID) {
+			best, found = r, true
 		}
 	}
-	return reservation{}, false
+	return best, found
+}
+
+// holds says whether a live reservation of another op holds the code.
+func (b *reservationBook) holds(code, exceptOp string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, r := range b.byOp {
+		if id != exceptOp && r.code == code && r.liveAt(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// notFuture is at, but never later than now: a clock that ran ahead must not stretch the ten minutes.
+func notFuture(at, now time.Time) time.Time {
+	if at.After(now) {
+		return now
+	}
+	return at
 }
 
 // codes are the names the live reservations hold; the lapsed are dropped on the way.
@@ -137,13 +164,18 @@ func (m *Module) ensureReservations(ctx context.Context) {
 	}
 	now := m.now()
 	for _, r := range list {
-		res := reservation{opID: r.OpID, code: r.Code, tmuxName: r.TmuxName, at: r.CreatedAt}
+		res := reservation{opID: r.OpID, code: r.Code, tmuxName: r.TmuxName, at: notFuture(r.CreatedAt, now)}
 		if !res.liveAt(now) {
 			continue
 		}
-		if _, have := m.reservations.get(r.OpID, now); !have { // this process's own reservation is as new as the row
-			m.reservations.put(res)
+		if _, have := m.reservations.get(r.OpID, now); have { // this process's own reservation is as new as the row
+			continue
 		}
+		if m.reservations.holds(r.Code, r.OpID, now) { // one name, one op: the one already held wins
+			m.logf("peers: name: the open spawn op %s reserves %s, which another op holds; not rebuilt", r.OpID, r.Code)
+			continue
+		}
+		m.reservations.put(res)
 	}
 	m.reservations.markRebuilt()
 }
@@ -176,7 +208,7 @@ func (m *Module) ReserveMember(ctx context.Context, leadSessionID, opID, tmuxNam
 	if !ok {
 		return "", nil
 	}
-	m.reservations.put(reservation{opID: opID, code: code, tmuxName: tmuxName, at: at})
+	m.reservations.put(reservation{opID: opID, code: code, tmuxName: tmuxName, at: notFuture(at, m.now())})
 	return code, nil
 }
 
@@ -213,7 +245,7 @@ func (m *Module) ReserveExact(ctx context.Context, code, opID, tmuxName string, 
 	if held[code] {
 		return ipeers.ErrNameTaken
 	}
-	m.reservations.put(reservation{opID: opID, code: code, tmuxName: tmuxName, at: at})
+	m.reservations.put(reservation{opID: opID, code: code, tmuxName: tmuxName, at: notFuture(at, m.now())})
 	return nil
 }
 

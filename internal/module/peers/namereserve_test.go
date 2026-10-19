@@ -213,3 +213,57 @@ func holdRemoteNow(e *poolEnv, start time.Time, names ...string) {
 	}
 	e.m.remoteNames.record("host-remote", rows, ipeers.AddressVersionV5, e.m.now())
 }
+
+// codex R2 on A1: a rebuild must not give one name to two ops.
+func TestReservations_ARebuiltOpDoesNotTakeANameAnotherOpHolds(t *testing.T) {
+	e := reserveEnv(t)
+	ctx := context.Background()
+	rd := &fakeReader{err: errors.New("team.db down")}
+	c := newTestCoreWithHosts(t, "host-mlab", "mlab", nil)
+	c.Registry.Register(team.SpawnReservationsKey, rd)
+	e.m.core = c
+	require.NoError(t, e.meta.NameHistory().RecordPair(ctx, "hiro", "mia", 5))
+
+	got, err := e.m.ReserveMember(ctx, poolSidA, "op-new", "tm-new", tNow)
+	require.NoError(t, err)
+	require.Equal(t, "mia", got)
+	rd.err = nil
+	rd.list = []ipeers.Reservation{
+		{OpID: "op-old", Code: "mia", TmuxName: "tm-old", CreatedAt: tNow.Add(-time.Minute)},
+		{OpID: "op-dup", Code: "anna", TmuxName: "tm-d1", CreatedAt: tNow},
+		{OpID: "op-dup2", Code: "anna", TmuxName: "tm-d2", CreatedAt: tNow},
+	}
+	_, _ = e.m.ReserveMember(ctx, poolSidA, "op-x", "tm-x", tNow)
+	_, ok := e.m.reservations.get("op-old", tNow)
+	assert.False(t, ok, "mia stays with op-new")
+	n := 0
+	for _, id := range []string{"op-dup", "op-dup2"} {
+		if _, ok := e.m.reservations.get(id, tNow); ok {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "a reader that lists anna twice keeps one of them")
+}
+
+func TestReservations_TwoOpsUnderOneTmuxNameGiveTheOlderOne(t *testing.T) {
+	e := reserveEnv(t)
+	for i := 0; i < 20; i++ { // map order must not matter
+		e.m.reservations.put(reservation{opID: "op-b", code: "anna", tmuxName: "tm", at: tNow.Add(-time.Minute)})
+		e.m.reservations.put(reservation{opID: "op-a", code: "mia", tmuxName: "tm", at: tNow})
+		r, ok := e.m.reservations.byTmux("tm", tNow)
+		require.True(t, ok)
+		assert.Equal(t, "op-b", r.opID)
+	}
+}
+
+func TestReservations_AFutureStartDoesNotStretchTheTenMinutes(t *testing.T) {
+	e := reserveEnv(t)
+	ctx := context.Background()
+	e.start(poolSidB, tLate)
+	e.assign(poolSidB, "purdex-54-anna", store.PeerNameSourcePool) // anna is a live session's, so only mia is left
+	_, err := e.m.ReserveMember(ctx, poolSidA, "op-1", "tm-1", tNow.Add(3*time.Hour))
+	require.NoError(t, err)
+	e.m.now = func() time.Time { return tNow.Add(reservationTTL + time.Second) }
+	got, _ := e.m.ReserveMember(ctx, poolSidA, "op-2", "tm-2", e.m.now())
+	assert.Equal(t, "mia", got, "op-1 lapsed ten minutes after it was made, not after its claimed start")
+}

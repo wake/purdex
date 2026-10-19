@@ -74,7 +74,8 @@ type Reservation struct {
 
 // SpawnReservationReader is what the team module registers under team.SpawnReservationsKey: the open spawn ops that carry a
 // pool name, read once by the name service after a boot to rebuild its in-memory reservations. The peers module never opens
-// team.db. The name service works without it (it then starts with no reservations).
+// team.db. The name service calls it with its pool lock held, so an implementation must only read its own store and never call
+// back into the NameService. The name service works without it (it then starts with no reservations).
 type SpawnReservationReader interface {
 	OpenReservations(ctx context.Context) ([]Reservation, error)
 }
