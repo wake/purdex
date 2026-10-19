@@ -3388,11 +3388,16 @@ test('a member that types /team <persona> reads no list and is told to be releas
   expect(m.persons).toEqual([])
 })
 
-// spawn, adopt, release and kill are not names, and do not even read the list.
-test('/team spawn does not read the persona list', async ($, on) => {
-  const f = namesWorld(on, () => NAMES_OK)
+// spawn, adopt, release and kill are not names, and do not even read the list. Only a lead gets as far as the spawn, so this world
+// is a lead whose `pdx names` would answer. Mutation gate: teamSpawn reads the list → red.
+test('/team spawn in a lead reads no persona list: its token is the spawn token alone', async ($, on) => {
+  const base = pdxWith([], 'lead')
+  const f = relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? AS_LEAD(argv) : argv[0] === 'names' ? NAMES_OK : base(argv)) })
   await start($, f)
-  await teamCmd($, 'spawn 修登入 bug')
+  expect((await teamCmd($, 'spawn 修登入 bug')).text).toBe('已請這個 session 開一個 member')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1) // it got as far as the spawn prompt
+  expect(f.persons.map((p: string[]) => p.slice(5))).toEqual([['spawn']])
   expect(namesCalls(f)).toEqual([])
 })
 
