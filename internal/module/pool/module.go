@@ -73,15 +73,20 @@ type Module struct {
 	done        chan struct{}        // closed when that loop has ended
 	sentAt      map[string]time.Time // host alias -> when its last notice went
 	pending     map[string]*time.Timer
-	sendMu      sync.RWMutex // held for reading by a send under way; Stop takes it to wait for them
+	// sending counts the notices that have been let through (watching was true, under mu) and are not yet emitted; Stop waits on sendIdle
+	// until it is 0, so nothing is emitted once Stop has returned. emit must not call Stop (the core's BroadcastEvent does not).
+	sending  int
+	sendIdle *sync.Cond
 }
 
 func New() *Module {
-	return &Module{
+	m := &Module{
 		now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}, flights: map[string]*flight{},
 		logf: log.Printf, pollEvery: defaultPollEvery, mergeWithin: defaultMergeWithin,
 		sentAt: map[string]time.Time{}, pending: map[string]*time.Timer{},
 	}
+	m.sendIdle = sync.NewCond(&m.mu)
+	return m
 }
 
 func (m *Module) Name() string           { return "pool" }
@@ -158,9 +163,12 @@ func (m *Module) Stop(ctx context.Context) error {
 		t.Stop()
 		delete(m.pending, host)
 	}
+	// a notice already let through is emitted before Stop returns; no new one is let through (watching is false), and a timer callback that
+	// was waiting for mu finds its entry gone
+	for m.sending > 0 {
+		m.sendIdle.Wait()
+	}
 	m.mu.Unlock()
-	m.sendMu.Lock() // a send that had begun finishes first; the ones after it see watching false
-	m.sendMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}

@@ -23,24 +23,30 @@ const (
 )
 
 // watch reads the local wwd's pool every m.pollEvery until ctx ends and announces the hosts whose entry changed. The first read is only
-// the baseline (what is there already is not news), and so is the first read after wwd was away: the App re-reads when its own
-// connection to this daemon comes back, and a daemon that has just seen wwd again has nothing to compare with. wwd being absent is
-// retried quietly: a failure is logged when it starts and when it changes, not at every poll.
+// the baseline (what is there already is not news). When wwd goes away every host is announced once (the answer of /api/pool/hosts is an
+// error now), and the first read after it is back announces every host there was or is: the App stopped polling when it saw
+// pool.events.v1 and its connection to this daemon did not drop with wwd's, so without these notices it would keep an old pool for as long
+// as nothing else changed. wwd being absent is retried quietly: a failure is logged when it starts and when it changes, not at every poll.
 func (m *Module) watch(ctx context.Context) {
 	known := map[string]string{} // host alias -> what its entry looked like when last read
-	based := false
+	based, away := false, false
 	last := ""
 	for {
 		p, err := m.client().Pool(ctx)
 		switch {
 		case err == nil:
 			last = ""
-			m.compare(known, based, p)
-			based = true
+			m.compare(known, based, away, p)
+			based, away = true, false
 		case ctx.Err() != nil:
 			return
 		default:
-			based = false
+			if based && !away {
+				away = true
+				for alias := range known {
+					m.notify(alias)
+				}
+			}
 			if s := err.Error(); s != last {
 				last = s
 				m.logf("pool: events: reading the pool: %v", err)
@@ -56,8 +62,9 @@ func (m *Module) watch(ctx context.Context) {
 
 // compare notes how each host's entry looks now, announces the hosts that differ from the last look (a host that came or went is a
 // change of it), and forgets the hosts that are gone. The entry is the one GET /api/pool/hosts gives, so the notice is exactly "that
-// answer is different for this host now".
-func (m *Module) compare(known map[string]string, based bool, p wire.Pool) {
+// answer is different for this host now". Before the baseline nothing is announced; with all, every host in the answer or in the last look
+// is (wwd was away).
+func (m *Module) compare(known map[string]string, based, all bool, p wire.Pool) {
 	now := map[string]string{}
 	for _, h := range hostsOf(p).Hosts {
 		b, err := json.Marshal(h)
@@ -67,7 +74,7 @@ func (m *Module) compare(known map[string]string, based bool, p wire.Pool) {
 		now[h.Info.Alias] = string(b)
 	}
 	for alias, fp := range now {
-		if old, had := known[alias]; based && (!had || old != fp) {
+		if old, had := known[alias]; based && (all || !had || old != fp) {
 			m.notify(alias)
 		}
 		known[alias] = fp
@@ -83,7 +90,9 @@ func (m *Module) compare(known map[string]string, based bool, p wire.Pool) {
 }
 
 // notify announces host, at once if its last notice is mergeWithin or more ago, else when that time is up (a second change inside the
-// window joins the notice already waiting).
+// window joins the notice already waiting). A notice is let through only here, under mu and while watching: it is counted in m.sending
+// at once, so Stop, which waits for the count to reach 0, cannot return before it is emitted, and a timer callback that Stop (or a Stop and
+// a Start) overtook finds its entry gone and does nothing.
 func (m *Module) notify(host string) {
 	m.mu.Lock()
 	if !m.watching {
@@ -98,8 +107,9 @@ func (m *Module) notify(host string) {
 	wait := m.mergeWithin - now.Sub(m.sentAt[host])
 	if wait <= 0 {
 		m.sentAt[host] = now
+		m.sending++
 		m.mu.Unlock()
-		m.send(host)
+		m.emitNotice(host)
 		return
 	}
 	defer m.mu.Unlock()
@@ -112,28 +122,28 @@ func (m *Module) notify(host string) {
 		}
 		delete(m.pending, host)
 		m.sentAt[host] = m.now()
+		m.sending++
 		m.mu.Unlock()
-		m.send(host)
+		m.emitNotice(host)
 	})
 	m.pending[host] = t
 }
 
-// send broadcasts pool.changed for host (non-blocking: a client that cannot keep up misses a notice and re-reads on its next one).
-func (m *Module) send(host string) {
+// emitNotice broadcasts pool.changed for host (non-blocking: a client that cannot keep up misses a notice and re-reads on its next one)
+// and takes the notice off the count Stop waits on. The caller has counted it.
+func (m *Module) emitNotice(host string) {
+	defer func() {
+		m.mu.Lock()
+		m.sending--
+		m.sendIdle.Broadcast()
+		m.mu.Unlock()
+	}()
 	b, err := json.Marshal(wire.PoolChanged{Host: host})
 	if err != nil {
 		return
 	}
 	ev := core.HostEvent{Type: EventPoolChanged, Value: string(b)}
-	// Stop waits for the sends that have begun (sendMu) and a send that begins after it sees watching false, so nothing goes out once Stop
-	// has returned, also from a notice that was already past its window when Stop came
-	m.sendMu.RLock()
-	defer m.sendMu.RUnlock()
 	m.mu.Lock()
-	if !m.watching {
-		m.mu.Unlock()
-		return
-	}
 	emit, c := m.emit, m.core
 	m.mu.Unlock()
 	switch {
