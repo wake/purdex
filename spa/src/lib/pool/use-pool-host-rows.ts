@@ -3,6 +3,7 @@
 import { useFleetHostViews, type FleetHostLook } from '../fleet/use-fleet-host-views'
 import { matchPoolHost } from './cell-model'
 import { usePoolStore } from './store'
+import type { FallbackReason } from './host-view'
 import { usePoolCellModels } from './use-cell-models'
 import type { PoolFacts, PoolHost, PoolZone, Slots } from './types'
 import type { FleetFast } from '../fleet/types'
@@ -50,6 +51,8 @@ export interface PoolHostRow {
   version: string
   /** Fallback: when the pool last read the host (ms). Offline: the newest last-ok of the pool and the fleet. */
   since: number | null
+  /** Fallback: why the pool does not read the host. */
+  reason: FallbackReason | null
 }
 
 export function usePoolHostRows(): { rows: PoolHostRow[]; active: boolean; oldDaemon: boolean } {
@@ -68,7 +71,7 @@ export function usePoolHostRows(): { rows: PoolHostRow[]; active: boolean; oldDa
       zone: pool?.zone ?? null, worker: pool?.worker ?? null, headroom: pool?.headroom ?? null,
       readings: state === 'live' ? (poolHost?.facts ? readingsFromFacts(poolHost.facts) : null) : state === 'fallback' && original.fast ? readingsFromFleet(original.fast) : null,
       host: poolHost, version: poolHost?.version ?? '',
-      since: state === 'offline' ? m.view.last_ok_at : pool?.since ?? null,
+      since: state === 'offline' ? m.view.last_ok_at : pool?.since ?? null, reason: pool?.reason ?? null,
     }
   })
   return { rows, active, oldDaemon }

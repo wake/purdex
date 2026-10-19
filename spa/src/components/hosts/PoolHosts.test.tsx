@@ -181,7 +181,7 @@ describe('the overview table', () => {
     render(<PoolHostsSection />)
     await flush()
     const status = within(screen.getByTestId('pool-host-row-d-air26')).getByTestId('pool-host-status').textContent ?? ''
-    expect(status).toMatch(/^wwd is not answering( \(since .+\))?$/)
+    expect(status).toMatch(/^wwd is unreachable( \(since .+\))?$/)
   })
 
   it('a version behind the newest is marked, the newest and the unknown are not', async () => {

@@ -17,7 +17,7 @@ const host = (over: Record<string, unknown> = {}) => ({ ...baseHost, alias: 'mse
 const row = (over: Partial<PoolHostRow> = {}): PoolHostRow => ({
   id: 'p-mserv', name: 'mserv', kind: 'probe', look: { icon: 'Desktop', iconWeight: '', colors: undefined } as never,
   state: 'live', dot: 'live', zone: 'normal', worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } },
-  headroom: { heavy: 1, light: 4 }, readings: { cpu: 20, mem: 50, level: 1, disk: 40, diskFree: 120 }, version: '1.0.0-alpha.755', since: null, host: host() as never, ...over,
+  headroom: { heavy: 1, light: 4 }, readings: { cpu: 20, mem: 50, level: 1, disk: 40, diskFree: 120 }, version: '1.0.0-alpha.755', since: null, reason: null, host: host() as never, ...over,
 })
 
 beforeEach(() => { cleanup(); openWatchArea.mockReset(); clearViewMemory() })
@@ -37,6 +37,15 @@ describe('the pool host page', () => {
     expect(screen.getByTestId('pool-page-worker').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-now').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-tools').textContent).toContain('Unknown')
+  })
+
+  it('the header says which fallback it is: wwd unreachable, or answering with numbers that stopped', () => {
+    const fb = { state: 'fallback', dot: 'warn', since: null } as const
+    render(<PoolHostPage row={row({ ...fb, reason: 'unreachable' })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd is unreachable')
+    cleanup()
+    render(<PoolHostPage row={row({ ...fb, reason: 'stale' })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd answers, but its numbers stopped')
   })
 
   it('現在 shows the row\'s readings: CPU, memory, pressure, disk', () => {
