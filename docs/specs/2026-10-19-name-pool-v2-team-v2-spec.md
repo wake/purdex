@@ -503,6 +503,19 @@ This is the default classification from the page's probe table. **[待確認]**
   - It reuses the JV-5b sections: `TeamSettingsPanel` content and `Steppers.tsx` from #3187 / #3188, which are closed
     unmerged, and the JV-5b 1/3 shared reader (#3186).
   - The exact layout is fixed in the design phase on a real screen (Opus, the 10-16 rule).
+  - 761 acceptance (user, 2026-10-20, #3652):
+    - The labels of the settings block and of the opened editor are `text-text-secondary`; the values keep their colour.
+      The steppers take the label colour from their caller (`Steppers.tsx` `labelClass`), so the unattended panel keeps
+      `text-text-muted`.
+    - The folders line is read-only chips. Its button is a Phosphor `PencilSimple` (i18n label, `aria-expanded`) that
+      opens the editor under the line; adding and removing happen in the editor only.
+    - In the editor, a `border-border-subtle` divider separates 「成員可啟動的目錄」 from 「其他主機的資料夾」 (only when
+      other hosts are listed).
+    - The other hosts' folders that are **applied** are chips on the line too, after the team's own, each with a
+      `HostBadge` (a neutral badge when the host has no id or no look) and the tooltip 「{{alias}}：路徑（整台 {{lead}}
+      共用，所有 team）」. Pending and refused changes are not listed. These grants belong to the lead's host and are
+      shared by all its teams; the local roots are each team's own.
+    - Opening the editor re-reads the host roots (a read already in flight queues one more).
 
 ### 9.6 Sidebar (U10, U11, U12)
 
