@@ -71,6 +71,8 @@ type Options struct {
 	// origin quarantines the label here, and pdx wwd quarantine|release change it by hand. nil: neither exists.
 	Labels    LabelKeeper
 	CacheDrop CacheDropper
+	// Qualifier is the qualification coordinator (spec §7): POST /v1/qualify and GET /v1/qualify on the socket serve from it. nil: no such routes.
+	Qualifier Qualifier
 	// Now is the clock the observation and usage routes take their default periods from. nil: time.Now.
 	Now func() time.Time
 }
@@ -188,6 +190,7 @@ func (d *Daemon) SocketHandler() http.Handler {
 	d.usageRoutes(mux)
 	d.earnedRoutes(mux)
 	d.quarantineRoutes(mux)
+	d.qualifyRoutes(mux)
 	if d.opts.ClaimRoutes != nil {
 		d.opts.ClaimRoutes(mux)
 	}

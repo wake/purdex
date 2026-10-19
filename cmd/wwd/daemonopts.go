@@ -28,6 +28,8 @@ type daemonParts struct {
 	Store                *store.Store
 	// Refs is the reader of the clones' manifests, shared with the drift watcher so both use one cache; nil: the daemon makes its own.
 	Refs *refTaskSource
+	// Qualifier is the qualification coordinator behind POST /v1/qualify; nil: no such routes.
+	Qualifier daemon.Qualifier
 }
 
 // daemonOptions is the daemon's options. LocalRuns and ClaimRoutes are set together: the claim routes on the socket are what the host's
@@ -51,5 +53,6 @@ func daemonOptions(p daemonParts) daemon.Options {
 		Observer:       p.Observer,
 		Alerts:         p.Store, // GET /v1/alerts (spec §13.3): read only until the alert rules write the table (8a-1, 8a-2)
 		Usage:          p.Store, // GET /v1/usage on the socket: what finished jobs used (rows are written by the job-end hook, WWD usage U3)
+		Qualifier:      p.Qualifier,
 	}
 }

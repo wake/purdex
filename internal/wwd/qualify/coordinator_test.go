@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -103,6 +99,7 @@ type fakeSource struct {
 	mu         sync.Mutex
 	host       Host
 	tasks      []Task
+	tasksErr   error
 	prepareErr error
 	prepared   atomic.Int32
 }
@@ -129,7 +126,7 @@ func cloneMap(m map[string]string) map[string]string {
 	return out
 }
 
-func (s *fakeSource) Tasks() []Task { return s.tasks }
+func (s *fakeSource) Tasks() ([]Task, error) { return s.tasks, s.tasksErr }
 
 func (s *fakeSource) Prepare(_ context.Context, t Task) (wire.JobSubmission, error) {
 	s.prepared.Add(1)
@@ -502,36 +499,103 @@ func TestAnUnreadableEarnedStoreStartsNothing(t *testing.T) {
 	}
 }
 
-// 5b-2b is a library: nothing in the daemon's wiring or routes reaches the coordinator. 5b-2c is the PR that wires it and deletes this test
-// (it must not go out before the passed-test digest writers, docs/plans WWD-5).
-func TestNothingWiresTheCoordinatorYet(t *testing.T) {
-	const self = "github.com/wake/purdex/internal/wwd/qualify"
-	for _, dir := range []string{"../../../cmd/wwd", "../daemon", "../jobsapi", "../jobscmd", "../../../cmd/pdx"} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.ImportsOnly)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, imp := range f.Imports {
-				if strings.Trim(imp.Path.Value, `"`) == self {
-					t.Errorf("%s imports the qualify package: 5b-2b must not wire the coordinator", filepath.Join(dir, name))
-				}
-			}
-			src, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(src), "/v1/qualify") {
-				t.Errorf("%s names a qualify route: 5b-2b must not add one", filepath.Join(dir, name))
-			}
-		}
+// A pair a person started by hand is settled by Settle alone: no other request and no automatic tick is needed.
+func TestSettleFinishesAManualPairWithoutATick(t *testing.T) {
+	r := newRig(t, tsc)
+	if _, err := r.c.Request(ctx(), "purdex/tsc"); err != nil {
+		t.Fatal(err)
+	}
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.now = r.now.Add(3 * time.Minute)
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 0 || len(rec) != 1 || rec[0].Outcome != OutcomeMatch {
+		t.Fatalf("%+v %+v", inf, rec)
+	}
+	if r.granted.Load() != 1 {
+		t.Fatalf("the daemon was told %d times", r.granted.Load())
+	}
+}
+
+func TestRunSettleSettlesOnItsPeriodAndStopsWithItsContext(t *testing.T) {
+	r := newRig(t, tsc)
+	if _, err := r.c.Request(ctx(), "purdex/tsc"); err != nil {
+		t.Fatal(err)
+	}
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	cctx, cancel := context.WithCancel(ctx())
+	done := make(chan struct{})
+	go func() { r.c.RunSettle(cctx, time.Millisecond); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.granted.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunSettle did not stop with its context")
+	}
+	if r.granted.Load() != 1 {
+		t.Fatalf("settled %d times", r.granted.Load())
+	}
+}
+
+// A manifest that cannot be read is not an unknown task: a request for a task that is not found while one is broken is a fault of the host
+// (not the 404), and the retry memory of the tasks that cannot be seen is kept.
+func TestABrokenManifestIsNotAnUnknownTask(t *testing.T) {
+	r := newRig(t, tsc)
+	r.src.tasksErr = errors.New("a: manifest does not parse")
+	_, err := r.c.Request(ctx(), "purdex/nope")
+	var unknown *UnknownTaskError
+	if err == nil || errors.As(err, &unknown) || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("%v", err)
+	}
+	r.src.tasksErr = nil
+	if _, err := r.c.Request(ctx(), "purdex/nope"); !errors.As(err, &unknown) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestABrokenManifestKeepsTheRetryMemory(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.last[tsc.Label()] = Attempt{At: r.now, Outcome: OutcomeMismatch}
+	r.src.tasks, r.src.tasksErr = nil, errors.New("unreadable")
+	r.c.Tick(ctx())
+	if _, ok := r.c.last[tsc.Label()]; !ok {
+		t.Fatal("the retry memory of a task hidden by a broken manifest was dropped")
+	}
+	r.src.tasksErr = nil
+	r.c.Tick(ctx())
+	if _, ok := r.c.last[tsc.Label()]; ok {
+		t.Fatal("the retry memory of a task that is gone was kept")
+	}
+}
+
+// A pair that matched is not voided by a manifest that cannot be read at the moment it is settled: it stays, and is settled (and earns the
+// label) on the first look after the manifest can be read again.
+func TestAMatchWaitsOutAManifestThatCannotBeReadJustNow(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.now = r.now.Add(3 * time.Minute)
+	r.src.tasks, r.src.tasksErr = nil, errors.New("unreadable just now")
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 1 || len(rec) != 0 || len(r.st.rows) != 0 {
+		t.Fatalf("%+v %+v %+v", inf, rec, r.st.rows)
+	}
+	r.src.tasks, r.src.tasksErr = []Task{tsc}, nil
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 0 || len(rec) != 1 || rec[0].Outcome != OutcomeMatch || len(r.st.rows) != 1 {
+		t.Fatalf("%+v %+v %+v", inf, rec, r.st.rows)
+	}
+	// and a task that is known to be gone (the read worked) is still void
+	r2 := newRig(t, tsc)
+	r2.c.Tick(ctx())
+	r2.finishPair(goodRes("mserv"), goodRes("air26"))
+	r2.now = r2.now.Add(3 * time.Minute)
+	r2.src.tasks = nil
+	r2.c.Settle(ctx())
+	if _, rec := r2.c.Status(); len(rec) != 1 || rec[0].Outcome != OutcomeVoid {
+		t.Fatalf("%+v", rec)
 	}
 }
