@@ -218,9 +218,9 @@ func (d *Daemon) info() wire.Info {
 // record, refreshes the labels and the fingerprint, and announces the labels
 // only when they really changed.
 func (d *Daemon) OnFacts(f wire.Facts) {
-	d.broker.PublishFacts(f)
-	d.labelsMu.Lock()
+	d.labelsMu.Lock() // the record's event goes out under the same lock as its labels, after any refresh that is already running
 	defer d.labelsMu.Unlock()
+	d.broker.PublishFacts(f)
 	d.lastFacts = &f
 	d.updateLabels(f)
 }

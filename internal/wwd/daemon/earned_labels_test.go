@@ -199,16 +199,22 @@ func TestOnlyTaskLabelsAreAdvertisedFromTheStore(t *testing.T) {
 	}
 }
 
-// OnFacts and RefreshLabels never interleave: a refresh that read an older record cannot land after a newer record's update. The
-// store read of the refresh is held while OnFacts(B) is called; B must wait for the refresh, so the last labels are B's.
+// OnFacts and RefreshLabels never interleave, in the state and in the events: a refresh that is in flight when a newer record arrives
+// announces its labels first, then the record, then the record's labels. The refresh's store read is held while OnFacts(B) is called;
+// B must wait for it.
 func TestRefreshCannotOverwriteANewerRecord(t *testing.T) {
 	gate := &gatedEarned{release: make(chan struct{}), entered: make(chan struct{}, 2)}
 	d := earnedDaemon(t, Options{Earned: gate})
+	ch, cancel := d.Events().Subscribe(false)
+	defer cancel()
 	a := wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("24.14.0")}}
 	b := wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("25.0.0")}}
 	gate.pass = true
 	d.OnFacts(a)
+	recv(t, ch) // facts A
+	recv(t, ch) // labels A
 	gate.pass = false
+	gate.rows = []wire.EarnedLabel{{Label: "task:purdex/tsc", State: wire.EarnedLabelEarned}} // the refresh finds a change to announce
 
 	done := make(chan struct{})
 	go func() { d.RefreshLabels(); close(done) }()
@@ -220,9 +226,19 @@ func TestRefreshCannotOverwriteANewerRecord(t *testing.T) {
 		t.Fatal("OnFacts ran while a refresh was in flight")
 	case <-time.After(50 * time.Millisecond):
 	}
+	none(t, ch) // not even the facts event of B has gone out yet
 	close(gate.release)
 	<-done
 	<-onB
+	if e := recv(t, ch); e.Type != wire.EventLabels {
+		t.Fatalf("first the refresh's labels, got %s", e.Type)
+	}
+	if e := recv(t, ch); e.Type != wire.EventFacts {
+		t.Fatalf("then the record, got %s", e.Type)
+	}
+	if ev := labelsEvent(t, recv(t, ch)); !slices.Contains(ev.Labels, "tool:node25") {
+		t.Fatalf("then the record's labels: %v", ev.Labels)
+	}
 	if got := infoOf(t, d).Labels; !slices.Contains(got, "tool:node25") || slices.Contains(got, "tool:node24") {
 		t.Fatalf("the older record won: %v", got)
 	}
@@ -230,6 +246,7 @@ func TestRefreshCannotOverwriteANewerRecord(t *testing.T) {
 
 type gatedEarned struct {
 	pass    bool
+	rows    []wire.EarnedLabel
 	release chan struct{}
 	entered chan struct{}
 }
@@ -240,5 +257,5 @@ func (g *gatedEarned) EarnedLabels() ([]wire.EarnedLabel, error) {
 	}
 	g.entered <- struct{}{}
 	<-g.release
-	return nil, nil
+	return g.rows, nil
 }
