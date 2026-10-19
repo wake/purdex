@@ -122,16 +122,45 @@ func TestTheReferenceIsTheOneOfTheMomentTheJobEnds(t *testing.T) {
 	f := newFixture(t)
 	f.reference("air26")
 	ref := f.endAs(t, "air26", []string{"os:linux"}, 0) // air26 is the reference now: its outcome is recorded as the reference's
-	f.reference("mserv")                                // and then the reference is another host
 	bad := f.endAs(t, "mini", []string{"os:linux", specLabel}, 1)
 	got, _, err := f.q.Disagreements(bg, "mini", 0, 100)
 	require.NoError(t, err)
-	require.Len(t, got, 1, "air26's outcome was the reference's when it ended, and stays so")
-	assert.Equal(t, "air26", got[0].OtherHost)
+	require.Len(t, got, 1, "air26's outcome was the reference's when it ended")
 	assert.Equal(t, [2]string{ref, bad}, got[0].Jobs)
+
+	f.reference("mserv") // and then the reference is another host: what came out under air26 is of another generation
+	f.endAs(t, "mini", []string{"os:linux", specLabel}, 1)
+	again, _, err := f.q.Disagreements(bg, "mini", 0, 100)
+	require.NoError(t, err)
+	assert.Len(t, again, 1, "no new disagreement: the new reference has not answered yet, and air26 no longer speaks for the work")
 	none, _, err := f.q.Disagreements(bg, "air26", 0, 100)
 	require.NoError(t, err)
 	assert.Empty(t, none, "it is not made a subject by having stopped being the reference")
+}
+
+// The reference changes from one host to another and the two disagree: they are not compared as two references (nobody to quarantine) and
+// the old reference is not the authority over the new generation: the earned host is compared with the reference of its own time.
+func TestAReferenceRotationDoesNotSilenceOrMisdirect(t *testing.T) {
+	f := newFixture(t)
+	f.reference("air26")
+	f.endAs(t, "air26", []string{"os:linux"}, 0) // reference A succeeds
+	f.reference("mserv")
+	f.endAs(t, "mserv", []string{"os:linux"}, 1) // reference B fails the same work
+	f.endAs(t, "mini", []string{"os:linux", specLabel}, 1)
+	for _, subject := range []string{"air26", "mserv", "mini"} {
+		got, _, err := f.q.Disagreements(bg, subject, 0, 100)
+		require.NoError(t, err)
+		if subject == "mini" {
+			assert.Empty(t, got, "mini agrees with the reference of its time (B), and A is not the authority over it")
+		} else {
+			assert.Empty(t, got, subject)
+		}
+	}
+	f.endAs(t, "mini", []string{"os:linux", specLabel}, 0) // now mini differs from B
+	got, _, err := f.q.Disagreements(bg, "mini", 0, 100)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "mserv", got[0].OtherHost)
 }
 
 // The record and the end are one transaction: if the outcome cannot be written, the result is not taken (the worker repeats it), and when

@@ -27,16 +27,17 @@ const (
 
 // Outcome is how one ended job of a declared task came out, on the host that made it.
 type Outcome struct {
-	JobID    string
-	Host     string // result.host: who ran it
-	Label    string // task:<repo>/<task>
-	Tree     string // the snapshot's tree
-	Task     string
-	Args     []string
-	DefHash  string    // the task's definition hash as submitted
-	OK       bool      // the command exited 0
-	Standing string    // StandingEarned or StandingReference
-	At       time.Time // when it ended, on the origin's clock (retention counts from it)
+	JobID     string
+	Host      string // result.host: who ran it
+	Label     string // task:<repo>/<task>
+	Tree      string // the snapshot's tree
+	Task      string
+	Args      []string
+	DefHash   string    // the task's definition hash as submitted
+	Reference string    // the task's reference host when it ended ("" for none): outcomes under another reference are of another generation, not compared
+	OK        bool      // the command exited 0
+	Standing  string    // StandingEarned or StandingReference
+	At        time.Time // when it ended, on the origin's clock (retention counts from it)
 }
 
 func (o Outcome) validate() error {
@@ -64,7 +65,7 @@ func (o Outcome) workKey() string {
 	if args == nil {
 		args = []string{}
 	}
-	b, err := json.Marshal([]any{1, o.Label, o.Tree, o.Task, args, o.DefHash})
+	b, err := json.Marshal([]any{2, o.Label, o.Tree, o.Task, args, o.DefHash, o.Reference})
 	if err != nil { // strings and a slice of strings cannot fail to encode
 		panic("queue: outcome: " + err.Error())
 	}
@@ -102,10 +103,10 @@ func recordOutcomeOn(ctx context.Context, c *sql.Conn, o Outcome) ([]wire.Disagr
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, nil // this job was recorded before
 	}
-	// the latest outcome of each other host (by the index on work_key, host, seq, not by reading all of them) is the one to compare with
-	rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes AS t
-		WHERE work_key = ? AND host != ?
-		  AND seq = (SELECT max(seq) FROM task_outcomes WHERE work_key = t.work_key AND host = t.host)`, key, o.Host)
+	// the latest outcome of each other host is the one to compare with: one pass over the index on (work_key, host, seq) that takes the greatest seq
+	// of each host, not a lookup per row
+	rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes
+		WHERE seq IN (SELECT max(seq) FROM task_outcomes WHERE work_key = ? AND host != ? GROUP BY host)`, key, o.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +168,7 @@ func (q *Queue) recordEndedOutcome(ctx context.Context, c *sql.Conn, j wire.Job,
 	default:
 		return nil
 	}
-	o := Outcome{JobID: j.ID, Host: j.Result.Host, Label: label, Tree: j.Snapshot.Tree, Task: j.Task, Args: j.Args, DefHash: p.DefHash,
+	o := Outcome{JobID: j.ID, Host: j.Result.Host, Label: label, Tree: j.Snapshot.Tree, Task: j.Task, Args: j.Args, DefHash: p.DefHash, Reference: reference,
 		OK: *j.Result.Exit == 0, Standing: standing, At: q.now()}
 	if err := o.validate(); err != nil {
 		// something about the job cannot be recorded (a label that is not a task label, a host name that is not one): not worth failing the
