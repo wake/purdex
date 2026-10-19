@@ -40,13 +40,13 @@ export function QuotaStepper({ hostId, row, name, field, label }: { hostId: stri
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
-      <StepButton sign="−" label={t('unattended.quota.minus', { field: label, name })} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
+      <StepButton sign="−" label={t('unattended.quota.step_minus', { field: label, name })} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
       <NumberField
         testId="quota-value" ariaLabel={t('unattended.quota.value_name', { field: label, name })} value={value}
         validate={(n) => (n > QUOTA_MAX ? t('unattended.field.range', { min: '0', max: String(QUOTA_MAX) }) : null)}
         onCommit={write}
       />
-      <StepButton sign="+" label={t('unattended.quota.plus', { field: label, name })} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
+      <StepButton sign="+" label={t('unattended.quota.step_plus', { field: label, name })} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
     </span>
   )
 }

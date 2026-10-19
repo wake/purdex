@@ -65,6 +65,18 @@ describe('QuotaStepper accessible names', () => {
     expect(screen.queryByRole('button', { name: '減少' })).toBeNull()
   })
 
+  it('a custom locale saved before this change, with the old bare 「Decrease」 / 「Increase」 for the old keys, does not take the names away (the buttons use their own keys; a missing one falls back to the built-in English)', () => {
+    const id = useI18nStore.getState().importLocale({ name: 'Old custom', translations: { 'unattended.quota.minus': 'Decrease', 'unattended.quota.plus': 'Increase', 'unattended.quota.self': 'Auto relay', 'unattended.quota.pool': 'Members' } })
+    useI18nStore.getState().setLocale(id)
+    mountTwoLeads()
+    const names = stepButtons().map((b) => b.getAttribute('aria-label'))
+    expect(names).toContain('Decrease Auto relay quota (Alma)')
+    expect(names).toContain('Increase Members quota (Bram)')
+    expect(new Set(names).size).toBe(8)
+    expect(names).not.toContain('Decrease')
+    expect(names).not.toContain('Increase')
+  })
+
   it('the number box has the same name without the action, so it is told apart too', () => {
     useI18nStore.getState().setLocale('zh-TW')
     mountTwoLeads()
