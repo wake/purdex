@@ -7,7 +7,7 @@ export const MAX_GROUPS = 32
 export const MAX_ROOTS = 64
 const MAX_NAME_BYTES = 64
 
-export type EditError = 'group-gone' | 'group-full' | 'too-many-groups' | 'bad-name' | 'id-taken'
+export type EditError = 'group-gone' | 'group-full' | 'too-many-groups' | 'bad-name' | 'id-taken' | 'group-changed' | 'group-in-use'
 export type EditResult = { groups: TaskGroup[] } | { error: EditError }
 
 /** The name's rule is the team name's (`peers.ValidateTitle`): 1–64 bytes, printable. `null` = fine. */
@@ -62,4 +62,16 @@ export function renameGroup(groups: readonly TaskGroup[], groupId: string, name:
 export function deleteGroup(groups: readonly TaskGroup[], groupId: string): EditResult {
   if (!groups.some((g) => g.id === groupId)) return { error: 'group-gone' }
   return { groups: groups.filter((g) => g.id !== groupId) }
+}
+
+/**
+ * Deletes the group only while what the person confirmed still holds, judged on the copy this edit meets (so a retry after a lost compare-and-set re-checks it): the group still holds exactly the roots that were
+ * shown (another device has not filed anything in it since), and none of them is a live session (`live` = the roots of every live session of the host, read just before).
+ */
+export function deleteGroupIf(groups: readonly TaskGroup[], groupId: string, expectedRoots: readonly string[], live: ReadonlySet<string>): EditResult {
+  const g = groups.find((x) => x.id === groupId)
+  if (!g) return { error: 'group-gone' }
+  if (g.roots.length !== expectedRoots.length || !expectedRoots.every((r) => g.roots.includes(r))) return { error: 'group-changed' }
+  if (g.roots.some((r) => live.has(r))) return { error: 'group-in-use' }
+  return { groups: groups.filter((x) => x.id !== groupId) }
 }

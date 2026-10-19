@@ -31,8 +31,7 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 			}
 			c.Grant = &g
 		}
-		t := leadTeamOf(a, *c.Grant, c.DecidedAt)
-		after, won, err = m.closeWith(a.ID, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(a.ID, c, t) })
+		after, won, err = m.approveLead(a, c)
 	case team.KindAdopt:
 		after, won, err = m.approveAdopt(a, c)
 	case team.KindSelfRelay:

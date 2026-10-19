@@ -60,7 +60,7 @@ func TestAVersionFiveDatabaseGainsTheManualPlace(t *testing.T) {
 	require.NoError(t, Migrate(bg, f.db))
 	var v int
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 6, v)
+	assert.Equal(t, schemaVersion, v)
 	j := f.get(t, a)
 	assert.Equal(t, wire.Position(""), j.Manual)
 	assert.Zero(t, j.ManualSeq)

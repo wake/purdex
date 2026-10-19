@@ -22,6 +22,7 @@ import { AskStrip } from './dock/AskStrip'
 import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
+import { useSessionSeat } from '../hooks/useSessionSeat'
 import { LaunchPanel } from './LaunchPanel'
 import { WatchLaunchPanel } from './watch/WatchLaunchPanel'
 import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
@@ -45,6 +46,8 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const hostId = content.kind === 'tmux-session' ? content.hostId : ''
   const tmuxInstance = content.kind === 'tmux-session' ? content.tmuxInstance : ''
   const terminated = content.kind === 'tmux-session' ? content.terminated : undefined
+  // Who the agent of this pane is, when it is a persona (name pool v2 spec §9.4): its face and name head the deck's speech.
+  const seat = useSessionSeat(hostId, sessionCode, tmuxInstance)
 
   const wsBase = useHostStore((s) => s.getWsBase(hostId))
   // A reference this device cannot resolve (host ownership spec §3.2) is kept
@@ -221,6 +224,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           isFocusTarget={isFocusTarget}
           onSwitchToTerminal={switchToTerminal}
           footer={footer}
+          seat={seat}
         />
       )}
       {!showLaunchView && view === 'chat' && (

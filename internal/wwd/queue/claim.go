@@ -46,9 +46,11 @@ func (q *Queue) claim(ctx context.Context, id string, req wire.ClaimRequest, for
 			return &ConflictError{State: h.state} // a held job is queued and stays so: the worker moves on to the next
 		}
 		now := q.now().UnixMilli()
+		// what the worker says it is, kept with the claim: the result it posts is filed under this, not under what the host is by then
+		labels, fp := claimFacts(req)
 		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'claimed', claim_worker = ?, claim_id = ?, claim_since = ?,
-			lease_deadline = ?, lease_s = ?, cancel_requested = 0, updated_at = ? WHERE id = ?`,
-			req.Worker, claimID, now, q.deadline(now), q.leaseS, now, id); err != nil {
+			lease_deadline = ?, lease_s = ?, cancel_requested = 0, updated_at = ?, claim_labels = ?, claim_fingerprint = ? WHERE id = ?`,
+			req.Worker, claimID, now, q.deadline(now), q.leaseS, now, labels, fp, id); err != nil {
 			return err
 		}
 		*changed = append(*changed, id)
@@ -208,6 +210,8 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		return wire.Job{}, err
 	}
 	var out wire.Job
+	var produced Produced
+	ended := false // this call ended the job: not the echo of a result posted before
 	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
@@ -225,11 +229,18 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 			return err
 		}
 		*changed = append(*changed, id)
+		if produced, err = producedOn(ctx, c, id); err != nil {
+			return err
+		}
+		ended = true
 		out, err = getOn(ctx, c, id, false)
 		return err
 	})
 	if err != nil {
 		return wire.Job{}, err
+	}
+	if ended {
+		q.offerResult(ctx, out, produced)
 	}
 	return out, nil
 }

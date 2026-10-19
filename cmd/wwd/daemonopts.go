@@ -43,7 +43,8 @@ func daemonOptions(p daemonParts) daemon.Options {
 		Token: p.Token, Fault: p.Hooks, WorkerEnabled: p.Cfg.Worker.Enabled, Sampler: p.Sampler, Peers: p.Peers,
 		State: p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: repos.Names,
 		ReferenceTasks: refs.Tasks, // the tasks whose qualify.reference is this host, read from the clones' manifests
-		Earned:         p.Store,    // task labels this host earned or lost (spec §7): the earned ones are advertised; GET /v1/earned-labels on the socket
+		ResultCache:    p.Store,
+		Earned:         p.Store, // task labels this host earned or lost (spec §7): the earned ones are advertised; GET /v1/earned-labels on the socket
 		ClaimRoutes:    func(mux *http.ServeMux) { jobsapi.New(p.Queue).WithFault(p.Hooks).WorkerRoutes(mux, false) },
 		Observer:       p.Observer,
 		Alerts:         p.Store, // GET /v1/alerts (spec §13.3): read only until the alert rules write the table (8a-1, 8a-2)

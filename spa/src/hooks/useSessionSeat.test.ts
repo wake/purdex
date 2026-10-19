@@ -99,6 +99,11 @@ describe('useSessionSeat', () => {
     expect(result.current).toMatchObject({ code: 'kenji' })
   })
 
+  it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])('a pane naming the prototype member %s as its host is no host: null, and nothing throws', (hostId) => {
+    const { result } = renderHook(() => useSessionSeat(hostId, 'S1'))
+    expect(result.current).toBeNull()
+  })
+
   it('never asks for anything: no peers refresh', () => {
     const refresh = vi.spyOn(usePeerStore.getState(), 'refresh')
     setPeers({ S1: peerRow('mlab/proj-1-freya') })

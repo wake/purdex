@@ -203,6 +203,8 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 		}
 	}
 	return m.closeWith(id, func() (team.Approval, bool, error) {
+		// only the CAS waits for a lead approval in the middle of its rename; the announce after it runs without the lock
+		defer m.approvalLocks.lock(id)()
 		return m.store.CloseIfExpired(id, now, Close{State: state, DecidedAt: now})
 	})
 }

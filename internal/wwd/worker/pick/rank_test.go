@@ -2,6 +2,7 @@ package pick
 
 import (
 	"math"
+	"sort"
 	"testing"
 	"time"
 
@@ -175,6 +176,26 @@ func TestNoLabelsRequiredAlwaysRuns(t *testing.T) {
 	env := baseEnv()
 	env.Labels = nil
 	eq(t, ids(Rank([]Candidate{cand(j)}, env)), []string{"x"})
+}
+
+func TestExplicitLabelsOnlySkipsJobsWithoutAnOsOrTaskLabel(t *testing.T) {
+	env := baseEnv()
+	env.Labels = []string{"go", "os:linux", "task:purdex/test"}
+	env.ExplicitLabelsOnly = true
+	none, plain, withOS, withTask := job("none", wire.ClassDev, 0), job("plain", wire.ClassDev, 0), job("os", wire.ClassDev, 0), job("task", wire.ClassDev, 0)
+	none.Labels = nil
+	withOS.Labels = []string{"os:linux"}
+	withTask.Labels = []string{"go", "task:purdex/test"}
+	r := Rank([]Candidate{cand(none), cand(plain), cand(withOS), cand(withTask)}, env)
+	got := ids(r)
+	sort.Strings(got)
+	eq(t, got, []string{"os", "task"})
+}
+
+func TestExplicitLabelsOnlyOffKeepsUnlabeledJobs(t *testing.T) {
+	none := job("none", wire.ClassDev, 0)
+	none.Labels = nil
+	eq(t, ids(Rank([]Candidate{cand(none)}, baseEnv())), []string{"none"})
 }
 
 func manual(j wire.Job, pos wire.Position, seq int64) wire.Job {
