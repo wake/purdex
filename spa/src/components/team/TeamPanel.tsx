@@ -27,7 +27,7 @@ import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { seatName, usePersonaRevision } from '../../lib/names/seat'
+import { seatLabel, seatName, usePersonaRevision } from '../../lib/names/seat'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
@@ -60,7 +60,7 @@ export function TeamPanel(props: Props) {
   const live = drill ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId) : undefined
   // the persona's name (through the daemon's address the seat had), else the title it had, else its id
   const drillTitle = drill
-    ? live ? seatName(live.address, live.title) : ended ? (ended.address ? seatName(ended.address, ended.title) : ended.title) : drill.sessionId
+    ? live ? seatName(live.address, live.title) : ended ? ((ended.address ? seatLabel(ended.address, ended.title) : null) ?? ended.title) : drill.sessionId
     : ''
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className={`text-xs text-text-primary${drill ? ' flex flex-col flex-1 min-h-0' : ''}`}>

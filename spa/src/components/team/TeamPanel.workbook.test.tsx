@@ -284,7 +284,7 @@ describe('the persona names of the ended list and the workbook heading', () => {
     ])
     mount()
     fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
-    expect(screen.getAllByTestId('team-panel-ended-row').map((r) => r.textContent)).toEqual(['Xia', 'gone Y'])
+    expect(screen.getAllByTestId('team-panel-ended-row').map((r) => r.textContent)).toEqual(['Xia · gone X', 'gone Y'])
   })
 
   it('the heading of a drilled-in live seat names the persona; an ended one does too, through its stored address', () => {
@@ -299,7 +299,22 @@ describe('the persona names of the ended list and the workbook heading', () => {
     useTeamUiStore.getState().recordEndedSeats(KEY, [{ hostId: HOST, sessionId: 'Z', title: 'gone Z', address: 'mlab/Z-xx', endedAt: 1 }])
     useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'Z' })
     mount()
-    expect(screen.getByTestId('team-seat-workbook')).toHaveTextContent('Xia 的工作簿')
+    expect(screen.getByTestId('team-seat-workbook')).toHaveTextContent('Xia · gone Z 的工作簿')
+  })
+
+  it('two ended seats of one persona stay apart: each row keeps the title the seat had', () => {
+    scene()
+    seedXia()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [
+      { hostId: HOST, sessionId: 'X1', title: 'deploy', address: 'mlab/X1-xx', endedAt: 1 },
+      { hostId: HOST, sessionId: 'X2', title: 'review', address: 'mlab/X2-xx', endedAt: 2 },
+    ])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
+    const rows = screen.getAllByTestId('team-panel-ended-row').map((r) => r.textContent)
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows).size).toBe(2)
+    expect(rows).toEqual(expect.arrayContaining(['Xia · deploy', 'Xia · review']))
   })
 
   it('redraws when the persona collection arrives after the first draw', () => {
@@ -309,6 +324,6 @@ describe('the persona names of the ended list and the workbook heading', () => {
     fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
     expect(screen.getAllByTestId('team-panel-ended-row')[0]).toHaveTextContent('gone X')
     act(() => seedXia())
-    expect(screen.getAllByTestId('team-panel-ended-row')[0]).toHaveTextContent('Xia')
+    expect(screen.getAllByTestId('team-panel-ended-row')[0]).toHaveTextContent('Xia · gone X')
   })
 })
