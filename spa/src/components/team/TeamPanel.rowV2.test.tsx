@@ -45,12 +45,13 @@ beforeEach(() => {
 afterEach(() => { cleanup() })
 
 describe('a row of the full panel (v2)', () => {
-  it('the avatar is 44 px and holds the light as its corner badge; the icon on line 1 has no light', () => {
+  it('the avatar is 44 px and holds no light; the light is the line-1 icon\'s top-right corner', () => {
     mount()
     const a = row('A')
     const avatar = within(a).getByTestId('team-panel-avatar')
     expect(avatar.className).toMatch(/w-11/)
-    expect(within(avatar).getByTestId('team-panel-light')).toBeTruthy()
+    expect(within(avatar).queryByTestId('team-panel-light')).toBeNull()
+    expect(within(within(a).getByTestId('team-panel-icon-light')).getByTestId('team-panel-light')).toBeTruthy()
     expect(within(a).getByTestId('seat-icon')).toHaveAttribute('data-light', 'false')
     expect(within(a).getAllByTestId('team-panel-light')).toHaveLength(1) // and it is the only one
   })
