@@ -22,6 +22,8 @@ export interface SessionRoots {
   rootOf: (hostId: string, agentSessionId: string) => string | null
   /** The host's quota rows have been read (so `rootOf` can tell a session that is not listed from one not asked about yet). */
   rootsKnown: (hostId: string) => boolean
+  /** The lineage roots of EVERY live session the daemon listed for the host (not only the ones with an open tab), or null when the host has not been read. */
+  liveRoots: (hostId: string) => ReadonlySet<string> | null
 }
 
 export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession[]): SessionRoots {
@@ -85,5 +87,6 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
   return useMemo<SessionRoots>(() => ({
     rootOf: (hostId, id) => index.get(hostId)?.get(id) ?? null,
     rootsKnown: (hostId) => index.has(hostId),
+    liveRoots: (hostId) => { const m = index.get(hostId); return m ? new Set(m.values()) : null },
   }), [index])
 }

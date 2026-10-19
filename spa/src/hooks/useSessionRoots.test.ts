@@ -49,6 +49,14 @@ describe('useSessionRoots', () => {
     expect(result.current.rootOf('h2', 'S1')).toBeNull()
   })
 
+  it('lists the roots of every live session of a host (null until the host is read) — what a group may not be cleared of', () => {
+    const { result } = renderHook(() => useSessionRoots(true, [want('h1', 'S1')]))
+    expect(result.current.liveRoots('h1')).toBeNull()
+    setRead('h1', [q('S1', 'ROOT'), q('S2', 'ROOT'), q('S3', 'S3')])
+    expect([...(result.current.liveRoots('h1') ?? [])].sort()).toEqual(['ROOT', 'S3'])
+    expect(result.current.liveRoots('h2')).toBeNull()
+  })
+
   it('knows when a host has been read ("reading" until then)', () => {
     const { result } = renderHook(() => useSessionRoots(true, [want('h1', 'S1')]))
     expect(result.current.rootsKnown('h1')).toBe(false)
