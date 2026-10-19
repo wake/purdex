@@ -44,8 +44,9 @@ interface Slices {
 }
 
 export interface DrillSeat { hostId: string; sessionId: string }
-/** A seat that left its team; `hostId` is the App host its session lived on, `title` what the panel called it. */
-export interface EndedSeat extends DrillSeat { title: string; endedAt: number }
+/** A seat that left its team; `hostId` is the App host its session lived on, `title` what the panel called it, `address` the daemon's resolved peer address it had (absent on an entry
+ *  recorded before name pool v2): the persona behind it names the seat once it is gone (spec §9.3). */
+export interface EndedSeat extends DrillSeat { title: string; address?: string; endedAt: number }
 export const ENDED_SEATS_MAX = 20
 
 /** The panel area: its width in px, one value for the whole area. */
@@ -162,7 +163,7 @@ function healEnded(v: unknown): EndedSeat[] {
   return capEnded(v.filter((e): e is EndedSeat => isRecord(e) && typeof e.hostId === 'string' && e.hostId !== ''
     && typeof e.sessionId === 'string' && e.sessionId !== '' && typeof e.title === 'string'
     && typeof e.endedAt === 'number' && Number.isFinite(e.endedAt))
-    .map((e) => ({ hostId: e.hostId, sessionId: e.sessionId, title: e.title, endedAt: e.endedAt })))
+    .map((e) => ({ hostId: e.hostId, sessionId: e.sessionId, title: e.title, ...(typeof e.address === 'string' && e.address !== '' ? { address: e.address } : {}), endedAt: e.endedAt })))
 }
 
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */

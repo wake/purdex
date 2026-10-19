@@ -27,6 +27,7 @@ import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
@@ -54,9 +55,12 @@ export function TeamPanel(props: Props) {
   // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
   const journalHost = useIsJournalHost(hostId) || props.noDrill === true
   const drill = useTeamUiStore((s) => (journalHost ? undefined : s.teamDrill[team.teamKey]))
-  const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
+  usePersonaRevision() // the heading reads the persona store without subscribing: redraw when it loads or changes
+  const ended = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId) : undefined)
+  const live = drill ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId) : undefined
+  // the persona's name (through the daemon's address the seat had), else the title it had, else its id
   const drillTitle = drill
-    ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
+    ? live ? seatName(live.address, live.title) : ended ? (ended.address ? seatName(ended.address, ended.title) : ended.title) : drill.sessionId
     : ''
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className={`text-xs text-text-primary${drill ? ' flex flex-col flex-1 min-h-0' : ''}`}>

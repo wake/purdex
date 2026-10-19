@@ -481,6 +481,18 @@ describe('the ended seats (WA-2b-1)', () => {
     useTeamUiStore.persist.rehydrate()
     expect(useTeamUiStore.getState().endedSeats).toEqual({ [key]: [ok] })
   })
+  // the address names the persona once the seat is gone (name pool v2 spec §9.3): kept when it is a non-empty string, dropped otherwise, absent on an older entry
+  it('heals the address of an ended seat: a non-empty string stays, anything else is dropped', () => {
+    const key = k('h1', 't1')
+    const base = { hostId: 'h1', title: 't', endedAt: 1 }
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { endedSeats: { [key]: [
+      { ...base, sessionId: 'a', address: 'mlab/x-kenji' }, { ...base, sessionId: 'b', address: '' }, { ...base, sessionId: 'c', address: 5 }, { ...base, sessionId: 'd' },
+    ] } }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    const list = useTeamUiStore.getState().endedSeats[key]
+    expect(list.map((e) => e.address)).toEqual(['mlab/x-kenji', undefined, undefined, undefined])
+    expect(list.map((e) => 'address' in e)).toEqual([true, false, false, false])
+  })
   it('heal caps a wild persisted list at 20', () => {
     const key = k('h1', 't1')
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { endedSeats: { [key]: Array.from({ length: 40 }, (_, i) => seat(`s${i}`)) } }, version: 0 }))
