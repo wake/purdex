@@ -135,6 +135,47 @@ describe('update', () => {
     expect(entry()).toMatchObject({ status: 'ready', revision: 5, groups: [g('a', ['r1']), g('n')] })
   })
 
+  it('a change queued behind another write, when the host is forgotten and added back, is not sent to the new endpoint', async () => {
+    let release!: (v: TaskGroupsRead) => void
+    putTaskGroups.mockImplementationOnce(() => new Promise<TaskGroupsRead>((r) => { release = r }))
+    const first = get().update('h1', (groups) => [...groups, g('n1')])
+    const queued = get().update('h1', (groups) => [...groups, g('n2')])
+    await new Promise((r) => setTimeout(r, 0))
+    get().forget('h1')
+    fetchTaskGroups.mockResolvedValueOnce(read([g('fresh')], 1))
+    await get().load('h1')
+    putTaskGroups.mockClear()
+    release(read([g('n1')], 9))
+    await first
+    expect(await queued).toEqual({ ok: false, reason: 'host-changed' })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('after a lost compare-and-set, a forget before the retry stops the retry', async () => {
+    let lose!: () => void
+    putTaskGroups.mockImplementationOnce(() => new Promise((_r, rej) => { lose = () => rej(new HostConfigConflictError({ items: [g('a')], revision: 6 })) }))
+    const w = get().update('h1', (groups) => [...groups, g('n')])
+    await new Promise((r) => setTimeout(r, 0))
+    get().forget('h1')
+    fetchTaskGroups.mockResolvedValueOnce(read([g('fresh')], 1))
+    await get().load('h1')
+    putTaskGroups.mockClear()
+    lose()
+    expect(await w).toEqual({ ok: false, reason: 'host-changed' })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+    expect(entry()).toMatchObject({ revision: 1, groups: [g('fresh')] })
+  })
+
+  it.each([
+    ['rows the daemon left out', { dropped: { count: 1, reasons: ['root "x" is already in group "a"'] }, invalid: false }],
+    ['a stored value that is not a list of groups', { dropped: null, invalid: true }],
+  ])('%s: the visible list is not the whole stored list, so nothing is written back', async (_n, marks) => {
+    fetchTaskGroups.mockResolvedValue({ ...read([g('a')], 4), ...marks })
+    await get().load('h1')
+    expect(await get().update('h1', (groups) => [...groups, g('n')])).toEqual({ ok: false, reason: 'unsafe' })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
   it('one write at a time per host: a second one waits for the first and sees its result', async () => {
     let release!: (v: TaskGroupsRead) => void
     putTaskGroups.mockImplementationOnce(() => new Promise<TaskGroupsRead>((r) => { release = r }))
