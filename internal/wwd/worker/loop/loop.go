@@ -455,12 +455,6 @@ func (l *Loop) adoptQuarantined() {
 		return
 	}
 	for _, e := range l.cfg.Quarantine.Held() {
-		l.mu.Lock()
-		have := l.quarSlots[e.Owner] != nil
-		l.mu.Unlock()
-		if have {
-			continue
-		}
 		slot := l.cfg.Gate.TakeLate()
 		if slot == nil {
 			continue

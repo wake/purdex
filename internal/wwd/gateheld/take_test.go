@@ -86,6 +86,10 @@ func TestTakeHeavyLateCountsACommandThatRunsAlready(t *testing.T) {
 	if h := heldBy(t, dir); len(h) != 0 {
 		t.Fatalf("given back: %+v", h)
 	}
+	paused, _ := host(t, 0, "") // heavy slots 0: a paused class takes no claim, late or over
+	if New(paused, nil).TakeHeavyLate() != nil {
+		t.Fatal("a paused heavy class has no slot to give")
+	}
 	none := New(filepath.Join(t.TempDir(), "none.toml"), nil)
 	t.Setenv("PDX_GATE_DIR", filepath.Join(t.TempDir(), "absent"))
 	if none.TakeHeavyLate() != nil {

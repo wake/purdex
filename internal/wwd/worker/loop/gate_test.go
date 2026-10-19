@@ -221,6 +221,25 @@ func TestAQuarantinedJobKeepsItsGateSlotUntilTheSweepClearsIt(t *testing.T) {
 	}
 }
 
+// The same job quarantined a second time (it was given back, claimed again and again not proven stopped) leaves one slot for its key: the
+// first is given back, not leaked.
+func TestAJobQuarantinedAgainReplacesItsSlot(t *testing.T) {
+	g := &fakeGate{free: 2}
+	r := newRig(t, newConn("mlab"))
+	withGate(r, g)
+	a, _ := g.TakeHeavy()
+	b, _ := g.TakeHeavy()
+	r.loop.keepForQuarantine("mlab/j", a)
+	r.loop.keepForQuarantine("mlab/j", b)
+	if free, _, s := g.state(); free != 1 || s[0].released != 1 || s[1].released != 0 {
+		t.Fatalf("the first is given back, the second kept: free=%d %+v", free, s)
+	}
+	r.loop.keepForQuarantine("mlab/j", b) // the same slot again: nothing is given back
+	if _, _, s := g.state(); s[1].released != 0 {
+		t.Fatalf("%+v", s)
+	}
+}
+
 // After a restart the quarantined jobs are still held (their commands may live on): the new process takes a slot for each before it claims
 // anything, beyond the gate's size if it has to, and gives it back when the sweep clears the entry.
 func TestARestartTakesASlotForEachQuarantinedJobBeforeAnyClaim(t *testing.T) {
