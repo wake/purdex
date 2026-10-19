@@ -93,6 +93,9 @@ type HostNow struct {
 	// Quarantined: it holds the task's label in state quarantined (it had standing and lost it to a disagreement). Not Earned, and
 	// not "no standing" either: its entries answer nobody until it is qualified again.
 	Quarantined bool
+	// StandingUnverified: this lookup cannot tell a host that never held the label from one that lost it to a quarantine (a host's
+	// public label list hides quarantined labels). Condition (4) then does not apply: only (3) can answer.
+	StandingUnverified bool
 	// Reference: it is the task's reference host and ReferenceFingerprint is its current fingerprint.
 	Reference            bool
 	ReferenceFingerprint map[string]string
@@ -101,16 +104,22 @@ type HostNow struct {
 // HostNowFromInfo is what a host's /v1/info says, read as HostNow for one task: taskLabel is task:<repo>/<task>, isReference says the
 // host is that task's reference (from the manifest's qualify.reference). A non-reference host that advertises the task label has it
 // earned: an advertised label has not drifted (a drift revokes it, WWD-5c-1), so the current toolchain fingerprint is the one it was
-// earned with. The reference host holds the label without qualifying and counts as Reference, not Earned. A quarantined label is not
-// advertised, so it reads as no standing here: whoever quarantines a label must also drop the entries made under it
-// (store.DeleteCacheByLabel), which is what keeps its disputed results from answering the host itself.
-func HostNowFromInfo(info wire.Info, taskLabel string, isReference bool) HostNow {
+// earned with. The reference host holds the label without qualifying and counts as Reference, not Earned.
+//
+// A quarantined label is not advertised, so /v1/info alone cannot tell "never had it" from "lost it". The caller says what it knows:
+// neverQuarantined is true only when it has an authoritative answer that the host's label is not quarantined (its own earned_labels for
+// the local host; the origin's disagreement read for a peer, WWD-5c-2). Without that, a host that does not advertise the label has an
+// unverified standing and condition (4) does not let it answer even itself, so a disputed result cannot come back through a missing
+// piece of information. Deleting the entries on quarantine (store.DeleteCacheByLabel) is a cleanup, not what this rests on.
+func HostNowFromInfo(info wire.Info, taskLabel string, isReference, neverQuarantined bool) HostNow {
 	h := HostNow{Labels: slices.Clone(info.Labels), CurrentFingerprint: maps.Clone(info.Fingerprint)}
 	switch {
 	case isReference:
 		h.Reference, h.ReferenceFingerprint = true, maps.Clone(info.Fingerprint)
 	case slices.Contains(info.Labels, taskLabel):
 		h.Earned, h.EarnedFingerprint = true, maps.Clone(info.Fingerprint)
+	case !neverQuarantined:
+		h.StandingUnverified = true
 	}
 	return h
 }
@@ -145,7 +154,7 @@ func HostStillValid(e Entry, h HostNow) bool {
 // matches is not here: its entries are stale, not private, so they answer nobody. Nor is a quarantined host: its results are in
 // dispute.
 func SameHostOnly(e Entry, q Query, h HostNow) bool {
-	return !h.Earned && !h.Reference && !h.Quarantined && e.Host != "" && e.Host == q.Host &&
+	return !h.Earned && !h.Reference && !h.Quarantined && !h.StandingUnverified && e.Host != "" && e.Host == q.Host &&
 		sameFingerprint(h.CurrentFingerprint, e.Fingerprint)
 }
 

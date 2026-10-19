@@ -1,18 +1,23 @@
 package store
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/queue"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 var cacheNow = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 
+func okResult(host string) wire.Result {
+	zero := 0
+	return wire.Result{Exit: &zero, Host: host, Log: "log-1"}
+}
+
 func cacheEntry(key string, created time.Time, label string) CacheEntry {
-	return CacheEntry{Key: key, Rec: json.RawMessage(`{"ok":true}`), Host: "mserv", HostFingerprint: map[string]string{"go": "1.26.0"}, Label: label, CreatedAt: created}
+	return CacheEntry{Key: key, Result: okResult("mserv"), HostFingerprint: map[string]string{"go": "1.26.0"}, Label: label, CreatedAt: created}
 }
 
 // cache retention <= log retention <= job retention: an entry never outlives the log or the job it points at. It goes red when any of
@@ -32,7 +37,7 @@ func TestCacheLimitIsFixed(t *testing.T) {
 	}
 	s := openTemp(t)
 	for _, n := range []int{0, -1} {
-		if err := s.putCacheEntry(cacheEntry("k", cacheNow, ""), n); err == nil {
+		if err := s.putCacheEntry(cacheEntry("k", cacheNow, ""), cacheNow, n); err == nil {
 			t.Fatalf("limit %d accepted", n)
 		}
 	}
@@ -41,16 +46,16 @@ func TestCacheLimitIsFixed(t *testing.T) {
 	}
 }
 
-func TestCacheEntryRoundTripReplaceAndBadRec(t *testing.T) {
+func TestCacheEntryRoundTripAndReplace(t *testing.T) {
 	s := openTemp(t)
-	if err := s.PutCacheEntry(cacheEntry("k", cacheNow.Add(-time.Hour), "task:a/b")); err != nil {
+	if err := s.PutCacheEntry(cacheEntry("k", cacheNow.Add(-time.Hour), "task:a/b"), cacheNow); err != nil {
 		t.Fatal(err)
 	}
 	c, ok, err := s.GetCacheEntry("k", cacheNow)
-	if err != nil || !ok || c.Host != "mserv" || c.Label != "task:a/b" || c.HostFingerprint["go"] != "1.26.0" || !c.CreatedAt.Equal(cacheNow.Add(-time.Hour)) {
+	if err != nil || !ok || c.Result.Host != "mserv" || *c.Result.Exit != 0 || c.Label != "task:a/b" || c.HostFingerprint["go"] != "1.26.0" || !c.CreatedAt.Equal(cacheNow.Add(-time.Hour)) {
 		t.Fatalf("got %+v %v %v", c, ok, err)
 	}
-	if err := s.PutCacheEntry(cacheEntry("k", cacheNow, "task:a/b")); err != nil {
+	if err := s.PutCacheEntry(cacheEntry("k", cacheNow, "task:a/b"), cacheNow); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := s.CountCache(); n != 1 {
@@ -59,10 +64,59 @@ func TestCacheEntryRoundTripReplaceAndBadRec(t *testing.T) {
 	if _, ok, _ := s.GetCacheEntry("none", cacheNow); ok {
 		t.Fatal("missing key found")
 	}
-	bad := cacheEntry("x", cacheNow, "")
-	bad.Rec = json.RawMessage(`{`)
-	if err := s.PutCacheEntry(bad); err == nil {
-		t.Fatal("bad rec accepted")
+}
+
+// Only the result of a command that ran and exited 0, with host and log, that is not a reuse and was not superseded, is stored.
+func TestCacheRefusesWhatIsNotAReusableResult(t *testing.T) {
+	s := openTemp(t)
+	one := 1
+	super := "job-2"
+	for name, mod := range map[string]func(*CacheEntry){
+		"no key":        func(c *CacheEntry) { c.Key = "" },
+		"no exit":       func(c *CacheEntry) { c.Result.Exit = nil },
+		"exit 1":        func(c *CacheEntry) { c.Result.Exit = &one },
+		"no host":       func(c *CacheEntry) { c.Result.Host = "" },
+		"no log":        func(c *CacheEntry) { c.Result.Log = "" },
+		"a reuse":       func(c *CacheEntry) { c.Result.CacheHit = true },
+		"superseded":    func(c *CacheEntry) { c.Result.SupersededBy = &super },
+		"a reason":      func(c *CacheEntry) { c.Result.Reason = "infra" },
+		"in the future": func(c *CacheEntry) { c.CreatedAt = cacheNow.Add(cacheClockSlack + time.Second) },
+	} {
+		c := cacheEntry("k", cacheNow, "")
+		mod(&c)
+		if err := s.PutCacheEntry(c, cacheNow); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if n, _ := s.CountCache(); n != 0 {
+		t.Fatalf("refused writes left %d rows", n)
+	}
+	// within the clock slack is fine
+	if err := s.PutCacheEntry(cacheEntry("k", cacheNow.Add(cacheClockSlack), ""), cacheNow); err != nil {
+		t.Fatalf("a small clock step: %v", err)
+	}
+}
+
+// A row that is valid JSON but not a reusable result, or whose host column disagrees with the result, is an error, never a hit.
+func TestCacheDamagedRowIsAnErrorNotAHit(t *testing.T) {
+	s := openTemp(t)
+	for _, c := range []struct{ key, rec, fp, host string }{
+		{"syntax", `{`, `{}`, "h"},
+		{"badfp", `{"exit":0,"host":"h","log":"l"}`, `{`, "h"},
+		{"null", `null`, `{}`, "h"},
+		{"scalar", `"x"`, `{}`, "h"},
+		{"empty object", `{}`, `{}`, "h"},
+		{"failed exit", `{"exit":1,"host":"h","log":"l"}`, `{}`, "h"},
+		{"no log", `{"exit":0,"host":"h"}`, `{}`, "h"},
+		{"host column differs", `{"exit":0,"host":"h","log":"l"}`, `{}`, "other"},
+	} {
+		if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, ?, ?, ?, '', ?)`,
+			c.key, c.rec, c.host, c.fp, cacheNow.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := s.GetCacheEntry(c.key, cacheNow); ok || err == nil {
+			t.Errorf("%s: ok=%v err=%v", c.key, ok, err)
+		}
 	}
 }
 
@@ -71,7 +125,7 @@ func TestCacheEntryRoundTripReplaceAndBadRec(t *testing.T) {
 func TestCacheHitJustBeforeAndAfterDayThree(t *testing.T) {
 	s := openTemp(t)
 	made := cacheNow
-	if err := s.PutCacheEntry(cacheEntry("k", made, "")); err != nil {
+	if err := s.PutCacheEntry(cacheEntry("k", made, ""), made); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -88,17 +142,19 @@ func TestCacheHitJustBeforeAndAfterDayThree(t *testing.T) {
 	}
 }
 
-// A row whose record or fingerprint no longer decodes is an error, never a hit: the submit path must not answer from damage.
-func TestCacheDamagedRowIsAnErrorNotAHit(t *testing.T) {
+// A row that claims to be made after now (a clock that was set forward, a bad write) never answers and is pruned: it would outlive
+// the log it points at.
+func TestCacheFutureRowNeverAnswersAndIsPruned(t *testing.T) {
 	s := openTemp(t)
-	for _, c := range []struct{ key, rec, fp string }{{"badrec", `{`, `{}`}, {"badfp", `{}`, `{`}} {
-		if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, ?, 'h', ?, '', ?)`,
-			c.key, c.rec, c.fp, cacheNow.UnixMilli()); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok, err := s.GetCacheEntry(c.key, cacheNow); ok || err == nil {
-			t.Errorf("%s: ok=%v err=%v", c.key, ok, err)
-		}
+	future := cacheNow.Add(48 * time.Hour)
+	if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES ('f', '{"exit":0,"host":"h","log":"l"}', 'h', '{}', '', ?)`, future.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.GetCacheEntry("f", cacheNow); ok || err != nil {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if n, err := s.PruneCache(cacheNow); err != nil || n != 1 {
+		t.Fatalf("pruned %d %v", n, err)
 	}
 }
 
@@ -109,7 +165,7 @@ func TestPruneCacheDropsOnlyThePast(t *testing.T) {
 		cacheEntry("edge", cacheNow.Add(-CacheRetention), ""),
 		cacheEntry("new", cacheNow, ""),
 	} {
-		if err := s.PutCacheEntry(c); err != nil {
+		if err := s.PutCacheEntry(c, cacheNow); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -121,15 +177,14 @@ func TestPruneCacheDropsOnlyThePast(t *testing.T) {
 	}
 }
 
-// The 10,000th entry stays and the 10,001st pushes out the oldest.
-func TestCacheKeepsMaxAndDropsOldest(t *testing.T) {
-	s := openTemp(t)
+func fillCache(t *testing.T, s *Store, n int) {
+	t.Helper()
 	tx, err := s.DB().Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < MaxCacheEntries; i++ {
-		if _, err := tx.Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, '{}', 'h', '{}', '', ?)`,
+	for i := 0; i < n; i++ {
+		if _, err := tx.Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, '{"exit":0,"host":"h","log":"l"}', 'h', '{}', '', ?)`,
 			fmt.Sprintf("k%05d", i), cacheNow.UnixMilli()+int64(i)); err != nil {
 			t.Fatal(err)
 		}
@@ -137,23 +192,44 @@ func TestCacheKeepsMaxAndDropsOldest(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutCacheEntry(cacheEntry("k00000", cacheNow, "")); err != nil { // the oldest key again: replaces itself, stays (now at its old time)
+}
+
+// The 10,000th entry stays and the 10,001st pushes out the oldest.
+func TestCacheKeepsMaxAndDropsOldest(t *testing.T) {
+	s := openTemp(t)
+	fillCache(t, s, MaxCacheEntries)
+	if err := s.PutCacheEntry(cacheEntry("k00000", cacheNow, ""), cacheNow); err != nil { // an existing key again: replaces itself
 		t.Fatal(err)
 	}
 	if n, _ := s.CountCache(); n != MaxCacheEntries {
 		t.Fatalf("at the limit: %d", n)
 	}
-	if err := s.PutCacheEntry(cacheEntry("new", cacheNow.Add(time.Hour), "")); err != nil {
+	if err := s.PutCacheEntry(cacheEntry("new", cacheNow.Add(time.Second), ""), cacheNow); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := s.CountCache(); n != MaxCacheEntries {
 		t.Fatalf("after the 10,001st: %d", n)
 	}
-	if _, ok, _ := s.GetCacheEntry("k00000", cacheNow); ok { // created at cacheNow, the same ms as nothing else older; it is the oldest
+	if _, ok, _ := s.GetCacheEntry("k00000", cacheNow); ok { // the oldest (created at cacheNow, the lowest key)
 		t.Fatal("the oldest stayed")
 	}
-	if _, ok, _ := s.GetCacheEntry("new", cacheNow); !ok {
+	if _, ok, _ := s.GetCacheEntry("new", cacheNow.Add(time.Second)); !ok {
 		t.Fatal("the new one is gone")
+	}
+}
+
+// An entry older than all the others of a full table is the one that goes out: the write succeeds, and the table stays at the limit.
+func TestCacheOlderThanEveryOtherGoesOutItself(t *testing.T) {
+	s := openTemp(t)
+	fillCache(t, s, MaxCacheEntries)
+	if err := s.PutCacheEntry(cacheEntry("ancient", cacheNow.Add(-time.Hour), ""), cacheNow); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountCache(); n != MaxCacheEntries {
+		t.Fatalf("%d", n)
+	}
+	if _, ok, _ := s.GetCacheEntry("ancient", cacheNow); ok {
+		t.Fatal("the oldest entry stayed in a full table")
 	}
 }
 
@@ -162,11 +238,11 @@ func TestCacheTrimTieBreaksByKey(t *testing.T) {
 	for run := 0; run < 3; run++ {
 		s := openTemp(t)
 		for _, k := range []string{"c", "a", "b"} {
-			if err := s.putCacheEntry(cacheEntry(k, cacheNow, ""), 3); err != nil {
+			if err := s.putCacheEntry(cacheEntry(k, cacheNow, ""), cacheNow, 3); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := s.putCacheEntry(cacheEntry("d", cacheNow, ""), 3); err != nil {
+		if err := s.putCacheEntry(cacheEntry("d", cacheNow, ""), cacheNow, 3); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok, _ := s.GetCacheEntry("a", cacheNow); ok {
@@ -183,7 +259,7 @@ func TestCacheTrimTieBreaksByKey(t *testing.T) {
 func TestCacheDeleteByLabel(t *testing.T) {
 	s := openTemp(t)
 	for _, c := range []CacheEntry{cacheEntry("a", cacheNow, "task:x/1"), cacheEntry("b", cacheNow, "task:x/1"), cacheEntry("c", cacheNow, "task:x/2"), cacheEntry("d", cacheNow, "")} {
-		if err := s.PutCacheEntry(c); err != nil {
+		if err := s.PutCacheEntry(c, cacheNow); err != nil {
 			t.Fatal(err)
 		}
 	}

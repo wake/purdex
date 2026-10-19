@@ -16,17 +16,17 @@ func TestHostNowFromInfoDrivesTheLookup(t *testing.T) {
 	fp := map[string]string{"go": "1.26.0"}
 	q := query()
 	// a qualified host (advertises the label): a member's result answers the lead on mlab
-	h := HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, false)
+	h := HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, false, true)
 	if !h.Earned || h.Reference || !Answers(entry(), q, h) {
 		t.Fatalf("earned host: %+v", h)
 	}
 	// the same host after its toolchain changed: the label is revoked (not advertised) and the toolchain is another one
-	h = HostNowFromInfo(infoOf([]string{"os:linux"}, map[string]string{"go": "1.26.1"}), label, false)
+	h = HostNowFromInfo(infoOf([]string{"os:linux"}, map[string]string{"go": "1.26.1"}), label, false, true)
 	if h.Earned || Answers(entry(), q, h) {
 		t.Fatalf("a drifted host answered another host: %+v", h)
 	}
 	// no standing and the same toolchain: only itself
-	h = HostNowFromInfo(infoOf([]string{"os:linux"}, fp), label, false)
+	h = HostNowFromInfo(infoOf([]string{"os:linux"}, fp), label, false, true)
 	if Answers(entry(), q, h) {
 		t.Fatal("a host with no standing answered another host")
 	}
@@ -35,20 +35,43 @@ func TestHostNowFromInfoDrivesTheLookup(t *testing.T) {
 		t.Fatal("a host with no standing did not answer itself")
 	}
 	// the reference host: valid while its fingerprint is the one of the entry
-	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, true)
+	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, true, true)
 	q.Host = "mlab"
 	if !h.Reference || h.Earned || !Answers(entry(), q, h) {
 		t.Fatalf("reference host: %+v", h)
 	}
-	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, map[string]string{"go": "1.27.0"}), label, true)
+	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, map[string]string{"go": "1.27.0"}), label, true, true)
 	if Answers(entry(), q, h) {
 		t.Fatal("a reference host that drifted answered")
 	}
 }
 
+// A quarantined label is not advertised, so /v1/info alone cannot tell it from "never had it". Unless the caller vouches that the host
+// is not quarantined, the host does not answer even itself; with the vouching it does.
+func TestUnvouchedHostWithoutTheLabelAnswersNobody(t *testing.T) {
+	label := "task:purdex/tsc"
+	fp := map[string]string{"go": "1.26.0"}
+	q := query()
+	q.Host = "mserv"
+	info := infoOf([]string{"os:linux"}, fp) // the label is missing: never earned, or quarantined
+	h := HostNowFromInfo(info, label, false, false)
+	if !h.StandingUnverified || Answers(entry(), q, h) {
+		t.Fatalf("an unverified standing answered: %+v", h)
+	}
+	h = HostNowFromInfo(info, label, false, true)
+	if h.StandingUnverified || !Answers(entry(), q, h) {
+		t.Fatalf("a vouched host with no standing did not answer itself: %+v", h)
+	}
+	// an advertised label needs no vouching: it is earned
+	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, false, false)
+	if h.StandingUnverified || !h.Earned {
+		t.Fatalf("%+v", h)
+	}
+}
+
 func TestHostNowFromInfoCopiesWhatItIsGiven(t *testing.T) {
 	info := infoOf([]string{"os:linux"}, map[string]string{"go": "1"})
-	h := HostNowFromInfo(info, "task:a/b", false)
+	h := HostNowFromInfo(info, "task:a/b", false, true)
 	info.Labels[0], info.Fingerprint["go"] = "x", "2"
 	if h.Labels[0] != "os:linux" || h.CurrentFingerprint["go"] != "1" {
 		t.Fatalf("%+v", h)
