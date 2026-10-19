@@ -160,7 +160,10 @@ describe('the 團隊 and 工作簿 buttons (journal host)', () => {
     const stack = () => screen.getByTestId('journal-card-stack')
     expect(stack().style.right).toBe('424px') // 12 margin + 400 panel + 12 gap
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-    expect(stack().style.right).toBe('424px')
+    // one line is narrower than the area width (user 2026-10-20): the cards hug the width the panel really draws
+    const drawn = parseInt(screen.getByTestId('team-panel-area').style.width, 10)
+    expect(drawn).toBeLessThan(400)
+    expect(stack().style.right).toBe(`${12 + drawn + 12}px`)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
     expect(stack().style.right).toBe('12px')
   })

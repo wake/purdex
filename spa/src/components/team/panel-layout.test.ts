@@ -3,8 +3,30 @@
 import { describe, it, expect } from 'vitest'
 import { HOST_BADGE_BOX_DEFAULT, HOST_BADGE_BOX_MAX } from '../../stores/useUISettingsStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, panelMinWidth, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, panelMinWidth, placeBelow, BESIDE_CELLS_W, LINE_SLACK_W, lineWidthFor,
 } from './panel-layout'
+
+describe('lineWidthFor (one-line width follows the content, with LINE_SLACK_W to spare)', () => {
+  const lead = BESIDE_CELLS_W + cellsWidth(1, cellWidthFor('badge'))
+  const AREA = 1000
+  it('lead only: the lead-only content plus the slack', () => {
+    expect(lineWidthFor(1, AREA, 'badge')).toBe(lead + LINE_SLACK_W)
+  })
+  it('lead + 1 member still inside the slack: the width does not change', () => {
+    expect(BESIDE_CELLS_W + cellsWidth(2, cellWidthFor('badge'))).toBeLessThanOrEqual(lead + LINE_SLACK_W)
+    expect(lineWidthFor(2, AREA, 'badge')).toBe(lead + LINE_SLACK_W)
+  })
+  it('more members than the slack holds: the width is the content', () => {
+    const w = BESIDE_CELLS_W + cellsWidth(5, cellWidthFor('badge'))
+    expect(w).toBeGreaterThan(lead + LINE_SLACK_W)
+    expect(lineWidthFor(5, AREA, 'badge')).toBe(w)
+  })
+  it('never above the area width', () => {
+    expect(lineWidthFor(30, 400, 'badge')).toBe(400)
+    expect(lineWidthFor(1, 200, 'badge')).toBe(200)
+  })
+  it('the slack is 100px', () => { expect(LINE_SLACK_W).toBe(100) })
+})
 
 describe('panel header budget', () => {
   it('spacing: 4px between cells and either side of the divider; header padding, gap and cell padding are back at their old values', () => {
