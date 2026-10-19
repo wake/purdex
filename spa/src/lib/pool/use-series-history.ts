@@ -13,7 +13,7 @@ export function useSeriesHistory(fleetHostId: string, alias: string | null, rang
   const enabled = live && range !== '5m' && alias !== null && source !== null && seriesAnnounced(source)
 
   useEffect(() => {
-    if (!enabled || !source || !alias || range === '5m') return
+    if (!enabled || !source || !alias) return
     let cancelled = false
     void loadSeries({ sourceHostId: source, alias, fleetHostId, range, memTotalMb, now: Date.now() }).then(() => { if (!cancelled) setRev((n) => n + 1) })
     return () => { cancelled = true; invalidateFactsHistory(fleetHostId) }
