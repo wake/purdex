@@ -150,6 +150,40 @@ describe('WorkerSettings', () => {
     expect(lastPut().body).toEqual({ enabled: true, slots: { heavy: 4, light: 3 }, owner_rule: 'hid<9m' })
   })
 
+  it('latest wins: three presses while a PUT is out show +3 at once and make two PUTs that never overlap, the last carrying +3', async () => {
+    const answers: Array<(r: Response) => void> = []
+    hostFetch.mockImplementation(() => new Promise<Response>((resolve) => { answers.push(resolve) }))
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await act(async () => {
+      for (let i = 0; i < 3; i++) fireEvent.click(screen.getByTestId('pool-worker-slots-heavy-inc'))
+    })
+    expect(screen.getByTestId('pool-worker-slots-heavy-value')).toHaveTextContent('4') // drawn at once, not after the host answers
+    expect(hostFetch).toHaveBeenCalledTimes(1) // the second and third presses wait for the one in the air
+    expect(JSON.parse((hostFetch.mock.calls[0][2] as RequestInit).body as string).slots.heavy).toBe(2)
+    await act(async () => { answers[0](reply(200, { ok: true })) })
+    expect(hostFetch).toHaveBeenCalledTimes(2) // sent only after the first was answered
+    expect(lastPut().body.slots.heavy).toBe(4)
+    await act(async () => { answers[1](reply(200, { ok: true })) })
+    expect(hostFetch).toHaveBeenCalledTimes(2) // nothing newer was asked: no third PUT
+    expect(screen.getByTestId('pool-worker-slots-heavy-value')).toHaveTextContent('4')
+  })
+
+  it('a refused PUT drops what was queued behind it and the rows go back to what the host has', async () => {
+    const answers: Array<(r: Response) => void> = []
+    hostFetch.mockImplementation(() => new Promise<Response>((resolve) => { answers.push(resolve) }))
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('pool-worker-slots-heavy-inc'))
+      fireEvent.click(screen.getByTestId('pool-worker-slots-heavy-inc'))
+    })
+    await act(async () => { answers[0](reply(400, { error: 'wwd_rejected', detail: 'too many' })) })
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('pool-worker-slots-heavy-value')).toHaveTextContent('1')
+    expect(screen.getByTestId('pool-worker-error-heavy')).toHaveTextContent('too many')
+  })
+
   it('a change wwd refuses goes back, with wwd\'s own words under that row', async () => {
     hostFetch.mockResolvedValue(reply(400, { error: 'wwd_rejected', detail: 'slots cannot be negative' }))
     setHost(mlab())
