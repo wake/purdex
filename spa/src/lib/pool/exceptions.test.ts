@@ -44,6 +44,10 @@ describe('parseExceptionList: the wire object { host, known, exceptions }', () =
   it('known:true with no exceptions is an empty list; a broken entry is left out', () => {
     expect(parseExceptionList({ host: 'h', known: true, exceptions: [] })).toEqual([])
     expect(parseExceptionList({ host: 'h', known: true, exceptions: [5, { name: 'ok' }] })).toEqual([{ name: 'ok', until: null, pid: null, holds: [] }])
-    expect(parseExceptionList({ host: 'h', known: true })).toEqual([])
+  })
+
+  it('known:true with exceptions missing, null, an object or a string is a bad answer, not "none"', () => {
+    for (const bad of [undefined, null, {}, 'x']) expect(parseExceptionList({ host: 'h', known: true, exceptions: bad })).toBeNull()
+    expect(parseExceptionList({ host: 'h', known: true })).toBeNull()
   })
 })

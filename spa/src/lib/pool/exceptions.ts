@@ -1,5 +1,5 @@
 // spa/src/lib/pool/exceptions.ts — the tolerant parse of `GET /api/pool/hosts/{alias}/exceptions`: the wire object `{ host, known, exceptions: [wire.Exception] }`
-// (the bare list an older daemon relayed is still read). `known:false` — a host too old to say — is "not known" (null), not an empty list. An entry that does not
+// (the bare list an older daemon relayed is still read; the daemon always sends an array when known, so a missing or non-array `exceptions` is a bad answer, i.e. not known). `known:false` — a host too old to say — is "not known" (null), not an empty list. An entry that does not
 // read is left out; `allow` and `flags` are not shown, so they are not carried. The App shows these as 「暫停」.
 import type { PoolExceptionDetail, PoolHold } from './types'
 
@@ -9,7 +9,7 @@ export function parseExceptionList(json: unknown): PoolExceptionDetail[] | null 
   let list: unknown = json
   if (isObj(json)) {
     if (json.known !== true) return null
-    list = json.exceptions ?? []
+    list = json.exceptions
   }
   if (!Array.isArray(list)) return null
   const out: PoolExceptionDetail[] = []
