@@ -437,3 +437,22 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   for any infrastructure failure). The same key failing **twice in a row on a host** ends the next job of it: failed with no exit and the
   reason `deps_install_failed: …` (which no outcome and no qualification counts), and the host does not try that key again for 10 minutes.
   Restarting wwd forgets this. A cancelled job or a stopping worker is not a failure of the install.
+
+## 11. The tools a worker must have, and raising Go (#3546)
+
+The manifest (`.wwd/tasks.toml`) says what a task needs of its host: a task that runs `go` (`go test …`, `make lint`) carries
+`tool:go<major>.<minor>` (the `go` line of `go.mod`), one that runs `pnpm` carries `tool:node<N>` and `tool:pnpm<N>` (tsc has its own
+labels). A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the
+PATH of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that
+lacks one does not claim those tasks; if no host has all of them the job is not sent and `pdx test` ends with exit 5 ("no host can take
+it"), instead of running somewhere and failing for the missing tool.
+
+**Raising Go to a new minor** (for example 1.26 → 1.27), in this order:
+
+1. Upgrade Go on all three worker hosts (mlab, air26, mserv) first and check that each host's `GET /v1/info` shows `tool:go1.27`.
+2. Then change the `go` line of `go.mod` **and** every `tool:go1.26` in `.wwd/tasks.toml` in one PR.
+
+`TestPurdexManifestTasksCarryTheToolsTheyRun` goes red when the two disagree, so it cannot be forgotten. Between the steps (some hosts
+raised, the manifest not yet) the Go tasks still run on the hosts that have the old label; between 1 and 2 on a host that has already
+moved, and after 2 on a host that has not, a Go task has no host that can take it and fails at once with exit 5 — loudly, never
+silently on the wrong toolchain.
