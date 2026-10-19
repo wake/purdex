@@ -12,7 +12,7 @@ import { usePersonaSourceStore } from '../../../stores/usePersonaSourceStore'
 import { usePeerStore, emptyPeerHostEntry } from '../../../stores/usePeerStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { makeCollection, makePersona } from '../../../lib/names/__fixtures__/personas'
-import { PersonaImport } from './PersonaImport'
+import { PersonaImport, MAX_IMPORT_BYTES } from './PersonaImport'
 
 const WEBP = 'data:image/webp;base64,UklGRgAAAABXRUJQ'
 const NO_MIRROR = { mirrored: [], failed: [], pulled: [] }
@@ -42,11 +42,11 @@ describe('PersonaImport', () => {
     usePeerStore.setState({ byHost: {}, refresh: vi.fn(async () => {}) })
   })
 
-  const mount = (items: ReturnType<typeof seed>) => render(<PersonaImport items={items} fallbackHostId="h1" disabled={false} />)
+  const mount = () => render(<PersonaImport fallbackHostId="h1" disabled={false} />)
 
   it('shows what the file would change before anything is drawn or saved', async () => {
-    const items = seed(['hiro', 'emma'])
-    mount(items)
+    seed(['hiro', 'emma'])
+    mount()
     pick([{ id: 'hiro', name: 'Hiro Two' }, { id: 'olga', name: 'Olga', avatar: recipe('o') }, { id: 'emma', name: 'Emma' }])
     expect((await screen.findByTestId('persona-import-counts')).textContent).toMatch(/新增 1.*變更 1.*不變 1.*略過 0|1 new, 1 changed, 1 unchanged, 0 skipped/)
     expect(screen.getByTestId('persona-import-counts').textContent).toMatch(/重畫 1|1 avatars/)
@@ -54,8 +54,34 @@ describe('PersonaImport', () => {
     expect(savePersonas).not.toHaveBeenCalled()
   })
 
+  it('plans on the collection and the base of the moment the file has been read, never one of each from different moments', async () => {
+    seed(['hiro'])
+    mount()
+    pick([{ id: 'emma', name: 'Emma' }])
+    // the file is still being read: the shown collection (another source) changes under it
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: makeCollection(['olga'], { at: 9, host: 'h1' }, 9) } } })
+    fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    const [saved, base] = vi.mocked(savePersonas).mock.calls[0]
+    expect(saved.map((p) => p.code)).toEqual(['olga', 'emma']) // merged into the collection now shown
+    expect(base).toMatchObject({ hostId: 'h1', revision: 9 }) // and saved against that collection's base
+  })
+
+  it('refuses a file over the size limit before reading it', async () => {
+    seed(['hiro'])
+    mount()
+    const big = new File(['[]'], 'big.json', { type: 'application/json' })
+    Object.defineProperty(big, 'size', { value: MAX_IMPORT_BYTES + 1 })
+    const read = vi.spyOn(FileReader.prototype, 'readAsText')
+    fireEvent.change(screen.getByTestId('persona-import-file'), { target: { files: [big] } })
+    expect((await screen.findByTestId('persona-import-problem')).textContent).toMatch(/太大|too large/)
+    expect(read).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('persona-import-summary')).toBeNull()
+    read.mockRestore()
+  })
+
   it('lists each entry it would skip, with the reason', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     pick([{ id: 'Bad Code', name: 'x' }, { id: 'emma', name: 'Emma' }, { id: 'emma', name: 'Emma again' }])
     const list = await screen.findByTestId('persona-import-skipped')
     expect(list.textContent).toContain('Bad Code')
@@ -64,7 +90,7 @@ describe('PersonaImport', () => {
   })
 
   it('saves nothing when the user cancels', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-cancel'))
     expect(screen.queryByTestId('persona-import-summary')).toBeNull()
@@ -74,7 +100,7 @@ describe('PersonaImport', () => {
 
   it('draws the marked avatars, then saves the merged collection on the base the plan was made on', async () => {
     const items = seed(['hiro'])
-    mount(items)
+    mount()
     pick([{ id: 'emma', name: 'Emma', avatar: recipe('e') }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
@@ -89,7 +115,7 @@ describe('PersonaImport', () => {
   })
 
   it('saves against the base from when the file was chosen, not the one of the moment it is confirmed', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     pick([{ id: 'emma', name: 'Emma' }])
     await screen.findByTestId('persona-import-confirm')
     // meanwhile another save moved the shown collection on to revision 9
@@ -100,7 +126,7 @@ describe('PersonaImport', () => {
   })
 
   it('holds the page save lock from the click until the save is over', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     let release!: () => void
     vi.mocked(drawRecipe).mockImplementation(() => new Promise<string>((r) => { release = () => r(WEBP) }))
     pick([{ id: 'emma', name: 'Emma', avatar: recipe('e') }])
@@ -112,7 +138,7 @@ describe('PersonaImport', () => {
   })
 
   it('saves anyway when an avatar cannot be drawn, keeps the old one, and names the code', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     vi.mocked(drawRecipe).mockRejectedValue(new Error('no'))
     pick([{ id: 'hiro', name: 'Hiro', avatar: recipe('new') }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
@@ -123,7 +149,8 @@ describe('PersonaImport', () => {
 
   it('tells the page the import was saved, and says so when the form that was open was rebuilt', async () => {
     const onImported = vi.fn(() => true)
-    render(<PersonaImport items={seed(['hiro'])} fallbackHostId="h1" disabled={false} onImported={onImported} />)
+    seed(['hiro'])
+    render(<PersonaImport fallbackHostId="h1" disabled={false} onImported={onImported} />)
     vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
@@ -133,7 +160,8 @@ describe('PersonaImport', () => {
 
   it('does not call the page when the save failed', async () => {
     const onImported = vi.fn(() => true)
-    render(<PersonaImport items={seed(['hiro'])} fallbackHostId="h1" disabled={false} onImported={onImported} />)
+    seed(['hiro'])
+    render(<PersonaImport fallbackHostId="h1" disabled={false} onImported={onImported} />)
     vi.mocked(savePersonas).mockRejectedValue(new PersonaStaleError())
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
@@ -142,7 +170,7 @@ describe('PersonaImport', () => {
   })
 
   it('does not report plain success when another collection won while the import was written', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     // savePersonas answers base: null when the shown collection is no longer the one it wrote
     vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     pick([{ id: 'emma', name: 'Emma' }])
@@ -153,14 +181,14 @@ describe('PersonaImport', () => {
 
   it('does not offer to import a file that would change nothing', async () => {
     const items = seed(['hiro'])
-    mount(items)
+    mount()
     pick([{ id: 'hiro', name: items[0].name }])
     expect((await screen.findByTestId('persona-import-nothing'))).toBeTruthy()
     expect((screen.getByTestId('persona-import-confirm') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('says so when the file is not a list of personas, and shows no summary', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     pick('{"hello": 1}')
     expect((await screen.findByTestId('persona-import-problem')).textContent).toMatch(/不是角色清單|not a list/)
     expect(screen.queryByTestId('persona-import-summary')).toBeNull()
@@ -169,7 +197,7 @@ describe('PersonaImport', () => {
   })
 
   it('asks the user to choose the file again when the collection moved after the plan was made', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     vi.mocked(savePersonas).mockRejectedValue(new PersonaStaleError())
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
@@ -182,7 +210,7 @@ describe('PersonaImport', () => {
       byHost: { h1: { ...emptyPeerHostEntry(), fetchedAt: 5, rows: {} } },
       refresh: vi.fn(async () => {}),
     })
-    mount(seed([]))
+    seed([]); mount()
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
     expect(await screen.findByTestId('persona-first-save')).toBeTruthy()
@@ -193,7 +221,7 @@ describe('PersonaImport', () => {
   })
 
   it('does not ask again when the source already has personas', async () => {
-    mount(seed(['hiro']))
+    seed(['hiro']); mount()
     pick([{ id: 'emma', name: 'Emma' }])
     fireEvent.click(await screen.findByTestId('persona-import-confirm'))
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
@@ -201,7 +229,7 @@ describe('PersonaImport', () => {
   })
 
   it('is off while the page is locked or read-only', () => {
-    render(<PersonaImport items={[]} fallbackHostId="h1" disabled />)
+    render(<PersonaImport fallbackHostId="h1" disabled />)
     expect((screen.getByTestId('persona-import') as HTMLButtonElement).disabled).toBe(true)
   })
 })

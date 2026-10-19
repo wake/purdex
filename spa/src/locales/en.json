@@ -2081,6 +2081,7 @@
   "settings.personas.import.cancel": "Cancel",
   "settings.personas.import.notList": "This file is not a list of personas (a JSON array, or an object with items or personas).",
   "settings.personas.import.stale": "The personas changed after the file was chosen, so nothing was imported. Choose the file again.",
+  "settings.personas.import.tooBig": "This file is too large (the limit is 2 MB) to be a list of personas, so it was not read.",
   "settings.personas.import.movedOn": "The import was saved, but something newer arrived from elsewhere at the same time. The page shows that newer copy, which may not include the import. Please check.",
   "settings.personas.import.editorReloaded": "The open form now shows what was saved.",
   "settings.personas.import.redrawFailed": "These avatars could not be drawn and keep what they had: {{codes}}.",

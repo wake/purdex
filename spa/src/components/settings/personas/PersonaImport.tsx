@@ -15,6 +15,7 @@ import { drawRecipe } from '../../../lib/names/persona-draw'
 import { parsePersonasJson, planImport, type ImportPlan } from '../../../lib/names/persona-import'
 import { redrawForImport } from '../../../lib/names/persona-import-run'
 import { editBase, savePersonas, type EditBase } from '../../../lib/names/persona-save'
+import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { saveErrorMessage, savedNote } from '../../../lib/names/persona-save-report'
 import type { Persona } from '../../../lib/names/persona-types'
 import { FirstSaveConfirm } from './FirstSaveConfirm'
@@ -23,8 +24,6 @@ const BTN =
   'shrink-0 rounded-md border border-border-default px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 
 interface Props {
-  /** The collection the page shows: what the file is merged into. */
-  items: Persona[]
   /** Where a first collection goes when no host holds one yet (see the page). */
   fallbackHostId: string | null
   disabled: boolean
@@ -35,7 +34,14 @@ interface Props {
   onImported?: () => boolean
 }
 
-interface Planned { plan: ImportPlan; base: EditBase | null }
+/**
+ * What the file was planned against: the collection it was merged into and the base that collection had, taken in one
+ * synchronous step (see `choose`). They go together to the save and to everything that asks "what was there before".
+ */
+interface Planned { plan: ImportPlan; base: EditBase | null; items: Persona[] }
+
+/** A personas file is a few dozen entries with recipes, no images; the daemon refuses a body over 4 MiB anyway. */
+export const MAX_IMPORT_BYTES = 2 * 1024 * 1024
 
 function readText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -46,7 +52,7 @@ function readText(file: File): Promise<string> {
   })
 }
 
-export function PersonaImport({ items, fallbackHostId, disabled, onImported }: Props) {
+export function PersonaImport({ fallbackHostId, disabled, onImported }: Props) {
   const t = useI18nStore((s) => s.t)
   const input = useRef<HTMLInputElement>(null)
   const [planned, setPlanned] = useState<Planned | null>(null)
@@ -59,10 +65,20 @@ export function PersonaImport({ items, fallbackHostId, disabled, onImported }: P
     if (input.current) input.current.value = '' // the same file can be picked again after a change
     if (!file) return
     setProblem(null); setConfirmHost(null)
+    if (file.size > MAX_IMPORT_BYTES) {
+      setPlanned(null)
+      setProblem(t('settings.personas.import.tooBig'))
+      return
+    }
     try {
       const entries = parsePersonasJson(await readText(file))
-      // The base is taken now: a save from this plan is refused if the collection moves before it is confirmed.
-      setPlanned({ plan: planImport(items, entries), base: editBase() })
+      // Reading the file took a while, and the shown collection (or which host is the source) may have changed meanwhile.
+      // The collection to merge into and the base to save against are therefore both taken NOW, from the store, in one
+      // step: a plan made on one source's items and saved under another source's base would pass the compare-and-set and
+      // write the first one's collection onto the second. A save from this plan is refused if the collection moves
+      // before it is confirmed.
+      const items = usePersonaStore.getState().current()?.items ?? []
+      setPlanned({ plan: planImport(items, entries), base: editBase(), items })
     } catch {
       setPlanned(null)
       setProblem(t('settings.personas.import.notList'))
@@ -71,7 +87,7 @@ export function PersonaImport({ items, fallbackHostId, disabled, onImported }: P
 
   const run = async (confirmed: boolean) => {
     if (!planned) return
-    const { plan, base } = planned
+    const { plan, base, items } = planned
     const target = base?.hostId ?? fallbackHostId ?? ''
     // The first persona on a source that has none renames its live conversations: asked first, as in the form's save.
     if (!confirmed && items.length === 0 && plan.result.length > 0 && target !== '') {

@@ -207,7 +207,7 @@ export function PersonasSection() {
       <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
 
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-        <PersonaImport items={items} fallbackHostId={fallbackHostId} disabled={unsupported || saving || readOnly} onImported={reloadEditor} />
+        <PersonaImport fallbackHostId={fallbackHostId} disabled={unsupported || saving || readOnly} onImported={reloadEditor} />
         <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving || readOnly} onClick={() => open('')}>
           {t('settings.personas.new')}
         </button>
