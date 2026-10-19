@@ -61,7 +61,13 @@ export function JobsPane(_props: PaneRendererProps) {
   const [mode, setModeState] = useState<JobsMode>(() => readJobsMode())
   const setMode = (m: JobsMode) => { writeJobsMode(m); setModeState(m) }
 
-  const jobs = useMemo(() => Object.values(byOrigin).flatMap((o) => Object.values(o.jobs)), [byOrigin])
+  // The store keeps what it read; the pane shows the pool's hosts' jobs. A pool with no daemon at all shows none, and says so; one that could not be read for a moment (no hosts, not an old daemon) keeps what was read.
+  const jobs = useMemo(() => {
+    const aliases = new Set(hosts.map((h) => h.alias))
+    return Object.entries(byOrigin)
+      .filter(([origin]) => (hosts.length > 0 ? aliases.has(origin) : !oldDaemon))
+      .flatMap(([, o]) => Object.values(o.jobs))
+  }, [byOrigin, hosts, oldDaemon])
   const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
   const entries = useMemo(() => queueEntries(jobs, now, hosts), [jobs, now, hosts])
   const failed = Object.entries(errors).flatMap(([origin, e]) => {
@@ -81,7 +87,7 @@ export function JobsPane(_props: PaneRendererProps) {
         {mode === 'live' && <span data-testid="jobs-count" className="tabular-nums text-text-secondary">{t('watch.jobs.queue.count', { n: entries.length })}</span>}
       </div>
       {failed.map((f) => <p key={f.origin} data-testid="jobs-error" className="text-xs text-status-warning-text">{f.origin}：{f.text}</p>)}
-      {oldDaemon && jobs.length === 0 && <p data-testid="jobs-no-pool" className="text-xs text-text-muted">{t('watch.jobs.no_pool')}</p>}
+      {oldDaemon && <p data-testid="jobs-no-pool" className="text-xs text-text-muted">{t('watch.jobs.no_pool')}</p>}
       {mode === 'live'
         ? (
           <>

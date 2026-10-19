@@ -169,6 +169,28 @@ describe('the pane around the store', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  it('jobs of an origin that has left the pool are not shown (the store keeps them; the pane shows the pool\'s hosts only)', () => {
+    withJobs(job('gone', { origin: 'air19' }), job('here', { origin: 'mlab' }))
+    mount()
+    expect(screen.getAllByTestId('job-queued').map((c) => c.getAttribute('data-job-id'))).toEqual(['here'])
+  })
+
+  it('no daemon offers the pool any more: the old jobs are not shown, and the pane says so', () => {
+    withJobs(job('stale'))
+    usePoolStore.setState({ hosts: [], oldDaemon: true })
+    mount()
+    expect(screen.getByTestId('jobs-no-pool')).toBeInTheDocument()
+    expect(screen.queryByTestId('job-queued')).toBeNull()
+  })
+
+  it('the pool could not be read for a moment (no hosts, but not an old daemon): what was read stays on the screen', () => {
+    withJobs(job('kept'))
+    usePoolStore.setState({ hosts: [], oldDaemon: false })
+    mount()
+    expect(screen.getAllByTestId('job-queued').map((c) => c.getAttribute('data-job-id'))).toEqual(['kept'])
+    expect(screen.queryByTestId('jobs-no-pool')).toBeNull()
+  })
+
   it('no daemon offers the pool and nothing was read: it says so', () => {
     usePoolStore.setState({ hosts: [], oldDaemon: true })
     mount()
