@@ -86,10 +86,8 @@ func Why(f wire.Facts) wire.HeadroomReasons {
 		j.gateFull = true
 	}
 	r := j.reasons()
-	// a record whose headroom is 0 for no reason it shows (a skewed or faulty peer): never an empty list, which means "there is room"
-	if f.Derived.Headroom.Heavy == 0 && len(r.Heavy) == 0 {
-		r.Heavy = append(r.Heavy, ReasonUnknown)
-	}
+	// a light side at 0 for no reason the record shows (a skewed or faulty peer): never an empty list, which means "there is room".
+	// (Heavy needs no such line: a heavy 0 nothing else explains is gate_full, above.)
 	if f.Derived.Headroom.Light == 0 && len(r.Light) == 0 {
 		r.Light = append(r.Light, ReasonUnknown)
 	}
