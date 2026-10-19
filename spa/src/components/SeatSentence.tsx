@@ -16,16 +16,18 @@ interface InlineProps {
   /** The host whose colour the initials sit on when the persona has no picture. */
   hostId: string | null
   size?: 14 | 16 | 18
+  /** Show the address as this element's own tooltip (default). Off where the surrounding control already carries a fuller one. */
+  titled?: boolean
 }
 
 /** `[avatar] Name` for a persona; the plain fallback text otherwise. */
-export function SeatInline({ address, fallback, hostId, size = 14 }: InlineProps) {
+export function SeatInline({ address, fallback, hostId, size = 14, titled = true }: InlineProps) {
   const seat = useSeat(address)
   const look = useHostLook(hostId)
   if (seat === null) return <>{fallback}</>
   const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   return (
-    <span data-testid="seat-inline" data-seat={seat.code} title={address} className="inline-flex items-center gap-1 align-middle">
+    <span data-testid="seat-inline" data-seat={seat.code} title={titled ? address : undefined} className="inline-flex items-center gap-1 align-middle">
       <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} decorative />
       <span>{seat.name}</span>
     </span>

@@ -14,6 +14,7 @@ import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
 import type { PeerRow } from '../stores/usePeerStore'
 import { reasonText } from '../lib/peer-display'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './status/StatusSegments'
+import { SeatInline } from './SeatSentence'
 import { CcUsageSegments } from './status/UsageSegments'
 import { WorkerStatusBar } from './status/WorkerStatusBar'
 import { PaneModeButtons } from './status/PaneModeButtons'
@@ -297,7 +298,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
         <Separator />
         <CopySegment
           testId="status-seg-peer-id"
-          display={peerIdDisplay || '\u2014'}
+          display={<SeatInline address={peerRow?.address ?? ''} fallback={peerIdDisplay || '\u2014'} hostId={agentHostId} titled={false} />}
           value={peerId.value}
           what={t('peer.label.peer_id')}
           title={peerIdTitle(peer, t)}

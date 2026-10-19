@@ -80,7 +80,7 @@ describe('the chat peer line', () => {
 
 describe('a peer\'s message waiting in Claude Code\'s queue', () => {
   const queued = (from: string): HeaderQueued => ({ text: 'wait for me', at: 6, source: 'peer', from })
-  const tail = (from: string) => render(<PendingTail paneKey="p-pend" hostId="h" sessionId="s" queued={[queued(from)]} />)
+  const tail = (from: string) => render(<PendingTail paneKey="p-pend" hostId="h" sessionId="s" entries={[]} queued={[queued(from)]} />)
 
   it('names the person', () => {
     seedKenji()
