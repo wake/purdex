@@ -8,9 +8,12 @@ import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { HalfHandoffMark } from '../relay/HalfHandoffMark'
 import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
+import { SeatInline } from '../SeatSentence'
 
 export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhostLead; team: TeamDisplay; activeTabId: string | null }) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the tooltip reads the persona store without subscribing: redraw when it loads or changes
   const { lead, teamKey, members, collapsed } = ghost
   const open = () => team.onOpenSeat(teamKey, lead.sessionId)
   const freshHandoff = useFreshHandoffOfSeat(teamKey, lead.sessionId)
@@ -19,7 +22,7 @@ export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhos
       <div
         role="button"
         tabIndex={0}
-        title={t('team.sidebar.ghost', { title: lead.title })}
+        title={t('team.sidebar.ghost', { title: seatName(lead.address, lead.title) })}
         onClick={open}
         onKeyDown={(e) => { if (e.key === 'Enter') open() }}
         className="group relative flex items-center gap-1.5 mx-2 pl-[18px] pr-1.5 py-1 rounded-md text-xs cursor-pointer text-text-muted border border-dashed border-border-default hover:bg-surface-hover"
@@ -28,7 +31,7 @@ export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhos
           <TeamSeatIcon hostId={lead.hostId} sessionCode={lead.sessionCode} subagents />
           <TeamSeatHostBadge hostId={lead.hostId} sessionCode={lead.sessionCode} />
         </span>
-        <span className="flex-1 truncate italic">{lead.title}</span>
+        <span className="flex-1 truncate italic"><SeatInline address={lead.address} fallback={lead.title} hostId={lead.hostId || null} titled={false} /></span>
         <HalfHandoffMark handoff={freshHandoff} variant="icon" />
         <span className="text-[10px] flex-shrink-0">{t('team.sidebar.ghost_badge')}</span>
       </div>
