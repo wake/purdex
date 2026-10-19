@@ -19,10 +19,12 @@ import (
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/gateheld"
+	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -32,6 +34,12 @@ import (
 
 func main() {
 	if handled, err := runInstallCmd(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatalf("wwd: %v", err)
+		}
+		return
+	}
+	if handled, err := runAdvisorCmd(os.Args[1:]); handled {
 		if err != nil {
 			log.Fatalf("wwd: %v", err)
 		}
@@ -181,16 +189,22 @@ func run(cfgPath string) error {
 		}
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
+	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
+	refs.ttl = 2 * time.Second // the daemon's labels and the drift watcher ask once per facts record each: one read of the manifests serves both
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
-		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st,
+		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs,
 	}))
+	watcher := newDriftWatcher(alias, st, refs, d.RefreshLabels) // an earned label whose OS version or tool moved is taken away (spec §7)
 	sampler.SetOnFacts(func(f wire.Facts) {
 		d.OnFacts(f)
 		usage.OnFacts(f)
+		_, fp := labels.FromFacts(f)
+		watcher.OnFacts(fp)
 	})
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
+	go runAdvisor(ctx, advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler})
 	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
 	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
 	// defer runs before it, which was deferred earlier), also when run() failed.

@@ -43,6 +43,24 @@ func (s *Store) StartsSince(since time.Time) (int, error) {
 	return n, err
 }
 
+// StartTimes are the recorded starts at or after since, oldest first.
+func (s *Store) StartTimes(since time.Time) ([]time.Time, error) {
+	rows, err := s.db.Query(`SELECT started_ms FROM wwd_starts WHERE started_ms >= ? ORDER BY started_ms`, since.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var ms int64
+		if err := rows.Scan(&ms); err != nil {
+			return nil, err
+		}
+		out = append(out, time.UnixMilli(ms).UTC())
+	}
+	return out, rows.Err()
+}
+
 // oneLine drops control characters and cuts s to at most max bytes without splitting a character.
 func oneLine(s string, max int) string {
 	s = strings.Map(func(r rune) rune {

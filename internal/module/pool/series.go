@@ -3,9 +3,9 @@ package poolmod
 import (
 	"context"
 	"net/http"
-	"slices"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -24,52 +24,15 @@ const (
 	seriesFineWindow = 2 * time.Hour
 )
 
-// SeriesPoint is one moment of a host: the readings a chart draws, taken from one facts record.
-type SeriesPoint struct {
-	At             time.Time  `json:"at"`
-	Zone           wire.Zone  `json:"zone"`
-	CPUIdlePct     float64    `json:"cpu_idle_pct"`
-	MemAvailableMB int        `json:"mem_available_mb"`
-	Pressure       int        `json:"pressure"` // 0 when unknown
-	PageOutRate    *float64   `json:"page_out_rate"`
-	DiskMaxUsedPct *float64   `json:"disk_max_used_pct"` // null when the record names no disk
-	Headroom       wire.Slots `json:"headroom"`
-}
-
-// SeriesResponse is the answer: the step that was served, the points oldest first, and Truncated when the oldest ones were left out to
-// stay within seriesMaxPoints.
-type SeriesResponse struct {
-	Step      string        `json:"step"`
-	Points    []SeriesPoint `json:"points"`
-	Truncated bool          `json:"truncated"`
-}
+// SeriesPoint and SeriesResponse are wire's: wwd cuts the series itself (GET /v1/facts/series) and this daemon cuts it from a full
+// history only when the wwd it asks does not have that route.
+type (
+	SeriesPoint    = wire.SeriesPoint
+	SeriesResponse = wire.FactsSeriesResponse
+)
 
 // seriesOf projects a history onto points, and keeps the latest seriesMaxPoints of them.
-func seriesOf(h wire.FactsHistoryResponse) SeriesResponse {
-	recs := h.Records
-	if !slices.IsSortedFunc(recs, func(a, b wire.Facts) int { return a.At.Compare(b.At) }) { // wwd answers oldest first; do not trust it with what is cut
-		recs = slices.Clone(recs)
-		slices.SortStableFunc(recs, func(a, b wire.Facts) int { return a.At.Compare(b.At) })
-	}
-	out := SeriesResponse{Step: h.Step, Points: make([]SeriesPoint, 0, min(len(recs), seriesMaxPoints))}
-	if len(recs) > seriesMaxPoints {
-		recs, out.Truncated = recs[len(recs)-seriesMaxPoints:], true
-	}
-	for _, f := range recs {
-		p := SeriesPoint{
-			At: f.At, Zone: f.Derived.Zone, CPUIdlePct: f.CPU.IdlePct, MemAvailableMB: f.Mem.AvailableMB, Pressure: f.Mem.Pressure,
-			PageOutRate: f.Mem.PageOutRate, Headroom: f.Derived.Headroom,
-		}
-		for i, d := range f.Disk {
-			if i == 0 || d.UsedPct > *p.DiskMaxUsedPct {
-				u := d.UsedPct
-				p.DiskMaxUsedPct = &u
-			}
-		}
-		out.Points = append(out.Points, p)
-	}
-	return out
-}
+func seriesOf(h wire.FactsHistoryResponse) SeriesResponse { return wire.SeriesOf(h, seriesMaxPoints) }
 
 // parseSince reads a since that is an RFC 3339 time or a duration back from now ("1h", "24h", "90m"). The default is cut to the minute
 // so that readers asking within the same minute share one key.
@@ -111,7 +74,21 @@ func (m *Module) handleSeries(w http.ResponseWriter, r *http.Request) {
 	host := q.Get("host")
 	key := "series|" + host + "|" + since.Format(time.RFC3339) + "|" + step
 	m.serve(w, r, key, func(ctx context.Context) (any, *apiError) {
-		h, err := m.client().FactsHistory(ctx, wire.FactsHistoryQuery{Since: since, Step: step, Host: host})
+		hq := wire.FactsHistoryQuery{Since: since, Step: step, Host: host}
+		// the host that has the data cuts the series (a day of 1 m points is 10 MB of records, more than a peer's answer may be);
+		// a wwd without that route (an older release, here or on the peer) answers 404, and then the full history is fetched and cut here
+		sr, err := m.client().FactsSeries(ctx, wire.FactsSeriesQuery{FactsHistoryQuery: hq, Limit: seriesMaxPoints})
+		if err == nil {
+			// the 2000-point contract of this route is held here too, whatever a wwd of another release answered to the limit
+			if over := len(sr.Points) - seriesMaxPoints; over > 0 {
+				sr.Points, sr.Truncated = sr.Points[over:], true
+			}
+			return sr, nil
+		}
+		if !client.RouteMissing(err) {
+			return nil, historyError(err)
+		}
+		h, err := m.client().FactsHistory(ctx, hq)
 		if err != nil {
 			return nil, historyError(err)
 		}

@@ -70,7 +70,7 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 	case sessionRoleLead:
 		query, wire = `SELECT id FROM teams WHERE lead_session_id = ? AND ended_at = 0`, team.SeatLead
 	case sessionRoleMemberLocal:
-		query, wire = `SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
+		query, wire = `SELECT m.team_id, t.lead_session_id FROM team_members m JOIN teams t ON t.id = m.team_id
 			WHERE m.session_id = ? AND m.state IN ('active', 'killing') AND t.ended_at = 0`, team.SeatMember
 	case sessionRoleMemberRemote:
 		query, wire = `SELECT team_id, lead_host_id, lead_session_id FROM remote_members WHERE member_session_id = ? AND state = 'active'`, team.SeatMemberRemote
@@ -79,8 +79,11 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 	}
 	seat := team.Seat{Role: wire}
 	dest := []any{&seat.TeamID}
-	if wire == team.SeatMemberRemote { // where the lead is, for a reader that has to ask its host (the journal)
+	switch wire {
+	case team.SeatMemberRemote: // where the lead is, for a reader that has to ask its host (the journal)
 		dest = append(dest, &seat.LeadHostID, &seat.LeadSessionID)
+	case team.SeatMember: // the lead of its team on this host (the name backfill follows the lead's pairs)
+		dest = append(dest, &seat.LeadSessionID)
 	}
 	err = tx.QueryRow(query, sessionID).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -90,6 +93,21 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 		return team.Seat{}, fmt.Errorf("seat %s: %w", sessionID, err)
 	}
 	return seat, nil
+}
+
+// InRelay says whether sessionID is in a relay op that has not finished, as the session being relayed or as the new session it
+// produced (team.RelayGuard).
+func (s *Store) InRelay(sessionID string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM relay_ops
+		WHERE state NOT IN ('done', 'failed', 'cancelled') AND (session_id = ? OR new_session_id = ?) LIMIT 1`, sessionID, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("in relay %s: %w", sessionID, err)
+	}
+	return true, nil
 }
 
 // PredecessorOf is the session a relay replaced with sid (one session_lineage row, read by its primary key).
