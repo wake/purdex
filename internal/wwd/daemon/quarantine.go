@@ -24,7 +24,7 @@ type LabelKeeper interface {
 	EarnedLabel(label string) (wire.EarnedLabel, bool, error)
 	QuarantineEarnedLabel(label string, at time.Time) (changed bool, err error)
 	SetEarnedLabelState(label, state string) (ok bool, err error)
-	DeleteEarnedLabel(label string) error
+	ReleaseEarnedLabel(label string, granted time.Time) (deleted bool, err error)
 }
 
 // CacheDropper drops the reuse entries this host made under a label (store.Store).
@@ -42,6 +42,9 @@ const maxPagesPerPass = 10
 // ErrNoSuchLabel: the label is not in this host's earned-label table.
 var ErrNoSuchLabel = errors.New("daemon: no such earned label")
 
+// ErrLabelChanged: the label was granted again while it was being released; nothing was released, look and ask again.
+var ErrLabelChanged = errors.New("daemon: the earned label changed while it was being released")
+
 // ApplyDisagreement quarantines the label a disagreement names, if it is this host's, earned now, and was granted before the
 // disagreement (a disagreement read again, or from before the label was earned anew, takes nothing away). It then drops the reuse
 // entries this host made under the label, and tells the daemon so the label stops being advertised at once. changed says whether the
@@ -51,26 +54,42 @@ func (d *Daemon) ApplyDisagreement(x wire.Disagreement) (changed bool, err error
 		return false, nil
 	}
 	changed, err = d.opts.Labels.QuarantineEarnedLabel(x.Label, x.At)
-	if err != nil || !changed {
+	if err != nil {
 		return false, err
 	}
-	d.afterQuarantine(x.Label)
-	// the exception: the label was taken from the host, so it says so, with the evidence
-	log.Printf("wwd: quarantine: %s quarantined: %s and %s disagree on tree %s (jobs %s and %s)", x.Label, x.Host, x.OtherHost, x.Tree, x.Jobs[0], x.Jobs[1])
-	return true, nil
+	if !changed {
+		// Quarantined already by a disagreement this one follows (or by hand), or not the host's to lose. The entries of a label that is
+		// quarantined and was granted before this disagreement are dropped again: an earlier drop may have failed, or wwd restarted
+		// before it was done, and an entry left behind could answer again once the task is qualified anew.
+		e, ok, err := d.opts.Labels.EarnedLabel(x.Label)
+		if err != nil {
+			return false, err
+		}
+		if !ok || e.State != wire.EarnedLabelQuarantined || !e.GrantedAt.Before(x.At) {
+			return false, nil
+		}
+	} else {
+		d.RefreshLabels() // the label stops being advertised at once, whatever happens to the entries
+		// the exception: the label was taken from the host, so it says so, with the evidence
+		log.Printf("wwd: quarantine: %s quarantined: %s and %s disagree on tree %s (jobs %s and %s)", x.Label, x.Host, x.OtherHost, x.Tree, x.Jobs[0], x.Jobs[1])
+	}
+	// a failure is an error: the pass does not move past this disagreement, so it is met again
+	return changed, d.dropEntries(x.Label)
 }
 
-// afterQuarantine drops the entries the host made under the label (the lookup would not answer from them without the label, so a failure
-// is logged, not retried) and announces the labels.
-func (d *Daemon) afterQuarantine(label string) {
-	if d.opts.CacheDrop != nil {
-		if n, err := d.opts.CacheDrop.DeleteCacheByLabelAndHost(label, d.opts.Alias); err != nil {
-			log.Printf("wwd: quarantine: dropping the reuse entries of %s: %v", label, err)
-		} else if n > 0 {
-			log.Printf("wwd: quarantine: %d reuse entries of %s dropped", n, label)
-		}
+// dropEntries drops the reuse entries the host made under the label.
+func (d *Daemon) dropEntries(label string) error {
+	if d.opts.CacheDrop == nil {
+		return nil
 	}
-	d.RefreshLabels()
+	n, err := d.opts.CacheDrop.DeleteCacheByLabelAndHost(label, d.opts.Alias)
+	if err != nil {
+		return fmt.Errorf("dropping the reuse entries of %s: %w", label, err)
+	}
+	if n > 0 {
+		log.Printf("wwd: quarantine: %d reuse entries of %s dropped", n, label)
+	}
+	return nil
 }
 
 // Quarantine quarantines a label by hand (pdx wwd quarantine). ErrNoSuchLabel when this host has no such earned label.
@@ -85,9 +104,9 @@ func (d *Daemon) Quarantine(label string) error {
 	if !ok {
 		return ErrNoSuchLabel
 	}
-	d.afterQuarantine(label)
+	d.RefreshLabels()
 	log.Printf("wwd: quarantine: %s quarantined by hand", label)
-	return nil
+	return d.dropEntries(label)
 }
 
 // Release lets go of a label by hand (pdx wwd release): the row is deleted, so the host does not hold the label until it qualifies for
@@ -96,13 +115,20 @@ func (d *Daemon) Release(label string) error {
 	if d.opts.Labels == nil {
 		return ErrNoSuchLabel
 	}
-	if _, ok, err := d.opts.Labels.EarnedLabel(label); err != nil {
+	e, ok, err := d.opts.Labels.EarnedLabel(label)
+	if err != nil {
 		return err
-	} else if !ok {
+	}
+	if !ok {
 		return ErrNoSuchLabel
 	}
-	if err := d.opts.Labels.DeleteEarnedLabel(label); err != nil {
+	// the row that was looked at is the one deleted: a label granted anew in between (a qualification runs on its own) is not released
+	deleted, err := d.opts.Labels.ReleaseEarnedLabel(label, e.GrantedAt)
+	if err != nil {
 		return err
+	}
+	if !deleted {
+		return ErrLabelChanged
 	}
 	d.RefreshLabels()
 	log.Printf("wwd: quarantine: %s released by hand", label)
@@ -239,6 +265,8 @@ func (d *Daemon) handleLabelChange(change func(label string) error) http.Handler
 		switch err := change(req.Label); {
 		case errors.Is(err, ErrNoSuchLabel):
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		case errors.Is(err, ErrLabelChanged):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		default:

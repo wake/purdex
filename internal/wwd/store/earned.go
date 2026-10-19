@@ -115,6 +115,17 @@ func (s *Store) EarnedLabel(label string) (e wire.EarnedLabel, ok bool, err erro
 	return e, true, nil
 }
 
+// ReleaseEarnedLabel deletes the row of the label if it is still the one granted at granted, in one statement: a label that was granted
+// again in the meantime is a different row and stays. deleted says whether a row was deleted.
+func (s *Store) ReleaseEarnedLabel(label string, granted time.Time) (deleted bool, err error) {
+	res, err := s.db.Exec(`DELETE FROM earned_labels WHERE label = ? AND granted_ms = ?`, label, granted.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // QuarantineEarnedLabel quarantines the label if it is earned now and was granted before at (the time of a disagreement), in one
 // statement: a disagreement read again, or one from before the label was earned anew, takes nothing away. changed says whether a row
 // was changed.

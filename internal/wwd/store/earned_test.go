@@ -137,6 +137,28 @@ func TestEarnedLabelKeepsALongManifestTaskName(t *testing.T) {
 	}
 }
 
+// A release deletes the row that was looked at, not one granted again since.
+func TestReleaseEarnedLabelDeletesOnlyTheGrantItWasAskedAbout(t *testing.T) {
+	s := openTemp(t)
+	granted := time.UnixMilli(1_700_000_000_000).UTC()
+	label := "task:purdex/tsc"
+	if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: label, Fingerprint: map[string]string{"node": "24"}, Snapshot: "abc", GrantedAt: granted.Add(time.Minute), State: wire.EarnedLabelEarned}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted); err != nil || deleted {
+		t.Fatalf("an older grant: deleted=%v err=%v", deleted, err)
+	}
+	if _, ok, _ := s.EarnedLabel(label); !ok {
+		t.Fatal("the row granted since was deleted")
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted.Add(time.Minute)); err != nil || !deleted {
+		t.Fatalf("the grant looked at: deleted=%v err=%v", deleted, err)
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted.Add(time.Minute)); err != nil || deleted {
+		t.Fatalf("nothing left: deleted=%v err=%v", deleted, err)
+	}
+}
+
 // A disagreement quarantines a label only if the label is earned and was granted before the disagreement: one read again later, or
 // from before the label was earned anew, must not take it away, and the check and the change are one statement.
 func TestQuarantineEarnedLabelOnlyWhatWasGrantedBefore(t *testing.T) {

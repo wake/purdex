@@ -182,7 +182,83 @@ func TestADisagreementThatDoesNotConcernTheLabelChangesNothing(t *testing.T) {
 	changed, err = r.d.ApplyDisagreement(disagreementFor(3, "mserv", "air26", quarGranted.Add(2*time.Hour)))
 	require.NoError(t, err)
 	assert.False(t, changed, "already quarantined")
-	assert.Len(t, r.cache.dropped(), 1)
+	assert.Len(t, r.cache.dropped(), 2, "the entries are dropped again, harmlessly: an earlier drop may have failed")
+}
+
+// The label is quarantined, but the entries could not be dropped: the disagreement is not left behind, it is met again, so an entry that
+// survived cannot answer once the task is qualified anew.
+func TestAFailedCacheDropIsRetriedOnTheNextPass(t *testing.T) {
+	origin := &peerOrigin{items: []wire.Disagreement{disagreementFor(1, "mserv", "air26", quarGranted.Add(time.Hour))}}
+	srv := origin.serve("air26")
+	defer srv.Close()
+	r := newQuarRig(t, Options{Peers: []PeerAddr{{"air26", addr(srv)}}})
+	r.cache.mu.Lock()
+	r.cache.err = context.DeadlineExceeded
+	r.cache.mu.Unlock()
+
+	r.d.QuarantinePass(t.Context())
+	assert.Equal(t, wire.EarnedLabelQuarantined, r.state(t), "the label is gone from the advertised ones whatever happens to the entries")
+	require.Len(t, r.cache.dropped(), 1)
+
+	r.cache.mu.Lock()
+	r.cache.err = nil
+	r.cache.mu.Unlock()
+	r.d.QuarantinePass(t.Context())
+	assert.Len(t, r.cache.dropped(), 2, "the drop was tried again")
+	qs := origin.asked()
+	require.Len(t, qs, 2)
+	assert.Contains(t, qs[1], "after=0", "the cursor stayed before the disagreement")
+	r.d.QuarantinePass(t.Context())
+	assert.Len(t, r.cache.dropped(), 2, "and now it is done")
+}
+
+// After a restart the cursor is 0 again and the label is quarantined already: the entries are dropped again, once per read.
+func TestAQuarantinedLabelsEntriesAreDroppedAfterARestart(t *testing.T) {
+	srv := (&peerOrigin{items: []wire.Disagreement{disagreementFor(1, "mserv", "air26", quarGranted.Add(time.Hour))}}).serve("air26")
+	defer srv.Close()
+	r := newQuarRig(t, Options{Peers: []PeerAddr{{"air26", addr(srv)}}})
+	ok, err := r.st.SetEarnedLabelState(quarLabel, wire.EarnedLabelQuarantined)
+	require.NoError(t, err)
+	require.True(t, ok)
+	r.d.QuarantinePass(t.Context())
+	assert.Equal(t, [][2]string{{quarLabel, "mserv"}}, r.cache.dropped())
+}
+
+// A quarantined label that was granted after the disagreement (it was qualified anew, and quarantined since by hand or by a later
+// disagreement) is not the one the old disagreement was about: its entries are not dropped for it.
+func TestAnOldDisagreementDoesNotDropTheEntriesOfALabelGrantedSince(t *testing.T) {
+	r := newQuarRig(t, Options{})
+	ok, err := r.st.SetEarnedLabelState(quarLabel, wire.EarnedLabelQuarantined)
+	require.NoError(t, err)
+	require.True(t, ok)
+	changed, err := r.d.ApplyDisagreement(disagreementFor(1, "mserv", "air26", quarGranted.Add(-time.Hour)))
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Empty(t, r.cache.dropped())
+}
+
+// A label granted again between the look and the delete is not released: the delete is of the row that was looked at.
+func TestReleaseDoesNotDeleteALabelGrantedAnewInTheMeantime(t *testing.T) {
+	r := newQuarRig(t, Options{})
+	r.d.opts.Labels = regrantingKeeper{LabelKeeper: r.st, st: r.st}
+	err := r.d.Release(quarLabel)
+	assert.ErrorIs(t, err, ErrLabelChanged)
+	assert.Equal(t, wire.EarnedLabelEarned, r.state(t), "the new grant is still there")
+
+	w := httptest.NewRecorder()
+	r.d.SocketHandler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/earned-labels/release", strings.NewReader(`{"label":"`+quarLabel+`"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// regrantingKeeper grants the label again just before the release deletes the row it looked at.
+type regrantingKeeper struct {
+	LabelKeeper
+	st *store.Store
+}
+
+func (k regrantingKeeper) ReleaseEarnedLabel(label string, granted time.Time) (bool, error) {
+	_ = k.st.SaveEarnedLabel(wire.EarnedLabel{Label: label, Fingerprint: map[string]string{"node": "25"}, Snapshot: "def", GrantedAt: granted.Add(time.Minute), State: wire.EarnedLabelEarned})
+	return k.LabelKeeper.ReleaseEarnedLabel(label, granted)
 }
 
 // A peer that is an older build (404), one that does not answer, and one whose answer is not for the host asked about leave the label
