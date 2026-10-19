@@ -70,6 +70,9 @@ func (m *Module) Stop(context.Context) error {
 		m.personaCancel()
 	}
 	m.stopCancel()
+	m.noticeMu.Lock() // no notice worker is admitted from here on (namebackfill.go)
+	m.noticeClosed = true
+	m.noticeMu.Unlock()
 	m.reapWG.Wait()
 	if m.helpers != nil {
 		m.helpers.Stop()

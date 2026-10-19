@@ -132,7 +132,7 @@ func TestPoolRules_APickNeverSeesTheNewPoolWithTheOldLeadFlags(t *testing.T) {
 
 	picked := make(chan string, 1)
 	go func() {
-		got, _ := e.m.pickOther(context.Background(), map[string]bool{})
+		got, _, _ := e.m.pickOther(context.Background(), map[string]bool{})
 		picked <- got
 	}()
 	select {

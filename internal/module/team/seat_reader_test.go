@@ -67,8 +67,9 @@ func TestSeatOf(t *testing.T) {
 	seedMember(t, s, "op-1", "team-1", "local-m", 1000)
 	seedRemote(t, s, "mk-1", "remote-m", 1000)
 	for sid, want := range map[string]team.Seat{
-		"lead-1":  {TeamID: "team-1", Role: team.SeatLead},
-		"local-m": {TeamID: "team-1", Role: team.SeatMember},
+		"lead-1": {TeamID: "team-1", Role: team.SeatLead},
+		// a local member also names its lead's session (name pool v2 backfill: the member's rule is the lead's)
+		"local-m": {TeamID: "team-1", Role: team.SeatMember, LeadSessionID: "lead-1"},
 		// the team id on the lead's host, and where that lead is: its host and its session there (the journal asks the lead's host)
 		"remote-m": {TeamID: "team-L", Role: team.SeatMemberRemote, LeadHostID: "host-L", LeadSessionID: "lead-sid"},
 		"nobody":   {Role: team.SeatNone},
@@ -99,6 +100,39 @@ func TestSeatOf_EndedIsNone(t *testing.T) {
 	}
 }
 
+// The relay guard (name pool v2 backfill): a session in an unfinished relay, as the old session or as the new one.
+func TestInRelay(t *testing.T) {
+	s := openTestStore(t)
+	op := selfOp("op-1", "old-sid", "_aaaaaa", 1000)
+	op.State = team.RelayClaimed
+	if err := s.CreateRelayOp(op); err != nil {
+		t.Fatal(err)
+	}
+	check := func(sid string, want bool) {
+		t.Helper()
+		if got, err := s.InRelay(sid); err != nil || got != want {
+			t.Fatalf("InRelay(%s) = %v err=%v, want %v", sid, got, err, want)
+		}
+	}
+	check("old-sid", true)
+	check("new-sid", false)
+	check("other", false)
+	mustReport(t, s, "op-1", RelayReport{State: team.RelayCleared, NewSessionID: "new-sid", NewRef: "_bbbbbb", At: 1500})
+	check("old-sid", true)
+	check("new-sid", true) // cleared, not done: the successor is still settling
+	mustReport(t, s, "op-1", RelayReport{State: team.RelayDone, At: 2000})
+	check("old-sid", false)
+	check("new-sid", false)
+}
+
+func TestInRelay_DBErrorSurfaces(t *testing.T) {
+	s := openTestStore(t)
+	s.db.Close()
+	if _, err := s.InRelay("a"); err == nil {
+		t.Fatal("a closed db must be an error")
+	}
+}
+
 func TestSeatOf_DBErrorSurfaces(t *testing.T) {
 	s := openTestStore(t)
 	s.db.Close()
@@ -112,6 +146,7 @@ func TestSeatAndLineageRootAreTheStore(t *testing.T) {
 	s := openTestStore(t)
 	var _ team.SeatReader = s
 	var _ team.LineageRootResolver = s
+	var _ team.RelayGuard = s
 }
 
 // Today's behaviour kept: a failed turn end records nothing on the team side (workbook D4).
