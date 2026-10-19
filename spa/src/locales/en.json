@@ -3212,5 +3212,19 @@
   "pool_hosts.page.labels_other": "Other",
   "pool_hosts.page.tools": "Toolchain",
   "pool_hosts.page.tool_missing": "Not installed",
-  "pool_hosts.page.style": "Style and SSH fallback"
+  "pool_hosts.page.style": "Style and SSH fallback",
+  "watch.host.avail.title": "Available for work",
+  "watch.host.avail.exceptions": "Exceptions",
+  "watch.host.avail.until": "until {{time}}",
+  "watch.host.avail.no_end": "no end",
+  "watch.host.wwd_age": "wwd {{version}} · {{s}} s ago",
+  "watch.host.owner.session": "Session",
+  "watch.host.owner.job": "Job",
+  "watch.host.owner.codex": "codex",
+  "watch.host.owner.resident": "Resident",
+  "watch.host.owner.system": "System",
+  "watch.host.residents": "Resident programs",
+  "watch.host.res_session": "Session",
+  "watch.host.res_kind": "Kind",
+  "watch.host.res_count": "Count"
 }
