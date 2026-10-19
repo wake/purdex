@@ -27,6 +27,13 @@ vi.mock('../../lib/host-api', async (orig) => ({
   hostFetch: async () => new Response('{}', { status: 200 }),
 }))
 
+// The host tab starts the pool's poll (as the cells do); it answers with the host this test seeds, so the poll does not wipe the seeded store.
+const fetchPoolHosts = vi.fn()
+vi.mock('../../lib/pool/api', async (orig) => ({
+  ...(await orig<typeof import('../../lib/pool/api')>()),
+  fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a),
+}))
+
 const Other = () => <div data-testid="other-tab" />
 const hostTab: Tab = { ...createTab({ kind: 'watch-host', fleetHostId: 'd-a' }), id: 'watch-host-d-a' }
 const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
@@ -46,7 +53,10 @@ beforeEach(() => {
   s.applyFetched('cfg-a', gen, primaryAnswer(1, [host('d-a', { alias: 'air26' })]))
   const facts = parseFacts(darwinJson)!
   usePoolStore.getState().reset()
-  usePoolStore.setState({ hosts: [{ ...parseHostsAnswer(hostsJson)![0], alias: 'air26', reachable: true, facts }], sourceHostId: 'cfg-a' })
+  const seeded = [{ ...parseHostsAnswer(hostsJson)![0], alias: 'air26', reachable: true, facts }]
+  fetchPoolHosts.mockReset()
+  fetchPoolHosts.mockResolvedValue(seeded)
+  usePoolStore.setState({ hosts: seeded, sourceHostId: 'cfg-a' })
 })
 afterEach(() => { clearViewMemory(); clearWatchDrafts(); clearWorkerDrafts() })
 

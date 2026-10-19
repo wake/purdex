@@ -3258,5 +3258,18 @@
   "pool_hosts.page.labels_other": "其他",
   "pool_hosts.page.tools": "工具鏈",
   "pool_hosts.page.tool_missing": "未安裝",
-  "pool_hosts.page.style": "樣式與 SSH 備援"
+  "pool_hosts.page.style": "樣式與 SSH 備援",
+  "watch.host.avail.title": "可接工作",
+  "watch.host.avail.until": "到 {{time}}",
+  "watch.host.avail.no_end": "沒有結束時間",
+  "watch.host.wwd_age": "wwd {{version}}・{{s}} 秒前",
+  "watch.host.owner.session": "Session",
+  "watch.host.owner.job": "工作",
+  "watch.host.owner.codex": "codex",
+  "watch.host.owner.resident": "常駐",
+  "watch.host.owner.system": "系統",
+  "watch.host.residents": "常駐程式",
+  "watch.host.res_session": "Session",
+  "watch.host.res_kind": "種類",
+  "watch.host.res_count": "數量"
 }
