@@ -88,5 +88,9 @@ func TestSweepKeepsTheOldNameOfALiveKey(t *testing.T) {
 		if got := len(dropped) == 1 && dropped[0] == oldDB; got != tc.wantDrop {
 			t.Errorf("%s: dropped %v, want dropped=%v", name, dropped, tc.wantDrop)
 		}
+		// the old user goes with the old database, or stays with it
+		if got := strings.Contains(f.all(), "wwd_drop_user('"+oldUser+"'"); got != tc.wantDrop {
+			t.Errorf("%s: the old user dropped = %v, want %v:\n%s", name, got, tc.wantDrop, f.all())
+		}
 	}
 }
