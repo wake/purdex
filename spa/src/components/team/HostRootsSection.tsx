@@ -45,8 +45,10 @@ export function HostRootsSection({ leadId }: { leadId: string }) {
   const leadName = hostLabel(leadId, useHostLook(leadId))
   if (view.load !== 'ok' || view.hosts.length === 0) return null
   return (
+    <>
+    <hr data-testid="roots-section-divider" className="my-1 border-0 border-t border-border-subtle" />
     <div data-testid="host-roots" className="flex flex-col gap-1">
-      <div className="text-text-muted">{t('unattended.hostroots.label')}</div>
+      <div className="text-text-secondary">{t('unattended.hostroots.label')}</div>
       {view.hosts.map((h) => (
         <section key={h.hostId || h.alias} data-testid="host-roots-host" data-alias={h.alias} className="mt-1 flex flex-col gap-0.5">
           <div data-testid="host-roots-heading" className="font-medium text-text-secondary">{t('unattended.hostroots.shared', { alias: h.alias, lead: leadName })}</div>
@@ -68,6 +70,7 @@ export function HostRootsSection({ leadId }: { leadId: string }) {
         </section>
       ))}
     </div>
+    </>
   )
 }
 

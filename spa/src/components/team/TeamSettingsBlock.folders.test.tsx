@@ -26,7 +26,7 @@ beforeEach(() => {
 })
 
 describe('the folders line', () => {
-  it('shows a chip per root (the full path in its tooltip) and a dashed +', () => {
+  it('shows a chip per root (the full path in its tooltip) and a pencil', () => {
     useTeamRosterStore.getState().apply(A, [team()])
     show()
     const line = screen.getByTestId('team-settings-folders')
@@ -35,7 +35,7 @@ describe('the folders line', () => {
     expect(chips.map((c) => c.textContent)).toEqual(['/Users/wake/a', '/b'])
     expect(chips[0]).toHaveAttribute('title', '/Users/wake/a')
     expect(chips[0].className).toContain('truncate')
-    expect(within(line).getByTestId('team-folder-add').className).toContain('border-dashed')
+    expect(within(line).getByTestId('team-folder-edit')).toBeInTheDocument()
   })
 
   it('is the only line a roster with roots alone brings (no cap, no quota): the block still shows', () => {
@@ -60,20 +60,20 @@ describe('the folders line', () => {
     useTeamRosterStore.getState().apply(A, [team()])
     show()
     expect(screen.queryByTestId('roots-editor')).toBeNull()
-    fireEvent.click(screen.getByTestId('team-folder-add'))
+    fireEvent.click(screen.getByTestId('team-folder-edit'))
     const editor = screen.getByTestId('roots-editor')
     expect(editor.className).not.toContain('col-span-full')
     expect(editor.className).not.toContain('pl-3')
     expect(within(editor).getAllByTestId('roots-path').map((p) => p.textContent)).toEqual(['/Users/wake/a', '/b'])
-    expect(screen.getByTestId('team-folder-add')).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(screen.getByTestId('team-folder-add'))
+    expect(screen.getByTestId('team-folder-edit')).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByTestId('team-folder-edit'))
     expect(screen.queryByTestId('roots-editor')).toBeNull()
   })
 
   it('switching the block to another team folds the editor away and starts clean', () => {
     useTeamRosterStore.getState().apply(A, [team(), team({ id: 't-l2', lead: sess('l2'), roots: ['/other'] })])
     const view = render(<TeamSettingsBlock hostId={A} teamId="t-l1" name="Team" />)
-    fireEvent.click(screen.getByTestId('team-folder-add'))
+    fireEvent.click(screen.getByTestId('team-folder-edit'))
     expect(screen.getByTestId('roots-editor')).toBeInTheDocument()
     view.rerender(<TeamSettingsBlock hostId={A} teamId="t-l2" name="Team 2" />)
     expect(screen.queryByTestId('roots-editor')).toBeNull()
@@ -84,6 +84,6 @@ describe('the folders line', () => {
     useTeamRosterStore.getState().apply(A, [team({ roots: [] })])
     show()
     expect(screen.queryAllByTestId('team-folder-chip')).toHaveLength(0)
-    expect(screen.getByTestId('team-folder-add')).toBeInTheDocument()
+    expect(screen.getByTestId('team-folder-edit')).toBeInTheDocument()
   })
 })
