@@ -40,6 +40,10 @@ interface OriginState {
   failures: number
   /** The best source for the origin when it was last read: a topology that changes it makes the origin read again, through the new one. */
   primary: string
+  /** A failure nobody retried (no view was watching), or one that gives up: the next `sync` reads the origin again. */
+  dirty: boolean
+  /** A `sync` came while a read was out: when it ends, the origin is looked at again. */
+  resync: boolean
   timer: ReturnType<typeof setTimeout> | null
   /** When `timer` fires (ms): a later request for a later time keeps the earlier one. */
   due: number
@@ -67,13 +71,13 @@ export function createJobsDriver(deps: JobsDriverDeps) {
 
   const stateOf = (origin: string): OriginState => {
     let s = states.get(origin)
-    if (!s) { s = { skip: 0, failures: 0, primary: '', timer: null, due: 0, running: false }; states.set(origin, s) }
+    if (!s) { s = { skip: 0, failures: 0, primary: '', dirty: false, resync: false, timer: null, due: 0, running: false }; states.set(origin, s) }
     return s
   }
 
   function schedule(origin: string, ms: number) {
-    if (watchers === 0) return // nobody watches: a failure waits for the next event, reconnect or view, it is not retried on its own
     const st = stateOf(origin)
+    if (watchers === 0) { st.dirty = true; return } // nobody watches: not retried on its own; the next view (or event, or reconnect) reads it again
     const due = Date.now() + ms
     if (st.timer !== null) {
       if (st.due <= due) return
@@ -102,7 +106,8 @@ export function createJobsDriver(deps: JobsDriverDeps) {
         schedule(origin, backoffMs(st.failures++))
         return false
       default:
-        return false // none, log, read_only …: nothing to try differently; the next event, reconnect or poll reads again
+        stateOf(origin).dirty = true
+        return false // none, log, read_only …: nothing to try differently; the next sync, event, reconnect or poll reads again
     }
   }
 
@@ -113,6 +118,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     if (st.running) return // the read in flight is after the same cursor
     if (st.timer !== null) { clearTimeout(st.timer); st.timer = null }
     st.running = true
+    st.dirty = false
     try {
       for (;;) {
         const cands = candidates(origin, deps.topology())
@@ -129,6 +135,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       }
     } finally {
       st.running = false
+      if (st.resync) { st.resync = false; syncOrigin(origin, deps.topology()) }
     }
   }
 
@@ -153,21 +160,31 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     for (const origin of deps.topology().origins) if (primaryOf(origin) === hostId) void refresh(origin)
   }
 
-  /** Reads what is known to exist and has not been read, and what was read through a source that is no longer the best one (the store then starts it over: a cursor is its source's own). */
+  /**
+   * One origin looked at again: read if the store has not got it, if a failure left it dirty, or if it was read through a source that is no longer the best one (the store then starts it over: a cursor is its source's own).
+   * While a read is out the look waits for it to end.
+   */
+  function syncOrigin(origin: string, topo: JobsTopology) {
+    const st = stateOf(origin)
+    if (st.running) { st.resync = true; return }
+    if (!deps.known(origin)) {
+      if (st.timer === null) void refresh(origin)
+      return
+    }
+    if (st.dirty) {
+      if (st.timer === null) void refresh(origin)
+      return
+    }
+    const best = keyOf(candidates(origin, topo)[0])
+    if (best === '') return
+    if (st.primary === '') st.primary = best // read by someone else (the store has it): this is the source to compare against from now on
+    else if (best !== st.primary) void refresh(origin)
+  }
+
+  /** Reads what is known to exist and has not been read, what a failure left behind, and what was read through a source that is no longer the best one. */
   function sync() {
     const topo = deps.topology()
-    for (const origin of topo.origins) {
-      const st = stateOf(origin)
-      if (st.running) continue
-      if (!deps.known(origin)) {
-        if (st.timer === null) void refresh(origin)
-        continue
-      }
-      const best = keyOf(candidates(origin, topo)[0])
-      if (best === '') continue
-      if (st.primary === '') st.primary = best // read by someone else (the store has it): this is the source to compare against from now on
-      else if (best !== st.primary) void refresh(origin)
-    }
+    for (const origin of topo.origins) syncOrigin(origin, topo)
   }
 
   function pollOnce() {

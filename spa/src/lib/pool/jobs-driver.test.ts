@@ -245,6 +245,42 @@ describe('a topology that changes under an origin that was already read', () => 
   })
 })
 
+describe('a topology that changes while a read is out', () => {
+  it('the change is not lost: when the read ends, the origin is read again through the new best source', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: ['h-air'] }
+    have.add('mlab')
+    let finish!: (o: ReadOutcome) => void
+    store.read.mockReturnValueOnce(new Promise<ReadOutcome>((r) => { finish = r }))
+    const d = driver()
+    d.watch()
+    d.hostOpened('h-air') // a read through h-air is out
+    await vi.advanceTimersByTimeAsync(0)
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab', 'h-air'] }
+    d.sync() // the daemon\'s capabilities arrived: the read in flight is the old source\'s
+    finish(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read.mock.calls.map(src)).toEqual(['h-air>mlab', 'h-mlab'])
+  })
+})
+
+describe('a failure nobody was there to retry', () => {
+  it('is read again once when a view watches (the poll leaves an origin with its own daemon alone), and then no more', async () => {
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
+    have.add('mlab')
+    store.readJob.mockResolvedValueOnce(failing)
+    const d = driver()
+    await d.jobChanged('mlab', 'a') // no watcher: not retried on its own
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(store.read).not.toHaveBeenCalled()
+    d.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).toHaveBeenCalledTimes(1)
+    d.sync()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('stop', () => {
   it('a release from before it does nothing, and the next watcher polls again', async () => {
     have.add('mlab'); have.add('mserv')
