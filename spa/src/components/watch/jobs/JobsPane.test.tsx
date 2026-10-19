@@ -191,6 +191,22 @@ describe('the pane around the store', () => {
     expect(screen.queryByTestId('jobs-no-pool')).toBeNull()
   })
 
+  it('the pool answered with no host at all (the last one was removed): none of the old jobs is shown, and it is no failure', () => {
+    withJobs(job('stale'))
+    usePoolStore.setState({ hosts: [], oldDaemon: false, sourceHostId: 'h1' })
+    mount()
+    expect(screen.queryByTestId('job-queued')).toBeNull()
+    expect(screen.queryByTestId('jobs-no-pool')).toBeNull()
+  })
+
+  it('the error of an origin that has left the pool is not shown; one that is still in it is', () => {
+    useJobsStore.setState({ errors: { air19: { code: 'host_unreachable', action: 'backoff' }, mserv: { code: 'host_unreachable', action: 'backoff' } } })
+    mount()
+    const lines = screen.getAllByTestId('jobs-error')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toHaveTextContent('mserv')
+  })
+
   it('no daemon offers the pool and nothing was read: it says so', () => {
     usePoolStore.setState({ hosts: [], oldDaemon: true })
     mount()

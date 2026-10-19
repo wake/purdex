@@ -62,16 +62,20 @@ export function JobsPane(_props: PaneRendererProps) {
   const setMode = (m: JobsMode) => { writeJobsMode(m); setModeState(m) }
 
   // The store keeps what it read; the pane shows the pool's hosts' jobs. A pool with no daemon at all shows none, and says so; one that could not be read for a moment (no hosts, not an old daemon) keeps what was read.
-  const jobs = useMemo(() => {
-    const aliases = new Set(hosts.map((h) => h.alias))
-    return Object.entries(byOrigin)
-      .filter(([origin]) => (hosts.length > 0 ? aliases.has(origin) : !oldDaemon))
-      .flatMap(([, o]) => Object.values(o.jobs))
-  }, [byOrigin, hosts, oldDaemon])
+  // `sourceHostId` is set by an answer, so an empty list with it is the pool saying it has no host.
+  const answered = usePoolStore((s) => s.sourceHostId !== null)
+  const shown = useMemo((): ((origin: string) => boolean) => {
+    if (hosts.length > 0 || answered) {
+      const aliases = new Set(hosts.map((h) => h.alias))
+      return (origin) => aliases.has(origin)
+    }
+    return () => !oldDaemon
+  }, [hosts, answered, oldDaemon])
+  const jobs = useMemo(() => Object.entries(byOrigin).filter(([origin]) => shown(origin)).flatMap(([, o]) => Object.values(o.jobs)), [byOrigin, shown])
   const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
   const entries = useMemo(() => queueEntries(jobs, now, hosts), [jobs, now, hosts])
   const failed = Object.entries(errors).flatMap(([origin, e]) => {
-    const key = e ? errorTextKey(e.code) : null
+    const key = e && shown(origin) ? errorTextKey(e.code) : null
     return key ? [{ origin, text: t(key) }] : []
   })
 
