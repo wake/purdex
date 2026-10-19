@@ -10,6 +10,8 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useFleetDaemons } from '../../lib/fleet/use-fleet-daemons'
 import { ProbeBadge, ProbeStatusDot } from './probe-rows'
 import { useProbeRows } from './use-probe-rows'
+import { usePoolHostRows } from '../../lib/pool/use-pool-host-rows'
+import { PoolHostGroup } from './PoolHostGroup'
 import { MAX_PROBE_HOSTS, useProbeEditor } from './useProbeEditor'
 
 interface Props {
@@ -51,6 +53,8 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
   const { writable, blocked } = useProbeEditor()
   const addProbeDisabled = !writable || probeRows.length >= MAX_PROBE_HOSTS
   const { known: fleetDaemons } = useFleetDaemons()
+  // Once the resource pool is the source the group lists its hosts; before that (or with no daemon announcing it) it is the probe group as it was.
+  const pool = usePoolHostRows()
   const [probesOpen, setProbesOpen] = useState(true)
   // Every host is listed in every workbench; a hidden one only looks muted (H2d-2, user rule 1).
   const isShown = useShownRefFilter()
@@ -179,7 +183,15 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
             </div>
           )
         })}
-        {(probeRows.length > 0 || fleetDaemons.length > 0) && (
+        {pool.active && pool.rows.length > 0 && (
+          <PoolHostGroup
+            rows={pool.rows}
+            selectedId={selectedProbeId ?? null}
+            // A probe host opens its own page; a daemon host, until it has a page of its own here, opens that host's overview.
+            onOpen={(r) => { if (r.kind === 'probe') onSelect(`probe:${r.id}`, ''); else if (r.hostConfigId) onSelect(r.hostConfigId, 'overview') }}
+          />
+        )}
+        {!pool.active && (probeRows.length > 0 || fleetDaemons.length > 0) && (
           <div data-testid="probe-group" className="mt-2">
             <div className="flex items-center px-1">
               <button type="button" data-testid="probe-group-toggle" aria-expanded={probesOpen} onClick={() => setProbesOpen((o) => !o)}
