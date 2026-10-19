@@ -3260,7 +3260,6 @@
   "pool_hosts.page.tool_missing": "未安裝",
   "pool_hosts.page.style": "樣式與 SSH 備援",
   "watch.host.avail.title": "可接工作",
-  "watch.host.avail.exceptions": "例外",
   "watch.host.avail.until": "到 {{time}}",
   "watch.host.avail.no_end": "沒有結束時間",
   "watch.host.wwd_age": "wwd {{version}}・{{s}} 秒前",

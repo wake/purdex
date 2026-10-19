@@ -3260,7 +3260,6 @@
   "pool_hosts.page.tool_missing": "Not installed",
   "pool_hosts.page.style": "Style and SSH fallback",
   "watch.host.avail.title": "Available for work",
-  "watch.host.avail.exceptions": "Exceptions",
   "watch.host.avail.until": "until {{time}}",
   "watch.host.avail.no_end": "no end",
   "watch.host.wwd_age": "wwd {{version}} · {{s}} s ago",

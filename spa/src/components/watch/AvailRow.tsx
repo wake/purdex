@@ -47,7 +47,7 @@ export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; e
         {pool.owner && <Item id="owner" label={t('pool.card.owner')}>{t(pool.owner.active ? 'pool.card.owner_active' : 'pool.card.owner_idle', { s: pool.owner.idle_s })}</Item>}
         {exceptions.length > 0 && (
           <div data-testid="avail-exceptions" className="min-w-0">
-            <div className="text-[11px] text-text-muted">{t('watch.host.avail.exceptions')}</div>
+            <div className="text-[11px] text-text-muted">{t('pool.pause.title')}</div>
             {exceptions.map((e) => (
               <div key={e.name} data-testid={`avail-exception-${e.name}`} className="text-sm text-text-primary">
                 {e.name} <span className="text-xs text-text-muted">{e.until !== null ? t('watch.host.avail.until', { time: hhmm(e.until) }) : t('watch.host.avail.no_end')}</span>
