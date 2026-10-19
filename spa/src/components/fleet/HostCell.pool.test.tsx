@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { HostCell } from './HostCell'
 import { HostCard } from './HostCard'
 import { poolCellModel } from '../../lib/pool/cell-model'
@@ -59,6 +59,45 @@ describe('HostCell on the pool — states', () => {
     expect(ring().dataset.zone).toBe('normal')
     expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
     expect(dot()).toBeNull()
+  })
+
+  // 8a-3b (user: 要能看見斷線): one mark at the badge's bottom left while the pool does not read the host but the fleet does
+  const linkMark = () => screen.queryByTestId('wwd-link-mlab')
+  const tile = () => screen.getByTestId('host-tile-mlab')
+
+  it('fallback, wwd unreachable: the link-break mark on the badge, the reason in the aria name, the badge not dimmed', () => {
+    show(cell(null))
+    expect(linkMark()).toBeTruthy()
+    expect(linkMark()!.className).toContain('text-status-warning')
+    expect(linkMark()!.className).toContain('-bottom-px')
+    expect(linkMark()!.className).toContain('-left-px')
+    expect(tile().getAttribute('aria-label')).toContain('wwd is unreachable')
+    expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
+  })
+
+  it('fallback, wwd answering with old facts: the same mark, the other reason in the aria name', () => {
+    show(cell(poolHost({ facts: factsWith({ at: NOW - 60_000 }) })))
+    expect(linkMark()).toBeTruthy()
+    expect(tile().getAttribute('aria-label')).toContain('wwd answers, but its numbers stopped')
+  })
+
+  it('no mark while the pool reads the host, when the host is offline, or when the pool is not the source', () => {
+    show(cell(poolHost()))
+    expect(linkMark()).toBeNull()
+    expect(tile().getAttribute('aria-label')).not.toContain('wwd')
+    cleanup()
+    show(cell(null, { fleet: fleetHost({ status: 'offline', fast: null }) }))
+    expect(linkMark()).toBeNull()
+    cleanup()
+    const f = fleetHost()
+    render(<HostCell view={f} pool={null} look={{ colors: COLORS, icon: 'Desktop' }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={vi.fn()} />)
+    expect(linkMark()).toBeNull()
+  })
+
+  it('the mark does not take the bottom right (the running dot) or the top right (the queue count)', () => {
+    show(cell(null))
+    expect(linkMark()!.className).not.toContain('-right-px')
+    expect(linkMark()!.className).not.toContain('-top-')
   })
 
   it('offline: the badge at 40 %, the ring track only', () => {
@@ -200,10 +239,17 @@ describe('HostCard on the pool — the lower part', () => {
 
   it('fallback: says the pool does not answer, with the time; worker and headroom unknown; the fleet readings stay', () => {
     card(cell(null, { poolLastOk: NOW - 60_000 }))
-    expect(screen.getByTestId('host-card-pool-fallback').textContent).toContain('wwd is not answering')
+    expect(screen.getByTestId('host-card-pool-fallback').textContent).toContain('wwd is unreachable')
     expect(rowText('worker')).toContain('Unknown')
     expect(rowText('headroom')).toContain('Unknown')
     expect(screen.getByTestId('host-card-row-cpu')).toBeTruthy()
+  })
+
+  it('fallback with old facts from an answering wwd: the card says the numbers stopped, not that wwd is unreachable', () => {
+    card(cell(poolHost({ facts: factsWith({ at: NOW - 60_000 }) }), { poolLastOk: NOW - 60_000 }))
+    const line = screen.getByTestId('host-card-pool-fallback').textContent!
+    expect(line).toContain('wwd answers, but its numbers stopped')
+    expect(line).not.toContain('unreachable')
   })
 
   it('offline: the newer last-ok and no pool rows', () => {

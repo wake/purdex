@@ -21,6 +21,7 @@
 //   bars   `HostBars`: left CPU %, right the memory pressure level (`bars-pressure`, memory used % when the level is unknown)
 //          or memory used % (`bars-memory`), each in its own band. Offline or no reading: the grey tracks only.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { LinkBreak } from '@phosphor-icons/react'
 import { resolveHostBadge } from '../../lib/host-color'
 import type { HostLook } from '../../lib/host-look'
 import type { UsageTone } from '../../lib/usage-display'
@@ -34,6 +35,7 @@ import { ContextRing } from '../team/ModelIcon'
 import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
+import { fallbackWord } from '../../lib/pool/words'
 import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
 import type { PoolCellExtra } from '../../lib/pool/cell-model'
 import type { PoolZone } from '../../lib/pool/types'
@@ -69,11 +71,12 @@ function queueTone(n: number, longestMs: number, held: boolean): string {
 }
 
 /** The cell's accessible name: the host, its zone word, the queue summary when one is shown, and the waiting-primary notice. */
-function accessibleName(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }, zoneOf?: PoolZone | null): string {
+function accessibleName(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }, zoneOf?: PoolZone | null, pool?: PoolCellExtra | null): string {
   const parts: string[] = [v.name]
   if (isOffline(v)) parts.push(t('fleet.zone.offline'))
   else if (!v.fast) parts.push(t('fleet.no_data'))
   else parts.push(t(`fleet.zone.${zoneOf ?? v.fast.zone}`))
+  if (pool?.state === 'fallback') parts.push(fallbackWord(t, pool.reason, null))
   const q = v.kind === 'daemon' && !isOffline(v) ? v.slow?.queue : undefined
   if (q && q.waiters.length > 0) {
     parts.push(t('fleet.queue', { n: q.waiters.length, s: Math.round(q.longest_wait_s) }))
@@ -136,7 +139,7 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
       data-testid={`host-tile-${view.id}`}
       data-active={String(isActive)}
       data-variant={variant}
-      aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere }, pool?.zone)}
+      aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere }, pool?.zone, pool)}
       ref={ref}
       onMouseEnter={openCard}
       onMouseLeave={closeCard}
@@ -149,6 +152,10 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} bright />
         </span>
+        {/* wwd does not answer (or its numbers stopped) but the fleet still reads the host over SSH: the readings stay, the break shows (spec §10) */}
+        {pool?.state === 'fallback' && (
+          <LinkBreak data-testid={`wwd-link-${view.id}`} weight="bold" size={8} aria-hidden className="pointer-events-none absolute -bottom-px -left-px rounded-full text-status-warning" style={{ boxShadow: '0 0 0 1px var(--surface-tertiary)' }} />
+        )}
         {running && <span data-testid={`worker-running-${view.id}`} className="pointer-events-none absolute -bottom-px -right-px size-[6px] rounded-full bg-status-success animate-breathe" />}
         {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={`pointer-events-none ${queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)}`} testId={`queue-badge-${view.id}`} />}
       </span>
