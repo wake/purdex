@@ -17,7 +17,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
-import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
+import { BESIDE_CELLS_W, CELL_GAP, CELL_H, HEADER_H, LINE_SLACK_W, cellsWidth, cellWidthFor, firstRowCapacity } from './panel-layout'
 
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
@@ -628,6 +628,47 @@ describe('header height (TI-6)', () => {
   })
 })
 
+/** scene(): a lead + 3 members. */
+const LINE4 = BESIDE_CELLS_W + cellsWidth(4, cellWidthFor('badge'))
+
+describe('one-line mode width follows the content (user 2026-10-20)', () => {
+  const content = (n: number) => BESIDE_CELLS_W + cellsWidth(n, cellWidthFor('badge'))
+  const line = () => act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 1000, followsMin: false } }) })
+
+  it('lead only: lead-only content + the slack', () => {
+    seedScene({ members: [], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+    line()
+    mount()
+    expect(area().style.width).toBe(`${content(1) + LINE_SLACK_W}px`)
+  })
+  it('lead + 1 member inside the slack: the width does not change', () => {
+    seedScene({ members: [['M0', 'm0-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+    line()
+    mount()
+    expect(area().style.width).toBe(`${content(1) + LINE_SLACK_W}px`)
+  })
+  it('members past the slack: the width is the content', () => {
+    seedScene({ members: Array.from({ length: 5 }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]), tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+    line()
+    mount()
+    expect(area().style.width).toBe(`${content(6)}px`)
+  })
+  it('over the area width: the area width, and the rest wraps', () => {
+    useTeamUiStore.setState({ panel: { width: 312, followsMin: false } })
+    seedScene({ members: Array.from({ length: 8 }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]), tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+    line()
+    mount()
+    expect(area().style.width).toBe('312px')
+    expect(screen.getByTestId('team-panel-more')).toBeTruthy()
+  })
+  it('full mode keeps the area width', () => {
+    seedScene({ members: [], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+    mount()
+    expect(area().style.width).toBe('1000px')
+  })
+})
+
 describe('one-line mode', () => {
   it('one-line cells + name, wraps', () => {
     scene()
@@ -737,13 +778,13 @@ describe('resize', () => {
     expect(useTeamUiStore.getState().panel).toBe(before.panel)
   })
 
-  it('both modes take the area\'s width', () => {
+  it('full takes the area\'s width; one line takes the content (the area\'s width is its cap)', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelWidth(600))
     mount()
     expect(area().style.width).toBe('600px')
     fireEvent.click(screen.getByTestId('team-panel-count')) // full -> line
-    expect(area().style.width).toBe('600px')
+    expect(area().style.width).toBe(`${LINE4}px`)
   })
 
   it('there is no max state and no enlarge control, in full or one line', () => {
@@ -755,7 +796,7 @@ describe('resize', () => {
     expect(screen.getByTestId('resize-hit')).toBeTruthy()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     expect(screen.queryByTestId('team-panel-expand')).toBeNull()
-    expect(area().style.width).toBe('500px')
+    expect(area().style.width).toBe(`${LINE4}px`)
   })
 
   it('a saved max (an older build) draws as full', () => {
@@ -846,7 +887,7 @@ describe('the panel state lives in the store (tab-hosted rule)', () => {
     act(() => { void useTeamUiStore.persist.rehydrate() })
     mount()
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    expect(area().style.width).toBe('555px')
+    expect(area().style.width).toBe(`${LINE4}px`)
   })
 
   it('switch tabs away and back keeps the mode, the width and the view (real TabContent)', () => {
@@ -872,7 +913,7 @@ describe('the panel state lives in the store (tab-hosted rule)', () => {
     expect(screen.queryByTestId('team-panel')).toBeNull()
     setActive('mb')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    expect(area().style.width).toBe('480px')
+    expect(area().style.width).toBe(`${LINE4}px`)
     setActive('lead')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
   })
