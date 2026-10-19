@@ -35,6 +35,9 @@ export function useTabQueued(panes: TabAgentPane[]): TabQueued {
     })
     return hits.length > 0 ? JSON.stringify(hits) : ''
   })
+  // A queued job's place comes from the display order, which reads each origin's zone (+200 warning, +400 danger): the hosts load after the jobs, and a zone moves. This subscribes to exactly that, as a string, so the selector
+  // below (which reads the hosts fresh on every run) is run again when a zone changes, and nothing else of the pool re-renders the tab.
+  usePoolStore((s) => s.hosts.map((h) => `${h.alias}:${h.facts?.derived.zone ?? ''}`).join('|'))
   // The pool's jobs: matched by the session that submitted them (`submitter.session`); an empty one (a job from before #3477) lights nothing.
   const jobsSig = useJobsStore((s) => {
     const withSession = panes.filter((p) => p.sessionId)

@@ -65,6 +65,22 @@ describe('useTabQueued with pool jobs', () => {
     expect([...two.keys].sort()).toEqual(['k1', 'k2'])
   })
 
+  // codex R1 (P2): the place reads each origin's zone, so a zone that moves (or hosts that load after the jobs) changes it with no jobs update
+  it('the place follows a host\'s zone without any change in the jobs', () => {
+    const host = (alias: string, zone: string) => ({ alias, labels: [], worker: { enabled: true }, facts: { derived: { zone } } }) as never
+    // two queued dev jobs of different origins, queued 1 s apart; the older one (mlab) goes first while both zones are ok
+    useJobsStore.setState({ byOrigin: {
+      mlab: { jobs: { a: job('a', { origin: 'mlab', created_at: 1000 }) }, cursor: '', epoch: '', via: 'd' },
+      mserv: { jobs: { b: job('b', { origin: 'mserv', created_at: 2000, submitter: { session: 'SESS-2', ref: '', team: '', host: '' } }) }, cursor: '', epoch: '', via: 'd' },
+    }, errors: {} } as never)
+    act(() => usePoolStore.setState({ hosts: [host('mlab', 'ok'), host('mserv', 'ok')] } as never))
+    const { result } = renderHook(() => useTabQueued([pane('k2', 'SESS-2')]))
+    expect(result.current.jobs[0].place).toBe(2)
+    // mserv goes into danger (+400): its job now goes first, though no job changed
+    act(() => usePoolStore.setState({ hosts: [host('mlab', 'ok'), host('mserv', 'danger')] } as never))
+    expect(result.current.jobs[0].place).toBe(1)
+  })
+
   it('lights up when the job arrives and goes out when it ends', () => {
     const { result } = renderHook(() => useTabQueued([pane('k1', 'SESS-1')]))
     expect(result.current.keys.size).toBe(0)
