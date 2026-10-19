@@ -9,21 +9,22 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
-import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, currentSource, usePersonaStore } from '../../../stores/usePersonaStore'
 import { useSourceId } from '../../../stores/usePersonaSourceStore'
-import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
   beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
 } from '../../../lib/names/persona-draft-memory'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
-import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
+import { editBase, savePersonas, type EditBase } from '../../../lib/names/persona-save'
+import { saveErrorMessage, savedNote } from '../../../lib/names/persona-save-report'
 import type { Persona } from '../../../lib/names/persona-types'
 import { forgetAvatarOptionsText } from '../../../lib/names/avatar-options-memory'
 import { AvatarPicker } from './AvatarPicker'
 import { FirstSaveConfirm } from './FirstSaveConfirm'
+import { PersonaCredits } from './PersonaCredits'
 import { PersonaForm } from './PersonaForm'
+import { PersonaImport } from './PersonaImport'
 import { PersonaList } from './PersonaList'
 import { PersonaSourcePicker } from './PersonaSourcePicker'
 
@@ -175,26 +176,11 @@ export function PersonasSection() {
       const res = await savePersonas(next, editing.base, fallbackHostId ?? '')
       if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
-      // The host's name as the rest of the App shows it (`lib/host-look.ts`; a screen never reads `host.name` itself).
-      const label = (id: string) => hostLabel(id, hostLookOf(id))
-      // What reached the other hosts is part of the answer: a copy that failed is waiting for that host's next connect,
-      // and a role taken into the source from another host changed what the user is looking at.
-      const parts = [t('settings.personas.saved', { host: label(res.hostId) })]
-      if (res.mirror.failed.length > 0) parts.push(t('settings.personas.mirrorFailed', { hosts: res.mirror.failed.map((f) => label(f.hostId)).join('、') }))
-      if (res.mirror.pulled.length > 0) parts.push(t('settings.personas.pulled', { codes: res.mirror.pulled.join(', ') }))
-      setOutcome({ note: parts.join(' ') })
+      setOutcome({ note: savedNote(t, res) })
     } catch (e) {
-      if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
-      else if (e instanceof PersonaValidationError) {
-        setOutcome({ error: [t('settings.personas.error.invalid'), ...e.issues.map((i) => `${i.field}: ${i.message}`)].join(' ') })
-      } else if (e instanceof PersonaApiError) {
-        const row = e.rowIndex()
-        setOutcome({
-          error: row === null
-            ? t('settings.personas.error.whole', { message: e.message })
-            : t('settings.personas.error.row', { field: e.field ?? String(row), message: e.message }),
-        })
-      } else setOutcome({ error: t('settings.personas.error.whole', { message: e instanceof Error ? e.message : String(e) }) })
+      const message = saveErrorMessage(t, e)
+      if (message === null) keepTyped(editing.key, draft) // stale or lost the compare-and-set
+      else setOutcome({ error: message })
     } finally {
       endSave()
     }
@@ -205,7 +191,8 @@ export function PersonasSection() {
       <h2 className="text-lg text-text-primary">{t('settings.section.personas')}</h2>
       <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
 
-      <div className="mt-3 flex items-center justify-end gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <PersonaImport items={items} fallbackHostId={fallbackHostId} disabled={unsupported || saving || readOnly} />
         <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving || readOnly} onClick={() => open('')}>
           {t('settings.personas.new')}
         </button>
@@ -243,6 +230,7 @@ export function PersonasSection() {
           {error && <p className="mt-2 text-xs text-red-500" data-testid="personas-error">{error}</p>}
         </div>
       </div>
+      <PersonaCredits />
     </div>
   )
 }
