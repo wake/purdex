@@ -86,6 +86,9 @@ type TeamCommand struct {
 	Title  string `json:"title,omitempty"`
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// PoolName is the persona code the lead host chose for the member (name pool v2 spec §5.2); the member host reserves exactly
+	// it, or names the session by its own rules when it is held there. An older member host ignores the field.
+	PoolName string `json:"pool_name,omitempty"`
 }
 
 // TeamCommandAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the
