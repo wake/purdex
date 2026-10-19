@@ -242,14 +242,13 @@ func (m *Module) pass(ctx context.Context) {
 		m.deliverer, m.suppressed = deliverer, m.passSuppressed
 		m.smu.Unlock()
 	}()
-	hosts, err := m.hosts(ctx)
+	hosts, allRead, err := m.hosts(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
 		}
 		return
 	}
-	allRead := true
 	silent := map[string]bool{} // the silence:<host> keys active on any list read this pass
 	for _, h := range hosts {
 		if ctx.Err() != nil {
@@ -290,23 +289,24 @@ func (m *Module) pass(ctx context.Context) {
 
 type hostRef struct{ alias, ask string }
 
-// hosts lists the local host (asked with "") and every peer of its pool.
-func (m *Module) hosts(ctx context.Context) ([]hostRef, error) {
+// hosts lists the local host (asked with "") and every peer of its pool. complete is false when the pool could not be read, so the list
+// is only the local host: a pass over it has not seen every list.
+func (m *Module) hosts(ctx context.Context) (out []hostRef, complete bool, err error) {
 	info, err := m.src.Info(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	out := []hostRef{{alias: info.Alias, ask: ""}}
+	out = []hostRef{{alias: info.Alias, ask: ""}}
 	pool, err := m.src.Pool(ctx)
 	if err != nil {
-		return out, nil // the pool unreadable: the local host's alerts are still read
+		return out, false, nil // the pool unreadable: the local host's alerts are still read
 	}
 	for _, p := range pool.Peers {
 		if p.Info.Alias != "" && p.Info.Alias != info.Alias {
 			out = append(out, hostRef{alias: p.Info.Alias, ask: p.Info.Alias})
 		}
 	}
-	return out, nil
+	return out, true, nil
 }
 
 // handle acts on one host's active alerts: gathers the digest ones, pushes the push ones that are due, and forgets the ledger rows of

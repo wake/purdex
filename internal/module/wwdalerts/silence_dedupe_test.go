@@ -82,6 +82,26 @@ func TestSilenceLedgerIsForgottenOnlyWhenEveryListWasRead(t *testing.T) {
 	assert.Equal(t, 2, e.ntf.count(), "cleared everywhere and back: a new failure")
 }
 
+// A pass that could not read the pool saw only the local list: the peers' lists may still hold the failure, so the ledger row stays (R1).
+func TestSilenceLedgerStaysWhenThePoolCouldNotBeRead(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab", silenceOf("mserv", t0))
+	e.src.set("air26", silenceOf("mserv", t0))
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count())
+	e.ntf.confirm(0)
+
+	e.src.poolErr = errors.New("wwd busy")
+	e.src.set("mlab") // the local list no longer holds it, the peer's still does
+	e.now = e.now.Add(time.Minute)
+	e.pass(t) // only the local list was seen: nothing is forgotten
+	e.src.poolErr = nil
+	e.now = e.now.Add(time.Minute)
+	e.pass(t) // the pool is back and air26's list still holds the same failure
+	assert.Equal(t, 1, e.ntf.count(), "a pool read that failed must not make the same failure new")
+}
+
 // The partner's alert is about the wwd's own host and stays per host: two hosts' partner_down are two failures.
 func TestPartnerDownStaysPerHost(t *testing.T) {
 	e := newEnv(t)
