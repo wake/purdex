@@ -257,8 +257,20 @@ func (j Job) Validate() error {
 		(j.Manual == PositionFront && j.ManualSeq > 0) || (j.Manual == PositionBack && j.ManualSeq < 0) {
 		return fmt.Errorf("job: manual_seq %d does not fit the place %q", j.ManualSeq, j.Manual)
 	}
+	if err := j.Result.Validate(); err != nil {
+		return err
+	}
 	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
 	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
+}
+
+// Validate checks what a stored result carries that has a form of its own: the summary's digest. Nil-safe, so a job that has no result
+// yet passes. A result read back from a peer or from the cache goes through here, as a posted one goes through ResultRequest.Validate.
+func (r *Result) Validate() error {
+	if r == nil {
+		return nil
+	}
+	return r.Summary.Validate()
 }
 
 func validatePayload(task string, repo Repo, snap Snapshot, timeoutS, queueTimeoutS int) error {

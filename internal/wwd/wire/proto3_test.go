@@ -49,6 +49,31 @@ func TestResultRequestRefusesABadDigest(t *testing.T) {
 	}
 }
 
+// A result read back from a peer is checked the way a posted one is: a job (and so a jobs list) whose result carries a malformed digest
+// is refused at the boundary, and a good or absent one is not.
+func TestAJobWithAMalformedDigestIsRefused(t *testing.T) {
+	good := string(fixture(t, "job_done.json"))
+	with := func(d string) string {
+		return strings.Replace(good, `"tail": ["x"]}`, `"tail": ["x"], "passed_digest": "`+d+`"}`, 1)
+	}
+	if with(goodDigest) == good {
+		t.Fatal("test setup: the fixture changed")
+	}
+	if _, err := Decode[Job]([]byte(with(goodDigest))); err != nil {
+		t.Fatalf("a good digest: %v", err)
+	}
+	if _, err := Decode[Job]([]byte(good)); err != nil {
+		t.Fatalf("no digest: %v", err)
+	}
+	if _, err := Decode[Job]([]byte(with("sha256:zz"))); err == nil {
+		t.Fatal("a job with a malformed digest was accepted")
+	}
+	var nilResult *Result
+	if err := nilResult.Validate(); err != nil {
+		t.Fatalf("no result: %v", err)
+	}
+}
+
 // The writer-release invariant: a summary with no digest is byte-for-byte the shape an older reader takes, so a writer that has nothing to
 // say about the passed tests (or is held back by the gate) does not show an old reader a field it would reject. With a digest the same
 // strict decode fails, which is why the writers wait.

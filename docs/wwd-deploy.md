@@ -220,9 +220,16 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     Summaries are byte-for-byte the old shape (the field is `omitempty`; a test pins that an older strict decoder takes them). The
     **facts version is no longer the protocol version**: `wire.FactsProto = 2` is what facts carry and a facts reader takes, so a
     proto 3 build still writes `v: 2` facts when the proto 2 gate is open (a `v: 3` record would be refused by a proto 2 host; a test
-    pins it). **Deploy the four wwds and both Purdex daemons from the same build, one after the other and quickly**: while the
-    four are being upgraded a proto 2 host reads a proto 3 host's `/v1/info` as an unknown proto, i.e. an unreachable peer, for the
-    few minutes of the skew (the same cost as the proto 2 release; the gates stay shut meanwhile and nothing is lost).
+    pins it). **Deploy the four wwds and both Purdex daemons from the same build, one after the other and quickly, and on each host
+    the Purdex daemon first, then that host's wwd.** The reason is the local read: a new wwd announces `proto: 3` in `/v1/info`
+    and as the first entry of `/v1/pool` (itself), and an old Purdex daemon's strict `Pool.Validate` refuses the whole answer for it,
+    so with the wwd upgraded first the Purdex daemon's pool API (`/api/pool/hosts`, facts history and series, the fleet view) answers
+    "bad response" until Purdex is upgraded too. (The order of the proto 2 release, Purdex first, is the one to repeat.) Across hosts
+    the skew costs less: a proto 2 wwd reads a proto 3 wwd's `/v1/info` as an unknown proto, i.e. an unreachable peer, for the few
+    minutes it lasts, the gates stay shut meanwhile and nothing is lost, but the pool view of that peer is missing and anything that
+    treats an unreachable peer as news (a host-down alert, once the alert writers are on) may fire for it: do the four back to back.
+    Check after each host: the Purdex daemon's `GET /api/pool/hosts` answers 200 with this host first, and
+    `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` shows `"proto":3`.
   - *The writers' release (5b-2w), one release later*: the three summary parsers fill `passed_digest`, and only while
     `wire.PoolAtLeast(peers, 3)` holds. A writer PR must not be merged or deployed in the same release as the reader PR. A host rolled
     back below proto 3 shuts the gate again.
