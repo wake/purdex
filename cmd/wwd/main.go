@@ -199,7 +199,7 @@ func run(cfgPath string) error {
 	go d.Pool().Run(ctx)
 	go runAdvisor(ctx, advisorInputs{
 		Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler,
-		HintsOpen: func() bool { return wire.PoolAtLeast(d.Pool().Peers(), 2) },
+		GateOpen: func() bool { return wire.PoolAtLeast(d.Pool().Peers(), 2) },
 	})
 	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
 	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this

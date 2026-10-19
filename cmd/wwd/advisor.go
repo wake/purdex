@@ -21,14 +21,15 @@ type advisorInputs struct {
 	Store    *store.Store
 	Broker   *daemon.Broker
 	Sampler  *daemon.Sampler
-	// HintsOpen is the proto 2 gate for the `alert` event; the alerts table is written whatever it says (daemon.AlertBook).
-	HintsOpen func() bool
+	// GateOpen is the proto 2 writer gate (spec §13.1): the rules judge, and the alerts table and the `alert` event are written, only while
+	// it is open.
+	GateOpen func() bool
 }
 
 // runAdvisor judges the alert rules over this host's own facts until ctx ends. The first judgement waits one interval, so the first
 // facts sample and the start record are in before a rule looks.
 func runAdvisor(ctx context.Context, in advisorInputs) {
-	book := daemon.NewAlertBook(in.Store, in.Alias, in.Broker, in.HintsOpen, nil)
+	book := daemon.NewAlertBook(in.Store, in.Alias, in.Broker, in.GateOpen, nil)
 	input := func() (advisor.Input, bool) {
 		f, ok := in.Sampler.Latest()
 		if !ok {
@@ -40,7 +41,9 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
-	advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{}).Run(ctx)
+	ev := advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{})
+	ev.SetGate(in.GateOpen)
+	ev.Run(ctx)
 }
 
 // runAdvisorCmd handles `wwd alerts-replay --db <copy of wwd.db> [--days 7] [--work-root <dir>]`: it counts what the alert rules would have

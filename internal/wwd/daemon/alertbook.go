@@ -20,7 +20,7 @@ type AlertWriter interface {
 // dropped stream loses nothing.
 //
 // The hint is a new event type, so it is published only while the proto 2 gate is open (spec §13.1): a proto 1 reader of /v1/events
-// would refuse the type. The table is written whatever the gate says (a reader of the list is a proto 2 reader).
+// would refuse the type. The table is written whatever this book's gate says; the evaluator that calls it does not call while the writer gate (§13.1) is shut.
 type AlertBook struct {
 	w    AlertWriter
 	host string

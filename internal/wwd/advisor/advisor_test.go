@@ -52,6 +52,40 @@ func (b *fakeBook) Clear(key string) error {
 	return nil
 }
 
+// openEvaluator is an evaluator whose proto 2 gate is open.
+func openEvaluator(b Book, in func() (Input, bool), logf func(string, ...any), rules ...Rule) *Evaluator {
+	ev := NewEvaluator(b, in, logf, rules...)
+	ev.SetGate(func() bool { return true })
+	return ev
+}
+
+// While the proto 2 gate is shut (a peer older, unreachable, or rolled back) nothing is judged, raised or cleared; when it opens, it is
+// judged at once.
+func TestEvaluator_ShutGateWritesNothing(t *testing.T) {
+	b := newBook()
+	b.active["old"] = wire.Alert{Key: "old"}
+	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush}}
+	open := false
+	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, nil, r)
+	ev.Pass() // no gate at all: shut
+	ev.SetGate(func() bool { return open })
+	ev.Pass()
+	if b.raised != 0 || b.cleared != 0 || len(b.active) != 1 {
+		t.Fatalf("written with the gate shut: raised %d cleared %d %+v", b.raised, b.cleared, b.active)
+	}
+	open = true
+	ev.Pass()
+	if _, ok := b.active["disk_low"]; !ok {
+		t.Fatal("not raised once the gate opened")
+	}
+	open = false
+	r.v = Verdict{Key: "disk_low"}
+	ev.Pass() // rolled back: the rule stopped holding but nothing is cleared while shut
+	if _, ok := b.active["disk_low"]; !ok {
+		t.Fatal("cleared with the gate shut")
+	}
+}
+
 // stubRule returns whatever the test sets.
 type stubRule struct {
 	kind wire.AlertKind
@@ -65,7 +99,7 @@ func (r *stubRule) Eval(Input) (Verdict, error) { return r.v, r.err }
 func TestEvaluator_RaisesWhileTheRuleHoldsAndClearsWhenItStops(t *testing.T) {
 	b := newBook()
 	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush, Detail: "d"}}
-	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, nil, r)
+	ev := openEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, nil, r)
 	ev.Pass()
 	if a, ok := b.active["disk_low"]; !ok || a.Kind != wire.AlertDiskLow || a.Level != wire.AlertPush || a.Detail != "d" {
 		t.Fatalf("active = %+v", b.active)
@@ -83,7 +117,7 @@ func TestEvaluator_ARuleThatErrorsLeavesTheAlertAsItWas(t *testing.T) {
 	b := newBook()
 	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush}}
 	var logs []string
-	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(f string, a ...any) { logs = append(logs, f) }, r)
+	ev := openEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(f string, a ...any) { logs = append(logs, f) }, r)
 	ev.Pass()
 	r.v, r.err = Verdict{Key: "disk_low"}, errors.New("no volume")
 	ev.Pass()
@@ -102,7 +136,7 @@ func TestEvaluator_ARuleThatErrorsLeavesTheAlertAsItWas(t *testing.T) {
 func TestEvaluator_HysteresisFollowsTheTable(t *testing.T) {
 	b := newBook()
 	in := inputWith(12.2, nil)
-	ev := NewEvaluator(b, func() (Input, bool) { return in, true }, nil, DiskLow{})
+	ev := openEvaluator(b, func() (Input, bool) { return in, true }, nil, DiskLow{})
 	ev.Pass()
 	if len(b.active) != 0 {
 		t.Fatalf("12.2 GB raised afresh: %+v", b.active)
@@ -126,7 +160,7 @@ func TestEvaluator_AnUnreadableTableJudgesNothing(t *testing.T) {
 	b.activeErr = errors.New("locked")
 	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Key: "disk_low"}}
 	n := 0
-	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(string, ...any) { n++ }, r)
+	ev := openEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(string, ...any) { n++ }, r)
 	ev.Pass()
 	ev.Pass()
 	if _, held := b.active["disk_low"]; !held || n != 1 {
@@ -138,7 +172,7 @@ func TestEvaluator_AnUnreadableTableJudgesNothing(t *testing.T) {
 func TestEvaluator_NoFactsNoVerdict(t *testing.T) {
 	b := newBook()
 	r := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush}}
-	NewEvaluator(b, func() (Input, bool) { return Input{}, false }, nil, r).Pass()
+	openEvaluator(b, func() (Input, bool) { return Input{}, false }, nil, r).Pass()
 	if len(b.active) != 0 {
 		t.Fatalf("active = %+v", b.active)
 	}
@@ -151,7 +185,7 @@ func TestEvaluator_ABookErrorDoesNotStopTheOtherRules(t *testing.T) {
 	r1 := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "a", Level: wire.AlertPush}}
 	r2 := &stubRule{kind: wire.AlertWorkerCrash, v: Verdict{Holds: true, Key: "b", Level: wire.AlertPush}}
 	n := 0
-	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(string, ...any) { n++ }, r1, r2)
+	ev := openEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, func(string, ...any) { n++ }, r1, r2)
 	ev.Pass()
 	if n != 2 {
 		t.Fatalf("logged %d failures, want one per rule", n)
