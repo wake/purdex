@@ -14,18 +14,24 @@ export function parseClock(text: string): { h: number; m: number } | null {
   return m ? { h: Number(m[1]), m: Number(m[2]) } : null
 }
 
-/** The next time the wall clock reads `hh:mm`: today when that is still ahead, else tomorrow (local time). null for text that is no clock time. */
+/** The next time the wall clock reads `hh:mm` (local time): looked for minute by minute, so a repeated hour (clocks turned back) gives the first reading that is still
+ *  ahead, and a reading that does not exist (clocks turned forward) gives the next one that does. null for text that is no clock time. */
 export function untilClock(now: number, hhmm: string): number | null {
   const c = parseClock(hhmm)
   if (!c) return null
-  const d = new Date(now)
-  d.setHours(c.h, c.m, 0, 0)
-  if (d.getTime() <= now) d.setDate(d.getDate() + 1)
-  return d.getTime()
+  const MINUTE = 60_000
+  const first = (Math.floor(now / MINUTE) + 1) * MINUTE // a reading in the minute we are in is already past
+  for (let t = first; t <= first + 26 * 60 * MINUTE; t += MINUTE) {
+    const d = new Date(t)
+    if (d.getHours() === c.h && d.getMinutes() === c.m) return t
+  }
+  return null
 }
 
-/** A name wwd accepts as one path segment (letters, digits, dashes) and no other pause has: the millisecond it was made, in base 36. */
-export const pauseName = (now: number): string => `app-pause-${Math.floor(now).toString(36)}`
+/** A name wwd accepts as one path segment (letters, digits, dashes) and no other pause has: the millisecond it was made, in base 36, and a few random characters
+ *  (two Apps, or two presses in one millisecond, must not be the same pause: wwd would overwrite one with the other). `rand` is Math.random(). */
+export const pauseName = (now: number, rand: number = Math.random()): string =>
+  `app-pause-${Math.floor(now).toString(36)}-${Math.floor(rand * 36 ** 4).toString(36).padStart(4, '0')}`
 
 export const holdsOf = (alsoLight: boolean): PoolHold[] => (alsoLight ? ['heavy', 'light'] : ['heavy'])
 

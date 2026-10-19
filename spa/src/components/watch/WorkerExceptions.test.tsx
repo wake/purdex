@@ -104,7 +104,7 @@ describe('adding', () => {
       const c = lastChange()
       expect(c.method).toBe('POST')
       expect(c.path).toBe('/api/pool/hosts/mlab/exceptions')
-      expect(c.body.name).toMatch(/^app-pause-[0-9a-z]+$/)
+      expect(c.body.name).toMatch(/^app-pause-[0-9a-z]+-[0-9a-z]{4}$/)
       expect(c.body.until).toBe(new Date(now + h * 3_600_000).toISOString())
       expect(c.body).toMatchObject({ pid: null, holds: ['heavy'] })
       act(() => { vi.advanceTimersByTime(5) }) // the next pause is made a moment later: a different name
