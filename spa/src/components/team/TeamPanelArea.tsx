@@ -21,6 +21,7 @@ import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
 import { useOwnWorkbook } from './own-workbook'
 import { TeamPanel } from './TeamPanel'
+import { useShownPanelWidth } from './useShownPanelWidth'
 import { OwnWorkbookPanel } from './OwnWorkbookPanel'
 
 export function TeamPanelArea() {
@@ -28,7 +29,6 @@ export function TeamPanelArea() {
   const display = useTeamDisplay()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
-  const { width } = useTeamUiStore((s) => s.panel)
   const own = useOwnWorkbook()
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
@@ -44,7 +44,6 @@ export function TeamPanelArea() {
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   // A tab of no team shows its own workbook in the one value all such tabs share.
   const mode = shownTeam ? shownTeam.mode : view0 !== null ? sharedMode : null
-  const draft = usePanelDraftStore((s) => s.draft)
   const draftRef = useRef<number | null>(null)
   // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
   const hidden = view0 === null || mode === null || mode === 'titlebar'
@@ -53,6 +52,8 @@ export function TeamPanelArea() {
     if (hidden) { draftRef.current = null; usePanelDraftStore.getState().setDraft(null) }
   }, [hidden])
   useEffect(() => () => { draftRef.current = null; usePanelDraftStore.getState().setDraft(null) }, [])
+  const drilled = shownTeam !== null && !noDrill && teamDrill[shownTeam.teamKey] != null
+  const shownWidth = useShownPanelWidth(shownTeam, drilled)
   if (hidden) return null
   const paneMode = mode
 
@@ -60,7 +61,7 @@ export function TeamPanelArea() {
     <div
       data-testid="team-panel-area"
       className="absolute z-20 flex font-sans top-0 right-3 max-h-[calc(100%-12px)]"
-      style={{ width: draft ?? width }}
+      style={{ width: shownWidth }}
     >
       <div className="absolute inset-y-0 left-0 z-10 flex" title={t('team.panel.resize')}>
         <RegionResize
@@ -86,7 +87,7 @@ export function TeamPanelArea() {
           <TeamPanel
             team={shownTeam}
             activeTabId={activeTabId}
-            width={draft ?? width}
+            width={shownWidth}
             noDrill={noDrill}
             onSetMode={(m) => useTeamUiStore.getState().setPanelMode(shownTeam.teamKey, m)}
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}

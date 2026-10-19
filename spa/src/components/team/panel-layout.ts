@@ -68,6 +68,21 @@ export function panelMinWidth(style: 'icon' | 'dot' | 'iconDot' | 'badge', box: 
   return BESIDE_CELLS_W + cellsWidth(PANEL_MIN_CELLS, cellWidthFor(style, box))
 }
 
+/** One-line mode spares this much beyond the lead-only content (user 2026-10-20): members use it up before the panel widens. */
+export const LINE_SLACK_W = 100
+
+/**
+ * The panel's width in one-line mode (user 2026-10-20, replacing "takes the area's width"):
+ * min(area, max(everything's width, lead-only width + LINE_SLACK_W)). Nominal cell widths; a wider real cell wraps through
+ * useCellCapacity. Full mode keeps the area's width and does not call this.
+ */
+export function lineWidthFor(seatCount: number, areaWidth: number, style: 'icon' | 'dot' | 'iconDot' | 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
+  const cellW = cellWidthFor(style, box)
+  const content = BESIDE_CELLS_W + cellsWidth(Math.max(1, seatCount), cellW)
+  const leadOnly = BESIDE_CELLS_W + cellsWidth(1, cellW)
+  return Math.min(areaWidth, Math.max(content, leadOnly + LINE_SLACK_W))
+}
+
 /**
  * Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. This is the fallback where
  * nothing can be measured, so it uses the same nominal cell (`cellWidthFor(style, box)`) as `panelMinWidth`: pass the CURRENT
