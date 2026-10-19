@@ -3,6 +3,8 @@
 // Nothing here starts by itself: the sidebar's task-group view asks (NA-6b), so a device that never opens that view never reads the groups.
 import { useNexHostStore, selectTaskGroupsV1 } from '../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../stores/useTaskGroupsStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { hostEndpointKey } from '../../stores/useHostConfigStore'
 
 export function taskGroupsSupported(hostId: string): boolean {
   const state = useNexHostStore.getState()
@@ -12,4 +14,13 @@ export function taskGroupsSupported(hostId: string): boolean {
 /** Reads the host's groups now when its fresh capabilities declare `task_groups.v1`; otherwise does nothing. */
 export async function loadTaskGroupsIfSupported(hostId: string): Promise<void> {
   if (taskGroupsSupported(hostId)) await useTaskGroupsStore.getState().load(hostId)
+}
+
+/** Forgets a host's cached groups when the host is removed or moved (address, port or token) under the same id: they belong to the daemon they were read from. Reads nothing; returns the unsubscribe. */
+export function startTaskGroupsLifecycle(): () => void {
+  return useHostStore.subscribe((next, prev) => {
+    for (const hostId of Object.keys(prev.hosts)) {
+      if (!next.hosts[hostId] || hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])) useTaskGroupsStore.getState().forget(hostId)
+    }
+  })
 }

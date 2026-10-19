@@ -35,6 +35,8 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
     return byHost
   }, [reads])
 
+  const asked = useRef(new Map<string, Set<string>>()) // per host: the sessions already asked about in this epoch
+
   // Hosts to read now: wanted, supported, and with no read at all (never read, or fenced by a reconnect). A failed read is a read — it does not loop.
   const unread = useMemo(() => {
     if (!enabled) return ''
@@ -44,11 +46,13 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
   }, [enabled, wanted, reads])
   useEffect(() => {
     if (unread === '') return
-    for (const hostId of unread.split('\n')) readFirstPage(hostId).catch(() => {}) // a failure lands in the store as the host's read
+    for (const hostId of unread.split('\n')) {
+      asked.current.delete(hostId) // a new epoch of the host: what was asked about in the old one is asked again if the new read misses it
+      readFirstPage(hostId).catch(() => {}) // a failure lands in the store as the host's read
+    }
   }, [unread])
 
-  // Sessions the last read did not list: one more read, debounced, once per session (what was asked about already is filtered in the effect — a ref is read in effects, not while rendering).
-  const asked = useRef(new Map<string, Set<string>>())
+  // Sessions the last read did not list: one more read, debounced, once per session per epoch (what was asked about already is filtered in the effect — a ref is read in effects, not while rendering).
   const unknown = useMemo(() => {
     if (!enabled) return ''
     const keys: string[] = []

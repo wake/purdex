@@ -78,6 +78,18 @@ describe('useSessionRoots', () => {
     expect(readFirstPage).toHaveBeenCalledTimes(1) // asked about NEW already: no loop when the daemon does not list it
   })
 
+  it('a reconnect forgets what was asked: a session the new epoch\'s first read misses is asked about again', () => {
+    setRead('h1', [q('S1', 'ROOT')])
+    renderHook(() => useSessionRoots(true, [want('h1', 'S1'), want('h1', 'NEW')]))
+    act(() => { vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS) })
+    expect(readFirstPage).toHaveBeenCalledTimes(1) // NEW asked about
+    act(() => { useRelayQuotaStore.getState().forgetHost('h1') })
+    expect(readFirstPage).toHaveBeenCalledTimes(2) // the fenced host is read again
+    setRead('h1', [q('S1', 'ROOT')]) // the new epoch's first read misses NEW again
+    act(() => { vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS) })
+    expect(readFirstPage).toHaveBeenCalledTimes(3)
+  })
+
   it('several new sessions inside the debounce are one read', () => {
     setRead('h1', [q('S1', 'ROOT')])
     const { rerender } = renderHook(({ wants }) => useSessionRoots(true, wants), { initialProps: { wants: [want('h1', 'S1')] } })
