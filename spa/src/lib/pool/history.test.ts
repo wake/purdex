@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseFacts } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import { fleetHistory } from '../fleet/history'
+import { fast } from '../fleet/__fixtures__/builders'
 import type { PoolFacts } from './types'
 
 const fetchFactsHistory = vi.fn()
@@ -31,7 +32,7 @@ describe('loadFactsHistory', () => {
   })
 
   it('what the App collected itself is kept, not doubled', async () => {
-    fleetHistory.record('f-air26', { at: NOW - 10_000, cpu: 33, mem: 1, level: 1, page_rate: 0, disk: 1, load1: 0, ncpu: 8, zone: 'normal', load: 0 })
+    fleetHistory.record('f-air26', fast({ at: NOW - 10_000, cpu: 33 }))
     fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(20), rec(10, {}, 'normal', 1)] })
     await loadFactsHistory('d1', 'air26', 'f-air26', NOW)
     expect(fleetHistory.series('f-air26', 'cpu', '5m', NOW).map((p) => [p.t, p.avg])).toEqual([[NOW - 20_000, 20], [NOW - 10_000, 33]])
