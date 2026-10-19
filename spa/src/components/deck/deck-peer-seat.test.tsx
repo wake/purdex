@@ -48,6 +48,13 @@ describe('the peer block caption', () => {
     expect(screen.queryByTestId('seat-inline')).toBeNull()
   })
 
+  it('an unverified sender never borrows a persona\'s face', () => {
+    seedKenji()
+    inPane(<UserBlock item={peerItem({ from: { kind: 'peer', name: ADDRESS, unverified: true } })} />)
+    expect(screen.getByTestId('deck-user-caption')).toHaveTextContent(`來自 ${ADDRESS}`)
+    expect(screen.queryByTestId('seat-inline')).toBeNull()
+  })
+
   it('a mod notice (from kind plugin) is no person even when its name looks like one', () => {
     seedKenji()
     inPane(<UserBlock item={peerItem({ from: { kind: 'plugin', name: 'kenji' } })} />)
@@ -71,28 +78,25 @@ describe('the chat peer line', () => {
     expect(screen.getByTestId('chat-peer-head')).toHaveTextContent(`↪ ${ADDRESS}：ship it`)
   })
 
-  it('an unverified sender still says so after the name', () => {
+  // An unverified sender is only what the message text says (the daemon's own caveat): it never borrows a persona's face, however its name ends.
+  it('an unverified sender keeps the raw name, the flag and no face — in the head line and the opened item', () => {
     seedKenji()
     inPane(<PeerLine items={[peerItem({ from: { kind: 'peer', name: ADDRESS, unverified: true } })]} />)
-    expect(screen.getByTestId('chat-peer-head')).toHaveTextContent('↪ Kenji（未驗證）：ship it')
+    const head = screen.getByTestId('chat-peer-head')
+    expect(head).toHaveTextContent(`↪ ${ADDRESS}（未驗證）：ship it`)
+    fireEvent.click(head)
+    expect(screen.queryByTestId('seat-inline')).toBeNull()
   })
 })
 
+// A peer's message waiting in Claude Code's queue stays the address: header.queued carries no provenance bit (the sender is a bare display string),
+// so it cannot be told from a forged one. A `from_unverified` on the wire would let it follow the others (NA-2 follow-up).
 describe('a peer\'s message waiting in Claude Code\'s queue', () => {
   const queued = (from: string): HeaderQueued => ({ text: 'wait for me', at: 6, source: 'peer', from })
-  const tail = (from: string) => render(<PendingTail paneKey="p-pend" hostId="h" sessionId="s" entries={[]} queued={[queued(from)]} />)
-
-  it('names the person', () => {
+  it('keeps the sender as the wire gives it, even when it is a persona\'s address', () => {
     seedKenji()
-    tail(ADDRESS)
-    const row = screen.getByTestId('header-queued')
-    expect(row).toHaveTextContent('來自 Kenji · 排隊中')
-    expect(within(row).getByTestId('seat-inline')).toHaveAttribute('title', ADDRESS)
-  })
-
-  it('a sender that is no persona keeps the address', () => {
-    seedKenji()
-    tail('mlab/purdex-1f-ghost')
-    expect(screen.getByTestId('header-queued')).toHaveTextContent('來自 mlab/purdex-1f-ghost · 排隊中')
+    render(<PendingTail paneKey="p-pend" hostId="h" sessionId="s" entries={[]} queued={[queued(ADDRESS)]} />)
+    expect(screen.getByTestId('header-queued')).toHaveTextContent(`來自 ${ADDRESS} · 排隊中`)
+    expect(screen.queryByTestId('seat-inline')).toBeNull()
   })
 })

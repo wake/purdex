@@ -40,3 +40,9 @@ export function SeatSentence({ template, ...rest }: InlineProps & { template: st
   if (at < 0) return <>{template}</>
   return <>{template.slice(0, at)}<SeatInline {...rest} />{template.slice(at + SEAT_MARK.length)}</>
 }
+
+/** Whether a message's sender may be shown as a person: another session whose identity the transport established. A mod's notice (kind plugin) is no person, and an
+ *  `unverified` sender is only what the message text says (the daemon's own caveat): its name is never resolved to a persona's face. */
+export function isVerifiedPeer(item: { from?: { kind: string; unverified?: boolean } }): boolean {
+  return item.from?.kind === 'peer' && item.from.unverified !== true
+}

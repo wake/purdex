@@ -9,7 +9,7 @@ import type { UserItem } from '../../lib/conversations/types'
 import { useFold } from '../room/fold-context'
 import { usePeerCollapse } from './usePeerCollapse'
 import { ConversationHostContext } from './conversation-host'
-import { SEAT_MARK, SeatSentence } from '../SeatSentence'
+import { SEAT_MARK, SeatSentence, isVerifiedPeer } from '../SeatSentence'
 
 const PREVIEW_CHARS = 40
 
@@ -36,9 +36,9 @@ export function PeerLine({ items }: { items: UserItem[] }) {
   const [open, toggle] = useFold(`${items[0].id}:peer`)
   const hostId = useContext(ConversationHostContext)
   // A message from another session names the person (spec §9.3): the sentence is translated with the mark where the sender goes, and the sender
-  // becomes `[avatar] Name` when it is a persona; a mod's own notice (from kind plugin) is no person. `plain` is the same sentence without faces.
+  // becomes `[avatar] Name` when it is a persona; a mod's notice (kind plugin) is no person, and an unverified sender never borrows a persona's face. `plain` is the same sentence without faces.
   const plain = (i: UserItem) => (i.from?.kind === 'plugin' ? t('chat.peer.plugin', { name: i.from.name ?? '' }) : (i.from?.name ?? i.from?.kind ?? ''))
-  const sender = (i: UserItem) => (i.from?.kind === 'plugin' ? plain(i) : SEAT_MARK)
+  const sender = (i: UserItem) => (isVerifiedPeer(i) ? SEAT_MARK : plain(i))
   const withSeat = (template: string, i: UserItem) => <SeatSentence template={template} address={i.from?.name ?? ''} fallback={plain(i)} hostId={hostId} />
   const dim = items.every((i) => i.from?.unverified === true)
   const flag = (i: UserItem) => (i.from?.unverified === true ? t('chat.peer.unverified') : '')
