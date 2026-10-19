@@ -1,0 +1,5 @@
+{"host": "air26", "known": true, "exceptions": [
+ {"name": "app-dev-package", "until": "2026-10-19T09:00:00Z", "pid": null, "holds": ["heavy", "light"]},
+ {"name": "stress-run", "until": null, "pid": 4242, "holds": ["heavy"],
+  "allow": {"classes": ["release"], "repos": ["purdex"]}, "flags": ["release", "expect_pressure"]}
+]}
