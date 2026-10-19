@@ -26,7 +26,7 @@ func TestTakeHeavyHoldsASlotTheGateCanSee(t *testing.T) {
 	}
 	a.Describe([]string{"wwd", "job", "j_1", "go-pkg"}, "")
 	h := heldBy(t, dir)
-	if len(h) != 1 || h[0].PID != os.Getpid() || len(h[0].Argv) != 4 || h[0].Argv[0] != "wwd" || h[0].Argv[2] != "j_1" || h[0].Orphaned {
+	if len(h) != 1 || h[0].PID != os.Getpid() || len(h[0].Argv) != 4 || h[0].Argv[0] != "wwd" || h[0].Argv[2] != "j_1" || h[0].Tag != "wwd" || h[0].Orphaned {
 		t.Fatalf("the gate sees %+v", h)
 	}
 	if r.HeavyFull() {
