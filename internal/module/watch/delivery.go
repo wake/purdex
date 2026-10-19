@@ -98,12 +98,12 @@ func (m *Module) Enqueue(rec watch.Record) {
 		// A wwd queue job is outside the gate's slots on purpose (#3447): it is in the record, and that is all. It is handled at once, so it
 		// is not a message to the watcher, not in a backlog summary and not in the unhandled count; a person reads it with `pdx watch log`.
 		if _, err := m.acks.Ack([]string{rec.ID}, func(id string) bool { return id == rec.ID },
-			watch.Ack{Note: wwdJobNote, At: m.now(), By: "system"}); err != nil {
+			watch.Ack{Note: wwdJobNote, At: m.now(), By: "system"}); err == nil {
+			m.emitEvents(CauseRecorded) // a client with the events list open sees the new (handled) row
+			return
+		} else {
 			m.logf("[watch] wwd job event %s: %v", rec.ID, err) // left unhandled: it is then told like any other event
-			m.dlv.outbox.Add(rec)
-			m.wakeDelivery()
 		}
-		return
 	}
 	m.dlv.outbox.Add(rec)
 	m.wakeDelivery()

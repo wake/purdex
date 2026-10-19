@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -89,10 +90,13 @@ func TestDelivery_AWwdJobEventIsRecordedHandledAndNeverDelivered(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
 	na, _ := withNotifiers(p)
 	p.a.register(t, "wa")
+	var sent []core.HostEvent
+	p.a.m.emit = func(ev core.HostEvent) { sent = append(sent, ev) }
 	rc := watch.NewRecorder(p.a.m.dlv.logDir, "mlab")
 	job, err := rc.RecordFull(watch.Event{Kind: watch.KindUnmanagedHeavy, At: p.a.m.now(), Label: watch.LabelWWDJob, Argv: []string{"go", "test", "./..."}})
 	require.NoError(t, err)
 	p.a.m.Enqueue(job)
+	require.Len(t, sent, 1, "a client that has the events list open is told one more event was recorded")
 	p.a.pass(t)
 	require.Equal(t, 0, na.count(), "a wwd job does not wake the watcher")
 	require.Equal(t, 0, p.a.m.dlv.outbox.Pending())
