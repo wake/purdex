@@ -63,6 +63,12 @@ export const usePoolStore = create<PoolState>((set, get) => {
     set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, error: null })
   }
 
+  function forgetPin() {
+    pinned = null
+    failures = 0
+    busy = 0
+  }
+
   function fail(code: PoolErrorCode) {
     const prev = get().error
     set({ error: { code, since: prev?.code === code ? prev.since : Date.now() } })
@@ -71,6 +77,8 @@ export const usePoolStore = create<PoolState>((set, get) => {
   async function readOnce(): Promise<number> {
     const token = gen // a stop() or a visibility change bumps `gen`: whatever this read learns after that is old news
     const sources = poolSources()
+    // the retry state belongs to the source that earned it: a source that is gone takes it along
+    if (sources.length === 0 || (pinned && !sources.includes(pinned))) forgetPin()
     if (sources.length === 0) {
       set({ hosts: [], sourceHostId: null, oldDaemon: true, error: null })
       return POLL_MS
@@ -89,7 +97,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
       } catch (e) {
         if (token !== gen) return POLL_MS
         last = errorOf(e)
-        if (last.action === 'next_source') continue
+        if (last.action === 'next_source') { forgetPin(); continue }
         failedOn = id
         break
       }

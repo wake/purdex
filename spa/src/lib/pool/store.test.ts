@@ -208,6 +208,33 @@ describe('error actions', () => {
       expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B, A])
     })
 
+    it('the busy count belongs to its source: A busy twice, then A unavailable and B busy once, shows nothing', async () => {
+      fetchPoolHosts.mockImplementation(async () => { throw fail(429, 'busy') })
+      await st().readOnce(); await st().readOnce()
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      expect(st().error).toBeNull()
+    })
+
+    it('the back-off belongs to its source: A failing twice, then B failing once waits 2 s, not 8', async () => {
+      fetchPoolHosts.mockImplementation(async () => { throw fail(502, 'wwd_error') })
+      await st().readOnce(); await st().readOnce()
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(502, 'wwd_error'))))
+      expect(await st().readOnce()).toBe(2000)
+    })
+
+    it('every daemon disconnecting forgets the kept source: when both return, A is read first', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      useHostStore.setState({ runtime: {} } as never)
+      await st().readOnce()
+      useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+      fetchPoolHosts.mockClear()
+      fetchPoolHosts.mockImplementation(async () => [mlab()])
+      await st().readOnce()
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([A])
+    })
+
     it('a kept source that is no longer connected is forgotten', async () => {
       fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
       await st().readOnce()
