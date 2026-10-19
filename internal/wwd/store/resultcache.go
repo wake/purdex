@@ -89,6 +89,9 @@ func (s *Store) GetCacheEntry(key string, now time.Time) (c CacheEntry, ok bool,
 	if err := json.Unmarshal([]byte(fp), &c.HostFingerprint); err != nil {
 		return CacheEntry{}, false, fmt.Errorf("store: cache entry %s: %w", key, err)
 	}
+	if !json.Valid([]byte(rec)) {
+		return CacheEntry{}, false, fmt.Errorf("store: cache entry %s: rec is not JSON", key)
+	}
 	c.Rec, c.CreatedAt = json.RawMessage(rec), time.UnixMilli(ms).UTC()
 	return c, true, nil
 }

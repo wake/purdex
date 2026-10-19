@@ -88,6 +88,20 @@ func TestCacheHitJustBeforeAndAfterDayThree(t *testing.T) {
 	}
 }
 
+// A row whose record or fingerprint no longer decodes is an error, never a hit: the submit path must not answer from damage.
+func TestCacheDamagedRowIsAnErrorNotAHit(t *testing.T) {
+	s := openTemp(t)
+	for _, c := range []struct{ key, rec, fp string }{{"badrec", `{`, `{}`}, {"badfp", `{}`, `{`}} {
+		if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, ?, 'h', ?, '', ?)`,
+			c.key, c.rec, c.fp, cacheNow.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := s.GetCacheEntry(c.key, cacheNow); ok || err == nil {
+			t.Errorf("%s: ok=%v err=%v", c.key, ok, err)
+		}
+	}
+}
+
 func TestPruneCacheDropsOnlyThePast(t *testing.T) {
 	s := openTemp(t)
 	for _, c := range []CacheEntry{
