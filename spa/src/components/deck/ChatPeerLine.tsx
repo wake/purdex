@@ -9,7 +9,8 @@ import type { UserItem } from '../../lib/conversations/types'
 import { useFold } from '../room/fold-context'
 import { usePeerCollapse } from './usePeerCollapse'
 import { ConversationHostContext } from './conversation-host'
-import { SEAT_MARK, SeatSentence, isVerifiedPeer } from '../SeatSentence'
+import { SEAT_MARK, SeatSentence } from '../SeatSentence'
+import { isVerifiedPeer } from '../../lib/names/seat'
 
 const PREVIEW_CHARS = 40
 
