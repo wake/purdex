@@ -3,6 +3,7 @@ package gateheld
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,6 +186,66 @@ func TestTakeHeavyHeldByTheDiskFloorOfTheWorkDir(t *testing.T) {
 		t.Fatalf("no floor: %v %v", s, st)
 	}
 	s.Release()
+}
+
+// calm is a pressure reader that finds the host calm.
+type calm struct{}
+
+func (calm) Read() (gate.Pressure, error) { return gate.Pressure{Level: 1}, nil }
+func (calm) Peek() (gate.Pressure, bool)  { return gate.Pressure{Level: 1}, true }
+
+// The disk the floor is held against is the work directory's: a work root on a small volume holds the job while the working directory
+// and $TMPDIR (a big volume) would not; a big work root on a host whose own directory is small does not.
+func TestTakeHeavyChecksTheWorkDirNotTheWorkingDirectory(t *testing.T) {
+	cfg, _ := host(t, 2, "")
+	body, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// admission on, the pressure lines widest, the disk floor 10 GB
+	if err := os.WriteFile(cfg, []byte(strings.Replace(string(body), "enabled = false", "max_pressure_level = 4\nmax_page_rate = 1000000000\ndisk_min_gb = 10", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(t.TempDir(), "work")
+	var asked []string
+	sizes := map[string]int64{}
+	mk := func(c gate.Config) *gate.Gate {
+		g := gate.New(c)
+		g.Pressure = calm{}
+		g.DiskFree = func(p string) (int64, error) {
+			asked = append(asked, p)
+			if v, ok := sizes[p]; ok {
+				return v, nil
+			}
+			return 100 << 30, nil
+		}
+		return g
+	}
+	sizes[work] = 3 << 30
+	r := New(cfg, nil).WithWorkDir(work)
+	r.newGate = mk
+	if s, st := r.TakeHeavy(); st != HeldByHost || s != nil {
+		t.Fatalf("a small work root: %v %v", s, st)
+	}
+	sizes[work] = 50 << 30
+	cwd, _ := os.Getwd()
+	sizes[cwd] = 1 << 30 // this process's own directory is small, which no longer matters
+	s, st := r.TakeHeavy()
+	if st != Taken || s == nil {
+		t.Fatalf("a big work root: %v %v", s, st)
+	}
+	s.Release()
+	for _, p := range asked {
+		if p == cwd {
+			t.Fatalf("the working directory was asked: %v", asked)
+		}
+	}
+	// without a work dir the process's own directory is what counts, as for a command at a terminal
+	r = New(cfg, nil)
+	r.newGate = mk
+	if _, st := r.TakeHeavy(); st != HeldByHost {
+		t.Fatalf("no work dir, a small cwd: %v", st)
+	}
 }
 
 // The default admission is the gate's own, with a config that disables it: nothing holds (the tests above put theirs in; this keeps the

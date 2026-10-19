@@ -27,7 +27,9 @@ type Reader struct {
 	// admission, when set (a test), takes the place of the gate's own answer (gate.Gate.Admission): whether the gate would hold a heavy
 	// start now (pressure, page rate, disk). workDir is the directory whose free space counts for the disk floor (WithWorkDir).
 	admission func(gate.Config) gate.AdmissionState
-	workDir   string
+	// newGate makes the gate admit asks (gate.New; a test gives it other pressure and disk readings).
+	newGate func(gate.Config) *gate.Gate
+	workDir string
 
 	mu       sync.Mutex
 	lastLog  string // the problem last logged; "" when the gate was readable at the last look
@@ -54,7 +56,11 @@ func (r *Reader) admit(cfg gate.Config) gate.AdmissionState {
 	if r.admission != nil {
 		return r.admission(cfg)
 	}
-	g := gate.New(cfg)
+	mk := r.newGate
+	if mk == nil {
+		mk = gate.New
+	}
+	g := mk(cfg)
 	if r.workDir != "" {
 		return g.AdmissionFor(r.workDir)
 	}

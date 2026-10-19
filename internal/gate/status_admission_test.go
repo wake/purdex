@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -123,6 +124,14 @@ func TestAdmissionForCountsTheGivenDirectory(t *testing.T) {
 	assert.Equal(t, AdmissionState{}, g.AdmissionFor("/big-volume/work"))
 	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 3 GB < 10"}, g.AdmissionFor("/small-volume/work"))
 	assert.Equal(t, AdmissionState{}, g.Admission(), "the working directory is on the big volume")
+	// $TMPDIR counts beside the directory
+	g.DiskFree = func(p string) (int64, error) {
+		if p == os.TempDir() {
+			return 2 << 30, nil
+		}
+		return 100 << 30, nil
+	}
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 2 GB < 10"}, g.AdmissionFor("/big-volume/work"))
 }
 
 // The state in Status and the decision a start takes come from one function: on the same reading they agree.
