@@ -285,12 +285,20 @@ type Module struct {
 	// history, familiar and leads feed the picking rules (namepool_rules.go): this host's name history, the other hosts'
 	// familiar sets, and the lead:true persona codes.
 	nameHistory NameHistoryReader
+	nameWriter  NameHistoryWriter // the write side of nameHistory, when it has one
+	leadRenames leadRenameLedger  // the names RenameForLead set, for the undo (namesvc.go)
 	familiar    FamiliarSource
 	leads       atomic.Pointer[map[string]bool]
+	// personaCodes is the code of every persona, retired too, as of the collection the pool follows (published with it).
+	personaCodes atomic.Pointer[map[string]bool]
 	// poolGen makes the pool and the lead flags of one persona collection visible together: bindPersonas holds the write side
 	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
 	poolGen            sync.RWMutex
 	afterPoolPublished func()
+	// beforeLeadRename is a test seam in RenameForLead, after the held check and before the generation read lock.
+	beforeLeadRename func()
+	// inLeadRename is a test seam in RenameForLead, under the generation read lock, between the pickable check and the write.
+	inLeadRename func()
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.
@@ -414,6 +422,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(HostCallerKey, m.HostCaller())
 	// The team module delivers a remote member's notices through this narrow seam (cross-host team spec §4.4, X3d).
 	c.Registry.Register(TeamNoticeKey, TeamNoticeDeliverer(m))
+	// The team module renames a lead at its approval and records the name history through this (name pool v2 spec §5.3).
+	c.Registry.Register(ipeers.NameServiceKey, ipeers.NameService(m))
 
 	return nil
 }
