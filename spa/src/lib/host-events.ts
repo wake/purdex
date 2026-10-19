@@ -28,6 +28,7 @@ export interface HostEvent {
     | 'journal.changed'
     | 'fleet.changed'
     | 'jobs.changed'
+    | 'pool.changed'
     | 'watch.changed'
     | 'watch.events'
     | 'nex.executions.hello'
