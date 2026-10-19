@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -82,26 +81,24 @@ func TestNamePairs_AFailedWriteIsOnlyLogged(t *testing.T) {
 	}
 }
 
-// A forwarded op records on the member host, from the lead's address and the name this host reserved for it. (The command does not
-// carry a name yet: the op's pool_name is set here by hand.)
-func TestNamePairs_ARegisteredRemoteSpawnRecordsTheLeadsCodeFromItsAddress(t *testing.T) {
+// The member host of a forwarded op writes no pair: the lead's code and the history are on the lead host (see name_pairs_remote_test.go).
+// The op runs to done on this host, so the finish is really reached. Mutation gate: record in spawnFinishRemote → red.
+func TestNamePairs_TheMemberHostOfAForwardedOpRecordsNothing(t *testing.T) {
 	f, root := remoteSpawnFixture(t)
 	n := pairNames(f)
-	f.holdRunners()
+	f.register("%0", "sid-m1")
 	cmd := spawnCommand(cmdUUID1, root)
 	cmd.Lead.Address = "lead/purdex-88-anna"
+	cmd.PoolName = "mia"
 	if code, body := f.postCmd(leadPrincipal(), cmd); code != http.StatusOK {
 		t.Fatalf("spawn = %d %s", code, body)
 	}
-	op, _, err := f.m.store.GetSpawnOp(cmdUUID1)
-	if err != nil {
-		t.Fatal(err)
+	f.m.spawnWG.Wait()
+	if op, _, _ := f.m.store.GetSpawnOp(cmdUUID1); op.State != team.SpawnDone {
+		t.Fatalf("op = %+v, want done (the finish was not reached)", op)
 	}
-	op.PoolName, op.SessionID = "mia", "sid-m1"
-	f.register("%0", "sid-m1")
-	f.m.spawnFinishRemote(op, &team.Origin{SessionID: "sid-m1", Ref: ipeers.RefID("sid-m1"), PID: 31, ProcStart: "ps"})
-	if n.count("pair:anna:mia") != 1 || n.count("pair:") != 1 {
-		t.Fatalf("calls = %v", n.log())
+	if n.count("pair:") != 0 {
+		t.Fatalf("calls = %v, want the member host to write no pair", n.log())
 	}
 }
 

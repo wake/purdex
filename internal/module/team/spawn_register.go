@@ -267,12 +267,8 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 	// failed, so the roster sent carries the member as it will be seen.
 	m.rosterChanged()
 	m.logf("[team] spawn %s done: member %s (%s) in %s", op.ID, o.Ref, op.SessionID, op.TmuxName)
-	if op.PoolName != "" { // the pair is the team's lead now and the name the op reserved (spec §6.1)
-		if t, ok, err := m.store.TeamByID(op.TeamID); err == nil && ok {
-			m.recordSpawnPair(m.sessionCode(t.LeadSessionID), op.PoolName, op.ID)
-		}
-	}
-	m.releaseMemberName(op.ID) // the session is registered: it takes the name at its first naming, no longer held by the op
+	m.recordRegisteredPair(op.TeamID, op.PoolName, op.ID) // the team's lead now and the name the op reserved (spec §6.1)
+	m.releaseMemberName(op.ID)                            // the session is registered: it takes the name at its first naming, no longer held by the op
 	m.wake(op.ID)
 }
 

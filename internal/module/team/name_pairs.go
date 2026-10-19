@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // The lead/member pairs of the name history (name pool v2 spec §6.1): one pair is written, through the name service, when a spawned
@@ -57,11 +58,40 @@ func addressCode(address string) string {
 	return code
 }
 
-// recordSpawnPair is the pair of a spawned member whose op reached registered: the lead's code and the op's reserved name. An op
-// without a name writes nothing. A local op's lead is the team's lead now (it may have relayed since the accept).
-func (m *Module) recordSpawnPair(leadCode, poolName, opID string) {
+// recordRegisteredPair writes the pair of a spawn op that has registered: the code of the team's lead as it is now (it may have
+// relayed since the accept) and the name the op carries. It runs on the LEAD host — for a local op when the op finishes, for a
+// forwarded one when the member host's `registered` fact is applied — because that is where the lead's code and the history are. The
+// member host of a forwarded op writes nothing.
+func (m *Module) recordRegisteredPair(teamID, poolName, opID string) {
 	if poolName == "" {
 		return
 	}
-	m.recordPair(leadCode, poolName, "spawn "+opID)
+	t, ok, err := m.store.TeamByID(teamID)
+	if err != nil || !ok {
+		return
+	}
+	m.recordPair(m.sessionCode(t.LeadSessionID), poolName, "spawn "+opID)
+}
+
+// recordRemoteSpawnPair writes the pair of a forwarded spawn after its `registered` fact was applied here (not a replay of it): only
+// when the op is done — a session_conflict fails the op while the fact still answers applied — and carries a name.
+func (m *Module) recordRemoteSpawnPair(fromHost string, fact team.TeamFact) {
+	op, found, err := m.store.GetRemoteSpawn(fact.MK)
+	if err != nil || !found || op.HostID != fromHost || op.TeamID != fact.TeamID || op.State != remoteSpawnDone {
+		return
+	}
+	m.recordRegisteredPair(op.TeamID, op.PoolName, op.ID)
+}
+
+// recordAdoptPair writes the pair of an adopt that was approved: the lead's code and the adopted session's (spec §5.4: it keeps its
+// name and counts from now on). A local target's code is read from the session; a remote one has only the name the request carried.
+func (m *Module) recordAdoptPair(p team.AdoptPayload, approvalID string) {
+	memberCode := ""
+	if p.TargetHostID == "" {
+		memberCode = m.sessionCode(p.TargetSessionID)
+	}
+	if memberCode == "" {
+		memberCode = addressCode(p.TargetName)
+	}
+	m.recordPair(m.sessionCode(p.LeadSessionID), memberCode, "adopt "+approvalID)
 }
