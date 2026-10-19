@@ -31,11 +31,15 @@ func checkPool(ctx context.Context, o Options, task string, labels []string) (co
 		return 0, false
 	}
 	var holders []wire.Peer
+	settling := false
 	var lacks []string // "alias: a, b" for each host that lacks some label
 	have := map[string]bool{}
 	for _, p := range pool.Peers {
 		if !p.Reachable && p.Info.HostID == "" && len(p.Info.Labels) == 0 {
 			continue // never reached: nothing is known of it
+		}
+		if p.Reachable && p.Facts == nil {
+			settling = true // answers but has no facts record yet: its labels (repo:, host:, earned task:) are not all in
 		}
 		set := map[string]bool{}
 		for _, l := range p.Info.Labels {
@@ -53,6 +57,9 @@ func checkPool(ctx context.Context, o Options, task string, labels []string) (co
 		} else {
 			lacks = append(lacks, fmt.Sprintf("%s lacks %s", p.Info.Alias, strings.Join(miss, ", ")))
 		}
+	}
+	if len(holders) == 0 && settling {
+		return 0, false // a host that has not finished announcing its labels may still hold them: queue as usual
 	}
 	if len(holders) == 0 {
 		var none []string
@@ -91,7 +98,7 @@ func notReadyReason(p wire.Peer) string {
 		return "unreachable"
 	case !p.Info.Worker.Enabled:
 		return "worker off"
-	case p.Facts != nil && p.Facts.Owner != nil && p.Facts.Owner.Active:
+	case p.Facts != nil && p.Facts.Owner != nil && p.Facts.Owner.Active && p.Facts.Worker.OwnerRule != "":
 		return "owner active, yielding"
 	}
 	return ""

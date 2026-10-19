@@ -39,6 +39,9 @@ func peer(alias string, reachable, worker bool, owner *wire.OwnerState, labels .
 	p := wire.Peer{Info: wire.Info{HostID: "h-" + alias, Alias: alias, Labels: labels, Worker: wire.InfoWorker{Enabled: worker}}, Reachable: reachable}
 	if reachable {
 		p.Facts = &wire.Facts{HostID: "h-" + alias, Alias: alias, Owner: owner}
+		if owner != nil {
+			p.Facts.Worker.OwnerRule = "hid>5m"
+		}
 	}
 	return p
 }
@@ -114,5 +117,27 @@ func TestAPoolThatCannotBeReadDoesNotStopTheSubmission(t *testing.T) {
 	code, _, _ := run(t, Options{Dir: labelRepo(t), Args: args(t, "go-changed", "a.test.ts"), API: api})
 	if code == ExitNoHost || api.submitted != 1 {
 		t.Fatalf("code %d submitted %d", code, api.submitted)
+	}
+}
+
+// An active owner reading only holds the worker when an owner rule is set (the worker loop's own rule), so without one it is no reason.
+func TestAnActiveOwnerWithoutARuleIsNotCalledYielding(t *testing.T) {
+	air := peer("air26", true, true, &wire.OwnerState{Active: true}, "os:darwin", "repo:purdex")
+	air.Facts.Worker.OwnerRule = ""
+	api := &poolAPI{fakeAPI: &fakeAPI{}, pool: wire.Pool{Peers: []wire.Peer{air}}}
+	code, _, errOut := run(t, Options{Dir: labelRepo(t), Args: args(t, "go-changed", "a.test.ts"), API: api})
+	if code == ExitNoHost || api.submitted != 1 || strings.Contains(errOut, "yielding") {
+		t.Fatalf("code %d submitted %d: %s", code, api.submitted, errOut)
+	}
+}
+
+// A host that answers but has no facts record yet has not announced all its labels (repo:, host:, earned task:): nothing is judged.
+func TestAHostStillSettlingIsNotTakenForAMissingSetting(t *testing.T) {
+	self := peer("mlab", true, true, nil, "arch:arm64", "os:darwin")
+	self.Facts = nil
+	api := &poolAPI{fakeAPI: &fakeAPI{}, pool: wire.Pool{Peers: []wire.Peer{self}}}
+	code, _, errOut := run(t, Options{Dir: labelRepo(t), Args: args(t, "go-changed", "a.test.ts"), API: api})
+	if code == ExitNoHost || api.submitted != 1 {
+		t.Fatalf("code %d submitted %d: %s", code, api.submitted, errOut)
 	}
 }
