@@ -57,9 +57,16 @@ export function QuotaStepper({ hostId, row, name, field, label }: { hostId: stri
   )
 }
 
-/** `team` must carry its cap and its usage (`hasCap`, team-settings.ts); `label` names the team in the toasts; `labelText` is the text before the number (default 「上限」). */
+/**
+ * `team` must carry its cap and its usage (`hasCap`, team-settings.ts); `label` names the team (the toasts', and the buttons' and the box's accessible names, with the host's after it when there is more than one host); `labelText` is the text before the number (default 「上限」).
+ * The buttons read "Decrease <labelText> (<label>)": two teams on one screen must not both have a 「調低上限」 for a screen reader or voice control (#3611, as #3607 did for QuotaStepper).
+ */
 export function CapStepper({ hostId, team, label, labelText }: { hostId: string; team: TeamRoster; label: string; labelText?: string }) {
   const t = useI18nStore((s) => s.t)
+  // With more than one host the same team name can be on two of them, and the host heading above is no part of a button's name: the subject says the host too.
+  const lookOf = useHostLookResolver()
+  const manyHosts = useHostStore((s) => s.hostOrder.length > 1)
+  const subject = manyHosts ? `${label} · ${lookOf(hostId).name || hostId}` : label
   const busy = useMaxMembersStore((s) => s.inflight[teamKey(hostId, team.id)] !== undefined)
   const max = maxMembersMax(useUnattendedStore((s) => s.byHost[hostId]?.maxMembersV2Support === 'yes')) // 9 against team.max_members.v2, else 8
   const text = labelText ?? t('unattended.cap.label')
@@ -72,15 +79,15 @@ export function CapStepper({ hostId, team, label, labelText }: { hostId: string;
   return (
     <span className="inline-flex items-center gap-1" data-testid="cap-stepper" title={t('unattended.cap.in_use', { n: String(inUse) })}>
       <span className="text-text-muted">{text}</span>
-      <StepButton sign="−" label={t('unattended.cap.minus')} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
+      <StepButton sign="−" label={t('unattended.cap.step_minus', { field: text, name: subject })} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
       <NumberField
-        testId="cap-value" ariaLabel={text} value={value} disabled={busy}
+        testId="cap-value" ariaLabel={t('unattended.cap.value_name', { field: text, name: subject })} value={value} disabled={busy}
         validate={(n) => (n < MAX_MEMBERS_MIN || n > max
           ? t('unattended.field.range', { min: String(MAX_MEMBERS_MIN), max: String(max) })
           : n < inUse ? t('unattended.cap.below', { n: String(inUse) }) : null)}
         onCommit={write}
       />
-      <StepButton sign="+" label={t('unattended.cap.plus')} disabled={busy || value >= max} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(max) })} onClick={() => write(value + 1)} />
+      <StepButton sign="+" label={t('unattended.cap.step_plus', { field: text, name: subject })} disabled={busy || value >= max} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(max) })} onClick={() => write(value + 1)} />
     </span>
   )
 }
