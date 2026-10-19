@@ -104,6 +104,12 @@ describe('update', () => {
     expect(putTaskGroups).toHaveBeenCalledTimes(1)
   })
 
+  it('the daemon\'s own dropped marker on a 409 and the rows the App cannot read add up', async () => {
+    putTaskGroups.mockRejectedValueOnce(new HostConfigConflictError({ items: [g('a'), { id: 'bad', name: 7 }], revision: 6, dropped: { count: 2, reasons: ['root "x" is twice in the group'] } } as never))
+    expect(await get().update('h1', (groups) => [...groups, g('n')])).toEqual({ ok: false, reason: 'unsafe' })
+    expect(entry()?.dropped).toEqual({ count: 3, reasons: ['root "x" is twice in the group', 'the stored copy has rows this App could not read'] })
+  })
+
   it('a refusal says why in the daemon\'s words and leaves the copy alone', async () => {
     putTaskGroups.mockRejectedValue(new HostConfigApiError(400, 'task group 0: root "r1" is already in group "b"'))
     const out = await get().update('h1', (groups) => [...groups, g('n', ['r1'])])

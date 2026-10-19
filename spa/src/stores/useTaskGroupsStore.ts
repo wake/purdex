@@ -83,7 +83,11 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
           // A 409 carries the stored copy as `{items, revision}` and none of the GET's marks, so what the parser left out is counted here: a copy with rows the App could not read is as unsafe to write back as a GET that said so.
           const rawItems = (e.current as { items?: unknown } | null)?.items
           if (!Array.isArray(rawItems)) theirs.invalid = true
-          else if (rawItems.length > theirs.items.length) theirs.dropped = { count: rawItems.length - theirs.items.length, reasons: ['the stored copy has rows this App could not read'] }
+          else if (rawItems.length > theirs.items.length) {
+            // added to what the daemon already said it left out, never replacing it
+            const unread = rawItems.length - theirs.items.length
+            theirs.dropped = { count: (theirs.dropped?.count ?? 0) + unread, reasons: [...(theirs.dropped?.reasons ?? []), 'the stored copy has rows this App could not read'] }
+          }
           if (mine()) put(hostId, entryOf(theirs))
           if (attempt === 1) return { ok: false, reason: 'conflict' }
           if (!alive()) return { ok: false, reason: 'host-changed' }
