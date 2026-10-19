@@ -36,6 +36,7 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 	sc := bufio.NewScanner(bytes.NewReader(in.Stdout))
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	var malformed error
+	passed := newPassedSet(in.Digest)
 	lineNo := 0
 	for sc.Scan() {
 		lineNo++
@@ -74,15 +75,18 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 			delete(output, k) // a test that passed needs no output kept
 			if ev.Test != "" {
 				s.Passed++
+				passed.add(ev.Package, ev.Test)
 			}
 		case "skip":
 			delete(output, k)
 			if ev.Test != "" {
 				s.Skipped++
+				passed.skippedTest(ev.Package, ev.Test)
 			}
 		case "fail":
 			if ev.Test != "" {
 				s.Failed++
+				passed.failedTest(ev.Package, ev.Test)
 				failedTests[ev.Package] = true
 				if len(failedOrder) < maxFailures {
 					failedOrder = append(failedOrder, k)
@@ -91,6 +95,7 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 				}
 			} else if !failedTests[ev.Package] { // its tests already told; a package that failed alone is a build or setup failure
 				s.Failed++
+				passed.failedTest("<package>", ev.Package)
 				if len(pkgFailed) < maxFailures {
 					pkgFailed = append(pkgFailed, ev.Package)
 				} else {
@@ -115,6 +120,9 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 	}
 	for _, pkg := range pkgFailed {
 		addFailure(&s, wire.Failure{Name: pkg, Message: testMessage(output[key{pkg, ""}])})
+	}
+	if malformed == nil { // a stream with a damaged event may have lost passes: the set is not trusted
+		s.PassedDigest = passed.digest()
 	}
 	return s, malformed
 }

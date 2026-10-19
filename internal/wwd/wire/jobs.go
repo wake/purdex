@@ -51,7 +51,8 @@ type Summary struct {
 	Skipped  int       `json:"skipped"`
 	Failures []Failure `json:"failures"`
 	Tail     []string  `json:"tail"`
-	// PassedDigest identifies the set of tests that passed: "sha256:" and the hex of the SHA-256 of the sorted passed test ids, each
+	// PassedDigest identifies which tests passed and which failed (WWD-5b-2w: the lines "P <id>" and "F <id>", sorted; see summary/digest.go
+	// for the exact form, which the parsers own, and for when a report has none). Originally "the set of tests that passed": "sha256:" and the hex of the SHA-256 of the sorted passed test ids, each
 	// followed by a newline (WWD-5b-2r; the summary parsers fill it from 5b-2w on, only while every pool host reports proto >= 3).
 	// Empty: not computed (an older writer, or a task whose report has no per-test ids). Qualification (spec §7) compares it and treats
 	// a missing one on either half as a mismatch.

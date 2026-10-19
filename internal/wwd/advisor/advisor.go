@@ -23,6 +23,10 @@ type Input struct {
 	// Orphans is the host's latest process scan (internal/wwd/orphans); nil: none is available (a replay has no process table), and the
 	// orphans rule is unjudged. It returns nil before the first scan has run.
 	Orphans func() *OrphanReport
+	// Peers is the pool poller's view of the peers' reachability (spec §13.3 silence); nil: not available (a replay has no pool).
+	Peers func() []PeerDown
+	// PartnerSeen is when the local Purdex daemon last read this host's alerts; nil: not available (a replay, or a host without a daemon).
+	PartnerSeen func() time.Time
 	// StartsSince is the number of wwd starts recorded at or after since; nil: not available.
 	StartsSince func(since time.Time) (int, error)
 	// WorkRoot is the directory jobs run in: the volume that holds it is the host's work volume (spec §13.3 "disk low").

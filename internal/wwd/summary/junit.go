@@ -37,9 +37,12 @@ func parseJunit(in Input) (wire.Summary, error) {
 	}
 	dec := xml.NewDecoder(bytes.NewReader(in.Junit))
 	depth := 0
+	passed := newPassedSet(in.Digest)
+	var suites []string // the names of the <testsuite> elements around the token: a test is told apart by where it sits
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
+			s.PassedDigest = passed.digest()
 			return s, nil
 		}
 		if err != nil {
@@ -52,25 +55,48 @@ func parseJunit(in Input) (wire.Summary, error) {
 				if depth++; depth > maxJunitDepth {
 					return s, fmt.Errorf("junit: suites nest deeper than %d", maxJunitDepth)
 				}
+				if t.Name.Local == "testsuite" {
+					suites = append(suites, suiteName(t))
+				}
 			case "testcase":
 				var c junitCase
 				if err := dec.DecodeElement(&c, &t); err != nil {
 					return s, fmt.Errorf("junit: %w", err)
 				}
-				addCase(&s, c, in.Root)
+				addCase(&s, c, in.Root, passed, strings.Join(suites, "\x1f"))
 			}
 		case xml.EndElement:
 			if t.Name.Local == "testsuite" || t.Name.Local == "testsuites" {
 				depth--
 			}
+			if t.Name.Local == "testsuite" && len(suites) > 0 {
+				suites = suites[:len(suites)-1]
+			}
 		}
 	}
 }
 
-func addCase(s *wire.Summary, c junitCase, root string) {
+// suiteName is the name attribute of a <testsuite> ("" when it has none).
+func suiteName(t xml.StartElement) string {
+	for _, a := range t.Attr {
+		if a.Name.Local == "name" {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+// addCase counts one test case. suite is the names of the suites around it, outermost first: with the case's file, class and name they
+// are the identity of a passed test for the digest, so the same class and name in two suites are two tests. A test with no name, or a
+// file outside the workspace (which rel folds to its base name), cannot be told apart from another: the report then has no digest.
+func addCase(s *wire.Summary, c junitCase, root string, passed *passedSet, suite string) {
 	p := c.Failure
 	if p == nil {
 		p = c.Error
+	}
+	idFile := ""
+	if c.File != "" {
+		idFile = rel(root, c.File)
 	}
 	switch {
 	case p != nil:
@@ -87,10 +113,19 @@ func addCase(s *wire.Summary, c junitCase, root string) {
 		if file == "" {
 			file = c.Classname
 		}
+		if c.Name == "" || strings.HasPrefix(idFile, outside) { // as for a pass: such a failure is not told apart from another
+			passed.taint()
+		}
+		passed.failedTest(suite, idFile, c.Classname, c.Name)
 		addFailure(s, wire.Failure{Name: name, File: rel(root, file), Message: msg})
 	case c.Skipped != nil:
 		s.Skipped++
+		passed.skippedTest(suite, idFile, c.Classname, c.Name)
 	default:
 		s.Passed++
+		if c.Name == "" || strings.HasPrefix(idFile, outside) {
+			passed.taint()
+		}
+		passed.add(suite, idFile, c.Classname, c.Name)
 	}
 }

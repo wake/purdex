@@ -43,6 +43,12 @@ export function useSeat(address: string): Seat | null {
   return useMemo(() => seatFrom(collection, address), [collection, address])
 }
 
+/** The name a tooltip or a title shows for a seat (spec §9.3): its persona's name, else `fallback` (the title the seat had). `address` must be the daemon's resolved one. Plain,
+ *  without a subscription: the component calls `usePersonaRevision()` once. */
+export function seatName(address: string, fallback: string): string {
+  return seatOf(address)?.name ?? fallback
+}
+
 /** For a component that formats names through the plain functions (`seatLabel`, `approvalSessionLabel`), which read the store without subscribing: call this once at the top
  *  and the component redraws when the persona collection loads or changes. The returned collection is only there to be depended on (a memo's dependency list). */
 export function usePersonaRevision(): PersonaCollection | null {
