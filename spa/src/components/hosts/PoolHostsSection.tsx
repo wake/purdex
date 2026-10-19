@@ -40,7 +40,7 @@ export function PoolHostsSection() {
 }
 
 /** The status words of a row: the zone while the pool reads the host, else why it does not. */
-function statusWord(t: (k: string, p?: Record<string, string | number>) => string, r: PoolHostRow): string {
+export function statusWord(t: (k: string, p?: Record<string, string | number>) => string, r: PoolHostRow): string {
   if (r.state === 'live') return t(zoneKey(r.zone ?? 'normal'))
   if (r.state === 'fallback') {
     return r.since !== null

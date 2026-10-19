@@ -27,6 +27,8 @@ interface Props {
   pairedPhonesActive?: boolean
   /** The probe host whose own page is showing (its id; selecting one calls `onSelect('probe:<id>', '')`). */
   selectedProbeId?: string | null
+  /** The pool host (a daemon host) whose page is showing; selecting one calls `onSelect('pool:<id>', '')`. */
+  selectedPoolId?: string | null
   /** The 「觀察主機」 heading's `+`: start a new probe host. */
   onAddProbe?: () => void
 }
@@ -42,7 +44,7 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
-export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone, onShowPairedPhones, pairedPhonesActive, selectedProbeId, onAddProbe }: Props) {
+export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone, onShowPairedPhones, pairedPhonesActive, selectedProbeId, selectedPoolId, onAddProbe }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -186,9 +188,9 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
         {pool.active && pool.rows.length > 0 && (
           <PoolHostGroup
             rows={pool.rows}
-            selectedId={selectedProbeId ?? null}
-            // A probe host opens its own page; a daemon host, until it has a page of its own here, opens that host's overview.
-            onOpen={(r) => { if (r.kind === 'probe') onSelect(`probe:${r.id}`, ''); else if (r.hostConfigId) onSelect(r.hostConfigId, 'overview') }}
+            selectedId={selectedPoolId ?? selectedProbeId ?? null}
+            // A probe host opens its own page (the pool host page with the style editor); a daemon host opens the pool host page alone.
+            onOpen={(r) => onSelect(r.kind === 'probe' ? `probe:${r.id}` : `pool:${r.id}`, '')}
           />
         )}
         {!pool.active && (probeRows.length > 0 || fleetDaemons.length > 0) && (
