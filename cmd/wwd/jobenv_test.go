@@ -48,7 +48,7 @@ func TestJobParentEnvKeepsTheRestAndWorksWithoutAPath(t *testing.T) {
 func TestTheJobEnvironmentCarriesTheExtraDirectories(t *testing.T) {
 	home := t.TempDir()
 	parent := jobParentEnv([]string{"PATH=/usr/bin"}, home, []string{"/srv/tc/node/bin"})
-	env, err := wrun.BuildEnv("j_0123456789abcdef", t.TempDir(), nil, parent)
+	env, err := wrun.BuildEnv("j_0123456789abcdef", "", t.TempDir(), nil, parent)
 	if err != nil {
 		t.Fatal(err)
 	}

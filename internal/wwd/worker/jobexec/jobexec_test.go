@@ -692,3 +692,26 @@ func TestACleanupDoesNotWaitForeverForADropThatIsStuck(t *testing.T) {
 		t.Fatalf("the workspace stays although only the drop was slow: %v", serr)
 	}
 }
+
+// The command's environment carries the whole mark: the job id and the tag of the connection the job came in on.
+func TestTheCommandCarriesTheJobAndOriginMark(t *testing.T) {
+	r, commit := repo(t)
+	e := newExec(t, &localFetcher{repo: r, commit: commit})
+	ctx := context.Background()
+	j := job("envs")
+	ref := ident.Ref{Source: "air26", ID: j.ID}
+	ws, err := e.Materialize(ctx, ref, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	plan, err := e.Prepare(ctx, ref, j, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := e.Run(ctx, ref, j, ws, plan)
+	log, _ := os.ReadFile(res.LogPath)
+	if !strings.Contains(string(log), "WWD_JOB="+j.ID+"\n") || !strings.Contains(string(log), "WWD_ORIGIN="+ident.OriginTag("air26")+"\n") {
+		t.Fatalf("log %q: want WWD_JOB=%s and WWD_ORIGIN=%s", log, j.ID, ident.OriginTag("air26"))
+	}
+}

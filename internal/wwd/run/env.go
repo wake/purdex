@@ -13,23 +13,31 @@ import (
 	"github.com/wake/purdex/internal/wwd/facts"
 )
 
-// MarkEnv is the environment variable that names the job a process belongs to.
-const MarkEnv = facts.JobMarkerEnv
+// MarkEnv is the environment variable that names the job a process belongs to; OriginEnv names the connection it came in on (a job
+// id is only unique per origin): the mark of a job is both.
+const (
+	MarkEnv   = facts.JobMarkerEnv
+	OriginEnv = facts.OriginMarkerEnv
+)
 
 // fixedNames are set by the runner and cannot be allowed or overridden by a manifest: they point at the job's workspace or
 // identify the job.
 var fixedNames = map[string]bool{
 	"HOME": true, "TMPDIR": true, "XDG_CONFIG_HOME": true, "XDG_CACHE_HOME": true, "XDG_DATA_HOME": true,
-	"XDG_STATE_HOME": true, "XDG_RUNTIME_DIR": true, MarkEnv: true,
+	"XDG_STATE_HOME": true, "XDG_RUNTIME_DIR": true, MarkEnv: true, OriginEnv: true,
 }
 
 // BuildEnv is the environment of a job's command: PATH and TERM, HOME, TMPDIR and the XDG directories inside the workspace,
-// the job mark, and what the task's env list asks for. An entry is "NAME" (taken from parent when it has it) or "NAME=value"
+// the job mark (the id, and the origin tag when there is one), and what the task's env list asks for. An entry is "NAME" (taken from parent when it has it) or "NAME=value"
 // (fixed). parent is only read for allowed names; nothing else of it reaches the command.
-func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, error) {
-	// the id must be one the facts' shared check recognises as a mark, or the sweep and the attribution could not find the job
-	if _, ok := facts.JobFromEnv([]string{MarkEnv + "=" + jobID}); !ok {
+func BuildEnv(jobID, origin, workspace string, taskEnv, parent []string) ([]string, error) {
+	// the mark must be one the facts' shared check recognises, or the sweep and the attribution could not find the job
+	tag, id, ok := facts.MarkFromEnv([]string{MarkEnv + "=" + jobID, OriginEnv + "=" + origin})
+	if !ok {
 		return nil, fmt.Errorf("run: invalid job id %q", jobID)
+	}
+	if origin != "" && tag != origin {
+		return nil, fmt.Errorf("run: invalid origin tag %q", origin)
 	}
 	if !filepath.IsAbs(workspace) {
 		return nil, fmt.Errorf("run: the workspace %q must be an absolute path", workspace)
@@ -48,10 +56,13 @@ func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, erro
 		"XDG_CACHE_HOME":  filepath.Join(workspace, ".cache"),
 		"XDG_DATA_HOME":   filepath.Join(workspace, ".local", "share"),
 		"XDG_STATE_HOME":  filepath.Join(workspace, ".local", "state"),
-		MarkEnv:           jobID,
+		MarkEnv:           id,
 		// Purdex state directories, inside the workspace so a job never reads or writes the host's own.
 		"PDX_GATE_DIR":         filepath.Join(workspace, ".pdx", "gate"),
 		"PDX_CODEX_STATE_ROOT": filepath.Join(workspace, ".pdx", "codex"),
+	}
+	if origin != "" {
+		env[OriginEnv] = origin
 	}
 	if p, ok := parentVal["PATH"]; ok {
 		env["PATH"] = p
