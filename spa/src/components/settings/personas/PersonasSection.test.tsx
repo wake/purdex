@@ -142,7 +142,7 @@ describe('PersonasSection', () => {
 
   it('stops editing, switching and a second save while a save is in flight, and applies nothing stale', async () => {
     seed(['hiro', 'emma'])
-    let finish!: (r: { hostId: string; base: null }) => void
+    let finish!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: null }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -159,7 +159,7 @@ describe('PersonasSection', () => {
 
   it('stays locked when the page is left and re-entered while a save is in flight, and picks up the result', async () => {
     seed(['hiro'])
-    let finish!: (r: { hostId: string; base: null }) => void
+    let finish!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: null }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
     const first = render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -199,7 +199,7 @@ describe('PersonasSection', () => {
 
   it('shows the "saved" note on the page that was re-entered, and drops it when the user starts something new', async () => {
     seed(['hiro', 'emma'])
-    let done!: (r: { hostId: string; base: { hostId: string; revision: number; stamp: { at: number; host: string } } }) => void
+    let done!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: { hostId: string; revision: number; stamp: { at: number; host: string } } }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { done = r as typeof done }))
     const first = render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
