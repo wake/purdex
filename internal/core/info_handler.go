@@ -68,6 +68,7 @@ var capabilities = []string{
 	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
 	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
 	"team.decision_log.v1",    // GET / PUT /api/team/unattended carry `log`: the latest team decisions and the switch's on/off records, newest first (NP-6b)
+	"team.max_members.v2",     // the member cap's ceiling is 9, not 8: PUT /api/team/max-members, max_members on a lead request, pdx lead request --max-members (NP-4a)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose

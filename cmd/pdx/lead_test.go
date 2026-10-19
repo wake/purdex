@@ -401,7 +401,7 @@ func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
 		{"unknown verb", []string{"approve"}},
 		{"missing reason", []string{"request"}},
 		{"empty reason", []string{"request", "--reason", "  "}},
-		{"max-members too large", []string{"request", "--reason", "x", "--max-members", "9"}},
+		{"max-members too large", []string{"request", "--reason", "x", "--max-members", "10"}},
 		{"max-members negative", []string{"request", "--reason", "x", "--max-members", "-1"}},
 		{"wait zero", []string{"request", "--reason", "x", "--wait", "0"}},
 		{"wait over cap", []string{"request", "--reason", "x", "--wait", "11m"}},
@@ -519,6 +519,18 @@ func TestRunLeadCmd_DefaultsLeaveMaxMembersAndRootsToDaemon(t *testing.T) {
 		if len(creates) != 1 || creates[0].MaxMembers != 0 || creates[0].Roots != nil {
 			t.Errorf("%v: create body = %+v, want max_members 0 and no roots", args, creates)
 		}
+	}
+}
+
+// --max-members takes up to the ceiling, 9 (name pool v2 §5.1), and reaches the body as given; 10 is refused above.
+// Mutation gate: the ceiling back to 8 → red.
+func TestRunLeadCmd_MaxMembersNineIsAccepted(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 9}})
+	if code, _, stderr := driveLead(t, context.Background(), d, "--reason", "r", "--max-members", "9"); code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if creates, _, _, _ := d.snapshot(); len(creates) != 1 || creates[0].MaxMembers != 9 {
+		t.Errorf("create body = %+v, want max_members 9", creates)
 	}
 }
 
