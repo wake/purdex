@@ -119,6 +119,11 @@ func pausedLine(class Class) string {
 	return fmt.Sprintf("the %s class is paused (slots.%s = 0): this command waits and starts by itself once the count is raised. %s", class, class, normalQueue)
 }
 
+// holdLine is the line for a command held back by a hold of the local wwd (spec §13.4).
+func holdLine(class Class, name string) string {
+	return fmt.Sprintf("a hold is in force on this host (%s): this %s command waits and starts by itself once it ends. %s", name, class, normalQueue)
+}
+
 // pressureLine is the line for a command held back by the memory pressure, with the numbers.
 func pressureLine(p Pressure, a AdmissionConfig, haveReading bool) string {
 	if !haveReading {

@@ -93,6 +93,10 @@ type Options struct {
 type state struct {
 	mu  sync.RWMutex
 	cfg Config
+	// the last reading of the wwd's holds (holdview.go)
+	holdMu   sync.Mutex
+	holdMemo HoldView
+	holdAt   time.Time
 }
 
 // Gate runs commands under slots.
@@ -126,6 +130,8 @@ type Gate struct {
 	// Getppid is the parent of this process now (os.Getppid); a seam so a test can reparent it.
 	Getppid func() int
 	Token   func() string
+	// HoldFetch asks the local wwd for its holds (holdview.go); nil asks nothing, and there are no holds.
+	HoldFetch HoldFetch
 }
 
 // SessionFromEnv is the Claude Code session a command runs in: CLAUDE_CODE_SESSION_ID (what Claude Code sets), else
@@ -171,8 +177,9 @@ func hostTools() Tools {
 // Config is the settings as last read.
 func (g *Gate) Config() Config {
 	g.st.mu.RLock()
-	defer g.st.mu.RUnlock()
-	return g.st.cfg
+	cfg := g.st.cfg
+	g.st.mu.RUnlock()
+	return g.effective(cfg)
 }
 
 // SetConfig changes the settings the gate holds (what Load would otherwise bring).
@@ -189,7 +196,7 @@ func (g *Gate) refresh() Config {
 		g.st.mu.Lock()
 		g.st.cfg = c
 		g.st.mu.Unlock()
-		return c
+		return g.effective(c)
 	}
 	return g.Config()
 }

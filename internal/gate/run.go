@@ -107,6 +107,10 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				}
 			}
 		}
+		holdName, holding := g.holdView(cfg.Dir).Waits(class) // a hold of the local wwd keeps a new command waiting (holdview.go)
+		if holding && !paused {
+			ok = false
+		}
 		ahead, aheadFront := 0, 0
 		var rank RankInfo
 		var blocked *ConflictBlock
@@ -165,6 +169,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		switch {
 		case paused:
 			d.why("paused")
+		case holding:
+			d.why("hold:" + holdName)
 		case rank.Rank == RankHold:
 		case ok:
 			d.why("queue")
@@ -184,6 +190,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			switch {
 			case paused:
 				g.say("%s", pausedLine(class))
+			case holding:
+				g.say("%s", holdLine(class, holdName))
 			case rank.Rank == RankHold:
 				g.say("%s", heldLine(class, rank, now))
 			case blocked != nil:

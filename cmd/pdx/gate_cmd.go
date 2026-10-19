@@ -163,6 +163,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
+	g.HoldFetch = gate.WwdHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
 	var target *gate.AssistTarget
@@ -259,6 +260,7 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
+	g.HoldFetch = gate.WwdHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
 	// the JSON is read by machines, often (the fleet view polls it): the lock holders cost an lsof over the whole host each,
 	// so it carries them only for a slot whose gate is gone, unless asked
 	mode := gate.HoldersAll
@@ -552,6 +554,7 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
+	g.HoldFetch = gate.WwdHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
 	if batchGiven {
 		return wouldWaitBatch(g, cfg, argvs, *asJSON, stdout)
 	}
