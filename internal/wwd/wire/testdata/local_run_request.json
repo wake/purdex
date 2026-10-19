@@ -6,6 +6,5 @@
   "supersede_key": "deadbeef:spa-related",
   "interruptible": true, "queue_timeout_s": 0, "adhoc": false,
   "submitter": {"session": "s1", "ref": "_abc123", "team": "wwd", "host": "mlab"},
-  "def_hash": "", "no_cache": false,
   "git_dir": "/Users/wake/Workspace/wake/purdex/.git"
 }

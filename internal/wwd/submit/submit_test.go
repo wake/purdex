@@ -266,6 +266,9 @@ func TestPrepareLocalTakesNoSnapshotAndNamesHead(t *testing.T) {
 	if p.Body.GitDir != filepath.Join(dir, ".git") {
 		t.Fatalf("git_dir = %q", p.Body.GitDir)
 	}
+	if p.Body.DefHash != "" || p.Body.NoCache {
+		t.Fatalf("a fast-lane run is never answered from a stored result: def_hash %q no_cache %v", p.Body.DefHash, p.Body.NoCache)
+	}
 }
 
 func TestPrepareLocalReadsTheManifestFromTheWorkingTreeAndNeverCaches(t *testing.T) {

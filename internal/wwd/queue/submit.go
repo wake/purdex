@@ -54,8 +54,8 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 }
 
 // SubmitReused records a submission that a stored result answered (spec §4.5): the job is born succeeded, with the stored result marked
-// cache_hit and pointing at the log of the job that made it. Nothing runs, so there is no pin and no supersede (an older job with the
-// same key goes on as it is). The stored result is validated like a posted one.
+// cache_hit and pointing at the log of the job that made it (OpenLog follows the pointer). Nothing runs, so nothing is pinned; the older
+// jobs with the same supersede_key are superseded as for any newer submission. The stored result is validated like a posted one.
 func (q *Queue) SubmitReused(ctx context.Context, s wire.JobSubmission, stored wire.Result) (wire.JobSubmissionResponse, error) {
 	if err := s.Validate(); err != nil {
 		return wire.JobSubmissionResponse{}, err
@@ -84,7 +84,13 @@ func (q *Queue) SubmitReused(ctx context.Context, s wire.JobSubmission, stored w
 			return err
 		}
 		*changed = append(*changed, id)
-		return nil
+		if s.SupersedeKey == "" {
+			return nil
+		}
+		// the newest submission for the key is answered, so an older one still waiting or running is stale, the same as for a job that runs
+		superseded, err := supersedeOlder(ctx, c, id, s.SupersedeKey, now.UnixMilli())
+		*changed = append(*changed, superseded...)
+		return err
 	})
 	if err != nil {
 		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: %w", err)

@@ -210,7 +210,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		Locks:         nonNil(task.Locks),
 		Cacheable:     task.Cacheable && !req.Local, // a local run has no snapshot tree to key a result by
 		NoCache:       req.NoCache,
-		DefHash:       adHocFreeHash(req.AdHoc, task.DefinitionHash()),
+		DefHash:       cacheableHash(req, task),
 		TimeoutS:      int(task.Timeout.Seconds()),
 		SupersedeKey:  adHocFree(req.AdHoc, supersedeKey(root, task.Name)),
 		AdHoc:         req.AdHoc != nil,
@@ -226,11 +226,13 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 }
 
 // adHocFree drops a supersede key for an undeclared command: nothing is known about what a newer one would replace.
-func adHocFreeHash(adhoc []string, h string) string {
-	if adhoc != nil {
+// cacheableHash is the definition hash a stored result is compared on; a run that is never answered from one (undeclared or local) sends
+// none, so the field is left out of its body and an older wwd that does not know it still decodes the fast lane's.
+func cacheableHash(req Request, task *manifest.Task) string {
+	if req.AdHoc != nil || req.Local {
 		return ""
 	}
-	return h
+	return task.DefinitionHash()
 }
 
 func adHocFree(adhoc []string, key string) string {
