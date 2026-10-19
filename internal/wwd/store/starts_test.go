@@ -36,6 +36,19 @@ func TestStartsSinceCountsTheStartsInTheWindow(t *testing.T) {
 	}
 }
 
+func TestStartTimesAreTheStartsSinceOldestFirst(t *testing.T) {
+	s := openStarts(t)
+	for _, at := range []time.Duration{-20 * time.Minute, -3 * time.Hour, 0} {
+		if err := s.RecordStartAt(st0.Add(at), "v1", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.StartTimes(st0.Add(-time.Hour))
+	if err != nil || len(got) != 2 || !got[0].Equal(st0.Add(-20*time.Minute)) || !got[1].Equal(st0) {
+		t.Fatalf("%v %v", got, err)
+	}
+}
+
 func TestRecordStartKeepsVersionAndPreviousExit(t *testing.T) {
 	s := openStarts(t)
 	if err := s.RecordStartAt(st0, "0.1.0-alpha.755", "signal: killed"); err != nil {
