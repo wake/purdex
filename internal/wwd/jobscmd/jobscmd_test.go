@@ -16,26 +16,29 @@ import (
 var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
 type fakeAPI struct {
-	jobs      []wire.Job
-	query     client.JobsQuery
-	jobErr    error
-	logBytes  []byte
-	logErr    error
-	cancelErr error
-	cancelled []string
-	moved     []string
-	moveJob   wire.Job
-	moveErr   error
-	waitJob   wire.Job
-	info      wire.Info
-	pool      wire.Pool
-	worker    wire.WorkerSettings
-	set       *wire.WorkerSettings
-	started   *wire.Exception
-	stopped   string
-	usage     wire.UsageResponse
-	usageQ    client.UsageQuery
-	err       error // returned by every call when set (wwd unreachable)
+	earned wire.EarnedLabelList
+	// earnedUnknown: the wwd answered 404 for the earned-labels route (it predates it)
+	earnedUnknown bool
+	jobs          []wire.Job
+	query         client.JobsQuery
+	jobErr        error
+	logBytes      []byte
+	logErr        error
+	cancelErr     error
+	cancelled     []string
+	moved         []string
+	moveJob       wire.Job
+	moveErr       error
+	waitJob       wire.Job
+	info          wire.Info
+	pool          wire.Pool
+	worker        wire.WorkerSettings
+	set           *wire.WorkerSettings
+	started       *wire.Exception
+	stopped       string
+	usage         wire.UsageResponse
+	usageQ        client.UsageQuery
+	err           error // returned by every call when set (wwd unreachable)
 }
 
 func (f *fakeAPI) Usage(_ context.Context, q client.UsageQuery) (wire.UsageResponse, error) {
@@ -90,6 +93,10 @@ func (f *fakeAPI) StartException(_ context.Context, e wire.Exception) error {
 func (f *fakeAPI) StopException(_ context.Context, name string) error {
 	f.stopped = name
 	return f.err
+}
+
+func (f *fakeAPI) EarnedLabels(context.Context) (wire.EarnedLabelList, bool, error) {
+	return f.earned, !f.earnedUnknown, f.err
 }
 
 func firstErr(errs ...error) error {

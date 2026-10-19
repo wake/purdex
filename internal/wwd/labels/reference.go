@@ -3,6 +3,7 @@ package labels
 import (
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -19,6 +20,19 @@ type RefTask struct {
 // TaskLabel is the earned label of a task: task:<repo>/<task>.
 func TaskLabel(repo, task string) string { return "task:" + repo + "/" + task }
 
+// envPrefixes are the labels a task may need as a precondition of its environment. Anything else a manifest lists (task:, host:, repo:,
+// a label of its own) is not an environment requirement and grants nothing: a task that lists one is not held without qualifying.
+var envPrefixes = []string{"os:", "arch:", "tool:"}
+
+func isEnvRequirement(l string) bool {
+	for _, p := range envPrefixes {
+		if strings.HasPrefix(l, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // ReferenceLabels is the `task:` labels the host named alias holds without qualifying (spec §7): for each task whose reference is
 // this host, when the host has the task's repo (repo:<name> among have) and every label the task needs. have is the host's labels
 // without the task labels themselves. The result is sorted and has no duplicates.
@@ -33,7 +47,7 @@ func ReferenceLabels(alias string, have []string, tasks []RefTask) []string {
 		}
 		ok := true
 		for _, n := range t.Needs {
-			if !slices.Contains(have, n) {
+			if !isEnvRequirement(n) || !slices.Contains(have, n) {
 				ok = false
 				break
 			}
