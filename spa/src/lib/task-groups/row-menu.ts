@@ -26,13 +26,16 @@ export function failureText(t: Translate, r: Extract<ActionResult, { ok: false }
   return r.reason === 'rejected' ? t('taskgroups.err.rejected', { message: r.message }) : t(`taskgroups.err.${r.reason}`)
 }
 
+/** Why a host's groups cannot be edited right now, in words; null = they can: unsafe (the daemon left rows out, or the value is not a list), or not read yet. */
+export function hostBlockedReason(entry: TaskGroupsEntry | undefined, t: Translate): string | null {
+  if (entry && (entry.invalid || entry.dropped !== null)) return entry.invalid || !entry.dropped || entry.dropped.count <= 0 ? t('taskgroups.unsafe_edit_nocount') : t('taskgroups.unsafe_edit', { n: entry.dropped.count })
+  if (!entry || !entry.loaded) return t('taskgroups.groups_reading')
+  return null
+}
+
 /** Why nothing can be filed from this host/session right now, in words; null = it can. */
 function blockedReason(i: RowMenuInput): string | null {
-  const e = i.entry
-  if (e && (e.invalid || e.dropped !== null)) return e.invalid || !e.dropped || e.dropped.count <= 0 ? i.t('taskgroups.unsafe_edit_nocount') : i.t('taskgroups.unsafe_edit', { n: e.dropped.count })
-  if (!e || !e.loaded) return i.t('taskgroups.groups_reading')
-  if (i.root === null) return i.t('taskgroups.root_reading')
-  return null
+  return hostBlockedReason(i.entry, i.t) ?? (i.root === null ? i.t('taskgroups.root_reading') : null)
 }
 
 export function rowMenuItems(i: RowMenuInput): TabMenuExtra[] {

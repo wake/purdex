@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,7 +20,7 @@ import (
 //	GOOS=linux GOARCH=amd64 go test -c -tags mserv -o wwd-run-mserv.test ./internal/wwd/run/
 //	WWD_MSERV_E2E=1 ./wwd-run-mserv.test -test.v -test.run 'MServ/<scenario>'
 //
-// It makes transient units named wwd-j_4d3-<scenario> in wwd.slice, a directory under WWD_E2E_DIR (default ~/.local/share/wwd-4d3)
+// It makes transient units named wwd-j_4d3-<scenario> (wwd-<origin tag>-j_4d3-<scenario> in P and Q) in wwd.slice, a directory under WWD_E2E_DIR (default ~/.local/share/wwd-4d3)
 // and probe files named 4d3-*; it clears its own units one by one (no wildcard). docs/wwd-c2-matrix.md is not about this: the
 // results of a run are in docs/wwd-4d3-mserv.md.
 
@@ -46,7 +48,18 @@ type e2eRun struct {
 // runSB runs argv in a fresh workspace under the sandbox and reads back the files.
 func runSB(t *testing.T, name string, sb Sandbox, timeout time.Duration, ctx context.Context, argv ...string) e2eRun {
 	t.Helper()
-	ws := filepath.Join(e2eDir(t), "ws-"+name)
+	return runSBOrigin(t, name, "", sb, timeout, ctx, argv...)
+}
+
+// runSBOrigin is runSB for a job that came in on the connection with this origin tag: its unit is wwd-<origin>-j_4d3-<name>. An empty
+// origin is the old unit name wwd-j_4d3-<name>.
+func runSBOrigin(t *testing.T, name, origin string, sb Sandbox, timeout time.Duration, ctx context.Context, argv ...string) e2eRun {
+	t.Helper()
+	wsName := name
+	if origin != "" {
+		wsName += "-" + origin
+	}
+	ws := filepath.Join(e2eDir(t), "ws-"+wsName)
 	_ = os.RemoveAll(ws)
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
@@ -56,10 +69,10 @@ func runSB(t *testing.T, name string, sb Sandbox, timeout time.Duration, ctx con
 	}
 	id := "j_4d3-" + name
 	t.Cleanup(func() {
-		_ = exec.Command("sudo", "systemctl", "reset-failed", "wwd-"+id+".service").Run() // our own unit only
+		_ = exec.Command("sudo", "systemctl", "reset-failed", UnitName(origin, id)+".service").Run() // our own unit only
 		_ = os.RemoveAll(ws)
 	})
-	spec := Spec{JobID: id, Argv: argv, Dir: ws, Workspace: ws, ParentEnv: []string{"PATH=" + os.Getenv("PATH"), "SECRET=hunter2"},
+	spec := Spec{JobID: id, Origin: origin, Argv: argv, Dir: ws, Workspace: ws, ParentEnv: []string{"PATH=" + os.Getenv("PATH"), "SECRET=hunter2"},
 		Timeout: timeout, KillAfter: 3 * time.Second, OutDir: filepath.Join(ws, ".out"), Sandbox: &sb}
 	start := time.Now()
 	r := Run(ctx, spec)
@@ -74,12 +87,15 @@ func runSB(t *testing.T, name string, sb Sandbox, timeout time.Duration, ctx con
 	return e
 }
 
+// failedUnitName: a unit of these tests, wwd-j_4d3-<scenario> or wwd-<origin tag>-j_4d3-<scenario>, at the start of a `systemctl --failed` row.
+var failedUnitName = regexp.MustCompile(`^wwd-([0-9a-f]{16}-)?j_4d3-`)
+
 func failedUnits(t *testing.T) string {
 	t.Helper()
 	b, _ := exec.Command("systemctl", "--failed", "--no-legend").Output()
 	var mine []string
 	for _, l := range strings.Split(string(b), "\n") {
-		if strings.Contains(l, "wwd-j_4d3") {
+		if failedUnitName.MatchString(strings.TrimLeft(l, "● ")) {
 			mine = append(mine, l)
 		}
 	}
@@ -292,6 +308,79 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 		}
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed unit left: %s", f)
+		}
+	})
+	t.Run("P_unit_carries_the_origin_tag", func(t *testing.T) {
+		// #3373 PR3b on a real systemd: the unit is wwd-<origin tag>-<job id>; systemd-run, the cgroup, `show` and reset-failed all use it
+		const tag = "0123456789abcdef"
+		unit := UnitName(tag, "j_4d3-P")
+		r := runSBOrigin(t, "P", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; env | sort")
+		if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+			t.Fatalf("result %+v", r.Result)
+		}
+		for _, want := range []string{unit + ".service", "WWD_JOB=j_4d3-P", "WWD_ORIGIN=" + tag} {
+			if !strings.Contains(r.out, want) {
+				t.Errorf("missing %q in\n%s", want, r.out)
+			}
+		}
+		if strings.Contains(r.out, "wwd-j_4d3-P.service") {
+			t.Error("the unit of a run with an origin tag has the old name")
+		}
+		// a failing run leaves a failed unit under the new name; `show` finds it by that name, reset-failed clears that one
+		rawUnit(t, UnitName(tag, "j_4d3-P2"), 60, "", "exit 1")
+		show, err := Sandbox{}.withDefaults().show(UnitName(tag, "j_4d3-P2"))
+		if err != nil || show["Result"] != "exit-code" {
+			t.Errorf("show of the tagged unit: %v err=%v", show, err)
+		}
+		if out, _ := shOut("sudo systemctl reset-failed " + UnitName(tag, "j_4d3-P2") + ".service 2>&1"); strings.TrimSpace(out) != "" {
+			t.Errorf("reset-failed: %s", out)
+		}
+		if f := failedUnits(t); f != "" {
+			t.Errorf("failed unit left: %s", f)
+		}
+	})
+	t.Run("Q_two_origins_same_job_id", func(t *testing.T) {
+		// design section 5: two origins send the same job id to this worker at the same time. What is under test is the unit name: the two
+		// units must be alive together, each its own, and be cleared on their own. (The workspaces differ because runSBOrigin names them
+		// after the tag; their allocation is the worker's, not this test's.)
+		e2eDir(t) // the skip (WWD_MSERV_E2E unset) and the directory failure happen here, not in a worker goroutine
+		tags := []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}
+		runs := make([]e2eRun, len(tags))
+		var wg sync.WaitGroup
+		for i, tag := range tags {
+			wg.Add(1)
+			go func() {
+				defer wg.Done() // also when runSBOrigin ends this goroutine (t.Fatal): the run then stays the zero value and fails below
+				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; sleep 3")
+			}()
+		}
+		// both units are seen active in one systemctl call, while the commands (3 s) are still running
+		units := []string{UnitName(tags[0], "j_4d3-Q") + ".service", UnitName(tags[1], "j_4d3-Q") + ".service"}
+		both := false
+		for deadline := time.Now().Add(2500 * time.Millisecond); !both && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			b, _ := exec.Command("systemctl", "is-active", units[0], units[1]).Output()
+			both = string(b) == "active\nactive\n"
+		}
+		wg.Wait()
+		if !both {
+			t.Errorf("the two same-id units %v were never active at the same time", units)
+		}
+		for i, tag := range tags {
+			r, other := runs[i], tags[1-i]
+			if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
+				t.Errorf("origin %s: result %+v", tag, r.Result)
+				continue
+			}
+			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) || strings.Contains(r.out, other) {
+				t.Errorf("origin %s ran in the wrong unit:\n%s", tag, r.out)
+			}
+		}
+		if f := failedUnits(t); f != "" {
+			t.Errorf("failed unit left: %s", f)
+		}
+		left, _ := shOut("systemctl list-units --all --no-legend 'wwd-*j_4d3-Q.service'")
+		if strings.TrimSpace(left) != "" {
+			t.Errorf("units of the two origins are not cleared:\n%s", left)
 		}
 	})
 	t.Run("Z_nothing_left", func(t *testing.T) {

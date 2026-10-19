@@ -28,8 +28,18 @@ func TestConfigWorkerSettingsDefaultToNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Worker.BackgroundDev || c.Worker.SpeedFactor != 0 || c.Worker.SandboxUser != "" {
+	if c.Worker.BackgroundDev || c.Worker.SpeedFactor != 0 || c.Worker.SandboxUser != "" || c.Worker.ExplicitLabelsOnly {
 		t.Fatalf("worker = %+v: the host settings are off unless the config names them", c.Worker)
+	}
+}
+
+func TestConfigReadsExplicitLabelsOnly(t *testing.T) {
+	c, err := load(t, "[worker]\nexplicit_labels_only = true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Worker.ExplicitLabelsOnly {
+		t.Fatalf("worker = %+v", c.Worker)
 	}
 }
 

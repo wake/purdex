@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -38,6 +39,7 @@ type Config struct {
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
 	Observe     ObserveRule  `toml:"observe"`
+	Advisor     AdvisorRule  `toml:"advisor"`
 	JobDB       JobDBConfig  `toml:"jobdb"`
 	Tools       ToolsConfig  `toml:"tools"`
 	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
@@ -57,6 +59,8 @@ type WorkerConfig struct {
 	BackgroundDev bool `toml:"background_dev"`
 	// SpeedFactor is this host's speed against the reference host for size_penalty (spec §4.6); 0 means none.
 	SpeedFactor float64 `toml:"speed_factor"`
+	// ExplicitLabelsOnly: the worker takes only jobs whose labels name this host's os: label or a task: label it earned (#3441; mserv).
+	ExplicitLabelsOnly bool `toml:"explicit_labels_only"`
 	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
 	// sandbox, the command runs as a process group of the daemon's own account.
 	SandboxUser string `toml:"sandbox_user"`
@@ -119,6 +123,13 @@ type ObserveRule struct {
 	MinMemMB      int     `toml:"min_mem_mb"`
 }
 
+// AdvisorRule is the alert rules' own settings (spec §13.3). KnownResidents names the system or resident processes whose large footprint
+// is expected on this host: they are not reported by "resident growth" while the host has ≥ 50 % memory available and the swap did not
+// grow. Empty (the default): none is known, every large resident is reported.
+type AdvisorRule struct {
+	KnownResidents []string `toml:"known_residents"`
+}
+
 // PeerConfig is another wwd of the pool: its alias and tailnet address
 // (host or host:port; the port defaults to 7871).
 type PeerConfig struct {
@@ -162,6 +173,11 @@ func (c Config) validateWorker() error {
 	}
 	if err := c.Fault.Validate(); err != nil {
 		return err
+	}
+	for _, n := range c.Advisor.KnownResidents {
+		if n == "" || len(n) > 128 || strings.ContainsFunc(n, unicode.IsControl) {
+			return fmt.Errorf("advisor.known_residents has %q: a process name is 1 to 128 characters without control characters", n)
+		}
 	}
 	if c.Observe.MinMemMB < 0 {
 		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)

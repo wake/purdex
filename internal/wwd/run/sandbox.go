@@ -147,7 +147,18 @@ func (s Sandbox) checkExtraPaths() error {
 	return nil
 }
 
-func unitName(jobID string) string { return "wwd-" + jobID }
+// UnitName is the name of the transient unit a job runs in: "wwd-<origin tag>-<job id>". A job id is only unique within the origin that
+// made it, so two origins can send the same one, and a unit name must be unique on the host (the tag is worker/ident.OriginTag of the
+// connection, 16 hex characters, safe in a unit name where an alias is not). A run with no origin tag keeps the old "wwd-<job id>": the
+// quarantine's markers written before the tag existed name units of that form, and they are still asked about by their stored name.
+func UnitName(originTag, jobID string) string {
+	if originTag == "" {
+		return "wwd-" + jobID
+	}
+	return "wwd-" + originTag + "-" + jobID
+}
+
+func unitName(spec Spec) string { return UnitName(spec.Origin, spec.JobID) }
 
 // exitWrapper runs "$@" and writes its exit status to the file named by $0: the code on the first line, then (WWD usage U3b) what
 // the unit's own cgroup says the command used, read after it ended and before the shell exits: the CPU time in microseconds

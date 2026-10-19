@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -63,9 +63,41 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
+		if have < 7 {
+			if err := migrateV6ToV7(ctx, c); err != nil {
+				return err
+			}
+		}
 		_, err := c.ExecContext(ctx, `UPDATE queue_schema SET version = ?`, schemaVersion)
 		return err
 	})
+}
+
+// resultReuseColumns (version 7) are what a stored result is filed under (spec §4.5), kept on the job: the definition hash of the task as
+// submitted (def_hash), and what the worker that holds the claim said about itself when it claimed (claim_labels, claim_fingerprint; JSON,
+// empty for a job nobody has claimed or a worker that said nothing). A claim overwrites them, so at the end they are those of the claim that
+// ended the job. A job from before the version has none, and its result is never stored for reuse.
+var resultReuseColumns = []struct{ name, def string }{
+	{"def_hash", `TEXT NOT NULL DEFAULT ''`},
+	{"claim_labels", `TEXT NOT NULL DEFAULT ''`},
+	{"claim_fingerprint", `TEXT NOT NULL DEFAULT ''`},
+}
+
+// migrateV6ToV7 adds the columns result reuse needs. It can run again: each column is looked for first. Going back to an older wwd needs the
+// wwd.db backup from before this step (the older code refuses a newer schema).
+func migrateV6ToV7(ctx context.Context, c *sql.Conn) error {
+	for _, col := range resultReuseColumns {
+		var n int
+		if err := c.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('jobs') WHERE name = ?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := c.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+col.name+` `+col.def); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // gitPinsTable (version 2) is the queue's own record of the snapshots it pinned: one row per pin, written BEFORE the pin is made, so that
@@ -270,7 +302,10 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			updated_at       INTEGER NOT NULL,
 			rev              INTEGER NOT NULL DEFAULT 0,
 			manual           TEXT NOT NULL DEFAULT '',
-			manual_seq       INTEGER NOT NULL DEFAULT 0
+			manual_seq       INTEGER NOT NULL DEFAULT 0,
+			def_hash          TEXT NOT NULL DEFAULT '',
+			claim_labels      TEXT NOT NULL DEFAULT '',
+			claim_fingerprint TEXT NOT NULL DEFAULT ''
 		)`,
 		gitPinsTable,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,

@@ -11,7 +11,12 @@ vi.mock('../lib/icon-path-cache', () => ({ getIconPath: (n: string, w: string) =
 const loadIfSupported = vi.fn(async (_hostId: string) => {})
 vi.mock('../../../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: string) => h === 'h1', loadTaskGroupsIfSupported: (h: string) => loadIfSupported(h) }))
 const readFirstPage = vi.fn(async (_hostId: string) => ({}))
-vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: vi.fn() }))
+// a fresh read answers with the quota rows the test put in the store
+const freshRead = async (h: string) => { const r = useRelayQuotaStore.getState().reads[h]; return { quotas: r?.ok ? r.quotas : undefined, approved: [], truncated: false } }
+vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: (h: string) => freshRead(h) }))
+
+const putTaskGroups = vi.fn()
+vi.mock('../../../lib/task-groups/api', async (orig) => ({ ...(await orig<typeof import('../../../lib/task-groups/api')>()), putTaskGroups: (...a: unknown[]) => putTaskGroups(...a) }))
 
 const openTeamSeat = vi.fn()
 vi.mock('../../../lib/team/team-actions', () => ({ openTeamSeat: (...a: unknown[]) => openTeamSeat(...a) }))
@@ -22,6 +27,7 @@ import { useWorkspaceStore } from '../store'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
+import { useUnattendedStore } from '../../../stores/useUnattendedStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
@@ -270,5 +276,226 @@ describe('the right-click rows (NA-6c)', () => {
     expect(await screen.findByTestId('task-group-notice')).toHaveTextContent('這個任務編組已經不存在')
     fireEvent.click(screen.getByRole('button', { name: '關閉' }))
     expect(screen.queryByTestId('task-group-notice')).toBeNull()
+  })
+})
+
+describe('dragging a session onto a group (NA-6c)', () => {
+  const MIME = 'application/x-purdex-group-session'
+  const sent = () => putTaskGroups.mock.calls.map((c) => c[1] as TaskGroup[])
+  const dt = () => ({ types: [MIME], setData: vi.fn(), getData: () => '', effectAllowed: '', dropEffect: '' })
+  const rowOf = (section: HTMLElement, i = 0) => within(section).getAllByTestId('task-group-session')[i]
+  /** Drags `row` onto `target`: start, over, drop, end — true when the target let the drop through. */
+  const drag = (row: HTMLElement, target: HTMLElement) => {
+    const data = dt()
+    fireEvent.dragStart(row, { dataTransfer: data })
+    const allowed = !fireEvent.dragOver(target, { dataTransfer: data }) // preventDefault called = not "not cancelled"
+    fireEvent.drop(target, { dataTransfer: data })
+    fireEvent.dragEnd(row, { dataTransfer: data })
+    return allowed
+  }
+
+  beforeEach(() => {
+    putTaskGroups.mockReset()
+    putTaskGroups.mockImplementation(async (_h: string, items: TaskGroup[], base: number) => ({ items, revision: base + 1, dropped: null, invalid: false }))
+  })
+
+  it('a solo session dropped on a group of its host is filed there, by its lineage root', async () => {
+    setGroups('h1', [group('g1', [])])
+    setRoots([['AG1', 'ROOT1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual')); await act(async () => {})
+    expect(sent()[0][0].roots).toEqual(['ROOT1'])
+  })
+
+  it('dropped on 「未分組」 it is taken out of its group', async () => {
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    drag(rowOf(screen.getByTestId('task-group-manual')), screen.getByTestId('task-group-ungrouped')); await act(async () => {})
+    expect(sent()[0][0].roots).toEqual([])
+  })
+
+  it('a target that does not take the session lets nothing through: the group it is already in, and a team', () => {
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    const manual = screen.getByTestId('task-group-manual')
+    expect(drag(rowOf(manual), manual)).toBe(false) // already in it
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('an unsafe host takes the drop and says why instead of writing', async () => {
+    setGroups('h1', [group('g1', [])], { dropped: { count: 2, reasons: ['bad'] } })
+    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    expect(drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual'))).toBe(true)
+    await act(async () => {})
+    expect(screen.getByTestId('task-group-notice')).toHaveTextContent('這台主機有 2 列讀不了，暫時不能編輯')
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('a session whose root is not read yet is not filed: the drop says it is still being read', async () => {
+    setGroups('h1', [group('g1', [])])
+    mount() // no roots read
+    drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual')); await act(async () => {})
+    expect(screen.getByTestId('task-group-notice')).toHaveTextContent('這個 session 的來源還在讀取中')
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('the drop uses the session as it is when it lands, not as it was when the drag began (its root was read meanwhile)', async () => {
+    setGroups('h1', [group('g1', [])])
+    mount() // no roots read yet
+    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
+    const target = screen.getByTestId('task-group-manual')
+    const data = dt()
+    fireEvent.dragStart(row, { dataTransfer: data })
+    act(() => { setRoots([['AG1', 'ROOT-NOW'], ['AG2', 'AG2'], ['AG3', 'AG3']]) })
+    fireEvent.dragOver(target, { dataTransfer: data })
+    fireEvent.drop(target, { dataTransfer: data })
+    await act(async () => {})
+    expect(sent()[0][0].roots).toEqual(['ROOT-NOW'])
+  })
+
+  it('a drag that starts on a control inside the row (the close button) is not a group drag', () => {
+    setGroups('h1', [group('g1', [])])
+    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
+    const target = screen.getByTestId('task-group-manual')
+    const data = dt()
+    fireEvent.mouseDown(row.querySelector('button') as HTMLElement)
+    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(false) // cancelled
+    expect(fireEvent.dragOver(target, { dataTransfer: data })).toBe(true) // nothing taken: the drop is not let through
+    fireEvent.drop(target, { dataTransfer: data })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+    // ... and the next press on the row itself drags as usual
+    fireEvent.mouseDown(within(row).getByTestId('inline-tab-title'))
+    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(true)
+  })
+
+  it('a team seat\'s row is not draggable, and a team takes no drop', () => {
+    const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
+    setGroups('h1', [group('g1', [])])
+    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    expect(within(screen.getByTestId('task-group-team')).queryAllByTestId('task-group-session')).toHaveLength(0)
+    const solo = rowOf(screen.getByTestId('task-group-ungrouped'))
+    expect(drag(solo, screen.getByTestId('task-group-team'))).toBe(false)
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('a session of a host that cannot serve groups is not draggable at all (the other-host rule itself is in drag.test)', () => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 }, h2: { id: 'h2', name: 'air', ip: '2', port: 1, token: 't', order: 1 } }, hostOrder: ['h1', 'h2'], runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } } as never)
+    useTabStore.setState({ tabs: { t9: tab('t9', 'S9', 'AG9', 'h2') }, activeTabId: null } as never)
+    useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t9'], activeTabId: null, moduleConfig: {} }] } as never)
+    setGroups('h1', [group('g1', [])])
+    mount()
+    expect(drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual'))).toBe(false)
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+})
+
+describe('the group headers (NA-6c)', () => {
+  const sent = () => putTaskGroups.mock.calls.map((c) => c[1] as TaskGroup[])
+  beforeEach(() => {
+    putTaskGroups.mockReset()
+    putTaskGroups.mockImplementation(async (_h: string, items: TaskGroup[], base: number) => ({ items, revision: base + 1, dropped: null, invalid: false }))
+  })
+
+  it('a manual group is renamed in place: double-click, type, Enter — written through the store', async () => {
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1']])
+    mount()
+    fireEvent.doubleClick(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-name'))
+    const input = screen.getByTestId('task-group-name-input')
+    fireEvent.change(input, { target: { value: 'Billing' } })
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(sent()[0].map((g) => g.name)).toEqual(['Billing'])
+    expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-name')).toHaveTextContent('Billing')
+  })
+
+  it('an unsafe host: the name does not open and 「清除」 is inert, both saying the same sentence', () => {
+    setGroups('h1', [group('g1', ['GONE'])], { dropped: { count: 2, reasons: ['bad'] } })
+    setRoots([['AG1', 'AG1']])
+    mount()
+    const manual = screen.getByTestId('task-group-manual')
+    fireEvent.doubleClick(within(manual).getByTestId('task-group-name'))
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    expect(within(manual).getByTestId('task-group-name')).toHaveAttribute('title', '這台主機有 2 列讀不了，暫時不能編輯')
+    fireEvent.click(within(manual).getByTestId('task-group-clear'))
+    expect(within(manual).getByTestId('task-group-clear')).toHaveAttribute('title', '這台主機有 2 列讀不了，暫時不能編輯')
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+  })
+
+  it('only a group with nothing live offers 「清除」', () => {
+    setGroups('h1', [group('g1', ['ROOT1']), group('g2', ['GONE'])])
+    setRoots([['AG1', 'ROOT1']])
+    mount()
+    const [full, empty] = screen.getAllByTestId('task-group-manual')
+    expect(within(full).queryByTestId('task-group-clear')).toBeNull()
+    expect(within(empty).getByTestId('task-group-clear')).toBeInTheDocument()
+  })
+
+  it('「清除」 asks once, says what it also forgets, and deletes the group on confirm', async () => {
+    setGroups('h1', [group('g1', ['GONE', 'GONE2']), group('g2', [])])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    fireEvent.click(within(screen.getAllByTestId('task-group-manual')[0]).getByTestId('task-group-clear'))
+    expect(screen.getByTestId('task-group-clear-panel')).toHaveTextContent('清除「Group g1」？')
+    expect(screen.getByTestId('task-group-clear-panel')).toHaveTextContent('2 個 session')
+    fireEvent.click(screen.getByTestId('task-group-clear-cancel'))
+    expect(putTaskGroups).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getAllByTestId('task-group-manual')[0]).getByTestId('task-group-clear'))
+    await act(async () => { fireEvent.click(screen.getByTestId('task-group-clear-confirm')) })
+    expect(sent()[0].map((g) => g.id)).toEqual(['g2'])
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+  })
+
+  it('until the host\'s session roots are read, an empty-looking group cannot be cleared (it may hold live sessions)', () => {
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    mount() // no roots read: the group looks empty because nobody is filed in it yet
+    const clear = within(screen.getByTestId('task-group-manual')).getByTestId('task-group-clear')
+    expect(clear).toHaveAttribute('title', '這台主機的 session 來源還在讀取中，暫時不能清除')
+    fireEvent.click(clear)
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+  })
+
+  it('a group whose member is alive but held by a team looks empty and still cannot be cleared', () => {
+    const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1']]) // S1 (the team's lead) is in g1 by root; the team holds its row
+    mount()
+    const manual = screen.getByTestId('task-group-manual')
+    expect(manual).toHaveAttribute('data-collapsed', 'true')
+    const clear = within(manual).getByTestId('task-group-clear')
+    expect(clear).toHaveAttribute('title', '這個編組還有在線的成員（例如在團隊裡），暫時不能清除')
+    fireEvent.click(clear)
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+  })
+
+  it('the confirmation goes away if the group stops being empty while it is up', () => {
+    setGroups('h1', [group('g1', ['LATER'])])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    fireEvent.click(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-clear'))
+    expect(screen.getByTestId('task-group-clear-dialog')).toBeInTheDocument()
+    act(() => { setRoots([['AG1', 'AG1'], ['AG9', 'LATER']]) }) // a session whose root the group holds comes alive
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
+  it('a team header opens the team edit form on a double-click when the lead\'s host offers it, and not otherwise', () => {
+    const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
+    mount()
+    fireEvent.doubleClick(within(screen.getByTestId('task-group-team')).getByTestId('task-group-name'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+    cleanup()
+    act(() => { useUnattendedStore.setState({ byHost: { h1: { editSupport: 'yes' } } } as never) })
+    mount()
+    fireEvent.doubleClick(within(screen.getByTestId('task-group-team')).getByTestId('task-group-name'))
+    expect(screen.getAllByRole('textbox').length).toBeGreaterThan(0)
   })
 })

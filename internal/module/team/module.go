@@ -227,6 +227,9 @@ type Module struct {
 	// request_open, insert) and Stop's cancel of stopCtx: a create either
 	// finishes before Stop, or takes the lock after it and sees stopping.
 	createMu sync.Mutex
+	// approvalLocks serialises the steps of one approval that name its lead (rename, close, undo) with the sweeper's close of the
+	// same approval. Taken alone, never while waiting for createMu (a holder of createMu may take it).
+	approvalLocks keyedMutex
 	// persons is the table of live person tokens (RT-1a).
 	persons personTokens
 
@@ -594,6 +597,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+team.RemoteMembersEndRoute, m.handleRemoteMembersEnd)
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
+	mux.HandleFunc(team.LeadNamesRoute, m.handleLeadNames) // the names a lead request could take now (name pool v2 §5.3)
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
 	mux.HandleFunc("GET "+team.AdoptionsRoute+"{id}", m.handleAdoption) // the membership a remote adopt led to (X3c)
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)

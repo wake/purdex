@@ -58,6 +58,8 @@ type Options struct {
 	// task label of those that name it, without qualifying, when it has what they need. Called once per facts record and per
 	// RefreshLabels: cheap, never blocking. nil: none.
 	ReferenceTasks func() []labels.RefTask
+	// ResultCache is the result cache a cacheable submission is answered from (spec §4.5). nil: no submission is.
+	ResultCache ResultCache
 	// Observer is this host's observation records (spec 8.4); the observation routes serve from it. nil: they are not registered.
 	Observer *Observer
 	// Alerts is the store of this host's alerts (spec §13.3); GET /v1/alerts serves from it. nil: the route is not registered.
@@ -167,7 +169,11 @@ func (d *Daemon) SocketHandler() http.Handler {
 	}
 	// Submission is local only (spec §4.4): a job is always submitted on its own host, so the TCP surface has no such route.
 	if d.opts.Queue != nil {
-		mux.HandleFunc("POST /v1/jobs", jobsapi.New(d.opts.Queue).Submit())
+		sub := jobsapi.New(d.opts.Queue)
+		if r := d.Reuser(); r != nil { // not WithReuse(d.Reuser()): a nil *reuser in the interface would not be nil
+			sub = sub.WithReuse(r)
+		}
+		mux.HandleFunc("POST /v1/jobs", sub.Submit())
 		// The manual place of a queued job is set on the socket only (spec 4.6): the TCP surface has no such route, and a ?host= is not
 		// forwarded (the person moves a job on the host it is queued on).
 		mux.HandleFunc("POST /v1/jobs/{id}/position", d.localOnly(jobsapi.New(d.opts.Queue).Position()))

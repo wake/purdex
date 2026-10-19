@@ -30,14 +30,15 @@ function rosterAddress(teams: readonly TeamRoster[] | undefined, tmuxName: strin
  * generation than the session now carrying its code is a stale pane (reconciliation has not marked it terminated yet): it is not that session's face. Only a KNOWN difference rules it out —
  * a pane that cannot say (`''`) follows the session, as usePeerInfo's callers do.
  */
+// A pane's host id is data from a stored tab: a name that is a member of Object.prototype (`toString`) is no host, and its lookup must not reach the member.
 export function useSessionSeat(hostId: string, sessionCode: string | undefined, paneInstance = ''): Seat | null {
-  const session = useSessionStore((s) => (hostId && sessionCode ? s.sessions[hostId]?.find((x) => x.code === sessionCode) : undefined))
+  const session = useSessionStore((s) => (hostId && sessionCode ? (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((x) => x.code === sessionCode) : undefined))
   const name = session?.name ?? ''
   const instance = session?.tmux_instance ?? ''
   const stale = paneInstance !== '' && instance !== '' && paneInstance !== instance
-  const fromRoster = useTeamRosterStore((s) => (stale ? null : rosterAddress(s.byHost[hostId], name, instance)))
+  const fromRoster = useTeamRosterStore((s) => (stale ? null : rosterAddress(Object.hasOwn(s.byHost, hostId) ? s.byHost[hostId] : undefined, name, instance)))
   const fromPeers = usePeerStore((s) => {
-    const row = hostId && sessionCode && !stale ? s.byHost[hostId]?.rows[sessionCode] : undefined
+    const row = hostId && sessionCode && !stale ? (Object.hasOwn(s.byHost, hostId) ? s.byHost[hostId] : undefined)?.rows[sessionCode] : undefined
     return row && sameGeneration(instance, row.tmuxInstance) ? row.address : null
   })
   return useSeat(fromRoster ?? fromPeers ?? '')

@@ -158,6 +158,15 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		waitS = team.MaxWaitS
 	}
 	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: canonicalRoots(roots), RootsCanonical: true, TeamName: teamName, TeamLabel: teamLabel}
+	// the names it could take now, read before createMu (the name service takes its own locks); not part of the request's hash
+	lead.LeadNames = m.leadNames(origin.SessionID)
+	// What the person's token is bound to (a lead name, or a card). Read here for the payload's sake; the token is checked again
+	// under createMu, where a spent or foreign one is refused before this is used for anything but the row's marker.
+	var bound personBind
+	if req.PersonToken != "" {
+		bound = m.persons.binding(origin.SessionID, team.PersonCmdLead, req.PersonToken, m.now())
+		lead.Person = bound.card // a person's card request: the unattended sweep leaves it for the person
+	}
 	payload, err := json.Marshal(lead)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
@@ -226,8 +235,27 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if found {
 		if person {
+			if bound.card {
+				// the person asked for the card, and the session has a request waiting on one already: that one is the answer, and
+				// from now on it is the person's (the unattended sweep leaves it alone)
+				row, marked, err := m.store.MarkLeadPerson(open.ID)
+				if err != nil {
+					m.logf("[team] create %s: %v", req.ID, err)
+					m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+					return
+				}
+				if !marked { // closed by a decide or the sweeper since it was read: nothing was served, the token is kept
+					m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "that request was closed first by someone else", &row)
+					return
+				}
+				m.persons.spend(req.PersonToken)
+				m.writeJSON(w, http.StatusOK, row)
+				return
+			}
 			// the agent asked for this already and the person has now said yes: their command approves that request (RT-1b)
-			m.personApproveLead(w, open, personLeadGrant(open.Origin, teamName, teamLabel), req.PersonToken, req.ID, hash)
+			g := personLeadGrant(open.Origin, teamName, teamLabel)
+			g.LeadName = bound.leadName
+			m.personApproveLead(w, open, g, req.PersonToken, req.ID, hash)
 			return
 		}
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "this session already has an open lead request", &open)
@@ -268,11 +296,14 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
-	if person {
-		m.createApprovedLead(w, row, hash, m.personClose(now), personLeadGrant(origin, teamName, teamLabel), req.PersonToken)
+	if person && !bound.card {
+		g := personLeadGrant(origin, teamName, teamLabel)
+		g.LeadName = bound.leadName
+		m.createApprovedLead(w, row, hash, m.personClose(now), g, req.PersonToken)
 		return
 	}
-	if m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
+	// a person's card request waits for the person whatever the switch: the unattended refusal is for an agent's own ask
+	if !person && m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
 		m.writeErr(w, http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText, nil)
 		return
 	}
@@ -291,6 +322,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.logf("[team] approval %s opened: kind=%s origin=%s (%s) reason=%q", stored.ID, stored.Kind, origin.Ref, origin.SessionID, reason)
+	if person {
+		m.persons.spend(req.PersonToken) // only a person's card request gets here: it is written, so the command is served
+	}
 	m.broadcast("opened", &stored)
 	m.writeJSON(w, http.StatusCreated, stored)
 }

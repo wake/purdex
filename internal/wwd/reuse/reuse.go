@@ -178,3 +178,16 @@ func sameFingerprint(a, b map[string]string) bool {
 	}
 	return true
 }
+
+// KeyForHost is the key a result made by the host described by h is filed under, for work with the given tree, task, args and definition
+// hash: the key the writer files it under and the key a lookup asks for, so the two cannot differ. platform and arch are the host's
+// (Info.Platform, Info.Arch). A host that holds the task's earned label is keyed by the fingerprint it earned it with; the reference
+// host, which holds it without qualifying, has no qualification fingerprint.
+func KeyForHost(tree, task string, args []string, defHash, platform, arch string, h HostNow) string {
+	var qual map[string]string
+	if h.Earned {
+		qual = h.EarnedFingerprint
+	}
+	return Key(KeyParts{Tree: tree, Task: task, Args: args, DefHash: defHash, OS: platform, Arch: arch,
+		Toolchain: h.CurrentFingerprint, Qualification: qual})
+}

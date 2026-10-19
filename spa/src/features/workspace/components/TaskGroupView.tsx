@@ -19,12 +19,18 @@ import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRo
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/task-groups/loader'
-import { rowMenuItems } from '../../../lib/task-groups/row-menu'
+import { hostBlockedReason, failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
+import { clearTaskGroup, renameTaskGroup, type ActionResult } from '../../../lib/task-groups/actions'
+import type { TaskGroup } from '../../../lib/task-groups/api'
 import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
 import { openTeamSeat } from '../../../lib/team/team-actions'
 import { InlineTab } from './InlineTab'
+import { TaskGroupHeader } from './TaskGroupHeader'
+import { TeamGroupHeader } from './TeamGroupHeader'
+import { useGroupDrag } from './useGroupDrag'
+import { ConfirmDialog } from '../../../components/ConfirmDialog'
 
 interface Props {
   activeTabId: string | null
@@ -49,6 +55,9 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const teams = useTeamViews()
   // The last refusal of an edit, in words, until dismissed or replaced by the next action.
   const [notice, setNotice] = useState<string | null>(null)
+  // The empty group the person asked to clear, until they answer.
+  const [clearing, setClearing] = useState<{ hostId: string; groupId: string } | null>(null)
+  const [clearBusy, setClearBusy] = useState(false)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
   const sessionTabs = useMemo<SessionTab[]>(() => {
@@ -103,6 +112,27 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   )
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
+  // Why a host's groups cannot be edited now (unsafe, not read yet), in words; null = they can. An action's refusal is said in the notice line.
+  const hostBlocked = (hostId: string) => hostBlockedReason(groupsByHost[hostId], t)
+  const done = (r: ActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
+  // A group may be cleared only when nothing in it is alive: the host's groups editable, ITS session roots read, and none of the group's roots a live session of the host (the display leaves out a session a team holds,
+  // so an empty-looking group can still have live members). The dialog follows this on every render and goes away when it stops holding.
+  const clearBlocked = (hostId: string, group: TaskGroup): string | null => {
+    const blocked = hostBlocked(hostId)
+    if (blocked !== null) return blocked
+    const live = roots.liveRoots(hostId)
+    if (live === null) return t('taskgroups.clear_roots_reading')
+    return group.roots.some((r) => live.has(r)) ? t('taskgroups.clear_in_use') : null
+  }
+  const clearGroup = clearing ? groupsByHost[clearing.hostId]?.groups.find((g) => g.id === clearing.groupId) : undefined
+  const clearOk = clearing !== null && clearGroup !== undefined && clearBlocked(clearing.hostId, clearGroup) === null
+  useEffect(() => { if (clearing !== null && !clearOk && !clearBusy) setClearing(null) }, [clearing, clearOk, clearBusy])
+  const confirmClear = async () => {
+    if (!clearing || !clearOk) return
+    setClearBusy(true)
+    try { done(await clearTaskGroup(clearing.hostId, clearing.groupId, clearGroup?.roots ?? [])) } finally { setClearBusy(false); setClearing(null) }
+  }
+
   const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])
   // A solo session's right-click menu gets the task-group rows on top (a team seat is filed by its team, L10). Set as the click bubbles up from the row, i.e. AFTER the tab menu's own handler cleared whatever an
   // earlier menu left; a host that cannot serve groups, or a tab that is no session, gets none.
@@ -112,6 +142,22 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     const root = s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId)
     useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({ hostId: s.hostId, root, entry: groupsByHost[s.hostId], currentGroupId: groupId, t, report: setNotice }))
   }
+
+  // Dragging a solo session: onto a group of its host files it there, onto 「未分組」 takes it out (lib/task-groups/drag.ts). A team seat is not draggable and a team takes no drop (L10).
+  const groupOfTab = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const sec of view) if (sec.kind === 'manual') for (const r of sec.rows) if (r.tabId !== null) m.set(r.tabId, sec.group.id)
+    return m
+  }, [view])
+  const drag = useGroupDrag({
+    sourceOf: (tabId) => {
+      const s = sessionOfTab.get(tabId)
+      if (!s || !taskGroupsSupported(s.hostId)) return null
+      return { hostId: s.hostId, root: s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId), currentGroupId: groupOfTab.get(tabId) ?? null }
+    },
+    entryOf: (hostId) => groupsByHost[hostId], t, onNotice: setNotice, onResult: done,
+  })
+  const lit = (key: string) => (drag.over === key ? ' rounded-md ring-1 ring-border-active' : '')
 
   const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
@@ -125,7 +171,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
-      return seat ? inner : <div key={row.key} onContextMenu={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
+      return seat ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
     }
     // A team seat no open tab shows: listed, and a click opens it.
     return (
@@ -166,7 +212,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           const count = 1 + section.members.length
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
-              <GroupHeader color={teamColor(section.view.colorIndex)} name={name} count={count} strong />
+              <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} count={count} />
               {renderRow(section.lead, section.view.key, true)}
               <div className="ml-4 border-l border-border-subtle">{section.members.map((m) => renderRow(m, section.view.key))}</div>
             </section>
@@ -175,35 +221,35 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
         if (section.kind === 'manual') {
           const collapsed = section.rows.length === 0
           return (
-            <section key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className="flex flex-col">
-              <GroupHeader
+            <section
+              key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.group.id)}`}
+              {...drag.targetProps({ kind: 'group', hostId: section.hostId, groupId: section.group.id })}
+            >
+              <TaskGroupHeader
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
                 host={hostLabel(section.hostId, hostLookOf(section.hostId))}
+                edit={{ blocked: hostBlocked(section.hostId), onCommit: (name) => renameTaskGroup(section.hostId, section.group.id, name).then(done) }}
+                clear={collapsed ? { blocked: clearBlocked(section.hostId, section.group), onClick: () => setClearing({ hostId: section.hostId, groupId: section.group.id }) } : undefined}
               />
               {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.group.id))}
             </section>
           )
         }
         return (
-          <section key="ungrouped" data-testid="task-group-ungrouped" className="flex flex-col">
+          <section key="ungrouped" data-testid="task-group-ungrouped" className={`flex flex-col${lit('ungrouped')}`} {...drag.targetProps({ kind: 'ungrouped' })}>
             {i > 0 && <div className="mx-3 my-1 h-px bg-border-default" />}
-            <GroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} count={section.rows.length} muted />
+            <TaskGroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} count={section.rows.length} muted />
             {section.rows.map((r) => renderRow(r))}
           </section>
         )
       })}
-    </div>
-  )
-}
-
-/** A group's header: the colour square, the name (semibold for a team, lighter for a manual group), the count and — for a manual group — the host it gathers. */
-function GroupHeader({ color, name, count, strong = false, muted = false, host }: { color: string; name: string; count: number; strong?: boolean; muted?: boolean; host?: string }) {
-  return (
-    <div data-testid="task-group-header" className="mx-2 flex items-center gap-1.5 pl-1.5 pr-1.5 py-1 text-xs">
-      <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />
-      <span data-testid="task-group-name" className={`min-w-0 truncate ${strong ? 'font-semibold text-text-primary' : muted ? 'text-text-muted' : 'font-normal text-text-secondary'}`}>{name}</span>
-      {host !== undefined && <span data-testid="task-group-host" className="shrink-0 rounded bg-surface-hover px-1 text-[9.5px] text-text-secondary">{host}</span>}
-      <span data-testid="task-group-count" className="ml-auto shrink-0 tabular-nums text-text-muted">{count}</span>
+      {clearing && clearOk && clearGroup && (
+        <ConfirmDialog
+          testIdPrefix="task-group-clear" title={t('taskgroups.clear_title', { name: clearGroup.name })}
+          body={clearGroup.roots.length > 0 ? t('taskgroups.clear_body', { n: clearGroup.roots.length }) : t('taskgroups.clear_body_none')}
+          confirmLabel={t('taskgroups.clear_confirm')} busy={clearBusy} onCancel={() => setClearing(null)} onConfirm={() => { void confirmClear() }}
+        />
+      )}
     </div>
   )
 }

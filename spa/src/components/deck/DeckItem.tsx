@@ -9,10 +9,12 @@ import { StepView, type StepActions } from './StepViews'
 import { SystemRow, ThinkingRow } from './ThinkingSystem'
 import { UserBlock } from './UserBlock'
 import { AgentHeader } from './AgentHeader'
+import { SpeechLine } from './SeatFace'
+import type { Seat } from '../../lib/names/seat'
 import { agentUnitId } from '../../lib/conversations/find-units'
 
 /** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
-export function DeckItem({ item, actions, light, agentModel, agentHeader, midTurn }: { item: ConversationItem; /** a user message that is not the first of its turn */ midTurn?: boolean; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
+export function DeckItem({ item, actions, light, agentModel, agentHeader, midTurn, seat, speechStart }: { item: ConversationItem; /** a user message that is not the first of its turn */ midTurn?: boolean; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean; /** the persona behind this conversation's agent (name pool v2 §9.4); null/absent: today's header and no extra lines */ seat?: Seat | null; /** this agent text begins a run of speech that is not the turn's first: it carries the compact name line */ speechStart?: boolean }) {
   const t = useI18nStore((s) => s.t)
   const scope = useContext(SearchScopeContext)
   if (!isKnownItem(item)) return null
@@ -21,7 +23,8 @@ export function DeckItem({ item, actions, light, agentModel, agentHeader, midTur
     case 'agent_text':
       return (
         <div data-testid="deck-agent-text" className="deck-md">
-          {agentHeader && <AgentHeader model={agentModel} at={item.at} />}
+          {agentHeader && <AgentHeader model={agentModel} at={item.at} seat={seat} />}
+          {!agentHeader && speechStart && seat && <SpeechLine seat={seat} />}
           {light && !item.streaming
             ? <RoomProseLight content={item.markdown} cjk />
             : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} searchUnit={agentUnitId(item.id, scope)} cjk />}
