@@ -28,7 +28,8 @@ function DecisionRow({ hostId, entry, showHost }: { hostId: string; entry: Unatt
   const t = useI18nStore((s) => s.t)
   const rosters = useTeamRosterStore((s) => s.byHost)
   const look = useHostLook(hostId)
-  const seat = useSeat(entry.origin.address ?? entry.origin.name)
+  // the daemon's resolved address only: `origin.name` is the registry's raw name, which a session sets itself and may end in any persona's code
+  const seat = useSeat(entry.origin.address ?? '')
   const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   const team = entry.kind === 'lead' ? leadNameBySession(rosters, entry.origin.session_id, entry.origin.title) : undefined
   const name = team?.name ?? seat?.name ?? approvalSessionLabel(entry.origin)

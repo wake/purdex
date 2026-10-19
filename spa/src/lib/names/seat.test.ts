@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { addressName, isVerifiedPeer, seatOf } from './seat'
+import { addressName, isVerifiedPeer, seatLabel, seatOf } from './seat'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { makeCollection, makePersona } from './__fixtures__/personas'
 
@@ -35,6 +35,29 @@ describe('seatOf', () => {
     expect(seatOf('mlab/_q34psn')).toBeNull()
     expect(seatOf('mlab/purdex-1f-emma')).toBeNull()
     expect(seatOf('')).toBeNull()
+  })
+})
+
+describe('seatLabel', () => {
+  beforeEach(() => usePersonaStore.setState({ byHost: {} }))
+  const seed = () => {
+    const c = makeCollection(['hiro'])
+    c.items[0] = makePersona('hiro', { name: 'Hiro' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+  }
+
+  it('is the persona\'s name with the title after it, or the name alone', () => {
+    seed()
+    expect(seatLabel('mlab/purdex-1f-hiro', 'review the plan')).toBe('Hiro · review the plan')
+    expect(seatLabel('mlab/purdex-1f-hiro')).toBe('Hiro')
+    expect(seatLabel('mlab/purdex-1f-hiro', '  ')).toBe('Hiro')
+  })
+
+  it('is null when the address names no persona, so the caller keeps its own label', () => {
+    seed()
+    expect(seatLabel('mlab/purdex-1f-ghost', 't')).toBeNull()
+    expect(seatLabel('mlab/_q34psn')).toBeNull()
+    expect(seatLabel('')).toBeNull()
   })
 })
 

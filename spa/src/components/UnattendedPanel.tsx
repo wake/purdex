@@ -31,6 +31,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { ApprovalApiError } from '../lib/team/approval-api'
+import { usePersonaRevision } from '../lib/names/seat'
 import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-format'
 import { getUnattended } from '../lib/team/unattended-api'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
@@ -134,6 +135,7 @@ export interface UnattendedPanelProps {
 
 export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClose }: UnattendedPanelProps) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the label below reads the persona store without subscribing: redraw when it loads or changes
   // Set once per mount: a re-render with another reachable set must not refetch or drop what is shown.
   const [hosts] = useState(hostIds)
   const [unreachable] = useState(unreachableIds)

@@ -43,6 +43,22 @@ export function useSeat(address: string): Seat | null {
   return useMemo(() => seatFrom(collection, address), [collection, address])
 }
 
+/** For a component that formats names through the plain functions (`seatLabel`, `approvalSessionLabel`), which read the store without subscribing: call this once at the top
+ *  and the component redraws when the persona collection loads or changes. The returned collection is only there to be depended on (a memo's dependency list). */
+export function usePersonaRevision(): PersonaCollection | null {
+  const sourceId = useSourceId()
+  return usePersonaStore((s) => currentCollection(s.byHost, sourceId))
+}
+
+/** What a session is called where a string is needed (a toast, a push, a table cell): the persona's name with the title after it. `null` when the address names no
+ *  persona, so the caller keeps the label it had. Only for an address the daemon resolved itself (a registry origin), never for a sender read out of message text. */
+export function seatLabel(address: string, title?: string): string | null {
+  const seat = seatOf(address)
+  if (seat === null) return null
+  const t = title?.trim() ?? ''
+  return t !== '' ? `${seat.name} · ${t}` : seat.name
+}
+
 /** Whether a message's sender may be shown as a person: another session whose identity the transport established. A mod's notice (kind plugin) is no person, and an
  *  `unverified` sender is only what the message text says (the daemon's own caveat): its name is never resolved to a persona's face. */
 export function isVerifiedPeer(item: { from?: { kind: string; name?: string; unverified?: boolean } }): boolean {
