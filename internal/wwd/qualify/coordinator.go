@@ -20,6 +20,9 @@ import (
 // route starts it); every way of starting a pair is WWD-5b-2c, which waits for the passed-test digest writers (docs/plans, WWD-5).
 // TestNothingWiresTheCoordinatorYet pins that, and 5b-2c is the PR that changes it.
 //
+// Locking: Tick and Request hold the coordinator's lock while they prepare a snapshot (git) and read and write the queue, so the caller
+// runs them in a goroutine of their own, never inside another lock (not in the daemon's labels lock, which Granted takes). 5b-2c wires it so.
+//
 // State is in memory. A restart forgets the pairs in flight (their two jobs go on and finish, unobserved) and the rate rule's memory
 // (the next automatic try may come before 24 h); a new pair for the same task supersedes the old jobs by their supersede keys, so a
 // restart does not leave two pairs running.
@@ -78,6 +81,7 @@ type Started struct {
 
 type openPair struct {
 	task      Task
+	identity  string // task.Identity() when the pair was queued
 	cand, ref string
 	at        time.Time
 	fp        map[string]string
@@ -117,9 +121,23 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		log.Printf("wwd: qualify: %v", err)
 		return
 	}
+	c.forgetGoneTasks(in.Tasks)
 	for _, t := range Decide(in) {
 		if _, err := c.start(ctx, t); err != nil {
 			log.Printf("wwd: qualify %s: %v", t.Label(), err)
+		}
+	}
+}
+
+// forgetGoneTasks drops the retry memory of tasks that no longer exist, so it cannot grow with the history of manifests.
+func (c *Coordinator) forgetGoneTasks(tasks []Task) {
+	have := map[string]bool{}
+	for _, t := range tasks {
+		have[t.Label()] = true
+	}
+	for l := range c.last {
+		if !have[l] {
+			delete(c.last, l)
 		}
 	}
 }
@@ -224,7 +242,7 @@ func (c *Coordinator) start(ctx context.Context, t Task) (Started, error) {
 		c.note(t, OutcomeVoid, "queueing the reference half: "+err.Error(), cr.ID, "", host.Fingerprint)
 		return Started{}, fmt.Errorf("queueing the reference half: %w", err)
 	}
-	c.pairs[t.Label()] = &openPair{task: t, cand: cr.ID, ref: rr.ID, at: c.cfg.Now(), fp: host.Fingerprint, tree: base.Snapshot.Tree}
+	c.pairs[t.Label()] = &openPair{task: t, identity: t.Identity(), cand: cr.ID, ref: rr.ID, at: c.cfg.Now(), fp: host.Fingerprint, tree: base.Snapshot.Tree}
 	return Started{Label: t.Label(), Candidate: cr.ID, Reference: rr.ID}, nil
 }
 
@@ -274,6 +292,9 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 	if v.Outcome == OutcomeMatch && !sameFingerprint(p.fp, c.cfg.Source.Host().Fingerprint) {
 		v = Verdict{Outcome: OutcomeVoid, Why: "the host's toolchain changed while the pair ran"}
 	}
+	if v.Outcome == OutcomeMatch && !c.stillTheSameTask(p) {
+		v = Verdict{Outcome: OutcomeVoid, Why: "the task's definition changed (or the task is gone) while the pair ran"}
+	}
 	if v.Outcome == OutcomeMatch {
 		err := c.cfg.Store.SaveEarnedLabel(wire.EarnedLabel{Label: label, State: wire.EarnedLabelEarned, Fingerprint: p.fp, Snapshot: p.tree, GrantedAt: now})
 		if err != nil {
@@ -290,6 +311,17 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 		c.last[label] = Attempt{At: now, Outcome: v.Outcome, Fingerprint: p.fp}
 	}
 	c.remember(Record{Label: label, Outcome: v.Outcome, Why: v.Why, At: now, Candidate: p.cand, Reference: p.ref})
+}
+
+// stillTheSameTask says whether the task is, now, the one the pair was queued for: the same repo, name, reference, qualify args, needs and
+// definition. A result of an older definition proves nothing about the current one.
+func (c *Coordinator) stillTheSameTask(p *openPair) bool {
+	for _, t := range c.cfg.Source.Tasks() {
+		if t.Label() == p.task.Label() {
+			return t.Identity() == p.identity
+		}
+	}
+	return false
 }
 
 // note records a pair that never got going.

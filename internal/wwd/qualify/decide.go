@@ -23,6 +23,17 @@ type Task struct {
 	Reference string   // the alias of the reference host
 	Args      []string // qualify.args: what both halves run
 	Needs     []string // the task's environment labels (os:, arch:, tool:); the host must have the tool: ones to be asked to qualify
+	// DefHash is the manifest's definition hash of the task (manifest.Task.DefinitionHash): what the pair ran, as a whole. The
+	// coordinator compares it again when the pair is done, so a result of an older definition never earns the label.
+	DefHash string
+}
+
+// Identity is a stable string for the task as qualification sees it: where it is, who is its reference, what both halves run, what the
+// host needs, and the definition hash. Two tasks with the same identity are the same qualification.
+func (t Task) Identity() string {
+	needs := slices.Clone(t.Needs)
+	slices.Sort(needs)
+	return strings.Join([]string{t.Repo, t.Name, t.Reference, t.DefHash, strings.Join(t.Args, "\x00"), strings.Join(needs, "\x00")}, "\x01")
 }
 
 // Label is the earned label of the task.

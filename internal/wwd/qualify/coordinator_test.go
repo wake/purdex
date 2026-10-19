@@ -349,6 +349,72 @@ func TestAMatchAcrossAToolchainChangeIsVoid(t *testing.T) {
 	}
 }
 
+// A result of an older definition never earns the label: while the pair ran the task's qualify args, its needs, its reference or its
+// definition changed (the host's fingerprint did not), or the task is gone.
+func TestAMatchForAnOlderDefinitionOfTheTaskIsVoid(t *testing.T) {
+	for name, change := range map[string]func(*Task){
+		"the qualify args": func(t *Task) { t.Args = []string{"another.test.ts"} },
+		"the needs":        func(t *Task) { t.Needs = []string{"os:darwin", "tool:node25"} },
+		"the reference":    func(t *Task) { t.Reference = "mlab" },
+		"the definition":   func(t *Task) { t.DefHash = "d2" },
+	} {
+		task := tsc
+		task.DefHash = "d1"
+		r := newRig(t, task)
+		r.c.Tick(ctx())
+		changed := task
+		changed.Needs = slices.Clone(task.Needs)
+		change(&changed)
+		r.src.tasks = []Task{changed}
+		r.finishPair(goodRes("mserv"), goodRes("air26"))
+		r.c.Tick(ctx())
+		if len(r.st.rows) != 0 || r.granted.Load() != 0 {
+			t.Errorf("%s changed and the old result earned the label", name)
+		}
+		if _, rec := r.c.Status(); len(rec) != 1 || rec[0].Outcome != OutcomeVoid {
+			t.Errorf("%s: %+v", name, rec)
+		}
+	}
+	// the task gone altogether
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	r.src.tasks = nil
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.c.Tick(ctx())
+	if len(r.st.rows) != 0 {
+		t.Fatal("a task that is gone earned a label")
+	}
+	// and the order of the needs is not a change
+	task := tsc
+	task.Needs = []string{"tool:node24", "os:darwin"}
+	r = newRig(t, task)
+	r.c.Tick(ctx())
+	reordered := task
+	reordered.Needs = []string{"os:darwin", "tool:node24"}
+	r.src.tasks = []Task{reordered}
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.c.Tick(ctx())
+	if len(r.st.rows) != 1 {
+		t.Fatal("reordered needs voided a match")
+	}
+}
+
+// The retry memory follows the tasks that exist: it is not kept for one that is gone.
+func TestTheRetryMemoryForgetsGoneTasks(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	r.finishPair(&wire.Result{Host: "mserv"}, goodRes("air26")) // void
+	r.c.Tick(ctx())
+	if len(r.c.last) != 1 {
+		t.Fatalf("%v", r.c.last)
+	}
+	r.src.tasks = nil
+	r.c.Tick(ctx())
+	if len(r.c.last) != 0 {
+		t.Fatalf("kept for a task that is gone: %v", r.c.last)
+	}
+}
+
 // A half that ended without running (cancelled, expired) voids the pair at once and the other half is cancelled.
 func TestAHalfThatNeverRanCancelsTheOtherAndVoidsThePair(t *testing.T) {
 	r := newRig(t, tsc)
