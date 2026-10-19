@@ -136,7 +136,8 @@ export function InlineTab({
     }
   }
 
-  const showClose = !tab.locked
+  // A seat's row has no close: its tab may carry other seats too (a split tab), and closing it would close them all.
+  const showClose = !tab.locked && !seatOverride
   const showTooltip = tabNameTooltipMode === 'left' || tabNameTooltipMode === 'both'
 
   // Active surface — no visible border; both states keep a transparent 1px

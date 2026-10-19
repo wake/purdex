@@ -140,8 +140,8 @@ describe('the task-group view', () => {
     mount()
     const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('title L'), expect.stringContaining('title M')])
-    // the close button names the seat too, not the tab's primary title
-    expect(within(rows[1]).getByRole('button', { name: /Close title M/ })).toBeInTheDocument()
+    // a seat's row has no close button: its tab carries the other seat too, and closing it would close both
+    for (const r of rows) expect(within(r).queryByRole('button', { name: /Close/ })).toBeNull()
     fireEvent.click(rows[1])
     expect(openTeamSeat).toHaveBeenLastCalledWith(expect.any(String), 'M')
     fireEvent.click(rows[0])
