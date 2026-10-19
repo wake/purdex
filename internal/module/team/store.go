@@ -299,10 +299,6 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn person): %w", err)
 	}
-	if err := migrateRemoteSpawnPoolName(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate team db (remote spawn pool name): %w", err)
-	}
 	if err := migrateSpawnPoolName(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn pool name): %w", err)
@@ -338,6 +334,10 @@ func OpenStore(path string) (*Store, error) {
 	if err := ensureColumn(db, "remote_spawns", "host_ref", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (remote spawns host_ref): %w", err)
+	}
+	if err := migrateRemoteSpawnPoolName(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote spawn pool name): %w", err)
 	}
 	if _, err := db.Exec(remoteRefSchema); err != nil {
 		db.Close()

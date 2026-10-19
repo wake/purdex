@@ -32,7 +32,12 @@ func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	rows.Close()
+	var endedSpawns []string
 	if c.Kind == team.CommandEnd {
+		var err error
+		if endedSpawns, err = reservedForwardedSpawnIDsIn(tx, p.LeadHostID, c.TeamID); err != nil {
+			return CommandResult{}, err
+		}
 		// A forwarded spawn of the team that has not registered yet ends with it (#2327), in this transaction: the
 		// runner's registration is a compare-and-set on a running op, so it can no longer add a member after the end.
 		// No fact is queued — the lead host's team is over and it would answer `ignored`. The caller kills the sessions.
@@ -61,5 +66,25 @@ func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 			return CommandResult{}, err
 		}
 	}
-	return okResult(map[string]any{"state": "ok", "affected": len(mks)})
+	res, err := okResult(map[string]any{"state": "ok", "affected": len(mks)})
+	res.endedSpawns = endedSpawns
+	return res, err
+}
+
+// reservedForwardedSpawnIDsIn are the running spawn ops forwarded by leadHost for team teamID that carry a reserved member name.
+func reservedForwardedSpawnIDsIn(tx *sql.Tx, leadHost, teamID string) ([]string, error) {
+	rows, err := tx.Query(`SELECT id FROM spawn_ops WHERE lead_host_id = ? AND team_id = ? AND state = 'running' AND pool_name <> ''`, leadHost, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

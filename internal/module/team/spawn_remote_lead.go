@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 

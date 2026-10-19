@@ -28,6 +28,17 @@ type fakeNames struct {
 	err                error
 	reserved           []reserveCall
 	released           map[string]int
+	exactErr           error // what ReserveExact answers
+	exact              []exactCall
+}
+
+type exactCall struct{ code, op, tmux string }
+
+func (n *fakeNames) ReserveExact(_ context.Context, code, op, tmux string, _ time.Time) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.exact = append(n.exact, exactCall{code, op, tmux})
+	return n.exactErr
 }
 
 func (n *fakeNames) ReserveMember(_ context.Context, lead, op, tmux string, at time.Time) (string, error) {

@@ -136,6 +136,13 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	if cmd.Kind == team.CommandSpawn && plan.Consent {
 		plan.SpawnCwd, _ = resolveUnderRoots(fresh.TeamRoots, cmd.Cwd)
 	}
+	// A spawn's name is reserved here before the transaction (it holds team.db's write lock, and the name service may read it): the
+	// lead host's choice, exactly. A name held here, or not a persona code, leaves the spawn without one and it goes on.
+	reservedName := false
+	if cmd.Kind == team.CommandSpawn && plan.Consent && plan.SpawnCwd != "" && cmd.PoolName != "" {
+		plan.PoolName = m.reserveExactName(cmd.PoolName, cmd.ID, plan.Now)
+		reservedName = plan.PoolName != ""
+	}
 	plan.HandoffDir = m.relayDir
 	plan.ModOK = func(sessionID string) bool { return m.modProtocolAtLeast(sessionID, team.MinMemberRelayModVersion) }
 	var res CommandResult
@@ -147,6 +154,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		m.createMu.Unlock()
 	} else {
 		res, err = m.store.ApplyTeamCommand(plan)
+	}
+	if reservedName && (err != nil || res.Status != http.StatusOK || res.Replayed) {
+		m.releaseUnlessOpen(cmd.ID) // refused, expired, failed, or a replay: only an op that is open keeps its name
 	}
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
