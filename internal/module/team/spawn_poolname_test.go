@@ -30,7 +30,30 @@ type fakeNames struct {
 	released           map[string]int
 	exactErr           error // what ReserveExact answers
 	exact              []exactCall
-	events             []string // "reserve:<op>" and "release:<op>", in the order they happened
+	events             []string          // "reserve:<op>" and "release:<op>", in the order they happened
+	codeOf             map[string]string // session id → persona code, for CodeOf
+	pairs              [][2]string       // RecordPairCodes calls: lead code, member code
+	pairErr            error
+}
+
+func (n *fakeNames) CodeOf(_ context.Context, sessionID string) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c, ok := n.codeOf[sessionID]
+	return c, ok
+}
+
+func (n *fakeNames) RecordPairCodes(_ context.Context, leadCode, memberCode string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.pairs = append(n.pairs, [2]string{leadCode, memberCode})
+	return n.pairErr
+}
+
+func (n *fakeNames) pairsRecorded() [][2]string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([][2]string(nil), n.pairs...)
 }
 
 type exactCall struct{ code, op, tmux string }
