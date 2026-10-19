@@ -97,92 +97,122 @@ type Cache interface {
 	DeleteCacheByLabelAndHost(label, host string) (int, error)
 }
 
+// Task is a task label the host knows from the manifests of its prepared clones.
+type Task struct {
+	Label string
+	Needs []string // the environment labels of the task
+	// IsReference: this host is the task's reference host. It holds the label without earning it (labels.ReferenceLabels): its drift
+	// takes nothing from anyone and only drops the reuse entries this host made.
+	IsReference bool
+}
+
 // Config is what NewWatcher needs.
 type Config struct {
 	Host   string // this host's alias: the entries it made carry it as result.host
 	Earned Earned
 	Cache  Cache
-	// Needs says what a task label needs (the environment labels of its manifest task); ok is false when the task is not known now.
-	Needs func(label string) (needs []string, ok bool)
+	// Tasks is the tasks the host knows now. It is called once per record (the manifests are files: the caller keeps it cheap).
+	Tasks func() []Task
 	// Revoked is called after labels were taken away, so the daemon stops advertising them at once (RefreshLabels).
 	Revoked func()
-	// References is the task labels this host holds as the reference (it earned none: ReferenceLabels), with what each needs. A reference
-	// host's drift takes nothing from anyone: it only drops the reuse entries that host made, which no longer describe it. nil: none.
-	References func() []Reference
-}
-
-// Reference is a task label the host holds as its reference host.
-type Reference struct {
-	Label string
-	Needs []string
 }
 
 // Watcher revokes the earned labels whose fingerprint has drifted. Safe for concurrent use (OnFacts calls are serialized).
 type Watcher struct {
-	cfg  Config
-	mu   sync.Mutex
-	seen map[string]map[string]string // a reference label's fingerprint keys as last seen (memory only: the lookup compares whole fingerprints too)
+	cfg     Config
+	mu      sync.Mutex
+	seen    map[string]map[string]string // a reference label's fingerprint keys as last seen (memory only: the lookup compares whole fingerprints too)
+	pending map[string]bool              // labels whose reuse entries still have to be dropped (the label itself is already revoked)
 }
 
 // NewWatcher builds a watcher; nothing happens until OnFacts is called.
-func NewWatcher(cfg Config) *Watcher { return &Watcher{cfg: cfg, seen: map[string]map[string]string{}} }
+func NewWatcher(cfg Config) *Watcher {
+	return &Watcher{cfg: cfg, seen: map[string]map[string]string{}, pending: map[string]bool{}}
+}
 
 // OnFacts looks at the fingerprint of one facts record. For each earned label that drifted it deletes the row (the coordinator then sees
 // a host that lacks the label and asks for a new pair on its next tick, which is the re-qualification), drops the entries this host made
-// under the label, and, once, calls Revoked. A store that cannot be read or written is logged and tried again on the next record: a
-// label is never revoked on a guess, and never kept past a drift that was seen.
+// under the label, and, once, calls Revoked. Taking the label away comes first: if the entries cannot be dropped just now the label is
+// still gone, and the drop is tried again on every following record until it works (the lookup compares fingerprints too, so a leftover
+// entry is not reused in the meantime). A store that cannot be read is logged and nothing is revoked on a guess.
 func (w *Watcher) OnFacts(current map[string]string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.watchReferences(current)
+	tasks := w.cfg.Tasks() // once: it reads the manifests
+	w.retryPending()
+	w.watchReferences(tasks, current)
 	rows, err := w.cfg.Earned.EarnedLabels()
 	var damaged *store.SkippedRowsError
 	if err != nil && !errors.As(err, &damaged) { // damaged rows are skipped and the rest is the table; any other error is no answer
 		log.Printf("wwd: drift: reading the earned labels: %v", err)
 		return
 	}
+	needs := make(map[string][]string, len(tasks))
+	for _, t := range tasks {
+		needs[t.Label] = t.Needs
+	}
 	revoked := false
-	for _, r := range Revoked(rows, w.cfg.Needs, current) {
+	for _, r := range Revoked(rows, func(label string) ([]string, bool) { n, ok := needs[label]; return n, ok }, current) {
 		if err := w.cfg.Earned.DeleteEarnedLabel(r.Label); err != nil {
 			log.Printf("wwd: drift: revoking %s: %v", r.Label, err)
 			continue
 		}
 		revoked = true
-		n, cerr := w.cfg.Cache.DeleteCacheByLabelAndHost(r.Label, w.cfg.Host)
-		if cerr != nil {
-			log.Printf("wwd: drift: dropping the reuse entries of %s: %v", r.Label, cerr)
-		}
-		log.Printf("wwd: drift: %s revoked (%s changed); %d reuse entries dropped", r.Label, strings.Join(r.Keys, ", "), n)
+		log.Printf("wwd: drift: %s revoked (%s changed)", r.Label, strings.Join(r.Keys, ", "))
+		w.dropEntries(r.Label, true)
 	}
 	if revoked && w.cfg.Revoked != nil {
 		w.cfg.Revoked()
 	}
 }
 
-// watchReferences drops the reuse entries this host made under a label it holds as the reference when the part of its fingerprint that
-// label depends on moves. The first time a label is seen only its fingerprint is noted (nothing is known to have changed).
-func (w *Watcher) watchReferences(current map[string]string) {
-	if w.cfg.References == nil {
-		return
+// dropEntries drops the reuse entries this host made under the label; a failure is remembered and retried.
+func (w *Watcher) dropEntries(label string, track bool) bool {
+	n, err := w.cfg.Cache.DeleteCacheByLabelAndHost(label, w.cfg.Host)
+	if err != nil {
+		log.Printf("wwd: drift: dropping the reuse entries of %s: %v (will try again)", label, err)
+		if track { // a reference label retries through its unmoved note instead
+			w.pending[label] = true
+		}
+		return false
 	}
+	delete(w.pending, label)
+	if n > 0 {
+		log.Printf("wwd: drift: %d reuse entries of %s dropped", n, label)
+	}
+	return true
+}
+
+func (w *Watcher) retryPending() {
+	for label := range w.pending {
+		w.dropEntries(label, true)
+	}
+}
+
+// watchReferences drops the reuse entries this host made under a label it holds as the reference when the part of its fingerprint that
+// label depends on moves. The first time a label is seen only its fingerprint is noted (nothing is known to have changed); the noted
+// fingerprint moves on only once the entries are dropped, so a failure is met again on the next record.
+func (w *Watcher) watchReferences(tasks []Task, current map[string]string) {
 	live := map[string]bool{}
-	for _, ref := range w.cfg.References() {
-		live[ref.Label] = true
+	for _, t := range tasks {
+		if !t.IsReference {
+			continue
+		}
+		live[t.Label] = true
 		now := map[string]string{}
-		for _, k := range KeysFor(ref.Needs) {
+		for _, k := range KeysFor(t.Needs) {
 			if v, ok := current[k]; ok {
 				now[k] = v
 			}
 		}
-		before, known := w.seen[ref.Label]
-		w.seen[ref.Label] = now
+		before, known := w.seen[t.Label]
 		if known && !sameKeys(before, now) {
-			n, err := w.cfg.Cache.DeleteCacheByLabelAndHost(ref.Label, w.cfg.Host)
-			if err != nil {
-				log.Printf("wwd: drift: dropping the reuse entries of reference %s: %v", ref.Label, err)
+			log.Printf("wwd: drift: the reference fingerprint of %s moved (no label is taken from anyone)", t.Label)
+			if !w.dropEntries(t.Label, false) {
+				continue // keep the old note: the difference is still there on the next record
 			}
-			log.Printf("wwd: drift: the reference fingerprint of %s moved; %d reuse entries this host made were dropped (no label was taken from anyone)", ref.Label, n)
 		}
+		w.seen[t.Label] = now
 	}
 	for l := range w.seen { // a task that is no longer ours as the reference
 		if !live[l] {

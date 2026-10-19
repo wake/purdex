@@ -184,6 +184,7 @@ func run(cfgPath string) error {
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
 	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
+	refs.ttl = 2 * time.Second // the daemon's labels and the drift watcher ask once per facts record each: one read of the manifests serves both
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
 		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs,

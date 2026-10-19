@@ -5,9 +5,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/labels"
@@ -23,8 +25,17 @@ const maxManifestBytes = 256 << 10
 // a capability that was taken out of the file. A manifest that does not parse contributes nothing (the same as no manifest).
 type refTaskSource struct {
 	repos *clones.Source
+	// ttl is how long the last answer is kept: the daemon's labels and the drift watcher both ask at every facts record, and the answer
+	// comes from files, so one read serves both (and a slow disk is met once, not once per asker). 0: every call reads. A manifest change
+	// shows up within ttl.
+	ttl time.Duration
+	now func() time.Time
+
 	mu    sync.Mutex
 	seen  map[string]refCache // by manifest path; the tasks carry no repo name (the same clone may be configured under two names)
+	at    time.Time
+	last  []labels.RefTask
+	asked bool
 }
 
 type refCache struct {
@@ -39,6 +50,20 @@ func newRefTaskSource(repos *clones.Source) *refTaskSource {
 func (s *refTaskSource) Tasks() []labels.RefTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	if s.asked && s.ttl > 0 && now().Sub(s.at) < s.ttl {
+		return slices.Clone(s.last) // a copy: the callers are free to change what they get
+	}
+	out := s.read()
+	s.last, s.at, s.asked = out, now(), true
+	return slices.Clone(out)
+}
+
+// read looks at the clones now.
+func (s *refTaskSource) read() []labels.RefTask {
 	out := []labels.RefTask{}
 	live := map[string]bool{}
 	for _, name := range s.repos.Names() {

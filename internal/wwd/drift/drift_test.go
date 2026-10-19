@@ -112,21 +112,42 @@ func (f *fakeEarned) DeleteEarnedLabel(l string) error {
 }
 
 type fakeCache struct {
-	calls [][2]string
-	err   error
+	calls    [][2]string
+	err      error
+	failures int // the first calls fail with this many errors, then it works
 }
 
 func (c *fakeCache) DeleteCacheByLabelAndHost(label, host string) (int, error) {
 	c.calls = append(c.calls, [2]string{label, host})
+	if c.failures > 0 {
+		c.failures--
+		return 0, errors.New("database is locked")
+	}
 	return 3, c.err
 }
 
-func newWatcher(e *fakeEarned, c *fakeCache, revoked *int, refs func() []Reference) *Watcher {
+// tasksCalled counts how many times a watcher asked for the tasks.
+var tasksCalled int
+
+func newWatcher(e *fakeEarned, c *fakeCache, revoked *int, extra func() []Task) *Watcher {
+	tasksCalled = 0
 	return NewWatcher(Config{
-		Host: "mserv", Earned: e, Cache: c, References: refs,
-		Needs:   needsOf(map[string][]string{"task:purdex/tsc": {"tool:node24"}, "task:purdex/spa": {"tool:node24", "tool:pnpm10"}}),
+		Host: "mserv", Earned: e, Cache: c,
+		Tasks: func() []Task {
+			tasksCalled++
+			out := []Task{{Label: "task:purdex/tsc", Needs: []string{"tool:node24"}}, {Label: "task:purdex/spa", Needs: []string{"tool:node24", "tool:pnpm10"}}}
+			if extra != nil {
+				out = append(out, extra()...)
+			}
+			return out
+		},
 		Revoked: func() { *revoked++ },
 	})
+}
+
+// referenceTask is a task this host (mserv) is the reference for.
+func referenceTask(label string, needs ...string) Task {
+	return Task{Label: label, Needs: needs, IsReference: true}
 }
 
 var fpNow = map[string]string{"os_version": "26.4", "node": "24.14.0", "pnpm": "10.23.0"}
@@ -205,7 +226,8 @@ func TestAReferenceHostsDriftDropsOnlyItsOwnEntries(t *testing.T) {
 	e := &fakeEarned{rows: []wire.EarnedLabel{earned("task:purdex/other", wire.EarnedLabelEarned, fpNow)}}
 	c := &fakeCache{}
 	var revoked int
-	refs := func() []Reference { return []Reference{{Label: "task:purdex/tsc", Needs: []string{"tool:node24"}}} }
+	// tsc is held as the reference here, so the base list's earned-style tsc is replaced by the reference form
+	refs := func() []Task { return []Task{referenceTask("task:purdex/tsc", "tool:node24")} }
 	w := newWatcher(e, c, &revoked, refs)
 
 	w.OnFacts(fpNow) // first sight: noted only
@@ -229,16 +251,74 @@ func TestAReferenceHostsDriftDropsOnlyItsOwnEntries(t *testing.T) {
 	}
 }
 
+// The tasks come from files: one record asks for them once, however many earned labels there are.
+func TestTheTasksAreAskedForOncePerRecord(t *testing.T) {
+	e := &fakeEarned{rows: []wire.EarnedLabel{
+		earned("task:purdex/tsc", wire.EarnedLabelEarned, fpNow),
+		earned("task:purdex/spa", wire.EarnedLabelEarned, fpNow),
+	}}
+	var revoked int
+	w := newWatcher(e, &fakeCache{}, &revoked, func() []Task { return []Task{referenceTask("task:purdex/ref", "tool:node24")} })
+	w.OnFacts(fpNow)
+	if tasksCalled != 1 {
+		t.Fatalf("the tasks were read %d times for one record", tasksCalled)
+	}
+	w.OnFacts(map[string]string{"os_version": "27.0", "node": "24.14.0", "pnpm": "10.23.0"}) // both earned labels drift
+	if tasksCalled != 2 {
+		t.Fatalf("the tasks were read %d times for two records", tasksCalled)
+	}
+}
+
+// The label is taken away first. If its reuse entries cannot be dropped just now, the label is gone anyway and the drop is tried again on
+// every record until it works; a reference label's drift is met again until its entries are dropped.
+func TestAFailedCacheCleanupIsRetriedOnTheNextRecords(t *testing.T) {
+	e := &fakeEarned{rows: []wire.EarnedLabel{earned("task:purdex/tsc", wire.EarnedLabelEarned, fpNow)}}
+	c := &fakeCache{failures: 2}
+	var revoked int
+	w := newWatcher(e, c, &revoked, nil)
+	moved := map[string]string{"os_version": "27.0", "node": "24.14.0"}
+	w.OnFacts(moved)
+	if len(e.deleted) != 1 || revoked != 1 || len(c.calls) != 1 || !w.pending["task:purdex/tsc"] {
+		t.Fatalf("revoked %v, told %d, cache calls %v, pending %v", e.deleted, revoked, c.calls, w.pending)
+	}
+	w.OnFacts(moved) // the row is gone, but the entries are still to drop: second failure
+	if len(c.calls) != 2 || !w.pending["task:purdex/tsc"] {
+		t.Fatalf("cache calls %v, pending %v", c.calls, w.pending)
+	}
+	w.OnFacts(moved) // works now
+	if len(c.calls) != 3 || len(w.pending) != 0 {
+		t.Fatalf("cache calls %v, pending %v", c.calls, w.pending)
+	}
+	w.OnFacts(moved) // and is not asked again
+	if len(c.calls) != 3 {
+		t.Fatalf("%v", c.calls)
+	}
+	if revoked != 1 {
+		t.Fatalf("the daemon was told %d times: a retry of the cleanup is not a new revocation", revoked)
+	}
+
+	// the reference side: the noted fingerprint does not move on until the entries are dropped
+	c2 := &fakeCache{failures: 1}
+	w2 := newWatcher(&fakeEarned{}, c2, new(int), func() []Task { return []Task{referenceTask("task:purdex/ref", "tool:node24")} })
+	w2.OnFacts(fpNow)
+	w2.OnFacts(map[string]string{"os_version": "26.4", "node": "24.15.0", "pnpm": "10.23.0"}) // drop fails
+	w2.OnFacts(map[string]string{"os_version": "26.4", "node": "24.15.0", "pnpm": "10.23.0"}) // the same record: tried again, works
+	w2.OnFacts(map[string]string{"os_version": "26.4", "node": "24.15.0", "pnpm": "10.23.0"}) // and is settled
+	if len(c2.calls) != 2 {
+		t.Fatalf("the reference cleanup was tried %d times, want 2 (one failure, one success)", len(c2.calls))
+	}
+}
+
 func TestAReferenceThatIsNoLongerOursIsForgotten(t *testing.T) {
 	e := &fakeEarned{}
 	c := &fakeCache{}
 	var revoked int
 	held := true
-	refs := func() []Reference {
+	refs := func() []Task {
 		if !held {
 			return nil
 		}
-		return []Reference{{Label: "task:purdex/tsc", Needs: []string{"tool:node24"}}}
+		return []Task{referenceTask("task:purdex/tsc", "tool:node24")}
 	}
 	w := newWatcher(e, c, &revoked, refs)
 	w.OnFacts(fpNow)
