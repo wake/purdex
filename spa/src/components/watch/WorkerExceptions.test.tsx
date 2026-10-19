@@ -72,15 +72,29 @@ describe('the list', () => {
   })
 
   it('with the list route: what each holds, and 「跟著 pid」 for one that follows a process', async () => {
-    details = [
+    details = { host: 'mlab', known: true, exceptions: [
       { name: 'app-dev-package', until: '2026-10-19T18:30:00+08:00', pid: null, holds: ['heavy', 'light'] },
-      { name: 'dev-server', until: null, pid: 4242, holds: ['heavy'] },
-    ]
+      { name: 'dev-server', until: null, pid: 4242, holds: ['heavy'], allow: { classes: ['release'] }, flags: ['release'] },
+    ] }
     setHost(mlab())
     await mount()
     expect(screen.getByTestId('pool-pause-row-app-dev-package')).toHaveTextContent(t('pool.pause.holds_both'))
     expect(screen.getByTestId('pool-pause-row-dev-server')).toHaveTextContent(t('pool.pause.pid', { pid: 4242 }))
     expect(screen.getByTestId('pool-pause-row-dev-server')).toHaveTextContent(t('pool.pause.holds_heavy'))
+  })
+
+  it('an older wwd answers 200 with known:false: what they hold stays unknown (not "holds nothing")', async () => {
+    details = { host: 'mlab', known: false, exceptions: [] }
+    setHost(mlab())
+    await mount()
+    expect(screen.getByTestId('pool-pause-row-dev-server')).toHaveTextContent(t('pool.pause.holds_unknown'))
+  })
+
+  it.each([[404, 'wwd_rejected'], [502, 'wwd_error'], [503, 'wwd_unavailable']])('a %i (%s) on the list route leaves what they hold unknown', async (status, error) => {
+    hostFetch.mockImplementation(async (_id: string, path: string, init?: RequestInit) => (init?.method === undefined && path.endsWith('/exceptions') ? reply(status, { error }) : reply(200, { ok: true })))
+    setHost(mlab())
+    await mount()
+    expect(screen.getByTestId('pool-pause-row-dev-server')).toHaveTextContent(t('pool.pause.holds_unknown'))
   })
 
   it('says so when there is none, and renders nothing for a host the pool does not list', async () => {
