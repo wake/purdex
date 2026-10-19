@@ -20,6 +20,7 @@ func factsOf(in Input, enabled bool) wire.Facts {
 	}
 	if in.OwnerActive {
 		f.Owner = &wire.OwnerState{Active: true}
+		f.Worker.OwnerRule = "hid<5m" // the reading counts only with a rule in force
 	}
 	return f
 }
@@ -86,6 +87,13 @@ func TestWhyTable(t *testing.T) {
 		r := Why(factsOf(in, true))
 		codes(t, r.Heavy, []string{"owner_active"})
 		codes(t, r.Light, []string{"owner_active"})
+	})
+	t.Run("owner reading without a rule", func(t *testing.T) {
+		f := factsOf(open, true)
+		f.Owner = &wire.OwnerState{Active: true} // shown, not counted: headroom has room, so reasons are empty
+		r := Why(f)
+		codes(t, r.Heavy, []string{})
+		codes(t, r.Light, []string{})
 	})
 	t.Run("slots", func(t *testing.T) {
 		in := open

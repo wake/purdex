@@ -16,7 +16,7 @@ import (
 func faultSampler(h *fault.Hooks, level *int, owner *wire.OwnerState) *Sampler {
 	return NewSampler(SamplerOptions{
 		HostID: "h1", Alias: "mlab", OSVersion: "26.6.2", Fault: h,
-		Sources: fakeSources(level, owner), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true,
+		Sources: fakeSources(level, owner), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true, OwnerRule: ruleFor(owner),
 	})
 }
 

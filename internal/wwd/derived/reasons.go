@@ -69,7 +69,7 @@ func (j judgement) reasons() wire.HeadroomReasons {
 // and some exceptions is those exceptions. worker_off is the worker's own flag and does not touch the headroom the record states.
 func Why(f wire.Facts) wire.HeadroomReasons {
 	j := judgement{
-		workerOff: !f.Worker.Enabled, zone: f.Derived.Zone, owner: f.Owner != nil && f.Owner.Active,
+		workerOff: !f.Worker.Enabled, zone: f.Derived.Zone, owner: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, // as Compute is fed: a reading counts only with a rule in force
 		free: wire.Slots{Heavy: free(f.Worker.Slots.Heavy, f.Worker.Running.Heavy), Light: free(f.Worker.Slots.Light, f.Worker.Running.Light)},
 	}
 	for _, e := range f.Exception {

@@ -10,6 +10,8 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { usePersonaStore } from '../../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import type { EntryEvent } from '../../lib/workbook/types'
@@ -256,5 +258,72 @@ describe('the row tooltip', () => {
     mount()
     const title = row('A').querySelector('span.truncate')
     expect(title?.getAttribute('title')).toBeNull()
+  })
+})
+
+// Persona names (name pool v2 spec §9.3): the ended list and the drilled-in workbook's heading name the persona behind the seat's DAEMON-RESOLVED address; the roster's
+// fixture addresses are `mlab/<id>-xx`, so the persona code is `xx`. A seat that is no persona keeps its title.
+describe('the persona names of the ended list and the workbook heading', () => {
+  const seedXia = () => {
+    const c = makeCollection(['xx'])
+    c.items[0] = makePersona('xx', { name: 'Xia' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+  }
+  beforeEach(() => {
+    usePersonaStore.setState({ byHost: {} })
+    useWorkbookStore.getState().setSupport(HOST, { v1: true, v2: false })
+  })
+  afterEach(() => usePersonaStore.setState({ byHost: {} }))
+
+  it('an ended seat that kept its address is listed by the persona\'s name; one without keeps its title', () => {
+    scene()
+    seedXia()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [
+      { hostId: HOST, sessionId: 'X', title: 'gone X', address: 'mlab/X-xx', endedAt: 1 },
+      { hostId: HOST, sessionId: 'Y', title: 'gone Y', endedAt: 1 },
+    ])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
+    expect(screen.getAllByTestId('team-panel-ended-row').map((r) => r.textContent)).toEqual(['Xia · gone X', 'gone Y'])
+  })
+
+  it('the heading of a drilled-in live seat names the persona; an ended one does too, through its stored address', () => {
+    scene()
+    seedXia()
+    seedWorkbook(HOST, 'A', { status: 's' })
+    useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' })
+    mount()
+    expect(screen.getByTestId('team-seat-workbook')).toHaveTextContent('Xia 的工作簿')
+    cleanup()
+    seedWorkbook(HOST, 'Z', { status: 'z' })
+    useTeamUiStore.getState().recordEndedSeats(KEY, [{ hostId: HOST, sessionId: 'Z', title: 'gone Z', address: 'mlab/Z-xx', endedAt: 1 }])
+    useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'Z' })
+    mount()
+    expect(screen.getByTestId('team-seat-workbook')).toHaveTextContent('Xia · gone Z 的工作簿')
+  })
+
+  it('two ended seats of one persona stay apart: each row keeps the title the seat had', () => {
+    scene()
+    seedXia()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [
+      { hostId: HOST, sessionId: 'X1', title: 'deploy', address: 'mlab/X1-xx', endedAt: 1 },
+      { hostId: HOST, sessionId: 'X2', title: 'review', address: 'mlab/X2-xx', endedAt: 2 },
+    ])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
+    const rows = screen.getAllByTestId('team-panel-ended-row').map((r) => r.textContent)
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows).size).toBe(2)
+    expect(rows).toEqual(expect.arrayContaining(['Xia · deploy', 'Xia · review']))
+  })
+
+  it('redraws when the persona collection arrives after the first draw', () => {
+    scene()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [{ hostId: HOST, sessionId: 'X', title: 'gone X', address: 'mlab/X-xx', endedAt: 1 }])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
+    expect(screen.getAllByTestId('team-panel-ended-row')[0]).toHaveTextContent('gone X')
+    act(() => seedXia())
+    expect(screen.getAllByTestId('team-panel-ended-row')[0]).toHaveTextContent('Xia · gone X')
   })
 })

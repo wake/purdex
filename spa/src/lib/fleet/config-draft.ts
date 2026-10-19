@@ -18,7 +18,11 @@ export interface ProbeSelection { id: string; isNew: boolean }
 
 interface DraftState {
   selectedProbe: ProbeSelection | null
+  /** Picking a probe host, or none, drops the pool host page (one page shows at a time). */
   selectProbe: (sel: ProbeSelection | null) => void
+  /** The resource pool host whose page the Hosts page shows (7a-3b; a fleet host id). Kept here so a tab switch keeps it. */
+  selectedPool: string | null
+  selectPool: (id: string | null) => void
   ui: ProbeUi
   setUi: (patch: Partial<ProbeUi>) => void
   probe: ProbeSession | null
@@ -37,11 +41,12 @@ interface DraftState {
 }
 
 const emptyUi: ProbeUi = { busy: false, dialogError: null, listError: null, changed: null }
-const empty = { selectedProbe: null, ui: emptyUi, probe: null, deleting: null, probeConfirm: null, fleetRows: {}, fleetConfirm: {} }
+const empty = { selectedProbe: null, selectedPool: null, ui: emptyUi, probe: null, deleting: null, probeConfirm: null, fleetRows: {}, fleetConfirm: {} }
 
 export const useFleetDraftStore = create<DraftState>((set) => ({
   ...empty,
-  selectProbe: (selectedProbe) => set({ selectedProbe }),
+  selectProbe: (selectedProbe) => set({ selectedProbe, selectedPool: null }),
+  selectPool: (selectedPool) => set((s) => ({ selectedPool, selectedProbe: selectedPool ? null : s.selectedProbe })),
   setUi: (patch) => set((s) => ({ ui: { ...s.ui, ...patch } })),
   beginProbe: (entry, isNew, base) => set({ probe: { initial: entry, draft: entry, isNew, base } }),
   setProbeDraft: (fn) => set((s) => (s.probe ? { probe: { ...s.probe, draft: fn(s.probe.draft) } } : s)),

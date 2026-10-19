@@ -13,6 +13,7 @@ import { useMemberDrag } from './useMemberDrag'
 import { HalfHandoffMark } from '../relay/HalfHandoffMark'
 import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
 
 interface Props {
   teamKey: string
@@ -27,9 +28,10 @@ interface Props {
 /** The member's title; a seat that is still joining / being released / killed adds the state, with the host alias only when remote. */
 function tooltipOf(m: TeamSeatView, t: (key: string, params?: Record<string, string | number>) => string): string {
   const gone = notInApp(m) ? ` — ${t('team.seat_not_in_app')}` : ''
-  if (m.role !== 'member' || !['joining', 'releasing', 'killing'].includes(m.state)) return `${m.title}${gone}`
+  const name = seatName(m.address, m.title) // the persona's name when the daemon's address has one (spec §9.3)
+  if (m.role !== 'member' || !['joining', 'releasing', 'killing'].includes(m.state)) return `${name}${gone}`
   const word = t(`team.seat_state.${m.state}`)
-  return `${m.title} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}${gone}`
+  return `${name} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}${gone}`
 }
 
 /** The member's handoff mark, beside the bead's icon (a hook per bead, so a roster change re-renders only the bead it touches). */
@@ -39,6 +41,7 @@ function BeadHandoff({ teamKey, sessionId }: { teamKey: string; sessionId: strin
 
 export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpen, onReorder, onBlankClick }: Props) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the tooltips read the persona store without subscribing: redraw when it loads or changes
   const box = useRef<HTMLDivElement>(null)
   const [rows, setRows] = useState(1)
   // Count the wrapped bead rows (distinct offsetTop) so the tick can draw one mark per row. Layout-derived, not state to keep.

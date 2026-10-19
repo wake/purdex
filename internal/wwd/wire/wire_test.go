@@ -74,6 +74,7 @@ func TestRoundTripFixtures(t *testing.T) {
 	roundTrip[WorkerSettings](t, "worker_settings.json")
 	roundTrip[Exception](t, "exception.json")
 	roundTrip[PoolHostsResponse](t, "pool_hosts_response.json")
+	roundTrip[PoolHostsResponse](t, "pool_hosts_response_reasons.json")
 	roundTrip[JobsListResponse](t, "jobs_list_response.json")
 	roundTrip[JobDetail](t, "job_detail.json")
 	roundTrip[PoolChanged](t, "pool_changed.json")

@@ -6,11 +6,13 @@ import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useJournalStore } from '../../stores/useJournalStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus } from './panel-focus'
+import { seatLabel, usePersonaRevision } from '../../lib/names/seat'
 
 /** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
  *  drills into its workbook, which the daemon keeps after the session is gone. */
 export function EndedGroup({ teamKey, noDrill = false }: { teamKey: string; noDrill?: boolean }) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the names read the persona store without subscribing: redraw when it loads or changes
   const all = useTeamUiStore((s) => s.endedSeats[teamKey])
   const support = useWorkbookStore((s) => s.support)
   const journal = useJournalStore((s) => s.sticky)
@@ -45,7 +47,7 @@ export function EndedGroup({ teamKey, noDrill = false }: { teamKey: string; noDr
           onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
           className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
         >
-          {e.title}
+          {(e.address ? seatLabel(e.address, e.title) : null) ?? e.title}
         </div>
       ))}
     </div>

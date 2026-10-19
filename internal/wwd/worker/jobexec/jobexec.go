@@ -52,8 +52,9 @@ const dropTimeout = 30 * time.Second
 type Config struct {
 	// WorkRoot holds one directory per job.
 	WorkRoot string
-	// Fetchers gives the Fetcher of a job's origin (Job.Origin); nil: that origin cannot be fetched from.
-	Fetchers func(origin string) Fetcher
+	// Fetchers gives the Fetcher of the connection a job was claimed on (ident.Ref.Source: the worker's own name for it, never the
+	// Job.Origin text the other host wrote); nil: nothing can be fetched from that source.
+	Fetchers func(source string) Fetcher
 	// ClonePath is the host's own clone of a repository, by name.
 	ClonePath func(repo string) (string, bool)
 	// BackgroundDev runs dev jobs under background QoS (mlab; spec §5 Platform limits).
@@ -97,10 +98,10 @@ func outDir(base string) string { return filepath.Join(base, "out") }
 func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error) {
 	var f Fetcher
 	if e.cfg.Fetchers != nil {
-		f = e.cfg.Fetchers(job.Origin)
+		f = e.cfg.Fetchers(ref.Source)
 	}
 	if f == nil {
-		return snapshot.Workspace{}, fmt.Errorf("jobexec: no way to fetch a snapshot from origin %q", job.Origin)
+		return snapshot.Workspace{}, fmt.Errorf("jobexec: no way to fetch a snapshot from source %q", ref.Source)
 	}
 	if !wire.ValidClaimID(claimID) {
 		return snapshot.Workspace{}, fmt.Errorf("jobexec: invalid claim id")

@@ -505,3 +505,45 @@ func TestInFlight_ExcessDistinctReadsAreTurnedAway(t *testing.T) {
 	}
 	assert.Equal(t, 200, call(srv, path(maxInFlight)).Code, "a slot is free again")
 }
+
+// The non-null shape of the judgements, as a JSON sample the App can copy: pool_hosts_response_reasons.json. mlab is a warning-zone
+// host with heavy full and a nearly full disk; the second host has light at 0 for no reason its record shows (reason "unknown"); the
+// third was never reached (null reasons and load). The answer must equal the sample once decoded (JSONEq: the sample is hand-indented,
+// the handler's output is compact; the keys, values and nulls are what the App reads).
+func TestHosts_ReasonsAndLoadGolden(t *testing.T) {
+	info, err := wire.Decode[wire.Info](fixture(t, "info.json"))
+	require.NoError(t, err)
+	f, err := wire.Decode[wire.Facts](fixture(t, "facts_darwin.json"))
+	require.NoError(t, err)
+	f.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, Running: wire.Slots{Heavy: 2}}
+	f.Derived = wire.Derived{Zone: wire.ZoneWarning, Headroom: wire.Slots{Light: 3}}
+	f.Exception = []wire.FactExc{}
+	f.Owner = nil
+	f.CPU = wire.CPU{NCPU: 10, IdlePct: 20}
+	f.Mem = wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: 1}
+	f.Disk = []wire.Disk{{Mount: "/", UsedPct: 40}, {Mount: "/data", UsedPct: 91}}
+
+	odd, err := wire.Decode[wire.Facts](fixture(t, "facts_linux.json"))
+	require.NoError(t, err)
+	odd.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 3}}
+	odd.Derived = wire.Derived{Zone: wire.ZoneNormal, Headroom: wire.Slots{Heavy: 1}}
+	odd.Exception = []wire.FactExc{}
+	odd.Owner = nil
+	odd.CPU = wire.CPU{NCPU: 4, IdlePct: 50}
+	odd.Mem = wire.Mem{TotalMB: 8000, AvailableMB: 6000, Pressure: 1}
+	odd.Disk = []wire.Disk{{Mount: "/", UsedPct: 30}}
+	linux := wire.Info{HostID: "h-mserv", Alias: "mserv", Version: "0.1.0", Proto: 1, Platform: "linux", Arch: "amd64"}
+	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
+
+	body, err := json.Marshal(wire.Pool{Peers: []wire.Peer{
+		{Info: info, Facts: &f, Reachable: true},
+		{Info: linux, Facts: &odd, Reachable: true},
+		{Info: air19, Reachable: false},
+	}})
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/hosts")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.JSONEq(t, string(fixture(t, "pool_hosts_response_reasons.json")), rr.Body.String())
+}

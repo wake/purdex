@@ -293,9 +293,18 @@ precheck() {
       [ "$pc_c" = 6 ] || { say "FAIL: fault.log_upload_fail is on in mlab's config, and case $pc_c would wait behind the 2-minute log retries of the case before it; turn it off for every case but 6 (docs/wwd-c2-matrix.md, section 7.1; #3404)"; exit 1; }
     done
   fi
-  # an empty owner_rule on air26 means [owner] is off (wwd.db may still hold hid<5m, which wwd only hides): the PUTs of this run store
-  # the empty one, so the rule has to be put back by hand afterwards
-  [ "$dry" -eq 1 ] || [ -n "$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)" ] || say "WARN: air26's owner_rule is empty ([owner] off?): this run stores it empty; put it back by hand afterwards (docs/wwd-c2-matrix.md, section 7.1)"
+  # case 7 (H2) needs air26 to have an owner rule: the effective rule is the only basis for the owner being active (#3457), and the H2 file
+  # only replaces the reading (#3561), so with an empty rule the file shows owner.active but nothing yields and the case waits for a reclaim
+  # that never comes. An empty rule is also what a PUT of this run would store back, so for the other cases it is a warning.
+  pc_rule=""; [ "$dry" -eq 1 ] || pc_rule=$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)
+  if [ "$dry" -eq 1 ]; then
+    case " $cases " in *" 7 "*) say "+ check air26's owner_rule is not empty (case 7 FAILs here when it is)" ;; esac
+  elif [ -z "$pc_rule" ]; then
+    case " $cases " in
+      *" 7 "*) say "FAIL: air26's owner_rule is empty, and case 7 (H2) needs a rule: with none the H2 file shows owner.active but headroom stays and the worker does not yield (#3457). Fix: [owner] enabled = true in air26's config, then PUT /v1/worker with owner_rule \"hid<5m\" (docs/wwd-c2-matrix.md, sections 7.1 and the note after it)"; exit 1 ;;
+    esac
+    say "WARN: air26's owner_rule is empty: this run stores it empty; put it back to hid<5m by hand afterwards (docs/wwd-c2-matrix.md, section 7.1)"
+  fi
   # case 8 submits from air26 over a non-interactive ssh, whose PATH has no pdx on a Mac (the shell reads .zshenv only): find it on the PATH,
   # then in the two places pdx is installed, and say which one is used
   case " $cases " in *" 8 "*)

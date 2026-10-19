@@ -9,14 +9,14 @@ import { parseRosterEvent, type TeamRoster } from './roster'
 import { teamHostMap } from './team-state'
 import { labelOf, seatHostOf, teamKeyOf } from './team-views'
 
-interface SeatMark { hostId: string; title: string }
+interface SeatMark { hostId: string; title: string; address: string }
 
 /** The seats of `team` this Mac can name a host for, by session id (a seat on a host it cannot name has no workbook to open). */
 function seatsOf(team: TeamRoster, frameHostId: string, hostMap: Record<string, string>): Map<string, SeatMark> {
   const out = new Map<string, SeatMark>()
   for (const session of [team.lead, ...team.members]) {
     const { hostId } = seatHostOf(team, session, frameHostId, hostMap)
-    if (hostId !== null) out.set(session.session_id, { hostId, title: labelOf(session) })
+    if (hostId !== null) out.set(session.session_id, { hostId, title: labelOf(session), address: session.address })
   }
   return out
 }
@@ -36,7 +36,7 @@ function recordEnded(hostId: string, before: readonly TeamRoster[] | undefined, 
     const prev = before.find((t) => t.id === team.id)
     if (!prev) continue
     const gone = [...seatsOf(prev, hostId, hostMap)].filter(([sessionId]) => !live.has(sessionId))
-    if (gone.length > 0) ui.recordEndedSeats(key, gone.map(([sessionId, m]) => ({ hostId: m.hostId, sessionId, title: m.title, endedAt: now })))
+    if (gone.length > 0) ui.recordEndedSeats(key, gone.map(([sessionId, m]) => ({ hostId: m.hostId, sessionId, title: m.title, address: m.address, endedAt: now })))
   }
 }
 

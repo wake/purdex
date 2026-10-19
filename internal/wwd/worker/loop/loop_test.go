@@ -308,10 +308,13 @@ func TestAtMostOneClaimPerRound(t *testing.T) {
 
 func TestNothingIsTakenWhenTheWorkerIsOffOrThereIsNoRoom(t *testing.T) {
 	cases := map[string]func(st *wire.WorkerSettings, f *wire.Facts){
-		"off":             func(st *wire.WorkerSettings, f *wire.Facts) { st.Enabled = false },
-		"no heavy slots":  func(st *wire.WorkerSettings, f *wire.Facts) { st.Slots.Heavy = 0 },
-		"no headroom":     func(st *wire.WorkerSettings, f *wire.Facts) { f.Derived.Headroom.Heavy = 0 },
-		"owner is active": func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} },
+		"off":            func(st *wire.WorkerSettings, f *wire.Facts) { st.Enabled = false },
+		"no heavy slots": func(st *wire.WorkerSettings, f *wire.Facts) { st.Slots.Heavy = 0 },
+		"no headroom":    func(st *wire.WorkerSettings, f *wire.Facts) { f.Derived.Headroom.Heavy = 0 },
+		"owner is active": func(st *wire.WorkerSettings, f *wire.Facts) {
+			st.OwnerRule = "air26"
+			f.Owner = &wire.OwnerState{Active: true, Reason: "hid"}
+		},
 	}
 	for name, mod := range cases {
 		c := newConn("mlab", qjob("a", wire.ClassDev, 0))
@@ -482,7 +485,10 @@ func TestTheOwnerTakingTheMachineStopsAndGivesBackEveryJobAndTakesNothingMore(t 
 	r.round()
 	waitFor(t, "two runs", func() bool { return r.ex.ran.Load() == 2 })
 
-	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} })
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+		st.OwnerRule = "air26"
+		f.Owner = &wire.OwnerState{Active: true, Reason: "hid"}
+	})
 	r.round()
 	claims, rel, _ := c.seen()
 	if len(rel) != 2 || rel[0].Reason != wire.ReleaseReclaim || rel[1].Reason != wire.ReleaseReclaim {
@@ -518,6 +524,7 @@ func TestAJobThatDoesNotStopStaysTrackedAndNothingIsClaimedMeanwhile(t *testing.
 	r.round()
 	<-started
 	r.set(func(st *wire.WorkerSettings, f *wire.Facts) {
+		st.OwnerRule = "air26"
 		f.Owner = &wire.OwnerState{Active: true, Reason: "build"}
 	})
 	r.loop.cfg.StopTimeout = 3 * unit
@@ -691,6 +698,18 @@ func TestRunSweepsOnItsOwnPause(t *testing.T) {
 	waitFor(t, "two sweeps", func() bool { sw.mu.Lock(); defer sw.mu.Unlock(); return len(sw.calls) >= 2 })
 	cancel()
 	<-done
+}
+
+// The effective rule is the only basis: a reading that says active (the config has an owner source) is not a yield when the rule is empty.
+func TestAnActiveOwnerReadingWithoutARuleIsNotAYield(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { f.Owner = &wire.OwnerState{Active: true, Reason: "hid"} })
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: with no owner rule the reading must not hold the worker", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
 }
 
 func TestSwitchingTheOwnerRuleOffWhileYieldingFreesTheWorker(t *testing.T) {
