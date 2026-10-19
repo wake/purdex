@@ -19,7 +19,9 @@ import { ToggleSwitch } from '../settings/ToggleSwitch'
 export const PENDING_NOTICE_MS = 15_000
 
 type Field = 'enabled' | 'heavy' | 'light' | 'owner_rule'
-interface Failure { field: Field; text: string; retry?: () => void }
+type Patch = Partial<Pick<PoolWorker, 'enabled' | 'owner_rule'>> & { slots?: Partial<PoolWorker['slots']> }
+/** `patch` is kept for a retry: it is applied to whatever the settings are at the click, never to the ones at the failure. */
+interface Failure { field: Field; text: string; patch?: Patch }
 
 const INPUT = 'w-20 px-2 py-1 rounded border border-border-default bg-surface-primary text-xs text-text-primary disabled:opacity-50'
 const BTN = 'px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary text-xs cursor-pointer disabled:opacity-50'
@@ -85,7 +87,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
   const host: PoolHost | undefined = hosts.find((h) => h.alias === alias)
   const source = controlSource(poolSource)
 
-  const [pending, setPending] = useState<{ sent: PoolWorker; at: number } | null>(null)
+  const [pending, setPending] = useState<{ sent: PoolWorker; base: PoolWorker; at: number; baseAt: number | null } | null>(null)
   const [late, setLate] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
@@ -94,10 +96,12 @@ export function WorkerSettings({ alias }: { alias: string }) {
 
   const current: PoolWorker | null = host ? (host.facts?.worker ?? host.worker) : null
 
-  // The next facts that carry the value it was sent as settle it.
+  // Facts that carry the value it was sent as settle it — facts read after the ones the page showed when it sent (`baseAt`, the host's own
+  // clock, never ours): an older answer still on its way can hold the same value without the host having applied anything.
+  const factsAt = host?.facts?.at ?? 0
   useEffect(() => {
-    if (pending && current && sameWorker(current, pending.sent)) { setPending(null); setLate(false) }
-  }, [pending, current])
+    if (pending && current && sameWorker(current, pending.sent) && (pending.baseAt === null || factsAt > pending.baseAt)) { setPending(null); setLate(false) }
+  }, [pending, current, factsAt])
   useEffect(() => {
     if (!pending) return
     const left = pending.at + PENDING_NOTICE_MS - Date.now()
@@ -119,14 +123,14 @@ export function WorkerSettings({ alias }: { alias: string }) {
   const locked = busy || readOnly
   const running = host.facts?.worker.running ?? { heavy: 0, light: 0 }
 
-  const change = async (field: Field, patch: Partial<Pick<PoolWorker, 'enabled' | 'owner_rule'>> & { slots?: Partial<PoolWorker['slots']> }): Promise<void> => {
+  const change = async (field: Field, patch: Patch): Promise<void> => {
     const base = pending?.sent ?? current
     const next: PoolWorker = { ...base, ...patch, slots: { ...base.slots, ...patch.slots } }
     setFailure(null)
     setBusy(true)
     try {
       await putWorker(source, alias, next)
-      setPending({ sent: next, at: Date.now() })
+      setPending({ sent: next, base, at: Date.now(), baseAt: host.facts?.at ?? null })
       setLate(false)
       void usePoolStore.getState().readOnce() // the facts that carry it, sooner than the next poll
     } catch (e) {
@@ -135,25 +139,30 @@ export function WorkerSettings({ alias }: { alias: string }) {
       if (action === 'read_only') { redraw((n) => n + 1); return }
       if (err?.poolError.code === 'wwd_rejected') setFailure({ field, text: err.detail || t('pool.worker.rejected') })
       else if (err?.poolError.code === 'bad_request') setFailure({ field, text: t('pool.worker.bad_request') })
-      else setFailure({ field, text: t('pool.worker.no_answer', { alias, reason: err?.detail ?? '' }), retry: () => { void change(field, patch) } })
+      else setFailure({ field, text: t('pool.worker.no_answer', { alias, reason: err?.detail ?? '' }), patch })
     } finally {
       setBusy(false)
     }
   }
 
-  const rowError = (field: Field) => failure?.field === field && (
-    <p data-testid={`pool-worker-error-${field}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">
-      {failure.text}
-      {failure.retry && <button type="button" className={`${BTN} ml-2`} data-testid={`pool-worker-retry-${field}`} onClick={failure.retry}>{t('pool.worker.retry')}</button>}
-    </p>
-  )
+  const rowError = (field: Field) => {
+    if (failure?.field !== field) return null
+    const retry = failure.patch
+    return (
+      <p data-testid={`pool-worker-error-${field}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">
+        {failure.text}
+        {retry && <button type="button" className={`${BTN} ml-2`} data-testid={`pool-worker-retry-${field}`} onClick={() => void change(field, retry)}>{t('pool.worker.retry')}</button>}
+      </p>
+    )
+  }
 
   const owner = host.facts?.owner ?? null
   const onToggle = (on: boolean) => {
     if (!on && running.heavy + running.light > 0) { setConfirmOff(true); return }
     void change('enabled', { enabled: on })
   }
-  const pendingMark = (differs: boolean) => differs && pending !== null && (
+  // the rows the sent change touched wait for the facts (a row is marked by what was sent, not by how the facts compare: they may hold it already)
+  const pendingMark = (touched: boolean) => touched && pending !== null && (
     <span data-testid="pool-worker-pending" className="text-[11px] text-text-muted">{t('pool.worker.pending')}</span>
   )
 
@@ -166,7 +175,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
         <SettingItem label={t('pool.worker.enabled')} description={t('pool.worker.enabled_d')} disabled={locked}>
           <div className="flex flex-col items-end gap-1">
             <ToggleSwitch label={t('pool.worker.enabled')} checked={shown.enabled} testId="pool-worker-enabled" onChange={onToggle} />
-            {pendingMark(shown.enabled !== current.enabled)}
+            {pendingMark(pending !== null && pending.sent.enabled !== pending.base.enabled)}
             {confirmOff && (
               <span data-testid="pool-worker-confirm-off" role="alertdialog" className="flex items-center gap-2 text-xs text-text-secondary">
                 {t('pool.worker.confirm_off', { n: running.heavy + running.light })}
@@ -183,7 +192,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
             <div className="flex flex-col items-end gap-1">
               <Stepper value={shown.slots[k]} label={t(`pool.worker.slots_${k}`)} testId={`pool-worker-slots-${k}`} disabled={locked}
                 onChange={(n) => void change(k, { slots: { [k]: n } })} />
-              {pendingMark(shown.slots[k] !== current.slots[k])}
+              {pendingMark(pending !== null && pending.sent.slots[k] !== pending.base.slots[k])}
               {rowError(k)}
             </div>
           </SettingItem>
@@ -193,7 +202,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
           <SettingItem label={t('pool.worker.owner_rule')} description={t('pool.worker.owner_rule_d')} disabled={locked}>
             <div className="flex flex-col items-end gap-1">
               <OwnerRuleBox alias={alias} rule={shown.owner_rule} disabled={locked} onCommit={(rule) => void change('owner_rule', { owner_rule: rule })} />
-              {pendingMark(shown.owner_rule !== current.owner_rule)}
+              {pendingMark(pending !== null && pending.sent.owner_rule !== pending.base.owner_rule)}
               <span data-testid="pool-worker-owner-state" className="text-[11px] text-text-muted">
                 {owner.active ? t('pool.worker.owner_active', { reason: owner.reason }) : t('pool.worker.owner_idle', { min: Math.floor(owner.idle_s / 60) })}
               </span>

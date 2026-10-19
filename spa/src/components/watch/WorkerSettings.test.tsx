@@ -28,6 +28,8 @@ function mlab(worker: PoolWorker = WORKER, over: Partial<PoolHost> = {}): PoolHo
   const base = parseHostsAnswer(hostsJson)![0]
   return { ...base, alias: 'mlab', reachable: true, worker, labels: ['os:darwin', 'gpu'], facts: { ...facts, worker: { ...facts.worker, ...worker } }, ...over }
 }
+/** The same host read `dt` ms later. */
+const later = (h: PoolHost, dt = 5000): PoolHost => ({ ...h, facts: { ...h.facts!, at: h.facts!.at + dt } })
 const setHost = (h: PoolHost) => act(() => { usePoolStore.setState({ hosts: [h], sourceHostId: CFG }) })
 const reply = (status: number, body: unknown = null) => new Response(body === null ? '' : JSON.stringify(body), { status })
 const lastPut = () => {
@@ -122,10 +124,30 @@ describe('WorkerSettings', () => {
     expect(screen.queryByTestId('pool-worker-late')).toBeNull()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.getByTestId('pool-worker-late')).toHaveTextContent(t('pool.worker.late'))
-    setHost(mlab({ ...WORKER, slots: { heavy: 1, light: 3 } }))
+    setHost(later(mlab({ ...WORKER, slots: { heavy: 1, light: 3 } })))
     expect(screen.queryByTestId('pool-worker-pending')).toBeNull()
     expect(screen.queryByTestId('pool-worker-late')).toBeNull()
     expect(screen.getByTestId('pool-worker-slots-light-value')).toHaveTextContent('3')
+  })
+
+  it('facts that are not newer than the ones the page showed do not settle a change, even when they hold the sent value', async () => {
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await click('pool-worker-slots-light-inc')
+    setHost(mlab({ ...WORKER, slots: { heavy: 1, light: 3 } })) // an older answer on its way: same reading time as before the PUT
+    expect(screen.getByTestId('pool-worker-pending')).toBeInTheDocument()
+    setHost(later(mlab({ ...WORKER, slots: { heavy: 1, light: 3 } })))
+    expect(screen.queryByTestId('pool-worker-pending')).toBeNull()
+  })
+
+  it('a retry changes the one field on top of the settings as they are at the click, not as they were at the failure', async () => {
+    hostFetch.mockResolvedValueOnce(reply(502, { error: 'wwd_error', detail: 'timeout' }))
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await click('pool-worker-slots-light-inc') // fails; light would be 3
+    setHost(later(mlab({ ...WORKER, slots: { heavy: 4, light: 2 }, owner_rule: 'hid<9m' }))) // meanwhile another App changed the others
+    await click('pool-worker-retry-light')
+    expect(lastPut().body).toEqual({ enabled: true, slots: { heavy: 4, light: 3 }, owner_rule: 'hid<9m' })
   })
 
   it('a change wwd refuses goes back, with wwd\'s own words under that row', async () => {
