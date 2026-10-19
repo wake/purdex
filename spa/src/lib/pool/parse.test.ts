@@ -40,6 +40,16 @@ describe('facts samples', () => {
     expect(parseFacts({ ...darwinJson, worker: undefined })).toBeNull()
   })
 
+  it('an unreadable swap counter stays null, not 0', () => {
+    expect(parseFacts({ ...darwinJson, mem: { ...darwinJson.mem, swap_used_mb: null } })!.mem.swap_used_mb).toBeNull()
+    expect(parseFacts(darwinJson)!.mem.swap_used_mb).toBe(2100)
+  })
+
+  it('facts whose worker slots are missing or malformed are null, not zero capacity', () => {
+    expect(parseFacts({ ...darwinJson, worker: { ...darwinJson.worker, slots: undefined } })).toBeNull()
+    expect(parseFacts({ ...darwinJson, worker: { ...darwinJson.worker, slots: { heavy: 'x', light: 1 } } })).toBeNull()
+  })
+
   it('queue.queued is read when present', () => {
     expect(parseFacts({ ...darwinJson, queue: { queued: 2 } })!.queue).toEqual({ queued: 2 })
   })

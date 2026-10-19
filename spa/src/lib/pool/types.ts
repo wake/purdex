@@ -25,7 +25,7 @@ export interface PoolFacts {
   cpu: { ncpu: number; load1: number; load5: number; idle_pct: number }
   mem: {
     total_mb: number; available_mb: number; pressure: number
-    page_out_rate: number | null; swap_out_rate: number | null; swap_used_mb: number; compressor_mb: number | null
+    page_out_rate: number | null; swap_out_rate: number | null; swap_used_mb: number | null; compressor_mb: number | null
     psi: PoolPsi | null
   }
   disk: PoolDisk[]

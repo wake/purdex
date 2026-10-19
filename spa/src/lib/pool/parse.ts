@@ -27,10 +27,12 @@ function worker(v: unknown): PoolWorker | null {
   return { enabled: v.enabled, slots: slots(v.slots) ?? { heavy: 0, light: 0 }, owner_rule: str(v.owner_rule) ? v.owner_rule : '' }
 }
 
+// Facts are strict about slots: a missing pair would read as "no capacity". (A host row without facts falls back, see `host`.)
 function factsWorker(v: unknown): FactsWorker | null {
   const w = worker(v)
+  const own = isRec(v) ? slots(v.slots) : null
   const running = isRec(v) ? slots(v.running) : null
-  return w && running ? { ...w, running } : null
+  return w && own && running ? { ...w, running } : null
 }
 
 function proc(p: unknown): PoolProc | null {
@@ -90,7 +92,7 @@ export function parseFacts(v: unknown): PoolFacts | null {
     mem: {
       total_mb: mem.total_mb, available_mb: mem.available_mb, pressure: num(mem.pressure) ? mem.pressure : 0,
       page_out_rate: numOrNull(mem.page_out_rate), swap_out_rate: numOrNull(mem.swap_out_rate),
-      swap_used_mb: num(mem.swap_used_mb) ? mem.swap_used_mb : 0, compressor_mb: numOrNull(mem.compressor_mb), psi: psi(mem.psi),
+      swap_used_mb: numOrNull(mem.swap_used_mb), compressor_mb: numOrNull(mem.compressor_mb), psi: psi(mem.psi),
     },
     disk: list(v.disk, disk),
     procs: list(v.procs, proc),
