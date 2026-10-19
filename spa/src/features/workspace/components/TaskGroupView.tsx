@@ -20,7 +20,7 @@ import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/task-groups/loader'
 import { hostBlockedReason, failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
-import { deleteTaskGroup, renameTaskGroup, type ActionResult } from '../../../lib/task-groups/actions'
+import { clearTaskGroup, renameTaskGroup, type ActionResult } from '../../../lib/task-groups/actions'
 import type { TaskGroup } from '../../../lib/task-groups/api'
 import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
@@ -129,7 +129,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const confirmClear = async () => {
     if (!clearing || !clearOk) return
     setClearBusy(true)
-    try { done(await deleteTaskGroup(clearing.hostId, clearing.groupId)) } finally { setClearBusy(false); setClearing(null) }
+    try { done(await clearTaskGroup(clearing.hostId, clearing.groupId, clearGroup?.roots ?? [])) } finally { setClearBusy(false); setClearing(null) }
   }
 
   const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])

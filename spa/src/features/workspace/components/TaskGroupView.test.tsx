@@ -11,7 +11,9 @@ vi.mock('../lib/icon-path-cache', () => ({ getIconPath: (n: string, w: string) =
 const loadIfSupported = vi.fn(async (_hostId: string) => {})
 vi.mock('../../../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: string) => h === 'h1', loadTaskGroupsIfSupported: (h: string) => loadIfSupported(h) }))
 const readFirstPage = vi.fn(async (_hostId: string) => ({}))
-vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: vi.fn() }))
+// a fresh read answers with the quota rows the test put in the store
+const freshRead = async (h: string) => { const r = useRelayQuotaStore.getState().reads[h]; return { quotas: r?.ok ? r.quotas : undefined, approved: [], truncated: false } }
+vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: (h: string) => freshRead(h) }))
 
 const putTaskGroups = vi.fn()
 vi.mock('../../../lib/task-groups/api', async (orig) => ({ ...(await orig<typeof import('../../../lib/task-groups/api')>()), putTaskGroups: (...a: unknown[]) => putTaskGroups(...a) }))

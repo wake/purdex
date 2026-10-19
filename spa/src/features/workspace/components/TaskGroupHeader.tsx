@@ -59,7 +59,8 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
           ref={input} data-testid="task-group-name-input" value={draft} disabled={pending} aria-label={name}
           onChange={(e) => setDraft(e.target.value)} onBlur={cancel}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); void commit() }
+            // Enter that picks a candidate in an IME (注音, 日本語) is the IME's, not a save: keyCode 229 is how browsers that do not set isComposing on the last keydown say so.
+            if (e.key === 'Enter') { if (e.nativeEvent.isComposing || e.keyCode === 229) return; e.preventDefault(); void commit() }
             else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel() }
           }}
           className="min-w-0 flex-1 rounded border border-border-default bg-surface-primary px-1 py-0 text-xs text-text-primary outline-none focus:border-border-active"

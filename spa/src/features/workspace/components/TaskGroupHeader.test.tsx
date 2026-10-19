@@ -27,6 +27,17 @@ describe('rename in place', () => {
     expect(screen.queryByTestId('task-group-name-input')).toBeNull()
   })
 
+  it('an Enter that picks an IME candidate is not a save', () => {
+    const onCommit = vi.fn().mockResolvedValue(undefined)
+    render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit }} />)
+    fireEvent.doubleClick(name())
+    fireEvent.change(input(), { target: { value: 'ㄅㄧ' } })
+    fireEvent.keyDown(input(), { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input(), { key: 'Enter', keyCode: 229 })
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(input()).not.toBeDisabled()
+  })
+
   it('Esc and a click away drop the draft and send nothing; an unchanged name sends nothing', () => {
     const onCommit = vi.fn().mockResolvedValue(undefined)
     render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit }} />)
