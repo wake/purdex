@@ -90,6 +90,21 @@ describe('the task-group view', () => {
     expect(within(manual).queryByTestId('inline-tab-row')).toBeNull()
   })
 
+  it('a split tab stands for the session in whichever pane shows one: a tmux session in a secondary pane is listed, a tab with no session at all is not', () => {
+    const split = (id: string, children: unknown[]) => ({ type: 'split', id, direction: 'h', children, sizes: [50, 50] })
+    const leaf = (id: string, content: unknown) => ({ type: 'leaf', pane: { id, content } })
+    const t4 = { id: 't4', kind: 'tmux-session', locked: false, pinned: false, layout: split('s4', [leaf('p4a', { kind: 'new-tab' }), leaf('p4b', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S4', mode: 'terminal', cachedName: 'n4', tmuxInstance: 'I', rebuild: { agent: { sessionId: 'AG4' } } })]) }
+    const t5 = { id: 't5', kind: 'new-tab', locked: false, pinned: false, layout: leaf('p5', { kind: 'new-tab' }) }
+    act(() => {
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t4, t5 } } as never)
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t1', 't2', 't3', 't4', 't5'], activeTabId: null, moduleConfig: {} }] } as never)
+      setGroups('h1', [group('g1', ['ROOT4'])]); setRoots([['AG4', 'ROOT4']])
+    })
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
+    expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(3) // t1 t2 t3; t5 shows no session
+  })
+
   it('a click on a session row switches to its tab', () => {
     mount()
     fireEvent.click(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[1])

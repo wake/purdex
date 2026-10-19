@@ -16,7 +16,7 @@ import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
-import { getPrimaryPane } from '../../../lib/pane-tree'
+import { collectLeaves } from '../../../lib/pane-tree'
 import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/task-groups/loader'
 import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
@@ -54,8 +54,9 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     for (const [tabId, workspaceId] of order) {
       const tab = tabsById[tabId]
       if (!tab) continue
-      const c = getPrimaryPane(tab.layout).content
-      if (c.kind !== 'tmux-session' || c.terminated) continue
+      // The session a tab stands for: the first live tmux session among its panes (a split tab's session may sit in a secondary pane), as `shownSessions` reads a tab.
+      const c = collectLeaves(tab.layout).map((p) => p.content).find((x) => x.kind === 'tmux-session' && !x.terminated)
+      if (!c || c.kind !== 'tmux-session') continue
       out.push({ tabId, workspaceId, hostId: c.hostId, sessionCode: c.sessionCode, agentSessionId: c.rebuild?.agent?.sessionId ?? null })
     }
     return out
