@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-driver.test.ts — what drives the jobs store (plan "WWD-7 design", Data flow: Jobs): which daemon answers for an origin, a read that is not finished goes on at once, a failure is acted on by the action of its error
 // (next source, the same one again after 1–2 s, back-off 2/4/8 … 30 s, drop the origin), a `jobs.changed` re-reads that one job, a host-events reconnect reads after the cursor, and an origin no daemon announces is polled every 10 s while a view watches.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createJobsDriver, POLL_MS, type JobsTopology } from './jobs-driver'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
+import { createJobsDriver, POLL_MS, type JobsStoreLike, type JobsTopology } from './jobs-driver'
 import type { ReadOutcome } from './jobs-store'
 import { classify } from './errors'
 
@@ -15,7 +15,7 @@ const cursorAhead = fail(409) // reset_origin
 
 let topo: JobsTopology
 let seen: string[]
-let store: { read: ReturnType<typeof vi.fn>; readJob: ReturnType<typeof vi.fn>; drop: ReturnType<typeof vi.fn> }
+let store: { [K in keyof JobsStoreLike]: Mock<JobsStoreLike[K]> }
 let have: Set<string>
 let hidden: boolean
 
@@ -29,9 +29,9 @@ beforeEach(() => {
   seen = []
   topo = { origins: ['mlab', 'mserv'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab', 'h-air'] }
   store = {
-    read: vi.fn(async (o: string) => { seen.push(`read ${o}`); return ok }),
-    readJob: vi.fn(async (o: string, _s: unknown, id: string) => { seen.push(`job ${o} ${id}`); return ok }),
-    drop: vi.fn(),
+    read: vi.fn<JobsStoreLike['read']>(async (o) => { seen.push(`read ${o}`); return ok }),
+    readJob: vi.fn<JobsStoreLike['readJob']>(async (o, _s, id) => { seen.push(`job ${o} ${id}`); return ok }),
+    drop: vi.fn<JobsStoreLike['drop']>(),
   }
 })
 afterEach(() => { vi.useRealTimers() })
