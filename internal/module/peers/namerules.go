@@ -117,19 +117,34 @@ func pickForMember(in nameRuleInput) (string, bool) {
 // pickForOther is rule 3.
 func pickForOther(in nameRuleInput) (string, bool) { return in.pickAfterPairs() }
 
+// leadCandidate is one name of rule 1 with why it is offered: kind is keep (the session's current name), former (it has been
+// a lead; lastAt is when, ms), lead (a lead:true persona) or other.
+type leadCandidate struct {
+	code, kind string
+	lastAt     int64
+}
+
 // leadCandidates is rule 1: the names a lead's card offers, best first. keep is the session's current name (preselected, so
 // it comes first even though the session itself holds it); then the free former leads, most recent first; then the free
 // lead:true personas; then the other free names. A name appears once.
 func leadCandidates(in nameRuleInput, keep string) []string {
 	var out []string
+	for _, c := range leadCandidatesWithKind(in, keep) {
+		out = append(out, c.code)
+	}
+	return out
+}
+
+func leadCandidatesWithKind(in nameRuleInput, keep string) []leadCandidate {
+	var out []leadCandidate
 	seen := map[string]bool{}
-	add := func(n string) {
+	add := func(n, kind string, lastAt int64) {
 		if n != "" && !seen[n] {
 			seen[n] = true
-			out = append(out, n)
+			out = append(out, leadCandidate{code: n, kind: kind, lastAt: lastAt})
 		}
 	}
-	add(keep)
+	add(keep, "keep", 0)
 	var former []string
 	for _, n := range in.Free {
 		if in.Leads[n].Count > 0 {
@@ -138,15 +153,15 @@ func leadCandidates(in nameRuleInput, keep string) []string {
 	}
 	sort.SliceStable(former, func(i, j int) bool { return in.Leads[former[i]].LastAt > in.Leads[former[j]].LastAt })
 	for _, n := range former {
-		add(n)
+		add(n, "former", in.Leads[n].LastAt)
 	}
 	for _, n := range in.Free {
 		if in.Lead[n] {
-			add(n)
+			add(n, "lead", 0)
 		}
 	}
 	for _, n := range in.Free {
-		add(n)
+		add(n, "other", 0)
 	}
 	return out
 }

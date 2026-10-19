@@ -86,6 +86,23 @@ func TestPoolGeneration_TheHeldNamesAreReadUnderTheGenerationLock(t *testing.T) 
 		require.NoError(t, e.m.ReserveExact(ctx, "mia", "op-1", "tm-1", tNow))
 		p.check(t)
 	})
+	t.Run("the lead name card looks the display names up", func(t *testing.T) {
+		e := svcEnv(t)
+		var calls, unlocked atomic.Int32
+		e.m.displayName = func(code string) (string, bool) {
+			calls.Add(1)
+			if e.m.poolGen.TryLock() {
+				e.m.poolGen.Unlock()
+				unlocked.Add(1)
+			}
+			return ipeers.PoolDisplayName(code)
+		}
+		got, err := e.m.LeadCandidates(ctx, poolSidA)
+		require.NoError(t, err)
+		require.NotEmpty(t, got)
+		assert.EqualValues(t, len(got), calls.Load())
+		assert.Zero(t, unlocked.Load(), "a display name was read outside the generation lock")
+	})
 	t.Run("a rename for a lead", func(t *testing.T) {
 		e := svcEnv(t)
 		p := e.probeGeneration()

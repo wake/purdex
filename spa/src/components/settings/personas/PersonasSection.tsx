@@ -11,7 +11,8 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
-import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
+import { currentCollection, currentSource, usePersonaStore } from '../../../stores/usePersonaStore'
+import { useSourceId } from '../../../stores/usePersonaSourceStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
   beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
@@ -47,7 +48,11 @@ interface Editing {
 
 export function PersonasSection() {
   const t = useI18nStore((s) => s.t)
-  const collection = usePersonaStore((s) => currentCollection(s.byHost))
+  const sourceId = useSourceId()
+  const collection = usePersonaStore((s) => currentCollection(s.byHost, sourceId))
+  // The source is offline and another host's copy stands in: it is shown, not edited. A save from it would go to that
+  // host as if it were the source, and the source's own copy would overwrite it (or be overwritten) when it returns.
+  const readOnly = usePersonaStore((s) => currentSource(s.byHost, sourceId)?.readOnly ?? false)
   const nex = useNexHostStore((s) => s.byHost)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
@@ -128,7 +133,13 @@ export function PersonasSection() {
       if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
       // The host's name as the rest of the App shows it (`lib/host-look.ts`; a screen never reads `host.name` itself).
-      setOutcome({ note: t('settings.personas.saved', { host: hostLabel(res.hostId, hostLookOf(res.hostId)) }) })
+      const label = (id: string) => hostLabel(id, hostLookOf(id))
+      // What reached the other hosts is part of the answer: a copy that failed is waiting for that host's next connect,
+      // and a role taken into the source from another host changed what the user is looking at.
+      const parts = [t('settings.personas.saved', { host: label(res.hostId) })]
+      if (res.mirror.failed.length > 0) parts.push(t('settings.personas.mirrorFailed', { hosts: res.mirror.failed.map((f) => label(f.hostId)).join('、') }))
+      if (res.mirror.pulled.length > 0) parts.push(t('settings.personas.pulled', { codes: res.mirror.pulled.join(', ') }))
+      setOutcome({ note: parts.join(' ') })
     } catch (e) {
       if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
       else if (e instanceof PersonaValidationError) {
@@ -152,7 +163,7 @@ export function PersonasSection() {
       <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
 
       <div className="mt-3 flex items-center justify-end gap-2">
-        <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving} onClick={() => open('')}>
+        <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving || readOnly} onClick={() => open('')}>
           {t('settings.personas.new')}
         </button>
       </div>
@@ -162,10 +173,10 @@ export function PersonasSection() {
       <div className="mt-3 grid grid-cols-[minmax(0,330px)_minmax(0,1fr)] gap-4">
         <div>
           {items.length === 0 && !unsupported && <p className="text-xs text-text-secondary">{t('settings.personas.empty')}</p>}
-          <PersonaList items={items} selected={editing?.key ?? null} disabled={saving} onSelect={open} />
+          <PersonaList items={items} selected={editing?.key ?? null} disabled={saving || readOnly} onSelect={open} />
         </div>
         <div>
-          {editing ? (
+          {editing && !readOnly ? (
             <PersonaForm
               draft={editing.draft}
               isNew={editing.key === ''}

@@ -10,6 +10,8 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, selectPersonasV1 } from '../../stores/useNexHostStore'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
+import { backfillHosts } from './persona-backfill'
+import { startSourcePin } from '../../stores/usePersonaSourceStore'
 
 export const PERSONAS_EVENT_TYPE = 'hostconfig.personas'
 
@@ -24,9 +26,20 @@ function freshSupported(state: Pick<NexState, 'byHost'>, hostId: string): boolea
   return (state.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(state)
 }
 
+/** Whether the host's fresh capabilities declare `personas.v1` (the same test the load uses). */
+export function personasSupported(hostId: string): boolean {
+  return freshSupported(useNexHostStore.getState(), hostId)
+}
+
 /** Loads now when the host's fresh capabilities declare `personas.v1`; otherwise does nothing. */
 export async function loadPersonasIfSupported(hostId: string): Promise<void> {
-  if (freshSupported(useNexHostStore.getState(), hostId)) await usePersonaStore.getState().load(hostId)
+  if (freshSupported(useNexHostStore.getState(), hostId)) await loadThenBackfill(hostId)
+}
+
+/** A read can be the one that completes the picture (the source or a host just arrived), so hosts are compared after it. */
+async function loadThenBackfill(hostId: string): Promise<void> {
+  await usePersonaStore.getState().load(hostId)
+  try { await backfillHosts() } catch { /* the next load tries again; a failed copy must not break loading */ }
 }
 
 /** The event carries only `{revision}`; the collection is re-read whole. */
@@ -44,6 +57,7 @@ function ensureCapabilities(hostId: string): void {
 }
 
 export function startPersonaLoader(): () => void {
+  const stopPin = startSourcePin()
   for (const [hostId, rt] of Object.entries(useHostStore.getState().runtime)) {
     if (rt?.status === 'connected') {
       ensureCapabilities(hostId)
@@ -54,7 +68,7 @@ export function startPersonaLoader(): () => void {
   const stopNex = useNexHostStore.subscribe((next, prev) => {
     for (const hostId of Object.keys(next.byHost)) {
       if (next.byHost[hostId] === prev.byHost[hostId]) continue
-      if (freshSupported(next, hostId)) void usePersonaStore.getState().load(hostId)
+      if (freshSupported(next, hostId)) void loadThenBackfill(hostId)
       // A refetch that no longer declares it: the daemon was downgraded.
       else if ((next.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(prev)) usePersonaStore.getState().forget(hostId)
     }
@@ -69,9 +83,12 @@ export function startPersonaLoader(): () => void {
       // The cached copy belongs to the old daemon when the address, port or token moved under the same id.
       const moved = !!prev.hosts[hostId] && hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])
       if (moved) usePersonaStore.getState().forget(hostId)
+      else if (prev.runtime[hostId]?.status === 'connected' && !connected) usePersonaStore.getState().markOffline(hostId)
+      // A dropped connection leaves the cached copy "ready", which would keep an unreachable source editable. The
+      // reconnect refetches the capabilities and loads again, which makes the entry ready.
       if (connected && (moved || prev.runtime[hostId]?.status !== 'connected')) ensureCapabilities(hostId)
     }
   })
 
-  return () => { stopNex(); stopHosts() }
+  return () => { stopPin(); stopNex(); stopHosts() }
 }

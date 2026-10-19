@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../lib/names/persona-api', () => ({ fetchPersonas: vi.fn() }))
 
 import { fetchPersonas } from '../lib/names/persona-api'
-import { usePersonaStore, currentCollection, isNewerStamp } from './usePersonaStore'
+import { usePersonaStore, currentCollection, currentSource, isNewerStamp } from './usePersonaStore'
 import { makeCollection } from '../lib/names/__fixtures__/personas'
 
 describe('isNewerStamp', () => {
@@ -31,6 +31,53 @@ describe('current collection', () => {
 
   it('is null when no host has loaded one', () => {
     expect(currentCollection({ h1: { status: 'idle', collection: null } })).toBeNull()
+  })
+})
+
+describe('current source', () => {
+  const mine = makeCollection(['hiro'], { at: 1, host: 'h1' })
+  const newer = makeCollection(['emma'], { at: 9, host: 'h2' })
+
+  it('prefers the source host even when another copy has a newer stamp', () => {
+    const src = currentSource({ h1: { status: 'ready', collection: mine }, h2: { status: 'ready', collection: newer } }, 'h1')
+    expect(src).toMatchObject({ hostId: 'h1', readOnly: false })
+  })
+
+  it('stands in with the newest other copy, read-only, while the source is in error or empty', () => {
+    expect(currentSource({ h1: { status: 'error', collection: mine }, h2: { status: 'ready', collection: newer } }, 'h1'))
+      .toMatchObject({ hostId: 'h2', readOnly: true })
+    expect(currentSource({ h1: { status: 'idle', collection: null }, h2: { status: 'ready', collection: newer } }, 'h1'))
+      .toMatchObject({ hostId: 'h2', readOnly: true })
+  })
+})
+
+describe('markOffline', () => {
+  it('keeps the cached copy but makes it a stand-in source, and leaves an empty entry alone', () => {
+    const c = makeCollection(['hiro'], { at: 1, host: 'h1' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c }, h2: { status: 'ready', collection: makeCollection(['emma'], { at: 9, host: 'h2' }) } } })
+    usePersonaStore.getState().markOffline('h1')
+    usePersonaStore.getState().markOffline('nobody')
+    expect(usePersonaStore.getState().byHost.h1).toEqual({ status: 'error', collection: c })
+    expect(currentSource(usePersonaStore.getState().byHost, 'h1')).toMatchObject({ hostId: 'h2', readOnly: true })
+  })
+})
+
+describe('markOffline and a read in flight', () => {
+  beforeEach(() => {
+    usePersonaStore.setState({ byHost: {} })
+    vi.mocked(fetchPersonas).mockReset()
+  })
+
+  it('a read that started before the drop does not make the host ready again', async () => {
+    let answer!: (c: ReturnType<typeof makeCollection>) => void
+    vi.mocked(fetchPersonas).mockImplementation(() => new Promise((r) => { answer = r }))
+    const pending = usePersonaStore.getState().load('h1')
+    usePersonaStore.setState({ byHost: { h1: { status: 'loading', collection: makeCollection(['hiro']) } } })
+    usePersonaStore.getState().markOffline('h1')
+    answer(makeCollection(['emma']))
+    await pending
+    expect(usePersonaStore.getState().byHost.h1.status).toBe('error')
+    expect(usePersonaStore.getState().byHost.h1.collection?.items[0].code).toBe('hiro')
   })
 })
 
