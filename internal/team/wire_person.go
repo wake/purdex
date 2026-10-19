@@ -61,4 +61,10 @@ type PersonRequest struct {
 type PersonResponse struct {
 	Token     string `json:"token"`
 	ExpiresAt int64  `json:"expires_at"` // unix ms
+	// LeadName and Card echo what the token is bound to: a daemon that took the request's fields of the same names sets them.
+	// `pdx relay person` prints no token whose answer does not echo what it asked, so a daemon that decodes and drops the fields
+	// (one older than team.lead_name.v1, even one that rolled back between the capability check and the request) can never hand the
+	// mod a plain token for a request meant to wait on the card.
+	LeadName string `json:"lead_name,omitempty"`
+	Card     bool   `json:"card,omitempty"`
 }

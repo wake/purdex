@@ -410,6 +410,12 @@ func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer
 	if _, err := client.Do(ctx, http.MethodPost, team.PersonRoute, req, &res); err != nil {
 		return relayReportErr(err, stdout, stderr)
 	}
+	if (leadNameGiven || req.Card) && (res.LeadName != req.LeadName || res.Card != req.Card) {
+		// The capability check above and this request are two requests; a daemon that drops the fields would have minted a plain
+		// token. Print none: the mod then has no token and creates no request.
+		fmt.Fprintf(stderr, "pdx relay: daemon 簽發的 token 沒有綁定 --lead-name／--card（沒有回聲），不輸出 token unsupported\n")
+		return ExitUnsupported
+	}
 	return relayPrintJSON(stdout, stderr, res)
 }
 

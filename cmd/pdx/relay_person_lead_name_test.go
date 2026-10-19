@@ -19,6 +19,9 @@ type namedPersonDaemon struct {
 	caps       []string // what GET /api/info announces
 	infoStatus int      // non-zero: GET /api/info answers that status
 	infos      int      // GET /api/info requests
+	oldHandler bool     // the token route is an older daemon's: it decodes the request, drops the two fields, and echoes nothing
+	// echoOverride, when set, is the whole answer of the token route whatever was asked
+	echoOverride *team.PersonResponse
 	fakeRelayDaemon
 	got  team.PersonRequest
 	raw  string
@@ -43,7 +46,14 @@ func (p *namedPersonDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.got = team.PersonRequest{} // Unmarshal leaves a key that is absent as it was: start from nothing
 		_ = json.Unmarshal([]byte(p.raw), &p.got)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(team.PersonResponse{Token: "t-1", ExpiresAt: 99})
+		res := team.PersonResponse{Token: "t-1", ExpiresAt: 99}
+		if !p.oldHandler { // a daemon that took the request says what the token is bound to
+			res.LeadName, res.Card = p.got.LeadName, p.got.Card
+		}
+		if p.echoOverride != nil {
+			res = *p.echoOverride
+		}
+		_ = json.NewEncoder(w).Encode(res)
 		return
 	}
 	p.fakeRelayDaemon.ServeHTTP(w, r)
@@ -104,6 +114,29 @@ func TestRelayCmd_PersonFlagsFailClosedWithoutTheCapability(t *testing.T) {
 		if d.asks != 0 {
 			t.Errorf("%s: %d token requests reached the daemon", name, d.asks)
 		}
+	}
+}
+
+// The capability check and the token request are two requests. A daemon that rolls back to one that drops the fields between them
+// would answer /api/info as the new one and mint a plain token with the old handler: the token the CLI prints would not carry the
+// card, and the request would be granted at once (codex critic of NP-4d). So the response has to say what the token is bound to,
+// and the CLI prints nothing when it does not say what was asked. Mutation gate: do not verify the echo → the plain token is printed
+// (red); verify only one of the two fields → the other case is red.
+func TestRelayCmd_PersonFlagsFailClosedWhenTheTokenDoesNotEchoThem(t *testing.T) {
+	for _, flag := range [][]string{{"--card"}, {"--lead-name", "hiro"}} {
+		d := &namedPersonDaemon{caps: []string{team.CapabilityLeadName}, oldHandler: true}
+		args := append([]string{"person", "--session", "sid-1", "--command", "lead"}, flag...)
+		code, stdout, stderr := driveRelay(t, context.Background(), d, args...)
+		if code != ExitUnsupported || strings.TrimSpace(stdout) != "" {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q, want a refusal with no token printed", flag, code, stdout, stderr)
+		}
+	}
+	// a daemon that echoes something else than was asked is no better
+	d := &namedPersonDaemon{caps: []string{team.CapabilityLeadName}}
+	d.echoOverride = &team.PersonResponse{Token: "t-1", ExpiresAt: 99, LeadName: "freya"}
+	code, stdout, _ := driveRelay(t, context.Background(), d, "person", "--session", "sid-1", "--command", "lead", "--lead-name", "hiro")
+	if code != ExitUnsupported || strings.TrimSpace(stdout) != "" {
+		t.Errorf("a different echo: code=%d stdout=%q, want a refusal", code, stdout)
 	}
 }
 
