@@ -33,6 +33,17 @@ describe('task groups lifecycle', () => {
     expect(forget()).toHaveBeenCalledWith('h1')
   })
 
+  it('forgets a host whose endpoint now answers as another daemon (daemonId mismatch)', () => {
+    const rt = (observed: string) => ({ h1: { status: 'connected', daemonIdMismatch: { stored: 'D1', observed, endpoint: '10.0.0.1:7860' } } }) as never
+    useHostStore.setState({ runtime: rt('D2') })
+    expect(forget()).toHaveBeenCalledTimes(1)
+    expect(forget()).toHaveBeenCalledWith('h1')
+    useHostStore.setState({ runtime: rt('D2') }) // the same finding again: nothing new
+    expect(forget()).toHaveBeenCalledTimes(1)
+    useHostStore.setState({ runtime: rt('D3') }) // yet another daemon there
+    expect(forget()).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the cache when only the name changes', () => {
     useHostStore.setState({ hosts: { h1: { ...host('10.0.0.1'), name: 'renamed' } as never } })
     expect(forget()).not.toHaveBeenCalled()

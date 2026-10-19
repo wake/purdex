@@ -16,11 +16,18 @@ export async function loadTaskGroupsIfSupported(hostId: string): Promise<void> {
   if (taskGroupsSupported(hostId)) await useTaskGroupsStore.getState().load(hostId)
 }
 
-/** Forgets a host's cached groups when the host is removed or moved (address, port or token) under the same id: they belong to the daemon they were read from. Reads nothing; returns the unsubscribe. */
+/**
+ * Forgets a host's cached groups when they can no longer be the answering daemon's: the host is removed, moved (address, port or token) under the same id, or its endpoint now answers as another daemon
+ * (the identity check's `daemonIdMismatch` appears or names a different daemon). Reads nothing; returns the unsubscribe.
+ */
 export function startTaskGroupsLifecycle(): () => void {
   return useHostStore.subscribe((next, prev) => {
     for (const hostId of Object.keys(prev.hosts)) {
       if (!next.hosts[hostId] || hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])) useTaskGroupsStore.getState().forget(hostId)
+    }
+    for (const [hostId, rt] of Object.entries(next.runtime)) {
+      const observed = rt?.daemonIdMismatch?.observed
+      if (observed !== undefined && observed !== prev.runtime[hostId]?.daemonIdMismatch?.observed) useTaskGroupsStore.getState().forget(hostId)
     }
   })
 }
