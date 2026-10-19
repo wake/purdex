@@ -75,6 +75,7 @@ func (m *Module) personApprove(w http.ResponseWriter, open team.Approval, c Clos
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team; the request stays open", nil)
 	case errors.Is(err, ErrMemberCannotLead):
 		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of a live team; the request stays open", nil)
+	case m.writeLeadNameErr(w, open, err): // the name is taken (the list now), unknown, or there is no name service; the token is kept
 	case errors.As(err, &refused): // committed and announced: the request is cancelled with this code
 		m.writeErr(w, http.StatusConflict, refused.Code, "the request cannot be approved ("+refused.Code+"); it is cancelled", nil)
 	case errors.Is(err, errRegistry):

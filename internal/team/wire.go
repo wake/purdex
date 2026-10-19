@@ -141,6 +141,9 @@ type LeadPayload struct {
 	// the card opens, which reads GET /api/team/approvals/{id}/lead-names for a fresh list. null: this daemon had no name service
 	// then; [] when no persona exists. Not part of the request's hash.
 	LeadNames []LeadName `json:"lead_names"`
+	// Person marks the request of a person's own /team --card (NP-4c): it waits on the card whatever the unattended switch, which
+	// refuses an agent's lead request. Not part of the request's hash.
+	Person bool `json:"person,omitempty"`
 }
 
 // Grant is what the user approved (edited in the dialog). P4 turns it into a team.
