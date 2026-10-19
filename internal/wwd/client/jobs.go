@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -300,6 +301,41 @@ func (c *Client) StartException(ctx context.Context, e wire.Exception) error {
 	}
 	_, err := c.send(ctx, http.MethodPost, "/v1/exceptions", nil, e, maxBody)
 	return err
+}
+
+// StartExceptionOn is StartException for the named host: the local wwd forwards it (spec §10). host "" is this host.
+func (c *Client) StartExceptionOn(ctx context.Context, host string, e wire.Exception) error {
+	if host == "" {
+		return c.StartException(ctx, e)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	body, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return c.mutateStatus(ctx, http.MethodPost, "/v1/exceptions", host, body)
+}
+
+// StopExceptionOn is StopException for the named host.
+func (c *Client) StopExceptionOn(ctx context.Context, host, name string) error {
+	if host == "" {
+		return c.StopException(ctx, name)
+	}
+	return c.mutateStatus(ctx, http.MethodDelete, "/v1/exceptions/"+url.PathEscape(name), host, nil)
+}
+
+// mutateStatus is Mutate with a non-2xx answer turned into a *StatusError, like the calls that read.
+func (c *Client) mutateStatus(ctx context.Context, method, path, host string, body []byte) error {
+	status, answer, err := c.Mutate(ctx, method, path, host, body)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return &StatusError{Code: status, Body: strings.TrimSpace(string(answer))}
+	}
+	return nil
 }
 
 // StopException is DELETE /v1/exceptions/{name}.

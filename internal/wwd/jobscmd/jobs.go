@@ -40,7 +40,10 @@ type API interface {
 	Worker(ctx context.Context) (wire.WorkerSettings, error)
 	SetWorker(ctx context.Context, s wire.WorkerSettings) (wire.WorkerSettings, error)
 	StartException(ctx context.Context, e wire.Exception) error
+	// StartExceptionOn and StopExceptionOn act on the named host through the local wwd, which forwards (spec §10); "" is this host.
+	StartExceptionOn(ctx context.Context, host string, e wire.Exception) error
 	StopException(ctx context.Context, name string) error
+	StopExceptionOn(ctx context.Context, host, name string) error
 	Usage(ctx context.Context, q client.UsageQuery) (wire.UsageResponse, error)
 	EarnedLabels(ctx context.Context) (list wire.EarnedLabelList, known bool, err error)
 	QuarantineLabel(ctx context.Context, label string) error
@@ -54,6 +57,30 @@ type Env struct {
 	Now     func() time.Time
 	Stdout  io.Writer
 	Stderr  io.Writer
+	// Log, when set, gets one line for each hold made (who asked is the host it ran on; why is the reason): `pdx wwd hold` keeps the full
+	// reason there, since the exception's name holds only a slug of it.
+	Log io.Writer
+	// Sleep and HoldWait are for `pdx wwd hold`'s wait for the facts: Sleep nil waits on the clock (and stops with ctx), HoldWait 0 is 30 s.
+	Sleep    func(time.Duration)
+	HoldWait time.Duration
+}
+
+func (e Env) holdWait() time.Duration {
+	if e.HoldWait > 0 {
+		return e.HoldWait
+	}
+	return defaultHoldWait
+}
+
+func (e Env) sleep(ctx context.Context, d time.Duration) {
+	if e.Sleep != nil {
+		e.Sleep(d)
+		return
+	}
+	select {
+	case <-time.After(d):
+	case <-ctx.Done():
+	}
 }
 
 func (e Env) now() time.Time {

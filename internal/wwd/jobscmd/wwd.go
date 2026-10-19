@@ -17,7 +17,8 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd pool [--json]
        pdx wwd worker on|off [--heavy N] [--light N]
        pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
-       pdx wwd exception stop <name>
+       pdx wwd exception stop <name> [--host <host>]
+       pdx wwd hold <host> --for <dur> --reason <text> [--allow-class release|merge|dev]... [--allow-repo <repo>]... [--release] [--expect pressure]
        pdx wwd usage [--since <6h|7d|RFC3339> [--after <job id>]] [--limit N] [--json]
        pdx wwd labels [--json]
        pdx wwd quarantine <task:repo/task>
@@ -30,6 +31,11 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
   worker     switch this host's worker; --heavy / --light set the slot counts
   exception  tell wwd a dev server or packaging run is using the host: its worker takes no new heavy work (and no light work if
              --holds says light) until --until passes or --pid ends
+  hold       keep a host quiet for a while (the worker takes no new heavy work there): an exception with a reason. With --allow-class or
+             --allow-repo the worker still takes the jobs of those classes or repos, and only those; --release is a release (the host's
+             light slots drop to 1 while it lasts); --expect pressure is a deliberate stress test (the PSI part of the mserv alert waits).
+             The command waits until the hold shows in that host's facts (30 s) and fails if it does not: the worker decides from the
+             facts. End it with: pdx wwd exception stop <name> --host <host>.
   usage      what this host's finished jobs used (CPU, cores, memory) and what the host was like around them; kept 30 days
 `
 
@@ -48,6 +54,8 @@ func WWD(ctx context.Context, args []string, env Env) int {
 		return wwdWorker(ctx, args, env)
 	case "exception":
 		return wwdException(ctx, args, env)
+	case "hold":
+		return wwdHold(ctx, args, env)
 	case "usage":
 		return wwdUsage(ctx, args, env)
 	case "labels":
@@ -198,10 +206,14 @@ func wwdException(ctx context.Context, args []string, env Env) int {
 	}
 	name := pos[0]
 	if action == "stop" {
-		if err := only(flags); err != nil {
+		if err := only(flags, "host"); err != nil {
 			return usageErr(env, WWDUsage, err)
 		}
-		if err := env.API.StopException(ctx, name); err != nil {
+		host := flags["host"]
+		if host != "" && !wire.ValidAlias(host) {
+			return usageErr(env, WWDUsage, fmt.Errorf("--host %q is not a host alias", host))
+		}
+		if err := env.API.StopExceptionOn(ctx, host, name); err != nil {
 			return fail(env, "wwd exception", err)
 		}
 		fmt.Fprintf(env.Stdout, "exception %s stopped\n", name)

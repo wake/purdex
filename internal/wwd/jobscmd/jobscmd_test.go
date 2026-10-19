@@ -36,6 +36,8 @@ type fakeAPI struct {
 	set           *wire.WorkerSettings
 	started       *wire.Exception
 	stopped       string
+	startedOn     string
+	stoppedOn     string
 	labelCalls    []string // "quarantine <label>" and "release <label>", in order
 	usage         wire.UsageResponse
 	usageQ        client.UsageQuery
@@ -92,6 +94,16 @@ func (f *fakeAPI) StartException(_ context.Context, e wire.Exception) error {
 	return f.err
 }
 func (f *fakeAPI) StopException(_ context.Context, name string) error {
+	f.stopped = name
+	return f.err
+}
+func (f *fakeAPI) StartExceptionOn(_ context.Context, host string, e wire.Exception) error {
+	f.startedOn = host
+	f.started = &e
+	return f.err
+}
+func (f *fakeAPI) StopExceptionOn(_ context.Context, host, name string) error {
+	f.stoppedOn = host
 	f.stopped = name
 	return f.err
 }
