@@ -112,6 +112,13 @@ func TestWhyTable(t *testing.T) {
 		r := Why(factsOf(in, false))
 		codes(t, r.Heavy, []string{"worker_off", "zone_warning", "exception:a", "owner_active", "slots_full"})
 	})
+	t.Run("a side at 0 that nothing explains is unknown, never an empty list", func(t *testing.T) {
+		f := factsOf(open, true)
+		f.Derived.Headroom.Light = 0 // normal zone, no exception, no owner, light slots free: a record that cannot come from Compute
+		r := Why(f)
+		codes(t, r.Light, []string{"unknown"})
+		codes(t, r.Heavy, []string{})
+	})
 	t.Run("a full slot count hides the gate: it is not guessed", func(t *testing.T) {
 		in := open
 		in.GateHeavyFull = true

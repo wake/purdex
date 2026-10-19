@@ -14,6 +14,8 @@ const (
 	ReasonOwnerActive = "owner_active"
 	ReasonSlotsFull   = "slots_full"
 	ReasonGateFull    = "gate_full"
+	// ReasonUnknown is a side at 0 that nothing in the record explains; only Why gives it (Compute always knows).
+	ReasonUnknown = "unknown"
 )
 
 // judgement is what the reasons are made from.
@@ -83,7 +85,15 @@ func Why(f wire.Facts) wire.HeadroomReasons {
 	if f.Derived.Headroom.Heavy == 0 && j.reasonsHeavyIgnoringWorker() == 0 {
 		j.gateFull = true
 	}
-	return j.reasons()
+	r := j.reasons()
+	// a record whose headroom is 0 for no reason it shows (a skewed or faulty peer): never an empty list, which means "there is room"
+	if f.Derived.Headroom.Heavy == 0 && len(r.Heavy) == 0 {
+		r.Heavy = append(r.Heavy, ReasonUnknown)
+	}
+	if f.Derived.Headroom.Light == 0 && len(r.Light) == 0 {
+		r.Light = append(r.Light, ReasonUnknown)
+	}
+	return r
 }
 
 // reasonsLightIgnoringHolds counts the light reasons that do not come from an exception.
