@@ -6,7 +6,7 @@ const fetchTaskGroups = vi.fn()
 const putTaskGroups = vi.fn()
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), fetchTaskGroups: (...a: unknown[]) => fetchTaskGroups(...a), putTaskGroups: (...a: unknown[]) => putTaskGroups(...a) }))
 
-import { putInGroup, startGroupWith, takeOutOfGroup, defaultGroupName } from './actions'
+import { putInGroup, startGroupWith, takeOutOfGroup, renameTaskGroup, deleteTaskGroup, defaultGroupName } from './actions'
 import { useTaskGroupsStore } from '../../stores/useTaskGroupsStore'
 import type { TaskGroup, TaskGroupsRead } from './api'
 
@@ -70,6 +70,32 @@ describe('takeOutOfGroup', () => {
     await loaded(read([g('a', ['R1', 'R2'])]))
     expect(await takeOutOfGroup('h1', 'R1')).toEqual({ ok: true })
     expect(sent()[0][0].roots).toEqual(['R2'])
+  })
+})
+
+describe('renameTaskGroup / deleteTaskGroup', () => {
+  it('renames with the name checked first; a bad name sends nothing', async () => {
+    await loaded(read([g('a'), g('b')]))
+    expect(await renameTaskGroup('h1', 'a', '  Fresh ')).toEqual({ ok: true })
+    expect(sent()[0].map((x) => x.name)).toEqual(['Fresh', 'Gb'])
+    expect(await renameTaskGroup('h1', 'a', '   ')).toEqual({ ok: false, reason: 'bad-name' })
+    expect(putTaskGroups).toHaveBeenCalledTimes(1)
+  })
+  it('says the group is gone when another device deleted it, for both', async () => {
+    await loaded(read([g('a')]))
+    expect(await renameTaskGroup('h1', 'zz', 'X')).toEqual({ ok: false, reason: 'group-gone' })
+    expect(await deleteTaskGroup('h1', 'zz')).toEqual({ ok: false, reason: 'group-gone' })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+  it('deletes the group (its saved roots go with it)', async () => {
+    await loaded(read([g('a', ['R1', 'R2']), g('b')]))
+    expect(await deleteTaskGroup('h1', 'a')).toEqual({ ok: true })
+    expect(sent()[0].map((x) => x.id)).toEqual(['b'])
+  })
+  it('an unsafe host is neither renamed nor cleared', async () => {
+    await loaded(read([g('a')], 1, { invalid: true }))
+    expect(await renameTaskGroup('h1', 'a', 'X')).toEqual({ ok: false, reason: 'unsafe' })
+    expect(await deleteTaskGroup('h1', 'a')).toEqual({ ok: false, reason: 'unsafe' })
   })
 })
 

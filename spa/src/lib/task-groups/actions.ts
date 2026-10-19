@@ -4,7 +4,7 @@
 // changed, conflict); an edit that finds its target gone (another device deleted the group) judges that on the copy the write actually meets, so a retried change cannot undo a delete.
 import type { TaskGroup } from './api'
 import { useTaskGroupsStore, type UpdateResult } from '../../stores/useTaskGroupsStore'
-import { addRoot, newGroup, newGroupId, removeRoot, groupNameError, type EditError, type EditResult } from './edits'
+import { addRoot, newGroup, newGroupId, removeRoot, renameGroup, deleteGroup, groupNameError, type EditError, type EditResult } from './edits'
 
 export type ActionResult = UpdateResult | { ok: false; reason: EditError | 'no-root' }
 
@@ -38,6 +38,15 @@ export function startGroupWith(hostId: string, root: string | null, name: string
 export function takeOutOfGroup(hostId: string, root: string | null): Promise<ActionResult> {
   if (root === null) return Promise.resolve({ ok: false, reason: 'no-root' })
   return run(hostId, (groups, now) => removeRoot(groups, root, now))
+}
+
+export function renameTaskGroup(hostId: string, groupId: string, name: string): Promise<ActionResult> {
+  return run(hostId, (groups, now) => renameGroup(groups, groupId, name, now))
+}
+
+/** Deletes the group, the roots it still holds (sessions that are not live) with it: the caller has asked the person once. */
+export function deleteTaskGroup(hostId: string, groupId: string): Promise<ActionResult> {
+  return run(hostId, (groups) => deleteGroup(groups, groupId))
 }
 
 /** 「<base> N」: the first N whose name no group on the host has. */
