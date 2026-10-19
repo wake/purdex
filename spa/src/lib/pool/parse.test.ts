@@ -1,0 +1,102 @@
+// The three JSON samples in __fixtures__/ are copied byte for byte from internal/wwd/wire/testdata: when the wire changes they go red.
+import { describe, it, expect } from 'vitest'
+import { parseFacts, parseHostsAnswer, parseSeries } from './parse'
+import hostsJson from './__fixtures__/pool_hosts_response.json'
+import darwinJson from './__fixtures__/facts_darwin.json'
+import linuxJson from './__fixtures__/facts_linux.json'
+
+describe('facts samples', () => {
+  it('darwin: times become ms, owners, residents, exceptions and the worker are read', () => {
+    const f = parseFacts(darwinJson)!
+    expect(f.at).toBe(Date.parse('2026-10-18T05:00:00+08:00'))
+    expect(f.alias).toBe('mlab')
+    expect(f.derived).toEqual({ zone: 'normal', headroom: { heavy: 1, light: 2 }, sessions_room: 2 })
+    expect(f.procs.map((p) => p.owner)).toEqual([{ kind: 'job', id: 'j_01JC', session: 's1' }, { kind: 'system' }, null])
+    expect(f.residents).toEqual([{ session: 's1', kind: 'codex-broker', count: 3, mem_mb: 640 }])
+    expect(f.exceptions.map((e) => [e.name, e.until])).toEqual([['app-dev-package', Date.parse('2026-10-18T05:30:00+08:00')], ['dev-server', null]])
+    expect(f.owner).toEqual({ active: true, idle_s: 42, reason: 'hid' })
+    expect(f.worker).toEqual({ enabled: true, slots: { heavy: 1, light: 2 }, running: { heavy: 0, light: 1 }, owner_rule: 'hid<5m' })
+    expect(f.mem.psi).toBeNull()
+    expect(f.queue).toBeUndefined()
+  })
+
+  it('linux: psi is read, null fields stay null, the zone unknown is kept', () => {
+    const f = parseFacts(linuxJson)!
+    expect(f.mem.psi).toEqual({ some10: 0.5, full10: 0, some60: 0.3 })
+    expect(f.mem.page_out_rate).toBeNull()
+    expect(f.owner).toBeNull()
+    expect(f.derived.zone).toBe('unknown')
+    expect(f.tools.pnpm).toBeNull()
+  })
+
+  it('a zone the App does not know reads as unknown, never as an error', () => {
+    const f = parseFacts({ ...darwinJson, derived: { ...darwinJson.derived, zone: 'purple' } })!
+    expect(f.derived.zone).toBe('unknown')
+  })
+
+  it('malformed facts are null', () => {
+    expect(parseFacts(null)).toBeNull()
+    expect(parseFacts({ ...darwinJson, at: 'yesterday' })).toBeNull()
+    expect(parseFacts({ ...darwinJson, worker: undefined })).toBeNull()
+  })
+
+  it('an unreadable swap counter stays null, not 0', () => {
+    expect(parseFacts({ ...darwinJson, mem: { ...darwinJson.mem, swap_used_mb: null } })!.mem.swap_used_mb).toBeNull()
+    expect(parseFacts(darwinJson)!.mem.swap_used_mb).toBe(2100)
+  })
+
+  it('facts whose worker slots are missing or malformed are null, not zero capacity', () => {
+    expect(parseFacts({ ...darwinJson, worker: { ...darwinJson.worker, slots: undefined } })).toBeNull()
+    expect(parseFacts({ ...darwinJson, worker: { ...darwinJson.worker, slots: { heavy: 'x', light: 1 } } })).toBeNull()
+  })
+
+  it('queue.queued is read when present', () => {
+    expect(parseFacts({ ...darwinJson, queue: { queued: 2 } })!.queue).toEqual({ queued: 2 })
+  })
+})
+
+describe('hosts answer', () => {
+  it('the sample: an unreachable host with no facts', () => {
+    const a = parseHostsAnswer(hostsJson)!
+    expect(a).toHaveLength(1)
+    expect(a[0]).toMatchObject({ alias: 'air19', host_id: 'h-air19', reachable: false, facts: null, labels: [], version: '0.1.0', proto: 1 })
+    expect(a[0].worker).toEqual({ enabled: false, slots: { heavy: 0, light: 0 }, owner_rule: '' })
+    expect(a[0].headroom_reasons).toBeUndefined()
+    expect(a[0].load).toBeUndefined()
+  })
+
+  it('assess fields are optional; reasons keep their order and unknown codes', () => {
+    const row = { ...hostsJson.hosts[0], facts: darwinJson, reachable: true,
+      headroom_reasons: { heavy: ['worker_off', 'exception:a', 'exception:b', 'from_the_future'], light: ['gate_full'] }, load: { score: 71, driver: 'mem' } }
+    const [h] = parseHostsAnswer({ hosts: [row] })!
+    expect(h.headroom_reasons).toEqual({ heavy: ['worker_off', 'exception:a', 'exception:b', 'from_the_future'], light: ['gate_full'] })
+    expect(h.load).toEqual({ score: 71, driver: 'mem' })
+    expect(h.facts?.alias).toBe('mlab')
+  })
+
+  it('a malformed row is dropped whole, malformed facts only null that part, a malformed envelope is null', () => {
+    const bad = { hosts: [{ nope: 1 }, { ...hostsJson.hosts[0], facts: { v: 1 } }] }
+    const a = parseHostsAnswer(bad)!
+    expect(a.map((h) => h.alias)).toEqual(['air19'])
+    expect(a[0].facts).toBeNull()
+    expect(parseHostsAnswer({ hosts: 3 })).toBeNull()
+    expect(parseHostsAnswer(null)).toBeNull()
+  })
+
+  it('an unknown driver is kept as text', () => {
+    const [h] = parseHostsAnswer({ hosts: [{ ...hostsJson.hosts[0], load: { score: 5, driver: 'gpu' } }] })!
+    expect(h.load).toEqual({ score: 5, driver: 'gpu' })
+  })
+})
+
+describe('series', () => {
+  it('points become ms; a malformed point is dropped', () => {
+    const s = parseSeries({ step: '1m', truncated: false, points: [
+      { at: '2026-10-18T05:00:00Z', zone: 'warning', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 1, page_out_rate: null, disk_max_used_pct: 80.5, headroom: { heavy: 0, light: 1 } },
+      { at: 'x' },
+    ] })!
+    expect(s.points).toEqual([{ at: Date.parse('2026-10-18T05:00:00Z'), zone: 'warning', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 1, page_out_rate: null, disk_max_used_pct: 80.5, headroom: { heavy: 0, light: 1 } }])
+    expect(s.step).toBe('1m')
+    expect(s.truncated).toBe(false)
+  })
+})
