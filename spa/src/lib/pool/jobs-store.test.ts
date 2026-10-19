@@ -203,7 +203,37 @@ describe('failures and races', () => {
   })
 })
 
+describe('reset while the first read of an origin is out', () => {
+  it('takes nothing from the answer that comes after, also for an origin nothing had touched yet, for a read and for a job read waiting behind it', async () => {
+    let release!: (p: JobsPage) => void
+    fetchJobsPage.mockReturnValueOnce(new Promise<JobsPage>((r) => { release = r }))
+    fetchJob.mockResolvedValue({ job: job('a') })
+    const pending = get().read('never-seen', src)
+    const behind = get().readJob('never-seen', src, 'a')
+    get().reset()
+    release(page([job('a')], '1'))
+    await Promise.all([pending, behind])
+    expect(get().byOrigin['never-seen']).toBeUndefined()
+  })
+})
+
 describe('one job again (jobs.changed)', () => {
+  it('a good read of it clears the error an earlier failure left, also when the job turns out to be gone', async () => {
+    fetchJobsPage.mockResolvedValue(page([job('a')], '1'))
+    await get().read('mlab', src)
+    fetchJob.mockRejectedValueOnce(readErr(503, { error: 'wwd_unavailable' }))
+    await get().readJob('mlab', src, 'a')
+    expect(get().errors.mlab).toBeDefined()
+    fetchJob.mockResolvedValueOnce({ job: job('a', { state: 'running' }) })
+    await get().readJob('mlab', src, 'a')
+    expect(get().errors.mlab).toBeUndefined()
+    fetchJob.mockRejectedValueOnce(readErr(503, { error: 'wwd_unavailable' }))
+    await get().readJob('mlab', src, 'a')
+    fetchJob.mockRejectedValueOnce(readErr(404, { error: 'not_found' }))
+    await get().readJob('mlab', src, 'zzz')
+    expect(get().errors.mlab).toBeUndefined()
+  })
+
   it('replaces that job by id and leaves the cursor and the others alone', async () => {
     fetchJobsPage.mockResolvedValueOnce(page([job('a'), job('b')], '5'))
     await get().read('mlab', src)

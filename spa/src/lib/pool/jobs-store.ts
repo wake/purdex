@@ -137,7 +137,7 @@ export const useJobsStore = create<JobsState>()((set, get) => {
       set((s) => {
         const cur = ownOf(s.byOrigin, origin)
         if (!cur) return s
-        return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: keep({ ...cur.jobs, [id]: detail.job }) } } }
+        return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: keep({ ...cur.jobs, [id]: detail.job }) } }, errors: { ...s.errors, [origin]: undefined } }
       })
       return { ok: true }
     } catch (e) {
@@ -147,9 +147,10 @@ export const useJobsStore = create<JobsState>()((set, get) => {
         // the job is gone (kept 7 days): it leaves the list
         set((s) => {
           const cur = ownOf(s.byOrigin, origin)
-          if (!cur?.jobs[id]) return s
+          const errors = { ...s.errors, [origin]: undefined }
+          if (!cur?.jobs[id]) return { errors }
           const { [id]: _gone, ...rest } = cur.jobs
-          return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: rest } } }
+          return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: rest } }, errors }
         })
         return { ok: true }
       }
@@ -188,7 +189,7 @@ export const useJobsStore = create<JobsState>()((set, get) => {
     },
 
     reset() {
-      for (const origin of new Set([...gens.keys(), ...Object.keys(get().byOrigin)])) gens.set(origin, genOf(origin) + 1)
+      for (const origin of new Set([...gens.keys(), ...tails.keys(), ...reads.keys(), ...Object.keys(get().byOrigin)])) gens.set(origin, genOf(origin) + 1)
       reads.clear()
       set({ byOrigin: {}, errors: {} })
     },
