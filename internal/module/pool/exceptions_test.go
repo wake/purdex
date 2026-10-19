@@ -2,7 +2,9 @@ package poolmod
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,4 +62,25 @@ func TestExceptions_TheErrorsAreTheOnesTheOtherReadsHave(t *testing.T) {
 	rr = send(mux, "GET", "/api/pool/hosts/a%00b/exceptions", "", asAdmin)
 	assert.Equal(t, 400, rr.Code)
 	assert.Equal(t, n, len(s.all()))
+}
+
+// The answer is the golden the App copies (internal/wwd/wire/testdata): what wwd lists, wrapped as {host, known, exceptions}.
+func TestExceptions_AnswerIsTheGoldenTheAppCopies(t *testing.T) {
+	golden, err := os.ReadFile("../../wwd/wire/testdata/pool_host_exceptions.json")
+	require.NoError(t, err)
+	var g struct {
+		Exceptions json.RawMessage `json:"exceptions"`
+	}
+	require.NoError(t, json.Unmarshal(golden, &g))
+	var s seen
+	mux := newModule(t, fakeWWD(t, exceptionsWWD(t, &s, 200, string(g.Exceptions))))
+	rr := send(mux, "GET", "/api/pool/hosts/air26/exceptions", "", asAdmin)
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.JSONEq(t, string(golden), rr.Body.String())
+
+	unknown, err := os.ReadFile("../../wwd/wire/testdata/pool_host_exceptions_unknown.json")
+	require.NoError(t, err)
+	mux = newModule(t, fakeWWD(t, exceptionsWWD(t, &s, 404, `404 page not found`)))
+	rr = send(mux, "GET", "/api/pool/hosts/mserv/exceptions", "", asAdmin)
+	assert.JSONEq(t, string(unknown), rr.Body.String())
 }
