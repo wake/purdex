@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/wake/purdex/internal/wwd/client"
@@ -20,9 +21,13 @@ func runWWD(args []string) { os.Exit(wwdCommand(args, jobscmd.WWD)) }
 func wwdCommand(args []string, f func(context.Context, []string, jobscmd.Env) int) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	return f(ctx, args, jobscmd.Env{
-		API: client.New(client.DefaultSocket()), Session: submitterSession(), Stdout: os.Stdout, Stderr: os.Stderr,
-	})
+	env := jobscmd.Env{API: client.New(client.DefaultSocket()), Session: submitterSession(), Stdout: os.Stdout, Stderr: os.Stderr}
+	// `pdx wwd hold` keeps the full reason of each hold here (the exception's name holds only a slug of it); no log is no reason to refuse
+	if lg, err := os.OpenFile(filepath.Join(filepath.Dir(client.DefaultSocket()), "holds.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		defer lg.Close()
+		env.Log = lg
+	}
+	return f(ctx, args, env)
 }
 
 // submitterSession is the session `pdx test` and `pdx jobs` name as the caller's: PDX_SESSION_ID when a script names one on purpose, else

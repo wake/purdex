@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 func TestExceptions_SendsTheHostAndDecodesTheHolds(t *testing.T) {
@@ -91,5 +94,53 @@ func TestExceptions_RefusesWhatTheContractRefuses(t *testing.T) {
 		if !errors.Is(err, ErrBadResponse) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// StartExceptionOn / StopExceptionOn send the host to the local wwd, which forwards; a refusal comes back as a *StatusError like the
+// calls that read, so the command can tell a wwd that does not know holds from a bad request.
+func TestExceptionOnForwardsAndReportsRefusals(t *testing.T) {
+	var method, path, host, body string
+	status := http.StatusOK
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		method, path, host = r.Method, r.URL.Path, r.URL.Query().Get("host")
+		b := make([]byte, 4096)
+		n, _ := r.Body.Read(b)
+		body = string(b[:n])
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":"x"}`))
+	})
+	mux.HandleFunc("/v1/exceptions/", func(w http.ResponseWriter, r *http.Request) {
+		method, path, host = r.Method, r.URL.Path, r.URL.Query().Get("host")
+		w.WriteHeader(status)
+	})
+	c := New(fakeWWD(t, mux))
+	until := time.Now().Add(time.Hour).UTC()
+	e := wire.Exception{Name: "hold-x", Until: &until, Holds: []wire.Hold{wire.HoldHeavy}, Flags: []wire.HoldFlag{wire.HoldFlagRelease}}
+	if err := c.StartExceptionOn(context.Background(), "air26", e); err != nil {
+		t.Fatal(err)
+	}
+	if method != "POST" || path != "/v1/exceptions" || host != "air26" || !strings.Contains(body, `"flags":["release"]`) {
+		t.Fatalf("%s %s host=%q body=%s", method, path, host, body)
+	}
+	if err := c.StopExceptionOn(context.Background(), "air26", "hold-x"); err != nil {
+		t.Fatal(err)
+	}
+	if method != "DELETE" || path != "/v1/exceptions/hold-x" || host != "air26" {
+		t.Fatalf("%s %s host=%q", method, path, host)
+	}
+	status = http.StatusBadRequest
+	var se *StatusError
+	if err := c.StartExceptionOn(context.Background(), "air26", e); !errors.As(err, &se) || se.Code != 400 || !strings.Contains(se.Body, "error") {
+		t.Fatalf("a refusal: %v", err)
+	}
+	if err := c.StopExceptionOn(context.Background(), "air26", "hold-x"); !errors.As(err, &se) || se.Code != 400 {
+		t.Fatalf("a refusal: %v", err)
+	}
+	// host "" is this host: the plain calls
+	status = http.StatusOK
+	if err := c.StartExceptionOn(context.Background(), "", e); err != nil || host != "" {
+		t.Fatalf("this host: %v host=%q", err, host)
 	}
 }
