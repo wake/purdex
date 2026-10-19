@@ -156,38 +156,57 @@ func (d *Daemon) QuarantinePass(ctx context.Context) {
 		d.quar.cursor, d.quar.failed = map[string]int64{}, map[string]string{}
 	}
 	if d.opts.Queue != nil {
-		d.readOrigin(ctx, d.opts.Alias, d.opts.Queue.Disagreements)
+		d.readOrigin(ctx, d.opts.Alias, func(ctx context.Context, host string, after int64, limit int) (page, error) {
+			items, more, err := d.opts.Queue.Disagreements(ctx, host, after, limit)
+			return page{items: items, more: more}, err // its own queue: one clock, no difference
+		})
 	}
 	for _, p := range d.opts.Peers {
 		p := p
-		d.readOrigin(ctx, p.Alias, func(ctx context.Context, host string, after int64, limit int) ([]wire.Disagreement, bool, error) {
+		d.readOrigin(ctx, p.Alias, func(ctx context.Context, host string, after int64, limit int) (page, error) {
 			return d.peerDisagreements(ctx, p, host, after, limit)
 		})
 	}
 }
 
 // peerDisagreements is GET /v1/outcomes/disagreements of a peer; a 404 is an older build (nothing to offer).
-func (d *Daemon) peerDisagreements(ctx context.Context, p PeerAddr, host string, after int64, limit int) ([]wire.Disagreement, bool, error) {
+func (d *Daemon) peerDisagreements(ctx context.Context, p PeerAddr, host string, after int64, limit int) (page, error) {
 	q := url.Values{"subject": {host}, "after": {strconv.FormatInt(after, 10)}, "limit": {strconv.Itoa(limit)}}
+	sent := d.now()
 	list, err := get[wire.DisagreementList](ctx, d.pool.client, p, d.opts.Token, "/v1/outcomes/disagreements?"+q.Encode())
+	received := d.now()
 	var se *StatusError
 	if errors.As(err, &se) && se.Code == http.StatusNotFound {
-		return nil, false, nil
+		return page{}, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return page{}, err
 	}
 	if err := list.Validate(); err != nil {
-		return nil, false, err
+		return page{}, err
 	}
 	if list.Host != host || list.Origin != p.Alias {
-		return nil, false, fmt.Errorf("disagreements: answer for %q from %q", list.Host, list.Origin)
+		return page{}, fmt.Errorf("disagreements: answer for %q from %q", list.Host, list.Origin)
 	}
-	return list.Items, list.More, nil
+	// The origin dates what it records by its own clock, and this host dates its grants by its own: an item is compared with them on this
+	// host's clock, by the difference between the two clocks as of this answer (the origin's clock at the answer, against the middle of the
+	// time the request took here). A build that did not say what time it is gets no correction.
+	var skew time.Duration
+	if !list.Now.IsZero() {
+		skew = list.Now.Sub(sent.Add(received.Sub(sent) / 2))
+	}
+	return page{items: list.Items, more: list.More, skew: skew}, nil
+}
+
+// page is one answer of an origin: its items, whether more wait, and how far the origin's clock is ahead of this host's.
+type page struct {
+	items []wire.Disagreement
+	more  bool
+	skew  time.Duration
 }
 
 // readOrigin reads pages from one origin from its cursor on and applies them. The caller holds quar.mu.
-func (d *Daemon) readOrigin(ctx context.Context, origin string, read func(ctx context.Context, host string, after int64, limit int) ([]wire.Disagreement, bool, error)) {
+func (d *Daemon) readOrigin(ctx context.Context, origin string, read func(ctx context.Context, host string, after int64, limit int) (page, error)) {
 	fail := func(err error) {
 		msg := err.Error()
 		if d.quar.failed[origin] != msg {
@@ -195,14 +214,14 @@ func (d *Daemon) readOrigin(ctx context.Context, origin string, read func(ctx co
 			log.Printf("wwd: quarantine: reading the disagreements of %s: %v", origin, err)
 		}
 	}
-	for page := 0; page < maxPagesPerPass; page++ {
-		items, more, err := read(ctx, d.opts.Alias, d.quar.cursor[origin], wire.MaxDisagreements)
+	for n := 0; n < maxPagesPerPass; n++ {
+		pg, err := read(ctx, d.opts.Alias, d.quar.cursor[origin], wire.MaxDisagreements)
 		if err != nil {
 			fail(err)
 			return
 		}
 		delete(d.quar.failed, origin)
-		for _, x := range items {
+		for _, x := range pg.items {
 			if err := x.Validate(); err != nil {
 				fail(err)
 				return
@@ -211,13 +230,14 @@ func (d *Daemon) readOrigin(ctx context.Context, origin string, read func(ctx co
 				fail(fmt.Errorf("disagreement %d is not after the cursor %d", x.ID, d.quar.cursor[origin]))
 				return
 			}
+			x.At = x.At.Add(-pg.skew) // on this host's clock, the one its grants are dated by
 			if _, err := d.ApplyDisagreement(x); err != nil {
 				fail(err)
 				return
 			}
 			d.quar.cursor[origin] = x.ID
 		}
-		if !more || len(items) == 0 {
+		if !pg.more || len(pg.items) == 0 {
 			return
 		}
 	}

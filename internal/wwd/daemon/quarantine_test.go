@@ -84,7 +84,9 @@ type peerOrigin struct {
 	items   []wire.Disagreement
 	status  int // 0: 200
 	queries []string
-	subject string // what it answers for; "" is the asked subject
+	subject string        // what it answers for; "" is the asked subject
+	ahead   time.Duration // how far this origin's clock is ahead of the reader's
+	noClock bool          // an older build: the answer says nothing of the origin's clock
 }
 
 func (p *peerOrigin) serve(alias string) *httptest.Server {
@@ -111,6 +113,9 @@ func (p *peerOrigin) serve(alias string) *httptest.Server {
 			subject = p.subject
 		}
 		out := wire.DisagreementList{Host: subject, Origin: alias, Cursor: after, Items: []wire.Disagreement{}}
+		if !p.noClock {
+			out.Now = time.Now().Add(p.ahead)
+		}
 		for _, x := range p.items {
 			if x.ID > after {
 				out.Items = append(out.Items, x)
@@ -222,6 +227,41 @@ func TestAQuarantinedLabelsEntriesAreDroppedAfterARestart(t *testing.T) {
 	require.True(t, ok)
 	r.d.QuarantinePass(t.Context())
 	assert.Equal(t, [][2]string{{quarLabel, "mserv"}}, r.cache.dropped())
+}
+
+// The origin dates a disagreement by its clock and the owner dates its grants by its own: an origin whose clock is an hour ahead must not
+// make a disagreement from before the label was granted look like one from after it, however often it is read again (a restart reads from
+// the start), and a disagreement from after the grant still counts.
+func TestAnOriginsClockThatIsAheadDoesNotMakeAnOldDisagreementNew(t *testing.T) {
+	const ahead = time.Hour
+	old := disagreementFor(1, "mserv", "air26", quarGranted.Add(-10*time.Minute).Add(ahead)) // 10 minutes before the grant, as that origin dated it
+	fresh := disagreementFor(2, "mserv", "air26", quarGranted.Add(10*time.Minute).Add(ahead))
+	origin := &peerOrigin{items: []wire.Disagreement{old}, ahead: ahead}
+	srv := origin.serve("air26")
+	defer srv.Close()
+	r := newQuarRig(t, Options{Peers: []PeerAddr{{"air26", addr(srv)}}})
+	// the owner's clock is the real one; quarGranted is in the past of it, and the origin says it is an hour ahead of the real time
+	for i := 0; i < 2; i++ { // and again from the start, as after a restart
+		r.d.quar = quarantineState{}
+		r.d.QuarantinePass(t.Context())
+		assert.Equal(t, wire.EarnedLabelEarned, r.state(t), "an old disagreement, however the origin's clock runs")
+	}
+	origin.mu.Lock()
+	origin.items = []wire.Disagreement{old, fresh}
+	origin.mu.Unlock()
+	r.d.quar = quarantineState{}
+	r.d.QuarantinePass(t.Context())
+	assert.Equal(t, wire.EarnedLabelQuarantined, r.state(t), "one from after the grant counts")
+}
+
+// An origin that does not say what time it is (an older build) is read without a correction.
+func TestAnOriginThatSaysNothingOfItsClockIsReadAsItIs(t *testing.T) {
+	origin := &peerOrigin{items: []wire.Disagreement{disagreementFor(1, "mserv", "air26", quarGranted.Add(time.Hour))}, noClock: true}
+	srv := origin.serve("air26")
+	defer srv.Close()
+	r := newQuarRig(t, Options{Peers: []PeerAddr{{"air26", addr(srv)}}})
+	r.d.QuarantinePass(t.Context())
+	assert.Equal(t, wire.EarnedLabelQuarantined, r.state(t))
 }
 
 // A quarantined label that was granted after the disagreement (it was qualified anew, and quarantined since by hand or by a later
