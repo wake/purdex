@@ -68,9 +68,10 @@ function DecisionRow({ hostId, entry, showHost }: { hostId: string; entry: Unatt
   )
 }
 
-export function UnattendedLogSection({ rows }: { rows: readonly LogRow[] }) {
+/** `multiHost`: more than one host is shown in the panel, so every row (a switch record too) names the host it belongs to. */
+export function UnattendedLogSection({ rows, multiHost }: { rows: readonly LogRow[]; multiHost: boolean }) {
   const t = useI18nStore((s) => s.t)
-  const showHost = new Set(rows.map((r) => r.hostId)).size > 1
+  const showHost = multiHost
   return (
     <section data-testid="unattended-log-section" className="flex flex-col gap-2">
       <div data-testid="unattended-log-title" className="font-medium text-text-primary">{t('unattended.log.title')}</div>
@@ -83,6 +84,7 @@ export function UnattendedLogSection({ rows }: { rows: readonly LogRow[] }) {
               key={`${hostId}:t:${entry.at}:${i}`} data-testid="unattended-log-toggle" data-on={String(entry.on)}
               className="rounded bg-pink-500/15 px-2 py-0.5 font-bold text-text-primary"
             >
+              {showHost && <span data-testid="unattended-log-host" className="mr-1.5 font-normal text-text-muted">{hostLabel(hostId, hostLookOf(hostId))}</span>}
               {t(entry.on ? 'unattended.log.toggle_on' : 'unattended.log.toggle_off', { who: whoOf(t, entry.by), time: sinceText(entry.at) })}
             </li>
           ) : (

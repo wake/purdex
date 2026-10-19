@@ -114,6 +114,23 @@ describe('the log in the unattended panel', () => {
     expect(within(logRows()[1]).getByTestId('unattended-log-host')).toHaveTextContent('air26')
   })
 
+  it('names the host on a switch record too, and on every row while several hosts are shown (even when the newest 30 are all one host\'s)', async () => {
+    mockedGet.mockImplementation(async (hostId) => hostId === A
+      ? page({ log: [toggle(at(10, 0), true), decision('a', at(9, 0), 'approved', 'unattended')] })
+      : page({ log: [] }))
+    open([A, B])
+    await waitFor(() => expect(logRows()).toHaveLength(2))
+    expect(within(logRows()[0]).getByTestId('unattended-log-host')).toHaveTextContent('mlab')
+    expect(within(logRows()[1]).getByTestId('unattended-log-host')).toHaveTextContent('mlab')
+  })
+
+  it('a single host\'s log names no host', async () => {
+    mockedGet.mockResolvedValue(page({ log: [toggle(at(10, 0), true), decision('a', at(9, 0), 'approved', 'unattended')] }))
+    open([A])
+    await waitFor(() => expect(logRows()).toHaveLength(2))
+    expect(screen.queryByTestId('unattended-log-host')).toBeNull()
+  })
+
   it('keeps the newest 30 of everything the hosts sent, in a list that scrolls', async () => {
     const many = (prefix: string, n: number, base: number) => Array.from({ length: n }, (_, i) => decision(`${prefix}${i}`, base - i * 60_000, 'approved', 'unattended'))
     mockedGet.mockImplementation(async (hostId) => page({ log: hostId === A ? many('a', 30, at(11, 59)) : many('b', 30, at(11, 29)) }))
