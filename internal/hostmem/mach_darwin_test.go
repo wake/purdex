@@ -40,6 +40,23 @@ func TestMach_VMAgreesWithVMStat(t *testing.T) {
 	}
 }
 
+// The decompression counter is vm_stat's "Decompressions": it only grows, and vm_stat read it between the two Mach reads.
+func TestMach_DecompressionsAgreeWithVMStat(t *testing.T) {
+	m, err := NewMach()
+	require.NoError(t, err)
+	before, err := m.VM()
+	require.NoError(t, err)
+	out, err := Run(context.Background())
+	require.NoError(t, err)
+	vs, err := ParseVMStat(out)
+	require.NoError(t, err)
+	after, err := m.VM()
+	require.NoError(t, err)
+	require.NotZero(t, before.Decompressions, "the host has decompressed at least once since boot")
+	require.GreaterOrEqual(t, vs.Decompressions, before.Decompressions)
+	require.LessOrEqual(t, vs.Decompressions, after.Decompressions)
+}
+
 // vmAgreeWithin reads up to tries times and answers nothing as soon as one try agrees, else the disagreements of the last.
 func vmAgreeWithin(tries int, read func() (before, after VMCounters, vs VMStat)) []string {
 	var last []string

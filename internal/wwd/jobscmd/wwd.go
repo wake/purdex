@@ -19,6 +19,8 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
        pdx wwd exception stop <name>
        pdx wwd usage [--since <6h|7d|RFC3339> [--after <job id>]] [--limit N] [--json]
+       pdx wwd labels [--json]
+  labels    the task labels this host earned (or lost to a quarantine), with the fingerprint each was earned under
   status    this host's wwd: version, labels, worker switch and slots
   pool       every host the pool knows: reachable, pressure zone, free slots, worker
   worker     switch this host's worker; --heavy / --light set the slot counts
@@ -44,6 +46,8 @@ func WWD(ctx context.Context, args []string, env Env) int {
 		return wwdException(ctx, args, env)
 	case "usage":
 		return wwdUsage(ctx, args, env)
+	case "labels":
+		return wwdLabels(ctx, args, env)
 	case "help":
 		io.WriteString(env.Stdout, WWDUsage)
 		return ExitOK

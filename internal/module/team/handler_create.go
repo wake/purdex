@@ -40,7 +40,7 @@ func normaliseRoots(roots []string, cwd string) ([]string, error) {
 	return out, nil
 }
 
-// normaliseMaxMembers applies 0→3, cap 8 (spec §6.1); def is the fallback for 0.
+// normaliseMaxMembers applies 0→3, cap 9 (spec §6.1, ceiling per name pool v2 §5.1); def is the fallback for 0.
 func normaliseMaxMembers(n, def int) int {
 	if n <= 0 {
 		return def

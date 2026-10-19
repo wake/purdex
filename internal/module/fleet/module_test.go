@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/middleware"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	"github.com/wake/purdex/internal/push"
 )
 
 const ourID, peerID = "air26:aaaaaa", "mlab:bbbbbb"
@@ -126,6 +127,37 @@ func TestRoleRoute_NewestAgeWhenWired(t *testing.T) {
 	r.m.engine.SetNewestAge(age(1234 * time.Millisecond))
 	rr := r.post(pathRole, hostP, `{"to_host_id":"`+ourID+`","from_alias":"mlab","role":"standby","term":0}`)
 	require.Contains(t, rr.Body.String(), `"newest_age_ms":1234`)
+}
+
+// stubNotifier is the push module's alert notifier as the registry holds it; ready is what its AlertReady answers.
+type stubNotifier struct{ ready bool }
+
+func (*stubNotifier) NotifyAlert(push.AlertPush) bool { return true }
+func (s *stubNotifier) AlertReady() bool              { return s.ready }
+
+// The role route says whether this daemon's push module can queue a push now. The registry keeps a service after its module stops, so
+// the answer follows the notifier's own readiness — false before it is registered, true while it is up, false again after it stopped —
+// and it is always there (never left out) in this module.
+func TestRoleRoute_PushReadyFollowsThePushModule(t *testing.T) {
+	r := newRig(t)
+	body := `{"to_host_id":"` + ourID + `","from_alias":"mlab","role":"standby","term":0}`
+	ready := func() (bool, string) {
+		rr := r.post(pathRole, hostP, body)
+		var a RoleAnswer
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &a))
+		require.NotNil(t, a.PushReady, "never left out in this module")
+		return *a.PushReady, rr.Body.String()
+	}
+	got, _ := ready()
+	require.False(t, got, "no push module yet")
+	n := &stubNotifier{ready: true}
+	r.m.core.Registry.Register(push.AlertNotifyKey, n)
+	got, raw := ready()
+	require.True(t, got)
+	require.Contains(t, raw, `"push_ready":true`)
+	n.ready = false // the push module stopped; the registry still holds it
+	got, _ = ready()
+	require.False(t, got, "a stopped push module is not ready, whatever the registry holds")
 }
 
 func TestRoutes_WrongHost409(t *testing.T) {

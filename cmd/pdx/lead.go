@@ -24,7 +24,7 @@ import (
 
 // leadUsage is the grammar-rejection message for `pdx lead` (exit 2).
 const leadUsage = "usage: pdx lead request --reason <text> [--name <team name>] [--label <短名>] [--max-members N] [--root <dir>]... [--wait 9m] [--person <token>] [--config <path>]\n" +
-	"       (--max-members 1..8, default 3; --wait up to 10m, default 9m so the call fits one Bash timeout;\n" +
+	"       (--max-members 1..9, default 3; --wait up to 10m, default 9m so the call fits one Bash timeout;\n" +
 	"        --label: the tab group's short name, about five Chinese characters / 10 columns, e.g. \"A 線\"; --name is the longer one for the team panel)"
 
 const (

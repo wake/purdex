@@ -105,6 +105,9 @@ func run(cfgPath string) error {
 	if err := queue.Migrate(ctx, st.DB()); err != nil {
 		return err
 	}
+	// one record per run, for the crash-loop rule (spec §13.1); a failure to write it must not stop the host from starting
+	startedAt := time.Now() // one stamp for every try, so a retry records the same start
+	recordStart(ctx, func() error { return st.RecordStartAt(startedAt, buildinfo.Version, "") }, startRetryDelays, log.Printf)
 	broker := daemon.NewBroker()
 	// The one lock table of this host: the fast lane's runs and the worker's claims take their keys from it. The quarantine store holds
 	// the keys of the jobs whose commands were not proven stopped; their holds go back before anything can take a lock, and a host that
@@ -160,10 +163,14 @@ func run(cfgPath string) error {
 		usage.Observe(now, snap, c)
 	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
+	var d *daemon.Daemon                      // the sampler's gate reads its pool, which exists once the daemon does
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
+		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
+		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
+		Queued:      func() (int, error) { return q.CountQueued(ctx) },
 		// until WWD-6 a queue job is outside the gate's slots, so the host's own gate is counted (#3447)
 		GateHeavyFull: gateheld.New(gate.DefaultConfigPath(), log.Printf).HeavyFull,
 	})
@@ -174,7 +181,7 @@ func run(cfgPath string) error {
 		}
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
-	d := daemon.New(daemonOptions(daemonParts{
+	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
 		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st,
 	}))

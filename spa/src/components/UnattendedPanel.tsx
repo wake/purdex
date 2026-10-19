@@ -7,6 +7,9 @@
 // A shown host that cannot be reached (`unreachableIds`) is not asked but named above the list: its daemon may still be
 // approving. When no host can be reached there is no list to be empty, so only those lines show.
 //
+// A host whose daemon sends `log` (`team.decision_log.v1`, name pool v2 spec §8) is shown by it instead (UnattendedLogSection: the latest 30 decisions of the team approvals and the
+// switch's own records, newest first across hosts); the list above stays for the hosts that do not, and names the hosts that could not be read or reached either way.
+//
 // Above that list (relay quota spec §3.5, plan RQ-A): 「接力額度」 (UnattendedQuotaSection: a stepper per session, for hosts
 // whose daemon lists `team.relay_quota.v1`) and 「額度用完，等你核准」 (UnattendedHeldSection, only when the daemon sent held
 // requests). The first page is read through the shared reader (unattended-reader.ts, journal v5 §3.9): it joins a read the
@@ -22,6 +25,8 @@ import { FloatingPanel } from './FloatingPanel'
 import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSection'
 import { UnattendedPausedSection } from './UnattendedPausedSection'
 import { UnattendedHeldSection, type HeldRow } from './UnattendedHeldSection'
+import { UnattendedLogSection } from './UnattendedLogSection'
+import { mergeLogs } from '../lib/team/unattended-log'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
@@ -33,7 +38,7 @@ import { HOST_READ_TIMEOUT_MS, readFirstPage, watchHost } from '../lib/team/unat
 import { hostIdentityNow } from '../lib/team/quota-host'
 import { useHostStore } from '../stores/useHostStore'
 import { sinceText } from '../lib/team/time-text'
-import type { Approval, UnattendedView } from '../lib/team/types'
+import type { Approval, UnattendedLogEntry, UnattendedView } from '../lib/team/types'
 
 const PANEL_WIDTH = 480
 
@@ -44,6 +49,10 @@ interface HostPages {
   nextBefore?: number
   /** The switch's last turn-on (ms), 0 = never. */
   since: number
+  /** The host's log (`team.decision_log.v1`), when its daemon sends one: it then stands in for this host's `rows` in the panel. */
+  log?: UnattendedLogEntry[]
+  /** The first read failed: nothing is known of this host, so it is neither a log host nor a list host (it is named in the notes). */
+  unread?: boolean
   /** The code of the last failed read (kept with the rows loaded before it); absent = the last read worked. */
   failed?: string
 }
@@ -109,7 +118,7 @@ function readPage(life: Lifecycle, hostId: string, before: number): Promise<Unat
 }
 
 function firstPage(v: UnattendedView): HostPages {
-  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since }
+  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since, ...(v.log !== undefined ? { log: v.log } : {}) }
 }
 
 const quotaHostOf = (hostId: string): boolean => useUnattendedStore.getState().byHost[hostId]?.quotaSupport === 'yes'
@@ -160,7 +169,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         const current = () => !life.cancelled && mine === gen && hostIdentityNow(hostId) === identity
         void readFirstPage(hostId, join.signal).then(
           firstPage,
-          (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e) }),
+          (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e), unread: true }),
         ).then((p) => { if (current()) setPages((cur) => ({ ...cur, [hostId]: p })) })
         previous?.()
       }
@@ -196,7 +205,8 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     const life = lifeRef.current
     if (pagingNow.current || life === null || life.cancelled) return
     // Only the hosts that said "more" (and whose cursor we hold): a host at its last page is not asked again.
-    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined)
+    // a log host's `approved` page is the older App's: it is not asked for, and a host that could not be read has no cursor
+    const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined && pages[h].log === undefined)
     if (todo.length === 0) return
     pagingNow.current = true
     setPaging(true)
@@ -225,11 +235,19 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   // Busy only while nothing has come back (no hosts to ask = nothing to wait for); "empty" only once every host has.
   const busy = hosts.length > 0 && answered.length === 0
   const settled = answered.length === hosts.length
-  const merged = answered.flatMap((hostId) => pages[hostId].rows.map((a) => ({ hostId, a })))
+  // A host whose daemon sends a log is shown by it (the latest 30 decisions and the switch's records); the "approved since you left" list stays for the hosts that do not.
+  const logHosts = answered.filter((h) => pages[h].log !== undefined)
+  const listHosts = answered.filter((h) => pages[h].log === undefined && pages[h].unread !== true)
+  const logRows = mergeLogs(logHosts.map((hostId) => ({ hostId, log: pages[hostId].log! })))
+  const merged = listHosts.flatMap((hostId) => pages[hostId].rows.map((a) => ({ hostId, a })))
     .sort((x, y) => timeOf(y.a) - timeOf(x.a))
   const failed = answered.filter((h) => pages[h].failed !== undefined)
-  const since = Math.min(...answered.map((h) => pages[h].since).filter((s) => s > 0))
-  const hasMore = answered.some((h) => pages[h].nextBefore !== undefined)
+  const since = Math.min(...listHosts.map((h) => pages[h].since).filter((s) => s > 0))
+  const hasMore = listHosts.some((h) => pages[h].nextBefore !== undefined)
+  // The list's own section: for hosts without a log, and wherever it names a host it could not read or reach (those lines belong to the panel, not to a list). With no host
+  // answered yet it is today's empty panel.
+  const showList = logHosts.length === 0 || listHosts.length > 0
+  const showNotes = showList || failed.length > 0 || unreachable.length > 0
   const supportOf = useUnattendedStore((s) => s.byHost)
   // The quota part is the host's LAST read (the store's), shown once this panel's own first read of it came back.
   const reads = useRelayQuotaStore((s) => s.reads)
@@ -251,12 +269,13 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         <UnattendedPausedSection hostIds={hosts} />
         <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
         <UnattendedHeldSection rows={held} />
-        <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
-          <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>
-          {Number.isFinite(since) && (
+        {logHosts.length > 0 && <UnattendedLogSection rows={logRows} multiHost={hosts.length + unreachable.length > 1} />}
+        {showNotes && <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
+          {showList && <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>}
+          {showList && Number.isFinite(since) && (
             <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
           )}
-          {settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
+          {showList && settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
             <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
           )}
           {unreachable.map((hostId) => (
@@ -289,7 +308,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
               {t('unattended.panel.more')}
             </button>
           )}
-        </section>
+        </section>}
       </div>
     </FloatingPanel>
   )

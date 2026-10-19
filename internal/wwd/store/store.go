@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,7 +44,12 @@ const startsDDL = `CREATE TABLE IF NOT EXISTS wwd_starts (id INTEGER PRIMARY KEY
 const alertsDDL = `CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, kind TEXT NOT NULL, level TEXT NOT NULL, since_ms INTEGER NOT NULL, last_ms INTEGER NOT NULL, cleared_ms INTEGER, detail TEXT NOT NULL DEFAULT '')`
 
 // Store is the open wwd.db.
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+	// alertMu serializes RaiseAlert: its read-then-write transaction cannot upgrade to a writer while another one holds the lock
+	// (SQLITE_BUSY at once, the busy timeout does not apply), and wwd is the only process that writes alerts.
+	alertMu sync.Mutex
+}
 
 // Open opens (creating if need be) wwd.db at path and migrates the host tables.
 // WAL and a long busy timeout let the queue and the host state share the file.

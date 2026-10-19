@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -281,6 +282,15 @@ type Module struct {
 	// Picking and storing a pool name, and settling two holders of one, are
 	// serialised.
 	namePicker NamePicker
+	// history, familiar and leads feed the picking rules (namepool_rules.go): this host's name history, the other hosts'
+	// familiar sets, and the lead:true persona codes.
+	nameHistory NameHistoryReader
+	familiar    FamiliarSource
+	leads       atomic.Pointer[map[string]bool]
+	// poolGen makes the pool and the lead flags of one persona collection visible together: bindPersonas holds the write side
+	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
+	poolGen            sync.RWMutex
+	afterPoolPublished func()
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.
