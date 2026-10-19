@@ -105,3 +105,36 @@ describe('FleetHistory', () => {
     expect(h.rawCount('a')).toBe(2)
   })
 })
+
+describe('FleetHistory.seedRaw (the 5 min range filled from the daemon\'s history)', () => {
+  const at = (n: number) => 1_000_000 + n * 1000
+  const seed = (n: number, cpu: number) => ({ at: at(n), cpu, mem: 1, level: 1, page_rate: 0, disk: 1 })
+
+  it('older readings are put before the ones already there, in time order', () => {
+    const h = new FleetHistory()
+    h.record('h', fast({ at: at(10), cpu: 50 }))
+    h.seedRaw('h', [seed(0, 10), seed(5, 20)])
+    expect(h.series('h', 'cpu', '5m', at(11)).map((p) => [p.t, p.avg])).toEqual([[at(0), 10], [at(5), 20], [at(10), 50]])
+  })
+
+  it('a reading at the same time as one already there is kept once, the one already there wins', () => {
+    const h = new FleetHistory()
+    h.record('h', fast({ at: at(10), cpu: 50 }))
+    h.seedRaw('h', [seed(10, 99)])
+    expect(h.series('h', 'cpu', '5m', at(11)).map((p) => p.avg)).toEqual([50])
+  })
+
+  it('readings older than the raw window are dropped, and the 1 h+ buckets are not touched', () => {
+    const h = new FleetHistory()
+    h.record('h', fast({ at: at(900), cpu: 50 }))
+    h.seedRaw('h', [seed(0, 10)])
+    expect(h.rawCount('h')).toBe(1)
+    expect(h.bucketCount('h')).toBe(1)
+  })
+
+  it('seeding a host with no history yet starts one', () => {
+    const h = new FleetHistory()
+    h.seedRaw('h', [seed(0, 10), seed(5, 20)])
+    expect(h.series('h', 'cpu', '5m', at(6)).map((p) => p.avg)).toEqual([10, 20])
+  })
+})

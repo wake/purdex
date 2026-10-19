@@ -63,6 +63,27 @@ export class FleetHistory {
     }
   }
 
+  /**
+   * Readings the daemon already has (its 5 s history, read when the host tab opens) put into the raw 5 minute track, before and among the
+   * ones this App collected. A time already there keeps its own value; what is older than the raw window is dropped; the 10 s buckets (1 h
+   * and longer) are not touched, they stay what this App saw. Readings carry the five charted items, `load` is not charted.
+   */
+  seedRaw(hostId: string, readings: Array<Pick<FleetFast, 'at' | 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>>): void {
+    let hh = this.hosts.get(hostId)
+    if (!hh) {
+      hh = { lastAt: -Infinity, lastRawAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
+      this.hosts.set(hostId, hh)
+    }
+    const newest = Math.max(hh.lastAt, ...readings.map((r) => r.at))
+    for (const item of HISTORY_ITEMS) {
+      if (item === 'load') continue
+      const tr = hh.items[item]
+      const have = new Set(tr.raw.map((p) => p.t))
+      const add = readings.filter((r) => !have.has(r.at)).map((r) => ({ t: r.at, v: r[item] }))
+      tr.raw = [...tr.raw, ...add].filter((p) => p.t >= newest - RAW_MS).sort((a, b) => a.t - b.t)
+    }
+  }
+
   series(hostId: string, item: HistoryItem, range: HistoryRange, now: number = Date.now()): HistoryPoint[] {
     const tr = this.hosts.get(hostId)?.items[item]
     if (!tr) return []

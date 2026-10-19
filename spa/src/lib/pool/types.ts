@@ -62,6 +62,9 @@ export interface PoolHost {
   load?: PoolLoad
 }
 
+/** `GET /api/pool/facts/history`: the full facts records, oldest first, at the asked step. */
+export interface PoolFactsHistory { step: '1m' | '5s'; records: PoolFacts[] }
+
 export interface SeriesPoint {
   at: number
   zone: PoolZone
