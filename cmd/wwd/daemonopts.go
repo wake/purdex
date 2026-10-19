@@ -26,18 +26,24 @@ type daemonParts struct {
 	FastLane             *localruns.Service
 	Observer             *daemon.Observer
 	Store                *store.Store
+	// Refs is the reader of the clones' manifests, shared with the drift watcher so both use one cache; nil: the daemon makes its own.
+	Refs *refTaskSource
 }
 
 // daemonOptions is the daemon's options. LocalRuns and ClaimRoutes are set together: the claim routes on the socket are what the host's
 // own worker and the fast-lane runners claim, heartbeat and report with, and POST /v1/local-runs opens only together with them.
 func daemonOptions(p daemonParts) daemon.Options {
 	repos := clones.NewSource(p.Cfg.Repos)
+	refs := p.Refs
+	if refs == nil {
+		refs = newRefTaskSource(repos)
+	}
 	return daemon.Options{
 		HostID: p.HostID, Alias: p.Alias, Version: buildinfo.Version,
 		Token: p.Token, Fault: p.Hooks, WorkerEnabled: p.Cfg.Worker.Enabled, Sampler: p.Sampler, Peers: p.Peers,
 		State: p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: repos.Names,
-		ReferenceTasks: newRefTaskSource(repos).Tasks, // the tasks whose qualify.reference is this host, read from the clones' manifests
-		Earned:         p.Store,                       // task labels this host earned or lost (spec §7): the earned ones are advertised; GET /v1/earned-labels on the socket
+		ReferenceTasks: refs.Tasks, // the tasks whose qualify.reference is this host, read from the clones' manifests
+		Earned:         p.Store,    // task labels this host earned or lost (spec §7): the earned ones are advertised; GET /v1/earned-labels on the socket
 		ClaimRoutes:    func(mux *http.ServeMux) { jobsapi.New(p.Queue).WithFault(p.Hooks).WorkerRoutes(mux, false) },
 		Observer:       p.Observer,
 		Alerts:         p.Store, // GET /v1/alerts (spec §13.3): read only until the alert rules write the table (8a-1, 8a-2)

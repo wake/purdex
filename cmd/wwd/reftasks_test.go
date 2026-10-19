@@ -145,6 +145,32 @@ func TestRefTaskSourceFollowsContentNotMetadata(t *testing.T) {
 	}
 }
 
+// With a ttl, two askers in the same moment share one read (a slow disk is met once, not once per asker), a change shows up once the ttl
+// has passed, and what a caller gets is its own copy.
+func TestRefTaskSourceTTLSharesOneReadAndShowsAChangeAfterIt(t *testing.T) {
+	src, file := refRepo(t, refManifest)
+	clock := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	s := newRefTaskSource(src)
+	s.ttl, s.now = 2*time.Second, func() time.Time { return clock }
+
+	first := s.Tasks()
+	if len(first) != 1 {
+		t.Fatalf("%+v", first)
+	}
+	first[0].Task = "scribbled" // a caller changes what it was given
+	if err := os.WriteFile(file, []byte("this is not [valid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Second)
+	if got := s.Tasks(); len(got) != 1 || got[0].Task != "tsc" {
+		t.Fatalf("inside the ttl the answer is the one read before, untouched by the caller's change: %+v", got)
+	}
+	clock = clock.Add(time.Second) // exactly the ttl after the read: read again
+	if got := s.Tasks(); len(got) != 0 {
+		t.Fatalf("after the ttl the broken manifest still contributed: %+v", got)
+	}
+}
+
 // One clone configured under two names gives each name its own tasks.
 func TestRefTaskSourceTwoNamesOneClone(t *testing.T) {
 	one, _ := refRepo(t, refManifest)
