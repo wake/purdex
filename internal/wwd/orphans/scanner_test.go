@@ -311,7 +311,8 @@ func TestScanner_OnlyTheUsersPpid1Shells(t *testing.T) {
 	}
 }
 
-// A loop stays flagged as long as it keeps being above the limit, keeping its first time; a quiet reading drops it, and a new run starts over.
+// A loop stays flagged as long as the last few bursts together are above the limit, keeping its first time. Once it stops, the old bursts
+// age out of the window and it is dropped (not on the first quiet reading: one reading says little); a loop seen again starts a new run.
 func TestScanner_ALoopKeepsItsFirstTimeUntilItGoesQuiet(t *testing.T) {
 	now := t0
 	s := newScanner(&now)
@@ -329,24 +330,94 @@ func TestScanner_ALoopKeepsItsFirstTimeUntilItGoesQuiet(t *testing.T) {
 	s.Observe(now, withChild(shell), c.context())
 	first := s.Report().Loops[0].Since
 
-	now = now.Add(3 * time.Minute)
+	now = now.Add(CheckEvery)
 	c = busy()
 	s.Observe(now, withChild(shell), c.context())
 	if got := s.Report().Loops[0].Since; !got.Equal(first) {
 		t.Fatalf("since moved from %v to %v", first, got)
 	}
 
-	now = now.Add(time.Minute)
-	s.Observe(now, withChild(shell), quiet.context())
-	if r := s.Report(); len(r.Loops) != 0 {
-		t.Fatalf("a quiet reading kept the loop: %+v", r.Loops)
+	dropped := 0
+	for i := 1; i <= rateHistory+1 && dropped == 0; i++ {
+		now = now.Add(CheckEvery)
+		s.Observe(now, withChild(shell), quiet.context())
+		if len(s.Report().Loops) == 0 {
+			dropped = i
+		}
+	}
+	if dropped == 0 || dropped > rateHistory {
+		t.Fatalf("the loop was dropped after %d quiet checks, want within %d (and not before the old bursts aged out)", dropped, rateHistory)
 	}
 
-	now = now.Add(time.Minute)
+	now = now.Add(CheckEvery)
 	c = busy()
-	s.Observe(now, withChild(shell), c.context())
-	if got := s.Report().Loops[0].Since; got.Before(now.Add(-time.Second)) {
-		t.Fatalf("a new run kept the old start: %v", got)
+	calledAt := now
+	s.Observe(calledAt, withChild(shell), c.context())
+	if got := s.Report().Loops[0].Since; !got.Equal(calledAt) {
+		t.Fatalf("a new run kept the old start: %v, scan made at %v", got, calledAt)
+	}
+}
+
+// bursting is a context whose burst sees k new children of shell 500 (the first read has one, already there): at reads 3, 7, 11, ...
+func bursting(shell facts.ProcRec, k int) *ctxOf {
+	base := facts.ProcRec{PID: 8000, PPID: 500, UID: me, Name: "true", Start: t0.Add(-time.Hour)}
+	var tables [][]facts.ProcRec
+	for r := 0; r < 40; r++ {
+		table := []facts.ProcRec{shell, base}
+		for j := 0; j < k; j++ {
+			if r >= 3+4*j {
+				table = append(table, facts.ProcRec{PID: 8100 + j, PPID: 500, UID: me, Name: "true", Start: t0.Add(time.Duration(j) * time.Millisecond)})
+			}
+		}
+		tables = append(tables, table)
+	}
+	return &ctxOf{tables: tables}
+}
+
+// A burst is short, so the rate it gives is coarse (one more child is about 6.7/s): a loop a little over the limit shows one child in
+// some bursts and two in others. Judged one burst at a time it would be lost the first time a burst under-counted and its ten minutes
+// would start over, so it never pushes. The last few bursts are added together.
+func TestScanner_ALoopNearTheLimitIsNotLostToQuantisation(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	counts := []int{1, 2, 2} // 5 new children per 3 bursts of 0.15 s: 11.1 a second
+	absent := 0
+	var checks int
+	for i := 0; i < 28; i++ {
+		c := bursting(shell, counts[i%len(counts)])
+		s.Observe(now, withChild(shell), c.context())
+		if r := s.Report(); i >= 5 && len(r.Loops) == 0 {
+			absent++
+		}
+		checks++
+		now = now.Add(CheckEvery)
+	}
+	r := s.Report()
+	if absent != 0 || len(r.Loops) != 1 {
+		t.Fatalf("the loop was missing from %d of the checks after it was first found; at the end %+v", absent, r.Loops)
+	}
+	// Since was set within the first few checks and kept: by the end it is well past ten minutes
+	if held := now.Add(-CheckEvery).Sub(r.Loops[0].Since); held < forkHold {
+		t.Fatalf("the loop has been held for %v after %d checks, want ≥ %v", held, checks, forkHold)
+	}
+}
+
+const forkHold = 10 * time.Minute
+
+// The same bursts a little under the limit (8.9 a second) never make a loop, however long they go on.
+func TestScanner_ALoopJustUnderTheLimitIsNeverFlagged(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	counts := []int{1, 1, 2} // 4 new children per 3 bursts of 0.15 s: 8.9 a second
+	for i := 0; i < 30; i++ {
+		c := bursting(shell, counts[i%len(counts)])
+		s.Observe(now, withChild(shell), c.context())
+		if r := s.Report(); len(r.Loops) != 0 {
+			t.Fatalf("check %d flagged a %v/s loop: %+v", i, 8.9, r.Loops)
+		}
+		now = now.Add(CheckEvery)
 	}
 }
 

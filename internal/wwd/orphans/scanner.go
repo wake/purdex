@@ -23,6 +23,11 @@ const (
 	// CheckEvery is how often the loop check is made. It reads the process table many times in a few hundred milliseconds, so it is not
 	// made on every 5 s sample.
 	CheckEvery = 30 * time.Second
+	// rateHistory is how many of the latest bursts are added together to judge a shell. One burst is short (about 0.15 s), so its rate is
+	// coarse: one more child is a jump of about 6.7 a second, and a loop a little over the limit shows one child in some bursts and two in
+	// others. Judged one burst at a time it would be lost at the first low one, and its ten minutes would start over. Added up, the
+	// quantisation averages out; the price is that a loop which stops is dropped only when its old bursts have aged out (about 3 minutes).
+	rateHistory = 6
 
 	burstReads = 16
 	burstGap   = 10 * time.Millisecond
@@ -51,8 +56,15 @@ type Scanner struct {
 
 	mu        sync.Mutex
 	report    *advisor.OrphanReport
-	loops     map[loopKey]*loopState
+	loops     map[loopKey]*loopState // the shells above the limit now
+	bursts    map[loopKey][]burst    // the last rateHistory bursts of each ppid-1 shell
 	lastCheck time.Time
+}
+
+// burst is one measurement of one shell: the new children seen, over the time the burst took.
+type burst struct {
+	children int
+	window   time.Duration
 }
 
 // childKey identifies a child process: its pid and its start time.
@@ -74,7 +86,7 @@ type loopState struct {
 
 // New returns a scanner.
 func New(cfg Config) *Scanner {
-	return &Scanner{cfg: cfg, sleep: time.Sleep, clock: time.Now, loops: map[loopKey]*loopState{}}
+	return &Scanner{cfg: cfg, sleep: time.Sleep, clock: time.Now, loops: map[loopKey]*loopState{}, bursts: map[loopKey][]burst{}}
 }
 
 // Report is the latest scan, or nil before the first one has run. The caller may keep it.
@@ -159,17 +171,19 @@ func devKind(name string, argv []string, residentKind string) string {
 	return ""
 }
 
+// resetLoops forgets the run of every shell and its bursts: what was measured can no longer be joined to what comes next.
 func (s *Scanner) resetLoops() {
 	s.mu.Lock()
 	s.loops = map[loopKey]*loopState{}
+	s.bursts = map[loopKey][]burst{}
 	s.mu.Unlock()
 }
 
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true}
 
-// checkLoops measures the user's ppid-1 shells that have a child: a burst of table reads a few milliseconds apart counts the distinct
-// children each shell began during it. A shell above LoopRate keeps the time it was first seen above it; one that is quiet, or gone, is
-// dropped, so a new run starts over.
+// checkLoops measures the user's ppid-1 shells: a burst of table reads a few milliseconds apart counts the distinct children each shell
+// began during it. A shell whose last rateHistory bursts together are above LoopRate keeps the time it was first found so; one that falls
+// back under it, or is gone, is dropped, so a new run starts over.
 func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
 	s.mu.Lock()
 	s.lastCheck = now
@@ -227,18 +241,30 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 	window := max(s.clock().Sub(began), burstFloor)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// each shell's rate is its last rateHistory bursts added together; a shell that is gone leaves no history
+	nextBursts := map[loopKey][]burst{}
 	next := map[loopKey]*loopState{}
 	for pid, p := range suspects {
-		rate := float64(len(seen[pid])) / window.Seconds()
+		k := loopKey{pid: pid, start: p.Start}
+		h := append(s.bursts[k], burst{children: len(seen[pid]), window: window})
+		if len(h) > rateHistory {
+			h = h[len(h)-rateHistory:]
+		}
+		nextBursts[k] = h
+		var kids int
+		var span time.Duration
+		for _, b := range h {
+			kids, span = kids+b.children, span+b.window
+		}
+		rate := float64(kids) / span.Seconds()
 		if rate <= LoopRate {
 			continue
 		}
-		k := loopKey{pid: pid, start: p.Start}
 		st := &loopState{name: p.Name, since: now, rate: rate}
 		if old, ok := s.loops[k]; ok {
 			st.since = old.since
 		}
 		next[k] = st
 	}
-	s.loops = next
+	s.bursts, s.loops = nextBursts, next
 }
