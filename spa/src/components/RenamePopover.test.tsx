@@ -358,7 +358,8 @@ describe('RenamePopover peer section', () => {
     const btn = screen.getByTestId('peer-address-p1')
     expect(within(btn).getByText('Alma')).toBeTruthy()
     expect(btn.textContent).not.toContain('ai-chat-story') // the address is the tooltip's, not the row's
-    expect(btn.getAttribute('title')).toContain('mini-lab/ai-chat-story-3a')
+    // the tooltip carries the address with its ref, as the status bar's copy does; the copy action below is the row's own, unchanged
+    expect(btn.getAttribute('title')).toContain(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`)
     fireEvent.click(btn)
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat-story-3a'))
   })

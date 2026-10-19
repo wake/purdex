@@ -11,8 +11,7 @@ import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
 import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
-import type { PeerRow } from '../stores/usePeerStore'
-import { reasonText } from '../lib/peer-display'
+import { peerIdText, reasonText } from '../lib/peer-display'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './status/StatusSegments'
 import { SeatInline } from './SeatSentence'
 import { CcUsageSegments } from './status/UsageSegments'
@@ -21,7 +20,6 @@ import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
 import { keepFocus } from '../lib/keep-focus'
 import { uploadFailureText } from '../lib/upload-failure'
-import { addressName } from '../lib/names/seat'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -52,27 +50,6 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   if (peer.envelope.titlesUnavailable) parts.push(t('peer.titles_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
   return parts.join(' — ')
-}
-
-/**
- * The peer segment's two strings: what the row shows, and what a click copies.
- *
- * Display drops the host; the clipboard keeps it, and keeps the ref. What
- * gets copied is what gets pasted into a handoff and used hours later —
- * exactly the window in which a name drifts or is taken by someone else. The
- * prettier string is the weaker one; it does not belong on the clipboard.
- */
-function peerIdText(row: PeerRow | null): { display: string; value: string } {
-  const address = row?.address ?? ''
-  if (address === '') return { display: '', value: '' }
-  const name = addressName(address)
-  const ref = row?.ref ?? ''
-  // A session whose registry name is not routable is addressed by its ref, so
-  // the address already ends in it and there is no name to bracket: appending
-  // would render `_q34psn [q34psn]`, which says the same thing twice.
-  if (ref === '' || name === ref) return { display: name, value: address }
-  const bracketed = ` [${ref.replace(/^_/, '')}]`
-  return { display: name + bracketed, value: address + bracketed }
 }
 
 interface Props {
