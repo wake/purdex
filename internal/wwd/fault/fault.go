@@ -119,6 +119,7 @@ func (h *Hooks) OwnerBlock() *wire.OwnerState {
 		return nil
 	}
 	if _, err := os.Stat(h.cfg.OwnerActiveFile); err == nil {
+		h.warn("wwd: fault owner_active_file: %s exists, the owner counts as active for the worker", h.cfg.OwnerActiveFile)
 		return &wire.OwnerState{Active: true, Reason: "fault: owner_active_file"}
 	} else if os.IsNotExist(err) {
 		return &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
