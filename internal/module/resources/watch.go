@@ -18,6 +18,7 @@ import (
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/watchsettings"
+	"github.com/wake/purdex/internal/wwd/facts"
 )
 
 // The load watcher runs on the sampler's tick (host-load-control spec §12, plan W1b-3): after a good sample it hands the
@@ -34,6 +35,8 @@ type watchEnv struct {
 	isGate func(ctx context.Context, pid int) bool
 	argv   func(ctx context.Context, pid int) []string
 	cwd    func(ctx context.Context, pid int) string
+	// jobMark says whether pid carries a wwd job's WWD_JOB mark, by wwd's one shared check (facts.JobOfPID); nil: none does.
+	jobMark func(ctx context.Context, pid int) bool
 	// started is when pid started (the zero time: unknown).
 	started func(ctx context.Context, pid int) time.Time
 	// footprint is the physical footprint of pid (ok=false: not to be had); nil: the detector counts by RSS (#3072).
@@ -71,6 +74,10 @@ func defaultWatchEnv() watchEnv {
 			return info.Argv
 		},
 		cwd: lsofCwd,
+		jobMark: func(_ context.Context, pid int) bool {
+			_, ok := facts.JobOfPID(pid)
+			return ok
+		},
 		started: func(ctx context.Context, pid int) time.Time {
 			snap, err := iagent.SharedProcessSnapshot(ctx)
 			if err != nil {
@@ -238,6 +245,7 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 		IsGate:  func(pid int) bool { return env.isGate(ctx, pid) },
 		Argv:    func(pid int) []string { return env.argv(ctx, pid) },
 		Cwd:     func(pid int) string { return env.cwd(ctx, pid) },
+		JobMark: func(pid int) bool { return env.jobMark != nil && env.jobMark(ctx, pid) },
 		Started: func(pid int) time.Time {
 			if env.started == nil {
 				return time.Time{}

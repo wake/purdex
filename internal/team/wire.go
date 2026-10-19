@@ -106,7 +106,7 @@ const (
 // Limits (spec §6.1, §6.2, §9.1)
 const (
 	DefaultMaxMembers = 3
-	MaxMaxMembers     = 8
+	MaxMaxMembers     = 9   // 8 before team.max_members.v2 (spec: name pool v2 §5.1)
 	DefaultWaitS      = 540 // 9 min
 	MaxWaitS          = 600 // 10 min
 	LeaseS            = 30
@@ -130,7 +130,7 @@ type Origin struct {
 // LeadPayload is Approval.Payload for KindLead.
 type LeadPayload struct {
 	Reason     string   `json:"reason"`
-	MaxMembers int      `json:"max_members"` // normalised: 0→3, cap 8
+	MaxMembers int      `json:"max_members"` // normalised: 0→3, cap 9
 	Roots      []string `json:"roots"`       // normalised: absolute, Clean; default [origin.Cwd]
 	TeamName   string   `json:"team_name"`   // normalised (NormaliseTeamName); always present, "" = none
 	TeamLabel  string   `json:"team_label"`  // normalised (NormaliseTeamLabel); always present, "" = none requested

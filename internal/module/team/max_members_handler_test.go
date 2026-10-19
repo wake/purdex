@@ -40,8 +40,8 @@ func TestMaxMembersPut_OnlyTheAppAndInRange(t *testing.T) {
 	if code, body := f.putMax("", 4, appClientMM); code != 400 || decodeErr(t, body).Error != team.ErrBadRequest {
 		t.Errorf("no team_id: %d %s", code, body)
 	}
-	// Mutation gate: allow 0 or 9 -> red.
-	for _, n := range []int{0, 9, -1} {
+	// Mutation gate: allow 0 or 10 -> red.
+	for _, n := range []int{0, 10, -1} {
 		if code, body := f.putMax(uid(1), n, appClientMM); code != 400 || decodeErr(t, body).Error != team.ErrBadRequest {
 			t.Errorf("max %d: %d %s, want 400", n, code, body)
 		}
@@ -49,7 +49,7 @@ func TestMaxMembersPut_OnlyTheAppAndInRange(t *testing.T) {
 	if got := f.grantMax(); got != 3 {
 		t.Errorf("refused requests changed max_members to %d", got)
 	}
-	for _, n := range []int{1, 8} {
+	for _, n := range []int{1, 9} {
 		if code, body := f.putMax(uid(1), n, appClientMM); code != 200 {
 			t.Errorf("max %d: %d %s, want 200", n, code, body)
 		}

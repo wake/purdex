@@ -45,6 +45,9 @@ type watchRig struct {
 	gatePath    atomic.Value
 	sampleErr   atomic.Bool
 	unsupported atomic.Bool
+	// jobMark is what the wwd-job mark check answers; jobMarkReads counts the asks
+	jobMark      atomic.Bool
+	jobMarkReads atomic.Int64
 }
 
 const wtick = 20 * time.Second // not the detector's default of 5 s: a pass that ignored Input.Interval would see every gap as a break
@@ -82,6 +85,7 @@ func newWatchRig(t *testing.T, mode string) *watchRig {
 		isGate:   func(context.Context, int) bool { r.isGate.Add(1); return false },
 		argv:     func(context.Context, int) []string { r.argv.Add(1); return []string{"go", "test", "./..."} },
 		cwd:      func(context.Context, int) string { r.cwd.Add(1); return "/work/tree" },
+		jobMark:  func(context.Context, int) bool { r.jobMarkReads.Add(1); return r.jobMark.Load() },
 	}
 	r.m = m
 	return r
@@ -138,6 +142,25 @@ func TestWatch_AHeavyTreeIsRecordedOnceWithOneArgvAndOneCwdRead(t *testing.T) {
 	}
 }
 
+// #3447: the tree of a wwd queue job is recorded with the wwd_job label, found by the one shared "this is a wwd job" check on the root of
+// the tree, asked once for the episode.
+func TestWatch_AWwdJobTreeIsRecordedAsWwdJobWithOneMarkRead(t *testing.T) {
+	r := newWatchRig(t, resources.ModeMeasure)
+	r.jobMark.Store(true)
+	r.setProcs(heavyTree(3))
+	r.ticks(30)
+	recs := r.records()
+	if len(recs) != 1 || recs[0].Label != watch.LabelWWDJob {
+		t.Fatalf("records = %+v", recs)
+	}
+	if r.jobMarkReads.Load() != 1 {
+		t.Fatalf("mark reads %d, want one per episode", r.jobMarkReads.Load())
+	}
+	if strings.Join(recs[0].Argv, " ") != "go test ./..." {
+		t.Fatalf("the command is still recorded: %+v", recs[0])
+	}
+}
+
 // The steady state reads nothing extra: with many trees and none over a threshold there is no argv read, no cwd read and no lock
 // lookup; the only calls are the gate config and the pdx-named processes' gate check.
 func TestWatch_NoTreeOverAThresholdCostsNoArgvCwdOrLockRead(t *testing.T) {
@@ -148,8 +171,8 @@ func TestWatch_NoTreeOverAThresholdCostsNoArgvCwdOrLockRead(t *testing.T) {
 	}
 	r.setProcs(procs)
 	r.ticks(40)
-	if r.argv.Load() != 0 || r.cwd.Load() != 0 || r.lockPID.Load() != 0 || r.isGate.Load() != 0 {
-		t.Fatalf("argv %d cwd %d lock %d isGate %d, all zero", r.argv.Load(), r.cwd.Load(), r.lockPID.Load(), r.isGate.Load())
+	if r.argv.Load() != 0 || r.cwd.Load() != 0 || r.lockPID.Load() != 0 || r.isGate.Load() != 0 || r.jobMarkReads.Load() != 0 {
+		t.Fatalf("argv %d cwd %d lock %d isGate %d jobMark %d, all zero", r.argv.Load(), r.cwd.Load(), r.lockPID.Load(), r.isGate.Load(), r.jobMarkReads.Load())
 	}
 	if len(r.records()) != 0 {
 		t.Fatal("nothing to record")

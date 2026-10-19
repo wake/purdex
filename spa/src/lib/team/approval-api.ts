@@ -10,7 +10,7 @@
 // queues the decision on that code alone.
 import { pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
-import { isApproval, type APIError, type Approval, type ApprovalErrorCode, type DecideRequest, type InflightResponse } from './types'
+import { isApproval, leadNamesOf, type APIError, type Approval, type ApprovalErrorCode, type DecideRequest, type InflightResponse, type LeadNameCandidate } from './types'
 
 /** `fetchInflight`'s budget: the restart confirm's own (daemon-restart.ts `WORKER_COUNT_TIMEOUT_MS`). */
 export const INFLIGHT_TIMEOUT_MS = 3_000
@@ -89,6 +89,14 @@ export function decideApproval(hostId: string, id: string, body: DecideRequest):
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+/** `GET /api/team/approvals/{id}/lead-names`: the names a lead can take now (name pool v2 §5.3). A body without the list is `bad_response`. */
+export async function fetchLeadNames(hostId: string, id: string): Promise<LeadNameCandidate[]> {
+  const r = await send<unknown>(hostId, `/api/team/approvals/${encodeURIComponent(id)}/lead-names`, { method: 'GET' })
+  const names = isRecord(r) ? leadNamesOf(r.lead_names) : undefined
+  if (names === undefined) throw new ApprovalApiError(200, 'bad_response', 'the lead names are not the wire shape')
+  return names
 }
 
 /** `GET /api/team/adoptions/{approval_id}?wait=<s>` (cross-host spec §4.3): the membership a remote adopt led to. */

@@ -84,7 +84,8 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			if err != nil {
 				return RawMem{}, err
 			}
-			m := RawMem{TotalBytes: total, PageSize: uint64(ps), Free: vm.Free, Inactive: vm.Inactive, Pageouts: vm.Pageouts}
+			m := RawMem{TotalBytes: total, PageSize: uint64(ps), Free: vm.Free, Inactive: vm.Inactive, Pageouts: vm.Pageouts,
+				Decompressions: vm.Decompressions, HaveDecompressions: true}
 			if lvl, err := hostmem.Level(); err == nil {
 				m.Level = lvl
 			}

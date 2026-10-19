@@ -19,13 +19,14 @@ Pages wired down:                             137688.
 "Translation faults":                    61269535748.
 Pageouts:                                      123456.
 Swapouts:                                       78901.
+Decompressions:                          13935860366.
 `
 
 func TestParseVMStat(t *testing.T) {
 	v, err := ParseVMStat([]byte(vmStatSample))
 	require.NoError(t, err)
 	assert.Equal(t, VMStat{PageSize: 16384, Free: 68039, Inactive: 318361, Speculative: 13661, Pageouts: 123456, Swapouts: 78901,
-		HaveMemory: true, HaveCounters: true}, v)
+		Decompressions: 13935860366, HaveMemory: true, HaveCounters: true}, v)
 	assert.NoError(t, v.MemoryErr())
 	assert.NoError(t, v.CountersErr())
 }

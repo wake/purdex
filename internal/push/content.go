@@ -73,6 +73,8 @@ type Content struct {
 	// cursor of the event an agent push is about (purdex.event_cursor); an empty epoch leaves it out.
 	Reads       []reads.Read
 	EventCursor reads.Cursor
+	// AlertHost is the host a wwd alert is about (payload purdex.alert_host); host_id stays the host that sends the push. "" = none.
+	AlertHost string
 }
 
 // maxReads is how many reads one push carries.
@@ -314,7 +316,7 @@ func firstReads(rs []reads.Read) []reads.Read {
 
 func (c Content) payload(hostID, body string, rs []reads.Read) ([]byte, error) {
 	purdex := map[string]any{"host_id": hostID, "kind": c.Kind}
-	for k, v := range map[string]string{"approval_id": c.ApprovalID, "session_code": c.SessionCode, "session_id": c.SessionID, "session_title": c.SessionName, "event": c.Event} {
+	for k, v := range map[string]string{"approval_id": c.ApprovalID, "session_code": c.SessionCode, "session_id": c.SessionID, "session_title": c.SessionName, "event": c.Event, "alert_host": c.AlertHost} {
 		if v != "" {
 			purdex[k] = v
 		}
