@@ -366,6 +366,19 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
     be renamed in place.
   - Clicking a session switches to its workspace and tab.
   - The toggle state is per device.
+- **Where the App gets a session's lineage root** (decided in NA-6a, #3495):
+  - The source is the `quotas` of `GET /api/team/unattended` (`team.relay_quota.v1`). The daemon gives one row per
+    live session of the host, with `session_id`, `root_session_id` and `address` (`internal/team/wire_quota.go`). The
+    App matches `session_id` against the agent session id that its pane records.
+  - A host with `task_groups.v1` always has `team.relay_quota.v1`. If one does not, all of that host's sessions show
+    under 「未分組」; the App does not guess.
+  - The App reads it only while the task-group view is open: once when the view opens, once on a host-events
+    reconnect, and once (debounced) when it sees a live session that the list does not have. It always goes through
+    the existing shared reader.
+  - **Display** may put a session whose root is not known yet under 「未分組」 (a relayed session, before the read).
+  - **Writes** (加入任務編組, 新建任務編組, a drop) need the real root. Until it is known, the menu items are disabled
+    with 「讀取中」 and a drop is refused. The App never stores a session's own id as its root: after the next relay
+    that session would drop out of its group, which silently corrupts the data.
 
 ## 8. Unattended v2 (U16; 1f reviews)
 
@@ -429,6 +442,12 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - `WorkerStatusBar.tsx:73`.
 - `<Avatar>`: one component in sizes 16 / 18 / 24 / 44. It falls back to initials on the host colour when the image is
   missing or empty.
+- **Trust boundary** (NA-2, #3555 / #3563): the App resolves a persona only from an address that the daemon resolved:
+  - a deck sender whose `from.kind` is `peer` and that is not marked `unverified`;
+  - an approval's `Origin.address`, a quota row's `address`.
+  - It never resolves a name taken from message text, a plugin notice, or a registry name (`Origin.name`, which a
+    session sets itself). Otherwise a session named `x-kenji` could wear Kenji's face. A sender that is not resolved
+    keeps today's label.
 
 ### 9.3 Where identity becomes avatar + name
 
@@ -436,7 +455,8 @@ This is the default classification from the page's probe table. **[待確認]**
 
 | Place | Change |
 |---|---|
-| deck peer caption `來自 …` (`deck-format.ts:34`, `UserBlock.tsx:52`), chat peer line (`ChatPeerLine.tsx`), queued `來自 …` (`PendingTail.tsx:23`) | avatar + name; the sender string is the address (`convmodel.From.Name`), so `seatOf` resolves it |
+| deck peer caption `來自 …` (`deck-format.ts:34`, `UserBlock.tsx:52`), chat peer line (`ChatPeerLine.tsx`) | avatar + name; the sender string is the address (`convmodel.From.Name`), so `seatOf` resolves it |
+| queued `來自 …` (`PendingTail.tsx:23`) | **unchanged, plain text** (decided 10-19, below) |
 | team panel, sidebar beads, tooltips, ghost lead, ended list, workbook title, folder "who uses it" (all through `labelOf`, `team-views.ts:118`) | the `[agent][host][avatar][name][title]` structure; tooltips and titles use the name |
 | approval dialog titles, pushes, toasts (`approvalSessionLabel`, `approval-format.ts:9`) | the name, with the title after it; the dialog's address row keeps the full address |
 | unattended panel rows and quota table | members and solo sessions by name; a lead row keeps the team name (JV-5a) |
@@ -444,6 +464,16 @@ This is the default classification from the page's probe table. **[待確認]**
 | status bar peer id (`StatusBar.tsx:63`), rename popover address (`RenamePopover.tsx:119`) | avatar + name; the tooltip and the copy action keep the full address + ref |
 | tab titles, session lists, host page, session picker | unchanged (10-17 decision) |
 | journal card actor / owner | later: needs structured seats from the daemon (§10, NP-7) |
+
+**Why the queued line stays plain text** (88, 2026-10-19; #3559 in Backlog):
+- The queued entries come from Claude Code's `queue-operation` rows (`internal/convmodel/ccnorm/queue.go`). Those rows
+  carry only the text and no origin, and `queueSource` only checks whether the text starts with a peer envelope.
+- A verified peer origin appears only once the message enters the turn, on the user row (`ccnorm/user.go`, kind
+  `peer`). While a message is queued, the daemon has nothing that proves its sender was confirmed by the transport.
+- So the line stays plain text. Once the message is delivered, the deck caption shows the avatar + name as in the first
+  row. Matching queued text against recent deliveries would be a new cross-module mechanism with its own impersonation
+  risk, for a line that lasts only until the turn takes the message.
+- #3559 is done when Claude Code carries an origin on queued rows.
 
 ### 9.4 Deck speech (U15)
 
