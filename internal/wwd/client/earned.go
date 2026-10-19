@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -21,4 +22,24 @@ func (c *Client) EarnedLabels(ctx context.Context) (list wire.EarnedLabelList, k
 		return wire.EarnedLabelList{Labels: []wire.EarnedLabel{}}, false, nil
 	}
 	return wire.EarnedLabelList{}, false, err
+}
+
+// QuarantineLabel is POST /v1/earned-labels/quarantine (local socket only): this host stops advertising the label it earned, until the
+// task is qualified again. A StatusError with Code 404 says the host has no such earned label.
+func (c *Client) QuarantineLabel(ctx context.Context, label string) error {
+	return c.changeLabel(ctx, "quarantine", label)
+}
+
+// ReleaseLabel is POST /v1/earned-labels/release (local socket only): this host lets go of the label (the row is deleted; the host holds
+// it again by qualifying for it).
+func (c *Client) ReleaseLabel(ctx context.Context, label string) error {
+	return c.changeLabel(ctx, "release", label)
+}
+
+func (c *Client) changeLabel(ctx context.Context, action, label string) error {
+	if !wire.ValidTaskLabel(label) {
+		return errors.New("not a task label (task:<repo>/<task>): " + label)
+	}
+	_, err := c.send(ctx, http.MethodPost, "/v1/earned-labels/"+action, nil, map[string]string{"label": label}, maxBody)
+	return err
 }

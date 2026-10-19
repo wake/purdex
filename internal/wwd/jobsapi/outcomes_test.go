@@ -42,6 +42,7 @@ func TestDisagreementsAreServedBySubjectAndCursor(t *testing.T) {
 	require.NoError(t, all.Validate())
 	assert.Equal(t, "mserv", all.Host)
 	assert.Equal(t, r.q.Origin(), all.Origin)
+	assert.True(t, all.Now.Equal(r.q.Now()), "the origin says what time its clock gave when it answered: the reader sets it against its own")
 	require.Len(t, all.Items, 3)
 	assert.False(t, all.More)
 	assert.Equal(t, all.Items[2].ID, all.Cursor)

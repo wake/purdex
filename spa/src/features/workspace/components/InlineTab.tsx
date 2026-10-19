@@ -9,6 +9,7 @@ import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { Avatar } from '../../../components/Avatar'
 import { useSessionSeat } from '../../../hooks/useSessionSeat'
 import { useSeat } from '../../../lib/names/seat'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { HostBadge } from '../../../components/HostBadge'
@@ -84,7 +85,9 @@ export function InlineTab({
   const shownTitle = seatOverride?.title || displayTitle
   const bySession = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
   const bySeat = useSeat(seatOverride?.address ?? '')
-  const seat = seatOverride ? bySeat : bySession
+  // Only the task-group view dresses a row as its persona; the workspace view keeps the plain agent-icon row (owner call 10-20, overturning spec §9.6 U10).
+  const groupsView = useTeamUiStore((s) => s.sidebarView === 'groups')
+  const seat = groupsView ? (seatOverride ? bySeat : bySession) : null
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
   // across the activity bar border.

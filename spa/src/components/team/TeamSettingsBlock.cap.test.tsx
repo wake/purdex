@@ -92,9 +92,9 @@ describe('the cap section', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4, in_use: 1 })])
     show()
-    fireEvent.click(within(cap()).getByRole('button', { name: '調高上限' }))
+    fireEvent.click(within(cap()).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' }))
     expect(mockedCap).toHaveBeenLastCalledWith({ hostId: A, teamId: 't-l1', label: 'Team l1' }, 5)
-    fireEvent.click(within(cap()).getByRole('button', { name: '調低上限' }))
+    fireEvent.click(within(cap()).getByRole('button', { name: '調低成員上限（Team l1 · mlab）' }))
     expect(mockedCap).toHaveBeenLastCalledWith({ hostId: A, teamId: 't-l1', label: 'Team l1' }, 3)
   })
 
@@ -108,8 +108,8 @@ describe('the cap section', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', over)])
     show()
-    expect(within(cap()).getByRole('button', { name: '調低上限' }).hasAttribute('disabled')).toBe(minusDisabled)
-    expect(within(cap()).getByRole('button', { name: '調高上限' }).hasAttribute('disabled')).toBe(plusDisabled)
+    expect(within(cap()).getByRole('button', { name: '調低成員上限（Team l1 · mlab）' }).hasAttribute('disabled')).toBe(minusDisabled)
+    expect(within(cap()).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' }).hasAttribute('disabled')).toBe(plusDisabled)
   })
 
   it('both buttons are disabled while that team\'s request is out, and free again after', () => {
@@ -118,18 +118,18 @@ describe('the cap section', () => {
     const one = show('l1').container
     const two = show('l2').container
     act(() => { useMaxMembersStore.getState().begin(teamKey(A, 't-l1'), { token: 1, identity: 'x' }) })
-    expect(within(capIn(one)).getByRole('button', { name: '調高上限' })).toBeDisabled()
-    expect(within(capIn(one)).getByRole('button', { name: '調低上限' })).toBeDisabled()
-    expect(within(capIn(two)).getByRole('button', { name: '調高上限' })).toBeEnabled() // another team is not held
+    expect(within(capIn(one)).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' })).toBeDisabled()
+    expect(within(capIn(one)).getByRole('button', { name: '調低成員上限（Team l1 · mlab）' })).toBeDisabled()
+    expect(within(capIn(two)).getByRole('button', { name: '調高成員上限（Team l2 · mlab）' })).toBeEnabled() // another team is not held
     act(() => { useMaxMembersStore.getState().end(teamKey(A, 't-l1'), 1) })
-    expect(within(capIn(one)).getByRole('button', { name: '調高上限' })).toBeEnabled()
+    expect(within(capIn(one)).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' })).toBeEnabled()
   })
 
   it('shows what the roster says and follows its events: no optimistic number', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 3 })])
     show()
-    fireEvent.click(within(cap()).getByRole('button', { name: '調高上限' }))
+    fireEvent.click(within(cap()).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' }))
     expect(within(cap()).getByTestId('cap-value')).toHaveTextContent('3') // the click changed nothing on screen
     act(() => { useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4 })]) })
     expect(within(cap()).getByTestId('cap-value')).toHaveTextContent('4')
@@ -148,7 +148,7 @@ describe('why a − is off', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 3, in_use: 3 })])
     show()
-    const minus = within(cap()).getByRole('button', { name: '調低上限' })
+    const minus = within(cap()).getByRole('button', { name: '調低成員上限（Team l1 · mlab）' })
     expect(minus).toBeDisabled()
     expect(minus.parentElement).toHaveAttribute('title', '目前有 3 位 member，要先讓 member 離開才能調低')
   })
@@ -157,11 +157,11 @@ describe('why a − is off', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 1, in_use: 0 })])
     const { unmount } = show()
-    expect(within(cap()).getByRole('button', { name: '調低上限' }).parentElement).toHaveAttribute('title', '上限最少是 1')
+    expect(within(cap()).getByRole('button', { name: '調低成員上限（Team l1 · mlab）' }).parentElement).toHaveAttribute('title', '上限最少是 1')
     unmount()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 8, in_use: 2 })])
     show()
-    expect(within(cap()).getByRole('button', { name: '調高上限' }).parentElement).toHaveAttribute('title', '上限最多是 8')
+    expect(within(cap()).getByRole('button', { name: '調高成員上限（Team l1 · mlab）' }).parentElement).toHaveAttribute('title', '上限最多是 8')
   })
 })
 
