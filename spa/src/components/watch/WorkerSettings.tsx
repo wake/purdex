@@ -152,7 +152,7 @@ export function WorkerSettings({ alias }: { alias: string }) {
     const baseAt = host.facts?.at ?? null
     try {
       for (;;) {
-        const sending = wantedRef.current
+        const sending: PoolWorker | null = wantedRef.current
         const target = controlSource(usePoolStore.getState().sourceHostId)
         if (sending === null || target === null) break
         await putWorker(target, alias, sending)
