@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -281,6 +282,11 @@ type Module struct {
 	// Picking and storing a pool name, and settling two holders of one, are
 	// serialised.
 	namePicker NamePicker
+	// history, familiar and leads feed the picking rules (namepool_rules.go): this host's name history, the other hosts'
+	// familiar sets, and the lead:true persona codes.
+	nameHistory NameHistoryReader
+	familiar    FamiliarSource
+	leads       atomic.Pointer[map[string]bool]
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.

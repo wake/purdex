@@ -471,6 +471,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// instead of two ref characters (name pool spec); deploy every host
 		// together, uniqueness across hosts holds only when all run it.
 		peersMod.WithNamePool(peersmod.RandomNamePicker())
+		// The picking rules read who has been a lead and who worked with whom (name pool v2 spec §6.2).
+		peersMod.WithNameHistory(meta.NameHistory())
 	}
 	c.AddModule(peersMod)
 	// resources samples the host on its own ticker; it reads the session

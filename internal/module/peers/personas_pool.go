@@ -37,6 +37,17 @@ func buildPool(set personas.Set) (recognised map[string]string, pickable []strin
 	return recognised, pickable
 }
 
+// leadSet is the codes of the personas flagged lead:true (spec §4.1); the rules take them last.
+func leadSet(set personas.Set) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range set.Items {
+		if p.Lead {
+			out[p.Code] = true
+		}
+	}
+	return out
+}
+
 // personaRetryMax bounds the retries of a read that fails: the delays double from a second up to half a minute, so a read that
 // never works (a stored value that does not read) is given up after about two minutes; the next change starts over.
 const personaRetryMax = 8
@@ -78,6 +89,8 @@ func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
 		}
 		recognised, pickable := buildPool(set)
 		ipeers.SetPool(recognised, pickable)
+		leads := leadSet(set)
+		m.leads.Store(&leads)
 	}
 	// Subscribe first, then read: a change that lands between the two would be told to nobody, and the first read may predate it.
 	// A change told before the read finishes only makes the read run once more, and it reads the stored set again.

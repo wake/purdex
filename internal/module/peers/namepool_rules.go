@@ -1,0 +1,69 @@
+package peers
+
+import (
+	"context"
+	"errors"
+
+	"github.com/wake/purdex/internal/store"
+)
+
+// The wiring of the picking rules (namerules.go) into the naming passes: the lead flags of the personas, the name history of
+// this host, and the familiar sets of the other hosts become a nameRuleInput under the pool lock.
+
+// NameHistoryReader is the name history the rules read (store.NameHistoryStore): who has been a lead, who worked with whom.
+type NameHistoryReader interface {
+	Leads(ctx context.Context) ([]store.NameLead, error)
+	Pairs(ctx context.Context) ([]store.NamePair, error)
+	// Familiar is the codes this host has seen, most recent first, at most limit (the envelope's names.familiar).
+	Familiar(ctx context.Context, limit int) ([]string, error)
+}
+
+// WithNameHistory wires the name history; nil (the default) means the rules see none, which is the v1 behaviour for a build
+// without it.
+func (m *Module) WithNameHistory(h NameHistoryReader) *Module {
+	m.nameHistory = h
+	return m
+}
+
+// leadCodes is the set of persona codes whose persona is lead:true, as of the last collection the pool followed.
+func (m *Module) leadCodes() map[string]bool {
+	if p := m.leads.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// ruleInput builds the input of the rules for the free names. A history that cannot be read does not stop the naming: the
+// pick goes on as if there were none, and says so. Called with the pool lock held.
+func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
+	in := nameRuleInput{Free: free, Lead: m.leadCodes(), Familiar: map[string]bool{}, AnyPairs: map[string]int{}}
+	if m.namePicker != nil {
+		in.Pick = m.namePicker.Pick
+	}
+	if m.nameHistory != nil {
+		leads, lerr := m.nameHistory.Leads(ctx)
+		pairs, perr := m.nameHistory.Pairs(ctx)
+		if err := errors.Join(lerr, perr); err != nil {
+			m.logf("peers: name pool: cannot read the name history, picking as if there were none: %v", err)
+		} else {
+			for _, l := range leads {
+				in.Familiar[l.Code] = true
+			}
+			for _, p := range pairs {
+				in.Familiar[p.MemberCode] = true
+				in.AnyPairs[p.MemberCode] += p.Count
+			}
+		}
+	}
+	if m.familiar != nil {
+		for c := range m.familiar.RemoteFamiliar() {
+			in.Familiar[c] = true
+		}
+	}
+	return in
+}
+
+// pickOther is rule 3, for a conversation that is not a team member and not a lead's card: ok is false when nothing is free.
+func (m *Module) pickOther(ctx context.Context, free []string) (string, bool) {
+	return pickForOther(m.ruleInput(ctx, free))
+}
