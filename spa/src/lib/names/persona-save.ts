@@ -46,6 +46,14 @@ export class PersonaStaleError extends Error {
   }
 }
 
+/** The source is offline and another host's copy stands in: that copy is shown, never written as if it were the source. */
+export class PersonaReadOnlyError extends Error {
+  constructor() {
+    super('the source host is offline; personas are read-only')
+    this.name = 'PersonaReadOnlyError'
+  }
+}
+
 function sameBase(a: EditBase | null, b: EditBase | null): boolean {
   if (a === null || b === null) return a === b
   return a.hostId === b.hostId && a.revision === b.revision && a.stamp.at === b.stamp.at && a.stamp.host === b.stamp.host
@@ -62,6 +70,9 @@ export async function savePersonas(
 ): Promise<{ hostId: string; base: EditBase | null; mirror: MirrorReport }> {
   const issues = collectionIssues(items)
   if (issues.length > 0) throw new PersonaValidationError(issues)
+  // A form opened while the source was up can still be submitted after it drops; its base would then be moved onto the
+  // stand-in by the stale path and the second submit would write the stand-in. The last gate is here.
+  if (currentSource(usePersonaStore.getState().byHost, resolvedSourceId())?.readOnly) throw new PersonaReadOnlyError()
   if (!sameBase(base, editBase())) throw new PersonaStaleError()
   const hostId = base?.hostId ?? fallbackHostId
   let written: { revision: number }

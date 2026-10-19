@@ -9,12 +9,17 @@ vi.mock('./persona-mirror', () => ({
 import { putPersonas, PersonaConflictError } from './persona-api'
 import { mirrorPersonas } from './persona-mirror'
 import { usePersonaStore } from '../../stores/usePersonaStore'
-import { savePersonas, editBase, PersonaValidationError, PersonaStaleError } from './persona-save'
+import { usePersonaSourceStore } from '../../stores/usePersonaSourceStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { savePersonas, editBase, PersonaValidationError, PersonaStaleError, PersonaReadOnlyError } from './persona-save'
 import { makeCollection, makePersona } from './__fixtures__/personas'
 
 describe('savePersonas', () => {
   beforeEach(() => {
     vi.mocked(putPersonas).mockReset()
+    // h2 is this device's source host
+    useHostStore.setState({ hosts: { h1: {}, h2: {}, h3: {} } as never, hostOrder: ['h2', 'h1', 'h3'] })
+    usePersonaSourceStore.setState({ hostId: 'h2' })
     usePersonaStore.setState({
       byHost: {
         h1: { status: 'ready', collection: makeCollection(['old'], { at: 1, host: 'h1' }, 3) },
@@ -50,7 +55,7 @@ describe('savePersonas', () => {
     expect(putPersonas).toHaveBeenCalledWith('h1', expect.anything(), 0)
   })
 
-  it('refuses to save when a newer collection arrived after the edit started', async () => {
+  it('is not moved by another host holding a newer stamp: the source decides', async () => {
     const base = editBase() // the form opened on h2's collection
     usePersonaStore.setState({
       byHost: {
@@ -58,7 +63,19 @@ describe('savePersonas', () => {
         h3: { status: 'ready', collection: makeCollection(['fresh'], { at: 50, host: 'h3' }, 2) },
       },
     })
-    await expect(savePersonas([makePersona('hiro')], base, 'h1')).rejects.toBeInstanceOf(PersonaStaleError)
+    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
+    await savePersonas([makePersona('hiro')], base, 'h1')
+    expect(putPersonas).toHaveBeenCalledWith('h2', expect.anything(), 7)
+  })
+
+  it('refuses to write a stand-in copy when the source is offline, even from a form opened before', async () => {
+    const base = editBase() // opened while h2, the source, was up
+    usePersonaStore.setState({
+      byHost: { ...usePersonaStore.getState().byHost, h2: { status: 'error', collection: null } },
+    })
+    await expect(savePersonas([makePersona('hiro')], base, 'h1')).rejects.toBeInstanceOf(PersonaReadOnlyError)
+    // the stale path would have re-based the form onto h1; a second submit must be refused too
+    await expect(savePersonas([makePersona('hiro')], editBase(), 'h1')).rejects.toBeInstanceOf(PersonaReadOnlyError)
     expect(putPersonas).not.toHaveBeenCalled()
   })
 
@@ -75,23 +92,6 @@ describe('savePersonas', () => {
     expect(first.base).toMatchObject({ hostId: 'h2', revision: 8, stamp: { at: 20, host: 'h2' } })
     await savePersonas([makePersona('hiro', { name: 'Hiro Two' })], first.base, 'h1')
     expect(putPersonas).toHaveBeenLastCalledWith('h2', expect.anything(), 8)
-  })
-
-  it('does not hand back a base for another host when a newer collection won during the reload', async () => {
-    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
-    usePersonaStore.setState({
-      load: vi.fn(async () => {
-        usePersonaStore.setState({
-          byHost: {
-            ...usePersonaStore.getState().byHost,
-            h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 20, host: 'h2' }, 8) },
-            h3: { status: 'ready', collection: makeCollection(['fresh'], { at: 50, host: 'h3' }, 2) },
-          },
-        })
-      }),
-    })
-    const res = await savePersonas([makePersona('hiro')], editBase(), 'h1')
-    expect(res.base).toBeNull() // the form must be rebuilt on h3's collection, not re-bound to it
   })
 
   it('hands back no base when the same host moved past the revision this save wrote', async () => {

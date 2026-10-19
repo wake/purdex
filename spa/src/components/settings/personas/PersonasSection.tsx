@@ -170,7 +170,7 @@ export function PersonasSection() {
           <PersonaList items={items} selected={editing?.key ?? null} disabled={saving || readOnly} onSelect={open} />
         </div>
         <div>
-          {editing ? (
+          {editing && !readOnly ? (
             <PersonaForm
               draft={editing.draft}
               isNew={editing.key === ''}

@@ -26,9 +26,12 @@ function mirrorTargets(sourceId: string): string[] {
   return Object.keys(runtime).filter((id) => id !== sourceId && runtime[id]?.status === 'connected' && personasSupported(id))
 }
 
-async function pushOne(hostId: string, items: Persona[]): Promise<Push> {
+async function pushOne(hostId: string, items: Persona[], abort?: () => boolean): Promise<Push> {
   try {
     const theirs = await fetchPersonas(hostId)
+    // The revision just read would let a stale copy through the compare-and-set, so a caller whose items may have been
+    // replaced since it started (the backfill, against a save) gets to stop here, between the read and the write.
+    if (abort?.()) return { kind: 'fail', message: 'aborted: the source changed' }
     await putPersonas(hostId, items, theirs.revision)
     return { kind: 'ok' }
   } catch (e) {
@@ -48,10 +51,10 @@ async function pushOne(hostId: string, items: Persona[]): Promise<Push> {
 /**
  * `items` were just written to the source at `revision`. Returns the items and revision the source holds afterwards
  * (they change when a role was taken in) and what happened to each other host. `only` limits the copy to one host
- * (the backfill of a host that just connected).
+ * (the backfill of a host that just connected). `abort` is asked between each host's read and write.
  */
 export async function mirrorPersonas(
-  sourceId: string, items: Persona[], revision: number, only?: string,
+  sourceId: string, items: Persona[], revision: number, only?: string, abort?: () => boolean,
 ): Promise<{ report: MirrorReport; items: Persona[]; revision: number }> {
   let current = items
   let rev = revision
@@ -62,7 +65,7 @@ export async function mirrorPersonas(
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     const live = targets.filter((id) => !failed.has(id))
-    const results = await Promise.all(live.map((id) => pushOne(id, current)))
+    const results = await Promise.all(live.map((id) => pushOne(id, current, abort)))
     mirrored = []
     const extras = new Map<string, Persona>()
     const rejected: string[] = []

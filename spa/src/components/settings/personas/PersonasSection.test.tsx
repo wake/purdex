@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 
 vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-save')>()), savePersonas: vi.fn() }))
 
@@ -68,6 +68,21 @@ describe('PersonasSection', () => {
     expect(screen.getByTestId('persona-row-hiro')).toBeTruthy()
     expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    expect(screen.queryByTestId('persona-save')).toBeNull()
+  })
+
+  it('takes an open form away when the source drops, instead of leaving it submittable', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+      runtime: { h1: { status: 'connected' } as never, h2: { status: 'connected' } as never },
+    })
+    usePersonaSourceStore.setState({ hostId: 'h1' })
+    const copy = makeCollection(['hiro'], { at: 5, host: 'h1' }, 4)
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: copy }, h2: { status: 'ready', collection: copy } } })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    expect(screen.getByTestId('persona-save')).toBeTruthy()
+    act(() => { usePersonaStore.setState({ byHost: { h1: { status: 'error', collection: copy }, h2: { status: 'ready', collection: copy } } }) })
     expect(screen.queryByTestId('persona-save')).toBeNull()
   })
 

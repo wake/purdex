@@ -34,7 +34,16 @@ describe('backfillHosts', () => {
 
   it('writes the source items to a host whose items differ, whatever its stamp says', async () => {
     await backfillHosts()
-    expect(mirrorPersonas).toHaveBeenCalledWith('src', source.items, 5, 'h2')
+    expect(mirrorPersonas).toHaveBeenCalledWith('src', source.items, 5, 'h2', expect.any(Function))
+  })
+
+  it('stops between the host read and write once a save has moved the source past the snapshot', async () => {
+    let abort: (() => boolean) | undefined
+    vi.mocked(mirrorPersonas).mockImplementation(async (_s, _i, _r, _o, a) => { abort = a; return done(['h2']) })
+    await backfillHosts()
+    expect(abort?.()).toBe(false)
+    usePersonaStore.setState({ byHost: { ...usePersonaStore.getState().byHost, src: { status: 'ready', collection: { ...source, revision: 6 } } } })
+    expect(abort?.()).toBe(true)
   })
 
   it('leaves a host that already holds the same items alone', async () => {

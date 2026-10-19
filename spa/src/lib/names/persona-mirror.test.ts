@@ -54,6 +54,13 @@ describe('mirrorPersonas', () => {
     expect(out.report.mirrored.sort()).toEqual(['h2', 'h3'])
   })
 
+  it('does not write a host when the caller aborts after the read', async () => {
+    const out = await mirrorPersonas('src', items, 5, undefined, () => true)
+    expect(putPersonas).not.toHaveBeenCalled()
+    expect(out.report.mirrored).toEqual([])
+    expect(out.report.failed.map((f) => f.hostId).sort()).toEqual(['h2', 'h3'])
+  })
+
   it('reports a host that cannot be written, and still mirrors the others', async () => {
     vi.mocked(putPersonas).mockImplementation(async (id) => {
       if (id === 'h2') throw new PersonaApiError(500, 'boom')

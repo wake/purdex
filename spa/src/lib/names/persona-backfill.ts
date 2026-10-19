@@ -33,7 +33,12 @@ export async function backfillHosts(): Promise<void> {
     if (tried.has(key)) continue
     // Only a copy that went through is remembered: a host that dropped, or a write that failed, gets another chance on
     // its next load. A daemon that took the write but stores something different is what the memory is for.
-    const out = await mirrorPersonas(sourceId, src.collection.items, src.collection.revision, hostId)
+    // A save that began after the snapshot was taken has written newer items; the snapshot must not go over them. The
+    // save reloads the source before it ends, so a moved revision (or a save still pending) means the snapshot is old.
+    const snapshotRevision = src.collection.revision
+    const moved = () => savePending() || usePersonaStore.getState().byHost[sourceId]?.collection?.revision !== snapshotRevision
+    if (moved()) return
+    const out = await mirrorPersonas(sourceId, src.collection.items, snapshotRevision, hostId, moved)
     if (out.report.mirrored.includes(hostId)) tried.add(key)
   }
 }
