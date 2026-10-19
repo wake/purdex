@@ -40,7 +40,18 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
-	advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{}).Run(ctx)
+	ev := advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{})
+	// what was active before this start is still held raised, so a restart does not skip a rule's clearing margin
+	if active, err := in.Store.ActiveAlerts(); err != nil {
+		log.Printf("advisor: the active alerts could not be read: %v", err)
+	} else {
+		keys := make([]string, len(active))
+		for i, a := range active {
+			keys[i] = a.Key
+		}
+		ev.SeedRaised(keys)
+	}
+	ev.Run(ctx)
 }
 
 // runAdvisorCmd handles `wwd alerts-replay --db <copy of wwd.db> [--days 7] [--work-root <dir>]`: it counts what the alert rules would have
@@ -65,7 +76,15 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 		return true, err
 	}
 	defer st.Close()
-	recs, err := st.LoadMinutes(time.Now().AddDate(0, 0, -*days))
+	// the range counts back from the newest record, so a copy analysed days later is not cut short
+	newest, ok, err := st.NewestMinute()
+	if err != nil {
+		return true, err
+	}
+	if !ok {
+		return true, errors.New("alerts-replay: the database holds no minutes")
+	}
+	recs, err := st.LoadMinutes(newest.AddDate(0, 0, -*days))
 	if err != nil {
 		var skipped *store.SkippedRowsError
 		if !errors.As(err, &skipped) {
@@ -76,7 +95,8 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 	if len(recs) == 0 {
 		return true, errors.New("alerts-replay: the database holds no minutes in that range")
 	}
-	starts, err := st.StartTimes(recs[0].At)
+	// the first minutes need the starts of the hour before them (the crash-loop window)
+	starts, err := st.StartTimes(recs[0].At.Add(-time.Hour))
 	if err != nil {
 		return true, err
 	}

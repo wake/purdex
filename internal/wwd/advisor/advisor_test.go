@@ -85,6 +85,23 @@ func TestEvaluator_ARuleThatErrorsLeavesTheAlertAsItWas(t *testing.T) {
 	}
 }
 
+// An alert that was active before the daemon restarted keeps its clearing margin: 12.2 GB is still "low" for a disk disk_low raised on.
+func TestEvaluator_SeededAlertKeepsItsHysteresis(t *testing.T) {
+	b := newBook()
+	in := inputWith(12.2, nil)
+	for _, seeded := range []bool{false, true} {
+		b.active = map[string]wire.Alert{}
+		ev := NewEvaluator(b, func() (Input, bool) { return in, true }, nil, DiskLow{})
+		if seeded {
+			ev.SeedRaised([]string{"disk_low"})
+		}
+		ev.Pass()
+		if _, held := b.active["disk_low"]; held != seeded {
+			t.Fatalf("seeded=%v: held=%v", seeded, held)
+		}
+	}
+}
+
 // No facts yet (the first sample has not been taken): nothing is judged.
 func TestEvaluator_NoFactsNoVerdict(t *testing.T) {
 	b := newBook()

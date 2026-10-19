@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -46,6 +47,18 @@ type SkippedRowsError struct {
 
 func (e *SkippedRowsError) Error() string {
 	return fmt.Sprintf("store: %d %s rows do not decode and were skipped", e.N, e.Table)
+}
+
+// NewestMinute is the time of the newest stored rollup; false when there is none.
+func (s *Store) NewestMinute() (time.Time, bool, error) {
+	var ms sql.NullInt64
+	if err := s.db.QueryRow(`SELECT max(at) FROM host_minutes`).Scan(&ms); err != nil {
+		return time.Time{}, false, err
+	}
+	if !ms.Valid {
+		return time.Time{}, false, nil
+	}
+	return time.UnixMilli(ms.Int64).UTC(), true, nil
 }
 
 // LoadMinutes returns the stored rollups at or after since, oldest first. A row

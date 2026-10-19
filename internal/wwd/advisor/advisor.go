@@ -69,6 +69,15 @@ func NewEvaluator(book Book, input func() (Input, bool), logf func(string, ...an
 	return &Evaluator{book: book, input: input, logf: logf, rules: rules, last: map[wire.AlertKind]string{}, raised: map[string]bool{}}
 }
 
+// SeedRaised tells the evaluator which alerts are already active (those in the table when the daemon started), before the first Pass.
+func (e *Evaluator) SeedRaised(keys []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, k := range keys {
+		e.raised[k] = true
+	}
+}
+
 // Every is how often Run judges. The spec's shortest window is a minute; a push waits for the poll of the deliverer (30 s) anyway.
 const Every = 30 * time.Second
 
