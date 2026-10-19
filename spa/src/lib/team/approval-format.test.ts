@@ -170,9 +170,12 @@ describe('approvalSessionLabel of a persona', () => {
     expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji', address: 'mlab/purdex-1f-kenji' }))).toBe('Kenji')
   })
 
-  it('resolves by the registry name when the daemon sent no address (an older daemon)', () => {
+  // `name` is the registry's raw name, which the session sets itself: only the daemon's resolved `address` may name a persona
+  // (mutation: resolve from `o.name` again → a session called `anything-kenji` reads as Kenji in the dialog).
+  it('never resolves a persona from the registry name: an older daemon sends no address, and a forged name stays the name', () => {
     seed()
-    expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji' }))).toBe('Kenji')
+    expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji' }))).toBe('purdex-1f-kenji')
+    expect(approvalSessionLabel(origin({ name: 'anything-kenji', title: 'deploy' }))).toBe('deploy')
   })
 
   it('a session that is no persona reads as it always did: the title, else the name, else the ref', () => {

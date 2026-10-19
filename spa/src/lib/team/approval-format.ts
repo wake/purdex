@@ -8,7 +8,9 @@ export type T = (key: string, params?: Record<string, string | number>) => strin
 
 /** What to call the requesting session: a persona by its name with the title after it (spec §9.3), else its title (when the wire carries one), else its registry name, else its ref. */
 export function approvalSessionLabel(o: Origin): string {
-  const persona = seatLabel(o.address || o.name || '', o.title)
+  // Only the daemon's resolved address names a persona. `o.name` is the registry's raw name, which a session sets itself: a name that merely ends in a persona's code
+  // (`anything-kenji`) must never read as that person in a dialog the user decides from. An older daemon sends no address, and the label then stays what it was.
+  const persona = o.address ? seatLabel(o.address, o.title) : null
   if (persona !== null) return persona
   const title = o.title?.trim() ?? ''
   if (title !== '') return title
