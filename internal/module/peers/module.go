@@ -925,7 +925,26 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		LineageUnavailable:   lineageUnavailable,
 		// Not partial, like lineage_unavailable: every row shown is whole.
 		ExecutionsUnavailable: execsUnavailable,
+		Names:                 m.localNames(invCtx),
 	}
+}
+
+// localNames is what this host's name history shares in its envelope (name pool v2 spec §6.1): the last ipeers.MaxFamiliar codes
+// it has seen as a lead or a lead's member. nil without a history, or when it cannot be read (logged): a reader takes that as an
+// empty set, and the rows, which owe the history nothing, stay whole.
+func (m *Module) localNames(ctx context.Context) *ipeers.NamesInfo {
+	if m.nameHistory == nil {
+		return nil
+	}
+	codes, err := m.nameHistory.Familiar(ctx, ipeers.MaxFamiliar)
+	if err != nil {
+		m.logf("peers: inventory: read the familiar set, publishing no names: %v", err)
+		return nil
+	}
+	if codes == nil {
+		codes = []string{}
+	}
+	return &ipeers.NamesInfo{Familiar: codes}
 }
 
 // executions reads the nex module's execution list (execpeers.RegistryKey,
