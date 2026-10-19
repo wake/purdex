@@ -165,6 +165,32 @@ func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 	return first
 }
 
+// killVoidedSpawnSession stops the tmux session of the forwarded spawn op that a void (or a replay of it) ended abandoned
+// (#3537), under the generation it was created in; a session already gone is a replay after a lost answer. An op the void
+// did not end — it registered first, or it never was this lead host's — is left alone. A session created after the void
+// is the runner's to reap (reapFailedSpawn), which meets the failed op when it stops. The waiters of the op are told too.
+func (m *Module) killVoidedSpawnSession(leadHost, opID string) error {
+	op, found, err := m.store.GetSpawnOp(opID)
+	if err != nil {
+		return err
+	}
+	if !found || op.LeadHostID != leadHost || op.State != team.SpawnFailed || op.Reason != team.SpawnReasonAbandoned {
+		return nil
+	}
+	m.wake(opID)
+	m.rosterChanged()
+	if op.TmuxID == "" {
+		return nil
+	}
+	if m.tmux == nil {
+		return fmt.Errorf("abandoned spawn session of op %s and no tmux on this daemon", opID)
+	}
+	if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil && !errors.Is(err, tmux.ErrNoSession) {
+		return fmt.Errorf("spawn %s: tmux session %s not killed on void: %w", opID, op.TmuxID, err)
+	}
+	return nil
+}
+
 // validSpawnCommand is the shape of a `spawn` command ("" = fine).
 func validSpawnCommand(c team.TeamCommand) string {
 	switch {

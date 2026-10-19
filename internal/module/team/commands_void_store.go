@@ -15,9 +15,12 @@ import (
 //   - applied adopt: undo it (the row → released, the member owed the released notice), record the id so a late
 //     copy no longer replays "applied";
 //   - applied but the member already left, or refused: nothing to undo;
+//   - applied spawn whose op still runs: the op fails (running → failed, abandoned) in this transaction, so the runner's
+//     registration — a compare-and-set on a running op — can no longer add a member; the caller releases its reserved name
+//     and stops its session once this commits (#3537). Exactly one of the void and the registration wins;
+//   - applied spawn whose op already failed: nothing to undo; whose member registered (done): refused, a registered
+//     member is undone by a kill, which is X4a's;
 //   - anything that is no adopt/spawn: refused.
-//
-// A spawn is undone by a kill, which is X4a's; none can be logged before that.
 func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	c := p.cmd
 	target := c.CommandID
@@ -35,7 +38,7 @@ func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	case kind == team.CommandRelay:
 		return voidRelayIn(tx, p, target, status)
 	case kind == team.CommandSpawn:
-		return refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "undoing a spawn is not supported by this version"), nil
+		return voidSpawnIn(tx, p, target, status)
 	case kind != team.CommandAdopt:
 		return refusal(http.StatusConflict, team.ErrCommandNotVoidable, "only an adopt or a spawn can be voided"), nil
 	case status != http.StatusOK:
@@ -75,4 +78,47 @@ func recordVoidIn(tx dbtx, leadHostID, commandID, teamID, voidID string, at int6
 		return fmt.Errorf("record void of %s: %w", commandID, err)
 	}
 	return nil
+}
+
+// voidSpawnIn is a void of an applied spawn. The op's id is the spawn command's id.
+func voidSpawnIn(tx *sql.Tx, p CommandPlan, target string, status int) (CommandResult, error) {
+	c := p.cmd
+	if status != http.StatusOK {
+		return okResult(map[string]string{"state": "ok"}) // refused: no op was made, its stored refusal stands
+	}
+	var opTeam, state, poolName string
+	err := tx.QueryRow(`SELECT team_id, state, pool_name FROM spawn_ops WHERE id = ? AND lead_host_id = ?`, target, p.LeadHostID).Scan(&opTeam, &state, &poolName)
+	found := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return CommandResult{}, err
+	}
+	if found && opTeam != c.TeamID { // a void belongs to a team like every command
+		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "that command belongs to another team"), nil
+	}
+	if found && state == string(team.SpawnDone) {
+		return refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "undoing a registered spawn is not supported by this version"), nil
+	}
+	outcome := "ok"
+	var ended []string
+	if found && state == string(team.SpawnRunning) {
+		r, err := tx.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE id = ? AND lead_host_id = ? AND state = 'running'`,
+			team.SpawnReasonAbandoned, p.Now, target, p.LeadHostID)
+		won, err := oneRow(r, err, "void spawn op "+target)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		if won {
+			// No fact is queued: the lead host already gave this spawn up and would answer `ignored`.
+			outcome = "undone"
+			if poolName != "" {
+				ended = []string{target}
+			}
+		}
+	}
+	if err := recordVoidIn(tx, p.LeadHostID, target, c.TeamID, c.ID, p.Now); err != nil {
+		return CommandResult{}, err
+	}
+	res, err := okResult(map[string]string{"state": outcome})
+	res.endedSpawns = ended
+	return res, err
 }

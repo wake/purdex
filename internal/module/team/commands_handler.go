@@ -202,6 +202,13 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if cmd.Kind == team.CommandVoid {
+		if err := m.killVoidedSpawnSession(entry.HostID, cmd.CommandID); err != nil {
+			m.logf("[team] void %s: %v", cmd.ID, err)
+			m.writeCommandErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "could not stop the voided spawn's session; retry")
+			return
+		}
+	}
 	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
 		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
 		// very command (a replay signals again). The consent is read once more right before it (the window left is the
