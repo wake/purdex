@@ -1,0 +1,73 @@
+// spa/src/lib/pool/types.ts — the App's view of `/api/pool/*` (wwd spec §3, internal/wwd/wire). Times are ms since epoch.
+export const ZONES = ['normal', 'warning', 'danger', 'unknown'] as const
+export type PoolZone = (typeof ZONES)[number]
+
+export interface Slots { heavy: number; light: number }
+
+export interface PoolWorker { enabled: boolean; slots: Slots; owner_rule: string }
+export interface FactsWorker extends PoolWorker { running: Slots }
+
+export interface ProcOwner { kind: string; id?: string; session?: string }
+export interface PoolProc { pid: number; name: string; cpu_pct: number; mem_mb: number; mem_kind: string; owner: ProcOwner | null }
+export interface PoolResident { session: string; kind: string; count: number; mem_mb: number }
+export interface PoolDisk { mount: string; free_gb: number; used_pct: number; total_bytes: number; avail_bytes: number }
+export interface PoolPsi { some10: number; full10: number; some60: number }
+export interface PoolException { name: string; since: number; until: number | null }
+export interface PoolOwner { active: boolean; idle_s: number; reason: string }
+
+export interface PoolFacts {
+  host_id: string
+  alias: string
+  at: number
+  platform: string
+  arch: string
+  os_version: string
+  cpu: { ncpu: number; load1: number; load5: number; idle_pct: number }
+  mem: {
+    total_mb: number; available_mb: number; pressure: number
+    page_out_rate: number | null; swap_out_rate: number | null; swap_used_mb: number; compressor_mb: number | null
+    psi: PoolPsi | null
+  }
+  disk: PoolDisk[]
+  procs: PoolProc[]
+  residents: PoolResident[]
+  tools: Record<string, string | string[] | null>
+  owner: PoolOwner | null
+  exceptions: PoolException[]
+  derived: { zone: PoolZone; headroom: Slots; sessions_room: number }
+  worker: FactsWorker
+  /** Jobs this host submitted that are still queued (filled from 756); absent until a daemon sends it. */
+  queue?: { queued: number }
+}
+
+/** Why a class of work is not taken, in spec §3.2 order (#3478, `pool.assess.v1`). A code the App does not know stays text. */
+export interface HeadroomReasons { heavy: string[]; light: string[] }
+/** `driver` is cpu | mem | pressure | paging | disk today; a newer one stays text. */
+export interface PoolLoad { score: number; driver: string }
+
+export interface PoolHost {
+  host_id: string
+  alias: string
+  version: string
+  proto: number
+  platform: string
+  arch: string
+  facts: PoolFacts | null
+  worker: PoolWorker
+  labels: string[]
+  reachable: boolean
+  headroom_reasons?: HeadroomReasons
+  load?: PoolLoad
+}
+
+export interface SeriesPoint {
+  at: number
+  zone: PoolZone
+  cpu_idle_pct: number
+  mem_available_mb: number
+  pressure: number
+  page_out_rate: number | null
+  disk_max_used_pct: number | null
+  headroom: Slots
+}
+export interface PoolSeries { step: string; points: SeriesPoint[]; truncated: boolean }
