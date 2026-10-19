@@ -40,6 +40,12 @@ func TestJobUsageTakeMarkFallbackClosesBothKeys(t *testing.T) {
 	}
 	sample(tr, h, 1, wire.ZoneNormal, nil) // the same old process is sampled after the job ended
 	if tr.Len() != 0 {
-		t.Fatalf("a taken job came back (%d kept)", tr.Len())
+		t.Fatalf("a taken job came back under the old key (%d kept)", tr.Len())
+	}
+	// and the tagged key is closed too: a process that carries the tag now (the job went on under a new mark) is not taken in either
+	h.origins = map[int]string{300: a}
+	sample(tr, h, 2, wire.ZoneNormal, nil)
+	if tr.Len() != 0 {
+		t.Fatalf("a taken job came back under its own key (%d kept)", tr.Len())
 	}
 }

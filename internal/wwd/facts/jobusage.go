@@ -241,9 +241,15 @@ func (t *JobUsageTracker) TakeMark(tag, jobID string) (JobSample, bool) {
 		var oldest string
 		var oat time.Time
 		for id, a := range t.taken {
+			if id == own || id == key { // the keys just closed stay, whatever the clock says (equal times pick at random)
+				continue
+			}
 			if oldest == "" || a.Before(oat) {
 				oldest, oat = id, a
 			}
+		}
+		if oldest == "" {
+			break
 		}
 		delete(t.taken, oldest)
 	}
