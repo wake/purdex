@@ -38,7 +38,10 @@ func validJobID(id string) error {
 
 // gitEnv is the environment of every git command here: the repository is the one in repoDir, whatever repository or configuration
 // variables the process carries, and no prompt can stop it.
-func gitEnv() []string { return gitenv.Clean(os.Environ()) }
+// gitEnv is the environment of every git this package starts: the cleaned one of the process, with the C locale. isRefLockError reads git's
+// English error text, and LC_ALL wins over LANG and LC_MESSAGES (and makes git ignore LANGUAGE), so a service started in another locale
+// still gets the words it looks for. The later value of a name is the one the child gets.
+func gitEnv() []string { return append(gitenv.Clean(os.Environ()), "LC_ALL=C") }
 
 // errTooLarge is what a command whose output went over its limit is: it was stopped, not waited for.
 var errTooLarge = errors.New("snapshot: output over the limit")

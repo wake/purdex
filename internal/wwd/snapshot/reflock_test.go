@@ -148,3 +148,19 @@ func TestACancelDuringTheWaitIsTheContextsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot lock ref")
 	assert.Less(t, time.Since(start), 4*time.Second, "the wait ended with the context, not after the backoff")
 }
+
+// The lock error is recognised by the English words of the tool that raised it, so every command this package starts runs with the C locale
+// whatever locale the service was started in (LC_ALL wins over LANG and LC_MESSAGES, and LANGUAGE is ignored under C). The last value of a
+// name is the one the child gets.
+func TestTheToolRunsInTheCLocaleWhateverTheParentUses(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LC_MESSAGES", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+	last := map[string]string{}
+	for _, kv := range gitEnv() {
+		name, val, _ := strings.Cut(kv, "=")
+		last[name] = val
+	}
+	assert.Equal(t, "C", last["LC_ALL"])
+}
