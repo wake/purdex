@@ -79,6 +79,7 @@ type nameCandidate struct {
 	sid, ref, registryName string
 	previousRefs           []string
 	dirBase                string
+	tmuxName               string // the tmux session of its pane, when the pass knows it (a spawned member is found by it)
 }
 
 // resolveNames answers the virtual name of every candidate, keyed by the
@@ -195,7 +196,7 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 				if picked == nil {
 					picked = map[string]bool{}
 				}
-				row, err = m.assignPooled(ctx, k, c.ref, base, name, source, nowMs, picked)
+				row, err = m.assignPooled(ctx, k, c.ref, base, name, source, c.tmuxName, nowMs, picked)
 			} else {
 				row, err = m.peerNames.Assign(ctx, k, c.ref, name, source, nowMs)
 			}
@@ -223,7 +224,7 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 
 // entryNameCandidates is one candidate per live, non-proxy registry entry,
 // with that session's relay lineage.
-func entryNameCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, lineage map[string][]string) []nameCandidate {
+func entryNameCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, lineage map[string][]string, tmuxNames map[string]string) []nameCandidate {
 	out := make([]nameCandidate, 0, len(entries))
 	for _, e := range entries {
 		if e.SessionID == "" || e.IsProxy || proxyPIDs[e.PID] {
@@ -231,7 +232,7 @@ func entryNameCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, lineage
 		}
 		out = append(out, nameCandidate{
 			sid: e.SessionID, ref: ipeers.RefID(e.SessionID),
-			registryName: e.Name, previousRefs: lineage[e.SessionID],
+			registryName: e.Name, previousRefs: lineage[e.SessionID], tmuxName: tmuxNames[e.SessionID],
 		})
 	}
 	return out
@@ -262,7 +263,7 @@ func (m *Module) virtualNamesOf(ctx context.Context, entries ...ipeers.Entry) ma
 		return map[string]string{}
 	}
 	lineage, _ := m.previousRefs()
-	return m.resolveNames(ctx, entryNameCandidates(entries, nil, lineage))
+	return m.resolveNames(ctx, entryNameCandidates(entries, nil, lineage, nil))
 }
 
 // baseName picks a fallback name for a conversation without a row or a

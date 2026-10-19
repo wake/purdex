@@ -53,6 +53,7 @@ func (m *Module) lockPool(ctx context.Context) (unlock func(), err error) {
 	}
 	select {
 	case m.poolSem <- struct{}{}:
+		m.reservations.newSection() // a failed rebuild of the reservations is tried once per section (namereserve.go)
 		return func() { <-m.poolSem }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -85,6 +86,11 @@ func (m *Module) awaitPoolReady(ctx context.Context) error {
 func (m *Module) heldPoolNames(ctx context.Context, picked map[string]bool) (map[string]bool, error) {
 	held := make(map[string]bool, len(picked))
 	for n := range picked {
+		held[n] = true
+	}
+	// the names reserved for spawns that have not produced their session yet (namereserve.go)
+	m.ensureReservations(ctx)
+	for n := range m.reservations.codes(m.now()) {
 		held[n] = true
 	}
 	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
@@ -135,7 +141,7 @@ func freePoolNames(held map[string]bool) []string {
 // the names this pass already took, for conversations (executions) no registry
 // entry shows. The stored row is returned: with Assign's first-writer-wins, a
 // concurrent pass that named the same conversation first wins.
-func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refSource string, nowMs int64, picked map[string]bool) (store.PeerNameEntry, error) {
+func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refSource, tmuxName string, nowMs int64, picked map[string]bool) (store.PeerNameEntry, error) {
 	if err := m.awaitPoolReady(ctx); err != nil {
 		return store.PeerNameEntry{}, err
 	}
@@ -144,9 +150,16 @@ func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refS
 		return store.PeerNameEntry{}, err
 	}
 	defer unlock()
-	pick, ok, err := m.pickOther(ctx, picked)
-	if err != nil {
-		return store.PeerNameEntry{}, err
+	// A session born from a spawn takes the name its op reserved (matched by the op's tmux session name, NP-0 result b′).
+	m.ensureReservations(ctx)
+	pick, ok := "", false
+	if r, found := m.reservations.byTmux(tmuxName, m.now()); found {
+		pick, ok = r.code, true
+	} else {
+		var err error
+		if pick, ok, err = m.pickOther(ctx, picked); err != nil {
+			return store.PeerNameEntry{}, err
+		}
 	}
 	// The registry read cannot be cancelled: a budget it ran past means no
 	// name this pass rather than a pick made after the caller gave up.
