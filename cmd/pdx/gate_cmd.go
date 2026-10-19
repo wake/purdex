@@ -162,8 +162,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
-	g := gate.New(cfg)
-	g.HoldFetch = gateHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
+	g := newGate(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
 	var target *gate.AssistTarget
@@ -176,6 +175,14 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	}
 	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
 	return code
+}
+
+// newGate is the gate of this host for a call that takes a slot or answers about one: it asks the local wwd for its holds (spec §13.4),
+// and a wwd that cannot answer holds nothing. Every entry that takes a slot builds its gate here, so they cannot differ.
+func newGate(cfg gate.Config) *gate.Gate {
+	g := gate.New(cfg)
+	g.HoldFetch = gateHoldFetch
+	return g
 }
 
 // gateHoldFetch asks the local wwd for its holds (a seam for tests: no test may depend on the wwd of the host it runs on).
@@ -262,8 +269,7 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
-	g := gate.New(cfg)
-	g.HoldFetch = gateHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
+	g := newGate(cfg)
 	// the JSON is read by machines, often (the fleet view polls it): the lock holders cost an lsof over the whole host each,
 	// so it carries them only for a slot whose gate is gone, unless asked
 	mode := gate.HoldersAll
@@ -559,8 +565,7 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
-	g := gate.New(cfg)
-	g.HoldFetch = gateHoldFetch // a hold of the local wwd keeps a command waiting; a wwd that cannot answer holds nothing (spec §13.4)
+	g := newGate(cfg)
 	if batchGiven {
 		return wouldWaitBatch(g, cfg, argvs, *asJSON, stdout)
 	}
