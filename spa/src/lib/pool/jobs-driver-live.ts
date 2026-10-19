@@ -44,6 +44,19 @@ export const jobsDriver = createJobsDriver({
 })
 
 /**
+ * Always on (the event hook starts it): a connection that opened before its daemon counted as a source (a reconnect marks its capabilities stale until they are read again) is caught up
+ * as soon as the capabilities, the connections or the pool's hosts say it is one — with or without a view open.
+ */
+export function startJobsCatchUp(): () => void {
+  const unsubscribes = [
+    usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) jobsDriver.retryOpened() }),
+    useNexHostStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) jobsDriver.retryOpened() }),
+    useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime) jobsDriver.retryOpened() }),
+  ]
+  return () => { for (const u of unsubscribes) u() }
+}
+
+/**
  * A view that shows jobs mounts: the driver polls for it, and an origin the pool lists later — or one whose daemon announces `jobs.v1` or connects later (a connection opens before its capabilities are read) — is read when it appears.
  * The returned function releases it all.
  */

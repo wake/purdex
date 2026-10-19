@@ -35,7 +35,7 @@ import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { handleFleetEvent } from '../lib/fleet/fleet-ws'
-import { jobsDriver } from '../lib/pool/jobs-driver-live'
+import { jobsDriver, startJobsCatchUp } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
@@ -456,6 +456,9 @@ export function useMultiHostEventWs() {
       entries.clear()
     }
   }, [])
+
+  // A connection that opened before its daemon counted as a jobs source is caught up as soon as it does (jobs-driver-live.ts).
+  useEffect(() => startJobsCatchUp(), [])
 
   // The operation lock's acquire / release (see `createOperationLockObserver`).
   // The release is also the second revive trigger: a rebuild in flight holds
