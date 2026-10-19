@@ -25,6 +25,11 @@ interface Props {
   disabled: boolean
   /** The recipe and the image drawn from it; `''` for no image. */
   onChange: (recipe: PersonaAvatarRecipe, avatarData: string) => void
+  /**
+   * True from the moment a change is waiting to be drawn (the pause) until its image has come back or was dropped. The
+   * page does not save in between: it would store the recipe and the image of the PREVIOUS input.
+   */
+  onBusyChange?: (busy: boolean) => void
 }
 
 const isStyle = (s: string): s is DicebearStyle => (DICEBEAR_STYLES as readonly string[]).includes(s)
@@ -46,7 +51,7 @@ function recipeOf(source: string, seed: string, options: Record<string, unknown>
   return { source, ...(seed !== '' ? { seed } : {}), ...(options && Object.keys(options).length > 0 ? { options } : {}) }
 }
 
-export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
+export function AvatarPicker({ slot, recipe, disabled, onChange, onBusyChange }: Props) {
   const t = useI18nStore((s) => s.t)
   const [source, setSource] = useState(recipe.source)
   const [seed, setSeed] = useState(recipe.seed ?? '')
@@ -59,16 +64,23 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
   const latest = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const optionsInvalid = parseOptions(optionsText) === null
+  // Read through a ref: the parent may pass a new function every render, and the cleanup below must not depend on it.
+  const busyRef = useRef(onBusyChange)
+  busyRef.current = onBusyChange
+  const setBusy = (busy: boolean) => busyRef.current?.(busy)
 
   // Leaving (another persona was opened, the page was closed) drops what is still on its way: it was asked for something
   // that is no longer on screen, and applying it would put this picker's image into whatever is shown next.
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current)
     latest.current++
+    setBusy(false)
   }, [])
+
   const run = async (next: PersonaAvatarRecipe, deps?: { file?: Blob }) => {
     const mine = ++latest.current
     setDrawing(true)
+    setBusy(true)
     try {
       const data = await drawRecipe(next, deps)
       if (mine !== latest.current) return
@@ -79,7 +91,7 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
       const code = e instanceof PersonaDrawError ? e.code : 'other'
       setError(t(`settings.personas.avatar.error.${code}`))
     } finally {
-      if (mine === latest.current) setDrawing(false)
+      if (mine === latest.current) { setDrawing(false); setBusy(false) }
     }
   }
 
@@ -92,6 +104,7 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
     if (timer.current) clearTimeout(timer.current)
     latest.current++
     setDrawing(false)
+    setBusy(false)
   }
 
   /** A DiceBear recipe is drawn once the user stops typing; anything else waits for its own action. */
@@ -99,6 +112,7 @@ export function AvatarPicker({ slot, recipe, disabled, onChange }: Props) {
     cancel()
     const options = parseOptions(nextOptionsText)
     if (!isStyle(nextSource) || options === null) return
+    setBusy(true) // a draw is coming: saving now would store the previous recipe with the previous image
     timer.current = setTimeout(() => void run(recipeOf(nextSource, nextSeed, options, '')), DEBOUNCE_MS)
   }
 

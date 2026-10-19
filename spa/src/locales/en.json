@@ -2067,6 +2067,7 @@
   "settings.personas.avatar.fetch": "Fetch photo",
   "settings.personas.avatar.file": "Choose an image file",
   "settings.personas.avatar.drawing": "Drawing…",
+  "settings.personas.avatar.busy": "The avatar is still being drawn. Save again once it is done.",
   "settings.personas.avatar.error.bad-style": "There is no such avatar style.",
   "settings.personas.avatar.error.render": "This seed or these options cannot be drawn. Change them and try again.",
   "settings.personas.avatar.error.bad-url": "This address is not an allowed photo source.",

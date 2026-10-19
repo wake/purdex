@@ -312,6 +312,44 @@ describe('PersonasSection', () => {
       expect(saved).toMatchObject({ name: 'Hiro Two', avatar: { source: 'lorelei', seed: 'hiro' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ' })
     })
 
+    it('does not save while a changed avatar is still waiting to be drawn, then saves the new pair', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'new-seed' } })
+      fireEvent.click(screen.getByTestId('persona-save')) // inside the pause before the draw
+      expect(savePersonas).not.toHaveBeenCalled()
+      expect(screen.getByTestId('personas-note').textContent).toMatch(/繪製|drawn/)
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.queryByTestId('avatar-drawing')).toBeNull())
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'hiro')).toMatchObject({
+        avatar: { source: 'lorelei', seed: 'new-seed' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ',
+      })
+    })
+
+    it('opens the picker afresh on the persona that was rebuilt from the shown collection', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      vi.mocked(savePersonas).mockImplementation(async () => {
+        seed(['hiro'], { hiro: { avatar: { source: 'micah', seed: 'remote-seed' } } })
+        return { hostId: 'h1', mirror: NO_MIRROR, base: null }
+      })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'local-seed' } })
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalled())
+      await waitFor(() => expect(screen.queryByTestId('avatar-drawing')).toBeNull())
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect((screen.getByTestId('avatar-source') as HTMLSelectElement).value).toBe('micah'))
+      expect((screen.getByTestId('avatar-seed') as HTMLInputElement).value).toBe('remote-seed')
+    })
+
     it('a second new persona starts with a fresh picker, not the first one\'s source, seed and options', () => {
       seed(['hiro'])
       render(<PersonasSection />)

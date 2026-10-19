@@ -2067,6 +2067,7 @@
   "settings.personas.avatar.fetch": "取得照片",
   "settings.personas.avatar.file": "選擇圖片檔",
   "settings.personas.avatar.drawing": "繪製中…",
+  "settings.personas.avatar.busy": "頭像還在繪製，畫好之後再存。",
   "settings.personas.avatar.error.bad-style": "沒有這個頭像樣式。",
   "settings.personas.avatar.error.render": "這個種子或選項畫不出圖，請改一下再試。",
   "settings.personas.avatar.error.bad-url": "這個網址不在允許的照片來源內。",

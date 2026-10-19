@@ -98,6 +98,8 @@ export function PersonasSection() {
   // another field meanwhile must survive), not into the one the picker saw when it started.
   const editingNow = useRef(editing)
   editingNow.current = editing
+  const avatarBusy = useRef(false)
+  const setAvatarBusy = (busy: boolean) => { avatarBusy.current = busy }
   const setAvatar = (avatar: Persona['avatar'], avatarData: string) => {
     const cur = editingNow.current
     if (cur) hold({ ...cur, draft: { ...cur.draft, avatar, avatar_data: avatarData } })
@@ -111,6 +113,7 @@ export function PersonasSection() {
     // new persona too; a new epoch makes each opening a fresh picker, and the half-typed options of the last are dropped.
     forgetAvatarOptionsText(key)
     setPickerEpoch((n) => n + 1)
+    avatarBusy.current = false // the picker that was drawing is gone with its draw
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
 
@@ -133,11 +136,17 @@ export function PersonasSection() {
   const showShown = (key: string, saved: Persona) => {
     const now = usePersonaStore.getState().current()?.items.find((x) => x.code === key)
     hold(now ? { key, draft: structuredClone(now), base: editBase() } : { key: '', draft: saved, base: editBase() })
+    // The draft now comes from elsewhere, with its own avatar recipe: the picker holds the source, seed and options it
+    // was opened with, so it is opened afresh on the new one.
+    setPickerEpoch((n) => n + 1)
     setOutcome({ note: t('settings.personas.rebuilt') })
   }
 
   const save = async (draft: Persona, confirmed = false) => {
     if (!editing || savePending()) return // read straight from the slot: a double submit can beat the next render
+    // A change to the avatar is still being drawn: what the draft holds is the PREVIOUS recipe with the PREVIOUS image.
+    // Saving that and letting the draw land afterwards would leave an unsaved draft under a "saved" note.
+    if (avatarBusy.current) { setOutcome({ note: t('settings.personas.avatar.busy'), error: null }); return }
     const found = validatePersona(draft)
     if (editing.key === '' && items.some((p) => p.code === draft.code)) found.push({ field: 'code', message: draft.code })
     setIssues(found)
@@ -217,7 +226,7 @@ export function PersonasSection() {
               isNew={editing.key === ''}
               issues={issues}
               saving={saving}
-              avatarPicker={<AvatarPicker key={`${editing.key}#${pickerEpoch}`} slot={editing.key} recipe={editing.draft.avatar} disabled={saving} onChange={setAvatar} />}
+              avatarPicker={<AvatarPicker key={`${editing.key}#${pickerEpoch}`} slot={editing.key} recipe={editing.draft.avatar} disabled={saving} onChange={setAvatar} onBusyChange={setAvatarBusy} />}
               onChange={(draft) => hold({ ...editing, draft })}
               onSave={() => void save(editing.draft)}
               onToggleRetired={() => void save({ ...editing.draft, retired: !editing.draft.retired })}
