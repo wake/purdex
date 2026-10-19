@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { daemonMismatchKey, useHostStore } from '../../../stores/useHostStore'
+import { TaskGroupSeatClosed } from './TaskGroupSeatClosed'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
@@ -175,15 +176,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       )
       return seat ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
     }
-    // A team seat no open tab shows: listed, and a click opens it.
-    return (
-      <button
-        key={row.key} type="button" data-testid="task-group-seat-closed" onClick={openSeat}
-        className="mx-2 pl-[18px] pr-1.5 py-1 text-left text-xs text-text-muted truncate cursor-pointer hover:bg-surface-hover rounded-md" title={seat?.session.address}
-      >
-        {seat?.label}
-      </button>
-    )
+    // A team seat no open tab shows: listed (dimmed, dressed as its persona), and a click opens it.
+    return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
   }
 
   if (view.length === 0) {

@@ -27,6 +27,12 @@ describe('rename in place', () => {
     expect(screen.queryByTestId('task-group-name-input')).toBeNull()
   })
 
+  it('the name wears a focus-visible ring and no default focus outline', () => {
+    render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit: vi.fn() }} />)
+    expect(name().className).toContain('focus-visible:ring-1')
+    expect(name().className).toContain('focus:outline-none')
+  })
+
   it('an Enter that picks an IME candidate is not a save', () => {
     const onCommit = vi.fn().mockResolvedValue(undefined)
     render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit }} />)

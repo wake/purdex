@@ -82,7 +82,8 @@ export function InlineTab({
   // Who the row is (name pool v2 spec §9.6): the persona of the session the tab shows, when the App already knows it (useSessionSeat reads, never asks). With none the row is as it was.
   const primary = getPrimaryPane(tab.layout).content
   const tmux = primary.kind === 'tmux-session' && !primary.terminated ? primary : null
-  const shownTitle = seatOverride?.title || displayTitle
+  // A seat's row names the session by its tab's title (the one the tab bar shows); the seat's label stands in when the tab has none.
+  const shownTitle = displayTitle || seatOverride?.title || ''
   const bySession = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
   const bySeat = useSeat(seatOverride?.address ?? '')
   // Only the task-group view dresses a row as its persona; the workspace view keeps the plain agent-icon row (owner call 10-20, overturning spec §9.6 U10).
@@ -187,7 +188,7 @@ export function InlineTab({
       <span data-testid="inline-tab-title" className="flex-1 truncate">
         {seat !== null ? (
           <>
-            <span data-testid="inline-tab-name" className="font-semibold">{seat.name}</span>
+            <span data-testid="inline-tab-name" className={`font-semibold${isActive ? '' : ' text-text-secondary group-hover:text-text-primary'}`}>{seat.name}</span>
             {shownTitle !== '' && shownTitle !== seat.name && <span data-testid="inline-tab-subtitle" className="ml-1.5 text-text-muted">{shownTitle}</span>}
           </>
         ) : shownTitle}

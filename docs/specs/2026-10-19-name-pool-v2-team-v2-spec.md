@@ -533,6 +533,11 @@ This is the default classification from the page's probe table. **[待確認]**
     own colour (`teamColor`); without `teamColor` it wears the profile colour when the profile has an icon, else none.
   - The home button keeps its label and its click (home, or the profile menu on a device with slave profiles).
 - Task-group view as in §7.
+  - 761 acceptance (user, 2026-10-20), task-group sidebar rows only: (1) a team seat no tab shows wears the same row as an
+    open one (avatar, host badge, bold persona name, then the label), dimmed to say "not open", and a click still opens
+    it; (2) the persona name is `text-secondary` when the row is not active (hover and active follow the row);
+    (3) the text after the name is the tab's title (`displayTitle`), the seat's label only when there is no tab;
+    (4) the group title's focus ring is `focus-visible`, not the browser default outline.
 
 ### 9.7 Lead name card and cap
 
