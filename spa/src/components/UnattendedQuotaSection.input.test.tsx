@@ -33,10 +33,10 @@ describe('why a − is off', () => {
 
   it('a quota at 0: − says 已經是 0; a − that works has no reason', () => {
     show([q('p1', { self_left: 0 }), q('p2', { self_left: 4 })])
-    const minus1 = within(row('p1')).getByRole('button', { name: '減少' })
+    const minus1 = within(row('p1')).getByRole('button', { name: /^減少自動接力額度/ })
     expect(minus1).toBeDisabled()
     expect(minus1.parentElement).toHaveAttribute('title', '已經是 0')
-    const minus2 = within(row('p2')).getByRole('button', { name: '減少' })
+    const minus2 = within(row('p2')).getByRole('button', { name: /^減少自動接力額度/ })
     expect(minus2).toBeEnabled()
     expect(minus2.parentElement).not.toHaveAttribute('title')
   })
@@ -116,6 +116,6 @@ describe('typing a number', () => {
 
   it('a disabled − also carries its reason on the button itself (a keyboard or screen-reader user reaches it)', () => {
     show([q('p1', { self_left: 0 })])
-    expect(within(row('p1')).getByRole('button', { name: '減少' })).toHaveAttribute('title', '已經是 0')
+    expect(within(row('p1')).getByRole('button', { name: /^減少自動接力額度/ })).toHaveAttribute('title', '已經是 0')
   })
 })
