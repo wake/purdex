@@ -17,7 +17,7 @@ const host = (over: Record<string, unknown> = {}) => ({ ...baseHost, alias: 'mse
 const row = (over: Partial<PoolHostRow> = {}): PoolHostRow => ({
   id: 'p-mserv', name: 'mserv', kind: 'probe', look: { icon: 'Desktop', iconWeight: '', colors: undefined } as never,
   state: 'live', dot: 'live', zone: 'normal', worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } },
-  headroom: { heavy: 1, light: 4 }, version: '1.0.0-alpha.755', since: null, host: host() as never, ...over,
+  headroom: { heavy: 1, light: 4 }, readings: { cpu: 20, mem: 50, level: 1, disk: 40, diskFree: 120 }, version: '1.0.0-alpha.755', since: null, host: host() as never, ...over,
 })
 
 beforeEach(() => { cleanup(); openWatchArea.mockReset(); clearViewMemory() })
@@ -32,19 +32,25 @@ describe('the pool host page', () => {
   })
 
   it('a host the pool does not list: no sub line, the sections say unknown rather than invent', () => {
-    render(<PoolHostPage row={row({ host: null, version: '', state: 'fallback', dot: 'warn', worker: null, headroom: null })} />)
+    render(<PoolHostPage row={row({ host: null, version: '', state: 'fallback', dot: 'warn', worker: null, headroom: null, readings: null })} />)
     expect(screen.queryByTestId('pool-page-sub')).toBeNull()
     expect(screen.getByTestId('pool-page-worker').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-now').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-tools').textContent).toContain('Unknown')
   })
 
-  it('現在 reads the facts: CPU, memory, pressure, disk', () => {
-    render(<PoolHostPage row={row()} />)
+  it('現在 shows the row\'s readings: CPU, memory, pressure, disk', () => {
+    render(<PoolHostPage row={row({ readings: { cpu: 21, mem: 52, level: 2, disk: 43, diskFree: 99 } })} />)
     const now = screen.getByTestId('pool-page-now')
-    expect(within(now).getByTestId('pool-page-cpu').textContent).toMatch(/CPU \d+%/)
-    expect(within(now).getByTestId('pool-page-mem').textContent).toMatch(/Memory \d+%/)
-    expect(within(now).getByTestId('pool-page-disk').textContent).toMatch(/Disk/)
+    expect(within(now).getByTestId('pool-page-cpu').textContent).toBe('CPU 21%')
+    expect(within(now).getByTestId('pool-page-mem').textContent).toBe('Memory 52%')
+    expect(within(now).getByTestId('pool-page-pressure').textContent).toContain('Warning')
+    expect(within(now).getByTestId('pool-page-disk').textContent).toBe('Disk 43% used (99 GB free)')
+  })
+
+  it('no readings (nobody reads the host): 現在 says unknown', () => {
+    render(<PoolHostPage row={row({ readings: null })} />)
+    expect(screen.getByTestId('pool-page-now').textContent).toContain('Unknown')
   })
 
   it('Worker is read only: no switch, no slots input, and a link that opens the host tab on 設定', () => {

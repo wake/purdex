@@ -4,6 +4,7 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { writeHostPage } from '../../lib/watch/view-memory'
 import type { PoolHostRow } from '../../lib/pool/use-pool-host-rows'
 import type { PoolFacts } from '../../lib/pool/types'
+import type { PoolReadings } from '../../lib/pool/use-pool-host-rows'
 import { ProbeBadge } from './probe-rows'
 import { PoolStatusDot } from './PoolStatusDot'
 import { statusWord } from './PoolHostsSection'
@@ -39,7 +40,7 @@ export function PoolHostPage({ row, children }: { row: PoolHostRow; children?: R
       </div>
 
       <Section title={t('pool_hosts.page.now')} testId="pool-page-now">
-        {facts ? <Readings facts={facts} /> : <span className="text-text-muted">{unknown}</span>}
+        {row.readings ? <Readings r={row.readings} /> : <span className="text-text-muted">{unknown}</span>}
       </Section>
 
       <Section title={t('pool.card.worker')} testId="pool-page-worker">
@@ -73,18 +74,14 @@ function Section({ title, testId, children }: { title: string; testId: string; c
 }
 
 /** CPU, memory, memory pressure and the fullest disk, the way the host card words them (`fleet.card.*`). */
-function Readings({ facts }: { facts: PoolFacts }) {
+function Readings({ r }: { r: PoolReadings }) {
   const t = useI18nStore((s) => s.t)
-  const cpu = Math.round(100 - facts.cpu.idle_pct)
-  const mem = facts.mem.total_mb > 0 ? Math.round(((facts.mem.total_mb - facts.mem.available_mb) / facts.mem.total_mb) * 100) : null
-  const disk = facts.disk.reduce<PoolFacts['disk'][number] | null>((m, d) => (m === null || d.used_pct > m.used_pct ? d : m), null)
-  const level = facts.mem.pressure >= 4 ? 4 : facts.mem.pressure >= 2 ? 2 : 1
   return (
     <ul className="space-y-0.5">
-      <li data-testid="pool-page-cpu">{t('fleet.cpu', { v: cpu })}</li>
-      {mem !== null && <li data-testid="pool-page-mem">{t('fleet.mem', { v: mem })}</li>}
-      <li data-testid="pool-page-pressure">{t('fleet.card.pressure')}: {t(`fleet.card.level.${level}`)}</li>
-      {disk && <li data-testid="pool-page-disk">{t('fleet.disk', { v: Math.round(disk.used_pct) })}{t('fleet.card.disk_free', { v: Math.round(disk.free_gb) })}</li>}
+      <li data-testid="pool-page-cpu">{t('fleet.cpu', { v: r.cpu })}</li>
+      {r.mem !== null && <li data-testid="pool-page-mem">{t('fleet.mem', { v: r.mem })}</li>}
+      <li data-testid="pool-page-pressure">{t('fleet.card.pressure')}: {t(`fleet.card.level.${r.level}`)}</li>
+      {r.disk !== null && <li data-testid="pool-page-disk">{t('fleet.disk', { v: r.disk })}{r.diskFree !== null ? t('fleet.card.disk_free', { v: r.diskFree }) : ''}</li>}
     </ul>
   )
 }

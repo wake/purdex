@@ -269,6 +269,24 @@ describe('the pool host page on the Hosts page', () => {
     expect(screen.queryByTestId('pool-page-style')).toBeNull()
   })
 
+  it('a host wwd is silent for shows the fleet\'s readings, not the pool\'s old facts', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+    render(<PoolHostRoute id="d-air26" />)
+    await flush()
+    const now = screen.getByTestId('pool-page-now')
+    expect(within(now).getByTestId('pool-page-cpu').textContent).toBe('CPU 5%')
+    expect(within(now).getByTestId('pool-page-mem').textContent).toBe('Memory 40%')
+    expect(within(now).getByTestId('pool-page-disk').textContent).toContain('Disk 30% used')
+  })
+
+  it('a live host shows what wwd read', async () => {
+    livePool()
+    render(<PoolHostRoute id="d-mlab" />)
+    await flush()
+    const cpu = Math.round(100 - darwin.cpu.idle_pct)
+    expect(within(screen.getByTestId('pool-page-now')).getByTestId('pool-page-cpu').textContent).toBe(`CPU ${cpu}%`)
+  })
+
   it('a host that left the list shows nothing', async () => {
     livePool()
     const { container } = render(<PoolHostRoute id="d-gone" />)
