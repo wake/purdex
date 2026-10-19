@@ -104,6 +104,22 @@ describe('opening the editor', () => {
   })
 })
 
+describe('opening the editor while the mount read is still out', () => {
+  it('reads once more after it, so the older snapshot does not stay on screen', async () => {
+    const waiting: Array<(h: PairedHostRoots[]) => void> = []
+    configureHostRoots({ identity: () => 'id-1', fetch: () => new Promise<PairedHostRoots[]>((res) => { waiting.push(res) }), post: async () => {}, dismiss: async () => {} })
+    render(<TeamSettingsBlock hostId={A} teamId="t-l1" name="Team" />)
+    await flush()
+    expect(waiting).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('team-folder-edit'))
+    await act(async () => { waiting[0]([host({ roots: ['/old'] })]); await Promise.resolve(); await Promise.resolve() })
+    expect(waiting).toHaveLength(2) // the open asked for a read after the one in flight
+    await act(async () => { waiting[1]([host({ roots: ['/new'] })]); await Promise.resolve(); await Promise.resolve() })
+    expect(screen.getAllByTestId('team-folder-chip').map((c) => c.textContent)).toContain('/new')
+    expect(screen.getAllByTestId('team-folder-chip').map((c) => c.textContent)).not.toContain('/old')
+  })
+})
+
 describe('other hosts\' grants as chips', () => {
   it('lists the applied grant after the team\'s own, with a host badge and the shared-by-all tooltip', async () => {
     await show()

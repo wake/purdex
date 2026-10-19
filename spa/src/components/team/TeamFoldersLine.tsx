@@ -55,7 +55,7 @@ export function TeamFoldersLine({ hostId, team }: { hostId: string; team: TeamRo
           ))}
           <button
             type="button" data-testid="team-folder-edit" aria-expanded={open} aria-label={t('team.settings.folders_edit')} title={t('team.settings.folders_edit')}
-            onClick={() => { if (!open) void refreshHostRoots(hostId); setOpen(!open) }} // the folded line already holds the poll's reference, so opening reads again by hand
+            onClick={() => { if (!open) void refreshHostRoots(hostId, true); setOpen(!open) }} // the folded line already holds the poll's reference, so opening reads again by hand; `true`: a read still out may predate the open, read once more after it
             className="inline-flex h-4 w-5 flex-shrink-0 cursor-pointer items-center justify-center rounded text-text-secondary hover:bg-surface-hover hover:text-text-primary"
           ><PencilSimple size={11} /></button>
         </div>
