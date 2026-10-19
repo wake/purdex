@@ -80,6 +80,9 @@ func Run(ctx context.Context, o Options) int {
 	if err != nil {
 		return failPrepare(o, err)
 	}
+	if code, stop := checkPool(ctx, o, o.Args.Task, p.Body.Labels); stop {
+		return code
+	}
 	resp, err := o.API.Submit(ctx, p.Body)
 	if err != nil {
 		return failSubmit(o, err)
