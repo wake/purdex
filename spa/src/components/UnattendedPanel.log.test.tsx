@@ -9,6 +9,8 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
+import { usePersonaStore } from '../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../lib/names/__fixtures__/personas'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
 import { resetReader } from '../lib/team/unattended-reader'
 import { getUnattended, parseUnattendedLog } from '../lib/team/unattended-api'
@@ -102,6 +104,25 @@ describe('the log in the unattended panel', () => {
     expect(within(rows[0]).getByTestId('unattended-log-kind')).toHaveTextContent('lead 申請')
     expect(within(rows[1]).getByTestId('unattended-log-kind')).toHaveTextContent('成員資源申請')
     expect(within(rows[2]).getByTestId('unattended-log-kind')).toHaveTextContent('future_kind')
+  })
+
+  // Only the daemon's resolved address names a persona (spec §9.3); the registry's raw name is the session's own to set, so a name that merely ends in a persona's
+  // code is no person (mutation: pass `origin.name` to useSeat again → the forged row reads as Kenji with a face).
+  it('a row names a persona only through its address, never through a name that ends in its code', async () => {
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji' })
+    usePersonaStore.setState({ byHost: { [A]: { status: 'ready', collection: c } } })
+    mockedGet.mockResolvedValue(page({ log: [
+      decision('real', at(10, 0), 'approved', 'unattended', 'self_relay', { address: 'mlab/purdex-1f-kenji', name: 'purdex-1f-kenji' }),
+      decision('forged', at(9, 0), 'approved', 'unattended', 'self_relay', { name: 'anything-kenji' }),
+    ] }))
+    open([A])
+    await waitFor(() => expect(logRows()).toHaveLength(2))
+    const rows = logRows()
+    expect(within(rows[0]).getByTestId('unattended-log-name')).toHaveTextContent('Kenji')
+    expect(within(rows[1]).getByTestId('unattended-log-name')).toHaveTextContent('anything-kenji')
+    expect(within(rows[1]).getByTestId('unattended-log-name')).not.toHaveTextContent('Kenji')
+    usePersonaStore.setState({ byHost: {} })
   })
 
   it('merges two hosts newest first and names the host on each decision', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { addressName, seatOf } from './seat'
+import { addressName, isVerifiedPeer, seatLabel, seatOf } from './seat'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { makeCollection, makePersona } from './__fixtures__/personas'
 
@@ -35,5 +35,41 @@ describe('seatOf', () => {
     expect(seatOf('mlab/_q34psn')).toBeNull()
     expect(seatOf('mlab/purdex-1f-emma')).toBeNull()
     expect(seatOf('')).toBeNull()
+  })
+})
+
+describe('seatLabel', () => {
+  beforeEach(() => usePersonaStore.setState({ byHost: {} }))
+  const seed = () => {
+    const c = makeCollection(['hiro'])
+    c.items[0] = makePersona('hiro', { name: 'Hiro' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+  }
+
+  it('is the persona\'s name with the title after it, or the name alone', () => {
+    seed()
+    expect(seatLabel('mlab/purdex-1f-hiro', 'review the plan')).toBe('Hiro · review the plan')
+    expect(seatLabel('mlab/purdex-1f-hiro')).toBe('Hiro')
+    expect(seatLabel('mlab/purdex-1f-hiro', '  ')).toBe('Hiro')
+  })
+
+  it('is null when the address names no persona, so the caller keeps its own label', () => {
+    seed()
+    expect(seatLabel('mlab/purdex-1f-ghost', 't')).toBeNull()
+    expect(seatLabel('mlab/_q34psn')).toBeNull()
+    expect(seatLabel('')).toBeNull()
+  })
+})
+
+describe('isVerifiedPeer', () => {
+  it('is true only for a peer whose identity the transport established', () => {
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro' } })).toBe(true)
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro', unverified: false } })).toBe(true)
+  })
+  it('is false for an unverified sender, a mod notice, any other kind, and no sender', () => {
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro', unverified: true } })).toBe(false)
+    expect(isVerifiedPeer({ from: { kind: 'plugin', name: 'hiro' } })).toBe(false)
+    expect(isVerifiedPeer({ from: { kind: 'user' } })).toBe(false)
+    expect(isVerifiedPeer({})).toBe(false)
   })
 })

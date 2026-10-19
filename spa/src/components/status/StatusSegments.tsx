@@ -48,7 +48,7 @@ export function Separator({ className = '' }: { className?: string }) {
 export function CopySegment({ testId, display, value, what, title, dim, rtl, className = '', onCopy, onDoubleClick }: {
   testId: string
   /** What the row shows; '—' stands in for a value that is not there. */
-  display: string
+  display: ReactNode
   /** What a click puts on the clipboard. Empty disables the button. */
   value: string
   /** The segment's name, already translated, for the confirmation message. */

@@ -118,6 +118,9 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		}
 		m.rosterChanged() // a seat may have been freed
 		if fact.Kind == team.FactRegistered || fact.Kind == team.FactSpawnFailed {
+			if fact.Kind == team.FactRegistered {
+				m.recordRemoteSpawnPair(entry.HostID, fact) // the lead host writes the pair of a forwarded spawn (spec §6.1)
+			}
 			m.wake(fact.MK) // a `pdx spawn --host` POST is waiting on this op
 		}
 	}

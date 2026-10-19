@@ -35,6 +35,11 @@ type fakeNames struct {
 
 type exactCall struct{ code, op, tmux string }
 
+// The pair of a registered spawn is written through the name service too (NP-4 B); these tests are about the reservation, so the
+// fake knows no codes and writes nothing (name_pairs_test.go has the one that does).
+func (n *fakeNames) CodeOf(context.Context, string) (string, bool)         { return "", false }
+func (n *fakeNames) RecordPairCodes(context.Context, string, string) error { return nil }
+
 func (n *fakeNames) ReserveExact(_ context.Context, code, op, tmux string, _ time.Time) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()

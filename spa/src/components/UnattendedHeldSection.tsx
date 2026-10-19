@@ -5,6 +5,7 @@
 import { Fragment, type ReactNode } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
+import { usePersonaRevision } from '../lib/names/seat'
 import { approvalSessionLabel, memberRelayNames } from '../lib/team/approval-format'
 import { sinceText } from '../lib/team/time-text'
 import { clipForDisplay, type Approval } from '../lib/team/types'
@@ -31,6 +32,7 @@ function LeadLabel({ name, title }: { name: string; title?: string }) {
 
 export function UnattendedHeldSection({ rows }: { rows: readonly HeldRow[] }) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the label below reads the persona store without subscribing: redraw when it loads or changes
   const rosters = useTeamRosterStore((s) => s.byHost)
   if (rows.length === 0) return null
   const sorted = [...rows].sort((x, y) => y.a.created_at - x.a.created_at)

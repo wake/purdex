@@ -1,8 +1,10 @@
 // spa/src/lib/team/approval-format.test.ts — the pdx address the dialog prints for the requesting session, including
 // an origin an unexpected daemon left incomplete: the formatter must not throw on a missing `ref` (F2).
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { approvalKindLabel, approvalSessionLabel, closedToastText, formatOriginAddress, memberRelayNames } from './approval-format'
 import type { Origin } from './types'
+import { usePersonaStore } from '../../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../names/__fixtures__/personas'
 
 const origin = (over: Partial<Origin> = {}): Origin => ({
   session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w/purdex', tmux: '',
@@ -150,5 +152,41 @@ describe('closedToastText: a relay that ended half', () => {
   it('half on a card that is not cancelled is not that wording (a stray field never rewrites a state)', () => {
     expect(closedToastText(t, 'mlab', { ...base, state: 'timeout', close_reason: 'half' })).toContain('approval.toast.ended')
     expect(closedToastText(t, 'mlab', { ...base, state: 'abandoned', close_reason: 'half' })).toContain('approval.state.abandoned')
+  })
+})
+
+// A session that is a persona is called by its name, the title after it (name pool v2 spec §9.3); the dialog's address row (formatOriginAddress) is untouched.
+describe('approvalSessionLabel of a persona', () => {
+  beforeEach(() => usePersonaStore.setState({ byHost: {} }))
+  const seed = () => {
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+  }
+
+  it('is the name with the title after it, or the name alone', () => {
+    seed()
+    expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji', address: 'mlab/purdex-1f-kenji', title: 'deploy' }))).toBe('Kenji · deploy')
+    expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji', address: 'mlab/purdex-1f-kenji' }))).toBe('Kenji')
+  })
+
+  // `name` is the registry's raw name, which the session sets itself: only the daemon's resolved `address` may name a persona
+  // (mutation: resolve from `o.name` again → a session called `anything-kenji` reads as Kenji in the dialog).
+  it('never resolves a persona from the registry name: an older daemon sends no address, and a forged name stays the name', () => {
+    seed()
+    expect(approvalSessionLabel(origin({ name: 'purdex-1f-kenji' }))).toBe('purdex-1f-kenji')
+    expect(approvalSessionLabel(origin({ name: 'anything-kenji', title: 'deploy' }))).toBe('deploy')
+  })
+
+  it('a session that is no persona reads as it always did: the title, else the name, else the ref', () => {
+    seed()
+    expect(approvalSessionLabel(origin({ title: 'deploy' }))).toBe('deploy')
+    expect(approvalSessionLabel(origin())).toBe('purdex-7c')
+    expect(approvalSessionLabel(origin({ name: '' }))).toBe('_40iueq')
+  })
+
+  it('leaves the address row as it was', () => {
+    seed()
+    expect(formatOriginAddress('mlab', origin({ name: 'purdex-1f-kenji' }))).toBe('mlab/purdex-1f-kenji [40iueq]')
   })
 })

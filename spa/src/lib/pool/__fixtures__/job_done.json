@@ -1,0 +1,18 @@
+{
+  "id": "j_01JD", "origin": "mlab",
+  "repo": {"name": "purdex", "root": "abc123", "remote": "git@github.com:wake/purdex.git"},
+  "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
+  "task": "spa-related", "args": [], "class": "dev",
+  "labels": [], "locks": ["db"], "cacheable": false, "timeout_s": 600,
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false, "manual": "", "manual_seq": 0,
+  "supersede_key": "k",
+  "submitter": {"session": "s1", "ref": "_abc123", "team": "", "host": "mlab"},
+  "created_at": "2026-10-18T05:00:00+08:00", "state": "superseded",
+  "claim": {"worker": "air26", "attempt": 1, "since": "2026-10-18T05:00:10+08:00"},
+  "result": {"exit": 0,
+    "summary": {"passed": 10, "failed": 1, "skipped": 2,
+                "failures": [{"name": "t", "file": "a.test.ts", "message": "boom"}], "tail": ["x"]},
+    "log": "j_01JD/log", "host": "air26",
+    "started_at": "2026-10-18T05:00:11+08:00", "finished_at": "2026-10-18T05:02:00+08:00",
+    "cache_hit": false, "reason": "", "superseded_by": "j_01JE"}
+}
