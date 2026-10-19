@@ -47,7 +47,7 @@ func (PressureHeld) Eval(in Input) (Verdict, error) {
 		return Verdict{}, errors.New("no minute history is available")
 	}
 	v := Verdict{Key: "pressure_held", Level: wire.AlertPush}
-	recs := in.Minutes(in.Now.Add(-(pressureMinutes + 1) * time.Minute))
+	recs := in.Minutes(in.Now.Add(-(pressureMinutes + 3) * time.Minute))
 	if len(recs) == 0 {
 		return v, nil
 	}
@@ -64,16 +64,23 @@ func (PressureHeld) Eval(in Input) (Verdict, error) {
 	if !minuteFull(last) {
 		recs = recs[:len(recs)-1]
 	}
-	if len(recs) < pressureMinutes {
+	// a minute's swap reading is the swap at its end, so five minutes of growth is the reading at the end of the fifth minus the one at the
+	// end of the minute before the window: six readings, five intervals
+	if len(recs) < pressureMinutes+1 {
 		return v, nil
 	}
+	base := recs[len(recs)-pressureMinutes-1]
 	win := recs[len(recs)-pressureMinutes:]
 	for i, f := range win {
-		if !minuteFull(f) || !minuteHigh(f) || (i > 0 && f.At.Sub(win[i-1].At) != time.Minute) {
+		prev := base
+		if i > 0 {
+			prev = win[i-1]
+		}
+		if !minuteFull(f) || !minuteHigh(f) || f.At.Sub(prev.At) != time.Minute {
 			return v, nil
 		}
 	}
-	from, to := win[0].Mem.SwapUsedMB, win[len(win)-1].Mem.SwapUsedMB
+	from, to := base.Mem.SwapUsedMB, win[len(win)-1].Mem.SwapUsedMB
 	if from == nil || to == nil || *to-*from < pressureSwapMB {
 		return v, nil
 	}

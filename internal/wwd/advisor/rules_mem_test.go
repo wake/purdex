@@ -45,12 +45,23 @@ func minutesInput(now time.Time, recs ...wire.Facts) Input {
 
 // ---- pressure held ----
 
-func TestPressureHeld_FiveMinutesAtWarningAndSwapUpAGB(t *testing.T) {
+// recsOf builds one-minute records at t0+i minutes: record i spent its minute in zones[i] and ended with swap(i) MB in use. The five
+// minutes the rule judges are the last five; the one before them is the baseline whose swap reading starts the window.
+func recsOf(zones []wire.Zone, swap func(i int) int) []wire.Facts {
 	var recs []wire.Facts
-	for i := 0; i < 5; i++ {
-		recs = append(recs, minute(i, wire.ZoneWarning, 900+i*300)) // swap 900 → 2100: +1200 MB
+	for i, z := range zones {
+		recs = append(recs, minute(i, z, swap(i)))
 	}
-	v, err := PressureHeld{}.Eval(minutesInput(t0.Add(4*time.Minute+30*time.Second), recs...))
+	return recs
+}
+
+// nowOf is half a minute into the minute after the last record, a moment the newest whole minute is 30 s old.
+func nowOf(recs []wire.Facts) time.Time { return recs[len(recs)-1].At.Add(30 * time.Second) }
+
+func TestPressureHeld_FiveMinutesAtWarningAndSwapUpAGB(t *testing.T) {
+	w, n := wire.ZoneWarning, wire.ZoneNormal
+	recs := recsOf([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return 900 + i*250 }) // 900 → 2150: +1250 over five minutes
+	v, err := PressureHeld{}.Eval(minutesInput(nowOf(recs), recs...))
 	if err != nil || !v.Holds || v.Key != "pressure_held" || v.Level != wire.AlertPush {
 		t.Fatalf("%+v %v", v, err)
 	}
@@ -60,26 +71,29 @@ func TestPressureHeld_FiveMinutesAtWarningAndSwapUpAGB(t *testing.T) {
 }
 
 func TestPressureHeld_EachConditionIsNeeded(t *testing.T) {
+	w, n, d := wire.ZoneWarning, wire.ZoneNormal, wire.ZoneDanger
 	mk := func(zones []wire.Zone, swap func(i int) int) Input {
-		var recs []wire.Facts
-		for i, z := range zones {
-			recs = append(recs, minute(i, z, swap(i)))
-		}
-		return minutesInput(t0.Add(time.Duration(len(zones)-1)*time.Minute+30*time.Second), recs...)
+		recs := recsOf(zones, swap)
+		return minutesInput(nowOf(recs), recs...)
 	}
 	grow := func(i int) int { return 900 + i*300 }
 	flat := func(i int) int { return 900 }
-	w, n := wire.ZoneWarning, wire.ZoneNormal
 	for name, c := range map[string]struct {
 		in   Input
 		want bool
 	}{
-		"swap flat":                     {mk([]wire.Zone{w, w, w, w, w}, flat), false},
-		"swap up only 800 MB":           {mk([]wire.Zone{w, w, w, w, w}, func(i int) int { return 900 + i*200 }), false},
-		"only 4 minutes at warning":     {mk([]wire.Zone{n, w, w, w, w}, grow), false},
-		"a normal minute in the middle": {mk([]wire.Zone{w, w, n, w, w}, grow), false},
-		"danger counts as above":        {mk([]wire.Zone{wire.ZoneDanger, w, w, w, wire.ZoneDanger}, grow), true},
-		"six minutes, the last five":    {mk([]wire.Zone{n, w, w, w, w, w}, grow), true},
+		"swap flat":                       {mk([]wire.Zone{n, w, w, w, w, w}, flat), false},
+		"swap up only 800 MB in five":     {mk([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return 900 + i*160 }), false},
+		"only 4 minutes at warning":       {mk([]wire.Zone{n, n, w, w, w, w}, grow), false},
+		"a normal minute in the middle":   {mk([]wire.Zone{n, w, w, n, w, w}, grow), false},
+		"danger counts as above":          {mk([]wire.Zone{n, d, w, w, w, d}, grow), true},
+		"the baseline minute may be high": {mk([]wire.Zone{w, w, w, w, w, w}, grow), true},
+		"seven minutes, the last five":    {mk([]wire.Zone{n, n, w, w, w, w, w}, grow), true},
+		// growth that happened in the first minute of the window counts: the window starts at the baseline's reading, not at the first
+		// whole minute's own end
+		"growth in the first minute": {mk([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return []int{900, 1950, 2000, 2050, 2100, 2150}[i] }), true},
+		// growth before the baseline is not in the window
+		"growth only before the window": {mk([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return []int{2200, 2200, 2250, 2300, 2350, 2400}[i] }), false},
 	} {
 		v, err := PressureHeld{}.Eval(c.in)
 		if err != nil || v.Holds != c.want {
@@ -90,12 +104,10 @@ func TestPressureHeld_EachConditionIsNeeded(t *testing.T) {
 
 // A minute that was warning for part of it only is not "at warning for the minute": the stats say how many seconds were normal.
 func TestPressureHeld_APartlyNormalMinuteBreaksIt(t *testing.T) {
-	var recs []wire.Facts
-	for i := 0; i < 5; i++ {
-		recs = append(recs, minute(i, wire.ZoneWarning, 900+i*300))
-	}
-	recs[2].Stats.WarningS, recs[2].Stats.NormalS = 40, 20
-	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute), recs...)); v.Holds {
+	w, n := wire.ZoneWarning, wire.ZoneNormal
+	recs := recsOf([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return 900 + i*300 })
+	recs[3].Stats.WarningS, recs[3].Stats.NormalS = 40, 20
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(recs), recs...)); v.Holds {
 		t.Fatal("a minute with 20 normal seconds counted as at warning")
 	}
 }
@@ -122,18 +134,30 @@ func TestPressureHeld_StaysWhileTheZoneStaysHigh(t *testing.T) {
 	}
 }
 
-// Old history, a hole in it, or a missing swap reading is not a verdict of "held".
+// Old history, a hole in it, or a missing swap reading (at either end of the window) is not a verdict of "held".
 func TestPressureHeld_StaleOrMissingData(t *testing.T) {
-	var recs []wire.Facts
-	for i := 0; i < 5; i++ {
-		recs = append(recs, minute(i, wire.ZoneWarning, 900+i*300))
+	w, n := wire.ZoneWarning, wire.ZoneNormal
+	fresh := func() []wire.Facts {
+		return recsOf([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return 900 + i*300 })
 	}
+	recs := fresh()
 	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(30*time.Minute), recs...)); v.Holds {
 		t.Fatal("history that ended 25 minutes ago counted as now")
 	}
-	recs[4].Mem.SwapUsedMB = nil
-	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute), recs...)); v.Holds {
-		t.Fatal("no swap reading counted as growth")
+	recs = fresh()
+	recs[5].Mem.SwapUsedMB = nil
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(recs), recs...)); v.Holds {
+		t.Fatal("no swap reading at the end counted as growth")
+	}
+	recs = fresh()
+	recs[0].Mem.SwapUsedMB = nil
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(recs), recs...)); v.Holds {
+		t.Fatal("no baseline swap reading counted as growth")
+	}
+	recs = fresh()
+	recs[0].At = recs[0].At.Add(-time.Minute) // a missing minute between the baseline and the window
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(recs), recs...)); v.Holds {
+		t.Fatal("a hole between the baseline and the window counted")
 	}
 	if _, err := (PressureHeld{}).Eval(Input{Now: t0}); err == nil {
 		t.Fatal("no history at all is not a verdict")
@@ -141,30 +165,31 @@ func TestPressureHeld_StaleOrMissingData(t *testing.T) {
 }
 
 // The minute still being filled does not count toward the five: the alert must not fire before the pressure has lasted five minutes. Five
-// whole minutes before a partial newest one are enough; a partial minute inside the five, or a record without stats, is not.
+// whole minutes (and the baseline before them) with a partial newest one are enough; a partial minute inside the five, or a record without
+// stats, is not.
 func TestPressureHeld_OnlyWholeMinutesStartIt(t *testing.T) {
-	var recs []wire.Facts
-	for i := 0; i < 5; i++ {
-		recs = append(recs, minute(i, wire.ZoneWarning, 900+i*300))
+	w, n := wire.ZoneWarning, wire.ZoneNormal
+	whole := func() []wire.Facts {
+		return recsOf([]wire.Zone{n, w, w, w, w, w}, func(i int) int { return 900 + i*300 })
 	}
-	partial := minute(5, wire.ZoneWarning, 2400)
+	partial := minute(6, w, 2700)
 	partial.Stats.SampledS, partial.Stats.WarningS = 20, 20 // the open minute, 20 s in
-	now := t0.Add(5*time.Minute + 20*time.Second)
-	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(recs, partial)...)); !v.Holds {
-		t.Fatal("five whole minutes and an open one should hold")
+	now := t0.Add(6*time.Minute + 20*time.Second)
+	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(whole(), partial)...)); !v.Holds {
+		t.Fatal("five whole minutes, their baseline and an open one should hold")
 	}
-	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(recs[1:], partial)...)); v.Holds {
-		t.Fatal("four whole minutes and an open one are only four minutes: it fired early")
+	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(whole()[1:], partial)...)); v.Holds {
+		t.Fatal("four whole minutes after the baseline and an open one are only four minutes: it fired early")
 	}
-	short := append([]wire.Facts(nil), recs...)
-	short[2] = minute(2, wire.ZoneWarning, 1500)
-	short[2].Stats.SampledS, short[2].Stats.WarningS = 35, 35 // the sampler failed for 25 s of it
-	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute+30*time.Second), short...)); v.Holds {
+	short := whole()
+	short[3] = minute(3, w, 1800)
+	short[3].Stats.SampledS, short[3].Stats.WarningS = 35, 35 // the sampler failed for 25 s of it
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(short), short...)); v.Holds {
 		t.Fatal("a minute that lost 25 s of samples counted as a whole minute")
 	}
-	nostats := append([]wire.Facts(nil), recs...)
-	nostats[1].Stats = nil
-	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute+30*time.Second), nostats...)); v.Holds {
+	nostats := whole()
+	nostats[2].Stats = nil
+	if v, _ := (PressureHeld{}).Eval(minutesInput(nowOf(nostats), nostats...)); v.Holds {
 		t.Fatal("a minute with no stats counted as a whole minute")
 	}
 }
@@ -192,7 +217,7 @@ func TestPressureHeld_AMinuteWithoutSamplesDoesNotKeepItUp(t *testing.T) {
 	if v, _ := (PressureHeld{}).Eval(raised(append(recs, open)...)); v.Holds {
 		t.Fatal("a normal second in the open minute did not end it")
 	}
-	// the minute before lost its samples and no whole minute is recent: nothing keeps it up
+	// the minutes before lost their samples and no whole minute is recent: nothing keeps it up
 	lost := minute(5, wire.ZoneWarning, 2400)
 	lost.Stats.SampledS, lost.Stats.WarningS = 5, 5
 	old := recs[:3] // whole minutes at 0..2, then nothing whole until the lost one

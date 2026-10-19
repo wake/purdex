@@ -47,7 +47,7 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 		return advisor.Input{
 			Now: time.Now(), Facts: f, WorkRoot: in.WorkRoot,
 			Minutes:     func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step1m) },
-			Recent:      func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step5s) },
+			Recent:      in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
