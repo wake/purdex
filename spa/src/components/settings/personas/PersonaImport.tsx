@@ -28,6 +28,11 @@ interface Props {
   /** Where a first collection goes when no host holds one yet (see the page). */
   fallbackHostId: string | null
   disabled: boolean
+  /**
+   * Called once the import has been saved. The page rebuilds the form that is open from the saved collection and answers
+   * whether it did, so the note can say so.
+   */
+  onImported?: () => boolean
 }
 
 interface Planned { plan: ImportPlan; base: EditBase | null }
@@ -41,7 +46,7 @@ function readText(file: File): Promise<string> {
   })
 }
 
-export function PersonaImport({ items, fallbackHostId, disabled }: Props) {
+export function PersonaImport({ items, fallbackHostId, disabled, onImported }: Props) {
   const t = useI18nStore((s) => s.t)
   const input = useRef<HTMLInputElement>(null)
   const [planned, setPlanned] = useState<Planned | null>(null)
@@ -79,7 +84,11 @@ export function PersonaImport({ items, fallbackHostId, disabled }: Props) {
     try {
       const { result, failed } = await redrawForImport(plan, items, drawRecipe)
       const res = await savePersonas(result, base, fallbackHostId ?? '')
-      const parts = [savedNote(t, res)]
+      // Another collection became the shown one while this was being written: the page no longer shows the import, so
+      // the plain "saved" would tell the user something the screen does not bear out (the form's save has the same case).
+      const parts = [res.base === null ? t('settings.personas.import.movedOn') : savedNote(t, res)]
+      // The form that is open was made on the collection before the import and would save stale values over it.
+      if (onImported?.()) parts.push(t('settings.personas.import.editorReloaded'))
       if (failed.length > 0) parts.push(t('settings.personas.import.redrawFailed', { codes: failed.join(', ') }))
       setOutcome({ note: parts.join(' ') })
     } catch (e) {

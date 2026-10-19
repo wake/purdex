@@ -106,6 +106,21 @@ export function PersonasSection() {
     if (cur) hold({ ...cur, draft: { ...cur.draft, avatar, avatar_data: avatarData } })
   }
 
+  /**
+   * An import was saved: the form that is open was made on the collection from before it. A persona that exists is
+   * rebuilt from the saved copy (its stale values would otherwise be saved over the import on the next save); a new one
+   * has nothing in the collection to be stale against, so it keeps what was typed and only takes the new base. Answers
+   * whether typed values were replaced, for the note.
+   */
+  const reloadEditor = (): boolean => {
+    const cur = editingNow.current
+    if (!cur) return false
+    const now = cur.key === '' ? undefined : usePersonaStore.getState().current()?.items.find((x) => x.code === cur.key)
+    hold(now ? { key: cur.key, draft: structuredClone(now), base: editBase() } : { ...cur, base: editBase() })
+    setPickerEpoch((n) => n + 1)
+    return now !== undefined
+  }
+
   const open = (key: string) => {
     const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
     if (!p) return
@@ -192,7 +207,7 @@ export function PersonasSection() {
       <p className="text-xs text-text-secondary">{t('settings.personas.description')}</p>
 
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-        <PersonaImport items={items} fallbackHostId={fallbackHostId} disabled={unsupported || saving || readOnly} />
+        <PersonaImport items={items} fallbackHostId={fallbackHostId} disabled={unsupported || saving || readOnly} onImported={reloadEditor} />
         <button type="button" className={BTN} data-testid="persona-new" disabled={unsupported || atCap || saving || readOnly} onClick={() => open('')}>
           {t('settings.personas.new')}
         </button>

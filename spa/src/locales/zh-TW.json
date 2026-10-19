@@ -2081,6 +2081,8 @@
   "settings.personas.import.cancel": "取消",
   "settings.personas.import.notList": "這個檔案不是角色清單（要是一個 JSON 陣列，或含 items／personas 的物件）。",
   "settings.personas.import.stale": "選檔之後角色資料有變動，沒有匯入。請重新選一次檔案。",
+  "settings.personas.import.movedOn": "匯入已存下，但這時別處又有更新，頁面顯示的是最新的那一份，可能不含匯入的內容，請檢查。",
+  "settings.personas.import.editorReloaded": "開著的表單已改成存下之後的內容。",
   "settings.personas.import.redrawFailed": "這些角色的頭像沒畫成，保留原本的頭像：{{codes}}。",
   "settings.personas.credits.title": "頭像樣式的作者與授權",
   "settings.personas.avatar.error.bad-style": "沒有這個頭像樣式。",

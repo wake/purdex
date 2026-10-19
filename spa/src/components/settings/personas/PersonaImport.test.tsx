@@ -34,7 +34,8 @@ describe('PersonaImport', () => {
   beforeEach(() => {
     cleanup()
     clearDraftMemory()
-    vi.mocked(savePersonas).mockReset().mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+    // an ordinary save: the page still shows what was written, so the answer carries a base
+    vi.mocked(savePersonas).mockReset().mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     vi.mocked(drawRecipe).mockReset().mockResolvedValue(WEBP)
     useHostStore.setState({ hosts: { h1: { id: 'h1' } as never }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } as never } })
     usePersonaSourceStore.setState({ hostId: null })
@@ -118,6 +119,36 @@ describe('PersonaImport', () => {
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
     expect(vi.mocked(savePersonas).mock.calls[0][0][0]).toMatchObject({ avatar: recipe('old'), avatar_data: WEBP })
     await waitFor(() => expect(getOutcome().note).toContain('hiro'))
+  })
+
+  it('tells the page the import was saved, and says so when the form that was open was rebuilt', async () => {
+    const onImported = vi.fn(() => true)
+    render(<PersonaImport items={seed(['hiro'])} fallbackHostId="h1" disabled={false} onImported={onImported} />)
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    pick([{ id: 'emma', name: 'Emma' }])
+    fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+    await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(getOutcome().note).toMatch(/表單已改成|open form now shows/))
+  })
+
+  it('does not call the page when the save failed', async () => {
+    const onImported = vi.fn(() => true)
+    render(<PersonaImport items={seed(['hiro'])} fallbackHostId="h1" disabled={false} onImported={onImported} />)
+    vi.mocked(savePersonas).mockRejectedValue(new PersonaStaleError())
+    pick([{ id: 'emma', name: 'Emma' }])
+    fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+    await waitFor(() => expect(getOutcome().error).toBeTruthy())
+    expect(onImported).not.toHaveBeenCalled()
+  })
+
+  it('does not report plain success when another collection won while the import was written', async () => {
+    mount(seed(['hiro']))
+    // savePersonas answers base: null when the shown collection is no longer the one it wrote
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+    pick([{ id: 'emma', name: 'Emma' }])
+    fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+    await waitFor(() => expect(getOutcome().note).toMatch(/別處又有更新|something newer/))
+    expect(getOutcome().note).not.toMatch(/^已存在|^Saved on/)
   })
 
   it('does not offer to import a file that would change nothing', async () => {
