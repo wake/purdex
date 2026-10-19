@@ -223,6 +223,41 @@ describe('what appears later is read', () => {
   })
 })
 
+describe('a topology that changes under an origin that was already read', () => {
+  it('an origin whose best source is now another one is read again through it (a daemon\'s capabilities arrive after its connection opened)', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: ['h-air'] }
+    have.add('mlab')
+    const d = driver()
+    d.watch()
+    await d.jobChanged('mlab', 'a') // read through h-air: the best source is noted
+    store.read.mockClear()
+    d.sync()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).not.toHaveBeenCalled() // nothing changed
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab', 'h-air'] }
+    d.sync()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read.mock.calls.map(src)).toEqual(['h-mlab'])
+    store.read.mockClear()
+    d.sync()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).not.toHaveBeenCalled() // and once only
+  })
+})
+
+describe('stop', () => {
+  it('a release from before it does nothing, and the next watcher polls again', async () => {
+    have.add('mlab'); have.add('mserv')
+    const d = driver()
+    const old = d.watch()
+    d.stop()
+    old()
+    d.watch()
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(store.read.mock.calls.map((c) => c[0])).toEqual(['mserv'])
+  })
+})
+
 describe('polling the origins no daemon announces', () => {
   it('every 10 s while something watches, only the origins without a daemon of their own', async () => {
     have.add('mlab'); have.add('mserv')

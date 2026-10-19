@@ -38,6 +38,8 @@ interface OriginState {
   /** How many sources were tried and failed with `next_source` since the last good read. */
   skip: number
   failures: number
+  /** The best source for the origin when it was last read: a topology that changes it makes the origin read again, through the new one. */
+  primary: string
   timer: ReturnType<typeof setTimeout> | null
   /** When `timer` fires (ms): a later request for a later time keeps the earlier one. */
   due: number
@@ -59,11 +61,13 @@ export function candidates(origin: string, topo: JobsTopology): JobSource[] {
 export function createJobsDriver(deps: JobsDriverDeps) {
   const states = new Map<string, OriginState>()
   let watchers = 0
+  /** Bumped by `stop`: a release handed out before it is of no use any more. */
+  let epoch = 0
   let poll: ReturnType<typeof setInterval> | null = null
 
   const stateOf = (origin: string): OriginState => {
     let s = states.get(origin)
-    if (!s) { s = { skip: 0, failures: 0, timer: null, due: 0, running: false }; states.set(origin, s) }
+    if (!s) { s = { skip: 0, failures: 0, primary: '', timer: null, due: 0, running: false }; states.set(origin, s) }
     return s
   }
 
@@ -102,6 +106,8 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     }
   }
 
+  const keyOf = (s: JobSource | undefined): string => (s ? `${s.daemonId}\u0000${s.host ?? ''}` : '')
+
   async function refresh(origin: string): Promise<void> {
     const st = stateOf(origin)
     if (st.running) return // the read in flight is after the same cursor
@@ -111,6 +117,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       for (;;) {
         const cands = candidates(origin, deps.topology())
         if (cands.length === 0) return
+        st.primary = keyOf(cands[0])
         const out = await deps.store.read(origin, cands[Math.min(st.skip, cands.length - 1)])
         if (out.ok) {
           st.skip = 0
@@ -129,6 +136,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     const st = stateOf(origin)
     const cands = candidates(origin, deps.topology())
     if (cands.length === 0) return
+    st.primary = keyOf(cands[0])
     const out = await deps.store.readJob(origin, cands[Math.min(st.skip, cands.length - 1)], id)
     if (out.ok) {
       if (out.more) void refresh(origin)
@@ -145,11 +153,20 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     for (const origin of deps.topology().origins) if (primaryOf(origin) === hostId) void refresh(origin)
   }
 
-  /** Reads what is known to exist and has not been read. */
+  /** Reads what is known to exist and has not been read, and what was read through a source that is no longer the best one (the store then starts it over: a cursor is its source's own). */
   function sync() {
-    for (const origin of deps.topology().origins) {
+    const topo = deps.topology()
+    for (const origin of topo.origins) {
       const st = stateOf(origin)
-      if (!deps.known(origin) && st.timer === null && !st.running) void refresh(origin)
+      if (st.running) continue
+      if (!deps.known(origin)) {
+        if (st.timer === null) void refresh(origin)
+        continue
+      }
+      const best = keyOf(candidates(origin, topo)[0])
+      if (best === '') continue
+      if (st.primary === '') st.primary = best // read by someone else (the store has it): this is the source to compare against from now on
+      else if (best !== st.primary) void refresh(origin)
     }
   }
 
@@ -170,8 +187,9 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     }
     sync()
     let released = false
+    const mine = epoch
     return () => {
-      if (released) return
+      if (released || mine !== epoch) return
       released = true
       watchers -= 1
       if (watchers === 0) stop()
@@ -185,6 +203,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
 
   /** Clears every timer (the App is closing, or a test ends). */
   function stop() {
+    epoch += 1
     watchers = 0
     stopPolling()
     for (const st of states.values()) if (st.timer !== null) { clearTimeout(st.timer); st.timer = null }

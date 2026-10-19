@@ -1,6 +1,7 @@
 // spa/src/lib/pool/jobs-driver-live.ts — the jobs driver with the App's real stores handed in: the pool's hosts say which origins exist, the host store and the Nex capability cache say which connected daemons announce `jobs.v1`
-// (the daemon of a pool host is the App host whose id, or verified daemon id, is that host's `host_id`; the first of those in host order forwards for the rest).
-import { useHostStore } from '../../stores/useHostStore'
+// (the daemon of a pool host is the App host whose daemon id THIS SESSION VERIFIED at its current endpoint is that host's `host_id` — a stored `daemonId` alone is a claim, and a wrong one would read another daemon's jobs under this origin;
+// the first of the connected daemons in host order forwards for the rest).
+import { selectDaemonIdVerified, useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { createJobsDriver, type JobsTopology } from './jobs-driver'
 import { useJobsStore } from './jobs-store'
@@ -17,11 +18,11 @@ function jobsDaemons(): string[] {
 
 export function liveTopology(): JobsTopology {
   const forwarders = jobsDaemons()
-  const { hosts } = useHostStore.getState()
+  const hostState = useHostStore.getState()
   const pool = usePoolStore.getState().hosts
   const ownDaemon: Record<string, string> = {}
   for (const h of pool) {
-    const own = forwarders.find((id) => id === h.host_id || (!!hosts[id]?.daemonId && hosts[id].daemonId === h.host_id))
+    const own = forwarders.find((id) => hostState.hosts[id]?.daemonId === h.host_id && selectDaemonIdVerified(hostState, id))
     if (own) ownDaemon[h.alias] = own
   }
   return { origins: pool.map((h) => h.alias), ownDaemon, forwarders }
