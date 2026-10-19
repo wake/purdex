@@ -12,8 +12,15 @@ export interface Stretch { tone: Tone; pts: SPt[] }
 
 /** The expected step between two points of a range: 1 s raw points for 5 分, 10 s buckets for the rest. */
 export const stepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 10_000)
+/**
+ * How far apart two points of a range are expected to be at most, for telling a hole from a slow stretch. The 5 minute range is the 1 s readings; 1 h and
+ * longer hold the App's own 10 s buckets and, before them, the daemon's 1 minute series, so there a neighbouring step can be up to a minute.
+ */
+export const holeStepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 60_000)
 /** A step wider than this many expected steps is a hole in the history (offline host, stalled fleet), not a slow stretch. */
 const GAP_STEPS = 2.5
+/** Where the two kinds of step meet the step is that of the slower side, with less room than inside a run. */
+const JUNCTION_STEPS = 1.5
 /** The charts are 400 viewBox units wide; more points than that cannot be told apart. */
 export const MAX_POINTS = 400
 
@@ -26,14 +33,42 @@ export interface ToPointsOpts {
 export function toPoints(points: HistoryPoint[], now: number, range: HistoryRange, opts: ToPointsOpts = {}): SPt[] {
   const span = RANGE_MS[range]
   const from = now - span
-  const gap = GAP_STEPS * stepMs(range)
+  const cap = holeStepMs(range)
+  const base = stepMs(range)
+  const n = points.length
+  const step = (j: number): number => Math.min(cap, Math.max(base, points[j + 1].t - points[j].t))
+  // In a long range the expected step is the one around the pair, not one for the whole range: a 70 s outage in a run of 10 s buckets is a hole,
+  // the same 60 s between two minute points (or where the two kinds meet) is not. A neighbouring step counts when the step behind it is of the same
+  // size (a run of minute points): one odd step beside another cannot vouch for it, so two outages in a row are both holes. At the edge of the data
+  // there is no step behind: such a neighbour counts only when no step has been vouched for and it is of the pair's own size (a short run of minute points).
+  const similar = (x: number, y: number): boolean => Math.max(x, y) / Math.min(x, y) <= 2
+  const side = (j: number, far: number): { v: number; ok: boolean | null } | null => {
+    if (j < 0 || j >= n - 1) return null
+    return { v: step(j), ok: far < 0 || far >= n - 1 ? null : similar(step(j), step(far)) }
+  }
+  /** How wide a step may be before it is a hole, for the pair that ends at point i. */
+  const holeLimit = (i: number): number => {
+    const sides = [side(i - 2, i - 3), side(i, i + 1)].filter((v) => v !== null)
+    if (sides.length === 0) return GAP_STEPS * cap
+    const vouched = sides.filter((v) => v.ok === true).map((v) => v.v)
+    if (vouched.length > 0) {
+      const wide = Math.max(...vouched)
+      // Both kinds of step vouched for: the pair sits where minute points meet 10 s buckets, where a step is about a minute and no more.
+      return wide * (similar(wide, Math.min(...vouched)) ? GAP_STEPS : JUNCTION_STEPS)
+    }
+    const own = step(i - 1)
+    const edge = sides.filter((v) => v.ok === null && similar(v.v, own)).map((v) => v.v)
+    return GAP_STEPS * (edge.length > 0 ? Math.max(...edge) : base)
+  }
   const out: SPt[] = []
-  let prev: number | null = null
-  for (const q of points) {
-    if (prev !== null && q.t - prev > gap) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
+  for (let i = 0; i < n; i++) {
+    const q = points[i]
+    if (i > 0) {
+      const prev = points[i - 1].t
+      if (q.t - prev > holeLimit(i)) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
+    }
     const unknown = opts.unknownZero === true && q.max <= 0
     out.push({ x: (q.t - from) / span, v: unknown ? Number.NaN : q.avg, p: unknown ? Number.NaN : q.max })
-    prev = q.t
   }
   return out
 }

@@ -106,6 +106,60 @@ describe('FleetHistory', () => {
   })
 })
 
+describe('FleetHistory.seedBuckets (1 h and longer filled from the daemon\'s 1 minute series)', () => {
+  const T0 = 2_000_000 // a multiple of the 10 s bucket
+  const sec = (n: number) => T0 + n * 1000
+  const at = (n: number, items: Record<string, number> = { cpu: 10 }) => ({ at: sec(n), ...items })
+
+  it('series points become buckets before and among what the App collected, in time order', () => {
+    const h = new FleetHistory()
+    h.record('h', fast({ at: sec(1000), cpu: 50 }))
+    h.seedBuckets('h', [at(0, { cpu: 10 }), at(60, { cpu: 20 })], sec(1001))
+    expect(h.series('h', 'cpu', '1h', sec(1001)).map((p) => [p.t, p.avg, p.max])).toEqual([[sec(0), 10, 10], [sec(60), 20, 20], [sec(1000), 50, 50]])
+  })
+
+  it('a bucket the App already has keeps its own value', () => {
+    const h = new FleetHistory()
+    h.record('h', fast({ at: sec(1000), cpu: 50 }))
+    h.seedBuckets('h', [at(1003, { cpu: 99 })], sec(1010))
+    expect(h.series('h', 'cpu', '1h', sec(1010)).map((p) => p.avg)).toEqual([50])
+  })
+
+  it('a point dated ahead of this App\'s clock is not placed', () => {
+    const h = new FleetHistory()
+    h.seedBuckets('h', [at(0), at(100_000)], sec(10))
+    expect(h.series('h', 'cpu', '24h', sec(10)).map((p) => p.t)).toEqual([sec(0)])
+    expect(h.bucketCount('h')).toBe(1)
+  })
+
+  it('an item a point does not carry is a gap for that item only', () => {
+    const h = new FleetHistory()
+    h.seedBuckets('h', [{ at: sec(0), cpu: 10 }, { at: sec(60), cpu: 20, mem: 40 }], sec(70))
+    expect(h.series('h', 'cpu', '1h', sec(70)).map((p) => p.avg)).toEqual([10, 20])
+    expect(h.series('h', 'mem', '1h', sec(70)).map((p) => [p.t, p.avg])).toEqual([[sec(60), 40]])
+  })
+
+  it('the 5 minute track is not touched', () => {
+    const h = new FleetHistory()
+    h.seedBuckets('h', [at(0), at(60)], sec(70))
+    expect(h.rawCount('h')).toBe(0)
+  })
+
+  it('what is older than the 24 h of buckets is dropped', () => {
+    const h = new FleetHistory()
+    h.seedBuckets('h', [at(0), at(25 * 3600)], sec(25 * 3600 + 10))
+    expect(h.series('h', 'cpu', '24h', sec(25 * 3600 + 10)).map((p) => p.t)).toEqual([sec(25 * 3600)])
+  })
+
+  it('a live reading older than a seeded bucket still lands in time order', () => {
+    const h = new FleetHistory()
+    h.seedBuckets('h', [at(100, { cpu: 20 })], sec(130))
+    h.record('h', fast({ at: sec(50), cpu: 10 }))
+    h.record('h', fast({ at: sec(120), cpu: 30 }))
+    expect(h.series('h', 'cpu', '1h', sec(130)).map((p) => [p.t, p.avg])).toEqual([[sec(50), 10], [sec(100), 20], [sec(120), 30]])
+  })
+})
+
 describe('FleetHistory.seedRaw (the 5 min range filled from the daemon\'s history)', () => {
   const at = (n: number) => 1_000_000 + n * 1000
   const seed = (n: number, cpu: number) => ({ at: at(n), cpu, mem: 1, level: 1, page_rate: 0, disk: 1 })
