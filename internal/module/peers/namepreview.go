@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -20,16 +21,18 @@ import (
 
 const (
 	// previewMaxCodes and previewMaxCodeLen bound the body: a collection holds at most this many personas, a code this many bytes.
-	previewMaxCodes   = 2000
-	previewMaxCodeLen = 64
-	previewBodyLimit  = 1 << 20
+	previewMaxCodes  = 2000
+	previewBodyLimit = 1 << 20
 )
+
+// previewCodeRe is the shape of a persona code (the personas route accepts no other).
+var previewCodeRe = regexp.MustCompile(`^[a-z]{3,12}$`)
 
 // renamePreview counts, for a collection whose codes are codes and whose active (pickable) codes are pickable: candidates, the live
 // conversations the backfill would look at, and wouldRename, how many of them it can actually rename — no more than there are
 // pickable names no live conversation holds, because the pool runs out and the rest keep their own names. A conversation in a relay
-// is left to a later pass but is renamed in the end, so it is counted. Names held by another host's snapshot or by a reservation
-// are not known here; they can only make the real number smaller.
+// is left to a later pass but is renamed in the end, so it is counted. The held names are the ones a pick sees: live conversations',
+// reservations' and other hosts' snapshots'.
 func (m *Module) renamePreview(ctx context.Context, codes, pickable []string) (candidates, wouldRename int, err error) {
 	if m.peerNames == nil {
 		return 0, 0, errNoNameStore
@@ -75,6 +78,31 @@ func (m *Module) renamePreview(ctx context.Context, codes, pickable []string) (c
 			held[name[i+1:]] = true
 		}
 	}
+	// ... and, as heldPoolNames, the names reserved for spawns and the ones the other hosts' snapshots hold, read under the same
+	// pool lock and generation as a pick (the proposed codes are not in the pool yet, so the live names above are matched by suffix)
+	if err := m.awaitPoolReady(ctx); err != nil {
+		return 0, 0, err
+	}
+	unlock, err := m.lockPool(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer unlock()
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
+	m.ensureReservations(ctx)
+	for n := range m.reservations.codes(m.now()) {
+		if pick[n] {
+			held[n] = true
+		}
+	}
+	if m.remoteNames != nil {
+		for n := range m.remoteNames.held(m.now()) {
+			if pick[n] {
+				held[n] = true
+			}
+		}
+	}
 	free := len(pick) - len(held)
 	return len(cands), min(len(cands), free), nil
 }
@@ -99,8 +127,8 @@ func (m *Module) handleRenamePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, c := range append(append([]string(nil), req.Codes...), pickable...) {
-		if len(c) > previewMaxCodeLen {
-			http.Error(w, "a code is too long", http.StatusBadRequest)
+		if !previewCodeRe.MatchString(c) { // a code the personas route would refuse can never be saved, so it has no preview
+			http.Error(w, "a code is not a persona code", http.StatusBadRequest)
 			return
 		}
 	}

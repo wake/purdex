@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,7 +119,11 @@ func TestRenamePreview_Route(t *testing.T) {
 	assert.Equal(t, 1, out.Candidates)
 
 	assert.Equal(t, http.StatusBadRequest, post(`not json`).Code)
-	assert.Equal(t, http.StatusBadRequest, post(`{"codes":["ok","`+strings.Repeat("a", 200)+`"]}`).Code, "a code over the limit")
+	assert.Equal(t, http.StatusBadRequest, post(`{"codes":["abc","`+strings.Repeat("a", 200)+`"]}`).Code, "a code over the limit")
+	for _, bad := range []string{"Hiro", "a-b", "ab", "abcdefghijklm", "hi ro", ""} {
+		assert.Equal(t, http.StatusBadRequest, post(`{"codes":["`+bad+`"]}`).Code, "%q is no persona code", bad)
+		assert.Equal(t, http.StatusBadRequest, post(`{"codes":["abc"],"pickable":["`+bad+`"]}`).Code, "pickable %q", bad)
+	}
 	assert.Equal(t, http.StatusBadRequest, post(`{"codes":[`+strings.Repeat(`"a",`, previewMaxCodes)+`"a"]}`).Code, "too many codes")
 	assert.Equal(t, http.StatusOK, post(`{"codes":[]}`).Code, "no codes: every named conversation would be renamed")
 }
@@ -164,4 +169,29 @@ func TestRenamePreview_CountsNoMoreThanTheFreeNames(t *testing.T) {
 	_, would, err = e.m.renamePreview(context.Background(), []string{"hiro"}, []string{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, would, "nothing pickable: nothing can be renamed")
+}
+
+// codex R2 on #3568: the names the backfill treats as held are the live conversations', the reservations' and the other hosts'
+// snapshots'. The preview takes the same set, so a first save is not promised more renames than the picker can give.
+// Mutation gate: leave the reservations out → red; leave the remote snapshot out → red.
+func TestRenamePreview_ReservedAndRemoteHeldNamesAreNotFree(t *testing.T) {
+	codes := []string{"hiro", "anna", "mia"}
+	t.Run("a reservation", func(t *testing.T) {
+		e := newBackfillEnv(t)
+		e.live(poolSidA, "scratch-1")
+		e.live(poolSidB, "scratch-2")
+		require.NoError(t, e.m.ReserveExact(context.Background(), "anna", "op-1", "tm-1", time.Now()))
+		_, would, err := e.m.renamePreview(context.Background(), codes, []string{"anna", "mia"})
+		require.NoError(t, err)
+		assert.Equal(t, 1, would, "anna is reserved for a spawn, only mia is free for two old conversations")
+	})
+	t.Run("another host's snapshot", func(t *testing.T) {
+		e := newBackfillEnv(t)
+		e.live(poolSidA, "scratch-1")
+		e.live(poolSidB, "scratch-2")
+		e.holdRemote(tEarly, "anna", "mia")
+		_, would, err := e.m.renamePreview(context.Background(), codes, []string{"anna", "mia"})
+		require.NoError(t, err)
+		assert.Equal(t, 0, would, "both pickable names are held on another host")
+	})
 }
