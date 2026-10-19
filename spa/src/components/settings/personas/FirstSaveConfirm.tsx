@@ -27,14 +27,14 @@ export function FirstSaveConfirm({ hostId, personas, onConfirm, onCancel }: Prop
   // alongside: when it answers, that is the number; when it cannot (an older daemon, not ready, offline), the floor
   // worked out from the inventory is used as before.
   const [read, setRead] = useState<{ hostId: string; exact: number | null } | null>(null)
-  const personasRef = useRef(personas)
-  personasRef.current = personas
+  // The set is the one that was shown when the question was asked; it does not change while the question is open.
+  const asked = useRef(personas)
   useEffect(() => {
     const ctl = new AbortController()
     let live = true
     void Promise.all([
       usePeerStore.getState().refresh(hostId),
-      fetchRenamePreview(hostId, personasRef.current, ctl.signal),
+      fetchRenamePreview(hostId, asked.current, ctl.signal),
     ]).then(([, exact]) => { if (live) setRead({ hostId, exact }) })
     return () => { live = false; ctl.abort() }
   }, [hostId])
