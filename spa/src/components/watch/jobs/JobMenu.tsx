@@ -1,7 +1,7 @@
 // spa/src/components/watch/jobs/JobMenu.tsx — the 「⋯」 menu of a job's detail (plan "WWD-7 design", Jobs tab): 最前／最後／暫緩／恢復 for a queued job (only for an origin the App has its own daemon for) and 取消. It exists only where a daemon announces
 // `jobs.control.v1` and the connection may change things (a device token answers 403: the menu then goes away and the notice says why). Cancelling a job that is going asks first; a queued one is cancelled at once (user Q5).
 // What a change did is not read back here: the job store's next read (`jobs.changed`) decides what the job now is; a refusal is told to the detail through `onNotice`, with a retry where one can help.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DotsThree } from '@phosphor-icons/react'
 import { Menu, type MenuEntry } from '../../Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -25,6 +25,8 @@ function noticeOf(e: unknown, t: T, origin: string, retry: () => void): MenuNoti
   const { code, action } = e.poolError
   if (code === 'wwd_rejected') return { text: e.status === 409 ? t('watch.jobs.menu.ended') : (e.detail !== '' ? e.detail : t('watch.jobs.menu.rejected')) }
   if (action === 'read_only') return { text: t('pool.error.forbidden') }
+  // no daemon answered at all (the connection dropped or is coming back): nothing was sent that could be half done, so asking again is safe
+  if (code === 'no_answer') return { text: t('watch.jobs.menu.unreachable'), retry }
   if (action === 'revert_retry') return { text: e.detail !== '' ? t('watch.jobs.menu.no_answer', { host: origin, reason: e.detail }) : t('pool.error.host_failing', { host: origin }), retry }
   if (code === 'busy') return { text: t('pool.error.busy'), retry }
   console.error('job change refused', e.message)
@@ -44,8 +46,7 @@ export function JobMenu({ job, onNotice }: { job: PoolJob; onNotice: (n: MenuNot
   // A device token was refused (403): the daemon is remembered (control-api), so the menu is gone for it until the App starts again.
   const [, setDeniedSeen] = useState(0)
   const via = (a: MenuAction) => (a.kind === 'cancel' ? ctl.cancelVia : ctl.positionVia)
-  const actions = menuActions(job, ctl).filter((a) => { const v = via(a); return v !== null && !controlDenied(v) })
-  if (actions.length === 0) return null
+  const runRef = useRef<(a: MenuAction) => Promise<void>>(async () => {})
 
   const run = async (a: MenuAction): Promise<void> => {
     const to = via(a)
@@ -59,11 +60,18 @@ export function JobMenu({ job, onNotice }: { job: PoolJob; onNotice: (n: MenuNot
       if (source) void useJobsStore.getState().readJob(job.origin, source, job.id)
     } catch (e) {
       if (e instanceof PoolChangeError && e.poolError.action === 'read_only') setDeniedSeen((n) => n + 1)
-      onNotice(noticeOf(e, t, job.origin, () => { void run(a) }))
+      // the retry is the newest render's `run`: the daemon it picks is the one that is connected then, not the one the first press picked
+      onNotice(noticeOf(e, t, job.origin, () => { void runRef.current(a) }))
     } finally {
       setBusy(false)
     }
   }
+
+  useEffect(() => { runRef.current = run })
+
+  // every hook is above this line
+  const actions = menuActions(job, ctl).filter((a) => { const v = via(a); return v !== null && !controlDenied(v) })
+  if (actions.length === 0) return null
 
   const pick = (a: MenuAction) => {
     if (a.kind === 'cancel' && a.confirm) { setConfirming(true); return }

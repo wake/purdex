@@ -175,6 +175,22 @@ describe('a refusal', () => {
     await waitFor(() => expect(screen.queryByTestId('notice')).toBeNull())
   })
 
+  it('a connection that drops (no answer at all) says nothing was sent, with 重試; the retry asks the daemon that is connected then', async () => {
+    vi.mocked(hostFetch).mockRejectedValue(new Error('network down'))
+    render(<Harness j={job({ origin: 'mserv' })} />)
+    open()
+    fireEvent.click(screen.getByTestId('job-menu-cancel'))
+    expect(await screen.findByTestId('notice')).toHaveTextContent(t('watch.jobs.menu.unreachable'))
+    // the first daemon is gone and another has come: the retry goes there
+    vi.mocked(liveTopology).mockReturnValue({ origins: ['mlab', 'mserv'], ownDaemon: {}, forwarders: ['d-air26'] })
+    act(() => announce('d-air26'))
+    reply(200, {})
+    fireEvent.click(screen.getByTestId('retry'))
+    await waitFor(() => expect(hostFetch).toHaveBeenCalledTimes(2))
+    expect(calls()[0].id).toBe('d-mlab')
+    expect(calls()[1]).toMatchObject({ id: 'd-air26', path: '/api/pool/jobs/j1/cancel?host=mserv' })
+  })
+
   it('a daemon that is too busy (429) says so, with 重試', async () => {
     reply(429, { error: 'busy' })
     render(<Harness j={job()} />)

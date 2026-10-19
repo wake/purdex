@@ -3302,6 +3302,7 @@
   "watch.jobs.menu.ended": "這件工作已經結束，沒辦法再改",
   "watch.jobs.menu.rejected": "wwd 沒有接受這個動作",
   "watch.jobs.menu.no_answer": "{{host}} 沒有回應：{{reason}}",
+  "watch.jobs.menu.unreachable": "連不上 daemon，這個動作沒有送出",
   "watch.jobs.menu.failed": "這個動作沒有成功",
   "pool.driver.cpu": "CPU",
   "pool.driver.mem": "記憶體",

@@ -3302,6 +3302,7 @@
   "watch.jobs.menu.ended": "This job has already ended and cannot be changed",
   "watch.jobs.menu.rejected": "wwd did not accept this action",
   "watch.jobs.menu.no_answer": "{{host}} did not answer: {{reason}}",
+  "watch.jobs.menu.unreachable": "Cannot reach the daemon; the action was not sent",
   "watch.jobs.menu.failed": "The action did not go through",
   "pool.driver.cpu": "CPU",
   "pool.driver.mem": "Memory",
