@@ -5,11 +5,10 @@ import { useState } from 'react'
 import { Avatar } from './Avatar'
 import { useI18nStore } from '../stores/useI18nStore'
 import { currentCollection, usePersonaStore } from '../stores/usePersonaStore'
-import { useHostLook } from '../lib/host-look'
-import { resolveHostColors } from '../lib/host-color'
 import type { LeadNameCandidate } from '../lib/team/types'
 
 interface Props {
+  /** Not used any more: a persona's initial sits on the persona's own colour, not the host's. */
   hostId: string
   /** The session's name now: the 「保留」 pill reads it. */
   currentName: string
@@ -22,11 +21,9 @@ interface Props {
   disabled: boolean
 }
 
-export function LeadNameCard({ hostId, currentName, names, pick, onPick, taken, disabled }: Props) {
+export function LeadNameCard({ currentName, names, pick, onPick, taken, disabled }: Props) {
   const t = useI18nStore((s) => s.t)
   const collection = usePersonaStore((s) => currentCollection(s.byHost))
-  const look = useHostLook(hostId === '' ? null : hostId)
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   const [more, setMore] = useState(false)
   const former = names.filter((n) => n.kind === 'former')
   const lead = names.filter((n) => n.kind === 'lead')
@@ -39,7 +36,7 @@ export function LeadNameCard({ hostId, currentName, names, pick, onPick, taken, 
       key={key} type="button" role="radio" aria-checked={selected} disabled={disabled} onClick={onClick} data-testid="lead-name-pill" data-code={code}
       className={`inline-flex max-w-full items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${selected ? 'border-accent bg-surface-hover text-text-primary' : 'border-border-subtle text-text-secondary hover:bg-surface-hover'} disabled:opacity-50`}
     >
-      <Avatar size={22} code={avatarCode} name={label} src={collection?.items.find((p) => p.code === avatarCode)?.avatar_data} fallbackColor={faceColor} />
+      <Avatar size={22} code={avatarCode} name={label} src={collection?.items.find((p) => p.code === avatarCode)?.avatar_data} />
       <span className="truncate">{label}</span>
     </button>
   )

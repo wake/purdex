@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseExceptionList } from './exceptions'
+import knownJson from './__fixtures__/pool_host_exceptions.json'
+import unknownJson from './__fixtures__/pool_host_exceptions_unknown.json'
 
 describe('parseExceptionList', () => {
   it('reads wwd\'s Exception list: the end time, the pid, the holds', () => {
@@ -21,8 +23,31 @@ describe('parseExceptionList', () => {
     ])
   })
 
-  it('an answer that is no list is not known', () => {
-    for (const bad of [null, undefined, {}, 'x', { exceptions: [] }]) expect(parseExceptionList(bad)).toBeNull()
+  it('an answer that is neither the wire object nor a list is not known', () => {
+    for (const bad of [null, undefined, {}, 'x', { exceptions: [] }, { known: 'yes', exceptions: [] }]) expect(parseExceptionList(bad)).toBeNull()
     expect(parseExceptionList([])).toEqual([])
+  })
+})
+
+describe('parseExceptionList: the wire object { host, known, exceptions }', () => {
+  it('known:true reads the entries; allow and flags are not shown, so they are not carried', () => {
+    expect(parseExceptionList(knownJson)).toEqual([
+      { name: 'app-dev-package', until: Date.parse('2026-10-19T09:00:00Z'), pid: null, holds: ['heavy', 'light'] },
+      { name: 'stress-run', until: null, pid: 4242, holds: ['heavy'] },
+    ])
+  })
+
+  it('known:false is "not known" (null), not an empty list', () => {
+    expect(parseExceptionList(unknownJson)).toBeNull()
+  })
+
+  it('known:true with no exceptions is an empty list; a broken entry is left out', () => {
+    expect(parseExceptionList({ host: 'h', known: true, exceptions: [] })).toEqual([])
+    expect(parseExceptionList({ host: 'h', known: true, exceptions: [5, { name: 'ok' }] })).toEqual([{ name: 'ok', until: null, pid: null, holds: [] }])
+  })
+
+  it('known:true with exceptions missing, null, an object or a string is a bad answer, not "none"', () => {
+    for (const bad of [undefined, null, {}, 'x']) expect(parseExceptionList({ host: 'h', known: true, exceptions: bad })).toBeNull()
+    expect(parseExceptionList({ host: 'h', known: true })).toBeNull()
   })
 })

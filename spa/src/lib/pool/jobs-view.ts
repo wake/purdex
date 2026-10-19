@@ -80,7 +80,13 @@ export function noHostToGoTo(job: PoolJob, hosts: readonly PoolHostLabels[]): { 
   return fits ? null : { labels: [...job.labels] }
 }
 
-export interface HistoryFilter { state?: string; host?: string; repo?: string }
+/** The state groups the history filters by: cancelled takes superseded with it. A state the App does not know is in no group, so only the unfiltered list shows it. */
+export const STATE_GROUPS = ['failed', 'succeeded', 'cancelled', 'expired'] as const
+export type StateGroup = (typeof STATE_GROUPS)[number]
+const GROUP_STATES: Record<StateGroup, readonly string[]> = { failed: ['failed'], succeeded: ['succeeded'], cancelled: ['cancelled', 'superseded'], expired: ['expired'] }
+
+/** `group` absent = every ended job; `host` is the host a job ran on, `repo` its repo name. */
+export interface HistoryFilter { group?: StateGroup; host?: string; repo?: string }
 
 /** The host a job ran on: who claimed it (else where it ended). A job that never ran (superseded or timed out in the queue) has none: only the unfiltered list shows it. */
 const ranOn = (j: PoolJob): string => j.claim?.worker || j.result?.host || ''
@@ -90,8 +96,30 @@ export function historyOf(jobs: readonly PoolJob[], filter: HistoryFilter): Pool
   const at = (j: PoolJob) => j.result?.finished_at ?? j.created_at
   return jobs
     .filter((j) => isEnded(j.state))
-    .filter((j) => (filter.state === undefined || j.state === filter.state) && (filter.repo === undefined || j.repo.name === filter.repo) && (filter.host === undefined || ranOn(j) === filter.host))
+    .filter((j) => (filter.group === undefined || GROUP_STATES[filter.group].includes(j.state)) && (filter.repo === undefined || j.repo.name === filter.repo) && (filter.host === undefined || ranOn(j) === filter.host))
     .sort((a, b) => at(b) - at(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+const sorted = (values: Iterable<string>): string[] => [...new Set(values)].filter((v) => v !== '').sort()
+
+/** The hosts jobs ran on, each once, in order: the choices of the host filter. */
+export const historyHosts = (jobs: readonly PoolJob[]): string[] => sorted(jobs.filter((j) => isEnded(j.state)).map(ranOn))
+/** The repos of the ended jobs, each once, in order: the choices of the repo filter. */
+export const historyRepos = (jobs: readonly PoolJob[]): string[] => sorted(jobs.filter((j) => isEnded(j.state)).map((j) => j.repo.name))
+/** The host a history row shows (`''`: it never ran). */
+export const jobRanOn = ranOn
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+
+/** When a job ended: today the time, this year the date and the time, another year with the year; 「—」 when it is not known. */
+export function whenText(at: number | null, now: number): string {
+  if (at === null) return '—'
+  const d = new Date(at)
+  const n = new Date(now)
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()) return time
+  const date = `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`
+  return d.getFullYear() === n.getFullYear() ? `${date} ${time}` : `${d.getFullYear()}/${date} ${time}`
 }
 
 /** What the result column says, before it is turned into words. */

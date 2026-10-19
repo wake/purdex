@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-view.test.ts — what the jobs tab derives from the jobs the store keeps (plan "WWD-7 design", Jobs tab): the queue's display order, the lanes, the red line, the history and the result column.
 import { describe, it, expect } from 'vitest'
 import type { PoolJob } from './jobs-types'
-import { baseScore, displayOrder, lanes, noHostToGoTo, historyOf, resultWord, resultText, type PoolHostLabels } from './jobs-view'
+import { baseScore, displayOrder, lanes, noHostToGoTo, historyOf, historyHosts, historyRepos, whenText, resultWord, resultText, type PoolHostLabels } from './jobs-view'
 
 const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
   id, origin: 'mlab', repo: { name: 'purdex', root: '', remote: '' }, snapshot: { commit: 'c', tree: '', base: '', rel_cwd: '' }, task: 't', args: [], class: 'dev', labels: [], locks: [], cacheable: false,
@@ -156,12 +156,53 @@ describe('the history', () => {
       ended('b', 2, { state: 'failed', repo: { name: 'mlab', root: '', remote: '' } }),
       ended('c', 1, { state: 'superseded', result: null, origin: 'air26', repo: { name: 'aigora', root: '', remote: '' } }),
     ]
-    expect(idsOf(historyOf(jobs, { state: 'failed' }))).toEqual(['b'])
+    expect(idsOf(historyOf(jobs, { group: 'failed' }))).toEqual(['b'])
     expect(idsOf(historyOf(jobs, { repo: 'purdex' }))).toEqual(['a'])
     expect(idsOf(historyOf(jobs, { host: 'mserv' }))).toEqual(['a', 'b'])
     expect(idsOf(historyOf(jobs, { host: 'air26' }))).toEqual([])
     expect(idsOf(historyOf(jobs, {}))).toEqual(['a', 'b', 'c'])
-    expect(idsOf(historyOf(jobs, { state: 'succeeded', repo: 'mlab' }))).toEqual([])
+    expect(idsOf(historyOf(jobs, { group: 'succeeded', repo: 'mlab' }))).toEqual([])
+  })
+
+  it('the state groups: cancelled takes superseded with it; an expired job is its own; unfiltered shows them all', () => {
+    const jobs = [
+      ended('s', 6), ended('f', 5, { state: 'failed' }), ended('c', 4, { state: 'cancelled' }), ended('u', 3, { state: 'superseded', result: null }),
+      ended('x', 2, { state: 'expired', result: null }),
+    ]
+    expect(idsOf(historyOf(jobs, { group: 'succeeded' }))).toEqual(['s'])
+    expect(idsOf(historyOf(jobs, { group: 'failed' }))).toEqual(['f'])
+    expect(idsOf(historyOf(jobs, { group: 'cancelled' }))).toEqual(['c', 'u'])
+    expect(idsOf(historyOf(jobs, { group: 'expired' }))).toEqual(['x'])
+    // the two with no result are ordered by when they were queued (the same here), then by id
+    expect(idsOf(historyOf(jobs, {}))).toEqual(['s', 'f', 'c', 'u', 'x'])
+  })
+})
+
+describe('the history\'s filter choices', () => {
+  const ended = (id: string, over: Partial<PoolJob> = {}): PoolJob =>
+    job(id, { state: 'succeeded', result: { exit: 0, summary: null, log: '', host: 'mserv', started_at: 1, finished_at: 2, cache_hit: false, reason: '', superseded_by: null }, ...over })
+
+  it('the hosts jobs ran on and the repos, each once, in order; a job that never ran adds no host; live jobs add nothing', () => {
+    const jobs = [
+      ended('a', { repo: { name: 'purdex', root: '', remote: '' } }),
+      ended('b', { result: null, claim: { worker: 'air26', attempt: 1, since: 1 }, repo: { name: 'aigora', root: '', remote: '' } }),
+      ended('c', { state: 'superseded', result: null, repo: { name: 'purdex', root: '', remote: '' } }),
+      job('live', { repo: { name: 'live-repo', root: '', remote: '' }, claim: { worker: 'mlab', attempt: 1, since: 1 }, state: 'running' }),
+    ]
+    expect(historyHosts(jobs)).toEqual(['air26', 'mserv'])
+    expect(historyRepos(jobs)).toEqual(['aigora', 'purdex'])
+  })
+})
+
+describe('whenText', () => {
+  const NOW = new Date(2026, 9, 20, 12, 0).getTime()
+  it('today it is the time; another day it is the date and the time', () => {
+    expect(whenText(new Date(2026, 9, 20, 9, 5).getTime(), NOW)).toBe('09:05')
+    expect(whenText(new Date(2026, 9, 19, 23, 59).getTime(), NOW)).toBe('10/19 23:59')
+    expect(whenText(new Date(2025, 11, 31, 8, 0).getTime(), NOW)).toBe('2025/12/31 08:00')
+  })
+  it('a time that is not known reads 「—」', () => {
+    expect(whenText(null, NOW)).toBe('—')
   })
 })
 
