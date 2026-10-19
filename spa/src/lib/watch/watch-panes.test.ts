@@ -23,6 +23,7 @@ describe('watch pane kinds', () => {
   it('labels: guardian, events, and the host alias from the fleet snapshot (id as fallback)', () => {
     expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')
+    expect(getPaneLabel({ kind: 'watch-jobs' }, sessions, workspaces, t)).toBe('watch.pane.jobs')
     expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
     useFleetStore.setState({
       snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } },
@@ -33,13 +34,15 @@ describe('watch pane kinds', () => {
   it('icons exist in ICON_MAP', () => {
     expect(getPaneIcon({ kind: 'watch-guardian' })).toBe('ShieldCheck')
     expect(getPaneIcon({ kind: 'watch-events' })).toBe('ListBullets')
+    expect(getPaneIcon({ kind: 'watch-jobs' })).toBe('ListChecks')
     expect(getPaneIcon(host('h'))).toBe('Desktop')
-    for (const n of ['ShieldCheck', 'ListBullets', 'Desktop']) expect(ICON_MAP[n]).toBeTruthy()
+    for (const n of ['ShieldCheck', 'ListBullets', 'ListChecks', 'Desktop']) expect(ICON_MAP[n]).toBeTruthy()
   })
 
   it('route is /', () => {
     expect(tabToUrl('t', { kind: 'watch-guardian' })).toBe('/')
     expect(tabToUrl('t', { kind: 'watch-events' })).toBe('/')
+    expect(tabToUrl('t', { kind: 'watch-jobs' })).toBe('/')
     expect(tabToUrl('t', host('h'))).toBe('/')
   })
 
@@ -48,10 +51,12 @@ describe('watch pane kinds', () => {
     expect(contentMatches(host('a'), host('b'))).toBe(false)
     expect(contentMatches({ kind: 'watch-guardian' }, { kind: 'watch-guardian' })).toBe(true)
     expect(contentMatches({ kind: 'watch-events' }, { kind: 'watch-events' })).toBe(true)
+    expect(contentMatches({ kind: 'watch-jobs' }, { kind: 'watch-jobs' })).toBe(true)
+    expect(contentMatches({ kind: 'watch-jobs' }, { kind: 'watch-events' })).toBe(false)
   })
 
   it('none is a light tab', () => {
-    for (const c of [{ kind: 'watch-guardian' }, { kind: 'watch-events' }, host('h')] as PaneContent[]) {
+    for (const c of [{ kind: 'watch-guardian' }, { kind: 'watch-events' }, { kind: 'watch-jobs' }, host('h')] as PaneContent[]) {
       expect(isLightTab(leaf(c))).toBe(false)
     }
   })
@@ -69,13 +74,14 @@ describe('watch pane kinds', () => {
     expect(getTabHostId(tab)).toBeNull()
   })
 
-  it('registers the three kinds in one non-disableable module', () => {
+  it('registers the four kinds in one non-disableable module', () => {
     clearModuleRegistry()
     registerBuiltinModules()
     const m = getModule('watch-area')
     expect(m).toBeTruthy()
     expect(m!.disableable).toBeFalsy()
-    expect(m!.panes?.map((p) => p.kind).sort()).toEqual(['watch-events', 'watch-guardian', 'watch-host'])
+    expect(m!.panes?.map((p) => p.kind).sort()).toEqual(['watch-events', 'watch-guardian', 'watch-host', 'watch-jobs'])
+    expect(getPaneRenderer('watch-jobs')).toBeTruthy()
     expect(getPaneRenderer('watch-host')).toBeTruthy()
   })
 })

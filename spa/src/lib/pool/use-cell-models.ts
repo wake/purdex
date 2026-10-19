@@ -12,7 +12,7 @@ const CLOCK_MS = 5000
 
 // Cells can be mounted more than once (wide and narrow bars): the poll runs while any is.
 let mounted = 0
-function useRunPool() {
+export function useRunPool() {
   useEffect(() => {
     if (mounted++ === 0) usePoolStore.getState().start()
     return () => { if (--mounted === 0) usePoolStore.getState().stop() }

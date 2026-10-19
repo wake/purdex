@@ -66,6 +66,8 @@ export function getPaneLabel(
       const n = pendingCount(useWatchEventsStore.getState().unhandled)
       return n > 0 ? t('watch.pane.events_n', { n }) : t('watch.pane.events')
     }
+    case 'watch-jobs':
+      return t('watch.pane.jobs')
     case 'watch-host':
       return useFleetStore.getState().snapshot?.hosts[content.fleetHostId]?.alias || content.fleetHostId
   }
@@ -108,6 +110,8 @@ export function getPaneIcon(content: PaneContent): string {
       return 'ShieldCheck'
     case 'watch-events':
       return 'ListBullets'
+    case 'watch-jobs':
+      return 'ListChecks'
     case 'watch-host':
       return 'Desktop'
   }
