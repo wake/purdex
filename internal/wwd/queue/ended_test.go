@@ -175,6 +175,24 @@ func TestAReferenceThatCannotBeHadFailsTheResult(t *testing.T) {
 	assert.Equal(t, 1, f.outcomeRows(t), "recorded as the reference's once it can be had")
 }
 
+// The echo of a result that was taken is answered whatever the reference hook does: only a result that is going to end the job needs it.
+func TestTheEchoOfATakenResultDoesNotNeedTheReference(t *testing.T) {
+	f := newFixture(t)
+	f.reference("air26")
+	id := f.submit(t, func(s *wire.JobSubmission) { s.DefHash = "def1" })
+	c := f.claimAs(t, id, "air26", []string{"os:linux"}, fpA)
+	zero := 0
+	req := wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: &zero}
+	_, err := f.q.Result(bg, id, req)
+	require.NoError(t, err)
+
+	f.q.opt.ReferenceHost = func(repo, task string) string { panic("manifest unreadable") }
+	got, err := f.q.Result(bg, id, req)
+	require.NoError(t, err, "the same result again is the stored job")
+	assert.Equal(t, wire.StateSucceeded, got.State)
+	assert.Equal(t, 1, f.outcomeRows(t))
+}
+
 // Of a host's many outcomes of the same work only the latest is compared, however many there are: the host ends on a failure, which
 // disagrees with the reference's success, and there is one disagreement per pair, not one per earlier outcome.
 func TestOnlyAHostsLatestOutcomeOfTheWorkIsCompared(t *testing.T) {

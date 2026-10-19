@@ -212,11 +212,10 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 	var out wire.Job
 	var produced Produced
 	ended := false // this call ended the job: not the echo of a result posted before
-	reference, err := q.referenceOf(ctx, id)
-	if err != nil {
-		return wire.Job{}, err
-	}
-	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
+	// the reference is asked first, but a failure of it matters only to a result that is going to end the job: the echo of one that did
+	// must still be answered, however the hook is
+	reference, refErr := q.referenceOf(ctx, id)
+	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
 			return err
@@ -227,6 +226,9 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		}
 		if err := h.live(req.ClaimID); err != nil {
 			return err
+		}
+		if refErr != nil {
+			return refErr // the result is not taken; the worker posts it again
 		}
 		res := wire.Result{Exit: req.Exit, Summary: req.Summary, Host: h.worker, StartedAt: req.StartedAt, FinishedAt: req.FinishedAt, Reason: req.Reason}
 		if err := endHeld(ctx, c, h, req.State, res, req.ClaimID, q.now().UnixMilli()); err != nil {
