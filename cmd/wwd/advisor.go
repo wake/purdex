@@ -76,7 +76,22 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			Recent:      in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
 			Orphans:     in.Orphans,
 			StartsSince: in.Store.StartsSince,
-			PartnerSeen: in.PartnerSeen,
+		}, true
+	}
+	// the silence rules judge the pool and the partner, not the facts: they run on their own, so a host whose first facts sample never comes
+	// (a sampler that keeps failing) still tells that a peer or the Purdex daemon is gone
+	if rs := silenceRules(in.Peers, in.PartnerSeen != nil); len(rs) > 0 {
+		go advisor.NewEvaluator(book, silenceInput(in), log.Printf, rs...).Run(ctx)
+	}
+	// not behind the proto 2 writer gate (spec §13.1): an unreachable host must not silence the others' alerts
+	advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known)...).Run(ctx)
+}
+
+// silenceInput is what the silence rules read: the pool's view of the peers and the partner's last read, with no facts.
+func silenceInput(in advisorInputs) func() (advisor.Input, bool) {
+	return func() (advisor.Input, bool) {
+		return advisor.Input{
+			Now: time.Now(), PartnerSeen: in.PartnerSeen,
 			Peers: func() []advisor.PeerDown {
 				var out []advisor.PeerDown
 				for _, d := range in.Downs() {
@@ -86,8 +101,6 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 			},
 		}, true
 	}
-	// not behind the proto 2 writer gate (spec §13.1): an unreachable host must not silence the others' alerts
-	advisor.NewEvaluator(book, input, log.Printf, append(advisorRules(in.Known), silenceRules(in.Peers, in.PartnerSeen != nil)...)...).Run(ctx)
 }
 
 // runOrphansScan is `wwd orphans-scan`: the orphans scan once, right now, on this host's own process table, printed. There is no recorded
