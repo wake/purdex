@@ -15,12 +15,17 @@ const (
 	mservPSI        = 10.0
 	mservPSIMinutes = 2
 	mservMemAvailMB = 1536
+	// mservMemClearMB is how far above mservMemAvailMB MemAvailable must be before a raised alert clears. The spec gives only the raise
+	// limit; this margin is the same device as disk low's 0.5 GB.
+	mservMemClearMB = 256
 )
 
 // MservService is "mserv service" (push), judged on the host it runs on and only on Linux, where the PSI and MemAvailable are read (mserv is
 // the Linux host; elsewhere the rule does not apply). It holds when the production PSI some avg60 was ≥ 10 over the last two whole minutes
-// and still is, or when MemAvailable is under 1.5 GiB (no duration: the latest reading). A deliberate stress test (a hold with the
-// expect_pressure flag) suspends only the PSI part.
+// and still is, or when MemAvailable is under 1.5 GiB (no duration: the latest reading; once raised it clears only mservMemClearMB above).
+// A deliberate stress test (a hold with the expect_pressure flag) suspends only the PSI part. The flag is read from the facts' exceptions;
+// no hold carries it until the hold writer of 8b-3 (the exception route refuses flags today, and HostState does not copy them into the
+// facts), so the suspension is dormant until then. 8b-3 must also make sure a host whose proto 2 gate is shut still sees its own hold.
 //
 // The third condition of the spec row, "mserv unreachable ≥ 2 min", is not this rule's: a host cannot report its own absence. It is noticed
 // by the other hosts' wwds and told by the deliverer (the silence rules, 8a-3).
@@ -34,7 +39,13 @@ func (MservService) Eval(in Input) (Verdict, error) {
 	if f.Platform != "linux" {
 		return v, nil
 	}
-	if f.Mem.TotalMB > 0 && f.Mem.AvailableMB < mservMemAvailMB {
+	// once raised, the memory condition holds until MemAvailable is back above the limit by mservMemClearMB, so a reading that crosses
+	// 1.5 GiB back and forth is one alert, not a raise and a clear every pass (a cleared key may be pushed again)
+	limit := mservMemAvailMB
+	if in.Raised != nil && in.Raised(v.Key) {
+		limit += mservMemClearMB
+	}
+	if f.Mem.TotalMB > 0 && f.Mem.AvailableMB < limit {
 		v.Holds, v.Detail = true, fmt.Sprintf("MemAvailable 只剩 %d MB", f.Mem.AvailableMB)
 		return v, nil
 	}

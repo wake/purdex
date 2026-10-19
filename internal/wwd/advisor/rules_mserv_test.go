@@ -90,6 +90,36 @@ func TestMservService_MemAvailableUnderOneAndAHalfGB(t *testing.T) {
 	}
 }
 
+// Once raised, low memory clears only 256 MB above the limit: a reading that crosses 1.5 GiB back and forth is one episode, not many.
+func TestMservService_LowMemoryClearsWithAMargin(t *testing.T) {
+	at := func(avail int, raised bool) bool {
+		in := linuxInput(psiMinute(0, 0, avail))
+		in.Raised = func(string) bool { return raised }
+		v, err := MservService{}.Eval(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Holds
+	}
+	if at(1600, false) {
+		t.Fatal("1600 MB raised afresh")
+	}
+	if !at(1600, true) || !at(1791, true) {
+		t.Fatal("a raised alert cleared inside the margin")
+	}
+	if at(1792, true) {
+		t.Fatal("a raised alert did not clear at limit + margin")
+	}
+	// replayed over a reading that crosses the limit back and forth: one episode
+	var recs []wire.Facts
+	for i, avail := range []int{9000, 1500, 1560, 1500, 1580, 1520, 2000, 9000} {
+		recs = append(recs, psiMinute(i, 0, avail))
+	}
+	if got := Replay(recs, nil, "/x", MservService{})[wire.AlertMservService]; got.Episodes != 1 {
+		t.Fatalf("a reading hovering at the limit made %d episodes", got.Episodes)
+	}
+}
+
 // A deliberate stress test (the expect_pressure hold) suspends only the PSI part: low memory still counts.
 func TestMservService_ExpectPressureSuspendsOnlyPSI(t *testing.T) {
 	psi := []wire.Facts{psiMinute(0, 30, 9000), psiMinute(1, 30, 9000), psiMinute(2, 30, 9000)}
