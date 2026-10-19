@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/wake/purdex/internal/wwd/labels"
@@ -19,7 +20,8 @@ import (
 // or doubtful is not filed (a job that runs again costs time; a wrong reuse costs a wrong answer):
 //   - the claim said nothing about the host's labels or fingerprint, or the task has no definition hash (a job from before schema 7);
 //   - the host that made the result is not this one and is not a reachable peer, so its fingerprint cannot be checked now;
-//   - the fingerprint at the claim is not the host's fingerprint now.
+//   - the fingerprint at the claim is not the host's fingerprint now;
+//   - the host held the task's label at the claim and does not now, or the other way round: its standing changed while the job ran.
 func (d *Daemon) FileResult(_ context.Context, j wire.Job, p queue.Produced) {
 	if d.opts.ResultCache == nil || j.Result == nil {
 		return
@@ -34,6 +36,12 @@ func (d *Daemon) FileResult(_ context.Context, j wire.Job, p queue.Produced) {
 		return
 	}
 	taskLabel := labels.TaskLabel(j.Repo.Name, j.Task)
+	// the standing for the task has to be what it was at the claim: a label taken away while the job ran (a disagreement quarantined it)
+	// leaves the fingerprint as it was, and the entry made under the claim's standing would answer again as soon as the host holds the label
+	// again with that fingerprint
+	if slices.Contains(p.Labels, taskLabel) != slices.Contains(now.Labels, taskLabel) {
+		return
+	}
 	// the host as it was at the claim; HostNowFromInfo is the lookup's own reading, so the two build one key
 	at := wire.Info{Alias: host, Platform: platform, Arch: arch, Labels: p.Labels, Fingerprint: p.Fingerprint}
 	h := reuse.HostNowFromInfo(at, taskLabel, host == d.referenceHost(j.Repo.Name, j.Task), false)

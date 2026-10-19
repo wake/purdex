@@ -27,7 +27,7 @@ func TestFaultOwnerFileAbsentSaysAwayWithoutAnOwnerRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Tick(s0.Add(5 * time.Second))
-	if f, _ = s.Latest(); f.Owner == nil || !f.Owner.Active || f.Derived.Headroom != (wire.Slots{}) {
+	if f, _ = s.Latest(); f.Owner == nil || !f.Owner.Active || f.Derived.Headroom.Heavy != 1 { // no rule: the made-up reading is shown, not counted (#3457)
 		t.Fatalf("file: owner %+v derived %+v", f.Owner, f.Derived)
 	}
 	if err := os.Remove(file); err != nil {

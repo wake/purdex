@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -78,6 +79,7 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		}
 	}()
 
+	log.Printf("dev rebuild requested by %s (current %s)", r.RemoteAddr, buildinfo.Hash)
 	binDir := filepath.Join(m.repoRoot, "bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
@@ -113,18 +115,22 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeEvent(daemonRebuildEvent{Type: "success", NewHash: hash})
-	writeEvent(daemonRebuildEvent{Type: "restarting"})
-	// Give SSE a moment to flush to the client before we vanish into Exec.
-	time.Sleep(200 * time.Millisecond)
 
-	// execSelf replaces this process; the function only returns on failure.
-	// In tests execSelf is nil (DevModule constructed directly without Init),
-	// so we skip exec entirely — safe, no risk of replacing the test binary.
-	if m.execSelf != nil {
-		if err := m.execSelf(finalPath, os.Args, os.Environ()); err != nil {
-			writeEvent(daemonRebuildEvent{Type: "error", Message: "exec: " + err.Error()})
+	// Hand the swap to core's restart flow (#3572): modules stop in order,
+	// the log shows "shutdown: ... done, restarting", and core refuses a
+	// second restart. It execs finalPath, the binary just built, not the
+	// one this daemon booted from. The call does not block; the HTTP
+	// shutdown waits for this handler to return, so the events below are
+	// still flushed. In tests restartFn is nil, so nothing restarts.
+	if m.restartFn != nil {
+		reason := fmt.Sprintf("dev rebuild from %s (%s -> %s)", r.RemoteAddr, buildinfo.Hash, hash)
+		if err := m.restartFn(reason, finalPath, nil); err != nil {
+			log.Printf("dev rebuild: restart refused: %v", err)
+			writeEvent(daemonRebuildEvent{Type: "error", Message: "restart: " + err.Error()})
+			return
 		}
 	}
+	writeEvent(daemonRebuildEvent{Type: "restarting"})
 }
 
 func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {

@@ -609,6 +609,37 @@ func TestARecalledPushDoesNotHoldTheAlertBack(t *testing.T) {
 	}
 }
 
+// Status reports a deliverer only when this daemon would really send: the rule says so and its own push module is ready (#3573). A
+// primary whose push is not configured is not a deliverer, though the rule names it; a standby that takes over for such a primary is.
+func TestStatusDelivererNeedsAReadyNotifier(t *testing.T) {
+	ready := func() (push.AlertNotifier, bool) { return &fakeNotifier{done: true}, true }
+	notReady := func() (push.AlertNotifier, bool) { return nil, false }
+	no := false
+	for _, c := range []struct {
+		name   string
+		role   fleet.RoleState
+		peer   fleet.PeerPush
+		notify func() (push.AlertNotifier, bool)
+		want   bool
+	}{
+		{"primary without a ready notifier", fleet.RoleState{Role: fleet.RolePrimary, Self: "air26"}, fleet.PeerPush{}, notReady, false},
+		{"primary with a ready notifier", fleet.RoleState{Role: fleet.RolePrimary, Self: "air26"}, fleet.PeerPush{}, ready, true},
+		{"standby, primary cannot push, own notifier ready", fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"}, fleet.PeerPush{Known: true, Answered: true, Ready: &no}, ready, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			role := fleet.NewFakeRole(c.role)
+			role.SetPeerPush(c.peer)
+			e.m.deliver = deliverRule(role)
+			e.m.notify = c.notify
+			e.pass(t)
+			if got := e.m.Status()["deliverer"]; got != c.want {
+				t.Fatalf("deliverer = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // A daemon that is not the deliverer says so, and counts nothing as held back by the switch.
 func TestStatusSaysWhetherThisDaemonIsTheDeliverer(t *testing.T) {
 	e := newEnv(t)

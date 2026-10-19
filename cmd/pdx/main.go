@@ -425,6 +425,7 @@ func runServe(args []string) *reexecPlan {
 			// Keep the pid lock held through the exec: the new image adopts it.
 			// reexec clears close-on-exec right before the exec.
 			handingOff = true
+			boot.overrideExecPath(c.RestartExecPath(), log.Printf)
 			boot.env = append(boot.env, pidLockEnvEntry(pidFile))
 			boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
 			if runLock != nil { // the config file's run lock goes the same way (#2562)

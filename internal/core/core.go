@@ -94,6 +94,10 @@ type Core struct {
 	// restartHook / life back POST /api/daemon/restart (restart.go).
 	restartHook func()
 	life        atomic.Int32
+	// restartMu makes accepting a restart (life CAS) and publishing its exec
+	// path one step for RestartExecPath: see RequestRestart.
+	restartMu       sync.Mutex
+	restartExecPath string
 
 	// now / logf back the startup timing lines (startup_timing.go); New sets
 	// time.Now / log.Printf, tests inject a fake clock and a collector.

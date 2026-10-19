@@ -146,7 +146,7 @@ export function PersonaImport({ fallbackHostId, disabled, onImported }: Props) {
           {nothingToDo && <p className="mt-1" data-testid="persona-import-nothing">{t('settings.personas.import.nothing')}</p>}
           {confirmHost !== null && (
             <div className="mt-2">
-              <FirstSaveConfirm hostId={confirmHost} onCancel={() => setConfirmHost(null)} onConfirm={() => void run(true)} />
+              <FirstSaveConfirm hostId={confirmHost} personas={plan.result} onCancel={() => setConfirmHost(null)} onConfirm={() => void run(true)} />
             </div>
           )}
           <div className="mt-2 flex justify-end gap-2">

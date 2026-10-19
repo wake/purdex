@@ -248,7 +248,7 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 		l.y, l.ownerRule = yield.New(l.cfg.Now, rule), rule
 	}
 	var owner *wire.OwnerState
-	if facts != nil {
+	if facts != nil && l.ownerRule { // the rule in force is the only basis: with none, a reading (from the config's [owner], or a fault hook) is not watched
 		owner = facts.Owner
 	}
 	d, changed := l.y.Observe(owner)

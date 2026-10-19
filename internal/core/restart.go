@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -54,6 +55,55 @@ func (c *Core) BeginShutdown() (restartAccepted bool) {
 // the HTTP shutdown waits for this handler to return.
 func (c *Core) SetRestartHook(fn func()) { c.restartHook = fn }
 
+// Restart refusals, in the order RequestRestart checks them.
+var (
+	ErrRestartUnavailable = errors.New("restart_unavailable")
+	ErrRestartInProgress  = errors.New("restart_in_progress")
+	ErrShuttingDown       = errors.New("shutting_down")
+)
+
+// RequestRestart accepts a restart: CAS to lifeRestarting, log who asked, then
+// fire the hook (serve's normal shutdown, then re-exec). execPath, when not
+// empty, is the executable the re-exec runs instead of the one this process
+// booted from (dev rebuild swaps in a freshly built binary elsewhere); it is
+// read back with RestartExecPath. afterAccept, when not nil, runs once the
+// restart is accepted and before the hook (the HTTP handler flushes its 202
+// there). On refusal nothing runs and the error says why.
+func (c *Core) RequestRestart(reason, execPath string, afterAccept func()) error {
+	if c.restartHook == nil {
+		return ErrRestartUnavailable
+	}
+	// Held across the CAS and the path store: shutdown may observe
+	// lifeRestarting (BeginShutdown) and read the path (RestartExecPath)
+	// before this returns, e.g. when Serve fails in between.
+	c.restartMu.Lock()
+	if !c.life.CompareAndSwap(lifeRunning, lifeRestarting) {
+		c.restartMu.Unlock()
+		if c.life.Load() == lifeRestarting {
+			return ErrRestartInProgress
+		}
+		return ErrShuttingDown
+	}
+	if execPath != "" {
+		c.restartExecPath = execPath
+	}
+	c.restartMu.Unlock()
+	log.Printf("daemon restart requested by %s", reason)
+	if afterAccept != nil {
+		afterAccept()
+	}
+	c.restartHook()
+	return nil
+}
+
+// RestartExecPath is the executable an accepted restart asked to exec, or ""
+// for the one this process booted from.
+func (c *Core) RestartExecPath() string {
+	c.restartMu.Lock()
+	defer c.restartMu.Unlock()
+	return c.restartExecPath
+}
+
 // handleDaemonRestart is POST /api/daemon/restart (spec §3.1): 202 with the
 // current boot id, flushed, then the hook. A second request while one is
 // under way gets 409 with the same boot id so its client can follow the
@@ -62,26 +112,23 @@ func (c *Core) SetRestartHook(fn func()) { c.restartHook = fn }
 // restart nothing will perform.
 func (c *Core) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if c.restartHook == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{"error": "restart_unavailable"})
-		return
-	}
-	if !c.life.CompareAndSwap(lifeRunning, lifeRestarting) {
-		if c.life.Load() == lifeRestarting {
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{"error": "restart_in_progress", "boot_id": c.BootID})
-			return
+	err := c.RequestRestart(r.RemoteAddr, "", func() {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"boot_id": c.BootID})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrRestartInProgress):
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"error": "restart_in_progress", "boot_id": c.BootID})
+	case errors.Is(err, ErrShuttingDown):
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "shutting_down"})
-		return
+	default:
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "restart_unavailable"})
 	}
-	log.Printf("daemon restart requested by %s", r.RemoteAddr)
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"boot_id": c.BootID})
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	c.restartHook()
 }
