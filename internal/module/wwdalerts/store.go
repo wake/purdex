@@ -83,6 +83,28 @@ func (s *store) beginAttempt(host, key string, since, now time.Time) error {
 	return err
 }
 
+// restoreDelivery gives back an attempt that queued nothing: the ledger row of an alert key goes back to what it was before beginAttempt
+// (had: there was a row; prev: its values), but only while the row is still the one beginAttempt wrote (this instance, this attempt
+// time). A push of the same alert queued earlier may get its Sent on the sender's goroutine meanwhile; that delivery stays:
+//   - the same instance as before: only the attempt time goes back, sent_ms is never touched;
+//   - an older instance (the alert was raised again) or no row: the old row returns, or the new one goes, only if it has no delivery.
+func (s *store) restoreDelivery(host, key string, prev delivery, had bool, since, attempt time.Time) error {
+	var err error
+	switch {
+	case had && prev.Since == since.UnixMilli():
+		_, err = s.db.Exec(`UPDATE deliveries SET attempt_ms = ? WHERE host = ? AND key = ? AND since_ms = ? AND attempt_ms = ?`,
+			prev.Attempt, host, key, since.UnixMilli(), attempt.UnixMilli())
+	case had:
+		_, err = s.db.Exec(`UPDATE deliveries SET since_ms = ?, attempt_ms = ?, sent_ms = ?
+			WHERE host = ? AND key = ? AND since_ms = ? AND attempt_ms = ? AND sent_ms = 0`,
+			prev.Since, prev.Attempt, prev.Sent, host, key, since.UnixMilli(), attempt.UnixMilli())
+	default:
+		_, err = s.db.Exec(`DELETE FROM deliveries WHERE host = ? AND key = ? AND since_ms = ? AND attempt_ms = ? AND sent_ms = 0`,
+			host, key, since.UnixMilli(), attempt.UnixMilli())
+	}
+	return err
+}
+
 // markSent records that the push module said APNs took the push of this alert instance. A row that is about another instance by now
 // (the alert cleared and was raised again while the push was queued) is left alone.
 func (s *store) markSent(host, key string, since, now time.Time) error {

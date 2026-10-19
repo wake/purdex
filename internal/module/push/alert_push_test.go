@@ -1,6 +1,7 @@
 package push
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,24 @@ func TestAlertPush_SentNotCalledWhenRefusedOrSkipped(t *testing.T) {
 	case <-called:
 		t.Fatal("Sent called for a refused or skipped push")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// The registry keeps the notifier after the module stops, so readiness is its own question: true while the sender is up, false after Stop.
+func TestAlertPush_ReadyOnlyWhileTheSenderIsUp(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	r, ok := te.mod.alertNotifier().(push.AlertReadiness)
+	if !ok {
+		t.Fatal("the push module's notifier does not say whether it is ready")
+	}
+	if !r.AlertReady() {
+		t.Fatal("not ready after Start")
+	}
+	if err := te.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.AlertReady() {
+		t.Fatal("still ready after Stop")
 	}
 }
 

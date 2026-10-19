@@ -10,7 +10,14 @@ import (
 // The alert push (WWD-8a-1b, spec §13): the module that delivers the wwd host alerts asks, in process, for one phone push per
 // alert. The module publishes itself as the AlertNotifier when it is ready and started.
 
-var _ push.AlertNotifier = (*Module)(nil)
+var (
+	_ push.AlertNotifier  = (*Module)(nil)
+	_ push.AlertReadiness = (*Module)(nil)
+)
+
+// AlertReady says whether a push can be queued now: the sender is up (it is gone before start and after Stop, while the notifier stays
+// in the service registry).
+func (m *Module) AlertReady() bool { return m.sender.Load() != nil }
 
 // alertNotifier is the module as the interface (a seam for tests).
 func (m *Module) alertNotifier() push.AlertNotifier { return m }

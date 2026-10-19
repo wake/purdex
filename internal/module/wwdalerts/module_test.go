@@ -325,7 +325,9 @@ func TestARefusedPushIsRetriedAfterTheInterval(t *testing.T) {
 func TestDeliveryFollowsTheFleetRole(t *testing.T) {
 	e := newEnv(t)
 	role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
-	e.m.deliver = primaryOnly(role)
+	yes := true
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &yes}) // the primary can push
+	e.m.deliver = deliverRule(role)
 	e.src.set("mlab", diskLow("mlab"))
 	e.pass(t)
 	if e.ntf.count() != 0 {
@@ -352,8 +354,59 @@ func TestDeliveryFollowsTheFleetRole(t *testing.T) {
 
 // No fleet role at all (the fleet module is not there): nothing delivers, nothing panics.
 func TestNoFleetRoleMeansNoDelivery(t *testing.T) {
-	if primaryOnly(nil)() {
+	if deliverRule(nil)() {
 		t.Fatal("a daemon without a fleet role delivered")
+	}
+}
+
+// A standby with push ready also delivers when the primary cannot: it reported no push, reported nothing (an older daemon), did not
+// answer, or nothing has been asked yet. It does not when the primary reported its push ready; and an off daemon never does.
+func TestAStandbyDeliversWhenThePrimaryCannotPush(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		peer fleet.PeerPush
+		want bool
+	}{
+		{"primary can push", fleet.PeerPush{Known: true, Answered: true, Ready: &yes}, false},
+		{"primary reports no push", fleet.PeerPush{Known: true, Answered: true, Ready: &no}, true},
+		{"primary reports nothing (older daemon)", fleet.PeerPush{Known: true, Answered: true}, true},
+		{"primary does not answer", fleet.PeerPush{Known: true}, true},
+		{"not asked yet", fleet.PeerPush{}, true},
+	}
+	for _, c := range cases {
+		role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
+		role.SetPeerPush(c.peer)
+		if got := deliverRule(role)(); got != c.want {
+			t.Errorf("standby, %s: delivers=%v, want %v", c.name, got, c.want)
+		}
+	}
+	off := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleOff, Self: "mlab", Reason: "disabled"})
+	off.SetPeerPush(fleet.PeerPush{Known: true})
+	if deliverRule(off)() {
+		t.Error("an off daemon delivered")
+	}
+}
+
+// End to end through the pass: the primary (air26, no push) is the fleet primary, mlab is the standby with push ready. mlab tells the
+// alert; once the primary reports its push ready, mlab stops.
+func TestAStandbyWithPushPushesWhileThePrimaryHasNone(t *testing.T) {
+	e := newEnv(t)
+	role := fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: "mlab", Primary: "air26"})
+	no := false
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &no})
+	e.m.deliver = deliverRule(role)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d", e.ntf.count())
+	}
+	yes := true
+	role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &yes})
+	e.now = e.now.Add(10 * time.Minute)
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("the standby kept pushing after the primary could: %d", e.ntf.count())
 	}
 }
 
@@ -383,6 +436,120 @@ func TestAClockThatSteppedBackDoesNotStretchTheWindows(t *testing.T) {
 	e.pass(t)
 	if e.ntf.count() != 3 {
 		t.Fatalf("attempts = %d: a delivery stamped in the future still silenced the alert", e.ntf.count())
+	}
+}
+
+// The registry keeps the push module's notifier after the module stops. One that says it is not ready is not asked.
+type readinessNotifier struct {
+	fakeNotifier
+	ready bool
+}
+
+func (r *readinessNotifier) AlertReady() bool { return r.ready }
+
+func TestAStoppedPushModuleIsNotAsked(t *testing.T) {
+	n := &readinessNotifier{ready: true}
+	if _, ok := readyNotifier(n); !ok {
+		t.Fatal("a ready notifier was refused")
+	}
+	n.ready = false
+	if _, ok := readyNotifier(n); ok {
+		t.Fatal("a notifier that is not ready was asked")
+	}
+	if _, ok := readyNotifier(struct{}{}); ok {
+		t.Fatal("something that is not a notifier was taken for one")
+	}
+	if _, ok := readyNotifier(&fakeNotifier{}); !ok {
+		t.Fatal("a notifier with no readiness is taken as asked-able")
+	}
+}
+
+// The push module stops between the readiness look and the push: NotifyAlert answers false because the module is down, nothing was queued,
+// and the attempt that was written before the call is given back — it must not silence the alert for the 5 minutes of the interval.
+type stoppingNotifier struct {
+	mu    sync.Mutex
+	ready bool
+	stop  bool // the next NotifyAlert finds the module just stopped
+	calls int
+	// during, when set, runs inside NotifyAlert: what another goroutine does at that moment (an older push getting its Sent)
+	during func()
+}
+
+func (s *stoppingNotifier) NotifyAlert(push.AlertPush) bool {
+	if s.during != nil {
+		s.during()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.stop {
+		s.ready = false
+		return false
+	}
+	return true
+}
+
+func (s *stoppingNotifier) AlertReady() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.ready }
+
+func TestAnAttemptTheStoppedPushModuleNeverTookIsGivenBack(t *testing.T) {
+	e := newEnv(t)
+	n := &stoppingNotifier{ready: true, stop: true}
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if n.calls != 1 {
+		t.Fatalf("calls = %d", n.calls)
+	}
+	// the module is back a minute later: the alert is not held back by an attempt that sent nothing
+	n.mu.Lock()
+	n.ready, n.stop = true, false
+	n.mu.Unlock()
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if n.calls != 2 {
+		t.Fatalf("calls = %d: the failed attempt was still counted", n.calls)
+	}
+	if d, ok := e.m.store.delivery("mlab", "disk_low:/"); !ok || d.Attempt != e.now.UnixMilli() {
+		t.Fatalf("the ledger row is %+v", d)
+	}
+}
+
+// An older push of the same alert may still be in the sender when a new attempt is refused: its Sent can land between the attempt being
+// written and given back. Giving the attempt back puts back the attempt time only, never over a delivery that was recorded meanwhile.
+func TestGivingAnAttemptBackNeverErasesADeliveryRecordedMeanwhile(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t) // the first attempt, at t0, whose push is still in the sender (its Sent has not come)
+	first := e.now
+	e.now = e.now.Add(6 * time.Minute) // past the interval: a new attempt is due
+	n := &stoppingNotifier{ready: true, stop: true}
+	n.during = func() { _ = e.m.store.markSent("mlab", "disk_low:/", t0, e.now) } // the old push is taken by APNs just now
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.pass(t)
+	d, ok := e.m.store.delivery("mlab", "disk_low:/")
+	if !ok {
+		t.Fatal("the ledger row is gone")
+	}
+	if d.Sent != e.now.UnixMilli() {
+		t.Fatalf("the delivery recorded meanwhile was erased: %+v", d)
+	}
+	if d.Attempt != first.UnixMilli() {
+		t.Fatalf("the attempt that queued nothing was not given back: %+v", d)
+	}
+}
+
+// A queue that is full (the module is up) is an attempt that counts: the module is not asked again before the interval.
+func TestAFullQueueStillSpendsTheAttempt(t *testing.T) {
+	e := newEnv(t)
+	n := &readinessNotifier{ready: true}
+	n.done = false
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if n.count() != 1 {
+		t.Fatalf("calls = %d, a full queue is retried only after the interval", n.count())
 	}
 }
 

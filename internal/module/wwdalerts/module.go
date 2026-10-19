@@ -82,8 +82,7 @@ func (m *Module) Init(c *core.Core) error {
 			if !ok {
 				return nil, false
 			}
-			n, ok := svc.(push.AlertNotifier)
-			return n, ok
+			return readyNotifier(svc)
 		}
 	}
 	if m.deliver == nil {
@@ -91,7 +90,7 @@ func (m *Module) Init(c *core.Core) error {
 		if svc, ok := c.Registry.Get(fleetmod.RoleViewKey); ok {
 			rv, _ = svc.(fleet.RoleView)
 		}
-		m.deliver = primaryOnly(rv)
+		m.deliver = deliverRule(rv)
 	}
 	path := m.dbPath
 	if path == "" {
@@ -161,9 +160,43 @@ func (m *Module) loop(ctx context.Context) {
 	}
 }
 
-// primaryOnly is the deliverer rule: this daemon holds the fleet primary role. Without a role view (no fleet module) nobody delivers.
-func primaryOnly(rv fleet.RoleView) func() bool {
-	return func() bool { return rv != nil && rv.State().Role == fleet.RolePrimary }
+// readyNotifier is the registered service as a notifier that can be asked now. The registry keeps a service after its module stops, so a
+// notifier that says it is not ready is not asked: no attempt is spent on it.
+func readyNotifier(svc any) (push.AlertNotifier, bool) {
+	n, ok := svc.(push.AlertNotifier)
+	if !ok {
+		return nil, false
+	}
+	if r, ok := svc.(push.AlertReadiness); ok && !r.AlertReady() {
+		return nil, false
+	}
+	return n, true
+}
+
+// deliverRule is who delivers (spec §13.3), before this daemon's own push module is asked (a daemon without one attempts nothing):
+//   - the fleet primary delivers;
+//   - a standby delivers too when the primary cannot send a phone push — it reported push_ready=false, reported nothing (an older
+//     daemon), did not answer, or has not been asked yet. Better both push (the phone shows one notification per collapse id) than
+//     none; fleet's election is what turns an unreachable primary into a new one, and that takeover needs no rule here;
+//   - an `off` daemon, and one without a role view (no fleet module), reads and does not push.
+func deliverRule(rv fleet.RoleView) func() bool {
+	return func() bool {
+		if rv == nil {
+			return false
+		}
+		switch rv.State().Role {
+		case fleet.RolePrimary:
+			return true
+		case fleet.RoleStandby:
+			v, ok := rv.(fleet.PeerPushView)
+			if !ok {
+				return false // no way to know what the primary can do: not a reason to push
+			}
+			p := v.PeerPush()
+			return !p.Known || !p.Answered || p.Ready == nil || !*p.Ready
+		}
+		return false
+	}
 }
 
 // pass reads every host's active alerts once and acts on them.
@@ -249,11 +282,12 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !ok {
 		return // the push side is not up: no attempt is spent
 	}
-	if d, ok := m.store.delivery(host, a.Key); ok && d.Since == a.Since.UnixMilli() {
-		if d.Sent > 0 && within(now, d.Sent, deliveredFor) {
+	prev, hadRow := m.store.delivery(host, a.Key)
+	if hadRow && prev.Since == a.Since.UnixMilli() {
+		if prev.Sent > 0 && within(now, prev.Sent, deliveredFor) {
 			return
 		}
-		if d.Attempt > 0 && within(now, d.Attempt, attemptEvery) {
+		if prev.Attempt > 0 && within(now, prev.Attempt, attemptEvery) {
 			return
 		}
 	}
@@ -264,7 +298,7 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	}
 	since := a.Since
 	key := a.Key
-	ntf.NotifyAlert(push.AlertPush{
+	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
 		Title:      title(host, a),
 		Host:       host,
@@ -274,6 +308,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 			}
 		},
 	})
+	// The push module can stop between the readiness look and the call: it then says false, nothing was queued, and the attempt written
+	// above must not hold the alert back for the interval. A false from a module that is still up (its queue is full) keeps the attempt.
+	if !queued {
+		if r, ok := ntf.(push.AlertReadiness); ok && !r.AlertReady() {
+			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow, a.Since, now); err != nil {
+				m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
+			}
+		}
+	}
 }
 
 // within reports whether the stored time at (unix ms) is less than window before now. A time in the future (the clock stepped back after

@@ -57,6 +57,10 @@ type RoleAnswer struct {
 	Term        int64    `json:"term"`
 	Order       []string `json:"order"`
 	NewestAgeMS *int64   `json:"newest_age_ms"`
+	// PushReady says whether the callee's push module is ready to send a phone push. Absent from an older daemon's answer, and from an
+	// engine nothing supplies it to: a reader takes absent as "not reported", never as false. A caller ignores fields it does not know,
+	// so adding it changes no existing pair.
+	PushReady *bool `json:"push_ready,omitempty"`
 }
 
 // Peer reaches the other daemon. An error means unreachable (or refused).
@@ -88,6 +92,10 @@ type Engine struct {
 	lastHeard   time.Time
 	announce    bool // an announcement is owed to the peer
 	newestAge   func() (time.Duration, bool)
+	pushReady   func() bool    // whether this daemon's push module is ready; nil = not reported in the answer
+	peerPush    fleet.PeerPush // what the other daemon said about its push at the last call
+	peerEpoch   int            // the roleEpoch peerPush was recorded in
+	roleEpoch   int            // counts the changes of role
 	lastOrderWn time.Time
 	readErr     string        // the last settings read error that was logged
 	backoff     time.Duration // the settings re-read delay after errors
@@ -123,6 +131,47 @@ func (e *Engine) SetNewestAge(f func() (time.Duration, bool)) {
 	e.mu.Lock()
 	e.newestAge = f
 	e.mu.Unlock()
+}
+
+// SetPushReady supplies (f must not call any method of the engine: it runs under its lock) whether this daemon's push module is ready; the
+// role answer carries it as push_ready. nil takes it away again.
+func (e *Engine) SetPushReady(f func() bool) {
+	e.mu.Lock()
+	e.pushReady = f
+	e.mu.Unlock()
+}
+
+// PeerPush implements fleet.PeerPushView: what the other daemon said about its push at this daemon's last call to it, as long as this
+// daemon's role has not changed since (then it is unknown: a reader that takes unknown as "the other cannot push" errs towards a
+// duplicate push, never towards none). It changes only when a call completes, so a push module that stops or starts on the other
+// daemon shows here after at most one heartbeat: an alert is late by that much, never lost, since it stays active and undelivered.
+func (e *Engine) PeerPush() fleet.PeerPush {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.peerEpoch != e.roleEpoch {
+		return fleet.PeerPush{}
+	}
+	p := e.peerPush
+	if p.Ready != nil {
+		v := *p.Ready
+		p.Ready = &v // a copy: the caller cannot reach into the engine
+	}
+	return p
+}
+
+// recordPeerLocked notes the outcome of a call to the other daemon, under the role the daemon has now. Callers record after any change
+// of role the answer caused, so the record belongs to the role the daemon ends up in.
+func (e *Engine) recordPeerLocked(ans RoleAnswer, err error) {
+	e.peerEpoch = e.roleEpoch
+	if err != nil {
+		e.peerPush = fleet.PeerPush{Known: true}
+		return
+	}
+	e.peerPush = fleet.PeerPush{Known: true, Answered: true}
+	if ans.PushReady != nil {
+		v := *ans.PushReady
+		e.peerPush.Ready = &v
+	}
 }
 
 // ---- fleet.RoleView ----
@@ -261,20 +310,32 @@ func (s Settings) peerAlias() string {
 
 // ---- transitions (callers hold e.mu) ----
 
+// setRoleLocked sets the role. A real change starts a new roleEpoch, which makes what was recorded about the other daemon's push
+// unknown (see recordPeerLocked): it was seen from another role, and the other daemon may be a different one by now.
+func (e *Engine) setRoleLocked(r string) {
+	if e.role != r {
+		e.roleEpoch++
+	}
+	e.role = r
+}
+
 func (e *Engine) becomeOffLocked(reason string) {
-	e.role, e.reason, e.primary, e.announce = fleet.RoleOff, reason, "", false
+	e.setRoleLocked(fleet.RoleOff)
+	e.reason, e.primary, e.announce = reason, "", false
 	e.persistLocked()
 	e.notifyLocked()
 }
 
 func (e *Engine) becomePrimaryLocked(term int64) {
-	e.role, e.term, e.reason, e.primary = fleet.RolePrimary, term, "", e.set.Self
+	e.setRoleLocked(fleet.RolePrimary)
+	e.term, e.reason, e.primary = term, "", e.set.Self
 	e.persistLocked()
 	e.notifyLocked()
 }
 
 func (e *Engine) becomeStandbyLocked(primary string, term int64) {
-	e.role, e.reason, e.announce = fleet.RoleStandby, "", false
+	e.setRoleLocked(fleet.RoleStandby)
+	e.reason, e.announce = "", false
 	if term > e.term {
 		e.term = term
 	}
@@ -367,6 +428,10 @@ func (e *Engine) answerLocked() RoleAnswer {
 			a.NewestAgeMS = &ms
 		}
 	}
+	if e.pushReady != nil {
+		ready := e.pushReady()
+		a.PushReady = &ready
+	}
 	return a
 }
 
@@ -401,6 +466,7 @@ func (e *Engine) Startup(ctx context.Context) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	defer e.recordPeerLocked(ans, err) // after the role it decides below, so the record belongs to that role
 	switch {
 	case err != nil: // unreachable: primary with persisted+1, an announcement owed
 		e.becomePrimaryLocked(e.term + 1)
@@ -486,10 +552,12 @@ func (e *Engine) Beat(ctx context.Context) {
 	case fleet.RoleStandby:
 		if err != nil || !e.aliveLocked(ans) {
 			e.takeoverLocked(ctx, ans, err == nil)
+			e.recordPeerLocked(ans, err)
 			return
 		}
 		e.lastHeard = e.now()
 		e.observePrimaryLocked(ans.Alias, ans.Term, ans.Order)
+		e.recordPeerLocked(ans, err) // after observePrimaryLocked: that may change the role
 	}
 }
 
