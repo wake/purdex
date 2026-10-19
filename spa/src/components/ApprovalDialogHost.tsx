@@ -211,14 +211,18 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
   const leadNameShown = approval.kind === 'lead' && leadNames !== undefined && leadNames.length > 0
+  // Every list that lands bumps the generation; a read that went out earlier and comes back after a newer list (the open-time read after a `name_taken`) is dropped.
+  const namesGen = useRef(0)
   const refreshLeadNames = (names: LeadNameCandidate[]) => {
+    namesGen.current += 1
     setLeadNames(names)
     setPickedName((p) => (p !== null && names.some((n) => n.code === p) ? p : null))
   }
   useEffect(() => {
     if (approval.kind !== 'lead' || payload.lead_names === undefined) return
     let live = true
-    fetchLeadNames(hostId, approval.id).then((names) => { if (live) refreshLeadNames(names) }, () => {}) // a failed read keeps the stored list
+    const gen = namesGen.current
+    fetchLeadNames(hostId, approval.id).then((names) => { if (live && namesGen.current === gen) refreshLeadNames(names) }, () => {}) // a failed read keeps the stored list
     return () => { live = false }
     // once per dialog: it is keyed by the approval
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,7 +281,10 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
       onNameTaken: (names) => {
         setNameTaken(true)
         if (names !== undefined) refreshLeadNames(names)
-        else void fetchLeadNames(hostId, approval.id).then(refreshLeadNames, () => {})
+        else {
+          const gen = namesGen.current
+          void fetchLeadNames(hostId, approval.id).then((fresh) => { if (namesGen.current === gen) refreshLeadNames(fresh) }, () => {})
+        }
       },
     })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.

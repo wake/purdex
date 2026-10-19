@@ -172,6 +172,21 @@ describe('name_taken', () => {
     expect(screen.getByTestId('lead-name-taken')).toBeInTheDocument()
   })
 
+  it('an open-time read that comes back after a name_taken list does not overwrite it', async () => {
+    let late!: (v: LeadNameCandidate[]) => void
+    mockedNames.mockReset()
+    mockedNames.mockReturnValue(new Promise<LeadNameCandidate[]>((r) => { late = r }))
+    mockedDecide.mockRejectedValueOnce(taken([KEEP, cand('kenji', 'lead')]))
+    render(<ApprovalDialogHost />)
+    await open(lead())
+    fireEvent.click(pill('freya'))
+    await approve()
+    expect(screen.queryByText('Freya')).toBeNull()
+    await act(async () => { late(LIST) }) // the stale list still has Freya
+    expect(screen.queryByText('Freya')).toBeNull()
+    expect(screen.getByText('Kenji')).toBeInTheDocument()
+  })
+
   it('a pick sitting in the folded group keeps that group open after a refresh', async () => {
     mockedDecide.mockRejectedValueOnce(taken([KEEP, cand('freya', 'former'), cand('yuki', 'other'), cand('emma', 'other')]))
     render(<ApprovalDialogHost />)
