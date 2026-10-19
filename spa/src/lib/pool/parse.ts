@@ -7,11 +7,11 @@ import {
 } from './types'
 
 type Rec = Record<string, unknown>
-const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v)
-const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-const str = (v: unknown): v is string => typeof v === 'string'
+export const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v)
+export const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+export const str = (v: unknown): v is string => typeof v === 'string'
 const numOrNull = (v: unknown): number | null => (num(v) ? v : null)
-const time = (v: unknown): number | null => {
+export const time = (v: unknown): number | null => {
   if (!str(v) || !/^\d{4}-\d\d-\d\dT/.test(v)) return null
   const t = Date.parse(v)
   return Number.isFinite(t) ? t : null
@@ -45,7 +45,7 @@ function proc(p: unknown): PoolProc | null {
 }
 
 /** A list the wire must carry: an array, or null (a Go nil slice) read as empty. Anything else — including absent — is undefined. A malformed element is dropped. */
-function list<T>(v: unknown, one: (x: unknown) => T | null): T[] | undefined {
+export function list<T>(v: unknown, one: (x: unknown) => T | null): T[] | undefined {
   if (v === null) return []
   return Array.isArray(v) ? v.flatMap((x) => { const r = one(x); return r === null ? [] : [r] }) : undefined
 }
