@@ -3274,6 +3274,7 @@
   "watch.jobs.detail.class": "Class",
   "watch.jobs.detail.origin": "Sent from",
   "watch.jobs.detail.submitter": "Submitter",
+  "watch.jobs.detail.submitter_open": "Go to the submitter's tab",
   "watch.jobs.detail.host": "Ran on",
   "watch.jobs.detail.attempt": "attempt {{n}}",
   "watch.jobs.detail.queued": "Queued",

@@ -3274,6 +3274,7 @@
   "watch.jobs.detail.class": "類別",
   "watch.jobs.detail.origin": "送出主機",
   "watch.jobs.detail.submitter": "送出者",
+  "watch.jobs.detail.submitter_open": "切到送出者的分頁",
   "watch.jobs.detail.host": "跑的主機",
   "watch.jobs.detail.attempt": "第 {{n}} 次",
   "watch.jobs.detail.queued": "排入時間",

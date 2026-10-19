@@ -9,6 +9,7 @@ import { jobLine } from '../../../lib/pool/jobs-lanes'
 import { jobRanOn, resultText, resultWord, whenText } from '../../../lib/pool/jobs-view'
 import { jobKey, readLogScroll, writeLogScroll } from '../../../lib/pool/jobs-view-memory'
 import { logNote, useJobDetail } from '../../../lib/pool/job-detail'
+import { showSubmitterTab, useSubmitterTab } from '../../../lib/pool/submitter-tab'
 import { errorTextKey } from '../../../lib/pool/words'
 import { isEnded, type PoolJob } from '../../../lib/pool/jobs-types'
 import type { PoolError } from '../../../lib/pool/errors'
@@ -35,6 +36,7 @@ function LogText({ id, text }: { id: string; text: string }) {
 export function JobDetail({ job, now, onClose }: { job: PoolJob; now: number; onClose: () => void }) {
   const t = useI18nStore((s) => s.t)
   const { detail, full, loadFull } = useJobDetail(job)
+  const submitterTab = useSubmitterTab(job.submitter.session)
   const key = jobKey(job.origin, job.id)
   const r = job.result
   const inline = detail.phase === 'ready' ? detail.log : null
@@ -101,7 +103,13 @@ export function JobDetail({ job, now, onClose }: { job: PoolJob; now: number; on
         <Row label={t('watch.jobs.detail.repo')} testId="job-repo"><span className="font-mono">{job.repo.name}@{job.snapshot.commit.slice(0, 8)}</span></Row>
         <Row label={t('watch.jobs.detail.class')} testId="job-class-row">{KNOWN_CLASSES.includes(job.class) ? t(`watch.jobs.class.${job.class}`) : job.class}</Row>
         <Row label={t('watch.jobs.detail.origin')} testId="job-origin">{job.origin}</Row>
-        <Row label={t('watch.jobs.detail.submitter')} testId="job-submitter">{job.submitter.session !== '' ? job.submitter.session : t('watch.jobs.session_none')}</Row>
+        <Row label={t('watch.jobs.detail.submitter')} testId="job-submitter">
+          {job.submitter.session === ''
+            ? t('watch.jobs.session_none')
+            : submitterTab
+              ? <button type="button" data-testid="job-submitter-link" title={t('watch.jobs.detail.submitter_open')} onClick={() => showSubmitterTab(submitterTab)} className="cursor-pointer text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid">{job.submitter.session}</button>
+              : job.submitter.session}
+        </Row>
         <Row label={t('watch.jobs.detail.host')} testId="job-host">
           {host === '' ? '—' : host}{job.claim ? ` · ${t('watch.jobs.detail.attempt', { n: job.claim.attempt })}` : ''}
         </Row>

@@ -4,10 +4,13 @@ import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-li
 
 vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(), fetchJobLog: vi.fn() }))
 vi.mock('../../../lib/pool/jobs-driver-live', () => ({ liveTopology: vi.fn() }))
+vi.mock('../../../lib/open-session-tab', () => ({ activateTabPane: vi.fn() }))
 
 import { JobDetail } from './JobDetail'
 import { fetchJob, fetchJobLog } from '../../../lib/pool/jobs-api'
 import { liveTopology } from '../../../lib/pool/jobs-driver-live'
+import { activateTabPane } from '../../../lib/open-session-tab'
+import { useTabStore } from '../../../stores/useTabStore'
 import { PoolReadError } from '../../../lib/pool/api'
 import { clearJobsViewMemory, readLogScroll, writeLogScroll } from '../../../lib/pool/jobs-view-memory'
 import type { JobResult, PoolJob } from '../../../lib/pool/jobs-types'
@@ -31,6 +34,7 @@ const gone = () => new PoolReadError('/api/pool/jobs/j1', 404, { code: 'not_foun
 
 beforeEach(() => {
   cleanup(); clearJobsViewMemory()
+  useTabStore.setState({ tabs: {} } as never); vi.mocked(activateTabPane).mockClear()
   vi.mocked(fetchJob).mockReset(); vi.mocked(fetchJobLog).mockReset()
   vi.mocked(liveTopology).mockReturnValue({ origins: ['mlab', 'air26'], ownDaemon: { mlab: 'd-mlab' }, forwarders: ['d-mlab'] })
 })
@@ -163,7 +167,35 @@ describe('who and where', () => {
     expect(await screen.findByTestId('job-cache')).toHaveTextContent(t('watch.jobs.detail.cache_hit'))
   })
 
+  const heldBy = (sessionId: string) => useTabStore.setState({
+    tabs: { t9: { id: 't9', layout: { type: 'leaf', pane: { id: 'p9', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'a', mode: 'terminal', cachedName: '', tmuxInstance: '',
+      rebuild: { sessionName: 'a', tmuxInstance: '', agent: { type: 'cc', sessionId, updatedAt: 1 }, capturedAt: 1 } } } } } },
+  } as never)
+
+  it('a submitter session some tab holds is a link to that tab (the case of the id ignored); a press shows the tab and its pane', async () => {
+    heldBy('SESS-1')
+    const j = job() // session 'sess-1'
+    ready(j, 'x')
+    mount(j)
+    await screen.findByTestId('job-log')
+    const link = screen.getByTestId('job-submitter-link')
+    expect(link).toHaveTextContent('sess-1')
+    fireEvent.click(link)
+    expect(activateTabPane).toHaveBeenCalledWith('t9', 'p9')
+  })
+
+  it('a session no tab holds is plain text, nothing to press', async () => {
+    heldBy('another-session')
+    const j = job()
+    ready(j, 'x')
+    mount(j)
+    await screen.findByTestId('job-log')
+    expect(screen.getByTestId('job-submitter')).toHaveTextContent('sess-1')
+    expect(screen.queryByTestId('job-submitter-link')).toBeNull()
+  })
+
   it('an empty submitter session is 「—」 with nothing to press', async () => {
+    heldBy('sess-1')
     const j = job({ submitter: { session: '', ref: '', team: '', host: '' } })
     ready(j, 'x')
     mount(j)
