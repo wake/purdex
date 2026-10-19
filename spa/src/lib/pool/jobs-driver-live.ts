@@ -10,7 +10,7 @@ import { usePoolStore } from './store'
 export const JOBS_CAPABILITY = 'jobs.v1'
 
 /** The connected daemons announcing `jobs.v1`, in host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here. */
-function jobsDaemons(): string[] {
+export function jobsDaemons(): string[] {
   const { byHost } = useNexHostStore.getState()
   const { hostOrder, runtime } = useHostStore.getState()
   return hostOrder.filter((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities?.includes(JOBS_CAPABILITY))

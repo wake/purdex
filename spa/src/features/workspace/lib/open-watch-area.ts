@@ -2,11 +2,11 @@
 // (W5a3); the way back is the area's back button and ⌘W (journal v5 §3.7).
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore, getReturnWorkspaceId, getWatchReturnTarget } from '../store'
-import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { currentWatchReconciler, readFleetView } from './watch-area'
 
-export type WatchTarget = { tab: 'guardian' | 'events' } | { host: string }
+export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { host: string }
 
 /**
  * Ensures the area's workspace, brings its host tabs up to the fleet's host list, then selects the target the way
@@ -22,7 +22,7 @@ export function openWatchArea(target: WatchTarget): void {
   currentWatchReconciler().reconcile(readFleetView())
 
   const area = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
-  const wanted = 'host' in target ? watchHostTabId(target.host) : target.tab === 'events' ? WATCH_EVENTS_TAB_ID : WATCH_GUARDIAN_TAB_ID
+  const wanted = 'host' in target ? watchHostTabId(target.host) : target.tab === 'events' ? WATCH_EVENTS_TAB_ID : target.tab === 'jobs' ? WATCH_JOBS_TAB_ID : WATCH_GUARDIAN_TAB_ID
   const tabs = useTabStore.getState().tabs
   const live = area.tabs.filter((id) => id in tabs)
   const tabId = live.includes(wanted) ? wanted : (live[0] ?? null)
