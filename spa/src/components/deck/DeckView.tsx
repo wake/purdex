@@ -27,6 +27,8 @@ import { PendingTail } from './PendingTail'
 import { queuedSignature, shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
+import { speechStartIds } from '../../lib/conversations/deck-speech'
+import type { Seat } from '../../lib/names/seat'
 import { footerContext, type DeckFooterContext } from './footer-context'
 import type { StepActions } from './StepViews'
 import type { PanelContent } from '../../lib/conversations/panel-memory'
@@ -50,13 +52,15 @@ export interface DeckViewProps {
   live?: { tool: string | null; background?: HeaderBackground; /** The back-end says nothing runs any more (a worker that ended): no live line, whatever the header still says. */ hidden?: boolean }
   /** Drawn at the very end of the stream, after the live line and what is waiting to be read: a back-end's own system rows (a worker's lifecycle, U4-4a). */
   tail?: ReactNode
+  /** The persona behind the agent of this conversation (name pool v2 spec §9.4), or null/absent: today's header, no extra lines. */
+  seat?: Seat | null
 }
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
 // `eager`: one of the newest turns, always drawn in full. An older one draws its agent text as plain text until it comes near the
 // viewport (#2469), then in full for good — the swap is remembered outside the component (`deck-reveal-memory`), so a deck that
 // remounts with its tab does not start the far-off turns over.
-const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, subagents, loadSubagent, background }: { turn: Turn; eager: boolean; /** the header's background work, for the last turn only */ background?: HeaderBackground; onOpenPanel?: (content: PanelContent) => void; agentModel?: string; subagents?: ConversationEntry['subagents']; loadSubagent?: (agentId: string) => void }) {
+const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, subagents, loadSubagent, background, seat }: { turn: Turn; seat?: Seat | null; eager: boolean; /** the header's background work, for the last turn only */ background?: HeaderBackground; onOpenPanel?: (content: PanelContent) => void; agentModel?: string; subagents?: ConversationEntry['subagents']; loadSubagent?: (agentId: string) => void }) {
   const t = useI18nStore((s) => s.t)
   const reveal = useContext(DeckRevealContext)
   const [near, setNear] = useState(false)
@@ -71,6 +75,8 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   const hasProse = turn.items.some((item) => item.type === 'agent_text')
   const firstAgentId = turn.items.find((item) => item.type === 'agent_text')?.id
   const firstUser = firstUserId(turn.items, turn.omitted_items)
+  // Where the agent starts speaking again after a tool or a thought (spec §9.4): only a persona's conversation draws a line for it.
+  const speechStarts = useMemo(() => (seat ? speechStartIds(turn.items) : null), [seat, turn.items])
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return
@@ -89,7 +95,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
       {turn.omitted_items ? (
         <div data-testid="deck-omitted" className="deck-t-down text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
-      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} midTurn={item.type === 'user' && item.id !== firstUser} />)}
+      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} seat={seat} speechStart={speechStarts?.has(item.id) ?? false} midTurn={item.type === 'user' && item.id !== firstUser} />)}
       <DoneTurnLine turn={turn} background={background} />
       {turn.error && <div data-testid="deck-turn-error" className="deck-t-down text-status-error">{turn.error.message}</div>}
     </section>
@@ -98,7 +104,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
 
 const NO_UNITS: SearchUnit[] = []
 
-export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live, tail }: DeckViewProps) {
+export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live, tail, seat }: DeckViewProps) {
   const background = live ? live.background : entry.doc.header?.background
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
@@ -174,7 +180,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (
-              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? background : undefined} />)
+              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? background : undefined} seat={seat} />)
             )}
             {!empty && !live?.hidden && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={background} tool={live?.tool} />}
             <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
