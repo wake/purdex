@@ -238,6 +238,7 @@ const KIND_DECISION: Record<PaneContent['kind'], 'device-local' | 'syncs'> = {
   execution: 'syncs',
   'watch-guardian': 'syncs',
   'watch-events': 'syncs',
+  'watch-jobs': 'syncs',
   'watch-host': 'syncs',
 }
 
