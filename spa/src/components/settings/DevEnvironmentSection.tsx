@@ -220,7 +220,9 @@ export function DevEnvironmentSection() {
     setDaemonLog([])
     setDaemonError(null)
     setDaemonPhase('idle')
-  }, [daemonBase, token, closeStream])
+    setRelayConfirm(null) // a question about the previous host's relays is not one about this host
+    setAskingRelays(false)
+  }, [daemonBase, token, devHostId, closeStream])
 
   // Load daemon status on mount / host change
   useEffect(() => {

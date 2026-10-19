@@ -500,6 +500,16 @@ describe('DevEnvironmentSection: relays in progress before a rebuild', () => {
     expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled()
   })
 
+  it('a source change while the question is open closes it, and nothing is rebuilt', async () => {
+    arrange(() => json({ approvals_open: 0, relays_active: 2 }))
+    await clickRebuild()
+    await screen.findByTestId('dev-rebuild-confirm-dialog')
+    const b = useHostStore.getState().addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    await act(async () => { useHostStore.getState().setDevHost(b) })
+    expect(screen.queryByTestId('dev-rebuild-confirm-dialog')).toBeNull()
+    expect(posted).toBe(0)
+  })
+
   it('rebuilds at once when no relay is in progress', async () => {
     arrange(() => json({ approvals_open: 3, relays_active: 0 }))
     await clickRebuild()
