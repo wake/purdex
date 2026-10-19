@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { JobHistory } from './JobHistory'
-import { clearJobsViewMemory, readHistoryFilter, readSelectedJob, readHistoryScroll, writeHistoryFilter } from '../../../lib/pool/jobs-view-memory'
+import { clearJobsViewMemory, readHistoryFilter, readSelectedJob, readHistoryScroll, writeHistoryFilter, writeHistoryScroll } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
@@ -129,13 +129,13 @@ describe('the selection', () => {
     render(<JobHistory jobs={JOBS} now={NOW} />)
     const row = (id: string) => screen.getAllByTestId('job-history-row').find((r) => r.getAttribute('data-job-id') === id)!
     fireEvent.click(row('bad'))
-    expect(row('bad')).toHaveAttribute('aria-selected', 'true')
+    expect(row('bad')).toHaveAttribute('aria-pressed', 'true')
     expect(readSelectedJob()).toBe('mlab/bad')
     fireEvent.click(row('ok'))
-    expect(row('bad')).toHaveAttribute('aria-selected', 'false')
-    expect(row('ok')).toHaveAttribute('aria-selected', 'true')
+    expect(row('bad')).toHaveAttribute('aria-pressed', 'false')
+    expect(row('ok')).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(row('ok'))
-    expect(row('ok')).toHaveAttribute('aria-selected', 'false')
+    expect(row('ok')).toHaveAttribute('aria-pressed', 'false')
     expect(readSelectedJob()).toBeNull()
   })
 
@@ -144,7 +144,7 @@ describe('the selection', () => {
     render(<JobHistory jobs={twins} now={NOW} />)
     fireEvent.click(screen.getAllByTestId('job-history-row')[1])
     expect(readSelectedJob()).toBe('air26/same')
-    expect(screen.getAllByTestId('job-history-row').map((r) => r.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+    expect(screen.getAllByTestId('job-history-row').map((r) => r.getAttribute('aria-pressed'))).toEqual(['false', 'true'])
   })
 
   it('a remembered selection is shown when the table comes back', () => {
@@ -152,11 +152,43 @@ describe('the selection', () => {
     fireEvent.click(screen.getAllByTestId('job-history-row')[2])
     unmount()
     render(<JobHistory jobs={JOBS} now={NOW} />)
-    expect(screen.getAllByTestId('job-history-row')[2]).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByTestId('job-history-row')[2]).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('the keyboard', () => {
+  it('a row is a button the keyboard can reach and press (Enter and Space press a button), not only a click target', () => {
+    render(<JobHistory jobs={JOBS} now={NOW} />)
+    for (const row of screen.getAllByTestId('job-history-row')) {
+      expect(row.tagName).toBe('BUTTON')
+      expect(row).not.toBeDisabled()
+      expect(row.getAttribute('tabindex')).not.toBe('-1')
+    }
   })
 })
 
 describe('the scroll', () => {
+  it('rows that arrive after the table was shown still get the saved position (the box is only there once there are rows)', () => {
+    writeHistoryScroll(90)
+    const view = render(<JobHistory jobs={[]} now={NOW} />)
+    expect(screen.queryByTestId('job-history-scroll')).toBeNull()
+    view.rerender(<JobHistory jobs={JOBS} now={NOW} />)
+    expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(90)
+  })
+
+  it('and only the first time: a box that comes back after the filter emptied it starts where the reader left it, not at the old position', () => {
+    writeHistoryScroll(90)
+    render(<JobHistory jobs={JOBS} now={NOW} />)
+    const box = screen.getByTestId('job-history-scroll')
+    box.scrollTop = 10
+    fireEvent.scroll(box)
+    fireEvent.click(within(screen.getByTestId('job-filter-group')).getByRole('button', { name: t('watch.jobs.filter.group.failed') }))
+    fireEvent.change(screen.getByLabelText(t('watch.jobs.filter.host')), { target: { value: 'mserv' } })
+    expect(screen.queryByTestId('job-history-scroll')).toBeNull() // no failed job ran on mserv
+    fireEvent.click(within(screen.getByTestId('job-filter-group')).getByRole('button', { name: t('watch.jobs.filter.group.all') }))
+    expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(0)
+  })
+
   it('the scroll position goes to the view memory and is put back when the table comes back', () => {
     const first = render(<JobHistory jobs={JOBS} now={NOW} />)
     const box = screen.getByTestId('job-history-scroll')

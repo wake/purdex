@@ -80,7 +80,7 @@ describe('the jobs tab across tab switches', () => {
     expect(screen.getAllByTestId('job-history-row').map((r) => r.getAttribute('data-job-id'))).toEqual(['bad'])
     expect(within(screen.getByTestId('job-filter-group')).getByRole('button', { name: t('watch.jobs.filter.group.failed') })).toHaveAttribute('aria-pressed', 'true')
     expect((screen.getByLabelText(t('watch.jobs.filter.repo')) as HTMLSelectElement).value).toBe('purdex')
-    expect(screen.getByTestId('job-history-row')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('job-history-row')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(64)
   }, 30_000)
 })

@@ -2,7 +2,7 @@
 // three filters: the state group (全部／失敗／成功／取消與取代／逾時), the host a job ran on and its repo. A row can be selected (7b1-3 opens its detail).
 //
 // Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the filters, the selected job and the scroll position live in `lib/pool/jobs-view-memory`, not in component state.
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { STATE_GROUPS, historyHosts, historyOf, historyRepos, jobRanOn, resultText, resultWord, whenText } from '../../../lib/pool/jobs-view'
@@ -30,12 +30,13 @@ export function JobHistory({ jobs, now }: { jobs: PoolJob[]; now: number }) {
   // The tab outlives this component: the memory is the source, the state only re-renders.
   const [choice, setChoiceState] = useState<HistoryFilterChoice>(() => readHistoryFilter())
   const [selected, setSelectedState] = useState<string | null>(() => readSelectedJob())
-  const box = useRef<HTMLDivElement>(null)
+  // The box is only there once there are rows, which may be after the tab was shown (the jobs arrive by polling): the saved position is put back when it first appears, once.
+  const restored = useRef(false)
+  const boxRef = useCallback((el: HTMLDivElement | null) => {
+    if (el && !restored.current) { restored.current = true; el.scrollTop = readHistoryScroll() }
+  }, [])
   const setChoice = (next: HistoryFilterChoice) => { writeHistoryFilter(next); setChoiceState(next) }
   const select = (key: string | null) => { writeSelectedJob(key); setSelectedState(key) }
-
-  // Put the scroll back where it was left, once the rows are there.
-  useLayoutEffect(() => { if (box.current) box.current.scrollTop = readHistoryScroll() }, [])
 
   const rows = useMemo(() => historyOf(jobs, {
     group: choice.group === 'all' ? undefined : choice.group,
@@ -81,18 +82,19 @@ export function JobHistory({ jobs, now }: { jobs: PoolJob[]; now: number }) {
               <span>{t('watch.jobs.history.col.state')}</span><span>{t('watch.jobs.history.col.job')}</span><span>{t('watch.jobs.history.col.host')}</span>
               <span>{t('watch.jobs.history.col.when')}</span><span>{t('watch.jobs.history.col.took')}</span><span>{t('watch.jobs.history.col.result')}</span>
             </div>
-            <div ref={box} data-testid="job-history-scroll" onScroll={(e) => writeHistoryScroll(e.currentTarget.scrollTop)} className="min-h-0 overflow-y-auto">
-              <ul role="listbox" aria-label={t('watch.jobs.history.title')} className="flex flex-col">
+            <div ref={boxRef} data-testid="job-history-scroll" onScroll={(e) => writeHistoryScroll(e.currentTarget.scrollTop)} className="min-h-0 overflow-y-auto">
+              <ul aria-label={t('watch.jobs.history.title')} className="flex flex-col">
                 {rows.map((j) => {
                   const key = jobKey(j.origin, j.id)
                   const on = selected === key
                   const host = jobRanOn(j)
                   const r = j.result
                   return (
-                    <li
-                      key={key} role="option" data-testid="job-history-row" data-job-id={j.id} data-state={j.state} aria-selected={on}
+                    <li key={key}>
+                    <button
+                      type="button" data-testid="job-history-row" data-job-id={j.id} data-state={j.state} aria-pressed={on}
                       onClick={() => select(on ? null : key)}
-                      className={`${COLS} cursor-pointer border-b border-border-subtle/50 px-2 py-1.5 text-xs ${on ? 'bg-surface-elevated' : 'hover:bg-surface-secondary'}`}
+                      className={`${COLS} w-full cursor-pointer border-b border-border-subtle/50 px-2 py-1.5 text-left text-xs ${on ? 'bg-surface-elevated' : 'hover:bg-surface-secondary'}`}
                     >
                       <span data-testid="job-history-state" className="text-text-secondary">{KNOWN_STATES.includes(j.state) ? t(`watch.jobs.state.${j.state}`) : j.state}</span>
                       <span className="min-w-0 truncate font-mono text-text-primary" title={jobLine(j)}>{jobLine(j)}</span>
@@ -100,6 +102,7 @@ export function JobHistory({ jobs, now }: { jobs: PoolJob[]; now: number }) {
                       <span data-testid="job-history-when" className="tabular-nums text-text-muted">{whenText(r?.finished_at ?? null, now)}</span>
                       <span data-testid="job-history-took" className="tabular-nums text-text-muted">{r?.started_at != null && r.finished_at != null ? mss(r.started_at, r.finished_at) : '—'}</span>
                       <span data-testid="job-history-result" className="truncate text-text-muted">{resultText(resultWord(j), t)}</span>
+                    </button>
                     </li>
                   )
                 })}
