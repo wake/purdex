@@ -63,6 +63,40 @@ describe('rename in place', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
+  it('the keyboard opens it too: the name is focusable and Enter or F2 starts the edit (not while an IME is composing)', () => {
+    const onCommit = vi.fn().mockResolvedValue(undefined)
+    render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: null, onCommit }} />)
+    expect(name()).toHaveAttribute('role', 'button')
+    name().focus()
+    expect(document.activeElement).toBe(name())
+    fireEvent.keyDown(name(), { key: 'Enter', isComposing: true })
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    fireEvent.keyDown(name(), { key: 'F2' })
+    expect(input()).toHaveValue('Old')
+  })
+
+  it('a blocked name is still focusable, aria-disabled, and carries the reason as its description', () => {
+    render(<TaskGroupHeader color="#000" name="Old" count={1} edit={{ blocked: BLOCKED, onCommit: vi.fn() }} />)
+    expect(name()).toHaveAttribute('aria-disabled', 'true')
+    expect(name()).toHaveAccessibleDescription(BLOCKED)
+    expect(name()).toHaveAccessibleName('Old')
+    fireEvent.keyDown(name(), { key: 'Enter' })
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+  })
+
+  it('a team header hands the keyboard the same way', () => {
+    const onDoubleClickName = vi.fn()
+    render(<TaskGroupHeader color="#000" name="Team" count={3} strong onDoubleClickName={onDoubleClickName} />)
+    fireEvent.keyDown(name(), { key: 'Enter' })
+    expect(onDoubleClickName).toHaveBeenCalledTimes(1)
+  })
+
+  it('a name nobody can edit is plain text', () => {
+    render(<TaskGroupHeader color="#000" name="未分組" count={2} muted />)
+    expect(name()).not.toHaveAttribute('role')
+    expect(name()).not.toHaveAttribute('tabindex')
+  })
+
   it('a team header hands the double-click to the team edit instead', () => {
     const onDoubleClickName = vi.fn()
     render(<TaskGroupHeader color="#000" name="Team" count={3} strong onDoubleClickName={onDoubleClickName} />)

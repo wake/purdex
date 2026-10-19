@@ -50,7 +50,8 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
     try { await edit.onCommit(next) } finally { if (alive.current) { setPending(false); setEditing(false) } }
   }
 
-  const nameClass = `min-w-0 truncate ${strong ? 'font-semibold text-text-primary' : muted ? 'text-text-muted' : 'font-normal text-text-secondary'}`
+  const interactive = edit !== undefined || onDoubleClickName !== undefined
+  const nameClass =`min-w-0 truncate ${strong ? 'font-semibold text-text-primary' : muted ? 'text-text-muted' : 'font-normal text-text-secondary'}`
   return (
     <div ref={ref} data-testid="task-group-header" className="mx-2 flex items-center gap-1.5 pl-1.5 pr-1.5 py-1 text-xs">
       <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />
@@ -66,12 +67,22 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
           className="min-w-0 flex-1 rounded border border-border-default bg-surface-primary px-1 py-0 text-xs text-text-primary outline-none focus:border-border-active"
         />
       ) : (
-        <span
-          data-testid="task-group-name" title={edit?.blocked ?? undefined} aria-disabled={edit?.blocked ? true : undefined}
-          onDoubleClick={onDoubleClickName ?? start} className={nameClass}
-        >
-          {name}
-        </span>
+        <>
+          {/* An editable name is a control: focusable, opened by Enter or F2 as well as a double-click; blocked, it stays focusable and says why (tooltip, and a hidden description). */}
+          <span
+            data-testid="task-group-name" title={edit?.blocked ?? undefined} aria-disabled={edit?.blocked ? true : undefined}
+            role={interactive ? 'button' : undefined} tabIndex={interactive ? 0 : undefined} aria-label={interactive ? name : undefined}
+            aria-describedby={edit?.blocked ? `${reasonId}-name` : undefined}
+            onDoubleClick={onDoubleClickName ?? start}
+            onKeyDown={interactive ? (e) => {
+              if ((e.key === 'Enter' || e.key === 'F2') && !e.nativeEvent.isComposing) { e.preventDefault(); (onDoubleClickName ?? start)() }
+            } : undefined}
+            className={nameClass}
+          >
+            {name}
+          </span>
+          {edit?.blocked && <span id={`${reasonId}-name`} className="sr-only">{edit.blocked}</span>}
+        </>
       )}
       {host !== undefined && <span data-testid="task-group-host" className="shrink-0 rounded bg-surface-hover px-1 text-[9.5px] text-text-secondary">{host}</span>}
       <span data-testid="task-group-count" className="ml-auto shrink-0 tabular-nums text-text-muted">{count}</span>
