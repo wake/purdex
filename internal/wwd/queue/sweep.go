@@ -94,6 +94,10 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 	if err != nil {
 		errs = append(errs, err)
 	}
+	// the outcomes and disagreements recorded about those jobs go with them, after the same time
+	if _, err := q.pruneOutcomes(ctx, now.Add(-retention).UnixMilli()); err != nil {
+		errs = append(errs, err)
+	}
 
 	orphans, failed, err := q.removeOrphanPins(ctx, now)
 	res.Orphans, res.UnpinFailed = orphans, res.UnpinFailed+failed
