@@ -53,6 +53,9 @@ function keep(jobs: Record<string, PoolJob>): Record<string, PoolJob> {
   return Object.fromEntries(Object.entries(jobs).filter(([id]) => !drop.has(id)))
 }
 
+/** An entry the record really holds: an origin named like an Object.prototype member (`toString`) has none until it is read. */
+const ownOf = <T,>(rec: Record<string, T>, key: string): T | undefined => (Object.hasOwn(rec, key) ? rec[key] : undefined)
+
 const errorOf = (e: unknown): PoolError => (e instanceof PoolReadError ? e.poolError : { code: 'unknown', action: 'log' })
 
 export const useJobsStore = create<JobsState>()((set, get) => {
@@ -63,7 +66,7 @@ export const useJobsStore = create<JobsState>()((set, get) => {
 
   async function run(origin: string, source: JobSource): Promise<ReadOutcome> {
     const gen = genOf(origin)
-    const baseline = get().byOrigin[origin]
+    const baseline = ownOf(get().byOrigin, origin)
     let jobs: Record<string, PoolJob> = { ...baseline?.jobs }
     let cursor = baseline?.cursor ?? ''
     let epoch = baseline?.epoch ?? ''
@@ -118,14 +121,14 @@ export const useJobsStore = create<JobsState>()((set, get) => {
     },
 
     async readJob(origin, source, id) {
-      const base = get().byOrigin[origin]
+      const base = ownOf(get().byOrigin, origin)
       if (!base) return get().read(origin, source)
       const gen = genOf(origin)
       try {
         const detail = await fetchJob(source.daemonId, id, source.host)
         if (genOf(origin) !== gen) return { ok: true }
         set((s) => {
-          const cur = s.byOrigin[origin]
+          const cur = ownOf(s.byOrigin, origin)
           if (!cur) return s
           return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: keep({ ...cur.jobs, [id]: detail.job }) } } }
         })
@@ -136,7 +139,7 @@ export const useJobsStore = create<JobsState>()((set, get) => {
         if (error.code === 'not_found') {
           // the job is gone (kept 7 days): it leaves the list
           set((s) => {
-            const cur = s.byOrigin[origin]
+            const cur = ownOf(s.byOrigin, origin)
             if (!cur?.jobs[id]) return s
             const { [id]: _gone, ...rest } = cur.jobs
             return { byOrigin: { ...s.byOrigin, [origin]: { ...cur, jobs: rest } } }

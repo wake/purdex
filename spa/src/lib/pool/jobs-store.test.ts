@@ -234,6 +234,16 @@ describe('one job again (jobs.changed)', () => {
   })
 })
 
+describe('an origin named like an Object.prototype member', () => {
+  it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])('%s has no baseline until it is read: a job event reads it whole', async (origin) => {
+    fetchJobsPage.mockResolvedValueOnce(page([job('a', { origin })], '1'))
+    await get().readJob(origin, src, 'a')
+    expect(fetchJob).not.toHaveBeenCalled()
+    expect(fetchJobsPage).toHaveBeenCalledTimes(1)
+    expect(Object.keys(get().byOrigin[origin]?.jobs ?? {})).toEqual(['a'])
+  })
+})
+
 describe('jobSourceFor: the origin\'s own daemon first, forwarding second', () => {
   it('the daemon the App is connected to for that origin answers for itself, with no ?host=', () => {
     expect(jobSourceFor('mlab', { mlab: 'd-mlab', air26: 'd-air26' }, 'd-mlab')).toEqual({ daemonId: 'd-mlab' })
