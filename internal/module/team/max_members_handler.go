@@ -28,7 +28,7 @@ func (m *Module) handleMaxMembersPut(w http.ResponseWriter, r *http.Request) {
 		bad("team_id is required")
 		return
 	case req.MaxMembers < 1 || req.MaxMembers > team.MaxMaxMembers:
-		bad("max_members must be an integer from 1 to 8")
+		bad("max_members must be an integer from 1 to 9")
 		return
 	}
 	label := strings.TrimSpace(req.Client.Label)
