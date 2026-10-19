@@ -281,6 +281,40 @@ describe('a failure nobody was there to retry', () => {
   })
 })
 
+describe('the last view going away', () => {
+  it('keeps what its cancelled retry would have read: the next view reads that origin again', async () => {
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
+    have.add('mlab')
+    store.readJob.mockResolvedValueOnce(failing)
+    const d = driver()
+    const release = d.watch()
+    await d.jobChanged('mlab', 'a') // a retry is waiting
+    release()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(store.read).not.toHaveBeenCalled()
+    d.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).toHaveBeenCalledTimes(1)
+  })
+
+  it('and a sync that was waiting for a read to end does not start a new read after it', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: ['h-air'] }
+    have.add('mlab')
+    let finish!: (o: ReadOutcome) => void
+    store.read.mockReturnValueOnce(new Promise<ReadOutcome>((r) => { finish = r }))
+    const d = driver()
+    const release = d.watch()
+    d.hostOpened('h-air')
+    await vi.advanceTimersByTimeAsync(0)
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab', 'h-air'] }
+    d.sync() // waits for the read
+    release()
+    finish(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('stop', () => {
   it('a release from before it does nothing, and the next watcher polls again', async () => {
     have.add('mlab'); have.add('mserv')

@@ -223,7 +223,10 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     epoch += 1
     watchers = 0
     stopPolling()
-    for (const st of states.values()) if (st.timer !== null) { clearTimeout(st.timer); st.timer = null }
+    for (const st of states.values()) {
+      st.resync = false // a look that waited for a read to end is cancelled with the rest
+      if (st.timer !== null) { clearTimeout(st.timer); st.timer = null; st.dirty = true } // what the retry would have read is read by the next view
+    }
   }
 
   return { jobChanged, hostOpened, sync, watch, stop }
