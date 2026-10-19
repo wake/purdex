@@ -2,7 +2,8 @@
 // loads on demand; a running job says it comes at the end), then who and where: id, repo @ commit, class, origin, submitter, host and attempt, queued and run time, labels, cache hit.
 //
 // Tab-hosted checklist: the pane unmounts when another tab is shown, so the log's scroll position lives in `lib/pool/jobs-view-memory` (the selection is there too); the log itself is read again when the panel comes back.
-import { useCallback, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
+import { JobMenu, type MenuNotice } from './JobMenu'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { jobLine } from '../../../lib/pool/jobs-lanes'
@@ -38,6 +39,8 @@ export function JobDetail({ job, now, onClose }: { job: PoolJob; now: number; on
   const { detail, full, loadFull } = useJobDetail(job)
   const submitterTab = useSubmitterTab(job.submitter.session)
   const key = jobKey(job.origin, job.id)
+  // What a change that did not go through said, for the job it was made on: another job's panel does not show it.
+  const [notice, setNotice] = useState<(MenuNotice & { key: string }) | null>(null)
   const r = job.result
   const inline = detail.phase === 'ready' ? detail.log : null
   const note = logNote(job, inline, now)
@@ -58,9 +61,16 @@ export function JobDetail({ job, now, onClose }: { job: PoolJob; now: number; on
           <div data-testid="job-detail-line" className="break-all font-mono text-sm text-text-primary">{jobLine(job)}</div>
           <div data-testid="job-detail-state" className="text-xs text-text-secondary">{KNOWN_STATES.includes(job.state) ? t(`watch.jobs.state.${job.state}`) : job.state}{result !== '' && ` · ${result}`}</div>
         </div>
+        <JobMenu job={job} onNotice={(n) => setNotice(n === null ? null : { key, ...n })} />
         <button type="button" onClick={onClose} aria-label={t('watch.jobs.detail.close')} className="shrink-0 rounded px-1.5 text-xs text-text-muted hover:text-text-primary">✕</button>
       </header>
 
+      {notice?.key === key && (
+        <p data-testid="job-menu-notice" className="flex items-center gap-2 text-xs text-status-warning-text">
+          <span className="min-w-0 break-words">{notice.text}</span>
+          {notice.retry && <button type="button" data-testid="job-menu-retry" onClick={notice.retry} className="shrink-0 rounded border border-current px-1.5">{t('watch.jobs.menu.retry')}</button>}
+        </p>
+      )}
       {detail.phase === 'error' && <p data-testid="job-detail-error" className="text-xs text-status-warning-text">{errorLine(detail.error)}</p>}
 
       {r?.summary && r.summary.failures.length > 0 && (
