@@ -331,8 +331,13 @@ describe('TabContextMenu stays below the title bar (#1801)', () => {
       fireEvent.click(screen.getByTestId('tab-menu-extra-one'))
       expect(onSelect).toHaveBeenCalledTimes(1)
       expect(props.onClose).toHaveBeenCalled()
-      expect(screen.getByTestId('tab-menu-extra-two')).toBeDisabled()
-      expect(screen.getByTestId('tab-menu-extra-two')).toHaveAttribute('title', 'reading')
+      const off = screen.getByTestId('tab-menu-extra-two')
+      expect(off).toHaveAttribute('aria-disabled', 'true')
+      expect(off).toHaveAttribute('title', 'reading')
+      off.focus()
+      expect(document.activeElement).toBe(off) // focusable: the reason is reachable from the keyboard
+      fireEvent.click(off)
+      expect(props.onClose).toHaveBeenCalledTimes(1) // a disabled row does nothing and does not close the menu
     })
 
     it('ignores rows set for another tab, and clears them when the menu goes away', () => {

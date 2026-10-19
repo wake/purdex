@@ -135,9 +135,10 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
       {extras.length > 0 && (
         <>
           {extras.map((x) => (
+            // aria-disabled, not `disabled`: a disabled button takes no focus, so a keyboard user would never reach the reason in its title.
             <button
-              key={x.key} data-testid={`tab-menu-extra-${x.key}`} disabled={x.disabled} title={x.title}
-              onClick={() => { x.onSelect(); onClose() }}
+              key={x.key} data-testid={`tab-menu-extra-${x.key}`} aria-disabled={x.disabled ? true : undefined} title={x.title}
+              onClick={() => { if (x.disabled) return; x.onSelect(); onClose() }}
               className={`w-full text-left px-3 py-1.5 transition-colors ${x.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'}`}
             >
               {x.label}
