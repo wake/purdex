@@ -53,11 +53,11 @@ func parseVitest(in Input) (wire.Summary, error) {
 			case "failed":
 				s.Failed++
 				suiteFailed = true
-				passed.notPassed(file, name)
+				passed.failedTest(file, name)
 				addFailure(&s, wire.Failure{Name: name, File: file, Message: strings.Join(a.FailureMessages, "\n")})
 			case "pending", "skipped", "todo", "disabled":
 				s.Skipped++
-				passed.notPassed(file, name)
+				passed.skippedTest(file, name)
 			default:
 				// schema drift or a damaged report: counting it as skipped would look trustworthy and be wrong
 				if unknown == nil {
@@ -67,6 +67,7 @@ func parseVitest(in Input) (wire.Summary, error) {
 		}
 		if !suiteFailed && suite.Status == "failed" {
 			s.Failed++
+			passed.failedTest("<suite>", file)
 			addFailure(&s, wire.Failure{Name: file, File: file, Message: suite.Message})
 		}
 	}

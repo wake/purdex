@@ -113,11 +113,14 @@ func addCase(s *wire.Summary, c junitCase, root string, passed *passedSet, suite
 		if file == "" {
 			file = c.Classname
 		}
-		passed.notPassed(suite, idFile, c.Classname, c.Name)
+		if c.Name == "" || strings.HasPrefix(idFile, outside) { // as for a pass: such a failure is not told apart from another
+			passed.taint()
+		}
+		passed.failedTest(suite, idFile, c.Classname, c.Name)
 		addFailure(s, wire.Failure{Name: name, File: rel(root, file), Message: msg})
 	case c.Skipped != nil:
 		s.Skipped++
-		passed.notPassed(suite, idFile, c.Classname, c.Name)
+		passed.skippedTest(suite, idFile, c.Classname, c.Name)
 	default:
 		s.Passed++
 		if c.Name == "" || strings.HasPrefix(idFile, outside) {

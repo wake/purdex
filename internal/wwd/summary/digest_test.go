@@ -38,13 +38,15 @@ func goFailEv(pkg, test string) string {
 	return fmt.Sprintf(`{"Action":"fail","Package":%q,"Test":%q}`, pkg, test)
 }
 
-// The digest is what the spec says it is: "sha256:" and the hex of the SHA-256 of the sorted passed test ids, each followed by a newline.
-// Written out here so the definition cannot drift unnoticed.
+// The digest is "sha256:" and the hex of the SHA-256 of the sorted lines "P <id>" (passed) and "F <id>" (failed), each followed by a
+// newline, an id being the quoted package and test name. Written out here so the definition cannot drift unnoticed.
 func TestPassedDigestIsTheHashOfTheSortedIDs(t *testing.T) {
-	got := digestOf(t, "go-json", Input{Stdout: goStream(goPassEv("p/b", "TestB"), goPassEv("p/a", "TestA"))})
+	got := digestOf(t, "go-json", Input{Stdout: goStream(goPassEv("p/b", "TestB"), goFailEv("p/c", "TestC"), goPassEv("p/a", "TestA"))})
 	h := sha256.New()
-	for _, id := range []string{strconv.Quote("p/a\x00TestA"), strconv.Quote("p/b\x00TestB")} {
-		h.Write([]byte(id + "\n"))
+	for _, line := range []string{
+		"F " + strconv.Quote("p/c\x00TestC"), "P " + strconv.Quote("p/a\x00TestA"), "P " + strconv.Quote("p/b\x00TestB"),
+	} {
+		h.Write([]byte(line + "\n"))
 	}
 	if want := "sha256:" + hex.EncodeToString(h.Sum(nil)); got != want {
 		t.Fatalf("digest = %s, want %s", got, want)

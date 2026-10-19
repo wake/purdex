@@ -44,21 +44,23 @@ func TestJunitDigestTellsSuitesApart(t *testing.T) {
 	}
 }
 
-// A case with no name, or a file outside the workspace, cannot be told apart: no digest. A failed or skipped one needs no identity.
+// A passed or failed case with no name, or a file outside the workspace, cannot be told apart: no digest. A skipped one is not compared,
+// so it needs no identity.
 func TestJunitCasesThatCannotBeToldApartGiveNoDigest(t *testing.T) {
 	doc := func(inner string) []byte { return []byte(`<testsuite name="s">` + inner + `</testsuite>`) }
 	for name, inner := range map[string]string{
 		"no name":               `<testcase classname="A"/><testcase classname="B"/>`,
 		"a file outside":        `<testcase classname="A" name="t" file="/elsewhere/x.php"/>`,
 		"no name beside a good": `<testcase classname="A" name="t"/><testcase classname="B"/>`,
+		"a nameless failure":    `<testcase classname="A" name="ok"/><testcase name=""><failure message="x"/></testcase>`,
 	} {
 		s, err := Parse("junit", Input{Junit: doc(inner), Root: "/work", Digest: true})
 		if err != nil || s.PassedDigest != "" {
 			t.Errorf("%s: digest %q err %v", name, s.PassedDigest, err)
 		}
 	}
-	s, err := Parse("junit", Input{Junit: doc(`<testcase classname="A" name="ok" file="/work/x.php"/><testcase name=""><failure message="x"/></testcase><testcase><skipped/></testcase>`), Root: "/work", Digest: true})
+	s, err := Parse("junit", Input{Junit: doc(`<testcase classname="A" name="ok" file="/work/x.php"/><testcase><skipped/></testcase>`), Root: "/work", Digest: true})
 	if err != nil || s.PassedDigest == "" {
-		t.Errorf("a nameless failed or skipped case is not a passed test: digest %q err %v", s.PassedDigest, err)
+		t.Errorf("a nameless skipped case is not compared: digest %q err %v", s.PassedDigest, err)
 	}
 }

@@ -81,12 +81,12 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 			delete(output, k)
 			if ev.Test != "" {
 				s.Skipped++
-				passed.notPassed(ev.Package, ev.Test)
+				passed.skippedTest(ev.Package, ev.Test)
 			}
 		case "fail":
 			if ev.Test != "" {
 				s.Failed++
-				passed.notPassed(ev.Package, ev.Test)
+				passed.failedTest(ev.Package, ev.Test)
 				failedTests[ev.Package] = true
 				if len(failedOrder) < maxFailures {
 					failedOrder = append(failedOrder, k)
@@ -95,6 +95,7 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 				}
 			} else if !failedTests[ev.Package] { // its tests already told; a package that failed alone is a build or setup failure
 				s.Failed++
+				passed.failedTest("<package>", ev.Package)
 				if len(pkgFailed) < maxFailures {
 					pkgFailed = append(pkgFailed, ev.Package)
 				} else {
