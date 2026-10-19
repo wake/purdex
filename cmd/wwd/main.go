@@ -216,7 +216,12 @@ func run(cfgPath string) error {
 	})
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
-	go runAdvisor(ctx, advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report})
+	adv := advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report,
+		Peers: cfg.Peers, Downs: d.Pool().Downs}
+	if cfg.Advisor.PartnerCheck {
+		adv.PartnerSeen = d.PartnerSeen
+	}
+	go runAdvisor(ctx, adv)
 	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
 	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
 	// defer runs before it, which was deferred earlier), also when run() failed.

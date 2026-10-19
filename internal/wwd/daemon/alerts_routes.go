@@ -19,7 +19,15 @@ func (d *Daemon) alertsRoutes(mux *http.ServeMux, peer bool) {
 	if d.opts.Alerts == nil {
 		return
 	}
-	mux.HandleFunc("GET /v1/alerts", d.viaHost(peer, d.handleAlerts))
+	local := d.handleAlerts
+	if !peer {
+		// a read of this host's own list on the socket is the local Purdex daemon's deliverer (spec §13.3): it is the partner's heartbeat
+		local = func(w http.ResponseWriter, r *http.Request) {
+			d.partnerAt.Store(d.clock().UnixNano())
+			d.handleAlerts(w, r)
+		}
+	}
+	mux.HandleFunc("GET /v1/alerts", d.viaHost(peer, local))
 }
 
 func (d *Daemon) handleAlerts(w http.ResponseWriter, r *http.Request) {
