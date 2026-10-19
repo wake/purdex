@@ -16,6 +16,7 @@ import (
 var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 
 type fakeAPI struct {
+	earned    wire.EarnedLabelList
 	jobs      []wire.Job
 	query     client.JobsQuery
 	jobErr    error
@@ -90,6 +91,10 @@ func (f *fakeAPI) StartException(_ context.Context, e wire.Exception) error {
 func (f *fakeAPI) StopException(_ context.Context, name string) error {
 	f.stopped = name
 	return f.err
+}
+
+func (f *fakeAPI) EarnedLabels(context.Context) (wire.EarnedLabelList, error) {
+	return f.earned, f.err
 }
 
 func firstErr(errs ...error) error {
