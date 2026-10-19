@@ -189,6 +189,46 @@ func TestScanner_AFailedReadEndsTheRun(t *testing.T) {
 
 var errTable = errors.New("table unreadable")
 
+// A child is a process, not a pid: a pid handed to a new child during the burst, after the first read's child of that pid exited, is a new
+// fork. Counting by pid alone would take it for the one that was there and under-count the rate.
+func TestScanner_AReusedPidIsANewChild(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	var tables [][]facts.ProcRec
+	for i := 0; i < 40; i++ {
+		// every read has a child with the same pid 9000, but a different process each time (a different start)
+		kid := facts.ProcRec{PID: 9000, PPID: 500, UID: me, Name: "true", Start: t0.Add(time.Duration(i) * time.Millisecond)}
+		tables = append(tables, []facts.ProcRec{shell, kid})
+	}
+	c := &ctxOf{tables: tables}
+	s.Observe(now, facts.ProcSnapshot{Procs: tables[0]}, c.context())
+	if r := s.Report(); r == nil || len(r.Loops) != 1 || r.Loops[0].Rate < 50 {
+		t.Fatalf("a pid reused for every new child was counted once: %+v", r)
+	}
+}
+
+// A burst that runs past its wall-clock budget (a slow table, a big host) is given up: that round says nothing, the run is over, and the
+// sampler is held up no longer than the budget plus one read.
+func TestScanner_ABurstOverItsBudgetIsGivenUp(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	reads := 0
+	slow := facts.ProcContext{Fresh: func() ([]facts.ProcRec, error) {
+		reads++
+		now = now.Add(time.Second) // every read takes a second
+		return []facts.ProcRec{shell, {PID: 9000 + reads, PPID: 500, UID: me, Name: "true"}}, nil
+	}}
+	s.Observe(now, withChild(shell), slow)
+	if r := s.Report(); r == nil || len(r.Loops) != 0 {
+		t.Fatalf("a burst past its budget claimed a loop: %+v", r)
+	}
+	if limit := int(burstBudget/time.Second) + 2; reads > limit {
+		t.Fatalf("%d reads of a one-second table: the budget did not stop it (limit %d)", reads, limit)
+	}
+}
+
 // withChild is a snapshot of a shell and one child it has just now.
 func withChild(shell facts.ProcRec) facts.ProcSnapshot {
 	return facts.ProcSnapshot{Procs: append([]facts.ProcRec{shell}, children(shell.PID, 9000, 1)...)}

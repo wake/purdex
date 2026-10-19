@@ -26,6 +26,9 @@ const (
 
 	burstReads = 25
 	burstGap   = 10 * time.Millisecond
+	// burstBudget is the wall-clock time a burst may take before it is given up: it runs on the sampler's goroutine, and a big or slow
+	// process table (Linux reads each process) must not hold up the 5 s sampling. A normal burst takes about 0.3 s.
+	burstBudget = 1500 * time.Millisecond
 	// burstFloor keeps the measured window from being shorter than the reads that were really made, whatever the clock says.
 	burstFloor = 100 * time.Millisecond
 	maxListed  = 100
@@ -50,6 +53,12 @@ type Scanner struct {
 	report    *advisor.OrphanReport
 	loops     map[loopKey]*loopState
 	lastCheck time.Time
+}
+
+// childKey identifies a child process: its pid and its start time.
+type childKey struct {
+	pid   int
+	start time.Time
 }
 
 type loopKey struct {
@@ -184,16 +193,18 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 	began := s.clock()
 	// A child is new when it was not there at the first read. Not by its start time against the clock: on Linux a start time is the boot
 	// time (whole seconds) plus ticks, so a child that began a moment ago can seem to have begun nearly a second before the burst.
-	before := map[int]map[int]bool{}
-	seen := map[int]map[int]bool{}
+	// A child is a process, not a pid: the key is the pair, so a pid handed to a new child is a new child (the start time need not be exact,
+	// only the same each time the same process is read).
+	before := map[int]map[childKey]bool{}
+	seen := map[int]map[childKey]bool{}
 	for pid := range suspects {
-		before[pid], seen[pid] = map[int]bool{}, map[int]bool{}
+		before[pid], seen[pid] = map[childKey]bool{}, map[childKey]bool{}
 	}
 	for i := 0; i < burstReads; i++ {
 		rows, err := c.Fresh()
-		if err != nil {
-			// a table that cannot be read says nothing about the loop, so the run it was part of is over: kept, it would let ten minutes of
-			// failed reads count as ten minutes above the limit
+		// a table that cannot be read, or a burst that has run past its budget (a big or slow table), says nothing about the loop, so the run
+		// it was part of is over: kept, it would let ten minutes of failed reads count as ten minutes above the limit
+		if err != nil || s.clock().Sub(began) > burstBudget {
 			s.resetLoops()
 			return
 		}
@@ -201,11 +212,12 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 			if _, ok := seen[r.PPID]; !ok {
 				continue
 			}
+			k := childKey{r.PID, r.Start}
 			switch {
 			case i == 0:
-				before[r.PPID][r.PID] = true // already there: not a fork of this burst
-			case !before[r.PPID][r.PID]:
-				seen[r.PPID][r.PID] = true
+				before[r.PPID][k] = true // already there: not a fork of this burst
+			case !before[r.PPID][k]:
+				seen[r.PPID][k] = true
 			}
 		}
 		if i < burstReads-1 {
