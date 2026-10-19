@@ -257,4 +257,25 @@ func TestPersonLeadName_SweepLeavesTheCardAndRefusesTheAgentsRequest(t *testing.
 	}
 }
 
+// A card over the agent's own open request makes that request the person's: the sweep, switched on later, leaves it open
+// (mutation: drop MarkLeadPerson → the sweep cancels it).
+func TestPersonLeadName_CardOverAnOpenRequestSurvivesTheSweep(t *testing.T) {
+	f := newFixture(t)
+	withLeadNames(f)
+	open := f.create(uid(1))
+	_, body := f.mintPersonWith(team.PersonRequest{SessionID: "sid-1", Command: team.PersonCmdLead, Card: true})
+	var r team.PersonResponse
+	_ = json.Unmarshal(body, &r)
+	code, body := f.createLeadWith(uid(2), func(c *team.CreateApprovalRequest) { c.PersonToken = r.Token })
+	var p team.LeadPayload
+	if err := json.Unmarshal(decodeApproval(t, body).Payload, &p); err != nil || code != http.StatusOK || !p.Person {
+		t.Fatalf("create: %d %s (person=%v)", code, body, p.Person)
+	}
+	f.unatt.set(true)
+	f.sweep()
+	if row, _, _ := f.m.store.Get(open.ID); row.State != team.StateOpen {
+		t.Fatalf("the request is %s after the sweep, want open", row.State)
+	}
+}
+
 var _ = errors.New

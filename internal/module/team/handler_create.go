@@ -236,9 +236,16 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	} else if found {
 		if person {
 			if bound.card {
-				// the person asked for the card, and the session has a request waiting on one already: that one is the answer
+				// the person asked for the card, and the session has a request waiting on one already: that one is the answer, and
+				// from now on it is the person's (the unattended sweep leaves it alone)
+				marked, err := m.store.MarkLeadPerson(open.ID)
+				if err != nil {
+					m.logf("[team] create %s: %v", req.ID, err)
+					m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+					return
+				}
 				m.persons.spend(req.PersonToken)
-				m.writeJSON(w, http.StatusOK, open)
+				m.writeJSON(w, http.StatusOK, marked)
 				return
 			}
 			// the agent asked for this already and the person has now said yes: their command approves that request (RT-1b)
