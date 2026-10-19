@@ -17,6 +17,8 @@ import type { ExecutionSummary } from '../lib/nex/types'
 import type { PaneLayout, Tab } from '../types/tab'
 import { CC_ICON_VARIANTS } from '../lib/agent-icons'
 import { useFleetStore } from '../lib/fleet/store'
+import { useJobsStore } from '../lib/pool/jobs-store'
+import type { PoolJob } from '../lib/pool/jobs-types'
 import { queuedBySession } from '../lib/watch/queued-sessions'
 import type { FleetSnapshot } from '../lib/fleet/store'
 import type { FleetWaiter } from '../lib/fleet/types'
@@ -192,6 +194,47 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     expect(result.current.background).toBe('queued')
     act(() => { withFleet([waiter({ session: 'someone-else' })]) })
     expect(result.current.background).toBe('workflow')
+    expect(result.current.backgroundWaiters).toBeUndefined()
+  })
+
+  // WWD-7b1-6: a pool job of the pane's session lights the same hourglass, with or without the gate's fleet
+  const poolJob = (over: Partial<PoolJob> = {}): PoolJob => ({
+    id: 'j1', origin: 'mlab', repo: { name: 'purdex', root: '', remote: '' }, snapshot: { commit: 'c', tree: '', base: '', rel_cwd: '' }, task: 'spa-tsc', args: [], class: 'dev', labels: [], locks: [], cacheable: false,
+    timeout_s: 0, supersede_key: '', interruptible: false, queue_timeout_s: 0, adhoc: false, local: false, submitter: { session: 'sid-1', ref: '', team: '', host: '' }, created_at: Date.now() - 125_000, state: 'queued',
+    claim: null, result: null, manual: '', manual_seq: 0, ...over,
+  })
+  const withJobs = (jobs: PoolJob[]) => useJobsStore.setState({ byOrigin: { mlab: { jobs: Object.fromEntries(jobs.map((j) => [j.id, j])), cursor: '', epoch: '', via: 'd' } }, errors: {} } as never)
+  const jobMarks = (items: unknown[] | undefined) => (items ?? []).filter((x) => typeof x === 'object' && x !== null && 'jobId' in x)
+
+  it('a pool job of the pane session lights the hourglass with no fleet at all, and hands its mark to the symbol', () => {
+    useJobsStore.getState().reset()
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    withJobs([poolJob()])
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('SID-1'))))
+    expect(result.current.background).toBe('queued')
+    expect(jobMarks(result.current.backgroundWaiters)).toEqual([expect.objectContaining({ jobId: 'j1', state: 'queued', place: 1 })])
+  })
+
+  it('a job and a gate waiter of the same session are both handed over (the gate still counts until WWD-9)', () => {
+    useJobsStore.getState().reset()
+    withFleet([waiter({ place: 3 })])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    withJobs([poolJob({ state: 'running', claim: { worker: 'air26', attempt: 1, since: Date.now() - 5000 } })])
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.backgroundWaiters).toHaveLength(2)
+    expect(jobMarks(result.current.backgroundWaiters)).toHaveLength(1)
+  })
+
+  it('goes when the job ends, and a job of another session or with no session lights nothing', () => {
+    useJobsStore.getState().reset()
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    withJobs([poolJob({ submitter: { session: 'sid-2', ref: '', team: '', host: '' } }), poolJob({ id: 'j2', submitter: { session: '', ref: '', team: '', host: '' } })])
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.background).toBeUndefined()
+    act(() => withJobs([poolJob()]))
+    expect(result.current.background).toBe('queued')
+    act(() => withJobs([poolJob({ state: 'succeeded' })]))
+    expect(result.current.background).toBeUndefined()
     expect(result.current.backgroundWaiters).toBeUndefined()
   })
 
