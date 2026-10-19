@@ -121,7 +121,7 @@ func applySpawnIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	}
 	op := spawnRow{ID: c.ID, TeamID: c.TeamID, HostID: p.HostID, OriginSessionID: c.Lead.SessionID, Cwd: p.SpawnCwd, Title: c.Title,
 		Model: c.Model, Effort: c.Effort, TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning,
-		CreatedAt: p.Now, UpdatedAt: p.Now, LeadHostID: p.LeadHostID, LeadJSON: string(lead)}
+		CreatedAt: p.Now, UpdatedAt: p.Now, LeadHostID: p.LeadHostID, LeadJSON: string(lead), PoolName: p.PoolName}
 	if _, _, inserted, err := insertSpawnOp(tx, op, p.hash); err != nil {
 		return CommandResult{}, err
 	} else if !inserted {
@@ -227,6 +227,7 @@ func (m *Module) spawnFinishRemote(op spawnRow, o *team.Origin) {
 			m.logf("[team] spawn %s: title %q for %s: %v", op.ID, op.Title, op.SessionID, err)
 		}
 	}
+	m.releaseMemberName(op.ID) // the session is registered: it takes the name at its first naming, no longer held by the op
 	m.logf("[team] spawn %s done: remote member %s (%s) in %s for host %s", op.ID, o.Ref, op.SessionID, op.TmuxName, op.LeadHostID)
 	m.kickFacts() // the registered fact is committed: tell the lead host now
 	m.wake(op.ID)

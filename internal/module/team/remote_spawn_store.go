@@ -52,21 +52,23 @@ type remoteSpawnRow struct {
 	// longer resolves.
 	HostRef              string
 	CreatedAt, UpdatedAt int64
+	// PoolName is the member name the lead host chose for the spawn (name pool v2 spec §5.2), sent in the command; "" for none.
+	PoolName string
 }
 
 const remoteSpawnCols = `id, team_id, host_id, origin_session_id, cwd, title, model, effort, task_subject, task_description, task_done_json,
-	state, reason, member_session_id, host_ref, created_at, updated_at`
+	state, reason, member_session_id, host_ref, created_at, updated_at, pool_name`
 
-const remoteSpawnInsertSQL = `INSERT INTO remote_spawns (` + remoteSpawnCols + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+const remoteSpawnInsertSQL = `INSERT INTO remote_spawns (` + remoteSpawnCols + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func (r remoteSpawnRow) insertArgs() []any {
 	return []any{r.ID, r.TeamID, r.HostID, r.OriginSessionID, r.Cwd, r.Title, r.Model, r.Effort, r.TaskSubject, r.TaskDescription,
-		r.TaskDoneJSON, r.State, r.Reason, r.MemberSessionID, r.HostRef, r.CreatedAt, r.UpdatedAt}
+		r.TaskDoneJSON, r.State, r.Reason, r.MemberSessionID, r.HostRef, r.CreatedAt, r.UpdatedAt, r.PoolName}
 }
 
 func (r *remoteSpawnRow) dest() []any {
 	return []any{&r.ID, &r.TeamID, &r.HostID, &r.OriginSessionID, &r.Cwd, &r.Title, &r.Model, &r.Effort, &r.TaskSubject, &r.TaskDescription,
-		&r.TaskDoneJSON, &r.State, &r.Reason, &r.MemberSessionID, &r.HostRef, &r.CreatedAt, &r.UpdatedAt}
+		&r.TaskDoneJSON, &r.State, &r.Reason, &r.MemberSessionID, &r.HostRef, &r.CreatedAt, &r.UpdatedAt, &r.PoolName}
 }
 
 // doneWhen decodes the done-when column: a JSON array of strings, "" = none. A damaged column is an error, never "no
