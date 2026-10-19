@@ -37,6 +37,8 @@ import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { handleFleetEvent } from '../lib/fleet/fleet-ws'
 import { jobsDriver } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
+import { handlePoolEvent, isPoolEvent } from '../lib/pool/pool-events'
+import { usePoolStore } from '../lib/pool/store'
 import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
 import { connectionKey } from '../lib/host-connection-key'
@@ -362,6 +364,13 @@ export function useMultiHostEventWs() {
             handleJobsEvent(hostId, event.value)
             return
           }
+          if (isPoolEvent(event.type)) {
+            // The pool's hosts moved (WWD-7a-1c): the pool store reads them again when this daemon is its source. Bound to the connection like the frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handlePoolEvent(hostId)
+            return
+          }
           if (isWatchEvent(event.type)) {
             // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
             // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
@@ -422,6 +431,7 @@ export function useMultiHostEventWs() {
           })
           useSessionStore.getState().fetchHost(hostId).catch(() => {})
           jobsDriver.hostOpened(hostId) // the pool's jobs of the origins this daemon answers for are read after their cursor
+          usePoolStore.getState().poolEvent(hostId) // events may have been missed while it was down: the pool is read again if this is its source
         },
         () => fetchWsTicket(hostId),
         false, // autoReconnect disabled — SM manages reconnection
