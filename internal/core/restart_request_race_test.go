@@ -1,6 +1,7 @@
 package core
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 
@@ -19,6 +20,9 @@ func TestRequestRestart_ShutdownSeesAcceptedRestartPath(t *testing.T) {
 			defer wg.Done()
 			_ = c.RequestRestart("dev rebuild", "/repo/bin/pdx", nil)
 		}()
+		for c.life.Load() == lifeRunning {
+			runtime.Gosched()
+		}
 		if c.BeginShutdown() {
 			if got := c.RestartExecPath(); got != "/repo/bin/pdx" {
 				t.Fatalf("iteration %d: restart accepted but exec path %q", i, got)
