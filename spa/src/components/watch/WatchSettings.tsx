@@ -13,6 +13,8 @@ import { ProbeHostEditor } from '../hosts/ProbeHostEditor'
 import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
+import { usePoolStore } from '../../lib/pool/store'
+import { WorkerSettings } from './WorkerSettings'
 
 type Kind = 'bool' | 'int' | 'float' | 'text' | 'targets' | 'textarea' | 'mode'
 const FIELDS: { key: WatchKey; kind: Kind }[] = [
@@ -222,12 +224,16 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
 }
 
 /** The 設定 page of one fleet host. `hostConfigId`: the App's id for a daemon host (absent for one the App has no config for). */
-export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerIds, onGotoProbe }: {
+export function WatchSettings({ kind, fleetHostId, hostConfigId, poolAlias, offline, peerIds, onGotoProbe }: {
   kind: 'daemon' | 'probe'; fleetHostId: string; hostConfigId?: string; offline: boolean; peerIds: string[]
+  /** The host's alias in the resource pool: with it the page opens with the worker settings (`pool.control.v1`). */
+  poolAlias?: string
   /** Opens another probe host's tab (where its refused, unsaved draft can be finished). */
   onGotoProbe?: (probeId: string) => void
 }) {
   const t = useI18nStore((s) => s.t)
+  // The worker settings take the top; the watcher section stays collapsed under them (until WWD-8) once the pool lists this host.
+  const listed = usePoolStore((s) => poolAlias !== undefined && s.hosts.some((h) => h.alias === poolAlias))
   if (kind === 'probe') {
     return (
       <div data-testid="watch-set-probe">
@@ -237,10 +243,13 @@ export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerId
     )
   }
   return (
-    <Section title={t('watch.set.guardian')}>
-      {hostConfigId
-        ? <GuardianSection hostConfigId={hostConfigId} fleetHostId={fleetHostId} offline={offline} peerIds={peerIds} />
-        : <p data-testid="watch-set-unmapped" className="text-sm text-text-muted">{t('watch.set.unmapped')}</p>}
-    </Section>
+    <>
+      {poolAlias && <WorkerSettings alias={poolAlias} />}
+      <Section title={t('watch.set.guardian')} defaultOpen={!listed}>
+        {hostConfigId
+          ? <GuardianSection hostConfigId={hostConfigId} fleetHostId={fleetHostId} offline={offline} peerIds={peerIds} />
+          : <p data-testid="watch-set-unmapped" className="text-sm text-text-muted">{t('watch.set.unmapped')}</p>}
+      </Section>
+    </>
   )
 }
