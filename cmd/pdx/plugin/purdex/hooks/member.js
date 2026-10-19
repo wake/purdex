@@ -72,12 +72,43 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] // team.ValidEffort
 const TEAM_USAGE = '用法：/team [名稱或說明] | spawn <任務> [--model m] [--effort e] | adopt <ref> | release <ref> | kill <ref>'
 export const SPAWN_USAGE = '用法：/team spawn <任務> [--model m] [--effort e]'
 
+const PERSONA_CODE_RE = /^[a-z]{2,16}$/ // the shape `pdx names` keeps (cmd/pdx leadNameCode)
+
+// parseTeamNames reads the stdout of `pdx names --json` (name pool v2 spec §5.3): { leadName: true, personas: [{ code, name }] } when
+// the daemon takes a lead name and the list is well formed, otherwise undefined, which is how every failure — an older pdx with no
+// such command, a daemon without team.lead_name.v1, an answer that is not what was asked — leaves /team as it was before names.
+export function parseTeamNames(stdout) {
+  let b
+  try { b = JSON.parse(String(stdout ?? '')) } catch { return undefined }
+  if (!b || typeof b !== 'object' || b.lead_name !== true || !Array.isArray(b.personas)) return undefined
+  const personas = []
+  for (const p of b.personas) {
+    if (!p || typeof p !== 'object' || typeof p.code !== 'string' || !PERSONA_CODE_RE.test(p.code)) return undefined
+    personas.push({ code: p.code, name: typeof p.name === 'string' ? p.name : '' })
+  }
+  return { leadName: true, personas }
+}
+
+// personaMatches are the personas a typed word names: the word is compared, case-insensitively, with each persona's code and with
+// the first word of its display name. A persona counts once however it matched.
+function personaMatches(word, personas) {
+  const w = word.toLowerCase()
+  return personas.filter((p) => p.code.toLowerCase() === w || (p.name.trim().split(/\s+/)[0] || '').toLowerCase() === w)
+}
+
 // parseTeamArgs reads what follows `/team`: { kind: 'show' } (nothing), { kind: 'lead', note } (any other text),
 // { kind: 'spawn', task, model?, effort? }, { kind: 'adopt' | 'release' | 'kill', ref } or { error }. `--model` and
 // `--effort` belong to spawn only (their values are the CLI's own lists); a word of another kind is part of the note.
-export function parseTeamArgs(args) {
+//
+// names (parseTeamNames, optional) is the persona list of a daemon that takes a lead name. With it the lead kind learns two
+// things: the first word names exactly one persona → { kind: 'lead', note: <the rest>, leadName: <its code> }, a lead at once
+// under that name; otherwise (no persona, or more than one: the daemon never picks) → { kind: 'lead', note, card: true }, a
+// request that waits on the card where the person picks. Nothing typed is { kind: 'show', card: true }, which a session that
+// leads still answers with its roster. Without names it is all exactly as before.
+export function parseTeamArgs(args, names) {
   const text = String(args ?? '').trim()
-  if (text === '') return { kind: 'show' }
+  const named = names && names.leadName === true // a daemon that takes a lead name, with its persona list
+  if (text === '') return named ? { kind: 'show', card: true } : { kind: 'show' }
   const words = text.split(/\s+/)
   const head = words[0]
   if (head === 'spawn') {
@@ -102,6 +133,11 @@ export function parseTeamArgs(args) {
   if (head === 'adopt' || head === 'release' || head === 'kill') {
     if (words.length !== 2 || words[1].startsWith('-')) return { error: '用法：/team ' + head + ' <ref>' }
     return { kind: head, ref: words[1] }
+  }
+  if (named) {
+    const hit = personaMatches(head, names.personas)
+    if (hit.length === 1) return { kind: 'lead', note: text.slice(head.length).trim(), leadName: hit[0].code }
+    return { kind: 'lead', note: text, card: true }
   }
   return { kind: 'lead', note: text }
 }
