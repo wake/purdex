@@ -7,10 +7,16 @@ import { fast } from '../fleet/__fixtures__/builders'
 import type { PoolFacts } from './types'
 
 const fetchFactsHistory = vi.fn()
-vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
+const fetchPoolSeries = vi.fn()
+vi.mock('./api', async (orig) => ({
+  ...(await orig<typeof import('./api')>()),
+  fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a),
+  fetchPoolSeries: (...a: unknown[]) => fetchPoolSeries(...a),
+}))
 
 import { PoolReadError } from './api'
-import { loadFactsHistory, invalidateFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS, FACTS_HISTORY_SKEW_MS } from './history'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+import { loadFactsHistory, loadSeries, seriesAnnounced, invalidateFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS, FACTS_HISTORY_SKEW_MS } from './history'
 
 const darwin = parseFacts(darwinJson)!
 const NOW = Date.UTC(2026, 9, 18, 5, 10, 0)
@@ -19,7 +25,7 @@ const rec = (secAgo: number, over: Partial<PoolFacts> = {}, zone: PoolFacts['der
 })
 const refused = (code: string) => new PoolReadError('/x', 501, { code, action: 'none' } as never)
 
-beforeEach(() => { fetchFactsHistory.mockReset(); fleetHistory.clear(); clearZoneMemory() })
+beforeEach(() => { fetchPoolSeries.mockReset(); fetchFactsHistory.mockReset(); fleetHistory.clear(); clearZoneMemory() })
 
 describe('loadFactsHistory', () => {
   it('asks for the last 5 minutes at 5 s, seeds the raw track and keeps each sample\'s zone', async () => {
@@ -141,5 +147,99 @@ describe('zone points', () => {
     recordZone('h', NOW, 'danger') // the same time again: the first stays
     recordZone('h', NOW - 6 * 60_000, 'normal') // older than the window
     expect(readZones('h')).toEqual([{ t: NOW - 10_000, zone: 'warning' }, { t: NOW, zone: 'normal' }])
+  })
+})
+
+describe('loadSeries (1 h, 6 h and 24 h from the daemon\'s 1 minute series)', () => {
+  const pt = (secAgo: number, over: Record<string, unknown> = {}) => ({
+    at: NOW - secAgo * 1000, zone: 'normal', cpu_idle_pct: 75, mem_available_mb: 4000, pressure: 1, page_out_rate: 12, disk_max_used_pct: 55, headroom: { heavy: 1, light: 1 }, ...over,
+  })
+  const run = (over: Record<string, unknown> = {}) => loadSeries({ sourceHostId: 'd1', alias: 'air26', fleetHostId: 'f-air26', range: '1h', memTotalMb: 16000, now: NOW, ...over } as never)
+  const series = (item: 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk', range: '1h' | '6h' | '24h' = '1h') => fleetHistory.series('f-air26', item, range, NOW).map((p) => p.avg)
+
+  it('asks for the range at 1 m, reaching back a skew margin, and seeds the five charted items', async () => {
+    fetchPoolSeries.mockResolvedValue({ step: '1m', truncated: false, points: [pt(120), pt(60, { cpu_idle_pct: 50, mem_available_mb: 8000, pressure: 2, page_out_rate: 300, disk_max_used_pct: 90 })] })
+    expect(await run()).toBe('ok')
+    expect(fetchPoolSeries).toHaveBeenCalledWith('d1', 'air26', new Date(NOW - 3600_000 - FACTS_HISTORY_SKEW_MS).toISOString(), '1m')
+    expect(series('cpu')).toEqual([25, 50])
+    expect(series('mem')).toEqual([75, 50]) // used % from the host's total, not an invented one
+    expect(series('level')).toEqual([1, 2])
+    expect(series('page_rate')).toEqual([12, 300])
+    expect(series('disk')).toEqual([55, 90])
+  })
+
+  it('the range is the one asked for', async () => {
+    fetchPoolSeries.mockResolvedValue({ step: '1m', truncated: false, points: [] })
+    await run({ range: '24h' })
+    expect(fetchPoolSeries.mock.calls[0][2]).toBe(new Date(NOW - 24 * 3600_000 - FACTS_HISTORY_SKEW_MS).toISOString())
+  })
+
+  it('a reading the daemon has no value for is a gap for that item, not a 0', async () => {
+    fetchPoolSeries.mockResolvedValue({ step: '1m', truncated: false, points: [pt(60, { page_out_rate: null, disk_max_used_pct: null })] })
+    await run()
+    expect(series('cpu')).toEqual([25])
+    expect(series('page_rate')).toEqual([])
+    expect(series('disk')).toEqual([])
+  })
+
+  it('without the host\'s total memory the memory chart is not invented', async () => {
+    fetchPoolSeries.mockResolvedValue({ step: '1m', truncated: false, points: [pt(60)] })
+    await run({ memTotalMb: null })
+    expect(series('mem')).toEqual([])
+    expect(series('cpu')).toEqual([25])
+  })
+
+  it('truncated: what came is seeded', async () => {
+    fetchPoolSeries.mockResolvedValue({ step: '1m', truncated: true, points: [pt(60)] })
+    expect(await run({ range: '24h' })).toBe('ok')
+    expect(series('cpu', '24h')).toEqual([25])
+  })
+
+  it('host_not_local and any other failure are told apart, with nothing seeded', async () => {
+    fetchPoolSeries.mockRejectedValueOnce(refused('host_not_local'))
+    expect(await run()).toBe('host_not_local')
+    fetchPoolSeries.mockRejectedValueOnce(new Error('boom'))
+    expect(await run()).toBe('error')
+    expect(series('cpu')).toEqual([])
+  })
+
+  it('does not touch the 5 minute note of the host', async () => {
+    fetchPoolSeries.mockRejectedValue(refused('host_not_local'))
+    await run()
+    expect(readHistoryLoad('f-air26')).toBe('idle')
+  })
+
+  it('the later load of the host owns the memory; an invalidated one writes nothing', async () => {
+    let ok!: (v: unknown) => void
+    fetchPoolSeries.mockReturnValueOnce(new Promise((a) => { ok = a }))
+    fetchPoolSeries.mockResolvedValueOnce({ step: '1m', truncated: false, points: [pt(60, { cpu_idle_pct: 90 })] })
+    const first = run()
+    await run()
+    ok({ step: '1m', truncated: false, points: [pt(60, { cpu_idle_pct: 10, at: NOW - 600_000 })] })
+    await first
+    expect(series('cpu')).toEqual([10])
+    let ok2!: (v: unknown) => void
+    fleetHistory.clear()
+    fetchPoolSeries.mockReturnValueOnce(new Promise((a) => { ok2 = a }))
+    const third = run()
+    invalidateFactsHistory('f-air26')
+    ok2({ step: '1m', truncated: false, points: [pt(60)] })
+    await third
+    expect(series('cpu')).toEqual([])
+  })
+})
+
+describe('seriesAnnounced (the capability gate)', () => {
+  const caps = (list: string[] | undefined) => useNexHostStore.setState({ byHost: { d1: { phase: 'ready', daemonCapabilities: list } } } as never)
+
+  it('true only when the daemon the pool is read through announces pool.series.v1', () => {
+    caps(['pool.v1', 'pool.series.v1'])
+    expect(seriesAnnounced('d1')).toBe(true)
+    caps(['pool.v1'])
+    expect(seriesAnnounced('d1')).toBe(false)
+    caps(undefined)
+    expect(seriesAnnounced('d1')).toBe(false)
+    expect(seriesAnnounced('other')).toBe(false)
+    expect(seriesAnnounced(null)).toBe(false)
   })
 })
