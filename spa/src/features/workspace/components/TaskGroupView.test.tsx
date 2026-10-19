@@ -342,6 +342,37 @@ describe('dragging a session onto a group (NA-6c)', () => {
     expect(putTaskGroups).not.toHaveBeenCalled()
   })
 
+  it('the drop uses the session as it is when it lands, not as it was when the drag began (its root was read meanwhile)', async () => {
+    setGroups('h1', [group('g1', [])])
+    mount() // no roots read yet
+    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
+    const target = screen.getByTestId('task-group-manual')
+    const data = dt()
+    fireEvent.dragStart(row, { dataTransfer: data })
+    act(() => { setRoots([['AG1', 'ROOT-NOW'], ['AG2', 'AG2'], ['AG3', 'AG3']]) })
+    fireEvent.dragOver(target, { dataTransfer: data })
+    fireEvent.drop(target, { dataTransfer: data })
+    await act(async () => {})
+    expect(sent()[0][0].roots).toEqual(['ROOT-NOW'])
+  })
+
+  it('a drag that starts on a control inside the row (the close button) is not a group drag', () => {
+    setGroups('h1', [group('g1', [])])
+    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
+    mount()
+    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
+    const target = screen.getByTestId('task-group-manual')
+    const data = dt()
+    fireEvent.mouseDown(row.querySelector('button') as HTMLElement)
+    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(false) // cancelled
+    expect(fireEvent.dragOver(target, { dataTransfer: data })).toBe(true) // nothing taken: the drop is not let through
+    fireEvent.drop(target, { dataTransfer: data })
+    expect(putTaskGroups).not.toHaveBeenCalled()
+    // ... and the next press on the row itself drags as usual
+    fireEvent.mouseDown(within(row).getByTestId('inline-tab-title'))
+    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(true)
+  })
+
   it('a team seat\'s row is not draggable, and a team takes no drop', () => {
     const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
     useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
