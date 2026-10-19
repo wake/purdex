@@ -58,20 +58,24 @@ export function PersonaImport({ fallbackHostId, disabled, onImported }: Props) {
   const [planned, setPlanned] = useState<Planned | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [confirmHost, setConfirmHost] = useState<string | null>(null)
+  // Counts the picks: a file still being read when another is picked (or the summary is closed) is no longer wanted.
+  const pick = useRef(0)
 
-  const close = () => { setPlanned(null); setConfirmHost(null) }
+  const close = () => { pick.current++; setPlanned(null); setConfirmHost(null) }
 
   const choose = async (file: File | undefined) => {
     if (input.current) input.current.value = '' // the same file can be picked again after a change
     if (!file) return
-    setProblem(null); setConfirmHost(null)
+    const mine = ++pick.current
+    // The summary of the file before is gone from this moment: it must not be confirmable while the new one is read.
+    setPlanned(null); setProblem(null); setConfirmHost(null)
     if (file.size > MAX_IMPORT_BYTES) {
-      setPlanned(null)
       setProblem(t('settings.personas.import.tooBig'))
       return
     }
     try {
       const entries = parsePersonasJson(await readText(file))
+      if (mine !== pick.current) return
       // Reading the file took a while, and the shown collection (or which host is the source) may have changed meanwhile.
       // The collection to merge into and the base to save against are therefore both taken NOW, from the store, in one
       // step: a plan made on one source's items and saved under another source's base would pass the compare-and-set and
@@ -80,7 +84,7 @@ export function PersonaImport({ fallbackHostId, disabled, onImported }: Props) {
       const items = usePersonaStore.getState().current()?.items ?? []
       setPlanned({ plan: planImport(items, entries), base: editBase(), items })
     } catch {
-      setPlanned(null)
+      if (mine !== pick.current) return
       setProblem(t('settings.personas.import.notList'))
     }
   }

@@ -80,6 +80,37 @@ describe('PersonaImport', () => {
     read.mockRestore()
   })
 
+  it('drops the summary of the file before the moment another is picked, so it cannot be confirmed meanwhile', async () => {
+    seed(['hiro']); mount()
+    pick([{ id: 'emma', name: 'Emma' }])
+    await screen.findByTestId('persona-import-summary')
+    // the second file is slow to read
+    const real = FileReader.prototype.readAsText
+    const spy = vi.spyOn(FileReader.prototype, 'readAsText').mockImplementation(function (this: FileReader) { /* never finishes */ void this })
+    pick([{ id: 'olga', name: 'Olga' }], 'second.json')
+    expect(screen.queryByTestId('persona-import-summary')).toBeNull()
+    expect(screen.queryByTestId('persona-import-confirm')).toBeNull()
+    spy.mockRestore(); void real
+  })
+
+  it('keeps only the file picked last when an earlier one finishes reading later', async () => {
+    seed(['hiro']); mount()
+    const real = FileReader.prototype.readAsText
+    const finish: Array<() => void> = []
+    const spy = vi.spyOn(FileReader.prototype, 'readAsText').mockImplementation(function (this: FileReader, blob: Blob) {
+      finish.push(() => real.call(this, blob))
+    })
+    pick([{ id: 'emma', name: 'Emma' }], 'first.json')
+    pick([{ id: 'olga', name: 'Olga' }], 'second.json')
+    spy.mockRestore()
+    finish[1](); await screen.findByTestId('persona-import-summary')
+    finish[0]() // the first, abandoned file is read last
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    fireEvent.click(screen.getByTestId('persona-import-confirm'))
+    await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(savePersonas).mock.calls[0][0].map((p) => p.code)).toEqual(['hiro', 'olga'])
+  })
+
   it('lists each entry it would skip, with the reason', async () => {
     seed(['hiro']); mount()
     pick([{ id: 'Bad Code', name: 'x' }, { id: 'emma', name: 'Emma' }, { id: 'emma', name: 'Emma again' }])
