@@ -2,8 +2,7 @@
 // how long it has waited (yellow past 2 minutes), its labels, and — in red — when no host with its worker on can take it. A held job is dimmed and last.
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
-import type { QueueEntry } from '../../../lib/pool/jobs-lanes'
-import { jobLine } from './JobLanes'
+import { jobLine, type QueueEntry } from '../../../lib/pool/jobs-lanes'
 
 const KNOWN_CLASSES = ['release', 'merge', 'dev']
 
