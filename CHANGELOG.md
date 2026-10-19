@@ -1,5 +1,70 @@
 # Changelog
 
+## [1.0.0-alpha.761] - 2026-10-20
+
+> daemon、`pdx` CLI（含 `pdx gate`）、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 760 相同。
+>
+> **資料庫：`wwd.db` 的 host schema 從 6 升到 7**（`exceptions` 表多了 `allow_json` 與 `flags` 兩個可為空的欄位，存 hold 的設定）；queue schema 仍是 8，Purdex 這邊沒有新表。部署前每台都會備份成 `wwd.db.pre-761`。**760 的 wwd 會拒絕 host schema 7 的資料庫，所以退回 760 時要照 `docs/wwd-deploy.md` §5 做三步：停掉 wwd 後還原 `wwd.db.pre-761`；替還原的資料庫換一個新的 epoch 再啟動；而且退版前隔離區必須是空的。** 備份之後才建的 hold 會跟著消失。同一個 `wwd.db` 不能同時跑兩個 wwd（#3630）。wire 的 `proto` 仍是 3。
+>
+> **hold：要一台主機安靜下來，改問 wwd（WWD-8 8b-3）**：新增 `pdx wwd hold <host> --for <時間> --reason <原因>`，可加 `--allow-class`／`--allow-repo`（只放行列出的工作類別或 repo）、`--release`（發版用：輕工作名額降到 1）、`--expect pressure`（壓力測試時暫停 mserv 的 PSI 推播）。指令會等到 facts 顯示這筆 hold 才算生效。worker 只接 hold 放行的工作（#3633）。**`pdx gate` 現在也會讀本機 wwd 的例外（#3641）**：只要本機有生效中的例外，heavy 指令就排隊等它結束；light 指令只等「也擋 light」的例外。讀 wwd 最多等 300 毫秒，讀不到就照常放行，結果快取 5 秒。已知限制：在同一台主機開了 hold 的人，自己經 gate 跑的 heavy 也會等到 hold 結束（#3642）。
+>
+> **依賴快取（#3620，#3634）**：宣告 `deps` 的任務（例如 `spa-related`）開跑前會拿到裝好的 `node_modules`。快取以 lockfile 內容、安裝指令、工具版本、平台與一份列舉的設定檔清單為 key；某台主機第一次遇到一個 key 時要花幾分鐘安裝，之後同一個 key 只要幾秒就複製好。新增設定 `[worker] deps_root`／`deps_keep`（預設 2）／`deps_store_max_mb`（預設 4096）；air26 磁碟較小，設成 `deps_keep = 1`。key 只看列舉的檔案，不追蹤 `yarnPath`、外掛或 composer scripts 引用的檔案，這是已知限制（#3639）。
+>
+> **標籤隔離（WWD-5c-2b，#3617）**：同一份工作在兩台主機上一成一敗、origin 記下不一致之後，標籤的擁有者會把那個標籤隔離起來。
+>
+> **mserv 的 wwd.slice 有上限了（#3623）**：安裝時寫入 `/etc/systemd/system/wwd.slice.d/10-wwd-limits.conf`（CPUWeight=50、CPUQuota=300%、MemoryMax=6G、MemorySwapMax=0、TasksMax=4096），再 `systemctl daemon-reload`，不重啟 wwd。每個值都可以在 wwd 的 `config.toml` 的 `[slice]` 段覆寫。mserv 的 worker 仍然關著（#3549）。
+>
+> **App（B 線）**：工作分頁補上歷史表格與篩選（WWD-7b1-2b）、工作詳情與 log（7b1-3a）、「⋯」選單（調整順序與取消，7b1-3b）；主機分頁新增「工作」區（7b1-4）；分頁的沙漏也會被自己 session 的資源池工作點亮（7b1-6）；監看的 1 小時／6 小時／24 小時改讀資源池的 1 分鐘序列（7a-5）；新增唯讀的 `GET /api/pool/hosts/{alias}/exceptions`（G4，#3614）。側欄只在任務群組檢視顯示人物頭像、預設頭像外觀與 CapStepper 的按鈕名稱也有修正（759 驗收）。
+>
+> **worker**：部署時三台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；air26 的 `[owner]` 照使用者 10-19 的指示維持關閉；mserv 仍關著（#3549）；air19 若仍連不上，就沿用舊版。
+
+### Changed：告警投遞
+
+- **讀不到自己的 wwd 就不算發送者（#3643，#3631）**：`/api/info` 的 `wwdalerts.deliverer` 必須讀得到本機 wwd 才為 true，讀不到時回 false。
+
+### Added：wwd hold（WWD-8 8b-3）
+
+- **例外的 allow／flags 存進 wwd.db（8b-3 PR-A，#3629）**：`exceptions` 表多了可為空的 `allow_json` 與 `flags`，host schema 由 6 升到 7；POST 也開放帶這兩個欄位。舊版 wwd 會拒絕 v7 的檔案，退版要還原備份。
+- **worker 依 hold 的 allow 篩工作（8b-3 PR-B，#3633）**：對外的 headroom 語意不變（有 hold 就是 0），worker 自己多算，只接 hold 放行的工作類別與 repo。
+- **`pdx wwd hold`（8b-3 PR-D，#3638）**：`pdx wwd hold <host> --for <時間> --reason <原因>`，可加 `--allow-class`、`--allow-repo`、`--release`、`--expect pressure`；等到 facts 顯示這筆 hold 才算生效。
+- **release hold 降輕名額、`pdx gate` 讀 wwd 的例外（8b-3 PR-C，#3641）**：有 `release` 旗標的 hold 讓輕名額降為 1；`pdx gate` 的 would-wait 與准入去問本機 wwd，讀不到就照常放行，結果快取 5 秒。
+
+### Added：wwd 依賴快取與標籤隔離
+
+- **宣告 `deps` 的任務拿到裝好的依賴（#3634，#3620）**：把依賴快取接進 `jobexec.Prepare`，命中就複製、沒命中才安裝一次再存；新增 `[worker] deps_root`／`deps_keep`／`deps_store_max_mb`。
+- **spec §5 補上依賴快取的限制（#3640）**：寫明 key 只看列舉的檔案，不追蹤 `yarnPath`、外掛或 composer scripts 引用的檔案（純文件）。
+- **標籤的主人在 origin 提供不一致時隔離標籤（WWD-5c-2b，#3617）**：每 60 秒讀自己與各 peer 的不一致清單，同一份工作一成一敗時隔離該標籤；沒有 schema 變更。
+
+### Added：wwd 例外路由與 mserv slice
+
+- **例外的唯讀路由（G4，#3614）**：wwd 新增 `GET /v1/exceptions`，Purdex 新增 `GET /api/pool/hosts/{alias}/exceptions`，舊版主機回 `known:false` 與空清單。
+- **exceptions 讀取的 golden JSON（#3618）**：把上述答案存成 golden fixtures，供 App 的 fixtures-sync 守門比對（只動測試資料）。
+- **mserv 的 `wwd.slice` 有資源上限（#3623，#3549 PR1）**：安裝時寫入 drop-in（CPUWeight=50、CPUQuota=300%、MemoryMax=6G、MemorySwapMax=0、TasksMax=4096），每項可在 `config.toml` 的 `[slice]` 覆寫。
+
+### Added：WWD-7 App 的資源池與工作介面（B 線）
+
+- **工作分頁的入口（WWD-7b1-2a 2/2，#3599）**：daemon 宣告 `jobs.v1` 且已連線時建立「工作」分頁，只建不刪。
+- **分頁的排隊沙漏（WWD-7b1-6，#3612）**：自己 session 的資源池工作處於排隊、認領或執行中時，沙漏也會亮，與閘門的 waiters 合併成同一個沙漏。
+- **1 小時／6 小時／24 小時改讀 1 分鐘序列（WWD-7a-5，#3616）**：主機分頁在這三個範圍改讀 `GET /api/pool/facts/series`，載入完成後圖表立刻重算。
+- **工作分頁的歷史（WWD-7b1-2b，#3622）**：歷史改為表格，加上狀態、主機、repo 三個篩選，並補上跨分頁切換的 view memory。
+- **App 讀取例外路由的新格式（#3628）**：`parseExceptionList` 改讀 `{host, known, exceptions}`，`known` 不是 `true` 或答案壞掉時視為不知道。
+- **工作詳情與 log（WWD-7b1-3a，#3632）**：選一件工作後右側顯示摘要、失敗項目、log 與各項欄位。
+- **主機分頁的「工作」區（WWD-7b1-4，#3635）**：在「資源」與「行程」之間顯示這台正在跑的、從這台送出排隊中的、以及最近在這台結束的工作。
+- **工作詳情的「⋯」選單（WWD-7b1-3b，#3636）**：排隊中的工作可移到最前／最後、暫緩、恢復，未結束的工作可取消；位置變更帶 `host=<origin>`，避免落到別台的佇列。
+
+### Fixed：介面修正（759 驗收）
+
+- **CapStepper 的按鈕名稱（#3619，#3611）**：「調低／調高成員上限」的 accessible name 帶團隊名，多主機時再帶主機名。
+- **沒有頭像時的預設樣子與點距（#3621）**：有角色沒圖用角色底色與白字首字，沒角色用中性圓；移除 `fallbackColor`；並調整團隊面板 subagent 點與 agent 圖示的間距。
+- **側欄只在任務群組檢視用頭像（#3626）**：一般模式回到 758 之前的樣子，任務編組檢視才顯示頭像與角色名。
+- **姓名池 v2 的 spec 補上 759 驗收的調整（#3627）**：側欄、頭像預設、團隊圖示與單行格子的規則寫回 spec（純文件）。
+
+### Fixed：761 發版閘門抓到的問題
+
+- **依賴快取查工具版本改走 execstat（#3646）**：`deps.go` 查工具版本的 `exec.Command` 改經 execstat 的 helper，讓 execstat 守門測試恢復綠燈。
+- **不需要名額的指令不讀 hold、不撥 wwd（#3648，#3641）**：這類指令不建 gate 目錄、不讀 hold、不撥 wwd；`pdx test` 的 fast lane 也經同一個建構點讀 hold。
+- **snapshot 截斷測試改用小的 socket 緩衝（#3647）**：不再依賴主機的緩衝大小（只動測試）。
+
 ## [1.0.0-alpha.760] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 759 相同。
