@@ -19,6 +19,9 @@ type Capabilities struct {
 	Send             string `json:"send,omitempty"`
 	Interrupt        string `json:"interrupt,omitempty"`
 	Steer            string `json:"steer,omitempty"`
+	// SendNow is "keys" when the daemon's send-now route can press Claude Code's own send now for this conversation (a live
+	// terminal conversation with a mod owner); otherwise absent, with the reason not_wired.
+	SendNow string `json:"send_now,omitempty"`
 
 	Reasons map[string]string `json:"reasons,omitempty"`
 }

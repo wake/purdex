@@ -43,7 +43,7 @@ type UsageRecorder interface {
 	RecordRun(e runner.Ended)
 }
 
-// Sweeper cleans up what jobs leave outside the worker (a per-job database): given the ids of every job this worker still holds, it removes
+// Sweeper cleans up what jobs leave outside the worker (a per-job database): given the keys ("source/id", worker/ident) of every job this worker still holds, it removes
 // whatever belongs to any other. A failure is logged and tried again at the next sweep.
 type Sweeper interface {
 	Sweep(ctx context.Context, live []string) error
@@ -79,7 +79,7 @@ type Config struct {
 	Estimate    func(wire.Job) float64
 	// Usage is told how each run went (see UsageRecorder); nil: nothing is recorded.
 	Usage UsageRecorder
-	// Sweepers are run every SweepEvery with the ids of the jobs the worker holds: the ones it runs, and Held() (quarantined ones, whose
+	// Sweepers are run every SweepEvery with the keys ("source/id") of the jobs the worker holds: the ones it runs, and Held() (quarantined ones, whose
 	// leftovers must stay until they are proven gone).
 	Sweepers []Sweeper
 	Held     func() []string
@@ -394,9 +394,10 @@ func (l *Loop) Sweep(ctx context.Context) {
 	}
 	l.mu.Lock()
 	l.pruneLocked()
+	// keys, "source/id": a job id is only unique per origin (the map's own keys are these)
 	live := make([]string, 0, len(l.running))
-	for _, r := range l.running {
-		live = append(live, r.ID())
+	for k := range l.running {
+		live = append(live, k)
 	}
 	l.mu.Unlock()
 	if l.cfg.Held != nil {
@@ -404,7 +405,7 @@ func (l *Loop) Sweep(ctx context.Context) {
 	}
 	if q := l.cfg.Quarantine; q != nil {
 		for _, e := range q.Held() {
-			live = append(live, e.JobID)
+			live = append(live, e.Owner)
 		}
 	}
 	for _, sw := range l.cfg.Sweepers {

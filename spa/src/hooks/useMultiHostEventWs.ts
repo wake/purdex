@@ -28,6 +28,7 @@ import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { handleRosterEvent } from '../lib/team/roster-ws'
+import { handlePersonasEvent, PERSONAS_EVENT_TYPE } from '../lib/names/persona-loader'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleRelayFreshEvent } from '../lib/relay/fresh-ws'
 import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
@@ -265,6 +266,13 @@ export function useMultiHostEventWs() {
             return
           }
           if (dispatchNexHostEvent(hostId, event, useExecutionListStore.getState())) return
+          if (event.type === PERSONAS_EVENT_TYPE) {
+            // The persona collection changed on this host (local PUT, or a sync from a peer): re-read it whole.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handlePersonasEvent(hostId)
+            return
+          }
           if (event.type === 'profile') {
             // Profile section change (spec §4.6). Own writes are NOT filtered
             // here or in the helper — the sync driver decides what "own" means.

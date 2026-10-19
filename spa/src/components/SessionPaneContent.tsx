@@ -148,7 +148,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
     [paneId, hostId, readSession, sessionCode],
   )
   if (readSession && sessionCode) bindAdapter(draftKey(paneId, hostId, readSession), sendAdapter)
-  useSendQueueDriver(pane.id, hostId, readSession, readyItems, shownHeaderQueue(readyDoc?.header?.queued, readyDoc?.header?.status))
+  useSendQueueDriver(pane.id, hostId, readSession, readyItems, shownHeaderQueue(readyDoc?.header?.queued, readyDoc?.header?.status), readyDoc?.stages)
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → quick replies → input → status row.

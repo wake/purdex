@@ -80,6 +80,26 @@ describe('startUnattendedSupport', () => {
     expect(useUnattendedStore.getState().byHost.h2?.unansweredSupport).toBe('no')
   })
 
+  it('conversations.stages.v1 in the capabilities → the Deck\'s send queue reads stages; without it, not', async () => {
+    useHostStore.getState().setRuntime('h1', { status: 'connected' })
+    stop = startUnattendedSupport()
+    fetchHostInfo.mockResolvedValue(info(['conversations.stages.v1']))
+    useHostStore.getState().setRuntime('h2', { status: 'connected' })
+    await flush()
+    expect(useUnattendedStore.getState().byHost.h2?.stagesSupport).toBe('yes')
+    expect(useUnattendedStore.getState().byHost.h1?.stagesSupport).toBe('no')
+  })
+
+  it('team.max_members.v2 in the capabilities → the cap may go to 9; without it, 8', async () => {
+    useHostStore.getState().setRuntime('h1', { status: 'connected' })
+    stop = startUnattendedSupport()
+    fetchHostInfo.mockResolvedValue(info(['team.max_members.v1', 'team.max_members.v2']))
+    useHostStore.getState().setRuntime('h2', { status: 'connected' })
+    await flush()
+    expect(useUnattendedStore.getState().byHost.h2?.maxMembersV2Support).toBe('yes')
+    expect(useUnattendedStore.getState().byHost.h1?.maxMembersV2Support).toBe('no')
+  })
+
   it('team.person.v1 in the capabilities → the daemon refuses lead / adopt itself under unattended mode; without it, not', async () => {
     useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
     fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'team.person.v1'] : ['relay.unattended.v1']))

@@ -18,6 +18,9 @@ const (
 	maxQueuedText   = 2000 // runes of text kept and shown
 )
 
+// MaxQueueEntries is how many rows the feed's queue tracker keeps: with that many (hidden ones included) it may have lost older rows.
+const MaxQueueEntries = maxQueueEntries
+
 // MaxQueuedText is the cap (in runes) of a queued text the feed keeps: a text at the cap may have been cut.
 const MaxQueuedText = maxQueuedText
 
@@ -68,6 +71,15 @@ var harnessTags = [...]string{"task-notification", "system-reminder", "command-n
 	"user-prompt-submit-hook"}
 
 func normSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// ShownQueued is the text the header shows for a queued user message: the message cut to maxQueuedText runes. A caller that
+// looks for its own message in the header's queue compares against this.
+func ShownQueued(text string) string {
+	if utf8.RuneCountInString(text) > maxQueuedText {
+		return string([]rune(text)[:maxQueuedText])
+	}
+	return text
+}
 
 func newQEntry(text string, at int64) qEntry {
 	e := qEntry{Queued: Queued{At: at, Source: queueSource(text)}, full: sha256.Sum256([]byte(normSpace(text)))}

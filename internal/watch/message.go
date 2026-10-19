@@ -60,7 +60,11 @@ func clip(s string, n int) string {
 func eventLine(r Record) string {
 	switch r.Kind {
 	case KindUnmanagedHeavy:
-		s := fmt.Sprintf("%s 有不在管制內的重指令（%s）：%s｜峰值 %.1f 核心／%d MB，持續 %s", r.Host, r.Label, clip(strings.Join(r.Argv, " "), argvShow),
+		what := string(r.Label)
+		if r.Label == LabelWWDJob {
+			what = "wwd 佇列工作（名額外）"
+		}
+		s := fmt.Sprintf("%s 有不在管制內的重指令（%s）：%s｜峰值 %.1f 核心／%d MB，持續 %s", r.Host, what, clip(strings.Join(r.Argv, " "), argvShow),
 			r.PeakCores, r.PeakMB, (time.Duration(r.DurationS * float64(time.Second))).Round(time.Second))
 		if r.Cwd != "" {
 			s += "｜cwd " + r.Cwd
@@ -207,7 +211,7 @@ func KnownKind(k Kind) bool {
 
 func KnownLabel(l Label) bool {
 	switch l {
-	case "", LabelGateGap, LabelUnknown, LabelAllowed:
+	case "", LabelGateGap, LabelUnknown, LabelAllowed, LabelWWDJob:
 		return true
 	}
 	return false

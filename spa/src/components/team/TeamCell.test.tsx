@@ -12,7 +12,7 @@ import { compositeKey } from '../../lib/composite-key'
 import { resolveHostColors } from '../../lib/host-color'
 
 const seat = (over: Partial<TeamSeatView> = {}): TeamSeatView => ({
-  sessionId: 'S', title: 'S', hostId: 'h1', sessionCode: 's1', role: 'member', tabId: null, state: 'active', hostAlias: '', remote: false, ...over,
+  sessionId: 'S', title: 'S', address: 'mlab/S-xx', hostId: 'h1', sessionCode: 's1', role: 'member', tabId: null, state: 'active', hostAlias: '', remote: false, ...over,
 })
 const COLORS = { console: { main: { color: '#3b82f6', alpha: 100 } } }
 const ref = { id: 'a', type: 'cc', started_at: 1, source_pid: 0, source_start_time: '' }

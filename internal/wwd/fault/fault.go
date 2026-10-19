@@ -23,8 +23,9 @@ type Config struct {
 	Enabled bool `toml:"enabled"`
 	// LogUploadFail (H1): the origin refuses a log upload. A result upload is not touched.
 	LogUploadFail bool `toml:"log_upload_fail"`
-	// OwnerActiveFile (H2): while this file exists the host's owner counts as active in the worker's headroom. The facts' owner
-	// block keeps the real answer.
+	// OwnerActiveFile (H2): while this file exists the host's owner counts as active: the facts' owner block says active (reason
+	// "fault: owner_active_file"), so the headroom empties and the worker yields. On a host with no owner rule the block says away
+	// ("fault: owner_active_file absent") while the file is absent, so that the yield can end (daemon/sampler.go).
 	OwnerActiveFile string `toml:"owner_active_file"`
 	// Zone (H3): the zone peers score this host's jobs by (facts.derived.zone_override). The real zone is not changed.
 	Zone string `toml:"zone"`
@@ -108,6 +109,18 @@ func (h *Hooks) OwnerActive(real bool) bool {
 	}
 	h.warn("wwd: fault owner_active_file: %s exists, the owner counts as active for the worker", h.cfg.OwnerActiveFile)
 	return true
+}
+
+// OwnerFileAbsent is the other half of H2: true only when the hook is named and the file is confirmed not to be there (ENOENT). A file
+// that cannot be told about (permission, I/O) is neither there nor absent: false, so that nothing is made up. A host with no owner rule has
+// a null owner block, and a worker that yielded stays yielded on a null block, so the sampler fills in an "away" block on this
+// (daemon/sampler.go).
+func (h *Hooks) OwnerFileAbsent() bool {
+	if h == nil || !h.cfg.Enabled || h.cfg.OwnerActiveFile == "" {
+		return false
+	}
+	_, err := os.Stat(h.cfg.OwnerActiveFile)
+	return err != nil && os.IsNotExist(err)
 }
 
 // ZoneOverride is H3: the zone peers score by instead of the real one, or "" when none.

@@ -29,6 +29,9 @@ const (
 	LabelGateGap Label = "gate_gap" // the gate would have taken a slot for it (heavy or light) and it ran without one
 	LabelUnknown Label = "unknown"  // a tool or script the gate's table does not know
 	LabelAllowed Label = "allowed"  // the gate lets it through on purpose (packaging, a watch, a known cheap command)
+	// LabelWWDJob: the tree is a wwd queue job (its processes carry the WWD_JOB mark). Until WWD-6 a queue job is outside the gate's
+	// slots by design, and the worker counts the gate itself (#3447). It is recorded and handled at once, never sent to the watcher.
+	LabelWWDJob Label = "wwd_job"
 )
 
 // Settings are the thresholds (read at every pass by the caller; the defaults are the first values, tuned on the running
@@ -81,6 +84,10 @@ type Input struct {
 	// Cwd is the working directory of a process, asked once for the root of a tree at the moment its event is made (one lookup
 	// per episode, never per tick); nil, or "", falls back to the session's cwd.
 	Cwd func(pid int) string
+	// JobMark says whether a process carries a wwd job's WWD_JOB mark, asked once for the root of a tree that crossed a threshold, at the
+	// moment its event is made (one read per episode, never per tick). The caller answers with wwd's own shared check; nil, or false,
+	// leaves the tree to be judged as any other.
+	JobMark func(pid int) bool
 	// Started is when a process started, asked once for the root of a tree that crossed a threshold with a parent of pid 1 (a resident
 	// app, #2965); nil, or the zero time, is "unknown" and the tree is judged as any other.
 	Started func(pid int) time.Time

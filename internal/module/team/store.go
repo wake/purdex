@@ -120,6 +120,8 @@ type Store struct {
 	// (since > 0); an error fails the list there (tests). nil in
 	// production.
 	beforeListAutoApproved func() error
+	// beforeListRecentDecisions, when set, runs as ListRecentDecisions starts; an error fails the list (tests). nil in production.
+	beforeListRecentDecisions func() error
 	// afterMaxMembersCount, when set, runs in SetMaxMembers right after the in_use count and before the write (tests: prove
 	// nothing can change the count in between). nil in production.
 	afterMaxMembersCount func()
@@ -205,7 +207,11 @@ func OpenStore(path string) (*Store, error) {
 		CREATE INDEX IF NOT EXISTS approval_requests_state_created
 			ON approval_requests (state, created_at);
 		CREATE INDEX IF NOT EXISTS approval_requests_state_decided
-			ON approval_requests (state, decided_at);`); err != nil {
+			ON approval_requests (state, decided_at);
+		CREATE INDEX IF NOT EXISTS approval_requests_state_kind_decided
+			ON approval_requests (state, kind, decided_at);
+		CREATE INDEX IF NOT EXISTS approval_requests_state_kind_deadline
+			ON approval_requests (state, kind, deadline_at);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db: %w", err)
 	}
@@ -365,6 +371,11 @@ func OpenStore(path string) (*Store, error) {
 	if err := ensureColumn(db, "approval_requests", "unanswered_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (unanswered_at): %w", err)
+	}
+	// the daemon's refusals of a lead / adopt request (ListRecentDecisions), after close_reason exists
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS approval_requests_refused ON approval_requests (kind, decided_at) WHERE close_reason = '` + team.ErrUnattendedRefused + `'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (refused index): %w", err)
 	}
 	return &Store{db: db, memory: memory}, nil
 }

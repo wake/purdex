@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -80,6 +81,50 @@ func TestDelivery_AnEventGoesToTheWatcherOnThisHostOnce(t *testing.T) {
 	require.False(t, p.a.m.hs().Get().LastDelivery.IsZero(), "the rest countdown counts from a delivery")
 	p.a.pass(t)
 	require.Equal(t, 1, na.count(), "nothing more to send")
+}
+
+// #3447: a wwd queue job's tree is recorded and nothing more. The record is on disk and handled at once (with a note that says why), so
+// it is not a message to the watcher, not in a backlog summary and not in the unhandled count the App shows; the events after it are
+// delivered as ever.
+func TestDelivery_AWwdJobEventIsRecordedHandledAndNeverDelivered(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	na, _ := withNotifiers(p)
+	p.a.register(t, "wa")
+	var sent []core.HostEvent
+	p.a.m.emit = func(ev core.HostEvent) { sent = append(sent, ev) }
+	rc := watch.NewRecorder(p.a.m.dlv.logDir, "mlab")
+	job, err := rc.RecordFull(watch.Event{Kind: watch.KindUnmanagedHeavy, At: p.a.m.now(), Label: watch.LabelWWDJob, Argv: []string{"go", "test", "./..."}})
+	require.NoError(t, err)
+	p.a.m.Enqueue(job)
+	require.Len(t, sent, 1, "a client that has the events list open is told one more event was recorded")
+	p.a.pass(t)
+	require.Equal(t, 0, na.count(), "a wwd job does not wake the watcher")
+	require.Equal(t, 0, p.a.m.dlv.outbox.Pending())
+	n, err := p.a.m.unhandledCount()
+	require.NoError(t, err)
+	require.Equal(t, 0, n, "and is not an unhandled event")
+	acks := p.a.m.acks.All()
+	require.Contains(t, acks, job.ID, "it is handled, with a note")
+	require.Contains(t, acks[job.ID].Note, "wwd")
+	recs, err := p.a.m.records()
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "still in the record")
+
+	other := evRecord(watch.KindPressureHigh, "mlab")
+	p.a.m.Enqueue(other)
+	p.a.pass(t)
+	require.Equal(t, 1, na.count(), "any other event is delivered as ever")
+}
+
+func TestDelivery_AnEventOfAnotherLabelIsNotHandledByTheWwdJobRule(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	rc := watch.NewRecorder(p.a.m.dlv.logDir, "mlab")
+	rec, err := rc.RecordFull(watch.Event{Kind: watch.KindUnmanagedHeavy, At: p.a.m.now(), Label: watch.LabelGateGap, Argv: []string{"vitest"}})
+	require.NoError(t, err)
+	p.a.m.Enqueue(rec)
+	n, _ := p.a.m.unhandledCount()
+	require.Equal(t, 1, n)
+	require.Equal(t, 1, p.a.m.dlv.outbox.Pending())
 }
 
 func TestDelivery_AnEventGoesToTheWatcherOnAnotherHostThroughThePeerRoute(t *testing.T) {

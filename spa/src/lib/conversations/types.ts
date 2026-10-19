@@ -146,6 +146,8 @@ export interface Capabilities {
   background_tasks?: string
   peer_inbound?: string
   send?: string
+  /** `keys`: the daemon can send Claude Code's queue now (`POST …/send-now`, host capability `sessions.send_now.v1`); `not_wired`: it cannot. */
+  send_now?: string
   interrupt?: string
   steer?: string
   reasons?: Record<string, string>
@@ -191,6 +193,18 @@ export interface Window {
   has_more_before: boolean
 }
 
+/** Where one client_msg_id is (message-stages plan §1.1): `conversations.stages.v1`. Unknown stage names are kept (a later daemon's). */
+export const STAGES_CAPABILITY = 'conversations.stages.v1'
+
+export interface Stage {
+  client_msg_id: string
+  stage: string
+  /** Unix ms. */
+  at: number
+  reason?: string
+  mode?: 'fill' | 'keys'
+}
+
 export interface Snapshot {
   reset?: boolean
   conversation: {
@@ -206,6 +220,8 @@ export interface Snapshot {
   header: Header
   window: Window
   cursor: string
+  /** The latest stage of every id of this session still in the daemon's ledger (absent: a daemon without stages). */
+  stages?: Stage[]
 }
 
 export interface Change {
@@ -231,6 +247,7 @@ export type Frame =
   | { type: 'conversation.header'; seq: number; value: { header: Header; cursor: string } }
   | { type: 'conversation.reset'; seq: number; value: unknown }
   | { type: 'conversation.capabilities'; seq: number; value: { capabilities: Capabilities } }
+  | { type: 'conversation.stages'; seq: number; value: { stages: Stage[] } }
   | { type: 'approvals.snapshot'; seq: number; value: { approvals: ConversationApproval[] } }
   | { type: 'approval'; seq: number; value: { op: 'opened' | 'closed'; approval: ConversationApproval } }
   | { type: string; seq: number; value: unknown }

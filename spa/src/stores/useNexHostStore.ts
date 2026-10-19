@@ -102,6 +102,11 @@ export function selectWatchV1(hostId: string): (s: Pick<NexHostState, 'byHost'>)
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('watch.v1') === true
 }
 
+/** The daemon lists `personas.v1` (name pool v2): `GET/PUT /api/hostconfig/personas` and the `hostconfig.personas` event are served. Key presence. */
+export function selectPersonasV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('personas.v1') === true
+}
+
 /** The daemon lists `gate.decisions.v1`: `GET /api/gate/decisions` (the gate's record of each command) is served. Key presence. */
 export function selectGateDecisionsV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('gate.decisions.v1') === true

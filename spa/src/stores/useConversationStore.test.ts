@@ -94,6 +94,8 @@ describe('acquire — the first read, then the stream', () => {
     on(f(5, 'approval', { op: 'opened', approval: { id: 'a2' } }))
     on(f(6, 'approval', { op: 'closed', approval: { id: 'a1' } }))
     expect(entry()?.doc.approvals.map((a) => a.id)).toEqual(['a2'])
+    on(f(6.5, 'conversation.stages', { stages: [{ client_msg_id: 'm1', stage: 'queued', at: 1 }] }))
+    expect(entry()?.doc.stages.m1?.stage).toBe('queued')
     on(f(7, 'conversation.reset', {}))
     on(f(8, 'something.new', {})) // a later version's frame: ignored
     expect(entry()?.status).toBe('live')

@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -169,6 +171,8 @@ func run(cfgPath string) error {
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
 		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
 		Queued:      func() (int, error) { return q.CountQueued(ctx) },
+		// until WWD-6 a queue job is outside the gate's slots, so the host's own gate is counted (#3447)
+		GateHeavyFull: gateheld.New(gate.DefaultConfigPath(), log.Printf).HeavyFull,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {

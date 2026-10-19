@@ -857,6 +857,66 @@ func TestSend_LocalDeliveryUsesNoHelperAndNoDeliverCall(t *testing.T) {
 	}
 }
 
+// Name pool v2 (spec §6.3): a renamed local session stays reachable by its old name, through the send route that fills
+// ResolveSnapshot.Aliases from the name store.
+func TestSend_ALocalSessionIsReachedByItsOldName(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	old := vname(t, localPeerName, localPeerSessionID)
+	s.sendOK(s.localSendReq()) // the name is assigned by the pass
+	p.recvLine()
+
+	renamed := "mlab-hiro"
+	if _, ok, err := s.m.peerNames.RenamePool(context.Background(), localPeerSessionID, old, renamed); err != nil || !ok {
+		t.Fatalf("rename: ok=%v err=%v", ok, err)
+	}
+	for _, name := range []string{old, renamed} {
+		req := s.localSendReq()
+		req.To = localAlias + "/" + name
+		if resp := s.sendOK(req); resp.Result != ipeers.ResultDelivered {
+			t.Fatalf("send to %q: result %q", name, resp.Result)
+		}
+		p.recvLine()
+	}
+	// the combined form the table prints, with the old name beside the session's ref
+	req := s.localSendReq()
+	req.To = localAlias + "/" + old + " [" + ipeers.RefID(localPeerSessionID)[1:] + "]"
+	if resp := s.sendOK(req); resp.Result != ipeers.ResultDelivered {
+		t.Fatalf("combined form with the alias: result %q", resp.Result)
+	}
+	p.recvLine()
+}
+
+// Without the alias row an unknown old name is peer_not_found (a rename that left no alias would end here).
+func TestSend_AnOldNameWithoutAnAliasIsNotFound(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+	req.To = localAlias + "/mlab-nobody-adam"
+	assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+}
+
+// A name store that does not answer makes a miss "not ready", never a fallback to a tmux session of the same text (codex attack on
+// #3435): the old name below is also the tmux name of an unrelated session.
+type failingAliases struct{ PeerNameStore }
+
+func (failingAliases) Aliases(context.Context) ([]store.PeerNameAlias, error) {
+	return nil, errors.New("meta db busy")
+}
+
+func TestSend_AFailingAliasReadIsNotReadyAndNeverFallsThroughToATmuxName(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	s.m.peerNames = failingAliases{s.m.peerNames}
+	req := s.localSendReq()
+	req.To = localAlias + "/mlab-nobody-adam"
+	assertRefused(t, s.send(adminCtx(), req), http.StatusServiceUnavailable, ipeers.ErrNotReady)
+	// a live name still resolves: tier 1 does not need the aliases
+	if resp := s.sendOK(s.localSendReq()); resp.Result != ipeers.ResultDelivered {
+		t.Fatalf("live name: result %q", resp.Result)
+	}
+}
+
 // TestSend_LocalDeliverySendResponse pins the answer a local send gives its
 // caller: this host's own host id, the target row's address, delivered, and
 // never one_way — there is no helper whose absence could make it so.

@@ -24,8 +24,7 @@
 | `PUT /api/hostconfig/personas` | `{items, baseRevision}` → 200 `{revision}`. A stale base gives 409 with the current entry (as every collection). A bad item gives 400 `{error, index, field}`. The body cap is 4 MiB. |
 | `GET /api/hostconfig` | no longer has `personas` |
 | host event `hostconfig.personas` | `{revision}` (P4) |
-| envelope `names` (`internal/peers/envelope.go`) | `{personas: {at, host, hash, count}, familiar: [code]}`, optional. NP-2 adds `personas`, NP-3 adds `familiar` (codex #9) |
-| `POST /api/peers/personas` (peer token) | body `{to_host_id}` → `{items, stamp}` |
+| envelope `names` (`internal/peers/envelope.go`) | `{familiar: [code]}`, optional, added by NP-3. (The `personas` member of rev 2 is dropped with NP-2, 10-19.) |
 | `PUT /api/hostconfig/task-groups` / key `task_groups` | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
 | `LeadPayload.lead_names` | `[{code, name, kind: "keep"|"former"|"lead"|"other", last_at}]`. It is always present from a daemon with `team.lead_name.v1`; `[]` means that no persona exists. |
 | `Grant.lead_name` | an optional code. Absent means keep the current name. |
@@ -87,13 +86,14 @@ type SpawnReservationReader interface {
 |---|---|---|---|
 | NP-0 | lead | Measurement only (P5). **Done 10-19**: the result is under「NP-0 measurement」 | — |
 | NP-1 | daemon member A | personas key, routes, validation, event, pool registry, picker, `journal.DisplayName` | §1 |
-| NP-2 | daemon member A | envelope `names`, sync apply, peer route | NP-1 |
-| NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1; NP-2 for its last task (`familiar`) |
+| ~~NP-2~~ | — | **Dropped 10-19 (user):** no daemon-to-daemon persona sync. One source host, and the App copies it to the others (spec §4.3, NA-1d) | — |
+| NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1 |
 | NP-4 | daemon member B | reservations (local and remote), lead names at approval, `/team` parse and card path, adopt pair, cap 9 | NP-0, NP-3 |
 | NP-5 | daemon member A | `task_groups` key and capability | §1 |
 | NP-6 | daemon member A | decision log, `unattended_events`, `log` field | §1 |
 | NA-0 | lead (Opus) | Design: team panel v2 layout on a real screen, persona page, task-group view, deck speech line. A docs PR with screenshots of a prototype, not a vite server on mlab (the 10-17 rule) | — |
 | NA-1 | interface member | persona store, `seatOf`, `<Avatar>`, persona page, import, Electron image IPC (P2) | §1, NA-0 (page) |
+| NA-1d | interface member | the source host setting (「正本主機」, per device, default the main host), copying on save and catching up on connect by hash, the dropped-code adoption, read-only when the source is offline (spec §4.3) | NA-1a, NA-1b |
 | NA-2 | interface member | identity display in the places of spec §9.3 | NA-1 |
 | NA-3 | interface member | deck speech starts and header | NA-1 |
 | NA-4 | Mac member (olga) | team panel v2 with settings on the panel; close #3187 / #3188 | NA-0, NA-1 |
@@ -164,7 +164,11 @@ op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
 - The pool registry is race-free (`-race` on `internal/peers`, because it adds an atomic swap).
 - `journal.DisplayName("mlab/purdex-3f-hiro")` → "Hiro", the display name (M: capitalise the code).
 
-### NP-2 (`internal/peers/envelope.go`, `internal/module/peers`)
+### NP-2 — dropped 2026-10-19
+
+The user chose one source host copied by the App (spec §4.3) as the interim model, pending a review of all of Purdex's
+sync mechanisms. Nothing of NP-2 merged. The text below is kept only as a record of the dropped design.
+
 
 - The envelope field.
 - `namepool_snapshot.go` keeps `names` per host (`fetchHostResult` passes the envelope's `names` on).
@@ -188,8 +192,10 @@ op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
   - `ResolveSnapshot` gains `Aliases map[string]string` (full alias name → ref).
   - `Resolve` (`address.go:182`) checks it after tier 1 misses (`:321-333`) and goes on with that ref through
     `resolveRefHead`. The combined form's bracket check accepts a name found in the map for that ref.
-  - `send.go:451`, the only production caller, fills the map from `PeerNameStore.Aliases()`. The map is cached in the
-    module and dropped on every rename or alias change.
+  - `send.go:451`, the only production caller, fills the map from `PeerNameStore.Aliases()` for a local target, and
+    `AliasSessions` beside it (alias → session id, for the combined form). **Read on every local send, not cached**
+    (decided in NP-3a: at most a few hundred rows, a send is rare beside a rename, and a cache would need dropping on
+    every rename path). A read that fails sets `Partial`, so a miss is `not_ready`.
   - Tests at both levels: `Resolve` (a pure table test) and a send through `send.go` to an alias.
 - The rules (spec §6.2) live in `internal/module/peers/namerules.go` as pure functions over `(free, history, personas)`,
   with table tests. `assignPooled` uses rule 3.
@@ -289,8 +295,8 @@ op `a8e64ed8…`, tmux `tm-a8e64ed82e`.
 - `usePersonaStore`:
   - keyed per host;
   - read on connect and on `hostconfig.personas`;
-  - `current()` = **the whole collection with the highest stamp** (`at`, then host), as the daemons decide. It is
-    never a union by code (spec §9.2, codex #6). The page edits and saves that collection.
+  - `current()` = **the source host's collection** (spec §4.3; NA-1d replaces NA-1a's highest-stamp rule), or, with the
+    source unreachable, any connected host's copy read-only. Never a union by code (spec §9.2, codex #6).
 - `seatOf(addr)` in `lib/names/seat.ts`, as spec §9.2. It replaces the four inline slicers.
 - `<Avatar size code fallbackColor>`.
 - The persona page:
