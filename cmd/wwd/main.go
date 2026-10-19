@@ -252,9 +252,10 @@ func run(cfgPath string) error {
 		}
 		producers.Wait()
 	})
-	producers.Add(2)
-	go func() { defer producers.Done(); sweepQueue(ctx, q) }() // lapsed leases, queue timeouts, retention
-	go func() { defer producers.Done(); fastLane.Run(ctx) }()  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	producers.Add(3)
+	go func() { defer producers.Done(); sweepQueue(ctx, q) }()                            // lapsed leases, queue timeouts, retention
+	go func() { defer producers.Done(); fastLane.Run(ctx) }()                             // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	go func() { defer producers.Done(); d.RunQuarantine(ctx, daemon.QuarantinePeriod) }() // reads the disagreements that concern this host and quarantines its labels (spec §7)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err

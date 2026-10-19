@@ -20,7 +20,11 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd exception stop <name>
        pdx wwd usage [--since <6h|7d|RFC3339> [--after <job id>]] [--limit N] [--json]
        pdx wwd labels [--json]
+       pdx wwd quarantine <task:repo/task>
+       pdx wwd release <task:repo/task>
   labels    the task labels this host earned (or lost to a quarantine), with the fingerprint each was earned under
+  quarantine  stop advertising a task label this host earned, by hand (it is advertised again after qualifying anew)
+  release     let go of a task label this host earned or lost to a quarantine: the row is deleted
   status    this host's wwd: version, labels, worker switch and slots
   pool       every host the pool knows: reachable, pressure zone, free slots, worker
   worker     switch this host's worker; --heavy / --light set the slot counts
@@ -48,6 +52,10 @@ func WWD(ctx context.Context, args []string, env Env) int {
 		return wwdUsage(ctx, args, env)
 	case "labels":
 		return wwdLabels(ctx, args, env)
+	case "quarantine":
+		return wwdQuarantine(ctx, args, env)
+	case "release":
+		return wwdRelease(ctx, args, env)
 	case "help":
 		io.WriteString(env.Stdout, WWDUsage)
 		return ExitOK

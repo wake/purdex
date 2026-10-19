@@ -80,7 +80,7 @@ export async function deletePause(hostId: string, alias: string, name: string): 
   await send(hostId, 'DELETE', `${hostPath(alias)}/exceptions/${encodeURIComponent(name)}`)
 }
 
-/** `GET …/exceptions`: the pauses with their holds. null is "not known": an older host answers 404, and any other failure of the read is the same to the page. */
+/** `GET …/exceptions`: the pauses with their holds. null is "not known": an older host answers 200 with `known:false` (or 404), and any other failure of the read (wwd_rejected 404, wwd_error 502, wwd_unavailable 503) is the same to the page. */
 export async function fetchPauses(hostId: string, alias: string): Promise<PoolExceptionDetail[] | null> {
   try { return parseExceptionList(await readJson(hostId, `${hostPath(alias)}/exceptions`)) } catch { return null }
 }

@@ -136,3 +136,57 @@ func TestEarnedLabelKeepsALongManifestTaskName(t *testing.T) {
 		t.Fatal("one past the bound accepted")
 	}
 }
+
+// A release deletes the row that was looked at, not one granted again since.
+func TestReleaseEarnedLabelDeletesOnlyTheGrantItWasAskedAbout(t *testing.T) {
+	s := openTemp(t)
+	granted := time.UnixMilli(1_700_000_000_000).UTC()
+	label := "task:purdex/tsc"
+	if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: label, Fingerprint: map[string]string{"node": "24"}, Snapshot: "abc", GrantedAt: granted.Add(time.Minute), State: wire.EarnedLabelEarned}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted); err != nil || deleted {
+		t.Fatalf("an older grant: deleted=%v err=%v", deleted, err)
+	}
+	if _, ok, _ := s.EarnedLabel(label); !ok {
+		t.Fatal("the row granted since was deleted")
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted.Add(time.Minute)); err != nil || !deleted {
+		t.Fatalf("the grant looked at: deleted=%v err=%v", deleted, err)
+	}
+	if deleted, err := s.ReleaseEarnedLabel(label, granted.Add(time.Minute)); err != nil || deleted {
+		t.Fatalf("nothing left: deleted=%v err=%v", deleted, err)
+	}
+}
+
+// A disagreement quarantines a label only if the label is earned and was granted before the disagreement: one read again later, or
+// from before the label was earned anew, must not take it away, and the check and the change are one statement.
+func TestQuarantineEarnedLabelOnlyWhatWasGrantedBefore(t *testing.T) {
+	s := openTemp(t)
+	granted := time.UnixMilli(1_700_000_000_000).UTC()
+	label := "task:purdex/tsc"
+	save := func(state string) {
+		t.Helper()
+		if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: label, Fingerprint: map[string]string{"node": "24"}, Snapshot: "abc", GrantedAt: granted, State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := func() string { e, _, _ := s.EarnedLabel(label); return e.State }
+
+	save(wire.EarnedLabelEarned)
+	if changed, err := s.QuarantineEarnedLabel(label, granted.Add(-time.Second)); err != nil || changed || state() != wire.EarnedLabelEarned {
+		t.Fatalf("a disagreement from before the grant: changed=%v err=%v state=%s", changed, err, state())
+	}
+	if changed, err := s.QuarantineEarnedLabel(label, granted); err != nil || changed {
+		t.Fatalf("at the grant instant is not after it: changed=%v err=%v", changed, err)
+	}
+	if changed, err := s.QuarantineEarnedLabel("task:none/none", granted.Add(time.Hour)); err != nil || changed {
+		t.Fatalf("no such label: changed=%v err=%v", changed, err)
+	}
+	if changed, err := s.QuarantineEarnedLabel(label, granted.Add(time.Second)); err != nil || !changed || state() != wire.EarnedLabelQuarantined {
+		t.Fatalf("after the grant: changed=%v err=%v state=%s", changed, err, state())
+	}
+	if changed, err := s.QuarantineEarnedLabel(label, granted.Add(time.Hour)); err != nil || changed {
+		t.Fatalf("already quarantined is not a change: changed=%v err=%v", changed, err)
+	}
+}

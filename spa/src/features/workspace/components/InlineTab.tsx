@@ -9,8 +9,7 @@ import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { Avatar } from '../../../components/Avatar'
 import { useSessionSeat } from '../../../hooks/useSessionSeat'
 import { useSeat } from '../../../lib/names/seat'
-import { useHostLook } from '../../../lib/host-look'
-import { resolveHostColors } from '../../../lib/host-color'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { HostBadge } from '../../../components/HostBadge'
@@ -86,9 +85,9 @@ export function InlineTab({
   const shownTitle = seatOverride?.title || displayTitle
   const bySession = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
   const bySeat = useSeat(seatOverride?.address ?? '')
-  const seat = seatOverride ? bySeat : bySession
-  const look = useHostLook(tmux?.hostId ?? null)
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
+  // Only the task-group view dresses a row as its persona; the workspace view keeps the plain agent-icon row (owner call 10-20, overturning spec §9.6 U10).
+  const groupsView = useTeamUiStore((s) => s.sidebarView === 'groups')
+  const seat = groupsView ? (seatOverride ? bySeat : bySession) : null
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
   // across the activity bar border.
@@ -172,7 +171,7 @@ export function InlineTab({
         awaitingApproval: isAwaitingApproval,
         background,
         backgroundWaiters,
-        avatar: seat !== null ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} /> : undefined,
+        avatar: seat !== null ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} /> : undefined,
       })}
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge

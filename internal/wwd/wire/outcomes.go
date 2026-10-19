@@ -70,6 +70,7 @@ type DisagreementList struct {
 	Items  []Disagreement `json:"items"`
 	Origin string         `json:"origin"` // the alias of the host that recorded them
 	More   bool           `json:"more"`   // true when more were waiting than the limit let through: read again from Cursor
+	Now    time.Time      `json:"now"`    // the origin's clock when it answered: the reader sets it against its own, so it can date the items by its own clock (the zero value from a build that did not say)
 }
 
 // Validate checks a list as a reader must before it acts on it.

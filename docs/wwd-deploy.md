@@ -96,6 +96,30 @@ What the install does, all of it idempotent (a second run changes nothing and re
    `wwd-xxx.slice` for a child of `wwd.slice`, which would put wwd's own process in with the jobs. An install over a
    unit made before this replaces it, reloads systemd and restarts wwd into the new slice; check with
    `systemctl status wwd` (the CGroup line reads `wwdd.slice/wwd.service`);
+   **On Linux it also limits `wwd.slice` itself** (#3549): the jobs have limits of their own (`CPUQuota=200%`,
+   `MemoryMax=4G` each), but the slice they share had none, so two jobs together could take the whole machine and starve
+   the production services. `/etc/systemd/system/wwd.slice.d/10-wwd-limits.conf` (through `sudo install -D`; written
+   only when it differs) holds `CPUWeight=50` (half the weight of the production services, in contention only),
+   `CPUQuota=300%` (at most three of mserv's four cores), `MemoryMax=6G`, `MemorySwapMax=0` (a job that outgrows its
+   memory is killed, not swapped) and `TasksMax=4096`. Each value can be overridden, one at a time, in wwd's
+   `config.toml` (the file is never overwritten, so the override is the operator's):
+
+   ```toml
+   [slice]
+   cpu_weight = 50        # 1 to 10000
+   cpu_quota = "300%"     # a percentage
+   memory_max = "6G"      # 6G, 512M, a byte count or "infinity"
+   memory_swap_max = "0"
+   tasks_max = 4096
+   ```
+
+   A value that is not a plain value is refused (by `wwd install` and by wwd at start) before anything is written: the
+   file is read by systemd as root. A changed drop-in is made known with `systemctl daemon-reload`; wwd is **not**
+   restarted for it, and the new limits apply to running jobs at once (checked before the first mserv worker is
+   turned on, #3549). With `--no-restart` the file is written and the command is printed. `wwd uninstall` removes it.
+   The 6G follows from mserv's 15 GB, the production services' 2 GB resident and the 4G one manual run in
+   `assist.slice` may take: **`assist.slice` has no limit of its own**, so while a worker is on, a manual run to mserv
+   must not run beside it (the 2026-10-20 ruling: `mserv-run.sh` refuses while mserv's worker is on);
 5. loads or restarts it: first install → `launchctl bootstrap` / `systemctl enable` + `restart`; a new
    binary → `launchctl kickstart -k` / `systemctl restart`; a changed plist → bootout + bootstrap; nothing
    changed and running → nothing. `--no-restart` does steps 1–4 only and prints the restart command.
@@ -117,6 +141,12 @@ curl -s --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/pool          | 
 
 All four peers `reachable: true` means the token and the addresses agree. A peer that is `false` while its
 own `/v1/info` answers: the tokens differ, or `alias` in its config is not the name the others list for it.
+
+On Linux (mserv) the limits of the job slice are in place when these five are not the defaults (`infinity`, no weight):
+
+```sh
+systemctl show wwd.slice -p CPUWeight,CPUQuotaPerSecUSec,MemoryMax,MemorySwapMax,TasksMax
+```
 
 Acceptance (WWD-1): every host reports a full record, and each wwd uses under 1 % CPU and under 50 MB RSS:
 `ps -o pid=,rss=,pcpu=,time= -p $(pgrep -f 'bin/wwd -config')`, twice a minute apart (the second `time=`

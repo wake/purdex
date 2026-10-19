@@ -36,6 +36,7 @@ type fakeAPI struct {
 	set           *wire.WorkerSettings
 	started       *wire.Exception
 	stopped       string
+	labelCalls    []string // "quarantine <label>" and "release <label>", in order
 	usage         wire.UsageResponse
 	usageQ        client.UsageQuery
 	err           error // returned by every call when set (wwd unreachable)
@@ -97,6 +98,15 @@ func (f *fakeAPI) StopException(_ context.Context, name string) error {
 
 func (f *fakeAPI) EarnedLabels(context.Context) (wire.EarnedLabelList, bool, error) {
 	return f.earned, !f.earnedUnknown, f.err
+}
+
+func (f *fakeAPI) QuarantineLabel(_ context.Context, label string) error {
+	f.labelCalls = append(f.labelCalls, "quarantine "+label)
+	return f.err
+}
+func (f *fakeAPI) ReleaseLabel(_ context.Context, label string) error {
+	f.labelCalls = append(f.labelCalls, "release "+label)
+	return f.err
 }
 
 func firstErr(errs ...error) error {

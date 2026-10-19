@@ -170,6 +170,14 @@ func readCapped(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
+// StatusError is a peer answering something other than 200: its Code is what a reader tells apart (404 is an older build).
+type StatusError struct {
+	Path string
+	Code int
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.Path, e.Code) }
+
 func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path string) (T, error) {
 	var zero T
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+a.HostPort+path, nil)
@@ -187,7 +195,7 @@ func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path str
 		return zero, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return zero, fmt.Errorf("%s: status %d", path, resp.StatusCode)
+		return zero, &StatusError{Path: path, Code: resp.StatusCode}
 	}
 	return wire.Decode[T](body)
 }
