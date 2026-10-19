@@ -2,6 +2,7 @@
 // spec §9.2). Every inline "slice after the slash" in the App goes through here.
 import { useMemo } from 'react'
 import { currentCollection, usePersonaStore } from '../../stores/usePersonaStore'
+import { useSourceId } from '../../stores/usePersonaSourceStore'
 import type { PersonaCollection } from './persona-types'
 
 export interface Seat {
@@ -37,6 +38,7 @@ function seatFrom(collection: PersonaCollection | null, address: string): Seat |
 /** The same lookup for a component: it re-renders when the persona collection changes. */
 export function useSeat(address: string): Seat | null {
   // The selector returns the stored collection itself (a stable reference); the seat is derived outside it.
-  const collection = usePersonaStore((s) => currentCollection(s.byHost))
+  const sourceId = useSourceId()
+  const collection = usePersonaStore((s) => currentCollection(s.byHost, sourceId))
   return useMemo(() => seatFrom(collection, address), [collection, address])
 }

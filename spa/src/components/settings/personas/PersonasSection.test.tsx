@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 
 vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-save')>()), savePersonas: vi.fn() }))
 
@@ -8,9 +8,12 @@ import { PersonaApiError, PersonaConflictError } from '../../../lib/names/person
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useHostStore } from '../../../stores/useHostStore'
+import { usePersonaSourceStore } from '../../../stores/usePersonaSourceStore'
 import { clearDraftMemory } from '../../../lib/names/persona-draft-memory'
 import { makeCollection, makePersona } from '../../../lib/names/__fixtures__/personas'
 import { PersonasSection } from './PersonasSection'
+
+const NO_MIRROR = { mirrored: [], failed: [], pulled: [] }
 
 function seed(codes: string[], over: Record<string, Partial<ReturnType<typeof makePersona>>> = {}) {
   const c = makeCollection(codes, { at: 5, host: 'h1' }, 4)
@@ -26,6 +29,7 @@ describe('PersonasSection', () => {
     useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1.2.3.4', port: 7860 } as never }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } as never } })
     useNexHostStore.setState({ byHost: { h1: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never } })
     usePersonaStore.setState({ byHost: {}, load: vi.fn(async () => {}) })
+    usePersonaSourceStore.setState({ hostId: null })
   })
 
   it('lists active personas first, retired last and dimmed, with the lead mark', () => {
@@ -53,6 +57,35 @@ describe('PersonasSection', () => {
     expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('does not offer editing while the source is offline and another copy stands in', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+      runtime: { h1: { status: 'disconnected' } as never, h2: { status: 'connected' } as never },
+    })
+    usePersonaSourceStore.setState({ hostId: 'h1' })
+    usePersonaStore.setState({ byHost: { h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 5, host: 'h2' }, 4) } } })
+    render(<PersonasSection />)
+    expect(screen.getByTestId('persona-row-hiro')).toBeTruthy()
+    expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    expect(screen.queryByTestId('persona-save')).toBeNull()
+  })
+
+  it('takes an open form away when the source drops, instead of leaving it submittable', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+      runtime: { h1: { status: 'connected' } as never, h2: { status: 'connected' } as never },
+    })
+    usePersonaSourceStore.setState({ hostId: 'h1' })
+    const copy = makeCollection(['hiro'], { at: 5, host: 'h1' }, 4)
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: copy }, h2: { status: 'ready', collection: copy } } })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    expect(screen.getByTestId('persona-save')).toBeTruthy()
+    act(() => { usePersonaStore.setState({ byHost: { h1: { status: 'error', collection: copy }, h2: { status: 'ready', collection: copy } } }) })
+    expect(screen.queryByTestId('persona-save')).toBeNull()
+  })
+
   it('shows counters against the limits while typing', () => {
     seed(['hiro'])
     render(<PersonasSection />)
@@ -70,7 +103,7 @@ describe('PersonasSection', () => {
 
   it('saves the edited collection on the base the form opened with, and says where it went', async () => {
     seed(['hiro', 'emma'])
-    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
     fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
@@ -81,6 +114,21 @@ describe('PersonasSection', () => {
     expect(base).toEqual({ hostId: 'h1', revision: 4, stamp: { at: 5, host: 'h1' } })
     expect(fallback).toBe('h1')
     expect((await screen.findByTestId('personas-note')).textContent).toContain('mlab')
+  })
+
+  it('tells which hosts the copy missed and which roles were taken into the source', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockResolvedValue({
+      hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } },
+      mirror: { mirrored: [], failed: [{ hostId: 'h2', message: 'boom' }], pulled: ['olga'] },
+    })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    const note = (await screen.findByTestId('personas-note')).textContent ?? ''
+    expect(note).toMatch(/沒有複製成功|Could not copy/)
+    expect(note).toContain('olga')
   })
 
   it('refuses a bad code before any request and points at the field', async () => {
@@ -96,7 +144,7 @@ describe('PersonasSection', () => {
 
   it('retires and restores with a save, never a delete', async () => {
     seed(['hiro'])
-    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', base: null })
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
     fireEvent.click(screen.getByTestId('persona-retire'))
@@ -108,7 +156,7 @@ describe('PersonasSection', () => {
     seed(['hiro'])
     vi.mocked(savePersonas).mockImplementation(async () => {
       seed(['hiro'], { hiro: { name: 'From elsewhere' } })
-      return { hostId: 'h1', base: null }
+      return { hostId: 'h1', mirror: NO_MIRROR, base: null }
     })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -131,7 +179,7 @@ describe('PersonasSection', () => {
     expect((await screen.findByTestId('personas-note')).textContent).toMatch(/保留|kept/)
     expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('My Edit')
     // the next save goes out on the NEW base, not the one the form was opened with
-    vi.mocked(savePersonas).mockResolvedValueOnce({ hostId: 'h1', base: { hostId: 'h1', revision: 9, stamp: { at: 9, host: 'h1' } } })
+    vi.mocked(savePersonas).mockResolvedValueOnce({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 9, stamp: { at: 9, host: 'h1' } } })
     fireEvent.click(screen.getByTestId('persona-save'))
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))
     expect(vi.mocked(savePersonas).mock.calls[1][1]).toEqual({ hostId: 'h1', revision: 4, stamp: { at: 5, host: 'h1' } })
@@ -140,7 +188,7 @@ describe('PersonasSection', () => {
 
   it('stops editing, switching and a second save while a save is in flight, and applies nothing stale', async () => {
     seed(['hiro', 'emma'])
-    let finish!: (r: { hostId: string; base: null }) => void
+    let finish!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: null }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -151,13 +199,13 @@ describe('PersonasSection', () => {
     expect((screen.getByTestId('persona-row-emma') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.submit(screen.getByTestId('persona-form')) // a second submit while the first is pending
     expect(savePersonas).toHaveBeenCalledTimes(1)
-    finish({ hostId: 'h1', base: null })
+    finish({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     await waitFor(() => expect(screen.getByTestId('persona-name').querySelector('input')!.matches(':disabled')).toBe(false))
   })
 
   it('stays locked when the page is left and re-entered while a save is in flight, and picks up the result', async () => {
     seed(['hiro'])
-    let finish!: (r: { hostId: string; base: null }) => void
+    let finish!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: null }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { finish = r as typeof finish }))
     const first = render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -171,7 +219,7 @@ describe('PersonasSection', () => {
     fireEvent.submit(screen.getByTestId('persona-form'))
     expect(savePersonas).toHaveBeenCalledTimes(1) // no second write
     seed(['hiro'], { hiro: { name: 'Saved Name' } }) // what the daemon now holds
-    finish({ hostId: 'h1', base: null })
+    finish({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     await waitFor(() => expect(input().matches(':disabled')).toBe(false))
     expect((input() as HTMLInputElement).value).toBe('Saved Name')
   })
@@ -197,7 +245,7 @@ describe('PersonasSection', () => {
 
   it('shows the "saved" note on the page that was re-entered, and drops it when the user starts something new', async () => {
     seed(['hiro', 'emma'])
-    let done!: (r: { hostId: string; base: { hostId: string; revision: number; stamp: { at: number; host: string } } }) => void
+    let done!: (r: { hostId: string; mirror: typeof NO_MIRROR; base: { hostId: string; revision: number; stamp: { at: number; host: string } } }) => void
     vi.mocked(savePersonas).mockImplementation(() => new Promise((r) => { done = r as typeof done }))
     const first = render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -205,7 +253,7 @@ describe('PersonasSection', () => {
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
     first.unmount()
     render(<PersonasSection />)
-    done({ hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    done({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     expect((await screen.findByTestId('personas-note')).textContent).toContain('mlab')
     fireEvent.click(screen.getByTestId('persona-row-emma'))
     expect(screen.queryByTestId('personas-note')).toBeNull()
@@ -246,7 +294,7 @@ describe('PersonasSection', () => {
 
   it('keeps a new persona that the shown collection did not take after a save with no base', async () => {
     seed(['hiro'])
-    vi.mocked(savePersonas).mockImplementation(async () => ({ hostId: 'h1', base: null })) // another copy won; it lacks "newone"
+    vi.mocked(savePersonas).mockImplementation(async () => ({ hostId: 'h1', mirror: NO_MIRROR, base: null })) // another copy won; it lacks "newone"
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-new'))
     fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })

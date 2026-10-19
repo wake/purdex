@@ -2,6 +2,7 @@
 // rest keeps its names. The file is the user's own data; it is read from a file the user picks and never bundled.
 import { CODE_RULE, PERSONA_LIMITS, validatePersona } from './persona-limits'
 import type { Persona } from './persona-types'
+import { canonical } from './persona-hash'
 
 export type SkipReason = 'code' | 'duplicate' | 'invalid' | 'full'
 
@@ -67,15 +68,6 @@ function fromRaw(r: Raw, existing: Persona | undefined, now: number): Persona {
 /** The recipe an entry carries, or `undefined` when it has none. */
 function fileRecipe(r: Raw): Persona['avatar'] | undefined {
   return typeof r.avatar === 'object' && r.avatar !== null && !Array.isArray(r.avatar) ? (r.avatar as Persona['avatar']) : undefined
-}
-
-/** JSON with object keys sorted, so two recipes that differ only in key order compare equal. */
-function canonical(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
-  if (typeof v === 'object' && v !== null) {
-    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Raw)[k])}`).join(',')}}`
-  }
-  return JSON.stringify(v)
 }
 
 function sameContent(a: Persona, b: Persona): boolean {
