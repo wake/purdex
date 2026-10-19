@@ -102,10 +102,37 @@ func TestAHalfThatNeverRanVoidsThePair(t *testing.T) {
 	}
 }
 
-// A reference that fails its own qualify run shows nothing about the candidate: void, even when the candidate fails the same way.
-func TestAFailingReferenceVoidsThePair(t *testing.T) {
+// The spec compares "pass/fail sets and exit state": a qualify run that fails the same way on both hosts matches (the host reproduces the
+// reference, failures included), and one that fails on only one of them does not.
+func TestTheSameFailureOnBothHostsMatches(t *testing.T) {
 	c, r := pair(res("mserv", 1, sum(9, 1, "x")), res("air26", 1, sum(9, 1, "x")))
-	if v := Compare(c, r); v.Outcome != OutcomeVoid {
+	if v := Compare(c, r); v.Outcome != OutcomeMatch {
 		t.Fatalf("%+v", v)
+	}
+	c, r = pair(res("mserv", 0, sum(10, 0)), res("air26", 1, sum(9, 1, "x")))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("the reference fails and the candidate passes: %+v", v)
+	}
+	c, r = pair(res("mserv", 1, sum(9, 1, "y")), res("air26", 1, sum(9, 1, "x")))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("two different failures: %+v", v)
+	}
+}
+
+// A summary keeps only the first failures it saw: when either half lists fewer failures than it counts, the sets cannot be compared, so
+// the pair proves nothing (void), whether the visible parts agree or not.
+func TestATruncatedFailureListVoidsThePair(t *testing.T) {
+	trunc := func(failures ...string) *wire.Summary {
+		s := sum(0, 0, failures...)
+		s.Failed = len(failures) + 40 // 40 more failures than are listed
+		return s
+	}
+	c, r := pair(res("mserv", 1, trunc("a", "b")), res("air26", 1, trunc("a", "b")))
+	if v := Compare(c, r); v.Outcome != OutcomeVoid {
+		t.Fatalf("agreeing truncated lists: %+v", v)
+	}
+	c, r = pair(res("mserv", 1, trunc("b", "a")), res("air26", 1, trunc("c", "d")))
+	if v := Compare(c, r); v.Outcome != OutcomeVoid {
+		t.Fatalf("different truncated lists: %+v", v)
 	}
 }
