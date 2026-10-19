@@ -74,3 +74,30 @@ func TestJobUsageTakeWithoutAnOriginFindsAnUnmarkedJob(t *testing.T) {
 		t.Fatal("Take(id) is the old call: it finds a job whose mark has no origin")
 	}
 }
+
+// DiscardMark drops the samples of its own origin's job only; with nothing under the tag it drops the old-key ones.
+func TestJobUsageDiscardMarkTouchesOnlyItsOwnOrigin(t *testing.T) {
+	a, b := wident.OriginTag("air26"), wident.OriginTag("mserv")
+	h, tr := newHost(), newJU()
+	h.add(300, 100, "go", []string{"go"})
+	h.jobs[300], h.origins = "j_same", map[int]string{300: a}
+	h.add(400, 100, "go", []string{"go"})
+	h.jobs[400], h.origins[400] = "j_same", b
+	h.add(500, 100, "go", []string{"go"})
+	h.jobs[500] = "j_old"
+	for _, pid := range []int{300, 400, 500} {
+		h.rec(pid).CPUPct = 100
+	}
+	sample(tr, h, 0, "normal", nil)
+	tr.DiscardMark(a, "j_same")
+	if _, ok := tr.TakeMark(a, "j_same"); ok {
+		t.Fatal("air26's samples must be gone")
+	}
+	if _, ok := tr.TakeMark(b, "j_same"); !ok {
+		t.Fatal("mserv's samples of the same id must have stayed")
+	}
+	tr.DiscardMark(a, "j_old") // nothing under a: the old key
+	if _, ok := tr.TakeMark(a, "j_old"); ok {
+		t.Fatal("the old-key samples must be gone")
+	}
+}
