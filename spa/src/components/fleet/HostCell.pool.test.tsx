@@ -68,9 +68,9 @@ describe('HostCell on the pool — states', () => {
   it('fallback, wwd unreachable: the link-break mark on the badge, the reason in the aria name, the badge not dimmed', () => {
     show(cell(null))
     expect(linkMark()).toBeTruthy()
-    expect(linkMark()!.className).toContain('text-status-warning')
-    expect(linkMark()!.className).toContain('-bottom-px')
-    expect(linkMark()!.className).toContain('-left-px')
+    expect(linkMark()!.getAttribute('class')).toContain('text-status-warning')
+    expect(linkMark()!.getAttribute('class')).toContain('-bottom-px')
+    expect(linkMark()!.getAttribute('class')).toContain('-left-px')
     expect(tile().getAttribute('aria-label')).toContain('wwd is unreachable')
     expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
   })
@@ -96,8 +96,8 @@ describe('HostCell on the pool — states', () => {
 
   it('the mark does not take the bottom right (the running dot) or the top right (the queue count)', () => {
     show(cell(null))
-    expect(linkMark()!.className).not.toContain('-right-px')
-    expect(linkMark()!.className).not.toContain('-top-')
+    expect(linkMark()!.getAttribute('class')).not.toContain('-right-px')
+    expect(linkMark()!.getAttribute('class')).not.toContain('-top-')
   })
 
   it('offline: the badge at 40 %, the ring track only', () => {
