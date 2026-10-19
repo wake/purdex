@@ -10,6 +10,7 @@ import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { usePeerStore, emptyPeerHostEntry, type PeerRow } from '../../../stores/usePeerStore'
 import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { makeCollection } from '../../../lib/names/__fixtures__/personas'
 import type { Tab } from '../../../types/tab'
@@ -53,6 +54,7 @@ beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())
   usePeerStore.setState({ byHost: {} })
   useTeamRosterStore.getState().reset()
+  useTeamUiStore.setState({ sidebarView: 'groups' })
   usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: makeCollection(['freya', 'kenji']) } } } as never)
 })
 afterEach(() => { cleanup() })
@@ -114,6 +116,37 @@ describe('a session row without one keeps the agent icon (and its light)', () =>
     expect(avatar()).toBeNull()
     expect(screen.getByTestId('inline-tab-dot-overlay')).toBeInTheDocument()
     expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('inline-tab-name')).toBeNull()
+  })
+})
+
+describe('the sidebar view decides whether the row wears the persona', () => {
+  it('workspace view: agent icon, light and the original name; no avatar, no persona name', () => {
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    setPeers(peerRow('mlab/work-freya'))
+    mount()
+    expect(avatar()).toBeNull()
+    expect(screen.getByTestId('inline-tab-dot-overlay')).toBeInTheDocument()
+    expect(screen.queryByTestId('inline-tab-name')).toBeNull()
+    expect(screen.getByTestId('inline-tab-title')).toHaveTextContent('work')
+    expect(screen.getByTestId('inline-tab-title')).not.toHaveTextContent('Freya')
+  })
+
+  it('switching the view changes the row at once', () => {
+    setPeers(peerRow('mlab/work-freya'))
+    mount()
+    expect(avatar()).not.toBeNull()
+    act(() => { useTeamUiStore.getState().setSidebarView('workspace') })
+    expect(avatar()).toBeNull()
+    act(() => { useTeamUiStore.getState().setSidebarView('groups') })
+    expect(avatar()).not.toBeNull()
+  })
+
+  it('workspace view: a seat row (seatOverride) is plain too', () => {
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    useTeamRosterStore.getState().apply('h1', [roster('mlab/work-kenji')])
+    render(<InlineTab tab={tab} isActive={false} seatOverride={{ address: 'mlab/work-kenji', title: 'T' }} onSelect={() => {}} onClose={() => {}} onMiddleClick={() => {}} onContextMenu={() => {}} />)
+    expect(avatar()).toBeNull()
     expect(screen.queryByTestId('inline-tab-name')).toBeNull()
   })
 })
