@@ -227,6 +227,8 @@ func (m *Module) spawnFinishRemote(op spawnRow, o *team.Origin) {
 			m.logf("[team] spawn %s: title %q for %s: %v", op.ID, op.Title, op.SessionID, err)
 		}
 	}
+	// the pair of the registration (spec §6.1): the lead's code, read from its address, and the name this host reserved for the op
+	m.recordSpawnPair(addressCode(lead.Lead.Address), op.PoolName, op.ID)
 	m.logf("[team] spawn %s done: remote member %s (%s) in %s for host %s", op.ID, o.Ref, op.SessionID, op.TmuxName, op.LeadHostID)
 	m.kickFacts() // the registered fact is committed: tell the lead host now
 	m.wake(op.ID)
