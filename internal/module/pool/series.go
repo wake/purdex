@@ -73,6 +73,9 @@ func (m *Module) parseSince(s string) (time.Time, bool) {
 		return m.now().Add(-seriesDefaultSince).UTC().Truncate(time.Minute), true
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		if age := m.now().Sub(t); age < 0 || age > seriesMaxSince {
+			return time.Time{}, false
+		}
 		return t, true
 	}
 	d, err := time.ParseDuration(s)

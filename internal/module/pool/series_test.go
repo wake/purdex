@@ -120,12 +120,13 @@ func TestSeriesRouteRefusesWhatItCannotAnswer(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/facts/history", serve(historyOf("1m")))
 	m := newModule(t, fakeWWD(t, mux))
-	for _, p := range []string{"?since=yesterday", "?since=-1h", "?since=0s", "?since=337h", "?step=2m", "?since=1h&step=1s"} {
+	for _, p := range []string{"?since=yesterday", "?since=-1h", "?since=0s", "?since=337h", "?since=2025-01-01T00:00:00Z", "?since=2026-10-19T00:00:00Z", "?step=2m", "?since=1h&step=1s"} {
 		rr := call(m, "/api/pool/facts/series"+p)
 		assert.Equal(t, 400, rr.Code, p)
 		assert.Equal(t, ErrBadRequest, errCode(rr), p)
 	}
 	assert.Equal(t, 200, call(m, "/api/pool/facts/series?since=336h").Code, "14 days is the longest wwd keeps")
+	assert.Equal(t, 200, call(m, "/api/pool/facts/series?since=2026-10-05T12:00:00Z").Code, "an RFC 3339 time is held to the same window")
 }
 
 func TestSeriesRouteErrorsAreHistorys(t *testing.T) {

@@ -86,8 +86,13 @@ func (c *Client) timeout() time.Duration {
 
 // get fetches path (with query) and decodes the 200 body as T.
 func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, error) {
+	return getLimit[T](ctx, c, path, q, c.timeout(), maxBody)
+}
+
+// getLimit is get with its own timeout and answer cap.
+func getLimit[T any](ctx context.Context, c *Client, path string, q url.Values, timeout time.Duration, limit int64) (T, error) {
 	var zero T
-	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	u := "http://wwd" + path
 	if len(q) > 0 {
@@ -102,7 +107,7 @@ func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, e
 		return zero, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return zero, fmt.Errorf("%w: reading the answer: %v", ErrUnavailable, err)
 	}
@@ -113,8 +118,8 @@ func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, e
 		}
 		return zero, &StatusError{Code: resp.StatusCode, Body: msg}
 	}
-	if len(body) > maxBody {
-		return zero, fmt.Errorf("%w: the answer is over %d bytes", ErrBadResponse, maxBody)
+	if int64(len(body)) > limit {
+		return zero, fmt.Errorf("%w: the answer is over %d bytes", ErrBadResponse, limit)
 	}
 	v, err := wire.Decode[T](body)
 	if err != nil {
@@ -172,7 +177,16 @@ func (c *Client) Pool(ctx context.Context) (wire.Pool, error) {
 	return get[wire.Pool](ctx, c, "/v1/pool", nil)
 }
 
-// FactsHistory is GET /v1/facts/history.
+// maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
+// 10 MB, which the general cap would refuse.
+const maxHistoryBody = 32 << 20
+
+// FactsHistory is GET /v1/facts/history. A history of another host (q.Host) may be forwarded by the local wwd, whose own forwarding limit
+// is 10 s, so that call is bounded by MutateTimeout rather than the short default.
 func (c *Client) FactsHistory(ctx context.Context, q wire.FactsHistoryQuery) (wire.FactsHistoryResponse, error) {
-	return get[wire.FactsHistoryResponse](ctx, c, "/v1/facts/history", q.Values())
+	timeout := c.timeout()
+	if q.Host != "" && timeout < MutateTimeout {
+		timeout = MutateTimeout
+	}
+	return getLimit[wire.FactsHistoryResponse](ctx, c, "/v1/facts/history", q.Values(), timeout, maxHistoryBody)
 }
