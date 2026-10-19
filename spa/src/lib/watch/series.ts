@@ -41,7 +41,7 @@ export function toPoints(points: HistoryPoint[], now: number, range: HistoryRang
     if (i > 0) {
       const prev = points[i - 1].t
       const sides = [i > 1 ? near(i - 1) : null, i + 1 < points.length ? near(i + 1) : null].filter((v): v is number => v !== null)
-      const expected = range === '5m' ? cap : sides.length > 0 ? Math.max(...sides) : cap
+      const expected = sides.length > 0 ? Math.max(...sides) : cap
       if (q.t - prev > GAP_STEPS * expected) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
     }
     const unknown = opts.unknownZero === true && q.max <= 0
