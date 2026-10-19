@@ -1,6 +1,9 @@
 // spa/src/lib/pool/job-detail.ts — one job's detail (plan "WWD-7 design", Jobs tab, detail panel): what its log area says, and the read of the detail with its log. Read on open and again when the job itself changes (its state or its stored
 // log — `jobs.changed` re-reads the job in the store, and that is what moves these); never polled. The log is the detail's own up to 1 MiB; a larger one is read on demand from `/log`.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+import { usePoolStore } from './store'
 import { PoolReadError } from './api'
 import type { PoolError } from './errors'
 import { fetchJob, fetchJobLog } from './jobs-api'
@@ -37,11 +40,29 @@ const errorOf =(e: unknown): PoolError => (e instanceof PoolReadError ? e.poolEr
 export type DetailRead = { phase: 'loading' } | { phase: 'ready'; log: string | null } | { phase: 'error'; error: PoolError }
 export type FullLogRead = { phase: 'idle' } | { phase: 'loading' } | { phase: 'ready'; text: string } | { phase: 'error'; error: PoolError }
 
+/**
+ * The source of `origin`'s reads, as a string that changes only when the source does. The inputs of `liveTopology` (the pool's hosts, the connections, the cached capabilities, the App's hosts) are subscribed to,
+ * so the source is worked out again when any of them changes; a change that leaves the source as it was changes nothing.
+ */
+function useDetailSourceSig(origin: string): string {
+  const hosts = usePoolStore((s) => s.hosts)
+  const caps = useNexHostStore((s) => s.byHost)
+  const runtime = useHostStore((s) => s.runtime)
+  const appHosts = useHostStore((s) => s.hosts)
+  return useMemo(() => {
+    const s = detailSource(origin)
+    return s ? `${s.daemonId}\u0001${s.host ?? ''}` : ''
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the four stores are what detailSource reads (through liveTopology); they are the reason to work it out again
+  }, [origin, hosts, caps, runtime, appHosts])
+}
+
 export function useJobDetail(job: PoolJob): { detail: DetailRead; full: FullLogRead; loadFull: () => void } {
   const { origin, id, state } = job
   const stored = job.result?.log ?? ''
   // Every answer carries the picture of the job it was asked for: one that is not the current picture (another job, or this one changed since) reads as not yet read, so a slow answer never shows under another job.
-  const tag = `${origin}\u0000${id}\u0000${state}\u0000${stored}`
+  // The daemon asked is part of the picture: a connection or capability that arrives (or goes) while the panel is open moves the source, and the read is made again — a failure before the daemon was there does not stay.
+  const source = useDetailSourceSig(origin)
+  const tag = `${origin}\u0000${id}\u0000${state}\u0000${stored}\u0000${source}`
   const [got, setGot] = useState<{ tag: string; read: DetailRead } | null>(null)
   const [fullGot, setFullGot] = useState<{ tag: string; read: FullLogRead } | null>(null)
   const detail: DetailRead = got?.tag === tag ? got.read : { phase: 'loading' }

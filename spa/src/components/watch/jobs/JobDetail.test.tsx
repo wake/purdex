@@ -1,6 +1,6 @@
 // spa/src/components/watch/jobs/JobDetail.test.tsx — the detail of one job: the summary first (result line, failures, tail), then the log (inline, on demand over 1 MiB, or the reason there is none), then who and where. The daemon reads are mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react'
 
 vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(), fetchJobLog: vi.fn() }))
 vi.mock('../../../lib/pool/jobs-driver-live', () => ({ liveTopology: vi.fn() }))
@@ -11,6 +11,7 @@ import { fetchJob, fetchJobLog } from '../../../lib/pool/jobs-api'
 import { liveTopology } from '../../../lib/pool/jobs-driver-live'
 import { activateTabPane } from '../../../lib/open-session-tab'
 import { useTabStore } from '../../../stores/useTabStore'
+import { usePoolStore } from '../../../lib/pool/store'
 import { PoolReadError } from '../../../lib/pool/api'
 import { clearJobsViewMemory, readLogScroll, writeLogScroll } from '../../../lib/pool/jobs-view-memory'
 import type { JobResult, PoolJob } from '../../../lib/pool/jobs-types'
@@ -242,6 +243,28 @@ describe('the read', () => {
     mount(job())
     expect(await screen.findByTestId('job-detail-error')).toBeInTheDocument()
     expect(fetchJob).not.toHaveBeenCalled()
+  })
+
+  it('a daemon that arrives while the panel is open is asked: a read that had none does not stay failed', async () => {
+    vi.mocked(liveTopology).mockReturnValue({ origins: ['mlab'], ownDaemon: {}, forwarders: [] })
+    const j = job()
+    ready(j, 'late log')
+    mount(j)
+    expect(await screen.findByTestId('job-detail-error')).toBeInTheDocument()
+    vi.mocked(liveTopology).mockReturnValue({ origins: ['mlab'], ownDaemon: { mlab: 'd-mlab' }, forwarders: ['d-mlab'] })
+    act(() => { usePoolStore.setState({ hosts: [] }) }) // the topology's inputs moved
+    expect(await screen.findByTestId('job-log')).toHaveTextContent('late log')
+    expect(screen.queryByTestId('job-detail-error')).toBeNull()
+  })
+
+  it('a change of the stores that leaves the source as it was reads nothing again', async () => {
+    const j = job()
+    ready(j, 'x')
+    mount(j)
+    await screen.findByTestId('job-log')
+    expect(fetchJob).toHaveBeenCalledTimes(1)
+    act(() => { usePoolStore.setState({ hosts: [] }) })
+    expect(fetchJob).toHaveBeenCalledTimes(1)
   })
 
   it('is read again when the job changes (it ended, its log was stored) and not again when nothing changed', async () => {
