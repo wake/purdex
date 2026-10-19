@@ -18,6 +18,9 @@ import { ToggleSwitch } from '../settings/ToggleSwitch'
 /** After this long without facts that carry the new value, the page says the host has not reported it. */
 export const PENDING_NOTICE_MS = 15_000
 
+/** What an empty owner rule means on the host (wwd `ParseOwnerRule`: 5 minutes). */
+const DEFAULT_OWNER_MINUTES = 5
+
 type Field = 'enabled' | 'heavy' | 'light' | 'owner_rule'
 type Patch = Partial<Pick<PoolWorker, 'enabled' | 'owner_rule'>> & { slots?: Partial<PoolWorker['slots']> }
 /** `patch` is kept for a retry: it is applied to whatever the settings are at the click, never to the ones at the failure. */
@@ -65,11 +68,18 @@ function OwnerRuleBox({ alias, rule, disabled, onCommit }: { alias: string; rule
     if (next === rule) { setDraftState(stored); return }
     onCommit(next)
   }
+  // the stepper moves from the stored minutes (the host's default, 5, when the rule is empty) and sends at once; a half-typed value is dropped for it
+  const step = (d: number) => {
+    forgetWorkerDraft(key)
+    onCommit(ownerRuleOf(Math.min(9999, Math.max(1, (minutes ?? DEFAULT_OWNER_MINUTES) + d))))
+  }
   return (
     <span className="flex items-center gap-2">
+      {asMinutes && <button type="button" className={BTN} aria-label={`${t('pool.worker.owner_rule')} −`} data-testid="pool-worker-owner-rule-dec" disabled={disabled || (minutes ?? DEFAULT_OWNER_MINUTES) <= 1} onClick={() => step(-1)}>−</button>}
       <input aria-label={t('pool.worker.owner_rule')} data-testid="pool-worker-owner-rule" className={`${INPUT} ${asMinutes ? '' : 'w-40 font-mono'}`} disabled={disabled}
         inputMode={asMinutes ? 'numeric' : undefined} placeholder={asMinutes ? t('pool.worker.owner_default') : undefined} value={draft}
         onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+      {asMinutes && <button type="button" className={BTN} aria-label={`${t('pool.worker.owner_rule')} +`} data-testid="pool-worker-owner-rule-inc" disabled={disabled || (minutes ?? DEFAULT_OWNER_MINUTES) >= 9999} onClick={() => step(1)}>+</button>}
       {asMinutes && <span className="text-xs text-text-muted">{t('pool.worker.minutes_unit')}</span>}
       {bad && <span data-testid="pool-worker-owner-rule-bad" role="alert" className="text-xs text-status-error-text">{t('pool.worker.owner_bad')}</span>}
     </span>

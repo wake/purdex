@@ -227,6 +227,27 @@ describe('WorkerSettings', () => {
     expect(lastPut().body.owner_rule).toBe('hid<3m')
   })
 
+  it('the owner rule has a minutes stepper: it moves from the stored minutes (5 when the rule is empty) and sends hid<N>m at once', async () => {
+    setHost(mlab())
+    render(<WorkerSettings alias="mlab" />)
+    await click('pool-worker-owner-rule-inc')
+    expect(lastPut().body.owner_rule).toBe('hid<6m')
+    cleanup()
+    hostFetch.mockClear()
+    setHost(mlab({ ...WORKER, owner_rule: '' }))
+    render(<WorkerSettings alias="mlab" />)
+    await click('pool-worker-owner-rule-dec')
+    expect(lastPut().body.owner_rule).toBe('hid<4m')
+    cleanup()
+    setHost(mlab({ ...WORKER, owner_rule: 'hid<1m' }))
+    render(<WorkerSettings alias="mlab" />)
+    expect(screen.getByTestId('pool-worker-owner-rule-dec')).toBeDisabled()
+    cleanup()
+    setHost(mlab({ ...WORKER, owner_rule: 'when-quiet' }))
+    render(<WorkerSettings alias="mlab" />)
+    expect(screen.queryByTestId('pool-worker-owner-rule-inc')).toBeNull() // any other text is edited as the text it is
+  })
+
   it('an unsent owner-rule value is kept when the component is remounted', () => {
     setHost(mlab())
     const first = render(<WorkerSettings alias="mlab" />)
