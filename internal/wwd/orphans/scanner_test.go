@@ -385,6 +385,32 @@ func TestScanner_ALongBreakEndsTheRun(t *testing.T) {
 	}
 }
 
+// The clock set back (a manual correction, a VM syncing): the gap is negative. That must neither put the next checks off until the clock
+// catches up (loop detection would stop for as long as it was set back) nor carry the run over the discontinuity.
+func TestScanner_AClockSetBackEndsTheRunAndDoesNotStopTheChecks(t *testing.T) {
+	now := t0.Add(2 * time.Hour)
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	s.Observe(now, withChild(shell), bursting(shell, 8).context())
+	if len(s.Report().Loops) != 1 {
+		t.Fatal("no loop to begin with")
+	}
+	back := t0.Add(30 * time.Minute) // set back an hour and a half
+	reads := 0
+	c := bursting(shell, 8)
+	counted := c.context()
+	fresh := counted.Fresh
+	counted.Fresh = func() ([]facts.ProcRec, error) { reads++; return fresh() }
+	calledAt := back
+	s.Observe(calledAt, withChild(shell), counted)
+	if reads == 0 {
+		t.Fatal("no check was made after the clock was set back: detection would stop until it catches up")
+	}
+	if r := s.Report(); len(r.Loops) != 1 || !r.Loops[0].Since.Equal(calledAt) {
+		t.Fatalf("the run was carried over the discontinuity (or lost): %+v", r.Loops)
+	}
+}
+
 // The gap between checks is wall-clock time: a time.Now() carries a monotonic reading that does not advance while the machine sleeps, and Sub
 // uses it, so a sleep would not show. The scanner keeps its last check without that reading (a test cannot make a machine sleep, so this
 // pins the property that matters: what is compared has none).

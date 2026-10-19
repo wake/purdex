@@ -108,7 +108,10 @@ func (s *Scanner) Report() *advisor.OrphanReport {
 func (s *Scanner) Observe(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
 	procs := s.devOrphans(now, snap, c)
 	s.mu.Lock()
-	check := s.lastCheck.IsZero() || now.Sub(s.lastCheck) >= CheckEvery
+	// due when the last check is CheckEvery ago, or when the clock was set back past it (a negative gap): a check that waited for the clock
+	// to catch up could be put off for hours
+	gap := now.Round(0).Sub(s.lastCheck)
+	check := s.lastCheck.IsZero() || gap >= CheckEvery || gap < 0
 	s.mu.Unlock()
 	if check {
 		s.checkLoops(now, snap, c)
@@ -193,7 +196,7 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 	// the machine sleeps, so a three-hour sleep would look like a few seconds. The gap is wall-clock time.
 	s.lastCheck = now.Round(0)
 	s.mu.Unlock()
-	if !prev.IsZero() && now.Round(0).Sub(prev) > maxCheckGap {
+	if gap := now.Round(0).Sub(prev); !prev.IsZero() && (gap > maxCheckGap || gap < 0) { // a clock set back is a break too
 		s.resetLoops() // the checks were interrupted (a sleep, a stalled sampler): what came before is not continuous with what comes now
 	}
 	if c.Fresh == nil {
