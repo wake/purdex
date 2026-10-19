@@ -71,3 +71,19 @@ func TestRecordRunDiscardsOnlyItsOwnOriginsSamples(t *testing.T) {
 		t.Fatalf("air26's samples must have survived the other origin's discard: %+v", rows)
 	}
 }
+
+// A run of air26's job that is not the job's end drops air26's samples of it (the job runs again and collects its own).
+func TestRecordRunDiscardsTheSamplesOfItsOwnOriginWhenTheRunIsNotTheEnd(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	for n := 0; n < 3; n++ {
+		sampleMarked(r, n, ident.OriginTag("air26"))
+	}
+	notEnd := endedFrom("air26")
+	notEnd.Run.StartedAt = time.Time{}
+	r.RecordRun(notEnd)
+	r.RecordRun(endedFrom("air26"))
+	rows := drain(r, sink)
+	if len(rows) != 1 || rows[0].PeakCores != nil {
+		t.Fatalf("the samples of the run that was not the end must be gone: %+v", rows)
+	}
+}
