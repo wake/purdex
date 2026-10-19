@@ -72,7 +72,8 @@ func TestNameService_LeadCandidatesOfASessionWithoutAPoolNameHaveNoKeep(t *testi
 	for _, c := range got {
 		assert.False(t, c.Keep)
 	}
-	assert.Equal(t, "mia", got[0].Code, "no history: the free names in the rule's order, lead:true last")
+	// no history: rule 1 offers the lead:true personas before the other free names (anna is held by A)
+	assert.Equal(t, []ipeers.LeadCandidate{{Code: "hiro"}, {Code: "mia"}}, got)
 }
 
 func TestNameService_RenameForLeadKeepsTheOldNameAsAnAlias(t *testing.T) {
@@ -146,7 +147,7 @@ func TestNameService_UndoRenameForLeadIsRefusedWhenTheOldNameIsTakenAndSkippedWh
 	old, err := e.m.RenameForLead(ctx, poolSidA, "mia")
 	require.NoError(t, err)
 	e.start(poolSidB, tLate)
-	e.assign(poolSidB, "purdex-55-anna", store.PeerNameSourcePool) // B took the name A left
+	e.assign(poolSidB, "purdex-54-anna", store.PeerNameSourcePool) // B took the very name A left
 	require.ErrorIs(t, e.m.UndoRenameForLead(ctx, poolSidA, old), ipeers.ErrNameTaken)
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "refused: nothing changes")
 
