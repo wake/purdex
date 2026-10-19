@@ -128,17 +128,15 @@ type Gate struct {
 	Token   func() string
 }
 
-// SessionFromEnv is the session a command runs in, read from the environment through get: PDX_SESSION_ID (a script that names the
-// session on purpose), else CLAUDE_CODE_SESSION_ID (what Claude Code sets), else CLAUDE_SESSION_ID (an older name some callers still
-// set); "" when none is. It is the one reading: the gate records its slots, queue entries and decisions by it, and `pdx test` and
-// `pdx jobs` name the submitter's session of a wwd job by it (#3477).
+// SessionFromEnv is the Claude Code session a command runs in: CLAUDE_CODE_SESSION_ID (what Claude Code sets), else
+// CLAUDE_SESSION_ID (an older name some callers still set); "" when neither is. It is the one reading of those two: the gate records its
+// slots, queue entries and decisions by it, and `pdx test` and `pdx jobs` start from it to name the submitter's session of a wwd job
+// (#3477). The gate itself reads nothing else: a PDX_SESSION_ID left in a shell must not take the place of the real session.
 func SessionFromEnv(get func(string) string) string {
-	for _, name := range []string{"PDX_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"} {
-		if v := get(name); v != "" {
-			return v
-		}
+	if v := get("CLAUDE_CODE_SESSION_ID"); v != "" {
+		return v
 	}
-	return ""
+	return get("CLAUDE_SESSION_ID")
 }
 
 // New is the gate of this host with the given config.
