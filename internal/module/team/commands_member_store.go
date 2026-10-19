@@ -52,8 +52,9 @@ func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	if err := oweNoticeIn(tx, c.MK, noticeAdopted, c.ID, c.Lead.Address, c.TeamName, p.Now); err != nil {
 		return CommandResult{}, err
 	}
+	code := p.TargetCode // always sent, empty when the session has none: that is different from a host that cannot say
 	return okResult(team.AdoptOutcome{State: "applied", MemberSession: o.SessionID, Ref: o.Ref, PID: o.PID,
-		ProcStart: o.ProcStart, Title: o.Title, Cwd: o.Cwd, Tmux: o.Tmux, MemberCode: p.TargetCode})
+		ProcStart: o.ProcStart, Title: o.Title, Cwd: o.Cwd, Tmux: o.Tmux, MemberCode: &code})
 }
 
 // applyReleaseIn is `release` (active → released, notice `released`). Only the lead host's own live row of that

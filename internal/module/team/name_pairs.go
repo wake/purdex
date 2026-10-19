@@ -85,7 +85,7 @@ func (m *Module) recordAdoptPairAtApproval(p team.AdoptPayload, approvalID strin
 
 // noteAdoptPair notes, inside the settle transaction tx, that the remote adopt of approval approvalID became active. The pair is
 // written by afterAdoptPairs once tx has committed (dropAdoptPairs forgets it when it did not).
-func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID, memberCode string) {
+func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID string, memberCode *string) {
 	m.endedOpsMu.Lock()
 	defer m.endedOpsMu.Unlock()
 	if m.adoptPairs == nil {
@@ -95,7 +95,10 @@ func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID, memberCode string) {
 }
 
 // adoptPairNote is one remote adopt that became active: its approval, and the persona code the member host reported ("" = none).
-type adoptPairNote struct{ approvalID, memberCode string }
+type adoptPairNote struct {
+	approvalID string
+	memberCode *string
+}
 
 func (m *Module) takeAdoptPairs(tx *sql.Tx) []adoptPairNote {
 	m.endedOpsMu.Lock()
@@ -138,17 +141,24 @@ func (m *Module) recordRemoteSpawnPair(fromHost string, fact team.TeamFact) {
 // recordAdoptPair writes the pair of an adopt that was approved: the lead's code and the adopted session's (spec §5.4: it keeps its
 // name and counts from now on). A local target's code is read from the session; a remote one has only the name the request carried.
 func (m *Module) recordAdoptPair(p team.AdoptPayload, approvalID string) {
-	m.recordAdoptPairAs(p, approvalID, "")
+	m.recordAdoptPairAs(p, approvalID, nil)
 }
 
-// recordAdoptPairAs is recordAdoptPair with the code the member host reported (memberCode); "" falls back to what this host can
-// tell: the session's code for a local target, the name the request carried for a remote one.
-func (m *Module) recordAdoptPairAs(p team.AdoptPayload, approvalID, memberCode string) {
-	if memberCode == "" && p.TargetHostID == "" {
-		memberCode = m.sessionCode(p.TargetSessionID)
-	}
-	if memberCode == "" {
-		memberCode = addressCode(p.TargetName)
+// recordAdoptPairAs is recordAdoptPair with the code the member host reported (reported). A reported code, even an empty one, is
+// the answer: the session has none now and no pair is written. Not reported (an older member host, or a local target) falls back
+// to what this host can tell: the session's code for a local target, the name the request carried for a remote one.
+func (m *Module) recordAdoptPairAs(p team.AdoptPayload, approvalID string, reported *string) {
+	var memberCode string
+	switch {
+	case reported != nil:
+		memberCode = *reported
+	default:
+		if p.TargetHostID == "" {
+			memberCode = m.sessionCode(p.TargetSessionID)
+		}
+		if memberCode == "" {
+			memberCode = addressCode(p.TargetName)
+		}
 	}
 	m.recordPair(m.sessionCode(p.LeadSessionID), memberCode, "adopt "+approvalID)
 }

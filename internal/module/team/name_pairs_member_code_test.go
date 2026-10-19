@@ -35,10 +35,19 @@ func TestNamePairsAdopt_ARenamedRemoteTargetIsRecordedUnderItsCurrentCode(t *tes
 	t.Run("the member host says the session is hiro now", func(t *testing.T) {
 		f, n := setup(t)
 		out := applied(rtSession, "_rt1234")
-		out.MemberCode = "hiro"
+		out.MemberCode = strp("hiro")
 		settle(t, f, out)
 		if n.count("pair:anna:hiro") != 1 || n.count("pair:") != 1 {
 			t.Fatalf("calls = %v, want the pair under hiro, the code it has now", n.log())
+		}
+	})
+	t.Run("the member host says it has no persona code now: no pair, not the old name", func(t *testing.T) {
+		f, n := setup(t)
+		out := applied(rtSession, "_rt1234")
+		out.MemberCode = strp("") // renamed to something that is no persona's, after the request
+		settle(t, f, out)
+		if n.count("pair:") != 0 {
+			t.Fatalf("calls = %v, want none: a newer member host said the session has no persona code", n.log())
 		}
 	})
 	t.Run("an older member host sends no code: the request's name stands", func(t *testing.T) {
@@ -62,7 +71,29 @@ func TestCommands_AdoptOutcomeCarriesTheTargetsCurrentCode(t *testing.T) {
 	if err := json.Unmarshal(body, &ans); err != nil || code != http.StatusOK || json.Unmarshal(ans.Outcome, &out) != nil {
 		t.Fatalf("%d %s (%v)", code, body, err)
 	}
-	if out.MemberCode != "hiro" {
+	if out.MemberCode == nil || *out.MemberCode != "hiro" {
 		t.Fatalf("outcome = %s, want member_code hiro", ans.Outcome)
 	}
 }
+
+// A target with no persona code is reported as an explicit empty code, not as an absent field (which an older host would also be).
+func TestCommands_AdoptOutcomeSaysWhenTheTargetHasNoCode(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.m.names = &fakeLeadNames{codes: map[string]string{}}
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "scratch"})
+	code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
+	var ans team.TeamCommandAnswer
+	if err := json.Unmarshal(body, &ans); err != nil || code != http.StatusOK {
+		t.Fatalf("%d %s (%v)", code, body, err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(ans.Outcome, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if v, has := raw["member_code"]; !has || v != "" {
+		t.Fatalf("outcome = %s, want member_code present and empty", ans.Outcome)
+	}
+}
+
+func strp(s string) *string { return &s }
