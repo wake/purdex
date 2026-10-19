@@ -210,9 +210,10 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		DB:            db,
 		ParentEnv:     jobParentEnv(os.Environ(), in.Home, in.ToolDirs),
 	})
-	labels, fingerprint := in.Labels()
+	// the claim says what the host is at the time of the claim (in.Labels), not what it was when the worker started: that is before the first
+	// facts record, with no tool labels and a fingerprint of the OS version only, and no result made under it could be filed for reuse
 	ctl := runner.New(runner.Config{
-		Worker: in.Alias, Labels: labels, Fingerprint: fingerprint, Locks: in.Locks, Exec: exec, Guard: guard,
+		Worker: in.Alias, Facts: in.Labels, Locks: in.Locks, Exec: exec, Guard: guard,
 	})
 	return loop.Config{
 		Gate:     in.Gate,
