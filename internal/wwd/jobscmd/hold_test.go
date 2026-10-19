@@ -78,16 +78,20 @@ func TestHoldSavesTheHoldOnTheNamedHostAndWaitsForTheFacts(t *testing.T) {
 		Allow: &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassRelease, wire.ClassMerge}, Repos: []string{"purdex"}},
 		Flags: []wire.HoldFlag{wire.HoldFlagRelease, wire.HoldFlagExpectPressure},
 	}
+	want.Name = holdName("release 763")
+	if !strings.HasPrefix(want.Name, "hold-release-763-") {
+		t.Fatalf("name %q", want.Name)
+	}
 	if h.started == nil || !reflect.DeepEqual(*h.started, want) {
 		t.Fatalf("started %+v, want %+v", h.started, want)
 	}
 	if h.polls != 3 {
 		t.Errorf("it waited for the facts to show the hold: %d readings", h.polls)
 	}
-	if !strings.Contains(out, "hold-release-763") || !strings.Contains(out, "air26") || !strings.Contains(out, "release 763") {
+	if !strings.Contains(out, want.Name) || !strings.Contains(out, "air26") || !strings.Contains(out, "release 763") {
 		t.Errorf("the output names the hold, the host and the reason: %q", out)
 	}
-	if !strings.Contains(log, "air26") || !strings.Contains(log, "hold-release-763") || !strings.Contains(log, "release 763") {
+	if !strings.Contains(log, "air26") || !strings.Contains(log, want.Name) || !strings.Contains(log, "release 763") {
 		t.Errorf("the log keeps who and why: %q", log)
 	}
 }
@@ -103,7 +107,7 @@ func TestHoldWithoutOptionsIsAPlainException(t *testing.T) {
 	if h.started == nil || h.started.Allow != nil || len(h.started.Flags) != 0 || len(h.started.Holds) != 2 {
 		t.Fatalf("started %+v", h.started)
 	}
-	if h.started.Name != "hold-mysql-restore" {
+	if !strings.HasPrefix(h.started.Name, "hold-mysql-restore-") {
 		t.Errorf("name %q", h.started.Name)
 	}
 }
@@ -116,7 +120,7 @@ func TestHoldFailsWhenTheFactsNeverShowIt(t *testing.T) {
 	if code == ExitOK {
 		t.Fatalf("a timeout must not be success: %q", out)
 	}
-	if !strings.Contains(errOut, "hold-stress") || !strings.Contains(errOut, "facts") {
+	if !strings.Contains(errOut, holdName("stress")) || !strings.Contains(errOut, "facts") {
 		t.Errorf("the message says it was saved but not seen: %q", errOut)
 	}
 }
@@ -189,32 +193,58 @@ func TestHoldRefusesWhatIsNotAHold(t *testing.T) {
 	}
 }
 
-// The name comes from the reason: a slug that is a valid exception name; a reason with nothing a name can hold (Chinese, say) gets a short
-// hash, so two different reasons are two different holds.
+// The name comes from the reason: a readable slug of its letters and digits and a short hash of the whole reason. Two different reasons are
+// two holds — also when their slugs are the same, or cut to the same 40 letters (R1) — and the same reason again is the same hold.
 func TestHoldName(t *testing.T) {
 	cases := map[string]string{
-		"Release 763: purdex!":     "hold-release-763-purdex",
-		"  A  b  ":                 "hold-a-b",
-		strings.Repeat("abc ", 40): "",
+		"Release 763: purdex!": "hold-release-763-purdex-",
+		"  A  b  ":             "hold-a-b-",
 	}
-	for reason, want := range cases {
+	for reason, prefix := range cases {
+		if got := holdName(reason); !strings.HasPrefix(got, prefix) {
+			t.Errorf("%q: %q, want prefix %q", reason, got, prefix)
+		}
+	}
+	long := strings.Repeat("release candidate verification ", 6)
+	for _, reason := range []string{long, "x", "發版 763", "!!!", strings.Repeat("abc ", 40)} {
 		got := holdName(reason)
-		if want != "" && got != want {
-			t.Errorf("%q: %q, want %q", reason, got, want)
+		if len(got) > 64 {
+			t.Errorf("%q: %d bytes", reason, len(got))
 		}
 		if err := (wire.Exception{Name: got, Until: &time.Time{}}).Validate(); err != nil && strings.Contains(err.Error(), "name") {
 			t.Errorf("%q: %q is not a valid name", reason, got)
 		}
-		if len(got) > 64 {
-			t.Errorf("%q: %d bytes", reason, len(got))
+		if holdName(reason) != got {
+			t.Errorf("%q: the name must be the same every time (the same line again replaces the hold)", reason)
 		}
 	}
-	a, b := holdName("發版 763"), holdName("發版 764")
-	if a == b || !strings.HasPrefix(a, "hold-") || len(a) > 64 {
-		t.Errorf("a name for a reason with no letters: %q %q", a, b)
+	distinct := [][2]string{
+		{long + "alpha", long + "beta"}, // the first 40 letters are the same
+		{"Release 763", "release-763"},  // the same slug
+		{"發版 763", "發版 764"},            // no letters at all
+		{"fix: mysql", "fix mysql"},     // punctuation only
 	}
-	if holdName("發版 763") != a {
-		t.Error("the name must be the same every time (the same line again replaces the hold)")
+	for _, d := range distinct {
+		if holdName(d[0]) == holdName(d[1]) {
+			t.Errorf("%q and %q are one hold", d[0], d[1])
+		}
+	}
+}
+
+// An option that is given with nothing in it is a mistake, not "no option": dropping it would turn a hold meant to let a class through
+// into one that lets nothing through (R1).
+func TestHoldRefusesAnEmptyAllowValue(t *testing.T) {
+	for _, args := range [][]string{
+		{"air26", "--for", "1h", "--reason", "x", "--allow-repo="},
+		{"air26", "--for", "1h", "--reason", "x", "--allow-class="},
+		{"air26", "--for", "1h", "--reason", "x", "--allow-class", " , "},
+		{"air26", "--for", "1h", "--reason", "x", "--allow-class", "release", "--allow-repo", ","},
+	} {
+		h := newHold("air26")
+		code, _, errOut, _ := runHold(h, args...)
+		if code != ExitUsage || h.started != nil {
+			t.Errorf("%v: code %d started %+v (%s)", args, code, h.started, errOut)
+		}
 	}
 }
 

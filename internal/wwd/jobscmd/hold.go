@@ -28,10 +28,12 @@ const (
 	maxSlug         = 40
 )
 
-// holdName is the exception's name, made from the reason so the same line again replaces the same hold: "hold-" and the reason's
-// letters and digits (lower case, anything else becomes one "-"), at most maxSlug of them; a reason with none (Chinese, say) gets a short
-// hash instead, so two such reasons are two holds.
+// holdName is the exception's name, made from the reason: "hold-", a readable slug of the reason's letters and digits (lower case, anything
+// else becomes one "-", at most maxSlug of them; none for a reason with no letters, Chinese say) and a short hash of the whole reason. The
+// same reason again is the same name, so the same line replaces the same hold; two different reasons are two holds, whatever their slugs
+// are (cut to the same 40 letters, or the same once punctuation is gone).
 func holdName(reason string) string {
+	reason = strings.TrimSpace(reason)
 	var b strings.Builder
 	dash := true // no leading dash
 	for _, r := range strings.ToLower(reason) {
@@ -47,11 +49,12 @@ func holdName(reason string) string {
 	if len(slug) > maxSlug {
 		slug = strings.TrimRight(slug[:maxSlug], "-")
 	}
+	sum := sha256.Sum256([]byte(reason))
+	hash := hex.EncodeToString(sum[:4])
 	if slug == "" {
-		sum := sha256.Sum256([]byte(strings.TrimSpace(reason)))
-		slug = hex.EncodeToString(sum[:4])
+		return "hold-" + hash
 	}
-	return "hold-" + slug
+	return "hold-" + slug + "-" + hash
 }
 
 // takeRepeated pulls every `--name value` / `--name=value` of the named options out of args (they may be given more than once, and a value
@@ -69,10 +72,18 @@ func takeRepeated(args []string, names ...string) (got map[string][]string, rest
 					return nil, nil, fmt.Errorf("%s needs a value", flag)
 				}
 				i++
-				got[n] = append(got[n], splitList(args[i])...)
+				vals := splitList(args[i])
+				if len(vals) == 0 {
+					return nil, nil, fmt.Errorf("%s %q holds no value: dropping it would change what the hold lets through", flag, args[i])
+				}
+				got[n] = append(got[n], vals...)
 				taken = true
 			case strings.HasPrefix(a, flag+"="):
-				got[n] = append(got[n], splitList(strings.TrimPrefix(a, flag+"="))...)
+				vals := splitList(strings.TrimPrefix(a, flag+"="))
+				if len(vals) == 0 {
+					return nil, nil, fmt.Errorf("%s= holds no value: dropping it would change what the hold lets through", flag)
+				}
+				got[n] = append(got[n], vals...)
 				taken = true
 			}
 		}
