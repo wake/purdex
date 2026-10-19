@@ -65,6 +65,7 @@ type argKey struct {
 type procArgs struct {
 	argv    []string
 	job     string
+	origin  string // the origin tag of the job mark (WWD_ORIGIN); "" when the mark has none
 	session string // the ref of the session in the environment (SessionEnvKey); "" when none
 }
 
@@ -225,7 +226,7 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	}
 	r.prev = cur
 	r.dropStaleArgs()
-	return snap, ProcContext{JobOf: r.jobOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
+	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
 }
 
 // kindOf is the resident kind of a process, computed once per process (by pid
@@ -278,7 +279,7 @@ func (r *ProcReader) loadArgs(pid int) procArgs {
 		}
 		if argv, env, ok := parseProcArgs(buf); ok {
 			a.argv = argv
-			a.job, _ = JobFromEnv(env) // the environment itself is never kept
+			a.origin, a.job, _ = MarkFromEnv(env) // the environment itself is never kept
 			if id, ok := SessionIDFromEnv(env); ok {
 				a.session = sessionRef(id) // only the ref is kept, not the id and not the rest of the environment
 			}
@@ -293,6 +294,11 @@ func (r *ProcReader) argsOf(pid int) []string { return r.loadArgs(pid).argv }
 func (r *ProcReader) jobOf(pid int) (string, bool) {
 	j := r.loadArgs(pid).job
 	return j, j != ""
+}
+
+func (r *ProcReader) originOf(pid int) (string, bool) {
+	o := r.loadArgs(pid).origin
+	return o, o != ""
 }
 
 func (r *ProcReader) envSessionOf(pid int) (string, bool) {

@@ -89,14 +89,15 @@ func (t *JobUsageTracker) Observe(now time.Time, snap ProcSnapshot, c ProcContex
 	c.ensureTable(snap)
 	cur := map[string]*jobNow{}
 	for _, p := range snap.Procs {
-		id, ok := jobAbove(p, c)
+		tag, id, ok := jobMarkAbove(p, c)
 		if !ok {
 			continue
 		}
-		j := cur[id]
+		key := markKey(tag, id)
+		j := cur[key]
 		if j == nil {
 			j = &jobNow{}
-			cur[id] = j
+			cur[key] = j
 		}
 		j.cpuPct += p.CPUPct
 		j.mem += p.FootprintBytes
@@ -150,7 +151,7 @@ func (t *JobUsageTracker) Commit(f wire.Facts) {
 		acc := t.jobs[id]
 		if acc == nil {
 			acc = &jobAcc{JobSample: JobSample{
-				JobID: id, FirstSeen: now, JobsAtStart: n, ZoneAtStart: zone, ZoneWorst: zone,
+				JobID: markID(id), FirstSeen: now, JobsAtStart: n, ZoneAtStart: zone, ZoneWorst: zone,
 			}}
 			if ownerActive != nil {
 				start, seen := *ownerActive, false
@@ -203,11 +204,31 @@ func (t *JobUsageTracker) forget(now time.Time) {
 	}
 }
 
-// Take hands out the sample of a job and forgets it. ok is false for a job no sample saw (it ended between two samples, or its
-// processes were never seen: the row then says none for every figure).
-func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
+// markKey is how the tracker names a job: its origin tag and its id (a job id is only unique per origin). A mark with no origin, from a
+// command started before the upgrade, has the tag "".
+func markKey(tag, id string) string { return tag + ":" + id }
+
+// markID is the job id of a markKey (a tag is hex and an id holds no colon, so the first colon splits them).
+func markID(key string) string {
+	_, id, _ := strings.Cut(key, ":")
+	return id
+}
+
+// Take hands out the sample of a job whose mark has no origin and forgets it. ok is false for a job no sample saw (it ended between two
+// samples, or its processes were never seen: the row then says none for every figure).
+func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) { return t.TakeMark("", jobID) }
+
+// TakeMark is Take for the job of origin tag: its own samples, else (for a command started before the upgrade, whose mark has no origin)
+// the ones kept under the old key.
+func (t *JobUsageTracker) TakeMark(tag, jobID string) (JobSample, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if tag != "" {
+		if _, own := t.jobs[markKey(tag, jobID)]; !own {
+			tag = "" // nothing under the tag: the old key, if the job is an old one
+		}
+	}
+	jobID = markKey(tag, jobID)
 	at := t.lastAt
 	if at.IsZero() {
 		at = time.Now()
@@ -238,10 +259,17 @@ func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 // a command started and one sample taken, all in the microseconds between the origin taking the release and the loop's call) would lose
 // those first samples with the old run's. The samples are per job id, not per run, so the two cannot be told apart once they are in one
 // accumulator; keeping the accumulator instead would put the old run's figures into the next row. The first is the smaller wrong.
-func (t *JobUsageTracker) Discard(jobID string) {
+func (t *JobUsageTracker) Discard(jobID string) { t.DiscardMark("", jobID) }
+
+// DiscardMark is Discard for the job of origin tag (and, as TakeMark, the old key when nothing is under the tag).
+func (t *JobUsageTracker) DiscardMark(tag, jobID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.jobs, jobID)
+	if _, own := t.jobs[markKey(tag, jobID)]; own {
+		delete(t.jobs, markKey(tag, jobID))
+		return
+	}
+	delete(t.jobs, markKey("", jobID))
 }
 
 // Len is how many jobs are being kept.

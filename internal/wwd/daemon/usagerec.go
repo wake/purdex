@@ -8,6 +8,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 )
 
 // usageQueueLen is how many finished jobs' rows wait for the writer; a full queue drops the row (logged), never blocks the caller.
@@ -119,7 +120,7 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 	if !j.State.Terminal() || !r.ranHere(j) {
 		return wire.JobUsage{}, false
 	}
-	sm, seen := r.tr.Take(j.ID) // takes it out even for a job that is not recorded, so nothing is kept for it
+	sm, seen := r.tr.TakeMark(ident.OriginTag(r.host), j.ID) // takes it out even for a job that is not recorded, so nothing is kept for it
 	if j.Result == nil {
 		return wire.JobUsage{}, false
 	}

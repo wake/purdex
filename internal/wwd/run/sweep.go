@@ -12,9 +12,12 @@ import (
 )
 
 // ProcSource lists the processes whose environment carries the mark of a job, wherever they sit in the process tree. It reads
-// the process table without starting anything (the facts' reader on macOS).
+// the process table without starting anything (the facts' reader on macOS). The mark is (origin tag, job id): a process matches when its
+// WWD_JOB is the id and its WWD_ORIGIN is the tag, or it has no WWD_ORIGIN at all (a command started before the upgrade; only for the
+// transition, #3373: a process of that kind can only belong to a job an older wwd started, and nothing new makes one). An empty tag in the
+// question matches by id alone.
 type ProcSource interface {
-	JobProcesses(jobID string) ([]int, error)
+	JobProcesses(tag, jobID string) ([]int, error)
 }
 
 // sweepPoll is how often a sweep looks again while it waits for processes to leave.
@@ -27,7 +30,7 @@ var errAbandoned = errors.New("sweep: abandoned after its time budget")
 
 // sweepBounded is sweep under one overall deadline, so a process table that cannot be read (a hung sysctl) never holds Run:
 // past the budget it returns an error and the scan goroutine is left to finish by itself.
-func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int, error) {
+func sweepBounded(src ProcSource, tag, jobID string, killAfter time.Duration) ([]int, error) {
 	type out struct {
 		pids []int
 		err  error
@@ -35,7 +38,7 @@ func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int,
 	var abandoned atomic.Bool
 	done := make(chan out, 1)
 	go func() {
-		pids, err := sweep(src, jobID, killAfter, &abandoned)
+		pids, err := sweep(src, tag, jobID, killAfter, &abandoned)
 		done <- out{pids, err}
 	}()
 	t := time.NewTimer(killAfter + sweepSlack)
@@ -53,11 +56,11 @@ func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int,
 // vite or playwright that a test started and that daemonized out of the group. It is cleanup, not a security boundary — a
 // process that removes the mark from its environment is not found (a known limit, see the tests). TERM first, KILL after
 // killAfter for those still marked on a second look (so a recycled pid is not killed), and it returns the pids it found.
-func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *atomic.Bool) (found []int, err error) {
+func sweep(src ProcSource, tag, jobID string, killAfter time.Duration, abandoned *atomic.Bool) (found []int, err error) {
 	if src == nil {
 		return nil, nil
 	}
-	pids, err := src.JobProcesses(jobID)
+	pids, err := src.JobProcesses(tag, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +77,7 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *ato
 	}
 	deadline := time.Now().Add(killAfter)
 	for time.Now().Before(deadline) {
-		left, err := stillThere(src, jobID, pids)
+		left, err := stillThere(src, tag, jobID, pids)
 		if err != nil {
 			return pids, err
 		}
@@ -83,7 +86,7 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *ato
 		}
 		time.Sleep(sweepPoll)
 	}
-	left, err := stillThere(src, jobID, pids)
+	left, err := stillThere(src, tag, jobID, pids)
 	if err != nil {
 		return pids, err // not confirmed: no KILL on a guess, the pid may belong to someone else by now
 	}
@@ -95,7 +98,7 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *ato
 	}
 	// give the kernel a moment to take them, so a caller that looks right after Run returns finds them gone
 	for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(sweepPoll) {
-		left, err := stillThere(src, jobID, pids)
+		left, err := stillThere(src, tag, jobID, pids)
 		if err != nil {
 			return pids, err
 		}
@@ -108,8 +111,8 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *ato
 
 // stillThere are the pids of before that the source still lists under the job's mark; an unreadable table is an error, never
 // "nothing left".
-func stillThere(src ProcSource, jobID string, before []int) ([]int, error) {
-	now, err := src.JobProcesses(jobID)
+func stillThere(src ProcSource, tag, jobID string, before []int) ([]int, error) {
+	now, err := src.JobProcesses(tag, jobID)
 	if err != nil {
 		return nil, err
 	}
