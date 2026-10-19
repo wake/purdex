@@ -162,3 +162,28 @@ func TestASharedFailureTheUnreadPeerStillHoldsIsNotToldAgainInTheFallback(t *tes
 	a.passes(t, 4)
 	assert.Equal(t, 1, a.e.ntf.count(), "the failure that was told is not told again as a new one")
 }
+
+// The other side of it: an unread list's old hold is not a reason to keep quiet for ever. When a list that is read clears the failure and
+// it comes back (mserv recovers and goes down again while air26's list cannot be read), that is a new failure and it is told: a duplicate is
+// preferred to a failure not told.
+func TestAStaleHoldOfAnUnreadListDoesNotHideANewFailure(t *testing.T) {
+	a := newNode(t, "mlab")
+	a.e.src.peers = []string{"air26"}
+	a.e.src.set("air26", silenceOf("mserv", t0))
+	a.passes(t, 1)
+	assert.Equal(t, 1, a.e.ntf.count())
+	a.e.ntf.confirm(0)
+
+	a.e.src.poolErr = errors.New("pool unreadable")
+	a.e.src.set("mlab", silenceOf("mserv", t0.Add(time.Minute)))
+	a.peer(notReady())
+	a.passes(t, 2)
+	assert.Equal(t, 1, a.e.ntf.count(), "still the failure that was told")
+
+	a.e.src.set("mlab") // mserv answers again: this wwd's list clears the failure
+	a.passes(t, 1)
+	a.e.now = a.e.now.Add(10 * time.Minute)
+	a.e.src.set("mlab", silenceOf("mserv", a.e.now)) // and it goes down again: a new failure
+	a.passes(t, 2)
+	assert.Equal(t, 2, a.e.ntf.count(), "told again as the new failure it is, not hidden by air26's old hold")
+}

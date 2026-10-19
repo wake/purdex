@@ -397,6 +397,21 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 		}
 		nowHeld[host] = held
 	}
+	// A list that is read and no longer holds what it held is a clear: the failure ended, at least where that wwd saw it. What a list that
+	// could not be read held about the same key is then old news, and is dropped, so the failure coming back is told as a new one (a
+	// duplicate is preferred to a miss) and not hidden by a hold nobody can check.
+	for h, held := range nowHeld {
+		for k := range m.lastHeld[h] {
+			if held[k] {
+				continue
+			}
+			for u, uheld := range m.lastHeld {
+				if _, read := nowHeld[u]; !read {
+					delete(uheld, k)
+				}
+			}
+		}
+	}
 	keys := map[string]bool{}
 	for _, held := range nowHeld {
 		for k := range held {
