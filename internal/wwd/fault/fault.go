@@ -111,6 +111,22 @@ func (h *Hooks) OwnerActive(real bool) bool {
 	return true
 }
 
+// OwnerBlock is H2 as the whole owner reading: nil unless the hook is named, else active while the file exists and away while it is
+// confirmed absent (the reasons name the hook, which jobusage ignores). Unlike OwnerActive it replaces the real rule instead of adding to
+// it, so the host's keyboard cannot reach a test (#3561). A file that cannot be told about (permission, I/O) gives nil: the real rule answers.
+func (h *Hooks) OwnerBlock() *wire.OwnerState {
+	if h == nil || !h.cfg.Enabled || h.cfg.OwnerActiveFile == "" {
+		return nil
+	}
+	if _, err := os.Stat(h.cfg.OwnerActiveFile); err == nil {
+		h.warn("wwd: fault owner_active_file: %s exists, the owner counts as active for the worker", h.cfg.OwnerActiveFile)
+		return &wire.OwnerState{Active: true, Reason: "fault: owner_active_file"}
+	} else if os.IsNotExist(err) {
+		return &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
+	}
+	return nil
+}
+
 // OwnerFileAbsent is the other half of H2: true only when the hook is named and the file is confirmed not to be there (ENOENT). A file
 // that cannot be told about (permission, I/O) is neither there nor absent: false, so that nothing is made up. A host with no owner rule has
 // a null owner block, and a worker that yielded stays yielded on a null block, so the sampler fills in an "away" block on this

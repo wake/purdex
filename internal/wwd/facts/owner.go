@@ -77,6 +77,21 @@ func BuildOwner(cfg OwnerConfig, src OwnerSources, snap ProcSnapshot, ctx ProcCo
 	return out
 }
 
+// OverrideOwner puts a test hook in front of the owner rule: while override answers non-nil, that block is the owner and the real rule
+// (the HID idle time included) is not read at all, so who is at the keyboard of the host a test runs on cannot change its result (#3561).
+// Without a rule (real nil) there is nothing to override. override nil or answering nil leaves the real rule in force.
+func OverrideOwner(real func(ProcSnapshot, ProcContext) *wire.OwnerState, override func() *wire.OwnerState) func(ProcSnapshot, ProcContext) *wire.OwnerState {
+	if real == nil || override == nil {
+		return real
+	}
+	return func(s ProcSnapshot, c ProcContext) *wire.OwnerState {
+		if o := override(); o != nil {
+			return o
+		}
+		return real(s, c)
+	}
+}
+
 // ownerWorkReason is "build" or "simulator" when the owner has such work
 // running, "" otherwise. A build wins over a simulator.
 func ownerWorkReason(cfg OwnerConfig, snap ProcSnapshot, ctx ProcContext) string {
