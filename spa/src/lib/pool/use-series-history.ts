@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
 import { invalidateFactsHistory, loadSeries, seriesAnnounced } from './history'
-import type { HistoryRange } from '../watch/series'
+import type { HistoryRange } from '../fleet/history'
 
 /** The count of finished loads: the charts' memo depends on it, since a finished load changes the history without any other render cause. */
 export function useSeriesHistory(fleetHostId: string, alias: string | null, range: HistoryRange, live: boolean, memTotalMb: number | null): number {
