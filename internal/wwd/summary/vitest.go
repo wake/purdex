@@ -37,6 +37,9 @@ func parseVitest(in Input) (wire.Summary, error) {
 	passed := newPassedSet(in.Digest)
 	for _, suite := range r.TestResults {
 		file := rel(in.Root, suite.Name)
+		// rel folds a directory outside the workspace away: two files of that base name would be one, for a passed test and for a failed one
+		// alike (qualification compares a failure by its name and file), so such a suite has no identity to put in a digest
+		folded := strings.HasPrefix(file, outside)
 		suiteFailed := false
 		for _, a := range suite.AssertionResults {
 			name := a.FullName
@@ -46,13 +49,16 @@ func parseVitest(in Input) (wire.Summary, error) {
 			switch a.Status {
 			case "passed":
 				s.Passed++
-				if strings.HasPrefix(file, outside) { // rel folded the directory away: two files of that name would be one
+				if folded {
 					passed.taint()
 				}
 				passed.add(file, name)
 			case "failed":
 				s.Failed++
 				suiteFailed = true
+				if folded {
+					passed.taint()
+				}
 				passed.failedTest(file, name)
 				addFailure(&s, wire.Failure{Name: name, File: file, Message: strings.Join(a.FailureMessages, "\n")})
 			case "pending", "skipped", "todo", "disabled":
@@ -67,6 +73,9 @@ func parseVitest(in Input) (wire.Summary, error) {
 		}
 		if !suiteFailed && suite.Status == "failed" {
 			s.Failed++
+			if folded {
+				passed.taint()
+			}
 			passed.failedTest("<suite>", file)
 			addFailure(&s, wire.Failure{Name: file, File: file, Message: suite.Message})
 		}
