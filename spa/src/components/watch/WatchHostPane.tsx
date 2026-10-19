@@ -22,6 +22,7 @@ import { usePoolCellModels } from '../../lib/pool/use-cell-models'
 import { matchPoolHost } from '../../lib/pool/cell-model'
 import { usePoolStore } from '../../lib/pool/store'
 import { useFactsHistory } from '../../lib/pool/use-facts-history'
+import { useSeriesHistory } from '../../lib/pool/use-series-history'
 import type { ZonePoint } from '../../lib/pool/history'
 import type { PoolProc } from '../../lib/pool/types'
 import { Gauge } from './Gauge'
@@ -37,13 +38,15 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
 /** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
-function Resources({ view, range, now, zones, notLocal }: { view: FleetHostView; range: HistoryRange; now: number; zones: ZonePoint[]; notLocal: boolean }) {
+function Resources({ view, range, now, zones, notLocal, rev }: { view: FleetHostView; range: HistoryRange; now: number; zones: ZonePoint[]; notLocal: boolean; rev: number }) {
   const t = useI18nStore((s) => s.t)
   const offline = isOffline(view)
   // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
   const at = Math.floor(now / stepMs(range)) * stepMs(range)
   const hostId = view.id
-  const series = useMemo(() => METRICS.map((d) => ({ def: d, points: fleetHistory.series(hostId, d.k, range, at) })), [hostId, range, at])
+  // `rev` is not read inside: a finished series load changes the history without changing anything else, so it is what makes this recompute.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const series = useMemo(() => METRICS.map((d) => ({ def: d, points: fleetHistory.series(hostId, d.k, range, at) })), [hostId, range, at, rev])
   return (
     <div data-testid="metrics">
       <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
@@ -111,6 +114,8 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const live = pool?.state === 'live' ? (poolHost?.facts ?? null) : null
   // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
   const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)
+  // 1 h / 6 h / 24 h: the daemon's 1 minute series, read once; `seriesRev` moves when a load finishes so the charts redraw at once.
+  const seriesRev = useSeriesHistory(fleetHostId, poolHost?.alias ?? null, range, live !== null, live?.mem.total_mb ?? null)
 
   // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
   // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
@@ -172,7 +177,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         ) : (<>
         {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} />}
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
-          <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} />
+          <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} rev={seriesRev} />
         </Section>
         {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>
