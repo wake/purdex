@@ -56,6 +56,10 @@ type Options struct {
 	// OnSucceeded is told, after the end is committed, of each job a worker ended with a reusable success (see reusable), with what the
 	// claim that ended it said about itself. It runs on the caller's goroutine and must be quick; it cannot fail the result. Optional.
 	OnSucceeded func(ctx context.Context, j wire.Job, p Produced)
+	// ReferenceHost is the alias of the host that is the task's reference ("" for none), asked when a job ends so that its outcome is judged
+	// by the reference of that moment. It may read manifests, so it is called before the transaction of the end, never inside it. It is
+	// called for every end of a worker's job, so it must be cheap (the daemon's reads are cached). Nil: no host is a reference.
+	ReferenceHost func(repo, task string) string
 	// LeaseS and RenewS are the lease a claim and each heartbeat hand out, and how often the worker should renew (default 60 and 15).
 	// Tests shorten them.
 	LeaseS, RenewS int

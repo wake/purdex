@@ -212,6 +212,9 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 	var out wire.Job
 	var produced Produced
 	ended := false // this call ended the job: not the echo of a result posted before
+	// the reference is asked first, but a failure of it matters only to a result that is going to end the job: the echo of one that did
+	// must still be answered, however the hook is
+	reference, refErr := q.referenceOf(ctx, id)
 	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
@@ -224,6 +227,9 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		if err := h.live(req.ClaimID); err != nil {
 			return err
 		}
+		if refErr != nil {
+			return refErr // the result is not taken; the worker posts it again
+		}
 		res := wire.Result{Exit: req.Exit, Summary: req.Summary, Host: h.worker, StartedAt: req.StartedAt, FinishedAt: req.FinishedAt, Reason: req.Reason}
 		if err := endHeld(ctx, c, h, req.State, res, req.ClaimID, q.now().UnixMilli()); err != nil {
 			return err
@@ -234,7 +240,12 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		}
 		ended = true
 		out, err = getOn(ctx, c, id, false)
-		return err
+		if err != nil {
+			return err
+		}
+		// how it came out is recorded in this transaction: it cannot be lost to a failure after the result is taken, and it is dated and
+		// judged as of this end
+		return q.recordEndedOutcome(ctx, c, out, produced, reference)
 	})
 	if err != nil {
 		return wire.Job{}, err
@@ -243,6 +254,29 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 		q.offerResult(ctx, out, produced)
 	}
 	return out, nil
+}
+
+// referenceOf is the task's reference host for a job, as Options.ReferenceHost says, asked before the transaction that ends the job (it may
+// read manifests; not with the write lock held). "" when there is no hook, no such job, or no reference. A failure to look the job up, or a
+// hook that panics, is an error: the result is not taken (the worker posts it again) rather than taken with an outcome judged without the
+// reference it should have had, which could not be recorded again.
+func (q *Queue) referenceOf(ctx context.Context, id string) (ref string, err error) {
+	if q.opt.ReferenceHost == nil {
+		return "", nil
+	}
+	var repo, task string
+	switch err := q.db.QueryRowContext(ctx, `SELECT repo_name, task FROM jobs WHERE id = ?`, id).Scan(&repo, &task); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil // Result answers that
+	case err != nil:
+		return "", err
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			ref, err = "", fmt.Errorf("queue: reference of %s/%s: %v", repo, task, r)
+		}
+	}()
+	return q.opt.ReferenceHost(repo, task), nil
 }
 
 // held is the part of a job row that decides who may do what to it.
