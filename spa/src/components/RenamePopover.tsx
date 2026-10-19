@@ -12,8 +12,9 @@ import { usePeerStore, type PeerEnvelopeFlags } from '../stores/usePeerStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { copyText } from '../lib/copy-text'
-import { reasonText } from '../lib/peer-display'
+import { peerIdText, reasonText } from '../lib/peer-display'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
+import { SeatInline } from './SeatSentence'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -101,7 +102,7 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
     if (!row?.address) return
     let failed = false
     try {
-      await copyText(row.address)
+      await copyText(peerIdText(row).value || row.address) // the address with its ref, as the status bar copies it (spec §9.3)
     } catch {
       failed = true
     }
@@ -122,11 +123,12 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
             <button
               type="button"
               data-testid={`peer-address-${pid}`}
-              title={t('peer.copy_hint')}
+              // the face and name stand for the address (spec §9.3); the tooltip and the copy keep the whole of it
+              title={`${peerIdText(row).value || row.address} — ${t('peer.copy_hint')}`}
               onClick={() => void copyAddress()}
               className="min-w-0 cursor-pointer truncate text-left font-mono text-[11px] text-text-primary"
             >
-              {row.address}
+              <SeatInline address={row.address} fallback={row.address} hostId={target.hostId} titled={false} />
             </button>
           </span>
         </DetailRow>

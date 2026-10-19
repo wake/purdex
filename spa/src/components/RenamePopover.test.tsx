@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react'
 import { RenamePopover } from './RenamePopover'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
@@ -8,6 +8,8 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { copyText } from '../lib/copy-text'
 import type { PaneContent, Tab } from '../types/tab'
+import { usePersonaStore } from '../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../lib/names/__fixtures__/personas'
 
 vi.mock('../lib/copy-text', () => ({ copyText: vi.fn(async () => {}) }))
 const copyTextMock = vi.mocked(copyText)
@@ -309,6 +311,7 @@ describe('RenamePopover peer section', () => {
     })
     usePeerStore.setState({ byHost: {}, refresh: peerRefresh })
     useSessionCwdStore.setState({ byHost: {}, refresh: cwdRefresh })
+    usePersonaStore.setState({ byHost: {} })
   })
 
   // The drift guard for ROW. Every test below renders it and asserts on what
@@ -336,12 +339,29 @@ describe('RenamePopover peer section', () => {
     expect(screen.getByTestId('peer-deliverable-p1').textContent).toBe('yes')
   })
 
-  it('copies the full address from the address row', async () => {
+  it('copies the full address with its ref from the address row', async () => {
     seedSession(H1, 'abc123')
     seedHost(H1, 'abc123', ROW)
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
     fireEvent.click(screen.getByTestId('peer-address-p1'))
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat-story-3a'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`))
+  })
+
+  // A persona's address shows as `[avatar] Name` (spec §9.3); the tooltip and the copy keep the whole address.
+  it('shows the person for a persona address, and still copies and titles the full address', async () => {
+    const c = makeCollection(['3a']) // ROW's address is `mini-lab/ai-chat-story-3a`
+    c.items[0] = makePersona('3a', { name: 'Alma' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+    seedSession(H1, 'abc123')
+    seedHost(H1, 'abc123', ROW)
+    render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+    const btn = screen.getByTestId('peer-address-p1')
+    expect(within(btn).getByText('Alma')).toBeTruthy()
+    expect(btn.textContent).not.toContain('ai-chat-story') // the address is the tooltip's, not the row's
+    // the tooltip carries the address with its ref, as the status bar's copy does; so does the copy action below
+    expect(btn.getAttribute('title')).toContain(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`)
+    fireEvent.click(btn)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`))
   })
 
   it.each([
