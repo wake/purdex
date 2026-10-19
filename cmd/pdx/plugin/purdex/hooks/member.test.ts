@@ -750,6 +750,46 @@ test('parseTeamArgs: bad spawn and ref commands are errors, never guessed', () =
   expect(err('release --all')).toBe('用法：/team release <ref>')
 })
 
+// ---- parseTeamArgs with the persona list (name pool v2 spec §5.3): the first word after /team may name the lead ----
+const NAMES = {
+  leadName: true,
+  personas: [
+    { code: 'hiro', name: 'Hiro Tanaka' },
+    { code: 'freya', name: 'Freya Lindqvist' },
+    { code: 'sato', name: 'Hiro Sato' }, // the same first word of the display name as hiro
+    { code: 'maria', name: 'María José Ortega' },
+  ],
+}
+
+// Mutation gate: match on the code only → the display-name row red; case-sensitive → the case row red; first persona wins on a tie
+// → the ambiguous row red; keep the word in the note → the note row red.
+test('parseTeamArgs with personas: a code or the first word of a display name picks the lead name, the rest is the note', () => {
+  expect(parseTeamArgs('freya 修登入 bug', NAMES)).toEqual({ kind: 'lead', note: '修登入 bug', leadName: 'freya' })
+  expect(parseTeamArgs('FREYA', NAMES)).toEqual({ kind: 'lead', note: '', leadName: 'freya' }) // case-insensitive, no note
+  expect(parseTeamArgs('maría 看一下', NAMES)).toEqual({ kind: 'lead', note: '看一下', leadName: 'maria' }) // the display name's first word
+  expect(parseTeamArgs('Sato  多個   空白', NAMES)).toEqual({ kind: 'lead', note: '多個   空白', leadName: 'sato' })
+})
+
+test('parseTeamArgs with personas: a word that matches more than one persona, or none, is a card; the daemon never picks', () => {
+  // "hiro" is the code of one persona and the first word of two display names (Hiro Tanaka, Hiro Sato): two personas match
+  expect(parseTeamArgs('hiro 做事', NAMES)).toEqual({ kind: 'lead', note: 'hiro 做事', card: true })
+  expect(parseTeamArgs('B 線 上限 2', NAMES)).toEqual({ kind: 'lead', note: 'B 線 上限 2', card: true })
+  expect(parseTeamArgs('--model opus 做事', NAMES)).toEqual({ kind: 'lead', note: '--model opus 做事', card: true })
+  expect(parseTeamArgs('', NAMES)).toEqual({ kind: 'show', card: true }) // nothing typed: a session that is no lead gets the card
+})
+
+// The other kinds are not names, whatever the list holds; and without the list (an older pdx, or a daemon without the capability)
+// everything is exactly what it was.
+test('parseTeamArgs with personas: spawn, adopt, release, kill are untouched; no list, or lead_name false, is today’s parse', () => {
+  const withSpawnName = { leadName: true, personas: [{ code: 'spawn', name: 'Spawn Person' }, { code: 'kill', name: 'Kill Person' }] }
+  expect(parseTeamArgs('spawn 修 bug', withSpawnName)).toEqual({ kind: 'spawn', task: '修 bug' })
+  expect(parseTeamArgs('kill _abc123', withSpawnName)).toEqual({ kind: 'kill', ref: '_abc123' })
+  expect(parseTeamArgs('freya 修登入 bug')).toEqual({ kind: 'lead', note: 'freya 修登入 bug' })
+  expect(parseTeamArgs('freya 修登入 bug', undefined)).toEqual({ kind: 'lead', note: 'freya 修登入 bug' })
+  expect(parseTeamArgs('freya 修登入 bug', { leadName: false, personas: NAMES.personas })).toEqual({ kind: 'lead', note: 'freya 修登入 bug' })
+  expect(parseTeamArgs('', { leadName: false, personas: [] })).toEqual({ kind: 'show' })
+})
+
 // ---- RT-3c T39: a handoff op - the member writes its handoff and goes on, it is closed by the daemon ----
 
 const HANDOFF_OP = { ...OP, mode: 'handoff' }

@@ -3301,6 +3301,120 @@ test('/lead in a lead shows pdx team plus the deprecation line', async ($, on) =
   expect((await leadCmd($, '')).text).toBe('team B 線\n成員 0' + LEAD_DEPRECATION)
 })
 
+// ---- /team <name>: the lead name at approval (name pool v2 spec §5.3, NP-4d) ----
+
+const PERSONAS = [{ code: 'hiro', name: 'Hiro Tanaka' }, { code: 'freya', name: 'Freya Lindqvist' }, { code: 'sato', name: 'Hiro Sato' }]
+const NAMES_OK = { exitCode: 0, stdout: JSON.stringify({ lead_name: true, personas: PERSONAS }) }
+const NO_SUCH_COMMAND = { exitCode: 2, stderr: 'pdx: unknown command "names"\n' } // an older pdx
+// namesWorld: an ordinary session (`pdx team` says not a lead) whose `pdx names --json` is answered by `names`.
+function namesWorld(on: any, names: (argv: string[]) => any, role = 'none') {
+  const base = pdxWith([], role)
+  return relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? NOT_LEAD : argv[0] === 'names' ? names(argv) : base(argv)) })
+}
+const personArgs = (f: any) => f.persons.map((p: string[]) => p.slice(6))
+const namesCalls = (f: any) => f.argvs.filter((a: string[]) => a[1] === 'names').map((a: string[]) => a.slice(1))
+
+// Mutation gate: do not read the list → red; leave the name out of the token → red; keep the word in the note → red.
+test('/team <persona> makes the token carry the lead name, and the rest is the note', async ($, on) => {
+  const f = namesWorld(on, () => NAMES_OK)
+  await start($, f)
+  expect((await teamCmd($, 'freya 修登入 bug')).text).toBe('已請這個 session 以「freya」申請 lead，等待核准')
+  await f.clock.advance(50)
+  expect(namesCalls(f)).toEqual([['names', '--json']])
+  expect(personArgs(f)).toEqual([['--lead-name', 'freya']])
+  expect(f.persons[0].slice(0, 6)).toEqual(['relay', 'person', '--session', 'sid-old', '--command', 'lead'])
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toContain('pdx lead request --person ' + PERSON_TOKEN)
+  expect(f.submits[0].text).toContain('「修登入 bug」')
+  expect(f.submits[0].text).not.toContain('freya 修登入 bug')
+  expect(f.submits[0].text).toContain('freya') // the agent is told which name the token carries
+})
+
+// No persona, or more than one: the card. The token is still the person's, and it asks for the card.
+for (const [typed, note] of [['修登入 bug', '修登入 bug'], ['hiro 做事', 'hiro 做事'], ['', '']]) {
+  test('/team ' + JSON.stringify(typed) + ' (no persona, more than one, or nothing) asks for the card', async ($, on) => {
+    const f = namesWorld(on, () => NAMES_OK)
+    await start($, f)
+    expect((await teamCmd($, typed)).text).toBe('已請這個 session 申請 lead，請在核准卡上選名字')
+    await f.clock.advance(50)
+    expect(personArgs(f)).toEqual([['--card']])
+    expect(f.submits.length).toBe(1)
+    const text = f.submits[0].text
+    expect(text).toContain('pdx lead request --person ' + PERSON_TOKEN)
+    expect(text).toContain('核准卡')
+    expect(text).not.toContain('會立刻生效') // it waits for the person
+    if (note) expect(text).toContain('「' + note + '」')
+    else expect(text).not.toContain('使用者打在 /team 後的補充')
+  })
+}
+
+// Mixed versions: anything but a good list from a daemon with the capability leaves /team exactly as it was: the whole text is the
+// note, no name, no card, a lead at once. Mutation gate: a failed read still sends --card → red.
+const NAMES_FALLBACKS: Array<[string, any]> = [
+  ['an older pdx with no names command', NO_SUCH_COMMAND],
+  ['the daemon unreachable', { exitCode: 20, stderr: 'down' }],
+  ['output that is not json', { exitCode: 0, stdout: 'not json' }],
+  ['an empty object', { exitCode: 0, stdout: '{}' }],
+  ['a daemon without team.lead_name.v1', { exitCode: 0, stdout: JSON.stringify({ lead_name: false, personas: [] }) }],
+  ['a persona code that is no code', { exitCode: 0, stdout: JSON.stringify({ lead_name: true, personas: [{ code: 'Bad Code', name: 'x' }] }) }],
+  ['personas that are not a list', { exitCode: 0, stdout: JSON.stringify({ lead_name: true, personas: 'x' }) }],
+]
+for (const [why, answer] of NAMES_FALLBACKS) {
+  test('/team falls back to today’s behaviour on ' + why, async ($, on) => {
+    const f = namesWorld(on, () => answer)
+    await start($, f)
+    expect((await teamCmd($, 'freya 修登入 bug')).text).toBe('已請這個 session 申請 lead，等待核准')
+    await f.clock.advance(50)
+    expect(personArgs(f)).toEqual([[]]) // the old request, no flag
+    expect(f.submits[0].text).toContain('「freya 修登入 bug」')
+    expect(f.submits[0].text).toContain('會立刻生效')
+    expect(f.submits[0].text).not.toContain('核准卡')
+  })
+}
+
+// The list is read for a session that is going to be asked to lead, and for no other: a lead gets its roster, a member the reason.
+test('a lead that types /team <persona> reads no list and gets its roster', async ($, on) => {
+  const g = leadWorld(on, AS_LEAD)
+  await start($, g)
+  expect((await teamCmd($, 'freya')).text).toBe('已經是 lead：B 線 ［B線］（上限 3）')
+  expect(g.argvs.filter((a) => a[1] === 'names')).toEqual([])
+})
+
+test('a member that types /team <persona> reads no list and is told to be released first', async ($, on) => {
+  const m = namesWorld(on, () => NAMES_OK, 'member')
+  await start($, m)
+  expect((await teamCmd($, 'freya')).text).toBe('要先被釋出才能成為 lead')
+  expect(namesCalls(m)).toEqual([])
+  expect(m.persons).toEqual([])
+})
+
+// spawn, adopt, release and kill are not names, and do not even read the list. Only a lead gets as far as the spawn, so this world
+// is a lead whose `pdx names` would answer. Mutation gate: teamSpawn reads the list → red.
+test('/team spawn in a lead reads no persona list: its token is the spawn token alone', async ($, on) => {
+  const base = pdxWith([], 'lead')
+  const f = relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? AS_LEAD(argv) : argv[0] === 'names' ? NAMES_OK : base(argv)) })
+  await start($, f)
+  expect((await teamCmd($, 'spawn 修登入 bug')).text).toBe('已請這個 session 開一個 member')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1) // it got as far as the spawn prompt
+  expect(f.persons.map((p: string[]) => p.slice(5))).toEqual([['spawn']])
+  expect(namesCalls(f)).toEqual([])
+})
+
+// A /team that waited for a relay keeps what it was: read again when it runs, so the name is the one the person typed.
+test('a queued /team <persona> runs later with the lead name', async ($, on) => {
+  const base = pdxWith([{ exitCode: 10 }])
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : argv[0] === 'names' ? NAMES_OK : base(argv)) })
+  await start($, f)
+  await relayCmd($, 'now')
+  expect((await teamCmd($, 'freya 做事')).text).toBe('接力進行中，完成後立刻執行')
+  await f.clock.advance(50)
+  await f.clock.advance(50)
+  await f.clock.settle()
+  expect(f.submits.length).toBe(1)
+  expect(f.persons.map((p: string[]) => p.slice(5))).toEqual([['relay'], ['lead', '--lead-name', 'freya']])
+})
+
 // ---- /team spawn | adopt | release | kill ----
 
 test('/team spawn <task> --model --effort: a lead gets one prompt with the token, the task as data and the given model and effort', async ($, on) => {
