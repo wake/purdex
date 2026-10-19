@@ -124,6 +124,16 @@ describe('buildGroupView', () => {
       expect(v.find((s) => s.kind === 'ungrouped')).toBeUndefined()
     })
 
+    it('whichever of the two tabs the seat was drawn from, ungrouped is the same and holds neither', () => {
+      const run = (chosen: 't1' | 't2') => buildGroupView({
+        tabs: [named('t1', 'M', 'tm-M'), named('t0', 'S', 'tm-S'), named('t2', 'M', 'tm-M')],
+        teams: [team('a', named_seat('lead', 'L', null), [named_seat('member', 'M', chosen)])],
+        manual: {}, rootOf: noRoot, hostOrder: ['h1'],
+      }).filter((x) => x.kind === 'ungrouped').flatMap((x) => (x.kind === 'ungrouped' ? x.rows.map((r) => r.tabId) : []))
+      expect(run('t1')).toEqual(['t0'])
+      expect(run('t2')).toEqual(['t0'])
+    })
+
     it('a session in no team keeps both tabs', () => {
       const v = buildGroupView({
         tabs: [named('t1', 'S', 'tm-S'), named('t2', 'S', 'tm-S')],
