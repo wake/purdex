@@ -20,9 +20,7 @@ func loadOf(f wire.Facts) wire.HostLoad {
 	}
 	for _, r := range []*float64{f.Mem.PageOutRate, f.Mem.SwapOutRate} {
 		if r != nil {
-			// each is held to the score's own ceiling (100) before they are added: two finite, valid readings of 1e308 must not
-			// add up to +Inf, which JSON cannot carry and which would fail the whole hosts answer
-			lf.PageRate += min(max(*r, 0), 100)
+			lf.PageRate += *r // two huge readings add up to +Inf, which fleet.LoadScore holds to its ceiling (TestLoadOf)
 		}
 	}
 	disk, diskOK := 0.0, false
