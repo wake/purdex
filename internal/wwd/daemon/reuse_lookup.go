@@ -12,9 +12,24 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
-// ResultCache is the read side of the result cache (store.Store.GetCacheEntry).
+// ResultCache is the result cache (store.Store): a submission is answered from it (reuse_lookup.go) and a result is filed in it
+// (reuse_store.go).
 type ResultCache interface {
 	GetCacheEntry(key string, now time.Time) (store.CacheEntry, bool, error)
+	PutCacheEntry(c store.CacheEntry, now time.Time) error
+}
+
+// referenceHost is the alias of the host that is the task's reference ("" for a task none names), from the manifests of this host's repos.
+func (d *Daemon) referenceHost(repo, task string) string {
+	if d.opts.ReferenceTasks == nil {
+		return ""
+	}
+	for _, t := range d.opts.ReferenceTasks() {
+		if t.Repo == repo && t.Task == task {
+			return t.Reference
+		}
+	}
+	return ""
 }
 
 // reuser answers a submission from a stored result (spec §4.5). The key a result is filed under holds the producing host's own
@@ -30,9 +45,10 @@ func (d *Daemon) Reuser() *reuser {
 	return &reuser{d: d}
 }
 
-func (r *reuser) now() time.Time {
-	if r.d.opts.Now != nil {
-		return r.d.opts.Now()
+// reuseNow is the clock the cache reads and writes are dated by.
+func (d *Daemon) reuseNow() time.Time {
+	if d.opts.Now != nil {
+		return d.opts.Now()
 	}
 	return time.Now()
 }
@@ -42,19 +58,12 @@ func (r *reuser) now() time.Time {
 func (r *reuser) Lookup(_ context.Context, s wire.JobSubmission) (wire.Result, bool) {
 	d := r.d
 	taskLabel := labels.TaskLabel(s.Repo.Name, s.Task)
-	reference := ""
-	if d.opts.ReferenceTasks != nil {
-		for _, t := range d.opts.ReferenceTasks() {
-			if t.Repo == s.Repo.Name && t.Task == s.Task {
-				reference = t.Reference
-			}
-		}
-	}
+	reference := d.referenceHost(s.Repo.Name, s.Task)
 	q := reuse.Query{Tree: s.Snapshot.Tree, Task: s.Task, Args: s.Args, DefHash: s.DefHash, Labels: s.Labels, Host: d.opts.Alias}
 	try := func(info wire.Info, neverQuarantined bool) (wire.Result, bool) {
 		h := reuse.HostNowFromInfo(info, taskLabel, reference != "" && reference == info.Alias, neverQuarantined)
 		key := reuse.KeyForHost(q.Tree, q.Task, q.Args, q.DefHash, info.Platform, info.Arch, h)
-		c, ok, err := d.opts.ResultCache.GetCacheEntry(key, r.now())
+		c, ok, err := d.opts.ResultCache.GetCacheEntry(key, r.d.reuseNow())
 		if err != nil {
 			log.Printf("wwd: reuse: reading the cache entry of %s: %v", info.Alias, err)
 			return wire.Result{}, false

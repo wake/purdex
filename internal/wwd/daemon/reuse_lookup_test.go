@@ -15,8 +15,17 @@ import (
 )
 
 type mapCache struct {
-	rows map[string]store.CacheEntry
-	err  error
+	rows   map[string]store.CacheEntry
+	err    error
+	putErr error
+}
+
+func (m *mapCache) PutCacheEntry(c store.CacheEntry, _ time.Time) error {
+	if m.putErr != nil {
+		return m.putErr
+	}
+	m.rows[c.Key] = c
+	return nil
 }
 
 func (m *mapCache) GetCacheEntry(key string, _ time.Time) (store.CacheEntry, bool, error) {
