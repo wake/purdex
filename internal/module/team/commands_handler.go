@@ -112,6 +112,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		}
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
+			// from the session's virtual address now (Origin.Name is the registry's raw name, which a rename leaves behind): no store
+			// to time out, and a ref-form address (no name) gives "", so "" means no persona code
+			plan.TargetCode = addressCode(o.Address)
 		}
 	}
 	if cmd.Kind == team.CommandKill && plan.Consent {
