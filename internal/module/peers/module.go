@@ -285,6 +285,8 @@ type Module struct {
 	// history, familiar and leads feed the picking rules (namepool_rules.go): this host's name history, the other hosts'
 	// familiar sets, and the lead:true persona codes.
 	nameHistory NameHistoryReader
+	nameWriter  NameHistoryWriter // the write side of nameHistory, when it has one
+	leadRenames leadRenameLedger  // the names RenameForLead set, for the undo (namesvc.go)
 	familiar    FamiliarSource
 	leads       atomic.Pointer[map[string]bool]
 	// poolGen makes the pool and the lead flags of one persona collection visible together: bindPersonas holds the write side
@@ -414,6 +416,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(HostCallerKey, m.HostCaller())
 	// The team module delivers a remote member's notices through this narrow seam (cross-host team spec §4.4, X3d).
 	c.Registry.Register(TeamNoticeKey, TeamNoticeDeliverer(m))
+	// The team module renames a lead at its approval and records the name history through this (name pool v2 spec §5.3).
+	c.Registry.Register(ipeers.NameServiceKey, ipeers.NameService(m))
 
 	return nil
 }
