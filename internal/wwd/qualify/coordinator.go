@@ -183,7 +183,7 @@ func halves(base wire.JobSubmission, t Task, candidate string) (cand, ref wire.J
 	common := func(s wire.JobSubmission, role, host string) wire.JobSubmission {
 		s.Class = wire.ClassDev
 		s.Cacheable = false
-		s.Interruptible = false
+		s.Interruptible = true // so that a newer pair (after a restart forgot this one) really stops an older one that is still running
 		s.AdHoc = false
 		s.SupersedeKey = "qualify:" + candidate + ":" + own + ":" + role
 		s.Submitter = wire.Submitter{Session: SessionName, Host: candidate}
@@ -235,6 +235,8 @@ func (c *Coordinator) settle(ctx context.Context) {
 		rj, rerr := c.cfg.Queue.Get(ctx, p.ref)
 		switch {
 		case errors.Is(cerr, queue.ErrNotFound) || errors.Is(rerr, queue.ErrNotFound):
+			// the half that is still there is of no use now: stop it (a half we could not read, or that is already over, is left alone)
+			c.cancelQuietly(ctx, p, cerr != nil || cj.State.Terminal(), rerr != nil || rj.State.Terminal())
 			c.finish(label, p, Verdict{Outcome: OutcomeVoid, Why: "a half of the pair is gone from the queue"})
 			continue
 		case cerr != nil || rerr != nil:

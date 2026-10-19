@@ -189,7 +189,8 @@ func TestTickStartsAPairWithTheRightHalves(t *testing.T) {
 		t.Fatalf("the halves do not share one snapshot: %+v %+v", cand.Snapshot, ref.Snapshot)
 	}
 	for name, s := range map[string]wire.JobSubmission{"candidate": cand, "reference": ref} {
-		if s.Class != wire.ClassDev || s.Cacheable || s.Interruptible || s.AdHoc || s.Submitter.Session != SessionName {
+		// interruptible on purpose: a newer pair's supersede key must be able to stop an older pair that is still running
+		if s.Class != wire.ClassDev || s.Cacheable || !s.Interruptible || s.AdHoc || s.Submitter.Session != SessionName {
 			t.Errorf("%s: %+v", name, s)
 		}
 	}
@@ -375,6 +376,9 @@ func TestAHalfGoneFromTheQueueVoidsThePairAndAReadErrorWaits(t *testing.T) {
 	r.c.Tick(ctx())
 	if inf, rec := r.c.Status(); len(inf) != 0 || len(rec) != 1 || rec[0].Outcome != OutcomeVoid {
 		t.Fatalf("%+v %+v", inf, rec)
+	}
+	if !slices.Contains(r.q.cancels, "j2") || slices.Contains(r.q.cancels, "j1") {
+		t.Fatalf("the half that is still there must be stopped, and the gone one not asked about: %v", r.q.cancels)
 	}
 }
 
