@@ -3123,5 +3123,19 @@
   "pool.error.not_found": "This job is gone (kept for 7 days)",
   "pool.error.host_not_local": "This host's history cannot be read through this daemon yet",
   "pool.error.forbidden": "This connection uses a device token: view only",
-  "pool.error.bad_request": "Malformed request"
+  "pool.error.bad_request": "Malformed request",
+  "pool.card.unknown": "Unknown",
+  "pool.card.worker": "Worker",
+  "pool.card.worker_on": "On · heavy {{hr}}/{{hs}} · light {{lr}}/{{ls}}",
+  "pool.card.worker_off": "Off",
+  "pool.card.headroom": "Takes",
+  "pool.card.headroom_value": "heavy {{h}} · light {{l}}",
+  "pool.card.owner": "Owner",
+  "pool.card.owner_active": "At this machine ({{s}} s idle)",
+  "pool.card.owner_idle": "Away (idle {{s}} s)",
+  "pool.card.sessions": "Sessions",
+  "pool.card.sessions_value": "room for {{n}} more",
+  "pool.card.fallback": "wwd is not answering (since {{time}})",
+  "pool.card.fallback_nosince": "wwd is not answering",
+  "pool.card.psi": " · PSI {{some}}/{{full}}"
 }

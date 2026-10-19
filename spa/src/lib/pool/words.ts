@@ -3,7 +3,7 @@
 import type { PoolErrorCode } from './errors'
 import type { PoolZone } from './types'
 
-type T = (key: string, opts?: Record<string, unknown>) => string
+type T = (key: string, opts?: Record<string, string | number>) => string
 
 /** Headroom reason codes (#3478, spec §3.2). `exception:<name>` is the one family: it carries the exception's name. */
 export const REASON_CODES = ['worker_off', 'zone_warning', 'zone_danger', 'zone_unknown', 'owner_active', 'slots_full', 'gate_full', 'unknown'] as const
