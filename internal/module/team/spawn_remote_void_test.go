@@ -135,8 +135,13 @@ func TestRemoteSpawnVoid_ExactlyOneOfTheVoidAndTheRegistrationWins(t *testing.T)
 			t.Fatalf("op = %+v, want done", op)
 		}
 		code, body := f.postCmd(leadPrincipal(), voidOf(cmdUUID2, cmdUUID1))
-		if code != http.StatusBadRequest || errCode(t, body) != team.ErrCommandUnsupportedKind {
-			t.Fatalf("void of a registered spawn = %d %s, want 400 command_unsupported_kind", code, body)
+		// 200, not unsupported_kind: the lead host's outbox would hold that refusal for ever as "the host was downgraded" (codex R2)
+		if code != http.StatusOK || outcomeState(t, body) != "too_late" {
+			t.Fatalf("void of a registered spawn = %d %s, want 200 too_late", code, body)
+		}
+		// not recorded: a late copy of the spawn is still the stored answer, not command_void
+		if code, body := f.postCmd(leadPrincipal(), spawnCommand(cmdUUID1, root)); code != http.StatusOK || outcomeState(t, body) == "" {
+			t.Fatalf("late spawn after a too-late void = %d %s", code, body)
 		}
 		if row, ok, _ := f.m.store.RemoteMember(cmdUUID1); !ok || row.State != remoteActive {
 			t.Fatalf("the registered member was touched: %+v %v", row, ok)

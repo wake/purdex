@@ -18,8 +18,8 @@ import (
 //   - applied spawn whose op still runs: the op fails (running → failed, abandoned) in this transaction, so the runner's
 //     registration — a compare-and-set on a running op — can no longer add a member; the caller releases its reserved name
 //     and stops its session once this commits (#3537). Exactly one of the void and the registration wins;
-//   - applied spawn whose op already failed: nothing to undo; whose member registered (done): refused, a registered
-//     member is undone by a kill, which is X4a's;
+//   - applied spawn whose op already failed: nothing to undo; whose member registered (done): answered too_late and
+//     left alone, a registered member is undone by a kill, which is X4a's;
 //   - anything that is no adopt/spawn: refused.
 func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	c := p.cmd
@@ -96,7 +96,10 @@ func voidSpawnIn(tx *sql.Tx, p CommandPlan, target string, status int) (CommandR
 		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "that command belongs to another team"), nil
 	}
 	if found && state == string(team.SpawnDone) {
-		return refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "undoing a registered spawn is not supported by this version"), nil
+		// Too late: the member registered first and undoing it is X4a's. Answered 200 so the lead host settles it: a refusal
+		// with unsupported_kind would be read by its outbox as a downgraded host and sent again for ever. The void is NOT
+		// recorded, so a late copy of the spawn still answers its stored `accepted` and not command_void.
+		return okResult(map[string]string{"state": "too_late"})
 	}
 	outcome := "ok"
 	var ended []string
