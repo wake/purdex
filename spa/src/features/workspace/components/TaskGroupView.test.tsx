@@ -13,6 +13,9 @@ vi.mock('../../../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: str
 const readFirstPage = vi.fn(async (_hostId: string) => ({}))
 vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: vi.fn() }))
 
+const openTeamSeat = vi.fn()
+vi.mock('../../../lib/team/team-actions', () => ({ openTeamSeat: (...a: unknown[]) => openTeamSeat(...a) }))
+
 import { TaskGroupView } from './TaskGroupView'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../store'
@@ -42,7 +45,7 @@ const mount = () => render(<TaskGroupView activeTabId={null} onSelectTab={onSele
 
 beforeEach(() => {
   cleanup()
-  onSelectTab.mockClear(); loadIfSupported.mockClear(); readFirstPage.mockClear()
+  onSelectTab.mockClear(); loadIfSupported.mockClear(); readFirstPage.mockClear(); openTeamSeat.mockClear()
   useI18nStore.getState().setLocale('zh-TW')
   useUISettingsStore.setState({ dynamicTabName: false, tabNameTooltipMode: 'both', tabIndicatorStyle: 'badge', ccIconVariant: 'bot', codexIconVariant: 'openai', hostBadgeSidebarEnabled: false } as never)
   useAgentStore.setState({ statuses: {}, unread: {}, subagents: {}, agentTypes: {}, oscTitles: {} } as never)
@@ -103,6 +106,61 @@ describe('the task-group view', () => {
     mount()
     expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
     expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(3) // t1 t2 t3; t5 shows no session
+  })
+
+  const rosterSession = (id: string, tmux: string, over: Record<string, unknown> = {}) => ({ session_id: id, ref: `_${id}`, address: `mlab/${id}-x`, live: true, tmux_session: tmux, title: `title ${id}`, ...over })
+  const teamOf = (lead: ReturnType<typeof rosterSession>, members: ReturnType<typeof rosterSession>[]) => ({
+    id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead,
+    members: members.map((m) => ({ ...m, state: 'active', origin: 'spawned', joined_at: 1 })),
+  })
+
+  it('a team is a group of its own: the lead, its members under it; a seat\'s row opens the seat, not just a tab', () => {
+    useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-S2')]) as never])
+    mount()
+    const secs = sections()
+    expect(secs[0].getAttribute('data-testid')).toBe('task-group-team')
+    expect(within(secs[0]).getByTestId('task-group-name')).toHaveTextContent('Payments')
+    expect(within(secs[0]).getByTestId('task-group-count')).toHaveTextContent('2')
+    expect(within(secs[0]).getAllByTestId('inline-tab-row')).toHaveLength(2)
+    expect(within(secs[1]).getAllByTestId('inline-tab-row')).toHaveLength(1) // t3 is nobody's
+    fireEvent.click(within(secs[0]).getAllByTestId('inline-tab-row')[1])
+    expect(openTeamSeat).toHaveBeenCalledWith(expect.stringContaining('team-1'), 'M')
+    expect(onSelectTab).not.toHaveBeenCalled()
+  })
+
+  it('two seats in the panes of one split tab are two rows, each with its own title, each opening its own seat', () => {
+    const split = (id: string, children: unknown[]) => ({ type: 'split', id, direction: 'h', children, sizes: [50, 50] })
+    const leaf = (id: string, code: string) => ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h1', sessionCode: code, mode: 'terminal', cachedName: `name-${code}`, tmuxInstance: 'I' } } })
+    act(() => {
+      useTabStore.setState({ tabs: { t6: { id: 't6', kind: 'tmux-session', locked: false, pinned: false, layout: split('s6', [leaf('p6a', 'S6'), leaf('p6b', 'S7')]) } } } as never)
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t6'], activeTabId: null, moduleConfig: {} }] } as never)
+      useSessionStore.setState({ sessions: { h1: [{ code: 'S6', name: 'name-S6' }, { code: 'S7', name: 'name-S7' }] as never } })
+      useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S6'), [rosterSession('M', 'name-S7')]) as never])
+    })
+    mount()
+    const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('title L'), expect.stringContaining('title M')])
+    fireEvent.click(rows[1])
+    expect(openTeamSeat).toHaveBeenLastCalledWith(expect.any(String), 'M')
+    fireEvent.click(rows[0])
+    expect(openTeamSeat).toHaveBeenLastCalledWith(expect.any(String), 'L')
+  })
+
+  it('a seat no open tab shows is listed, and a click opens it', () => {
+    useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-gone')]) as never])
+    mount()
+    const closed = within(screen.getByTestId('task-group-team')).getByTestId('task-group-seat-closed')
+    expect(closed).toHaveTextContent('title M')
+    fireEvent.click(closed)
+    expect(openTeamSeat).toHaveBeenCalledWith(expect.any(String), 'M')
+  })
+
+  it('a stored value that is not a list says so — no count it cannot know', () => {
+    setGroups('h1', [], { invalid: true })
+    mount()
+    const unsafe = screen.getByTestId('task-group-unsafe')
+    expect(unsafe).toHaveTextContent('資料格式讀不懂')
+    expect(unsafe.textContent).not.toMatch(/\d 筆/)
   })
 
   it('a click on a session row switches to its tab', () => {

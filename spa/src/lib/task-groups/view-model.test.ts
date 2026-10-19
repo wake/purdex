@@ -86,9 +86,9 @@ describe('buildGroupView', () => {
   })
 
   it('a host that cannot be written to (unsafe) says so on its block, even with no groups to show', () => {
-    const unsafe = { count: 2, reasons: ['root "x" is twice in the group'] }
+    const unsafe = { count: 2, reasons: ['root "x" is twice in the group'], invalid: false }
     const v = buildGroupView({ tabs: [], teams: [], manual: { h1: { groups: [], unsafe } }, rootOf: noRoot, hostOrder: ['h1'] })
-    expect(v).toEqual([{ kind: 'unsafe', hostId: 'h1', count: 2, reasons: ['root "x" is twice in the group'] }])
+    expect(v).toEqual([{ kind: 'unsafe', hostId: 'h1', count: 2, reasons: ['root "x" is twice in the group'], invalid: false }])
   })
 
   it('a team seat with no open tab is still listed, not openable; a tab not showing a tmux session is not here at all', () => {

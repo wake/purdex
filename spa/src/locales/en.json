@@ -2077,6 +2077,7 @@
   "settings.profile.local.name_preview": "Will be saved as \"{{name}}\"",
   "taskgroups.empty": "No sessions",
   "taskgroups.ungrouped": "Ungrouped",
+  "taskgroups.invalid": "The task groups stored on this host are not in a format this App can read, so they cannot be changed for now",
   "taskgroups.unsafe": "{{n}} task groups on this host could not be read, so they cannot be changed for now",
   "sidebar.view.toggle": "Task-group view",
   "settings.profile.local.team_icon": "Team icon",

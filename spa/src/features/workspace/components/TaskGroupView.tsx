@@ -21,6 +21,7 @@ import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/tas
 import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
+import { openTeamSeat } from '../../../lib/team/team-actions'
 import { InlineTab } from './InlineTab'
 
 interface Props {
@@ -83,7 +84,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     for (const [hostId, entry] of Object.entries(groupsByHost)) {
       if (!taskGroupsSupported(hostId) || !entry.loaded) continue
       const unsafe = entry.invalid || entry.dropped !== null
-        ? { count: entry.dropped?.count ?? 0, reasons: entry.dropped?.reasons ?? [] }
+        ? { count: entry.dropped?.count ?? 0, reasons: entry.dropped?.reasons ?? [], invalid: entry.invalid }
         : null
       out[hostId] = { groups: entry.groups, unsafe }
     }
@@ -96,21 +97,28 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     [sessionTabs, teams, manual, roots, hostOrder],
   )
 
-  const renderRow = (row: GroupRow, leadOfTeam?: string) => {
+  // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
+  const renderRow = (row: GroupRow, teamKey?: string, isLead = false) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
+    const seat = row.seat
+    const openSeat = seat && teamKey ? () => { openTeamSeat(teamKey, seat.session.session_id) } : undefined
     if (tab) {
       return (
         <InlineTab
-          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag leadOfTeam={leadOfTeam}
-          onSelect={onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
+          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag leadOfTeam={isLead ? teamKey : undefined}
+          seatOverride={seat ? { address: seat.session.address, title: seat.label } : undefined}
+          onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
     }
-    // A team seat no open tab shows: listed, not openable.
+    // A team seat no open tab shows: listed, and a click opens it.
     return (
-      <div key={row.key} data-testid="task-group-seat-closed" className="mx-2 pl-[18px] pr-1.5 py-1 text-xs text-text-muted truncate" title={row.seat?.session.address}>
-        {row.seat?.label}
-      </div>
+      <button
+        key={row.key} type="button" data-testid="task-group-seat-closed" onClick={openSeat}
+        className="mx-2 pl-[18px] pr-1.5 py-1 text-left text-xs text-text-muted truncate cursor-pointer hover:bg-surface-hover rounded-md" title={seat?.session.address}
+      >
+        {seat?.label}
+      </button>
     )
   }
 
@@ -127,7 +135,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
               key={`unsafe:${section.hostId}`} data-testid="task-group-unsafe" role="status" title={section.reasons.join('\n')}
               className="mx-3 my-0.5 text-[11px] text-status-warning-text"
             >
-              {t('taskgroups.unsafe', { n: section.count })}
+              {section.invalid ? t('taskgroups.invalid') : t('taskgroups.unsafe', { n: section.count })}
             </div>
           )
         }
@@ -137,8 +145,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
               <GroupHeader color={teamColor(section.view.colorIndex)} name={name} count={count} strong />
-              {renderRow(section.lead, section.view.key)}
-              <div className="ml-4 border-l border-border-subtle">{section.members.map((m) => renderRow(m))}</div>
+              {renderRow(section.lead, section.view.key, true)}
+              <div className="ml-4 border-l border-border-subtle">{section.members.map((m) => renderRow(m, section.view.key))}</div>
             </section>
           )
         }

@@ -8,6 +8,7 @@ import { HoverTooltip } from '../../../components/HoverTooltip'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { Avatar } from '../../../components/Avatar'
 import { useSessionSeat } from '../../../hooks/useSessionSeat'
+import { useSeat } from '../../../lib/names/seat'
 import { useHostLook } from '../../../lib/host-look'
 import { resolveHostColors } from '../../../lib/host-color'
 import { getPrimaryPane } from '../../../lib/pane-tree'
@@ -32,6 +33,8 @@ interface Props {
   leadOfTeam?: string
   /** Not a drag source: the task-group view lists the sessions by group, and a drop there means nothing. */
   noDrag?: boolean
+  /** The row stands for a team seat (the task-group view): its persona comes from the seat's address and its title is the seat's label — a split tab can carry several seats, each with its own row. */
+  seatOverride?: { address: string; title: string }
 }
 
 export function InlineTab({
@@ -45,6 +48,7 @@ export function InlineTab({
   onRename,
   leadOfTeam,
   noDrag = false,
+  seatOverride,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
@@ -79,7 +83,10 @@ export function InlineTab({
   // Who the row is (name pool v2 spec §9.6): the persona of the session the tab shows, when the App already knows it (useSessionSeat reads, never asks). With none the row is as it was.
   const primary = getPrimaryPane(tab.layout).content
   const tmux = primary.kind === 'tmux-session' && !primary.terminated ? primary : null
-  const seat = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
+  const shownTitle = seatOverride?.title || displayTitle
+  const bySession = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
+  const bySeat = useSeat(seatOverride?.address ?? '')
+  const seat = seatOverride ? bySeat : bySession
   const look = useHostLook(tmux?.hostId ?? null)
   const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
 
@@ -180,9 +187,9 @@ export function InlineTab({
         {seat !== null ? (
           <>
             <span data-testid="inline-tab-name" className="font-semibold">{seat.name}</span>
-            {displayTitle !== '' && displayTitle !== seat.name && <span data-testid="inline-tab-subtitle" className="ml-1.5 text-text-muted">{displayTitle}</span>}
+            {shownTitle !== '' && shownTitle !== seat.name && <span data-testid="inline-tab-subtitle" className="ml-1.5 text-text-muted">{shownTitle}</span>}
           </>
-        ) : displayTitle}
+        ) : shownTitle}
       </span>
       {/*
         placement=right mirrors ActivityBarNarrow's pattern — the sidebar is an

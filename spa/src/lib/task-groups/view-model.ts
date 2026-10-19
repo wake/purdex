@@ -31,10 +31,11 @@ export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: 
 export interface ManualSection { kind: 'manual'; key: string; hostId: string; group: TaskGroup; rows: GroupRow[] }
 export interface UngroupedSection { kind: 'ungrouped'; key: 'ungrouped'; rows: GroupRow[] }
 /** The host's groups cannot be written to (the daemon left rows out, or the value is not a list): said on that host's block. */
-export interface UnsafeSection { kind: 'unsafe'; hostId: string; count: number; reasons: string[] }
+/** `invalid`: the stored value is not a list of groups at all (a count would be a lie); otherwise `count` rows were left out. */
+export interface UnsafeSection { kind: 'unsafe'; hostId: string; count: number; reasons: string[]; invalid: boolean }
 export type GroupSection = TeamSection | ManualSection | UngroupedSection | UnsafeSection
 
-export interface HostGroups { groups: TaskGroup[]; unsafe: { count: number; reasons: string[] } | null }
+export interface HostGroups { groups: TaskGroup[]; unsafe: { count: number; reasons: string[]; invalid: boolean } | null }
 
 export interface GroupViewInput {
   tabs: readonly SessionTab[]
@@ -66,7 +67,7 @@ export function buildGroupView(input: GroupViewInput): GroupSection[] {
   for (const hostId of hosts) {
     const entry = input.manual[hostId]
     if (!entry) continue
-    if (entry.unsafe) out.push({ kind: 'unsafe', hostId, count: entry.unsafe.count, reasons: entry.unsafe.reasons })
+    if (entry.unsafe) out.push({ kind: 'unsafe', hostId, count: entry.unsafe.count, reasons: entry.unsafe.reasons, invalid: entry.unsafe.invalid })
     const groups = [...entry.groups].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))
     for (const group of groups) {
       const roots = new Set(group.roots)
