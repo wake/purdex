@@ -43,6 +43,8 @@ type API interface {
 	StopException(ctx context.Context, name string) error
 	Usage(ctx context.Context, q client.UsageQuery) (wire.UsageResponse, error)
 	EarnedLabels(ctx context.Context) (list wire.EarnedLabelList, known bool, err error)
+	QuarantineLabel(ctx context.Context, label string) error
+	ReleaseLabel(ctx context.Context, label string) error
 }
 
 // Env is what the commands need from their surroundings.

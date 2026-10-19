@@ -156,8 +156,25 @@ export function createJobsDriver(deps: JobsDriverDeps) {
   const primaryOf = (origin: string): string | undefined => candidates(origin, deps.topology())[0]?.daemonId
 
   /** A host-events connection opened or came back: the origins its daemon answers for are read after their cursor. */
+  /** Daemons whose connection opened while they did not count as a source yet (their capabilities were being read again): caught up as soon as they do. */
+  const waiting = new Set<string>()
+
   function hostOpened(hostId: string) {
-    for (const origin of deps.topology().origins) if (primaryOf(origin) === hostId) void refresh(origin)
+    const mine = deps.topology().origins.filter((origin) => primaryOf(origin) === hostId)
+    if (mine.length === 0) waiting.add(hostId)
+    else for (const origin of mine) void refresh(origin)
+  }
+
+  /** The daemons that opened too early: read their origins after the cursor now that they are sources. */
+  function retryOpened() {
+    if (waiting.size === 0) return
+    const topo = deps.topology()
+    for (const hostId of [...waiting]) {
+      const mine = topo.origins.filter((origin) => primaryOf(origin) === hostId)
+      if (mine.length === 0) continue
+      waiting.delete(hostId)
+      for (const origin of mine) void refresh(origin)
+    }
   }
 
   /**
@@ -183,6 +200,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
 
   /** Reads what is known to exist and has not been read, what a failure left behind, and what was read through a source that is no longer the best one. */
   function sync() {
+    retryOpened()
     const topo = deps.topology()
     for (const origin of topo.origins) syncOrigin(origin, topo)
   }
@@ -209,7 +227,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       if (released || mine !== epoch) return
       released = true
       watchers -= 1
-      if (watchers === 0) stop()
+      if (watchers === 0) idle()
     }
   }
 
@@ -219,7 +237,8 @@ export function createJobsDriver(deps: JobsDriverDeps) {
   }
 
   /** Clears every timer (the App is closing, or a test ends). */
-  function stop() {
+  /** Nobody watches any more (or the driver is shut down): the poll, the waiting retries and the looks that waited for a read end. A connection still waiting to be caught up is kept: that needs no view. */
+  function idle() {
     epoch += 1
     watchers = 0
     stopPolling()
@@ -229,7 +248,13 @@ export function createJobsDriver(deps: JobsDriverDeps) {
     }
   }
 
-  return { jobChanged, hostOpened, sync, watch, stop }
+  /** Clears every timer and forgets the connections waiting to be caught up (the App is closing, or a test ends). */
+  function stop() {
+    waiting.clear()
+    idle()
+  }
+
+  return { jobChanged, hostOpened, retryOpened, sync, watch, stop }
 }
 
 export type JobsDriver = ReturnType<typeof createJobsDriver>

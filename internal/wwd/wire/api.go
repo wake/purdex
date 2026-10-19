@@ -276,6 +276,14 @@ type PoolHost struct {
 	Load            *HostLoad        `json:"load"`
 }
 
+// PoolHostExceptions is GET /api/pool/hosts/{alias}/exceptions: the exceptions in force on a host with their holds (facts' exceptions[]
+// has none). Known is false when the host's wwd predates the route (it answered 404): nothing is claimed about it, and Exceptions is empty.
+type PoolHostExceptions struct {
+	Host       string      `json:"host"`
+	Known      bool        `json:"known"`
+	Exceptions []Exception `json:"exceptions"`
+}
+
 type PoolHostsResponse struct {
 	Hosts []PoolHost `json:"hosts"`
 }

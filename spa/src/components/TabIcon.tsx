@@ -3,7 +3,7 @@ import type { AgentStatus, BackgroundKind, SubagentRef } from '../stores/useAgen
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { TabStatusIndicator } from './TabStatusIndicator'
 import { SubagentDots } from './SubagentDots'
-import type { FleetWaiter } from '../lib/fleet/types'
+import type { QueuedItem } from '../lib/watch/queued-sessions'
 import { BackgroundSymbol } from './BackgroundSymbol'
 
 function UnreadPip({ size = 5 }: { size?: number }) {
@@ -38,7 +38,7 @@ interface Props {
   /** The tab's highest background-work kind (N6): a small symbol at the top-left of the agent icon (of the dot in `dot`). */
   background?: BackgroundKind
   /** The waiters behind the queue hourglass (its tooltip). */
-  backgroundWaiters?: FleetWaiter[]
+  backgroundWaiters?: QueuedItem[]
 }
 
 export function TabIcon({

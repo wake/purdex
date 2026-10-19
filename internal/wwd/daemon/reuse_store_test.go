@@ -57,6 +57,20 @@ func TestAFiledResultIsFoundByTheLookup(t *testing.T) {
 	}
 }
 
+// A result and its log that arrive together can each offer the result: the second filing of one key is the same entry, not a second row
+// (store.TestCacheEntryRoundTripAndReplace is the real store's side of it).
+func TestFilingTheSameResultTwiceKeepsOneEntry(t *testing.T) {
+	info := peerInfo("mserv", "linux", mservLabels, fpMserv)
+	r, cache := rigFor(t, info, info, "")
+	cache.rows = map[string]store.CacheEntry{}
+	for i := 0; i < 2; i++ {
+		r.d.FileResult(t.Context(), succeededJob("mserv"), producedBy(info))
+	}
+	assert.Len(t, cache.rows, 1)
+	_, ok := r.Lookup(t.Context(), submissionFor())
+	assert.True(t, ok)
+}
+
 // The host's own results too: it has no standing for the task, so only its own submission is answered (spec §4.5 condition 4).
 func TestALocalResultIsFiledAndAnswersOnlyItsOwnHost(t *testing.T) {
 	cache := &mapCache{rows: map[string]store.CacheEntry{}}

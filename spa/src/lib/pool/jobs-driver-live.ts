@@ -9,11 +9,14 @@ import { usePoolStore } from './store'
 
 export const JOBS_CAPABILITY = 'jobs.v1'
 
-/** The connected daemons announcing `jobs.v1`, in host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here. */
-function jobsDaemons(): string[] {
+/**
+ * The connected daemons announcing `jobs.v1`, in host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here; and a reconnect marks the entry stale (`fetchedAt` 0, data kept)
+ * until `/api/info` is read again, so what is in it then is the last connection's and is not believed.
+ */
+export function jobsDaemons(): string[] {
   const { byHost } = useNexHostStore.getState()
   const { hostOrder, runtime } = useHostStore.getState()
-  return hostOrder.filter((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities?.includes(JOBS_CAPABILITY))
+  return hostOrder.filter((id) => runtime[id]?.status === 'connected' && (byHost[id]?.fetchedAt ?? 0) > 0 && byHost[id]?.daemonCapabilities?.includes(JOBS_CAPABILITY))
 }
 
 export function liveTopology(): JobsTopology {
@@ -39,6 +42,19 @@ export const jobsDriver = createJobsDriver({
   rand: Math.random,
   known: (origin) => Object.hasOwn(useJobsStore.getState().byOrigin, origin),
 })
+
+/**
+ * Always on (the event hook starts it): a connection that opened before its daemon counted as a source (a reconnect marks its capabilities stale until they are read again) is caught up
+ * as soon as the capabilities, the connections or the pool's hosts say it is one — with or without a view open.
+ */
+export function startJobsCatchUp(): () => void {
+  const unsubscribes = [
+    usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) jobsDriver.retryOpened() }),
+    useNexHostStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) jobsDriver.retryOpened() }),
+    useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime) jobsDriver.retryOpened() }),
+  ]
+  return () => { for (const u of unsubscribes) u() }
+}
 
 /**
  * A view that shows jobs mounts: the driver polls for it, and an origin the pool lists later — or one whose daemon announces `jobs.v1` or connects later (a connection opens before its capabilities are read) — is read when it appears.

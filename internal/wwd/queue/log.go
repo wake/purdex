@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 const (
@@ -18,6 +20,9 @@ const (
 	// defaultMaxLog caps one uploaded log. A worker is trusted with a claim, not with the origin's disk; a test run's output is
 	// kilobytes to a few megabytes. (Queue.maxLog, so a test can lower it.)
 	defaultMaxLog = 64 << 20
+	// lateLogWindow: a result is offered for reuse on a log that comes after it only within this long of its end, so that the entry (kept
+	// for the log retention from the time it is made) is gone before the job is: retention minus logRetention.
+	lateLogWindow = retention - logRetention
 )
 
 // ErrLogTooLarge: the uploaded log is bigger than the cap; nothing of it is kept.
@@ -68,6 +73,9 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	// being replaced.
 	final, backup := q.logPath(id), tmp.Name()+".prev"
 	var placed, hadOld bool
+	var late wire.Job // the job whose result was posted before its log, as it is once the log is in
+	var lateProduced Produced
+	offer := false
 	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
@@ -93,6 +101,22 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 				return err
 			}
 			*changed = append(*changed, id)
+			if !h.hasLog { // the first log of an ended job: its result could not be offered for reuse without one (see offerResult)
+				var fin sql.NullInt64
+				if err := c.QueryRowContext(ctx, `SELECT finished_at FROM jobs WHERE id = ?`, id).Scan(&fin); err != nil {
+					return err
+				}
+				if !fin.Valid || q.now().Sub(time.UnixMilli(fin.Int64)) > lateLogWindow {
+					return nil // too late: an entry made now would outlive the job it points at
+				}
+				if late, err = getOn(ctx, c, id, false); err != nil {
+					return err
+				}
+				if lateProduced, err = producedOn(ctx, c, id); err != nil {
+					return err
+				}
+				offer = true
+			}
 		}
 		return nil
 	})
@@ -107,6 +131,9 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 	}
 	if hadOld {
 		_ = os.Remove(backup)
+	}
+	if offer {
+		q.offerResult(ctx, late, lateProduced)
 	}
 	return nil
 }

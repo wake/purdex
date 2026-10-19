@@ -3,12 +3,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { hostEndpoint, useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from './store'
-import { liveTopology, watchJobs, jobsDriver } from './jobs-driver-live'
+import { liveTopology, watchJobs, startJobsCatchUp, jobsDriver } from './jobs-driver-live'
 
 const A = 'app-a'
 const B = 'app-b'
 const hostCfg = (id: string, extra: object = {}) => ({ id, name: id, ip: '100.64.0.2', port: 7860, token: 't', order: 0, ...extra })
-const entry = (caps: string[]) => ({ phase: 'ready', daemonCapabilities: caps })
+const entry = (caps: string[], fetchedAt = 1) => ({ phase: 'ready', fetchedAt, daemonCapabilities: caps })
 const poolHost = (alias: string, host_id: string) => ({ alias, host_id }) as never
 
 const verified = (id: string, daemonId: string) => ({ status: 'connected', daemonIdVerified: { endpoint: hostEndpoint(hostCfg(id)), daemonId } })
@@ -50,6 +50,34 @@ describe('liveTopology', () => {
     useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1']), [B]: entry(['pool.v1']) } } as never)
     expect(liveTopology()).toMatchObject({ forwarders: [], ownDaemon: {} })
+  })
+})
+
+describe('liveTopology and a connection that came back', () => {
+  it('a daemon whose capabilities are the last connection\'s (the cache was marked stale: fetchedAt 0) is not counted until they are read again', () => {
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 0), [B]: entry(['jobs.v1'], 0) } } as never)
+    expect(liveTopology()).toMatchObject({ forwarders: [], ownDaemon: {} })
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 5), [B]: entry(['jobs.v1'], 0) } } as never)
+    expect(liveTopology().forwarders).toEqual([A])
+  })
+})
+
+describe('startJobsCatchUp', () => {
+  it('looks again at the connections that opened early when the pool\'s hosts, the capabilities or the connections change — and no more once stopped', () => {
+    const retry = vi.spyOn(jobsDriver, 'retryOpened').mockImplementation(() => {})
+    const stop = startJobsCatchUp()
+    usePoolStore.setState({ hosts: [poolHost('mlab', A)] })
+    expect(retry).toHaveBeenCalledTimes(1)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1']) } } as never)
+    expect(retry).toHaveBeenCalledTimes(2)
+    useHostStore.setState({ runtime: { [A]: { status: 'reconnecting' } } } as never)
+    expect(retry).toHaveBeenCalledTimes(3)
+    stop()
+    usePoolStore.setState({ hosts: [] })
+    useNexHostStore.setState({ byHost: {} } as never)
+    useHostStore.setState({ runtime: {} } as never)
+    expect(retry).toHaveBeenCalledTimes(3)
+    retry.mockRestore()
   })
 })
 

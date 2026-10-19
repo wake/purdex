@@ -345,6 +345,23 @@ func (s *HostState) activeLocked() []wire.FactExc {
 	return out
 }
 
+// Exceptions is the exceptions in force as they were made, holds, allow and flags included (oldest first): what facts' exceptions[] does
+// not carry. The ones whose time has come are ended first, as Snapshot does.
+func (s *HostState) Exceptions() []wire.Exception {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(s.opts.Now())
+	out := make([]wire.Exception, 0, len(s.excs))
+	for _, e := range s.sorted() {
+		x := e.Exception
+		if x.Holds == nil {
+			x.Holds = []wire.Hold{}
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
 // Holds is the exceptions in force as headroom sees them: each holds heavy work,
 // and light work too when it lists light.
 func (s *HostState) Holds() []derived.Hold {

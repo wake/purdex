@@ -35,6 +35,7 @@ export function HistoryPage(_props: PaneRendererProps) {
               const c = record.paneContent
               if (c.kind === 'watch-host') return openWatchArea({ host: c.fleetHostId })
               if (c.kind === 'watch-guardian' || c.kind === 'watch-events') return openWatchArea({ tab: 'guardian' })
+              if (c.kind === 'watch-jobs') return openWatchArea({ tab: 'jobs' })
               if (isOpen) {
                 setActiveTab(record.tabId)
               } else {

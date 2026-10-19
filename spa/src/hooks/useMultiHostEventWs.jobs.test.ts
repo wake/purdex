@@ -16,10 +16,11 @@ vi.mock('../lib/host-api', async (orig) => ({
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn() }))
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn(() => ({ close: vi.fn() })) }))
 vi.mock('../lib/team/approval-ws', () => ({ handleApprovalEvent: vi.fn() }))
-vi.mock('../lib/pool/jobs-driver-live', () => ({ jobsDriver: { jobChanged: vi.fn(async () => {}), hostOpened: vi.fn() } }))
+const { stopCatchUp } = vi.hoisted(() => ({ stopCatchUp: vi.fn() }))
+vi.mock('../lib/pool/jobs-driver-live', () => ({ jobsDriver: { jobChanged: vi.fn(async () => {}), hostOpened: vi.fn() }, startJobsCatchUp: vi.fn(() => stopCatchUp) }))
 
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
-const { jobsDriver } = await import('../lib/pool/jobs-driver-live')
+const { jobsDriver, startJobsCatchUp } = await import('../lib/pool/jobs-driver-live')
 
 const HOST = 'h1'
 
@@ -43,6 +44,8 @@ beforeEach(() => {
   sockets = []
   vi.mocked(jobsDriver.jobChanged).mockClear()
   vi.mocked(jobsDriver.hostOpened).mockClear()
+  vi.mocked(startJobsCatchUp).mockClear()
+  stopCatchUp.mockClear()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.stubGlobal('WebSocket', FakeSocket)
   useHostStore.setState({
@@ -82,6 +85,14 @@ describe('useMultiHostEventWs jobs.changed (WWD-7b1-1b)', () => {
     act(() => { sockets[0].emit(JSON.stringify({ type: 'jobs.changed', session: '', value })) })
     expect(jobsDriver.jobChanged).not.toHaveBeenCalled()
     view.unmount()
+  })
+
+  it('starts the jobs catch-up with the hook and stops it with it', async () => {
+    const view = await connect()
+    expect(startJobsCatchUp).toHaveBeenCalledTimes(1)
+    expect(stopCatchUp).not.toHaveBeenCalled()
+    view.unmount()
+    expect(stopCatchUp).toHaveBeenCalledTimes(1)
   })
 
   it('a connection that opened tells the driver which daemon it is', async () => {

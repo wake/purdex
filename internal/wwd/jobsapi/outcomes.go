@@ -59,6 +59,6 @@ func (a *API) Disagreements() http.HandlerFunc {
 		if n := len(items); n > 0 {
 			cursor = items[n-1].ID
 		}
-		writeJSON(w, http.StatusOK, wire.DisagreementList{Host: subject, Cursor: cursor, Items: items, Origin: a.q.Origin(), More: more})
+		writeJSON(w, http.StatusOK, wire.DisagreementList{Host: subject, Cursor: cursor, Items: items, Origin: a.q.Origin(), More: more, Now: a.q.Now()})
 	}
 }

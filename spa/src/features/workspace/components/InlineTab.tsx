@@ -9,6 +9,7 @@ import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { Avatar } from '../../../components/Avatar'
 import { useSessionSeat } from '../../../hooks/useSessionSeat'
 import { useSeat } from '../../../lib/names/seat'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { useHostLook } from '../../../lib/host-look'
 import { resolveHostColors } from '../../../lib/host-color'
 import { getPrimaryPane } from '../../../lib/pane-tree'
@@ -86,7 +87,9 @@ export function InlineTab({
   const shownTitle = seatOverride?.title || displayTitle
   const bySession = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
   const bySeat = useSeat(seatOverride?.address ?? '')
-  const seat = seatOverride ? bySeat : bySession
+  // Only the task-group view dresses a row as its persona; the workspace view keeps the plain agent-icon row (owner call 10-20, overturning spec §9.6 U10).
+  const groupsView = useTeamUiStore((s) => s.sidebarView === 'groups')
+  const seat = groupsView ? (seatOverride ? bySeat : bySession) : null
   const look = useHostLook(tmux?.hostId ?? null)
   const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
 
