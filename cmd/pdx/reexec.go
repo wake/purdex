@@ -52,6 +52,17 @@ func captureReexecPlan(executable func() (string, error), args, env []string) (*
 	}, nil
 }
 
+// overrideExecPath makes the re-exec run path instead of the executable this
+// daemon booted from, when a restart asked for one (a dev rebuild execs the
+// binary it just built, which may live elsewhere, #3572). "" keeps the plan.
+func (p *reexecPlan) overrideExecPath(path string, logf func(string, ...any)) {
+	if path == "" {
+		return
+	}
+	logf("restart: exec path overridden to %s (booted from %s)", path, p.path)
+	p.path = path
+}
+
 // captureCleanReexecPlan removes the Claude Code session-identity variables from this process's environment
 // (a daemon started, or restarted, from inside a Claude Code session carries that session's id, messaging
 // socket and token, pid, ... and would hand them to every process it starts, #2122), logs their names, and
