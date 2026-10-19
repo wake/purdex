@@ -312,7 +312,7 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	// above must not hold the alert back for the interval. A false from a module that is still up (its queue is full) keeps the attempt.
 	if !queued {
 		if r, ok := ntf.(push.AlertReadiness); ok && !r.AlertReady() {
-			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow); err != nil {
+			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow, a.Since, now); err != nil {
 				m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
 			}
 		}

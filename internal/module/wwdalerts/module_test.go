@@ -471,9 +471,14 @@ type stoppingNotifier struct {
 	ready bool
 	stop  bool // the next NotifyAlert finds the module just stopped
 	calls int
+	// during, when set, runs inside NotifyAlert: what another goroutine does at that moment (an older push getting its Sent)
+	during func()
 }
 
 func (s *stoppingNotifier) NotifyAlert(push.AlertPush) bool {
+	if s.during != nil {
+		s.during()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -506,6 +511,30 @@ func TestAnAttemptTheStoppedPushModuleNeverTookIsGivenBack(t *testing.T) {
 	}
 	if d, ok := e.m.store.delivery("mlab", "disk_low:/"); !ok || d.Attempt != e.now.UnixMilli() {
 		t.Fatalf("the ledger row is %+v", d)
+	}
+}
+
+// An older push of the same alert may still be in the sender when a new attempt is refused: its Sent can land between the attempt being
+// written and given back. Giving the attempt back puts back the attempt time only, never over a delivery that was recorded meanwhile.
+func TestGivingAnAttemptBackNeverErasesADeliveryRecordedMeanwhile(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t) // the first attempt, at t0, whose push is still in the sender (its Sent has not come)
+	first := e.now
+	e.now = e.now.Add(6 * time.Minute) // past the interval: a new attempt is due
+	n := &stoppingNotifier{ready: true, stop: true}
+	n.during = func() { _ = e.m.store.markSent("mlab", "disk_low:/", t0, e.now) } // the old push is taken by APNs just now
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.pass(t)
+	d, ok := e.m.store.delivery("mlab", "disk_low:/")
+	if !ok {
+		t.Fatal("the ledger row is gone")
+	}
+	if d.Sent != e.now.UnixMilli() {
+		t.Fatalf("the delivery recorded meanwhile was erased: %+v", d)
+	}
+	if d.Attempt != first.UnixMilli() {
+		t.Fatalf("the attempt that queued nothing was not given back: %+v", d)
 	}
 }
 
