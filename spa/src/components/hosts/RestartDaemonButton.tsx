@@ -151,11 +151,14 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
                 : t('hosts.restart.confirm_workers', { count: confirm.workers })}
             </p>
           )}
-          {(openApprovals > 0 || activeRelays > 0) && (
+          {openApprovals > 0 && (
             <p data-testid={`${testId}-inflight`} className="mt-1 text-xs text-amber-400">
-              {openApprovals > 0 && <span data-testid={`${testId}-approvals`}>{t('approval.restart.pending', { count: openApprovals })}</span>}
-              {openApprovals > 0 && activeRelays > 0 && t('approval.restart.join')}
-              {activeRelays > 0 && <span data-testid={`${testId}-relays`}>{t('approval.restart.relays', { count: activeRelays })}</span>}
+              <span data-testid={`${testId}-approvals`}>{t('approval.restart.pending', { count: openApprovals })}</span>
+            </p>
+          )}
+          {activeRelays > 0 && (
+            <p className="mt-1 text-xs text-amber-400">
+              <span data-testid={`${testId}-relays`}>{t('approval.restart.relays', { count: activeRelays })}</span>
             </p>
           )}
         </ConfirmDialog>

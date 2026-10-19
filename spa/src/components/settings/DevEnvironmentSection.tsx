@@ -4,6 +4,8 @@ import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 import { hostLabel, hostLookOf } from '../../lib/host-look'
 import { DevBuildLogPanel } from './DevBuildLogPanel'
 import { LocalDaemonSection } from './LocalDaemonSection'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { fetchInflight } from '../../lib/team/approval-api'
 
 type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
@@ -70,6 +72,9 @@ export function DevEnvironmentSection() {
   const [daemonLog, setDaemonLog] = useState<string[]>([])
   const [daemonPhase, setDaemonPhase] = useState<DaemonPhase>('idle')
   const [daemonError, setDaemonError] = useState<string | null>(null)
+  // Relays in progress on the dev host, asked just before a rebuild (#3590): null = no question open; the count when the user is being asked.
+  const [relayConfirm, setRelayConfirm] = useState<number | null>(null)
+  const [askingRelays, setAskingRelays] = useState(false)
 
   useEffect(() => { appInfoRef.current = appInfo }, [appInfo])
 
@@ -176,6 +181,25 @@ export function DevEnvironmentSection() {
     }
   }, [daemonBase, daemonAuthHeaders, checkDaemon, t])
 
+  // The rebuild restarts the daemon: with relays in progress the user is asked first (the count is the same one the restart button's
+  // confirm shows). A count that is 0 or cannot be read starts the rebuild at once: not knowing never stops the user.
+  const askBeforeRebuild = useCallback(async () => {
+    if (!daemonBase || !devHostId || askingRelays) return
+    const gen = sourceGenRef.current
+    setAskingRelays(true)
+    let relays = 0
+    try {
+      relays = (await fetchInflight(devHostId)).relays_active
+    } catch {
+      relays = 0
+    }
+    if (gen !== sourceGenRef.current) return // the source changed: a newer question (or none) owns askingRelays, touch nothing
+    setAskingRelays(false)
+    if (relays > 0) setRelayConfirm(relays)
+    else void rebuildDaemon()
+  }, [daemonBase, devHostId, askingRelays, rebuildDaemon])
+
+
   const closeStream = useCallback(() => {
     streamCloseRef.current?.()
     streamCloseRef.current = null
@@ -196,7 +220,9 @@ export function DevEnvironmentSection() {
     setDaemonLog([])
     setDaemonError(null)
     setDaemonPhase('idle')
-  }, [daemonBase, token, closeStream])
+    setRelayConfirm(null) // a question about the previous host's relays is not one about this host
+    setAskingRelays(false)
+  }, [daemonBase, token, devHostId, closeStream])
 
   // Load daemon status on mount / host change
   useEffect(() => {
@@ -488,14 +514,25 @@ export function DevEnvironmentSection() {
             {t('settings.dev.daemon.check')}
           </button>
           <button
-            onClick={() => void rebuildDaemon()}
-            disabled={!daemonBase || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            onClick={() => void askBeforeRebuild()}
+            disabled={!daemonBase || askingRelays || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
             className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {t('settings.dev.daemon.rebuild')}
           </button>
         </div>
       </div>
+
+      {relayConfirm !== null && (
+        <ConfirmDialog
+          testIdPrefix="dev-rebuild-confirm"
+          title={t('settings.dev.daemon.rebuild_confirm_title')}
+          body={t('approval.restart.relays', { count: relayConfirm })}
+          confirmLabel={t('settings.dev.daemon.rebuild_confirm')}
+          onCancel={() => setRelayConfirm(null)}
+          onConfirm={() => { setRelayConfirm(null); void rebuildDaemon() }}
+        />
+      )}
 
       <LocalDaemonSection daemonBase={daemonBase} token={token} latestHash={daemonCheck?.latest_hash ?? null} refreshKey={daemonCheck} />
     </div>

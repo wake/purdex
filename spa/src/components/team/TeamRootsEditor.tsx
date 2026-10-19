@@ -55,7 +55,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
 
   return (
     <div data-testid="roots-editor" className="flex flex-col gap-1">
-      <div className="text-text-muted">{t('unattended.roots.label')}</div>
+      <div className="text-text-secondary">{t('unattended.roots.label')}</div>
       <ul className="flex flex-col gap-0.5">
         {roots.map((root, i) => (
           <li key={root} data-testid="roots-row" className="flex flex-col">

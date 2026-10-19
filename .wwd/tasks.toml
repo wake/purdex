@@ -22,13 +22,15 @@ summary = "go-json"
 # ---- merge: affected tests, lint, guards ----
 # Every task that can leave the local machine carries os:darwin (a Linux host with its worker on would otherwise claim it and fail it for
 # what it lacks); a task may drop it only when it is qualified on that host (`qualify`), see internal/wwd/manifest/purdex_manifest_test.go.
+# A task that runs go carries tool:go<go.mod's major.minor>, one that runs pnpm carries tool:node<N> and tool:pnpm<N>: a host whose worker has
+# no such tool never gets the job (#3546). Raising Go: see docs/wwd-deploy.md.
 
 [tasks.spa-related]
 run       = "pnpm vitest related --run --reporter=json --outputFile={report} {files}"
 cwd       = "spa"
 args      = "files"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex"]
+labels    = ["os:darwin", "repo:purdex", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
@@ -39,7 +41,7 @@ qualify   = { args = ["src/lib/fleet/parse.test.ts"], reference = "air26" }
 run       = "go test -json {packages}"
 args      = "packages"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex"]
+labels    = ["os:darwin", "repo:purdex", "tool:go1.26"]
 cacheable = true
 timeout   = "30m"
 summary   = "go-json"
@@ -49,7 +51,7 @@ summary   = "go-json"
 run       = "go test -race -json {packages}"
 args      = "packages"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex"]
+labels    = ["os:darwin", "repo:purdex", "tool:go1.26"]
 cacheable = true
 timeout   = "30m"
 summary   = "go-json"
@@ -69,7 +71,7 @@ timeout   = "10m"
 run       = "go test -json ./cmd/pdx/..."
 args      = "none"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex"]
+labels    = ["os:darwin", "repo:purdex", "tool:go1.26"]
 cacheable = true
 timeout   = "30m"
 summary   = "go-json"
@@ -79,16 +81,17 @@ run       = "pnpm tsc -b"
 cwd       = "spa"
 args      = "none"
 class     = "merge"
-labels     = ["os:darwin"]
+labels    = ["repo:purdex", "task:purdex/tsc", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
+qualify   = { args = [], reference = "air26" }
 
 [tasks.lint]
 run       = "make lint"
 args      = "none"
 class     = "merge"
-labels     = ["os:darwin"]
+labels     = ["os:darwin", "tool:go1.26"]
 cacheable = true
 timeout   = "20m"
 
@@ -97,7 +100,7 @@ timeout   = "20m"
 run       = "go test -json ./internal/execstat/"
 args      = "none"
 class     = "merge"
-labels     = ["os:darwin"]
+labels     = ["os:darwin", "tool:go1.26"]
 cacheable = true
 timeout   = "10m"
 summary   = "go-json"
@@ -108,7 +111,7 @@ summary   = "go-json"
 run           = "go test -json -p 3 -timeout 30m ./..."
 args          = "none"
 class         = "release"
-labels         = ["os:darwin"]
+labels         = ["os:darwin", "tool:go1.26"]
 cacheable     = true
 interruptible = false
 timeout       = "60m"
@@ -119,7 +122,7 @@ run           = "pnpm vitest run --maxWorkers=3 --reporter=json --outputFile={re
 cwd           = "spa"
 args          = "none"
 class         = "release"
-labels         = ["os:darwin"]
+labels         = ["os:darwin", "tool:node24", "tool:pnpm10"]
 deps          = ["pnpm-lock.yaml"]
 cacheable     = true
 timeout       = "60m"
@@ -130,7 +133,7 @@ run       = "pnpm tsc -b --force"
 cwd       = "spa"
 args      = "none"
 class     = "release"
-labels     = ["os:darwin"]
+labels     = ["os:darwin", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
@@ -139,7 +142,7 @@ timeout   = "30m"
 run       = "go test -json ./cmd/pdx/..."
 args      = "none"
 class     = "release"
-labels     = ["os:darwin"]
+labels     = ["os:darwin", "tool:go1.26"]
 cacheable = true
 timeout   = "30m"
 summary   = "go-json"

@@ -437,3 +437,26 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   for any infrastructure failure). The same key failing **twice in a row on a host** ends the next job of it: failed with no exit and the
   reason `deps_install_failed: …` (which no outcome and no qualification counts), and the host does not try that key again for 10 minutes.
   Restarting wwd forgets this. A cancelled job or a stopping worker is not a failure of the install.
+
+## 11. The tools a worker must have, and raising Go (#3546)
+
+The manifest (`.wwd/tasks.toml`) says what a task needs of its host: a task that runs `go` (`go test …`, `make lint`) carries
+`tool:go<major>.<minor>` (the `go` line of `go.mod`), one that runs `pnpm` carries `tool:node24` and `tool:pnpm10` (the worker
+advertises the major only; `tsc` has them besides its earned `task:purdex/tsc`). A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the PATH
+of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that lacks
+one does not claim those tasks.
+
+If **no** host has all the labels of a task, `pdx test` can end at once with exit 5 ("no host can take it") — but only when the pool
+was read, no reachable host is still settling its facts, and no host holds the labels, **counting a host that is offline or has its
+worker off by the last labels it reported** (those stay). In every other case the job is queued as usual and may wait until the queue
+timeout (exit 6). Do not count on the quick failure.
+
+**Raising Go to a new minor** (for example 1.26 → 1.27), in this order:
+
+1. Upgrade Go on all three worker hosts (mlab, air26, mserv) first and check that each host's `GET /v1/info` shows `tool:go1.27`.
+2. Then change the `go` line of `go.mod` **and** every `tool:go1.26` in `.wwd/tasks.toml` in one PR.
+
+`TestPurdexManifestTasksCarryTheToolsTheyRun` goes red when the two disagree, so it cannot be forgotten. Between the steps a Go task is
+taken by the hosts that have the label it carries: while some hosts are on 1.27 and the manifest still says 1.26, only the hosts still
+on 1.26 take it (when all three are raised, none does until step 2 lands); after step 2, a host that has not been raised takes none.
+Raise all three before step 2, and do step 2 promptly.

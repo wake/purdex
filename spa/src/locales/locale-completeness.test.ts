@@ -118,8 +118,8 @@ describe('locale completeness', () => {
       expect(zh['approval.kind.self_relay']).toBe('接力申請')
       expect(zh['approval.notify.title']).toBe('{{host}}：{{session}} 申請成為 lead')
       expect(zh['approval.restart.pending']).toBe('{{count}} 個申請等待核准')
-      expect(zh['approval.restart.relays']).toBe('{{count}} 個接力進行中（重啟後會接續）')
-      expect(zh['approval.restart.join']).toBe('、')
+      expect(zh['approval.restart.relays']).toBe('有 {{count}} 個接力進行中。重啟後多半能接續，但正在交接的那一個可能被打斷。')
+      expect(Object.keys(zh)).not.toContain('approval.restart.join') // approvals and relays are two lines now (#3590)
     })
 
     it('carries the spec §8.7 self-relay strings in zh-TW', () => {
