@@ -510,6 +510,30 @@ describe('DevEnvironmentSection: relays in progress before a rebuild', () => {
     expect(posted).toBe(0)
   })
 
+  it('an answer of the old source does not unlock the question of the new one', async () => {
+    const dA = { resolve: (_r: Response) => {} }
+    const dB = { resolve: (_r: Response) => {} }
+    const pa = new Promise<Response>((r) => { dA.resolve = r })
+    const pb = new Promise<Response>((r) => { dB.resolve = r })
+    arrange(() => new Response('{}', { status: 200 }))
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/team/inflight')) return href.includes('10.0.0.2') ? pb : pa
+      return base(url, init)
+    })
+    await clickRebuild() // host A: its answer is pending
+    const b = useHostStore.getState().addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    await act(async () => { useHostStore.getState().setDevHost(b) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) }) // host B: pending too
+    await act(async () => { dA.resolve(json({ approvals_open: 0, relays_active: 0 })) })
+    expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).toBeDisabled()
+    expect(posted).toBe(0)
+    await act(async () => { dB.resolve(json({ approvals_open: 0, relays_active: 0 })) })
+    await waitFor(() => expect(posted).toBe(1))
+  })
+
   it('rebuilds at once when no relay is in progress', async () => {
     arrange(() => json({ approvals_open: 3, relays_active: 0 }))
     await clickRebuild()

@@ -193,8 +193,8 @@ export function DevEnvironmentSection() {
     } catch {
       relays = 0
     }
+    if (gen !== sourceGenRef.current) return // the source changed: a newer question (or none) owns askingRelays, touch nothing
     setAskingRelays(false)
-    if (gen !== sourceGenRef.current) return
     if (relays > 0) setRelayConfirm(relays)
     else void rebuildDaemon()
   }, [daemonBase, devHostId, askingRelays, rebuildDaemon])
