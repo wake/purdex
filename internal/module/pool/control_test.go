@@ -153,7 +153,8 @@ func TestExceptionNameAndAliasRules(t *testing.T) {
 	}
 	assert.False(t, exceptionName("."))
 	assert.False(t, exceptionName(".."))
-	assert.True(t, validAlias(".."), "a dot name is not a path here: the alias goes in a query")
+	assert.False(t, validAlias("."), "a dot name is not one path segment (#3615)")
+	assert.False(t, validAlias(".."), "a dot name is not one path segment (#3615)")
 }
 
 // wwd accepts any non-empty alias in its peer config, so any alias the pool lists can be changed; the host reaches wwd as

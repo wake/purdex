@@ -23,8 +23,8 @@ const maxControlBody = 64 << 10
 // parameter or a path.
 func validAlias(s string) bool { return wire.ValidAlias(s) }
 
-// exceptionName is an exception name as one path segment: the alias rule, and not a dot segment.
-func exceptionName(s string) bool { return wire.ValidAlias(s) && s != "." && s != ".." }
+// exceptionName is an exception name as one path segment: the alias rule, which leaves out the dot segments.
+func exceptionName(s string) bool { return wire.ValidAlias(s) }
 
 func (m *Module) registerControl(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/pool/hosts/{alias}/worker", m.handlePutWorker)

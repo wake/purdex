@@ -39,7 +39,7 @@ func TestConfigPeerAliasUsesTheSharedRule(t *testing.T) {
 	if _, err := loadCfg(t, peer(strings.Repeat("a", 128))); err != nil {
 		t.Errorf("128 bytes is allowed: %v", err)
 	}
-	for name, a := range map[string]string{"too long": strings.Repeat("a", 129), "control": `a\nb`} {
+	for name, a := range map[string]string{"too long": strings.Repeat("a", 129), "control": `a\nb`, "dot": ".", "dot dot": ".."} {
 		if _, err := loadCfg(t, peer(a)); err == nil || !strings.Contains(err.Error(), "peers") {
 			t.Errorf("%s: want a peers error, got %v", name, err)
 		}
