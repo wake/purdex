@@ -35,10 +35,9 @@ func (d *Daemon) NoteOutcome(ctx context.Context, j wire.Job, p queue.Produced) 
 	default:
 		return
 	}
+	// the origin's own clock, as for everything the queue orders and keeps by time: the worker's finished_at is the worker's, and a clock more
+	// than the retention behind would have the record swept at once (a clock ahead, kept too long)
 	at := d.reuseNow()
-	if j.Result.FinishedAt != nil {
-		at = *j.Result.FinishedAt
-	}
 	found, err := d.opts.Queue.RecordOutcome(ctx, queue.Outcome{
 		JobID: j.ID, Host: host, Label: label, Tree: j.Snapshot.Tree, Task: j.Task, Args: j.Args, DefHash: p.DefHash,
 		OK: *j.Result.Exit == 0, Standing: standing, At: at,

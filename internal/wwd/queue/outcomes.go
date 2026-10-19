@@ -31,10 +31,10 @@ type Outcome struct {
 	Tree     string // the snapshot's tree
 	Task     string
 	Args     []string
-	DefHash  string // the task's definition hash as submitted
-	OK       bool   // the command exited 0
-	Standing string // StandingEarned or StandingReference
-	At       time.Time
+	DefHash  string    // the task's definition hash as submitted
+	OK       bool      // the command exited 0
+	Standing string    // StandingEarned or StandingReference
+	At       time.Time // when it was recorded, on the origin's clock (retention counts from it)
 }
 
 func (o Outcome) validate() error {
@@ -92,8 +92,10 @@ func (q *Queue) RecordOutcome(ctx context.Context, o Outcome) ([]wire.Disagreeme
 		if n, _ := res.RowsAffected(); n == 0 {
 			return nil // this job was recorded before
 		}
-		rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing FROM task_outcomes
-			WHERE work_key = ? AND host != ? AND ok != ? ORDER BY seq DESC`, key, o.Host, b2i(o.OK))
+		// the latest outcome of each other host is the one to compare with: the host's earlier ones are superseded by it (a host that passed
+		// and then failed agrees with a failing host), so the latest is chosen first and only then is it asked whether it differs
+		rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes
+			WHERE work_key = ? AND host != ? ORDER BY seq DESC`, key, o.Host)
 		if err != nil {
 			return err
 		}
@@ -102,12 +104,16 @@ func (q *Queue) RecordOutcome(ctx context.Context, o Outcome) ([]wire.Disagreeme
 		seen := map[string]bool{}
 		for rows.Next() {
 			var e earlier
-			if err := rows.Scan(&e.job, &e.host, &e.standing); err != nil {
+			var ok int
+			if err := rows.Scan(&e.job, &e.host, &e.standing, &ok); err != nil {
 				rows.Close()
 				return err
 			}
-			if !seen[e.host] { // the most recent of each other host
-				seen[e.host] = true
+			if seen[e.host] {
+				continue
+			}
+			seen[e.host] = true
+			if ok != b2i(o.OK) {
 				pairs = append(pairs, e)
 			}
 		}
