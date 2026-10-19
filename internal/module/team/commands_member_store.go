@@ -53,7 +53,7 @@ func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	return okResult(team.AdoptOutcome{State: "applied", MemberSession: o.SessionID, Ref: o.Ref, PID: o.PID,
-		ProcStart: o.ProcStart, Title: o.Title, Cwd: o.Cwd, Tmux: o.Tmux})
+		ProcStart: o.ProcStart, Title: o.Title, Cwd: o.Cwd, Tmux: o.Tmux, MemberCode: p.TargetCode})
 }
 
 // applyReleaseIn is `release` (active → released, notice `released`). Only the lead host's own live row of that

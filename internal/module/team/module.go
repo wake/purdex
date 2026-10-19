@@ -194,7 +194,7 @@ type Module struct {
 	endedOpsMu sync.Mutex
 	endedOps   map[*sql.Tx][]string
 	// adoptPairs are the approvals of remote adopts a command settle made active, until that settle has committed (name_pairs.go).
-	adoptPairs  map[*sql.Tx][]string
+	adoptPairs  map[*sql.Tx][]adoptPairNote
 	busyNoticed map[string]struct{}
 	idleSince   map[string]int64
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).

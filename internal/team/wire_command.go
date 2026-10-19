@@ -109,6 +109,10 @@ type AdoptOutcome struct {
 	Title         string `json:"title,omitempty"`
 	Cwd           string `json:"cwd,omitempty"`
 	Tmux          string `json:"tmux,omitempty"`
+	// MemberCode is the persona code the adopted session's name ends in on the member host when the adopt is applied ("" when it
+	// has none). The lead host records the lead/member pair under it, not under the name the request carried: the session may have
+	// been renamed since. An older member host sends none.
+	MemberCode string `json:"member_code,omitempty"`
 }
 
 // RelayCommandOutcome is the relay command's outcome when applied.

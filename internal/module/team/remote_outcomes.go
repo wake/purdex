@@ -112,7 +112,7 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 		tmux_session = CASE WHEN ? <> '' THEN ? ELSE tmux_session END, pane_id = CASE WHEN ? <> '' THEN ? ELSE pane_id END, updated_at = ?`,
 		[]any{out.MemberSession, out.Ref, out.PID, out.ProcStart, out.Title, out.Title, out.Cwd, out.Cwd, tmuxSession, tmuxSession, pane, pane, now}, rowJoining)
 	if err == nil && changed {
-		o.m.noteAdoptPair(tx, c.MK) // the member joined: its pair is written once this settle has committed (name_pairs.go)
+		o.m.noteAdoptPair(tx, c.MK, out.MemberCode) // the member joined: its pair is written once this settle has committed (name_pairs.go)
 	}
 	return err
 }

@@ -85,16 +85,19 @@ func (m *Module) recordAdoptPairAtApproval(p team.AdoptPayload, approvalID strin
 
 // noteAdoptPair notes, inside the settle transaction tx, that the remote adopt of approval approvalID became active. The pair is
 // written by afterAdoptPairs once tx has committed (dropAdoptPairs forgets it when it did not).
-func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID string) {
+func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID, memberCode string) {
 	m.endedOpsMu.Lock()
 	defer m.endedOpsMu.Unlock()
 	if m.adoptPairs == nil {
-		m.adoptPairs = map[*sql.Tx][]string{}
+		m.adoptPairs = map[*sql.Tx][]adoptPairNote{}
 	}
-	m.adoptPairs[tx] = append(m.adoptPairs[tx], approvalID)
+	m.adoptPairs[tx] = append(m.adoptPairs[tx], adoptPairNote{approvalID, memberCode})
 }
 
-func (m *Module) takeAdoptPairs(tx *sql.Tx) []string {
+// adoptPairNote is one remote adopt that became active: its approval, and the persona code the member host reported ("" = none).
+type adoptPairNote struct{ approvalID, memberCode string }
+
+func (m *Module) takeAdoptPairs(tx *sql.Tx) []adoptPairNote {
 	m.endedOpsMu.Lock()
 	defer m.endedOpsMu.Unlock()
 	ids := m.adoptPairs[tx]
@@ -106,7 +109,8 @@ func (m *Module) dropAdoptPairs(tx *sql.Tx) { m.takeAdoptPairs(tx) }
 
 // afterAdoptPairs writes the pair of each remote adopt the committed settle tx made active, from the approval's payload.
 func (m *Module) afterAdoptPairs(tx *sql.Tx) {
-	for _, id := range m.takeAdoptPairs(tx) {
+	for _, note := range m.takeAdoptPairs(tx) {
+		id := note.approvalID
 		a, _, err := m.store.getRow(id)
 		if err != nil {
 			m.logf("[team] adopt %s: pair not recorded, its approval is unreadable: %v", id, err)
@@ -117,7 +121,7 @@ func (m *Module) afterAdoptPairs(tx *sql.Tx) {
 			m.logf("[team] adopt %s: pair not recorded: %v", id, err)
 			continue
 		}
-		m.recordAdoptPair(p, id)
+		m.recordAdoptPairAs(p, id, note.memberCode)
 	}
 }
 
@@ -134,8 +138,13 @@ func (m *Module) recordRemoteSpawnPair(fromHost string, fact team.TeamFact) {
 // recordAdoptPair writes the pair of an adopt that was approved: the lead's code and the adopted session's (spec §5.4: it keeps its
 // name and counts from now on). A local target's code is read from the session; a remote one has only the name the request carried.
 func (m *Module) recordAdoptPair(p team.AdoptPayload, approvalID string) {
-	memberCode := ""
-	if p.TargetHostID == "" {
+	m.recordAdoptPairAs(p, approvalID, "")
+}
+
+// recordAdoptPairAs is recordAdoptPair with the code the member host reported (memberCode); "" falls back to what this host can
+// tell: the session's code for a local target, the name the request carried for a remote one.
+func (m *Module) recordAdoptPairAs(p team.AdoptPayload, approvalID, memberCode string) {
+	if memberCode == "" && p.TargetHostID == "" {
 		memberCode = m.sessionCode(p.TargetSessionID)
 	}
 	if memberCode == "" {
