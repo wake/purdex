@@ -142,7 +142,7 @@ func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return err
 		}
-		err := withStore(cacheDir, e.storeMax(), func() error {
+		err := withStore(ctx, cacheDir, e.storeMax(), func() error {
 			res := run.Run(ctx, e.installSpec(ref, job, ws, lf, in[i], taskEnv, cacheDir))
 			switch {
 			case res.Outcome == run.Exited && res.ExitCode == 0 && res.Err == nil:
@@ -298,6 +298,8 @@ func (e *Exec) depsNow() time.Time {
 // configuration and a workspace's definition, and the manifest of each workspace member (dirs are the members' node_modules). A file that
 // is not there is hashed as absent. The root package's own scripts and .npmrc are not functions of the lockfile, so without them two
 // snapshots with one lockfile would share an installed tree that one of them made differently.
+// This is a list, not a derivation: a file those name (a yarnPath or a plugin, a script of composer.json that runs a file of the workspace)
+// is not followed. The lockfile already holds the hash of a pnpm patch, which is why patches are not listed.
 func depsInputs(lockfiles, memberDirs []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -310,7 +312,7 @@ func depsInputs(lockfiles, memberDirs []string) []string {
 	}
 	for _, lf := range lockfiles {
 		d := path.Dir(lf)
-		for _, n := range []string{"package.json", ".npmrc", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "composer.json"} {
+		for _, n := range []string{"package.json", ".npmrc", ".pnpmfile.cjs", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "composer.json"} {
 			add(d, n)
 		}
 	}

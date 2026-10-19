@@ -60,6 +60,7 @@ func TestWhatAnInstallReadsBesidesTheLockfileIsPartOfTheKey(t *testing.T) {
 		"an .npmrc":                      {files: with(map[string]string{".npmrc": "registry=https://evil.example\n"})},
 		"a member's manifest":            {files: with(map[string]string{"spa/package.json": `{"name":"spa","scripts":{"postinstall":"c"}}`})},
 		"a workspace definition":         {files: with(map[string]string{"pnpm-workspace.yaml": "packages:\n  - spa\n"})},
+		"a .pnpmfile.cjs":                {files: with(map[string]string{".pnpmfile.cjs": "module.exports = { hooks: {} }\n"})},
 		"the environment of the install": {files: with(nil), env: []string{"HTTPS_PROXY=http://proxy:3128"}},
 	} {
 		r := newDepsRig(t)
@@ -105,7 +106,7 @@ func TestADownloadCacheOverItsBoundIsEmptiedBeforeAnInstall(t *testing.T) {
 
 	over := filepath.Join(t.TempDir(), "pnpm-store")
 	fill(t, over, 2)
-	require.NoError(t, withStore(over, 1<<20, install))
+	require.NoError(t, withStore(context.Background(), over, 1<<20, install))
 	assert.True(t, ran)
 	_, err := os.Stat(filepath.Join(over, "blob"))
 	assert.True(t, os.IsNotExist(err), "emptied")
@@ -115,7 +116,7 @@ func TestADownloadCacheOverItsBoundIsEmptiedBeforeAnInstall(t *testing.T) {
 
 	under := filepath.Join(t.TempDir(), "pnpm-store")
 	fill(t, under, 1)
-	require.NoError(t, withStore(under, 2<<20, install))
+	require.NoError(t, withStore(context.Background(), under, 2<<20, install))
 	_, err = os.Stat(filepath.Join(under, "blob"))
 	assert.NoError(t, err, "under the bound it stays")
 
@@ -125,9 +126,36 @@ func TestADownloadCacheOverItsBoundIsEmptiedBeforeAnInstall(t *testing.T) {
 	require.NoError(t, err)
 	defer other.Close()
 	require.NoError(t, syscall.Flock(int(other.Fd()), syscall.LOCK_SH)) // another install is using it
-	require.NoError(t, withStore(busy, 1<<20, install))
+	require.NoError(t, withStore(context.Background(), busy, 1<<20, install))
 	_, err = os.Stat(filepath.Join(busy, "blob"))
 	assert.NoError(t, err, "not emptied under an install that is using it")
+}
+
+// A download cache of many small files is over its bound though it is small in bytes, and the look at it stops at the entry bound instead of
+// walking them all; a look that is cancelled ends and the install does not run.
+func TestTheLookAtADownloadCacheIsBounded(t *testing.T) {
+	old := storeScanLimit
+	storeScanLimit = 50
+	t.Cleanup(func() { storeScanLimit = old })
+	dir := filepath.Join(t.TempDir(), "npm-cache")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	for i := 0; i < 80; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "f"+string(rune('a'+i%26))+string(rune('a'+i/26))), nil, 0o644))
+	}
+	ran := false
+	require.NoError(t, withStore(context.Background(), dir, 1<<40, func() error { ran = true; return nil }))
+	assert.True(t, ran)
+	list, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, list, "empty files, far under the bound in bytes, but more entries than the scan allows: emptied")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ran = false
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "x"), nil, 0o644))
+	err = withStore(ctx, dir, 1<<40, func() error { ran = true; return nil })
+	require.Error(t, err)
+	assert.False(t, ran, "a cancelled look does not go on to the install")
 }
 
 // The bound is worker.deps_store_max_mb, 4096 when it is not set.
