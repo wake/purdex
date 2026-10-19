@@ -107,6 +107,48 @@ func TestSilenceANewFailureIsToldWhateverTheWWDsClocksSay(t *testing.T) {
 	assert.Equal(t, 2, e.ntf.count())
 }
 
+// A restart is not the end of a failure the ledger knows: the same alert, raised before the last push, is not told again. One that cleared
+// and was raised again while the daemon was down — raised after that push — is a new failure and is told.
+func TestSilenceAcrossARestart(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab", silenceOf("mserv", t0))
+	e.src.set("air26")
+	e.pass(t)
+	e.ntf.confirm(0)
+
+	e.m = e.module(t) // the daemon restarted: same ledger, no memory
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "the same failure after a restart")
+
+	e.m = e.module(t)
+	e.src.set("mlab", silenceOf("mserv", e.now.Add(2*time.Minute))) // cleared and raised again while the daemon was down
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count(), "raised after the last push: a new failure")
+}
+
+// A host that left the pool takes what it held with it: back in the pool and holding the key again is a new observer, and the failure it
+// shows is told.
+func TestSilenceAHostThatLeftAndCameBackIsANewObserver(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab")
+	e.src.set("air26", silenceOf("mserv", t0))
+	e.pass(t)
+	e.ntf.confirm(0)
+
+	e.src.peers = nil // air26 left the pool: mserv recovered and failed again meanwhile, nobody holds it
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("air26", silenceOf("mserv", e.now))
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count())
+}
+
 // A list that cannot be read must not hide a new failure, whatever it held: one unreadable list does not freeze the failures the others
 // show (attack review).
 func TestSilenceAnUnreadableListDoesNotHideANewFailure(t *testing.T) {

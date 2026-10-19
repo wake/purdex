@@ -247,7 +247,7 @@ func (m *Module) pass(ctx context.Context) {
 		m.deliverer, m.suppressed = deliverer, m.passSuppressed
 		m.smu.Unlock()
 	}()
-	hosts, err := m.hosts(ctx)
+	hosts, whole, err := m.hosts(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
@@ -255,11 +255,7 @@ func (m *Module) pass(ctx context.Context) {
 		return
 	}
 	// every list is read before any is acted on, so a silence alert is judged on all of them at once
-	type got struct {
-		alias  string
-		alerts []wire.Alert
-	}
-	var lists []got
+	var lists []gotList
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
@@ -273,13 +269,13 @@ func (m *Module) pass(ctx context.Context) {
 			}
 			continue
 		}
-		lists = append(lists, got{h.alias, list.Alerts})
+		lists = append(lists, gotList{h.alias, list.Alerts})
 	}
-	m.markEpisodes(func(yield func(host string, alerts []wire.Alert)) {
-		for _, l := range lists {
-			yield(l.alias, l.alerts)
-		}
-	})
+	present := map[string]bool{} // the hosts that are in the pool now
+	for _, h := range hosts {
+		present[h.alias] = true
+	}
+	m.markEpisodes(lists2(lists), present, whole)
 	for _, l := range lists {
 		m.handle(l.alias, l.alerts)
 	}
@@ -294,23 +290,35 @@ func (m *Module) pass(ctx context.Context) {
 // continuously (it cleared everywhere, or another wwd noticed afresh after the first one's alert was gone) a new failure begins, told at
 // once: a duplicate is preferred to a failure not told (spec §13.3). Only this daemon's own observations and clock are compared, never a
 // wwd's Since against this daemon's time.
-func (m *Module) markEpisodes(each func(yield func(host string, alerts []wire.Alert))) {
+func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]bool, poolWhole bool) {
 	first := m.lastHeld == nil
 	if first {
 		m.lastHeld = map[string]map[string]bool{}
 		m.episode = map[string]time.Time{}
 	}
+	if poolWhole {
+		// a host that is not in the pool any more takes what it held with it: coming back it is a new observer, not a continuation
+		for h := range m.lastHeld {
+			if !inPool[h] {
+				delete(m.lastHeld, h)
+			}
+		}
+	}
 	now := m.now()
 	nowHeld := map[string]map[string]bool{}
-	each(func(host string, alerts []wire.Alert) {
+	earliest := map[string]time.Time{} // key -> the earliest Since on the lists (a wwd's clock; used only for the first look after a restart)
+	for host, alerts := range lists {
 		held := map[string]bool{}
 		for _, a := range alerts {
 			if a.ClearedAt == nil && sharedLedger(a) {
 				held[a.Key] = true
+				if t, ok := earliest[a.Key]; !ok || a.Since.Before(t) {
+					earliest[a.Key] = a.Since
+				}
 			}
 		}
 		nowHeld[host] = held
-	})
+	}
 	keys := map[string]bool{}
 	for _, held := range nowHeld {
 		for k := range held {
@@ -327,8 +335,11 @@ func (m *Module) markEpisodes(each func(yield func(host string, alerts []wire.Al
 		if continuing {
 			continue
 		}
-		if row, had := m.store.delivery(silenceLedger, k); had && first {
-			m.episode[k] = time.UnixMilli(row.Since) // a restart is not the end of a failure the ledger knows
+		// The first look after a start has no history of its own. The ledger knows the failure it last told: the same one while a list's
+		// alert was raised no later than that push (a wwd's clock against this one's, used only here); one raised after it began while
+		// this daemon was down, and is told.
+		if row, had := m.store.delivery(silenceLedger, k); had && first && !earliest[k].After(time.UnixMilli(row.Attempt)) {
+			m.episode[k] = time.UnixMilli(row.Since)
 		} else {
 			m.episode[k] = now
 		}
@@ -338,25 +349,40 @@ func (m *Module) markEpisodes(each func(yield func(host string, alerts []wire.Al
 	}
 }
 
+func lists2(lists []gotList) map[string][]wire.Alert {
+	out := make(map[string][]wire.Alert, len(lists))
+	for _, l := range lists {
+		out[l.alias] = l.alerts
+	}
+	return out
+}
+
+// gotList is one host's active alerts as read this pass.
+type gotList struct {
+	alias  string
+	alerts []wire.Alert
+}
+
 type hostRef struct{ alias, ask string }
 
-// hosts lists the local host (asked with "") and every peer of its pool.
-func (m *Module) hosts(ctx context.Context) ([]hostRef, error) {
+// hosts lists the local host (asked with "") and every peer of its pool. whole is false when the pool could not be read, so the list is
+// only the local host.
+func (m *Module) hosts(ctx context.Context) (out []hostRef, whole bool, err error) {
 	info, err := m.src.Info(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	out := []hostRef{{alias: info.Alias, ask: ""}}
+	out = []hostRef{{alias: info.Alias, ask: ""}}
 	pool, err := m.src.Pool(ctx)
 	if err != nil {
-		return out, nil // the pool unreadable: the local host's alerts are still read
+		return out, false, nil // the pool unreadable: the local host's alerts are still read
 	}
 	for _, p := range pool.Peers {
 		if p.Info.Alias != "" && p.Info.Alias != info.Alias {
 			out = append(out, hostRef{alias: p.Info.Alias, ask: p.Info.Alias})
 		}
 	}
-	return out, nil
+	return out, true, nil
 }
 
 // handle acts on one host's active alerts: gathers the digest ones, pushes the push ones that are due, and forgets the ledger rows of
