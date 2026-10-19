@@ -140,6 +140,7 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("pool") {
 		out = append(out, "pool.v1")         // GET /api/pool/hosts, GET /api/pool/facts/history (the resource pool from the local wwd; 503 wwd_unavailable while wwd is not running)
+		out = append(out, "pool.series.v1")  // GET /api/pool/facts/series?host=&since=&step=: the history of a host cut down to the points a chart draws (at most 2000, the latest kept); same condition as pool.v1
 		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
 	}
 	if c.moduleReady("jobs") {

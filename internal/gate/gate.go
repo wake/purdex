@@ -128,9 +128,11 @@ type Gate struct {
 	Token   func() string
 }
 
-// sessionFromEnv is the Claude Code session a command runs in: CLAUDE_CODE_SESSION_ID (what Claude Code sets), else
-// CLAUDE_SESSION_ID (an older name some callers still set); "" when neither is.
-func sessionFromEnv(get func(string) string) string {
+// SessionFromEnv is the Claude Code session a command runs in: CLAUDE_CODE_SESSION_ID (what Claude Code sets), else
+// CLAUDE_SESSION_ID (an older name some callers still set); "" when neither is. It is the one reading of those two: the gate records its
+// slots, queue entries and decisions by it, and `pdx test` and `pdx jobs` start from it to name the submitter's session of a wwd job
+// (#3477). The gate itself reads nothing else: a PDX_SESSION_ID left in a shell must not take the place of the real session.
+func SessionFromEnv(get func(string) string) string {
 	if v := get("CLAUDE_CODE_SESSION_ID"); v != "" {
 		return v
 	}
@@ -142,7 +144,7 @@ func New(cfg Config) *Gate {
 	g := &Gate{
 		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
-		Session: sessionFromEnv(os.Getenv),
+		Session: SessionFromEnv(os.Getenv),
 		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Getppid: os.Getppid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)

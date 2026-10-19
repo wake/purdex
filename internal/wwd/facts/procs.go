@@ -56,6 +56,10 @@ const SessionEnvKey = "CLAUDE_CODE_SESSION_ID"
 
 var reSessionID = regexp.MustCompile(`^[0-9A-Za-z_-]{8,64}$`)
 
+// ValidSessionID says whether s looks like a session id: 8 to 64 characters of letters, digits, `_` and `-` (a Claude Code session id is a
+// UUID). It is the one rule for a session id taken from an environment, here and where `pdx test` and `pdx jobs` name the submitter's.
+func ValidSessionID(s string) bool { return reSessionID.MatchString(s) }
+
 // SessionIDFromEnv returns the Claude Code session id out of a process environment (KEY=VALUE). It is the only value read from
 // an environment besides the job marker, and nothing else of it is kept. Facts are observations: a same-user process can set it
 // to anything (spec section 11 does not defend against that).
