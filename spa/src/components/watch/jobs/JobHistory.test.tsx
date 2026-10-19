@@ -176,7 +176,7 @@ describe('the scroll', () => {
     expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(90)
   })
 
-  it('and only the first time: a box that comes back after the filter emptied it starts where the reader left it, not at the old position', () => {
+  it('a box that comes back after the filter emptied the table starts where the reader last left it, as the memory says', () => {
     writeHistoryScroll(90)
     render(<JobHistory jobs={JOBS} now={NOW} />)
     const box = screen.getByTestId('job-history-scroll')
@@ -186,7 +186,7 @@ describe('the scroll', () => {
     fireEvent.change(screen.getByLabelText(t('watch.jobs.filter.host')), { target: { value: 'mserv' } })
     expect(screen.queryByTestId('job-history-scroll')).toBeNull() // no failed job ran on mserv
     fireEvent.click(within(screen.getByTestId('job-filter-group')).getByRole('button', { name: t('watch.jobs.filter.group.all') }))
-    expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(0)
+    expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(10)
   })
 
   it('the scroll position goes to the view memory and is put back when the table comes back', () => {

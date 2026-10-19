@@ -2,7 +2,7 @@
 // three filters: the state group (全部／失敗／成功／取消與取代／逾時), the host a job ran on and its repo. A row can be selected (7b1-3 opens its detail).
 //
 // Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the filters, the selected job and the scroll position live in `lib/pool/jobs-view-memory`, not in component state.
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { STATE_GROUPS, historyHosts, historyOf, historyRepos, jobRanOn, resultText, resultWord, whenText } from '../../../lib/pool/jobs-view'
@@ -30,10 +30,9 @@ export function JobHistory({ jobs, now }: { jobs: PoolJob[]; now: number }) {
   // The tab outlives this component: the memory is the source, the state only re-renders.
   const [choice, setChoiceState] = useState<HistoryFilterChoice>(() => readHistoryFilter())
   const [selected, setSelectedState] = useState<string | null>(() => readSelectedJob())
-  // The box is only there once there are rows, which may be after the tab was shown (the jobs arrive by polling): the saved position is put back when it first appears, once.
-  const restored = useRef(false)
+  // The box is only there while there are rows — which may be after the tab was shown (the jobs arrive by polling), or again after a filter emptied the table — so the position the memory holds is put back each time a box appears.
   const boxRef = useCallback((el: HTMLDivElement | null) => {
-    if (el && !restored.current) { restored.current = true; el.scrollTop = readHistoryScroll() }
+    if (el) el.scrollTop = readHistoryScroll()
   }, [])
   const setChoice = (next: HistoryFilterChoice) => { writeHistoryFilter(next); setChoiceState(next) }
   const select = (key: string | null) => { writeSelectedJob(key); setSelectedState(key) }
