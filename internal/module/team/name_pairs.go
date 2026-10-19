@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -71,6 +72,53 @@ func (m *Module) recordRegisteredPair(teamID, poolName, opID string) {
 		return
 	}
 	m.recordPair(m.sessionCode(t.LeadSessionID), poolName, "spawn "+opID)
+}
+
+// recordAdoptPairAtApproval is recordAdoptPair for the moment an adopt is approved: a target on this host is a member from then on; one
+// on another host is not yet (the member host can still refuse it), so its pair waits for noteAdoptPair / afterAdoptPairs.
+func (m *Module) recordAdoptPairAtApproval(p team.AdoptPayload, approvalID string) {
+	if p.TargetHostID != "" {
+		return
+	}
+	m.recordAdoptPair(p, approvalID)
+}
+
+// noteAdoptPair notes, inside the settle transaction tx, that the remote adopt of approval approvalID became active. The pair is
+// written by afterAdoptPairs once tx has committed (dropAdoptPairs forgets it when it did not).
+func (m *Module) noteAdoptPair(tx *sql.Tx, approvalID string) {
+	m.endedOpsMu.Lock()
+	defer m.endedOpsMu.Unlock()
+	if m.adoptPairs == nil {
+		m.adoptPairs = map[*sql.Tx][]string{}
+	}
+	m.adoptPairs[tx] = append(m.adoptPairs[tx], approvalID)
+}
+
+func (m *Module) takeAdoptPairs(tx *sql.Tx) []string {
+	m.endedOpsMu.Lock()
+	defer m.endedOpsMu.Unlock()
+	ids := m.adoptPairs[tx]
+	delete(m.adoptPairs, tx)
+	return ids
+}
+
+func (m *Module) dropAdoptPairs(tx *sql.Tx) { m.takeAdoptPairs(tx) }
+
+// afterAdoptPairs writes the pair of each remote adopt the committed settle tx made active, from the approval's payload.
+func (m *Module) afterAdoptPairs(tx *sql.Tx) {
+	for _, id := range m.takeAdoptPairs(tx) {
+		a, _, err := m.store.getRow(id)
+		if err != nil {
+			m.logf("[team] adopt %s: pair not recorded, its approval is unreadable: %v", id, err)
+			continue
+		}
+		p, err := team.AdoptPayloadOf(a)
+		if err != nil {
+			m.logf("[team] adopt %s: pair not recorded: %v", id, err)
+			continue
+		}
+		m.recordAdoptPair(p, id)
+	}
 }
 
 // recordRemoteSpawnPair writes the pair of a forwarded spawn after its `registered` fact was applied here (not a replay of it): only

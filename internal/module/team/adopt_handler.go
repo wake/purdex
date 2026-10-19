@@ -396,7 +396,7 @@ func (m *Module) createApprovedAdopt(w http.ResponseWriter, row team.Approval, h
 		m.logf("[team] approval %s approved by %s at create: kind=adopt origin=%s (%s) target=%s", after.ID, c.DecidedBy.Kind, after.Origin.Ref, after.Origin.SessionID, p.TargetRef)
 		m.persons.spend(token)
 		m.announceClosed(after, nil)
-		m.recordAdoptPair(p, after.ID) // approved at create: the same pair as a click
+		m.recordAdoptPairAtApproval(p, after.ID) // approved at create: the same pair as a click
 		if cmd != nil {
 			m.kickCommands() // the joining row and its command are committed: send it now
 		}
@@ -448,7 +448,7 @@ func (m *Module) approveAdopt(a team.Approval, c Close) (after team.Approval, wo
 			m.kickCommands()
 		}
 		if refused == "" {
-			m.recordAdoptPair(p, a.ID) // an adopted session keeps its name and counts from now on (spec §5.4)
+			m.recordAdoptPairAtApproval(p, a.ID) // an adopted session keeps its name and counts from now on (spec §5.4)
 		}
 	}
 	if refused != "" && won {

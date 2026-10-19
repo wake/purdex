@@ -1,8 +1,10 @@
 package teammod
 
 import (
+	"context"
 	"testing"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -143,4 +145,58 @@ func TestNamePairsAdopt_ARemoteTargetIsKnownByItsName(t *testing.T) {
 	if n.count("pair:") != 1 {
 		t.Fatalf("calls = %v, want a name without a persona code to write nothing", n.log())
 	}
+}
+
+// codex R1 on #3556: an adopt of a session on another host is not a pair when it is approved — the member host can still refuse it,
+// or the session may turn out to be a member here — but when the member host answers applied and the row becomes active. A refusal
+// writes none. Mutation gate: record at the approval → red; no call after the settle → red.
+func TestNamePairsAdopt_ARemoteTargetIsRecordedWhenItBecomesActive(t *testing.T) {
+	setup := func(t *testing.T) (*fixture, *fakeLeadNames) {
+		f, _ := adoptFixture(t)
+		n := leadHostNames(f)
+		ipeers.SetPool(map[string]string{"anna": "Anna", "mia": "Mia"}, []string{"anna", "mia"}) // personas, as the peers module binds them
+		t.Cleanup(ipeers.ResetPool)
+		rec := remoteSession(rtSession, "_rt1234")
+		rec.Name = "purdex-88-mia"
+		f.m.peerRecords = func(context.Context, string) ([]ipeers.PeerRecord, error) { return []ipeers.PeerRecord{rec}, nil }
+		f.adoptOK(uid(30), remoteTarget)
+		f.approveClick(uid(30))
+		if n.count("pair:") != 0 {
+			t.Fatalf("calls at the approval = %v, want none yet", n.log())
+		}
+		return f, n
+	}
+	settle := func(t *testing.T, f *fixture, res peersmod.CallResult) {
+		t.Helper()
+		if _, err := f.m.store.SettleCommand(uid(30), res, f.clock.Load(), remoteOutcomes{m: f.m}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("applied", func(t *testing.T) {
+		f, n := setup(t)
+		settle(t, f, answerOf(uid(30), applied(rtSession, "_rt1234")))
+		if st, _ := f.memberRowState(uid(30)); st != rowActive {
+			t.Fatalf("row = %s, want active", st)
+		}
+		if n.count("pair:anna:mia") != 1 || n.count("pair:") != 1 {
+			t.Fatalf("calls = %v", n.log())
+		}
+	})
+	t.Run("a late applied for a row that is no longer joining", func(t *testing.T) {
+		f, n := setup(t)
+		if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'released' WHERE spawn_op = ?`, uid(30)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, f, answerOf(uid(30), applied(rtSession, "_rt1234")))
+		if n.count("pair:") != 0 {
+			t.Fatalf("calls = %v, want none: the row had left joining, the late answer changed nothing", n.log())
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		f, n := setup(t)
+		settle(t, f, refusedBy("host_not_allowed"))
+		if n.count("pair:") != 0 {
+			t.Fatalf("calls = %v, want none for an adopt the member host refused", n.log())
+		}
+	})
 }
