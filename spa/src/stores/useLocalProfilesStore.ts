@@ -74,6 +74,9 @@ import { isIconWeight, isPhosphorIconName, isValidHostColor } from '../lib/host-
 import { sanitizeShownIds } from './useShownHostsStore'
 import type { IconWeight, Tab, Workspace } from '../types/tab'
 
+/** The icon the sidebar's view toggle shows in the task-group view when the profile chose none (name pool v2 spec §9.6). */
+export const DEFAULT_TEAM_ICON = 'UsersThree'
+
 /** The `activeProfileId` of the master; never a slave's id. */
 export const MASTER_PROFILE_ID = 'master'
 
@@ -92,6 +95,8 @@ export interface ProfileAppearance {
   iconWeight?: IconWeight
   /** Strict lower-case `#rrggbb`, as a host's colour. */
   color?: string
+  /** The Phosphor icon (catalog name) the sidebar's view toggle shows in the task-group view (name pool v2 spec §9.6); absent = `UsersThree`. Independent of `icon`. */
+  teamIcon?: string
 }
 
 export interface LocalProfile extends ProfileAppearance {
@@ -118,6 +123,7 @@ export interface ProfileAppearancePatch {
   icon?: string | null
   iconWeight?: IconWeight | null
   color?: string | null
+  teamIcon?: string | null
 }
 
 interface LocalProfilesData {
@@ -179,7 +185,7 @@ export interface LocalProfilesState extends LocalProfilesData {
   setProfileAppearance: (
     id: string,
     patch: ProfileAppearancePatch,
-  ) => { ok: true } | Refused<'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color'>
+  ) => { ok: true } | Refused<'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'>
   /** Overwrite a PARKED world — `'master'` for the parked master (the master keeps syncing while a slave is on
    *  screen, so an apply lands here). The world on screen is not this store's to write. The epoch does not move. */
   replaceParkedWorld: (targetId: string, world: ParkedWorld) => { ok: true } | Refused<'not-found' | 'on-screen' | 'bad-world'>
@@ -252,6 +258,7 @@ function sanitiseAppearance(v: Record<string, unknown>): ProfileAppearance {
     if (isIconWeight(v.iconWeight)) out.iconWeight = v.iconWeight
   }
   if (isValidHostColor(v.color)) out.color = v.color.toLowerCase()
+  if (isPhosphorIconName(v.teamIcon)) out.teamIcon = v.teamIcon
   return out
 }
 
@@ -263,8 +270,8 @@ function sanitiseMaster(v: unknown): MasterAppearance {
 function patchAppearance(
   current: ProfileAppearance,
   patch: ProfileAppearancePatch,
-): { ok: true; appearance: ProfileAppearance } | Refused<'bad-icon' | 'bad-weight' | 'bad-color'> {
-  const next: ProfileAppearance = { icon: current.icon, iconWeight: current.iconWeight, color: current.color }
+): { ok: true; appearance: ProfileAppearance } | Refused<'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'> {
+  const next: ProfileAppearance = { icon: current.icon, iconWeight: current.iconWeight, color: current.color, teamIcon: current.teamIcon }
   if (patch.icon !== undefined) {
     if (patch.icon !== null && !isPhosphorIconName(patch.icon)) return { ok: false, reason: 'bad-icon' }
     next.icon = patch.icon ?? undefined
@@ -277,12 +284,17 @@ function patchAppearance(
     if (patch.color !== null && !isValidHostColor(patch.color)) return { ok: false, reason: 'bad-color' }
     next.color = patch.color?.toLowerCase()
   }
+  if (patch.teamIcon !== undefined) {
+    if (patch.teamIcon !== null && !isPhosphorIconName(patch.teamIcon)) return { ok: false, reason: 'bad-team-icon' }
+    next.teamIcon = patch.teamIcon ?? undefined
+  }
   if (next.icon === undefined) next.iconWeight = undefined // a weight alone means nothing
   // No `undefined`-valued keys: the record is compared and persisted as it is.
   const appearance: ProfileAppearance = {}
   if (next.icon !== undefined) appearance.icon = next.icon
   if (next.iconWeight !== undefined) appearance.iconWeight = next.iconWeight
   if (next.color !== undefined) appearance.color = next.color
+  if (next.teamIcon !== undefined) appearance.teamIcon = next.teamIcon
   return { ok: true, appearance }
 }
 
