@@ -17,11 +17,11 @@ import (
 
 // This file is the coordinator of qualification (spec §7): it submits the two halves of a pair to this host's queue, settles them when both
 // are done, and grants the label. cmd/wwd builds it (qualifysource.go gives it the host, the tasks of the prepared clones and the snapshot);
-// a person starts a pair with `pdx wwd qualify` (POST /v1/qualify, WWD-5b-2c-1), and the automatic trigger that calls Tick at the facts cadence
-// is WWD-5b-2c-2.
+// a person starts a pair with `pdx wwd qualify` (POST /v1/qualify, WWD-5b-2c-1), and the automatic trigger calls Tick at the facts cadence
+// (cmd/wwd qualifyTrigger, WWD-5b-2c-2).
 //
 // Locking: Tick and Request hold the coordinator's lock while they prepare a snapshot (git) and read and write the queue, so the caller
-// runs them in a goroutine of their own, never inside another lock (not in the daemon's labels lock, which Granted takes). 5b-2c wires it so.
+// runs them in a goroutine of their own, never inside another lock (not in the daemon's labels lock, which Granted takes). cmd/wwd wires it so.
 //
 // State is in memory. A restart forgets the pairs in flight (their two jobs go on and finish, unobserved) and the rate rule's memory
 // (the next automatic try may come before 24 h); a new pair for the same task supersedes the old jobs by their supersede keys, so a
