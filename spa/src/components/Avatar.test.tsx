@@ -11,6 +11,22 @@ describe('Avatar', () => {
     expect(img).toHaveStyle({ width: '24px', height: '24px' })
   })
 
+  // The persona drawings are transparent: without a disc behind them the circle (and the face on a dark theme) is lost.
+  it('puts a round #dfe4ea backing under the picture, whatever its size', () => {
+    for (const size of [18, 44] as const) {
+      const { unmount } = render(<Avatar size={size} code="hiro" name="Hiro" src="data:image/png;base64,AA==" fallbackColor="#336699" />)
+      const img = screen.getByRole('img', { name: 'Hiro' })
+      expect(img).toHaveStyle({ backgroundColor: '#dfe4ea' })
+      expect(img.className).toContain('rounded-full')
+      unmount()
+    }
+  })
+
+  it('keeps the initials on the host colour, not the backing', () => {
+    render(<Avatar size={44} code="hiro" name="Hiro" fallbackColor="#336699" />)
+    expect(screen.getByRole('img', { name: 'Hiro' })).toHaveStyle({ backgroundColor: '#336699' })
+  })
+
   it('falls back to the initial on the host colour when the image is empty', () => {
     render(<Avatar size={44} code="hiro" name="Hiro" src="" fallbackColor="#336699" />)
     const el = screen.getByRole('img', { name: 'Hiro' })

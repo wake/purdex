@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
-import { reasonWord, driverKey, zoneKey, errorTextKey, fallbackWord, REASON_CODES, DRIVERS } from './words'
+import { reasonWord, headroomReasonLines, driverKey, zoneKey, errorTextKey, fallbackWord, REASON_CODES, DRIVERS } from './words'
+import { parseHostsAnswer } from './parse'
+import reasonsJson from './__fixtures__/pool_hosts_response_reasons.json'
 import { ERROR_CODES } from './errors'
 
 const t = (key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON.stringify(opts) : ''}`
@@ -48,5 +50,37 @@ describe('other tables', () => {
       const k = errorTextKey(c)
       if (k) expect(has(k), c).toBe(true)
     }
+  })
+})
+
+describe('headroom reason lines (the daemon\'s golden: mlab, mserv, an unreachable host)', () => {
+  const [mlab, mserv, air19] = parseHostsAnswer(reasonsJson)!
+  const line = (cls: string, reason: string) => `pool.card.reason_line{"cls":"pool.card.class.${cls}","reason":"${reason}"}`
+  const words = (...codes: string[]) => codes.map((c) => `pool.reason.${c}`).join(' · ')
+
+  it('a class at 0 says why, in the daemon\'s order; a class above 0 says nothing', () => {
+    expect(headroomReasonLines({ heavy: 0, light: 2 }, mlab.headroom_reasons ?? null, t)).toEqual([line('heavy', words('zone_warning', 'slots_full'))])
+  })
+
+  it('an unreachable host sends no reasons: the plain 0, nothing invented', () => {
+    expect(air19.headroom_reasons).toBeUndefined()
+    expect(headroomReasonLines({ heavy: 0, light: 0 }, air19.headroom_reasons ?? null, t)).toEqual([])
+  })
+
+  it('reasons sent but none for a zero (an empty list) read as unknown, once for both classes', () => {
+    expect(headroomReasonLines({ heavy: 0, light: 0 }, { heavy: [], light: [] }, t)).toEqual([line('both', words('unknown'))])
+  })
+
+  it('the daemon naming `unknown` for light only', () => {
+    expect(mserv.headroom_reasons).toEqual({ heavy: [], light: ['unknown'] })
+    expect(headroomReasonLines({ heavy: 2, light: 0 }, mserv.headroom_reasons ?? null, t)).toEqual([line('light', words('unknown'))])
+  })
+
+  it('different words for the two classes are two lines', () => {
+    expect(headroomReasonLines({ heavy: 0, light: 0 }, { heavy: ['worker_off'], light: ['gate_full'] }, t)).toEqual([line('heavy', words('worker_off')), line('light', words('gate_full'))])
+  })
+
+  it('no headroom at all: nothing', () => {
+    expect(headroomReasonLines(null, { heavy: ['worker_off'], light: [] }, t)).toEqual([])
   })
 })
