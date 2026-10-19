@@ -149,6 +149,21 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   client (Purdex's `jobnotify`) that kept a cursor from before the restore would take it as still good once the
   restored queue's counter has caught up with it, and then miss the changes below it. A new epoch makes every client
   start again from `0`. (A backup older than schema 5 has no `db_epoch`; upgrading it again makes a new one.)
+* **Before any roll back: the quarantine must be empty** (#3373 PR2, from the build where the per-job database is named by
+  `source/id`). A job whose command was not proven stopped sits in the quarantine with its per-job database, and the older wwd's
+  database sweep knows only the names made from the job id alone: it would drop the new-named database of a job that may still be
+  running. Look on each host before you start the old build:
+
+  ```sh
+  ls ~/.local/share/wwd/quarantine/*.json 2>/dev/null | wc -l      # 0 = nothing is quarantined
+  ```
+
+  (one `*.json` marker per quarantined job; `ls ~/.local/share/wwd/quarantine/` shows the files, and the log line `worker:
+  quarantine: ... proven stopped and cleared` shows entries leaving). With one or more markers: wait for them to clear (the
+  quarantine sweep removes an entry once its unit is proven gone), or deal with the job first (the marker is JSON; its `Unit` field names the systemd unit: stop that
+  unit by hand and let the quarantine sweep clear the entry), and only then roll back. Today this concerns **mserv alone**, the only host with per-job
+  databases (`[jobdb]`); the other three have no database to lose. Going forward, new build over old, needs none of this: a sweep
+  of the new build keeps the old names of a held job.
 * Queue schema steps (`queue_schema`; each only forward): 2 `git_pins` (3b-2b), 3 `jobs.lapses` (3b-3a), 4 the origin cursor
   `jobs.rev`/`job_rev` and its triggers (3b-4a), 5 `db_epoch` (3b-4d), 6 `jobs.manual`/`jobs.manual_seq` (manual order; the rev trigger is
   replaced to watch them). The wire grows with them: `GET /v1/jobs` answers
