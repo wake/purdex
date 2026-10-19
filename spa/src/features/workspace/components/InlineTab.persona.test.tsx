@@ -29,7 +29,7 @@ const { InlineTab } = await import('./InlineTab')
 const INSTANCE = '4242:1700000000'
 const tab: Tab = {
   id: 't1', kind: 'tmux-session', locked: false,
-  layout: { type: 'leaf', pane: { id: 't1-pane', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S1', terminated: false } } },
+  layout: { type: 'leaf', pane: { id: 't1-pane', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S1', terminated: false, tmuxInstance: INSTANCE } } },
 } as never
 
 const peerRow = (address: string, tmuxInstance = INSTANCE): PeerRow => ({ address, ref: '_abc123', title: '', titleSource: '', deliverable: true, reason: '', tmuxInstance, agent: null })
@@ -107,6 +107,7 @@ describe('a session row without one keeps the agent icon (and its light)', () =>
     ['the peers row is of another tmux generation', () => setPeers(peerRow('mlab/work-freya', '9999:1'))],
     ['the persona is not one the App knows', () => setPeers(peerRow('mlab/work-nobody'))],
     ['nothing is cached', () => {}],
+    ['the pane itself is of an older tmux generation than the session now carrying its code', () => { setPeers(peerRow('mlab/work-freya')); useSessionStore.setState({ sessions: { h1: [{ code: 'S1', name: 'work', tmux_instance: '5555:2' }] as never } }); setPeers(peerRow('mlab/work-freya', '5555:2')) }],
   ])('%s', (_n, setup) => {
     setup()
     mount()

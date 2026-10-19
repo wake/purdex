@@ -49,6 +49,15 @@ describe('useSessionSeat', () => {
     expect(renderHook(() => useSessionSeat(H, 'S1')).result.current).toBeNull()
   })
 
+  it('a pane bound to an older tmux generation than the session now carrying its code is stale → null; one that cannot say follows the session', () => {
+    setPeers({ S1: peerRow('mlab/proj-1-freya') })
+    expect(renderHook(() => useSessionSeat(H, 'S1', '9999:1')).result.current).toBeNull()
+    expect(renderHook(() => useSessionSeat(H, 'S1', INSTANCE)).result.current).toMatchObject({ code: 'freya' })
+    expect(renderHook(() => useSessionSeat(H, 'S1', '')).result.current).toMatchObject({ code: 'freya' })
+    useTeamRosterStore.getState().apply(H, [team(sess('L', { tmux_session: 'proj-1', tmux_instance: INSTANCE, address: 'mlab/proj-1-kenji' }))])
+    expect(renderHook(() => useSessionSeat(H, 'S1', '9999:1')).result.current).toBeNull() // the roster does not vouch for a stale pane either
+  })
+
   it('an address that ends in no persona\'s code, no row, no host entry, and no code → null', () => {
     setPeers({ S1: peerRow('mlab/proj-1-nobody') })
     expect(renderHook(() => useSessionSeat(H, 'S1')).result.current).toBeNull()
