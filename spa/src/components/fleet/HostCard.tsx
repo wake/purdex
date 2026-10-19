@@ -63,7 +63,12 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
   const t = useI18nStore((s) => s.t)
   const unknown = t('pool.card.unknown')
   const w = pool.worker
-  const wordsOf = (n: number, list: string[] | undefined) => (n === 0 && list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : null)
+  // A class at 0: its reasons when the daemon sent them. A daemon that sends reasons but none for a zero (spec §3.2 says it names `unknown`)
+  // reads as unknown; a daemon that sends no reasons at all (older than pool.assess.v1) shows the plain 0, nothing invented.
+  const wordsOf = (n: number, list: string[] | undefined) => {
+    if (n !== 0 || !pool.reasons) return null
+    return list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : reasonWord('unknown', t)
+  }
   // Each class at 0 shows its own reasons, labelled with the class; the same words for both are shown once, labelled for both.
   const heavyWords = pool.headroom ? wordsOf(pool.headroom.heavy, pool.reasons?.heavy) : null
   const lightWords = pool.headroom ? wordsOf(pool.headroom.light, pool.reasons?.light) : null

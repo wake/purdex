@@ -165,6 +165,14 @@ describe('HostCard on the pool — the lower part', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }), headroom_reasons: { heavy: ['gate_full'], light: [] } })))
     expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(["heavy: The gate's slots are held"])
   })
+  it('reasons sent but a class at 0 with an empty list is a contradiction the daemon should not make: shown as unknown, labelled', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }), headroom_reasons: { heavy: [], light: [] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['heavy: Reason unknown'])
+  })
+  it('the same for light, and for both', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: [], light: [] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['heavy · light: Reason unknown'])
+  })
   it('a zero without reasons from the daemon is shown as 0, no reason invented', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }) })))
     expect(rowText('headroom')).toContain('heavy 0')
