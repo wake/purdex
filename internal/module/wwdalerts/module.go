@@ -410,6 +410,12 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 				continuing = true
 			}
 		}
+		// a list that could not be read this pass keeps what it held (a blip in reading, or the pool unreadable): it is not a clear
+		for h, held := range m.lastHeld {
+			if _, read := nowHeld[h]; !read && held[k] {
+				continuing = true
+			}
+		}
 		if continuing {
 			continue
 		}

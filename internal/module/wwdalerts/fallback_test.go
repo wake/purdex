@@ -144,3 +144,21 @@ func TestTheFallbackEndsWithThePoolAndRepeatsAtMostOnce(t *testing.T) {
 	a.passes(t, 1)
 	assert.Equal(t, 2, a.e.ntf.count())
 }
+
+// R2: a failure only a peer's list held (and was told) when the pool was whole, and which this host's own wwd starts to hold when the pool
+// can no longer be read, is the same failure going on: the peer's list is unread, not cleared, so the fallback does not tell it again.
+func TestASharedFailureTheUnreadPeerStillHoldsIsNotToldAgainInTheFallback(t *testing.T) {
+	a := newNode(t, "mlab")
+	a.e.src.peers = []string{"air26"}
+	a.e.src.set("air26", silenceOf("mserv", t0))
+	a.passes(t, 1)
+	assert.Equal(t, 1, a.e.ntf.count())
+	a.e.ntf.confirm(0)
+
+	// the pool becomes unreadable (air26's list with it); this host's own wwd now notices the same loss of mserv
+	a.e.src.poolErr = errors.New("pool unreadable")
+	a.e.src.set("mlab", silenceOf("mserv", t0.Add(2*time.Minute)))
+	a.peer(notReady())
+	a.passes(t, 4)
+	assert.Equal(t, 1, a.e.ntf.count(), "the failure that was told is not told again as a new one")
+}
