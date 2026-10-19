@@ -42,10 +42,12 @@ describe('HostCell on the pool — states', () => {
     expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
   })
 
-  it('live with the zone unknown: the cell says unknown and does not force a zone colour (the arc follows its own score)', () => {
+  it('live with the zone unknown: the ring keeps its length (the score) and is grey (design: 環照長度畫，但用灰色)', () => {
     show(cell(poolHost({ load: { score: 20, driver: 'cpu' }, facts: factsWith({ derived: { ...darwin.derived, zone: 'unknown' } }) })))
     expect(ring().dataset.zone).toBe('unknown')
-    expect(within(ring()).getByTestId('context-ring-arc').dataset.tone).toBe('ok')
+    const arc = within(ring()).getByTestId('context-ring-arc')
+    expect(arc.dataset.tone).toBe('muted')
+    expect(arc.dataset.shown).toBe('20')
   })
   it('a zone colour is forced when the zone is known: warning paints the arc warn even at a low score', () => {
     show(cell(poolHost({ load: { score: 20, driver: 'cpu' }, facts: factsWith({ derived: { ...darwin.derived, zone: 'warning' } }) })))
@@ -87,20 +89,22 @@ describe('HostCell on the pool — the running dot', () => {
   })
 })
 
-describe('HostCell on the pool — the count', () => {
-  it('is the queued jobs of this host, always muted', () => {
+// The count at the badge's top right is left as it is today (the user, WWD-7 Q2: "to be reworked as a whole later"): facts' queued
+// jobs add no number to it. On the pool a live host has no gate queue, so today's count does not show either.
+describe('HostCell on the pool — the top-right count is left alone', () => {
+  it('queued jobs in the facts draw no number', () => {
     show(cell(poolHost({ facts: factsWith({ queue: { queued: 4 } }) })))
-    expect(count()).toHaveTextContent('4')
-    expect(count()!.className).toContain('bg-text-muted')
-    expect(count()!.className).not.toContain('bg-status-')
+    expect(count()).toBeNull()
   })
-  it('is absent when facts carry no queue, or it is empty', () => {
+  it('no queue in the facts, none either', () => {
     show(cell(poolHost()))
     expect(count()).toBeNull()
   })
-  it('is absent at 0', () => {
-    show(cell(poolHost({ facts: factsWith({ queue: { queued: 0 } }) })))
-    expect(count()).toBeNull()
+  it('a fallback host keeps today\'s gate-queue count', () => {
+    const waiters = Array.from({ length: 2 }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', session: '', since: 0 }))
+    const slow = { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, holders: [], waiters, longest_wait_s: 30, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } }
+    show(cell(null, { fleet: fleetHost({ slow }) }))
+    expect(count()).toHaveTextContent('2')
   })
 })
 
@@ -149,15 +153,27 @@ describe('HostCard on the pool — the lower part', () => {
   it('both classes at 0 for different reasons: each shows its own', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: ['slots_full'], light: ['owner_active'] } })))
     const reasons = screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)
-    expect(reasons).toEqual(['All slots are in use', 'The owner is at this machine'])
+    expect(reasons).toEqual(['heavy: All slots are in use', 'light: The owner is at this machine'])
   })
-  it('both classes at 0 for the same reason: shown once', () => {
+  it('both classes at 0 for the same reason: shown once, saying it holds for both', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: ['worker_off'], light: ['worker_off'] } })))
-    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['Worker is off'])
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['heavy · light: Worker is off'])
   })
-  it('only light at 0: its reason shows', () => {
+  it('only light at 0: its reason shows, labelled light', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 1, light: 0 } } }), headroom_reasons: { heavy: [], light: ['slots_full'] } })))
-    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['All slots are in use'])
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['light: All slots are in use'])
+  })
+  it('only heavy at 0: its reason shows, labelled heavy', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }), headroom_reasons: { heavy: ['gate_full'], light: [] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(["heavy: The gate's slots are held"])
+  })
+  it('reasons sent but a class at 0 with an empty list is a contradiction the daemon should not make: shown as unknown, labelled', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }), headroom_reasons: { heavy: [], light: [] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['heavy: Reason unknown'])
+  })
+  it('the same for light, and for both', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: [], light: [] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['heavy · light: Reason unknown'])
   })
   it('a zero without reasons from the daemon is shown as 0, no reason invented', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }) })))

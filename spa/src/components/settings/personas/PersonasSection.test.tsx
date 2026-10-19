@@ -3,7 +3,10 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-libra
 
 vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-save')>()), savePersonas: vi.fn() }))
 
-import { savePersonas, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
+vi.mock('../../../lib/names/persona-draw', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-draw')>()), drawRecipe: vi.fn() }))
+
+import { drawRecipe } from '../../../lib/names/persona-draw'
+import { savePersonas, editBase, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
@@ -278,6 +281,158 @@ describe('PersonasSection', () => {
     const err = (await screen.findByTestId('personas-error')).textContent!
     expect(err).toMatch(/不合規定|break the rules/)
     expect(err).toContain('olga.nationality.zh')
+  })
+
+  describe('the avatar', () => {
+    it('does not draw anything just because a persona is opened', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      expect(screen.getByTestId('avatar-picker')).toBeTruthy()
+      expect(drawRecipe).not.toHaveBeenCalled()
+    })
+
+    it('saves the recipe with the image that was drawn, and keeps what was typed meanwhile', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset()
+      let finish!: (v: string) => void
+      vi.mocked(drawRecipe).mockImplementation(() => new Promise<string>((r) => { finish = r }))
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'hiro' } })
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      // the draw is out; the name is edited before it comes back
+      fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
+      await act(async () => { finish('data:image/webp;base64,UklGRgAAAABXRUJQ') })
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      const saved = vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'hiro')!
+      expect(saved).toMatchObject({ name: 'Hiro Two', avatar: { source: 'lorelei', seed: 'hiro' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ' })
+    })
+
+    it('does not save while a changed avatar is still waiting to be drawn, then saves the new pair', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'new-seed' } })
+      fireEvent.click(screen.getByTestId('persona-save')) // inside the pause before the draw
+      expect(savePersonas).not.toHaveBeenCalled()
+      expect(screen.getByTestId('personas-note').textContent).toMatch(/繪製|drawn/)
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.queryByTestId('avatar-drawing')).toBeNull())
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'hiro')).toMatchObject({
+        avatar: { source: 'lorelei', seed: 'new-seed' }, avatar_data: 'data:image/webp;base64,UklGRgAAAABXRUJQ',
+      })
+    })
+
+    it('opens the picker afresh on the persona that was rebuilt from the shown collection', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      vi.mocked(savePersonas).mockImplementation(async () => {
+        seed(['hiro'], { hiro: { avatar: { source: 'micah', seed: 'remote-seed' } } })
+        return { hostId: 'h1', mirror: NO_MIRROR, base: null }
+      })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'lorelei' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'local-seed' } })
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalled())
+      await waitFor(() => expect(screen.queryByTestId('avatar-drawing')).toBeNull())
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect((screen.getByTestId('avatar-source') as HTMLSelectElement).value).toBe('micah'))
+      expect((screen.getByTestId('avatar-seed') as HTMLInputElement).value).toBe('remote-seed')
+    })
+
+    it('a second new persona starts with a fresh picker, not the first one\'s source, seed and options', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-new'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'micah' } })
+      fireEvent.change(screen.getByTestId('avatar-seed'), { target: { value: 'first-seed' } })
+      fireEvent.change(screen.getByTestId('avatar-options'), { target: { value: '{"a": 1}' } })
+      fireEvent.click(screen.getByTestId('persona-new')) // "New" again: another blank persona
+      expect((screen.getByTestId('avatar-source') as HTMLSelectElement).value).toBe('')
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'micah' } })
+      expect((screen.getByTestId('avatar-seed') as HTMLInputElement).value).toBe('')
+      expect((screen.getByTestId('avatar-options') as HTMLTextAreaElement).value).toBe('')
+    })
+
+    it('does not put an old persona\'s image into the one opened next', async () => {
+      seed(['hiro', 'emma'])
+      vi.mocked(drawRecipe).mockReset()
+      let finish!: (v: string) => void
+      vi.mocked(drawRecipe).mockImplementation(() => new Promise<string>((r) => { finish = r }))
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      fireEvent.change(screen.getByTestId('avatar-source'), { target: { value: 'photo' } })
+      fireEvent.change(screen.getByTestId('avatar-url'), { target: { value: 'https://picsum.photos/seed/x/200' } })
+      fireEvent.click(screen.getByTestId('avatar-fetch'))
+      await waitFor(() => expect(drawRecipe).toHaveBeenCalledTimes(1))
+      fireEvent.click(screen.getByTestId('persona-row-emma')) // hiro's draw is still out
+      await act(async () => { finish('data:image/webp;base64,UklGRgAAAABXRUJQ') })
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      const emma = vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'emma')!
+      expect(emma.avatar_data).not.toBe('data:image/webp;base64,UklGRgAAAABXRUJQ')
+    })
+  })
+
+  describe('import', () => {
+    const pickFile = (entries: unknown) =>
+      fireEvent.change(screen.getByTestId('persona-import-file'), { target: { files: [new File([JSON.stringify(entries)], 'p.json', { type: 'application/json' })] } })
+
+    // the real savePersonas writes the collection and reloads the host; this stands in for that
+    const savesLikeTheDaemon = () =>
+      vi.mocked(savePersonas).mockImplementation(async (items) => {
+        usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: { items, stamp: { at: 9, host: 'h1' }, revision: 5 } } } })
+        return { hostId: 'h1', mirror: NO_MIRROR, base: editBase() }
+      })
+
+    it('rebuilds the open form from what was saved, so its next save is not made on the old values', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      savesLikeTheDaemon()
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('Hiro')
+      pickFile([{ id: 'hiro', name: 'Hiro Imported' }])
+      fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+      await waitFor(() => expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('Hiro Imported'))
+      expect((await screen.findByTestId('personas-note')).textContent).toMatch(/表單已改成|open form now shows/)
+      // and saving that form now goes through on the new base instead of being refused as stale
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(savePersonas).mock.calls[1][1]).toMatchObject({ revision: 5 })
+    })
+
+    it('keeps what was typed for a new persona, and only moves it onto the new base', async () => {
+      seed(['hiro'])
+      savesLikeTheDaemon()
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-new'))
+      fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
+      pickFile([{ id: 'emma', name: 'Emma' }])
+      fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.queryByTestId('persona-import-summary')).toBeNull())
+      expect((screen.getByTestId('persona-code').querySelector('input') as HTMLInputElement).value).toBe('newone')
+      expect(screen.getByTestId('personas-note').textContent).not.toMatch(/表單已改成|open form now shows/)
+    })
+
+    it('shows the avatar credits at the foot of the page', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      expect(screen.getByTestId('persona-credits')).toBeTruthy()
+      expect(screen.getByTestId('persona-credit-micah').textContent).toContain('CC BY 4.0')
+    })
   })
 
   describe('the source host', () => {

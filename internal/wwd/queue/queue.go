@@ -53,6 +53,9 @@ type Options struct {
 	NewID func() string
 	// Pinner pins the snapshots (see Pinner). Nil: nothing is pinned, which is for tests and for a host with no git.
 	Pinner Pinner
+	// OnSucceeded is told, after the end is committed, of each job a worker ended with a reusable success (see reusable), with what the
+	// claim that ended it said about itself. It runs on the caller's goroutine and must be quick; it cannot fail the result. Optional.
+	OnSucceeded func(ctx context.Context, j wire.Job, p Produced)
 	// LeaseS and RenewS are the lease a claim and each heartbeat hand out, and how often the worker should renew (default 60 and 15).
 	// Tests shorten them.
 	LeaseS, RenewS int

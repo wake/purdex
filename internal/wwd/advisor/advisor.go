@@ -20,6 +20,9 @@ type Input struct {
 	// Recent returns the 5 s samples at or after since, oldest first (about the last hour is kept); nil: only the minute rollups exist (a
 	// replay), and a rule that needs finer time falls back to the minute.
 	Recent func(since time.Time) []wire.Facts
+	// Orphans is the host's latest process scan (internal/wwd/orphans); nil: none is available (a replay has no process table), and the
+	// orphans rule is unjudged. It returns nil before the first scan has run.
+	Orphans func() *OrphanReport
 	// StartsSince is the number of wwd starts recorded at or after since; nil: not available.
 	StartsSince func(since time.Time) (int, error)
 	// WorkRoot is the directory jobs run in: the volume that holds it is the host's work volume (spec §13.3 "disk low").

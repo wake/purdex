@@ -26,6 +26,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
+	"github.com/wake/purdex/internal/wwd/orphans"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -134,11 +135,18 @@ func run(cfgPath string) error {
 	var fastLane *localruns.Service
 	// what each job that ran here used, from the samples and the job's final event (spec 8.5); recording only
 	usage := daemon.NewUsageRecorder(alias, facts.NewJobUsageTracker(time.Now(), daemon.SampleInterval), st)
-	q, err := queue.New(st.DB(), queueOptions(alias, cfg.DataDir, func(ev wire.JobEvent) {
+	var d *daemon.Daemon // the sampler's gate reads its pool, and a result is filed by it: it exists once the daemon does, before any job can end
+	qopts := queueOptions(alias, cfg.DataDir, func(ev wire.JobEvent) {
 		broker.PublishJob(ev)
 		fastLane.OnJobEvent(ev)
 		usage.OnJobEvent(ev)
-	}))
+	})
+	qopts.OnSucceeded = func(ctx context.Context, j wire.Job, p queue.Produced) { // the result of a job a worker ended is filed for reuse (spec §4.5)
+		if d != nil {
+			d.FileResult(ctx, j, p)
+		}
+	}
+	q, err := queue.New(st.DB(), qopts)
 	if err != nil {
 		return err
 	}
@@ -166,12 +174,14 @@ func run(cfgPath string) error {
 		MinCPUSeconds: cfg.Observe.MinCPUSeconds, MinMemMB: cfg.Observe.MinMemMB, Interval: daemon.SampleInterval,
 	}, st)
 	sources := facts.SystemSourcesWith(srcOpt)
+	// the leaked dev processes and fork loops (spec §13.3 orphans): looked at from the same snapshot, listed only, never signalled
+	orphanScan := orphans.New(orphans.Config{UID: os.Getuid()})
 	sources.Observe = func(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
 		observer.Observe(now, snap, c)
 		usage.Observe(now, snap, c)
+		orphanScan.Observe(now, snap, c)
 	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
-	var d *daemon.Daemon                      // the sampler's gate reads its pool, which exists once the daemon does
 	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
 	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
 	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf).WithWorkDir(workRoot) // the jobs' disk is the work root's
@@ -206,7 +216,7 @@ func run(cfgPath string) error {
 	})
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
-	go runAdvisor(ctx, advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents})
+	go runAdvisor(ctx, advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report})
 	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
 	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
 	// defer runs before it, which was deferred earlier), also when run() failed.

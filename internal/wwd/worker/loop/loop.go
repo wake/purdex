@@ -97,7 +97,9 @@ type Config struct {
 	Warm func(wire.Job) bool
 	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none.
 	SpeedFactor float64
-	Estimate    func(wire.Job) float64
+	// ExplicitLabelsOnly is pick.Env.ExplicitLabelsOnly.
+	ExplicitLabelsOnly bool
+	Estimate           func(wire.Job) float64
 	// Usage is told how each run went (see UsageRecorder); nil: nothing is recorded.
 	Usage UsageRecorder
 	// Sweepers are run every SweepEvery with the keys ("source/id") of the jobs the worker holds: the ones it runs, and Held() (quarantined ones, whose
@@ -327,7 +329,7 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 		l.cfg.Logf("worker: reading the queue of %s: %v", host, err)
 	}
 	env := pick.Env{
-		Now: l.cfg.Now(), Labels: l.cfg.Labels(), SpeedFactor: l.cfg.SpeedFactor, Estimate: l.cfg.Estimate, Warm: l.cfg.Warm,
+		Now: l.cfg.Now(), Labels: l.cfg.Labels(), ExplicitLabelsOnly: l.cfg.ExplicitLabelsOnly, SpeedFactor: l.cfg.SpeedFactor, Estimate: l.cfg.Estimate, Warm: l.cfg.Warm,
 		Locked: func(keys []string) bool { return len(l.cfg.Locks.Conflicts(keys)) > 0 },
 	}
 	if l.cfg.Report != nil {

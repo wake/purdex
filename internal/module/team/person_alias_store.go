@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/wake/purdex/internal/team"
 )
 
 // personAliasSchema: when a person's command approves the agent's OPEN request instead of opening its own row, the person's request id
@@ -25,6 +27,27 @@ func (s *Store) RecordPersonAlias(requestID, approvalID, hash string, at int64) 
 		return fmt.Errorf("record person alias %s: %w", requestID, err)
 	}
 	return nil
+}
+
+// MarkLeadPerson marks the open lead request id as a person's card request (LeadPayload.Person), so the unattended sweep leaves it
+// for the person; it returns the row as it is now. marked is false when the row was no longer an open lead request (a decide or
+// the sweeper closed it first): nothing was written and the row returned is the closed one. The request's hash is not part of
+// the payload and does not change.
+func (s *Store) MarkLeadPerson(id string) (row team.Approval, marked bool, err error) {
+	res, err := s.db.Exec(`UPDATE approval_requests SET payload_json = json_set(payload_json, '$.person', json('true'))
+		WHERE id = ? AND kind = 'lead' AND state = 'open'`, id)
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("mark lead person %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("mark lead person %s: %w", id, err)
+	}
+	row, ok, err := s.Get(id)
+	if err == nil && !ok {
+		err = ErrNoSuchApproval
+	}
+	return row, n == 1, err
 }
 
 // PersonAlias is the approval that answered request id and the hash it was asked with; ok false when there is none.

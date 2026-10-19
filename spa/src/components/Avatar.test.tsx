@@ -28,4 +28,15 @@ describe('Avatar', () => {
     render(<Avatar size={18} code="olga" fallbackColor="#336699" />)
     expect(screen.getByRole('img', { name: 'olga' })).toHaveTextContent('O')
   })
+
+  it('decorative: hidden from assistive technology, picture or initials, so the name beside it is said once', () => {
+    const { container, rerender } = render(<Avatar size={16} code="ann" name="Ann" src="data:image/png;base64,AA==" fallbackColor="#336699" decorative />)
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(container.querySelector('img')).toHaveAttribute('aria-hidden', 'true')
+    expect(container.querySelector('img')).toHaveAttribute('alt', '')
+    rerender(<Avatar size={16} code="ann" name="Ann" fallbackColor="#336699" decorative />)
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true')
+    expect(container.firstElementChild).not.toHaveAttribute('aria-label')
+  })
 })

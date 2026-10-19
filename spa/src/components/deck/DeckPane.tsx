@@ -28,9 +28,11 @@ interface Props {
   live?: DeckViewProps['live']
   /** See `DeckViewProps.tail`. */
   tail?: DeckViewProps['tail']
+  /** See `DeckViewProps.seat`. */
+  seat?: DeckViewProps['seat']
 }
 
-export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer, live, tail }: Props) {
+export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer, live, tail, seat }: Props) {
   const t = useI18nStore((s) => s.t)
   const typeStyle = useDeckTypeStyle()
   const ref = useRef<HTMLDivElement>(null)
@@ -82,7 +84,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     body = (
       <SessionPanelSplit paneKey={paneId} binding={binding} turns={entry.doc.turns} active={isActive && isFocusTarget}>
         <DeckView key={sessionId} paneId={paneId} hostId={hostId} sessionId={sessionId} entry={entry}
-          onSwitchToTerminal={onSwitchToTerminal} footer={footer} onOpenPanel={onOpenPanel} live={live} tail={tail} />
+          onSwitchToTerminal={onSwitchToTerminal} footer={footer} onOpenPanel={onOpenPanel} live={live} tail={tail} seat={seat} />
       </SessionPanelSplit>
     )
   }
