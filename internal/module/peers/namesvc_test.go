@@ -163,9 +163,8 @@ func TestNameService_UndoWithoutARecordOfTheRenameDoesNothing(t *testing.T) {
 	ctx := context.Background()
 	_, err := e.m.RenameForLead(ctx, poolSidA, "mia")
 	require.NoError(t, err)
-	fresh := e.m // a daemon restart forgets the renames in flight
-	fresh.leadRenames = nil
-	require.NoError(t, fresh.UndoRenameForLead(ctx, poolSidA, "purdex-54-anna"))
+	e.m.leadRenames.drop(nameSID(poolSidA)) // a daemon restart forgets the renames in flight
+	require.NoError(t, e.m.UndoRenameForLead(ctx, poolSidA, "purdex-54-anna"))
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "harmless: on a retry, keeping the current name is the new name")
 }
 
