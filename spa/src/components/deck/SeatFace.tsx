@@ -9,7 +9,7 @@ import type { Seat } from '../../lib/names/seat'
 export function SeatFace({ seat, size }: { seat: Seat; size: 14 | 16 }) {
   const look = useHostLook(useContext(ConversationHostContext))
   const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
-  return <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} />
+  return <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} decorative />
 }
 
 /** The compact line over a later speech start (spec §9.4): the face and the name in muted text, no time. */

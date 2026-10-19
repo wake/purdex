@@ -33,7 +33,10 @@ describe('the deck of a persona', () => {
     render(<DeckView {...props} seat={ann} entry={entry([text('a', 0)])} />)
     const head = screen.getByTestId('deck-agent-header')
     expect(head).toHaveAttribute('data-persona', 'ann')
-    expect(within(head).getByRole('img', { name: 'Ann' })).toBeInTheDocument()
+    // the face is decoration: the name next to it is the only thing a screen reader says
+    expect(within(head).queryByRole('img')).toBeNull()
+    expect(head.querySelector('[aria-label], [alt]:not([alt=""])')).toBeNull() // nothing else carries the name for assistive technology
+    expect(head.textContent?.match(/Ann/g)).toHaveLength(1)
     expect(head).toHaveTextContent('Ann')
     expect(head).toHaveTextContent('claude-opus-4')
     expect(head).toHaveTextContent('04:12')
@@ -44,7 +47,7 @@ describe('the deck of a persona', () => {
     expect(screen.getAllByTestId('deck-agent-header')).toHaveLength(1)
     const lines = screen.getAllByTestId('deck-speech-line')
     expect(lines).toHaveLength(2) // b (after the tool) and c (after the thought); d continues c
-    for (const l of lines) { expect(l).toHaveTextContent('Ann'); expect(l).not.toHaveTextContent(/\d\d:\d\d/) }
+    for (const l of lines) { expect(l).toHaveTextContent('Ann'); expect(l).not.toHaveTextContent(/\d\d:\d\d/); expect(within(l).queryByRole('img')).toBeNull() }
   })
 
   it('a system row between two texts does not make the second a start', () => {

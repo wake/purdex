@@ -38,4 +38,15 @@ describe('speechStartIds', () => {
   it('a turn with no agent text has no start', () => {
     expect(starts('user', 'step', 'thinking')).toEqual([])
   })
+
+  it('a turn that left its first items out cannot say what came before the first one in view: a text there is not claimed as a start', () => {
+    const items = ['agent_text', 'step', 'agent_text'].map((k, i) => it_(k, `${k}${i}`))
+    expect([...speechStartIds(items, { afterOmitted: true })]).toEqual(['agent_text2'])
+    expect([...speechStartIds(items)]).toEqual(['agent_text0', 'agent_text2'])
+  })
+
+  it('left-out items before something that is not text change nothing: the first text after a tool is still a start', () => {
+    const items = ['step', 'agent_text'].map((k, i) => it_(k, `${k}${i}`))
+    expect([...speechStartIds(items, { afterOmitted: true })]).toEqual(['agent_text1'])
+  })
 })

@@ -76,7 +76,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   const firstAgentId = turn.items.find((item) => item.type === 'agent_text')?.id
   const firstUser = firstUserId(turn.items, turn.omitted_items)
   // Where the agent starts speaking again after a tool or a thought (spec §9.4): only a persona's conversation draws a line for it.
-  const speechStarts = useMemo(() => (seat ? speechStartIds(turn.items) : null), [seat, turn.items])
+  const speechStarts = useMemo(() => (seat ? speechStartIds(turn.items, { afterOmitted: !!turn.omitted_items }) : null), [seat, turn.items, turn.omitted_items])
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return
