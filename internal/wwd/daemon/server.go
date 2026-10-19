@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/snapshot"
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -49,6 +51,13 @@ type Options struct {
 	// repo:<name> labels). Called once per facts record: cheap, never blocking.
 	// nil: no repo labels.
 	RepoSource func() []string
+	// Earned is the store of this host's earned and quarantined task labels (spec §7): the earned ones join the advertised labels, a
+	// quarantined one does not. nil: none. GET /v1/earned-labels serves from it on the local socket.
+	Earned EarnedStore
+	// ReferenceTasks lists the tasks whose qualify.reference is a host, from the manifests of this host's repos; this host holds the
+	// task label of those that name it, without qualifying, when it has what they need. Called once per facts record and per
+	// RefreshLabels: cheap, never blocking. nil: none.
+	ReferenceTasks func() []labels.RefTask
 	// Observer is this host's observation records (spec 8.4); the observation routes serve from it. nil: they are not registered.
 	Observer *Observer
 	// Alerts is the store of this host's alerts (spec §13.3); GET /v1/alerts serves from it. nil: the route is not registered.
@@ -66,6 +75,12 @@ type Daemon struct {
 	pool   *PoolPoller
 	fwd    *http.Client
 	labels labels.Tracker
+
+	// labelsMu serializes choosing the record, collecting the labels, updating the tracker and announcing: OnFacts and RefreshLabels
+	// never interleave. It guards lastFacts and lastEarned.
+	labelsMu   sync.Mutex
+	lastFacts  *wire.Facts // the newest record, for RefreshLabels
+	lastEarned []string    // the earned task labels the store last gave
 }
 
 func New(o Options) *Daemon {
@@ -141,6 +156,7 @@ func (d *Daemon) SocketHandler() http.Handler {
 	d.routes(mux, false)
 	d.poolRoutes(mux)
 	d.usageRoutes(mux)
+	d.earnedRoutes(mux)
 	if d.opts.ClaimRoutes != nil {
 		d.opts.ClaimRoutes(mux)
 	}
@@ -205,19 +221,72 @@ func (d *Daemon) info() wire.Info {
 // record, refreshes the labels and the fingerprint, and announces the labels
 // only when they really changed.
 func (d *Daemon) OnFacts(f wire.Facts) {
+	d.labelsMu.Lock() // the record's event goes out under the same lock as its labels, after any refresh that is already running
+	defer d.labelsMu.Unlock()
 	d.broker.PublishFacts(f)
-	var repos []string
+	d.lastFacts = &f
+	d.updateLabels(f)
+}
+
+// RefreshLabels recomputes the labels from the newest facts record and announces them if they changed: for when the earned labels
+// changed (a label earned, quarantined or revoked) between two facts records. Before the first record there is nothing to do. It runs
+// under the same lock as OnFacts, so a refresh that started on an older record can never land after a newer record's update.
+func (d *Daemon) RefreshLabels() {
+	d.labelsMu.Lock()
+	defer d.labelsMu.Unlock()
+	if d.lastFacts != nil {
+		d.updateLabels(*d.lastFacts)
+	}
+}
+
+// updateLabels is the labels of a record plus what no record says: repo:<name> for each prepared clone, host:<alias> (it narrows who
+// may claim a job and grants nothing, spec §7), the task labels held as the reference, and the earned task labels. The caller holds
+// labelsMu.
+func (d *Daemon) updateLabels(f wire.Facts) {
+	var extra []string
 	if d.opts.RepoSource != nil {
 		for _, r := range d.opts.RepoSource() {
 			if r != "" {
-				repos = append(repos, "repo:"+r)
+				extra = append(extra, "repo:"+r)
 			}
 		}
 	}
-	if d.labels.Update(f, repos...) {
+	if d.opts.Alias != "" {
+		extra = append(extra, "host:"+d.opts.Alias)
+	}
+	if d.opts.ReferenceTasks != nil {
+		base, _ := labels.FromFacts(f)
+		extra = append(extra, labels.ReferenceLabels(d.opts.Alias, append(base, extra...), d.opts.ReferenceTasks())...)
+	}
+	extra = append(extra, d.earnedLabels()...)
+	if d.labels.Update(f, extra...) {
 		l, _ := d.labels.Current()
 		d.broker.PublishLabels(wire.LabelsEvent{Host: d.opts.Alias, Labels: l})
 	}
+}
+
+// earnedLabels is the task labels this host advertises because it earned them; a quarantined one is left out, and so is a label that
+// is not a task label (a damaged row never grants a capability). A store that cannot be read at all keeps the last set it gave, so a
+// passing read error does not revoke every label and announce it; a store that has never answered advertises none (nothing is invented).
+// A table with damaged rows still answers with the rest. The caller holds labelsMu.
+func (d *Daemon) earnedLabels() []string {
+	if d.opts.Earned == nil {
+		return nil
+	}
+	rows, err := d.opts.Earned.EarnedLabels()
+	var skipped *store.SkippedRowsError
+	if err != nil && !errors.As(err, &skipped) {
+		log.Printf("wwd: reading the earned labels: %v (keeping the last set)", err)
+		return d.lastEarned
+	}
+	out := []string{}
+	for _, e := range rows {
+		if e.State == wire.EarnedLabelEarned && wire.ValidTaskLabel(e.Label) {
+			out = append(out, e.Label)
+		}
+	}
+	d.lastEarned = out
+	return out
 }
 
 func (d *Daemon) handleInfo(w http.ResponseWriter, r *http.Request) {
