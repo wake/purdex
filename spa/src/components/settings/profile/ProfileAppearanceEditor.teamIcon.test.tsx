@@ -102,6 +102,14 @@ describe('the team-icon colour row', () => {
     for (const p of HOST_COLOR_PRESETS) expect(screen.getByTestId(`profile-edit-team-color-${p}`)).toBeInTheDocument()
   })
 
+  it('after "use the default" on the profile icon, a colour left behind does not tint the team preview (the logo is not tinted)', () => {
+    state().setProfileAppearance('master', { icon: 'Star', color: '#ff0000' })
+    state().setProfileAppearance('master', { icon: null }) // the colour stays in the record; the logo does not wear it
+    render(<ProfileAppearanceEditor id="master" />)
+    expect(state().master.color).toBe('#ff0000')
+    expect(screen.getByTestId('profile-edit-team-icon-glyph').style.color).toBe('')
+  })
+
   it('works with no profile icon (the profile colour is switched off then; the team icon is always an icon)', () => {
     render(<ProfileAppearanceEditor id="master" />)
     expect(screen.getByTestId(`profile-edit-team-color-${hex}`)).not.toBeDisabled()

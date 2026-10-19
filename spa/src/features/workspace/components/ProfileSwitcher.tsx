@@ -35,12 +35,13 @@ export function ProfileIcon({ appearance, size, logoAlt = '' }: { appearance: Pr
 
 /**
  * A profile's team icon (name pool v2 spec §9.6): what the sidebar's view toggle shows in the task-group view, and the editor's preview of it. Drawn once, here, so the two
- * cannot differ: the chosen icon (`UsersThree` when none) at the profile's `teamIconWeight`, in `teamColor` — which, when not set, is the profile's `color` (the same
- * colour as its profile icon, and none when that is not set either). The colour goes on the outer element, as `ProfileIcon` does.
+ * cannot differ: the chosen icon (`UsersThree` when none) at the profile's `teamIconWeight`, in `teamColor` — which, when not set, is the colour the profile icon wears (its `color`, when it
+ * has an icon; none with the logo, which is a bitmap). The colour goes on the outer element, as `ProfileIcon` does.
  */
 export function TeamIcon({ appearance, size, testId = 'team-icon' }: { appearance: ProfileAppearance; size: number; testId?: string }) {
   const icon = appearance.teamIcon ?? DEFAULT_TEAM_ICON
-  const color = appearance.teamColor ?? appearance.color
+  // Not set, it is in the colour of the profile icon — and the profile colour tints an icon only: with the Purdex logo showing (no `icon`), a colour left from an earlier icon is not worn.
+  const color = appearance.teamColor ?? (appearance.icon !== undefined ? appearance.color : undefined)
   return (
     <span
       data-testid={testId}

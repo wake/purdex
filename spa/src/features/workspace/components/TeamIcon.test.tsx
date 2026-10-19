@@ -48,10 +48,17 @@ describe('TeamIcon', () => {
   it('is in teamColor on the outer element; with none it is in the profile colour; with neither it sets none', () => {
     const { rerender } = render(<TeamIcon appearance={{ color: '#ff0000', teamColor: '#00ff00' }} size={16} />)
     expect(screen.getByTestId('team-icon').style.color).toBe('rgb(0, 255, 0)')
-    rerender(<TeamIcon appearance={{ color: '#ff0000' }} size={16} />)
+    rerender(<TeamIcon appearance={{ icon: 'Star', color: '#ff0000' }} size={16} />)
     expect(screen.getByTestId('team-icon').style.color).toBe('rgb(255, 0, 0)')
     rerender(<TeamIcon appearance={{}} size={16} />)
     expect(screen.getByTestId('team-icon').style.color).toBe('')
+  })
+
+  it('the profile colour is worn only as far as the profile icon wears it: with the logo showing, a colour left from an earlier icon is not', () => {
+    const { rerender } = render(<TeamIcon appearance={{ color: '#ff0000' }} size={16} />) // no icon: the Purdex logo, which a colour does not tint
+    expect(screen.getByTestId('team-icon').style.color).toBe('')
+    rerender(<TeamIcon appearance={{ color: '#ff0000', teamColor: '#00ff00' }} size={16} />)
+    expect(screen.getByTestId('team-icon').style.color).toBe('rgb(0, 255, 0)') // its own colour is still worn
   })
 })
 
