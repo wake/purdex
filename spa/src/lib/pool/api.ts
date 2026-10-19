@@ -5,8 +5,15 @@ import { parseHostsAnswer, parseSeries } from './parse'
 import type { PoolHost, PoolSeries } from './types'
 
 export class PoolReadError extends Error {
-  constructor(readonly path: string, readonly status: number | null, readonly poolError: PoolError) {
+  readonly path: string
+  readonly status: number | null
+  readonly poolError: PoolError
+
+  constructor(path: string, status: number | null, poolError: PoolError) {
     super(`GET ${path}: ${status ?? 'no answer'} (${poolError.code})`)
+    this.path = path
+    this.status = status
+    this.poolError = poolError
   }
 }
 
