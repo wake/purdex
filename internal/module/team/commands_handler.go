@@ -112,7 +112,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		}
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
-			plan.TargetCode = m.sessionCode(o.SessionID) // before the transaction: the name service reads other stores
+			plan.TargetCode = addressCode(o.Name) // from the name the registry shows now: no store to time out, so "" means no persona code
 		}
 	}
 	if cmd.Kind == team.CommandKill && plan.Consent {

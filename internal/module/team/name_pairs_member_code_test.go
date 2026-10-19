@@ -63,8 +63,10 @@ func TestNamePairsAdopt_ARenamedRemoteTargetIsRecordedUnderItsCurrentCode(t *tes
 func TestCommands_AdoptOutcomeCarriesTheTargetsCurrentCode(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(true)
-	f.m.names = &fakeLeadNames{codes: map[string]string{"sid-t": "hiro"}}
-	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "scratch"})
+	ipeers.SetPool(map[string]string{"hiro": "Hiro"}, []string{"hiro"}) // personas, as the peers module binds them
+	t.Cleanup(ipeers.ResetPool)
+	// the code comes from the name the registry shows for the session now, not from a store that can time out
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "purdex-88-hiro"})
 	code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
 	var ans team.TeamCommandAnswer
 	var out team.AdoptOutcome
@@ -80,7 +82,8 @@ func TestCommands_AdoptOutcomeCarriesTheTargetsCurrentCode(t *testing.T) {
 func TestCommands_AdoptOutcomeSaysWhenTheTargetHasNoCode(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(true)
-	f.m.names = &fakeLeadNames{codes: map[string]string{}}
+	ipeers.SetPool(map[string]string{"hiro": "Hiro"}, []string{"hiro"})
+	t.Cleanup(ipeers.ResetPool)
 	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "scratch"})
 	code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
 	var ans team.TeamCommandAnswer
