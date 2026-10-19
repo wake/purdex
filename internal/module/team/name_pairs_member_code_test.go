@@ -65,8 +65,10 @@ func TestCommands_AdoptOutcomeCarriesTheTargetsCurrentCode(t *testing.T) {
 	f.setLeadHost(true)
 	ipeers.SetPool(map[string]string{"hiro": "Hiro"}, []string{"hiro"}) // personas, as the peers module binds them
 	t.Cleanup(ipeers.ResetPool)
-	// the code comes from the name the registry shows for the session now, not from a store that can time out
-	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "purdex-88-hiro"})
+	// the code comes from the session's virtual address now, not from a store that can time out; the registry's raw name is the one it
+	// started with and is left behind by a rename
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m",
+		Name: "purdex-88-mia", Address: "mlab/purdex-88-hiro"})
 	code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
 	var ans team.TeamCommandAnswer
 	var out team.AdoptOutcome
@@ -84,7 +86,9 @@ func TestCommands_AdoptOutcomeSaysWhenTheTargetHasNoCode(t *testing.T) {
 	f.setLeadHost(true)
 	ipeers.SetPool(map[string]string{"hiro": "Hiro"}, []string{"hiro"})
 	t.Cleanup(ipeers.ResetPool)
-	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m", Name: "scratch"})
+	// renamed to something that is no persona's: the raw registry name still ends in a persona code, the address does not
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w", Title: "m",
+		Name: "purdex-88-hiro", Address: "mlab/scratch"})
 	code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
 	var ans team.TeamCommandAnswer
 	if err := json.Unmarshal(body, &ans); err != nil || code != http.StatusOK {
