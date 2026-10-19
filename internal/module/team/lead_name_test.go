@@ -184,6 +184,19 @@ func TestLeadName_Taken(t *testing.T) {
 	}
 }
 
+// When the list cannot be refreshed after a name_taken, the body carries the one the request was made with.
+func TestLeadName_TakenWithUnreadableListFallsBackToTheStoredOne(t *testing.T) {
+	f := newFixture(t)
+	n := withNames(f)
+	f.create(uid(1))
+	n.rename = func(string, string) error { n.candErr = errors.New("meta.db locked"); return ipeers.ErrNameTaken }
+	code, body := f.decideLead(uid(1), "kenji")
+	e := decodeErr(t, body)
+	if code != http.StatusConflict || e.Error != team.ErrNameTaken || len(e.LeadNames) != 3 || e.LeadNames[0].Code != "adam" {
+		t.Fatalf("decide: %d %s", code, body)
+	}
+}
+
 func TestLeadName_UnknownAndMalformedCodes(t *testing.T) {
 	f := newFixture(t)
 	n := withNames(f)

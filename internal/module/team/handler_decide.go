@@ -125,7 +125,7 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
 		return
 	}
-	if m.writeLeadNameErr(w, a.Origin.SessionID, err) {
+	if m.writeLeadNameErr(w, a, err) {
 		return
 	}
 	if errors.Is(err, ErrLeadHasTeam) {

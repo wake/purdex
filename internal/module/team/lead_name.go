@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -227,11 +228,19 @@ func (m *Module) handleLeadNames(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeLeadNameErr answers the decide errors of a lead name; false when err is not one of them.
-func (m *Module) writeLeadNameErr(w http.ResponseWriter, sessionID string, err error) bool {
+func (m *Module) writeLeadNameErr(w http.ResponseWriter, a team.Approval, err error) bool {
 	switch {
 	case errors.Is(err, errLeadNameTaken):
-		// the request stays open; the body carries the list now, so the card reopens with it
-		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrNameTaken, Detail: "that name is held by another session; pick another", LeadNames: m.leadNames(sessionID)})
+		// the request stays open; the body carries the list now, so the card reopens with it. When it cannot be read the list the
+		// request was made with goes instead (stale, but a list: the card never reopens empty-handed).
+		names := m.leadNames(a.Origin.SessionID)
+		if names == nil {
+			var p team.LeadPayload
+			if json.Unmarshal(a.Payload, &p) == nil {
+				names = p.LeadNames
+			}
+		}
+		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrNameTaken, Detail: "that name is held by another session; pick another", LeadNames: names})
 	case errors.Is(err, errLeadNameUnknown):
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "lead_name is not a name that can be taken", nil)
 	case errors.Is(err, errLeadNameNoService):
