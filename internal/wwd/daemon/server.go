@@ -67,6 +67,10 @@ type Options struct {
 	Alerts AlertStore
 	// Usage is the store of finished jobs' usage; GET /v1/usage serves from it on the local socket. nil: the route is not registered.
 	Usage UsageStore
+	// Labels and CacheDrop are the earned-label table and the result cache the quarantine acts on (spec §7): a disagreement read from an
+	// origin quarantines the label here, and pdx wwd quarantine|release change it by hand. nil: neither exists.
+	Labels    LabelKeeper
+	CacheDrop CacheDropper
 	// Now is the clock the observation and usage routes take their default periods from. nil: time.Now.
 	Now func() time.Time
 }
@@ -88,6 +92,8 @@ type Daemon struct {
 	labelsMu   sync.Mutex
 	lastFacts  *wire.Facts // the newest record, for RefreshLabels
 	lastEarned []string    // the earned task labels the store last gave
+
+	quar quarantineState // where the quarantine pass has read to (memory only)
 }
 
 func New(o Options) *Daemon {
@@ -181,6 +187,7 @@ func (d *Daemon) SocketHandler() http.Handler {
 	d.poolRoutes(mux)
 	d.usageRoutes(mux)
 	d.earnedRoutes(mux)
+	d.quarantineRoutes(mux)
 	if d.opts.ClaimRoutes != nil {
 		d.opts.ClaimRoutes(mux)
 	}

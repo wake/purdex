@@ -114,3 +114,16 @@ func (s *Store) EarnedLabel(label string) (e wire.EarnedLabel, ok bool, err erro
 	e.GrantedAt = time.UnixMilli(ms).UTC()
 	return e, true, nil
 }
+
+// QuarantineEarnedLabel quarantines the label if it is earned now and was granted before at (the time of a disagreement), in one
+// statement: a disagreement read again, or one from before the label was earned anew, takes nothing away. changed says whether a row
+// was changed.
+func (s *Store) QuarantineEarnedLabel(label string, at time.Time) (changed bool, err error) {
+	res, err := s.db.Exec(`UPDATE earned_labels SET state = ? WHERE label = ? AND state = ? AND granted_ms < ?`,
+		wire.EarnedLabelQuarantined, label, wire.EarnedLabelEarned, at.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
