@@ -362,6 +362,58 @@ describe('PersonasSection', () => {
       expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
     })
 
+    it('asks the host again before skipping: a count of 0 read earlier may be old', async () => {
+      seed([])
+      peers([])
+      // between the old read and now, two conversations opened
+      usePeerStore.setState({
+        refresh: vi.fn(async () => {
+          usePeerStore.setState({
+            byHost: { h1: { ...emptyPeerHostEntry(), fetchedAt: 9, rows: { a: { address: 'h1/a', ref: '_aaaaaa', title: '', titleSource: '', deliverable: true, reason: '', tmuxInstance: '', agent: null }, b: { address: 'h1/b', ref: '_bbbbbb', title: '', titleSource: '', deliverable: true, reason: '', tmuxInstance: '', agent: null } } } },
+          })
+        }),
+      })
+      render(<PersonasSection />)
+      fillNew()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).toContain('2')
+      expect(savePersonas).not.toHaveBeenCalled()
+    })
+
+    it('asks, without a number, when the host cannot be read again', async () => {
+      seed([])
+      peers([])
+      usePeerStore.setState({
+        refresh: vi.fn(async () => { usePeerStore.setState({ byHost: { h1: { ...emptyPeerHostEntry(), fetchedAt: 9, error: 'down' } } }) }),
+      })
+      render(<PersonasSection />)
+      fillNew()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
+      expect(savePersonas).not.toHaveBeenCalled()
+    })
+
+    it('saves what is in the form now, not what was there when the question came up', async () => {
+      seed([])
+      peers(['_aaaaaa'])
+      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
+      render(<PersonasSection />)
+      fillNew()
+      await screen.findByTestId('persona-first-save')
+      fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Edited Later' } })
+      fireEvent.click(screen.getByTestId('persona-first-save-confirm'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(savePersonas).mock.calls[0][0].map((p) => p.name)).toEqual(['Edited Later'])
+    })
+
+    it('drops the question when another persona is opened', async () => {
+      seed([])
+      peers(['_aaaaaa'])
+      render(<PersonasSection />)
+      fillNew()
+      await screen.findByTestId('persona-first-save')
+      fireEvent.click(screen.getByTestId('persona-new'))
+      expect(screen.queryByTestId('persona-first-save')).toBeNull()
+    })
+
     it('does not ask when there is no conversation to rename', async () => {
       seed([])
       peers([''])

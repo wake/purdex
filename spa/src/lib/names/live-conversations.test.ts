@@ -21,4 +21,11 @@ describe('liveConversationCount', () => {
     usePeerStore.setState({ byHost: { h1: { ...emptyPeerHostEntry(), fetchedAt: 5, error: 'down', rows: { a: row('_aaaaaa') } } } })
     expect(liveConversationCount('h1')).toBeNull()
   })
+
+  it('is null for a partial inventory, whose empty list proves nothing', () => {
+    usePeerStore.setState({
+      byHost: { h1: { ...emptyPeerHostEntry(), fetchedAt: 5, rows: {}, envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: [] } } },
+    })
+    expect(liveConversationCount('h1')).toBeNull()
+  })
 })

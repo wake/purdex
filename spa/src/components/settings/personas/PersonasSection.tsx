@@ -13,6 +13,7 @@ import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, currentSource, usePersonaStore } from '../../../stores/usePersonaStore'
 import { useSourceId } from '../../../stores/usePersonaSourceStore'
+import { usePeerStore } from '../../../stores/usePeerStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
   beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
@@ -61,7 +62,7 @@ export function PersonasSection() {
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())
   const [issues, setIssues] = useState<PersonaIssue[]>([])
   // The first persona on a source that has none renames every live conversation; the user is asked once, here.
-  const [confirm, setConfirm] = useState<{ draft: Persona; hostId: string } | null>(null)
+  const [confirm, setConfirm] = useState<{ hostId: string } | null>(null)
   // The note and the error of the last save live outside the component with the lock: a save that ends while this page
   // is away reports to whichever instance is mounted when it does.
   const { note, error } = useSyncExternalStore(subscribeSave, getOutcome)
@@ -95,9 +96,12 @@ export function PersonasSection() {
   const open = (key: string) => {
     const p = key === '' ? blankPersona() : items.find((x) => x.code === key)
     if (!p) return
-    setIssues([]); setOutcome({ note: null, error: null })
+    setIssues([]); setOutcome({ note: null, error: null }); setConfirm(null)
     hold({ key, draft: structuredClone(p), base: editBase() })
   }
+
+  // A notice asked about one source; another source (the user changed it, or the old one dropped) is another question.
+  useEffect(() => { setConfirm(null) }, [sourceId])
 
   /**
    * A save came back stale, or lost the compare-and-set: another copy of the collection is now the shown one. What the
@@ -135,9 +139,14 @@ export function PersonasSection() {
     // The first persona on a source that has none: the daemon starts naming its live conversations after personas. Asked
     // once; a host with no conversation to rename (a count of 0) has nothing to warn about.
     const target = editing.base?.hostId ?? fallbackHostId ?? ''
-    if (!confirmed && items.length === 0 && next.length > 0 && target !== '' && liveConversationCount(target) !== 0) {
-      setConfirm({ draft, hostId: target })
-      return
+    if (!confirmed && items.length === 0 && next.length > 0 && target !== '') {
+      // The list is not refreshed on a timer: a count of 0 read earlier may be old, and a conversation opened since would
+      // be renamed without a word. Ask the host again first; a failed or partial answer counts as "unknown", which asks.
+      await usePeerStore.getState().refresh(target)
+      if (liveConversationCount(target) !== 0) {
+        setConfirm({ hostId: target })
+        return
+      }
     }
     setConfirm(null)
     if (!beginSave()) return
@@ -203,9 +212,9 @@ export function PersonasSection() {
           ) : (
             <p className="text-xs text-text-secondary">{t('settings.personas.form.pick')}</p>
           )}
-          {confirm && !readOnly && (
+          {confirm && editing && !readOnly && (
             <div className="mt-2">
-              <FirstSaveConfirm hostId={confirm.hostId} onCancel={() => setConfirm(null)} onConfirm={() => void save(confirm.draft, true)} />
+              <FirstSaveConfirm hostId={confirm.hostId} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
             </div>
           )}
           {note && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-note">{note}</p>}
