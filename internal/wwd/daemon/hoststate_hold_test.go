@@ -53,6 +53,27 @@ func TestHoldFieldsCountAsAChange(t *testing.T) {
 	}
 }
 
+// The same request is the same hold before and after a restart: `"flags":[]` and an allow that leaves out `classes` or `repos` come back
+// from the database as nothing and as empty lists, and must not then read as a different hold (R1: the identical POST would reset since
+// and publish a change).
+func TestAnIdenticalHoldIsNotAChangeAfterARestart(t *testing.T) {
+	for name, e := range map[string]wire.Exception{
+		"empty flags":    func() wire.Exception { e := holdExc(); e.Flags = []wire.HoldFlag{}; return e }(),
+		"allow no repos": func() wire.Exception { e := holdExc(); e.Allow = &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassMerge}}; return e }(),
+		"allow no class": func() wire.Exception { e := holdExc(); e.Allow = &wire.HoldAllow{Repos: []string{"purdex"}}; return e }(),
+		"no holds list":  func() wire.Exception { e := holdExc(); e.Holds = nil; return e }(),
+	} {
+		r := newRig(t)
+		if changed, err := r.st.AddException(e); err != nil || !changed {
+			t.Fatalf("%s: %v %v", name, changed, err)
+		}
+		r.reopen(t)
+		if changed, err := r.st.AddException(e); err != nil || changed {
+			t.Errorf("%s: the same request after a restart: changed=%v err=%v", name, changed, err)
+		}
+	}
+}
+
 // The facts and the list carry copies: a reader that changes what it was given does not change the hold.
 func TestHoldFieldsAreCopiedOut(t *testing.T) {
 	r := newRig(t)

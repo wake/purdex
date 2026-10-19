@@ -232,6 +232,14 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 	if e.Holds == nil {
 		e.Holds = []wire.Hold{}
 	}
+	// the one shape the database gives back after a restart, so that the same request is the same hold before and after one: no flags is
+	// nil (not an empty list), an allow has both lists (an empty one admits nothing; one left out is an empty one)
+	if len(e.Flags) == 0 {
+		e.Flags = nil
+	}
+	if a := e.Allow; a != nil {
+		e.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if old, ok := s.excs[e.Name]; ok && reflect.DeepEqual(old.Exception, e) {
