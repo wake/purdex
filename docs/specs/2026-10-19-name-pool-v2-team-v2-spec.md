@@ -47,7 +47,7 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 | U7 | **Characters ("personas") are not bundled** (the source is public on GitHub). A **persona manager page** in the App lets each user build their own. Fields follow `personas.json`, plus `lead`, which marks a default lead identity. Images are cached when the settings are saved. |
 | U8 | **Avatar sources may be mixed:** Lorelei, Notionists, Open Peeps, Micah, Shapes, Clay (DiceBear), PlaceCats, PlaceDog, Picsum. Avatars must stay visible on the dark theme. |
 | U9 | **The team panel gets avatars of about 44 px that span two rows.** The lead row also gets two rows. |
-| U10 | **The sidebar uses the "a" layout:** the avatar replaces the agent icon and the light stays. |
+| U10 | **The sidebar uses the "a" layout:** the avatar replaces the agent icon and the light stays. **Changed 2026-10-20 (user, 759 acceptance):** only in the task-group view; the workspace view keeps the rows as before 758 (§9.6). |
 | U11 | **The sidebar gets a second view, "task groups"** (任務編組－員工模式). Its group header is the task group name, which for a team is today's team name (no fixed team name). Names can be set by command or in the App. **Single sessions are put into a task group by hand.** Their groups sit **at the same level as team groups**, much like a workspace. |
 | U12 | **The icon left of the home row's name becomes its own toggle button.** It switches between the two sidebar views. Its icon follows the view: the profile's own icon, or a **team icon** (a new profile setting). |
 | U13 | **Team settings (member cap, relay quotas, folders) sit directly on the team panel.** There is no gear; this replaces JV-5b 2/3 and 3/3. The original → new wording was confirmed. |
@@ -440,8 +440,13 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - `UnattendedQuotaSection.tsx:47`;
   - `StatusBar.tsx:67`;
   - `WorkerStatusBar.tsx:73`.
-- `<Avatar>`: one component in sizes 16 / 18 / 24 / 44. It falls back to initials on the host colour when the image is
-  missing or empty.
+- `<Avatar>`: one component in sizes 16 / 18 / 24 / 44. 759 acceptance (user, 2026-10-20), so a face never borrows the
+  host colour (bright, and green already means "working"):
+  - an image sits on a round `#dfe4ea` backing (#3604), since the drawn avatars are transparent;
+  - a persona with no image (or one that fails to load) shows its initial on `personaColor(code)`, the colour the
+    persona page uses, so a persona looks the same everywhere (#3621);
+  - no persona: a neutral circle (a surface token, the initial in the secondary text colour) (#3621).
+  - The light on an avatar's corner is the session's status light, the same one that sits beside the agent icon.
 - **Trust boundary** (NA-2, #3555 / #3563): the App resolves a persona only from an address that the daemon resolved:
   - a deck sender whose `from.kind` is `peer` and that is not marked `unverified`;
   - an approval's `Origin.address`, a quota row's `address`.
@@ -488,7 +493,11 @@ This is the default classification from the page's probe table. **[待確認]**
 - Each row: a 44 px avatar spanning two rows (the light is a corner badge on it), then
   - line 1 = agent icon, host badge, **name**, title (muted), context ring, workbook button;
   - line 2 = task / last line.
+  - The agent icon keeps the sidebar's spacing to the subagent dots before it (759 acceptance, #3621).
 - The lead row gets line 2 from the lead's own last journal line (`TeamPanelRow.tsx:81-152` today).
+- **The one-line cells** (the pinned header and the title-bar strip, `TeamCell`): a seat with a persona shows its 18 px
+  avatar in the agent icon's place, the light on its top-right corner and the subagent dots where they were; a seat
+  without one keeps the agent icon (user, 759 acceptance, #3604).
 - **Team settings on the panel:** a compact block under the title holds the cap stepper (1–9 per §5.1), the relay
   quotas (own + member pool) and the folder chips with edit.
   - It reuses the JV-5b sections: `TeamSettingsPanel` content and `Steppers.tsx` from #3187 / #3188, which are closed
@@ -497,13 +506,18 @@ This is the default classification from the page's probe table. **[待確認]**
 
 ### 9.6 Sidebar (U10, U11, U12)
 
-- A session row's agent icon becomes its avatar (`useSessionAgentIndicator.ts:45` → the avatar when `seatOf` resolves).
-  The light stays. A session without a persona keeps the agent icon.
+- **Workspace view** (user, 2026-10-20): the session rows stay as they were before 758: `[agent icon + light] [host badge]
+  session name`, with no avatar and no persona name (#3626).
+- **Task-group view**: a session row's agent icon becomes its avatar (the light on its corner), then the host badge, the
+  persona name (bold) and the session title (muted). A session without a persona keeps the agent icon.
 - `HomeRow.tsx:42`: the `ProfileIcon` leaves the home button and becomes its own toggle button. Clicking it switches
   between the workspace view and the task-group view.
   - Its icon is the profile icon (workspace view) or the team icon (task-group view).
   - The team icon is a new field of `ProfileAppearance` (`useLocalProfilesStore.ts:88`), per device like the rest,
     defaulting to Phosphor `UsersThree`.
+  - 759 acceptance (#3597): the toggle has no outline in either view (the icon itself tells the view). The team icon
+    has its own weight (`teamIconWeight`, valid without `teamIcon`, so it applies to the default `UsersThree`) and its
+    own colour (`teamColor`); without `teamColor` it wears the profile colour when the profile has an icon, else none.
   - The home button keeps its label and its click (home, or the profile menu on a device with slave profiles).
 - Task-group view as in §7.
 
