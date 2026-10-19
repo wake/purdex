@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -60,40 +61,134 @@ type Module struct {
 	flightMu sync.Mutex
 	cache    map[string]cachedAnswer
 	flights  map[string]*flight
+
+	// pool.changed (events.go); all under mu
+	core        *core.Core
+	logf        func(format string, args ...any)
+	emit        func(core.HostEvent) // where pool.changed goes; nil: the core's host events
+	pollEvery   time.Duration        // how often the local wwd's pool is read
+	mergeWithin time.Duration        // the least time between two notices for one host
+	watching    bool                 // Start ran and Stop has not: pool.events.v1 is announced
+	cancel      context.CancelFunc   // ends the watch loop
+	done        chan struct{}        // closed when that loop has ended
+	sentAt      map[string]time.Time // host alias -> when its last notice went
+	pending     map[string]*time.Timer
+	// sending counts the notices that have been let through (watching was true, under mu) and are not yet emitted; Stop waits on sendIdle
+	// until it is 0, so nothing is emitted once Stop has returned. emit must not call Stop (the core's BroadcastEvent does not).
+	sending  int
+	sendIdle *sync.Cond
 }
 
 func New() *Module {
-	return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}, flights: map[string]*flight{}}
+	m := &Module{
+		now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}, flights: map[string]*flight{},
+		logf: log.Printf, pollEvery: defaultPollEvery, mergeWithin: defaultMergeWithin,
+		sentAt: map[string]time.Time{}, pending: map[string]*time.Timer{},
+	}
+	m.sendIdle = sync.NewCond(&m.mu)
+	return m
 }
 
 func (m *Module) Name() string           { return "pool" }
 func (m *Module) Dependencies() []string { return nil }
 
 // Init never fails: wwd is a separate process that may start later than this daemon.
-func (m *Module) Init(*core.Core) error {
+func (m *Module) Init(c *core.Core) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cl == nil {
 		m.cl = client.New(client.DefaultSocket())
 	}
+	m.core = c
 	m.ready = true
 	return nil
 }
 
-func (m *Module) Start(context.Context) error { return nil }
-
-func (m *Module) Stop(context.Context) error {
+// Start opens the watch that sends pool.changed, in the background; wwd not running is retried and never fails the daemon. A second
+// Start while it runs does nothing; a Start after Stop runs it again, but not while the loop of the earlier Start has still not
+// ended (a Stop whose ctx ran out leaves it ending): that Start is refused rather than run beside the old loop.
+func (m *Module) Start(context.Context) error {
 	m.mu.Lock()
-	m.ready = false
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		return nil
+	}
+	if m.done != nil {
+		select {
+		case <-m.done:
+		default:
+			return errors.New("pool: the watch loop of the earlier Start has not ended yet")
+		}
+	}
+	if m.sentAt == nil {
+		m.sentAt = map[string]time.Time{}
+	}
+	if m.pending == nil {
+		m.pending = map[string]*time.Timer{}
+	}
+	if m.logf == nil {
+		m.logf = log.Printf
+	}
+	if m.pollEvery <= 0 {
+		m.pollEvery = defaultPollEvery
+	}
+	if m.mergeWithin <= 0 {
+		m.mergeWithin = defaultMergeWithin
+	}
+	if m.cl == nil {
+		m.cl = client.New(client.DefaultSocket())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.cancel, m.done, m.watching = cancel, done, true
+	if m.core != nil {
+		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
+	}
+	go func() {
+		defer close(done)
+		m.watch(ctx)
+	}()
 	return nil
 }
 
-// Status is what /api/info reads to announce pool.v1 (the API exists; whether wwd is up is each call's answer).
+// Stop ends the watch and drops the notices waiting for their window, and waits for the loop as long as ctx allows. The loop is
+// remembered until it has ended, so a Stop that ran out of time can be repeated and a Start does not begin a second loop beside it.
+func (m *Module) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	m.ready = false
+	m.watching = false
+	cancel, done := m.cancel, m.done
+	m.cancel = nil
+	for host, t := range m.pending {
+		t.Stop()
+		delete(m.pending, host)
+	}
+	// a notice already let through is emitted before Stop returns; no new one is let through (watching is false), and a timer callback that
+	// was waiting for mu finds its entry gone
+	for m.sending > 0 {
+		m.sendIdle.Wait()
+	}
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Status is what /api/info reads to announce pool.v1 (the API exists; whether wwd is up is each call's answer) and, while the watch
+// runs, pool.events.v1.
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready}
+	return map[string]any{"ready": m.ready, "events": m.watching}
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
