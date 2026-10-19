@@ -58,8 +58,12 @@ func TestHoldFieldsCountAsAChange(t *testing.T) {
 // and publish a change).
 func TestAnIdenticalHoldIsNotAChangeAfterARestart(t *testing.T) {
 	for name, e := range map[string]wire.Exception{
-		"empty flags":    func() wire.Exception { e := holdExc(); e.Flags = []wire.HoldFlag{}; return e }(),
-		"allow no repos": func() wire.Exception { e := holdExc(); e.Allow = &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassMerge}}; return e }(),
+		"empty flags": func() wire.Exception { e := holdExc(); e.Flags = []wire.HoldFlag{}; return e }(),
+		"allow no repos": func() wire.Exception {
+			e := holdExc()
+			e.Allow = &wire.HoldAllow{Classes: []wire.JobClass{wire.ClassMerge}}
+			return e
+		}(),
 		"allow no class": func() wire.Exception { e := holdExc(); e.Allow = &wire.HoldAllow{Repos: []string{"purdex"}}; return e }(),
 		"no holds list":  func() wire.Exception { e := holdExc(); e.Holds = nil; return e }(),
 	} {
