@@ -25,7 +25,7 @@ import { resolveHostBadge } from '../../lib/host-color'
 import type { HostLook } from '../../lib/host-look'
 import type { UsageTone } from '../../lib/usage-display'
 import type { FleetHostView } from '../../lib/fleet/store'
-import type { FleetFast, FleetZone } from '../../lib/fleet/types'
+import type { FleetFast } from '../../lib/fleet/types'
 import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUISettingsStore, isFleetCellIndicator, FLEET_CELL_INDICATOR_DEFAULT, type FleetCellIndicator } from '../../stores/useUISettingsStore'
@@ -35,15 +35,19 @@ import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
+import type { PoolCellExtra } from '../../lib/pool/cell-model'
+import type { PoolZone } from '../../lib/pool/types'
 
 // One card at a time: the close function of the cell whose card is open (hover on B closes the card focus left on A).
 let openCell: { owner: object; close: () => void } | null = null
 
 export const WAIT_LONG_MS = 120_000
-const ZONE_TONE: Record<FleetZone, UsageTone> = { normal: 'ok', warning: 'warn', danger: 'danger' }
+const ZONE_TONE: Record<PoolZone, UsageTone | undefined> = { normal: 'ok', warning: 'warn', danger: 'danger', unknown: undefined }
 
 export interface HostCellProps {
   view: FleetHostView
+  /** What the resource pool adds (worker, headroom, the zone `unknown`); null while the pool is not the source: the cell is then the fleet's. */
+  pool?: PoolCellExtra | null
   /** The host's look (name excluded): from the App's host config for a daemon host, from the wire for a probe host. */
   look: Pick<HostLook, 'colors' | 'color' | 'icon' | 'iconWeight'>
   variant: 'wide' | 'narrow'
@@ -65,11 +69,11 @@ function queueTone(n: number, longestMs: number, held: boolean): string {
 }
 
 /** The cell's accessible name: the host, its zone word, the queue summary when one is shown, and the waiting-primary notice. */
-function accessibleName(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }): string {
+function accessibleName(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }, zoneOf?: PoolZone | null): string {
   const parts: string[] = [v.name]
   if (isOffline(v)) parts.push(t('fleet.zone.offline'))
   else if (!v.fast) parts.push(t('fleet.no_data'))
-  else parts.push(t(`fleet.zone.${v.fast.zone}`))
+  else parts.push(t(`fleet.zone.${zoneOf ?? v.fast.zone}`))
   const q = v.kind === 'daemon' && !isOffline(v) ? v.slow?.queue : undefined
   if (q && q.waiters.length > 0) {
     parts.push(t('fleet.queue', { n: q.waiters.length, s: Math.round(q.longest_wait_s) }))
@@ -80,7 +84,7 @@ function accessibleName(t: (k: string, p?: Record<string, string | number>) => s
   return parts.join(', ')
 }
 
-export function HostCell({ view, look, variant, isActive, waitingPrimary, primaryElsewhere, onOpen }: HostCellProps) {
+export function HostCell({ view, pool = null, look, variant, isActive, waitingPrimary, primaryElsewhere, onOpen }: HostCellProps) {
   const t = useI18nStore((s) => s.t)
   const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
   const stored = useUISettingsStore((s) => s.fleetCellIndicator)
@@ -90,7 +94,9 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
   const badge = useMemo(() => resolveHostBadge({ colors, color, icon, iconWeight }, 'terminal'), [colors, color, icon, iconWeight])
   const off = isOffline(view)
   const f = off ? null : view.fast
-  const zone: FleetZone | 'offline' | 'nodata' = off ? 'offline' : f ? f.zone : 'nodata'
+  const zone: PoolZone | 'offline' | 'nodata' = off ? 'offline' : f ? (pool?.zone ?? f.zone) : 'nodata'
+  // A breathing dot while this host's worker runs something; the count at the badge's top right is left as it is today (the user, WWD-7 Q2: reworked as a whole later).
+  const running = !off && pool?.worker ? pool.worker.running.heavy + pool.worker.running.light > 0 : false
   const q = view.kind === 'daemon' && !off ? view.slow?.queue : undefined
   const waiting = q?.waiters.length ?? 0
   const narrow = variant === 'narrow'
@@ -130,7 +136,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
       data-testid={`host-tile-${view.id}`}
       data-active={String(isActive)}
       data-variant={variant}
-      aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere })}
+      aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere }, pool?.zone)}
       ref={ref}
       onMouseEnter={openCard}
       onMouseLeave={closeCard}
@@ -143,18 +149,19 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} bright />
         </span>
+        {running && <span data-testid={`worker-running-${view.id}`} className="pointer-events-none absolute -bottom-px -right-px size-[6px] rounded-full bg-status-success animate-breathe" />}
         {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={`pointer-events-none ${queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)}`} testId={`queue-badge-${view.id}`} />}
       </span>
       {indicator === 'ring' ? (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.id}`} data-zone={zone}>
-          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[f.zone] : undefined} noShape />
+          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[pool?.zone ?? f.zone] : undefined} muted={!!f && pool?.zone === 'unknown'} noShape />
         </span>
       ) : (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.id}`} data-zone={zone}>
           <HostBars left={f ? cpuReading(f.cpu) : null} right={f ? memoryBar(indicator, f) : null} size={box} />
         </span>
       )}
-      {cardOpen && <HostCard view={view} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
+      {cardOpen && <HostCard view={view} pool={pool} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
     </button>
   )
 }
