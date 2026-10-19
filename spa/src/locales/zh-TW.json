@@ -2415,6 +2415,7 @@
   "approval.toast.decided_by_person": "{{host}}：{{session}} 的 {{kind}} 已由終端機指令{{decision}}",
   "approval.toast.unattended_refused": "{{host}}：{{session}} 的 {{kind}} 已由無人值守模式拒絕",
   "approval.toast.ended": "{{host}}：{{session}} 的 {{kind}}已結束（{{state}}）",
+  "approval.toast.name_taken": "選的名字在離線時被別人用了，請重新選一個再核准",
   "approval.toast.failed": "送出決定失敗（{{code}}）",
   "approval.dialog.title_lead": "{{host}}：{{session}} 申請成為 lead",
   "approval.dialog.host": "主機",

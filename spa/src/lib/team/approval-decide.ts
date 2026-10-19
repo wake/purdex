@@ -121,6 +121,12 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       opts.onNameTaken(leadNamesOf(err.body?.lead_names))
       return 'failed'
     }
+    if (err.status === 409 && err.code === 'name_taken') {
+      // Nobody is waiting on the card (a decision resent from the offline queue): the request stays open, and the dialog re-reads its list when the queue is gone.
+      store.unmarkDecidedHere(hostId, approval.id)
+      useUndoToast.getState().show(useI18nStore.getState().t('approval.toast.name_taken'))
+      return 'failed'
+    }
     if (err.status === 409 && err.approval) {
       // `applyClosed` also drops our `decidedHere` mark. Always toast: see the header on why the label is no identity.
       store.applyClosed(hostId, err.approval)

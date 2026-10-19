@@ -9,6 +9,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { ApprovalApiError, decideApproval, fetchLeadNames } from '../lib/team/approval-api'
+import { handleApprovalEvent } from '../lib/team/approval-ws'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval, LeadNameCandidate } from '../lib/team/types'
 
@@ -129,6 +130,30 @@ describe('the lead name card', () => {
     fireEvent.click(pill('kenji'))
     await approve()
     expect(sentGrant()).toMatchObject({ lead_name: 'kenji' })
+  })
+})
+
+describe('a decision made offline', () => {
+  it('whose name was taken meanwhile: the resend is refused, the list is read again, the pick is dropped and the dialog says so', async () => {
+    render(<ApprovalDialogHost />)
+    await open(lead())
+    act(() => { useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'disconnected' } } })) })
+    fireEvent.click(pill('freya'))
+    await approve()
+    expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1)
+    expect(mockedDecide).not.toHaveBeenCalled()
+    mockedNames.mockReset()
+    mockedNames.mockResolvedValue([KEEP, cand('kenji', 'lead')])
+    mockedDecide.mockRejectedValueOnce(taken())
+    act(() => { useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'connected' } } })) })
+    await act(async () => { handleApprovalEvent(H, { op: 'snapshot', approvals: [lead()] }) })
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    expect((mockedDecide.mock.calls[0][2] as { grant?: Record<string, unknown> }).grant).toMatchObject({ lead_name: 'freya' })
+    expect(useUndoToast.getState().toast).not.toBeNull()
+    expect(screen.queryByText('Freya')).toBeNull()
+    expect(pills()[0]).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('lead-name-taken')).toBeInTheDocument()
+    expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(0)
   })
 })
 

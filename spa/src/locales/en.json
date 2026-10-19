@@ -2415,6 +2415,7 @@
   "approval.toast.decided_by_person": "{{host}}: {{session}} {{kind}} was {{decision}} by a terminal command",
   "approval.toast.unattended_refused": "{{host}}: {{session}} {{kind}} was refused by unattended mode",
   "approval.toast.ended": "{{host}}: the {{kind}} from {{session}} ended ({{state}})",
+  "approval.toast.name_taken": "The name you picked was taken while you were offline. Pick another and approve again",
   "approval.toast.failed": "Could not send the decision ({{code}})",
   "approval.dialog.title_lead": "{{host}}: {{session}} requests to become lead",
   "approval.dialog.host": "Host",

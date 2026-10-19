@@ -227,6 +227,22 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     // once per dialog: it is keyed by the approval
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // A decision made offline is sent by the reconnect, not by this dialog: when it leaves the queue with the dialog still here it was refused (the name may have been taken meanwhile),
+  // so the list is read again, and a pick that is gone says so. (Sent and accepted, the dialog goes away and this reads for nothing.)
+  const hadQueued = useRef(false)
+  useEffect(() => {
+    const was = hadQueued.current
+    hadQueued.current = queued !== undefined
+    if (!was || queued !== undefined || pickedName === null) return
+    const gen = namesGen.current
+    fetchLeadNames(hostId, approval.id).then((fresh) => {
+      if (namesGen.current !== gen) return
+      if (!fresh.some((n) => n.code === pickedName)) setNameTaken(true)
+      refreshLeadNames(fresh)
+    }, () => {})
+    // only the queue leaving matters
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued])
   const nameShown = !isSelfRelay && !isAdopt && !isMemberRelay && payload.team_name !== undefined
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
