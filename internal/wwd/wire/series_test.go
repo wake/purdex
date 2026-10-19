@@ -58,6 +58,33 @@ func TestFactsSeriesQueryValues(t *testing.T) {
 	}
 }
 
+// SeriesOf keeps the latest limit points by time (not by position), oldest first, says it cut, and reads the fullest disk.
+func TestSeriesOfKeepsTheLatestByTime(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	rec := func(i int, used ...float64) Facts {
+		f := Facts{At: t0.Add(time.Duration(i) * time.Minute)}
+		for _, u := range used {
+			f.Disk = append(f.Disk, Disk{Mount: "/", UsedPct: u})
+		}
+		return f
+	}
+	h := FactsHistoryResponse{Step: Step1m, Records: []Facts{rec(3), rec(0, 10, 80, 30), rec(2), rec(1), rec(4)}} // out of order
+	got := SeriesOf(h, 3)
+	if !got.Truncated || len(got.Points) != 3 || !got.Points[0].At.Equal(t0.Add(2*time.Minute)) || !got.Points[2].At.Equal(t0.Add(4*time.Minute)) {
+		t.Fatalf("%+v", got)
+	}
+	whole := SeriesOf(h, 10)
+	if whole.Truncated || len(whole.Points) != 5 || !whole.Points[0].At.Equal(t0) {
+		t.Fatalf("%+v", whole)
+	}
+	if d := whole.Points[0].DiskMaxUsedPct; d == nil || *d != 80 || whole.Points[1].DiskMaxUsedPct != nil {
+		t.Fatalf("disk: %+v", whole.Points[:2])
+	}
+	if e := SeriesOf(FactsHistoryResponse{Step: Step5s}, 5); e.Points == nil || len(e.Points) != 0 {
+		t.Fatalf("no records: want an empty, non-nil slice, got %+v", e)
+	}
+}
+
 func TestSeriesResponseValidate(t *testing.T) {
 	if err := (FactsSeriesResponse{Step: Step1m, Points: []SeriesPoint{}}).Validate(); err != nil {
 		t.Fatal(err)
