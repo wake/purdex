@@ -34,7 +34,8 @@ func host(t *testing.T, heavy int, extra string) (cfgPath, dir string) {
 		t.Fatal(err)
 	}
 	cfgPath = filepath.Join(root, "config.toml")
-	body := "[gate]\ndir = \"" + dir + "\"\n" + extra + "\n[gate.slots]\nheavy = " + string(rune('0'+heavy)) + "\n"
+	// admission is off here: the host the tests run on has a pressure and a disk of its own; the admission tests put theirs in
+	body := "[gate]\ndir = \"" + dir + "\"\n" + extra + "\n[gate.slots]\nheavy = " + string(rune('0'+heavy)) + "\n\n[gate.admission]\nenabled = false\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

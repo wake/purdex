@@ -299,6 +299,8 @@ type Module struct {
 	inLeadRename func()
 	// noticeSend sends the rename notice of the backfill; nil is the in-process SendSelfNotice (namebackfill.go). A test seam.
 	noticeSend func(ctx context.Context, req ipeers.SendRequest) error
+	// reservations are the names held for spawn ops that have not produced their session yet (namereserve.go).
+	reservations reservationBook
 	// noticeMu admits the backfill's notice workers and is closed by Stop (namebackfill.go); the other two are test seams: one after the
 	// backfill's scan, one between the admission check and the worker's Add.
 	noticeMu          sync.Mutex
@@ -896,7 +898,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// that name. Under invCtx, the inventory's one budget: a name store that
 	// hangs, or a pass whose budget is already spent, costs this pass its
 	// names (every row takes the ref form), never the GET or the send.
-	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
+	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs, tmuxNamesBySession(summaries, owners)), execNameCandidates(execs, previousRefs)...))
 	// Two live holders of one pool name: the newcomer picks again (spec §5).
 	m.settlePoolCollisions(invCtx, entries, proxyPIDs, previousRefs, virtualNames)
 	// Old conversations get a persona name once there are personas (name pool v2 spec §6.4).

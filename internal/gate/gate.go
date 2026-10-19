@@ -541,6 +541,12 @@ type AdmissionState struct {
 // status`, the daemon's working directory and $TMPDIR when the daemon asks (the fleet's summary), which for the fleet is the
 // main disk, the one that matters; a command's own directory is only known to the command (its start checks that one).
 func (g *Gate) admission(cfg Config) AdmissionState {
+	cwd, _ := os.Getwd()
+	return g.admissionFor(cfg, cwd)
+}
+
+// admissionFor is admission with the directory whose free space counts (a command's own directory; $TMPDIR always counts too).
+func (g *Gate) admissionFor(cfg Config, dir string) AdmissionState {
 	if !cfg.Admission.Enabled {
 		return AdmissionState{}
 	}
@@ -552,8 +558,7 @@ func (g *Gate) admission(cfg Config) AdmissionState {
 		}
 	}
 	if g.DiskFree != nil {
-		cwd, _ := os.Getwd()
-		for _, path := range []string{cwd, os.TempDir()} {
+		for _, path := range []string{dir, os.TempDir()} {
 			if path == "" {
 				continue
 			}
@@ -566,6 +571,14 @@ func (g *Gate) admission(cfg Config) AdmissionState {
 	}
 	return AdmissionState{}
 }
+
+// Admission is whether a heavy start would be held back by the host right now (memory pressure, page rate, disk): the answer Status
+// carries, without Status's look at every held slot and its lock holders.
+func (g *Gate) Admission() AdmissionState { return g.admission(g.Config()) }
+
+// AdmissionFor is Admission for a command that will work in dir: that directory's free space counts (and $TMPDIR's), not this process's
+// working directory.
+func (g *Gate) AdmissionFor(dir string) AdmissionState { return g.admissionFor(g.Config(), dir) }
 
 // HoldersMode says for which held slots Status asks who has the lock file open (an lsof, which looks at every process of
 // the host: about 0.3 s of CPU each time, #2933).

@@ -57,3 +57,6 @@ const PredecessorReaderKey = "team.predecessor"
 type PredecessorReader interface {
 	PredecessorOf(sessionID string) (prev string, at int64, ok bool, err error)
 }
+
+// SpawnReservationsKey is the service-registry key of the SpawnReservationReader (internal/peers) the team module registers.
+const SpawnReservationsKey = "team.spawn-reservations"
