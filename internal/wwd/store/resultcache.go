@@ -17,8 +17,9 @@ const MaxCacheEntries = 10000
 // log is not kept longer for the cache and the cache keeps no copy of it. TestCacheRetentionNeverOutlivesLogAndJob pins the order.
 const CacheRetention = 3 * 24 * time.Hour
 
-// cacheClockSlack is how far past now an entry may claim to have been made (clock steps between the job's end and the write). A row
-// further in the future is refused on the way in and never answers: it would outlive the log it points at.
+// cacheClockSlack is how far past now an entry may claim to have been made (clock steps between the job's end and the write): such a
+// time is taken as now. A time further in the future is refused on the way in. A row that is in the future when it is read never
+// answers and is pruned: it would outlive the log it points at.
 const cacheClockSlack = time.Minute
 
 // CacheEntry is one row of result_cache: the result of a succeeded job as stored (Result.Host is who made it), the toolchain
@@ -78,6 +79,9 @@ func (s *Store) putCacheEntry(c CacheEntry, now time.Time, max int) error {
 	if err := c.validate(now); err != nil {
 		return err
 	}
+	if c.CreatedAt.After(now) { // within the slack: a clock step, not a later life
+		c.CreatedAt = now
+	}
 	rec, err := json.Marshal(c.Result)
 	if err != nil {
 		return err
@@ -105,7 +109,7 @@ func (s *Store) putCacheEntry(c CacheEntry, now time.Time, max int) error {
 }
 
 // GetCacheEntry returns the entry for the key as of now; ok is false when there is none, it is past CacheRetention (an entry exactly
-// CacheRetention old is still reusable, like a log at its limit; one millisecond older is not), or it claims to be made in the future.
+// CacheRetention old is still reusable, like a log at its limit; one millisecond older is not), or it is dated after now.
 // A row whose result or fingerprint no longer decodes or no longer is a reusable result is an error, not a hit.
 func (s *Store) GetCacheEntry(key string, now time.Time) (c CacheEntry, ok bool, err error) {
 	var rec, fp string
@@ -119,7 +123,7 @@ func (s *Store) GetCacheEntry(key string, now time.Time) (c CacheEntry, ok bool,
 	if err != nil {
 		return CacheEntry{}, false, err
 	}
-	if ms < now.Add(-CacheRetention).UnixMilli() || ms > now.Add(cacheClockSlack).UnixMilli() {
+	if ms < now.Add(-CacheRetention).UnixMilli() || ms > now.UnixMilli() {
 		return CacheEntry{}, false, nil
 	}
 	if err := json.Unmarshal([]byte(fp), &c.HostFingerprint); err != nil {
@@ -144,7 +148,7 @@ func (s *Store) DeleteCacheByLabel(label string) (int, error) {
 // cutoffs come from now, not from a row.
 func (s *Store) PruneCache(now time.Time) (int, error) {
 	return execCount(s.db, `DELETE FROM result_cache WHERE created_ms < ? OR created_ms > ?`,
-		now.Add(-CacheRetention).UnixMilli(), now.Add(cacheClockSlack).UnixMilli())
+		now.Add(-CacheRetention).UnixMilli(), now.UnixMilli())
 }
 
 // CountCache is the number of entries.

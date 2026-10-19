@@ -91,9 +91,19 @@ func TestCacheRefusesWhatIsNotAReusableResult(t *testing.T) {
 	if n, _ := s.CountCache(); n != 0 {
 		t.Fatalf("refused writes left %d rows", n)
 	}
-	// within the clock slack is fine
+	// within the clock slack is fine, and is taken as now: the entry never lives past the log it points at
 	if err := s.PutCacheEntry(cacheEntry("k", cacheNow.Add(cacheClockSlack), ""), cacheNow); err != nil {
 		t.Fatalf("a small clock step: %v", err)
+	}
+	c, ok, err := s.GetCacheEntry("k", cacheNow)
+	if err != nil || !ok || !c.CreatedAt.Equal(cacheNow) {
+		t.Fatalf("stored as %v ok=%v err=%v, want %v", c.CreatedAt, ok, err, cacheNow)
+	}
+	if _, ok, _ := s.GetCacheEntry("k", cacheNow.Add(CacheRetention)); !ok {
+		t.Fatal("an entry made a minute ahead must still end exactly CacheRetention after now")
+	}
+	if _, ok, _ := s.GetCacheEntry("k", cacheNow.Add(CacheRetention+time.Millisecond)); ok {
+		t.Fatal("an entry made a minute ahead outlived CacheRetention after now")
 	}
 }
 
@@ -153,7 +163,13 @@ func TestCacheFutureRowNeverAnswersAndIsPruned(t *testing.T) {
 	if _, ok, err := s.GetCacheEntry("f", cacheNow); ok || err != nil {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if n, err := s.PruneCache(cacheNow); err != nil || n != 1 {
+	if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES ('s', '{"exit":0,"host":"h","log":"l"}', 'h', '{}', '', ?)`, cacheNow.Add(time.Second).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.GetCacheEntry("s", cacheNow); ok {
+		t.Fatal("a row one second ahead answered")
+	}
+	if n, err := s.PruneCache(cacheNow); err != nil || n != 2 {
 		t.Fatalf("pruned %d %v", n, err)
 	}
 }
