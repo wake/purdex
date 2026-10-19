@@ -53,7 +53,7 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14,
     return (
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <Icon size={size} className="flex-shrink-0" />
-        {subagents && tabIndicatorStyle !== 'icon' && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
+        {subagents && tabIndicatorStyle !== 'icon' && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
       </span>
     )
   }

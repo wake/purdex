@@ -19,8 +19,6 @@ import { keepFocus } from '../../lib/keep-focus'
 import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 import { seatName, useSeat, usePersonaRevision } from '../../lib/names/seat'
 import { Avatar } from '../Avatar'
-import { useHostLook } from '../../lib/host-look'
-import { resolveHostColors } from '../../lib/host-color'
 
 export function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
@@ -44,8 +42,6 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
   // A seat whose address (the daemon's own, spec §9.2) ends in a persona's code shows its face in the bot's place, 18 px like the sidebar's rows; the light and the
   // subagent dots stay where they were. With no persona: the agent icon, as before.
   const persona = useSeat(seat.address)
-  const look = useHostLook(seat.hostId === '' ? null : seat.hostId)
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   // The cell has no room for a mark (the strip's capacity is counted in cells): the handoff file rides in the tooltip.
   const freshHandoff = useFreshHandoffOfSeat(teamKey, seat.sessionId)
   const model = r.unavailable ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
@@ -77,7 +73,7 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
           sessionCode={seat.sessionCode}
           isActive={isActive}
           subagents
-          avatar={persona !== null ? <Avatar size={18} code={persona.code} name={persona.name} src={persona.avatar} fallbackColor={faceColor} decorative /> : undefined}
+          avatar={persona !== null ? <Avatar size={18} code={persona.code} name={persona.name} src={persona.avatar} decorative /> : undefined}
         />
       </span>
       <ContextRing pct={r.ctx} model={r.model} size={ringBox} symbolColor={hostMain} />
