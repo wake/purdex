@@ -39,6 +39,8 @@ type Env struct {
 	// HeldOff: the origin of this job answered the request for its snapshot wrongly a moment ago (#3379), so this one job is skipped for a
 	// while, not the repo: the failure is the origin's and often one job's.
 	HeldOff func(source, id string) bool
+	// Admit: whether the holds with `allow` (spec §13.4) let this job through. A job it refuses is left out of the ranking. nil: no such hold.
+	Admit func(wire.Job) bool
 }
 
 // Scored is a claimable job with its score.
@@ -143,6 +145,9 @@ func Rank(cands []Candidate, env Env) []Scored {
 			continue
 		}
 		if j.Manual == wire.PositionHold {
+			continue
+		}
+		if env.Admit != nil && !env.Admit(j) {
 			continue
 		}
 		var e entry

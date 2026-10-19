@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
@@ -268,7 +269,13 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	l.pruneLocked()
 	n, last := len(l.running), l.lastClaim
 	l.mu.Unlock()
-	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 {
+	// The headroom is 0 while any exception is on, a hold with `allow` included (so every outside reader waits). The worker knows what
+	// `allow` means: when the selective holds are the only thing in the way it may still take a job they list, and only those (claimOne).
+	selective := false
+	if facts.Derived.Headroom.Heavy < 1 {
+		selective = derived.HeavyRoomForAllowed(*facts) >= 1
+	}
+	if n >= st.Slots.Heavy || (facts.Derived.Headroom.Heavy < 1 && !selective) {
 		return
 	}
 	// a quarantined job whose command may still run must be counted by the gate before anything new is claimed (a restart takes these
@@ -282,7 +289,7 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	if age := l.cfg.Now().Sub(facts.At); age < 0 || age > l.cfg.FactsMaxAge || facts.At.Sub(last) < l.cfg.Settle {
 		return
 	}
-	l.claimOne(ctx, jobCtx)
+	l.claimOne(ctx, jobCtx, facts.Exception)
 }
 
 // stopAll stops every running job at once and waits for them (Running.Stop: the command ends, Finish gives the claim back, the lease is
@@ -311,7 +318,7 @@ func (l *Loop) stopAll(ctx context.Context, why string) {
 	wg.Wait()
 }
 
-func (l *Loop) claimOne(ctx, jobCtx context.Context) {
+func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	origins := l.cfg.Origins()
 	byHost := make(map[string]Origin, len(origins))
 	srcs := make([]pick.Source, 0, len(origins))
@@ -335,6 +342,13 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 	if l.cfg.Report != nil {
 		env.Suspended = l.cfg.Report.Suspended
 		env.HeldOff = l.cfg.Report.HeldOff
+	}
+	// the holds with `allow` (spec §13.4) let through only the jobs they list
+	for _, h := range holds {
+		if h.Allow != nil {
+			env.Admit = func(j wire.Job) bool { return derived.AdmitsJob(holds, j.Class, j.Repo.Name) }
+			break
+		}
 	}
 	ranked := pick.Rank(cands, env)
 	// The gate's heavy slot is taken only when there is something to claim (an empty queue does not make the gate's slots flicker), and
