@@ -34,6 +34,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
+import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
@@ -128,6 +129,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-shown-hosts': asPersisted(useShownHostsStore),
   'purdex-worker-settings': asPersisted(useWorkerSettingsStore),
   'purdex-quick-reply-prefs': asPersisted(useQuickReplyPrefsStore),
+  'purdex-task-groups': asPersisted(useManualGroupsStore),
 }
 
 /** The nine settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */

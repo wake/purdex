@@ -21,7 +21,7 @@
 // results may share structure with `local` and `incoming`.
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
-import { hostSettingsFromWire, layoutFromWire, presetColumnsFromWire, type WireResolver } from './host-identity'
+import { hostSettingsFromWire, layoutFromWire, presetColumnsFromWire, taskGroupsFromWire, type WireResolver } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
 import {
   WORKSPACE_SCOPED_SETTINGS,
@@ -120,6 +120,8 @@ export function settingsFromWire(payload: SettingsPayload, resolve: WireResolver
   if (isPlainObject(newtab) && isPlainObject(newtab.presets)) {
     out['purdex-newtab-layout'] = { ...newtab, presets: presetColumnsFromWire(newtab.presets, resolve) }
   }
+  const taskGroups = payload['purdex-task-groups']
+  if (isPlainObject(taskGroups)) out['purdex-task-groups'] = taskGroupsFromWire(taskGroups, resolve)
   return out
 }
 
@@ -363,6 +365,9 @@ function scopeToMaster(current: unknown, sent: unknown, masterWorkspaceIds: Read
   return out
 }
 
+/** Stores added after the first ordinal: a payload without their entry came from an older client and CLEARS them (task groups spec §4.1). */
+const CLEARED_WHEN_ABSENT: ReadonlySet<SettingsStorageKey> = new Set<SettingsStorageKey>(['purdex-task-groups'])
+
 /**
  * Per store, the listed fields whose incoming value differs from the local one.
  * Unlisted fields and unknown stores are left alone (the guard refuses both;
@@ -404,8 +409,11 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
   const rejected = new Set<string>()
   for (const [key, fields] of listedSettingsFields()) {
     const storageKey = key as SettingsStorageKey
-    if (!Object.hasOwn(incoming, storageKey)) continue
-    const theirs = incoming[storageKey]
+    // A store that came in at a later ordinal has no entry in an older payload: that means cleared (the sender
+    // predates it), not "leave it alone" like the stores that always existed (task groups spec §4.1).
+    const absentClears = !Object.hasOwn(incoming, storageKey) && CLEARED_WHEN_ABSENT.has(storageKey)
+    if (!absentClears && !Object.hasOwn(incoming, storageKey)) continue
+    const theirs = absentClears ? {} : incoming[storageKey]
     if (!isPlainObject(theirs)) continue
     const mine = (Object.hasOwn(local, storageKey) ? local[storageKey] : undefined) as Rec | undefined
     const patch: Rec = {}

@@ -21,6 +21,7 @@
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
   hostSettingsToWire,
+  taskGroupsToWire,
   hostsToWire,
   identityOfSync,
   layoutToWire,
@@ -386,6 +387,9 @@ export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspace
     if (hostSettings !== undefined && isRecord(hostSettings.hosts)) hostSettings.hosts = hostSettingsToWire(hostSettings.hosts, identity)
     const newtab = payload['purdex-newtab-layout']
     if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWireOnce(newtab.presets, identity)
+    // Members: wire host, then de-duplicated, then sorted — in that order, so two devices build one payload (task groups spec §4.1).
+    const taskGroups = payload['purdex-task-groups']
+    if (taskGroups !== undefined) payload['purdex-task-groups'] = taskGroupsToWire(taskGroups, identity)
   }
   const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
   // `project` returns fresh structure, so deleting from it touches no store.

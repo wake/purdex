@@ -18,7 +18,7 @@ export type SectionKind = 'hosts' | 'settings' | 'workspaces' | 'tabs'
 /** A section key as the daemon stores it: three singletons plus one `tabs.<workspaceId>` per workspace. */
 export type ProfileSectionKey = 'hosts' | 'settings' | 'workspaces' | `tabs.${string}`
 
-/** The twelve persisted stores the `settings` section draws fields from, by localStorage key (`purdex-module-enabled` and `purdex-editor-settings` are device-local — see PROJECTIONS.settings). */
+/** The thirteen persisted stores the `settings` section draws fields from, by localStorage key (`purdex-module-enabled` and `purdex-editor-settings` are device-local — see PROJECTIONS.settings). */
 export type SettingsStorageKey =
   | 'purdex-ui-settings'
   | 'purdex-themes'
@@ -32,6 +32,7 @@ export type SettingsStorageKey =
   | 'purdex-shown-hosts'
   | 'purdex-worker-settings'
   | 'purdex-quick-reply-prefs'
+  | 'purdex-task-groups'
 
 // === Section payloads (what travels) ===
 

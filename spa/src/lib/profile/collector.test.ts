@@ -13,6 +13,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
@@ -58,13 +59,13 @@ const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash
 
 const SETTINGS_STORES = [
   useUISettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
-  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore,
+  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore,
   useWorkerSettingsStore,
 ] as const
 
-const TWELVE_KEYS = [
+const SETTINGS_KEYS = [
   'purdex-host-looks', 'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
-  'purdex-notification-settings', 'purdex-quick-reply-prefs', 'purdex-shown-hosts', 'purdex-themes', 'purdex-ui-settings', 'purdex-worker-settings',
+  'purdex-notification-settings', 'purdex-quick-reply-prefs', 'purdex-shown-hosts', 'purdex-task-groups', 'purdex-themes', 'purdex-ui-settings', 'purdex-worker-settings',
   'purdex-workspace-settings',
 ]
 
@@ -409,7 +410,7 @@ describe('startCollector — settings', () => {
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, Record<string, unknown>>
-    expect(Object.keys(payload).sort()).toEqual(TWELVE_KEYS)
+    expect(Object.keys(payload).sort()).toEqual(SETTINGS_KEYS)
     expect(payload['purdex-ui-settings'].keepAliveCount).toBe(5)
     expect(payload).not.toHaveProperty('purdex-editor-settings')
     expect(payload['purdex-ui-settings']).not.toHaveProperty('terminalSettingsVersion')
@@ -628,7 +629,7 @@ describe('watchUnsyncedStores', () => {
   it('UNSYNCED_SETTINGS_KEYS is exactly the projected stores that never registered with syncManager — none today', () => {
     // Fails the day a projected store starts (or stops) calling syncManager.register.
     const projected = [...new Set(PROJECTIONS.settings.map((p) => p.slice(0, p.indexOf('.'))))]
-    expect(projected.sort()).toEqual(TWELVE_KEYS)
+    expect(projected.sort()).toEqual(SETTINGS_KEYS)
     expect(h.registered).toContain('purdex-ui-settings') // the recorder is live
     expect([...UNSYNCED_SETTINGS_KEYS].sort()).toEqual(projected.filter((k) => !h.registered.includes(k)).sort())
     expect(UNSYNCED_SETTINGS_KEYS).toEqual([])
@@ -637,7 +638,7 @@ describe('watchUnsyncedStores', () => {
   it('rehydrates nothing: neither a registered store a second time, nor the device-local editor store', () => {
     const spies = [...SETTINGS_STORES, useEditorSettingsStore].map((s) => vi.spyOn(s.persist, 'rehydrate'))
     unwatch = watchUnsyncedStores()
-    for (const key of [...TWELVE_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
+    for (const key of [...SETTINGS_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   })
 
