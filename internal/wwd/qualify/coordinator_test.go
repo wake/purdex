@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/queue"
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -77,9 +78,41 @@ func (q *fakeQueue) submissions() []wire.JobSubmission {
 }
 
 type fakeStore struct {
-	mu   sync.Mutex
-	rows []wire.EarnedLabel
-	err  error
+	mu       sync.Mutex
+	rows     []wire.EarnedLabel
+	err      error
+	attempts map[string]store.QualifyAttempt
+	saveErr  error
+}
+
+func (s *fakeStore) QualifyAttempts() ([]store.QualifyAttempt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.QualifyAttempt
+	for _, a := range s.attempts {
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (s *fakeStore) SaveQualifyAttempt(a store.QualifyAttempt) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	if s.attempts == nil {
+		s.attempts = map[string]store.QualifyAttempt{}
+	}
+	s.attempts[a.Label] = a
+	return nil
+}
+
+func (s *fakeStore) DeleteQualifyAttempt(label string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.attempts, label)
+	return nil
 }
 
 func (s *fakeStore) EarnedLabels() ([]wire.EarnedLabel, error) {
@@ -597,5 +630,70 @@ func TestAMatchWaitsOutAManifestThatCannotBeReadJustNow(t *testing.T) {
 	r2.c.Settle(ctx())
 	if _, rec := r2.c.Status(); len(rec) != 1 || rec[0].Outcome != OutcomeVoid {
 		t.Fatalf("%+v", rec)
+	}
+}
+
+// A restart does not bring a retry forward: a second coordinator on the same store (and the same queue) waits out the 24 h the first one
+// started, and starts a pair at 24:00:00.
+func TestARestartKeepsTheRetryWait(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	bad := goodRes("mserv")
+	bad.Summary = sum(9, 0)
+	bad.Summary.PassedDigest = digestOf(77)
+	r.finishPair(bad, goodRes("air26"))
+	r.c.Tick(ctx()) // the mismatch is settled and saved
+	if len(r.st.attempts) != 1 {
+		t.Fatalf("the attempt was not saved: %+v", r.st.attempts)
+	}
+	before := len(r.q.submissions())
+
+	r.now = r.now.Add(time.Hour)
+	restarted := New(Config{Queue: r.q, Store: r.st, Source: r.src, Now: func() time.Time { return r.now }, Granted: func() {}})
+	restarted.Tick(ctx())
+	if n := len(r.q.submissions()); n != before {
+		t.Fatalf("the first record after a restart started a pair inside the 24 h: %d submissions", n)
+	}
+	r.now = r.now.Add(RetryAfter - time.Hour)
+	restarted.Tick(ctx())
+	if n := len(r.q.submissions()); n != before+2 {
+		t.Fatalf("24:00:00 after the failure did not start a pair: %d submissions", n)
+	}
+}
+
+// An earned label ends the memory of the failures before it, in the store as well; a task that is gone ends it too.
+func TestEarningTheLabelOrLosingTheTaskForgetsTheSavedAttempt(t *testing.T) {
+	r := newRig(t, tsc)
+	r.st.attempts = map[string]store.QualifyAttempt{tsc.Label(): {Label: tsc.Label(), Outcome: string(OutcomeVoid), At: r.now.Add(-48 * time.Hour)}}
+	r.c = New(Config{Queue: r.q, Store: r.st, Source: r.src, Now: func() time.Time { return r.now }, Granted: func() { r.granted.Add(1) }})
+	r.c.Tick(ctx()) // 48 h after the failure: a pair starts
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.now = r.now.Add(3 * time.Minute)
+	r.c.Tick(ctx())
+	if len(r.st.attempts) != 0 || len(r.st.rows) != 1 {
+		t.Fatalf("attempts %+v rows %+v", r.st.attempts, r.st.rows)
+	}
+	r.st.attempts = map[string]store.QualifyAttempt{"task:purdex/gone": {Label: "task:purdex/gone", Outcome: string(OutcomeVoid), At: r.now}}
+	r.c = New(Config{Queue: r.q, Store: r.st, Source: r.src, Now: func() time.Time { return r.now }, Granted: func() {}})
+	r.c.Tick(ctx())
+	if len(r.st.attempts) != 0 {
+		t.Fatalf("the attempt of a task that no longer exists was kept: %+v", r.st.attempts)
+	}
+}
+
+// A store that cannot save the attempt does not stop the coordinator: the wait still holds in memory for this run.
+func TestAFailedSaveOfTheAttemptStillWaitsInMemory(t *testing.T) {
+	r := newRig(t, tsc)
+	r.st.saveErr = errors.New("disk full")
+	r.c.Tick(ctx())
+	bad := goodRes("mserv")
+	bad.Summary = sum(9, 0)
+	bad.Summary.PassedDigest = digestOf(77)
+	r.finishPair(bad, goodRes("air26"))
+	r.c.Tick(ctx())
+	before := len(r.q.submissions())
+	r.c.Tick(ctx())
+	if n := len(r.q.submissions()); n != before {
+		t.Fatalf("a failed save lost the wait in this run: %d", n)
 	}
 }

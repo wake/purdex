@@ -442,8 +442,7 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
 
 The manifest (`.wwd/tasks.toml`) says what a task needs of its host: a task that runs `go` (`go test …`, `make lint`) carries
 `tool:go<major>.<minor>` (the `go` line of `go.mod`), one that runs `pnpm` carries `tool:node24` and `tool:pnpm10` (the worker
-advertises the major only). `tsc` and `tsc-force` are decided with the qualification of `tsc` (#3655) and carry no tool label until
-that lands. A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the PATH
+advertises the major only; `tsc` has them besides its earned `task:purdex/tsc`). A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the PATH
 of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that lacks
 one does not claim those tasks.
 

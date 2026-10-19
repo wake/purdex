@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,4 +88,38 @@ func TestARequestOnTheSocketQueuesTheTwoHalvesOfAPair(t *testing.T) {
 	treq.Header.Set("Authorization", "Bearer tok")
 	d.TCPHandler().ServeHTTP(tcp, treq)
 	assert.Equal(t, http.StatusNotFound, tcp.Code)
+}
+
+// A facts record alone starts the pair: Notify, the trigger's goroutine and the real coordinator, with no request from anyone.
+func TestAFactsRecordStartsAPairByItself(t *testing.T) {
+	root := qualifyRepo(t, qualifyManifest)
+	st, err := store.Open(filepath.Join(t.TempDir(), "wwd.db"))
+	require.NoError(t, err)
+	defer st.Close()
+	require.NoError(t, queue.Migrate(t.Context(), st.DB()))
+	q, err := queue.New(st.DB(), queue.Options{Origin: "mserv", LogDir: t.TempDir()})
+	require.NoError(t, err)
+	coordinator := qualify.New(qualify.Config{
+		Queue: q, Store: st,
+		Source: &qualifySource{repos: clones.NewSource(map[string]string{"purdex": root}), host: func() qualify.Host {
+			return qualify.Host{Alias: "mserv", WorkerOn: true, Labels: []string{"repo:purdex", "tool:node24", "os:linux"}, Fingerprint: map[string]string{"node": "24"}}
+		}},
+		Granted: func() {},
+	})
+	trigger := newQualifyTrigger()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go trigger.Run(ctx, coordinator.Tick)
+
+	trigger.Notify()
+	require.Eventually(t, func() bool {
+		inFlight, _ := coordinator.Status()
+		return len(inFlight) > 0
+	}, 10*time.Second, 20*time.Millisecond, "no pair was started by a facts record")
+	inFlight, _ := coordinator.Status()
+	labels := map[string]bool{}
+	for _, p := range inFlight {
+		labels[p.Label] = true
+	}
+	assert.True(t, labels["task:purdex/tsc"], "%v", labels)
 }

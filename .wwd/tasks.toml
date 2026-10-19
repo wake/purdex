@@ -23,7 +23,7 @@ summary = "go-json"
 # Every task that can leave the local machine carries os:darwin (a Linux host with its worker on would otherwise claim it and fail it for
 # what it lacks); a task may drop it only when it is qualified on that host (`qualify`), see internal/wwd/manifest/purdex_manifest_test.go.
 # A task that runs go carries tool:go<go.mod's major.minor>, one that runs pnpm carries tool:node<N> and tool:pnpm<N>: a host whose worker has
-# no such tool never gets the job (#3546). tsc and tsc-force carry their own. Raising Go: see docs/wwd-deploy.md.
+# no such tool never gets the job (#3546). Raising Go: see docs/wwd-deploy.md.
 
 [tasks.spa-related]
 run       = "pnpm vitest related --run --reporter=json --outputFile={report} {files}"
@@ -81,10 +81,11 @@ run       = "pnpm tsc -b"
 cwd       = "spa"
 args      = "none"
 class     = "merge"
-labels     = ["os:darwin"]
+labels    = ["repo:purdex", "task:purdex/tsc", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
+qualify   = { args = [], reference = "air26" }
 
 [tasks.lint]
 run       = "make lint"
@@ -132,7 +133,7 @@ run       = "pnpm tsc -b --force"
 cwd       = "spa"
 args      = "none"
 class     = "release"
-labels     = ["os:darwin"]
+labels     = ["os:darwin", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
