@@ -210,7 +210,7 @@ func TestTCPRefusesHostOnMutations(t *testing.T) {
 	h := d.TCPHandler()
 	auth := "Bearer " + testToken
 	for _, c := range []struct{ method, path string }{
-		{"PUT", "/v1/worker"}, {"GET", "/v1/worker"}, {"POST", "/v1/exceptions"}, {"DELETE", "/v1/exceptions/x"},
+		{"PUT", "/v1/worker"}, {"GET", "/v1/worker"}, {"GET", "/v1/exceptions"}, {"POST", "/v1/exceptions"}, {"DELETE", "/v1/exceptions/x"},
 	} {
 		for _, host := range []string{"air26", "mlab"} {
 			if w := send(h, c.method, fwdPath(c.path, host), auth, `{}`); w.Code != http.StatusBadRequest {
