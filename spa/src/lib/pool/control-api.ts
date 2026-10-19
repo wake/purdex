@@ -5,7 +5,9 @@ import { hostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { classify, type PoolError } from './errors'
-import type { PoolWorker } from './types'
+import { readJson } from './api'
+import { parseExceptionList } from './exceptions'
+import type { PoolExceptionDetail, PoolHold, PoolWorker } from './types'
 
 export const CONTROL_CAPABILITY = 'pool.control.v1'
 
@@ -66,4 +68,19 @@ const hostPath = (alias: string) => `/api/pool/hosts/${encodeURIComponent(alias)
 /** `PUT /api/pool/hosts/{alias}/worker`: the whole settings object. */
 export async function putWorker(hostId: string, alias: string, worker: PoolWorker): Promise<void> {
   await send(hostId, 'PUT', `${hostPath(alias)}/worker`, { enabled: worker.enabled, slots: { heavy: worker.slots.heavy, light: worker.slots.light }, owner_rule: worker.owner_rule })
+}
+
+/** `POST …/exceptions`: a pause bounded by a time (`until`, ms since epoch) — the only kind the App adds. */
+export async function postPause(hostId: string, alias: string, name: string, untilMs: number, holds: PoolHold[]): Promise<void> {
+  await send(hostId, 'POST', `${hostPath(alias)}/exceptions`, { name, until: new Date(untilMs).toISOString(), pid: null, holds })
+}
+
+/** `DELETE …/exceptions/{name}`. */
+export async function deletePause(hostId: string, alias: string, name: string): Promise<void> {
+  await send(hostId, 'DELETE', `${hostPath(alias)}/exceptions/${encodeURIComponent(name)}`)
+}
+
+/** `GET …/exceptions`: the pauses with their holds. null is "not known": an older host answers 404, and any other failure of the read is the same to the page. */
+export async function fetchPauses(hostId: string, alias: string): Promise<PoolExceptionDetail[] | null> {
+  try { return parseExceptionList(await readJson(hostId, `${hostPath(alias)}/exceptions`)) } catch { return null }
 }

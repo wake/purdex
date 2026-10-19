@@ -13,6 +13,9 @@ export interface PoolResident { session: string; kind: string; count: number; me
 export interface PoolDisk { mount: string; free_gb: number; used_pct: number; total_bytes: number; avail_bytes: number }
 export interface PoolPsi { some10: number; full10: number; some60: number }
 export interface PoolException { name: string; since: number; until: number | null }
+export type PoolHold = 'heavy' | 'light'
+/** One entry of `GET /api/pool/hosts/{alias}/exceptions` (`pool.control.v1`'s list, #3479): a pause with what it holds. `until` and `pid`: exactly one is set. */
+export interface PoolExceptionDetail { name: string; until: number | null; pid: number | null; holds: PoolHold[] }
 export interface PoolOwner { active: boolean; idle_s: number; reason: string }
 
 export interface PoolFacts {
