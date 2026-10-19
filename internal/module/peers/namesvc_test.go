@@ -166,7 +166,7 @@ func TestNameService_UndoWithoutARecordOfTheRenameDoesNothing(t *testing.T) {
 	ctx := context.Background()
 	_, err := e.m.RenameForLead(ctx, poolSidA, "mia")
 	require.NoError(t, err)
-	e.m.leadRenames.drop(nameSID(poolSidA)) // a daemon restart forgets the renames in flight
+	e.m.leadRenames.drop(nameSID(poolSidA), "purdex-54-anna") // a daemon restart forgets the renames in flight
 	require.NoError(t, e.m.UndoRenameForLead(ctx, poolSidA, "purdex-54-anna"))
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "harmless: on a retry, keeping the current name is the new name")
 }
@@ -178,7 +178,7 @@ func TestNameService_RenameForLeadThatLosesTheCompareAndSetIsLost(t *testing.T) 
 	}}
 	_, err := e.m.RenameForLead(context.Background(), poolSidA, "mia")
 	assert.ErrorIs(t, err, ipeers.ErrNameLost)
-	_, recorded := e.m.leadRenames.get(nameSID(poolSidA))
+	_, recorded := e.m.leadRenames.get(nameSID(poolSidA), "purdex-54-anna")
 	assert.False(t, recorded, "a rename that did not happen leaves nothing to undo")
 }
 
@@ -217,6 +217,69 @@ func TestNameService_AnApplyingCollectionWaitsForARenameInFlight(t *testing.T) {
 	assert.Equal(t, "purdex-54-anna", old)
 	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "mia was pickable when the rename was checked and written")
 	<-applied // and the change goes through once the rename is done
+}
+
+// Two renames of one session by different approvals: each undo reverses its own rename only (codex R2 on NP-3c-2).
+func TestNameService_AnUndoReversesOnlyTheRenameItBelongsTo(t *testing.T) {
+	e := svcEnv(t)
+	ctx := context.Background()
+	first, err := e.m.RenameForLead(ctx, poolSidA, "mia") // anna -> mia
+	require.NoError(t, err)
+	second, err := e.m.RenameForLead(ctx, poolSidA, "hiro") // mia -> hiro
+	require.NoError(t, err)
+	assert.Equal(t, "purdex-54-mia", second)
+
+	// the first approval fails to close: its undo finds the name moved on and leaves the second rename alone
+	require.NoError(t, e.m.UndoRenameForLead(ctx, poolSidA, first))
+	assert.Equal(t, "purdex-54-hiro", e.storedName(poolSidA))
+	// the second approval's own undo still works
+	require.NoError(t, e.m.UndoRenameForLead(ctx, poolSidA, second))
+	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA))
+}
+
+// A rename that waited for the pool lock while an identical one went through is a success, not a held name.
+func TestNameService_ARenameToTheSameCodeThatJustWentThroughIsASuccess(t *testing.T) {
+	e := svcEnv(t)
+	ctx := context.Background()
+	unlock, err := e.m.lockPool(ctx)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.m.RenameForLead(ctx, poolSidA, "mia")
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // it is waiting for the lock
+	_, won, err := e.meta.PeerNames().RenamePool(ctx, poolSidA, "purdex-54-anna", "purdex-54-mia")
+	require.NoError(t, err)
+	require.True(t, won)
+	unlock()
+	require.NoError(t, <-done)
+	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA))
+}
+
+// Only persona codes are written to the history (spec §6.1): a built-in name is not one once there are personas, a retired
+// persona's code still is.
+func TestNameService_TheHistoryTakesPersonaCodesOnly(t *testing.T) {
+	e := svcEnv(t) // personas hiro, anna, mia; A is named purdex-54-anna
+	ctx := context.Background()
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", true), pp("mia", "Mia", false)}}}
+	e.m.bindPersonas(f) // anna is retired now
+
+	require.NoError(t, e.m.RecordPairCodes(ctx, "hiro", "adam")) // adam is a built-in name, not a persona
+	require.NoError(t, e.m.RecordPairCodes(ctx, "adam", "mia"))
+	pairs, _ := e.meta.NameHistory().Pairs(ctx)
+	assert.Empty(t, pairs)
+	require.NoError(t, e.m.RecordPairCodes(ctx, "hiro", "anna"))
+	pairs, _ = e.meta.NameHistory().Pairs(ctx)
+	assert.Len(t, pairs, 1, "a retired persona is still a persona")
+
+	e.start(poolSidB, tLate)
+	e.assign(poolSidB, "purdex-55-adam", store.PeerNameSourcePool)
+	_, ok := e.m.CodeOf(ctx, poolSidB)
+	assert.False(t, ok, "a session still named after a built-in name has no persona code")
+	require.NoError(t, e.m.RecordLead(ctx, poolSidB))
+	leads, _ := e.meta.NameHistory().Leads(ctx)
+	assert.Empty(t, leads)
 }
 
 func TestNameService_RecordLeadWritesOnlyForAPersonaName(t *testing.T) {

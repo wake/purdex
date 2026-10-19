@@ -24,34 +24,38 @@ type NameHistoryWriter interface {
 
 var errNoNameStore = errors.New("peers: names are not enabled")
 
-// leadRenameLedger remembers, per session, the name a RenameForLead set, so the undo can be a compare-and-set on exactly that
-// name. It is in memory: a daemon that restarted between the rename and its undo has nothing to undo, which is harmless (spec
-// §5.3: on a retry, keeping the current name is the new name).
+// leadRenameLedger remembers the name each RenameForLead set, keyed by the session and the name it renamed FROM, so an undo is a
+// compare-and-set on exactly the rename it belongs to: two approvals renaming one session (anna→mia, then mia→hiro) have two
+// records, and the undo of the first can neither find nor spend the second's. It is in memory: a daemon that restarted between
+// the rename and its undo has nothing to undo, which is harmless (spec §5.3: on a retry, keeping the current name is the new
+// name).
 type leadRenameLedger struct {
 	mu sync.Mutex
-	to map[string]string // session id (lowercase) → the name the rename set
+	to map[leadRenameKey]string // → the name the rename set
 }
 
-func (l *leadRenameLedger) set(sid, name string) {
+type leadRenameKey struct{ sid, from string }
+
+func (l *leadRenameLedger) set(sid, from, to string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.to == nil {
-		l.to = map[string]string{}
+		l.to = map[leadRenameKey]string{}
 	}
-	l.to[sid] = name
+	l.to[leadRenameKey{sid, from}] = to
 }
 
-func (l *leadRenameLedger) get(sid string) (string, bool) {
+func (l *leadRenameLedger) get(sid, from string) (string, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n, ok := l.to[sid]
+	n, ok := l.to[leadRenameKey{sid, from}]
 	return n, ok
 }
 
-func (l *leadRenameLedger) drop(sid string) {
+func (l *leadRenameLedger) drop(sid, from string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.to, sid)
+	delete(l.to, leadRenameKey{sid, from})
 }
 
 func nameSID(sessionID string) string { return strings.ToLower(strings.TrimSpace(sessionID)) }
@@ -75,11 +79,20 @@ func (m *Module) CodeOf(ctx context.Context, sessionID string) (string, bool) {
 	if err != nil || !ok {
 		return "", false
 	}
-	return ipeers.PoolNameOf(row.Name)
+	code, ok := ipeers.PoolNameOf(row.Name)
+	if !ok || !m.isPersonaCode(code) {
+		return "", false
+	}
+	return code, true
 }
 
-// isPoolCode says whether code is a recognised pool name (a persona code, or a built-in name while there are none).
-func isPoolCode(code string) bool {
+// isPersonaCode says whether code is a persona's code (a retired persona's too), as of the collection the pool follows. While
+// there are no personas the built-in names are the pool (spec L4), and count. Once there are, a built-in name that is not a
+// persona's code does not: the history is of personas (spec §6.1).
+func (m *Module) isPersonaCode(code string) bool {
+	if p := m.personaCodes.Load(); p != nil && len(*p) > 0 {
+		return (*p)[code]
+	}
 	c, ok := ipeers.PoolNameOf("x-" + code)
 	return ok && c == code
 }
@@ -112,6 +125,19 @@ func (m *Module) LeadCandidates(ctx context.Context, sessionID string) ([]ipeers
 
 // RenameForLead renames the session to <base>-<code>; see ipeers.NameService.
 func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (string, error) {
+	if m.peerNames == nil {
+		return "", errNoNameStore
+	}
+	if err := m.awaitPoolReady(ctx); err != nil {
+		return "", err
+	}
+	unlock, err := m.lockPool(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	// the row is read under the pool lock: a rename that waited for it sees what the one before it did (an identical one is a
+	// success below, not a held name)
 	row, ok, err := m.nameRow(ctx, sessionID)
 	if err != nil {
 		return "", err
@@ -134,14 +160,6 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if !ok {
 		return "", ipeers.ErrNameUnknown
 	}
-	if err := m.awaitPoolReady(ctx); err != nil {
-		return "", err
-	}
-	unlock, err := m.lockPool(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
 	held, err := m.heldPoolNames(ctx, map[string]bool{})
 	if err != nil {
 		return "", err
@@ -169,16 +187,16 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if !won {
 		return "", ipeers.ErrNameLost
 	}
-	m.leadRenames.set(nameSID(sessionID), newName)
+	m.leadRenames.set(nameSID(sessionID), row.Name, newName)
 	return row.Name, nil
 }
 
 // UndoRenameForLead reverses the last RenameForLead of the session; see ipeers.NameService.
 func (m *Module) UndoRenameForLead(ctx context.Context, sessionID, oldName string) error {
 	sid := nameSID(sessionID)
-	to, ok := m.leadRenames.get(sid)
+	to, ok := m.leadRenames.get(sid, oldName)
 	if !ok {
-		m.logf("peers: name: no rename of %s to undo", sessionID)
+		m.logf("peers: name: no rename of %s from %s to undo", sessionID, oldName)
 		return nil
 	}
 	if m.peerNames == nil {
@@ -196,7 +214,7 @@ func (m *Module) UndoRenameForLead(ctx context.Context, sessionID, oldName strin
 	case err != nil:
 		return err // the record stays, so the undo can be tried again
 	}
-	m.leadRenames.drop(sid) // undone, or a later rename won: either way this record is spent
+	m.leadRenames.drop(sid, oldName) // undone, or a later rename won: either way this record is spent
 	return nil
 }
 
@@ -211,7 +229,7 @@ func (m *Module) RecordLead(ctx context.Context, sessionID string) error {
 
 // RecordPairCodes writes one lead/member pair by code.
 func (m *Module) RecordPairCodes(ctx context.Context, leadCode, memberCode string) error {
-	if m.nameWriter == nil || !isPoolCode(leadCode) || !isPoolCode(memberCode) {
+	if m.nameWriter == nil || !m.isPersonaCode(leadCode) || !m.isPersonaCode(memberCode) {
 		return nil
 	}
 	return m.nameWriter.RecordPair(ctx, leadCode, memberCode, m.now().UnixMilli())

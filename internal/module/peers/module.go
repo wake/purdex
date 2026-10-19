@@ -289,6 +289,8 @@ type Module struct {
 	leadRenames leadRenameLedger  // the names RenameForLead set, for the undo (namesvc.go)
 	familiar    FamiliarSource
 	leads       atomic.Pointer[map[string]bool]
+	// personaCodes is the code of every persona, retired too, as of the collection the pool follows (published with it).
+	personaCodes atomic.Pointer[map[string]bool]
 	// poolGen makes the pool and the lead flags of one persona collection visible together: bindPersonas holds the write side
 	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
 	poolGen            sync.RWMutex
