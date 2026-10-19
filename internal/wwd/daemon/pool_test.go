@@ -84,7 +84,7 @@ func TestPoolRefusesAPeerThatAnswersAsSomeoneElse(t *testing.T) {
 		case "/v1/info":
 			writeJSON(w, 200, wire.Info{HostID: "id-mserv", Alias: "mserv", Version: "v", Proto: wire.Proto, Platform: "linux", Arch: "amd64", Labels: []string{}})
 		case "/v1/facts":
-			f := wire.Facts{V: wire.Proto, HostID: "id-mserv", Alias: factsAlias.Load().(string), Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0}
+			f := wire.Facts{V: wire.FactsProto, HostID: "id-mserv", Alias: factsAlias.Load().(string), Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0}
 			writeJSON(w, 200, f)
 		}
 	}))
@@ -116,7 +116,7 @@ func TestPoolDropsFactsOfAReplacedHost(t *testing.T) {
 				http.Error(w, "no sample yet", http.StatusServiceUnavailable)
 				return
 			}
-			writeJSON(w, 200, wire.Facts{V: wire.Proto, HostID: id.Load().(string), Alias: "mserv", Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0})
+			writeJSON(w, 200, wire.Facts{V: wire.FactsProto, HostID: id.Load().(string), Alias: "mserv", Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0})
 		}
 	}))
 	defer srv.Close()

@@ -310,7 +310,7 @@ func TestClaimID(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if Proto != 2 || MinProto != 1 || LeaseS != 60 || RenewS != 15 || Port != 7871 {
+	if Proto != 3 || FactsProto != 2 || MinProto != 1 || LeaseS != 60 || RenewS != 15 || Port != 7871 {
 		t.Fatal("constants changed")
 	}
 }

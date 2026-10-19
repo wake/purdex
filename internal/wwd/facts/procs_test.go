@@ -129,7 +129,7 @@ func TestBuildProcsWireShape(t *testing.T) {
 		}
 	}
 	// the result is valid wire data
-	f := wire.Facts{V: wire.Proto, Procs: procs, Derived: wire.Derived{Zone: wire.ZoneNormal}}
+	f := wire.Facts{V: wire.FactsProto, Procs: procs, Derived: wire.Derived{Zone: wire.ZoneNormal}}
 	if err := f.Validate(); err != nil {
 		t.Fatal(err)
 	}

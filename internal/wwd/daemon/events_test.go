@@ -78,7 +78,7 @@ func TestBrokerFansOutAndDropsAdHocForPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.PublishFacts(wire.Facts{V: wire.Proto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
+	b.PublishFacts(wire.Facts{V: wire.FactsProto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
 	if recv(t, local).Type != wire.EventFacts || recv(t, peer).Type != wire.EventFacts {
 		t.Fatal("facts not delivered to both")
 	}
@@ -111,7 +111,7 @@ func TestBrokerNeverBlocksOnASlowSubscriber(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 10*subscriberBuffer; i++ {
-			b.PublishFacts(wire.Facts{V: wire.Proto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
+			b.PublishFacts(wire.Facts{V: wire.FactsProto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
 		}
 		close(done)
 	}()
@@ -130,7 +130,7 @@ func TestBrokerNeverBlocksOnASlowSubscriber(t *testing.T) {
 	}
 	other, cancel2 := b.Subscribe(false)
 	defer cancel2()
-	b.PublishFacts(wire.Facts{V: wire.Proto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
+	b.PublishFacts(wire.Facts{V: wire.FactsProto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
 	recv(t, other)
 }
 
@@ -138,7 +138,7 @@ func TestBrokerNeverBlocksOnASlowSubscriber(t *testing.T) {
 // registers it: a record published at that moment arrives once, not twice (R1).
 func TestSubscribeStartsWithTheLatestFactsExactlyOnce(t *testing.T) {
 	b := NewBroker()
-	f1 := wire.Facts{V: wire.Proto, At: s0, Derived: wire.Derived{Zone: wire.ZoneNormal}}
+	f1 := wire.Facts{V: wire.FactsProto, At: s0, Derived: wire.Derived{Zone: wire.ZoneNormal}}
 	b.PublishFacts(f1)
 	ch, cancel := b.Subscribe(false)
 	defer cancel()
@@ -202,7 +202,7 @@ func TestCancelStopsDelivery(t *testing.T) {
 	ch, cancel := b.Subscribe(false)
 	cancel()
 	cancel() // twice is fine
-	b.PublishFacts(wire.Facts{V: wire.Proto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
+	b.PublishFacts(wire.Facts{V: wire.FactsProto, Derived: wire.Derived{Zone: wire.ZoneNormal}})
 	if _, open := <-ch; open {
 		t.Fatal("a cancelled subscription still delivers")
 	}

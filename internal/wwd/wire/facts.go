@@ -210,7 +210,7 @@ type FactsWorker struct {
 
 // Validate checks the version and enumerations.
 func (f Facts) Validate() error {
-	if f.V < MinProto || f.V > Proto {
+	if f.V < MinProto || f.V > FactsProto {
 		return fmt.Errorf("facts: unsupported v %d", f.V)
 	}
 	if f.Mem.DecompressRate != nil && *f.Mem.DecompressRate < 0 {

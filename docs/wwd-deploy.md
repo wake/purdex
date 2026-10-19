@@ -213,6 +213,21 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     above), start the old build. The rows of the two new tables are lost with the roll back (until 8a-1 they hold nothing).
     Check after the upgrade: `sqlite3 ~/.local/share/wwd/wwd.db "SELECT version FROM host_schema; SELECT count(*) FROM alerts;"`
     prints `5` and `0`.
+* **Wire `proto` 3 and the passed-test digest (WWD-5b-2r / 5b-2w, spec §7)** — the same two phases, for one new field: `summary.passed_digest`
+  in a job result (`sha256:<64 hex>` of the sorted passed test ids; qualification compares it so that two hosts that ran different tests
+  and passed as many are told apart). Decoders are strict, so:
+  - *The readers' release (5b-2r)*: every wwd and both Purdex daemons learn the field; `/v1/info` says `"proto":3`. Nothing writes it.
+    Summaries are byte-for-byte the old shape (the field is `omitempty`; a test pins that an older strict decoder takes them). The
+    **facts version is no longer the protocol version**: `wire.FactsProto = 2` is what facts carry and a facts reader takes, so a
+    proto 3 build still writes `v: 2` facts when the proto 2 gate is open (a `v: 3` record would be refused by a proto 2 host; a test
+    pins it). **Deploy the four wwds and both Purdex daemons from the same build, one after the other and quickly**: while the
+    four are being upgraded a proto 2 host reads a proto 3 host's `/v1/info` as an unknown proto, i.e. an unreachable peer, for the
+    few minutes of the skew (the same cost as the proto 2 release; the gates stay shut meanwhile and nothing is lost).
+  - *The writers' release (5b-2w), one release later*: the three summary parsers fill `passed_digest`, and only while
+    `wire.PoolAtLeast(peers, 3)` holds. A writer PR must not be merged or deployed in the same release as the reader PR. A host rolled
+    back below proto 3 shuts the gate again.
+  - A pair compared with a digest missing on either half is a mismatch, never a count comparison, so until the writers are everywhere
+    qualification earns nothing; **the first PR that starts a pair on a production host (5b-2c) waits for the writers' release**.
 * Remove: `wwd uninstall` (service definition and binary go; config, token and `wwd.db` stay) or
   `wwd uninstall --purge` (everything under `~/.config/wwd` and `~/.local/share/wwd`). `pdx setup --wwd-remove
   [--wwd-purge]` is the same.
