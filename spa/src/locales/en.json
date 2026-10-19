@@ -3177,5 +3177,19 @@
   "pool.card.sessions_value": "room for {{n}} more",
   "pool.card.fallback": "wwd is not answering (since {{time}})",
   "pool.card.fallback_nosince": "wwd is not answering",
-  "pool.card.psi": " · PSI {{some}}/{{full}}"
+  "pool.card.psi": " · PSI {{some}}/{{full}}",
+  "pool_hosts.group": "Pool hosts",
+  "pool_hosts.title": "Pool hosts",
+  "pool_hosts.hint": "Adding a host means installing wwd on it and editing each host's peers; this page cannot do that.",
+  "pool_hosts.col.host": "Host",
+  "pool_hosts.col.status": "Status",
+  "pool_hosts.col.worker": "Worker",
+  "pool_hosts.col.headroom": "Takes",
+  "pool_hosts.col.version": "wwd",
+  "pool_hosts.version_behind": "Older than the newest wwd in the pool",
+  "pool_hosts.old_daemon": "The daemon is older: upgrade it to see the resource pool.",
+  "pool_hosts.dot.live": "Read by wwd",
+  "pool_hosts.dot.warn": "wwd is not answering; read over SSH",
+  "pool_hosts.dot.off": "Offline",
+  "pool_hosts.dot.error": "Error"
 }

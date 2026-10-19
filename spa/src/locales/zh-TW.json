@@ -3177,5 +3177,19 @@
   "pool.card.sessions_value": "還可開 {{n}} 個",
   "pool.card.fallback": "wwd 沒有回應（{{time}} 起）",
   "pool.card.fallback_nosince": "wwd 沒有回應",
-  "pool.card.psi": "・PSI {{some}}/{{full}}"
+  "pool.card.psi": "・PSI {{some}}/{{full}}",
+  "pool_hosts.group": "資源池主機",
+  "pool_hosts.title": "資源池主機",
+  "pool_hosts.hint": "加一台主機要在那台裝 wwd、改各台的 peers 設定；這個頁面做不到這件事。",
+  "pool_hosts.col.host": "主機",
+  "pool_hosts.col.status": "狀態",
+  "pool_hosts.col.worker": "Worker",
+  "pool_hosts.col.headroom": "可接",
+  "pool_hosts.col.version": "wwd",
+  "pool_hosts.version_behind": "比資源池裡最新的 wwd 舊",
+  "pool_hosts.old_daemon": "daemon 版本較舊，升級後才看得到資源池資訊。",
+  "pool_hosts.dot.live": "wwd 讀得到",
+  "pool_hosts.dot.warn": "wwd 沒有回應，改由 SSH 讀取",
+  "pool_hosts.dot.off": "離線",
+  "pool_hosts.dot.error": "錯誤"
 }

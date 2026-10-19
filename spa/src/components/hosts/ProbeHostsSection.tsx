@@ -1,6 +1,8 @@
 import { Plus } from '@phosphor-icons/react'
 import { ProbeBadge, ProbeStatusDot } from './probe-rows'
 import { useProbeRows } from './use-probe-rows'
+import { usePoolHostRows } from '../../lib/pool/use-pool-host-rows'
+import { PoolHostsSection } from './PoolHostsSection'
 import { MAX_PROBE_HOSTS, selectProbeGuarded, startNewProbe, useProbeEditor } from './useProbeEditor'
 
 /**
@@ -10,10 +12,14 @@ import { MAX_PROBE_HOSTS, selectProbeGuarded, startNewProbe, useProbeEditor } fr
 export function ProbeHostsSection() {
   const { t, known, ready, failed, unreachable, writable, blocked } = useProbeEditor()
   const rows = useProbeRows()
+  const pool = usePoolHostRows()
   if (known.length === 0) return null
+  // The resource pool is the source: this section is its table instead.
+  if (pool.active) return <PoolHostsSection />
 
   return (
     <div data-testid="probe-hosts-section" className="mt-6">
+      {pool.oldDaemon && <p data-testid="pool-old-daemon" className="text-xs text-status-warning-text mb-2">{t('pool_hosts.old_daemon')}</p>}
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold">{t('fleet_hosts.probe.title')}</h3>
         <button type="button" data-testid="probe-add" disabled={!writable || rows.length >= MAX_PROBE_HOSTS} title={blocked ?? undefined} onClick={() => startNewProbe()}
