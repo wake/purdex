@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/clones"
+	"github.com/wake/purdex/internal/wwd/labels"
 )
 
 const refManifest = `
@@ -74,6 +75,46 @@ func TestRefTaskSourceNoManifestIsEmptyNotNil(t *testing.T) {
 	src, _ := refRepo(t, "")
 	if got := newRefTaskSource(src).Tasks(); got == nil || len(got) != 0 {
 		t.Fatalf("%#v", got)
+	}
+}
+
+// The labels a real manifest gives a task (its repo, its own earned label, an environment) are not all needs: the repo and the task's
+// own label are not conditions of the host, a foreign label still is (and keeps the task from being held, labels.ReferenceLabels).
+func TestEnvironmentNeedsDropsTheRepoAndTheTasksOwnLabel(t *testing.T) {
+	got := environmentNeeds("purdex", "tsc", []string{"repo:purdex", "task:purdex/tsc", "tool:node24", "os:darwin", "task:purdex/other", "host:air26", "repo:mlab"})
+	want := []string{"tool:node24", "os:darwin", "task:purdex/other", "host:air26", "repo:mlab"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%v, want %v", got, want)
+	}
+	if got := environmentNeeds("purdex", "tsc", nil); got == nil || len(got) != 0 {
+		t.Fatalf("%#v", got)
+	}
+}
+
+// End to end with the shape of purdex's own manifest: an A-class task carries its repo and its own task label and no os:darwin, a Mac
+// task carries os:darwin and the repo. The reference host holds each of them once it has the environment they name.
+func TestARealManifestShapeIsHeldByItsReference(t *testing.T) {
+	const m = `
+[tasks.spa-related]
+run     = "pnpm vitest related --run {files}"
+args    = "files"
+labels  = ["os:darwin", "repo:purdex"]
+qualify = { args = ["a.test.ts"], reference = "air26" }
+
+[tasks.tsc]
+run     = "pnpm tsc -b"
+args    = "none"
+labels  = ["repo:purdex", "task:purdex/tsc", "tool:node24"]
+qualify = { args = [], reference = "air26" }
+`
+	src, _ := refRepo(t, m)
+	tasks := newRefTaskSource(src).Tasks()
+	have := []string{"os:darwin", "arch:arm64", "repo:purdex", "tool:node24"}
+	if got := labels.ReferenceLabels("air26", have, tasks); !slices.Equal(got, []string{"task:purdex/spa-related", "task:purdex/tsc"}) {
+		t.Fatalf("the reference does not hold its tasks: %v (%+v)", got, tasks)
+	}
+	if got := labels.ReferenceLabels("air26", []string{"os:darwin", "repo:purdex"}, tasks); !slices.Equal(got, []string{"task:purdex/spa-related"}) {
+		t.Fatalf("without the tool: %v", got)
 	}
 }
 
