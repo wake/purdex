@@ -2080,6 +2080,7 @@
   "settings.personas.source.help": "Personas follow this host and are copied to the other connected hosts when saved. After you change it, the other hosts are made to match the new source.",
   "settings.personas.sourceOffline": "The source host ({{host}}) cannot be reached, or it does not offer personas. Another host's copy is shown and cannot be edited for now.",
   "settings.personas.firstSave.withCount": "Once saved, at least {{count}} of the conversations on {{host}} now will take persona names, and each gets one notice; the old address still works.",
+  "settings.personas.firstSave.exactCount": "Once saved, {{count}} of the conversations on {{host}} now will take persona names, and each gets one notice; the old address still works.",
   "settings.personas.firstSave.noCount": "Once saved, the conversations on {{host}} will take persona names, and each gets one notice; the old address still works.",
   "settings.personas.firstSave.confirm": "Save and rename",
   "settings.personas.firstSave.cancel": "Cancel",

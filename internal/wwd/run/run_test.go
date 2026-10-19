@@ -42,8 +42,15 @@ func alive(pid int) bool {
 		return false
 	}
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if errors.Is(err, os.ErrNotExist) {
-		if _, perr := os.Stat("/proc/self/stat"); perr != nil {
+	_, perr := os.Stat("/proc/self/stat")
+	return statSaysAlive(b, err, perr == nil)
+}
+
+// statSaysAlive judges a /proc/<pid>/stat read after kill(pid, 0) succeeded. A process that is leaving can answer the read with
+// ESRCH instead of ENOENT; both mean gone (#3560). hasProc says whether this host has /proc at all.
+func statSaysAlive(b []byte, err error, hasProc bool) bool {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+		if !hasProc {
 			return true // no /proc here (macOS): the kill test stands
 		}
 		return false // kill(pid, 0) saw a zombie, and init collected it before this read: gone
@@ -58,6 +65,28 @@ func alive(pid int) bool {
 		return true
 	}
 	return s[i+2] != 'Z'
+}
+
+func TestStatSaysAliveJudgesReadErrors(t *testing.T) {
+	run := []byte("1 (sleep) S 0 0")
+	for _, c := range []struct {
+		name    string
+		b       []byte
+		err     error
+		hasProc bool
+		want    bool
+	}{
+		{"running", run, nil, true, true},
+		{"zombie", []byte("1 (a b) Z 0"), nil, true, false},
+		{"ENOENT with /proc", nil, &os.PathError{Op: "open", Err: syscall.ENOENT}, true, false},
+		{"ENOENT without /proc", nil, &os.PathError{Op: "open", Err: syscall.ENOENT}, false, true},
+		{"ESRCH is gone", nil, &os.PathError{Op: "open", Err: syscall.ESRCH}, true, false},
+		{"other error is alive", nil, &os.PathError{Op: "open", Err: syscall.EACCES}, true, true},
+	} {
+		if got := statSaysAlive(c.b, c.err, c.hasProc); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 // On every platform: a running process is alive, a waited-for one is not.
@@ -333,7 +362,8 @@ func TestChildThatIgnoresTermKeepsItsGraceAfterTheLeaderLeft(t *testing.T) {
 	for end := time.Now().Add(3 * time.Second); pid > 0 && alive(pid) && time.Now().Before(end); {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if pid > 0 && alive(pid) {
+	// judge twice, a beat apart: a process caught mid-exit may read differently from one moment to the next (#3560)
+	if pid > 0 && alive(pid) && func() bool { time.Sleep(50 * time.Millisecond); return alive(pid) }() {
 		st, rerr := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 		kerr := syscall.Kill(pid, 0)
 		t.Fatalf("the child survived KILL: pid=%d stat=%q readerr=%v kill0=%v", pid, st, rerr, kerr)

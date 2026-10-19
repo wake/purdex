@@ -238,7 +238,7 @@ export function PersonasSection() {
           )}
           {confirm && editing && !readOnly && (
             <div className="mt-2">
-              <FirstSaveConfirm hostId={confirm.hostId} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
+              <FirstSaveConfirm hostId={confirm.hostId} personas={editing.key === '' ? [...items, editing.draft] : items.map((p) => (p.code === editing.key ? editing.draft : p))} onCancel={() => setConfirm(null)} onConfirm={() => void save(editing.draft, true)} />
             </div>
           )}
           {note && <p className="mt-2 text-xs text-text-secondary" data-testid="personas-note">{note}</p>}

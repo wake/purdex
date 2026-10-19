@@ -292,7 +292,8 @@ func TestInit_NeverFailsWithoutWWD(t *testing.T) {
 	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}, Registry: core.NewServiceRegistry()})
 	require.NoError(t, m.Init(c))
 	require.NoError(t, m.Start(context.Background()))
-	assert.Equal(t, map[string]any{"ready": true}, m.Status())
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	assert.Equal(t, map[string]any{"ready": true, "events": true}, m.Status(), "the watch runs, wwd or not")
 }
 
 // The real module registered in a real core, asked through GET /api/info (the lesson of fleet.v1): pool.v1 is declared while

@@ -145,6 +145,9 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "pool.assess.v1")  // GET /api/pool/hosts: each host with facts also has headroom_reasons {heavy, light} (why a side's headroom is 0) and load {score, driver}; same condition as pool.v1
 		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
 	}
+	if c.moduleReady("pool") && c.moduleFlag("pool", "events") {
+		out = append(out, "pool.events.v1") // the pool.changed host event {host}: a host's entry in GET /api/pool/hosts changed (read every 5 s from the local wwd, at most one notice per host per 2 s); the App then stops polling the hosts; only while the pool module's watch runs
+	}
 	if c.moduleReady("jobs") {
 		out = append(out, "jobs.v1") // GET /api/pool/jobs, /api/pool/jobs/{id}, /api/pool/jobs/{id}/log (wwd's jobs, read through the local wwd; ?host= for another host; 503 wwd_unavailable while wwd is not running)
 	}
