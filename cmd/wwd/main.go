@@ -166,15 +166,17 @@ func run(cfgPath string) error {
 	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
 	var d *daemon.Daemon                      // the sampler's gate reads its pool, which exists once the daemon does
+	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
+	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
+	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf)
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
-		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
-		Queued:      func() (int, error) { return q.CountQueued(ctx) },
-		// until WWD-6 a queue job is outside the gate's slots, so the host's own gate is counted (#3447)
-		GateHeavyFull: gateheld.New(gate.DefaultConfigPath(), log.Printf).HeavyFull,
+		SignalsOpen:   func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
+		Queued:        func() (int, error) { return q.CountQueued(ctx) },
+		GateHeavyFull: hostGate.HeavyFull,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
@@ -205,7 +207,7 @@ func run(cfgPath string) error {
 		return runWorker(ctx, workerInputs{
 			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb, Home: home, ToolDirs: toolDirs,
 			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers, FastLaneReady: fastLane.Ready,
-			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
+			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks, Gate: gateTaker{hostGate},
 		})
 	})
 	// What else makes a job's final event besides the worker: the HTTP servers (a peer's or the caller's result, release, cancel), the queue's

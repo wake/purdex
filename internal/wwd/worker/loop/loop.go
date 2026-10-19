@@ -58,8 +58,25 @@ type Quarantine interface {
 	Held() []quarantine.Entry
 }
 
+// GateSlot is one of this host's pdx gate heavy slots held for a job (gateheld.Held is one). Describe names the job in the slot's record
+// (what `pdx gate status` shows) and Release gives the slot back; Release may be called more than once.
+type GateSlot interface {
+	Describe(argv []string, session string)
+	Release()
+}
+
+// Gate is the host's pdx gate as the worker keeps its books with it (#3502, until WWD-6 moves the entry point): a job the worker runs
+// holds one of the gate's heavy slots while it runs, so a heavy command arriving then waits for it instead of making one more heavy
+// thing on the host. TakeHeavy never waits: ok is false when there is no slot to be had (the gate is full or cannot be read: the worker
+// claims nothing); a nil slot with ok true is a host without a gate (nothing to hold).
+type Gate interface {
+	TakeHeavy() (slot GateSlot, ok bool)
+}
+
 // Config is what the loop needs from its host.
 type Config struct {
+	// Gate, when set, is asked for a heavy slot before a job is claimed. nil: no gate to keep books with.
+	Gate Gate
 	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
 	Settings func() wire.WorkerSettings
 	// Facts is this host's latest facts record; nil until the first sample (the loop then takes nothing).
@@ -305,6 +322,21 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 		env.HeldOff = l.cfg.Report.HeldOff
 	}
 	ranked := pick.Rank(cands, env)
+	// The gate's heavy slot is taken only when there is something to claim (an empty queue does not make the gate's slots flicker), and
+	// one slot serves all of this round's tries: it goes to the job that is claimed, or comes back when none is.
+	var slot GateSlot
+	if l.cfg.Gate != nil && len(ranked) > 0 {
+		s, ok := l.cfg.Gate.TakeHeavy()
+		if !ok {
+			return
+		}
+		slot = s
+	}
+	defer func() {
+		if slot != nil {
+			slot.Release()
+		}
+	}()
 	tries := 0
 	for _, sc := range ranked {
 		if tries >= l.cfg.MaxTries || ctx.Err() != nil {
@@ -321,6 +353,17 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 			l.running[sc.Source+"/"+sc.Job.ID] = r
 			l.lastClaim = l.cfg.Now()
 			l.mu.Unlock()
+			if slot != nil {
+				// the slot is the job's now: named in the gate's record, and given back when the job is over, however it ends (its
+				// result, a stop, a lost claim). A worker that is killed loses the lock with the process.
+				held := slot
+				slot = nil
+				held.Describe([]string{"wwd", "job", sc.Job.ID, sc.Job.Task}, sc.Job.Submitter.Session)
+				go func() {
+					<-r.Done()
+					held.Release()
+				}()
+			}
 			return
 		}
 		// not taken (someone else was first, the job is held, its locks are busy, the origin did not answer): the next candidate
