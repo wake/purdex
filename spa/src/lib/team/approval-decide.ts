@@ -30,7 +30,16 @@ import { closedToastText } from './approval-format'
 import { gotoRequester } from './approval-goto'
 import { clientDescriptor } from './client-label'
 import { startAdoptionWait } from './adoption-wait'
-import { adoptPayloadOf, type Approval, type Grant } from './types'
+import { adoptPayloadOf, leadNamesOf, type Approval, type Grant, type LeadNameCandidate } from './types'
+
+type NameTakenListener = (hostId: string, approvalId: string, names: LeadNameCandidate[] | undefined) => void
+const nameTakenListeners = new Set<NameTakenListener>()
+
+/** A `name_taken` refusal nobody was waiting on (a decision resent from the offline queue): the open dialog of that request hears it here and shows what the card shows after a click. */
+export function subscribeNameTaken(fn: NameTakenListener): () => void {
+  nameTakenListeners.add(fn)
+  return () => { nameTakenListeners.delete(fn) }
+}
 
 export type DecideOutcome = 'closed' | 'decided_elsewhere' | 'queued' | 'failed'
 
@@ -56,6 +65,9 @@ export interface SubmitOptions {
   /** The host's `hostEpoch` when the person clicked, for a caller that awaited something of its own first.
    *  Default: the value now. A forget since then voids the send and its answer. */
   epoch?: number
+  /** The daemon refused the lead's name (409 `name_taken`): the refreshed list from the body (`undefined` when it came without one). When given, the refusal is the
+   *  caller's to show (no failure toast) and the outcome is `failed`; when not, it is an ordinary failure. */
+  onNameTaken?: (names: LeadNameCandidate[] | undefined) => void
 }
 
 export async function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant, opts: SubmitOptions = {}): Promise<DecideOutcome> {
@@ -111,6 +123,19 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
     }
     if (err.code === 'host_removed') {
       store.applyClosed(hostId, approval)
+      return 'failed'
+    }
+    if (err.status === 409 && err.code === 'name_taken' && opts.onNameTaken) {
+      store.unmarkDecidedHere(hostId, approval.id)
+      opts.onNameTaken(leadNamesOf(err.body?.lead_names))
+      return 'failed'
+    }
+    if (err.status === 409 && err.code === 'name_taken') {
+      // Nobody is waiting on the card (a decision resent from the offline queue): the request stays open, the open dialog hears it and refreshes its list.
+      store.unmarkDecidedHere(hostId, approval.id)
+      useUndoToast.getState().show(useI18nStore.getState().t('approval.toast.name_taken'))
+      const names = leadNamesOf(err.body?.lead_names)
+      for (const fn of [...nameTakenListeners]) fn(hostId, approval.id, names)
       return 'failed'
     }
     if (err.status === 409 && err.approval) {

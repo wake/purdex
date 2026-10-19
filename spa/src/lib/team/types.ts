@@ -67,6 +67,25 @@ export interface Origin {
   address?: string
 }
 
+/** One name a lead can take at approval (name pool v2 §5.3): `keep` is the session's own name; the others are personas. */
+export type LeadNameKind = 'keep' | 'former' | 'lead' | 'other'
+export interface LeadNameCandidate { code: string; name: string; kind: LeadNameKind; last_at: number }
+
+const LEAD_NAME_KINDS: readonly string[] = ['keep', 'former', 'lead', 'other']
+
+/** The candidate list as the daemon sends it (payload or route); `undefined` when `v` is not a list (a daemon without team.lead_name.v1). A kind this App does not know reads as `other`. */
+export function leadNamesOf(v: unknown): LeadNameCandidate[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: LeadNameCandidate[] = []
+  for (const e of v) {
+    if (!isRecord(e) || typeof e.code !== 'string' || typeof e.name !== 'string') continue
+    const kind = typeof e.kind === 'string' && LEAD_NAME_KINDS.includes(e.kind) ? (e.kind as LeadNameKind) : 'other'
+    if (e.code === '' && kind !== 'keep') continue
+    out.push({ code: e.code, name: e.name, kind, last_at: typeof e.last_at === 'number' && Number.isFinite(e.last_at) ? e.last_at : 0 })
+  }
+  return out
+}
+
 /** `Approval.payload` for kind `lead`. */
 export interface LeadPayload {
   reason: string
@@ -82,6 +101,8 @@ export interface LeadPayload {
    * payload carries a string `team_label`, so `undefined` means the daemon does not know labels (no label field).
    */
   team_label?: string
+  /** The names the lead can take, at request time (stale by the time the dialog opens: the dialog reads a fresh list). `undefined` = the daemon has no lead names. */
+  lead_names?: LeadNameCandidate[]
 }
 
 /** `Approval.payload` for kind `self_relay` (spec §8.7): the usage the mod reported when it asked. */
@@ -148,6 +169,8 @@ export interface Grant {
    * the name); on a served grant it is the explicit label, '' when the team's label was derived.
    */
   team_label?: string
+  /** Optional on a decide body: the persona code the lead takes as its name; absent keeps the session's name. */
+  lead_name?: string
 }
 
 /** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
@@ -365,6 +388,8 @@ export function leadPayloadOf(a: Approval, ceiling: number = MAX_MAX_MEMBERS): L
   const lead: LeadPayload = { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
   if (typeof p.team_name === 'string') lead.team_name = p.team_name
   if (typeof p.team_label === 'string') lead.team_label = p.team_label
+  const names = leadNamesOf(p.lead_names)
+  if (names !== undefined) lead.lead_names = names
   return lead
 }
 

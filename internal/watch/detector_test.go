@@ -34,6 +34,7 @@ type rig struct {
 	started map[int]time.Time // when each pid started; absent = unknown
 	lockPID []int
 	locks   int
+	jobMark map[int]bool // the pids whose environment carries a wwd job's WWD_JOB mark
 	// fp, when non-nil, backs the Footprint callback: a pid absent from it is "not ok"; fpCalls counts the asks.
 	fp      map[int]uint64
 	fpCalls int
@@ -41,7 +42,7 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	mem := NewMemoryStore()
-	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, gates: map[int]bool{}, cwd: map[int]string{}, started: map[int]time.Time{}}
+	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, gates: map[int]bool{}, cwd: map[int]string{}, started: map[int]time.Time{}, jobMark: map[int]bool{}}
 }
 
 // pass runs one pass at the current time and moves the clock on by a tick.
@@ -51,6 +52,7 @@ func (r *rig) pass() []Event {
 		IsGate:  func(pid int) bool { return r.gates[pid] },
 		Cwd:     func(pid int) string { return r.cwd[pid] },
 		Started: func(pid int) time.Time { return r.started[pid] },
+		JobMark: func(pid int) bool { return r.jobMark[pid] },
 		LockPIDs: func(gate.Holder) []int {
 			r.locks++
 			return r.lockPID
@@ -318,6 +320,86 @@ func TestE1_LabelsSayWhyTheGateDidNotTakeIt(t *testing.T) {
 		require.Len(t, ev, 1, "%v", c.argv)
 		assert.Equal(t, c.label, ev[0].Label, "%v", c.argv)
 	}
+}
+
+// #3447: a tree carrying a wwd job's WWD_JOB mark is the worker's own queue job, outside the gate's slots on purpose (until WWD-6): it is
+// still an event (recorded, with its command), labelled wwd_job whatever the gate would have said of the command; a tree without the
+// mark is judged as ever.
+func TestE1_ATreeWithTheWwdJobMarkIsLabelledWwdJob(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(3, 100)
+	r.argv[100] = []string{"go", "test", "./..."} // the gate would call this gate_gap
+	r.jobMark[100] = true
+	ev := r.run(2 * time.Minute)
+	require.Len(t, ev, 1)
+	assert.Equal(t, KindUnmanagedHeavy, ev[0].Kind)
+	assert.Equal(t, LabelWWDJob, ev[0].Label)
+	assert.Equal(t, Signature([]string{"go", "test", "./..."}), ev[0].Signature, "the command is still recorded")
+
+	r = newRig(t)
+	r.procs = goTest(3, 100)
+	r.argv[100] = []string{"go", "test", "./..."}
+	ev = r.run(2 * time.Minute)
+	require.Len(t, ev, 1)
+	assert.Equal(t, LabelGateGap, ev[0].Label, "no mark: as ever")
+}
+
+// The mark is asked once for the root of a tree that crossed a threshold, never for the many processes under it.
+func TestE1_TheJobMarkIsAskedOncePerEpisodeAndOnlyForAnEventTree(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(0.2, 100) // under both thresholds
+	asked := 0
+	in := Input{Now: r.now, Procs: r.procs, Set: r.set, JobMark: func(int) bool { asked++; return false }}
+	for i := 0; i < 20; i++ {
+		in.Now = in.Now.Add(tick)
+		r.d.Pass(in)
+	}
+	assert.Zero(t, asked, "a tree under the thresholds costs no read")
+	r = newRig(t)
+	r.procs = goTest(3, 100)
+	asked = 0
+	for end := r.now.Add(3 * time.Minute); r.now.Before(end); {
+		r.d.Pass(Input{Now: r.now, Procs: r.procs, Set: r.set, JobMark: func(int) bool { asked++; return true }})
+		r.now = r.now.Add(tick)
+	}
+	assert.Equal(t, 1, asked, "one read for the episode")
+}
+
+// The root of a tree may be an Apple-signed binary (a /usr/bin/make), whose environment the kernel does not show; every process of a job
+// carries the mark, so the processes below the root are asked too, a few and only when the root said no.
+func TestE1_TheMarkIsFoundBelowARootWhoseEnvironmentIsHidden(t *testing.T) {
+	r := newRig(t)
+	r.procs = []resources.Proc{
+		p(1, 0, "launchd", 0, 10),
+		p(10, 1, "zsh", 0, 5),
+		p(100, 10, "make", 0, 5),   // the root of the tree: an Apple binary, hidden environment
+		p(101, 100, "go", 150, 50), // its child carries the mark
+		p(102, 101, "compile", 150, 50),
+	}
+	r.argv[100] = []string{"make", "test"}
+	r.jobMark[101] = true
+	ev := r.run(2 * time.Minute)
+	require.Len(t, ev, 1)
+	assert.Equal(t, LabelWWDJob, ev[0].Label)
+}
+
+func TestE1_TheJobMarkSearchBelowTheRootIsBounded(t *testing.T) {
+	r := newRig(t)
+	procs := []resources.Proc{p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5), p(100, 10, "make", 0, 5)}
+	for i := 0; i < 60; i++ {
+		procs = append(procs, p(200+i, 100, "worker", 10, 20)) // 60 children, 6 cores in all
+	}
+	asked := 0
+	r.procs = procs
+	for end := r.now.Add(3 * time.Minute); r.now.Before(end); {
+		r.d.Pass(Input{Now: r.now, Procs: r.procs, Set: r.set, JobMark: func(int) bool { asked++; return false }})
+		r.now = r.now.Add(tick)
+	}
+	assert.Equal(t, 1+maxJobMarkAsks, asked, "the root, then a bounded number below it, once for the episode")
+}
+
+func TestKnownLabelKnowsWwdJob(t *testing.T) {
+	assert.True(t, KnownLabel(LabelWWDJob))
 }
 
 func TestE1_NewIsTheSignaturesFirstSightingOnTheHost(t *testing.T) {
