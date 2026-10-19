@@ -40,7 +40,7 @@ func checkV6Tables(t *testing.T, s *Store) {
 		t.Error("earned_labels accepted a state outside earned|quarantined")
 	}
 	var v int
-	if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != 6 {
+	if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != schemaVersion {
 		t.Errorf("version %d err %v", v, err)
 	}
 }

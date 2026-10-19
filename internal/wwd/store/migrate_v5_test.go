@@ -69,14 +69,14 @@ func TestOpenMigratesV4ToV5(t *testing.T) {
 			t.Fatalf("open %d: worker settings: %+v %v %v", round, ws, ok, err)
 		}
 		var v int
-		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != 6 || schemaVersion != 6 {
+		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != schemaVersion {
 			t.Fatalf("open %d: version %d (const %d) err %v", round, v, schemaVersion, err)
 		}
 		s.Close()
 	}
 }
 
-// A new file has them too, and a file a newer wwd wrote is refused (a rolled-back binary does not run on a v7 schema).
+// A new file has them too, and a file a newer wwd wrote is refused (a rolled-back binary does not run on a newer schema).
 func TestOpenFreshHasV5TablesAndRefusesNewer(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "wwd.db")
 	s, err := Open(p)
@@ -88,7 +88,7 @@ func TestOpenFreshHasV5TablesAndRefusesNewer(t *testing.T) {
 			t.Fatalf("fresh: table %s missing", name)
 		}
 	}
-	if _, err := s.DB().Exec(`UPDATE host_schema SET version = 7`); err != nil {
+	if _, err := s.DB().Exec(`UPDATE host_schema SET version = 99`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
