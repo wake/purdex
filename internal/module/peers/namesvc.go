@@ -86,15 +86,13 @@ func (m *Module) CodeOf(ctx context.Context, sessionID string) (string, bool) {
 	return code, true
 }
 
-// isPersonaCode says whether code is a persona's code (a retired persona's too), as of the collection the pool follows. While
-// there are no personas the built-in names are the pool (spec L4), and count. Once there are, a built-in name that is not a
-// persona's code does not: the history is of personas (spec §6.1).
+// isPersonaCode says whether code is a persona's code (a retired persona's too), as of the collection the pool follows. The
+// built-in names never are: they are only the naming pool while there are no personas (spec L4), and the history is of
+// personas (spec §5.3, §6.1), so with no personas nothing is written and the history holds no built-in name when they are
+// created.
 func (m *Module) isPersonaCode(code string) bool {
-	if p := m.personaCodes.Load(); p != nil && len(*p) > 0 {
-		return (*p)[code]
-	}
-	c, ok := ipeers.PoolNameOf("x-" + code)
-	return ok && c == code
+	p := m.personaCodes.Load()
+	return p != nil && (*p)[code]
 }
 
 // LeadCandidates is rule 1 for the session.

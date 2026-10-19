@@ -282,6 +282,27 @@ func TestNameService_TheHistoryTakesPersonaCodesOnly(t *testing.T) {
 	assert.Empty(t, leads)
 }
 
+// With no personas the built-in names are the naming pool but not personas: nothing is written to the history, so it holds no
+// built-in name when personas are created (codex critic on NP-3c-2).
+func TestNameService_WithNoPersonasTheHistoryStaysEmpty(t *testing.T) {
+	t.Cleanup(ipeers.ResetPool)
+	e := newPoolEnv(t)
+	e.m.WithNameHistory(e.meta.NameHistory())
+	e.m.bindPersonas(&fakePersonas{}) // an empty collection
+	ctx := context.Background()
+	e.start(poolSidA, tEarly)
+	e.assign(poolSidA, "purdex-54-adam", store.PeerNameSourcePool)
+
+	_, ok := e.m.CodeOf(ctx, poolSidA)
+	assert.False(t, ok)
+	require.NoError(t, e.m.RecordLead(ctx, poolSidA))
+	require.NoError(t, e.m.RecordPairCodes(ctx, "adam", "emma"))
+	leads, _ := e.meta.NameHistory().Leads(ctx)
+	pairs, _ := e.meta.NameHistory().Pairs(ctx)
+	assert.Empty(t, leads)
+	assert.Empty(t, pairs)
+}
+
 func TestNameService_RecordLeadWritesOnlyForAPersonaName(t *testing.T) {
 	e := svcEnv(t)
 	ctx := context.Background()
