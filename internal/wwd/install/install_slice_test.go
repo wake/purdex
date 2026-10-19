@@ -142,6 +142,28 @@ func TestInstallLinuxRefusesABadSliceValue(t *testing.T) {
 	}
 }
 
+// wwd refuses an unknown key in [slice] when it starts; the installer must not install the defaults for a misspelled key and only then
+// leave wwd unable to start (R2).
+func TestInstallLinuxRefusesAnUnknownSliceKeyBeforeChangingAnything(t *testing.T) {
+	in, f, _ := newInstaller(t, "linux", "mserv", writeBin(t, t.TempDir(), "x"))
+	writeConfig(t, in, "alias = \"mserv\"\n[slice]\nmemory_mx = \"4G\"\n")
+	err := in.Install(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "memory_mx") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("something was run: %v", f.calls)
+	}
+	if _, err := os.Stat(in.BinPath()); err == nil {
+		t.Error("the binary was installed")
+	}
+	// a key of another table is not this table's business
+	writeConfig(t, in, "alias = \"mserv\"\n[worker]\nenabled = true\n[slice]\nmemory_max = \"4G\"\n")
+	if err := in.Install(context.Background()); err != nil {
+		t.Fatalf("a valid config: %v", err)
+	}
+}
+
 // Only a Linux host has a wwd.slice; --no-restart and --dry-run leave the machine alone.
 func TestSliceDropInOnlyOnLinuxAndNeverOnDryRunOrNoRestart(t *testing.T) {
 	in, f, _ := newInstaller(t, "darwin", "mlab", writeBin(t, t.TempDir(), "x"))

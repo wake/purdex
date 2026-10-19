@@ -335,8 +335,15 @@ func (i *Installer) sliceLimits() (slicecfg.Limits, error) {
 	case err != nil:
 		return c.Slice, fmt.Errorf("install: the config: %w", err)
 	}
-	if _, err := toml.Decode(string(b), &c); err != nil {
+	md, err := toml.Decode(string(b), &c)
+	if err != nil {
 		return c.Slice, fmt.Errorf("install: the config %s: %w", i.ConfigPath(), err)
+	}
+	// wwd refuses an unknown key when it starts; a misspelled one here would install the default and leave wwd unable to start
+	for _, k := range md.Undecoded() {
+		if len(k) > 0 && k[0] == "slice" {
+			return c.Slice, fmt.Errorf("install: the config %s: unknown key %s", i.ConfigPath(), k)
+		}
 	}
 	if err := c.Slice.Validate(); err != nil {
 		return c.Slice, fmt.Errorf("install: the config %s: %w", i.ConfigPath(), err)
