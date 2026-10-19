@@ -22,9 +22,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Peer addresses（跨主機 agent 訊息）
 
 - **日常地址是 `<host>/<name>`**，`<name>` 是 pdx 替這個對話配的**虛擬名**（Peer Address v5）：
-  `<基底>-<名字>`，名字是 daemon 從 30 個短名字（adam、emma、kenji、yuki…，各國常見員工名）的池子裡，
-  挑一個「現在沒有活著的對話在用」的，例如 `mlab/purdex-b0-kenji`；30 個都被占住時退回舊式
-  `<基底>-<ref 前兩碼>`（例如 ref `_q34psn` → `mlab/purdex-b0-q3`）。**已經有名字的舊對話維持原名**。
+  `<基底>-<名字>`，名字是 daemon 從**角色（persona）**的代碼裡，挑一個「現在沒有活著的對話在用」的，例如
+  `mlab/purdex-b0-kenji`；還沒有任何角色時用內建的 30 個短名字（adam、emma、kenji、yuki…，各國常見員工名）；
+  名字都被占住時退回舊式 `<基底>-<ref 前兩碼>`（例如 ref `_q34psn` → `mlab/purdex-b0-q3`）。
+  挑名字的規則依身分而不同：lead 的名字卡（先留原名，再曾當過 lead 的、`lead: true` 的角色）、lead 的 member
+  （先挑跟這位 lead 搭過的）、其他對話（優先挑沒搭過的新面孔，`lead: true` 的角色排最後）。
+  **舊對話會補名**：有角色之後，名字後綴不是角色代碼（現役或已退役）的活對話，下一輪命名時依上面的規則換成角色名
+  （例如 `purdex-88-b8`、`kenji`）；**舊名變成別名，仍然送得到**（約 30 天沒有活著的後繼才清掉），改名後
+  該對話會收到一則 `[pdx team]` 通知講新地址；**正在接力的對話（`relays_active` 內）先跳過**，等接力結束。
   基底取這個對話**第一次**被 daemon 看到時的名字（當時的 CLI 名字；沒有就用記過的名字；
   執行體用工作目錄名），**配一次就終生不變**：`/rename`、Claude Code 每次啟動換名都不影響；
   接力（relay）後的新 session 沿用前任的名字（含名字，後綴不重算）；手動 `/clear` 是新對話，重新配。

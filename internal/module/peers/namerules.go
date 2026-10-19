@@ -25,6 +25,9 @@ type nameRuleInput struct {
 	Familiar map[string]bool
 	// Pairs is, for rule 2, the member code → how often it worked with this member's lead.
 	Pairs map[string]nameStat
+	// LeadPairs is every lead code → its member codes → how often they worked together; the caller picks the member's lead's as
+	// Pairs.
+	LeadPairs map[string]map[string]nameStat
 	// AnyPairs is the member code → how often it worked with any lead (rules 2 and 3).
 	AnyPairs map[string]int
 	// Leads is, for rule 1, the code → how often it was a lead.

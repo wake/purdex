@@ -144,7 +144,7 @@ func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refS
 		return store.PeerNameEntry{}, err
 	}
 	defer unlock()
-	held, err := m.heldPoolNames(ctx, picked)
+	pick, ok, err := m.pickOther(ctx, picked)
 	if err != nil {
 		return store.PeerNameEntry{}, err
 	}
@@ -154,7 +154,7 @@ func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refS
 		return store.PeerNameEntry{}, err
 	}
 	name, source := refName, refSource
-	if pick, ok := m.pickOther(ctx, held); ok {
+	if ok {
 		if n, ok := ipeers.VirtualNameWith(base, pick); ok {
 			name, source = n, store.PeerNameSourcePool
 		}
@@ -272,14 +272,14 @@ func (m *Module) settlePoolCollisions(ctx context.Context, entries []ipeers.Entr
 	defer unlock()
 	picked := map[string]bool{}
 	for _, l := range yielding {
-		held, err := m.heldPoolNames(ctx, picked)
+		pick, ok, err := m.pickOther(ctx, picked)
 		if err != nil {
 			m.logf("peers: name pool: cannot read the held names, %s keeps %s this pass: %v", l.sid, l.name, err)
 			continue
 		}
 		base := strings.TrimSuffix(l.name, "-"+l.pool)
 		var newName string
-		if pick, ok := m.pickOther(ctx, held); ok {
+		if ok {
 			newName, _ = ipeers.VirtualNameWith(base, pick)
 		} else {
 			newName, _ = ipeers.VirtualName(base, l.ref)

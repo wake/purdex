@@ -60,6 +60,17 @@ func (l *leadRenameLedger) drop(sid, from string) {
 
 func nameSID(sessionID string) string { return strings.ToLower(strings.TrimSpace(sessionID)) }
 
+// nameBase is a session's name without its suffix: the pool name, or the two ref characters; a name with neither is its own base.
+func nameBase(name, sessionID string) string {
+	if cur, ok := ipeers.PoolNameOf(name); ok {
+		return strings.TrimSuffix(name, "-"+cur)
+	}
+	if ref := ipeers.RefID(sessionID); ipeers.IsRef(ref) {
+		return strings.TrimSuffix(name, "-"+ref[1:3])
+	}
+	return name
+}
+
 // nameRow is the stored name of a session; ok is false when it has none.
 func (m *Module) nameRow(ctx context.Context, sessionID string) (store.PeerNameEntry, bool, error) {
 	if m.peerNames == nil {
@@ -110,12 +121,12 @@ func (m *Module) LeadCandidates(ctx context.Context, sessionID string) ([]ipeers
 		return nil, err
 	}
 	defer unlock()
-	held, err := m.heldPoolNames(ctx, map[string]bool{})
+	in, err := m.inputWithHeld(ctx, map[string]bool{})
 	if err != nil {
 		return nil, err
 	}
 	var out []ipeers.LeadCandidate
-	for _, c := range leadCandidates(m.inputFor(ctx, held), keep) {
+	for _, c := range leadCandidates(in, keep) {
 		out = append(out, ipeers.LeadCandidate{Code: c, Keep: c == keep})
 	}
 	return out, nil
@@ -147,17 +158,14 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if curIsPool && cur == code {
 		return row.Name, nil
 	}
-	// the base is the name without its suffix: the pool name, or the two ref characters
-	base := row.Name
-	if curIsPool {
-		base = strings.TrimSuffix(row.Name, "-"+cur)
-	} else if ref := ipeers.RefID(sessionID); ipeers.IsRef(ref) {
-		base = strings.TrimSuffix(row.Name, "-"+ref[1:3])
-	}
-	newName, ok := ipeers.VirtualNameWith(base, code)
+	newName, ok := ipeers.VirtualNameWith(nameBase(row.Name, sessionID), code)
 	if !ok {
 		return "", ipeers.ErrNameUnknown
 	}
+	// The held names, the pickable check and the write all see one generation of the pool: a collection that is published
+	// meanwhile waits for this read lock (bindPersonas holds the write side).
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
 	held, err := m.heldPoolNames(ctx, map[string]bool{})
 	if err != nil {
 		return "", err
@@ -165,13 +173,6 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if held[code] {
 		return "", ipeers.ErrNameTaken
 	}
-	if m.beforeLeadRename != nil {
-		m.beforeLeadRename()
-	}
-	// the code must still be pickable at the moment of the rename: a collection that retires it meanwhile waits for the read
-	// lock (bindPersonas holds the write side), so the check and the write see one generation
-	m.poolGen.RLock()
-	defer m.poolGen.RUnlock()
 	if !slices.Contains(ipeers.PickablePool(), code) {
 		return "", ipeers.ErrNameUnknown
 	}

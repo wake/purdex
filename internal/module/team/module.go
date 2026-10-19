@@ -564,6 +564,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(team.AssistTeamsKey, store) // the assist module: live teams and relayed refs
 	c.Registry.Register(team.LineageRootKey, store)
 	c.Registry.Register(team.SeatReaderKey, store)
+	c.Registry.Register(team.RelayGuardKey, store)
 	c.Registry.Register(team.PredecessorReaderKey, store)                       // the conversation module's scroll-back across a relay
 	c.Registry.Register(team.ModReadKey, team.ModReader(store))                 // the mod socket's team read (TI-5a)
 	c.Registry.Register(team.MembershipReaderKey, team.MembershipReader(store)) // the push module's badge rules (BG-1a)
