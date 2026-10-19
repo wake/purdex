@@ -57,20 +57,16 @@ func (in nameRuleInput) newcomers() []string {
 	return out
 }
 
-// leastPaired returns the names of cands with the fewest pairs with any lead (all of them on a tie), in pool order.
-func (in nameRuleInput) leastPaired(cands []string) []string {
-	var out []string
-	best := -1
+// leastPaired returns the name of cands with the fewest pairs with any lead; a tie goes to the first in pool order (the spec
+// has one random step, the newcomer's, and this is not it). ok is false when cands is empty.
+func (in nameRuleInput) leastPaired(cands []string) (string, bool) {
+	best, found := "", false
 	for _, n := range cands {
-		c := in.AnyPairs[n]
-		switch {
-		case best < 0 || c < best:
-			best, out = c, []string{n}
-		case c == best:
-			out = append(out, n)
+		if !found || in.AnyPairs[n] < in.AnyPairs[best] {
+			best, found = n, true
 		}
 	}
-	return out
+	return best, found
 }
 
 // pickAfterPairs is the part rules 2 and 3 share: a newcomer at random, else the name least paired with any lead, else the
@@ -87,13 +83,10 @@ func (in nameRuleInput) pickAfterPairs() (string, bool) {
 			plain = append(plain, n)
 		}
 	}
-	if c := in.leastPaired(plain); len(c) > 0 {
-		return in.choose(c), true
+	if n, ok := in.leastPaired(plain); ok {
+		return n, true
 	}
-	if c := in.leastPaired(lead); len(c) > 0 {
-		return in.choose(c), true
-	}
-	return "", false
+	return in.leastPaired(lead)
 }
 
 // pickForMember is rule 2: a free name paired with the lead (most pairs first, then most recent, then pool order), then rule
