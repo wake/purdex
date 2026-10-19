@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./persona-api', async (orig) => ({ ...(await orig<typeof import('./persona-api')>()), putPersonas: vi.fn(), fetchPersonas: vi.fn() }))
 
+vi.mock('./persona-mirror', () => ({
+  mirrorPersonas: vi.fn(async (_h: string, items: unknown[], revision: number) => ({ report: { mirrored: [], failed: [], pulled: [] }, items, revision })),
+}))
+
 import { putPersonas, PersonaConflictError } from './persona-api'
+import { mirrorPersonas } from './persona-mirror'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { savePersonas, editBase, PersonaValidationError, PersonaStaleError } from './persona-save'
 import { makeCollection, makePersona } from './__fixtures__/personas'
@@ -26,6 +31,15 @@ describe('savePersonas', () => {
     expect(putPersonas).toHaveBeenCalledWith('h2', items, 7)
     expect(res.hostId).toBe('h2')
     expect(usePersonaStore.getState().load).toHaveBeenCalledWith('h2')
+  })
+
+  it('writes the source first, then hands the same items to the mirror and returns its report', async () => {
+    vi.mocked(putPersonas).mockResolvedValue({ revision: 8 })
+    vi.mocked(mirrorPersonas).mockResolvedValue({ report: { mirrored: ['h1'], failed: [], pulled: [] }, items: [], revision: 8 })
+    const items = [makePersona('hiro')]
+    const res = await savePersonas(items, editBase(), 'h1')
+    expect(mirrorPersonas).toHaveBeenCalledWith('h2', items, 8)
+    expect(res.mirror.mirrored).toEqual(['h1'])
   })
 
   it('uses the fallback host at revision 0 when no collection has loaded', async () => {

@@ -25,6 +25,11 @@ function freshSupported(state: Pick<NexState, 'byHost'>, hostId: string): boolea
   return (state.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(state)
 }
 
+/** Whether the host's fresh capabilities declare `personas.v1` (the same test the load uses). */
+export function personasSupported(hostId: string): boolean {
+  return freshSupported(useNexHostStore.getState(), hostId)
+}
+
 /** Loads now when the host's fresh capabilities declare `personas.v1`; otherwise does nothing. */
 export async function loadPersonasIfSupported(hostId: string): Promise<void> {
   if (freshSupported(useNexHostStore.getState(), hostId)) await usePersonaStore.getState().load(hostId)

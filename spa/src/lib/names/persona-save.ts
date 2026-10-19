@@ -5,6 +5,7 @@ import { putPersonas, PersonaConflictError } from './persona-api'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from './persona-limits'
 import type { Persona, PersonaCollection } from './persona-types'
 import { currentSource, usePersonaStore } from '../../stores/usePersonaStore'
+import { mirrorPersonas, type MirrorReport } from './persona-mirror'
 import { resolvedSourceId } from '../../stores/usePersonaSourceStore'
 
 export class PersonaValidationError extends Error {
@@ -58,7 +59,7 @@ function sameBase(a: EditBase | null, b: EditBase | null): boolean {
  */
 export async function savePersonas(
   items: Persona[], base: EditBase | null, fallbackHostId: string,
-): Promise<{ hostId: string; base: EditBase | null }> {
+): Promise<{ hostId: string; base: EditBase | null; mirror: MirrorReport }> {
   const issues = collectionIssues(items)
   if (issues.length > 0) throw new PersonaValidationError(issues)
   if (!sameBase(base, editBase())) throw new PersonaStaleError()
@@ -70,11 +71,15 @@ export async function savePersonas(
     if (e instanceof PersonaConflictError) await usePersonaStore.getState().load(hostId)
     throw e
   }
+  // The source is written; the other daemons get the same items. A role one of them holds that the source lacks is taken
+  // into the source first (its revision moves), so the reload below reads the final source.
+  const mirrored = await mirrorPersonas(hostId, items, written.revision)
+  written = { revision: mirrored.revision }
   await usePersonaStore.getState().load(hostId)
   // The reload moved the revision and stamp; a form that stays open continues from this base. That is only right when
   // the shown collection is exactly what this save wrote: the saved host, at the revision the PUT returned. If another
   // host's newer copy won meanwhile, or the same host moved on to a later revision, the open form's items were built
   // on something that has been replaced, so there is no base to continue from and the page rebuilds the form.
   const after = editBase()
-  return { hostId, base: after?.hostId === hostId && after.revision === written.revision ? after : null }
+  return { hostId, base: after?.hostId === hostId && after.revision === written.revision ? after : null, mirror: mirrored.report }
 }
