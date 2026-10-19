@@ -104,10 +104,11 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
   const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])
-  // A solo session's right-click menu gets the task-group rows on top (a team seat is filed by its team, L10). Set when the click happens, before the tab menu opens.
+  // A solo session's right-click menu gets the task-group rows on top (a team seat is filed by its team, L10). Set as the click bubbles up from the row, i.e. AFTER the tab menu's own handler cleared whatever an
+  // earlier menu left; a host that cannot serve groups, or a tab that is no session, gets none.
   const offerGroupMenu = (tabId: string, groupId: string | null) => {
     const s = sessionOfTab.get(tabId)
-    if (!s || !taskGroupsSupported(s.hostId)) return
+    if (!s || !taskGroupsSupported(s.hostId)) { useTabMenuExtrasStore.getState().clear(); return }
     const root = s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId)
     useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({ hostId: s.hostId, root, entry: groupsByHost[s.hostId], currentGroupId: groupId, t, report: setNotice }))
   }
@@ -124,7 +125,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
-      return seat ? inner : <div key={row.key} onContextMenuCapture={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
+      return seat ? inner : <div key={row.key} onContextMenu={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
     }
     // A team seat no open tab shows: listed, and a click opens it.
     return (

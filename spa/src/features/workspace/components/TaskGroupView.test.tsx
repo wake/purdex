@@ -226,6 +226,15 @@ describe('the right-click rows (NA-6c)', () => {
     expect(extras().every((x) => !x.disabled)).toBe(true)
   })
 
+  it('a session on a host that cannot serve groups gets none, and clears what was left', () => {
+    useTabStore.setState({ tabs: { t4: tab('t4', 'S4', 'AG4', 'h2') }, activeTabId: null } as never)
+    useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t4'], activeTabId: null, moduleConfig: {} }] } as never)
+    useTabMenuExtrasStore.getState().set('t4', [{ key: 'stale', label: 'Stale', onSelect: vi.fn() }])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    expect(extras()).toEqual([])
+  })
+
   it('a session in a group is offered to be taken out of it', () => {
     setGroups('h1', [group('g1', ['ROOT1']), group('g2', [])])
     setRoots([['AG1', 'ROOT1']])
