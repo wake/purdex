@@ -20,6 +20,7 @@ func (d *Daemon) workerRoutes(mux *http.ServeMux, peer bool) {
 	}
 	mux.HandleFunc("GET /v1/worker", d.viaHost(peer, d.handleGetWorker))
 	mux.HandleFunc("PUT /v1/worker", d.viaHost(peer, d.handlePutWorker))
+	mux.HandleFunc("GET /v1/exceptions", d.viaHost(peer, d.handleGetExceptions))
 	mux.HandleFunc("POST /v1/exceptions", d.viaHost(peer, d.handlePostException))
 	mux.HandleFunc("DELETE /v1/exceptions/{name}", d.viaHost(peer, d.handleDeleteException))
 }
@@ -77,6 +78,11 @@ func (d *Daemon) handlePutWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d.opts.State.Worker())
+}
+
+// handleGetExceptions answers the exceptions in force with their holds (read-only; a host without this route answers 404 to a reader).
+func (d *Daemon) handleGetExceptions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, d.opts.State.Exceptions())
 }
 
 func (d *Daemon) handlePostException(w http.ResponseWriter, r *http.Request) {

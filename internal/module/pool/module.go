@@ -193,6 +193,7 @@ func (m *Module) Status() map[string]any {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/exceptions", m.handleExceptions)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
 	mux.HandleFunc("GET /api/pool/facts/series", m.handleSeries)
 	m.registerControl(mux)
@@ -359,6 +360,23 @@ func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
 			return nil, wwdError(err)
 		}
 		return hostsOf(p), nil
+	})
+}
+
+// handleExceptions is a host's exceptions with their holds (#3479 G4), asked of the local wwd with that host. A host whose wwd predates
+// the route is "not known" (known: false), not an error; the errors are the history read's.
+func (m *Module) handleExceptions(w http.ResponseWriter, r *http.Request) {
+	alias := r.PathValue("alias")
+	if !validAlias(alias) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		return
+	}
+	m.serve(w, r, "exceptions|"+alias, func(ctx context.Context) (any, *apiError) {
+		list, known, err := m.client().Exceptions(ctx, alias)
+		if err != nil {
+			return nil, historyError(err)
+		}
+		return wire.PoolHostExceptions{Host: alias, Known: known, Exceptions: list}, nil
 	})
 }
 
