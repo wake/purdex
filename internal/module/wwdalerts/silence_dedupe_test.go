@@ -53,13 +53,14 @@ func TestSilenceStaysOneFailureWhileAnyListHoldsIt(t *testing.T) {
 	assert.Equal(t, 1, e.ntf.count(), "a hand-over between observers is not a new failure")
 }
 
-// A list that cannot be read may still hold the failure: the ledger row is kept, so the failure that comes back is not told twice. Once
-// every list has been read and none holds it, the row goes and a new failure is told.
-func TestSilenceLedgerIsForgottenOnlyWhenEveryListWasRead(t *testing.T) {
+// A list that cannot be read may still hold the failure, going by what it held when it was last read: the ledger row is kept, so the
+// failure that comes back is not told twice. Once every list that held it has been read and none holds it, the row goes and a new
+// failure is told.
+func TestSilenceLedgerKeepsWhatAnUnreadableListHeld(t *testing.T) {
 	e := newEnv(t)
 	e.src.peers = []string{"air26"}
 	e.src.set("mlab", silenceOf("mserv", t0))
-	e.src.set("air26")
+	e.src.set("air26", silenceOf("mserv", t0))
 	e.pass(t)
 	assert.Equal(t, 1, e.ntf.count())
 	e.ntf.confirm(0) // APNs took it: the ledger holds it for the hour
@@ -70,16 +71,56 @@ func TestSilenceLedgerIsForgottenOnlyWhenEveryListWasRead(t *testing.T) {
 	e.src.set("mlab", silenceOf("mserv", t0.Add(10*time.Minute)))
 	e.now = e.now.Add(10 * time.Minute)
 	e.pass(t)
-	assert.Equal(t, 1, e.ntf.count(), "air26's list could not be read, so the first failure may be going on: not a new one")
+	assert.Equal(t, 1, e.ntf.count(), "air26's list could not be read and held the failure last time: not a new one")
 
 	e.src.errs = nil
 	e.src.set("mlab")
+	e.src.set("air26")
 	e.now = e.now.Add(time.Minute)
 	e.pass(t) // every list read, none holds it: forgotten
 	e.src.set("mlab", silenceOf("mserv", e.now))
 	e.now = e.now.Add(time.Minute)
 	e.pass(t)
 	assert.Equal(t, 2, e.ntf.count(), "cleared everywhere and back: a new failure")
+}
+
+// A list that could not be read and did not hold the failure must not hold the ledger: a failure that cleared and came back within the hour
+// is a new failure (the attack review: one unreadable list must not freeze every shared row).
+func TestSilenceAnUnrelatedUnreadableListDoesNotFreezeTheLedger(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab", silenceOf("mserv", t0))
+	e.src.set("air26")
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count())
+	e.ntf.confirm(0)
+
+	e.src.errs = map[string]error{"air26": errors.New("unreachable")} // air26's list never held it
+	e.src.set("mlab")
+	e.now = e.now.Add(time.Minute)
+	e.pass(t) // cleared on every list that could hold it
+	e.src.set("mlab", silenceOf("mserv", e.now))
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count(), "mserv came back and failed again inside the hour: a new failure, whatever air26's list is doing")
+}
+
+// A list never read since this daemon started could hold anything: nothing is forgotten while it stays unread.
+func TestSilenceANeverReadListKeepsTheLedger(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.errs = map[string]error{"air26": errors.New("unreachable")}
+	e.src.set("mlab", silenceOf("mserv", t0))
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count())
+	e.ntf.confirm(0)
+	e.src.set("mlab")
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	e.src.set("mlab", silenceOf("mserv", e.now))
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "air26 has never been read: the first failure may still be going on there")
 }
 
 // A pass that could not read the pool saw only the local list: the peers' lists may still hold the failure, so the ledger row stays (R1).

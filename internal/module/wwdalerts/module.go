@@ -70,6 +70,10 @@ type Module struct {
 	deliverer      bool       // whether this daemon was the deliverer at the last pass
 	suppressed     int        // push-level alerts the switch held back in the last pass
 	passSuppressed int        // the same, being counted in the pass that is running
+
+	// what the lists held when they were last read, for the silence ledger (pass runs on one goroutine): host alias -> its silence: keys
+	heldSilence map[string]map[string]bool
+	poolKnown   bool // a pass has seen the whole pool, so heldSilence names every host
 }
 
 // New returns the module with production defaults.
@@ -242,7 +246,7 @@ func (m *Module) pass(ctx context.Context) {
 		m.deliverer, m.suppressed = deliverer, m.passSuppressed
 		m.smu.Unlock()
 	}()
-	hosts, allRead, err := m.hosts(ctx)
+	hosts, poolWhole, err := m.hosts(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
@@ -250,13 +254,16 @@ func (m *Module) pass(ctx context.Context) {
 		return
 	}
 	silent := map[string]bool{} // the silence:<host> keys active on any list read this pass
+	read := map[string]bool{}   // the hosts whose list was read this pass
+	if m.heldSilence == nil {
+		m.heldSilence = map[string]map[string]bool{}
+	}
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
 		if err != nil || !known {
-			allRead = false
 			// An unreadable host is not a cleared one: its ledger is kept, so the alerts it still has are not told a second time when it
 			// answers again.
 			if err != nil && ctx.Err() == nil {
@@ -265,25 +272,55 @@ func (m *Module) pass(ctx context.Context) {
 			continue
 		}
 		m.handle(h.alias, list.Alerts)
+		held := map[string]bool{}
 		for _, a := range list.Alerts {
 			if a.ClearedAt == nil && sharedLedger(a) {
 				silent[a.Key] = true
+				held[a.Key] = true
+			}
+		}
+		read[h.alias] = true
+		m.heldSilence[h.alias] = held
+	}
+	m.forgetSilence(hosts, read, poolWhole, silent)
+	if err := m.store.prune(m.now()); err != nil {
+		m.logf("wwdalerts: prune: %v", err)
+	}
+}
+
+// forgetSilence drops the ledger rows of the silence alerts that no list holds any more. A silence alert is one failure however many wwds
+// noticed it, so its row stays while any list may still hold it: the lists read this pass, and the lists that could not be read, by what
+// they held when they were last read. A list never read since this daemon started, or a pool that was never read whole, could hold
+// anything: nothing is forgotten then.
+func (m *Module) forgetSilence(hosts []hostRef, read map[string]bool, poolWhole bool, silent map[string]bool) {
+	if poolWhole {
+		m.poolKnown = true
+	}
+	if !m.poolKnown {
+		return
+	}
+	keep := map[string]bool{}
+	for k := range silent {
+		keep[k] = true
+	}
+	for _, h := range hosts {
+		if !read[h.alias] && m.heldSilence[h.alias] == nil {
+			return // a list that was never read
+		}
+	}
+	for alias, held := range m.heldSilence {
+		if !read[alias] {
+			for k := range held {
+				keep[k] = true
 			}
 		}
 	}
-	// a silence alert is one failure however many wwds noticed it: its ledger row goes when no list holds it any more — judged only when
-	// every list was read, since one that could not be read may still hold it
-	if allRead {
-		keys := make([]string, 0, len(silent))
-		for k := range silent {
-			keys = append(keys, k)
-		}
-		if err := m.store.forgetExcept(silenceLedger, keys); err != nil {
-			m.logf("wwdalerts: ledger %s: %v", silenceLedger, err)
-		}
+	keys := make([]string, 0, len(keep))
+	for k := range keep {
+		keys = append(keys, k)
 	}
-	if err := m.store.prune(m.now()); err != nil {
-		m.logf("wwdalerts: prune: %v", err)
+	if err := m.store.forgetExcept(silenceLedger, keys); err != nil {
+		m.logf("wwdalerts: ledger %s: %v", silenceLedger, err)
 	}
 }
 
