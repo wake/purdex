@@ -168,7 +168,7 @@ func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 // killVoidedSpawnSession stops the tmux session of the forwarded spawn op that a void (or a replay of it) ended abandoned
 // (#3537), under the generation it was created in; a session already gone is a replay after a lost answer. An op the void
 // did not end — it registered first, or it never was this lead host's — is left alone. A session created after the void
-// is the runner's to reap (reapFailedSpawn), which meets the failed op when it stops. The waiters of the op are told too.
+// is the runner's to reap (reapFailedSpawn), which meets the failed op when it stops.
 func (m *Module) killVoidedSpawnSession(leadHost, opID string) error {
 	op, found, err := m.store.GetSpawnOp(opID)
 	if err != nil {
@@ -177,8 +177,7 @@ func (m *Module) killVoidedSpawnSession(leadHost, opID string) error {
 	if !found || op.LeadHostID != leadHost || op.State != team.SpawnFailed || op.Reason != team.SpawnReasonAbandoned {
 		return nil
 	}
-	m.wake(opID)
-	m.rosterChanged()
+	m.rosterChanged() // the seat of the op is free again
 	if op.TmuxID == "" {
 		return nil
 	}

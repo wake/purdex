@@ -29,9 +29,19 @@ func TestRemoteSpawnVoid_AStillRunningOpIsFailedItsNameReleasedAndItsSessionStop
 				t.Fatalf("spawn = %d %s", code, body)
 			}
 			waitReached()
+			f.m.rosterSig = make(chan struct{}, 1) // the publisher is not running here: the signal stays for the test to read
 			code, body := f.postCmd(leadPrincipal(), voidOf(cmdUUID2, cmdUUID1))
 			if code != http.StatusOK || outcomeState(t, body) != "undone" {
 				t.Fatalf("void = %d %s, want 200 undone", code, body)
+			}
+			// by the void itself: the runner is still held and has not looked at the op
+			if got := n.releasedOps(); len(got) != 1 || got[0] != cmdUUID1 {
+				t.Fatalf("released = %v right after the void, want the voided op's name given back", got)
+			}
+			select {
+			case <-f.m.rosterSig:
+			default:
+				t.Fatal("the roster was not told the seat is free")
 			}
 			releaseRunner()
 			f.m.spawnWG.Wait()
@@ -42,9 +52,6 @@ func TestRemoteSpawnVoid_AStillRunningOpIsFailedItsNameReleasedAndItsSessionStop
 			}
 			if _, ok, _ := f.m.store.RemoteMember(cmdUUID1); ok {
 				t.Fatal("a voided spawn registered a remote member")
-			}
-			if got := n.releasedOps(); len(got) == 0 || got[0] != cmdUUID1 {
-				t.Fatalf("released = %v, want the voided op's name given back", got)
 			}
 			name, _ := team.SpawnTmuxName(cmdUUID1)
 			if f.tmux.HasSession(name) {
