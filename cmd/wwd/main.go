@@ -251,8 +251,8 @@ func run(cfgPath string) error {
 		producers.Wait()
 	})
 	producers.Add(2)
-	go func() { defer producers.Done(); sweepQueue(ctx, q) }() // lapsed leases, queue timeouts, retention
-	go func() { defer producers.Done(); fastLane.Run(ctx) }()  // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
+	go func() { defer producers.Done(); sweepQueue(ctx, q, d.ReconcileOutcomes) }() // lapsed leases, queue timeouts, retention
+	go func() { defer producers.Done(); fastLane.Run(ctx) }()                       // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
@@ -273,7 +273,7 @@ func run(cfgPath string) error {
 const sweepEvery = 5 * time.Second
 
 // sweepQueue runs the queue's periodic housekeeping until ctx ends; without it a run whose caller died would stay running.
-func sweepQueue(ctx context.Context, q *queue.Queue) {
+func sweepQueue(ctx context.Context, q *queue.Queue, after func(context.Context)) {
 	t := time.NewTicker(sweepEvery)
 	defer t.Stop()
 	for {
@@ -283,6 +283,9 @@ func sweepQueue(ctx context.Context, q *queue.Queue) {
 		case <-t.C:
 			if _, err := q.Sweep(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("wwd: queue sweep: %v", err)
+			}
+			if after != nil {
+				after(ctx) // what the daemon keeps up with the queue: the outcomes of jobs that ended and were not recorded
 			}
 		}
 	}

@@ -35,7 +35,9 @@ func claimFacts(req wire.ClaimRequest) (labels, fingerprint string) {
 
 // producedOn reads what the claim that holds the job said about itself. A value that does not decode is treated as not said: the result is
 // then simply not filed.
-func producedOn(ctx context.Context, c *sql.Conn, id string) (Produced, error) {
+func producedOn(ctx context.Context, c interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, id string) (Produced, error) {
 	var p Produced
 	var labels, fp string
 	if err := c.QueryRowContext(ctx, `SELECT def_hash, claim_labels, claim_fingerprint FROM jobs WHERE id = ?`, id).Scan(&p.DefHash, &labels, &fp); err != nil {

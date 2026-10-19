@@ -143,6 +143,57 @@ func (q *Queue) RecordOutcome(ctx context.Context, o Outcome) ([]wire.Disagreeme
 	return written, err
 }
 
+// EndedJob is a job that ended with an outcome to compare, with what its claim said about the host.
+type EndedJob struct {
+	Job      wire.Job
+	Produced Produced
+}
+
+// UnrecordedOutcomes lists, newest first and at most limit of them, the jobs that ended within the last window with an outcome to compare
+// (see comparable) and have no row in task_outcomes. The outcome of a job is written after its result is committed, and that write can
+// fail (a locked database): the worker's repeat of the result is an echo and offers nothing again, and a restart forgets it. The jobs
+// themselves keep everything the record needs, so the daemon asks for these now and then and records them again. Recording is
+// idempotent. A job whose host has no standing for the task is listed every time until it leaves the window, which is why the list is
+// bounded and newest first: a pile of them cannot keep the recent ones from being seen.
+func (q *Queue) UnrecordedOutcomes(ctx context.Context, window time.Duration, limit int) ([]EndedJob, error) {
+	cutoff := q.now().Add(-window).UnixMilli()
+	rows, err := q.db.QueryContext(ctx, `SELECT id FROM jobs
+		WHERE state IN ('succeeded','failed') AND cacheable = 1 AND local = 0 AND adhoc = 0 AND def_hash != '' AND claim_labels != ''
+		  AND finished_at >= ? AND NOT EXISTS (SELECT 1 FROM task_outcomes o WHERE o.job_id = jobs.id)
+		ORDER BY seq DESC LIMIT ?`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var out []EndedJob
+	for _, id := range ids {
+		j, err := q.Get(ctx, id)
+		if err != nil {
+			continue // gone since (retention)
+		}
+		if !comparable(j) {
+			continue
+		}
+		p, err := producedOn(ctx, q.db, id)
+		if err != nil {
+			continue
+		}
+		out = append(out, EndedJob{Job: j, Produced: p})
+	}
+	return out, nil
+}
+
 // Origin is the alias of the host this queue belongs to: the one that records the outcomes it offers.
 func (q *Queue) Origin() string { return q.opt.Origin }
 

@@ -4,11 +4,41 @@ import (
 	"context"
 	"log"
 	"slices"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// reconcileWindow is how far back ReconcileOutcomes looks for ended jobs whose outcome was not recorded, and reconcileBatch how many it
+// takes up at a time (newest first).
+const (
+	reconcileWindow = time.Hour
+	reconcileBatch  = 200
+)
+
+// ReconcileOutcomes records again the outcomes of jobs that ended in the last hour and were never recorded: the write that follows a
+// result can fail (a locked database), and a worker's repeat of the result is an echo that offers nothing again, so a missed outcome would
+// be a missed disagreement for good. The jobs keep what the record needs; recording is idempotent, so a job recorded meanwhile is not
+// recorded twice. Called from the queue's sweep, every few seconds; with nothing missed it is one cheap query.
+func (d *Daemon) ReconcileOutcomes(ctx context.Context) {
+	if d.opts.Queue == nil {
+		return
+	}
+	missed, err := d.opts.Queue.UnrecordedOutcomes(ctx, reconcileWindow, reconcileBatch)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("wwd: outcomes: looking for outcomes that were not recorded: %v", err)
+		}
+		return
+	}
+	// the list is newest first (so a pile of old ones cannot hide the recent), but they are recorded oldest first, as they ended, so a pair
+	// is "the earlier job, then the later one" here as it is when the outcomes are recorded as the jobs end
+	for i := len(missed) - 1; i >= 0; i-- {
+		d.NoteOutcome(ctx, missed[i].Job, missed[i].Produced)
+	}
+}
 
 // NoteOutcome records how a job a worker ended came out, for the comparison with the same work on another host (spec §7 Disagreement); it
 // is the queue's Options.OnEnded. The outcome counts only if the host vouches for the task: it held the task's earned label when it
