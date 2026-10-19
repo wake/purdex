@@ -77,10 +77,11 @@ export const usePoolStore = create<PoolState>((set, get) => {
   let inflight = false // a read cycle is under way
   let again = false // an event came during it: read once more right after
 
-  /** The reads are event-driven: the last one came from a source that is still connected, announces `pool.events.v1`, and nothing is failing. */
+  let lastOk = false // the last read cycle was answered by its source (`busy` and the first back-off failures publish no error, but they are failures: their retry timer must stay)
+  /** The reads are event-driven: the last one was answered by a source that is still connected and announces `pool.events.v1`. */
   const eventDriven = () => {
     const src = get().sourceHostId
-    return get().error === null && src !== null && announcesEvents(src) && poolSources().includes(src)
+    return lastOk && src !== null && announcesEvents(src) && poolSources().includes(src)
   }
 
   const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
@@ -91,6 +92,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     for (const h of hosts) if (h.reachable && h.facts) lastLiveAt[h.alias] = h.facts.at
     failures = 0
     busy = 0
+    lastOk = true
     set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, error: null })
   }
 
@@ -107,6 +109,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
 
   async function readOnce(): Promise<number> {
     const token = gen // a stop() or a visibility change bumps `gen`: whatever this read learns after that is old news
+    lastOk = false // until this cycle is answered
     const sources = poolSources()
     // the retry state belongs to the source that earned it: a source that is gone takes it along
     if (sources.length === 0 || (pinned && !sources.includes(pinned))) forgetPin()
@@ -197,8 +200,10 @@ export const usePoolStore = create<PoolState>((set, get) => {
     ...initial,
     readOnce,
     poolEvent(hostId) {
-      if (!running || hidden() || !eventDriven() || hostId !== get().sourceHostId) return
-      if (inflight) { again = true; return }
+      if (!running || hidden() || hostId !== get().sourceHostId) return
+      // a read under way has not been answered yet (`lastOk` is false until it is), so an event during it is kept for the next one
+      if (inflight) { if (announcesEvents(hostId)) again = true; return }
+      if (!eventDriven()) return
       clearTimer()
       void tick(gen)
     },
@@ -225,6 +230,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
       inflight = false
     },
     reset() {
+      lastOk = false
       failures = 0
       pinned = null
       busy = 0

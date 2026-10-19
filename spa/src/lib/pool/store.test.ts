@@ -467,6 +467,24 @@ describe('pool.events.v1', () => {
     expect(fetchPoolHosts.mock.calls.length).toBe(settled)
   })
 
+  // codex R1 (P1): `busy` publishes no error until its third time in a row, but it is a failure: its 1–2 s retry must still run
+  it('a busy answer from an events source is retried on its timer, though no error is published yet', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValueOnce([mlab()])
+    st().start()
+    await settle()
+    fetchPoolHosts.mockRejectedValueOnce(fail(429, 'busy'))
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().poolEvent(A)
+    await settle()
+    expect(st().error).toBeNull() // the first busy shows nothing
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(3) // the retry came without any event
+    await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(3) // and once it is answered the events drive it again
+  })
+
   it('the source losing the capability brings the poll back', async () => {
     announce(['pool.v1', EV])
     fetchPoolHosts.mockResolvedValue([mlab()])
