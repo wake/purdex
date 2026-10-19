@@ -2,7 +2,7 @@
 // that host's facts null (nothing is invented); optional #3478 fields that do not parse are left out; a malformed envelope is null.
 import {
   ZONES,
-  type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolHost, type PoolLoad,
+  type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolFactsHistory, type PoolHost, type PoolLoad,
   type PoolOwner, type PoolProc, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesPoint, type Slots,
 } from './types'
 
@@ -176,6 +176,13 @@ function point(p: unknown): SeriesPoint | null {
 }
 
 /** `GET /api/pool/facts/series`. */
+/** A record that does not parse is dropped, not the whole answer: the chart has a gap, which is honest. */
+export function parseFactsHistory(v: unknown): PoolFactsHistory | null {
+    if (!isRec(v) || (v.step !== '1m' && v.step !== '5s') || !Array.isArray(v.records)) return null
+    const records = v.records.map(parseFacts).filter((f): f is PoolFacts => f !== null)
+    return { step: v.step, records }
+}
+
 export function parseSeries(v: unknown): PoolSeries | null {
   if (!isRec(v) || (v.step !== '1m' && v.step !== '5s') || typeof v.truncated !== 'boolean') return null
   const points = list(v.points, point)

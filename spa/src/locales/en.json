@@ -3275,5 +3275,7 @@
   "watch.host.residents": "Resident programs",
   "watch.host.res_session": "Session",
   "watch.host.res_kind": "Kind",
-  "watch.host.res_count": "Count"
+  "watch.host.res_count": "Count",
+  "watch.host.zone_band": "Zone",
+  "watch.host.history_not_local": "This host's history cannot be read through this daemon yet."
 }
