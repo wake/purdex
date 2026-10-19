@@ -8,6 +8,7 @@ import { PersonaApiError, PersonaConflictError } from '../../../lib/names/person
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useHostStore } from '../../../stores/useHostStore'
+import { usePersonaSourceStore } from '../../../stores/usePersonaSourceStore'
 import { clearDraftMemory } from '../../../lib/names/persona-draft-memory'
 import { makeCollection, makePersona } from '../../../lib/names/__fixtures__/personas'
 import { PersonasSection } from './PersonasSection'
@@ -28,6 +29,7 @@ describe('PersonasSection', () => {
     useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1.2.3.4', port: 7860 } as never }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } as never } })
     useNexHostStore.setState({ byHost: { h1: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never } })
     usePersonaStore.setState({ byHost: {}, load: vi.fn(async () => {}) })
+    usePersonaSourceStore.setState({ hostId: null })
   })
 
   it('lists active personas first, retired last and dimmed, with the lead mark', () => {
@@ -53,6 +55,20 @@ describe('PersonasSection', () => {
     render(<PersonasSection />)
     expect(screen.getByTestId('personas-unsupported')).toBeTruthy()
     expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('does not offer editing while the source is offline and another copy stands in', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+      runtime: { h1: { status: 'disconnected' } as never, h2: { status: 'connected' } as never },
+    })
+    usePersonaSourceStore.setState({ hostId: 'h1' })
+    usePersonaStore.setState({ byHost: { h2: { status: 'ready', collection: makeCollection(['hiro'], { at: 5, host: 'h2' }, 4) } } })
+    render(<PersonasSection />)
+    expect(screen.getByTestId('persona-row-hiro')).toBeTruthy()
+    expect((screen.getByTestId('persona-new') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    expect(screen.queryByTestId('persona-save')).toBeNull()
   })
 
   it('shows counters against the limits while typing', () => {

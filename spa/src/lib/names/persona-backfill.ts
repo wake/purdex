@@ -31,7 +31,9 @@ export async function backfillHosts(): Promise<void> {
     if ((await itemsHash(entry.collection.items)) === sourceHash) continue
     const key = `${hostId}:${sourceHash}`
     if (tried.has(key)) continue
-    tried.add(key)
-    await mirrorPersonas(sourceId, src.collection.items, src.collection.revision, hostId)
+    // Only a copy that went through is remembered: a host that dropped, or a write that failed, gets another chance on
+    // its next load. A daemon that took the write but stores something different is what the memory is for.
+    const out = await mirrorPersonas(sourceId, src.collection.items, src.collection.revision, hostId)
+    if (out.report.mirrored.includes(hostId)) tried.add(key)
   }
 }

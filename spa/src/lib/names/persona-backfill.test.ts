@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('./persona-mirror', () => ({ mirrorPersonas: vi.fn(async () => ({})) }))
+vi.mock('./persona-mirror', () => ({ mirrorPersonas: vi.fn() }))
 vi.mock('./persona-draft-memory', () => ({ savePending: vi.fn(() => false) }))
 
 import { mirrorPersonas } from './persona-mirror'
@@ -15,6 +15,8 @@ const source = makeCollection(['hiro', 'olga'], { at: 1, host: 'src' }, 5)
 // a newer stamp than the source, but different roles: the content decides, not the stamp
 const stale = makeCollection(['hiro'], { at: 99, host: 'h2' }, 3)
 
+const done = (mirrored: string[]) => ({ report: { mirrored, failed: [], pulled: [] }, items: source.items, revision: 5 })
+
 const setStore = (h2 = stale, srcStatus: 'ready' | 'error' = 'ready') =>
   usePersonaStore.setState({
     byHost: { src: { status: srcStatus, collection: source }, h2: { status: 'ready', collection: h2 } },
@@ -23,7 +25,7 @@ const setStore = (h2 = stale, srcStatus: 'ready' | 'error' = 'ready') =>
 describe('backfillHosts', () => {
   beforeEach(() => {
     resetBackfillMemory()
-    vi.mocked(mirrorPersonas).mockClear()
+    vi.mocked(mirrorPersonas).mockReset().mockResolvedValue(done(['h2']))
     vi.mocked(savePending).mockReturnValue(false)
     useHostStore.setState({ hostOrder: ['src', 'h2'], hosts: { src: {}, h2: {} } as never })
     usePersonaSourceStore.setState({ hostId: 'src' })
@@ -45,6 +47,13 @@ describe('backfillHosts', () => {
     await backfillHosts()
     await backfillHosts()
     expect(mirrorPersonas).toHaveBeenCalledTimes(1)
+  })
+
+  it('tries again on the next load when the copy did not go through', async () => {
+    vi.mocked(mirrorPersonas).mockResolvedValueOnce(done([]))
+    await backfillHosts()
+    await backfillHosts()
+    expect(mirrorPersonas).toHaveBeenCalledTimes(2)
   })
 
   it('does nothing while a save is in flight', async () => {
