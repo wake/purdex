@@ -54,7 +54,7 @@ func TestBigAnswersAreNotCached(t *testing.T) {
 	base := baseFacts(t)
 	t0 := time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC)
 	recs := []wire.Facts{rec(base, t0, wire.ZoneNormal, 10, 1, 1, nil, nil, wire.Slots{})}
-	for n := maxCachedBody/len(historyOf("1m", recs...)) + 2; n > 0; n-- {
+	for n := maxCachedBody/len(historyOf("1m", recs...))*12/10 + 2; n > 0; n-- {
 		recs = append(recs, recs[0])
 	}
 	require.Greater(t, len(historyOf("1m", recs...)), maxCachedBody)
