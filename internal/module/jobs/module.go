@@ -162,6 +162,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/jobs", m.handleList)
 	mux.HandleFunc("GET /api/pool/jobs/{id}", m.handleJob)
 	mux.HandleFunc("GET /api/pool/jobs/{id}/log", m.handleLog)
+	m.registerControl(mux)
 }
 
 func (m *Module) client() *client.Client {
