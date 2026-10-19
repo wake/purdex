@@ -121,13 +121,25 @@ func (m *Module) LeadCandidates(ctx context.Context, sessionID string) ([]ipeers
 		return nil, err
 	}
 	defer unlock()
-	in, err := m.inputWithHeld(ctx, map[string]bool{})
+	// the candidates and their display names are one generation of the pool: the read lock is held until the names are put in
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
+	held, err := m.heldPoolNames(ctx, map[string]bool{})
 	if err != nil {
 		return nil, err
 	}
+	in := m.inputForLocked(ctx, held)
 	var out []ipeers.LeadCandidate
-	for _, c := range leadCandidates(in, keep) {
-		out = append(out, ipeers.LeadCandidate{Code: c, Keep: c == keep})
+	for _, c := range leadCandidatesWithKind(in, keep) {
+		lookup := m.displayName
+		if lookup == nil {
+			lookup = ipeers.PoolDisplayName
+		}
+		name, ok := lookup(c.code)
+		if !ok {
+			name = c.code
+		}
+		out = append(out, ipeers.LeadCandidate{Code: c.code, Keep: c.code == keep, Name: name, Kind: c.kind, LastAt: c.lastAt})
 	}
 	return out, nil
 }
