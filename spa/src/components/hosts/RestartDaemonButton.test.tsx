@@ -427,7 +427,7 @@ describe('RestartDaemonButton - onActiveChange', () => {
     it('relays line shows when non-zero', async () => {
       inflight(0, 2)
       await openConfirm(0)
-      expect(screen.getByTestId('restart-daemon-relays').textContent).toBe('2 個接力進行中（重啟後會接續）')
+      expect(screen.getByTestId('restart-daemon-relays').textContent).toBe('有 2 個接力進行中。重啟後多半能接續，但正在交接的那一個可能被打斷。')
       expect(screen.queryByTestId('restart-daemon-approvals')).toBeNull()
     })
 
@@ -439,10 +439,11 @@ describe('RestartDaemonButton - onActiveChange', () => {
       expect(screen.queryByText(/接力進行中/)).toBeNull()
     })
 
-    it('joins both with 、 in one line', async () => {
+    it('shows approvals and relays as two lines', async () => {
       inflight(2, 3)
       await openConfirm(0)
-      expect(screen.getByTestId('restart-daemon-inflight').textContent).toBe('2 個申請等待核准、3 個接力進行中（重啟後會接續）')
+      expect(screen.getByTestId('restart-daemon-inflight').textContent).toBe('2 個申請等待核准')
+      expect(screen.getByTestId('restart-daemon-relays').textContent).toBe('有 3 個接力進行中。重啟後多半能接續，但正在交接的那一個可能被打斷。')
     })
 
     it('fetch failure shows no relay line', async () => {

@@ -455,3 +455,62 @@ describe('DevEnvironmentSection - source change discipline', () => {
     expect(screen.getByLabelText('Development host')).toBeDisabled()
   })
 })
+
+// #3590: before the daemon is rebuilt and restarted, the page asks the dev host how many relays are in progress (GET /api/team/inflight);
+// above 0 it asks first and does what the answer says; 0 or no answer rebuilds at once (an unreadable count never stops the user).
+describe('DevEnvironmentSection: relays in progress before a rebuild', () => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  let posted = 0
+
+  function arrange(inflight: () => Response | Promise<Response>) {
+    posted = 0
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/team/inflight')) return inflight()
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') { posted++; return new Response('', { status: 409 }) }
+      if (href.endsWith('/api/dev/daemon/check')) return json({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    })
+  }
+
+  async function clickRebuild() {
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+  }
+
+  it('asks first when relays are in progress, and rebuilds only after the confirm', async () => {
+    arrange(() => json({ approvals_open: 0, relays_active: 2 }))
+    await clickRebuild()
+    const dialog = await screen.findByTestId('dev-rebuild-confirm-dialog')
+    expect(dialog.textContent).toContain('2 relay(s) in progress. Most resume after the restart, but one that is mid-handoff may be interrupted.')
+    expect(posted).toBe(0)
+    await act(async () => { fireEvent.click(screen.getByTestId('dev-rebuild-confirm-confirm')) })
+    await waitFor(() => expect(posted).toBe(1))
+    expect(screen.queryByTestId('dev-rebuild-confirm-dialog')).toBeNull()
+  })
+
+  it('cancel leaves the daemon alone', async () => {
+    arrange(() => json({ approvals_open: 0, relays_active: 1 }))
+    await clickRebuild()
+    await screen.findByTestId('dev-rebuild-confirm-dialog')
+    await act(async () => { fireEvent.click(screen.getByTestId('dev-rebuild-confirm-cancel')) })
+    expect(screen.queryByTestId('dev-rebuild-confirm-dialog')).toBeNull()
+    expect(posted).toBe(0)
+    expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled()
+  })
+
+  it('rebuilds at once when no relay is in progress', async () => {
+    arrange(() => json({ approvals_open: 3, relays_active: 0 }))
+    await clickRebuild()
+    await waitFor(() => expect(posted).toBe(1))
+    expect(screen.queryByTestId('dev-rebuild-confirm-dialog')).toBeNull()
+  })
+
+  it('rebuilds at once when the count cannot be read', async () => {
+    arrange(() => new Response('nope', { status: 500 }))
+    await clickRebuild()
+    await waitFor(() => expect(posted).toBe(1))
+    expect(screen.queryByTestId('dev-rebuild-confirm-dialog')).toBeNull()
+  })
+})
