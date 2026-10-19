@@ -23,6 +23,7 @@ import { useSessionStore } from '../../../stores/useSessionStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
+import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
@@ -206,5 +207,68 @@ describe('the task-group view', () => {
     expect(screen.queryByTestId('task-group-manual')).toBeNull()
     act(() => { setGroups('h1', [group('g1', ['ROOT1'])]); setRoots([['AG1', 'ROOT1']]) })
     expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
+  })
+})
+
+describe('the right-click rows (NA-6c)', () => {
+  const extras = () => useTabMenuExtrasStore.getState().items
+  const rightClick = (el: HTMLElement) => fireEvent.contextMenu(el)
+
+  beforeEach(() => { useTabMenuExtrasStore.getState().clear() })
+
+  it('an ungrouped session is offered each group and a new one; the rows are set for that tab', () => {
+    setGroups('h1', [group('g1', ['ROOT9'])])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    expect(useTabMenuExtrasStore.getState().tabId).toBe('t1')
+    expect(extras().map((x) => x.key)).toEqual(['put:g1', 'new'])
+    expect(extras().every((x) => !x.disabled)).toBe(true)
+  })
+
+  it('a session on a host that cannot serve groups gets none, and clears what was left', () => {
+    useTabStore.setState({ tabs: { t4: tab('t4', 'S4', 'AG4', 'h2') }, activeTabId: null } as never)
+    useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t4'], activeTabId: null, moduleConfig: {} }] } as never)
+    useTabMenuExtrasStore.getState().set('t4', [{ key: 'stale', label: 'Stale', onSelect: vi.fn() }])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    expect(extras()).toEqual([])
+  })
+
+  it('a session in a group is offered to be taken out of it', () => {
+    setGroups('h1', [group('g1', ['ROOT1']), group('g2', [])])
+    setRoots([['AG1', 'ROOT1']])
+    mount()
+    rightClick(within(screen.getAllByTestId('task-group-manual')[0]).getAllByTestId('inline-tab-row')[0])
+    expect(extras().map((x) => x.key)).toEqual(['put:g2', 'new', 'out'])
+  })
+
+  it('its root is not read yet: the rows are there, disabled, and say so', () => {
+    setGroups('h1', [group('g1', [])])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    expect(extras().length).toBeGreaterThan(0)
+    for (const x of extras()) { expect(x.disabled).toBe(true); expect(x.title).toBe('這個 session 的來源還在讀取中') }
+  })
+
+  it('an unsafe host: the rows are disabled with the count', () => {
+    setGroups('h1', [group('g1', [])], { dropped: { count: 2, reasons: ['bad'] } })
+    setRoots([['AG1', 'AG1']])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    for (const x of extras()) { expect(x.disabled).toBe(true); expect(x.title).toBe('這台主機有 2 列讀不了，暫時不能編輯') }
+  })
+
+  it('a refused edit is said in words, and can be dismissed', async () => {
+    setGroups('h1', [group('g1', [])])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    rightClick(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')[0])
+    const put = extras().find((x) => x.key === 'put:g1')!
+    act(() => { setGroups('h1', []) }) // another device deleted the group while the menu was up
+    await act(async () => { put.onSelect() })
+    expect(await screen.findByTestId('task-group-notice')).toHaveTextContent('這個任務編組已經不存在')
+    fireEvent.click(screen.getByRole('button', { name: '關閉' }))
+    expect(screen.queryByTestId('task-group-notice')).toBeNull()
   })
 })

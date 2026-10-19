@@ -4,6 +4,7 @@ import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { useTabMenuExtrasStore } from '../../stores/useTabMenuExtrasStore'
 import { useTabWorkspaceActions } from './hooks'
 import { getVisibleTabIds } from './lib/getVisibleTabIds'
 import { closeTab } from '../../lib/tab-lifecycle'
@@ -462,5 +463,16 @@ describe('tearOff and a preload without tearOffTab (#1816)', () => {
     expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).not.toContain(tab.id)
     expect(useUndoToast.getState().toast).toBeNull()
     expect(isTabMoving(tab.id)).toBe(true) // #2140: a move, so the team lifecycle does not take it for a close
+  })
+})
+
+describe('handleContextMenu — rows another surface left on the tab menu', () => {
+  it('a tab menu opened from anywhere starts with none: the task-group view sets its own after this runs', () => {
+    const tab = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(tab)
+    useTabMenuExtrasStore.getState().set(tab.id, [{ key: 'stale', label: 'Stale', onSelect: () => {} }])
+    const { result } = renderHook(() => useTabWorkspaceActions([tab]))
+    act(() => { result.current.handleContextMenu({ preventDefault() {}, clientX: 0, clientY: 0 } as unknown as React.MouseEvent, tab.id) })
+    expect(useTabMenuExtrasStore.getState().items).toEqual([])
   })
 })
