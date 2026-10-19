@@ -51,7 +51,7 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
   }
 
   const interactive = edit !== undefined || onDoubleClickName !== undefined
-  const nameClass =`min-w-0 truncate ${strong ? 'font-semibold text-text-primary' : muted ? 'text-text-muted' : 'font-normal text-text-secondary'}`
+  const nameClass =`min-w-0 truncate focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active ${strong ? 'font-semibold text-text-primary' : muted ? 'text-text-muted' : 'font-normal text-text-secondary'}`
   return (
     <div ref={ref} data-testid="task-group-header" className="mx-2 flex items-center gap-1.5 pl-1.5 pr-1.5 py-1 text-xs">
       <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />

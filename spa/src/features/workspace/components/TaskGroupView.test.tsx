@@ -33,6 +33,9 @@ import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
+import { usePersonaStore } from '../../../stores/usePersonaStore'
+import { makeCollection } from '../../../lib/names/__fixtures__/personas'
 import { useAgentStore } from '../../../stores/useAgentStore'
 import type { Tab } from '../../../types/tab'
 import type { TaskGroup } from '../../../lib/task-groups/api'
@@ -135,7 +138,7 @@ describe('the task-group view', () => {
     expect(onSelectTab).not.toHaveBeenCalled()
   })
 
-  it('two seats in the panes of one split tab are two rows, each with its own title, each opening its own seat', () => {
+  it('two seats in the panes of one split tab are two rows, each opening its own seat', () => {
     const split = (id: string, children: unknown[]) => ({ type: 'split', id, direction: 'h', children, sizes: [50, 50] })
     const leaf = (id: string, code: string) => ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h1', sessionCode: code, mode: 'terminal', cachedName: `name-${code}`, tmuxInstance: 'I' } } })
     act(() => {
@@ -146,7 +149,8 @@ describe('the task-group view', () => {
     })
     mount()
     const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
-    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('title L'), expect.stringContaining('title M')])
+    // both rows show the tab's title (TG-0b); what tells them apart is the persona name, and each opens its own seat
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('name-S6'), expect.stringContaining('name-S6')])
     // a seat's row has no close button: its tab carries the other seat too, and closing it would close both
     for (const r of rows) expect(within(r).queryByRole('button', { name: /Close/ })).toBeNull()
     fireEvent.click(rows[1])
@@ -162,6 +166,37 @@ describe('the task-group view', () => {
     expect(closed).toHaveTextContent('title M')
     fireEvent.click(closed)
     expect(openTeamSeat).toHaveBeenCalledWith(expect.any(String), 'M')
+  })
+
+  describe('seat rows (TG-0b)', () => {
+    const personas = () => {
+      useTeamUiStore.setState({ sidebarView: 'groups' })
+      usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: makeCollection(['kenji']) } } } as never)
+    }
+    const kenji = (id: string, tmux: string) => rosterSession(id, tmux, { address: 'mlab/work-kenji' })
+
+    it('a seat no tab shows wears its persona: avatar and a bold name, then the label, dimmed', () => {
+      personas()
+      useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [kenji('M', 'name-gone')]) as never])
+      mount()
+      const closed = within(screen.getByTestId('task-group-team')).getByTestId('task-group-seat-closed')
+      expect(within(closed).getByRole('img', { name: 'Kenji' })).toBeInTheDocument()
+      expect(within(closed).getByTestId('task-group-seat-name')).toHaveTextContent('Kenji')
+      expect(closed).toHaveTextContent('title M')
+      expect(closed.className).toContain('opacity-60')
+      fireEvent.click(closed)
+      expect(openTeamSeat).toHaveBeenCalledWith(expect.any(String), 'M')
+    })
+
+    it('a seat row with a tab: the name is dimmed unless active, and the title after it is the tab title, not the seat label', () => {
+      personas()
+      useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1', { address: 'mlab/work-kenji' }), []) as never])
+      mount()
+      const row = within(screen.getByTestId('task-group-team')).getByTestId('inline-tab-row')
+      expect(within(row).getByTestId('inline-tab-name').className).toContain('text-text-secondary')
+      expect(within(row).getByTestId('inline-tab-subtitle')).toHaveTextContent('name-S1')
+      expect(row).not.toHaveTextContent('title L')
+    })
   })
 
   it('a stored value that is not a list says so — no count it cannot know', () => {
