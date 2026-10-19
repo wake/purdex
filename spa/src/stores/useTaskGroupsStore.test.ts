@@ -94,6 +94,16 @@ describe('update', () => {
     expect(entry()).toMatchObject({ revision: 8, groups: [g('a'), g('c')] })
   })
 
+  it.each([
+    ['a row the App could not read', { items: [g('a'), { id: 'bad', name: 7 }], revision: 6 }],
+    ['a body that is not a list', { items: 'junk', revision: 6 }],
+  ])('a lost compare-and-set whose copy has %s: the retry does not write it back', async (_n, theirs) => {
+    putTaskGroups.mockRejectedValueOnce(new HostConfigConflictError(theirs as never))
+    const out = await get().update('h1', (groups) => [...groups, g('n')])
+    expect(out).toEqual({ ok: false, reason: 'unsafe' })
+    expect(putTaskGroups).toHaveBeenCalledTimes(1)
+  })
+
   it('a refusal says why in the daemon\'s words and leaves the copy alone', async () => {
     putTaskGroups.mockRejectedValue(new HostConfigApiError(400, 'task group 0: root "r1" is already in group "b"'))
     const out = await get().update('h1', (groups) => [...groups, g('n', ['r1'])])

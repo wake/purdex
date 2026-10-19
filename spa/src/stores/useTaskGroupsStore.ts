@@ -80,6 +80,10 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
       } catch (e) {
         if (e instanceof HostConfigConflictError) {
           const theirs = parseTaskGroups({ taskGroups: e.current })
+          // A 409 carries the stored copy as `{items, revision}` and none of the GET's marks, so what the parser left out is counted here: a copy with rows the App could not read is as unsafe to write back as a GET that said so.
+          const rawItems = (e.current as { items?: unknown } | null)?.items
+          if (!Array.isArray(rawItems)) theirs.invalid = true
+          else if (rawItems.length > theirs.items.length) theirs.dropped = { count: rawItems.length - theirs.items.length, reasons: ['the stored copy has rows this App could not read'] }
           if (mine()) put(hostId, entryOf(theirs))
           if (attempt === 1) return { ok: false, reason: 'conflict' }
           if (!alive()) return { ok: false, reason: 'host-changed' }
