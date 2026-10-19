@@ -30,20 +30,22 @@ func (a *API) Disagreements() http.HandlerFunc {
 			badRequest(w, "subject must be given once, and be a host alias")
 			return
 		}
+		// an optional parameter that is present has exactly one value and it is not empty: "after=" and "after=&after=1" are not "after
+		// not given" (a proxy and this handler would read them differently)
 		after := int64(0)
-		if s := q.Get("after"); s != "" {
-			n, err := strconv.ParseInt(s, 10, 64)
+		if q.Has("after") {
+			n, err := strconv.ParseInt(q.Get("after"), 10, 64)
 			if err != nil || n < 0 || len(q["after"]) != 1 {
-				badRequest(w, "after must be a non-negative integer")
+				badRequest(w, "after must be given once, as a non-negative integer")
 				return
 			}
 			after = n
 		}
 		limit := wire.MaxDisagreements
-		if s := q.Get("limit"); s != "" {
-			n, err := strconv.Atoi(s)
+		if q.Has("limit") {
+			n, err := strconv.Atoi(q.Get("limit"))
 			if err != nil || n < 1 || n > wire.MaxDisagreements || len(q["limit"]) != 1 {
-				badRequest(w, "limit must be between 1 and "+strconv.Itoa(wire.MaxDisagreements))
+				badRequest(w, "limit must be given once, between 1 and "+strconv.Itoa(wire.MaxDisagreements))
 				return
 			}
 			limit = n
