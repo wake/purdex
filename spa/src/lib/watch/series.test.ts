@@ -55,6 +55,11 @@ describe('toPoints — the spacing of the data', () => {
     expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(2)
   })
 
+  it('the same at the end of the data: a last step with nothing behind it does not vouch for the step before it', () => {
+    const t = [0, 10, 20, 30, 100, 170].map((s) => ({ t: now - 300_000 + s * 1000, avg: s, max: s }))
+    expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(2)
+  })
+
   it('10 s buckets follow 1 minute points: the 60 s step between the two kinds is not a hole', () => {
     const minute = every(60_000, 5).map((p) => ({ ...p, t: p.t - 110_000 })) // its last point is 60 s before the first bucket
     const buckets = every(10_000, 6)
