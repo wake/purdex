@@ -219,21 +219,24 @@ func markID(key string) string {
 func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) { return t.TakeMark("", jobID) }
 
 // TakeMark is Take for the job of origin tag: its own samples, else (for a command started before the upgrade, whose mark has no origin)
-// the ones kept under the old key.
+// the ones kept under the old key. The job's own key is the one marked taken whatever is found, so that a sample made just before this
+// call and committed after it does not make the job again.
 func (t *JobUsageTracker) TakeMark(tag, jobID string) (JobSample, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if tag != "" {
-		if _, own := t.jobs[markKey(tag, jobID)]; !own {
-			tag = "" // nothing under the tag: the old key, if the job is an old one
-		}
-	}
-	jobID = markKey(tag, jobID)
+	own := markKey(tag, jobID)
 	at := t.lastAt
 	if at.IsZero() {
 		at = time.Now()
 	}
-	t.taken[jobID] = at                   // a job ends once: a sample of it made just before this Take is not its start
+	t.taken[own] = at // a job ends once: a sample of it made just before this Take is not its start
+	key := own
+	if tag != "" && t.jobs[own] == nil {
+		if old := markKey("", jobID); t.jobs[old] != nil { // nothing under the tag: an old-mark command's samples, if there are any
+			key = old
+			t.taken[old] = at
+		}
+	}
 	for len(t.taken) > jobUsageMaxTaken { // bounded even when no sample comes to forget them
 		var oldest string
 		var oat time.Time
@@ -244,11 +247,11 @@ func (t *JobUsageTracker) TakeMark(tag, jobID string) (JobSample, bool) {
 		}
 		delete(t.taken, oldest)
 	}
-	acc := t.jobs[jobID]
+	acc := t.jobs[key]
 	if acc == nil {
 		return JobSample{}, false
 	}
-	delete(t.jobs, jobID)
+	delete(t.jobs, key)
 	return acc.JobSample, true
 }
 
