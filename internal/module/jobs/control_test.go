@@ -151,13 +151,19 @@ func TestControlRefusesWhatWWDShouldNeverSee(t *testing.T) {
 }
 
 // A position is set on one host, so the host it names must be one clear value: an empty or repeated one is not "the local host".
-func TestPositionRefusesAnEmptyOrRepeatedHost(t *testing.T) {
+// The same for a cancel: wwd takes an empty host (or the first of two) as the local one, and a cancel is not undone.
+func TestControlRefusesAnEmptyOrRepeatedHost(t *testing.T) {
 	var s seen
 	mux := newMux(t, controlWWD(t, &s, 200, ""))
-	for _, q := range []string{"?host=", "?host=&host=mlab", "?host=mlab&host=air26", "?host=mlab&host=mlab"} {
-		rr := post(mux, "/api/pool/jobs/j_a/position"+q, `{"position":"front"}`, asAdmin)
-		assert.Equal(t, 400, rr.Code, q)
-		assert.Equal(t, "bad_request", errCode(rr), q)
+	for _, q := range []string{"?host=", "?host=&host=mlab", "?host=&host=air26", "?host=mlab&host=air26", "?host=air26&host=air26"} {
+		for _, rt := range [][2]string{
+			{"/api/pool/jobs/j_a/position", `{"position":"front"}`},
+			{"/api/pool/jobs/j_a/cancel", ""},
+		} {
+			rr := post(mux, rt[0]+q, rt[1], asAdmin)
+			assert.Equal(t, 400, rr.Code, rt[0]+q)
+			assert.Equal(t, "bad_request", errCode(rr), rt[0]+q)
+		}
 	}
 	assert.Empty(t, s.all(), "wwd is never asked")
 }

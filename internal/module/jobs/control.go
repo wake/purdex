@@ -53,6 +53,16 @@ func (m *Module) controlSlot(w http.ResponseWriter) (release func(), ok bool) {
 	}
 }
 
+// controlHost is host() for a change: when ?host= is there it is one clear, non-empty value. wwd takes an empty host (or the first of two)
+// as the local one, so a muddled request would become a change on the wrong host, and a change is not undone. "" is only "no host".
+func controlHost(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if hs := r.URL.Query()["host"]; len(hs) > 1 || (len(hs) == 1 && hs[0] == "") {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is given more than once, or is empty")
+		return "", false
+	}
+	return host(w, r)
+}
+
 // writeChangeError answers a failed change: wwd's own 4xx keeps its status as wwd_rejected (the App reads "the job had ended" from a
 // 409), everything else is what a failed read is.
 func writeChangeError(w http.ResponseWriter, err error) {
@@ -78,7 +88,7 @@ func (m *Module) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !adminOnly(w, r) {
 		return
 	}
-	h, ok := host(w, r)
+	h, ok := controlHost(w, r)
 	if !ok {
 		return
 	}
@@ -105,14 +115,8 @@ func (m *Module) handlePosition(w http.ResponseWriter, r *http.Request) {
 	if !adminOnly(w, r) {
 		return
 	}
-	h, ok := host(w, r)
+	h, ok := controlHost(w, r)
 	if !ok {
-		return
-	}
-	// a host that is named is one clear value: an empty or a repeated one is not "the local host" (wwd's position route refuses any host
-	// it is given, and a muddled request must not become a change on the wrong host)
-	if hs := r.URL.Query()["host"]; len(hs) > 1 || (len(hs) == 1 && hs[0] == "") {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is given more than once, or is empty")
 		return
 	}
 	id, ok := jobID(w, r)
