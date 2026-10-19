@@ -58,6 +58,41 @@ func TestTakeHeavyHoldsASlotTheGateCanSee(t *testing.T) {
 	}
 }
 
+// A command that is running already (a quarantined job's) takes a slot whatever the gate says: within the count while there is room,
+// beyond it when the gate is full (the host is over its size by as many as are held, as the gate's own late holders are). No gate: none.
+func TestTakeHeavyLateCountsACommandThatRunsAlready(t *testing.T) {
+	cfg, dir := host(t, 1, "")
+	r := New(cfg, nil)
+	a, st := r.TakeHeavy()
+	if st != Taken {
+		t.Fatalf("%v", st)
+	}
+	late := r.TakeHeavyLate()
+	if late == nil {
+		t.Fatal("a running command's slot is taken even when the gate is full")
+	}
+	late.Describe([]string{"wwd", "job", "j_q", "(quarantined)"}, "")
+	if h := heldBy(t, dir); len(h) != 2 {
+		t.Fatalf("both are held: %+v", h)
+	}
+	if !r.HeavyFull() {
+		t.Fatal("full")
+	}
+	if s, st := r.TakeHeavy(); st != Full || s != nil {
+		t.Fatalf("a new job waits: %v %v", s, st)
+	}
+	late.Release()
+	a.Release()
+	if h := heldBy(t, dir); len(h) != 0 {
+		t.Fatalf("given back: %+v", h)
+	}
+	none := New(filepath.Join(t.TempDir(), "none.toml"), nil)
+	t.Setenv("PDX_GATE_DIR", filepath.Join(t.TempDir(), "absent"))
+	if none.TakeHeavyLate() != nil {
+		t.Fatal("a host without a gate has nothing to hold")
+	}
+}
+
 // A taker does not jump the gate's queue: with a command waiting for the slot that is free in the meantime, the older ticket is served
 // first, so the job is not given the slot (it would be one more heavy thing than the gate wanted).
 func TestTakeHeavyDoesNotPassAWaitingCommand(t *testing.T) {

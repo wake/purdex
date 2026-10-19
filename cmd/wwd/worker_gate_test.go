@@ -35,10 +35,19 @@ func TestGateTakerAnswers(t *testing.T) {
 	if !ok || s == nil {
 		t.Fatalf("after the release: %v %v", s, ok)
 	}
+	// a command that runs already is counted even when the gate is full, and "none" is an untyped nil
+	if l := g.TakeLate(); l == nil {
+		t.Fatal("a late slot is taken")
+	} else {
+		l.Release()
+	}
 	s.Release()
 
 	none := gateTaker{gateheld.New(filepath.Join(root, "no-such-config.toml"), nil)}
 	t.Setenv("PDX_GATE_DIR", filepath.Join(root, "absent"))
+	if l := none.TakeLate(); l != nil {
+		t.Fatalf("a host without a gate: %v, want an untyped nil", l)
+	}
 	if s, ok := none.TakeHeavy(); !ok || s != nil {
 		t.Fatalf("a host without a gate: %v %v, want a nil slot and ok", s, ok)
 	}

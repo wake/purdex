@@ -3,12 +3,14 @@ package loop
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 )
 
 // fakeGate is a host's pdx gate as the loop sees it: free heavy slots it hands out, and a record of every slot and what became of it.
@@ -17,6 +19,7 @@ type fakeGate struct {
 	free   int
 	noGate bool // a host without a gate: TakeHeavy answers ok with no slot
 	takes  int
+	lates  int
 	slots  []*fakeSlot
 }
 
@@ -41,6 +44,21 @@ func (g *fakeGate) TakeHeavy() (GateSlot, bool) {
 	s := &fakeSlot{g: g}
 	g.slots = append(g.slots, s)
 	return s, true
+}
+
+// TakeLate is a slot for a command that is already running (it may go beyond the gate's size, so it is given while any is free, not only
+// within the count; the fake treats it as a plain take that does not look at the count).
+func (g *fakeGate) TakeLate() GateSlot {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lates++
+	if g.noGate {
+		return nil
+	}
+	g.free--
+	s := &fakeSlot{g: g}
+	g.slots = append(g.slots, s)
+	return s
 }
 
 func (s *fakeSlot) Describe(argv []string, session string) {
@@ -166,6 +184,76 @@ func TestTheSlotGoesToTheCandidateThatWasClaimed(t *testing.T) {
 	_, takes, slots := g.state()
 	if takes != 1 || len(slots) != 1 || slots[0].released != 1 || len(slots[0].argv) != 4 || slots[0].argv[2] != "b" {
 		t.Fatalf("takes=%d slots=%+v", takes, slots)
+	}
+}
+
+// A job whose command could not be proven stopped may still be running: its slot stays taken (the gate must not hand it to another heavy
+// command) until the quarantine proves the unit gone, and is given back by the sweep that clears it.
+func TestAQuarantinedJobKeepsItsGateSlotUntilTheSweepClearsIt(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	g := &fakeGate{free: 1}
+	q := newQRig(t, c)
+	withGate(q.rig, g)
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the quarantine", func() bool { return len(q.store.Held()) == 1 })
+	waitFor(t, "the job to be over", func() bool { return q.loop.Running() == 0 })
+	time.Sleep(5 * unit)
+	if free, _, s := g.state(); free != 0 || s[0].released != 0 {
+		t.Fatalf("the command may still run, the slot must stay: free=%d %+v", free, s)
+	}
+	q.loop.Sweep(context.Background()) // the unit is not proven gone
+	if free, _, _ := g.state(); free != 0 {
+		t.Fatalf("not proven gone: free=%d", free)
+	}
+	q.units.mu.Lock()
+	q.units.gone["wwd-stuck"] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	if free, _, s := g.state(); free != 1 || s[0].released != 1 {
+		t.Fatalf("proven gone and cleared: free=%d %+v", free, s)
+	}
+	q.loop.Sweep(context.Background()) // nothing left to give back twice
+	if _, _, s := g.state(); s[0].released != 1 {
+		t.Fatalf("released %d times", s[0].released)
+	}
+}
+
+// After a restart the quarantined jobs are still held (their commands may live on): the new process takes a slot for each before it claims
+// anything, beyond the gate's size if it has to, and gives it back when the sweep clears the entry.
+func TestARestartTakesASlotForEachQuarantinedJobBeforeAnyClaim(t *testing.T) {
+	c := newConn("mlab", qjob("free", wire.ClassDev, time.Minute))
+	g := &fakeGate{free: 2}
+	q := newQRig(t, c)
+	withGate(q.rig, g)
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	q.ex.run = blockUntilDone
+	q.loop.cfg.SweepEvery = unit
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() >= 1 })
+	free, takes, slots := g.state()
+	g.mu.Lock()
+	lates := g.lates
+	g.mu.Unlock()
+	if lates != 1 || len(slots) != 2 || free != 0 || takes != 1 {
+		t.Fatalf("a slot for the quarantined job (late) and one for the new job: lates=%d free=%d takes=%d slots=%+v", lates, free, takes, slots)
+	}
+	if len(slots[0].argv) < 3 || slots[0].argv[0] != "wwd" || slots[0].argv[2] != "old" {
+		t.Fatalf("the late slot says %v", slots[0].argv)
+	}
+	q.units.mu.Lock()
+	q.units.gone["wwd-old"] = true
+	q.units.mu.Unlock()
+	waitFor(t, "the quarantined slot given back", func() bool { _, _, s := g.state(); return s[0].released == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

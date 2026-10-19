@@ -255,6 +255,14 @@ func (g gateTaker) TakeHeavy() (loop.GateSlot, bool) {
 	return nil, false
 }
 
+// TakeLate is a slot for a command that runs already; an untyped nil when there is none.
+func (g gateTaker) TakeLate() loop.GateSlot {
+	if h := g.r.TakeHeavyLate(); h != nil {
+		return h
+	}
+	return nil
+}
+
 // peerZone is the zone of a peer's last facts, for origin_bonus; unknown when the pool has not reached it.
 func peerZone(peers func() []wire.Peer, alias string) wire.Zone {
 	if peers == nil {

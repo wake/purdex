@@ -69,6 +69,26 @@ func (r *Reader) TakeHeavy() (*Held, TakeStatus) {
 	return &Held{slot: slot}, Taken
 }
 
+// TakeHeavyLate takes a heavy slot for a command that is running already (a quarantined job's): the gate's own TakeLate, which does not
+// ask whether the host admits more work and goes beyond the gate's size if it has to. nil: no gate, none free, or the gate cannot be
+// used (logged).
+func (r *Reader) TakeHeavyLate() *Held {
+	cfg, st := r.look()
+	if st != gateReadable {
+		return nil
+	}
+	p := &gate.Pool{Dir: cfg.Dir, Class: gate.ClassHeavy, Size: cfg.Slots.Size(gate.ClassHeavy), Now: time.Now}
+	slot, err := p.TakeLate(gate.WaiterInfo{PID: os.Getpid(), Argv: []string{"wwd", "job"}})
+	if err != nil {
+		r.logf("wwd: a heavy slot for a quarantined job could not be taken: %v", err)
+		return nil
+	}
+	if slot == nil {
+		return nil
+	}
+	return &Held{slot: slot}
+}
+
 // Describe writes whose the slot is: argv as `pdx gate status` shows it (wwd job <id> <task>), and the session if there is one. It only
 // sets what the gate shows; a record that cannot be written leaves the placeholder the take wrote (this process and the moment).
 func (h *Held) Describe(argv []string, session string) {
