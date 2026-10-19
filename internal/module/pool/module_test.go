@@ -531,7 +531,7 @@ func TestHosts_ReasonsAndLoadGolden(t *testing.T) {
 	odd.CPU = wire.CPU{NCPU: 4, IdlePct: 50}
 	odd.Mem = wire.Mem{TotalMB: 8000, AvailableMB: 6000, Pressure: 1}
 	odd.Disk = []wire.Disk{{Mount: "/", UsedPct: 30}}
-	linux := wire.Info{HostID: "h-linux", Alias: "mserv", Version: "0.1.0", Proto: 1, Platform: "linux", Arch: "amd64"}
+	linux := wire.Info{HostID: "h-mserv", Alias: "mserv", Version: "0.1.0", Proto: 1, Platform: "linux", Arch: "amd64"}
 	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
 
 	body, err := json.Marshal(wire.Pool{Peers: []wire.Peer{

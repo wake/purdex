@@ -163,7 +163,7 @@
     },
     {
       "info": {
-        "host_id": "h-linux",
+        "host_id": "h-mserv",
         "alias": "mserv",
         "version": "0.1.0",
         "proto": 1,
