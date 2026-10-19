@@ -86,6 +86,26 @@ func TestEvaluator_ShutGateWritesNothing(t *testing.T) {
 	}
 }
 
+// The gate is asked again at the write: a pool that drops below proto 2 while a rule is being judged stops that pass's writes.
+func TestEvaluator_TheGateIsAskedAgainAtTheWrite(t *testing.T) {
+	b := newBook()
+	open := true
+	r := &closingRule{stubRule: stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush}}, closeGate: func() { open = false }}
+	ev := NewEvaluator(b, func() (Input, bool) { return Input{Now: t0}, true }, nil, r)
+	ev.SetGate(func() bool { return open })
+	ev.Pass()
+	if b.raised != 0 {
+		t.Fatal("wrote after the gate shut during the judgement")
+	}
+}
+
+type closingRule struct {
+	stubRule
+	closeGate func()
+}
+
+func (r *closingRule) Eval(in Input) (Verdict, error) { r.closeGate(); return r.stubRule.Eval(in) }
+
 // stubRule returns whatever the test sets.
 type stubRule struct {
 	kind wire.AlertKind

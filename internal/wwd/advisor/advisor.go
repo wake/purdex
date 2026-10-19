@@ -117,6 +117,9 @@ func (e *Evaluator) Pass() {
 			e.fail(r.Kind(), "judge", err)
 			continue
 		}
+		if !e.gate() { // asked again at the write: judging takes time and the pool can change meanwhile
+			return
+		}
 		if v.Holds {
 			err = e.book.Raise(wire.Alert{Key: v.Key, Kind: r.Kind(), Level: v.Level, Detail: v.Detail})
 		} else {
