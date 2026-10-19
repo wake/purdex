@@ -6,6 +6,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { QuotaStepper } from './Steppers'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useRelayQuotaStore } from '../../lib/team/relay-quota'
+import { useHostStore } from '../../stores/useHostStore'
 import type { SessionQuota } from '../../lib/team/types'
 
 vi.mock('../../lib/team/relay-quota-writer', () => ({ setQuota: vi.fn() }))
@@ -29,7 +30,13 @@ function mountTwoLeads() {
   )
 }
 
-beforeEach(() => { cleanup(); useRelayQuotaStore.getState().reset() })
+const hostCfg = (id: string, name: string, order: number) => ({ id, name, ip: '1', port: 1, token: 't', order })
+
+beforeEach(() => {
+  cleanup()
+  useRelayQuotaStore.getState().reset()
+  useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {} } as never)
+})
 afterEach(() => { cleanup() })
 
 describe('QuotaStepper accessible names', () => {
@@ -75,6 +82,29 @@ describe('QuotaStepper accessible names', () => {
     expect(new Set(names).size).toBe(8)
     expect(names).not.toContain('Decrease')
     expect(names).not.toContain('Increase')
+  })
+
+  it('two hosts that show the same row name: the host is in the name, so the buttons are still told apart (the heading above is no part of a button\'s name)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    useHostStore.setState({ hosts: { h1: hostCfg('h1', 'mlab', 0), h2: hostCfg('h2', 'air26', 1) }, hostOrder: ['h1', 'h2'] } as never)
+    render(
+      <div>
+        <QuotaStepper hostId="h1" row={row('a')} name="Alma" field="self_left" label="自動接力" />
+        <QuotaStepper hostId="h2" row={row('a2')} name="Alma" field="self_left" label="自動接力" />
+      </div>,
+    )
+    const names = stepButtons().map((b) => b.getAttribute('aria-label'))
+    expect(names).toEqual(['減少自動接力額度（Alma · mlab）', '增加自動接力額度（Alma · mlab）', '減少自動接力額度（Alma · air26）', '增加自動接力額度（Alma · air26）'])
+    expect(screen.getByRole('button', { name: '增加自動接力額度（Alma · air26）' })).toBeInTheDocument()
+    const boxes = screen.getAllByTestId('quota-value').map((b) => b.getAttribute('aria-label') ?? b.querySelector('[aria-label]')?.getAttribute('aria-label'))
+    expect(new Set(boxes).size).toBe(2)
+  })
+
+  it('with one host the name does not carry it (nothing to tell apart; the visible heading and rows are enough)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    useHostStore.setState({ hosts: { h1: hostCfg('h1', 'mlab', 0) }, hostOrder: ['h1'] } as never)
+    render(<QuotaStepper hostId="h1" row={row('a')} name="Alma" field="self_left" label="自動接力" />)
+    expect(stepButtons().map((b) => b.getAttribute('aria-label'))).toEqual(['減少自動接力額度（Alma）', '增加自動接力額度（Alma）'])
   })
 
   it('the number box has the same name without the action, so it is told apart too', () => {
