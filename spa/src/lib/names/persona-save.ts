@@ -5,6 +5,8 @@ import { putPersonas, PersonaConflictError } from './persona-api'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from './persona-limits'
 import type { Persona, PersonaCollection } from './persona-types'
 import { currentSource, usePersonaStore } from '../../stores/usePersonaStore'
+import { mirrorPersonas, type MirrorReport } from './persona-mirror'
+import { resolvedSourceId } from '../../stores/usePersonaSourceStore'
 
 export class PersonaValidationError extends Error {
   readonly issues: PersonaIssue[]
@@ -32,7 +34,7 @@ export interface EditBase { hostId: string; revision: number; stamp: PersonaColl
 
 /** The page takes this when it opens a form; `null` when no host has a collection yet. */
 export function editBase(): EditBase | null {
-  const src = currentSource(usePersonaStore.getState().byHost)
+  const src = currentSource(usePersonaStore.getState().byHost, resolvedSourceId())
   return src && { hostId: src.hostId, revision: src.collection.revision, stamp: src.collection.stamp }
 }
 
@@ -41,6 +43,14 @@ export class PersonaStaleError extends Error {
   constructor() {
     super('personas changed since the form was opened')
     this.name = 'PersonaStaleError'
+  }
+}
+
+/** The source is offline and another host's copy stands in: that copy is shown, never written as if it were the source. */
+export class PersonaReadOnlyError extends Error {
+  constructor() {
+    super('the source host is offline; personas are read-only')
+    this.name = 'PersonaReadOnlyError'
   }
 }
 
@@ -57,9 +67,12 @@ function sameBase(a: EditBase | null, b: EditBase | null): boolean {
  */
 export async function savePersonas(
   items: Persona[], base: EditBase | null, fallbackHostId: string,
-): Promise<{ hostId: string; base: EditBase | null }> {
+): Promise<{ hostId: string; base: EditBase | null; mirror: MirrorReport }> {
   const issues = collectionIssues(items)
   if (issues.length > 0) throw new PersonaValidationError(issues)
+  // A form opened while the source was up can still be submitted after it drops; its base would then be moved onto the
+  // stand-in by the stale path and the second submit would write the stand-in. The last gate is here.
+  if (currentSource(usePersonaStore.getState().byHost, resolvedSourceId())?.readOnly) throw new PersonaReadOnlyError()
   if (!sameBase(base, editBase())) throw new PersonaStaleError()
   const hostId = base?.hostId ?? fallbackHostId
   let written: { revision: number }
@@ -69,11 +82,15 @@ export async function savePersonas(
     if (e instanceof PersonaConflictError) await usePersonaStore.getState().load(hostId)
     throw e
   }
+  // The source is written; the other daemons get the same items. A role one of them holds that the source lacks is taken
+  // into the source first (its revision moves), so the reload below reads the final source.
+  const mirrored = await mirrorPersonas(hostId, items, written.revision)
+  written = { revision: mirrored.revision }
   await usePersonaStore.getState().load(hostId)
   // The reload moved the revision and stamp; a form that stays open continues from this base. That is only right when
   // the shown collection is exactly what this save wrote: the saved host, at the revision the PUT returned. If another
   // host's newer copy won meanwhile, or the same host moved on to a later revision, the open form's items were built
   // on something that has been replaced, so there is no base to continue from and the page rebuilds the form.
   const after = editBase()
-  return { hostId, base: after?.hostId === hostId && after.revision === written.revision ? after : null }
+  return { hostId, base: after?.hostId === hostId && after.revision === written.revision ? after : null, mirror: mirrored.report }
 }

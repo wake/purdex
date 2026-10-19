@@ -199,9 +199,11 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	if cardPayload != nil && !person && m.unattendedOn() {
 		return fail(http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText)
 	}
+	// the member's name is reserved before the op is written, so the row carries it; an accept that is refused releases it
+	poolName := m.reserveMemberName(origin.SessionID, req.ID, name, now)
 	op := spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
 		OriginSessionID: origin.SessionID, Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort,
-		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now,
+		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now, PoolName: poolName,
 		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task), Person: person}
 	var (
 		row      spawnRow
@@ -216,6 +218,9 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 			op.State = team.SpawnAwaitingResources
 			row, _, inserted, err = m.store.AcceptSpawnOpWithCard(op, hash, card, cardHash)
 		}
+	}
+	if err != nil {
+		m.releaseMemberName(req.ID) // nothing was written: the name is free again
 	}
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
@@ -294,7 +299,10 @@ func (m *Module) awaitSpawn(ctx context.Context, id string) (spawnRow, error) {
 func (m *Module) spawnView(r spawnRow, leadAddress string) (team.SpawnOp, error) {
 	op := team.SpawnOp{ID: r.ID, TeamID: r.TeamID, HostID: r.HostID, State: r.State, Step: r.Step, Reason: r.Reason,
 		Cwd: r.Cwd, Title: r.Title, Model: r.Model, Effort: r.Effort, TmuxSession: r.TmuxName,
-		LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+		LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, PoolName: r.PoolName}
+	if r.PoolName != "" {
+		op.PoolDisplayName, _ = ipeers.PoolDisplayName(r.PoolName)
+	}
 	if r.State == team.SpawnFailed && r.Reason == team.SpawnReasonStartTimeout {
 		op.Detail = m.startTimeoutDetail(r)
 	}

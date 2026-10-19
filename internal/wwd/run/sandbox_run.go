@@ -31,7 +31,7 @@ var (
 // workspace.
 func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp *capture, res Result) Result {
 	sb := spec.Sandbox.withDefaults()
-	unit := unitName(spec.JobID)
+	unit := unitName(spec)
 	killAfter := spec.KillAfter
 	if killAfter <= 0 {
 		killAfter = DefaultKillAfter

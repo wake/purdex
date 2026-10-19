@@ -139,6 +139,8 @@ type Module struct {
 	// exits and POST create answers 503 not_ready. The DB stays open until
 	// Close (PD6): in-flight handlers still read it during srv.Shutdown.
 	stopCtx context.Context
+	// names is the name service a test sets; nil resolves it from the registry (spawn_poolname.go)
+	names ipeers.NameService
 	// cmdLimit is the per-lead-host admission of the cross-host commands route (spent before the body is decoded).
 	cmdLimit *peersmod.HostLimiter
 	// factLimit is the same for the facts route (a flood of fresh fact ids is rate-limited before decode).
@@ -546,6 +548,7 @@ func (m *Module) Init(c *core.Core) error {
 	store.onFacts = m.kickFacts
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
 	store.onCommandSettled, store.onSettleAborted = m.afterRelayOpsEnded, m.dropRelayOpsEnded
+	store.onSpawnsEnded = m.releaseMemberNames
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
 	if err != nil {
@@ -567,6 +570,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(team.AssistTeamsKey, store) // the assist module: live teams and relayed refs
 	c.Registry.Register(team.LineageRootKey, store)
 	c.Registry.Register(team.SeatReaderKey, store)
+	c.Registry.Register(team.SpawnReservationsKey, ipeers.SpawnReservationReader(spawnReservationReader{store})) // the peers name service rebuilds its reservations from it (NP-4)
 	c.Registry.Register(team.RelayGuardKey, store)
 	c.Registry.Register(team.PredecessorReaderKey, store)                       // the conversation module's scroll-back across a relay
 	c.Registry.Register(team.ModReadKey, team.ModReader(store))                 // the mod socket's team read (TI-5a)

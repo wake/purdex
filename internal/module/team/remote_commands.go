@@ -252,7 +252,8 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 		return false, err
 	}
 	defer tx.Rollback()
-	if ended, err := endTeamTx(tx, t.ID, t.LeadSessionID, reason, at); err != nil || !ended {
+	ended, spawnIDs, err := endTeamTx(tx, t.ID, t.LeadSessionID, reason, at)
+	if err != nil || !ended {
 		return false, err
 	}
 	// the rows keep their states (D4); the commands read them, so they are enqueued from the rows as they are
@@ -265,7 +266,11 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 		team.SpawnReasonAbandoned, at, t.ID); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	s.spawnsEnded(spawnIDs)
+	return true, nil
 }
 
 // ledTeamsTx are the live teams the session leads, read in tx (before a cleared moves them).

@@ -26,6 +26,10 @@ import (
 
 const unit = 20 * time.Millisecond
 
+// mlabUnit is the sandbox unit of a job that came in on the connection "mlab": the name carries the origin's tag (two origins can send
+// one job id), and it is what the quarantine entry of such a job names.
+func mlabUnit(id string) string { return run.UnitName(ident.OriginTag("mlab"), id) }
+
 const claimID = "0123456789abcdef0123456789abcdef"
 
 func qjob(id string, class wire.JobClass, age time.Duration, lockKeys ...string) wire.Job {
@@ -886,7 +890,7 @@ func TestAJobThatCannotBeProvenStoppedIsQuarantinedBeforeItIsDelivered(t *testin
 	q.loop.stopAll(context.Background(), "test")
 	waitFor(t, "the delivery", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
 	held := q.store.Held()
-	if len(held) != 1 || held[0].JobID != "stuck" || held[0].Owner != "mlab/stuck" || held[0].Unit != "wwd-stuck" || len(held[0].Keys) != 1 {
+	if len(held) != 1 || held[0].JobID != "stuck" || held[0].Owner != "mlab/stuck" || held[0].Unit != mlabUnit("stuck") || len(held[0].Keys) != 1 {
 		t.Fatalf("held %+v", held)
 	}
 	if want := filepath.Join(q.root, "stuck"); held[0].Dir != want {
@@ -900,6 +904,45 @@ func TestAJobThatCannotBeProvenStoppedIsQuarantinedBeforeItIsDelivered(t *testin
 	}
 	if _, rel, _ := c.seen(); rel[0].Reason != wire.ReleaseInfra {
 		t.Fatalf("release %+v", rel[0])
+	}
+}
+
+// Two origins send the same job id: each job's entry has its own owner and its own unit (so neither can be proven gone by the other's
+// unit), the store takes both, and a bare Clear of the id refuses and names both.
+func TestTwoOriginsWithOneJobIdQuarantineUnderTheirOwnUnits(t *testing.T) {
+	a := newConn("air26", qjob("dup", wire.ClassDev, 0))
+	b := newConn("mserv", qjob("dup", wire.ClassDev, 0))
+	q := newQRig(t, a, b)
+	q.ex.run = notProven
+	q.round()
+	time.Sleep(2 * unit)
+	q.round()
+	waitFor(t, "two runs", func() bool { return q.ex.ran.Load() == 2 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "two entries", func() bool { return len(q.store.Held()) == 2 })
+	units := map[string]string{}
+	for _, e := range q.store.Held() {
+		units[e.Owner] = e.Unit
+	}
+	wantA, wantB := run.UnitName(ident.OriginTag("air26"), "dup"), run.UnitName(ident.OriginTag("mserv"), "dup")
+	if units["air26/dup"] != wantA || units["mserv/dup"] != wantB || wantA == wantB {
+		t.Fatalf("units %v, want air26/dup=%s mserv/dup=%s", units, wantA, wantB)
+	}
+	// only air26's unit is gone: only air26's entry clears
+	q.units.mu.Lock()
+	q.units.gone[wantA] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	held := q.store.Held()
+	if len(held) != 1 || held[0].Owner != "mserv/dup" {
+		t.Fatalf("held %+v: air26's unit is gone, mserv's is not", held)
+	}
+	q.units.mu.Lock()
+	q.units.gone[wantB] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	if len(q.store.Held()) != 0 {
+		t.Fatalf("held %+v", q.store.Held())
 	}
 }
 
@@ -997,7 +1040,7 @@ func TestSweepClearsAQuarantinedJobOnceItsUnitIsGoneAndOtherSweepersSeeItAsHeldU
 	}
 
 	q.units.mu.Lock()
-	q.units.gone["wwd-stuck"] = true
+	q.units.gone[mlabUnit("stuck")] = true
 	q.units.mu.Unlock()
 	q.loop.Sweep(context.Background())
 	if _, ok := q.tbl.Holder("mysql"); ok || len(q.store.Held()) != 0 {
@@ -1037,7 +1080,7 @@ func TestRunSweepsTheQuarantineByItselfEvenWithNoOtherSweeper(t *testing.T) {
 	q.loop.stopAll(context.Background(), "test")
 	waitFor(t, "the quarantine", func() bool { return len(q.store.Held()) == 1 })
 	q.units.mu.Lock()
-	q.units.gone["wwd-stuck"] = true
+	q.units.gone[mlabUnit("stuck")] = true
 	q.units.mu.Unlock()
 	waitFor(t, "the clear", func() bool { return len(q.store.Held()) == 0 })
 	cancel()

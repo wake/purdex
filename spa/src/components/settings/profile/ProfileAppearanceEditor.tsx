@@ -18,7 +18,6 @@ import { FloatingPanel } from '../../FloatingPanel'
 import { WorkspaceIconPicker } from '../../../features/workspace/components/WorkspaceIconPicker'
 import { ProfileIcon } from '../../../features/workspace/components/ProfileSwitcher'
 import { WorkspaceIcon } from '../../../features/workspace/components/WorkspaceIcon'
-import { taskGroupView } from '../../../features/workspace/lib/task-group-view'
 import { canTintProfile } from './profile-rules'
 
 type Reason = 'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'
@@ -174,48 +173,46 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
         )}
       </div>
 
-      {taskGroupView.enabled && (
-        <div ref={teamIconRowRef} className="flex flex-wrap items-center gap-2">
-          <span className={LABEL}>{t('settings.profile.local.team_icon')}</span>
-          <button
-            type="button"
-            data-testid="profile-edit-team-icon"
-            data-icon={profile.teamIcon ?? DEFAULT_TEAM_ICON}
-            aria-label={t('settings.profile.local.team_icon_change')}
-            title={t('settings.profile.local.team_icon_change')}
-            aria-expanded={teamPickerOpen}
-            onClick={() => setTeamPickerOpen((v) => !v)}
-            className="w-7 h-7 rounded border border-border-default flex items-center justify-center text-text-secondary hover:text-text-primary hover:border-text-muted cursor-pointer"
-          >
-            <WorkspaceIcon icon={profile.teamIcon ?? DEFAULT_TEAM_ICON} name="" size={18} />
-          </button>
-          <button
-            type="button"
-            data-testid="profile-edit-team-icon-default"
-            disabled={profile.teamIcon === undefined}
-            onClick={() => {
-              apply({ teamIcon: null })
-              setTeamPickerOpen(false)
-            }}
-            className={BTN}
-          >
-            {t('settings.profile.local.team_icon_default')}
-          </button>
-          {teamPickerOpen && (
-            <FloatingPanel title={t('settings.profile.local.team_icon_change')} anchorRef={teamIconRowRef} onClose={() => setTeamPickerOpen(false)} width={360}>
-              <WorkspaceIconPicker
-                inline
-                currentIcon={profile.teamIcon ?? DEFAULT_TEAM_ICON}
-                onSelect={(name) => {
-                  apply({ teamIcon: name === '' ? null : name })
-                  setTeamPickerOpen(false)
-                }}
-                onCancel={() => setTeamPickerOpen(false)}
-              />
-            </FloatingPanel>
-          )}
-        </div>
-      )}
+      <div ref={teamIconRowRef} className="flex flex-wrap items-center gap-2">
+        <span className={LABEL}>{t('settings.profile.local.team_icon')}</span>
+        <button
+          type="button"
+          data-testid="profile-edit-team-icon"
+          data-icon={profile.teamIcon ?? DEFAULT_TEAM_ICON}
+          aria-label={t('settings.profile.local.team_icon_change')}
+          title={t('settings.profile.local.team_icon_change')}
+          aria-expanded={teamPickerOpen}
+          onClick={() => setTeamPickerOpen((v) => !v)}
+          className="w-7 h-7 rounded border border-border-default flex items-center justify-center text-text-secondary hover:text-text-primary hover:border-text-muted cursor-pointer"
+        >
+          <WorkspaceIcon icon={profile.teamIcon ?? DEFAULT_TEAM_ICON} name="" size={18} />
+        </button>
+        <button
+          type="button"
+          data-testid="profile-edit-team-icon-default"
+          disabled={profile.teamIcon === undefined}
+          onClick={() => {
+            apply({ teamIcon: null })
+            setTeamPickerOpen(false)
+          }}
+          className={BTN}
+        >
+          {t('settings.profile.local.team_icon_default')}
+        </button>
+        {teamPickerOpen && (
+          <FloatingPanel title={t('settings.profile.local.team_icon_change')} anchorRef={teamIconRowRef} onClose={() => setTeamPickerOpen(false)} width={360}>
+            <WorkspaceIconPicker
+              inline
+              currentIcon={profile.teamIcon ?? DEFAULT_TEAM_ICON}
+              onSelect={(name) => {
+                apply({ teamIcon: name === '' ? null : name })
+                setTeamPickerOpen(false)
+              }}
+              onCancel={() => setTeamPickerOpen(false)}
+            />
+          </FloatingPanel>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <span className={LABEL}>{t('settings.profile.local.color')}</span>

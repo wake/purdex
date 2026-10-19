@@ -6,7 +6,6 @@ import { DEFAULT_TEAM_ICON } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
 import { WorkspaceIcon } from './WorkspaceIcon'
-import { taskGroupView } from '../lib/task-group-view'
 import { ProfileConflictButton } from './ProfileConflict'
 import { WatchShieldButton } from './WatchShieldButton'
 
@@ -60,8 +59,6 @@ function ViewToggle({ appearance }: { appearance: ReturnType<typeof useProfileSw
 export function HomeRow({ isActive, onSelectHome }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   const switcher = useProfileSwitcherTrigger(onSelectHome)
-  // Until NA-6 ships the task-group view the toggle stays out and the icon stays in the Home button (task-group-view.ts).
-  const split = taskGroupView.enabled
 
   return (
     <div
@@ -72,7 +69,7 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
           : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
       }`}
     >
-      {split && <ViewToggle appearance={switcher.current} />}
+      <ViewToggle appearance={switcher.current} />
       <button
         ref={buttonRef}
         type="button"
@@ -82,7 +79,6 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
         title={switcher.current.name ?? undefined}
         className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left rounded cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       >
-        {!split && <ProfileIcon appearance={switcher.current} size={16} />}
         {/* The profile on screen, by name; one nobody named is `Home` — which, with the logo above, is the row
             as it always was. A slave never syncs: which world this is must be readable without opening the menu. */}
         <span data-testid="home-label" className="flex-1 truncate">{switcher.label}</span>

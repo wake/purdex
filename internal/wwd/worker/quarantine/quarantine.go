@@ -79,6 +79,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 )
 
@@ -229,10 +230,22 @@ func validate(e Entry) error {
 		return errors.New("empty directory")
 	case !strings.HasSuffix(e.Owner, "/"+e.JobID):
 		return errors.New("owner does not end in the job id")
-	case e.Unit != "" && e.Unit != "wwd-"+e.JobID:
+	case e.Unit != "" && !ownUnit(e):
 		return errors.New("unit is not the job's own unit")
 	}
 	return nil
+}
+
+// ownUnit says the entry's unit is the job's own: the old name, "wwd-<id>" (a marker written before the unit carried the origin; it
+// stays valid for as long as such markers are on disk, and the unit it names is what Gone is asked about), or the new one,
+// "wwd-<origin tag>-<id>", with the tag of the source the owner names. The source is the owner without its last "/<id>" (an alias may
+// hold a slash, an id never does). Any other name is somebody else's unit.
+func ownUnit(e Entry) bool {
+	if e.Unit == "wwd-"+e.JobID {
+		return true
+	}
+	source := strings.TrimSuffix(e.Owner, "/"+e.JobID)
+	return source != "" && e.Unit == "wwd-"+ident.OriginTag(source)+"-"+e.JobID
 }
 
 func (e Entry) clone() Entry {
@@ -631,21 +644,39 @@ func (s *Store) Sweep(ctx context.Context) (cleared int, err error) {
 }
 
 // Clear is the human release of quarantined entries: the hold, the marker and, when it passes safeDir, the directory go for each named
-// job. A job whose command is running is refused, an entry that changed while Clear was looking at it is reported (nothing was cleared;
-// ask again), and a job that is not in the store is reported, after the others have been handled.
+// job. A name is an owner ("source/id", exactly one entry) or a bare job id; two origins can send the same id, so a bare id that is
+// the id of more than one entry is refused with the candidates named and none of them is cleared (a person is asked to say which). A
+// job whose command is running is refused, an entry that changed while Clear was looking at it is reported (nothing was cleared; ask
+// again), and a job that is not in the store is reported, after the others have been handled.
 func (s *Store) Clear(jobID ...string) error {
 	byJob := map[string][]snap{}
+	byOwner := map[string]snap{}
 	for _, h := range s.snapshot() {
 		byJob[h.e.JobID] = append(byJob[h.e.JobID], h)
+		byOwner[h.e.Owner] = h
 	}
 	if s.window != nil {
 		s.window()
 	}
 	var errs []error
 	for _, id := range jobID {
-		es := byJob[id]
+		var es []snap
+		if h, ok := byOwner[id]; ok {
+			es = []snap{h} // an owner: exactly that entry
+		} else if !strings.Contains(id, "/") {
+			es = byJob[id]
+		}
 		if len(es) == 0 {
 			errs = append(errs, fmt.Errorf("quarantine: no entry for job %q", id))
+			continue
+		}
+		if len(es) > 1 {
+			owners := make([]string, len(es))
+			for i, h := range es {
+				owners[i] = h.e.Owner
+			}
+			sort.Strings(owners)
+			errs = append(errs, fmt.Errorf("quarantine: job id %q is the id of %d entries, none was cleared: say which, by owner: %s", id, len(es), strings.Join(owners, ", ")))
 			continue
 		}
 		for _, h := range es {
