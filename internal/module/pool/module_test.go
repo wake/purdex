@@ -116,6 +116,69 @@ func TestHosts_MapsThePoolToTheAppShape(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"labels":[]`, "labels are [] not null")
 }
 
+// A host with facts is judged in Go, once: the codes that say why its headroom is 0, and its composite load with the reading that
+// drives it. A host without facts has neither (null).
+func TestHosts_ReasonsAndLoad(t *testing.T) {
+	info, err := wire.Decode[wire.Info](fixture(t, "info.json"))
+	require.NoError(t, err)
+	f, err := wire.Decode[wire.Facts](fixture(t, "facts_darwin.json"))
+	require.NoError(t, err)
+	f.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, Running: wire.Slots{Heavy: 2}}
+	f.Derived = wire.Derived{Zone: wire.ZoneWarning, Headroom: wire.Slots{Light: 3}}
+	f.Exception = []wire.FactExc{}
+	f.Owner = nil
+	f.CPU = wire.CPU{NCPU: 10, IdlePct: 20}
+	f.Mem = wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: 1}
+	f.Disk = []wire.Disk{{Mount: "/", UsedPct: 40}, {Mount: "/data", UsedPct: 91}}
+	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
+	body, err := json.Marshal(wire.Pool{Peers: []wire.Peer{{Info: info, Facts: &f, Reachable: true}, {Info: air19, Reachable: false}}})
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/hosts")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	got, err := wire.Decode[wire.PoolHostsResponse](rr.Body.Bytes())
+	require.NoError(t, err)
+	mlab, air := got.Hosts[0], got.Hosts[1]
+	require.NotNil(t, mlab.HeadroomReasons)
+	assert.Equal(t, []string{"zone_warning", "slots_full"}, mlab.HeadroomReasons.Heavy)
+	assert.Equal(t, []string{}, mlab.HeadroomReasons.Light)
+	require.NotNil(t, mlab.Load)
+	assert.InDelta(t, 91, mlab.Load.Score, 0.01, "the fullest disk, over 85, is the largest of: cpu 80, mem 75, level 30")
+	assert.Equal(t, wire.LoadDriverDisk, mlab.Load.Driver)
+	assert.Nil(t, air.HeadroomReasons)
+	assert.Nil(t, air.Load)
+	assert.Contains(t, rr.Body.String(), `"headroom_reasons":null`)
+}
+
+// How the load reads a record: cpu from idle (not at all where no cpu count was read), memory from total and available, paging from
+// page-out plus swap-out, the disk from the fullest mount.
+func TestLoadOf(t *testing.T) {
+	f64 := func(v float64) *float64 { return &v }
+	var f wire.Facts
+	f.CPU = wire.CPU{NCPU: 8, IdlePct: 70}
+	f.Mem = wire.Mem{TotalMB: 1000, AvailableMB: 900, Pressure: 1, PageOutRate: f64(30), SwapOutRate: f64(40)}
+	l := loadOf(f)
+	assert.Equal(t, wire.LoadDriverPaging, l.Driver, "30 + 40 pages/s")
+	assert.InDelta(t, 70, l.Score, 0.01)
+	f.CPU = wire.CPU{} // the cpu was not read: idle 0 is not "fully busy"
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = nil, nil
+	l = loadOf(f)
+	assert.Equal(t, wire.LoadDriverLevel, l.Driver)
+	assert.InDelta(t, 30, l.Score, 0.01)
+	f.Mem.TotalMB = 0 // no total: memory is not judged
+	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
+	// two valid, finite readings must not add up to +Inf (JSON cannot carry it, and one peer would fail the whole answer)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(1e308), f64(1e308)
+	l = loadOf(f)
+	assert.Equal(t, wire.LoadDriverPaging, l.Driver)
+	assert.Equal(t, 100.0, l.Score)
+	_, err := json.Marshal(l)
+	assert.NoError(t, err)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(-5), f64(-1e308) // negative: it counts for nothing
+	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
+}
+
 // wwd not running: 503 wwd_unavailable. wwd answering garbage: 502 wwd_bad_response. wwd answering an error: 502 wwd_error.
 func TestHosts_WWDAbsentOrBrokenAnswersAClearStatus(t *testing.T) {
 	absent := newModule(t, client.New(filepath.Join(t.TempDir(), "none.sock")))
@@ -253,9 +316,11 @@ func TestInfo_AnnouncesPoolV1ForTheRealModule(t *testing.T) {
 	}
 	require.Contains(t, caps(), "pool.v1")
 	require.Contains(t, caps(), "pool.series.v1")
+	require.Contains(t, caps(), "pool.assess.v1")
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "pool.v1")
 	require.NotContains(t, caps(), "pool.series.v1")
+	require.NotContains(t, caps(), "pool.assess.v1")
 }
 
 // A wwd that answers records as null still gives the App an array.
