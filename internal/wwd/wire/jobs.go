@@ -138,6 +138,11 @@ type JobSubmission struct {
 	QueueTimeoutS int       `json:"queue_timeout_s"`
 	AdHoc         bool      `json:"adhoc"`
 	Submitter     Submitter `json:"submitter"`
+	// DefHash is the manifest's definition hash of the task (manifest.Task.DefinitionHash): what a stored result is compared on
+	// (spec §4.5). NoCache asks the origin not to answer this submission from a stored result. Both are the submitter's word on its
+	// own host's socket; neither reaches a Job or a peer.
+	DefHash string `json:"def_hash,omitempty"`
+	NoCache bool   `json:"no_cache,omitempty"`
 	// GitDir is the repo's common git directory as an absolute path (git rev-parse --path-format=absolute --git-common-dir), not the
 	// working tree: a member's worktree may be removed before the job runs, and the snapshot's objects live in the common directory
 	// (spec 4.1). It is queue-private: a Job has no such field, so it can never reach a listing, an event or a peer.
