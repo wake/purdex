@@ -790,8 +790,8 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
           const local = useLocalProfilesStore.getState()
           if (id === MASTER_PROFILE_ID) return { ...local.master }
           if (!Object.hasOwn(local.slaves, id)) return null
-          const { name, icon, iconWeight, color, teamIcon } = local.slaves[id]
-          return { name, ...(icon !== undefined ? { icon } : {}), ...(iconWeight !== undefined ? { iconWeight } : {}), ...(color !== undefined ? { color } : {}), ...(teamIcon !== undefined ? { teamIcon } : {}) }
+          const { name, icon, iconWeight, color, teamIcon, teamIconWeight, teamColor } = local.slaves[id]
+          return { name, ...(icon !== undefined ? { icon } : {}), ...(iconWeight !== undefined ? { iconWeight } : {}), ...(color !== undefined ? { color } : {}), ...(teamIcon !== undefined ? { teamIcon } : {}), ...(teamIconWeight !== undefined ? { teamIconWeight } : {}), ...(teamColor !== undefined ? { teamColor } : {}) }
         },
         world: () => {
           const read = readMasterWorld()
