@@ -73,6 +73,7 @@ type Module struct {
 	done        chan struct{}        // closed when that loop has ended
 	sentAt      map[string]time.Time // host alias -> when its last notice went
 	pending     map[string]*time.Timer
+	sendMu      sync.RWMutex // held for reading by a send under way; Stop takes it to wait for them
 }
 
 func New() *Module {
@@ -135,6 +136,9 @@ func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel, m.done, m.watching = cancel, done, true
+	if m.core != nil {
+		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
+	}
 	go func() {
 		defer close(done)
 		m.watch(ctx)
@@ -155,6 +159,8 @@ func (m *Module) Stop(ctx context.Context) error {
 		delete(m.pending, host)
 	}
 	m.mu.Unlock()
+	m.sendMu.Lock() // a send that had begun finishes first; the ones after it see watching false
+	m.sendMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}

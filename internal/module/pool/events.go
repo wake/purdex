@@ -125,7 +125,15 @@ func (m *Module) send(host string) {
 		return
 	}
 	ev := core.HostEvent{Type: EventPoolChanged, Value: string(b)}
+	// Stop waits for the sends that have begun (sendMu) and a send that begins after it sees watching false, so nothing goes out once Stop
+	// has returned, also from a notice that was already past its window when Stop came
+	m.sendMu.RLock()
+	defer m.sendMu.RUnlock()
 	m.mu.Lock()
+	if !m.watching {
+		m.mu.Unlock()
+		return
+	}
 	emit, c := m.emit, m.core
 	m.mu.Unlock()
 	switch {
