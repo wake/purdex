@@ -58,8 +58,29 @@ type Quarantine interface {
 	Held() []quarantine.Entry
 }
 
+// GateSlot is one of this host's pdx gate heavy slots held for a job (gateheld.Held is one). Describe names the job in the slot's record
+// (what `pdx gate status` shows) and Release gives the slot back; Release may be called more than once.
+type GateSlot interface {
+	Describe(argv []string, session string)
+	Release()
+}
+
+// Gate is the host's pdx gate as the worker keeps its books with it (#3502, until WWD-6 moves the entry point): a job the worker runs
+// holds one of the gate's heavy slots while it runs, so a heavy command arriving then waits for it instead of making one more heavy
+// thing on the host. TakeHeavy never waits: ok is false when there is no slot to be had (the gate is full or cannot be read: the worker
+// claims nothing); a nil slot with ok true is a host without a gate (nothing to hold).
+type Gate interface {
+	TakeHeavy() (slot GateSlot, ok bool)
+	// TakeLate is a slot for a command that is already running (a quarantined job's, whose command could not be proven stopped): it
+	// does not ask whether the gate admits more, and may go beyond the gate's size. ok is false when none could be had (the gate cannot
+	// be read, or is paused): the caller tries again and claims nothing meanwhile. A nil slot with ok true is a host without a gate.
+	TakeLate() (slot GateSlot, ok bool)
+}
+
 // Config is what the loop needs from its host.
 type Config struct {
+	// Gate, when set, is asked for a heavy slot before a job is claimed. nil: no gate to keep books with.
+	Gate Gate
 	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
 	Settings func() wire.WorkerSettings
 	// Facts is this host's latest facts record; nil until the first sample (the loop then takes nothing).
@@ -117,8 +138,11 @@ type Loop struct {
 	// ownerRule is whether y was made for a host with an owner rule
 	ownerRule bool
 
-	mu        sync.Mutex
-	running   map[string]*runner.Running
+	mu      sync.Mutex
+	running map[string]*runner.Running
+	// quarSlots are the gate slots of the quarantined jobs, by owner ("source/id"): their commands may still run, so the slot is kept until
+	// the quarantine has proven them gone (releaseCleared, after each sweep).
+	quarSlots map[string]GateSlot
 	lastClaim time.Time
 	lastSweep time.Time
 }
@@ -155,7 +179,7 @@ func New(cfg Config) *Loop {
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Loop{cfg: cfg, running: map[string]*runner.Running{}}
+	return &Loop{cfg: cfg, running: map[string]*runner.Running{}, quarSlots: map[string]GateSlot{}}
 }
 
 // Running is how many jobs the worker is running now.
@@ -183,6 +207,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		if err := l.cfg.Quarantine.Restore(); err != nil {
 			return fmt.Errorf("worker: the quarantined jobs' holds could not all be put back, the worker does not start: %w", err)
 		}
+		l.adoptQuarantined() // before any claim: the commands of these jobs may be running, and the gate must count them
 	}
 	// The jobs do not run under ctx: when it ends they are stopped one by one and released, which needs their leases and their
 	// connections to be alive.
@@ -242,6 +267,11 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	n, last := len(l.running), l.lastClaim
 	l.mu.Unlock()
 	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 {
+		return
+	}
+	// a quarantined job whose command may still run must be counted by the gate before anything new is claimed (a restart takes these
+	// slots at the start; one that could not be had is tried again here)
+	if !l.adoptQuarantined() {
 		return
 	}
 	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
@@ -305,6 +335,21 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 		env.HeldOff = l.cfg.Report.HeldOff
 	}
 	ranked := pick.Rank(cands, env)
+	// The gate's heavy slot is taken only when there is something to claim (an empty queue does not make the gate's slots flicker), and
+	// one slot serves all of this round's tries: it goes to the job that is claimed, or comes back when none is.
+	var slot GateSlot
+	if l.cfg.Gate != nil && len(ranked) > 0 {
+		s, ok := l.cfg.Gate.TakeHeavy()
+		if !ok {
+			return
+		}
+		slot = s
+	}
+	defer func() {
+		if slot != nil {
+			slot.Release()
+		}
+	}()
 	tries := 0
 	for _, sc := range ranked {
 		if tries >= l.cfg.MaxTries || ctx.Err() != nil {
@@ -321,6 +366,22 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context) {
 			l.running[sc.Source+"/"+sc.Job.ID] = r
 			l.lastClaim = l.cfg.Now()
 			l.mu.Unlock()
+			if slot != nil {
+				// the slot is the job's now: named in the gate's record, and given back when the job is over, however it ends (its
+				// result, a stop, a lost claim). A worker that is killed loses the lock with the process.
+				held := slot
+				slot = nil
+				held.Describe([]string{"wwd", "job", sc.Job.ID, sc.Job.Task}, sc.Job.Submitter.Session)
+				owner := sc.Source + "/" + sc.Job.ID
+				go func() {
+					<-r.Done()
+					if r.Ended().Quarantined {
+						l.keepForQuarantine(owner, held) // its command may still run: the slot stays until the quarantine clears it
+						return
+					}
+					held.Release()
+				}()
+			}
 			return
 		}
 		// not taken (someone else was first, the job is held, its locks are busy, the origin did not answer): the next candidate
@@ -382,6 +443,70 @@ func (l *Loop) sweepIfDue(ctx context.Context) {
 	}
 }
 
+// keepForQuarantine keeps a quarantined job's gate slot under its owner key until releaseCleared finds the entry gone.
+func (l *Loop) keepForQuarantine(owner string, slot GateSlot) {
+	l.mu.Lock()
+	old := l.quarSlots[owner]
+	l.quarSlots[owner] = slot
+	l.mu.Unlock()
+	if old != nil && old != slot {
+		old.Release()
+	}
+}
+
+// adoptQuarantined takes a gate slot for each quarantined job that has none (a restart found them: their commands may live on, outside
+// this process, and the slots of the process that ended went with it). Late slots: they count for commands that are running already,
+// whatever the gate says. It says whether every one is counted (or the host has no gate): when a slot could not be had (the gate cannot
+// be read, or is paused) it is tried again at the next round, and nothing new is claimed until all are counted.
+func (l *Loop) adoptQuarantined() bool {
+	if l.cfg.Gate == nil || l.cfg.Quarantine == nil {
+		return true
+	}
+	all := true
+	for _, e := range l.cfg.Quarantine.Held() {
+		l.mu.Lock()
+		have := l.quarSlots[e.Owner] != nil
+		l.mu.Unlock()
+		if have {
+			continue
+		}
+		slot, ok := l.cfg.Gate.TakeLate()
+		if !ok {
+			all = false
+			continue
+		}
+		if slot == nil {
+			continue // a host without a gate
+		}
+		slot.Describe([]string{"wwd", "job", e.JobID, "(quarantined)"}, "")
+		l.keepForQuarantine(e.Owner, slot)
+	}
+	return all
+}
+
+// releaseCleared gives back the slots of the quarantined jobs whose entries are gone (proven stopped and cleared).
+func (l *Loop) releaseCleared() {
+	if l.cfg.Quarantine == nil {
+		return
+	}
+	still := map[string]bool{}
+	for _, e := range l.cfg.Quarantine.Held() {
+		still[e.Owner] = true
+	}
+	var gone []GateSlot
+	l.mu.Lock()
+	for owner, s := range l.quarSlots {
+		if !still[owner] {
+			gone = append(gone, s)
+			delete(l.quarSlots, owner)
+		}
+	}
+	l.mu.Unlock()
+	for _, s := range gone {
+		s.Release()
+	}
+}
+
 // Sweep runs every Sweeper once with the ids of the jobs this worker holds.
 func (l *Loop) Sweep(ctx context.Context) {
 	// the quarantine first: a unit proven gone frees its hold and workspace, and the other sweepers then see the job as not held
@@ -391,6 +516,7 @@ func (l *Loop) Sweep(ctx context.Context) {
 		} else if n > 0 {
 			l.cfg.Logf("worker: quarantine: %d job(s) proven stopped and cleared", n)
 		}
+		l.releaseCleared()
 	}
 	l.mu.Lock()
 	l.pruneLocked()

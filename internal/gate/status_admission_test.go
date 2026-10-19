@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -85,6 +86,52 @@ func TestStatus_AdmissionFollowsTheRule(t *testing.T) {
 
 	g.SetConfig(func(c *Config) { c.Admission.Enabled = false })
 	assert.Equal(t, AdmissionState{}, g.Status().Admission, "a gate with no admission holds nothing")
+}
+
+// Admission is the same answer without Status's lsof pass over every held slot: for a reader that only asks whether the host would hold a
+// new heavy start now (wwd's worker, before it takes a slot).
+func TestAdmissionIsStatusAdmissionWithoutTheRest(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) {
+		c.Admission.Enabled, c.Admission.MaxPressureLevel, c.Admission.PageRateAuto, c.Admission.MaxPageRate, c.Admission.DiskMinGB = true, 1, false, 100, 10
+	})
+	g.DiskFree = func(string) (int64, error) { return 100 << 30, nil }
+	for _, p := range []Pressure{{Level: 1}, {Level: 2}, {Level: 1, PageRate: 250}, {Level: 4, PageRate: 9}} {
+		g.Pressure = peekOnly{p, true}
+		assert.Equal(t, g.Status().Admission, g.Admission(), "%+v", p)
+	}
+	g.Pressure = peekOnly{Pressure{Level: 1}, true}
+	g.DiskFree = func(string) (int64, error) { return 8 << 30, nil }
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 8 GB < 10"}, g.Admission())
+	g.SetConfig(func(c *Config) { c.Admission.Enabled = false })
+	assert.Equal(t, AdmissionState{}, g.Admission())
+}
+
+// AdmissionFor looks at the directory it is given (a worker's work root on another volume), not at the working directory: the free space
+// of that directory is what holds it.
+func TestAdmissionForCountsTheGivenDirectory(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) {
+		c.Admission.Enabled, c.Admission.MaxPressureLevel, c.Admission.PageRateAuto, c.Admission.MaxPageRate, c.Admission.DiskMinGB = true, 1, false, 100, 10
+	})
+	g.Pressure = peekOnly{Pressure{Level: 1}, true}
+	g.DiskFree = func(p string) (int64, error) {
+		if p == "/small-volume/work" {
+			return 3 << 30, nil
+		}
+		return 100 << 30, nil
+	}
+	assert.Equal(t, AdmissionState{}, g.AdmissionFor("/big-volume/work"))
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 3 GB < 10"}, g.AdmissionFor("/small-volume/work"))
+	assert.Equal(t, AdmissionState{}, g.Admission(), "the working directory is on the big volume")
+	// $TMPDIR counts beside the directory
+	g.DiskFree = func(p string) (int64, error) {
+		if p == os.TempDir() {
+			return 2 << 30, nil
+		}
+		return 100 << 30, nil
+	}
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 2 GB < 10"}, g.AdmissionFor("/big-volume/work"))
 }
 
 // The state in Status and the decision a start takes come from one function: on the same reading they agree.
