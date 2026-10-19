@@ -21,6 +21,9 @@ describe('matchPoolHost', () => {
   const hosts = [poolHost(), poolHost({ alias: 'air26', host_id: 'h-air26' })]
   it('by alias', () => expect(matchPoolHost(hosts, fleet({ alias: 'air26' }) as never)?.alias).toBe('air26'))
   it('a daemon host also by host id', () => expect(matchPoolHost(hosts, fleet({ alias: '', id: 'h-air26' }) as never)?.alias).toBe('air26'))
+  it('a host known only by the App\'s config (no fleet snapshot) matches by the daemon id it verified', () => {
+    expect(matchPoolHost(hosts, { alias: '', id: 'cfg-1', kind: 'daemon', daemonId: 'h-air26' })?.alias).toBe('air26')
+  })
   it('no match is null, and an empty alias never matches', () => {
     expect(matchPoolHost(hosts, fleet({ alias: 'nope' }) as never)).toBeNull()
     expect(matchPoolHost([poolHost({ alias: '' })], fleet({ alias: '' }) as never)).toBeNull()

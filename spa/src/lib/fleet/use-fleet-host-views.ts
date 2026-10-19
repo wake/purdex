@@ -8,7 +8,7 @@ import { useFleetStore, fleetHostsView, type FleetHostView } from './store'
 /** No fleet from a primary this App can see: the App's own hosts, without readings. */
 function configuredViews(hostOrder: string[], hosts: Record<string, unknown>): FleetHostView[] {
   return hostOrder.filter((id) => hosts[id]).map((id) => ({
-    id, hostConfigId: id, kind: 'daemon', alias: '', name: id, icon: '', os: '', status: 'ok', error: null, last_ok_at: null, fast: null, slow: null,
+    id, hostConfigId: id, daemonId: (hosts[id] as { daemonId?: string }).daemonId, kind: 'daemon', alias: '', name: id, icon: '', os: '', status: 'ok', error: null, last_ok_at: null, fast: null, slow: null,
   }))
 }
 

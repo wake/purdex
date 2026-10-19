@@ -224,6 +224,8 @@ export const useFleetStore = create<FleetState>((set, get) => {
 export interface FleetHostView extends FleetHost {
   /** The App's HostConfig id for a daemon host (matched by daemon id); the look then comes from there. */
   hostConfigId?: string
+  /** The daemon id the App verified for that config (`HostConfig.daemonId`); set on views built without a fleet snapshot, which have no alias. */
+  daemonId?: string
 }
 
 /**

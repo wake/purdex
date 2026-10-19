@@ -65,14 +65,45 @@ describe('source and reads', () => {
     expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B])
   })
 
-  it('every announcing daemon being disconnected is the old-daemon state', async () => {
+  // `oldDaemon` is a verdict about the version, so it needs evidence: a connected daemon whose capabilities were read and that does not
+  // announce pool.v1, with none announcing it anywhere. Disconnected or not yet probed is "not known", never "old".
+  it('every announcing daemon being disconnected is not the old-daemon state, and nothing is read', async () => {
     useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'reconnecting' } } } as never)
     await st().readOnce()
     expect(fetchPoolHosts).not.toHaveBeenCalled()
+    expect(st().oldDaemon).toBe(false)
+  })
+
+  it('an announcing daemon that is disconnected while another, connected one does not announce: not old either', async () => {
+    useNexHostStore.setState({ byHost: { [A]: entry(['pool.v1']), [B]: entry([]) } } as never)
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
+    await st().readOnce()
+    expect(st().oldDaemon).toBe(false)
+  })
+
+  it('capabilities not read yet (the startup window) is not the old-daemon state', async () => {
+    useNexHostStore.setState({ byHost: {} } as never)
+    await st().readOnce()
+    expect(st().oldDaemon).toBe(false)
+    useNexHostStore.setState({ byHost: { [A]: { phase: 'loading' }, [B]: { phase: 'loading' } } } as never)
+    await st().readOnce()
+    expect(st().oldDaemon).toBe(false)
+  })
+
+  it('a daemon without Nexen (phase unavailable) whose info answered still counts as read', async () => {
+    useNexHostStore.setState({ byHost: { [A]: { phase: 'unavailable', daemonCapabilities: [] }, [B]: { phase: 'unavailable', daemonCapabilities: [] } } } as never)
+    await st().readOnce()
     expect(st().oldDaemon).toBe(true)
   })
 
-  it('no daemon announcing pool.v1 is the old-daemon state, and nothing is read', async () => {
+  it('no host connected at all is not the old-daemon state', async () => {
+    useHostStore.setState({ runtime: {} } as never)
+    useNexHostStore.setState({ byHost: { [A]: entry([]), [B]: entry([]) } } as never)
+    await st().readOnce()
+    expect(st().oldDaemon).toBe(false)
+  })
+
+  it('connected daemons read and none announcing pool.v1 is the old-daemon state, and nothing is read', async () => {
     useNexHostStore.setState({ byHost: { [A]: entry([]), [B]: entry([]) } } as never)
     await st().readOnce()
     expect(fetchPoolHosts).not.toHaveBeenCalled()

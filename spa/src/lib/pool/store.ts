@@ -42,6 +42,19 @@ function poolSources(): string[] {
   return hostOrder.filter((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities?.includes(POOL_CAPABILITY))
 }
 
+/**
+ * Is it known that the daemons are older than the pool? Only when a connected daemon's capabilities have been read and none announces
+ * `pool.v1` — and none does anywhere, a disconnected one included (it may simply be down). Startup, a drop and an unprobed host are "not known".
+ */
+function knownOld(): boolean {
+  const { byHost } = useNexHostStore.getState()
+  const { hostOrder, runtime } = useHostStore.getState()
+  const announces = (id: string) => byHost[id]?.daemonCapabilities?.includes(POOL_CAPABILITY) === true
+  if (hostOrder.some(announces)) return false
+  // `daemonCapabilities` is absent until `/api/info` answered, whatever Nexen's phase is.
+  return hostOrder.some((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities !== undefined)
+}
+
 const errorOf = (e: unknown): PoolError => (e as { poolError?: PoolError })?.poolError ?? classify(null, null)
 
 export const usePoolStore = create<PoolState>((set, get) => {
@@ -80,7 +93,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     // the retry state belongs to the source that earned it: a source that is gone takes it along
     if (sources.length === 0 || (pinned && !sources.includes(pinned))) forgetPin()
     if (sources.length === 0) {
-      set({ hosts: [], sourceHostId: null, oldDaemon: true, error: null })
+      set({ hosts: [], sourceHostId: null, oldDaemon: knownOld(), error: null })
       return POLL_MS
     }
     let last: PoolError = classify(null, null)
