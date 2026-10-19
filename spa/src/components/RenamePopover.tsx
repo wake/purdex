@@ -102,7 +102,7 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
     if (!row?.address) return
     let failed = false
     try {
-      await copyText(row.address)
+      await copyText(peerIdText(row).value || row.address) // the address with its ref, as the status bar copies it (spec §9.3)
     } catch {
       failed = true
     }

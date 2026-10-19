@@ -339,12 +339,12 @@ describe('RenamePopover peer section', () => {
     expect(screen.getByTestId('peer-deliverable-p1').textContent).toBe('yes')
   })
 
-  it('copies the full address from the address row', async () => {
+  it('copies the full address with its ref from the address row', async () => {
     seedSession(H1, 'abc123')
     seedHost(H1, 'abc123', ROW)
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
     fireEvent.click(screen.getByTestId('peer-address-p1'))
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat-story-3a'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`))
   })
 
   // A persona's address shows as `[avatar] Name` (spec §9.3); the tooltip and the copy keep the whole address.
@@ -358,10 +358,10 @@ describe('RenamePopover peer section', () => {
     const btn = screen.getByTestId('peer-address-p1')
     expect(within(btn).getByText('Alma')).toBeTruthy()
     expect(btn.textContent).not.toContain('ai-chat-story') // the address is the tooltip's, not the row's
-    // the tooltip carries the address with its ref, as the status bar's copy does; the copy action below is the row's own, unchanged
+    // the tooltip carries the address with its ref, as the status bar's copy does; so does the copy action below
     expect(btn.getAttribute('title')).toContain(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`)
     fireEvent.click(btn)
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat-story-3a'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(`mini-lab/ai-chat-story-3a [${ROW.ref.replace(/^_/, '')}]`))
   })
 
   it.each([
