@@ -650,6 +650,27 @@ func TestStatusDelivererNeedsAReadyNotifier(t *testing.T) {
 	}
 }
 
+// #3631: a deliverer that cannot read its own wwd says it is not the deliverer (the fleet already hands delivery to the standby through
+// push_ready), and says so again once it can read.
+func TestStatusDelivererNeedsAReadableWWD(t *testing.T) {
+	e := newEnv(t)
+	e.pass(t)
+	if e.m.Status()["deliverer"] != true {
+		t.Fatalf("status = %v", e.m.Status())
+	}
+	e.src.errs = map[string]error{"mlab": errors.New("socket refused")}
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if got := e.m.Status()["deliverer"]; got != false {
+		t.Fatalf("deliverer = %v while its own wwd cannot be read", got)
+	}
+	e.src.errs = nil
+	e.pass(t)
+	if got := e.m.Status()["deliverer"]; got != true {
+		t.Fatalf("deliverer = %v after the wwd could be read again", got)
+	}
+}
+
 // A daemon that is not the deliverer says so, and counts nothing as held back by the switch.
 func TestStatusSaysWhetherThisDaemonIsTheDeliverer(t *testing.T) {
 	e := newEnv(t)
