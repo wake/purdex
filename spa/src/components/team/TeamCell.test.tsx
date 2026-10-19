@@ -10,6 +10,8 @@ import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { compositeKey } from '../../lib/composite-key'
 import { resolveHostColors } from '../../lib/host-color'
+import { usePersonaStore } from '../../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
 
 const seat = (over: Partial<TeamSeatView> = {}): TeamSeatView => ({
   sessionId: 'S', title: 'S', address: 'mlab/S-xx', hostId: 'h1', sessionCode: 's1', role: 'member', tabId: null, state: 'active', hostAlias: '', remote: false, ...over,
@@ -128,3 +130,59 @@ describe('subagents and the light do not change or leave the cell', () => {
     expect(overlay).toBe(true)
   })
 })
+
+// 759 acceptance: a seat that is a persona shows its face in the bot's place (18 px, as the sidebar rows do); the light is the face's top-right corner dot and the
+// subagent dots stay to its left. A seat that is no persona keeps the agent icon.
+describe('a persona seat shows its face', () => {
+  const seedKenji = () => {
+    const c = makeCollection(['kenji'])
+    c.items[0] = makePersona('kenji', { name: 'Kenji', avatar_data: 'data:image/png;base64,AA==' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c } } })
+  }
+  const kenji = () => seat({ address: 'mlab/purdex-1f-kenji' })
+  beforeEach(() => usePersonaStore.setState({ byHost: {} }))
+
+  it('draws the face, with the light and the subagent dots, and no agent icon', () => {
+    seedKenji()
+    useAgentStore.setState({ subagents: { [compositeKey('h1', 's1')]: [ref, { ...ref, id: 'b' }] } } as never)
+    mount(kenji())
+    const img = cell().querySelector('img')!
+    expect(img).not.toBeNull()
+    expect(img).toHaveStyle({ width: '18px', height: '18px', backgroundColor: '#dfe4ea' })
+    expect(cell().querySelector('[data-testid="tab-status-indicator"]')).not.toBeNull()
+    expect(cell().querySelectorAll('[data-testid="subagent-dot"]')).toHaveLength(2)
+    expect(cell().querySelector('[data-testid="team-bead-bot"]')).toBeNull()
+    // the light sits on the face's own box, over it
+    const box = cell().querySelector('[data-testid="tab-status-indicator"]')!.closest('[data-testid="inline-tab-avatar"]')!
+    expect(box.contains(img)).toBe(true)
+  })
+
+  it('keeps the cell\'s two children (the face run, then the ring)', () => {
+    seedKenji()
+    mount(kenji())
+    const kids = [...cell().children]
+    expect(kids.map((k) => k.getAttribute('data-testid'))).toEqual(['team-panel-light', 'context-ring'])
+  })
+
+  it('a seat that is no persona keeps the agent icon and draws no face', () => {
+    seedKenji()
+    mount(seat({ address: 'mlab/purdex-1f-zzz' }))
+    expect(cell().querySelector('img')).toBeNull()
+    expect(cell().querySelector('[data-testid="inline-tab-avatar"]')).toBeNull()
+    expect(cell().querySelector('.w-4.h-4')).not.toBeNull()
+  })
+
+  it('a persona collection that is not loaded yet shows the agent icon, and the face once it is', () => {
+    mount(kenji())
+    expect(cell().querySelector('img')).toBeNull()
+    act(() => seedKenji())
+    expect(cell().querySelector('img')).not.toBeNull()
+  })
+
+  it('dims with the seat\'s transition like the bot did', () => {
+    seedKenji()
+    mount({ ...kenji(), state: 'releasing' })
+    expect(screen.getByTestId('team-panel-light').getAttribute('data-dim')).toBe('true')
+  })
+})
+
