@@ -39,7 +39,7 @@ export function ModelIcon({ model, size = 11 }: { model: ModelFamily | undefined
   )
 }
 
-const TONE_CLASS: Record<UsageTone, string> = { ok: 'stroke-status-success', warn: 'stroke-status-warning', danger: 'stroke-status-error' }
+const TONE_CLASS: Record<UsageTone | 'muted', string> = { ok: 'stroke-status-success', warn: 'stroke-status-warning', danger: 'stroke-status-error', muted: 'stroke-text-muted' }
 
 /**
  * Context usage as a USED ring (grows counterclockwise from 12 o'clock, coloured by used %); the model shape sits in the
@@ -50,11 +50,12 @@ const TONE_CLASS: Record<UsageTone, string> = { ok: 'stroke-status-success', war
  * used %, so the arc can show a level another party judged (the zone the daemon sent); `noShape` leaves the middle empty
  * (a host has no model, and the "?" would read as "model unknown").
  */
-export function ContextRing({ pct, model, size = 22, symbolColor, tone, noShape = false }: { pct: number | undefined; model: ModelFamily | undefined; size?: number; symbolColor?: string; tone?: UsageTone; noShape?: boolean }) {
+export function ContextRing({ pct, model, size = 22, symbolColor, tone, muted = false, noShape = false }: { pct: number | undefined; model: ModelFamily | undefined; size?: number; symbolColor?: string; tone?: UsageTone; muted?: boolean; noShape?: boolean }) {
   const r = size / 2 - 2
   const c = 2 * Math.PI * r
   const geo = pct === undefined ? null : ringGeometry(pct, 'used')
-  const arcTone = tone ?? geo?.tone
+  // `muted` (a host whose zone is unknown) keeps the length but paints the arc grey, whatever the score.
+  const arcTone = muted ? 'muted' as const : (tone ?? geo?.tone)
   // The shape lives in the ring's own coordinate system: its 12x12 box (g wide, NOT rounded to an integer) is centred on
   // (size/2, size/2) by arithmetic, so no DOM-level pixel snapping can push it off the ring's middle.
   const g = size * 0.42

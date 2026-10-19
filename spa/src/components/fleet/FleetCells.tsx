@@ -9,6 +9,7 @@ import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fle
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { useHostStore } from '../../stores/useHostStore'
 import { useHostLookResolver, type HostLook } from '../../lib/host-look'
+import { usePoolCellModels } from '../../lib/pool/use-cell-models'
 import { HostCell } from './HostCell'
 
 export interface FleetCellsProps {
@@ -33,6 +34,8 @@ export function FleetCells({ variant }: FleetCellsProps) {
     () => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : primaryElsewhere ? configuredViews(hostOrder, hosts) : []).map((v) => (v.hostConfigId ? { ...v, name: lookOf(v.hostConfigId).name ?? v.name } : v)),
     [snapshot, primaryElsewhere, hosts, hostOrder, lookOf],
   )
+  // The resource pool, when a daemon announces it, is the source of the readings; otherwise `models` are the fleet hosts as they were.
+  const { models, active: poolActive } = usePoolCellModels(views)
   if (views.length === 0) return null
 
   const look = (v: FleetHostView): Pick<HostLook, 'colors' | 'icon' | 'iconWeight'> => {
@@ -50,8 +53,8 @@ export function FleetCells({ variant }: FleetCellsProps) {
       data-variant={variant}
       className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-0 pb-1'}
     >
-      {views.map((v) => (
-        <HostCell key={v.id} view={v} look={look(v)} variant={variant} isActive={false} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere && !snapshot} onOpen={() => open(v)} />
+      {models.map((m) => (
+        <HostCell key={m.view.id} view={m.view} pool={m.pool} look={look(m.view)} variant={variant} isActive={false} waitingPrimary={!poolActive && waitingPrimary} primaryElsewhere={!poolActive && primaryElsewhere && !snapshot} onOpen={() => open(m.view)} />
       ))}
     </div>
   )

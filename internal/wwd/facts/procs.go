@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -82,6 +83,9 @@ type ProcRec struct {
 	// MemKind says what FootprintBytes is: "" is the physical footprint (macOS),
 	// "rss" the resident set (Linux has no footprint).
 	MemKind string
+	// Start is when the process began (to the microsecond on macOS, to 10 ms on Linux); zero when the reader does not know. Set by
+	// Snapshot, not by the bare table of Fresh on a host where that cannot tell it.
+	Start time.Time
 }
 
 // ProcSnapshot is the whole process table at one moment.
@@ -105,6 +109,10 @@ type ProcContext struct {
 	// KindOf is the resident kind of a process, cached by the reader (a process's
 	// kind does not change). Optional: when nil it is computed from ArgsOf.
 	KindOf func(p ProcRec) string
+	// Fresh reads the process table again right now: PID, PPID, Name and Start of every process, nothing per process (no figures, no argv,
+	// no uid on Linux), so it is cheap enough to be asked a few times in a second. Optional: nil when the reader cannot. Like the other
+	// lookups it must be called from the goroutine that took the snapshot.
+	Fresh func() ([]ProcRec, error)
 }
 
 // kindOf is the resident kind of p ("" when it is not a long-lived helper).

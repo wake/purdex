@@ -53,6 +53,33 @@ func TestProcReaderRealTable(t *testing.T) {
 	if child == nil || child.PPID != os.Getpid() {
 		t.Fatalf("child: %+v", child)
 	}
+	// Start is the kernel's own: after the test began, before now, and the child began after this test did
+	if self.Start.IsZero() || self.Start.After(time.Now()) || child.Start.Before(self.Start) || time.Since(child.Start) > time.Minute {
+		t.Fatalf("start times: self %v child %v", self.Start, child.Start)
+	}
+	// Fresh reads the table again and sees a process that started after the snapshot
+	late := exec.Command(os.Args[0], "-test.run=TestHelperSleep")
+	late.Env = append(os.Environ(), "WWD_FACTS_HELPER=1")
+	if err := late.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = late.Process.Kill(); _, _ = late.Process.Wait() })
+	if ctx.Fresh == nil {
+		t.Fatal("no Fresh lookup")
+	}
+	fresh, err := ctx.Fresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen bool
+	for _, p := range fresh {
+		if p.PID == late.Process.Pid {
+			seen = p.PPID == os.Getpid() && !p.Start.IsZero()
+		}
+	}
+	if !seen {
+		t.Fatalf("Fresh did not show the process started after the snapshot (%d rows)", len(fresh))
+	}
 	if id, ok := ctx.JobOf(child.PID); !ok || id != "j_smoke" {
 		t.Fatalf("job marker: %q %v", id, ok)
 	}

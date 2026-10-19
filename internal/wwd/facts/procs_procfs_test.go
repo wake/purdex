@@ -219,3 +219,38 @@ func TestProcfsReaderSessionAttribution(t *testing.T) {
 		t.Fatalf("the playwright helper under the session: %+v", owner)
 	}
 }
+
+// Start is the boot time plus the start ticks (10 ms each), and Fresh lists the table again from the stat files alone, with the same
+// start times, and sees a process that appeared after the snapshot without disturbing the reader's own state.
+func TestProcfsReaderStartAndFresh(t *testing.T) {
+	const btime = 1_760_000_000
+	f := newFakeProc(t, btime)
+	f.proc(10, 1, "sh", 0, 500, 1, []string{"sh"}, nil) // started 5 s after boot
+	r := NewProcfsReader(f.root, "")
+	snap, ctx, err := r.Snapshot(time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC))
+	if err != nil || len(snap.Procs) != 1 {
+		t.Fatalf("%d procs err %v", len(snap.Procs), err)
+	}
+	if want := time.Unix(btime+5, 0); !snap.Procs[0].Start.Equal(want) {
+		t.Fatalf("start %v want %v", snap.Procs[0].Start, want)
+	}
+	if ctx.Fresh == nil {
+		t.Fatal("no Fresh lookup")
+	}
+	f.proc(11, 10, "sleep", 0, 1234, 1, []string{"sleep", "0.02"}, nil)
+	got, err := ctx.Fresh()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%d rows err %v", len(got), err)
+	}
+	byPID := map[int]ProcRec{}
+	for _, p := range got {
+		byPID[p.PID] = p
+	}
+	if c := byPID[11]; c.PPID != 10 || c.Name != "sleep" || !c.Start.Equal(time.Unix(btime+12, 340_000_000)) {
+		t.Fatalf("the new child: %+v", c)
+	}
+	// the reader's own state is as the snapshot left it: a second snapshot still works and still sees both
+	if snap, _, err = r.Snapshot(time.Date(2026, 10, 18, 9, 0, 5, 0, time.UTC)); err != nil || len(snap.Procs) != 2 {
+		t.Fatalf("after Fresh: %d procs err %v", len(snap.Procs), err)
+	}
+}
