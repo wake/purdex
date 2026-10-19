@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/snapshot"
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -74,8 +76,11 @@ type Daemon struct {
 	fwd    *http.Client
 	labels labels.Tracker
 
-	factsMu   sync.Mutex
-	lastFacts *wire.Facts // the newest record, for RefreshLabels
+	// labelsMu serializes choosing the record, collecting the labels, updating the tracker and announcing: OnFacts and RefreshLabels
+	// never interleave. It guards lastFacts and lastEarned.
+	labelsMu   sync.Mutex
+	lastFacts  *wire.Facts // the newest record, for RefreshLabels
+	lastEarned []string    // the earned task labels the store last gave
 }
 
 func New(o Options) *Daemon {
@@ -214,25 +219,26 @@ func (d *Daemon) info() wire.Info {
 // only when they really changed.
 func (d *Daemon) OnFacts(f wire.Facts) {
 	d.broker.PublishFacts(f)
-	d.factsMu.Lock()
+	d.labelsMu.Lock()
+	defer d.labelsMu.Unlock()
 	d.lastFacts = &f
-	d.factsMu.Unlock()
 	d.updateLabels(f)
 }
 
 // RefreshLabels recomputes the labels from the newest facts record and announces them if they changed: for when the earned labels
-// changed (a label earned, quarantined or revoked) between two facts records. Before the first record there is nothing to do.
+// changed (a label earned, quarantined or revoked) between two facts records. Before the first record there is nothing to do. It runs
+// under the same lock as OnFacts, so a refresh that started on an older record can never land after a newer record's update.
 func (d *Daemon) RefreshLabels() {
-	d.factsMu.Lock()
-	f := d.lastFacts
-	d.factsMu.Unlock()
-	if f != nil {
-		d.updateLabels(*f)
+	d.labelsMu.Lock()
+	defer d.labelsMu.Unlock()
+	if d.lastFacts != nil {
+		d.updateLabels(*d.lastFacts)
 	}
 }
 
 // updateLabels is the labels of a record plus what no record says: repo:<name> for each prepared clone, host:<alias> (it narrows who
-// may claim a job and grants nothing, spec §7), the task labels held as the reference, and the earned task labels.
+// may claim a job and grants nothing, spec §7), the task labels held as the reference, and the earned task labels. The caller holds
+// labelsMu.
 func (d *Daemon) updateLabels(f wire.Facts) {
 	var extra []string
 	if d.opts.RepoSource != nil {
@@ -256,19 +262,27 @@ func (d *Daemon) updateLabels(f wire.Facts) {
 	}
 }
 
-// earnedLabels is the task labels this host advertises because it earned them; a quarantined one is left out. A store that cannot be
-// read advertises none (a label is never invented), and the next record tries again.
+// earnedLabels is the task labels this host advertises because it earned them; a quarantined one is left out, and so is a label that
+// is not a task label (a damaged row never grants a capability). A store that cannot be read at all keeps the last set it gave, so a
+// passing read error does not revoke every label and announce it; a store that has never answered advertises none (nothing is invented).
+// A table with damaged rows still answers with the rest. The caller holds labelsMu.
 func (d *Daemon) earnedLabels() []string {
 	if d.opts.Earned == nil {
 		return nil
 	}
-	rows, _ := d.opts.Earned.EarnedLabels() // rows that did decode come back even next to an error
-	var out []string
+	rows, err := d.opts.Earned.EarnedLabels()
+	var skipped *store.SkippedRowsError
+	if err != nil && !errors.As(err, &skipped) {
+		log.Printf("wwd: reading the earned labels: %v (keeping the last set)", err)
+		return d.lastEarned
+	}
+	out := []string{}
 	for _, e := range rows {
-		if e.State == wire.EarnedLabelEarned {
+		if e.State == wire.EarnedLabelEarned && wire.ValidTaskLabel(e.Label) {
 			out = append(out, e.Label)
 		}
 	}
+	d.lastEarned = out
 	return out
 }
 

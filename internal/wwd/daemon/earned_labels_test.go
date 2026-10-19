@@ -4,6 +4,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -151,4 +152,93 @@ func TestEarnedLabelsRouteIsLocalOnly(t *testing.T) {
 	if w := do(empty.SocketHandler(), "GET", "/v1/earned-labels", ""); w.Code != 404 {
 		t.Fatalf("no store: %d", w.Code)
 	}
+}
+
+// A passing read error does not revoke what was earned: the last set that was read stays advertised, and no event announces a loss.
+func TestStoreReadErrorKeepsTheLastEarnedSet(t *testing.T) {
+	fe := &fakeEarned{}
+	fe.set(wire.EarnedLabel{Label: "task:purdex/tsc", State: wire.EarnedLabelEarned})
+	d := earnedDaemon(t, Options{Earned: fe})
+	ch, cancel := d.Events().Subscribe(false)
+	defer cancel()
+	d.OnFacts(linuxFacts)
+	recv(t, ch)
+	recv(t, ch)
+
+	fe.mu.Lock()
+	fe.err, fe.rows = errTest, nil
+	fe.mu.Unlock()
+	d.RefreshLabels()
+	none(t, ch)
+	if got := infoOf(t, d).Labels; !slices.Contains(got, "task:purdex/tsc") {
+		t.Fatalf("the label was revoked by a read error: %v", got)
+	}
+	// the store answers again, now without the label: that is a real revoke
+	fe.mu.Lock()
+	fe.err = nil
+	fe.mu.Unlock()
+	d.RefreshLabels()
+	if ev := labelsEvent(t, recv(t, ch)); slices.Contains(ev.Labels, "task:purdex/tsc") {
+		t.Fatalf("%+v", ev)
+	}
+}
+
+// A row that is not a task label is never advertised, whatever the store holds.
+func TestOnlyTaskLabelsAreAdvertisedFromTheStore(t *testing.T) {
+	fe := &fakeEarned{}
+	fe.set(
+		wire.EarnedLabel{Label: "os:darwin", State: wire.EarnedLabelEarned},
+		wire.EarnedLabel{Label: "repo:secret", State: wire.EarnedLabelEarned},
+		wire.EarnedLabel{Label: "task:purdex/tsc", State: wire.EarnedLabelEarned},
+	)
+	d := earnedDaemon(t, Options{Earned: fe})
+	d.OnFacts(wire.Facts{Platform: "linux", Arch: "amd64"})
+	got := infoOf(t, d).Labels
+	if slices.Contains(got, "os:darwin") || slices.Contains(got, "repo:secret") || !slices.Contains(got, "task:purdex/tsc") {
+		t.Fatalf("%v", got)
+	}
+}
+
+// OnFacts and RefreshLabels never interleave: a refresh that read an older record cannot land after a newer record's update. The
+// store read of the refresh is held while OnFacts(B) is called; B must wait for the refresh, so the last labels are B's.
+func TestRefreshCannotOverwriteANewerRecord(t *testing.T) {
+	gate := &gatedEarned{release: make(chan struct{}), entered: make(chan struct{}, 2)}
+	d := earnedDaemon(t, Options{Earned: gate})
+	a := wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("24.14.0")}}
+	b := wire.Facts{Platform: "linux", Arch: "amd64", Tools: wire.Tools{Node: str("25.0.0")}}
+	gate.pass = true
+	d.OnFacts(a)
+	gate.pass = false
+
+	done := make(chan struct{})
+	go func() { d.RefreshLabels(); close(done) }()
+	<-gate.entered // the refresh is inside its store read, holding the lock with record A
+	onB := make(chan struct{})
+	go func() { d.OnFacts(b); close(onB) }()
+	select {
+	case <-onB:
+		t.Fatal("OnFacts ran while a refresh was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate.release)
+	<-done
+	<-onB
+	if got := infoOf(t, d).Labels; !slices.Contains(got, "tool:node25") || slices.Contains(got, "tool:node24") {
+		t.Fatalf("the older record won: %v", got)
+	}
+}
+
+type gatedEarned struct {
+	pass    bool
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (g *gatedEarned) EarnedLabels() ([]wire.EarnedLabel, error) {
+	if g.pass {
+		return nil, nil
+	}
+	g.entered <- struct{}{}
+	<-g.release
+	return nil, nil
 }

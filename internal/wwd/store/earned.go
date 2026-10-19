@@ -11,8 +11,8 @@ import (
 )
 
 func validateEarned(e wire.EarnedLabel) error {
-	if e.Label == "" {
-		return errors.New("store: earned label: empty label")
+	if !wire.ValidTaskLabel(e.Label) {
+		return fmt.Errorf("store: earned label %q is not task:<repo>/<task>", e.Label)
 	}
 	if e.State != wire.EarnedLabelEarned && e.State != wire.EarnedLabelQuarantined {
 		return fmt.Errorf("store: earned label %s: state %q", e.Label, e.State)
@@ -80,7 +80,7 @@ func (s *Store) EarnedLabels() ([]wire.EarnedLabel, error) {
 		if err := rows.Scan(&e.Label, &fp, &e.Snapshot, &ms, &e.State); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(fp), &e.Fingerprint); err != nil {
+		if !wire.ValidTaskLabel(e.Label) || json.Unmarshal([]byte(fp), &e.Fingerprint) != nil {
 			skipped = append(skipped, e.Label)
 			continue
 		}

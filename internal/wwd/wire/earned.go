@@ -1,6 +1,9 @@
 package wire
 
-import "time"
+import (
+	"regexp"
+	"time"
+)
 
 // Earned label states (spec §7). An earned label is advertised; a quarantined one is kept on record and is not, until the task is
 // qualified again.
@@ -25,3 +28,9 @@ type EarnedLabelList struct {
 	Host   string        `json:"host"`
 	Labels []EarnedLabel `json:"labels"`
 }
+
+var reTaskLabel = regexp.MustCompile(`^task:[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// ValidTaskLabel says whether s is a task label, task:<repo>/<task>: the only kind a host earns. Anything else in an earned_labels row
+// (an os:, tool: or repo: label, blanks, an over-long value) is damage and is neither stored nor advertised.
+func ValidTaskLabel(s string) bool { return reTaskLabel.MatchString(s) }

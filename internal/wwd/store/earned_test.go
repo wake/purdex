@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,8 +80,11 @@ func TestEarnedLabelsListIsNotNilAndOrdered(t *testing.T) {
 func TestEarnedLabelRefusesBadRows(t *testing.T) {
 	s := openTemp(t)
 	for name, e := range map[string]wire.EarnedLabel{
-		"empty label": {State: wire.EarnedLabelEarned},
-		"bad state":   {Label: "x", State: "maybe"},
+		"empty label":      {State: wire.EarnedLabelEarned},
+		"not a task label": {Label: "os:linux", State: wire.EarnedLabelEarned},
+		"blanks":           {Label: "task:a b/c", State: wire.EarnedLabelEarned},
+		"over long":        {Label: "task:a/" + strings.Repeat("x", 65), State: wire.EarnedLabelEarned},
+		"bad state":        {Label: "x", State: "maybe"},
 	} {
 		if err := s.SaveEarnedLabel(e); err == nil {
 			t.Errorf("%s accepted", name)
@@ -100,6 +104,19 @@ func TestEarnedLabelsSkipsDamagedRow(t *testing.T) {
 	got, err := s.EarnedLabels()
 	var se *SkippedRowsError
 	if !errors.As(err, &se) || se.N != 1 || len(got) != 1 || got[0].Label != "task:a/ok" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A row that is not a task label (a damaged or planted one) is skipped on the way out like any other damaged row.
+func TestEarnedLabelsSkipsRowsThatAreNotTaskLabels(t *testing.T) {
+	s := openTemp(t)
+	if _, err := s.DB().Exec(`INSERT INTO earned_labels (label, fingerprint, snapshot, granted_ms, state) VALUES ('os:linux', '{}', '', 0, 'earned')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.EarnedLabels()
+	var se *SkippedRowsError
+	if !errors.As(err, &se) || se.N != 1 || len(got) != 0 {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
