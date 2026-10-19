@@ -10,6 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, selectPersonasV1 } from '../../stores/useNexHostStore'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
+import { backfillHosts } from './persona-backfill'
 import { startSourcePin } from '../../stores/usePersonaSourceStore'
 
 export const PERSONAS_EVENT_TYPE = 'hostconfig.personas'
@@ -32,7 +33,13 @@ export function personasSupported(hostId: string): boolean {
 
 /** Loads now when the host's fresh capabilities declare `personas.v1`; otherwise does nothing. */
 export async function loadPersonasIfSupported(hostId: string): Promise<void> {
-  if (freshSupported(useNexHostStore.getState(), hostId)) await usePersonaStore.getState().load(hostId)
+  if (freshSupported(useNexHostStore.getState(), hostId)) await loadThenBackfill(hostId)
+}
+
+/** A read can be the one that completes the picture (the source or a host just arrived), so hosts are compared after it. */
+async function loadThenBackfill(hostId: string): Promise<void> {
+  await usePersonaStore.getState().load(hostId)
+  try { await backfillHosts() } catch { /* the next load tries again; a failed copy must not break loading */ }
 }
 
 /** The event carries only `{revision}`; the collection is re-read whole. */
@@ -61,7 +68,7 @@ export function startPersonaLoader(): () => void {
   const stopNex = useNexHostStore.subscribe((next, prev) => {
     for (const hostId of Object.keys(next.byHost)) {
       if (next.byHost[hostId] === prev.byHost[hostId]) continue
-      if (freshSupported(next, hostId)) void usePersonaStore.getState().load(hostId)
+      if (freshSupported(next, hostId)) void loadThenBackfill(hostId)
       // A refetch that no longer declares it: the daemon was downgraded.
       else if ((next.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectPersonasV1(hostId)(prev)) usePersonaStore.getState().forget(hostId)
     }

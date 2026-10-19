@@ -47,17 +47,18 @@ async function pushOne(hostId: string, items: Persona[]): Promise<Push> {
 
 /**
  * `items` were just written to the source at `revision`. Returns the items and revision the source holds afterwards
- * (they change when a role was taken in) and what happened to each other host.
+ * (they change when a role was taken in) and what happened to each other host. `only` limits the copy to one host
+ * (the backfill of a host that just connected).
  */
 export async function mirrorPersonas(
-  sourceId: string, items: Persona[], revision: number,
+  sourceId: string, items: Persona[], revision: number, only?: string,
 ): Promise<{ report: MirrorReport; items: Persona[]; revision: number }> {
   let current = items
   let rev = revision
   const pulled: string[] = []
   const failed = new Map<string, string>()
   let mirrored: string[] = []
-  const targets = mirrorTargets(sourceId)
+  const targets = mirrorTargets(sourceId).filter((id) => only === undefined || id === only)
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     const live = targets.filter((id) => !failed.has(id))

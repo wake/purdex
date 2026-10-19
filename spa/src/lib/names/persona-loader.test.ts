@@ -6,7 +6,10 @@ vi.mock('../../stores/usePersonaStore', () => {
   return { usePersonaStore: { getState: () => ({ load, forget }) } }
 })
 
+vi.mock('./persona-backfill', () => ({ backfillHosts: vi.fn(async () => {}) }))
+
 import { usePersonaStore } from '../../stores/usePersonaStore'
+import { backfillHosts } from './persona-backfill'
 import { useNexHostStore, startNexHostInvalidation } from '../../stores/useNexHostStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { loadPersonasIfSupported, handlePersonasEvent, startPersonaLoader } from './persona-loader'
@@ -32,6 +35,12 @@ describe('persona loader', () => {
     setEntry('h1', ['personas.v1'])
     await loadPersonasIfSupported('h1')
     expect(load()).toHaveBeenCalledWith('h1')
+  })
+
+  it('compares the hosts after a read, so a host that arrived late is brought up to the source', async () => {
+    setEntry('h1', ['personas.v1'])
+    await loadPersonasIfSupported('h1')
+    expect(backfillHosts).toHaveBeenCalled()
   })
 
   it('touches nothing on a daemon without the capability', async () => {
