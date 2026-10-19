@@ -164,6 +164,23 @@ describe('the overview table', () => {
     expect(within(air19).getByTestId('pool-host-version').textContent).toBe('—')
   })
 
+  it('a fleet error with the pool silent says 「Error」 in the status word, not 「Offline」', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+    useFleetStore.setState((s) => ({ snapshot: { ...s.snapshot!, hosts: { ...s.snapshot!.hosts, 'p-air19': probe('p-air19', 'air19', { status: 'error', fast: null }) } } }) as never)
+    render(<PoolHostsSection />)
+    await flush()
+    const air19 = screen.getByTestId('pool-host-row-p-air19')
+    expect(within(air19).getByTestId('pool-host-status').textContent).toBe('Error')
+  })
+
+  it('a fallback row shows when the pool last read the host when it knows, the short words when it does not', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+    render(<PoolHostsSection />)
+    await flush()
+    const status = within(screen.getByTestId('pool-host-row-d-air26')).getByTestId('pool-host-status').textContent ?? ''
+    expect(status).toMatch(/^wwd is not answering( \(since .+\))?$/)
+  })
+
   it('a version behind the newest is marked, the newest and the unknown are not', async () => {
     livePool()
     render(<PoolHostsSection />)

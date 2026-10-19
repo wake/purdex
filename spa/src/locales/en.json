@@ -3186,7 +3186,6 @@
   "pool_hosts.col.worker": "Worker",
   "pool_hosts.col.headroom": "Takes",
   "pool_hosts.col.version": "wwd",
-  "pool_hosts.fallback_short": "wwd not answering",
   "pool_hosts.version_behind": "Older than the newest wwd in the pool",
   "pool_hosts.old_daemon": "The daemon is older: upgrade it to see the resource pool.",
   "pool_hosts.dot.live": "Read by wwd",

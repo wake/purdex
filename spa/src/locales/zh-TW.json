@@ -3186,7 +3186,6 @@
   "pool_hosts.col.worker": "Worker",
   "pool_hosts.col.headroom": "可接",
   "pool_hosts.col.version": "wwd",
-  "pool_hosts.fallback_short": "wwd 沒有回應",
   "pool_hosts.version_behind": "比資源池裡最新的 wwd 舊",
   "pool_hosts.old_daemon": "daemon 版本較舊，升級後才看得到資源池資訊。",
   "pool_hosts.dot.live": "wwd 讀得到",
