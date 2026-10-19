@@ -22,17 +22,17 @@ export const zoneOf = (v: unknown): PoolZone => ((ZONES as readonly unknown[]).i
 
 const slots = (v: unknown): Slots | null => (isRec(v) && num(v.heavy) && num(v.light) ? { heavy: v.heavy, light: v.light } : null)
 
+// Strict: a missing or malformed pair of slots would read as "no capacity", a missing owner_rule as "no rule".
 function worker(v: unknown): PoolWorker | null {
-  if (!isRec(v) || typeof v.enabled !== 'boolean') return null
-  return { enabled: v.enabled, slots: slots(v.slots) ?? { heavy: 0, light: 0 }, owner_rule: str(v.owner_rule) ? v.owner_rule : '' }
+  const own = isRec(v) ? slots(v.slots) : null
+  if (!isRec(v) || typeof v.enabled !== 'boolean' || !own || !str(v.owner_rule)) return null
+  return { enabled: v.enabled, slots: own, owner_rule: v.owner_rule }
 }
 
-// Facts are strict about slots: a missing pair would read as "no capacity". (A host row without facts falls back, see `host`.)
 function factsWorker(v: unknown): FactsWorker | null {
   const w = worker(v)
-  const own = isRec(v) ? slots(v.slots) : null
   const running = isRec(v) ? slots(v.running) : null
-  return w && own && running ? { ...w, running } : null
+  return w && running ? { ...w, running } : null
 }
 
 function proc(p: unknown): PoolProc | null {
@@ -44,16 +44,24 @@ function proc(p: unknown): PoolProc | null {
   return { pid: p.pid, name: p.name, cpu_pct: p.cpu_pct, mem_mb: p.mem_mb, mem_kind: str(p.mem_kind) ? p.mem_kind : 'rss', owner }
 }
 
-function list<T>(v: unknown, one: (x: unknown) => T | null): T[] {
-  return Array.isArray(v) ? v.flatMap((x) => { const r = one(x); return r === null ? [] : [r] }) : []
+/** A list the wire must carry: an array, or null (a Go nil slice) read as empty. Anything else — including absent — is undefined. A malformed element is dropped. */
+function list<T>(v: unknown, one: (x: unknown) => T | null): T[] | undefined {
+  if (v === null) return []
+  return Array.isArray(v) ? v.flatMap((x) => { const r = one(x); return r === null ? [] : [r] }) : undefined
+}
+
+/** As `list`, but one malformed element makes the whole list undefined: a shorter disk or exception list would be read as the truth. */
+function strictList<T>(v: unknown, one: (x: unknown) => T | null): T[] | undefined {
+  const out = list(v, one)
+  return out && out.length === (Array.isArray(v) ? v.length : 0) ? out : undefined
 }
 
 const resident = (r: unknown): PoolResident | null =>
   isRec(r) && str(r.session) && str(r.kind) && num(r.count) && num(r.mem_mb) ? { session: r.session, kind: r.kind, count: r.count, mem_mb: r.mem_mb } : null
 
 const disk = (d: unknown): PoolDisk | null =>
-  isRec(d) && str(d.mount) && num(d.free_gb) && num(d.used_pct)
-    ? { mount: d.mount, free_gb: d.free_gb, used_pct: d.used_pct, total_bytes: num(d.total_bytes) ? d.total_bytes : 0, avail_bytes: num(d.avail_bytes) ? d.avail_bytes : 0 }
+  isRec(d) && str(d.mount) && num(d.free_gb) && num(d.used_pct) && num(d.total_bytes) && num(d.avail_bytes)
+    ? { mount: d.mount, free_gb: d.free_gb, used_pct: d.used_pct, total_bytes: d.total_bytes, avail_bytes: d.avail_bytes }
     : null
 
 function exception(e: unknown): PoolException | null {
@@ -78,29 +86,33 @@ export function parseFacts(v: unknown): PoolFacts | null {
   if (at === null || !str(v.host_id) || !str(v.alias) || !isRec(cpu) || !isRec(mem) || !isRec(derived) || !w) return null
   const headroom = slots(derived.headroom)
   if (!num(cpu.ncpu) || !num(cpu.load1) || !num(cpu.load5) || !num(cpu.idle_pct) || !num(mem.total_mb) || !num(mem.available_mb) || !headroom) return null
+  const disks = strictList(v.disk, disk)
+  const procs = list(v.procs, proc)
+  const residents = strictList(v.residents, resident)
+  const exceptions = strictList(v.exceptions, exception)
+  if (!str(v.platform) || !str(v.arch) || !str(v.os_version) || !num(mem.pressure) || !num(derived.sessions_room)) return null
+  if (!disks || !procs || !residents || !exceptions || !isRec(v.tools)) return null
   const tools: PoolFacts['tools'] = {}
-  if (isRec(v.tools)) {
-    for (const [k, t] of Object.entries(v.tools)) {
-      if (t === null || str(t)) tools[k] = t
-      else if (Array.isArray(t) && t.every(str)) tools[k] = t
-    }
+  for (const [k, t] of Object.entries(v.tools)) {
+    if (t === null || str(t)) tools[k] = t
+    else if (Array.isArray(t) && t.every(str)) tools[k] = t
   }
   return {
     host_id: v.host_id, alias: v.alias, at,
-    platform: str(v.platform) ? v.platform : '', arch: str(v.arch) ? v.arch : '', os_version: str(v.os_version) ? v.os_version : '',
+    platform: v.platform, arch: v.arch, os_version: v.os_version,
     cpu: { ncpu: cpu.ncpu, load1: cpu.load1, load5: cpu.load5, idle_pct: cpu.idle_pct },
     mem: {
-      total_mb: mem.total_mb, available_mb: mem.available_mb, pressure: num(mem.pressure) ? mem.pressure : 0,
+      total_mb: mem.total_mb, available_mb: mem.available_mb, pressure: mem.pressure,
       page_out_rate: numOrNull(mem.page_out_rate), swap_out_rate: numOrNull(mem.swap_out_rate),
       swap_used_mb: numOrNull(mem.swap_used_mb), compressor_mb: numOrNull(mem.compressor_mb), psi: psi(mem.psi),
     },
-    disk: list(v.disk, disk),
-    procs: list(v.procs, proc),
-    residents: list(v.residents, resident),
+    disk: disks,
+    procs,
+    residents,
     tools,
     owner: owner(v.owner),
-    exceptions: list(v.exceptions, exception),
-    derived: { zone: zoneOf(derived.zone), headroom, sessions_room: num(derived.sessions_room) ? derived.sessions_room : 0 },
+    exceptions,
+    derived: { zone: zoneOf(derived.zone), headroom, sessions_room: derived.sessions_room },
     worker: w,
     ...(isRec(v.queue) && num(v.queue.queued) ? { queue: { queued: v.queue.queued } } : {}),
   }
@@ -122,18 +134,19 @@ function load(v: unknown): PoolLoad | undefined {
 function host(v: unknown): PoolHost | null {
   if (!isRec(v) || !isRec(v.info)) return null
   const { info } = v
-  if (!str(info.host_id) || !str(info.alias)) return null
-  const w = worker(v.worker) ?? worker(info.worker) ?? { enabled: false, slots: { heavy: 0, light: 0 }, owner_rule: '' }
+  if (!str(info.host_id) || !str(info.alias) || !str(info.version) || !num(info.proto) || !str(info.platform) || !str(info.arch)) return null
+  // worker, labels and reachable are what the cell says about capacity and reach: absent or mistyped they would read as "off, none, down".
+  const w = worker(v.worker)
+  const labels = v.labels === null ? [] : strings(v.labels)
+  if (!w || !labels || typeof v.reachable !== 'boolean') return null
   const hr = reasons(v.headroom_reasons)
   const ld = load(v.load)
   return {
-    host_id: info.host_id, alias: info.alias,
-    version: str(info.version) ? info.version : '', proto: num(info.proto) ? info.proto : 0,
-    platform: str(info.platform) ? info.platform : '', arch: str(info.arch) ? info.arch : '',
+    host_id: info.host_id, alias: info.alias, version: info.version, proto: info.proto, platform: info.platform, arch: info.arch,
     facts: parseFacts(v.facts),
     worker: w,
-    labels: strings(v.labels) ?? [],
-    reachable: v.reachable === true,
+    labels,
+    reachable: v.reachable,
     ...(hr ? { headroom_reasons: hr } : {}),
     ...(ld ? { load: ld } : {}),
   }
@@ -142,7 +155,9 @@ function host(v: unknown): PoolHost | null {
 /** `GET /api/pool/hosts`. */
 export function parseHostsAnswer(v: unknown): PoolHost[] | null {
   if (!isRec(v) || !Array.isArray(v.hosts)) return null
-  return list(v.hosts, host)
+  const hosts = list(v.hosts, host) ?? []
+  // every row malformed: the answer is outside the contract (the caller reads it as wwd_bad_response), not an empty pool
+  return v.hosts.length > 0 && hosts.length === 0 ? null : hosts
 }
 
 function point(p: unknown): SeriesPoint | null {
@@ -158,6 +173,7 @@ function point(p: unknown): SeriesPoint | null {
 
 /** `GET /api/pool/facts/series`. */
 export function parseSeries(v: unknown): PoolSeries | null {
-  if (!isRec(v) || !str(v.step) || !Array.isArray(v.points)) return null
-  return { step: v.step, points: list(v.points, point), truncated: v.truncated === true }
+  if (!isRec(v) || (v.step !== '1m' && v.step !== '5s') || typeof v.truncated !== 'boolean') return null
+  const points = list(v.points, point)
+  return points ? { step: v.step, points, truncated: v.truncated } : null
 }

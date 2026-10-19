@@ -89,7 +89,62 @@ describe('hosts answer', () => {
   })
 })
 
+// R2 (attack): a response that drifted from the wire must not turn into a believable wrong state.
+describe('required fields', () => {
+  const row = (over: Record<string, unknown>) => ({ ...hostsJson.hosts[0], ...over })
+  const drop = (o: Record<string, unknown>, k: string) => { const { [k]: _gone, ...rest } = o; void _gone; return rest }
+
+  it.each([['worker', undefined], ['worker', { enabled: 'yes' }], ['reachable', 'true'], ['reachable', undefined], ['labels', 'os:darwin']])(
+    'a host row with %s = %j is dropped, not shown as unreachable or zero capacity', (k, v) => {
+      const bad = v === undefined ? drop(row({}), k) : row({ [k]: v })
+      const a = parseHostsAnswer({ hosts: [bad, row({ info: { ...hostsJson.hosts[0].info, host_id: 'h-ok', alias: 'ok' } })] })!
+      expect(a.map((h) => h.alias)).toEqual(['ok'])
+    })
+
+  it('worker slots missing in a host row drop the row', () => {
+    expect(parseHostsAnswer({ hosts: [row({ worker: { enabled: true, owner_rule: '' } }), row({})] })!).toHaveLength(1)
+  })
+
+  it('an answer whose every row is malformed is unreadable, so the caller treats it as wwd_bad_response', () => {
+    expect(parseHostsAnswer({ hosts: [{ nope: 1 }] })).toBeNull()
+    expect(parseHostsAnswer({ hosts: [] })).toEqual([])
+  })
+
+  it('null labels read as none', () => {
+    expect(parseHostsAnswer({ hosts: [row({ labels: null })] })![0].labels).toEqual([])
+  })
+
+  it.each(['platform', 'arch', 'os_version', 'tools', 'disk', 'procs', 'residents', 'exceptions'])('facts without %s are null', (k) => {
+    expect(parseFacts(drop(darwinJson, k))).toBeNull()
+  })
+  it('facts with derived.sessions_room or mem.pressure missing are null', () => {
+    expect(parseFacts({ ...darwinJson, derived: drop(darwinJson.derived, 'sessions_room') })).toBeNull()
+    expect(parseFacts({ ...darwinJson, mem: drop(darwinJson.mem, 'pressure') })).toBeNull()
+  })
+  it('a disk without total_bytes or avail_bytes is null facts', () => {
+    expect(parseFacts({ ...darwinJson, disk: [drop(darwinJson.disk[0], 'total_bytes')] })).toBeNull()
+  })
+  it('the lists the wire may send as null (Go nil slices) read as empty', () => {
+    const f = parseFacts({ ...darwinJson, disk: null, procs: null, residents: null, exceptions: null, tools: { ...darwinJson.tools, php: null } })!
+    expect([f.disk, f.procs, f.residents, f.exceptions]).toEqual([[], [], [], []])
+    expect(f.tools.php).toBeNull()
+  })
+})
+
 describe('series', () => {
+  const point = { at: '2026-10-18T05:00:00Z', zone: 'normal', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 0, page_out_rate: null, disk_max_used_pct: null, headroom: { heavy: 1, light: 1 } }
+  it('truncated must be a boolean', () => {
+    expect(parseSeries({ step: '1m', points: [point] })).toBeNull()
+    expect(parseSeries({ step: '1m', points: [point], truncated: 'no' })).toBeNull()
+  })
+  it('step must be 1m or 5s', () => {
+    expect(parseSeries({ step: '1h', points: [point], truncated: false })).toBeNull()
+    expect(parseSeries({ step: '5s', points: [point], truncated: true })!.truncated).toBe(true)
+  })
+  it('points may be null (an empty series)', () => {
+    expect(parseSeries({ step: '1m', points: null, truncated: false })!.points).toEqual([])
+  })
+
   it('points become ms; a malformed point is dropped', () => {
     const s = parseSeries({ step: '1m', truncated: false, points: [
       { at: '2026-10-18T05:00:00Z', zone: 'warning', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 1, page_out_rate: null, disk_max_used_pct: 80.5, headroom: { heavy: 0, light: 1 } },
