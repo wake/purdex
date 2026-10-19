@@ -21,7 +21,10 @@ export function FirstSaveConfirm({ hostId, onConfirm, onCancel }: Props) {
   // Read again so the number is the host's current one; the subscription below redraws when it lands.
   useEffect(() => { void usePeerStore.getState().refresh(hostId) }, [hostId])
   const entry = usePeerStore((s) => s.byHost[hostId])
-  const count = entry ? liveConversationCount(hostId) : null
+  // A count of 0 is not shown as a number: the inventory lists session rows, and the daemon also renames conversations
+  // that have none, so "0 conversations" would promise more than is known.
+  const known = entry ? liveConversationCount(hostId) : null
+  const count = known !== null && known > 0 ? known : null
   const host = hostLabel(hostId, hostLookOf(hostId))
   return (
     <div className="rounded-md border border-border-default p-3" data-testid="persona-first-save">

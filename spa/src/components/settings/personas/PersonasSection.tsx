@@ -13,7 +13,6 @@ import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, currentSource, usePersonaStore } from '../../../stores/usePersonaStore'
 import { useSourceId } from '../../../stores/usePersonaSourceStore'
-import { usePeerStore } from '../../../stores/usePeerStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
   beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
@@ -21,7 +20,6 @@ import {
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from '../../../lib/names/persona-limits'
 import { editBase, PersonaStaleError, PersonaValidationError, savePersonas, type EditBase } from '../../../lib/names/persona-save'
 import type { Persona } from '../../../lib/names/persona-types'
-import { liveConversationCount } from '../../../lib/names/live-conversations'
 import { FirstSaveConfirm } from './FirstSaveConfirm'
 import { PersonaForm } from './PersonaForm'
 import { PersonaList } from './PersonaList'
@@ -137,16 +135,14 @@ export function PersonasSection() {
     const stamped = { ...draft, updated_at: Date.now() }
     const next = editing.key === '' ? [...items, stamped] : items.map((p) => (p.code === editing.key ? stamped : p))
     // The first persona on a source that has none: the daemon starts naming its live conversations after personas. Asked
-    // once; a host with no conversation to rename (a count of 0) has nothing to warn about.
+    // once, and always: the number shown comes from the inventory of session rows, but the daemon renames every live
+    // conversation, including ones without a session row, so even a count of 0 does not prove nobody is renamed.
+    // Nothing is awaited here: the lock below is taken in the same turn as the click, so the form and the source cannot
+    // change under a save that is waiting.
     const target = editing.base?.hostId ?? fallbackHostId ?? ''
     if (!confirmed && items.length === 0 && next.length > 0 && target !== '') {
-      // The list is not refreshed on a timer: a count of 0 read earlier may be old, and a conversation opened since would
-      // be renamed without a word. Ask the host again first; a failed or partial answer counts as "unknown", which asks.
-      await usePeerStore.getState().refresh(target)
-      if (liveConversationCount(target) !== 0) {
-        setConfirm({ hostId: target })
-        return
-      }
+      setConfirm({ hostId: target })
+      return
     }
     setConfirm(null)
     if (!beginSave()) return

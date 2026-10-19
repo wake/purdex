@@ -286,6 +286,12 @@ describe('PersonasSection', () => {
         hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
         runtime: { h1: { status: 'connected' } as never, h2: { status: 'connected' } as never },
       })
+      useNexHostStore.setState({
+        byHost: {
+          h1: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never,
+          h2: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never,
+        },
+      })
       seed(['hiro'])
       render(<PersonasSection />)
       const select = screen.getByTestId('persona-source-select') as HTMLSelectElement
@@ -293,6 +299,23 @@ describe('PersonasSection', () => {
       expect(select.value).toBe('h1')
       fireEvent.change(select, { target: { value: 'h2' } })
       expect(usePersonaSourceStore.getState().hostId).toBe('h2')
+    })
+
+    it('does not offer a host that does not declare personas.v1', () => {
+      useHostStore.setState({
+        hosts: { h1: { id: 'h1' } as never, h2: { id: 'h2' } as never }, hostOrder: ['h1', 'h2'],
+        runtime: { h1: { status: 'connected' } as never, h2: { status: 'connected' } as never },
+      })
+      useNexHostStore.setState({
+        byHost: {
+          h1: { phase: 'ready', daemonCapabilities: ['personas.v1'], fetchedAt: 1 } as never,
+          h2: { phase: 'ready', daemonCapabilities: [], fetchedAt: 1 } as never,
+        },
+      })
+      seed(['hiro'])
+      render(<PersonasSection />)
+      const select = screen.getByTestId('persona-source-select') as HTMLSelectElement
+      expect(Array.from(select.options).map((o) => o.value)).toEqual(['h1'])
     })
 
     it('says the source is offline and shows the stand-in copy without editing', () => {
@@ -362,7 +385,7 @@ describe('PersonasSection', () => {
       expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
     })
 
-    it('asks the host again before skipping: a count of 0 read earlier may be old', async () => {
+    it('shows the number the host reports once it has been read again', async () => {
       seed([])
       peers([])
       // between the old read and now, two conversations opened
@@ -375,7 +398,7 @@ describe('PersonasSection', () => {
       })
       render(<PersonasSection />)
       fillNew()
-      expect((await screen.findByTestId('persona-first-save-text')).textContent).toContain('2')
+      await waitFor(() => expect(screen.getByTestId('persona-first-save-text').textContent).toContain('2'))
       expect(savePersonas).not.toHaveBeenCalled()
     })
 
@@ -414,14 +437,13 @@ describe('PersonasSection', () => {
       expect(screen.queryByTestId('persona-first-save')).toBeNull()
     })
 
-    it('does not ask when there is no conversation to rename', async () => {
+    it('still asks, with no number, when the list shows no conversation: the daemon also renames ones without a session row', async () => {
       seed([])
       peers([''])
-      vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
       render(<PersonasSection />)
       fillNew()
-      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
-      expect(screen.queryByTestId('persona-first-save')).toBeNull()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
+      expect(savePersonas).not.toHaveBeenCalled()
     })
 
     it('does not ask again once the source has personas', async () => {

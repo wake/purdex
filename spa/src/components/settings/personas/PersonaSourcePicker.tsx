@@ -4,6 +4,7 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
+import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { usePersonaSourceStore } from '../../../stores/usePersonaSourceStore'
 
 interface Props {
@@ -19,8 +20,12 @@ export function PersonaSourcePicker({ sourceId, offline, disabled }: Props) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const hosts = useHostStore((s) => s.hosts)
   const setSource = usePersonaSourceStore((s) => s.setSource)
+  const nex = useNexHostStore((s) => s.byHost)
   const label = (id: string) => hostLabel(id, hostLookOf(id))
-  const ids = hostOrder.filter((id) => hosts[id])
+  // A host that does not declare `personas.v1` is neither read nor written (spec §4.3), so it cannot be a source. The
+  // current choice stays listed so the select never shows a value it does not have.
+  const serves = (id: string) => (nex[id]?.fetchedAt ?? 0) > 0 && selectPersonasV1(id)({ byHost: nex })
+  const ids = hostOrder.filter((id) => hosts[id] && (serves(id) || id === sourceId))
   if (sourceId === null || ids.length === 0) return null
   return (
     <div className="mt-3" data-testid="persona-source">
