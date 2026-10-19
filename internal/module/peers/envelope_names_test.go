@@ -18,12 +18,17 @@ type envelopeHistory struct {
 	codes []string
 	err   error
 	limit int
+	// left is how long before its deadline the Familiar call's context had (0: it had none)
+	left time.Duration
 }
 
 func (h *envelopeHistory) Leads(context.Context) ([]store.NameLead, error) { return nil, nil }
 func (h *envelopeHistory) Pairs(context.Context) ([]store.NamePair, error) { return nil, nil }
-func (h *envelopeHistory) Familiar(_ context.Context, limit int) ([]string, error) {
+func (h *envelopeHistory) Familiar(ctx context.Context, limit int) ([]string, error) {
 	h.limit = limit
+	if d, ok := ctx.Deadline(); ok {
+		h.left = time.Until(d)
+	}
 	return h.codes, h.err
 }
 
@@ -51,6 +56,24 @@ func TestLocalEnvelope_PublishesTheFamiliarSet(t *testing.T) {
 	}
 	if h.limit != ipeers.MaxFamiliar || ipeers.MaxFamiliar != 64 {
 		t.Fatalf("asked the history for %d codes, want 64", h.limit)
+	}
+}
+
+// The familiar read has a bound of its own and does not borrow what is left of the inventory's budget: an inventory that used its
+// budget up would otherwise lose the read, publish no names, and the readers (who take no names for an older daemon's empty set)
+// would drop this host's valid set. Mutation gate: read under the inventory's context → red.
+func TestLocalEnvelope_TheFamiliarReadHasItsOwnBound(t *testing.T) {
+	h := &envelopeHistory{codes: []string{"hiro"}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(t, c, &fakeSessions{}, &fakeOwners{}, t.TempDir(), allLiveLiveness(fixture76973ProcStart), &fakeClock{times: []time.Time{time.Unix(0, 0)}}, time.Second)
+	m.budget = 400 * time.Millisecond // shorter than the name store's bound: a read under the inventory's context would have less
+	m.WithNameHistory(h)
+	env := m.localEnvelope(t.Context(), "mlab:abc123", "mlab")
+	if !env.OK || env.Names == nil {
+		t.Fatalf("envelope = %+v, want ok with names", env)
+	}
+	if h.left < 700*time.Millisecond || h.left > namerTimeout {
+		t.Fatalf("the read had %s left, want a bound of its own near %s, more than the inventory's 400ms budget leaves", h.left, namerTimeout)
 	}
 }
 

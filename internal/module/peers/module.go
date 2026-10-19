@@ -306,7 +306,7 @@ type Module struct {
 	// aliasRetentionFirst / aliasRetentionEvery override the retention loop's timing, and aliasLiveRefs replaces its inventory
 	// read (tests; alias_retention.go). Zero / nil in production.
 	aliasRetentionFirst, aliasRetentionEvery time.Duration
-	aliasLiveRefs                            func(context.Context) (map[string]bool, bool)
+	aliasLiveRefs                            func(context.Context) (liveRows, bool)
 }
 
 // New constructs a peers Module with production defaults over audit (the
@@ -925,17 +925,21 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		LineageUnavailable:   lineageUnavailable,
 		// Not partial, like lineage_unavailable: every row shown is whole.
 		ExecutionsUnavailable: execsUnavailable,
-		Names:                 m.localNames(invCtx),
+		Names:                 m.localNames(ctx),
 	}
 }
 
 // localNames is what this host's name history shares in its envelope (name pool v2 spec §6.1): the last ipeers.MaxFamiliar codes
 // it has seen as a lead or a lead's member. nil without a history, or when it cannot be read (logged): a reader takes that as an
-// empty set, and the rows, which owe the history nothing, stay whole.
+// empty set, and the rows, which owe the history nothing, stay whole. ctx is the caller's, not the inventory's budget: the read
+// has the name store's bound (namerTimeout), because a budget the rows already used up would fail it, and a host that publishes
+// no names reads as an older daemon's empty set and drops its valid one.
 func (m *Module) localNames(ctx context.Context) *ipeers.NamesInfo {
 	if m.nameHistory == nil {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, namerTimeout)
+	defer cancel()
 	codes, err := m.nameHistory.Familiar(ctx, ipeers.MaxFamiliar)
 	if err != nil {
 		m.logf("peers: inventory: read the familiar set, publishing no names: %v", err)

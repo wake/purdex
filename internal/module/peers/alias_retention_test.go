@@ -55,9 +55,9 @@ func TestRetainAliases_AnAliasWithALiveSuccessorStaysAndADeadOneGoes(t *testing.
 	m, meta := aliasesOf(t)
 	later := time.Now().Add(31 * 24 * time.Hour)
 	m.now = func() time.Time { return later }
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) {
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) {
 		// A is live itself; B is only a previous ref of a live row; C has nothing
-		return map[string]bool{ipeers.RefID(retSidA): true, ipeers.RefID(retSidB): true}, true
+		return liveRows{own: map[string]map[string]bool{ipeers.RefID(retSidA): {retSidA: true}}, taken: map[string]bool{ipeers.RefID(retSidB): true}}, true
 	}
 	m.retainAliases(context.Background())
 	got := aliasNames(t, meta)
@@ -66,10 +66,28 @@ func TestRetainAliases_AnAliasWithALiveSuccessorStaysAndADeadOneGoes(t *testing.
 	}
 	// 31 days after that stamp the same two are dead too
 	m.now = func() time.Time { return later.Add(31 * 24 * time.Hour) }
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) { return map[string]bool{}, true }
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) { return liveRows{}, true }
 	m.retainAliases(context.Background())
 	if got := aliasNames(t, meta); len(got) != 0 {
 		t.Fatalf("aliases = %v, want none", got)
+	}
+}
+
+// Two sessions can share a ref (a ref is 6 base36 digits of a hash). A live row that carries the dead alias's ref but is another
+// session does not keep the alias alive: it would route the old address to a stranger forever. A row of the alias's own session
+// does. Mutation gate: match on the ref alone → red.
+func TestRetainAliases_ALiveStrangerWithTheSameRefDoesNotKeepAnAlias(t *testing.T) {
+	m, meta := aliasesOf(t)
+	m.now = func() time.Time { return time.Now().Add(31 * 24 * time.Hour) }
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) {
+		return liveRows{own: map[string]map[string]bool{
+			ipeers.RefID(retSidA): {"some-other-session": true}, // A's ref, not A
+			ipeers.RefID(retSidB): {retSidB: true},              // B itself
+		}}, true
+	}
+	m.retainAliases(context.Background())
+	if got := aliasNames(t, meta); len(got) != 1 || got[0] != "oldb" {
+		t.Fatalf("aliases = %v, want only oldb", got)
 	}
 }
 
@@ -78,7 +96,7 @@ func TestRetainAliases_NothingGoesBeforeThirtyDays(t *testing.T) {
 	m, meta := aliasesOf(t)
 	later := time.Now().Add(29 * 24 * time.Hour)
 	m.now = func() time.Time { return later }
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) { return map[string]bool{}, true }
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) { return liveRows{}, true }
 	m.retainAliases(context.Background())
 	if got := aliasNames(t, meta); len(got) != 3 {
 		t.Fatalf("aliases = %v, want all three", got)
@@ -90,7 +108,7 @@ func TestRetainAliases_NothingGoesBeforeThirtyDays(t *testing.T) {
 func TestRetainAliases_AnInventoryThatCannotVouchDeletesNothing(t *testing.T) {
 	m, meta := aliasesOf(t)
 	m.now = func() time.Time { return time.Now().Add(90 * 24 * time.Hour) }
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) { return nil, false }
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) { return liveRows{}, false }
 	m.retainAliases(context.Background())
 	if got := aliasNames(t, meta); len(got) != 3 {
 		t.Fatalf("aliases = %v, want all three", got)
@@ -116,7 +134,7 @@ func TestRetainAliases_TheCapIsAskedForEvenWithoutAnInventory(t *testing.T) {
 	m, meta := namerFixture(t)
 	rec := &retainRecorder{PeerNameStore: meta.PeerNames()}
 	m.WithPeerNames(rec, meta.ConversationNames())
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) { return nil, false }
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) { return liveRows{}, false }
 	m.retainAliases(context.Background())
 	if len(rec.keep) != 1 || rec.keep[0] != store.MaxPeerNameAliases {
 		t.Fatalf("trim asked with %v, want [%d]", rec.keep, store.MaxPeerNameAliases)
@@ -127,24 +145,37 @@ func TestRetainAliases_TheCapIsAskedForEvenWithoutAnInventory(t *testing.T) {
 func TestRetainAliases_ANameStoreWithoutRetentionIsSkipped(t *testing.T) {
 	m := New(nil, nil)
 	m.logf = t.Logf
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) {
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) {
 		t.Fatal("asked for live refs without a retainer")
-		return nil, false
+		return liveRows{}, false
 	}
 	m.retainAliases(context.Background()) // nil store
 	m.WithPeerNames(failingNames{PeerNameStore: nil}, nil)
 	m.retainAliases(context.Background())
 }
 
-// The refs an inventory answers to are its rows' own and the ones they took over from; an inventory that cannot vouch for its
-// rows — partial, lineage unreadable, executions unreadable (an execution is named and aliased like a session), or not ok — is
-// no basis for a deletion. Mutation gate: drop any one of the four conditions → red; ignore previous refs → red.
-func TestEnvelopeLiveRefs_OnlyAnInventoryThatCanVouchCounts(t *testing.T) {
-	rows := []ipeers.PeerRecord{{Ref: "_aaaaaa", PreviousRefs: []string{"_bbbbbb", "_cccccc"}}, {Ref: "_dddddd"}, {Ref: ""}}
-	whole := ipeers.Envelope{OK: true, Peers: rows}
-	refs, ok := envelopeLiveRefs(whole)
-	if !ok || len(refs) != 4 || !refs["_aaaaaa"] || !refs["_bbbbbb"] || !refs["_cccccc"] || !refs["_dddddd"] {
-		t.Fatalf("refs = %v ok = %v, want the four refs of a whole inventory", refs, ok)
+// What an inventory says is alive: a row's ref together with the session it belongs to (an execution row carries one too), and the
+// refs its rows took over from. An inventory that cannot vouch for its rows — partial, lineage unreadable, executions unreadable (an
+// execution is named and aliased like a session), or not ok — is no basis for a deletion. Mutation gate: drop any one of the four
+// conditions → red; ignore previous refs → red; ignore the session → red.
+func TestEnvelopeLiveRows_OnlyAnInventoryThatCanVouchCounts(t *testing.T) {
+	rows := []ipeers.PeerRecord{
+		{Ref: "_aaaaaa", PreviousRefs: []string{"_bbbbbb", "_cccccc"}, Agent: &ipeers.AgentInfo{SessionID: "sid-a"}},
+		{Ref: "_dddddd", RowKind: ipeers.RowKindExecution, Agent: &ipeers.AgentInfo{SessionID: "sid-d"}},
+		{Ref: "_eeeeee"}, // no agent: no session to match
+		{Ref: ""},
+	}
+	live, ok := envelopeLiveRows(ipeers.Envelope{OK: true, Peers: rows})
+	if !ok || !live.has(store.PeerNameAlias{Ref: "_aaaaaa", SessionID: "sid-a"}) || !live.has(store.PeerNameAlias{Ref: "_dddddd", SessionID: "sid-d"}) {
+		t.Fatalf("live = %+v ok = %v, want the session and the execution row alive", live, ok)
+	}
+	if live.has(store.PeerNameAlias{Ref: "_aaaaaa", SessionID: "sid-stranger"}) || live.has(store.PeerNameAlias{Ref: "_eeeeee", SessionID: "sid-e"}) {
+		t.Fatalf("live = %+v: a ref without its session must not count as the session", live)
+	}
+	for _, ref := range []string{"_bbbbbb", "_cccccc"} {
+		if !live.has(store.PeerNameAlias{Ref: ref, SessionID: "sid-gone"}) {
+			t.Fatalf("live = %+v: %s was taken over by a live row, whoever held it", live, ref)
+		}
 	}
 	for name, env := range map[string]ipeers.Envelope{
 		"not ok":                 {OK: false, Peers: rows},
@@ -152,8 +183,8 @@ func TestEnvelopeLiveRefs_OnlyAnInventoryThatCanVouchCounts(t *testing.T) {
 		"lineage unavailable":    {OK: true, LineageUnavailable: true, Peers: rows},
 		"executions unavailable": {OK: true, ExecutionsUnavailable: true, Peers: rows},
 	} {
-		if refs, ok := envelopeLiveRefs(env); ok || refs != nil {
-			t.Errorf("%s: refs = %v ok = %v, want none", name, refs, ok)
+		if live, ok := envelopeLiveRows(env); ok || len(live.own) != 0 || len(live.taken) != 0 {
+			t.Errorf("%s: live = %+v ok = %v, want none", name, live, ok)
 		}
 	}
 }
@@ -169,12 +200,12 @@ func TestModuleStart_StartsTheAliasRetentionLoop(t *testing.T) {
 	t.Cleanup(func() { meta.Close() })
 	e.m.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
 	ran := make(chan struct{}, 1)
-	e.m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) {
+	e.m.aliasLiveRefs = func(context.Context) (liveRows, bool) {
 		select {
 		case ran <- struct{}{}:
 		default:
 		}
-		return nil, false
+		return liveRows{}, false
 	}
 	e.m.aliasRetentionFirst = time.Millisecond
 	if err := e.m.Start(context.Background()); err != nil {
@@ -193,11 +224,11 @@ func TestAliasRetention_LoopRunsPassesAndStopEndsIt(t *testing.T) {
 	m, _ := aliasesOf(t)
 	var mu sync.Mutex
 	passes := 0
-	m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) {
+	m.aliasLiveRefs = func(context.Context) (liveRows, bool) {
 		mu.Lock()
 		passes++
 		mu.Unlock()
-		return nil, false
+		return liveRows{}, false
 	}
 	m.aliasRetentionFirst, m.aliasRetentionEvery = 2*time.Millisecond, 5*time.Millisecond
 	m.startAliasRetention()
