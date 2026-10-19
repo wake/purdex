@@ -17,7 +17,9 @@ import (
 // FileResult files a succeeded job's result for reuse (spec §4.5); it is the queue's Options.OnSucceeded. The result is filed under the
 // host that made it, as that host was when it claimed the job (the worker's own words in the claim), and only when that is still what the
 // host is: a host whose toolchain moved while the job ran may have made the result with either toolchain, and is not asked. Anything missing
-// or doubtful is not filed (a job that runs again costs time; a wrong reuse costs a wrong answer):
+// or doubtful is not filed (a job that runs again costs time; a wrong reuse costs a wrong answer). **A result with no log is not filed**:
+// the queue offers a result only once the log it points at is in (whichever of the two the worker sent first), so a job whose log never
+// arrived, or whose log was removed before it could be offered, leaves no entry; the store refuses a result without one as well.
 //   - the claim said nothing about the host's labels or fingerprint, or the task has no definition hash (a job from before schema 7);
 //   - the host that made the result is not this one and is not a reachable peer, so its fingerprint cannot be checked now;
 //   - the fingerprint at the claim is not the host's fingerprint now;
