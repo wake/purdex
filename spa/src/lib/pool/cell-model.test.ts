@@ -84,6 +84,17 @@ describe('poolCellModel — fallback and offline', () => {
     expect(m.pool).toMatchObject({ state: 'fallback', since: NOW - 60_000, worker: null, headroom: null })
   })
 
+  it('fallback carries why: no pool view of the host is unreachable; old facts from an answering wwd are stale', () => {
+    expect(model(null, fleet(), { poolLastOk: NOW - 60_000 }).pool).toMatchObject({ state: 'fallback', reason: 'unreachable' })
+    const old = poolHost({ facts: { ...darwin, at: NOW - 60_000 } })
+    expect(model(old, fleet(), { poolLastOk: NOW - 60_000 }).pool).toMatchObject({ state: 'fallback', reason: 'stale' })
+  })
+
+  it('live and offline have no fallback reason', () => {
+    expect(model(poolHost())!.pool!.reason).toBeNull()
+    expect(model(null, fleet({ status: 'offline', fast: null }), {}).pool!.reason).toBeNull()
+  })
+
   it('offline: the host reads as offline, with the newer last-ok', () => {
     const f = fleet({ status: 'offline', fast: null, last_ok_at: 1000 })
     const m = model(null, f, { poolLastOk: 9000 })

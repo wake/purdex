@@ -14,6 +14,7 @@ import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 import { usePoolStore } from '../../lib/pool/store'
+import { WorkerExceptions } from './WorkerExceptions'
 import { WorkerSettings } from './WorkerSettings'
 
 type Kind = 'bool' | 'int' | 'float' | 'text' | 'targets' | 'textarea' | 'mode'
@@ -245,6 +246,7 @@ export function WatchSettings({ kind, fleetHostId, hostConfigId, poolAlias, offl
   return (
     <>
       {poolAlias && <WorkerSettings alias={poolAlias} />}
+      {poolAlias && <WorkerExceptions alias={poolAlias} />}
       <Section title={t('watch.set.guardian')} defaultOpen={!listed}>
         {hostConfigId
           ? <GuardianSection hostConfigId={hostConfigId} fleetHostId={fleetHostId} offline={offline} peerIds={peerIds} />
