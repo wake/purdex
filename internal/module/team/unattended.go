@@ -31,8 +31,7 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 			}
 			c.Grant = &g
 		}
-		t := leadTeamOf(a, *c.Grant, c.DecidedAt)
-		after, won, err = m.closeWith(a.ID, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(a.ID, c, t) })
+		after, won, err = m.approveLead(a, c)
 	case team.KindAdopt:
 		after, won, err = m.approveAdopt(a, c)
 	case team.KindSelfRelay:
@@ -169,10 +168,30 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 	var after team.Approval
 	c.Grant = g
 	t := leadTeamOf(row, *g, row.CreatedAt)
+	// A named lead is renamed first, under the approval's lock like a decide's, and gets the name back when the write fails.
+	var oldName string
+	renamed := false
+	unlock := func() {}
+	if g.LeadName != "" {
+		unlock = m.approvalLocks.lock(row.ID)
+		if oldName, err = m.renameForLead(row.Origin.SessionID, g.LeadName); err != nil {
+			unlock()
+			if !m.writeLeadNameErr(w, row, err) {
+				m.logf("[team] create %s: %v", row.ID, err)
+				m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			}
+			return
+		}
+		renamed = true
+	}
 	after, err = m.store.CreateApproved(row, hash, func(tx *sql.Tx) error {
 		_, err := closeLeadApprovedIn(tx, row.ID, c, t)
 		return err
 	})
+	if renamed && err != nil {
+		m.undoLeadRename(row.Origin.SessionID, oldName)
+	}
+	unlock()
 	switch {
 	case errors.Is(err, ErrLeadHasTeam):
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team", nil)
@@ -185,6 +204,9 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 		m.logf("[team] approval %s approved by %s at create: kind=%s origin=%s (%s)%s", after.ID, c.DecidedBy.Kind, after.Kind, after.Origin.Ref, after.Origin.SessionID, teamNote(after))
 		m.persons.spend(token)
 		m.announceClosed(after, nil)
+		if after.Kind == team.KindLead {
+			m.afterLeadApproved(after.ID, after.Origin.SessionID, oldName, g.LeadName, renamed)
+		}
 		m.writeJSON(w, http.StatusCreated, after)
 	}
 }
@@ -366,7 +388,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending, refused int) {
 		return 0, 0, 0
 	}
 	for _, a := range open {
-		if team.UnattendedRefusable(a.Kind) || agentSpawnCard(a) {
+		if (team.UnattendedRefusable(a.Kind) && !personLeadCard(a)) || agentSpawnCard(a) {
 			// An agent's lead or adopt request is not approved while unattended (RT-1b): it is refused, with the reason the
 			// requester's CLI turns into the text. A person's typed command never reaches here: it is approved at its create.
 			if _, won, err := m.closeAs(a.ID, Close{State: team.StateCancelled, DecidedAt: m.now(), Reason: team.ErrUnattendedRefused}); err != nil {
@@ -432,6 +454,15 @@ func (m *Module) reconcileUnattended(open []team.Approval) {
 		return
 	}
 	m.forgetClosedRefusals(still)
+}
+
+// personLeadCard is an open lead request of a person's own /team --card: the switch-on sweep leaves it for the person to decide.
+func personLeadCard(a team.Approval) bool {
+	if a.Kind != team.KindLead {
+		return false
+	}
+	var p team.LeadPayload
+	return json.Unmarshal(a.Payload, &p) == nil && p.Person
 }
 
 // agentSpawnCard is an open spawn_resources card of an agent's spawn: the switch-on sweep refuses it like a lead or adopt request

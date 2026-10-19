@@ -267,7 +267,11 @@ type SpawnOp struct {
 	TmuxSession string     `json:"tmux_session"`           // SpawnTmuxName(ID)
 	LeadAddress string     `json:"lead_address,omitempty"` // for the brief's first line (§7.2)
 	TaskID      string     `json:"task_id,omitempty"`      // done only: the display id of the task the spawn created (T-2)
-	Member      *Member    `json:"member,omitempty"`       // done only
+	// PoolName is the persona code reserved for the member when the spawn was accepted (name pool v2 spec §5.2), PoolDisplayName
+	// its display name: what `pdx spawn` prints as "→ Freya（預訂）". A reservation, not a promise. Empty: none was reserved.
+	PoolName        string  `json:"pool_name,omitempty"`
+	PoolDisplayName string  `json:"pool_display_name,omitempty"`
+	Member          *Member `json:"member,omitempty"` // done only
 	// Resources: awaiting_resources only - the host as the resource card shows it (RT-5a), for the CLI to say why it waits.
 	Resources *SpawnResourcesPayload `json:"resources,omitempty"`
 	CreatedAt int64                  `json:"created_at"` // unix ms

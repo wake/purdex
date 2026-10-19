@@ -137,6 +137,13 @@ type LeadPayload struct {
 	// RootsCanonical: Roots were resolved to real paths when the request was made (#2450). Absent on a request an older
 	// daemon made, whose roots are only Clean.
 	RootsCanonical bool `json:"roots_canonical,omitempty"`
+	// LeadNames are the names the session could take, when the request was made (name pool v2 spec §5.3, rule 1): stale by the time
+	// the card opens, which reads GET /api/team/approvals/{id}/lead-names for a fresh list. null: this daemon had no name service
+	// then; [] when no persona exists. Not part of the request's hash.
+	LeadNames []LeadName `json:"lead_names"`
+	// Person marks the request of a person's own /team --card (NP-4c): it waits on the card whatever the unattended switch, which
+	// refuses an agent's lead request. Not part of the request's hash.
+	Person bool `json:"person,omitempty"`
 }
 
 // Grant is what the user approved (edited in the dialog). P4 turns it into a team.
@@ -157,6 +164,9 @@ type Grant struct {
 	// be derived from the name (D-L3). In the grant of a decided approval it is
 	// the explicit label, "" when the team's label was derived.
 	TeamLabel *string `json:"team_label,omitempty"`
+	// LeadName is the persona code the lead takes as its name (name pool v2 spec §5.3): the daemon renames the session as the
+	// approval is made. Absent keeps the session's name. A decide body's field; the grant of a decided approval records it.
+	LeadName string `json:"lead_name,omitempty"`
 }
 
 // Client is the audit label of whoever decided (spec §6.5). Addr is set by the daemon from RemoteAddr.
@@ -221,6 +231,8 @@ type APIError struct {
 	Detail   string    `json:"detail,omitempty"`
 	Approval *Approval `json:"approval,omitempty"` // request_open, already_decided
 	Op       *RelayOp  `json:"op,omitempty"`       // relay_open, bad_transition (P5a)
+	// LeadNames is the refreshed list of a name_taken (name pool v2 spec §5.3); absent from every other error.
+	LeadNames []LeadName `json:"lead_names,omitempty"`
 }
 
 // InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of

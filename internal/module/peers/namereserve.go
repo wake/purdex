@@ -3,6 +3,7 @@ package peers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -21,6 +22,11 @@ import (
 // reservationTTL is how long a reservation holds its name without a release.
 const reservationTTL = 10 * time.Minute
 
+// reservationReadTimeout bounds the rebuild's read of the team module's open ops, which runs with the pool lock held: a team.db
+// that does not answer, or a reader that waits for the name service (it holds the pool lock itself), costs the namers this
+// long, once per pool-lock section, never more. Module.reservationReadTimeout overrides it (tests).
+const reservationReadTimeout = 3 * time.Second
+
 type reservation struct {
 	opID, code, tmuxName string
 	at                   time.Time
@@ -31,11 +37,16 @@ func (r reservation) liveAt(now time.Time) bool { return now.Sub(r.at) <= reserv
 // reservationBook is the reservations in memory. Its own mutex is short: ReleaseReservation takes only that, never the pool lock
 // (releasing can only free a name, so a pick that read the book a moment before is safe).
 type reservationBook struct {
-	mu      sync.Mutex
-	byOp    map[string]reservation
-	rebuilt bool // the team module's open ops were read (or there is no reader)
-	tried   bool // a rebuild was tried in this pool-lock section
+	mu       sync.Mutex
+	byOp     map[string]reservation
+	rebuilt  bool // the team module's open ops were read (or there is no reader)
+	tried    bool // a rebuild was tried in this pool-lock section
+	inFlight bool // a read of the open ops is still in flight (one that timed out is not cancelled: it is not started twice)
+	noted    bool // the skipped rebuilds of this stuck read were said once; re-armed when the read returns
 }
+
+// errReadInFlight: a read given up on has not returned, so no new one was started.
+var errReadInFlight = errors.New("the previous read of the open spawn ops has not returned")
 
 func (b *reservationBook) put(r reservation) {
 	b.mu.Lock()
@@ -135,6 +146,41 @@ func (b *reservationBook) shouldTry() bool {
 	return true
 }
 
+// beginRead says whether a read may start: not while an earlier one, given up on at its deadline, has not returned.
+func (b *reservationBook) beginRead() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.inFlight {
+		return false
+	}
+	b.inFlight = true
+	return true
+}
+
+func (b *reservationBook) reading() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.inFlight
+}
+
+// firstSkip says whether this is the first rebuild skipped for the read that is stuck (the caller says so then, and only then).
+func (b *reservationBook) firstSkip() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.noted {
+		return false
+	}
+	b.noted = true
+	return true
+}
+
+func (b *reservationBook) endRead() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.inFlight = false
+	b.noted = false
+}
+
 func (b *reservationBook) markRebuilt() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -157,7 +203,13 @@ func (m *Module) ensureReservations(ctx context.Context) {
 		m.reservations.markRebuilt()
 		return
 	}
-	list, err := reader.OpenReservations(ctx)
+	list, err := m.readOpenReservations(ctx, reader)
+	if errors.Is(err, errReadInFlight) {
+		if m.reservations.firstSkip() {
+			m.logf("peers: name: a read of the open spawn reservations is still running (it passed its deadline); the reservations are not rebuilt until it returns, and a restart's reservations stay lost until then")
+		}
+		return
+	}
 	if err != nil {
 		m.logf("peers: name: cannot read the open spawn reservations, tried again at the next use: %v", err)
 		return
@@ -178,6 +230,37 @@ func (m *Module) ensureReservations(ctx context.Context) {
 		m.reservations.put(res)
 	}
 	m.reservations.markRebuilt()
+}
+
+// readOpenReservations is reader.OpenReservations within reservationReadTimeout. The read runs in its own goroutine and is given
+// up on at the deadline even if it ignores its context (a reader that calls back into the name service waits for the pool lock
+// the caller holds): the caller must get the lock back. A read that finishes late is dropped.
+func (m *Module) readOpenReservations(ctx context.Context, reader ipeers.SpawnReservationReader) ([]ipeers.Reservation, error) {
+	timeout := m.reservationReadTimeout
+	if timeout <= 0 {
+		timeout = reservationReadTimeout
+	}
+	if !m.reservations.beginRead() {
+		return nil, errReadInFlight
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	type result struct {
+		list []ipeers.Reservation
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer m.reservations.endRead()
+		list, err := reader.OpenReservations(rctx)
+		done <- result{list, err}
+	}()
+	select {
+	case r := <-done:
+		return r.list, r.err
+	case <-rctx.Done():
+		return nil, fmt.Errorf("the read did not finish in %v: %w", timeout, rctx.Err())
+	}
 }
 
 // ReserveMember implements ipeers.NameService.

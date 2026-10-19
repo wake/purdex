@@ -3,7 +3,7 @@
 import { useState } from 'react'
 
 /** 16–44 are the places an avatar sits beside text (22 the lead name card's pills); 32 is the persona list row and 96 the persona form's preview. */
-export type AvatarSize = 16 | 18 | 22 | 24 | 32 | 44 | 96
+export type AvatarSize = 14 | 16 | 18 | 22 | 24 | 32 | 44 | 96
 
 interface Props {
   size: AvatarSize
@@ -14,17 +14,18 @@ interface Props {
   /** The host colour the initials sit on. */
   fallbackColor: string
   className?: string
+  /** The name sits right beside the face: it adds nothing for a screen reader (no role, no label) rather than saying the name twice. */
+  decorative?: boolean
 }
 
-export function Avatar({ size, code, name, src, fallbackColor, className = '' }: Props) {
+export function Avatar({ size, code, name, src, fallbackColor, className = '', decorative = false }: Props) {
   const label = name || code
   const [failed, setFailed] = useState<string | null>(null)
   const box = { width: size, height: size }
   if (src && failed !== src) {
     return (
       <img
-        role="img"
-        alt={label}
+        {...(decorative ? { alt: '', 'aria-hidden': true } : { role: 'img', alt: label })}
         src={src}
         draggable={false}
         onError={() => setFailed(src)}
@@ -35,8 +36,7 @@ export function Avatar({ size, code, name, src, fallbackColor, className = '' }:
   }
   return (
     <span
-      role="img"
-      aria-label={label}
+      {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label })}
       style={{ ...box, backgroundColor: fallbackColor, fontSize: Math.round(size * 0.5) }}
       className={`inline-flex shrink-0 items-center justify-center rounded-full font-medium leading-none text-white ring-1 ring-border-subtle ${className}`}
     >

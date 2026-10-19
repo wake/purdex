@@ -76,7 +76,7 @@ func Run(ctx context.Context, o Options) int {
 		}
 	}
 
-	p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, Task: o.Args.Task, Args: o.Args.TaskArgs, Class: o.Args.Class, Submitter: sub, Git: o.GitBin})
+	p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, Task: o.Args.Task, Args: o.Args.TaskArgs, Class: o.Args.Class, Submitter: sub, Git: o.GitBin, NoCache: o.Args.NoCache})
 	if err != nil {
 		return failPrepare(o, err)
 	}

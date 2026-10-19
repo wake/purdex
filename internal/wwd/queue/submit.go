@@ -53,6 +53,51 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	return wire.JobSubmissionResponse{ID: id}, nil
 }
 
+// SubmitReused records a submission that a stored result answered (spec §4.5): the job is born succeeded, with the stored result marked
+// cache_hit and pointing at the log of the job that made it (OpenLog follows the pointer). Nothing runs, so nothing is pinned; the older
+// jobs with the same supersede_key are superseded as for any newer submission. The stored result is validated like a posted one.
+func (q *Queue) SubmitReused(ctx context.Context, s wire.JobSubmission, stored wire.Result) (wire.JobSubmissionResponse, error) {
+	if err := s.Validate(); err != nil {
+		return wire.JobSubmissionResponse{}, err
+	}
+	if stored.Exit == nil || *stored.Exit != 0 || stored.Log == "" || stored.Host == "" {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: the stored result is not a success with a host and a log")
+	}
+	id := q.newI()
+	now := q.now()
+	fin := time64(now.UnixMilli())
+	res := stored
+	res.CacheHit, res.FinishedAt, res.SupersededBy = true, &fin, nil
+	if err := res.Validate(); err != nil {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: %w", err)
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		return wire.JobSubmissionResponse{}, err
+	}
+	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
+		if err := insertJob(ctx, c, id, q.opt.Origin, s, now.UnixMilli(), false); err != nil {
+			return err
+		}
+		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = ?, result = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+			string(wire.StateSucceeded), string(b), now.UnixMilli(), now.UnixMilli(), id); err != nil {
+			return err
+		}
+		*changed = append(*changed, id)
+		if s.SupersedeKey == "" {
+			return nil
+		}
+		// the newest submission for the key is answered, so an older one still waiting or running is stale, the same as for a job that runs
+		superseded, err := supersedeOlder(ctx, c, id, s.SupersedeKey, now.UnixMilli())
+		*changed = append(*changed, superseded...)
+		return err
+	})
+	if err != nil {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: %w", err)
+	}
+	return wire.JobSubmissionResponse{ID: id, Result: &res}, nil
+}
+
 // recordPin writes the pin down before it is made (see the git_pins table).
 func (q *Queue) recordPin(ctx context.Context, id, gitDir string, nowMS int64) error {
 	_, err := q.db.ExecContext(ctx, `INSERT OR IGNORE INTO git_pins (id, git_dir, at) VALUES (?, ?, ?)`, id, gitDir, nowMS)
@@ -82,12 +127,12 @@ func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSu
 	_, err := c.ExecContext(ctx, `INSERT INTO jobs (
 			id, origin, repo_name, repo_root, repo_remote, snap_commit, snap_tree, snap_base, snap_rel_cwd,
 			task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
-			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at, git_dir, pinned)
-		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
+			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at, git_dir, pinned, def_hash)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)`,
 		id, origin, s.Repo.Name, s.Repo.Root, s.Repo.Remote, s.Snapshot.Commit, s.Snapshot.Tree, s.Snapshot.Base, s.Snapshot.RelCwd,
 		s.Task, list(s.Args), string(s.Class), list(s.Labels), list(s.Locks), b2i(s.Cacheable), s.TimeoutS, s.SupersedeKey,
 		b2i(s.Interruptible), s.QueueTimeoutS, b2i(s.AdHoc),
-		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS, s.GitDir, b2i(pinned))
+		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS, s.GitDir, b2i(pinned), s.DefHash)
 	return err
 }
 
