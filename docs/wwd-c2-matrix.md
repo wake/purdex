@@ -216,7 +216,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 |---|---|---|---|---|
 | H0 | （無，自動） | `GET /v1/info` 多一個 `fault` 物件，宣告開了哪些掛鉤（沒開任何掛鉤時整個 `fault` 欄位不存在）。腳本靠它決定 SKIP | 5a、6、7、8 | 下面各掛鉤所在的台 |
 | H1 | `log_upload_fail = true` | origin 拒收 log 上傳（TCP 上的 `PUT /v1/jobs/{id}/log` 回 503；結果上傳不受影響） | 6 | mlab（origin） |
-| H2 | `owner_active_file = "<絕對路徑>"` | 該檔案存在時，facts 的 `owner` 視為 active。**值必須是字面的絕對路徑**：TOML 不展開 `~`、`$HOME`，`/v1/info` 也只回 `true`，不帶路徑。腳本建立與刪除的是 `$HOME/.local/share/wwd/fault/owner-active`，所以 air26 的設定要寫成它展開後的路徑（`/Users/wake/.local/share/wwd/fault/owner-active`）。worker 讓位看的是 facts 的 `owner.active`，與 `[owner]` 開不開無關（`yield.Observe`、`loop.Round`）；`[owner] enabled = false` 時 HID 不再被讀，只剩這個檔案能讓 owner 變 active，所以使用者在 air26 工作不會干擾其他案例（見下）。`[owner]` 關閉時 facts 原本沒有 owner 區塊（null），而 `yield.Observe` 對 null 不會結束讓位，所以掛鉤設了、檔案不在時 sampler 會補一個 `{active:false, reason:"fault: owner_active_file absent"}`（`daemon/sampler.go`），檔案刪掉 worker 才會回來；在這個修正之前，案例 7 之後 air26 的 worker 會一直讓位到重啟 | 7 | air26 |
+| H2 | `owner_active_file = "<絕對路徑>"` | 該檔案存在時，facts 的 `owner` 視為 active。**值必須是字面的絕對路徑**：TOML 不展開 `~`、`$HOME`，`/v1/info` 也只回 `true`，不帶路徑。腳本建立與刪除的是 `$HOME/.local/share/wwd/fault/owner-active`，所以 air26 的設定要寫成它展開後的路徑（`/Users/wake/.local/share/wwd/fault/owner-active`）。H2 檔案**取代**真實讀數（#3561）：`[owner] enabled = true` 又設了 `owner_active_file` 時，HID 完全不讀，`facts.owner` 只看檔案（存在＝active、確定不存在＝away），所以使用者在 air26 工作不會干擾任何案例。H2 只取代讀數，不取代規則：生效中的 `owner_rule` 才是 headroom 與 worker 讓位的唯一依據（#3457），**規則是空字串時 H2 不會讓 headroom 歸零，worker 也不讓位**，所以案例 7 要求 air26 的 `owner_rule` 非空（`hid<5m`），腳本 precheck 看到空的會直接 FAIL | 7 | air26 |
 | H3 | `zone = "warning"` | 覆蓋 origin 的 derived zone。值是 zone 名（`normal`／`warning`／`danger`），**不是數字**：壓力 2 就是 `warning`（origin_bonus +200，`danger` +400）。只對「worker 把它當 peer 讀」生效，案例 8 的 worker 是 mserv，成立 | 8 | mlab |
 | H4 | `snapshot_delay_s = N`（0～3600） | worker 向 origin 取快照前等 N 秒，讓 5a 的凍結時機是確定的。**建議 5～10**（小於 5a 的 20 秒凍結窗口） | 5a | air26（worker；延遲發生在它） |
 
@@ -233,19 +233,15 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 | 主機 | 加什麼 | 為什麼 |
 |---|---|---|
 | mlab | `[fault]`<br>`enabled = true`<br>`zone = "warning"`<br>**`log_upload_fail = true` 只在跑案例 6 時加**（單獨 `--case 6`，跑完移除並重啟） | H3（案例 8）、H1（案例 6）。**H1 不能在其他案例開著**：worker 在結果送出後還要重試 log 上傳最多 2 分鐘，這段時間仍占著 heavy 名額（#3404），下一格就在 90 秒內 claim 不到（2026-10-19 重跑時案例 3、4 因此失敗）。腳本的 precheck 在 mlab 的 `/v1/info` 顯示 `log_upload_fail` 開著、又選了 6 以外的案例時直接 FAIL。mlab 作為 origin 的工作在 `zone = "warning"` 下多 +200 分（只影響各 worker 偏好哪個 origin） |
-| air26 | `[owner]`<br>`enabled = true`（正式設定本來就有，確認即可）<br>`[fault]`<br>`enabled = true`<br>`owner_active_file = "/Users/wake/.local/share/wwd/fault/owner-active"`<br>`snapshot_delay_s = 8` | H2（案例 7）、H4（案例 5a）。建議再加 `[owner] enabled = false`（跑完照樣由 `config.toml.pre-c2` 還原）：`[owner]` 開著時，使用者最近 5 分鐘有動 air26，worker 就不接工作（`owner_rule` 設空字串**不會**關掉它，空字串＝預設的 5 分鐘），案例會在「工作從沒進 running」處 FAIL 或 SKIP。關掉後 `BuildOwner` 不跑（`cmd/wwd/main.go` 不設 `srcOpt.Owner`，`facts/collector.go` 的 `Owner` 為 nil），案例 7 的 H2 檔案仍會讓 `facts.owner` 變 active（`daemon/sampler.go` 的 H2 區塊），`derived` 的 headroom 歸零，worker 讓位並 reclaim |
+| air26 | `[owner]`<br>`enabled = true`（正式設定本來就有，確認即可；**不要**關掉）<br>`[fault]`<br>`enabled = true`<br>`owner_active_file = "/Users/wake/.local/share/wwd/fault/owner-active"`<br>`snapshot_delay_s = 8` | H2（案例 7）、H4（案例 5a）。`owner_rule` 必須非空（`hid<5m`，`GET /v1/worker` 確認）：H2 檔案取代真實 HID 讀數（#3561），使用者在用 air26 也不影響案例，但 headroom 與 worker 讓位只看生效中的規則（#3457），規則是空字串時案例 7 不會 reclaim。案例 7 開始前腳本會檢查，空的就 FAIL |
 | mserv | 不要有 `[fault]`。案例 13 需要：`[worker] sandbox_user = "<job 帳號>"`（非 root）；`[jobdb]`（`enabled = true`、`host`、`port`、`user_hosts`、`defaults_file = "~/.config/wwd/mysql-admin.cnf"`，檔案 0600、帳號 `wwd_admin`）；`wwd.slice` 不用預先建立 | 沙箱與 per-job 資料庫；見 `docs/wwd-deploy.md` |
 | air19 | 什麼都不加；worker 必須是關的（precheck 會檢查） | 整個矩陣它都不 claim |
 
 重啟後檢查（每台）：`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info | jq .fault`，預期 mlab 是 `{"zone":"warning"}`（案例 6 時多一個 `"log_upload_fail":true`）、air26 是 `{"owner_active_file":true,"snapshot_delay_s":8}`、mserv 與 air19 是 `null`；`GET /v1/worker` 在 air26 的 `owner_rule` 非空。
 
-**跑完之後**：把每台的 `config.toml.pre-c2` 放回 `config.toml`（沒有 `[fault]`），重啟 wwd，確認四台 `curl … /v1/info | jq 'has("fault")'` 都是 `false`；`GET /v1/worker` 與矩陣前一致（部署後預設四台都是關的）（**air26 的 `owner_rule` 例外，見下**）；矩陣的暫存、`/tmp/wwd-c2-ran.log`、`fault/owner-active` 腳本結尾已刪，用 §6 的指令確認即可。
+**跑完之後**：把每台的 `config.toml.pre-c2` 放回 `config.toml`（沒有 `[fault]`），重啟 wwd，確認四台 `curl … /v1/info | jq 'has("fault")'` 都是 `false`；`GET /v1/worker` 與矩陣前一致（部署後預設四台都是關的）；矩陣的暫存、`/tmp/wwd-c2-ran.log`、`fault/owner-active` 腳本結尾已刪，用 §6 的指令確認即可。
 
-**air26 的 `owner_rule`（`[owner] enabled = false` 的副作用）**（只讀程式碼的結論，`internal/wwd/daemon/hoststate.go`）：
-- 重啟時 wwd.db 裡存的 `hid<5m` 不會讓 wwd 起不來：`NewHostState` 對從 DB 讀到的設定走 `sane`（hoststate.go:172），`checkWorker` 因 `OwnerRuleSupported=false` 拒絕非空的 owner_rule（:161），`sane` 只在記憶體裡把它清成 `""` 並 log（`owner_rule cleared`），**不會回寫 DB**。
-- 所以矩陣期間 `GET /v1/worker` 回 `owner_rule: ""`；腳本一開始存下的就是 `""`，結尾 PUT 回去的也是 `""`，不會被拒（`SetWorker` 的檢查對空字串放行）。
-- 但腳本在矩陣中途用 PUT 開關 worker，每次改動都會 `SaveWorker`（:185-），那一筆存的 `owner_rule` 是 `""`，**會把 DB 裡的 `hid<5m` 蓋掉**。所以跑完、把 `[owner] enabled = true` 放回並重啟之後，air26 的 `owner_rule` 是 `""`（規則本身仍照預設 5 分鐘運作，但 `facts.worker.owner_rule` 是空的，worker 也少了「第一次讀數前不接工作」的保護）。
-- 跑完要補一步：把 `[owner]` 放回並重啟 wwd 後，`curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/worker | jq '.owner_rule = "hid<5m"' | curl --unix-socket ~/.local/share/wwd/wwd.sock -X PUT -d @- http://wwd/v1/worker`，再確認 `GET /v1/worker` 的 `owner_rule` 是 `hid<5m`。腳本在 precheck 看到 air26 的 `owner_rule` 是空的時會印一行提醒。
+**air26 的 `owner_rule`**：不再需要關 `[owner]`，所以矩陣不會把規則存成空字串；歷史上（#3561 之前）建議關 `[owner]` 時會把 DB 裡的 `hid<5m` 蓋成 `""`，現在不用做任何補救。若 `GET /v1/worker` 回的 `owner_rule` 是空的（例如之前照舊文件跑過），先 `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/worker | jq '.owner_rule = "hid<5m"' | curl --unix-socket ~/.local/share/wwd/wwd.sock -X PUT -d @- http://wwd/v1/worker` 補回，再跑案例 7。
 
 ## 8. 已對照程式碼核對的假設，與第一次真機執行要留意的
 

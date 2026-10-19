@@ -198,8 +198,8 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 	repos := clones.NewSource(in.Cfg.Repos)
 	exec := jobexec.New(jobexec.Config{
 		WorkRoot: in.WorkRoot,
-		Fetchers: func(origin string) jobexec.Fetcher {
-			if f, ok := fetchers[origin]; ok {
+		Fetchers: func(source string) jobexec.Fetcher {
+			if f, ok := fetchers[source]; ok {
 				return f
 			}
 			return nil

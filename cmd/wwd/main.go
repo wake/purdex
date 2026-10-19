@@ -182,6 +182,8 @@ func run(cfgPath string) error {
 		orphanScan.Observe(now, snap, c)
 	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
+	// H2 stands in for the keyboard: with owner_active_file named the real HID is not read (#3561)
+	sources.Owner = facts.OverrideOwner(sources.Owner, hooks.OwnerBlock)
 	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
 	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
 	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf).WithWorkDir(workRoot) // the jobs' disk is the work root's

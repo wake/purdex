@@ -3228,5 +3228,16 @@
   "pool_hosts.dot.live": "wwd 讀得到",
   "pool_hosts.dot.warn": "wwd 沒有回應，改由 SSH 讀取",
   "pool_hosts.dot.off": "離線",
-  "pool_hosts.dot.error": "錯誤"
+  "pool_hosts.dot.error": "錯誤",
+  "pool_hosts.page.sub": "wwd {{version}}・proto {{proto}}・{{platform}} {{arch}}・{{os}}",
+  "pool_hosts.page.now": "現在",
+  "pool_hosts.page.worker_settings": "在主機分頁設定",
+  "pool_hosts.page.labels": "標籤",
+  "pool_hosts.page.labels_none": "沒有",
+  "pool_hosts.page.labels_platform": "平台",
+  "pool_hosts.page.labels_repo": "Repo",
+  "pool_hosts.page.labels_other": "其他",
+  "pool_hosts.page.tools": "工具鏈",
+  "pool_hosts.page.tool_missing": "未安裝",
+  "pool_hosts.page.style": "樣式與 SSH 備援"
 }
