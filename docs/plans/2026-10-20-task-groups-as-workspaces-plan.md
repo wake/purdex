@@ -1,4 +1,4 @@
-# Task groups as a workspace-level layer — plan r5 (2026-10-20)
+# Task groups as a workspace-level layer — plan r5.1 (2026-10-20)
 
 Spec: `docs/specs/2026-10-20-task-groups-as-workspaces-spec.md` r5 (§ numbers below are the spec's). Phases are PRs
 (≤ 800 lines / ≤ 20 files with tests); tasks are commits; TDD in every task (the test first, seen red). Test tiers per
@@ -7,7 +7,8 @@ CLAUDE.md: affected files while developing; at the PR layer `vitest related` + g
 its **split** line says where to cut it; cut there and report before going on.
 
 Reviews: r1 by codex `task-mvfs2clf-c2dr4g`; r2 / r3 by an Opus reviewer while the codex quota was out; r4 by codex
-`task-mvfw3qzd-pbuzxj` (answered in r5: see the spec header).
+`task-mvfw3qzd-pbuzxj` (answered in r5); r5 by codex `task-mvfwim2s-7f97oq` (every earlier finding resolved, one new
+important answered in r5.1: see the spec header).
 
 ## TG-0b — #3662 (merged, 4a887d935)
 
@@ -40,9 +41,10 @@ Reviews: r1 by codex `task-mvfs2clf-c2dr4g`; r2 / r3 by an Opus reviewer while t
 ## TG-1b-1 — ranks and the tab fields
 
 1. `lib/task-groups/rank.ts`: `rankBetween(a?, b?)` (fractional index, base 62), `compareRank`, **`compareGroupTabs`
-   (rank, then tab id)**, the shared limits (generator 32, check 128) and `rebalance(ranks)`. Tests: between any two,
-   before the first, after the last; repeated inserts at one spot hit the cap and rebalance; the check limit is above the
-   generator limit; equal ranks order by tab id.
+   (ranked first by rank, then tab id; then unranked by `createdAt`, then tab id — spec §4.2)**, the shared limits
+   (generator 32, check 128) and `rebalance(ranks)`. Tests: between any two, before the first, after the last; repeated
+   inserts at one spot hit the cap and rebalance; the check limit is above the generator limit; equal ranks order by tab
+   id; unranked after ranked, by `createdAt`.
 2. `types/tab.ts` `group?: string`, `groupRank?: string`; `useTabStore` `setTabGroup`, `setTabGroupRank`.
 3. `projections.ts` `tabs.*.group`, `tabs.*.groupRank`, tabs ordinal 5; the builder translates the team host in `group`
    to wire beside `layoutToWire` (`sections.ts`); `tabsFromWire` translates it back beside `layoutFromWire` (it runs in
@@ -123,7 +125,8 @@ pinned by an unchanged test.
 3. The fresh-tab write (spec §5): `createTab` adds to a `WeakSet`; `addTab` and `detachPane` place a fresh tab in the
    same `set()`. Tests — placed: ⌘T, + in the bar, `openSingletonTab` (settings, files), a browser tab, a notification
    opening a non-seat session, a pane detached into a tab, a History reopen; the selection stays on the group after
-   each. Not placed: an Electron single-tab transfer and a workspace transfer, ⌘⇧T reopen, a rehydrate, an apply, a
+   each; the placed tab has no `groupRank` and is last in `groupTabs` even when the group already ends with unranked
+   tabs of another workspace. Not placed: an Electron single-tab transfer and a workspace transfer, ⌘⇧T reopen, a rehydrate, an apply, a
    world switch, the workspace view, the narrow sidebar, 「未分組」 selected, a seat tab, a watcher-area tab.
 4. Guard test: the production callers of `createTab` are a listed set, each handing the tab to `addTab` or
    `detachPane`.
@@ -144,8 +147,9 @@ pinned by an unchanged test.
 
 ## TG-3e — drag in the sidebar
 
-Drag decisions (pure) and wiring with dnd-kit like `InlineTabList`: rank writes, seat moves (all its tabs →
-`memberOrder`), plain tabs after members, moves to a manual group / 「未分組」, no drop on teams. Tests.
+Drag decisions (pure) and wiring with dnd-kit like `InlineTabList`: rank writes (a drop among unranked tabs also ranks
+the unranked tabs before the drop point, spec §4.2), seat moves (all its tabs → `memberOrder`), plain tabs after members,
+moves to a manual group / 「未分組」, no drop on teams. Tests incl. a drop between two unranked tabs.
 - **Split** if over: the pure decisions first, the wiring second.
 
 ## TG-4a — the range
@@ -166,8 +170,8 @@ workspaces).
 
 ## TG-4c — drag in the bar in the task-group view
 
-Lead fixed, nothing before it, seat moves with its tabs (`memberOrder`), plain tabs by rank, pinned zone by rank; a
-re-rank at the cap. Tests.
+Lead fixed, nothing before it, seat moves with its tabs (`memberOrder`), plain tabs by rank, pinned zone by rank; a drop
+among unranked tabs (the same pure decision as TG-3e); a re-rank at the cap. Tests.
 
 ## TG-5 — personal panel
 

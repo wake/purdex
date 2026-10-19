@@ -1,6 +1,6 @@
 # Task groups as a workspace-level layer — spec (2026-10-20)
 
-Owner: B line lead (88). Status: draft r5.
+Owner: B line lead (88). Status: r5.1 (plan review passed 2026-10-20).
 - r1 → r2: codex plan review `task-mvfs2clf-c2dr4g` (a new world section needed its own world fence, slave-copy remap and
   apply fence) → groups ride the existing `settings` section, a tab's place rides its own tab.
 - r2 → r3: an independent Opus review (codex quota exhausted until 10-25): explicit field copy and type checks in the tabs
@@ -14,6 +14,9 @@ Owner: B line lead (88). Status: draft r5.
   are inserted, not when activated; members de-duplicated after translation; a rank tie-break; the schema lock is
   profile-wide, so the data PRs ship in one release; the group-view store in the host rewrite; one order function and one
   effective-view reader shared by every reader; phases reordered and split.
+- r5 → r5.1: codex incremental review `task-mvfwim2s-7f97oq` (every r4 finding resolved; one new important: a placed
+  tab could not be put last when the group ends with unranked tabs) → unranked tabs sort by `createdAt`, the automatic
+  write sets `group` only, a drop among unranked tabs ranks the ones before it.
 
 The sidebar's task-group view (name pool v2 spec, NP2 §7, U11) stops being a second listing of the same tabs and becomes
 a layer **parallel to workspaces**: a group has its own tabs in the top bar, its own tab order, its own active tab, and it
@@ -119,14 +122,17 @@ Two optional tab fields, listed in `PROJECTIONS.tabs` (`tabs.*.group`, `tabs.*.g
 
 - `group?: string` — the tab's **placement**, a group key (§3). Read only when rules 1–2 (§5) do not place the tab.
 - `groupRank?: string` — the tab's position in its group's bar: a fractional-index string (`lib/task-groups/rank.ts`,
-  `rankBetween(a, b)`), so moving one tab writes one tab. Inserting again and again at one spot lengthens the string, so
+  `rankBetween(a, b)`), so moving a ranked tab writes one tab. Inserting again and again at one spot lengthens the string, so
   the generator keeps ranks ≤ 32 characters: at that point it re-ranks the group's tabs evenly (rare; several tab
-  writes). The payload check accepts up to 128 — one shared constant module holds both limits. No rank → after the ranked
-  tabs, in workspace order.
+  writes). The payload check accepts up to 128 — one shared constant module holds both limits. **No rank → after the
+  ranked tabs, by `createdAt`, then tab id** (both synced, so every device agrees; a tab just opened is therefore last).
+  A tab gets a rank only when the user moves it: dropping it among unranked tabs also ranks the unranked tabs before the
+  drop point, in their shown order (the first reorder there writes those few tabs once).
 - **Equal ranks**: a group holds tabs of several workspaces, whose ranks live in different `tabs.<workspace>` sections.
   Two devices inserting at the same spot, in tabs of different workspaces, compute the same rank and write different
-  sections, so nothing conflicts and both ranks stay. The order is therefore `compareRank`, then tab id — one comparator
-  in `rank.ts`, used by `groupTabs` (§3) and so by every reader; both devices then show the same order. A re-rank that
+  sections, so nothing conflicts and both ranks stay. The order is therefore ranked tabs by `compareRank`, then tab id,
+  followed by the unranked ones as above — one comparator in `rank.ts` (`compareGroupTabs`), used by `groupTabs` (§3) and
+  so by every reader; both devices then show the same order. A re-rank that
   spans several sections writes each as an ordinary section write; a concurrent edit of one of them locks that section
   alone, as any concurrent edit does.
 
@@ -192,9 +198,9 @@ group. "Opened" is decided by where the tab object came from, not by when it is 
   `set()` that inserts it**, and place it when: the effective view (§3) is the task-group view; a group is selected (a
   team or a manual group — never 「未分組」); the tab has no `group`; it is not a watcher-area tab (`isWatchTabId`); and
   neither rule 1 nor rule 2 places it as far as is known at that moment (a root not read yet counts as no match — rule 2
-  still wins once it is). Placing sets `group` to the selected group's key and `groupRank` after the group's last tab
-  (`groupTabs`). Since it is written in the same update as the insertion, the selection subscriber (§6.2) already sees
-  the tab placed and the selection stays.
+  still wins once it is). Placing sets `group` to the selected group's key and nothing else: the tab has no rank, so it
+  sorts after the group's other tabs by its `createdAt` (§4.2) — last. Since it is written in the same update as the
+  insertion, the selection subscriber (§6.2) already sees the tab placed and the selection stays.
 - Every other way a tab arrives is never placed, because its object was not minted by this window's `createTab`: a tab
   transferred from another window (Electron IPC — a new object from JSON), a reopened tab (⌘⇧T restores the closed tab
   object), a persist rehydrate, an apply, a restore, a world switch. Opening from the History page mints a new tab
