@@ -131,18 +131,18 @@ describe('the row', () => {
   it('the buttons write absolute values for the row\'s root and field', () => {
     show([{ hostId: A, rows: [q('l1', { is_lead: true, self_left: 4, member_pool_left: 2 })] }])
     const row = rowFor('l1')
-    fireEvent.click(within(row).getAllByRole('button', { name: '增加' })[0])
+    fireEvent.click(within(row).getByRole('button', { name: /^增加自動接力額度/ }))
     expect(mockedSet).toHaveBeenLastCalledWith({ hostId: A, sessionId: 'l1', root: 'root-l1', label: 'T-l1' }, 'self_left', 5)
-    fireEvent.click(within(row).getAllByRole('button', { name: '減少' })[1])
+    fireEvent.click(within(row).getByRole('button', { name: /^減少member額度/ }))
     expect(mockedSet).toHaveBeenLastCalledWith({ hostId: A, sessionId: 'l1', root: 'root-l1', label: 'T-l1' }, 'member_pool_left', 1)
   })
 
   it('the limits disable the button that would pass them (0 and 99)', () => {
     show([{ hostId: A, rows: [q('p0', { self_left: 0 }), q('p99', { self_left: 99 })] }])
-    expect(within(rowFor('p0')).getByRole('button', { name: '減少' })).toBeDisabled()
-    expect(within(rowFor('p0')).getByRole('button', { name: '增加' })).toBeEnabled()
-    expect(within(rowFor('p99')).getByRole('button', { name: '增加' })).toBeDisabled()
-    expect(within(rowFor('p99')).getByRole('button', { name: '減少' })).toBeEnabled()
+    expect(within(rowFor('p0')).getByRole('button', { name: /^減少自動接力額度/ })).toBeDisabled()
+    expect(within(rowFor('p0')).getByRole('button', { name: /^增加自動接力額度/ })).toBeEnabled()
+    expect(within(rowFor('p99')).getByRole('button', { name: /^增加自動接力額度/ })).toBeDisabled()
+    expect(within(rowFor('p99')).getByRole('button', { name: /^減少自動接力額度/ })).toBeEnabled()
   })
 
   it('shows the desired value while a write is pending, the confirmed value otherwise', () => {
@@ -162,7 +162,7 @@ describe('the row', () => {
     act(() => { useRelayQuotaStore.getState().setWrite(A, 'chain', 'self_left', { desired: 7 }) })
     expect(within(rowFor('a')).getByTestId('quota-value')).toHaveTextContent('7')
     expect(within(rowFor('b')).getByTestId('quota-value')).toHaveTextContent('7')
-    fireEvent.click(within(rowFor('b')).getByRole('button', { name: '增加' }))
+    fireEvent.click(within(rowFor('b')).getByRole('button', { name: /^增加自動接力額度/ }))
     expect(mockedSet).toHaveBeenLastCalledWith(expect.objectContaining({ root: 'chain', sessionId: 'b' }), 'self_left', 8)
   })
 })
