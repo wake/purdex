@@ -102,15 +102,15 @@ func recordOutcomeOn(ctx context.Context, c *sql.Conn, o Outcome) ([]wire.Disagr
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, nil // this job was recorded before
 	}
-	// the latest outcome of each other host is the one to compare with, so it is chosen first and only then asked whether it differs
-	rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes
-		WHERE work_key = ? AND host != ? ORDER BY seq DESC`, key, o.Host)
+	// the latest outcome of each other host (by the index on work_key, host, seq, not by reading all of them) is the one to compare with
+	rows, err := c.QueryContext(ctx, `SELECT job_id, host, standing, ok FROM task_outcomes AS t
+		WHERE work_key = ? AND host != ?
+		  AND seq = (SELECT max(seq) FROM task_outcomes WHERE work_key = t.work_key AND host = t.host)`, key, o.Host)
 	if err != nil {
 		return nil, err
 	}
 	type earlier struct{ job, host, standing string }
 	var pairs []earlier
-	seen := map[string]bool{}
 	for rows.Next() {
 		var e earlier
 		var ok int
@@ -118,10 +118,6 @@ func recordOutcomeOn(ctx context.Context, c *sql.Conn, o Outcome) ([]wire.Disagr
 			rows.Close()
 			return nil, err
 		}
-		if seen[e.host] {
-			continue
-		}
-		seen[e.host] = true
 		if ok != b2i(o.OK) {
 			pairs = append(pairs, e)
 		}

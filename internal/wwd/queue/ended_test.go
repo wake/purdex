@@ -156,3 +156,41 @@ func TestTheOutcomeAndTheEndAreOneTransaction(t *testing.T) {
 	assert.Equal(t, wire.StateSucceeded, f.get(t, id).State)
 	assert.Equal(t, 1, f.outcomeRows(t))
 }
+
+// A reference that cannot be had (the hook panics) is not "no reference": the result is not taken, so the worker repeats it and the
+// outcome is judged with the reference it should have had.
+func TestAReferenceThatCannotBeHadFailsTheResult(t *testing.T) {
+	f := newFixture(t)
+	f.q.opt.ReferenceHost = func(repo, task string) string { panic("manifest unreadable") }
+	id := f.submit(t, func(s *wire.JobSubmission) { s.DefHash = "def1" })
+	c := f.claimAs(t, id, "air26", []string{"os:linux"}, fpA)
+	zero := 0
+	_, err := f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: &zero})
+	require.Error(t, err)
+	assert.Equal(t, wire.StateClaimed, f.get(t, id).State, "the result was not taken")
+
+	f.reference("air26")
+	_, err = f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: &zero})
+	require.NoError(t, err)
+	assert.Equal(t, 1, f.outcomeRows(t), "recorded as the reference's once it can be had")
+}
+
+// Of a host's many outcomes of the same work only the latest is compared, however many there are: the host ends on a failure, which
+// disagrees with the reference's success, and there is one disagreement per pair, not one per earlier outcome.
+func TestOnlyAHostsLatestOutcomeOfTheWorkIsCompared(t *testing.T) {
+	f := newFixture(t)
+	f.reference("air26")
+	f.endAs(t, "mserv", []string{"os:linux", specLabel}, 1) // an old failure ...
+	for i := 0; i < 5; i++ {
+		f.endAs(t, "mserv", []string{"os:linux", specLabel}, 0) // ... and then only successes
+	}
+	f.endAs(t, "air26", []string{"os:linux"}, 0)
+	none, _, err := f.q.Disagreements(bg, "mserv", 0, 100)
+	require.NoError(t, err)
+	assert.Empty(t, none, "the old failure does not count: the host's latest agrees with the reference")
+	bad := f.endAs(t, "mserv", []string{"os:linux", specLabel}, 1)
+	got, _, err := f.q.Disagreements(bg, "mserv", 0, 100)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, bad, got[0].Jobs[1])
+}

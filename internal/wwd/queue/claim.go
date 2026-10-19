@@ -212,8 +212,11 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 	var out wire.Job
 	var produced Produced
 	ended := false // this call ended the job: not the echo of a result posted before
-	reference := q.referenceOf(ctx, id)
-	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
+	reference, err := q.referenceOf(ctx, id)
+	if err != nil {
+		return wire.Job{}, err
+	}
+	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
 		h, err := loadHeld(ctx, c, id, false)
 		if err != nil {
 			return err
@@ -252,16 +255,26 @@ func (q *Queue) Result(ctx context.Context, id string, req wire.ResultRequest) (
 }
 
 // referenceOf is the task's reference host for a job, as Options.ReferenceHost says, asked before the transaction that ends the job (it may
-// read manifests; not with the write lock held). "" when there is no hook, no such job, or no reference.
-func (q *Queue) referenceOf(ctx context.Context, id string) string {
+// read manifests; not with the write lock held). "" when there is no hook, no such job, or no reference. A failure to look the job up, or a
+// hook that panics, is an error: the result is not taken (the worker posts it again) rather than taken with an outcome judged without the
+// reference it should have had, which could not be recorded again.
+func (q *Queue) referenceOf(ctx context.Context, id string) (ref string, err error) {
 	if q.opt.ReferenceHost == nil {
-		return ""
+		return "", nil
 	}
 	var repo, task string
-	if err := q.db.QueryRowContext(ctx, `SELECT repo_name, task FROM jobs WHERE id = ?`, id).Scan(&repo, &task); err != nil {
-		return ""
+	switch err := q.db.QueryRowContext(ctx, `SELECT repo_name, task FROM jobs WHERE id = ?`, id).Scan(&repo, &task); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil // Result answers that
+	case err != nil:
+		return "", err
 	}
-	return q.opt.ReferenceHost(repo, task)
+	defer func() {
+		if r := recover(); r != nil {
+			ref, err = "", fmt.Errorf("queue: reference of %s/%s: %v", repo, task, r)
+		}
+	}()
+	return q.opt.ReferenceHost(repo, task), nil
 }
 
 // held is the part of a job row that decides who may do what to it.

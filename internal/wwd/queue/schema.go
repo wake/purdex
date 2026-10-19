@@ -97,7 +97,7 @@ var outcomeStatements = []string{
 		standing  TEXT NOT NULL,
 		at        INTEGER NOT NULL
 	)`,
-	`CREATE INDEX IF NOT EXISTS task_outcomes_work ON task_outcomes (work_key)`,
+	`CREATE INDEX IF NOT EXISTS task_outcomes_work_host ON task_outcomes (work_key, host, seq)`,
 	`CREATE INDEX IF NOT EXISTS task_outcomes_at ON task_outcomes (at)`,
 	`CREATE TABLE IF NOT EXISTS outcome_disagreements (
 		seq        INTEGER PRIMARY KEY AUTOINCREMENT,
