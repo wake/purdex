@@ -237,3 +237,20 @@ func TestSpawnPoolName_AnOpFailedByAnotherActorIsReleasedWhenItsRunnerStops(t *t
 		t.Fatalf("released = %v, want op 1 name given back", got)
 	}
 }
+
+// The start timeout gives the name back itself (codex R1 on #3524): the runner reaps the failed op later by reading it again, and a
+// read that fails must not leave the name held for the ten minutes. Mutation gate: no release in timeOutSpawn → red.
+func TestSpawnPoolName_TheStartTimeoutReleasesItWithoutTheReaper(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	n := withNames(f, "mia")
+	id := f.acceptOp(1, root, namedOp)
+	f.tmux.AddSession("tm-0000000100", root)
+	mustStep(t, f.m.store, id, team.StepAccepted, spawnUpdate{Step: team.StepSessionCreated,
+		TmuxID: "$0", TmuxInstance: "4242:1700000000", PaneID: "%0", At: 1}, true)
+	mustStep(t, f.m.store, id, team.StepSessionCreated, spawnUpdate{Step: team.StepLaunched, LaunchedAt: f.clock.Load(), At: 1}, true)
+	op, _, _ := f.m.store.GetSpawnOp(id)
+	f.m.timeOutSpawn(op, "no frame") // only the timeout: the reaper does not run
+	if got := n.releasedOps(); len(got) != 1 || got[0] != id {
+		t.Fatalf("released = %v, want op 1 name given back by the timeout itself", got)
+	}
+}
