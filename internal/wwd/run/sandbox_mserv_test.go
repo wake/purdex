@@ -340,33 +340,36 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 		}
 	})
 	t.Run("Q_two_origins_same_job_id", func(t *testing.T) {
-		// design section 5: two origins send the same job id to this worker at the same time; each has its own unit, its own
-		// workspace, and is cleared on its own
+		// design section 5: two origins send the same job id to this worker at the same time. What is under test is the unit name: the two
+		// units must be alive together, each its own, and be cleared on their own. (The workspaces differ because runSBOrigin names them
+		// after the tag; their allocation is the worker's, not this test's.)
 		e2eDir(t) // the skip (WWD_MSERV_E2E unset) and the directory failure happen here, not in a worker goroutine
 		tags := []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}
 		runs := make([]e2eRun, len(tags))
 		var wg sync.WaitGroup
+		start := time.Now()
 		for i, tag := range tags {
 			wg.Add(1)
 			go func() {
 				defer wg.Done() // also when runSBOrigin ends this goroutine (t.Fatal): the run then stays the zero value and fails below
-				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; echo pwd=$PWD; touch seen-$WWD_ORIGIN; sleep 3; echo files=$(ls | grep ^seen- | tr '\\n' ',')")
+				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; sleep 3")
 			}()
 		}
 		wg.Wait()
+		wall := time.Since(start)
 		for i, tag := range tags {
 			r, other := runs[i], tags[1-i]
 			if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
 				t.Errorf("origin %s: result %+v", tag, r.Result)
 				continue
 			}
-			// the unit, the origin mark and the workspace (named after the tag by runSBOrigin) are this origin's own, and after both runs
-			// have made their seen-<tag> file (3 s apart from the listing, both runs started together) the directory holds only its own:
-			// a shared workspace lists both files, whatever the scheduling
-			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) ||
-				!strings.Contains(r.out, "/ws-Q-"+tag+"\n") || !strings.Contains(r.out, "files=seen-"+tag+",\n") || strings.Contains(r.out, other) {
-				t.Errorf("origin %s ran in the wrong unit or workspace:\n%s", tag, r.out)
+			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) || strings.Contains(r.out, other) {
+				t.Errorf("origin %s ran in the wrong unit:\n%s", tag, r.out)
 			}
+		}
+		// the runs overlapped iff the wall time is shorter than the two durations added up (run one after the other, it is at least their sum)
+		if sum := runs[0].took + runs[1].took; wall >= sum {
+			t.Errorf("the two runs did not overlap (wall %s, together %s): same-id units were not alive at the same time", wall, sum)
 		}
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed unit left: %s", f)
