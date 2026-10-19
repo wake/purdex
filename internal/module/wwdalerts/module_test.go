@@ -586,6 +586,29 @@ func TestAQueuedPushIsNotSentOnceTheSwitchIsTurnedOff(t *testing.T) {
 	}
 }
 
+// A push taken back before anything was sent hands the attempt back: Recalled puts the ledger as it was, so turning the switch on again
+// is not held back for the 5-minute interval.
+func TestARecalledPushDoesNotHoldTheAlertBack(t *testing.T) {
+	e := newEnv(t)
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.ntf.mu.Lock()
+	recalled := e.ntf.got[0].Recalled
+	e.ntf.mu.Unlock()
+	if recalled == nil {
+		t.Fatal("the push carries no way to be told it was taken back")
+	}
+	e.pass(t)
+	if e.ntf.count() != 1 {
+		t.Fatalf("pushes = %d: the attempt interval should hold it back", e.ntf.count())
+	}
+	recalled()
+	e.pass(t)
+	if e.ntf.count() != 2 {
+		t.Fatalf("pushes = %d: a recalled attempt should not hold it back", e.ntf.count())
+	}
+}
+
 // A daemon that is not the deliverer says so, and counts nothing as held back by the switch.
 func TestStatusSaysWhetherThisDaemonIsTheDeliverer(t *testing.T) {
 	e := newEnv(t)

@@ -347,6 +347,12 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		Host:       host,
 		// the switch is asked again just before the push goes out: turning it off also takes back what still waits in the queue
 		StillWanted: m.pushEnabled,
+		// nothing was sent: the attempt written above goes back, so turning the switch on again is not held back for the interval
+		Recalled: func() {
+			if err := m.store.restoreDelivery(host, key, prev, hadRow, since, now); err != nil {
+				m.logf("wwdalerts: ledger %s/%s: %v", host, key, err)
+			}
+		},
 		Sent: func() {
 			if err := m.store.markSent(host, key, since, m.now()); err != nil {
 				m.logf("wwdalerts: record delivery %s/%s: %v", host, key, err)
