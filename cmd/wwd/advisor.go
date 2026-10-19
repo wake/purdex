@@ -64,7 +64,7 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 // runOrphansScan is `wwd orphans-scan`: the orphans scan once, right now, on this host's own process table, printed. There is no recorded
 // history of the process table to replay, so this is how the rule is checked against a real host before it is relied on. It only lists;
 // the fork-loop line is one burst of table reads (the daemon needs the same loop above the limit for ten minutes before it pushes).
-func runOrphansScan() error {
+func runOrphansScan(measure int) error {
 	src := facts.SystemSourcesWith(facts.SourceOptions{})
 	now := time.Now()
 	snap, ctx, err := src.Procs(now)
@@ -83,6 +83,9 @@ func runOrphansScan() error {
 	for _, l := range r.Loops {
 		fmt.Printf("  pid %-7d %-12s %.0f children/s\n", l.PID, l.Name, l.Rate)
 	}
+	if measure > 0 {
+		measureOrphans(snap, ctx, measure)
+	}
 	return nil
 }
 
@@ -91,7 +94,12 @@ func runOrphansScan() error {
 // is switched on. It reports whether args named it.
 func runAdvisorCmd(args []string) (handled bool, err error) {
 	if len(args) > 0 && args[0] == "orphans-scan" {
-		return true, runOrphansScan()
+		fs := flag.NewFlagSet("orphans-scan", flag.ContinueOnError)
+		measure := fs.Int("measure", 0, "also measure the scan's wall and CPU time over this many runs")
+		if err := fs.Parse(args[1:]); err != nil {
+			return true, err
+		}
+		return true, runOrphansScan(*measure)
 	}
 	if len(args) == 0 || args[0] != "alerts-replay" {
 		return false, nil
