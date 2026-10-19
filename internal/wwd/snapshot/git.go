@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gitenv"
@@ -82,6 +83,38 @@ func gitLimited(ctx context.Context, tag, repoDir string, max int, args ...strin
 	return out.buf.Bytes(), nil
 }
 
+// refLockBackoff is the wait between the tries of gitRefWrite (a var so a test can shorten it).
+var refLockBackoff = 100 * time.Millisecond
+
+// refLockTries is how many times gitRefWrite tries again after a lock error: the first try and then this many.
+const refLockTries = 3
+
+// isRefLockError says whether a git error is another process holding the lock of a ref (or of packed-refs): git says "cannot lock ref" for a
+// ref and "Unable to create '...lock': File exists" for the lock file itself. Nothing else is worth a second try.
+func isRefLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "cannot lock ref") || strings.Contains(msg, "Unable to create") && strings.Contains(msg, ".lock")
+}
+
+// gitRefWrite is git for the commands that write or delete a ref (update-ref, fetch into a ref). The clone may be shared with another git
+// user, and two writers of the same ref directory or of packed-refs fail one of them with "cannot lock ref" for the moment the other holds
+// the lock; that one is tried again (refLockTries times, refLockBackoff apart), any other error at once.
+func gitRefWrite(ctx context.Context, tag, repoDir string, args ...string) ([]byte, error) {
+	out, err := git(ctx, tag, repoDir, args...)
+	for try := 0; try < refLockTries && isRefLockError(err); try++ {
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(refLockBackoff):
+		}
+		out, err = git(ctx, tag, repoDir, args...)
+	}
+	return out, err
+}
+
 // hasCommit says whether repoDir holds the commit.
 func hasCommit(ctx context.Context, repoDir, commit string) bool {
 	if !commitRe.MatchString(commit) {
@@ -122,7 +155,7 @@ func Pin(ctx context.Context, repoDir, jobID, commit string) error {
 		return nil
 	}
 	// the last argument is the value the ref must have now: none, so a second Pin cannot move it
-	_, err := git(ctx, "wwd.snapshot-pin", repoDir, "update-ref", PinRef(jobID), commit, strings.Repeat("0", len(commit)))
+	_, err := gitRefWrite(ctx, "wwd.snapshot-pin", repoDir, "update-ref", PinRef(jobID), commit, strings.Repeat("0", len(commit)))
 	if err != nil && pinned(ctx, repoDir, jobID) == commit {
 		return nil // another call made it first, to the same commit
 	}
@@ -138,7 +171,7 @@ func Unpin(ctx context.Context, repoDir, jobID string) error {
 	if err := ownRepo(ctx, repoDir); err != nil {
 		return err
 	}
-	_, err := git(ctx, "wwd.snapshot-unpin", repoDir, "update-ref", "-d", PinRef(jobID))
+	_, err := gitRefWrite(ctx, "wwd.snapshot-unpin", repoDir, "update-ref", "-d", PinRef(jobID))
 	return err
 }
 
