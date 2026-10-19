@@ -118,8 +118,8 @@ describe('the icon', () => {
     expect(button()).toBeNull()
     setSync({ workspaces: CONFLICT }, {}, { profileGone: true })
     expect(button()).toBeNull()
-    // The watcher shield (W5a3) is the row's other button; this is about the conflict icon.
-    expect(screen.getAllByRole('button').filter((b) => b.getAttribute('data-testid') !== 'watch-shield')).toHaveLength(1)
+    // The watcher shield (W5a3) and the view toggle are the row's other buttons; this is about the conflict icon.
+    expect(screen.getAllByRole('button').filter((b) => !['watch-shield', 'sidebar-view-toggle'].includes(b.getAttribute('data-testid') ?? ''))).toHaveLength(1)
   })
 
   it('locks → an icon with their count, OUTSIDE the switcher trigger', () => {

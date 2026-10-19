@@ -30,6 +30,8 @@ interface Props {
   onRename?: (tabId: string) => void
   /** The team key when this row is a team's lead row (the handoff mark then reads the roster). */
   leadOfTeam?: string
+  /** Not a drag source: the task-group view lists the sessions by group, and a drop there means nothing. */
+  noDrag?: boolean
 }
 
 export function InlineTab({
@@ -42,6 +44,7 @@ export function InlineTab({
   onContextMenu,
   onRename,
   leadOfTeam,
+  noDrag = false,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
@@ -57,6 +60,7 @@ export function InlineTab({
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
+    disabled: noDrag,
   })
 
   const {
