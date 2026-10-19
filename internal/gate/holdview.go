@@ -145,3 +145,15 @@ func (g *Gate) effective(cfg Config) Config {
 	}
 	return cfg
 }
+
+// holdNames is the name of every hold in force (empty when the gate asks nothing or is off).
+func (g *Gate) holdNames(cfg Config) []string {
+	if g.HoldFetch == nil || !cfg.Enabled {
+		return nil
+	}
+	var names []string
+	for _, h := range g.holdView(cfg.Dir).Holds {
+		names = append(names, h.Name)
+	}
+	return names
+}

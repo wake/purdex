@@ -325,8 +325,11 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
-	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
-	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight, st.QueueLight)
+	printPool("重", st.SlotsHeavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
+	printPool("輕", st.SlotsLight, st.Light, st.WaitLight, st.QueueLight)
+	if len(st.Holds) > 0 { // a hold of the local wwd: heavy commands wait for it, and a release hold leaves one light slot
+		fmt.Fprintf(stdout, "wwd 的 hold：%s（重指令等它結束；有 release 旗標時輕名額上限 1）\n", strings.Join(st.Holds, "、"))
+	}
 	if st.ConflictsError != "" {
 		fmt.Fprintf(stdout, "衝突規則：conflicts.json 不能用，目前沒有規則生效（%s）\n", st.ConflictsError)
 	}

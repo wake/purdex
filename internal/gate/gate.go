@@ -533,6 +533,11 @@ type Status struct {
 	Conflicts      []Conflict `json:"Conflicts"`
 	ConflictsError string     `json:"ConflictsError,omitempty"`
 	PausedLight    bool       `json:"PausedLight"`
+	// SlotsHeavy and SlotsLight are the slot counts the gate really allows now: the settings, with a release hold of the local wwd
+	// taking the light ones down to 1 (holdview.go). Holds is the name of every hold in force.
+	SlotsHeavy int      `json:"SlotsHeavy"`
+	SlotsLight int      `json:"SlotsLight"`
+	Holds      []string `json:"Holds,omitempty"`
 }
 
 // AdmissionState is whether the gate is holding new heavy work because of the host, and why.
@@ -601,7 +606,7 @@ func (g *Gate) Status() Status { return g.StatusWith(HoldersAll) }
 
 // StatusWith is Status with a choice of which held slots get their lock holders looked up.
 func (g *Gate) StatusWith(mode HoldersMode) Status {
-	cfg := g.Config()
+	cfg := g.effective(g.Config())
 	h, l := g.pool(cfg, ClassHeavy), g.pool(cfg, ClassLight)
 	heavy, light := h.Held(), l.Held()
 	g.fillLocked(h, heavy, l, light, mode)
@@ -615,6 +620,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 		QueueHeavy: h.waitersWithConflicts(heavy, rules), QueueLight: l.waitersWithConflicts(light, rules),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 		PausedHeavy: cfg.Enabled && cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Enabled && cfg.Slots.Paused(ClassLight),
+		SlotsHeavy: cfg.Slots.Heavy, SlotsLight: cfg.Slots.Light, Holds: g.holdNames(cfg),
 	}
 }
 
