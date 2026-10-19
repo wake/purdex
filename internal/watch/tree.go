@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/wake/purdex/internal/resources"
@@ -70,6 +71,37 @@ func (t *table) rootOf(pid int) int {
 		t.memo[q] = root
 	}
 	return root
+}
+
+// maxJobMarkAsks bounds how many processes below a tree's root are asked for the wwd job mark, after the root itself.
+const maxJobMarkAsks = 16
+
+// hasJobMark says whether the tree of root belongs to a wwd job. Every process a job starts carries the mark, but the kernel hides the
+// environment of an Apple-signed binary (a /usr/bin/make at the root), so when the root says no the lowest-numbered processes below it are
+// asked, up to maxJobMarkAsks of them. It is asked when a tree's event is made, once per episode, never per tick. A nil mark knows none.
+func (t *table) hasJobMark(root int, mark func(pid int) bool) bool {
+	if mark == nil {
+		return false
+	}
+	if mark(root) {
+		return true
+	}
+	var below []int
+	for pid := range t.byPID {
+		if pid != root && t.rootOf(pid) == root {
+			below = append(below, pid)
+		}
+	}
+	sort.Ints(below)
+	if len(below) > maxJobMarkAsks {
+		below = below[:maxJobMarkAsks]
+	}
+	for _, pid := range below {
+		if mark(pid) {
+			return true
+		}
+	}
+	return false
 }
 
 // ancestors calls f on a process and then each of its ancestors, until f says stop, the chain ends or loops.
