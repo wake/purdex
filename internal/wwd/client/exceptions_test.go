@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestExceptions_SendsTheHostAndDecodesTheHolds(t *testing.T) {
@@ -41,6 +42,40 @@ func TestExceptions_AnUnknownHostIsStillAnError(t *testing.T) {
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != 404 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Only net/http's own "no such route" 404 is an old host; a proxy's 404 page or any other 404 is an answer, not "not known" (R1).
+func TestExceptions_AnotherA404IsAnError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<html>proxy: nothing here</html>"))
+	})
+	_, known, err := New(fakeWWD(t, mux)).Exceptions(context.Background(), "air26")
+	var se *StatusError
+	if known || !errors.As(err, &se) || se.Code != 404 {
+		t.Fatalf("known=%v err=%v", known, err)
+	}
+}
+
+// A host named in the call may be forwarded by the local wwd (its own limit is 10 s), so that call outlasts the short default (R1).
+func TestExceptions_AForwardedCallOutlastsTheShortTimeout(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(400 * time.Millisecond):
+			_, _ = w.Write([]byte(`[]`))
+		case <-r.Context().Done():
+		}
+	})
+	c := New(fakeWWD(t, mux))
+	c.Timeout = 100 * time.Millisecond
+	if _, _, err := c.Exceptions(context.Background(), ""); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("local: err = %v, want ErrUnavailable", err)
+	}
+	if _, _, err := c.Exceptions(context.Background(), "mserv"); err != nil {
+		t.Fatalf("forwarded: %v", err)
 	}
 }
 

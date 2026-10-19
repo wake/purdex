@@ -2,10 +2,8 @@ package client
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -16,10 +14,14 @@ import (
 // is not in the pool.
 func (c *Client) Exceptions(ctx context.Context, host string) (list []wire.Exception, known bool, err error) {
 	var q url.Values
+	timeout := c.timeout()
 	if host != "" {
 		q = url.Values{"host": {host}}
+		if timeout < MutateTimeout { // the local wwd may forward it (its own limit is 10 s)
+			timeout = MutateTimeout
+		}
 	}
-	list, err = get[[]wire.Exception](ctx, c, "/v1/exceptions", q)
+	list, err = getLimit[[]wire.Exception](ctx, c, "/v1/exceptions", q, timeout, maxBody)
 	if err == nil {
 		if list == nil {
 			list = []wire.Exception{}
@@ -31,8 +33,7 @@ func (c *Client) Exceptions(ctx context.Context, host string) (list []wire.Excep
 		}
 		return list, true, nil
 	}
-	var se *StatusError
-	if errors.As(err, &se) && se.Code == 404 && !strings.Contains(se.Body, "unknown host") {
+	if RouteMissing(err) {
 		return []wire.Exception{}, false, nil
 	}
 	return nil, false, err
