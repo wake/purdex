@@ -78,7 +78,8 @@ func newQualifySource(root string) *qualifySource {
 // environment labels they need (the repo and the task's own label are not needs) and the manifest's definition hash.
 func TestTheQualifySourceListsTheTasksWithAQualify(t *testing.T) {
 	src := newQualifySource(qualifyRepo(t, qualifyManifest))
-	tasks := src.Tasks()
+	tasks, err := src.Tasks()
+	require.NoError(t, err)
 	require.Len(t, tasks, 3, "plain has no qualify")
 	byName := map[string]qualify.Task{}
 	for _, tk := range tasks {
@@ -104,14 +105,18 @@ func TestTheQualifySourceListsTheTasksWithAQualify(t *testing.T) {
 func TestTheDefinitionHashFollowsTheTasksOwnManifestFields(t *testing.T) {
 	hash := func(text string) map[string]string {
 		out := map[string]string{}
-		for _, tk := range newQualifySource(qualifyRepo(t, text)).Tasks() {
+		tasks, err := newQualifySource(qualifyRepo(t, text)).Tasks()
+		require.NoError(t, err)
+		for _, tk := range tasks {
 			out[tk.Name] = tk.DefHash
 		}
 		return out
 	}
 	identity := func(text string) map[string]string {
 		out := map[string]string{}
-		for _, tk := range newQualifySource(qualifyRepo(t, text)).Tasks() {
+		tasks, err := newQualifySource(qualifyRepo(t, text)).Tasks()
+		require.NoError(t, err)
+		for _, tk := range tasks {
 			out[tk.Name] = tk.Identity()
 		}
 		return out
@@ -131,12 +136,54 @@ func TestTheDefinitionHashFollowsTheTasksOwnManifestFields(t *testing.T) {
 
 // A clone with no manifest, one whose manifest does not parse, and a repo that is not prepared contribute nothing.
 func TestTheQualifySourceSkipsWhatItCannotRead(t *testing.T) {
-	none := t.TempDir()
-	bad := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(bad, ".wwd"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(bad, ".wwd", "tasks.toml"), []byte("[tasks.x\n"), 0o644))
+	none := qualifyRepo(t, qualifyManifest)
+	require.NoError(t, os.RemoveAll(filepath.Join(none, ".wwd")))
+	bad := qualifyRepo(t, "[tasks.x\n")
 	src := &qualifySource{repos: clones.NewSource(map[string]string{"a": none, "b": bad}), host: func() qualify.Host { return qualify.Host{} }}
-	assert.Empty(t, src.Tasks())
+	tasks, err := src.Tasks()
+	assert.Empty(t, tasks)
+	require.Error(t, err, "a manifest that does not parse is told, not hidden as a task that is not there")
+	assert.Contains(t, err.Error(), "b:")
+	assert.NotContains(t, err.Error(), "a: ", "a clone with no manifest is not a fault")
+}
+
+// A manifest that is there and cannot be read (here: a directory in its place) is told as well, and the other clones' tasks still come.
+func TestTheQualifySourceTellsAManifestItCannotRead(t *testing.T) {
+	good := qualifyRepo(t, qualifyManifest)
+	broken := qualifyRepo(t, qualifyManifest)
+	require.NoError(t, os.Remove(filepath.Join(broken, ".wwd", "tasks.toml")))
+	require.NoError(t, os.MkdirAll(filepath.Join(broken, ".wwd", "tasks.toml"), 0o755))
+	src := &qualifySource{repos: clones.NewSource(map[string]string{"purdex": good, "other": broken}), host: func() qualify.Host { return qualify.Host{} }}
+	tasks, err := src.Tasks()
+	assert.Len(t, tasks, 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "other:")
+}
+
+// The manifest moved between listing the task and the snapshot (the A, B, A of a person editing): the pair is refused, not run on B.
+func TestPrepareRefusesATaskWhoseDefinitionMoved(t *testing.T) {
+	root := qualifyRepo(t, qualifyManifest)
+	src := newQualifySource(root)
+	tasks, err := src.Tasks()
+	require.NoError(t, err)
+	var tsc qualify.Task
+	for _, tk := range tasks {
+		if tk.Name == "tsc" {
+			tsc = tk
+		}
+	}
+	changed := strings.Replace(qualifyManifest, `run     = "echo checked"`, `run     = "echo changed"`, 1)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte(changed), 0o644))
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "B"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	_, err = src.Prepare(context.Background(), tsc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "changed its definition")
 }
 
 // Prepare takes the snapshot of the task's clone and returns the task's submission with the qualify args as its args, in the name of the
@@ -144,7 +191,9 @@ func TestTheQualifySourceSkipsWhatItCannotRead(t *testing.T) {
 func TestPrepareTakesOneSnapshotWithTheQualifyArgs(t *testing.T) {
 	src := newQualifySource(qualifyRepo(t, qualifyManifest))
 	byName := map[string]qualify.Task{}
-	for _, tk := range src.Tasks() {
+	all, err := src.Tasks()
+	require.NoError(t, err)
+	for _, tk := range all {
 		byName[tk.Name] = tk
 	}
 	sub, err := src.Prepare(context.Background(), byName["tsc"])

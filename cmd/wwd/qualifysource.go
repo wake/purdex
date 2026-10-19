@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/wake/purdex/internal/wwd/clones"
@@ -25,21 +28,26 @@ func (s *qualifySource) Host() qualify.Host { return s.host() }
 
 // Tasks lists, for each prepared clone whose manifest parses, the tasks that name a reference host in their `qualify`. The manifest is the
 // one in the clone's working tree, read the same bounded way the reference labels are; DefHash is the manifest's own definition hash of the
-// task, so the coordinator can tell when a pair is done that the task is still the one that was run. A clone with no manifest, or one that
-// does not parse, contributes nothing.
-func (s *qualifySource) Tasks() []qualify.Task {
+// task, so the coordinator can tell when a pair is done that the task is still the one that was run. A clone with no manifest contributes nothing; one that does
+// not parse contributes nothing and is named in the error.
+func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 	var out []qualify.Task
+	var errs []error
 	for _, repo := range s.repos.Names() {
 		root, ok := s.repos.Path(repo)
 		if !ok {
 			continue
 		}
-		_, b, ok := readManifest(root)
+		path, b, ok := readManifest(root)
 		if !ok {
+			if file := filepath.Join(root, ".wwd", "tasks.toml"); fileExists(file) { // no manifest at all is not a fault; one that is there and cannot be read is
+				errs = append(errs, fmt.Errorf("%s: %s cannot be read (not a regular file inside the clone, too large, or unreadable)", repo, file))
+			}
 			continue
 		}
 		m, err := manifest.Parse(b)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %s does not parse: %w", repo, path, err))
 			continue
 		}
 		var names []string
@@ -61,7 +69,7 @@ func (s *qualifySource) Tasks() []qualify.Task {
 			})
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
 // Prepare takes the snapshot of the task's clone and returns the task's submission as its manifest declares it, with the qualify args as its
@@ -79,5 +87,10 @@ func (s *qualifySource) Prepare(ctx context.Context, t qualify.Task) (wire.JobSu
 	if err != nil {
 		return wire.JobSubmission{}, err
 	}
+	if p.Body.DefHash != t.DefHash { // the manifest moved between listing the task and the snapshot: the pair would run a definition nobody asked for
+		return wire.JobSubmission{}, fmt.Errorf("%s/%s changed its definition while the snapshot was taken: ask again", t.Repo, t.Name)
+	}
 	return p.Body, nil
 }
+
+func fileExists(p string) bool { _, err := os.Lstat(p); return err == nil }

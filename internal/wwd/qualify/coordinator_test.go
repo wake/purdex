@@ -99,6 +99,7 @@ type fakeSource struct {
 	mu         sync.Mutex
 	host       Host
 	tasks      []Task
+	tasksErr   error
 	prepareErr error
 	prepared   atomic.Int32
 }
@@ -125,7 +126,7 @@ func cloneMap(m map[string]string) map[string]string {
 	return out
 }
 
-func (s *fakeSource) Tasks() []Task { return s.tasks }
+func (s *fakeSource) Tasks() ([]Task, error) { return s.tasks, s.tasksErr }
 
 func (s *fakeSource) Prepare(_ context.Context, t Task) (wire.JobSubmission, error) {
 	s.prepared.Add(1)
@@ -536,5 +537,36 @@ func TestRunSettleSettlesOnItsPeriodAndStopsWithItsContext(t *testing.T) {
 	}
 	if r.granted.Load() != 1 {
 		t.Fatalf("settled %d times", r.granted.Load())
+	}
+}
+
+// A manifest that cannot be read is not an unknown task: a request for a task that is not found while one is broken is a fault of the host
+// (not the 404), and the retry memory of the tasks that cannot be seen is kept.
+func TestABrokenManifestIsNotAnUnknownTask(t *testing.T) {
+	r := newRig(t, tsc)
+	r.src.tasksErr = errors.New("a: manifest does not parse")
+	_, err := r.c.Request(ctx(), "purdex/nope")
+	var unknown *UnknownTaskError
+	if err == nil || errors.As(err, &unknown) || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("%v", err)
+	}
+	r.src.tasksErr = nil
+	if _, err := r.c.Request(ctx(), "purdex/nope"); !errors.As(err, &unknown) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestABrokenManifestKeepsTheRetryMemory(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.last[tsc.Label()] = Attempt{At: r.now, Outcome: OutcomeMismatch}
+	r.src.tasks, r.src.tasksErr = nil, errors.New("unreadable")
+	r.c.Tick(ctx())
+	if _, ok := r.c.last[tsc.Label()]; !ok {
+		t.Fatal("the retry memory of a task hidden by a broken manifest was dropped")
+	}
+	r.src.tasksErr = nil
+	r.c.Tick(ctx())
+	if _, ok := r.c.last[tsc.Label()]; ok {
+		t.Fatal("the retry memory of a task that is gone was kept")
 	}
 }

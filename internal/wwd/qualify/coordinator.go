@@ -44,8 +44,9 @@ type Store interface {
 type Source interface {
 	// Host is the host now: its alias, whether its worker is on, the labels it advertises and its fingerprint.
 	Host() Host
-	// Tasks is the tasks of the prepared clones that have a qualify with a reference host.
-	Tasks() []Task
+	// Tasks is the tasks of the prepared clones that have a qualify with a reference host. A clone whose manifest cannot be read or parsed
+	// contributes nothing and is reported in the error (joined, one per clone) next to the tasks of the others.
+	Tasks() ([]Task, error)
 	// Prepare takes the snapshot of the task's clone and returns the submission of the task as the manifest declares it, with the qualify
 	// args as its args (the caller turns it into the two halves). One call, so both halves share one snapshot.
 	Prepare(ctx context.Context, t Task) (wire.JobSubmission, error)
@@ -142,7 +143,11 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		log.Printf("wwd: qualify: %v", err)
 		return
 	}
-	c.forgetGoneTasks(in.Tasks)
+	if in.TasksErr != nil { // a manifest that could not be read hides its tasks: they are not gone, and their retry memory stays
+		log.Printf("wwd: qualify: %v", in.TasksErr)
+	} else {
+		c.forgetGoneTasks(in.Tasks)
+	}
 	for _, t := range Decide(in) {
 		if _, err := c.start(ctx, t); err != nil {
 			log.Printf("wwd: qualify %s: %v", t.Label(), err)
@@ -173,6 +178,11 @@ func (c *Coordinator) Request(ctx context.Context, repoTask string) (Started, er
 		return Started{}, err
 	}
 	t, err := Manual(in, repoTask)
+	var unknown *UnknownTaskError
+	if errors.As(err, &unknown) && in.TasksErr != nil { // not found, but a manifest could not be read: that is a fault of the host, not a wrong name
+		log.Printf("wwd: qualify: %v", in.TasksErr)
+		return Started{}, fmt.Errorf("task %q not found, and a manifest could not be read: %w", repoTask, in.TasksErr)
+	}
 	if err != nil {
 		return Started{}, err
 	}
@@ -199,7 +209,8 @@ func (c *Coordinator) input() (Input, error) {
 	if err != nil && !errors.As(err, &damaged) { // damaged rows are left out and the rest is the answer; any other error is no answer
 		return Input{}, fmt.Errorf("reading the earned labels: %w", err)
 	}
-	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: c.cfg.Source.Tasks(),
+	tasks, terr := c.cfg.Source.Tasks()
+	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr,
 		Earned: map[string]string{}, InFlight: map[string]bool{}, Last: map[string]Attempt{}}
 	for _, r := range rows {
 		in.Earned[r.Label] = r.State
@@ -337,7 +348,8 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 // stillTheSameTask says whether the task is, now, the one the pair was queued for: the same repo, name, reference, qualify args, needs and
 // definition. A result of an older definition proves nothing about the current one.
 func (c *Coordinator) stillTheSameTask(p *openPair) bool {
-	for _, t := range c.cfg.Source.Tasks() {
+	tasks, _ := c.cfg.Source.Tasks() // a manifest that cannot be read hides the task: the pair is not known to be of the current definition
+	for _, t := range tasks {
 		if t.Label() == p.task.Label() {
 			return t.Identity() == p.identity
 		}

@@ -72,6 +72,8 @@ type Input struct {
 	Now   time.Time
 	Host  Host
 	Tasks []Task
+	// TasksErr is what could not be read of the manifests behind Tasks (nil when all could).
+	TasksErr error
 	// Earned maps a task label to its state (wire.EarnedLabelEarned or wire.EarnedLabelQuarantined); a label that is not there was never earned.
 	Earned map[string]string
 	// InFlight holds the task labels that have an unfinished pair on this host.
