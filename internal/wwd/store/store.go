@@ -21,7 +21,7 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // exceptionHoldCols (v7, WWD-8 8b-3): the two hold fields of an exception (spec §13.4), NULL for an exception made without them. Both
 // are JSON: allow as {"classes":[..],"repos":[..]}, flags as a list. A file made before v7 gets them with an ALTER; a new file gets them
@@ -129,6 +129,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			resultCacheDDL,
 			resultCacheIndexDDL,
 			resultCacheLabelIndexDDL,
+			qualifyAttemptsDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -182,6 +183,11 @@ func (s *Store) migrate(ctx context.Context) error {
 				if err := addColumn(ctx, tx, "exceptions", c.name, c.ddl); err != nil {
 					return err
 				}
+			}
+		}
+		if have < 8 { // v8: the last unsuccessful qualification pair of a task (WWD-5b-2c-2; IF NOT EXISTS: a re-run changes nothing)
+			if _, err := tx.ExecContext(ctx, qualifyAttemptsDDL); err != nil {
+				return err
 			}
 		}
 		if have < schemaVersion {

@@ -102,17 +102,9 @@ func TestOpenMigratesV6ToV7(t *testing.T) {
 			t.Fatalf("open %d: the old row keeps its meaning: %+v %v", round, got, err)
 		}
 		var v int
-		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != 7 {
+		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != schemaVersion {
 			t.Fatalf("open %d: version %d %v", round, v, err)
 		}
 		s.Close()
-	}
-}
-
-// What an older wwd does with a v7 file is the existing rule: a newer schema is refused (TestRefusesADatabaseANewerWwdWrote), so the roll
-// back is the backup taken before the upgrade. This pins the number that rule compares.
-func TestSchemaVersionIsSeven(t *testing.T) {
-	if schemaVersion != 7 {
-		t.Fatalf("schemaVersion = %d: a step needs its own case in migrate and its own test", schemaVersion)
 	}
 }

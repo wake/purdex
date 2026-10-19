@@ -79,10 +79,11 @@ run       = "pnpm tsc -b"
 cwd       = "spa"
 args      = "none"
 class     = "merge"
-labels     = ["os:darwin"]
+labels    = ["repo:purdex", "task:purdex/tsc", "tool:node24"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
+qualify   = { args = [], reference = "air26" }
 
 [tasks.lint]
 run       = "make lint"
