@@ -17,7 +17,8 @@ function Item({ id, label, children }: { id: string; label: string; children: Re
 
 const hhmm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-export function AvailRow({ pool, exceptions }: { pool: PoolCellExtra; exceptions: PoolException[] }) {
+/** `at` is the facts' own time (the daemon's clock): an exception whose end is before it is over, whatever this App's clock says. */
+export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; exceptions: PoolException[]; at: number }) {
   const t = useI18nStore((s) => s.t)
   if (pool.state === 'offline') return null
   if (pool.state === 'fallback') {
@@ -28,6 +29,7 @@ export function AvailRow({ pool, exceptions }: { pool: PoolCellExtra; exceptions
     )
   }
   const unknown = t('pool.card.unknown')
+  const exceptions = all.filter((e) => e.until === null || e.until > at)
   const w = pool.worker
   const reasons = headroomReasonLines(pool.headroom, pool.reasons, t)
   return (

@@ -12,6 +12,7 @@ import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
 import hostsJson from '../../lib/pool/__fixtures__/pool_hosts_response.json'
 import type { PoolFacts, PoolHost } from '../../lib/pool/types'
+import type { FleetQueue } from '../../lib/fleet/types'
 
 const fetchPoolHosts = vi.fn()
 vi.mock('../../lib/pool/api', () => ({ fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a) }))
@@ -24,6 +25,11 @@ const ph = (over: Partial<PoolHost> = {}, facts: Partial<PoolFacts> = {}): PoolH
   ...baseHost, alias: 'air26', host_id: 'd-a', version: '1.0.0-alpha.755', reachable: true,
   facts: { ...darwin, alias: 'air26', at: Date.now() - 5000, ...facts }, ...over,
 })
+
+const queue: FleetQueue = {
+  heavy_used: 1, heavy_total: 2, light_used: 0, light_total: 3, holders: [{ class: 'heavy', slot: 1, command: 'go test', project: 'purdex', session: '', since: 1, pid: 9 }],
+  waiters: [], longest_wait_s: 0, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false,
+}
 
 function load(hosts: ReturnType<typeof host>[]) {
   const gen = st().begin('cfg-a')
@@ -65,7 +71,9 @@ describe('WatchHostPane on the pool — a host wwd reads', () => {
     await renderPane()
     const row = screen.getByTestId('avail-row')
     expect(within(row).getByTestId('avail-worker').textContent).toContain('heavy 0/1')
-    expect(within(row).getByTestId('avail-exception-app-dev-package')).toBeTruthy()
+    // the fixture's two exceptions: one without an end is in force, the one that ended on 10-18 is over by the facts' time
+    expect(within(row).getByTestId('avail-exception-dev-server')).toBeTruthy()
+    expect(within(row).queryByTestId('avail-exception-app-dev-package')).toBeNull()
   })
 
   it('the gauges read the facts, not the fleet\'s older number', async () => {
@@ -96,6 +104,28 @@ describe('WatchHostPane on the pool — a host wwd reads', () => {
     expect(within(cpu).getByTestId('proc-owner-41').textContent).toBe('codex s7')
     expect(within(cpu).getByTestId('proc-owner-42').textContent).toBe('Resident s9')
     expect(within(cpu).getByTestId('proc-owner-43').textContent).toBe('System')
+  })
+
+  it('wwd reads the host: the fleet\'s older gate queue is not drawn next to the facts', async () => {
+    load([host('d-a', { alias: 'air26', slow: { at: 1, top_cpu: [], top_mem: [], queue } })])
+    await renderPane()
+    expect(screen.queryByTestId('q-holder')).toBeNull()
+    expect(screen.queryByText(t('watch.queue.title'))).toBeNull()
+  })
+
+  it('a memory kind this App does not know is not labelled RSS', async () => {
+    const procs = [
+      { pid: 51, name: 'a', cpu_pct: 9, mem_mb: 300, mem_kind: 'rss', owner: null },
+      { pid: 52, name: 'b', cpu_pct: 8, mem_mb: 200, mem_kind: 'swap', owner: null },
+      { pid: 53, name: 'c', cpu_pct: 7, mem_mb: 100, mem_kind: 'footprint', owner: null },
+    ]
+    fetchPoolHosts.mockResolvedValue([ph({}, { procs })])
+    await renderPane()
+    const rows = within(screen.getByTestId('procs-mem')).getAllByRole('row')
+    const rss = (name: string) => within(rows.find((r) => r.textContent?.includes(name))!).queryByText('RSS')
+    expect(rss('a')).not.toBeNull()
+    expect(rss('b')).toBeNull()
+    expect(rss('c')).toBeNull()
   })
 
   it('residents: shown, with no way to end them', async () => {

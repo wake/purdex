@@ -67,7 +67,7 @@ function isOffline(v: FleetHostView): boolean {
 
 /** The facts' processes as the table's rows: the top five by CPU and by memory, each with its owner. */
 function topProcs(procs: PoolProc[]): { cpu: ProcRow[]; mem: ProcRow[] } {
-  const row = (p: PoolProc): ProcRow => ({ pid: p.pid, name: p.name, cpu: Math.round(p.cpu_pct * 10) / 10, rss_mb: p.mem_mb, mem_mb: p.mem_mb, mem_kind: p.mem_kind === 'footprint' ? 'footprint' : 'rss', owner: p.owner })
+  const row = (p: PoolProc): ProcRow => ({ pid: p.pid, name: p.name, cpu: Math.round(p.cpu_pct * 10) / 10, rss_mb: p.mem_mb, mem_mb: p.mem_mb, mem_kind: p.mem_kind === 'footprint' || p.mem_kind === 'rss' ? p.mem_kind : undefined, owner: p.owner })
   return {
     cpu: [...procs].sort((x, y) => y.cpu_pct - x.cpu_pct).slice(0, 5).map(row),
     mem: [...procs].sort((x, y) => y.mem_mb - x.mem_mb).slice(0, 5).map(row),
@@ -158,11 +158,11 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
-        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} />}
+        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} />}
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
           <Resources view={shown} range={range} now={now} />
         </Section>
-        {view.kind === 'daemon' && (offline || view.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={view.slow?.queue} offline={offline} />}
+        {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={live ? topProcs(live.procs).cpu : (view.slow?.top_cpu ?? [])} unit="cpu" offline={offline} />
