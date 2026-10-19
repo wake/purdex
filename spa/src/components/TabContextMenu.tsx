@@ -4,9 +4,11 @@ import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTabMenuExtrasStore, type TabMenuExtra } from '../stores/useTabMenuExtrasStore'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 
 const PADDING = 4
+const NO_EXTRAS: TabMenuExtra[] = []
 
 export type ContextMenuAction =
   | 'lock' | 'unlock' | 'pin' | 'unpin'
@@ -67,6 +69,10 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
 
   useClickOutside(ref, onClose)
 
+  // Rows a surface put on top for this tab (the task-group view's); gone when the menu is.
+  const extras = useTabMenuExtrasStore((s) => (s.tabId === tab.id ? s.items : NO_EXTRAS))
+  useEffect(() => () => useTabMenuExtrasStore.getState().clear(), [])
+
   useEffect(() => {
     const escHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', escHandler)
@@ -126,6 +132,20 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
       // no-drag: wherever it lands, the title bar's drag region must not take its clicks.
       style={{ left: position.x, top: position.y, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
+      {extras.length > 0 && (
+        <>
+          {extras.map((x) => (
+            <button
+              key={x.key} data-testid={`tab-menu-extra-${x.key}`} disabled={x.disabled} title={x.title}
+              onClick={() => { x.onSelect(); onClose() }}
+              className={`w-full text-left px-3 py-1.5 transition-colors ${x.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'}`}
+            >
+              {x.label}
+            </button>
+          ))}
+          <div className="border-t border-border-default my-1" />
+        </>
+      )}
       {cleaned.map((item, i) => {
         if (item === 'separator') {
           return <div key={`sep-${i}`} className="border-t border-border-default my-1" />
