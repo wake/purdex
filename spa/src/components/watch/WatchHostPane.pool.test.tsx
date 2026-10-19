@@ -84,6 +84,20 @@ describe('WatchHostPane on the pool — a host wwd reads', () => {
     expect(within(cpu).queryByTestId('proc-owner-999')).toBeNull()
   })
 
+  it('codex and resident processes name their session, so several sessions can be told apart', async () => {
+    const procs = [
+      { pid: 41, name: 'codex', cpu_pct: 9, mem_mb: 300, mem_kind: 'rss', owner: { kind: 'codex', session: 's7' } },
+      { pid: 42, name: 'tail', cpu_pct: 8, mem_mb: 20, mem_kind: 'rss', owner: { kind: 'resident', session: 's9' } },
+      { pid: 43, name: 'cron', cpu_pct: 7, mem_mb: 10, mem_kind: 'rss', owner: { kind: 'system' } },
+    ]
+    fetchPoolHosts.mockResolvedValue([ph({}, { procs })])
+    await renderPane()
+    const cpu = screen.getByTestId('procs-cpu')
+    expect(within(cpu).getByTestId('proc-owner-41').textContent).toBe('codex s7')
+    expect(within(cpu).getByTestId('proc-owner-42').textContent).toBe('Resident s9')
+    expect(within(cpu).getByTestId('proc-owner-43').textContent).toBe('System')
+  })
+
   it('residents: shown, with no way to end them', async () => {
     await renderPane()
     const r = screen.getByTestId('residents')

@@ -8,10 +8,10 @@ export type ProcRow = FleetProc & { owner?: ProcOwner | null }
 
 const OWNER_KINDS = ['session', 'job', 'codex', 'resident', 'system']
 
-/** The chip's words: the kind, and the id it names (a job id, a session ref). A kind this App does not know shows as it is. */
+/** The chip's words: the kind, and the id it names (a job id; for the rest the session's ref, so two sessions' processes tell apart). A kind this App does not know shows as it is. */
 function ownerWords(o: ProcOwner, t: (k: string, p?: Record<string, string | number>) => string): string {
   if (!OWNER_KINDS.includes(o.kind)) return o.kind
-  const id = o.kind === 'job' ? o.id : o.kind === 'session' ? (o.session ?? o.id) : undefined
+  const id = o.kind === 'job' ? o.id : o.kind === 'system' ? undefined : (o.session ?? o.id)
   return t(`watch.host.owner.${o.kind}`) + (id ? ` ${id}` : '')
 }
 
