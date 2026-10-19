@@ -139,7 +139,6 @@ func (w *Watcher) OnFacts(current map[string]string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	tasks := w.cfg.Tasks() // once: it reads the manifests
-	w.retryPending()
 	w.watchReferences(tasks, current)
 	rows, err := w.cfg.Earned.EarnedLabels()
 	var damaged *store.SkippedRowsError
@@ -147,6 +146,7 @@ func (w *Watcher) OnFacts(current map[string]string) {
 		log.Printf("wwd: drift: reading the earned labels: %v", err)
 		return
 	}
+	w.retryPending(rows)
 	needs := make(map[string][]string, len(tasks))
 	for _, t := range tasks {
 		needs[t.Label] = t.Needs
@@ -183,8 +183,18 @@ func (w *Watcher) dropEntries(label string, track bool) bool {
 	return true
 }
 
-func (w *Watcher) retryPending() {
+// retryPending drops what an earlier record could not. A label that has been earned again since is let go instead: the entries now under
+// it belong to the new qualification, and a leftover old one cannot be reused (the lookup compares fingerprints).
+func (w *Watcher) retryPending(rows []wire.EarnedLabel) {
+	earned := map[string]bool{}
+	for _, r := range rows {
+		earned[r.Label] = true
+	}
 	for label := range w.pending {
+		if earned[label] {
+			delete(w.pending, label)
+			continue
+		}
 		w.dropEntries(label, true)
 	}
 }

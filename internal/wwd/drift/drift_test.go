@@ -333,3 +333,16 @@ func TestAReferenceThatIsNoLongerOursIsForgotten(t *testing.T) {
 		t.Fatalf("%v", c.calls)
 	}
 }
+
+func TestAPendingCleanupIsLetGoOnceTheLabelIsEarnedAgain(t *testing.T) {
+	e := &fakeEarned{rows: []wire.EarnedLabel{earned("task:purdex/tsc", wire.EarnedLabelEarned, fpNow)}}
+	c := &fakeCache{failures: 1}
+	w := newWatcher(e, c, new(int), nil)
+	moved := map[string]string{"os_version": "27.0", "node": "24.14.0"}
+	w.OnFacts(moved)
+	e.rows = []wire.EarnedLabel{earned("task:purdex/tsc", wire.EarnedLabelEarned, moved)} // earned again on the new fingerprint
+	w.OnFacts(moved)
+	if len(c.calls) != 1 || len(w.pending) != 0 {
+		t.Fatalf("cache calls %v, pending %v: the new qualification's entries must not be dropped", c.calls, w.pending)
+	}
+}
