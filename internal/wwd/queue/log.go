@@ -20,6 +20,9 @@ const (
 	// defaultMaxLog caps one uploaded log. A worker is trusted with a claim, not with the origin's disk; a test run's output is
 	// kilobytes to a few megabytes. (Queue.maxLog, so a test can lower it.)
 	defaultMaxLog = 64 << 20
+	// lateLogWindow: a result is offered for reuse on a log that comes after it only within this long of its end, so that the entry (kept
+	// for the log retention from the time it is made) is gone before the job is: retention minus logRetention.
+	lateLogWindow = retention - logRetention
 )
 
 // ErrLogTooLarge: the uploaded log is bigger than the cap; nothing of it is kept.
@@ -99,6 +102,13 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 			}
 			*changed = append(*changed, id)
 			if !h.hasLog { // the first log of an ended job: its result could not be offered for reuse without one (see offerResult)
+				var fin sql.NullInt64
+				if err := c.QueryRowContext(ctx, `SELECT finished_at FROM jobs WHERE id = ?`, id).Scan(&fin); err != nil {
+					return err
+				}
+				if !fin.Valid || q.now().Sub(time.UnixMilli(fin.Int64)) > lateLogWindow {
+					return nil // too late: an entry made now would outlive the job it points at
+				}
 				if late, err = getOn(ctx, c, id, false); err != nil {
 					return err
 				}

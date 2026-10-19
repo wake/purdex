@@ -181,6 +181,24 @@ func TestAResultIsOfferedOnceItsLogIsIn(t *testing.T) {
 		require.NoError(t, f.putLog(t, id, c.ClaimID, "again\n"))
 		assert.Len(t, o.jobs, 1)
 	})
+	t.Run("a log that comes too late to keep the entry within the job's life", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			after time.Duration
+			want  int
+		}{
+			"just inside the window":  {after: 4*24*time.Hour - time.Minute, want: 1},
+			"just outside the window": {after: 4*24*time.Hour + time.Minute, want: 0},
+		} {
+			f := newFixture(t)
+			o := f.offers()
+			id := f.submit(t, func(s *wire.JobSubmission) { s.DefHash = "def1" })
+			c := f.claimAs(t, id, "mserv", lblA, fpA)
+			f.postResultNoLog(t, id, c.ClaimID)
+			f.clk.Advance(tc.after)
+			require.NoError(t, f.putLog(t, id, c.ClaimID, "late\n"), name)
+			assert.Len(t, o.jobs, tc.want, name)
+		}
+	})
 	t.Run("no log ever comes", func(t *testing.T) {
 		f := newFixture(t)
 		o := f.offers()
