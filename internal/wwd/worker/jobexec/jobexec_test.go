@@ -715,3 +715,31 @@ func TestTheCommandCarriesTheJobAndOriginMark(t *testing.T) {
 		t.Fatalf("log %q: want WWD_JOB=%s and WWD_ORIGIN=%s", log, j.ID, ident.OriginTag("air26"))
 	}
 }
+
+// The fetcher is chosen by the connection the job was claimed on (ref.Source), not by the Origin the job's own JSON carries: a peer can
+// write another peer's alias there (#3373).
+func TestFetcherIsChosenBySourceNotByJobOrigin(t *testing.T) {
+	r, commit := repo(t)
+	mine := &localFetcher{repo: r, commit: commit}
+	other := &localFetcher{repo: r, commit: commit}
+	fetchers := map[string]Fetcher{"air26": mine, "mserv": other}
+	e := New(Config{
+		WorkRoot: t.TempDir(), ParentEnv: os.Environ(),
+		Fetchers:  func(source string) Fetcher { return fetchers[source] },
+		ClonePath: func(string) (string, bool) { return "", false },
+	})
+	j := job("hello")
+	j.Origin = "mserv" // what a hostile air26 writes into its job
+	ws, err := e.Materialize(context.Background(), ident.Ref{Source: "air26", ID: j.ID}, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	if mine.got.dir == "" || other.got.dir != "" {
+		t.Fatalf("fetched from the wrong host: source's fetcher dir=%q, the Origin-named one dir=%q", mine.got.dir, other.got.dir)
+	}
+	// a source nobody is configured for is refused, whatever the job says its Origin is
+	if _, err := e.Materialize(context.Background(), ident.Ref{Source: "nobody", ID: j.ID}, j, claimID); err == nil {
+		t.Fatal("a source without a fetcher was served")
+	}
+}

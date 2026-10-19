@@ -35,7 +35,7 @@ func fakeSources(level *int, owner *wire.OwnerState) facts.Sources {
 func newSampler(level *int, owner *wire.OwnerState) *Sampler {
 	return NewSampler(SamplerOptions{
 		HostID: "h1", Alias: "mlab", OSVersion: "26.6.2",
-		Sources: fakeSources(level, owner), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true,
+		Sources: fakeSources(level, owner), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true, OwnerRule: ruleFor(owner),
 	})
 }
 
@@ -173,4 +173,12 @@ func TestFactsRoutes(t *testing.T) {
 	if w := do(d.SocketHandler(), "GET", "/v1/facts", ""); w.Code != 200 {
 		t.Fatalf("socket: %d", w.Code)
 	}
+}
+
+// ruleFor: a test that hands the sampler an owner reading is a host with an owner rule (the reading only counts with one, #3457).
+func ruleFor(owner *wire.OwnerState) string {
+	if owner == nil {
+		return ""
+	}
+	return "hid<5m"
 }

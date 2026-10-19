@@ -167,10 +167,11 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 	gateFull := s.opts.GateHeavyFull != nil && s.opts.GateHeavyFull() // file reads: before the lock
 	s.mu.Lock()
+	// the effective owner rule is the only basis for "the owner is active" (#3457): with none, f.Owner still shows the reading but it does not count
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
-		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
+		OwnerActive: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
 		GateHeavyFull: gateFull,
 	}
 	if f.Mem.CompressorMB != nil {

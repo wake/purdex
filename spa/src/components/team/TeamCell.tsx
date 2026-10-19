@@ -17,6 +17,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { keepFocus } from '../../lib/keep-focus'
 import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
 
 export function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
@@ -33,6 +34,7 @@ export function NameCapsule({ team, className = '', style }: { team: TeamPanelTe
 
 export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: TeamSeatView; isActive: boolean; onOpen: (sessionId: string) => void }) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the tooltip reads the persona store without subscribing: redraw when it loads or changes
   const r = useSeatReading(teamKey, seat.sessionId)
   const ringBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const hostMain = useSeatHostMain(seat.hostId, seat.sessionCode)
@@ -58,7 +60,7 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
       data-seat-state={seat.state}
       onMouseDown={keepFocus}
       onClick={() => onOpen(seat.sessionId)}
-      title={`${seat.title} · ${model} · ${ctxTip(r.ctx, t)}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
+      title={`${seatName(seat.address, seat.title)} · ${model} · ${ctxTip(r.ctx, t)}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
       className={`group relative flex items-center gap-1.5 h-6 pl-1.5 pr-[3px] rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
       <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`}>

@@ -3202,5 +3202,16 @@
   "pool_hosts.dot.live": "Read by wwd",
   "pool_hosts.dot.warn": "wwd is not answering; read over SSH",
   "pool_hosts.dot.off": "Offline",
-  "pool_hosts.dot.error": "Error"
+  "pool_hosts.dot.error": "Error",
+  "pool_hosts.page.sub": "wwd {{version}} · proto {{proto}} · {{platform}} {{arch}} · {{os}}",
+  "pool_hosts.page.now": "Now",
+  "pool_hosts.page.worker_settings": "Set on the host tab",
+  "pool_hosts.page.labels": "Labels",
+  "pool_hosts.page.labels_none": "None",
+  "pool_hosts.page.labels_platform": "Platform",
+  "pool_hosts.page.labels_repo": "Repo",
+  "pool_hosts.page.labels_other": "Other",
+  "pool_hosts.page.tools": "Toolchain",
+  "pool_hosts.page.tool_missing": "Not installed",
+  "pool_hosts.page.style": "Style and SSH fallback"
 }

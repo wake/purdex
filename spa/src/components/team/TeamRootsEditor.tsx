@@ -3,6 +3,7 @@
 // What the list shows is the roster's `roots` — nothing is assumed before the daemon answers. The path being typed is kept in the store.
 import { useState } from 'react'
 import { X } from '@phosphor-icons/react'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { checkRootInput, editOf, midEllipsis, saveRoots, useRootsStore, type InUseItem, type RootInputRefusal } from '../../lib/team/roots'
 import { teamKey } from '../../lib/team/max-members'
@@ -17,6 +18,7 @@ const REFUSAL_KEY: Record<RootInputRefusal, string> = {
 
 export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRoster }) {
   const t = useI18nStore((s) => s.t)
+  usePersonaRevision() // the in-use lines read the persona store without subscribing: redraw when it loads or changes
   const key = teamKey(hostId, team.id)
   const busy = useRootsStore((s) => s.inflight[key] !== undefined)
   const edit = useRootsStore((s) => editOf(s, key))
@@ -99,9 +101,10 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
 
 function inUseLine(it: InUseItem, team: TeamRoster, t: (k: string, p?: Record<string, string>) => string): string {
   if (it.kind === 'member') {
-    // the member's name when the roster has it, else its ref
+    // the member's persona name (through the daemon's address) when the roster has it, else its title or name, else its ref
     const m = team.members.find((x) => x.ref === it.ref)
-    return t('unattended.roots.in_use_member', { who: m?.title || m?.name || it.ref || it.cwd, cwd: it.cwd })
+    const plain = m?.title || m?.name || it.ref || it.cwd
+    return t('unattended.roots.in_use_member', { who: m ? seatName(m.address, plain) : plain, cwd: it.cwd })
   }
   return t(it.kind === 'spawn' ? 'unattended.roots.in_use_spawn' : 'unattended.roots.in_use_adoption', { cwd: it.cwd })
 }

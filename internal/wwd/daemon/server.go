@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -78,6 +79,10 @@ type Daemon struct {
 	fwd    *http.Client
 	labels labels.Tracker
 
+	// partnerAt is when the local Purdex daemon last read this host's alerts on the socket (unix nanoseconds; the daemon's own start until
+	// it does): the partner check of the silence rules (spec §13.3) says the daemon is down when this is old.
+	partnerAt atomic.Int64
+
 	// labelsMu serializes choosing the record, collecting the labels, updating the tracker and announcing: OnFacts and RefreshLabels
 	// never interleave. It guards lastFacts and lastEarned.
 	labelsMu   sync.Mutex
@@ -102,8 +107,22 @@ func New(o Options) *Daemon {
 	if o.Sampler != nil {
 		b.SetShape(o.Sampler.Shaped)
 	}
-	return &Daemon{opts: o, broker: b, pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
+	d := &Daemon{opts: o, broker: b, pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
+	d.partnerAt.Store(d.clock().UnixNano())
+	return d
 }
+
+func (d *Daemon) clock() time.Time {
+	if d.opts.Now != nil {
+		return d.opts.Now()
+	}
+	return time.Now()
+}
+
+// PartnerSeen is when the local Purdex daemon last read this host's own alerts on the socket (the daemon's start before the first read).
+// The deliverer of every Purdex daemon reads every host's list every 30 s, this host's included, so a long silence here means the daemon is
+// down or has stopped reading.
+func (d *Daemon) PartnerSeen() time.Time { return time.Unix(0, d.partnerAt.Load()) }
 
 // Events is the broker the SSE streams read; the sampler and the queue publish to it.
 func (d *Daemon) Events() *Broker { return d.broker }

@@ -182,6 +182,8 @@ func run(cfgPath string) error {
 		orphanScan.Observe(now, snap, c)
 	}
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
+	// H2 stands in for the keyboard: with owner_active_file named the real HID is not read (#3561)
+	sources.Owner = facts.OverrideOwner(sources.Owner, hooks.OwnerBlock)
 	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
 	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
 	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf).WithWorkDir(workRoot) // the jobs' disk is the work root's
@@ -216,7 +218,12 @@ func run(cfgPath string) error {
 	})
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
-	go runAdvisor(ctx, advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report})
+	adv := advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report,
+		Peers: cfg.Peers, Downs: d.Pool().Downs}
+	if cfg.Advisor.PartnerCheck {
+		adv.PartnerSeen = d.PartnerSeen
+	}
+	go runAdvisor(ctx, adv)
 	// The usage recorder and the worker (takes jobs from this host's queue and the peers', runs them, reports). At the end the worker is
 	// stopped first, then the recorder writes what is left (it records the usage of the jobs the worker hands back), then st.Close (this
 	// defer runs before it, which was deferred earlier), also when run() failed.
