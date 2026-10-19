@@ -410,9 +410,19 @@ export interface UnattendedState {
   changed_by?: Client
 }
 
+/** The state a log decision ends in (name pool v2 spec §8): a cancelled or abandoned approval is not a decision and is not in the log. */
+export type LogDecisionState = 'approved' | 'denied' | 'timeout'
+/** One closed team approval in `UnattendedView.log`. `decided_by` is absent for a timeout (nobody decided); `at` is the deadline for a timeout. `kind` is a string: the log also covers `spawn_resources`. */
+export interface UnattendedLogDecision { type: 'decision'; at: number; kind: string; origin: Origin; state: LogDecisionState; decided_by?: Client }
+/** One on/off of the switch. */
+export interface UnattendedLogToggle { type: 'toggle'; at: number; on: boolean; by: Client }
+export type UnattendedLogEntry = UnattendedLogDecision | UnattendedLogToggle
+
 /** `GET` / `PUT /api/team/unattended`: the state, flattened, and one page of auto-approvals since `since`, newest first. */
 export interface UnattendedView extends UnattendedState {
   approved: Approval[]
+  /** The latest 30 decisions and switch changes, newest first (`team.decision_log.v1`); absent from an older daemon, which keeps the `approved` page for the panel. */
+  log?: UnattendedLogEntry[]
   /** More rows exist before `next_before`. */
   truncated: boolean
   /** The next page's `before` cursor (a `decided_at`); present only when truncated. */
