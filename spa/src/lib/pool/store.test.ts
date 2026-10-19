@@ -148,10 +148,75 @@ describe('error actions', () => {
     expect(await st().readOnce()).toBe(2000)
   })
 
-  it('a code the table sends elsewhere (bad_request, forbidden) stays on the source and polls normally', async () => {
+  it('a code the table sends elsewhere (bad_request, forbidden) stays on the source and polls normally, and is published', async () => {
     fetchPoolHosts.mockImplementation(async () => { throw fail(400, 'bad_request') })
     expect(await st().readOnce()).toBe(POLL_MS)
     expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    expect(st().error).toMatchObject({ code: 'bad_request' })
+    fetchPoolHosts.mockImplementation(async () => { throw fail(403, 'forbidden') })
+    await st().readOnce()
+    expect(st().error).toMatchObject({ code: 'forbidden' })
+  })
+
+  it('a different error replaces the old one and ends the busy count', async () => {
+    fetchPoolHosts.mockImplementation(async () => { throw fail(429, 'busy') })
+    await st().readOnce(); await st().readOnce(); await st().readOnce()
+    expect(st().error).toMatchObject({ code: 'busy' })
+    fetchPoolHosts.mockImplementation(async () => { throw fail(400, 'bad_request') })
+    await st().readOnce()
+    expect(st().error).toMatchObject({ code: 'bad_request' })
+    fetchPoolHosts.mockImplementation(async () => { throw fail(429, 'busy') })
+    await st().readOnce()
+    expect(st().error).toMatchObject({ code: 'bad_request' }) // one busy is not three in a row
+  })
+
+  describe('a source that answered busy or failed is kept until it recovers', () => {
+    const aDown = (id: string, then: () => Promise<PoolHost[]>) => (id === A ? Promise.reject(fail(503, 'wwd_unavailable')) : then())
+
+    it('busy on the second daemon after the first was unavailable: the next read goes to the second only', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      fetchPoolHosts.mockClear()
+      await st().readOnce()
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B])
+    })
+
+    it('wwd_error on the second daemon is retried on it alone, with the back-off growing', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(502, 'wwd_error'))))
+      expect(await st().readOnce()).toBe(2000)
+      fetchPoolHosts.mockClear()
+      expect(await st().readOnce()).toBe(4000)
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B])
+    })
+
+    it('once the kept source answers, reading starts from the first daemon again', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      fetchPoolHosts.mockImplementation(async () => [mlab()])
+      await st().readOnce()
+      fetchPoolHosts.mockClear()
+      await st().readOnce()
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([A])
+    })
+
+    it('if the kept source then says next_source, the others are tried', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      fetchPoolHosts.mockImplementation(async () => { throw fail(503, 'wwd_unavailable') })
+      fetchPoolHosts.mockClear()
+      await st().readOnce()
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B, A])
+    })
+
+    it('a kept source that is no longer connected is forgotten', async () => {
+      fetchPoolHosts.mockImplementation((id: string) => aDown(id, () => Promise.reject(fail(429, 'busy'))))
+      await st().readOnce()
+      useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } } as never)
+      fetchPoolHosts.mockClear()
+      fetchPoolHosts.mockImplementation(async () => [mlab()])
+      await st().readOnce()
+      expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([A])
+    })
   })
 })
 

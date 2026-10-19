@@ -46,6 +46,7 @@ const errorOf = (e: unknown): PoolError => (e as { poolError?: PoolError })?.poo
 
 export const usePoolStore = create<PoolState>((set, get) => {
   let failures = 0 // consecutive back-off failures
+  let pinned: string | null = null // the source a busy or back-off answer came from
   let busy = 0 // consecutive `busy`
   let timer: ReturnType<typeof setTimeout> | null = null
   let gen = 0
@@ -75,21 +76,27 @@ export const usePoolStore = create<PoolState>((set, get) => {
       return POLL_MS
     }
     let last: PoolError = classify(null, null)
-    for (const id of sources) {
+    let failedOn: string | null = null
+    // a source that answered busy or failed is read again on its own until it recovers; if it then says next_source, the rest follow
+    const ordered = pinned && sources.includes(pinned) ? [pinned, ...sources.filter((id) => id !== pinned)] : sources
+    for (const id of ordered) {
       try {
         const hosts = await fetchPoolHosts(id)
         if (token !== gen) return POLL_MS
+        pinned = null
         applyHosts(id, hosts)
         return POLL_MS
       } catch (e) {
         if (token !== gen) return POLL_MS
         last = errorOf(e)
         if (last.action === 'next_source') continue
+        failedOn = id
         break
       }
     }
     if (last.action === 'next_source') {
       // every daemon failed: the pool shows nothing, so each host falls back to the fleet until one answers
+      pinned = null
       failures = 0
       busy = 0
       set({ hosts: [], sourceHostId: null, oldDaemon: false })
@@ -97,17 +104,22 @@ export const usePoolStore = create<PoolState>((set, get) => {
       return POLL_MS
     }
     if (last.action === 'retry_same') {
+      pinned = failedOn
       busy += 1
       if (busy >= BUSY_SHOWN_AT) fail(last.code)
       return busyDelayMs(Math.random())
     }
     busy = 0
     if (last.action === 'backoff') {
+      pinned = failedOn
       fail(last.code)
       const wait = backoffMs(failures)
       failures += 1
       return wait
     }
+    // read_only, log, none, no_chart: nothing to retry differently, but the failure is published and replaces an older one
+    pinned = null
+    fail(last.code)
     return POLL_MS
   }
 
@@ -143,6 +155,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     },
     reset() {
       failures = 0
+      pinned = null
       busy = 0
       set({ ...initial })
     },
