@@ -159,6 +159,9 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if !slices.Contains(ipeers.PickablePool(), code) {
 		return "", ipeers.ErrNameUnknown
 	}
+	if m.inLeadRename != nil {
+		m.inLeadRename()
+	}
 	_, won, err := m.peerNames.RenamePool(ctx, sessionID, row.Name, newName)
 	if err != nil {
 		return "", err

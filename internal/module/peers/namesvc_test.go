@@ -3,6 +3,7 @@ package peers
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -191,6 +192,31 @@ func TestNameService_RenameForLeadChecksPickableAtTheMomentOfTheWrite(t *testing
 	_, err := e.m.RenameForLead(context.Background(), poolSidA, "mia")
 	assert.ErrorIs(t, err, ipeers.ErrNameUnknown)
 	assert.Equal(t, "purdex-54-anna", e.storedName(poolSidA), "nothing was written")
+}
+
+// While the rename holds the generation read lock, a collection change waits: it cannot retire the code between the check and
+// the write.
+func TestNameService_AnApplyingCollectionWaitsForARenameInFlight(t *testing.T) {
+	e := svcEnv(t)
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false)}}}
+	e.m.bindPersonas(f)
+	applied := make(chan struct{})
+	e.m.inLeadRename = func() {
+		go func() {
+			f.change(leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", true)) // mia retired
+			close(applied)
+		}()
+		select {
+		case <-applied:
+			t.Error("the collection was applied while a rename held the generation lock")
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	old, err := e.m.RenameForLead(context.Background(), poolSidA, "mia")
+	require.NoError(t, err)
+	assert.Equal(t, "purdex-54-anna", old)
+	assert.Equal(t, "purdex-54-mia", e.storedName(poolSidA), "mia was pickable when the rename was checked and written")
+	<-applied // and the change goes through once the rename is done
 }
 
 func TestNameService_RecordLeadWritesOnlyForAPersonaName(t *testing.T) {
