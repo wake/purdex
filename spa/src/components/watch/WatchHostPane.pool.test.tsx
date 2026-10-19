@@ -7,6 +7,10 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { usePoolStore } from '../../lib/pool/store'
+import { PoolReadError } from '../../lib/pool/api'
+import { clearZoneMemory, readHistoryLoad, readZones } from '../../lib/pool/history'
+import { fleetHistory } from '../../lib/fleet/history'
+import { clearViewMemory, writeRange } from '../../lib/watch/view-memory'
 import { fast, host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
 import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
@@ -15,7 +19,12 @@ import type { PoolFacts, PoolHost } from '../../lib/pool/types'
 import type { FleetQueue } from '../../lib/fleet/types'
 
 const fetchPoolHosts = vi.fn()
-vi.mock('../../lib/pool/api', () => ({ fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a) }))
+const fetchFactsHistory = vi.fn()
+vi.mock('../../lib/pool/api', async (orig) => ({
+  ...(await orig<typeof import('../../lib/pool/api')>()),
+  fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a),
+  fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a),
+}))
 
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 const st = () => useFleetStore.getState()
@@ -46,6 +55,9 @@ beforeEach(() => {
   cleanup()
   vi.useFakeTimers()
   fetchPoolHosts.mockReset()
+  fetchFactsHistory.mockReset()
+  fetchFactsHistory.mockResolvedValue({ step: '5s', records: [] })
+  clearZoneMemory(); fleetHistory.clear(); clearViewMemory()
   usePoolStore.getState().stop()
   usePoolStore.getState().reset()
   st().reset()
@@ -143,6 +155,67 @@ describe('WatchHostPane on the pool — a host wwd reads', () => {
   })
 })
 
+describe('WatchHostPane on the pool — the 5 minute history', () => {
+  const sample = (secAgo: number, zone: 'normal' | 'warning' | 'danger', idle: number): PoolFacts => ({ ...ph().facts!, at: Date.now() - secAgo * 1000, cpu: { ...darwin.cpu, idle_pct: idle }, derived: { ...darwin.derived, zone } })
+  beforeEach(() => { load([host('d-a', { alias: 'air26' })]); fetchPoolHosts.mockResolvedValue([ph()]) })
+
+  it('opening the tab reads the daemon\'s last 5 minutes once, and the zone band shows them', async () => {
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: [sample(30, 'normal', 90), sample(25, 'warning', 20), sample(20, 'danger', 5)] })
+    await renderPane()
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+    expect(fetchFactsHistory.mock.calls[0].slice(0, 2)).toEqual(['cfg-a', 'air26'])
+    expect(fetchFactsHistory.mock.calls[0][3]).toBe('5s')
+    const zones = screen.getAllByTestId('zone-seg').map((z) => z.getAttribute('data-zone'))
+    // the three read from the daemon, then the sample the page itself is showing
+    expect(zones).toEqual(['normal', 'warning', 'danger', 'normal'])
+    expect(screen.getByTestId('metric-cpu')).toBeTruthy()
+  })
+
+  it('leaving the tab while the history is still being read: what comes back is not written', async () => {
+    let ok!: (v: unknown) => void
+    fetchFactsHistory.mockReturnValue(new Promise((a) => { ok = a }))
+    const view = render(<WatchHostPane pane={{ id: 'watch-host-d-a.p', content: { kind: 'watch-host', fleetHostId: 'd-a' } }} isActive />)
+    await flush()
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+    const before = fleetHistory.rawCount('d-a') // the fleet snapshot the test loaded is already in
+    view.unmount()
+    await act(async () => { ok({ step: '5s', records: [sample(30, 'danger', 5)] }); await vi.advanceTimersByTimeAsync(0) })
+    expect(readHistoryLoad('d-a')).toBe('idle')
+    expect(readZones('d-a').some((z) => z.zone === 'danger')).toBe(false)
+    expect(fleetHistory.rawCount('d-a')).toBe(before)
+  })
+
+  it('host_not_local: the gauges stay, the chart says it cannot be read through this daemon', async () => {
+    fetchFactsHistory.mockRejectedValue(new PoolReadError('/x', 501, { code: 'host_not_local', action: 'none' } as never))
+    await renderPane()
+    expect(screen.getByTestId('history-not-local').textContent).toBe(t('watch.host.history_not_local'))
+    expect(screen.getByTestId('gauge-cpu')).toBeTruthy()
+    expect(screen.queryByTestId('metric-cpu')).toBeNull()
+    expect(screen.queryByTestId('zone-band')).toBeNull()
+  })
+
+  it('any other failure leaves the charts as the App collected them, with no note', async () => {
+    fetchFactsHistory.mockRejectedValue(new Error('boom'))
+    await renderPane()
+    expect(screen.queryByTestId('history-not-local')).toBeNull()
+    expect(screen.getByTestId('metric-cpu')).toBeTruthy()
+  })
+
+  it('the longer ranges keep the App\'s own history: nothing is read, no band, no note', async () => {
+    writeRange('d-a', '1h')
+    await renderPane()
+    expect(fetchFactsHistory).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('zone-band')).toBeNull()
+    expect(screen.getByTestId('metric-cpu')).toBeTruthy()
+  })
+
+  it('a host wwd does not read, or no pool at all: nothing is read', async () => {
+    fetchPoolHosts.mockResolvedValue([])
+    await renderPane()
+    expect(fetchFactsHistory).not.toHaveBeenCalled()
+  })
+})
+
 describe('WatchHostPane on the pool — a host wwd does not read', () => {
   it('keeps "measured by", says wwd is unreachable, and keeps the fleet\'s process tables', async () => {
     load([host('d-a', { alias: 'air26' })])
@@ -162,5 +235,6 @@ describe('WatchHostPane without the pool', () => {
     expect(screen.queryByTestId('avail-row')).toBeNull()
     expect(screen.queryByTestId('residents')).toBeNull()
     expect(screen.getByTestId('measure-source').textContent).toContain(t('watch.host.measured', { alias: 'air26' }))
+    expect(fetchFactsHistory).not.toHaveBeenCalled()
   })
 })
