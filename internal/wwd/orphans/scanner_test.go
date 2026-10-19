@@ -358,6 +358,32 @@ func TestScanner_ALoopKeepsItsFirstTimeUntilItGoesQuiet(t *testing.T) {
 	}
 }
 
+// A long break between two checks (the machine slept, the sampler stalled) ends the run: bursts from before it are not joined to those after
+// it, and the loop's first time is not carried over it. Otherwise a loop seen before the break and gone during it would still be flagged on
+// waking, with a start long enough ago to be pushed on the clock alone.
+func TestScanner_ALongBreakEndsTheRun(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	busy := bursting(shell, 8) // eight new children in a burst: a fast loop
+	s.Observe(now, withChild(shell), busy.context())
+	if len(s.Report().Loops) != 1 {
+		t.Fatal("no loop to begin with")
+	}
+	now = now.Add(3 * time.Hour) // the machine slept
+	quiet := &ctxOf{tables: [][]facts.ProcRec{{shell, {PID: 8000, PPID: 500, UID: me, Name: "true", Start: t0.Add(-time.Hour)}}}}
+	s.Observe(now, withChild(shell), quiet.context())
+	if r := s.Report(); len(r.Loops) != 0 {
+		t.Fatalf("a loop from before a 3 h break was carried over it: %+v", r.Loops)
+	}
+	// seen again after the break, it starts a new run now, not 3 hours ago
+	calledAt := now.Add(CheckEvery)
+	s.Observe(calledAt, withChild(shell), bursting(shell, 8).context())
+	if r := s.Report(); len(r.Loops) != 1 || !r.Loops[0].Since.Equal(calledAt) {
+		t.Fatalf("the new run did not start at the scan: %+v", r.Loops)
+	}
+}
+
 // bursting is a context whose burst sees k new children of shell 500 (the first read has one, already there): at reads 3, 7, 11, ...
 func bursting(shell facts.ProcRec, k int) *ctxOf {
 	base := facts.ProcRec{PID: 8000, PPID: 500, UID: me, Name: "true", Start: t0.Add(-time.Hour)}

@@ -23,6 +23,8 @@ const (
 	// CheckEvery is how often the loop check is made. It reads the process table many times in a few hundred milliseconds, so it is not
 	// made on every 5 s sample.
 	CheckEvery = 30 * time.Second
+	// maxCheckGap is how long may pass between two checks before the run is taken as interrupted.
+	maxCheckGap = 3 * CheckEvery
 	// rateHistory is how many of the latest bursts are added together to judge a shell. One burst is short (about 0.15 s), so its rate is
 	// coarse: one more child is a jump of about 6.7 a second, and a loop a little over the limit shows one child in some bursts and two in
 	// others. Judged one burst at a time it would be lost at the first low one, and its ten minutes would start over. Added up, the
@@ -186,8 +188,12 @@ var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true
 // back under it, or is gone, is dropped, so a new run starts over.
 func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.ProcContext) {
 	s.mu.Lock()
+	prev := s.lastCheck
 	s.lastCheck = now
 	s.mu.Unlock()
+	if !prev.IsZero() && now.Sub(prev) > maxCheckGap {
+		s.resetLoops() // the checks were interrupted (a sleep, a stalled sampler): what came before is not continuous with what comes now
+	}
 	if c.Fresh == nil {
 		s.resetLoops() // nothing here can measure a loop, so none is claimed
 		return
