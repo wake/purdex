@@ -72,6 +72,16 @@ describe('toPoints — the spacing of the data', () => {
     expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(2)
   })
 
+  it('where minute points meet 10 s buckets, a 140 s outage is still a hole (the junction allows about a minute, not 2.5 of them)', () => {
+    const t = [0, 60, 120, 260, 270, 280].map((s) => ({ t: now - 400_000 + s * 1000, avg: s, max: s }))
+    expect(toPoints(t, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(1)
+  })
+
+  it('a junction step of 70 s (a minute and some jitter) is not a hole', () => {
+    const t = [0, 60, 120, 190, 200, 210].map((s) => ({ t: now - 400_000 + s * 1000, avg: s, max: s }))
+    expect(toPoints(t, now, '1h').some((p) => Number.isNaN(p.v))).toBe(false)
+  })
+
   it('10 s buckets follow 1 minute points: the 60 s step between the two kinds is not a hole', () => {
     const minute = every(60_000, 5).map((p) => ({ ...p, t: p.t - 110_000 })) // its last point is 60 s before the first bucket
     const buckets = every(10_000, 6)
