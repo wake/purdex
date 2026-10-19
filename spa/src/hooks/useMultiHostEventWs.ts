@@ -35,6 +35,8 @@ import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { handleFleetEvent } from '../lib/fleet/fleet-ws'
+import { jobsDriver } from '../lib/pool/jobs-driver-live'
+import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
 import { connectionKey } from '../lib/host-connection-key'
@@ -353,6 +355,13 @@ export function useMultiHostEventWs() {
             handleFleetEvent(hostId, event.value)
             return
           }
+          if (isJobsEvent(event.type)) {
+            // A job of the resource pool moved (WWD-7b1-1b): the notice makes the App read that one job again. Bound to the connection like the fleet frame above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleJobsEvent(hostId, event.value)
+            return
+          }
           if (isWatchEvent(event.type)) {
             // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
             // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
@@ -412,6 +421,7 @@ export function useMultiHostEventWs() {
             daemonState: 'connected',
           })
           useSessionStore.getState().fetchHost(hostId).catch(() => {})
+          jobsDriver.hostOpened(hostId) // the pool's jobs of the origins this daemon answers for are read after their cursor
         },
         () => fetchWsTicket(hostId),
         false, // autoReconnect disabled — SM manages reconnection

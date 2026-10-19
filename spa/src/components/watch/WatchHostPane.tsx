@@ -172,7 +172,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           </span>
         </div>
         {page === 'settings' ? (
-          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
+          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} poolAlias={view.kind === 'daemon' ? alias : undefined} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -36,10 +35,10 @@ type DevModule struct {
 	lastFailedElectron string
 	stopCtx            context.Context
 	stopCancel         context.CancelFunc
-	// execSelf can be overridden in tests to prevent syscall.Exec from
-	// replacing the test process. Nil means skip exec (test-safe default).
-	// Set to syscall.Exec by Init for production use.
-	execSelf func(argv0 string, argv []string, envv []string) error
+	// restartFn asks core for a restart that execs execPath (core's
+	// RequestRestart: ordered shutdown, then re-exec). Nil means skip the
+	// restart (test-safe default); Init sets it to the core's.
+	restartFn func(reason, execPath string, afterAccept func()) error
 	// gitHeadFn returns the short hash of HEAD, or "" when unavailable.
 	// Injected by tests; defaulted to m.gitHead in Init.
 	gitHeadFn func() string
@@ -78,8 +77,8 @@ func (m *DevModule) Init(c *core.Core) error {
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
 	}
-	if m.execSelf == nil {
-		m.execSelf = syscall.Exec
+	if m.restartFn == nil {
+		m.restartFn = c.RequestRestart
 	}
 	return nil
 }
