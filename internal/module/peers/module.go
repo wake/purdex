@@ -1288,6 +1288,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		// The name pool's snapshot of what this host holds, from the rows as
 		// normalizeRemoteRows settled them, never the raw envelope.
 		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, ticket)
+		m.noteRemoteFamiliar(resultHostID, env.Names, ticket)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

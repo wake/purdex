@@ -1,5 +1,7 @@
 package peers
 
+import "regexp"
+
 // Envelope is GET /api/peers' body for one host: the daemon's own local
 // inventory (scope unset or scope=local), and the shape of each host's row
 // when the CLI's fan-out client (P2) unwraps a scope=all response.
@@ -52,6 +54,38 @@ type Envelope struct {
 	// it lets the ASKING principal use them (cross-host team spec §3.1 rule
 	// 7). Absent: an older daemon, which supports none.
 	Team *TeamCaps `json:"team,omitempty"`
+	// Names is what this host's name history shares with the others (name pool v2 spec §6.1). Absent: an older daemon, or a
+	// history that could not be read; a reader takes it as an empty set either way.
+	Names *NamesInfo `json:"names,omitempty"`
+}
+
+// MaxFamiliar is how many codes a host publishes in Names.Familiar, and how many a reader takes from one host.
+const MaxFamiliar = 64
+
+// NamesInfo is Envelope.Names. Familiar is the codes this host has seen as a lead or as a member (name_leads.code ∪
+// name_pairs.member_code), most recent first, at most MaxFamiliar; never null.
+type NamesInfo struct {
+	Familiar []string `json:"familiar"`
+}
+
+var familiarCode = regexp.MustCompile(`^[a-z]{2,16}$`)
+
+// NormalizeFamiliar is codes as a reader keeps them: the well-formed ones only (a remote is attacker-controlled; a name code
+// is lower-case letters), each once in its first position, at most MaxFamiliar. Never nil.
+func NormalizeFamiliar(codes []string) []string {
+	out := make([]string, 0, min(len(codes), MaxFamiliar))
+	seen := make(map[string]bool, len(out))
+	for _, c := range codes {
+		if len(out) == MaxFamiliar {
+			break
+		}
+		if !familiarCode.MatchString(c) || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
 }
 
 // TeamCaps is Envelope.Team. Kinds is never null; AllowTeam is the asking

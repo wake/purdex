@@ -42,11 +42,20 @@ type hostNames struct {
 	names  map[string]remoteHolder
 }
 
+// hostFamiliar is the familiar codes one host published in its last answer (name pool v2 spec §6.1); the answer of a daemon
+// without names.familiar is an empty set.
+type hostFamiliar struct {
+	readAt time.Time
+	ticket uint64
+	codes  []string
+}
+
 // remoteNameSnapshot is safe for concurrent use.
 type remoteNameSnapshot struct {
-	mu    sync.Mutex
-	hosts map[string]*hostNames
-	seq   uint64 // last ticket handed out
+	mu       sync.Mutex
+	hosts    map[string]*hostNames
+	familiar map[string]*hostFamiliar
+	seq      uint64 // last ticket handed out
 	// floor and keep are the last prune's: an answer to a request drawn before
 	// it is dropped unless its host was kept.
 	floor uint64
@@ -54,7 +63,46 @@ type remoteNameSnapshot struct {
 }
 
 func newRemoteNameSnapshot() *remoteNameSnapshot {
-	return &remoteNameSnapshot{hosts: map[string]*hostNames{}}
+	return &remoteNameSnapshot{hosts: map[string]*hostNames{}, familiar: map[string]*hostFamiliar{}}
+}
+
+// recordFamiliar replaces hostID's familiar set with the codes of names (nil: a daemon without names.familiar, an empty set),
+// ordered, expired and pruned exactly as recordTicket does for the held names. The codes are re-validated: a remote is
+// attacker-controlled.
+func (s *remoteNameSnapshot) recordFamiliar(hostID string, names *ipeers.NamesInfo, ticket uint64, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ticket < s.floor && !s.keep[hostID] {
+		return
+	}
+	if h := s.familiar[hostID]; h != nil && ticket < h.ticket {
+		return
+	}
+	var codes []string
+	if names != nil {
+		codes = ipeers.NormalizeFamiliar(names.Familiar)
+	}
+	s.familiar[hostID] = &hostFamiliar{readAt: now, ticket: ticket, codes: codes}
+}
+
+// familiarUnion is every code a host published within remoteNamesTTL. nil when no host has any (the rules read it as no
+// remote data); a fresh map each call. It takes only the snapshot's own short lock and does no I/O.
+func (s *remoteNameSnapshot) familiarUnion(now time.Time) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out map[string]bool
+	for _, h := range s.familiar {
+		if now.Sub(h.readAt) >= remoteNamesTTL {
+			continue
+		}
+		for _, c := range h.codes {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[c] = true
+		}
+	}
+	return out
 }
 
 // record replaces hostID's set with the pool names rows hold, read at now.
@@ -164,6 +212,11 @@ func (s *remoteNameSnapshot) prune(keep map[string]bool) {
 			delete(s.hosts, id)
 		}
 	}
+	for id := range s.familiar {
+		if !keep[id] {
+			delete(s.familiar, id)
+		}
+	}
 }
 
 // noteRemoteNames files one OK answer's normalized rows. No-op without a pool.
@@ -172,6 +225,25 @@ func (m *Module) noteRemoteNames(hostID string, rows []ipeers.PeerRecord, addres
 		return
 	}
 	m.remoteNames.recordTicket(hostID, rows, addressVersion, ticket, m.now())
+}
+
+// noteRemoteFamiliar files one OK answer's familiar set; a daemon that sent no names is an empty set. No-op without a pool.
+func (m *Module) noteRemoteFamiliar(hostID string, names *ipeers.NamesInfo, ticket uint64) {
+	if m.remoteNames == nil {
+		return
+	}
+	m.remoteNames.recordFamiliar(hostID, names, ticket, m.now())
+}
+
+// RemoteFamiliar is the union of the familiar codes the other hosts published in their latest answers (name pool v2 §6.1,
+// the rules' input, spec §6.2). Not the local host's: that is read from the name history. nil when no host has published any
+// (including no pool); the map is the caller's, never changed here. It holds no pool lock and does no I/O, so the naming
+// path may call it under the pool lock.
+func (m *Module) RemoteFamiliar() map[string]bool {
+	if m.remoteNames == nil {
+		return nil
+	}
+	return m.remoteNames.familiarUnion(m.now())
 }
 
 // startNamePoolRefresher starts the background refresher: every
