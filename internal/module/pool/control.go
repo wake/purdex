@@ -62,7 +62,7 @@ func (m *Module) handlePutWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	alias := r.PathValue("alias")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -82,7 +82,7 @@ func (m *Module) handlePostException(w http.ResponseWriter, r *http.Request) {
 	}
 	alias := r.PathValue("alias")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -102,7 +102,7 @@ func (m *Module) handleDeleteException(w http.ResponseWriter, r *http.Request) {
 	}
 	alias, name := r.PathValue("alias"), r.PathValue("name")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	if !exceptionName(name) {

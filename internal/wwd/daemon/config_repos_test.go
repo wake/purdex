@@ -44,6 +44,10 @@ func TestConfigPeerAliasUsesTheSharedRule(t *testing.T) {
 			t.Errorf("%s: want a peers error, got %v", name, err)
 		}
 	}
+	// the message names the dot names, so a user who typed one learns why it is refused (R1)
+	if _, err := loadCfg(t, peer("..")); err == nil || !strings.Contains(err.Error(), "dot name") {
+		t.Errorf("the error for a dot name should name the dot names: %v", err)
+	}
 }
 
 func TestConfigReposRejectsBadNamesAndPaths(t *testing.T) {

@@ -200,7 +200,7 @@ func jobID(w http.ResponseWriter, r *http.Request) (string, bool) {
 func host(w http.ResponseWriter, r *http.Request) (string, bool) {
 	h := r.URL.Query().Get("host")
 	if h != "" && !wire.ValidAlias(h) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "host is empty, a dot name (. or ..), too long or holds a control character")
 		return "", false
 	}
 	return h, true
