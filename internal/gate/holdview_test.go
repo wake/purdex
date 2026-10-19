@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -216,4 +217,36 @@ func TestHold_ABrokenCacheFileIsAskedAgain(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(g.Config().Dir, holdCacheFile), []byte("{not json"), 0o600))
 	assert.True(t, g.WouldWait(ClassHeavy).Wait)
 	assert.EqualValues(t, 1, f.calls.Load())
+}
+
+// R2: a look in a gate directory that does not exist yet (would-wait and status are read-only) still leaves the answer for the next process.
+func TestHold_TheGateDirectoryIsMadeForTheCache(t *testing.T) {
+	g, f := holdGate(t)
+	dir := filepath.Join(t.TempDir(), "not-yet")
+	g.SetConfig(func(c *Config) { c.Dir = dir })
+	f.set(hold("hold-x", false, wire.HoldHeavy))
+	require.True(t, g.WouldWait(ClassHeavy).Wait)
+	g2 := New(g.Config())
+	g2.HoldFetch = f.fetch
+	require.True(t, g2.WouldWait(ClassHeavy).Wait)
+	assert.EqualValues(t, 1, f.calls.Load(), "the second process read the file")
+}
+
+// R2: a slow failure that ends after another process wrote a good answer must not turn that answer into "no hold".
+func TestHold_ALateFailureDoesNotOverwriteAFreshAnswer(t *testing.T) {
+	g, _ := holdGate(t)
+	now := time.Now()
+	g.Now = func() time.Time { return now }
+	dir := g.st.cfg.Dir // (Config() would already ask the fetch of the rig)
+	g.HoldFetch = func(ctx context.Context) ([]wire.Exception, error) {
+		b, _ := json.Marshal(holdFile{At: now.UnixMilli(), Holds: []HoldInfo{{Name: "hold-other"}}}) // the other process finishes first
+		require.NoError(t, os.WriteFile(filepath.Join(dir, holdCacheFile), b, 0o600))
+		return nil, errors.New("timed out")
+	}
+	w := g.WouldWait(ClassHeavy)
+	assert.True(t, w.Wait)
+	assert.Equal(t, "hold:hold-other", w.Reason)
+	b, err := os.ReadFile(filepath.Join(dir, holdCacheFile))
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "hold-other")
 }

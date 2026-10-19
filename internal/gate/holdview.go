@@ -92,15 +92,9 @@ func (g *Gate) holdView(dir string) HoldView {
 		return g.st.holdMemo
 	}
 	path := filepath.Join(dir, holdCacheFile)
-	if b, err := os.ReadFile(path); err == nil {
-		var f holdFile
-		if json.Unmarshal(b, &f) == nil {
-			at := time.UnixMilli(f.At)
-			if age := now.Sub(at); age >= 0 && age < holdTTL {
-				g.st.holdMemo, g.st.holdAt = HoldView{Holds: f.Holds}, at
-				return g.st.holdMemo
-			}
-		}
+	if v, at, ok := readHoldCache(path, now); ok {
+		g.st.holdMemo, g.st.holdAt = v, at
+		return v
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), holdReadTimeout)
 	defer cancel()
@@ -108,8 +102,15 @@ func (g *Gate) holdView(dir string) HoldView {
 	if list, err := g.HoldFetch(ctx); err == nil && ctx.Err() == nil {
 		v = holdViewOf(list)
 	} // else: fail-open, and the "no hold" is kept for holdTTL like any other answer
+	// Another gate may have written an answer while this one was asking (a slow failure must not overwrite a good answer that came in
+	// meanwhile): a fresh file is taken as it is, and this process writes nothing.
+	if w, at, ok := readHoldCache(path, g.Now()); ok {
+		g.st.holdMemo, g.st.holdAt = w, at
+		return w
+	}
 	g.st.holdMemo, g.st.holdAt = v, now
 	if b, err := json.Marshal(holdFile{At: now.UnixMilli(), Holds: v.Holds}); err == nil {
+		_ = os.MkdirAll(dir, 0o755) // a read-only look (would-wait, status) may be the first thing in a new gate directory
 		tmp := path + "." + strconv.Itoa(os.Getpid()) + "." + strconv.FormatInt(now.UnixNano(), 36) + ".tmp"
 		if os.WriteFile(tmp, b, 0o600) == nil {
 			if os.Rename(tmp, path) != nil {
@@ -118,6 +119,23 @@ func (g *Gate) holdView(dir string) HoldView {
 		}
 	}
 	return v
+}
+
+// readHoldCache is the shared file's answer when it is younger than holdTTL (and not from the future).
+func readHoldCache(path string, now time.Time) (HoldView, time.Time, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return HoldView{}, time.Time{}, false
+	}
+	var f holdFile
+	if json.Unmarshal(b, &f) != nil {
+		return HoldView{}, time.Time{}, false
+	}
+	at := time.UnixMilli(f.At)
+	if age := now.Sub(at); age < 0 || age >= holdTTL {
+		return HoldView{}, time.Time{}, false
+	}
+	return HoldView{Holds: f.Holds}, at, true
 }
 
 // effective is cfg as the holds make it: a release hold leaves one light slot at most. The stored settings are not changed.
