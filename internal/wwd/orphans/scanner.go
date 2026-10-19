@@ -24,7 +24,7 @@ const (
 	// made on every 5 s sample.
 	CheckEvery = 30 * time.Second
 
-	burstReads = 25
+	burstReads = 16
 	burstGap   = 10 * time.Millisecond
 	// burstBudget is the wall-clock time a burst may take before it is given up: it runs on the sampler's goroutine, and a big or slow
 	// process table (Linux reads each process) must not hold up the 5 s sampling. A normal burst takes about 0.3 s.
