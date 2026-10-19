@@ -537,6 +537,19 @@ describe('pool.events.v1', () => {
     expect(fetchPoolHosts).toHaveBeenLastCalledWith(A)
   })
 
+  it('a change that does not move the first source during a read costs no extra read', async () => {
+    announce(['pool.v1', EV], ['pool.v1', EV])
+    let release: (h: PoolHost[]) => void = () => {}
+    fetchPoolHosts.mockImplementationOnce(() => new Promise<PoolHost[]>((r) => { release = r }))
+    st().start()
+    await settle()
+    announce(['pool.v1', EV], ['pool.v1', EV, 'other']) // the Nex cache moves; A is still the first source
+    await settle()
+    release([mlab()])
+    await settle(); await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+
   it('the source losing the capability brings the poll back', async () => {
     announce(['pool.v1', EV])
     fetchPoolHosts.mockResolvedValue([mlab()])
