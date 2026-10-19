@@ -3,6 +3,7 @@ package peers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -20,6 +21,11 @@ import (
 
 // reservationTTL is how long a reservation holds its name without a release.
 const reservationTTL = 10 * time.Minute
+
+// reservationReadTimeout bounds the rebuild's read of the team module's open ops, which runs with the pool lock held: a team.db
+// that does not answer, or a reader that waits for the name service (it holds the pool lock itself), costs the namers this
+// long, once per pool-lock section, never more. Module.reservationReadTimeout overrides it (tests).
+const reservationReadTimeout = 3 * time.Second
 
 type reservation struct {
 	opID, code, tmuxName string
@@ -157,7 +163,7 @@ func (m *Module) ensureReservations(ctx context.Context) {
 		m.reservations.markRebuilt()
 		return
 	}
-	list, err := reader.OpenReservations(ctx)
+	list, err := m.readOpenReservations(ctx, reader)
 	if err != nil {
 		m.logf("peers: name: cannot read the open spawn reservations, tried again at the next use: %v", err)
 		return
@@ -178,6 +184,33 @@ func (m *Module) ensureReservations(ctx context.Context) {
 		m.reservations.put(res)
 	}
 	m.reservations.markRebuilt()
+}
+
+// readOpenReservations is reader.OpenReservations within reservationReadTimeout. The read runs in its own goroutine and is given
+// up on at the deadline even if it ignores its context (a reader that calls back into the name service waits for the pool lock
+// the caller holds): the caller must get the lock back. A read that finishes late is dropped.
+func (m *Module) readOpenReservations(ctx context.Context, reader ipeers.SpawnReservationReader) ([]ipeers.Reservation, error) {
+	timeout := m.reservationReadTimeout
+	if timeout <= 0 {
+		timeout = reservationReadTimeout
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	type result struct {
+		list []ipeers.Reservation
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		list, err := reader.OpenReservations(rctx)
+		done <- result{list, err}
+	}()
+	select {
+	case r := <-done:
+		return r.list, r.err
+	case <-rctx.Done():
+		return nil, fmt.Errorf("the read did not finish in %v: %w", timeout, rctx.Err())
+	}
 }
 
 // ReserveMember implements ipeers.NameService.

@@ -84,6 +84,9 @@ type Store struct {
 	// choke point for waking its long-polls (P6-2b-2, plan v3 §7), whatever path wrote it (report, claim, an approval's
 	// close, a create). The module sets it at Init (wake); it must not block and must not call back into the store.
 	opChanged func(opID string)
+	// onSpawnsEnded, when set, is called with the ids of local spawn ops that carried a reserved member name and were ended by
+	// a team end, AFTER that transaction committed (the names go back to the pool). It must not block.
+	onSpawnsEnded func(opIDs []string)
 	// onCommandSettled, when set, runs after a command's settle transaction committed (the relay ops it ended: their long-polls and
 	// the lead's notice).
 	onCommandSettled func(tx *sql.Tx)
@@ -295,6 +298,10 @@ func OpenStore(path string) (*Store, error) {
 	if err := migrateSpawnPerson(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn person): %w", err)
+	}
+	if err := migrateSpawnPoolName(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (spawn pool name): %w", err)
 	}
 	if err := migrateSpawnTask(db); err != nil {
 		db.Close()
