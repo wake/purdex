@@ -69,6 +69,7 @@ var capabilities = []string{
 	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
 	"team.decision_log.v1",    // GET / PUT /api/team/unattended carry `log`: the latest team decisions and the switch's on/off records, newest first (NP-6b)
 	"team.max_members.v2",     // the member cap's ceiling is 9, not 8: PUT /api/team/max-members, max_members on a lead request, pdx lead request --max-members (NP-4a)
+	"team.lead_name.v1",       // a lead takes its name at approval: Grant.lead_name, 409 name_taken, LeadPayload.lead_names, GET /api/team/approvals/{id}/lead-names, and a person token that carries lead_name or card (NP-4c)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
@@ -146,6 +147,9 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("jobs") {
 		out = append(out, "jobs.v1") // GET /api/pool/jobs, /api/pool/jobs/{id}, /api/pool/jobs/{id}/log (wwd's jobs, read through the local wwd; ?host= for another host; 503 wwd_unavailable while wwd is not running)
+	}
+	if c.moduleReady("jobs") {
+		out = append(out, "jobs.control.v1") // POST /api/pool/jobs/{id}/cancel?host=, POST /api/pool/jobs/{id}/position: the admin token cancels a job (on any host, through the local wwd) or sets a queued job's place (this host only, 400 host_not_local otherwise; a device token gets 403); same condition as jobs.v1
 	}
 	if c.moduleReady("gate") {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first

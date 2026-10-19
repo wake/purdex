@@ -308,8 +308,10 @@ func TestInfo_AnnouncesJobsV1ForTheRealModule(t *testing.T) {
 		return list
 	}
 	require.Contains(t, caps(), "jobs.v1")
+	require.Contains(t, caps(), "jobs.control.v1")
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "jobs.v1")
+	require.NotContains(t, caps(), "jobs.control.v1")
 }
 
 // Init never fails when wwd is not there, and its routes are registered next to the pool's without a clash.

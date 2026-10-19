@@ -136,6 +136,22 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	if cmd.Kind == team.CommandSpawn && plan.Consent {
 		plan.SpawnCwd, _ = resolveUnderRoots(fresh.TeamRoots, cmd.Cwd)
 	}
+	// A spawn's name is reserved here before the transaction (it holds team.db's write lock, and the name service may read it): the
+	// lead host's choice, exactly. A name held here, or not a persona code, leaves the spawn without one and it goes on.
+	// reserve → apply → conditional release is one section per daemon (spawnNameMu): a reservation is the op's, not a request's, so two
+	// copies of one command that overlap must not interleave (the failed one's release would take the name of the one that commits)
+	reservedName, nameLocked := false, false
+	if cmd.Kind == team.CommandSpawn && plan.Consent && plan.SpawnCwd != "" && cmd.PoolName != "" {
+		m.spawnNameMu.Lock()
+		nameLocked = true
+		defer func() {
+			if nameLocked {
+				m.spawnNameMu.Unlock()
+			}
+		}()
+		plan.PoolName = m.reserveExactName(cmd.PoolName, cmd.ID, plan.Now)
+		reservedName = plan.PoolName != ""
+	}
 	plan.HandoffDir = m.relayDir
 	plan.ModOK = func(sessionID string) bool { return m.modProtocolAtLeast(sessionID, team.MinMemberRelayModVersion) }
 	var res CommandResult
@@ -147,6 +163,13 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		m.createMu.Unlock()
 	} else {
 		res, err = m.store.ApplyTeamCommand(plan)
+	}
+	if reservedName && (err != nil || res.Status != http.StatusOK || res.Replayed) {
+		m.releaseUnlessOpen(cmd.ID) // refused, expired, failed, or a replay: only an op that is open keeps its name
+	}
+	if nameLocked {
+		m.spawnNameMu.Unlock()
+		nameLocked = false
 	}
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
@@ -213,7 +236,7 @@ func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, o
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
 	for _, s := range []string{c.ID, c.Kind, c.ToHostID, c.TeamID, c.TeamName, c.MK, c.Lead.SessionID, c.Lead.Ref, c.Lead.Title,
-		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.OpID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel} {
+		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.OpID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel, c.PoolName} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}

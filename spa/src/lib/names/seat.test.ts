@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { addressName, seatOf } from './seat'
+import { addressName, isVerifiedPeer, seatOf } from './seat'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { makeCollection, makePersona } from './__fixtures__/personas'
 
@@ -35,5 +35,18 @@ describe('seatOf', () => {
     expect(seatOf('mlab/_q34psn')).toBeNull()
     expect(seatOf('mlab/purdex-1f-emma')).toBeNull()
     expect(seatOf('')).toBeNull()
+  })
+})
+
+describe('isVerifiedPeer', () => {
+  it('is true only for a peer whose identity the transport established', () => {
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro' } })).toBe(true)
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro', unverified: false } })).toBe(true)
+  })
+  it('is false for an unverified sender, a mod notice, any other kind, and no sender', () => {
+    expect(isVerifiedPeer({ from: { kind: 'peer', name: 'mlab/x-hiro', unverified: true } })).toBe(false)
+    expect(isVerifiedPeer({ from: { kind: 'plugin', name: 'hiro' } })).toBe(false)
+    expect(isVerifiedPeer({ from: { kind: 'user' } })).toBe(false)
+    expect(isVerifiedPeer({})).toBe(false)
   })
 })
