@@ -69,6 +69,17 @@ describe('the 可接工作 row', () => {
     expect(screen.getByTestId('avail-exception-on-now')).toBeTruthy()
   })
 
+  it('an exception that has not begun yet is not in force, with or without an end; one that begins exactly now is', () => {
+    render(<AvailRow pool={live()} exceptions={[
+      { name: 'later', since: AT + 60_000, until: AT + 3600_000 },
+      { name: 'later-open', since: AT + 60_000, until: null },
+      { name: 'right-now', since: AT, until: null },
+    ]} at={AT} />)
+    expect(screen.queryByTestId('avail-exception-later')).toBeNull()
+    expect(screen.queryByTestId('avail-exception-later-open')).toBeNull()
+    expect(screen.getByTestId('avail-exception-right-now')).toBeTruthy()
+  })
+
   it('all exceptions over: no exceptions block', () => {
     render(<AvailRow pool={live()} exceptions={[{ name: 'old-one', since: 1, until: AT - 1 }]} at={AT} />)
     expect(screen.queryByTestId('avail-exceptions')).toBeNull()
