@@ -23,8 +23,8 @@ const maxControlBody = 64 << 10
 // parameter or a path.
 func validAlias(s string) bool { return wire.ValidAlias(s) }
 
-// exceptionName is an exception name as one path segment: the alias rule, and not a dot segment.
-func exceptionName(s string) bool { return wire.ValidAlias(s) && s != "." && s != ".." }
+// exceptionName is an exception name as one path segment: the alias rule, which leaves out the dot segments.
+func exceptionName(s string) bool { return wire.ValidAlias(s) }
 
 func (m *Module) registerControl(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/pool/hosts/{alias}/worker", m.handlePutWorker)
@@ -62,7 +62,7 @@ func (m *Module) handlePutWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	alias := r.PathValue("alias")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -82,7 +82,7 @@ func (m *Module) handlePostException(w http.ResponseWriter, r *http.Request) {
 	}
 	alias := r.PathValue("alias")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	body, ok := readControlBody(w, r)
@@ -102,7 +102,7 @@ func (m *Module) handleDeleteException(w http.ResponseWriter, r *http.Request) {
 	}
 	alias, name := r.PathValue("alias"), r.PathValue("name")
 	if !validAlias(alias) {
-		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, too long or holds a control character")
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
 	if !exceptionName(name) {

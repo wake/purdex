@@ -252,7 +252,7 @@ func (c Config) validatePeers() error {
 	seen := map[string]bool{}
 	for _, p := range c.Peers {
 		if !wire.ValidAlias(p.Alias) || seen[p.Alias] {
-			return fmt.Errorf("peers: alias %q is empty, repeated, over %d bytes or holds a control character", p.Alias, wire.MaxAliasBytes)
+			return fmt.Errorf("peers: alias %q is empty, a dot name (. or ..), repeated, over %d bytes or holds a control character", p.Alias, wire.MaxAliasBytes)
 		}
 		seen[p.Alias] = true
 		host, port, err := net.SplitHostPort(p.HostPort())

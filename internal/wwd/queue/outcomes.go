@@ -119,7 +119,9 @@ func recordOutcomeOn(ctx context.Context, c *sql.Conn, o Outcome) ([]wire.Disagr
 			rows.Close()
 			return nil, err
 		}
-		if ok != b2i(o.OK) {
+		// a row an older wwd wrote under a host name the alias rule no longer accepts ("." and ".." since #3615) is not compared: a
+		// disagreement made of it could not be read back (wire.Disagreement.Validate), and the reader of its origin would stop there
+		if ok != b2i(o.OK) && wire.ValidAlias(e.host) {
 			pairs = append(pairs, e)
 		}
 	}

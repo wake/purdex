@@ -96,6 +96,20 @@ func TestAnOutcomeRecordedTwiceIsOne(t *testing.T) {
 }
 
 // A run of outcomes does not become a run of disagreements: a new outcome is paired with the most recent one of each other host only.
+// An outcome an older wwd stored under a host name the alias rule has since closed ("." and "..", #3615) is not paired with a new one: the
+// disagreement it would make could not be read back, and the reader of the origin would stop on it for good.
+func TestAnOutcomeOfAHostNameTheRuleNoLongerAllowsMakesNoDisagreement(t *testing.T) {
+	f := newFixture(t)
+	old := outcome("j_old", "air26", StandingReference, true)
+	_, err := f.db.Exec(`INSERT INTO task_outcomes (job_id, work_key, host, label, tree, task, ok, standing, at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		old.JobID, old.workKey(), ".", old.Label, old.Tree, old.Task, 1, old.Standing, old.At.UnixMilli())
+	require.NoError(t, err)
+	assert.Empty(t, f.record(t, outcome("j_new", "mserv", StandingEarned, false)))
+	// a host the rule allows is still paired
+	f.record(t, outcome("j_ref", "air26", StandingReference, true))
+	assert.Len(t, f.record(t, outcome("j_bad", "air19", StandingEarned, false)), 1)
+}
+
 func TestANewOutcomeIsPairedWithTheLatestOfEachOtherHostOnly(t *testing.T) {
 	f := newFixture(t)
 	for i := 0; i < 5; i++ {

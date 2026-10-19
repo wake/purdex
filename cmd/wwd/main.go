@@ -84,7 +84,7 @@ func run(cfgPath string) error {
 		alias, _, _ = strings.Cut(h, ".")
 	}
 	if !wire.ValidAlias(alias) { // the one rule the pool routes also apply
-		return fmt.Errorf("this host's alias %q is empty, over %d bytes or holds a control character; set alias in the config", alias, wire.MaxAliasBytes)
+		return fmt.Errorf("this host's alias %q is empty, a dot name (. or ..), over %d bytes or holds a control character; set alias in the config", alias, wire.MaxAliasBytes)
 	}
 	ifaceAddrs, _ := net.InterfaceAddrs()
 	addrs, err := daemon.PickBindAddrs(cfg.TailnetAddr, ifaceAddrs)
