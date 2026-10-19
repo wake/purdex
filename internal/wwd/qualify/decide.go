@@ -72,6 +72,8 @@ type Input struct {
 	Now   time.Time
 	Host  Host
 	Tasks []Task
+	// TasksErr is what could not be read of the manifests behind Tasks (nil when all could).
+	TasksErr error
 	// Earned maps a task label to its state (wire.EarnedLabelEarned or wire.EarnedLabelQuarantined); a label that is not there was never earned.
 	Earned map[string]string
 	// InFlight holds the task labels that have an unfinished pair on this host.
@@ -170,7 +172,14 @@ func Manual(in Input, repoTask string) (Task, error) {
 			return t, nil
 		}
 	}
-	return Task{}, fmt.Errorf("no task %q with a qualify in this host's prepared clones", repoTask)
+	return Task{}, &UnknownTaskError{Name: repoTask}
+}
+
+// UnknownTaskError: the name is not a task with a qualify in this host's prepared clones (a request for it is a 404, not a refusal).
+type UnknownTaskError struct{ Name string }
+
+func (e *UnknownTaskError) Error() string {
+	return fmt.Sprintf("no task %q with a qualify in this host's prepared clones", e.Name)
 }
 
 // sameFingerprint is equality of two fingerprints; an empty one is never the same as anything (a host that reported nothing has not

@@ -16,9 +16,9 @@ import (
 )
 
 // This file is the coordinator of qualification (spec §7): it submits the two halves of a pair to this host's queue, settles them when both
-// are done, and grants the label. It is a library: WWD-5b-2b adds it and wires NOTHING (cmd/wwd does not build it, no trigger runs it, no
-// route starts it); every way of starting a pair is WWD-5b-2c, which waits for the passed-test digest writers (docs/plans, WWD-5).
-// TestNothingWiresTheCoordinatorYet pins that, and 5b-2c is the PR that changes it.
+// are done, and grants the label. cmd/wwd builds it (qualifysource.go gives it the host, the tasks of the prepared clones and the snapshot);
+// a person starts a pair with `pdx wwd qualify` (POST /v1/qualify, WWD-5b-2c-1), and the automatic trigger that calls Tick at the facts cadence
+// is WWD-5b-2c-2.
 //
 // Locking: Tick and Request hold the coordinator's lock while they prepare a snapshot (git) and read and write the queue, so the caller
 // runs them in a goroutine of their own, never inside another lock (not in the daemon's labels lock, which Granted takes). 5b-2c wires it so.
@@ -44,8 +44,9 @@ type Store interface {
 type Source interface {
 	// Host is the host now: its alias, whether its worker is on, the labels it advertises and its fingerprint.
 	Host() Host
-	// Tasks is the tasks of the prepared clones that have a qualify with a reference host.
-	Tasks() []Task
+	// Tasks is the tasks of the prepared clones that have a qualify with a reference host. A clone whose manifest cannot be read or parsed
+	// contributes nothing and is reported in the error (joined, one per clone) next to the tasks of the others.
+	Tasks() ([]Task, error)
 	// Prepare takes the snapshot of the task's clone and returns the submission of the task as the manifest declares it, with the qualify
 	// args as its args (the caller turns it into the two halves). One call, so both halves share one snapshot.
 	Prepare(ctx context.Context, t Task) (wire.JobSubmission, error)
@@ -110,6 +111,27 @@ func New(cfg Config) *Coordinator {
 	return &Coordinator{cfg: cfg, pairs: map[string]*openPair{}, last: map[string]Attempt{}}
 }
 
+// Settle only settles the pairs that are done (a pair a person started by hand needs no tick to finish); it starts nothing.
+func (c *Coordinator) Settle(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.settle(ctx)
+}
+
+// RunSettle calls Settle every period until ctx ends.
+func (c *Coordinator) RunSettle(ctx context.Context, period time.Duration) {
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.Settle(ctx)
+		}
+	}
+}
+
 // Tick settles the pairs that are done, then starts the pairs the automatic trigger asks for. It is meant to be called at the facts
 // cadence; every call is cheap when nothing is due.
 func (c *Coordinator) Tick(ctx context.Context) {
@@ -121,7 +143,11 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		log.Printf("wwd: qualify: %v", err)
 		return
 	}
-	c.forgetGoneTasks(in.Tasks)
+	if in.TasksErr != nil { // a manifest that could not be read hides its tasks: they are not gone, and their retry memory stays
+		log.Printf("wwd: qualify: %v", in.TasksErr)
+	} else {
+		c.forgetGoneTasks(in.Tasks)
+	}
 	for _, t := range Decide(in) {
 		if _, err := c.start(ctx, t); err != nil {
 			log.Printf("wwd: qualify %s: %v", t.Label(), err)
@@ -152,6 +178,11 @@ func (c *Coordinator) Request(ctx context.Context, repoTask string) (Started, er
 		return Started{}, err
 	}
 	t, err := Manual(in, repoTask)
+	var unknown *UnknownTaskError
+	if errors.As(err, &unknown) && in.TasksErr != nil { // not found, but a manifest could not be read: that is a fault of the host, not a wrong name
+		log.Printf("wwd: qualify: %v", in.TasksErr)
+		return Started{}, fmt.Errorf("task %q not found, and a manifest could not be read: %w", repoTask, in.TasksErr)
+	}
 	if err != nil {
 		return Started{}, err
 	}
@@ -178,7 +209,8 @@ func (c *Coordinator) input() (Input, error) {
 	if err != nil && !errors.As(err, &damaged) { // damaged rows are left out and the rest is the answer; any other error is no answer
 		return Input{}, fmt.Errorf("reading the earned labels: %w", err)
 	}
-	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: c.cfg.Source.Tasks(),
+	tasks, terr := c.cfg.Source.Tasks()
+	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr,
 		Earned: map[string]string{}, InFlight: map[string]bool{}, Last: map[string]Attempt{}}
 	for _, r := range rows {
 		in.Earned[r.Label] = r.State
@@ -264,7 +296,11 @@ func (c *Coordinator) settle(ctx context.Context) {
 		ranC, ranR := ranToAnExit(cj), ranToAnExit(rj)
 		switch {
 		case cDone && rDone:
-			c.finish(label, p, Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result}))
+			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result})
+			if v.Outcome == OutcomeMatch && c.taskHiddenByUnreadableManifest(p) {
+				continue // a match is not thrown away for a manifest that cannot be read just now: look again on the next tick
+			}
+			c.finish(label, p, v)
 		case (cDone && !ranC) || (rDone && !ranR):
 			// one half ended without running (cancelled, superseded, expired): the pair is void, and the other half is not worth waiting for
 			c.cancelQuietly(ctx, p, cDone, rDone)
@@ -313,10 +349,26 @@ func (c *Coordinator) finish(label string, p *openPair, v Verdict) {
 	c.remember(Record{Label: label, Outcome: v.Outcome, Why: v.Why, At: now, Candidate: p.cand, Reference: p.ref})
 }
 
+// taskHiddenByUnreadableManifest says whether the task cannot be seen now only because a manifest could not be read (so whether it is
+// still the same task is not known yet, as opposed to known to be gone or changed).
+func (c *Coordinator) taskHiddenByUnreadableManifest(p *openPair) bool {
+	tasks, err := c.cfg.Source.Tasks()
+	if err == nil {
+		return false
+	}
+	for _, t := range tasks {
+		if t.Label() == p.task.Label() {
+			return false
+		}
+	}
+	return true
+}
+
 // stillTheSameTask says whether the task is, now, the one the pair was queued for: the same repo, name, reference, qualify args, needs and
 // definition. A result of an older definition proves nothing about the current one.
 func (c *Coordinator) stillTheSameTask(p *openPair) bool {
-	for _, t := range c.cfg.Source.Tasks() {
+	tasks, _ := c.cfg.Source.Tasks() // a manifest that cannot be read hides the task: the pair is not known to be of the current definition
+	for _, t := range tasks {
 		if t.Label() == p.task.Label() {
 			return t.Identity() == p.identity
 		}

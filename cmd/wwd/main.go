@@ -27,6 +27,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/orphans"
+	"github.com/wake/purdex/internal/wwd/qualify"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -212,9 +213,19 @@ func run(cfgPath string) error {
 	}
 	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
 	refs.ttl = 2 * time.Second // the daemon's labels and the drift watcher ask once per facts record each: one read of the manifests serves both
+	// the qualification coordinator (spec §7): a person starts a pair with pdx wwd qualify (POST /v1/qualify); the automatic trigger is not wired
+	// here (WWD-5b-2c-2). It reads the host through d, which exists before any request can arrive.
+	qualifier := qualify.New(qualify.Config{
+		Queue: q, Store: st,
+		Source: &qualifySource{repos: clones.NewSource(cfg.Repos), host: func() qualify.Host {
+			l, fp := d.Labels()
+			return qualify.Host{Alias: alias, WorkerOn: state.Worker().Enabled, Labels: l, Fingerprint: fp}
+		}},
+		Granted: func() { d.RefreshLabels() },
+	})
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
-		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs,
+		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs, Qualifier: qualifier,
 	}))
 	watcher := newDriftWatcher(alias, st, refs, d.RefreshLabels) // an earned label whose OS version or tool moved is taken away (spec §7)
 	sampler.SetOnFacts(func(f wire.Facts) {
@@ -252,10 +263,11 @@ func run(cfgPath string) error {
 		}
 		producers.Wait()
 	})
-	producers.Add(3)
+	producers.Add(4)
 	go func() { defer producers.Done(); sweepQueue(ctx, q) }()                            // lapsed leases, queue timeouts, retention
 	go func() { defer producers.Done(); fastLane.Run(ctx) }()                             // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	go func() { defer producers.Done(); d.RunQuarantine(ctx, daemon.QuarantinePeriod) }() // reads the disagreements that concern this host and quarantines its labels (spec §7)
+	go func() { defer producers.Done(); qualifier.RunSettle(ctx, qualifySettlePeriod) }() // a pair a person started ends here (the automatic trigger is WWD-5b-2c-2)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err
