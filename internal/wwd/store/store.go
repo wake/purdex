@@ -20,7 +20,7 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // hostMinutesDDL (v2): one row per finished minute, the whole rollup record as
 // JSON (minutes.go).
@@ -94,6 +94,10 @@ func (s *Store) migrate(ctx context.Context) error {
 			usageIndexDDL,
 			startsDDL,
 			alertsDDL,
+			earnedLabelsDDL,
+			resultCacheDDL,
+			resultCacheIndexDDL,
+			resultCacheLabelIndexDDL,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -130,6 +134,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if have < 5 { // v5: the start records and the alerts of spec §13 (every statement is IF NOT EXISTS: a re-run changes nothing)
 			for _, stmt := range []string{startsDDL, alertsDDL} {
+				if _, err := tx.ExecContext(ctx, stmt); err != nil {
+					return err
+				}
+			}
+		}
+		if have < 6 { // v6: earned labels and the result cache (WWD-5; every statement is IF NOT EXISTS)
+			for _, stmt := range []string{earnedLabelsDDL, resultCacheDDL, resultCacheIndexDDL, resultCacheLabelIndexDDL} {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
 					return err
 				}
