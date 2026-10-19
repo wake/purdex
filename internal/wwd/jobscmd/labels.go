@@ -2,12 +2,15 @@ package jobscmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/testcmd"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -67,6 +70,42 @@ func wwdLabels(ctx context.Context, args []string, env Env) int {
 	if hasQuarantined(list.Labels) {
 		fmt.Fprintln(env.Stdout, "quarantined = kept on record but not advertised, until the task is qualified again.")
 	}
+	return ExitOK
+}
+
+// wwdQuarantine and wwdRelease are `pdx wwd quarantine|release <label>`: this host's own labels, by hand. Only this host's wwd, on its
+// local socket, ever changes them (a disagreement another host read is applied by the owner, spec §7).
+func wwdQuarantine(ctx context.Context, args []string, env Env) int {
+	return wwdLabelChange(ctx, args, env, "quarantine", env.API.QuarantineLabel, "quarantined: %s is no longer advertised until the task is qualified again\n")
+}
+
+func wwdRelease(ctx context.Context, args []string, env Env) int {
+	return wwdLabelChange(ctx, args, env, "release", env.API.ReleaseLabel, "released: %s is no longer on record; this host holds it again by qualifying for it\n")
+}
+
+func wwdLabelChange(ctx context.Context, args []string, env Env, name string, change func(context.Context, string) error, done string) int {
+	flags, pos, err := splitFlags(args)
+	if err == nil {
+		err = only(flags)
+	}
+	if err == nil && len(pos) != 1 {
+		err = fmt.Errorf("%s takes one task label, task:<repo>/<task>", name)
+	}
+	if err == nil && !wire.ValidTaskLabel(pos[0]) {
+		err = fmt.Errorf("%q is not a task label (task:<repo>/<task>)", pos[0])
+	}
+	if err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	if err := change(ctx, pos[0]); err != nil {
+		var se *client.StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			fmt.Fprintf(env.Stderr, "pdx wwd %s: this host has no earned label %s (pdx wwd labels lists them)\n", name, testcmd.CleanLine(pos[0]))
+			return ExitFailed
+		}
+		return fail(env, "wwd "+name, err)
+	}
+	fmt.Fprintf(env.Stdout, done, testcmd.CleanLine(pos[0]))
 	return ExitOK
 }
 

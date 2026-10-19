@@ -187,6 +187,9 @@ func (q *Queue) recordEndedOutcome(ctx context.Context, c *sql.Conn, j wire.Job,
 	return nil
 }
 
+// Now is the queue's clock (the origin's: what the outcomes it records are dated by).
+func (q *Queue) Now() time.Time { return q.now() }
+
 // Origin is the alias of the host this queue belongs to: the one that records the outcomes it offers.
 func (q *Queue) Origin() string { return q.opt.Origin }
 
