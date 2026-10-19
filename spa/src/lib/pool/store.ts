@@ -78,10 +78,11 @@ export const usePoolStore = create<PoolState>((set, get) => {
   let again = false // an event came during it: read once more right after
 
   let lastOk = false // the last read cycle was answered by its source (`busy` and the first back-off failures publish no error, but they are failures: their retry timer must stay)
-  /** The reads are event-driven: the last one was answered by a source that is still connected and announces `pool.events.v1`. */
+  let readFirst: string | null = null // the first source in host order when the read under way started
+  /** The reads are event-driven: the last one was answered by the FIRST connected pool daemon (host order, as a read picks it) and it announces `pool.events.v1`. */
   const eventDriven = () => {
     const src = get().sourceHostId
-    return lastOk && src !== null && announcesEvents(src) && poolSources().includes(src)
+    return lastOk && src !== null && announcesEvents(src) && poolSources()[0] === src
   }
 
   const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
@@ -110,6 +111,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
   async function readOnce(): Promise<number> {
     const token = gen // a stop() or a visibility change bumps `gen`: whatever this read learns after that is old news
     lastOk = false // until this cycle is answered
+    readFirst = poolSources()[0] ?? null
     const sources = poolSources()
     // the retry state belongs to the source that earned it: a source that is gone takes it along
     if (sources.length === 0 || (pinned && !sources.includes(pinned))) forgetPin()
@@ -177,7 +179,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     if (g !== gen) return
     if (again) { again = false; void tick(g); return }
     if (eventDriven()) return // no timer: the next read comes with an event, a reconnect or the window turning visible
-    timer = setTimeout(() => { void tick(g) }, delay)
+    timer = setTimeout(() => { timer = null; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
   }
 
   function onVisibility() {
@@ -190,7 +192,9 @@ export const usePoolStore = create<PoolState>((set, get) => {
 
   /** The capability (or the source's connection) can change while nothing is read: gone → the poll is back at once, there → the timer is not needed. */
   function onCapabilities() {
-    if (!running || hidden() || inflight) return
+    if (!running || hidden()) return
+    // a read under way chose its source before this change: when the first source is another one now, read once more after it
+    if (inflight) { if (poolSources()[0] !== readFirst) again = true; return }
     if (eventDriven()) clearTimer()
     else if (timer === null) void tick(gen)
   }

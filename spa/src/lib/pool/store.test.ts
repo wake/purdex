@@ -485,6 +485,58 @@ describe('pool.events.v1', () => {
     expect(fetchPoolHosts).toHaveBeenCalledTimes(3) // and once it is answered the events drive it again
   })
 
+  // codex R2 (high): a timer that fired is no timer
+  it('after a retry timer fired and the source recovered, losing the capability brings the poll back at once', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValueOnce([mlab()])
+    st().start()
+    await settle()
+    fetchPoolHosts.mockRejectedValueOnce(fail(502, 'wwd_error'))
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().poolEvent(A)
+    await settle()
+    await vi.advanceTimersByTimeAsync(3000) // the back-off retry fires and is answered
+    const calls = fetchPoolHosts.mock.calls.length
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(fetchPoolHosts.mock.calls.length).toBe(calls) // events drive it: no timer
+    announce(['pool.v1'])
+    await settle()
+    expect(fetchPoolHosts.mock.calls.length).toBe(calls + 1) // read at once
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(fetchPoolHosts.mock.calls.length).toBe(calls + 2) // and polling
+  })
+
+  // codex R2 (high): the source is the FIRST connected pool daemon, as a read picks it
+  it('when an earlier daemon in host order comes back, the store moves to it even though both announce events', async () => {
+    announce(['pool.v1', EV], ['pool.v1', EV])
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenLastCalledWith(B)
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenLastCalledWith(A)
+    st().poolEvent(B) // B's events are no longer the source's
+    await settle()
+    expect(fetchPoolHosts.mock.calls.filter((c) => c[0] === B)).toHaveLength(1)
+  })
+
+  it('the same switch during a read is not lost', async () => {
+    announce(['pool.v1', EV], ['pool.v1', EV])
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
+    let release: (h: PoolHost[]) => void = () => {}
+    fetchPoolHosts.mockImplementationOnce(() => new Promise<PoolHost[]>((r) => { release = r }))
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+    await settle()
+    release([mlab()])
+    await settle(); await settle()
+    expect(fetchPoolHosts).toHaveBeenLastCalledWith(A)
+  })
+
   it('the source losing the capability brings the poll back', async () => {
     announce(['pool.v1', EV])
     fetchPoolHosts.mockResolvedValue([mlab()])
