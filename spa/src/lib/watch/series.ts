@@ -13,8 +13,8 @@ export interface Stretch { tone: Tone; pts: SPt[] }
 /** The expected step between two points of a range: 1 s raw points for 5 分, 10 s buckets for the rest. */
 export const stepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 10_000)
 /**
- * How far apart two points of a range are expected to be, for telling a hole from a slow stretch. The 5 minute range is the 1 s readings; 1 h and
- * longer hold 10 s buckets this App collected and, before them, the daemon's 1 minute series, so their points can be a minute apart.
+ * How far apart two points of a range are expected to be at most, for telling a hole from a slow stretch. The 5 minute range is the 1 s readings; 1 h and
+ * longer hold the App's own 10 s buckets and, before them, the daemon's 1 minute series, so there a neighbouring step can be up to a minute.
  */
 export const holeStepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 60_000)
 /** A step wider than this many expected steps is a hole in the history (offline host, stalled fleet), not a slow stretch. */
@@ -31,14 +31,21 @@ export interface ToPointsOpts {
 export function toPoints(points: HistoryPoint[], now: number, range: HistoryRange, opts: ToPointsOpts = {}): SPt[] {
   const span = RANGE_MS[range]
   const from = now - span
-  const gap = GAP_STEPS * holeStepMs(range)
+  const cap = holeStepMs(range)
+  // In a long range the expected step is the one around the pair, not one for the whole range: a 60 s outage in a run of 10 s buckets is a hole,
+  // the same 60 s between two minute points (or where the two kinds meet) is not. A neighbouring step is capped, so a hole next to a pair does not widen its limit.
+  const near = (i: number): number => Math.min(cap, Math.max(stepMs(range), points[i].t - points[i - 1].t))
   const out: SPt[] = []
-  let prev: number | null = null
-  for (const q of points) {
-    if (prev !== null && q.t - prev > gap) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
+  for (let i = 0; i < points.length; i++) {
+    const q = points[i]
+    if (i > 0) {
+      const prev = points[i - 1].t
+      const sides = [i > 1 ? near(i - 1) : null, i + 1 < points.length ? near(i + 1) : null].filter((v): v is number => v !== null)
+      const expected = range === '5m' ? cap : sides.length > 0 ? Math.max(...sides) : cap
+      if (q.t - prev > GAP_STEPS * expected) out.push({ x: (prev + (q.t - prev) / 2 - from) / span, v: Number.NaN, p: Number.NaN })
+    }
     const unknown = opts.unknownZero === true && q.max <= 0
     out.push({ x: (q.t - from) / span, v: unknown ? Number.NaN : q.avg, p: unknown ? Number.NaN : q.max })
-    prev = q.t
   }
   return out
 }

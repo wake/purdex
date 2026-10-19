@@ -9,6 +9,7 @@ import type { HistoryRange } from '../watch/series'
 export function useSeriesHistory(fleetHostId: string, alias: string | null, range: HistoryRange, live: boolean, memTotalMb: number | null): number {
   const source = usePoolStore((s) => s.sourceHostId)
   const [rev, setRev] = useState(0)
+  const hasTotal = memTotalMb !== null && memTotalMb > 0
   const enabled = live && range !== '5m' && alias !== null && source !== null && seriesAnnounced(source)
 
   useEffect(() => {
@@ -16,9 +17,9 @@ export function useSeriesHistory(fleetHostId: string, alias: string | null, rang
     let cancelled = false
     void loadSeries({ sourceHostId: source, alias, fleetHostId, range, memTotalMb, now: Date.now() }).then(() => { if (!cancelled) setRev((n) => n + 1) })
     return () => { cancelled = true; invalidateFactsHistory(fleetHostId) }
-    // memTotalMb is the host's constant total: a changed value does not warrant a new read.
+    // memTotalMb itself is the host's constant total: only whether it is usable (> 0) matters, since without it the memory chart is left out of the series.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, source, alias, fleetHostId, range])
+  }, [enabled, source, alias, fleetHostId, range, hasTotal])
 
   return rev
 }

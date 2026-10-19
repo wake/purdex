@@ -44,6 +44,18 @@ describe('toPoints — the spacing of the data', () => {
     expect(toPoints(run, now, '6h').filter((p) => Number.isNaN(p.v))).toHaveLength(1)
   })
 
+  // The App's own 10 s buckets sit beside the daemon's 1 minute points in a long range: a hole is judged by the spacing of the points around it.
+  it('a 60 s outage inside a run of 10 s buckets breaks the line in a long range', () => {
+    const run = [...every(10_000, 6).map((p) => ({ ...p, t: p.t - 120_000 })), ...every(10_000, 6)]
+    expect(toPoints(run, now, '1h').filter((p) => Number.isNaN(p.v))).toHaveLength(1)
+  })
+
+  it('10 s buckets follow 1 minute points: the 60 s step between the two kinds is not a hole', () => {
+    const minute = every(60_000, 5).map((p) => ({ ...p, t: p.t - 110_000 })) // its last point is 60 s before the first bucket
+    const buckets = every(10_000, 6)
+    expect(toPoints([...minute, ...buckets], now, '1h').some((p) => Number.isNaN(p.v))).toBe(false)
+  })
+
   it('the 5 minute range keeps its own, tighter threshold: a 5 s hole breaks', () => {
     const pts = toPoints([{ t: now - 10_000, avg: 1, max: 1 }, { t: now - 5000, avg: 2, max: 2 }, { t: now, avg: 3, max: 3 }], now, '5m')
     expect(pts.filter((p) => Number.isNaN(p.v))).toHaveLength(2)

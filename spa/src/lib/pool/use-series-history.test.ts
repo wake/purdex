@@ -34,6 +34,16 @@ describe('useSeriesHistory', () => {
     expect(fleetHistory.series('f1', 'cpu', '1h', Date.now()).length).toBeGreaterThan(0)
   })
 
+  it('a total of 0 on the first live sample, then a real one: the series is read again, so the memory chart is not left empty', async () => {
+    fetchPoolSeries.mockResolvedValue({ points: [point(30), point(20)] })
+    const { rerender } = renderHook(({ total }) => useSeriesHistory('f1', 'air26', '1h', true, total), { initialProps: { total: 0 } })
+    await waitFor(() => expect(fetchPoolSeries).toHaveBeenCalledTimes(1))
+    expect(fleetHistory.series('f1', 'mem', '1h', Date.now())).toHaveLength(0)
+    rerender({ total: 8000 })
+    await waitFor(() => expect(fetchPoolSeries).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fleetHistory.series('f1', 'mem', '1h', Date.now()).length).toBeGreaterThan(0))
+  })
+
   it('the 5 minute range does not read, and no load is counted', async () => {
     fetchPoolSeries.mockResolvedValue({ points: [point(1)] })
     const { result } = renderHook(() => useSeriesHistory('f1', 'air26', '5m', true, 8000))
