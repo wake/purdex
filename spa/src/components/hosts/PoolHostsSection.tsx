@@ -40,7 +40,7 @@ export function PoolHostsSection() {
 }
 
 /** The status words of a row: the zone while the pool reads the host, else why it does not. */
-export function statusWord(t: (k: string) => string, r: PoolHostRow): string {
+function statusWord(t: (k: string) => string, r: PoolHostRow): string {
   if (r.state === 'live') return t(zoneKey(r.zone ?? 'normal'))
   return r.state === 'fallback' ? t('pool_hosts.fallback_short') : t('fleet.zone.offline')
 }
