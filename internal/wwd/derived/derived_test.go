@@ -85,6 +85,11 @@ func TestHeadroom(t *testing.T) {
 		{"two exceptions, one holds light", func(i *Input) { i.Exceptions = []Hold{{Name: "a"}, {Name: "b", Light: true}} }, 0, 0},
 		{"page rate at the limit is a warning", func(i *Input) { i.PageRate = 50 }, 0, 2},
 		{"mserv sized slots", func(i *Input) { i.Slots = wire.Slots{Heavy: 0, Light: 1} }, 0, 1},
+		// #3447: during the migration a queue job is outside the gate's slots, so a gate whose heavy slots are all held stops new heavy
+		// work; light is the fast lane's own gate class and is left alone, and what is running is not touched (Running is not read here).
+		{"gate heavy slots full stops heavy only", func(i *Input) { i.GateHeavyFull = true }, 0, 2},
+		{"gate heavy full with a job running", func(i *Input) { i.GateHeavyFull = true; i.Running = wire.Slots{Heavy: 1} }, 0, 2},
+		{"gate heavy not full changes nothing", func(i *Input) { i.GateHeavyFull = false }, 1, 2},
 	}
 	for _, c := range cases {
 		inp := in()

@@ -81,6 +81,9 @@ type Input struct {
 	Exceptions    []Hold
 	AvailableMB   int
 	CompressorMB  int // memory held by the compressor (0 where there is none)
+	// GateHeavyFull: the pdx gate on this host has all its heavy slots held (or cannot be read). Until WWD-6 a queue job is outside the
+	// gate's slots, so a full gate stops new heavy work here; the job already running is not touched (#3447).
+	GateHeavyFull bool
 }
 
 // Compute is the derived block of a facts record. l keeps the zone between
@@ -93,7 +96,7 @@ func Compute(l *ZoneLatch, in Input) wire.Derived {
 		holdLight = holdLight || e.Light
 	}
 	d := wire.Derived{Zone: zone}
-	if zone == wire.ZoneNormal && !holdHeavy && !in.OwnerActive {
+	if zone == wire.ZoneNormal && !holdHeavy && !in.OwnerActive && !in.GateHeavyFull {
 		d.Headroom.Heavy = free(in.Slots.Heavy, in.Running.Heavy)
 	}
 	if zone != wire.ZoneDanger && !holdLight && !in.OwnerActive {

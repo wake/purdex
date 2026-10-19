@@ -56,6 +56,8 @@ export const SETTINGS_ORDER = {
   // Profile Sync (P3d-2): what is on screen, and whether it syncs. Last of the core band — after the three
   // that say how the app looks and behaves.
   PROFILE: 3,
+  // Personas (name pool v2): the names and faces the App shows for agents. After Profile, before the App's own section.
+  PERSONAS: 4,
   // Top app built-in — always present (the App is the only shell).
   ELECTRON: 5,
   // Modules switchboard — single row, header of the modules group.

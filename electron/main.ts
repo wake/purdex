@@ -8,6 +8,7 @@ import { registerFsIpc } from './fs-ipc'
 import { createTray, isTrayVisible } from './tray'
 import { registerTrayIpc } from './tray-ipc'
 import { registerBadgeIpc } from './badge-ipc'
+import { registerAvatarIpc } from './avatar-ipc'
 import { loadAppPrefs } from './app-prefs'
 import { startPresence, type PresenceHandle } from './presence/start'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
@@ -369,6 +370,7 @@ if (!gotInstanceLock) {
     registerIpcHandlers()
     registerTrayIpc({ prefsPath, windowManager })
     registerBadgeIpc()
+    registerAvatarIpc()
     // Push presence (PA-2): the Mac reports "at the computer" from the main process, which outlives
     // every window. Tokens handed over by the renderer stay in memory here.
     presence = startPresence({
