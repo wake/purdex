@@ -45,7 +45,11 @@ export function HostJobs({ host }: { host: PoolHost }) {
   const now = useNowEverySecond()
   const poolHosts = usePoolStore((s) => s.hosts)
   const byOrigin = useJobsStore((s) => s.byOrigin)
-  const jobs = useMemo(() => Object.values(byOrigin).flatMap((o) => Object.values(o.jobs)), [byOrigin])
+  // The store keeps what it read, a host that has left the pool too: the section shows the pool's hosts' jobs, as the jobs tab does.
+  const jobs = useMemo(() => {
+    const aliases = new Set(poolHosts.map((h) => h.alias))
+    return Object.entries(byOrigin).filter(([origin]) => aliases.has(origin)).flatMap(([, o]) => Object.values(o.jobs))
+  }, [byOrigin, poolHosts])
   const blocks = useMemo(() => hostJobBlocks(jobs, host.alias), [jobs, host.alias])
   const lanes = useMemo(() => laneModels([host], blocks.running), [host, blocks.running])
   const entries = useMemo(() => queueEntries(blocks.queued, now, poolHosts), [blocks.queued, now, poolHosts])

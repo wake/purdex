@@ -115,6 +115,20 @@ describe('the last five that ended here', () => {
   })
 })
 
+describe('a host that left the pool', () => {
+  it('its jobs the store still keeps are not shown: not on this host, not ended', () => {
+    withJobs(
+      job('gone-running', { origin: 'gone', state: 'running', claim: claim('mlab') }),
+      ended('gone-ended', 'mlab', NOW - 1000, { origin: 'gone' }),
+      job('kept-running', { state: 'running', claim: claim('mlab') }),
+    )
+    mount()
+    expect(idsIn('host-jobs-running', 'job-running')).toEqual(['kept-running'])
+    expect(idsIn('host-jobs-ended', 'host-jobs-ended-row')).toEqual([])
+    expect(screen.getByTestId('host-jobs-ended-none')).toBeInTheDocument()
+  })
+})
+
 describe('the link to the jobs tab', () => {
   it('sets the history filter to this host, the mode to 歷史, then opens the jobs tab', () => {
     mount()
