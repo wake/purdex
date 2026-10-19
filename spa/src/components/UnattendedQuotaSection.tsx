@@ -17,7 +17,7 @@ import { setQuota } from '../lib/team/relay-quota-writer'
 import type { RelayQuotaField, SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
-import { addressName } from '../lib/names/seat'
+import { addressName, seatLabel } from '../lib/names/seat'
 import { NumberField } from './team/NumberField'
 
 /** One host's share of the section. */
@@ -37,8 +37,10 @@ export interface UnattendedQuotaSectionProps {
 
 const MAX = 99
 
-/** The name a solo row shows: its title, else the name part of its address (`<alias>/<name>`). */
+/** The name a solo row shows: a persona by its name with the title after it (spec §9.3), else its title, else the name part of its address (`<alias>/<name>`). */
 function plainName(r: SessionQuota): string {
+  const persona = seatLabel(r.address, r.title)
+  if (persona !== null) return persona
   if (r.title !== undefined && r.title !== '') return r.title
   return addressName(r.address)
 }

@@ -1,12 +1,15 @@
 // spa/src/lib/team/approval-format.ts — the strings the approval dialog and its toasts are built from
 // (lead-team spec §6.3, §6.5). Pure; the i18n `t` is passed in so lib code and tests do not depend on the
 // store's locale.
+import { seatLabel } from '../names/seat'
 import { clipForDisplay, memberRelayPayloadOf, type Approval, type ApprovalKind, type MemberRelayPayload, type Origin } from './types'
 
 export type T = (key: string, params?: Record<string, string | number>) => string
 
-/** What to call the requesting session: its title (when the wire carries one), else its registry name, else its ref. */
+/** What to call the requesting session: a persona by its name with the title after it (spec §9.3), else its title (when the wire carries one), else its registry name, else its ref. */
 export function approvalSessionLabel(o: Origin): string {
+  const persona = seatLabel(o.address || o.name || '', o.title)
+  if (persona !== null) return persona
   const title = o.title?.trim() ?? ''
   if (title !== '') return title
   return o.name !== '' ? o.name : o.ref

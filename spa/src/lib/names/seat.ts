@@ -42,3 +42,12 @@ export function useSeat(address: string): Seat | null {
   const collection = usePersonaStore((s) => currentCollection(s.byHost, sourceId))
   return useMemo(() => seatFrom(collection, address), [collection, address])
 }
+
+/** What a session is called where a string is needed (a toast, a push, a table cell): the persona's name with the title after it. `null` when the address names no
+ *  persona, so the caller keeps the label it had. Only for an address the daemon resolved itself (a registry origin), never for a sender read out of message text. */
+export function seatLabel(address: string, title?: string): string | null {
+  const seat = seatOf(address)
+  if (seat === null) return null
+  const t = title?.trim() ?? ''
+  return t !== '' ? `${seat.name} · ${t}` : seat.name
+}

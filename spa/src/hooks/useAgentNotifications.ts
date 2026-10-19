@@ -16,6 +16,7 @@ import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHo
 import { clearSeenTs, requestBroadcastTs, requestIdOf, shouldDispatch, shouldDispatchRequest } from '../lib/notification-dedup'
 import { shouldNotify } from '../lib/notification-gate'
 import { currentMemberKeys } from '../lib/team/member-set'
+import { sessionSeatNow } from './useSessionSeat'
 
 export function useAgentNotifications(): void {
   useEffect(() => {
@@ -102,7 +103,7 @@ export function useAgentNotifications(): void {
  * The worker's `fromTitle` is read from the pane that shows it, a secondary
  * pane of a split included (#1840), as its status bar does.
  */
-function notificationName(hostId: string, sessionCode: string): string {
+export function notificationName(hostId: string, sessionCode: string): string {
   const executionId = executionIdOfAgentCode(sessionCode)
   if (executionId !== null) {
     const tabs = useTabStore.getState().tabs
@@ -112,6 +113,9 @@ function notificationName(hostId: string, sessionCode: string): string {
     const titleSupported = selectSessionTitleSupported(hostId)(useNexHostStore.getState())
     return workerTitleOf({ fromTitle }, readWorkerSummary(hostId, executionId), titleSupported) ?? executionId
   }
+  // a session that is a persona is named by it (spec §9.3); one no store can place yet keeps its tmux name
+  const persona = sessionSeatNow(hostId, sessionCode)
+  if (persona !== null) return persona.name
   const session = useSessionStore.getState().sessions[hostId]?.find((s) => s.code === sessionCode)
   return session?.name || sessionCode
 }
