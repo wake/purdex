@@ -33,6 +33,18 @@ func TestAlertsReadableFollowsTheLocalWWD(t *testing.T) {
 	assert.True(t, e.m.AlertsReadable(), "read again: the next answer hands back")
 }
 
+// A local wwd that does not serve the alerts route (older, or no store) answers 404: its list cannot be read, and neither can the peers'
+// through it, so this daemon delivers nothing and must not say its push is ready (R1).
+func TestAlertsReadableIsFalseWhenTheLocalWWDHasNoAlertsRoute(t *testing.T) {
+	e := newEnv(t)
+	e.src.known = map[string]bool{"mlab": false}
+	e.pass(t)
+	assert.False(t, e.m.AlertsReadable())
+	e.src.known = nil
+	e.pass(t)
+	assert.True(t, e.m.AlertsReadable())
+}
+
 // The local wwd not answering at all (the first question, who am I, fails) is the same.
 func TestAlertsReadableIsFalseWhenTheWWDDoesNotAnswer(t *testing.T) {
 	e := newEnv(t)

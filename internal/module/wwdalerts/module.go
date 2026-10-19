@@ -277,8 +277,8 @@ func (m *Module) pass(ctx context.Context) {
 			return
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
-		if h.ask == "" && ctx.Err() == nil { // the list of this host's own wwd
-			if err != nil {
+		if h.ask == "" && ctx.Err() == nil { // the list of this host's own wwd; one it does not serve (404) cannot be read either
+			if err != nil || !known {
 				m.readState.Store(readNo)
 			} else {
 				m.readState.Store(readYes)
