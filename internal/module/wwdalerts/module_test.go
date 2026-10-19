@@ -19,21 +19,17 @@ var t0 = time.Date(2026, 10, 19, 8, 0, 0, 0, time.UTC)
 
 // fakeSrc is the local wwd: its own alias, its pool, and each host's alert list.
 type fakeSrc struct {
-	mu      sync.Mutex
-	poolErr error // what Pool answers with when set
-	self    string
-	peers   []string
-	lists   map[string][]wire.Alert // by host alias
-	known   map[string]bool         // absent = known
-	errs    map[string]error
+	mu    sync.Mutex
+	self  string
+	peers []string
+	lists map[string][]wire.Alert // by host alias
+	known map[string]bool         // absent = known
+	errs  map[string]error
 }
 
 func (f *fakeSrc) Info(context.Context) (wire.Info, error) { return wire.Info{Alias: f.self}, nil }
 
 func (f *fakeSrc) Pool(context.Context) (wire.Pool, error) {
-	if f.poolErr != nil {
-		return wire.Pool{}, f.poolErr
-	}
 	var p wire.Pool
 	for _, a := range f.peers {
 		p.Peers = append(p.Peers, wire.Peer{Info: wire.Info{Alias: a}, Reachable: true})
