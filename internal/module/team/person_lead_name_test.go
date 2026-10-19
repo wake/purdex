@@ -278,4 +278,19 @@ func TestPersonLeadName_CardOverAnOpenRequestSurvivesTheSweep(t *testing.T) {
 	}
 }
 
+// MarkLeadPerson on a request a decide closed first writes nothing and says so (the handler then keeps the token and answers
+// already_decided). Mutation: drop `state = 'open'` from the UPDATE → marked is true and the closed row is rewritten.
+func TestPersonLeadName_MarkingAClosedRequestIsNotAMark(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", team.DecideRequest{Decision: "deny", Client: leadAppClient}); code != 200 {
+		t.Fatalf("deny: %d %s", code, body)
+	}
+	row, marked, err := f.m.store.MarkLeadPerson(uid(1))
+	var p team.LeadPayload
+	if err != nil || marked || row.State != team.StateDenied || json.Unmarshal(row.Payload, &p) != nil || p.Person {
+		t.Fatalf("marked=%v err=%v row=%s person=%v", marked, err, row.State, p.Person)
+	}
+}
+
 var _ = errors.New

@@ -238,14 +238,18 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 			if bound.card {
 				// the person asked for the card, and the session has a request waiting on one already: that one is the answer, and
 				// from now on it is the person's (the unattended sweep leaves it alone)
-				marked, err := m.store.MarkLeadPerson(open.ID)
+				row, marked, err := m.store.MarkLeadPerson(open.ID)
 				if err != nil {
 					m.logf("[team] create %s: %v", req.ID, err)
 					m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 					return
 				}
+				if !marked { // closed by a decide or the sweeper since it was read: nothing was served, the token is kept
+					m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "that request was closed first by someone else", &row)
+					return
+				}
 				m.persons.spend(req.PersonToken)
-				m.writeJSON(w, http.StatusOK, marked)
+				m.writeJSON(w, http.StatusOK, row)
 				return
 			}
 			// the agent asked for this already and the person has now said yes: their command approves that request (RT-1b)
