@@ -30,6 +30,26 @@ describe('toPoints', () => {
   })
 })
 
+describe('toPoints — the spacing of the data', () => {
+  const now = 1_000_000_000
+  const every = (ms: number, n: number) => Array.from({ length: n }, (_, i) => ({ t: now - (n - 1 - i) * ms, avg: i, max: i }))
+
+  it('1 minute points in the 1 h range are one line, not isolated points', () => {
+    const pts = toPoints(every(60_000, 10), now, '1h')
+    expect(pts.some((p) => Number.isNaN(p.v))).toBe(false)
+  })
+
+  it('a hole of 10 minutes in a 6 h series still breaks the line', () => {
+    const run = [...every(60_000, 5).map((p) => ({ ...p, t: p.t - 20 * 60_000 })), ...every(60_000, 5)]
+    expect(toPoints(run, now, '6h').filter((p) => Number.isNaN(p.v))).toHaveLength(1)
+  })
+
+  it('the 5 minute range keeps its own, tighter threshold: a 5 s hole breaks', () => {
+    const pts = toPoints([{ t: now - 10_000, avg: 1, max: 1 }, { t: now - 5000, avg: 2, max: 2 }, { t: now, avg: 3, max: 3 }], now, '5m')
+    expect(pts.filter((p) => Number.isNaN(p.v))).toHaveLength(2)
+  })
+})
+
 describe('collectedMinutes / summarize', () => {
   it('collected minutes come from the first point', () => {
     expect(collectedMinutes([{ t: 1_000_000 - 150_000, avg: 1, max: 1 }], 1_000_000)).toBe(2.5)

@@ -12,6 +12,11 @@ export interface Stretch { tone: Tone; pts: SPt[] }
 
 /** The expected step between two points of a range: 1 s raw points for 5 分, 10 s buckets for the rest. */
 export const stepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 10_000)
+/**
+ * How far apart two points of a range are expected to be, for telling a hole from a slow stretch. The 5 minute range is the 1 s readings; 1 h and
+ * longer hold 10 s buckets this App collected and, before them, the daemon's 1 minute series, so their points can be a minute apart.
+ */
+export const holeStepMs = (range: HistoryRange): number => (range === '5m' ? 1000 : 60_000)
 /** A step wider than this many expected steps is a hole in the history (offline host, stalled fleet), not a slow stretch. */
 const GAP_STEPS = 2.5
 /** The charts are 400 viewBox units wide; more points than that cannot be told apart. */
@@ -26,7 +31,7 @@ export interface ToPointsOpts {
 export function toPoints(points: HistoryPoint[], now: number, range: HistoryRange, opts: ToPointsOpts = {}): SPt[] {
   const span = RANGE_MS[range]
   const from = now - span
-  const gap = GAP_STEPS * stepMs(range)
+  const gap = GAP_STEPS * holeStepMs(range)
   const out: SPt[] = []
   let prev: number | null = null
   for (const q of points) {

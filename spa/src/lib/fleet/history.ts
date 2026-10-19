@@ -54,9 +54,12 @@ export class FleetHistory {
       while (drop < tr.raw.length && tr.raw[drop].t < fast.at - RAW_MS) drop++
       if (drop) tr.raw.splice(0, drop)
       const bt = Math.floor(fast.at / BUCKET_MS) * BUCKET_MS
-      const last = tr.buckets[tr.buckets.length - 1]
+      // The bucket of this time: usually the last, but seeded buckets can be newer than a live reading, so it is found by its time.
+      let k = tr.buckets.length - 1
+      while (k >= 0 && tr.buckets[k].t > bt) k--
+      const last = tr.buckets[k]
       if (last && last.t === bt) { last.sum += v; last.n++; if (v > last.max) last.max = v }
-      else tr.buckets.push({ t: bt, sum: v, n: 1, max: v })
+      else tr.buckets.splice(k + 1, 0, { t: bt, sum: v, n: 1, max: v })
       let dropB = 0
       while (dropB < tr.buckets.length && tr.buckets[dropB].t < fast.at - BUCKETS_MS) dropB++
       if (dropB) tr.buckets.splice(0, dropB)
@@ -88,6 +91,39 @@ export class FleetHistory {
     // `record()` takes a reading only if it is newer than `lastAt`: with the cursor left behind, a live reading at (or before) the newest seeded
     // time would be added after it, doubled or out of order.
     if (readings.length > 0) hh.lastAt = Math.max(hh.lastAt, ...readings.map((r) => r.at))
+  }
+
+  /**
+   * Points the daemon already has (its 1 minute series, read when a 1 h+ range opens) put into the 10 s bucket track, before and among the buckets
+   * this App collected. A bucket already there keeps its own value; a point dated more than a few seconds ahead of `now` is not placed (the same
+   * reason as `seedRaw`); what is older than the 24 h of buckets is dropped. An item a point does not carry is a gap for that item only. The 5
+   * minute track and the cursors `record()` judges by are not touched: a live reading is still welcome whatever was seeded.
+   */
+  seedBuckets(hostId: string, points: Array<{ at: number } & Partial<Record<HistoryItem, number>>>, now: number = Date.now()): void {
+    let hh = this.hosts.get(hostId)
+    if (!hh) {
+      hh = { lastAt: -Infinity, lastRawAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
+      this.hosts.set(hostId, hh)
+    }
+    const placed = points.filter((p) => p.at <= now + FUTURE_TOLERANCE_MS)
+    if (placed.length === 0) return
+    for (const item of HISTORY_ITEMS) {
+      const tr = hh.items[item]
+      const have = new Set(tr.buckets.map((b) => b.t))
+      const add: Bucket[] = []
+      for (const p of placed) {
+        const v = p[item]
+        if (v === undefined) continue
+        const t = Math.floor(p.at / BUCKET_MS) * BUCKET_MS
+        if (have.has(t)) continue
+        have.add(t)
+        add.push({ t, sum: v, n: 1, max: v })
+      }
+      if (add.length === 0) continue
+      const all = [...tr.buckets, ...add].sort((a, b) => a.t - b.t)
+      const newest = all[all.length - 1].t
+      tr.buckets = all.filter((b) => b.t >= newest - BUCKETS_MS)
+    }
   }
 
   series(hostId: string, item: HistoryItem, range: HistoryRange, now: number = Date.now()): HistoryPoint[] {
