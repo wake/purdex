@@ -2,9 +2,11 @@ package teammod
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // The member name of a spawn (name pool v2 spec §5.2). The team module asks the peers name service for it when it accepts the
@@ -50,6 +52,52 @@ func (m *Module) reserveMemberName(leadSessionID, opID, tmuxName string, at int6
 		return ""
 	}
 	return code
+}
+
+// chooseMemberName is the lead host's choice of a name for a member that will live on another host: reserved to pick with this lead's
+// pair history, and given back at once, because this host has no session to name and the member host holds its own reservation. ""
+// when there is none to give.
+func (m *Module) chooseMemberName(leadSessionID, opID string, at int64) string {
+	code := m.reserveMemberName(leadSessionID, opID, "", at)
+	if code != "" {
+		m.releaseMemberName(opID)
+	}
+	return code
+}
+
+// reserveExactName reserves exactly code for op opID on this (the member) host; "" when it is held here, not a pool name, or the name
+// service fails: the session is then named by this host's own rules and the spawn goes on.
+func (m *Module) reserveExactName(code, opID string, at int64) string {
+	svc := m.nameService()
+	if svc == nil {
+		return ""
+	}
+	tmuxName, err := team.SpawnTmuxName(opID)
+	if err != nil {
+		return ""
+	}
+	parent := m.stopCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, spawnNameTimeout)
+	defer cancel()
+	if err := svc.ReserveExact(ctx, code, opID, tmuxName, time.UnixMilli(at)); err != nil {
+		if !errors.Is(err, ipeers.ErrNameTaken) && !errors.Is(err, ipeers.ErrNameUnknown) {
+			m.logf("[team] spawn %s: no member name reserved: %v", opID, err)
+		}
+		return ""
+	}
+	return code
+}
+
+// releaseUnlessOpen gives the name of op opID back unless the op is there and still open (a replay of a running spawn, or a command
+// that clashed with one: the name is that op's).
+func (m *Module) releaseUnlessOpen(opID string) {
+	if op, found, err := m.store.GetSpawnOp(opID); err == nil && found && (op.State == team.SpawnRunning || op.State == team.SpawnAwaitingResources) {
+		return
+	}
+	m.releaseMemberName(opID)
 }
 
 // releaseMemberName gives the name of op opID back. It is idempotent, and does nothing when the op had none.

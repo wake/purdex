@@ -89,6 +89,8 @@ type CommandPlan struct {
 	// HostID is this host's id (a spawn's op belongs to it); SpawnCwd the canonical cwd of a spawn, "" when it lies under
 	// none of the roots the lead host's entry grants.
 	HostID, SpawnCwd string
+	// PoolName is the member name this host reserved for a spawn (the lead host's choice, ReserveExact; "" = none): the op's pool_name.
+	PoolName string
 	// ModOK says whether the session's mod speaks a protocol the relay needs (MinMemberRelayModVersion), read by the handler
 	// from the hello it saw; nil means no. HandoffDir is the directory a relay's handoff file lives in.
 	ModOK      func(sessionID string) bool
@@ -105,7 +107,8 @@ type CommandResult struct {
 	Body     json.RawMessage
 	Replayed bool
 
-	changedOp string // a relay op this decision changed: the store tells its waiters once the transaction commits
+	endedSpawns []string // forwarded spawn ops an `end` failed that carried a reserved name: released once the transaction commits
+	changedOp   string   // a relay op this decision changed: the store tells its waiters once the transaction commits
 }
 
 // ApplyTeamCommand decides p in ONE transaction: the stored answer of an earlier copy (same lead host, same id)
@@ -187,6 +190,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		return fail(fmt.Errorf("commit: %w", err))
 	}
 	s.notifyOp(res.changedOp)
+	s.spawnsEnded(res.endedSpawns)
 	return res, nil
 }
 

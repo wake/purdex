@@ -141,6 +141,8 @@ type Module struct {
 	stopCtx context.Context
 	// names is the name service a test sets; nil resolves it from the registry (spawn_poolname.go)
 	names ipeers.NameService
+	// spawnNameMu orders a member host's reserve → apply → release of one forwarded spawn command (commands_handler.go)
+	spawnNameMu sync.Mutex
 	// cmdLimit is the per-lead-host admission of the cross-host commands route (spent before the body is decoded).
 	cmdLimit *peersmod.HostLimiter
 	// factLimit is the same for the facts route (a flood of fresh fact ids is rate-limited before decode).

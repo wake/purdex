@@ -128,6 +128,12 @@ func migrateSpawnPoolName(db *sql.DB) error {
 	return ensureColumn(db, "spawn_ops", "pool_name", "TEXT NOT NULL DEFAULT ''")
 }
 
+// migrateRemoteSpawnPoolName gives remote_spawns the member name the lead host chose for the spawn (name pool v2 spec §5.2): a row
+// written before it reads "" (no name). It can run again.
+func migrateRemoteSpawnPoolName(db *sql.DB) error {
+	return ensureColumn(db, "remote_spawns", "pool_name", "TEXT NOT NULL DEFAULT ''")
+}
+
 // migrateMemberLastTurn gives team_members the member's last turn (plan T-3a2): the
 // summary and its (at, seq) stamp, written when the member has no in_progress task. A row
 // written before it reads no turn. Never reset on a relay (resetMemberUsage leaves it).

@@ -17,6 +17,8 @@
 | I | same-name old failed unit | a failed `wwd-j_4d3-I` left behind; the next run of the same id is cleared first and reads its own result (Exited 0) |
 | L | task with its own `.wwd-exit` | a task that makes a directory `.wwd-exit` and exits 0 → Exited 0 (the runner's file has another, random name) |
 | K | stopped from outside | `systemctl stop` of the running unit by an operator: Cancelled after 1.55 s with `Err` "ended and left no exit status: it was stopped from outside" (systemd-run exits 0 and the unit disappears, so it must not read as a success) |
+| P | unit with an origin tag (#3373 PR3b, #3529; run 2026-10-19) | `Origin` set: the job's cgroup is `0::/wwd.slice/wwd-0123456789abcdef-j_4d3-P.service`, `WWD_ORIGIN` is in its environment, `systemd-run`, `show` (a failed tagged unit reads `Result=exit-code`) and `reset-failed` all work under the tagged name; no old-form unit |
+| Q | two origins, the same job id (#3529; design section 5) | two runs of `j_4d3-Q` from origins `aaaa…` and `bbbb…` at once, 3.12 s each: each in its own `wwd-<tag>-j_4d3-Q.service`, own workspace, both Exited 0; afterwards `systemctl list-units --all 'wwd-*'` is empty |
 | J | jobdb on the dev MySQL | **not run**: it needs the administrator account on mserv's MySQL, which is the user's decision |
 
 ### G: without and with `ProtectSystem=strict`
