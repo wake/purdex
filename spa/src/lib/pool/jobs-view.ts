@@ -82,8 +82,8 @@ export function noHostToGoTo(job: PoolJob, hosts: readonly PoolHostLabels[]): { 
 
 export interface HistoryFilter { state?: string; host?: string; repo?: string }
 
-/** The host a job ran on: where it ended, else who claimed it, else its origin (a job that never ran). */
-const ranOn = (j: PoolJob): string => j.result?.host || j.claim?.worker || j.origin
+/** The host a job ran on: who claimed it (else where it ended). A job that never ran (superseded or timed out in the queue) has none: only the unfiltered list shows it. */
+const ranOn = (j: PoolJob): string => j.claim?.worker || j.result?.host || ''
 
 /** The ended jobs, newest first (by when they finished, else when they were queued), under the filter. */
 export function historyOf(jobs: readonly PoolJob[], filter: HistoryFilter): PoolJob[] {

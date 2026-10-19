@@ -150,7 +150,7 @@ describe('the history', () => {
     expect(idsOf(historyOf(jobs, {}))).toEqual(['new', 'unfinished', 'old'])
   })
 
-  it('filters by state, by repo and by the host it ran on (else its origin)', () => {
+  it('filters by state, by repo and by the host it ran on; a job that never ran has no host and shows only unfiltered', () => {
     const jobs = [
       ended('a', 3, { repo: { name: 'purdex', root: '', remote: '' } }),
       ended('b', 2, { state: 'failed', repo: { name: 'mlab', root: '', remote: '' } }),
@@ -159,7 +159,8 @@ describe('the history', () => {
     expect(idsOf(historyOf(jobs, { state: 'failed' }))).toEqual(['b'])
     expect(idsOf(historyOf(jobs, { repo: 'purdex' }))).toEqual(['a'])
     expect(idsOf(historyOf(jobs, { host: 'mserv' }))).toEqual(['a', 'b'])
-    expect(idsOf(historyOf(jobs, { host: 'air26' }))).toEqual(['c'])
+    expect(idsOf(historyOf(jobs, { host: 'air26' }))).toEqual([])
+    expect(idsOf(historyOf(jobs, {}))).toEqual(['a', 'b', 'c'])
     expect(idsOf(historyOf(jobs, { state: 'succeeded', repo: 'mlab' }))).toEqual([])
   })
 })
