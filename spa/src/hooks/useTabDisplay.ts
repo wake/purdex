@@ -29,7 +29,7 @@ import type { ExecutionSummary } from '../lib/nex/types'
 import { useSessionAgentIndicator } from './useSessionAgentIndicator'
 import { useTabAgentAggregate } from './useTabAgentAggregate'
 import { useTabQueued } from './useTabQueued'
-import type { FleetWaiter } from '../lib/fleet/types'
+import type { QueuedItem } from '../lib/watch/queued-sessions'
 import { tabAgentPanes } from '../lib/agent-lights/tab-aggregate'
 import type { TabIconComponent } from './useSessionAgentIndicator'
 
@@ -53,7 +53,7 @@ export interface TabDisplayData {
   /** The highest background-work kind over the tab's panes (N6): the corner symbol of the agent icon. */
   background: BackgroundKind | undefined
   /** The waiters behind the symbol when it is the queue hourglass (its tooltip is built where it is drawn); else undefined. */
-  backgroundWaiters: FleetWaiter[] | undefined
+  backgroundWaiters: QueuedItem[] | undefined
 }
 
 /**
@@ -152,7 +152,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
   // Over every execution pane of the tab (useTabAgentAggregate), not only the primary one.
 
-  const backgroundWaiters = agg.background === 'queued' && queued.waiters.length > 0 ? queued.waiters : undefined
+  const queuedItems: QueuedItem[] = [...queued.jobs, ...queued.waiters]
+  const backgroundWaiters = agg.background === 'queued' && queuedItems.length > 0 ? queuedItems : undefined
 
   return {
     displayTitle,

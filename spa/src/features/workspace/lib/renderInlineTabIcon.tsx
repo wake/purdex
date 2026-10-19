@@ -2,7 +2,7 @@ import type { AgentStatus, BackgroundKind, SubagentRef } from '../../../stores/u
 import type { TabIndicatorStyle } from '../../../stores/useUISettingsStore'
 import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
-import type { FleetWaiter } from '../../../lib/fleet/types'
+import type { QueuedItem } from '../../../lib/watch/queued-sessions'
 import { BackgroundSymbol } from '../../../components/BackgroundSymbol'
 
 interface Params {
@@ -20,7 +20,7 @@ interface Params {
   /** The tab's highest background-work kind (N6), drawn as in TabIcon. */
   background?: BackgroundKind
   /** The waiters behind the queue hourglass (its tooltip). */
-  backgroundWaiters?: FleetWaiter[]
+  backgroundWaiters?: QueuedItem[]
   /**
    * The row's persona avatar (name pool v2 spec §9.6): drawn in the agent icon's place, 18 px, whatever the light style — the light is
    * always its top-right corner dot (the 'dot' style's replace-the-icon layout would hide the face). Everything else of the light stays:

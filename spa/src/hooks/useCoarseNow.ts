@@ -16,7 +16,7 @@ export function coarseNow(): number {
   return Math.floor(Date.now() / COARSE_NOW_STEP_MS) * COARSE_NOW_STEP_MS
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribeCoarseNow(listener: () => void): () => void {
   listeners.add(listener)
   if (timer === null) timer = setInterval(() => { for (const l of [...listeners]) l() }, COARSE_NOW_STEP_MS)
   return () => {
@@ -29,5 +29,5 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function useCoarseNow(): number {
-  return useSyncExternalStore(subscribe, coarseNow, coarseNow)
+  return useSyncExternalStore(subscribeCoarseNow, coarseNow, coarseNow)
 }

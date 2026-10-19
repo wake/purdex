@@ -8,15 +8,14 @@ import { Clock, Eye, Hourglass, TreeStructure } from '@phosphor-icons/react'
 import type { BackgroundKind } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useCoarseNow } from '../hooks/useCoarseNow'
-import type { FleetWaiter } from '../lib/fleet/types'
-import { queuedTooltip } from '../lib/watch/queued-sessions'
+import { queuedTooltip, type QueuedItem } from '../lib/watch/queued-sessions'
 
 const ICONS = { queued: Hourglass, workflow: TreeStructure, monitor: Eye, schedule: Clock } as const
 
 interface Props {
   kind: BackgroundKind
-  /** The waiters of a `queued` symbol: its tooltip names the longest wait (place, minutes, command) and counts the others. */
-  waiters?: FleetWaiter[]
+  /** What a `queued` symbol stands for: pool jobs (their place or where they run) and, until WWD-9, gate waiters (the longest wait, the others counted). */
+  waiters?: QueuedItem[]
   /** Offsets from the top-left of the positioned box it sits in (px). */
   top?: number
   left?: number
@@ -30,7 +29,7 @@ export function BackgroundSymbol({ waiters, ...rest }: Props) {
     : <Symbol {...rest} />
 }
 
-function QueuedSymbol({ waiters, ...rest }: Props & { waiters: FleetWaiter[] }) {
+function QueuedSymbol({ waiters, ...rest }: Props & { waiters: QueuedItem[] }) {
   const t = useI18nStore((s) => s.t)
   useCoarseNow() // re-render each minute; the minutes themselves are read from the clock below
   // Date.now(), not the coarse minute: the minute value would understate a wait by up to a minute. The tick above re-renders.
