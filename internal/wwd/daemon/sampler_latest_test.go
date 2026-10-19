@@ -56,6 +56,39 @@ func TestHistoryLatestReadsOnlyTheNewestMinutes(t *testing.T) {
 	}
 }
 
+// Through the route: GET /v1/facts/series?limit=n reads n+1 stored minutes (so it knows it cut), answers the newest n, oldest first,
+// and says truncated; with room to spare it is not truncated.
+func TestSeriesRouteReadsLimitPlusOneMinutes(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "wwd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rec := &recordingMinutes{Store: db}
+	s := statsSampler(&steer{load1: 1}, rec)
+	tickN(s, 0, 12*8) // seven finished minutes and the eighth open
+	d := New(Options{HostID: "h1", Alias: "mlab", Version: "v0", Token: testToken, Sampler: s})
+	rec.all, rec.latest = 0, nil
+
+	path := "/v1/facts/series?step=1m&since=" + minuteStart().Format(time.RFC3339) + "&limit="
+	w := do(d.SocketHandler(), "GET", path+"3", "")
+	got, err := wire.Decode[wire.FactsSeriesResponse](w.Body.Bytes())
+	if w.Code != 200 || err != nil || len(got.Points) != 3 || !got.Truncated {
+		t.Fatalf("limit 3: %d %v %+v", w.Code, err, got)
+	}
+	if len(rec.latest) != 1 || rec.latest[0] != 4 || rec.all != 0 {
+		t.Fatalf("the store was read by LoadMinutes %d times and LoadMinutesLatest with %v, want one read of 4", rec.all, rec.latest)
+	}
+	if !got.Points[0].At.Before(got.Points[2].At) {
+		t.Fatalf("oldest first expected: %+v", got.Points)
+	}
+	w = do(d.SocketHandler(), "GET", path+"100", "")
+	whole, err := wire.Decode[wire.FactsSeriesResponse](w.Body.Bytes())
+	if err != nil || whole.Truncated || len(whole.Points) < 7 {
+		t.Fatalf("limit 100: %v %+v", err, whole)
+	}
+}
+
 // A store that cannot read the newest n (the plain MinuteStore) still answers: all of them.
 func TestHistoryLatestWithAStoreThatCannotLimit(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "wwd.db"))
