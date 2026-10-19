@@ -60,6 +60,17 @@ func (l *leadRenameLedger) drop(sid, from string) {
 
 func nameSID(sessionID string) string { return strings.ToLower(strings.TrimSpace(sessionID)) }
 
+// nameBase is a session's name without its suffix: the pool name, or the two ref characters; a name with neither is its own base.
+func nameBase(name, sessionID string) string {
+	if cur, ok := ipeers.PoolNameOf(name); ok {
+		return strings.TrimSuffix(name, "-"+cur)
+	}
+	if ref := ipeers.RefID(sessionID); ipeers.IsRef(ref) {
+		return strings.TrimSuffix(name, "-"+ref[1:3])
+	}
+	return name
+}
+
 // nameRow is the stored name of a session; ok is false when it has none.
 func (m *Module) nameRow(ctx context.Context, sessionID string) (store.PeerNameEntry, bool, error) {
 	if m.peerNames == nil {
@@ -147,14 +158,7 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if curIsPool && cur == code {
 		return row.Name, nil
 	}
-	// the base is the name without its suffix: the pool name, or the two ref characters
-	base := row.Name
-	if curIsPool {
-		base = strings.TrimSuffix(row.Name, "-"+cur)
-	} else if ref := ipeers.RefID(sessionID); ipeers.IsRef(ref) {
-		base = strings.TrimSuffix(row.Name, "-"+ref[1:3])
-	}
-	newName, ok := ipeers.VirtualNameWith(base, code)
+	newName, ok := ipeers.VirtualNameWith(nameBase(row.Name, sessionID), code)
 	if !ok {
 		return "", ipeers.ErrNameUnknown
 	}

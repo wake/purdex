@@ -37,7 +37,7 @@ func (m *Module) leadCodes() map[string]bool {
 // ruleInput builds the input of the rules for the free names. A history that cannot be read does not stop the naming: the
 // pick goes on as if there were none, and says so. Called with the pool lock held.
 func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
-	in := nameRuleInput{Free: free, Lead: m.leadCodes(), Familiar: map[string]bool{}, AnyPairs: map[string]int{}, Leads: map[string]nameStat{}}
+	in := nameRuleInput{Free: free, Lead: m.leadCodes(), Familiar: map[string]bool{}, AnyPairs: map[string]int{}, Leads: map[string]nameStat{}, LeadPairs: map[string]map[string]nameStat{}}
 	if m.namePicker != nil {
 		in.Pick = m.namePicker.Pick
 	}
@@ -54,6 +54,10 @@ func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
 			for _, p := range pairs {
 				in.Familiar[p.MemberCode] = true
 				in.AnyPairs[p.MemberCode] += p.Count
+				if in.LeadPairs[p.LeadCode] == nil {
+					in.LeadPairs[p.LeadCode] = map[string]nameStat{}
+				}
+				in.LeadPairs[p.LeadCode][p.MemberCode] = nameStat{Count: p.Count, LastAt: p.LastAt}
 			}
 		}
 	}

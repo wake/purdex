@@ -299,6 +299,8 @@ type Module struct {
 	beforeLeadRename func()
 	// inLeadRename is a test seam in RenameForLead, under the generation read lock, between the pickable check and the write.
 	inLeadRename func()
+	// noticeSend sends the rename notice of the backfill; nil is the in-process SendSelfNotice (namebackfill.go). A test seam.
+	noticeSend func(ctx context.Context, req ipeers.SendRequest) error
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.
@@ -893,6 +895,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
 	// Two live holders of one pool name: the newcomer picks again (spec §5).
 	m.settlePoolCollisions(invCtx, entries, proxyPIDs, previousRefs, virtualNames)
+	// Old conversations get a persona name once there are personas (name pool v2 spec §6.4).
+	m.backfillPersonaNames(invCtx, entries, proxyPIDs, virtualNames, alias)
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
