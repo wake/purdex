@@ -2,7 +2,8 @@
 // `push` ones through the push module (APNs), and gathers the `digest` ones for the daily digest.
 //
 // The deliverer is the daemon holding the fleet `primary` role, and only while its push module is ready; a `standby` or `off` daemon
-// reads and gathers, and tells nothing. Delivery is at least once. "Delivered" is recorded only when the push module says APNs took the
+// reads and gathers, and tells nothing (a standby tells only when the primary cannot push). Status reports a deliverer only while this
+// daemon's own push module is ready, so /api/info names who really sends. Delivery is at least once. "Delivered" is recorded only when the push module says APNs took the
 // push (AlertPush.Sent), never when the push was merely queued: the sender's queue is not drained when the daemon stops (#3432), and a
 // person at the computer or a phone-less daemon gets no push at all. So an alert that holds is put in the push module's hands at most
 // once per attemptEvery, and again after deliveredFor from its last confirmed delivery. The ledger is in this module's own database, so
@@ -231,7 +232,12 @@ func (m *Module) pass(ctx context.Context) {
 	m.smu.Unlock()
 	m.pushEnabled()
 	defer func() {
+		// what is reported is who really sends: the rule names this daemon and its own push module can be asked (#3573). The rule itself
+		// is left alone: a standby still takes over for a primary whose push it cannot see.
 		deliverer := m.deliver()
+		if deliverer {
+			_, deliverer = m.notify()
+		}
 		m.smu.Lock()
 		m.deliverer, m.suppressed = deliverer, m.passSuppressed
 		m.smu.Unlock()
