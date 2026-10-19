@@ -26,6 +26,7 @@ interface PoolState {
   lastLiveAt: Record<string, number>
   error: PoolReadFailure | null
 
+  /** One read cycle; resolves to the wait before the next. An answer that arrives after `stop()` or a visibility change (a newer generation) is dropped. */
   readOnce: () => Promise<number>
   start: () => void
   stop: () => void
@@ -34,10 +35,11 @@ interface PoolState {
 
 const initial = { hosts: [], sourceHostId: null, oldDaemon: false, lastLiveAt: {}, error: null }
 
-/** The connected daemons announcing `pool.v1`, in the App's host order. */
+/** The connected daemons announcing `pool.v1`, in the App's host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here. */
 function poolSources(): string[] {
   const { byHost } = useNexHostStore.getState()
-  return useHostStore.getState().hostOrder.filter((id) => byHost[id]?.daemonCapabilities?.includes(POOL_CAPABILITY))
+  const { hostOrder, runtime } = useHostStore.getState()
+  return hostOrder.filter((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities?.includes(POOL_CAPABILITY))
 }
 
 const errorOf = (e: unknown): PoolError => (e as { poolError?: PoolError })?.poolError ?? classify(null, null)
@@ -66,6 +68,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
   }
 
   async function readOnce(): Promise<number> {
+    const token = gen // a stop() or a visibility change bumps `gen`: whatever this read learns after that is old news
     const sources = poolSources()
     if (sources.length === 0) {
       set({ hosts: [], sourceHostId: null, oldDaemon: true, error: null })
@@ -74,9 +77,12 @@ export const usePoolStore = create<PoolState>((set, get) => {
     let last: PoolError = classify(null, null)
     for (const id of sources) {
       try {
-        applyHosts(id, await fetchPoolHosts(id))
+        const hosts = await fetchPoolHosts(id)
+        if (token !== gen) return POLL_MS
+        applyHosts(id, hosts)
         return POLL_MS
       } catch (e) {
+        if (token !== gen) return POLL_MS
         last = errorOf(e)
         if (last.action === 'next_source') continue
         break

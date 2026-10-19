@@ -40,7 +40,10 @@ beforeEach(() => {
   usePoolStore.getState().reset()
   visibility = 'visible'
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
-  useHostStore.setState({ hosts: { [A]: hostCfg(A), [B]: hostCfg(B) }, hostOrder: [A, B], activeHostId: A, runtime: {} } as never)
+  useHostStore.setState({
+    hosts: { [A]: hostCfg(A), [B]: hostCfg(B) }, hostOrder: [A, B], activeHostId: A,
+    runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } },
+  } as never)
   useNexHostStore.setState({ byHost: { [A]: entry(['pool.v1']), [B]: entry(['pool.v1']) } } as never)
 })
 afterEach(() => { usePoolStore.getState().stop(); vi.useRealTimers() })
@@ -53,6 +56,20 @@ describe('source and reads', () => {
     expect(fetchPoolHosts).toHaveBeenCalledWith(B)
     expect(st().sourceHostId).toBe(B)
     expect(st().hosts.map((h) => h.alias)).toEqual(['mlab'])
+  })
+
+  it('a daemon that is not connected is skipped even though its capability is cached', async () => {
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    await st().readOnce()
+    expect(fetchPoolHosts.mock.calls.map((c) => c[0])).toEqual([B])
+  })
+
+  it('every announcing daemon being disconnected is the old-daemon state', async () => {
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'reconnecting' } } } as never)
+    await st().readOnce()
+    expect(fetchPoolHosts).not.toHaveBeenCalled()
+    expect(st().oldDaemon).toBe(true)
   })
 
   it('no daemon announcing pool.v1 is the old-daemon state, and nothing is read', async () => {
@@ -135,6 +152,48 @@ describe('error actions', () => {
     fetchPoolHosts.mockImplementation(async () => { throw fail(400, 'bad_request') })
     expect(await st().readOnce()).toBe(POLL_MS)
     expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a read that was overtaken', () => {
+  const deferred = () => { let resolve!: (h: PoolHost[]) => void; const p = new Promise<PoolHost[]>((r) => { resolve = r }); return { p, resolve } }
+
+  it('stop() while a read is in flight: its answer is dropped', async () => {
+    const d = deferred()
+    fetchPoolHosts.mockReturnValue(d.p)
+    st().start()
+    await vi.advanceTimersByTimeAsync(0)
+    st().stop()
+    d.resolve([mlab()])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(st().hosts).toEqual([])
+  })
+
+  it('hidden then visible: the old read finishing last does not overwrite the newer one', async () => {
+    const old = deferred()
+    const fresh = deferred()
+    fetchPoolHosts.mockReturnValueOnce(old.p).mockReturnValueOnce(fresh.p)
+    st().start()
+    await vi.advanceTimersByTimeAsync(0)
+    setVisibility('hidden')
+    setVisibility('visible')
+    await vi.advanceTimersByTimeAsync(0)
+    fresh.resolve([mlab({ alias: 'new' })])
+    await vi.advanceTimersByTimeAsync(0)
+    old.resolve([mlab({ alias: 'old' })])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(st().hosts.map((h) => h.alias)).toEqual(['new'])
+  })
+
+  it('a failure of an overtaken read does not set an error either', async () => {
+    let reject!: (e: unknown) => void
+    fetchPoolHosts.mockReturnValue(new Promise((_, r) => { reject = r }))
+    st().start()
+    await vi.advanceTimersByTimeAsync(0)
+    st().stop()
+    reject(fail(503, 'wwd_unavailable'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(st().error).toBeNull()
   })
 })
 

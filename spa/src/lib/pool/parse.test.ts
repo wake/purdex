@@ -74,6 +74,15 @@ describe('hosts answer', () => {
     expect(h.facts?.alias).toBe('mlab')
   })
 
+  // The values are what the daemon's own test asserts for this body (internal/module/pool/module_test.go TestHosts_ReasonsAndLoad,
+  // #3496): mlab is in the warning zone with its heavy slots full and its fullest disk at 91 %, light has room (an empty list, not null).
+  it('the non-null assess shape the daemon answers for a host with facts (module_test.go TestHosts_ReasonsAndLoad)', () => {
+    const [h] = parseHostsAnswer({ hosts: [{ ...hostsJson.hosts[0], facts: darwinJson, reachable: true,
+      headroom_reasons: { heavy: ['zone_warning', 'slots_full'], light: [] }, load: { score: 91, driver: 'disk' } }] })!
+    expect(h.headroom_reasons).toEqual({ heavy: ['zone_warning', 'slots_full'], light: [] })
+    expect(h.load).toEqual({ score: 91, driver: 'disk' })
+  })
+
   it('a malformed row is dropped whole, malformed facts only null that part, a malformed envelope is null', () => {
     const bad = { hosts: [{ nope: 1 }, { ...hostsJson.hosts[0], facts: { v: 1 } }] }
     const a = parseHostsAnswer(bad)!
