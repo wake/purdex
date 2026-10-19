@@ -3,11 +3,13 @@ package jobexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // defaultStoreMaxMB bounds a package manager's download cache (pnpm-store and the others in the cache directory), which is kept across
@@ -46,20 +48,46 @@ func withStore(ctx context.Context, dir string, max int64, install func() error)
 			return err
 		}
 		if big {
+			// Moved aside in one step and made again, so that what holds the lock and the install behind it do not wait for the removal of
+			// however many entries there are: that is done after the lock is let go, in the background (and by the next install, if this
+			// process ends first).
+			aside := fmt.Sprintf("%s.old-%d-%d", dir, os.Getpid(), time.Now().UnixNano())
 			log.Printf("jobexec: the download cache %s is over its bound (%d MB or %d entries): emptied", dir, max>>20, storeScanLimit)
-			if err := os.RemoveAll(dir); err != nil {
-				log.Printf("jobexec: emptying %s: %v", dir, err)
+			if err := os.Rename(dir, aside); err != nil {
+				return err
 			}
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return err
 			}
+			defer func() { go removeAsideFn(aside) }()
 		}
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	}
+	sweepAside(dir)
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH); err != nil {
 		return err
 	}
 	return install()
+}
+
+// removeAsideFn is removeAside; a test replaces it to show that nothing waits for the removal.
+var removeAsideFn = removeAside
+
+// removeAside removes a download cache that was moved aside; a failure is only logged (the next install tries again).
+func removeAside(path string) {
+	if err := os.RemoveAll(path); err != nil {
+		log.Printf("jobexec: removing %s: %v", path, err)
+	}
+}
+
+// sweepAside removes, in the background, what an earlier emptying of the cache at dir left: the directories moved aside that a process which
+// ended before it finished removing them did not remove. One that is being removed by this or another process just now is the same
+// removal twice, which is harmless.
+func sweepAside(dir string) {
+	left, _ := filepath.Glob(dir + ".old-*")
+	for _, p := range left {
+		go removeAsideFn(p)
+	}
 }
 
 var errOverBound = errors.New("over the bound")

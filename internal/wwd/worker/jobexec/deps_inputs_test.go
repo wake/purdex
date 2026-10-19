@@ -158,6 +158,47 @@ func TestTheLookAtADownloadCacheIsBounded(t *testing.T) {
 	assert.False(t, ran, "a cancelled look does not go on to the install")
 }
 
+// Emptying a download cache does not wait for the removal of what was in it: it is moved aside and a fresh one made while the lock is held,
+// and the removal is done afterwards in the background; one that a process left behind is removed by the next install.
+func TestEmptyingADownloadCacheDoesNotWaitForTheRemoval(t *testing.T) {
+	release := make(chan struct{})
+	removing := make(chan string, 4)
+	old := removeAsideFn
+	removeAsideFn = func(p string) { removing <- p; <-release; old(p) }
+	t.Cleanup(func() { removeAsideFn = old })
+
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "pnpm-store")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "blob"), make([]byte, 2<<20), 0o644))
+	ran := false
+	require.NoError(t, withStore(context.Background(), dir, 1<<20, func() error {
+		ran = true
+		list, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Empty(t, list, "the install starts on a fresh, empty cache")
+		return nil
+	}))
+	assert.True(t, ran, "the install ran while the removal had not been done")
+	aside := <-removing
+	assert.Contains(t, aside, "pnpm-store.old-")
+	_, err := os.Stat(filepath.Join(aside, "blob"))
+	assert.NoError(t, err, "what was in the cache is in the directory moved aside, not yet removed")
+
+	close(release)
+	require.Eventually(t, func() bool { _, err := os.Stat(aside); return os.IsNotExist(err) }, 10e9, 20e6, "and removed in the end")
+}
+
+// What an earlier process left moved aside is removed by the next install that uses the cache.
+func TestADownloadCacheMovedAsideByAnEarlierProcessIsRemoved(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "npm-cache")
+	left := dir + ".old-123-456"
+	require.NoError(t, os.MkdirAll(left, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(left, "blob"), []byte("x"), 0o644))
+	require.NoError(t, withStore(context.Background(), dir, 1<<30, func() error { return nil }))
+	require.Eventually(t, func() bool { _, err := os.Stat(left); return os.IsNotExist(err) }, 10e9, 20e6)
+}
+
 // The bound is worker.deps_store_max_mb, 4096 when it is not set.
 func TestTheDownloadCacheBoundComesFromTheConfig(t *testing.T) {
 	assert.EqualValues(t, 4096<<20, (&Exec{}).storeMax())
