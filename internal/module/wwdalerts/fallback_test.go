@@ -112,6 +112,7 @@ func TestWithoutItsOwnWWDNothingIsPushed(t *testing.T) {
 	a.peer(notReady())
 	a.passes(t, 4)
 	assert.Equal(t, 0, a.e.ntf.count())
+	assert.Equal(t, false, a.e.m.Status()["deliverer"], "with no list of its own there is nothing it could send, and it does not say it does")
 }
 
 // The pool coming back ends the fallback at once and the streak starts again; a duplicate is at most one (the other host's alert, which
