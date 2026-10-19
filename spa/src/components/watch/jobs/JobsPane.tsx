@@ -1,7 +1,7 @@
 // spa/src/components/watch/jobs/JobsPane.tsx — the 工作 tab of the watcher area (plan "WWD-7 design", Jobs tab): 「佇列與執行中」 (lanes per host, then the queue) and 「歷史」. It only reads: the jobs are the jobs
 // store's (the driver keeps it, `watchJobs` makes it poll the origins no daemon announces while this is mounted), the hosts are the pool's.
 //
-// Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the mode lives in `lib/pool/jobs-view-memory`, not in component state. The jobs themselves are in the store, outside the pane.
+// Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the mode (and 歷史's filters, selection and scroll) live in `lib/pool/jobs-view-memory`, not in component state. The jobs themselves are in the store, outside the pane.
 import { useEffect, useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -10,13 +10,12 @@ import { useJobsStore } from '../../../lib/pool/jobs-store'
 import { usePoolStore } from '../../../lib/pool/store'
 import { useRunPool } from '../../../lib/pool/use-cell-models'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
-import { jobLine, laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
-import { historyOf, resultText, resultWord } from '../../../lib/pool/jobs-view'
+import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
 import { errorTextKey } from '../../../lib/pool/words'
 import { readJobsMode, writeJobsMode, type JobsMode } from '../../../lib/pool/jobs-view-memory'
-import type { PoolJob } from '../../../lib/pool/jobs-types'
 import { JobLanes } from './JobLanes'
 import { JobQueue } from './JobQueue'
+import { JobHistory } from './JobHistory'
 
 /** One interval for the elapsed and waited times, cleared on unmount. */
 function useNowEverySecond(): number {
@@ -26,26 +25,6 @@ function useNowEverySecond(): number {
     return () => clearInterval(id)
   }, [])
   return now
-}
-
-const KNOWN_STATES = ['succeeded', 'failed', 'cancelled', 'superseded', 'expired']
-
-/** 歷史, plainly: the newest ended jobs. 7b1-2b replaces it with the table, its filters and the view memory of the selection and the scroll. */
-function HistoryList({ jobs }: { jobs: PoolJob[] }) {
-  const t = useI18nStore((s) => s.t)
-  const rows = useMemo(() => historyOf(jobs, {}).slice(0, 200), [jobs])
-  if (rows.length === 0) return <p data-testid="job-history-none" className="text-xs text-text-muted">{t('watch.jobs.history.none')}</p>
-  return (
-    <ul data-testid="job-history" className="flex flex-col">
-      {rows.map((j) => (
-        <li key={`${j.origin}/${j.id}`} data-testid="job-history-row" data-state={j.state} className="flex items-center gap-2 border-b border-border-subtle/50 py-1.5 text-xs">
-          <span className="w-16 shrink-0 text-text-secondary">{KNOWN_STATES.includes(j.state) ? t(`watch.jobs.state.${j.state}`) : j.state}</span>
-          <span className="flex-1 min-w-0 truncate font-mono text-text-primary" title={jobLine(j)}>{jobLine(j)}</span>
-          <span className="shrink-0 text-text-muted">{resultText(resultWord(j), t)}</span>
-        </li>
-      ))}
-    </ul>
-  )
 }
 
 export function JobsPane(_props: PaneRendererProps) {
@@ -80,7 +59,7 @@ export function JobsPane(_props: PaneRendererProps) {
   })
 
   return (
-    <div data-testid="jobs-pane" className="h-full overflow-y-auto p-4 flex flex-col gap-3">
+    <div data-testid="jobs-pane" className={`h-full min-h-0 p-4 flex flex-col gap-3 ${mode === 'live' ? 'overflow-y-auto' : 'overflow-hidden'}`}>
       <div className="flex items-center gap-3 text-xs">
         <span role="group" aria-label={t('watch.jobs.mode_label')} data-testid="jobs-mode">
           <SegmentControl
@@ -102,7 +81,7 @@ export function JobsPane(_props: PaneRendererProps) {
             </div>
           </>
         )
-        : <HistoryList jobs={jobs} />}
+        : <JobHistory jobs={jobs} now={now} />}
     </div>
   )
 }
