@@ -130,7 +130,8 @@ func (m *Module) reapFailedSpawn(id string, seen *spawnRow) {
 		}
 	}
 	if ok && op.State == team.SpawnFailed {
-		m.wake(id) // whoever failed it (a team end writes no wake of its own) leaves the requests waiting on it to this runner
+		m.releaseMemberName(id) // a team end or another runner failed it
+		m.wake(id)              // whoever failed it (a team end writes no wake of its own) leaves the requests waiting on it to this runner
 		m.rosterChanged()
 	}
 	if mine || !ok || op.State != team.SpawnFailed || op.Reason != team.SpawnReasonAbandoned || op.TmuxID == "" {
@@ -149,6 +150,7 @@ func (m *Module) failSpawnWon(id, reason string) bool {
 		m.logf("[team] spawn %s: %v", id, err)
 	}
 	if won {
+		m.releaseMemberName(id)
 		m.logf("[team] spawn %s failed: %s", id, reason)
 		m.rosterChanged() // the failure is committed: the seat is free again (in_use)
 		m.kickFacts()     // a forwarded op's spawn_failed fact is committed with it

@@ -203,9 +203,11 @@ type Module struct {
 	// displayName is the display name of a pool code; nil is ipeers.PoolDisplayName (a test seam: the lead name card reads it
 	// under the pool generation lock)
 	displayName func(code string) (string, bool)
-	client      *http.Client                     // default newRemoteClient(); shared across fan-out fetches
-	fetch       fetchFunc                        // default fetchRemote; test seam
-	logf        func(format string, args ...any) // default log.Printf; test seam
+	// reservationReadTimeout overrides reservationReadTimeout (0 = the default; a test seam)
+	reservationReadTimeout time.Duration
+	client                 *http.Client                     // default newRemoteClient(); shared across fan-out fetches
+	fetch                  fetchFunc                        // default fetchRemote; test seam
+	logf                   func(format string, args ...any) // default log.Printf; test seam
 
 	// snapshotProcs reads the process table once for an inventory pass, which
 	// shares it between the owner lookups and the registry read. Default

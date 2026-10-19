@@ -109,6 +109,7 @@ func (m *Module) settleSpawnCard(a team.Approval, start bool) {
 		}
 	} else {
 		m.logf("[team] spawn %s failed: %s (resource card %s)", a.ID, reason, a.State)
+		m.releaseMemberName(a.ID)
 		m.rosterChanged() // the seat is free again
 	}
 	m.wake(a.ID) // the spawn client waits on the op's id
