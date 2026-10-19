@@ -79,6 +79,17 @@ describe('useSessionSeat', () => {
     expect(renderHook(() => useSessionSeat(H, 'S2')).result.current).toBeNull()
   })
 
+  it('a member of another host, or one whose host the parser did not trust, is never matched by tmux name', () => {
+    const remote = (over: Partial<RosterSession>) => sess('M', { tmux_session: 'proj-2', tmux_instance: INSTANCE, address: 'mlab/proj-2-freya', ...over })
+    for (const over of [{ host_id: 'other' }, { host_untrusted: true }]) {
+      useTeamRosterStore.getState().apply(H, [team(sess('L', { tmux_session: 'x' }), [remote(over)])])
+      expect(renderHook(() => useSessionSeat(H, 'S2')).result.current).toBeNull()
+    }
+    // and it falls back to the peers row rather than wearing the remote face
+    setPeers({ S2: peerRow('mlab/proj-2-kenji') })
+    expect(renderHook(() => useSessionSeat(H, 'S2')).result.current).toMatchObject({ code: 'kenji' })
+  })
+
   it('follows the stores: a peers answer that lands later, and a roster that changes, change the answer', () => {
     const { result } = renderHook(() => useSessionSeat(H, 'S1'))
     expect(result.current).toBeNull()

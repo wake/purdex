@@ -17,7 +17,8 @@ function rosterAddress(teams: readonly TeamRoster[] | undefined, tmuxName: strin
   if (!teams || tmuxName === '') return null
   for (const team of teams) {
     for (const s of [team.lead, ...team.members]) {
-      if ((s.host_id ?? '') !== '') continue
+      // A member on another host lives in that host's tmux; one whose host_id the parser rejected (`host_untrusted`) may be anywhere — it is never matched here.
+      if ((s.host_id ?? '') !== '' || s.host_untrusted === true) continue
       if (s.tmux_session === tmuxName && sameGeneration(instance, s.tmux_instance ?? '')) return s.address
     }
   }
