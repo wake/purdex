@@ -60,7 +60,7 @@ func TestDeviceAllowed_EveryEntryIsARegisteredPattern(t *testing.T) {
 func TestDeviceAllowed_ExactSet(t *testing.T) {
 	want := []string{
 		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig", "GET /api/fleet",
-		"GET /api/pool/hosts", "GET /api/pool/facts/history", // the resource pool from wwd (read-only)
+		"GET /api/pool/hosts", "GET /api/pool/facts/history", "GET /api/pool/facts/series", // the resource pool from wwd (read-only)
 		"GET /api/pool/jobs", "GET /api/pool/jobs/{id}", "GET /api/pool/jobs/{id}/log", // the pool's jobs (read-only)
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "POST /api/sessions/{code}/send-now", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
@@ -134,7 +134,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
-		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/fleet"}, {"GET", "/api/pool/jobs"}, {"GET", "/api/pool/jobs/j_abc"}, {"GET", "/api/pool/jobs/j_abc/log"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
+		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/fleet"}, {"GET", "/api/pool/jobs"}, {"GET", "/api/pool/jobs/j_abc"}, {"GET", "/api/pool/jobs/j_abc/log"}, {"GET", "/api/pool/facts/history"}, {"GET", "/api/pool/facts/series"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},

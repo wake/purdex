@@ -77,10 +77,12 @@ const (
 	Step5s = "5s"
 )
 
-// FactsHistoryQuery is GET /v1/facts/history?since=&step=.
+// FactsHistoryQuery is GET /v1/facts/history?since=&step=. Host, when set, is the alias of another host of the pool: on the socket the
+// local wwd forwards the question to it (spec §10); it is not part of what ParseFactsHistoryQuery reads (the route takes it apart).
 type FactsHistoryQuery struct {
 	Since time.Time
 	Step  string
+	Host  string
 }
 
 // ParseFactsHistoryQuery parses the query string; step defaults to 5s.
@@ -102,7 +104,11 @@ func ParseFactsHistoryQuery(v url.Values) (FactsHistoryQuery, error) {
 }
 
 func (q FactsHistoryQuery) Values() url.Values {
-	return url.Values{"since": {q.Since.Format(time.RFC3339)}, "step": {q.Step}}
+	v := url.Values{"since": {q.Since.Format(time.RFC3339)}, "step": {q.Step}}
+	if q.Host != "" {
+		v.Set("host", q.Host)
+	}
+	return v
 }
 
 type FactsHistoryResponse struct {

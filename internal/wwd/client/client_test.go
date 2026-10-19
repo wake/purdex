@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -147,5 +148,76 @@ func TestDefaultSocket_EnvOverridesHome(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	if got := DefaultSocket(); got != "/home/u/.local/share/wwd/wwd.sock" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// historyBody is a history answer of about n bytes: one facts record, repeated.
+func historyBody(t *testing.T, n int) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "wire", "testdata", "facts_darwin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := wire.Decode[wire.Facts](raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, _ := json.Marshal(f)
+	h := wire.FactsHistoryResponse{Step: wire.Step1m}
+	for i := 0; i < n/len(one)+1; i++ {
+		h.Records = append(h.Records, f)
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// A day of 1 m points is about 10 MB: more than the general cap, still an answer (spec §10 series).
+func TestFactsHistory_AcceptsAnAnswerOverTheGeneralCap(t *testing.T) {
+	body := historyBody(t, maxBody+(2<<20))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { w.Write(body) })
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) { w.Write(body) })
+	c := New(fakeWWD(t, mux))
+	h, err := c.FactsHistory(context.Background(), wire.FactsHistoryQuery{Step: wire.Step1m})
+	if err != nil || len(h.Records) == 0 {
+		t.Fatalf("%d bytes: %d records, %v", len(body), len(h.Records), err)
+	}
+	// ...and the general cap still holds for everything else
+	if _, err := c.Pool(context.Background()); !errors.Is(err, ErrBadResponse) {
+		t.Fatalf("pool err = %v, want ErrBadResponse", err)
+	}
+}
+
+func TestFactsHistory_RefusesAnAnswerOverItsCap(t *testing.T) {
+	body := historyBody(t, maxHistoryBody+(1<<20))
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { w.Write(body) })
+	c := New(fakeWWD(t, mux))
+	if _, err := c.FactsHistory(context.Background(), wire.FactsHistoryQuery{Step: wire.Step1m}); !errors.Is(err, ErrBadResponse) {
+		t.Fatalf("err = %v, want ErrBadResponse", err)
+	}
+}
+
+// The local wwd may forward a history to a peer for up to 10 s: a call that names a host waits longer than the short default; one for
+// this host does not.
+func TestFactsHistory_AForwardedCallOutlastsTheShortTimeout(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(400 * time.Millisecond):
+			serveFixture("facts_history_response.json")(w, r)
+		case <-r.Context().Done():
+		}
+	})
+	c := New(fakeWWD(t, mux))
+	c.Timeout = 100 * time.Millisecond
+	if _, err := c.FactsHistory(context.Background(), wire.FactsHistoryQuery{Step: wire.Step1m}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("local: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := c.FactsHistory(context.Background(), wire.FactsHistoryQuery{Step: wire.Step1m, Host: "mserv"}); err != nil {
+		t.Fatalf("forwarded: %v", err)
 	}
 }

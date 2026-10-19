@@ -138,11 +138,10 @@ func TestHosts_WWDAbsentOrBrokenAnswersAClearStatus(t *testing.T) {
 
 // History of the local host: the query is forwarded (since defaults to an hour back, step to 5s) and the answer is wwd's.
 func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
-	var since, step string
+	var since, step, host string
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", serve(fixture(t, "info.json")))
 	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
-		since, step = r.URL.Query().Get("since"), r.URL.Query().Get("step")
+		since, step, host = r.URL.Query().Get("since"), r.URL.Query().Get("step"), r.URL.Query().Get("host")
 		serve(fixture(t, "facts_history_response.json"))(w, r)
 	})
 	m := newModule(t, fakeWWD(t, mux))
@@ -151,6 +150,7 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 	require.Equal(t, 200, rr.Code, rr.Body.String())
 	assert.Equal(t, "2026-10-18T01:00:00Z", since)
 	assert.Equal(t, "1m", step)
+	assert.Equal(t, "mlab", host, "the host goes to the local wwd, which answers for itself or forwards")
 	got, err := wire.Decode[wire.FactsHistoryResponse](rr.Body.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, "1m", got.Step)
@@ -158,6 +158,7 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 
 	// no host, no since, no step: the local host, the last hour, 5 s
 	rr = call(m, "/api/pool/facts/history")
+	assert.Equal(t, "", host, "no host asked, none sent")
 	require.Equal(t, 200, rr.Code, rr.Body.String())
 	assert.Equal(t, "2026-10-18T11:00:00Z", since)
 	assert.Equal(t, "5s", step)
@@ -166,9 +167,8 @@ func TestHistory_ForwardsTheQueryForTheLocalHost(t *testing.T) {
 	assert.Equal(t, 200, call(m, "/api/pool/facts/history?host=h-mlab").Code)
 }
 
-func TestHistory_BadQueryAndOtherHost(t *testing.T) {
+func TestHistory_BadQuery(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", serve(fixture(t, "info.json")))
 	mux.HandleFunc("GET /v1/facts/history", serve(fixture(t, "facts_history_response.json")))
 	m := newModule(t, fakeWWD(t, mux))
 	for _, q := range []string{"?since=yesterday", "?step=2m", "?since=2026-10-18"} {
@@ -176,9 +176,41 @@ func TestHistory_BadQueryAndOtherHost(t *testing.T) {
 		assert.Equal(t, 400, rr.Code, q)
 		assert.Equal(t, ErrBadRequest, errCode(rr), q)
 	}
-	rr := call(m, "/api/pool/facts/history?host=air19")
-	assert.Equal(t, 501, rr.Code)
-	assert.Equal(t, ErrHostNotLocal, errCode(rr))
+}
+
+// The history of another host goes through the local wwd: its answer is the App's, a 4xx of wwd's (an alias it does not know is 404) is
+// passed on as wwd_rejected with its status, a peer that cannot be reached is wwd's 502 and stays 502 wwd_error.
+func TestHistory_AnotherHostThroughTheLocalWWD(t *testing.T) {
+	var asked []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
+		h := r.URL.Query().Get("host")
+		asked = append(asked, h)
+		switch h {
+		case "nowhere":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"unknown host","host":"nowhere"}`))
+		case "air19":
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte(`{"host":"air19","reason":"dial tcp: refused"}`))
+		default:
+			serve([]byte(`{"step":"1m","records":[]}`))(w, r)
+		}
+	})
+	m := newModule(t, fakeWWD(t, mux))
+
+	rr := call(m, "/api/pool/facts/history?host=mserv&step=1m")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Contains(t, rr.Body.String(), `"step":"1m"`)
+
+	rr = call(m, "/api/pool/facts/history?host=nowhere")
+	assert.Equal(t, 404, rr.Code)
+	assert.Equal(t, ErrWWDRejected, errCode(rr))
+
+	rr = call(m, "/api/pool/facts/history?host=air19")
+	assert.Equal(t, 502, rr.Code)
+	assert.Equal(t, ErrWWDError, errCode(rr))
+	assert.Equal(t, []string{"mserv", "nowhere", "air19"}, asked)
 }
 
 func TestHistory_WWDAbsent(t *testing.T) {
@@ -220,8 +252,10 @@ func TestInfo_AnnouncesPoolV1ForTheRealModule(t *testing.T) {
 		return list
 	}
 	require.Contains(t, caps(), "pool.v1")
+	require.Contains(t, caps(), "pool.series.v1")
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "pool.v1")
+	require.NotContains(t, caps(), "pool.series.v1")
 }
 
 // A wwd that answers records as null still gives the App an array.

@@ -26,7 +26,6 @@ const (
 	ErrWWDBadResponse = "wwd_bad_response" // 502: wwd answered outside the contract
 	ErrWWDError       = "wwd_error"        // 502: wwd answered with an error status
 	ErrBadRequest     = "bad_request"      // 400
-	ErrHostNotLocal   = "host_not_local"   // 501: history of another host is not served by this daemon yet
 	ErrBusy           = "busy"             // 429: too many wwd calls in flight
 )
 
@@ -39,6 +38,9 @@ const maxInFlight = 8
 const (
 	answerTTL = time.Second
 	maxCached = 16
+	// maxCachedBody is the largest answer that is kept: a raw history can be megabytes, and 16 of those held until the next store would be
+	// memory for nothing (a series is a few hundred KB).
+	maxCachedBody = 2 << 20
 )
 
 type cachedAnswer struct {
@@ -97,6 +99,7 @@ func (m *Module) Status() map[string]any {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
+	mux.HandleFunc("GET /api/pool/facts/series", m.handleSeries)
 	m.registerControl(mux)
 }
 
@@ -235,7 +238,7 @@ func (m *Module) cachedLocked(key string) ([]byte, bool) {
 func (m *Module) store(key string, body []byte) {
 	m.flightMu.Lock()
 	defer m.flightMu.Unlock()
-	if m.cache == nil {
+	if m.cache == nil || len(body) > maxCachedBody {
 		return
 	}
 	if len(m.cache) >= maxCached {
@@ -281,28 +284,30 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "step must be 1m or 5s")
 		return
 	}
-	host := q.Get("host")
-	key := "history|" + host + "|" + hq.Since.Format(time.RFC3339) + "|" + hq.Step
+	// another host's history goes through the local wwd (?host=<alias>): it answers for itself, or forwards to that peer (spec §10)
+	hq.Host = q.Get("host")
+	key := "history|" + hq.Host + "|" + hq.Since.Format(time.RFC3339) + "|" + hq.Step
 	m.serve(w, r, key, func(ctx context.Context) (any, *apiError) {
-		cl := m.client()
-		if host != "" {
-			info, err := cl.Info(ctx)
-			if err != nil {
-				return nil, wwdError(err)
-			}
-			if host != info.Alias && host != info.HostID {
-				return nil, &apiError{http.StatusNotImplemented, ErrHostNotLocal, "this daemon serves the history of its own host only (" + info.Alias + ")"}
-			}
-		}
-		h, err := cl.FactsHistory(ctx, hq)
+		h, err := m.client().FactsHistory(ctx, hq)
 		if err != nil {
-			return nil, wwdError(err)
+			return nil, historyError(err)
 		}
 		if h.Records == nil {
 			h.Records = []wire.Facts{}
 		}
 		return h, nil
 	})
+}
+
+// historyError is wwdError for a read that may have been forwarded to a peer: a 4xx from wwd (an alias it does not know is 404, a bad
+// query 400) is passed on as it is with the code wwd_rejected, so that the App can tell its own mistake from a broken host; a peer that
+// could not be reached is wwd's 502, which stays 502 wwd_error.
+func historyError(err error) *apiError {
+	var se *client.StatusError
+	if errors.As(err, &se) && se.Code >= 400 && se.Code < 500 {
+		return &apiError{se.Code, ErrWWDRejected, "wwd answered " + http.StatusText(se.Code)}
+	}
+	return wwdError(err)
 }
 
 // wwdError maps a client error to the status the App reads.
