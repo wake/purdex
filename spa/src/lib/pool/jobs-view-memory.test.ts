@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-view-memory.test.ts — what the jobs tab remembers across a tab switch (module memory, not persisted): the mode, the history's three filters, the selected job and the history's scroll position.
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
-  clearJobsViewMemory, readJobsMode, writeJobsMode, readHistoryFilter, writeHistoryFilter, readSelectedJob, writeSelectedJob, readHistoryScroll, writeHistoryScroll, jobKey,
+  clearJobsViewMemory, readJobsMode, writeJobsMode, readHistoryFilter, writeHistoryFilter, readSelectedJob, writeSelectedJob, readHistoryScroll, writeHistoryScroll, readLogScroll, writeLogScroll, jobKey,
 } from './jobs-view-memory'
 
 beforeEach(() => clearJobsViewMemory())
@@ -38,5 +38,13 @@ describe('jobs view memory', () => {
 
   it('a job is told apart by its origin as well as its id (an id is only unique within the host that queued it)', () => {
     expect(jobKey('mlab', 'j1')).not.toBe(jobKey('mserv', 'j1'))
+  })
+
+  it('the log scroll position is the selected job\'s: another job starts at the top, and clear forgets it', () => {
+    writeLogScroll('mlab/a', 120)
+    expect(readLogScroll('mlab/a')).toBe(120)
+    expect(readLogScroll('mlab/b')).toBe(0)
+    clearJobsViewMemory()
+    expect(readLogScroll('mlab/a')).toBe(0)
   })
 })

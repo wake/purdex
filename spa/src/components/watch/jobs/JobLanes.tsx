@@ -5,30 +5,35 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { reasonWord } from '../../../lib/pool/words'
 import { jobLine, type LaneModel } from '../../../lib/pool/jobs-lanes'
+import { jobKey } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 
-const CARD = 'shrink-0 flex items-center gap-1.5 h-7 w-[200px] px-2 rounded-md text-xs font-mono cursor-default'
+const CARD = 'shrink-0 flex items-center gap-1.5 h-7 w-[200px] px-2 rounded-md text-xs font-mono cursor-pointer text-left'
+type Pick = { selected: string | null; onSelect: (key: string | null) => void }
 
-function JobCard({ job, now }: { job: PoolJob; now: number }) {
+function JobCard({ job, now, selected, onSelect }: { job: PoolJob; now: number } & Pick) {
   const t = useI18nStore((s) => s.t)
   const preparing = job.state === 'claimed'
+  const key = jobKey(job.origin, job.id)
+  const on = selected === key
   return (
-    <div
+    <button
+      type="button" aria-pressed={on} onClick={() => onSelect(on ? null : key)}
       data-testid={preparing ? 'job-preparing' : 'job-running'} data-job-id={job.id} title={jobLine(job)}
-      className={preparing
+      className={`${preparing
         ? `${CARD} border border-dashed border-status-success-text bg-transparent`
-        : `${CARD} border border-status-success-text bg-status-success-text/12`}
+        : `${CARD} border border-status-success-text bg-status-success-text/12`} ${on ? 'ring-1 ring-border-active' : ''}`}
     >
       {!preparing && <span data-testid="job-dot" aria-hidden="true" className="shrink-0 w-1.5 h-1.5 rounded-full bg-status-success-text animate-breathe motion-reduce:animate-none" />}
       <span className="flex-1 min-w-0 truncate text-text-primary">{jobLine(job)}</span>
       {job.local && <span data-testid="job-fast-lane" className="shrink-0 font-sans text-[10px] text-text-muted">{t('watch.jobs.fast_lane')}</span>}
       {preparing && <span className="shrink-0 font-sans text-[10px] text-text-secondary">{t('watch.jobs.preparing')}</span>}
       <span className="shrink-0 tabular-nums text-text-secondary">{mss(job.claim?.since ?? null, now)}</span>
-    </div>
+    </button>
   )
 }
 
-function Lane({ lane, now }: { lane: LaneModel; now: number }) {
+function Lane({ lane, now, selected, onSelect }: { lane: LaneModel; now: number } & Pick) {
   const t = useI18nStore((s) => s.t)
   const name = lane.alias === '' ? t('watch.jobs.lane.unknown') : lane.alias
   const free = Math.max(0, lane.total - lane.jobs.length)
@@ -40,7 +45,7 @@ function Lane({ lane, now }: { lane: LaneModel; now: number }) {
       </div>
       <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5">
         {lane.off && lane.jobs.length === 0 && <span data-testid="job-lane-off" className="text-xs text-text-muted">{t('watch.jobs.lane.off')}</span>}
-        {lane.jobs.map((j) => <JobCard key={j.id} job={j} now={now} />)}
+        {lane.jobs.map((j) => <JobCard key={j.id} job={j} now={now} selected={selected} onSelect={onSelect} />)}
         {!lane.off && Array.from({ length: free }).map((_, i) => (
           <div key={`free${i}`} data-testid="job-free" className="shrink-0 h-7 w-[200px] rounded-md border border-dashed border-border-default grid place-items-center text-[10px] text-text-muted">{t('watch.queue.free')}</div>
         ))}
@@ -55,10 +60,10 @@ function Lane({ lane, now }: { lane: LaneModel; now: number }) {
   )
 }
 
-export function JobLanes({ lanes, now }: { lanes: LaneModel[]; now: number }) {
+export function JobLanes({ lanes, now, selected, onSelect }: { lanes: LaneModel[]; now: number } & Pick) {
   return (
     <div data-testid="job-lanes" className="divide-y divide-border-subtle/50">
-      {lanes.map((l) => <Lane key={l.alias} lane={l} now={now} />)}
+      {lanes.map((l) => <Lane key={l.alias} lane={l} now={now} selected={selected} onSelect={onSelect} />)}
     </div>
   )
 }

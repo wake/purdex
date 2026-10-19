@@ -3,7 +3,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 
-vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => () => {}), jobsDaemons: () => [] }))
+vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => () => {}), jobsDaemons: () => [], liveTopology: () => ({ origins: ['mlab'], ownDaemon: { mlab: 'd-mlab' }, forwarders: ['d-mlab'] }) }))
+vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(() => new Promise(() => {})), fetchJobLog: vi.fn() }))
 vi.mock('../../../lib/pool/use-cell-models', () => ({ useRunPool: vi.fn() }))
 
 import { TabContent } from '../../TabContent'
@@ -17,7 +18,8 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { createTab } from '../../../types/tab'
 import type { Tab } from '../../../types/tab'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
-import { readHistoryScroll } from '../../../lib/pool/jobs-view-memory'
+import { readHistoryScroll, readLogScroll } from '../../../lib/pool/jobs-view-memory'
+import { fetchJob } from '../../../lib/pool/jobs-api'
 
 const t = (k: string) => useI18nStore.getState().t(k)
 const Other = () => <div data-testid="other-tab" />
@@ -82,5 +84,26 @@ describe('the jobs tab across tab switches', () => {
     expect((screen.getByLabelText(t('watch.jobs.filter.repo')) as HTMLSelectElement).value).toBe('purdex')
     expect(screen.getByTestId('job-history-row')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('job-history-scroll').scrollTop).toBe(64)
+  }, 30_000)
+
+  it('keeps the open detail and its log\'s scroll position (the log is read again when the panel comes back)', async () => {
+    const j = ended('bad', 4000, { state: 'failed' })
+    useJobsStore.setState({ byOrigin: { mlab: { jobs: { bad: j }, cursor: '1', epoch: 'e', via: 'v' } } })
+    usePoolStore.setState({ hosts: [{ host_id: 'id-mlab', alias: 'mlab', version: '1', proto: 1, platform: 'darwin', arch: 'arm64', facts: null, reachable: true, labels: [], worker: { enabled: true, slots: { heavy: 1, light: 1 }, owner_rule: '' } }] })
+    vi.mocked(fetchJob).mockResolvedValue({ job: j, log: 'l1\nl2\nl3' })
+    const { rerender } = render(<TabContent activeTab={jobsTab} allTabs={all} />)
+    fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.mode.history') }))
+    fireEvent.click(screen.getByTestId('job-history-row'))
+    const log = await screen.findByTestId('job-log')
+    log.scrollTop = 30
+    fireEvent.scroll(log)
+    expect(readLogScroll('mlab/bad')).toBe(30)
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('job-detail')).toBeNull()
+
+    rerender(<TabContent activeTab={jobsTab} allTabs={all} />)
+    expect(screen.getByTestId('job-detail')).toBeInTheDocument()
+    expect((await screen.findByTestId('job-log')).scrollTop).toBe(30)
   }, 30_000)
 })

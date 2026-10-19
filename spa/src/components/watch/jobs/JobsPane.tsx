@@ -12,10 +12,11 @@ import { useRunPool } from '../../../lib/pool/use-cell-models'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
 import { errorTextKey } from '../../../lib/pool/words'
-import { readJobsMode, writeJobsMode, type JobsMode } from '../../../lib/pool/jobs-view-memory'
+import { jobKey, readJobsMode, readSelectedJob, writeJobsMode, writeSelectedJob, type JobsMode } from '../../../lib/pool/jobs-view-memory'
 import { JobLanes } from './JobLanes'
 import { JobQueue } from './JobQueue'
 import { JobHistory } from './JobHistory'
+import { JobDetail } from './JobDetail'
 
 /** One interval for the elapsed and waited times, cleared on unmount. */
 function useNowEverySecond(): number {
@@ -39,6 +40,8 @@ export function JobsPane(_props: PaneRendererProps) {
   // The tab outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
   const [mode, setModeState] = useState<JobsMode>(() => readJobsMode())
   const setMode = (m: JobsMode) => { writeJobsMode(m); setModeState(m) }
+  const [selected, setSelectedState] = useState<string | null>(() => readSelectedJob())
+  const select = (key: string | null) => { writeSelectedJob(key); setSelectedState(key) }
 
   // The store keeps what it read; the pane shows the pool's hosts' jobs. A pool with no daemon at all shows none, and says so; one that could not be read for a moment (no hosts, not an old daemon) keeps what was read.
   // `sourceHostId` is set by an answer, so an empty list with it is the pool saying it has no host.
@@ -51,6 +54,8 @@ export function JobsPane(_props: PaneRendererProps) {
     return () => !oldDaemon
   }, [hosts, answered, oldDaemon])
   const jobs = useMemo(() => Object.entries(byOrigin).filter(([origin]) => shown(origin)).flatMap(([, o]) => Object.values(o.jobs)), [byOrigin, shown])
+  // The selected job as the store holds it now. One the store no longer has (it keeps the newest 200 ended ones) shows no detail; the memory keeps the choice, which is not an error.
+  const open = useMemo(() => jobs.find((j) => jobKey(j.origin, j.id) === selected) ?? null, [jobs, selected])
   const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
   const entries = useMemo(() => queueEntries(jobs, now, hosts), [jobs, now, hosts])
   const failed = Object.entries(errors).flatMap(([origin, e]) => {
@@ -59,7 +64,7 @@ export function JobsPane(_props: PaneRendererProps) {
   })
 
   return (
-    <div data-testid="jobs-pane" className={`h-full min-h-0 p-4 flex flex-col gap-3 ${mode === 'live' ? 'overflow-y-auto' : 'overflow-hidden'}`}>
+    <div data-testid="jobs-pane" className="h-full min-h-0 p-4 flex flex-col gap-3 overflow-hidden">
       <div className="flex items-center gap-3 text-xs">
         <span role="group" aria-label={t('watch.jobs.mode_label')} data-testid="jobs-mode">
           <SegmentControl
@@ -71,17 +76,22 @@ export function JobsPane(_props: PaneRendererProps) {
       </div>
       {failed.map((f) => <p key={f.origin} data-testid="jobs-error" className="text-xs text-status-warning-text">{f.origin}：{f.text}</p>)}
       {oldDaemon && <p data-testid="jobs-no-pool" className="text-xs text-text-muted">{t('watch.jobs.no_pool')}</p>}
-      {mode === 'live'
-        ? (
-          <>
-            <JobLanes lanes={lanes} now={now} />
-            <div>
-              <h3 className="mb-1.5 text-xs font-medium text-text-secondary">{t('watch.jobs.queue.title')}</h3>
-              <JobQueue entries={entries} now={now} />
-            </div>
-          </>
-        )
-        : <JobHistory jobs={jobs} now={now} />}
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className={`flex min-h-0 min-w-0 flex-1 flex-col gap-3 ${mode === 'live' ? 'overflow-y-auto' : 'overflow-hidden'}`}>
+          {mode === 'live'
+            ? (
+              <>
+                <JobLanes lanes={lanes} now={now} selected={selected} onSelect={select} />
+                <div>
+                  <h3 className="mb-1.5 text-xs font-medium text-text-secondary">{t('watch.jobs.queue.title')}</h3>
+                  <JobQueue entries={entries} now={now} selected={selected} onSelect={select} />
+                </div>
+              </>
+            )
+            : <JobHistory jobs={jobs} now={now} selected={selected} onSelect={select} />}
+        </div>
+        {open && <div className="flex min-h-0 w-[26rem] max-w-[45%] shrink-0 flex-col"><JobDetail job={open} now={now} onClose={() => select(null)} /></div>}
+      </div>
     </div>
   )
 }
