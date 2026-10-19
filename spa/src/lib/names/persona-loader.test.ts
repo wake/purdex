@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../../stores/usePersonaStore', () => {
   const load = vi.fn(async () => {})
   const forget = vi.fn()
-  return { usePersonaStore: { getState: () => ({ load, forget }) } }
+  const markOffline = vi.fn()
+  return { usePersonaStore: { getState: () => ({ load, forget, markOffline }) } }
 })
 
 vi.mock('./persona-backfill', () => ({ backfillHosts: vi.fn(async () => {}) }))
@@ -21,11 +22,13 @@ const setEntry = (hostId: string, caps: string[], fetchedAt = 1) =>
 const host = (port: number) => ({ id: 'h1', ip: '10.0.0.1', port, token: 't' }) as never
 const load = () => usePersonaStore.getState().load as ReturnType<typeof vi.fn>
 const forget = () => usePersonaStore.getState().forget as ReturnType<typeof vi.fn>
+const markOffline = () => usePersonaStore.getState().markOffline as ReturnType<typeof vi.fn>
 
 describe('persona loader', () => {
   beforeEach(() => {
     load().mockClear()
     forget().mockClear()
+    markOffline().mockClear()
     ensure.mockClear()
     useNexHostStore.setState({ byHost: {}, ensure })
     useHostStore.setState({ hosts: {}, runtime: {} })
@@ -103,6 +106,14 @@ describe('persona loader', () => {
     setEntry('h1', [], 2) // refetch: the daemon was downgraded
     expect(load()).not.toHaveBeenCalled()
     expect(forget()).toHaveBeenCalledWith('h1')
+    stop()
+  })
+
+  it('marks a host offline when its connection drops, so a cached source stops counting as live', () => {
+    useHostStore.setState({ hosts: { h1: host(1) }, runtime: { h1: { status: 'connected' } as never } })
+    const stop = startPersonaLoader()
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } as never } })
+    expect(markOffline()).toHaveBeenCalledWith('h1')
     stop()
   })
 

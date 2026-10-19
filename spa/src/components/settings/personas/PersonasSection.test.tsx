@@ -116,6 +116,21 @@ describe('PersonasSection', () => {
     expect((await screen.findByTestId('personas-note')).textContent).toContain('mlab')
   })
 
+  it('tells which hosts the copy missed and which roles were taken into the source', async () => {
+    seed(['hiro'])
+    vi.mocked(savePersonas).mockResolvedValue({
+      hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } },
+      mirror: { mirrored: [], failed: [{ hostId: 'h2', message: 'boom' }], pulled: ['olga'] },
+    })
+    render(<PersonasSection />)
+    fireEvent.click(screen.getByTestId('persona-row-hiro'))
+    fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
+    fireEvent.click(screen.getByTestId('persona-save'))
+    const note = (await screen.findByTestId('personas-note')).textContent ?? ''
+    expect(note).toMatch(/沒有複製成功|Could not copy/)
+    expect(note).toContain('olga')
+  })
+
   it('refuses a bad code before any request and points at the field', async () => {
     seed([])
     render(<PersonasSection />)

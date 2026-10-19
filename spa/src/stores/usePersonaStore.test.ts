@@ -51,6 +51,17 @@ describe('current source', () => {
   })
 })
 
+describe('markOffline', () => {
+  it('keeps the cached copy but makes it a stand-in source, and leaves an empty entry alone', () => {
+    const c = makeCollection(['hiro'], { at: 1, host: 'h1' })
+    usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: c }, h2: { status: 'ready', collection: makeCollection(['emma'], { at: 9, host: 'h2' }) } } })
+    usePersonaStore.getState().markOffline('h1')
+    usePersonaStore.getState().markOffline('nobody')
+    expect(usePersonaStore.getState().byHost.h1).toEqual({ status: 'error', collection: c })
+    expect(currentSource(usePersonaStore.getState().byHost, 'h1')).toMatchObject({ hostId: 'h2', readOnly: true })
+  })
+})
+
 describe('usePersonaStore', () => {
   beforeEach(() => {
     usePersonaStore.setState({ byHost: {} })

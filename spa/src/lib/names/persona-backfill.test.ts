@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./persona-mirror', () => ({ mirrorPersonas: vi.fn() }))
-vi.mock('./persona-draft-memory', () => ({ savePending: vi.fn(() => false) }))
+vi.mock('./persona-draft-memory', () => ({ savePending: vi.fn(() => false), subscribeSave: vi.fn(() => () => {}) }))
 
 import { mirrorPersonas } from './persona-mirror'
-import { savePending } from './persona-draft-memory'
+import { savePending, subscribeSave } from './persona-draft-memory'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { usePersonaSourceStore } from '../../stores/usePersonaSourceStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -65,10 +65,27 @@ describe('backfillHosts', () => {
     expect(mirrorPersonas).toHaveBeenCalledTimes(2)
   })
 
-  it('does nothing while a save is in flight', async () => {
+  it('does nothing while a save is in flight, then runs once when it ends', async () => {
+    let onSaveChange: (() => void) | undefined
+    vi.mocked(subscribeSave).mockImplementation((fn) => { onSaveChange = fn; return () => { onSaveChange = undefined } })
     vi.mocked(savePending).mockReturnValue(true)
     await backfillHosts()
     expect(mirrorPersonas).not.toHaveBeenCalled()
+    vi.mocked(savePending).mockReturnValue(false)
+    onSaveChange?.()
+    await vi.waitFor(() => expect(mirrorPersonas).toHaveBeenCalledTimes(1))
+  })
+
+  it('runs again when a save moved the source while the write was out', async () => {
+    vi.mocked(mirrorPersonas).mockImplementationOnce(async () => {
+      // the save's reload lands while this write is in flight
+      const saved = makeCollection(['hiro', 'olga', 'emma'], { at: 2, host: 'src' }, 6)
+      usePersonaStore.setState({ byHost: { ...usePersonaStore.getState().byHost, src: { status: 'ready', collection: saved } } })
+      return done(['h2'])
+    })
+    await backfillHosts()
+    await vi.waitFor(() => expect(mirrorPersonas).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(mirrorPersonas).mock.calls[1][2]).toBe(6)
   })
 
   it('does nothing while the source is offline', async () => {

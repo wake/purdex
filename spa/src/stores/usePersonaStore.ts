@@ -51,6 +51,8 @@ interface PersonaState {
   byHost: Record<string, PersonaEntry>
   load: (hostId: string) => Promise<void>
   forget: (hostId: string) => void
+  /** The host dropped its connection: its copy stays (a stand-in can still be shown) but is no longer a live source. */
+  markOffline: (hostId: string) => void
   /** The collection the App shows and edits (highest stamp, whole). */
   current: () => PersonaCollection | null
 }
@@ -89,6 +91,13 @@ export const usePersonaStore = create<PersonaState>()((set, get) => ({
     set((s) => {
       const { [hostId]: _dropped, ...rest } = s.byHost
       return { byHost: rest }
+    })
+  },
+  markOffline(hostId) {
+    set((s) => {
+      const entry = s.byHost[hostId]
+      if (!entry || entry.status === 'error') return s
+      return { byHost: { ...s.byHost, [hostId]: { ...entry, status: 'error' } } }
     })
   },
   current: () => currentCollection(get().byHost, resolvedSourceId()),

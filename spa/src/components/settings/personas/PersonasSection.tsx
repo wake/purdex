@@ -133,7 +133,13 @@ export function PersonasSection() {
       if (res.base === null) { showShown(draft.code, stamped); return }
       hold({ key: draft.code, draft: stamped, base: res.base })
       // The host's name as the rest of the App shows it (`lib/host-look.ts`; a screen never reads `host.name` itself).
-      setOutcome({ note: t('settings.personas.saved', { host: hostLabel(res.hostId, hostLookOf(res.hostId)) }) })
+      const label = (id: string) => hostLabel(id, hostLookOf(id))
+      // What reached the other hosts is part of the answer: a copy that failed is waiting for that host's next connect,
+      // and a role taken into the source from another host changed what the user is looking at.
+      const parts = [t('settings.personas.saved', { host: label(res.hostId) })]
+      if (res.mirror.failed.length > 0) parts.push(t('settings.personas.mirrorFailed', { hosts: res.mirror.failed.map((f) => label(f.hostId)).join('、') }))
+      if (res.mirror.pulled.length > 0) parts.push(t('settings.personas.pulled', { codes: res.mirror.pulled.join(', ') }))
+      setOutcome({ note: parts.join(' ') })
     } catch (e) {
       if (e instanceof PersonaStaleError || e instanceof PersonaConflictError) keepTyped(editing.key, draft)
       else if (e instanceof PersonaValidationError) {

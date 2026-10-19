@@ -83,6 +83,9 @@ export function startPersonaLoader(): () => void {
       // The cached copy belongs to the old daemon when the address, port or token moved under the same id.
       const moved = !!prev.hosts[hostId] && hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])
       if (moved) usePersonaStore.getState().forget(hostId)
+      else if (prev.runtime[hostId]?.status === 'connected' && !connected) usePersonaStore.getState().markOffline(hostId)
+      // A dropped connection leaves the cached copy "ready", which would keep an unreachable source editable. The
+      // reconnect refetches the capabilities and loads again, which makes the entry ready.
       if (connected && (moved || prev.runtime[hostId]?.status !== 'connected')) ensureCapabilities(hostId)
     }
   })
