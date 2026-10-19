@@ -843,6 +843,7 @@ func TestValidateAcceptsTheOldAndTheNewUnitNameAndOnlyTheEntrysOwn(t *testing.T)
 		{"the tag alone", "air26/j_1", "j_1", "wwd-" + tag, true},
 		{"the tag, no dash", "air26/j_1", "j_1", "wwd-" + tag + "j_1", true},
 		{"somebody else's unit", "air26/j_1", "j_1", "sshd", true},
+		{"an owner with no source has no tag to match", "/j_1", "j_1", "wwd-" + ident.OriginTag("") + "-j_1", true},
 		{"a longer tag", "air26/j_1", "j_1", "wwd-" + tag + "0-j_1", true},
 		{"the slashy alias's tag cut at the first slash", "a/b c/j_1", "j_1", "wwd-" + ident.OriginTag("a") + "-j_1", true},
 	}
@@ -873,8 +874,8 @@ func TestClearByAnIdTwoOriginsShareNamesTheCandidatesAndClearsNone(t *testing.T)
 		}
 	}
 	err := s.Clear("j_x")
-	if err == nil || !strings.Contains(err.Error(), "air26/j_x") || !strings.Contains(err.Error(), "mserv/j_x") {
-		t.Fatalf("the error must list both candidates, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "air26/j_x, mserv/j_x") {
+		t.Fatalf("the error must list both candidates, in order, got %v", err)
 	}
 	if len(s.Held()) != 3 {
 		t.Fatalf("nothing is cleared when the id is ambiguous: %d held", len(s.Held()))
