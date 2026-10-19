@@ -144,6 +144,22 @@ func (s *ProcessSnapshot) ReadCached(pid int) (ProcessInfo, error) {
 	return s.read(pid, true, procArgsCachedPlatform)
 }
 
+// cachedReadView is a ProcessView over one snapshot whose Read is ReadCached.
+type cachedReadView struct{ *ProcessSnapshot }
+
+func (v cachedReadView) Read(pid int) (ProcessInfo, error) { return v.ProcessSnapshot.ReadCached(pid) }
+
+// CachedReads is v with Read answered as ReadCached answers it, for a pass that takes a table of its own (the peers inventory) and
+// whose readers classify by registry kind, not by an Argv of this very moment: the table (liveness, ppid, start) stays the pass's
+// fresh one and the process is re-checked on every call; only ps's answer for a process that only ps can read is kept
+// (psArgsCacheTTL), so back-to-back passes do not fork ps for it each time. A view that is not a *ProcessSnapshot is returned as is.
+func CachedReads(v ProcessView) ProcessView {
+	if s, ok := v.(*ProcessSnapshot); ok && s != nil {
+		return cachedReadView{s}
+	}
+	return v
+}
+
 func (s *ProcessSnapshot) read(pid int, fresh bool, readArgs func(int, *snapshotEntry) (string, []string, error)) (ProcessInfo, error) {
 	e, err := s.entry(pid)
 	if err != nil {
