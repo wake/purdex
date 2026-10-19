@@ -63,9 +63,12 @@ type Envelope struct {
 const MaxFamiliar = 64
 
 // NamesInfo is Envelope.Names. Familiar is the codes this host has seen as a lead or as a member (name_leads.code ∪
-// name_pairs.member_code), most recent first, at most MaxFamiliar; never null.
+// name_pairs.member_code), most recent first, at most MaxFamiliar; never null. Unavailable says the history could not be read this
+// time (Familiar is then empty and means nothing): a reader keeps what the host published before, rather than taking the
+// silence for an older daemon's empty set.
 type NamesInfo struct {
-	Familiar []string `json:"familiar"`
+	Familiar    []string `json:"familiar"`
+	Unavailable bool     `json:"unavailable,omitempty"`
 }
 
 var familiarCode = regexp.MustCompile(`^[a-z]{2,16}$`)

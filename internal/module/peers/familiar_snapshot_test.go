@@ -57,6 +57,27 @@ func TestRemoteNameSnapshot_AnOldDaemonIsAnEmptySetAndNothingIsNil(t *testing.T)
 	}
 }
 
+// A host that says its history could not be read (names.unavailable) keeps what it published before: the answer is no news, not an
+// empty set. With nothing recorded before, it records nothing. Mutation gate: treat it as an empty set → red.
+func TestRemoteNameSnapshot_AnUnavailableAnswerKeepsThePreviousSet(t *testing.T) {
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	s := newRemoteNameSnapshot()
+	unavailable := &ipeers.NamesInfo{Familiar: []string{}, Unavailable: true}
+	s.recordFamiliar("h1", unavailable, s.ticket(), t0)
+	if s.familiarUnion(t0) != nil {
+		t.Fatal("an unavailable answer with nothing before must record nothing")
+	}
+	s.recordFamiliar("h1", &ipeers.NamesInfo{Familiar: []string{"freya"}}, s.ticket(), t0)
+	s.recordFamiliar("h1", unavailable, s.ticket(), t0.Add(time.Minute))
+	if got := familiarKeys(s.familiarUnion(t0.Add(time.Minute))); !reflect.DeepEqual(got, []string{"freya"}) {
+		t.Fatalf("union = %v, want freya kept", got)
+	}
+	// it is not a fresh reading: the set still expires on the clock of the last good answer
+	if len(s.familiarUnion(t0.Add(remoteNamesTTL))) != 0 {
+		t.Fatal("an unavailable answer renewed the set's lifetime")
+	}
+}
+
 // A remote is attacker-controlled: only codes of the shape a name takes count, each once, at most 64 per host.
 func TestRemoteNameSnapshot_FamiliarKeepsOnlyWellFormedCodesUpToSixtyFour(t *testing.T) {
 	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)

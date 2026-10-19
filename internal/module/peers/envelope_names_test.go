@@ -93,20 +93,34 @@ func TestLocalEnvelope_AnEmptyHistoryPublishesAnEmptyArray(t *testing.T) {
 	}
 }
 
-// No history wired, or one that cannot be read, publishes no names (the readers take that as an empty set), and costs the
-// envelope nothing else: it is still ok and not partial.
-func TestLocalEnvelope_NoNamesWithoutAReadableHistory(t *testing.T) {
-	for name, h := range map[string]NameHistoryReader{
-		"none":       nil,
-		"read error": &envelopeHistory{err: errors.New("meta db locked")},
-	} {
-		env := envelopeWithHistory(t, h)
-		if env.Names != nil || env.Partial {
-			t.Errorf("%s: names = %+v partial = %v, want no names and not partial", name, env.Names, env.Partial)
-		}
-		raw, _ := json.Marshal(env)
-		if strings.Contains(string(raw), `"names"`) {
-			t.Errorf("%s: envelope json carries names: %s", name, raw)
-		}
+// No history wired publishes no names (a reader takes that as an older daemon's empty set), and costs the envelope nothing: it is
+// still ok and not partial.
+func TestLocalEnvelope_NoNamesWithoutAHistory(t *testing.T) {
+	env := envelopeWithHistory(t, nil)
+	if env.Names != nil || env.Partial {
+		t.Fatalf("names = %+v partial = %v, want no names and not partial", env.Names, env.Partial)
+	}
+	raw, _ := json.Marshal(env)
+	if strings.Contains(string(raw), `"names"`) {
+		t.Fatalf("envelope json carries names: %s", raw)
+	}
+}
+
+// A history that cannot be read says so on the wire (names.unavailable), so a reader keeps what this host published before instead of
+// taking the silence for an older daemon's empty set. The envelope itself is still ok and not partial: the rows owe the history
+// nothing. Mutation gate: publish nothing, or an empty set without the flag → red.
+func TestLocalEnvelope_AHistoryThatCannotBeReadSaysUnavailable(t *testing.T) {
+	env := envelopeWithHistory(t, &envelopeHistory{err: errors.New("meta db locked")})
+	if env.Partial || env.Names == nil || !env.Names.Unavailable || env.Names.Familiar == nil || len(env.Names.Familiar) != 0 {
+		t.Fatalf("names = %+v partial = %v, want unavailable with an empty array, not partial", env.Names, env.Partial)
+	}
+	raw, _ := json.Marshal(env)
+	if !strings.Contains(string(raw), `"names":{"familiar":[],"unavailable":true}`) {
+		t.Fatalf("envelope json = %s, want names with familiar [] and unavailable true", raw)
+	}
+	// and a readable one never carries the flag
+	ok, _ := json.Marshal(envelopeWithHistory(t, &envelopeHistory{codes: []string{"hiro"}}))
+	if strings.Contains(string(ok), "unavailable") {
+		t.Fatalf("a readable history carries the flag: %s", ok)
 	}
 }

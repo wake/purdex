@@ -930,8 +930,9 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 }
 
 // localNames is what this host's name history shares in its envelope (name pool v2 spec §6.1): the last ipeers.MaxFamiliar codes
-// it has seen as a lead or a lead's member. nil without a history, or when it cannot be read (logged): a reader takes that as an
-// empty set, and the rows, which owe the history nothing, stay whole. ctx is the caller's, not the inventory's budget: the read
+// it has seen as a lead or a lead's member. nil without a history (a reader takes that as an older daemon's empty set). A history
+// that cannot be read (logged) is published as unavailable, which a reader answers by keeping the last set; either way the rows,
+// which owe the history nothing, stay whole. ctx is the caller's, not the inventory's budget: the read
 // has the name store's bound (namerTimeout), because a budget the rows already used up would fail it, and a host that publishes
 // no names reads as an older daemon's empty set and drops its valid one.
 func (m *Module) localNames(ctx context.Context) *ipeers.NamesInfo {
@@ -942,8 +943,8 @@ func (m *Module) localNames(ctx context.Context) *ipeers.NamesInfo {
 	defer cancel()
 	codes, err := m.nameHistory.Familiar(ctx, ipeers.MaxFamiliar)
 	if err != nil {
-		m.logf("peers: inventory: read the familiar set, publishing no names: %v", err)
-		return nil
+		m.logf("peers: inventory: read the familiar set, publishing it as unavailable: %v", err)
+		return &ipeers.NamesInfo{Familiar: []string{}, Unavailable: true}
 	}
 	if codes == nil {
 		codes = []string{}

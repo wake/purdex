@@ -78,6 +78,9 @@ func (s *remoteNameSnapshot) recordFamiliar(hostID string, names *ipeers.NamesIn
 	if h := s.familiar[hostID]; h != nil && ticket < h.ticket {
 		return
 	}
+	if names != nil && names.Unavailable {
+		return // the host could not read its history this time: no news, what it published before stands (and ages)
+	}
 	var codes []string
 	if names != nil {
 		codes = ipeers.NormalizeFamiliar(names.Familiar)
