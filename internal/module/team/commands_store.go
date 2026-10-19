@@ -91,6 +91,8 @@ type CommandPlan struct {
 	HostID, SpawnCwd string
 	// PoolName is the member name this host reserved for a spawn (the lead host's choice, ReserveExact; "" = none): the op's pool_name.
 	PoolName string
+	// TargetCode is the persona code the adopt's target has now, read by the handler; the outcome reports it to the lead host.
+	TargetCode string
 	// ModOK says whether the session's mod speaks a protocol the relay needs (MinMemberRelayModVersion), read by the handler
 	// from the hello it saw; nil means no. HandoffDir is the directory a relay's handoff file lives in.
 	ModOK      func(sessionID string) bool

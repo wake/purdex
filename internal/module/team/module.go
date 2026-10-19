@@ -191,8 +191,10 @@ type Module struct {
 	// bootTrace, when set, is told the name of each boot reconciliation step as it starts (tests).
 	bootTrace func(step string)
 	// endedOps are the forwarded relay ops a command settle ended, until that settle has committed (relay_forwarded.go).
-	endedOpsMu  sync.Mutex
-	endedOps    map[*sql.Tx][]string
+	endedOpsMu sync.Mutex
+	endedOps   map[*sql.Tx][]string
+	// adoptPairs are the approvals of remote adopts a command settle made active, until that settle has committed (name_pairs.go).
+	adoptPairs  map[*sql.Tx][]adoptPairNote
 	busyNoticed map[string]struct{}
 	idleSince   map[string]int64
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
@@ -549,7 +551,8 @@ func (m *Module) Init(c *core.Core) error {
 	store.leadNotice = m.queueLeadNotice
 	store.onFacts = m.kickFacts
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
-	store.onCommandSettled, store.onSettleAborted = m.afterRelayOpsEnded, m.dropRelayOpsEnded
+	store.onCommandSettled = func(tx *sql.Tx) { m.afterRelayOpsEnded(tx); m.afterAdoptPairs(tx) }
+	store.onSettleAborted = func(tx *sql.Tx) { m.dropRelayOpsEnded(tx); m.dropAdoptPairs(tx) }
 	store.onSpawnsEnded = m.releaseMemberNames
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)

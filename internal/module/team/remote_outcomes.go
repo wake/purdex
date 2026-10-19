@@ -107,10 +107,14 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 	// The member host answers with the whole Origin.Tmux ("<session>:@<win>.%<pane>"); the row keeps the session NAME and the pane
 	// apart, as a local adopt does (the name is what a workspace tab is matched by).
 	tmuxSession, pane := splitTmux(out.Tmux)
-	return o.cas(tx, c, `state = 'active', session_id = ?, ref = ?, pid = ?, proc_start = ?,
+	changed, err := o.casChanged(tx, c, `state = 'active', session_id = ?, ref = ?, pid = ?, proc_start = ?,
 		title = CASE WHEN ? <> '' THEN ? ELSE title END, cwd = CASE WHEN ? <> '' THEN ? ELSE cwd END,
 		tmux_session = CASE WHEN ? <> '' THEN ? ELSE tmux_session END, pane_id = CASE WHEN ? <> '' THEN ? ELSE pane_id END, updated_at = ?`,
 		[]any{out.MemberSession, out.Ref, out.PID, out.ProcStart, out.Title, out.Title, out.Cwd, out.Cwd, tmuxSession, tmuxSession, pane, pane, now}, rowJoining)
+	if err == nil && changed {
+		o.m.noteAdoptPair(tx, c.MK, out.MemberCode) // the member joined: its pair is written once this settle has committed (name_pairs.go)
+	}
+	return err
 }
 
 // killAnswer: killed / gone from the answer; a refusal returns the row to active (host_not_allowed, or any code but
@@ -138,13 +142,20 @@ func (o remoteOutcomes) killAnswer(tx *sql.Tx, c commandRow, res peersmod.CallRe
 // cas moves the command's row from the state `from` with set, while its team is live. No row changed: logged once
 // (rule 5), not an error.
 func (o remoteOutcomes) cas(tx *sql.Tx, c commandRow, set string, args []any, from string) error {
+	_, err := o.casChanged(tx, c, set, args, from)
+	return err
+}
+
+// casChanged is cas that says whether the row was in state from and changed.
+func (o remoteOutcomes) casChanged(tx *sql.Tx, c commandRow, set string, args []any, from string) (bool, error) {
 	args = append(args, c.MK, c.HostID, c.TeamID, from)
 	r, err := tx.Exec(`UPDATE team_members SET `+set+` WHERE mk = ? AND host_id = ? AND team_id = ? AND state = ? AND `+liveTeamOfRow, args...)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if n, _ := r.RowsAffected(); n == 0 {
+	n, _ := r.RowsAffected()
+	if n == 0 {
 		o.m.logf("[team] outcome of command %s (%s) ignored: the member row is no longer %s", c.ID, c.Kind, from)
 	}
-	return nil
+	return n > 0, nil
 }
