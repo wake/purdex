@@ -347,7 +347,6 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 		tags := []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}
 		runs := make([]e2eRun, len(tags))
 		var wg sync.WaitGroup
-		start := time.Now()
 		for i, tag := range tags {
 			wg.Add(1)
 			go func() {
@@ -355,8 +354,17 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; sleep 3")
 			}()
 		}
+		// both units are seen active in one systemctl call, while the commands (3 s) are still running
+		units := []string{UnitName(tags[0], "j_4d3-Q") + ".service", UnitName(tags[1], "j_4d3-Q") + ".service"}
+		both := false
+		for deadline := time.Now().Add(2500 * time.Millisecond); !both && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			b, _ := exec.Command("systemctl", "is-active", units[0], units[1]).Output()
+			both = string(b) == "active\nactive\n"
+		}
 		wg.Wait()
-		wall := time.Since(start)
+		if !both {
+			t.Errorf("the two same-id units %v were never active at the same time", units)
+		}
 		for i, tag := range tags {
 			r, other := runs[i], tags[1-i]
 			if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
@@ -366,10 +374,6 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) || strings.Contains(r.out, other) {
 				t.Errorf("origin %s ran in the wrong unit:\n%s", tag, r.out)
 			}
-		}
-		// the runs overlapped iff the wall time is shorter than the two durations added up (run one after the other, it is at least their sum)
-		if sum := runs[0].took + runs[1].took; wall >= sum {
-			t.Errorf("the two runs did not overlap (wall %s, together %s): same-id units were not alive at the same time", wall, sum)
 		}
 		if f := failedUnits(t); f != "" {
 			t.Errorf("failed unit left: %s", f)
