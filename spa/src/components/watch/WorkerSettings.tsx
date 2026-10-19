@@ -46,15 +46,13 @@ function OwnerRuleBox({ alias, rule, disabled, onCommit }: { alias: string; rule
   const asMinutes = rule === '' || minutes !== null
   const stored = minutes !== null ? String(minutes) : rule
   const key = workerDraftKey(alias, 'owner_rule')
-  const [draft, setDraftState] = useState(() => readWorkerDraft(key) ?? stored)
+  // Only what the reader typed is state: a box with nothing typed follows the stored value (so new facts show through at once).
+  const [typed, setTyped] = useState<string | null>(() => readWorkerDraft(key) ?? null)
   const [bad, setBad] = useState(false)
-  // A new stored value (the facts moved on) replaces a box that holds no draft of the reader's.
-  useEffect(() => {
-    if (readWorkerDraft(key) === undefined) setDraftState(stored)
-  }, [stored, key])
-  const setDraft = (text: string) => { writeWorkerDraft(key, text); setDraftState(text); setBad(false) }
+  const draft = typed ?? stored
+  const setDraft = (text: string) => { writeWorkerDraft(key, text); setTyped(text); setBad(false) }
   const commit = () => {
-    if (draft === stored) { forgetWorkerDraft(key); return }
+    if (draft === stored) { forgetWorkerDraft(key); setTyped(null); return }
     let next: string
     if (asMinutes) {
       if (draft.trim() === '') next = ''
@@ -65,12 +63,14 @@ function OwnerRuleBox({ alias, rule, disabled, onCommit }: { alias: string; rule
       }
     } else next = draft
     forgetWorkerDraft(key)
-    if (next === rule) { setDraftState(stored); return }
+    setTyped(null)
+    if (next === rule) return
     onCommit(next)
   }
   // the stepper moves from the stored minutes (the host's default, 5, when the rule is empty) and sends at once; a half-typed value is dropped for it
   const step = (d: number) => {
     forgetWorkerDraft(key)
+    setTyped(null)
     onCommit(ownerRuleOf(Math.min(9999, Math.max(1, (minutes ?? DEFAULT_OWNER_MINUTES) + d))))
   }
   return (
