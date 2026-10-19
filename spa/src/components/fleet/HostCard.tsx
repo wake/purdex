@@ -6,7 +6,9 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { FleetHostView } from '../../lib/fleet/store'
-import type { FleetZone } from '../../lib/fleet/types'
+import type { PoolZone } from '../../lib/pool/types'
+import type { PoolCellExtra } from '../../lib/pool/cell-model'
+import { reasonWord } from '../../lib/pool/words'
 import { ringDriver, type RingDriver } from '../../lib/fleet/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -18,9 +20,10 @@ const CARD_W = 220
 const GAP = 8
 const MARGIN = 8
 
-const ZONE_CLASS: Record<FleetZone | 'offline' | 'nodata', string> = {
-  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', offline: 'text-text-muted', nodata: 'text-text-muted',
+const ZONE_CLASS: Record<PoolZone | 'offline' | 'nodata', string> = {
+  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', unknown: 'text-text-muted', offline: 'text-text-muted', nodata: 'text-text-muted',
 }
+const RING_DRIVERS: readonly string[] = ['cpu', 'mem', 'pressure', 'paging', 'disk']
 const TONE_CLASS: Record<UsageTone, string> = { ok: '', warn: 'text-status-warning-text', danger: 'text-status-error-text' }
 const pressureTone = (level: number): UsageTone => (level >= 4 ? 'danger' : level >= 2 ? 'warn' : 'ok')
 const pagingTone = (rate: number): UsageTone => (rate > 800 ? 'danger' : rate > 50 ? 'warn' : 'ok')
@@ -46,8 +49,60 @@ function Row({ id, label, driver, children }: { id: RingDriver; label: string; d
   )
 }
 
+function PoolRow({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div data-testid={`host-card-pool-${id}`} className="flex items-start gap-3 py-0.5">
+      <span className="w-[72px] shrink-0 text-text-secondary">{label}</span>
+      <span className="flex-1 text-right text-text-primary">{children}</span>
+    </div>
+  )
+}
+
+/** The pool's part of the card: worker, what it takes now (with the reason at 0), the owner, the sessions room. */
+function PoolRows({ pool }: { pool: PoolCellExtra }) {
+  const t = useI18nStore((s) => s.t)
+  const unknown = t('pool.card.unknown')
+  const w = pool.worker
+  // A class at 0: its reasons when the daemon sent them. A daemon that sends reasons but none for a zero (spec §3.2 says it names `unknown`)
+  // reads as unknown; a daemon that sends no reasons at all (older than pool.assess.v1) shows the plain 0, nothing invented.
+  const wordsOf = (n: number, list: string[] | undefined) => {
+    if (n !== 0 || !pool.reasons) return null
+    return list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : reasonWord('unknown', t)
+  }
+  // Each class at 0 shows its own reasons, labelled with the class; the same words for both are shown once, labelled for both.
+  const heavyWords = pool.headroom ? wordsOf(pool.headroom.heavy, pool.reasons?.heavy) : null
+  const lightWords = pool.headroom ? wordsOf(pool.headroom.light, pool.reasons?.light) : null
+  const line = (cls: 'heavy' | 'light' | 'both', words: string) => t('pool.card.reason_line', { cls: t(`pool.card.class.${cls}`), reason: words })
+  const reasonLines = heavyWords !== null && heavyWords === lightWords
+    ? [line('both', heavyWords)]
+    : [heavyWords !== null ? line('heavy', heavyWords) : null, lightWords !== null ? line('light', lightWords) : null].filter((w): w is string => w !== null)
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-border-subtle">
+      <PoolRow id="worker" label={t('pool.card.worker')}>
+        {!w ? unknown : w.enabled
+          ? t('pool.card.worker_on', { hr: w.running.heavy, hs: w.slots.heavy, lr: w.running.light, ls: w.slots.light })
+          : t('pool.card.worker_off')}
+      </PoolRow>
+      <PoolRow id="headroom" label={t('pool.card.headroom')}>
+        {pool.headroom ? (
+          <>
+            {t('pool.card.headroom_value', { h: pool.headroom.heavy, l: pool.headroom.light })}
+            {reasonLines.map((w) => <span key={w} data-testid="host-card-pool-reason" className="block text-text-muted">{w}</span>)}
+          </>
+        ) : unknown}
+      </PoolRow>
+      {pool.owner && (
+        <PoolRow id="owner" label={t('pool.card.owner')}>{t(pool.owner.active ? 'pool.card.owner_active' : 'pool.card.owner_idle', { s: pool.owner.idle_s })}</PoolRow>
+      )}
+      {pool.sessionsRoom !== null && <PoolRow id="sessions" label={t('pool.card.sessions')}>{t('pool.card.sessions_value', { n: pool.sessionsRoom })}</PoolRow>}
+    </div>
+  )
+}
+
 export interface HostCardProps {
   view: FleetHostView
+  /** What the resource pool adds; null while the pool is not the source: the card is then the fleet's. */
+  pool?: PoolCellExtra | null
   waitingPrimary: boolean
   primaryElsewhere: boolean
   placement: HostCardPlacement
@@ -55,15 +110,17 @@ export interface HostCardProps {
   anchor: HostCardAnchor | null
 }
 
-export function HostCard({ view, waitingPrimary, primaryElsewhere, placement, anchor }: HostCardProps) {
+export function HostCard({ view, pool = null, waitingPrimary, primaryElsewhere, placement, anchor }: HostCardProps) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   const [shift, setShift] = useState({ x: 0, y: 0 })
   const off = view.status !== 'ok'
   const f = off ? null : view.fast
-  const zone: FleetZone | 'offline' | 'nodata' = off ? 'offline' : f ? f.zone : 'nodata'
+  const zone: PoolZone | 'offline' | 'nodata' = off ? 'offline' : f ? (pool?.zone ?? f.zone) : 'nodata'
   const q = view.kind === 'daemon' && !off ? view.slow?.queue : undefined
-  const driver = f ? ringDriver(f) : null
+  // The ring's driver is the daemon's own when it sent a load; otherwise worked out from the readings as before.
+  const poolDriver = pool?.load && RING_DRIVERS.includes(pool.load.driver) ? (pool.load.driver as RingDriver) : null
+  const driver = f ? (poolDriver ?? ringDriver(f)) : null
   const pct = (v: number) => <span className={TONE_CLASS[usageTone(Math.round(v))]}>{Math.round(v)}%</span>
   const lvl = f ? levelKey(f.level) : null
 
@@ -108,6 +165,7 @@ export function HostCard({ view, waitingPrimary, primaryElsewhere, placement, an
           <Row id="mem" label={t('fleet.card.mem')} driver={driver}>{pct(f.mem)}</Row>
           <Row id="pressure" label={t('fleet.card.pressure')} driver={driver}>
             {lvl ? <span className={TONE_CLASS[pressureTone(f.level)]}>{t(`fleet.card.level.${lvl}`)}</span> : '—'}
+            {pool?.psi && <span className="text-text-muted">{t('pool.card.psi', { some: pool.psi.some10.toFixed(1), full: pool.psi.full10.toFixed(1) })}</span>}
           </Row>
           <Row id="paging" label={t('fleet.card.paging')} driver={driver}>
             <span className={TONE_CLASS[pagingTone(f.page_rate)]}>{t('fleet.card.paging_value', { v: Math.round(f.page_rate).toLocaleString() })}</span>
@@ -117,6 +175,12 @@ export function HostCard({ view, waitingPrimary, primaryElsewhere, placement, an
             {f.disk_free_gb > 0 && <span className="text-text-muted">{t('fleet.card.disk_free', { v: Math.round(f.disk_free_gb) })}</span>}
           </Row>
         </>
+      )}
+      {pool && pool.state !== 'offline' && <PoolRows pool={pool} />}
+      {pool?.state === 'fallback' && (
+        <div data-testid="host-card-pool-fallback" className="mt-1 text-text-muted">
+          {pool.since !== null ? t('pool.card.fallback', { time: new Date(pool.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : t('pool.card.fallback_nosince')}
+        </div>
       )}
       {q && (
         <div className="mt-1.5 pt-1.5 border-t border-border-subtle text-text-secondary">
