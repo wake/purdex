@@ -202,7 +202,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     poolEvent(hostId) {
       if (!running || hidden() || hostId !== get().sourceHostId) return
       // a read under way has not been answered yet (`lastOk` is false until it is), so an event during it is kept for the next one
-      if (inflight) { if (announcesEvents(hostId)) again = true; return }
+      if (inflight) { again = true; return }
       if (!eventDriven()) return
       clearTimer()
       void tick(gen)
