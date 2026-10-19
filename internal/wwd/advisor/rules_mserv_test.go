@@ -60,6 +60,23 @@ func TestMservService_PSINeedsTwoWholeMinutesAndTheLatestReading(t *testing.T) {
 	}
 }
 
+// Live history ends with the minute still being filled: two whole high minutes before it, and a high latest reading, hold. Without the
+// open minute set aside the rule would only hold for a moment at each minute's end.
+func TestMservService_TheOpenMinuteIsSetAside(t *testing.T) {
+	open := psiMinute(3, 12, 9000)
+	open.Stats.SampledS = 15 // 15 s into the minute
+	recs := []wire.Facts{psiMinute(0, 3, 9000), psiMinute(1, 11, 9000), psiMinute(2, 13, 9000), open}
+	in := minutesInput(open.At.Add(15*time.Second), recs...)
+	if v, err := (MservService{}).Eval(in); err != nil || !v.Holds {
+		t.Fatalf("two whole high minutes and an open one: %+v %v", v, err)
+	}
+	// only one whole high minute before the open one: not two minutes yet
+	recs = []wire.Facts{psiMinute(0, 3, 9000), psiMinute(1, 3, 9000), psiMinute(2, 13, 9000), open}
+	if v, _ := (MservService{}).Eval(minutesInput(open.At.Add(15*time.Second), recs...)); v.Holds {
+		t.Fatal("one whole high minute and an open one counted as two minutes")
+	}
+}
+
 // MemAvailable < 1.5 GB needs no duration.
 func TestMservService_MemAvailableUnderOneAndAHalfGB(t *testing.T) {
 	for avail, want := range map[int]bool{1535: true, 1536: false, 800: true, 9000: false} {

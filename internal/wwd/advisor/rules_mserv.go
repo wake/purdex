@@ -48,6 +48,11 @@ func (MservService) Eval(in Input) (Verdict, error) {
 		return v, nil // unreadable PSI is unknown, not high; and the latest reading must still be high
 	}
 	recs := in.Minutes(in.Now.Add(-(mservPSIMinutes + 2) * time.Minute))
+	// live history ends with the minute still being filled: leave it out, and look at the last two whole minutes before it (the latest
+	// reading above says whether the pressure still holds)
+	if n := len(recs); n > 0 && !minuteFull(recs[n-1]) {
+		recs = recs[:n-1]
+	}
 	if len(recs) < mservPSIMinutes {
 		return v, nil
 	}
