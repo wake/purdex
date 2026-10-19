@@ -6,7 +6,7 @@ vi.mock('../../../lib/names/persona-save', async (orig) => ({ ...(await orig<typ
 vi.mock('../../../lib/names/persona-draw', async (orig) => ({ ...(await orig<typeof import('../../../lib/names/persona-draw')>()), drawRecipe: vi.fn() }))
 
 import { drawRecipe } from '../../../lib/names/persona-draw'
-import { savePersonas, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
+import { savePersonas, editBase, PersonaStaleError, PersonaValidationError } from '../../../lib/names/persona-save'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import { usePersonaStore } from '../../../stores/usePersonaStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
@@ -382,6 +382,56 @@ describe('PersonasSection', () => {
       await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
       const emma = vi.mocked(savePersonas).mock.calls[0][0].find((p) => p.code === 'emma')!
       expect(emma.avatar_data).not.toBe('data:image/webp;base64,UklGRgAAAABXRUJQ')
+    })
+  })
+
+  describe('import', () => {
+    const pickFile = (entries: unknown) =>
+      fireEvent.change(screen.getByTestId('persona-import-file'), { target: { files: [new File([JSON.stringify(entries)], 'p.json', { type: 'application/json' })] } })
+
+    // the real savePersonas writes the collection and reloads the host; this stands in for that
+    const savesLikeTheDaemon = () =>
+      vi.mocked(savePersonas).mockImplementation(async (items) => {
+        usePersonaStore.setState({ byHost: { h1: { status: 'ready', collection: { items, stamp: { at: 9, host: 'h1' }, revision: 5 } } } })
+        return { hostId: 'h1', mirror: NO_MIRROR, base: editBase() }
+      })
+
+    it('rebuilds the open form from what was saved, so its next save is not made on the old values', async () => {
+      seed(['hiro'])
+      vi.mocked(drawRecipe).mockReset().mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ')
+      savesLikeTheDaemon()
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-row-hiro'))
+      expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('Hiro')
+      pickFile([{ id: 'hiro', name: 'Hiro Imported' }])
+      fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+      await waitFor(() => expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('Hiro Imported'))
+      expect((await screen.findByTestId('personas-note')).textContent).toMatch(/表單已改成|open form now shows/)
+      // and saving that form now goes through on the new base instead of being refused as stale
+      fireEvent.click(screen.getByTestId('persona-save'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(savePersonas).mock.calls[1][1]).toMatchObject({ revision: 5 })
+    })
+
+    it('keeps what was typed for a new persona, and only moves it onto the new base', async () => {
+      seed(['hiro'])
+      savesLikeTheDaemon()
+      render(<PersonasSection />)
+      fireEvent.click(screen.getByTestId('persona-new'))
+      fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
+      pickFile([{ id: 'emma', name: 'Emma' }])
+      fireEvent.click(await screen.findByTestId('persona-import-confirm'))
+      await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.queryByTestId('persona-import-summary')).toBeNull())
+      expect((screen.getByTestId('persona-code').querySelector('input') as HTMLInputElement).value).toBe('newone')
+      expect(screen.getByTestId('personas-note').textContent).not.toMatch(/表單已改成|open form now shows/)
+    })
+
+    it('shows the avatar credits at the foot of the page', () => {
+      seed(['hiro'])
+      render(<PersonasSection />)
+      expect(screen.getByTestId('persona-credits')).toBeTruthy()
+      expect(screen.getByTestId('persona-credit-micah').textContent).toContain('CC BY 4.0')
     })
   })
 
