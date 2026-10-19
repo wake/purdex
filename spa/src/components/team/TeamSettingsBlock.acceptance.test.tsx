@@ -89,6 +89,21 @@ describe('the read-only folders line', () => {
   })
 })
 
+describe('opening the editor', () => {
+  it('reads the other hosts\' grants again (the folded line already holds the poll, so the editor mounting does not)', async () => {
+    let reads = 0
+    configureHostRoots({ identity: () => 'id-1', fetch: async () => { reads++; return hosts }, post: async () => {}, dismiss: async () => {} })
+    await show()
+    const before = reads
+    expect(before).toBeGreaterThan(0)
+    hosts = [host({ roots: ['/Users/wake/Workspace/ios', '/changed-elsewhere'] })]
+    fireEvent.click(screen.getByTestId('team-folder-edit'))
+    await flush()
+    expect(reads).toBe(before + 1)
+    expect(screen.getAllByTestId('team-folder-chip').map((c) => c.textContent)).toContain('/changed-elsewhere')
+  })
+})
+
 describe('other hosts\' grants as chips', () => {
   it('lists the applied grant after the team\'s own, with a host badge and the shared-by-all tooltip', async () => {
     await show()

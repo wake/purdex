@@ -8,7 +8,7 @@ import { PencilSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { midEllipsis } from '../../lib/team/roots'
 import type { TeamRoster } from '../../lib/team/roster'
-import { useHostRootsStore, viewOf } from '../../lib/team/host-roots'
+import { refreshHostRoots, useHostRootsStore, viewOf } from '../../lib/team/host-roots'
 import { hostLabel, useHostLook } from '../../lib/host-look'
 import { hasHostBadge, resolveHostBadge } from '../../lib/host-color'
 import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
@@ -55,7 +55,7 @@ export function TeamFoldersLine({ hostId, team }: { hostId: string; team: TeamRo
           ))}
           <button
             type="button" data-testid="team-folder-edit" aria-expanded={open} aria-label={t('team.settings.folders_edit')} title={t('team.settings.folders_edit')}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => { if (!open) void refreshHostRoots(hostId); setOpen(!open) }} // the folded line already holds the poll's reference, so opening reads again by hand
             className="inline-flex h-4 w-5 flex-shrink-0 cursor-pointer items-center justify-center rounded text-text-secondary hover:bg-surface-hover hover:text-text-primary"
           ><PencilSimple size={11} /></button>
         </div>
