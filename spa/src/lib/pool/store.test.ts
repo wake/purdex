@@ -375,3 +375,129 @@ describe('polling', () => {
     expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
   })
 })
+
+// WWD-7a-1c: a source announcing pool.events.v1 stops the poll; reads follow pool.changed, a reconnect of the source and the window turning visible.
+describe('pool.events.v1', () => {
+  const EV = 'pool.events.v1'
+  const announce = (a: string[], b: string[] = ['pool.v1']) => useNexHostStore.setState({ byHost: { [A]: entry(a), [B]: entry(b) } } as never)
+  const settle = () => vi.advanceTimersByTimeAsync(0)
+
+  it('a source with the capability is read once and then not on a timer', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+
+  it('without the capability it still polls', async () => {
+    announce(['pool.v1'])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(fetchPoolHosts.mock.calls.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('pool.changed from the source reads again; from another daemon it does not', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    st().poolEvent(B)
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    st().poolEvent(A)
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+    expect(fetchPoolHosts).toHaveBeenLastCalledWith(A)
+  })
+
+  it('an event while a read is under way is read once more after it, not in parallel', async () => {
+    announce(['pool.v1', EV])
+    let release: (h: PoolHost[]) => void = () => {}
+    fetchPoolHosts.mockReturnValueOnce(Promise.resolve([mlab()]))
+    st().start()
+    await settle()
+    fetchPoolHosts.mockImplementationOnce(() => new Promise<PoolHost[]>((r) => { release = r }))
+    st().poolEvent(A)
+    await settle()
+    st().poolEvent(A); st().poolEvent(A) // two more while the second read is open
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    release([mlab()])
+    await settle(); await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+  })
+
+  it('a hidden window reads nothing on an event, and reads at once when it turns visible', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    setVisibility('hidden')
+    st().poolEvent(A)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    setVisibility('visible')
+    await settle()
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3) // and no timer after it
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failing read retries on its own timer even with the capability, and events drive it again once it recovers', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValueOnce([mlab()])
+    st().start()
+    await settle()
+    fetchPoolHosts.mockRejectedValue(fail(502, 'wwd_error'))
+    st().poolEvent(A)
+    await settle()
+    expect(st().error?.code).toBe('wwd_error')
+    const before = fetchPoolHosts.mock.calls.length
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(fetchPoolHosts.mock.calls.length).toBeGreaterThan(before)
+    fetchPoolHosts.mockReset(); fetchPoolHosts.mockResolvedValue([mlab()])
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(st().error).toBeNull()
+    const settled = fetchPoolHosts.mock.calls.length
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(fetchPoolHosts.mock.calls.length).toBe(settled)
+  })
+
+  it('the source losing the capability brings the poll back', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    announce(['pool.v1'])
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(fetchPoolHosts.mock.calls.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('a switch to a source without the capability polls again', async () => {
+    announce(['pool.v1', EV], ['pool.v1'])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+    expect(fetchPoolHosts.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(fetchPoolHosts).toHaveBeenLastCalledWith(B)
+  })
+
+  it('stop() leaves nothing subscribed: a later capability change reads nothing', async () => {
+    announce(['pool.v1', EV])
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    st().start()
+    await settle()
+    st().stop()
+    announce(['pool.v1'])
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+    expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+})
