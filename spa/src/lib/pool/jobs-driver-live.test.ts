@@ -1,9 +1,9 @@
 // spa/src/lib/pool/jobs-driver-live.test.ts — the topology the jobs driver reads from the App's stores: the pool's hosts are the origins, the connected daemons announcing `jobs.v1` are the sources, and a pool host's own daemon is the App host that is it.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from './store'
-import { liveTopology } from './jobs-driver-live'
+import { liveTopology, watchJobs, jobsDriver } from './jobs-driver-live'
 
 const A = 'app-a'
 const B = 'app-b'
@@ -34,5 +34,25 @@ describe('liveTopology', () => {
     useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'connected' } } } as never)
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1']), [B]: entry(['pool.v1']) } } as never)
     expect(liveTopology()).toMatchObject({ forwarders: [], ownDaemon: {} })
+  })
+})
+
+describe('watchJobs', () => {
+  it('syncs again when the pool\'s hosts, a daemon\'s capabilities or the connections change — and no more once released', () => {
+    const sync = vi.spyOn(jobsDriver, 'sync').mockImplementation(() => {})
+    const release = watchJobs()
+    expect(sync).toHaveBeenCalledTimes(0)
+    usePoolStore.setState({ hosts: [poolHost('mlab', A)] })
+    expect(sync).toHaveBeenCalledTimes(1)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1']) } } as never)
+    expect(sync).toHaveBeenCalledTimes(2)
+    useHostStore.setState({ runtime: { [A]: { status: 'reconnecting' } } } as never)
+    expect(sync).toHaveBeenCalledTimes(3)
+    release()
+    usePoolStore.setState({ hosts: [] })
+    useNexHostStore.setState({ byHost: {} } as never)
+    useHostStore.setState({ runtime: {} } as never)
+    expect(sync).toHaveBeenCalledTimes(3)
+    sync.mockRestore()
   })
 })

@@ -68,6 +68,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
   }
 
   function schedule(origin: string, ms: number) {
+    if (watchers === 0) return // nobody watches: a failure waits for the next event, reconnect or view, it is not retried on its own
     const st = stateOf(origin)
     const due = Date.now() + ms
     if (st.timer !== null) {
@@ -173,7 +174,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       if (released) return
       released = true
       watchers -= 1
-      if (watchers === 0) stopPolling()
+      if (watchers === 0) stop()
     }
   }
 

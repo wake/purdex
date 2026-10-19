@@ -39,9 +39,16 @@ export const jobsDriver = createJobsDriver({
   known: (origin) => Object.hasOwn(useJobsStore.getState().byOrigin, origin),
 })
 
-/** A view that shows jobs mounts: the driver polls for it, and an origin the pool lists later is read when it appears. The returned function releases both. */
+/**
+ * A view that shows jobs mounts: the driver polls for it, and an origin the pool lists later — or one whose daemon announces `jobs.v1` or connects later (a connection opens before its capabilities are read) — is read when it appears.
+ * The returned function releases it all.
+ */
 export function watchJobs(): () => void {
   const release = jobsDriver.watch()
-  const unsubscribe = usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) jobsDriver.sync() })
-  return () => { unsubscribe(); release() }
+  const unsubscribes = [
+    usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) jobsDriver.sync() }),
+    useNexHostStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) jobsDriver.sync() }),
+    useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime || s.hosts !== prev.hosts) jobsDriver.sync() }),
+  ]
+  return () => { for (const u of unsubscribes) u(); release() }
 }

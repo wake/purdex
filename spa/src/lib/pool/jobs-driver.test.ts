@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-driver.test.ts — what drives the jobs store (plan "WWD-7 design", Data flow: Jobs): which daemon answers for an origin, a read that is not finished goes on at once, a failure is acted on by the action of its error
 // (next source, the same one again after 1–2 s, back-off 2/4/8 … 30 s, drop the origin), a `jobs.changed` re-reads that one job, a host-events reconnect reads after the cursor, and an origin no daemon announces is polled every 10 s while a view watches.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createJobsDriver, POLL_MS, type JobsTopology, type JobsStoreLike } from './jobs-driver'
+import { createJobsDriver, POLL_MS, type JobsTopology } from './jobs-driver'
 import type { ReadOutcome } from './jobs-store'
 import { classify } from './errors'
 
@@ -15,7 +15,7 @@ const cursorAhead = fail(409) // reset_origin
 
 let topo: JobsTopology
 let seen: string[]
-let store: JobsStoreLike & { read: ReturnType<typeof vi.fn>; readJob: ReturnType<typeof vi.fn>; drop: ReturnType<typeof vi.fn> }
+let store: { read: ReturnType<typeof vi.fn>; readJob: ReturnType<typeof vi.fn>; drop: ReturnType<typeof vi.fn> }
 let have: Set<string>
 let hidden: boolean
 
@@ -73,7 +73,7 @@ describe('a failure is acted on by its action', () => {
   it('next_source: the next daemon that can answer for the origin, at once; all tried → back-off', async () => {
     store.read.mockResolvedValue(unavailable)
     const d = driver()
-    d.sync()
+    d.watch()
     await vi.advanceTimersByTimeAsync(0)
     // mserv: only forwarders (h-mlab, then h-air); mlab: its own, then the forwarders that are not that same daemon
     const mserv = store.read.mock.calls.filter((c) => c[0] === 'mserv').map(src)
@@ -91,7 +91,7 @@ describe('a failure is acted on by its action', () => {
     topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab', 'h-air'] }
     store.read.mockResolvedValueOnce(busy).mockResolvedValue(ok)
     const d = driver()
-    d.sync()
+    d.watch()
     await vi.advanceTimersByTimeAsync(0)
     expect(store.read).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(999)
@@ -105,7 +105,7 @@ describe('a failure is acted on by its action', () => {
     topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
     store.read.mockResolvedValue(failing)
     const d = driver()
-    d.sync()
+    d.watch()
     await vi.advanceTimersByTimeAsync(0)
     expect(store.read).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(2000)
@@ -132,7 +132,7 @@ describe('a failure is acted on by its action', () => {
     topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
     store.read.mockResolvedValueOnce(cursorAhead).mockResolvedValue(ok)
     const d = driver()
-    d.sync()
+    d.watch()
     await vi.advanceTimersByTimeAsync(0)
     expect(store.drop).toHaveBeenCalledWith('mlab')
     expect(store.read).toHaveBeenCalledTimes(1)
@@ -142,7 +142,9 @@ describe('a failure is acted on by its action', () => {
 
   it('a job that could not be read is read again as a whole list, not as that one job', async () => {
     store.readJob.mockResolvedValueOnce(failing)
+    have.add('mlab'); have.add('mserv')
     const d = driver()
+    d.watch()
     await d.jobChanged('mlab', 'a')
     await vi.advanceTimersByTimeAsync(2000)
     expect(store.readJob).toHaveBeenCalledTimes(1)
@@ -154,9 +156,48 @@ describe('a failure is acted on by its action', () => {
     topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
     store.readJob.mockResolvedValue(failing)
     store.read.mockResolvedValue(ok)
+    have.add('mlab')
     const d = driver()
+    d.watch()
     await d.jobChanged('mlab', 'a')
     await d.jobChanged('mlab', 'b')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(store.read).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a failure with nobody watching', () => {
+  it('is not retried on its own: the next event, reconnect or view reads again', async () => {
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
+    store.readJob.mockResolvedValue(failing)
+    const d = driver()
+    await d.jobChanged('mlab', 'a')
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(store.read).not.toHaveBeenCalled()
+    expect(store.readJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('and the last view going away cancels the retry that was waiting', async () => {
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
+    have.add('mlab')
+    store.readJob.mockResolvedValue(failing)
+    const d = driver()
+    const release = d.watch()
+    await d.jobChanged('mlab', 'a')
+    release()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(store.read).not.toHaveBeenCalled()
+  })
+
+  it('a retry that waits for a view that is still there is kept when another one goes away', async () => {
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: [] }
+    have.add('mlab')
+    store.readJob.mockResolvedValueOnce(failing)
+    const d = driver()
+    const a = d.watch()
+    d.watch()
+    await d.jobChanged('mlab', 'a')
+    a()
     await vi.advanceTimersByTimeAsync(2000)
     expect(store.read).toHaveBeenCalledTimes(1)
   })
