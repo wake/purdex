@@ -747,3 +747,19 @@ describe('InlineTab — background symbol (U1-3c, spec N6)', () => {
     expect(screen.queryByTestId('tab-background-symbol')).toBeNull()
   })
 })
+
+describe('InlineTab — seat row middle click', () => {
+  it('closes the tab on middle click, but not from a seat row', () => {
+    const onMiddleClick = vi.fn()
+    const { rerender } = render(
+      <InlineTab tab={baseTab} isActive={false} onSelect={() => {}} onClose={() => {}} onMiddleClick={onMiddleClick} onContextMenu={() => {}} />,
+    )
+    fireEvent.mouseDown(screen.getByTestId('inline-tab-row'), { button: 1 })
+    expect(onMiddleClick).toHaveBeenCalledTimes(1)
+    rerender(
+      <InlineTab tab={baseTab} isActive={false} onSelect={() => {}} onClose={() => {}} onMiddleClick={onMiddleClick} onContextMenu={() => {}} seatOverride={{ address: 'h1/seat', title: 'Seat' }} />,
+    )
+    fireEvent.mouseDown(screen.getByTestId('inline-tab-row'), { button: 1 })
+    expect(onMiddleClick).toHaveBeenCalledTimes(1)
+  })
+})
