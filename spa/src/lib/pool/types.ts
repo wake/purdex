@@ -16,6 +16,8 @@ export interface PoolException { name: string; since: number; until: number | nu
 export interface PoolOwner { active: boolean; idle_s: number; reason: string }
 
 export interface PoolFacts {
+  /** The wire version of this record (1 or 2). */
+  v: number
   host_id: string
   alias: string
   at: number

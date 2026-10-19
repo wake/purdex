@@ -117,6 +117,14 @@ describe('required fields', () => {
   it.each(['platform', 'arch', 'os_version', 'tools', 'disk', 'procs', 'residents', 'exceptions'])('facts without %s are null', (k) => {
     expect(parseFacts(drop(darwinJson, k))).toBeNull()
   })
+  it('facts carry a supported wire version: 1 and 2 are read, absent, 0 and a future one are null', () => {
+    expect(parseFacts({ ...darwinJson, v: 2 })!.v).toBe(2)
+    expect(parseFacts(darwinJson)!.v).toBe(1)
+    expect(parseFacts(drop(darwinJson, 'v'))).toBeNull()
+    expect(parseFacts({ ...darwinJson, v: 0 })).toBeNull()
+    expect(parseFacts({ ...darwinJson, v: 3 })).toBeNull()
+    expect(parseFacts({ ...darwinJson, v: '1' })).toBeNull()
+  })
   it('facts with derived.sessions_room or mem.pressure missing are null', () => {
     expect(parseFacts({ ...darwinJson, derived: drop(darwinJson.derived, 'sessions_room') })).toBeNull()
     expect(parseFacts({ ...darwinJson, mem: drop(darwinJson.mem, 'pressure') })).toBeNull()

@@ -78,8 +78,12 @@ function owner(v: unknown): PoolOwner | null {
   return isRec(v) && typeof v.active === 'boolean' && num(v.idle_s) ? { active: v.active, idle_s: v.idle_s, reason: str(v.reason) ? v.reason : '' } : null
 }
 
+/** The facts records this App reads: wire `v` 1 to 2 (internal/wwd/wire doc.go MinProto..FactsProto). A newer one may mean different fields. */
+const FACTS_MIN_V = 1
+const FACTS_MAX_V = 2
+
 export function parseFacts(v: unknown): PoolFacts | null {
-  if (!isRec(v)) return null
+  if (!isRec(v) || !Number.isInteger(v.v) || (v.v as number) < FACTS_MIN_V || (v.v as number) > FACTS_MAX_V) return null
   const at = time(v.at)
   const { cpu, mem, derived } = v
   const w = factsWorker(v.worker)
@@ -98,7 +102,7 @@ export function parseFacts(v: unknown): PoolFacts | null {
     else if (Array.isArray(t) && t.every(str)) tools[k] = t
   }
   return {
-    host_id: v.host_id, alias: v.alias, at,
+    v: v.v as number, host_id: v.host_id, alias: v.alias, at,
     platform: v.platform, arch: v.arch, os_version: v.os_version,
     cpu: { ncpu: cpu.ncpu, load1: cpu.load1, load5: cpu.load5, idle_pct: cpu.idle_pct },
     mem: {
