@@ -44,6 +44,12 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 			t.Errorf("the waiting section lacks %q", want)
 		}
 	}
+	// the fast lane: never queued, waits locally, refuses --detach; its result is not announced again
+	for _, want := range []string{"永遠不進佇列", "每 2 秒再問一次", "`--detach`、`--class` 都會被拒", "不另外通知", "CLAUDE_CODE_SESSION_ID"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-test lacks %q", want)
+		}
+	}
 	// every exit code pdx test has, with its meaning in the same row
 	rows := map[int]string{}
 	for _, line := range strings.Split(section(t, s, "結束碼"), "\n") {
