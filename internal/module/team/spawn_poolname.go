@@ -52,6 +52,17 @@ func (m *Module) reserveMemberName(leadSessionID, opID, tmuxName string, at int6
 	return code
 }
 
+// chooseMemberName is the lead host's choice of a name for a member that will live on another host: reserved to pick with this lead's
+// pair history, and given back at once, because this host has no session to name and the member host holds its own reservation. ""
+// when there is none to give.
+func (m *Module) chooseMemberName(leadSessionID, opID string, at int64) string {
+	code := m.reserveMemberName(leadSessionID, opID, "", at)
+	if code != "" {
+		m.releaseMemberName(opID)
+	}
+	return code
+}
+
 // releaseMemberName gives the name of op opID back. It is idempotent, and does nothing when the op had none.
 func (m *Module) releaseMemberName(opID string) {
 	if svc := m.nameService(); svc != nil {

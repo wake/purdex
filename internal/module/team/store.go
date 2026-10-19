@@ -299,6 +299,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn person): %w", err)
 	}
+	if err := migrateRemoteSpawnPoolName(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote spawn pool name): %w", err)
+	}
 	if err := migrateSpawnPoolName(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn pool name): %w", err)

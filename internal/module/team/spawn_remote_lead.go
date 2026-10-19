@@ -107,8 +107,10 @@ func (m *Module) acceptRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 	}
 	now := m.now()
 	want.TeamID, want.State, want.CreatedAt, want.UpdatedAt = t.ID, remoteSpawnRunning, now, now
+	want.PoolName = m.chooseMemberName(origin.SessionID, req.ID, now)
 	cmd, err := remoteCommand(req.ID, CmdSpawn, want.HostID, t, req.ID, m.leadTuple(t), func(tc *team.TeamCommand) {
 		tc.Cwd, tc.Title, tc.Model, tc.Effort = req.Cwd, req.Title, req.Model, req.Effort
+		tc.PoolName = want.PoolName
 	})
 	if err != nil {
 		m.failRemoteSpawn(w, req.ID, err)
@@ -192,7 +194,11 @@ func (m *Module) writeRemoteSpawn(w http.ResponseWriter, row remoteSpawnRow, ori
 // had one, its first task's id.
 func (m *Module) remoteSpawnView(r remoteSpawnRow, leadAddress string) (team.SpawnOp, error) {
 	op := team.SpawnOp{ID: r.ID, TeamID: r.TeamID, HostID: r.HostID, State: team.SpawnState(r.State), Reason: r.Reason, Cwd: r.Cwd,
-		Title: r.Title, Model: r.Model, Effort: r.Effort, LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+		Title: r.Title, Model: r.Model, Effort: r.Effort, LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		PoolName: r.PoolName}
+	if r.PoolName != "" {
+		op.PoolDisplayName, _ = ipeers.PoolDisplayName(r.PoolName)
+	}
 	if r.State != remoteSpawnDone {
 		return op, nil
 	}
