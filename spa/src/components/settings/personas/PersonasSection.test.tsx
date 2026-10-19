@@ -12,6 +12,8 @@ import { clearDraftMemory } from '../../../lib/names/persona-draft-memory'
 import { makeCollection, makePersona } from '../../../lib/names/__fixtures__/personas'
 import { PersonasSection } from './PersonasSection'
 
+const NO_MIRROR = { mirrored: [], failed: [], pulled: [] }
+
 function seed(codes: string[], over: Record<string, Partial<ReturnType<typeof makePersona>>> = {}) {
   const c = makeCollection(codes, { at: 5, host: 'h1' }, 4)
   c.items = c.items.map((p) => makePersona(p.code, over[p.code] ?? {}))
@@ -70,7 +72,7 @@ describe('PersonasSection', () => {
 
   it('saves the edited collection on the base the form opened with, and says where it went', async () => {
     seed(['hiro', 'emma'])
-    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
     fireEvent.change(screen.getByTestId('persona-name').querySelector('input')!, { target: { value: 'Hiro Two' } })
@@ -96,7 +98,7 @@ describe('PersonasSection', () => {
 
   it('retires and restores with a save, never a delete', async () => {
     seed(['hiro'])
-    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', base: null })
+    vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
     fireEvent.click(screen.getByTestId('persona-retire'))
@@ -108,7 +110,7 @@ describe('PersonasSection', () => {
     seed(['hiro'])
     vi.mocked(savePersonas).mockImplementation(async () => {
       seed(['hiro'], { hiro: { name: 'From elsewhere' } })
-      return { hostId: 'h1', base: null }
+      return { hostId: 'h1', mirror: NO_MIRROR, base: null }
     })
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-row-hiro'))
@@ -131,7 +133,7 @@ describe('PersonasSection', () => {
     expect((await screen.findByTestId('personas-note')).textContent).toMatch(/保留|kept/)
     expect((screen.getByTestId('persona-name').querySelector('input') as HTMLInputElement).value).toBe('My Edit')
     // the next save goes out on the NEW base, not the one the form was opened with
-    vi.mocked(savePersonas).mockResolvedValueOnce({ hostId: 'h1', base: { hostId: 'h1', revision: 9, stamp: { at: 9, host: 'h1' } } })
+    vi.mocked(savePersonas).mockResolvedValueOnce({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 9, stamp: { at: 9, host: 'h1' } } })
     fireEvent.click(screen.getByTestId('persona-save'))
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(2))
     expect(vi.mocked(savePersonas).mock.calls[1][1]).toEqual({ hostId: 'h1', revision: 4, stamp: { at: 5, host: 'h1' } })
@@ -151,7 +153,7 @@ describe('PersonasSection', () => {
     expect((screen.getByTestId('persona-row-emma') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.submit(screen.getByTestId('persona-form')) // a second submit while the first is pending
     expect(savePersonas).toHaveBeenCalledTimes(1)
-    finish({ hostId: 'h1', base: null })
+    finish({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     await waitFor(() => expect(screen.getByTestId('persona-name').querySelector('input')!.matches(':disabled')).toBe(false))
   })
 
@@ -171,7 +173,7 @@ describe('PersonasSection', () => {
     fireEvent.submit(screen.getByTestId('persona-form'))
     expect(savePersonas).toHaveBeenCalledTimes(1) // no second write
     seed(['hiro'], { hiro: { name: 'Saved Name' } }) // what the daemon now holds
-    finish({ hostId: 'h1', base: null })
+    finish({ hostId: 'h1', mirror: NO_MIRROR, base: null })
     await waitFor(() => expect(input().matches(':disabled')).toBe(false))
     expect((input() as HTMLInputElement).value).toBe('Saved Name')
   })
@@ -205,7 +207,7 @@ describe('PersonasSection', () => {
     await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
     first.unmount()
     render(<PersonasSection />)
-    done({ hostId: 'h1', base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
+    done({ hostId: 'h1', mirror: NO_MIRROR, base: { hostId: 'h1', revision: 5, stamp: { at: 9, host: 'h1' } } })
     expect((await screen.findByTestId('personas-note')).textContent).toContain('mlab')
     fireEvent.click(screen.getByTestId('persona-row-emma'))
     expect(screen.queryByTestId('personas-note')).toBeNull()
@@ -246,7 +248,7 @@ describe('PersonasSection', () => {
 
   it('keeps a new persona that the shown collection did not take after a save with no base', async () => {
     seed(['hiro'])
-    vi.mocked(savePersonas).mockImplementation(async () => ({ hostId: 'h1', base: null })) // another copy won; it lacks "newone"
+    vi.mocked(savePersonas).mockImplementation(async () => ({ hostId: 'h1', mirror: NO_MIRROR, base: null })) // another copy won; it lacks "newone"
     render(<PersonasSection />)
     fireEvent.click(screen.getByTestId('persona-new'))
     fireEvent.change(screen.getByTestId('persona-code').querySelector('input')!, { target: { value: 'newone' } })
