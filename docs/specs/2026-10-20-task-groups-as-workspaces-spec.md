@@ -1,11 +1,13 @@
 # Task groups as a workspace-level layer — spec (2026-10-20)
 
-Owner: B line lead (88). Status: draft for codex review together with its plan.
+Owner: B line lead (88). Status: draft r2 — revised after the plan review (codex `task-mvfs2clf-c2dr4g`: a new world
+section needed its own world fence, slave copy remap and apply fence; r2 rides the existing settings and tabs sections
+instead, which already have all three).
 
 The sidebar's task-group view (name pool v2 spec, NP2 §7, U11) stops being a second listing of the same tabs and becomes
-a layer **parallel to workspaces**: a group has its own tabs in the top bar, its own tab order, its own active tab, and
-it is collapsed, selected and created the way a workspace is. Manual groups leave the hosts' `host_config` and travel with
-the profile (Profile Sync), with the same per-section conflict handling as workspaces.
+a layer **parallel to workspaces**: a group has its own tabs in the top bar, its own tab order, its own active tab, and it
+is collapsed, selected and created the way a workspace is. Manual groups leave the hosts' `host_config` and travel with
+the profile (Profile Sync) under the same per-section conflict handling as everything else there.
 
 ## 1. User decisions (2026-10-20, after the 761 acceptance)
 
@@ -22,8 +24,9 @@ Asked plainly with examples, answered by the user. Quoted where the wording matt
 | D7 | 「team / 任務編組，就是和 workspace 平行對等的層級。應該要跟著 profile sync 走到全 client 裝置，提供一樣的衝突處理覆蓋機制」. In the task-group view the sidebar's + creates a task group, as + creates a workspace in the workspace view. |
 | D8 | A group header collapses and expands like a workspace's (a chevron replaces the count), has no outline, and a click on it selects that group. |
 
-Two bugs reported with it are fixed in phase TG-0 (§9): a team seat with no open tab shows no avatar and no persona name,
-and a session shown by two tabs is listed twice (the guardian tab) — which also made 「未分組」 look reordered on a click.
+Bugs reported with it: a session shown by two tabs was listed twice (the guardian tab) and 「未分組」 looked reordered when
+the seat's chosen tab switched — fixed by #3654 (every tab showing a seat's session is the team's); a team seat with no
+open tab shows no avatar and no persona name — TG-0b.
 
 ## 2. What this replaces
 
@@ -31,7 +34,7 @@ and a session shown by two tabs is listed twice (the guardian tab) — which als
 |---|---|---|
 | NP2 L9 | "A manual task group only gathers sessions of one host. **[待確認]** — stored per host, so no cross-host sync is needed" | Replaced: a group gathers sessions of **any** host; groups are stored in the profile (§4). |
 | NP2 §7, first bullets | groups in hostconfig `task_groups`, capability `task_groups.v1`, CAS PUT per host | Replaced by §4. The hostconfig row is retired (§8). |
-| NP2 §7 | "groups in creation order"; "A group with none collapses and offers 「清除」"; "Clicking a session switches to its workspace and tab" | Kept, extended by §6 (chevron, header click, the group's tabs). |
+| NP2 §7 | "groups in creation order"; "A group with none collapses and offers 「清除」"; "Clicking a session switches to its workspace and tab" | Kept, extended by §6 (chevron, header click, the group's tabs). New groups are appended, so creation order is the default order. |
 | NP2 §12 item 4 | "A manual task group holds sessions of one host only (L9)" | Dropped. |
 | NP2 §9.3 / §9.6 | the muted title after the name goes through `labelOf` | In the task-group rows only: the tab's title first (D5). Panel, beads, tooltips unchanged. |
 | TI §4.4 | "3. otherwise nothing" (the panel area) | A solo agent session shows the personal panel (§7). |
@@ -41,93 +44,105 @@ NP2 L10 stays: membership is keyed by lineage root, and a session in a live team
 
 ## 3. Words
 
-- **Group**: a team (from the daemons' rosters, never stored by the App), a manual task group (stored, §4), or
+- **Group**: a team (from the daemons' rosters, never stored by the App), a manual task group (stored, §4.1), or
   「未分組」 (implicit).
-- **Group key**: `team:<wire host id>:<team id>`, `group:<group id>`, or `ungrouped`. Team keys use the wire host id
-  (`host-identity.ts`, `d1_…`) so that a key means the same team on every device.
-- **Session tab**: a tab whose primary live pane is a `tmux-session` with an agent session id (`rebuild.agent.sessionId`),
-  i.e. one whose lineage root can be known. Every other tab — UI pages, editors, a plain shell — is a **plain tab**.
+- **Group key** (one module, `lib/task-groups/group-key.ts`, serialize and parse): `team\0<wire host id>\0<team id>`,
+  `group\0<group id>`, or `ungrouped`. NUL separates the parts, as `teamKeyOf` does. The team part uses the **wire** host
+  id (`host-identity.ts` `wireIdOfHost`, `d1_…`; the local id for a host with no daemon id), so one key means one team on
+  every device and the same string is used everywhere — stored, synced and device-local alike. `TeamView` (local host
+  id) is converted once, where a key is made from it.
+- **A tab's session**: the first live `tmux-session` pane of the tab in pre-order (the primary pane first) — exactly
+  `SessionTab` today (#3654). A **session tab** is one whose session has an agent session id
+  (`rebuild.agent.sessionId`), so its lineage root can be known. Every other tab — UI pages, editors, a plain shell —
+  is a **plain tab**.
 
 ## 4. Storage and sync
 
-### 4.1 The `taskgroups` profile section
+### 4.1 Group definitions: a settings store
 
-A fifth `SectionKind`, one section per profile world (key `taskgroups`), built and applied like `workspaces`:
+A new persisted store `purdex-task-groups` (`useTaskGroupsStore` rewritten), listed in `PROJECTIONS.settings`, so it
+travels in the profile's `settings` section like the other synced settings:
 
 ```ts
-interface TaskGroupsPayload {
-  order: string[]                                  // manual group ids, sidebar order (new groups are appended)
+interface TaskGroupsState {
+  order: string[]                                   // manual group ids, sidebar order (new groups appended)
   groups: Record<string, {
-    name: string                                   // 1–64 bytes, printable (same rule as today)
-    color?: string                                 // #rrggbb
-    members: Array<{ host: string; root: string }> // wire host id + lineage root; a (host, root) is in at most one group
+    name: string                                    // 1–64 bytes, printable (today's rule)
+    color?: string                                  // #rrggbb
+    members: Array<{ host: string; root: string }>  // WIRE host id + lineage root; a (host, root) is in at most one group
     createdAt: number
   }>
-  tabOrder: Record<string, string[]>               // group key → tab ids in bar order (a team's lead is never listed: it is first)
-  placement: Record<string, string>                // tab id → group key, for plain tabs (§5)
 }
 ```
 
-- Limits: 32 groups, 64 members per group (today's), tab-order and placement entries only for tabs the world has.
-- Group ids are 8 hex (`edits.ts` `newGroupId`, as today); two devices creating groups at once do not collide.
-- Host ids go through the same wire translation as tab layouts (`layoutToWire` / `layoutFromWire`): the builder takes
-  the `HostIdentity`, the applier the `WireResolver`, the section is host-bearing (`collector.scheduleHostBearing`), and
-  an identity conflict stops building it like every host-bearing section. A host with no daemon id keeps its local id,
-  so its members do not match on another device; this is said in the group's tooltip there ("a host this Mac does not
-  know").
-- **World part**: the section belongs to the profile world, like `workspaces` and `tabs.*`: `ParkedWorld` gains it, a
-  slave profile has its own groups, the collector reads it through `master-world.ts`, and 「複製為 slave」 copies it.
-  Rationale: `tabOrder` and `placement` name tab ids, which are world-specific.
-- **Projection, fingerprint, ordinal**: `PROJECTIONS.taskgroups` lists the payload's paths; `SECTION_SCHEMA_ORDINAL`
-  gets `taskgroups: 1`; the `shapeTable()` guard snapshot moves with it. An older client skips the unknown kind
-  ("carried, never rewritten", PS §4.6.3), so it is not locked — it just does not see groups.
-- **Pull gate**: none. A `tabOrder` / `placement` entry naming a tab the world does not have (yet) is ignored on read
-  and dropped on the next local write.
-- **Local-only tabs** (`tabs-local-only` spec: settings, new-tab, dashboard, …) are never in a synced `tabs.*`
-  section, so their `tabOrder` / `placement` entries are kept **per device**: the builder leaves them out, the applier
-  keeps the local ones (the same split as tabs).
+- **Wire ids in the store itself**, like `purdex-host-looks.looks` and `purdex-shown-hosts.ids`: the builder and the
+  applier pass them through verbatim, readers resolve wire → local with the host identity. A member whose host this
+  device does not know is kept and simply matches nothing here.
+- Limits 32 groups, 64 members each (today's); group ids 8 hex (`newGroupId`).
+- `SECTION_SCHEMA_ORDINAL.settings` 11 → 12; the guard snapshot moves with it. An ordinal-11 payload lacks the store and
+  leaves it alone on apply (the ordinal-9/10 precedent).
+- **Master and slave**: settings belong to the master and a slave borrows them (Profile Sync §4.1), so every world on a
+  device sees the master's groups. Edits made while a slave is on screen edit those groups.
+- **No daemon change and no capability**: the `settings` section already exists on every daemon.
 
-### 4.2 Conflicts
+### 4.2 A tab's place: two tab fields
 
-Exactly the workspace mechanism: the section is `synced | pending | locked:conflict | locked:reset | locked:invalid`
-(`sync-state.ts`); `ResolveRow` offers 「留本機」/「用同步版本」 for it in Settings › Profile, with its own unit label
-and count (`resolve-counts.ts`, `settings.profile.resolve.unit.taskgroups`). The task-group view shows the lock the way
-the workspace view does (`WorkspaceConflict`): an alert icon on the view's header row opening the same resolve row.
+Each tab gets two optional fields, listed in `PROJECTIONS.tabs` (`tabs.*.group`, `tabs.*.groupRank`), so they travel
+in the tab's own `tabs.<workspace>` section:
 
-### 4.3 Daemon and rollout
+- `group?: string` — the tab's **placement**: a group key (§3). Read only when the derived rules do not place the tab
+  (§5).
+- `groupRank?: number` — the tab's position in its group's bar (§6.2). Lower first; a tab without a rank comes after the
+  ranked ones, in workspace order.
 
-- `internal/module/profiles/validate.go` `sectionPattern` admits `taskgroups`; the daemon still never reads payloads.
-- `/api/info` advertises `profiles.taskgroups.v1`. The SPA builds and pushes the section only when the profile's SOT
-  daemon advertises it; before that the groups live in the local store only and the view says nothing (a single
-  device works; a second device simply does not see them yet).
-- Order: the daemon phase ships and is deployed on every host before the SPA phase that pushes (§9).
+Riding the tabs section means the existing mechanisms carry them with no new code paths: the world fence and switch
+(`switch-active.ts`), 「複製為 slave」 (`copyWorld` copies the tab, fields included; group keys hold no tab ids, so nothing
+needs remapping), and local-only tabs (`tabs-local-only`: an interface tab stays on its device with its fields).
+`SECTION_SCHEMA_ORDINAL.tabs` 4 → 5; an ordinal-4 payload lacks both fields, and applying it keeps the local values
+(upcast, like `upcastLegacyTabs`).
 
-### 4.4 Root cache
+### 4.3 Conflicts
 
-A session's lineage root is a fact that never changes, so the App keeps the roots it has read (`useSessionRoots`,
-from `GET /api/team/unattended`) in a **device-local persisted** map `(wire host, session id) → root`. A tab whose
-host is offline keeps its group instead of falling into 「未分組」. Writes still require a root read from the daemon
-(NP2 §7's "never stores a session's own id as its root" stays).
+Unchanged mechanism: group edits lock and resolve as part of `settings`, tab placement and order as part of their
+`tabs.<workspace>` section — 「留本機」/「用同步版本」 in Settings › Profile and, for tabs, the workspace row's alert
+(`WorkspaceConflict`). The grain is coarse (a group rename and an unrelated settings change on two devices at once lock
+`settings`); accepted.
+
+### 4.4 Old clients
+
+Both ordinals move, so a client that predates this locks `settings` and `tabs` with `locked:schema` until it updates —
+the standing rule for every projection change. All of this user's App clients load the SPA from the dev server, or
+update with each release.
+
+### 4.5 Root cache
+
+A session's lineage root never changes, so the App keeps the roots it reads (`GET /api/team/unattended`) in a
+**device-local persisted** map `(local host id, agent session id) → root`, dropped with the host (the task-groups
+lifecycle's forget rule). It is read without a React hook too (placement, auto-join). Reads are gated on the endpoint's
+own capability `team.relay_quota.v1`, no longer on `task_groups.v1`. A tab whose host is offline keeps its group.
+Writing a member still needs a root read from the daemon (NP2 §7: never a session's own id).
 
 ## 5. Which group a tab is in
 
 First match wins:
 
-1. The tab shows a live team seat's session (any of the tab's panes, matched by session as `seatLookup` does) → that
-   team. Team first: every tab showing a seat is the team's, not only the seat's chosen tab (fixes the double listing).
-2. It is a session tab whose (host, root) is a member of a manual group → that group.
-3. It has a `placement` entry naming a group that exists → that group.
+1. The tab's session is a live team seat's session → that team (#3654).
+2. The tab is a session tab whose (wire host, root) is a member of a manual group → that group.
+3. Its `group` field names a group that exists (a team key whose team is live, a manual group in the store) → there.
 4. 「未分組」.
 
-Placement is written:
-- when a **plain tab** is opened: the group of the tab that was active (in either view); none → 「未分組」;
-- when a tab is dragged onto a group in the sidebar (§6.1) and it is not a session tab;
-- when a session tab **stops** being one (its session ends, the agent exits): its group at that moment, so it does not
-  jump.
+The `group` field is written:
+- **when a tab is created by the user** (the tab factory used by every open path, never by apply, rehydrate, restore or
+  a world switch): in the task-group view the selected group; in the workspace view the group of the tab that is active
+  at that moment; none → not set;
+- **when a tab is moved** to another group in the sidebar (§6.1);
+- **when a tab stops matching rules 1–2** (its session ended, the agent exited, it left a team): the group it was in,
+  but only when that group was known (a root that was read); an unknown root never writes 「未分組」 over a placement.
 
-When a tab placed in manual group G becomes a session tab whose root is known and in no group, the root is added to G
-("a session started inside a group joins it"). Tabs of the watcher area other than session tabs are in no group (they
-live in the watcher area only).
+Auto-join: a tab whose `group` is manual group G, that becomes a session tab whose root is known and in no group, adds
+(host, root) to G ("a session started inside a group joins it").
+
+Tabs of the watcher area other than session tabs are in no group: they live in the watcher area only.
 
 ## 6. The task-group view
 
@@ -135,35 +150,39 @@ live in the watcher area only).
 
 - Order: teams (roster order), manual groups (`order`), 「未分組」 last (left out when empty) — as today.
 - **Header**: a chevron (CaretDown/CaretRight, `aria-expanded`) replaces the count. Clicking the header selects the
-  group (§6.2); clicking the header of the selected, expanded group collapses it — `WorkspaceRow`'s rule. The
-  chevron alone toggles without selecting. Focus shows only as `focus-visible:ring-1 focus-visible:ring-border-active`
-  (no UA outline). Double-click renames (manual) / opens `TeamEditPopover` (team), as today.
-- Expanded state per device, keyed by group key, reconciled against the live keys like `workspaceExpanded`. A manual
-  group with nothing to show stays collapsed and offers 「清除」 (NP2 §7); it has no chevron.
-- Right-click on a manual group header: rename, colour (the team palette), 「刪除任務編組」 (its sessions and tabs go to
-  「未分組」; asks first when it holds tabs).
-- **Rows**: dragging reorders within the group (writes `tabOrder`; a team's lead row never moves and nothing drops
-  before it; moving a member also writes this device's team member order, so the panel follows). Dragging a solo row
-  onto another manual group moves it there (session tab: membership, root required; plain tab: placement); onto
-  「未分組」 takes it out. Teams take no drop; team rows do not leave their team (NP2 L10). Any host's session can go
-  into any group.
-- Row text: the persona name `text-text-secondary` (hover/active as today); the muted title is the tab's title, the
-  pdx label only for a seat with no tab (D4, D5). A seat with no open tab shows its avatar and persona name like the
-  others, dimmed (TG-0).
-- **+** (bottom nav) in this view: 「新增任務編組」 — creates 「任務編組 N」 (first unused N), appends it, selects it and
-  starts its rename. In the workspace view + is unchanged.
+  group (§6.2); clicking the header of the selected, expanded group collapses it — `WorkspaceRow`'s rule. The chevron
+  alone toggles without selecting. Focus shows only as `focus-visible:ring-1 focus-visible:ring-border-active`.
+  Double-click renames (manual) / opens `TeamEditPopover` (team), as today.
+- Expanded state per device, keyed by group key, reconciled against live keys like `workspaceExpanded`. A manual group
+  with nothing to show stays collapsed and offers 「清除」 (NP2 §7); it has no chevron.
+- Right-click on a manual group header: rename, colour (the team palette), 「刪除任務編組」 (its sessions fall to
+  「未分組」, tabs placed in it lose the placement; asks first when it holds tabs).
+- **Rows** are draggable as in the workspace view:
+  - within a group, a drag reorders (writes `groupRank`); in a team the lead never moves and nothing drops before it,
+    members reorder among themselves (writes this device's `memberOrder`), plain tabs among themselves after the members;
+  - onto another manual group: a session tab becomes its member (root required), a plain tab gets `group`;
+  - onto 「未分組」: takes it out (membership removed / `group` cleared);
+  - teams take no drop, and team seats do not leave their team (NP2 L10). Any host's session can go into any group.
+- Row text (TG-0b): the persona name `text-text-secondary` (hover/active as today); the muted title is the tab's title,
+  the pdx label only for a seat with no tab; a seat with no tab shows its avatar and persona name, dimmed.
+- **+** in the bottom nav, in this view: 「新增任務編組」 — creates 「任務編組 N」 (first unused N), appends it, selects
+  it and starts its rename. The workspace view's + is unchanged.
 
 ### 6.2 Selected group and the top bar
 
 - Per device: `selectedGroup` (a group key) and each group's last active tab (like `Workspace.activeTabId`).
-- Selecting a group shows its tabs in the top bar and activates its last active tab, else its first tab; an empty
-  group shows the empty state, as an empty workspace does.
-- Activating a tab in any other way (notification, search, a click in the panel) selects the tab's group.
-- The bar lists the group's tabs: pinned first (as in a workspace), then `tabOrder[groupKey]`, then tabs not yet in
-  the order in workspace order. For a team: the lead first, never draggable, nothing drops before it (TI R4/R5
-  semantics inside the group). The team-run frame of the workspace view is not drawn here — the whole bar is the team.
-- The same range is used by close-others, close-right, ⌘1–9 and prev/next (`getVisibleTabIds` becomes view-aware).
-- New tabs are still inserted into a workspace (the active tab's workspace), so the workspace view is unaffected.
+- Selecting a group shows its tabs in the top bar and activates its last active tab, else its first; an empty group
+  shows the empty state, as an empty workspace does.
+- Activating a tab any other way (notification, search, a panel click) selects the tab's group.
+- The bar of a **manual group or 「未分組」**: pinned tabs first (as in a workspace), then every tab by `groupRank`.
+- The bar of a **team**: pinned first, then the lead, then the members in the device's member order (`memberOrder`,
+  the same order as the panel and the workspace view's team run), then the plain tabs placed in the team by
+  `groupRank`. Like a workspace's team run, the members stay together: a plain tab dropped among them lands after them,
+  never before the lead. The run frame is not drawn — the whole bar is the team.
+- The same range drives close-others, close-right, ⌘1–9, prev/next and the merge-into-tab targets
+  (`getVisibleTabIds` becomes view-aware; `App.tsx` passes the view).
+- New tabs are still inserted into a workspace (the active tab's workspace), so the workspace view is unaffected; the
+  team tab lifecycle (`startTeamTabLifecycle`) keeps running on workspaces as today.
 
 ### 6.3 Switching views (D3)
 
@@ -180,36 +199,39 @@ team panel's parts:
 - Full form: one card like the lead's (avatar, persona name, title, context %, the last status line), a workbook entry
   where the session has one (it absorbs today's `OwnWorkbookPanel` / `OwnTitleStrip`), and a settings block: the group
   (move to a group, take out, new group), the group's name and colour.
-- The exact layout is fixed in a design pass on a real screen (Opus, the 10-16 rule) before it is built.
+- The layout is fixed in a design pass on a real screen (Opus, the 10-16 rule) and shown to the user before it is built.
 
 ## 8. Retiring the hostconfig `task_groups`
 
 Checked 2026-10-20 (read-only): neither mlab's nor air26's `host_config.db` has a `task_groups` row, and mserv has no
-pdx daemon. So nothing is imported. The SPA stops reading and writing `PUT /api/hostconfig/task-groups` in the storage
-phase; the daemon's route, `task_groups.v1` and `taskgroups.go` are removed in the last phase, together with the NP2
-text and the sync inventory's S19 row ("每台一份" → profile).
+pdx daemon. Nothing is imported. The SPA stops reading and writing `PUT /api/hostconfig/task-groups` in TG-2b; the
+daemon's route, `task_groups.v1` and `taskgroups.go` go in TG-6, with the NP2 text and the sync inventory's S19 row.
 
 ## 9. Phases
 
-Each ≤ 800 lines / ≤ 20 files including tests; stacked where noted.
+Each ≤ 800 lines / ≤ 20 files including tests. All SPA except TG-6.
 
-| Phase | Scope | Notes |
-|---|---|---|
-| TG-0 | Sidebar rows: team-first claim of every tab showing a seat; seat rows without a tab get avatar + persona name; persona name colour; title prefers the tab's title; header outline. | SPA. The first item is the PR in flight (`fix/task-group-team-session-dedupe`). |
-| TG-1 | Daemon: `sectionPattern` admits `taskgroups`; `profiles.taskgroups.v1` in `/api/info`. | Daemon → 1f releases and deploys. |
-| TG-2a | Profile plumbing: `SectionKind`, projection, ordinal, builder, applier, guard, wire ids, `ParkedWorld`, resolve label/count, capability gate. No consumer. | SPA. |
-| TG-2b | `useTaskGroupsStore` on the section (world part, local + synced); actions rewritten on it; cross-host members; root cache; TaskGroupView reads it; hostconfig reads/writes removed. | SPA, after TG-1 is deployed. |
-| TG-3 | Sidebar: header chevron/click/selection, expanded state, per-view memory, + new group, header menu (rename, colour, delete), row drag reorder, placement rules §5. | SPA. |
-| TG-4 | Top bar: view-aware range, group order, lead rule, shortcuts and close range. | SPA. |
-| TG-5 | Personal panel: design pass, then build. | SPA. |
-| TG-6 | Cleanup: daemon `task_groups` route and capability, NP2 text, sync inventory. | Daemon → 1f. |
+| Phase | Scope |
+|---|---|
+| TG-0b | Sidebar rows: seat rows without a tab get avatar + persona name; persona name colour; title prefers the tab's title; header outline. (TG-0a = #3654, merged.) |
+| TG-1a | `group-key.ts`; the `purdex-task-groups` store (wire members) in the settings projection, ordinal 12; guard and integration tests. No consumer. |
+| TG-1b | Tab fields `group` / `groupRank` in the tabs projection, ordinal 5 with the upcast; copy-to-slave and local-only carry tests. No consumer. |
+| TG-2a | Edits and actions on the new store (empty group allowed, cross-host members); root cache (§4.5). |
+| TG-2b | The view reads the new store (no per-host blocks, no `unsafe` rows); drag and row menu across hosts; the SPA's hostconfig path removed. |
+| TG-3a | `useGroupViewStore` (selected group, last tab per group, expanded, last per view); header chevron / click / focus; view-switch memory. |
+| TG-3b | Placement (§5): `groupOfTab`, the creation stamp, the transition stamp, auto-join. |
+| TG-3c | Header menu (rename, colour, delete); + new group. |
+| TG-3d | Row drag in the sidebar (ranks, member order, moves). |
+| TG-4a | View-aware range: `getVisibleTabIds` and every caller (App, shown-hosts, watch area), close range, shortcuts, merge targets. |
+| TG-4b | The top bar in the task-group view (lead first, member run, plain tabs by rank, drag rules); activation selects the group; empty state. |
+| TG-5a / 5b / 5c | Personal panel: design pass (user sees it) / routing and strip / full form and settings. |
+| TG-6 | Daemon cleanup (route, capability, `taskgroups.go`), NP2 text, sync inventory — 1f. |
 
 ## 10. Risks and open points
 
-1. `tabOrder` / `placement` name tab ids; local-only tabs need the per-device split of §4.1 — the applier must not
-   wipe local entries when it applies a remote payload.
-2. One section for all groups means two devices editing groups at once lock the whole section (the same grain as
-   `workspaces`). Accepted.
-3. A host without a daemon id: its members match only on the device that added them (§4.1).
-4. Team member order stays per device (TI); the bar's order of a team group syncs. A drag in the bar updates this
-   device's member order; another device keeps its own panel order until it drags.
+1. Settings-grain conflicts for group edits (§4.3) — accepted.
+2. A host without a daemon id has no stable wire id: its members and team keys match only on the device that wrote them.
+3. Member order stays per device (`memberOrder`, TI); a team's bar order of members can differ between devices. Plain
+   tab ranks sync.
+4. Ranks are numbers between neighbours; when two are too close the group's ranks are renumbered, which writes every
+   tab of the group (possibly several `tabs.<workspace>` sections).

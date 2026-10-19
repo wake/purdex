@@ -1,121 +1,126 @@
-# Task groups as a workspace-level layer — plan (2026-10-20)
+# Task groups as a workspace-level layer — plan r2 (2026-10-20)
 
-Spec: `docs/specs/2026-10-20-task-groups-as-workspaces-spec.md` (§ numbers below are the spec's). Phases are PRs;
-tasks are commits; TDD in every task (the test first, seen red). Test tiers per CLAUDE.md: affected files during
-development; at the PR layer `vitest related` + guards + both `tsc` + eslint on air26 (SPA), the changed packages +
-`make lint` (Go). No full suite before the release.
+Spec: `docs/specs/2026-10-20-task-groups-as-workspaces-spec.md` r2 (§ numbers below are the spec's). Phases are PRs
+(≤ 800 lines / ≤ 20 files with tests); tasks are commits; TDD in every task (the test first, seen red). Test tiers per
+CLAUDE.md: affected files while developing; at the PR layer `vitest related` + guards + locale completeness + both
+`tsc` + eslint on air26. No full suite before the release. Every phase is SPA except TG-6.
 
-## TG-0 — sidebar rows (SPA; two PRs)
+r2 answers the plan review `task-mvfs2clf-c2dr4g`: no new section and no daemon phase (groups ride `settings`, a tab's
+place rides its own tab, §4); one definition of a tab's session (§3); a creation stamp in the tab factory instead of a
+store hook (§5); the team bar keeps the member run (§6.2); the root cache keyed by local host and gated on its own
+endpoint (§4.5); phases split to size.
 
-TG-0a is in flight (`fix/task-group-team-session-dedupe`): `buildGroupView` claims every tab whose session is a live
-seat's (spec §5 rule 1), so a guardian tab no longer lands in 「未分組」.
+## TG-0b — sidebar rows (in flight: `fix/task-group-rows`)
 
-TG-0b (`fix/task-group-rows`), after TG-0a merges:
-1. Seat rows with no tab: `TaskGroupView.renderRow`'s no-tab branch draws the same row as `InlineTab` (avatar, host
-   badge, persona name, label) with a dimmed style instead of the bare label. Test: a seat with `tabId === null` and a
-   persona renders its avatar and name.
-2. Persona name colour: `InlineTab.tsx` name span gets `text-text-secondary` when the row is not active (the row's own
-   hover/active classes still win). `inline-tab-row-classes.ts` is shared with the host-badge preview and is not touched.
-3. Title after the name: for a seat row with a tab, `shownTitle = displayTitle || seatOverride.title`; with no tab, the
-   label. Test both.
-4. Header outline: `TaskGroupHeader` name span `focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active`.
+Seat rows without a tab get avatar + persona name (dimmed); persona name `text-text-secondary`; the title after it is
+the tab's title first; the header name has no UA outline. Brief: `b-taskgroup-rows-subagent.md`.
 
-## TG-1 — daemon (Go; 1f releases and deploys)
+## TG-1a — group key and the group store (no consumer)
 
-1. `internal/module/profiles/validate.go`: `sectionPattern` admits `taskgroups` (exact; `taskgroups.x` stays
-   rejected). Tests in the package's validate tests: accept `taskgroups`; reject `taskgroups.x`, `taskgroup`.
-2. `internal/core/info_handler.go`: capability `profiles.taskgroups.v1` advertised when the profiles module is
-   registered. Test through the real module registration → `/api/info` (the 743 rule).
-3. PR layer: `go test ./internal/module/profiles/ ./internal/core/` + `make lint`.
+1. `lib/task-groups/group-key.ts`: `teamGroupKey(wireHost, teamId)`, `manualGroupKey(id)`, `UNGROUPED`,
+   `parseGroupKey`, and `groupKeyOfTeamView(view, identity)` (local host → wire). Tests: round trips, NUL in ids
+   refused, a host without a daemon id keeps its local id.
+2. `stores/useTaskGroupsStore.ts` rewritten as `purdex-task-groups` (`order`, `groups` with wire members), persisted,
+   `merge` sanitising what arrives (names, colours, duplicate members, limits), plain setters. The old per-host store is
+   renamed `useHostTaskGroupsStore.ts` so the current view keeps working until TG-2b.
+3. `lib/profile/types.ts` `SettingsStorageKey` + the key; `projections.ts` `settingsPaths('purdex-task-groups',
+   ['order', 'groups'])`, settings ordinal 12 with its comment; the collector's and `apply-to-stores`' store maps; guard
+   snapshot `projections.test.ts`.
+4. Integration test in the style of `tabs-local-only.integration.test.ts`: a group created on device A reaches B's
+   store through the real collector and applier; members' hosts are not translated; an ordinal-11 payload leaves the
+   store alone; a slave on screen sees and edits the master's groups.
 
-## TG-2a — profile plumbing (SPA; no consumer)
+## TG-1b — the tab fields (no consumer)
 
-1. Store shape: `stores/useTaskGroupsStore.ts` is rewritten as the world's groups:
-   `{ payload: TaskGroupsPayload, local: { tabOrder, placement } }` (local = entries for local-only tabs, §4.1), persisted
-   (localStorage, like workspaces), with plain setters only (no actions yet). The old `byHost` state goes; nothing reads
-   it after TG-2b, and until then TG-2a keeps the old store file under a new name (`useHostTaskGroupsStore.ts`) so the
-   current view keeps working. Test: persistence round trip; the local split.
-2. `lib/profile/types.ts`: `SectionKind` + `'taskgroups'`; `ProfileSectionKey` + the literal.
-3. `lib/profile/projections.ts`: `PROJECTIONS.taskgroups` (order, groups.*.{name,color,members,createdAt},
-   tabOrder.*, placement.*), `SECTION_SCHEMA_ORDINAL.taskgroups = 1`, `sectionKind()`, `shapeTable()`, the
-   `@wire:host-id=d1` marker. Guard test `projections.test.ts` snapshot updated in the same commit.
-4. `lib/profile/sections.ts`: `buildTaskGroupsSection(world, identity)` — members' hosts and team keys in `tabOrder` /
-   `placement` values to wire ids; entries naming tabs outside the synced tab set left out. Tests: wire translation,
-   local-only split, dangling entries dropped.
-5. `lib/profile/applier.ts` + `apply-to-stores.ts`: `applyTaskGroups(payload, resolver, localTabs)` — wire → local,
-   local entries kept, unknown hosts kept as-is (matched later), `isWellFormedSection` case. Tests: round trip with
-   `buildTaskGroupsSection`; a remote apply keeps local-only entries.
-6. `lib/profile/collector.ts` / `master-world.ts` / `useLocalProfilesStore.ts`: the section in `buildSection`,
-   `scheduleWholeWorld`, `primeAll`, `scheduleDiff`, `scheduleHostBearing`; `ParkedWorld` and `isParkedWorld` gain
-   `taskgroups`; switching active profile parks and restores it; 「複製為 slave」 copies it. Tests: park/restore; a slave
-   edit never reaches the master's section.
-7. `lib/profile/executor.ts`: `Shapes` gains the kind; the section is built and pushed only when the SOT host's
-   `/api/info` has `profiles.taskgroups.v1` (selector in `useNexHostStore`); without it the section stays local and
-   is never `failed`. Integration test with the fake daemon: no capability → no PUT; capability → PUT with ordinal 1.
-8. Conflict UI: `sync-view.ts` (`SectionView`, `FIXED_ORDER`), `components/settings/profile/resolve-counts.ts`
-   (`countPayload`: groups), locales `settings.profile.resolve.unit.taskgroups` (zh-TW + en). Test: the resolve row
-   renders the unit and count.
+1. `types/tab.ts`: `Tab.group?: string`, `Tab.groupRank?: number`; `useTabStore` setters `setTabGroup`,
+   `setTabGroupRank` (no-op on an unknown tab).
+2. `projections.ts`: `tabs.*.group`, `tabs.*.groupRank`; tabs ordinal 5; `applier.ts` upcast — an ordinal-4 payload
+   keeps the local values of both fields. `sections.ts` / `applier.ts` tests for the two fields.
+3. Carry tests: 「複製為 slave」 (`switch-active.ts` `copyWorld`) keeps both fields on the copied tabs; an interface tab
+   (local-only) keeps them across a remote apply; a world switch parks and restores them (they are on the tab).
 
-## TG-2b — the store goes live (SPA; after TG-1 is deployed)
+## TG-2a — edits and actions on the new store; root cache
 
-1. `lib/task-groups/edits.ts` on the new payload: `newGroup` (no root required — an empty group is allowed), rename,
-   colour, delete, add/remove/move member `{host, root}` (a (host, root) in at most one group), limits 32 / 64.
-   Pure, with tests (including cross-host members).
-2. `lib/task-groups/actions.ts`: the same verbs on the store (writes are local, the collector syncs); root still
-   required to add a member (`no-root`); `clearTaskGroup` keeps its "nothing alive" check. Tests.
-3. Root cache: `hooks/useSessionRoots.ts` persists `(wire host, session id) → root` device-locally and reads it before
-   asking the daemon. Test: an offline host's tab keeps its group.
-4. `lib/task-groups/view-model.ts` + `TaskGroupView.tsx`: manual groups from the store (no per-host blocks, no
-   `unsafe` section); `drag.ts` `acceptsDrag` drops the same-host rule; `row-menu.ts` lists every group. Tests updated.
-5. Remove the SPA's hostconfig path: `lib/task-groups/api.ts`, `loader.ts`, `useHostTaskGroupsStore.ts`, the
-   `taskgroups.invalid/unsafe*` strings that only they used. Test: nothing imports them (guard).
-6. The task-group view shows the section's lock like `WorkspaceConflict` (alert on the view's header row → the
-   resolve row). Test.
+1. `lib/task-groups/edits.ts` on the new state: `newGroup` without a root (empty allowed), `renameGroup`,
+   `setGroupColor`, `deleteGroup`, `addMember` / `removeMember` / `moveMember` with `{host, root}` (wire), one group per
+   member, limits. Pure tests, including members of two hosts in one group.
+2. `lib/task-groups/actions.ts`: the same verbs on the store; adding a member resolves the session's root from the
+   cache or the daemon (`no-root` otherwise) and its host's wire id; `clearTaskGroup` keeps its "nothing alive" check.
+3. Root cache `lib/task-groups/root-cache.ts` (device-local persisted, `(local host, session id) → root`, forget with the
+   host) and `hooks/useSessionRoots.ts` on it: gate `team.relay_quota.v1`; a plain `rootOf(hostId, sessionId)` reader
+   for non-React code. Tests: an offline host's root still answers; a forgotten host's entries go.
 
-## TG-3 — sidebar as a workspace-level layer (SPA)
+## TG-2b — the view on the new store; hostconfig path out
 
-1. `lib/task-groups/placement.ts` (pure): `groupOfTab(tab, ctx)` implementing §5's four rules; `placementWrites`
-   for the three write moments. Tests per rule and per write moment, including the watcher-area exclusion.
-2. Device-local store `stores/useGroupViewStore.ts`: `selectedGroup`, `lastActiveTab[groupKey]`, `expanded[groupKey]`
+1. `view-model.ts` / `TaskGroupView.tsx`: manual groups from the new store in `order`, membership by (wire host, root);
+   no per-host blocks, no `unsafe` rows; teams and 「未分組」 unchanged. Tests updated.
+2. `drag.ts` drops the same-host rule; `row-menu.ts` lists every group. Tests.
+3. Remove `lib/task-groups/api.ts`, `loader.ts`, `useHostTaskGroupsStore.ts`, their strings and the lifecycle hook in
+   `main.tsx`; a guard test that nothing imports them.
+
+## TG-3a — selection, expansion, view memory
+
+1. `stores/useGroupViewStore.ts` (device-local): `selectedGroup`, `lastActiveTab[groupKey]`, `expanded[groupKey]`
    (reconciled against live keys, like `reconcileWorkspaceExpanded`), `lastByView {workspace, groups}`. Tests.
-3. Placement wiring: plain tabs placed on open (tab-store add hook), session tabs placed when they stop being session
-   tabs, auto-join when a placed tab gains a root (§5). Tests with the stores.
-4. `TaskGroupHeader` / `TeamGroupHeader`: chevron replaces the count, header click selects / toggles (WorkspaceRow
-   rule), chevron toggles only, focus-visible ring only, empty manual group has no chevron and keeps 「清除」. Tests.
-5. Header context menu for manual groups: rename, colour (team palette), 「刪除任務編組」 with a confirm when it holds
-   tabs. Tests.
-6. Row drag: reorder within a group writes `tabOrder` (lead fixed; a member move also writes this device's
-   `memberOrder`); moving between manual groups / 「未分組」 per §6.1; teams take no drop. Tests on the drag decisions
-   (pure) and one component test.
-7. Bottom nav + in the task-group view: 「新增任務編組」 creates 「任務編組 N」, selects it, starts the rename. Test.
-8. View switch memory (§6.3) in `HomeRow` toggle: restore last workspace / group and its last tab; fall back to the
-   current tab's. Tests both directions and the fall-back.
+2. `TaskGroupHeader` / `TeamGroupHeader`: chevron instead of the count, header click selects / toggles (the
+   `WorkspaceRow` rule), chevron toggles only, focus-visible ring only, empty manual group: no chevron, 「清除」 kept.
+   Tests.
+3. `HomeRow` view toggle restores the last workspace / group and its last tab, falling back to the current tab's.
+   Tests both ways and the fall-back.
 
-## TG-4 — the top bar (SPA)
+## TG-3b — placement (§5)
 
-1. `getVisibleTabIds` takes the view: in the task-group view, the selected group's tabs — pinned first, then
-   `tabOrder[groupKey]` (+ local entries), then the rest in workspace order; a team's lead first. Tests.
-2. `TabBar` in the task-group view: the lead is not draggable and nothing drops before it; no team-run frame;
-   `handleReorderTabs` writes `tabOrder` (and `memberOrder` for team members) instead of the workspace order. Tests.
-3. Range users: close-others / close-right (`features/workspace/hooks.ts`), `useShortcuts` (⌘1–9, prev/next),
-   `TabContextMenu` — all through the view-aware range. Tests for one of each.
-4. Activating a tab selects its group (`handleSelectTab` in the task-group view); an empty group shows the empty
-   state. Tests.
+1. `lib/task-groups/placement.ts` (pure): `groupOfTab(tab, ctx)` (rules 1–4) and `transitionWrite(prev, next)`.
+   Tests per rule; the watcher-area exclusion; an unknown root never writes 「未分組」.
+2. Creation stamp in the tab factory: find the one function every user-open path goes through (`addTab` or its
+   wrapper) and set `group` there from `useGroupViewStore` / the active tab's group; prove apply, rehydrate, restore and
+   world switch do not pass through it (a test per path that a tab arriving that way gets no stamp).
+3. A subscriber for the transition stamp and auto-join (tab store + roots + team views + group store), started next to
+   `startTeamTabLifecycle`. Tests with the real stores: a session ends → keeps its group; a placed tab gains a root →
+   joins.
 
-## TG-5 — personal panel (SPA)
+## TG-3c — header menu and +
 
-1. Design pass on a real screen (Opus; style taken from the team panel as shipped in 761): strip, one-line, full form,
-   settings block. Reviewed by the user before building.
-2. Build per the design: `panel-view.ts` gains the solo-agent case (absorbing `OwnWorkbookPanel` / `OwnTitleStrip`),
-   the group editor reuses TG-2b/TG-3 actions. Tab-switch survival test (the tab-hosted checklist).
+1. Manual group header context menu: rename, colour (team palette), 「刪除任務編組」 (confirm when it holds tabs;
+   members dropped, placements cleared). Tests.
+2. `BottomNav` in the task-group view: 「新增任務編組」 creates 「任務編組 N」, selects it, starts the rename;
+   the workspace view's + untouched (both `ActivityBarWide` and `ActivityBarNarrow`). Tests.
 
-## TG-6 — cleanup (daemon + SPA; 1f)
+## TG-3d — row drag in the sidebar
 
-1. Remove `PUT /api/hostconfig/task-groups`, the `task_groups` key handling, `task_groups.v1`.
-2. NP2 L9 / §7 / §12 text, `sync-inventory.html` S19.
+1. Drag decisions (pure, `drag.ts`): reorder within a group (rank between neighbours, renumber when too close), the
+   team rules (lead fixed, members among members → `memberOrder`, plain tabs after the members), moves to a manual group
+   / 「未分組」, no drop on teams. Tests.
+2. `TaskGroupView` wiring with dnd-kit like `InlineTabList`; one component test.
+
+## TG-4a — the view-aware range
+
+1. `getVisibleTabIds` takes the view and, in the task-group view, returns the selected group's range (§6.2 order).
+   Tests.
+2. Every caller: `App.tsx` (TabBar and `useTabWorkspaceActions(displayTabs)`: close-others / close-right slices),
+   `useShortcuts` (⌘1–9, prev/next, close), the merge-into-tab targets, shown-hosts and watch-area callers. A test for
+   each kind of caller.
+
+## TG-4b — the top bar in the task-group view
+
+1. `TabBar` group mode: lead first and not draggable, the member run kept together (no frame), plain tabs after it;
+   `handleReorderTabs` writes `groupRank` / `memberOrder` instead of the workspace order. Tests.
+2. Activating a tab selects its group (`handleSelectTab`); selecting a group activates its last tab; an empty group
+   shows the empty state. Tests.
+
+## TG-5 — personal panel
+
+- 5a: design pass on a real screen (Opus), style from the shipped team panel; shown to the user.
+- 5b: `panel-view.ts` solo-agent case, title strip and one-line form (absorbing `OwnTitleStrip`).
+- 5c: full form and settings block (group move / out / new, name, colour) on TG-2a actions; tab-switch survival test.
+
+## TG-6 — cleanup (1f)
+
+Daemon: `PUT /api/hostconfig/task-groups`, the `task_groups` key, `task_groups.v1`, `taskgroups.go`. Docs: NP2 L9 / §7 /
+§12, `sync-inventory.html` S19.
 
 ## Order and ownership
 
-TG-0b and TG-1 can run at once. TG-2a needs nothing; TG-2b needs TG-1 deployed on every host. TG-3 needs TG-2b;
-TG-4 needs TG-3. TG-5's design can start any time; its build needs TG-3. One Sonnet member takes TG-1 → TG-4 in
-order (stacked where the next starts before the previous merges); small fixes stay with subagents.
+TG-0b now (subagent). TG-1a → TG-1b → TG-2a → TG-2b → TG-3a → 3b → 3c → 3d → TG-4a → 4b in order, stacked where the
+next starts before the previous merges — one Sonnet member. TG-5a (design) by the lead any time after TG-2a; 5b/5c after
+TG-3a. TG-6 after TG-4b ships.
