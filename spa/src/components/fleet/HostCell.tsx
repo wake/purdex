@@ -146,7 +146,7 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
       onFocus={openCard}
       onBlur={closeCard}
       onClick={() => { closeCard(); onOpen() }}
-      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
+      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
     >
       <span className="relative inline-flex shrink-0">
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
@@ -154,7 +154,7 @@ export function HostCell({ view, pool = null, look, variant, isActive, waitingPr
         </span>
         {/* wwd does not answer (or its numbers stopped) but the fleet still reads the host over SSH: the readings stay, the break shows (spec §10) */}
         {pool?.state === 'fallback' && (
-          <LinkBreak data-testid={`wwd-link-${view.id}`} weight="bold" size={8} aria-hidden className="pointer-events-none absolute -bottom-px -left-px rounded-full text-status-warning" style={{ boxShadow: '0 0 0 1px var(--surface-tertiary)' }} />
+          <LinkBreak data-testid={`wwd-link-${view.id}`} weight="bold" size={8} aria-hidden className="pointer-events-none absolute -bottom-px -left-px rounded-full text-status-warning" style={{ boxShadow: '0 0 0 1px var(--cell-bg)' }} />
         )}
         {running && <span data-testid={`worker-running-${view.id}`} className="pointer-events-none absolute -bottom-px -right-px size-[6px] rounded-full bg-status-success animate-breathe" />}
         {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={`pointer-events-none ${queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)}`} testId={`queue-badge-${view.id}`} />}

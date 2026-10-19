@@ -94,6 +94,19 @@ describe('HostCell on the pool — states', () => {
     expect(linkMark()).toBeNull()
   })
 
+  // 88's review: the ring around the mark is the cell's own background (selected, hover, or the bar's), read from one variable on the tile
+  it('the ring of the mark reads the cell background variable; the tile sets it per state (bar / hover / selected)', () => {
+    show(cell(null))
+    expect(linkMark()!.getAttribute('style')).toContain('var(--cell-bg)')
+    expect(tile().className).toContain('[--cell-bg:var(--surface-tertiary)]')
+    expect(tile().className).toContain('hover:[--cell-bg:var(--surface-hover)]')
+    cleanup()
+    const m = cell(null)
+    render(<HostCell view={m.view} pool={m.pool} look={{ colors: COLORS, icon: 'Desktop' }} variant="wide" isActive waitingPrimary={false} primaryElsewhere={false} onOpen={vi.fn()} />)
+    expect(tile().className).toContain('[--cell-bg:var(--surface-active)]')
+    expect(tile().className).not.toContain('hover:[--cell-bg')
+  })
+
   it('the mark does not take the bottom right (the running dot) or the top right (the queue count)', () => {
     show(cell(null))
     expect(linkMark()!.getAttribute('class')).not.toContain('-right-px')
