@@ -168,6 +168,15 @@ func TestLoadOf(t *testing.T) {
 	assert.InDelta(t, 30, l.Score, 0.01)
 	f.Mem.TotalMB = 0 // no total: memory is not judged
 	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
+	// two valid, finite readings must not add up to +Inf (JSON cannot carry it, and one peer would fail the whole answer)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(1e308), f64(1e308)
+	l = loadOf(f)
+	assert.Equal(t, wire.LoadDriverPaging, l.Driver)
+	assert.Equal(t, 100.0, l.Score)
+	_, err := json.Marshal(l)
+	assert.NoError(t, err)
+	f.Mem.PageOutRate, f.Mem.SwapOutRate = f64(-5), f64(-1e308) // negative: it counts for nothing
+	assert.Equal(t, wire.LoadDriverLevel, loadOf(f).Driver)
 }
 
 // wwd not running: 503 wwd_unavailable. wwd answering garbage: 502 wwd_bad_response. wwd answering an error: 502 wwd_error.
