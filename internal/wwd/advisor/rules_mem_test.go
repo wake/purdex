@@ -169,6 +169,40 @@ func TestPressureHeld_OnlyWholeMinutesStartIt(t *testing.T) {
 	}
 }
 
+// A raised alert is kept up by whole minutes, not by the open one: a minute that lost its samples proves nothing about the pressure, and
+// the open minute only ends it (a normal second in it) and never prolongs it.
+func TestPressureHeld_AMinuteWithoutSamplesDoesNotKeepItUp(t *testing.T) {
+	raised := func(recs ...wire.Facts) Input {
+		in := minutesInput(t0.Add(time.Duration(len(recs)-1)*time.Minute+40*time.Second), recs...)
+		in.Raised = func(string) bool { return true }
+		return in
+	}
+	var recs []wire.Facts
+	for i := 0; i < 5; i++ {
+		recs = append(recs, minute(i, wire.ZoneWarning, 2400))
+	}
+	// the open minute: 5 s in, one warning sample; no normal second
+	open := minute(5, wire.ZoneWarning, 2400)
+	open.Stats.SampledS, open.Stats.WarningS = 5, 5
+	if v, _ := (PressureHeld{}).Eval(raised(append(recs, open)...)); !v.Holds {
+		t.Fatal("the last whole minute was high and the open one is not normal: it should stand")
+	}
+	// a normal second in the open minute ends it at once
+	open.Stats.NormalS, open.Stats.SampledS = 5, 10
+	if v, _ := (PressureHeld{}).Eval(raised(append(recs, open)...)); v.Holds {
+		t.Fatal("a normal second in the open minute did not end it")
+	}
+	// the minute before lost its samples and no whole minute is recent: nothing keeps it up
+	lost := minute(5, wire.ZoneWarning, 2400)
+	lost.Stats.SampledS, lost.Stats.WarningS = 5, 5
+	old := recs[:3] // whole minutes at 0..2, then nothing whole until the lost one
+	in := minutesInput(t0.Add(5*time.Minute+30*time.Second), append(old, lost)...)
+	in.Raised = func(string) bool { return true }
+	if v, _ := (PressureHeld{}).Eval(in); v.Holds {
+		t.Fatal("a minute that lost its samples kept the alert up")
+	}
+}
+
 // ---- thrash ----
 
 func thrashSample(at time.Time, compressorMB int, rate float64) wire.Facts {
@@ -253,20 +287,31 @@ func TestThrash_NoDecompressRateIsNotThrash(t *testing.T) {
 	}
 }
 
-// Without 5 s samples (a replay from the minute rollups) the minute's peak rate stands in for the minute: an upper bound, documented.
-func TestThrash_FromMinutesWhenThereAreNoSamples(t *testing.T) {
-	m := func(i int, mb int, rate float64) wire.Facts {
-		f := minute(i, wire.ZoneNormal, 0)
-		f.Mem.CompressorMB, f.Mem.DecompressRate = ip(mb), fp(rate)
-		return f
+// Without the 5 s samples (a replay from the minute rollups) thrash is unjudged, never an estimate: a rollup keeps each field's own peak, so
+// a compressor peak and a decompress peak that never shared a sample would read as thrashing, and it says nothing of how long.
+func TestThrash_WithoutSamplesIsUnjudged(t *testing.T) {
+	f := minute(0, wire.ZoneNormal, 0)
+	f.Mem.CompressorMB, f.Mem.DecompressRate = ip(4300), fp(95000)
+	if _, err := (Thrash{}).Eval(minutesInput(t0.Add(30*time.Second), f)); err == nil {
+		t.Fatal("a minute rollup was taken for a minute of thrashing")
 	}
-	in := minutesInput(t0.Add(30*time.Second), m(0, 4300, 95000))
-	if v, _ := (Thrash{}).Eval(in); !v.Holds {
-		t.Fatal("a minute over both limits should hold")
+}
+
+// On macOS a sample with no decompress_rate means the writer gate is shut (the field is a proto 2 one): that is unjudged, which leaves a
+// raised alert as it was, not "not thrashing", which would clear it. On Linux the field is never read, and the rule does not apply.
+func TestThrash_NoDecompressRateIsUnjudgedOnMacAndNotApplicableOnLinux(t *testing.T) {
+	recs := every5s(t0, 13, 4300, 95000)
+	for i := range recs {
+		recs[i].Mem.DecompressRate = nil
 	}
-	in = minutesInput(t0.Add(30*time.Second), m(0, 4300, 1000))
-	if v, _ := (Thrash{}).Eval(in); v.Holds {
-		t.Fatal("a slow minute held")
+	in := samplesInput(t0.Add(60*time.Second), recs...)
+	in.Facts.Platform = "darwin"
+	if _, err := (Thrash{}).Eval(in); err == nil {
+		t.Fatal("a macOS sample without decompress_rate was read as not thrashing")
+	}
+	in.Facts.Platform = "linux"
+	if v, err := (Thrash{}).Eval(in); err != nil || v.Holds {
+		t.Fatalf("linux: %+v %v", v, err)
 	}
 }
 
@@ -369,6 +414,28 @@ func TestResidentGrowth_KnownResidentSuppression(t *testing.T) {
 	f.Mem.AvailableMB = 9000
 	if v, _ := rule.Eval(Input{Now: t0, Facts: f}); !v.Holds {
 		t.Fatal("suppressed without being able to tell that swap did not grow")
+	}
+}
+
+// The suppression needs history reaching back the whole window: a baseline from a few minutes ago (a fresh start, a hole) shows nothing
+// about the ten minutes, so the known resident is reported.
+func TestResidentGrowth_KnownResidentNeedsTheWholeWindowOfHistory(t *testing.T) {
+	rule := ResidentGrowth{Known: []string{"OrbStack Helper"}}
+	f := procFacts(resident("OrbStack Helper", 5000, wire.OwnerResident))
+	f.Mem.AvailableMB = 9000
+	baseline := func(age time.Duration) Input {
+		b := minute(0, wire.ZoneNormal, 900)
+		b.At = t0.Add(-age)
+		return Input{Now: t0, Facts: f, Minutes: func(time.Time) []wire.Facts { return []wire.Facts{b} }}
+	}
+	if v, _ := rule.Eval(baseline(suppressWindow)); v.Holds {
+		t.Fatal("a baseline from the start of the window did not suppress")
+	}
+	if v, _ := rule.Eval(baseline(suppressWindow - time.Minute)); v.Holds {
+		t.Fatal("a baseline within the slack did not suppress")
+	}
+	if v, _ := rule.Eval(baseline(3 * time.Minute)); !v.Holds {
+		t.Fatal("a baseline from 3 minutes ago suppressed a 10-minute question")
 	}
 }
 

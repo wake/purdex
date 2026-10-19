@@ -55,7 +55,7 @@ func (PressureHeld) Eval(in Input) (Verdict, error) {
 	if in.Now.Sub(last.At) > 90*time.Second {
 		return v, nil // the newest minute is not now's
 	}
-	if in.Raised != nil && in.Raised(v.Key) && minuteHigh(last) {
+	if in.Raised != nil && in.Raised(v.Key) && pressureStands(recs, in.Now) {
 		v.Holds, v.Detail = true, "記憶體壓力持續在 warning 以上"
 		return v, nil
 	}
@@ -81,6 +81,23 @@ func (PressureHeld) Eval(in Input) (Verdict, error) {
 	return v, nil
 }
 
+// pressureStands says whether a raised "pressure held" is still true: the newest whole minute (within 150 s: it ended less than a minute
+// and a half ago) was spent at warning or worse, and the minute being filled has not shown a normal second. A minute that lost its samples
+// proves nothing, so it cannot keep the alert up: with no recent whole minute the answer is no.
+func pressureStands(recs []wire.Facts, now time.Time) bool {
+	for i := len(recs) - 1; i >= 0; i-- {
+		if !minuteFull(recs[i]) {
+			continue
+		}
+		if now.Sub(recs[i].At) > 150*time.Second || !minuteHigh(recs[i]) {
+			return false
+		}
+		newest := recs[len(recs)-1]
+		return i == len(recs)-1 || newest.Stats == nil || newest.Stats.NormalS == 0
+	}
+	return false
+}
+
 // The thresholds of "thrash" (spec §13.3): the compressor over 4 GiB and decompressing over 80 000 pages/s, for 60 s.
 const (
 	thrashCompressorMB = 4096
@@ -92,9 +109,11 @@ const (
 	thrashMaxGap = 2 * wire.SampleIntervalS * time.Second
 )
 
-// Thrash is "thrash" (digest): macOS, compressor > 4 GiB and decompress_rate > 80 000/s for ≥ 60 s. It judges the last 60 s of 5 s samples
-// when it has them (Input.Recent); a replay from the minute rollups has only each minute's peak rate, and judges the newest minute by it,
-// an upper bound. Where decompress_rate is not read (Linux, a record from before the proto 2 writers) the rule does not apply.
+// Thrash is "thrash" (digest): macOS, compressor > 4 GiB and decompress_rate > 80 000/s for ≥ 60 s, judged on the last 60 s of 5 s samples
+// (Input.Recent). It cannot be judged from the minute rollups, which keep each field's own peak (the two peaks need not share a sample) and
+// say nothing of how long: without the 5 s samples (a replay) it is unjudged, never an estimate. decompress_rate is a proto 2 field, written
+// only while the writer gate is open (spec §13.1); on macOS a sample without it means the gate is shut, which is unjudged too (the alert is
+// left as it was), and on Linux, where it is never read, the rule does not apply.
 type Thrash struct{}
 
 func (Thrash) Kind() wire.AlertKind { return wire.AlertThrash }
@@ -105,38 +124,33 @@ func thrashing(m wire.Mem) bool {
 
 func (Thrash) Eval(in Input) (Verdict, error) {
 	v := Verdict{Key: "thrash", Level: wire.AlertDigest}
-	if in.Recent == nil && in.Minutes == nil {
-		return Verdict{}, errors.New("no history is available")
+	if in.Recent == nil {
+		return Verdict{}, errors.New("thrash needs the 5 s samples; the minute rollups cannot show a sustained minute")
 	}
-	if in.Recent != nil {
-		recs := in.Recent(in.Now.Add(-thrashSpan))
-		if len(recs) == 0 || recs[len(recs)-1].At.Sub(recs[0].At) < thrashSpan-thrashSpanSlack {
+	recs := in.Recent(in.Now.Add(-thrashSpan))
+	if len(recs) == 0 || recs[len(recs)-1].At.Sub(recs[0].At) < thrashSpan-thrashSpanSlack {
+		return v, nil
+	}
+	for i, f := range recs {
+		if in.Facts.Platform == "darwin" && f.Mem.DecompressRate == nil {
+			return Verdict{}, errors.New("decompress_rate is not recorded (the proto 2 writer gate is shut)")
+		}
+		// every sample, and no hole between them: two high samples a minute apart (the daemon paused, the clock jumped) are not a minute
+		if !thrashing(f.Mem) || (i > 0 && f.At.Sub(recs[i-1].At) > thrashMaxGap) {
 			return v, nil
 		}
-		for i, f := range recs {
-			// every sample, and no hole between them: two high samples a minute apart (the daemon paused, the clock jumped) are not a minute
-			if !thrashing(f.Mem) || (i > 0 && f.At.Sub(recs[i-1].At) > thrashMaxGap) {
-				return v, nil
-			}
-		}
-		v.Holds = true
-		v.Detail = fmt.Sprintf("compressor %d MB，每秒解壓 %.0f 頁，已 %d 秒", *recs[len(recs)-1].Mem.CompressorMB, *recs[len(recs)-1].Mem.DecompressRate, int(thrashSpan.Seconds()))
-		return v, nil
 	}
-	recs := in.Minutes(in.Now.Add(-2 * time.Minute))
-	if len(recs) == 0 {
-		return v, nil
-	}
-	last := recs[len(recs)-1]
-	if in.Now.Sub(last.At) <= 90*time.Second && thrashing(last.Mem) {
-		v.Holds = true
-		v.Detail = fmt.Sprintf("compressor %d MB，每秒解壓最高 %.0f 頁", *last.Mem.CompressorMB, *last.Mem.DecompressRate)
-	}
+	v.Holds = true
+	v.Detail = fmt.Sprintf("compressor %d MB，每秒解壓 %.0f 頁，已 %d 秒", *recs[len(recs)-1].Mem.CompressorMB, *recs[len(recs)-1].Mem.DecompressRate, int(thrashSpan.Seconds()))
 	return v, nil
 }
 
 // suppressWindow is how far back "swap did not grow" looks for a known resident's noise suppression.
 const suppressWindow = 10 * time.Minute
+
+// suppressSlack is how much younger than suppressWindow the oldest reading may be and still stand for the whole window (minutes are 1 min
+// apart and the newest is still being filled).
+const suppressSlack = 90 * time.Second
 
 // ResidentGrowth is "resident growth" (digest): a single system or resident process, by its own footprint (never a sum over a group, the
 // simulator's processes excluded), ≥ max(4 GB, 25 % of RAM). A process named in Known is not reported while the host has ≥ 50 % memory
@@ -185,6 +199,9 @@ func (ResidentGrowth) suppressed(in Input) bool {
 	}
 	for _, f := range in.Minutes(in.Now.Add(-suppressWindow)) {
 		if f.Mem.SwapUsedMB != nil {
+			if f.At.After(in.Now.Add(-suppressWindow + suppressSlack)) {
+				return false // the history does not reach back far enough (a fresh start, a hole): nothing shows the swap did not grow
+			}
 			return *m.SwapUsedMB <= *f.Mem.SwapUsedMB // the oldest reading in the window
 		}
 	}
