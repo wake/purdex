@@ -94,6 +94,10 @@ func addCase(s *wire.Summary, c junitCase, root string, passed *passedSet, suite
 	if p == nil {
 		p = c.Error
 	}
+	idFile := ""
+	if c.File != "" {
+		idFile = rel(root, c.File)
+	}
 	switch {
 	case p != nil:
 		s.Failed++
@@ -109,18 +113,16 @@ func addCase(s *wire.Summary, c junitCase, root string, passed *passedSet, suite
 		if file == "" {
 			file = c.Classname
 		}
+		passed.notPassed(suite, idFile, c.Classname, c.Name)
 		addFailure(s, wire.Failure{Name: name, File: rel(root, file), Message: msg})
 	case c.Skipped != nil:
 		s.Skipped++
+		passed.notPassed(suite, idFile, c.Classname, c.Name)
 	default:
 		s.Passed++
-		file := ""
-		if c.File != "" {
-			file = rel(root, c.File)
-		}
-		if c.Name == "" || strings.HasPrefix(file, outside) {
+		if c.Name == "" || strings.HasPrefix(idFile, outside) {
 			passed.taint()
 		}
-		passed.add(suite, file, c.Classname, c.Name)
+		passed.add(suite, idFile, c.Classname, c.Name)
 	}
 }

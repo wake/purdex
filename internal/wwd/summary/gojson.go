@@ -81,10 +81,12 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 			delete(output, k)
 			if ev.Test != "" {
 				s.Skipped++
+				passed.notPassed(ev.Package, ev.Test)
 			}
 		case "fail":
 			if ev.Test != "" {
 				s.Failed++
+				passed.notPassed(ev.Package, ev.Test)
 				failedTests[ev.Package] = true
 				if len(failedOrder) < maxFailures {
 					failedOrder = append(failedOrder, k)

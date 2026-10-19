@@ -39,13 +39,13 @@ func parseVitest(in Input) (wire.Summary, error) {
 		file := rel(in.Root, suite.Name)
 		suiteFailed := false
 		for _, a := range suite.AssertionResults {
+			name := a.FullName
+			if name == "" {
+				name = a.Title
+			}
 			switch a.Status {
 			case "passed":
 				s.Passed++
-				name := a.FullName
-				if name == "" {
-					name = a.Title
-				}
 				if strings.HasPrefix(file, outside) { // rel folded the directory away: two files of that name would be one
 					passed.taint()
 				}
@@ -53,13 +53,11 @@ func parseVitest(in Input) (wire.Summary, error) {
 			case "failed":
 				s.Failed++
 				suiteFailed = true
-				name := a.FullName
-				if name == "" {
-					name = a.Title
-				}
+				passed.notPassed(file, name)
 				addFailure(&s, wire.Failure{Name: name, File: file, Message: strings.Join(a.FailureMessages, "\n")})
 			case "pending", "skipped", "todo", "disabled":
 				s.Skipped++
+				passed.notPassed(file, name)
 			default:
 				// schema drift or a damaged report: counting it as skipped would look trustworthy and be wrong
 				if unknown == nil {
