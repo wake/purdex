@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { holdsOf, loadRecentClocks, parseClock, pauseName, PAUSE_HOURS, RECENT_MAX, rememberClock, saveRecentClocks, untilClock, untilInHours } from './pause'
 
 // Local time throughout: the end time of a custom clock is the next time the wall clock reads it.
@@ -25,11 +25,10 @@ describe('the end time of a pause', () => {
 })
 
 describe('a clock time where the clocks change (DST)', () => {
-  const zone = process.env.TZ
-  afterEach(() => { if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone })
+  afterEach(() => { vi.unstubAllEnvs() })
 
   it('clocks turned back: between the two readings of 01:50 it ends at the one still ahead, not a day later', () => {
-    process.env.TZ = 'America/New_York'
+    vi.stubEnv('TZ', 'America/New_York')
     const secondPass = Date.parse('2026-11-01T06:45:00Z') // 01:45 EST, the second time that hour; the first 01:50 (EDT) is already past
     expect(untilClock(secondPass, '01:50')).toBe(secondPass + 5 * 60_000)
     const firstPass = Date.parse('2026-11-01T05:45:00Z') // 01:45 EDT, the first time
@@ -37,7 +36,7 @@ describe('a clock time where the clocks change (DST)', () => {
   })
 
   it('clocks turned forward: a reading that does not exist (02:30) ends at the next one that does', () => {
-    process.env.TZ = 'America/New_York'
+    vi.stubEnv('TZ', 'America/New_York')
     const before = Date.parse('2026-03-08T06:00:00Z') // 01:00 EST on the day 02:00 jumps to 03:00
     expect(untilClock(before, '02:30')).toBe(new Date(2026, 2, 9, 2, 30, 0, 0).getTime())
   })
