@@ -12,6 +12,7 @@ func (d *Daemon) factsRoutes(mux *http.ServeMux, peer bool) {
 	}
 	mux.HandleFunc("GET /v1/facts", d.handleFacts)
 	mux.HandleFunc("GET /v1/facts/history", d.handleFactsHistory(peer))
+	mux.HandleFunc("GET /v1/facts/series", d.handleFactsSeries(peer))
 }
 
 func (d *Daemon) handleFacts(w http.ResponseWriter, r *http.Request) {
@@ -32,21 +33,50 @@ func (d *Daemon) handleFactsHistory(peer bool) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if !peer {
-			target, local, status := d.forwardTarget(r)
-			switch {
-			case status != 0:
-				writeJSON(w, status, map[string]string{"error": "unknown host", "host": r.URL.Query().Get("host")})
-				return
-			case !local:
-				d.forwardGET(w, r, target)
-				return
-			}
+		if d.forwardedOrRefused(w, r, peer) {
+			return
 		}
 		recs := d.opts.Sampler.History(q.Since, q.Step)
 		if recs == nil {
 			recs = []wire.Facts{}
 		}
 		writeJSON(w, http.StatusOK, wire.FactsHistoryResponse{Step: q.Step, Records: recs})
+	}
+}
+
+// forwardedOrRefused handles ?host= on the socket (peer false): another host of the pool is asked and its answer passed on, an
+// unknown one is a 404. It reports whether the request is done; false means it is about this host.
+func (d *Daemon) forwardedOrRefused(w http.ResponseWriter, r *http.Request, peer bool) bool {
+	if peer {
+		return false
+	}
+	target, local, status := d.forwardTarget(r)
+	switch {
+	case status != 0:
+		writeJSON(w, status, map[string]string{"error": "unknown host", "host": r.URL.Query().Get("host")})
+		return true
+	case !local:
+		d.forwardGET(w, r, target)
+		return true
+	}
+	return false
+}
+
+// handleFactsSeries is GET /v1/facts/series?since=&step=&limit=: this host's history cut down to the points a chart draws, so that a
+// day of 1 m points is 200 KB on the tailnet instead of 10 MB of records. It is forwarded like the history, and the host that has the
+// data does the cutting. At most limit points (SeriesMaxPoints when absent); the latest are kept and "truncated" says so.
+func (d *Daemon) handleFactsSeries(peer bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q, err := wire.ParseFactsSeriesQuery(r.URL.Query())
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if d.forwardedOrRefused(w, r, peer) {
+			return
+		}
+		// one record more than the limit is read, to know whether the oldest were cut
+		recs := d.opts.Sampler.HistoryLatest(q.Since, q.Step, q.Limit+1)
+		writeJSON(w, http.StatusOK, wire.SeriesOf(wire.FactsHistoryResponse{Step: q.Step, Records: recs}, q.Limit))
 	}
 }

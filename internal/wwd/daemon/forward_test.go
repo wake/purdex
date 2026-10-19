@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,81 @@ func TestHistoryForwardsToAPeerThroughTheSocket(t *testing.T) {
 		if w.Code != 200 || err != nil || len(r.Records) != 2 || r.Records[0].Alias != "mlab" {
 			t.Errorf("host=%q: %d %v %+v", host, w.Code, err, r)
 		}
+	}
+}
+
+func seriesPath(host string, extra ...string) string {
+	q := url.Values{"since": {s0.Format(time.RFC3339)}}
+	if host != "" {
+		q.Set("host", host)
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		q.Set(extra[i], extra[i+1])
+	}
+	return "/v1/facts/series?" + q.Encode()
+}
+
+// The series is cut where the data is: the local one from this host's history, another host's by that host, passed on through the
+// socket like the history; the `limit` goes with it and keeps the latest points.
+func TestSeriesIsCutByTheHostThatHasTheData(t *testing.T) {
+	_, srv := peerDaemon(t, "air26", testToken)
+	d := newLocal(t, PeerAddr{"air26", addr(srv)})
+
+	w := do(d.SocketHandler(), "GET", seriesPath("air26"), "")
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	got, err := wire.Decode[wire.FactsSeriesResponse](w.Body.Bytes())
+	if err != nil || len(got.Points) != 3 || got.Truncated || got.Step != wire.Step5s {
+		t.Fatalf("the peer's own points expected, got %+v (%v)", got, err)
+	}
+	for _, host := range []string{"", "mlab"} {
+		w := do(d.SocketHandler(), "GET", seriesPath(host), "")
+		r, err := wire.Decode[wire.FactsSeriesResponse](w.Body.Bytes())
+		if w.Code != 200 || err != nil || len(r.Points) != 2 || r.Points[0].Zone != wire.ZoneNormal {
+			t.Errorf("host=%q: %d %v %+v", host, w.Code, err, r)
+		}
+	}
+	// limit keeps the latest points and says it cut; it goes to the peer too
+	for _, host := range []string{"", "air26"} {
+		w := do(d.SocketHandler(), "GET", seriesPath(host, "limit", "1"), "")
+		r, err := wire.Decode[wire.FactsSeriesResponse](w.Body.Bytes())
+		if w.Code != 200 || err != nil || len(r.Points) != 1 || !r.Truncated {
+			t.Fatalf("host=%q limit=1: %d %v %+v", host, w.Code, err, r)
+		}
+		full, _ := wire.Decode[wire.FactsSeriesResponse](do(d.SocketHandler(), "GET", seriesPath(host), "").Body.Bytes())
+		if !r.Points[0].At.Equal(full.Points[len(full.Points)-1].At) {
+			t.Errorf("host=%q: limit=1 kept %v, the latest is %v", host, r.Points[0].At, full.Points[len(full.Points)-1].At)
+		}
+	}
+	// the failure modes are the history's: an unknown host 404 naming it, a bad query 400 (limit too), the TCP side refuses a host
+	if w := do(d.SocketHandler(), "GET", seriesPath("nowhere"), ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "unknown host") {
+		t.Errorf("unknown host: %d %s", w.Code, w.Body)
+	}
+	for _, bad := range []string{seriesPath("", "limit", "0"), seriesPath("", "limit", "99999"), seriesPath("", "step", "2m"), "/v1/facts/series?since=nope"} {
+		if w := do(d.SocketHandler(), "GET", bad, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", bad, w.Code)
+		}
+	}
+	if w := do(d.TCPHandler(), "GET", seriesPath("air26"), "Bearer "+testToken); w.Code != http.StatusBadRequest {
+		t.Errorf("TCP with a host: %d, want 400", w.Code)
+	}
+	if w := do(d.TCPHandler(), "GET", seriesPath(""), ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("TCP without the token: %d, want 401", w.Code)
+	}
+	if w := do(d.TCPHandler(), "GET", seriesPath(""), "Bearer "+testToken); w.Code != 200 {
+		t.Errorf("TCP: %d", w.Code)
+	}
+}
+
+// A peer from before the route answers 404; the local wwd passes that on as it is, so the caller can tell the route is missing.
+func TestSeriesAnOldPeerAnswers404ThroughTheSocket(t *testing.T) {
+	old := httptest.NewServer(http.NotFoundHandler())
+	defer old.Close()
+	d := newLocal(t, PeerAddr{"air19", addr(old)})
+	w := do(d.SocketHandler(), "GET", seriesPath("air19"), "")
+	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "unknown host") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }
 
