@@ -31,7 +31,7 @@ type advisorInputs struct {
 func advisorRules(known []string) []advisor.Rule {
 	return []advisor.Rule{
 		advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{},
-		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known},
+		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known}, advisor.MservService{},
 	}
 }
 
