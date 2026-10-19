@@ -4,6 +4,7 @@ import { HostBadge } from '../../../components/HostBadge'
 import { useSeat } from '../../../lib/names/seat'
 import { useHostLook } from '../../../lib/host-look'
 import { hasHostBadge, resolveHostBadge } from '../../../lib/host-color'
+import { ICON_MAP } from '../../../components/tab-icon-map'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 
 interface Props {
@@ -21,6 +22,8 @@ export function TaskGroupSeatClosed({ address, label, hostId, onOpen }: Props) {
   const badgeBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
+  // No persona: the agent icon, as an open row without one keeps (spec 9.6). No tab means no agent type is known, so the session's plain icon.
+  const PlainIcon = ICON_MAP.TerminalWindow
   const look = useHostLook(hostId)
   const badge = hostId === null ? null : resolveHostBadge(look, 'console')
   return (
@@ -28,7 +31,9 @@ export function TaskGroupSeatClosed({ address, label, hostId, onOpen }: Props) {
       type="button" data-testid="task-group-seat-closed" onClick={onOpen} title={address}
       className="group mx-2 flex items-center gap-1.5 pl-[18px] pr-1.5 py-1 text-left text-xs text-text-muted opacity-60 cursor-pointer hover:bg-surface-hover hover:opacity-100 rounded-md"
     >
-      {seat !== null && <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} />}
+      {seat !== null
+        ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} />
+        : <span data-testid="task-group-seat-icon" className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center"><PlainIcon size={14} className="flex-shrink-0" /></span>}
       {badgeEnabled && badge !== null && hasHostBadge(badge) && (
         <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={badgeBox} inset={badgeInset} radius={badgeRadius} lineColor={badgeLineColor} />
       )}

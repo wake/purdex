@@ -188,6 +188,16 @@ describe('the task-group view', () => {
       expect(openTeamSeat).toHaveBeenCalledWith(expect.any(String), 'M')
     })
 
+    it('a seat with no persona and no tab keeps the agent icon, dimmed', () => {
+      personas()
+      useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-gone', { address: 'mlab/work-nobody' })]) as never])
+      mount()
+      const closed = within(screen.getByTestId('task-group-team')).getByTestId('task-group-seat-closed')
+      expect(within(closed).getByTestId('task-group-seat-icon')).toBeInTheDocument()
+      expect(within(closed).queryByRole('img')).toBeNull()
+      expect(closed.className).toContain('opacity-60')
+    })
+
     it('a seat row with a tab: the name is dimmed unless active, and the title after it is the tab title, not the seat label', () => {
       personas()
       useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1', { address: 'mlab/work-kenji' }), []) as never])
