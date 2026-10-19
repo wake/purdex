@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/wake/purdex/internal/alertsettings"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/personas"
 	"github.com/wake/purdex/internal/resources"
@@ -70,6 +71,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(FleetConfigKey, m)
 	// ... and the personas (name pool v2 spec §4) through this one.
 	c.Registry.Register(personas.Key, m)
+	// ... and the wwd alert delivery's switch through this one (WWD-8a-2a-0).
+	c.Registry.Register(alertsettings.Key, m)
 	return nil
 }
 
@@ -84,6 +87,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte, _ Entry) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte, _ Entry) (any, error) { return normalizeRelayQuota(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/wwd_alerts", m.putHandler(KeyWwdAlerts, func(raw []byte, _ Entry) (any, error) { return normalizeWwdAlerts(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, cur Entry) (any, error) {
 		stored := watchsettings.Default()
 		if len(cur.Value) > 0 {
