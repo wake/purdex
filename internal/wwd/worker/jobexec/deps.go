@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/wwd/deps"
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
@@ -237,7 +237,7 @@ func (e *Exec) toolVersion(ctx context.Context, tool string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("jobexec: %s is not on the job PATH: %w", tool, err)
 	}
-	cmd := exec.CommandContext(cctx, prog, "--version")
+	cmd := execstat.CommandContext(cctx, "wwd.jobexec.deps", prog, "--version")
 	cmd.Env = e.cfg.ParentEnv
 	out, err := cmd.Output()
 	if err != nil {
