@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,13 +84,48 @@ func (f *fakeSource) Claimed(_ context.Context, jobID, claimID string) (Ref, err
 	return f.ref, nil
 }
 
+// smallBuffers starts srv and returns a client, both holding little in flight. The cut test needs a tar the kernel cannot swallow
+// whole: the server's send buffer and the client's receive buffer autotune to megabytes on Linux, and what sits in them has to be read,
+// at the test's slow pace, before the reader sees that the connection was aborted. On a roomy host (mserv) that took longer than the
+// test waits. The write side is set from the server (ConnContext), the read side from the client's dialer.
+func smallBuffers(srv *httptest.Server) *http.Client {
+	srv.Config.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetWriteBuffer(64 << 10)
+		}
+		return ctx
+	}
+	srv.Start()
+	d := &net.Dialer{}
+	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := d.DialContext(ctx, network, addr)
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetReadBuffer(64 << 10)
+		}
+		return c, err
+	}}}
+}
+
 func serve(t *testing.T, src Source) *httptest.Server {
+	t.Helper()
+	srv, _ := serveWith(t, src, false)
+	return srv
+}
+
+// serveWith is serve, and with small=true it also returns a client whose connections hold little in flight (see smallBuffers).
+func serveWith(t *testing.T, src Source, small bool) (*httptest.Server, *http.Client) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.Handle("GET /v1/jobs/{id}/snapshot", NewHandler(src))
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewUnstartedServer(mux)
+	client := http.DefaultClient
+	if small {
+		client = smallBuffers(srv)
+	} else {
+		srv.Start()
+	}
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, client
 }
 
 func get(t *testing.T, srv *httptest.Server, id, query string) (int, []byte) {
@@ -342,8 +378,8 @@ func TestServe_ATarThatTakesTooLongIsCut(t *testing.T) {
 	head := gitOut(t, repo, "rev-parse", "HEAD")
 	claim := wire.NewClaimID()
 	require.NoError(t, Pin(context.Background(), repo, "j_11", head))
-	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: head}})
-	resp, err := http.Get(srv.URL + "/v1/jobs/j_11/snapshot?claim_id=" + claim + "&format=tar")
+	srv, client := serveWith(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: head}}, true)
+	resp, err := client.Get(srv.URL + "/v1/jobs/j_11/snapshot?claim_id=" + claim + "&format=tar")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var n int64
