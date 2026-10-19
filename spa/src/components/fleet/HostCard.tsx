@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom'
 import type { FleetHostView } from '../../lib/fleet/store'
 import type { PoolZone } from '../../lib/pool/types'
 import type { PoolCellExtra } from '../../lib/pool/cell-model'
-import { headroomReasonLines } from '../../lib/pool/words'
+import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
 import { ringDriver, type RingDriver } from '../../lib/fleet/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -167,7 +167,7 @@ export function HostCard({ view, pool = null, waitingPrimary, primaryElsewhere, 
       {pool && pool.state !== 'offline' && <PoolRows pool={pool} />}
       {pool?.state === 'fallback' && (
         <div data-testid="host-card-pool-fallback" className="mt-1 text-text-muted">
-          {pool.since !== null ? t('pool.card.fallback', { time: new Date(pool.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : t('pool.card.fallback_nosince')}
+          {fallbackWord(t, pool.reason, pool.since)}
         </div>
       )}
       {q && (

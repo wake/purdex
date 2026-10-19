@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PoolCellExtra } from '../../lib/pool/cell-model'
 import type { PoolException } from '../../lib/pool/types'
-import { headroomReasonLines } from '../../lib/pool/words'
+import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
 
 function Item({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
@@ -24,7 +24,7 @@ export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; e
   if (pool.state === 'fallback') {
     return (
       <div data-testid="avail-row" className="mb-5 rounded-lg border border-border-subtle px-4 py-3 text-sm text-text-muted">
-        {pool.since !== null ? t('pool.card.fallback', { time: hhmm(pool.since) }) : t('pool.card.fallback_nosince')}
+        {fallbackWord(t, pool.reason, pool.since)}
       </div>
     )
   }
@@ -47,7 +47,7 @@ export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; e
         {pool.owner && <Item id="owner" label={t('pool.card.owner')}>{t(pool.owner.active ? 'pool.card.owner_active' : 'pool.card.owner_idle', { s: pool.owner.idle_s })}</Item>}
         {exceptions.length > 0 && (
           <div data-testid="avail-exceptions" className="min-w-0">
-            <div className="text-[11px] text-text-muted">{t('watch.host.avail.exceptions')}</div>
+            <div className="text-[11px] text-text-muted">{t('pool.pause.title')}</div>
             {exceptions.map((e) => (
               <div key={e.name} data-testid={`avail-exception-${e.name}`} className="text-sm text-text-primary">
                 {e.name} <span className="text-xs text-text-muted">{e.until !== null ? t('watch.host.avail.until', { time: hhmm(e.until) }) : t('watch.host.avail.no_end')}</span>
