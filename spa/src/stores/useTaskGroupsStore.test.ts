@@ -111,6 +111,30 @@ describe('update', () => {
     expect(putTaskGroups).not.toHaveBeenCalled()
   })
 
+  it('a write\'s answer that lands after the host was forgotten and added back is the old daemon\'s: not adopted', async () => {
+    let release!: (v: TaskGroupsRead) => void
+    putTaskGroups.mockImplementationOnce(() => new Promise<TaskGroupsRead>((r) => { release = r }))
+    const w = get().update('h1', (groups) => [...groups, g('old')])
+    await new Promise((r) => setTimeout(r, 0))
+    get().forget('h1')
+    fetchTaskGroups.mockResolvedValueOnce(read([g('fresh')], 1))
+    await get().load('h1')
+    release(read([g('a', ['r1']), g('old')], 5))
+    await w
+    expect(entry()).toMatchObject({ revision: 1, groups: [g('fresh')] })
+  })
+
+  it('a read that was out while a write finished does not bring the older state back', async () => {
+    let answer!: (v: TaskGroupsRead) => void
+    fetchTaskGroups.mockImplementationOnce(() => new Promise<TaskGroupsRead>((r) => { answer = r }))
+    const reading = get().load('h1')
+    putTaskGroups.mockResolvedValueOnce(read([g('a', ['r1']), g('n')], 5))
+    await get().update('h1', (groups) => [...groups, g('n')])
+    answer(read([g('a', ['r1'])], 4)) // the state before the write
+    await reading
+    expect(entry()).toMatchObject({ status: 'ready', revision: 5, groups: [g('a', ['r1']), g('n')] })
+  })
+
   it('one write at a time per host: a second one waits for the first and sees its result', async () => {
     let release!: (v: TaskGroupsRead) => void
     putTaskGroups.mockImplementationOnce(() => new Promise<TaskGroupsRead>((r) => { release = r }))

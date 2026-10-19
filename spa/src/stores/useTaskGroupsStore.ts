@@ -42,6 +42,12 @@ function bump(hostId: string): number {
   return n
 }
 
+/**
+ * Bumped by `forget` only. A write's answer belongs to the daemon it was made to: if the host was forgotten while it was out (removed, or re-pointed and added back under the same id) the answer
+ * is the old daemon's and is not adopted, even though an entry for that id exists again by then.
+ */
+const incarnations = new Map<string, number>()
+
 /** Writes in flight, one chain per host. */
 const queues = new Map<string, Promise<unknown>>()
 
@@ -51,6 +57,8 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
   const put = (hostId: string, entry: TaskGroupsEntry) => set((s) => ({ byHost: { ...s.byHost, [hostId]: entry } }))
 
   async function write(hostId: string, change: (groups: TaskGroup[]) => TaskGroup[] | null): Promise<UpdateResult> {
+    const incarnation = incarnations.get(hostId) ?? 0
+    const mine = () => (incarnations.get(hostId) ?? 0) === incarnation && get().byHost[hostId] !== undefined
     for (let attempt = 0; attempt < 2; attempt++) {
       const cur = get().byHost[hostId]
       if (!cur?.loaded) return { ok: false, reason: 'not-loaded' }
@@ -58,12 +66,12 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
       if (next === null) return { ok: true }
       try {
         const stored = await putTaskGroups(hostId, next, cur.revision)
-        if (get().byHost[hostId] !== undefined) put(hostId, entryOf(stored))
+        if (mine()) put(hostId, entryOf(stored))
         return { ok: true }
       } catch (e) {
         if (e instanceof HostConfigConflictError) {
           const theirs = parseTaskGroups({ taskGroups: e.current })
-          if (get().byHost[hostId] !== undefined) put(hostId, entryOf(theirs))
+          if (mine()) put(hostId, entryOf(theirs))
           if (attempt === 1) return { ok: false, reason: 'conflict' }
           continue
         }
@@ -83,6 +91,12 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
       try {
         const r = await fetchTaskGroups(hostId)
         if (latest.get(hostId) !== mine) return
+        // A write that finished while this read was out is newer than the answer: a revision behind the one held is the older state, and is not adopted.
+        const held = get().byHost[hostId]
+        if (held?.loaded && r.revision < held.revision) {
+          put(hostId, { ...held, status: 'ready' })
+          return
+        }
         put(hostId, entryOf(r))
       } catch {
         if (latest.get(hostId) !== mine) return
@@ -94,6 +108,7 @@ export const useTaskGroupsStore = create<TaskGroupsState>()((set, get) => {
     },
     forget(hostId) {
       bump(hostId)
+      incarnations.set(hostId, (incarnations.get(hostId) ?? 0) + 1)
       queues.delete(hostId)
       set((s) => {
         const { [hostId]: _dropped, ...rest } = s.byHost
