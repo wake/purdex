@@ -41,6 +41,11 @@ export function recordZone(fleetHostId: string, t: number, zone: PoolZone, now: 
   zones.set(fleetHostId, all.filter((p) => p.t >= newest - FACTS_HISTORY_MS))
 }
 
+/** Whatever load of this host is out is called off: when it comes back it writes nothing (the tab left, the range changed, nothing took its place). */
+export function invalidateFactsHistory(fleetHostId: string): void {
+  generation.set(fleetHostId, (generation.get(fleetHostId) ?? 0) + 1)
+}
+
 /**
  * Reads the last 5 minutes of `alias` through `sourceHostId`'s daemon and seeds them under `fleetHostId`. The outcome is remembered per host.
  * Never throws: a refusal that is `host_not_local` is told apart, every other failure is `error`.

@@ -10,7 +10,7 @@ const fetchFactsHistory = vi.fn()
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
 
 import { PoolReadError } from './api'
-import { loadFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS, FACTS_HISTORY_SKEW_MS } from './history'
+import { loadFactsHistory, invalidateFactsHistory, readZones, recordZone, clearZoneMemory, readHistoryLoad, FACTS_HISTORY_MS, FACTS_HISTORY_SKEW_MS } from './history'
 
 const darwin = parseFacts(darwinJson)!
 const NOW = Date.UTC(2026, 9, 18, 5, 10, 0)
@@ -93,6 +93,28 @@ describe('overlapping loads of one host', () => {
     await first
     expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal'])
     expect(fleetHistory.series('f-air26', 'cpu', '5m', NOW).map((p) => p.avg)).toEqual([10])
+  })
+})
+
+describe('invalidating a load that nothing replaces (the tab left, the range changed)', () => {
+  it('a load that is out when it is invalidated writes nothing when it comes back', async () => {
+    let ok!: (v: unknown) => void
+    fetchFactsHistory.mockReturnValueOnce(new Promise((a) => { ok = a }))
+    const out = loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    invalidateFactsHistory('f-air26')
+    ok({ step: '5s', records: [rec(20, {}, 'danger', 5)] })
+    await out
+    expect(readHistoryLoad('f-air26')).toBe('idle')
+    expect(readZones('f-air26')).toEqual([])
+    expect(fleetHistory.rawCount('f-air26')).toBe(0)
+  })
+
+  it('it does not undo what an earlier load already wrote', async () => {
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(20, {}, 'normal', 90)] })
+    await loadFactsHistory('d1', 'air26', 'f-air26', NOW)
+    invalidateFactsHistory('f-air26')
+    expect(readHistoryLoad('f-air26')).toBe('ok')
+    expect(readZones('f-air26').map((z) => z.zone)).toEqual(['normal'])
   })
 })
 

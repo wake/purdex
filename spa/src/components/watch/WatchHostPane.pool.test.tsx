@@ -8,7 +8,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { usePoolStore } from '../../lib/pool/store'
 import { PoolReadError } from '../../lib/pool/api'
-import { clearZoneMemory } from '../../lib/pool/history'
+import { clearZoneMemory, readHistoryLoad, readZones } from '../../lib/pool/history'
 import { fleetHistory } from '../../lib/fleet/history'
 import { clearViewMemory, writeRange } from '../../lib/watch/view-memory'
 import { fast, host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
@@ -169,6 +169,20 @@ describe('WatchHostPane on the pool — the 5 minute history', () => {
     // the three read from the daemon, then the sample the page itself is showing
     expect(zones).toEqual(['normal', 'warning', 'danger', 'normal'])
     expect(screen.getByTestId('metric-cpu')).toBeTruthy()
+  })
+
+  it('leaving the tab while the history is still being read: what comes back is not written', async () => {
+    let ok!: (v: unknown) => void
+    fetchFactsHistory.mockReturnValue(new Promise((a) => { ok = a }))
+    const view = render(<WatchHostPane pane={{ id: 'watch-host-d-a.p', content: { kind: 'watch-host', fleetHostId: 'd-a' } }} isActive />)
+    await flush()
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+    const before = fleetHistory.rawCount('d-a') // the fleet snapshot the test loaded is already in
+    view.unmount()
+    await act(async () => { ok({ step: '5s', records: [sample(30, 'danger', 5)] }); await vi.advanceTimersByTimeAsync(0) })
+    expect(readHistoryLoad('d-a')).toBe('idle')
+    expect(readZones('d-a').some((z) => z.zone === 'danger')).toBe(false)
+    expect(fleetHistory.rawCount('d-a')).toBe(before)
   })
 
   it('host_not_local: the gauges stay, the chart says it cannot be read through this daemon', async () => {

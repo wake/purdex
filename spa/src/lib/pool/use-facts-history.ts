@@ -2,7 +2,7 @@
 // (5 minute range only), and adds each new facts sample's zone to the band as it arrives.
 import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
-import { loadFactsHistory, readHistoryLoad, readZones, recordZone, type HistoryLoad, type ZonePoint } from './history'
+import { invalidateFactsHistory, loadFactsHistory, readHistoryLoad, readZones, recordZone, type HistoryLoad, type ZonePoint } from './history'
 import type { PoolFacts } from './types'
 
 export function useFactsHistory(fleetHostId: string, alias: string | null, enabled: boolean, live: PoolFacts | null): { load: HistoryLoad; zones: ZonePoint[] } {
@@ -14,7 +14,8 @@ export function useFactsHistory(fleetHostId: string, alias: string | null, enabl
     if (!enabled || !source || !alias) return
     let cancelled = false
     void loadFactsHistory(source, alias, fleetHostId, Date.now()).then((r) => { if (!cancelled) setLoad(r) })
-    return () => { cancelled = true }
+    // Leaving (the tab, the range, the source) calls the load off in the memory too, not only in this component's state.
+    return () => { cancelled = true; invalidateFactsHistory(fleetHostId) }
   }, [enabled, source, alias, fleetHostId])
 
   const at = live?.at ?? null
