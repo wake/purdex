@@ -60,6 +60,7 @@ type Module struct {
 	core    *core.Core
 	notify  func() (push.AlertNotifier, bool) // the push module's notifier, asked at each pass (it registers when it starts)
 	deliver func() bool                       // whether this daemon is the deliverer now
+	peer    func() fleet.PeerPush             // what the other fleet daemon last said about its push; nil: nothing known
 	pushOn  func() (bool, error)              // the host setting wwd_alerts.push; an error is read as off
 
 	cancel context.CancelFunc
@@ -74,6 +75,12 @@ type Module struct {
 
 	// whether the last pass could read this host's own wwd: 0 no pass yet, 1 it could, 2 it could not (AlertsReadable)
 	readState atomic.Int32
+
+	// The fallback of #3610 (spec §13.3): this host's own wwd could be read but the pool could not, and the other fleet daemon has been
+	// seen unable to push for fallbackPasses passes running: this daemon then pushes the alerts of its own host (the only list it has).
+	// fbStreak is counted on the pass goroutine; fallback is read by pushIfDue (same goroutine) and by Status.
+	fbStreak int
+	fallback atomic.Bool
 
 	// the silence alerts' episodes (pass runs on one goroutine): which silence: keys each list held when it was last read, and the instance
 	// (a time on this daemon's clock) of the failure each key is about now
@@ -120,12 +127,17 @@ func (m *Module) Init(c *core.Core) error {
 			return s.Push, err
 		}
 	}
-	if m.deliver == nil {
+	if m.deliver == nil || m.peer == nil {
 		var rv fleet.RoleView
 		if svc, ok := c.Registry.Get(fleetmod.RoleViewKey); ok {
 			rv, _ = svc.(fleet.RoleView)
 		}
-		m.deliver = deliverRule(rv)
+		if m.deliver == nil {
+			m.deliver = deliverRule(rv)
+		}
+		if pv, ok := rv.(fleet.PeerPushView); ok && m.peer == nil {
+			m.peer = pv.PeerPush
+		}
 	}
 	path := m.dbPath
 	if path == "" {
@@ -244,6 +256,42 @@ const (
 // through push_ready and the standby takes over.
 func (m *Module) AlertsReadable() bool { return m.readState.Load() != readNo }
 
+// fallbackPasses is how many passes in a row the other fleet daemon must be seen unable to push before this one pushes its own host's
+// alerts without the pool (#3610): a standby that restarts for a moment does not make the primary take over.
+const fallbackPasses = 2
+
+// peerCannotPush says the other fleet daemon has been seen unable to push: it answered that its push is not ready, or it could not be
+// reached (a daemon that is not there sends nothing). Nothing known yet, or an answer that carries no push_ready (an older daemon), is not
+// a confirmation.
+func (m *Module) peerCannotPush() bool {
+	if m.peer == nil {
+		return false
+	}
+	p := m.peer()
+	return p.Known && (!p.Answered || (p.Ready != nil && !*p.Ready))
+}
+
+// updateFallback is called once per pass, before anything is acted on. localOnly: this pass read the list of this host's own wwd and
+// nothing else (the pool could not be read). The fallback is on after fallbackPasses such passes in a row with the other daemon seen
+// unable to push, and off at the first pass that is not.
+func (m *Module) updateFallback(localOnly bool) {
+	if !localOnly || !m.peerCannotPush() {
+		m.fbStreak = 0
+		m.fallback.Store(false)
+		return
+	}
+	m.fbStreak++
+	on := m.fbStreak >= fallbackPasses
+	if on != m.fallback.Load() {
+		if on {
+			m.logf("wwdalerts: the pool cannot be read and the other daemon cannot push: pushing this host's own alerts")
+		} else {
+			m.logf("wwdalerts: the fallback of this host's own alerts ended")
+		}
+	}
+	m.fallback.Store(on)
+}
+
 // pass reads every host's active alerts once and acts on them.
 func (m *Module) pass(ctx context.Context) {
 	// the status: whether this daemon delivers and what the switch says, looked at once per pass even when no alert exists
@@ -255,7 +303,7 @@ func (m *Module) pass(ctx context.Context) {
 		// what is reported is who really sends: the rule names this daemon and its own push module can be asked (#3573). The rule itself
 		// is left alone: a standby still takes over for a primary whose push it cannot see.
 		// and whose wwd it can read: a daemon that cannot read its own wwd hands delivery over (AlertsReadable, #3605), so it is not the sender (#3631)
-		deliverer := m.deliver() && m.AlertsReadable()
+		deliverer := (m.deliver() && m.AlertsReadable()) || m.fallback.Load()
 		if deliverer {
 			_, deliverer = m.notify()
 		}
@@ -268,16 +316,21 @@ func (m *Module) pass(ctx context.Context) {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
 			m.readState.Store(readNo)
+			m.updateFallback(false)
 		}
 		return
 	}
 	// every list is read before any is acted on, so a silence alert is judged on all of them at once
 	var lists []gotList
+	localOK := false // the list of this host's own wwd was read
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
+		if h.ask == "" && ctx.Err() == nil && err == nil && known {
+			localOK = true
+		}
 		if h.ask == "" && ctx.Err() == nil { // the list of this host's own wwd; one it does not serve (404) cannot be read either
 			if err != nil || !known || !whole { // without the pool the peers' lists cannot be enumerated: most of what there is to deliver
 				m.readState.Store(readNo)
@@ -295,6 +348,7 @@ func (m *Module) pass(ctx context.Context) {
 		}
 		lists = append(lists, gotList{h.alias, list.Alerts})
 	}
+	m.updateFallback(localOK && !whole)
 	present := map[string]bool{} // the hosts that are in the pool now
 	for _, h := range hosts {
 		present[h.alias] = true
@@ -438,7 +492,13 @@ func (m *Module) handle(host string, alerts []wire.Alert) {
 func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	// A daemon that says its push is not ready (AlertsReadable) has handed delivery to the standby: pushing the lists it did read as well
 	// would send the same shared alert from both.
-	if !m.deliver() || !m.AlertsReadable() {
+	// Without the pool the only list there is is this host's own, and the fallback (updateFallback) decides whether it is pushed: the other
+	// daemon cannot push either, so nobody else would tell it (#3610).
+	if m.AlertsReadable() {
+		if !m.deliver() {
+			return
+		}
+	} else if !m.fallback.Load() {
 		return
 	}
 	// The switch is read at every push (hostconfig keeps it cached), so turning it off stops the next push, not the next restart. Off
