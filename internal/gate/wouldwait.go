@@ -104,7 +104,7 @@ func (v ConflictView) Apply(w WouldWait, argv []string) WouldWait {
 
 // WouldWait looks at the class now.
 func (g *Gate) WouldWait(class Class) WouldWait {
-	cfg := g.Config()
+	cfg := g.effective(g.Config())
 	w := WouldWait{Class: class}
 	if !cfg.Enabled || !class.Valid() {
 		return w

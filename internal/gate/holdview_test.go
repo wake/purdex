@@ -105,9 +105,9 @@ func TestHold_ReleaseTakesTheLightSlotsDownToOne(t *testing.T) {
 	g, f := holdGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Light = 3 })
 	f.set(hold("hold-r", true, wire.HoldHeavy))
-	assert.Equal(t, 1, g.Config().Slots.Light, "effective")
+	assert.Equal(t, 1, g.effective(g.Config()).Slots.Light, "effective")
 	assert.Equal(t, 3, g.st.cfg.Slots.Light, "the stored setting is not changed")
-	assert.Equal(t, 1, g.refresh().Slots.Light)
+	assert.Equal(t, 1, g.effective(g.refresh()).Slots.Light)
 	// one light command takes the slot, the next waits for it
 	done, release := holdSlot(t, g, ClassLight, "a")
 	defer func() { release(); <-done }()
@@ -116,7 +116,7 @@ func TestHold_ReleaseTakesTheLightSlotsDownToOne(t *testing.T) {
 	assert.Equal(t, "slots", w.Reason)
 	// a setting below 1 stays where it is
 	g.SetConfig(func(c *Config) { c.Slots.Light = 0 })
-	assert.Equal(t, 0, g.Config().Slots.Light)
+	assert.Equal(t, 0, g.effective(g.Config()).Slots.Light)
 }
 
 func TestHold_SlotsComeBackWhenTheHoldEnds(t *testing.T) {
@@ -125,10 +125,10 @@ func TestHold_SlotsComeBackWhenTheHoldEnds(t *testing.T) {
 	g.Now = func() time.Time { return now }
 	g.SetConfig(func(c *Config) { c.Slots.Light = 3 })
 	f.set(hold("hold-r", true, wire.HoldHeavy))
-	require.Equal(t, 1, g.Config().Slots.Light)
+	require.Equal(t, 1, g.effective(g.Config()).Slots.Light)
 	f.set()
 	now = now.Add(holdTTL + time.Second)
-	assert.Equal(t, 3, g.Config().Slots.Light)
+	assert.Equal(t, 3, g.effective(g.Config()).Slots.Light)
 }
 
 func TestHold_ARunningGateWaitsForTheHoldAndStartsWhenItEnds(t *testing.T) {
@@ -169,7 +169,7 @@ func TestHold_FailOpen(t *testing.T) {
 		assert.False(t, g.WouldWait(ClassHeavy).Wait)
 		assert.Less(t, time.Since(start), 2*time.Second, "the read is bounded")
 		g.SetConfig(func(c *Config) { c.Slots.Light = 3 })
-		assert.Equal(t, 3, g.Config().Slots.Light, "light stays at the setting")
+		assert.Equal(t, 3, g.effective(g.Config()).Slots.Light, "light stays at the setting")
 	})
 	t.Run("no fetch at all", func(t *testing.T) {
 		g, _ := testGate(t)
@@ -249,4 +249,59 @@ func TestHold_ALateFailureDoesNotOverwriteAFreshAnswer(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, holdCacheFile))
 	require.NoError(t, err)
 	assert.Contains(t, string(b), "hold-other")
+}
+
+// The first admission reads the holds too, not only the retries of a waiting command: with a release hold and three light slots in the
+// settings, the second light command waits behind the first from its very first look, and starts once the first ends.
+func TestHold_TheFirstAdmissionHonoursARelease(t *testing.T) {
+	g, f := holdGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Light = 3 })
+	f.set(hold("hold-r", true, wire.HoldHeavy))
+	first, release := holdSlot(t, g, ClassLight, "a")
+	second := runAsync(g, context.Background(), Options{Argv: sh("true"), Class: ClassLight})
+	select {
+	case r := <-second:
+		t.Fatalf("a second light command started beside the first under a release hold: %+v", r)
+	case <-time.After(400 * time.Millisecond):
+	}
+	release()
+	<-first
+	select {
+	case r := <-second:
+		assert.Equal(t, 0, r.code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second light command did not start after the first ended")
+	}
+}
+
+// Status shows the slot counts the gate really allows and the holds in force.
+func TestHold_StatusShowsTheEffectiveSlotsAndTheHolds(t *testing.T) {
+	g, f := holdGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Light = 3; c.Slots.Heavy = 2 })
+	st := g.Status()
+	assert.Equal(t, 3, st.SlotsLight)
+	assert.Empty(t, st.Holds)
+	now := time.Now().Add(holdTTL + time.Second)
+	g.Now = func() time.Time { return now }
+	f.set(hold("hold-r", true, wire.HoldHeavy))
+	st = g.Status()
+	assert.Equal(t, 1, st.SlotsLight)
+	assert.Equal(t, 2, st.SlotsHeavy)
+	assert.Equal(t, []string{"hold-r"}, st.Holds)
+}
+
+// 761 gate: reading the settings is not asking for a slot. Config() and refresh() never ask the wwd and never make the gate directory (a
+// command the gate lets through without a slot reads them too); the holds are looked at where a slot is asked for (WouldWait and the
+// waiting loop).
+func TestHold_ReadingTheSettingsDoesNotAskTheWWD(t *testing.T) {
+	g, f := holdGate(t)
+	dir := filepath.Join(t.TempDir(), "not-yet")
+	g.SetConfig(func(c *Config) { c.Dir = dir; c.Slots.Light = 3 })
+	f.set(hold("hold-r", true, wire.HoldHeavy))
+	assert.Equal(t, 3, g.Config().Slots.Light)
+	assert.Equal(t, 3, g.refresh().Slots.Light)
+	assert.EqualValues(t, 0, f.calls.Load())
+	assert.NoDirExists(t, dir)
+	g.WouldWait(ClassLight) // a question about a slot does
+	assert.EqualValues(t, 1, f.calls.Load())
 }

@@ -76,7 +76,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			d.Outcome = "orphaned"
 			return nil, ExitOrphaned, true
 		}
-		cfg = g.refresh()
+		cfg = g.effective(g.refresh()) // the holds of the local wwd are looked at only here, where the command really asks for a slot
 		cfg.Dir = dir
 		if walkFirst {
 			walkFirst, lastWalk = false, g.Now()
@@ -495,7 +495,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			}
 			// the settings as they are now: a class set to 0 (or raised from it) since the command started decides this claim, not the
 			// ones the command was started under (W3c)
-			s, err := g.pool(g.refresh(), lw.class).TakeLate(g.waiterInfo(o))
+			s, err := g.pool(g.effective(g.refresh()), lw.class).TakeLate(g.waiterInfo(o))
 			switch {
 			case err != nil:
 				g.say("late slot: %v (the command goes on without one)", err)
