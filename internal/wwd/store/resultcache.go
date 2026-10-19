@@ -35,6 +35,9 @@ type CacheEntry struct {
 // validateCachedResult says whether r is a result that may be reused: a command that ran and exited 0, with its host and log named, that
 // is not itself a reuse and was not superseded. Anything else is never stored and never answers.
 func validateCachedResult(r wire.Result) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
 	switch {
 	case r.Exit == nil || *r.Exit != 0:
 		return errors.New("not a successful exit")

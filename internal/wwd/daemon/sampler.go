@@ -114,7 +114,7 @@ func (s *Sampler) Tick(now time.Time) {
 	// The proto 2 fields: written only while every pool host reads them (the gate), else the record is the v1 shape and the
 	// readings are dropped here, before the record reaches the ring, the minute rollups, the store or the event stream.
 	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
-		f.V = wire.Proto
+		f.V = wire.FactsProto
 		if s.opts.Queued != nil {
 			if n, err := s.opts.Queued(); err != nil {
 				s.logQueue(err)

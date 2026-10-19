@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,6 +132,33 @@ func TestClaimIsShownOnlyWhileHeld(t *testing.T) {
 		f.seed(t, id, c.state, "claim_worker = 'air26', claim_since = ?", ms(f.clk.Now()))
 		assert.Equal(t, c.shown, f.get(t, id).Claim != nil, string(c.state))
 	}
+}
+
+// A stored result is checked on the way out as it was on the way in: a row whose summary carries a malformed passed_digest is refused by
+// every read, so it cannot reach qualification as a pass set. A good digest and none at all read as before.
+func TestAStoredResultWithAMalformedDigestIsRefusedByEveryRead(t *testing.T) {
+	f := newFixture(t)
+	withDigest := func(d string) string {
+		extra := ""
+		if d != "" {
+			extra = `,"passed_digest":"` + d + `"`
+		}
+		return `{"exit":0,"host":"air26","log":"l","summary":{"passed":1,"failed":0,"skipped":0,"failures":[],"tail":[]` + extra + `}}`
+	}
+	good := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	f.seed(t, good, wire.StateSucceeded, "result = ?", withDigest("sha256:"+strings.Repeat("a", 64)))
+	none := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	f.seed(t, none, wire.StateSucceeded, "result = ?", withDigest(""))
+	assert.NotNil(t, f.get(t, good).Result)
+	assert.NotNil(t, f.get(t, none).Result)
+
+	bad := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	f.seed(t, bad, wire.StateSucceeded, "result = ?", withDigest("nope"))
+	ctx := context.Background()
+	_, err := f.q.Get(ctx, bad)
+	require.Error(t, err, "Get")
+	_, err = f.q.List(ctx, Filter{})
+	require.Error(t, err, "List: one damaged row is reported, not passed on")
 }
 
 // The claim_id is a capability: no read path ever carries it (spec 4.2). Mutation gate: a Job built with the claim_id → this fails.

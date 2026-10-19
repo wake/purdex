@@ -9,7 +9,7 @@ import (
 
 func rec(at time.Time, load, avail float64, pressure int, zone wire.Zone) wire.Facts {
 	return wire.Facts{
-		V: wire.Proto, At: at,
+		V: wire.FactsProto, At: at,
 		CPU:     wire.CPU{NCPU: 10, Load1: load, IdlePct: 100 - load*10},
 		Mem:     wire.Mem{AvailableMB: int(avail), Pressure: pressure, PageOutRate: fp(float64(pressure))},
 		Derived: wire.Derived{Zone: zone},
