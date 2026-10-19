@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.762] - 2026-10-20
+
+> daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 761 相同。
+>
+> **資料庫：`wwd.db` 的 host schema 從 7 升到 8**（新增 `qualify_attempts` 表，記每個任務最近一次沒成功的資格比對，讓「失敗後 24 小時才重試」撐過重啟）；queue schema 仍是 8，Purdex 這邊沒有新表。部署前每台都會備份成 `wwd.db.pre-762`。**761 的 wwd 會拒絕 host schema 8 的資料庫，所以退回 761 時要照 `docs/wwd-deploy.md` §5：停掉 wwd 後還原 `wwd.db.pre-762`、換新的 epoch 再啟動，而且退版前隔離區必須是空的。** wire 的 `proto` 仍是 3。
+>
+> **資格比對（WWD-5b-2c）**：`pdx wwd qualify <repo>/<task>` 可以手動對一台主機發起資格比對，`--status` 看進行中與最近的紀錄（#3651）；facts 每次更新時也會自動檢查要不要發起（#3655）。只排給 worker 開著、有該 repo 與工具標籤、不是對照主機的主機。**purdex 的 `tsc` 改成只給持有 `task:purdex/tsc` 的主機接**（拿掉 `os:darwin`）；air26 是對照主機，不必比對就持有這個標籤。這一版部署後不會馬上起任何比對：mlab 的 wwd 沒有設定 `[repos]`，mserv 的 worker 關著。
+>
+> **任務宣告帶工具標籤（#3657）**：跑 Go 的任務要求 `tool:go1.26`，跑 pnpm 的任務要求 `tool:node24` 與 `tool:pnpm10`；PATH 上沒有這些工具的主機不會再領走任務然後失敗。版本寫死在 manifest，有測試比對 `go.mod`；升 Go 的順序寫在 `docs/wwd-deploy.md` §11。
+>
+> **air26 的 wwd 改用專屬的 clone**：`~/Assist/repos.noindex/purdex-wwd`，`[repos] purdex` 改指它，不再和輔測腳本共用同一份 clone，避免搶 ref 鎖（#3546）。
+>
+> **重啟前先問接力（#3590，#3653）**：開發頁的「Rebuild & 重啟」現在也會先讀接力數，有接力在進行就問「重啟後多半能接續，但正在交接的那一個可能被打斷。仍要重啟？」；設定頁的「重啟 daemon」改成同一句。daemon 本身不擋任何重啟。
+>
+> **其他**：主機別名不接受「.」與「..」（它們到不了資源池 API，#3645）；gate 關閉或巢狀呼叫時不再建 gate 目錄（#3650）。B 線：團隊面板的設定區標籤、資料夾列、別台的授權資料夾與成員燈號位置（#3652，761 驗收）；任務編組檢視不再把同一個團隊 session 在「未分組」列兩次（#3654）。
+>
+> **worker**：部署時三台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；air26 的 `[owner]` 照使用者 10-19 的指示維持關閉；mserv 仍關著（#3549）；air19 若仍連不上就沿用舊版。
+
+### Added：資格比對（WWD-5b-2c）
+
+- **手動發起資格比對（WWD-5b-2c-1，#3651）**：新增 `pdx wwd qualify <repo>/<task>` 與 `--status [--json]`；`/v1/qualify` 只在本機 socket 提供，手動配對由 daemon 每 10 秒結算。
+- **自動觸發資格比對，purdex 的 `tsc` 走 qualify（WWD-5b-2c-2，#3655）**：facts 更新時只通知專用 goroutine 去檢查要不要發起；`tsc` 拿掉 `os:darwin`，改要求 `task:purdex/tsc`，以 air26 為對照主機。
+
+### Changed：任務宣告與部署
+
+- **任務宣告帶工具標籤（#3657，#3546）**：跑 Go 的任務要求 `tool:go1.26`，跑 pnpm 的任務要求 `tool:node24` 與 `tool:pnpm10`，沒有這些工具的主機不再領走任務後失敗；版本寫死在 manifest，並有測試比對 `go.mod`。
+
+### Changed：重啟前先問接力
+
+- **開發頁與設定頁重啟前先問接力（#3653，#3590）**：「Rebuild & 重啟」先讀接力數，有接力進行就跳確認框；設定頁「重啟 daemon」文案改成同一句；daemon 本身不擋任何重啟，讀不到接力數也照常執行。
+
+### Fixed
+
+- **主機別名不接受「.」與「..」（#3645，#3615）**：`wire.ValidAlias` 排除這兩個值，因為它們在路徑中會被當成 dot segment 正規化，worker 與例外操作到不了 handler。
+- **gate 關閉或巢狀呼叫時不再建 gate 目錄（#3650，#3649）**：這兩種直接放行改用不建目錄的鎖檔；全新目錄上的那一筆 decision 不再記錄。
+
+### Fixed：團隊面板與任務編組（B 線）
+
+- **團隊面板 761 驗收四項（#3652）**：設定區標籤顏色、資料夾列改為唯讀加編輯鈕、別台已套用的授權資料夾也列出、成員燈號移到第一行 agent 圖示右上角。
+- **任務編組不再把同一個團隊 session 列兩次（#3654）**：`buildGroupView` 會認領團隊席位 session 的所有分頁，不再讓多出的分頁掉到「未分組」。
+- **docs：記錄團隊面板驗收的規格變更（#3656）**：把 #3652 的改動補進姓名池 v2 規格 §9.5，純文件。
+
 ## [1.0.0-alpha.761] - 2026-10-20
 
 > daemon、`pdx` CLI（含 `pdx gate`）、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 760 相同。
