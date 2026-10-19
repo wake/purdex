@@ -41,25 +41,37 @@ func (m *Module) nameService() ipeers.NameService {
 	return ns
 }
 
-// leadNames is the list a lead request or the card carries: nil when there is no name service or it cannot be read, an empty
-// (non-nil) list when no persona exists.
-func (m *Module) leadNames(sessionID string) []team.LeadName {
+// leadNamesNow is the list the card reads: an empty (non-nil) list when no persona exists, an error when there is no name
+// service or it cannot be read.
+func (m *Module) leadNamesNow(sessionID string) ([]team.LeadName, error) {
 	ns := m.nameService()
 	if ns == nil {
-		return nil
+		return nil, errLeadNameNoService
 	}
 	ctx, cancel := context.WithTimeout(m.stopCtx, leadNameTimeout)
 	defer cancel()
 	cands, err := ns.LeadCandidates(ctx, sessionID)
 	if err != nil {
-		m.logf("[team] lead names of %s: %v", sessionID, err)
-		return nil
+		return nil, err
 	}
 	out := make([]team.LeadName, 0, len(cands))
 	for _, c := range cands {
 		out = append(out, team.LeadName{Code: c.Code, Name: c.Name, Kind: c.Kind, LastAt: c.LastAt})
 	}
-	return out
+	return out, nil
+}
+
+// leadNames is leadNamesNow for the places that carry the list along (the request's payload, a name_taken body): nil when it
+// cannot be had, so the request is made and the body sent anyway. No name service is not worth a log line; a read error is.
+func (m *Module) leadNames(sessionID string) []team.LeadName {
+	names, err := m.leadNamesNow(sessionID)
+	if err != nil {
+		if !errors.Is(err, errLeadNameNoService) {
+			m.logf("[team] lead names of %s: %v", sessionID, err)
+		}
+		return nil
+	}
+	return names
 }
 
 // approveLead is approve's lead branch: under the approval's lock, rename (when the grant names a code), close, and undo the
@@ -203,9 +215,12 @@ func (m *Module) handleLeadNames(w http.ResponseWriter, r *http.Request) {
 	case m.nameService() == nil:
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the name service is not available", nil)
 	default:
-		names := m.leadNames(a.Origin.SessionID)
-		if names == nil {
-			names = []team.LeadName{}
+		// a failed read is not an empty list: the card keeps the list it has
+		names, err := m.leadNamesNow(a.Origin.SessionID)
+		if err != nil {
+			m.logf("[team] lead-names %s: %v", a.ID, err)
+			m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the names could not be read; retry", nil)
+			return
 		}
 		m.writeJSON(w, http.StatusOK, team.LeadNamesResponse{LeadNames: names})
 	}

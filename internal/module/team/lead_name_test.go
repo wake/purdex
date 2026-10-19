@@ -420,6 +420,15 @@ func TestLeadName_Route(t *testing.T) {
 			t.Fatalf("%d %s", code, body)
 		}
 	})
+	t.Run("read error is not an empty list", func(t *testing.T) {
+		f := newFixture(t)
+		n := withNames(f)
+		f.create(uid(1))
+		n.candErr = errors.New("meta.db locked")
+		if code, body := f.do(http.MethodGet, path(uid(1)), nil); code != 503 || decodeErr(t, body).Error != team.ErrNotReady {
+			t.Fatalf("%d %s", code, body)
+		}
+	})
 	t.Run("the list now", func(t *testing.T) {
 		f := newFixture(t)
 		n := withNames(f)
