@@ -54,17 +54,28 @@ func TestBigAnswersAreNotCached(t *testing.T) {
 	base := baseFacts(t)
 	t0 := time.Date(2026, 10, 18, 11, 30, 0, 0, time.UTC)
 	recs := []wire.Facts{rec(base, t0, wire.ZoneNormal, 10, 1, 1, nil, nil, wire.Slots{})}
-	for len(historyOf("1m", recs...)) <= maxCachedBody {
+	for n := maxCachedBody/len(historyOf("1m", recs...)) + 2; n > 0; n-- {
 		recs = append(recs, recs[0])
 	}
+	require.Greater(t, len(historyOf("1m", recs...)), maxCachedBody)
 	calls := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		serve(historyOf("1m", recs...))(w, r)
 	})
-	m := newModule(t, fakeWWD(t, mux))
-	require.Equal(t, 200, call(m, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
-	require.Equal(t, 200, call(m, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
+	m := New() // New has the cache; a module built bare keeps nothing
+	m.cl = fakeWWD(t, mux)
+	m.now = func() time.Time { return time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC) }
+	srv := http.NewServeMux()
+	m.RegisterRoutes(srv)
+	require.Equal(t, 200, call(srv, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
+	require.Equal(t, 200, call(srv, "/api/pool/facts/history?since=2026-10-18T11:00:00Z&step=1m").Code)
 	assert.Equal(t, 2, calls)
+	// a small answer, same setup, is kept (so the test above is about size and not about the cache being off)
+	small := 0
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) { small++; serve(fixture(t, "pool.json"))(w, r) })
+	call(srv, "/api/pool/hosts")
+	call(srv, "/api/pool/hosts")
+	assert.Equal(t, 1, small)
 }
