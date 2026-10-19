@@ -5,13 +5,15 @@
 // A session in a live team shows under its team only; its manual membership is ignored until the team ends (L10). A manual group holds the sessions of ITS OWN host (L9) whose lineage root it lists, so a
 // relay keeps the membership; a session whose root is not known yet (or whose pane has no agent session id) is 「未分組」 for the display — it is never guessed into a group.
 import type { TaskGroup } from './api'
-import type { Seat, TeamView } from '../team/team-views'
+import { seatLookup, sessionKey, type Seat, type TeamView } from '../team/team-views'
 
 /** One open tab that shows a tmux session: the sidebar's session row. */
 export interface SessionTab {
   tabId: string
   hostId: string
   sessionCode: string
+  /** The tmux session name `sessionCode` stands for (the sessions store, else the pane's cached name); decides whether a team seat is this session. */
+  sessionName?: string | null
   /** The agent session id the pane recorded (`rebuild.agent.sessionId`); null when it recorded none. */
   agentSessionId: string | null
   workspaceId: string | null
@@ -53,6 +55,9 @@ const tabRow = (t: SessionTab): GroupRow => ({ key: `tab:${t.tabId}`, tabId: t.t
 export function buildGroupView(input: GroupViewInput): GroupSection[] {
   const out: GroupSection[] = []
   const claimed = new Set<string>()
+  // Every tab that shows a team seat's session is the team's, not just the tab the seat was drawn from.
+  const seatSessions = seatLookup(input.teams)
+  for (const t of input.tabs) if (t.sessionName && seatSessions.has(sessionKey(t.hostId, t.sessionName))) claimed.add(t.tabId)
 
   for (const view of input.teams) {
     const seats = [view.lead, ...view.members]

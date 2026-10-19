@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { daemonMismatchKey, useHostStore } from '../../../stores/useHostStore'
+import { useSessionStore } from '../../../stores/useSessionStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
@@ -53,6 +54,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const nex = useNexHostStore((s) => s.byHost)
   const groupsByHost = useTaskGroupsStore((s) => s.byHost)
   const teams = useTeamViews()
+  const sessionsByHost = useSessionStore((s) => s.sessions)
   // The last refusal of an edit, in words, until dismissed or replaced by the next action.
   const [notice, setNotice] = useState<string | null>(null)
   // The empty group the person asked to clear, until they answer.
@@ -72,10 +74,10 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       // The session a tab stands for: the first live tmux session among its panes (a split tab's session may sit in a secondary pane), as `shownSessions` reads a tab.
       const c = collectLeaves(tab.layout).map((p) => p.content).find((x) => x.kind === 'tmux-session' && !x.terminated)
       if (!c || c.kind !== 'tmux-session') continue
-      out.push({ tabId, workspaceId, hostId: c.hostId, sessionCode: c.sessionCode, agentSessionId: c.rebuild?.agent?.sessionId ?? null })
+      out.push({ tabId, workspaceId, hostId: c.hostId, sessionCode: c.sessionCode, sessionName: sessionsByHost[c.hostId]?.find((r) => r.code === c.sessionCode)?.name ?? c.cachedName, agentSessionId: c.rebuild?.agent?.sessionId ?? null })
     }
     return out
-  }, [tabsById, workspaces])
+  }, [tabsById, workspaces, sessionsByHost])
 
   // Opening the view reads each connected host's groups (when its daemon serves them); the capability entry is asked for first.
   const connectedKey = hostOrder.filter((h) => runtime[h]?.status === 'connected').join('\n')
