@@ -3,9 +3,10 @@
 // The same pieces the tab rows use (TabIcon + HostBadge), keyed by (hostId, sessionCode) instead of a tab, so a member
 // without a tab still shows its agent icon and light. A seat on a host this Mac has not configured (hostId '') has no key
 // at all: no light, and a neutral host glyph in place of the host icon.
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Desktop, Robot } from '@phosphor-icons/react'
 import { TabIcon } from '../TabIcon'
+import { renderInlineTabIcon } from '../../features/workspace/lib/renderInlineTabIcon'
 import { SubagentDots } from '../SubagentDots'
 import { HostBadge } from '../HostBadge'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
@@ -24,6 +25,8 @@ interface IconProps {
   subagents?: boolean
   /** False: the icon alone, muted, with no light (the panel's rows draw the light on the avatar's corner: TeamSeatLight). Default true. */
   light?: boolean
+  /** A persona's face (an `<Avatar size={18}>`) in the agent icon's place, laid out as the sidebar's rows do (NA-5b): the light is its top-right corner dot, the subagent dots (when asked for) float to its left. */
+  avatar?: ReactNode
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -31,8 +34,19 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, light = true }: IconProps) {
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, light = true, avatar }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
+  if (avatar) {
+    return renderInlineTabIcon({
+      IconComponent: undefined,
+      agentStatus,
+      tabIndicatorStyle,
+      isActive,
+      subagentRefs: subagents ? subagentRefs : [],
+      isUnread,
+      avatar,
+    })
+  }
   if (!light) {
     // The icon alone (the light is the avatar's corner badge); the subagent dots, when asked for, still float to its left. Lights off hides them, as everywhere.
     const Icon = agentIcon ?? DefaultBot

@@ -63,6 +63,33 @@ export class FleetHistory {
     }
   }
 
+  /**
+   * Readings the daemon already has (its 5 s history, read when the host tab opens) put into the raw 5 minute track, before and among the
+   * ones this App collected. A time already there keeps its own value; what is older than the raw window is dropped; the 10 s buckets (1 h
+   * and longer) are not touched, they stay what this App saw. Readings carry the five charted items, `load` is not charted. A reading dated
+   * more than a few seconds ahead of `now` (the daemon's clock is ahead) cannot be placed on this App's time line and is dropped: kept, it
+   * would be taken for the newest and wipe the history this App has, and the chart would cut it off as being in the future.
+   */
+  seedRaw(hostId: string, all: Array<Pick<FleetFast, 'at' | 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>>, now: number = Date.now()): void {
+    const readings = all.filter((r) => r.at <= now + FUTURE_TOLERANCE_MS)
+    let hh = this.hosts.get(hostId)
+    if (!hh) {
+      hh = { lastAt: -Infinity, lastRawAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
+      this.hosts.set(hostId, hh)
+    }
+    const newest = Math.max(hh.lastAt, ...readings.map((r) => r.at))
+    for (const item of HISTORY_ITEMS) {
+      if (item === 'load') continue
+      const tr = hh.items[item]
+      const have = new Set(tr.raw.map((p) => p.t))
+      const add = readings.filter((r) => !have.has(r.at)).map((r) => ({ t: r.at, v: r[item] }))
+      tr.raw = [...tr.raw, ...add].filter((p) => p.t >= newest - RAW_MS).sort((a, b) => a.t - b.t)
+    }
+    // `record()` takes a reading only if it is newer than `lastAt`: with the cursor left behind, a live reading at (or before) the newest seeded
+    // time would be added after it, doubled or out of order.
+    if (readings.length > 0) hh.lastAt = Math.max(hh.lastAt, ...readings.map((r) => r.at))
+  }
+
   series(hostId: string, item: HistoryItem, range: HistoryRange, now: number = Date.now()): HistoryPoint[] {
     const tr = this.hosts.get(hostId)?.items[item]
     if (!tr) return []

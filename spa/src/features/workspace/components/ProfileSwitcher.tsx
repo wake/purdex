@@ -3,7 +3,7 @@ import { useLocation } from 'wouter'
 import { GearSix, WarningCircle } from '@phosphor-icons/react'
 import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
+import { useLocalProfilesStore, MASTER_PROFILE_ID, DEFAULT_TEAM_ICON, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { useProfileSync } from '../../../hooks/useProfileSync'
@@ -29,6 +29,28 @@ export function ProfileIcon({ appearance, size, logoAlt = '' }: { appearance: Pr
       style={appearance.color !== undefined ? { color: appearance.color } : undefined}
     >
       <WorkspaceIcon icon={appearance.icon} name="" size={size} weight={appearance.iconWeight} />
+    </span>
+  )
+}
+
+/**
+ * A profile's team icon (name pool v2 spec §9.6): what the sidebar's view toggle shows in the task-group view, and the editor's preview of it. Drawn once, here, so the two
+ * cannot differ: the chosen icon (`UsersThree` when none) at the profile's `teamIconWeight`, in `teamColor` — which, when not set, is the colour the profile icon wears (its `color`, when it
+ * has an icon; none with the logo, which is a bitmap). The colour goes on the outer element, as `ProfileIcon` does.
+ */
+export function TeamIcon({ appearance, size, testId = 'team-icon' }: { appearance: ProfileAppearance; size: number; testId?: string }) {
+  const icon = appearance.teamIcon ?? DEFAULT_TEAM_ICON
+  // Not set, it is in the colour of the profile icon — and the profile colour tints an icon only: with the Purdex logo showing (no `icon`), a colour left from an earlier icon is not worn.
+  const color = appearance.teamColor ?? (appearance.icon !== undefined ? appearance.color : undefined)
+  return (
+    <span
+      data-testid={testId}
+      data-icon={icon}
+      data-weight={appearance.teamIconWeight}
+      className="shrink-0 flex items-center justify-center"
+      style={color !== undefined ? { color } : undefined}
+    >
+      <WorkspaceIcon icon={icon} name="" size={size} weight={appearance.teamIconWeight} />
     </span>
   )
 }

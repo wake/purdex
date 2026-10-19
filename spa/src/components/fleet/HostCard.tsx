@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom'
 import type { FleetHostView } from '../../lib/fleet/store'
 import type { PoolZone } from '../../lib/pool/types'
 import type { PoolCellExtra } from '../../lib/pool/cell-model'
-import { fallbackWord, reasonWord } from '../../lib/pool/words'
+import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
 import { ringDriver, type RingDriver } from '../../lib/fleet/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -63,19 +63,7 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
   const t = useI18nStore((s) => s.t)
   const unknown = t('pool.card.unknown')
   const w = pool.worker
-  // A class at 0: its reasons when the daemon sent them. A daemon that sends reasons but none for a zero (spec §3.2 says it names `unknown`)
-  // reads as unknown; a daemon that sends no reasons at all (older than pool.assess.v1) shows the plain 0, nothing invented.
-  const wordsOf = (n: number, list: string[] | undefined) => {
-    if (n !== 0 || !pool.reasons) return null
-    return list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : reasonWord('unknown', t)
-  }
-  // Each class at 0 shows its own reasons, labelled with the class; the same words for both are shown once, labelled for both.
-  const heavyWords = pool.headroom ? wordsOf(pool.headroom.heavy, pool.reasons?.heavy) : null
-  const lightWords = pool.headroom ? wordsOf(pool.headroom.light, pool.reasons?.light) : null
-  const line = (cls: 'heavy' | 'light' | 'both', words: string) => t('pool.card.reason_line', { cls: t(`pool.card.class.${cls}`), reason: words })
-  const reasonLines = heavyWords !== null && heavyWords === lightWords
-    ? [line('both', heavyWords)]
-    : [heavyWords !== null ? line('heavy', heavyWords) : null, lightWords !== null ? line('light', lightWords) : null].filter((w): w is string => w !== null)
+  const reasonLines = headroomReasonLines(pool.headroom, pool.reasons, t)
   return (
     <div className="mt-1.5 pt-1.5 border-t border-border-subtle">
       <PoolRow id="worker" label={t('pool.card.worker')}>

@@ -1,4 +1,4 @@
-// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6): the header, 資源 and
+// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6): the header, 可接工作 (on the pool), 資源 and
 // 重指令排隊 (W5b1, daemon hosts) and 行程. 設定 is W5c1; it fills in under this header.
 //
 // Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range and the queue sub-tab now;
@@ -7,7 +7,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
-import type { FleetProc } from '../../lib/fleet/types'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostLookResolver, type HostLook } from '../../lib/host-look'
@@ -19,7 +18,17 @@ import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
 import { METRICS } from '../../lib/watch/metrics'
 import { RANGES, stepMs } from '../../lib/watch/series'
 import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
+import { usePoolCellModels } from '../../lib/pool/use-cell-models'
+import { matchPoolHost } from '../../lib/pool/cell-model'
+import { usePoolStore } from '../../lib/pool/store'
+import { useFactsHistory } from '../../lib/pool/use-facts-history'
+import type { ZonePoint } from '../../lib/pool/history'
+import type { PoolProc } from '../../lib/pool/types'
 import { Gauge } from './Gauge'
+import { AvailRow } from './AvailRow'
+import { ZoneBand } from './ZoneBand'
+import { ProcTable, type ProcRow } from './ProcTable'
+import { ResidentsTable } from './ResidentsTable'
 import { MetricRow, TimeAxis } from './MetricChart'
 import { QueueSection } from './QueueSection'
 import { WatchSettings } from './WatchSettings'
@@ -28,7 +37,8 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
 /** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
-function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRange; now: number }) {
+function Resources({ view, range, now, zones, notLocal }: { view: FleetHostView; range: HistoryRange; now: number; zones: ZonePoint[]; notLocal: boolean }) {
+  const t = useI18nStore((s) => s.t)
   const offline = isOffline(view)
   // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
   const at = Math.floor(now / stepMs(range)) * stepMs(range)
@@ -39,9 +49,15 @@ function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRa
       <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
         {METRICS.map((d) => <Gauge key={d.k} def={d} fast={view.fast} offline={offline} />)}
       </div>
-      <ChartNote />
-      {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
-      <TimeAxis points={series[0].points} now={at} range={range} />
+      {notLocal ? (
+        // The daemon cannot read this host's history (it does not forward): the gauges above stay, the 5 minute chart does not.
+        <p data-testid="history-not-local" className="text-[11px] text-text-muted mb-1">{t('watch.host.history_not_local')}</p>
+      ) : (<>
+        {range === '5m' && <ZoneBand points={zones} now={at} />}
+        <ChartNote />
+        {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
+        <TimeAxis points={series[0].points} now={at} range={range} />
+      </>)}
     </div>
   )
 }
@@ -52,54 +68,20 @@ function ChartNote() {
 }
 
 const ZONE_CLASS: Record<string, string> = {
-  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', offline: 'text-text-muted', nodata: 'text-text-muted',
+  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', unknown: 'text-text-muted', offline: 'text-text-muted', nodata: 'text-text-muted',
 }
 
 function isOffline(v: FleetHostView): boolean {
   return v.status !== 'ok'
 }
 
-function ProcTable({ testId, title, rows, unit, offline }: { testId: string; title: string; rows: FleetProc[]; unit: 'cpu' | 'mem'; offline: boolean }) {
-  const t = useI18nStore((s) => s.t)
-  const empty = offline ? t('watch.host.offline_no_data') : rows.length === 0 ? t('fleet.no_data') : null
-  return (
-    <div className="min-w-0" data-testid={testId}>
-      <div className="text-xs text-text-secondary mb-1">{title}</div>
-      <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr className="text-text-muted text-left">
-            <th className="font-normal py-1 pr-3 border-b border-border-subtle w-16">{t('watch.host.col_pid')}</th>
-            <th className="font-normal py-1 pr-3 border-b border-border-subtle">{t('watch.host.col_process')}</th>
-            <th className="font-normal py-1 border-b border-border-subtle text-right">{unit === 'cpu' ? t('watch.host.col_cpu') : t('watch.host.col_mem')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {empty !== null ? (
-            <tr><td colSpan={3} className="py-3 text-text-muted">{empty}</td></tr>
-          ) : rows.map((p) => (
-            <tr key={p.pid}>
-              <td className="py-1 pr-3 border-b border-border-subtle/50 tabular-nums text-text-muted">{p.pid}</td>
-              <td className="py-1 pr-3 border-b border-border-subtle/50 font-mono text-text-primary truncate">{p.name}</td>
-              <td className="py-1 border-b border-border-subtle/50 tabular-nums text-text-secondary text-right">
-                {unit === 'cpu' ? `${p.cpu}%` : (
-                  <>
-                    {p.mem_kind === 'rss' && (
-                      <span
-                        className="mr-1.5 text-[10px] text-text-muted/70 uppercase tracking-wide cursor-help"
-                        title={t('watch.host.mem_rss_hint')}
-                        aria-label={t('watch.host.mem_rss_hint')}
-                      >RSS</span>
-                    )}
-                    {`${(p.mem_mb ?? p.rss_mb).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`}
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+/** The facts' processes as the table's rows: the top five by CPU and by memory, each with its owner. */
+function topProcs(procs: PoolProc[]): { cpu: ProcRow[]; mem: ProcRow[] } {
+  const row = (p: PoolProc): ProcRow => ({ pid: p.pid, name: p.name, cpu: Math.round(p.cpu_pct * 10) / 10, rss_mb: p.mem_mb, mem_mb: p.mem_mb, mem_kind: p.mem_kind === 'footprint' || p.mem_kind === 'rss' ? p.mem_kind : undefined, owner: p.owner })
+  return {
+    cpu: [...procs].sort((x, y) => y.cpu_pct - x.cpu_pct).slice(0, 5).map(row),
+    mem: [...procs].sort((x, y) => y.mem_mb - x.mem_mb).slice(0, 5).map(row),
+  }
 }
 
 export function WatchHostPane({ pane }: PaneRendererProps) {
@@ -119,6 +101,16 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const view = useMemo(() => all.find((v) => v.id === fleetHostId), [all, fleetHostId])
   // The other daemon hosts: 設定 reads their `watch` rows to compare `targets`.
   const peers = useMemo(() => all.filter((v) => v.kind === 'daemon'), [all])
+  // On the resource pool the numbers are wwd's facts (the model's view carries them in the fleet's shape); before it answers, the fleet's as ever.
+  const views = useMemo(() => (view ? [view] : []), [view])
+  const { models, active: poolActive } = usePoolCellModels(views)
+  const poolHosts = usePoolStore((s) => s.hosts)
+  const model = poolActive && view ? models[0] : null
+  const pool = model?.pool ?? null
+  const poolHost = model && view ? matchPoolHost(poolHosts, view) : null
+  const live = pool?.state === 'live' ? (poolHost?.facts ?? null) : null
+  // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
+  const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)
 
   // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
   // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
@@ -139,8 +131,9 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
     : { colors: view.colors, icon: view.icon, iconWeight: view.icon_weight as HostLook['iconWeight'] }
   const colors = resolveHostColors({ colors: look.colors, color: look.color }, 'console')
 
-  const offline = isOffline(view)
-  const zone = offline ? 'offline' : view.fast ? view.fast.zone : 'nodata'
+  const shown = model ? model.view : view
+  const offline = isOffline(shown)
+  const zone = offline ? 'offline' : pool?.state === 'live' && pool.zone ? pool.zone : shown.fast ? shown.fast.zone : 'nodata'
   const zoneWord = zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)
 
   // "量測：" names the host the numbers come from: the primary (spec §6).
@@ -159,7 +152,9 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <h2 className="text-lg font-semibold text-text-primary">{alias}</h2>
           <span className={`text-sm ${ZONE_CLASS[zone]}`} data-testid="zone-text">{zoneWord}</span>
           <span className="text-xs text-text-muted" data-testid="measure-source">
-            {t('watch.host.measured', { alias: primaryAlias })}{lastOk !== null && t('watch.host.last_ok', { time: lastOk })}
+            {live && poolHost
+              ? t('watch.host.wwd_age', { version: poolHost.version, s: Math.max(0, Math.round((now - live.at) / 1000)) })
+              : <>{t('watch.host.measured', { alias: primaryAlias })}{lastOk !== null && t('watch.host.last_ok', { time: lastOk })}</>}
           </span>
           <span className="flex-1" />
           {page === 'status' && (
@@ -175,15 +170,17 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} poolAlias={view.kind === 'daemon' ? alias : undefined} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
+        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} />}
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
-          <Resources view={view} range={range} now={now} />
+          <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} />
         </Section>
-        {view.kind === 'daemon' && (offline || view.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={view.slow?.queue} offline={offline} />}
+        {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
-            <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={view.slow?.top_cpu ?? []} unit="cpu" offline={offline} />
-            <ProcTable testId="procs-mem" title={t('watch.host.top_mem')} rows={view.slow?.top_mem ?? []} unit="mem" offline={offline} />
+            <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={live ? topProcs(live.procs).cpu : (view.slow?.top_cpu ?? [])} unit="cpu" offline={offline} />
+            <ProcTable testId="procs-mem" title={t('watch.host.top_mem')} rows={live ? topProcs(live.procs).mem : (view.slow?.top_mem ?? [])} unit="mem" offline={offline} />
           </div>
+          {live && <ResidentsTable residents={live.residents} />}
         </Section>
         </>)}
       </div>

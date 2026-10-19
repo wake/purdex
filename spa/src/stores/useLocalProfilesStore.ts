@@ -97,6 +97,10 @@ export interface ProfileAppearance {
   color?: string
   /** The Phosphor icon (catalog name) the sidebar's view toggle shows in the task-group view (name pool v2 spec §9.6); absent = `UsersThree`. Independent of `icon`. */
   teamIcon?: string
+  /** The weight of the team icon (the default `UsersThree` too). Unlike `iconWeight` it stands alone: the team icon always exists, so a weight needs no chosen icon. */
+  teamIconWeight?: IconWeight
+  /** Strict lower-case `#rrggbb`, as `color`. Absent = the team icon wears the profile's `color` (and none when that is absent too). */
+  teamColor?: string
 }
 
 export interface LocalProfile extends ProfileAppearance {
@@ -124,6 +128,8 @@ export interface ProfileAppearancePatch {
   iconWeight?: IconWeight | null
   color?: string | null
   teamIcon?: string | null
+  teamIconWeight?: IconWeight | null
+  teamColor?: string | null
 }
 
 interface LocalProfilesData {
@@ -185,7 +191,7 @@ export interface LocalProfilesState extends LocalProfilesData {
   setProfileAppearance: (
     id: string,
     patch: ProfileAppearancePatch,
-  ) => { ok: true } | Refused<'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'>
+  ) => { ok: true } | Refused<'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon' | 'bad-team-weight' | 'bad-team-color'>
   /** Overwrite a PARKED world — `'master'` for the parked master (the master keeps syncing while a slave is on
    *  screen, so an apply lands here). The world on screen is not this store's to write. The epoch does not move. */
   replaceParkedWorld: (targetId: string, world: ParkedWorld) => { ok: true } | Refused<'not-found' | 'on-screen' | 'bad-world'>
@@ -259,6 +265,8 @@ function sanitiseAppearance(v: Record<string, unknown>): ProfileAppearance {
   }
   if (isValidHostColor(v.color)) out.color = v.color.toLowerCase()
   if (isPhosphorIconName(v.teamIcon)) out.teamIcon = v.teamIcon
+  if (isIconWeight(v.teamIconWeight)) out.teamIconWeight = v.teamIconWeight
+  if (isValidHostColor(v.teamColor)) out.teamColor = v.teamColor.toLowerCase()
   return out
 }
 
@@ -270,8 +278,10 @@ function sanitiseMaster(v: unknown): MasterAppearance {
 function patchAppearance(
   current: ProfileAppearance,
   patch: ProfileAppearancePatch,
-): { ok: true; appearance: ProfileAppearance } | Refused<'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'> {
-  const next: ProfileAppearance = { icon: current.icon, iconWeight: current.iconWeight, color: current.color, teamIcon: current.teamIcon }
+): { ok: true; appearance: ProfileAppearance } | Refused<'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon' | 'bad-team-weight' | 'bad-team-color'> {
+  const next: ProfileAppearance = {
+    icon: current.icon, iconWeight: current.iconWeight, color: current.color, teamIcon: current.teamIcon, teamIconWeight: current.teamIconWeight, teamColor: current.teamColor,
+  }
   if (patch.icon !== undefined) {
     if (patch.icon !== null && !isPhosphorIconName(patch.icon)) return { ok: false, reason: 'bad-icon' }
     next.icon = patch.icon ?? undefined
@@ -288,6 +298,14 @@ function patchAppearance(
     if (patch.teamIcon !== null && !isPhosphorIconName(patch.teamIcon)) return { ok: false, reason: 'bad-team-icon' }
     next.teamIcon = patch.teamIcon ?? undefined
   }
+  if (patch.teamIconWeight !== undefined) {
+    if (patch.teamIconWeight !== null && !isIconWeight(patch.teamIconWeight)) return { ok: false, reason: 'bad-team-weight' }
+    next.teamIconWeight = patch.teamIconWeight ?? undefined
+  }
+  if (patch.teamColor !== undefined) {
+    if (patch.teamColor !== null && !isValidHostColor(patch.teamColor)) return { ok: false, reason: 'bad-team-color' }
+    next.teamColor = patch.teamColor?.toLowerCase()
+  }
   if (next.icon === undefined) next.iconWeight = undefined // a weight alone means nothing
   // No `undefined`-valued keys: the record is compared and persisted as it is.
   const appearance: ProfileAppearance = {}
@@ -295,6 +313,8 @@ function patchAppearance(
   if (next.iconWeight !== undefined) appearance.iconWeight = next.iconWeight
   if (next.color !== undefined) appearance.color = next.color
   if (next.teamIcon !== undefined) appearance.teamIcon = next.teamIcon
+  if (next.teamIconWeight !== undefined) appearance.teamIconWeight = next.teamIconWeight
+  if (next.teamColor !== undefined) appearance.teamColor = next.teamColor
   return { ok: true, appearance }
 }
 
