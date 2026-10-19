@@ -140,6 +140,35 @@ func TestPressureHeld_StaleOrMissingData(t *testing.T) {
 	}
 }
 
+// The minute still being filled does not count toward the five: the alert must not fire before the pressure has lasted five minutes. Five
+// whole minutes before a partial newest one are enough; a partial minute inside the five, or a record without stats, is not.
+func TestPressureHeld_OnlyWholeMinutesStartIt(t *testing.T) {
+	var recs []wire.Facts
+	for i := 0; i < 5; i++ {
+		recs = append(recs, minute(i, wire.ZoneWarning, 900+i*300))
+	}
+	partial := minute(5, wire.ZoneWarning, 2400)
+	partial.Stats.SampledS, partial.Stats.WarningS = 20, 20 // the open minute, 20 s in
+	now := t0.Add(5*time.Minute + 20*time.Second)
+	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(recs, partial)...)); !v.Holds {
+		t.Fatal("five whole minutes and an open one should hold")
+	}
+	if v, _ := (PressureHeld{}).Eval(minutesInput(now, append(recs[1:], partial)...)); v.Holds {
+		t.Fatal("four whole minutes and an open one are only four minutes: it fired early")
+	}
+	short := append([]wire.Facts(nil), recs...)
+	short[2] = minute(2, wire.ZoneWarning, 1500)
+	short[2].Stats.SampledS, short[2].Stats.WarningS = 35, 35 // the sampler failed for 25 s of it
+	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute+30*time.Second), short...)); v.Holds {
+		t.Fatal("a minute that lost 25 s of samples counted as a whole minute")
+	}
+	nostats := append([]wire.Facts(nil), recs...)
+	nostats[1].Stats = nil
+	if v, _ := (PressureHeld{}).Eval(minutesInput(t0.Add(4*time.Minute+30*time.Second), nostats...)); v.Holds {
+		t.Fatal("a minute with no stats counted as a whole minute")
+	}
+}
+
 // ---- thrash ----
 
 func thrashSample(at time.Time, compressorMB int, rate float64) wire.Facts {
@@ -191,6 +220,24 @@ func TestThrash_EachConditionIsNeeded(t *testing.T) {
 		if err != nil || v.Holds != c.want {
 			t.Errorf("%s: %+v %v", name, v, err)
 		}
+	}
+}
+
+// Two high samples a minute apart, or one hole in the middle, are not a minute of thrashing: the span between the ends is not enough.
+func TestThrash_AHoleBetweenSamplesIsNotContinuous(t *testing.T) {
+	now := t0.Add(60 * time.Second)
+	holed := append(every5s(t0, 3, 4300, 95000), every5s(t0.Add(45*time.Second), 4, 4300, 95000)...) // 10 s … 45 s missing
+	if v, _ := (Thrash{}).Eval(samplesInput(now, holed...)); v.Holds {
+		t.Fatalf("a 30 s hole counted: %+v", v)
+	}
+	ends := []wire.Facts{thrashSample(t0, 4300, 95000), thrashSample(t0.Add(60*time.Second), 4300, 95000)}
+	if v, _ := (Thrash{}).Eval(samplesInput(now, ends...)); v.Holds {
+		t.Fatalf("two samples a minute apart counted: %+v", v)
+	}
+	oneMissed := every5s(t0, 13, 4300, 95000)
+	oneMissed = append(oneMissed[:5], oneMissed[6:]...) // one sample lost: a 10 s step is still fine
+	if v, _ := (Thrash{}).Eval(samplesInput(now, oneMissed...)); !v.Holds {
+		t.Fatal("one lost sample should not break it")
 	}
 }
 

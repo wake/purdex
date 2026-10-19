@@ -19,6 +19,14 @@ const (
 
 func zoneHigh(z wire.Zone) bool { return z == wire.ZoneWarning || z == wire.ZoneDanger }
 
+// minuteFullS is the sampled seconds a one-minute record needs to stand for the whole minute: a sample is 5 s, so a minute that lost one
+// sample still counts. The minute being filled, and a minute the sampler failed in, have fewer, and prove nothing about the seconds they
+// did not see.
+const minuteFullS = 55
+
+// minuteFull says whether a one-minute record covers (nearly) the whole minute. A record without stats cannot say, so it does not.
+func minuteFull(f wire.Facts) bool { return f.Stats != nil && f.Stats.SampledS >= minuteFullS }
+
 // minuteHigh says whether a one-minute record spent the whole minute at warning or worse: the per-minute stats count the seconds in each
 // zone, so a minute with any normal second is not. A record without stats (written before they existed) has only its worst zone to go on.
 func minuteHigh(f wire.Facts) bool {
@@ -51,12 +59,17 @@ func (PressureHeld) Eval(in Input) (Verdict, error) {
 		v.Holds, v.Detail = true, "記憶體壓力持續在 warning 以上"
 		return v, nil
 	}
+	// to start, five whole minutes are needed: the minute still being filled (or one that lost samples) is left out, so the alert cannot
+	// fire before the pressure has lasted five minutes, nor across seconds nobody sampled
+	if !minuteFull(last) {
+		recs = recs[:len(recs)-1]
+	}
 	if len(recs) < pressureMinutes {
 		return v, nil
 	}
 	win := recs[len(recs)-pressureMinutes:]
 	for i, f := range win {
-		if !minuteHigh(f) || (i > 0 && f.At.Sub(win[i-1].At) != time.Minute) {
+		if !minuteFull(f) || !minuteHigh(f) || (i > 0 && f.At.Sub(win[i-1].At) != time.Minute) {
 			return v, nil
 		}
 	}
@@ -75,6 +88,8 @@ const (
 	thrashSpan         = 60 * time.Second
 	// thrashSpanSlack is how short of thrashSpan the covered span of the samples may be (a sample is 5 s apart, the clock jitters).
 	thrashSpanSlack = 5 * time.Second
+	// thrashMaxGap is the most two neighbouring samples may be apart: one missed sample (2 × 5 s) is fine, more is a hole.
+	thrashMaxGap = 2 * wire.SampleIntervalS * time.Second
 )
 
 // Thrash is "thrash" (digest): macOS, compressor > 4 GiB and decompress_rate > 80 000/s for ≥ 60 s. It judges the last 60 s of 5 s samples
@@ -98,8 +113,9 @@ func (Thrash) Eval(in Input) (Verdict, error) {
 		if len(recs) == 0 || recs[len(recs)-1].At.Sub(recs[0].At) < thrashSpan-thrashSpanSlack {
 			return v, nil
 		}
-		for _, f := range recs {
-			if !thrashing(f.Mem) {
+		for i, f := range recs {
+			// every sample, and no hole between them: two high samples a minute apart (the daemon paused, the clock jumped) are not a minute
+			if !thrashing(f.Mem) || (i > 0 && f.At.Sub(recs[i-1].At) > thrashMaxGap) {
 				return v, nil
 			}
 		}
