@@ -470,6 +470,11 @@ func lockFile(path string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
+	return lockFileIn(path)
+}
+
+// lockFileIn is lockFile in a directory that is there: it does not make it, so a directory that is gone is an error.
+func lockFileIn(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err

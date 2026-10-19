@@ -84,7 +84,7 @@ func TestDecisions_AreRotated(t *testing.T) {
 	dir := g.Config().Dir
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, decisionsFile), make([]byte, decisionsMaxSize+1), 0o644))
-	g.record(dir, &Decision{Argv: []string{"x"}})
+	g.record(dir, &Decision{Argv: []string{"x"}}, true)
 	_, err := os.Stat(filepath.Join(dir, decisionsFile+".1"))
 	assert.NoError(t, err)
 	b, _ := os.ReadFile(filepath.Join(dir, decisionsFile))

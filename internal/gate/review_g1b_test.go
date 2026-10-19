@@ -72,7 +72,7 @@ func TestDecisions_ConcurrentWritersKeepWholeLines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			g.record(dir, &Decision{Argv: []string{"x"}, Outcome: "slot"})
+			g.record(dir, &Decision{Argv: []string{"x"}, Outcome: "slot"}, true)
 		}()
 	}
 	wg.Wait()
