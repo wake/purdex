@@ -72,6 +72,13 @@ func TestMacOnlyViolationsRules(t *testing.T) {
 // toolNeedsExempt are the tasks whose tool needs are decided elsewhere: tsc and tsc-force carry their own labels (5b-2c-2).
 var toolNeedsExempt = map[string]bool{"tsc": true, "tsc-force": true}
 
+// The node and pnpm labels the SPA tasks carry: the worker advertises the major only (internal/wwd/labels/labels.go), so these are the
+// exact strings a host has. A wrong major here leaves a task that no host can take, so they are checked whole, not by prefix.
+const (
+	nodeLabel = "tool:node24"
+	pnpmLabel = "tool:pnpm10"
+)
+
 // toolNeeds says which tool: labels a task has to carry, from what it runs: a task that runs go (go test, make lint's gofmt and go vet)
 // needs the Go of the repo's go.mod, and one that runs pnpm needs node and pnpm. goLabel is "tool:go<major>.<minor>".
 func toolNeeds(task *Task, goLabel string) []string {
@@ -80,7 +87,7 @@ func toolNeeds(task *Task, goLabel string) []string {
 		need = append(need, goLabel)
 	}
 	if strings.Contains(task.Run, "pnpm ") {
-		need = append(need, "node", "pnpm") // the version is the host's: checked by prefix below
+		need = append(need, nodeLabel, pnpmLabel)
 	}
 	return need
 }
@@ -109,12 +116,13 @@ func TestPurdexManifestTasksCarryTheToolsTheyRun(t *testing.T) {
 		}
 		for _, need := range toolNeeds(task, goLabel) {
 			checked++
-			has := slices.Contains(task.Labels, need)
-			if need == "node" || need == "pnpm" {
-				has = slices.ContainsFunc(task.Labels, func(l string) bool { return strings.HasPrefix(l, "tool:"+need) })
+			if !slices.Contains(task.Labels, need) {
+				t.Errorf("task %s runs %q and has no %s label (labels %v)", name, task.Run, need, task.Labels)
 			}
-			if !has {
-				t.Errorf("task %s runs %q and has no %s label (labels %v)", name, task.Run, map[bool]string{true: goLabel, false: "tool:" + need + "<major>"}[need == goLabel], task.Labels)
+		}
+		for _, l := range task.Labels { // a tool: label the task has no need of, or one with another version, is a task nobody can take
+			if strings.HasPrefix(l, "tool:") && !slices.Contains(toolNeeds(task, goLabel), l) {
+				t.Errorf("task %s carries %s, which is not what it runs needs (%v)", name, l, toolNeeds(task, goLabel))
 			}
 		}
 	}

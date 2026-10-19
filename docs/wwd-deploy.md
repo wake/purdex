@@ -441,18 +441,23 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
 ## 11. The tools a worker must have, and raising Go (#3546)
 
 The manifest (`.wwd/tasks.toml`) says what a task needs of its host: a task that runs `go` (`go test …`, `make lint`) carries
-`tool:go<major>.<minor>` (the `go` line of `go.mod`), one that runs `pnpm` carries `tool:node<N>` and `tool:pnpm<N>` (tsc has its own
-labels). A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the
-PATH of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that
-lacks one does not claim those tasks; if no host has all of them the job is not sent and `pdx test` ends with exit 5 ("no host can take
-it"), instead of running somewhere and failing for the missing tool.
+`tool:go<major>.<minor>` (the `go` line of `go.mod`), one that runs `pnpm` carries `tool:node24` and `tool:pnpm10` (the worker
+advertises the major only). `tsc` and `tsc-force` are decided with the qualification of `tsc` (#3655) and carry no tool label until
+that lands. A host advertises such a label only when its worker's PATH really finds the tool, so **every worker host needs, on the PATH
+of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that lacks
+one does not claim those tasks.
+
+If **no** host has all the labels of a task, `pdx test` can end at once with exit 5 ("no host can take it") — but only when the pool
+was read, no reachable host is still settling its facts, and no host holds the labels, **counting a host that is offline or has its
+worker off by the last labels it reported** (those stay). In every other case the job is queued as usual and may wait until the queue
+timeout (exit 6). Do not count on the quick failure.
 
 **Raising Go to a new minor** (for example 1.26 → 1.27), in this order:
 
 1. Upgrade Go on all three worker hosts (mlab, air26, mserv) first and check that each host's `GET /v1/info` shows `tool:go1.27`.
 2. Then change the `go` line of `go.mod` **and** every `tool:go1.26` in `.wwd/tasks.toml` in one PR.
 
-`TestPurdexManifestTasksCarryTheToolsTheyRun` goes red when the two disagree, so it cannot be forgotten. Between the steps (some hosts
-raised, the manifest not yet) the Go tasks still run on the hosts that have the old label; between 1 and 2 on a host that has already
-moved, and after 2 on a host that has not, a Go task has no host that can take it and fails at once with exit 5 — loudly, never
-silently on the wrong toolchain.
+`TestPurdexManifestTasksCarryTheToolsTheyRun` goes red when the two disagree, so it cannot be forgotten. Between the steps a Go task is
+taken by the hosts that have the label it carries: while some hosts are on 1.27 and the manifest still says 1.26, only the hosts still
+on 1.26 take it (when all three are raised, none does until step 2 lands); after step 2, a host that has not been raised takes none.
+Raise all three before step 2, and do step 2 promptly.
