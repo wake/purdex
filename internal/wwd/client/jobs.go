@@ -261,6 +261,15 @@ func (c *Client) Cancel(ctx context.Context, id string) error {
 	return err
 }
 
+// CancelAt is POST /v1/jobs/{id}/cancel about the named host (the local wwd forwards to that peer, spec §10) and returns the job as it is
+// then. A job that has ended is a StatusError 409.
+func (c *Client) CancelAt(ctx context.Context, host, id string) (wire.Job, error) {
+	if err := checkID(id); err != nil {
+		return wire.Job{}, err
+	}
+	return call[wire.Job](ctx, c, http.MethodPost, "/v1/jobs/"+url.PathEscape(id)+"/cancel", hostQuery(host), nil)
+}
+
 // SetPosition is POST /v1/jobs/{id}/position (spec 4.6): the manual place of a queued job on this host. It returns the job as it is
 // then; a job that is not queued is a StatusError 409.
 func (c *Client) SetPosition(ctx context.Context, id string, p wire.Position) (wire.Job, error) {
