@@ -3064,6 +3064,7 @@
   "pool.reason.owner_active": "主人正在這台操作",
   "pool.reason.slots_full": "名額都在用",
   "pool.reason.gate_full": "閘門的名額被占住",
+  "pool.reason.unknown": "原因不明",
   "pool.driver.cpu": "CPU",
   "pool.driver.mem": "記憶體",
   "pool.driver.pressure": "壓力",

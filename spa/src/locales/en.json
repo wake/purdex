@@ -3064,6 +3064,7 @@
   "pool.reason.owner_active": "The owner is at this machine",
   "pool.reason.slots_full": "All slots are in use",
   "pool.reason.gate_full": "The gate's slots are held",
+  "pool.reason.unknown": "Reason unknown",
   "pool.driver.cpu": "CPU",
   "pool.driver.mem": "Memory",
   "pool.driver.pressure": "Pressure",
