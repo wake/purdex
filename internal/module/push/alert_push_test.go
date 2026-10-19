@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,6 +133,31 @@ func TestAlertPush_ReadyOnlyWhileTheSenderIsUp(t *testing.T) {
 	if r.AlertReady() {
 		t.Fatal("still ready after Stop")
 	}
+}
+
+// StillWanted is asked by the sender just before each device's push, not only when the push was queued: a push that waited in the queue
+// while its caller was told to stop (the wwd_alerts.push switch) is not sent, and then Sent is not called either.
+func TestAlertPush_NotSentWhenNoLongerWanted(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	te.register(tokA, "zh-TW", "mlab")
+	var wanted atomic.Bool
+	sent := make(chan struct{}, 2)
+	wanted.Store(false)
+	if !te.mod.alertNotifier().NotifyAlert(push.AlertPush{CollapseID: "alert:mlab:x", Title: "t", Host: "mlab",
+		StillWanted: wanted.Load, Sent: func() { sent <- struct{}{} }}) {
+		t.Fatal("queued is done")
+	}
+	te.noSends(t)
+	select {
+	case <-sent:
+		t.Fatal("Sent called for a push that was not sent")
+	default:
+	}
+	wanted.Store(true)
+	if !te.mod.alertNotifier().NotifyAlert(push.AlertPush{CollapseID: "alert:mlab:y", Title: "t", Host: "mlab", StillWanted: wanted.Load}) {
+		t.Fatal("not done")
+	}
+	te.waitSends(t, 1)
 }
 
 // A person at the computer needs no phone push: the alert is done (not retried) and nothing is sent.

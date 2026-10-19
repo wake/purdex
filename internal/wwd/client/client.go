@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -175,6 +176,27 @@ func (c *Client) Info(ctx context.Context) (wire.Info, error) {
 // Pool is GET /v1/pool: this wwd's view of every peer.
 func (c *Client) Pool(ctx context.Context) (wire.Pool, error) {
 	return get[wire.Pool](ctx, c, "/v1/pool", nil)
+}
+
+// FactsSeries is GET /v1/facts/series: the host that has the data cuts its history to the points a chart draws. Like the history, a
+// call that names another host waits for wwd's forwarding. A wwd that does not have the route answers 404: see RouteMissing.
+func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire.FactsSeriesResponse, error) {
+	timeout := c.timeout()
+	if q.Host != "" && timeout < MutateTimeout {
+		timeout = MutateTimeout
+	}
+	return getLimit[wire.FactsSeriesResponse](ctx, c, "/v1/facts/series", q.Values(), timeout, maxBody)
+}
+
+// notFoundBody is what net/http's mux answers for a path it has no handler for.
+const notFoundBody = "404 page not found"
+
+// RouteMissing says err is a wwd (or the peer behind it) that has no such route: exactly net/http's own 404 for an unknown path.
+// Any other 404 (a JSON {"error":"unknown host"}, a proxy's page, another route's reason) is the answer it is and is not this, so that
+// it is never mistaken for an old release and answered by asking again for ten times the data.
+func RouteMissing(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusNotFound && strings.TrimSpace(se.Body) == notFoundBody
 }
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about

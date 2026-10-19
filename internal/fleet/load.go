@@ -8,6 +8,7 @@ import (
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // Composite-load and memory-latch lines (spec §5).
@@ -27,14 +28,30 @@ const (
 // unknown, counts for nothing), the page rate (pages/s, capped at 100) and the disk % only when it is 85 or more. The ring's
 // colour is the zone, not this score: a host at CPU 95 % without memory pressure shows a long neutral ring.
 func Composite(f LocalFast, diskPct float64, diskOK bool) float64 {
-	score := clamp100(f.CPU)
-	score = max(score, clamp100(f.Mem))
-	score = max(score, levelScore(f.Level))
-	score = max(score, min(max(f.PageRate, 0), pageRateCap))
-	if diskOK && diskPct >= diskScoreFrom {
-		score = max(score, clamp100(diskPct))
-	}
+	score, _ := LoadScore(f, diskPct, diskOK)
 	return score
+}
+
+// LoadScore is Composite and the reading that is the largest of its five (wire.LoadDriver*): cpu, mem, pressure, paging or disk.
+// On a tie the first in that order is the driver, and a host with no reading at all is "cpu" at 0.
+func LoadScore(f LocalFast, diskPct float64, diskOK bool) (float64, string) {
+	score, driver := clamp100(f.CPU), wire.LoadDriverCPU
+	for _, c := range []struct {
+		v      float64
+		driver string
+	}{
+		{clamp100(f.Mem), wire.LoadDriverMem},
+		{levelScore(f.Level), wire.LoadDriverLevel},
+		{min(max(f.PageRate, 0), pageRateCap), wire.LoadDriverPaging},
+	} {
+		if c.v > score {
+			score, driver = c.v, c.driver
+		}
+	}
+	if diskOK && diskPct >= diskScoreFrom && clamp100(diskPct) > score {
+		score, driver = clamp100(diskPct), wire.LoadDriverDisk
+	}
+	return score, driver
 }
 
 func clamp100(v float64) float64 { return min(max(v, 0), 100) }

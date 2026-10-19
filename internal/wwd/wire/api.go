@@ -241,13 +241,39 @@ func (e Exception) Validate() error {
 
 // ---- Purdex daemon API for the App (spec §10) ----
 
-// PoolHost is one host in GET /api/pool/hosts.
+// HeadroomReasons says why a side of a host's headroom is 0: the codes of spec §3.2 in this order, worker_off, zone_warning |
+// zone_danger | zone_unknown, exception:<name>, owner_active, slots_full, gate_full (and unknown for a side at 0 that a faulty record does not explain). An empty list means there is room. Both lists are
+// never null.
+type HeadroomReasons struct {
+	Heavy []string `json:"heavy"`
+	Light []string `json:"light"`
+}
+
+// Load drivers: the reading that holds a host's composite load up (internal/fleet.LoadScore).
+const (
+	LoadDriverCPU    = "cpu"
+	LoadDriverMem    = "mem"
+	LoadDriverLevel  = "pressure"
+	LoadDriverPaging = "paging"
+	LoadDriverDisk   = "disk"
+)
+
+// HostLoad is a host's composite load, 0-100, and the reading that is the largest of those it is made of.
+type HostLoad struct {
+	Score  float64 `json:"score"`
+	Driver string  `json:"driver"`
+}
+
+// PoolHost is one host in GET /api/pool/hosts. HeadroomReasons and Load come from the latest facts and are null for a host that has
+// none (capability pool.assess.v1).
 type PoolHost struct {
-	Info      Info           `json:"info"`
-	Facts     *Facts         `json:"facts"`
-	Worker    WorkerSettings `json:"worker"`
-	Labels    []string       `json:"labels"`
-	Reachable bool           `json:"reachable"`
+	Info            Info             `json:"info"`
+	Facts           *Facts           `json:"facts"`
+	Worker          WorkerSettings   `json:"worker"`
+	Labels          []string         `json:"labels"`
+	Reachable       bool             `json:"reachable"`
+	HeadroomReasons *HeadroomReasons `json:"headroom_reasons"`
+	Load            *HostLoad        `json:"load"`
 }
 
 type PoolHostsResponse struct {

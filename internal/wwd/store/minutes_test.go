@@ -8,7 +8,7 @@ import (
 )
 
 func minuteRec(at time.Time, load float64) wire.Facts {
-	return wire.Facts{V: wire.Proto, HostID: "h1", Alias: "mlab", At: at, CPU: wire.CPU{Load1: load}}
+	return wire.Facts{V: wire.FactsProto, HostID: "h1", Alias: "mlab", At: at, CPU: wire.CPU{Load1: load}}
 }
 
 func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {
@@ -35,6 +35,47 @@ func TestMinutesPersistReadBackInOrderAndSurviveReopen(t *testing.T) {
 	}
 	if !got[0].At.Equal(t0.Add(time.Minute)) || got[0].CPU.Load1 != 1 || got[1].CPU.Load1 != 2 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestNewestMinute(t *testing.T) {
+	s, _ := open(t)
+	if _, ok, err := s.NewestMinute(); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	for _, i := range []int{0, 5, 2} {
+		if err := s.SaveMinute(minuteRec(t0.Add(time.Duration(i)*time.Minute), 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at, ok, err := s.NewestMinute()
+	if err != nil || !ok || !at.Equal(t0.Add(5*time.Minute)) {
+		t.Fatalf("%v %v %v", at, ok, err)
+	}
+}
+
+// LoadMinutesLatest reads only the newest n minutes at or after since (oldest first), so a chart's cost is its point count and not the
+// fourteen days behind it.
+func TestLoadMinutesLatestReadsOnlyTheNewestN(t *testing.T) {
+	s, _ := open(t)
+	for i := 0; i < 10; i++ {
+		if err := s.SaveMinute(minuteRec(t0.Add(time.Duration(i)*time.Minute), float64(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.LoadMinutesLatest(t0, 3)
+	if err != nil || len(got) != 3 || got[0].CPU.Load1 != 7 || got[1].CPU.Load1 != 8 || got[2].CPU.Load1 != 9 {
+		t.Fatalf("the newest 3, oldest first: %+v err %v", got, err)
+	}
+	got, err = s.LoadMinutesLatest(t0.Add(8*time.Minute), 5) // since still applies
+	if err != nil || len(got) != 2 || got[0].CPU.Load1 != 8 {
+		t.Fatalf("since: %+v err %v", got, err)
+	}
+	if got, err = s.LoadMinutesLatest(t0, 100); err != nil || len(got) != 10 || got[0].CPU.Load1 != 0 {
+		t.Fatalf("fewer rows than n: %d err %v", len(got), err)
+	}
+	if got, err = s.LoadMinutesLatest(t0, 0); err != nil || len(got) != 0 {
+		t.Fatalf("n = 0 reads nothing: %d err %v", len(got), err)
 	}
 }
 

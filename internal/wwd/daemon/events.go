@@ -140,10 +140,11 @@ func (b *Broker) PublishFacts(f wire.Facts) {
 }
 
 // PublishAlert announces that host's alert list changed (spec §13.3). It is a hint: it is not cached for a later subscriber, who reads
-// the list when it starts, and it goes to every subscriber, peers included (an alert is not local-only like an ad-hoc job).
+// the list when it starts. It goes to the socket stream only (its reader is the same host's Purdex daemon, never older than its wwd): a
+// peer's TCP stream never carries it, since an older peer's decoder would refuse the new type (spec §13.1).
 func (b *Broker) PublishAlert(host string) {
 	if e, ok := envelope(wire.EventAlert, wire.AlertEvent{Host: host}); ok {
-		b.publish(e, false)
+		b.publish(e, true) // true: local subscribers only
 	}
 }
 

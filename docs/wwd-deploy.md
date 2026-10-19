@@ -213,6 +213,28 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     above), start the old build. The rows of the two new tables are lost with the roll back (until 8a-1 they hold nothing).
     Check after the upgrade: `sqlite3 ~/.local/share/wwd/wwd.db "SELECT version FROM host_schema; SELECT count(*) FROM alerts;"`
     prints `5` and `0`.
+* **Wire `proto` 3 and the passed-test digest (WWD-5b-2r / 5b-2w, spec §7)** — the same two phases, for one new field: `summary.passed_digest`
+  in a job result (`sha256:<64 hex>` of the sorted passed test ids; qualification compares it so that two hosts that ran different tests
+  and passed as many are told apart). Decoders are strict, so:
+  - *The readers' release (5b-2r)*: every wwd and both Purdex daemons learn the field; `/v1/info` says `"proto":3`. Nothing writes it.
+    Summaries are byte-for-byte the old shape (the field is `omitempty`; a test pins that an older strict decoder takes them). The
+    **facts version is no longer the protocol version**: `wire.FactsProto = 2` is what facts carry and a facts reader takes, so a
+    proto 3 build still writes `v: 2` facts when the proto 2 gate is open (a `v: 3` record would be refused by a proto 2 host; a test
+    pins it). **Deploy the four wwds and both Purdex daemons from the same build, one after the other and quickly, and on each host
+    the Purdex daemon first, then that host's wwd.** The reason is the local read: a new wwd announces `proto: 3` in `/v1/info`
+    and as the first entry of `/v1/pool` (itself), and an old Purdex daemon's strict `Pool.Validate` refuses the whole answer for it,
+    so with the wwd upgraded first the Purdex daemon's pool API (`/api/pool/hosts`, facts history and series, the fleet view) answers
+    "bad response" until Purdex is upgraded too. (The order of the proto 2 release, Purdex first, is the one to repeat.) Across hosts
+    the skew costs less: a proto 2 wwd reads a proto 3 wwd's `/v1/info` as an unknown proto, i.e. an unreachable peer, for the few
+    minutes it lasts, the gates stay shut meanwhile and nothing is lost, but the pool view of that peer is missing and anything that
+    treats an unreachable peer as news (a host-down alert, once the alert writers are on) may fire for it: do the four back to back.
+    Check after each host: the Purdex daemon's `GET /api/pool/hosts` answers 200 with this host first, and
+    `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` shows `"proto":3`.
+  - *The writers' release (5b-2w), one release later*: the three summary parsers fill `passed_digest`, and only while
+    `wire.PoolAtLeast(peers, 3)` holds. A writer PR must not be merged or deployed in the same release as the reader PR. A host rolled
+    back below proto 3 shuts the gate again.
+  - A pair compared with a digest missing on either half is a mismatch, never a count comparison, so until the writers are everywhere
+    qualification earns nothing; **the first PR that starts a pair on a production host (5b-2c) waits for the writers' release**.
 * Remove: `wwd uninstall` (service definition and binary go; config, token and `wwd.db` stay) or
   `wwd uninstall --purge` (everything under `~/.config/wwd` and `~/.local/share/wwd`). `pdx setup --wwd-remove
   [--wwd-purge]` is the same.
@@ -284,3 +306,23 @@ routines use `REGEXP_LIKE(expr, pattern, 'c')`.
 
 `go test -c -tags mserv ./internal/wwd/jobdb/` makes the end-to-end test of the Go side (scenario J: Create over `100.64.0.6:3307`, a
 re-run starts empty, Drop ends a held connection, Sweep keeps what a live job owns); run it on mserv with `WWD_MSERV_E2E=1`.
+
+## 7. Phone pushes of the wwd alerts (the switch)
+
+The alerts the wwd rules raise (spec §13.3) are written to each host's `wwd.db` and read by the Purdex daemons, which gather the
+`digest` ones and send the `push` ones to the phone through the push module. **Sending to the phone is off by default.** It is the host
+setting `wwd_alerts` with one field, `push`, kept by each Purdex daemon for itself (mlab's and air26's are separate: whichever of the two
+holds the fleet `primary` role, or takes over for a primary without a push module, is the one that sends).
+
+```sh
+# turn on / off (needs the admin token; baseRevision is the row's current revision, GET /api/hostconfig key wwdAlerts)
+curl -sS -X PUT "$DAEMON/api/hostconfig/wwd_alerts" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"items":{"push":true},"baseRevision":0}'
+```
+
+**To stop the pushes now, set `push` to `false` on both daemons.** It is read at every push, so nothing needs a restart, and it is read
+again just before each push leaves the push module's queue, so what still waits there is taken back too. The one thing it cannot recall
+is a request that is already on its way to APNs at that moment. A setting that cannot be read counts as off. While it is off the alerts are still written, shown by `GET /v1/alerts` and gathered for the digest;
+nothing is recorded as sent, so alerts that still hold when it is turned on again are sent then. `/api/info` shows the state under
+`wwdalerts`: `{push: "on"|"off", deliverer: true|false, suppressed: <push-level alerts held back in the last pass>}`, and the daemon's
+log has one line each time the state changes.

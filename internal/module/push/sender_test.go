@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,6 +189,58 @@ func TestSender_RetryLaterWaitsTwoSecondsOnceThenGivesUp(t *testing.T) {
 	runOne(t, newTestSender(book2, a2, sl2), leadJob(d.DeviceID))
 	if a2.count() != 2 || book2.errors[d.DeviceID] != "network error" {
 		t.Fatalf("calls %d errors %v", a2.count(), book2.errors)
+	}
+}
+
+// The retry after a 429 / 5xx is a new request: a job taken back (StillWanted false) during the 2 s pause is not sent again, and since a
+// request did go out, OnRecalled is not called.
+func TestSender_ARetryIsNotMadeOnceTheJobIsTakenBack(t *testing.T) {
+	d := device(strings.Repeat("a1", 32), "en", "mlab")
+	book := newBook(d)
+	a := &fakeAPNS{script: []apns.Result{{Class: apns.RetryLater, Status: 503, Reason: "ServiceUnavailable"}, {Class: apns.OK, Status: 200}}}
+	var wanted atomic.Bool
+	wanted.Store(true)
+	s := newTestSender(book, a, &slept{})
+	s.sleep = func(context.Context, time.Duration) { wanted.Store(false) } // the switch is turned off during the pause
+	recalled := 0
+	j := leadJob(d.DeviceID)
+	j.StillWanted, j.OnRecalled = wanted.Load, func() { recalled++ }
+	runOne(t, s, j)
+	if a.count() != 1 || recalled != 0 {
+		t.Fatalf("calls %d recalled %d", a.count(), recalled)
+	}
+}
+
+// The immediate retry after a rejected provider token is a new request too.
+func TestSender_AJWTRetryIsNotMadeOnceTheJobIsTakenBack(t *testing.T) {
+	d := device(strings.Repeat("a1", 32), "en", "mlab")
+	book := newBook(d)
+	a := &fakeAPNS{script: []apns.Result{{Class: apns.JWTRejected, Status: 403, Reason: "InvalidProviderToken"}, {Class: apns.OK, Status: 200}}}
+	var calls int
+	j := leadJob(d.DeviceID)
+	j.StillWanted = func() bool { calls++; return calls <= 1 } // wanted before the first request, taken back before the retry
+	runOne(t, newTestSender(book, a, &slept{}), j)
+	if a.count() != 1 {
+		t.Fatalf("calls = %d", a.count())
+	}
+}
+
+// A job taken back before any request went out calls OnRecalled once and sends nothing; one still wanted does not call it.
+func TestSender_OnRecalledOnlyWhenNothingWasRequested(t *testing.T) {
+	d := device(strings.Repeat("a1", 32), "en", "mlab")
+	book, a := newBook(d), &fakeAPNS{script: []apns.Result{{Class: apns.OK, Status: 200}}}
+	recalled := 0
+	j := leadJob(d.DeviceID, d.DeviceID)
+	j.StillWanted, j.OnRecalled = func() bool { return false }, func() { recalled++ }
+	runOne(t, newTestSender(book, a, &slept{}), j)
+	if a.count() != 0 || recalled != 1 {
+		t.Fatalf("calls %d recalled %d", a.count(), recalled)
+	}
+	j = leadJob(d.DeviceID)
+	j.StillWanted, j.OnRecalled = func() bool { return true }, func() { recalled++ }
+	runOne(t, newTestSender(book, a, &slept{}), j)
+	if a.count() != 1 || recalled != 1 {
+		t.Fatalf("calls %d recalled %d", a.count(), recalled)
 	}
 }
 

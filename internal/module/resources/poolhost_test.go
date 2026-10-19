@@ -19,7 +19,7 @@ import (
 func factsAt(at time.Time) *wire.Facts {
 	po, so := 2.0, 1.0
 	return &wire.Facts{
-		V: wire.Proto, Alias: "mlab", At: at, Platform: "darwin",
+		V: wire.FactsProto, Alias: "mlab", At: at, Platform: "darwin",
 		CPU:     wire.CPU{NCPU: 10, Load1: 5, Load5: 4},
 		Mem:     wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: 2, PageOutRate: &po, SwapOutRate: &so},
 		Derived: wire.Derived{Zone: wire.ZoneWarning, SessionsRoom: 3},

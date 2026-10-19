@@ -7,8 +7,13 @@ package wire
 // Contract constants.
 const (
 	// Proto is the highest wire protocol version this build reads, and what /v1/info announces (spec §13.1). 2 adds
-	// readers for Facts mem.decompress_rate and queue, Exception allow and flags, the Alert payloads and GET /v1/alerts.
-	Proto = 2
+	// readers for Facts mem.decompress_rate and queue, Exception allow and flags, the Alert payloads and GET /v1/alerts. 3 adds
+	// the reader for Summary.passed_digest (WWD-5b-2r); nothing else changed, in particular no facts record is v 3 (FactsProto).
+	Proto = 3
+	// FactsProto is the highest `v` a facts record carries and a facts reader takes: 2. It was the same number as Proto while
+	// the only proto 2 things were in facts; the proto 3 reader is in a job result, not in a facts record, so a proto 3 build still
+	// writes (at most) v 2 facts and a proto 2 host takes them.
+	FactsProto = 2
 	// MinProto is the oldest version a reader still takes: a v1 payload never has the fields proto 2 added.
 	MinProto = 1
 	// WriteProto is the `v` writers put in facts. It stays 1, and the new fields stay empty, until every pool host reports

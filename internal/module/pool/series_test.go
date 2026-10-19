@@ -145,6 +145,82 @@ func TestSeriesRouteRefusesWhatItCannotAnswer(t *testing.T) {
 	assert.Equal(t, 200, call(m, "/api/pool/facts/series?since=2026-10-05T12:00:00Z").Code, "an RFC 3339 time is held to the same window")
 }
 
+// A wwd that has the route cuts the series itself: the full history is not asked for, and the limit and host go to it.
+func TestSeriesRouteAsksWWDForTheCutSeries(t *testing.T) {
+	var q [][3]string
+	history := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query()
+		q = append(q, [3]string{v.Get("host"), v.Get("limit"), v.Get("step")})
+		_, _ = w.Write([]byte(`{"step":"1m","points":[{"at":"2026-10-18T11:30:00Z","zone":"normal","cpu_idle_pct":70,"mem_available_mb":3000,"pressure":1,"page_out_rate":null,"disk_max_used_pct":50,"headroom":{"heavy":1,"light":0}}],"truncated":true}`))
+	})
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { history++ })
+	m := newModule(t, fakeWWD(t, mux))
+	rr := call(m, "/api/pool/facts/series?host=mserv&since=24h")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	var got SeriesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Len(t, got.Points, 1)
+	assert.True(t, got.Truncated)
+	assert.Equal(t, 70.0, got.Points[0].CPUIdlePct)
+	assert.Equal(t, [][3]string{{"mserv", "2000", "1m"}}, q)
+	assert.Zero(t, history, "the full history is the fallback, not the first ask")
+}
+
+// The route's 2000 points hold even when the wwd behind it ignores the limit.
+func TestSeriesRouteKeepsTheLatest2000OfAnOverlongAnswer(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	over := wire.FactsSeriesResponse{Step: "1m", Points: make([]wire.SeriesPoint, seriesMaxPoints+5)}
+	for i := range over.Points {
+		over.Points[i] = wire.SeriesPoint{At: t0.Add(time.Duration(i) * time.Minute), Zone: wire.ZoneNormal}
+	}
+	body, err := json.Marshal(over)
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/facts/series?since=24h")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	var got SeriesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Len(t, got.Points, seriesMaxPoints)
+	assert.True(t, got.Truncated)
+	assert.Equal(t, t0.Add(5*time.Minute), got.Points[0].At, "the oldest 5 are the ones left out")
+}
+
+// An unknown host is the caller's mistake, not a missing route: it is passed on as wwd_rejected 404 and the history is not tried.
+// A wwd that has no series route (an older release) is the fallback: the full history is fetched and cut here.
+func TestSeriesRouteFallsBackOnlyWhenTheRouteIsMissing(t *testing.T) {
+	history := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"unknown host","host":"nowhere"}`))
+	})
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { history++; serve(historyOf("5s"))(w, r) })
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/facts/series?host=nowhere")
+	assert.Equal(t, 404, rr.Code)
+	assert.Equal(t, ErrWWDRejected, errCode(rr))
+	assert.Zero(t, history)
+
+	old := http.NewServeMux() // only the history: net/http answers the series with its plain 404
+	old.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { history++; serve(historyOf("5s"))(w, r) })
+	rr = call(newModule(t, fakeWWD(t, old)), "/api/pool/facts/series?host=mserv")
+	assert.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Equal(t, 1, history)
+}
+
+// A 5xx or an unreachable wwd on the series is that error, not a reason to ask again for ten times the data.
+func TestSeriesRouteDoesNotFallBackOnOtherErrors(t *testing.T) {
+	history := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) })
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) { history++; serve(historyOf("5s"))(w, r) })
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/facts/series")
+	assert.Equal(t, 502, rr.Code)
+	assert.Zero(t, history)
+}
+
 func TestSeriesRouteErrorsAreHistorys(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {

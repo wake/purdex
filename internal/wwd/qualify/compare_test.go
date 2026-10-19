@@ -1,6 +1,7 @@
 package qualify
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -10,8 +11,11 @@ func res(host string, exit int, sum *wire.Summary) *wire.Result {
 	return &wire.Result{Exit: &exit, Host: host, Summary: sum}
 }
 
+// digestOf is a well-formed digest standing for "the passed tests are set n".
+func digestOf(n int) string { return fmt.Sprintf("sha256:%064x", n) }
+
 func sum(passed, failed int, failures ...string) *wire.Summary {
-	s := &wire.Summary{Passed: passed, Failed: failed}
+	s := &wire.Summary{Passed: passed, Failed: failed, PassedDigest: digestOf(passed)}
 	for _, f := range failures {
 		s.Failures = append(s.Failures, wire.Failure{File: "a.ts", Name: f})
 	}
@@ -134,5 +138,36 @@ func TestATruncatedFailureListVoidsThePair(t *testing.T) {
 	c, r = pair(res("mserv", 1, trunc("b", "a")), res("air26", 1, trunc("c", "d")))
 	if v := Compare(c, r); v.Outcome != OutcomeVoid {
 		t.Fatalf("different truncated lists: %+v", v)
+	}
+}
+
+// Two hosts that ran different tests and passed as many of them are told apart by the digest: this is what the counts alone could not do.
+func TestDifferentPassedTestsWithTheSameCountAreAMismatch(t *testing.T) {
+	cs, rs := sum(2, 0), sum(2, 0)
+	cs.PassedDigest = digestOf(1001) // tests A and B
+	rs.PassedDigest = digestOf(1002) // tests C and D
+	c, r := pair(res("mserv", 0, cs), res("air26", 0, rs))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("%+v", v)
+	}
+}
+
+// A digest missing on either half (an older host, an older result, a parser with none) is a mismatch: never a fall back to the counts.
+func TestAMissingDigestIsAMismatchNeverACountFallback(t *testing.T) {
+	none := func() *wire.Summary { s := sum(10, 0); s.PassedDigest = ""; return s }
+	for name, tc := range map[string]struct{ cand, ref *wire.Summary }{
+		"the candidate has none": {none(), sum(10, 0)},
+		"the reference has none": {sum(10, 0), none()},
+		"neither has one":        {none(), none()},
+	} {
+		c, r := pair(res("mserv", 0, tc.cand), res("air26", 0, tc.ref))
+		if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+			t.Errorf("%s: %+v", name, v)
+		}
+	}
+	// no summary at all (a task without a parser) has no pass set to name: exit state alone decides, as before
+	c, r := pair(res("mserv", 0, nil), res("air26", 0, nil))
+	if v := Compare(c, r); v.Outcome != OutcomeMatch {
+		t.Fatalf("%+v", v)
 	}
 }

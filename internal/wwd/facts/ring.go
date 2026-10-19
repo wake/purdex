@@ -85,7 +85,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 		out.Mem.Pressure = max(out.Mem.Pressure, r.Mem.Pressure)
 		out.Mem.PageOutRate = maxPtr(out.Mem.PageOutRate, r.Mem.PageOutRate)
 		out.Mem.SwapOutRate = maxPtr(out.Mem.SwapOutRate, r.Mem.SwapOutRate)
-		if r.V >= wire.Proto { // only v 2 samples carry the proto 2 fields
+		if r.V >= wire.FactsProto { // only v 2 samples carry the proto 2 fields
 			out.Mem.DecompressRate = maxPtr(out.Mem.DecompressRate, r.Mem.DecompressRate)
 			if r.Queue != nil { // the peak of the minute
 				if out.Queue == nil {
@@ -98,7 +98,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 			out.Derived.Zone = r.Derived.Zone
 		}
 	}
-	if out.V < wire.Proto { // the rollup is the last record's version: a v1 minute carries none of the v 2 fields
+	if out.V < wire.FactsProto { // the rollup is the last record's version: a v1 minute carries none of the v 2 fields
 		out.Mem.DecompressRate, out.Queue = nil, nil
 	}
 	n := float64(len(recs))

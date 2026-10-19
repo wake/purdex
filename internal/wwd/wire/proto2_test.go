@@ -14,8 +14,11 @@ var alertSince = time.Date(2026, 10, 19, 4, 0, 0, 0, time.UTC)
 // until every pool host reports proto >= 2. These tests pin both halves of that.
 
 func TestProtoConstants(t *testing.T) {
-	if Proto != 2 {
-		t.Fatalf("Proto = %d: the highest version a reader understands is 2", Proto)
+	if Proto != 3 {
+		t.Fatalf("Proto = %d: the highest version a reader understands is 3 (3 reads Summary.passed_digest)", Proto)
+	}
+	if FactsProto != 2 {
+		t.Fatalf("FactsProto = %d: no facts record is newer than v 2; a proto 3 build writes v 2 at most", FactsProto)
 	}
 	if WriteProto != 1 {
 		t.Fatalf("WriteProto = %d: writers send v 1 until every host reports proto >= 2 (a later PR raises it)", WriteProto)
@@ -41,7 +44,7 @@ func TestInfoProtoRange(t *testing.T) {
 	for _, c := range []struct {
 		p  string
 		ok bool
-	}{{`"proto": 0,`, false}, {`"proto": 1,`, true}, {`"proto": 2,`, true}, {`"proto": 3,`, false}} {
+	}{{`"proto": 0,`, false}, {`"proto": 1,`, true}, {`"proto": 2,`, true}, {`"proto": 3,`, true}, {`"proto": 4,`, false}} {
 		js := strings.Replace(string(good), `"proto": 1,`, c.p, 1)
 		_, err := Decode[Info]([]byte(js))
 		if (err == nil) != c.ok {

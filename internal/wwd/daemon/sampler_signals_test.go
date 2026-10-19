@@ -97,6 +97,38 @@ func TestTheNewSignalsAreWrittenWhenTheGateIsOpen(t *testing.T) {
 	}
 }
 
+// A proto 3 build writes v 2 facts and no newer: the facts version is not the protocol version since proto 3 (WWD-5b-2r), whose one new
+// reader is in a job result. A v 3 record would be refused by a proto 2 host (its reader takes v <= 2), so this is what the gate-open
+// record must stay. The check below is the proto 2 reader's own: the version range and a strict decode.
+func TestAProto3BuildStillWritesV2Facts(t *testing.T) {
+	if wire.Proto <= wire.FactsProto {
+		t.Fatalf("this test is about a build whose proto (%d) is newer than its facts version (%d)", wire.Proto, wire.FactsProto)
+	}
+	level := 1
+	var open atomic.Bool
+	var queued atomic.Int32
+	open.Store(true)
+	queued.Store(4)
+	s := signalsSampler(&level, &open, &queued)
+	tickAt(s, s0)
+	tickAt(s, s0.Add(5*time.Second))
+	f, _ := s.Latest()
+	if f.V != wire.FactsProto || f.V == wire.Proto {
+		t.Fatalf("v %d: want %d (the facts version), not the build's proto %d", f.V, wire.FactsProto, wire.Proto)
+	}
+	b, _ := json.Marshal(f)
+	if !strings.Contains(string(b), `"v":2`) {
+		t.Fatalf("the record is not v 2: %s", b)
+	}
+	const proto2Max = 2 // what a proto 2 host's facts reader accepts
+	if f.V < wire.MinProto || f.V > proto2Max {
+		t.Fatalf("a proto 2 host would refuse v %d", f.V)
+	}
+	if _, err := wire.Decode[wire.Facts](b); err != nil {
+		t.Fatalf("the contract decoder refuses it: %v", err)
+	}
+}
+
 // The one-minute rollups that go to wwd.db are built from the records, so they carry nothing while the gate is shut either.
 func TestRollupsFollowTheGate(t *testing.T) {
 	level := 1

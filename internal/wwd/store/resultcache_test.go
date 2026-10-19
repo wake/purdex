@@ -80,6 +80,7 @@ func TestCacheRefusesWhatIsNotAReusableResult(t *testing.T) {
 		"a reuse":       func(c *CacheEntry) { c.Result.CacheHit = true },
 		"superseded":    func(c *CacheEntry) { c.Result.SupersededBy = &super },
 		"a reason":      func(c *CacheEntry) { c.Result.Reason = "infra" },
+		"a bad digest":  func(c *CacheEntry) { c.Result.Summary = &wire.Summary{PassedDigest: "nope"} },
 		"in the future": func(c *CacheEntry) { c.CreatedAt = cacheNow.Add(cacheClockSlack + time.Second) },
 	} {
 		c := cacheEntry("k", cacheNow, "")
@@ -119,6 +120,7 @@ func TestCacheDamagedRowIsAnErrorNotAHit(t *testing.T) {
 		{"failed exit", `{"exit":1,"host":"h","log":"l"}`, `{}`, "h"},
 		{"no log", `{"exit":0,"host":"h"}`, `{}`, "h"},
 		{"host column differs", `{"exit":0,"host":"h","log":"l"}`, `{}`, "other"},
+		{"malformed digest", `{"exit":0,"host":"h","log":"l","summary":{"passed":1,"failed":0,"skipped":0,"failures":[],"tail":[],"passed_digest":"nope"}}`, `{}`, "h"},
 	} {
 		if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, ?, ?, ?, '', ?)`,
 			c.key, c.rec, c.host, c.fp, cacheNow.UnixMilli()); err != nil {
@@ -268,6 +270,31 @@ func TestCacheTrimTieBreaksByKey(t *testing.T) {
 			if _, ok, _ := s.GetCacheEntry(k, cacheNow); !ok {
 				t.Fatalf("run %d: %s gone", run, k)
 			}
+		}
+	}
+}
+
+// A host revoking its own label drops what it made under it and nothing that another host made under the same label.
+func TestCacheDeleteByLabelAndHostKeepsOtherHostsEntries(t *testing.T) {
+	s := openTemp(t)
+	mk := func(key, host, label string) CacheEntry {
+		c := cacheEntry(key, cacheNow, label)
+		c.Result = okResult(host)
+		return c
+	}
+	for _, c := range []CacheEntry{
+		mk("a", "mserv", "task:x/1"), mk("b", "mserv", "task:x/1"), mk("c", "air26", "task:x/1"), mk("d", "mserv", "task:x/2"),
+	} {
+		if err := s.PutCacheEntry(c, cacheNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.DeleteCacheByLabelAndHost("task:x/1", "mserv"); err != nil || n != 2 {
+		t.Fatalf("by label and host: %d %v", n, err)
+	}
+	for key, want := range map[string]bool{"a": false, "b": false, "c": true, "d": true} {
+		if _, ok, _ := s.GetCacheEntry(key, cacheNow); ok != want {
+			t.Errorf("entry %s present = %v, want %v", key, ok, want)
 		}
 	}
 }

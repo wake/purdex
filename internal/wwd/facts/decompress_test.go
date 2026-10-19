@@ -42,7 +42,7 @@ func TestBuildMemWithoutDecompressions(t *testing.T) {
 }
 
 func TestCloneKeepsDecompressRateAndQueueIndependent(t *testing.T) {
-	f := wire.Facts{V: wire.Proto, Mem: wire.Mem{DecompressRate: fp(7)}, Queue: &wire.Queue{Queued: 3}, Derived: wire.Derived{Zone: wire.ZoneNormal}}
+	f := wire.Facts{V: wire.FactsProto, Mem: wire.Mem{DecompressRate: fp(7)}, Queue: &wire.Queue{Queued: 3}, Derived: wire.Derived{Zone: wire.ZoneNormal}}
 	c := Clone(f)
 	*c.Mem.DecompressRate = 99
 	c.Queue.Queued = 99

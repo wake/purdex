@@ -33,9 +33,10 @@ func void(format string, a ...any) Verdict {
 // The sets are the counts of passed and failed tests and the set of failures; skipped tests are neither passes nor failures and are
 // not compared.
 //
-// KNOWN LIMIT: wire.Summary carries the number of passed tests, not which ones, so two hosts that ran different tests and passed the
-// same number of them are not told apart. The qualify args are a small fixed run, which keeps the risk low, but it is a risk; closing
-// it needs a digest of the passed test identities from the summary parsers (open question to the lead, WWD-5b-2).
+// The passed tests are identified by Summary.PassedDigest (WWD-5b-2r): when both halves report a summary, both must carry a digest and
+// the digests must be equal. A digest missing on either half (a host or a result from before the digest, or a parser that does not
+// produce one) is a mismatch, never a fall back to comparing counts: the counts alone cannot tell two hosts apart that ran different
+// tests and passed as many of them.
 func Compare(host, reference Half) Verdict {
 	for _, h := range []struct {
 		name string
@@ -59,6 +60,10 @@ func Compare(host, reference Half) Verdict {
 		return Verdict{Outcome: OutcomeMatch, Why: "the same exit state and neither reports a summary"}
 	case hs == nil || rs == nil:
 		return Verdict{Outcome: OutcomeMismatch, Why: "only one half reports a summary"}
+	case hs.PassedDigest == "" || rs.PassedDigest == "":
+		return Verdict{Outcome: OutcomeMismatch, Why: "a half has no digest of its passed tests: the pass sets cannot be compared"}
+	case hs.PassedDigest != rs.PassedDigest:
+		return Verdict{Outcome: OutcomeMismatch, Why: "the passed tests differ"}
 	case hs.Passed != rs.Passed || hs.Failed != rs.Failed:
 		return Verdict{Outcome: OutcomeMismatch, Why: fmt.Sprintf("passed/failed %d/%d on the candidate, %d/%d on the reference", hs.Passed, hs.Failed, rs.Passed, rs.Failed)}
 	}
