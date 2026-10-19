@@ -18,13 +18,13 @@ import { TeamRootsEditor } from './TeamRootsEditor'
 
 const CHIP = 'min-w-0 max-w-full rounded bg-surface-hover px-1.5 font-mono text-[10.5px] text-text-secondary'
 
-/** The badge of a paired host in front of its chip; none for a host this Mac has not configured (no id) or one without a badge. */
+/** The badge of a paired host in front of its chip. A host this Mac has not configured, or one with no colour or icon set, gets the neutral badge (default icon, no tint): every remote chip says which host it is from. */
 function RemoteHostBadge({ hostId }: { hostId: string }) {
   const look = useHostLook(hostId === '' ? null : hostId)
   const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
-  const badge = useMemo(() => resolveHostBadge(look, 'terminal'), [look])
-  if (hostId === '' || !hasHostBadge(badge)) return null
-  return <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} />
+  const resolved = useMemo(() => resolveHostBadge(look, 'terminal'), [look])
+  const badge = hostId !== '' && hasHostBadge(resolved) ? resolved : { colors: null, icon: undefined, iconWeight: undefined }
+  return <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId="team-folder-host-badge" />
 }
 
 export function TeamFoldersLine({ hostId, team }: { hostId: string; team: TeamRoster }) {

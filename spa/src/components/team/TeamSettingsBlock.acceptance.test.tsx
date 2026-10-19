@@ -131,6 +131,16 @@ describe('other hosts\' grants as chips', () => {
     expect(chips[0]).toHaveAttribute('data-remote', 'false')
     expect(chips[0]).toHaveAttribute('title', '/Users/wake/a')
   })
+  it('every remote chip starts with a HostBadge, a neutral one for a host without a look or without an id', async () => {
+    hosts = [host({ roots: ['/known-id'] }), host({ hostId: '', alias: 'noid', roots: ['/no-id'] })]
+    await show()
+    for (const chip of screen.getAllByTestId('team-folder-chip').filter((c) => c.getAttribute('data-remote') === 'true')) {
+      const badge = within(chip).getByTestId('team-folder-host-badge')
+      expect(badge.getAttribute('data-has-color')).toBe('false')
+      expect(chip.firstElementChild).toBe(badge)
+    }
+    expect(within(screen.getAllByTestId('team-folder-chip')[0]).queryByTestId('team-folder-host-badge')).toBeNull() // the team's own chips have none
+  })
   it('lists neither pending nor refused changes', async () => {
     await show()
     const text = screen.getAllByTestId('team-folder-chip').map((c) => c.textContent).join('|')
