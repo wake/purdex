@@ -169,6 +169,10 @@ func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 // (#3537), under the generation it was created in; a session already gone is a replay after a lost answer. An op the void
 // did not end — it registered first, or it never was this lead host's — is left alone. A session created after the void
 // is the runner's to reap (reapFailedSpawn), which meets the failed op when it stops.
+//
+// It stops the session of any op that is failed/abandoned, not only of one THIS void failed. The assumption: the session
+// of an op marked failed/abandoned is meant to be stopped anyway, so a late void stopping it is harmless. If another path
+// ever marks an op abandoned yet means to keep its session, this has to change.
 func (m *Module) killVoidedSpawnSession(leadHost, opID string) error {
 	op, found, err := m.store.GetSpawnOp(opID)
 	if err != nil {
