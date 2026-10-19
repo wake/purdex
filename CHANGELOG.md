@@ -28,7 +28,6 @@
 - **記憶體壓力與常駐成長三條規則（8a-2b）**：新增 pressure held（push 級，連續 5 個完整分鐘都在 warning 以上且 swap 增加至少 1 GB）、thrash（digest 級，compressor 超過 4096 MB 且解壓速率過高、持續 60 秒以上）與 resident growth，並含已知常駐行程的抑制。取樣不足、缺欄位或重播時一律「未判斷」，不誤報也不清除既有告警；Linux 上不適用的規則視為不成立（#3516）。
 - **mserv service 規則（8a-2c-1）**：只在 Linux 上判斷（push 級）。PSI `some avg60` 連續兩個完整分鐘達 10 以上且最新讀數仍高，或最新一筆可用記憶體低於 1.5 GiB 就告警；`expect_pressure` 暫停只影響 PSI 這一半，低記憶體照報。同一張也更新了 spec 的 mserv service 與 orphans 兩列（#3538）。
 - **orphans 規則（8a-2c-2）**：列出使用者自己的、ppid 為 1、啟動超過 2 小時且屬於開發路徑（worktree、scratch、pdx 暫存、測試用 wwd、playwright、codex-broker）的孤兒行程，以及 ppid 為 1 的 shell fork 迴圈。**只列出，絕不 kill**。為此 facts 的行程紀錄多了啟動時間，並新增只讀行程表的 `Fresh()`，一秒內多次呼叫也很便宜（#3544）。
-- **`/api/info` 看得到 `wwdalerts`（#3535）**：見下方 Fixed。
 
 ### Added：wwd worker 與隔離
 
