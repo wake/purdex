@@ -58,6 +58,20 @@ func TestAlertsReadableIsFalseWhenThePoolCannotBeRead(t *testing.T) {
 	assert.True(t, e.m.AlertsReadable())
 }
 
+// A daemon that says its push is not ready (the pool cannot be read) hands delivery to the standby, so it must not push the local list
+// itself meanwhile: the same alert would go out from both (increment review).
+func TestNothingIsPushedWhileTheAlertsAreNotReadable(t *testing.T) {
+	e := newEnv(t)
+	e.src.poolErr = errors.New("pool busy")
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	assert.False(t, e.m.AlertsReadable())
+	assert.Equal(t, 0, e.ntf.count(), "the standby delivers; this daemon stays quiet")
+	e.src.poolErr = nil
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "read again: delivery comes back, the alert was not spent")
+}
+
 // The local wwd not answering at all (the first question, who am I, fails) is the same.
 func TestAlertsReadableIsFalseWhenTheWWDDoesNotAnswer(t *testing.T) {
 	e := newEnv(t)

@@ -435,7 +435,9 @@ func (m *Module) handle(host string, alerts []wire.Alert) {
 
 // pushIfDue puts a push-level alert in the push module's hands when this daemon is the deliverer and the alert is due.
 func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
-	if !m.deliver() {
+	// A daemon that says its push is not ready (AlertsReadable) has handed delivery to the standby: pushing the lists it did read as well
+	// would send the same shared alert from both.
+	if !m.deliver() || !m.AlertsReadable() {
 		return
 	}
 	// The switch is read at every push (hostconfig keeps it cached), so turning it off stops the next push, not the next restart. Off
