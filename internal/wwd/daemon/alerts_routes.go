@@ -19,25 +19,29 @@ func (d *Daemon) alertsRoutes(mux *http.ServeMux, peer bool) {
 	if d.opts.Alerts == nil {
 		return
 	}
-	local := d.handleAlerts
+	local := func(w http.ResponseWriter, r *http.Request) { d.handleAlerts(w, r) }
 	if !peer {
-		// a read of this host's own list on the socket is the local Purdex daemon's deliverer (spec §13.3): it is the partner's heartbeat
+		// a read of this host's own list on the socket is the local Purdex daemon's deliverer (spec §13.3): it is the partner's heartbeat, but
+		// only a read that was answered counts: a store that fails every time is a deliverer that reads nothing, and must not look alive
 		local = func(w http.ResponseWriter, r *http.Request) {
-			d.partnerAt.Store(d.clock().UnixNano())
-			d.handleAlerts(w, r)
+			if d.handleAlerts(w, r) {
+				d.partnerAt.Store(d.clock().UnixNano())
+			}
 		}
 	}
 	mux.HandleFunc("GET /v1/alerts", d.viaHost(peer, local))
 }
 
-func (d *Daemon) handleAlerts(w http.ResponseWriter, r *http.Request) {
+// handleAlerts answers with the active alerts and says whether it could.
+func (d *Daemon) handleAlerts(w http.ResponseWriter, r *http.Request) bool {
 	alerts, err := d.opts.Alerts.ActiveAlerts()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return false
 	}
 	if alerts == nil {
 		alerts = []wire.Alert{}
 	}
 	writeJSON(w, http.StatusOK, wire.AlertList{Host: d.opts.Alias, Alerts: alerts})
+	return true
 }
