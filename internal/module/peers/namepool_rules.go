@@ -22,6 +22,7 @@ type NameHistoryReader interface {
 // without it.
 func (m *Module) WithNameHistory(h NameHistoryReader) *Module {
 	m.nameHistory = h
+	m.nameWriter, _ = h.(NameHistoryWriter)
 	return m
 }
 
@@ -36,7 +37,7 @@ func (m *Module) leadCodes() map[string]bool {
 // ruleInput builds the input of the rules for the free names. A history that cannot be read does not stop the naming: the
 // pick goes on as if there were none, and says so. Called with the pool lock held.
 func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
-	in := nameRuleInput{Free: free, Lead: m.leadCodes(), Familiar: map[string]bool{}, AnyPairs: map[string]int{}}
+	in := nameRuleInput{Free: free, Lead: m.leadCodes(), Familiar: map[string]bool{}, AnyPairs: map[string]int{}, Leads: map[string]nameStat{}}
 	if m.namePicker != nil {
 		in.Pick = m.namePicker.Pick
 	}
@@ -48,6 +49,7 @@ func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
 		} else {
 			for _, l := range leads {
 				in.Familiar[l.Code] = true
+				in.Leads[l.Code] = nameStat{Count: l.Count, LastAt: l.LastAt}
 			}
 			for _, p := range pairs {
 				in.Familiar[p.MemberCode] = true
@@ -67,7 +69,12 @@ func (m *Module) ruleInput(ctx context.Context, free []string) nameRuleInput {
 // The free names (the pickable pool minus held) and the lead flags are read under one read lock, so a collection that is being
 // applied is seen whole or not at all (bindPersonas holds the write side while it publishes both).
 func (m *Module) pickOther(ctx context.Context, held map[string]bool) (string, bool) {
+	return pickForOther(m.inputFor(ctx, held))
+}
+
+// inputFor is the rule input for the pickable pool minus held, read under the read lock of the pool generation.
+func (m *Module) inputFor(ctx context.Context, held map[string]bool) nameRuleInput {
 	m.poolGen.RLock()
 	defer m.poolGen.RUnlock()
-	return pickForOther(m.ruleInput(ctx, freePoolNames(held)))
+	return m.ruleInput(ctx, freePoolNames(held))
 }

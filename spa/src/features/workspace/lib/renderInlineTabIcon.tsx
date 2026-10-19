@@ -21,6 +21,12 @@ interface Params {
   background?: BackgroundKind
   /** The waiters behind the queue hourglass (its tooltip). */
   backgroundWaiters?: FleetWaiter[]
+  /**
+   * The row's persona avatar (name pool v2 spec §9.6): drawn in the agent icon's place, 18 px, whatever the light style — the light is
+   * always its top-right corner dot (the 'dot' style's replace-the-icon layout would hide the face). Everything else of the light stays:
+   * unread tint, the 「等待核准」 hand, subagent dots, the queue symbol.
+   */
+  avatar?: React.ReactNode
 }
 
 // Left-mode variant of the top-tab renderer in SortableTab.tsx. Slot/icon
@@ -48,6 +54,7 @@ export function renderInlineTabIcon({
   awaitingApproval = false,
   background,
   backgroundWaiters,
+  avatar,
 }: Params) {
   // 「等待核准」 is a waiting light whatever `agentStatus` says: on the first paint after a cold load the summary
   // already carries the pending request while useWorkerAgentProjection (an App-level effect) has not written it.
@@ -56,6 +63,26 @@ export function renderInlineTabIcon({
   // Lights off ('icon'): only an awaiting worker still shows its light (user decision 2026-10-08 — a pending approval
   // is a must-show exception); it falls through to the overlay layout below, with no unread tint / subagent dots.
   const lightsOff = tabIndicatorStyle === 'icon'
+
+  if (avatar) {
+    const lit = status !== undefined && (!lightsOff || awaitingApproval)
+    return (
+      <span data-testid="inline-tab-avatar" className="relative inline-flex items-center justify-center w-[18px] h-[18px] flex-shrink-0">
+        {avatar}
+        {lit && (
+          <TabStatusIndicator
+            status={status}
+            mode="overlay"
+            isActive={isActive}
+            isUnread={isUnread && !isActive && !lightsOff}
+            awaitingApproval={awaitingApproval}
+          />
+        )}
+        {lit && !lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
+        {!lightsOff && background && <BackgroundSymbol kind={background} waiters={backgroundWaiters} />}
+      </span>
+    )
+  }
   // lights off without an awaiting request OR no agent event → plain icon slot
   if (!status || (lightsOff && !awaitingApproval)) {
     return (

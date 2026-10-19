@@ -48,6 +48,15 @@ func leadSet(set personas.Set) map[string]bool {
 	return out
 }
 
+// codeSet is the code of every persona in the collection, retired ones included (spec L5: a code is never reused).
+func codeSet(set personas.Set) map[string]bool {
+	out := make(map[string]bool, len(set.Items))
+	for _, p := range set.Items {
+		out[p.Code] = true
+	}
+	return out
+}
+
 // personaRetryMax bounds the retries of a read that fails: the delays double from a second up to half a minute, so a read that
 // never works (a stored value that does not read) is given up after about two minutes; the next change starts over.
 const personaRetryMax = 8
@@ -89,12 +98,14 @@ func (m *Module) bindPersonas(r personas.Reader) (cancel func()) {
 		}
 		recognised, pickable := buildPool(set)
 		leads := leadSet(set)
+		codes := codeSet(set)
 		m.poolGen.Lock() // the pool and its lead flags go out together (pickOther reads both under the read side)
 		ipeers.SetPool(recognised, pickable)
 		if m.afterPoolPublished != nil {
 			m.afterPoolPublished()
 		}
 		m.leads.Store(&leads)
+		m.personaCodes.Store(&codes)
 		m.poolGen.Unlock()
 	}
 	// Subscribe first, then read: a change that lands between the two would be told to nobody, and the first read may predate it.

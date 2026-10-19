@@ -36,7 +36,7 @@ export const PEER_STALE_AFTER_MS = 60_000
  * withholding a real address is a dash on screen, the cost of showing a wrong
  * one is a message delivered to a stranger's agent.
  */
-function sameGeneration(pane: string | null, row: string): boolean {
+export function sameGeneration(pane: string | null, row: string): boolean {
   return !!pane && pane !== '' && row !== '' && pane === row
 }
 

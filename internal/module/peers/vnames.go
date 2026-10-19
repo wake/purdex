@@ -19,6 +19,8 @@ type PeerNameStore interface {
 	Assign(ctx context.Context, sessionID, ref, name, source string, nowMs int64) (store.PeerNameEntry, error)
 	AdoptLineage(ctx context.Context, sessionID, name string) (store.PeerNameEntry, error)
 	RenamePool(ctx context.Context, sessionID, oldName, newName string) (store.PeerNameEntry, bool, error)
+	// UndoRename reverses a rename by compare-and-set (name pool v2 spec §5.3).
+	UndoRename(ctx context.Context, sessionID, currentName, oldName string) (bool, error)
 	Lookup(ctx context.Context, sessionIDs []string) (map[string]store.PeerNameEntry, error)
 	ByRefs(ctx context.Context, refs []string) (map[string]string, error)
 	// Aliases are the old names of renamed sessions (name pool v2 spec §6.3): routing reads them as data.
