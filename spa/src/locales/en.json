@@ -2100,6 +2100,7 @@
   "taskgroups.notice_close": "Dismiss",
   "taskgroups.clear": "Clear",
   "taskgroups.clear_roots_reading": "Still reading where this host's sessions come from, so it cannot be cleared for now",
+  "taskgroups.clear_in_use": "This group still has live members (in a team, for one), so it cannot be cleared for now",
   "taskgroups.clear_title": "Clear \"{{name}}\"?",
   "taskgroups.clear_body": "This task group has no live session now. Clearing it also forgets the {{n}} sessions it still remembers. This cannot be undone.",
   "taskgroups.clear_body_none": "This task group has no live session now and remembers no other. Clearing it cannot be undone.",

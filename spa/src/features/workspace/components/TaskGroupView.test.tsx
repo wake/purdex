@@ -342,6 +342,31 @@ describe('the group headers (NA-6c)', () => {
     expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
   })
 
+  it('a group whose member is alive but held by a team looks empty and still cannot be cleared', () => {
+    const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
+    setGroups('h1', [group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1']]) // S1 (the team's lead) is in g1 by root; the team holds its row
+    mount()
+    const manual = screen.getByTestId('task-group-manual')
+    expect(manual).toHaveAttribute('data-collapsed', 'true')
+    const clear = within(manual).getByTestId('task-group-clear')
+    expect(clear).toHaveAttribute('title', '這個編組還有在線的成員（例如在團隊裡），暫時不能清除')
+    fireEvent.click(clear)
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+  })
+
+  it('the confirmation goes away if the group stops being empty while it is up', () => {
+    setGroups('h1', [group('g1', ['LATER'])])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    fireEvent.click(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-clear'))
+    expect(screen.getByTestId('task-group-clear-dialog')).toBeInTheDocument()
+    act(() => { setRoots([['AG1', 'AG1'], ['AG9', 'LATER']]) }) // a session whose root the group holds comes alive
+    expect(screen.queryByTestId('task-group-clear-dialog')).toBeNull()
+    expect(putTaskGroups).not.toHaveBeenCalled()
+  })
+
   it('a team header opens the team edit form on a double-click when the lead\'s host offers it, and not otherwise', () => {
     const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
     useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])

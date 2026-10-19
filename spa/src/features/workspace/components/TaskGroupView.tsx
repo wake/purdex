@@ -55,7 +55,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   // The last refusal of an edit, in words, until dismissed or replaced by the next action.
   const [notice, setNotice] = useState<string | null>(null)
   // The empty group the person asked to clear, until they answer.
-  const [clearing, setClearing] = useState<{ hostId: string; group: TaskGroup } | null>(null)
+  const [clearing, setClearing] = useState<{ hostId: string; groupId: string } | null>(null)
   const [clearBusy, setClearBusy] = useState(false)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
@@ -114,10 +114,22 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   // Why a host's groups cannot be edited now (unsafe, not read yet), in words; null = they can. An action's refusal is said in the notice line.
   const hostBlocked = (hostId: string) => hostBlockedReason(groupsByHost[hostId], t)
   const done = (r: ActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
+  // A group may be cleared only when nothing in it is alive: the host's groups editable, ITS session roots read, and none of the group's roots a live session of the host (the display leaves out a session a team holds,
+  // so an empty-looking group can still have live members). The dialog follows this on every render and goes away when it stops holding.
+  const clearBlocked = (hostId: string, group: TaskGroup): string | null => {
+    const blocked = hostBlocked(hostId)
+    if (blocked !== null) return blocked
+    const live = roots.liveRoots(hostId)
+    if (live === null) return t('taskgroups.clear_roots_reading')
+    return group.roots.some((r) => live.has(r)) ? t('taskgroups.clear_in_use') : null
+  }
+  const clearGroup = clearing ? groupsByHost[clearing.hostId]?.groups.find((g) => g.id === clearing.groupId) : undefined
+  const clearOk = clearing !== null && clearGroup !== undefined && clearBlocked(clearing.hostId, clearGroup) === null
+  useEffect(() => { if (clearing !== null && !clearOk && !clearBusy) setClearing(null) }, [clearing, clearOk, clearBusy])
   const confirmClear = async () => {
-    if (!clearing) return
+    if (!clearing || !clearOk) return
     setClearBusy(true)
-    try { done(await deleteTaskGroup(clearing.hostId, clearing.group.id)) } finally { setClearBusy(false); setClearing(null) }
+    try { done(await deleteTaskGroup(clearing.hostId, clearing.groupId)) } finally { setClearBusy(false); setClearing(null) }
   }
 
   const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])
@@ -197,7 +209,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
                 host={hostLabel(section.hostId, hostLookOf(section.hostId))}
                 edit={{ blocked: hostBlocked(section.hostId), onCommit: (name) => renameTaskGroup(section.hostId, section.group.id, name).then(done) }}
-                clear={collapsed ? { blocked: hostBlocked(section.hostId) ?? (roots.rootsKnown(section.hostId) ? null : t('taskgroups.clear_roots_reading')), onClick: () => setClearing({ hostId: section.hostId, group: section.group }) } : undefined}
+                clear={collapsed ? { blocked: clearBlocked(section.hostId, section.group), onClick: () => setClearing({ hostId: section.hostId, groupId: section.group.id }) } : undefined}
               />
               {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.group.id))}
             </section>
@@ -211,10 +223,10 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           </section>
         )
       })}
-      {clearing && (
+      {clearing && clearOk && clearGroup && (
         <ConfirmDialog
-          testIdPrefix="task-group-clear" title={t('taskgroups.clear_title', { name: clearing.group.name })}
-          body={clearing.group.roots.length > 0 ? t('taskgroups.clear_body', { n: clearing.group.roots.length }) : t('taskgroups.clear_body_none')}
+          testIdPrefix="task-group-clear" title={t('taskgroups.clear_title', { name: clearGroup.name })}
+          body={clearGroup.roots.length > 0 ? t('taskgroups.clear_body', { n: clearGroup.roots.length }) : t('taskgroups.clear_body_none')}
           confirmLabel={t('taskgroups.clear_confirm')} busy={clearBusy} onCancel={() => setClearing(null)} onConfirm={() => { void confirmClear() }}
         />
       )}
