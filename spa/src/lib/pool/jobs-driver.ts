@@ -227,7 +227,7 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       if (released || mine !== epoch) return
       released = true
       watchers -= 1
-      if (watchers === 0) stop()
+      if (watchers === 0) idle()
     }
   }
 
@@ -237,8 +237,8 @@ export function createJobsDriver(deps: JobsDriverDeps) {
   }
 
   /** Clears every timer (the App is closing, or a test ends). */
-  function stop() {
-    waiting.clear()
+  /** Nobody watches any more (or the driver is shut down): the poll, the waiting retries and the looks that waited for a read end. A connection still waiting to be caught up is kept: that needs no view. */
+  function idle() {
     epoch += 1
     watchers = 0
     stopPolling()
@@ -246,6 +246,12 @@ export function createJobsDriver(deps: JobsDriverDeps) {
       st.resync = false // a look that waited for a read to end is cancelled with the rest
       if (st.timer !== null) { clearTimeout(st.timer); st.timer = null; st.dirty = true } // what the retry would have read is read by the next view
     }
+  }
+
+  /** Clears every timer and forgets the connections waiting to be caught up (the App is closing, or a test ends). */
+  function stop() {
+    waiting.clear()
+    idle()
   }
 
   return { jobChanged, hostOpened, retryOpened, sync, watch, stop }

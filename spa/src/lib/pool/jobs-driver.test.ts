@@ -234,6 +234,19 @@ describe('a connection that opened before its daemon counted as a source', () =>
     expect(store.read).toHaveBeenCalledTimes(1)
   })
 
+  it('the last view going away does not forget it: the catch-up does not need a view', async () => {
+    topo = { origins: ['mlab'], ownDaemon: {}, forwarders: [] }
+    have.add('mlab')
+    const d = driver()
+    const release = d.watch()
+    d.hostOpened('h-mlab') // too early
+    release() // the view closes before the capabilities arrive
+    topo = { origins: ['mlab'], ownDaemon: { mlab: 'h-mlab' }, forwarders: ['h-mlab'] }
+    d.retryOpened()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.read.mock.calls.map(src)).toEqual(['h-mlab'])
+  })
+
   it('a daemon that answers for no origin yet keeps waiting; stop forgets it', async () => {
     topo = { origins: ['mlab'], ownDaemon: {}, forwarders: [] }
     const d = driver()
