@@ -311,7 +311,7 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		*o.WaitedOut = d.Outcome == "wait-max" && code == ExitRefused
 	}
 	if d.Outcome != "not-gated" { // the commands the gate does not hold are many and cheap: they leave no line and touch no file
-		g.record(d.dir, d)
+		g.recordRun(d.dir, d)
 	}
 	return code, err
 }
