@@ -62,6 +62,25 @@ describe('markOffline', () => {
   })
 })
 
+describe('markOffline and a read in flight', () => {
+  beforeEach(() => {
+    usePersonaStore.setState({ byHost: {} })
+    vi.mocked(fetchPersonas).mockReset()
+  })
+
+  it('a read that started before the drop does not make the host ready again', async () => {
+    let answer!: (c: ReturnType<typeof makeCollection>) => void
+    vi.mocked(fetchPersonas).mockImplementation(() => new Promise((r) => { answer = r }))
+    const pending = usePersonaStore.getState().load('h1')
+    usePersonaStore.setState({ byHost: { h1: { status: 'loading', collection: makeCollection(['hiro']) } } })
+    usePersonaStore.getState().markOffline('h1')
+    answer(makeCollection(['emma']))
+    await pending
+    expect(usePersonaStore.getState().byHost.h1.status).toBe('error')
+    expect(usePersonaStore.getState().byHost.h1.collection?.items[0].code).toBe('hiro')
+  })
+})
+
 describe('usePersonaStore', () => {
   beforeEach(() => {
     usePersonaStore.setState({ byHost: {} })

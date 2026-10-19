@@ -94,6 +94,8 @@ export const usePersonaStore = create<PersonaState>()((set, get) => ({
     })
   },
   markOffline(hostId) {
+    // A read started while the host was connected may still answer; it must not make the dropped host "ready" again.
+    bump(hostId)
     set((s) => {
       const entry = s.byHost[hostId]
       if (!entry || entry.status === 'error') return s
