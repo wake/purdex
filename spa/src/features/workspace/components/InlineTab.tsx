@@ -6,6 +6,11 @@ import { useTabDisplay } from '../../../hooks/useTabDisplay'
 import { shouldShowGlobalUnreadPip } from '../../../components/tab-icon-helpers'
 import { HoverTooltip } from '../../../components/HoverTooltip'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
+import { Avatar } from '../../../components/Avatar'
+import { useSessionSeat } from '../../../hooks/useSessionSeat'
+import { useHostLook } from '../../../lib/host-look'
+import { resolveHostColors } from '../../../lib/host-color'
+import { getPrimaryPane } from '../../../lib/pane-tree'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { HostBadge } from '../../../components/HostBadge'
 import { useTabHostBadge } from '../../../hooks/useTabHostBadge'
@@ -66,6 +71,13 @@ export function InlineTab({
     background,
     backgroundWaiters,
   } = useTabDisplay(tab)
+
+  // Who the row is (name pool v2 spec §9.6): the persona of the session the tab shows, when the App already knows it (useSessionSeat reads, never asks). With none the row is as it was.
+  const primary = getPrimaryPane(tab.layout).content
+  const tmux = primary.kind === 'tmux-session' && !primary.terminated ? primary : null
+  const seat = useSessionSeat(tmux?.hostId ?? '', tmux?.sessionCode, tmux?.tmuxInstance ?? '')
+  const look = useHostLook(tmux?.hostId ?? null)
+  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
   // across the activity bar border.
@@ -147,6 +159,7 @@ export function InlineTab({
         awaitingApproval: isAwaitingApproval,
         background,
         backgroundWaiters,
+        avatar: seat !== null ? <Avatar size={18} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} /> : undefined,
       })}
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
@@ -160,7 +173,12 @@ export function InlineTab({
         />
       )}
       <span data-testid="inline-tab-title" className="flex-1 truncate">
-        {displayTitle}
+        {seat !== null ? (
+          <>
+            <span data-testid="inline-tab-name" className="font-semibold">{seat.name}</span>
+            {displayTitle !== '' && displayTitle !== seat.name && <span data-testid="inline-tab-subtitle" className="ml-1.5 text-text-muted">{displayTitle}</span>}
+          </>
+        ) : displayTitle}
       </span>
       {/*
         placement=right mirrors ActivityBarNarrow's pattern — the sidebar is an
