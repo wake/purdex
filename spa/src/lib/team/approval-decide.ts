@@ -32,6 +32,15 @@ import { clientDescriptor } from './client-label'
 import { startAdoptionWait } from './adoption-wait'
 import { adoptPayloadOf, leadNamesOf, type Approval, type Grant, type LeadNameCandidate } from './types'
 
+type NameTakenListener = (hostId: string, approvalId: string, names: LeadNameCandidate[] | undefined) => void
+const nameTakenListeners = new Set<NameTakenListener>()
+
+/** A `name_taken` refusal nobody was waiting on (a decision resent from the offline queue): the open dialog of that request hears it here and shows what the card shows after a click. */
+export function subscribeNameTaken(fn: NameTakenListener): () => void {
+  nameTakenListeners.add(fn)
+  return () => { nameTakenListeners.delete(fn) }
+}
+
 export type DecideOutcome = 'closed' | 'decided_elsewhere' | 'queued' | 'failed'
 
 /** The "handled elsewhere" toast (spec §6.3): who closed it, on which host, for which session. */
@@ -122,9 +131,11 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       return 'failed'
     }
     if (err.status === 409 && err.code === 'name_taken') {
-      // Nobody is waiting on the card (a decision resent from the offline queue): the request stays open, and the dialog re-reads its list when the queue is gone.
+      // Nobody is waiting on the card (a decision resent from the offline queue): the request stays open, the open dialog hears it and refreshes its list.
       store.unmarkDecidedHere(hostId, approval.id)
       useUndoToast.getState().show(useI18nStore.getState().t('approval.toast.name_taken'))
+      const names = leadNamesOf(err.body?.lead_names)
+      for (const fn of [...nameTakenListeners]) fn(hostId, approval.id, names)
       return 'failed'
     }
     if (err.status === 409 && err.approval) {

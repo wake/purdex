@@ -134,7 +134,7 @@ describe('the lead name card', () => {
 })
 
 describe('a decision made offline', () => {
-  it('whose name was taken meanwhile: the resend is refused, the list is read again, the pick is dropped and the dialog says so', async () => {
+  it('whose name was taken meanwhile: the resend is refused, the list of the refusal replaces the one on the card, the pick is dropped and the dialog says so', async () => {
     render(<ApprovalDialogHost />)
     await open(lead())
     act(() => { useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'disconnected' } } })) })
@@ -142,9 +142,7 @@ describe('a decision made offline', () => {
     await approve()
     expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1)
     expect(mockedDecide).not.toHaveBeenCalled()
-    mockedNames.mockReset()
-    mockedNames.mockResolvedValue([KEEP, cand('kenji', 'lead')])
-    mockedDecide.mockRejectedValueOnce(taken())
+    mockedDecide.mockRejectedValueOnce(taken([KEEP, cand('kenji', 'lead')]))
     act(() => { useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'connected' } } })) })
     await act(async () => { handleApprovalEvent(H, { op: 'snapshot', approvals: [lead()] }) })
     expect(mockedDecide).toHaveBeenCalledTimes(1)

@@ -43,7 +43,7 @@ import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
-import { submitDecision } from '../lib/team/approval-decide'
+import { submitDecision, subscribeNameTaken } from '../lib/team/approval-decide'
 import { parseOriginTmux } from '../lib/team/approval-goto'
 import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 
@@ -227,22 +227,19 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     // once per dialog: it is keyed by the approval
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  // A decision made offline is sent by the reconnect, not by this dialog: when it leaves the queue with the dialog still here it was refused (the name may have been taken meanwhile),
-  // so the list is read again, and a pick that is gone says so. (Sent and accepted, the dialog goes away and this reads for nothing.)
-  const hadQueued = useRef(false)
-  useEffect(() => {
-    const was = hadQueued.current
-    hadQueued.current = queued !== undefined
-    if (!was || queued !== undefined || pickedName === null) return
-    const gen = namesGen.current
-    fetchLeadNames(hostId, approval.id).then((fresh) => {
-      if (namesGen.current !== gen) return
-      if (!fresh.some((n) => n.code === pickedName)) setNameTaken(true)
-      refreshLeadNames(fresh)
-    }, () => {})
-    // only the queue leaving matters
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queued])
+  // The card's answer to a `name_taken`: the list from the refusal (or read again when it came without one), the pick dropped when it is gone, one line above the pills.
+  const onNameTaken = (names: LeadNameCandidate[] | undefined) => {
+    setNameTaken(true)
+    if (names !== undefined) refreshLeadNames(names)
+    else {
+      const gen = namesGen.current
+      void fetchLeadNames(hostId, approval.id).then((fresh) => { if (namesGen.current === gen) refreshLeadNames(fresh) }, () => {})
+    }
+  }
+  // A decision made offline is sent by the reconnect, not by this dialog: its refusal reaches the card the same way.
+  const onTakenRef = useRef(onNameTaken)
+  onTakenRef.current = onNameTaken
+  useEffect(() => subscribeNameTaken((h, id, names) => { if (h === hostId && id === approval.id) onTakenRef.current(names) }), [hostId, approval.id])
   const nameShown = !isSelfRelay && !isAdopt && !isMemberRelay && payload.team_name !== undefined
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
@@ -294,14 +291,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     setBusy(true)
     const outcome = await submitDecision(hostId, approval, decision, grant, {
       ...(reveal ? { reveal } : {}),
-      onNameTaken: (names) => {
-        setNameTaken(true)
-        if (names !== undefined) refreshLeadNames(names)
-        else {
-          const gen = namesGen.current
-          void fetchLeadNames(hostId, approval.id).then((fresh) => { if (namesGen.current === gen) refreshLeadNames(fresh) }, () => {})
-        }
-      },
+      onNameTaken,
     })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
