@@ -47,24 +47,25 @@ export function useSessionRoots(enabled: boolean, wanted: readonly WantedSession
     for (const hostId of unread.split('\n')) readFirstPage(hostId).catch(() => {}) // a failure lands in the store as the host's read
   }, [unread])
 
-  // Sessions the last read did not list, never asked about since: one more read, debounced.
+  // Sessions the last read did not list: one more read, debounced, once per session (what was asked about already is filtered in the effect — a ref is read in effects, not while rendering).
   const asked = useRef(new Map<string, Set<string>>())
   const unknown = useMemo(() => {
     if (!enabled) return ''
     const keys: string[] = []
     for (const w of wanted) {
       const map = index.get(w.hostId)
-      if (!map || !taskGroupsSupported(w.hostId) || map.has(w.agentSessionId) || asked.current.get(w.hostId)?.has(w.agentSessionId)) continue
+      if (!map || !taskGroupsSupported(w.hostId) || map.has(w.agentSessionId)) continue
       keys.push(`${w.hostId}\n${w.agentSessionId}`)
     }
     return keys.sort().join('\n\n')
   }, [enabled, wanted, index])
   useEffect(() => {
     if (unknown === '') return
+    const fresh = unknown.split('\n\n').map((key) => key.split('\n') as [string, string]).filter(([hostId, id]) => !asked.current.get(hostId)?.has(id))
+    if (fresh.length === 0) return
     const timer = setTimeout(() => {
       const hosts = new Set<string>()
-      for (const key of unknown.split('\n\n')) {
-        const [hostId, id] = key.split('\n')
+      for (const [hostId, id] of fresh) {
         hosts.add(hostId)
         const set = asked.current.get(hostId) ?? new Set<string>()
         set.add(id)

@@ -10,8 +10,8 @@ vi.mock('@dnd-kit/sortable', () => ({
 vi.mock('../lib/icon-path-cache', () => ({ getIconPath: (n: string, w: string) => `M ${n} ${w}`, isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve() }))
 const loadIfSupported = vi.fn(async () => {})
 vi.mock('../../../lib/task-groups/loader', () => ({ taskGroupsSupported: (h: string) => h === 'h1', loadTaskGroupsIfSupported: (h: string) => loadIfSupported(h) }))
-const readFirstPage = vi.fn(async () => ({}))
-vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...(a as [])), refreshHost: vi.fn() }))
+const readFirstPage = vi.fn(async (_hostId: string) => ({}))
+vi.mock('../../../lib/team/unattended-reader', () => ({ readFirstPage: (h: string) => readFirstPage(h), refreshHost: vi.fn() }))
 
 import { TaskGroupView } from './TaskGroupView'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -58,7 +58,6 @@ beforeEach(() => {
 afterEach(() => { cleanup() })
 
 const sections = () => screen.getAllByTestId(/^task-group-(manual|team|ungrouped|unsafe)/)
-const rowsIn = (el: HTMLElement) => within(el).queryAllByTestId('inline-tab-row').map((r) => r.getAttribute('data-tab-id') ?? r.textContent)
 
 describe('the task-group view', () => {
   it('lists a manual group with the sessions whose lineage root it holds (a relayed session included), then 未分組', () => {
