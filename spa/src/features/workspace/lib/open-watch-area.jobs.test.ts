@@ -32,7 +32,7 @@ beforeEach(() => {
 
 describe('openWatchArea on the jobs tab', () => {
   it('selects the jobs tab once a connected daemon announces jobs.v1', () => {
-    useNexHostStore.setState({ byHost: { h1: { phase: 'ready', daemonCapabilities: ['jobs.v1'] } } } as never)
+    useNexHostStore.setState({ byHost: { h1: { phase: 'ready', fetchedAt: 1, daemonCapabilities: ['jobs.v1'] } } } as never)
     openWatchArea({ tab: 'jobs' })
     expect(area()!.tabs).toEqual([G, J, watchHostTabId('h1')])
     expect(useTabStore.getState().activeTabId).toBe(J)

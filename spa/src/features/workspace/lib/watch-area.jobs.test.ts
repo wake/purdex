@@ -17,7 +17,7 @@ const view = (ids: string[] = []) => ({ hostIds: ids, stale: false })
 const T0 = 1_000_000
 const status = (): WatchStatus => ({ self: { host_id: 'd1', state: 'none' }, enabled: true, auto_wake: true, mode: 'patrol', targets: [] })
 const answerOk = (appHost: string) => useWatchStatusStore.setState((st) => ({ byHost: { ...st.byHost, [appHost]: { kind: 'ok', status: status(), at: 1 } } }))
-const announce = (caps: string[]) => useNexHostStore.setState({ byHost: { h1: { phase: 'ready', daemonCapabilities: caps } } } as never)
+const announce = (caps: string[], fetchedAt = 1) => useNexHostStore.setState({ byHost: { h1: { phase: 'ready', fetchedAt, daemonCapabilities: caps } } } as never)
 
 beforeEach(() => {
   ws().reset()
@@ -47,6 +47,19 @@ describe('the jobs tab', () => {
     useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
     r.reconcile(view(['x']), T0)
     expect(WATCH_JOBS_TAB_ID in useTabStore.getState().tabs).toBe(false)
+  })
+
+  it('is not made on the strength of the last connection\'s capabilities: after a reconnect the cache is stale until it is read again, and a daemon that no longer has jobs.v1 makes no tab', () => {
+    const r = createWatchReconciler()
+    announce(['jobs.v1'], 0) // marked stale by the reconnect (data kept, fetchedAt 0)
+    r.reconcile(view(['x']), T0)
+    expect(WATCH_JOBS_TAB_ID in useTabStore.getState().tabs).toBe(false)
+    announce([], 7) // read again: the new daemon does not have it
+    r.reconcile(view(['x']), T0)
+    expect(WATCH_JOBS_TAB_ID in useTabStore.getState().tabs).toBe(false)
+    announce(['jobs.v1'], 8) // and one that does
+    r.reconcile(view(['x']), T0)
+    expect(watchTabs()).toContain(WATCH_JOBS_TAB_ID)
   })
 
   it('is made after the guardian and events tabs, before the host tabs, locked, with a fixed pane id', () => {
