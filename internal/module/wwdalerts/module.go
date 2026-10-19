@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/alertsettings"
@@ -71,6 +72,9 @@ type Module struct {
 	suppressed     int        // push-level alerts the switch held back in the last pass
 	passSuppressed int        // the same, being counted in the pass that is running
 
+	// whether the last pass could read this host's own wwd: 0 no pass yet, 1 it could, 2 it could not (AlertsReadable)
+	readState atomic.Int32
+
 	// the silence alerts' episodes (pass runs on one goroutine): which silence: keys each list held when it was last read, and the instance
 	// (a time on this daemon's clock) of the failure each key is about now
 	lastHeld map[string]map[string]bool // host alias -> its silence: keys
@@ -89,6 +93,7 @@ func (m *Module) Dependencies() []string { return []string{"fleet"} }
 
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	c.Registry.Register(push.AlertsReadableKey, m) // the fleet role answer folds it into push_ready
 	if m.src == nil {
 		m.src = client.New(client.DefaultSocket())
 	}
@@ -229,6 +234,16 @@ func deliverRule(rv fleet.RoleView) func() bool {
 	}
 }
 
+const (
+	readYes = 1
+	readNo  = 2
+)
+
+// AlertsReadable says whether the last pass could read this host's own wwd (push.AlertsReadable): true until the first pass has run. A
+// daemon whose wwd is down reads no alert, from any host, so it must not stand as the deliverer; the fleet role answer says so
+// through push_ready and the standby takes over.
+func (m *Module) AlertsReadable() bool { return m.readState.Load() != readNo }
+
 // pass reads every host's active alerts once and acts on them.
 func (m *Module) pass(ctx context.Context) {
 	// the status: whether this daemon delivers and what the switch says, looked at once per pass even when no alert exists
@@ -251,6 +266,7 @@ func (m *Module) pass(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() == nil {
 			m.logf("wwdalerts: hosts: %v", err)
+			m.readState.Store(readNo)
 		}
 		return
 	}
@@ -261,6 +277,13 @@ func (m *Module) pass(ctx context.Context) {
 			return
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
+		if h.ask == "" && ctx.Err() == nil { // the list of this host's own wwd
+			if err != nil {
+				m.readState.Store(readNo)
+			} else {
+				m.readState.Store(readYes)
+			}
+		}
 		if err != nil || !known {
 			// An unreadable host is not a cleared one: its ledger is kept, so the alerts it still has are not told a second time when it
 			// answers again.
