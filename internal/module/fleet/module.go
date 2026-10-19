@@ -106,7 +106,17 @@ func (m *Module) Init(c *core.Core) error {
 			return false
 		}
 		r, ok := svc.(push.AlertReadiness)
-		return ok && r.AlertReady()
+		if !ok || !r.AlertReady() {
+			return false
+		}
+		// the deliverer reads every alert through this host's wwd: when it cannot, this daemon cannot deliver, whatever its push module
+		// says; a host without the deliverer, or before its first pass, is as it was
+		if d, ok := c.Registry.Get(push.AlertsReadableKey); ok {
+			if rd, ok := d.(push.AlertsReadable); ok && !rd.AlertsReadable() {
+				return false
+			}
+		}
+		return true
 	})
 	c.Registry.Register(RoleViewKey, fleet.RoleView(m.engine))
 	m.measure = m.newMeasure()

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/wwd/advisor"
 	"github.com/wake/purdex/internal/wwd/daemon"
@@ -76,7 +77,7 @@ type mxHost struct {
 	ev        *advisor.Evaluator
 	hasDaemon bool
 	daemonUp  bool
-	deliv     bool // this daemon is the deliverer (the fleet role); the election is fleet's, set by the test
+	role      *fleet.FakeRole // this daemon's fleet role: mlab the primary, air26 the standby; what the standby knows of the primary is synced each round
 	mod       *Module
 	ntf       *fakeNotifier
 }
@@ -245,6 +246,11 @@ func (w *world) wireDeliverer(h *mxHost) {
 		return
 	}
 	h.ntf = &fakeNotifier{done: true}
+	if h.alias == "mlab" {
+		h.role = fleet.NewFakeRole(fleet.RoleState{Role: fleet.RolePrimary, Self: "mlab"})
+	} else {
+		h.role = fleet.NewFakeRole(fleet.RoleState{Role: fleet.RoleStandby, Self: h.alias, Primary: "mlab"})
+	}
 	st, err := openStore(filepath.Join(w.t.TempDir(), "wwdalerts.db"))
 	require.NoError(w.t, err)
 	w.t.Cleanup(func() { st.close() })
@@ -254,7 +260,7 @@ func (w *world) wireDeliverer(h *mxHost) {
 		src:     localSrc{h},
 		store:   st,
 		notify:  func() (push.AlertNotifier, bool) { return h.ntf, true },
-		deliver: func() bool { return h.deliv },
+		deliver: deliverRule(h.role),
 		pushOn:  func() (bool, error) { return true, nil },
 	}
 }
@@ -270,12 +276,26 @@ func (w *world) round(step time.Duration) {
 			h.ev.Pass()
 		}
 	}
+	w.syncRoles()
 	for _, a := range w.order {
 		h := w.hosts[a]
 		if h.hasDaemon && h.daemonUp {
 			// the deliverer's read of its own wwd is the partner's heartbeat; a daemon that is down reads nothing
 			h.mod.pass(context.Background())
 		}
+	}
+}
+
+// syncRoles tells the standby what the primary's role answer says of its push, the way the fleet module's call does: the primary's
+// push_ready is its push module being ready and its deliverer reading its own wwd (the fleet module's closure); a primary that is down
+// does not answer. The real deliverRule then decides who pushes.
+func (w *world) syncRoles() {
+	primary, standby := w.hosts["mlab"], w.hosts["air26"]
+	if primary.daemonUp && !w.link.blocked("air26", "mlab") {
+		ready := primary.mod.AlertsReadable() // the push module is always ready in this world
+		standby.role.SetPeerPush(fleet.PeerPush{Known: true, Answered: true, Ready: &ready})
+	} else {
+		standby.role.SetPeerPush(fleet.PeerPush{Known: true})
 	}
 }
 
@@ -319,7 +339,6 @@ func (w *world) activeKeys(alias string) []string {
 // healthy brings the world up and past the partner check's grace: everything answers, nothing is raised, nothing is pushed.
 func healthyWorld(t *testing.T) *world {
 	w := newWorld(t)
-	w.hosts["mlab"].deliv = true // the fleet primary
 	w.settle(5 * time.Minute)
 	for _, a := range w.order {
 		require.Empty(t, w.activeKeys(a), a)
@@ -361,24 +380,32 @@ func TestMatrix_Air26WWDDown_OnePush(t *testing.T) {
 }
 
 func TestMatrix_MlabWWDDown_TheOtherDelivererTellsIt(t *testing.T) {
-	t.Skip("known gap, fixed by the push_ready change (the next PR): a primary whose own wwd is down reads nothing and still reports push_ready, so the standby stays silent")
-	// mlab's Purdex daemon is up but its own wwd is not: it cannot read mlab's list, the other wwds raise silence:mlab, and the primary
-	// (mlab's daemon) reads them from air26's wwd — the failure is told once.
+	// mlab's Purdex daemon is up but its own wwd is not: it reads nothing, so it stops saying its push is ready and air26's daemon, the
+	// standby, takes over. The other wwds raise silence:mlab; air26 tells it once. When the wwd is back mlab reads again and the standby
+	// hands back — no second push of the same failure at the hand-over.
 	w := healthyWorld(t)
 	w.stopWWD("mlab")
 	w.settle(past)
 	assert.Contains(t, w.activeKeys("air26"), "silence:mlab")
 	assert.Contains(t, w.activeKeys("mserv"), "silence:mlab")
+	assert.False(t, w.hosts["mlab"].mod.AlertsReadable(), "mlab's deliverer cannot read its wwd")
 	n, per := w.pushes("mlab")
 	assert.Equal(t, 1, n, "%v", per)
+	assert.Equal(t, 1, per["air26"], "the standby told it: the primary could not read anything")
+	w.startWWD("mlab")
+	w.settle(5 * time.Minute)
+	assert.True(t, w.hosts["mlab"].mod.AlertsReadable())
+	for _, a := range w.order {
+		assert.NotContains(t, w.activeKeys(a), "silence:mlab", a)
+	}
+	n, per = w.pushes("mlab")
+	assert.Equal(t, 1, n, "the hand-back pushed nothing again: %v", per)
 }
 
 func TestMatrix_MlabDaemonDown_PartnerDownTold_ByAir26(t *testing.T) {
 	// a daemon down while its wwd is up: its own wwd notices (nobody reads its list), and the daemon of air26 — which took over — tells it
 	w := healthyWorld(t)
 	w.hosts["mlab"].daemonUp = false
-	w.hosts["mlab"].deliv = false
-	w.hosts["air26"].deliv = true // fleet's election, not this module's
 	w.settle(past)
 	assert.Contains(t, w.activeKeys("mlab"), "partner_down")
 	n, per := w.pushes("Purdex daemon")
@@ -417,8 +444,6 @@ func TestMatrix_WholeMlabDown_Air26TellsIt(t *testing.T) {
 	w := healthyWorld(t)
 	w.stopWWD("mlab")
 	w.hosts["mlab"].daemonUp = false
-	w.hosts["mlab"].deliv = false
-	w.hosts["air26"].deliv = true
 	w.settle(past)
 	n, per := w.pushes("mlab")
 	assert.Equal(t, 1, n, "%v", per)
@@ -429,7 +454,6 @@ func TestMatrix_Partition_EachSideTellsItsOwn_DuplicatesAllowed(t *testing.T) {
 	// mlab | air26 + mserv: each side sees the other unreachable; each side's deliverer pushes what it sees. Two deliverers both pushing is
 	// the duplicate the spec allows during a partition (preferred to neither pushing).
 	w := healthyWorld(t)
-	w.hosts["air26"].deliv = true // the other side elects its own primary
 	w.link.setCut("mlab", "air26", true)
 	w.link.setCut("mlab", "mserv", true)
 	w.settle(past)
