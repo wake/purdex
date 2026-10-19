@@ -41,6 +41,20 @@ func TestWwdLabelsEmptyAndJSON(t *testing.T) {
 	}
 }
 
+// A wwd that predates the route (404) is "none yet", not a failure; --json still gives the empty list.
+func TestWwdLabelsOlderWwdIsNoneYet(t *testing.T) {
+	f := &fakeAPI{earnedUnknown: true, earned: wire.EarnedLabelList{Labels: []wire.EarnedLabel{}}}
+	code, out, _ := runWWD(f, "labels")
+	if code != ExitOK || !strings.Contains(out, "predates earned labels") {
+		t.Fatalf("%d %q", code, out)
+	}
+	code, out, _ = runWWD(f, "labels", "--json")
+	var back wire.EarnedLabelList
+	if code != ExitOK || json.Unmarshal([]byte(out), &back) != nil || len(back.Labels) != 0 {
+		t.Fatalf("%d %q", code, out)
+	}
+}
+
 func TestWwdLabelsRefusesArgumentsAndReportsFailure(t *testing.T) {
 	if code, _, _ := runWWD(&fakeAPI{}, "labels", "extra"); code != ExitUsage {
 		t.Fatalf("code %d", code)

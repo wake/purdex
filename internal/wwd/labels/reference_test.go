@@ -67,3 +67,22 @@ func TestReferenceLabelsFollowTheStoreRule(t *testing.T) {
 		t.Fatalf("a label the store refuses: %v", got)
 	}
 }
+
+// A manifest cannot turn a requirement into a grant: a need that is not an environment label (task:, host:, repo:) keeps the task from
+// being held, even when the host happens to have that label, and one task's label cannot satisfy another's need.
+func TestOnlyEnvironmentLabelsCanBeNeeded(t *testing.T) {
+	have := []string{"repo:purdex", "host:air26", "task:purdex/a", "tool:node24"}
+	for _, need := range []string{"host:air26", "task:purdex/a", "repo:purdex", "custom:x"} {
+		got := ReferenceLabels("air26", have, []RefTask{{Repo: "purdex", Task: "b", Reference: "air26", Needs: []string{"tool:node24", need}}})
+		if len(got) != 0 {
+			t.Errorf("need %q was satisfied: %v", need, got)
+		}
+	}
+	chain := []RefTask{
+		{Repo: "purdex", Task: "a", Reference: "air26", Needs: []string{"tool:node24"}},
+		{Repo: "purdex", Task: "b", Reference: "air26", Needs: []string{"task:purdex/a"}},
+	}
+	if got := ReferenceLabels("air26", []string{"repo:purdex", "tool:node24"}, chain); !slices.Equal(got, []string{"task:purdex/a"}) {
+		t.Fatalf("a chain through a task label: %v", got)
+	}
+}

@@ -41,9 +41,13 @@ func wwdLabels(ctx context.Context, args []string, env Env) int {
 	if err != nil {
 		return usageErr(env, WWDUsage, err)
 	}
-	list, err := env.API.EarnedLabels(ctx)
+	list, known, err := env.API.EarnedLabels(ctx)
 	if err != nil {
 		return fail(env, "wwd labels", err)
+	}
+	if !known && flags["json"] == "" {
+		fmt.Fprintln(env.Stdout, "this wwd predates earned labels: none yet")
+		return ExitOK
 	}
 	if flags["json"] != "" {
 		writeJSON(env.Stdout, list)
