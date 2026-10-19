@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { FleetHost, FleetWaiter } from '../fleet/types'
 import type { FleetSnapshot } from '../fleet/store'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { queuedBySession, queuedJobsBySession, queuedTooltip, jobsTooltip, isJobMark, type QueuedJobMark } from './queued-sessions'
+import { queuedBySession, queuedJobsBySession, sharedQueuedJobs, queuedTooltip, jobsTooltip, isJobMark, type QueuedJobMark } from './queued-sessions'
 import type { PoolJob } from '../pool/jobs-types'
 import type { PoolHost } from '../pool/types'
 
@@ -162,5 +162,38 @@ describe('queuedTooltip with jobs and gate waiters together', () => {
     expect(lines[1]).toContain('tab.queued.tooltip')
     expect(isJobMark(w())).toBe(false)
     expect(isJobMark(jobM)).toBe(true)
+  })
+})
+
+// codex R2 (high, medium): every tab asks for the same global picture; it is worked out once per (jobs, zones, minute)
+describe('sharedQueuedJobs', () => {
+  const origins = (...jobs: PoolJob[]) => ({ mlab: { jobs: Object.fromEntries(jobs.map((j) => [j.id, j])) } })
+  const host = (alias: string, zone: string) => ({ alias, labels: [], worker: { enabled: true }, facts: { derived: { zone } } }) as unknown as PoolHost
+
+  it('the same jobs, zones and minute give the SAME result object for every tab that asks', () => {
+    const by = origins(job('a'))
+    const first = sharedQueuedJobs(by, [host('mlab', 'ok')], 60_000)
+    expect(sharedQueuedJobs(by, [host('mlab', 'ok')], 60_000)).toBe(first)
+    expect(first.get('s-one')!.map((x) => x.jobId)).toEqual(['a'])
+  })
+
+  it('is worked out again when the jobs store holds a new object, a zone moves, or the minute turns', () => {
+    const by = origins(job('a'))
+    const first = sharedQueuedJobs(by, [host('mlab', 'ok')], 60_000)
+    expect(sharedQueuedJobs(origins(job('a')), [host('mlab', 'ok')], 60_000)).not.toBe(first) // jobs
+    const second = sharedQueuedJobs(by, [host('mlab', 'ok')], 60_000)
+    expect(sharedQueuedJobs(by, [host('mlab', 'danger')], 60_000)).not.toBe(second) // a zone
+    const third = sharedQueuedJobs(by, [host('mlab', 'danger')], 60_000)
+    expect(sharedQueuedJobs(by, [host('mlab', 'danger')], 120_000)).not.toBe(third) // the minute
+  })
+
+  it('counts whole minutes waited at the minute it is given, so the tooltip place and the jobs tab agree', () => {
+    const by = origins(
+      job('old', { class: 'dev', created_at: 0 }),
+      job('new', { class: 'dev', created_at: 119_000, submitter: { session: 'S-TWO', ref: '', team: '', host: '' } }),
+    )
+    const m = sharedQueuedJobs(by, [], 180_000)
+    expect(m.get('s-one')![0].place).toBe(1)
+    expect(m.get('s-two')![0].place).toBe(2)
   })
 })

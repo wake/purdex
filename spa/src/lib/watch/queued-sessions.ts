@@ -68,14 +68,28 @@ export function queuedJobsBySession(jobs: readonly PoolJob[], now: number, hosts
     }
   })
   marks.sort((a, b) => rank[a.state] - rank[b.state] || a.place - b.place || (a.jobId < b.jobId ? -1 : a.jobId > b.jobId ? 1 : 0))
-  live.forEach((j) => {
-    const k = j.submitter.session.toLowerCase()
-    const m = marks.find((x) => x.jobId === j.id && x.origin === j.origin)!
+  const sessionOf = new Map(live.map((j) => [`${j.origin}\u0000${j.id}`, j.submitter.session.toLowerCase()]))
+  for (const m of marks) { // `marks` is sorted: each list below is in that order already
+    const k = sessionOf.get(`${m.origin}\u0000${m.jobId}`)!
     const list = out.get(k)
     if (list) list.push(m)
     else out.set(k, [m])
-  })
-  for (const list of out.values()) list.sort((a, b) => rank[a.state] - rank[b.state] || a.place - b.place || (a.jobId < b.jobId ? -1 : a.jobId > b.jobId ? 1 : 0))
+  }
+  return out
+}
+
+/** What `sharedQueuedJobs` last worked out, and what it was worked out from. */
+let memo: { byOrigin: unknown; zones: string; minute: number; out: Map<string, QueuedJobMark[]> } | null = null
+
+/**
+ * `queuedJobsBySession` over every origin's jobs, worked out ONCE for all the tabs that ask (every tab has a hook): the display order sorts the whole queue, so a tab each doing it would multiply that by the tab count on every jobs push.
+ * Worked out again only when the jobs store's `byOrigin` is a new object, a host's zone moved (the order reads the origin's zone), or the minute turned (the score counts whole minutes waited; the hook subscribes to the minute).
+ */
+export function sharedQueuedJobs(byOrigin: Readonly<Record<string, { jobs: Readonly<Record<string, PoolJob>> }>>, hosts: readonly PoolHost[], minute: number): Map<string, QueuedJobMark[]> {
+  const zones = hosts.map((h) => `${h.alias}:${h.facts?.derived.zone ?? ''}`).join('|')
+  if (memo && memo.byOrigin === byOrigin && memo.zones === zones && memo.minute === minute) return memo.out
+  const out = queuedJobsBySession(Object.values(byOrigin).flatMap((o) => Object.values(o.jobs)), minute, hosts)
+  memo = { byOrigin, zones, minute, out }
   return out
 }
 

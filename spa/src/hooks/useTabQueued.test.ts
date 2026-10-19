@@ -1,7 +1,13 @@
 // spa/src/hooks/useTabQueued.test.ts — WWD-7b1-6: the tab's hourglass is lit by a pool job of its session (queued, claimed or running) as well as by a gate waiter, until WWD-9.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useTabQueued } from './useTabQueued'
+import { queueEntries } from '../lib/pool/jobs-lanes'
+
+vi.mock('../lib/pool/jobs-lanes', async (orig) => {
+  const m = await orig<typeof import('../lib/pool/jobs-lanes')>()
+  return { ...m, queueEntries: vi.fn(m.queueEntries) }
+})
 import { useJobsStore } from '../lib/pool/jobs-store'
 import { usePoolStore } from '../lib/pool/store'
 import { useFleetStore } from '../lib/fleet/store'
@@ -14,6 +20,7 @@ const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
   claim: null, result: null, manual: '', manual_seq: 0, ...over,
 })
 const seed = (jobs: PoolJob[]) => useJobsStore.setState({ byOrigin: { mlab: { jobs: Object.fromEntries(jobs.map((j) => [j.id, j])), cursor: '', epoch: '', via: 'd' } }, errors: {} } as never)
+let queueEntriesCalls = 0
 const pane = (key: string, sessionId?: string): TabAgentPane => ({ key, hostId: 'h1', sessionId } as unknown as TabAgentPane)
 
 beforeEach(() => {
@@ -79,6 +86,39 @@ describe('useTabQueued with pool jobs', () => {
     // mserv goes into danger (+400): its job now goes first, though no job changed
     act(() => usePoolStore.setState({ hosts: [host('mlab', 'ok'), host('mserv', 'danger')] } as never))
     expect(result.current.jobs[0].place).toBe(1)
+  })
+
+  // codex R2 (high): every tab runs this hook, so the whole queue's order must not be worked out once per tab
+  it('many tabs on one jobs picture share one computation', () => {
+    const jobs = Array.from({ length: 30 }, (_, i) => job(`j${i}`, { submitter: { session: `SESS-${i}`, ref: '', team: '', host: '' }, created_at: 1000 + i }))
+    seed(jobs)
+    vi.mocked(queueEntries).mockClear()
+    const views = jobs.map((_, i) => renderHook(() => useTabQueued([pane(`k${i}`, `SESS-${i}`)])))
+    expect(views.every((v) => v.result.current.keys.size === 1)).toBe(true)
+    expect(queueEntries).toHaveBeenCalledTimes(1) // 30 tabs, one display order
+  })
+
+  // codex R2 (medium): the place counts whole minutes waited, so a tab with a job mark re-reads it when the minute turns; a tab without one holds no timer
+  it('a tab with a job mark re-reads the picture when the minute turns, and one without holds no timer', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(10 * 60_000)
+      seed([job('j1', { created_at: 10 * 60_000 })])
+      const withMark = renderHook(() => useTabQueued([pane('k1', 'SESS-1')]))
+      const without = renderHook(() => useTabQueued([pane('k2', 'SESS-9')]))
+      expect(withMark.result.current.keys.size).toBe(1)
+      expect(without.result.current.keys.size).toBe(0)
+      queueEntriesCalls = vi.mocked(queueEntries).mock.calls.length
+      act(() => { vi.advanceTimersByTime(60_000) })
+      // the minute turned: only the tab that has a mark was re-rendered, and the picture was worked out again for the new minute
+      expect(vi.mocked(queueEntries).mock.calls.length).toBe(queueEntriesCalls + 1)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      withMark.unmount()
+      expect(vi.getTimerCount()).toBe(0) // the only subscriber was the tab with a mark
+      without.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('lights up when the job arrives and goes out when it ends', () => {
