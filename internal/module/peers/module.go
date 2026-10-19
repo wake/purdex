@@ -310,6 +310,11 @@ type Module struct {
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
 	putHostAfterSnapshot func()
+
+	// aliasRetentionFirst / aliasRetentionEvery override the retention loop's timing, and aliasLiveRefs replaces its inventory
+	// read (tests; alias_retention.go). Zero / nil in production.
+	aliasRetentionFirst, aliasRetentionEvery time.Duration
+	aliasLiveRefs                            func(context.Context) (liveRows, bool)
 }
 
 // New constructs a peers Module with production defaults over audit (the
@@ -930,7 +935,31 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		LineageUnavailable:   lineageUnavailable,
 		// Not partial, like lineage_unavailable: every row shown is whole.
 		ExecutionsUnavailable: execsUnavailable,
+		Names:                 m.localNames(ctx),
 	}
+}
+
+// localNames is what this host's name history shares in its envelope (name pool v2 spec §6.1): the last ipeers.MaxFamiliar codes
+// it has seen as a lead or a lead's member. nil without a history (a reader takes that as an older daemon's empty set). A history
+// that cannot be read (logged) is published as unavailable, which a reader answers by keeping the last set; either way the rows,
+// which owe the history nothing, stay whole. ctx is the caller's, not the inventory's budget: the read
+// has the name store's bound (namerTimeout), because a budget the rows already used up would fail it, and a host that publishes
+// no names reads as an older daemon's empty set and drops its valid one.
+func (m *Module) localNames(ctx context.Context) *ipeers.NamesInfo {
+	if m.nameHistory == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, namerTimeout)
+	defer cancel()
+	codes, err := m.nameHistory.Familiar(ctx, ipeers.MaxFamiliar)
+	if err != nil {
+		m.logf("peers: inventory: read the familiar set, publishing it as unavailable: %v", err)
+		return &ipeers.NamesInfo{Familiar: []string{}, Unavailable: true}
+	}
+	if codes == nil {
+		codes = []string{}
+	}
+	return &ipeers.NamesInfo{Familiar: codes}
 }
 
 // executions reads the nex module's execution list (execpeers.RegistryKey,
@@ -1308,6 +1337,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		// The name pool's snapshot of what this host holds, from the rows as
 		// normalizeRemoteRows settled them, never the raw envelope.
 		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, ticket)
+		m.noteRemoteFamiliar(resultHostID, env.Names, ticket)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

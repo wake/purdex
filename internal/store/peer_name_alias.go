@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -37,7 +38,50 @@ func migratePeerNameAliases(db *sql.DB) error {
 			ref        TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`)
-	return err
+	if err != nil {
+		return err
+	}
+	// last_live_at: when a live successor of the alias's session was last seen (retention, spec §6.3); 0 = never, so the row
+	// counts from created_at
+	var have int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('peer_name_aliases') WHERE name = 'last_live_at'`).Scan(&have); err != nil {
+		return err
+	}
+	if have == 0 {
+		if _, err := db.Exec(`ALTER TABLE peer_name_aliases ADD COLUMN last_live_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add peer_name_aliases.last_live_at: %w", err)
+		}
+	}
+	return nil
+}
+
+// TouchAliases records that the sessions the given aliases stand for have a live successor at nowMs; an alias that is not
+// there is ignored.
+func (s *PeerNameStore) TouchAliases(ctx context.Context, aliases []string, nowMs int64) error {
+	for len(aliases) > 0 {
+		n := min(len(aliases), peerNameChunk)
+		args := make([]any, 0, n+1)
+		args = append(args, nowMs)
+		for _, a := range aliases[:n] {
+			args = append(args, a)
+		}
+		aliases = aliases[n:]
+		if _, err := s.db.ExecContext(ctx, `UPDATE peer_name_aliases SET last_live_at = ? WHERE alias IN (`+placeholders(n)+`)`, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ExpireAliases deletes every alias whose last sign of a live successor (the later of created_at and last_live_at) is before
+// cutoffMs, and returns how many it deleted.
+func (s *PeerNameStore) ExpireAliases(ctx context.Context, cutoffMs int64) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM peer_name_aliases WHERE MAX(created_at, last_live_at) < ?`, cutoffMs)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // Aliases is every alias row, oldest first.

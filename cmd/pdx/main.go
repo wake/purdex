@@ -474,6 +474,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		peersMod.WithNamePool(peersmod.RandomNamePicker())
 		// The picking rules read who has been a lead and who worked with whom (name pool v2 spec §6.2).
 		peersMod.WithNameHistory(meta.NameHistory())
+		// ...and the codes the other hosts publish in their envelopes (names.familiar): the module's own snapshot of them.
+		peersMod.WithFamiliarSource(peersMod)
 	}
 	c.AddModule(peersMod)
 	// resources samples the host on its own ticker; it reads the session

@@ -244,3 +244,58 @@ func TestPeerNameAliases_StaleUndoIsNotAReclaimConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok)
 }
+
+// Retention (spec §6.3): an alias goes once its session's lineage has had no live successor for 30 days. Whoever finds a live
+// successor stamps the alias (TouchAliases); an alias counts from the later of its creation and its last stamp (ExpireAliases).
+// Mutation gate: ignore the stamp → red; expire on created_at alone → red.
+func TestPeerNameAliases_ATouchedAliasOutlivesTheCutoff(t *testing.T) {
+	s := aliasStore(t)
+	ctx := context.Background()
+	assignPool(t, s, alA, "n0")
+	for i := 0; i < 4; i++ {
+		aliasClock = func() int64 { return int64(100 + i) }
+		_, ok, err := s.RenamePool(ctx, alA, fmt.Sprintf("n%d", i), fmt.Sprintf("n%d", i+1))
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	t.Cleanup(func() { aliasClock = nil })
+
+	require.NoError(t, s.TouchAliases(ctx, []string{"n1", "no-such"}, 5000))
+	n, err := s.ExpireAliases(ctx, 1000)
+	require.NoError(t, err)
+	require.Equal(t, 3, n, "n0, n2, n3 were created before the cutoff and never stamped")
+	left, _ := s.Aliases(ctx)
+	require.Len(t, left, 1)
+	require.Equal(t, "n1", left[0].Alias)
+
+	n, err = s.ExpireAliases(ctx, 5000)
+	require.NoError(t, err)
+	require.Equal(t, 0, n, "stamped at 5000: not before a cutoff of 5000")
+	n, err = s.ExpireAliases(ctx, 5001)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.NoError(t, s.TouchAliases(ctx, nil, 1))
+}
+
+// A table made before last_live_at gets the column on the next open, keeps its rows, and counts them from created_at.
+func TestPeerNameAliases_MigrationAddsLastLiveAtToAnOlderTable(t *testing.T) {
+	m, _ := openConvStore(t)
+	for _, q := range []string{
+		`DROP TABLE peer_name_aliases`,
+		`CREATE TABLE peer_name_aliases (alias TEXT PRIMARY KEY, session_id TEXT NOT NULL, ref TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+		`INSERT INTO peer_name_aliases VALUES ('old', 's', '_aaaaaa', 100)`,
+	} {
+		_, err := m.db.Exec(q)
+		require.NoError(t, err)
+	}
+	require.NoError(t, migrateMetaDB(m.db))
+	require.NoError(t, migrateMetaDB(m.db))
+	s := m.PeerNames()
+	got, err := s.Aliases(context.Background())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "old", got[0].Alias)
+	n, err := s.ExpireAliases(context.Background(), 101)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}

@@ -37,6 +37,7 @@ func (m *Module) Start(context.Context) error {
 	go m.reapLoop()
 	m.startPersonaPool()
 	m.startNamePoolRefresher()
+	m.startAliasRetention()
 	return nil
 }
 
