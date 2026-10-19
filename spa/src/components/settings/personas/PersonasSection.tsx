@@ -12,6 +12,7 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { selectPersonasV1, useNexHostStore } from '../../../stores/useNexHostStore'
 import { currentCollection, usePersonaStore } from '../../../stores/usePersonaStore'
+import { useSourceId } from '../../../stores/usePersonaSourceStore'
 import { PersonaApiError, PersonaConflictError } from '../../../lib/names/persona-api'
 import {
   beginSave, endSave, forgetDraft, getOutcome, recallDraft, rememberDraft, savePending, setOutcome, subscribeSave,
@@ -47,7 +48,8 @@ interface Editing {
 
 export function PersonasSection() {
   const t = useI18nStore((s) => s.t)
-  const collection = usePersonaStore((s) => currentCollection(s.byHost))
+  const sourceId = useSourceId()
+  const collection = usePersonaStore((s) => currentCollection(s.byHost, sourceId))
   const nex = useNexHostStore((s) => s.byHost)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const [editing, setEditing] = useState<Editing | null>(() => recallDraft())

@@ -5,6 +5,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { useHostStore } from './useHostStore'
 
 interface PersonaSourceState {
   /** The chosen host's local id, or `null` for the default. */
@@ -43,4 +44,33 @@ export function resolveSourceHostId(
 ): string | null {
   if (chosen !== null && hosts[chosen]) return chosen
   return hostOrder.find((id) => hosts[id]) ?? null
+}
+
+/**
+ * The source host for this device right now (see `resolveSourceHostId`). The default is written down the first time it
+ * is resolved, so dragging another host to the top of the list later does not silently change who the source is (the
+ * next copy would write that host's possibly older personas over the old source's). Only the user's choice on the
+ * personas page, or the pinned host being removed, changes it; a removed host falls back to the first host and is
+ * pinned again.
+ */
+export function resolvedSourceId(): string | null {
+  const { hostOrder, hosts } = useHostStore.getState()
+  const { hostId, setSource } = usePersonaSourceStore.getState()
+  const resolved = resolveSourceHostId(hostId, hostOrder, hosts)
+  if (resolved !== null && resolved !== hostId) setSource(resolved)
+  return resolved
+}
+
+/** Keeps the pin current as hosts come and go (a render must not write, so this runs outside React). */
+export function startSourcePin(): () => void {
+  resolvedSourceId()
+  return useHostStore.subscribe(() => { resolvedSourceId() })
+}
+
+/** The same for a component: it re-renders when the choice, the host list or its order changes. */
+export function useSourceId(): string | null {
+  const chosen = usePersonaSourceStore((s) => s.hostId)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const hosts = useHostStore((s) => s.hosts)
+  return resolveSourceHostId(chosen, hostOrder, hosts)
 }

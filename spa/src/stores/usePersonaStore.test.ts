@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../lib/names/persona-api', () => ({ fetchPersonas: vi.fn() }))
 
 import { fetchPersonas } from '../lib/names/persona-api'
-import { usePersonaStore, currentCollection, isNewerStamp } from './usePersonaStore'
+import { usePersonaStore, currentCollection, currentSource, isNewerStamp } from './usePersonaStore'
 import { makeCollection } from '../lib/names/__fixtures__/personas'
 
 describe('isNewerStamp', () => {
@@ -31,6 +31,23 @@ describe('current collection', () => {
 
   it('is null when no host has loaded one', () => {
     expect(currentCollection({ h1: { status: 'idle', collection: null } })).toBeNull()
+  })
+})
+
+describe('current source', () => {
+  const mine = makeCollection(['hiro'], { at: 1, host: 'h1' })
+  const newer = makeCollection(['emma'], { at: 9, host: 'h2' })
+
+  it('prefers the source host even when another copy has a newer stamp', () => {
+    const src = currentSource({ h1: { status: 'ready', collection: mine }, h2: { status: 'ready', collection: newer } }, 'h1')
+    expect(src).toMatchObject({ hostId: 'h1', readOnly: false })
+  })
+
+  it('stands in with the newest other copy, read-only, while the source is in error or empty', () => {
+    expect(currentSource({ h1: { status: 'error', collection: mine }, h2: { status: 'ready', collection: newer } }, 'h1'))
+      .toMatchObject({ hostId: 'h2', readOnly: true })
+    expect(currentSource({ h1: { status: 'idle', collection: null }, h2: { status: 'ready', collection: newer } }, 'h1'))
+      .toMatchObject({ hostId: 'h2', readOnly: true })
   })
 })
 

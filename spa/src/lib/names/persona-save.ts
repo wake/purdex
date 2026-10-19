@@ -5,6 +5,7 @@ import { putPersonas, PersonaConflictError } from './persona-api'
 import { PERSONA_LIMITS, validatePersona, type PersonaIssue } from './persona-limits'
 import type { Persona, PersonaCollection } from './persona-types'
 import { currentSource, usePersonaStore } from '../../stores/usePersonaStore'
+import { resolvedSourceId } from '../../stores/usePersonaSourceStore'
 
 export class PersonaValidationError extends Error {
   readonly issues: PersonaIssue[]
@@ -32,7 +33,7 @@ export interface EditBase { hostId: string; revision: number; stamp: PersonaColl
 
 /** The page takes this when it opens a form; `null` when no host has a collection yet. */
 export function editBase(): EditBase | null {
-  const src = currentSource(usePersonaStore.getState().byHost)
+  const src = currentSource(usePersonaStore.getState().byHost, resolvedSourceId())
   return src && { hostId: src.hostId, revision: src.collection.revision, stamp: src.collection.stamp }
 }
 

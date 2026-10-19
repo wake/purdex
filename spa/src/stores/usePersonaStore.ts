@@ -4,6 +4,7 @@
 // collections by code: a union would show — and on the next save revive — what last-writer-wins dropped.
 import { create } from 'zustand'
 import { fetchPersonas } from '../lib/names/persona-api'
+import { resolvedSourceId } from './usePersonaSourceStore'
 import type { PersonaCollection, PersonaStamp } from '../lib/names/persona-types'
 
 export type PersonaStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -19,19 +20,31 @@ export function isNewerStamp(a: PersonaStamp, b: PersonaStamp): boolean {
   return a.host > b.host
 }
 
-/** The host holding the collection with the highest stamp, and that collection; `null` when none has loaded one. */
-export function currentSource(byHost: Record<string, PersonaEntry>): { hostId: string; collection: PersonaCollection } | null {
+export interface PersonaSource { hostId: string; collection: PersonaCollection; readOnly: boolean }
+
+/**
+ * The collection the App shows. The source host's copy wins while it has one that is not in error. When the source is
+ * offline (no collection, or its last read failed) the copy with the highest stamp among the others stands in, and is
+ * marked `readOnly`: an edit made on it could not be written to the source, so the page does not offer one. With no
+ * `sourceId` (no host chosen yet) the highest stamp is used the same way.
+ */
+export function currentSource(byHost: Record<string, PersonaEntry>, sourceId: string | null = null): PersonaSource | null {
+  const own = sourceId === null ? undefined : byHost[sourceId]
+  if (sourceId !== null && own?.collection && own.status !== 'error') {
+    return { hostId: sourceId, collection: own.collection, readOnly: false }
+  }
   let best: { hostId: string; collection: PersonaCollection } | null = null
   for (const [hostId, entry] of Object.entries(byHost)) {
+    if (hostId === sourceId) continue
     const c = entry.collection
     if (c && (best === null || isNewerStamp(c.stamp, best.collection.stamp))) best = { hostId, collection: c }
   }
-  return best
+  return best && { ...best, readOnly: sourceId !== null }
 }
 
-/** The whole collection with the highest stamp among the loaded hosts, or `null` when none has loaded one. */
-export function currentCollection(byHost: Record<string, PersonaEntry>): PersonaCollection | null {
-  return currentSource(byHost)?.collection ?? null
+/** The whole collection the App shows, or `null` when no host has loaded one. */
+export function currentCollection(byHost: Record<string, PersonaEntry>, sourceId: string | null = null): PersonaCollection | null {
+  return currentSource(byHost, sourceId)?.collection ?? null
 }
 
 interface PersonaState {
@@ -78,5 +91,5 @@ export const usePersonaStore = create<PersonaState>()((set, get) => ({
       return { byHost: rest }
     })
   },
-  current: () => currentCollection(get().byHost),
+  current: () => currentCollection(get().byHost, resolvedSourceId()),
 }))

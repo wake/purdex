@@ -10,6 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, selectPersonasV1 } from '../../stores/useNexHostStore'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
+import { startSourcePin } from '../../stores/usePersonaSourceStore'
 
 export const PERSONAS_EVENT_TYPE = 'hostconfig.personas'
 
@@ -44,6 +45,7 @@ function ensureCapabilities(hostId: string): void {
 }
 
 export function startPersonaLoader(): () => void {
+  const stopPin = startSourcePin()
   for (const [hostId, rt] of Object.entries(useHostStore.getState().runtime)) {
     if (rt?.status === 'connected') {
       ensureCapabilities(hostId)
@@ -73,5 +75,5 @@ export function startPersonaLoader(): () => void {
     }
   })
 
-  return () => { stopNex(); stopHosts() }
+  return () => { stopPin(); stopNex(); stopHosts() }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { usePersonaSourceStore, resolveSourceHostId } from './usePersonaSourceStore'
+import { usePersonaSourceStore, resolveSourceHostId, resolvedSourceId } from './usePersonaSourceStore'
+import { useHostStore } from './useHostStore'
 
 describe('resolveSourceHostId', () => {
   const hosts = { h1: {}, h2: {}, h3: {} }
@@ -53,5 +54,29 @@ describe('usePersonaSourceStore', () => {
     localStorage.setItem('purdex-persona-source', JSON.stringify({ state: { hostId: 42 }, version: 1 }))
     await usePersonaSourceStore.persist.rehydrate()
     expect(usePersonaSourceStore.getState().hostId).toBeNull()
+  })
+})
+
+describe('resolvedSourceId pins the default', () => {
+  const setHosts = (hostOrder: string[]) =>
+    useHostStore.setState({ hostOrder, hosts: Object.fromEntries(hostOrder.map((id) => [id, {}])) as never })
+
+  beforeEach(() => {
+    usePersonaSourceStore.setState({ hostId: null })
+    setHosts(['h1', 'h2'])
+  })
+
+  it('keeps the source when the host list is reordered', () => {
+    expect(resolvedSourceId()).toBe('h1')
+    expect(usePersonaSourceStore.getState().hostId).toBe('h1')
+    setHosts(['h2', 'h1'])
+    expect(resolvedSourceId()).toBe('h1')
+  })
+
+  it('falls back to the first host and pins it again when the pinned host is removed', () => {
+    usePersonaSourceStore.getState().setSource('h2')
+    setHosts(['h1', 'h3'])
+    expect(resolvedSourceId()).toBe('h1')
+    expect(usePersonaSourceStore.getState().hostId).toBe('h1')
   })
 })
