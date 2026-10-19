@@ -61,6 +61,8 @@ type Request struct {
 	// Local prepares a fast-lane record (spec §5.2): no snapshot, HEAD named in its place, the manifest read from the working
 	// tree, local-only (pass) tasks allowed, never cacheable.
 	Local bool
+	// NoCache: the origin must not answer this call from a stored result (`pdx test --no-cache`).
+	NoCache bool
 	// AdHoc, when not nil, is an undeclared command (spec §8.3): its words are the whole argv, there is no manifest task, and the
 	// record is local (Local is implied), marked adhoc, with no locks, labels, cache or supersede key.
 	AdHoc []string
@@ -207,6 +209,8 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		Labels:        nonNil(task.Labels),
 		Locks:         nonNil(task.Locks),
 		Cacheable:     task.Cacheable && !req.Local, // a local run has no snapshot tree to key a result by
+		NoCache:       req.NoCache,
+		DefHash:       adHocFreeHash(req.AdHoc, task.DefinitionHash()),
 		TimeoutS:      int(task.Timeout.Seconds()),
 		SupersedeKey:  adHocFree(req.AdHoc, supersedeKey(root, task.Name)),
 		AdHoc:         req.AdHoc != nil,
@@ -222,6 +226,13 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 }
 
 // adHocFree drops a supersede key for an undeclared command: nothing is known about what a newer one would replace.
+func adHocFreeHash(adhoc []string, h string) string {
+	if adhoc != nil {
+		return ""
+	}
+	return h
+}
+
 func adHocFree(adhoc []string, key string) string {
 	if adhoc != nil {
 		return ""

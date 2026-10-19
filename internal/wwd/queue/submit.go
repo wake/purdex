@@ -53,6 +53,45 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	return wire.JobSubmissionResponse{ID: id}, nil
 }
 
+// SubmitReused records a submission that a stored result answered (spec §4.5): the job is born succeeded, with the stored result marked
+// cache_hit and pointing at the log of the job that made it. Nothing runs, so there is no pin and no supersede (an older job with the
+// same key goes on as it is). The stored result is validated like a posted one.
+func (q *Queue) SubmitReused(ctx context.Context, s wire.JobSubmission, stored wire.Result) (wire.JobSubmissionResponse, error) {
+	if err := s.Validate(); err != nil {
+		return wire.JobSubmissionResponse{}, err
+	}
+	if stored.Exit == nil || *stored.Exit != 0 || stored.Log == "" || stored.Host == "" {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: the stored result is not a success with a host and a log")
+	}
+	id := q.newI()
+	now := q.now()
+	fin := time64(now.UnixMilli())
+	res := stored
+	res.CacheHit, res.FinishedAt, res.SupersededBy = true, &fin, nil
+	if err := res.Validate(); err != nil {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: %w", err)
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		return wire.JobSubmissionResponse{}, err
+	}
+	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
+		if err := insertJob(ctx, c, id, q.opt.Origin, s, now.UnixMilli(), false); err != nil {
+			return err
+		}
+		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = ?, result = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+			string(wire.StateSucceeded), string(b), now.UnixMilli(), now.UnixMilli(), id); err != nil {
+			return err
+		}
+		*changed = append(*changed, id)
+		return nil
+	})
+	if err != nil {
+		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit reused: %w", err)
+	}
+	return wire.JobSubmissionResponse{ID: id, Result: &res}, nil
+}
+
 // recordPin writes the pin down before it is made (see the git_pins table).
 func (q *Queue) recordPin(ctx context.Context, id, gitDir string, nowMS int64) error {
 	_, err := q.db.ExecContext(ctx, `INSERT OR IGNORE INTO git_pins (id, git_dir, at) VALUES (?, ?, ?)`, id, gitDir, nowMS)

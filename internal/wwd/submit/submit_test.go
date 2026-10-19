@@ -106,6 +106,16 @@ func TestPrepareFillsTheSubmission(t *testing.T) {
 	if err := b.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if len(b.DefHash) != 64 || b.DefHash != p.Task.DefinitionHash() || b.NoCache {
+		t.Fatalf("def_hash = %q no_cache = %v", b.DefHash, b.NoCache)
+	}
+	again, err := Prepare(context.Background(), Request{Dir: dir, Task: "go-changed", Args: []string{"./internal/a"}, NoCache: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Body.NoCache || again.Body.DefHash != b.DefHash {
+		t.Fatalf("--no-cache: %+v", again.Body)
+	}
 }
 
 func TestPrepareGitDirOfAWorktreeIsTheCommonDirectory(t *testing.T) {

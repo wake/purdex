@@ -45,6 +45,8 @@ type Args struct {
 	Detach   bool
 	JSON     bool
 	List     bool
+	// NoCache: run the task even when a stored result could answer it (the result is still stored).
+	NoCache bool
 	// AdHoc: an undeclared command (spec §8.3); Task and TaskArgs together are its argv.
 	AdHoc bool
 }
@@ -76,6 +78,8 @@ func ParseArgs(argv []string) (Args, error) {
 			a.JSON = true
 		case w == "--list":
 			a.List = true
+		case w == "--no-cache":
+			a.NoCache = true
 		case w == "--adhoc":
 			a.AdHoc = true
 		case w == "--class" || strings.HasPrefix(w, "--class="):
@@ -97,9 +101,9 @@ func ParseArgs(argv []string) (Args, error) {
 		}
 	}
 	switch {
-	case a.AdHoc && (a.List || a.Detach || a.Class != "" || before > 0 || !rest || a.Task == ""):
+	case a.AdHoc && (a.List || a.Detach || a.Class != "" || a.NoCache || before > 0 || !rest || a.Task == ""):
 		return a, fmt.Errorf("--adhoc runs one command after --: pdx test --adhoc [--json] -- <command> [args…] (no task, --detach, --class or --list)")
-	case a.List && (a.Task != "" || len(a.TaskArgs) > 0 || a.Detach || a.Class != ""):
+	case a.List && (a.Task != "" || len(a.TaskArgs) > 0 || a.Detach || a.Class != "" || a.NoCache):
 		return a, fmt.Errorf("--list takes no task and no other option than --json")
 	case !a.List && a.Task == "":
 		return a, fmt.Errorf("a task name is needed (pdx test --list shows them)")
