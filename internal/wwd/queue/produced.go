@@ -58,16 +58,31 @@ func reusable(j wire.Job) bool {
 		r != nil && !r.CacheHit && r.SupersededBy == nil && r.Exit != nil && *r.Exit == 0
 }
 
-// offerResult tells Options.OnSucceeded about a job that has just ended in this call (never an echo of an earlier result), once the end is
-// committed. What the callback does cannot change the answer to the worker: it is told nothing of a failure.
+// comparable says whether a job that has just ended has an outcome to compare with the same work's on another host (spec §7): a worker's
+// success or failure of a declared, cacheable task, with an exit of its own, not replaced by a newer submission while it ran, and not an
+// answer from a stored result. A cancel, a timeout or an infrastructure error says nothing of the host's toolchain.
+func comparable(j wire.Job) bool {
+	r := j.Result
+	return (j.State == wire.StateSucceeded || j.State == wire.StateFailed) && j.Cacheable && !j.Local && !j.AdHoc &&
+		r != nil && !r.CacheHit && r.SupersededBy == nil && r.Exit != nil
+}
+
+// offerResult tells Options.OnSucceeded (a reusable success) and Options.OnEnded (an outcome to compare) about a job that has just ended in
+// this call (never an echo of an earlier result), once the end is committed. What a callback does cannot change the answer to the worker.
 func (q *Queue) offerResult(ctx context.Context, j wire.Job, p Produced) {
-	if q.opt.OnSucceeded == nil || !reusable(j) {
-		return
+	ctx = context.WithoutCancel(ctx)
+	call := func(what string, fn func()) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("queue: result of %s was not offered (%s): %v", j.ID, what, r)
+			}
+		}()
+		fn()
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("queue: result of %s was not offered for reuse: %v", j.ID, r)
-		}
-	}()
-	q.opt.OnSucceeded(context.WithoutCancel(ctx), j, p)
+	if q.opt.OnSucceeded != nil && reusable(j) {
+		call("reuse", func() { q.opt.OnSucceeded(ctx, j, p) })
+	}
+	if q.opt.OnEnded != nil && comparable(j) {
+		call("outcome", func() { q.opt.OnEnded(ctx, j, p) })
+	}
 }

@@ -154,6 +154,9 @@ func (d *Daemon) jobRoutes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/jobs/{id}", d.viaHost(peer, a.Get(peer)))
 	mux.HandleFunc("GET /v1/jobs/{id}/log", d.viaHost(peer, a.Log(peer)))
 	mux.HandleFunc("POST /v1/jobs/{id}/cancel", d.viaHost(peer, a.Cancel(peer)))
+	// The disagreements the owner of a label reads from the origins it reads (spec §7): read-only, and not forwarded (a reader asks each
+	// origin itself; its subject= is the host the answer concerns, not a host to forward to).
+	mux.HandleFunc("GET /v1/outcomes/disagreements", a.Disagreements())
 	if peer {
 		// What a worker on another host does with a job (spec 4.3), and the snapshot it fetches for a claim it holds. On the socket the
 		// worker routes are the caller's to register (Options.ClaimRoutes), since they open the fast lane too.

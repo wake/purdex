@@ -146,6 +146,11 @@ func run(cfgPath string) error {
 			d.FileResult(ctx, j, p)
 		}
 	}
+	qopts.OnEnded = func(ctx context.Context, j wire.Job, p queue.Produced) { // how it came out is compared with the same work on other hosts (spec §7)
+		if d != nil {
+			d.NoteOutcome(ctx, j, p)
+		}
+	}
 	q, err := queue.New(st.DB(), qopts)
 	if err != nil {
 		return err
