@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -148,6 +149,82 @@ func TestDefaultSocket_EnvOverridesHome(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	if got := DefaultSocket(); got != "/home/u/.local/share/wwd/wwd.sock" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestFactsSeries_SendsTheQueryAndDecodes(t *testing.T) {
+	var got url.Values
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		w.Write([]byte(`{"step":"1m","points":[{"at":"2026-10-18T01:00:00Z","zone":"normal","cpu_idle_pct":50,"mem_available_mb":1,"pressure":1,"page_out_rate":null,"disk_max_used_pct":null,"headroom":{"heavy":1,"light":2}}],"truncated":true}`))
+	})
+	c := New(fakeWWD(t, mux))
+	q := wire.FactsSeriesQuery{FactsHistoryQuery: wire.FactsHistoryQuery{Since: time.Date(2026, 10, 18, 1, 0, 0, 0, time.UTC), Step: wire.Step1m, Host: "mserv"}, Limit: 2000}
+	r, err := c.FactsSeries(context.Background(), q)
+	if err != nil || len(r.Points) != 1 || !r.Truncated || r.Points[0].Headroom.Light != 2 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if got.Get("host") != "mserv" || got.Get("limit") != "2000" || got.Get("step") != "1m" || got.Get("since") != "2026-10-18T01:00:00Z" {
+		t.Fatalf("query = %v", got)
+	}
+}
+
+// A wwd without the route answers its mux's plain 404; one that does not know the host answers a JSON 404 naming it. Only the first
+// is "the route is missing" (the caller falls back to the full history); the second is the caller's mistake and must not be retried.
+func TestRouteMissing(t *testing.T) {
+	old := http.NewServeMux() // no series route: net/http's own 404
+	c := New(fakeWWD(t, old))
+	_, err := c.FactsSeries(context.Background(), wire.FactsSeriesQuery{FactsHistoryQuery: wire.FactsHistoryQuery{Step: wire.Step1m}})
+	if !RouteMissing(err) {
+		t.Fatalf("an old wwd: err = %v, want RouteMissing", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"unknown host","host":"nowhere"}`))
+	})
+	c = New(fakeWWD(t, mux))
+	_, err = c.FactsSeries(context.Background(), wire.FactsSeriesQuery{FactsHistoryQuery: wire.FactsHistoryQuery{Step: wire.Step1m, Host: "nowhere"}})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != 404 || RouteMissing(err) {
+		t.Fatalf("an unknown host: err = %v, want a 404 that is not RouteMissing", err)
+	}
+	for _, e := range []error{
+		nil, ErrUnavailable, &StatusError{Code: 500, Body: "404 page not found"},
+		&StatusError{Code: 404, Body: "<html>502 Bad Gateway: not found</html>"}, // a proxy's page
+		&StatusError{Code: 404, Body: `{"error":"no such series"}`},              // another route's reason
+		&StatusError{Code: 404, Body: `{"error":"Unknown Host"}`},                // not even the unknown-host spelling
+		&StatusError{Code: 404, Body: "404 page not found, but more"},
+	} {
+		if RouteMissing(e) {
+			t.Errorf("RouteMissing(%v) = true", e)
+		}
+	}
+	if !RouteMissing(&StatusError{Code: 404, Body: "404 page not found\n"}) {
+		t.Error("net/http's own 404 (with its newline) is a missing route")
+	}
+}
+
+// Like the history, a series of another host waits for wwd's forwarding.
+func TestFactsSeries_AForwardedCallOutlastsTheShortTimeout(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(400 * time.Millisecond):
+			w.Write([]byte(`{"step":"1m","points":[],"truncated":false}`))
+		case <-r.Context().Done():
+		}
+	})
+	c := New(fakeWWD(t, mux))
+	c.Timeout = 100 * time.Millisecond
+	q := wire.FactsSeriesQuery{FactsHistoryQuery: wire.FactsHistoryQuery{Step: wire.Step1m}}
+	if _, err := c.FactsSeries(context.Background(), q); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("local: err = %v, want ErrUnavailable", err)
+	}
+	q.Host = "mserv"
+	if _, err := c.FactsSeries(context.Background(), q); err != nil {
+		t.Fatalf("forwarded: %v", err)
 	}
 }
 

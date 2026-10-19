@@ -331,14 +331,31 @@ func (s *Sampler) Shaped(f wire.Facts) wire.Facts {
 // While the proto 2 gate is shut (spec §13.1) every record is handed out in the v1 shape, also those written while it was open and
 // those read back from wwd.db after a restart: a proto 1 reader refuses the whole answer on one field it does not know.
 func (s *Sampler) History(since time.Time, step string) []wire.Facts {
-	recs := s.history(since, step)
+	return s.shaped(s.history(since, step, 0))
+}
+
+// HistoryLatest is History for a reader that wants the newest limit records (it asks for one more than it will show, to know it cut).
+// The stored minutes are read newest-first up to limit when the store can, so a chart of 14 days reads what it draws and not the
+// 20160 minutes behind it; the minutes of this run that are in memory (at most a day) are merged in as usual, so the answer may hold
+// a few more than limit, and the reader cuts.
+func (s *Sampler) HistoryLatest(since time.Time, step string, limit int) []wire.Facts {
+	return s.shaped(s.history(since, step, limit))
+}
+
+func (s *Sampler) shaped(recs []wire.Facts) []wire.Facts {
 	for i := range recs {
 		recs[i] = s.Shaped(recs[i])
 	}
 	return recs
 }
 
-func (s *Sampler) history(since time.Time, step string) []wire.Facts {
+// latestMinuteStore is a MinuteStore that can read the newest n minutes only (store.Store).
+type latestMinuteStore interface {
+	LoadMinutesLatest(since time.Time, n int) ([]wire.Facts, error)
+}
+
+// history: limit > 0 reads at most that many stored minutes (the newest) where the store can.
+func (s *Sampler) history(since time.Time, step string, limit int) []wire.Facts {
 	s.mu.RLock()
 	if step != wire.Step1m {
 		defer s.mu.RUnlock()
@@ -360,7 +377,11 @@ func (s *Sampler) history(since time.Time, step string) []wire.Facts {
 	var stored []wire.Facts
 	if st := s.opts.Minutes; st != nil {
 		var err error
-		stored, err = st.LoadMinutes(since)
+		if l, ok := st.(latestMinuteStore); ok && limit > 0 {
+			stored, err = l.LoadMinutesLatest(since, limit)
+		} else {
+			stored, err = st.LoadMinutes(since)
+		}
 		if err != nil {
 			s.logMinutes("reading the minutes", err)
 			var skipped *store.SkippedRowsError
