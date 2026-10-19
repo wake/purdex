@@ -108,7 +108,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
   async function tick(g: number) {
     if (g !== gen) return
     const delay = await get().readOnce()
-    if (g !== gen || hidden()) return
+    if (g !== gen) return
     timer = setTimeout(() => { void tick(g) }, delay)
   }
 
