@@ -23,9 +23,10 @@ type Config struct {
 	Enabled bool `toml:"enabled"`
 	// LogUploadFail (H1): the origin refuses a log upload. A result upload is not touched.
 	LogUploadFail bool `toml:"log_upload_fail"`
-	// OwnerActiveFile (H2): while this file exists the host's owner counts as active: the facts' owner block says active (reason
-	// "fault: owner_active_file"), so the headroom empties and the worker yields. On a host with no owner rule the block says away
-	// ("fault: owner_active_file absent") while the file is absent, so that the yield can end (daemon/sampler.go).
+	// OwnerActiveFile (H2): while this file exists the host's owner reading says active (reason "fault: owner_active_file"), and while it
+	// is confirmed absent it says away; it replaces the real reading (OwnerBlock). It only replaces the reading: the effective owner rule
+	// is still the only basis, so on a host whose rule is empty the reading is shown in facts but the headroom does not empty and the
+	// worker does not yield (#3457).
 	OwnerActiveFile string `toml:"owner_active_file"`
 	// Zone (H3): the zone peers score this host's jobs by (facts.derived.zone_override). The real zone is not changed.
 	Zone string `toml:"zone"`
@@ -99,7 +100,8 @@ func (h *Hooks) LogUploadFail() bool {
 	return true
 }
 
-// OwnerActive is H2: real is the owner rule's answer; the file makes it true, never false.
+// OwnerActive is H2 as an addition to the reading: real is the owner rule's answer; the file makes it true, never false. It makes the
+// reading only: whether the reading counts is the effective owner rule's say (#3457).
 func (h *Hooks) OwnerActive(real bool) bool {
 	if real || h == nil || !h.cfg.Enabled || h.cfg.OwnerActiveFile == "" {
 		return real
@@ -130,7 +132,7 @@ func (h *Hooks) OwnerBlock() *wire.OwnerState {
 // OwnerFileAbsent is the other half of H2: true only when the hook is named and the file is confirmed not to be there (ENOENT). A file
 // that cannot be told about (permission, I/O) is neither there nor absent: false, so that nothing is made up. A host with no owner rule has
 // a null owner block, and a worker that yielded stays yielded on a null block, so the sampler fills in an "away" block on this
-// (daemon/sampler.go).
+// (daemon/sampler.go). The block is only shown on such a host: with no rule it counts for nothing (#3457).
 func (h *Hooks) OwnerFileAbsent() bool {
 	if h == nil || !h.cfg.Enabled || h.cfg.OwnerActiveFile == "" {
 		return false
