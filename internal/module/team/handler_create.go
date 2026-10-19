@@ -158,6 +158,8 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		waitS = team.MaxWaitS
 	}
 	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: canonicalRoots(roots), RootsCanonical: true, TeamName: teamName, TeamLabel: teamLabel}
+	// the names it could take now, read before createMu (the name service takes its own locks); not part of the request's hash
+	lead.LeadNames = m.leadNames(origin.SessionID)
 	payload, err := json.Marshal(lead)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)

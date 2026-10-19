@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 )
 
@@ -818,6 +819,109 @@ func TestDiscardOfAnUnknownOwnerIsNothingAndLeavesAnUnreadableMarkerForAHuman(t 
 	}
 	if !exists(bad) {
 		t.Fatal("a marker that could not be read is kept on purpose; Discard only drops entries it loaded")
+	}
+}
+
+// The unit of an entry is its own: the old name (wwd-<id>, markers written before the unit carried the origin) or the new one
+// (wwd-<tag of the owner's source>-<id>); anyone else's is refused. The source is the owner without its last "/id", and may hold slashes.
+func TestValidateAcceptsTheOldAndTheNewUnitNameAndOnlyTheEntrysOwn(t *testing.T) {
+	tag := ident.OriginTag("air26")
+	slashy := ident.OriginTag("a/b c")
+	cases := []struct {
+		name    string
+		owner   string
+		job     string
+		unit    string
+		wantErr bool
+	}{
+		{"old name", "air26/j_1", "j_1", "wwd-j_1", false},
+		{"new name", "air26/j_1", "j_1", "wwd-" + tag + "-j_1", false},
+		{"no unit (macOS)", "air26/j_1", "j_1", "", false},
+		{"an alias with a slash and a space", "a/b c/j_1", "j_1", "wwd-" + slashy + "-j_1", false},
+		{"another source's tag", "air26/j_1", "j_1", "wwd-" + ident.OriginTag("mserv") + "-j_1", true},
+		{"another job's id under the right tag", "air26/j_1", "j_1", "wwd-" + tag + "-j_2", true},
+		{"the tag alone", "air26/j_1", "j_1", "wwd-" + tag, true},
+		{"the tag, no dash", "air26/j_1", "j_1", "wwd-" + tag + "j_1", true},
+		{"somebody else's unit", "air26/j_1", "j_1", "sshd", true},
+		{"an owner with no source has no tag to match", "/j_1", "j_1", "wwd-" + ident.OriginTag("") + "-j_1", true},
+		{"a longer tag", "air26/j_1", "j_1", "wwd-" + tag + "0-j_1", true},
+		{"the slashy alias's tag cut at the first slash", "a/b c/j_1", "j_1", "wwd-" + ident.OriginTag("a") + "-j_1", true},
+	}
+	for _, c := range cases {
+		err := validate(Entry{Owner: c.owner, JobID: c.job, Dir: "/d", Unit: c.unit})
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// Two origins can send the same job id. Clear with the bare id refuses to guess: it names the candidates and clears none of them; the
+// owner ("source/id") clears exactly one. A bare id that is only one entry's still works.
+func TestClearByAnIdTwoOriginsShareNamesTheCandidatesAndClearsNone(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	a, b, c := r.entry("j_x"), r.entry("j_x"), r.entry("j_y")
+	a.Owner, b.Owner, c.Owner = "air26/j_x", "mserv/j_x", "air26/j_y"
+	a.Dir, b.Dir = filepath.Join(r.root, "h-air26-x"), filepath.Join(r.root, "h-mserv-x")
+	for _, d := range []string{a.Dir, b.Dir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []Entry{a, b, c} {
+		if err := r.add(s, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := s.Clear("j_x")
+	if err == nil || !strings.Contains(err.Error(), "air26/j_x, mserv/j_x") {
+		t.Fatalf("the error must list both candidates, in order, got %v", err)
+	}
+	if len(s.Held()) != 3 {
+		t.Fatalf("nothing is cleared when the id is ambiguous: %d held", len(s.Held()))
+	}
+	if err := s.Clear("air26/j_x"); err != nil {
+		t.Fatal(err)
+	}
+	held := map[string]bool{}
+	for _, e := range s.Held() {
+		held[e.Owner] = true
+	}
+	if held["air26/j_x"] || !held["mserv/j_x"] || !held["air26/j_y"] {
+		t.Fatalf("only air26/j_x goes: %v", held)
+	}
+	if err := s.Clear("j_x"); err != nil { // now the bare id is only mserv's
+		t.Fatal(err)
+	}
+	if err := s.Clear("air26/nope"); err == nil {
+		t.Fatal("an owner that is not there is reported")
+	}
+	if err := s.Clear("j_y", "mserv/j_x"); err == nil {
+		// j_y is held, mserv/j_x is already gone: reported, and j_y is still cleared
+		t.Fatal("mserv/j_x was cleared already: reported")
+	}
+	if len(s.Held()) != 0 {
+		t.Fatalf("held %+v", s.Held())
+	}
+}
+
+// An alias may hold a slash: Clear takes the whole owner, and a name that is not an owner and holds a slash is simply not there.
+func TestClearByOwnerWithASlashyAlias(t *testing.T) {
+	r := newRig(t)
+	s := r.open()
+	e := r.entry("j_z")
+	e.Owner = "a/b c/j_z"
+	if err := r.add(s, e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Clear("b c/j_z"); err == nil {
+		t.Fatal("a tail of the owner is not the owner")
+	}
+	if err := s.Clear("a/b c/j_z"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Held()) != 0 {
+		t.Fatalf("held %+v", s.Held())
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -140,6 +141,10 @@ func (q *Queue) OpenLog(ctx context.Context, id string, forPeers bool) (io.ReadC
 	if q.opt.LogDir == "" || !validLogID(id) {
 		return nil, 0, ErrNotFound
 	}
+	id, err := q.reusedLogOwner(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := `SELECT 1 FROM jobs WHERE id = ? AND log_size IS NOT NULL`
 	if forPeers {
 		query += ` AND adhoc = 0 AND local = 0`
@@ -164,6 +169,27 @@ func (q *Queue) OpenLog(ctx context.Context, id string, forPeers bool) (io.ReadC
 		return nil, 0, err
 	}
 	return f, st.Size(), nil
+}
+
+var reusedLogRe = regexp.MustCompile(`^(j_[0-9A-Za-z_-]{1,64})/log$`)
+
+// reusedLogOwner is the job whose log id's log is: id itself, or, for a job born from a stored result (SubmitReused), the job that made
+// the result, which its Result.Log names. One step only: a reuse is never itself stored, so the owner has a log of its own or none. Only
+// a pointer of exactly the form "<job id>/log" is followed; the owner is then read like any job (retention and the peer filter apply).
+func (q *Queue) reusedLogOwner(ctx context.Context, id string) (string, error) {
+	var hit sql.NullInt64
+	var log sql.NullString
+	err := q.db.QueryRowContext(ctx, `SELECT json_extract(result, '$.cache_hit'), json_extract(result, '$.log') FROM jobs WHERE id = ?`, id).Scan(&hit, &log)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return id, nil // not a job: the lookup below says so
+	case err != nil:
+		return "", err
+	}
+	if m := reusedLogRe.FindStringSubmatch(log.String); hit.Int64 == 1 && m != nil && m[1] != id {
+		return m[1], nil
+	}
+	return id, nil
 }
 
 func (q *Queue) logPath(id string) string { return filepath.Join(q.opt.LogDir, id+".log") }

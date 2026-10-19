@@ -247,9 +247,14 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 	defer cancel()
 	defer time.AfterFunc(spawnSettleBound, cancel).Stop()
 	hung := 0
+	said := false // the reserved member name is said once, at the first answer that carries it
 	for {
 		var op team.SpawnOp
 		_, err := client.Do(bounded, http.MethodPost, "/api/team/spawns", req, &op, daemonclient.Idempotent())
+		if err == nil && !said && op.PoolName != "" {
+			said = true
+			fmt.Fprintf(stderr, "→ %s（預訂）\n", sanitizeCell(poolLabel(op)))
+		}
 		switch {
 		case err == nil && op.State != team.SpawnRunning && op.State != team.SpawnAwaitingResources:
 			return op, ExitOK
@@ -268,6 +273,14 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 			return op, teamReportErr("spawn", err, stderr)
 		}
 	}
+}
+
+// poolLabel is the name the team reserved for the member: the display name, or the code from a daemon that gives no display name.
+func poolLabel(op team.SpawnOp) string {
+	if op.PoolDisplayName != "" {
+		return op.PoolDisplayName
+	}
+	return op.PoolName
 }
 
 // spawnOutput is what a done spawn prints on stdout, one JSON line (§7.2 step 6).

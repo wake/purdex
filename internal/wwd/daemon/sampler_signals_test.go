@@ -97,6 +97,38 @@ func TestTheNewSignalsAreWrittenWhenTheGateIsOpen(t *testing.T) {
 	}
 }
 
+// Alerts are not behind the gate (spec §13.1): while it is shut the records others see carry no decompress_rate, but this host's own rules
+// still get the rate as read, so thrash can be judged (and raised) when a peer is unreachable.
+func TestLocalRecentKeepsTheRateWhileTheGateIsShut(t *testing.T) {
+	level := 1
+	var open atomic.Bool // shut
+	var queued atomic.Int32
+	s := signalsSampler(&level, &open, &queued)
+	tickAt(s, s0)
+	tickAt(s, s0.Add(5*time.Second))
+	tickAt(s, s0.Add(10*time.Second))
+	for _, f := range s.History(s0, wire.Step5s) {
+		if f.Mem.DecompressRate != nil {
+			t.Fatalf("the shut gate let the rate into a record others see: %+v", f.Mem)
+		}
+	}
+	got := s.LocalRecent(s0.Add(5 * time.Second))
+	if len(got) != 2 {
+		t.Fatalf("%d local samples since the second one", len(got))
+	}
+	if got[1].Mem.DecompressRate == nil || *got[1].Mem.DecompressRate != 200 || !got[1].At.Equal(s0.Add(10*time.Second)) {
+		t.Fatalf("the local rate was not kept as read: %+v", got[1])
+	}
+	if got[0].Platform == "" || got[0].Mem.CompressorMB == nil && got[0].Mem.DecompressRate == nil {
+		t.Fatalf("a local sample lost its platform or readings: %+v", got[0])
+	}
+	// what it hands out is a copy: changing it does not change what the sampler keeps
+	*got[1].Mem.DecompressRate = 1
+	if again := s.LocalRecent(s0.Add(10 * time.Second)); *again[0].Mem.DecompressRate != 200 {
+		t.Fatal("LocalRecent handed out the sampler's own pointer")
+	}
+}
+
 // A proto 3 build writes v 2 facts and no newer: the facts version is not the protocol version since proto 3 (WWD-5b-2r), whose one new
 // reader is in a job result. A v 3 record would be refused by a proto 2 host (its reader takes v <= 2), so this is what the gate-open
 // record must stay. The check below is the proto 2 reader's own: the version range and a strict decode.

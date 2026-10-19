@@ -5,6 +5,7 @@
 package jobsapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ const (
 // API serves one queue.
 type API struct {
 	q     *queue.Queue
+	reuse Reuser       // nil: no submission is answered from a stored result
 	fault *fault.Hooks // test hooks (nil: none)
 	// afterHead is a test hook: it runs in List after the head was read and before the list is.
 	afterHead func()
@@ -38,6 +40,23 @@ func New(q *queue.Queue) *API { return &API{q: q} }
 
 // WithFault is the API with the log-upload test hook (nil: none). The hook is for the C2 matrix and is off unless the config turns it on.
 func (a *API) WithFault(h *fault.Hooks) *API { a.fault = h; return a }
+
+// Reuser finds a stored result that answers a submission (spec §4.5). It must say no when it is unsure.
+type Reuser interface {
+	Lookup(ctx context.Context, s wire.JobSubmission) (wire.Result, bool)
+}
+
+// WithReuse is the API that answers a cacheable submission from a stored result (nil: never).
+func (a *API) WithReuse(r Reuser) *API { a.reuse = r; return a }
+
+// reused asks the Reuser only for a submission that may be answered from a stored result: a declared, cacheable task, not an
+// undeclared command, no --no-cache, and a definition hash to compare on.
+func (a *API) reused(ctx context.Context, s wire.JobSubmission) (wire.Result, bool) {
+	if a.reuse == nil || !s.Cacheable || s.AdHoc || s.NoCache || s.DefHash == "" {
+		return wire.Result{}, false
+	}
+	return a.reuse.Lookup(ctx, s)
+}
 
 var jobIDRe = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
 
@@ -94,6 +113,13 @@ func (a *API) Submit() http.HandlerFunc {
 		if err != nil {
 			badRequest(w, err.Error())
 			return
+		}
+		if res, ok := a.reused(r.Context(), s); ok {
+			if resp, err := a.q.SubmitReused(r.Context(), s, res); err == nil {
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+			// the stored result could not be recorded: run the job as if there had been none
 		}
 		resp, err := a.q.Submit(r.Context(), s)
 		if err != nil {

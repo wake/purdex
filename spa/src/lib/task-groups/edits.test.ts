@@ -2,7 +2,7 @@
 // a root in at most one group, a name of 1–64 bytes) or says why it cannot. Every edit is a function of the list alone, because the store may apply it twice (a lost compare-and-set).
 import { describe, it, expect } from 'vitest'
 import type { TaskGroup } from './api'
-import { addRoot, newGroup, removeRoot, renameGroup, deleteGroup, groupNameError, newGroupId, MAX_GROUPS, MAX_ROOTS } from './edits'
+import { addRoot, newGroup, removeRoot, renameGroup, deleteGroup, deleteGroupIf, groupNameError, newGroupId, MAX_GROUPS, MAX_ROOTS } from './edits'
 
 const g = (id: string, roots: string[] = [], created_at = 1): TaskGroup => ({ id, name: `G ${id}`, roots, created_at, updated_at: created_at })
 const ok = (r: ReturnType<typeof addRoot>) => { if ('error' in r) throw new Error(r.error); return r.groups }
@@ -67,6 +67,21 @@ describe('renameGroup / deleteGroup', () => {
   it('deletes a group, and says when it is already gone', () => {
     expect(ok(deleteGroup([g('a'), g('b')], 'a')).map((x) => x.id)).toEqual(['b'])
     expect(deleteGroup([g('a')], 'zz')).toEqual({ error: 'group-gone' })
+  })
+})
+
+describe('deleteGroupIf', () => {
+  const live = new Set(['L1'])
+  it('deletes a group that still holds what was shown and nothing of it is alive', () => {
+    expect(ok(deleteGroupIf([g('a', ['R1', 'R2']), g('b')], 'a', ['R2', 'R1'], live)).map((x) => x.id)).toEqual(['b'])
+  })
+  it('refuses when the group has changed since it was shown — a root added, one taken out, or the group gone', () => {
+    expect(deleteGroupIf([g('a', ['R1', 'NEW'])], 'a', ['R1'], live)).toEqual({ error: 'group-changed' })
+    expect(deleteGroupIf([g('a', ['R1'])], 'a', ['R1', 'R2'], live)).toEqual({ error: 'group-changed' })
+    expect(deleteGroupIf([g('a')], 'zz', [], live)).toEqual({ error: 'group-gone' })
+  })
+  it('refuses when a root of the group is a live session', () => {
+    expect(deleteGroupIf([g('a', ['R1', 'L1'])], 'a', ['R1', 'L1'], live)).toEqual({ error: 'group-in-use' })
   })
 })
 

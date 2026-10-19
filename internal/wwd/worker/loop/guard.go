@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/run"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
@@ -23,7 +25,7 @@ func entryOf(e runner.Ended, sandboxed bool, now time.Time) quarantine.Entry {
 		Dir: filepath.Dir(e.Root), Keys: e.Job.Locks, Since: now,
 	}
 	if sandboxed {
-		ent.Unit = "wwd-" + e.Job.ID
+		ent.Unit = run.UnitName(ident.OriginTag(e.Source), e.Job.ID) // the name the sandbox gave the unit (jobexec puts the same tag into run.Spec.Origin)
 	}
 	return ent
 }

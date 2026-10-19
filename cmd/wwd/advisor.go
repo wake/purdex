@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/advisor"
@@ -21,6 +22,17 @@ type advisorInputs struct {
 	Store    *store.Store
 	Broker   *daemon.Broker
 	Sampler  *daemon.Sampler
+	// Known is [advisor] known_residents: the residents whose large footprint is expected here.
+	Known []string
+}
+
+// advisorRules are the rules this build judges (spec §13.3 except silence, thrash's broker hand-off and the incidents of 8b); the live
+// evaluator and the replay run the same list.
+func advisorRules(known []string) []advisor.Rule {
+	return []advisor.Rule{
+		advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{},
+		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known},
+	}
 }
 
 // runAdvisor judges the alert rules over this host's own facts until ctx ends. The first judgement waits one interval, so the first
@@ -35,11 +47,12 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 		return advisor.Input{
 			Now: time.Now(), Facts: f, WorkRoot: in.WorkRoot,
 			Minutes:     func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step1m) },
+			Recent:      in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
 			StartsSince: in.Store.StartsSince,
 		}, true
 	}
 	// not behind the proto 2 writer gate (spec §13.1): an unreachable host must not silence the others' alerts
-	advisor.NewEvaluator(book, input, log.Printf, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{}).Run(ctx)
+	advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known)...).Run(ctx)
 }
 
 // runAdvisorCmd handles `wwd alerts-replay --db <copy of wwd.db> [--days 7] [--work-root <dir>]`: it counts what the alert rules would have
@@ -53,6 +66,7 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 	db := fs.String("db", "", "a copy of wwd.db (sqlite3 <live> \".backup <copy>\")")
 	days := fs.Int("days", 7, "how many days back from the newest record")
 	root := fs.String("work-root", "", "the work root of the host the database came from")
+	known := fs.String("known", "", "comma-separated known residents ([advisor] known_residents of that host)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return true, err
 	}
@@ -88,11 +102,17 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 	if err != nil {
 		return true, err
 	}
-	res := advisor.Replay(recs, starts, *root, advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{})
+	var knownList []string
+	if *known != "" {
+		knownList = strings.Split(*known, ",")
+	}
+	rules := advisorRules(knownList)
+	res := advisor.Replay(recs, starts, *root, rules...)
 	span := recs[len(recs)-1].At.Sub(recs[0].At)
 	fmt.Printf("replayed %d minutes (%.1f days) from %s to %s, %d starts\n", len(recs), span.Hours()/24,
 		recs[0].At.Format(time.RFC3339), recs[len(recs)-1].At.Format(time.RFC3339), len(starts))
-	for _, k := range []wire.AlertKind{wire.AlertDiskLow, wire.AlertDiskFalling, wire.AlertWorkerCrash} {
+	for _, r := range rules {
+		k := r.Kind()
 		o := res[k]
 		fmt.Printf("%-18s episodes=%d held_minutes=%d unjudged_minutes=%d first=%s last=%s\n", k, o.Episodes, o.HeldMinutes, o.Errors,
 			o.FirstAt.Format(time.RFC3339), o.LastAt.Format(time.RFC3339))

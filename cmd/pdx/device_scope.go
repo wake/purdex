@@ -45,14 +45,15 @@ var deviceAllowed = map[string]bool{
 	"GET /api/conversations/{provider}/{session_id}":                      true,
 	"GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}": true,
 	// team
-	"GET /api/team/approvals/{id}":         true,
-	"GET /api/team/adoptions/{id}":         true, // read-only: the membership a remote adopt's approval led to (X3c)
-	"POST /api/team/approvals/{id}/decide": true,
-	"GET /api/team/unattended":             true,
-	"PUT /api/team/unattended":             true,
-	"PUT /api/team/relay-quota":            true, // the user's call (2026-10-09 20:2x): the phone may set the relay quota ...
-	"PUT /api/team/max-members":            true, // ... and the team size cap
-	"POST /api/relay/self":                 true,
+	"GET /api/team/approvals/{id}":            true,
+	"GET /api/team/adoptions/{id}":            true, // read-only: the membership a remote adopt's approval led to (X3c)
+	"POST /api/team/approvals/{id}/decide":    true,
+	"GET /api/team/approvals/{id}/lead-names": true, // the names a lead request could take now (name pool v2 §5.3): the phone's card too
+	"GET /api/team/unattended":                true,
+	"PUT /api/team/unattended":                true,
+	"PUT /api/team/relay-quota":               true, // the user's call (2026-10-09 20:2x): the phone may set the relay quota ...
+	"PUT /api/team/max-members":               true, // ... and the team size cap
+	"POST /api/relay/self":                    true,
 	// the unattended quota pause (UP-5b): the phone lists the paused sessions and releases one, as the Mac App does; it may
 	// already turn unattended off (which releases them all)
 	"GET /api/team/paused":                       true,

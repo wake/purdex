@@ -108,8 +108,9 @@ func (m *Module) timeOutSpawn(op spawnRow, lastSeen string) {
 	}
 	m.logf("[team] spawn %s failed: %s (last seen: %s)", op.ID, team.SpawnReasonStartTimeout, lastSeen)
 	m.spawnSeen.set(op.ID, lastSeen)
-	m.rosterChanged() // the timeout is committed: the seat is free again (in_use)
-	m.kickFacts()     // a forwarded op's spawn_failed fact is committed with it
+	m.releaseMemberName(op.ID) // now: the runner reaps the op later (reapFailedSpawn), but that is a second read that can fail
+	m.rosterChanged()          // the timeout is committed: the seat is free again (in_use)
+	m.kickFacts()              // a forwarded op's spawn_failed fact is committed with it
 	m.wake(op.ID)
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
@@ -266,6 +267,7 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 	// failed, so the roster sent carries the member as it will be seen.
 	m.rosterChanged()
 	m.logf("[team] spawn %s done: member %s (%s) in %s", op.ID, o.Ref, op.SessionID, op.TmuxName)
+	m.releaseMemberName(op.ID) // the session is registered: it takes the name at its first naming, no longer held by the op
 	m.wake(op.ID)
 }
 

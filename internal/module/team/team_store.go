@@ -584,40 +584,71 @@ func (s *Store) EndTeam(id, leadSessionID, reason string, at int64) (bool, error
 		return false, fmt.Errorf("end team %s: %w", id, err)
 	}
 	defer tx.Rollback()
-	ended, err := endTeamTx(tx, id, leadSessionID, reason, at)
+	ended, spawnIDs, err := endTeamTx(tx, id, leadSessionID, reason, at)
 	if err != nil || !ended {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("end team %s: %w", id, err)
 	}
+	s.spawnsEnded(spawnIDs)
 	return true, nil
 }
 
 // endTeamTx is EndTeam's one guarded UPDATE on the caller's transaction — the only copy of that SQL, shared with
 // EndTeamWithCommands (which enqueues the `end` commands in the same transaction).
-func endTeamTx(tx *sql.Tx, id, leadSessionID, reason string, at int64) (bool, error) {
+func endTeamTx(tx *sql.Tx, id, leadSessionID, reason string, at int64) (ended bool, spawnIDs []string, err error) {
 	res, err := tx.Exec(`UPDATE teams SET ended_at = ?, end_reason = ?
 		WHERE id = ? AND lead_session_id = ? AND ended_at = 0
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
 		at, reason, id, leadSessionID, leadSessionID)
 	if err != nil {
-		return false, fmt.Errorf("end team %s: %w", id, err)
+		return false, nil, fmt.Errorf("end team %s: %w", id, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("end team %s rows affected: %w", id, err)
+		return false, nil, fmt.Errorf("end team %s rows affected: %w", id, err)
 	}
 	if n != 1 {
-		return false, nil
+		return false, nil, nil
+	}
+	// the ops that carry a reserved member name, read before they end: their names are released after the commit (spawnsEnded)
+	if spawnIDs, err = reservedSpawnIDsIn(tx, id); err != nil {
+		return false, nil, fmt.Errorf("end team %s: its reserved names: %w", id, err)
 	}
 	// The team's local spawns still running end with it (#2384), in this transaction: the runner's finish is a
 	// compare-and-set on a running op, so it can no longer add a member to the ended team. The runner reaps its
 	// session when it sees the op failed (reapFailedSpawn); a crash in between is the boot sweep's.
 	if _, err := tx.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE team_id = ? AND state IN ('running', 'awaiting_resources') AND lead_host_id = ''`,
 		team.SpawnReasonAbandoned, at, id); err != nil {
-		return false, fmt.Errorf("end team %s: its running spawns: %w", id, err)
+		return false, nil, fmt.Errorf("end team %s: its running spawns: %w", id, err)
 	}
-	return true, nil
+	return true, spawnIDs, nil
+}
+
+// reservedSpawnIDsIn are the open local spawn ops of team teamID that carry a reserved member name.
+func reservedSpawnIDsIn(q *sql.Tx, teamID string) ([]string, error) {
+	rows, err := q.Query(`SELECT id FROM spawn_ops WHERE team_id = ? AND pool_name <> '' AND lead_host_id = ''
+		AND state IN ('running', 'awaiting_resources')`, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// spawnsEnded tells the module that these spawn ops ended in a committed transaction (their reserved names go back).
+func (s *Store) spawnsEnded(ids []string) {
+	if s.onSpawnsEnded != nil && len(ids) > 0 {
+		s.onSpawnsEnded(ids)
+	}
 }

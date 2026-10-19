@@ -66,7 +66,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "POST /api/sessions/{code}/send-now", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
-		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
+		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/approvals/{id}/lead-names", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
 		"GET /api/team/paused", "POST /api/team/paused/{session_id}/release", // the unattended quota pause: the 被擋下 list and 解除
 		"GET /api/nex/v1/executions", "/api/nex/",
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
