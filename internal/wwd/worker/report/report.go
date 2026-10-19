@@ -274,7 +274,7 @@ func (r *Reporter) parse(e runner.Ended) wire.Summary {
 	if kind == "" {
 		kind = "plain"
 	}
-	in := summary.Input{Log: e.Run.Tail, Root: e.Root, Digest: r.cfg.Digest != nil && r.cfg.Digest()}
+	in := summary.Input{Log: e.Run.Tail, Root: e.Root, Digest: r.digestOpen()}
 	if e.Run.StdoutPath != "" {
 		in.Stdout = readCapped(e.Run.StdoutPath)
 	}
@@ -300,7 +300,9 @@ func readCapped(path string) []byte {
 		return nil
 	}
 	defer f.Close()
-	b, _ := io.ReadAll(io.LimitReader(f, maxReport))
+	// one byte more than the limit: a report that long is cut here, and the summary parsers refuse anything over the limit instead of
+	// reading a prefix of it as if it were the whole (a prefix that ends on a line would be taken for a complete stream and given a digest)
+	b, _ := io.ReadAll(io.LimitReader(f, maxReport+1))
 	return b
 }
 
@@ -308,7 +310,7 @@ func readCapped(path string) []byte {
 // (409, 404) means the claim is not live: the log is not sent either.
 func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, req wire.ResultRequest) bool {
 	var last error
-	out := r.retry(ctx, e, "result", func(ctx context.Context) error { last = sink.Result(ctx, e.Job.ID, req); return last })
+	out := r.retry(ctx, e, "result", func(ctx context.Context) error { last = sink.Result(ctx, e.Job.ID, r.gated(req)); return last })
 	if out == abandoned && ctx.Err() != nil && (errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded)) {
 		// A try was cut short by the lease's context ending: the origin may have taken the result and the answer been lost with the
 		// context (a heartbeat that met the finished job and ended the lease is how it happens). A result is idempotent per claim, so one
@@ -316,12 +318,27 @@ func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, re
 		// really is gone, with a 409.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), confirmTimeout)
 		defer cancel()
-		if r.retryFor(cctx, e, "result confirmation", confirmTimeout, func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken {
+		if r.retryFor(cctx, e, "result confirmation", confirmTimeout, func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, r.gated(req)) }) == taken {
 			r.cfg.Logf("report: the result of %s was taken after all (confirmed once its lease had ended)", e.Job.ID)
 			return true
 		}
 	}
 	return out == taken
+}
+
+// digestOpen says whether a summary may carry the passed-test digest now (Config.Digest).
+func (r *Reporter) digestOpen() bool { return r.cfg.Digest != nil && r.cfg.Digest() }
+
+// gated is req as it is to be sent now: the summary's digest is kept only while the pool still allows it. The result is retried for
+// minutes, and a host of the pool may have been rolled back to a version that rejects the field since the summary was built.
+func (r *Reporter) gated(req wire.ResultRequest) wire.ResultRequest {
+	if req.Summary == nil || req.Summary.PassedDigest == "" || r.digestOpen() {
+		return req
+	}
+	s := *req.Summary
+	s.PassedDigest = ""
+	req.Summary = &s
+	return req
 }
 
 // confirmTimeout bounds the one try that settles a result whose answer was lost with the lease's context.

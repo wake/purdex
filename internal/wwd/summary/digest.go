@@ -16,10 +16,15 @@ const maxPassedIDs = 250_000
 // for a digest (Input.Digest): then a parser adds the id of each test that passed and asks for the digest only once the whole report was
 // read without a problem.
 type passedSet struct {
-	on   bool
-	over bool
-	ids  map[string]struct{}
+	on      bool
+	over    bool
+	tainted bool // a test of the report cannot be told apart from another: the set is not a set of tests, so there is no digest
+	ids     map[string]struct{}
 }
+
+// taint says the report holds a test whose identity is not unique across hosts (a path outside the workspace, folded for display; a
+// test with no name). A wrong "same" is worse than a missing digest, which only sends the pair round again.
+func (p *passedSet) taint() { p.tainted = true }
 
 func newPassedSet(on bool) *passedSet {
 	return &passedSet{on: on, ids: map[string]struct{}{}}
@@ -46,7 +51,7 @@ func (p *passedSet) add(parts ...string) {
 // digest is "sha256:" and the hex SHA-256 of the sorted ids, each followed by a newline; "" when it was not asked for or the report
 // named more tests than maxPassedIDs.
 func (p *passedSet) digest() string {
-	if !p.on || p.over {
+	if !p.on || p.over || p.tainted {
 		return ""
 	}
 	ids := make([]string, 0, len(p.ids))

@@ -46,6 +46,9 @@ func parseVitest(in Input) (wire.Summary, error) {
 				if name == "" {
 					name = a.Title
 				}
+				if strings.HasPrefix(file, outside) { // rel folded the directory away: two files of that name would be one
+					passed.taint()
+				}
 				passed.add(file, name)
 			case "failed":
 				s.Failed++
