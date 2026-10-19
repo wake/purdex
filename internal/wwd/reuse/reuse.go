@@ -6,7 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"slices"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // KeyParts is everything the key is made of (spec §4.5): what was run, and the host and the qualification it was run under.
@@ -93,6 +96,23 @@ type HostNow struct {
 	// Reference: it is the task's reference host and ReferenceFingerprint is its current fingerprint.
 	Reference            bool
 	ReferenceFingerprint map[string]string
+}
+
+// HostNowFromInfo is what a host's /v1/info says, read as HostNow for one task: taskLabel is task:<repo>/<task>, isReference says the
+// host is that task's reference (from the manifest's qualify.reference). A non-reference host that advertises the task label has it
+// earned: an advertised label has not drifted (a drift revokes it, WWD-5c-1), so the current toolchain fingerprint is the one it was
+// earned with. The reference host holds the label without qualifying and counts as Reference, not Earned. A quarantined label is not
+// advertised, so it reads as no standing here: whoever quarantines a label must also drop the entries made under it
+// (store.DeleteCacheByLabel), which is what keeps its disputed results from answering the host itself.
+func HostNowFromInfo(info wire.Info, taskLabel string, isReference bool) HostNow {
+	h := HostNow{Labels: slices.Clone(info.Labels), CurrentFingerprint: maps.Clone(info.Fingerprint)}
+	switch {
+	case isReference:
+		h.Reference, h.ReferenceFingerprint = true, maps.Clone(info.Fingerprint)
+	case slices.Contains(info.Labels, taskLabel):
+		h.Earned, h.EarnedFingerprint = true, maps.Clone(info.Fingerprint)
+	}
+	return h
 }
 
 // SameWork is condition (1): snapshot tree, task, args and definition hash are equal.

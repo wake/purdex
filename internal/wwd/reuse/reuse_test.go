@@ -1,6 +1,59 @@
 package reuse
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+func infoOf(labels []string, fp map[string]string) wire.Info {
+	return wire.Info{Alias: "mserv", Labels: labels, Fingerprint: fp}
+}
+
+// The real earned label, read from a host's /v1/info, decides condition (3) end to end.
+func TestHostNowFromInfoDrivesTheLookup(t *testing.T) {
+	label := "task:purdex/tsc"
+	fp := map[string]string{"go": "1.26.0"}
+	q := query()
+	// a qualified host (advertises the label): a member's result answers the lead on mlab
+	h := HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, false)
+	if !h.Earned || h.Reference || !Answers(entry(), q, h) {
+		t.Fatalf("earned host: %+v", h)
+	}
+	// the same host after its toolchain changed: the label is revoked (not advertised) and the toolchain is another one
+	h = HostNowFromInfo(infoOf([]string{"os:linux"}, map[string]string{"go": "1.26.1"}), label, false)
+	if h.Earned || Answers(entry(), q, h) {
+		t.Fatalf("a drifted host answered another host: %+v", h)
+	}
+	// no standing and the same toolchain: only itself
+	h = HostNowFromInfo(infoOf([]string{"os:linux"}, fp), label, false)
+	if Answers(entry(), q, h) {
+		t.Fatal("a host with no standing answered another host")
+	}
+	q.Host = "mserv"
+	if !Answers(entry(), q, h) {
+		t.Fatal("a host with no standing did not answer itself")
+	}
+	// the reference host: valid while its fingerprint is the one of the entry
+	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, fp), label, true)
+	q.Host = "mlab"
+	if !h.Reference || h.Earned || !Answers(entry(), q, h) {
+		t.Fatalf("reference host: %+v", h)
+	}
+	h = HostNowFromInfo(infoOf([]string{"os:linux", label}, map[string]string{"go": "1.27.0"}), label, true)
+	if Answers(entry(), q, h) {
+		t.Fatal("a reference host that drifted answered")
+	}
+}
+
+func TestHostNowFromInfoCopiesWhatItIsGiven(t *testing.T) {
+	info := infoOf([]string{"os:linux"}, map[string]string{"go": "1"})
+	h := HostNowFromInfo(info, "task:a/b", false)
+	info.Labels[0], info.Fingerprint["go"] = "x", "2"
+	if h.Labels[0] != "os:linux" || h.CurrentFingerprint["go"] != "1" {
+		t.Fatalf("%+v", h)
+	}
+}
 
 func baseParts() KeyParts {
 	return KeyParts{
