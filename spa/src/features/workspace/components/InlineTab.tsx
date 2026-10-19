@@ -132,7 +132,8 @@ export function InlineTab({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 1) {
       e.preventDefault()
-      onMiddleClick(tab.id)
+      // a seat's row never closes (see showClose)
+      if (!seatOverride) onMiddleClick(tab.id)
     }
   }
 
