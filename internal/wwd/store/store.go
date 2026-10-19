@@ -21,7 +21,30 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 6
+const schemaVersion = 7
+
+// exceptionHoldCols (v7, WWD-8 8b-3): the two hold fields of an exception (spec §13.4), NULL for an exception made without them. Both
+// are JSON: allow as {"classes":[..],"repos":[..]}, flags as a list. A file made before v7 gets them with an ALTER; a new file gets them
+// the same way right after the table, so there is one definition. An older wwd refuses a v7 file (a newer schema), so the way back is the
+// backup taken before the upgrade.
+var exceptionHoldCols = []struct{ name, ddl string }{
+	{"allow_json", `ALTER TABLE exceptions ADD COLUMN allow_json TEXT`},
+	{"flags", `ALTER TABLE exceptions ADD COLUMN flags TEXT`},
+}
+
+// addColumn runs an ALTER TABLE ADD COLUMN unless the table has the column already (a step run again, or a file that was labelled with an
+// older version by hand).
+func addColumn(ctx context.Context, tx *sql.Tx, table, column, ddl string) error {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, ddl)
+	return err
+}
 
 // hostMinutesDDL (v2): one row per finished minute, the whole rollup record as
 // JSON (minutes.go).
@@ -93,6 +116,8 @@ func (s *Store) migrate(ctx context.Context) error {
 				name TEXT PRIMARY KEY,
 				until_ms INTEGER, pid INTEGER, pid_ident TEXT NOT NULL DEFAULT '',
 				holds TEXT NOT NULL, since_ms INTEGER NOT NULL)`,
+			exceptionHoldCols[0].ddl,
+			exceptionHoldCols[1].ddl,
 			hostMinutesDDL,
 			observationsDDL,
 			observationsIndexDDL,
@@ -148,6 +173,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		if have < 6 { // v6: earned labels and the result cache (WWD-5; every statement is IF NOT EXISTS)
 			for _, stmt := range []string{earnedLabelsDDL, resultCacheDDL, resultCacheIndexDDL, resultCacheLabelIndexDDL} {
 				if _, err := tx.ExecContext(ctx, stmt); err != nil {
+					return err
+				}
+			}
+		}
+		if have < 7 { // v7: the hold fields of an exception (WWD-8 8b-3). ALTER has no IF NOT EXISTS, so a column that is there is left alone
+			for _, c := range exceptionHoldCols {
+				if err := addColumn(ctx, tx, "exceptions", c.name, c.ddl); err != nil {
 					return err
 				}
 			}
@@ -211,10 +243,26 @@ func (s *Store) SaveException(e Stored) error {
 	if e.Exception.PID != nil {
 		pid = *e.Exception.PID
 	}
-	_, err = s.db.Exec(`INSERT INTO exceptions (name, until_ms, pid, pid_ident, holds, since_ms) VALUES (?, ?, ?, ?, ?, ?)
+	// the hold fields: NULL when absent. An empty allow is not an absent one (it admits nothing), so it is stored as {"classes":[],"repos":[]}.
+	var allow, flags any
+	if a := e.Exception.Allow; a != nil {
+		b, err := json.Marshal(wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)})
+		if err != nil {
+			return err
+		}
+		allow = string(b)
+	}
+	if len(e.Exception.Flags) > 0 {
+		b, err := json.Marshal(e.Exception.Flags)
+		if err != nil {
+			return err
+		}
+		flags = string(b)
+	}
+	_, err = s.db.Exec(`INSERT INTO exceptions (name, until_ms, pid, pid_ident, holds, since_ms, allow_json, flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET until_ms = excluded.until_ms, pid = excluded.pid, pid_ident = excluded.pid_ident,
-			holds = excluded.holds, since_ms = excluded.since_ms`,
-		e.Exception.Name, until, pid, e.PIDIdent, string(holds), e.Since.UnixMilli())
+			holds = excluded.holds, since_ms = excluded.since_ms, allow_json = excluded.allow_json, flags = excluded.flags`,
+		e.Exception.Name, until, pid, e.PIDIdent, string(holds), e.Since.UnixMilli(), allow, flags)
 	return err
 }
 
@@ -226,7 +274,7 @@ func (s *Store) DeleteException(name string) error {
 
 // LoadExceptions returns every saved exception, oldest first.
 func (s *Store) LoadExceptions() ([]Stored, error) {
-	rows, err := s.db.Query(`SELECT name, until_ms, pid, pid_ident, holds, since_ms FROM exceptions ORDER BY since_ms, name`)
+	rows, err := s.db.Query(`SELECT name, until_ms, pid, pid_ident, holds, since_ms, allow_json, flags FROM exceptions ORDER BY since_ms, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -237,8 +285,9 @@ func (s *Store) LoadExceptions() ([]Stored, error) {
 			name, holds, ident string
 			until, pid         sql.NullInt64
 			since              int64
+			allow, flags       sql.NullString
 		)
-		if err := rows.Scan(&name, &until, &pid, &ident, &holds, &since); err != nil {
+		if err := rows.Scan(&name, &until, &pid, &ident, &holds, &since, &allow, &flags); err != nil {
 			return nil, err
 		}
 		e := Stored{Exception: wire.Exception{Name: name}, Since: time.UnixMilli(since).UTC(), PIDIdent: ident}
@@ -247,6 +296,24 @@ func (s *Store) LoadExceptions() ([]Stored, error) {
 		}
 		if e.Exception.Holds == nil {
 			e.Exception.Holds = []wire.Hold{}
+		}
+		if allow.Valid {
+			var a wire.HoldAllow
+			if err := json.Unmarshal([]byte(allow.String), &a); err != nil {
+				return nil, fmt.Errorf("store: exception %q allow: %w", name, err)
+			}
+			if a.Classes == nil {
+				a.Classes = []wire.JobClass{}
+			}
+			if a.Repos == nil {
+				a.Repos = []string{}
+			}
+			e.Exception.Allow = &a
+		}
+		if flags.Valid {
+			if err := json.Unmarshal([]byte(flags.String), &e.Exception.Flags); err != nil {
+				return nil, fmt.Errorf("store: exception %q flags: %w", name, err)
+			}
 		}
 		if until.Valid {
 			t := time.UnixMilli(until.Int64).UTC()

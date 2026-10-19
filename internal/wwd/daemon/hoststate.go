@@ -232,6 +232,14 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 	if e.Holds == nil {
 		e.Holds = []wire.Hold{}
 	}
+	// the one shape the database gives back after a restart, so that the same request is the same hold before and after one: no flags is
+	// nil (not an empty list), an allow has both lists (an empty one admits nothing; one left out is an empty one)
+	if len(e.Flags) == 0 {
+		e.Flags = nil
+	}
+	if a := e.Allow; a != nil {
+		e.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if old, ok := s.excs[e.Name]; ok && reflect.DeepEqual(old.Exception, e) {
@@ -340,6 +348,10 @@ func (s *HostState) activeLocked() []wire.FactExc {
 			u := *e.Exception.Until
 			fe.Until = &u
 		}
+		if a := e.Exception.Allow; a != nil { // a hold: every reader sees it from the facts (spec §13.4)
+			fe.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+		}
+		fe.Flags = append([]wire.HoldFlag(nil), e.Exception.Flags...)
 		out = append(out, fe)
 	}
 	return out
@@ -354,8 +366,12 @@ func (s *HostState) Exceptions() []wire.Exception {
 	out := make([]wire.Exception, 0, len(s.excs))
 	for _, e := range s.sorted() {
 		x := e.Exception
-		if x.Holds == nil {
-			x.Holds = []wire.Hold{}
+		x.Holds = append([]wire.Hold{}, x.Holds...) // copies: a reader that changes what it was given does not change the hold
+		if a := x.Allow; a != nil {
+			x.Allow = &wire.HoldAllow{Classes: append([]wire.JobClass{}, a.Classes...), Repos: append([]string{}, a.Repos...)}
+		}
+		if len(x.Flags) > 0 {
+			x.Flags = append([]wire.HoldFlag(nil), x.Flags...)
 		}
 		out = append(out, x)
 	}
