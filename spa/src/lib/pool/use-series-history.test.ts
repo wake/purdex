@@ -1,6 +1,6 @@
 // 7a-5: the host tab's hook onto the series read — 1 h / 6 h / 24 h, once per open, behind the `pool.series.v1` gate.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { renderHook, waitFor, act } from '@testing-library/react'
 import { fleetHistory } from '../fleet/history'
 
 const fetchPoolSeries = vi.fn()
@@ -34,9 +34,12 @@ describe('useSeriesHistory', () => {
     expect(fleetHistory.series('f1', 'cpu', '1h', Date.now()).length).toBeGreaterThan(0)
   })
 
-  it('the 5 minute range does not read', () => {
-    renderHook(() => useSeriesHistory('f1', 'air26', '5m', true, 8000))
+  it('the 5 minute range does not read, and no load is counted', async () => {
+    fetchPoolSeries.mockResolvedValue({ points: [point(1)] })
+    const { result } = renderHook(() => useSeriesHistory('f1', 'air26', '5m', true, 8000))
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     expect(fetchPoolSeries).not.toHaveBeenCalled()
+    expect(result.current).toBe(0)
   })
 
   it('a daemon that did not announce the series does not get asked', () => {
@@ -55,8 +58,7 @@ describe('useSeriesHistory', () => {
     fetchPoolSeries.mockReturnValue(new Promise((r) => { done = r }))
     const { unmount, result } = renderHook(() => useSeriesHistory('f1', 'air26', '1h', true, 8000))
     unmount()
-    done({ points: [point(30)] })
-    await new Promise((r) => setTimeout(r, 0))
+    await act(async () => { done({ points: [point(30)] }); await new Promise((r) => setTimeout(r, 0)) })
     expect(result.current).toBe(0)
     expect(fleetHistory.series('f1', 'cpu', '1h', Date.now()).length).toBe(0)
   })
