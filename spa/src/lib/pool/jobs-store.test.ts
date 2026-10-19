@@ -8,7 +8,7 @@ const fetchJobsPage = vi.fn()
 const fetchJob = vi.fn()
 vi.mock('./jobs-api', () => ({ fetchJobsPage: (...a: unknown[]) => fetchJobsPage(...a), fetchJob: (...a: unknown[]) => fetchJob(...a) }))
 
-import { useJobsStore, jobSourceFor, FIRST_PAGE_LIMIT, ENDED_KEPT } from './jobs-store'
+import { useJobsStore, jobSourceFor, FIRST_PAGE_LIMIT, ENDED_KEPT, MAX_PAGES } from './jobs-store'
 import { PoolReadError } from './api'
 import { classify } from './errors'
 
@@ -231,6 +231,78 @@ describe('one job again (jobs.changed)', () => {
     await get().readJob('mlab', src, 'a')
     expect(fetchJob).not.toHaveBeenCalled()
     expect(idsOf()).toEqual(['a'])
+  })
+})
+
+describe('a read that ran out of pages', () => {
+  it('commits what it reached with its cursor and says there is more, so the next read goes on from there and nothing is missed', async () => {
+    let n = 0
+    fetchJobsPage.mockImplementation(async () => { n++; return page(Array.from({ length: FIRST_PAGE_LIMIT }, (_, i) => job(`p${n}-${i}`, { state: 'succeeded', created_at: n })), String(n * 1000)) })
+    expect(await get().read('mlab', src)).toEqual({ ok: true, more: true })
+    expect(fetchJobsPage).toHaveBeenCalledTimes(MAX_PAGES)
+    expect(get().byOrigin.mlab.cursor).toBe(String(MAX_PAGES * 1000))
+    fetchJobsPage.mockReset()
+    fetchJobsPage.mockResolvedValueOnce(page([job('tail')], String(MAX_PAGES * 1000 + 1)))
+    expect(await get().read('mlab', src)).toEqual({ ok: true })
+    expect(fetchJobsPage.mock.calls[0][1].after).toBe(String(MAX_PAGES * 1000))
+  })
+})
+
+describe('reads and single-job reads of one origin do not interleave', () => {
+  it('a job event that comes while a list is out is applied after it: the list\'s older picture does not undo it', async () => {
+    fetchJobsPage.mockResolvedValueOnce(page([job('a', { state: 'running' })], '1'))
+    await get().read('mlab', src)
+    let release!: (p: JobsPage) => void
+    fetchJobsPage.mockReturnValueOnce(new Promise<JobsPage>((r) => { release = r }))
+    const list = get().read('mlab', src)
+    fetchJob.mockResolvedValueOnce({ job: job('a', { state: 'succeeded' }), log: null })
+    const one = get().readJob('mlab', src, 'a')
+    await Promise.resolve()
+    expect(fetchJob).not.toHaveBeenCalled() // waits its turn
+    release(page([job('a', { state: 'running' })], '2')) // the list still carries the older picture
+    await Promise.all([list, one])
+    expect(get().byOrigin.mlab.jobs.a.state).toBe('succeeded')
+  })
+
+  it('a job that was found gone while a list was out stays gone', async () => {
+    fetchJobsPage.mockResolvedValueOnce(page([job('a'), job('b')], '1'))
+    await get().read('mlab', src)
+    let release!: (p: JobsPage) => void
+    fetchJobsPage.mockReturnValueOnce(new Promise<JobsPage>((r) => { release = r }))
+    const list = get().read('mlab', src)
+    fetchJob.mockRejectedValueOnce(readErr(404, { error: 'not_found' }))
+    const one = get().readJob('mlab', src, 'a')
+    release(page([], '1'))
+    await Promise.all([list, one])
+    expect(idsOf()).toEqual(['b'])
+  })
+})
+
+describe('the source of an origin changes (forwarded ⇄ its own daemon)', () => {
+  it('a read through another source does not join the one in flight, and starts over: the two views differ', async () => {
+    let release!: (p: JobsPage) => void
+    fetchJobsPage.mockReturnValueOnce(new Promise<JobsPage>((r) => { release = r }))
+    const forwarded = get().read('mlab', { daemonId: 'd1', host: 'mlab' })
+    fetchJobsPage.mockResolvedValueOnce(page([job('own'), job('fast', { local: true })], '9'))
+    const own = get().read('mlab', { daemonId: 'd-mlab' })
+    release(page([job('peer')], '5'))
+    await Promise.all([forwarded, own])
+    expect(fetchJobsPage.mock.calls.map((c) => [c[0], c[1].host, c[1].after])).toEqual([['d1', 'mlab', '0'], ['d-mlab', undefined, '0']])
+    expect(idsOf()).toEqual(['fast', 'own'])
+    expect(get().byOrigin.mlab.cursor).toBe('9')
+  })
+
+  it('after a completed read, another source does not continue the first one\'s cursor', async () => {
+    fetchJobsPage.mockResolvedValueOnce(page([job('peer')], '5'))
+    await get().read('mlab', { daemonId: 'd1', host: 'mlab' })
+    fetchJobsPage.mockResolvedValueOnce(page([job('own')], '2'))
+    await get().read('mlab', { daemonId: 'd-mlab' })
+    expect(fetchJobsPage.mock.calls[1][1].after).toBe('0')
+    expect(idsOf()).toEqual(['own'])
+    // the same source goes on from its cursor as before
+    fetchJobsPage.mockResolvedValueOnce(page([], '2'))
+    await get().read('mlab', { daemonId: 'd-mlab' })
+    expect(fetchJobsPage.mock.calls[2][1].after).toBe('2')
   })
 })
 
