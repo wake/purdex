@@ -293,6 +293,8 @@ type Module struct {
 	// while it publishes both, pickOther the read side while it reads both. afterPoolPublished is a test seam between the two.
 	poolGen            sync.RWMutex
 	afterPoolPublished func()
+	// beforeLeadRename is a test seam in RenameForLead, after the held check and before the generation read lock.
+	beforeLeadRename func()
 	// poolSem is the cancellable lock around picking and storing a pool name
 	// (lockPool); poolReady is closed once the refresher's first pass over
 	// the other hosts is done (awaitPoolReady), nil before Start.

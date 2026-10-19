@@ -12,6 +12,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/personas"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -178,6 +179,18 @@ func TestNameService_RenameForLeadThatLosesTheCompareAndSetIsLost(t *testing.T) 
 	assert.ErrorIs(t, err, ipeers.ErrNameLost)
 	_, recorded := e.m.leadRenames.get(nameSID(poolSidA))
 	assert.False(t, recorded, "a rename that did not happen leaves nothing to undo")
+}
+
+// A collection that retires the code between the checks and the write is seen: the rename checks pickable under the same
+// generation lock as the write (codex R1 on NP-3c-2).
+func TestNameService_RenameForLeadChecksPickableAtTheMomentOfTheWrite(t *testing.T) {
+	e := svcEnv(t)
+	f := &fakePersonas{set: personas.Set{Items: []personas.Persona{leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", false)}}}
+	e.m.bindPersonas(f)
+	e.m.beforeLeadRename = func() { f.change(leadP("hiro"), pp("anna", "Anna", false), pp("mia", "Mia", true)) } // mia retired
+	_, err := e.m.RenameForLead(context.Background(), poolSidA, "mia")
+	assert.ErrorIs(t, err, ipeers.ErrNameUnknown)
+	assert.Equal(t, "purdex-54-anna", e.storedName(poolSidA), "nothing was written")
 }
 
 func TestNameService_RecordLeadWritesOnlyForAPersonaName(t *testing.T) {

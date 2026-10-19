@@ -123,9 +123,6 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	if curIsPool && cur == code {
 		return row.Name, nil
 	}
-	if !slices.Contains(ipeers.PickablePool(), code) {
-		return "", ipeers.ErrNameUnknown
-	}
 	// the base is the name without its suffix: the pool name, or the two ref characters
 	base := row.Name
 	if curIsPool {
@@ -151,6 +148,16 @@ func (m *Module) RenameForLead(ctx context.Context, sessionID, code string) (str
 	}
 	if held[code] {
 		return "", ipeers.ErrNameTaken
+	}
+	if m.beforeLeadRename != nil {
+		m.beforeLeadRename()
+	}
+	// the code must still be pickable at the moment of the rename: a collection that retires it meanwhile waits for the read
+	// lock (bindPersonas holds the write side), so the check and the write see one generation
+	m.poolGen.RLock()
+	defer m.poolGen.RUnlock()
+	if !slices.Contains(ipeers.PickablePool(), code) {
+		return "", ipeers.ErrNameUnknown
 	}
 	_, won, err := m.peerNames.RenamePool(ctx, sessionID, row.Name, newName)
 	if err != nil {
