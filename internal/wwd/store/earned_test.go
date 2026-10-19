@@ -83,7 +83,7 @@ func TestEarnedLabelRefusesBadRows(t *testing.T) {
 		"empty label":      {State: wire.EarnedLabelEarned},
 		"not a task label": {Label: "os:linux", State: wire.EarnedLabelEarned},
 		"blanks":           {Label: "task:a b/c", State: wire.EarnedLabelEarned},
-		"over long":        {Label: "task:a/" + strings.Repeat("x", 65), State: wire.EarnedLabelEarned},
+		"over long":        {Label: "task:a/" + strings.Repeat("x", wire.MaxTaskLabelBytes), State: wire.EarnedLabelEarned},
 		"bad state":        {Label: "x", State: "maybe"},
 	} {
 		if err := s.SaveEarnedLabel(e); err == nil {
@@ -118,5 +118,21 @@ func TestEarnedLabelsSkipsRowsThatAreNotTaskLabels(t *testing.T) {
 	var se *SkippedRowsError
 	if !errors.As(err, &se) || se.N != 1 || len(got) != 0 {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A task name the manifest allows with more than 64 characters is a valid label, up to the bound on the whole label.
+func TestEarnedLabelKeepsALongManifestTaskName(t *testing.T) {
+	s := openTemp(t)
+	long := "task:purdex/" + strings.Repeat("a", 100)
+	if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: long, State: wire.EarnedLabelEarned}); err != nil {
+		t.Fatalf("%v", err)
+	}
+	edge := "task:purdex/" + strings.Repeat("b", wire.MaxTaskLabelBytes-len("task:purdex/"))
+	if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: edge, State: wire.EarnedLabelEarned}); err != nil {
+		t.Fatalf("at the bound: %v", err)
+	}
+	if err := s.SaveEarnedLabel(wire.EarnedLabel{Label: edge + "c", State: wire.EarnedLabelEarned}); err == nil {
+		t.Fatal("one past the bound accepted")
 	}
 }

@@ -2,7 +2,10 @@ package labels
 
 import (
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 var refTasks = []RefTask{
@@ -49,5 +52,18 @@ func TestReferenceLabelsAreSortedAndNotNil(t *testing.T) {
 	got := ReferenceLabels("air26", []string{"repo:purdex", "tool:node24", "tool:pnpm10"}, dup)
 	if !slices.IsSorted(got) || len(got) != 2 {
 		t.Fatalf("%v", got)
+	}
+}
+
+// The reference host advertises a long manifest task name (the store keeps it) and never a label the store would refuse.
+func TestReferenceLabelsFollowTheStoreRule(t *testing.T) {
+	have := []string{"repo:purdex"}
+	long := strings.Repeat("a", 100)
+	if got := ReferenceLabels("mlab", have, []RefTask{{Repo: "purdex", Task: long, Reference: "mlab"}}); len(got) != 1 {
+		t.Fatalf("a long task name: %v", got)
+	}
+	tooLong := strings.Repeat("a", wire.MaxTaskLabelBytes)
+	if got := ReferenceLabels("mlab", have, []RefTask{{Repo: "purdex", Task: tooLong, Reference: "mlab"}}); len(got) != 0 {
+		t.Fatalf("a label the store refuses: %v", got)
 	}
 }

@@ -3,6 +3,8 @@ package labels
 import (
 	"slices"
 	"sort"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // RefTask is a task of a repo's manifest that is qualified against a reference host (its `qualify.reference`): what the host needs
@@ -36,8 +38,8 @@ func ReferenceLabels(alias string, have []string, tasks []RefTask) []string {
 				break
 			}
 		}
-		if ok {
-			out = append(out, TaskLabel(t.Repo, t.Task))
+		if l := TaskLabel(t.Repo, t.Task); ok && wire.ValidTaskLabel(l) { // never a label the store would refuse to keep
+			out = append(out, l)
 		}
 	}
 	sort.Strings(out)

@@ -29,8 +29,13 @@ type EarnedLabelList struct {
 	Labels []EarnedLabel `json:"labels"`
 }
 
-var reTaskLabel = regexp.MustCompile(`^task:[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[a-z0-9][a-z0-9_-]{0,63}$`)
+// The repo part follows the repo names of a host's config; the task part is the manifest's task name rule (^[a-z0-9][a-z0-9_-]*$) with
+// no length of its own, so the whole label is bounded instead.
+var reTaskLabel = regexp.MustCompile(`^task:[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[a-z0-9][a-z0-9_-]*$`)
+
+// MaxTaskLabelBytes bounds a whole task label.
+const MaxTaskLabelBytes = 200
 
 // ValidTaskLabel says whether s is a task label, task:<repo>/<task>: the only kind a host earns. Anything else in an earned_labels row
 // (an os:, tool: or repo: label, blanks, an over-long value) is damage and is neither stored nor advertised.
-func ValidTaskLabel(s string) bool { return reTaskLabel.MatchString(s) }
+func ValidTaskLabel(s string) bool { return len(s) <= MaxTaskLabelBytes && reTaskLabel.MatchString(s) }
