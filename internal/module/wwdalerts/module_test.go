@@ -26,6 +26,7 @@ type fakeSrc struct {
 	known   map[string]bool         // absent = known
 	errs    map[string]error
 	infoErr error // what Info answers with when set
+	poolErr error // what Pool answers with when set
 }
 
 func (f *fakeSrc) Info(context.Context) (wire.Info, error) {
@@ -36,6 +37,9 @@ func (f *fakeSrc) Info(context.Context) (wire.Info, error) {
 }
 
 func (f *fakeSrc) Pool(context.Context) (wire.Pool, error) {
+	if f.poolErr != nil {
+		return wire.Pool{}, f.poolErr
+	}
 	var p wire.Pool
 	for _, a := range f.peers {
 		p.Peers = append(p.Peers, wire.Peer{Info: wire.Info{Alias: a}, Reachable: true})

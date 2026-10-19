@@ -278,7 +278,7 @@ func (m *Module) pass(ctx context.Context) {
 		}
 		list, known, err := m.src.Alerts(ctx, h.ask)
 		if h.ask == "" && ctx.Err() == nil { // the list of this host's own wwd; one it does not serve (404) cannot be read either
-			if err != nil || !known {
+			if err != nil || !known || !whole { // without the pool the peers' lists cannot be enumerated: most of what there is to deliver
 				m.readState.Store(readNo)
 			} else {
 				m.readState.Store(readYes)

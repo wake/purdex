@@ -45,6 +45,19 @@ func TestAlertsReadableIsFalseWhenTheLocalWWDHasNoAlertsRoute(t *testing.T) {
 	assert.True(t, e.m.AlertsReadable())
 }
 
+// Without the pool the peers' lists cannot be enumerated, which is most of what there is to deliver: this daemon says it cannot deliver,
+// so the standby takes over, and says it can again when the pool is read (critic).
+func TestAlertsReadableIsFalseWhenThePoolCannotBeRead(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.poolErr = errors.New("pool busy")
+	e.pass(t)
+	assert.False(t, e.m.AlertsReadable())
+	e.src.poolErr = nil
+	e.pass(t)
+	assert.True(t, e.m.AlertsReadable())
+}
+
 // The local wwd not answering at all (the first question, who am I, fails) is the same.
 func TestAlertsReadableIsFalseWhenTheWWDDoesNotAnswer(t *testing.T) {
 	e := newEnv(t)
