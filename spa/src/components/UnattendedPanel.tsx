@@ -269,7 +269,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         <UnattendedPausedSection hostIds={hosts} />
         <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
         <UnattendedHeldSection rows={held} />
-        {logHosts.length > 0 && <UnattendedLogSection rows={logRows} multiHost={answered.length > 1} />}
+        {logHosts.length > 0 && <UnattendedLogSection rows={logRows} multiHost={hosts.length + unreachable.length > 1} />}
         {showNotes && <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
           {showList && <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>}
           {showList && Number.isFinite(since) && (

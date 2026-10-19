@@ -2,7 +2,7 @@
 // a status tag, the switch's records in bold on a pink row, newest first across hosts, the newest 30, scrollable; a host without `log` keeps today's list; a mixed set shows both.
 // The real panel over the real stores; only the API is mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createRef } from 'react'
 import { UnattendedPanel } from './UnattendedPanel'
 import { useHostStore } from '../stores/useHostStore'
@@ -31,9 +31,9 @@ const legacy = (id: string, decidedAt: number): Approval => ({
 })
 const page = (over: Partial<UnattendedView> = {}): UnattendedView => ({ on: true, since: at(8, 0), changed_at: at(8, 0), approved: [], truncated: false, ...over })
 
-function open(hostIds: string[]) {
+function open(hostIds: string[], unreachableIds: string[] = []) {
   const anchorRef = createRef<HTMLDivElement>()
-  return render(<><div ref={anchorRef} /><UnattendedPanel hostIds={hostIds} anchorRef={anchorRef} onClose={vi.fn()} /></>)
+  return render(<><div ref={anchorRef} /><UnattendedPanel hostIds={hostIds} unreachableIds={unreachableIds} anchorRef={anchorRef} onClose={vi.fn()} /></>)
 }
 const logRows = () => screen.getAllByTestId(/^unattended-log-(row|toggle)$/)
 const tagOf = (row: HTMLElement) => within(row).getByTestId('unattended-log-tag')
@@ -122,6 +122,19 @@ describe('the log in the unattended panel', () => {
     await waitFor(() => expect(logRows()).toHaveLength(2))
     expect(within(logRows()[0]).getByTestId('unattended-log-host')).toHaveTextContent('mlab')
     expect(within(logRows()[1]).getByTestId('unattended-log-host')).toHaveTextContent('mlab')
+  })
+
+  it('names the host while another host is shown but unreachable, or has not answered yet', async () => {
+    mockedGet.mockImplementation(async (hostId) => hostId === A ? page({ log: [decision('a', at(9, 0), 'approved', 'unattended')] }) : new Promise<UnattendedView>(() => {}))
+    open([A, B], [])
+    await waitFor(() => expect(logRows()).toHaveLength(1))
+    expect(within(logRows()[0]).getByTestId('unattended-log-host')).toHaveTextContent('mlab') // B has not answered, and is still part of what the panel shows
+    cleanup()
+    mockedGet.mockReset()
+    mockedGet.mockResolvedValue(page({ log: [decision('a', at(9, 0), 'approved', 'unattended')] }))
+    open([A], [B])
+    await waitFor(() => expect(logRows()).toHaveLength(1))
+    expect(within(logRows()[0]).getByTestId('unattended-log-host')).toHaveTextContent('mlab')
   })
 
   it('a single host\'s log names no host', async () => {
