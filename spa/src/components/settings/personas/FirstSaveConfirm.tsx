@@ -20,13 +20,13 @@ export function FirstSaveConfirm({ hostId, onConfirm, onCancel }: Props) {
   const t = useI18nStore((s) => s.t)
   // The cached count can be old (the list is not refreshed on a timer), so no number is shown until the host has been read
   // again for this question; until then, and when the read fails, the text names none.
-  const [settled, setSettled] = useState(false)
+  const [readHost, setReadHost] = useState<string | null>(null)
   useEffect(() => {
     let live = true
-    setSettled(false)
-    void usePeerStore.getState().refresh(hostId).then(() => { if (live) setSettled(true) })
+    void usePeerStore.getState().refresh(hostId).then(() => { if (live) setReadHost(hostId) })
     return () => { live = false }
   }, [hostId])
+  const settled = readHost === hostId
   const entry = usePeerStore((s) => s.byHost[hostId])
   // The inventory lists session rows, while the daemon renames every live conversation, including ones that have none,
   // so the number is a floor ("at least"), and a count of 0 is not shown at all (#3520 tracks an exact count from the
