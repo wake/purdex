@@ -29,8 +29,8 @@
 
 ### Added：wwd 與 pool
 
-- **pool 的主機格資料（WWD-7a 第 2 張）**：`GET /api/pool/hosts` 對有 facts 的主機多回 `headroom_reasons`（heavy 與 light 各自沒有餘裕的原因，依序為 `worker_off`、`zone_*`、`exception:<name>`、`owner_active`、`slots_full`、`gate_full`；空清單代表有餘裕）與 `load`（0 到 100 的綜合分數與最大的來源）；沒有 facts 的主機兩者為 null，能力為 `pool.assess.v1`。facts 的 wire 沒有改（#3496）。
-- **圖表資料改由 wwd 就地裁切（WWD-7a 第 3 張）**：wwd 新增唯讀路由 `GET /v1/facts/series`，擁有資料的那台主機直接回圖表點（最多 21,600 點，超過保留最新並標示截斷），一天的 1 分鐘資料約 300 KB，不再把 10 MB 的紀錄傳過 tailnet；Purdex 的 `GET /api/pool/facts/series` 先問這條路由，只有 wwd 回標準的 404 才退回舊的抓全部歷史再裁切，其他錯誤不會被當成退路重試。已知限制：舊版 wwd 沒有這條路由時仍走較貴的舊路徑（#3505）。
+- **pool 的主機格資料（#3478 三張中的第 2 張）**：`GET /api/pool/hosts` 對有 facts 的主機多回 `headroom_reasons`（heavy 與 light 各自沒有餘裕的原因，依序為 `worker_off`、`zone_*`、`exception:<name>`、`owner_active`、`slots_full`、`gate_full`；空清單代表有餘裕）與 `load`（0 到 100 的綜合分數與最大的來源）；沒有 facts 的主機兩者為 null，能力為 `pool.assess.v1`。facts 的 wire 沒有改（#3496）。
+- **圖表資料改由 wwd 就地裁切（#3478 三張中的第 3 張）**：wwd 新增唯讀路由 `GET /v1/facts/series`，擁有資料的那台主機直接回圖表點（最多 21,600 點，超過保留最新並標示截斷），一天的 1 分鐘資料約 300 KB，不再把 10 MB 的紀錄傳過 tailnet；Purdex 的 `GET /api/pool/facts/series` 先問這條路由，只有 wwd 回標準的 404 才退回舊的抓全部歷史再裁切，其他錯誤不會被當成退路重試。已知限制：舊版 wwd 沒有這條路由時仍走較貴的舊路徑（#3505）。
 - **wwd worker 的佇列工作占用閘門名額（#3513）**：有 pdx 閘門的主機上，worker 每執行一件佇列工作就占用一個 heavy 名額，工作結束才釋放，讓閘門與 worker 只有一本帳；先前閘門 0/2 時 worker 領一件、閘門還會再放兩件進來，變成三件。閘門自己的放行條件（壓力、換頁速率與磁碟剩餘）優先，在擋新 heavy 指令時不領件。無法確認已停止而被隔離的工作會一直占著名額直到隔離解除，重啟後會先補回再領件。沒有閘門的主機不受影響（#3509 一併關閉）。
 - **App 端 pool 資料層（WWD-7a-1a）**：新增 `lib/pool/`，包含 wire 型別、寬鬆解析（壞列整列丟棄、不認識的 zone 讀成 `unknown`）、`/api/pool/*` 的讀取、錯誤分類與代碼對應文字表，兩種語系都補了文字。目前沒有任何畫面使用，所以沒有 `pool.v1` 時畫面不變。已知限制：`headroom_reasons` 與 `load` 還沒有對照 #3496 的實際 fixture 驗證，計畫中提到的 10-19 真實快照不在 repo，沒有涵蓋（#3497）。
 
