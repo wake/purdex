@@ -140,6 +140,8 @@ describe('the task-group view', () => {
     mount()
     const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('title L'), expect.stringContaining('title M')])
+    // the close button names the seat too, not the tab's primary title
+    expect(within(rows[1]).getByRole('button', { name: /Close title M/ })).toBeInTheDocument()
     fireEvent.click(rows[1])
     expect(openTeamSeat).toHaveBeenLastCalledWith(expect.any(String), 'M')
     fireEvent.click(rows[0])

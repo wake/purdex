@@ -198,7 +198,7 @@ export function InlineTab({
       */}
       {showTooltip && (
         <HoverTooltip placement="right" data-testid="inline-tab-tooltip">
-          {displayTitle}
+          {shownTitle}
         </HoverTooltip>
       )}
       <HalfHandoffMark handoff={freshHandoff} variant="icon" />
@@ -229,7 +229,7 @@ export function InlineTab({
       {showClose && (
         <button
           type="button"
-          aria-label={`Close ${displayTitle}`}
+          aria-label={`Close ${shownTitle}`}
           title={t('common.close')}
           onClick={handleCloseClick}
           onMouseDown={(e) => e.stopPropagation()}
