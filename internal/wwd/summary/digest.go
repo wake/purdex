@@ -32,11 +32,15 @@ func (p *passedSet) add(parts ...string) {
 	if !p.on || p.over {
 		return
 	}
-	if len(p.ids) >= maxPassedIDs {
+	id := strconv.Quote(strings.Join(parts, "\x00"))
+	if _, seen := p.ids[id]; seen {
+		return
+	}
+	if len(p.ids) >= maxPassedIDs { // a new id past the limit: only a different test counts toward it, never a repeat
 		p.over, p.ids = true, nil
 		return
 	}
-	p.ids[strconv.Quote(strings.Join(parts, "\x00"))] = struct{}{}
+	p.ids[id] = struct{}{}
 }
 
 // digest is "sha256:" and the hex SHA-256 of the sorted ids, each followed by a newline; "" when it was not asked for or the report

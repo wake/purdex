@@ -119,6 +119,23 @@ func TestNoDigestForAReportThatIsNotWhole(t *testing.T) {
 	}
 }
 
+// The limit is on distinct tests: a set that is exactly full still takes a repeat, and only a new test past it goes over.
+func TestTheLimitCountsDistinctTestsOnly(t *testing.T) {
+	p := newPassedSet(true)
+	for i := 0; i < maxPassedIDs; i++ {
+		p.add("p", strconv.Itoa(i))
+	}
+	p.add("p", "0") // a repeat of a test already in
+	p.add("p", strconv.Itoa(maxPassedIDs-1))
+	if p.digest() == "" {
+		t.Fatal("a repeat on a full set took the digest away")
+	}
+	p.add("p", "one more")
+	if p.digest() != "" {
+		t.Fatal("the 250,001st distinct test kept the digest")
+	}
+}
+
 // The workspace root does not enter the id: two hosts with different directories have the same digest for the same passes.
 func TestVitestDigestIsOfTheRelativeFile(t *testing.T) {
 	report := func(root string) string {
