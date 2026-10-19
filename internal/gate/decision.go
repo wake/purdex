@@ -111,8 +111,17 @@ func (d *Decision) appliedSettings(cfg Config, class Class, foreground bool, lim
 	}
 }
 
-// record appends the decision to the gate directory. Failure is silent: the log is not the command.
-func (g *Gate) record(dir string, d *Decision) {
+// recordRun writes the decision of a run. A command that took no slot of its own (the gate is off, or it ran below a held slot) is
+// written only where the gate directory exists already: it must not make the directory (#3649), so in a fresh one that command leaves
+// no line. Every other outcome makes the directory as it always did.
+func (g *Gate) recordRun(dir string, d *Decision) {
+	g.record(dir, d, d.Outcome != "off" && d.Outcome != "nested")
+}
+
+// record appends the decision to the gate directory. Failure is silent: the log is not the command. With create false the directory is
+// not made: a directory that is not there (or goes away meanwhile) makes the lock file fail to open and nothing is written, with no
+// look-then-create in between.
+func (g *Gate) record(dir string, d *Decision, create bool) {
 	if dir == "" {
 		return
 	}
@@ -120,10 +129,11 @@ func (g *Gate) record(dir string, d *Decision) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+	lock := lockFileIn
+	if create {
+		lock = lockFile
 	}
-	unlock, err := lockFile(filepath.Join(dir, decisionsFile+".lock"))
+	unlock, err := lock(filepath.Join(dir, decisionsFile+".lock"))
 	if err != nil {
 		return
 	}

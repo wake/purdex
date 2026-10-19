@@ -24,7 +24,7 @@ func TestDecisions_ConcurrentRotationLosesNothing(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				g.record(dir, &Decision{Argv: []string{"x"}, Outcome: "slot"})
+				g.record(dir, &Decision{Argv: []string{"x"}, Outcome: "slot"}, true)
 			}()
 		}
 		close(start)
