@@ -170,7 +170,14 @@ func Manual(in Input, repoTask string) (Task, error) {
 			return t, nil
 		}
 	}
-	return Task{}, fmt.Errorf("no task %q with a qualify in this host's prepared clones", repoTask)
+	return Task{}, &UnknownTaskError{Name: repoTask}
+}
+
+// UnknownTaskError: the name is not a task with a qualify in this host's prepared clones (a request for it is a 404, not a refusal).
+type UnknownTaskError struct{ Name string }
+
+func (e *UnknownTaskError) Error() string {
+	return fmt.Sprintf("no task %q with a qualify in this host's prepared clones", e.Name)
 }
 
 // sameFingerprint is equality of two fingerprints; an empty one is never the same as anything (a host that reported nothing has not

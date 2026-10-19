@@ -39,6 +39,8 @@ type fakeAPI struct {
 	startedOn     string
 	stoppedOn     string
 	labelCalls    []string // "quarantine <label>" and "release <label>", in order
+	qualified     []string
+	qualifyStatus wire.QualifyStatus
 	usage         wire.UsageResponse
 	usageQ        client.UsageQuery
 	err           error // returned by every call when set (wwd unreachable)
@@ -119,6 +121,16 @@ func (f *fakeAPI) QuarantineLabel(_ context.Context, label string) error {
 func (f *fakeAPI) ReleaseLabel(_ context.Context, label string) error {
 	f.labelCalls = append(f.labelCalls, "release "+label)
 	return f.err
+}
+func (f *fakeAPI) Qualify(_ context.Context, task string) (wire.QualifyStarted, error) {
+	f.qualified = append(f.qualified, task)
+	if f.err != nil {
+		return wire.QualifyStarted{}, f.err
+	}
+	return wire.QualifyStarted{Label: "task:" + task, Candidate: "j_cand", Reference: "j_ref"}, nil
+}
+func (f *fakeAPI) QualifyStatus(context.Context) (wire.QualifyStatus, error) {
+	return f.qualifyStatus, f.err
 }
 
 func firstErr(errs ...error) error {

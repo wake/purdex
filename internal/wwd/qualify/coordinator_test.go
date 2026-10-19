@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -499,39 +495,5 @@ func TestAnUnreadableEarnedStoreStartsNothing(t *testing.T) {
 	r.c.Tick(ctx())
 	if len(r.q.submissions()) != 0 {
 		t.Fatal("a pair was started without knowing what is held")
-	}
-}
-
-// 5b-2b is a library: nothing in the daemon's wiring or routes reaches the coordinator. 5b-2c is the PR that wires it and deletes this test
-// (it must not go out before the passed-test digest writers, docs/plans WWD-5).
-func TestNothingWiresTheCoordinatorYet(t *testing.T) {
-	const self = "github.com/wake/purdex/internal/wwd/qualify"
-	for _, dir := range []string{"../../../cmd/wwd", "../daemon", "../jobsapi", "../jobscmd", "../../../cmd/pdx"} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.ImportsOnly)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, imp := range f.Imports {
-				if strings.Trim(imp.Path.Value, `"`) == self {
-					t.Errorf("%s imports the qualify package: 5b-2b must not wire the coordinator", filepath.Join(dir, name))
-				}
-			}
-			src, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(src), "/v1/qualify") {
-				t.Errorf("%s names a qualify route: 5b-2b must not add one", filepath.Join(dir, name))
-			}
-		}
 	}
 }

@@ -2,6 +2,7 @@ package qualify
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +177,9 @@ func TestManualDoesNotWaitButStillChecks(t *testing.T) {
 	if _, err := Manual(in, "purdex/tsc"); !errors.Is(err, ErrInFlight) {
 		t.Fatalf("manual with a pair in flight: %v", err)
 	}
-	if _, err := Manual(input(tsc), "purdex/nope"); err == nil {
-		t.Fatal("an unknown task")
+	_, err = Manual(input(tsc), "purdex/nope")
+	var unknown *UnknownTaskError
+	if !errors.As(err, &unknown) || unknown.Name != "purdex/nope" || !strings.Contains(err.Error(), `no task "purdex/nope"`) {
+		t.Fatalf("an unknown task: %v", err)
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/orphans"
+	"github.com/wake/purdex/internal/wwd/qualify"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -212,9 +213,19 @@ func run(cfgPath string) error {
 	}
 	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
 	refs.ttl = 2 * time.Second // the daemon's labels and the drift watcher ask once per facts record each: one read of the manifests serves both
+	// the qualification coordinator (spec §7): a person starts a pair with pdx wwd qualify (POST /v1/qualify); the automatic trigger is not wired
+	// here (WWD-5b-2c-2). It reads the host through d, which exists before any request can arrive.
+	qualifier := qualify.New(qualify.Config{
+		Queue: q, Store: st,
+		Source: &qualifySource{repos: clones.NewSource(cfg.Repos), host: func() qualify.Host {
+			l, fp := d.Labels()
+			return qualify.Host{Alias: alias, WorkerOn: state.Worker().Enabled, Labels: l, Fingerprint: fp}
+		}},
+		Granted: d.RefreshLabels,
+	})
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
-		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs,
+		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs, Qualifier: qualifier,
 	}))
 	watcher := newDriftWatcher(alias, st, refs, d.RefreshLabels) // an earned label whose OS version or tool moved is taken away (spec §7)
 	sampler.SetOnFacts(func(f wire.Facts) {

@@ -48,6 +48,8 @@ type API interface {
 	EarnedLabels(ctx context.Context) (list wire.EarnedLabelList, known bool, err error)
 	QuarantineLabel(ctx context.Context, label string) error
 	ReleaseLabel(ctx context.Context, label string) error
+	Qualify(ctx context.Context, task string) (wire.QualifyStarted, error)
+	QualifyStatus(ctx context.Context) (wire.QualifyStatus, error)
 }
 
 // Env is what the commands need from their surroundings.
