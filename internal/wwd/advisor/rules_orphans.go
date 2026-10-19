@@ -39,6 +39,9 @@ type OrphanReport struct {
 // forkLoopHold is how long a loop must have been seen above the limit before the alert is pushed (spec §13.3: for ≥ 10 min).
 const forkLoopHold = 10 * time.Minute
 
+// orphanStale is how old a scan may be and still be judged: far more than the 5 s between samples, so a slow sample is not a gap.
+const orphanStale = 2 * time.Minute
+
 // Orphans is "orphans" (digest; push when the fork rate holds): the ppid-1 processes under dev paths older than 2 h, and the ppid-1 shell
 // loops that keep creating children (> 10 per second, for ≥ 10 minutes: #3416). It only lists; nothing here can kill a process. The scan
 // is the host's own process table, taken live: there is none to replay, so without a report the rule is unjudged, not "no orphans".
@@ -53,6 +56,11 @@ func (Orphans) Eval(in Input) (Verdict, error) {
 	r := in.Orphans()
 	if r == nil {
 		return Verdict{}, errors.New("the process scan has not run yet")
+	}
+	// the sampler hands the scanner a snapshot every 5 s: a report older than that has stopped being renewed, and a loop in it would be pushed
+	// on the clock alone
+	if in.Now.Sub(r.At) > orphanStale {
+		return Verdict{}, fmt.Errorf("the process scan is %s old", in.Now.Sub(r.At).Round(time.Second))
 	}
 	v := Verdict{Key: "orphans", Level: wire.AlertDigest}
 	if len(r.Procs) == 0 && len(r.Loops) == 0 {

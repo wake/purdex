@@ -76,6 +76,18 @@ func TestOrphans_ManyLoopsAndOrphans(t *testing.T) {
 	}
 }
 
+// A scan nobody renews any more (the sampler stopped) is unjudged: its fork loop would otherwise be pushed on the clock alone.
+func TestOrphans_AStaleScanIsUnjudged(t *testing.T) {
+	r := &OrphanReport{At: t0.Add(-3 * time.Minute), Loops: []ForkLoop{{PID: 77, Name: "sh", Rate: 43, Since: t0.Add(-time.Hour)}}}
+	if _, err := (Orphans{}).Eval(orphanInput(r)); err == nil {
+		t.Fatal("a 3-minute-old scan was judged")
+	}
+	r.At = t0.Add(-time.Minute)
+	if v, err := (Orphans{}).Eval(orphanInput(r)); err != nil || !v.Holds || v.Level != wire.AlertPush {
+		t.Fatalf("a 1-minute-old scan is current: %+v %v", v, err)
+	}
+}
+
 // Nothing scanned yet (or a replay, which has no process table) is unjudged: not "no orphans", which would clear the alert.
 func TestOrphans_NoScanIsUnjudged(t *testing.T) {
 	if _, err := (Orphans{}).Eval(orphanInput(nil)); err == nil {

@@ -1,6 +1,7 @@
 package orphans
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -133,6 +134,60 @@ func TestScanner_ChildrenAlreadyThereAreNotForks(t *testing.T) {
 		t.Fatalf("long-lived children counted as forks: %+v", r)
 	}
 }
+
+// Linux's start time is the boot time (whole seconds) plus the start ticks, so a child can seem to have started up to a second before it
+// did. A child is new when it was not there at the burst's first read, never by comparing its start time with the clock.
+func TestScanner_ChildrenAreNewByNotBeingInTheFirstRead(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	var tables [][]facts.ProcRec
+	for i := 0; i < 40; i++ {
+		kids := children(500, 9000+i, 1)
+		kids[0].Start = t0.Add(-900 * time.Millisecond) // starts that seem to be before the burst began, all of them
+		tables = append(tables, append([]facts.ProcRec{shell}, kids...))
+	}
+	c := &ctxOf{tables: tables}
+	s.Observe(now, facts.ProcSnapshot{Procs: tables[0]}, c.context())
+	if r := s.Report(); r == nil || len(r.Loops) != 1 || r.Loops[0].Rate < 50 {
+		t.Fatalf("a loop whose children's start times looked old was missed: %+v", r)
+	}
+}
+
+// A table that cannot be read says nothing about the loop: the continuous run is over, and a loop seen again starts a new one. Otherwise
+// ten minutes of failures would be counted as ten minutes above the limit.
+func TestScanner_AFailedReadEndsTheRun(t *testing.T) {
+	now := t0
+	s := newScanner(&now)
+	shell := proc(500, 1, "sh", time.Hour)
+	busy := func() *ctxOf {
+		var tables [][]facts.ProcRec
+		for i := 0; i < 40; i++ {
+			tables = append(tables, append([]facts.ProcRec{shell}, children(500, 9000+i, 1)...))
+		}
+		return &ctxOf{tables: tables}
+	}
+	c := busy()
+	s.Observe(now, withChild(shell), c.context())
+	if len(s.Report().Loops) != 1 {
+		t.Fatal("no loop to begin with")
+	}
+	now = now.Add(CheckEvery)
+	broken := facts.ProcContext{Fresh: func() ([]facts.ProcRec, error) { return nil, errTable }}
+	s.Observe(now, withChild(shell), broken)
+	if r := s.Report(); len(r.Loops) != 0 {
+		t.Fatalf("a failed read kept the loop: %+v", r.Loops)
+	}
+	now = now.Add(CheckEvery)
+	c = busy()
+	calledAt := now // the fake sleep moves now during the burst; the run starts at the time the scan was made
+	s.Observe(calledAt, withChild(shell), c.context())
+	if got := s.Report().Loops[0].Since; !got.Equal(calledAt) {
+		t.Fatalf("the run did not start over: since %v, scan made at %v", got, calledAt)
+	}
+}
+
+var errTable = errors.New("table unreadable")
 
 // withChild is a snapshot of a shell and one child it has just now.
 func withChild(shell facts.ProcRec) facts.ProcSnapshot {

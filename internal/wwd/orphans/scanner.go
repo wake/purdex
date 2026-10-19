@@ -150,6 +150,12 @@ func devKind(name string, argv []string, residentKind string) string {
 	return ""
 }
 
+func (s *Scanner) resetLoops() {
+	s.mu.Lock()
+	s.loops = map[loopKey]*loopState{}
+	s.mu.Unlock()
+}
+
 var shells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true}
 
 // checkLoops measures the user's ppid-1 shells that have a child: a burst of table reads a few milliseconds apart counts the distinct
@@ -160,6 +166,7 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 	s.lastCheck = now
 	s.mu.Unlock()
 	if c.Fresh == nil {
+		s.resetLoops() // nothing here can measure a loop, so none is claimed
 		return
 	}
 	// every ppid-1 shell of the user's, whether or not it has a child at this instant: the faster the loop, the shorter its child lives and the
@@ -171,24 +178,34 @@ func (s *Scanner) checkLoops(now time.Time, snap facts.ProcSnapshot, c facts.Pro
 		}
 	}
 	if len(suspects) == 0 {
-		s.mu.Lock()
-		s.loops = map[loopKey]*loopState{} // no shell left to be a loop
-		s.mu.Unlock()
+		s.resetLoops() // no shell left to be a loop
 		return
 	}
 	began := s.clock()
+	// A child is new when it was not there at the first read. Not by its start time against the clock: on Linux a start time is the boot
+	// time (whole seconds) plus ticks, so a child that began a moment ago can seem to have begun nearly a second before the burst.
+	before := map[int]map[int]bool{}
 	seen := map[int]map[int]bool{}
 	for pid := range suspects {
-		seen[pid] = map[int]bool{}
+		before[pid], seen[pid] = map[int]bool{}, map[int]bool{}
 	}
 	for i := 0; i < burstReads; i++ {
 		rows, err := c.Fresh()
 		if err != nil {
-			return // a table that cannot be read says nothing: the states stay as they were
+			// a table that cannot be read says nothing about the loop, so the run it was part of is over: kept, it would let ten minutes of
+			// failed reads count as ten minutes above the limit
+			s.resetLoops()
+			return
 		}
 		for _, r := range rows {
-			if m, ok := seen[r.PPID]; ok && (r.Start.IsZero() || !r.Start.Before(began)) {
-				m[r.PID] = true // a child that began during the burst; ones that were already there are not forks of it
+			if _, ok := seen[r.PPID]; !ok {
+				continue
+			}
+			switch {
+			case i == 0:
+				before[r.PPID][r.PID] = true // already there: not a fork of this burst
+			case !before[r.PPID][r.PID]:
+				seen[r.PPID][r.PID] = true
 			}
 		}
 		if i < burstReads-1 {
