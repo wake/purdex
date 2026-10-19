@@ -72,8 +72,9 @@ type GateSlot interface {
 type Gate interface {
 	TakeHeavy() (slot GateSlot, ok bool)
 	// TakeLate is a slot for a command that is already running (a quarantined job's, whose command could not be proven stopped): it
-	// does not ask whether the gate admits more, and may go beyond the gate's size. nil: none to be had, or no gate.
-	TakeLate() GateSlot
+	// does not ask whether the gate admits more, and may go beyond the gate's size. ok is false when none could be had (the gate cannot
+	// be read, or is paused): the caller tries again and claims nothing meanwhile. A nil slot with ok true is a host without a gate.
+	TakeLate() (slot GateSlot, ok bool)
 }
 
 // Config is what the loop needs from its host.
@@ -268,6 +269,11 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	if n >= st.Slots.Heavy || facts.Derived.Headroom.Heavy < 1 {
 		return
 	}
+	// a quarantined job whose command may still run must be counted by the gate before anything new is claimed (a restart takes these
+	// slots at the start; one that could not be had is tried again here)
+	if !l.adoptQuarantined() {
+		return
+	}
 	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
 	// claim, and it must not be old (a sampler that has stopped leaves the last "there is room" standing).
 	// A sample "from the future" (the clock was set back after it was taken) is as little to be trusted as an old one.
@@ -448,20 +454,34 @@ func (l *Loop) keepForQuarantine(owner string, slot GateSlot) {
 	}
 }
 
-// adoptQuarantined takes a gate slot for each quarantined job a restart found (their commands may live on, outside this process, and the
-// slots of the process that ended went with it). Late slots: they count for commands that are running already, whatever the gate says.
-func (l *Loop) adoptQuarantined() {
+// adoptQuarantined takes a gate slot for each quarantined job that has none (a restart found them: their commands may live on, outside
+// this process, and the slots of the process that ended went with it). Late slots: they count for commands that are running already,
+// whatever the gate says. It says whether every one is counted (or the host has no gate): when a slot could not be had (the gate cannot
+// be read, or is paused) it is tried again at the next round, and nothing new is claimed until all are counted.
+func (l *Loop) adoptQuarantined() bool {
 	if l.cfg.Gate == nil || l.cfg.Quarantine == nil {
-		return
+		return true
 	}
+	all := true
 	for _, e := range l.cfg.Quarantine.Held() {
-		slot := l.cfg.Gate.TakeLate()
-		if slot == nil {
+		l.mu.Lock()
+		have := l.quarSlots[e.Owner] != nil
+		l.mu.Unlock()
+		if have {
 			continue
+		}
+		slot, ok := l.cfg.Gate.TakeLate()
+		if !ok {
+			all = false
+			continue
+		}
+		if slot == nil {
+			continue // a host without a gate
 		}
 		slot.Describe([]string{"wwd", "job", e.JobID, "(quarantined)"}, "")
 		l.keepForQuarantine(e.Owner, slot)
 	}
+	return all
 }
 
 // releaseCleared gives back the slots of the quarantined jobs whose entries are gone (proven stopped and cleared).

@@ -24,9 +24,13 @@ var heavyLock = regexp.MustCompile(`^heavy-[0-9]+\.lock$`)
 type Reader struct {
 	path string
 	logf func(format string, args ...any)
+	// admission says whether the gate would hold a heavy start now (pressure, page rate, disk); the gate's own answer (gate.Gate.Admission)
+	// unless a test puts another in its place.
+	admission func(gate.Config) gate.AdmissionState
 
-	mu      sync.Mutex
-	lastLog string // the problem last logged; "" when the gate was readable at the last look
+	mu       sync.Mutex
+	lastLog  string // the problem last logged; "" when the gate was readable at the last look
+	lastHold string // the admission hold last logged; "" when the gate was not holding
 }
 
 // New returns a reader of the gate whose settings are in the config file at path (gate.DefaultConfigPath() on a host). logf may be nil.
@@ -34,7 +38,7 @@ func New(path string, logf func(format string, args ...any)) *Reader {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Reader{path: path, logf: logf}
+	return &Reader{path: path, logf: logf, admission: func(cfg gate.Config) gate.AdmissionState { return gate.New(cfg).Admission() }}
 }
 
 // HeavyFull reports whether the gate's heavy slots are all held (or it has none to give), so that a worker takes no new heavy job.

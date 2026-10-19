@@ -18,9 +18,11 @@ type fakeGate struct {
 	mu     sync.Mutex
 	free   int
 	noGate bool // a host without a gate: TakeHeavy answers ok with no slot
-	takes  int
-	lates  int
-	slots  []*fakeSlot
+	// lateFail makes TakeLate fail (the gate cannot be read, or is paused)
+	lateFail bool
+	takes    int
+	lates    int
+	slots    []*fakeSlot
 }
 
 type fakeSlot struct {
@@ -48,17 +50,20 @@ func (g *fakeGate) TakeHeavy() (GateSlot, bool) {
 
 // TakeLate is a slot for a command that is already running (it may go beyond the gate's size, so it is given while any is free, not only
 // within the count; the fake treats it as a plain take that does not look at the count).
-func (g *fakeGate) TakeLate() GateSlot {
+func (g *fakeGate) TakeLate() (GateSlot, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.lates++
 	if g.noGate {
-		return nil
+		return nil, true
+	}
+	if g.lateFail {
+		return nil, false
 	}
 	g.free--
 	s := &fakeSlot{g: g}
 	g.slots = append(g.slots, s)
-	return s
+	return s, true
 }
 
 func (s *fakeSlot) Describe(argv []string, session string) {
@@ -274,6 +279,51 @@ func TestARestartTakesASlotForEachQuarantinedJobBeforeAnyClaim(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A quarantined job the new process could not count (the gate could not be read or was paused when it started) is counted as soon as the
+// gate can, and nothing new is claimed before that: its command may be running, and a full slot count would let a heavy job on top of it.
+func TestNothingIsClaimedWhileAQuarantinedJobIsNotCounted(t *testing.T) {
+	c := newConn("mlab", qjob("free", wire.ClassDev, time.Minute))
+	g := &fakeGate{free: 2, lateFail: true}
+	q := newQRig(t, c)
+	withGate(q.rig, g)
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	q.ex.run = blockUntilDone
+	q.round()
+	q.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v while the quarantined job is not counted", claims)
+	}
+	if _, takes, _ := g.state(); takes != 0 {
+		t.Fatalf("takes %d: the gate was asked for a job's slot before the old one was counted", takes)
+	}
+	g.mu.Lock()
+	g.lateFail = false
+	g.mu.Unlock()
+	time.Sleep(2 * unit)
+	q.round()
+	waitFor(t, "the claim", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+	free, _, slots := g.state()
+	if free != 0 || len(slots) != 2 || len(slots[0].argv) < 3 || slots[0].argv[2] != "old" {
+		t.Fatalf("the old job counted first, then the new one: free=%d %+v", free, slots)
+	}
+	q.loop.stopAll(context.Background(), "test")
+}
+
+// A host without a gate has nothing to count, so a quarantined job there never holds back a claim.
+func TestAQuarantinedJobOnAHostWithoutAGateHoldsNothingBack(t *testing.T) {
+	c := newConn("mlab", qjob("free", wire.ClassDev, time.Minute))
+	g := &fakeGate{noGate: true}
+	q := newQRig(t, c)
+	withGate(q.rig, g)
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	q.round()
+	waitFor(t, "the claim", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
 }
 
 // Every way a job ends gives the slot back: stopped for the owner, and a command that fails.

@@ -18,7 +18,8 @@ func TestGateTakerAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(root, "config.toml")
-	if err := os.WriteFile(cfg, []byte("[gate]\ndir = \""+dir+"\"\n\n[gate.slots]\nheavy = 1\n"), 0o644); err != nil {
+	// admission off: the host the test runs on has a pressure and a disk of its own
+	if err := os.WriteFile(cfg, []byte("[gate]\ndir = \""+dir+"\"\n\n[gate.slots]\nheavy = 1\n\n[gate.admission]\nenabled = false\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	g := gateTaker{gateheld.New(cfg, nil)}
@@ -36,8 +37,8 @@ func TestGateTakerAnswers(t *testing.T) {
 		t.Fatalf("after the release: %v %v", s, ok)
 	}
 	// a command that runs already is counted even when the gate is full, and "none" is an untyped nil
-	if l := g.TakeLate(); l == nil {
-		t.Fatal("a late slot is taken")
+	if l, ok := g.TakeLate(); !ok || l == nil {
+		t.Fatalf("a late slot is taken: %v %v", l, ok)
 	} else {
 		l.Release()
 	}
@@ -45,8 +46,8 @@ func TestGateTakerAnswers(t *testing.T) {
 
 	none := gateTaker{gateheld.New(filepath.Join(root, "no-such-config.toml"), nil)}
 	t.Setenv("PDX_GATE_DIR", filepath.Join(root, "absent"))
-	if l := none.TakeLate(); l != nil {
-		t.Fatalf("a host without a gate: %v, want an untyped nil", l)
+	if l, ok := none.TakeLate(); !ok || l != nil {
+		t.Fatalf("a host without a gate: %v %v, want an untyped nil slot and ok", l, ok)
 	}
 	if s, ok := none.TakeHeavy(); !ok || s != nil {
 		t.Fatalf("a host without a gate: %v %v, want a nil slot and ok", s, ok)

@@ -255,12 +255,17 @@ func (g gateTaker) TakeHeavy() (loop.GateSlot, bool) {
 	return nil, false
 }
 
-// TakeLate is a slot for a command that runs already; an untyped nil when there is none.
-func (g gateTaker) TakeLate() loop.GateSlot {
-	if h := g.r.TakeHeavyLate(); h != nil {
-		return h
+// TakeLate is a slot for a command that runs already: the slot, "no gate here" (a nil slot, ok), or "none could be had" (not ok: the
+// worker tries again and claims nothing meanwhile).
+func (g gateTaker) TakeLate() (loop.GateSlot, bool) {
+	h, st := g.r.TakeHeavyLate()
+	switch st {
+	case gateheld.Taken:
+		return h, true
+	case gateheld.NoGate:
+		return nil, true
 	}
-	return nil
+	return nil, false
 }
 
 // peerZone is the zone of a peer's last facts, for origin_bonus; unknown when the pool has not reached it.

@@ -27,6 +27,9 @@ const (
 	Taken
 	// Full: the gate has no free heavy slot (all held, a command is waiting ahead, or the heavy class is paused). The worker claims nothing.
 	Full
+	// HeldByHost: the gate would hold a new heavy command now because of the host (memory pressure or page rate over its admission lines, or the
+	// free disk under admission.disk_min_gb). The worker claims nothing.
+	HeldByHost
 	// Unreadable: there is a gate and it cannot be read or used. Counted as full, like HeavyFull does.
 	Unreadable
 )
@@ -52,6 +55,14 @@ func (r *Reader) TakeHeavy() (*Held, TakeStatus) {
 		r.clearLog()
 		return nil, Full // paused
 	}
+	// The gate's own admission, the rule a heavy command meets before it gets a slot: the pressure and page-rate lines of
+	// [gate.admission] as configured (they may be stricter than the zone the worker follows) and the free-disk floor. Running work is
+	// never touched; this only keeps a new job from starting where the gate would hold a new command.
+	if a := r.admission(cfg); a.Held {
+		r.logHold(a.Reason)
+		return nil, HeldByHost
+	}
+	r.clearHold()
 	tk, err := p.EnqueueFor(gate.WaiterInfo{PID: os.Getpid(), Argv: []string{"wwd", "job"}})
 	if err != nil {
 		return nil, Unreadable
@@ -69,24 +80,45 @@ func (r *Reader) TakeHeavy() (*Held, TakeStatus) {
 	return &Held{slot: slot}, Taken
 }
 
+// logHold says once per change of reason that the gate's admission is holding the worker's new jobs.
+func (r *Reader) logHold(why string) {
+	r.mu.Lock()
+	again := r.lastHold == why
+	r.lastHold = why
+	r.mu.Unlock()
+	if !again {
+		r.logf("wwd: the gate is holding new heavy work (%s), no job is claimed until it lets go", why)
+	}
+}
+
+func (r *Reader) clearHold() {
+	r.mu.Lock()
+	r.lastHold = ""
+	r.mu.Unlock()
+}
+
 // TakeHeavyLate takes a heavy slot for a command that is running already (a quarantined job's): the gate's own TakeLate, which does not
-// ask whether the host admits more work and goes beyond the gate's size if it has to. nil: no gate, none free, or the gate cannot be
-// used (logged).
-func (r *Reader) TakeHeavyLate() *Held {
+// ask whether the host admits more work and goes beyond the gate's size if it has to. NoGate: nothing to hold. Taken: the slot. Full:
+// even the late slots are taken, or the heavy class is paused (a paused class takes no claim, late or over). Unreadable: the gate cannot
+// be used (logged). The caller tries again for anything but Taken and NoGate.
+func (r *Reader) TakeHeavyLate() (*Held, TakeStatus) {
 	cfg, st := r.look()
-	if st != gateReadable {
-		return nil
+	switch st {
+	case gateAbsent:
+		return nil, NoGate
+	case gateUnreadable:
+		return nil, Unreadable
 	}
 	p := &gate.Pool{Dir: cfg.Dir, Class: gate.ClassHeavy, Size: cfg.Slots.Size(gate.ClassHeavy), Now: time.Now}
 	slot, err := p.TakeLate(gate.WaiterInfo{PID: os.Getpid(), Argv: []string{"wwd", "job"}})
 	if err != nil {
 		r.logf("wwd: a heavy slot for a quarantined job could not be taken: %v", err)
-		return nil
+		return nil, Unreadable
 	}
 	if slot == nil {
-		return nil
+		return nil, Full
 	}
-	return &Held{slot: slot}
+	return &Held{slot: slot}, Taken
 }
 
 // Describe writes whose the slot is: argv as `pdx gate status` shows it (wwd job <id> <task>), and the session if there is one. It only

@@ -87,6 +87,25 @@ func TestStatus_AdmissionFollowsTheRule(t *testing.T) {
 	assert.Equal(t, AdmissionState{}, g.Status().Admission, "a gate with no admission holds nothing")
 }
 
+// Admission is the same answer without Status's lsof pass over every held slot: for a reader that only asks whether the host would hold a
+// new heavy start now (wwd's worker, before it takes a slot).
+func TestAdmissionIsStatusAdmissionWithoutTheRest(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) {
+		c.Admission.Enabled, c.Admission.MaxPressureLevel, c.Admission.PageRateAuto, c.Admission.MaxPageRate, c.Admission.DiskMinGB = true, 1, false, 100, 10
+	})
+	g.DiskFree = func(string) (int64, error) { return 100 << 30, nil }
+	for _, p := range []Pressure{{Level: 1}, {Level: 2}, {Level: 1, PageRate: 250}, {Level: 4, PageRate: 9}} {
+		g.Pressure = peekOnly{p, true}
+		assert.Equal(t, g.Status().Admission, g.Admission(), "%+v", p)
+	}
+	g.Pressure = peekOnly{Pressure{Level: 1}, true}
+	g.DiskFree = func(string) (int64, error) { return 8 << 30, nil }
+	assert.Equal(t, AdmissionState{Held: true, Reason: "disk 8 GB < 10"}, g.Admission())
+	g.SetConfig(func(c *Config) { c.Admission.Enabled = false })
+	assert.Equal(t, AdmissionState{}, g.Admission())
+}
+
 // The state in Status and the decision a start takes come from one function: on the same reading they agree.
 func TestStatus_AdmissionAgreesWithWouldWait(t *testing.T) {
 	g, _ := testGate(t)

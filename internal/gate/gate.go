@@ -567,6 +567,10 @@ func (g *Gate) admission(cfg Config) AdmissionState {
 	return AdmissionState{}
 }
 
+// Admission is whether a heavy start would be held back by the host right now (memory pressure, page rate, disk): the answer Status
+// carries, without Status's look at every held slot and its lock holders.
+func (g *Gate) Admission() AdmissionState { return g.admission(g.Config()) }
+
 // HoldersMode says for which held slots Status asks who has the lock file open (an lsof, which looks at every process of
 // the host: about 0.3 s of CPU each time, #2933).
 type HoldersMode int
