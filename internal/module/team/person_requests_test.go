@@ -55,7 +55,7 @@ func TestPersonLead_ApprovesTheAgentsOpenRequest(t *testing.T) {
 		card := f.create(uid(1)) // the agent asked while the switch was off
 		f.unatt.set(on)
 		f.personLead()
-		f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.MaxMembers, r.Roots = 8, []string{"/elsewhere"} })
+		f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.MaxMembers, r.Roots = 9, []string{"/elsewhere"} })
 		code, body := f.createLeadWith(uid(2), f.createReqEdit)
 		if code != http.StatusCreated {
 			t.Fatalf("switch %v: person over an open request: %d %s", on, code, body)

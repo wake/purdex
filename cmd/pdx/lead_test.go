@@ -401,7 +401,7 @@ func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
 		{"unknown verb", []string{"approve"}},
 		{"missing reason", []string{"request"}},
 		{"empty reason", []string{"request", "--reason", "  "}},
-		{"max-members too large", []string{"request", "--reason", "x", "--max-members", "9"}},
+		{"max-members too large", []string{"request", "--reason", "x", "--max-members", "10"}},
 		{"max-members negative", []string{"request", "--reason", "x", "--max-members", "-1"}},
 		{"wait zero", []string{"request", "--reason", "x", "--wait", "0"}},
 		{"wait over cap", []string{"request", "--reason", "x", "--wait", "11m"}},
