@@ -490,7 +490,7 @@ This is the default classification from the page's probe table. **[待確認]**
 
 ### 9.5 Team panel v2 (U9, U13)
 
-- Each row: a 44 px avatar spanning two rows (the light is a corner badge on it), then
+- Each row: a 44 px avatar spanning two rows (no light on it: 761 acceptance moved the light to the top-right corner of the line-1 agent icon, dimming with it in a transition; the one-line cell keeps its own light), then
   - line 1 = agent icon, host badge, **name**, title (muted), context ring, workbook button;
   - line 2 = task / last line.
   - The agent icon keeps the sidebar's spacing to the subagent dots before it (759 acceptance, #3621).

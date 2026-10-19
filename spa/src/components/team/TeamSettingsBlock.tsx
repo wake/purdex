@@ -38,7 +38,7 @@ export function TeamSettingsBlock({ hostId, teamId, name }: TeamSettingsTarget) 
     <div data-testid="team-settings-block" className="border-t border-border-subtle px-3 py-2 flex flex-col gap-1.5 text-[11.5px]">
       {offer.cap && (
         <div data-testid="team-settings-cap" className="flex items-center gap-3">
-          <CapStepper hostId={hostId} team={team} label={name} labelText={t('team.settings.cap')} />
+          <CapStepper hostId={hostId} team={team} label={name} labelText={t('team.settings.cap')} labelClass="text-text-secondary" />
           <span data-testid="team-settings-in-use" className="text-text-muted">{t('team.settings.in_use', { n: String(team.in_use) })}</span>
         </div>
       )}
@@ -70,8 +70,8 @@ function QuotaLine({ hostId, team, name }: { hostId: string; team: TeamRoster; n
       ? <span data-testid="team-settings-quota-missing" className="text-text-muted">{t('team.settings.quota_missing')}</span>
       : (
         <div data-testid="team-settings-quota-steppers" className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <QuotaStepper hostId={hostId} row={row} name={name} field="self_left" label={t('unattended.quota.self')} />
-          {row.is_lead && <QuotaStepper hostId={hostId} row={row} name={name} field="member_pool_left" label={t('unattended.quota.pool')} />}
+          <QuotaStepper hostId={hostId} row={row} name={name} field="self_left" label={t('unattended.quota.self')} labelClass="text-text-secondary" />
+          {row.is_lead && <QuotaStepper hostId={hostId} row={row} name={name} field="member_pool_left" label={t('unattended.quota.pool')} labelClass="text-text-secondary" />}
         </div>
       )
   } else if (read === undefined || reading) {

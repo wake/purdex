@@ -35,7 +35,7 @@ function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; 
  * `name` is the row's name (the writer's toasts, and the buttons' and the box's accessible names, with the host's after it when there is more than one host); `label` the text before the number. The two buttons read "Increase <label> quota (<name>)": two steppers of
  * one screen (the auto relay and the member pool, and every row or team beside them) must not both be called just 「增加」 to a screen reader or to voice control.
  */
-export function QuotaStepper({ hostId, row, name, field, label }: { hostId: string; row: SessionQuota; name: string; field: RelayQuotaField; label: string }) {
+export function QuotaStepper({ hostId, row, name, field, label, labelClass = 'text-text-muted' }: { hostId: string; row: SessionQuota; name: string; field: RelayQuotaField; label: string; labelClass?: string }) {
   const t = useI18nStore((s) => s.t)
   // With more than one host the same row name can be on two of them, and the host heading above the rows is no part of a button's name: the subject says the host too.
   const lookOf = useHostLookResolver()
@@ -45,7 +45,7 @@ export function QuotaStepper({ hostId, row, name, field, label }: { hostId: stri
   const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: name }, field, next)
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
-      <span className="text-text-muted">{label}</span>
+      <span className={labelClass}>{label}</span>
       <StepButton sign="−" label={t('unattended.quota.step_minus', { field: label, name: subject })} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
       <NumberField
         testId="quota-value" ariaLabel={t('unattended.quota.value_name', { field: label, name: subject })} value={value}
@@ -61,7 +61,7 @@ export function QuotaStepper({ hostId, row, name, field, label }: { hostId: stri
  * `team` must carry its cap and its usage (`hasCap`, team-settings.ts); `label` names the team (the toasts', and the buttons' and the box's accessible names, with the host's after it when there is more than one host); `labelText` is the text before the number (default 「上限」).
  * The buttons read "Decrease <labelText> (<label>)": two teams on one screen must not both have a 「調低上限」 for a screen reader or voice control (#3611, as #3607 did for QuotaStepper).
  */
-export function CapStepper({ hostId, team, label, labelText }: { hostId: string; team: TeamRoster; label: string; labelText?: string }) {
+export function CapStepper({ hostId, team, label, labelText, labelClass = 'text-text-muted' }: { hostId: string; team: TeamRoster; label: string; labelText?: string; labelClass?: string }) {
   const t = useI18nStore((s) => s.t)
   // With more than one host the same team name can be on two of them, and the host heading above is no part of a button's name: the subject says the host too.
   const lookOf = useHostLookResolver()
@@ -78,7 +78,7 @@ export function CapStepper({ hostId, team, label, labelText }: { hostId: string;
   const minusReason = value <= inUse ? t('unattended.cap.minus_in_use', { n: String(inUse) }) : t('unattended.cap.minus_min', { n: String(MAX_MEMBERS_MIN) })
   return (
     <span className="inline-flex items-center gap-1" data-testid="cap-stepper" title={t('unattended.cap.in_use', { n: String(inUse) })}>
-      <span className="text-text-muted">{text}</span>
+      <span className={labelClass}>{text}</span>
       <StepButton sign="−" label={t('unattended.cap.step_minus', { field: text, name: subject })} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
       <NumberField
         testId="cap-value" ariaLabel={t('unattended.cap.value_name', { field: text, name: subject })} value={value} disabled={busy}
