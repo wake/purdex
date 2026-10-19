@@ -2052,7 +2052,7 @@
   "settings.personas.source.label": "正本主機",
   "settings.personas.source.help": "角色以這台主機為準，存檔時會複製到其他已連線的主機。改選之後，其他主機會被改成和新正本一樣。",
   "settings.personas.sourceOffline": "正本主機（{{host}}）目前連不上，或這台主機不提供角色功能。先顯示其他主機的副本，暫時不能編輯。",
-  "settings.personas.firstSave.withCount": "存下之後，{{host}} 上現在的 {{count}} 個對話會改用角色名字，每個對話會收到一則通知；舊地址照樣送得到。",
+  "settings.personas.firstSave.withCount": "存下之後，{{host}} 上至少 {{count}} 個現有的對話會改用角色名字，每個對話會收到一則通知；舊地址照樣送得到。",
   "settings.personas.firstSave.noCount": "存下之後，{{host}} 上現有的對話會改用角色名字，每個對話會收到一則通知；舊地址照樣送得到。",
   "settings.personas.firstSave.confirm": "存下並改名",
   "settings.personas.firstSave.cancel": "取消",

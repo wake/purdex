@@ -1,7 +1,7 @@
 // spa/src/components/settings/personas/FirstSaveConfirm.tsx — asked before the first persona is saved on a source that has
 // none. From then on the daemon names every live conversation after a persona, one notice each, and the lead's address
 // changes (the old one stays an alias). The user should know that before it happens, not after.
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { usePeerStore } from '../../../stores/usePeerStore'
@@ -18,12 +18,20 @@ const BTN =
 
 export function FirstSaveConfirm({ hostId, onConfirm, onCancel }: Props) {
   const t = useI18nStore((s) => s.t)
-  // Read again so the number is the host's current one; the subscription below redraws when it lands.
-  useEffect(() => { void usePeerStore.getState().refresh(hostId) }, [hostId])
+  // The cached count can be old (the list is not refreshed on a timer), so no number is shown until the host has been read
+  // again for this question; until then, and when the read fails, the text names none.
+  const [settled, setSettled] = useState(false)
+  useEffect(() => {
+    let live = true
+    setSettled(false)
+    void usePeerStore.getState().refresh(hostId).then(() => { if (live) setSettled(true) })
+    return () => { live = false }
+  }, [hostId])
   const entry = usePeerStore((s) => s.byHost[hostId])
-  // A count of 0 is not shown as a number: the inventory lists session rows, and the daemon also renames conversations
-  // that have none, so "0 conversations" would promise more than is known.
-  const known = entry ? liveConversationCount(hostId) : null
+  // The inventory lists session rows, while the daemon renames every live conversation, including ones that have none,
+  // so the number is a floor ("at least"), and a count of 0 is not shown at all (#3520 tracks an exact count from the
+  // daemon).
+  const known = settled && entry ? liveConversationCount(hostId) : null
   const count = known !== null && known > 0 ? known : null
   const host = hostLabel(hostId, hostLookOf(hostId))
   return (

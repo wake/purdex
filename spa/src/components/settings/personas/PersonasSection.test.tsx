@@ -361,7 +361,8 @@ describe('PersonasSection', () => {
       vi.mocked(savePersonas).mockResolvedValue({ hostId: 'h1', mirror: NO_MIRROR, base: null })
       render(<PersonasSection />)
       fillNew()
-      expect((await screen.findByTestId('persona-first-save-text')).textContent).toContain('3')
+      await waitFor(() => expect(screen.getByTestId('persona-first-save-text').textContent).toContain('3'))
+      expect(screen.getByTestId('persona-first-save-text').textContent).toMatch(/至少|at least/)
       expect(savePersonas).not.toHaveBeenCalled()
       fireEvent.click(screen.getByTestId('persona-first-save-confirm'))
       await waitFor(() => expect(savePersonas).toHaveBeenCalledTimes(1))
@@ -383,6 +384,18 @@ describe('PersonasSection', () => {
       render(<PersonasSection />)
       fillNew()
       expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
+    })
+
+    it('writes no number while the host is still being read: the cached count may be old', async () => {
+      seed([])
+      peers(['_aaaaaa', '_bbbbbb'])
+      let answer!: () => void
+      usePeerStore.setState({ refresh: vi.fn(() => new Promise<void>((r) => { answer = r })) })
+      render(<PersonasSection />)
+      fillNew()
+      expect((await screen.findByTestId('persona-first-save-text')).textContent).not.toMatch(/\d/)
+      await act(async () => { answer() })
+      await waitFor(() => expect(screen.getByTestId('persona-first-save-text').textContent).toContain('2'))
     })
 
     it('shows the number the host reports once it has been read again', async () => {
