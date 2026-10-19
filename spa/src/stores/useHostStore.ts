@@ -283,6 +283,11 @@ export function selectDaemonIdMismatch(
   return flag
 }
 
+/** The hosts whose endpoint now answers as another daemon (see `selectDaemonIdMismatch`), as one string: a subscriber re-renders only when the set changes. */
+export function daemonMismatchKey(state: Pick<HostState, 'hosts' | 'runtime'>): string {
+  return Object.keys(state.hosts).filter((id) => selectDaemonIdMismatch(state, id) !== undefined).sort().join('\n')
+}
+
 /** True only while this session verified the host's current stored `daemonId` at its current
  *  endpoint (PR review #1). Stale after a re-point or a change of the stored value, local or by sync. */
 export function selectDaemonIdVerified(state: Pick<HostState, 'hosts' | 'runtime'>, hostId: string): boolean {

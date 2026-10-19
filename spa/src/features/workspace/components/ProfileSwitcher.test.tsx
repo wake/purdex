@@ -605,19 +605,20 @@ describe('the Home button shows the profile on screen', () => {
   }
 
   describe('nothing set, no slave — today\'s button, attribute for attribute', () => {
-    it('wide: the logo and `Home`; no title, no aria-*, no chevron, no menu, nothing else inside', () => {
+    it('wide: `Home` in the button, the logo in the view toggle before it; no title, no aria-*, no chevron, no menu, nothing else inside', () => {
       renderHome()
       const button = screen.getByTestId('home-button')
       expect(attrs(button)).toEqual(['class', 'data-testid', 'type'])
-      expect(button.children).toHaveLength(2)
-      const [img, label] = Array.from(button.children)
-      expect(img.tagName).toBe('IMG')
+      expect(button.children).toHaveLength(1)
+      expect(button.children[0]).toHaveTextContent(en['nav.home'])
+      // The profile icon left the Home button for the view toggle (name pool v2 spec §9.6): the logo, 16 px.
+      const img = screen.getByTestId('sidebar-view-toggle').querySelector('img')
+      expect(img).not.toBeNull()
       expect(img).toHaveAttribute('src', '/icons/logo-transparent.png')
       expect(img).toHaveAttribute('alt', '')
       expect(img).toHaveAttribute('width', '16')
-      expect(label).toHaveTextContent(en['nav.home'])
-      // The Home button, then the watcher shield (W5a3); no conflict icon, no switcher.
-      expect(Array.from(screen.getByTestId('home-header').children).map((c) => c.getAttribute('data-testid'))).toEqual(['home-button', 'watch-shield'])
+      // The view toggle, the Home button, then the watcher shield (W5a3); no conflict icon, no switcher.
+      expect(Array.from(screen.getByTestId('home-header').children).map((c) => c.getAttribute('data-testid'))).toEqual(['sidebar-view-toggle', 'home-button', 'watch-shield'])
       expect(screen.queryByTestId('profile-icon')).toBeNull()
     })
 
@@ -667,7 +668,7 @@ describe('the Home button shows the profile on screen', () => {
     it('a name alone keeps the logo; an icon alone keeps `Home`', () => {
       setLook('master', { name: 'Work' })
       const { unmount } = renderHome()
-      expect(screen.getByTestId('home-button').querySelector('img')).not.toBeNull()
+      expect(screen.getByTestId('sidebar-view-toggle').querySelector('img')).not.toBeNull()
       expect(screen.getByTestId('home-label')).toHaveTextContent('Work')
       unmount()
       setLook('master', { name: null, icon: 'Rocket' })
@@ -710,7 +711,8 @@ describe('the Home button shows the profile on screen', () => {
       if (bar === 'wide') renderHome()
       else renderNarrow()
       expect(screen.queryByTestId('profile-icon')).toBeNull()
-      expect(screen.getByTestId('home-button').querySelector('img')).not.toBeNull()
+      // wide: the logo is in the view toggle now; narrow keeps it in the button
+      expect(screen.getByTestId(bar === 'wide' ? 'sidebar-view-toggle' : 'home-button').querySelector('img')).not.toBeNull()
       expect(screen.getByTestId('home-button')).toHaveAttribute('title', 'Scratch')
     })
 

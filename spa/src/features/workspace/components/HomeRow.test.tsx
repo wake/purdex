@@ -48,8 +48,8 @@ describe('HomeRow', () => {
   it.each(['top', 'left', 'both'] as const)("is one plain button beside the shield: no expand/collapse chevron (tabPosition='%s')", (tabPosition) => {
     useLayoutStore.setState({ tabPosition, activityBarWidth: 'wide', workspaceExpanded: { home: true } })
     renderRow()
-    // The Home button, and the watcher shield after it (W5a3).
-    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['home-button', 'watch-shield'])
+    // The view toggle, the Home button, and the watcher shield after it (W5a3).
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['sidebar-view-toggle', 'home-button', 'watch-shield'])
     expect(screen.queryByLabelText(/expand home|collapse home/i)).not.toBeInTheDocument()
   })
 

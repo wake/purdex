@@ -27,6 +27,8 @@ import { PaneSplitter } from '../../../components/PaneSplitter'
 import { WorkerList } from '../../../components/executions/WorkerList'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
+import { TaskGroupView } from './TaskGroupView'
+import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { BottomNav } from './BottomNav'
 import { FleetCells } from '../../../components/fleet/FleetCells'
 import type { ActivityBarProps } from './activity-bar-props'
@@ -101,6 +103,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const workerListOpen = useLayoutStore((s) => s.workerListOpen)
   const toggleWorkerListOpen = useLayoutStore((s) => s.toggleWorkerListOpen)
   const setWorkerListOpen = useLayoutStore((s) => s.setWorkerListOpen)
+  const sidebarView = useTeamUiStore((s) => s.sidebarView)
   const bottomNavCompact = useLayoutStore((s) => s.bottomNavCompact)
   const toggleBottomNavCompact = useLayoutStore((s) => s.toggleBottomNavCompact)
 
@@ -311,6 +314,16 @@ export function ActivityBarWide(props: ActivityBarProps) {
               data-testid="activity-bar-workspace-scroll"
               className="activity-bar-workspace-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain py-0.5"
             >
+              {sidebarView === 'groups' ? (
+                <TaskGroupView
+                  activeTabId={activeTabId}
+                  onSelectTab={selectTab}
+                  onCloseTab={closeTab}
+                  onMiddleClickTab={middleClickTab}
+                  onContextMenuTab={contextMenuTab}
+                  onRenameTab={renameTab}
+                />
+              ) : (
               <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
                 <div className="flex flex-col gap-0.5">
                   {workspaces.map((ws) => (
@@ -332,6 +345,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
                   ))}
                 </div>
               </SortableContext>
+              )}
             </div>
 
             {/* Nothing of the list mounts while it is closed: each host section holds an SSE stream. */}

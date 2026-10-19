@@ -42,7 +42,11 @@ type reservationBook struct {
 	rebuilt  bool // the team module's open ops were read (or there is no reader)
 	tried    bool // a rebuild was tried in this pool-lock section
 	inFlight bool // a read of the open ops is still in flight (one that timed out is not cancelled: it is not started twice)
+	noted    bool // the skipped rebuilds of this stuck read were said once; re-armed when the read returns
 }
+
+// errReadInFlight: a read given up on has not returned, so no new one was started.
+var errReadInFlight = errors.New("the previous read of the open spawn ops has not returned")
 
 func (b *reservationBook) put(r reservation) {
 	b.mu.Lock()
@@ -159,10 +163,22 @@ func (b *reservationBook) reading() bool {
 	return b.inFlight
 }
 
+// firstSkip says whether this is the first rebuild skipped for the read that is stuck (the caller says so then, and only then).
+func (b *reservationBook) firstSkip() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.noted {
+		return false
+	}
+	b.noted = true
+	return true
+}
+
 func (b *reservationBook) endRead() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.inFlight = false
+	b.noted = false
 }
 
 func (b *reservationBook) markRebuilt() {
@@ -188,6 +204,12 @@ func (m *Module) ensureReservations(ctx context.Context) {
 		return
 	}
 	list, err := m.readOpenReservations(ctx, reader)
+	if errors.Is(err, errReadInFlight) {
+		if m.reservations.firstSkip() {
+			m.logf("peers: name: a read of the open spawn reservations is still running (it passed its deadline); the reservations are not rebuilt until it returns, and a restart's reservations stay lost until then")
+		}
+		return
+	}
 	if err != nil {
 		m.logf("peers: name: cannot read the open spawn reservations, tried again at the next use: %v", err)
 		return
@@ -219,7 +241,7 @@ func (m *Module) readOpenReservations(ctx context.Context, reader ipeers.SpawnRe
 		timeout = reservationReadTimeout
 	}
 	if !m.reservations.beginRead() {
-		return nil, errors.New("the previous read of the open spawn ops has not returned")
+		return nil, errReadInFlight
 	}
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

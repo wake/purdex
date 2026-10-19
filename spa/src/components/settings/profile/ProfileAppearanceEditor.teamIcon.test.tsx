@@ -1,11 +1,10 @@
 // spa/src/components/settings/profile/ProfileAppearanceEditor.teamIcon.test.tsx — the team-icon row of a profile's appearance (name pool v2 spec §9.6, NA-5): the icon the sidebar's view toggle wears in the
-// task-group view. Behind the NA-5 → NA-6 gate (a team icon nobody can see would be a setting with no effect): closed, the editor is exactly today's.
+// task-group view.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ProfileAppearanceEditor } from './ProfileAppearanceEditor'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { taskGroupView } from '../../../features/workspace/lib/task-group-view'
 
 // A stand-in with the picker's contract (it needs a layout engine, and has its own tests).
 vi.mock('../../../features/workspace/components/WorkspaceIconPicker', () => ({
@@ -19,27 +18,13 @@ vi.mock('../../../features/workspace/components/WorkspaceIconPicker', () => ({
 
 const state = () => useLocalProfilesStore.getState()
 
-// The gate as shipped: the closed-gate tests rely on it, they do not set it.
-const SHIPPED = taskGroupView.enabled
-
 beforeEach(() => {
   useI18nStore.getState().setLocale('zh-TW')
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
-afterEach(() => { cleanup(); taskGroupView.enabled = SHIPPED })
-
-describe('the gate is closed (until NA-6)', () => {
-  it('the editor has no team-icon row', () => {
-    render(<ProfileAppearanceEditor id="master" />)
-    expect(screen.queryByTestId('profile-edit-team-icon')).toBeNull()
-    expect(screen.queryByTestId('profile-edit-team-icon-default')).toBeNull()
-    expect(screen.getByTestId('profile-edit-icon')).toBeInTheDocument() // the rest is there as it was
-  })
-})
+afterEach(() => { cleanup() })
 
 describe('the team-icon row', () => {
-  beforeEach(() => { taskGroupView.enabled = true })
-
   it('shows the default (UsersThree) until one is chosen, and the reset button is off then', () => {
     render(<ProfileAppearanceEditor id="master" />)
     expect(screen.getByTestId('profile-edit-team-icon')).toHaveAttribute('data-icon', 'UsersThree')
