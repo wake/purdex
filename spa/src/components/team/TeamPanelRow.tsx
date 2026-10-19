@@ -89,19 +89,25 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       } ${dragging ? 'opacity-30' : ''}`}
     >
       {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
-      {/* The avatar spans the row's lines; the light is its corner badge (a seat in transition dims it) */}
+      {/* The avatar spans the row's lines; it carries no light (761: the light sits on the line-1 agent icon) */}
       <div data-testid="team-panel-avatar" aria-hidden="true" className="relative w-11 h-11 flex-shrink-0">
         <Avatar size={44} code={persona?.code ?? ''} name={name} src={persona?.avatar} />
-        <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -bottom-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
-        </span>
       </div>
       <div className="min-w-0">
-      {/* Line 1: agent icon (muted, no light) -> host badge -> host chip -> name -> title -> lead / unopened -> ring -> workbook */}
+      {/* Line 1: agent icon with its light on the top-right corner (a seat in transition dims it) -> host badge -> host chip -> name -> title -> lead / unopened -> ring -> workbook */}
       <div className="flex items-center gap-1.5">
-        <span className={`inline-flex items-center gap-1.5 text-text-muted ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents light={false} />
-          <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
+        <span className="inline-flex items-center gap-1.5 text-text-muted">
+          <span data-testid="team-panel-icon-light" className="relative inline-flex">
+            <span className={transition !== null ? 'opacity-40' : ''}>
+              <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents light={false} />
+            </span>
+            <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -top-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
+              <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
+            </span>
+          </span>
+          <span className={transition !== null ? 'opacity-40' : ''}>
+            <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
+          </span>
         </span>
         {seat.remote && (
           <span data-testid="team-panel-host-chip" className="text-[9.5px] px-1 rounded bg-surface-hover text-text-secondary flex-shrink-0 max-w-[6rem] truncate">

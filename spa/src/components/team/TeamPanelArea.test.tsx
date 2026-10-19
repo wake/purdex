@@ -221,8 +221,12 @@ describe('full mode', () => {
     mount()
     const leadRow = rows()[0]
     const lead = within(leadRow)
-    expect(lead.getByTestId('seat-icon').getAttribute('data-light')).toBe('false') // team panel v2: the icon alone; the light is the avatar's corner badge
-    expect(within(lead.getByTestId('team-panel-avatar')).getByTestId('team-panel-light')).toBeTruthy()
+    expect(lead.getByTestId('seat-icon').getAttribute('data-light')).toBe('false') // the icon draws no light of its own; the row puts the light on the icon's top-right corner
+    expect(within(lead.getByTestId('team-panel-avatar')).queryByTestId('team-panel-light')).toBeNull() // 761: the avatar carries no light
+    const lightWrap = lead.getByTestId('team-panel-icon-light')
+    expect(within(lightWrap).getByTestId('seat-icon')).toBeTruthy()
+    expect(within(lightWrap).getByTestId('team-panel-light').className).toContain('-top-')
+    expect(within(lightWrap).getByTestId('team-panel-light').className).toContain('-right-')
     expect(lead.getByTestId('seat-host')).toBeTruthy()
     expect(lead.getByText('title L')).toBeTruthy()
     expect(lead.getByTestId('model-icon-opus')).toBeTruthy() // the model shape sits inside the ring
