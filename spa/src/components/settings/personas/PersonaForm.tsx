@@ -91,7 +91,8 @@ export function PersonaForm({ draft, isNew, issues, saving, avatarPicker, onChan
       {/* While a save is in flight nothing can be edited: its answer is applied to exactly what was sent. */}
       <fieldset disabled={saving} className="flex flex-col gap-3 border-0 p-0 m-0 min-w-0">
       <div className="flex items-center gap-3">
-        <Avatar size={96} code={draft.code || '?'} name={draft.name} src={draft.avatar_data} />
+        {/* The real code, so a draft with none yet is drawn as no persona (the neutral disc); the "?" is only what its initial reads. */}
+        <Avatar size={96} code={draft.code} name={draft.name || draft.code || '?'} src={draft.avatar_data} />
         <div className="min-w-0 flex-1">{avatarPicker}</div>
       </div>
 
