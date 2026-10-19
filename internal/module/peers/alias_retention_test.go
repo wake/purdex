@@ -136,6 +136,36 @@ func TestRetainAliases_ANameStoreWithoutRetentionIsSkipped(t *testing.T) {
 	m.retainAliases(context.Background())
 }
 
+// Start begins the loop: a Module with a retaining name store runs a pass after the first delay without anything calling it.
+// Mutation gate: Start does not start the loop → red.
+func TestModuleStart_StartsTheAliasRetentionLoop(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{fixture: fixtureOpts{noSweep: true}})
+	meta, err := store.OpenMeta(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { meta.Close() })
+	e.m.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
+	ran := make(chan struct{}, 1)
+	e.m.aliasLiveRefs = func(context.Context) (map[string]bool, bool) {
+		select {
+		case ran <- struct{}{}:
+		default:
+		}
+		return nil, false
+	}
+	e.m.aliasRetentionFirst = time.Millisecond
+	if err := e.m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { e.m.Stop(context.Background()) })
+	select {
+	case <-ran:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no retention pass ran after Start")
+	}
+}
+
 // The loop runs a pass after the first delay and then every period, and Stop ends it. Mutation gate: no loop → red.
 func TestAliasRetention_LoopRunsPassesAndStopEndsIt(t *testing.T) {
 	m, _ := aliasesOf(t)
