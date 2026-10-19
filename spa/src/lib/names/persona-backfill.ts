@@ -63,7 +63,5 @@ export async function backfillHosts(): Promise<void> {
     // The check before the write cannot see a save that starts while the write is out; if one did, the host now holds
     // the older items and is corrected once that save ends.
     if (moved()) return runAfterSave()
-    // The check before the write cannot see a save that starts while the write is out; if one did, the host now holds
-    // the older items and is corrected once that save ends.
   }
 }
