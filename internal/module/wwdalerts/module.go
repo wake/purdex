@@ -71,6 +71,10 @@ type Module struct {
 	suppressed     int        // push-level alerts the switch held back in the last pass
 	passSuppressed int        // the same, being counted in the pass that is running
 
+	// the silence alerts' episodes (pass runs on one goroutine): which silence: keys each list held when it was last read, and the instance
+	// (a time on this daemon's clock) of the failure each key is about now
+	lastHeld map[string]map[string]bool // host alias -> its silence: keys
+	episode  map[string]time.Time
 }
 
 // New returns the module with production defaults.
@@ -250,14 +254,12 @@ func (m *Module) pass(ctx context.Context) {
 		}
 		return
 	}
-	// every list is read before any is acted on, so a silence alert is judged on all of them at once: it is one failure however many wwds
-	// noticed it, and it began when the first of them did
+	// every list is read before any is acted on, so a silence alert is judged on all of them at once
 	type got struct {
 		alias  string
 		alerts []wire.Alert
 	}
 	var lists []got
-	began := map[string]time.Time{} // silence:<host> key -> the earliest Since among the lists read this pass
 	for _, h := range hosts {
 		if ctx.Err() != nil {
 			return
@@ -272,19 +274,67 @@ func (m *Module) pass(ctx context.Context) {
 			continue
 		}
 		lists = append(lists, got{h.alias, list.Alerts})
-		for _, a := range list.Alerts {
-			if a.ClearedAt == nil && sharedLedger(a) {
-				if t, ok := began[a.Key]; !ok || a.Since.Before(t) {
-					began[a.Key] = a.Since
-				}
-			}
-		}
 	}
+	m.markEpisodes(func(yield func(host string, alerts []wire.Alert)) {
+		for _, l := range lists {
+			yield(l.alias, l.alerts)
+		}
+	})
 	for _, l := range lists {
-		m.handle(l.alias, l.alerts, began)
+		m.handle(l.alias, l.alerts)
 	}
 	if err := m.store.prune(m.now()); err != nil {
 		m.logf("wwdalerts: prune: %v", err)
+	}
+}
+
+// markEpisodes decides, from the lists read this pass, which failure each silence:<host> key is about. Every wwd that loses a peer raises
+// the same key on its own list, so it is one failure however many noticed it. It goes on while some list that held it before still holds
+// it — a list that could not be read this pass keeps what it held, so a blip in reading is not the end. When no list holds it
+// continuously (it cleared everywhere, or another wwd noticed afresh after the first one's alert was gone) a new failure begins, told at
+// once: a duplicate is preferred to a failure not told (spec §13.3). Only this daemon's own observations and clock are compared, never a
+// wwd's Since against this daemon's time.
+func (m *Module) markEpisodes(each func(yield func(host string, alerts []wire.Alert))) {
+	first := m.lastHeld == nil
+	if first {
+		m.lastHeld = map[string]map[string]bool{}
+		m.episode = map[string]time.Time{}
+	}
+	now := m.now()
+	nowHeld := map[string]map[string]bool{}
+	each(func(host string, alerts []wire.Alert) {
+		held := map[string]bool{}
+		for _, a := range alerts {
+			if a.ClearedAt == nil && sharedLedger(a) {
+				held[a.Key] = true
+			}
+		}
+		nowHeld[host] = held
+	})
+	keys := map[string]bool{}
+	for _, held := range nowHeld {
+		for k := range held {
+			keys[k] = true
+		}
+	}
+	for k := range keys {
+		continuing := false
+		for h, held := range nowHeld {
+			if held[k] && m.lastHeld[h][k] {
+				continuing = true
+			}
+		}
+		if continuing {
+			continue
+		}
+		if row, had := m.store.delivery(silenceLedger, k); had && first {
+			m.episode[k] = time.UnixMilli(row.Since) // a restart is not the end of a failure the ledger knows
+		} else {
+			m.episode[k] = now
+		}
+	}
+	for h, held := range nowHeld {
+		m.lastHeld[h] = held
 	}
 }
 
@@ -311,7 +361,7 @@ func (m *Module) hosts(ctx context.Context) ([]hostRef, error) {
 
 // handle acts on one host's active alerts: gathers the digest ones, pushes the push ones that are due, and forgets the ledger rows of
 // alerts that are gone.
-func (m *Module) handle(host string, alerts []wire.Alert, began map[string]time.Time) {
+func (m *Module) handle(host string, alerts []wire.Alert) {
 	now := m.now()
 	keys := make([]string, 0, len(alerts))
 	for _, a := range alerts {
@@ -325,7 +375,7 @@ func (m *Module) handle(host string, alerts []wire.Alert, began map[string]time.
 				m.logf("wwdalerts: digest %s/%s: %v", host, a.Key, err)
 			}
 		case wire.AlertPush:
-			m.pushIfDue(host, a, now, began)
+			m.pushIfDue(host, a, now)
 		}
 	}
 	if err := m.store.forgetExcept(host, keys); err != nil {
@@ -334,7 +384,7 @@ func (m *Module) handle(host string, alerts []wire.Alert, began map[string]time.
 }
 
 // pushIfDue puts a push-level alert in the push module's hands when this daemon is the deliverer and the alert is due.
-func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time, began map[string]time.Time) {
+func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !m.deliver() {
 		return
 	}
@@ -351,18 +401,13 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time, began map[s
 		return // the push side is not up: no attempt is spent
 	}
 	// a silence alert ("silence:mserv") is the same failure on every wwd's list that noticed it: one ledger row and one collapse id for the
-	// failure, not one per observer (spec §13.3: a duplicate only during a failover or a partition, and those are separate deliverers).
-	// It is the same failure while the row's last attempt came after the first list raised it; one raised after the last attempt is a
-	// new failure, told at once. When a list that held the old one cannot be read and another raises a new one, that is told too: a
-	// duplicate is preferred to a failure not told.
+	// failure, not one per observer (spec §13.3: a duplicate only during a failover or a partition, and those are separate deliverers);
+	// which failure it is, markEpisodes decided
 	about := host
 	since := a.Since
 	if sharedLedger(a) {
 		about, host = strings.TrimPrefix(a.Key, "silence:"), silenceLedger
-		since = began[a.Key]
-		if row, had := m.store.delivery(host, a.Key); had && !since.After(time.UnixMilli(row.Attempt)) {
-			since = time.UnixMilli(row.Since) // the failure the row is about
-		}
+		since = m.episode[a.Key]
 	}
 	prev, hadRow := m.store.delivery(host, a.Key)
 	if hadRow && prev.Since == since.UnixMilli() {

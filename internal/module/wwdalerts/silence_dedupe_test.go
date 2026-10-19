@@ -88,6 +88,25 @@ func TestSilenceClearedAndBackIsANewFailure(t *testing.T) {
 	assert.Equal(t, 2, e.ntf.count())
 }
 
+// The wwds' clocks are not the deliverer's: a new failure is told whatever Since the wwds put on it, a long time before the deliverer's last
+// push included (attack review: no cross-host clock comparison).
+func TestSilenceANewFailureIsToldWhateverTheWWDsClocksSay(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	behind := t0.Add(-3 * time.Hour) // a wwd whose clock is far behind
+	e.src.set("mlab", silenceOf("mserv", behind))
+	e.src.set("air26")
+	e.pass(t)
+	e.ntf.confirm(0)
+	e.src.set("mlab")
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	e.src.set("mlab", silenceOf("mserv", behind.Add(2*time.Minute))) // still before the first push in the deliverer's time
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count())
+}
+
 // A list that cannot be read must not hide a new failure, whatever it held: one unreadable list does not freeze the failures the others
 // show (attack review).
 func TestSilenceAnUnreadableListDoesNotHideANewFailure(t *testing.T) {
