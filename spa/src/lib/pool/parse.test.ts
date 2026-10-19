@@ -1,6 +1,6 @@
 // The three JSON samples in __fixtures__/ are copied byte for byte from internal/wwd/wire/testdata: when the wire changes they go red.
 import { describe, it, expect } from 'vitest'
-import { parseFacts, parseHostsAnswer, parseSeries } from './parse'
+import { parseFacts, parseFactsHistory, parseHostsAnswer, parseSeries } from './parse'
 import hostsJson from './__fixtures__/pool_hosts_response.json'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import linuxJson from './__fixtures__/facts_linux.json'
@@ -170,5 +170,26 @@ describe('series', () => {
     expect(s.points).toEqual([{ at: Date.parse('2026-10-18T05:00:00Z'), zone: 'warning', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 1, page_out_rate: null, disk_max_used_pct: 80.5, headroom: { heavy: 0, light: 1 } }])
     expect(s.step).toBe('1m')
     expect(s.truncated).toBe(false)
+  })
+})
+
+describe('parseFactsHistory', () => {
+  const rec = (at: string) => ({ ...darwinJson, at })
+  it('reads the step and the records, oldest first as the daemon sends them', () => {
+    const h = parseFactsHistory({ step: '5s', records: [rec('2026-10-18T05:00:00Z'), rec('2026-10-18T05:00:05Z')] })!
+    expect(h.step).toBe('5s')
+    expect(h.records.map((r) => r.at)).toEqual([Date.UTC(2026, 9, 18, 5, 0, 0), Date.UTC(2026, 9, 18, 5, 0, 5)])
+  })
+  it('a record that does not parse is dropped, not the whole answer', () => {
+    const h = parseFactsHistory({ step: '5s', records: [rec('2026-10-18T05:00:00Z'), { nonsense: true }] })!
+    expect(h.records).toHaveLength(1)
+  })
+  it('an empty list is an answer (wwd just started)', () => {
+    expect(parseFactsHistory({ step: '1m', records: [] })).toEqual({ step: '1m', records: [] })
+  })
+  it('a step this App does not know, or no records list, is no answer', () => {
+    expect(parseFactsHistory({ step: '1h', records: [] })).toBeNull()
+    expect(parseFactsHistory({ step: '5s' })).toBeNull()
+    expect(parseFactsHistory(null)).toBeNull()
   })
 })

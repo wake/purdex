@@ -21,9 +21,12 @@ import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } fro
 import { usePoolCellModels } from '../../lib/pool/use-cell-models'
 import { matchPoolHost } from '../../lib/pool/cell-model'
 import { usePoolStore } from '../../lib/pool/store'
+import { useFactsHistory } from '../../lib/pool/use-facts-history'
+import type { ZonePoint } from '../../lib/pool/history'
 import type { PoolProc } from '../../lib/pool/types'
 import { Gauge } from './Gauge'
 import { AvailRow } from './AvailRow'
+import { ZoneBand } from './ZoneBand'
 import { ProcTable, type ProcRow } from './ProcTable'
 import { ResidentsTable } from './ResidentsTable'
 import { MetricRow, TimeAxis } from './MetricChart'
@@ -34,7 +37,8 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
 /** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
-function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRange; now: number }) {
+function Resources({ view, range, now, zones, notLocal }: { view: FleetHostView; range: HistoryRange; now: number; zones: ZonePoint[]; notLocal: boolean }) {
+  const t = useI18nStore((s) => s.t)
   const offline = isOffline(view)
   // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
   const at = Math.floor(now / stepMs(range)) * stepMs(range)
@@ -45,9 +49,15 @@ function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRa
       <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
         {METRICS.map((d) => <Gauge key={d.k} def={d} fast={view.fast} offline={offline} />)}
       </div>
-      <ChartNote />
-      {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
-      <TimeAxis points={series[0].points} now={at} range={range} />
+      {notLocal ? (
+        // The daemon cannot read this host's history (it does not forward): the gauges above stay, the 5 minute chart does not.
+        <p data-testid="history-not-local" className="text-[11px] text-text-muted mb-1">{t('watch.host.history_not_local')}</p>
+      ) : (<>
+        {range === '5m' && <ZoneBand points={zones} now={at} />}
+        <ChartNote />
+        {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
+        <TimeAxis points={series[0].points} now={at} range={range} />
+      </>)}
     </div>
   )
 }
@@ -99,6 +109,8 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const pool = model?.pool ?? null
   const poolHost = model && view ? matchPoolHost(poolHosts, view) : null
   const live = pool?.state === 'live' ? (poolHost?.facts ?? null) : null
+  // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
+  const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)
 
   // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
   // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
@@ -160,7 +172,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         ) : (<>
         {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} />}
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
-          <Resources view={shown} range={range} now={now} />
+          <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} />
         </Section>
         {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>

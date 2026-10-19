@@ -6,7 +6,7 @@ const hostFetch = vi.fn()
 let offline = false
 vi.mock('../host-api', () => ({ hostFetch: (...a: unknown[]) => (offline ? Promise.reject(new TypeError('failed')) : hostFetch(...a)) }))
 
-import { fetchPoolHosts, fetchPoolSeries, PoolReadError } from './api'
+import { fetchFactsHistory, fetchPoolHosts, fetchPoolSeries, PoolReadError } from './api'
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
 
@@ -57,5 +57,25 @@ describe('fetchPoolSeries', () => {
     hostFetch.mockResolvedValue(json(501, { error: 'host_not_local' }))
     const err = await fetchPoolSeries('d1', 'air19', 'x', '1m').catch((e) => e)
     expect(err.poolError).toEqual({ code: 'host_not_local', action: 'no_chart' })
+  })
+})
+
+describe('fetchFactsHistory', () => {
+  it('asks the daemon for the host\'s 5 s records since a time', async () => {
+    hostFetch.mockResolvedValue(json(200, { step: '5s', records: [] }))
+    const h = await fetchFactsHistory('d1', 'air19', '2026-10-18T05:00:00Z', '5s')
+    expect(hostFetch).toHaveBeenCalledWith('d1', '/api/pool/facts/history?host=air19&since=2026-10-18T05%3A00%3A00Z&step=5s')
+    expect(h).toEqual({ step: '5s', records: [] })
+  })
+  it('host_not_local is a refusal that keeps its code', async () => {
+    hostFetch.mockResolvedValue(json(501, { error: 'host_not_local' }))
+    const err = await fetchFactsHistory('d1', 'air19', '2026-10-18T05:00:00Z', '5s').catch((e) => e)
+    expect(err).toBeInstanceOf(PoolReadError)
+    expect(err.poolError.code).toBe('host_not_local')
+  })
+  it('an answer that is not a history is wwd_bad_response', async () => {
+    hostFetch.mockResolvedValue(json(200, { step: 'weird' }))
+    const err = await fetchFactsHistory('d1', 'air19', '2026-10-18T05:00:00Z', '5s').catch((e) => e)
+    expect(err.poolError.code).toBe('wwd_bad_response')
   })
 })

@@ -1,8 +1,8 @@
 // spa/src/lib/pool/api.ts — reads of `/api/pool/*` from one daemon. A refused read throws a PoolReadError carrying the classification.
 import { hostFetch } from '../host-api'
 import { classify, type PoolCallKind, type PoolError } from './errors'
-import { parseHostsAnswer, parseSeries } from './parse'
-import type { PoolHost, PoolSeries } from './types'
+import { parseFactsHistory, parseHostsAnswer, parseSeries } from './parse'
+import type { PoolFactsHistory, PoolHost, PoolSeries } from './types'
 
 export class PoolReadError extends Error {
   readonly path: string
@@ -59,4 +59,12 @@ export async function fetchPoolSeries(hostId: string, alias: string, since: stri
   const series = parseSeries(await readJson(hostId, path))
   if (!series) throw unreadable(path)
   return series
+}
+
+/** `GET /api/pool/facts/history`: another host's history goes through this daemon's wwd (`host_not_local` when it cannot forward). `since` is RFC 3339. */
+export async function fetchFactsHistory(hostId: string, alias: string, since: string, step: '1m' | '5s'): Promise<PoolFactsHistory> {
+  const path = `/api/pool/facts/history?host=${encodeURIComponent(alias)}&since=${encodeURIComponent(since)}&step=${step}`
+  const history = parseFactsHistory(await readJson(hostId, path))
+  if (!history) throw unreadable(path)
+  return history
 }
