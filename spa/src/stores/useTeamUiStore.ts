@@ -25,6 +25,9 @@ export type PaneMode = Exclude<PanelMode, 'titlebar'>
 const isPaneMode = (v: unknown): v is PaneMode => v === 'line' || v === 'full'
 const isPanelMode = (v: unknown): v is PanelMode => v === 'titlebar' || isPaneMode(v)
 
+export type SidebarView = 'workspace' | 'groups'
+const isSidebarView = (v: unknown): v is SidebarView => v === 'workspace' || v === 'groups'
+
 interface Slices {
   /** Per team key, the member session ids in the order the person arranged (the lead is never in it). */
   memberOrder: Record<string, string[]>
@@ -86,6 +89,9 @@ interface TeamUiState extends Slices {
   /** Show the host icon next to each member bead (spec P7); default on. */
   teamBeadHost: boolean
   setTeamBeadHost: (v: boolean) => void
+  /** What the sidebar lists on this device: the workspaces, or the task groups (name pool v2 spec §7). Default `workspace`. */
+  sidebarView: SidebarView
+  setSidebarView: (v: SidebarView) => void
   /** Trial (TI-6, spec §4.2): which box-shadow the group tabs wear; removed once the user picks. Default `v2`. */
   setMemberOrder: (teamKey: string, order: readonly string[]) => void
   setCollapsed: (teamKey: string, collapsed: boolean) => void
@@ -222,6 +228,8 @@ export const useTeamUiStore = create<TeamUiState>()(
       }),
       teamBeadHost: true,
       setTeamBeadHost: (v) => set((s) => (s.teamBeadHost === v ? s : { teamBeadHost: v })),
+      sidebarView: 'workspace',
+      setSidebarView: (v) => set((s) => (s.sidebarView === v ? s : { sidebarView: v })),
       setMemberOrder: (teamKey, order) => set((s) => {
         const current = s.memberOrder[teamKey]
         if (current && current.length === order.length && current.every((id, i) => id === order[i])) return s
@@ -289,10 +297,11 @@ export const useTeamUiStore = create<TeamUiState>()(
     {
       name: STORAGE_KEYS.TEAM_UI,
       storage: purdexStorage,
-      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, panelLast: s.panelLast, sharedPanelMode: s.sharedPanelMode, sharedPanelLast: s.sharedPanelLast, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, endedSeats: s.endedSeats, panel: s.panel, teamBeadHost: s.teamBeadHost }),
+      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, panelLast: s.panelLast, sharedPanelMode: s.sharedPanelMode, sharedPanelLast: s.sharedPanelLast, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, endedSeats: s.endedSeats, panel: s.panel, teamBeadHost: s.teamBeadHost, sidebarView: s.sidebarView }),
       merge: (persisted, current) => ({
         ...current, ...heal(persisted),
         teamBeadHost: isRecord(persisted) && typeof persisted.teamBeadHost === 'boolean' ? persisted.teamBeadHost : true,
+        sidebarView: isRecord(persisted) && isSidebarView(persisted.sidebarView) ? persisted.sidebarView : 'workspace',
       }),
     },
   ),

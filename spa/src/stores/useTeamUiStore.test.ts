@@ -25,7 +25,7 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, teamDrill: {}, endedSeats: {}, panel: { width: 312 },
+      teamBeadHost: true, sidebarView: 'workspace', teamDrill: {}, endedSeats: {}, panel: { width: 312 },
       panelLast: { [key]: 'line' }, sharedPanelMode: 'titlebar', sharedPanelLast: 'full',
     })
     const saved = localStorage.getItem('purdex-team-ui')!
