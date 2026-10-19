@@ -278,6 +278,28 @@ func TestQueuePathSubmitsAndPrintsTheSummary(t *testing.T) {
 	}
 }
 
+// #3477: the session the caller named is the submitter's session in the job record, which is what the completion notice (spec §10) and
+// the queue mark on an App tab find the conversation by; with none named it is empty, as before.
+func TestQueuePathCarriesTheSessionToTheSubmitter(t *testing.T) {
+	for name, want := range map[string]string{"named": "6d0b7ae9-d77a-4a0f-9a13-dbc8ab81a8cc", "none": ""} {
+		api := &fakeAPI{job: doneJob(wire.StateSucceeded, ip(0), "", nil)}
+		code, out, errOut := run(t, Options{Args: args(t, "lint"), API: api, Session: want})
+		if code != 0 || api.submitted != 1 {
+			t.Fatalf("%s: code %d submitted %d\nout: %s\nerr: %s", name, code, api.submitted, out, errOut)
+		}
+		b, _ := json.Marshal(api.bodies[0])
+		var body struct {
+			Submitter wire.Submitter `json:"submitter"`
+		}
+		if err := json.Unmarshal(b, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Submitter.Session != want {
+			t.Errorf("%s: submitter.session = %q, want %q (body %s)", name, body.Submitter.Session, want, b)
+		}
+	}
+}
+
 func TestEveryTerminalStateHasItsExitCode(t *testing.T) {
 	for name, tc := range map[string]struct {
 		job  wire.Job
