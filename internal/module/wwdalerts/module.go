@@ -282,11 +282,12 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if !ok {
 		return // the push side is not up: no attempt is spent
 	}
-	if d, ok := m.store.delivery(host, a.Key); ok && d.Since == a.Since.UnixMilli() {
-		if d.Sent > 0 && within(now, d.Sent, deliveredFor) {
+	prev, hadRow := m.store.delivery(host, a.Key)
+	if hadRow && prev.Since == a.Since.UnixMilli() {
+		if prev.Sent > 0 && within(now, prev.Sent, deliveredFor) {
 			return
 		}
-		if d.Attempt > 0 && within(now, d.Attempt, attemptEvery) {
+		if prev.Attempt > 0 && within(now, prev.Attempt, attemptEvery) {
 			return
 		}
 	}
@@ -297,7 +298,7 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	}
 	since := a.Since
 	key := a.Key
-	ntf.NotifyAlert(push.AlertPush{
+	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
 		Title:      title(host, a),
 		Host:       host,
@@ -307,6 +308,15 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 			}
 		},
 	})
+	// The push module can stop between the readiness look and the call: it then says false, nothing was queued, and the attempt written
+	// above must not hold the alert back for the interval. A false from a module that is still up (its queue is full) keeps the attempt.
+	if !queued {
+		if r, ok := ntf.(push.AlertReadiness); ok && !r.AlertReady() {
+			if err := m.store.restoreDelivery(host, a.Key, prev, hadRow); err != nil {
+				m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
+			}
+		}
+	}
 }
 
 // within reports whether the stored time at (unix ms) is less than window before now. A time in the future (the clock stepped back after

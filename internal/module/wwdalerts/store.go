@@ -83,6 +83,18 @@ func (s *store) beginAttempt(host, key string, since, now time.Time) error {
 	return err
 }
 
+// restoreDelivery puts the ledger row of an alert key back as it was before beginAttempt (had: there was a row; prev: its values), for an
+// attempt that queued nothing. The row is the same instance's or an older one's; either way what was there is what returns.
+func (s *store) restoreDelivery(host, key string, prev delivery, had bool) error {
+	if !had {
+		_, err := s.db.Exec(`DELETE FROM deliveries WHERE host = ? AND key = ?`, host, key)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE deliveries SET since_ms = ?, attempt_ms = ?, sent_ms = ? WHERE host = ? AND key = ?`,
+		prev.Since, prev.Attempt, prev.Sent, host, key)
+	return err
+}
+
 // markSent records that the push module said APNs took the push of this alert instance. A row that is about another instance by now
 // (the alert cleared and was raised again while the push was queued) is left alone.
 func (s *store) markSent(host, key string, since, now time.Time) error {

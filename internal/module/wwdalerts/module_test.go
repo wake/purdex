@@ -464,6 +464,66 @@ func TestAStoppedPushModuleIsNotAsked(t *testing.T) {
 	}
 }
 
+// The push module stops between the readiness look and the push: NotifyAlert answers false because the module is down, nothing was queued,
+// and the attempt that was written before the call is given back — it must not silence the alert for the 5 minutes of the interval.
+type stoppingNotifier struct {
+	mu    sync.Mutex
+	ready bool
+	stop  bool // the next NotifyAlert finds the module just stopped
+	calls int
+}
+
+func (s *stoppingNotifier) NotifyAlert(push.AlertPush) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.stop {
+		s.ready = false
+		return false
+	}
+	return true
+}
+
+func (s *stoppingNotifier) AlertReady() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.ready }
+
+func TestAnAttemptTheStoppedPushModuleNeverTookIsGivenBack(t *testing.T) {
+	e := newEnv(t)
+	n := &stoppingNotifier{ready: true, stop: true}
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	if n.calls != 1 {
+		t.Fatalf("calls = %d", n.calls)
+	}
+	// the module is back a minute later: the alert is not held back by an attempt that sent nothing
+	n.mu.Lock()
+	n.ready, n.stop = true, false
+	n.mu.Unlock()
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if n.calls != 2 {
+		t.Fatalf("calls = %d: the failed attempt was still counted", n.calls)
+	}
+	if d, ok := e.m.store.delivery("mlab", "disk_low:/"); !ok || d.Attempt != e.now.UnixMilli() {
+		t.Fatalf("the ledger row is %+v", d)
+	}
+}
+
+// A queue that is full (the module is up) is an attempt that counts: the module is not asked again before the interval.
+func TestAFullQueueStillSpendsTheAttempt(t *testing.T) {
+	e := newEnv(t)
+	n := &readinessNotifier{ready: true}
+	n.done = false
+	e.m.notify = func() (push.AlertNotifier, bool) { return readyNotifier(n) }
+	e.src.set("mlab", diskLow("mlab"))
+	e.pass(t)
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	if n.count() != 1 {
+		t.Fatalf("calls = %d, a full queue is retried only after the interval", n.count())
+	}
+}
+
 // The push module is not there (no notifier in the registry yet): nothing is attempted, and nothing is counted as an attempt.
 func TestNoPushModuleMeansNoAttempt(t *testing.T) {
 	e := newEnv(t)
