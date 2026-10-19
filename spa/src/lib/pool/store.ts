@@ -1,6 +1,9 @@
 // spa/src/lib/pool/store.ts — the App's picture of the resource pool (plan "WWD-7 design", data flow). `GET /api/pool/hosts` is read from
 // the first connected daemon (host order) that announces `pool.v1`, every 5 s. A failure follows the error table (`classify`): the next
 // daemon, the same one again, or a back-off. While the window is hidden nothing is read; turning visible reads at once, then polls again.
+// When the source daemon announces `pool.events.v1` (WWD-7a-1c) the poll stops: a read follows each `pool.changed`, the host-events
+// connection of the source opening again, and the window turning visible. A failure still retries on its own timer, and a source
+// that lost the capability (or another source without it) brings the 5 s poll back.
 // Nothing here is persisted. A host the pool cannot read is not an error here: `poolHostView` falls back to the fleet.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
@@ -11,6 +14,7 @@ import type { PoolHost } from './types'
 
 export const POLL_MS = 5000
 const POOL_CAPABILITY = 'pool.v1'
+const POOL_EVENTS_CAPABILITY = 'pool.events.v1'
 /** `busy` shows its text only after this many in a row. */
 const BUSY_SHOWN_AT = 3
 
@@ -28,6 +32,8 @@ interface PoolState {
 
   /** One read cycle; resolves to the wait before the next. An answer that arrives after `stop()` or a visibility change (a newer generation) is dropped. */
   readOnce: () => Promise<number>
+  /** `pool.changed` from `hostId`, or its host-events connection opening: one read when `hostId` is the source and the source drives itself by events. */
+  poolEvent: (hostId: string) => void
   start: () => void
   stop: () => void
   reset: () => void
@@ -55,6 +61,10 @@ function knownOld(): boolean {
   return hostOrder.some((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities !== undefined)
 }
 
+/** Does this daemon announce `pool.events.v1`? (The daemon declares it only while its watcher runs, so it can come and go.) */
+const announcesEvents = (id: string | null): boolean =>
+  id !== null && useNexHostStore.getState().byHost[id]?.daemonCapabilities?.includes(POOL_EVENTS_CAPABILITY) === true
+
 const errorOf = (e: unknown): PoolError => (e as { poolError?: PoolError })?.poolError ?? classify(null, null)
 
 export const usePoolStore = create<PoolState>((set, get) => {
@@ -64,6 +74,16 @@ export const usePoolStore = create<PoolState>((set, get) => {
   let timer: ReturnType<typeof setTimeout> | null = null
   let gen = 0
   let running = false
+  let inflight = false // a read cycle is under way
+  let again = false // an event came during it: read once more right after
+
+  let lastOk = false // the last read cycle was answered by its source (`busy` and the first back-off failures publish no error, but they are failures: their retry timer must stay)
+  let readFirst: string | null = null // the first source in host order when the read under way started
+  /** The reads are event-driven: the last one was answered by the FIRST connected pool daemon (host order, as a read picks it) and it announces `pool.events.v1`. */
+  const eventDriven = () => {
+    const src = get().sourceHostId
+    return lastOk && src !== null && announcesEvents(src) && poolSources()[0] === src
+  }
 
   const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
   const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
@@ -73,6 +93,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     for (const h of hosts) if (h.reachable && h.facts) lastLiveAt[h.alias] = h.facts.at
     failures = 0
     busy = 0
+    lastOk = true
     set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, error: null })
   }
 
@@ -89,6 +110,8 @@ export const usePoolStore = create<PoolState>((set, get) => {
 
   async function readOnce(): Promise<number> {
     const token = gen // a stop() or a visibility change bumps `gen`: whatever this read learns after that is old news
+    lastOk = false // until this cycle is answered
+    readFirst = poolSources()[0] ?? null
     const sources = poolSources()
     // the retry state belongs to the source that earned it: a source that is gone takes it along
     if (sources.length === 0 || (pinned && !sources.includes(pinned))) forgetPin()
@@ -145,25 +168,57 @@ export const usePoolStore = create<PoolState>((set, get) => {
   }
 
   async function tick(g: number) {
+    if (g !== gen || inflight) return
+    inflight = true
+    let delay: number
+    try {
+      delay = await get().readOnce()
+    } finally {
+      if (g === gen) inflight = false // a read of an older generation does not clear the newer one's mark
+    }
     if (g !== gen) return
-    const delay = await get().readOnce()
-    if (g !== gen) return
-    timer = setTimeout(() => { void tick(g) }, delay)
+    if (again) { again = false; void tick(g); return }
+    if (eventDriven()) return // no timer: the next read comes with an event, a reconnect or the window turning visible
+    timer = setTimeout(() => { timer = null; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
   }
 
   function onVisibility() {
     clearTimer()
     gen += 1
+    again = false
+    inflight = false
     if (!hidden()) void tick(gen)
   }
+
+  /** The capability (or the source's connection) can change while nothing is read: gone → the poll is back at once, there → the timer is not needed. */
+  function onCapabilities() {
+    if (!running || hidden()) return
+    // a read under way chose its source before this change: when the first source is another one now, read once more after it
+    if (inflight) { if (poolSources()[0] !== readFirst) again = true; return }
+    if (eventDriven()) clearTimer()
+    else if (timer === null) void tick(gen)
+  }
+  let unsubscribe: (() => void)[] = []
 
   return {
     ...initial,
     readOnce,
+    poolEvent(hostId) {
+      if (!running || hidden() || hostId !== get().sourceHostId) return
+      // a read under way has not been answered yet (`lastOk` is false until it is), so an event during it is kept for the next one
+      if (inflight) { again = true; return }
+      if (!eventDriven()) return
+      clearTimer()
+      void tick(gen)
+    },
     start() {
       if (running) return
       running = true
       document.addEventListener('visibilitychange', onVisibility)
+      unsubscribe = [
+        useNexHostStore.subscribe((st, prev) => { if (st.byHost !== prev.byHost) onCapabilities() }),
+        useHostStore.subscribe((st, prev) => { if (st.runtime !== prev.runtime || st.hostOrder !== prev.hostOrder) onCapabilities() }), // the source dropped
+      ]
       gen += 1
       if (!hidden()) void tick(gen)
     },
@@ -171,10 +226,15 @@ export const usePoolStore = create<PoolState>((set, get) => {
       if (!running) return
       running = false
       document.removeEventListener('visibilitychange', onVisibility)
+      for (const u of unsubscribe) u()
+      unsubscribe = []
       clearTimer()
       gen += 1
+      again = false
+      inflight = false
     },
     reset() {
+      lastOk = false
       failures = 0
       pinned = null
       busy = 0

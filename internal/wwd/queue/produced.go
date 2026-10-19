@@ -73,7 +73,9 @@ func comparable(j wire.Job) bool {
 // committed. What the callback does cannot change the answer to the worker. (The outcome of the job is not offered: it is recorded inside
 // the transaction of the end, see recordEndedOutcome.)
 func (q *Queue) offerResult(ctx context.Context, j wire.Job, p Produced) {
-	if q.opt.OnSucceeded == nil || !reusable(j) {
+	if q.opt.OnSucceeded == nil || !reusable(j) || j.Result.Log == "" {
+		// no log: a result with none is not kept for reuse. If the log is still to come (the worker posts the result first), PutLog offers the
+		// result when the log is in; if it never comes, the result is not kept.
 		return
 	}
 	defer func() {
