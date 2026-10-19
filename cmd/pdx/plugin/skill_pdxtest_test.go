@@ -45,7 +45,7 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 		}
 	}
 	// the fast lane: never queued, waits locally, refuses --detach; its result is not announced again
-	for _, want := range []string{"永遠不進佇列", "每 2 秒再問一次", "`--detach`、`--class` 都會被拒", "不另外通知", "CLAUDE_CODE_SESSION_ID"} {
+	for _, want := range []string{"永遠不進佇列", "每 2 秒再問一次", "`--detach`、`--class` 都會被拒", "不另外通知", "CLAUDE_CODE_SESSION_ID", "盡力而為", "命中快取", "請用 `--json` 取 `id`"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-test lacks %q", want)
 		}
