@@ -188,6 +188,86 @@ func TestPrepare_AFailedInstallLeavesNoEntry(t *testing.T) {
 }
 
 // An install that did not make the directory is an error, not an empty entry.
+// A monorepo's one lockfile installs under its members too: the directories named in Spec.Dirs are installed, kept and cloned with the
+// root's, are part of the key, and each must be there when the install is done.
+func TestPrepare_AWorkspaceMembersDependenciesAreKeptAndCloned(t *testing.T) {
+	c := newCache(t, 2)
+	member := func(ctx context.Context, ws string) error {
+		in := &installer{}
+		if err := in.install(ctx, ws); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(ws, "spa/node_modules"), 0o755); err != nil {
+			return err
+		}
+		return os.Symlink("../../node_modules/pkg", filepath.Join(ws, "spa/node_modules/pkg"))
+	}
+	sp := Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{"spa/node_modules"}, Fingerprint: fp, Install: member}
+	ws1 := workspace(t, "lock: v1\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(ws1, "spa"), 0o755))
+	r1, err := c.Prepare(context.Background(), ws1, sp)
+	require.NoError(t, err)
+	assert.False(t, r1.Hit)
+
+	ws2 := workspace(t, "lock: v1\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(ws2, "spa"), 0o755))
+	r2, err := c.Prepare(context.Background(), ws2, sp)
+	require.NoError(t, err)
+	assert.True(t, r2.Hit)
+	link, err := os.Readlink(filepath.Join(ws2, "spa/node_modules/pkg"))
+	require.NoError(t, err, "the member's node_modules came with the clone")
+	assert.Equal(t, "../../node_modules/pkg", link)
+
+	// the same lockfile without the member is another key: a set made without it is not served
+	ws3 := workspace(t, "lock: v1\n")
+	rootOnly, err := c.Prepare(context.Background(), ws3, spec(&installer{}))
+	require.NoError(t, err)
+	assert.NotEqual(t, r1.Key, rootOnly.Key)
+
+	// a member that the install did not make is an error, and so is a directory the cache does not know
+	ws4 := workspace(t, "other\n")
+	_, err = c.Prepare(context.Background(), ws4, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{"spa/node_modules"}, Fingerprint: fp, Install: (&installer{}).install})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not make")
+	for _, bad := range []string{"../x/node_modules", "/abs/node_modules", "spa/lib", "spa//node_modules", `a\b/node_modules`, "spa/../node_modules"} {
+		_, err = c.Prepare(context.Background(), workspace(t, "z\n"), Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Dirs: []string{bad}, Fingerprint: fp, Install: (&installer{}).install})
+		require.Error(t, err, bad)
+		assert.Contains(t, err.Error(), "not a directory of dependencies", bad)
+	}
+}
+
+// Spec.Inputs: files an install reads besides the lockfile are part of the key; a file that is not there counts as absent (and is not the
+// same as an empty one); a path that is not plain is refused.
+func TestPlan_InputsAreHashedIntoTheKey(t *testing.T) {
+	key := func(files map[string]string, inputs ...string) string {
+		ws := workspace(t, "lock: v1\n")
+		for rel, body := range files {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(ws, rel)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ws, rel), []byte(body), 0o644))
+		}
+		k, _, err := plan(ws, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Inputs: inputs, Fingerprint: fp})
+		require.NoError(t, err)
+		return k
+	}
+	none := key(nil)
+	assert.Equal(t, none, key(map[string]string{"package.json": "{}"}), "a file that is not named is not read")
+	a := key(map[string]string{"package.json": `{"a":1}`}, "package.json")
+	b := key(map[string]string{"package.json": `{"a":2}`}, "package.json")
+	assert.NotEqual(t, a, b, "the content decides")
+	assert.NotEqual(t, a, none)
+	absent := key(nil, "package.json")
+	empty := key(map[string]string{"package.json": ""}, "package.json")
+	assert.NotEqual(t, absent, empty, "absent is not empty")
+	assert.NotEqual(t, absent, none, "naming a file that is absent is not naming none")
+	assert.Equal(t, key(map[string]string{"a": "1", "b": "2"}, "a", "b"), key(map[string]string{"a": "1", "b": "2"}, "b", "a"), "the order of the list is not part of it")
+
+	for _, bad := range []string{"../x", "/etc/passwd", `a\b`, "a//b", "a/../b"} {
+		_, _, err := plan(workspace(t, "x\n"), Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Inputs: []string{bad}, Fingerprint: fp})
+		require.Error(t, err, bad)
+		assert.Contains(t, err.Error(), "not a file this cache can hash", bad)
+	}
+}
+
 func TestPrepare_AnInstallWithoutTheDirectoryIsAnError(t *testing.T) {
 	c := newCache(t, 2)
 	_, err := c.Prepare(context.Background(), workspace(t, "y\n"), spec(&installer{skip: true}))

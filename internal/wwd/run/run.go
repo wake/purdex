@@ -240,6 +240,10 @@ func endGroup(pgid int, killAfter time.Duration, done <-chan error) error {
 	}
 }
 
+// LookPath is lookPath for a caller outside the package that needs to start a program as a job would find it (the worker asking a tool
+// its version for a cache key): the PATH of env, not that of this process.
+func LookPath(name, dir string, env []string) (string, error) { return lookPath(name, dir, env) }
+
 // lookPath finds the program the way the command's own environment would: a name with a slash is relative to dir, a bare name
 // is searched in the PATH of env, not in the PATH of the process that runs the job.
 func lookPath(name, dir string, env []string) (string, error) {

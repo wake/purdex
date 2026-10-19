@@ -51,6 +51,9 @@ type Config struct {
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
 	Repos map[string]string `toml:"repos"`
+	// DepsRoot holds the dependency cache and the package managers' download caches (default <data_dir>/deps; keep it on the volume of work_root
+	// so that installed dependencies are cloned, not copied).
+	DepsRoot string `toml:"deps_root"`
 }
 
 // WorkerConfig is the worker's starting settings. Heavy and Light are slots; an
@@ -68,6 +71,11 @@ type WorkerConfig struct {
 	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
 	// sandbox, the command runs as a process group of the daemon's own account.
 	SandboxUser string `toml:"sandbox_user"`
+	// DepsKeep is how many installed dependency sets the cache keeps (default 2; a set is a node_modules or vendor tree, hundreds of MB for a
+	// large project). 1 on a host short of disk.
+	DepsKeep int `toml:"deps_keep"`
+	// DepsStoreMaxMB bounds each package manager's download cache under deps_root (default 4096): one over it is emptied before the next install.
+	DepsStoreMaxMB int `toml:"deps_store_max_mb"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -166,6 +174,12 @@ func (c Config) validateWorker() error {
 	}
 	if c.Worker.Light != nil && *c.Worker.Light < 0 {
 		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
+	}
+	if c.Worker.DepsKeep < 0 || c.Worker.DepsKeep > 50 {
+		return fmt.Errorf("worker.deps_keep is %d, it must be 0 (the default, 2) or 1-50", c.Worker.DepsKeep)
+	}
+	if c.Worker.DepsStoreMaxMB < 0 || c.Worker.DepsStoreMaxMB > 1_000_000 {
+		return fmt.Errorf("worker.deps_store_max_mb is %d, it must be 0 (the default, 4096) or 1-1000000", c.Worker.DepsStoreMaxMB)
 	}
 	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)
@@ -331,6 +345,9 @@ func LoadConfig(path, home string) (Config, error) {
 	}
 	if c.WorkRoot == "" {
 		c.WorkRoot = filepath.Join(c.DataDir, "work")
+	}
+	if c.DepsRoot == "" {
+		c.DepsRoot = filepath.Join(c.DataDir, "deps")
 	}
 	return c, nil
 }

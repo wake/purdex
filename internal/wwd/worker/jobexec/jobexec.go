@@ -70,11 +70,19 @@ type Config struct {
 	// Procs and KillAfter are passed to run.Run (the marker sweep's process source and the TERM→KILL grace); zero values are its defaults.
 	Procs     run.ProcSource
 	KillAfter time.Duration
+	// DepsDir is where the dependency cache and the package managers' download caches live (a sibling of WorkRoot, on the same volume, so
+	// that a clone of installed dependencies is cheap); DepsKeep is how many installed sets are kept (2 when zero). "": a task that declares
+	// deps cannot be prepared on this worker. The directory is made when a job first needs it.
+	DepsDir  string
+	DepsKeep int
+	// DepsStoreMaxMB bounds each package manager's download cache in DepsDir; one over it is emptied before the next install (4096 when zero).
+	DepsStoreMaxMB int
 }
 
 // Exec implements runner.Exec.
 type Exec struct {
-	cfg Config
+	cfg  Config
+	deps depsState // the dependency cache and what is remembered of installs (deps.go)
 	// dbJobs: the job directories whose job has a database (made in Prepare, dropped with the workspace)
 	dbJobs sync.Map
 }
@@ -186,6 +194,12 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 			return runner.Plan{}, &runner.Rejected{Reason: rej.Reason()}
 		}
 		return runner.Plan{}, err
+	}
+	// a task that declares lockfiles gets its installed dependencies before anything else is made for it (a database, say)
+	if len(p.Task.Deps) > 0 {
+		if err := e.prepareDeps(ctx, ref, job, ws, p.Task.Deps, p.Env); err != nil {
+			return runner.Plan{}, err
+		}
 	}
 	env := p.Env
 	if p.Task.DB == "per-job" {
