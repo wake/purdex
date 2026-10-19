@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -172,6 +173,9 @@ func scanJob(r scanner) (wire.Job, error) {
 		var r wire.Result
 		if err := json.Unmarshal([]byte(result.String), &r); err != nil {
 			return wire.Job{}, err
+		}
+		if err := r.Validate(); err != nil { // a result is checked when it is read back as when it was posted (the digest, WWD-5b-2r)
+			return wire.Job{}, fmt.Errorf("job %s: stored result: %w", j.ID, err)
 		}
 		j.Result = &r
 	}

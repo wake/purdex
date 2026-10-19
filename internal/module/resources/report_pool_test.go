@@ -22,7 +22,7 @@ var poolDay0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 // minuteFacts is one wwd minute rollup: 4 CPUs, 16000 MB of which availMB is free.
 func minuteFacts(i int, load1 float64, availMB, pressure int, zone wire.Zone, heavy, light int) wire.Facts {
 	return wire.Facts{
-		V: wire.Proto, Alias: "mlab", At: poolDay0.Add(time.Duration(i) * time.Minute),
+		V: wire.FactsProto, Alias: "mlab", At: poolDay0.Add(time.Duration(i) * time.Minute),
 		CPU:     wire.CPU{NCPU: 4, Load1: load1, IdlePct: 80},
 		Mem:     wire.Mem{TotalMB: 16000, AvailableMB: availMB, Pressure: pressure},
 		Derived: wire.Derived{Zone: zone},

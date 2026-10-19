@@ -51,6 +51,24 @@ type Summary struct {
 	Skipped  int       `json:"skipped"`
 	Failures []Failure `json:"failures"`
 	Tail     []string  `json:"tail"`
+	// PassedDigest identifies the set of tests that passed: "sha256:" and the hex of the SHA-256 of the sorted passed test ids, each
+	// followed by a newline (WWD-5b-2r; the summary parsers fill it from 5b-2w on, only while every pool host reports proto >= 3).
+	// Empty: not computed (an older writer, or a task whose report has no per-test ids). Qualification (spec §7) compares it and treats
+	// a missing one on either half as a mismatch.
+	PassedDigest string `json:"passed_digest,omitempty"`
+}
+
+var rePassedDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// Validate checks the digest form; the counts and lists are the parsers' own.
+func (s *Summary) Validate() error {
+	if s == nil {
+		return nil
+	}
+	if s.PassedDigest != "" && !rePassedDigest.MatchString(s.PassedDigest) {
+		return fmt.Errorf("summary: passed_digest %q is not sha256:<64 hex>", s.PassedDigest)
+	}
+	return nil
 }
 
 // Result is a job's stored outcome (spec §4.1). Exit is null when no command
@@ -239,8 +257,20 @@ func (j Job) Validate() error {
 		(j.Manual == PositionFront && j.ManualSeq > 0) || (j.Manual == PositionBack && j.ManualSeq < 0) {
 		return fmt.Errorf("job: manual_seq %d does not fit the place %q", j.ManualSeq, j.Manual)
 	}
+	if err := j.Result.Validate(); err != nil {
+		return err
+	}
 	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
 	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
+}
+
+// Validate checks what a stored result carries that has a form of its own: the summary's digest. Nil-safe, so a job that has no result
+// yet passes. A result read back from a peer or from the cache goes through here, as a posted one goes through ResultRequest.Validate.
+func (r *Result) Validate() error {
+	if r == nil {
+		return nil
+	}
+	return r.Summary.Validate()
 }
 
 func validatePayload(task string, repo Repo, snap Snapshot, timeoutS, queueTimeoutS int) error {
@@ -382,6 +412,9 @@ func (r ResultRequest) Validate() error {
 	}
 	if !r.State.ResultState() {
 		return fmt.Errorf("result: state %q cannot be posted", r.State)
+	}
+	if err := r.Summary.Validate(); err != nil {
+		return err
 	}
 	if r.Reason != "" && !slices.Contains(ResultReasons, r.Reason) {
 		return fmt.Errorf("result: reason %q is not one a worker may post", r.Reason)

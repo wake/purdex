@@ -80,6 +80,7 @@ func TestCacheRefusesWhatIsNotAReusableResult(t *testing.T) {
 		"a reuse":       func(c *CacheEntry) { c.Result.CacheHit = true },
 		"superseded":    func(c *CacheEntry) { c.Result.SupersededBy = &super },
 		"a reason":      func(c *CacheEntry) { c.Result.Reason = "infra" },
+		"a bad digest":  func(c *CacheEntry) { c.Result.Summary = &wire.Summary{PassedDigest: "nope"} },
 		"in the future": func(c *CacheEntry) { c.CreatedAt = cacheNow.Add(cacheClockSlack + time.Second) },
 	} {
 		c := cacheEntry("k", cacheNow, "")
@@ -119,6 +120,7 @@ func TestCacheDamagedRowIsAnErrorNotAHit(t *testing.T) {
 		{"failed exit", `{"exit":1,"host":"h","log":"l"}`, `{}`, "h"},
 		{"no log", `{"exit":0,"host":"h"}`, `{}`, "h"},
 		{"host column differs", `{"exit":0,"host":"h","log":"l"}`, `{}`, "other"},
+		{"malformed digest", `{"exit":0,"host":"h","log":"l","summary":{"passed":1,"failed":0,"skipped":0,"failures":[],"tail":[],"passed_digest":"nope"}}`, `{}`, "h"},
 	} {
 		if _, err := s.DB().Exec(`INSERT INTO result_cache (key, rec, host, host_fingerprint, label, created_ms) VALUES (?, ?, ?, ?, '', ?)`,
 			c.key, c.rec, c.host, c.fp, cacheNow.UnixMilli()); err != nil {

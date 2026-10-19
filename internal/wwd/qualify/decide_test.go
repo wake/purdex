@@ -10,8 +10,8 @@ import (
 
 var now = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 
-var tsc = Task{Repo: "purdex", Name: "tsc", Reference: "air26", Args: []string{}, Needs: []string{"os:darwin", "tool:node24"}}
-var spa = Task{Repo: "purdex", Name: "spa-related", Reference: "air26", Args: []string{"a.test.ts"}, Needs: []string{"tool:node24", "tool:pnpm10"}}
+var tsc = Task{Repo: "purdex", Name: "tsc", Reference: "air26", Args: []string{}, Needs: []string{"os:darwin", "tool:node24"}, DefHash: "d-tsc"}
+var spa = Task{Repo: "purdex", Name: "spa-related", Reference: "air26", Args: []string{"a.test.ts"}, Needs: []string{"tool:node24", "tool:pnpm10"}, DefHash: "d-spa"}
 
 func mserv() Host {
 	return Host{Alias: "mserv", WorkerOn: true, Labels: []string{"arch:amd64", "os:linux", "repo:purdex", "tool:node24", "tool:pnpm10"}, Fingerprint: map[string]string{"node": "24.14.0"}}
@@ -77,6 +77,23 @@ func TestATaskWithoutQualifyIsNotAsked(t *testing.T) {
 	bare := Task{Repo: "purdex", Name: "lint"}
 	if err := Check(input(bare), bare); !errors.Is(err, ErrNoQualify) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A task without the manifest's definition hash is never asked for, by the trigger or by hand: without the hash the check that the task
+// is still the one that was run would compare an empty string with itself (fail closed, and 5b-2c must fill it).
+func TestATaskWithoutADefinitionHashIsNotAsked(t *testing.T) {
+	bare := tsc
+	bare.DefHash = ""
+	in := input(bare)
+	if err := Check(in, bare); !errors.Is(err, ErrNoDefinition) {
+		t.Fatalf("%v", err)
+	}
+	if got := Decide(in); len(got) != 0 {
+		t.Fatalf("the trigger asked for it: %v", labelsOf(got))
+	}
+	if _, err := Manual(in, "purdex/tsc"); !errors.Is(err, ErrNoDefinition) {
+		t.Fatalf("by hand: %v", err)
 	}
 }
 
