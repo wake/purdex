@@ -16,11 +16,10 @@ import { DEFAULT_TEAM_ICON, MASTER_PROFILE_ID, normalizeLocalProfileName, useLoc
 import { HOST_COLOR_PRESETS, normalizeHostColor } from '../../../lib/host-color'
 import { FloatingPanel } from '../../FloatingPanel'
 import { WorkspaceIconPicker } from '../../../features/workspace/components/WorkspaceIconPicker'
-import { ProfileIcon } from '../../../features/workspace/components/ProfileSwitcher'
-import { WorkspaceIcon } from '../../../features/workspace/components/WorkspaceIcon'
+import { ProfileIcon, TeamIcon } from '../../../features/workspace/components/ProfileSwitcher'
 import { canTintProfile } from './profile-rules'
 
-type Reason = 'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon'
+type Reason = 'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color' | 'bad-team-icon' | 'bad-team-weight' | 'bad-team-color'
 
 const REASON_KEY: Record<Reason, string> = {
   'not-found': 'settings.profile.local.error.not_found',
@@ -29,6 +28,8 @@ const REASON_KEY: Record<Reason, string> = {
   'bad-weight': 'settings.profile.local.error.bad_weight',
   'bad-color': 'settings.profile.local.error.bad_color',
   'bad-team-icon': 'settings.profile.local.error.bad_team_icon',
+  'bad-team-weight': 'settings.profile.local.error.bad_team_weight',
+  'bad-team-color': 'settings.profile.local.error.bad_team_color',
 }
 
 const LABEL = 'w-16 shrink-0 text-xs text-text-secondary'
@@ -185,14 +186,15 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
           onClick={() => setTeamPickerOpen((v) => !v)}
           className="w-7 h-7 rounded border border-border-default flex items-center justify-center text-text-secondary hover:text-text-primary hover:border-text-muted cursor-pointer"
         >
-          <WorkspaceIcon icon={profile.teamIcon ?? DEFAULT_TEAM_ICON} name="" size={18} />
+          <TeamIcon appearance={profile} size={18} testId="profile-edit-team-icon-glyph" />
         </button>
         <button
           type="button"
           data-testid="profile-edit-team-icon-default"
-          disabled={profile.teamIcon === undefined}
+          disabled={profile.teamIcon === undefined && profile.teamIconWeight === undefined}
           onClick={() => {
-            apply({ teamIcon: null })
+            // The default icon and its default weight go together; the colour is its own choice (below).
+            apply({ teamIcon: null, teamIconWeight: null })
             setTeamPickerOpen(false)
           }}
           className={BTN}
@@ -204,14 +206,47 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
             <WorkspaceIconPicker
               inline
               currentIcon={profile.teamIcon ?? DEFAULT_TEAM_ICON}
+              currentWeight={profile.teamIconWeight}
               onSelect={(name) => {
                 apply({ teamIcon: name === '' ? null : name })
                 setTeamPickerOpen(false)
               }}
+              // Unlike the profile icon's, this weight stands alone: the team icon is always there (the default one too) to wear it.
+              onWeightChange={(weight) => apply({ teamIconWeight: weight })}
               onCancel={() => setTeamPickerOpen(false)}
             />
           </FloatingPanel>
         )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={LABEL}>{t('settings.profile.local.team_color')}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {HOST_COLOR_PRESETS.map((hex) => (
+            <button
+              key={hex}
+              type="button"
+              data-testid={`profile-edit-team-color-${hex}`}
+              aria-label={hex}
+              aria-pressed={profile.teamColor === hex}
+              onClick={() => apply({ teamColor: hex })}
+              className={`w-[18px] h-[18px] rounded cursor-pointer border border-border-default ${
+                profile.teamColor === hex ? 'ring-2 ring-offset-1 ring-offset-surface-primary ring-text-primary' : ''
+              }`}
+              style={{ background: hex }}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          data-testid="profile-edit-team-color-follow"
+          aria-pressed={profile.teamColor === undefined}
+          disabled={profile.teamColor === undefined}
+          onClick={() => apply({ teamColor: null })}
+          className={BTN}
+        >
+          {t('settings.profile.local.team_color_follow')}
+        </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
