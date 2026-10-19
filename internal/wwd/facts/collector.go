@@ -32,8 +32,12 @@ type RawMem struct {
 	Pageouts, Swapouts   uint64
 	NoPageouts           bool // Pageouts could not be read: page_out_rate is null
 	NoSwapouts           bool // Swapouts could not be read: swap_out_rate is null
-	SwapUsedBytes        *uint64
-	CompressorBytes      *uint64
+	// Decompressions is the compressor's running count of pages brought back since boot (macOS); HaveDecompressions says it was read.
+	// Without it the decompress rate is absent (Linux has PSI instead).
+	Decompressions     uint64
+	HaveDecompressions bool
+	SwapUsedBytes      *uint64
+	CompressorBytes    *uint64
 
 	// Linux reads. AvailableBytes (MemAvailable) replaces Free + Inactive, and
 	// PSI is the production slices' pressure (nil: unreadable). Linux marks the
@@ -68,6 +72,7 @@ func BuildCPU(prev *RawCPU, cur RawCPU) wire.CPU {
 // belongs to one goroutine.
 type MemBuilder struct {
 	pageouts, swapouts []hostmem.PageSample
+	decompressions     []hostmem.PageSample
 	linux              LinuxPressure
 }
 
@@ -106,6 +111,10 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 	if !raw.NoSwapouts {
 		so := b.rate(&b.swapouts, now, raw.Swapouts)
 		m.SwapOutRate = &so
+	}
+	if raw.HaveDecompressions {
+		dr := b.rate(&b.decompressions, now, raw.Decompressions)
+		m.DecompressRate = &dr
 	}
 	return m
 }

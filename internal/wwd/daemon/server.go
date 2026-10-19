@@ -82,6 +82,9 @@ func New(o Options) *Daemon {
 	if b == nil {
 		b = NewBroker()
 	}
+	if o.Sampler != nil {
+		b.SetShape(o.Sampler.Shaped)
+	}
 	return &Daemon{opts: o, broker: b, pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
 }
 
