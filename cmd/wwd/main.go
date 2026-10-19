@@ -221,7 +221,7 @@ func run(cfgPath string) error {
 			l, fp := d.Labels()
 			return qualify.Host{Alias: alias, WorkerOn: state.Worker().Enabled, Labels: l, Fingerprint: fp}
 		}},
-		Granted: d.RefreshLabels,
+		Granted: func() { d.RefreshLabels() },
 	})
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
@@ -263,10 +263,11 @@ func run(cfgPath string) error {
 		}
 		producers.Wait()
 	})
-	producers.Add(3)
+	producers.Add(4)
 	go func() { defer producers.Done(); sweepQueue(ctx, q) }()                            // lapsed leases, queue timeouts, retention
 	go func() { defer producers.Done(); fastLane.Run(ctx) }()                             // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	go func() { defer producers.Done(); d.RunQuarantine(ctx, daemon.QuarantinePeriod) }() // reads the disagreements that concern this host and quarantines its labels (spec §7)
+	go func() { defer producers.Done(); qualifier.RunSettle(ctx, qualifySettlePeriod) }() // a pair a person started ends here (the automatic trigger is WWD-5b-2c-2)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err

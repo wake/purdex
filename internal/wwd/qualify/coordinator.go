@@ -110,6 +110,27 @@ func New(cfg Config) *Coordinator {
 	return &Coordinator{cfg: cfg, pairs: map[string]*openPair{}, last: map[string]Attempt{}}
 }
 
+// Settle only settles the pairs that are done (a pair a person started by hand needs no tick to finish); it starts nothing.
+func (c *Coordinator) Settle(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.settle(ctx)
+}
+
+// RunSettle calls Settle every period until ctx ends.
+func (c *Coordinator) RunSettle(ctx context.Context, period time.Duration) {
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.Settle(ctx)
+		}
+	}
+}
+
 // Tick settles the pairs that are done, then starts the pairs the automatic trigger asks for. It is meant to be called at the facts
 // cadence; every call is cheap when nothing is due.
 func (c *Coordinator) Tick(ctx context.Context) {

@@ -497,3 +497,44 @@ func TestAnUnreadableEarnedStoreStartsNothing(t *testing.T) {
 		t.Fatal("a pair was started without knowing what is held")
 	}
 }
+
+// A pair a person started by hand is settled by Settle alone: no other request and no automatic tick is needed.
+func TestSettleFinishesAManualPairWithoutATick(t *testing.T) {
+	r := newRig(t, tsc)
+	if _, err := r.c.Request(ctx(), "purdex/tsc"); err != nil {
+		t.Fatal(err)
+	}
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	r.now = r.now.Add(3 * time.Minute)
+	r.c.Settle(ctx())
+	if inf, rec := r.c.Status(); len(inf) != 0 || len(rec) != 1 || rec[0].Outcome != OutcomeMatch {
+		t.Fatalf("%+v %+v", inf, rec)
+	}
+	if r.granted.Load() != 1 {
+		t.Fatalf("the daemon was told %d times", r.granted.Load())
+	}
+}
+
+func TestRunSettleSettlesOnItsPeriodAndStopsWithItsContext(t *testing.T) {
+	r := newRig(t, tsc)
+	if _, err := r.c.Request(ctx(), "purdex/tsc"); err != nil {
+		t.Fatal(err)
+	}
+	r.finishPair(goodRes("mserv"), goodRes("air26"))
+	cctx, cancel := context.WithCancel(ctx())
+	done := make(chan struct{})
+	go func() { r.c.RunSettle(cctx, time.Millisecond); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.granted.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunSettle did not stop with its context")
+	}
+	if r.granted.Load() != 1 {
+		t.Fatalf("settled %d times", r.granted.Load())
+	}
+}
