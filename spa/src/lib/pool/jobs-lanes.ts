@@ -4,6 +4,9 @@ import type { PoolHost, PoolZone } from './types'
 import { WAIT_LONG_S } from '../watch/queue-time'
 import { displayOrder, lanes, noHostToGoTo, type PoolHostLabels } from './jobs-view'
 
+/** What a job's card says of it: `repo task args` (the full line as its title). */
+export const jobLine = (j: PoolJob): string => [j.repo.name, j.task, ...j.args].filter((x) => x !== '').join(' ')
+
 export interface LaneModel {
   /** The worker's name (the pool host's alias); `''` is the lane of live jobs with no claim to say where they are. */
   alias: string

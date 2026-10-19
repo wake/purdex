@@ -4,13 +4,10 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { mss } from '../../../lib/watch/queue-time'
 import { reasonWord } from '../../../lib/pool/words'
-import type { LaneModel } from '../../../lib/pool/jobs-lanes'
+import { jobLine, type LaneModel } from '../../../lib/pool/jobs-lanes'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 
 const CARD = 'shrink-0 flex items-center gap-1.5 h-7 w-[200px] px-2 rounded-md text-xs font-mono cursor-default'
-
-/** What the card says of the job: `repo task args` (the full line as its title). */
-export const jobLine = (j: PoolJob): string => [j.repo.name, j.task, ...j.args].filter((x) => x !== '').join(' ')
 
 function JobCard({ job, now }: { job: PoolJob; now: number }) {
   const t = useI18nStore((s) => s.t)
