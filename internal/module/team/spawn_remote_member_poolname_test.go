@@ -3,6 +3,7 @@ package teammod
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -175,4 +176,21 @@ func TestRemoteSpawnPoolName_TheEndsOfAForwardedOpReleaseIt(t *testing.T) {
 			t.Fatalf("released = %v, want the abandoned op's name given back", got)
 		}
 	})
+}
+
+// codex R1 on #3532: pool_name is a wire field like the others (256 bytes, UTF-8, no control character): a bad one is a 400, not a spawn
+// quietly left without a name. Mutation gate: leave it out of validateCommand → red.
+func TestRemoteSpawnPoolName_ABadFieldIsRefused(t *testing.T) {
+	for name, bad := range map[string]string{"too long": strings.Repeat("a", 300), "a control character": "mi\x01a"} {
+		f, root := remoteSpawnFixture(t)
+		n := withNames(f, "")
+		f.holdRunners()
+		code, body := f.postCmd(leadPrincipal(), poolSpawnCommand(cmdUUID1, root, bad))
+		if code != http.StatusBadRequest {
+			t.Fatalf("%s: spawn = %d %s, want 400", name, code, body)
+		}
+		if _, found, _ := f.m.store.GetSpawnOp(cmdUUID1); found || len(n.exact) != 0 {
+			t.Fatalf("%s: a refused command left an op (%v) or reserved %+v", name, found, n.exact)
+		}
+	}
 }

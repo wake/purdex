@@ -223,7 +223,7 @@ func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, o
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
 	for _, s := range []string{c.ID, c.Kind, c.ToHostID, c.TeamID, c.TeamName, c.MK, c.Lead.SessionID, c.Lead.Ref, c.Lead.Title,
-		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.OpID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel} {
+		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.OpID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel, c.PoolName} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
