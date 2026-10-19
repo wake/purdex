@@ -4,7 +4,6 @@
 import type { ReactNode } from 'react'
 import { Avatar } from '../../Avatar'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { personaColor } from '../../../lib/names/persona-color'
 import { countUnits, PERSONA_LIMITS, type PersonaIssue } from '../../../lib/names/persona-limits'
 import type { Persona, PersonaText } from '../../../lib/names/persona-types'
 
@@ -92,7 +91,7 @@ export function PersonaForm({ draft, isNew, issues, saving, avatarPicker, onChan
       {/* While a save is in flight nothing can be edited: its answer is applied to exactly what was sent. */}
       <fieldset disabled={saving} className="flex flex-col gap-3 border-0 p-0 m-0 min-w-0">
       <div className="flex items-center gap-3">
-        <Avatar size={96} code={draft.code || '?'} name={draft.name} src={draft.avatar_data} fallbackColor={personaColor(draft.code)} />
+        <Avatar size={96} code={draft.code || '?'} name={draft.name} src={draft.avatar_data} />
         <div className="min-w-0 flex-1">{avatarPicker}</div>
       </div>
 

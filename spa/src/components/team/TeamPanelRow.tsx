@@ -5,8 +5,6 @@ import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { TeamSeatLight } from './TeamSeatLight'
 import { Avatar } from '../Avatar'
 import { useSeat } from '../../lib/names/seat'
-import { useHostLook } from '../../lib/host-look'
-import { resolveHostColors } from '../../lib/host-color'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
@@ -67,8 +65,6 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
   // Who the row is (name pool v2): the persona by the code its address ends in. With none the avatar is initials on the host colour, same size, so the
   // layout does not move, and the title takes the name's place.
   const persona = useSeat(seat.address)
-  const look = useHostLook(seat.hostId === '' ? null : seat.hostId)
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? color
   const name = persona?.name ?? seat.title
   const showTitle = persona !== null && seat.title !== '' && seat.title !== persona.name
   return (
@@ -95,7 +91,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
       {/* The avatar spans the row's lines; the light is its corner badge (a seat in transition dims it) */}
       <div data-testid="team-panel-avatar" aria-hidden="true" className="relative w-11 h-11 flex-shrink-0">
-        <Avatar size={44} code={persona?.code ?? ''} name={name} src={persona?.avatar} fallbackColor={faceColor} />
+        <Avatar size={44} code={persona?.code ?? ''} name={name} src={persona?.avatar} />
         <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -bottom-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
           <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
         </span>

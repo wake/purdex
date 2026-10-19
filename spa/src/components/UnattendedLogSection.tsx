@@ -5,8 +5,7 @@
 import { Avatar } from './Avatar'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
-import { hostLabel, hostLookOf, useHostLook } from '../lib/host-look'
-import { resolveHostColors } from '../lib/host-color'
+import { hostLabel, hostLookOf } from '../lib/host-look'
 import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-format'
 import { leadNameBySession } from '../lib/team/lead-name'
 import { useSeat } from '../lib/names/seat'
@@ -27,16 +26,14 @@ const whoOf = (t: T, by: Client): string => (by.kind === 'app' ? t('unattended.l
 function DecisionRow({ hostId, entry, showHost }: { hostId: string; entry: UnattendedLogDecision; showHost: boolean }) {
   const t = useI18nStore((s) => s.t)
   const rosters = useTeamRosterStore((s) => s.byHost)
-  const look = useHostLook(hostId)
   // the daemon's resolved address only: `origin.name` is the registry's raw name, which a session sets itself and may end in any persona's code
   const seat = useSeat(entry.origin.address ?? '')
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   const team = entry.kind === 'lead' ? leadNameBySession(rosters, entry.origin.session_id, entry.origin.title) : undefined
   const name = team?.name ?? seat?.name ?? approvalSessionLabel(entry.origin)
   const tag = tagOf(entry, t)
   return (
     <li data-testid="unattended-log-row" data-state={entry.state} className="flex items-center gap-2">
-      <span aria-hidden="true" className="flex-shrink-0"><Avatar size={18} code={seat?.code ?? ''} name={name} src={seat?.avatar} fallbackColor={faceColor} /></span>
+      <span aria-hidden="true" className="flex-shrink-0"><Avatar size={18} code={seat?.code ?? ''} name={name} src={seat?.avatar} /></span>
       <span data-testid="unattended-log-name" className="min-w-0 truncate font-medium text-text-primary">{name}</span>
       <span data-testid="unattended-log-kind" className="flex-shrink-0 text-text-muted">{kindText(t, entry.kind)}</span>
       <span data-testid="unattended-log-tag" data-tone={tag.tone} className={`flex-shrink-0 rounded px-1.5 text-[10.5px] ${TAG_CLASS[tag.tone]}`}>{tag.text}</span>

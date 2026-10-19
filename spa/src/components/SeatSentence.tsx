@@ -2,8 +2,6 @@
 // kept as the tooltip. A name that is no persona stays the plain text it was, so a conversation with no personas reads as it always did.
 import { Avatar } from './Avatar'
 import { useSeat } from '../lib/names/seat'
-import { useHostLook } from '../lib/host-look'
-import { resolveHostColors } from '../lib/host-color'
 
 /** What a localized template is given for its `{{name}}` slot; <SeatSentence> puts the person there. */
 export const SEAT_MARK = ''
@@ -13,7 +11,7 @@ interface InlineProps {
   address: string
   /** What stands for the person when no persona matches. */
   fallback: string
-  /** The host whose colour the initials sit on when the persona has no picture. */
+  /** Not used any more: a persona's initial sits on the persona's own colour, not the host's. */
   hostId: string | null
   size?: 14 | 16 | 18
   /** Show the address as this element's own tooltip (default). Off where the surrounding control already carries a fuller one. */
@@ -21,14 +19,12 @@ interface InlineProps {
 }
 
 /** `[avatar] Name` for a persona; the plain fallback text otherwise. */
-export function SeatInline({ address, fallback, hostId, size = 14, titled = true }: InlineProps) {
+export function SeatInline({ address, fallback, size = 14, titled = true }: InlineProps) {
   const seat = useSeat(address)
-  const look = useHostLook(hostId)
   if (seat === null) return <>{fallback}</>
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
   return (
     <span data-testid="seat-inline" data-seat={seat.code} title={titled ? address : undefined} className="inline-flex items-center gap-1 align-middle">
-      <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} decorative />
+      <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} decorative />
       <span>{seat.name}</span>
     </span>
   )

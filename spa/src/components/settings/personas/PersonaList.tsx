@@ -3,7 +3,6 @@
 import { Crown } from '@phosphor-icons/react'
 import { Avatar } from '../../Avatar'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { personaColor } from '../../../lib/names/persona-color'
 import type { Persona } from '../../../lib/names/persona-types'
 
 interface Props {
@@ -36,7 +35,7 @@ export function PersonaList({ items, selected, disabled = false, onSelect }: Pro
               selected === p.code ? 'bg-surface-secondary' : ''
             } ${p.retired ? 'opacity-45' : ''}`}
           >
-            <Avatar size={32} code={p.code} name={p.name} src={p.avatar_data} fallbackColor={personaColor(p.code)} />
+            <Avatar size={32} code={p.code} name={p.name} src={p.avatar_data} />
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1">
                 <span className="truncate text-sm text-text-primary">{p.name || t('settings.personas.list.no_name')}</span>

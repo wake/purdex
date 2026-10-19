@@ -1,15 +1,9 @@
-// spa/src/components/deck/SeatFace.tsx — a persona's face inside the deck (name pool v2 spec §9.4): the avatar of the agent speaking, on the colour of the host the conversation lives on when there is no picture.
-import { useContext } from 'react'
+// spa/src/components/deck/SeatFace.tsx — a persona's face inside the deck (name pool v2 spec §9.4): the avatar of the agent speaking, on the persona's own colour when there is no picture.
 import { Avatar } from '../Avatar'
-import { ConversationHostContext } from './conversation-host'
-import { useHostLook } from '../../lib/host-look'
-import { resolveHostColors } from '../../lib/host-color'
 import type { Seat } from '../../lib/names/seat'
 
 export function SeatFace({ seat, size }: { seat: Seat; size: 14 | 16 }) {
-  const look = useHostLook(useContext(ConversationHostContext))
-  const faceColor = resolveHostColors({ colors: look.colors, color: look.color }, 'terminal')?.main ?? '#6b7280'
-  return <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} fallbackColor={faceColor} decorative />
+  return <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} decorative />
 }
 
 /** The compact line over a later speech start (spec §9.4): the face and the name in muted text, no time. */
