@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, act, within } from '@testing-library/react'
+import { render, screen, act, within, fireEvent } from '@testing-library/react'
 import { FleetCells } from './FleetCells'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
@@ -76,6 +76,17 @@ describe('FleetCells — on the pool', () => {
     await flush()
     expect(screen.getByTestId('worker-running-d-a')).toBeTruthy()
     expect(screen.getByTestId('queue-badge-d-a')).toHaveTextContent('2')
+  })
+
+  it('an empty list from the pool is an answer: the fleet host is drawn as a fallback, with the pool part, not as before', async () => {
+    fetchPoolHosts.mockResolvedValue([])
+    answer()
+    render(<FleetCells variant="wide" />)
+    await flush()
+    expect(screen.getByTestId('load-ring-d-a').dataset.zone).toBe('normal')
+    expect(usePoolStore.getState().sourceHostId).toBe(A)
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-d-a'))
+    expect(screen.getByTestId('host-card-pool-fallback')).toBeTruthy()
   })
 
   it('every daemon failing: the host falls back to the fleet readings, not dimmed', async () => {

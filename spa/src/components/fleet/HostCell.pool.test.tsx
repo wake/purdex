@@ -146,6 +146,19 @@ describe('HostCard on the pool — the lower part', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }), headroom_reasons: { heavy: ['from_the_future'], light: [] } })))
     expect(rowText('headroom')).toContain('from_the_future')
   })
+  it('both classes at 0 for different reasons: each shows its own', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: ['slots_full'], light: ['owner_active'] } })))
+    const reasons = screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)
+    expect(reasons).toEqual(['All slots are in use', 'The owner is at this machine'])
+  })
+  it('both classes at 0 for the same reason: shown once', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 0 } } }), headroom_reasons: { heavy: ['worker_off'], light: ['worker_off'] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['Worker is off'])
+  })
+  it('only light at 0: its reason shows', () => {
+    card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 1, light: 0 } } }), headroom_reasons: { heavy: [], light: ['slots_full'] } })))
+    expect(screen.getAllByTestId('host-card-pool-reason').map((e) => e.textContent)).toEqual(['All slots are in use'])
+  })
   it('a zero without reasons from the daemon is shown as 0, no reason invented', () => {
     card(cell(poolHost({ facts: factsWith({ derived: { ...darwin.derived, headroom: { heavy: 0, light: 2 } } }) })))
     expect(rowText('headroom')).toContain('heavy 0')

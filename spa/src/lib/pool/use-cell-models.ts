@@ -33,11 +33,12 @@ export function usePoolCellModels(views: FleetHostView[]): { models: PoolCellMod
   const now = useClock()
   const hosts = usePoolStore((s) => s.hosts)
   const oldDaemon = usePoolStore((s) => s.oldDaemon)
+  const answered = usePoolStore((s) => s.sourceHostId !== null)
   const failed = usePoolStore((s) => s.error !== null)
   const lastLiveAt = usePoolStore((s) => s.lastLiveAt)
   const fleetStale = useFleetStore((s) => s.stale)
-  // Active once the pool has said something: hosts, or that every daemon failed. Before the first read the cells stay the fleet's.
-  const active = !oldDaemon && (hosts.length > 0 || failed)
+  // Active once the pool has said something: a list (an empty one is an answer too), or that every daemon failed. Before the first read the cells stay the fleet's.
+  const active = !oldDaemon && (answered || failed)
   const models = useMemo(() => views.map((v) => {
     if (!active) return poolCellModel(v, null, null)
     const pool = matchPoolHost(hosts, v)

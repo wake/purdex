@@ -63,9 +63,11 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
   const t = useI18nStore((s) => s.t)
   const unknown = t('pool.card.unknown')
   const w = pool.worker
-  const reasonOf = (n: number, list: string[] | undefined) => (n === 0 && list && list.length > 0
-    ? <span data-testid="host-card-pool-reason" className="block text-text-muted">{list.map((c) => reasonWord(c, t)).join(' · ')}</span>
-    : null)
+  const wordsOf = (n: number, list: string[] | undefined) => (n === 0 && list && list.length > 0 ? list.map((c) => reasonWord(c, t)).join(' · ') : null)
+  // Each class at 0 shows its own reasons; the same words for both are shown once.
+  const heavyWords = pool.headroom ? wordsOf(pool.headroom.heavy, pool.reasons?.heavy) : null
+  const lightWords = pool.headroom ? wordsOf(pool.headroom.light, pool.reasons?.light) : null
+  const reasonLines = [heavyWords, lightWords === heavyWords ? null : lightWords].filter((w): w is string => w !== null)
   return (
     <div className="mt-1.5 pt-1.5 border-t border-border-subtle">
       <PoolRow id="worker" label={t('pool.card.worker')}>
@@ -77,8 +79,7 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
         {pool.headroom ? (
           <>
             {t('pool.card.headroom_value', { h: pool.headroom.heavy, l: pool.headroom.light })}
-            {reasonOf(pool.headroom.heavy, pool.reasons?.heavy)}
-            {pool.headroom.heavy > 0 && reasonOf(pool.headroom.light, pool.reasons?.light)}
+            {reasonLines.map((w) => <span key={w} data-testid="host-card-pool-reason" className="block text-text-muted">{w}</span>)}
           </>
         ) : unknown}
       </PoolRow>
