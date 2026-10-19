@@ -32,6 +32,7 @@ func TestSubmitterSession(t *testing.T) {
 		"too long is not a session":                        {"", strings.Repeat("a", 65), "", ""},
 		"an invalid PDX_SESSION_ID falls to Claude's":      {"bad id!", real, "", real},
 		"an invalid Claude one is empty, never the junk":   {"", "bad id!", "", ""},
+		"an invalid Claude Code id falls to the older one": {"", "bad id!", "old-name-ok", "old-name-ok"},
 	} {
 		set(t, c.pdx, c.cc, c.old)
 		if got := submitterSession(); got != c.want {
