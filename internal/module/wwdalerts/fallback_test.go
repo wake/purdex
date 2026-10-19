@@ -31,8 +31,10 @@ func newNode(t *testing.T, self string) *node {
 // peer sets what this node's role engine reports about the other daemon's push.
 func (n *node) peer(p fleet.PeerPush) { n.e.m.peer = func() fleet.PeerPush { return p } }
 
-func notReady() fleet.PeerPush { return fleet.PeerPush{Known: true, Answered: true, Ready: boolp(false)} }
-func ready() fleet.PeerPush    { return fleet.PeerPush{Known: true, Answered: true, Ready: boolp(true)} }
+func notReady() fleet.PeerPush {
+	return fleet.PeerPush{Known: true, Answered: true, Ready: boolp(false)}
+}
+func ready() fleet.PeerPush { return fleet.PeerPush{Known: true, Answered: true, Ready: boolp(true)} }
 
 func (n *node) passes(t *testing.T, k int) {
 	for i := 0; i < k; i++ {
@@ -92,7 +94,7 @@ func TestAnUnreachableOtherDaemonCountsAsNotAbleToPush(t *testing.T) {
 
 func TestUnknownOrUnanswerableIsNotConfirmed(t *testing.T) {
 	for name, p := range map[string]fleet.PeerPush{
-		"nothing known yet":            {},
+		"nothing known yet":              {},
 		"an older daemon, no push_ready": {Known: true, Answered: true},
 	} {
 		a := newNode(t, "mlab")
