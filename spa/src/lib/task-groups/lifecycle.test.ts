@@ -12,7 +12,8 @@ import { useHostStore } from '../../stores/useHostStore'
 import { startTaskGroupsLifecycle } from './loader'
 
 const forget = () => useTaskGroupsStore.getState().forget as ReturnType<typeof vi.fn>
-const host = (ip: string, port = 7860, token = 't') => ({ id: 'h1', name: 'h1', ip, port, token }) as never
+const hostOf = (ip: string, port = 7860, token = 't') => ({ id: 'h1', name: 'h1', ip, port, token })
+const host = (ip: string, port = 7860, token = 't') => hostOf(ip, port, token) as never
 
 let stop: () => void
 beforeEach(() => {
@@ -45,7 +46,7 @@ describe('task groups lifecycle', () => {
   })
 
   it('keeps the cache when only the name changes', () => {
-    useHostStore.setState({ hosts: { h1: { ...host('10.0.0.1'), name: 'renamed' } as never } })
+    useHostStore.setState({ hosts: { h1: { ...hostOf('10.0.0.1'), name: 'renamed' } as never } })
     expect(forget()).not.toHaveBeenCalled()
   })
 
