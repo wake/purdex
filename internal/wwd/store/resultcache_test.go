@@ -272,6 +272,31 @@ func TestCacheTrimTieBreaksByKey(t *testing.T) {
 	}
 }
 
+// A host revoking its own label drops what it made under it and nothing that another host made under the same label.
+func TestCacheDeleteByLabelAndHostKeepsOtherHostsEntries(t *testing.T) {
+	s := openTemp(t)
+	mk := func(key, host, label string) CacheEntry {
+		c := cacheEntry(key, cacheNow, label)
+		c.Result = okResult(host)
+		return c
+	}
+	for _, c := range []CacheEntry{
+		mk("a", "mserv", "task:x/1"), mk("b", "mserv", "task:x/1"), mk("c", "air26", "task:x/1"), mk("d", "mserv", "task:x/2"),
+	} {
+		if err := s.PutCacheEntry(c, cacheNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.DeleteCacheByLabelAndHost("task:x/1", "mserv"); err != nil || n != 2 {
+		t.Fatalf("by label and host: %d %v", n, err)
+	}
+	for key, want := range map[string]bool{"a": false, "b": false, "c": true, "d": true} {
+		if _, ok, _ := s.GetCacheEntry(key, cacheNow); ok != want {
+			t.Errorf("entry %s present = %v, want %v", key, ok, want)
+		}
+	}
+}
+
 func TestCacheDeleteByLabel(t *testing.T) {
 	s := openTemp(t)
 	for _, c := range []CacheEntry{cacheEntry("a", cacheNow, "task:x/1"), cacheEntry("b", cacheNow, "task:x/1"), cacheEntry("c", cacheNow, "task:x/2"), cacheEntry("d", cacheNow, "")} {

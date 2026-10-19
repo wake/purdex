@@ -19,10 +19,12 @@ import (
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/gateheld"
+	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -181,13 +183,17 @@ func run(cfgPath string) error {
 		}
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
+	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
 	d = daemon.New(daemonOptions(daemonParts{
 		HostID: hostID, Alias: alias, Token: tok, Cfg: cfg, Hooks: hooks, Sampler: sampler, Peers: peers, State: state,
-		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st,
+		Broker: broker, Queue: q, FastLane: fastLane, Observer: observer, Store: st, Refs: refs,
 	}))
+	watcher := newDriftWatcher(alias, st, refs, d.RefreshLabels) // an earned label whose OS version or tool moved is taken away (spec §7)
 	sampler.SetOnFacts(func(f wire.Facts) {
 		d.OnFacts(f)
 		usage.OnFacts(f)
+		_, fp := labels.FromFacts(f)
+		watcher.OnFacts(fp)
 	})
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)

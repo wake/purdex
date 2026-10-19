@@ -139,9 +139,16 @@ func (s *Store) GetCacheEntry(key string, now time.Time) (c CacheEntry, ok bool,
 	return c, true, nil
 }
 
-// DeleteCacheByLabel drops every entry made under the label (a drift revoked it) and returns how many.
+// DeleteCacheByLabel drops every entry made under the label and returns how many, whoever made it. A host revoking its own label uses
+// DeleteCacheByLabelAndHost: another host's entries under the same task label stay valid.
 func (s *Store) DeleteCacheByLabel(label string) (int, error) {
 	return execCount(s.db, `DELETE FROM result_cache WHERE label = ?`, label)
+}
+
+// DeleteCacheByLabelAndHost drops the entries that host made under the label (that host's label was revoked, or its toolchain moved) and
+// returns how many; what other hosts made under the same label stays (spec §7: a reference host's drift invalidates only its own entries).
+func (s *Store) DeleteCacheByLabelAndHost(label, host string) (int, error) {
+	return execCount(s.db, `DELETE FROM result_cache WHERE label = ? AND host = ?`, label, host)
 }
 
 // PruneCache drops the entries past CacheRetention as of now, and those that claim to be made in the future, and returns how many; the
