@@ -73,7 +73,7 @@ esac
 			_ = exec.Command("sudo", "systemctl", "reset-failed", run.UnitName(ref.Tag(), id)+".service").Run() // our own unit only
 		})
 		j := wire.Job{ID: id, Origin: "mserv", Class: wire.ClassDev, Repo: wire.Repo{Name: "purdex"}}
-		require.NoError(t, e.prepareDeps(context.Background(), ref, j, snapshot.Workspace{Dir: ws}, []string{"pnpm-lock.yaml"}))
+		require.NoError(t, e.prepareDeps(context.Background(), ref, j, snapshot.Workspace{Dir: ws}, []string{"pnpm-lock.yaml"}, nil))
 		return ws
 	}
 

@@ -14,8 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/wwd/run"
+	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/ident"
+	"github.com/wake/purdex/internal/wwd/worker/qos"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
@@ -25,6 +27,7 @@ run     = "cat node_modules/pkg/index.js"
 args    = "none"
 summary = "plain"
 deps    = ["pnpm-lock.yaml"]
+env     = ["HTTPS_PROXY=http://proxy:3128"]
 `
 
 // depsLock is a pnpm workspace's lockfile as pnpm writes it: the root, a member with dependencies (spa) and one with none (electron).
@@ -326,6 +329,54 @@ func TestTheInstallsSandboxMayWriteTheDownloadCachesAndTheJobsDoesNot(t *testing
 	assert.Equal(t, []string{"/srv/a", "/data/deps"}, got.ReadWritePaths)
 	assert.Equal(t, []string{"/srv/a"}, sb.ReadWritePaths, "the job's own sandbox is untouched")
 	assert.Nil(t, depsSandbox(nil, "/data/deps"))
+}
+
+// The install is run under the job's own policy: a dev job on a host that runs dev jobs in the background is installed in the background
+// (the wrapper the job's command gets), and the task's environment reaches the package manager (a private registry's token) with the
+// download cache variable last, so that the task's list cannot move the cache.
+func TestTheInstallRunsUnderTheJobsQoSAndEnvironment(t *testing.T) {
+	r := newDepsRig(t)
+	ws := snapshot.Workspace{Dir: filepath.Join(t.TempDir(), "ws")}
+	in := installers["pnpm-lock.yaml"]
+	taskEnv := []string{"HTTPS_PROXY=http://proxy:3128", "REGISTRY=https://npm.example", in.cacheEnv + "=/elsewhere"}
+
+	e := r.exec(t)
+	e.cfg.BackgroundDev = true
+	j := job("withdeps") // a dev job
+	spec := e.installSpec(ident.Ref{Source: "mlab", ID: j.ID}, j, ws, "pnpm-lock.yaml", in, taskEnv, "/data/deps/pnpm-store")
+	wrapped, background := qos.For(wire.ClassDev, true, in.argv)
+	assert.Equal(t, wrapped, spec.Argv)
+	if background {
+		assert.NotEqual(t, in.argv, spec.Argv, "background QoS wraps the install")
+	}
+	assert.Equal(t, append(append([]string(nil), taskEnv...), in.cacheEnv+"=/data/deps/pnpm-store"), spec.TaskEnv)
+
+	merge := j
+	merge.Class = wire.ClassMerge
+	assert.Equal(t, in.argv, e.installSpec(ident.Ref{Source: "mlab", ID: j.ID}, merge, ws, "pnpm-lock.yaml", in, nil, "/c").Argv, "a merge job is never in the background")
+	e.cfg.BackgroundDev = false
+	assert.Equal(t, in.argv, e.installSpec(ident.Ref{Source: "mlab", ID: j.ID}, j, ws, "pnpm-lock.yaml", in, nil, "/c").Argv, "nor on a host that does not ask for it")
+}
+
+// A real install sees the fixed values of the manifest's env (a proxy, a registry): a remote task may not take names from the worker's own
+// environment (env_not_allowed), so nothing of it reaches the install.
+func TestTheInstallSeesTheTasksEnvironment(t *testing.T) {
+	r := newDepsRig(t)
+	require.NoError(t, os.WriteFile(filepath.Join(r.tools.bin, "pnpm"), []byte("#!/bin/sh\ncase \"$1\" in\n  --version) echo 9.0.0;;\n  install)\n    echo \"proxy=$HTTPS_PROXY worker-secret=$NPM_TOKEN\" > "+filepath.Join(r.tools.bin, "seen")+"\n    mkdir -p node_modules/pkg && echo installed > node_modules/pkg/index.js\n    mkdir -p spa/node_modules/dep && echo workspace > spa/node_modules/dep/index.js;;\nesac\n"), 0o755))
+	e := New(Config{
+		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: r.repo, commit: r.sha} },
+		ParentEnv: append(r.tools.env(), "NPM_TOKEN=s3cret"), DepsDir: r.dir,
+	})
+	j := job("withdeps")
+	ref := ident.Ref{Source: "mlab", ID: j.ID}
+	ws, err := e.Materialize(context.Background(), ref, j, claimID)
+	require.NoError(t, err)
+	defer ws.Cleanup()
+	_, err = e.Prepare(context.Background(), ref, j, ws) // the manifest of the snapshot says which names the task may read
+	require.NoError(t, err)
+	seen, err := os.ReadFile(filepath.Join(r.tools.bin, "seen"))
+	require.NoError(t, err)
+	assert.Equal(t, "proxy=http://proxy:3128 worker-secret=\n", string(seen), "the fixed value of the manifest reaches the install, and nothing of the worker's own environment does")
 }
 
 // A task with no deps does not touch the cache: the directory is not even made.

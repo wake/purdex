@@ -195,7 +195,7 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 	}
 	// a task that declares lockfiles gets its installed dependencies before anything else is made for it (a database, say)
 	if len(p.Task.Deps) > 0 {
-		if err := e.prepareDeps(ctx, ref, job, ws, p.Task.Deps); err != nil {
+		if err := e.prepareDeps(ctx, ref, job, ws, p.Task.Deps, p.Env); err != nil {
 			return runner.Plan{}, err
 		}
 	}

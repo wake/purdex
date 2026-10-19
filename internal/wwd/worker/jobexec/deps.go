@@ -17,6 +17,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/ident"
+	"github.com/wake/purdex/internal/wwd/worker/qos"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
@@ -86,7 +87,7 @@ func (e *Exec) depsCache() (*deps.Cache, error) {
 // (the job goes back to the queue), until the same key has failed depsFailLimit times in a row on this host within depsFailWindow: then
 // the job ends, as failed with no exit and a reason, which no outcome and no qualification counts, and the host stops trying that key
 // until the window has passed.
-func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string) error {
+func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, taskEnv []string) error {
 	cache, err := e.depsCache()
 	if err != nil {
 		return err
@@ -115,7 +116,9 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 	if reason := e.depsHeldOff(key); reason != "" {
 		return &runner.Rejected{Reason: reason}
 	}
-	spec.Install = func(ctx context.Context, dir string) error { return e.installDeps(ctx, ref, job, ws, lockfiles, in) }
+	spec.Install = func(ctx context.Context, dir string) error {
+		return e.installDeps(ctx, ref, job, ws, lockfiles, in, taskEnv)
+	}
 	_, err = cache.Prepare(ctx, ws.Dir, spec)
 	if err == nil {
 		e.depsOK(key)
@@ -132,19 +135,13 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 
 // installDeps runs the install of each lockfile in its own directory, as a job's command is run (run.Run: the sandbox, the clean
 // environment with the package managers' download caches in the cache directory). Its log is <out>/deps-install, apart from the job's.
-func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, in []installer) error {
-	base := filepath.Dir(ws.Dir)
-	sb := depsSandbox(e.cfg.Sandbox, e.cfg.DepsDir)
+func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, in []installer, taskEnv []string) error {
 	for i, lf := range lockfiles {
 		cacheDir := filepath.Join(e.cfg.DepsDir, in[i].cacheSub)
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return err
 		}
-		res := run.Run(ctx, run.Spec{
-			JobID: job.ID, Origin: ref.Tag(), Argv: in[i].argv, Dir: filepath.Join(ws.Dir, filepath.FromSlash(path.Dir(lf))), Workspace: base,
-			TaskEnv: []string{in[i].cacheEnv + "=" + cacheDir}, ParentEnv: e.cfg.ParentEnv, Timeout: depsInstallTimeout, KillAfter: e.cfg.KillAfter,
-			OutDir: filepath.Join(outDir(base), "deps-install"), Procs: e.cfg.Procs, Sandbox: sb,
-		})
+		res := run.Run(ctx, e.installSpec(ref, job, ws, lf, in[i], taskEnv, cacheDir))
 		switch {
 		case res.Outcome == run.Exited && res.ExitCode == 0 && res.Err == nil:
 		case res.Err != nil:
@@ -154,6 +151,20 @@ func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 		}
 	}
 	return nil
+}
+
+// installSpec is the run of one lockfile's install, under the job's own policy: the background QoS of a dev job where the host asks for it
+// (the same wrapper as the job's command), the sandbox, the task's environment (the allow list and fixed values of the manifest, which
+// a proxy or a registry setting comes through) and, last so that nothing in the task's list can point the package manager's
+// download cache elsewhere, the cache directory.
+func (e *Exec) installSpec(ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfile string, in installer, taskEnv []string, cacheDir string) run.Spec {
+	base := filepath.Dir(ws.Dir)
+	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, in.argv)
+	return run.Spec{
+		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: filepath.Join(ws.Dir, filepath.FromSlash(path.Dir(lockfile))), Workspace: base,
+		TaskEnv: append(append([]string(nil), taskEnv...), in.cacheEnv+"="+cacheDir), ParentEnv: e.cfg.ParentEnv, Timeout: depsInstallTimeout,
+		KillAfter: e.cfg.KillAfter, OutDir: filepath.Join(outDir(base), "deps-install"), Procs: e.cfg.Procs, Sandbox: depsSandbox(e.cfg.Sandbox, e.cfg.DepsDir),
+	}
 }
 
 // depsSandbox is the sandbox of an install: the job's own, and the download caches (outside the workspace, which is all a sandboxed command may
