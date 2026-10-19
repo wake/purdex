@@ -73,15 +73,21 @@ func (c *Core) RequestRestart(reason, execPath string, afterAccept func()) error
 	if c.restartHook == nil {
 		return ErrRestartUnavailable
 	}
+	// Held across the CAS and the path store: shutdown may observe
+	// lifeRestarting (BeginShutdown) and read the path (RestartExecPath)
+	// before this returns, e.g. when Serve fails in between.
+	c.restartMu.Lock()
 	if !c.life.CompareAndSwap(lifeRunning, lifeRestarting) {
+		c.restartMu.Unlock()
 		if c.life.Load() == lifeRestarting {
 			return ErrRestartInProgress
 		}
 		return ErrShuttingDown
 	}
 	if execPath != "" {
-		c.restartExecPath.Store(&execPath)
+		c.restartExecPath = execPath
 	}
+	c.restartMu.Unlock()
 	log.Printf("daemon restart requested by %s", reason)
 	if afterAccept != nil {
 		afterAccept()
@@ -93,10 +99,9 @@ func (c *Core) RequestRestart(reason, execPath string, afterAccept func()) error
 // RestartExecPath is the executable an accepted restart asked to exec, or ""
 // for the one this process booted from.
 func (c *Core) RestartExecPath() string {
-	if p := c.restartExecPath.Load(); p != nil {
-		return *p
-	}
-	return ""
+	c.restartMu.Lock()
+	defer c.restartMu.Unlock()
+	return c.restartExecPath
 }
 
 // handleDaemonRestart is POST /api/daemon/restart (spec §3.1): 202 with the
