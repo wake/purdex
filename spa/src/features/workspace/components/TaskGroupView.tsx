@@ -89,8 +89,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       out[hostId] = { groups: entry.groups, unsafe }
     }
     return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `nex` moves the capability gate
-  }, [groupsByHost, nex])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `nex` and `runtime` (a daemon mismatch) move the capability gate
+  }, [groupsByHost, nex, runtime])
 
   const view = useMemo<GroupSection[]>(
     () => buildGroupView({ tabs: sessionTabs, teams, manual, rootOf: roots.rootOf, hostOrder }),

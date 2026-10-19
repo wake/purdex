@@ -3,10 +3,12 @@
 // Nothing here starts by itself: the sidebar's task-group view asks (NA-6b), so a device that never opens that view never reads the groups.
 import { useNexHostStore, selectTaskGroupsV1 } from '../../stores/useNexHostStore'
 import { useTaskGroupsStore } from '../../stores/useTaskGroupsStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
 
 export function taskGroupsSupported(hostId: string): boolean {
+  // A host whose endpoint answers as another daemon than the one it is stored as is not read: its groups would show under the wrong daemon's label.
+  if (selectDaemonIdMismatch(useHostStore.getState(), hostId) !== undefined) return false
   const state = useNexHostStore.getState()
   return (state.byHost[hostId]?.fetchedAt ?? 0) > 0 && selectTaskGroupsV1(hostId)(state)
 }
