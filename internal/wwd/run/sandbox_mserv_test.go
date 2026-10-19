@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -85,12 +87,15 @@ func runSBOrigin(t *testing.T, name, origin string, sb Sandbox, timeout time.Dur
 	return e
 }
 
+// failedUnitName: a unit of these tests, wwd-j_4d3-<scenario> or wwd-<origin tag>-j_4d3-<scenario>, at the start of a `systemctl --failed` row.
+var failedUnitName = regexp.MustCompile(`^wwd-([0-9a-f]{16}-)?j_4d3-`)
+
 func failedUnits(t *testing.T) string {
 	t.Helper()
 	b, _ := exec.Command("systemctl", "--failed", "--no-legend").Output()
 	var mine []string
 	for _, l := range strings.Split(string(b), "\n") {
-		if strings.Contains(l, "j_4d3") { // wwd-j_4d3-* and wwd-<origin tag>-j_4d3-*
+		if failedUnitName.MatchString(strings.TrimLeft(l, "● ")) {
 			mine = append(mine, l)
 		}
 	}
@@ -337,30 +342,29 @@ vendor/bin/phpunit tests 2>&1 | tail -4`
 	t.Run("Q_two_origins_same_job_id", func(t *testing.T) {
 		// design section 5: two origins send the same job id to this worker at the same time; each has its own unit, its own
 		// workspace, and is cleared on its own
-		tagA, tagB := "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"
-		type res struct{ e2eRun }
-		out := make(chan res, 2)
-		for _, tag := range []string{tagA, tagB} {
-			go func(tag string) {
-				out <- res{runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "sleep 3; cat /proc/self/cgroup; echo origin=$WWD_ORIGIN")}
-			}(tag)
+		e2eDir(t) // the skip (WWD_MSERV_E2E unset) and the directory failure happen here, not in a worker goroutine
+		tags := []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}
+		runs := make([]e2eRun, len(tags))
+		var wg sync.WaitGroup
+		for i, tag := range tags {
+			wg.Add(1)
+			go func() {
+				defer wg.Done() // also when runSBOrigin ends this goroutine (t.Fatal): the run then stays the zero value and fails below
+				runs[i] = runSBOrigin(t, "Q", tag, Sandbox{}, 60*time.Second, bg, "sh", "-c", "sleep 3; cat /proc/self/cgroup; echo origin=$WWD_ORIGIN; echo pwd=$PWD; echo $WWD_ORIGIN > marker; cat marker")
+			}()
 		}
-		for i := 0; i < 2; i++ {
-			r := <-out
+		wg.Wait()
+		for i, tag := range tags {
+			r, other := runs[i], tags[1-i]
 			if r.Outcome != Exited || r.ExitCode != 0 || r.Err != nil {
-				t.Errorf("result %+v", r.Result)
+				t.Errorf("origin %s: result %+v", tag, r.Result)
 				continue
 			}
-			tag := tagA
-			if strings.Contains(r.out, "origin="+tagB) {
-				tag = tagB
-			}
-			other := tagB
-			if tag == tagB {
-				other = tagA
-			}
-			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || strings.Contains(r.out, UnitName(other, "j_4d3-Q")) {
-				t.Errorf("origin %s ran in the wrong unit:\n%s", tag, r.out)
+			// the unit, the origin mark and the workspace (named after the tag by runSBOrigin) are this origin's own, and the marker file
+			// it wrote and read back holds its own tag: a shared workspace would let the other origin's write show up here
+			if !strings.Contains(r.out, UnitName(tag, "j_4d3-Q")+".service") || !strings.Contains(r.out, "origin="+tag) ||
+				!strings.Contains(r.out, "/ws-Q-"+tag+"\n") || !strings.Contains(r.out, "\n"+tag+"\n") || strings.Contains(r.out, other) {
+				t.Errorf("origin %s ran in the wrong unit or workspace:\n%s", tag, r.out)
 			}
 		}
 		if f := failedUnits(t); f != "" {
