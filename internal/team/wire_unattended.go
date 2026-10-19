@@ -98,6 +98,9 @@ type UnattendedView struct {
 	// they wait for a person, or for the quota to be raised (approved within one tick). Independent of the approved page
 	// above. null when it could not be read, [] when read and none; never absent.
 	Held []Approval `json:"held"`
+	// Log is the latest 30 decisions and switch changes, newest first (decision_log.go); never null (MarshalJSON). The old
+	// Approved page above stays for an App that does not know team.decision_log.v1.
+	Log []UnattendedLogEntry `json:"log"`
 	// ListFailed (PUT only): the write took effect — the state above is
 	// what is stored — but the list could not be read, so Approved is
 	// empty and says nothing; the client GETs the list.
@@ -110,6 +113,9 @@ func (v UnattendedView) MarshalJSON() ([]byte, error) {
 	type plain UnattendedView // no methods: avoids recursion; keeps the embedded state flattened
 	if v.Approved == nil {
 		v.Approved = []Approval{}
+	}
+	if v.Log == nil {
+		v.Log = []UnattendedLogEntry{}
 	}
 	return json.Marshal(plain(v))
 }
