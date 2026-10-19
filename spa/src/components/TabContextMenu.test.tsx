@@ -335,6 +335,7 @@ describe('TabContextMenu stays below the title bar (#1801)', () => {
       expect(off).toHaveAttribute('aria-disabled', 'true')
       expect(off).toHaveAttribute('title', 'reading')
       expect(off).toHaveAccessibleDescription('reading') // a screen reader gets the reason too, not only the tooltip
+      expect(off).toHaveAccessibleName('Not now') // ... and the reason does not leak into the row's name
       off.focus()
       expect(document.activeElement).toBe(off) // focusable: the reason is reachable from the keyboard
       fireEvent.click(off)

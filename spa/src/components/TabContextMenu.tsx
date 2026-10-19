@@ -139,7 +139,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
             // aria-disabled, not `disabled`: a disabled button takes no focus, so a keyboard user would never reach the reason. The reason is the tooltip for the pointer and, for a screen reader, a hidden description.
             <button
               key={x.key} data-testid={`tab-menu-extra-${x.key}`} aria-disabled={x.disabled ? true : undefined} title={x.title}
-              aria-describedby={x.disabled && x.title ? `${reasonId}-${x.key}` : undefined}
+              aria-label={x.label} aria-describedby={x.disabled && x.title ? `${reasonId}-${x.key}` : undefined}
               onClick={() => { if (x.disabled) return; x.onSelect(); onClose() }}
               className={`w-full text-left px-3 py-1.5 transition-colors ${x.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'}`}
             >
