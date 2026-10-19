@@ -89,8 +89,22 @@ func (m *Module) initDelivery(dir string) {
 	}
 }
 
+// wwdJobNote is the note of the ack a wwd queue job's event gets when it is recorded.
+const wwdJobNote = "wwd 佇列工作（名額外），只記錄"
+
 // Enqueue is the EventSink: the record goes to the outbox and the delivery loop is woken.
 func (m *Module) Enqueue(rec watch.Record) {
+	if rec.Label == watch.LabelWWDJob {
+		// A wwd queue job is outside the gate's slots on purpose (#3447): it is in the record, and that is all. It is handled at once, so it
+		// is not a message to the watcher, not in a backlog summary and not in the unhandled count; a person reads it with `pdx watch log`.
+		if _, err := m.acks.Ack([]string{rec.ID}, func(id string) bool { return id == rec.ID },
+			watch.Ack{Note: wwdJobNote, At: m.now(), By: "system"}); err != nil {
+			m.logf("[watch] wwd job event %s: %v", rec.ID, err) // left unhandled: it is then told like any other event
+			m.dlv.outbox.Add(rec)
+			m.wakeDelivery()
+		}
+		return
+	}
 	m.dlv.outbox.Add(rec)
 	m.wakeDelivery()
 	m.emitEvents(CauseRecorded) // the badge and the list: once per recorded event
