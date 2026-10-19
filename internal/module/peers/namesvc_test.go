@@ -55,13 +55,20 @@ func TestNameService_LeadCandidates(t *testing.T) {
 	got, err := e.m.LeadCandidates(ctx, poolSidA)
 	require.NoError(t, err)
 	// anna is the session's own name (keep, first); mia is a former lead; hiro is a lead:true persona
-	assert.Equal(t, []ipeers.LeadCandidate{{Code: "anna", Keep: true}, {Code: "mia"}, {Code: "hiro"}}, got)
+	assert.Equal(t, []ipeers.LeadCandidate{
+		{Code: "anna", Keep: true, Name: "Anna", Kind: "keep"},
+		{Code: "mia", Name: "Mia", Kind: "former", LastAt: 5},
+		{Code: "hiro", Name: "hiro", Kind: "lead"},
+	}, got)
 
 	e.start(poolSidB, tLate)
 	e.assign(poolSidB, "purdex-55-hiro", store.PeerNameSourcePool)
 	got, err = e.m.LeadCandidates(ctx, poolSidA)
 	require.NoError(t, err)
-	assert.Equal(t, []ipeers.LeadCandidate{{Code: "anna", Keep: true}, {Code: "mia"}}, got, "hiro is held by another live session")
+	assert.Equal(t, []ipeers.LeadCandidate{
+		{Code: "anna", Keep: true, Name: "Anna", Kind: "keep"},
+		{Code: "mia", Name: "Mia", Kind: "former", LastAt: 5},
+	}, got, "hiro is held by another live session")
 }
 
 func TestNameService_LeadCandidatesOfASessionWithoutAPoolNameHaveNoKeep(t *testing.T) {
@@ -75,7 +82,10 @@ func TestNameService_LeadCandidatesOfASessionWithoutAPoolNameHaveNoKeep(t *testi
 		assert.False(t, c.Keep)
 	}
 	// no history: rule 1 offers the lead:true personas before the other free names (anna is held by A)
-	assert.Equal(t, []ipeers.LeadCandidate{{Code: "hiro"}, {Code: "mia"}}, got)
+	assert.Equal(t, []ipeers.LeadCandidate{
+		{Code: "hiro", Name: "hiro", Kind: "lead"},
+		{Code: "mia", Name: "Mia", Kind: "other"},
+	}, got)
 }
 
 func TestNameService_RenameForLeadKeepsTheOldNameAsAnAlias(t *testing.T) {
