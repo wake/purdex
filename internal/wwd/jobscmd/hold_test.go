@@ -245,6 +245,25 @@ func TestHoldName(t *testing.T) {
 	}
 }
 
+// Many reasons with one slug (what a name can hold ignores them: CJK text, punctuation) are still many holds: the hash is wide enough that
+// a few hundred thousand of them do not meet (a 32-bit hash meets at about 77 000: R1 asked again, critic), and the longest name fits the
+// 64 bytes an exception name may have.
+func TestHoldNameDoesNotMeetAmongManyReasonsOfOneSlug(t *testing.T) {
+	seen := map[string]int{}
+	for i := 0; i < 300000; i++ {
+		reason := "release " + string(rune(0x4e00+i%20000)) + string(rune(0x4e00+i/20000))
+		n := holdName(reason)
+		if j, ok := seen[n]; ok {
+			t.Fatalf("reasons %d and %d are one hold: %s", j, i, n)
+		}
+		seen[n] = i
+	}
+	long := holdName(strings.Repeat("release candidate ", 20))
+	if len(long) > 64 {
+		t.Fatalf("%q is %d bytes: an exception name may have 64", long, len(long))
+	}
+}
+
 // An option that is given with nothing in it is a mistake, not "no option": dropping it would turn a hold meant to let a class through
 // into one that lets nothing through (R1).
 func TestHoldRefusesAnEmptyAllowValue(t *testing.T) {

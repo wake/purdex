@@ -27,6 +27,9 @@ const (
 	defaultHoldWait = 30 * time.Second
 	maxReason       = 200
 	maxSlug         = 40
+	// hashBytes of the reason's SHA-256 go into the name: 9 bytes (18 hex characters) is the most that fits "hold-" + maxSlug + "-" in the
+	// 64 bytes of an exception name, and wide enough that no reasons meet in practice (4 bytes met at about 77 000)
+	hashBytes = 9
 )
 
 // holdName is the exception's name, made from the reason: "hold-", a readable slug of the reason's letters and digits (lower case, anything
@@ -51,7 +54,7 @@ func holdName(reason string) string {
 		slug = strings.TrimRight(slug[:maxSlug], "-")
 	}
 	sum := sha256.Sum256([]byte(reason))
-	hash := hex.EncodeToString(sum[:4])
+	hash := hex.EncodeToString(sum[:hashBytes])
 	if slug == "" {
 		return "hold-" + hash
 	}
