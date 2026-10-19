@@ -193,10 +193,10 @@ describe('one value in both places', () => {
     await flush()
     expect(unattendedValues()).toEqual(['4', '2'])
     expect(settingsValues()).toEqual(['4', '2'])
-    fireEvent.click(within(quotaSection()).getAllByRole('button', { name: '增加' })[0])
+    fireEvent.click(within(quotaSection()).getByRole('button', { name: /^增加自動接力額度/ }))
     expect(settingsValues()).toEqual(['5', '2'])
     expect(unattendedValues()).toEqual(['5', '2'])
-    fireEvent.click(within(quotaSection()).getAllByRole('button', { name: '減少' })[1])
+    fireEvent.click(within(quotaSection()).getByRole('button', { name: /^減少member額度/ }))
     expect(unattendedValues()).toEqual(['5', '1'])
   })
 
@@ -204,7 +204,7 @@ describe('one value in both places', () => {
     mockedGet.mockResolvedValue(page({ quotas: [leadRow(), quota('P')] }))
     openBoth()
     await flush()
-    fireEvent.click(within(unattendedLead()).getAllByRole('button', { name: '增加' })[1])
+    fireEvent.click(within(unattendedLead()).getByRole('button', { name: /^增加member額度/ }))
     expect(unattendedValues()).toEqual(['4', '3'])
     expect(settingsValues()).toEqual(['4', '3'])
     // a confirmed number from elsewhere (another window's write) shows in both too

@@ -12,13 +12,11 @@ import { Fragment } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
-import { shownValue, useRelayQuotaStore } from '../lib/team/relay-quota'
-import { setQuota } from '../lib/team/relay-quota-writer'
-import type { RelayQuotaField, SessionQuota } from '../lib/team/types'
+import type { SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
 import { addressName, seatLabel, usePersonaRevision } from '../lib/names/seat'
-import { NumberField } from './team/NumberField'
+import { QuotaStepper } from './team/Steppers'
 
 /** One host's share of the section. */
 export interface QuotaHostData {
@@ -34,8 +32,6 @@ export interface UnattendedQuotaSectionProps {
   /** Name each host above its rows (more than one host has a section). */
   headings: boolean
 }
-
-const MAX = 99
 
 /** The name a solo row shows: a persona by its name with the title after it (spec §9.3), else its title, else the name part of its address (`<alias>/<name>`). */
 function plainName(r: SessionQuota): string {
@@ -59,35 +55,6 @@ function order(looks: Map<string, Look>) {
     if (a.is_lead !== b.is_lead) return a.is_lead ? -1 : 1
     return (looks.get(a.session_id) as Look).name.localeCompare((looks.get(b.session_id) as Look).name) || a.address.localeCompare(b.address)
   }
-}
-
-const STEP_BTN = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
-
-/** A − / + button. When it is off for a rule (not merely busy), the reason shows on hover: the title sits on a wrapper, since a disabled button gets no hover. */
-function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; label: string; disabled: boolean; reason?: string; onClick: () => void }) {
-  return (
-    <span title={disabled ? reason : undefined} data-testid="step-reason" data-reason={disabled && reason ? reason : undefined} className="inline-flex">
-      <button type="button" aria-label={label} title={disabled ? reason : undefined} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
-    </span>
-  )
-}
-
-function Stepper({ hostId, row, name, field, label }: { hostId: string; row: SessionQuota; name: string; field: RelayQuotaField; label: string }) {
-  const t = useI18nStore((s) => s.t)
-  const value = useRelayQuotaStore((s) => shownValue(s, hostId, row.root_session_id, field, row[field]))
-  const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: name }, field, next)
-  return (
-    <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
-      <span className="text-text-muted">{label}</span>
-      <StepButton sign="−" label={t('unattended.quota.minus')} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
-      <NumberField
-        testId="quota-value" ariaLabel={label} value={value}
-        validate={(n) => (n > MAX ? t('unattended.field.range', { min: '0', max: String(MAX) }) : null)}
-        onCommit={write}
-      />
-      <StepButton sign="+" label={t('unattended.quota.plus')} disabled={value >= MAX} reason={t('unattended.quota.at_max', { n: String(MAX) })} onClick={() => write(value + 1)} />
-    </span>
-  )
 }
 
 export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSectionProps) {
@@ -123,9 +90,9 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                     <span className="block min-w-0 truncate text-text-primary" title={look.team ? `${look.name}${look.title !== undefined ? `\n${look.title}` : ''}` : `${look.name}\n${r.address}`}>
                       {look.name}{look.title !== undefined && <span data-testid="quota-lead-title" className="text-text-muted"> {look.title}</span>}
                     </span>
-                    <Stepper name={look.name} hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
+                    <QuotaStepper name={look.name} hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
                     {r.is_lead
-                      ? <Stepper name={look.name} hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
+                      ? <QuotaStepper name={look.name} hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
                       : <span data-testid="quota-pool-cell-empty" />}
                   </li>
                 )})}

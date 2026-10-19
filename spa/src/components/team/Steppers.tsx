@@ -29,7 +29,10 @@ function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; 
   )
 }
 
-/** `name` is the row's name for the writer's toasts; `label` the text before the number. */
+/**
+ * `name` is the row's name (the writer's toasts, and the buttons' and the box's accessible names); `label` the text before the number. The two buttons read "Increase <label> quota (<name>)": two steppers of
+ * one screen (the auto relay and the member pool, and every row or team beside them) must not both be called just 「增加」 to a screen reader or to voice control.
+ */
 export function QuotaStepper({ hostId, row, name, field, label }: { hostId: string; row: SessionQuota; name: string; field: RelayQuotaField; label: string }) {
   const t = useI18nStore((s) => s.t)
   const value = useRelayQuotaStore((s) => shownValue(s, hostId, row.root_session_id, field, row[field]))
@@ -37,13 +40,13 @@ export function QuotaStepper({ hostId, row, name, field, label }: { hostId: stri
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
-      <StepButton sign="−" label={t('unattended.quota.minus')} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
+      <StepButton sign="−" label={t('unattended.quota.minus', { field: label, name })} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
       <NumberField
-        testId="quota-value" ariaLabel={label} value={value}
+        testId="quota-value" ariaLabel={t('unattended.quota.value_name', { field: label, name })} value={value}
         validate={(n) => (n > QUOTA_MAX ? t('unattended.field.range', { min: '0', max: String(QUOTA_MAX) }) : null)}
         onCommit={write}
       />
-      <StepButton sign="+" label={t('unattended.quota.plus')} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
+      <StepButton sign="+" label={t('unattended.quota.plus', { field: label, name })} disabled={value >= QUOTA_MAX} reason={t('unattended.quota.at_max', { n: String(QUOTA_MAX) })} onClick={() => write(value + 1)} />
     </span>
   )
 }
