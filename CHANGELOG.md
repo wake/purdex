@@ -1,5 +1,63 @@
 # Changelog
 
+## [1.0.0-alpha.759] - 2026-10-19
+
+> daemon、`pdx` CLI 與 `wwd` 有改；**mod 只改了一份 skill 說明（`pdx-test` 的結束碼 5），hooks 沒變，但要跑 `pdx setup` 才會把新的說明裝到各 session**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 758 相同。
+>
+> **測試結果重用這一版才真的生效**：758 的寫入端一筆都沒寫進去——worker 在啟動時（第一筆 facts 之前）就把自己的標籤與指紋算好存起來，之後每次認領都帶那份凍結的快照，存結果時和主機現在的指紋永遠比不上（fail-closed，沒有給出錯的結果）。這一版改成每次認領當下現讀（#3582）。部署後會在 air26 送兩次相同的宣告任務驗收：第一次寫入一筆，第二次直接重用。
+>
+> **`pdx test` 送件時就判斷有沒有主機能接（#3586）**：pool 裡沒有任何主機持有任務的全部 labels 時，當場回結束碼 5 並列出缺的 labels，不再靜靜排到逾時；有主機持有、只是現在都接不了（worker 關、連不上、主人在用）時照常排隊，並印一行說明在等誰。
+>
+> **新的 capability**：`jobs.control.v1`（管理端取消 job、調整排隊順序）、`pool.events.v1`（daemon 每 5 秒讀本機 wwd，主機的 pool 資料變了就發 `pool.changed` 事件；App 看到這個 capability 就停止輪詢 `/api/pool/hosts`）。
+>
+> **wwd 告警新增「不通」兩條（WWD-8a-3a）**：`silence:<peer>`（某台 peer 連續 3 分鐘不回應）與 `partner_down`（本機 Purdex daemon 3 分鐘沒來讀告警）。部署時會在 mlab、air26 的 wwd 設定加 `[advisor] partner_check = true`，並在三台的 `[[peers]]` 裡把 air19 設成 `alert_unreachable = false`（air19 目前連不上，也不會常開）。推播仍預設關閉。
+>
+> **「主人在不在」只看生效中的 owner 規則（#3457）**：規則是空字串的主機，owner 讀數照樣顯示，但不再讓 headroom 歸零，worker 也不再讓位。測試用的 `owner_active_file` 只負責「取代讀數」（#3561：設了這個檔案時，真實的鍵盤活動完全不讀），C2 矩陣的案例 7 因此要求 air26 的 `[owner]` 開著、規則非空，precheck 會擋。
+>
+> **dev 模式的「重建 daemon」改走正常重啟（#3572）**：以前編完新的執行檔就直接原地 exec，不關模組、不寫 log；現在走和 `/api/daemon/restart` 同一條關機流程，log 會有 `dev rebuild requested by …`、`shutdown: … done, restarting` 與 `restart: exec path overridden to …`，重啟後跑的是剛編好的那個執行檔。重啟中仍不檢查是否有對話正在接力（#3590 追蹤）。
+>
+> **姓名池 v2 與團隊介面 v2 這一批全部到齊**（角色匯入與頭像授權、頭像加名字、配對紀錄、第一次存角色的改名數字），88 會另外給一份驗收清單。**第一次在姓名池存角色時，所有存活的對話會一次改名**（舊名字仍可送達，lead 的地址也會換）。
+>
+> **資料庫與 wire**：沒有 schema 變動（wwd queue 仍是 7、host 仍是 6，Purdex 沒有新表），wire 的 `proto` 仍是 3。`passed_digest`（5b-2w）只在 pool 裡每台主機都連得上、且 proto ≥ 3 時才寫；air19 連不上的期間不會寫，facts 也維持 v1 形狀。
+>
+> **worker**：部署時四台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26。air26 依使用者 10-19 的指示，wwd 的 `[owner]` 已關閉（使用中也照樣接一重兩輕），這是部署設定、不在程式碼裡；mserv 仍關著（#3549），air19 連不上，沿用 757。
+
+### Added：姓名池 v2 與團隊介面 v2
+
+- **角色匯入對話框與頭像授權（#3550）**：SPA 新增角色匯入對話框，並在介面中標示頭像的授權來源。
+- **畫面上改稱「人」的名字（#3555、#3563、#3569）**：deck 的 peer 說明文字、狀態列的 peer 識別與改名彈窗，核准卡標籤、額度表與通知標題，以及團隊相關畫面（提示、空缺的 lead、已結束清單、工作簿標題與根目錄），都改為顯示角色名字。
+- **記錄 lead／member 配對（#3556）**：spawn 註冊或核准 adopt 時，daemon 會記下這一組 lead 與 member 的關係。
+- **第一次存角色的改名數字由 daemon 提供（#3568、#3580）**：新增 `POST /api/peers/rename-preview`，第一次在姓名池存角色時，提示裡的「會改名的對話數」改用 daemon 算出的數字。
+- **姓名池 v2 規格（#3566）**：補上 lineage root 來源、角色的信任邊界，以及排隊那一行維持純文字的規則。
+
+### Added：WWD-7 App 的資源池與工作介面
+
+- **主機格與卡片讀取資源池（#3531）、Hosts 頁列出池中主機（#3543）、資源池主機頁（#3570）**：fleet 的主機格與卡片、Hosts 頁與每台主機的頁面，現在都讀資源池的資料。
+- **工作（jobs）的讀取與衍生視圖（#3551、#3552、#3567）**：新增 jobs 的資料型別與寬鬆解析、`/api/pool/jobs*` 的讀取與每個來源各一份的 jobs store，以及 jobs 分頁的衍生視圖。
+- **管理端取消工作與調整順位（#3553）**：admin token 可取消 job、查詢排隊位置，並公告 capability `jobs.control.v1`。
+- **主機資料變動即時推送（#3576）**：新增 `pool.changed` 主機事件與 capability `pool.events.v1`，App 看到後不再輪詢 `/api/pool/hosts`。
+- **池中主機的 worker 設定頁（#3574）**：在池中主機的「設定」頁可調整 worker 設定。
+- **headroom 回傳值的黃金測試（#3575）**：固定非空的 `headroom_reasons` 與 load 的輸出格式。
+
+### Added：wwd 結果重用與告警
+
+- **`passed_digest` 寫入（WWD-5b-2w，#3554）**：摘要解析會填入 `passed_digest`，且只在池中每台主機都讀得到時才寫。
+- **「不通」告警（WWD-8a-3a，#3562）**：新增 `silence:<peer>`（peer 連續 3 分鐘不回應）與 `partner_down`（本機 Purdex daemon 3 分鐘沒來讀告警）兩條規則。
+- **`pdx test` 送件時判斷有沒有主機能接（#3586）**：沒有任何主機持有任務的全部 labels 時當場回結束碼 5 並列出缺的 labels；有主機持有但暫時接不了則照常排隊並說明在等誰。
+
+### Fixed
+
+- **測試結果快取的寫入端終於生效（#3582）**：每次認領時現讀 worker 的標籤與指紋，不再使用啟動時凍結的快照，修正 758 一筆都寫不進去的問題。
+- **告警投遞狀態更準確（#3581）**：`wwdalerts` 只在自己的推播模組就緒時才回報有投遞者。
+- **「主人在不在」只看生效中的 owner 規則（#3578）**：規則為空字串的主機不再讓 headroom 歸零。
+- **`owner_active_file` 完整取代真實讀數（#3577）**：設了這個檔案時，不再讀真實的鍵盤活動。
+- **快照取得方式依認領的來源決定（#3579）**：不再依 `Job.Origin` 選擇。
+- **dev 模式的「重建 daemon」改走正常重啟流程（#3587）**：會寫 log、依序關閉模組後再重啟，重啟後跑的是剛編好的執行檔。
+
+### Tests
+
+- **run 的 alive 檢查把 `/proc` 讀取的 ESRCH 視為已結束（#3584）**，避免誤判。
+
 ## [1.0.0-alpha.758] - 2026-10-19
 
 > daemon、`pdx` CLI 與 `wwd` 有改；**mod 沒有改，不用重跑 `pdx setup`**。SPA 有改，依賴沒變，不用 `pnpm install`。Electron 與 757 相同。
