@@ -32,6 +32,10 @@ func void(format string, a ...any) Verdict {
 // included (the spec says "same pass/fail sets and exit state"; a qualify run that should pass is the manifest author's to choose).
 // The sets are the counts of passed and failed tests and the set of failures; skipped tests are neither passes nor failures and are
 // not compared.
+//
+// KNOWN LIMIT: wire.Summary carries the number of passed tests, not which ones, so two hosts that ran different tests and passed the
+// same number of them are not told apart. The qualify args are a small fixed run, which keeps the risk low, but it is a risk; closing
+// it needs a digest of the passed test identities from the summary parsers (open question to the lead, WWD-5b-2).
 func Compare(host, reference Half) Verdict {
 	for _, h := range []struct {
 		name string
