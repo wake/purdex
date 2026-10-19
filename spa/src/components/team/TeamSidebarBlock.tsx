@@ -11,17 +11,19 @@ import { TeamMemberBeads } from './TeamMemberBeads'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { compositeKey } from '../../lib/composite-key'
+import { seatName, usePersonaRevision } from '../../lib/names/seat'
 
 /** The four light colors (same as the tab lights). */
 const LIGHT_COLOR = { running: '#4ade80', waiting: '#facc15', idle: '#6b7280', error: '#ef4444' } as const
 
 function MemberLightDot({ member }: { member: TeamSeatView }) {
+  usePersonaRevision() // the tooltip reads the persona store without subscribing
   const status = useAgentStore((s) => (member.hostId !== '' && member.sessionCode !== '' ? s.statuses[compositeKey(member.hostId, member.sessionCode)] : undefined))
   return (
     <span
       data-testid="team-fold-dot"
       data-status={status ?? 'none'}
-      title={member.title}
+      title={seatName(member.address, member.title)}
       className="w-1.5 h-1.5 rounded-full flex-shrink-0"
       style={{ background: status ? LIGHT_COLOR[status] : 'var(--border-default)' }}
     />

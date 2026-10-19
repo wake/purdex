@@ -84,7 +84,7 @@ describe('handleRosterEvent records the seats that left a team (WA-2b-1)', () =>
     handleRosterEvent('h1', v({ op: 'snapshot', teams: [withMembers(['x', 'y'])] }))
     expect(ended()).toBeUndefined() // the first frame has nothing to compare with
     handleRosterEvent('h1', v({ op: 'changed', teams: [withMembers(['x'])] }))
-    expect(ended()).toEqual([expect.objectContaining({ hostId: 'h1', sessionId: 'y', title: 'title y' })])
+    expect(ended()).toEqual([expect.objectContaining({ hostId: 'h1', sessionId: 'y', title: 'title y', address: 'h/y-xx' })]) // the daemon's address, which names the persona once the seat is gone
     handleRosterEvent('h1', v({ op: 'changed', teams: [withMembers(['x'])] })) // the same roster again
     handleRosterEvent('h1', v({ op: 'snapshot', teams: [withMembers(['x'])] }))
     expect(ended()).toHaveLength(1)
