@@ -3,6 +3,9 @@ package gate
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,6 +68,20 @@ func snapTree(t *testing.T, dir string) string {
 	return gitIn(t, dir, "rev-parse", snap.SHA+"^{tree}")
 }
 
+// oracleTree is the tree of the working directory worked out the plain way, from an empty index: every path git tracks or would not
+// ignore, taken from the files as they are now (a path that is gone is dropped).
+func oracleTree(t *testing.T, dir string) string {
+	t.Helper()
+	paths := gitIn(t, dir, "ls-files", "-z", "-c", "-o", "--exclude-standard")
+	idx := filepath.Join(t.TempDir(), "oracle-index")
+	cmd := exec.Command("git", "-C", dir, "update-index", "--add", "--remove", "-z", "--stdin")
+	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+idx)
+	cmd.Stdin = strings.NewReader(paths)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	return gitInEnv(t, dir, []string{"GIT_INDEX_FILE=" + idx}, "write-tree")
+}
+
 func TestWorkingTree_EqualsTheSnapshotsTreeInEveryState(t *testing.T) {
 	steps := []struct {
 		name string
@@ -101,5 +118,17 @@ func TestWorkingTree_EqualsTheSnapshotsTreeInEveryState(t *testing.T) {
 		got, err := WorkingTree(context.Background(), "", dir)
 		require.NoError(t, err, s.name)
 		assert.Equal(t, snapTree(t, dir), got, s.name)
+		assert.Equal(t, oracleTree(t, dir), got, s.name+" (against a tree built from an empty index)")
+	}
+}
+
+// BenchmarkWorkingTree is what a fast-lane run pays for the tree of the repo this package is in (#3745): run with -bench on a checkout;
+// touch a tracked file first to see the dirty case.
+func BenchmarkWorkingTree(b *testing.B) {
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		if _, err := WorkingTree(ctx, "", "."); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
