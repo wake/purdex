@@ -21,7 +21,8 @@ export interface MonitorHost {
 
 // W4: when no source answers (every one failed, or none is connected) the pool store has no hosts. The sidebar then keeps the last non-empty list of this run, every host unknown;
 // from the start with nothing read it is empty. Not persisted.
-let remembered: PoolHost[] = []
+let remembered: PoolHost[] = usePoolStore.getState().hosts
+usePoolStore.subscribe((s) => { if (s.hosts.length > 0) remembered = s.hosts })
 export function resetRememberedPoolHosts(): void { remembered = [] }
 
 export function useMonitorHosts(): MonitorHost[] {
@@ -33,7 +34,6 @@ export function useMonitorHosts(): MonitorHost[] {
   const order = usePoolHostsStore((s) => s.order)
   const owners = usePoolHostOwners()
   const lookOf = usePoolHostLookResolver()
-  if (hosts.length > 0) remembered = hosts
   const stale = hosts.length === 0 && !answered && remembered.length > 0
   const rows = stale ? remembered : hosts
   return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => ({

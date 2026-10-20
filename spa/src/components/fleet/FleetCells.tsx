@@ -1,13 +1,11 @@
-// spa/src/components/fleet/FleetCells.tsx — the fleet cells at the bottom of the sidebar (fleet spec rev 2 §8.1): one cell per
-// host, under the BottomNav. The wide bar lays them out like the session list's member beads (TeamMemberBeads: flex-wrap, no
-// separators), so they wrap with the sidebar's width; the narrow bar stacks them in a column. No gap between cells in either
-// (journal v5 U9: the hosts closer together; the cells' own 3 px sides still part them): at 0, five 44 px cells fit one line
-// at the default 240 px width, at 1 px the fifth would wrap. Reads the fleet from `useFleetStore` only; nothing here knows the
-// wire.
-import type { FleetHostView } from '../../lib/fleet/store'
-import { useFleetHostViews } from '../../lib/fleet/use-fleet-host-views'
+// spa/src/components/fleet/FleetCells.tsx — the host cells at the bottom of the sidebar: one cell per pool host, under the BottomNav. The wide bar lays them out like the session list's member beads
+// (TeamMemberBeads: flex-wrap, no separators), so they wrap with the sidebar's width; the narrow bar stacks them in a column. No gap between cells in either (journal v5 U9: the hosts closer together; the cells'
+// own 3 px sides still part them): at 0, five 44 px cells fit one line at the default 240 px width, at 1 px the fifth would wrap. The list, its order, each host's state and look come from the pool only
+// (`useMonitorHosts`); nothing here reads the fleet or knows the wire.
+import { useMemo } from 'react'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
-import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
+import { cellOf } from '../../lib/pool/cell-model'
+import { useMonitorHosts } from '../../lib/pool/use-monitor-hosts'
 import { HostCell } from './HostCell'
 
 export interface FleetCellsProps {
@@ -15,14 +13,9 @@ export interface FleetCellsProps {
 }
 
 export function FleetCells({ variant }: FleetCellsProps) {
-  const { views, look, snapshot, waitingPrimary, primaryElsewhere } = useFleetHostViews()
-  // The resource pool, when a daemon announces it, is the source of the readings; otherwise `models` are the fleet hosts as they were.
-  const { models, active: poolActive } = usePoolCellModels(views)
-  if (views.length === 0) return null
-
-  // Every cell, daemon or probe host, opens the watcher area on that host's tab (watcher area spec §2.2). The fleet's own host
-  // id (`v.id`) names the tab, not the App's HostConfig id.
-  const open = (v: FleetHostView) => openWatchArea({ host: v.id })
+  const hosts = useMonitorHosts()
+  const cells = useMemo(() => hosts.map(cellOf), [hosts])
+  if (cells.length === 0) return null
   const wide = variant === 'wide'
 
   return (
@@ -31,8 +24,8 @@ export function FleetCells({ variant }: FleetCellsProps) {
       data-variant={variant}
       className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-0 pb-1'}
     >
-      {models.map((m) => (
-        <HostCell key={m.view.id} view={m.view} pool={m.pool} look={look(m.view)} variant={variant} isActive={false} waitingPrimary={!poolActive && waitingPrimary} primaryElsewhere={!poolActive && primaryElsewhere && !snapshot} onOpen={() => open(m.view)} />
+      {cells.map((c) => (
+        <HostCell key={c.hostId} view={c} variant={variant} isActive={false} onOpen={() => openWatchArea({ poolHost: { hostId: c.hostId, alias: c.name } })} />
       ))}
     </div>
   )

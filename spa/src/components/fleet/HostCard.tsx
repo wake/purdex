@@ -1,14 +1,13 @@
 // spa/src/components/fleet/HostCard.tsx — the card a host cell pops up on hover / focus (the approved prototype's `Tooltip`,
-// user 10-17): the host's name and zone word, the five readings each in its tone, the reading that sets the ring's length
-// marked 「環」, the gate's queue for a daemon host, and the waiting notices as the last line.
+// user 10-17): the host's name and zone word (its state word when it is not ok), the five readings each in its tone, the reading that sets the ring's length
+// marked 「環」, and the pool's rows (worker, headroom, owner, sessions). A host that is not ok shows its state and the lines that explain it instead of readings.
 // Drawn in a portal with `position: fixed` from the anchor's rectangles, so no overflow of the sidebar can clip it; clamped so
 // it never leaves the window. `above` (wide bar): over the strip, left-aligned to it. `right` (narrow bar): beside the cell.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { FleetHostView } from '../../lib/fleet/store'
 import type { PoolZone } from '../../lib/pool/types'
-import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
-import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
+import type { CellView } from '../../lib/pool/cell-model'
+import { headroomReasonLines, livenessLines, livenessWord } from '../../lib/pool/words'
 import { ringDriver, type RingDriver } from '../../lib/pool/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -29,11 +28,6 @@ const pressureTone = (level: number): UsageTone => (level >= 4 ? 'danger' : leve
 const pagingTone = (rate: number): UsageTone => (rate > 800 ? 'danger' : rate > 50 ? 'warn' : 'ok')
 /** The pressure level word key: 1 / 2 / 4; 3 reads as 2 (the daemon sends 1, 2, 4 or 0 = unknown). */
 const levelKey = (level: number): string | null => (level >= 4 ? '4' : level >= 2 ? '2' : level >= 1 ? '1' : null)
-
-function mmss(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
 
 function Row({ id, label, driver, children }: { id: RingDriver; label: string; driver: RingDriver | null; children: ReactNode }) {
   const t = useI18nStore((s) => s.t)
@@ -59,7 +53,7 @@ function PoolRow({ id, label, children }: { id: string; label: string; children:
 }
 
 /** The pool's part of the card: worker, what it takes now (with the reason at 0), the owner, the sessions room. */
-function PoolRows({ pool }: { pool: PoolCellExtra }) {
+function PoolRows({ pool }: { pool: CellView }) {
   const t = useI18nStore((s) => s.t)
   const unknown = t('pool.card.unknown')
   const w = pool.worker
@@ -88,26 +82,23 @@ function PoolRows({ pool }: { pool: PoolCellExtra }) {
 }
 
 export interface HostCardProps {
-  view: FleetHostView
-  /** What the resource pool adds; null while the pool is not the source: the card is then the fleet's. */
-  pool?: PoolCellExtra | null
-  waitingPrimary: boolean
-  primaryElsewhere: boolean
+  view: CellView
   placement: HostCardPlacement
   /** Where the cell is on screen; null (tests, before the first layout) leaves the card unplaced. */
   anchor: HostCardAnchor | null
 }
 
-export function HostCard({ view, pool = null, waitingPrimary, primaryElsewhere, placement, anchor }: HostCardProps) {
+export function HostCard({ view, placement, anchor }: HostCardProps) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   const [shift, setShift] = useState({ x: 0, y: 0 })
-  const off = view.status !== 'ok'
-  const f = off ? null : view.fast
-  const zone: PoolZone | 'offline' | 'nodata' = off ? 'offline' : f ? (pool?.zone ?? f.zone) : 'nodata'
-  const q = view.kind === 'daemon' && !off ? view.slow?.queue : undefined
-  // The ring's driver is the daemon's own when it sent a load; otherwise worked out from the readings as before.
-  const poolDriver = pool?.load && RING_DRIVERS.includes(pool.load.driver) ? (pool.load.driver as RingDriver) : null
+  // The card lives as long as a hover: "how long ago" is worked out once, when it opens.
+  const [openedAt] = useState(() => Date.now())
+  const ok = view.state.state === 'ok'
+  const f = view.fast
+  const zone: PoolZone | 'offline' | 'nodata' = !ok ? 'offline' : f ? (view.zone ?? f.zone) : 'nodata'
+  // The ring's driver is the daemon's own when it sent a load; otherwise worked out from the readings.
+  const poolDriver = view.load && RING_DRIVERS.includes(view.load.driver) ? (view.load.driver as RingDriver) : null
   const driver = f ? (poolDriver ?? ringDriver(f)) : null
   const pct = (v: number) => <span className={TONE_CLASS[usageTone(Math.round(v))]}>{Math.round(v)}%</span>
   const lvl = f ? levelKey(f.level) : null
@@ -142,18 +133,16 @@ export function HostCard({ view, pool = null, waitingPrimary, primaryElsewhere, 
     >
       <div className="flex items-center gap-1.5 mb-1.5">
         <span className="text-sm font-semibold text-text-primary">{view.name}</span>
-        <span data-testid="host-card-zone" className={`ml-auto text-xs ${ZONE_CLASS[zone]}`}>{zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)}</span>
+        <span data-testid="host-card-zone" className={`ml-auto text-xs ${ZONE_CLASS[zone]}`}>{ok ? (zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)) : livenessWord(t, view.state)}</span>
       </div>
-      {off && view.last_ok_at !== null && (
-        <div className="text-text-muted">{t('fleet.card.last_ok', { t: new Date(view.last_ok_at).toLocaleString() })}</div>
-      )}
+      {!ok && livenessLines(t, view.state, openedAt).map((line) => <div key={line} data-testid="host-card-liveness" className="text-text-muted">{line}</div>)}
       {f && (
         <>
           <Row id="cpu" label={t('fleet.card.cpu')} driver={driver}>{pct(f.cpu)}</Row>
           <Row id="mem" label={t('fleet.card.mem')} driver={driver}>{pct(f.mem)}</Row>
           <Row id="pressure" label={t('fleet.card.pressure')} driver={driver}>
             {lvl ? <span className={TONE_CLASS[pressureTone(f.level)]}>{t(`fleet.card.level.${lvl}`)}</span> : '—'}
-            {pool?.psi && <span className="text-text-muted">{t('pool.card.psi', { some: pool.psi.some10.toFixed(1), full: pool.psi.full10.toFixed(1) })}</span>}
+            {view.psi && <span className="text-text-muted">{t('pool.card.psi', { some: view.psi.some10.toFixed(1), full: view.psi.full10.toFixed(1) })}</span>}
           </Row>
           <Row id="paging" label={t('fleet.card.paging')} driver={driver}>
             <span className={TONE_CLASS[pagingTone(f.page_rate)]}>{t('fleet.card.paging_value', { v: Math.round(f.page_rate).toLocaleString() })}</span>
@@ -164,25 +153,7 @@ export function HostCard({ view, pool = null, waitingPrimary, primaryElsewhere, 
           </Row>
         </>
       )}
-      {pool && pool.state !== 'offline' && <PoolRows pool={pool} />}
-      {pool?.state === 'fallback' && (
-        <div data-testid="host-card-pool-fallback" className="mt-1 text-text-muted">
-          {fallbackWord(t, pool.reason, pool.since)}
-        </div>
-      )}
-      {q && (
-        <div className="mt-1.5 pt-1.5 border-t border-border-subtle text-text-secondary">
-          <div data-testid="host-card-slots">{t('fleet.card.slots', { hu: q.heavy_used, ht: q.heavy_total, lu: q.light_used, lt: q.light_total })}</div>
-          <div data-testid="host-card-queue">
-            {t('fleet.card.queue_pre')}<span className={q.waiters.length > 0 ? 'text-status-warning-text' : ''}>{q.waiters.length}</span>
-            {q.waiters.length > 0 && t('fleet.card.queue_longest', { t: mmss(q.longest_wait_s) })}
-          </div>
-          {q.admission_held && <div data-testid="host-card-held" className="text-status-error-text">{t('fleet.card.held')}</div>}
-        </div>
-      )}
-      {(primaryElsewhere || waitingPrimary) && (
-        <div className="mt-1.5 text-text-muted">{t(primaryElsewhere ? 'fleet.primary_elsewhere' : 'fleet.waiting_primary')}</div>
-      )}
+      {ok && <PoolRows pool={view} />}
     </div>
   )
   return createPortal(card, document.body)

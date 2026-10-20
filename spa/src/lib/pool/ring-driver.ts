@@ -1,7 +1,7 @@
 // spa/src/lib/pool/ring-driver.ts — which reading sets the ring's length: the daemon's composite (internal/fleet/load.go
 // `Composite`) is the largest of CPU %, memory %, the level score (1 -> 30, 2 -> 75, 4 -> 100), the page rate capped at 100,
 // and the disk % only from 85 %. The hover card marks that row. A tie goes to the first in this order.
-import type { FleetFast } from '../fleet/types'
+import type { CellFast } from './cell-model'
 
 export type RingDriver = 'cpu' | 'mem' | 'pressure' | 'paging' | 'disk'
 
@@ -16,7 +16,7 @@ export function levelScore(level: number): number {
 }
 
 /** null when every score is 0 (all 0 or unknown): the ring is empty, so no row is marked. */
-export function ringDriver(f: Pick<FleetFast, 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>): RingDriver | null {
+export function ringDriver(f: Pick<CellFast, 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>): RingDriver | null {
   const scores: [RingDriver, number][] = [
     ['cpu', clamp100(f.cpu)],
     ['mem', clamp100(f.mem)],
