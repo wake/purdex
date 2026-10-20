@@ -753,3 +753,29 @@ describe('ActivityBarWide — the + follows the sidebar view (TG-3d)', () => {
   })
 })
 
+
+describe('ActivityBarWide — a drag that starts on a task-group row goes to the view (TG-3e)', () => {
+  it('the drop of a plain tab on a group sets the tab\'s group; the workspace drag-end is not asked', async () => {
+    const { useTeamUiStore } = await import('../../../stores/useTeamUiStore')
+    const { useManualGroupsStore } = await import('../../../stores/useManualGroupsStore')
+    const { useTabStore } = await import('../../../stores/useTabStore')
+    const { manualGroupKey, UNGROUPED } = await import('../../../lib/task-groups/group-key')
+    const onReorderWorkspaces = vi.fn()
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    const tx = { id: 'tx', kind: 'new-tab', locked: false, pinned: false, createdAt: 1, layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'new-tab' } } } }
+    useTabStore.setState({ tabs: { tx }, tabOrder: ['tx'], activeTabId: null } as never)
+    dnd.props = null
+    renderBar({ onReorderWorkspaces })
+    act(() => {
+      dnd.props!.onDragEnd!({
+        active: { id: 'tx', data: { current: { type: 'group-tab', tabId: 'tx', groupKey: UNGROUPED, kind: 'plain' } } },
+        over: { id: 'group-drop:aaaaaaaa', data: { current: { type: 'group-drop', target: { kind: 'group', groupId: 'aaaaaaaa' } } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(useTabStore.getState().tabs.tx.group).toBe(manualGroupKey('aaaaaaaa'))
+    expect(onReorderWorkspaces).not.toHaveBeenCalled()
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null } as never)
+  })
+})

@@ -7,6 +7,7 @@
 // A click switches to the session's workspace and tab (the same handler as the workspace view). Which group a solo session is in is decided by its (host, lineage root) (hooks/useSessionRoots.ts, the device-local
 // root cache); until the root is read it is 未分組 for the display. A write that needs a root gets it with `resolveRoot` (lib/task-groups/session-actions.ts). The roots are read only while this view is mounted, i.e. open.
 import { useMemo, useState } from 'react'
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { TaskGroupSeatClosed } from './TaskGroupSeatClosed'
@@ -35,7 +36,10 @@ import { InlineTab } from './InlineTab'
 import { TaskGroupHeader } from './TaskGroupHeader'
 import { TeamGroupHeader } from './TeamGroupHeader'
 import { TaskGroupHeaderMenu } from './TaskGroupHeaderMenu'
-import { useGroupDrag } from './useGroupDrag'
+import { GroupDropSection } from './GroupDropSection'
+import { useGroupDragEnd } from './useGroupDragEnd'
+import type { DragRowKind } from '../../../lib/task-groups/drop-resolve'
+import type { GroupTabDragData } from '../lib/group-drag'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 
 interface Props {
@@ -149,35 +153,31 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     }))
   }
 
-  // Dragging a solo session: onto any group files it there, onto 「未分組」 takes it out (lib/task-groups/drag.ts). A team seat is not draggable and a team takes no drop (L10).
-  const groupOfTab = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const sec of view) if (sec.kind === 'manual') for (const r of sec.rows) if (r.tabId !== null) m.set(r.tabId, sec.groupId)
-    return m
-  }, [view])
-  const drag = useGroupDrag({
-    sourceOf: (tabId) => {
-      const s = sessionOfTab.get(tabId)
-      if (!s) return null
-      return { session: { hostId: s.hostId, agentSessionId: s.agentSessionId, tabId }, currentGroupId: groupOfTab.get(tabId) ?? null }
-    },
+  // Dragging a row (the sidebar's DndContext, lib/group-drag.ts): inside its group it reorders; onto another group a solo session is filed there (onto 「未分組」 taken out) and a plain tab gets its `group`; a team seat
+  // never leaves its team and a team takes no drop (L10, lib/task-groups/drop-resolve.ts).
+  useGroupDragEnd({
+    ctx: { tabs: tabsById, index, manual, rootOf: roots.rootOf },
+    sessionOf: (tabId) => { const s = sessionOfTab.get(tabId); return s ? { hostId: s.hostId, agentSessionId: s.agentSessionId, tabId } : null },
     onResult: done,
   })
-  const lit = (key: string) => (drag.over === key ? ' rounded-md ring-1 ring-border-active' : '')
+  /** The sortable ids of a group's rows: the rows with a tab, the lead (which never moves) left out. */
+  const sortableIds = (rows: GroupRow[]) => rows.flatMap((r) => (r.tabId !== null && tabsById[r.tabId] ? [r.tabId] : []))
 
-  const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null, inTeam = false) => {
+  const renderRow = (row: GroupRow, groupKey: string, teamKey?: string, isLead = false, groupId: string | null = null, inTeam = false) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
     const seat = row.seat
     const openSeat = seat && teamKey ? () => { openTeamSeat(teamKey, seat.session.session_id) } : undefined
     if (tab) {
+      const kind: DragRowKind = seat ? 'seat' : sessionOfTab.has(tab.id) && !inTeam ? 'session' : 'plain'
+      const dragData: GroupTabDragData = { type: 'group-tab', tabId: tab.id, groupKey, kind }
       const inner = (
         <InlineTab
-          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag leadOfTeam={isLead ? teamKey : undefined}
+          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag={isLead} dragData={dragData} leadOfTeam={isLead ? teamKey : undefined}
           seatOverride={seat ? { address: seat.session.address, title: seat.label } : undefined}
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
-      return seat || inTeam ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
+      return seat || inTeam ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)}>{inner}</div>
     }
     // A team seat no open tab shows: listed (dimmed, dressed as its persona), and a click opens it.
     return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
@@ -225,11 +225,13 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
               <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} {...headerProps(key, true)} />
-              {open && renderRow(section.lead, section.view.key, true)}
+              {open && renderRow(section.lead, key, section.view.key, true)}
               {open && (
-                <div className="ml-4 border-l border-border-subtle">
-                  {section.rest.map((r) => renderRow(r, section.view.key, false, null, true))}
-                </div>
+                <SortableContext items={sortableIds(section.rest)} strategy={verticalListSortingStrategy}>
+                  <div className="ml-4 border-l border-border-subtle">
+                    {section.rest.map((r) => renderRow(r, key, section.view.key, false, null, true))}
+                  </div>
+                </SortableContext>
               )}
             </section>
           )
@@ -241,10 +243,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           const hasMembers = section.group.members.length > 0
           const open = isExpanded(key)
           return (
-            <section
-              key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.groupId)}`}
-              {...drag.targetProps({ kind: 'group', groupId: section.groupId })}
-            >
+            <GroupDropSection key={section.key} id={section.groupId} target={{ kind: 'group', groupId: section.groupId }} testId="task-group-manual" collapsed={collapsed}>
               <TaskGroupHeader
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} muted={collapsed} {...headerProps(key, !collapsed)}
                 edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
@@ -253,16 +252,24 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
                 clear={collapsed && hasMembers ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
               {collapsed && !hasMembers && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}
-              {!collapsed && open && section.rows.map((r) => renderRow(r, undefined, false, section.groupId))}
-            </section>
+              {!collapsed && open && (
+                <SortableContext items={sortableIds(section.rows)} strategy={verticalListSortingStrategy}>
+                  {section.rows.map((r) => renderRow(r, key, undefined, false, section.groupId))}
+                </SortableContext>
+              )}
+            </GroupDropSection>
           )
         }
         return (
-          <section key="ungrouped" data-testid="task-group-ungrouped" className={`flex flex-col${lit('ungrouped')}`} {...drag.targetProps({ kind: 'ungrouped' })}>
+          <GroupDropSection key="ungrouped" id="ungrouped" target={{ kind: 'ungrouped' }} testId="task-group-ungrouped">
             {i > 0 && <div className="mx-3 my-1 h-px bg-border-default" />}
             <TaskGroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} muted {...headerProps(UNGROUPED, true)} />
-            {isExpanded(UNGROUPED) && section.rows.map((r) => renderRow(r))}
-          </section>
+            {isExpanded(UNGROUPED) && (
+              <SortableContext items={sortableIds(section.rows)} strategy={verticalListSortingStrategy}>
+                {section.rows.map((r) => renderRow(r, UNGROUPED))}
+              </SortableContext>
+            )}
+          </GroupDropSection>
         )
       })}
       {menu && groupsById[menu.groupId] && (
