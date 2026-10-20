@@ -12,7 +12,7 @@ const OWNER_KINDS = ['session', 'job', 'codex', 'resident', 'system']
 // eslint-disable-next-line react-refresh/only-export-components
 export function ownerWords(o: ProcOwner, t: (k: string, p?: Record<string, string | number>) => string): string {
   if (!OWNER_KINDS.includes(o.kind)) return o.kind
-  if (o.kind === 'session' && o.session === 'orphan') return t('watch.host.owner.orphan')
+  if (o.session === 'orphan') return t('watch.host.owner.orphan')
   const id = o.kind === 'job' ? o.id : o.kind === 'system' ? undefined : (o.session ?? o.id)
   return t(`watch.host.owner.${o.kind}`) + (id ? ` ${id}` : '')
 }

@@ -55,6 +55,11 @@ describe('ProcList', () => {
     expect(screen.getByTestId('o-owner-2')).toHaveTextContent(t('watch.host.owner.orphan'))
     expect(screen.getByTestId('o-owner-3')).toHaveTextContent(`${t('watch.host.owner.session')} ab12`)
   })
+  it('the wire\'s orphan is a resident whose session is "orphan": also no owner (codex attack)', () => {
+    render(<ProcList testId="w" title="T" rows={[proc(1, { owner: { kind: 'resident', session: 'orphan' } })]} by="cpu" offline={false} />)
+    expect(screen.getByTestId('w-owner-1')).toHaveTextContent(t('watch.host.owner.orphan'))
+    expect(screen.getByTestId('w-owner-1')).not.toHaveTextContent(t('watch.host.owner.resident'))
+  })
   it('offline: one row that says there is no data', () => {
     render(<ProcList testId="x" title="T" rows={[proc(1)]} by="cpu" offline />)
     expect(screen.getByTestId('x')).toHaveTextContent(t('watch.host.offline_no_data'))
