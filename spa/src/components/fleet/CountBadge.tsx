@@ -14,14 +14,14 @@ const GEOMETRY: Record<CountBadgeSize, string> = {
   sm: '-top-[5px] -right-[5px] min-w-[9px] h-[9px] text-[7px]',
 }
 
-export function CountBadge({ n, size = 'md', className = '', style, testId }: { n: number; size?: CountBadgeSize; className?: string; style?: React.CSSProperties; testId?: string }) {
+export function CountBadge({ n, size = 'md', className = '', style, testId, label }: { n: number; size?: CountBadgeSize; className?: string; style?: React.CSSProperties; testId?: string; label?: string }) {
   return (
     <span
       data-testid={testId}
       className={`absolute ${GEOMETRY[size]} z-10 px-[2px] rounded-full inline-flex items-center justify-center leading-none font-semibold tabular-nums ${className}`}
       style={{ boxShadow: '0 0 0 1px var(--surface-tertiary)', ...style }}
     >
-      {n > 99 ? '99+' : n}
+      {label ?? (n > 99 ? '99+' : n)}
     </span>
   )
 }
