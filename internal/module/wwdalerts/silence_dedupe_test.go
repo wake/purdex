@@ -131,6 +131,43 @@ func TestSilenceChangingKindIsToldAgainAndTheSameKindIsNot(t *testing.T) {
 	assert.Equal(t, 3, e.ntf.count(), "a change back is a change too")
 }
 
+// The kind that was told is in the ledger, so a restart of the deliverer does not lose it: wwd_down told, the daemon restarts, and the same
+// failure (same key and Since) is now host_down — told again; and the same kind after a restart is still not.
+func TestSilenceKindToldSurvivesARestart(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	wwdDown := silenceKind("mserv", t0, wire.SilenceDetailWwdDown("mserv"))
+	e.src.set("mlab", wwdDown)
+	e.pass(t)
+	require.Equal(t, 1, e.ntf.count())
+	e.ntf.confirm(0)
+
+	e.m = e.module(t)
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "the same kind after a restart: not told again")
+
+	e.m = e.module(t)
+	e.src.set("mlab", silenceKind("mserv", t0, wire.SilenceDetailHostDown("mserv")))
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	require.Equal(t, 2, e.ntf.count(), "the host went while the daemon was down: told")
+	assert.Contains(t, e.ntf.got[1].Title, "主機離線")
+	e.ntf.confirm(1)
+
+	// and the other way, which only a kind that was kept (not the default) can tell: host_down was told, the host came back and its wwd
+	// did not while the daemon was down
+	e.m = e.module(t)
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count(), "host_down told, host_down still: not told again after a restart")
+	e.m = e.module(t)
+	e.src.set("mlab", wwdDown)
+	e.now = e.now.Add(5 * time.Minute)
+	e.pass(t)
+	assert.Equal(t, 3, e.ntf.count(), "the kind that was told is the kept one, not the default")
+}
+
 // Two wwds that see the same failure differently (one reaches the host's SSH port, the other does not) are one failure with one kind: the
 // host-down words win, and the push says the same whichever list is read first.
 func TestSilenceTwoWWDsDisagreeingOnTheKindMakeOneAlertInTheWorseWords(t *testing.T) {

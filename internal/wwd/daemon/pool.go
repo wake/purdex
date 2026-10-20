@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -223,7 +225,11 @@ func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path str
 	defer resp.Body.Close()
 	body, err := readCapped(resp.Body)
 	if err != nil {
-		return zero, err
+		if errors.Is(err, errTooLarge) {
+			return zero, err // it answered, with too much
+		}
+		// the connection went away in the middle of the answer: nothing answered (a url.Error, like a failure to connect)
+		return zero, &url.Error{Op: "Get", URL: path, Err: err}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return zero, &StatusError{Path: path, Code: resp.StatusCode}

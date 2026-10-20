@@ -456,10 +456,11 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 		}
 		// The kind of the silence (the peer's wwd only, or its host) is part of what was told: the same failure that changes kind is told
 		// again, in the new words. A restart of this daemon forgets the kind it last told (the ledger holds the failure, not its words).
-		kindChanged := false
-		if prev, had := m.hostDown[k]; had && prev != nowHostDown[k] {
-			kindChanged = true
+		prev, had := m.hostDown[k]
+		if !had { // the first look at it since this daemon started: the ledger knows the kind that was told
+			prev, had = m.store.toldKind(silenceLedger, k)
 		}
+		kindChanged := had && prev != nowHostDown[k]
 		m.hostDown[k] = nowHostDown[k]
 		if continuing {
 			if kindChanged {
@@ -475,6 +476,15 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 			m.episode[k] = time.UnixMilli(row.Since)
 		} else {
 			m.episode[k] = now
+		}
+		if kindChanged { // the failure goes on, as another kind (the ledger's kind, after a restart, counts as what was told)
+			m.episode[k] = now
+		}
+	}
+	// a key no list holds has cleared; its kind is compared with the ledger's (what was last told) if it comes back
+	for k := range m.hostDown {
+		if !keys[k] {
+			delete(m.hostDown, k)
 		}
 	}
 	for h, held := range nowHeld {
@@ -592,6 +602,11 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if err := m.store.beginAttempt(host, a.Key, since, now); err != nil {
 		m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
 		return
+	}
+	if sharedLedger(a) { // the kind that is being told, for the next pass (and the next start) to compare with
+		if err := m.store.setKind(host, a.Key, m.hostDown[a.Key]); err != nil {
+			m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
+		}
 	}
 	key := a.Key
 	queued := ntf.NotifyAlert(push.AlertPush{

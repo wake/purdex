@@ -133,6 +133,25 @@ func TestAnAnswerThatIsWrongProvesTheHostIsUp(t *testing.T) {
 	}
 }
 
+// A connection that goes away after the headers (or in the middle of the body) is not an answer: the wwd did not answer, and the host is
+// looked at.
+func TestAConnectionCutInTheMiddleOfAnAnswerIsLookedAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"host_id":"id-air19",`))
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPoolPoller([]PeerAddr{{"air19", addr(srv)}}, testToken, nil)
+	d := &fakeDial{}
+	d.set(context.DeadlineExceeded)
+	p.dial = d.dial
+	p.PollOnce(context.Background())
+	assert.Equal(t, wire.LivenessHostDown, p.Peers()[0].Liveness)
+	assert.Len(t, d.addrs(), 1)
+}
+
 // Two times: when the peer was last looked at (moves at every look) and since when it has been in this liveness (moves only when the value
 // does, and is set when it comes back to ok too), which is what the App shows as "offline for 12 minutes".
 func TestLivenessSinceMovesOnlyWhenTheValueDoes(t *testing.T) {

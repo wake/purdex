@@ -58,7 +58,56 @@ func openStore(path string) (*store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate alert ledger: %w", err)
 	}
+	// host_down: of a silence: alert, whether the kind that was last put in the push module's hands said the host itself is gone (the words of
+	// wire.SilenceDetailHostDown). A change of it inside one failure is pushed again, also across a restart of this daemon.
+	if err := addColumn(db, "deliveries", "host_down", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate alert ledger: %w", err)
+	}
 	return &store{db: db}, nil
+}
+
+// addColumn adds a column to a table that does not have it yet (a second start changes nothing).
+func addColumn(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	have := false
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		if n == column {
+			have = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if have {
+		return nil
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl)
+	return err
+}
+
+// setKind records the kind of the silence that was just put in the push module's hands (host and key as in the delivery row).
+func (s *store) setKind(host, key string, hostDown bool) error {
+	_, err := s.db.Exec(`UPDATE deliveries SET host_down = ? WHERE host = ? AND key = ?`, hostDown, host, key)
+	return err
+}
+
+// toldKind is the kind that was last put in the push module's hands for the key; false when there is no row.
+func (s *store) toldKind(host, key string) (hostDown, ok bool) {
+	if err := s.db.QueryRow(`SELECT host_down FROM deliveries WHERE host = ? AND key = ?`, host, key).Scan(&hostDown); err != nil {
+		return false, false
+	}
+	return hostDown, true
 }
 
 func (s *store) close() error { return s.db.Close() }
