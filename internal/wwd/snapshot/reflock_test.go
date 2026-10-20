@@ -149,8 +149,8 @@ func TestACancelDuringTheWaitIsTheContextsError(t *testing.T) {
 	assert.Less(t, time.Since(start), 4*time.Second, "the wait ended with the context, not after the backoff")
 }
 
-// The lock error is recognised by the English words of the tool that raised it, so every command this package starts runs with the C locale
-// whatever locale the service was started in (LC_ALL wins over LANG and LC_MESSAGES, and LANGUAGE is ignored under C). The last value of a
+// The lock error is recognised by the English words of the tool that raised it, so a ref write runs with the C locale (no other command of
+// the package does: a checkout keeps the locale its filters expect) whatever locale the service was started in (LC_ALL wins over LANG and LC_MESSAGES, and LANGUAGE is ignored under C). The last value of a
 // name is the one the child gets.
 func TestTheToolRunsInTheCLocaleWhateverTheParentUses(t *testing.T) {
 	t.Setenv("LC_ALL", "de_DE.UTF-8")
@@ -158,9 +158,45 @@ func TestTheToolRunsInTheCLocaleWhateverTheParentUses(t *testing.T) {
 	t.Setenv("LANG", "de_DE.UTF-8")
 	t.Setenv("LANGUAGE", "de")
 	last := map[string]string{}
-	for _, kv := range gitEnv() {
+	for _, kv := range refWriteEnv() {
 		name, val, _ := strings.Cut(kv, "=")
 		last[name] = val
 	}
 	assert.Equal(t, "C", last["LC_ALL"])
+	for _, kv := range gitEnv() {
+		assert.NotEqual(t, "LC_ALL=C", kv, "only a ref write is pinned to the C locale")
+	}
+}
+
+// A wait whose timer and whose context are ready together is still the context's error: select picks either branch, so the wait checks the
+// context after it, and a cancelled caller does not start another git.
+func TestWaitRefLock_ACancelledContextWinsOverAReadyTimer(t *testing.T) {
+	old := refLockBackoff
+	refLockBackoff = 0
+	defer func() { refLockBackoff = old }()
+	for i := 0; i < 200; i++ {
+		require.ErrorIs(t, waitRefLock(&endsDuringWait{Context: context.Background()}), context.Canceled)
+	}
+	assert.NoError(t, waitRefLock(context.Background()))
+}
+
+// endsDuringWait is a context that is live when the wait starts (the first Err is nil) and ended once it is over, with Done already closed:
+// the timer and the end are ready together.
+type endsDuringWait struct {
+	context.Context
+	calls int
+}
+
+func (c *endsDuringWait) Err() error {
+	c.calls++
+	if c.calls == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func (c *endsDuringWait) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }

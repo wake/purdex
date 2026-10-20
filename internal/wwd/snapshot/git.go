@@ -38,10 +38,13 @@ func validJobID(id string) error {
 
 // gitEnv is the environment of every git command here: the repository is the one in repoDir, whatever repository or configuration
 // variables the process carries, and no prompt can stop it.
-// gitEnv is the environment of every git this package starts: the cleaned one of the process, with the C locale. isRefLockError reads git's
-// English error text, and LC_ALL wins over LANG and LC_MESSAGES (and makes git ignore LANGUAGE), so a service started in another locale
-// still gets the words it looks for. The later value of a name is the one the child gets.
-func gitEnv() []string { return append(gitenv.Clean(os.Environ()), "LC_ALL=C") }
+func gitEnv() []string { return gitenv.Clean(os.Environ()) }
+
+// refWriteEnv is gitEnv with the C locale, for the commands that write a ref (gitRefWrite): isRefLockError reads git's English error text,
+// and LC_ALL wins over LANG and LC_MESSAGES (and makes git ignore LANGUAGE), so a service started in another locale still gets the words
+// it looks for. Those commands run no filter that reads the locale; a checkout (worktree add) keeps the process's own. The later value of
+// a name is the one the child gets.
+func refWriteEnv() []string { return append(gitEnv(), "LC_ALL=C") }
 
 // errTooLarge is what a command whose output went over its limit is: it was stopped, not waited for.
 var errTooLarge = errors.New("snapshot: output over the limit")
@@ -72,8 +75,13 @@ func git(ctx context.Context, tag, repoDir string, args ...string) ([]byte, erro
 
 // gitLimited is git with its own limit on the output: over it, git is stopped and the error is errTooLarge.
 func gitLimited(ctx context.Context, tag, repoDir string, max int, args ...string) ([]byte, error) {
+	return gitRun(ctx, gitEnv(), tag, repoDir, max, args...)
+}
+
+// gitRun is gitLimited with the environment of the command given.
+func gitRun(ctx context.Context, env []string, tag, repoDir string, max int, args ...string) ([]byte, error) {
 	cmd := execstat.CommandContext(ctx, tag, "git", append([]string{"-C", repoDir}, args...)...)
-	cmd.Env = gitEnv()
+	cmd.Env = env
 	out := &limitedBuffer{max: max}
 	var errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = out, &errb
@@ -102,18 +110,29 @@ func isRefLockError(err error) bool {
 	return strings.Contains(msg, "cannot lock ref") || strings.Contains(msg, "Unable to create") && strings.Contains(msg, ".lock")
 }
 
+// waitRefLock waits refLockBackoff and returns the context's error when it ended, also when the timer and the end of the context were ready
+// together (select picks either one then), so a cancelled caller never starts another git.
+func waitRefLock(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(refLockBackoff):
+	}
+	return ctx.Err()
+}
+
 // gitRefWrite is git for the commands that write or delete a ref (update-ref, fetch into a ref). The clone may be shared with another git
 // user, and two writers of the same ref directory or of packed-refs fail one of them with "cannot lock ref" for the moment the other holds
 // the lock; that one is tried again (refLockTries times, refLockBackoff apart), any other error at once.
 func gitRefWrite(ctx context.Context, tag, repoDir string, args ...string) ([]byte, error) {
-	out, err := git(ctx, tag, repoDir, args...)
+	out, err := gitRun(ctx, refWriteEnv(), tag, repoDir, smallOutput, args...)
 	for try := 0; try < refLockTries && isRefLockError(err); try++ {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%w (after %v)", ctx.Err(), err)
-		case <-time.After(refLockBackoff):
+		if werr := waitRefLock(ctx); werr != nil {
+			return nil, fmt.Errorf("%w (after %v)", werr, err)
 		}
-		out, err = git(ctx, tag, repoDir, args...)
+		out, err = gitRun(ctx, refWriteEnv(), tag, repoDir, smallOutput, args...)
 	}
 	return out, err
 }
