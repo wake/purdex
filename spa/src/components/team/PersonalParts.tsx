@@ -92,6 +92,7 @@ export function PersonalCell({ target, isActive = true }: { target: PersonalTarg
           sessionCode={target.sessionCode}
           isActive={isActive}
           subagents
+          light={!ended}
           avatar={<Avatar size={18} code={persona?.code ?? ''} name={name} src={persona?.avatar} decorative />}
         />
       </span>

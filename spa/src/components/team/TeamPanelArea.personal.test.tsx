@@ -10,6 +10,7 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { usePersonaStore } from '../../stores/usePersonaStore'
 import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
@@ -18,7 +19,7 @@ import { lineWidthFor } from './panel-layout'
 import type { Tab } from '../../types/tab'
 
 vi.mock('./TeamSeatIcon', () => ({
-  TeamSeatIcon: () => <span data-testid="seat-icon" />,
+  TeamSeatIcon: (p: { light?: boolean }) => <span data-testid="seat-icon" data-light={String(p.light !== false)} />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
 }))
 
@@ -139,6 +140,16 @@ describe('a tab that shows an agent session and is no team seat', () => {
     })
     mount()
     expect(screen.getByTestId('personal-cell').getAttribute('data-ended')).toBe('true')
+    expect(screen.getByTestId('seat-icon').getAttribute('data-light')).toBe('false') // no light, not just dimmed
+  })
+})
+
+describe('the status line asks for the panel\'s own session', () => {
+  it('a codex session\'s workbook is loaded (not only a live cc pane\'s)', () => {
+    const loadSeat = vi.fn(() => Promise.resolve('ok'))
+    act(() => { useWorkbookStore.setState((s) => ({ support: { ...s.support, [HOST]: { v1: true, v2: false } }, loadSeat }) as never) })
+    scene(); addTab(ccTab('cx', { type: 'codex', sessionId: 'S2' })); setActive('cx'); shared('line'); mount()
+    expect(loadSeat).toHaveBeenCalledWith(HOST, 'S2')
   })
 })
 
