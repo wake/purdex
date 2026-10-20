@@ -17,7 +17,8 @@ import { SegmentControl } from '../settings/SegmentControl'
 import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
 import { METRICS, gaugeOf } from '../../lib/watch/metrics'
 import { RANGES, stepMs } from '../../lib/watch/series'
-import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
+import { readHostRange, readHostTab, writeHostRange, writeHostTab } from '../../lib/watch/view-memory'
+import type { HostRange } from '../../lib/pool/host-history'
 import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
 import { fleetViewOfPoolHost, matchPoolHost } from '../../lib/pool/fleet-bridge'
 import { usePoolHostDaemons } from '../../lib/pool/daemons'
@@ -88,6 +89,11 @@ function topProcs(procs: PoolProc[]): { cpu: ProcRow[]; mem: ProcRow[] } {
   }
 }
 
+// Until MON-6f-2 replaces this page it knows two of the host page's four sub-tabs (狀態, 設定) and four of its six ranges; anything else the memory holds reads as the nearest it knows.
+type HostPage = 'status' | 'settings'
+const OLD_RANGES: readonly HistoryRange[] = ['5m', '1h', '6h', '24h']
+const oldRange = (r: HostRange): HistoryRange => (OLD_RANGES.includes(r as HistoryRange) ? (r as HistoryRange) : '5m')
+
 export function WatchHostPane({ pane }: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
   const poolHostId = pane.content.kind === 'watch-host' ? pane.content.poolHostId : undefined
@@ -99,10 +105,10 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const lookOf = useHostLookResolver()
   // The range outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
-  const [range, setRangeState] = useState<HistoryRange>(() => readRange(memoryKey))
-  const setRange = (r: HistoryRange) => { writeRange(memoryKey, r); setRangeState(r) }
-  const [page, setPageState] = useState<HostPage>(() => readHostPage(memoryKey))
-  const setPage = (p: HostPage) => { writeHostPage(memoryKey, p); setPageState(p) }
+  const [range, setRangeState] = useState<HistoryRange>(() => oldRange(readHostRange(memoryKey)))
+  const setRange = (r: HistoryRange) => { writeHostRange(memoryKey, r); setRangeState(r) }
+  const [page, setPageState] = useState<HostPage>(() => (readHostTab(memoryKey) === 'settings' ? 'settings' : 'status'))
+  const setPage = (p: HostPage) => { writeHostTab(memoryKey, p); setPageState(p) }
 
   const all = useMemo(() => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : []), [snapshot, hosts, hostOrder])
   const poolHosts = usePoolStore((s) => s.hosts)
