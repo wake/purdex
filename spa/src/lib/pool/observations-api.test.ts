@@ -109,18 +109,19 @@ describe('parseUndeclared', () => {
     expect(r.groups[0]).toEqual({ signature: 'go test', count: 3, cpuSeconds: 120.5, maxMemMb: 800, lastAt: Date.parse('2026-10-20T03:00:00Z'), lastSession: 's1', lastVia: 'session', lastCommand: 'go test ./...' })
     expect(r.groups[1].lastVia).toBe('codex')
   })
-  it('groups: null is an empty list; known: false (an older wwd) is an answer with nothing in it', () => {
+  it('groups: null is an empty list; known: false (an older wwd, the daemon\'s own answer) is an answer with nothing in it, whatever else it holds', () => {
     expect(parseUndeclared(ubody({ groups: null }))!.groups).toEqual([])
     const old = parseUndeclared({ host: 'air26', known: false, groups: [] })!
     expect([old.known, old.groups]).toEqual([false, []])
+    expect(parseUndeclared({ host: 'air26', known: false })!.groups).toEqual([])
   })
-  it('a group without a signature, with a count of 0 or a time that is no time is dropped (the Go contract refuses it too); the others stay', () => {
-    const r = parseUndeclared(ubody({ groups: [{ ...GROUP, signature: '' }, { ...GROUP, count: 0 }, { ...GROUP, last_at: 'nope' }, CODEX] }))!
-    expect(r.groups.map((g) => g.signature)).toEqual(['codex exec'])
+  it('fails closed: one bad group (no signature, a count of 0, a time that is no time, a via that is not session or codex, a figure that is not a finite number of 0 or more) makes the page nothing (codex attack)', () => {
+    for (const bad of [{ ...GROUP, signature: '' }, { ...GROUP, count: 0 }, { ...GROUP, last_at: 'nope' }, { ...GROUP, last_via: 'newkind' }, { ...GROUP, cpu_seconds: -1 }, { ...GROUP, max_mem_mb: 'x' }, { ...GROUP, cpu_seconds: undefined }]) {
+      expect(parseUndeclared(ubody({ groups: [CODEX, bad] }))).toBeNull()
+    }
   })
-  it('a via the App does not know stays as the word; a missing figure is 0', () => {
-    const r = parseUndeclared(ubody({ groups: [{ signature: 'x', count: 1, last_at: '2026-10-20T03:00:00Z', last_via: 'newkind' }] }))!
-    expect(r.groups[0]).toMatchObject({ lastVia: 'newkind', cpuSeconds: 0, maxMemMb: 0, lastCommand: '', lastSession: '' })
+  it('a page of good groups is a page', () => {
+    expect(parseUndeclared(ubody({ groups: [GROUP, CODEX] }))!.groups).toHaveLength(2)
   })
   it('truncated comes through; an answer without a host is nothing', () => {
     expect(parseUndeclared(ubody({ truncated: true }))!.truncated).toBe(true)

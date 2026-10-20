@@ -116,32 +116,41 @@ export interface UndeclaredPage {
   truncated: boolean
 }
 
+const finite = (v: unknown): v is number => num(v) && Number.isFinite(v) && v >= 0
+
+/** Go: wire.UndeclaredResponse.Validate: a signature, a count above 0, `last_via` session or codex; the figures and the time have to be real, or the group is not what wwd wrote. */
 function parseGroup(v: unknown): UndeclaredGroup | null {
   if (!isRec(v)) return null
   const { signature, last_via: via } = v
-  if (!str(signature) || signature === '' || !str(via) || via === '') return null
-  if (!num(v.count) || v.count <= 0) return null
+  if (!str(signature) || signature === '' || (via !== 'session' && via !== 'codex')) return null
+  if (!finite(v.count) || v.count <= 0 || !Number.isInteger(v.count)) return null
+  if (!finite(v.cpu_seconds) || !finite(v.max_mem_mb)) return null
   const lastAt = time(v.last_at)
   if (lastAt === null) return null
   return {
     signature, count: v.count, lastAt, lastVia: via,
-    cpuSeconds: figure(v.cpu_seconds), maxMemMb: figure(v.max_mem_mb),
+    cpuSeconds: v.cpu_seconds, maxMemMb: v.max_mem_mb,
     lastSession: str(v.last_session) ? v.last_session : '', lastCommand: str(v.last_command) ? v.last_command : '',
   }
 }
 
-/** The grouped read (`/undeclared`): same trust boundary as the records: a group that lacks what names it or whose count or time is broken is dropped (Go: wire.UndeclaredResponse.Validate), the others stay. */
+/**
+ * The grouped read (`/undeclared`). Fail closed: one group that breaks the contract (the Go `Validate` refuses the whole answer) makes the page nothing, not a smaller page that reads as a whole one.
+ * The one answer with no groups to read is the daemon's own `known: false` (an older wwd).
+ */
 export function parseUndeclared(v: unknown): UndeclaredPage | null {
   if (!isRec(v)) return null
   if (!str(v.host) || v.host === '') return null
+  if (v.known === false) return { host: v.host, known: false, groups: [], truncated: false }
   if (v.groups !== null && !Array.isArray(v.groups)) return null
   if (v.groups === undefined) return null
   const groups: UndeclaredGroup[] = []
   for (const row of (v.groups as unknown[] | null) ?? []) {
     const g = parseGroup(row)
-    if (g) groups.push(g)
+    if (!g) return null
+    groups.push(g)
   }
-  return { host: v.host, known: v.known !== false, groups, truncated: v.truncated === true }
+  return { host: v.host, known: true, groups, truncated: v.truncated === true }
 }
 
 /**

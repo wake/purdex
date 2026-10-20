@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import { holdObservations, loadUndeclared, readUndeclared, readUndeclaredLoad, subscribeObservations, type ObservationLoad } from './host-observations'
+import { holdObservations, loadUndeclared, observationKey, readUndeclared, readUndeclaredLoad, subscribeObservations, type ObservationLoad } from './host-observations'
 import type { UndeclaredPage } from './observations-api'
 
 const REFRESH_MS = 60_000
@@ -30,5 +30,5 @@ export function useHostObservations(hostId: string, alias: string, hostOk: boole
   }, [on, source, alias, hostId])
 
   const availability: ObservationsAvailability = !announced ? 'no_route' : !hostOk ? 'host_down' : 'ok'
-  return { availability, page: readUndeclared(hostId)?.page ?? null, load: readUndeclaredLoad(hostId) }
+  return { availability, page: source ? (readUndeclared(hostId, observationKey(source, alias))?.page ?? null) : null, load: readUndeclaredLoad(hostId) }
 }

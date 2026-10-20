@@ -10,7 +10,8 @@ export const UNDECLARED_SPAN_MS = 7 * 24 * 3600_000
 const MAX_HOSTS = 32
 
 interface ObsMemory {
-  undeclared: { page: UndeclaredPage; at: number } | null
+  /** `key` is the source and alias it was read for: a page is shown only to the ask that read it. */
+  undeclared: { page: UndeclaredPage; at: number; key: string } | null
   load: ObservationLoad
   gen: number
   holds: number
@@ -57,7 +58,12 @@ export function holdObservations(hostId: string): () => void {
   }
 }
 
-export const readUndeclared = (hostId: string): { page: UndeclaredPage; at: number } | null => memory.get(hostId)?.undeclared ?? null
+export const observationKey = (source: string, alias: string): string => `${source}\0${alias}`
+/** The page read for this ask (`observationKey`), or null: a page read for another source or alias is never shown under this one. */
+export function readUndeclared(hostId: string, key: string): { page: UndeclaredPage; at: number } | null {
+  const u = memory.get(hostId)?.undeclared
+  return u && u.key === key ? u : null
+}
 export const readUndeclaredLoad = (hostId: string): ObservationLoad => memory.get(hostId)?.load ?? 'idle'
 
 const failure = (e: unknown): ObservationLoad => (e instanceof PoolReadError && e.poolError.code === 'forbidden' ? 'forbidden' : 'error')
@@ -65,9 +71,11 @@ const failure = (e: unknown): ObservationLoad => (e instanceof PoolReadError && 
 /** Reads the last 7 days' groups of `alias` through `source`'s daemon. The same ask while one is out shares it. Never throws. */
 export function loadUndeclared(source: string, alias: string, hostId: string, now: number): Promise<ObservationLoad> {
   const m = memoryOf(hostId)
-  const key = `${source}\0${alias}`
+  const key = observationKey(source, alias)
   if (m.inFlight?.key === key) return m.inFlight.promise
   const mine = ++m.gen
+  // Another source or alias is another host's reading: what was read for the old one goes now, not when the new one answers (or fails).
+  if (m.undeclared && m.undeclared.key !== key) m.undeclared = null
   m.load = 'loading'
   notify(m)
   const promise = (async (): Promise<ObservationLoad> => {
@@ -80,7 +88,9 @@ export function loadUndeclared(source: string, alias: string, hostId: string, no
     // A different ask started, or the last page left, while this one was out: it owns the memory now.
     if (m.gen !== mine) return m.load
     if (m.inFlight?.key === key) m.inFlight = null
-    if (out === 'ok' && page) m.undeclared = { page, at: now }
+    if (out === 'ok' && page) m.undeclared = { page, at: now, key }
+    // A refusal means this token may not read them any more: what an earlier read got is not shown (an ordinary failure keeps the last good page).
+    else if (out === 'forbidden') m.undeclared = null
     m.load = out
     notify(m)
     return out
