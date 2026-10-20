@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +32,7 @@ func TestAnOlderLedgerGainsTheKindColumn(t *testing.T) {
 		hd, ok := s.toldKind("(silence)", "silence:mserv")
 		assert.True(t, ok)
 		assert.Equal(t, i == 1, hd, "the first open reads the default (the wwd only); the second finds what the first wrote")
-		require.NoError(t, s.setKind("(silence)", "silence:mserv", true))
+		require.NoError(t, s.setKind("(silence)", "silence:mserv", time.UnixMilli(1), true))
 		hd, _ = s.toldKind("(silence)", "silence:mserv")
 		assert.True(t, hd)
 		_, ok = s.toldKind("(silence)", "silence:none")

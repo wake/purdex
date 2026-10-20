@@ -603,12 +603,10 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
 		return
 	}
-	if sharedLedger(a) { // the kind that is being told, for the next pass (and the next start) to compare with
-		if err := m.store.setKind(host, a.Key, m.hostDown[a.Key]); err != nil {
-			m.logf("wwdalerts: ledger %s/%s: %v", host, a.Key, err)
-		}
-	}
 	key := a.Key
+	// the kind of a silence that is being told (read now: the next pass may change it); it is kept in the ledger only once the push is taken,
+	// so a push taken back, or never queued, leaves the kind that was told before
+	shared, hostDown := sharedLedger(a), m.hostDown[a.Key]
 	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
 		Title:      title(about, a),
@@ -624,6 +622,11 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		Sent: func() {
 			if err := m.store.markSent(host, key, since, m.now()); err != nil {
 				m.logf("wwdalerts: record delivery %s/%s: %v", host, key, err)
+			}
+			if shared {
+				if err := m.store.setKind(host, key, since, hostDown); err != nil {
+					m.logf("wwdalerts: record kind %s/%s: %v", host, key, err)
+				}
 			}
 		},
 	})

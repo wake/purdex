@@ -96,9 +96,10 @@ func addColumn(db *sql.DB, table, column, decl string) error {
 	return err
 }
 
-// setKind records the kind of the silence that was just put in the push module's hands (host and key as in the delivery row).
-func (s *store) setKind(host, key string, hostDown bool) error {
-	_, err := s.db.Exec(`UPDATE deliveries SET host_down = ? WHERE host = ? AND key = ?`, hostDown, host, key)
+// setKind records the kind of the silence whose push the push module said APNs took (host and key as in the delivery row). A row that is
+// about another instance by now is left alone, as markSent leaves it.
+func (s *store) setKind(host, key string, since time.Time, hostDown bool) error {
+	_, err := s.db.Exec(`UPDATE deliveries SET host_down = ? WHERE host = ? AND key = ? AND since_ms = ?`, hostDown, host, key, since.UnixMilli())
 	return err
 }
 

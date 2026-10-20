@@ -168,6 +168,28 @@ func TestSilenceKindToldSurvivesARestart(t *testing.T) {
 	assert.Equal(t, 3, e.ntf.count(), "the kind that was told is the kept one, not the default")
 }
 
+// The kind in the ledger is the one that was delivered: a push that was taken back before it went out (the switch was turned off while it
+// waited) leaves the ledger saying what was told before, so a restart does not lose the change of kind.
+func TestSilenceKindOfARecalledPushIsNotKept(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	e.src.set("mlab", silenceKind("mserv", t0, wire.SilenceDetailWwdDown("mserv")))
+	e.pass(t)
+	require.Equal(t, 1, e.ntf.count())
+	e.ntf.confirm(0)
+
+	e.src.set("mlab", silenceKind("mserv", t0, wire.SilenceDetailHostDown("mserv")))
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	require.Equal(t, 2, e.ntf.count(), "the host went: put in the push module's hands")
+	e.ntf.got[1].Recalled() // taken back: nothing was sent
+
+	e.m = e.module(t) // the daemon restarts before the next pass
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 3, e.ntf.count(), "what was told is still wwd_down, so host_down is told")
+}
+
 // Two wwds that see the same failure differently (one reaches the host's SSH port, the other does not) are one failure with one kind: the
 // host-down words win, and the push says the same whichever list is read first.
 func TestSilenceTwoWWDsDisagreeingOnTheKindMakeOneAlertInTheWorseWords(t *testing.T) {
