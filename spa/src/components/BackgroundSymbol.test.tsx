@@ -1,6 +1,8 @@
 // U1-3c-2: the corner symbol for background work (spec N6) on every tab surface.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
+
+vi.mock('../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 import { Terminal } from '@phosphor-icons/react'
 import { BackgroundSymbol } from './BackgroundSymbol'
 import type { FleetWaiter } from '../lib/fleet/types'
@@ -9,6 +11,9 @@ import { renderInlineTabIcon } from '../features/workspace/lib/renderInlineTabIc
 import type { BackgroundKind, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { openWatchArea } from '../features/workspace/lib/open-watch-area'
+import { clearJobsViewMemory, readJobsMode, readSelectedJob, writeJobsMode } from '../lib/pool/jobs-view-memory'
+import type { QueuedJobMark } from '../lib/watch/queued-sessions'
 
 const EMPTY: SubagentRef[] = []
 const sym = () => screen.queryByTestId('tab-background-symbol')
@@ -67,6 +72,51 @@ describe('BackgroundSymbol', () => {
       vi.useFakeTimers()
       render(<BackgroundSymbol kind="workflow" />)
       expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('the hourglass of a pool job opens the job queue (M34, M40)', () => {
+    const mark = (over: Partial<QueuedJobMark> = {}): QueuedJobMark => ({ jobId: 'j1', origin: 'mlab', line: 'purdex test', state: 'running', place: 0, since: Date.now() - 1000, worker: 'mlab', ...over })
+    beforeEach(() => { vi.mocked(openWatchArea).mockClear(); clearJobsViewMemory() })
+
+    it('a press opens the task queue on the live view with the first job selected, and goes no further up (the tab is itself a button)', () => {
+      writeJobsMode('history')
+      const outer = vi.fn()
+      render(<div onClick={outer}><BackgroundSymbol kind="queued" waiters={[mark(), mark({ jobId: 'j2', state: 'queued', place: 1 })]} /></div>)
+      fireEvent.click(sym()!)
+      expect(openWatchArea).toHaveBeenCalledWith({ tab: 'jobs' })
+      expect(readJobsMode()).toBe('live')
+      expect(readSelectedJob()).toBe('mlab/j1')
+      expect(outer).not.toHaveBeenCalled()
+    })
+
+    it('pointerdown does not go up either (a tab starts a drag from it)', () => {
+      const down = vi.fn()
+      render(<div onPointerDown={down}><BackgroundSymbol kind="queued" waiters={[mark()]} /></div>)
+      fireEvent.pointerDown(sym()!)
+      expect(down).not.toHaveBeenCalled()
+    })
+
+    it('the first job is the first one among the jobs, whatever gate waiters come before it', () => {
+      render(<BackgroundSymbol kind="queued" waiters={[{ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: 1 }, mark({ jobId: 'j9', origin: 'mserv' })]} />)
+      fireEvent.click(sym()!)
+      expect(readSelectedJob()).toBe('mserv/j9')
+    })
+
+    it('only gate waiters: it does nothing and the click goes on up as before', () => {
+      const outer = vi.fn()
+      render(<div onClick={outer}><BackgroundSymbol kind="queued" waiters={[{ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: 1 }]} /></div>)
+      fireEvent.click(sym()!)
+      expect(openWatchArea).not.toHaveBeenCalled()
+      expect(outer).toHaveBeenCalled()
+    })
+
+    it('the other kinds are not pressable', () => {
+      const outer = vi.fn()
+      render(<div onClick={outer}><BackgroundSymbol kind="monitor" /></div>)
+      fireEvent.click(sym()!)
+      expect(openWatchArea).not.toHaveBeenCalled()
+      expect(outer).toHaveBeenCalled()
     })
   })
 
