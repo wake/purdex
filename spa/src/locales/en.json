@@ -3378,5 +3378,9 @@
   "watch.host.res_kind": "Kind",
   "watch.host.res_count": "Count",
   "watch.host.zone_band": "Zone",
-  "watch.host.history_not_local": "This host's history cannot be read through this daemon yet."
+  "watch.host.history_not_local": "This host's history cannot be read through this daemon yet.",
+  "personal.titlebar.to_pane": "Put the personal panel back in the pane",
+  "personal.titlebar.to_titlebar": "Move the personal panel to the title bar",
+  "personal.sessions": "{{count}} sessions",
+  "personal.ended": "Ended"
 }

@@ -2,7 +2,7 @@
 //
 // A floating layer over the top-right of the pane area (the shell's content box is `relative`): the panes keep their
 // size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`), or that team's
-// drilled-in seat workbook in the same frame; a tab of no team shows its own conversation's workbook (WA-2b-1b), in the
+// drilled-in seat workbook in the same frame; a tab of no team that shows an agent session gets the personal panel (task groups spec §7), in the
 // one value all such tabs share. Everything the person arranged lives in `useTeamUiStore` (width, and per team one of three
 // states: titlebar | line | full), so a tab switch that unmounts the pane and a reload both come back to the same
 // area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
@@ -19,30 +19,35 @@ import { usePanelDraftStore } from '../../stores/usePanelDraftStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
-import { useOwnWorkbook } from './own-workbook'
+import { usePersonalTarget } from './usePersonalPanel'
 import { TeamPanel } from './TeamPanel'
 import { useShownPanelWidth } from './useShownPanelWidth'
+import { PersonalPanel } from './PersonalPanel'
 import { OwnWorkbookPanel } from './OwnWorkbookPanel'
+import { useLoadedSeatWorkbook } from './own-workbook'
 
 export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
   const display = useTeamDisplay()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
-  const own = useOwnWorkbook()
+  const personal = usePersonalTarget()
+  // TG-5b interim (see the full-form branch below): the personal session's own workbook, bound to the panel's target and no other pane's.
+  const personalJournal = useIsJournalHost(personal?.hostId ?? '') // the workbook view is off on a journal.v1 host (J-2b)
+  const ownWb = useLoadedSeatWorkbook(personal ? { hostId: personal.hostId, sessionId: personal.agentSessionId } : null)
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
-  // On a journal.v1 host (J-2b) the workbook branches stay off: the team view only. Either host decides: the tab's own host (its cc
+  // On a journal.v1 host (J-2b) the workbook view stays off: no drill into a seat's workbook. Either host decides: the tab's own host (its cc
   // session) or the team's lead host. `useJournalTarget().journalHost` is the host the unit is READ from, which a follow route moves to
   // the lead's, so it cannot stand for the tab's own.
   const originHost = useJournalTarget().origin?.hostId ?? ''
   const tabJournal = useIsJournalHost(originHost)
   const leadJournal = useIsJournalHost(panelTeam?.lead.hostId ?? '')
   const noDrill = tabJournal || leadJournal
-  const view0 = panelView({ panelTeam, teamDrill, own, journalHost: noDrill })
+  const view0 = panelView({ panelTeam, teamDrill, personal, journalHost: noDrill })
   // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
-  // A tab of no team shows its own workbook in the one value all such tabs share.
+  // A tab of no team shows the personal panel in the one value all such tabs share.
   const mode = shownTeam ? shownTeam.mode : view0 !== null ? sharedMode : null
   const draftRef = useRef<number | null>(null)
   // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
@@ -53,7 +58,7 @@ export function TeamPanelArea() {
   }, [hidden])
   useEffect(() => () => { draftRef.current = null; usePanelDraftStore.getState().setDraft(null) }, [])
   const drilled = shownTeam !== null && !noDrill && teamDrill[shownTeam.teamKey] != null
-  const shownWidth = useShownPanelWidth(shownTeam, drilled)
+  const shownWidth = useShownPanelWidth(shownTeam, drilled, view0 !== null && view0.kind === 'personal' && mode === 'line')
   if (hidden) return null
   const paneMode = mode
 
@@ -93,10 +98,12 @@ export function TeamPanelArea() {
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
             onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}
           />
-        ) : view0.kind === 'workbook' && view0.from === 'own' ? (
-          <OwnWorkbookPanel
-            hostId={view0.hostId}
-            sessionId={view0.sessionId}
+        ) : view0.kind === 'personal' && ownWb.has && !personalJournal && paneMode === 'full' ? (
+          // Until the full form's card and workbook entry arrive (TG-5c), an older host's own workbook keeps its full view, so 5b alone loses nothing.
+          <OwnWorkbookPanel hostId={view0.target.hostId} sessionId={view0.target.agentSessionId} mode={paneMode} onSetMode={(m) => useTeamUiStore.getState().setSharedPanelMode(m)} />
+        ) : view0.kind === 'personal' ? (
+          <PersonalPanel
+            target={view0.target}
             mode={paneMode}
             onSetMode={(m) => useTeamUiStore.getState().setSharedPanelMode(m)}
           />

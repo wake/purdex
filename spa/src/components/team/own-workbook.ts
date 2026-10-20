@@ -9,8 +9,8 @@ import { collectLeaves } from '../../lib/pane-tree'
 import { WORKBOOK_MAX_RETRIES, workbookRetryDelay } from '../../lib/workbook/retry'
 import type { PaneLayout } from '../../types/tab'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { firstSentence, useSeatWorkbook } from './seat-workbook'
-import type { OwnWorkbookTarget } from './panel-view'
+import { firstSentence, useSeatWorkbook, type SeatWorkbook } from './seat-workbook'
+export interface OwnWorkbookTarget { hostId: string; sessionId: string }
 
 
 /** The conversation a layout's first live `cc` tmux-session pane (pre-order) belongs to; null when there is none. */
@@ -32,13 +32,10 @@ export function useOwnStatusLine(hostId: string, sessionId: string): { text: str
 }
 
 /**
- * The active tab's own conversation, only when it HAS a workbook (null otherwise). Asking the host is the person looking at
- * this tab, not an event: `loadSeat` (limit 1, once per connection generation; the store dedupes) runs when the target, the
- * connection generation or the host's support answer changes, and again if a roster sync let go of the seat.
+ * Asks the host for a conversation's workbook, as the person looking at it (not an event): `loadSeat` (limit 1, once per connection generation; the store dedupes) runs when the target, the connection generation or
+ * the host's support answer changes, and again if a roster sync let go of the seat. A probe that got no answer (network / 5xx) is retried with a bounded backoff. Returns what the store holds for it.
  */
-export function useOwnWorkbook(): OwnWorkbookTarget | null {
-  const layout = useTabStore((s) => (s.activeTabId ? s.tabs[s.activeTabId]?.layout : undefined))
-  const target = useMemo(() => (layout ? ownSessionOf(layout) : null), [layout])
+export function useLoadedSeatWorkbook(target: OwnWorkbookTarget | null): SeatWorkbook {
   const hostId = target?.hostId ?? ''
   const sessionId = target?.sessionId ?? ''
   const wb = useSeatWorkbook(hostId, sessionId)
@@ -65,5 +62,13 @@ export function useOwnWorkbook(): OwnWorkbookTarget | null {
       setTimeout(() => setTick((n) => n + 1), delay)
     })
   }, [hostId, sessionId, gen, v1, seated, tick])
+  return wb
+}
+
+/** The active tab's own conversation, only when it HAS a workbook (null otherwise). */
+export function useOwnWorkbook(): OwnWorkbookTarget | null {
+  const layout = useTabStore((s) => (s.activeTabId ? s.tabs[s.activeTabId]?.layout : undefined))
+  const target = useMemo(() => (layout ? ownSessionOf(layout) : null), [layout])
+  const wb = useLoadedSeatWorkbook(target)
   return target !== null && wb.has ? target : null
 }

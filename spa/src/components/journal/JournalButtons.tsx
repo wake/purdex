@@ -8,6 +8,8 @@ import { keepFocus } from '../../lib/keep-focus'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
+import { PersonalButton } from '../team/TeamTitleBar'
+import { usePersonalTarget } from '../team/usePersonalPanel'
 import { useJournalTarget, type JournalTarget } from './useJournalTarget'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 
@@ -16,9 +18,10 @@ const NO_DRAG = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 export function JournalButtons({ target }: { target?: JournalTarget }) {
   const own = useJournalTarget()
   const t = target ?? own
+  const personal = usePersonalTarget()
   return (
     <>
-      {t.team && <TeamPanelButton teamKey={t.team.teamKey} mode={t.team.mode} />}
+      {t.team ? <TeamPanelButton teamKey={t.team.teamKey} mode={t.team.mode} /> : personal && <PersonalButton />}
       {t.origin && <JournalCardButton target={t} />}
     </>
   )

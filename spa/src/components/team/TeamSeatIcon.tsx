@@ -39,11 +39,11 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14,
   if (avatar) {
     return renderInlineTabIcon({
       IconComponent: undefined,
-      agentStatus,
+      agentStatus: light ? agentStatus : undefined, // `light={false}`: the face alone (an ended session's cell)
       tabIndicatorStyle,
       isActive,
-      subagentRefs: subagents ? subagentRefs : [],
-      isUnread,
+      subagentRefs: subagents && light ? subagentRefs : [],
+      isUnread: light && isUnread,
       avatar,
     })
   }
