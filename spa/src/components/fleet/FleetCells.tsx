@@ -7,7 +7,7 @@
 import type { FleetHostView } from '../../lib/fleet/store'
 import { useFleetHostViews } from '../../lib/fleet/use-fleet-host-views'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
-import { usePoolCellModels } from '../../lib/pool/use-cell-models'
+import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
 import { HostCell } from './HostCell'
 
 export interface FleetCellsProps {
