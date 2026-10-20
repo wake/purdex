@@ -48,6 +48,37 @@ func send(h http.Handler, method, path, auth, body string) *httptest.ResponseRec
 	return w
 }
 
+func TestWorkerRoutesCarryTheDiskFloor(t *testing.T) {
+	level := 1
+	d, _ := stateDaemon(t, "mlab", &level)
+	h := d.TCPHandler()
+	auth := "Bearer " + testToken
+	floor := func(body []byte) float64 {
+		t.Helper()
+		ws, err := wire.Decode[wire.WorkerSettings](body)
+		if err != nil || ws.DiskMinGB == nil {
+			t.Fatalf("answer %s: %v", body, err)
+		}
+		return *ws.DiskMinGB
+	}
+	if w := send(h, "GET", "/v1/worker", auth, ""); w.Code != 200 || floor(w.Body.Bytes()) != wire.DefaultDiskMinGB {
+		t.Fatalf("GET: %d %s", w.Code, w.Body)
+	}
+	w := send(h, "PUT", "/v1/worker", auth, `{"enabled":true,"slots":{"heavy":1,"light":2},"owner_rule":"","disk_min_gb":35}`)
+	if w.Code != 200 || floor(w.Body.Bytes()) != 35 {
+		t.Fatalf("PUT 35: %d %s", w.Code, w.Body)
+	}
+	// a body from a client that does not know the field keeps the floor
+	w = send(h, "PUT", "/v1/worker", auth, `{"enabled":true,"slots":{"heavy":2,"light":2},"owner_rule":""}`)
+	if w.Code != 200 || floor(w.Body.Bytes()) != 35 {
+		t.Fatalf("PUT without the floor: %d %s", w.Code, w.Body)
+	}
+	w = send(h, "PUT", "/v1/worker", auth, `{"enabled":true,"slots":{"heavy":2,"light":2},"owner_rule":"","disk_min_gb":-3}`)
+	if w.Code != 400 {
+		t.Fatalf("a negative floor: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestWorkerRoutes(t *testing.T) {
 	level := 1
 	d, _ := stateDaemon(t, "mlab", &level)

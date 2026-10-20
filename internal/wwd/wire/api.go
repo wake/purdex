@@ -238,7 +238,14 @@ type WorkerSettings struct {
 	Enabled   bool   `json:"enabled"`
 	Slots     Slots  `json:"slots"`
 	OwnerRule string `json:"owner_rule"`
+	// DiskMinGB is the free space the host's work volume must have for a heavy run to start (queue job or adhoc command); 0 is no
+	// floor. In a PUT, absent keeps the current value (a client that does not know the field must not switch the floor off); wwd
+	// always answers with it.
+	DiskMinGB *float64 `json:"disk_min_gb,omitempty"`
 }
+
+// DefaultDiskMinGB is the disk floor of a host that has not set one: the pdx gate's [gate.admission] disk_min_gb default.
+const DefaultDiskMinGB = 10.0
 
 // Exception is POST /v1/exceptions: Until or PID bounds it (the other is null).
 type Exception struct {

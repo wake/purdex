@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -15,7 +16,7 @@ import (
 
 const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd pool [--json]
-       pdx wwd worker on|off [--heavy N] [--light N]
+       pdx wwd worker on|off [--heavy N] [--light N] [--disk-min-gb GB]
        pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
        pdx wwd exception stop <name> [--host <host>]
        pdx wwd hold <host> --for <dur> --reason <text> [--allow-class release|merge|dev]... [--allow-repo <repo>]... [--release] [--expect pressure]
@@ -30,7 +31,7 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
   qualify     this host earns a task label by running the task and the reference host's run of it on one snapshot and comparing them; --status lists the pairs
   status    this host's wwd: version, labels, worker switch and slots
   pool       every host the pool knows: reachable, pressure zone, free slots, worker
-  worker     switch this host's worker; --heavy / --light set the slot counts
+  worker     switch this host's worker; --heavy / --light set the slot counts; --disk-min-gb the free GB the work volume must keep for a heavy run (0: none)
   exception  tell wwd a dev server or packaging run is using the host: its worker takes no new heavy work (and no light work if
              --holds says light) until --until passes or --pid ends
   hold       keep a host quiet for a while (the worker takes no new heavy work there): an exception with a reason. With --allow-class or
@@ -111,7 +112,7 @@ func wwdStatus(ctx context.Context, args []string, env Env) int {
 	if rule == "" {
 		rule = "none"
 	}
-	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d  owner rule: %s\n", onOff(w.Enabled), w.Slots.Heavy, w.Slots.Light, testcmd.CleanLine(rule))
+	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d  owner rule: %s%s\n", onOff(w.Enabled), w.Slots.Heavy, w.Slots.Light, testcmd.CleanLine(rule), diskFloorText(w))
 	fmt.Fprintf(env.Stdout, "labels %s\n", testcmd.CleanLine(strings.Join(info.Labels, " ")))
 	return ExitOK
 }
@@ -156,10 +157,29 @@ func wwdPool(ctx context.Context, args []string, env Env) int {
 	return ExitOK
 }
 
+// diskFloorText is "  disk floor 10 GB" (or "none"), "" for settings that carry no floor (a wwd from before it).
+func diskFloorText(w wire.WorkerSettings) string {
+	switch {
+	case w.DiskMinGB == nil:
+		return ""
+	case *w.DiskMinGB == 0:
+		return "  disk floor none"
+	}
+	return "  disk floor " + strconv.FormatFloat(*w.DiskMinGB, 'f', -1, 64) + " GB"
+}
+
 func wwdWorker(ctx context.Context, args []string, env Env) int {
 	flags, pos, err := splitFlags(args)
 	if err == nil {
-		err = only(flags, "heavy", "light")
+		err = only(flags, "heavy", "light", "disk-min-gb")
+	}
+	var floor *float64
+	if v, ok := flags["disk-min-gb"]; ok && err == nil {
+		n, e := strconv.ParseFloat(v, 64)
+		if e != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+			err = fmt.Errorf("--disk-min-gb must be a number of GB, 0 (no floor) or more")
+		}
+		floor = &n
 	}
 	if err == nil && (len(pos) != 1 || (pos[0] != "on" && pos[0] != "off")) {
 		err = fmt.Errorf("worker takes on or off")
@@ -188,11 +208,14 @@ func wwdWorker(ctx context.Context, args []string, env Env) int {
 	if n, ok := slots["light"]; ok {
 		cur.Slots.Light = n
 	}
+	if floor != nil {
+		cur.DiskMinGB = floor
+	}
 	now, err := env.API.SetWorker(ctx, cur)
 	if err != nil {
 		return fail(env, "wwd worker", err)
 	}
-	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d\n", onOff(now.Enabled), now.Slots.Heavy, now.Slots.Light)
+	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d%s\n", onOff(now.Enabled), now.Slots.Heavy, now.Slots.Light, diskFloorText(now))
 	return ExitOK
 }
 

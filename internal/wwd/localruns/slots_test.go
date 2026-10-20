@@ -8,8 +8,34 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// With the real admission rule as main wires it (derived.AdmitLocal over the latest record): a low work volume refuses an adhoc command
+// with disk_low in the 429 body and does not touch a declared task.
+func TestALowDiskRefusesAnAdhocRunWithTheReasonAndNotADeclaredTask(t *testing.T) {
+	s, _ := newService(&fakeQueue{})
+	var f wire.Facts
+	f.Worker.Slots = wire.Slots{Heavy: 2, Light: 2}
+	f.Derived = wire.Derived{Zone: wire.ZoneNormal, DiskLow: true}
+	s.Room = func(heavy bool, running wire.Slots) []string { return derived.AdmitLocal(f, false, heavy, running) }
+	rec := post(s, slotRequest(t, true))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("adhoc: %d, want 429: %s", rec.Code, rec.Body)
+	}
+	b, err := wire.Decode[wire.SlotBusy](rec.Body.Bytes())
+	if err != nil || b.Slot != "heavy" || len(b.Reasons) != 1 || b.Reasons[0] != "disk_low" {
+		t.Fatalf("body %+v %v", b, err)
+	}
+	if rec := post(s, slotRequest(t, false)); rec.Code != http.StatusOK {
+		t.Fatalf("a declared task on a low disk: %d %s", rec.Code, rec.Body)
+	}
+	f.Derived.DiskLow = false
+	if rec := post(s, slotRequest(t, true)); rec.Code != http.StatusOK {
+		t.Fatalf("adhoc once the disk has room: %d %s", rec.Code, rec.Body)
+	}
+}
 
 // slotRequest is request with the kind of the run set: adhoc is a heavy run, a declared task a light one.
 func slotRequest(t *testing.T, adhoc bool, keys ...string) []byte {
