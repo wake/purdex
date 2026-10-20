@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-host.test.ts — which jobs the host tab's 工作 section shows in which block (plan 7b1-4): on this host now (claimed or running here, any origin), queued from here, and the last five ended here.
 import { describe, it, expect } from 'vitest'
 import type { PoolJob } from './jobs-types'
-import { hostJobBlocks, HOST_ENDED_SHOWN } from './jobs-host'
+import { endedShownOf, hostJobBlocks, HOST_ENDED_SHOWN } from './jobs-host'
 
 const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
   id, origin: 'mlab', repo: { name: 'purdex', root: '', remote: '' }, snapshot: { commit: 'c', tree: '', base: '', rel_cwd: '' }, task: 't', args: [], class: 'dev', labels: [], locks: [], cacheable: false,
@@ -32,7 +32,7 @@ describe('the block of jobs on this host now', () => {
 })
 
 describe('the block of jobs queued from this host', () => {
-  it('only the queued ones whose origin is this host, wherever they will run', () => {
+  it('only the waiting ones whose origin is this host, wherever they will run (a held one is not waiting: spec 在排)', () => {
     const blocks = hostJobBlocks([
       job('mine', { origin: 'mini' }),
       job('mine-held', { origin: 'mini', manual: 'hold' }),
@@ -40,7 +40,7 @@ describe('the block of jobs queued from this host', () => {
       job('mine-running', { origin: 'mini', state: 'running', claim: claim('air26') }),
       ended('mine-ended', 'air26', 100, { origin: 'mini' }),
     ], 'mini')
-    expect(ids(blocks.queued).sort()).toEqual(['mine', 'mine-held'])
+    expect(ids(blocks.queued)).toEqual(['mine'])
   })
 })
 
@@ -62,5 +62,19 @@ describe('the block of the jobs that ended here', () => {
 
   it('no jobs, no blocks', () => {
     expect(hostJobBlocks([], 'mini')).toEqual({ running: [], queued: [], ended: [] })
+  })
+})
+
+describe('endedShownOf — the column is about as tall as the process tables (spec M41-3)', () => {
+  it.each([
+    [0, 0, 5], // 9 → held to 5
+    [2, 3, 4], // 9 − 2 − 3
+    [1, 5, 4], // 9 − 1 − 3 − 1 (the 「還有」 row)
+    [3, 5, 3], // 9 − 3 − 3 − 1 = 2 → 3
+    [9, 9, 3], // far past full: still 3
+    [0, 3, 5], // exactly three queued: no 「還有」 row: 9 − 0 − 3 = 6 → 5
+    [4, 1, 4], // 9 − 4 − 1
+  ])('%i running, %i waiting: %i ended', (running, queued, want) => {
+    expect(endedShownOf(running, queued)).toBe(want)
   })
 })

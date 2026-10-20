@@ -110,10 +110,27 @@ describe('on this host now', () => {
 
 describe('queued from here', () => {
   it('the queued jobs of this origin, wherever they will run; another host\'s queue and the running ones are not here', () => {
-    withJobs(job('mine-1'), job('mine-held', { manual: 'hold' }), job('theirs', { origin: 'air26' }), running('mine-running', { claim: claim('air26') }))
+    withJobs(job('mine-1'), job('mine-2'), job('theirs', { origin: 'air26' }), running('mine-running', { claim: claim('air26') }))
     mount()
-    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row').sort()).toEqual(['mine-1', 'mine-held'])
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row').sort()).toEqual(['mine-1', 'mine-2'])
     expect(screen.getByTestId('host-jobs-queued-count')).toHaveTextContent('2')
+  })
+
+  it('a held job is not waiting (spec: 在排 is queued and not hold): not listed, not counted, not in 「還有 n 件」, not in the ended count', () => {
+    withJobs(...endedN(6), job('held-1', { manual: 'hold' }), job('held-2', { manual: 'hold' }), job('w1'), job('w2'), job('w3'), job('w4'))
+    mount()
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row')).toHaveLength(3)
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row')).not.toContain('held-1')
+    expect(screen.getByTestId('host-jobs-queued-count')).toHaveTextContent('4')
+    expect(screen.getByTestId('host-jobs-queued-more')).toHaveTextContent(t('watch.host.jobs.queued_more', { n: 1 }))
+    // 0 running, 4 waiting (3 shown + 「還有」): 9 − 0 − 3 − 1 = 5 (the two held ones take no place)
+    expect(endedIds()).toHaveLength(5)
+  })
+
+  it('only held jobs: the queue reads as empty', () => {
+    withJobs(job('held-1', { manual: 'hold' }))
+    mount()
+    expect(screen.getByTestId('host-jobs-queued-none')).toBeInTheDocument()
   })
 
   it('a row says the class, the job and how long it has waited, yellow from 2 minutes', () => {

@@ -25,7 +25,7 @@ export interface HostJobBlocks {
 export function hostJobBlocks(jobs: readonly PoolJob[], alias: string): HostJobBlocks {
   return {
     running: lanes(jobs).get(alias) ?? [],
-    queued: jobs.filter((j) => j.state === 'queued' && j.origin === alias),
+    queued: jobs.filter((j) => j.state === 'queued' && j.manual !== 'hold' && j.origin === alias),
     ended: historyOf(jobs, { host: alias }).slice(0, HOST_ENDED_SHOWN),
   }
 }
