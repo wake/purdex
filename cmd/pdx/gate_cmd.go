@@ -20,7 +20,7 @@ import (
 	"github.com/wake/purdex/internal/gate/shim"
 )
 
-const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>] [--fg] [--real <binary>] [--config <path>] -- <command…>
+const gateUsage = `usage: pdx gate [--real <binary>] [--tool <name>] [--class heavy|light] [--auto] [--fg] [--wait-max <s>] [--class-source <s>] [--config <path>] -- <command…>
        pdx gate status [--json [--holders]] [--config <path>]
        pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
        pdx gate would-wait --auto [--json] [--config <path>] -- <command…>
@@ -28,25 +28,16 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
        pdx gate free <heavy|light>-<k> [--yes] [--force] [--config <path>]
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
-  --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
-  --wait-max  seconds the command may wait for its slot; past them nothing is run and the exit code is 75 (PDX_GATE_ADMITTED_MARK=1 prints a marker on stderr right before the command starts)
-  --fg     keep normal priority (no background QoS), for a release gate on an idle host
+  The gate is a pass-through (WWD-9 S0): the command is run at once, by exec, with its own exit code and streams. Nothing is queued, no slot is
+  taken, nothing is refused with 75. What holds a heavy command now is the wwd: pdx test (a declared task, or --adhoc), and the entry of the hook.
+  --class, --auto, --fg, --wait-max, --class-source, --config, --assist-host and --assist-ssh are read for the scripts that still pass them, and have no effect
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
-           without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
-  PDX_GATE_RANK=back  in the environment: this command's ticket is queued at rank back (served after every normal one); PDX_GATE_RANK_REASON=<one line> says why. Other values are ignored
+           without the shim directory, at this run
+  would-wait  always answers no (the JSON keeps its shape: class by the command's words, ahead 0); it reads no slot and makes no directory
   history  the commands that were offered to an assist host: where they ran, how long, why a send failed (pdx gate history --help)
   hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
-  would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
-           for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
-  free     end the processes that hold a slot's lock (a slot that stays held after its gate is gone): lists them, asks y, SIGTERM, SIGKILL after 5 s;
-           a slot whose gate is alive is refused unless --force.
-           The processes are those that have the slot's lock file open (lsof): a flock belongs to the open file description, which children share, so
-           an escaped child that kept the file open is what holds the slot; a process that opens the file on its own is not told apart (the short
-           probes of pdx itself, shells and tmux are never ended)
-  set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
-           again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
-  profile  use: make a profile the active one (its settings win over [gate]; release is built in: normal priority, go test keeps -count=1); list: the profiles; flags may stand before or after the name
+  status, free, set, profile, queue and conflict still look at, and change, the old gate's slots and settings until they are removed (9a-3)
 `
 
 func runGate(args []string) {

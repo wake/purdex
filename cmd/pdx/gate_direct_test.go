@@ -257,3 +257,16 @@ func slotGateMain(args []string, stdout, stderr io.Writer) int {
 	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Class: gate.Class(*class), Foreground: *fg, Stdout: stdout, Stderr: stderr})
 	return code
 }
+
+// The usage says what the gate does now: it does not promise a queue, a slot, a 75 or a priority.
+func TestGateDirect_TheUsageDoesNotPromiseWhatIsGone(t *testing.T) {
+	var out, errb bytes.Buffer
+	require.Equal(t, 2, gateMain(nil, &out, &errb))
+	u := errb.String()
+	assert.Contains(t, u, "pass-through")
+	assert.Contains(t, u, "run at once, by exec")
+	assert.Contains(t, u, "no effect")
+	for _, gone := range []string{"take a slot from", "past them nothing is run", "no background QoS", "served after every normal one", "wait for a slot right now", "queued at rank"} {
+		assert.NotContains(t, u, gone)
+	}
+}
