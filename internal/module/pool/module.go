@@ -347,8 +347,12 @@ func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Contex
 	if aerr != nil {
 		return nil, aerr // an error is never cached
 	}
-	body, err := json.Marshal(v)
-	if err != nil {
+	var err error
+	if raw, ok := v.(json.RawMessage); ok {
+		// wwd's own bytes (already checked against the contract by the client): not run through the encoder again, which would compact them
+		// and escape <, > and &; a reader that hands a cursor back must get exactly what wwd wrote
+		body = append(body, raw...)
+	} else if body, err = json.Marshal(v); err != nil {
 		return nil, &apiError{http.StatusInternalServerError, ErrWWDError, "encoding the answer failed"}
 	}
 	body = append(body, '\n')

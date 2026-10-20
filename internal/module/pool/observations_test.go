@@ -66,6 +66,24 @@ func TestObservations_ForwardAndReturnWhatWwdWrote(t *testing.T) {
 	assert.Contains(t, u.all()[0], "GET /v1/observations/undeclared host=air26")
 }
 
+// "As wwd wrote it" is bytes, not JSON meaning: spaces stay, and `<`, `>` and `&` in a command are not turned into < on the way (a
+// reader that hands a cursor or an id back, or diffs the records, must see wwd's own text). Only the one newline an answer ends with is added.
+func TestObservations_TheAnswerIsWwdsBytes(t *testing.T) {
+	const next = "2026-10-20T01:00:00.100+08:00"
+	body := `{ "host": "air26", "since": "2026-10-19T00:00:00Z",  "observations": [ ` +
+		`{"id":"o_1_2","host":"air26","session":"s1","via":"session","command":"a <b> && c","signature":"a","started_at":"` + next + `","ended_at":null,"cpu_seconds":61.5,"cpu_peak":100,"mem_peak_mb":300,"procs_peak":3}` +
+		` ], "truncated": true, "next_until": "` + next + `" }`
+	var s seen
+	mux := newModule(t, fakeWWD(t, observationsWWD(t, &s, 200, body)))
+	rr := send(mux, "GET", "/api/pool/hosts/air26/observations", "", asAdmin)
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Equal(t, body+"\n", rr.Body.String())
+
+	rr = send(mux, "GET", "/api/pool/hosts/air26/undeclared", "", asAdmin)
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Equal(t, body+"\n", rr.Body.String(), "the grouped read is the same")
+}
+
 // A bad since or until is refused here, with 400, and wwd is not asked.
 func TestObservations_BadTimesAreRefusedBeforeWwdIsAsked(t *testing.T) {
 	var s seen
