@@ -104,6 +104,13 @@ export function writePoolHostLook(hostId: string, patch: PoolHostLookPatch): voi
     if (!host) return
     const key = lookKeyOf(host, useHostLookStore.getState().looks)
     useHostLookStore.getState().patchLook(key, (cur) => editFace(cur, face))
+    // The host's own look is the home now: a face written to the pool store before its owner was known goes (the indicator stays), so a later reset to default cannot bring it back.
+    usePoolHostsStore.getState().patchLook(hostId, (cur) => {
+      if (cur === undefined || !hasFace(cur)) return cur
+      const { colors: _c, color: _co, icon: _i, iconWeight: _w, ...rest } = cur
+      void [_c, _co, _i, _w]
+      return Object.keys(rest).length > 0 ? rest : undefined
+    })
     return
   }
   usePoolHostsStore.getState().patchLook(hostId, (cur) => editFace(cur, face))

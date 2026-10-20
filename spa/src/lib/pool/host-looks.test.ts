@@ -90,6 +90,15 @@ describe('where a look lives does not flip with the connection', () => {
     useHostLookStore.setState({ looks: { 'cfg-a': { icon: 'HardDrives' } } })
     expect(renderHook(() => usePoolHostLook(WWD_A)).result.current.icon).toBe('HardDrives')
   })
+  it('once the owner is known, editing its face drops the early pool face (the indicator stays), so a reset to default does not bring it back', () => {
+    useNexHostStore.setState({ byHost: {} } as never)
+    writePoolHostLook(WWD_A, { icon: 'Cube', indicator: { shape: 'bar', data: ['disk'] } })
+    useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: 1000, daemonCapabilities: ['pool.v1'], wwd: { hostId: WWD_A, alias: 'mlab' } } } } as never)
+    writePoolHostLook(WWD_A, { icon: 'HardDrives' })
+    expect(usePoolHostsStore.getState().looks[WWD_A]).toEqual({ indicator: { shape: 'bar', data: ['disk'] } })
+    writePoolHostLook(WWD_A, { icon: null })
+    expect(renderHook(() => usePoolHostLook(WWD_A)).result.current.icon).toBeUndefined()
+  })
 })
 
 describe('writePoolHostLook', () => {
