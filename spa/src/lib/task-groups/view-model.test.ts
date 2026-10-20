@@ -12,7 +12,7 @@ import type { Seat, SeatHit, TeamView } from '../team/team-views'
 const content = (agent: string | null, ended = false): PaneContent => agent === null
   ? { kind: 'dashboard' }
   : { kind: 'tmux-session', hostId: 'h1', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i',
-      rebuild: { sessionName: 'n', tmuxInstance: 'i', agent: { type: 'cc', sessionId: agent, updatedAt: 1 }, ...(ended ? { agentExited: { at: 2, reason: 'session-end' as const } } : {}) } }
+      rebuild: { sessionName: 'n', tmuxInstance: 'i', capturedAt: 1, agent: { type: 'cc', sessionId: agent, updatedAt: 1 }, ...(ended ? { agentExited: { at: 2, reason: 'session-end' as const } } : {}) } }
 const tab = (id: string, agent: string | null, over: Partial<OrderedTab> & { host?: string; ended?: boolean } = {}): OrderedTab => {
   const { host, ended, ...rest } = over
   const c = content(agent, ended)
