@@ -3,7 +3,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest, getWatchReturnTarget } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { createTab, createWorkspace } from '../../../types/tab'
 import { WATCH_GUARDIAN_TAB_ID as G, watchHostTabId } from '../../../lib/watch/ids'
 import { commitTabWorld, restampWorld } from '../../../lib/profile/master-world'
@@ -13,12 +14,8 @@ const ws = () => useWorkspaceStore.getState()
 const wsOf = (id: string) => ws().workspaces.find((w) => w.id === id)!
 const at = () => ({ ws: ws().activeWorkspaceId, tab: useTabStore.getState().activeTabId })
 
-function setFleet(ids: string[]): void {
-  const snapshot: FleetSnapshot = {
-    hostId: 'p', term: 1, order: ids,
-    hosts: Object.fromEntries(ids.map((id) => [id, { id, alias: id } as never])),
-  }
-  useFleetStore.setState({ snapshot, primaryHostId: 'p', stale: false })
+function setPool(ids: string[]): void {
+  usePoolStore.setState({ hosts: ids.map((id) => ({ host_id: id, alias: id })) as never, sourceHostId: 'cfg-a' } as never)
 }
 
 function tabIn(wsId: string): string {
@@ -53,7 +50,8 @@ beforeEach(() => {
   ws().reset()
   useWorkspaceStore.setState({ worldId: 'master', worldEpoch: 0 }) // the world tests below move the tag
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [], worldId: 'master', worldEpoch: 0 })
-  useFleetStore.getState().reset()
+  usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+  usePoolHostsStore.setState({ order: [], looks: {} } as never)
   __resetReturnWorkspaceForTest()
   a = ws().addWorkspace('A').id
   b = ws().addWorkspace('B').id
@@ -62,12 +60,12 @@ beforeEach(() => {
   t3 = tabIn(b)
   select(b, t3)
   select(a, t1)
-  setFleet(['h1', 'h2'])
+  setPool(['h1', 'h2'])
 })
 
 describe('leaveWatchArea', () => {
   it('returns to the workspace and the tab the area was entered from', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
     // Meanwhile A's own active tab moves (a synced workspace from another device): the way back is still t1.
     ws().setWorkspaceActiveTab(a, t2)
@@ -77,8 +75,8 @@ describe('leaveWatchArea', () => {
   })
 
   it('the target is the one taken on entry: tabs switched and the area opened again from inside do not change it', () => {
-    openWatchArea({ host: 'h1' })
-    openWatchArea({ host: 'h2' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
+    openWatchArea({ poolHost: { hostId: 'h2' } })
     select(WATCH_WORKSPACE_ID, G)
     openWatchArea({ tab: 'guardian' })
     expect(getWatchReturnTarget()).toEqual({ workspaceId: a, tabId: t1 })
@@ -87,16 +85,16 @@ describe('leaveWatchArea', () => {
   })
 
   it('a new entry from elsewhere takes a new target', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     leaveWatchArea()
     select(b, t3)
-    openWatchArea({ host: 'h2' })
+    openWatchArea({ poolHost: { hostId: 'h2' } })
     leaveWatchArea()
     expect(at()).toEqual({ ws: b, tab: t3 })
   })
 
   it('the tab gone on return: the workspace\'s active tab', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     dropTab(a, t1)
     ws().setWorkspaceActiveTab(a, t2)
     leaveWatchArea()
@@ -104,7 +102,7 @@ describe('leaveWatchArea', () => {
   })
 
   it('the tab moved to another workspace is gone from this one: the workspace\'s active tab, the workspace kept', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     ws().removeTabFromWorkspace(a, t1)
     ws().addTabToWorkspace(b, t1)
     ws().setWorkspaceActiveTab(a, t2)
@@ -113,7 +111,7 @@ describe('leaveWatchArea', () => {
   })
 
   it('the workspace gone on return: the return workspace (the first other one) and its active tab', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     ws().removeWorkspace(a)
     leaveWatchArea()
     expect(at()).toEqual({ ws: b, tab: t3 })
@@ -129,7 +127,7 @@ describe('leaveWatchArea', () => {
   })
 
   it('reset (a tear-off `replace`) clears the way back: a leave right after takes the fallback, not the old target', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     expect(getWatchReturnTarget()).toEqual({ workspaceId: a, tabId: t1 })
     const before = wsOf(a)
     ws().reset()
@@ -160,7 +158,7 @@ describe('leaveWatchArea', () => {
   }
 
   it('another world while the area is shown: a leave takes the fallback, the new world\'s first workspace', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     const { c1, u1 } = anotherWorld()
     leaveWatchArea()
     expect(at()).toEqual({ ws: c1, tab: u1 })
@@ -173,7 +171,7 @@ describe('leaveWatchArea', () => {
   })
 
   it('a restamp (a promote: `restampWorld` moves the tag, the content stays) keeps the way back', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     ws().setWorkspaceActiveTab(a, t2) // A's own active tab moved meanwhile (a sync): only the way back still says t1
     restampWorld({ worldId: 'p2', worldEpoch: 7 })
     expect(ws().worldId).toBe('p2')
@@ -183,7 +181,7 @@ describe('leaveWatchArea', () => {
   })
 
   it('leaves the area\'s tabs as they are', () => {
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     const tabs = [...wsOf(WATCH_WORKSPACE_ID).tabs]
     leaveWatchArea()
     expect(wsOf(WATCH_WORKSPACE_ID).tabs).toEqual(tabs)

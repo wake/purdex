@@ -1,13 +1,15 @@
-// The watcher area's tabs (守門員專區), kept in step with the fleet's host list. Spec §3, plan §1 "Host tabs".
+// The watcher area's tabs (守門員專區), kept in step with the resource pool's host list (MON-6a-2; before it, the fleet's). Spec §3, plan §1 "Host tabs".
 //
 // The area is a real, syncable workspace (`WATCH_WORKSPACE_ID`) with fixed tab ids, so two devices that each create a
 // tab for the same host make the SAME tab and a sync apply converges instead of duplicating. The rule that keeps it
 // from ping-ponging: a tab is APPENDED for every host this device lists, but REMOVED only for a host this device saw
-// leave — listed in a non-stale snapshot, then absent for ABSENT_REMOVE_MS. A tab that arrives by sync for a host this
+// leave — listed in a pool answer, then absent for ABSENT_REMOVE_MS. A tab that arrives by sync for a host this
 // device never listed stays (its pane says it cannot read that host).
 import type { Tab, PaneContent } from '../../../types/tab'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useFleetStore } from '../../../lib/fleet/store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { orderPoolHosts } from '../../../lib/pool/host-looks'
+import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, hostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
@@ -22,10 +24,11 @@ import { tmuxSessionContent } from '../../../lib/open-session-tab'
 /** A host that this device listed and then did not list for this long loses its tab. */
 export const ABSENT_REMOVE_MS = 60_000
 
-/** What the reconcile needs of the fleet: the host ids of the current snapshot, and whether it is stale. */
-export interface WatchFleetView {
+/** What the reconcile needs of the pool: the wwd `host_id`s of the current answer, in the order of the pool hosts store. There is no stale: the pool's answer is the current one. */
+export interface WatchHostsView {
   hostIds: readonly string[]
-  stale: boolean
+  /** The App host whose daemon answered. Two sources may list different hosts, so a change of source says nothing of a host leaving. */
+  source?: string
 }
 
 function hostTab(id: string, content: PaneContent): Tab {
@@ -96,13 +99,15 @@ const contentKey = (c: PaneContent): string =>
 
 export interface WatchReconciler {
   /** One pass. Writes only on a difference. Returns when the next pass is due for a pending removal, else null. */
-  reconcile: (view: WatchFleetView | null, now?: number) => number | null
+  reconcile: (view: WatchHostsView | null, now?: number) => number | null
 }
 
 /** One reconciler = one device's memory of which hosts it has seen. Tests make two to stand for two devices. */
 export function createWatchReconciler(): WatchReconciler {
-  /** fleet host id → the last time a non-stale snapshot listed it. In memory only: a restart forgets, and forgets safely. */
+  /** host id → the last time a pool answer listed it (an older tab's fleet id: the time this device first saw the tab). In memory only: a restart forgets, and forgets safely. */
   const lastListed = new Map<string, number>()
+  /** The source of the last pool answer seen: when it changes, what the old one listed is no evidence about the new one. */
+  let lastSource: string | undefined
   /** The derivation behind the guardian pane's content, as this device last wrote it. Edge-triggered: see `reconcileGuardian`. */
   let guardianKey: string | undefined
 
@@ -172,7 +177,7 @@ export function createWatchReconciler(): WatchReconciler {
     }
   }
 
-  const reconcile = (view: WatchFleetView | null, now: number = Date.now()): number | null => {
+  const reconcile = (view: WatchHostsView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
 
@@ -208,21 +213,35 @@ export function createWatchReconciler(): WatchReconciler {
     reconcileEvents()
     reconcileJobs()
 
-    // 3. Host tabs, only with a fleet view; without one they are left as they are.
+    // 3. Host tabs, only with a pool view; without one they are left as they are.
     if (!view) return null
-    if (!view.stale) for (const id of view.hostIds) lastListed.set(id, now)
+    if (view.source !== lastSource) { lastListed.clear(); lastSource = view.source }
+    for (const id of view.hostIds) lastListed.set(id, now)
 
     const listed = new Set(view.hostIds)
+    // A host tab without `poolHostId` is from before the pool (its id is a fleet id): no device lists that id any more, so it is collected like a host that left — a minute after this
+    // device first sees it, and again after one that has not upgraded sends it back. Without this the `never listed` rule below would keep it for ever.
+    for (const tabId of useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs) {
+      const hostId = hostIdOfTabId(tabId)
+      const content = useTabStore.getState().tabs[tabId]?.layout
+      if (hostId === null || listed.has(hostId) || lastListed.has(hostId) || !content || content.type !== 'leaf') continue
+      if (content.pane.content.kind === 'watch-host' && !content.pane.content.poolHostId) lastListed.set(hostId, now)
+    }
     for (const id of view.hostIds) {
       const tabId = watchHostTabId(id)
       const tabs = useTabStore.getState().tabs
-      if (!(tabId in tabs)) useTabStore.getState().addTab(hostTab(tabId, { kind: 'watch-host', fleetHostId: id }))
+      if (!(tabId in tabs)) useTabStore.getState().addTab(hostTab(tabId, { kind: 'watch-host', poolHostId: id }))
+      else {
+        // The old tab's id is this pool host's id: it becomes the pool tab (the label and the page read `poolHostId`).
+        const layout = tabs[tabId].layout
+        if (layout.type === 'leaf' && layout.pane.content.kind === 'watch-host' && !layout.pane.content.poolHostId) useTabStore.getState().setPaneContent(tabId, layout.pane.id, { kind: 'watch-host', poolHostId: id })
+      }
       const inArea = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs.includes(tabId)
       if (!inArea) useWorkspaceStore.getState().addTabToWorkspace(WATCH_WORKSPACE_ID, tabId) // `add` rewrites even a no-op
     }
 
     let next: number | null = null
-    if (!view.stale) {
+    {
       const current = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
       for (const tabId of current.tabs) {
         const hostId = hostIdOfTabId(tabId)
@@ -260,11 +279,11 @@ export function leaveAreaForForeignActiveTab(): void {
 let current: WatchReconciler = createWatchReconciler()
 export const currentWatchReconciler = (): WatchReconciler => current
 
-/** The fleet store's view for the reconcile: no snapshot → null; no current primary counts as stale. */
-export function readFleetView(): WatchFleetView | null {
-  const s = useFleetStore.getState()
-  if (!s.snapshot) return null
-  return { hostIds: s.snapshot.order, stale: s.stale || s.primaryHostId === null }
+/** The pool's view for the reconcile: null while no source has answered (W4: none connected, or every one failed); else the pool hosts in the order of the pool hosts store. */
+export function readPoolView(): WatchHostsView | null {
+  const s = usePoolStore.getState()
+  if (s.sourceHostId === null) return null
+  return { hostIds: orderPoolHosts(s.hosts, usePoolHostsStore.getState().order).map((h) => h.host_id), source: s.sourceHostId }
 }
 
 /**
@@ -287,7 +306,7 @@ export function startWatchArea(): () => void {
     running = true
     let next: number | null = null
     try {
-      next = reconciler.reconcile(readFleetView())
+      next = reconciler.reconcile(readPoolView())
     } finally {
       running = false
     }
@@ -296,7 +315,7 @@ export function startWatchArea(): () => void {
   }
 
   const unsubscribe = [
-    useFleetStore.subscribe(run), useWorkspaceStore.subscribe(run), useTabStore.subscribe(run),
+    usePoolStore.subscribe(run), usePoolHostsStore.subscribe(run), useWorkspaceStore.subscribe(run), useTabStore.subscribe(run),
     useWatchStatusStore.subscribe(run), useSessionStore.subscribe(run), // the guardian pane follows where the watcher is
     useNexHostStore.subscribe(run), useHostStore.subscribe(run), // the jobs tab appears once a connected daemon announces `jobs.v1`
   ]

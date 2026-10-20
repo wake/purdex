@@ -33,7 +33,7 @@ export function HistoryPage(_props: PaneRendererProps) {
             onClick={() => {
               // The watcher area's panes live only in the area: open it, never make an ordinary tab of the record.
               const c = record.paneContent
-              if (c.kind === 'watch-host') return openWatchArea({ host: c.fleetHostId ?? '' })
+              if (c.kind === 'watch-host') return c.poolHostId ? openWatchArea({ poolHost: { hostId: c.poolHostId } }) : openWatchArea({ tab: 'guardian' }) // an older record names a fleet host that is gone
               if (c.kind === 'watch-guardian' || c.kind === 'watch-events') return openWatchArea({ tab: 'guardian' })
               if (c.kind === 'watch-jobs') return openWatchArea({ tab: 'jobs' })
               if (isOpen) {

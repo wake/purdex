@@ -1,7 +1,6 @@
 import type { PaneContent } from '../types/tab'
 import { fileIconForPath } from './file-icon'
 import { oneLine } from './nex/worker-tab-title'
-import { useFleetStore } from './fleet/store'
 import { poolHostAliasOf } from './pool/use-monitor-hosts'
 import { readPoolAlertCount } from './pool/alerts-store'
 
@@ -71,7 +70,7 @@ export function getPaneLabel(
       return t('watch.pane.jobs')
     case 'watch-host':
       if (content.poolHostId) return poolHostAliasOf(content.poolHostId)
-      return useFleetStore.getState().snapshot?.hosts[content.fleetHostId ?? '']?.alias || content.fleetHostId || ''
+      return content.fleetHostId ?? ''
   }
 }
 
