@@ -162,12 +162,15 @@ func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, cla
 		return snapshot.Workspace{}, errors.Join(fmt.Errorf("jobexec: the fetcher made %q, not %q", ws.Dir, wsDir(base)), cerr)
 	}
 	// A checkout (the clone route) is scanned like a tar is: a symlink out of the workspace is the snapshot's fault on every host.
-	if ol, serr := snapshot.FindOutsideLink(ws.Dir); serr == nil && ol != nil {
+	if ol, serr := snapshot.FindOutsideLink(ws.Dir); serr != nil || ol != nil {
 		var cerr error
 		if inner != nil {
 			cerr = inner()
 		}
 		_ = os.RemoveAll(base)
+		if serr != nil { // a workspace that could not be checked is not run: the host's trouble
+			return snapshot.Workspace{}, errors.Join(fmt.Errorf("jobexec: scanning the workspace for symlinks: %w", serr), cerr)
+		}
 		return snapshot.Workspace{}, errors.Join(outLinkRejected(ol), cerr)
 	}
 	return snapshot.Workspace{Dir: ws.Dir, Cleanup: func() error {
