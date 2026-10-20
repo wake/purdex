@@ -10,6 +10,9 @@ import { clearModuleRegistry, getModule, getPaneRenderer } from '../module-regis
 import { registerBuiltinModules } from '../register-modules'
 import { useFleetStore } from '../fleet/store'
 import { getTabBadgePane, getTabHostId } from '../host-color'
+import { usePoolStore } from '../pool/store'
+import { resetRememberedPoolHosts } from '../pool/use-monitor-hosts'
+import { hostIdOfTabId, watchHostTabId } from './ids'
 
 const t: TFunction = (key) => key
 const sessions = { getByCode: () => undefined }
@@ -83,5 +86,45 @@ describe('watch pane kinds', () => {
     expect(m!.panes?.map((p) => p.kind).sort()).toEqual(['watch-events', 'watch-guardian', 'watch-host', 'watch-jobs'])
     expect(getPaneRenderer('watch-jobs')).toBeTruthy()
     expect(getPaneRenderer('watch-host')).toBeTruthy()
+  })
+})
+
+describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
+  const pooled = (id: string): PaneContent => ({ kind: 'watch-host', poolHostId: id })
+  const answer = (hosts: Array<{ host_id: string; alias: string }>) => usePoolStore.setState({ hosts: hosts as never, sourceHostId: 'cfg-a' } as never)
+  beforeEach(() => {
+    useFleetStore.getState().reset()
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    resetRememberedPoolHosts()
+  })
+
+  it('tab ids go both ways; a tab id that is not a host tab has no host id', () => {
+    expect(hostIdOfTabId(watchHostTabId('abc123'))).toBe('abc123')
+    expect(hostIdOfTabId('watch-jobs')).toBeNull()
+    expect(hostIdOfTabId('t1')).toBeNull()
+  })
+
+  it('label: the alias from the pool store, else the one the list remembered, else the short id; follows a rename', () => {
+    const id = 'abcdef123456'
+    expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('abcdef')
+    answer([{ host_id: id, alias: 'mserv' }])
+    expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv')
+    answer([{ host_id: id, alias: 'mserv-2' }])
+    expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv-2')
+    // the whole pool cannot be read: the remembered list still names it
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv-2')
+  })
+
+  it('label of an old content is still the fleet alias', () => {
+    useFleetStore.setState({ snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } } })
+    answer([{ host_id: 'h1', alias: 'from-pool' }])
+    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('mlab')
+  })
+
+  it('contentMatches: the same poolHostId matches, a different one or an old content does not', () => {
+    expect(contentMatches(pooled('a'), pooled('a'))).toBe(true)
+    expect(contentMatches(pooled('a'), pooled('b'))).toBe(false)
+    expect(contentMatches(pooled('a'), host('a'))).toBe(false)
   })
 })

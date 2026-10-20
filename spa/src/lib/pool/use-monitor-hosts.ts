@@ -36,6 +36,13 @@ let remembered: { hosts: PoolHost[]; source: string | null } = usePoolStore.getS
 usePoolStore.subscribe((s) => { if (s.sourceHostId !== null) remembered = { hosts: s.hosts, source: s.sourceHostId } })
 export function resetRememberedPoolHosts(): void { remembered = { hosts: [], source: null } }
 
+/** The name for a pool host outside a hook (a tab's label): the pool store's alias, else the one the kept list had (W4), else the short id. */
+export function poolHostAliasOf(hostId: string): string {
+  const live = usePoolStore.getState().hosts.find((h) => h.host_id === hostId)
+  const kept = remembered.hosts.find((h) => h.host_id === hostId)
+  return live?.alias || kept?.alias || hostId.slice(0, 6)
+}
+
 export function useMonitorHosts(): MonitorHost[] {
   useRunPool()
   const now = useClock()
