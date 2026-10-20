@@ -35,6 +35,16 @@ describe('useGroupBarDrag', () => {
     expect(tabs[c.id].groupRank).toBeDefined()
   })
 
+  it('canDrop says whether a drop would write anything', () => {
+    const a = mk({ createdAt: 1 }), b = mk({ createdAt: 2 }), c = mk({ createdAt: 3 })
+    useTabStore.setState({ tabs: Object.fromEntries([a, b, c].map((t) => [t.id, t])), tabOrder: [a.id, b.id, c.id], activeTabId: null })
+    const { result } = renderHook(() => useGroupBarDrag([a.id, b.id, c.id]))
+    expect(result.current!.canDrop(c.id, a.id)).toBe(true)
+    expect(result.current!.canDrop(a.id, b.id)).toBe(true)
+    expect(result.current!.canDrop(c.id, c.id)).toBe(false)
+    expect(result.current!.canDrop(c.id, 'not-in-the-group')).toBe(false)
+  })
+
   it('a drop that changes nothing writes nothing', () => {
     const a = mk({ createdAt: 1 }), b = mk({ createdAt: 2 })
     useTabStore.setState({ tabs: Object.fromEntries([a, b].map((t) => [t.id, t])), tabOrder: [a.id, b.id], activeTabId: null })

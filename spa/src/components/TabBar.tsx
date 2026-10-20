@@ -38,7 +38,7 @@ interface Props {
    * With `flat`: how the group's tabs are dragged (TG-4c). `locked` are the tabs that cannot be picked up (a team's lead); a drop of one tab on another is `onDrop(activeId, overId)` — the group's order is written by
    * the caller (lib/task-groups/bar-drag.ts), never `onReorderTabs`. Without it the group's bar is not draggable.
    */
-  groupDrag?: { locked: ReadonlySet<string>; onDrop: (activeId: string, overId: string) => void }
+  groupDrag?: { locked: ReadonlySet<string>; onDrop: (activeId: string, overId: string) => void; /** Whether dropping `activeId` on `overId` would write anything: only such tabs are targets while dragging, so a preview is never followed by a snap back. */ canDrop: (activeId: string, overId: string) => boolean }
 }
 
 function TabSeparator({ show }: { show: boolean }) {
@@ -115,6 +115,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   // the pointer and snaps back on release.
   const collisionDetection: CollisionDetection = useCallback((args) => {
     const activeId = String(args.active.id)
+    if (flat && groupDrag) {
+      // a group's bar: the targets are the tabs the drop would act on (the sidebar's decision decides), nothing else
+      const droppableContainers = args.droppableContainers.filter((c) => groupDrag.canDrop(activeId, String(c.id)))
+      return droppableContainers.length === 0 ? [] : closestCenter({ ...args, droppableContainers })
+    }
     const from = runOf.get(activeId)
     if (from?.role === 'member') {
       const frame = args.droppableRects.get(teamGroupDragId(from.teamKey))
@@ -131,7 +136,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return leadOfFrame.has(id) || !runOf.has(id)
     })
     return closestCenter({ ...args, droppableContainers })
-  }, [leadOfFrame, runOf])
+  }, [leadOfFrame, runOf, flat, groupDrag])
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event

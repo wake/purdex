@@ -9,6 +9,7 @@ import { applyReorder } from '../lib/task-groups/apply-reorder'
 export interface GroupBarDrag {
   locked: ReadonlySet<string>
   onDrop: (activeId: string, overId: string) => void
+  canDrop: (activeId: string, overId: string) => boolean
 }
 
 export function useGroupBarDrag(groupRange: string[] | null): GroupBarDrag | undefined {
@@ -18,6 +19,7 @@ export function useGroupBarDrag(groupRange: string[] | null): GroupBarDrag | und
     return {
       locked: barLockedTabs(selected, currentGroupOrderCtx()),
       onDrop: (activeId, overId) => applyReorder(decideBarDrop(selected, activeId, overId, currentGroupOrderCtx())),
+      canDrop: (activeId, overId) => decideBarDrop(selected, activeId, overId, currentGroupOrderCtx()).kind !== 'ignore',
     }
   }, [groupRange, selected])
 }
