@@ -29,6 +29,9 @@ type SeriesPoint struct {
 	// What a record already carries, cut down for a chart (spec §2.3). Each is null when the record does not say.
 	Load1          *float64     `json:"load1"`
 	Load5          *float64     `json:"load5"`
+	Load15         *float64     `json:"load15"`
+	CPUUserPct     *float64     `json:"cpu_user_pct"`
+	CPUSystemPct   *float64     `json:"cpu_system_pct"`
 	SwapUsedMB     *int         `json:"swap_used_mb"`
 	CompressorMB   *int         `json:"compressor_mb"`
 	SwapOutRate    *float64     `json:"swap_out_rate"`
@@ -137,6 +140,7 @@ func SeriesOf(h FactsHistoryResponse, limit int) FactsSeriesResponse {
 		}
 		load1, load5, running := f.CPU.Load1, f.CPU.Load5, f.Worker.Running
 		p.Load1, p.Load5, p.WorkerRunning = &load1, &load5, &running
+		p.Load15, p.CPUUserPct, p.CPUSystemPct = copyPtr(f.CPU.Load15), copyPtr(f.CPU.UserPct), copyPtr(f.CPU.SystemPct)
 		p.SwapUsedMB, p.CompressorMB = copyPtr(f.Mem.SwapUsedMB), copyPtr(f.Mem.CompressorMB)
 		p.SwapOutRate, p.DecompressRate = copyPtr(f.Mem.SwapOutRate), copyPtr(f.Mem.DecompressRate)
 		if f.Queue != nil {
