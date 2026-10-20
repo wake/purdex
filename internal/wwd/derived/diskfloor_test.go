@@ -34,25 +34,21 @@ func TestWorkVolumeIsTheLongestMountAboveTheRoot(t *testing.T) {
 	}
 }
 
-func TestDiskLowComparesTheWorkVolumeWithTheFloor(t *testing.T) {
+func TestDiskLowComparesTheFreeSpaceWithTheFloor(t *testing.T) {
 	cases := []struct {
-		name  string
-		disks []wire.Disk
-		root  string
-		min   float64
-		want  bool
+		name      string
+		free, min float64
+		want      bool
 	}{
-		{"below", disks, "/Users/wake/work/x", 40, true},
-		{"above", disks, "/Users/wake/work/x", 10, false},
-		{"exactly the floor is enough (the gate's rule)", disks, "/Users/wake/work/x", 30, false},
-		{"floor 0 is none", disks, "/Users/wake/work/x", 0, false},
-		{"negative is none", disks, "/Users/wake/work/x", -1, false},
-		{"a volume that is not in the facts is not a reason", []wire.Disk{{Mount: "/data", FreeGB: 1}}, "/home/wwd", 10, false},
-		{"no disks read is not a reason", nil, "/home/wwd", 10, false},
-		{"the root volume", disks, "/var/wwd", 100, true},
+		{"below", 8, 10, true},
+		{"above", 12, 10, false},
+		{"exactly the floor is enough (the gate's rule)", 10, 10, false},
+		{"floor 0 is none", 0, 0, false},
+		{"negative is none", 0, -1, false},
+		{"a full disk under a floor", 0, 10, true},
 	}
 	for _, c := range cases {
-		if got := DiskLow(c.disks, c.root, c.min); got != c.want {
+		if got := DiskLow(c.free, c.min); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}

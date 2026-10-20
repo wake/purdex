@@ -7,7 +7,8 @@ import (
 )
 
 // WorkVolume is the facts' disk that holds root: the longest mount that is root itself or a directory above it (whole path components,
-// so /Users/wake/work2 is not under /Users/wake/work).
+// so /Users/wake/work2 is not under /Users/wake/work). It is the advisor's view of the work volume (its disk low alerts); the worker's disk
+// floor reads the work root's own volume (facts.FreeGB), which the facts' disk list may not hold.
 func WorkVolume(disks []wire.Disk, root string) (wire.Disk, bool) {
 	var best wire.Disk
 	found := false
@@ -23,13 +24,6 @@ func WorkVolume(disks []wire.Disk, root string) (wire.Disk, bool) {
 	return best, found
 }
 
-// DiskLow says whether the work volume has less free space than the floor (GB): the reason a heavy run is not started (spec §3.2
-// disk_low). A floor of 0 or less is none. A volume the facts do not list is not a reason, like a path the gate could not read:
-// better to run than to refuse on what is not known. Exactly the floor is enough.
-func DiskLow(disks []wire.Disk, workRoot string, minGB float64) bool {
-	if minGB <= 0 {
-		return false
-	}
-	d, ok := WorkVolume(disks, workRoot)
-	return ok && d.FreeGB < minGB
-}
+// DiskLow says whether the work volume's free space (GB) is below the floor: the reason a heavy run is not started (spec §3.2
+// disk_low). A floor of 0 or less is none. Exactly the floor is enough, as in the gate.
+func DiskLow(freeGB, minGB float64) bool { return minGB > 0 && freeGB < minGB }

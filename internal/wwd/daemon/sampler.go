@@ -39,6 +39,9 @@ type SamplerOptions struct {
 	// WorkRoot is the directory jobs run in: the volume that holds it is the one the worker's disk floor (disk_min_gb, from State) is
 	// measured on (derived.DiskLow). Empty: no disk floor is applied.
 	WorkRoot string
+	// WorkFreeGB reads the free space of the volume that holds a path, in GB; nil reads it with facts.FreeGB (statfs of the path itself:
+	// the work root may be on a volume the facts' disk list does not hold). A path that cannot be read is not a reason to hold work.
+	WorkFreeGB func(path string) (float64, error)
 	// Running, when set, is the runs on this host now by slot (queue jobs and fast-lane runs): facts.worker.running (spec §5.2). It
 	// is asked on every sample, outside the sampler's lock, and reads memory only. nil: nothing is counted.
 	Running func() wire.Slots
@@ -83,6 +86,7 @@ type Sampler struct {
 
 	lastQueue string       // the last queue-count error logged
 	lastStore string       // the last store error logged
+	lastDisk  string       // the last work-root free-space error logged
 	unsaved   []wire.Facts // finished minutes not yet in the store, oldest first
 
 	// signals is the last hour of the memory readings this host's own alert rules judge thrash by, kept as read: the proto 2 gate drops
@@ -162,7 +166,7 @@ func (s *Sampler) Tick(now time.Time) {
 			diskMinGB = *snap.Worker.DiskMinGB
 		}
 	}
-	diskLow := s.opts.WorkRoot != "" && derived.DiskLow(f.Disk, s.opts.WorkRoot, diskMinGB)
+	diskLow := s.workDiskLow(diskMinGB)
 
 	if on := s.opts.Fault.OwnerActive(f.Owner != nil && f.Owner.Active); on && (f.Owner == nil || !f.Owner.Active) {
 		// test hook H2: the owner block says active (with a reason that names the hook), which is what the matrix waits for
@@ -370,6 +374,40 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 		return f, false
 	}
 	return s.Shaped(f), true
+}
+
+// workDiskLow says whether the work root's volume has less free space than the floor. It reads the volume itself (a statfs, outside the
+// sampler's lock) at every sample, so a change of the floor or of the space shows in the next record. No work root or no floor: false.
+func (s *Sampler) workDiskLow(minGB float64) bool {
+	if s.opts.WorkRoot == "" || minGB <= 0 {
+		return false
+	}
+	read := s.opts.WorkFreeGB
+	if read == nil {
+		read = facts.FreeGB
+	}
+	free, err := read(s.opts.WorkRoot)
+	if err != nil {
+		s.logDisk(err)
+		return false
+	}
+	s.logDisk(nil)
+	return derived.DiskLow(free, minGB)
+}
+
+// logDisk tells that the work root's free space cannot be read, once per change.
+func (s *Sampler) logDisk(err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	s.mu.Lock()
+	changed := msg != s.lastDisk
+	s.lastDisk = msg
+	s.mu.Unlock()
+	if changed && err != nil {
+		log.Printf("wwd: sampling: the free space of the work root %s cannot be read, no disk floor applies: %v", s.opts.WorkRoot, err)
+	}
 }
 
 // GateFull is whether the gate had all its heavy slots held at the last sample (false before the first, or without a gate to read).
