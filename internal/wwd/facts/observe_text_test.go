@@ -201,3 +201,53 @@ func TestCommandSignature(t *testing.T) {
 		}
 	}
 }
+
+// ccWrap is the zsh -c script Claude Code builds around every Bash command (a real sample from ps; the newlines are real ones): the
+// shell snapshot, two exports, setopt, an unalias guard, then the command as the single-quoted argument of eval, with stdin and the
+// cwd file around it.
+func ccWrap(evalArg string) []string {
+	return []string{"/bin/zsh", "-c", "source /Users/wake/.claude/shell-snapshots/snapshot-zsh-1791868536359-gzelyx.sh 2>/dev/null || true && " +
+		"export CODEX_COMPANION_SESSION_ID='8c088675-7d6b-42da-8b1d-0f9b5ed031cc'\nexport CLAUDE_PLUGIN_DATA='/Users/wake/.claude/plugins/data/codex-openai-codex'\n" +
+		": && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && " +
+		"{ \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && " +
+		"eval " + evalArg + " < /dev/null && pwd -P >| /tmp/claude-19cb-cwd"}
+}
+
+func TestCommandSignatureSeesThroughTheClaudeCodeWrapper(t *testing.T) {
+	for name, c := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"a bare command":             {ccWrap(`'go test ./...'`), "go test"},
+		"a quoted program path":      {ccWrap(`''"'"'/Users/wake/Workspace/wake/purdex/bin/pdx'"'"' test go-all'`), "pdx test go-all"},
+		"cd then the command":        {ccWrap(`'cd /x && git status --short'`), "git status"},
+		"a quote escaped as '\\''":   {ccWrap(`'cd /x && grep -rn '\''a && b'\'' src | wc -l'`), "grep"},
+		"a newline between commands": {ccWrap("'cd /x\npnpm vitest run a.test.ts'"), "pnpm vitest run"},
+		"a && inside quotes is data": {ccWrap(`'echo "a && go test" && true'`), "echo"},
+		"the wrapper only":           {ccWrap(`''`), "zsh"},
+		"no eval: as before":         {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, ":"},
+		"plain zsh -c still works":   {[]string{"zsh", "-c", "cd /x && swift build"}, "swift build"},
+	} {
+		if got := CommandSignature(c.argv); got != c.want {
+			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestCommandSignatureWrapperReadingKeepsTheOtherRules(t *testing.T) {
+	for name, c := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"a secret joined by unquoting is not a word": {[]string{"zsh", "-c", "tool sk-'abcdefgh12345' go"}, "tool go"},
+		"a secret inside the eval is not a word":     {ccWrap(`'tool sk-'\''abcdefgh12345'\'' go'`), "tool go"},
+		"unalias outside the wrapper is the command": {[]string{"zsh", "-c", "unalias dangerous; go test ./..."}, "unalias dangerous"},
+		"setopt outside the wrapper is the command":  {[]string{"zsh", "-c", "setopt xtrace; deploy production"}, "setopt xtrace"},
+		"a phrase word in a plain argv stays":        {[]string{"tool", "release candidate", "deploy"}, "tool release candidate deploy"},
+		"a quoted phrase in a script ends the words": {[]string{"zsh", "-c", `echo "a b" c`}, "echo"},
+	} {
+		if got := CommandSignature(c.argv); got != c.want {
+			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)
+		}
+	}
+}

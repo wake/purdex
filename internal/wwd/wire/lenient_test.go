@@ -99,6 +99,7 @@ func TestEveryReadTypeToleratesUnknownFields(t *testing.T) {
 	t.Run("jobs list", func(t *testing.T) { readsLeniently[JobsListResponse](t, "jobs_list_response.json") })
 	t.Run("job detail", func(t *testing.T) { readsLeniently[JobDetail](t, "job_detail.json") })
 	t.Run("job queued", func(t *testing.T) { readsLeniently[Job](t, "job_queued.json") })
+	t.Run("job running", func(t *testing.T) { readsLeniently[Job](t, "job_running.json") })
 	t.Run("job done", func(t *testing.T) { readsLeniently[Job](t, "job_done.json") })
 	t.Run("submission response", func(t *testing.T) { readsLeniently[JobSubmissionResponse](t, "submission_response.json") })
 	t.Run("claim response", func(t *testing.T) { readsLeniently[ClaimResponse](t, "claim_response.json") })

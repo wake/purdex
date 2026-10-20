@@ -1,0 +1,14 @@
+{
+  "id": "j_01JD", "origin": "mlab",
+  "repo": {"name": "purdex", "root": "abc123", "remote": "git@github.com:wake/purdex.git"},
+  "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
+  "task": "spa-related", "args": ["src/a.ts"], "class": "merge",
+  "labels": ["os:darwin", "repo:purdex"], "locks": [], "cacheable": true, "timeout_s": 1800,
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false, "manual": "", "manual_seq": 0,
+  "supersede_key": "deadbeef:spa-related",
+  "submitter": {"session": "s1", "ref": "_abc123", "team": "wwd", "host": "mlab"},
+  "created_at": "2026-10-20T08:00:00+08:00", "state": "running",
+  "claim": {"worker": "air26", "attempt": 1, "since": "2026-10-20T08:00:05+08:00"},
+  "started_at": "2026-10-20T08:00:12.5+08:00",
+  "result": null
+}

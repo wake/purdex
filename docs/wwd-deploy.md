@@ -219,6 +219,13 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   client (Purdex's `jobnotify`) that kept a cursor from before the restore would take it as still good once the
   restored queue's counter has caught up with it, and then miss the changes below it. A new epoch makes every client
   start again from `0`. (A backup older than schema 5 has no `db_epoch`; upgrading it again makes a new one.)
+* **Roll back across queue schema 9** (`jobs.started_at`, MD-5; same shape as the host schema 9 step of #3706). Schema 9 is one nullable
+  column, and a wwd that knows only schema 8 refuses the file, so going back to 765 or earlier is the backup restore: on each host, with
+  wwd stopped, put `wwd.db.pre-<version>` (the online `.backup` made before the upgrade) back as `wwd.db`, remove `wwd.db-wal` and
+  `wwd.db-shm`, give it a new epoch (the `UPDATE db_epoch` above), start the old build. Jobs made since the backup are lost. Before the
+  upgrade, check on each of the four wwd (`GET /v1/pool` → `version`) and on mlab and air26's Purdex daemons (`/api/health` → `version`)
+  that all are at 765 or later: a reader older than 765 reads jobs strictly and refuses a record that has `started_at`, which would hide
+  every started job from it. The deploy script stops if one is lower.
 * **Before any roll back: the quarantine must be empty** (#3373 PR2, from the build where the per-job database is named by
   `source/id`; and again from PR3b, where the sandbox unit is named `wwd-<origin tag>-<id>` and an older build's quarantine
   check refuses a marker whose `Unit` is not exactly `wwd-<id>`, so it would not load the new markers at all). A job whose command was not proven stopped sits in the quarantine with its per-job database, and the older wwd's
