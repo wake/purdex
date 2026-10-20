@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/clones"
@@ -97,6 +98,10 @@ type workerInputs struct {
 	// FastLaneReady says the fast lane has rebuilt the keys of its runs that were going on (localruns.Service.Ready). The worker takes
 	// no job before that: it could otherwise be given a key a fast-lane run still holds. nil: no fast lane to wait for.
 	FastLaneReady func() bool
+	// ReserveHeavy books a heavy slot in the fast lane's ledger before a claim (localruns.Service.ReserveHeavy); nil: none.
+	ReserveHeavy func() (func(), bool)
+	// Running is told the worker's loop once it is built (nil: nothing reads it).
+	Running *queueRunning
 }
 
 // jobParentEnv is the environment the jobs' allowed names are read from: the daemon's own, with PATH replaced by the tool list the
@@ -221,6 +226,7 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 	})
 	return loop.Config{
 		Gate:     in.Gate,
+		Reserve:  in.ReserveHeavy,
 		Settings: in.Settings,
 		Facts: func() *wire.Facts {
 			f, ok := in.Latest()
@@ -324,5 +330,21 @@ func runWorker(ctx context.Context, in workerInputs) error {
 	if err != nil {
 		return err
 	}
-	return loop.New(cfg).Run(ctx)
+	l := loop.New(cfg)
+	if in.Running != nil {
+		in.Running.l.Store(l)
+	}
+	return l.Run(ctx)
+}
+
+// queueRunning is the queue jobs this host's worker is running, for facts.worker.running and the fast lane's admission: the sampler and
+// the fast lane are built before the worker is, so they hold this and the worker is put in when it exists. A queue job takes a heavy
+// slot (the loop claims only while its running count is below the heavy slots).
+type queueRunning struct{ l atomic.Pointer[loop.Loop] }
+
+func (r *queueRunning) Slots() wire.Slots {
+	if l := r.l.Load(); l != nil {
+		return wire.Slots{Heavy: l.Running()}
+	}
+	return wire.Slots{}
 }

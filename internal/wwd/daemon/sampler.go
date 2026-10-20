@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/derived"
@@ -35,6 +36,9 @@ type SamplerOptions struct {
 	// 0, because until WWD-6 a queue job runs outside the gate's slots (#3447). nil: this host has no gate to count. It is asked on every
 	// sample, outside the sampler's lock, and does file reads only.
 	GateHeavyFull func() bool
+	// Running, when set, is the runs on this host now by slot (queue jobs and fast-lane runs): facts.worker.running (spec §5.2). It
+	// is asked on every sample, outside the sampler's lock, and reads memory only. nil: nothing is counted.
+	Running func() wire.Slots
 	// State, when set, is where the worker settings and the exceptions come from
 	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
 	State *HostState
@@ -65,6 +69,8 @@ type Sampler struct {
 	collector *facts.Collector
 	latch     derived.ZoneLatch
 	mstats    derived.MinuteAgg // the open minute's per-sample totals (guarded by mu)
+
+	gateFull atomic.Bool // the gate's reading at the last sample (GateFull)
 
 	mu      sync.RWMutex
 	ring    *facts.Ring
@@ -166,6 +172,10 @@ func (s *Sampler) Tick(now time.Time) {
 		f.Owner = &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
 	}
 	gateFull := s.opts.GateHeavyFull != nil && s.opts.GateHeavyFull() // file reads: before the lock
+	s.gateFull.Store(gateFull)
+	if s.opts.Running != nil {
+		f.Worker.Running = s.opts.Running()
+	}
 	s.mu.Lock()
 	// the effective owner rule is the only basis for "the owner is active" (#3457): with none, f.Owner still shows the reading but it does not count
 	in := derived.Input{
@@ -353,6 +363,9 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 	}
 	return s.Shaped(f), true
 }
+
+// GateFull is whether the gate had all its heavy slots held at the last sample (false before the first, or without a gate to read).
+func (s *Sampler) GateFull() bool { return s.gateFull.Load() }
 
 // Shaped is f in the shape the gate allows now: while the gate is shut a record written while it was open (v 2, with the new fields)
 // is handed out as v1, on a copy, so the ring and the store keep what they were written as. Records already in v1 shape come back

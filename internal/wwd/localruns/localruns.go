@@ -56,11 +56,23 @@ type Service struct {
 	Queue  Queue
 	Worker string // this host's alias, passed to RecordLocal
 	Logf   func(format string, args ...any)
+	// Room, when set, says why a run may not start now (nil or empty: there is room): heavy is an adhoc command, else a declared task
+	// (light). running counts every run on this host, the fast lane's and Others'. It is asked with the service's lock held and must
+	// only read memory. nil: no admission, the runs are not counted either.
+	Room func(heavy bool, running wire.Slots) []string
+	// Capacity is the host's slots (the worker setting); memory only. ReserveHeavy refuses past it. nil: no limit.
+	Capacity func() wire.Slots
+	// Others counts the runs that are not fast-lane ones (the queue jobs the worker runs); memory only, like Room. nil: none.
+	Others func() wire.Slots
 
 	seq atomic.Uint64
 
 	mu    sync.Mutex
 	holds map[string]*locks.Hold // by job id
+	// adhoc: the slot of each hold by job id (true: heavy), which is the live count of the fast lane's runs. pending: runs admitted
+	// whose record is not installed yet; they hold their slot from the admission, so two registrations cannot both take the last one.
+	adhoc   map[string]bool
+	pending wire.Slots
 	// early: jobs whose end was announced before the registration that made them returned (the event is faster than the answer).
 	// It is only filled while a registration is in flight (inflight > 0) and emptied when the last one is over: an end that no
 	// registration waits for needs nothing remembered (Reconcile covers a hold that outlives its job).
@@ -74,7 +86,7 @@ type Service struct {
 
 // New returns a service over the table and the queue.
 func New(t *locks.Table, q Queue, worker string) *Service {
-	return &Service{Locks: t, Queue: q, Worker: worker, Logf: log.Printf, holds: map[string]*locks.Hold{}, early: map[string]struct{}{}, abandoning: map[string]struct{}{}}
+	return &Service{Locks: t, Queue: q, Worker: worker, Logf: log.Printf, holds: map[string]*locks.Hold{}, adhoc: map[string]bool{}, early: map[string]struct{}{}, abandoning: map[string]struct{}{}}
 }
 
 // Ready says the table has been rebuilt from the queue (Recover finished) and not been closed again by a repeat of it: the lane is open.
@@ -100,6 +112,7 @@ func (s *Service) Handler() http.HandlerFunc {
 		}
 		resp, status, err := s.Register(r.Context(), req)
 		var busy *locks.BusyError
+		var sb *SlotBusyError
 		switch {
 		case errors.As(err, &busy):
 			keys := make([]string, len(busy.Conflicts))
@@ -113,6 +126,8 @@ func (s *Service) Handler() http.HandlerFunc {
 				holders = nil // a run still being recorded has no job id yet: the keys alone are told
 			}
 			writeJSON(w, http.StatusConflict, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: keys, Holders: holders})
+		case errors.As(err, &sb):
+			writeJSON(w, http.StatusTooManyRequests, wire.SlotBusy{Reason: wire.SlotBusyReason, Slot: slotName(sb.Heavy), Reasons: sb.Reasons})
 		case err != nil:
 			writeJSON(w, status, map[string]string{"error": err.Error()})
 		default:
@@ -147,6 +162,18 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 	if err := locks.ValidateKeys(req.Locks); err != nil {
 		return wire.LocalRunResponse{}, http.StatusBadRequest, err // the request is malformed; the queue is not the problem
 	}
+	heavy := req.AdHoc
+	if err := s.admit(heavy); err != nil {
+		return wire.LocalRunResponse{}, http.StatusTooManyRequests, err
+	}
+	reserved := true // the slot is held from here; the install below turns it into the run's own
+	defer func() {
+		if reserved {
+			s.mu.Lock()
+			s.unreserve(heavy)
+			s.mu.Unlock()
+		}
+	}()
 	owner := fmt.Sprintf("%s%d", provisionalPrefix, s.seq.Add(1))
 	var resp wire.LocalRunResponse
 	hold, err := s.Locks.Acquire(owner, req.Locks, func() error {
@@ -187,9 +214,107 @@ func (s *Service) register(ctx context.Context, req wire.LocalRunRequest) (wire.
 		hold.Release() // the job ended while it was being recorded: nothing to hold
 		return resp, http.StatusOK, nil
 	}
-	s.holds[resp.ID] = hold
+	s.holds[resp.ID], s.adhoc[resp.ID] = hold, heavy
+	s.unreserve(heavy) // the run counts from its hold now
+	reserved = false
 	s.mu.Unlock()
 	return resp, http.StatusOK, nil
+}
+
+// SlotBusyError is a registration refused for want of a slot (status 429).
+type SlotBusyError struct {
+	Heavy   bool
+	Reasons []string
+}
+
+func (e *SlotBusyError) Error() string {
+	return fmt.Sprintf("no %s slot: %s", slotName(e.Heavy), strings.Join(e.Reasons, ", "))
+}
+
+func slotName(heavy bool) string {
+	if heavy {
+		return "heavy"
+	}
+	return "light"
+}
+
+// admit takes the slot of a run when Room says there is one, and counts it as pending until the run's hold is installed. Everything
+// it asks is in memory: the service's lock is held for the answer.
+func (s *Service) admit(heavy bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Room != nil {
+		running := s.localLocked()
+		if s.Others != nil {
+			o := s.Others()
+			running.Heavy, running.Light = running.Heavy+o.Heavy, running.Light+o.Light
+		}
+		if why := s.Room(heavy, running); len(why) > 0 {
+			return &SlotBusyError{Heavy: heavy, Reasons: why}
+		}
+	}
+	if heavy {
+		s.pending.Heavy++
+	} else {
+		s.pending.Light++
+	}
+	return nil
+}
+
+// ReserveHeavy books a heavy slot for a queue job the worker is about to claim, in the same ledger the fast lane is admitted against, so
+// the two cannot take the last heavy slot between them. It looks at the slot count only (the worker has its own headroom checks, which
+// know the holds that let a job through). release gives the booking back, once; the worker calls it when the claimed job is in its own
+// running count (Others), which counts it from then on.
+func (s *Service) ReserveHeavy() (release func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Capacity != nil {
+		running := s.localLocked()
+		if s.Others != nil {
+			running.Heavy += s.Others().Heavy
+		}
+		if running.Heavy >= s.Capacity().Heavy {
+			return nil, false
+		}
+	}
+	s.pending.Heavy++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.unreserve(true)
+			s.mu.Unlock()
+		})
+	}, true
+}
+
+// unreserve gives back a pending slot. s.mu is held.
+func (s *Service) unreserve(heavy bool) {
+	if heavy {
+		s.pending.Heavy--
+	} else {
+		s.pending.Light--
+	}
+}
+
+// localLocked is the fast lane's runs now: the held ones and the pending ones. s.mu is held.
+func (s *Service) localLocked() wire.Slots {
+	n := s.pending
+	for id := range s.holds {
+		if s.adhoc[id] {
+			n.Heavy++
+		} else {
+			n.Light++
+		}
+	}
+	return n
+}
+
+// Running is how many runs the fast lane has now, by slot: what facts.worker.running shows with the queue jobs added (spec §5.2).
+func (s *Service) Running() wire.Slots {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localLocked()
 }
 
 // abandon ends a run that was recorded and cannot be handed to its caller: failed, reason infra, with the claim the queue answered
@@ -261,6 +386,7 @@ func (s *Service) end(id string) {
 	s.mu.Lock()
 	hold, ok := s.holds[id]
 	delete(s.holds, id)
+	delete(s.adhoc, id)
 	if !ok && s.inflight > 0 { // a registration may be about to return this job
 		if len(s.early) >= maxEarly { // bounded; the next comparison covers a hold that is missed
 			for k := range s.early {
@@ -304,6 +430,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			s.mu.Lock()
 			hold, ok := s.holds[id]
 			delete(s.holds, id)
+			delete(s.adhoc, id)
 			s.mu.Unlock()
 			if ok {
 				hold.Release()
@@ -360,7 +487,7 @@ func (s *Service) Recover(ctx context.Context) error {
 			hold.Release()
 			continue
 		}
-		s.holds[j.ID] = hold
+		s.holds[j.ID], s.adhoc[j.ID] = hold, j.AdHoc // the queue keeps the job's kind, so the slot is known again after a restart
 		s.mu.Unlock()
 	}
 	if len(failed) > 0 {

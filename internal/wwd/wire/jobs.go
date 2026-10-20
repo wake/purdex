@@ -208,6 +208,18 @@ type LocksBusy struct {
 	Holders []LockHolder `json:"holders"`
 }
 
+// SlotBusy is the 429 body of a local-run registration that finds no slot on this host (spec §5.2): the caller waits and asks again,
+// like for LocksBusy. Slot is the slot the run takes ("light" for a declared task, "heavy" for an adhoc command); Reasons say why it
+// has no room now (the reasons of the headroom, spec §3.2).
+type SlotBusy struct {
+	Reason  string   `json:"reason"`
+	Slot    string   `json:"slot"`
+	Reasons []string `json:"reasons"`
+}
+
+// SlotBusyReason is the only reason a SlotBusy carries.
+const SlotBusyReason = "slot_busy"
+
 // LockHolder is the job that holds a lock key.
 type LockHolder struct {
 	Key string `json:"key"`

@@ -82,6 +82,10 @@ type Gate interface {
 type Config struct {
 	// Gate, when set, is asked for a heavy slot before a job is claimed. nil: no gate to keep books with.
 	Gate Gate
+	// Reserve, when set, books a heavy slot in the host's ledger before anything is claimed and gives it back when the round's claim is
+	// settled (the claimed job is in the loop's running count by then): a fast-lane run is admitted against the same ledger, so the two
+	// cannot take the last heavy slot between them. false: no room, nothing is claimed this round. nil: no ledger to keep books with.
+	Reserve func() (release func(), ok bool)
 	// Settings is the worker setting (/v1/worker): on or off, the slots, the owner rule.
 	Settings func() wire.WorkerSettings
 	// Facts is this host's latest facts record; nil until the first sample (the loop then takes nothing).
@@ -355,6 +359,13 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	ranked := pick.Rank(cands, env)
 	// The gate's heavy slot is taken only when there is something to claim (an empty queue does not make the gate's slots flicker), and
 	// one slot serves all of this round's tries: it goes to the job that is claimed, or comes back when none is.
+	if l.cfg.Reserve != nil && len(ranked) > 0 {
+		release, ok := l.cfg.Reserve()
+		if !ok {
+			return
+		}
+		defer release() // after the claimed job is in l.running (below), so the ledger never shows the slot as free in between
+	}
 	var slot GateSlot
 	if l.cfg.Gate != nil && len(ranked) > 0 {
 		s, ok := l.cfg.Gate.TakeHeavy()
