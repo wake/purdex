@@ -25,7 +25,43 @@ export interface HostSample {
   slotLight: number | null
   workerOn: boolean | null
   zone: PoolZone | null
+  /** What the status tab and the full charts read beyond the mini charts' fields. Optional: a sample built without it (a test literal, an older reader) has none; absent means this sample was not read for detail. */
+  detail?: HostDetail
 }
+
+/**
+ * The detail of one sample. Every figure is null where the source does not say (never 0, which would read as "measured, and nothing"): a record from before the host-metrics fields, a platform without the figure, or a series point,
+ * which does not carry `cores`, `psi`, `sessionsRoom`, `procsListed`, `residents`, `residentsMemMb` and `bootAt` (host-metrics spec §2.5).
+ */
+export interface HostDetail {
+  load15: number | null
+  userPct: number | null
+  systemPct: number | null
+  cores: { user: number | null; system: number | null; idle: number | null; kind: 'p' | 'e' | null }[] | null
+  /** The memory pressure level; 0 (unknown) is null. */
+  level: number | null
+  psi: { some10: number; full10: number; some60: number } | null
+  compressorMb: number | null
+  decompressRate: number | null
+  swapTotalMb: number | null
+  disks: { mount: string; usedPct: number; freeGb: number }[] | null
+  diskIO: { device: string; readBps: number | null; writeBps: number | null; readIops: number | null; writeIops: number | null }[] | null
+  headroomHeavy: number | null
+  headroomLight: number | null
+  queued: number | null
+  sessionsRoom: number | null
+  /** How many processes the record lists (not the host's total). */
+  procsListed: number | null
+  /** The residents' count in all and their memory in all. */
+  residents: number | null
+  residentsMemMb: number | null
+  procsTotal: number | null
+  selfCpuPct: number | null
+  selfRssMb: number | null
+  bootAt: number | null
+}
+
+const levelOf = (pressure: number): number | null => (pressure > 0 ? pressure : null)
 
 /** The sample of a full 5 s record; the disk is the one with the highest `used_pct`. */
 export function sampleOfFacts(f: PoolFacts): HostSample {
@@ -37,6 +73,16 @@ export function sampleOfFacts(f: PoolFacts): HostSample {
     diskUsedPct: fullest?.used_pct ?? null, diskFreeGb: fullest?.free_gb ?? null,
     runHeavy: f.worker.running.heavy, runLight: f.worker.running.light, slotHeavy: f.worker.slots.heavy, slotLight: f.worker.slots.light,
     workerOn: f.worker.enabled, zone: f.derived.zone,
+    detail: {
+      load15: f.cpu.load15 ?? null, userPct: f.cpu.user_pct ?? null, systemPct: f.cpu.system_pct ?? null,
+      cores: f.cpu.cores ? f.cpu.cores.map((c) => ({ user: c.user_pct, system: c.system_pct, idle: c.idle_pct, kind: c.kind })) : null,
+      level: levelOf(f.mem.pressure), psi: f.mem.psi, compressorMb: f.mem.compressor_mb, decompressRate: f.mem.decompress_rate ?? null, swapTotalMb: f.mem.swap_total_mb ?? null,
+      disks: f.disk.map((d) => ({ mount: d.mount, usedPct: d.used_pct, freeGb: d.free_gb })),
+      diskIO: f.disk_io ? f.disk_io.map((d) => ({ device: d.device, readBps: d.read_bps, writeBps: d.write_bps, readIops: d.read_iops, writeIops: d.write_iops })) : null,
+      headroomHeavy: f.derived.headroom.heavy, headroomLight: f.derived.headroom.light, queued: f.queue?.queued ?? null, sessionsRoom: f.derived.sessions_room,
+      procsListed: f.procs.length, residents: f.residents.reduce((n, r) => n + r.count, 0), residentsMemMb: f.residents.reduce((n, r) => n + r.mem_mb, 0),
+      procsTotal: f.procs_total ?? null, selfCpuPct: f.self?.cpu_pct ?? null, selfRssMb: f.self?.rss_mb ?? null, bootAt: f.boot_at ?? null,
+    },
   }
 }
 
@@ -53,6 +99,15 @@ export function sampleOfPoint(p: SeriesPoint, memTotalMb: number | null, ncpu: n
     pageOut: p.page_out_rate, swapOut: p.swap_out_rate ?? null, swapUsedMb: p.swap_used_mb ?? null,
     diskUsedPct: fullest?.used_pct ?? p.disk_max_used_pct, diskFreeGb: fullest?.free_gb ?? null,
     runHeavy: p.worker_running?.heavy ?? null, runLight: p.worker_running?.light ?? null, slotHeavy: null, slotLight: null, workerOn: null, zone: p.zone,
+    detail: {
+      load15: p.load15 ?? null, userPct: p.cpu_user_pct ?? null, systemPct: p.cpu_system_pct ?? null, cores: null,
+      level: levelOf(p.pressure), psi: null, compressorMb: p.compressor_mb ?? null, decompressRate: p.decompress_rate ?? null, swapTotalMb: p.swap_total_mb ?? null,
+      disks: p.disks ? p.disks.map((d) => ({ mount: d.mount, usedPct: d.used_pct, freeGb: d.free_gb })) : null,
+      diskIO: p.disk_io ? p.disk_io.map((d) => ({ device: d.device, readBps: d.read_bps, writeBps: d.write_bps, readIops: d.read_iops, writeIops: d.write_iops })) : null,
+      headroomHeavy: p.headroom.heavy, headroomLight: p.headroom.light, queued: p.queue_queued ?? null, sessionsRoom: null,
+      procsListed: null, residents: null, residentsMemMb: null,
+      procsTotal: p.procs_total ?? null, selfCpuPct: p.self_cpu_pct ?? null, selfRssMb: p.self_rss_mb ?? null, bootAt: null,
+    },
   }
 }
 
