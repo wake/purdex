@@ -126,3 +126,54 @@ func TestNotifyGroupOf_RegisteredByTheModule(t *testing.T) {
 		t.Fatalf("%T is not a team.NotifyGrouper", svc)
 	}
 }
+
+// The group name is the App's label of the roster's lead (title → the address's name part → ref): whatever the roster shows
+// for the lead of an unnamed team, NotifyGroupOf answers the label of it, live or offline. Locks the two rules together.
+func TestNotifyGroupOf_MatchesTheRostersLead(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		shown *team.Origin // nil: the registry does not list the lead (offline)
+	}{
+		{"live with a title", &team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss-addr", PID: 10}},
+		{"live without a title", &team.Origin{SessionID: "sid-1", Ref: "_abc123", Address: "self/boss-addr", PID: 10}},
+		{"live without an address", &team.Origin{SessionID: "sid-1", Ref: "_abc123", PID: 10}},
+		{"offline", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			seedTeam(t, f.m.store, uid(1), "sid-1", 1000)
+			seedMember(t, f.m.store, "op-1", uid(1), "sid-m1", 2000)
+			if c.shown != nil {
+				f.origins.show(*c.shown)
+			} else {
+				f.origins.hidden = map[string]bool{"sid-1": true}
+			}
+			roster := f.getRoster()
+			if len(roster.Teams) != 1 {
+				t.Fatalf("teams = %+v", roster.Teams)
+			}
+			lead := roster.Teams[0].Lead
+			want := team.LeadLabel(lead.Title, lead.Address, lead.Ref)
+			for _, sid := range []string{"sid-1", "sid-m1"} {
+				if got, err := f.m.NotifyGroupOf(sid); err != nil || got != want {
+					t.Fatalf("%s: NotifyGroupOf = %q err=%v, the roster's lead label is %q (lead %+v)", sid, got, err, want, lead)
+				}
+			}
+		})
+	}
+}
+
+// A remote member reads the team's new name as soon as team.appearance has written it (the labeler's reread picks it up).
+func TestNotifyGroupOf_RemoteMemberSeesARename(t *testing.T) {
+	f := newFixture(t)
+	seedRemote(t, f.m.store, "mk-1", "remote-m", 1000)
+	if got, _ := f.m.NotifyGroupOf("remote-m"); got != "T" {
+		t.Fatalf("before = %q", got)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE remote_members SET team_name = 'Renamed' WHERE mk = 'mk-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.m.NotifyGroupOf("remote-m"); got != "Renamed" {
+		t.Fatalf("after the rename = %q", got)
+	}
+}
