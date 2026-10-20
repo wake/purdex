@@ -648,6 +648,8 @@
   "watch.host.jobs.state_running": "執行中",
   "watch.host.jobs.queued_more": "還有 {{n}} 件在排，看任務佇列",
   "watch.host.jobs.all": "這台的全部工作",
+  "watch.host.monitor.work": "工作與行程",
+  "watch.host.monitor.procs_every": "行程每 5 秒更新",
   "watch.host.top_cpu": "CPU 前 5 名",
   "watch.host.top_mem": "記憶體前 5 名",
   "watch.host.col_pid": "PID",
