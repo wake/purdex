@@ -3,11 +3,16 @@
 // Guard (task groups spec §8, TG-2c): the per-host task groups (hostconfig `task_groups`, `task_groups.v1`, a CAS PUT per host) are gone — the groups are `useManualGroupsStore`'s, in the profile. This pins that
 // the retired modules stay deleted and that nothing imports them or their entry points again.
 import { describe, it, expect } from 'vitest'
+// node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see pool/fixtures-sync.guard.test.ts); they work at runtime.
+// @ts-expect-error node:fs is untyped here.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+// @ts-expect-error node:path is untyped here.
 import { join, relative } from 'node:path'
 
-const SRC = join(__dirname, '..', '..')
-const SELF = relative(SRC, __filename)
+// @ts-expect-error __dirname is untyped here.
+const SRC: string = join(__dirname, '..', '..')
+// @ts-expect-error __filename is untyped here.
+const SELF: string = relative(SRC, __filename)
 
 const RETIRED_FILES = [
   'lib/task-groups/api.ts',
@@ -28,7 +33,7 @@ const RETIRED_REFERENCES = [
 ]
 
 function sources(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir) as string[]) {
     if (name === 'node_modules') continue
     const full = join(dir, name)
     if (statSync(full).isDirectory()) sources(full, out)
