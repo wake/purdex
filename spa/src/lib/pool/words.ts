@@ -59,7 +59,7 @@ export const errorTextKey = (code: PoolErrorCode): string | null => ERROR_TEXT[c
 export const livenessWordOf = (t: T, state: PoolLiveness): string => t(`pool.liveness.${state}`)
 export const livenessWord = (t: T, s: PoolHostState): string => livenessWordOf(t, s.state)
 
-const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+export const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 /** "N seconds / minutes / hours ago", whole units rounded down. */
 function agoWord(t: T, ms: number): string {

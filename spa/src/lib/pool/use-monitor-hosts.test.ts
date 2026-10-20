@@ -54,7 +54,7 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
     answer([withWorker(host(A, 'mlab')), withWorker(host(B, 'mserv'))])
     seedJobs([wjob('a', 'mlab'), wjob('b', 'mlab'), wjob('c', 'mlab', { state: 'running', claim: { worker: 'mserv', attempt: 1, since: 0 } })])
     const { result } = renderHook(() => useMonitorHosts())
-    expect(result.current.map((h) => h.count)).toEqual([{ n: 2, tone: 'neutral' }, { n: 1, tone: 'neutral' }])
+    expect(result.current.map((h) => h.count)).toEqual([{ n: 2, tone: 'neutral', queued: 2, running: 0 }, { n: 1, tone: 'neutral', queued: 0, running: 1 }])
   })
   it('nothing to count is null, not zero', () => {
     answer([withWorker(host(A, 'mlab'))])
@@ -70,7 +70,7 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
     answer([withWorker(host(A, 'mlab'))])
     seedJobs([wjob('a', 'mlab')])
     const { result } = renderHook(() => useMonitorHosts())
-    expect(result.current[0].count).toEqual({ n: 1, tone: 'neutral' })
+    expect(result.current[0].count).toEqual({ n: 1, tone: 'neutral', queued: 1, running: 0 })
     act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null, error: { code: 'no_answer', since: 1 } } as never) })
     expect(result.current.map((h) => h.count)).toEqual([null])
   })

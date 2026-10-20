@@ -46,6 +46,8 @@ export interface CellView {
   owner: PoolOwner | null
   /** Linux only. */
   psi: { some10: number; full10: number } | null
+  /** What the card's lower rows say beyond the pool's own (M11); null unless `ok`. `checkedAt` is the daemon's last probe of this peer (ms), null for the local host or a daemon that sends none. */
+  detail: { version: string; memAvailGb: number; swapUsedGb: number | null; local: boolean; checkedAt: number | null } | null
 }
 
 /** The facts as `CellFast`. `zone` is a placeholder (`normal`) for the pool's `unknown`, which rides in `CellView.zone`. */
@@ -68,7 +70,7 @@ export function factsToCellFast(f: PoolFacts, load: number): CellFast {
 
 export function cellOf(m: MonitorHost): CellView {
   const base = { hostId: m.hostId, name: m.alias, state: m.state, look: m.look, poolFailure: m.poolFailure, count: m.count }
-  const none = { fast: null, zone: null, load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null }
+  const none = { fast: null, zone: null, load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, detail: null }
   if (m.state.state !== 'ok') return { ...base, ...none }
   const f = m.state.facts
   const pool = m.state.pool
@@ -83,5 +85,12 @@ export function cellOf(m: MonitorHost): CellView {
     sessionsRoom: f.derived.sessions_room,
     owner: f.owner,
     psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null,
+    detail: {
+      version: m.state.pool.version,
+      memAvailGb: f.mem.available_mb / 1024,
+      swapUsedGb: f.mem.swap_used_mb === null ? null : f.mem.swap_used_mb / 1024,
+      local: m.state.pool.liveness === undefined,
+      checkedAt: m.state.pool.liveness_at ?? null,
+    },
   }
 }

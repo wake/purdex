@@ -85,7 +85,7 @@ describe('HostCell — a host that is not ok (M17–M19)', () => {
     expect(screen.getByTestId(`host-badge-dim-${ID}`).className).not.toContain('opacity')
   })
   it('the cell draws the count it is given (the model gives none to a host that is not ok)', () => {
-    setup({ ...cellView({ liveness: 'host_down' }), count: { n: 3, tone: 'neutral' } })
+    setup({ ...cellView({ liveness: 'host_down' }), count: { n: 3, tone: 'neutral', queued: 3, running: 0 } })
     expect(screen.getByTestId(`count-badge-${ID}`)).toBeTruthy()
   })
   it('the accessible name carries the state word; an ok host also its zone', () => {
@@ -112,7 +112,7 @@ describe('HostCell — the count at the badge\'s corner (M6, M7)', () => {
     expect(badge.className).toContain(cls)
   })
   it('above 99 it reads 99+', () => {
-    setup({ ...cellView(), count: { n: 120, tone: 'neutral' } })
+    setup({ ...cellView(), count: { n: 120, tone: 'neutral', queued: 120, running: 0 } })
     expect(screen.getByTestId(`count-badge-${ID}`).textContent).toBe('99+')
   })
   it('there is no breathing dot any more (U3): the running jobs are in the number', () => {

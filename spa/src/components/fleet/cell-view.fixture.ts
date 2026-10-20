@@ -25,6 +25,7 @@ export function cellView(over: Partial<CellView> & { liveness?: 'wwd_down' | 'ho
     hostId: '82b11c521df16c12', name: 'mlab', state, look: DEFAULT_LOOK, poolFailure: null, count: null,
     fast: ok ? fast() : null, zone: ok ? 'normal' : null,
     load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null,
+    detail: ok ? { version: '0.9.1', memAvailGb: 6, swapUsedGb: 0.5, local: false, checkedAt: FACTS.at } : null,
     ...rest,
   }
 }
