@@ -11,6 +11,8 @@ import { useExecutionListStore, type HostListCache } from '../stores/useExecutio
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useManualGroupsStore } from '../stores/useManualGroupsStore'
+import { useGroupViewStore } from '../stores/useGroupViewStore'
+import { teamGroupKey } from './task-groups/group-key'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
@@ -69,6 +71,7 @@ function resetAllStores() {
     runtime: {},
   })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  useGroupViewStore.setState({ selectedGroup: null, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useExecutionStore.setState({ executions: {} })
@@ -478,6 +481,7 @@ describe('host delete undo — the references come back (host ownership spec §3
     useTabStore.getState().addTab(tmux)
     useTabStore.getState().addTab(exec)
     useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    useGroupViewStore.setState({ selectedGroup: teamGroupKey(`${HOST_A}\u0000t1`), lastActiveTab: { [teamGroupKey(`${HOST_A}\u0000t1`)]: 'tab1' }, expanded: {}, lastByView: { workspace: null, group: null } })
     useNewTabLayoutStore.setState({
       presets: { '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`headless:${HOST_A}`], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`sessions:${HOST_A}`]] } },
       knownIds: [`sessions:${HOST_A}`, `headless:${HOST_A}`],
@@ -603,6 +607,7 @@ describe('host delete cascade — a write fails half-way', () => {
     useTabStore.getState().addTab(makeSessionTab(HOST_B, 'stg001'))
     useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/a' })
     useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [{ host: HOST_A, root: 'r1' }, { host: HOST_B, root: 'r2' }], createdAt: 1 } } })
+    useGroupViewStore.setState({ selectedGroup: teamGroupKey(`${HOST_A}\u0000t1`), lastActiveTab: { [teamGroupKey(`${HOST_A}\u0000t1`)]: 'tab1' }, expanded: {}, lastByView: { workspace: null, group: null } })
     useNewTabLayoutStore.setState({
       presets: { '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`sessions:${HOST_B}`], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`headless:${HOST_A}`]] } },
       knownIds: [`sessions:${HOST_A}`, `sessions:${HOST_B}`, `headless:${HOST_A}`],
@@ -619,7 +624,7 @@ describe('host delete cascade — a write fails half-way', () => {
     useHostStore.setState({ runtime: { [HOST_A]: { status: 'connected' } } })
   }
 
-  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TASK_GROUPS]
+  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TASK_GROUPS, STORAGE_KEYS.GROUP_VIEW]
 
   function everything(): string {
     const h = useHostStore.getState()
@@ -629,6 +634,7 @@ describe('host delete cascade — a write fails half-way', () => {
       parked: [useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves],
       hostSettings: useHostSettingsStore.getState().hosts,
       groups: [useManualGroupsStore.getState().order, useManualGroupsStore.getState().groups],
+      groupView: useGroupViewStore.getState(),
       newtab: [useNewTabLayoutStore.getState().presets, useNewTabLayoutStore.getState().knownIds],
       sessions: useSessionStore.getState().sessions,
       agent: [a.lastEvents, a.statuses, a.unread, a.models, a.agentTypes, a.subagents],
