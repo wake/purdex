@@ -1,213 +1,142 @@
-// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6): the header, 可接工作 (on the pool), 資源 and
-// 重指令排隊 (W5b1, daemon hosts) and 行程. 設定 is W5c1; it fills in under this header.
+// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area, the host page (monitoring tabs spec M41 header, M22 banner, M43; plan MON-6f-2). A header (badge, alias, region word or state, wwd line), the sub-tab and
+// range switches, a banner under the header when the host is not ok, and the sub-tab's body. It reads the pool only (`useMonitorHosts`): no fleet store, no fleet view, no fleet history.
 //
-// Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range and the queue sub-tab now;
-// 狀態｜設定 in W5c1) live outside the component (`lib/watch/view-memory`), because the pane unmounts
-// when another tab is shown. W5a2 adds the 資源 section (gauges, charts) and the range switch.
-import { useEffect, useMemo, useState } from 'react'
+// Tab-hosted checklist: the sub-tab, the range and the scroll of each sub-tab live outside the component (`lib/watch/view-memory`, keyed by the pool host id), because the pane unmounts when another tab is shown.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
-import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
-import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostLookResolver, type HostLook } from '../../lib/host-look'
-import { resolveHostColors } from '../../lib/host-color'
+import { useHostStore } from '../../stores/useHostStore'
+import { resolveHostBadge } from '../../lib/host-color'
 import { HostBadge } from '../HostBadge'
-import { Section } from '../hosts/form-fields'
+import { HostStateIcon } from '../../components/fleet/HostStateIcon'
 import { SegmentControl } from '../settings/SegmentControl'
-import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
-import { METRICS, gaugeOf } from '../../lib/watch/metrics'
-import { RANGES, stepMs } from '../../lib/watch/series'
-import { readHostRange, readHostTab, writeHostRange, writeHostTab } from '../../lib/watch/view-memory'
-import type { HostRange } from '../../lib/pool/host-history'
-import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
-import { fleetViewOfPoolHost, matchPoolHost } from '../../lib/pool/fleet-bridge'
-import { usePoolHostDaemons } from '../../lib/pool/daemons'
-import { usePoolStore } from '../../lib/pool/store'
-import { useFactsHistory } from '../../lib/pool/use-facts-history'
-import { useSeriesHistory } from '../../lib/pool/use-series-history'
-import type { ZonePoint } from '../../lib/pool/history'
-import type { PoolProc } from '../../lib/pool/types'
-import { Gauge } from './Gauge'
+import { RANGE_MS, type HostRange } from '../../lib/pool/host-history'
+import { hostExtraOf } from '../../lib/pool/host-extra'
+import { useMonitorHosts, type MonitorHost } from '../../lib/pool/use-monitor-hosts'
+import { livenessWord, notOkLines, clock } from '../../lib/pool/words'
+import { readHostRange, readHostScroll, readHostTab, writeHostRange, writeHostScroll, writeHostTab, type HostSubTab } from '../../lib/watch/view-memory'
 import { AvailRow } from './AvailRow'
-import { ZoneBand } from './ZoneBand'
-import { ProcTable, type ProcRow } from './ProcTable'
-import { ResidentsTable } from './ResidentsTable'
-import { MetricRow, TimeAxis } from './MetricChart'
-import { QueueSection } from './QueueSection'
 import { WatchSettings } from './WatchSettings'
-import { HostJobs } from './jobs/HostJobs'
+import { MonitorTab } from './host/MonitorTab'
 
-const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
+const SUBS: readonly HostSubTab[] = ['monitor', 'status', 'procs', 'settings']
+const RANGES = Object.keys(RANGE_MS) as HostRange[]
+/** The range switch is for the two tabs that draw time (監控, 狀態). */
+const RANGE_SUBS: readonly HostSubTab[] = ['monitor', 'status']
 
-/** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
-function Resources({ view, range, now, zones, notLocal, rev }: { view: FleetHostView; range: HistoryRange; now: number; zones: ZonePoint[]; notLocal: boolean; rev: number }) {
+const ZONE_CLASS: Record<string, string> = {
+  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', unknown: 'text-text-muted',
+}
+const BANNER_CLASS = {
+  wwd_down: 'border-status-warning text-status-warning-text',
+  host_down: 'border-status-error text-status-error-text',
+  unknown: 'border-border-subtle text-text-muted',
+} as const
+
+/** The header's second line: the wwd it runs and the time of its last reading; a host that is not ok says the last reading and the last check. */
+function MetaLine({ host }: { host: MonitorHost }) {
   const t = useI18nStore((s) => s.t)
-  const offline = isOffline(view)
-  // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
-  const at = Math.floor(now / stepMs(range)) * stepMs(range)
-  const hostId = view.id
-  // `rev` is not read inside: a finished series load changes the history without changing anything else, so it is what makes this recompute.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const series = useMemo(() => METRICS.map((d) => ({ def: d, points: fleetHistory.series(hostId, d.k, range, at) })), [hostId, range, at, rev])
+  const st = host.state
+  if (st.state === 'ok') {
+    const p = st.pool
+    return <span className="text-xs text-text-muted" data-testid="measure-source">{t('watch.host.meta_ok', { version: p.version, platform: p.platform, arch: p.arch, time: clock(st.facts.at) })}</span>
+  }
+  const parts = [st.lastFactsAt !== null ? t('watch.host.meta_last_reading', { time: clock(st.lastFactsAt) }) : t('pool.liveness.no_reading')]
+  if (st.checkedAt !== null) parts.push(t('pool.liveness.checked', { time: clock(st.checkedAt) }))
+  return <span className="text-xs text-text-muted" data-testid="measure-source">{parts.join('・')}</span>
+}
+
+/** M22: under the header on every sub-tab, outside the sub-tab's body. Its colour is the state's; the lines are the state's words (`notOkLines`). */
+function Banner({ host, now }: { host: MonitorHost; now: number }) {
+  const t = useI18nStore((s) => s.t)
+  const st = host.state
+  if (st.state === 'ok') return null
   return (
-    <div data-testid="metrics">
-      <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
-        {METRICS.map((d) => <Gauge key={d.k} label={t(d.shortKey)} reading={offline || !view.fast ? null : gaugeOf(d.k, view.fast, t)} testId={`gauge-${d.k}`} />)}
+    <div data-testid="host-banner" data-state={st.state} role="status" className={`mb-4 rounded-lg border px-4 py-3 text-sm ${BANNER_CLASS[st.state]}`}>
+      <div className="flex items-center gap-2">
+        <HostStateIcon state={st.state} size={16} />
+        <span data-testid="host-banner-title">{t('watch.host.banner.title', { alias: host.alias, state: livenessWord(t, st) })}</span>
       </div>
-      {notLocal ? (
-        // The daemon cannot read this host's history (it does not forward): the gauges above stay, the 5 minute chart does not.
-        <p data-testid="history-not-local" className="text-[11px] text-text-muted mb-1">{t('watch.host.history_not_local')}</p>
-      ) : (<>
-        {range === '5m' && <ZoneBand points={zones} now={at} />}
-        <ChartNote />
-        {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
-        <TimeAxis points={series[0].points} now={at} range={range} />
-      </>)}
+      {notOkLines(t, st, now).map((line) => <div key={line} className="text-xs mt-1">{line}</div>)}
+      <div className="text-xs mt-1">{t('watch.host.banner.chart_stops')}</div>
     </div>
   )
 }
 
-function ChartNote() {
-  const t = useI18nStore((s) => s.t)
-  return <p className="text-[11px] text-text-muted mb-1">{t('watch.host.chart_note')}</p>
-}
-
-const ZONE_CLASS: Record<string, string> = {
-  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', unknown: 'text-text-muted', offline: 'text-text-muted', nodata: 'text-text-muted',
-}
-
-function isOffline(v: FleetHostView): boolean {
-  return v.status !== 'ok'
-}
-
-/** The facts' processes as the table's rows: the top five by CPU and by memory, each with its owner. */
-function topProcs(procs: PoolProc[]): { cpu: ProcRow[]; mem: ProcRow[] } {
-  const row = (p: PoolProc): ProcRow => ({ pid: p.pid, name: p.name, cpu: Math.round(p.cpu_pct * 10) / 10, rss_mb: p.mem_mb, mem_mb: p.mem_mb, mem_kind: p.mem_kind === 'footprint' || p.mem_kind === 'rss' ? p.mem_kind : undefined, owner: p.owner })
-  return {
-    cpu: [...procs].sort((x, y) => y.cpu_pct - x.cpu_pct).slice(0, 5).map(row),
-    mem: [...procs].sort((x, y) => y.mem_mb - x.mem_mb).slice(0, 5).map(row),
-  }
-}
-
-// Until MON-6f-2 replaces this page it knows two of the host page's four sub-tabs (狀態, 設定) and four of its six ranges; anything else the memory holds reads as the nearest it knows.
-type HostPage = 'status' | 'settings'
-const OLD_RANGES: readonly HistoryRange[] = ['5m', '1h', '6h', '24h']
-const oldRange = (r: HostRange): HistoryRange => (OLD_RANGES.includes(r as HistoryRange) ? (r as HistoryRange) : '5m')
-
 export function WatchHostPane({ pane }: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
   const poolHostId = pane.content.kind === 'watch-host' ? pane.content.poolHostId : undefined
-  const contentFleetId = pane.content.kind === 'watch-host' ? pane.content.fleetHostId ?? '' : ''
-  // The view memory is keyed by what names the tab: the pool host id, else (a tab from before the pool) the fleet id.
-  const memoryKey = poolHostId ?? contentFleetId
-  const snapshot = useFleetStore((s) => s.snapshot)
-  const hosts = useHostStore((s) => s.hosts)
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const lookOf = useHostLookResolver()
-  // The range outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
-  const [range, setRangeState] = useState<HistoryRange>(() => oldRange(readHostRange(memoryKey)))
-  const setRange = (r: HistoryRange) => { writeHostRange(memoryKey, r); setRangeState(r) }
-  const [page, setPageState] = useState<HostPage>(() => (readHostTab(memoryKey) === 'settings' ? 'settings' : 'status'))
-  const setPage = (p: HostPage) => { writeHostTab(memoryKey, p); setPageState(p) }
+  const hosts = useMonitorHosts()
+  const host = useMemo(() => (poolHostId ? hosts.find((h) => h.hostId === poolHostId) : undefined), [hosts, poolHostId])
+  const memoryKey = poolHostId ?? ''
+  // The guardian settings are read from the App host that fronts the pool host, whether or not the pool reads the host through another daemon: a disconnected owner is offline for them.
+  const ownerId = host?.daemonHostId ?? null
+  const ownerDown = useHostStore((s) => ownerId !== null && s.runtime[ownerId]?.status !== 'connected')
 
-  const all = useMemo(() => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : []), [snapshot, hosts, hostOrder])
-  const poolHosts = usePoolStore((s) => s.hosts)
-  const daemons = usePoolHostDaemons()
-  // A tab with a poolHostId finds its fleet host through the pool host (transitional, until MON-6f-2 drops the fleet here); an older tab names the fleet host itself.
-  const fleetHostId = useMemo(() => {
-    if (!poolHostId) return contentFleetId
-    const ph = poolHosts.find((h) => h.host_id === poolHostId)
-    return (ph && fleetViewOfPoolHost(all, ph, daemons)?.id) || ''
-  }, [poolHostId, contentFleetId, poolHosts, all, daemons])
-  const view = useMemo(() => all.find((v) => v.id === fleetHostId), [all, fleetHostId])
-  // The other daemon hosts: 設定 reads their `watch` rows to compare `targets`.
-  const peers = useMemo(() => all.filter((v) => v.kind === 'daemon'), [all])
-  // On the resource pool the numbers are wwd's facts (the model's view carries them in the fleet's shape); before it answers, the fleet's as ever.
-  const views = useMemo(() => (view ? [view] : []), [view])
-  const { models, active: poolActive } = usePoolCellModels(views)
-  const model = poolActive && view ? models[0] : null
-  const pool = model?.pool ?? null
-  const poolHost = model && view ? matchPoolHost(poolHosts, view, daemons) : null
-  const live = pool?.state === 'ok' ? (poolHost?.facts ?? null) : null
-  // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
-  const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)
-  // 1 h / 6 h / 24 h: the daemon's 1 minute series, read once; `seriesRev` moves when a load finishes so the charts redraw at once.
-  const seriesRev = useSeriesHistory(fleetHostId, poolHost?.alias ?? null, range, live !== null, live?.mem.total_mb ?? null)
+  // The choices outlive this component: the memory is the source, the state only re-renders.
+  const [sub, setSubState] = useState<HostSubTab>(() => readHostTab(memoryKey))
+  const setSub = (s: HostSubTab) => { writeHostTab(memoryKey, s); setSubState(s) }
+  const [range, setRangeState] = useState<HostRange>(() => readHostRange(memoryKey))
+  const setRange = (r: HostRange) => { writeHostRange(memoryKey, r); setRangeState(r) }
+  // A pane can change host in place (a tab from before the pool is upgraded to a pool host id): then the choices are the new host's, read again while rendering.
+  const [seenKey, setSeenKey] = useState(memoryKey)
+  if (seenKey !== memoryKey) { setSeenKey(memoryKey); setSubState(readHostTab(memoryKey)); setRangeState(readHostRange(memoryKey)) }
 
-  // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
-  // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
+  // The charts end at "now": a 5 s tick (one interval per pane, cleared on unmount) keeps the axis moving between answers.
   const [tick, setTick] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 5000)
     return () => clearInterval(id)
   }, [])
   // eslint-disable-next-line react-hooks/purity, react-hooks/exhaustive-deps
-  const now = useMemo(() => Date.now(), [snapshot, tick])
+  const now = useMemo(() => Date.now(), [hosts, tick])
 
-  if (!snapshot) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_fleet')}</p>
-  if (!view) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_host')}</p>
+  // Scroll: each sub-tab keeps its own place. Restored when the sub-tab (or the host) shows, written as the reader scrolls.
+  const scroller = useRef<HTMLDivElement>(null)
+  const present = host !== undefined
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = readHostScroll(memoryKey, sub)
+  }, [memoryKey, sub, present])
 
-  // The cell's look: a daemon host's comes from the App's host config, a probe host's from the wire.
-  const look: Pick<HostLook, 'colors' | 'color' | 'icon' | 'iconWeight'> = view.hostConfigId
-    ? lookOf(view.hostConfigId)
-    : { colors: view.colors, icon: view.icon, iconWeight: view.icon_weight as HostLook['iconWeight'] }
-  const colors = resolveHostColors({ colors: look.colors, color: look.color }, 'console')
+  if (!poolHostId) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_host')}</p>
+  if (!host) return <p className="p-6 text-sm text-text-muted" data-testid="host-not-listed">{t('watch.host.pool_missing')}</p>
 
-  const shown = model ? model.view : view
-  const offline = isOffline(shown)
-  const zone = offline ? 'offline' : pool?.state === 'ok' && pool.zone ? pool.zone : shown.fast ? shown.fast.zone : 'nodata'
-  const zoneWord = zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)
-
-  // "量測：" names the host the numbers come from: the primary (spec §6).
-  const primaryConfig = hosts[snapshot.hostId]
-  const primaryFleetHost = primaryConfig?.daemonId ? snapshot.hosts[primaryConfig.daemonId] : undefined
-  const primaryAlias = primaryFleetHost?.alias || lookOf(snapshot.hostId).name || snapshot.hostId
-
-  const alias = view.alias || view.name || view.id
-  // The worker and pause controls act on the pool's own name for the host (the fleet view's alias can differ, the daemon mapping going first); a host the pool does not list gets none.
-  const settingsAlias = poolHostId ? poolHosts.find((h) => h.host_id === poolHostId)?.alias : poolHost?.alias
-  const lastOk = offline && view.last_ok_at !== null ? new Date(view.last_ok_at).toLocaleString() : null
+  const st = host.state
+  const badge = resolveHostBadge(host.look, 'console')
+  const opacity = st.state === 'host_down' ? 0.4 : st.state === 'unknown' ? 0.6 : 1
+  const zone = st.state === 'ok' ? st.facts.derived.zone : null
+  const offline = st.state !== 'ok'
+  const peerIds = hosts.filter((h) => h.hostId !== host.hostId).flatMap((h) => (h.daemonHostId ? [h.daemonHostId] : []))
 
   return (
-    <div className="flex-1 min-h-0 h-full overflow-y-auto" data-testid={`watch-host-${view.id}`}>
+    <div ref={scroller} className="flex-1 min-h-0 h-full overflow-y-auto" data-testid={`watch-host-${host.hostId}`}
+      onScroll={(e) => writeHostScroll(memoryKey, sub, e.currentTarget.scrollTop)}>
       <div className="p-6 max-w-6xl">
-        <div className="flex items-center gap-3 mb-5">
-          <HostBadge colors={colors} icon={look.icon} iconWeight={look.iconWeight} box={20} inset={3} radius={5} lineColor="host" />
-          <h2 className="text-lg font-semibold text-text-primary">{alias}</h2>
-          <span className={`text-sm ${ZONE_CLASS[zone]}`} data-testid="zone-text">{zoneWord}</span>
-          <span className="text-xs text-text-muted" data-testid="measure-source">
-            {live && poolHost
-              ? t('watch.host.wwd_age', { version: poolHost.version, s: Math.max(0, Math.round((now - live.at) / 1000)) })
-              : <>{t('watch.host.measured', { alias: primaryAlias })}{lastOk !== null && t('watch.host.last_ok', { time: lastOk })}</>}
-          </span>
+        <div className="flex items-center gap-3 mb-4">
+          <span style={{ opacity }} className="flex"><HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={20} inset={3} radius={5} lineColor="host" /></span>
+          <h2 className="text-lg font-semibold text-text-primary">{host.alias}</h2>
+          {st.state === 'ok'
+            ? <span className={`text-sm ${zone ? ZONE_CLASS[zone] : 'text-text-muted'}`} data-testid="zone-text">{zone ? t(`fleet.zone.${zone}`) : t('fleet.no_data')}</span>
+            : <span className="flex items-center gap-1 text-sm text-text-muted" data-testid="zone-text"><HostStateIcon state={st.state} size={14} />{livenessWord(t, st)}</span>}
+          <MetaLine host={host} />
           <span className="flex-1" />
-          {page === 'status' && (
+          {RANGE_SUBS.includes(sub) && (
             <span data-testid="range-switch" role="group" aria-label={t('watch.host.range_label')}>
-              <SegmentControl options={RANGE_OPTS(t)} value={range} onChange={setRange} />
+              <SegmentControl options={RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))} value={range} onChange={setRange} />
             </span>
           )}
           <span data-testid="page-switch" role="group" aria-label={t('watch.host.page_label')}>
-            <SegmentControl options={[{ value: 'status', label: t('watch.host.page.status') }, { value: 'settings', label: t('watch.host.page.settings') }]} value={page} onChange={setPage} />
+            <SegmentControl options={SUBS.map((s) => ({ value: s, label: t(`watch.host.page.${s}`) }))} value={sub} onChange={setSub} />
           </span>
         </div>
-        {page === 'settings' ? (
-          <WatchSettings hostId={memoryKey} hostConfigId={view.hostConfigId} poolAlias={settingsAlias} offline={offline}
-            peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
-        ) : (<>
-        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} now={now} />}
-        <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
-          <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} rev={seriesRev} />
-        </Section>
-        {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
-        {view.kind === 'daemon' && poolHost && <Section title={t('watch.host.jobs')}><HostJobs host={poolHost} /></Section>}
-        <Section title={t('watch.host.procs')}>
-          <div className="grid grid-cols-2 gap-8">
-            <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={live ? topProcs(live.procs).cpu : (view.slow?.top_cpu ?? [])} unit="cpu" offline={offline} />
-            <ProcTable testId="procs-mem" title={t('watch.host.top_mem')} rows={live ? topProcs(live.procs).mem : (view.slow?.top_mem ?? [])} unit="mem" offline={offline} />
-          </div>
-          {live && <ResidentsTable residents={live.residents} />}
-        </Section>
+        <Banner host={host} now={now} />
+        {sub === 'monitor' && <MonitorTab host={host} range={range} now={now} />}
+        {sub === 'status' && (<>
+          {st.state === 'ok' && <AvailRow pool={hostExtraOf(st, st.pool)} exceptions={st.facts.exceptions} at={st.facts.at} now={now} />}
+          <p className="text-xs text-text-muted" data-testid="status-later">{t('watch.host.status_later')}</p>
         </>)}
+        {sub === 'procs' && <p className="text-xs text-text-muted" data-testid="procs-later">{t('watch.host.procs_later')}</p>}
+        {sub === 'settings' && <WatchSettings hostId={memoryKey} hostConfigId={host.daemonHostId ?? undefined} poolAlias={host.alias} offline={offline || ownerDown} peerIds={peerIds} />}
       </div>
     </div>
   )

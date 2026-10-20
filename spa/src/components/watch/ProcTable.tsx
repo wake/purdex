@@ -3,8 +3,8 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ProcOwner } from '../../lib/pool/types'
 
-/** One row. `rss_mb` is only what the old host page still passes from a fleet view (until MON-6f-2); the pool gives `mem_mb`. */
-export interface ProcRow { pid: number; name: string; cpu: number; mem_mb?: number; rss_mb?: number; mem_kind?: 'footprint' | 'rss'; owner?: ProcOwner | null }
+/** One row. The pool gives `mem_mb`. */
+export interface ProcRow { pid: number; name: string; cpu: number; mem_mb?: number; mem_kind?: 'footprint' | 'rss'; owner?: ProcOwner | null }
 
 const OWNER_KINDS = ['session', 'job', 'codex', 'resident', 'system']
 
@@ -49,7 +49,7 @@ export function ProcTable({ testId, title, rows, unit, offline }: { testId: stri
                         aria-label={t('watch.host.mem_rss_hint')}
                       >RSS</span>
                     )}
-                    {`${(p.mem_mb ?? p.rss_mb ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`}
+                    {`${(p.mem_mb ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`}
                   </>
                 )}
               </td>
