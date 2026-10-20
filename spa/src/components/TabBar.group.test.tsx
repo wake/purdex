@@ -115,6 +115,22 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(idsInOrder(container)).toEqual(['lead', 'ma', 'plain'])
   })
 
+  it('an unpinned lead stays first even when other tabs of the team are pinned: the pinned zone is only the pinned tabs that lead the order', () => {
+    const list = [mk('lead', 'lead-tm'), mk('pa', 'a-tm', true), mk('mb', 'b-tm'), mk('plain', 'other')]
+    seed(list)
+    const { container } = bar(list, true)
+    expect(idsInOrder(container)).toEqual(['lead', 'pa', 'mb', 'plain'])
+  })
+
+  it('a manual group\'s pinned tabs, which lead its order, keep the pinned zone', () => {
+    const list = [mk('p1', 'other', true), mk('p2', 'lead-tm', true), mk('x', 'a-tm')]
+    seed(list)
+    const { container } = bar(list, true)
+    expect(idsInOrder(container)).toEqual(['p1', 'p2', 'x'])
+    expect(container.querySelector('[data-tab-id="p1"]')!.parentElement).toBe(container.querySelector('[data-tab-id="p2"]')!.parentElement)
+    expect(container.querySelector('[data-tab-id="x"]')!.parentElement).not.toBe(container.querySelector('[data-tab-id="p1"]')!.parentElement)
+  })
+
   it('an empty group says so, and keeps the + button', () => {
     seed([])
     bar([], true)
