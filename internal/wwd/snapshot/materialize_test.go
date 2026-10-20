@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -305,7 +304,7 @@ func TestMaterialize_TheClonesCheckoutHookDoesNotRun(t *testing.T) {
 func TestMaterialize_AFailedCheckoutLeavesNothing(t *testing.T) {
 	repo, base, _ := origin(t)
 	writeFile(t, repo+"/.gitattributes", "a.txt filter=wwdfail\n")
-	info, err := gate.SnapshotTree(context.Background(), "", repo)
+	info, err := SnapshotTree(context.Background(), "", repo)
 	require.NoError(t, err)
 	snap := info.SHA
 	require.NoError(t, Pin(context.Background(), repo, "j_13", snap))
