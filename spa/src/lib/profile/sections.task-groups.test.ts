@@ -33,6 +33,11 @@ describe('buildSettingsSection — purdex-task-groups members', () => {
     expect(out).toEqual([{ host: 'alpha', root: 'z' }, { host: WIRE, root: 'r1' }, { host: WIRE, root: 'r2' }])
   })
 
+  it('does not mistake two different tuples for one when a NUL moves between host and root', () => {
+    const out = membersOut(input([{ host: 'a', root: 'b\u0000c' }, { host: 'a\u0000b', root: 'c' }]), identityA())
+    expect(out).toHaveLength(2)
+  })
+
   it('two devices with different local host ids, adding the same members in another order, build the same payload', () => {
     const a = buildSettingsSection(input([{ host: 'bbbbbb', root: 'r1' }, { host: 'bbbbbb', root: 'r2' }]), NO_WS, identityA())
     const b = buildSettingsSection(input([{ host: 'zzzzzz', root: 'r2' }, { host: 'zzzzzz', root: 'r1' }]), NO_WS, identityB())

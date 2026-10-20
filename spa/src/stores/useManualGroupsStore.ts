@@ -59,7 +59,7 @@ function sanitizeMembers(raw: unknown, taken: Set<string>): ManualGroupMember[] 
   for (const m of raw) {
     if (out.length >= MAX_MEMBERS) break
     if (!isRecord(m) || typeof m.host !== 'string' || m.host === '' || typeof m.root !== 'string' || m.root === '') continue
-    const key = `${m.host}\u0000${m.root}`
+    const key = JSON.stringify([m.host, m.root])
     if (taken.has(key)) continue
     taken.add(key)
     out.push({ host: m.host, root: m.root })

@@ -621,7 +621,7 @@ function mapTaskGroups<T extends { groups?: unknown; order?: unknown }>(payload:
           kept.push(m)
           continue
         }
-        const key = `${m.host}\u0000${m.root}`
+        const key = JSON.stringify([m.host, m.root])
         if (taken.has(key)) continue
         taken.add(key)
         kept.push(m)

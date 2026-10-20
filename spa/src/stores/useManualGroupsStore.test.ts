@@ -104,6 +104,12 @@ describe('useManualGroupsStore — merge (every arrival is sanitised)', () => {
     expect(st().groups.bbbbbbbb.members).toEqual([{ host: 'h', root: 't' }])
   })
 
+  it('tells (host, root) tuples apart even when a NUL moves between the two strings', async () => {
+    const members = [{ host: 'a', root: 'b\u0000c' }, { host: 'a\u0000b', root: 'c' }]
+    await rehydrateFrom({ order: ['aaaaaaaa'], groups: { aaaaaaaa: g({ members }) } })
+    expect(st().groups.aaaaaaaa.members).toEqual(members)
+  })
+
   it('drops malformed members', async () => {
     await rehydrateFrom({ order: ['aaaaaaaa'], groups: { aaaaaaaa: g({ members: [{ host: 1, root: 'r' }, { host: 'h' }, null, { host: '', root: 'r' }, { host: 'h', root: 'ok' }] }) } })
     expect(st().groups.aaaaaaaa.members).toEqual([{ host: 'h', root: 'ok' }])
