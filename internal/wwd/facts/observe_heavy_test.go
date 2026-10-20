@@ -64,7 +64,7 @@ func TestTrackerFollowsTheHeaviestProgramOverTime(t *testing.T) {
 func TestTrackerNamesTheProgramBelowANestedShell(t *testing.T) {
 	h, tr := newHost(), newTracker()
 	h.add(200, 100, "zsh", ccRoot())
-	h.add(201, 200, "bash", []string{"bash", "-c", "make test"})
+	h.add(201, 200, "bash", []string{"bash", "-c", "x=$(date); make test"}) // a shell with a name of its own would be a program
 	h.add(202, 201, "make", []string{"make", "test"})
 	sig, _ := runHeavy(t, h, tr, 20, func(int) { h.rec(202).CPUPct = 300 })
 	if sig != "make test" {
@@ -96,17 +96,16 @@ func TestTrackerDoesNotCarryTheCPUOfAReusedPIDToTheNewProgram(t *testing.T) {
 		h.rec(201).CPUPct = 300
 		step(tr, h, i)
 	}
-	// the pid goes to another program (same name, other argv, no start time to tell them apart by) and a third one is lighter
+	// the pid goes to another program (same name, other argv, no start time to tell them apart by) that then runs longer
 	h.args[201] = []string{"go", "test"}
-	h.add(202, 200, "pnpm", []string{"pnpm", "build"})
-	for i := 10; i < 12; i++ {
-		h.rec(201).CPUPct, h.rec(202).CPUPct = 0, 1
+	for i := 10; i < 30; i++ {
+		h.rec(201).CPUPct = 300
 		step(tr, h, i)
 	}
-	h.remove(200, 201, 202)
-	got := gone(t, tr, h, 12)
-	if len(got) != 1 || got[0].Signature != "go vet" {
-		t.Fatalf("the vet run was 10 samples of CPU, the new program none: %+v", got)
+	h.remove(200, 201)
+	got := gone(t, tr, h, 30)
+	if len(got) != 1 || got[0].Signature != "go test" {
+		t.Fatalf("the program that took the pid is a candidate of its own: %+v", got)
 	}
 	// and the same pid with a new start time is a new process too
 	h3, tr3 := newHost(), newTracker()
