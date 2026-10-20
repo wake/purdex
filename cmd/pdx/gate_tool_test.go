@@ -32,7 +32,7 @@ func toolEnv(t *testing.T, tool, gateSection string) (real, cfgPath, gateDir str
 	}
 	shimDir := shim.DirIn(home)
 	require.NoError(t, os.MkdirAll(shimDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(shimDir, tool), []byte("#!/bin/sh\nexit 99\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(shimDir, tool), []byte(shim.Script(tool, "/nonexistent/pdx")), 0o755))
 	realDir := filepath.Join(home, "real")
 	require.NoError(t, os.MkdirAll(realDir, 0o755))
 	real = filepath.Join(realDir, tool)

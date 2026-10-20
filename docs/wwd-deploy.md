@@ -248,8 +248,10 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     writers go out (the signals, the alerts, the gate's users). The gate cannot do this alone: it sees the peer wwds, not the Purdex
     daemon that reads the same host's wwd, and a Purdex daemon upgraded last would meet a v 2 facts record it cannot read. A writer PR
     must not be merged or deployed in the same release as the reader PRs.
-  - *The writers' release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer is reachable and reports
-    `proto >= 2` (a peer that is down holds the gate shut, whatever its last info said). Until then `POST /v1/exceptions` refuses
+  - *The writers' release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer reports
+    `proto >= 2`. A peer that is down counts by the last info it gave (kept in `<data_dir>/peers-last.json`, so a restart of the wwd does
+    not forget it), which is why a laptop that is mostly off does not shut the gate for everyone; a peer never seen holds it shut. The
+    cost: a host rolled back while it was away is believed until the next pool poll (5 s) reads its proto. Until then `POST /v1/exceptions` refuses
     `allow` and `flags` with 400, so no writer can show them to a proto 1 reader.
     Check before relying on it: `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` on each host shows
     `"proto":2`. A host rolled back below the contract shuts the gate again.

@@ -143,7 +143,7 @@ func runLeaseRunAlias(args []string, getenv func(string) string, stdout, stderr 
 	class, source := leaseRunClass(*kind, *weight, command, *cfgPath)
 	if !class.Valid() {
 		fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名：--kind %s（打包）不經過閘門，直接執行；--ask／--queue／--wait 不再有作用\n", *kind)
-		return gateExecDirect("", command, stderr)
+		return gateExecDirect("", command, nil, stderr)
 	}
 	fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名（%s）：--ask／--queue／--wait 不再有作用；請改用 pdx gate --class %s -- …\n", class, class)
 	gateArgs := []string{"--class", string(class), "--class-source", source}

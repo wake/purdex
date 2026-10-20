@@ -73,8 +73,8 @@ func TestMixedPoolOfProto1AndProto2ReadsBoth(t *testing.T) {
 	}
 }
 
-// A host that gave proto 2, went down and comes back rolled back to proto 1: the gate must be shut the moment it is unreachable
-// (its last info is old), and stay shut once it answers as proto 1.
+// A host that gave proto 2 and went down counts by that last info (the gate stays open: a host that is mostly off must not shut it for
+// everyone); it comes back rolled back to proto 1 and the first poll that reads it shuts the gate again.
 func TestARolledBackPeerShutsTheGate(t *testing.T) {
 	var proto atomic.Int32
 	var down atomic.Bool
@@ -100,8 +100,8 @@ func TestARolledBackPeerShutsTheGate(t *testing.T) {
 	}
 	down.Store(true)
 	p.PollOnce(context.Background())
-	if got := p.Peers()[0]; got.Reachable || got.Info.Proto != 2 || wire.PoolAtLeast(p.Peers(), 2) {
-		t.Fatalf("unreachable keeps its last info but must shut the gate: %+v", got)
+	if got := p.Peers()[0]; got.Reachable || got.Info.Proto != 2 || !wire.PoolAtLeast(p.Peers(), 2) {
+		t.Fatalf("unreachable keeps its last info and the gate follows it: %+v", got)
 	}
 	down.Store(false)
 	proto.Store(1)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"path/filepath"
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/wwd/clones"
@@ -43,7 +44,8 @@ func daemonOptions(p daemonParts) daemon.Options {
 	return daemon.Options{
 		HostID: p.HostID, Alias: p.Alias, Version: buildinfo.Version,
 		Token: p.Token, Fault: p.Hooks, WorkerEnabled: p.Cfg.Worker.Enabled, Sampler: p.Sampler, Peers: p.Peers,
-		State: p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: repos.Names,
+		PeersLastFile: filepath.Join(p.Cfg.DataDir, "peers-last.json"), // what a peer last said of itself: a restart does not forget it
+		State:         p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: repos.Names,
 		ReferenceTasks: refs.Tasks, // the tasks whose qualify.reference is this host, read from the clones' manifests
 		ResultCache:    p.Store,
 		Earned:         p.Store, // task labels this host earned or lost (spec §7): the earned ones are advertised; GET /v1/earned-labels on the socket
