@@ -79,9 +79,34 @@ const (
 // host itself is gone asks SilenceHostDown.
 const silenceHostDownText = "主機離線"
 
+const silenceWwdDownText = "wwd 沒有回應（主機還在）"
+
 // SilenceDetailWwdDown is the alert text for a peer whose wwd does not answer while its host does.
 func SilenceDetailWwdDown(alias string) string {
-	return alias + "：wwd 沒有回應（主機還在）"
+	return alias + "：" + silenceWwdDownText
+}
+
+// The kinds of silence SilenceKind tells apart.
+const (
+	SilenceWwdDownKind  = "wwd_down"
+	SilenceHostDownKind = "host_down"
+	SilenceUnknownKind  = "unknown"
+)
+
+// SilenceKind says which silence a silence alert is, from its words (the alert has no field for it, see above): SilenceHostDownKind when
+// the host itself is gone, SilenceWwdDownKind when only its wwd is, SilenceUnknownKind for any other text (a writer of another release).
+// An alert that is not a silence has none: "". Wwd and the Purdex daemon share this so both name the two the same way.
+func SilenceKind(a Alert) string {
+	if a.Kind != AlertSilence {
+		return ""
+	}
+	switch {
+	case SilenceHostDown(a.Detail):
+		return SilenceHostDownKind
+	case strings.HasSuffix(a.Detail, silenceWwdDownText):
+		return SilenceWwdDownKind
+	}
+	return SilenceUnknownKind
 }
 
 // SilenceDetailHostDown is the alert text for a peer whose host does not answer either.
