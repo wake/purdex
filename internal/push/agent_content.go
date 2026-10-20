@@ -20,9 +20,9 @@ type AgentInput struct {
 	SessionID   string
 	SessionName string // the tmux session name; "" falls back to the code
 	// Label is the persona and task group the daemon worked out; the zero value is today's title "{host}: {session}".
-	Label NotifyLabel
-	EventName   string
-	Detail      map[string]any
+	Label     NotifyLabel
+	EventName string
+	Detail    map[string]any
 	// Workbook is the session workbook's line for the Stop this push is about (WB-3); nil = today's push. Only a Stop or a
 	// StopFailure uses it.
 	Workbook *WorkbookLine
