@@ -3,7 +3,7 @@
 import {
   LIVENESS, ZONES,
   type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolFactsHistory, type PoolHost, type PoolLiveness, type PoolLoad,
-  type PoolOwner, type PoolProc, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesDisk, type SeriesPoint, type Slots,
+  type PoolCore, type PoolDiskIO, type PoolOwner, type PoolProc, type PoolSelf, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesDisk, type SeriesPoint, type Slots,
 } from './types'
 
 type Rec = Record<string, unknown>
@@ -81,6 +81,46 @@ function owner(v: unknown): PoolOwner | null {
   return isRec(v) && typeof v.active === 'boolean' && num(v.idle_s) ? { active: v.active, idle_s: v.idle_s, reason: str(v.reason) ? v.reason : '' } : null
 }
 
+// The host-metrics fields (G-2 to G-4): each is read on its own, and one that is absent or does not parse is left out while the record stays.
+const optNum = (v: unknown): number | undefined => (num(v) ? v : undefined)
+/** The entries of `o` that are set: an absent field is a missing key, not an `undefined` one. */
+const present = <T extends Record<string, unknown>>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, x]) => x !== undefined)) as Partial<T>
+
+function core(c: unknown): PoolCore | null {
+  if (!isRec(c)) return null
+  const share = (x: unknown): number | null | undefined => (x === null ? null : num(x) ? x : undefined)
+  const user = share(c.user_pct)
+  const system = share(c.system_pct)
+  const idle = share(c.idle_pct)
+  const kind = c.kind === 'p' || c.kind === 'e' || c.kind === null ? c.kind : undefined
+  return user === undefined || system === undefined || idle === undefined || kind === undefined ? null : { user_pct: user, system_pct: system, idle_pct: idle, kind }
+}
+
+/** One malformed core takes the whole list out: a list one core short would put every later core under the wrong number. */
+const cores = (v: unknown): PoolCore[] | undefined => {
+  if (!Array.isArray(v)) return undefined
+  const out = strictList(v, core)
+  return out && out.length > 0 ? out : undefined
+}
+
+function diskIO(d: unknown): PoolDiskIO | null {
+  return isRec(d) && str(d.device) && d.device !== ''
+    ? { device: d.device, read_bps: numOrNull(d.read_bps), write_bps: numOrNull(d.write_bps), read_iops: numOrNull(d.read_iops), write_iops: numOrNull(d.write_iops) }
+    : null
+}
+
+/** Each entry names its own disk, so a malformed one is dropped alone. */
+const diskIOs = (v: unknown): PoolDiskIO[] | undefined => {
+  if (!Array.isArray(v)) return undefined
+  const out = list(v, diskIO)
+  return out && out.length > 0 ? out : undefined
+}
+
+/** How many processes: a non-negative whole number, else absent (facts and series both). */
+const procCount = (v: unknown): number | undefined => (num(v) && Number.isInteger(v) && v >= 0 ? v : undefined)
+
+const self = (v: unknown): PoolSelf | undefined => (isRec(v) ? { cpu_pct: numOrNull(v.cpu_pct), rss_mb: numOrNull(v.rss_mb) } : undefined)
+
 /** The facts records this App reads: wire `v` 1 to 2 (internal/wwd/wire doc.go MinProto..FactsProto). A newer one may mean different fields. */
 const FACTS_MIN_V = 1
 const FACTS_MAX_V = 2
@@ -107,11 +147,12 @@ export function parseFacts(v: unknown): PoolFacts | null {
   return {
     v: v.v as number, host_id: v.host_id, alias: v.alias, at,
     platform: v.platform, arch: v.arch, os_version: v.os_version,
-    cpu: { ncpu: cpu.ncpu, load1: cpu.load1, load5: cpu.load5, idle_pct: cpu.idle_pct },
+    cpu: { ncpu: cpu.ncpu, load1: cpu.load1, load5: cpu.load5, idle_pct: cpu.idle_pct, ...present({ load15: optNum(cpu.load15), user_pct: optNum(cpu.user_pct), system_pct: optNum(cpu.system_pct), cores: cores(cpu.cores) }) },
     mem: {
       total_mb: mem.total_mb, available_mb: mem.available_mb, pressure: mem.pressure,
       page_out_rate: numOrNull(mem.page_out_rate), swap_out_rate: numOrNull(mem.swap_out_rate),
       swap_used_mb: numOrNull(mem.swap_used_mb), compressor_mb: numOrNull(mem.compressor_mb), psi: psi(mem.psi),
+      ...present({ decompress_rate: optNum(mem.decompress_rate), swap_total_mb: optNum(mem.swap_total_mb), wired_mb: optNum(mem.wired_mb), active_mb: optNum(mem.active_mb), inactive_mb: optNum(mem.inactive_mb), file_cache_mb: optNum(mem.file_cache_mb) }),
     },
     disk: disks,
     procs,
@@ -122,6 +163,7 @@ export function parseFacts(v: unknown): PoolFacts | null {
     derived: { zone: zoneOf(derived.zone), headroom, sessions_room: derived.sessions_room },
     worker: w,
     ...(isRec(v.queue) && num(v.queue.queued) ? { queue: { queued: v.queue.queued } } : {}),
+    ...present({ procs_total: procCount(v.procs_total), boot_at: time(v.boot_at) ?? undefined, self: self(v.self), disk_io: diskIOs(v.disk_io) }),
   }
 }
 
@@ -138,6 +180,13 @@ function load(v: unknown): PoolLoad | undefined {
   return isRec(v) && num(v.score) && str(v.driver) ? { score: v.score, driver: v.driver } : undefined
 }
 
+/** `info.fingerprint`: the string values only; nothing left, or not an object, is no fingerprint. */
+function fingerprint(v: unknown): Record<string, string> | undefined {
+  if (!isRec(v)) return undefined
+  const out = Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => str(e[1])))
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function host(v: unknown): PoolHost | null {
   if (!isRec(v) || !isRec(v.info)) return null
   const { info } = v
@@ -150,6 +199,7 @@ function host(v: unknown): PoolHost | null {
   const ld = load(v.load)
   const at = time(v.liveness_at)
   const since = time(v.liveness_since)
+  const fp = fingerprint(info.fingerprint)
   return {
     host_id: info.host_id, alias: info.alias, version: info.version, proto: info.proto, platform: info.platform, arch: info.arch,
     facts: parseFacts(v.facts),
@@ -162,6 +212,7 @@ function host(v: unknown): PoolHost | null {
     ...(at !== null ? { liveness_at: at } : {}),
     ...(since !== null ? { liveness_since: since } : {}),
     ...(num(v.rtt_ms) && v.rtt_ms >= 0 ? { rtt_ms: v.rtt_ms } : {}),
+    ...(fp ? { fingerprint: fp } : {}),
   }
 }
 
@@ -190,6 +241,15 @@ function point(p: unknown): SeriesPoint | null {
   const running = slots(p.worker_running)
   if (running) out.worker_running = running
   if (num(p.queue_queued)) out.queue_queued = p.queue_queued
+  // G-2 to G-4, the same way.
+  for (const k of ['load15', 'cpu_user_pct', 'cpu_system_pct', 'compressor_mb', 'decompress_rate', 'swap_total_mb', 'self_cpu_pct', 'self_rss_mb'] as const) {
+    const x = p[k]
+    if (num(x)) out[k] = x
+  }
+  const total = procCount(p.procs_total)
+  if (total !== undefined) out.procs_total = total
+  const dio = diskIOs(p.disk_io)
+  if (dio) out.disk_io = dio
   if (Array.isArray(p.disks)) out.disks = p.disks.flatMap((d): SeriesDisk[] => (isRec(d) && str(d.mount) && num(d.used_pct) && num(d.free_gb) ? [{ mount: d.mount, used_pct: d.used_pct, free_gb: d.free_gb }] : []))
   return out
 }
