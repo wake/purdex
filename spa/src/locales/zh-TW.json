@@ -3196,6 +3196,7 @@
   "pool.reason.owner_active": "主人正在這台操作",
   "pool.reason.slots_full": "名額都在用",
   "pool.reason.gate_full": "閘門的名額被占住",
+  "pool.reason.disk_low": "磁碟剩餘空間低於下限",
   "pool.reason.unknown": "原因不明",
   "pool.job.result.passed": "{{n}} 通過",
   "pool.job.result.failed": "{{n}} 失敗",

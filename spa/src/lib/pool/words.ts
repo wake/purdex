@@ -7,7 +7,7 @@ import type { HeadroomReasons, PoolZone, Slots } from './types'
 type T = (key: string, opts?: Record<string, string | number>) => string
 
 /** Headroom reason codes (#3478, spec §3.2). `exception:<name>` is the one family: it carries the exception's name. */
-export const REASON_CODES = ['worker_off', 'zone_warning', 'zone_danger', 'zone_unknown', 'owner_active', 'slots_full', 'gate_full', 'unknown'] as const
+export const REASON_CODES = ['worker_off', 'zone_warning', 'zone_danger', 'zone_unknown', 'owner_active', 'slots_full', 'gate_full', 'disk_low', 'unknown'] as const
 const EXCEPTION_PREFIX = 'exception:'
 
 export function reasonWord(code: string, t: T): string {

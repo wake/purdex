@@ -19,6 +19,9 @@ describe('reason words', () => {
   it('several exceptions keep their own names', () => {
     expect(['exception:a', 'exception:b'].map((c) => reasonWord(c, t))).toEqual(['pool.reason.exception{"name":"a"}', 'pool.reason.exception{"name":"b"}'])
   })
+  it('disk_low has its own word, not the raw code', () => {
+    expect(reasonWord('disk_low', t)).toBe('pool.reason.disk_low')
+  })
   it('an unknown code is shown as it is', () => {
     expect(reasonWord('from_the_future', t)).toBe('from_the_future')
   })
@@ -78,6 +81,10 @@ describe('headroom reason lines (the daemon\'s golden: mlab, mserv, an unreachab
 
   it('different words for the two classes are two lines', () => {
     expect(headroomReasonLines({ heavy: 0, light: 0 }, { heavy: ['worker_off'], light: ['gate_full'] }, t)).toEqual([line('heavy', words('worker_off')), line('light', words('gate_full'))])
+  })
+
+  it('disk_low on heavy only: one heavy line with the disk_low word', () => {
+    expect(headroomReasonLines({ heavy: 0, light: 2 }, { heavy: ['disk_low'], light: [] }, t)).toEqual([line('heavy', words('disk_low'))])
   })
 
   it('no headroom at all: nothing', () => {
