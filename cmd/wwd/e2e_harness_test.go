@@ -323,7 +323,7 @@ func (w *world) launch(o procOpts, port int) (*proc, bool) {
 		t.Fatal(err)
 	}
 	p.cmd = exec.Command(e2eBin, "-config", cfgPath)
-	p.cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "LANG=en_US.UTF-8"}
+	p.cmd.Env = e2eEnv(home)
 	p.cmd.Stdout, p.cmd.Stderr = logf, logf
 	if err := p.cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -538,4 +538,28 @@ func (w *world) startPair(workerName string, workerOn bool) *pair {
 	a := w.start(procOpts{name: "ea"}, 0)
 	b := w.start(procOpts{name: workerName, worker: workerOn, clone: w.clone(workerName), peers: []*proc{a}}, 0)
 	return &pair{origin: a, worker: b}
+}
+
+// e2eEnv is the whole environment of a wwd the harness starts. PDX_GATE_DIR points at a directory that does not exist: since #3677
+// the gate directory follows the account's real home, not $HOME, so a fake HOME alone leaves the wwd reading (and taking heavy
+// slots from) the host's real pdx gate. An absent directory means no gate, as before.
+func e2eEnv(home string) []string {
+	return []string{"HOME=" + home, "PDX_GATE_DIR=" + filepath.Join(home, "no-gate"), "PATH=" + os.Getenv("PATH"), "LANG=en_US.UTF-8"}
+}
+
+// The guard: every wwd the harness starts gets a gate directory under its own home that is not there.
+func TestE2EEnvIsolatesTheGate(t *testing.T) {
+	home := t.TempDir()
+	var dir string
+	for _, kv := range e2eEnv(home) {
+		if v, ok := strings.CutPrefix(kv, "PDX_GATE_DIR="); ok {
+			dir = v
+		}
+	}
+	if dir == "" || !strings.HasPrefix(dir, home+string(filepath.Separator)) {
+		t.Fatalf("PDX_GATE_DIR = %q, want a path under %s", dir, home)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the isolated gate dir must not exist: %v", err)
+	}
 }
