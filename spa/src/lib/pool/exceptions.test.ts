@@ -30,10 +30,20 @@ describe('parseExceptionList', () => {
 })
 
 describe('parseExceptionList: the wire object { host, known, exceptions }', () => {
-  it('known:true reads the entries; allow and flags are not shown, so they are not carried', () => {
+  it('known:true reads the entries, with the classes they let through and the flags they carry', () => {
     expect(parseExceptionList(knownJson)).toEqual([
       { name: 'app-dev-package', until: Date.parse('2026-10-19T09:00:00Z'), pid: null, holds: ['heavy', 'light'] },
-      { name: 'stress-run', until: null, pid: 4242, holds: ['heavy'] },
+      { name: 'stress-run', until: null, pid: 4242, holds: ['heavy'], allow: { classes: ['release'], repos: ['purdex'] }, flags: ['release', 'expect_pressure'] },
+    ])
+  })
+
+  it('drops the classes and flags it does not know; an allow with nothing left is still an allow (wwd: listed means only those)', () => {
+    const got = parseExceptionList([{ name: 'a', until: null, pid: 1, holds: ['heavy'], allow: { classes: ['merge', 'gpu', 3], repos: ['r', 4] }, flags: ['expect_pressure', 'x'] },
+      { name: 'b', allow: { classes: ['gpu'] }, flags: ['x'] }, { name: 'c', allow: 'all', flags: 'release' }])
+    expect(got).toEqual([
+      { name: 'a', until: null, pid: 1, holds: ['heavy'], allow: { classes: ['merge'], repos: ['r'] }, flags: ['expect_pressure'] },
+      { name: 'b', until: null, pid: null, holds: [], allow: { classes: [], repos: [] } },
+      { name: 'c', until: null, pid: null, holds: [] },
     ])
   })
 

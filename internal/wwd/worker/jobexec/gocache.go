@@ -83,6 +83,10 @@ type goCacheState struct {
 	mu   sync.Mutex
 	now  func() time.Time
 	dirs map[string]*goCacheDir
+	// tickMu serialises the timed trim (gocache_tick.go), which holds it for the seconds a large trim takes: not mu, which a starting job waits
+	// for. tickAt (under mu) is when the tick last looked at the caches.
+	tickMu sync.Mutex
+	tickAt time.Time
 	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
 	hook            func(stage string)
 	versionOverride string

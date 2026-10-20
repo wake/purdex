@@ -705,6 +705,26 @@ func TestRunSweepsOnItsOwnPause(t *testing.T) {
 	<-done
 }
 
+// The sweepers are the worker's beat for what is on the disk whether or not it takes jobs (the build cache's timed trim, #3833): a worker that
+// is switched off (or a host that yields to its owner) still runs them, and claims nothing.
+func TestRunSweepsWhileTheWorkerIsSwitchedOff(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.set(func(st *wire.WorkerSettings, f *wire.Facts) { st.Enabled = false })
+	sw := &fakeSweeper{}
+	r.loop.cfg.Sweepers = []Sweeper{sw}
+	r.loop.cfg.SweepEvery = unit
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.loop.Run(ctx); close(done) }()
+	waitFor(t, "two sweeps", func() bool { sw.mu.Lock(); defer sw.mu.Unlock(); return len(sw.calls) >= 2 })
+	cancel()
+	<-done
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: a worker that is off takes nothing", claims)
+	}
+}
+
 // The effective rule is the only basis: a reading that says active (the config has an owner source) is not a yield when the rule is empty.
 func TestAnActiveOwnerReadingWithoutARuleIsNotAYield(t *testing.T) {
 	c := newConn("mlab", qjob("a", wire.ClassDev, 0))

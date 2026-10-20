@@ -221,6 +221,9 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		GoCacheMaxMB:      in.Cfg.Worker.GoCacheMaxMB,
 		GoCachePruneHours: in.Cfg.Worker.GoCachePruneHours,
 	})
+	// the build caches are trimmed on the beat of the loop's sweepers (once in a quarter of an hour, in the background), whether or not the
+	// worker takes jobs: they are on the disk either way (#3833)
+	sweepers = append(sweepers, exec.GoCacheTrimmer())
 	// the claim says what the host is at the time of the claim (in.Labels), not what it was when the worker started: that is before the first
 	// facts record, with no tool labels and a fingerprint of the OS version only, and no result made under it could be filed for reuse
 	ctl := runner.New(runner.Config{

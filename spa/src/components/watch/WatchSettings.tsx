@@ -1,28 +1,19 @@
-// spa/src/components/watch/WatchSettings.tsx — a host tab's 設定 page (watcher area spec §6.2 / §6.3, plan §9): for a daemon host the
-// 守門員 section (the host's `watch` row, read with lib/watch/watch-row and written whole with its revision). Every host is a pool host (MON-6f-1): the worker settings and the pause
-// list come first when the pool lists it; a host the App has no config for says so in the 守門員 section. The gate settings (設定組, 資源管制, slots) are W5c2.
+// spa/src/components/watch/WatchSettings.tsx — the 守門員 section of a daemon host's 設定 page (watcher area spec §6.2 / §6.3, MON-9a-1): the host's `watch` row,
+// read with lib/watch/watch-row and written whole with its revision. Only the start settings are drawn (MON-9a-1: the trigger fields are WWD-9's to remove); the fields
+// not drawn stay in the stored row and are written back as they were. The page around it is `host/SettingsTab`.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostLookResolver } from '../../lib/host-look'
 import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-config-api'
 import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from '../../lib/watch/draft-memory'
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 import { isSet, putWatchRow, rowWith, valueOf, type WatchKey } from '../../lib/watch/watch-row-write'
-import { Section } from '../hosts/form-fields'
 import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
-import { usePoolStore } from '../../lib/pool/store'
-import { WorkerExceptions } from './WorkerExceptions'
-import { WorkerSettings } from './WorkerSettings'
 
-type Kind = 'bool' | 'int' | 'float' | 'text' | 'targets' | 'textarea' | 'mode'
+type Kind = 'bool' | 'int' | 'text' | 'textarea' | 'mode'
 const FIELDS: { key: WatchKey; kind: Kind }[] = [
   { key: 'enabled', kind: 'bool' },
-  { key: 'x_cores', kind: 'float' }, { key: 'y_mb', kind: 'int' }, { key: 't_s', kind: 'int' },
-  { key: 'pressure_level', kind: 'int' }, { key: 'pressure_t_s', kind: 'int' },
-  { key: 'page_rate', kind: 'float' }, { key: 'page_t_s', kind: 'int' },
-  { key: 'targets', kind: 'targets' },
   { key: 'mode', kind: 'mode' }, { key: 'patrol_idle_min', kind: 'int' },
   { key: 'auto_wake', kind: 'bool' },
   { key: 'agent_command', kind: 'text' }, { key: 'workdir', kind: 'text' },
@@ -31,14 +22,8 @@ const FIELDS: { key: WatchKey; kind: Kind }[] = [
 
 const INPUT = 'w-64 px-2 py-1 rounded border border-border-default bg-surface-primary text-xs text-text-primary disabled:opacity-50'
 
-function show(kind: Kind, v: unknown): string {
-  if (kind === 'targets') return Array.isArray(v) ? v.join(', ') : ''
+function show(v: unknown): string {
   return typeof v === 'string' || typeof v === 'number' ? String(v) : ''
-}
-
-function targetsOf(w: WatchRow): string[] {
-  const v = valueOf(w, 'targets')
-  return Array.isArray(v) ? v.filter((a): a is string => typeof a === 'string') : []
 }
 
 /** A text-like control: edited locally, committed on blur / Enter, put back to the stored value when the write is refused. */
@@ -100,17 +85,14 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
   )
 }
 
-/** 守門員: one daemon host's `watch` row. `peerIds` are the other daemon hosts, read only to compare `targets`. */
-function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfigId: string; hostId: string; offline: boolean; peerIds: string[] }) {
+/** 守門員: one daemon host's `watch` row. `hostId` only keys the drafts; `offline` is the App host not being connected. */
+export function GuardianSection({ hostConfigId, hostId, offline }: { hostConfigId: string; hostId: string; offline: boolean }) {
   const t = useI18nStore((s) => s.t)
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error' } | { status: 'ready'; w: WatchRow }>({ status: 'loading' })
   const [errors, setErrors] = useState<Partial<Record<WatchKey, string>>>({})
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [peers, setPeers] = useState<{ id: string; targets: string[] | null }[]>([])
-  const lookOf = useHostLookResolver() // the host's name goes through the look resolver (host-look guard)
   const rowRef = useRef<WatchRow | null>(null)
-  const peerKey = peerIds.join('\n')
 
   useEffect(() => {
     if (offline) return
@@ -122,17 +104,6 @@ function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfi
     })
     return () => { live = false }
   }, [hostConfigId, offline])
-
-  useEffect(() => {
-    if (offline || !peerKey) { setPeers([]); return }
-    let live = true
-    // Each peer is remembered with whether it could be read: one that cannot is "cannot compare", never "the same".
-    void Promise.all(peerKey.split('\n').map(async (id) => {
-      const r = await readWatchRow(id)
-      return { id, targets: r ? targetsOf(r) : null }
-    })).then((rows) => { if (live) setPeers(rows) })
-    return () => { live = false }
-  }, [peerKey, offline])
 
   const write = useCallback(async (key: WatchKey, value: unknown): Promise<boolean> => {
     const base = rowRef.current
@@ -167,9 +138,6 @@ function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfi
   if (state.status === 'error') return <p data-testid="watch-set-unreadable" className="text-sm text-status-warning-text">{t('watch.set.unreadable')}</p>
 
   const w = state.w
-  const mine = targetsOf(w)
-  const differs = peers.some((p) => p.targets !== null && p.targets.join('\n') !== mine.join('\n'))
-  const unreadablePeers = peers.filter((p) => p.targets === null).map((p) => lookOf(p.id).name || p.id)
   const locked = offline || busy
 
   const commitText = (f: { key: WatchKey; kind: Kind }) => async (raw: string): Promise<boolean> => {
@@ -177,12 +145,6 @@ function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfi
     if (f.kind === 'int') {
       if (!/^\d+$/.test(raw.trim())) { setErrors((e) => ({ ...e, [f.key]: t('watch.set.not_int') })); return false }
       value = Number(raw)
-    } else if (f.kind === 'float') {
-      const n = Number(raw)
-      if (raw.trim() === '' || !Number.isFinite(n)) { setErrors((e) => ({ ...e, [f.key]: t('watch.set.not_number') })); return false }
-      value = n
-    } else if (f.kind === 'targets') {
-      value = raw.split(/[,\s]+/).filter(Boolean)
     }
     return write(f.key, value)
   }
@@ -206,41 +168,15 @@ function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfi
                   <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
                     value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
                 ) : (
-                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, hostId, f.key)} onCommit={commitText(f)} />
+                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(v)} draftKey={watchDraftKey(hostConfigId, hostId, f.key)} onCommit={commitText(f)} />
                 )}
                 <span className="text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</span>
                 {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
               </div>
             </SettingItem>
-            {f.key === 'targets' && differs && <p data-testid="watch-set-targets-differ" className="mb-1 text-xs text-status-warning-text">{t('watch.set.targets_differ')}</p>}
-            {f.key === 'targets' && unreadablePeers.length > 0 && (
-              <p data-testid="watch-set-compare-unreadable" className="mb-1 text-xs text-status-warning-text">{t('watch.set.compare_unreadable', { host: unreadablePeers.join(', ') })}</p>
-            )}
           </div>
         )
       })}
     </div>
-  )
-}
-
-/** The 設定 page of one host. `hostId` only keys the drafts. `hostConfigId`: the App's id for the daemon (absent for a host the App has no config for). */
-export function WatchSettings({ hostId, hostConfigId, poolAlias, offline, peerIds }: {
-  hostId: string; hostConfigId?: string; offline: boolean; peerIds: string[]
-  /** The host's alias in the resource pool: with it the page opens with the worker settings (`pool.control.v1`). */
-  poolAlias?: string
-}) {
-  const t = useI18nStore((s) => s.t)
-  // The worker settings take the top; the watcher section stays collapsed under them (until WWD-8) once the pool lists this host.
-  const listed = usePoolStore((s) => poolAlias !== undefined && s.hosts.some((h) => h.alias === poolAlias))
-  return (
-    <>
-      {poolAlias && <WorkerSettings alias={poolAlias} />}
-      {poolAlias && <WorkerExceptions alias={poolAlias} />}
-      <Section title={t('watch.set.guardian')} defaultOpen={!listed}>
-        {hostConfigId
-          ? <GuardianSection hostConfigId={hostConfigId} hostId={hostId} offline={offline} peerIds={peerIds} />
-          : <p data-testid="watch-set-unmapped" className="text-sm text-text-muted">{t('watch.set.unmapped')}</p>}
-      </Section>
-    </>
   )
 }

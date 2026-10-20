@@ -9,13 +9,14 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from '../../lib/pool/store'
 import { controlDenied, controlSource, deletePause, fetchPauses, PoolChangeError, postPause } from '../../lib/pool/control-api'
 import { forgetWorkerDraft, readWorkerDraft, workerDraftKey, writeWorkerDraft } from '../../lib/pool/worker-draft-memory'
-import { holdsOf, loadRecentClocks, parseClock, pauseName, PAUSE_HOURS, rememberClock, saveRecentClocks, untilClock, untilInHours } from '../../lib/pool/pause'
+import { allowOf, holdsOf, loadRecentClocks, parseClock, pauseName, PAUSE_CLASSES, PAUSE_FLAGS, PAUSE_HOURS, rememberClock, saveRecentClocks, untilClock, untilInHours } from '../../lib/pool/pause'
 import type { PoolExceptionDetail, PoolHold } from '../../lib/pool/types'
 import { PENDING_NOTICE_MS } from './WorkerSettings'
 import { Section } from '../hosts/form-fields'
 import { SettingItem } from '../settings/SettingItem'
 
 const BTN = 'px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary text-xs cursor-pointer disabled:opacity-50'
+const pickedOf = (draft: string | undefined): string[] => (draft ? draft.split(',').filter(Boolean) : [])
 const pad = (n: number) => String(n).padStart(2, '0')
 
 /** `hh:mm`, with the date in front when it is not today. */
@@ -51,6 +52,15 @@ export function WorkerExceptions({ alias }: { alias: string }) {
   const lightKey = workerDraftKey(alias, 'pause_light')
   const [clock, setClockState] = useState(() => readWorkerDraft(clockKey) ?? '')
   const [alsoLight, setLightState] = useState(() => readWorkerDraft(lightKey) === '1')
+  const allowKey = workerDraftKey(alias, 'pause_allow')
+  const flagsKey = workerDraftKey(alias, 'pause_flags')
+  const [allowed, setAllowedState] = useState(() => pickedOf(readWorkerDraft(allowKey)))
+  const [marked, setMarkedState] = useState(() => pickedOf(readWorkerDraft(flagsKey)))
+  const toggle = (list: string[], v: string, key: string, set: (l: string[]) => void) => {
+    const next = list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
+    writeWorkerDraft(key, next.join(','))
+    set(next)
+  }
 
   useEffect(() => {
     if (readFrom === null) return
@@ -75,6 +85,7 @@ export function WorkerExceptions({ alias }: { alias: string }) {
   }, [waiting])
 
   if (!host || facts === undefined) return null
+  const hasPsi = host.facts?.mem.psi != null
   const readOnly = source === null || controlDenied(source)
   const now = Date.now()
 
@@ -102,7 +113,9 @@ export function WorkerExceptions({ alias }: { alias: string }) {
     const at = Date.now()
     const name = pauseName(at)
     const holds = holdsOf(alsoLight)
-    void run(null, (target) => postPause(target, alias, name, until, holds), { kind: 'add', name, at, until, holds })
+    const allow = allowOf(PAUSE_CLASSES.filter((c) => allowed.includes(c)))
+    const flags = PAUSE_FLAGS.filter((f) => marked.includes(f) && (f !== 'expect_pressure' || hasPsi))
+    void run(null, (target) => postPause(target, alias, name, until, holds, { allow, flags }), { kind: 'add', name, at, until, holds })
   }
   const end = (name: string) => void run(name, (target) => deletePause(target, alias, name), { kind: 'end', name, at: Date.now(), until: 0, holds: [] })
   const addClock = (hhmm: string) => {
@@ -134,7 +147,12 @@ export function WorkerExceptions({ alias }: { alias: string }) {
             const ending = waiting.some((w) => w.kind === 'end' && w.name === e.name)
             const label = until !== null ? t('pool.pause.until', { time: clockText(until, now) })
               : pid !== null ? t('pool.pause.pid', { pid }) : t('pool.pause.follows')
-            const holds = d === undefined ? t('pool.pause.holds_unknown') : d.holds.includes('light') ? t('pool.pause.holds_both') : t('pool.pause.holds_heavy')
+            const holdsText = d === undefined ? t('pool.pause.holds_unknown') : d.holds.includes('light') ? t('pool.pause.holds_both') : t('pool.pause.holds_heavy')
+            const extras = [
+              d?.allow && d.allow.classes.length > 0 ? t('pool.pause.allows', { classes: d.allow.classes.join(', ') }) : '',
+              d?.flags && d.flags.length > 0 ? t('pool.pause.marks', { flags: d.flags.map((f) => t(`pool.pause.flag_short.${f}`)).join(', ') }) : '',
+            ].filter(Boolean)
+            const holds = [holdsText, ...extras].join(' · ')
             return (
               <div key={e.name} data-testid={`pool-pause-row-${e.name}`}>
                 <SettingItem label={label} description={`${e.name} · ${holds}`}>
@@ -170,6 +188,24 @@ export function WorkerExceptions({ alias }: { alias: string }) {
                 onChange={(e) => { writeWorkerDraft(lightKey, e.target.checked ? '1' : '0'); setLightState(e.target.checked) }} />
               {t('pool.pause.also_light')}
             </label>
+            <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-text-secondary" data-testid="pool-pause-allow">
+              {t('pool.pause.allow')}
+              {PAUSE_CLASSES.map((c) => (
+                <label key={c} className="flex items-center gap-1">
+                  <input type="checkbox" data-testid={`pool-pause-allow-${c}`} checked={allowed.includes(c)} onChange={() => toggle(allowed, c, allowKey, setAllowedState)} />
+                  {c}
+                </label>
+              ))}
+            </span>
+            <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-text-secondary" data-testid="pool-pause-flags">
+              {t('pool.pause.flags')}
+              {PAUSE_FLAGS.filter((f) => f !== 'expect_pressure' || hasPsi).map((f) => (
+                <label key={f} className="flex items-center gap-1">
+                  <input type="checkbox" data-testid={`pool-pause-flag-${f}`} checked={marked.includes(f)} onChange={() => toggle(marked, f, flagsKey, setMarkedState)} />
+                  {t(`pool.pause.flag.${f}`)}
+                </label>
+              ))}
+            </span>
             {failure?.name === null && <p data-testid="pool-pause-error" role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">{failure.text}</p>}
           </div>
         </SettingItem>
