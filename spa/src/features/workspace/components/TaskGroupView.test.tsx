@@ -25,6 +25,8 @@ import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../../stores/useUnattendedStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
+import { useGroupViewStore } from '../../../stores/useGroupViewStore'
+import { manualGroupKey, UNGROUPED } from '../../../lib/task-groups/group-key'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
 import { useRootCacheStore } from '../../../lib/task-groups/root-cache'
@@ -65,6 +67,7 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } } } as never)
   useTeamRosterStore.getState().reset()
   useManualGroupsStore.setState({ order: [], groups: {} })
+  useGroupViewStore.setState({ selectedGroup: null, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
   useTeamUiStore.setState({ sidebarView: 'groups' }) // the task-group view is in force: stored, wide sidebar, tabs not on the left
   useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
   useRelayQuotaStore.getState().reset()
@@ -85,7 +88,7 @@ describe('the task-group view', () => {
     expect(secs.map((s) => s.getAttribute('data-testid'))).toEqual(['task-group-manual', 'task-group-ungrouped'])
     expect(within(secs[0]).getByTestId('task-group-name')).toHaveTextContent('Group g1')
     expect(within(secs[0]).getAllByTestId('inline-tab-row')).toHaveLength(1)
-    expect(within(secs[0]).getByTestId('task-group-count')).toHaveTextContent('1')
+    expect(within(secs[0]).getByTestId('task-group-chevron')).toHaveAttribute('aria-expanded', 'true') // the chevron stands where the count was
     expect(within(secs[1]).getAllByTestId('inline-tab-row')).toHaveLength(2)
     expect(within(secs[1]).getByTestId('task-group-name')).toHaveTextContent('未分組')
   })
@@ -134,7 +137,6 @@ describe('the task-group view', () => {
     const secs = sections()
     expect(secs[0].getAttribute('data-testid')).toBe('task-group-team')
     expect(within(secs[0]).getByTestId('task-group-name')).toHaveTextContent('Payments')
-    expect(within(secs[0]).getByTestId('task-group-count')).toHaveTextContent('2')
     expect(within(secs[0]).getAllByTestId('inline-tab-row')).toHaveLength(2)
     expect(within(secs[1]).getAllByTestId('inline-tab-row')).toHaveLength(1) // t3 is nobody's
     fireEvent.click(within(secs[0]).getAllByTestId('inline-tab-row')[1])
@@ -142,7 +144,7 @@ describe('the task-group view', () => {
     expect(onSelectTab).not.toHaveBeenCalled()
   })
 
-  it('a second tab showing a seat session is an extra row of its team (counted) and not a drag source', () => {
+  it('a second tab showing a seat session is an extra row of its team and not a drag source', () => {
     useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-S2')]) as never])
     act(() => {
       useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t2b: tab('t2b', 'S2', 'AG2b') } } as never)
@@ -150,7 +152,6 @@ describe('the task-group view', () => {
     mount()
     const team = screen.getByTestId('task-group-team')
     expect(within(team).getAllByTestId('inline-tab-row')).toHaveLength(3) // lead, member, and the member's second tab
-    expect(within(team).getByTestId('task-group-count')).toHaveTextContent('3')
     expect(within(team).queryByTestId('task-group-session')).toBeNull() // an extra team row is not draggable into a manual group
     expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(1) // t3 only
   })
@@ -598,3 +599,94 @@ describe('the group headers (NA-6c, TG-2b)', () => {
     expect(screen.getAllByRole('textbox').length).toBeGreaterThan(0)
   })
 })
+
+describe('headers: selection, collapse and the three manual group states (task groups spec §6.1, TG-3c)', () => {
+  const g1 = manualGroupKey('g1')
+  const rosterSession = (id: string, tmux: string) => ({ session_id: id, ref: `_${id}`, address: `mlab/${id}-x`, live: true, tmux_session: tmux, title: `title ${id}` })
+  const teamOf = (lead: ReturnType<typeof rosterSession>, members: ReturnType<typeof rosterSession>[]) => ({
+    id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '',
+    lead, members: members.map((m) => ({ ...m, state: 'active', origin: 'spawned', joined_at: 1 })),
+  })
+  const head =(testId: string) => within(screen.getByTestId(testId)).getByTestId('task-group-header')
+  const rowsIn = (testId: string) => within(screen.getByTestId(testId)).queryAllByTestId('inline-tab-row')
+
+  it('a header click selects the group and activates its tab; the selected header is marked', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    setRoots([['AG1', 'AG1'], ['AG2', 'ROOT2'], ['AG3', 'AG3']])
+    mount()
+    fireEvent.click(head('task-group-manual'))
+    expect(useGroupViewStore.getState().selectedGroup).toBe(g1)
+    expect(useTabStore.getState().activeTabId).toBe('t2')
+    expect(head('task-group-manual')).toHaveAttribute('data-selected', 'true')
+    expect(head('task-group-ungrouped')).not.toHaveAttribute('data-selected')
+  })
+
+  it('a click on the header of the selected, expanded group collapses it; on a collapsed one it selects again', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    setRoots([['AG2', 'ROOT2']])
+    mount()
+    fireEvent.click(head('task-group-manual')) // select
+    expect(rowsIn('task-group-manual')).toHaveLength(1)
+    fireEvent.click(head('task-group-manual')) // selected + expanded: collapse
+    expect(useGroupViewStore.getState().expanded[g1]).toBe(false)
+    expect(rowsIn('task-group-manual')).toHaveLength(0)
+    expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-chevron')).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(head('task-group-manual')) // selected but collapsed: the rule only collapses an expanded one
+    expect(useGroupViewStore.getState().expanded[g1]).toBe(false)
+  })
+
+  it('the chevron alone toggles, without selecting', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    setRoots([['AG2', 'ROOT2']])
+    mount()
+    const chevron = within(screen.getByTestId('task-group-manual')).getByTestId('task-group-chevron')
+    fireEvent.click(chevron)
+    expect(rowsIn('task-group-manual')).toHaveLength(0)
+    expect(useGroupViewStore.getState().selectedGroup).toBeNull()
+    fireEvent.click(chevron)
+    expect(rowsIn('task-group-manual')).toHaveLength(1)
+  })
+
+  it('「未分組」 and a team collapse and select the same way', () => {
+    useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-S2')]) as never])
+    mount()
+    expect(rowsIn('task-group-team')).toHaveLength(2)
+    fireEvent.click(within(screen.getByTestId('task-group-team')).getByTestId('task-group-chevron'))
+    expect(rowsIn('task-group-team')).toHaveLength(0)
+    fireEvent.click(head('task-group-ungrouped'))
+    expect(useGroupViewStore.getState().selectedGroup).toBe(UNGROUPED)
+    expect(useTabStore.getState().activeTabId).toBe('t3')
+    fireEvent.click(within(screen.getByTestId('task-group-ungrouped')).getByTestId('task-group-chevron'))
+    expect(rowsIn('task-group-ungrouped')).toHaveLength(0)
+  })
+
+  it('a group with members but no tab is collapsed with 「清除」; one with neither shows a muted hint and no 「清除」', () => {
+    setGroups([group('g1', ['GONE']), { ...group('g2', []), id: 'g2' }])
+    mount()
+    const [withMembers, bare] = screen.getAllByTestId('task-group-manual')
+    expect(within(withMembers).getByTestId('task-group-clear')).toBeInTheDocument()
+    expect(within(withMembers).queryByTestId('task-group-hint')).toBeNull()
+    expect(within(bare).queryByTestId('task-group-clear')).toBeNull()
+    expect(within(bare).getByTestId('task-group-hint')).toHaveTextContent('拖曳 session 到這裡')
+    expect(within(bare).queryByTestId('task-group-chevron')).toBeNull()
+  })
+
+  it('selecting an empty group sets the active tab to none and keeps the group selected', () => {
+    setGroups([{ ...group('g2', []), id: 'g2' }])
+    useTabStore.setState({ activeTabId: 't1' } as never)
+    mount()
+    fireEvent.click(head('task-group-manual'))
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useGroupViewStore.getState().selectedGroup).toBe(manualGroupKey('g2'))
+  })
+
+  it('selecting a group again returns to the tab that was last active in it', () => {
+    setGroups([group('g1', ['ROOT1', 'ROOT2'])])
+    setRoots([['AG1', 'ROOT1'], ['AG2', 'ROOT2'], ['AG3', 'AG3']])
+    useGroupViewStore.setState({ lastActiveTab: { [g1]: 't2' } })
+    mount()
+    fireEvent.click(head('task-group-manual'))
+    expect(useTabStore.getState().activeTabId).toBe('t2')
+  })
+})
+

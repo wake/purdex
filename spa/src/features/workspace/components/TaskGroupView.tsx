@@ -12,6 +12,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { TaskGroupSeatClosed } from './TaskGroupSeatClosed'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
+import { useGroupViewStore } from '../../../stores/useGroupViewStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
@@ -19,6 +20,8 @@ import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRo
 import { useEffectiveView } from '../../../lib/task-groups/effective-view'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { agentSessionOfTab } from '../../../lib/task-groups/placement'
+import { manualGroupKey, teamGroupKey, UNGROUPED } from '../../../lib/task-groups/group-key'
+import { selectGroupFromSidebar } from '../../../lib/task-groups/group-select'
 import { buildTeamIndex } from '../../../lib/team/team-index'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
 import { deleteManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
@@ -50,6 +53,9 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const groupOrder = useManualGroupsStore((s) => s.order)
   const groupsById = useManualGroupsStore((s) => s.groups)
+  const selectedGroup = useGroupViewStore((s) => s.selectedGroup)
+  const expandedMap = useGroupViewStore((s) => s.expanded)
+  const setExpanded = useGroupViewStore((s) => s.setExpanded)
   const teams = useTeamViews()
   const sessionsByHost = useSessionStore((s) => s.sessions)
   // The last refusal of an edit, in words, until dismissed or replaced by the next action.
@@ -169,6 +175,15 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
   }
 
+  // A group is expanded unless the device collapsed it. A header click selects the group; on the selected, expanded group it collapses it (WorkspaceRow's rule); the chevron alone toggles.
+  const isExpanded = (key: string) => expandedMap[key] !== false
+  const headerProps = (key: string, toggleable: boolean) => ({
+    selected: selectedGroup === key,
+    expanded: isExpanded(key),
+    onClick: () => { if (selectedGroup === key && isExpanded(key)) setExpanded(key, false); else selectGroupFromSidebar(key) },
+    onToggle: toggleable ? () => setExpanded(key, !isExpanded(key)) : undefined,
+  })
+
   if (view.length === 0) {
     return <div data-testid="task-group-empty" className="px-4 py-3 text-xs text-text-muted">{t('taskgroups.empty')}</div>
   }
@@ -184,38 +199,46 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       {view.map((section, i) => {
         if (section.kind === 'team') {
           const name = panelName(section.view).text
-          const count = 1 + section.rest.length
+          const key = teamGroupKey(section.view.key)
+          const open = isExpanded(key)
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
-              <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} count={count} />
-              {renderRow(section.lead, section.view.key, true)}
-              <div className="ml-4 border-l border-border-subtle">
-                {section.rest.map((r) => renderRow(r, section.view.key, false, null, true))}
-              </div>
+              <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} {...headerProps(key, true)} />
+              {open && renderRow(section.lead, section.view.key, true)}
+              {open && (
+                <div className="ml-4 border-l border-border-subtle">
+                  {section.rest.map((r) => renderRow(r, section.view.key, false, null, true))}
+                </div>
+              )}
             </section>
           )
         }
         if (section.kind === 'manual') {
+          // Three states (spec §6.1): with tabs, listed; with members but no tab, collapsed with 「清除」; with neither (just created), the header and a muted hint row.
+          const key = manualGroupKey(section.groupId)
           const collapsed = section.rows.length === 0
+          const hasMembers = section.group.members.length > 0
+          const open = isExpanded(key)
           return (
             <section
               key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.groupId)}`}
               {...drag.targetProps({ kind: 'group', groupId: section.groupId })}
             >
               <TaskGroupHeader
-                color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
+                color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} muted={collapsed} {...headerProps(key, !collapsed)}
                 edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
-                clear={collapsed ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
+                clear={collapsed && hasMembers ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
-              {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.groupId))}
+              {collapsed && !hasMembers && open && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}
+              {!collapsed && open && section.rows.map((r) => renderRow(r, undefined, false, section.groupId))}
             </section>
           )
         }
         return (
           <section key="ungrouped" data-testid="task-group-ungrouped" className={`flex flex-col${lit('ungrouped')}`} {...drag.targetProps({ kind: 'ungrouped' })}>
             {i > 0 && <div className="mx-3 my-1 h-px bg-border-default" />}
-            <TaskGroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} count={section.rows.length} muted />
-            {section.rows.map((r) => renderRow(r))}
+            <TaskGroupHeader color={COLOR_DEFAULT} name={t('taskgroups.ungrouped')} muted {...headerProps(UNGROUPED, true)} />
+            {isExpanded(UNGROUPED) && section.rows.map((r) => renderRow(r))}
           </section>
         )
       })}

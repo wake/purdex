@@ -8,6 +8,11 @@ import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useTabStore } from '../../../stores/useTabStore'
+import { useGroupViewStore } from '../../../stores/useGroupViewStore'
+import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
+import { useWorkspaceStore } from '../store'
+import { manualGroupKey } from '../../../lib/task-groups/group-key'
 
 const WORLD = { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }
 const toggle = () => screen.getByTestId('sidebar-view-toggle')
@@ -69,6 +74,23 @@ describe('the toggle', () => {
     fireEvent.click(toggle())
     expect(useTeamUiStore.getState().sidebarView).toBe('workspace')
     expect(within(toggle()).queryByTestId('sidebar-view-team-icon')).toBeNull()
+  })
+
+  it('a click restores the view\'s last place: to the task-group view the last group and its tab, back to the workspace view the last workspace and its tab (spec §6.3)', () => {
+    const tabOf = (id: string, group?: string) => ({ id, kind: 'new-tab', locked: false, pinned: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `${id}-p`, content: { kind: 'dashboard' } } }, ...(group ? { group } : {}) })
+    const G = manualGroupKey('aaaaaaaa')
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    useTabStore.setState({ tabs: { g1: tabOf('g1', G), g2: tabOf('g2', G), w1: tabOf('w1') }, activeTabId: 'w1' } as never)
+    useWorkspaceStore.setState({ workspaces: [{ id: 'wa', name: 'A', tabs: ['g1', 'g2'], activeTabId: 'g1', moduleConfig: {} }, { id: 'wb', name: 'B', tabs: ['w1'], activeTabId: 'w1', moduleConfig: {} }], activeWorkspaceId: 'wb' } as never)
+    useGroupViewStore.setState({ selectedGroup: null, lastActiveTab: { [G]: 'g2' }, expanded: {}, lastByView: { workspace: 'wa', group: G } })
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    renderRow()
+    fireEvent.click(toggle()) // workspace view -> task-group view
+    expect(useTeamUiStore.getState().sidebarView).toBe('groups')
+    expect([useGroupViewStore.getState().selectedGroup, useTabStore.getState().activeTabId]).toEqual([G, 'g2'])
+    fireEvent.click(toggle()) // and back
+    expect(useTeamUiStore.getState().sidebarView).toBe('workspace')
+    expect([useWorkspaceStore.getState().activeWorkspaceId, useTabStore.getState().activeTabId]).toEqual(['wa', 'g2'])
   })
 
   it('the team icon wears its own weight, standing alone (the default UsersThree too)', () => {
