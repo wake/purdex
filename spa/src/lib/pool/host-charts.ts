@@ -35,7 +35,8 @@ export function gaugesOf(facts: PoolFacts | null, t: T): (GaugeView | null)[] {
   const cpu = 100 - facts.cpu.idle_pct
   const mem = facts.mem.total_mb > 0 ? ((facts.mem.total_mb - facts.mem.available_mb) / facts.mem.total_mb) * 100 : 0
   const level = facts.mem.pressure
-  const paging = facts.mem.page_out_rate ?? 0
+  // A platform or a moment that gives no paging figure is "no reading", not a healthy zero: that gauge is a dash.
+  const paging = facts.mem.page_out_rate
   const fullest = facts.disk.reduce<number | null>((best, d) => (best === null || d.used_pct > best ? d.used_pct : best), null)
   const w = facts.worker
   const total = w.slots.heavy + w.slots.light
@@ -44,7 +45,7 @@ export function gaugesOf(facts: PoolFacts | null, t: T): (GaugeView | null)[] {
     { value: cpu.toFixed(0), unit: '%', pct: cpu, tone: usageTone(cpu) },
     { value: mem.toFixed(0), unit: '%', pct: mem, tone: usageTone(mem) },
     level <= 0 ? { value: '—', pct: 0, tone: 'ok' } : { value: pressureWord(level, t), pct: level === 1 ? 33 : level === 2 ? 66 : 100, tone: levelTone(level) },
-    { value: Math.round(paging).toLocaleString(), unit: t('watch.host.unit.pages'), pct: Math.min(100, (paging / PAGING_FULL) * 100), tone: pagingTone(paging) },
+    paging === null ? null : { value: Math.round(paging).toLocaleString(), unit: t('watch.host.unit.pages'), pct: Math.min(100, (paging / PAGING_FULL) * 100), tone: pagingTone(paging) },
     fullest === null ? null : { value: fullest.toFixed(0), unit: '%', pct: fullest, tone: diskTone(fullest) },
     w.enabled
       ? { value: `${used}/${total}`, unit: t('watch.host.unit.jobs'), pct: total > 0 ? Math.min(100, (used / total) * 100) : 0, tone: total > 0 && used >= total ? 'warn' : 'ok' }

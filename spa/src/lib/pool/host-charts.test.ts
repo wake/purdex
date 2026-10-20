@@ -42,8 +42,9 @@ describe('gaugesOf (M41-1, M22)', () => {
     expect(g(facts({ pageOut: 801 }))[3]).toMatchObject({ pct: 100, tone: 'danger' })
     expect(g(facts({ pageOut: 1500 }))[3]!.pct).toBe(100)
   })
-  it('paging that the platform does not report is 0', () => {
-    expect(g(facts({ pageOut: null }))[3]).toMatchObject({ value: '0', pct: 0, tone: 'ok' })
+  it('paging that the platform does not report is no reading (a dash), not a healthy zero', () => {
+    expect(g(facts({ pageOut: null }))[3]).toBeNull()
+    expect(g(facts({ pageOut: 0 }))[3]).toMatchObject({ value: '0', pct: 0, tone: 'ok' }) // a measured zero is still a zero
   })
   it('disk is the fullest one: yellow from 85, red from 95', () => {
     const disks = [{ mount: '/', used_pct: 40, free_gb: 300 }, { mount: '/data', used_pct: 85, free_gb: 20 }] as never
