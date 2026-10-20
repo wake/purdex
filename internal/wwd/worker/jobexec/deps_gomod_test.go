@@ -62,6 +62,8 @@ type goRig struct {
 	deps string
 	// cfgGoCacheMB is the worker's bound on the shared build cache (0: the default)
 	cfgGoCacheMB int
+	// cfgGoCachePruneH is how long an entry may go unused before the worker removes it (0: the default, 24 hours)
+	cfgGoCachePruneH int
 }
 
 func newGoRig(t *testing.T) *goRig {
@@ -79,7 +81,7 @@ func newGoRig(t *testing.T) *goRig {
 func (r *goRig) exec(t *testing.T, repo, sha string) *Exec {
 	return New(Config{
 		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: repo, commit: sha} },
-		ParentEnv: []string{"PATH=" + r.bin + ":/usr/bin:/bin", "HOME=/home/worker", "GIT_TOKEN=s3cret"}, DepsDir: r.deps, DepsKeep: 2, GoCacheMaxMB: r.cfgGoCacheMB,
+		ParentEnv: []string{"PATH=" + r.bin + ":/usr/bin:/bin", "HOME=/home/worker", "GIT_TOKEN=s3cret"}, DepsDir: r.deps, DepsKeep: 2, GoCacheMaxMB: r.cfgGoCacheMB, GoCachePruneHours: r.cfgGoCachePruneH,
 	})
 }
 
