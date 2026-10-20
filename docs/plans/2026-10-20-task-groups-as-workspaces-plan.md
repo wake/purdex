@@ -152,7 +152,7 @@ pinned by an unchanged test.
 ## TG-3d — header menu and +
 
 1. Manual group header menu: rename, colour, 「刪除任務編組」 with a confirm. Tests.
-2. `BottomNav` in the task-group view (wide and narrow activity bars): 「新增任務編組」. Tests.
+2. `BottomNav` in the task-group view (wide activity bar only; the narrow one behaves as the workspace view, spec §6): 「新增任務編組」. Tests.
 
 ## TG-3e — drag in the sidebar
 
