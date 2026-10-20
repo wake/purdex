@@ -6,8 +6,9 @@ import { lookKeyOf, useHostStore } from '../../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry } from '../../stores/useHostLookStore'
 import { usePoolHostsStore, type PoolHostIndicator, type PoolHostLook } from '../../stores/usePoolHostsStore'
 import { useUISettingsStore, type FleetCellIndicator } from '../../stores/useUISettingsStore'
-import { useHostLookResolver, type HostLook } from '../host-look'
-import { readPoolHostOwners, usePoolHostOwners } from './daemons'
+import { useHostLookResolver, hostLookOf, type HostLook } from '../host-look'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+import { poolHostOwners, readPoolHostOwners, usePoolHostOwners } from './daemons'
 
 /** A pool host's look as the screens draw it: colour and icon from their home, the indicator resolved (stored or default). */
 export interface PoolHostResolvedLook {
@@ -76,9 +77,36 @@ export function usePoolHostLookResolver(): (hostId: string) => PoolHostResolvedL
     const owner = owners[hostId]
     const fromHost = owner !== undefined ? resolve(owner) : undefined
     // A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one.
-    const base = fromHost !== undefined && hasFace(fromHost) ? fromHost : stored
-    return compose(base, indicatorOf(stored, global))
+    return poolLookOf(stored, fromHost, global)
   }, [owners, resolve, looks, global])
+}
+
+/** A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one. */
+function poolLookOf(stored: PoolHostLook | undefined, fromHost: HostLook | undefined, global: FleetCellIndicator): PoolHostResolvedLook {
+  const base = fromHost !== undefined && hasFace(fromHost) ? fromHost : stored
+  return compose(base, indicatorOf(stored, global))
+}
+
+const NO_ORDER: string[] = []
+const NO_ROWS: Record<string, never> = {}
+
+/**
+ * One pool host's look for a surface that is drawn once per tab (a tab row): the same answer as `usePoolHostLook`, but subscribed to the stores only while `hostId` is not empty.
+ * With `''` (the tab is not a pool host's) every selector gives a constant, so an unrelated write to a host store renders nothing.
+ */
+export function useTabPoolHostLook(hostId: string): PoolHostResolvedLook {
+  const on = hostId !== ''
+  const hostOrder = useHostStore((s) => (on ? s.hostOrder : NO_ORDER))
+  const hosts = useHostStore((s) => (on ? s.hosts : NO_ROWS))
+  const byHost = useNexHostStore((s) => (on ? s.byHost : NO_ROWS))
+  const hostLooks = useHostLookStore((s) => (on ? s.looks : NO_ROWS))
+  const stored = usePoolHostsStore((s) => (on && Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
+  const global = useUISettingsStore((s) => s.fleetCellIndicator)
+  return useMemo(() => {
+    const owner = on ? poolHostOwners({ hostOrder, byHost })[hostId] : undefined
+    const fromHost = owner !== undefined ? hostLookOf(owner, hosts, hostLooks) : undefined
+    return poolLookOf(stored, fromHost, global)
+  }, [on, hostId, hostOrder, byHost, hosts, hostLooks, stored, global])
 }
 
 export function usePoolHostLook(hostId: string): PoolHostResolvedLook {

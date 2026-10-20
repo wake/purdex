@@ -4,6 +4,8 @@ import { useTabHostBadge } from './useTabHostBadge'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { PaneLayout, Tab } from '../types/tab'
+import { usePoolHostsStore } from '../stores/usePoolHostsStore'
+import { writePoolHostLook } from '../lib/pool/host-looks'
 
 function tmuxTab(hostId: string): Tab {
   const layout: PaneLayout = {
@@ -270,5 +272,44 @@ describe('useTabHostBadge', () => {
       )
       expect(result.current?.colors?.main).toBe('rgba(59, 130, 246, 1)')
     })
+  })
+})
+
+// MON-6b (M9): a watch-host tab wears the colour and icon of its pool host, as the sidebar cell does.
+describe('useTabHostBadge for a watch-host tab', () => {
+  const MLAB = '82b11c521df16c12'
+  const watchTab = (poolHostId?: string): Tab => ({
+    id: 'watch-host-x', pinned: false, locked: true, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: 'p', content: { kind: 'watch-host', ...(poolHostId ? { poolHostId } : { fleetHostId: 'old' }) } } },
+  })
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    usePoolHostsStore.setState({ order: [], looks: {} } as never)
+  })
+
+  it('takes the look of its pool host (in console mode) and follows a change of it', () => {
+    writePoolHostLook(MLAB, { colors: { console: { main: { color: '#3b82f6', alpha: 100 } } } as never, icon: 'Laptop' })
+    const { result } = renderHook(() => useTabHostBadge(watchTab(MLAB)))
+    expect(result.current?.icon).toBe('Laptop')
+    expect(result.current?.colors?.main).toBe('rgba(59, 130, 246, 1)')
+    act(() => writePoolHostLook(MLAB, { icon: 'Desktop' }))
+    expect(result.current?.icon).toBe('Desktop')
+  })
+
+  it('a host with no look gives a badge with no colour, not null', () => {
+    const { result } = renderHook(() => useTabHostBadge(watchTab(MLAB)))
+    expect(result.current).not.toBeNull()
+    expect(result.current?.colors ?? null).toBeNull()
+  })
+
+  it('an older watch-host tab (no poolHostId) and a tab with no host at all have none', () => {
+    expect(renderHook(() => useTabHostBadge(watchTab())).result.current).toBeNull()
+    expect(renderHook(() => useTabHostBadge(plainTab())).result.current).toBeNull()
+  })
+
+  it('a tmux tab is not affected', () => {
+    seedHosts(hostA)
+    useHostStore.getState().setHostColor('host-a', '#3b82f6')
+    expect(renderHook(() => useTabHostBadge(tmuxTab('host-a'))).result.current?.colors?.main).toBe('rgba(59, 130, 246, 1)')
   })
 })
