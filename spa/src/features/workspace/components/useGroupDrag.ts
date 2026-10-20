@@ -5,8 +5,7 @@
 //   - A drag that starts on a control inside the row (the close button, an input) is not a group drag; one that is not ours (a file, text) is never touched.
 import { useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { acceptsDrag, decideDrop, type DropTarget } from '../../../lib/task-groups/drag'
-import { fileSession, takeSessionOut, type SessionRef } from '../../../lib/task-groups/session-actions'
-import type { ManualActionResult } from '../../../lib/task-groups/manual-actions'
+import { fileSession, takeSessionOut, type SessionActionResult, type SessionRef } from '../../../lib/task-groups/session-actions'
 
 export const GROUP_DRAG_MIME = 'application/x-purdex-group-session'
 
@@ -16,7 +15,7 @@ const CONTROL = 'button, input, textarea, select, a'
 interface Input {
   /** The solo session a tab row stands for NOW and the manual group it is in, or null when the row cannot be dragged. */
   sourceOf: (tabId: string) => { session: SessionRef; currentGroupId: string | null } | null
-  onResult: (r: ManualActionResult) => void
+  onResult: (r: SessionActionResult) => void
 }
 
 export function useGroupDrag({ sourceOf, onResult }: Input) {

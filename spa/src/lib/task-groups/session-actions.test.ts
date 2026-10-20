@@ -16,6 +16,11 @@ import type { SessionQuota } from '../team/types'
 const q = (session_id: string, root_session_id: string): SessionQuota => ({ session_id, root_session_id, title: '', address: `mlab/${session_id}`, is_lead: false, self_left: 0, member_pool_left: 0, rev: 1 })
 const ref = (over: Partial<SessionRef> = {}): SessionRef => ({ hostId: 'h1', agentSessionId: 'AG1', tabId: 't1', ...over })
 const GROUP = { name: 'G', members: [], createdAt: 1 }
+/** t1: a tab showing the session `agent` (null = none recorded) on h1, in the group g1 by its own `group`. */
+const tabOf = (agent: string | null, hostId = 'h1') => ({
+  id: 't1', group: 'group\u0000g1',
+  layout: { type: 'leaf', pane: { id: 'p1', content: { kind: 'tmux-session', hostId, sessionCode: 'S1', mode: 'terminal', cachedName: 'n', tmuxInstance: 'I', ...(agent ? { rebuild: { agent: { sessionId: agent } } } : {}) } } },
+}) as never
 
 beforeEach(() => {
   readFirstPage.mockReset()
@@ -23,7 +28,7 @@ beforeEach(() => {
   useUnattendedStore.setState({ byHost: { h1: { quotaSupport: 'yes' } } as never })
   useHostStore.setState({ hosts: {}, runtime: {} })
   useManualGroupsStore.setState({ order: ['g1', 'g2'], groups: { g1: { ...GROUP }, g2: { ...GROUP, name: 'G2' } } })
-  useTabStore.setState({ tabs: { t1: { id: 't1', group: 'group\u0000g1' } } as never })
+  useTabStore.setState({ tabs: { t1: tabOf('AG1') } })
 })
 
 describe('fileSession', () => {
@@ -52,12 +57,14 @@ describe('fileSession', () => {
   })
 
   it('a pane that recorded no agent session id has no root to look for: no-root, and the host is not asked', async () => {
+    useTabStore.setState({ tabs: { t1: tabOf(null) } })
     expect(await fileSession(ref({ agentSessionId: null }), 'g1')).toEqual({ ok: false, reason: 'no-root' })
     expect(readFirstPage).not.toHaveBeenCalled()
   })
 
   it('a session of ANY host goes into any group', async () => {
     useUnattendedStore.setState({ byHost: { h1: { quotaSupport: 'yes' }, h2: { quotaSupport: 'yes' } } as never })
+    useTabStore.setState({ tabs: { t1: tabOf('AG2', 'h2') } })
     readFirstPage.mockResolvedValue({ quotas: [q('AG2', 'R2')] })
     expect(await fileSession(ref({ hostId: 'h2', agentSessionId: 'AG2' }), 'g1')).toEqual({ ok: true })
     expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h2', root: 'R2' }])
@@ -94,5 +101,41 @@ describe('takeSessionOut', () => {
     readFirstPage.mockRejectedValue(new Error('down'))
     expect(await takeSessionOut(ref())).toEqual({ ok: false, reason: 'no-root' })
     expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
+  })
+})
+
+describe('the tab changes while the root is being got (commit-time check)', () => {
+  /** Starts `action` with the host slow to answer; `change` runs while it waits; then the host answers. */
+  const duringRead = async <T,>(action: () => Promise<T>, change: () => void): Promise<T> => {
+    let answer: (v: unknown) => void = () => {}
+    readFirstPage.mockReturnValue(new Promise((r) => { answer = r }))
+    const pending = action()
+    change()
+    answer({ quotas: [q('AG1', 'ROOT')] })
+    return pending
+  }
+  const untouched = () => {
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([])
+    expect(useManualGroupsStore.getState().order).toEqual(['g1', 'g2'])
+  }
+  const close = () => useTabStore.setState({ tabs: {} })
+  const rebind = () => useTabStore.setState({ tabs: { t1: tabOf('AG-OTHER') } })
+
+  it.each([['closed', close], ['rebound to another session', rebind]])('fileSession: the tab %s meanwhile — refused, nothing written, the tab keeps its own group', async (_n, change) => {
+    expect(await duringRead(() => fileSession(ref(), 'g1'), change)).toEqual({ ok: false, reason: 'tab-changed' })
+    untouched()
+    if (change === rebind) expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
+  })
+
+  it.each([['closed', close], ['rebound to another session', rebind]])('startGroupWithSession: the tab %s meanwhile — no group is made', async (_n, change) => {
+    expect(await duringRead(() => startGroupWithSession(ref(), 'New'), change)).toEqual({ ok: false, reason: 'tab-changed' })
+    untouched()
+  })
+
+  it.each([['closed', close], ['rebound to another session', rebind]])('takeSessionOut: the tab %s meanwhile — the member stays and the tab keeps its group', async (_n, change) => {
+    useManualGroupsStore.setState({ groups: { g1: { ...GROUP, members: [{ host: 'h1', root: 'ROOT' }] }, g2: { ...GROUP } } })
+    expect(await duringRead(() => takeSessionOut(ref()), change)).toEqual({ ok: false, reason: 'tab-changed' })
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h1', root: 'ROOT' }])
+    if (change === rebind) expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
   })
 })

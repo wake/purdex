@@ -18,7 +18,8 @@ import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
-import { deleteManualGroup, renameManualGroup, type ManualActionResult } from '../../../lib/task-groups/manual-actions'
+import { deleteManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
+import type { SessionActionResult } from '../../../lib/task-groups/session-actions'
 import { buildGroupView, type GroupRow, type GroupSection, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
@@ -90,7 +91,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
   // An action's refusal is said in the notice line.
-  const done = (r: ManualActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
+  const done = (r: SessionActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
   // A group may be cleared only when nothing in it is alive: every member's host read for ITS session roots, and none of the members' roots a live session of its host (the display leaves out a session a team holds,
   // so an empty-looking group can still have live members). The dialog follows this on every render and goes away when it stops holding.
   const clearBlocked = (groupId: string): string | null => {

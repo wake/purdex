@@ -2212,6 +2212,7 @@
   "taskgroups.err.too-many-groups": "任務編組已達上限（最多 32 組）",
   "taskgroups.err.bad-name": "名稱需要 1 到 64 個位元組，且不能含控制字元",
   "taskgroups.err.id-taken": "編組代號重複，請再試一次",
+  "taskgroups.err.tab-changed": "這個分頁在處理的時候變了，沒有動到編組，請再試一次",
   "taskgroups.err.bad-color": "這個顏色不能用",
   "taskgroups.err.bad-id": "編組代號不正確，請再試一次",
   "taskgroups.err.group-changed": "這個編組剛被改過（可能是別的裝置），沒有清除，請再看一次",

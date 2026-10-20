@@ -3,8 +3,8 @@
 // answer is told so in words through `report`. Pure but for the actions it hands to the rows.
 import type { TabMenuExtra } from '../../stores/useTabMenuExtrasStore'
 import { MAX_GROUPS } from './manual-edits'
-import { defaultManualGroupName, type ManualActionResult } from './manual-actions'
-import { fileSession, startGroupWithSession, takeSessionOut, type SessionRef } from './session-actions'
+import { defaultManualGroupName } from './manual-actions'
+import { fileSession, startGroupWithSession, takeSessionOut, type SessionActionError, type SessionRef } from './session-actions'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -20,14 +20,14 @@ export interface RowMenuInput {
 }
 
 /** A refusal in words (the keys are `taskgroups.err.<reason>`). */
-export function failureText(t: Translate, r: Extract<ManualActionResult, { ok: false }>): string {
+export function failureText(t: Translate, r: { ok: false; reason: SessionActionError }): string {
   return t(`taskgroups.err.${r.reason}`)
 }
 
 export function rowMenuItems(i: RowMenuInput): TabMenuExtra[] {
   const { t, session, groups, currentGroupId } = i
   const current = groups.find((g) => g.id === currentGroupId)
-  const done = (r: { ok: true } | Extract<ManualActionResult, { ok: false }>) => i.report(r.ok ? null : failureText(t, r))
+  const done = (r: { ok: true } | { ok: false; reason: SessionActionError }) => i.report(r.ok ? null : failureText(t, r))
 
   const items: TabMenuExtra[] = groups
     .filter((g) => g.id !== currentGroupId)
