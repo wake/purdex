@@ -135,12 +135,24 @@ func normalizeGoFlags(cmd []string) []string {
 		if strings.HasPrefix(w, "--") && len(w) > 2 && w[2] != '-' {
 			w = w[1:]
 		}
-		if rest, ok := strings.CutPrefix(w, "-test."); ok && rest != "" { // -test.run is -run: go test passes the -test. names through
+		// -test.run is -run: the test flags of `go help testflag` take the optional test. prefix. Nothing else does: -test.p is no -p, it is an
+		// unknown flag for the test program, and must stay what it is (a command that fails is not one to turn into a task)
+		if rest, ok := strings.CutPrefix(w, "-test."); ok && goTestFlags[flagName("-"+rest)] {
 			w = "-" + rest
 		}
 		out = append(out, w)
 	}
 	return out
+}
+
+// goTestFlags are the flags that `go help testflag` lists, the ones that may be written with the test. prefix (-test.run for -run). Build
+// flags such as -p, -tags and -race are not among them.
+var goTestFlags = map[string]bool{
+	"-benchmem": true, "-benchtime": true, "-bench": true, "-blockprofile": true, "-blockprofilerate": true, "-count": true,
+	"-coverprofile": true, "-cpu": true, "-cpuprofile": true, "-failfast": true, "-fullpath": true, "-fuzz": true, "-fuzzminimizetime": true,
+	"-fuzztime": true, "-json": true, "-list": true, "-memprofile": true, "-memprofilerate": true, "-mutexprofile": true,
+	"-mutexprofilefraction": true, "-outputdir": true, "-parallel": true, "-run": true, "-short": true, "-shuffle": true, "-skip": true,
+	"-testlogfile": true, "-timeout": true, "-trace": true, "-v": true,
 }
 
 // beforeGoArgs is the part of a `go test` command that is go's own flags and packages: what follows -args or a lone -- is for the test

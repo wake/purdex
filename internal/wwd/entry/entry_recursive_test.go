@@ -128,6 +128,27 @@ func TestMatch_TheHintDoesNotTakeAFlagValueForAPackage(t *testing.T) {
 	}
 }
 
+// Only the test flags of `go help testflag` take the optional test. prefix: -test.p is not -p (it is an unknown flag, handed to the test
+// program, where the command fails), so it must not be read as the run-only flag and dropped, leaving one package for the local task (#3711).
+func TestMatch_OnlyTestFlagsTakeTheTestPrefix(t *testing.T) {
+	root := purdexRoot(t)
+	for name, argv := range map[string][]string{
+		"-test.p is not -p":             {"go", "test", "./internal/wwd/entry/", "-test.p", "1"},
+		"-test.p= is not -p":            {"go", "test", "./internal/wwd/entry/", "-test.p=1"},
+		"-test.tags is not -tags":       {"go", "test", "-test.tags=e2e", "./internal/wwd/entry/"},
+		"-test.race is not -race":       {"go", "test", "-test.race", "./internal/wwd/entry/"},
+		"-test.nosuchflag":              {"go", "test", "-test.nosuchflag", "./internal/wwd/entry/"},
+		"--test.p (two dashes) neither": {"go", "test", "--test.p", "1", "./internal/wwd/entry/"},
+	} {
+		r := Match(root, argv)
+		assert.NotEqual(t, ActionRewrite, r.Action, name+": an unknown flag is not read as a run-only one and dropped")
+	}
+	// the flags that do take the prefix still do
+	r := Match(root, []string{"go", "test", "-test.v", "-test.count=1", "./internal/wwd/entry/"})
+	assert.Equal(t, "go-pkg", r.Task)
+	assert.Equal(t, ActionRewrite, r.Action)
+}
+
 // A flag that picks what runs, or that is not a way of running at all, is another command: it is not the task, whatever else matches.
 func TestMatch_FlagsThatChangeWhatRunsAreNotIgnored(t *testing.T) {
 	root := purdexRoot(t)
