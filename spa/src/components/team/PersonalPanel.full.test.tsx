@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
+import { SEAT_LIGHT_POSITION } from '../overlay-dot'
 import { TEAM_COLORS } from './team-display'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
@@ -68,6 +69,13 @@ describe('the card (R12–R15)', () => {
     expect(q('personal-card-name').textContent).toBe('purdex-iface-tg5') // no persona in this fixture: the pdx title takes the name's place (R15)
     expect(q('personal-card-ctx').textContent).toBe('—')
     expect(q('personal-card-line').textContent).toBe('Wiring the login form')
+  })
+  it('the card\'s light is placed like the team rows\' and the tab rows\': the dot\'s own top and right of the icon box', () => {
+    scene()
+    const box = q('personal-card-light')
+    expect(box.className).toContain('absolute')
+    expect(box.style.top).toBe(`${SEAT_LIGHT_POSITION.top}px`)
+    expect(box.style.right).toBe(`${SEAT_LIGHT_POSITION.right}px`)
   })
   it('no status at all: the card is one line (R13)', () => {
     scene()

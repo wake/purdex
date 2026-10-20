@@ -2,6 +2,7 @@
 import { HandPalm, WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
 import { STATUS_COLORS } from './status-colors'
+import { OVERLAY_DOT, OVERLAY_RING } from './overlay-dot'
 import { useI18nStore } from '../stores/useI18nStore'
 
 /** Render mode — orthogonal to the tab-level indicator style. */
@@ -25,8 +26,6 @@ interface Props {
 
 const UNREAD_COLOR = '#ef4444'
 
-/** The overlay dot's box, in px from the icon slot's top-right corner. */
-const OVERLAY_DOT = { size: 6, top: -1, right: -2 }
 /** The 「等待核准」 hand in overlay mode: this size, 1px left of the dot, on the dot's top line. */
 const OVERLAY_HAND_SIZE = 8
 const OVERLAY_HAND_RIGHT = OVERLAY_DOT.right + OVERLAY_DOT.size + 1
@@ -78,7 +77,7 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false, a
           top: OVERLAY_DOT.top,
           right: OVERLAY_DOT.right,
           backgroundColor: color,
-          boxShadow: `0 0 0 1.5px ${ringColor}`,
+          boxShadow: `0 0 0 ${OVERLAY_RING}px ${ringColor}`,
         }}
       />
     )
