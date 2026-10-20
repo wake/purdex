@@ -20,8 +20,8 @@ import hostsJson from '../../../lib/pool/__fixtures__/pool_hosts_response.json'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
 vi.mock('../../hosts/HostColorPicker', () => ({
-  HostColorPicker: (p: { mode: string; onModeChange: (m: 'console' | 'terminal' | 'execution') => void; onSetLayer: (m: 'console' | 'terminal' | 'execution', l: 'main', v: { color: string; alpha: number }) => void; onClearMode: (m: 'console' | 'terminal' | 'execution') => void }) => (
-    <div data-testid="mock-color-picker" data-mode={p.mode}>
+  HostColorPicker: (p: { legacyColor?: string; mode: string; onModeChange: (m: 'console' | 'terminal' | 'execution') => void; onSetLayer: (m: 'console' | 'terminal' | 'execution', l: 'main', v: { color: string; alpha: number }) => void; onClearMode: (m: 'console' | 'terminal' | 'execution') => void }) => (
+    <div data-testid="mock-color-picker" data-mode={p.mode} data-legacy={p.legacyColor ?? ''}>
       <button data-testid="mock-color-set" onClick={() => p.onSetLayer(p.mode as 'terminal', 'main', { color: '#336699', alpha: 100 })}>set</button>
       <button data-testid="mock-color-clear" onClick={() => p.onClearMode(p.mode as 'terminal')}>clear</button>
       <button data-testid="mock-mode-console" onClick={() => p.onModeChange('console')}>console</button>
@@ -96,6 +96,17 @@ describe('colour and icon — written where the host\'s look lives', () => {
     fireEvent.click(screen.getByTestId('mock-color-set'))
     fireEvent.click(screen.getByTestId('mock-color-clear'))
     expect(usePoolHostsStore.getState().looks[MSERV]?.colors).toBeUndefined()
+  })
+})
+
+describe('the legacy single colour (codex R1)', () => {
+  it('a host that has only the old `color` shows it to the colour editor, and clearing the mode removes it', () => {
+    usePoolHostsStore.setState({ order: [], looks: { [MSERV]: { color: '#112233' } } })
+    mount(monitorHost(MSERV, 'mserv', null))
+    expect(screen.getByTestId('mock-color-picker')).toHaveAttribute('data-legacy', '#112233')
+    fireEvent.click(screen.getByTestId('mock-mode-console'))
+    fireEvent.click(screen.getByTestId('mock-color-clear'))
+    expect(usePoolHostsStore.getState().looks[MSERV]?.color).toBeUndefined()
   })
 })
 

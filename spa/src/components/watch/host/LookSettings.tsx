@@ -47,6 +47,9 @@ export function LookSettings({ host }: { host: MonitorHost }) {
   const setMode = (m: HostColorMode) => { writeLookMode(host.hostId, m); setModeState(m) }
   const look = host.look
   const indicator = look.indicator
+  // The legacy single `color` counts as the console colour; an edit that goes through `withColorLayer` replaces it (and drops it from the look).
+  const colorsOf = (): HostLookEntry => ({ colors: look.colors, ...(look.color !== undefined ? { color: look.color } : {}) }) as HostLookEntry
+  const writeColors = (next: HostLookEntry | null) => { if (next) writePoolHostLook(host.hostId, { colors: next.colors ?? null, color: next.color ?? null }) }
   const write = (next: PoolHostIndicator) => writePoolHostLook(host.hostId, { indicator: next })
   const items = INDICATOR_ITEMS.map((i) => ({ value: i, label: t(`watch.look.item.${i}`) }))
   const itemSelect = (index: 0 | 1) => (
@@ -65,15 +68,9 @@ export function LookSettings({ host }: { host: MonitorHost }) {
         </SettingItem>
         <div className="py-2">
           <div className="text-xs text-text-secondary mb-1">{t('hosts.color.label')}</div>
-          <HostColorPicker colors={look.colors} mode={mode} onModeChange={setMode}
-            onSetLayer={(m, layer, value) => {
-              const next = withColorLayer({ colors: look.colors } as HostLookEntry, m, layer, value)
-              if (next) writePoolHostLook(host.hostId, { colors: next.colors ?? null })
-            }}
-            onClearMode={(m) => {
-              const next = withColorLayer({ colors: look.colors } as HostLookEntry, m, 'main', null)
-              if (next) writePoolHostLook(host.hostId, { colors: next.colors ?? null })
-            }} />
+          <HostColorPicker colors={look.colors} legacyColor={look.color} mode={mode} onModeChange={setMode}
+            onSetLayer={(m, layer, value) => writeColors(withColorLayer(colorsOf(), m, layer, value))}
+            onClearMode={(m) => writeColors(withColorLayer(colorsOf(), m, 'main', null))} />
         </div>
         <div className="py-2">
           <div className="text-xs text-text-secondary mb-1">{t('hosts.icon.label')}</div>

@@ -1,13 +1,14 @@
 // spa/src/components/watch/host/SettingsTab.test.tsx — the host page's 設定 tab as a whole (MON-9a-1): the order of its sections, the same layout with and without a daemon, the guardian section last and collapsed
 // and only where there is a daemon, and the worker settings working inside it (spec M46, M47, M52). The pieces have their own tests; the pool and the App host stores are real, the daemon's HTTP is mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react'
 import { SettingsTab } from './SettingsTab'
 import { PENDING_NOTICE_MS } from '../WorkerSettings'
 import { usePoolStore } from '../../../lib/pool/store'
 import { clearControlDenied } from '../../../lib/pool/control-api'
 import { clearWorkerDrafts } from '../../../lib/pool/worker-draft-memory'
 import { clearWatchDrafts } from '../../../lib/watch/draft-memory'
+import { clearViewMemory, readLookMode } from '../../../lib/watch/view-memory'
 import { parseFacts, parseHostsAnswer } from '../../../lib/pool/parse'
 import type { PoolHost, PoolWorker } from '../../../lib/pool/types'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
@@ -53,7 +54,7 @@ beforeEach(() => {
   vi.setSystemTime(1_000_000)
   hostFetch.mockReset()
   hostFetch.mockImplementation(async (_id: string, path: string) => (path === '/api/hostconfig' ? reply(200, { watch: { items: { enabled: true }, revision: 1 } }) : reply(200, { ok: true })))
-  clearControlDenied(); clearWorkerDrafts(); clearWatchDrafts()
+  clearControlDenied(); clearWorkerDrafts(); clearWatchDrafts(); clearViewMemory()
   readOnce = vi.fn()
   usePoolStore.getState().reset()
   usePoolStore.setState({ readOnce } as never)
@@ -122,6 +123,23 @@ describe('changing host in place (codex attack)', () => {
     await act(async () => {})
     expect(screen.getByTestId('pool-pause-allow-release')).not.toBeChecked()
     expect(screen.queryByTestId('watch-set-guardian')).toBeNull() // collapsed again: the old section was unmounted, not reused
+  })
+})
+
+describe('the colour mode when the page changes host in place (codex R1)', () => {
+  it('the next host starts on its own remembered mode, and a change on it is written to its memory, not the previous host\'s', async () => {
+    setPool([poolHost('air26'), poolHost('mlab')])
+    const { rerender } = render(<SettingsTab host={monitorHost('air26', null)} />)
+    await act(async () => {})
+    const mode = (name: string) => within(screen.getByTestId('look-settings')).getByRole('button', { name })
+    fireEvent.click(mode(t('hosts.color.mode.console')))
+    expect(mode(t('hosts.color.mode.console'))).toHaveAttribute('aria-pressed', 'true')
+    rerender(<SettingsTab host={monitorHost('mlab', null)} />)
+    await act(async () => {})
+    expect(mode(t('hosts.color.mode.terminal'))).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(mode(t('hosts.color.mode.execution')))
+    expect(readLookMode('id-mlab')).toBe('execution')
+    expect(readLookMode('id-air26')).toBe('console')
   })
 })
 

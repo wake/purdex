@@ -81,6 +81,15 @@ describe('where a look lives does not flip with the connection', () => {
     expect(useHostLookStore.getState().looks['cfg-a']).toMatchObject({ icon: 'Cube' })
     expect(usePoolHostsStore.getState().looks[WWD_A]).toBeUndefined()
   })
+  it('clears the legacy single colour (`color`) of a daemon host look and of a pool-store look', () => {
+    useHostLookStore.setState({ looks: { 'cfg-a': { color: '#112233', icon: 'HardDrives' } } })
+    writePoolHostLook(WWD_A, { color: null })
+    expect(useHostLookStore.getState().looks['cfg-a']).toEqual({ icon: 'HardDrives' })
+    useNexHostStore.setState({ byHost: {} } as never)
+    usePoolHostsStore.setState({ order: [], looks: { [WWD_A]: { color: '#445566', icon: 'Cube' } } })
+    writePoolHostLook(WWD_A, { color: null })
+    expect(usePoolHostsStore.getState().looks[WWD_A]).toEqual({ icon: 'Cube' })
+  })
   it('a face written to the pool store before the owner was known shows until the host look has one', () => {
     useNexHostStore.setState({ byHost: {} } as never)
     writePoolHostLook(WWD_A, { icon: 'Cube' })
