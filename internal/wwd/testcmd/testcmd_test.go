@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/submit"
@@ -157,12 +156,12 @@ type fakeGate struct {
 	calls   int
 	code    int
 	out     string
-	waitMax time.Duration // the WaitMax of the last call
-	last    gate.Options  // the options of the last call
-	onRun   func()        // called while the command "runs" (nil: nothing)
+	waitMax time.Duration    // the WaitMax of the last call
+	last    fastlane.Options // the options of the last call
+	onRun   func()           // called while the command "runs" (nil: nothing)
 }
 
-func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
+func (g *fakeGate) Run(_ context.Context, o fastlane.Options) (int, error) {
 	g.calls++
 	if g.onRun != nil {
 		g.onRun()
@@ -170,8 +169,8 @@ func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
 	g.waitMax = o.WaitMax
 	g.last = o
 	for _, kv := range o.Env {
-		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
-			o.Stderr.Write([]byte(gate.AdmittedMark(nonce)))
+		if nonce, ok := strings.CutPrefix(kv, fastlane.AdmittedMarkEnv+"="); ok {
+			o.Stderr.Write([]byte(fastlane.AdmittedMark(nonce)))
 		}
 	}
 	o.Stdout.Write([]byte(g.out))
@@ -496,10 +495,10 @@ func TestInterruptingAFastLaneRunStopsItAndSaysSo(t *testing.T) {
 
 type blockingGate struct{ started chan struct{} }
 
-func (g *blockingGate) Run(ctx context.Context, o gate.Options) (int, error) {
+func (g *blockingGate) Run(ctx context.Context, o fastlane.Options) (int, error) {
 	for _, kv := range o.Env {
-		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
-			o.Stderr.Write([]byte(gate.AdmittedMark(nonce)))
+		if nonce, ok := strings.CutPrefix(kv, fastlane.AdmittedMarkEnv+"="); ok {
+			o.Stderr.Write([]byte(fastlane.AdmittedMark(nonce)))
 		}
 	}
 	close(g.started)

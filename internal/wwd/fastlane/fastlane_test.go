@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/submit"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -60,17 +59,30 @@ func tree(t *testing.T) string {
 	return root
 }
 
+// directNoTTY is the direct runner with an empty stdin, so a test run from a terminal does not take the terminal's process group
+// (the direct runner leaves a command that reads the terminal in the caller's group).
+type directNoTTY struct{}
+
+func (directNoTTY) Run(ctx context.Context, o Options) (int, error) {
+	o.Stdin = strings.NewReader("")
+	return Direct{}.Run(ctx, o)
+}
+
+// testEnv is what a real run gets from these tests: the path only. The environment of a test that runs inside a wwd job carries that
+// job's mark, and the direct runner ends every process that carries the mark of the run it is running, the test's own included.
+func testEnv() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+
 type fakeGate struct {
 	mu    sync.Mutex
-	calls []gate.Options
-	run   func(ctx context.Context, o gate.Options) int
+	calls []Options
+	run   func(ctx context.Context, o Options) int
 	// skipMark: the gate never admits the command (it printed no mark); a run func may print the mark itself later.
 	skipMark bool
 	// waitedOut is what the gate reports through Options.WaitedOut: the wait for a slot ran past WaitMax.
 	waitedOut bool
 }
 
-func (g *fakeGate) Run(ctx context.Context, o gate.Options) (int, error) {
+func (g *fakeGate) Run(ctx context.Context, o Options) (int, error) {
 	g.mu.Lock()
 	g.calls = append(g.calls, o)
 	g.mu.Unlock()
@@ -80,8 +92,8 @@ func (g *fakeGate) Run(ctx context.Context, o gate.Options) (int, error) {
 	// like the real gate: the admitted mark goes to the command's stderr right before the command starts
 	if !g.skipMark {
 		for _, kv := range o.Env {
-			if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
-				io.WriteString(o.Stderr, gate.AdmittedMark(nonce))
+			if nonce, ok := strings.CutPrefix(kv, AdmittedMarkEnv+"="); ok {
+				io.WriteString(o.Stderr, AdmittedMark(nonce))
 			}
 		}
 	}
@@ -146,7 +158,7 @@ const goEvents = `{"Action":"pass","Package":"p","Test":"TestA"}
 func TestRunsInTheTreeUnderALightSlotAndRecordsTheResult(t *testing.T) {
 	root := tree(t)
 	rec := newRec()
-	g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+	g := &fakeGate{run: func(_ context.Context, o Options) int {
 		o.Stdout.Write([]byte(goEvents))
 		o.Stderr.Write([]byte("FAIL\n"))
 		return 1
@@ -163,7 +175,7 @@ func TestRunsInTheTreeUnderALightSlotAndRecordsTheResult(t *testing.T) {
 		t.Fatalf("gate calls = %d", len(g.calls))
 	}
 	o := g.calls[0]
-	if o.Class != gate.ClassLight {
+	if o.Class != ClassLight {
 		t.Fatalf("class = %q, want light", o.Class)
 	}
 	if o.Dir != filepath.Join(root, "sub") {
@@ -255,7 +267,7 @@ func TestBusyLocksSendTheCallToTheQueue(t *testing.T) {
 }
 
 func TestAWwdThatCannotRecordStillRunsTheCommandUnrecorded(t *testing.T) {
-	g := &fakeGate{run: func(context.Context, gate.Options) int { return 0 }}
+	g := &fakeGate{run: func(context.Context, Options) int { return 0 }}
 	rec := newRec()
 	rec.err = ErrUnrecorded
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "go-pkg"), Args: []string{"./a"}, Gate: g, Recorder: rec})
@@ -312,7 +324,7 @@ func TestTimeout(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.Timeout = 150 * time.Millisecond
 	rec := newRec()
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { <-ctx.Done(); return 143 }}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +341,7 @@ func TestTimeout(t *testing.T) {
 func TestCallerCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	rec := newRec()
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { cancel(); <-ctx.Done(); return 130 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { cancel(); <-ctx.Done(); return 130 }}
 	res, err := Run(ctx, Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -343,10 +355,10 @@ func TestCallerCancel(t *testing.T) {
 	}
 }
 
-func mark(o gate.Options) {
+func mark(o Options) {
 	for _, kv := range o.Env {
-		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
-			io.WriteString(o.Stderr, gate.AdmittedMark(nonce))
+		if nonce, ok := strings.CutPrefix(kv, AdmittedMarkEnv+"="); ok {
+			io.WriteString(o.Stderr, AdmittedMark(nonce))
 		}
 	}
 }
@@ -355,7 +367,7 @@ func TestWaitingForASlotDoesNotCountAgainstTheTaskTimeout(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.Timeout = 100 * time.Millisecond
 	rec := newRec()
-	g := &fakeGate{skipMark: true, run: func(_ context.Context, o gate.Options) int {
+	g := &fakeGate{skipMark: true, run: func(_ context.Context, o Options) int {
 		time.Sleep(300 * time.Millisecond) // waiting for a slot, three times the task's time
 		mark(o)                            // admitted now
 		return 0
@@ -371,7 +383,7 @@ func TestWaitingForASlotDoesNotCountAgainstTheTaskTimeout(t *testing.T) {
 }
 
 func TestTheAdmittedMarkIsNotInTheOutput(t *testing.T) {
-	g := &fakeGate{run: func(_ context.Context, o gate.Options) int { o.Stderr.Write([]byte("real stderr\n")); return 0 }}
+	g := &fakeGate{run: func(_ context.Context, o Options) int { o.Stderr.Write([]byte("real stderr\n")); return 0 }}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g})
 	if err != nil {
 		t.Fatal(err)
@@ -392,9 +404,9 @@ func TestAnInstantRefusalIsInfraWhateverTheQueueTimeout(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.QueueTimeout = time.Millisecond
 	rec := newRec()
-	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int {
+	g := &fakeGate{skipMark: true, run: func(context.Context, Options) int {
 		time.Sleep(5 * time.Millisecond)
-		return gate.ExitRefused
+		return ExitRefused
 	}}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
@@ -410,8 +422,8 @@ func TestAWaitThatOutlastsTheQueueTimeoutExpires(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.QueueTimeout = 200 * time.Millisecond
 	rec := newRec()
-	g := &fakeGate{skipMark: true, waitedOut: true, run: func(context.Context, gate.Options) int {
-		return gate.ExitRefused
+	g := &fakeGate{skipMark: true, waitedOut: true, run: func(context.Context, Options) int {
+		return ExitRefused
 	}}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
@@ -428,7 +440,7 @@ func TestAWaitThatOutlastsTheQueueTimeoutExpires(t *testing.T) {
 
 func TestACommandThatExits75AfterBeingAdmittedIsATestResult(t *testing.T) {
 	rec := newRec()
-	g := &fakeGate{run: func(context.Context, gate.Options) int { return gate.ExitRefused }} // the mark was printed: it ran
+	g := &fakeGate{run: func(context.Context, Options) int { return ExitRefused }} // the mark was printed: it ran
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -525,29 +537,6 @@ func TestTheLeaseIsStillRenewedWhileTheResultIsBeingDelivered(t *testing.T) {
 	}
 }
 
-// realGate is a gate over a temp directory with one light slot, as the gate's own tests build it.
-func realGate(t *testing.T) *gate.Gate {
-	t.Helper()
-	t.Setenv(gate.RankEnv, "")
-	t.Setenv(gate.RankReasonEnv, "")
-	t.Setenv(gate.HeldEnv, "")
-	cfg := gate.Defaults()
-	cfg.Dir = t.TempDir()
-	cfg.Slots.Heavy, cfg.Slots.Light = 1, 1
-	cfg.Priority.Mode = "none"
-	cfg.Admission.DiskMinGB = 0
-	cfg.Parallelism = gate.ParallelismConfig{Mode: "fixed", ByClass: map[gate.Class]gate.ParallelismOverride{}}
-	cfg.Cache.Count1 = "off"
-	g := gate.New(cfg)
-	g.Tools = gate.Tools{}
-	g.Pressure = nil
-	g.Facts = func() gate.HostFacts { return gate.HostFacts{NCPU: 10, AvailMemMB: 8000} }
-	g.Poll = func() time.Duration { return 10 * time.Millisecond }
-	g.IsTTY = func() bool { return false }
-	g.Stderr = io.Discard
-	return g
-}
-
 const shellTask = `
 [tasks.missing-binary]
 run = "wwd-no-such-binary-xyz"
@@ -565,13 +554,13 @@ func shellTaskNamed(t *testing.T, name string) *manifest.Task {
 	return m.Tasks[name]
 }
 
-func TestRealGateAdmitsAndMarksAreStripped(t *testing.T) {
+func TestDirectRunnerAdmitsAndMarksAreStripped(t *testing.T) {
 	m, err := manifest.Parse([]byte("[tasks.t]\nrun = \"echo hello\"\nargs = \"none\"\nlocal = true\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tk := m.Tasks["t"]
-	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Gate: realGate(t), Env: os.Environ()})
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Gate: directNoTTY{}, Env: testEnv()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,9 +571,9 @@ func TestRealGateAdmitsAndMarksAreStripped(t *testing.T) {
 	}
 }
 
-func TestRealGateCommandThatCannotStartIsInfrastructure(t *testing.T) {
+func TestDirectRunnerCommandThatCannotStartIsInfrastructure(t *testing.T) {
 	rec := newRec()
-	res, err := Run(context.Background(), Request{Root: tree(t), Task: shellTaskNamed(t, "missing-binary"), Gate: realGate(t), Recorder: rec, Env: os.Environ()})
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: shellTaskNamed(t, "missing-binary"), Gate: directNoTTY{}, Recorder: rec, Env: testEnv()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,12 +619,12 @@ func TestLeaseLostWhileWaitingToDeliverNeverTriesAgain(t *testing.T) {
 func TestNotStartedWinsOverATimeoutThatFiredBetweenTheMarks(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.Timeout = 5 * time.Millisecond
-	g := &fakeGate{skipMark: true, run: func(ctx context.Context, o gate.Options) int {
+	g := &fakeGate{skipMark: true, run: func(ctx context.Context, o Options) int {
 		mark(o) // admitted: the task's timer starts
 		time.Sleep(60 * time.Millisecond)
 		for _, kv := range o.Env { // the start failed after all
-			if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
-				io.WriteString(o.Stderr, gate.NotStartedMark(nonce))
+			if nonce, ok := strings.CutPrefix(kv, AdmittedMarkEnv+"="); ok {
+				io.WriteString(o.Stderr, NotStartedMark(nonce))
 			}
 		}
 		return 127
@@ -657,7 +646,7 @@ func TestNotStartedWinsOverATimeoutThatFiredBetweenTheMarks(t *testing.T) {
 func TestAnImmediateRefusalIsNotAnExpiryEvenWithAShortQueueTimeout(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.QueueTimeout = 500 * time.Millisecond
-	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int { return gate.ExitRefused }}
+	g := &fakeGate{skipMark: true, run: func(context.Context, Options) int { return ExitRefused }}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g})
 	if err != nil {
 		t.Fatal(err)
@@ -693,7 +682,7 @@ func TestAFileThatIsASymlinkOutOfTheTreeIsRefused(t *testing.T) {
 
 func TestGateRefusalIsInfrastructureNotATestResult(t *testing.T) {
 	rec := newRec()
-	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int { return gate.ExitRefused }}
+	g := &fakeGate{skipMark: true, run: func(context.Context, Options) int { return ExitRefused }}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -712,7 +701,7 @@ func TestCancelFromTheOriginStopsTheCommand(t *testing.T) {
 	rec := newRec()
 	rec.h.every = 20 * time.Millisecond
 	rec.h.heartbeat = func() (bool, error) { return beats.Add(1) >= 2, nil }
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { <-ctx.Done(); return 143 }}
 	tk := task(t, "one-file")
 	tk.Timeout = 10 * time.Second
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
@@ -729,7 +718,7 @@ func TestALeaseThatCannotBeRenewedEndsTheCommandAsLost(t *testing.T) {
 	rec := newRec()
 	rec.h.every, rec.h.lease = 10*time.Millisecond, 60*time.Millisecond
 	rec.h.heartbeat = func() (bool, error) { return false, errors.New("409") }
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { <-ctx.Done(); return 143 }}
 	tk := task(t, "one-file")
 	tk.Timeout = 10 * time.Second
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
@@ -746,7 +735,7 @@ func TestAClaimWwdNoLongerAcceptsEndsTheCommandAtOnce(t *testing.T) {
 	rec := newRec()
 	rec.h.every, rec.h.lease = 10*time.Millisecond, time.Hour // the lease alone would take an hour to run out
 	rec.h.heartbeat = func() (bool, error) { return false, ErrStale }
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { <-ctx.Done(); return 143 }}
 	tk := task(t, "one-file")
 	tk.Timeout = 10 * time.Second
 	start := time.Now()
@@ -775,7 +764,7 @@ func TestAStaleHeartbeatDoesNotCutShortTheDeliveryOfTheResult(t *testing.T) {
 	oldB, oldF := deliverBackoff, deliverFor
 	deliverBackoff, deliverFor = time.Millisecond, time.Minute
 	defer func() { deliverBackoff, deliverFor = oldB, oldF }()
-	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	g := &fakeGate{run: func(ctx context.Context, _ Options) int { <-ctx.Done(); return 143 }}
 	tk := task(t, "one-file")
 	tk.Timeout = 10 * time.Second
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})

@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/submit"
@@ -49,11 +48,6 @@ func (e *ArgError) Unwrap() error { return e.Err }
 
 // ExitTimeout is the exit status for a command that ran out of time (spec §8.1).
 const ExitTimeout = 124
-
-// Gater runs a command under a gate slot; *gate.Gate is one.
-type Gater interface {
-	Run(ctx context.Context, o gate.Options) (int, error)
-}
 
 // Recorder registers a fast-lane run with the local wwd (its fast-lane entry checks the locks against every job on this host
 // and records the run as running). Register returns ErrLocksBusy when a lock is taken.
@@ -104,7 +98,7 @@ type Request struct {
 	Recorder Recorder
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
 	// GateClass is the slot the run takes: "" is the light slot of a declared task, an undeclared command takes a heavy one.
-	GateClass gate.Class
+	GateClass Class
 	// TeeStdout and TeeStderr, when set, also receive the command's output as it is written (the log keeps it as well): a caller
 	// that has to show the output has it live. A tee that fails or stalls never stops the command.
 	TeeStdout, TeeStderr io.Writer
@@ -194,9 +188,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	var admitted, timedOut, notStarted atomic.Bool
 	var timer atomic.Pointer[time.Timer]
 	nonce := newNonce()
-	env = append(env, gate.AdmittedMarkEnv+"="+nonce)
+	env = append(env, AdmittedMarkEnv+"="+nonce)
 	outTee, errTee := newTee(cp.Stdout(), req.TeeStdout), newTee(cp.Stderr(), req.TeeStderr)
-	stderr := &admitFilter{w: errTee, admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
+	stderr := &admitFilter{w: errTee, admitted: AdmittedMark(nonce), notStartedMark: NotStartedMark(nonce),
 		onAdmitted: func() {
 			admitted.Store(true)
 			timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
@@ -218,8 +212,8 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 	started := time.Now()
 	var waitedOut bool // the gate's own word that the wait for a slot ran out, which an exit 75 alone does not say
-	code, gateErr := req.Gate.Run(runCtx, gate.Options{
-		Argv: argv, Class: gateClass(req.GateClass), ClassSource: "kind", Env: env,
+	code, gateErr := req.Gate.Run(runCtx, Options{
+		Argv: argv, Class: gateClass(req.GateClass), Env: env,
 		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
 		WaitMax: task.QueueTimeout, WaitedOut: &waitedOut,
 		Stdout: outTee, Stderr: stderr,
@@ -235,7 +229,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	res.TailCut = tailCut(filepath.Join(out, "log"), len(tail), logCut)
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
-	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned))
+	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == ExitRefused || code == ExitOrphaned))
 	switch {
 	case leaseLost.Load() || stale.Load():
 		res.State, res.Reason, res.Exit = wire.StateFailed, "lost", -1
@@ -243,7 +237,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
 	case timedOut.Load() && !notStarted.Load(): // a command that never started cannot have run out of time
 		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
-	case notRun && code == gate.ExitRefused && gateErr == nil && !notStarted.Load() && waitedOut:
+	case notRun && code == ExitRefused && gateErr == nil && !notStarted.Load() && waitedOut:
 		res.State, res.Reason, res.Exit = wire.StateExpired, "queue_timeout", -1 // waited for a slot as long as a queued job may
 	case notRun:
 		res.State, res.Reason = wire.StateFailed, "infra"
@@ -453,9 +447,9 @@ func lines(b []byte) []string {
 }
 
 // gateClass is the slot class of a run: light unless the request names another.
-func gateClass(c gate.Class) gate.Class {
+func gateClass(c Class) Class {
 	if c == "" {
-		return gate.ClassLight
+		return ClassLight
 	}
 	return c
 }
