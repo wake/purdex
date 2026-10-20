@@ -34,10 +34,10 @@ func TestRollupDiskIOUnionAndMean(t *testing.T) {
 		t.Fatalf("%+v", got.DiskIO)
 	}
 	d0, d2 := got.DiskIO[0], got.DiskIO[1]
-	if d0.Device != "disk0" || !near(d0.ReadBps, 200) || !near(d0.WriteBps, 20) { // (100+300)/2, (10+30)/2: a null sample is skipped
+	if d0.Device != "disk0" || !nearTo(d0.ReadBps, 200) || !nearTo(d0.WriteBps, 20) { // (100+300)/2, (10+30)/2: a null sample is skipped
 		t.Errorf("disk0 %+v", d0)
 	}
-	if d2.Device != "disk2" || !near(d2.ReadBps, 7) || d2.WriteBps == nil || *d2.WriteBps != 0 || d2.ReadIOPS != nil {
+	if d2.Device != "disk2" || !nearTo(d2.ReadBps, 7) || d2.WriteBps == nil || *d2.WriteBps != 0 || d2.ReadIOPS != nil {
 		t.Errorf("disk2 %+v: only the samples it was in count, and a measured 0 stays 0", d2)
 	}
 }
