@@ -14,6 +14,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/manifestref"
 )
 
 // maxManifestBytes bounds the manifest read on the facts path (every 5 s): a real manifest is a few KiB.
@@ -25,6 +26,8 @@ const maxManifestBytes = 256 << 10
 // a capability that was taken out of the file. A manifest that does not parse contributes nothing (the same as no manifest).
 type refTaskSource struct {
 	repos *clones.Source
+	// mrefs, when set, answers for the repos that have a manifest_ref: their manifest is the one at that ref (#3658), never the working tree.
+	mrefs *manifestref.Source
 	// ttl is how long the last answer is kept: the daemon's labels and the drift watcher both ask at every facts record, and the answer
 	// comes from files, so one read serves both (and a slow disk is met once, not once per asker). 0: every call reads. A manifest change
 	// shows up within ttl.
@@ -71,8 +74,15 @@ func (s *refTaskSource) read() []labels.RefTask {
 		if !ok {
 			continue
 		}
-		file, b, ok := readManifest(root)
-		if !ok {
+		var file string
+		var b []byte
+		if s.mrefs != nil && s.mrefs.Configured(name) {
+			snap, got := s.mrefs.Get(name)
+			if !got {
+				continue // not read at the ref yet: no manifest, not the stale working tree
+			}
+			file, b = "ref:"+name, snap.Manifest
+		} else if file, b, ok = readManifest(root); !ok {
 			continue
 		}
 		live[file] = true
