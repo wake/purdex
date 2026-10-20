@@ -86,6 +86,21 @@ describe('liveTopology across a reconnect (the moment after it, before /api/info
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B, ['pool.v1']) } } as never)
     expect(liveTopology().ownDaemon).toEqual({ mlab: A })
   })
+  it('the memory survives the not-connected moment in between (reconnecting, then connected with the entry still stale)', () => {
+    liveTopology()
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'reconnecting' } } } as never)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A, mserv: B })
+  })
+  it('a fresh read that no longer names the host ends the memory for good', () => {
+    liveTopology()
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: entry(['jobs.v1'], 5, 'ffffffffffffffff') } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+  })
   it('a daemon never seen as an origin\'s own is not made one by a stale entry', () => {
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
     expect(liveTopology().ownDaemon).toEqual({ mlab: A })

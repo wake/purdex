@@ -43,7 +43,13 @@ export function liveTopology(): JobsTopology {
     const e = prev ? byHost[prev] : undefined
     if (prev && runtime[prev]?.status === 'connected' && e && e.fetchedAt <= 0 && e.wwd?.hostId === h.host_id && e.daemonCapabilities?.includes(JOBS_CAPABILITY)) ownDaemon[h.alias] = prev
   }
-  lastOwn = { ...ownDaemon }
+  // Remembered across the non-connected moments of a reconnect too; forgotten once a fresh read (or the pool) no longer confirms it.
+  const aliases = new Set(pool.map((h) => h.alias))
+  for (const alias of Object.keys(lastOwn)) {
+    const e = byHost[lastOwn[alias]]
+    if (!aliases.has(alias) || (e && e.fetchedAt > 0 && ownDaemon[alias] !== lastOwn[alias])) delete lastOwn[alias]
+  }
+  Object.assign(lastOwn, ownDaemon)
   return { origins: pool.map((h) => h.alias), ownDaemon, forwarders }
 }
 
