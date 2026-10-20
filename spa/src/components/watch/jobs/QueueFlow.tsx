@@ -189,7 +189,7 @@ export function QueueFlow({ hosts, jobs, entries, now, selected, onSelect }: { h
         <div className="flex flex-wrap gap-2">
           {workers.cells.map((c) => <WorkerCellView key={c.hostId || `w:${c.alias}`} cell={c} looks={looks} now={now} {...pick} />)}
         </div>
-        {workers.off.length > 0 && <p data-testid="flow-off" className="mt-1.5 text-[11px] text-text-muted">{t('watch.jobs.flow.off_workers', { names: workers.off.join('、') })}</p>}
+        {workers.off.length > 0 && <p data-testid="flow-off" className="mt-1.5 text-[11px] text-text-muted">{t('watch.jobs.flow.off_workers', { names: workers.off.join(t('watch.jobs.flow.name_sep')) })}</p>}
       </section>
     </div>
   )

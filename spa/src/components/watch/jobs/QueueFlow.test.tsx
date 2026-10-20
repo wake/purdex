@@ -50,6 +50,11 @@ describe('the worker pool', () => {
     expect(screen.getByTestId('flow-off')).toHaveTextContent(t('watch.jobs.flow.off_workers', { names: 'mserv' }))
   })
 
+  it('two or more workers that are off are joined with the locale\'s separator', () => {
+    mount([host('mlab'), host('mserv', { enabled: false }), host('air26', { enabled: false })], [])
+    expect(screen.getByTestId('flow-off')).toHaveTextContent(t('watch.jobs.flow.off_workers', { names: `mserv${t('watch.jobs.flow.name_sep')}air26` }))
+  })
+
   it('a job is a card in the heavy or light row of the worker holding it, free slots are 「空」, a running one has its time and a claimed one says 「準備中」', () => {
     mount([host('mlab')], [running('r', 'mlab'), job('p', { state: 'claimed', claim: claim('mlab') }), running('l', 'mlab', { slot: 'light' })])
     const cell = document.querySelector('[data-wk]') as HTMLElement

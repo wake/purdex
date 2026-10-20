@@ -3279,6 +3279,7 @@
   "watch.jobs.flow.class.heavy": "重",
   "watch.jobs.flow.class.light": "輕",
   "watch.jobs.flow.paused_until": "暫停到 {{time}}（{{name}}）",
+  "watch.jobs.flow.name_sep": "、",
   "watch.jobs.flow.off_workers": "{{names}} 的 worker 關著，打開後出現在工作池",
   "watch.jobs.flow.why_prefix": "{{n}} 件等：{{why}}",
   "watch.jobs.flow.why.held": "保留中",

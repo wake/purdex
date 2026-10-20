@@ -3279,6 +3279,7 @@
   "watch.jobs.flow.class.heavy": "heavy",
   "watch.jobs.flow.class.light": "light",
   "watch.jobs.flow.paused_until": "paused until {{time}} ({{name}})",
+  "watch.jobs.flow.name_sep": ", ",
   "watch.jobs.flow.off_workers": "The worker of {{names}} is off; it appears in the worker pool once it is on",
   "watch.jobs.flow.why_prefix": "{{n}} waiting: {{why}}",
   "watch.jobs.flow.why.held": "held",
