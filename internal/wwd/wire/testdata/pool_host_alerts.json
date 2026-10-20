@@ -1,0 +1,5 @@
+{"host": "air19", "known": true, "alerts": [
+ {"key": "disk:air19", "kind": "disk_low", "level": "push", "since": "2026-10-20T01:00:00Z", "last": "2026-10-20T01:05:00Z", "cleared_at": null, "detail": "air19 剩 3 GB"},
+ {"key": "silence:mserv", "kind": "silence", "level": "push", "since": "2026-10-20T02:00:00Z", "last": "2026-10-20T02:05:00Z", "cleared_at": null, "detail": "mserv：主機離線", "silence": "host_down"},
+ {"key": "silence:air26", "kind": "silence", "level": "push", "since": "2026-10-20T02:10:00Z", "last": "2026-10-20T02:15:00Z", "cleared_at": "2026-10-20T02:16:00Z", "detail": "air26：wwd 沒有回應（主機還在）", "silence": "wwd_down"}
+]}

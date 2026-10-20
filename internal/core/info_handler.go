@@ -165,6 +165,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("pool") && c.moduleFlag("pool", "events") {
 		out = append(out, "pool.events.v1") // the pool.changed host event {host}: a host's entry in GET /api/pool/hosts changed (read every 5 s from the local wwd, at most one notice per host per 2 s); the App then stops polling the hosts; only while the pool module's watch runs
 	}
+	if c.moduleReady("pool") && c.moduleFlag("pool", "alerts") {
+		out = append(out, "pool.alerts.v1") // GET /api/pool/hosts/{alias}/alerts and the alerts.changed host event {host}: a host's alert list changed (the local host at once on wwd's alert event, another host within 30 s); the App then stops polling the alerts; only while the pool module's watch runs
+	}
 	if c.moduleReady("jobs") {
 		out = append(out, "jobs.v1") // GET /api/pool/jobs, /api/pool/jobs/{id}, /api/pool/jobs/{id}/log (wwd's jobs, read through the local wwd; ?host= for another host; 503 wwd_unavailable while wwd is not running)
 	}

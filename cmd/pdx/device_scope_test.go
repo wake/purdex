@@ -60,7 +60,7 @@ func TestDeviceAllowed_EveryEntryIsARegisteredPattern(t *testing.T) {
 func TestDeviceAllowed_ExactSet(t *testing.T) {
 	want := []string{
 		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig", "GET /api/fleet",
-		"GET /api/pool/hosts", "GET /api/pool/hosts/{alias}/exceptions", "GET /api/pool/facts/history", "GET /api/pool/facts/series", // the resource pool from wwd (read-only)
+		"GET /api/pool/hosts", "GET /api/pool/hosts/{alias}/exceptions", "GET /api/pool/hosts/{alias}/alerts", "GET /api/pool/facts/history", "GET /api/pool/facts/series", // the resource pool from wwd (read-only)
 		"GET /api/pool/jobs", "GET /api/pool/jobs/{id}", "GET /api/pool/jobs/{id}/log", // the pool's jobs (read-only)
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "POST /api/sessions/{code}/send-now", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",

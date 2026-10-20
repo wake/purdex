@@ -37,6 +37,7 @@ func (m *Module) watch(ctx context.Context) {
 		case err == nil:
 			last = ""
 			m.setSelf(&p)
+			m.setHosts(p)
 			m.compare(known, based, away, p)
 			based, away = true, false
 		case ctx.Err() != nil:
@@ -96,56 +97,71 @@ func (m *Module) compare(known map[string]string, based, all bool, p wire.Pool) 
 // window joins the notice already waiting). A notice is let through only here, under mu and while watching: it is counted in m.sending
 // at once, so Stop, which waits for the count to reach 0, cannot return before it is emitted, and a timer callback that Stop (or a Stop and
 // a Start) overtook finds its entry gone and does nothing.
-func (m *Module) notify(host string) {
+func (m *Module) notify(host string) { m.notifyKind(EventPoolChanged, host) }
+
+// noticeKey keys the merge window of a notice: pool.changed by the bare host (its first and only kind), the others by kind and host.
+func noticeKey(kind, host string) string {
+	if kind == EventPoolChanged {
+		return host
+	}
+	return kind + "|" + host
+}
+
+// notifyKind is notify for any of the notices this module sends (pool.changed, alerts.changed): each kind has its own window per host.
+func (m *Module) notifyKind(kind, host string) {
+	key := noticeKey(kind, host)
 	m.mu.Lock()
 	if !m.watching {
 		m.mu.Unlock()
 		return
 	}
-	if _, waiting := m.pending[host]; waiting {
+	if _, waiting := m.pending[key]; waiting {
 		m.mu.Unlock()
 		return
 	}
 	now := m.now()
-	wait := m.mergeWithin - now.Sub(m.sentAt[host])
+	wait := m.mergeWithin - now.Sub(m.sentAt[key])
 	if wait <= 0 {
-		m.sentAt[host] = now
+		m.sentAt[key] = now
 		m.sending++
 		m.mu.Unlock()
-		m.emitNotice(host)
+		m.emitNotice(kind, host)
 		return
 	}
 	defer m.mu.Unlock()
 	var t *time.Timer
 	t = time.AfterFunc(wait, func() {
 		m.mu.Lock()
-		if m.pending[host] != t { // Stop took it back
+		if m.pending[key] != t { // Stop took it back
 			m.mu.Unlock()
 			return
 		}
-		delete(m.pending, host)
-		m.sentAt[host] = m.now()
+		delete(m.pending, key)
+		m.sentAt[key] = m.now()
 		m.sending++
 		m.mu.Unlock()
-		m.emitNotice(host)
+		m.emitNotice(kind, host)
 	})
-	m.pending[host] = t
+	m.pending[key] = t
 }
 
-// emitNotice broadcasts pool.changed for host (non-blocking: a client that cannot keep up misses a notice and re-reads on its next one)
+// emitNotice broadcasts the notice of kind for host (non-blocking: a client that cannot keep up misses a notice and re-reads on its next one)
 // and takes the notice off the count Stop waits on. The caller has counted it.
-func (m *Module) emitNotice(host string) {
+func (m *Module) emitNotice(kind, host string) {
 	defer func() {
 		m.mu.Lock()
 		m.sending--
 		m.sendIdle.Broadcast()
 		m.mu.Unlock()
 	}()
-	b, err := json.Marshal(wire.PoolChanged{Host: host})
+	if kind == EventAlertsChanged {
+		m.forget(alertsKey(host)) // again at the send: a read that was kept between the look and the send is from before the change too
+	}
+	b, err := json.Marshal(wire.PoolChanged{Host: host}) // {host}, the same body for every kind
 	if err != nil {
 		return
 	}
-	ev := core.HostEvent{Type: EventPoolChanged, Value: string(b)}
+	ev := core.HostEvent{Type: kind, Value: string(b)}
 	m.mu.Lock()
 	emit, c := m.emit, m.core
 	m.mu.Unlock()
