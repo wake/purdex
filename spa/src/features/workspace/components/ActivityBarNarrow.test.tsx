@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe('ActivityBarNarrow', () => {
   it('stacks the fleet cells as a column under the bottom buttons', () => {
-    usePoolStore.setState({ hosts: [{ host_id: '82b11c521df16c12', alias: 'a', reachable: true, facts: null, liveness: 'unknown' }, { host_id: '0123456789abcdef', alias: 'b', reachable: true, facts: null, liveness: 'unknown' }] as never, sourceHostId: 'cfg-a', start: () => {}, stop: () => {} } as never)
+    usePoolStore.setState({ hosts: [{ host_id: '82b11c521df16c12', alias: 'a', reachable: true, facts: null, liveness: 'unknown', worker: { enabled: true, slots: { heavy: 2, light: 4 } }, labels: [] }, { host_id: '0123456789abcdef', alias: 'b', reachable: true, facts: null, liveness: 'unknown', worker: { enabled: true, slots: { heavy: 2, light: 4 } }, labels: [] }] as never, sourceHostId: 'cfg-a', start: () => {}, stop: () => {} } as never)
     render(
       <ActivityBarNarrow workspaces={[]} activeWorkspaceId={null} onSelectWorkspace={() => {}} onSelectHome={() => {}} onAddWorkspace={() => {}} onOpenHosts={() => {}} onOpenSettings={() => {}} />,
     )

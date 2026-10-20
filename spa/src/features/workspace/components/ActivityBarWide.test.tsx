@@ -465,7 +465,7 @@ describe('ActivityBarWide — bottom group', () => {
   })
 
   it('puts the fleet cells right under the BottomNav, whatever the BottomNav looks like', () => {
-    usePoolStore.setState({ hosts: [{ host_id: '82b11c521df16c12', alias: 'a', reachable: true, facts: null, liveness: 'unknown' }, { host_id: '0123456789abcdef', alias: 'b', reachable: true, facts: null, liveness: 'unknown' }] as never, sourceHostId: 'cfg-a', start: () => {}, stop: () => {} } as never)
+    usePoolStore.setState({ hosts: [{ host_id: '82b11c521df16c12', alias: 'a', reachable: true, facts: null, liveness: 'unknown', worker: { enabled: true, slots: { heavy: 2, light: 4 } }, labels: [] }, { host_id: '0123456789abcdef', alias: 'b', reachable: true, facts: null, liveness: 'unknown', worker: { enabled: true, slots: { heavy: 2, light: 4 } }, labels: [] }] as never, sourceHostId: 'cfg-a', start: () => {}, stop: () => {} } as never)
     renderBar()
     const nav = screen.getByTestId('bottom-nav')
     expect(nav.nextElementSibling).toBe(screen.getByTestId('fleet-cells'))
