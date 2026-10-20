@@ -108,7 +108,12 @@ func TestGateOnPool_AHostStillSettlingMayHoldTheLabels(t *testing.T) {
 	in := queued("repo:purdex", "tool:node24")
 	assert.Equal(t, in, GateOnPool(in, wire.Pool{Peers: []wire.Peer{peer("mlab", true, true, "os:darwin"), settling}}, nil))
 
-	// ... but one that is not answering holds nothing we can wait for, with or without facts
+	// ... a settling host whose worker is known to be off is not one to wait for: the worker switch is in its info, no facts needed (#3696 critic)
+	off := peer("air26", true, false, "os:darwin", "arch:arm64")
+	off.Facts = nil
+	assert.Equal(t, ActionNone, GateOnPool(in, wire.Pool{Peers: []wire.Peer{off}}, nil).Action)
+
+	// ... and one that is not answering holds nothing we can wait for, with or without facts
 	down := peer("air26", false, true, "os:darwin")
 	down.Facts = nil
 	assert.Equal(t, ActionNone, GateOnPool(in, wire.Pool{Peers: []wire.Peer{down}}, nil).Action)

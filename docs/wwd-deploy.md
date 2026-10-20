@@ -542,7 +542,7 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   one word, so `-tags=e2e` does not match a task that has `-tags e2e`: it falls to the ad-hoc path.
 * A command that is a queued task is rewritten only when some host can take it **now**: `pdx entry match` reads the local wwd's pool (2 s) and a
   host counts when it holds all of the task's labels, answers, and has its worker on (an owner at the keyboard making it yield is waiting, not a
-  no). A host that holds the labels but is down or has its worker off does not count. A host that answers but has not sent its first facts yet (the first seconds after wwd starts, when only its `os:` and `arch:` labels are announced) leaves the answer open and the rewrite stays, as `pdx test` queues in that case. Otherwise the answer is `none` and the command runs as typed:
+  no). A host that holds the labels but is down or has its worker off does not count. A host that answers and has its worker on but has not sent its first facts yet (the first seconds after wwd starts, when only its `os:` and `arch:` labels are announced) leaves the answer open and the rewrite stays, as `pdx test` queues in that case. Otherwise the answer is `none` and the command runs as typed:
   the alternative is `pdx test` ending at once with exit 5 (aigora-v2's `vitest-root` needs `repo:aigora-v2`, which no host has), or a call moved to
   the background that waits for a down host up to the queue timeout. A pool that cannot be read is `none` too. The reason (one line, for example
   `no reachable host with a worker on holds repo:aigora-v2`) is in the JSON answer only; the hook does not print it. Local-lane tasks and ad-hoc jobs

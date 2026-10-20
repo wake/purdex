@@ -37,8 +37,9 @@ func GateOnPool(r Result, pool wire.Pool, poolErr error) Result {
 			return r
 		}
 		// answers, but its first facts record has not come: only its os and arch labels are announced so far, the repo:, tool: and earned
-		// task: labels follow. It may hold them, so this is not a "no" (pdx test reads the pool the same way and queues as usual)
-		if p.Reachable && p.Facts == nil {
+		// task: labels follow. It may hold them, so this is not a "no" (pdx test reads the pool the same way and queues as usual). Its worker
+		// switch is in its info, no facts needed: one that is off is not a host to wait for
+		if p.Reachable && p.Info.Worker.Enabled && p.Facts == nil {
 			settling = true
 		}
 	}
