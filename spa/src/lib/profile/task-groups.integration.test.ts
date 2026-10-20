@@ -165,7 +165,36 @@ describe('a group made on one device reaches another (spec §4.1)', () => {
     expect(executor!.status().sections.settings).toBe('synced')
   })
 
-  it('two devices with different local host ids adding the same two members in a different order converge — nobody pushes the other\'s back', async () => {
+  it('two devices with different local host ids adding the same members in opposite order converge — nobody pushes the other\'s back', async () => {
+    // B (local id host-b2) holds G = [r3, r2] and pushes it
+    device('host-b2', { aaaaaaaa: group([{ host: 'host-b2', root: 'r3' }, { host: 'host-b2', root: 'r2' }]) })
+    await attach(B, 'push', 'host-b2')
+    expect(sotGroups().aaaaaaaa.members).toEqual([{ host: WIRE, root: 'r2' }, { host: WIRE, root: 'r3' }])
+    const rev = daemon.rows.get('settings')!.rev
+    leave()
+
+    // A (local id host-a1) holds the same group with the same members the other way round [r2, r3] and pushes: its build is the SOT's
+    device('host-a1', { aaaaaaaa: group([{ host: 'host-a1', root: 'r2' }, { host: 'host-a1', root: 'r3' }]) })
+    const beforeA = daemon.writes.length
+    await attach(A, 'push', 'host-a1')
+    expect(settingsWrites(beforeA, A).filter((w) => w.outcome === 'applied')).toEqual([])
+    expect(daemon.rows.get('settings')!.rev).toBe(rev)
+    expect(executor!.status().sections.settings).toBe('synced')
+    const quietA = daemon.writes.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(daemon.writes.length).toBe(quietA)
+    leave()
+
+    // back on B (its order [r3, r2] again): it agrees with the SOT and writes nothing
+    device('host-b2', { aaaaaaaa: group([{ host: 'host-b2', root: 'r3' }, { host: 'host-b2', root: 'r2' }]) })
+    const beforeB = daemon.writes.length
+    await attach(B, 'push', 'host-b2')
+    expect(settingsWrites(beforeB, B).filter((w) => w.outcome === 'applied')).toEqual([])
+    expect(daemon.rows.get('settings')!.rev).toBe(rev)
+    expect(executor!.status().sections.settings).toBe('synced')
+  })
+
+  it('a member added on B after it pulled reaches the SOT once, in canonical order, and a reorder on B alone moves nothing', async () => {
     device('host-a1', { aaaaaaaa: group([{ host: 'host-a1', root: 'r1' }]) })
     await attach(A, 'push', 'host-a1')
     leave()
@@ -173,19 +202,15 @@ describe('a group made on one device reaches another (spec §4.1)', () => {
     await attach(B, 'pull', 'host-b2')
     const before = daemon.writes.length
 
-    // B adds r3, r2 (in that order) on top of r1; A's own store would hold them as r2, r3 — the payload is the same
     store().patchGroup('aaaaaaaa', { members: [{ host: 'host-b2', root: 'r1' }, { host: 'host-b2', root: 'r3' }, { host: 'host-b2', root: 'r2' }] })
     await settle()
     expect(settingsWrites(before, B).map((w) => w.outcome)).toEqual(['applied'])
-    const sot = JSON.stringify(sotGroups())
     expect(sotGroups().aaaaaaaa.members).toEqual([{ host: WIRE, root: 'r1' }, { host: WIRE, root: 'r2' }, { host: WIRE, root: 'r3' }])
 
-    // the same members, the other order, on B again: the build is the same, so nothing goes out
     const quiet = daemon.writes.length
     store().patchGroup('aaaaaaaa', { members: [{ host: 'host-b2', root: 'r2' }, { host: 'host-b2', root: 'r3' }, { host: 'host-b2', root: 'r1' }] })
     await settle()
     expect(daemon.writes.length).toBe(quiet)
-    expect(JSON.stringify(sotGroups())).toBe(sot)
     expect(executor!.status().sections.settings).toBe('synced')
   })
 
