@@ -52,6 +52,8 @@ type Meminfo struct {
 	// Active, Inactive and Cached (the file cache), each with whether the kernel gave the line.
 	Active, Inactive, Cached          uint64
 	HasActive, HasInactive, HasCached bool
+	// HasSwapTotal and HasSwapFree say the two swap lines were read: without both, swap used and total are unknown, not 0.
+	HasSwapTotal, HasSwapFree bool
 }
 
 func ParseMeminfo(text string) (Meminfo, error) {
@@ -77,9 +79,9 @@ func ParseMeminfo(text string) (Meminfo, error) {
 		case "MemAvailable":
 			m.Available, m.HasAvailable = kb<<10, true
 		case "SwapTotal":
-			m.SwapTotal = kb << 10
+			m.SwapTotal, m.HasSwapTotal = kb<<10, true
 		case "SwapFree":
-			m.SwapFree = kb << 10
+			m.SwapFree, m.HasSwapFree = kb<<10, true
 		case "Active":
 			m.Active, m.HasActive = kb<<10, true
 		case "Inactive":
@@ -111,8 +113,10 @@ func ParseStatmRSS(text string, pageSize uint64) (uint64, error) {
 // and total come from the same read; the breakdown is nil for a line the kernel did not give, and wired is always nil (no such figure).
 func rawMemFromMeminfo(mi Meminfo, pageSize uint64) RawMem {
 	m := RawMem{TotalBytes: mi.Total, PageSize: pageSize, Linux: true, AvailableBytes: mi.Available}
-	used, total := mi.SwapTotal-min(mi.SwapFree, mi.SwapTotal), mi.SwapTotal
-	m.SwapUsedBytes, m.SwapTotalBytes = &used, &total
+	if mi.HasSwapTotal && mi.HasSwapFree {
+		used, total := mi.SwapTotal-min(mi.SwapFree, mi.SwapTotal), mi.SwapTotal
+		m.SwapUsedBytes, m.SwapTotalBytes = &used, &total
+	}
 	if mi.HasActive {
 		m.ActiveBytes = &mi.Active
 	}

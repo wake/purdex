@@ -280,8 +280,11 @@ func (c *Collector) Sample() (Reading, error) {
 	}
 	if c.src.Self != nil {
 		// a failed read is not a failed sample: self is one figure among many, and the next sample reads again
+		// timed at its own read: the sources above can be slow, and the CPU time this reads covers the time since the last read, not since
+		// this sample started
+		readAt := c.src.Now()
 		if raw, err := c.src.Self(); err == nil {
-			self := c.self.Build(now, raw)
+			self := c.self.Build(readAt, raw)
 			r.Self = &self
 		}
 	}

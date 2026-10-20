@@ -59,7 +59,22 @@ func TestRawMemFromMeminfo(t *testing.T) {
 	if raw.WiredBytes != nil {
 		t.Error("Linux has no wired figure: null")
 	}
-	// a host with no swap configured has a total of 0, which is a measured zero; a meminfo without the swap keys says nothing
+	// a swap line that is missing or not a number is not a swap of 0 (R2 attack): both the total and the used are then unknown
+	for _, text := range []string{
+		"MemTotal: 1024 kB\nMemAvailable: 512 kB\n",
+		"MemTotal: 1024 kB\nMemAvailable: 512 kB\nSwapTotal: 2048 kB\n",
+		"MemTotal: 1024 kB\nMemAvailable: 512 kB\nSwapFree: 2048 kB\n",
+		"MemTotal: 1024 kB\nMemAvailable: 512 kB\nSwapTotal: many kB\nSwapFree: 1 kB\n",
+	} {
+		mi, err := ParseMeminfo(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw := rawMemFromMeminfo(mi, 4096); raw.SwapTotalBytes != nil || raw.SwapUsedBytes != nil {
+			t.Errorf("%q: swap total %v used %v want unknown", text, raw.SwapTotalBytes, raw.SwapUsedBytes)
+		}
+	}
+	// a host with no swap configured has a total of 0, which is a measured zero
 	mi, _ = ParseMeminfo("MemTotal: 1024 kB\nMemAvailable: 512 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n")
 	if raw = rawMemFromMeminfo(mi, 4096); raw.SwapTotalBytes == nil || *raw.SwapTotalBytes != 0 {
 		t.Errorf("swap total 0 is a reading: %v", raw.SwapTotalBytes)
@@ -155,6 +170,35 @@ func TestSelfBuilder(t *testing.T) {
 	// more than one core is above 100
 	if got := b.Build(t0.Add(18*time.Second), RawSelf{CPUTime: 3*time.Second + 500*time.Millisecond}); got.CPUPct == nil || *got.CPUPct < 199 {
 		t.Errorf("two cores %v want 200", got.CPUPct)
+	}
+}
+
+// The interval self.cpu_pct is divided by is the one between the two counter reads, not between the two sample starts: when the process
+// scan before the read is slow in one sample, the CPU time it covers is not the nominal 5 s (R2 attack).
+func TestCollectorSelfCPUUsesTheTimeOfItsOwnRead(t *testing.T) {
+	now := t0
+	cpu := 2 * time.Second
+	var scanTakes time.Duration
+	src := Sources{
+		Now:   func() time.Time { return now },
+		CPU:   func() (RawCPU, error) { return RawCPU{NCPU: 2, Busy: 1, Total: 2}, nil },
+		Mem:   func() (RawMem, error) { return fixtureMem(1, 1), nil },
+		Disks: func() ([]RawDisk, error) { return nil, nil },
+		Procs: func(time.Time) (ProcSnapshot, ProcContext, error) {
+			now = now.Add(scanTakes) // the slow scan moves the clock before self is read
+			return ProcSnapshot{}, ProcContext{}, nil
+		},
+		Self: func() (RawSelf, error) { return RawSelf{CPUTime: cpu}, nil },
+	}
+	c := NewCollector(src)
+	if _, err := c.Sample(); err != nil { // read at t0
+		t.Fatal(err)
+	}
+	// the second sample starts 5 s later and its scan takes 3 s: self is read at t0+8 s, having used 0.8 s since t0
+	now, cpu, scanTakes = t0.Add(5*time.Second), 2800*time.Millisecond, 3*time.Second
+	r, _ := c.Sample()
+	if r.Self == nil || r.Self.CPUPct == nil || *r.Self.CPUPct < 9.99 || *r.Self.CPUPct > 10.01 {
+		t.Fatalf("self %+v want 10 (0.8 s over the 8 s between the reads)", r.Self)
 	}
 }
 
