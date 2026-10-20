@@ -156,6 +156,9 @@ func (m *Module) emitSlotFrom(kind slotKind, code, sessionName, notifyName, hook
 		boot = m.core.BootID
 	}
 	n.FromProxy = fromProxy
+	if kind != kindNonTmux && notifyName != "" { // the frames the notify feed carries (publishNotifyFrom); memory only, see notifyLabelFor
+		n.NotifyLabel = m.notifyLabelFor(notifySessionID(kind, hookSID, p), notifyName)
+	}
 	undo := e.stamp(boot, &n)
 	if !m.emitNormalizedToCode(code, n) {
 		undo()

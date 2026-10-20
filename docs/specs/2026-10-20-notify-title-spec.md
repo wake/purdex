@@ -40,9 +40,9 @@ agent 通知（任務完成、異常中斷、需要授權、等待輸入）的�
 
 ### 3.1 daemon 自己算的部分（人名、team）
 
-- **算的位置**：送給 App 的 `NormalizedEvent` 在 notify hub 之前就已廣播（`hookemitter.go` 的 `emitNormalizedToCode`），App 訂閱時的 `agent.snapshot` 又走另一條 `buildNormalized`；所以 `notify_label` 要在這兩條路徑**共用的投影層**填，推播（`onNotify`）也從同一個 labeler 取，三者同源。labeler 只做**記憶體內查詢**（不在 `hookEmitter.mu` 裡碰 SQLite）：人名查 peers 的 atomic registry，team 名查 team 模組維護的快取（team 事件時更新），回寫的編組查記憶體表（寫入時 write-through）。
-- 名字：`NameService.CodeOf(ctx, sessionID) (string, bool)` → `PoolDisplayName(code)`（peers 的 atomic registry 已由 `SetPool` 維護，含 retired persona）；查不到為空。
-- team：lead、本機 member（`team_members` join `teams`）、遠端 member（`remote_members` 已有 `team_name`、`lead_title`、`lead_address`、`lead_ref`，`team.appearance` 會更新）→ `team_name`，空則 lead 的 label（同 §1 第 1 層）。
+- **算的位置**：送給 App 的 `NormalizedEvent` 在 notify hub 之前就已廣播（`hookemitter.go` 的 `emitNormalizedToCode`），App 訂閱時的 `agent.snapshot` 又走另一條 `buildNormalized`；所以 `notify_label` 要在這兩條路徑**共用的投影層**填，推播（`onNotify`）也從同一個 labeler 取，三者同源。labeler 只做**記憶體內查詢**（不在 `hookEmitter.mu` 裡碰 SQLite）：它內部有一張 sessionID → {persona code, team 顯示名, 讀到的時間} 的記憶體表，`Label()` 只讀這張表；查不到或資料超過 30 秒，就排一次背景重讀（單一 goroutine、同一 session 去重、不持鎖做 I/O，讀 `NameService.CodeOf` 與 team 模組的 `NotifyGroupOf`），這次呼叫照當下的表回答。所以人名與 team 名**最多晚 30 秒**反映改名、換 team（不在 peers／team 的各寫入點掛回呼，避免漏掉一個寫入點就悄悄過期）；快取還沒暖時事件不帶 `notify_label`，標題退回現行格式。表裡只存 persona code，顯示名在 `Label()` 裡用 `PoolDisplayName`（記憶體）即時查，persona 改名馬上生效。回寫的編組查記憶體表（寫入時 write-through）。
+- 名字：`NameService.CodeOf(ctx, sessionID) (string, bool)`（讀 SQLite，只在背景重讀裡呼叫，且無法回報讀取失敗：失敗視同沒有 persona，下次重讀再修正）→ `PoolDisplayName(code)`（peers 的 atomic registry 已由 `SetPool` 維護，含 retired persona；查不到為空）。
+- team：team 模組的 `NotifyGroupOf(sessionID)`（背景重讀時呼叫；不動 mod socket 用的 `ModRead`，那個答案有結構相等的測試且在 mod 的熱路徑上）：lead、本機 member（`team_members` join `teams`）、遠端 member（`remote_members` 已有 `team_name`、`lead_title`、`lead_address`、`lead_ref`，`team.appearance` 會更新）→ `team_name`，空則 lead 的 label（同 §1 第 1 層；本機 lead 先用 registry 的 live origin、離線才用 request 存的值）。讀取錯誤時保留上一次的值。
 - root：`team.LineageRootResolver.RootSessionOf(sessionID)`（以 `team.LineageRootKey` 註冊；不在 lineage 表的 session 回傳自己）；讀取錯誤時 group 留空。
 
 ### 3.2 App 回寫的部分（自訂編組、tab.group）

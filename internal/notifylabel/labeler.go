@@ -201,7 +201,18 @@ func (l *Labeler) evictLocked() {
 	}
 }
 
-// idle says no read is queued or running (for tests).
+// WaitIdle waits until no read is queued or running, up to timeout; false when it ran out (for tests, which need the
+// background read to have landed before they look at a label).
+func (l *Labeler) WaitIdle(timeout time.Duration) bool {
+	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if l.idle() {
+			return true
+		}
+	}
+	return l.idle()
+}
+
+// idle says no read is queued or running.
 func (l *Labeler) idle() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
