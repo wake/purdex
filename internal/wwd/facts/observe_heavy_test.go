@@ -249,3 +249,16 @@ func TestTrackerKeepsAddingUpALongProgramAfterManyShortOnesEnded(t *testing.T) {
 		t.Fatalf("the long program adds up to more than any short one: %+v", got)
 	}
 }
+
+// The gate shim puts `pdx gate ... -- <command>` in front of every heavy command: the tree is named after the command, not the gate.
+func TestTrackerNamesAGatedCommandAfterTheCommand(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "zsh", ccRoot())
+	h.add(201, 200, "pdx", []string{"/Users/wake/Workspace/wake/purdex/bin/pdx", "gate", "--class", "heavy", "--", "go", "test", "./x/"})
+	h.add(202, 201, "go", []string{"go", "test", "./x/"})
+	h.add(203, 202, "compile", []string{"compile"})
+	sig, _ := runHeavy(t, h, tr, 20, func(int) { h.rec(201).CPUPct, h.rec(203).CPUPct = 1, 290 })
+	if sig != "go test" {
+		t.Errorf("Signature = %q, want go test (not pdx gate)", sig)
+	}
+}

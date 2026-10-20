@@ -250,6 +250,14 @@ func signature(clean []string, depth int) string {
 	if name == "." || name == "/" || isScrubbed(name) {
 		return ""
 	}
+	if name == "pdx" && len(clean) > 2 && clean[1] == "gate" {
+		// the gate runs what follows "--" (the shim puts it in front of every heavy command): that is the command
+		for i := 2; i < len(clean)-1; i++ {
+			if clean[i] == "--" {
+				return signature(clean[i+1:], depth+1)
+			}
+		}
+	}
 	if i := shellScript(clean); i >= 0 {
 		return scriptSignature(clean[i], depth+1, name)
 	}
