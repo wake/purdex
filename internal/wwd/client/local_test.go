@@ -87,6 +87,24 @@ func TestRegisterLocal_AnotherTooManyRequestsBodyStaysAStatusError(t *testing.T)
 	}
 }
 
+// A 429 whose JSON merely decodes (an empty object, another reason, a bare refusal) is not this protocol: it stays a StatusError, so
+// the caller does not wait out its whole queue_timeout on a real service error.
+func TestRegisterLocal_AnotherTooManyRequestsJSONStaysAStatusError(t *testing.T) {
+	for _, body := range []string{`{}`, `{"reason":"other","slot":"light","reasons":["x"]}`, `{"reason":"slot_busy","slot":"medium","reasons":["x"]}`, `{"reason":"slot_busy","slot":"light","reasons":[]}`} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/local-runs", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(body))
+		})
+		_, err := New(fakeWWD(t, mux)).RegisterLocal(context.Background(), wire.LocalRunRequest{})
+		var se *StatusError
+		var sb *SlotBusyError
+		if !errors.As(err, &se) || errors.As(err, &sb) {
+			t.Fatalf("body %s: err = %v", body, err)
+		}
+	}
+}
+
 func TestHeartbeat_SendsTheClaimAndAConflictIsClaimLost(t *testing.T) {
 	var got wire.HeartbeatRequest
 	conflict := false
