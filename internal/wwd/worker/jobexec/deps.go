@@ -117,8 +117,10 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 // depsJobEnv is what the job's command is told about the dependencies it was given besides the directories: a Go task uses the module cache
 // in its workspace and nothing else (no proxy, no network, no change to go.mod or go.sum), so it needs neither credentials nor a route out.
 // These come last in the task's environment, so nothing the manifest lists can point Go elsewhere.
-// The task's own GOFLAGS stay (build tags, -p), with -mod=readonly after them: the later -mod is the one that counts.
-func depsJobEnv(ws string, lockfiles []string, taskEnv []string) []string {
+// The task's own GOFLAGS stay (build tags, -p), with -mod=readonly after them: the later -mod is the one that counts. goCache, when the job
+// was given the shared build cache (gocache.go), is its GOCACHE, and -count=1 comes with it: the test results in a cache other jobs write to
+// are not used (a command that names -count itself keeps its own: the command line wins over GOFLAGS).
+func depsJobEnv(ws string, lockfiles []string, taskEnv []string, goCache string) []string {
 	for _, lf := range lockfiles {
 		if path.Base(lf) == "go.sum" {
 			flags := "-mod=readonly"
@@ -127,7 +129,12 @@ func depsJobEnv(ws string, lockfiles []string, taskEnv []string) []string {
 					flags = strings.TrimSpace(v) + " -mod=readonly"
 				}
 			}
-			return []string{"GOMODCACHE=" + filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=" + flags, "GOPROXY=off", "GOTOOLCHAIN=local", "GOWORK=off"}
+			env := []string{"GOMODCACHE=" + filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOPROXY=off", "GOTOOLCHAIN=local", "GOWORK=off"}
+			if goCache != "" {
+				flags += " -count=1"
+				env = append(env, "GOCACHE="+goCache)
+			}
+			return append(env, "GOFLAGS="+flags)
 		}
 	}
 	return nil

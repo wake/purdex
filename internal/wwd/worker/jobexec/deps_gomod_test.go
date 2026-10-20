@@ -60,6 +60,8 @@ type goRig struct {
 	bin  string
 	log  string
 	deps string
+	// cfgGoCacheMB is the worker's bound on the shared build cache (0: the default)
+	cfgGoCacheMB int
 }
 
 func newGoRig(t *testing.T) *goRig {
@@ -77,7 +79,7 @@ func newGoRig(t *testing.T) *goRig {
 func (r *goRig) exec(t *testing.T, repo, sha string) *Exec {
 	return New(Config{
 		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: repo, commit: sha} },
-		ParentEnv: []string{"PATH=" + r.bin + ":/usr/bin:/bin", "HOME=/home/worker", "GIT_TOKEN=s3cret"}, DepsDir: r.deps, DepsKeep: 2,
+		ParentEnv: []string{"PATH=" + r.bin + ":/usr/bin:/bin", "HOME=/home/worker", "GIT_TOKEN=s3cret"}, DepsDir: r.deps, DepsKeep: 2, GoCacheMaxMB: r.cfgGoCacheMB,
 	})
 }
 
@@ -117,7 +119,7 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 
 	env := r.prepare(t, e, "j_one")
 	assert.Equal(t, 1, r.downloads(t))
-	assert.Contains(t, env, "GOFLAGS=-tags=x -mod=readonly", "the task's own flags stay, readonly is added")
+	assert.Contains(t, env, "GOFLAGS=-tags=x -mod=readonly -count=1", "the task's own flags stay, readonly is added, and with the shared build cache no test result is reused")
 	assert.Contains(t, env, "GOPROXY=off")
 	assert.Contains(t, env, "GOTOOLCHAIN=local")
 	assert.Contains(t, env, "GOWORK=off")

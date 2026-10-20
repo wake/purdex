@@ -80,6 +80,9 @@ type WorkerConfig struct {
 	DepsKeep int `toml:"deps_keep"`
 	// DepsStoreMaxMB bounds each package manager's download cache under deps_root (default 4096): one over it is emptied before the next install.
 	DepsStoreMaxMB int `toml:"deps_store_max_mb"`
+	// GoCacheMaxMB bounds the shared Go build cache of the go tasks (one per Go version, under deps_root/gocache; default 10240): over it, and
+	// with no job using it, it is emptied before the next job.
+	GoCacheMaxMB int `toml:"gocache_max_mb"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -184,6 +187,9 @@ func (c Config) validateWorker() error {
 	}
 	if c.Worker.DepsStoreMaxMB < 0 || c.Worker.DepsStoreMaxMB > 1_000_000 {
 		return fmt.Errorf("worker.deps_store_max_mb is %d, it must be 0 (the default, 4096) or 1-1000000", c.Worker.DepsStoreMaxMB)
+	}
+	if c.Worker.GoCacheMaxMB < 0 || c.Worker.GoCacheMaxMB > 1_000_000 {
+		return fmt.Errorf("worker.gocache_max_mb is %d, it must be 0 (the default, 10240) or 1-1000000", c.Worker.GoCacheMaxMB)
 	}
 	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)

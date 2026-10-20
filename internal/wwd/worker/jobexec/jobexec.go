@@ -77,6 +77,9 @@ type Config struct {
 	DepsKeep int
 	// DepsStoreMaxMB bounds each package manager's download cache in DepsDir; one over it is emptied before the next install (4096 when zero).
 	DepsStoreMaxMB int
+	// GoCacheMaxMB bounds the shared build cache of the go tasks (one per Go version, under DepsDir/gocache): over it, and with no job using
+	// it, it is emptied before the next job (10240 when zero). See gocache.go.
+	GoCacheMaxMB int
 }
 
 // Exec implements runner.Exec.
@@ -85,6 +88,9 @@ type Exec struct {
 	deps depsState // the dependency cache and what is remembered of installs (deps.go)
 	// dbJobs: the job directories whose job has a database (made in Prepare, dropped with the workspace)
 	dbJobs sync.Map
+	// goJobs: the job directories whose job holds the shared build cache (taken in Prepare, let go with the workspace)
+	goJobs  sync.Map
+	goCache goCacheState
 }
 
 func New(cfg Config) *Exec { return &Exec{cfg: cfg} }
@@ -148,6 +154,7 @@ func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, cla
 		if inner != nil {
 			err = inner() // the worktree entry and the ref in the clone first
 		}
+		e.releaseGoCache(base)
 		var dberr error
 		if _, had := e.dbJobs.LoadAndDelete(base); had && e.cfg.DB != nil {
 			dberr = e.dropBounded(key)
@@ -200,7 +207,11 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 		if err := e.prepareDeps(ctx, ref, job, ws, p.Task.Deps, p.Env); err != nil {
 			return runner.Plan{}, err
 		}
-		p.Env = append(append([]string(nil), p.Env...), depsJobEnv(ws.Dir, p.Task.Deps, p.Env)...)
+		goCache := ""
+		if hasGoSum(p.Task.Deps) {
+			goCache = e.prepareGoCache(ctx, filepath.Dir(ws.Dir))
+		}
+		p.Env = append(append([]string(nil), p.Env...), depsJobEnv(ws.Dir, p.Task.Deps, p.Env, goCache)...)
 	}
 	env := p.Env
 	if p.Task.DB == "per-job" {
@@ -244,6 +255,6 @@ func (e *Exec) Run(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot
 	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, plan.Argv)
 	return run.Run(ctx, run.Spec{
 		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.cfg.ParentEnv,
-		Timeout: plan.Timeout, KillAfter: e.cfg.KillAfter, OutDir: plan.OutDir, Procs: e.cfg.Procs, Sandbox: e.cfg.Sandbox,
+		Timeout: plan.Timeout, KillAfter: e.cfg.KillAfter, OutDir: plan.OutDir, Procs: e.cfg.Procs, Sandbox: e.sandboxOf(filepath.Dir(ws.Dir)),
 	})
 }
