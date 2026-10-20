@@ -9,6 +9,7 @@ import { watchJobs } from '../../lib/pool/jobs-driver-live'
 import { usePoolReadable } from '../../lib/pool/pool-jobs'
 import { useMonitorHosts } from '../../lib/pool/use-monitor-hosts'
 import { HostCell } from './HostCell'
+import { QueueCounts } from './QueueCounts'
 import { QueueStrip } from './QueueStrip'
 
 export interface FleetCellsProps {
@@ -31,7 +32,7 @@ export function FleetCells({ variant }: FleetCellsProps) {
       data-variant={variant}
       className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-0 pb-1'}
     >
-      {wide && <div className="basis-full pb-1"><QueueStrip /></div>}
+      {wide ? <div className="basis-full pb-1"><QueueStrip /></div> : <QueueCounts />}
       {cells.map((c) => (
         <HostCell key={c.hostId} view={c} variant={variant} isActive={false} onOpen={() => openWatchArea({ poolHost: { hostId: c.hostId, alias: c.name } })} />
       ))}

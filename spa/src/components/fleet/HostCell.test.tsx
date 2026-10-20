@@ -181,3 +181,56 @@ describe('HostCell — the hover card', () => {
     expect(screen.getAllByTestId('host-card')).toHaveLength(1)
   })
 })
+
+describe('HostCell — the narrow block (M14, M16)', () => {
+  const narrow = (v: CellView) => setup(v, { variant: 'narrow' })
+  const barsOf = () => [0, 1, 2, 3].map((i) => within(screen.getByTestId(`narrow-block-${ID}`)).getByTestId(`host-bar-${i}`))
+  it('no host icon and no ring: four bars in order CPU, memory, pressure, disk, each in its band', () => {
+    narrow(cellView({ fast: fast({ cpu: 20, mem: 75, level: 2, disk: 96 }) }))
+    expect(screen.queryByTestId(`host-badge-${ID}`)).toBeNull()
+    expect(screen.queryByTestId(`load-ring-${ID}`)).toBeNull()
+    expect(screen.queryByTestId(`load-bars-${ID}`)).toBeNull()
+    const bars = barsOf()
+    expect(bars.map((b) => b.dataset.tone)).toEqual(['ok', 'warn', 'warn', 'danger'])
+    expect(Number(bars[0].dataset.pct)).toBe(20)
+  })
+  it('the block sits on the tint of the host colour; a host without one on the neutral grey', () => {
+    narrow(cellView())
+    const tinted = screen.getByTestId(`narrow-block-${ID}`)
+    expect(tinted.dataset.tinted).toBe('true')
+    expect(tinted.style.background).not.toBe('')
+    expect(tinted.className).not.toContain('bg-surface-hover')
+  })
+  it('no colour: bg-surface-hover', () => {
+    narrow(cellView({ look: { ...cellView().look, colors: undefined, color: undefined } as CellView['look'] }))
+    const plain = screen.getByTestId(`narrow-block-${ID}`)
+    expect(plain.dataset.tinted).toBe('false')
+    expect(plain.className).toContain('bg-surface-hover')
+  })
+  it('the count is on the block\'s top right and carries its colour', () => {
+    narrow({ ...cellView(), count: { n: 4, tone: 'error', queued: 4, running: 0 } })
+    const badge = within(screen.getByTestId(`narrow-block-${ID}`)).getByTestId(`count-badge-${ID}`)
+    expect(badge.textContent).toBe('4')
+    expect(badge.className).toContain('bg-status-error')
+  })
+  it.each([
+    ['wwd_down', ''],
+    ['host_down', 'opacity-40'],
+    ['unknown', 'opacity-60'],
+  ] as const)('%s: the state icon in the middle, no bars, dimmed %s (the model gives no count)', (liveness, dim) => {
+    narrow(cellView({ liveness }))
+    const icon = screen.getByTestId(`state-icon-${ID}`)
+    expect(icon.dataset.state).toBe(liveness)
+    expect(screen.queryByTestId('host-bars')).toBeNull()
+    const dimmed = screen.getByTestId(`narrow-dim-${ID}`)
+    if (dim) expect(dimmed.className).toContain(dim)
+    else expect(dimmed.className).not.toContain('opacity')
+  })
+  it('hover opens the card to the right; a click opens the host', () => {
+    const p = narrow(cellView())
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card').getAttribute('data-placement')).toBe('right')
+    fireEvent.click(tile())
+    expect(p.onOpen).toHaveBeenCalledTimes(1)
+  })
+})

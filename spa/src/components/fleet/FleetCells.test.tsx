@@ -103,10 +103,18 @@ describe('FleetCells — the queue strip and the jobs driver (MON-3a)', () => {
     const { container } = render(<FleetCells variant="wide" />)
     expect(container.firstChild).toBeNull()
   })
-  it('the narrow bar has no strip yet (MON-4 gives it two counts)', () => {
+  it('the narrow bar has the two counts above the cells, not the strip (M15)', () => {
     answer([host(A, 'mlab')])
     render(<FleetCells variant="narrow" />)
     expect(screen.queryByTestId('queue-strip')).toBeNull()
+    const bar = screen.getByTestId('fleet-cells')
+    expect(bar.firstElementChild).toBe(screen.getByTestId('queue-counts'))
+    expect(screen.getAllByTestId(/^narrow-block-/)).toHaveLength(1)
+  })
+  it('the wide bar has no counts', () => {
+    answer([host(A, 'mlab')])
+    render(<FleetCells variant="wide" />)
+    expect(screen.queryByTestId('queue-counts')).toBeNull()
   })
   it('mounting starts watching the pool\'s jobs and unmounting lets go', () => {
     answer([host(A, 'mlab')])
