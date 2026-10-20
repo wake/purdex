@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
-	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/run"
 )
 
@@ -149,32 +148,24 @@ func TestDirectTellsASweepThatFailedAndDoesNotClaimItCleared(t *testing.T) {
 	}
 }
 
-// At a terminal the command shares the caller's group and, unrecorded, has no job mark: Direct marks it itself, so its leftovers
-// are still found (and the mark is not the caller's WWD_JOB).
-func TestDirectMarksAnUnrecordedRunAtATerminalAndSweepsByTheMark(t *testing.T) {
+// At a terminal the command shares the caller's group (no group of its own) and, unrecorded, has no job mark: Direct invents none
+// (a made-up job id would be taken for a real job by the usage tracker and the observer), so nothing is swept for it.
+func TestDirectAtATerminalLeavesAnUnrecordedRunUnmarkedAndUnswept(t *testing.T) {
 	old := isTTY
 	isTTY = func() bool { return true }
 	t.Cleanup(func() { isTTY = old })
-	var seen string
 	var out bytes.Buffer
-	procs := probeProcsID(func(id string) { seen = id })
-	code, err := Direct{Procs: procs}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "echo $" + run.MarkEnv}, Env: []string{"PATH=/usr/bin:/bin"}, Stdout: &out})
-	if err != nil || code != 0 {
-		t.Fatalf("code %d, err %v", code, err)
+	scanned := false
+	code, err := Direct{Procs: probeProcs(func() { scanned = true })}.Run(context.Background(),
+		gate.Options{Argv: []string{"sh", "-c", `echo "mark=${` + run.MarkEnv + `-none}"`}, Env: []string{"PATH=/usr/bin:/bin"}, Stdout: &out})
+	if err != nil || code != 0 || scanned {
+		t.Fatalf("code %d, err %v, scanned %v", code, err, scanned)
 	}
 	got := strings.TrimSpace(out.String())
-	if !strings.HasPrefix(got, "j_unrecorded_") || seen != got {
-		t.Fatalf("the command was marked %q, the sweep looked for %q", got, seen)
-	}
-	// the facts' reader takes nothing else for a mark: the shape is the contract with the scanner
-	if id, ok := facts.JobFromEnv([]string{run.MarkEnv + "=" + got}); !ok || id != got {
-		t.Fatalf("the facts' reader does not take %q as a mark", got)
+	if got != "mark=none" {
+		t.Fatalf("the command saw %q, want no mark", got)
 	}
 }
-
-type probeProcsID func(id string)
-
-func (p probeProcsID) JobProcesses(_, id string) ([]int, error) { p(id); return nil, nil }
 
 func TestDirectWithoutAMarkSweepsNothing(t *testing.T) {
 	called := false

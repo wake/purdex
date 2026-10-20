@@ -2,8 +2,6 @@ package fastlane
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -81,8 +79,9 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 		_, _ = io.WriteString(stderr, gate.AdmittedMark(nonce)) // before the start: nothing the command prints can come first
 	}
 	// Stdin is the caller's own when none is given, like the gate: a runner that reads a prompt must not see an end of file. At a
-	// terminal the command stays in the caller's process group (a group of its own would be stopped by SIGTTIN at its first read);
-	// what it leaves behind is then found by the job mark below.
+	// terminal the command stays in the caller's process group (a group of its own would be stopped by SIGTTIN at its first read):
+	// the terminal signals the whole group for Ctrl-C and hangup, and a recorded run's leftovers are found by the job mark below. A
+	// run that is not recorded (wwd down or old) has no mark: its leftovers after a TERM sent from elsewhere are not found.
 	var stdin io.Reader = o.Stdin
 	if stdin == nil {
 		stdin = os.Stdin
@@ -95,10 +94,6 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 	grouped := !(o.Stdin == nil && isTTY())
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	} else if markOf(env) == "" {
-		// no group to clear and no job to name the leftovers by: a mark of its own, so they are still found at the end
-		cmd.Env = append(append([]string(nil), env...), run.MarkEnv+"="+newCleanupMark())
-		env = cmd.Env
 	}
 	if err := cmd.Start(); err != nil {
 		if nonce != "" {
@@ -152,15 +147,6 @@ func pidsNote(pids []int) string {
 		return ""
 	}
 	return fmt.Sprintf("，已找到但未確認清掉：pid %v", pids)
-}
-
-// newCleanupMark is the mark of a run that has none (it is not recorded) and shares the caller's process group: its leftovers are
-// found by this alone. It has the shape of a job id, which is all the facts' reader accepts as a mark (facts.JobFromEnv); no such job
-// exists, and the usage tracker forgets an entry that never ends.
-func newCleanupMark() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return "j_unrecorded_" + hex.EncodeToString(b)
 }
 
 // markOf is the job id the command was marked with (WWD_JOB), "" when it has none.
