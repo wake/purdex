@@ -134,7 +134,7 @@ describe('a tab that shows an agent session and is no team seat', () => {
       useTabStore.setState((s) => {
         const t = s.tabs.cc1
         if (t.layout.type !== 'leaf' || t.layout.pane.content.kind !== 'tmux-session') return s
-        return { tabs: { ...s.tabs, cc1: { ...t, layout: { type: 'leaf', pane: { ...t.layout.pane, content: { ...t.layout.pane.content, terminated: 'exited' } } } } } }
+        return { tabs: { ...s.tabs, cc1: { ...t, layout: { type: 'leaf', pane: { ...t.layout.pane, content: { ...t.layout.pane.content, terminated: 'tmux-restarted' } } } } } }
       })
     })
     mount()
