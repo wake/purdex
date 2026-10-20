@@ -29,14 +29,15 @@ func SystemSources() Sources { return SystemSourcesWith(SourceOptions{}) }
 func SystemSourcesWith(opt SourceOptions) Sources {
 	procs := NewProcfsReader("/proc", DefaultSessionsDir())
 	return Sources{
-		Now:   time.Now,
-		Tools: systemTools(opt.ToolDirs),
-		Procs: procs.Snapshot,
-		Boot:  procs.BootTime,
-		Self:  linuxSelf,
-		CPU:   linuxCPU,
-		Mem:   linuxMem,
-		Disks: linuxDisks,
+		Now:    time.Now,
+		Tools:  systemTools(opt.ToolDirs),
+		Procs:  procs.Snapshot,
+		Boot:   procs.BootTime,
+		Self:   linuxSelf,
+		CPU:    linuxCPU,
+		DiskIO: linuxDiskIO,
+		Mem:    linuxMem,
+		Disks:  linuxDisks,
 	}
 }
 
@@ -60,6 +61,19 @@ func linuxSelf() (RawSelf, error) {
 func readFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	return string(b), err
+}
+
+// linuxDiskIO is the counters of the physical disks: /proc/diskstats narrowed by /sys/block (see PhysicalDiskIO).
+func linuxDiskIO() ([]RawDiskIO, error) {
+	text, err := readFile("/proc/diskstats")
+	if err != nil {
+		return nil, err
+	}
+	all, err := ParseDiskstats(text)
+	if err != nil {
+		return nil, err
+	}
+	return PhysicalDiskIO(all, "/sys/block")
 }
 
 func linuxCPU() (RawCPU, error) {

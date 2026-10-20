@@ -247,6 +247,8 @@ type Sources struct {
 	Boot func() (time.Time, bool)
 	// Self is wwd's own CPU time and memory (nil, or an error: self stays null and the sample does not fail).
 	Self func() (RawSelf, error)
+	// DiskIO reads the cumulative counters of every physical disk (nil, or an error: disk_io stays null and the sample does not fail).
+	DiskIO func() ([]RawDiskIO, error)
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -270,6 +272,7 @@ type Reading struct {
 	ProcsTotal *int
 	BootAt     *time.Time
 	Self       *wire.Self
+	DiskIO     []wire.DiskIO // nil where the source is absent or failed
 }
 
 // Apply writes the reading into a facts record.
@@ -277,6 +280,7 @@ func (r Reading) Apply(f *wire.Facts) {
 	f.At, f.CPU, f.Mem, f.Disk = r.At, r.CPU, r.Mem, r.Disk
 	f.Procs, f.Residents, f.Tools, f.Owner = r.Procs, r.Residents, r.Tools, r.Owner
 	f.ProcsTotal, f.BootAt, f.Self = r.ProcsTotal, r.BootAt, r.Self
+	f.DiskIO = r.DiskIO
 }
 
 // Collector takes Readings; one value belongs to one goroutine.
@@ -285,10 +289,11 @@ type Collector struct {
 	prevCPU *RawCPU
 	mem     *MemBuilder
 	self    *SelfBuilder
+	diskio  *DiskIOBuilder
 }
 
 func NewCollector(src Sources) *Collector {
-	return &Collector{src: src, mem: NewMemBuilder(), self: NewSelfBuilder()}
+	return &Collector{src: src, mem: NewMemBuilder(), self: NewSelfBuilder(), diskio: NewDiskIOBuilder()}
 }
 
 // Sample takes one reading. A failing source leaves its fields at zero values
@@ -320,6 +325,15 @@ func (c *Collector) Sample() (Reading, error) {
 		errs = append(errs, err)
 	} else {
 		r.Disk = BuildDisk(d)
+	}
+	if c.src.DiskIO != nil {
+		// a failed read is not a failed sample: the next one reads again, and the gap just makes that pair's interval longer
+		// timed at its own read: the sources before it can be slow, and the counters cover the time since the last read, not since this
+		// sample started
+		readAt := c.src.Now()
+		if raw, err := c.src.DiskIO(); err == nil {
+			r.DiskIO = c.diskio.Build(readAt, raw)
+		}
 	}
 	if c.src.Procs != nil {
 		if snap, ctx, err := c.src.Procs(now); err != nil {
