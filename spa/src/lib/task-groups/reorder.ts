@@ -92,10 +92,16 @@ export function decideGroupDrop(p: { groupKey: string; activeId: string; overId:
   const memberIds = view.members.map((m) => m.session.session_id)
   // rows named by their seat (a split tab carrying several seats): the seats are moved by identity
   if (activeSeat !== undefined && memberIds.includes(activeSeat)) {
-    if (overSeat === view.lead.session.session_id) return moveSeat(view.key, memberIds, activeSeat, { lead: true }, side)
-    if (overSeat === undefined || !memberIds.includes(overSeat)) return IGNORE
+    // a row of another tab of a seat (no seat of its own) names its seat through the tab
+    let target = overSeat
+    if (target === undefined) {
+      if (inZone(sections.lead, overId)) target = view.lead.session.session_id
+      else { const to = sections.members.findIndex((m) => inZone(m, overId)); if (to >= 0) target = memberIds[to] }
+    }
+    if (target === view.lead.session.session_id) return moveSeat(view.key, memberIds, activeSeat, { lead: true }, side)
+    if (target === undefined || !memberIds.includes(target)) return IGNORE
     // the side is the direction of travel among the seats (the rows of one split tab share a tab, so the tabs cannot tell)
-    return moveSeat(view.key, memberIds, activeSeat, { seat: overSeat }, memberIds.indexOf(activeSeat) < memberIds.indexOf(overSeat) ? 'after' : 'before')
+    return moveSeat(view.key, memberIds, activeSeat, { seat: target }, memberIds.indexOf(activeSeat) < memberIds.indexOf(target) ? 'after' : 'before')
   }
   // the lead never moves and nothing goes before it
   if (inZone(sections.lead, activeId)) return IGNORE
