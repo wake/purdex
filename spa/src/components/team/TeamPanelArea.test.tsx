@@ -17,6 +17,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
+import { SEAT_LIGHT_POSITION } from '../overlay-dot'
 import { BESIDE_CELLS_W, CELL_GAP, CELL_H, HEADER_H, LINE_SLACK_W, cellsWidth, cellWidthFor, firstRowCapacity } from './panel-layout'
 
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
@@ -225,8 +226,10 @@ describe('full mode', () => {
     expect(within(lead.getByTestId('team-panel-avatar')).queryByTestId('team-panel-light')).toBeNull() // 761: the avatar carries no light
     const lightWrap = lead.getByTestId('team-panel-icon-light')
     expect(within(lightWrap).getByTestId('seat-icon')).toBeTruthy()
-    expect(within(lightWrap).getByTestId('team-panel-light').className).toContain('-top-')
-    expect(within(lightWrap).getByTestId('team-panel-light').className).toContain('-right-')
+    const lightBox = within(lightWrap).getByTestId('team-panel-light')
+    expect(lightBox.className).toContain('absolute')
+    expect(lightBox.style.top).toBe(`${SEAT_LIGHT_POSITION.top}px`) // the tab rows' place for the dot on the same icon
+    expect(lightBox.style.right).toBe(`${SEAT_LIGHT_POSITION.right}px`)
     expect(lead.getByTestId('seat-host')).toBeTruthy()
     expect(lead.getByText('title L')).toBeTruthy()
     expect(lead.getByTestId('model-icon-opus')).toBeTruthy() // the model shape sits inside the ring
