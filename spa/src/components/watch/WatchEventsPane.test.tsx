@@ -1,230 +1,203 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// The 事件 tab (monitoring tabs spec M23, M35, M37; plan MON-10c): the pool hosts' alerts and observations as one list, three chip filters, no button that changes an event.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
-
-const readWatchRow = vi.fn()
-vi.mock('../../lib/watch/watch-row', async (orig) => ({ ...(await orig<typeof import('../../lib/watch/watch-row')>()), readWatchRow: (...a: unknown[]) => readWatchRow(...a) }))
 import { WatchEventsPane } from './WatchEventsPane'
-import type { PaneRendererProps } from '../../lib/module-registry'
-import { useWatchEventsStore } from '../../lib/watch/events-store'
-import { useWatchStatusStore } from '../../lib/watch/status-store'
-import type { WatchStatus } from '../../lib/watch/status-types'
-import type { WatchEvent } from '../../lib/watch/events-types'
-import { clearViewMemory, readEventFilters } from '../../lib/watch/view-memory'
-import { useHostStore } from '../../stores/useHostStore'
+import { useAlertsStore, type HostAlertsEntry } from '../../lib/pool/alerts-store'
+import type { PoolAlert } from '../../lib/pool/alerts-api'
+import type { PoolObservation } from '../../lib/pool/observations-api'
+import { usePoolStore } from '../../lib/pool/store'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { clearViewMemory, readEventFilters, writeEventFilters } from '../../lib/watch/view-memory'
+import { PoolReadError } from '../../lib/pool/api'
+import { classify } from '../../lib/pool/errors'
+import type { MonitorHost } from '../../lib/pool/use-monitor-hosts'
+
+const fetchObservations = vi.hoisted(() => vi.fn())
+const openWatchArea = vi.hoisted(() => vi.fn())
+const monitorHosts = vi.hoisted(() => ({ list: [] as unknown[] }))
+vi.mock('../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../lib/pool/observations-api')>()), fetchObservations }))
+vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea }))
+vi.mock('../../lib/pool/use-monitor-hosts', () => ({ useMonitorHosts: () => monitorHosts.list }))
 
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
-const NOW = new Date(2026, 9, 17, 12, 0).getTime()
-const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).toISOString()
-const ev = (id: string, when: string, over: Partial<WatchEvent> = {}): WatchEvent => ({ id, host: 'mlab', kind: 'unmanaged_heavy', at: when, status: 'pending', ...over })
-const status = (state: 'awake' | 'resting' | 'none', mode = 'patrol'): WatchStatus => ({ self: { host_id: 'd1', state, since: '2026-10-16T01:00:00Z', session_id: 's' }, enabled: true, auto_wake: true, mode, targets: [] })
-/** `unhandled` defaults to what each listed host's pending rows add up to, as a daemon with a short backlog would say. */
-const setEvents = (byHost: Record<string, WatchEvent[] | 'error'>, known?: string[], unhandled?: Record<string, number>) => useWatchEventsStore.setState({
-  unhandled: unhandled ?? Object.fromEntries(Object.entries(byHost).flatMap(([id, v]) => (v === 'error' ? [] : [[id, v.filter((e) => e.status === 'pending').length]]))),
-  byHost: Object.fromEntries(Object.entries(byHost).map(([id, v]) => [id, v === 'error' ? { kind: 'error' as const, at: 1 } : { kind: 'ok' as const, events: v, at: 1 }])),
-  known: known ?? Object.keys(byHost),
+const NOW = new Date(2026, 9, 21, 12, 0, 0).getTime()
+const MIN = 60_000
+const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
+
+const host = (hostId: string, alias: string): MonitorHost => ({ hostId, alias, daemonHostId: null, look: { indicator: 'ring' } as never, state: {} as never, poolFailure: null, count: null, local: false })
+const alert = (p: Partial<PoolAlert> & { key: string }): PoolAlert => ({ kind: 'orphans', level: 'digest', since: NOW - 60 * MIN, last: NOW - MIN, clearedAt: null, detail: '', ...p })
+const ok = (alerts: PoolAlert[]): HostAlertsEntry => ({ kind: 'ok', known: true, alerts, at: NOW })
+const obs = (id: string, over: Partial<PoolObservation> = {}): PoolObservation => ({
+  id, host: 'mserv', session: 'purdex-1f', via: 'session', command: 'cc1plus', signature: `sig-${id}`, startedAt: NOW - 30 * MIN, endedAt: NOW - 20 * MIN, cpuSeconds: 120, cpuPeak: 450, memPeakMb: 2048, procsPeak: 7, ...over,
 })
-const asGuardian = (state: 'awake' | 'resting' | 'none') => useWatchStatusStore.setState({ byHost: { h1: { kind: 'ok', status: status(state), at: 1 } } })
+const page = (observations: PoolObservation[]) => ({ host: 'mserv', known: true, observations, truncated: false, nextUntil: null })
+const rows = () => screen.queryAllByTestId('watch-event')
+const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0) }) }
+const pane = () => render(<WatchEventsPane {...({} as never)} />)
 
 beforeEach(() => {
-  cleanup(); clearViewMemory()
-  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW)
-  readWatchRow.mockReset(); readWatchRow.mockResolvedValue({ revision: 1, row: {}, agentCommand: 'claude --model opus-5', workdir: '/w' })
-  useWatchEventsStore.getState().reset(); useWatchStatusStore.getState().reset()
-  useHostStore.setState({
-    hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 }, h2: { id: 'h2', name: 'air26', ip: '2', port: 1, token: 't', order: 1 } },
-    hostOrder: ['h1', 'h2'], activeHostId: 'h1', runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } },
-  } as never)
+  cleanup(); clearViewMemory(); fetchObservations.mockReset(); openWatchArea.mockReset()
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] })
+  vi.setSystemTime(NOW)
+  monitorHosts.list = [host('h-mlab', 'mlab'), host('h-mserv', 'mserv')]
+  usePoolStore.setState({ sourceHostId: 'src', hosts: [] } as never)
+  useNexHostStore.setState({ byHost: { src: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1', 'pool.observations.v1'] } } } as never)
+  useAlertsStore.setState({ byHost: {}, source: null })
+  fetchObservations.mockResolvedValue(page([]))
 })
 afterEach(() => { vi.useRealTimers(); clearViewMemory() })
 
-const noProps = {} as PaneRendererProps
-const mount = () => render(<WatchEventsPane {...noProps} />)
+describe('the events tab (MON-10c)', () => {
+  it('draws the alerts and the observations as rows, newest first, with the page title and no guardian line', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'orphans:mlab', detail: '3 個孤兒行程', since: NOW - 90 * MIN })]) } })
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1')] : []))
+    pane()
+    await flush()
+    expect(screen.getByRole('heading', { name: t('watch.pane.events') })).toBeInTheDocument()
+    expect(rows().map((r) => r.getAttribute('data-source'))).toEqual(['obs', 'alert']) // the observation started 30 min ago, the alert 90
+    expect(screen.queryByTestId('events-guardian')).toBeNull()
+    expect(within(rows()[1]).getByTestId('event-title')).toHaveTextContent('3 個孤兒行程')
+    expect(within(rows()[0]).getByTestId('event-title')).toHaveTextContent('sig-o1')
+  })
 
-describe('WatchEventsPane — count and guardian lines', () => {
-  it('says how many wait (handled ones are not counted), in the warning tone', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9)), ev('2', at(17, 8), { status: 'handled' })], h2: [ev('3', at(17, 7))] })
-    mount()
-    const c = screen.getByTestId('events-count')
-    expect(c).toHaveTextContent(t('watch.events.count_pending', { n: 2 }))
-    expect(c.className).toContain('text-status-warning-text')
+  it('counts what is in progress in the line at the top, push level in red', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'a', level: 'push' }), alert({ key: 'b' }), alert({ key: 'c', clearedAt: NOW - 5 * MIN })]) } })
+    pane()
+    await flush()
+    expect(screen.getByTestId('events-live-line')).toHaveTextContent(`${t('watch.events.live_push', { n: 1 })}・${t('watch.events.live_other', { n: 1 })}`)
+    expect(screen.getByTestId('events-live-push')).toHaveClass('text-status-error-text')
   })
-  it("says the daemon's number when its list holds only 500 of them", () => {
-    asGuardian('awake')
-    setEvents({ h1: Array.from({ length: 500 }, (_, i) => ev(String(i), at(17, 9))) }, undefined, { h1: 620 })
-    mount()
-    expect(screen.getByTestId('events-count')).toHaveTextContent(t('watch.events.count_pending', { n: 620 }))
-  })
-  it('says nothing waits when nothing does', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { status: 'handled', note: 'ok' })] })
-    mount()
-    expect(screen.getByTestId('events-count')).toHaveTextContent(t('watch.events.count_none'))
-  })
-  it.each([
-    ['awake', 'watch.events.guardian_awake'],
-    ['resting', 'watch.events.guardian_resting'],
-  ] as const)('the guardian line for %s names the host, the state, the mode and the model', async (state, key) => {
-    asGuardian(state)
-    setEvents({ h1: [] })
-    mount()
-    await vi.waitFor(() => expect(screen.getByTestId('events-guardian')).toHaveTextContent('opus-5'))
-    const line = screen.getByTestId('events-guardian')
-    expect(line).toHaveTextContent(t('watch.events.guardian_on', { host: 'mlab' }))
-    expect(line).toHaveTextContent(t(key))
-    expect(line).toHaveTextContent('patrol')
-  })
-  it('without a guardian the line says events will not be handled, and pending rows say so too', () => {
-    asGuardian('none')
-    setEvents({ h1: [ev('1', at(17, 9))] })
-    mount()
-    expect(screen.getByTestId('events-guardian')).toHaveTextContent(t('watch.events.guardian_none'))
-    expect(screen.getByTestId('event-status')).toHaveTextContent(t('watch.events.status.pending_no_guardian'))
-  })
-})
 
-describe('WatchEventsPane — rows', () => {
-  it('an E1 row: time, kind tag, label tag, host, status, command and facts', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9, 5), { label: 'gate_gap', command: 'vitest run', cwd: '/w/p', session: 'sess', peakCores: 6.25, peakMb: 900, durationS: 185 })] })
-    mount()
-    const row = screen.getByTestId('watch-event')
-    expect(within(row).getByTestId('event-time')).toHaveTextContent('09:05')
-    expect(within(row).getByTestId('event-kind')).toHaveTextContent(t('watch.events.kind.unmanaged_heavy'))
-    expect(within(row).getByTestId('event-label')).toHaveTextContent(t('watch.events.label.gate_gap'))
-    expect(within(row).getByTestId('event-label').className).toContain('text-status-error-text')
-    expect(within(row).getByTestId('event-host')).toHaveTextContent('mlab')
-    expect(within(row).getByTestId('event-status')).toHaveTextContent(t('watch.events.status.pending'))
-    expect(within(row).getByTestId('event-command')).toHaveTextContent('vitest run')
-    expect(within(row).getByTestId('event-command').className).toContain('font-mono')
-    expect(within(row).getByTestId('event-facts')).toHaveTextContent(['/w/p', 'sess', t('watch.events.peak_cores', { n: '6.3' }), t('watch.events.peak_mb', { n: 900 }), t('watch.events.duration', { t: '3m05s' })].join('・'))
+  it('draws a silence with its icon, colour, the 2 px bar and the recovery time', async () => {
+    const cleared = NOW - 10 * MIN
+    useAlertsStore.setState({ byHost: { mlab: ok([
+      alert({ key: 'silence:mserv', kind: 'silence', silence: 'host_down', level: 'push', since: NOW - 60 * MIN, clearedAt: cleared, detail: 'mserv 停了' }),
+      alert({ key: 'silence:mlab', kind: 'silence', silence: 'wwd_down', level: 'push', since: NOW - 30 * MIN, detail: 'wwd 停了' }),
+    ]) } })
+    pane()
+    await flush()
+    const done = rows().find((r) => r.getAttribute('data-silence') === 'host_down')!
+    expect(within(done).getByTestId('event-bar')).toHaveClass('w-0.5')
+    expect(within(done).getByTestId('event-kind')).toHaveClass('text-status-error-text')
+    expect(within(done).getByTestId('event-end')).toHaveTextContent(t('watch.events.recovered', { time: hhmm(cleared) }))
+    const live = rows().find((r) => r.getAttribute('data-silence') === 'wwd_down')!
+    expect(within(live).getByTestId('event-kind')).toHaveClass('text-status-warning-text')
+    expect(within(live).getByTestId('event-end')).toHaveTextContent(t('watch.events.live_for', { t: '30m00s' }))
+    expect(within(live).getByTestId('event-end')).toHaveClass('text-status-error-text') // push level in progress
   })
-  it('the host on a row is the host-look name of the App host, whatever the payload\'s host says, and follows a rename', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { host: 'mlab' }), ev('2', at(17, 8), { host: 'mlab', kind: 'pressure_high' })] })
-    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '工作站' } } }))
-    mount()
-    expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['工作站', '工作站'])
-    expect(screen.getByTestId('event-command')).toHaveTextContent(t('watch.events.pressure_line', { host: '工作站' }))
-    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '書房' } } })) })
-    expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['書房', '書房'])
+
+  it('an ordinary alert has no bar and says "ended" when it is over', async () => {
+    const cleared = NOW - 10 * MIN
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'orphans:mlab', clearedAt: cleared })]) } })
+    pane()
+    await flush()
+    expect(screen.queryByTestId('event-bar')).toBeNull()
+    expect(screen.getByTestId('event-end')).toHaveTextContent(t('watch.events.ended', { time: hhmm(cleared) }))
   })
-  it('an E2 row has the machine-wide sentence, with the App host name, instead of a command', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { kind: 'pressure_high', host: 'a19', pressure: 2, detail: 'swap 3 GB' })] })
-    mount()
-    expect(screen.getByTestId('event-command')).toHaveTextContent(t('watch.events.pressure_line', { host: 'mlab' }))
-    expect(screen.getByTestId('event-facts')).toHaveTextContent('swap 3 GB')
-    expect(screen.getByTestId('event-kind').className).toContain('text-status-error-text')
+
+  it('has no button in a row: nothing here changes an event (M35)', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'a', level: 'push' })]) } })
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1', { endedAt: null })] : []))
+    pane()
+    await flush()
+    expect(rows()).toHaveLength(2)
+    for (const r of rows()) expect(within(r).queryAllByRole('button')).toHaveLength(0)
   })
-  it('a handled row shows the watcher\'s note under it with a filled shield', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { status: 'handled', note: 'killed the stray vitest' })] })
-    mount()
-    expect(screen.getByTestId('event-status')).toHaveTextContent(t('watch.events.status.handled'))
-    expect(screen.getByTestId('event-note')).toHaveTextContent('killed the stray vitest')
+
+  it('filters by host, by source and by state', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'a' }), alert({ key: 'b', clearedAt: NOW - MIN })]) } })
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1', { endedAt: null })] : []))
+    pane()
+    await flush()
+    expect(rows()).toHaveLength(3)
+    fireEvent.click(within(screen.getByTestId('filter-host')).getByRole('button', { name: 'mserv' }))
+    expect(rows().map((r) => r.getAttribute('data-source'))).toEqual(['obs'])
+    fireEvent.click(within(screen.getByTestId('filter-host')).getByRole('button', { name: t('watch.events.filter.all') }))
+    fireEvent.click(within(screen.getByTestId('filter-source')).getByRole('button', { name: t('watch.events.filter.source_alert') }))
+    expect(rows().map((r) => r.getAttribute('data-source'))).toEqual(['alert', 'alert'])
+    fireEvent.click(within(screen.getByTestId('filter-status')).getByRole('button', { name: t('watch.events.filter.status_live') }))
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]).toHaveAttribute('data-live', 'true')
   })
-  it('a pending row shows no note, and nothing in the pane can change an event', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { note: 'stale' })] })
-    mount()
-    expect(screen.queryByTestId('event-note')).toBeNull()
-    // every button is a filter chip (a toggle); there is no action button, so nothing can mark or skip an event
-    const buttons = screen.getAllByRole('button')
-    expect(buttons.length).toBeGreaterThan(0)
-    for (const b of buttons) expect(b).toHaveAttribute('aria-pressed')
+
+  it('a remembered host that left the pool means no filter on hosts', async () => {
+    writeEventFilters({ host: 'h-gone', source: 'all', status: 'all' })
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'a' })]) } })
+    pane()
+    await flush()
+    expect(rows()).toHaveLength(1)
+    expect(within(screen.getByTestId('filter-host')).getByRole('button', { name: t('watch.events.filter.all') })).toHaveAttribute('aria-pressed', 'true')
   })
-  it('merges the hosts newest first, with day separators', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('a', at(17, 9)), ev('c', at(10, 9))], h2: [ev('b', at(16, 22), { host: 'air26' })] })
-    mount()
-    expect(screen.getAllByTestId('watch-event').map((n) => n.getAttribute('data-event-id'))).toEqual(['a', 'b', 'c'])
+
+  it('writes a picked filter into the view memory', async () => {
+    pane()
+    await flush()
+    fireEvent.click(within(screen.getByTestId('filter-source')).getByRole('button', { name: t('watch.events.filter.source_obs') }))
+    expect(readEventFilters().source).toBe('obs')
+  })
+
+  it('says it cannot read a host\'s alerts, with the reason', async () => {
+    useAlertsStore.setState({ byHost: { mserv: { kind: 'error', code: 'no_answer', at: NOW } } })
+    pane()
+    await flush()
+    expect(screen.getByTestId('events-alerts-unreadable-mserv')).toHaveTextContent('mserv')
+  })
+
+  it('a 403 on the observations is one line, once, however many hosts answer it', async () => {
+    fetchObservations.mockRejectedValue(new PoolReadError('/x', 403, classify(403, null)))
+    pane()
+    await flush()
+    expect(screen.getAllByTestId('events-obs-forbidden')).toHaveLength(1)
+    expect(screen.getByTestId('events-obs-forbidden')).toHaveTextContent(t('watch.events.obs_forbidden'))
+  })
+
+  it('reads the observations of every host since 24 hours ago, again every 60 s, and stops when the tab is gone', async () => {
+    const { unmount } = pane()
+    await flush()
+    expect(fetchObservations).toHaveBeenCalledTimes(2)
+    expect(fetchObservations).toHaveBeenCalledWith('src', 'mlab', { since: new Date(NOW - 24 * 60 * MIN).toISOString() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(fetchObservations).toHaveBeenCalledTimes(4)
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000) })
+    expect(fetchObservations).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not read the observations from a source that does not announce pool.observations.v1', async () => {
+    useNexHostStore.setState({ byHost: { src: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1'] } } } as never)
+    pane()
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+    expect(fetchObservations).not.toHaveBeenCalled()
+  })
+
+  it('keeps only the newest three observations of a host and links the rest to its 行程 tab', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [1, 2, 3, 4, 5].map((n) => obs(`o${n}`, { startedAt: NOW - n * MIN, endedAt: NOW - n * MIN + 1000 })) : []))
+    pane()
+    await flush()
+    expect(rows()).toHaveLength(3)
+    const more = screen.getByTestId('event-more-h-mserv')
+    expect(more).toHaveTextContent(t('watch.events.more', { alias: 'mserv', n: 2 }))
+    fireEvent.click(within(more).getByRole('button'))
+    expect(openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: 'h-mserv' }, sub: 'procs' })
+  })
+
+  it('the "more" row goes away under the wwd-alerts filter', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [1, 2, 3, 4].map((n) => obs(`o${n}`, { startedAt: NOW - n * MIN })) : []))
+    pane()
+    await flush()
+    expect(screen.getByTestId('event-more-h-mserv')).toBeInTheDocument()
+    fireEvent.click(within(screen.getByTestId('filter-source')).getByRole('button', { name: t('watch.events.filter.source_alert') }))
+    expect(screen.queryByTestId('event-more-h-mserv')).toBeNull()
+  })
+
+  it('separates days: today first, an older day by its date', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([alert({ key: 'a' }), alert({ key: 'b', since: NOW - 3 * 24 * 60 * MIN, clearedAt: NOW - 3 * 24 * 60 * MIN + MIN })]) } })
+    pane()
+    await flush()
     const days = screen.getAllByTestId('event-day')
-    expect(days.map((d) => d.getAttribute('data-day'))).toEqual(['today', 'yesterday', '2026-10-10'])
+    expect(days).toHaveLength(2)
     expect(days[0]).toHaveTextContent(t('watch.events.today'))
-    expect(days[1]).toHaveTextContent(t('watch.events.yesterday'))
-  })
-  it('an unknown kind from a newer daemon is drawn with its wire name', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9), { kind: 'future_kind' })] })
-    mount()
-    expect(screen.getByTestId('event-kind')).toHaveTextContent('future_kind')
-  })
-  it('no events at all say so', () => {
-    asGuardian('awake')
-    setEvents({ h1: [] })
-    mount()
-    expect(screen.getByTestId('events-empty')).toHaveTextContent(t('watch.events.empty'))
-  })
-})
-
-describe('WatchEventsPane — filters', () => {
-  const setup = () => {
-    asGuardian('awake')
-    setEvents({
-      h1: [ev('a', at(17, 9), { kind: 'pressure_high' }), ev('b', at(17, 8), { status: 'handled', note: 'n' })],
-      h2: [ev('c', at(17, 7), { kind: 'slot_long' })],
-    })
-    mount()
-  }
-  const ids = () => screen.queryAllByTestId('watch-event').map((n) => n.getAttribute('data-event-id'))
-  const chip = (row: string, name: string) => within(screen.getByTestId(row)).getByRole('button', { name })
-
-  it('the host chips are the hosts that answered, and narrow the list', () => {
-    setup()
-    fireEvent.click(chip('filter-host', 'air26'))
-    expect(ids()).toEqual(['c'])
-    expect(chip('filter-host', 'air26')).toHaveAttribute('aria-pressed', 'true')
-  })
-  it('the kind chips use the short names', () => {
-    setup()
-    fireEvent.click(chip('filter-kind', t('watch.events.kind.pressure_high_short')))
-    expect(ids()).toEqual(['a'])
-  })
-  it('the status chips split pending from handled; empty results say it is the filter', () => {
-    setup()
-    fireEvent.click(chip('filter-status', t('watch.events.filter.status_handled')))
-    expect(ids()).toEqual(['b'])
-    fireEvent.click(chip('filter-kind', t('watch.events.kind.slot_long_short')))
-    expect(ids()).toEqual([])
-    expect(screen.getByTestId('events-empty')).toHaveTextContent(t('watch.events.empty_filtered'))
-  })
-  it('keeps the choices in view memory', () => {
-    setup()
-    fireEvent.click(chip('filter-host', 'mlab'))
-    fireEvent.click(chip('filter-status', t('watch.events.filter.status_pending')))
-    expect(readEventFilters()).toEqual({ host: 'h1', kind: 'all', status: 'pending' })
-  })
-  it('a remembered host that no longer answers means no host filter', () => {
-    setup()
-    fireEvent.click(chip('filter-host', 'air26'))
-    cleanup()
-    setEvents({ h1: [ev('a', at(17, 9))] }, ['h1', 'h2'])
-    mount()
-    expect(ids()).toEqual(['a'])
-  })
-})
-
-describe('WatchEventsPane — hosts that cannot be read', () => {
-  it('says so per host above the list: offline, or an unreadable answer; events of the others stay', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9))], h2: 'error' }, ['h1', 'h2'])
-    mount()
-    expect(screen.getByTestId('events-offline-h2')).toHaveTextContent(t('watch.events.offline', { host: 'air26' }))
-    expect(screen.queryByTestId('events-offline-h1')).toBeNull()
-    expect(screen.getAllByTestId('watch-event')).toHaveLength(1)
-  })
-  it('a host that went offline (forgotten) but was known gets the note', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9))] }, ['h1', 'h2'])
-    mount()
-    expect(screen.getByTestId('events-offline-h2')).toBeInTheDocument()
-  })
-  it('a host that never carried the watch module gets none', () => {
-    asGuardian('awake')
-    setEvents({ h1: [ev('1', at(17, 9))] }, ['h1'])
-    mount()
-    expect(screen.queryByTestId('events-offline-h2')).toBeNull()
   })
 })
