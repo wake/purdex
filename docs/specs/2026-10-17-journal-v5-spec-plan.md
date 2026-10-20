@@ -15,7 +15,7 @@ Team panel
   **one line**, **collapsed to the title bar** (the title-bar strip shows the whole team name plus the lead's and every
   member's status). **No max state.** It is shown by default and is not closed by an outside click; one line and the
   title bar are its minimum states.
-- **U2** The toolbar keeps the two buttons it has now: 「團隊」 and 「工作簿」.
+- **U2** The toolbar keeps the two buttons it has now: 「團隊」 and 「工作簿」. *(Amended 2026-10-20, TG-5: on a tab that is no team seat, 「團隊」 is 「個人」; 「工作簿」 is unchanged.)*
 - **U3** Each member row shows two lines taken from the **leader's journal** (members run no journal): the member's
   current task and its state; its last exchange with the leader (time + one line).
 

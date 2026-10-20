@@ -48,7 +48,7 @@ no avatar and no persona name — TG-0b (#3662). D4, D5 and the outline are TG-0
 | NP2 §7 | "groups in creation order"; "A group with none collapses and offers 「清除」"; "Clicking a session switches to its workspace and tab" | Kept and extended by §6. |
 | NP2 §12 item 4 | "A manual task group holds sessions of one host only (L9)" | Dropped. |
 | NP2 §9.3 / §9.6 | the muted title after the name goes through `labelOf` | Task-group rows only: the tab's title first (D5, #3662). |
-| TI §4.4 | "3. otherwise nothing" (the panel area) | A solo agent session shows the personal panel (§7). |
+| TI §4.4 | "3. otherwise nothing" (the panel area) | A tab with an agent session that is no seat shows the personal panel (§7); the TI spec's own wording was amended in TG-5. |
 | `getVisibleTabIds` | "never wider than one workspace" | In the task-group view the range is the selected group (§6.2). |
 | #3654 | a tab's session for the team claim = its first live tmux pane | Any pane that shows a seat (§3, one function for the sidebar and the bar). |
 
@@ -91,7 +91,7 @@ interface ManualGroupsState {
   order: string[]                                   // manual group ids, sidebar order (new groups appended)
   groups: Record<string, {
     name: string                                    // 1–64 bytes, printable (today's rule)
-    color?: string                                  // #rrggbb
+    color?: string                                  // #rrggbb; none = the default grey (a new group is given a swatch colour, §6.1)
     members: Array<{ host: string; root: string }>  // LOCAL host id + lineage root; a (host, root) in at most one group
     createdAt: number
   }>
@@ -174,9 +174,9 @@ affected (§4.2). Accepted, as for every projection change.
 ### 4.5 Roots
 
 A session's lineage root never changes, so the App keeps the roots it reads (`GET /api/team/unattended`) in a
-device-local persisted cache `(local host id, agent session id) → root` (`lib/task-groups/root-cache.ts`, plain
+device-local persisted cache `(local host id, agent session id) → root`, and beside it the peer `address` and pdx `title` the same quota row carried (TG-5b: the personal panel's persona; the address of an ended session stays, as the team's ended list keeps its last address; it only ever comes from the daemon's quota row, name pool v2 §9.2) (`lib/task-groups/root-cache.ts`, plain
 reader `rootOf`). A lifecycle of its own — not the sidebar view — reads the roots of the session tabs whenever the
-task-group view is on, gated on the endpoint's capability `team.relay_quota.v1`; it drops a host's entries when the host
+task-group view is on **or the active tab shows a personal panel (then only that tab's session)**, gated on the endpoint's capability `team.relay_quota.v1`; it drops a host's entries when the host
 is removed or its daemon id mismatches, and entries no tab of any world (on screen or parked) refers to. Writing a member
 still needs a root read from the daemon (NP2 §7: never a session's own id).
 
@@ -212,7 +212,7 @@ group. "Opened" is decided by where the tab object came from, not by when it is 
 
 User writes:
 - moving a tab to another group in the sidebar (§6.1): a tab with an agent session becomes a member (root required) and
-  loses its `group`; a plain tab gets `group`;
+  loses its `group`; a plain tab gets `group`. A move from the personal panel puts the tab **last** in the new group's bar — the same as dropping it after the group's last tab (the drop decision of TG-3e: unranked tabs before it get ranks too), because an old `groupRank` would put it at an arbitrary place among the new group's tabs;
 - 「移出」 (onto 「未分組」): the member is removed and the tab's `group` cleared;
 - deleting a group: its members go, and the `group` of the on-screen world's tabs naming it is cleared.
 
@@ -242,8 +242,8 @@ stored view is — the effective view (§3).
     moves with all its tabs (writes this device's `memberOrder`); plain tabs reorder among themselves after the members;
   - onto another manual group or 「未分組」: §5's user writes;
   - teams take no drop; team seats do not leave their team (L10). Any host's session can go into any group.
-- **+** in the bottom nav, in this view: 「新增任務編組」 — creates 「任務編組 N」 (first unused N), appends it, selects it
-  and starts its rename. The workspace view's + is unchanged.
+- **+** in the bottom nav, in this view: 「新增任務編組」 — creates 「任務編組 N」 (first unused N) **in the first colour of the team swatch (eight colours) that no other manual group uses — from the start again when all eight are used**, so a new group is never the grey of 「未分組」; existing groups are not recoloured. It appends it, selects it
+  and starts its rename. The personal panel's 「新增任務編組」 does the same. The workspace view's + is unchanged.
 
 ### 6.2 Selected group and the top bar
 
@@ -255,7 +255,7 @@ stored view is — the effective view (§3).
   notification, search, the panel, ⌘-keys, a rehydrate from another window, an apply that removed the active tab), it
   does in the effective task-group view: `selectedGroup` becomes `groupOfTab` of the new active tab and that group's
   last active tab becomes it; in the workspace view: the view's last workspace becomes the tab's workspace. In both, the
-  view's last selection (§6.3) follows. A watcher-area active tab and a change to no active tab record nothing (the
+  view's last selection (§6.3) follows. It also follows a change of the active tab's own group (TG-5c): moving the active tab to another group, taking it out, or starting a group from it (the personal panel's settings, or a drag in the sidebar) selects its new group and the bar shows that group's tabs with the tab still active — else it would vanish from the bar it is in. The subscriber reads the active tab's id **and** its `groupOfTab`. A watcher-area active tab and a change to no active tab record nothing (the
   watcher area shows instead of the bar).
 - Selecting a group from the sidebar activates its last active tab, else its first tab (`groupTabs`); an **empty
   group** sets the active tab to none and shows the empty state, as an empty workspace does.
@@ -281,14 +281,13 @@ current tab.
 
 ## 7. Personal panel (D6)
 
-For a tab whose agent session is not a seat, the panel area and the title bar show a personal panel built from the team
-panel's parts:
-- Title-bar strip / one-line form: the group's capsule (name and colour; 「未分組」 grey) and the session's avatar and
-  context ring.
-- Full form: one card like the lead's (avatar, persona name, title, context %, the last status line), a workbook entry
-  where the session has one (it absorbs `OwnWorkbookPanel` / `OwnTitleStrip`), and a settings block: the group (move,
-  take out, new group), the group's name and colour.
-- The layout is fixed in a design pass on a real screen (Opus, the 10-16 rule) and shown to the user before it is built.
+For a tab whose agent session (live or ended, §3) is not a seat, the panel area and the title bar show a personal panel built from the team panel's parts. A tab with no agent session (settings, the file editor) has none, and neither has a watcher-area tab.
+- **Title-bar strip**: the group's capsule (name and colour; 「未分組」 neutral grey, none of the swatch colours) and the session's avatar cell (avatar, light, context ring). Hovering the cell shows the name, the model, what is left of the context and the last status line.
+- **One-line form**: the capsule, the avatar cell, then the session's **name and title** (user 2026-10-20) — the name in the main text colour, the title (the quota row's pdx title, else the tmux session name) in the secondary one, truncated when long; a session with no persona name shows its title in the name's place and no second copy. The width is a one-person team's (lead cell + 100 px, 295 px by default, or the panel area when that is narrower). The last status line is not in this form.
+- **Full form**: the header (capsule, 「· N 個 session」 for a manual group, ↑), one card like the lead's (avatar, persona name, title, context %, the last status line as the second line), a workbook entry where the session has one (it absorbs `OwnWorkbookPanel` / `OwnTitleStrip`: a journal.v1 host opens the journal card, an older host opens the workbook inside the panel), and a settings block: the group (move, take out, new group), the group's name and colour. The panel never deletes a group.
+- A session that ended keeps its panel (dim, no light, 「—」 for the context); its group can still be changed.
+- The form (title bar | line | full) is **one device-local value for all personal panels** (`sharedPanelMode`), starting in the title bar.
+- Design and rules R1–R25: the design page (not in this repo; served at https://pages.mlab.host/wake/purdex-b-line/personal-panel-design.html, B line). The rules this spec depends on are restated above: R15 (no persona name), R23 (an unread root is 「未分組」, and moving / taking out / starting a group stay off), R2 (an ended session keeps its panel).
 
 ## 8. Retiring the hostconfig `task_groups`
 

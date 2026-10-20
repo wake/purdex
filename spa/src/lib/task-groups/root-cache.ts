@@ -14,11 +14,15 @@ import type { SessionQuota } from '../team/types'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 
-type RootRows = readonly Pick<SessionQuota, 'session_id' | 'root_session_id'>[]
+type RootRows = readonly (Pick<SessionQuota, 'session_id' | 'root_session_id'> & { address?: string; title?: string })[]
 
 interface RootCacheState {
   /** host id → agent session id → the root of its chain. */
   roots: Record<string, Record<string, string>>
+  /** host id → agent session id → the peer address the quota row carried when it was last listed (the personal panel's persona; kept after the session ends, when no row lists it). */
+  addresses: Record<string, Record<string, string>>
+  /** host id → agent session id → the pdx title the quota row carried (optional on the wire), kept the same way: the personal panel's one-line form shows it after the name. */
+  titles: Record<string, Record<string, string>>
   /** Adds what a read listed. Earlier entries stay (a session's root never changes, and a session that ended is not listed any more). */
   ingest: (hostId: string, rows: RootRows) => void
   dropHost: (hostId: string) => void
@@ -27,8 +31,8 @@ interface RootCacheState {
 }
 
 /** The persisted value read as a cache: anything that is not a string → string map is dropped. */
-function sanitize(persisted: unknown): Record<string, Record<string, string>> {
-  const raw = (persisted as { roots?: unknown } | null | undefined)?.roots
+function sanitize(persisted: unknown, field: 'roots' | 'addresses' | 'titles' = 'roots'): Record<string, Record<string, string>> {
+  const raw = (persisted as Record<string, unknown> | null | undefined)?.[field]
   const out: Record<string, Record<string, string>> = {}
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return out
   for (const [hostId, map] of Object.entries(raw)) {
@@ -44,43 +48,83 @@ export const useRootCacheStore = create<RootCacheState>()(
   persist(
     (set) => ({
       roots: {},
+      addresses: {},
+      titles: {},
       ingest: (hostId, rows) =>
         set((state) => {
           const cur = state.roots[hostId] ?? {}
+          const curAddr = state.addresses[hostId] ?? {}
+          const curTitle = state.titles[hostId] ?? {}
+          let nextTitle: Record<string, string> | null = null
           let next: Record<string, string> | null = null
+          let nextAddr: Record<string, string> | null = null
           for (const r of rows) {
             if (typeof r.session_id !== 'string' || typeof r.root_session_id !== 'string' || r.root_session_id === '') continue
-            if (cur[r.session_id] === r.root_session_id) continue
-            next ??= { ...cur }
-            next[r.session_id] = r.root_session_id
+            if (cur[r.session_id] !== r.root_session_id) {
+              next ??= { ...cur }
+              next[r.session_id] = r.root_session_id
+            }
+            // Like the title: a listed row is the session's current state, so an empty address forgets the old one (it would name the wrong persona).
+            const address = typeof r.address === 'string' ? r.address : ''
+            if (address !== '' && curAddr[r.session_id] !== address) {
+              nextAddr ??= { ...curAddr }
+              nextAddr[r.session_id] = address
+            } else if (address === '' && curAddr[r.session_id] !== undefined) {
+              nextAddr ??= { ...curAddr }
+              delete nextAddr[r.session_id]
+            }
+            // A listed row is the session's current state: a title it no longer carries (the wire omits an empty one) is forgotten, so the panel falls back to the session name. A session no row lists keeps its last.
+            const title = typeof r.title === 'string' ? r.title : ''
+            if (title !== '' && curTitle[r.session_id] !== title) {
+              nextTitle ??= { ...curTitle }
+              nextTitle[r.session_id] = title
+            } else if (title === '' && curTitle[r.session_id] !== undefined) {
+              nextTitle ??= { ...curTitle }
+              delete nextTitle[r.session_id]
+            }
           }
-          return next === null ? state : { roots: { ...state.roots, [hostId]: next } }
+          if (next === null && nextAddr === null && nextTitle === null) return state
+          return {
+            ...(next === null ? null : { roots: { ...state.roots, [hostId]: next } }),
+            ...(nextAddr === null ? null : { addresses: { ...state.addresses, [hostId]: nextAddr } }),
+            ...(nextTitle === null ? null : { titles: { ...state.titles, [hostId]: nextTitle } }),
+          }
         }),
       dropHost: (hostId) =>
         set((state) => {
-          if (state.roots[hostId] === undefined) return state
+          if (state.roots[hostId] === undefined && state.addresses[hostId] === undefined && state.titles[hostId] === undefined) return state
           const roots = { ...state.roots }
+          const addresses = { ...state.addresses }
+          const titles = { ...state.titles }
           delete roots[hostId]
-          return { roots }
+          delete addresses[hostId]
+          delete titles[hostId]
+          return { roots, addresses, titles }
         }),
       prune: (keep) =>
         set((state) => {
           let changed = false
-          const roots: Record<string, Record<string, string>> = {}
-          for (const [hostId, map] of Object.entries(state.roots)) {
-            const kept = Object.fromEntries(Object.entries(map).filter(([id]) => keep(hostId, id)))
-            if (Object.keys(kept).length !== Object.keys(map).length) changed = true
-            if (Object.keys(kept).length > 0) roots[hostId] = kept
+          const narrow = (src: Record<string, Record<string, string>>) => {
+            const out: Record<string, Record<string, string>> = {}
+            for (const [hostId, map] of Object.entries(src)) {
+              const kept = Object.fromEntries(Object.entries(map).filter(([id]) => keep(hostId, id)))
+              if (Object.keys(kept).length !== Object.keys(map).length) changed = true
+              if (Object.keys(kept).length > 0) out[hostId] = kept
+            }
+            return out
           }
-          return changed ? { roots } : state
+          const roots = narrow(state.roots)
+          const addresses = narrow(state.addresses)
+          const titles = narrow(state.titles)
+          return changed ? { roots, addresses, titles } : state
         }),
     }),
     {
       name: STORAGE_KEYS.TASK_GROUP_ROOTS,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ roots: state.roots }),
-      merge: (persisted, current) => ({ ...current, roots: sanitize(persisted) }),
+      partialize: (state) => ({ roots: state.roots, addresses: state.addresses, titles: state.titles }),
+      merge: (persisted, current) => ({ ...current, roots: sanitize(persisted), addresses: sanitize(persisted, 'addresses'), titles: sanitize(persisted, 'titles') }),
     },
   ),
 )
@@ -94,6 +138,16 @@ export function rootsSupported(hostId: string): boolean {
 /** The cached root of an agent session on a host, or null. A pure read. */
 export function rootOf(hostId: string, sessionId: string): string | null {
   return useRootCacheStore.getState().roots[hostId]?.[sessionId] ?? null
+}
+
+/** The peer address the daemon last listed for an agent session (a pure read; null when no read ever listed one). It stays after the session ends. */
+export function addressOf(hostId: string, sessionId: string): string | null {
+  return useRootCacheStore.getState().addresses[hostId]?.[sessionId] ?? null
+}
+
+/** The pdx title the daemon last listed for an agent session, or null (same lifetime as the address). */
+export function titleOf(hostId: string, sessionId: string): string | null {
+  return useRootCacheStore.getState().titles[hostId]?.[sessionId] ?? null
 }
 
 /** The root of an agent session: the cache's answer, else what the host's daemon lists now (cached); null when neither knows. */

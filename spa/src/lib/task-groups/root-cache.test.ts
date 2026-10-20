@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
-import { useRootCacheStore, rootOf, resolveRoot, rootsSupported } from './root-cache'
+import { useRootCacheStore, addressOf, titleOf, rootOf, resolveRoot, rootsSupported } from './root-cache'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { SessionQuota } from '../team/types'
@@ -14,7 +14,7 @@ const supportQuota = (hostId: string, yes = true) => useUnattendedStore.setState
 
 beforeEach(() => {
   readFirstPage.mockReset()
-  useRootCacheStore.setState({ roots: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
   useUnattendedStore.setState({ byHost: {} })
   useHostStore.setState({ hosts: {}, runtime: {} })
 })
@@ -96,5 +96,56 @@ describe('store', () => {
     expect(rootOf('h1', 'S2')).toBe('R2')
     s.dropHost('h1')
     expect(useRootCacheStore.getState().roots).toEqual({})
+  })
+})
+
+describe('addresses (TG-5b)', () => {
+  it('keeps the address of the row beside its root, and keeps it when a later read no longer lists the session', () => {
+    useRootCacheStore.getState().ingest('h1', [q('S1', 'ROOT')])
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    useRootCacheStore.getState().ingest('h1', [q('S2', 'R2')])
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    expect(addressOf('h1', 'S2')).toBe('mlab/R2'.replace('R2', 'S2'))
+    expect(addressOf('h1', 'nope')).toBeNull()
+  })
+
+  it('an empty address is not stored; a listed row with an empty one forgets the old, and a new one replaces it', () => {
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: '' }])
+    expect(addressOf('h1', 'S1')).toBeNull()
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: 'mlab/new-name' }])
+    expect(addressOf('h1', 'S1')).toBe('mlab/new-name')
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: '' }])
+    expect(addressOf('h1', 'S1')).toBeNull()
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: 'mlab/again' }])
+    expect(addressOf('h1', 'S1')).toBe('mlab/again')
+  })
+
+  it('keeps the pdx title the row carried, beside the address, and forgets it with the host', () => {
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: 'purdex-iface-lead' }, q('S2', 'R2')])
+    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead')
+    expect(titleOf('h1', 'S2')).toBeNull() // the row carried none
+    useRootCacheStore.getState().ingest('h1', [q('S2', 'R2')])
+    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead') // a session no row lists keeps its last title
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: undefined }])
+    expect(titleOf('h1', 'S1')).toBeNull() // a listed row without one has none now
+    useRootCacheStore.getState().dropHost('h1')
+    expect(titleOf('h1', 'S1')).toBeNull()
+  })
+
+  it('dropHost and prune take the addresses with the roots', () => {
+    useRootCacheStore.getState().ingest('h1', [q('S1', 'ROOT'), q('S2', 'R2')])
+    useRootCacheStore.getState().prune((_h, id) => id === 'S1')
+    expect(addressOf('h1', 'S2')).toBeNull()
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    useRootCacheStore.getState().dropHost('h1')
+    expect(addressOf('h1', 'S1')).toBeNull()
+  })
+
+  it('a cache persisted before addresses existed loads with none', async () => {
+    useRootCacheStore.persist.setOptions({ name: useRootCacheStore.persist.getOptions().name })
+    const merged = useRootCacheStore.persist.getOptions().merge!({ roots: { h1: { S1: 'ROOT' } } }, useRootCacheStore.getState())
+    expect(merged.roots).toEqual({ h1: { S1: 'ROOT' } })
+    expect(merged.addresses).toEqual({})
+    expect(merged.titles).toEqual({})
   })
 })
