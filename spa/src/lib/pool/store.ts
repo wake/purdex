@@ -10,7 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { fetchPoolHosts } from './api'
 import { backoffMs, busyDelayMs, classify, type PoolError, type PoolErrorCode } from './errors'
-import { hostIsOk } from './host-state'
+import { hostIsOk, LIVE_MS } from './host-state'
 import type { PoolHost } from './types'
 
 export const POLL_MS = 5000
@@ -94,6 +94,27 @@ export const usePoolStore = create<PoolState>((set, get) => {
   }
 
   const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
+
+  /**
+   * Event mode, every host ok: the one read still due is when the earliest facts stop being fresh. A peer can keep saying `ok` while its facts
+   * stop advancing and nothing emits `pool.changed` for that, so without it the host would stay ok in the cards' check lines for good. Facts
+   * dated more than `LIVE_MS` ahead (clock skew) are left to the cards, which judge freshness at render time.
+   */
+  const factsExpiryMs = (): number | null => {
+    const now = Date.now()
+    let soonest: number | null = null
+    for (const h of get().hosts) {
+      if (!h.facts) continue
+      const left = h.facts.at + LIVE_MS + 1 - now
+      if (left > 0 && left <= LIVE_MS + 1 && (soonest === null || left < soonest)) soonest = left
+    }
+    return soonest
+  }
+  const armExpiry = (g: number) => {
+    clearTimer()
+    const wait = factsExpiryMs()
+    if (wait !== null) timer = setTimeout(() => { timer = null; void tick(g) }, wait)
+  }
   const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
 
   function applyHosts(sourceHostId: string, hosts: PoolHost[]) {
@@ -191,7 +212,8 @@ export const usePoolStore = create<PoolState>((set, get) => {
     }
     if (g !== gen) return
     if (again) { again = false; void tick(g); return }
-    if (eventDriven()) return // no timer: the next read comes with an event, a reconnect or the window turning visible
+    // no poll timer: the next read comes with an event, a reconnect or the window turning visible (or when the freshest facts expire)
+    if (eventDriven()) { armExpiry(g); return }
     timer = setTimeout(() => { timer = null; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
   }
 
@@ -208,7 +230,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     if (!running || hidden()) return
     // a read under way chose its source before this change: when the first source is another one now, read once more after it
     if (inflight) { if (poolSources()[0] !== readFirst) again = true; return }
-    if (eventDriven()) clearTimer()
+    if (eventDriven()) armExpiry(gen)
     else if (timer === null) void tick(gen)
   }
   let unsubscribe: (() => void)[] = []

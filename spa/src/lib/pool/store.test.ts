@@ -424,6 +424,35 @@ describe('pool.events.v1', () => {
       expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
     })
 
+    // codex R1 (P2): a peer can keep saying `ok` while its facts stop advancing, and nothing emits pool.changed for that.
+    it('facts that stop advancing are read again when they stop being fresh, then every 5 s (stalled is not ok)', async () => {
+      vi.setSystemTime(facts.at + 5_000)
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(24_000)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2_000) // past facts.at + 30 s
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+    })
+
+    it('an event while the expiry timer waits reads at once and re-arms it', async () => {
+      vi.setSystemTime(facts.at + 5_000)
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      st().poolEvent(A)
+      await settle()
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(26_000)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+    })
+
     it('one host not ok: read again every 5 s; once it is ok again the next read stops the timer', async () => {
       announce(['pool.v1', EV])
       fetchPoolHosts.mockResolvedValue([mlab(), down()])
