@@ -8,7 +8,7 @@
 //   bar / bars   `HostBars`: one bar, or two (left and right item), each in its own band.
 //   A host that is not ok has no readings: the indicator's place holds a bold icon instead (M17–M19): wwd_down a yellow broken link, host_down a red power symbol, unknown a grey question mark.
 // Read only from the pool (`CellView`).
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { LinkBreak, Power, Question } from '@phosphor-icons/react'
 import { resolveHostBadge } from '../../lib/host-color'
 import type { CellView } from '../../lib/pool/cell-model'
@@ -46,6 +46,7 @@ function accessibleName(t: (k: string, p?: Record<string, string | number>) => s
 
 export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
   const t = useI18nStore((s) => s.t)
+  const cardId = useId()
   const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
   const shape = view.look.indicator
   const { colors, color, icon, iconWeight } = view.look
@@ -94,6 +95,7 @@ export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
       data-active={String(isActive)}
       data-variant={variant}
       aria-label={accessibleName(t, view)}
+      aria-describedby={cardOpen ? cardId : undefined}
       ref={ref}
       onMouseEnter={openCard}
       onMouseLeave={closeCard}
@@ -123,7 +125,7 @@ export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
           <HostBars left={first} right={second} size={box} />
         </span>
       )}
-      {cardOpen && <HostCard view={view} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
+      {cardOpen && <HostCard id={cardId} view={view} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
     </button>
   )
 }

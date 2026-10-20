@@ -5,21 +5,22 @@ import type { QueueEntry } from './jobs-lanes'
 import type { PoolJob } from './jobs-types'
 
 export type CountTone = 'neutral' | 'warn' | 'error'
-export interface HostCount { n: number; tone: CountTone }
+/** `n` is `queued + running`: `queued` what the host sent and still waits, `running` what its worker has claimed (M11's 「工作」 row says both). */
+export interface HostCount { n: number; tone: CountTone; queued: number; running: number }
 
 export function hostCountsOf(entries: readonly QueueEntry[], jobs: readonly PoolJob[]): Record<string, HostCount> {
   const out: Record<string, HostCount> = {}
-  const bump = (alias: string, tone: CountTone = 'neutral') => {
-    const cur = out[alias] ?? { n: 0, tone: 'neutral' as CountTone }
+  const bump = (alias: string, kind: 'queued' | 'running', tone: CountTone = 'neutral') => {
+    const cur = out[alias] ?? { n: 0, tone: 'neutral' as CountTone, queued: 0, running: 0 }
     const rank = { neutral: 0, warn: 1, error: 2 }
-    out[alias] = { n: cur.n + 1, tone: rank[tone] > rank[cur.tone] ? tone : cur.tone }
+    out[alias] = { ...cur, n: cur.n + 1, [kind]: cur[kind] + 1, tone: rank[tone] > rank[cur.tone] ? tone : cur.tone }
   }
   for (const e of entries) {
     if (e.held) continue
-    bump(e.job.origin, e.noHost ? 'error' : e.long ? 'warn' : 'neutral')
+    bump(e.job.origin, 'queued', e.noHost ? 'error' : e.long ? 'warn' : 'neutral')
   }
   for (const j of jobs) {
-    if ((j.state === 'running' || j.state === 'claimed') && j.claim) bump(j.claim.worker)
+    if ((j.state === 'running' || j.state === 'claimed') && j.claim) bump(j.claim.worker, 'running')
   }
   return out
 }
