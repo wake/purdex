@@ -81,16 +81,17 @@ export function routeD(L: FlowLayout, tally: Tally, p: { x: number; t: number; b
 
 /**
  * One route per card (a job being prepared or run), from the bottom of the pool it came from to the top of the worker cell it sits in. Those leaving one pool are spread along its bottom edge in the order of their cards
- * (left to right); the ends reaching one worker are spread 34 px apart, starting 18 px in from the card's left edge, in the order `cards` lists them.
+ * (left to right); the ends reaching one worker are spread 34 px apart, starting 18 px in from the card's left edge, in the order `cards` lists them, and never past 6 px short of the card's right edge.
  */
 export function routesOf(L: FlowLayout): Route[] {
   const tally = newTally()
+  // a card whose pool or worker was not measured has no route and takes no place in the numbering
+  const valid = L.cards.filter((c) => L.pools[c.pool] && L.workers[c.worker])
   const intoWorker = new Map<string, number>()
   const slot = new Map<string, number>()
-  for (const c of L.cards) { slot.set(c.key, intoWorker.get(c.worker) ?? 0); intoWorker.set(c.worker, (slot.get(c.key) ?? 0) + 1) }
+  for (const c of valid) { const n = intoWorker.get(c.worker) ?? 0; slot.set(c.key, n); intoWorker.set(c.worker, n + 1) }
   const byPool = new Map<string, FlowCard[]>()
-  for (const c of L.cards) {
-    if (!L.pools[c.pool] || !L.workers[c.worker]) continue
+  for (const c of valid) {
     const list = byPool.get(c.pool)
     if (list) list.push(c)
     else byPool.set(c.pool, [c])
@@ -100,7 +101,8 @@ export function routesOf(L: FlowLayout): Route[] {
     const pr = L.pools[poolId]
     list.sort((a, b) => a.rect.l - b.rect.l).forEach((c, k) => {
       const from = { x: pr.l + pr.w * (k + 1) / (list.length + 1), y: pr.b }
-      const to = { x: c.rect.l + 18 + (slot.get(c.key) ?? 0) * 34, y: L.workers[c.worker].t }
+      // the end stays above its own card, however many routes reach the worker
+      const to = { x: Math.min(c.rect.l + 18 + (slot.get(c.key) ?? 0) * 34, c.rect.r - 6), y: L.workers[c.worker].t }
       out.push({ key: c.key, pool: c.pool, worker: c.worker, d: routeD(L, tally, { x: from.x, t: pr.t, b: from.y }, { x: to.x, t: to.y }), from, to })
     })
   }

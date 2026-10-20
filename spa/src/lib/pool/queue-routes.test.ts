@@ -93,6 +93,19 @@ describe('routesOf', () => {
     expect(to.r).toBe(470 + 18)
   })
 
+  it('seven cards into one worker: every end stays above its own card, and a card that was not measured does not take a place', () => {
+    const cards = [{ key: 'gone', rect: rect(0, 0, 1, 1), pool: 'nope', worker: 'W1' }, ...Array.from({ length: 7 }, (_, i) => ({ key: `k${i}`, rect: rect(10, 210 + i * 30, 200, 28), pool: 'A', worker: 'W1' }))]
+    const rs = routesOf(flat(cards))
+    expect(rs).toHaveLength(7)
+    const k0 = rs.find((r) => r.key === 'k0')!
+    expect(k0.to.x).toBe(10 + 18)
+    for (const r of rs) {
+      const c = cards.find((x) => x.key === r.key)!
+      expect(r.to.x).toBeGreaterThan(c.rect.l)
+      expect(r.to.x).toBeLessThanOrEqual(c.rect.r - 6)
+    }
+  })
+
   it('a card whose pool or worker was not measured has no route', () => {
     expect(routesOf(flat([{ key: 'z', rect: rect(0, 0, 1, 1), pool: 'gone', worker: 'W1' }]))).toEqual([])
   })
