@@ -13,7 +13,7 @@ vi.mock('../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('.
 
 import { WatchHostPane } from './WatchHostPane'
 import { poolHostOf, seedPool, SEED_HOST_ID } from './host-pane-seed'
-import { clearViewMemory, readHostRange, readHostTab } from '../../lib/watch/view-memory'
+import { clearViewMemory, readHostRange, readHostTab, writeHostRange, writeHostTab } from '../../lib/watch/view-memory'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -118,6 +118,24 @@ describe('the banner of a host that is not ok (M22, #3785)', () => {
     mount([down('host_down')])
     sub('settings')
     expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(true)
+  })
+})
+
+describe('a pane whose content changes host in place (codex attack)', () => {
+  it('reads the new host\'s remembered sub-tab and range, not the old one\'s', () => {
+    const other = '1234567890abcdef'
+    writeHostTab(other, 'procs'); writeHostRange(other, '6h')
+    const hosts = [poolHostOf(), poolHostOf({ host_id: other, alias: 'mserv' })]
+    fetchPoolHosts.mockResolvedValue(hosts)
+    seedPool(hosts)
+    const pane = (id: string) => ({ id: 'p', content: { kind: 'watch-host', poolHostId: id } }) as never
+    const { rerender } = render(<WatchHostPane pane={pane(SEED_HOST_ID)} isActive />)
+    expect(screen.getByTestId('mock-monitor')).toBeInTheDocument()
+    rerender(<WatchHostPane pane={pane(other)} isActive />)
+    expect(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.procs') })).toHaveAttribute('aria-pressed', 'true')
+    rerender(<WatchHostPane pane={pane(SEED_HOST_ID)} isActive />)
+    expect(screen.getByTestId('mock-monitor')).toBeInTheDocument()
+    expect((monitorProps.mock.calls.at(-1)![0] as { range: string }).range).toBe('30m')
   })
 })
 

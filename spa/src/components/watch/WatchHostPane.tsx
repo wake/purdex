@@ -78,6 +78,9 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const setSub = (s: HostSubTab) => { writeHostTab(memoryKey, s); setSubState(s) }
   const [range, setRangeState] = useState<HostRange>(() => readHostRange(memoryKey))
   const setRange = (r: HostRange) => { writeHostRange(memoryKey, r); setRangeState(r) }
+  // A pane can change host in place (a tab from before the pool is upgraded to a pool host id): then the choices are the new host's, read again while rendering.
+  const [seenKey, setSeenKey] = useState(memoryKey)
+  if (seenKey !== memoryKey) { setSeenKey(memoryKey); setSubState(readHostTab(memoryKey)); setRangeState(readHostRange(memoryKey)) }
 
   // The charts end at "now": a 5 s tick (one interval per pane, cleared on unmount) keeps the axis moving between answers.
   const [tick, setTick] = useState(0)
