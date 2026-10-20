@@ -83,6 +83,9 @@ type WorkerConfig struct {
 	// GoCacheMaxMB bounds the shared Go build cache of the go tasks (one per Go version, under deps_root/gocache; default 10240): over it, and
 	// with no job using it, it is emptied before the next job.
 	GoCacheMaxMB int `toml:"gocache_max_mb"`
+	// GoCachePruneHours: an entry of that cache not used for this many hours is removed (default 24); over the bound the oldest entries go
+	// first, and only a cache that cannot be trimmed is emptied.
+	GoCachePruneHours int `toml:"gocache_prune_hours"`
 	// DiskMinGB is the free space the work volume must have for a heavy run to start (a queue job or an adhoc command): 0 is no floor,
 	// unset is 10 (the pdx gate's disk_min_gb default). It is where the setting starts; a PUT /v1/worker is kept in wwd.db and wins.
 	DiskMinGB *float64 `toml:"disk_min_gb"`
@@ -196,6 +199,9 @@ func (c Config) validateWorker() error {
 	}
 	if c.Worker.GoCacheMaxMB < 0 || c.Worker.GoCacheMaxMB > 1_000_000 {
 		return fmt.Errorf("worker.gocache_max_mb is %d, it must be 0 (the default, 10240) or 1-1000000", c.Worker.GoCacheMaxMB)
+	}
+	if c.Worker.GoCachePruneHours < 0 || c.Worker.GoCachePruneHours > 8760 {
+		return fmt.Errorf("worker.gocache_prune_hours is %d, it must be 0 (the default, 24) or 1-8760", c.Worker.GoCachePruneHours)
 	}
 	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)
