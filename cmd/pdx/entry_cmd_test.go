@@ -11,10 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/wwd/entry"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 func entryRepo(t *testing.T) string {
 	t.Helper()
+	// a queued task is only rewritten when some host can take it: these tests are about the rules of the manifest, so one can
+	withPool(t, wire.Pool{Peers: []wire.Peer{peerOf("mlab", true, true)}}, nil)
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".wwd"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte("[entry]\nmode = \"deny\"\n[tasks.lint]\nrun = \"make lint\"\nargs = \"none\"\n"), 0o644))

@@ -83,10 +83,20 @@ func TestGateOnPool_OnlyQueuedRewritesAreJudged(t *testing.T) {
 	}
 }
 
-func TestGateOnPool_AQueuedRewriteWithNoLabelsIsLeftAlone(t *testing.T) {
-	// a task with no labels can be taken by any worker; without a label to check there is nothing to judge
+// A task with no labels can be taken by any worker, but not when no worker is on or reachable (#3696 R1): it is judged all the same.
+func TestGateOnPool_AQueuedRewriteWithNoLabelsNeedsAWorker(t *testing.T) {
 	in := Result{Action: ActionRewrite, Task: "t", Queued: true}
 	assert.Equal(t, in, GateOnPool(in, wire.Pool{Peers: []wire.Peer{peer("a", true, true)}}, nil))
+	for name, pool := range map[string]wire.Pool{
+		"no host":     {},
+		"worker off":  {Peers: []wire.Peer{peer("a", true, false)}},
+		"unreachable": {Peers: []wire.Peer{peer("a", false, true)}},
+	} {
+		r := GateOnPool(in, pool, nil)
+		assert.Equal(t, ActionNone, r.Action, name)
+		assert.Contains(t, r.Reason, "no reachable host with a worker on", name)
+		assert.NotContains(t, r.Reason, "holds", name+": there is no label to name")
+	}
 }
 
 func TestGateOnPool_ANeverReachedPeerHoldsNothing(t *testing.T) {

@@ -16,8 +16,8 @@ import (
 // yield is waiting, not a no. A host that holds the labels but is down or has its worker off does not count: its last known labels would
 // only say the setting exists. A pool that cannot be read is none too (wwd is not answering, and `pdx test` would exit 3).
 //
-// Only a rewrite that is queued is judged: the local fast lane and the ad-hoc job need no other host, and a task with no labels can be taken
-// by any worker.
+// Only a rewrite that is queued is judged: the local fast lane and the ad-hoc job need no other host (a queued task with no labels needs any
+// worker that is on and reachable).
 //
 // Known gap: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its os: label
 // or a task: label it earned). Labels that such a host satisfies, while it will not take the job, still pass here, and the call then waits
@@ -35,13 +35,17 @@ func GateOnPool(r Result, pool wire.Pool, poolErr error) Result {
 			return r
 		}
 	}
-	return Result{Action: ActionNone, Reason: "no reachable host with a worker on holds " + strings.Join(r.Labels, ", ") + ", so the command runs as typed"}
+	why := "no reachable host with a worker on"
+	if len(r.Labels) > 0 {
+		why += " holds " + strings.Join(r.Labels, ", ")
+	}
+	return Result{Action: ActionNone, Reason: why + ", so the command runs as typed"}
 }
 
-// NeedsPool says whether the answer has to be judged against the pool: a rewrite through the queue that names labels. The caller reads the
-// pool only then.
+// NeedsPool says whether the answer has to be judged against the pool: a rewrite through the queue (with labels or without: a task with none
+// is taken by any worker, which still has to be on and reachable). The caller reads the pool only then.
 func NeedsPool(r Result) bool {
-	return r.Action == ActionRewrite && r.Queued && len(r.Labels) > 0
+	return r.Action == ActionRewrite && r.Queued
 }
 
 func canTake(p wire.Peer, labels []string) bool {
