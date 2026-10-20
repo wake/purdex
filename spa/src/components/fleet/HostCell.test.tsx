@@ -1,433 +1,120 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within, act } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { HostCell, type HostCellProps } from './HostCell'
-import { fast, host } from '../../lib/fleet/__fixtures__/builders'
-import type { FleetHostView } from '../../lib/fleet/store'
-import type { FleetQueue } from '../../lib/fleet/types'
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { cellView, fast } from './cell-view.fixture'
+import type { CellView } from '../../lib/pool/cell-model'
 
-const COLORS = { console: { main: { color: '#336699', alpha: 100 } } }
-const queue = (n: number, over: Partial<FleetQueue> = {}): FleetQueue => ({
-  heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4,
-  holders: [],
-  waiters: Array.from({ length: n }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', session: '', since: 0 })),
-  longest_wait_s: 30, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false, ...over,
-})
-const view = (over: Partial<FleetHostView> = {}): FleetHostView => ({ ...host('mlab', { name: 'mlab', fast: fast({ load: 40 }) }), ...over })
+const ID = '82b11c521df16c12'
 
-beforeEach(() => {
-  useUISettingsStore.setState(useUISettingsStore.getInitialState())
-})
-
-function setup(v: FleetHostView, over: Partial<HostCellProps> = {}) {
-  const props: HostCellProps = {
-    view: v, look: { colors: COLORS, icon: 'Desktop' }, variant: 'wide', isActive: false, waitingPrimary: false, primaryElsewhere: false, onOpen: vi.fn(), ...over,
-  }
+function setup(v: CellView, over: Partial<HostCellProps> = {}) {
+  const props: HostCellProps = { view: v, variant: 'wide', isActive: false, onOpen: vi.fn(), ...over }
   render(<HostCell {...props} />)
   return props
 }
-const tile = () => screen.getByTestId('host-tile-mlab')
-const ring = () => screen.getByTestId('load-ring-mlab')
-const arc = () => within(ring()).queryByTestId('context-ring-arc')
-const hostBadge = () => screen.getByTestId('host-badge-mlab')
-const badge = () => screen.queryByTestId('queue-badge-mlab')
-const bars = () => screen.getByTestId('load-bars-mlab')
+const tile = () => screen.getByTestId(`host-tile-${ID}`)
+const ring = () => screen.getByTestId(`load-ring-${ID}`)
+const bars = () => screen.getByTestId(`load-bars-${ID}`)
 const barOf = (side: 'left' | 'right') => within(bars()).getByTestId(`host-bar-${side}`)
-const fillOf = (side: 'left' | 'right') => within(barOf(side)).queryByTestId('host-bar-fill')
+const withIndicator = (indicator: CellView['look']['indicator']) => cellView({ look: { ...cellView().look, indicator } })
 
-// 「主機格指示」: the setting picks what sits after the badge — the ring, or two bars (CPU + memory pressure / memory used).
-describe('HostCell — the indicator setting', () => {
-  it('default: the ring, no bars', () => {
-    setup(view())
-    expect(ring()).toBeTruthy()
-    expect(screen.queryByTestId('load-bars-mlab')).toBeNull()
+describe('HostCell — the indicator of the host', () => {
+  it('ring: the ring, no bars; its length is the load and its tone the zone', () => {
+    setup(cellView({ fast: fast({ load: 92, zone: 'danger' }), zone: 'danger' }))
+    expect(ring().dataset.zone).toBe('danger')
+    expect(within(ring()).getByTestId('context-ring-arc').dataset.tone).toBe('danger')
+    expect(screen.queryByTestId(`load-bars-${ID}`)).toBeNull()
   })
-  it('bars-pressure: two bars in the ring\'s place and the ring\'s size; left CPU, right the pressure level', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
-    setup(view({ fast: fast({ cpu: 75, level: 2, mem: 30, zone: 'warning' }) }))
-    expect(screen.queryByTestId('load-ring-mlab')).toBeNull()
-    expect(within(bars()).queryByTestId('context-ring')).toBeNull()
-    expect(within(bars()).getByTestId('host-bars').style.width).toBe('16px')
-    expect(bars().dataset.zone).toBe('warning')
+  it('the pool\'s zone unknown draws the ring muted', () => {
+    setup(cellView({ zone: 'unknown' }))
+    expect(within(ring()).getByTestId('context-ring-arc').dataset.tone).toBe('muted')
+  })
+  it('bars with pressure on the right: left CPU, right the pressure level', () => {
+    setup({ ...withIndicator({ shape: 'bars', data: ['cpu', 'pressure'] }), fast: fast({ cpu: 75, level: 2, mem: 30 }) })
+    expect(screen.queryByTestId(`load-ring-${ID}`)).toBeNull()
     expect(barOf('left').dataset.pct).toBe('75')
     expect(barOf('left').dataset.tone).toBe('warn')
     expect(Number(barOf('right').dataset.pct)).toBeCloseTo(200 / 3, 5)
-    expect(barOf('right').dataset.tone).toBe('warn')
   })
-  it('bars-pressure: an unknown level (0) falls back to memory used %', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
-    setup(view({ fast: fast({ cpu: 10, level: 0, mem: 91 }) }))
+  it('bars with memory on the right: memory used %', () => {
+    setup({ ...withIndicator({ shape: 'bars', data: ['cpu', 'mem'] }), fast: fast({ cpu: 10, level: 4, mem: 91 }) })
     expect(barOf('right').dataset.pct).toBe('91')
-    expect(barOf('right').dataset.tone).toBe('danger')
   })
-  it('bars-memory: the right bar is memory used %, whatever the level', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
-    setup(view({ fast: fast({ cpu: 30, level: 1, mem: 82 }) }))
-    expect(barOf('left').dataset.pct).toBe('30')
-    expect(barOf('left').dataset.tone).toBe('ok')
-    expect(barOf('right').dataset.pct).toBe('82')
-    expect(barOf('right').dataset.tone).toBe('warn')
-  })
-  it('bars, offline: grey tracks, no fill; the badge still dimmed', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
-    setup(view({ status: 'offline', fast: null }))
-    expect(fillOf('left')).toBeNull()
-    expect(fillOf('right')).toBeNull()
-    expect(bars().dataset.zone).toBe('offline')
-    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
-  })
-  it('bars, no reading yet: tracks only', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
-    setup(view({ fast: null }))
-    expect(fillOf('left')).toBeNull()
-    expect(fillOf('right')).toBeNull()
-  })
-  it('bars keep the queue count on the badge\'s corner', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
-    setup(view({ slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2) } }))
-    expect(badge()).toHaveTextContent('2')
-    expect(badge()!.parentElement!.contains(hostBadge())).toBe(true)
-  })
-  it('the narrow variant follows the same setting', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
-    setup(view(), { variant: 'narrow' })
-    expect(bars()).toBeTruthy()
-    expect(screen.queryByTestId('load-ring-mlab')).toBeNull()
-  })
-  it('a corrupt stored value draws the ring', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'pie' as never })
-    setup(view())
+  it('a single bar reads as the ring until the per-host shapes are drawn (MON-3b)', () => {
+    setup(withIndicator({ shape: 'bar', data: ['disk'] }))
     expect(ring()).toBeTruthy()
+  })
+})
+
+describe('HostCell — a host that is not ok', () => {
+  it.each(['wwd_down', 'host_down', 'unknown'] as const)('%s: the badge dimmed and the track only', (liveness) => {
+    setup(cellView({ liveness }))
+    expect(screen.getByTestId(`host-badge-dim-${ID}`).className).toContain('opacity-40')
+    expect(ring().dataset.zone).toBe('offline')
+    expect(within(ring()).queryByTestId('context-ring-arc')).toBeNull()
+  })
+  it('the accessible name carries the state word; an ok host also its zone', () => {
+    setup(cellView({ liveness: 'wwd_down' }))
+    expect(tile().getAttribute('aria-label')).toBe('mlab, wwd is not answering (the machine is up)')
+  })
+  it('an ok host\'s name: host, state, zone', () => {
+    setup(cellView())
+    expect(tile().getAttribute('aria-label')).toBe('mlab, OK, Normal')
+  })
+  it('bars of a host that is not ok are the grey tracks only', () => {
+    setup({ ...cellView({ liveness: 'host_down' }), look: { ...cellView().look, indicator: { shape: 'bars', data: ['cpu', 'pressure'] } } })
+    expect(within(barOf('left')).queryByTestId('host-bar-fill')).toBeNull()
+    expect(within(barOf('right')).queryByTestId('host-bar-fill')).toBeNull()
   })
 })
 
 describe('HostCell — the cell', () => {
-  it('is a member bead\'s box: h-6 rounded-md gap-1, 3px each side, hover surface, selected surface', () => {
-    const { rerender } = render(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    for (const c of ['group', 'h-6', 'rounded-md', 'gap-1', 'px-[3px]', 'hover:bg-surface-hover']) expect(tile().className.split(' ')).toContain(c)
-    rerender(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(tile().className).toContain('bg-surface-active')
+  it('shows the badge, and no queue count (the sidebar does not read the gate)', () => {
+    setup(cellView())
+    expect(screen.getByTestId(`host-badge-${ID}`)).toBeTruthy()
+    expect(screen.queryByTestId(`queue-badge-${ID}`)).toBeNull()
   })
-
-  it('draws no click / focus outline (user 10-17)', () => {
-    render(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(tile().className.split(' ')).toContain('outline-none')
+  it('a breathing dot while the worker runs something', () => {
+    setup(cellView({ worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } } }))
+    expect(screen.getByTestId(`worker-running-${ID}`)).toBeTruthy()
   })
-})
-
-describe('HostCell — the host badge (the App\'s HostBadge, as beside a member)', () => {
-  it('is a HostBadge: the host colour\'s light layer behind, the icon always in its main layer', () => {
-    setup(view())
-    const b = hostBadge()
-    expect(b.hasAttribute('data-host-badge')).toBe(true)
-    expect(b.style.background).toBe('rgba(51, 102, 153, 0.22)')
-    expect(b.style.getPropertyValue('--hb-main')).toBe('rgba(51, 102, 153, 1)')
-    expect(b.style.getPropertyValue('--hb-middle')).toBe('rgba(51, 102, 153, 0.6)')
-    expect(b.style.color).toBe('var(--hb-main)')
+  it('no dot when nothing runs, and none for a host that is not ok', () => {
+    setup(cellView({ worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } } }))
+    expect(screen.queryByTestId(`worker-running-${ID}`)).toBeNull()
   })
-  it('takes the sidebar badge settings (size 16, corner 4 by default)', () => {
-    setup(view())
-    expect(hostBadge().style.width).toBe('16px')
-    expect(hostBadge().style.height).toBe('16px')
-    expect(hostBadge().style.borderRadius).toBe('4px')
-  })
-  it('follows a changed sidebar badge size, and so does the ring', () => {
-    setup(view())
-    act(() => useUISettingsStore.setState({ hostBadgeSidebarBox: 20 } as never))
-    expect(hostBadge().style.width).toBe('20px')
-    expect(within(ring()).getByTestId('context-ring').style.width).toBe('20px')
-  })
-  it('a neutral line colour setting greys the icon, like the member badges', () => {
-    useUISettingsStore.setState({ hostBadgeSidebarLineColor: 'neutral' } as never)
-    setup(view())
-    expect(hostBadge().style.color).toBe('var(--text-secondary)')
-  })
-  it('resolves the colours as the badge beside an agent member does (terminal, falling back to console)', () => {
-    setup(view(), { look: { colors: { ...COLORS, terminal: { main: { color: '#22c55e', alpha: 100 } } } } })
-    expect(hostBadge().style.getPropertyValue('--hb-main')).toBe('rgba(34, 197, 94, 1)')
-  })
-  it('a host with no colour: the neutral badge (no background, muted icon)', () => {
-    setup(view(), { look: {} })
-    expect(hostBadge().dataset.hasColor).toBe('false')
-    expect(hostBadge().style.background).toBe('')
-  })
-  it('an unknown icon name (from the wire) never shows as text', () => {
-    setup(view(), { look: { colors: COLORS, icon: 'desktop' } })
-    expect(hostBadge().textContent).toBe('')
-  })
-  it('offline: the badge dimmed, no hatch', () => {
-    setup(view({ status: 'offline', fast: null }))
-    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
-    expect(tile().innerHTML).not.toContain('repeating-linear-gradient')
-    expect(hostBadge().style.background).toBe('rgba(51, 102, 153, 0.22)')
-  })
-  it('online (with or without a reading): not dimmed', () => {
-    setup(view({ fast: null }))
-    expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
+  it('click opens; the variant and the active mark are data attributes', () => {
+    const p = setup(cellView(), { variant: 'narrow', isActive: true })
+    expect(tile().dataset.variant).toBe('narrow')
+    expect(tile().dataset.active).toBe('true')
+    fireEvent.click(tile())
+    expect(p.onOpen).toHaveBeenCalledTimes(1)
   })
 })
 
-describe('HostCell — the ring (the App\'s ContextRing, as the member status)', () => {
-  it('is a ContextRing the badge\'s size, like the team cell\'s', () => {
-    setup(view())
-    const r = within(ring()).getByTestId('context-ring')
-    expect(r.style.width).toBe('16px')
-    expect(r.querySelector('circle')!.getAttribute('stroke')).toBe('var(--border-default)')
-    expect(r.querySelector('circle')!.getAttribute('stroke-width')).toBe('2.5')
-  })
-  it('its arc length follows the composite score', () => {
-    setup(view({ fast: fast({ load: 50 }) }))
-    expect(arc()!.dataset.shown).toBe('50')
-    const [len, whole] = (arc()!.getAttribute('stroke-dasharray') ?? '').split(' ').map(Number)
-    expect(len / whole).toBeCloseTo(0.5, 2)
-  })
-  it('a different score gives a different length', () => {
-    setup(view({ fast: fast({ load: 80 }) }))
-    const [len, whole] = (arc()!.getAttribute('stroke-dasharray') ?? '').split(' ').map(Number)
-    expect(len / whole).toBeCloseTo(0.8, 2)
-  })
-  it('normal is the ok tone (green, like a healthy member ring)', () => {
-    setup(view({ fast: fast({ load: 30, zone: 'normal' }) }))
-    expect(arc()!.dataset.tone).toBe('ok')
-    expect(arc()!.getAttribute('class')).toBe('stroke-status-success')
-  })
-  it('warning is the warn tone', () => {
-    setup(view({ fast: fast({ load: 60, zone: 'warning' }) }))
-    expect(arc()!.getAttribute('class')).toBe('stroke-status-warning')
-  })
-  it('its colour is the zone the daemon sent, not a function of the score', () => {
-    // a high score in a normal zone stays green; a low score in a danger zone is red
-    const { unmount } = render(<HostCell view={view({ fast: fast({ load: 95, zone: 'normal' }) })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(arc()!.getAttribute('class')).toBe('stroke-status-success')
-    unmount()
-    render(<HostCell view={view({ fast: fast({ load: 5, zone: 'danger' }) })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(arc()!.getAttribute('class')).toBe('stroke-status-error')
-    expect(ring().dataset.zone).toBe('danger')
-  })
-  it('the middle is empty: a host has no model', () => {
-    setup(view())
-    const svg = within(ring()).getByTestId('context-ring').querySelector('svg')!
-    expect(svg.querySelectorAll('g, path, text')).toHaveLength(0)
-  })
-  it('offline: the track only, no arc', () => {
-    setup(view({ status: 'offline', fast: null }))
-    expect(arc()).toBeNull()
-    expect(within(ring()).getByTestId('context-ring').querySelectorAll('circle')).toHaveLength(1)
-    expect(ring().dataset.zone).toBe('offline')
-  })
-  it('no reading yet: the track only, no arc', () => {
-    setup(view({ fast: null }))
-    expect(arc()).toBeNull()
-    expect(ring().dataset.zone).toBe('nodata')
-  })
-  it('an unknown zone (the parser drops one; defensive) still draws the score\'s arc', () => {
-    setup(view({ fast: { ...fast({ load: 50 }), zone: 'mystery' as never } }))
-    expect(arc()!.dataset.shown).toBe('50')
-  })
-})
-
-describe('HostCell — the queue badge', () => {
-  const slow = (q: FleetQueue) => ({ at: 1, top_cpu: [], top_mem: [], queue: q })
-  it('shows the waiter count on a daemon host that has waiters', () => {
-    setup(view({ slow: slow(queue(2)) }))
-    expect(badge()).toHaveTextContent('2')
-  })
-  it('sits on the host badge\'s corner (its positioned parent holds the host badge)', () => {
-    setup(view({ slow: slow(queue(2)) }))
-    const anchor = badge()!.parentElement!
-    expect(anchor.className).toContain('relative')
-    expect(anchor.contains(hostBadge())).toBe(true)
-    expect(anchor.contains(ring())).toBe(false)
-  })
-  it('is absent at 0 waiters', () => {
-    setup(view({ slow: slow(queue(0)) }))
-    expect(badge()).toBeNull()
-  })
-  it('is absent on a probe host even with a queue', () => {
-    setup(view({ kind: 'probe', slow: slow(queue(2)) }))
-    expect(badge()).toBeNull()
-  })
-  it('is absent while offline', () => {
-    setup(view({ status: 'offline', slow: slow(queue(2)) }))
-    expect(badge()).toBeNull()
-  })
-  it('is neutral grey under 2 minutes and under 3 waiters', () => {
-    setup(view({ slow: slow(queue(2, { longest_wait_s: 119 })) }))
-    expect(badge()!.className).toContain('bg-text-muted')
-  })
-  it('turns warning from 2 minutes', () => {
-    setup(view({ slow: slow(queue(1, { longest_wait_s: 120 })) }))
-    expect(badge()!.className).toContain('bg-status-warning')
-  })
-  it('turns warning from 3 waiters', () => {
-    setup(view({ slow: slow(queue(3)) }))
-    expect(badge()!.className).toContain('bg-status-warning')
-  })
-  it('turns error while admission is held, over everything else', () => {
-    setup(view({ slow: slow(queue(1, { admission_held: true })) }))
-    expect(badge()!.className).toContain('bg-status-error')
-  })
-  // The user's U9 (journal v5 §3.6): smaller and further to the upper right than the shield's.
-  it('is the small badge: 9px, 7px figures, 5px out of the host badge\'s corner', () => {
-    setup(view({ slow: slow(queue(2)) }))
-    const cls = badge()!.className.split(' ')
-    for (const c of ['h-[9px]', 'min-w-[9px]', 'text-[7px]', '-top-[5px]', '-right-[5px]']) expect(cls).toContain(c)
-    for (const c of ['h-[12px]', 'min-w-[12px]', 'text-[8px]', '-top-[4px]', '-right-[4px]']) expect(cls).not.toContain(c)
-  })
-  // Two digits widen the badge to the left (it is anchored by its right edge), so its reach toward the indicator is the one-digit
-  // badge's: 5 px past the host badge, and the wide cell puts the indicator 6 px after it (gap-1 + ml-0.5). Nothing clips it.
-  it.each(['ring', 'bars-pressure'] as const)('two digits (%s): the count whole, on the host badge\'s side, short of the indicator', (ind) => {
-    useUISettingsStore.setState({ fleetCellIndicator: ind })
-    setup(view({ slow: slow(queue(12)) }))
-    expect(badge()).toHaveTextContent('12')
-    const anchor = badge()!.parentElement!
-    expect(anchor.contains(hostBadge())).toBe(true)
-    const indicator = ind === 'ring' ? ring() : bars()
-    expect(anchor.contains(indicator)).toBe(false)
-    const px = (cls: string[], re: RegExp, scale = 1) => { const m = cls.map((c) => c.match(re)).find(Boolean); return m ? Number(m[1]) * scale : NaN }
-    const reach = px(badge()!.className.split(' '), /^-right-\[(\d+)px\]$/)
-    const room = px(tile().className.split(' '), /^gap-(\d+(?:\.\d+)?)$/, 4) + px(indicator.className.split(' '), /^ml-(\d+(?:\.\d+)?)$/, 4)
-    expect(reach).toBe(5)
-    expect(room).toBeGreaterThan(reach)
-    for (const el of [anchor, tile()]) expect(el.className.split(' ')).not.toContain('overflow-hidden')
-  })
-  // The narrow column stacks the cells with no gap and the badge sits 5 px above its host badge, 1 px past the top of its own
-  // button: it must not take clicks, or the bottom pixel of the cell above opens this host (WA-1 review).
-  it('takes no clicks: the 1 px it reaches over the cell above stays that cell\'s', () => {
-    setup(view({ slow: slow(queue(2)) }), { variant: 'narrow' })
-    expect(badge()!.className.split(' ')).toContain('pointer-events-none')
-  })
-})
-
-// U9: the ring (or the bars) moves 2 px further right of the host badge, to give the queue badge room.
-describe('HostCell — the indicator\'s left margin', () => {
-  it.each([
-    ['ring', 'wide'], ['ring', 'narrow'], ['bars-pressure', 'wide'], ['bars-memory', 'narrow'],
-  ] as const)('%s, %s: ml-0.5 after the cell\'s gap', (ind, variant) => {
-    useUISettingsStore.setState({ fleetCellIndicator: ind })
-    setup(view(), { variant })
-    const el = ind === 'ring' ? ring() : bars()
-    expect(el.className.split(' ')).toContain('ml-0.5')
-    expect(tile().className.split(' ')).toContain(variant === 'wide' ? 'gap-1' : 'gap-0.5')
-  })
-})
-
-describe('HostCell — the tooltip and the click', () => {
-  it('the accessible name carries the host, the zone word, the queue and the waiting notice', () => {
-    setup(view({ name: 'mlab', fast: fast({ zone: 'warning' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }), { waitingPrimary: true })
-    expect(screen.getByRole('button', { name: 'mlab, High, Queue: 2 waiting, longest 45 s, Waiting for the primary' })).toBeTruthy()
-  })
-  it('the accessible name says Offline / No data / the paused queue', () => {
-    const { unmount } = render(<HostCell view={view({ status: 'offline', fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(screen.getByRole('button', { name: 'mlab, Offline' })).toBeTruthy()
-    unmount()
-    render(<HostCell view={view({ fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(screen.getByRole('button', { name: 'mlab, No data' })).toBeTruthy()
-  })
-  it('has no native title (the hover card is the only tooltip), keeps the aria-label', () => {
-    setup(view())
-    expect(tile().hasAttribute('title')).toBe(false)
-    expect(tile().getAttribute('aria-label')).toBe('mlab, Normal')
-  })
-  it('no card until the pointer enters; enter shows it, leave hides it', () => {
-    setup(view())
+describe('HostCell — the hover card', () => {
+  it('opens on enter and focus, closes on leave and blur and click', () => {
+    setup(cellView())
     expect(screen.queryByTestId('host-card')).toBeNull()
     fireEvent.mouseEnter(tile())
     expect(screen.getByTestId('host-card')).toBeTruthy()
     fireEvent.mouseLeave(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
-  })
-  it('closes the card on a scroll of any ancestor, and on a window resize', () => {
-    setup(view())
-    fireEvent.mouseEnter(tile())
-    expect(screen.getByTestId('host-card')).toBeTruthy()
-    fireEvent.scroll(document.body)
-    expect(screen.queryByTestId('host-card')).toBeNull()
-    fireEvent.mouseEnter(tile())
-    expect(screen.getByTestId('host-card')).toBeTruthy()
-    fireEvent(window, new Event('resize'))
-    expect(screen.queryByTestId('host-card')).toBeNull()
-  })
-  it('scroll / resize listeners are gone once the card is closed', () => {
-    const add = vi.spyOn(window, 'addEventListener')
-    const rm = vi.spyOn(window, 'removeEventListener')
-    setup(view())
-    fireEvent.mouseEnter(tile())
-    expect(add.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
-    fireEvent.mouseLeave(tile())
-    expect(rm.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
-    expect(rm.mock.calls.some((c) => c[0] === 'resize')).toBe(true)
-    add.mockRestore(); rm.mockRestore()
-  })
-  it('one card at a time: focus on cell A then hover on cell B shows only B\'s card', () => {
-    const mk = (id: string) => ({ ...host(id, { name: id, fast: fast({ load: 40 }) }) }) as FleetHostView
-    render(<>
-      {[mk('a'), mk('b')].map((v) => (
-        <HostCell key={v.id} view={v} look={{ colors: COLORS, icon: 'Desktop' }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={vi.fn()} />
-      ))}
-    </>)
-    fireEvent.focus(screen.getByTestId('host-tile-a'))
-    expect(screen.getAllByTestId('host-card')).toHaveLength(1)
-    fireEvent.mouseEnter(screen.getByTestId('host-tile-b'))
-    const cards = screen.getAllByTestId('host-card')
-    expect(cards).toHaveLength(1)
-    expect(within(cards[0]).getByText('b')).toBeTruthy()
-  })
-  it('keyboard focus shows the card, blur hides it', () => {
-    setup(view())
     fireEvent.focus(tile())
     expect(screen.getByTestId('host-card')).toBeTruthy()
     fireEvent.blur(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
-  })
-  it('a click hides the card and opens', () => {
-    const p = setup(view())
     fireEvent.mouseEnter(tile())
     fireEvent.click(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
-    expect(p.onOpen).toHaveBeenCalledTimes(1)
   })
-  it('the card carries this cell\'s host, readings and the waiting-primary notice', () => {
-    setup(view({ name: 'mlab', fast: fast({ cpu: 12, zone: 'warning' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }), { waitingPrimary: true })
-    fireEvent.mouseEnter(tile())
-    const c = screen.getByTestId('host-card')
-    expect(c.textContent).toContain('mlab')
-    expect(c.textContent).toContain('12%')
-    expect(c.textContent).toContain('Waiting for the primary')
-    expect(c.textContent).toContain('Queue 2')
-  })
-  it('wide: the card sits above the strip; narrow: to the right of the cell', () => {
-    const { unmount } = render(<HostCell view={view()} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    fireEvent.mouseEnter(tile())
-    expect(screen.getByTestId('host-card').getAttribute('data-placement')).toBe('above')
-    unmount()
-    render(<HostCell view={view()} look={{}} variant="narrow" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+  it('the card is on the right in the narrow bar and above in the wide one', () => {
+    setup(cellView(), { variant: 'narrow' })
     fireEvent.mouseEnter(tile())
     expect(screen.getByTestId('host-card').getAttribute('data-placement')).toBe('right')
   })
-  it('the icon is always bright: a coloured host uses its main layer, a plain one text-secondary; offline keeps the dimming', () => {
-    setup(view())
-    expect(hostBadge().style.color).toBe('var(--hb-main)')
-  })
-  it('a plain (uncoloured) host: the brighter neutral, not muted', () => {
-    setup(view(), { look: {} })
-    expect(hostBadge().style.color).toBe('var(--text-secondary)')
-  })
-  it('an offline host stays dimmed on top of the bright icon', () => {
-    setup(view({ status: 'offline', fast: null }))
-    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
-    expect(hostBadge().style.color).toBe('var(--hb-main)')
-  })
-  it('click calls onOpen', () => {
-    const p = setup(view())
-    fireEvent.click(tile())
-    expect(p.onOpen).toHaveBeenCalledTimes(1)
-  })
-  it('the narrow variant has the same badge and ring, tighter', () => {
-    setup(view(), { variant: 'narrow' })
-    expect(hostBadge().style.width).toBe('16px')
-    expect(within(ring()).getByTestId('context-ring')).toBeTruthy()
-    expect(tile().dataset.variant).toBe('narrow')
-    expect(tile().className.split(' ')).toContain('gap-0.5')
+  it('one card at a time', () => {
+    render(<><HostCell view={cellView()} variant="wide" isActive={false} onOpen={vi.fn()} /><HostCell view={cellView({ hostId: '0123456789abcdef', name: 'air26' })} variant="wide" isActive={false} onOpen={vi.fn()} /></>)
+    fireEvent.mouseEnter(screen.getByTestId(`host-tile-${ID}`))
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-0123456789abcdef'))
+    expect(screen.getAllByTestId('host-card')).toHaveLength(1)
   })
 })

@@ -3350,6 +3350,7 @@
   "pool.liveness.explain_stalled_none": "wwd 有回應，但還沒有讀數",
   "pool.liveness.last_reading": "最後一筆讀數 {{time}}（{{ago}}）",
   "pool.liveness.no_reading": "還沒有讀數",
+  "pool.card.unreadable": "讀不到資源池（{{reason}}）",
   "pool.liveness.checked": "最後檢查 {{time}}・每 5 秒",
   "pool.liveness.ago_s": "{{n}} 秒前",
   "pool.liveness.ago_m": "{{n}} 分鐘前",

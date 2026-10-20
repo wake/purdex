@@ -4,9 +4,19 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore, getReturnWorkspaceId, getWatchReturnTarget } from '../store'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { readMasterWorld } from '../../../lib/profile/master-world'
+import { useFleetStore } from '../../../lib/fleet/store'
 import { currentWatchReconciler, readFleetView } from './watch-area'
 
-export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { host: string }
+/** `poolHost`: a pool host by its wwd `host_id` and alias (the sidebar). Until MON-6 gives the host tabs the wwd id as their id, it is found among the fleet's hosts by alias (MON-1c bridge, deleted with MON-6). */
+export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { host: string } | { poolHost: { hostId: string; alias: string } }
+
+/** The fleet's own id of the host with this alias, or null: not in the snapshot yet, an empty alias, or two fleet hosts with it (an alias is not known to be unique: neither is picked). */
+function fleetIdOfAlias(alias: string): string | null {
+  const snapshot = useFleetStore.getState().snapshot
+  if (!snapshot || alias === '') return null
+  const found = Object.values(snapshot.hosts).filter((h) => h.alias === alias)
+  return found.length === 1 ? found[0].id : null
+}
 
 /**
  * Ensures the area's workspace, brings its host tabs up to the fleet's host list, then selects the target the way
@@ -22,10 +32,13 @@ export function openWatchArea(target: WatchTarget): void {
   currentWatchReconciler().reconcile(readFleetView())
 
   const area = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
-  const wanted = 'host' in target ? watchHostTabId(target.host) : target.tab === 'events' ? WATCH_EVENTS_TAB_ID : target.tab === 'jobs' ? WATCH_JOBS_TAB_ID : WATCH_GUARDIAN_TAB_ID
+  const hostId = 'poolHost' in target ? fleetIdOfAlias(target.poolHost.alias) : 'host' in target ? target.host : undefined
+  const wanted = hostId !== undefined
+    ? (hostId === null ? null : watchHostTabId(hostId))
+    : 'tab' in target && target.tab === 'events' ? WATCH_EVENTS_TAB_ID : 'tab' in target && target.tab === 'jobs' ? WATCH_JOBS_TAB_ID : WATCH_GUARDIAN_TAB_ID
   const tabs = useTabStore.getState().tabs
   const live = area.tabs.filter((id) => id in tabs)
-  const tabId = live.includes(wanted) ? wanted : (live[0] ?? null)
+  const tabId = wanted !== null && live.includes(wanted) ? wanted : (live[0] ?? null)
 
   useTabStore.getState().setActiveTab(tabId)
   useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)

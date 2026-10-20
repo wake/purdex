@@ -4,8 +4,7 @@ import { render, screen, fireEvent, cleanup, within } from '@testing-library/rea
 import { ActivityBarNarrow } from './ActivityBarNarrow'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
-import { useFleetStore } from '../../../lib/fleet/store'
-import { host, primaryAnswer } from '../../../lib/fleet/__fixtures__/builders'
+import { usePoolStore } from '../../../lib/pool/store'
 import { __resetProfileSwitcherForTest } from '../../../stores/useProfileSwitcherStore'
 
 // The list itself is WorkerList's business (its own tests); here it only has to be there or not.
@@ -28,17 +27,14 @@ afterEach(() => {
 
 describe('ActivityBarNarrow', () => {
   it('stacks the fleet cells as a column under the bottom buttons', () => {
-    useFleetStore.getState().reset()
-    const gen = useFleetStore.getState().begin('h')
-    useFleetStore.getState().setSupport('h', gen, 'yes')
-    useFleetStore.getState().applyFetched('h', gen, primaryAnswer(1, [host('a', { name: 'a' }), host('b', { name: 'b' })]))
+    usePoolStore.setState({ hosts: [{ host_id: '82b11c521df16c12', alias: 'a', reachable: true, facts: null, liveness: 'unknown' }, { host_id: '0123456789abcdef', alias: 'b', reachable: true, facts: null, liveness: 'unknown' }] as never, sourceHostId: 'cfg-a', start: () => {}, stop: () => {} } as never)
     render(
       <ActivityBarNarrow workspaces={[]} activeWorkspaceId={null} onSelectWorkspace={() => {}} onSelectHome={() => {}} onAddWorkspace={() => {}} onOpenHosts={() => {}} onOpenSettings={() => {}} />,
     )
     const col = screen.getByTestId('fleet-cells')
     expect(col.className).toContain('flex-col')
     expect(screen.getByTestId('bottom-nav').nextElementSibling).toBe(col)
-    useFleetStore.getState().reset()
+    usePoolStore.getState().reset()
   })
 
   it('renders Home button', () => {
