@@ -77,7 +77,9 @@ func (q *Queue) Start(ctx context.Context, id, claimID string) (wire.Lease, erro
 		}
 		now := q.now().UnixMilli()
 		if h.state == wire.StateClaimed {
-			if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', started_at = ?, lease_deadline = ?, updated_at = ? WHERE id = ?`, now, q.deadline(now), now, id); err != nil {
+			// started_at is never before claim_since: the origin's clock stepping back while the worker prepared (NTP, a person) would
+			// otherwise make the time spent preparing negative
+			if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', started_at = max(?, coalesce(claim_since, ?)), lease_deadline = ?, updated_at = ? WHERE id = ?`, now, now, q.deadline(now), now, id); err != nil {
 				return err
 			}
 			*changed = append(*changed, id)

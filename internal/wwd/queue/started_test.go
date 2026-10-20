@@ -48,6 +48,23 @@ func TestStartWritesStartedAtAndARepeatedStartKeepsIt(t *testing.T) {
 	assert.Equal(t, first, *f.started(t, id), "a repeated start with the same claim is a renewal: the time stays")
 }
 
+// The origin's clock stepping back while the worker prepares (NTP, a person) does not make the preparing time negative: a start is never
+// written before the claim's own time.
+func TestStartedAtIsNeverBeforeTheClaimWhenTheClockStepsBack(t *testing.T) {
+	f := newFixture(t)
+	id := f.submit(t)
+	c := f.claim(t, id, "air26")
+	claimedAt := f.get(t, id).Claim.Since
+	f.clk.Advance(-90 * time.Second) // the clock stepped back
+	_, err := f.q.Start(bg, id, c.ClaimID)
+	require.NoError(t, err)
+
+	j := f.get(t, id)
+	require.NotNil(t, j.StartedAt)
+	assert.False(t, j.StartedAt.Before(claimedAt), "started_at %v is before the claim %v", j.StartedAt, claimedAt)
+	assert.Equal(t, claimedAt, *j.StartedAt, "held at the claim's time")
+}
+
 // Every way back to the queue clears it: a worker that hands the claim back, and a lease that ran out. The job then waits for another
 // worker, and its next Start writes a new time.
 func TestEveryWayBackToQueuedClearsStartedAt(t *testing.T) {
