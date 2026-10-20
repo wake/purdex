@@ -139,7 +139,9 @@ func (t *JobUsageTracker) Commit(f wire.Facts) {
 
 	zone := f.Derived.Zone // the real zone: a fault hook's override is in Derived.ZoneOverride
 	var ownerActive *bool
-	if o := f.Owner; o != nil && !strings.HasPrefix(o.Reason, jobUsageFaultPrefix) {
+	// the owner is part of a job's record only where an owner rule is in force (spec §8.6): a host that reads its owner with no rule (every
+	// macOS host, #3682) reports the reading in its facts, and it is not stored with the jobs
+	if o := f.Owner; o != nil && f.Worker.OwnerRule != "" && !strings.HasPrefix(o.Reason, jobUsageFaultPrefix) {
 		a := o.Active
 		ownerActive = &a
 	}

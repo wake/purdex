@@ -46,7 +46,8 @@ func sampleJob(r *UsageRecorder, n int, zone wire.Zone, owner *wire.OwnerState) 
 	ctx := facts.ProcContext{JobOf: func(pid int) (string, bool) { return "j_a", pid == 300 }}
 	now := ut0.Add(time.Duration(n) * 5 * time.Second)
 	r.Observe(now, snap, ctx)
-	r.OnFacts(wire.Facts{At: now, Owner: owner, Derived: wire.Derived{Zone: zone}})
+	// the owner is part of a job's record only with an owner rule in force (spec §8.6, #3682)
+	r.OnFacts(wire.Facts{At: now, Owner: owner, Worker: wire.FactsWorker{OwnerRule: "hid<5m"}, Derived: wire.Derived{Zone: zone}})
 }
 
 // finalJob is a fast-lane job's final event: the job a final event is the record of (a job the worker ran is recorded from the run,

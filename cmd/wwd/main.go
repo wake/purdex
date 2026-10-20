@@ -161,7 +161,7 @@ func run(cfgPath string) error {
 	}
 	fastLane = localruns.New(tbl, localruns.FromQueue(q), alias)
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
-		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
+		Store: st, Host: alias, Events: broker, OwnerRuleSupported: facts.OwnerReadable(),
 		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
 	})
 	if err != nil {
