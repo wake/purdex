@@ -9,6 +9,7 @@ import { ICON_MAP } from '../../components/tab-icon-map'
 import { clearModuleRegistry, getModule, getPaneRenderer } from '../module-registry'
 import { registerBuiltinModules } from '../register-modules'
 import { useFleetStore } from '../fleet/store'
+import { useAlertsStore } from '../pool/alerts-store'
 import { getTabBadgePane, getTabHostId } from '../host-color'
 import { usePoolStore } from '../pool/store'
 import { resetRememberedPoolHosts } from '../pool/use-monitor-hosts'
@@ -21,8 +22,17 @@ const host = (id: string): PaneContent => ({ kind: 'watch-host', fleetHostId: id
 const leaf = (content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id: 'p', content } })
 
 describe('watch pane kinds', () => {
-  beforeEach(() => useFleetStore.getState().reset())
+  beforeEach(() => { useFleetStore.getState().reset(); useAlertsStore.getState().reset() })
 
+  it('the events tab carries the number of active push-level alerts (「事件 n」, M36)', () => {
+    const al = (key: string, over: Record<string, unknown> = {}) => ({ key, kind: 'disk_low', level: 'push', since: 1, last: 2, clearedAt: null, detail: key, ...over })
+    useAlertsStore.setState({ byHost: {
+      mlab: { kind: 'ok', known: true, at: 1, alerts: [al('silence:mserv', { kind: 'silence' }), al('disk_low:mlab'), al('o', { level: 'digest' })] as never },
+      air26: { kind: 'ok', known: true, at: 1, alerts: [al('silence:mserv', { kind: 'silence' })] as never },
+    } })
+    expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, (k, p) => (p ? `${k}:${p.n}` : k))).toBe('watch.pane.events_n:2')
+    useAlertsStore.getState().reset()
+  })
   it('labels: guardian, events, and the host alias from the fleet snapshot (id as fallback)', () => {
     expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')

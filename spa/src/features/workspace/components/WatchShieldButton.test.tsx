@@ -5,7 +5,7 @@ const openWatchArea = vi.fn()
 vi.mock('../lib/open-watch-area', () => ({ openWatchArea: (...a: unknown[]) => openWatchArea(...a) }))
 import { WatchShieldButton } from './WatchShieldButton'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
-import { useWatchEventsStore } from '../../../lib/watch/events-store'
+import { useAlertsStore } from '../../../lib/pool/alerts-store'
 import type { WatchStatus } from '../../../lib/watch/status-types'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import zh from '../../../locales/zh-TW.json'
@@ -19,7 +19,7 @@ beforeEach(() => {
   cleanup()
   openWatchArea.mockReset()
   useWatchStatusStore.getState().reset()
-  useWatchEventsStore.getState().reset()
+  useAlertsStore.getState().reset()
   useWorkspaceStore.getState().reset()
 })
 
@@ -77,44 +77,43 @@ describe('WatchShieldButton', () => {
   })
 })
 
-describe('WatchShieldButton — the events count (W5e)', () => {
-  const ev = (id: string, status: 'pending' | 'handled') => ({ id, host: 'm', kind: 'pressure_high', at: '2026-10-17T01:00:00Z', status })
+describe('WatchShieldButton — the alert count (M36, M40)', () => {
+  const al = (key: string, over: Record<string, unknown> = {}) => ({ key, kind: 'disk_low', level: 'push', since: 1, last: 2, clearedAt: null, detail: key, ...over })
+  const ok = (alerts: ReturnType<typeof al>[]) => ({ kind: 'ok' as const, known: true, alerts: alerts as never, at: 1 })
   const title = (n: number) => `${t('watch.shield.awake')} · ${useI18nStore.getState().t('watch.shield.events', { n })}`
-  /** The daemon's own count per App host (GET /api/watch/unhandled, watch.events), and the rows its list returned. */
-  const counts = (unhandled: Record<string, number>, rows: ReturnType<typeof ev>[] = []) =>
-    useWatchEventsStore.setState({ unhandled, byHost: { h1: { kind: 'ok', events: rows, at: 1 } } })
 
-  it('shows no badge while nothing waits, and a click goes to the guardian tab', () => {
+  it('shows no badge while nothing is active, and a click goes to the guardian tab', () => {
     answer('awake')
-    counts({ h1: 0 }, [ev('1', 'handled')])
+    useAlertsStore.setState({ byHost: { mlab: ok([al('d', { clearedAt: 5 }), al('o', { level: 'digest' })]) } })
     render(<WatchShieldButton />)
     expect(screen.queryByTestId('watch-shield-count')).toBeNull()
     fireEvent.click(screen.getByTestId('watch-shield'))
     expect(openWatchArea).toHaveBeenCalledWith({ tab: 'guardian' })
   })
 
-  it('shows the sum of the hosts\' unhandled counts and a click opens 事件', () => {
+  it('mlab and air26 both list silence:mserv, mlab has a disk_low push and a digest: 2, and a click opens 事件', () => {
     answer('awake')
-    counts({ h1: 2, h2: 3 })
+    const silence = al('silence:mserv', { kind: 'silence', silence: 'host_down' })
+    useAlertsStore.setState({ byHost: { mlab: ok([silence, al('disk_low:mlab'), al('orphans:mlab', { kind: 'orphans', level: 'digest' })]), air26: ok([silence]) } })
     render(<WatchShieldButton />)
-    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('5')
-    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(5))
+    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('2')
+    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(2))
     fireEvent.click(screen.getByTestId('watch-shield'))
     expect(openWatchArea).toHaveBeenCalledWith({ tab: 'events' })
   })
 
-  it('the list holds only 500 rows but the daemon says 620: the number is 620 (the badge caps its figures at 99+)', () => {
+  it('the badge caps its figures at 99+ and the title says the number', () => {
     answer('awake')
-    counts({ h1: 620 }, Array.from({ length: 500 }, (_, i) => ev(String(i), 'pending')))
+    useAlertsStore.setState({ byHost: { mlab: ok(Array.from({ length: 120 }, (_, i) => al(`k${i}`))) } })
     render(<WatchShieldButton />)
-    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(620))
+    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(120))
     expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('99+')
   })
 
   // journal v5 U9 shrinks the host cells' count badge only (§3.6): the shield's keeps its 12 px size and 4 px offset.
   it('the badge keeps its size: 12px, 8px figures, 4px out of the corner (not the host cell\'s small one)', () => {
     answer('awake')
-    counts({ h1: 12 })
+    useAlertsStore.setState({ byHost: { mlab: ok([al('a')]) } })
     render(<WatchShieldButton />)
     const cls = screen.getByTestId('watch-shield-count').className.split(' ')
     for (const c of ['h-[12px]', 'min-w-[12px]', 'text-[8px]', '-top-[4px]', '-right-[4px]']) expect(cls).toContain(c)
@@ -123,10 +122,10 @@ describe('WatchShieldButton — the events count (W5e)', () => {
 
   it('follows the count when it changes', () => {
     answer('none')
-    counts({ h1: 1 })
+    useAlertsStore.setState({ byHost: { mlab: ok([al('a')]) } })
     render(<WatchShieldButton />)
     expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('1')
-    act(() => counts({ h1: 0 }))
+    act(() => useAlertsStore.setState({ byHost: { mlab: ok([al('a', { clearedAt: 9 })]) } }))
     expect(screen.queryByTestId('watch-shield-count')).toBeNull()
   })
 })

@@ -173,6 +173,30 @@ describe('series', () => {
   })
 })
 
+describe('series G-1 fields (MON-6c)', () => {
+  const base = { at: '2026-10-18T05:00:00Z', zone: 'normal', cpu_idle_pct: 50, mem_available_mb: 900, pressure: 0, page_out_rate: null, disk_max_used_pct: null, headroom: { heavy: 1, light: 1 } }
+  const one = (extra: Record<string, unknown>) => parseSeries({ step: '1m', truncated: false, points: [{ ...base, ...extra }] })!.points[0]
+
+  it('reads load1, load5, swap, worker_running, queue_queued and disks', () => {
+    const p = one({ load1: 1.5, load5: 2, swap_used_mb: 300, swap_out_rate: 4.5, worker_running: { heavy: 1, light: 0 }, queue_queued: 3, disks: [{ mount: '/', used_pct: 60, free_gb: 90 }, { mount: '/v', used_pct: 20, free_gb: 400 }] })
+    expect(p).toMatchObject({ load1: 1.5, load5: 2, swap_used_mb: 300, swap_out_rate: 4.5, worker_running: { heavy: 1, light: 0 }, queue_queued: 3 })
+    expect(p.disks).toEqual([{ mount: '/', used_pct: 60, free_gb: 90 }, { mount: '/v', used_pct: 20, free_gb: 400 }])
+  })
+  it('a point with only the original fields has none of the new ones', () => {
+    const p = one({})
+    for (const k of ['load1', 'load5', 'swap_used_mb', 'swap_out_rate', 'worker_running', 'queue_queued', 'disks']) expect(k in p).toBe(false)
+  })
+  it('null is absent; a bad field is absent and the point stays', () => {
+    const p = one({ load1: null, load5: 'x', swap_used_mb: 'x', worker_running: { heavy: 1 }, queue_queued: 'n' })
+    expect(p.at).toBe(Date.parse('2026-10-18T05:00:00Z'))
+    for (const k of ['load1', 'load5', 'swap_used_mb', 'worker_running', 'queue_queued']) expect(k in p).toBe(false)
+  })
+  it('one broken disk is dropped, the others stay', () => {
+    const p = one({ disks: [{ mount: '/', used_pct: 60, free_gb: 90 }, { mount: 5 }, { mount: '/v', used_pct: 'x', free_gb: 1 }] })
+    expect(p.disks).toEqual([{ mount: '/', used_pct: 60, free_gb: 90 }])
+  })
+})
+
 describe('parseFactsHistory', () => {
   const rec = (at: string) => ({ ...darwinJson, at })
   it('reads the step and the records, oldest first as the daemon sends them', () => {
