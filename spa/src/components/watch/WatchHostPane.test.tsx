@@ -1,7 +1,7 @@
 // spa/src/components/watch/WatchHostPane.test.tsx — the host page's shell (monitoring tabs spec M41 header, M22 banner; plan MON-6f-2): the header, the four sub-tabs, the range switch, and the banner of a host that is not ok on every sub-tab.
 // The bodies of 監控 and 設定 are mocked (they have their own tests); the hosts are the pool's.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
 
 vi.mock('../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => () => {}), jobsDaemons: () => [] }))
 const monitorProps = vi.fn()
@@ -102,6 +102,16 @@ describe('the banner of a host that is not ok (M22, #3785)', () => {
     cleanup()
     mount([down('host_down')])
     expect(screen.getByTestId('host-banner-title')).toHaveTextContent(t('pool.liveness.host_down'))
+  })
+
+  it('a host that is ok but whose owning App host is not connected: the guardian settings are offline too (codex R1)', () => {
+    mount([poolHostOf()])
+    sub('settings')
+    expect(screen.queryByTestId('host-banner')).toBeNull() // the pool still reads the host
+    expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(false)
+    act(() => useHostStore.setState({ runtime: { 'cfg-a': { status: 'disconnected' } } } as never))
+    expect(screen.queryByTestId('host-banner')).toBeNull()
+    expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(true)
   })
 
   it('the settings page is told the host is offline', () => {

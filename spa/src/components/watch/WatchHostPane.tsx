@@ -5,6 +5,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { resolveHostBadge } from '../../lib/host-color'
 import { HostBadge } from '../HostBadge'
 import { HostStateIcon } from '../../components/fleet/HostStateIcon'
@@ -68,6 +69,9 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const hosts = useMonitorHosts()
   const host = useMemo(() => (poolHostId ? hosts.find((h) => h.hostId === poolHostId) : undefined), [hosts, poolHostId])
   const memoryKey = poolHostId ?? ''
+  // The guardian settings are read from the App host that fronts the pool host, whether or not the pool reads the host through another daemon: a disconnected owner is offline for them.
+  const ownerId = host?.daemonHostId ?? null
+  const ownerDown = useHostStore((s) => ownerId !== null && s.runtime[ownerId]?.status !== 'connected')
 
   // The choices outlive this component: the memory is the source, the state only re-renders.
   const [sub, setSubState] = useState<HostSubTab>(() => readHostTab(memoryKey))
@@ -129,7 +133,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <p className="text-xs text-text-muted" data-testid="status-later">{t('watch.host.status_later')}</p>
         </>)}
         {sub === 'procs' && <p className="text-xs text-text-muted" data-testid="procs-later">{t('watch.host.procs_later')}</p>}
-        {sub === 'settings' && <WatchSettings hostId={memoryKey} hostConfigId={host.daemonHostId ?? undefined} poolAlias={host.alias} offline={offline} peerIds={peerIds} />}
+        {sub === 'settings' && <WatchSettings hostId={memoryKey} hostConfigId={host.daemonHostId ?? undefined} poolAlias={host.alias} offline={offline || ownerDown} peerIds={peerIds} />}
       </div>
     </div>
   )
