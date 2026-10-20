@@ -317,3 +317,18 @@ describe('state that must not leak (codex attack)', () => {
     expect(groups()[B].name).toBe('文件整理')
   })
 })
+
+describe('the group list is a disclosure of buttons (codex critic)', () => {
+  it('Escape closes it and gives the focus back to its button', () => {
+    readRoot('S1', 'R1')
+    scene()
+    const btn = q('personal-group-button')
+    fireEvent.click(btn)
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
+    expect(btn.getAttribute('aria-controls')).toBe(q('personal-group-list').id)
+    fireEvent.keyDown(screen.getAllByTestId('personal-group-option')[0], { key: 'Escape' })
+    expect(screen.queryByTestId('personal-group-list')).toBeNull()
+    expect(document.activeElement).toBe(btn)
+  })
+})
+

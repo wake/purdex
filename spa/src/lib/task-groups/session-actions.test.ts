@@ -203,3 +203,19 @@ describe('sessionOfTab — the one rule of the sidebar rows and the re-check (TG
     expect(sessionOfTab(split(pane('a', { terminated: 'tmux-restarted' }), pane('b', { terminated: 'tmux-restarted' })))).toBeNull()
   })
 })
+
+describe('startGroupWithSession with a name chosen late (TG-5c)', () => {
+  it('asks for the name after the root is known: a name taken while the root was being read is not used twice', async () => {
+    let finish!: (v: unknown) => void
+    readFirstPage.mockReturnValue(new Promise((r) => { finish = r }))
+    const name = vi.fn(() => `New ${Object.keys(useManualGroupsStore.getState().groups).length + 1}`)
+    const p = startGroupWithSession(ref(), name)
+    expect(name).not.toHaveBeenCalled() // the root is still being read
+    useManualGroupsStore.setState((s) => ({ order: [...s.order, 'g3'], groups: { ...s.groups, g3: { ...GROUP, name: 'New 3' } } })) // another window starts a group meanwhile
+    finish({ quotas: [q('AG1', 'ROOT')] })
+    const r = await p
+    expect(r.ok).toBe(true)
+    expect(name).toHaveBeenCalledTimes(1)
+    expect(Object.values(useManualGroupsStore.getState().groups).map((g) => g.name)).toContain('New 4')
+  })
+})

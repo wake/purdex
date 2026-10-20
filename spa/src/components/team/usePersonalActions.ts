@@ -48,7 +48,7 @@ export function usePersonalActions(target: PersonalTarget): PersonalActions {
     busy,
     move: (groupId) => once(async () => settle(await fileSession(ref, groupId)), false),
     startGroup: () => once(async () => {
-      const r = await startGroupWithSession(ref, defaultManualGroupName(t('taskgroups.default_name')))
+      const r = await startGroupWithSession(ref, () => defaultManualGroupName(t('taskgroups.default_name')))
       return settle(r) && r.ok ? r.id : null
     }, null),
     takeOut: () => once(async () => settle(await takeSessionOut(ref)), false),

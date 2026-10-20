@@ -1,7 +1,7 @@
 // spa/src/components/team/PersonalSettings.tsx — the personal panel's settings block (task groups spec §7, TG-5c; design R16–R24): the group (move, take out, new group), the group's name and its colour. Always shown under the card.
 // Moving, taking out and starting a group need the session's root (R23): until it is read the buttons stay off and say why. The panel never deletes a group (R22). The open list and the name draft are this component's own
-// state — a tab switch drops them, as the sidebar's rename does.
-import { useEffect, useRef, useState } from 'react'
+// state — a tab switch drops them, as the sidebar's rename does. The group list is a disclosure of plain buttons (Tab reaches them in order; Escape closes it and gives the focus back to its button).
+import { useEffect, useId, useRef, useState } from 'react'
 import { Check, PencilSimple } from '@phosphor-icons/react'
 import { TEAM_COLORS } from './team-display'
 import { keepFocus } from './panel-focus'
@@ -30,6 +30,8 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
   // The name draft belongs to the group it was opened on: a draft whose group is not the one shown is nothing (it is never written to another).
   const [draftState, setDraft] = useState<{ groupId: string; value: string } | null>(null)
   const input = useRef<HTMLInputElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const listId = useId()
   const [wantEdit, setWantEdit] = useState<string | null>(null) // the id of a group just started from this session: its name field opens once the panel shows THAT group
   const [seenRequest, setSeenRequest] = useState(0)
   const manual = group.kind === 'manual' ? group : null
@@ -62,8 +64,9 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
         <span className="relative min-w-0 flex-1">
           <button
             type="button"
+            ref={trigger}
             data-testid="personal-group-button"
-            aria-haspopup="menu"
+            aria-controls={listOpen ? listId : undefined}
             aria-expanded={listOpen}
             disabled={!rootKnown || actions.busy}
             title={waiting}
@@ -74,13 +77,12 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
             {manual !== null ? manual.name : t('taskgroups.ungrouped')} ▾
           </button>
           {listOpen && (
-            <ul data-testid="personal-group-list" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') setListOpen(false) }} className="absolute z-30 left-0 top-full mt-1 min-w-40 max-h-60 overflow-y-auto rounded-md border border-border-default bg-surface-elevated shadow-xl py-1 text-[11.5px]">
+            <ul id={listId} data-testid="personal-group-list" onKeyDown={(e) => { if (e.key === 'Escape') { setListOpen(false); trigger.current?.focus() } }} className="absolute z-30 left-0 top-full mt-1 min-w-40 max-h-60 overflow-y-auto rounded-md border border-border-default bg-surface-elevated shadow-xl py-1 text-[11.5px]">
               {order.flatMap((id) => (groups[id] ? [id] : [])).map((id) => (
                 <li key={id}>
                   <button
                     type="button"
-                    role="menuitemradio"
-                    aria-checked={manual?.id === id}
+                    aria-pressed={manual?.id === id}
                     data-testid="personal-group-option"
                     onMouseDown={press}
                     onClick={() => { setListOpen(false); if (manual?.id !== id) void actions.move(id) }}
