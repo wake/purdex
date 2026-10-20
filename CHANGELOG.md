@@ -1,5 +1,58 @@
 # Changelog
 
+## [1.0.0-alpha.765] - 2026-10-20
+
+> daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 764 相同。
+>
+> ⚠️ **wwd 的資料庫升級：host schema 8 → 9**（#3706，`worker_settings` 多 `disk_min_gb`）；queue schema 仍是 8，wire 的 `proto` 仍是 3。部署前備份 `wwd.db.pre-765`。要退回 764：停 wwd → 把 `wwd.db.pre-765` 放回 `wwd.db`（刪掉旁邊的 `-wal`、`-shm`）→ 給新 epoch → 啟動 764；備份之後的工作與 `PUT /v1/worker` 的設定會遺失。
+>
+> ⚠️ **這一版是轉換版（#3710，#3713）**：wwd 之間、Purdex 讀 wwd 的回應、推送與落盤紀錄，改成容忍不認得的欄位（`wire.DecodeLenient`，必填與值域照驗）；本機的 PUT／POST 本文維持 strict。轉換版本身沒有加任何需要容忍才安全的新欄位。等四台 wwd 與兩台 Purdex daemon 都升到 765 以上，之後的版本才可以在 job、facts、pool 上加欄位；之後就不能退回 765 以前（`docs/wwd-deploy.md` 有這條規則）。
+>
+> **部署順序**：每一台先升 Purdex daemon，再升 wwd；四台 wwd 一起升。原因是 #3706 的新欄位在磁碟偏低時才出現，而 765 以前的讀者是 strict。
+>
+> **wwd 自己檢查磁碟下限（#3702，#3706）**：work root 所在的卷可用空間低於 `[worker] disk_min_gb`（預設 10 GB，0＝關；可用 `PUT /v1/worker` 即時改）時，heavy 的 headroom 變成 0，理由是 `disk_low`，light 不受影響；預設值也套用到原本沒有 gate 的 mserv、air19。這是移除舊 gate（WWD-9）的前提。App 的理由文字是「磁碟剩餘空間低於下限」（#3704）。
+>
+> **入口切換（S2；入口本身仍是關的）**：
+> - `go test ./...` 這類遞迴樣式不再被改寫成本機快速通道的任務：`./...` 對到發版任務 `go-all`，其他遞迴樣式對到 `go-changed`，都排佇列；`-count`、`-v`、`-p`、`-parallel`、`-timeout`、`-json`、`-failfast` 這些只講「怎麼跑」的旗標不再擋比對（#3711）。
+> - 發版閘門改跑 `pdx test`：`scripts/release-gate.sh <commit>` 在專用的乾淨 clone 裡把所有發版任務送進佇列，印出一張表；新增 `wwd-linux`、`wwd-linux-vet`（mserv 上線前先 `--skip`）與五個腳本測試任務（#3708，`docs/wwd-deploy.md` §14）。765 的閘門就是用它跑的。
+>
+> **監控資料（WWD-9 之前的缺口，plan #3712）**：`/api/info` 多帶本機 wwd 的 `{host_id, alias}`，能力 `pool.identity.v1`（#3717，MD-1）；告警的讀取路由 `GET /api/pool/hosts/{alias}/alerts` 與 host event `alerts.changed`，失聯告警分成「wwd 沒有回應」與「主機離線」，能力 `pool.alerts.v1`（#3719，MD-2）；觀察紀錄的讀取路由 `…/observations`、`…/undeclared`，能力 `pool.observations.v1`，裝置 token 不能讀（#3724，MD-3）；`/api/pool/jobs` 與單筆 job 多一個 `slot`（heavy／light）（#3715，MD-4）。
+>
+> **B 線：任務編組**：側欄改成每個分頁都經由所屬群組列出，群組有標題列並可從側欄選取，新開的分頁會加入目前選取的群組，視圖也會記住各裝置的選擇並跟著使用中的分頁（#3709，#3716，#3718，#3722）。
+>
+> **worker**：部署時各台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；mserv、air19 仍關著。
+
+### Changed：wwd 磁碟下限與入口切換
+
+- **wwd 自己檢查磁碟下限（#3706）**：host schema 9，`[worker] disk_min_gb`，低於下限時 heavy 的 headroom 為 0、理由 `disk_low`。
+- **App 顯示 `disk_low` 的理由文字（#3704）**：「磁碟剩餘空間低於下限」。
+- **遞迴樣式不交給本機快速通道（#3711）**：`./...` 對到 `go-all`，其他遞迴樣式對到 `go-changed`；只講怎麼跑的旗標不再擋比對。
+- **發版閘門改跑 `pdx test`（#3708）**：`scripts/release-gate.sh`、`wwd-linux`、`wwd-linux-vet` 與五個腳本測試任務。
+
+### Changed：wwd 監控資料
+
+- **`/api/info` 帶本機 wwd 的身分（#3717）**：`{host_id, alias}`，能力 `pool.identity.v1`。
+- **job 帶 `slot`（#3715）**：`wire.JobSlot` 與 Purdex 的 PoolJob 型別。
+- **告警給 App 讀（#3719，MD-2）**：`GET /api/pool/hosts/{alias}/alerts` 回 `{host, known, alerts}`，失聯告警多一個 `silence: wwd_down | host_down | unknown`；Purdex 每 30 秒輪詢各台、本機的 `alert` 事件提早重讀，內容變了才發 `alerts.changed {host}`；能力 `pool.alerts.v1`。
+- **觀察紀錄給 App 讀（#3724，MD-3）**：`GET /api/pool/hosts/{alias}/observations?since=&until=` 與 `/undeclared?since=`，回 wwd 的原樣；`next_until` 原字串帶回；指令列可能帶秘密，裝置 token 回 403；能力 `pool.observations.v1`。
+
+### Changed：wwd wire（轉換版）
+
+- **讀取端容忍不認得的欄位（#3713，#3710）**：wwd 之間、Purdex 讀 wwd 的回應、推送與落盤紀錄改用 `wire.DecodeLenient`，必填與值域照驗；本機 PUT／POST 本文維持 strict。AST 守門測試限定 strict 只能用在白名單裡的請求本文。四台 wwd 與兩台 daemon 都升到 765 以後，新欄位才可以加。
+
+### Internal
+
+- **docs（#3712，#3714）**：wwd 監控資料缺口的 plan；WWD-9 保留 watch 的 wake／status 到 8b。
+- **測試在 wwd job 裡也正確（#3725）**：unix socket 測試改用 `/tmp` 下的短目錄（job 的 TMPDIR 太長）；檢查自身標記的測試依自己的環境判斷；起 helper 時拿掉外層的 `WWD_JOB`、`WWD_ORIGIN`。765 閘門第一次經 wwd job 跑 go-all 時這三個是紅的。
+
+### Changed：介面（B 線）
+
+- **側欄依群組列出每個分頁（#3709）**：「未分組」也列出不是 session 的分頁；team 底下多出成員的第二個分頁與釘選分頁的列。
+- **任務編組檢視記住選取與展開（#3716）**：存在本機、不同步；某台主機不再列出某個 team 時，對它的記憶一併清掉。
+- **新分頁落在選取的群組最後（#3718）**：在任務編組檢視選了某一組之後才有；工作區檢視、窄側欄、分頁放左邊與選「未分組」時不變。
+- **群組標題列（#3722）**：數字換成展開箭頭；點標題選取那一組並切到它最後看的分頁；空的新群組顯示「拖曳 session 到這裡」；側欄的視圖切換回到上次的位置。
+- **群組標題的操作（#3726）**：點已選取的群組標題會切換展開；手動群組的標題右鍵可以重新命名、改顏色、刪除；任務編組檢視底部的 + 改成「新增任務編組」。
+
 ## [1.0.0-alpha.764] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 763 相同。
