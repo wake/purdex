@@ -206,7 +206,7 @@ func host(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return h, true
 }
 
-// handleList is GET /api/pool/jobs?state=&session=&host=&after=&limit=: wwd's JobsListResponse (jobs oldest change first, the cursor
+// handleList is GET /api/pool/jobs?state=&session=&host=&after=&limit=: wwd's JobsListResponse with each job a PoolJob (oldest change first, the cursor
 // to read on from, the database epoch). Without after it is the list as it is now, at most limit jobs.
 func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -245,10 +245,7 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		writeWWDError(w, err)
 		return
 	}
-	if resp.Jobs == nil {
-		resp.Jobs = []wire.Job{}
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, poolJobsList(resp))
 }
 
 // handleJob is GET /api/pool/jobs/{id}?host=: the contract's JobDetail, the job and its stored log (null until it is stored, and
@@ -273,7 +270,7 @@ func (m *Module) handleJob(w http.ResponseWriter, r *http.Request) {
 		writeWWDError(w, err)
 		return
 	}
-	detail := wire.JobDetail{Job: job}
+	detail := PoolJobDetail{Job: poolJob(job)}
 	if job.State.Terminal() {
 		// at most maxDetailLog is read: a longer log is never held in memory here, it is told apart from "not stored" by the /log route
 		b, tooLarge, err := cl.LogAtMost(r.Context(), h, id, maxDetailLog)
