@@ -189,14 +189,14 @@ func (m *Module) wakeOnce(ctx context.Context, items []wakeItem) {
 			cancel()
 		}
 	}
-	if ctx.Err() != nil {
-		return // stopping: still pending, tried again after a restart
-	}
-	if err == nil {
+	if err == nil { // a success is recorded even when the module is stopping at the same moment
 		if e := m.store.markWoken(eps, m.now()); e != nil {
 			m.logf("wwdalerts: wake ledger: %v", e)
 		}
 		return
+	}
+	if ctx.Err() != nil {
+		return // stopping: still pending, tried again after a restart
 	}
 	m.logf("wwdalerts: wake the watcher (%s): %v; tried again later", text, err)
 	if e := m.store.markWakeFailed(eps, m.now()); e != nil {
