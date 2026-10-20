@@ -515,6 +515,16 @@ describe('the group headers (NA-6c, TG-2b)', () => {
     expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-clear')).toHaveAttribute('title', '這台主機的 session 來源還在讀取中，暫時不能清除')
   })
 
+  it('a member on a host no open tab shows is still read, so the group can be cleared once that host says it is not alive', () => {
+    useUnattendedStore.setState((s) => ({ byHost: { ...s.byHost, h2: { quotaSupport: 'yes' } } }) as never)
+    setGroups([group('g1', ['GONE'], 'h2')])
+    setRoots([['AG1', 'AG1']])
+    mount()
+    expect(readFirstPage).toHaveBeenCalledWith('h2') // no tab shows h2: the member alone makes it wanted
+    act(() => { useRelayQuotaStore.setState((s) => ({ reads: { ...s.reads, h2: { ok: true, quotas: [] } } })) })
+    expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-clear')).not.toHaveAttribute('title')
+  })
+
   it('a group whose member is alive but held by a team looks empty and still cannot be cleared', () => {
     const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
     useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])

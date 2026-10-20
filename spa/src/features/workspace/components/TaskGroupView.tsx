@@ -71,9 +71,13 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     return out
   }, [tabsById, workspaces, sessionsByHost])
 
+  // The open tabs' sessions, and one entry per group member (its root is its own chain's first session): a member on a host no tab shows is still read, so 「清除」 can tell whether that host has it alive.
   const wanted = useMemo<WantedSession[]>(
-    () => sessionTabs.filter((s): s is SessionTab & { agentSessionId: string } => s.agentSessionId !== null).map((s) => ({ hostId: s.hostId, agentSessionId: s.agentSessionId })),
-    [sessionTabs],
+    () => [
+      ...sessionTabs.filter((s): s is SessionTab & { agentSessionId: string } => s.agentSessionId !== null).map((s) => ({ hostId: s.hostId, agentSessionId: s.agentSessionId })),
+      ...Object.values(groupsById).flatMap((g) => g.members.map((m) => ({ hostId: m.host, agentSessionId: m.root }))),
+    ],
+    [sessionTabs, groupsById],
   )
   const roots = useSessionRoots(true, wanted)
 
