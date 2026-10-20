@@ -119,6 +119,26 @@ describe('source and reads', () => {
     await st().readOnce()
     expect(st().lastLiveAt.mlab).toBe(facts.at)
   })
+
+  // MON-1b (spec M21): the time of the last facts is kept by the wwd host_id, which an alias change does not move.
+  it('keeps the last facts time by host_id, and keeps it when the host cannot be read', async () => {
+    const id = mlab().host_id
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    await st().readOnce()
+    expect(st().lastFactsAt[id]).toBe(facts.at)
+    fetchPoolHosts.mockResolvedValue([mlab({ reachable: false, facts: null, liveness: 'host_down' })])
+    await st().readOnce()
+    expect(st().lastFactsAt[id]).toBe(facts.at)
+    fetchPoolHosts.mockResolvedValue([mlab({ alias: 'renamed' })])
+    await st().readOnce()
+    expect(Object.keys(st().lastFactsAt)).toEqual([id])
+  })
+
+  it('a host that is not reachable never had a facts time recorded', async () => {
+    fetchPoolHosts.mockResolvedValue([mlab({ reachable: false })])
+    await st().readOnce()
+    expect(st().lastFactsAt).toEqual({})
+  })
 })
 
 describe('error actions', () => {
@@ -389,6 +409,35 @@ describe('pool.events.v1', () => {
     await settle()
     await vi.advanceTimersByTimeAsync(POLL_MS * 6)
     expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+
+  // MON-1b (spec M20): `liveness_at` moves without a pool.changed, so while any host is not ok the 5 s poll stays even in event mode.
+  describe('a host that is not ok keeps the 5 s read (M20)', () => {
+    const down = () => mlab({ host_id: 'a0b1c2d3e4f50617', alias: 'mserv', facts: null, liveness: 'wwd_down' })
+
+    it('all hosts ok: one read, no timer', async () => {
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    })
+
+    it('one host not ok: read again every 5 s; once it is ok again the next read stops the timer', async () => {
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab(), down()])
+      st().start()
+      await settle()
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+      fetchPoolHosts.mockResolvedValue([mlab(), { ...down(), liveness: 'ok', facts }])
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(4)
+      await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(4)
+    })
   })
 
   it('without the capability it still polls', async () => {
