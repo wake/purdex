@@ -101,7 +101,31 @@ type CPU struct {
 	Load1   float64 `json:"load1"`
 	Load5   float64 `json:"load5"`
 	IdlePct float64 `json:"idle_pct"`
+	// The readings below are left out where there is nothing to say (absent reads as null; spec 2026-10-20 §2.4): no earlier
+	// sample to measure against, a counter that went backwards, or a platform that does not give them. They are omitted rather
+	// than written as null so every record and fixture written before them still round-trips byte for byte.
+	Load15 *float64 `json:"load15,omitempty"`
+	// UserPct (user + nice) and SystemPct (system; on Linux also irq and softirq) are shares of all cores' time, 0 to 100.
+	UserPct   *float64 `json:"user_pct,omitempty"`
+	SystemPct *float64 `json:"system_pct,omitempty"`
+	// Cores is one entry per core in core order; absent where cores were not read.
+	Cores []Core `json:"cores,omitempty"`
 }
+
+// Core is one core's shares of its own time. Each share is null on its own: the first sample, a counter that went backwards, or a
+// change in the number of cores. Kind is "p" (performance) or "e" (efficiency), or null when the platform does not say for certain.
+type Core struct {
+	UserPct   *float64 `json:"user_pct"`
+	SystemPct *float64 `json:"system_pct"`
+	IdlePct   *float64 `json:"idle_pct"`
+	Kind      *string  `json:"kind"`
+}
+
+// Core kinds.
+const (
+	CoreKindP = "p"
+	CoreKindE = "e"
+)
 
 // Mem: Pressure is 0 when unknown. PSI is Linux only; the other readings are
 // null where the platform has no such counter.
@@ -240,6 +264,11 @@ func (f Facts) Validate() error {
 	}
 	if f.Mem.DecompressRate != nil && *f.Mem.DecompressRate < 0 {
 		return fmt.Errorf("facts: negative decompress_rate")
+	}
+	for i, c := range f.CPU.Cores {
+		if c.Kind != nil && *c.Kind != CoreKindP && *c.Kind != CoreKindE {
+			return fmt.Errorf("facts: cpu.cores[%d]: invalid kind %q", i, *c.Kind)
+		}
 	}
 	if f.Queue != nil && f.Queue.Queued < 0 {
 		return fmt.Errorf("facts: negative queue.queued")

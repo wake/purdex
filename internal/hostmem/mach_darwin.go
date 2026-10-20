@@ -89,23 +89,32 @@ func NewMach() (m *Mach, err error) {
 	return m, nil
 }
 
-// CPUTicks are the ticks of every core summed: busy (user + system + nice) and total (those and idle), since boot.
-func (m *Mach) CPUTicks() (busy, total uint64, err error) {
+// CPUCoreTicks are every core's ticks since boot, in the order host_processor_info gives them.
+func (m *Mach) CPUCoreTicks() ([]CoreTicks, error) {
 	var cpus, cnt uint32
 	var info unsafe.Pointer
 	if kr := m.processor(m.host, processorCPULoadInfo, &cpus, &info, &cnt); kr != 0 {
-		return 0, 0, fmt.Errorf("host_processor_info: kern_return %d", kr)
+		return nil, fmt.Errorf("host_processor_info: kern_return %d", kr)
 	}
 	defer m.vmDealloc(*m.taskSelf, info, uintptr(cnt)*4) // the array is the caller's to give back, every call
 	if cpus == 0 || cnt < cpus*cpuStateCount {
-		return 0, 0, fmt.Errorf("host_processor_info: %d cpus, %d words", cpus, cnt)
+		return nil, fmt.Errorf("host_processor_info: %d cpus, %d words", cpus, cnt)
 	}
 	words := unsafe.Slice((*uint32)(info), int(cnt))
-	for c := uint32(0); c < cpus; c++ {
-		user, sys, idle, nice := uint64(words[c*4]), uint64(words[c*4+1]), uint64(words[c*4+2]), uint64(words[c*4+3])
-		busy += user + sys + nice
-		total += user + sys + nice + idle
+	out := make([]CoreTicks, cpus)
+	for c := range out {
+		out[c] = CoreTicks{User: uint64(words[c*4]), System: uint64(words[c*4+1]), Idle: uint64(words[c*4+2]), Nice: uint64(words[c*4+3])}
 	}
+	return out, nil
+}
+
+// CPUTicks are the ticks of every core summed: busy (user + system + nice) and total (those and idle), since boot.
+func (m *Mach) CPUTicks() (busy, total uint64, err error) {
+	cores, err := m.CPUCoreTicks()
+	if err != nil {
+		return 0, 0, err
+	}
+	busy, total = SumTicks(cores)
 	return busy, total, nil
 }
 

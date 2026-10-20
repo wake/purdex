@@ -8,6 +8,7 @@ import "github.com/wake/purdex/internal/wwd/wire"
 // contract and not copied here.)
 func Clone(f wire.Facts) wire.Facts {
 	out := f
+	out.CPU = cloneCPU(f.CPU)
 	out.Mem = cloneMem(f.Mem)
 	out.Disk = cloneSlice(f.Disk)
 	out.Procs = make([]wire.Proc, len(f.Procs))
@@ -49,6 +50,19 @@ func Clone(f wire.Facts) wire.Facts {
 		out.Exception = nil
 	}
 	return out
+}
+
+func cloneCPU(c wire.CPU) wire.CPU {
+	c.Load15, c.UserPct, c.SystemPct = clonePtr(c.Load15), clonePtr(c.UserPct), clonePtr(c.SystemPct)
+	if c.Cores != nil {
+		cores := make([]wire.Core, len(c.Cores))
+		for i, k := range c.Cores {
+			k.UserPct, k.SystemPct, k.IdlePct, k.Kind = clonePtr(k.UserPct), clonePtr(k.SystemPct), clonePtr(k.IdlePct), clonePtr(k.Kind)
+			cores[i] = k
+		}
+		c.Cores = cores
+	}
+	return c
 }
 
 func cloneMem(m wire.Mem) wire.Mem {

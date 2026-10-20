@@ -3,6 +3,7 @@ package facts
 import (
 	"bufio"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -129,53 +130,106 @@ func rawMemFromMeminfo(mi Meminfo, pageSize uint64) RawMem {
 	return m
 }
 
-// ParseCPUStat reads the aggregate "cpu" line of /proc/stat: busy and total
-// ticks, cumulative since boot. idle and iowait count as idle.
-func ParseCPUStat(text string) (busy, total uint64, ncpu int, err error) {
+// CPUStatDetail is /proc/stat's cpu lines: All is the aggregate, Cores the per-core lines ordered by core number.
+type CPUStatDetail struct {
+	All   RawCore
+	Cores []RawCore
+}
+
+// parseCPULine reads one cpu line's counters: user nice system idle iowait irq softirq steal (guest and guest_nice are already
+// inside user and nice). User is user+nice, System system+irq+softirq, Idle idle+iowait; Total is all eight.
+func parseCPULine(f []string) (RawCore, error) {
+	var c RawCore
+	if len(f) < 5 { // the name and at least user, nice, system, idle: a cut-off read is a failed read, not a quiet host
+		return RawCore{}, errors.New("stat: a cpu line with fewer than four counters")
+	}
+	for i, s := range f[1:] {
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return RawCore{}, err
+		}
+		if i >= 8 {
+			break
+		}
+		c.Total += n
+		switch i {
+		case 0, 1:
+			c.User += n
+		case 2, 5, 6:
+			c.System += n
+		case 3, 4:
+			c.Idle += n
+		}
+	}
+	return c, nil
+}
+
+// ParseCPUStatDetail reads the "cpu" line and every "cpuN" line of /proc/stat. An offline core has no line, so the cores are
+// ordered by their number, not by where they are in the file.
+func ParseCPUStatDetail(text string) (CPUStatDetail, error) {
+	var d CPUStatDetail
 	found := false
+	type numbered struct {
+		n int
+		c RawCore
+	}
+	var cores []numbered
 	for _, line := range strings.Split(text, "\n") {
 		f := strings.Fields(line)
-		if len(f) == 0 {
+		if len(f) == 0 || !strings.HasPrefix(f[0], "cpu") {
 			continue
 		}
 		if f[0] == "cpu" {
-			var sum, idle uint64
-			for i, s := range f[1:] {
-				n, perr := strconv.ParseUint(s, 10, 64)
-				if perr != nil {
-					return 0, 0, 0, perr
-				}
-				// user nice system idle iowait irq softirq steal; guest and
-				// guest_nice are already inside user and nice
-				if i >= 8 {
-					break
-				}
-				sum += n
-				if i == 3 || i == 4 {
-					idle += n
-				}
+			c, err := parseCPULine(f)
+			if err != nil {
+				return CPUStatDetail{}, err
 			}
-			busy, total, found = sum-idle, sum, true
-		} else if strings.HasPrefix(f[0], "cpu") {
-			ncpu++
+			d.All, found = c, true
+			continue
 		}
+		n, err := strconv.Atoi(f[0][3:])
+		if err != nil || n < 0 {
+			continue // not a core line
+		}
+		c, err := parseCPULine(f)
+		if err != nil {
+			return CPUStatDetail{}, err
+		}
+		c.ID = n
+		cores = append(cores, numbered{n, c})
 	}
 	if !found {
-		return 0, 0, 0, errors.New("stat: no cpu line")
+		return CPUStatDetail{}, errors.New("stat: no cpu line")
 	}
-	return busy, total, ncpu, nil
+	sort.Slice(cores, func(i, j int) bool { return cores[i].n < cores[j].n })
+	for _, c := range cores {
+		d.Cores = append(d.Cores, c.c)
+	}
+	return d, nil
 }
 
-func ParseLoadavg(text string) (l1, l5 float64, err error) {
+// ParseCPUStat reads the aggregate "cpu" line of /proc/stat: busy and total
+// ticks, cumulative since boot. idle and iowait count as idle.
+func ParseCPUStat(text string) (busy, total uint64, ncpu int, err error) {
+	d, err := ParseCPUStatDetail(text)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return d.All.Total - d.All.Idle, d.All.Total, len(d.Cores), nil
+}
+
+func ParseLoadavg(text string) (l1, l5, l15 float64, err error) {
 	f := strings.Fields(text)
-	if len(f) < 2 {
-		return 0, 0, errors.New("loadavg: too few fields")
+	if len(f) < 3 {
+		return 0, 0, 0, errors.New("loadavg: too few fields")
 	}
-	if l1, err = strconv.ParseFloat(f[0], 64); err != nil {
-		return 0, 0, err
+	var v [3]float64
+	for i := range v {
+		if v[i], err = strconv.ParseFloat(f[i], 64); err != nil {
+			return 0, 0, 0, err
+		}
 	}
-	l5, err = strconv.ParseFloat(f[1], 64)
-	return l1, l5, err
+	return v[0], v[1], v[2], nil
 }
 
 // ParseVmstat returns the cumulative pgpgout (KiB written to block devices, mostly

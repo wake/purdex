@@ -19,6 +19,14 @@ func TestSystemSourcesReadThisLinuxHost(t *testing.T) {
 	if r.CPU.NCPU < 1 || r.CPU.IdlePct < 0 || r.CPU.IdlePct > 100 {
 		t.Errorf("cpu: %+v", r.CPU)
 	}
+	if r.CPU.Load15 == nil || r.CPU.UserPct == nil || r.CPU.SystemPct == nil || len(r.CPU.Cores) != r.CPU.NCPU {
+		t.Errorf("cpu split: %+v", r.CPU)
+	}
+	for i, core := range r.CPU.Cores {
+		if core.Kind != nil {
+			t.Errorf("core %d: Linux does not say a kind, got %q", i, *core.Kind)
+		}
+	}
 	m := r.Mem
 	if m.TotalMB <= 0 || m.AvailableMB <= 0 || m.AvailableMB > m.TotalMB {
 		t.Errorf("mem: %+v", m)
