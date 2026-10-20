@@ -9,7 +9,6 @@ import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger
 import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPersonaLoader } from './lib/names/persona-loader'
-import { startTaskGroupsLifecycle } from './lib/task-groups/loader'
 import { startSessionRootsLifecycle } from './lib/task-groups/session-roots-lifecycle'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
@@ -55,7 +54,6 @@ void ensureDefaultDeviceName()
 // Host config (projects / commands / resume templates): fetch each host's copy when it connects.
 startHostConfigLoader()
 startPersonaLoader()
-startTaskGroupsLifecycle()
 startSessionRootsLifecycle()
 // Daemon identity: one /api/info per (re)connect / endpoint / token / stored-daemonId change → observeDaemonId.
 startHostDaemonIdVerification()
