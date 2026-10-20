@@ -6,13 +6,15 @@ import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/*.{ts,tsx}', '/src/lib/pool/*.ts', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
   'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts',
 ]
-const FLEET_IMPORT = /from\s+['"][^'"]*\/fleet\/[^'"]*['"]|from\s+['"][^'"]*\/fleet['"]|import\(\s*['"][^'"]*\/fleet\//
+// Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
+// barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
+const FLEET_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"][^'"]*\/fleet(?:\/[^'"]*)?['"]/
 const FLEET_READERS = /\b(useFleetStore|useFleetHostViews|readFleetView|useFleetConfigStore)\b/
 
 function scoped(): Array<{ name: string; code: string | undefined }> {
@@ -42,6 +44,10 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(FLEET_IMPORT.test("import type { FleetFast } from '../../lib/fleet/types'")).toBe(true)
     expect(FLEET_IMPORT.test("import { x } from '../fleet/store'")).toBe(true)
     expect(FLEET_IMPORT.test("const m = await import('../fleet/store')")).toBe(true)
+    expect(FLEET_IMPORT.test("import '../../lib/fleet/store'")).toBe(true)
+    expect(FLEET_IMPORT.test("const m = await import('../../lib/fleet')")).toBe(true)
+    expect(FLEET_IMPORT.test("const m = require('../fleet/store')")).toBe(true)
+    expect(FLEET_IMPORT.test("export { x } from '../fleet/store'")).toBe(true)
     expect(FLEET_IMPORT.test("import { x } from './fleet-bridge'")).toBe(false)
     expect(FLEET_READERS.test('const s = useFleetStore.getState()')).toBe(true)
   })

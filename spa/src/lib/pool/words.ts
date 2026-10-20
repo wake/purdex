@@ -75,6 +75,15 @@ function agoWord(t: T, ms: number): string {
   return t('pool.liveness.ago_h', { n: Math.floor(sec / 3600) })
 }
 
+/** M25: the card of a host in a pool nobody can read: why the pool cannot be read (the failure's word, or that no daemon is connected), then the last reading of this host. */
+export function poolOutageLines(t: T, failure: { code: PoolErrorCode | null }, lastFactsAt: number | null, now: number): string[] {
+  const key = failure.code === null ? null : errorTextKey(failure.code)
+  const reason = key === null || key === 'pool.error.unavailable' ? t('pool.error.unavailable_none') : t(key)
+  const lines = [t('pool.card.unreadable', { reason })]
+  lines.push(lastFactsAt !== null ? t('pool.liveness.last_reading', { time: clock(lastFactsAt), ago: agoWord(t, now - lastFactsAt) }) : t('pool.liveness.no_reading'))
+  return lines
+}
+
 /**
  * The lines under a host card's headline (M11, M17–M21, W3): what the state means, the last reading and how long ago, the last check and the
  * 5 s rhythm. An ok host says one word (no last check, M20); the local host, which has no probe of itself, says it is the local wwd.

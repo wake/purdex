@@ -8,6 +8,7 @@ import { usePoolHostOwners } from './daemons'
 import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useHostStore } from '../../stores/useHostStore'
+import type { PoolErrorCode } from './errors'
 import type { PoolHost } from './types'
 
 export interface MonitorHost {
@@ -18,6 +19,8 @@ export interface MonitorHost {
   daemonHostId: string | null
   state: PoolHostState
   look: PoolHostResolvedLook
+  /** Set while the list is the kept one because the whole pool cannot be read (M25): why, as the pool store knows it. */
+  poolFailure: { code: PoolErrorCode | null; since: number | null } | null
 }
 
 // W4: when no source answers (every one failed, or none is connected) the pool store has no hosts. The sidebar then keeps the last non-empty list of this run, every host unknown;
@@ -36,7 +39,9 @@ export function useMonitorHosts(): MonitorHost[] {
   const order = usePoolHostsStore((s) => s.order)
   const owners = usePoolHostOwners()
   const lookOf = usePoolHostLookResolver()
-  const sourceKnown = useHostStore((s) => remembered.source !== null && Object.hasOwn(s.hosts, remembered.source))
+  const appHosts = useHostStore((s) => s.hosts)
+  const poolError = usePoolStore((s) => s.error)
+  const sourceKnown = remembered.source !== null && Object.hasOwn(appHosts, remembered.source)
   const stale = hosts.length === 0 && !answered && remembered.hosts.length > 0 && sourceKnown
   const rows = stale ? remembered.hosts : hosts
   return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => ({
@@ -46,5 +51,6 @@ export function useMonitorHosts(): MonitorHost[] {
     // A list kept from before the failure has no word on any host now: unknown, with the last reading it had.
     state: poolHostState(stale ? { ...h, reachable: false, facts: null, liveness: 'unknown' } : h, lastFactsAt[h.host_id] ?? null, now),
     look: lookOf(h.host_id),
-  })), [rows, stale, order, owners, lookOf, lastFactsAt, now])
+    poolFailure: stale ? { code: poolError?.code ?? null, since: poolError?.since ?? null } : null,
+  })), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now])
 }

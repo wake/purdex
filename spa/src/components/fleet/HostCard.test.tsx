@@ -77,6 +77,23 @@ describe('HostCard — a host that is not ok (M21)', () => {
   })
 })
 
+describe('HostCard — the whole pool cannot be read (M25)', () => {
+  it('says why and the last reading of this host, not the per-host explanation', () => {
+    const c = show(cellView({ liveness: 'unknown', lastFactsAt: FACTS.at - 60_000, poolFailure: { code: 'wwd_unavailable', since: 1 } }))
+    const lines = within(c).getAllByTestId('host-card-pool-outage').map((e) => e.textContent)
+    expect(lines[0]).toBe('Cannot read the resource pool (Cannot read the pool: no wwd is running)')
+    expect(lines[1]).toContain('Last reading')
+    expect(within(c).queryByTestId('host-card-liveness')).toBeNull()
+  })
+  it('a failure with a word of its own, and none at all', () => {
+    expect(within(show(cellView({ liveness: 'unknown', poolFailure: { code: 'wwd_bad_response', since: 1 } }))).getAllByTestId('host-card-pool-outage')[0].textContent).toContain('does not match the format')
+  })
+  it('no reading yet says so', () => {
+    const c = show(cellView({ liveness: 'unknown', poolFailure: { code: null, since: null } }))
+    expect(within(c).getAllByTestId('host-card-pool-outage')[1].textContent).toBe('No reading yet')
+  })
+})
+
 describe('HostCard — the ring-driver mark', () => {
   const base = { cpu: 10, mem: 10, level: 0, page_rate: 0, disk: 10 }
   it.each([

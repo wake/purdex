@@ -10,11 +10,12 @@ import { currentWatchReconciler, readFleetView } from './watch-area'
 /** `poolHost`: a pool host by its wwd `host_id` and alias (the sidebar). Until MON-6 gives the host tabs the wwd id as their id, it is found among the fleet's hosts by alias (MON-1c bridge, deleted with MON-6). */
 export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { host: string } | { poolHost: { hostId: string; alias: string } }
 
-/** The fleet's own id of the host with this alias, or null (not in the snapshot yet, or an empty alias). */
+/** The fleet's own id of the host with this alias, or null: not in the snapshot yet, an empty alias, or two fleet hosts with it (an alias is not known to be unique: neither is picked). */
 function fleetIdOfAlias(alias: string): string | null {
   const snapshot = useFleetStore.getState().snapshot
   if (!snapshot || alias === '') return null
-  return Object.values(snapshot.hosts).find((h) => h.alias === alias)?.id ?? null
+  const found = Object.values(snapshot.hosts).filter((h) => h.alias === alias)
+  return found.length === 1 ? found[0].id : null
 }
 
 /**

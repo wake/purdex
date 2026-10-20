@@ -79,6 +79,27 @@ describe('useMonitorHosts', () => {
     expect(result.current.every((h) => h.state.state === 'unknown')).toBe(true)
   })
 
+  it('W4: one hook mounted through empty, a successful answer and then a total failure keeps the list, every host unknown, with the pool\'s failure', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
+    const { result } = renderHook(() => useMonitorHosts())
+    expect(result.current).toEqual([])
+    act(() => { answer([host(A, 'mlab'), host(B, 'mserv')]) })
+    expect(result.current.map((h) => h.state.state)).toEqual(['ok', 'ok'])
+    expect(result.current.every((h) => h.poolFailure === null)).toBe(true)
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null, error: { code: 'wwd_unavailable', since: 7 } } as never) })
+    expect(result.current.map((h) => h.alias)).toEqual(['mlab', 'mserv'])
+    expect(result.current.every((h) => h.state.state === 'unknown')).toBe(true)
+    expect(result.current[0].poolFailure).toEqual({ code: 'wwd_unavailable', since: 7 })
+  })
+
+  it('W4: with no failure code (no daemon connected) the failure is carried as null', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
+    answer([host(A, 'mlab')])
+    renderHook(() => useMonitorHosts()).unmount()
+    usePoolStore.setState({ hosts: [], sourceHostId: null, error: null } as never)
+    expect(renderHook(() => useMonitorHosts()).result.current[0].poolFailure).toEqual({ code: null, since: null })
+  })
+
   it('W4: the kept list is dropped once the App host that served it is gone (another world, a removed host)', () => {
     useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
     answer([host(A, 'mlab')])

@@ -7,7 +7,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { PoolZone } from '../../lib/pool/types'
 import type { CellView } from '../../lib/pool/cell-model'
-import { headroomReasonLines, livenessLines, livenessWord } from '../../lib/pool/words'
+import { headroomReasonLines, livenessLines, livenessWord, poolOutageLines } from '../../lib/pool/words'
 import { ringDriver, type RingDriver } from '../../lib/pool/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -135,7 +135,8 @@ export function HostCard({ view, placement, anchor }: HostCardProps) {
         <span className="text-sm font-semibold text-text-primary">{view.name}</span>
         <span data-testid="host-card-zone" className={`ml-auto text-xs ${ZONE_CLASS[zone]}`}>{ok ? (zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)) : livenessWord(t, view.state)}</span>
       </div>
-      {!ok && livenessLines(t, view.state, openedAt).map((line) => <div key={line} data-testid="host-card-liveness" className="text-text-muted">{line}</div>)}
+      {!ok && view.poolFailure && poolOutageLines(t, view.poolFailure, view.state.state === 'ok' ? null : view.state.lastFactsAt, openedAt).map((line) => <div key={line} data-testid="host-card-pool-outage" className="text-text-muted">{line}</div>)}
+      {!ok && !view.poolFailure && livenessLines(t, view.state, openedAt).map((line) => <div key={line} data-testid="host-card-liveness" className="text-text-muted">{line}</div>)}
       {f && (
         <>
           <Row id="cpu" label={t('fleet.card.cpu')} driver={driver}>{pct(f.cpu)}</Row>

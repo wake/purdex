@@ -22,7 +22,7 @@ export function cellView(over: Partial<CellView> & { liveness?: 'wwd_down' | 'ho
   const state = poolHostState(pool, lastFactsAt, NOW)
   const ok = state.state === 'ok'
   return {
-    hostId: '82b11c521df16c12', name: 'mlab', state, look: DEFAULT_LOOK,
+    hostId: '82b11c521df16c12', name: 'mlab', state, look: DEFAULT_LOOK, poolFailure: null,
     fast: ok ? fast() : null, zone: ok ? 'normal' : null,
     load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null,
     ...rest,

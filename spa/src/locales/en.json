@@ -3350,6 +3350,7 @@
   "pool.liveness.explain_stalled_none": "wwd answers, but there are no readings yet",
   "pool.liveness.last_reading": "Last reading {{time}} ({{ago}})",
   "pool.liveness.no_reading": "No reading yet",
+  "pool.card.unreadable": "Cannot read the resource pool ({{reason}})",
   "pool.liveness.checked": "Last check {{time}} · every 5 s",
   "pool.liveness.ago_s": "{{n}} s ago",
   "pool.liveness.ago_m": "{{n}} min ago",
