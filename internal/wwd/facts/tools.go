@@ -118,6 +118,10 @@ func ResolveExtraDirs(home string, entries []string, logf func(format string, ar
 	var out []string
 	for _, e := range entries {
 		p := e
+		if strings.TrimSpace(p) == "" { // Clean("") is ".": the daemon's working directory would lead every PATH
+			logf("wwd: tools.extra_path: skipping an empty entry")
+			continue
+		}
 		if p == "~" || strings.HasPrefix(p, "~/") {
 			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
 		}

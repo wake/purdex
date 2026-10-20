@@ -46,3 +46,13 @@ func TestProbeEnvPathMatchesToolPath(t *testing.T) {
 		t.Errorf("bad probe PATH %q", got)
 	}
 }
+
+// An empty extra_path entry must not turn into "." (the working directory) at the head of the probe and job PATH.
+func TestResolveExtraDirsSkipsEmptyEntries(t *testing.T) {
+	home := t.TempDir()
+	logged := 0
+	got := ResolveExtraDirs(home, []string{"", "  "}, func(string, ...any) { logged++ })
+	if len(got) != 0 || logged != 2 {
+		t.Fatalf("got %v logged %d, want none and 2", got, logged)
+	}
+}
