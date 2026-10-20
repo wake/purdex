@@ -5,6 +5,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { Section } from '../../hosts/form-fields'
+import { AlertSettings } from './AlertSettings'
 import { PushSwitch } from './PushSwitch'
 import { GuardianSection } from '../WatchSettings'
 import { WorkerExceptions } from '../WorkerExceptions'
@@ -20,6 +21,7 @@ export function SettingsTab({ host }: { host: MonitorHost }) {
     <div key={host.hostId} data-testid="settings-tab">
       <WorkerSettings alias={host.alias} />
       <WorkerExceptions alias={host.alias} />
+      <AlertSettings host={host} />
       <PushSwitch host={host} />
       {daemon !== null && (
         <Section title={t('watch.set.guardian')} defaultOpen={false}>
