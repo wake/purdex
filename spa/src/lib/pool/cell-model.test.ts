@@ -25,6 +25,10 @@ describe('matchPoolHost', () => {
     expect(matchPoolHost(hosts, { alias: 'other', kind: 'daemon', hostConfigId: 'cfg-air26' }, daemons)?.alias).toBe('air26')
     expect(matchPoolHost(hosts, { alias: '', kind: 'daemon', hostConfigId: 'cfg-air26' }, daemons)?.alias).toBe('air26')
   })
+  it('the daemon mapping wins over an earlier pool host whose alias collides', () => {
+    const both = [poolHost({ alias: 'air26' }), poolHost({ alias: 'mserv', host_id: '0123456789abcdef' })]
+    expect(matchPoolHost(both, { alias: 'air26', kind: 'daemon', hostConfigId: 'cfg-air26' }, daemons)?.alias).toBe('mserv')
+  })
   it('the old host id and daemon id rules no longer match (a Purdex host id is never the wwd one)', () => {
     expect(matchPoolHost(hosts, fleet({ alias: '', id: '0123456789abcdef' }) as never, {})).toBeNull()
     expect(matchPoolHost(hosts, { alias: '', kind: 'daemon', hostConfigId: 'cfg-1', daemonId: '0123456789abcdef' } as never, {})).toBeNull()

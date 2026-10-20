@@ -6,6 +6,7 @@ import { useFleetStore, type FleetHostView } from '../fleet/store'
 import { poolCellModel, matchPoolHost, type PoolCellModel } from './cell-model'
 import { poolHostView } from './host-view'
 import { usePoolStore } from './store'
+import { NEX_HOST_TTL_MS } from '../../stores/useNexHostStore'
 import { refreshPoolIdentities, usePoolHostDaemons } from './daemons'
 
 /** How often the freshness of the facts (30 s) is looked at again when nothing new arrives. */
@@ -19,7 +20,9 @@ export function useRunPool() {
     // A daemon that learned its wwd after the App first read /api/info is picked up when the pool's hosts change.
     refreshPoolIdentities()
     const unsubscribe = usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) refreshPoolIdentities() })
-    return () => { unsubscribe(); if (--mounted === 0) usePoolStore.getState().stop() }
+    // An event-driven pool stops polling, so nothing else would ask again once the 60 s cache TTL has passed.
+    const timer = setInterval(refreshPoolIdentities, NEX_HOST_TTL_MS)
+    return () => { unsubscribe(); clearInterval(timer); if (--mounted === 0) usePoolStore.getState().stop() }
   }, [])
 }
 
