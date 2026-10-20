@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/gitenv"
 )
@@ -88,11 +89,17 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	// Two copies of the index: `add -A` works on one while the other is read for flagged entries (the common case has none, and the
 	// wait for the answer was a fifth of the time). A flagged entry makes the first copy's result wrong, so it is made again.
 	probePath := filepath.Join(tmp, "index.probe")
-	if err := copyIndex(srcIndex, idxPath); err != nil {
+	snap, err := readIndex(srcIndex) // read once: both copies, and the one made again for flags, are of these bytes
+	if err != nil {
 		return builtTree{}, err
 	}
-	if err := copyIndex(srcIndex, probePath); err != nil {
-		return builtTree{}, err
+	if snap != nil {
+		if err := snap.writeTo(idxPath); err != nil {
+			return builtTree{}, err
+		}
+		if err := snap.writeTo(probePath); err != nil {
+			return builtTree{}, err
+		}
 	}
 	probe := append([]string{"GIT_INDEX_FILE=" + probePath}, idx[1:]...)
 	type probed struct {
@@ -110,8 +117,10 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		return builtTree{}, p.err
 	}
 	if len(p.flagged) > 0 {
-		if err := copyIndex(srcIndex, idxPath); err != nil {
-			return builtTree{}, err
+		if snap != nil {
+			if err := snap.writeTo(idxPath); err != nil {
+				return builtTree{}, err
+			}
 		}
 		if err := clearFlags(runIn, idx, p.flagged); err != nil {
 			return builtTree{}, err
@@ -175,32 +184,53 @@ func tempIndexConfig() []string {
 // ignore rules match is not lost, as it was from an empty index) and git need not read every file again (the stat information of the
 // entries comes along: M-S1 measured 1.5 s down to 0.25 s for 5,457 files). The copy is of the index file alone: a split index keeps its
 // shared part in the git directory, which git reads from there. A repository with no index yet starts empty (no file is made).
-func copyIndex(src, dst string) error {
+// indexSnapshot is the bytes of the caller's index file at one moment and its file time. A copy of it keeps what git tracks in the snapshot (a
+// tracked file that the ignore rules match is not lost, as it was from an empty index) and git need not read every file again (the stat
+// information of the entries comes along: M-S1 measured 1.5 s down to 0.25 s for 5,457 files). The copy is of the index file alone: a split
+// index keeps its shared part in the git directory, which git reads from there. Every copy of a run is made from one, so that
+// the flags read from one copy are the flags of the copy `add -A` works on, whatever other git processes do to the real index.
+type indexSnapshot struct {
+	b []byte
+	t time.Time
+}
+
+// indexReadHook, when set, runs right after the index file was read (tests change the real index there).
+var indexReadHook func()
+
+// readIndex reads the index file src; nil, nil when there is none (a repository with no index yet starts empty).
+func readIndex(src string) (*indexSnapshot, error) {
 	// One open file gives both the bytes and the file time: git replaces the index by renaming a new file over the path, and a stat
 	// of the path after the read could report the time of a newer index than the bytes that were copied.
 	f, err := os.Open(src)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, err)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, err)
 	}
 	b, rerr := io.ReadAll(f)
 	st, serr := f.Stat()
 	f.Close()
 	if rerr != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, rerr)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, rerr)
 	}
 	if serr != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, serr)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, serr)
 	}
-	if err := os.WriteFile(dst, b, 0o600); err != nil {
+	if indexReadHook != nil {
+		indexReadHook()
+	}
+	return &indexSnapshot{b: b, t: st.ModTime()}, nil
+}
+
+func (x *indexSnapshot) writeTo(dst string) error {
+	if err := os.WriteFile(dst, x.b, 0o600); err != nil {
 		return err
 	}
 	// The copy keeps the original's file time. git calls an entry racily clean when its file time is not older than the index
 	// file's, and then reads the content instead of trusting size and time; a copy made now would be newer than every entry, and an
 	// edit of the same size in the second of the last index write would read as unchanged and be missing from the snapshot.
-	return os.Chtimes(dst, st.ModTime(), st.ModTime())
+	return os.Chtimes(dst, x.t, x.t)
 }
 
 // flaggedEntries are the paths of the index at idx that carry skip-worktree or assume-unchanged: both say "do not look at the file", and

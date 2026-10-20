@@ -150,3 +150,17 @@ func TestWorkingTree_APathWithANewlineInIt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, oracleTree(t, dir), got)
 }
+
+// The flags are read from the copy `add -A` works on, whatever happens to the real index in between (#3751 attack): the real index is
+// changed right after it is read (the flag cleared by another git process), and the file that carried the flag is still in the tree.
+func TestWorkingTree_AnIndexReplacedWhileItIsCopiedStillGivesOneConsistentView(t *testing.T) {
+	dir := ignoredRepo(t)
+	gitIn(t, dir, "update-index", "--assume-unchanged", "conf.txt")
+	writeFile(t, dir+"/conf.txt", "c2 changed behind the flag\n", 0o644)
+	indexReadHook = func() { gitIn(t, dir, "update-index", "--no-assume-unchanged", "conf.txt") }
+	t.Cleanup(func() { indexReadHook = nil })
+	got, err := WorkingTree(context.Background(), "", dir)
+	require.NoError(t, err)
+	indexReadHook = nil
+	assert.Equal(t, oracleTree(t, dir), got, "the changed file is in the tree")
+}
