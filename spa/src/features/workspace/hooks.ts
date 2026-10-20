@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
-import { useWorkspaceStore } from './store'
+import { useWorkspaceStore, WATCH_WORKSPACE_ID } from './store'
+import { writeWatchHostOrder } from './lib/watch-area'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane, collectLeaves } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
@@ -149,6 +150,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const handleReorderTabs = useCallback((order: string[]) => {
     // The tab bar lists a workspace's tabs; with no active workspace there is no list of its own to reorder
     // (every tab belongs to a workspace — Profile Sync spec §4.3).
+    // In the watcher area the host tabs' order is the pool hosts' order (W2): write it first, so the pass the tab write triggers finds nothing to move.
+    if (activeWorkspaceId === WATCH_WORKSPACE_ID) writeWatchHostOrder(order)
     if (activeWorkspaceId) reorderWorkspaceTabs(activeWorkspaceId, order)
   }, [activeWorkspaceId, reorderWorkspaceTabs])
 

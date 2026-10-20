@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
+import { UNSORTED_WORKSPACE_ID, WATCH_WORKSPACE_ID, useWorkspaceStore } from './store'
+import { usePoolStore } from '../../lib/pool/store'
+import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
+import { createWatchReconciler, ABSENT_REMOVE_MS } from './lib/watch-area'
+import { WATCH_GUARDIAN_TAB_ID, watchHostTabId } from '../../lib/watch/ids'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useUndoToast } from '../../stores/useUndoToast'
@@ -318,6 +322,81 @@ describe('handleReorderTabs', () => {
 
     expect(useTabStore.getState().tabOrder).toEqual([a.id, b.id])
     expect(useWorkspaceStore.getState().workspaces).toEqual([])
+  })
+})
+
+// MON-6b: dragging host tabs in the watcher area writes the order of the pool hosts (W2), which the sidebar and every device follow.
+describe('handleReorderTabs in the watcher area', () => {
+  const T0 = 1_000_000
+  const MLAB = '82b11c521df16c12'
+  const MSERV = '0123456789abcdef'
+  const GONE = 'fedcba9876543210'
+  const hostTabs = () => useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs
+  const setPool = (ids: string[]) => usePoolStore.setState({ hosts: ids.map((id) => ({ host_id: id, alias: id, version: '1', proto: 1, platform: 'linux', arch: 'amd64', facts: null, worker: { enabled: false, slots: { heavy: 0, light: 0 }, owner_rule: '' }, labels: [], reachable: true, liveness: 'ok' })) as never, sourceHostId: 'cfg-a' } as never)
+
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    usePoolHostsStore.setState({ order: [], looks: {} } as never)
+    useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    setPool([MLAB, MSERV])
+    usePoolHostsStore.setState({ order: [MLAB, MSERV] } as never)
+    createWatchReconciler().reconcile({ hostIds: [MLAB, MSERV] }, T0)
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
+  })
+
+  it('dragging mserv before mlab writes the order (the sidebar and the other devices read it)', () => {
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => { result.current.handleReorderTabs([WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV), watchHostTabId(MLAB)]) })
+    expect(usePoolHostsStore.getState().order).toEqual([MSERV, MLAB])
+    expect(hostTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV), watchHostTabId(MLAB)])
+    // the next pass has nothing to write
+    const before = useWorkspaceStore.getState().workspaces
+    createWatchReconciler().reconcile({ hostIds: [MSERV, MLAB] }, T0 + 1000)
+    expect(useWorkspaceStore.getState().workspaces).toBe(before)
+  })
+
+  it('hosts that are not on screen keep their place in the order after the ones that were dragged', () => {
+    usePoolHostsStore.setState({ order: [MLAB, GONE, MSERV] } as never)
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => { result.current.handleReorderTabs([WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV), watchHostTabId(MLAB)]) })
+    expect(usePoolHostsStore.getState().order).toEqual([MSERV, MLAB, GONE])
+  })
+
+  it('dragging the guardian tab does not touch the order', () => {
+    usePoolHostsStore.setState({ order: [] } as never)
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => { result.current.handleReorderTabs([watchHostTabId(MLAB), WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV)]) })
+    expect(usePoolHostsStore.getState().order).toEqual([])
+    expect(hostTabs()).toEqual([watchHostTabId(MLAB), WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV)])
+  })
+
+  it('outside the watcher area a reorder does not write the order', () => {
+    const [a, b] = [createTab({ kind: 'dashboard' }), createTab({ kind: 'hosts' })]
+    useTabStore.getState().addTab(a); useTabStore.getState().addTab(b)
+    const ws = useWorkspaceStore.getState().addWorkspace('WS')
+    useWorkspaceStore.getState().insertTab(a.id, ws.id); useWorkspaceStore.getState().insertTab(b.id, ws.id)
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+    const { result } = renderHook(() => useTabWorkspaceActions([a, b]))
+    act(() => { result.current.handleReorderTabs([b.id, a.id]) })
+    expect(usePoolHostsStore.getState().order).toEqual([MLAB, MSERV])
+  })
+
+  it('two devices: B receives A\'s order and rearranges its tabs, then neither writes again', () => {
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => { result.current.handleReorderTabs([WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV), watchHostTabId(MLAB)]) })
+    const orderOnA = usePoolHostsStore.getState().order
+    // B: its tabs are still [mlab, mserv] and the synced order arrives
+    useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [WATCH_GUARDIAN_TAB_ID, watchHostTabId(MLAB), watchHostTabId(MSERV)])
+    usePoolHostsStore.setState({ order: orderOnA } as never)
+    const rB = createWatchReconciler()
+    rB.reconcile({ hostIds: [MSERV, MLAB] }, T0 + ABSENT_REMOVE_MS)
+    expect(hostTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, watchHostTabId(MSERV), watchHostTabId(MLAB)])
+    const before = [useWorkspaceStore.getState().workspaces, usePoolHostsStore.getState().order]
+    rB.reconcile({ hostIds: [MSERV, MLAB] }, T0 + ABSENT_REMOVE_MS + 1000)
+    expect([useWorkspaceStore.getState().workspaces, usePoolHostsStore.getState().order]).toEqual(before)
   })
 })
 

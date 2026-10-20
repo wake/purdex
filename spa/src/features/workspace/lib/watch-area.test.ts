@@ -47,12 +47,12 @@ describe('reconcileWatchTabs', () => {
     expect(ws().workspaces).toBe(before[0])
   })
 
-  it('keeps the user order; a new host goes at the end', () => {
+  it('the order is the pool hosts store\'s: a row order that was not written there gives way to it (a drag writes it, MON-6b)', () => {
     const r = createWatchReconciler()
     r.reconcile(view(['a', 'b', 'c']), T0)
     ws().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [watchHostTabId('c'), watchHostTabId('a'), watchHostTabId('b')])
     r.reconcile(view(['a', 'b', 'c', 'd']), T0 + 1000)
-    expect(watchTabs()).toEqual(['c', 'a', 'b', 'd'].map(watchHostTabId))
+    expect(watchTabs()).toEqual(['a', 'b', 'c', 'd'].map(watchHostTabId))
   })
 
   it('removes a host this device saw leave, only after ABSENT_REMOVE_MS', () => {
@@ -173,6 +173,51 @@ describe('reconcileWatchTabs', () => {
     r.reconcile(view(['a']), T0 + 1000)
     expect(ws().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)).toBe(false)
     expect(watchHostTabId('a') in useTabStore.getState().tabs).toBe(false)
+  })
+})
+
+describe('host tabs follow the order of the view (MON-6b, M13)', () => {
+  const areaTabs = () => ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs
+  const host = (...ids: string[]) => ids.map(watchHostTabId)
+
+  it('the host tabs take the places host tabs held, in the order of the view', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['mserv', 'mlab']), T0)
+    expect(areaTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, ...host('mserv', 'mlab')])
+    r.reconcile(view(['mlab', 'mserv']), T0 + 1000)
+    expect(areaTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, ...host('mlab', 'mserv')])
+  })
+
+  it('a tab that is not a host tab in the view keeps its place: the reader\'s guardian between two hosts stays there', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['mserv', 'mlab']), T0)
+    ws().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [...host('mserv'), WATCH_GUARDIAN_TAB_ID, ...host('mlab')])
+    r.reconcile(view(['mserv', 'mlab']), T0 + 1000)
+    expect(areaTabs()).toEqual([...host('mserv'), WATCH_GUARDIAN_TAB_ID, ...host('mlab')])
+    r.reconcile(view(['mlab', 'mserv']), T0 + 2000)
+    expect(areaTabs()).toEqual([...host('mlab'), WATCH_GUARDIAN_TAB_ID, ...host('mserv')])
+  })
+
+  it('a host tab the view does not list (waiting to be collected, or synced in) keeps its place', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['a', 'b', 'c']), T0)
+    r.reconcile(view(['c', 'a']), T0 + 1000) // b left the answer: its tab waits a minute
+    expect(areaTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, ...host('c', 'b', 'a')])
+  })
+
+  it('already in order: nothing is written', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['a', 'b']), T0)
+    const before = ws().workspaces
+    r.reconcile(view(['a', 'b']), T0 + 1000)
+    expect(ws().workspaces).toBe(before)
+  })
+
+  it('a new host is placed where the view has it', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['a', 'b']), T0)
+    r.reconcile(view(['a', 'c', 'b']), T0 + 1000)
+    expect(areaTabs()).toEqual([WATCH_GUARDIAN_TAB_ID, ...host('a', 'c', 'b')])
   })
 })
 
