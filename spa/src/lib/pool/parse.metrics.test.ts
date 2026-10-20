@@ -136,6 +136,15 @@ describe('series: the host-metrics fields on a point', () => {
     expect(p.self_rss_mb).toBe(40)
   })
 
+  it('the process count is a non-negative whole number here too, else absent; the point stays', () => {
+    for (const bad of [-1, 1.5]) {
+      const p = parse(point({ procs_total: bad }))
+      expect(p, String(bad)).not.toHaveProperty('procs_total')
+      expect(p.self_rss_mb).toBe(40)
+    }
+    expect(parse(point({ procs_total: 0 })).procs_total).toBe(0)
+  })
+
   it('a disk I/O entry that does not parse is dropped alone', () => {
     const p = parse(point({ disk_io: [{ device: 'a', read_bps: 1, write_bps: 2, read_iops: 3, write_iops: 4 }, { read_bps: 1 }, 'x'] }))
     expect(p.disk_io).toEqual([{ device: 'a', read_bps: 1, write_bps: 2, read_iops: 3, write_iops: 4 }])

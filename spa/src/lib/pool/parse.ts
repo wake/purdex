@@ -116,6 +116,9 @@ const diskIOs = (v: unknown): PoolDiskIO[] | undefined => {
   return out && out.length > 0 ? out : undefined
 }
 
+/** How many processes: a non-negative whole number, else absent (facts and series both). */
+const procCount = (v: unknown): number | undefined => (num(v) && Number.isInteger(v) && v >= 0 ? v : undefined)
+
 const self = (v: unknown): PoolSelf | undefined => (isRec(v) ? { cpu_pct: numOrNull(v.cpu_pct), rss_mb: numOrNull(v.rss_mb) } : undefined)
 
 /** The facts records this App reads: wire `v` 1 to 2 (internal/wwd/wire doc.go MinProto..FactsProto). A newer one may mean different fields. */
@@ -160,7 +163,7 @@ export function parseFacts(v: unknown): PoolFacts | null {
     derived: { zone: zoneOf(derived.zone), headroom, sessions_room: derived.sessions_room },
     worker: w,
     ...(isRec(v.queue) && num(v.queue.queued) ? { queue: { queued: v.queue.queued } } : {}),
-    ...present({ procs_total: Number.isInteger(v.procs_total) && (v.procs_total as number) >= 0 ? (v.procs_total as number) : undefined, boot_at: time(v.boot_at) ?? undefined, self: self(v.self), disk_io: diskIOs(v.disk_io) }),
+    ...present({ procs_total: procCount(v.procs_total), boot_at: time(v.boot_at) ?? undefined, self: self(v.self), disk_io: diskIOs(v.disk_io) }),
   }
 }
 
@@ -239,10 +242,12 @@ function point(p: unknown): SeriesPoint | null {
   if (running) out.worker_running = running
   if (num(p.queue_queued)) out.queue_queued = p.queue_queued
   // G-2 to G-4, the same way.
-  for (const k of ['load15', 'cpu_user_pct', 'cpu_system_pct', 'compressor_mb', 'decompress_rate', 'swap_total_mb', 'procs_total', 'self_cpu_pct', 'self_rss_mb'] as const) {
+  for (const k of ['load15', 'cpu_user_pct', 'cpu_system_pct', 'compressor_mb', 'decompress_rate', 'swap_total_mb', 'self_cpu_pct', 'self_rss_mb'] as const) {
     const x = p[k]
     if (num(x)) out[k] = x
   }
+  const total = procCount(p.procs_total)
+  if (total !== undefined) out.procs_total = total
   const dio = diskIOs(p.disk_io)
   if (dio) out.disk_io = dio
   if (Array.isArray(p.disks)) out.disks = p.disks.flatMap((d): SeriesDisk[] => (isRec(d) && str(d.mount) && num(d.used_pct) && num(d.free_gb) ? [{ mount: d.mount, used_pct: d.used_pct, free_gb: d.free_gb }] : []))
