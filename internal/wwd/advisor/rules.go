@@ -120,7 +120,8 @@ func freeOf(f wire.Facts, mount string) (float64, bool) {
 	return 0, false
 }
 
-// WorkerCrashLoop is "worker crash loop": ≥ 3 wwd starts within an hour (push).
+// WorkerCrashLoop is "worker crash loop": ≥ 3 wwd starts within an hour that followed a run that did not end cleanly (push). A start after a planned
+// restart (a deploy, systemctl restart, launchctl kickstart: all SIGTERM) is not one (#3843).
 type WorkerCrashLoop struct{}
 
 func (WorkerCrashLoop) Kind() wire.AlertKind { return wire.AlertWorkerCrash }
@@ -132,16 +133,16 @@ const (
 )
 
 func (WorkerCrashLoop) Eval(in Input) (Verdict, error) {
-	if in.StartsSince == nil {
+	if in.UncleanStartsSince == nil {
 		return Verdict{}, errors.New("the start log is not available")
 	}
-	n, err := in.StartsSince(in.Now.Add(-crashWindow))
+	n, err := in.UncleanStartsSince(in.Now.Add(-crashWindow))
 	if err != nil {
 		return Verdict{}, err
 	}
 	v := Verdict{Key: "worker_crash_loop", Level: wire.AlertPush}
 	if n >= crashStarts {
-		v.Holds, v.Detail = true, fmt.Sprintf("wwd 一小時內啟動 %d 次", n)
+		v.Holds, v.Detail = true, fmt.Sprintf("wwd 一小時內當機後重啟 %d 次", n)
 	}
 	return v, nil
 }

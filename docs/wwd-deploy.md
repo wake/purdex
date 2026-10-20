@@ -423,6 +423,20 @@ wwd reads it at start, so a change needs `wwd` restarted. Nothing is known until
 `wwd alerts-replay --db <copy of wwd.db> --work-root <dir> --known "OrbStack Helper,mysqld"` shows what the rules would have raised over the
 recorded minutes; copy the database first (`sqlite3 <live wwd.db> ".backup <copy>"`), never point it at the live file.
 
+### The "worker crash loop" rule and `<data_dir>/clean_exit` (#3843)
+
+The rule (push) holds when **3 or more wwd starts in an hour followed a run that did not end cleanly**. A deploy, `systemctl restart wwd`,
+`launchctl kickstart -k` and both steps of `wwd install` stop wwd with SIGTERM; wwd leaves the file `<data_dir>/clean_exit` (the start time of
+that run) as soon as the signal arrives, and the next start reads it, deletes it and records `clean` in its start record
+(`wwd_starts.prev_exit`). A start that finds no file records `unclean`: a panic, the OOM killer, a power cut, and **a manual `kill -9`, which is
+counted as one crash**. The first start ever records `first`, and a start that follows a record made by a wwd before this change records
+`unknown` (that wwd did not know how it ended: the restart that upgrades wwd is not a crash); neither is counted. There is no schema change.
+
+A start is recorded once wwd has bound its ports: a second wwd, or a mistaken `wwd` command, that cannot bind records nothing and leaves the
+file where it is. A crash before the ports are bound (for example a panic in start-up) is not seen by this rule; launchd's and systemd's own
+restart counters see it. `wwd help`, `-h` and `--help` print the usage and exit 0; an unknown subcommand or flag prints it on stderr and exits
+2; none of them reads the config or opens `wwd.db`.
+
 ## 9. Silence settings (spec §13.3, 8a-3)
 
 Two settings decide which absences a host's wwd tells. Both are read at start, so a change needs `wwd` restarted.

@@ -50,6 +50,8 @@ const dropTimeout = 30 * time.Second
 
 // Config is what Exec needs from the worker.
 type Config struct {
+	// Host is this worker's own name (its host alias): a half of a qualification pair is accepted only when it was worked out for it.
+	Host string
 	// WorkRoot holds one directory per job.
 	WorkRoot string
 	// Fetchers gives the Fetcher of the connection a job was claimed on (ident.Ref.Source: the worker's own name for it, never the
@@ -218,7 +220,7 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return runner.Plan{}, err
 	}
-	p, err := remotejob.Prepare(job, ws.Dir, out)
+	p, err := remotejob.PrepareAt(job, ws.Dir, out, e.cfg.Host, ref.Source)
 	if err != nil {
 		var rej *remotejob.Rejection
 		if errors.As(err, &rej) {
