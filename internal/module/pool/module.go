@@ -378,6 +378,14 @@ func (m *Module) cachedLocked(key string) ([]byte, bool) {
 	return a.body, true
 }
 
+// forget drops the answer kept for key, so that the next read asks wwd: a notice that something changed must not be followed by a read of
+// the answer from before it.
+func (m *Module) forget(key string) {
+	m.flightMu.Lock()
+	delete(m.cache, key)
+	m.flightMu.Unlock()
+}
+
 // store keeps a success for answerTTL. A module built without a cache map (a test's) keeps nothing.
 func (m *Module) store(key string, body []byte) {
 	m.flightMu.Lock()

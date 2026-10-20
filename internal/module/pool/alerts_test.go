@@ -148,6 +148,7 @@ type liveAlerts struct {
 	amu    sync.Mutex
 	alerts map[string][]wire.Alert // by the `host` query ("" is the local host)
 	down   bool                    // alerts answer 503
+	old    map[string]bool         // hosts whose wwd predates the route: 404
 	asked  []string
 	events chan string // a line to write to the event stream
 }
@@ -162,6 +163,15 @@ func (la *liveAlerts) set(host string, list []wire.Alert) {
 	la.amu.Lock()
 	defer la.amu.Unlock()
 	la.alerts[host] = list
+}
+
+func (la *liveAlerts) setOld(host string, v bool) {
+	la.amu.Lock()
+	defer la.amu.Unlock()
+	if la.old == nil {
+		la.old = map[string]bool{}
+	}
+	la.old[host] = v
 }
 
 func (la *liveAlerts) setDown(v bool) {
@@ -183,8 +193,12 @@ func (la *liveAlerts) handler() http.Handler {
 		la.amu.Lock()
 		host := r.URL.Query().Get("host")
 		la.asked = append(la.asked, host)
-		down, list := la.down, la.alerts[host]
+		down, list, old := la.down, la.alerts[host], la.old[host]
 		la.amu.Unlock()
+		if old {
+			http.NotFound(w, r)
+			return
+		}
 		if down {
 			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
@@ -400,4 +414,61 @@ func TestAlertsWatch_TheRealModuleAnnouncesPoolAlertsV1WhileItWatches(t *testing
 	require.Contains(t, caps(), "pool.alerts.v1")
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "pool.alerts.v1", "not after Stop")
+}
+
+// An App that has just read the route and is told alerts.changed reads the new list, not the answer kept for the last second: a notice
+// drops what the route kept for that host. (Polling stopped with pool.alerts.v1, so a stale read would stay.)
+func TestAlertsWatch_ANoticeDropsTheAnswerKeptForThatHost(t *testing.T) {
+	la := newLiveAlerts(t)
+	m, n := watchingAlerts(t, la)
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	time.Sleep(3 * testAlertsEvery) // baselines
+	first := send(mux, "GET", "/api/pool/hosts/air19/alerts", "", asAdmin)
+	require.Equal(t, 200, first.Code)
+	assert.JSONEq(t, `{"host":"air19","known":true,"alerts":[]}`, first.Body.String())
+
+	la.set("air19", []wire.Alert{anAlert("disk:air19", "x")})
+	require.Eventually(t, func() bool { return len(n.hosts()) == 1 }, 3*time.Second, testPoll)
+	again := send(mux, "GET", "/api/pool/hosts/air19/alerts", "", asAdmin)
+	assert.Contains(t, again.Body.String(), "disk:air19", "the read after the notice is the new list: %s", again.Body.String())
+}
+
+// A peer whose wwd gains the route turns known:false into known:true with the same (empty) list; that is a change the App must hear.
+func TestAlertsWatch_KnownChangingIsNews(t *testing.T) {
+	la := newLiveAlerts(t)
+	la.setOld("air19", true)
+	_, n := watchingAlerts(t, la)
+	time.Sleep(3 * testAlertsEvery)
+	require.Empty(t, n.hosts())
+	la.setOld("air19", false)
+	require.Eventually(t, func() bool { return len(n.hosts()) == 1 }, 3*time.Second, testPoll)
+	assert.Equal(t, []string{"air19"}, n.hosts())
+}
+
+// If the local alert event is already waiting when wwd comes back, the read that follows is only the local host's; the peers are still read
+// and announced once more after it (their lists may have changed while wwd was away).
+func TestAlertsWatch_RecoveryThroughAKickStillAnnouncesThePeers(t *testing.T) {
+	la := newLiveAlerts(t)
+	_, n := watchingAlerts(t, la, func(m *Module) { m.alertsEvery = time.Hour })
+	require.Eventually(t, func() bool { return len(la.askedHosts()) >= 2 }, 3*time.Second, testPoll)
+
+	la.setDown(true)
+	la.alertEvent("mlab")
+	require.Eventually(t, func() bool { return len(n.hosts()) == 2 }, 3*time.Second, testPoll, "away: every host once")
+
+	la.set("air19", []wire.Alert{anAlert("disk:air19", "x")})
+	la.setDown(false)
+	la.alertEvent("mlab") // the kick that comes first when wwd is back
+	require.Eventually(t, func() bool { return countOf(n.hosts(), "air19") >= 2 }, 3*time.Second, testPoll, "back: the peer too, not only the local host: %v", n.hosts())
+}
+
+func countOf(list []string, s string) int {
+	c := 0
+	for _, x := range list {
+		if x == s {
+			c++
+		}
+	}
+	return c
 }

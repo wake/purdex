@@ -40,6 +40,9 @@ func poolAlertsOf(in []wire.Alert) []PoolAlert {
 	return out
 }
 
+// alertsKey is the key the route keeps a host's answer under (see serve).
+func alertsKey(alias string) string { return "alerts|" + alias }
+
 // handleAlerts is a host's alerts, asked of the local wwd with that host (spec §13.3). A host whose wwd predates the route is "not known"
 // (known: false), not an error; the errors are the history read's.
 func (m *Module) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +51,7 @@ func (m *Module) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
 		return
 	}
-	m.serve(w, r, "alerts|"+alias, func(ctx context.Context) (any, *apiError) {
+	m.serve(w, r, alertsKey(alias), func(ctx context.Context) (any, *apiError) {
 		list, known, err := m.client().Alerts(ctx, alias)
 		if err != nil {
 			return nil, historyError(err)
@@ -59,7 +62,7 @@ func (m *Module) handleAlerts(w http.ResponseWriter, r *http.Request) {
 
 // alertsPrint is what a host's alerts look like to the watch: what the App would see changed. `last` moves at every evaluation of a rule that
 // still holds, so it is left out: a change of it is not news, as the time wwd last looked at a peer is not for pool.changed.
-func alertsPrint(list []wire.Alert) string {
+func alertsPrint(list []wire.Alert, known bool) string {
 	type row struct {
 		Key       string
 		Kind      wire.AlertKind
@@ -72,7 +75,10 @@ func alertsPrint(list []wire.Alert) string {
 	for _, a := range list {
 		rows = append(rows, row{a.Key, a.Kind, a.Level, a.Since, a.ClearedAt, a.Detail})
 	}
-	b, err := json.Marshal(rows)
+	b, err := json.Marshal(struct {
+		Known bool
+		Rows  []row
+	}{known, rows}) // known too: a peer whose wwd gains the route turns known:false into known:true with the same empty list
 	if err != nil {
 		return ""
 	}
@@ -108,14 +114,20 @@ func (m *Module) watchAlerts(ctx context.Context) {
 	last := ""
 	localOnly := false
 	for {
-		res, err := m.alertsPass(ctx, known, away, localOnly)
+		res, err := m.alertsPass(ctx, known, away && !localOnly, localOnly)
 		switch res {
 		case passOK:
+			if away && localOnly {
+				// the local host is readable again but only it was read: the peers are read, and announced, by a whole pass at once
+				last, localOnly = "", false
+				continue
+			}
 			away, last = false, ""
 		case passAway:
 			if !away {
 				away = true
 				for alias := range known {
+					m.forget(alertsKey(alias))
 					m.notifyKind(EventAlertsChanged, alias)
 				}
 			}
@@ -169,7 +181,7 @@ func (m *Module) alertsPass(ctx context.Context, known map[string]string, recove
 		if i == 0 {
 			ask = "" // this host itself: the local wwd answers for it
 		}
-		list, _, err := m.client().Alerts(ctx, ask)
+		list, known, err := m.client().Alerts(ctx, ask)
 		if err != nil {
 			if ctx.Err() != nil {
 				return passCanceled, nil
@@ -179,10 +191,11 @@ func (m *Module) alertsPass(ctx context.Context, known map[string]string, recove
 			}
 			continue // a peer that could not be read: its last look stands
 		}
-		now[alias] = alertsPrint(list.Alerts)
+		now[alias] = alertsPrint(list.Alerts, known)
 	}
 	for alias, fp := range now {
 		if old, had := known[alias]; had && (recovered || old != fp) {
+			m.forget(alertsKey(alias))
 			m.notifyKind(EventAlertsChanged, alias)
 		}
 		known[alias] = fp
@@ -195,6 +208,7 @@ func (m *Module) alertsPass(ctx context.Context, known map[string]string, recove
 		for alias := range known {
 			if !still[alias] { // left the pool
 				delete(known, alias)
+				m.forget(alertsKey(alias))
 				m.notifyKind(EventAlertsChanged, alias)
 			}
 		}

@@ -154,6 +154,9 @@ func (m *Module) emitNotice(kind, host string) {
 		m.sendIdle.Broadcast()
 		m.mu.Unlock()
 	}()
+	if kind == EventAlertsChanged {
+		m.forget(alertsKey(host)) // again at the send: a read that was kept between the look and the send is from before the change too
+	}
 	b, err := json.Marshal(wire.PoolChanged{Host: host}) // {host}, the same body for every kind
 	if err != nil {
 		return
