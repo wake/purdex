@@ -212,6 +212,7 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		DepsDir:        in.Cfg.DepsRoot,
 		DepsKeep:       in.Cfg.Worker.DepsKeep,
 		DepsStoreMaxMB: in.Cfg.Worker.DepsStoreMaxMB,
+		GoCacheMaxMB:   in.Cfg.Worker.GoCacheMaxMB,
 	})
 	// the claim says what the host is at the time of the claim (in.Labels), not what it was when the worker started: that is before the first
 	// facts record, with no tool labels and a fingerprint of the OS version only, and no result made under it could be filed for reuse
