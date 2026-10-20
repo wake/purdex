@@ -1,4 +1,5 @@
-// spa/src/components/watch/jobs/HostJobs.test.tsx — the host tab's 工作 section (plan 7b1-4): on this host now (a claimed one included), queued from here, the last five ended here, and the link to the jobs tab's 歷史 filtered to this host.
+// spa/src/components/watch/jobs/HostJobs.test.tsx — the monitoring tab's 工作 column (monitoring tabs spec M41-3, plan MON-6e task 2): on this host now (a claimed one included), queued from here (three at most, then 「還有 n 件」),
+// the last jobs that ended here (as many as keep the column about as tall as the process tables), and the link to the jobs tab's 歷史 filtered to this host.
 // The jobs are the jobs store's and the hosts the pool's; the driver is not started here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
@@ -12,7 +13,7 @@ import { HostJobs } from './HostJobs'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { useJobsStore } from '../../../lib/pool/jobs-store'
 import { usePoolStore } from '../../../lib/pool/store'
-import { clearJobsViewMemory, readHistoryFilter, readJobsMode } from '../../../lib/pool/jobs-view-memory'
+import { clearJobsViewMemory, readHistoryFilter, readJobsMode, writeJobsMode } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 import type { PoolHost } from '../../../lib/pool/types'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -30,6 +31,7 @@ const host = (alias: string, over: Partial<PoolHost> = {}): PoolHost => ({
   worker: { enabled: true, slots: { heavy: 2, light: 2 }, owner_rule: '' }, ...over,
 })
 const claim = (worker: string, since = NOW - 65_000) => ({ worker, attempt: 1, since })
+const running = (id: string, over: Partial<PoolJob> = {}): PoolJob => job(id, { state: 'running', claim: claim('mlab'), ...over })
 const ended = (id: string, worker: string, finishedAt: number, over: Partial<PoolJob> = {}): PoolJob => job(id, {
   state: 'succeeded', claim: claim(worker),
   result: { exit: 0, summary: null, log: '', host: worker, started_at: finishedAt - 5000, finished_at: finishedAt, cache_hit: false, reason: '', superseded_by: null }, ...over,
@@ -42,6 +44,9 @@ const withJobs = (...jobs: PoolJob[]) => {
 const MLAB = host('mlab')
 const mount = () => render(<HostJobs host={MLAB} />)
 const idsIn = (testId: string, row: string) => within(screen.getByTestId(testId)).queryAllByTestId(row).map((e) => e.getAttribute('data-job-id'))
+const endedIds = () => idsIn('host-jobs-ended', 'host-jobs-ended-row')
+/** Ended on this host, newest is the highest number. */
+const endedN = (n: number) => Array.from({ length: n }, (_, i) => ended(`e${i + 1}`, 'mlab', NOW - (n - i) * 60_000))
 
 beforeEach(() => {
   cleanup(); clearJobsViewMemory()
@@ -57,45 +62,145 @@ afterEach(() => { vi.useRealTimers(); cleanup(); clearJobsViewMemory() })
 describe('on this host now', () => {
   it('a running job and a claimed one of this worker, whichever host queued them; another worker\'s job is not here', () => {
     withJobs(
-      job('run-own', { state: 'running', claim: claim('mlab') }),
+      running('run-own'),
       job('claimed-from-air', { origin: 'air26', state: 'claimed', claim: claim('mlab') }),
-      job('run-elsewhere', { origin: 'mlab', state: 'running', claim: claim('air26') }),
+      running('run-elsewhere', { claim: claim('air26') }),
     )
     mount()
-    const block = screen.getByTestId('host-jobs-running')
-    expect(within(block).getAllByTestId('job-running').map((e) => e.getAttribute('data-job-id'))).toEqual(['run-own'])
-    expect(within(block).getAllByTestId('job-preparing').map((e) => e.getAttribute('data-job-id'))).toEqual(['claimed-from-air'])
-    expect(within(block).getByText(t('watch.queue.slots', { used: 2, total: 2 }))).toBeInTheDocument()
+    expect(idsIn('host-jobs-running', 'host-jobs-run-row').sort()).toEqual(['claimed-from-air', 'run-own'])
+  })
+
+  it('the section is not there when nothing runs here', () => {
+    withJobs(job('q1'))
+    mount()
+    expect(screen.queryByTestId('host-jobs-running')).toBeNull()
+  })
+
+  it('a row says running or preparing, the job, and the lane (重 or 輕; heavy when the wire does not say)', () => {
+    withJobs(running('r1', { slot: 'light' }), running('r2', { slot: 'heavy' }), running('r3'), job('c1', { state: 'claimed', claim: claim('mlab') }))
+    mount()
+    const row = (id: string) => within(screen.getByTestId('host-jobs-running')).getAllByTestId('host-jobs-run-row').find((e) => e.getAttribute('data-job-id') === id)!
+    expect(row('r1')).toHaveTextContent(t('watch.host.jobs.state_running'))
+    expect(row('r1')).toHaveTextContent('purdex task-r1')
+    expect(within(row('r1')).getByTestId('host-jobs-run-slot')).toHaveTextContent(t('watch.jobs.flow.class.light'))
+    expect(within(row('r2')).getByTestId('host-jobs-run-slot')).toHaveTextContent(t('watch.jobs.flow.class.heavy'))
+    expect(within(row('r3')).getByTestId('host-jobs-run-slot')).toHaveTextContent(t('watch.jobs.flow.class.heavy'))
+    expect(row('c1')).toHaveTextContent(t('watch.jobs.preparing'))
+  })
+
+  it('the elapsed time runs from started_at, else from the claim; a claimed job has none yet', () => {
+    withJobs(running('with-start', { started_at: NOW - 30_000, claim: claim('mlab', NOW - 90_000) }), running('claim-only', { claim: claim('mlab', NOW - 65_000) }), job('c1', { state: 'claimed', claim: claim('mlab', NOW - 5000) }))
+    mount()
+    const time = (id: string) => within(screen.getByTestId('host-jobs-running')).getAllByTestId('host-jobs-run-row').find((e) => e.getAttribute('data-job-id') === id)!.querySelector('[data-testid="host-jobs-run-time"]')
+    expect(time('with-start')).toHaveTextContent('0:30')
+    expect(time('claim-only')).toHaveTextContent('1:05')
+    expect(time('c1')).toBeNull()
+  })
+
+  it('a job another host sent carries that host\'s badge; one sent from this host has none', () => {
+    withJobs(running('own'), running('from-air', { origin: 'air26' }))
+    mount()
+    const rows = within(screen.getByTestId('host-jobs-running')).getAllByTestId('host-jobs-run-row')
+    const own = rows.find((e) => e.getAttribute('data-job-id') === 'own')!
+    const air = rows.find((e) => e.getAttribute('data-job-id') === 'from-air')!
+    expect(within(own).queryByTestId('host-jobs-run-origin')).toBeNull()
+    expect(within(air).getByTestId('host-jobs-run-origin')).toHaveAttribute('title', t('watch.jobs.from', { origin: 'air26' }))
   })
 })
 
 describe('queued from here', () => {
   it('the queued jobs of this origin, wherever they will run; another host\'s queue and the running ones are not here', () => {
-    withJobs(
-      job('mine-1'), job('mine-held', { manual: 'hold' }),
-      job('theirs', { origin: 'air26' }),
-      job('mine-running', { state: 'running', claim: claim('air26') }),
-    )
+    withJobs(job('mine-1'), job('mine-2'), job('theirs', { origin: 'air26' }), running('mine-running', { claim: claim('air26') }))
     mount()
-    expect(idsIn('host-jobs-queued', 'job-queued').sort()).toEqual(['mine-1', 'mine-held'])
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row').sort()).toEqual(['mine-1', 'mine-2'])
+    expect(screen.getByTestId('host-jobs-queued-count')).toHaveTextContent('2')
+  })
+
+  it('a held job is not waiting (spec: 在排 is queued and not hold): not listed, not counted, not in 「還有 n 件」, not in the ended count', () => {
+    withJobs(...endedN(6), job('held-1', { manual: 'hold' }), job('held-2', { manual: 'hold' }), job('w1'), job('w2'), job('w3'), job('w4'))
+    mount()
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row')).toHaveLength(3)
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row')).not.toContain('held-1')
+    expect(screen.getByTestId('host-jobs-queued-count')).toHaveTextContent('4')
+    expect(screen.getByTestId('host-jobs-queued-more')).toHaveTextContent(t('watch.host.jobs.queued_more', { n: 1 }))
+    // 0 running, 4 waiting (3 shown + 「還有」): 9 − 0 − 3 − 1 = 5 (the two held ones take no place)
+    expect(endedIds()).toHaveLength(5)
+  })
+
+  it('only held jobs: the queue reads as empty', () => {
+    withJobs(job('held-1', { manual: 'hold' }))
+    mount()
+    expect(screen.getByTestId('host-jobs-queued-none')).toBeInTheDocument()
+  })
+
+  it('a row says the class, the job and how long it has waited, yellow from 2 minutes', () => {
+    withJobs(job('fresh', { created_at: NOW - 30_000, class: 'merge' }), job('long', { created_at: NOW - 125_000 }))
+    mount()
+    const rows = within(screen.getByTestId('host-jobs-queued')).getAllByTestId('host-jobs-queue-row')
+    const fresh = rows.find((e) => e.getAttribute('data-job-id') === 'fresh')!
+    const long = rows.find((e) => e.getAttribute('data-job-id') === 'long')!
+    expect(fresh).toHaveTextContent(t('watch.jobs.class.merge'))
+    expect(fresh).toHaveTextContent('purdex task-fresh')
+    expect(within(fresh).getByTestId('host-jobs-queue-wait')).toHaveTextContent('0:30')
+    expect(within(fresh).getByTestId('host-jobs-queue-wait').className).not.toContain('text-status-warning-text')
+    expect(within(long).getByTestId('host-jobs-queue-wait')).toHaveTextContent('2:05')
+    expect(within(long).getByTestId('host-jobs-queue-wait').className).toContain('text-status-warning-text')
+  })
+
+  it('three at most, then 「還有 n 件在排」', () => {
+    withJobs(...[1, 2, 3, 4, 5].map((n) => job(`q${n}`, { created_at: NOW - n * 1000 })))
+    mount()
+    expect(idsIn('host-jobs-queued', 'host-jobs-queue-row')).toHaveLength(3)
+    expect(screen.getByTestId('host-jobs-queued-count')).toHaveTextContent('5')
+    expect(screen.getByTestId('host-jobs-queued-more')).toHaveTextContent(t('watch.host.jobs.queued_more', { n: 2 }))
+  })
+
+  it('exactly three: no 「還有」', () => {
+    withJobs(job('q1'), job('q2'), job('q3'))
+    mount()
+    expect(screen.queryByTestId('host-jobs-queued-more')).toBeNull()
+  })
+
+  it('「還有 n 件」 opens the jobs tab on its live view, unfiltered', () => {
+    writeJobsMode('history')
+    withJobs(...[1, 2, 3, 4].map((n) => job(`q${n}`)))
+    mount()
+    fireEvent.click(screen.getByTestId('host-jobs-queued-more'))
+    expect(readJobsMode()).toBe('live')
+    expect(openWatchArea).toHaveBeenCalledWith({ tab: 'jobs' })
   })
 
   it('says so when nothing is queued from here', () => {
     withJobs(job('theirs', { origin: 'air26' }))
     mount()
-    expect(within(screen.getByTestId('host-jobs-queued')).getByTestId('job-queue-none')).toBeInTheDocument()
+    expect(screen.getByTestId('host-jobs-queued-none')).toHaveTextContent(t('watch.jobs.queue.none'))
   })
 })
 
-describe('the last five that ended here', () => {
-  it('those that ran on this host, newest first, five at most; the ones that ran elsewhere are not here', () => {
-    withJobs(
-      ...[1, 2, 3, 4, 5, 6].map((n) => ended(`e${n}`, 'mlab', NOW - (10 - n) * 60_000)),
-      ended('ran-on-air', 'air26', NOW - 1000),
-      job('running', { state: 'running', claim: claim('mlab') }),
-    )
+describe('the last jobs that ended here', () => {
+  it('those that ran on this host, newest first; the ones that ran elsewhere are not here', () => {
+    withJobs(...endedN(4), ended('ran-on-air', 'air26', NOW - 1000), running('now'))
     mount()
-    expect(idsIn('host-jobs-ended', 'host-jobs-ended-row')).toEqual(['e6', 'e5', 'e4', 'e3', 'e2'])
+    // one running, none queued: 9 − 1 − 0 = 8, held to the most it shows (5); four ended here
+    expect(endedIds()).toEqual(['e4', 'e3', 'e2', 'e1'])
+  })
+
+  it('how many: 9 minus the running and the queued rows shown (and the 「還有」 row), kept between 3 and 5', () => {
+    // nothing running or queued: 9 → 5
+    withJobs(...endedN(6)); mount()
+    expect(endedIds()).toHaveLength(5)
+    cleanup()
+    // 2 running, 3 queued: 9 − 2 − 3 = 4
+    withJobs(...endedN(6), running('r1'), running('r2'), job('q1'), job('q2'), job('q3')); mount()
+    expect(endedIds()).toHaveLength(4)
+    cleanup()
+    // 1 running, 5 queued (3 shown + 「還有」): 9 − 1 − 3 − 1 = 4 (the 「還有」 row takes a place)
+    withJobs(...endedN(6), running('r1'), ...[1, 2, 3, 4, 5].map((n) => job(`q${n}`))); mount()
+    expect(endedIds()).toHaveLength(4)
+    cleanup()
+    // 3 running, 5 queued (3 shown + 「還有」): 9 − 3 − 3 − 1 = 2 → 3
+    withJobs(...endedN(6), running('r1'), running('r2'), running('r3'), ...[1, 2, 3, 4, 5].map((n) => job(`q${n}`))); mount()
+    expect(endedIds()).toHaveLength(3)
   })
 
   it('a row says the state, the job, when it ended and the result in words', () => {
@@ -118,13 +223,13 @@ describe('the last five that ended here', () => {
 describe('a host that left the pool', () => {
   it('its jobs the store still keeps are not shown: not on this host, not ended', () => {
     withJobs(
-      job('gone-running', { origin: 'gone', state: 'running', claim: claim('mlab') }),
+      running('gone-running', { origin: 'gone' }),
       ended('gone-ended', 'mlab', NOW - 1000, { origin: 'gone' }),
-      job('kept-running', { state: 'running', claim: claim('mlab') }),
+      running('kept-running'),
     )
     mount()
-    expect(idsIn('host-jobs-running', 'job-running')).toEqual(['kept-running'])
-    expect(idsIn('host-jobs-ended', 'host-jobs-ended-row')).toEqual([])
+    expect(idsIn('host-jobs-running', 'host-jobs-run-row')).toEqual(['kept-running'])
+    expect(endedIds()).toEqual([])
     expect(screen.getByTestId('host-jobs-ended-none')).toBeInTheDocument()
   })
 })
