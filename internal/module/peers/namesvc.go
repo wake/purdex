@@ -86,15 +86,25 @@ func (m *Module) nameRow(ctx context.Context, sessionID string) (store.PeerNameE
 
 // CodeOf is the persona code a session's name ends in.
 func (m *Module) CodeOf(ctx context.Context, sessionID string) (string, bool) {
+	code, ok, _ := m.CodeOfErr(ctx, sessionID)
+	return code, ok
+}
+
+// CodeOfErr is CodeOf that says a failed read: a session with no persona is ("", false, nil), a name row that could not be
+// read is ("", false, err).
+func (m *Module) CodeOfErr(ctx context.Context, sessionID string) (string, bool, error) {
 	row, ok, err := m.nameRow(ctx, sessionID)
-	if err != nil || !ok {
-		return "", false
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
 	}
 	code, ok := ipeers.PoolNameOf(row.Name)
 	if !ok || !m.isPersonaCode(code) {
-		return "", false
+		return "", false, nil
 	}
-	return code, true
+	return code, true, nil
 }
 
 // isPersonaCode says whether code is a persona's code (a retired persona's too), as of the collection the pool follows. The
