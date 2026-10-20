@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
   readQueueTab, writeQueueTab, clearViewMemory,
+  readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
 beforeEach(() => clearViewMemory())
@@ -52,5 +53,21 @@ describe('watch view memory — queue sub-tab (the old gate\'s, until MON-12)', 
     writeQueueTab('h1', 'history')
     clearViewMemory()
     expect(readQueueTab('h1')).toBe('now')
+  })
+})
+
+describe('watch view memory — the events tab (MON-10c)', () => {
+  it('defaults to no filter, no scroll and nothing read; keeps what is written; is cleared with the rest', () => {
+    expect(readEventFilters()).toEqual({ host: 'all', source: 'all', status: 'all' })
+    expect(readEventsScroll()).toBe(0)
+    expect(readEventsObservations()).toEqual({ source: null, owners: {}, byHost: {}, forbidden: [], failed: [], truncated: [] })
+    writeEventFilters({ host: 'h1', source: 'obs', status: 'live' })
+    writeEventsScroll(240)
+    writeEventsObservations({ source: 'src', owners: { mserv: 'h' }, byHost: { mserv: [] }, forbidden: ['mserv'], failed: [], truncated: [] })
+    expect(readEventFilters()).toEqual({ host: 'h1', source: 'obs', status: 'live' })
+    expect(readEventsScroll()).toBe(240)
+    expect(readEventsObservations().forbidden).toEqual(['mserv'])
+    clearViewMemory()
+    expect([readEventFilters().host, readEventsScroll(), readEventsObservations().forbidden]).toEqual(['all', 0, []])
   })
 })
