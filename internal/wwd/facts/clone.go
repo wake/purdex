@@ -36,6 +36,12 @@ func Clone(f wire.Facts) wire.Facts {
 		self := wire.Self{CPUPct: clonePtr(f.Self.CPUPct), RSSMB: clonePtr(f.Self.RSSMB)}
 		out.Self = &self
 	}
+	if f.DiskIO != nil {
+		out.DiskIO = make([]wire.DiskIO, len(f.DiskIO))
+		for i, d := range f.DiskIO {
+			out.DiskIO[i] = cloneDiskIO(d)
+		}
+	}
 	out.Exception = make([]wire.FactExc, len(f.Exception))
 	for i, e := range f.Exception {
 		e.Until = clonePtr(e.Until)
@@ -63,6 +69,12 @@ func cloneCPU(c wire.CPU) wire.CPU {
 		c.Cores = cores
 	}
 	return c
+}
+
+func cloneDiskIO(d wire.DiskIO) wire.DiskIO {
+	d.ReadBps, d.WriteBps = clonePtr(d.ReadBps), clonePtr(d.WriteBps)
+	d.ReadIOPS, d.WriteIOPS = clonePtr(d.ReadIOPS), clonePtr(d.WriteIOPS)
+	return d
 }
 
 func cloneMem(m wire.Mem) wire.Mem {
