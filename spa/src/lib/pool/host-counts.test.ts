@@ -14,13 +14,13 @@ describe('hostCountsOf — the count (M6)', () => {
     // mlab sent 2 queued; air26 is running one mlab sent: mlab 2, air26 1
     const entries = [queued('a', 'mlab'), queued('b', 'mlab')]
     const jobs = [running('c', 'mlab', 'air26')]
-    expect(hostCountsOf(entries, jobs)).toEqual({ mlab: { n: 2, tone: 'neutral' }, air26: { n: 1, tone: 'neutral' } })
+    expect(hostCountsOf(entries, jobs)).toEqual({ mlab: { n: 2, tone: 'neutral', queued: 2, running: 0 }, air26: { n: 1, tone: 'neutral', queued: 0, running: 1 } })
   })
   it('claimed (workspace being prepared) counts like running', () => {
-    expect(hostCountsOf([], [running('a', 'mlab', 'air26', 'claimed')])).toEqual({ air26: { n: 1, tone: 'neutral' } })
+    expect(hostCountsOf([], [running('a', 'mlab', 'air26', 'claimed')])).toEqual({ air26: { n: 1, tone: 'neutral', queued: 0, running: 1 } })
   })
   it('a host that sends and runs counts both', () => {
-    expect(hostCountsOf([queued('a', 'mlab')], [running('b', 'air26', 'mlab')])).toEqual({ mlab: { n: 2, tone: 'neutral' } })
+    expect(hostCountsOf([queued('a', 'mlab')], [running('b', 'air26', 'mlab')])).toEqual({ mlab: { n: 2, tone: 'neutral', queued: 1, running: 1 } })
   })
   it('a hold does not count', () => {
     expect(hostCountsOf([queued('a', 'mlab', { held: true })], [])).toEqual({})
