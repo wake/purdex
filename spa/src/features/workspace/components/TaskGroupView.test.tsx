@@ -27,6 +27,8 @@ import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
 import { useGroupViewStore } from '../../../stores/useGroupViewStore'
 import { manualGroupKey, UNGROUPED } from '../../../lib/task-groups/group-key'
+import { addTaskGroup } from '../../../lib/task-groups/add-group'
+import { useRenameRequestStore } from '../../../lib/task-groups/rename-request'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
 import { useRootCacheStore } from '../../../lib/task-groups/root-cache'
@@ -721,6 +723,17 @@ describe('header menu: rename, colour, delete (task groups spec §6.1, TG-3d)', 
     menuOf('task-group-manual')
     fireEvent.click(screen.getByTestId('task-group-menu-rename'))
     expect(screen.getByTestId('task-group-name-input')).toBeInTheDocument()
+  })
+
+  it('a group made by 新增任務編組 opens its rename as it appears, once: the same header mounting again does not reopen it', () => {
+    const id = addTaskGroup()
+    mount()
+    expect(screen.getByTestId('task-group-name-input')).toBeInTheDocument()
+    expect(useRenameRequestStore.getState().groupId).toBeNull() // consumed
+    cleanup()
+    mount()
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    expect(id).not.toBeNull()
   })
 
   it('a colour from the menu is stored on the group (and the default clears it)', () => {

@@ -69,6 +69,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const [deleting, setDeleting] = useState<string | null>(null)
   const renameFor = useRenameRequestStore((s) => s.groupId)
   const renameNonce = useRenameRequestStore((s) => s.nonce)
+  const consumeRename = useRenameRequestStore((s) => s.consume)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
   const sessionTabs = useMemo<SessionTab[]>(() => {
@@ -246,7 +247,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} muted={collapsed} {...headerProps(key, !collapsed)}
                 edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
                 onContextMenu={(e) => setMenu({ groupId: section.groupId, x: e.clientX, y: e.clientY })}
-                editRequest={renameFor === section.groupId ? renameNonce : undefined}
+                editRequest={renameFor === section.groupId ? renameNonce : undefined} onEditRequestHandled={consumeRename}
                 clear={collapsed && hasMembers ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
               {collapsed && !hasMembers && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}

@@ -31,8 +31,9 @@ interface Props {
   onToggle?: () => void
   /** A right-click on the header (a manual group's menu); the default menu is suppressed when given. */
   onContextMenu?: (e: React.MouseEvent) => void
-  /** A counter: each new value starts the in-place rename, as a double-click does (the menu's 「重新命名」, a freshly made group). */
+  /** A rename was asked for (the menu's 「重新命名」, a freshly made group): while it is defined — on mount too — the in-place rename starts, as a double-click does, and `onEditRequestHandled` is called once. */
   editRequest?: number
+  onEditRequestHandled?: () => void
   strong?: boolean
   muted?: boolean
   host?: string
@@ -42,7 +43,7 @@ interface Props {
   clear?: HeaderClear
 }
 
-export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, onContextMenu, editRequest, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
+export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, onContextMenu, editRequest, onEditRequestHandled, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
   const t = useI18nStore((s) => s.t)
   const reasonId = useId()
   const [editing, setEditing] = useState(false)
@@ -54,9 +55,8 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
   useEffect(() => { if (editing) { input.current?.focus(); input.current?.select() } }, [editing])
 
   const start = () => { if (edit && edit.blocked === null) { setDraft(name); setEditing(true) } }
-  const lastRequest = useRef(editRequest)
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request value starts the edit; `start` reads the latest name
-  useEffect(() => { if (editRequest !== lastRequest.current) { lastRequest.current = editRequest; start() } }, [editRequest])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a request starts the edit once; `start` reads the latest name
+  useEffect(() => { if (editRequest !== undefined) { start(); onEditRequestHandled?.() } }, [editRequest])
   const cancel = () => { if (!pending) setEditing(false) }
   const commit = async () => {
     const next = draft.trim()

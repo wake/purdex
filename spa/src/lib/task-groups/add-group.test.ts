@@ -27,7 +27,7 @@ describe('addTaskGroup', () => {
     expect(id).not.toBeNull()
     expect(names()).toEqual(['任務編組 1'])
     expect(useGroupViewStore.getState().selectedGroup).toBe(manualGroupKey(id!))
-    expect(useRenameRequestStore.getState()).toMatchObject({ groupId: id, nonce: 1 })
+    expect(useRenameRequestStore.getState()).toMatchObject({ groupId: id, nonce: 1 }) // pending until a header takes it
   })
 
   it('takes the first N no group uses: 1, 2, then 1 again once it is gone', () => {
