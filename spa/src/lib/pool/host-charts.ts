@@ -104,12 +104,12 @@ export interface ChartDef {
   pending: boolean
 }
 
-const niceMax = (peak: number, floor = 1): number => {
+export const niceMax = (peak: number, floor = 1): number => {
   const want = Math.max(floor, peak * 1.15)
   const mag = 10 ** Math.floor(Math.log10(want))
   return Math.ceil(want / mag) * mag
 }
-const peakOf = (series: readonly (readonly (number | null)[])[]): number => {
+export const peakOf = (series: readonly (readonly (number | null)[])[]): number => {
   let m = 0
   for (const s of series) for (const v of s) if (v !== null && v > m) m = v
   return m
