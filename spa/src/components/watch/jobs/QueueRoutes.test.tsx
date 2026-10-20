@@ -67,6 +67,11 @@ describe('QueueRoutes', () => {
     expect(screen.getByTestId('queue-routes')).toHaveAttribute('viewBox', '0 0 1000 400')
   })
 
+  it('the SVG does not clip: a wrapped row\'s gutter is just outside the rows', () => {
+    render(<Harness active={ALL} />)
+    expect(screen.getByTestId('queue-routes').getAttribute('class')).toContain('overflow-visible')
+  })
+
   it('a card that is not in the DOM has no route', () => {
     render(<Harness active={[ALL[0]]} />)
     expect(document.querySelectorAll('g[data-r]')).toHaveLength(1)

@@ -1,6 +1,6 @@
 // spa/src/components/watch/jobs/QueueRoutes.tsx — the lines of the queue flow (monitoring tabs spec M29, M30): from the queue pool cell a job was sent from to the job's card in the worker pool, one per job being prepared or run, in the colour
 // of the host that sent it. An SVG over the flow; it measures the cells (`data-pool`, `data-wk`, `data-j`, the two rows `data-qtop`, `data-qbot`) and draws with `lib/pool/queue-routes`. It measures again when the flow changes size, when
-// the fonts arrive, and when the cells or cards change. Static: no <animate>, no transition (M28). Only pointing lights a line: the others stay as they are.
+// the fonts arrive, and when the cells or cards change. A wrapped row sends its routes down a gutter just outside the rows, so the SVG does not clip (`overflow-visible`). Static: no <animate>, no transition (M28). Only pointing lights a line: the others stay as they are.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { candidatesOf, linesOf, routesOf, type FlowLayout, type Rect } from '../../../lib/pool/queue-routes'
@@ -77,7 +77,7 @@ export function QueueRoutes({ flowRef, active, highlighted, candidate, colorOf }
   // the lit routes are drawn last, so they are on top; nothing else about the others changes
   const ordered = [...routes.filter((r) => !highlighted.has(r.key)), ...routes.filter((r) => highlighted.has(r.key))]
   return (
-    <svg data-testid="queue-routes" aria-hidden="true" className="pointer-events-none absolute inset-0" width={m.w} height={m.h} viewBox={`0 0 ${m.w} ${m.h}`}>
+    <svg data-testid="queue-routes" aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-visible" width={m.w} height={m.h} viewBox={`0 0 ${m.w} ${m.h}`}>
       {ordered.map((r) => {
         const hl = highlighted.has(r.key)
         const color = colorOf(r.pool)
