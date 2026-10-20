@@ -1,19 +1,20 @@
-// spa/src/lib/task-groups/view-model.ts — what the sidebar's task-group view lists (task groups spec §6.1, TG-2b; name pool v2 spec §7, L10). Pure: the sidebar feeds it from the stores.
-//   1. the team groups, in the order given (a team with its lead and members);
+// spa/src/lib/task-groups/view-model.ts — what the sidebar's task-group view lists (task groups spec §6.1, TG-2b, TG-3a-2b; name pool v2 spec §7, L10). Pure: the sidebar feeds it from the stores.
+//   1. the team groups, in the order given (a team with its lead and members, then the other tabs the team holds);
 //   2. the manual groups of `useManualGroupsStore`, in its `order`;
-//   3. 「未分組」 last: every other session, left out when there is none.
-// A session in a live team shows under its team only; its manual membership is ignored until the team ends (L10). A manual group gathers sessions of ANY host: a member is a (host, lineage root), so a relay keeps
-// the membership; a session whose root is not known yet (or whose pane has no agent session id) is 「未分組」 for the display — it is never guessed into a group. A session two groups name (two devices filed it
-// differently) is shown in the first of them in `order`, once.
-import type { ManualGroup, ManualGroups } from '../../stores/useManualGroupsStore'
-import { seatLookup, sessionKey, type Seat, type TeamView } from '../team/team-views'
+//   3. 「未分組」 last: every other tab, left out when there is none.
+// Which group a tab is in is `groupOfTab` (placement.ts) and the order inside a group is `groupTabs` (group-order.ts); this file only turns them into rows. A group lists ALL its tabs — a tab that is no session, a tab whose
+// agent has ended, a second tab of a seat. A session in a live team shows under its team only (L10); a session whose root is not known yet is 「未分組」 for the display, never guessed into a group.
+import type { ManualGroup } from '../../stores/useManualGroupsStore'
+import type { Seat, TeamView } from '../team/team-views'
+import { allGroupTabs, teamSections, type GroupOrderCtx } from './group-order'
+import { manualGroupKey, teamGroupKey, UNGROUPED } from './group-key'
 
-/** One open tab that shows a tmux session: the sidebar's session row. */
+/** One open tab that shows a live tmux session: what a row's right-click menu and drag act on. */
 export interface SessionTab {
   tabId: string
   hostId: string
   sessionCode: string
-  /** The tmux session name `sessionCode` stands for (the sessions store, else the pane's cached name); decides whether a team seat is this session. */
+  /** The tmux session name `sessionCode` stands for (the sessions store, else the pane's cached name). */
   sessionName?: string | null
   /** The agent session id the pane recorded (`rebuild.agent.sessionId`); null when it recorded none. */
   agentSessionId: string | null
@@ -29,58 +30,43 @@ export interface GroupRow {
   seat?: Seat
 }
 
-export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: GroupRow; members: GroupRow[] }
+/** `rest`: every row after the lead, in `groupTabs` order — the lead's other tabs, the other pinned tabs, then each member's seat row followed by its other tabs (a seat no tab shows is a row with no tab), then the plain tabs `tab.group` filed under the team. */
+export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: GroupRow; rest: GroupRow[] }
 /** `rows` empty = nothing live in the group: the view collapses it. */
 export interface ManualSection { kind: 'manual'; key: string; groupId: string; group: ManualGroup; rows: GroupRow[] }
 export interface UngroupedSection { kind: 'ungrouped'; key: 'ungrouped'; rows: GroupRow[] }
 export type GroupSection = TeamSection | ManualSection | UngroupedSection
 
-export interface GroupViewInput {
-  tabs: readonly SessionTab[]
+/** The placement inputs (`tabs`, the team index, `manual`, `rootOf`) plus the team views in the order to list them. */
+export interface GroupViewInput extends GroupOrderCtx {
   teams: readonly TeamView[]
-  /** What `useManualGroupsStore` holds: the groups and their order. */
-  manual: ManualGroups
-  /** The lineage root of an agent session id on a host, or null when it is not known (yet). */
-  rootOf: (hostId: string, agentSessionId: string) => string | null
 }
 
 const seatRow = (view: TeamView, seat: Seat): GroupRow => ({ key: `seat:${view.key}:${seat.session.session_id}`, tabId: seat.groupTabId ?? seat.tabId, seatId: seat.session.session_id, seat })
-const tabRow = (t: SessionTab): GroupRow => ({ key: `tab:${t.tabId}`, tabId: t.tabId })
-const memberKey = (host: string, root: string) => JSON.stringify([host, root])
+const tabRow = (tabId: string): GroupRow => ({ key: `tab:${tabId}`, tabId })
 
 export function buildGroupView(input: GroupViewInput): GroupSection[] {
   const out: GroupSection[] = []
-  const claimed = new Set<string>()
-  // Every tab that shows a team seat's session is the team's, not just the tab the seat was drawn from.
-  const seatSessions = seatLookup(input.teams)
-  for (const t of input.tabs) if (t.sessionName && seatSessions.has(sessionKey(t.hostId, t.sessionName))) claimed.add(t.tabId)
+  const placed = allGroupTabs(input)
 
   for (const view of input.teams) {
-    const seats = [view.lead, ...view.members]
-    for (const s of seats) {
-      if (s.tabId) claimed.add(s.tabId)
-      if (s.groupTabId) claimed.add(s.groupTabId)
-    }
-    out.push({ kind: 'team', key: `team:${view.key}`, view, lead: seatRow(view, view.lead), members: view.members.map((m) => seatRow(view, m)) })
+    const lead = seatRow(view, view.lead)
+    const seatRows = view.members.map((m) => seatRow(view, m))
+    // a seat row stands for its chosen tab: that tab is never listed a second time
+    const used = new Set([lead, ...seatRows].flatMap((r) => (r.tabId === null ? [] : [r.tabId])))
+    const more = (tabs: readonly { id: string }[]): GroupRow[] => tabs.filter((t) => !used.has(t.id)).map((t) => tabRow(t.id))
+    const sec = teamSections(view, (placed.get(teamGroupKey(view.key)) ?? []).map((id) => input.tabs[id]), input)
+    const rest = [...more(sec.lead), ...more(sec.pinned), ...seatRows.flatMap((row, i) => [row, ...more(sec.members[i])]), ...more(sec.plain)]
+    out.push({ kind: 'team', key: `team:${view.key}`, view, lead, rest })
   }
 
   for (const groupId of input.manual.order) {
     const group = input.manual.groups[groupId]
     if (!group) continue
-    const members = new Set(group.members.map((m) => memberKey(m.host, m.root)))
-    const rows: GroupRow[] = []
-    for (const t of input.tabs) {
-      if (claimed.has(t.tabId) || t.agentSessionId === null) continue
-      const root = input.rootOf(t.hostId, t.agentSessionId)
-      if (root !== null && members.has(memberKey(t.hostId, root))) {
-        rows.push(tabRow(t))
-        claimed.add(t.tabId)
-      }
-    }
-    out.push({ kind: 'manual', key: `manual:${groupId}`, groupId, group, rows })
+    out.push({ kind: 'manual', key: `manual:${groupId}`, groupId, group, rows: (placed.get(manualGroupKey(groupId)) ?? []).map(tabRow) })
   }
 
-  const rest = input.tabs.filter((t) => !claimed.has(t.tabId)).map(tabRow)
+  const rest = (placed.get(UNGROUPED) ?? []).map(tabRow)
   if (rest.length > 0) out.push({ kind: 'ungrouped', key: 'ungrouped', rows: rest })
   return out
 }
