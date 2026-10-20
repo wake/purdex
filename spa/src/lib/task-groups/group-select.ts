@@ -58,7 +58,11 @@ export function switchSidebarView(to: SidebarView): void {
   }
   const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === lastByView.workspace)
   if (ws === undefined) {
-    resyncSelection() // gone: the workspace of the current tab
+    // gone: the workspace of the current tab becomes the active one (the sidebar highlights it) and is recorded
+    const current = useTabStore.getState().activeTabId
+    const home = current === null ? null : useWorkspaceStore.getState().findWorkspaceByTab(current)
+    if (home) useWorkspaceStore.getState().setActiveWorkspace(home.id)
+    resyncSelection()
     return
   }
   useWorkspaceStore.getState().setActiveWorkspace(ws.id)

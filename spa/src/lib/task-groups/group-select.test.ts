@@ -131,6 +131,7 @@ describe('switchSidebarView — restores the view\'s last place (spec §6.3)', (
     useTabStore.setState({ activeTabId: 'a2' } as never)
     switchSidebarView('workspace')
     expect(view().lastByView.workspace).toBe('w1')
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1') // w2 was active; the sidebar follows the current tab
     expect(active()).toBe('a2')
   })
 })
