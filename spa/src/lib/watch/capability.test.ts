@@ -39,7 +39,7 @@ const run = async (caps: string[]) => {
   useNexHostStore.setState({ byHost: { h1: infoOf(...caps) }, ensure: async () => {} } as never)
   stops.push(startWatchStatus(), startWatchEvents())
   await flush(); await flush()
-  createWatchReconciler().reconcile({ hostIds: [], stale: false }, 1)
+  createWatchReconciler().reconcile({ hostIds: [] }, 1)
 }
 
 describe('the events tab and the events read follow /api/info', () => {

@@ -37,11 +37,12 @@ describe('watch pane kinds', () => {
     expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')
     expect(getPaneLabel({ kind: 'watch-jobs' }, sessions, workspaces, t)).toBe('watch.pane.jobs')
+    // a tab from before the pool is named by its fleet id: the fleet is no longer read for it (MON-6a-2); the tab is collected within a minute
     expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
     useFleetStore.setState({
       snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } },
     })
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('mlab')
+    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
   })
 
   it('icons exist in ICON_MAP', () => {
@@ -126,10 +127,10 @@ describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
     expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv-2')
   })
 
-  it('label of an old content is still the fleet alias', () => {
+  it('label of an old content is its fleet id, not the fleet\'s alias or the pool\'s', () => {
     useFleetStore.setState({ snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } } })
     answer([{ host_id: 'h1', alias: 'from-pool' }])
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('mlab')
+    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
   })
 
   it('contentMatches: the same poolHostId matches, a different one or an old content does not', () => {

@@ -17,11 +17,18 @@ beforeEach(() => {
 
 describe('HistoryPage and the watcher area', () => {
   it('a watch-host record opens the area on that host and never creates a tab', () => {
+    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: { kind: 'watch-host', poolHostId: 'h1' }, visitedAt: 1 }], closedTabs: [] })
+    render(<HistoryPage {...props} />)
+    fireEvent.click(screen.getAllByRole('button')[0])
+    expect(openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: 'h1' } })
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual([])
+  })
+
+  it('a record from before the pool (a fleet host id) opens the first tab of the area', () => {
     useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: { kind: 'watch-host', fleetHostId: 'h1' }, visitedAt: 1 }], closedTabs: [] })
     render(<HistoryPage {...props} />)
     fireEvent.click(screen.getAllByRole('button')[0])
-    expect(openWatchArea).toHaveBeenCalledWith({ host: 'h1' })
-    expect(Object.keys(useTabStore.getState().tabs)).toEqual([])
+    expect(openWatchArea).toHaveBeenCalledWith({ tab: 'guardian' })
   })
 
   it('a guardian or events record opens the guardian target, no tab', () => {
