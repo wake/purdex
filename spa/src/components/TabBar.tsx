@@ -42,9 +42,16 @@ function TabSeparator({ show }: { show: boolean }) {
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat }: Props) {
   const t = useI18nStore((s) => s.t)
-  // A group's bar (`flat`) is ONE zone in the order `groupTabs` gives (a team's lead first even when unpinned, then its pinned tabs, ...): a pinned tab keeps its pinned look but is not moved into a zone of its own.
-  const pinnedTabs = useMemo(() => (flat ? [] : tabs.filter((t) => t.pinned)), [tabs, flat])
-  const normalTabs = useMemo(() => (flat ? tabs : tabs.filter((t) => !t.pinned)), [tabs, flat])
+  // The pinned zone: every pinned tab. In a group's bar (`flat`) the order is the one `groupTabs` gives, so the zone is the pinned tabs that LEAD it (a manual group's / 「未分組」's pinned tabs, a team with a pinned lead);
+  // a team whose lead is not pinned has the lead first and its pinned tabs after it, in the one zone, still dressed as pinned.
+  const pinnedCount = useMemo(() => {
+    if (!flat) return tabs.filter((t) => t.pinned).length
+    let n = 0
+    while (n < tabs.length && tabs[n].pinned) n += 1
+    return n
+  }, [tabs, flat])
+  const pinnedTabs = useMemo(() => (flat ? tabs.slice(0, pinnedCount) : tabs.filter((t) => t.pinned)), [tabs, flat, pinnedCount])
+  const normalTabs = useMemo(() => (flat ? tabs.slice(pinnedCount) : tabs.filter((t) => !t.pinned)), [tabs, flat, pinnedCount])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
   // Team runs (spec §4.2): the unpinned tabs split into plain tabs and label + lead + visible members. Only the tabs

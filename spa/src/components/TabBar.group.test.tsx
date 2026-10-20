@@ -116,6 +116,17 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(idsInOrder(container)).toEqual(['lead', 'ma', 'plain'])
   })
 
+  it('a manual group\'s pinned tabs keep the pinned zone and its divider before the others', () => {
+    const list = [mk('p1', 'other', true), mk('p2', 'lead-tm', true), mk('x', 'a-tm'), mk('y', 'b-tm')]
+    seed(list)
+    const { container } = bar(list, true)
+    expect(idsInOrder(container)).toEqual(['p1', 'p2', 'x', 'y'])
+    const parent = (id: string) => container.querySelector(`[data-tab-id="${id}"]`)!.parentElement
+    expect(parent('p1')).toBe(parent('p2'))
+    expect(parent('x')).not.toBe(parent('p1'))
+    expect(parent('p1')!.nextElementSibling!.className).toContain('w-px') // the divider after the pinned zone
+  })
+
   it('an unpinned lead stays first even when other tabs of the team are pinned: one zone, in the order given', () => {
     const list = [mk('lead', 'lead-tm'), mk('pa', 'a-tm', true), mk('mb', 'b-tm'), mk('plain', 'other')]
     seed(list)
@@ -125,11 +136,11 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(new Set(['lead', 'pa', 'mb', 'plain'].map(parent)).size).toBe(1)
   })
 
-  it('a pinned tab keeps its pinned look (a button) without a zone of its own', () => {
-    const list = [mk('p1', 'other', true), mk('x', 'a-tm')]
+  it('a pinned tab keeps its pinned look (a button), also outside the pinned zone', () => {
+    const list = [mk('lead', 'lead-tm'), mk('pa', 'a-tm', true), mk('x', 'b-tm')]
     seed(list)
     const { container } = bar(list, true)
-    expect(container.querySelector('[data-tab-id="p1"]')!.tagName).toBe('BUTTON')
+    expect(container.querySelector('[data-tab-id="pa"]')!.tagName).toBe('BUTTON')
     expect(container.querySelector('[data-tab-id="x"]')!.tagName).not.toBe('BUTTON')
   })
 
