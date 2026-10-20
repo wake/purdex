@@ -1,26 +1,23 @@
-// @vitest-environment node
-//
 // Guard (monitoring tabs plan, common rules; spec A1 / A11): the sidebar's host row and the files this line made pool-only do not read the fleet. The scope is `components/fleet/**` and
 // the listed `lib/pool` files. Not in scope, by name: `fleet-bridge.ts` (the host page's and the Hosts page's transitional reader, until MON-6 / MON-9b), `host-view.ts`,
 // `history.ts`, `use-pool-host-rows.ts`, `use-series-history.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
 // A scoped, non-test file must not import anything from `lib/fleet/` (a type import too) and must not mention the fleet's readers.
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
-const SRC = join(__dirname, '..', '..')
-const POOL = join(SRC, 'lib', 'pool')
+// Every non-test source file of the sidebar and the pool, raw. Keys are `/src/…` paths.
+const SOURCES = import.meta.glob<string>(
+  ['/src/components/fleet/*.{ts,tsx}', '/src/lib/pool/*.ts', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  { query: '?raw', import: 'default', eager: true },
+)
 const POOL_FILES = [
   'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts',
 ]
 const FLEET_IMPORT = /from\s+['"][^'"]*\/fleet\/[^'"]*['"]|from\s+['"][^'"]*\/fleet['"]|import\(\s*['"][^'"]*\/fleet\//
 const FLEET_READERS = /\b(useFleetStore|useFleetHostViews|readFleetView|useFleetConfigStore)\b/
 
-function scoped(): Array<{ name: string; path: string }> {
-  const sidebar = readdirSync(__dirname)
-    .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.(test|fixture)\./.test(f))
-    .map((f) => ({ name: `components/fleet/${f}`, path: join(__dirname, f) }))
-  return [...sidebar, ...POOL_FILES.map((f) => ({ name: `lib/pool/${f}`, path: join(POOL, f) }))]
+function scoped(): Array<{ name: string; code: string | undefined }> {
+  const sidebar = Object.keys(SOURCES).filter((k) => k.startsWith('/src/components/fleet/')).map((k) => ({ name: k.slice('/src/'.length), code: SOURCES[k] }))
+  return [...sidebar, ...POOL_FILES.map((f) => ({ name: `lib/pool/${f}`, code: SOURCES[`/src/lib/pool/${f}`] }))]
 }
 
 describe('the sidebar and the pool-only files do not read the fleet', () => {
@@ -30,12 +27,12 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(names).toContain('components/fleet/HostCell.tsx')
     expect(names).toContain('lib/pool/cell-model.ts')
     expect(names).toContain('lib/pool/use-monitor-hosts.ts')
-    for (const f of scoped()) expect(() => readFileSync(f.path, 'utf8'), f.name).not.toThrow()
+    for (const f of scoped()) expect(f.code, f.name).toBeTypeOf('string')
   })
 
   for (const f of scoped()) {
     it(`${f.name} imports nothing from lib/fleet and uses none of the fleet's readers`, () => {
-      const code = readFileSync(f.path, 'utf8')
+      const code = f.code ?? ''
       expect(FLEET_IMPORT.test(code), 'imports lib/fleet').toBe(false)
       expect(FLEET_READERS.test(code), 'mentions a fleet reader').toBe(false)
     })
