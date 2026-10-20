@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
-import { livenessLines, livenessWord } from './words'
+import { livenessLines, livenessWord, livenessWordOf, notOkLines } from './words'
 import { poolHostState } from './host-state'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
@@ -89,5 +89,23 @@ describe('livenessLines', () => {
       expect(k in (en as Record<string, string>), `en ${k}`).toBe(true)
       expect(k in (zhTW as Record<string, string>), `zh-TW ${k}`).toBe(true)
     }
+  })
+})
+
+// MON-1d: a cell model's pool part (not a PoolHostState) draws the same words.
+describe('livenessWordOf, notOkLines', () => {
+  it('livenessWordOf is the word of a bare state', () => {
+    expect(livenessWordOf(t, 'host_down')).toBe('pool.liveness.host_down')
+  })
+
+  it.each([
+    [{ liveness: 'wwd_down' as const, liveness_at: CHECK, facts: null }, NOW - 90_000],
+    [{ liveness: 'host_down' as const, liveness_at: CHECK, facts: null }, null],
+    [{ liveness: 'ok' as const, liveness_at: CHECK }, facts.at],
+  ])('says the same lines as livenessLines for a state that is not ok (%#)', (over, last) => {
+    const now = last === facts.at ? facts.at + 40_000 : NOW
+    const s = state(over, last, now)
+    if (s.state === 'ok') throw new Error('expected a state that is not ok')
+    expect(notOkLines(t, { state: s.state, stalled: s.stalled, lastFactsAt: s.lastFactsAt, checkedAt: s.checkedAt }, now)).toEqual(livenessLines(t, s, now))
   })
 })

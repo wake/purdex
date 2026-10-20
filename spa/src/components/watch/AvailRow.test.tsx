@@ -8,9 +8,9 @@ afterEach(() => cleanup())
 
 const AT = Date.UTC(2026, 9, 18, 5, 0)
 const live = (over: Partial<PoolCellExtra> = {}): PoolCellExtra => ({
-  state: 'live', zone: 'normal', load: null,
+  state: 'ok', zone: 'normal', load: null,
   worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } },
-  headroom: { heavy: 1, light: 4 }, reasons: null, sessionsRoom: 3, owner: { active: false, idle_s: 120, reason: 'hid' }, psi: null, since: null, reason: null, ...over,
+  headroom: { heavy: 1, light: 4 }, reasons: null, sessionsRoom: 3, owner: { active: false, idle_s: 120, reason: 'hid' }, psi: null, checkedAt: null, lastFactsAt: AT, stalled: false, ...over,
 })
 
 describe('the 可接工作 row', () => {
@@ -90,26 +90,45 @@ describe('the 可接工作 row', () => {
     expect(screen.queryByTestId('avail-exceptions')).toBeNull()
   })
 
-  it('wwd unreachable: one line saying so, no invented worker or headroom', () => {
-    render(<AvailRow pool={live({ state: 'fallback', reason: 'unreachable', worker: null, headroom: null, sessionsRoom: null, owner: null, since: null })} exceptions={[]} at={AT} />)
-    expect(screen.getByTestId('avail-row').textContent).toContain('wwd is unreachable')
+  const NOW = AT + 20_000
+  const notOk = (over: Partial<PoolCellExtra>) => live({ worker: null, headroom: null, sessionsRoom: null, owner: null, zone: null, ...over })
+
+  it('wwd_down: the word, what it means for the work, the last reading and the last check; no invented worker or headroom', () => {
+    render(<AvailRow pool={notOk({ state: 'wwd_down', lastFactsAt: AT - 90_000, checkedAt: AT + 15_000 })} exceptions={[]} at={AT} now={NOW} />)
+    const row = screen.getByTestId('avail-row').textContent!
+    expect(row).toContain('wwd is not answering (the machine is up)')
+    expect(row).toContain('return to their queue')
+    expect(row).toMatch(/Last reading .+ \(\d+ min ago\)/)
+    expect(row).toMatch(/Last check .+ every 5 s/)
     expect(screen.queryByTestId('avail-worker')).toBeNull()
   })
 
-  it('wwd answering with numbers that stopped: its own line, not "unreachable"', () => {
-    render(<AvailRow pool={live({ state: 'fallback', reason: 'stale', worker: null, headroom: null, sessionsRoom: null, owner: null, since: null })} exceptions={[]} at={AT} />)
-    const line = screen.getByTestId('avail-row').textContent!
-    expect(line).toContain('wwd answers, but its numbers stopped')
-    expect(line).not.toContain('unreachable')
+  it('host_down: the host is offline, both ports silent', () => {
+    render(<AvailRow pool={notOk({ state: 'host_down', lastFactsAt: AT, checkedAt: AT + 15_000 })} exceptions={[]} at={AT} now={NOW} />)
+    const row = screen.getByTestId('avail-row').textContent!
+    expect(row).toContain('Host is offline')
+    expect(row).toContain('Neither wwd nor port 22 answers')
   })
 
-  it('a fallback line carries since when the pool last read the host', () => {
-    render(<AvailRow pool={live({ state: 'fallback', reason: 'unreachable', worker: null, headroom: null, sessionsRoom: null, owner: null, since: AT - 60_000 })} exceptions={[]} at={AT} />)
-    expect(screen.getByTestId('avail-row').textContent).toMatch(/wwd is unreachable \(since .+\)/)
+  it('unknown: not checked yet, with no reading to show', () => {
+    render(<AvailRow pool={notOk({ state: 'unknown', lastFactsAt: null })} exceptions={[]} at={AT} now={NOW} />)
+    const row = screen.getByTestId('avail-row').textContent!
+    expect(row).toContain('State unknown')
+    expect(row).toContain('No reading yet')
   })
 
-  it('offline: nothing', () => {
-    const { container } = render(<AvailRow pool={live({ state: 'offline', worker: null, headroom: null })} exceptions={[]} at={AT} />)
-    expect(container.textContent).toBe('')
+  it('stalled (W3): wwd answers but the readings stopped, with the time they stopped, not "unreachable"', () => {
+    render(<AvailRow pool={notOk({ state: 'unknown', stalled: true, lastFactsAt: AT, checkedAt: AT + 15_000 })} exceptions={[]} at={AT} now={NOW} />)
+    const row = screen.getByTestId('avail-row').textContent!
+    expect(row).toMatch(/wwd answers, but its readings stopped at/)
+    expect(row).not.toContain('Host is offline')
+  })
+
+  it('no fallback wording is left: nothing says "unreachable" or "numbers stopped"', () => {
+    for (const state of ['wwd_down', 'host_down', 'unknown'] as const) {
+      const { unmount } = render(<AvailRow pool={notOk({ state })} exceptions={[]} at={AT} now={NOW} />)
+      expect(screen.getByTestId('avail-row').textContent).not.toMatch(/unreachable|numbers stopped/)
+      unmount()
+    }
   })
 })

@@ -4,12 +4,10 @@ import { useFleetHostViews, type FleetHostLook } from '../fleet/use-fleet-host-v
 import { matchPoolHost } from './fleet-bridge'
 import { usePoolStore } from './store'
 import { usePoolHostDaemons } from './daemons'
-import type { FallbackReason } from './host-view'
 import { usePoolCellModels } from './fleet-bridge'
-import type { PoolFacts, PoolHost, PoolZone, Slots } from './types'
-import type { FleetFast } from '../fleet/types'
+import type { PoolFacts, PoolHost, PoolLiveness, PoolZone, Slots } from './types'
 
-/** What the host page's 「現在」 shows, from whichever source the row is read from (wwd live, the fleet's SSH reading in fallback). */
+/** What the host page's 「現在」 shows: wwd's reading of an ok host (nothing for a host that is not ok — there is no fleet reading to fall back on). */
 export interface PoolReadings { cpu: number; mem: number | null; level: 1 | 2 | 4; disk: number | null; diskFree: number | null }
 
 const levelOf = (n: number): 1 | 2 | 4 => (n >= 4 ? 4 : n >= 2 ? 2 : 1)
@@ -25,9 +23,7 @@ export function readingsFromFacts(f: PoolFacts): PoolReadings {
   }
 }
 
-export const readingsFromFleet = (f: FleetFast): PoolReadings => ({ cpu: Math.round(f.cpu), mem: Math.round(f.mem), level: levelOf(f.level), disk: Math.round(f.disk), diskFree: Math.round(f.disk_free_gb) })
-
-/** The status light: live green, wwd silent but read over SSH yellow, nobody reads it grey, a fleet error red. */
+/** The status light of the pool's state (M21): ok green, wwd_down yellow, host_down and unknown grey. (`error` is retired with the fleet fallback; the type keeps it until MON-12 removes the dot's other users.) */
 export type PoolHostDot = 'live' | 'warn' | 'off' | 'error'
 
 export interface PoolHostRow {
@@ -38,22 +34,24 @@ export interface PoolHostRow {
   /** The App's HostConfig id for a daemon host. */
   hostConfigId?: string
   look: FleetHostLook
-  state: 'live' | 'fallback' | 'offline'
+  state: PoolLiveness
   dot: PoolHostDot
   zone: PoolZone | null
-  /** Live only. */
+  /** Ok only. */
   worker: { enabled: boolean; slots: Slots; running: Slots } | null
   headroom: Slots | null
-  /** Live: what wwd read. Fallback: the fleet's reading (wwd's last facts are old by then). Offline: none. */
+  /** Ok: what wwd read. Otherwise none. */
   readings: PoolReadings | null
   /** The pool's own record of the host (labels, proto, platform, facts); null while the pool does not list it. */
   host: PoolHost | null
   /** wwd's version from the pool's list; '' while the pool does not list the host. */
   version: string
-  /** Fallback: when the pool last read the host (ms). Offline: the newest last-ok of the pool and the fleet. */
-  since: number | null
-  /** Fallback: why the pool does not read the host. */
-  reason: FallbackReason | null
+  /** When the probe last ran (ms); null for an ok host, the local host and a host the pool does not list. */
+  checkedAt: number | null
+  /** When the pool last read facts from the host (ms); null if it never did. */
+  lastFactsAt: number | null
+  /** wwd answers but its readings stopped (spec W3). */
+  stalled: boolean
 }
 
 export function usePoolHostRows(): { rows: PoolHostRow[]; active: boolean; oldDaemon: boolean } {
@@ -65,15 +63,15 @@ export function usePoolHostRows(): { rows: PoolHostRow[]; active: boolean; oldDa
   const rows = models.map((m, i): PoolHostRow => {
     const original = views[i]
     const pool = m.pool
-    const state = pool?.state ?? 'fallback'
+    const state = pool?.state ?? 'unknown'
     const poolHost = matchPoolHost(hosts, original, daemons)
-    const dot: PoolHostDot = state === 'live' ? 'live' : state === 'fallback' ? 'warn' : original.status === 'error' ? 'error' : 'off'
+    const dot: PoolHostDot = state === 'ok' ? 'live' : state === 'wwd_down' ? 'warn' : 'off'
     return {
       id: m.view.id, name: m.view.name, kind: m.view.kind, hostConfigId: m.view.hostConfigId, look: look(original), state, dot,
       zone: pool?.zone ?? null, worker: pool?.worker ?? null, headroom: pool?.headroom ?? null,
-      readings: state === 'live' ? (poolHost?.facts ? readingsFromFacts(poolHost.facts) : null) : state === 'fallback' && original.fast ? readingsFromFleet(original.fast) : null,
+      readings: state === 'ok' && poolHost?.facts ? readingsFromFacts(poolHost.facts) : null,
       host: poolHost, version: poolHost?.version ?? '',
-      since: state === 'offline' ? m.view.last_ok_at : pool?.since ?? null, reason: pool?.reason ?? null,
+      checkedAt: pool?.checkedAt ?? null, lastFactsAt: pool?.lastFactsAt ?? null, stalled: pool?.stalled ?? false,
     }
   })
   return { rows, active, oldDaemon }

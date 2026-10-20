@@ -3,7 +3,7 @@
 import type { PoolErrorCode } from './errors'
 import type { FallbackReason } from './host-view'
 import type { PoolHostState } from './host-state'
-import type { HeadroomReasons, PoolZone, Slots } from './types'
+import type { HeadroomReasons, PoolLiveness, PoolZone, Slots } from './types'
 
 type T = (key: string, opts?: Record<string, string | number>) => string
 
@@ -63,7 +63,8 @@ export function fallbackWord(t: T, reason: FallbackReason | null, since: number 
 }
 
 /** The state's short word: `pool.liveness.<ok | wwd_down | host_down | unknown>` (the card's headline and the accessible name). */
-export const livenessWord = (t: T, s: PoolHostState): string => t(`pool.liveness.${s.state}`)
+export const livenessWordOf = (t: T, state: PoolLiveness): string => t(`pool.liveness.${state}`)
+export const livenessWord = (t: T, s: PoolHostState): string => livenessWordOf(t, s.state)
 
 const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
@@ -90,6 +91,13 @@ export function poolOutageLines(t: T, failure: { code: PoolErrorCode | null }, l
  */
 export function livenessLines(t: T, s: PoolHostState, now: number): string[] {
   if (s.state === 'ok') return [t(s.pool.liveness === undefined ? 'pool.liveness.ok_local' : 'pool.liveness.ok')]
+  return notOkLines(t, s, now)
+}
+
+/** What the lines of a state that is not ok need; a `PoolHostState` has it, and so does a cell model's pool part (the host page, MON-1d). */
+export interface NotOkView { state: PoolLiveness; stalled: boolean; lastFactsAt: number | null; checkedAt: number | null }
+
+export function notOkLines(t: T, s: NotOkView, now: number): string[] {
   const lines: string[] = []
   if (s.stalled) {
     lines.push(s.lastFactsAt !== null ? t('pool.liveness.explain_stalled', { time: clock(s.lastFactsAt) }) : t('pool.liveness.explain_stalled_none'))

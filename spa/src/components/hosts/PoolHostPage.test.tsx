@@ -16,8 +16,8 @@ const baseHost = parseHostsAnswer(hostsJson)![0]
 const host = (over: Record<string, unknown> = {}) => ({ ...baseHost, alias: 'mserv', version: '1.0.0-alpha.755', proto: 1, platform: 'linux', arch: 'amd64', labels: ['os:linux', 'arch:amd64', 'repo:purdex', 'x:custom'], facts: { ...darwin, os_version: 'Ubuntu 26.04' }, ...over })
 const row = (over: Partial<PoolHostRow> = {}): PoolHostRow => ({
   id: 'p-mserv', name: 'mserv', kind: 'probe', look: { icon: 'Desktop', iconWeight: '', colors: undefined } as never,
-  state: 'live', dot: 'live', zone: 'normal', worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } },
-  headroom: { heavy: 1, light: 4 }, readings: { cpu: 20, mem: 50, level: 1, disk: 40, diskFree: 120 }, version: '1.0.0-alpha.755', since: null, reason: null, host: host() as never, ...over,
+  state: 'ok', dot: 'live', zone: 'normal', worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 } },
+  headroom: { heavy: 1, light: 4 }, readings: { cpu: 20, mem: 50, level: 1, disk: 40, diskFree: 120 }, version: '1.0.0-alpha.755', checkedAt: null, lastFactsAt: null, stalled: false, host: host() as never, ...over,
 })
 
 beforeEach(() => { cleanup(); openWatchArea.mockReset(); clearViewMemory() })
@@ -32,20 +32,26 @@ describe('the pool host page', () => {
   })
 
   it('a host the pool does not list: no sub line, the sections say unknown rather than invent', () => {
-    render(<PoolHostPage row={row({ host: null, version: '', state: 'fallback', dot: 'warn', worker: null, headroom: null, readings: null })} />)
+    render(<PoolHostPage row={row({ host: null, version: '', state: 'unknown', dot: 'off', worker: null, headroom: null, readings: null })} />)
     expect(screen.queryByTestId('pool-page-sub')).toBeNull()
     expect(screen.getByTestId('pool-page-worker').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-now').textContent).toContain('Unknown')
     expect(screen.getByTestId('pool-page-tools').textContent).toContain('Unknown')
   })
 
-  it('the header says which fallback it is: wwd unreachable, or answering with numbers that stopped', () => {
-    const fb = { state: 'fallback', dot: 'warn', since: null } as const
-    render(<PoolHostPage row={row({ ...fb, reason: 'unreachable' })} />)
-    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd is unreachable')
+  it('the header says the pool\'s state: wwd not answering, host offline, unknown, or readings that stopped', () => {
+    const down = { dot: 'warn', worker: null, headroom: null, readings: null } as const
+    render(<PoolHostPage row={row({ ...down, state: 'wwd_down' })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd is not answering (the machine is up)')
     cleanup()
-    render(<PoolHostPage row={row({ ...fb, reason: 'stale' })} />)
-    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd answers, but its numbers stopped')
+    render(<PoolHostPage row={row({ ...down, dot: 'off', state: 'host_down' })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('Host is offline')
+    cleanup()
+    render(<PoolHostPage row={row({ ...down, dot: 'off', state: 'unknown' })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('State unknown')
+    cleanup()
+    render(<PoolHostPage row={row({ ...down, dot: 'off', state: 'unknown', stalled: true, lastFactsAt: Date.UTC(2026, 9, 20, 3, 0, 5) })} />)
+    expect(screen.getByTestId('pool-page-status').textContent).toMatch(/^wwd answers, but its readings stopped at /)
   })
 
   it('現在 shows the row\'s readings: CPU, memory, pressure, disk', () => {
