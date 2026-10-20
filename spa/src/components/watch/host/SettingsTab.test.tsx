@@ -20,6 +20,8 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
 const hostFetch = vi.fn()
+vi.mock('../../../lib/pool/use-monitor-hosts', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/use-monitor-hosts')>()), useMonitorHosts: () => [] }))
+vi.mock('../../../features/workspace/lib/icon-path-cache', () => ({ getIconPath: () => 'M0,0L10,10', isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve() }))
 vi.mock('../../../lib/host-api', async (orig) => ({
   ...(await orig<typeof import('../../../lib/host-api')>()),
   hostFetch: (...a: unknown[]) => hostFetch(...a),
@@ -32,7 +34,12 @@ const poolHost = (alias: string, over: Partial<PoolHost> = {}): PoolHost => {
   const base = parseHostsAnswer(hostsJson)![0]
   return { ...base, host_id: `id-${alias}`, alias, reachable: true, worker: WORKER, labels: [], facts: { ...facts, alias, worker: { ...facts.worker, ...WORKER } }, ...over }
 }
-const monitorHost = (alias: string, daemonHostId: string | null): MonitorHost => ({ hostId: `id-${alias}`, alias, daemonHostId } as MonitorHost)
+// The 側欄顯示 section draws the sidebar cell of the host, so the host carries a state and a look (here: not read yet, the default look).
+const monitorHost = (alias: string, daemonHostId: string | null): MonitorHost => ({
+  hostId: `id-${alias}`, alias, daemonHostId,
+  state: { state: 'unknown', hostId: `id-${alias}`, alias, pool: poolHost(alias), lastFactsAt: null, checkedAt: null, since: null, stalled: false },
+  look: { indicator: { shape: 'ring', data: ['load'] } }, poolFailure: null, count: null, local: false,
+} as unknown as MonitorHost)
 const reply = (status: number, body: unknown = null) => new Response(body === null ? '' : JSON.stringify(body), { status })
 const setPool = (hosts: PoolHost[]) => act(() => { usePoolStore.setState({ hosts, sourceHostId: CFG }) })
 const click = async (id: string) => { await act(async () => { fireEvent.click(screen.getByTestId(id)) }) }
@@ -66,6 +73,9 @@ describe('the sections and their order', () => {
     const guardian = screen.getByRole('button', { name: t('watch.set.guardian') })
     expect(before(worker, pause)).toBe(true)
     expect(before(pause, guardian)).toBe(true)
+    const look = screen.getByTestId('look-settings')
+    expect(before(pause, look)).toBe(true)
+    expect(before(look, guardian)).toBe(true)
     expect(guardian).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByTestId('watch-set-guardian')).toBeNull()
     fireEvent.click(guardian)
