@@ -17,6 +17,12 @@ describe('resolveDrop', () => {
     expect(resolveDrop(row('c', G1), onRow('a', G1), order)).toEqual({ kind: 'reorder', groupKey: G1, overId: 'a', side: 'before' })
   })
 
+  it('two rows of one split tab are two seats: a drop of one on the other is a reorder, on itself nothing', () => {
+    const active = { ...row('x', TEAM, 'seat'), seatId: 'M2' }
+    expect(resolveDrop(active, { kind: 'row', tabId: 'x', groupKey: TEAM, seatId: 'M1' }, ['x'])).toMatchObject({ kind: 'reorder', overId: 'x', activeSeat: 'M2', overSeat: 'M1' })
+    expect(resolveDrop(active, { kind: 'row', tabId: 'x', groupKey: TEAM, seatId: 'M2' }, ['x'])).toEqual(IGNORE)
+  })
+
   it('on itself, or on a row the group does not list: nothing', () => {
     expect(resolveDrop(row('a', G1), onRow('a', G1), ['a', 'b'])).toEqual(IGNORE)
     expect(resolveDrop(row('a', G1), onRow('x', G1), ['a', 'b'])).toEqual(IGNORE)

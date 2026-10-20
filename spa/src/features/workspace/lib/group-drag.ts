@@ -5,7 +5,7 @@ import type { DragEndEvent } from '@dnd-kit/core'
 import type { DragRowKind } from '../../../lib/task-groups/drop-resolve'
 import type { DropTarget } from '../../../lib/task-groups/drag'
 
-export interface GroupTabDragData { type: 'group-tab'; tabId: string; groupKey: string; kind: DragRowKind }
+export interface GroupTabDragData { type: 'group-tab'; tabId: string; groupKey: string; kind: DragRowKind; seatId?: string }
 export interface GroupDropData { type: 'group-drop'; target: DropTarget }
 
 export const isGroupTabDrag = (d: unknown): d is GroupTabDragData => (d as { type?: string } | undefined)?.type === 'group-tab'

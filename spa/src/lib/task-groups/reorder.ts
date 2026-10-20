@@ -66,10 +66,10 @@ function rerankZone(order: ReadonlyArray<Pick<OrderedTab, 'id'>>): RankWrite[] {
 }
 
 /** What dropping `activeId` on `overId` (the `side` of it) writes inside the group `groupKey`; `ignore` when the drag means nothing there. */
-export function decideGroupDrop(p: { groupKey: string; activeId: string; overId: string; side: DropSide; ctx: GroupOrderCtx }): ReorderDecision {
-  const { groupKey, activeId, overId, side, ctx } = p
+export function decideGroupDrop(p: { groupKey: string; activeId: string; overId: string; side: DropSide; ctx: GroupOrderCtx; activeSeat?: string; overSeat?: string }): ReorderDecision {
+  const { groupKey, activeId, overId, side, ctx, activeSeat, overSeat } = p
   const ids = groupTabs(groupKey, ctx)
-  if (activeId === overId || !ids.includes(activeId) || !ids.includes(overId)) return IGNORE
+  if ((activeId === overId && (activeSeat === undefined || activeSeat === overSeat)) || !ids.includes(activeId) || !ids.includes(overId)) return IGNORE
   const tabs = ids.map((id) => ctx.tabs[id])
   const rank = (zone: OrderedTab[]): ReorderDecision => {
     const writes = rankZoneMove(zone, activeId, overId, side)
@@ -89,6 +89,14 @@ export function decideGroupDrop(p: { groupKey: string; activeId: string; overId:
   }
 
   const sections = teamSections(view, tabs, ctx)
+  const memberIds = view.members.map((m) => m.session.session_id)
+  // rows named by their seat (a split tab carrying several seats): the seats are moved by identity
+  if (activeSeat !== undefined && memberIds.includes(activeSeat)) {
+    if (overSeat === view.lead.session.session_id) return moveSeat(view.key, memberIds, activeSeat, { lead: true }, side)
+    if (overSeat === undefined || !memberIds.includes(overSeat)) return IGNORE
+    // the side is the direction of travel among the seats (the rows of one split tab share a tab, so the tabs cannot tell)
+    return moveSeat(view.key, memberIds, activeSeat, { seat: overSeat }, memberIds.indexOf(activeSeat) < memberIds.indexOf(overSeat) ? 'after' : 'before')
+  }
   // the lead never moves and nothing goes before it
   if (inZone(sections.lead, activeId)) return IGNORE
   if (inZone(sections.pinned, activeId)) return inZone(sections.pinned, overId) ? rank(sections.pinned) : IGNORE
@@ -97,21 +105,25 @@ export function decideGroupDrop(p: { groupKey: string; activeId: string; overId:
   // a seat's tab: the seat moves, with all its tabs, relative to the seat of the tab it was dropped on
   const from = sections.members.findIndex((m) => inZone(m, activeId))
   if (from < 0) return IGNORE
-  const memberIds = view.members.map((m) => m.session.session_id)
-  const mine = memberIds[from]
+  if (inZone(sections.lead, overId)) return moveSeat(view.key, memberIds, memberIds[from], { lead: true }, side)
+  const to = sections.members.findIndex((m) => inZone(m, overId))
+  if (to < 0) return IGNORE
+  return moveSeat(view.key, memberIds, memberIds[from], { seat: memberIds[to] }, side)
+}
+
+/** The member order with seat `mine` put before/after `anchor` (the lead = right after it, the first seat), or ignore. */
+function moveSeat(teamKey: string, memberIds: string[], mine: string, anchor: { lead: true } | { seat: string }, side: DropSide): ReorderDecision {
   const rest = memberIds.filter((id) => id !== mine)
   let at: number
-  if (inZone(sections.lead, overId)) {
+  if ('lead' in anchor) {
     if (side === 'before') return IGNORE // nothing before the lead
-    at = 0 // right after the lead: the first seat
+    at = 0
   } else {
-    const to = sections.members.findIndex((m) => inZone(m, overId))
-    if (to < 0) return IGNORE
-    const target = rest.indexOf(memberIds[to])
+    const target = rest.indexOf(anchor.seat)
     if (target < 0) return IGNORE // dropped on its own seat
     at = side === 'before' ? target : target + 1
   }
   const order = [...rest.slice(0, at), mine, ...rest.slice(at)]
   if (order.every((id, i) => id === memberIds[i])) return IGNORE
-  return { kind: 'members', teamKey: view.key, order }
+  return { kind: 'members', teamKey, order }
 }

@@ -12,10 +12,10 @@ export function useGroupDragEnd(deps: DropDeps) {
       if (!e.over || !isGroupTabDrag(active)) return
       const o = e.over.data.current
       let over: DropOn
-      if (isGroupTabDrag(o)) over = { kind: 'row', tabId: o.tabId, groupKey: o.groupKey }
+      if (isGroupTabDrag(o)) over = { kind: 'row', tabId: o.tabId, groupKey: o.groupKey, seatId: o.seatId }
       else if (isGroupDropData(o)) over = { kind: 'target', target: o.target }
       else return
-      applyGroupDrop({ tabId: active.tabId, groupKey: active.groupKey, kind: active.kind }, over, deps)
+      applyGroupDrop({ tabId: active.tabId, groupKey: active.groupKey, kind: active.kind, seatId: active.seatId }, over, deps)
     }
     groupDragEnd.current = handler
     return () => { if (groupDragEnd.current === handler) groupDragEnd.current = null }

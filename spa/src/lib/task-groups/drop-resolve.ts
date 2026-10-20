@@ -14,13 +14,15 @@ export interface DraggedRow {
   /** The group key the row is shown in. */
   groupKey: string
   kind: DragRowKind
+  /** The team seat (session id) the row stands for: a split tab can carry several seats, one row each. */
+  seatId?: string
 }
 
-export type DropOn = { kind: 'row'; tabId: string; groupKey: string } | { kind: 'target'; target: DropTarget }
+export type DropOn = { kind: 'row'; tabId: string; groupKey: string; seatId?: string } | { kind: 'target'; target: DropTarget }
 
 export type Resolved =
   | { kind: 'ignore' }
-  | { kind: 'reorder'; groupKey: string; overId: string; side: DropSide }
+  | { kind: 'reorder'; groupKey: string; overId: string; side: DropSide; activeSeat?: string; overSeat?: string }
   | { kind: 'move'; target: DropTarget }
 
 const IGNORE: Resolved = { kind: 'ignore' }
@@ -41,12 +43,15 @@ export function manualIdOfGroupKey(groupKey: string): string | null {
 /** `order`: the dragged row's group, tab ids in bar order (to tell which way the row travels). */
 export function resolveDrop(active: DraggedRow, over: DropOn, order: readonly string[]): Resolved {
   if (over.kind === 'row') {
-    if (over.tabId === active.tabId) return IGNORE
+    // two rows of one split tab are different seats; any other row on itself means nothing
+    if (over.tabId === active.tabId && (active.seatId === undefined || active.seatId === over.seatId)) return IGNORE
     if (over.groupKey === active.groupKey) {
       const from = order.indexOf(active.tabId)
       const to = order.indexOf(over.tabId)
       if (from < 0 || to < 0) return IGNORE
-      return { kind: 'reorder', groupKey: active.groupKey, overId: over.tabId, side: from < to ? 'after' : 'before' }
+      // on one split tab the rows' order is the seats' order, which the caller knows; the side is settled there
+      const side: DropSide = from === to ? 'after' : from < to ? 'after' : 'before'
+      return { kind: 'reorder', groupKey: active.groupKey, overId: over.tabId, side, activeSeat: active.seatId, overSeat: over.seatId }
     }
   }
   if (active.kind === 'seat') return IGNORE

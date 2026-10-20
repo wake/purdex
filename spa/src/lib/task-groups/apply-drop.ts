@@ -34,13 +34,13 @@ export function applyGroupDrop(active: DraggedRow, over: DropOn, deps: DropDeps)
   if (over.kind === 'row') {
     const o = rowNow(over.tabId, deps)
     if (o === null) return
-    over = { kind: 'row', tabId: over.tabId, groupKey: o.groupKey }
+    over = { kind: 'row', tabId: over.tabId, groupKey: o.groupKey, seatId: over.seatId }
   }
   const resolved = resolveDrop(active, over, groupTabs(active.groupKey, ctx))
   if (resolved.kind === 'ignore') return
   if (resolved.kind === 'reorder') {
     if (over.kind !== 'row') return
-    applyReorder(decideGroupDrop({ groupKey: resolved.groupKey, activeId: active.tabId, overId: resolved.overId, side: resolved.side, ctx }))
+    applyReorder(decideGroupDrop({ groupKey: resolved.groupKey, activeId: active.tabId, overId: resolved.overId, side: resolved.side, ctx, activeSeat: resolved.activeSeat, overSeat: resolved.overSeat }))
     return
   }
   const { target } = resolved

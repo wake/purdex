@@ -241,6 +241,7 @@ export function InlineTab({
           title={t('common.close')}
           onClick={handleCloseClick}
           onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()} // a press on the button is the button's, never the start of a row drag
           className={`rounded p-0.5 hover:bg-surface-secondary hover:text-text-primary ${
             isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
