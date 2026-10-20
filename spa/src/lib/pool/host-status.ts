@@ -98,3 +98,31 @@ export function connectionOf(host: MonitorHost, byHost: Record<string, HostAlert
     outages: { rows: all.slice(0, OUTAGES_SHOWN), more: Math.max(0, all.length - OUTAGES_SHOWN) },
   }
 }
+
+// ---- Version and identity, labels, tools, fingerprint ---------------------------------------------------------------------------------------------------------
+
+export interface Identity { version: string; proto: number; factsV: number | null; platform: string; arch: string; osVersion: string | null; hostId: string }
+
+/** The 版本與身分 card. Whether a Purdex daemon fronts the host is the component's (`host.daemonHostId`). */
+export function identityOf(pool: PoolHost, facts: PoolFacts | null): Identity {
+  return { version: pool.version, proto: pool.proto, factsV: facts?.v ?? null, platform: pool.platform, arch: pool.arch, osVersion: facts?.os_version ?? null, hostId: pool.host_id }
+}
+
+export type LabelGroup = 'task' | 'repo' | 'other'
+export interface Tags {
+  labels: { text: string; group: LabelGroup }[]
+  /** `value` null: the host has none of it (a null, or an empty list). A list is joined with 、. */
+  tools: { name: string; value: string | null }[]
+  fingerprint: { name: string; value: string }[]
+}
+
+const labelGroup = (l: string): LabelGroup => (l.startsWith('task:') ? 'task' : l.startsWith('repo:') ? 'repo' : 'other')
+
+/** The 標籤、工具與 fingerprint card. With no facts (the host is not ok) there are no tools to say; the labels and the fingerprint are the row's and stay. */
+export function tagsOf(pool: PoolHost, facts: PoolFacts | null): Tags {
+  return {
+    labels: pool.labels.map((text) => ({ text, group: labelGroup(text) })),
+    tools: facts ? Object.entries(facts.tools).map(([name, v]) => ({ name, value: v === null ? null : Array.isArray(v) ? (v.length > 0 ? v.join('、') : null) : v })) : [],
+    fingerprint: Object.entries(pool.fingerprint ?? {}).map(([name, value]) => ({ name, value })),
+  }
+}

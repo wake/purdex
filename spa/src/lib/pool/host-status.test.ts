@@ -1,6 +1,6 @@
 // The host page's 狀態 data (monitoring tabs spec M44; plan MON-7b-1): pure functions from the pool's facts and host row to what the six cards and the facts table say. Words are i18n keys, never text.
 import { describe, it, expect } from 'vitest'
-import { connectionOf, judgeOf, pausesOf, workerCardOf } from './host-status'
+import { connectionOf, identityOf, judgeOf, pausesOf, tagsOf, workerCardOf } from './host-status'
 import { poolHostState } from './host-state'
 import type { HostAlertsEntry } from './alerts-store'
 import type { PoolAlert } from './alerts-api'
@@ -176,5 +176,40 @@ describe('connectionOf', () => {
   it('a list that could not be read adds nothing', () => {
     const c = connectionOf(monitor(peerRow()), { mlab: { kind: 'error', code: 'no_answer', at: NOW } }, hosts)
     expect(c.kind === 'peer' && c.outages.rows).toHaveLength(0)
+  })
+})
+
+describe('identityOf', () => {
+  it('the wwd version and proto, the facts version, the platform and the OS, the host id', () => {
+    const p = pool({ version: '1.2.3', proto: 2, platform: 'darwin', arch: 'arm64', host_id: 'h-1' })
+    expect(identityOf(p, withFacts((x) => ({ ...x, v: 2, os_version: '15.1' })))).toEqual({ version: '1.2.3', proto: 2, factsV: 2, platform: 'darwin', arch: 'arm64', osVersion: '15.1', hostId: 'h-1' })
+  })
+
+  it('no facts (the host is not ok): the facts version and the OS are null, the rest is the row\'s', () => {
+    expect(identityOf(pool({ host_id: 'h-1' }), null)).toMatchObject({ factsV: null, osVersion: null, hostId: 'h-1' })
+  })
+})
+
+describe('tagsOf', () => {
+  it('the labels in groups: task:, repo:, anything else', () => {
+    const t = tagsOf(pool({ labels: ['task:lint', 'repo:purdex', 'os:darwin'] }), darwin)
+    expect(t.labels).toEqual([{ text: 'task:lint', group: 'task' }, { text: 'repo:purdex', group: 'repo' }, { text: 'os:darwin', group: 'other' }])
+  })
+
+  it('the tools: a string as it is, a list joined, an empty list and null as "no value"', () => {
+    const f = withFacts((x) => ({ ...x, tools: { go: '1.26', node: ['22', '24'], php: [], docker: null } }))
+    expect(tagsOf(pool(), f).tools).toEqual([{ name: 'go', value: '1.26' }, { name: 'node', value: '22、24' }, { name: 'php', value: null }, { name: 'docker', value: null }])
+  })
+
+  it('the fingerprint is the row\'s, one entry per key', () => {
+    expect(tagsOf(pool({ fingerprint: { cpu: 'Apple M4', ram: '16 GB' } }), darwin).fingerprint).toEqual([{ name: 'cpu', value: 'Apple M4' }, { name: 'ram', value: '16 GB' }])
+    expect(tagsOf(pool(), darwin).fingerprint).toEqual([])
+  })
+
+  it('no facts: the tools are empty, the labels and the fingerprint still the row\'s', () => {
+    const t = tagsOf(pool({ labels: ['os:linux'], fingerprint: { cpu: 'x' } }), null)
+    expect(t.tools).toEqual([])
+    expect(t.labels).toHaveLength(1)
+    expect(t.fingerprint).toEqual([{ name: 'cpu', value: 'x' }])
   })
 })
