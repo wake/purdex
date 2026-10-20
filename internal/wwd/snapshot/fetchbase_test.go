@@ -110,15 +110,13 @@ func TestMaterialize_AFetchThatFailsFallsBackToATar(t *testing.T) {
 }
 
 // manifest_ref fetches the same clone every 10 minutes: when its fetch holds the lock of a remote ref at the moment a job asks for its base,
-// the job's fetch waits it out the way every ref write here does (gitRefWrite), and the workspace is still a worktree.
-func TestMaterialize_TheFetchWaitsOutAnotherFetchsRefLock(t *testing.T) {
-	old := refLockBackoff
-	refLockBackoff = 500 * time.Millisecond
-	t.Cleanup(func() { refLockBackoff = old })
+// the job's fetch waits it out for as long as its own deadline allows, not for the few short tries a ref write gets (gitRefWrite: about
+// 300 ms), and the workspace is still a worktree. The lock is held 2 s with the default backoff.
+func TestMaterialize_TheFetchWaitsOutAnotherFetchsRefLockUntilItsDeadline(t *testing.T) {
 	m := newLateCase(t, "j_locked")
 	lock := filepath.Join(m.clone, ".git", "refs", "remotes", "origin", "main.lock")
 	require.NoError(t, os.WriteFile(lock, nil, 0o644))
-	go func() { time.Sleep(1200 * time.Millisecond); _ = os.Remove(lock) }()
+	go func() { time.Sleep(2 * time.Second); _ = os.Remove(lock) }()
 
 	rec := &recorder{}
 	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, rec), "j_locked", filepath.Join(t.TempDir(), "ws")))
@@ -126,6 +124,23 @@ func TestMaterialize_TheFetchWaitsOutAnotherFetchsRefLock(t *testing.T) {
 	assert.Equal(t, []string{"bundle"}, rec.seen())
 	assert.Equal(t, m.snap, gitOut(t, ws.Dir, "rev-parse", "HEAD"))
 	require.NoError(t, ws.Cleanup())
+}
+
+// ...but not for ever: a lock that is never let go holds the job's start for the fetch's deadline and the tar follows.
+func TestMaterialize_AnotherFetchsRefLockThatNeverEndsIsCutAtTheDeadline(t *testing.T) {
+	old := fetchBaseTimeout
+	fetchBaseTimeout = 700 * time.Millisecond
+	t.Cleanup(func() { fetchBaseTimeout = old })
+	m := newLateCase(t, "j_stuck")
+	lock := filepath.Join(m.clone, ".git", "refs", "remotes", "origin", "main.lock")
+	require.NoError(t, os.WriteFile(lock, nil, 0o644))
+	rec := &recorder{}
+	start := time.Now()
+	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, rec), "j_stuck", filepath.Join(t.TempDir(), "ws")))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tar"}, rec.seen())
+	checkTree(t, ws.Dir)
+	assert.Less(t, time.Since(start), 10*time.Second)
 }
 
 // The fetch has a deadline of its own: a remote that does not answer holds a job start for that long and no longer.

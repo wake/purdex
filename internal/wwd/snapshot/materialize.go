@@ -67,13 +67,22 @@ var fetchClone = fetchCloneFromOrigin
 // fetchCloneFromOrigin brings the clone up to date with its origin, for the one reason fromClone has: the job's base is a commit pushed after the
 // clone was last fetched (manifest_ref fetches it every 10 minutes, and a release gate runs seconds after its push). Without it the
 // workspace of the same task would be a worktree or a tar, with or without a .git, by the minute it started in (#3729, #3730). It fetches
-// the way manifest_ref does (`fetch --quiet --no-tags -- origin`) and, as every write to the clone's refs here, waits out another
-// fetch's ref lock a few times (gitRefWrite). The error is only the reason the tar follows.
+// the way manifest_ref does (`fetch --quiet --no-tags -- origin`). When another fetch of the same clone (manifest_ref's, every 10 minutes)
+// holds a ref lock, this one does not give up after gitRefWrite's few short tries: that other fetch is bringing in the same commits, and
+// giving up on the first long one would be the tar this exists to avoid. It waits refLockBackoff between tries for as long as the deadline
+// (fetchBaseTimeout) allows, and any other error ends it at once. The error is only the reason the tar follows.
 func fetchCloneFromOrigin(ctx context.Context, clone string) error {
 	ctx, cancel := context.WithTimeout(ctx, fetchBaseTimeout)
 	defer cancel()
-	_, err := gitRefWrite(ctx, "wwd.snapshot-fetch-base", clone, "fetch", "--quiet", "--no-tags", "--", "origin")
-	return err
+	for {
+		_, err := gitRun(ctx, refWriteEnv(), "wwd.snapshot-fetch-base", clone, smallOutput, "fetch", "--quiet", "--no-tags", "--", "origin")
+		if err == nil || !isRefLockError(err) {
+			return err
+		}
+		if werr := waitRefLock(ctx); werr != nil {
+			return fmt.Errorf("%w (after %v)", werr, err)
+		}
+	}
 }
 
 func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
