@@ -48,6 +48,10 @@ describe('the inclusive seat map (TG-3a-1)', () => {
     expect(display.panelTeam('lead')).not.toBeNull()
     expect(index.byTabId.has('m1')).toBe(false) // a team whose lead tab is pinned has no group: its members are not drawn as grouped
     expect(display.panelTeam('m1')).not.toBeNull() // ... but they are still the team's for the panel
+    expect(display.sidebarBeads('lead')).toBeNull() // no group: the pinned lead carries no beads
+    expect(display.tabMark('lead')).toBeNull()
+    expect(display.tabMark('m1')).toBeNull() // and its members are drawn as plain tabs
+    expect(display.sidebarHidden(['lead', 'm1', 'm2', 'plain']).size).toBe(0)
   })
 
   it('byTabId still leaves a pinned tab out — the readers that stay on it (the pin guard, the team tab lifecycle, the run drawing)', () => {
