@@ -77,11 +77,28 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
 })
 
 describe('useMonitorHosts', () => {
-  it('local: the row without a probe next to probed peers; with no probe anywhere nobody is local', () => {
-    answer([host(A, 'mlab'), host(B, 'mserv', { liveness: 'ok' })])
-    expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true, false])
-    act(() => { answer([host(A, 'mlab'), host(B, 'mserv')]) })
-    expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([false, false])
+  describe('local: the wwd of the daemon that answered', () => {
+    const own = (id: string, hostId: string, alias: string) => ({ [id]: { phase: 'ready', fetchedAt: 1, daemonCapabilities: [], wwd: { hostId, alias } } })
+    const fronts = (...ids: string[]) => {
+      useHostStore.setState({ hosts: Object.fromEntries(ids.map((id, i) => [id, { id, name: id, ip: '1', port: 1, token: 't', order: i }])), hostOrder: ids } as never)
+    }
+    it('only the row the answering App host fronts, a single-host pool too, whatever liveness says', () => {
+      answer([host(A, 'mlab', { liveness: 'ok' })])
+      fronts('cfg-a'); useNexHostStore.setState({ byHost: own('cfg-a', A, 'mlab') } as never)
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true])
+    })
+    it('two rows without liveness: still one local (a legacy daemon)', () => {
+      answer([host(A, 'mlab'), host(B, 'mserv')])
+      fronts('cfg-a', 'cfg-b'); useNexHostStore.setState({ byHost: { ...own('cfg-a', A, 'mlab'), ...own('cfg-b', B, 'mserv') } } as never)
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true, false])
+    })
+    it('nobody is local while no source answers, or when no App host fronts the row', () => {
+      answer([host(A, 'mlab')])
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([false])
+      fronts('cfg-a'); useNexHostStore.setState({ byHost: own('cfg-a', A, 'mlab') } as never)
+      act(() => { usePoolStore.setState({ sourceHostId: null } as never) })
+      expect(renderHook(() => useMonitorHosts()).result.current.every((h) => !h.local)).toBe(true)
+    })
   })
 
   it('lists the pool\'s hosts in the order of the store, the unlisted after them in the pool\'s order (M13)', () => {

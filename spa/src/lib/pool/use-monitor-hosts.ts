@@ -26,7 +26,7 @@ export interface MonitorHost {
   poolFailure: { code: PoolErrorCode | null; since: number | null } | null
   /** The number at the cell's corner and its colour (M6, M7); null when there is none to show: a host that is not ok, a pool nobody can read (M25), or nothing to count. */
   count: HostCount | null
-  /** This row is the daemon's own host: its peers carry a `liveness` and this one, which has no probe of itself, does not. A daemon that sends no `liveness` at all tells nobody apart, so none is local. */
+  /** This row is the wwd of the daemon that answered the pool: the App host that fronts it (`daemonHostId`) is the source of this answer. At most one row, and none while nothing answers. */
   local: boolean
 }
 
@@ -55,7 +55,7 @@ export function useMonitorHosts(): MonitorHost[] {
   const stale = hosts.length === 0 && !answered && remembered.hosts.length > 0 && sourceKnown
   const rows = stale ? remembered.hosts : hosts
   const counts = useMemo(() => (readable ? hostCountsOf(queueEntries(jobs, now, hosts), jobs) : {}), [readable, jobs, now, hosts])
-  const peersProbed = rows.some((r) => r.liveness !== undefined)
+  const sourceHostId = usePoolStore((s) => s.sourceHostId)
   return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => {
     const state = poolHostState(stale ? { ...h, reachable: false, facts: null, liveness: 'unknown' } : h, lastFactsAt[h.host_id] ?? null, now)
     return {
@@ -67,7 +67,7 @@ export function useMonitorHosts(): MonitorHost[] {
       look: lookOf(h.host_id),
       poolFailure: stale ? { code: poolError?.code ?? null, since: poolError?.since ?? null } : null,
       count: state.state === 'ok' ? (counts[h.alias] ?? null) : null,
-      local: peersProbed && h.liveness === undefined,
+      local: sourceHostId !== null && owners[h.host_id] === sourceHostId,
     }
-  }), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now, counts, peersProbed])
+  }), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now, counts, sourceHostId])
 }
