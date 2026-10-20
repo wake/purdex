@@ -30,6 +30,12 @@ export function healLayoutInvariant<T extends { activityBarWidth?: ActivityBarWi
   return state
 }
 
+/** How many segments the sidebar's queue strip has (monitoring tabs M2); a UI setting of this device, not synced. */
+export const QUEUE_STRIP_SEGMENT_CHOICES = [6, 8, 10, 12] as const
+export type QueueStripSegments = (typeof QUEUE_STRIP_SEGMENT_CHOICES)[number]
+export const QUEUE_STRIP_SEGMENTS_DEFAULT: QueueStripSegments = 10
+export const isQueueStripSegments = (v: unknown): v is QueueStripSegments => (QUEUE_STRIP_SEGMENT_CHOICES as readonly unknown[]).includes(v)
+
 interface LayoutState {
   activityBarWidth: ActivityBarWidth
   tabPosition: TabPosition
@@ -38,6 +44,7 @@ interface LayoutState {
   workerListOpen: boolean
   workerListHeight: number
   bottomNavCompact: boolean
+  queueStripSegments: QueueStripSegments
 
   setActivityBarWidth: (width: ActivityBarWidth) => void
   toggleActivityBarWidth: () => void
@@ -50,6 +57,7 @@ interface LayoutState {
   setWorkerListHeight: (height: number) => void
   setBottomNavCompact: (compact: boolean) => void
   toggleBottomNavCompact: () => void
+  setQueueStripSegments: (n: QueueStripSegments) => void
 }
 
 function clampWidth(w: number): number {
@@ -70,6 +78,7 @@ export const useLayoutStore = create<LayoutState>()(
       workerListOpen: false,
       workerListHeight: WORKER_LIST_DEFAULT,
       bottomNavCompact: false,
+      queueStripSegments: QUEUE_STRIP_SEGMENTS_DEFAULT,
 
       setActivityBarWidth: (width) =>
         set((state) => {
@@ -129,6 +138,8 @@ export const useLayoutStore = create<LayoutState>()(
 
       toggleBottomNavCompact: () =>
         set((state) => ({ bottomNavCompact: !state.bottomNavCompact })),
+
+      setQueueStripSegments: (n) => set((state) => (isQueueStripSegments(n) ? { queueStripSegments: n } : state)),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,
@@ -143,9 +154,12 @@ export const useLayoutStore = create<LayoutState>()(
         workerListOpen: state.workerListOpen,
         workerListHeight: state.workerListHeight,
         bottomNavCompact: state.bottomNavCompact,
+        queueStripSegments: state.queueStripSegments,
       }),
       onRehydrateStorage: () => (state) => {
-        if (state) healLayoutInvariant(state)
+        if (!state) return
+        healLayoutInvariant(state)
+        if (!isQueueStripSegments(state.queueStripSegments)) state.queueStripSegments = QUEUE_STRIP_SEGMENTS_DEFAULT
       },
     },
   ),

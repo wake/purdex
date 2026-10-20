@@ -1,11 +1,10 @@
-// spa/src/components/fleet/HostBars.tsx — the two-bar indicator of a fleet host cell (「主機格指示」 = 雙柱, the user 10-16 on
-// #3033): in the ring's square, two bars, each one reading (lib/pool/bar-readings) as its fill height, coloured by that
-// reading's own band with the ring's status tokens. No reading (offline, or none yet): the grey tracks alone. The track is the
-// ring's (`--border-default`).
-import type { UsageTone } from '../../lib/usage-display'
-import type { BarReading } from '../../lib/pool/bar-readings'
+// spa/src/components/fleet/HostBars.tsx — the bar indicator of a host cell (monitoring tabs M9): in the ring's square, one bar (`right` left out) or two, each one reading as its fill height, coloured by that
+// reading's own band with the ring's status tokens (`muted`: grey, an unknown zone or a worker that is off). No reading: the grey tracks alone. The track is the ring's (`--border-default`).
+import type { IndicatorReading } from '../../lib/pool/indicator'
 
-const FILL: Record<UsageTone, string> = { ok: 'bg-status-success', warn: 'bg-status-warning', danger: 'bg-status-error' }
+type BarReading = IndicatorReading
+
+const FILL: Record<BarReading['tone'], string> = { ok: 'bg-status-success', warn: 'bg-status-warning', danger: 'bg-status-error', muted: 'bg-text-muted' }
 const BAR_W = 4
 const BAR_GAP = 3
 
@@ -29,13 +28,13 @@ function Bar({ side, r, h }: { side: 'left' | 'right'; r: BarReading | null; h: 
   )
 }
 
-/** The two bars in a `size` square (the ring's): each `size - 2` tall, like the ring's outer diameter. */
-export function HostBars({ left, right, size }: { left: BarReading | null; right: BarReading | null; size: number }) {
+/** One bar (`right` undefined) or two in a `size` square (the ring's): each `size - 2` tall, like the ring's outer diameter. */
+export function HostBars({ left, right, size }: { left: BarReading | null; right?: BarReading | null; size: number }) {
   const h = size - 2
   return (
     <span data-testid="host-bars" className="inline-flex items-center justify-center shrink-0" style={{ width: size, height: size, gap: BAR_GAP }}>
       <Bar side="left" r={left} h={h} />
-      <Bar side="right" r={right} h={h} />
+      {right !== undefined && <Bar side="right" r={right} h={h} />}
     </span>
   )
 }

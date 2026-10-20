@@ -228,6 +228,8 @@
   "settings.terminal.fleet_indicator.ring": "環",
   "settings.terminal.fleet_indicator.bars_pressure": "雙柱：CPU＋記憶體壓力",
   "settings.terminal.fleet_indicator.bars_memory": "雙柱：CPU＋記憶體使用率",
+  "settings.terminal.queue_strip_segments.label": "佇列條節數",
+  "settings.terminal.queue_strip_segments.desc": "主機格上方的資源池佇列條最多畫幾節；排得更多時右上角寫 +N",
   "settings.terminal.dynamic_tab_name.label": "動態分頁名稱",
   "settings.terminal.dynamic_tab_name.desc": "啟用後，agent session 分頁會在 session 名稱前顯示 tmux pane title。",
   "settings.terminal.strip_agent_title_marker.label": "移除 agent 標題符號",

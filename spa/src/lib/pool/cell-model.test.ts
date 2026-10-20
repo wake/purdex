@@ -16,7 +16,7 @@ const NOW = darwin.at + 5000
 const look = { indicator: { shape: 'ring', data: ['load'] } } as const
 
 const monitor = (pool: PoolHost, lastFactsAt: number | null = null): MonitorHost => ({
-  hostId: pool.host_id, alias: pool.alias, daemonHostId: null, state: poolHostState(pool, lastFactsAt, NOW), look: look as never, poolFailure: null,
+  hostId: pool.host_id, alias: pool.alias, daemonHostId: null, state: poolHostState(pool, lastFactsAt, NOW), look: look as never, poolFailure: null, count: null,
 })
 const poolHost = (over: Partial<PoolHost> = {}): PoolHost => ({ ...base, alias: 'mlab', reachable: true, facts: darwin, ...over })
 

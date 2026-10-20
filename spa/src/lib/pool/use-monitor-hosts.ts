@@ -9,6 +9,9 @@ import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { PoolErrorCode } from './errors'
+import { hostCountsOf, type HostCount } from './host-counts'
+import { queueEntries } from './jobs-lanes'
+import { usePoolJobs, usePoolReadable } from './pool-jobs'
 import type { PoolHost } from './types'
 
 export interface MonitorHost {
@@ -21,6 +24,8 @@ export interface MonitorHost {
   look: PoolHostResolvedLook
   /** Set while the list is the kept one because the whole pool cannot be read (M25): why, as the pool store knows it. */
   poolFailure: { code: PoolErrorCode | null; since: number | null } | null
+  /** The number at the cell's corner and its colour (M6, M7); null when there is none to show: a host that is not ok, a pool nobody can read (M25), or nothing to count. */
+  count: HostCount | null
 }
 
 // W4: when no source answers (every one failed, or none is connected) the pool store has no hosts. The sidebar then keeps the last non-empty list of this run, every host unknown;
@@ -42,16 +47,23 @@ export function useMonitorHosts(): MonitorHost[] {
   const lookOf = usePoolHostLookResolver()
   const appHosts = useHostStore((s) => s.hosts)
   const poolError = usePoolStore((s) => s.error)
+  const jobs = usePoolJobs()
+  const readable = usePoolReadable()
   const sourceKnown = remembered.source !== null && Object.hasOwn(appHosts, remembered.source)
   const stale = hosts.length === 0 && !answered && remembered.hosts.length > 0 && sourceKnown
   const rows = stale ? remembered.hosts : hosts
-  return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => ({
-    hostId: h.host_id,
-    alias: h.alias,
-    daemonHostId: owners[h.host_id] ?? null,
-    // A list kept from before the failure has no word on any host now: unknown, with the last reading it had.
-    state: poolHostState(stale ? { ...h, reachable: false, facts: null, liveness: 'unknown' } : h, lastFactsAt[h.host_id] ?? null, now),
-    look: lookOf(h.host_id),
-    poolFailure: stale ? { code: poolError?.code ?? null, since: poolError?.since ?? null } : null,
-  })), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now])
+  const counts = useMemo(() => (readable ? hostCountsOf(queueEntries(jobs, now, hosts), jobs) : {}), [readable, jobs, now, hosts])
+  return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => {
+    const state = poolHostState(stale ? { ...h, reachable: false, facts: null, liveness: 'unknown' } : h, lastFactsAt[h.host_id] ?? null, now)
+    return {
+      hostId: h.host_id,
+      alias: h.alias,
+      daemonHostId: owners[h.host_id] ?? null,
+      // A list kept from before the failure has no word on any host now: unknown, with the last reading it had.
+      state,
+      look: lookOf(h.host_id),
+      poolFailure: stale ? { code: poolError?.code ?? null, since: poolError?.since ?? null } : null,
+      count: state.state === 'ok' ? (counts[h.alias] ?? null) : null,
+    }
+  }), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now, counts])
 }

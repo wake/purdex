@@ -9,7 +9,9 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import hostsJson from './__fixtures__/pool_hosts_response.json'
+import { useJobsStore } from './jobs-store'
 import type { PoolHost } from './types'
+import type { PoolJob } from './jobs-types'
 
 const A = '82b11c521df16c12'
 const B = '0123456789abcdef'
@@ -33,6 +35,46 @@ beforeEach(() => {
 })
 
 const answer = (hosts: PoolHost[], lastFactsAt: Record<string, number> = {}) => usePoolStore.setState({ hosts, sourceHostId: 'cfg-a', lastFactsAt } as never)
+
+const wjob = (id: string, origin: string, over: Record<string, unknown> = {}): PoolJob => ({
+  id, origin, state: 'queued', task: 'go-all', args: [], class: 'dev', labels: [], locks: [], manual: '', manual_seq: 0, claim: null, result: null, created_at: facts.at - 1000,
+  repo: { name: 'purdex', root: '', remote: '' }, submitter: { session: '', ref: '', team: '', host: origin }, supersede_key: '', cacheable: true, interruptible: false, queue_timeout_s: 0, adhoc: false, local: false, timeout_s: 0, ...over,
+}) as unknown as PoolJob
+const withWorker = (h: PoolHost): PoolHost => ({ ...h, worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } }, labels: [] }) as unknown as PoolHost
+const seedJobs = (jobs: PoolJob[]) => {
+  const byOrigin: Record<string, { jobs: Record<string, PoolJob>; cursor: string; epoch: string; via: string }> = {}
+  for (const j of jobs) (byOrigin[j.origin] ??= { jobs: {}, cursor: '', epoch: '', via: '' }).jobs[j.id] = j
+  useJobsStore.setState({ byOrigin } as never)
+}
+
+describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
+  beforeEach(() => { seedJobs([]) })
+
+  it('carries each ok host\'s count: what it sent that waits plus what its worker has claimed', () => {
+    answer([withWorker(host(A, 'mlab')), withWorker(host(B, 'mserv'))])
+    seedJobs([wjob('a', 'mlab'), wjob('b', 'mlab'), wjob('c', 'mlab', { state: 'running', claim: { worker: 'mserv', attempt: 1, since: 0 } })])
+    const { result } = renderHook(() => useMonitorHosts())
+    expect(result.current.map((h) => h.count)).toEqual([{ n: 2, tone: 'neutral' }, { n: 1, tone: 'neutral' }])
+  })
+  it('nothing to count is null, not zero', () => {
+    answer([withWorker(host(A, 'mlab'))])
+    expect(renderHook(() => useMonitorHosts()).result.current[0].count).toBeNull()
+  })
+  it('a host that is not ok has no count (M17–M19)', () => {
+    answer([withWorker(host(A, 'mlab', { reachable: false, facts: null, liveness: 'host_down' }))])
+    seedJobs([wjob('a', 'mlab')])
+    expect(renderHook(() => useMonitorHosts()).result.current[0].count).toBeNull()
+  })
+  it('a pool nobody can read has no counts, whatever the jobs store holds (M25)', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
+    answer([withWorker(host(A, 'mlab'))])
+    seedJobs([wjob('a', 'mlab')])
+    const { result } = renderHook(() => useMonitorHosts())
+    expect(result.current[0].count).toEqual({ n: 1, tone: 'neutral' })
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null, error: { code: 'no_answer', since: 1 } } as never) })
+    expect(result.current.map((h) => h.count)).toEqual([null])
+  })
+})
 
 describe('useMonitorHosts', () => {
   it('lists the pool\'s hosts in the order of the store, the unlisted after them in the pool\'s order (M13)', () => {

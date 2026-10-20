@@ -228,6 +228,8 @@
   "settings.terminal.fleet_indicator.ring": "Ring",
   "settings.terminal.fleet_indicator.bars_pressure": "Bars: CPU + memory pressure",
   "settings.terminal.fleet_indicator.bars_memory": "Bars: CPU + memory used",
+  "settings.terminal.queue_strip_segments.label": "Queue strip segments",
+  "settings.terminal.queue_strip_segments.desc": "How many jobs the resource pool strip above the host cells shows; more waiting shows +N",
   "settings.terminal.dynamic_tab_name.label": "Dynamic tab name",
   "settings.terminal.dynamic_tab_name.desc": "When enabled, agent session tabs show the tmux pane title before the session name.",
   "settings.terminal.strip_agent_title_marker.label": "Strip agent title marker",
