@@ -3,7 +3,8 @@
 // until A's settings API (S9) exists. When the thresholds can be read per host, this becomes a read of each host's own values.
 import { LinkBreak, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { ALERT_RULES, OBSERVE_RULES, type AlertRule } from '../../../lib/pool/alert-rules'
+import { useEffect } from 'react'
+import { ALERT_RULES, knownPsi, OBSERVE_RULES, rememberPsi, type AlertRule } from '../../../lib/pool/alert-rules'
 import { usePoolStore } from '../../../lib/pool/store'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { Section } from '../../hosts/form-fields'
@@ -40,7 +41,10 @@ function Unreachable({ which }: { which: 'wwd' | 'host' }) {
 
 export function AlertSettings({ host }: { host: MonitorHost }) {
   const t = useI18nStore((s) => s.t)
-  const hasPsi = usePoolStore((s) => s.hosts.find((h) => h.alias === host.alias)?.facts?.mem.psi != null)
+  // null: the pool has no facts for this host now (it cannot be read, or the host is down): the last reading stands.
+  const live = usePoolStore((s) => { const f = s.hosts.find((h) => h.host_id === host.hostId)?.facts; return f ? f.mem.psi != null : null })
+  useEffect(() => { if (live !== null) rememberPsi(host.hostId, live) }, [host.hostId, live])
+  const hasPsi = live ?? knownPsi(host.hostId)
   return (
     <Section title={t('watch.alert.title')}>
       <div data-testid="alert-settings">

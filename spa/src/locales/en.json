@@ -3572,7 +3572,7 @@
   "watch.alert.rule.observe_mem": "Observe: memory peak",
   "watch.alert.th.disk_low": "less than 12 GB free",
   "watch.alert.th.disk_trend": "less than 14 GB free, or 2 GB less per hour and below 10 GB within 6 hours",
-  "watch.alert.th.pressure_sustained": "high for 5 minutes",
+  "watch.alert.th.pressure_sustained": "warning or worse for 5 minutes, with swap in use up ≥ 1 GB over them",
   "watch.alert.th.mem_thrash": "compressed > 4096 MB and decompressing > 80000/s for 60 s",
   "watch.alert.th.daemon_big": "one resident or system process ≥ max(4 GB, 25% of RAM)",
   "watch.alert.th.wwd_restart": "3 starts within an hour",

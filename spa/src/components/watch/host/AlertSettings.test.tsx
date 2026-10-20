@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, act } from '@testing-library/react'
 import { AlertSettings } from './AlertSettings'
-import { ALERT_RULES } from '../../../lib/pool/alert-rules'
+import { ALERT_RULES, clearPsiMemory } from '../../../lib/pool/alert-rules'
 import { usePoolStore } from '../../../lib/pool/store'
 import { parseFacts, parseHostsAnswer } from '../../../lib/pool/parse'
 import type { PoolHost } from '../../../lib/pool/types'
@@ -24,7 +24,7 @@ const mount = (alias: string, psi: boolean) => {
   render(<AlertSettings host={monitorHost(alias)} />)
 }
 
-beforeEach(() => { cleanup(); usePoolStore.getState().reset() })
+beforeEach(() => { cleanup(); clearPsiMemory(); usePoolStore.getState().reset() })
 afterEach(() => cleanup())
 
 describe('the threshold table', () => {
@@ -46,6 +46,14 @@ describe('the threshold table', () => {
     }
   })
 
+  it('the pressure rule states both of wwd\'s conditions: warning or worse for 5 minutes AND swap up 1 GB (rules_mem.go PressureHeld)', () => {
+    mount('mlab', false)
+    const input = within(screen.getByTestId('alert-rule-pressure_sustained')).getByRole('textbox')
+    expect((input as HTMLInputElement).value).toMatch(/5/)
+    expect((input as HTMLInputElement).value).toMatch(/1 GB/)
+    expect((input as HTMLInputElement).value).toMatch(/swap/i)
+  })
+
   it('the three watch-level rules (pressure_watch, pressure_danger, swap_growth) are not listed', () => {
     mount('mlab', false)
     for (const id of ['pressure_watch', 'pressure_danger', 'swap_growth']) expect(screen.queryByTestId(`alert-rule-${id}`)).toBeNull()
@@ -57,6 +65,32 @@ describe('the threshold table', () => {
     cleanup()
     mount('mserv', true)
     expect(screen.getByTestId('alert-rule-mserv_service')).toBeInTheDocument()
+  })
+})
+
+describe('which host has PSI (codex attack)', () => {
+  it('is found by the host id, not the alias: a host renamed in the pool keeps its row', () => {
+    act(() => { usePoolStore.setState({ hosts: [{ ...poolHost('mserv', true), alias: 'renamed' }], sourceHostId: 'cfg-a' }) })
+    render(<AlertSettings host={monitorHost('mserv')} />)
+    expect(screen.getByTestId('alert-rule-mserv_service')).toBeInTheDocument()
+  })
+
+  it('a host that had PSI keeps its mserv row while the pool cannot be read, and a host that never had it gains none', () => {
+    mount('mserv', true)
+    expect(screen.getByTestId('alert-rule-mserv_service')).toBeInTheDocument()
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null }) }) // the pool fails: the store forgets its hosts, the page keeps the host
+    expect(screen.getByTestId('alert-rule-mserv_service')).toBeInTheDocument()
+    cleanup()
+    clearPsiMemory()
+    mount('mlab', false)
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null }) })
+    expect(screen.queryByTestId('alert-rule-mserv_service')).toBeNull()
+  })
+
+  it('a host whose facts are read again without PSI loses the row', () => {
+    mount('mserv', true)
+    act(() => { usePoolStore.setState({ hosts: [poolHost('mserv', false)], sourceHostId: 'cfg-a' }) })
+    expect(screen.queryByTestId('alert-rule-mserv_service')).toBeNull()
   })
 })
 

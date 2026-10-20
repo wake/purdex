@@ -3572,7 +3572,7 @@
   "watch.alert.rule.observe_mem": "觀察：記憶體峰值",
   "watch.alert.th.disk_low": "剩不到 12 GB",
   "watch.alert.th.disk_trend": "剩不到 14 GB，或每小時少 2 GB 且 6 小時內會低於 10 GB",
-  "watch.alert.th.pressure_sustained": "偏高 5 分鐘",
+  "watch.alert.th.pressure_sustained": "warning 以上持續 5 分鐘，且期間 swap 用量增加 ≥ 1 GB",
   "watch.alert.th.mem_thrash": "壓縮 > 4096 MB 且解壓縮 > 每秒 80000 次，持續 60 秒",
   "watch.alert.th.daemon_big": "單一常駐或系統行程 ≥ max(4 GB, RAM 的 25%)",
   "watch.alert.th.wwd_restart": "一小時內啟動 3 次",

@@ -19,5 +19,13 @@ export const ALERT_RULES: readonly AlertRule[] = [
   { id: 'mserv_service', level: 'push', needsPsi: true },
 ]
 
+// Whether a host reports PSI, as last read. The pool store forgets its hosts when it cannot be read while the host page stays up on the kept list, which carries no facts: without this
+// memory the mserv rule would vanish for as long as the pool is down. Per host id, memory only.
+const psiSeen = new Map<string, boolean>()
+export const rememberPsi = (hostId: string, has: boolean): void => { psiSeen.set(hostId, has) }
+export const knownPsi = (hostId: string): boolean => psiSeen.get(hostId) === true
+/** Tests only. */
+export const clearPsiMemory = (): void => { psiSeen.clear() }
+
 // `[observe] min_cpu_seconds / min_mem_mb` (internal/wwd/daemon/config.go:148-149).
 export const OBSERVE_RULES = ['observe_cpu', 'observe_mem'] as const
