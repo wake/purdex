@@ -177,6 +177,10 @@ describe('the last jobs that ended here', () => {
     withJobs(...endedN(6), running('r1'), running('r2'), job('q1'), job('q2'), job('q3')); mount()
     expect(endedIds()).toHaveLength(4)
     cleanup()
+    // 1 running, 5 queued (3 shown + 「還有」): 9 − 1 − 3 − 1 = 4 (the 「還有」 row takes a place)
+    withJobs(...endedN(6), running('r1'), ...[1, 2, 3, 4, 5].map((n) => job(`q${n}`))); mount()
+    expect(endedIds()).toHaveLength(4)
+    cleanup()
     // 3 running, 5 queued (3 shown + 「還有」): 9 − 3 − 3 − 1 = 2 → 3
     withJobs(...endedN(6), running('r1'), running('r2'), running('r3'), ...[1, 2, 3, 4, 5].map((n) => job(`q${n}`))); mount()
     expect(endedIds()).toHaveLength(3)
