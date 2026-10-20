@@ -3196,6 +3196,7 @@
   "pool.reason.owner_active": "The owner is at this machine",
   "pool.reason.slots_full": "All slots are in use",
   "pool.reason.gate_full": "The gate's slots are held",
+  "pool.reason.disk_low": "Disk space is below the minimum",
   "pool.reason.unknown": "Reason unknown",
   "pool.job.result.passed": "{{n}} passed",
   "pool.job.result.failed": "{{n}} failed",
