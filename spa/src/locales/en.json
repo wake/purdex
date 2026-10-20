@@ -2050,6 +2050,8 @@
   "tab.background.schedule": "Scheduled wake-up",
   "tab.background.queued": "Queued",
   "tab.queued.tooltip": "Queued: #{{place}} · waiting {{m}} min · {{command}} ({{kind}})",
+  "tab.open_queue": "Open job queue",
+  "tab.queued.open_hint": "press Alt+Enter to open the job queue",
   "tab.queued.more": " · {{n}} more",
   "tab.queued.heavy": "heavy command",
   "tab.queued.light": "light command",

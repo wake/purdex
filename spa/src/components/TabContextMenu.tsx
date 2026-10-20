@@ -6,6 +6,8 @@ import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabMenuExtrasStore, type TabMenuExtra } from '../stores/useTabMenuExtrasStore'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
+import { useTabDisplay } from '../hooks/useTabDisplay'
+import { tabQueueOpener } from '../lib/watch/open-queue'
 
 const PADDING = 4
 const NO_EXTRAS: TabMenuExtra[] = []
@@ -14,7 +16,7 @@ export type ContextMenuAction =
   | 'lock' | 'unlock' | 'pin' | 'unpin'
   | 'close' | 'closeOthers' | 'closeRight'
   | 'tearOff' | 'mergeTo' | 'mergeToTab'
-  | 'rename'
+  | 'rename' | 'openQueue'
 
 interface Props {
   tab: Tab
@@ -34,6 +36,8 @@ interface MenuItem {
   /** Why it is disabled (shown as the tooltip). */
   title?: string
   payload?: string
+  /** Done by the menu itself instead of handing `action` to the caller. */
+  run?: () => void
 }
 
 export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked, targetTabs }: Props) {
@@ -86,7 +90,11 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
   const isSession = primary.content.kind === 'tmux-session'
   const isTerminated = isSession && !!(primary.content as { terminated?: string }).terminated
 
+  // The hourglass of a tab with a pool job waiting is a way into the job queue; this row is its keyboard-reachable twin (#3806).
+  const openQueue = tabQueueOpener(useTabDisplay(tab))
+
   const items: (MenuItem | 'separator')[] = [
+    ...(openQueue ? [{ label: t('tab.open_queue'), action: 'openQueue' as const, show: true, run: openQueue }, 'separator' as const] : []),
     // Rename section (session only, non-terminated)
     ...(isSession && !isTerminated ? [{ label: t('tab.rename_session'), action: 'rename' as const, show: true }] : []),
     // Lock/Pin section
@@ -159,7 +167,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
             key={item.payload ? `${item.action}-${item.payload}` : item.action}
             disabled={item.disabled}
             title={item.title}
-            onClick={() => { onAction(item.action, item.payload); onClose() }}
+            onClick={() => { if (item.run) item.run(); else onAction(item.action, item.payload); onClose() }}
             className={`w-full text-left px-3 py-1.5 transition-colors ${
               item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'
             }`}

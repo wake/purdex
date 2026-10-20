@@ -2050,6 +2050,8 @@
   "tab.background.schedule": "排程喚醒",
   "tab.background.queued": "排隊中",
   "tab.queued.tooltip": "排隊中：第 {{place}} 位・已等 {{m}} 分鐘・{{command}}（{{kind}}）",
+  "tab.open_queue": "打開任務佇列",
+  "tab.queued.open_hint": "按 Alt+Enter 開任務佇列",
   "tab.queued.more": "・另有 {{n}} 個",
   "tab.queued.heavy": "重指令",
   "tab.queued.light": "輕指令",
