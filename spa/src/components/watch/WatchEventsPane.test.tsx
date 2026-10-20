@@ -224,6 +224,58 @@ describe('the events tab (MON-10c)', () => {
     expect(screen.getByTestId('event-more-h-mserv')).toHaveTextContent(t('watch.events.more_at_least', { alias: 'mserv', n: 17 }))
   })
 
+  it('a 403 on one host stays shown whichever host answers last', async () => {
+    for (const order of ['forbidden-last', 'forbidden-first'] as const) {
+      cleanup(); clearViewMemory(); fetchObservations.mockReset()
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => { release = r })
+      fetchObservations.mockImplementation(async (_s: string, alias: string) => {
+        const forbidden = alias === 'mlab'
+        if (order === 'forbidden-last' ? forbidden : !forbidden) await gate
+        if (forbidden) throw new PoolReadError('/x', 403, classify(403, null))
+        return page([obs('fine')])
+      })
+      pane()
+      await flush()
+      await act(async () => { release(); await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.getAllByTestId('events-obs-forbidden'), order).toHaveLength(1)
+      expect(rows().map((r) => r.getAttribute('data-event-id')), order).toEqual(['h-mserv|fine'])
+    }
+  })
+
+  it('drops what was read through another source, or for an alias that now names another host, instead of showing it as current', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1')] : []))
+    const { rerender } = pane()
+    await flush()
+    expect(rows()).toHaveLength(1)
+    // the same alias is now another host, and its read does not finish
+    fetchObservations.mockImplementation(() => new Promise(() => {}))
+    monitorHosts.list = [host('h-mlab', 'mlab'), host('h-other', 'mserv')]
+    rerender(<WatchEventsPane {...({} as never)} />)
+    await flush()
+    expect(rows()).toHaveLength(0)
+    // another source, whose read does not finish either
+    monitorHosts.list = [host('h-mlab', 'mlab'), host('h-mserv', 'mserv')]
+    fetchObservations.mockImplementationOnce(async () => page([])).mockImplementationOnce(async () => page([obs('o2')]))
+    rerender(<WatchEventsPane {...({} as never)} />)
+    await flush()
+    fetchObservations.mockImplementation(() => new Promise(() => {}))
+    useNexHostStore.setState({ byHost: { src2: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1', 'pool.observations.v1'] } } } as never)
+    await act(async () => { usePoolStore.setState({ sourceHostId: 'src2' } as never) })
+    await flush()
+    expect(rows()).toHaveLength(0)
+  })
+
+  it('shows nothing from the memory once the source stops announcing pool.observations.v1', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1')] : []))
+    pane()
+    await flush()
+    expect(rows()).toHaveLength(1)
+    await act(async () => { useNexHostStore.setState({ byHost: { src: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1'] } } } as never) })
+    await flush()
+    expect(rows()).toHaveLength(0)
+  })
+
   it('does not read the observations from a source that does not announce pool.observations.v1', async () => {
     useNexHostStore.setState({ byHost: { src: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1'] } } } as never)
     pane()

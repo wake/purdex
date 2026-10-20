@@ -85,40 +85,62 @@ async function readObservationsOf(source: string, alias: string, since: string):
 }
 
 /**
- * The observations of every pool host over the last 24 hours, while the tab is shown: on mount and every 60 s, through the pool's source daemon, only when it announces `pool.observations.v1`. The last answers are kept in the view memory.
- * Each host is read and committed on its own, so one that hangs holds back only itself; a host whose read failed keeps its last list but is named as unreadable (`failed`), and one whose pages ran out is marked `truncated`.
+ * What the memory still holds true for `source` (null: nothing is being read) and these hosts: the answers of another source, or of an alias that now names another `host_id`, are dropped, so they are never shown as the current ones.
+ * The same memory comes back when nothing differs.
  */
-function useObservations(aliases: readonly string[]): EventsObservations {
+function reconcileObservations(mem: EventsObservations, source: string | null, hosts: readonly { hostId: string; alias: string }[]): EventsObservations {
+  const owners = Object.fromEntries(hosts.map((h) => [h.alias, h.hostId]))
+  const sameSource = mem.source === source
+  const keep = (alias: string): boolean => sameSource && mem.owners[alias] === owners[alias]
+  const only = (list: readonly string[]): string[] => list.filter(keep)
+  const byHost = Object.fromEntries(Object.entries(mem.byHost).filter(([a]) => keep(a)))
+  const same = sameSource && Object.keys(byHost).length === Object.keys(mem.byHost).length && only(mem.failed).length === mem.failed.length
+    && only(mem.truncated).length === mem.truncated.length && only(mem.forbidden).length === mem.forbidden.length && Object.keys(owners).every((a) => mem.owners[a] === owners[a])
+  if (same) return mem
+  return { source, owners, byHost, failed: only(mem.failed), truncated: only(mem.truncated), forbidden: only(mem.forbidden) }
+}
+
+/**
+ * The observations of every pool host over the last 24 hours, while the tab is shown: on mount and every 60 s, through the pool's source daemon, only when it announces `pool.observations.v1`. The last answers are kept in the view memory,
+ * tied to the source and to each alias's `host_id` they were read for. Each host is read and committed on its own, so one that hangs holds back only itself; a host whose read failed keeps its last list but is named as unreadable (`failed`),
+ * a 403 is per host (`forbidden`), and one whose pages ran out is marked `truncated`.
+ */
+function useObservations(hosts: readonly { hostId: string; alias: string }[]): EventsObservations {
   const source = usePoolStore((s) => s.sourceHostId)
   const announces = useNexHostStore((s) => source !== null && s.byHost[source]?.daemonCapabilities?.includes(OBSERVATIONS_CAPABILITY) === true)
+  const want = announces ? source : null
   const [state, setState] = useState<EventsObservations>(readEventsObservations)
-  const key = aliases.join('\0')
+  const key = hosts.map((h) => `${h.alias}\0${h.hostId}`).join('\u0001')
+  const current = useMemo(() => (key === '' ? [] : key.split('\u0001').map((p) => { const [alias, hostId] = p.split('\0'); return { alias, hostId } })), [key])
+  // What is shown is the memory as it holds for this source and these hosts, worked out here; the effect below brings the stored memory to the same.
+  const shown = useMemo(() => reconcileObservations(state, want, current), [state, want, current])
   useEffect(() => {
-    if (source === null || !announces) return
+    writeEventsObservations(reconcileObservations(readEventsObservations(), want, current))
+    if (want === null) return
     let live = true
     // A read that takes longer than the beat must not land over a newer one of the same host: only the newest started read of a host writes.
     const seq = new Map<string, number>()
     const readHost = async (alias: string): Promise<void> => {
       const mine = (seq.get(alias) ?? 0) + 1
       seq.set(alias, mine)
-      const r = await readObservationsOf(source, alias, new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString())
+      const r = await readObservationsOf(want, alias, new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString())
       if (!live || seq.get(alias) !== mine) return
-      const prev = readEventsObservations()
+      const prev = reconcileObservations(readEventsObservations(), want, current)
       const without = (list: readonly string[]): string[] => list.filter((a) => a !== alias)
       const next: EventsObservations = 'list' in r
-        ? { ...prev, forbidden: false, byHost: { ...prev.byHost, [alias]: r.list }, failed: without(prev.failed), truncated: r.truncated ? [...without(prev.truncated), alias] : without(prev.truncated) }
+        ? { ...prev, forbidden: without(prev.forbidden), byHost: { ...prev.byHost, [alias]: r.list }, failed: without(prev.failed), truncated: r.truncated ? [...without(prev.truncated), alias] : without(prev.truncated) }
         : 'forbidden' in r
-          ? { ...prev, forbidden: true }
+          ? { ...prev, forbidden: [...without(prev.forbidden), alias], failed: without(prev.failed) }
           : { ...prev, failed: [...without(prev.failed), alias] }
       writeEventsObservations(next)
       setState(next)
     }
-    const readAll = (): void => { for (const a of key.split('\0').filter(Boolean)) void readHost(a) }
+    const readAll = (): void => { for (const h of current) void readHost(h.alias) }
     readAll()
     const id = setInterval(readAll, OBSERVATIONS_POLL_MS)
     return () => { live = false; clearInterval(id) }
-  }, [source, announces, key])
-  return state
+  }, [want, current])
+  return shown
 }
 
 /** The wall clock, moved on every minute: the day separators and the "in progress for" times follow it without any event arriving. */
@@ -187,8 +209,7 @@ export function WatchEventsPane(_props: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
   const hosts = useMonitorHosts()
   const alerts = useAlertsStore((s) => s.byHost)
-  const aliasKey = hosts.map((h) => h.alias)
-  const observations = useObservations(aliasKey)
+  const observations = useObservations(hosts)
   const now = useMinuteClock()
 
   // Chip choices outlive the pane (view memory); the state only makes the pane redraw.
@@ -239,12 +260,12 @@ export function WatchEventsPane(_props: PaneRendererProps) {
           {t('watch.events.alerts_unreadable', { alias: h.alias, reason: reasonOf(h.alias) })}
         </p>
       ))}
-      {!observations.forbidden && observations.failed.filter((a) => hosts.some((h) => h.alias === a)).map((a) => (
+      {observations.failed.filter((a) => hosts.some((h) => h.alias === a)).map((a) => (
         <p key={a} data-testid={`events-obs-unreadable-${a}`} className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-status-warning-text">
           {t('watch.events.obs_unreadable', { alias: a })}
         </p>
       ))}
-      {observations.forbidden && (
+      {observations.forbidden.length > 0 && (
         <p data-testid="events-obs-forbidden" className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-text-muted">{t('watch.events.obs_forbidden')}</p>
       )}
 

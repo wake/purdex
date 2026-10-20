@@ -26,14 +26,18 @@ let eventFilters: EventFilters = DEFAULT_EVENT_FILTERS
 let eventsScroll = 0
 /** What the 事件 tab last read of the observations (by pool alias), so coming back shows it at once; `forbidden`: a device token cannot read them. */
 export interface EventsObservations {
+  /** The daemon these were read through (null: nothing is being read), and the `host_id` each alias had then: an answer is only the current one for the same source and the same host. */
+  source: string | null
+  owners: Record<string, string>
   byHost: Record<string, readonly PoolObservation[]>
-  forbidden: boolean
+  /** Pool aliases a device token was refused (403) for. */
+  forbidden: readonly string[]
   /** Pool aliases whose last read failed (their list is the older one). */
   failed: readonly string[]
   /** Pool aliases whose 24 hours did not fit in the pages read. */
   truncated: readonly string[]
 }
-const NO_OBSERVATIONS: EventsObservations = { byHost: {}, forbidden: false, failed: [], truncated: [] }
+const NO_OBSERVATIONS: EventsObservations = { source: null, owners: {}, byHost: {}, forbidden: [], failed: [], truncated: [] }
 let eventsObservations: EventsObservations = NO_OBSERVATIONS
 
 export const readHostTab = (hostId: string): HostSubTab => hostTabs.get(hostId) ?? 'monitor'
