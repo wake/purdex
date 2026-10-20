@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -41,12 +42,6 @@ func runHostCmd(ctx context.Context, args []string, stdout, stderr io.Writer, cl
 		msg = fmt.Sprintf("unknown subcommand %q", args[0])
 	}
 	fmt.Fprintf(stderr, "pdx host: %s\n%s\n", msg, hostUsage)
-	return ExitUsage
-}
-
-// runLeaseReportMoved is what `pdx lease report` says now: the report moved.
-func runLeaseReportMoved(stderr io.Writer) int {
-	fmt.Fprintln(stderr, "pdx lease report 已改名為 pdx host report（租約已退役，報表改讀主機的每分鐘紀錄）。用法：\n"+hostUsage)
 	return ExitUsage
 }
 
@@ -142,4 +137,31 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 	}
 	fmt.Fprintf(w, "zones     normal %.1f%%  warning %.1f%%  danger %.1f%%  (%d of %d minutes counted)\n",
 		r.Zones.Normal*100, r.Zones.Warning*100, r.Zones.Danger*100, r.Zones.Minutes, r.Coverage.Minutes)
+}
+
+// leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
+// of memory, so a daemon slower than this is not answering.
+const leaseAttemptTimeout = 5 * time.Second
+
+// leaseClient builds the daemon client from the config, with no inbox.
+func leaseClient(cmd, cfgPath string, stderr io.Writer, clientOpts []daemonclient.Option) (*daemonclient.Client, bool) {
+	return leaseClientT(cmd, cfgPath, stderr, leaseAttemptTimeout, clientOpts)
+}
+
+// leaseGrace is how long a lease command keeps trying a daemon that does not
+// answer. It is shorter than the client's 30 s: the pool is advice, and a
+// command that waits half a minute for advice before it runs has made the
+// advice a cost (spec D-5).
+const leaseGrace = 5 * time.Second
+
+// leaseClientT is leaseClient with the per-attempt timeout chosen.
+func leaseClientT(cmd, cfgPath string, stderr io.Writer, attempt time.Duration, clientOpts []daemonclient.Option) (*daemonclient.Client, bool) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx %s: %v\n", cmd, err)
+		return nil, false
+	}
+	base := fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)
+	opts := append([]daemonclient.Option{daemonclient.WithStderr(stderr), daemonclient.WithAttemptTimeout(attempt), daemonclient.WithGrace(leaseGrace)}, clientOpts...)
+	return daemonclient.New(base, cfg.Token, opts...), true
 }

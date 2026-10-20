@@ -632,14 +632,14 @@ func TestSkill_GateSaysWhatAnAgentNeeds(t *testing.T) {
 		"pdx gate -- ./script.sh", "不要只包腳本裡的某一步",
 		"旗標都放在 `--` 之前",
 		"**75**", "`pdx gate:`", // the gate's own exit code (gate.ExitRefused) and its stderr prefix
-		"`pdx lease run --kind … -- <指令…>` 目前是 `pdx gate` 的別名", "`--ask`／`--queue`／`--wait` 已沒有作用", "`build` 不經閘門直接執行", "實際數字以 `pdx gate status` 顯示的生效設定為準", // the retired verb is named once, as an alias
+		"實際數字以 `pdx gate status` 顯示的生效設定為準",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-gate lacks %q", want)
 		}
 	}
 	// What the lease told and the gate does not: none of it may survive in the skill.
-	for _, gone := range []string{"輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "advise", "--maxWorkers=3"} {
+	for _, gone := range []string{"輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "pdx lease run", "advise", "--maxWorkers=3"} {
 		if strings.Contains(s, gone) {
 			t.Errorf("SKILL.md of pdx-gate still says %q", gone)
 		}

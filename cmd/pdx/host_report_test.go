@@ -149,15 +149,6 @@ func TestHostReport_RefusesAnOlderDaemonsAnswer(t *testing.T) {
 	}
 }
 
-// `pdx lease report` points at the new verb and asks the daemon nothing.
-func TestLeaseReport_PointsAtHostReport(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := runLeaseCmd(context.Background(), []string{"report"}, fakeGetenv(nil), &stdout, &stderr)
-	if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "pdx host report") {
-		t.Errorf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-}
-
 // pdx host with no or an unknown verb is a usage error.
 func TestHost_UnknownVerb(t *testing.T) {
 	for _, args := range [][]string{nil, {"ls"}} {
