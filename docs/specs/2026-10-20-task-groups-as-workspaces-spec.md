@@ -287,7 +287,7 @@ For a tab whose agent session (live or ended, §3) is not a seat, the panel area
 - **Full form**: the header (capsule, 「· N 個 session」 for a manual group, ↑), one card like the lead's (avatar, persona name, title, context %, the last status line as the second line), a workbook entry where the session has one (it absorbs `OwnWorkbookPanel` / `OwnTitleStrip`: a journal.v1 host opens the journal card, an older host opens the workbook inside the panel), and a settings block: the group (move, take out, new group), the group's name and colour. The panel never deletes a group.
 - A session that ended keeps its panel (dim, no light, 「—」 for the context); its group can still be changed.
 - The form (title bar | line | full) is **one device-local value for all personal panels** (`sharedPanelMode`), starting in the title bar.
-- Design and rules R1–R25: `docs/pages/b-line/personal-panel-design.html`.
+- Design and rules R1–R25: the design page (not in this repo; served at https://pages.mlab.host/wake/purdex-b-line/personal-panel-design.html, B line). The rules this spec depends on are restated above: R15 (no persona name), R23 (an unread root is 「未分組」, and moving / taking out / starting a group stay off), R2 (an ended session keeps its panel).
 
 ## 8. Retiring the hostconfig `task_groups`
 
