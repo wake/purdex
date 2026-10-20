@@ -52,12 +52,39 @@ func TestParseDiskstats(t *testing.T) {
 func fakeSysBlock(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, d := range []string{"nvme0n1/device", "sda/device", "loop0", "zram0", "dm-0", "md0"} {
+	for _, d := range []string{"nvme0n1", "sda", "loop0", "zram0", "dm-0", "md0"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// on a real host device is a symlink into the device tree, not a directory
+	target := filepath.Join(t.TempDir(), "devices")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"nvme0n1", "sda"} {
+		if err := os.Symlink(target, filepath.Join(root, d, "device")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return root
+}
+
+// A device link whose target is not visible (a container with part of /sys mounted) is still a device link: the disk is listed, not
+// silently taken for a volume (R2 attack).
+func TestPhysicalDiskIODanglingDeviceLinkStillCounts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sda"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "not-mounted"), filepath.Join(root, "sda", "device")); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := ParseDiskstats(diskstatsFixture)
+	got, err := PhysicalDiskIO(all, root)
+	if err != nil || len(got) != 1 || got[0].Device != "sda" {
+		t.Fatalf("%+v %v", got, err)
+	}
 }
 
 func TestPhysicalDiskIOKeepsOnlyWholeDisks(t *testing.T) {

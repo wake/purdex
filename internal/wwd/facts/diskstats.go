@@ -49,7 +49,8 @@ func PhysicalDiskIO(all []RawDiskIO, sysBlock string) ([]RawDiskIO, error) {
 	}
 	var out []RawDiskIO
 	for _, d := range all {
-		switch _, err := os.Stat(filepath.Join(sysBlock, d.Device, "device")); {
+		// Lstat: the link itself is the answer; its target may be out of sight (a container with part of /sys mounted)
+		switch _, err := os.Lstat(filepath.Join(sysBlock, d.Device, "device")); {
 		case err == nil:
 			out = append(out, d)
 		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):

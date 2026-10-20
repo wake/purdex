@@ -90,6 +90,34 @@ func TestDiskIOBuilderEmpty(t *testing.T) {
 	}
 }
 
+// The rates are over the time between the two counter reads, not between the two sample starts: when a source read before the disk
+// counters is slow in one sample, the counters cover more than the nominal 5 s (R2 attack).
+func TestCollectorDiskIOUsesTheTimeOfItsOwnRead(t *testing.T) {
+	now := t0
+	var disksTake time.Duration
+	ops := uint64(0)
+	src := Sources{
+		Now: func() time.Time { return now },
+		CPU: func() (RawCPU, error) { return RawCPU{NCPU: 2, Busy: 1, Total: 2}, nil },
+		Mem: func() (RawMem, error) { return fixtureMem(1, 1), nil },
+		Disks: func() ([]RawDisk, error) {
+			now = now.Add(disksTake) // a slow mount point before the disk counters are read
+			return nil, nil
+		},
+		DiskIO: func() ([]RawDiskIO, error) { return []RawDiskIO{{Device: "disk0", ReadOps: ops}}, nil },
+	}
+	c := NewCollector(src)
+	if _, err := c.Sample(); err != nil { // counters read at t0
+		t.Fatal(err)
+	}
+	// the second sample starts 5 s later, its disks call takes 30 s, so its counters are read at t0+35 s: 350 operations in 35 s
+	now, ops, disksTake = t0.Add(5*time.Second), 350, 30*time.Second
+	r, _ := c.Sample()
+	if len(r.DiskIO) != 1 || !near(r.DiskIO[0].ReadIOPS, 10) {
+		t.Fatalf("%+v want 10 iops (350 operations over the 35 s between the reads)", r.DiskIO)
+	}
+}
+
 // The collector hands the source's devices through the builder; a failing source leaves disk_io null without failing the sample.
 func TestCollectorDiskIO(t *testing.T) {
 	now := t0

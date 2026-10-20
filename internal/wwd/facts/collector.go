@@ -328,8 +328,11 @@ func (c *Collector) Sample() (Reading, error) {
 	}
 	if c.src.DiskIO != nil {
 		// a failed read is not a failed sample: the next one reads again, and the gap just makes that pair's interval longer
+		// timed at its own read: the sources before it can be slow, and the counters cover the time since the last read, not since this
+		// sample started
+		readAt := c.src.Now()
 		if raw, err := c.src.DiskIO(); err == nil {
-			r.DiskIO = c.diskio.Build(now, raw)
+			r.DiskIO = c.diskio.Build(readAt, raw)
 		}
 	}
 	if c.src.Procs != nil {

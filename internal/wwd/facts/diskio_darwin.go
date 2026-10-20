@@ -23,6 +23,7 @@ const (
 	ioKeyWhole      = "Whole"
 	ioKeyBSDName    = "BSD Name"
 	bsdNameMax      = 64
+	ioKitTries      = 3 // reads made when the registry changes under an iteration
 )
 
 func cstr(s string) *byte { return &append([]byte(s), 0)[0] }
@@ -46,6 +47,7 @@ func newDarwinDiskIO() (read func() ([]RawDiskIO, error), err error) {
 		matching  func(name *byte) uintptr
 		services  func(port uint32, matching uintptr, it *uint32) int32
 		next      func(it uint32) uint32
+		isValid   func(it uint32) uint32
 		childIter func(entry uint32, plane *byte, it *uint32) int32
 		conforms  func(obj uint32, class *byte) uint32
 		property  func(entry uint32, key uintptr, alloc uintptr, opts uint32) uintptr
@@ -66,6 +68,7 @@ func newDarwinDiskIO() (read func() ([]RawDiskIO, error), err error) {
 	purego.RegisterLibFunc(&matching, io, "IOServiceMatching")
 	purego.RegisterLibFunc(&services, io, "IOServiceGetMatchingServices")
 	purego.RegisterLibFunc(&next, io, "IOIteratorNext")
+	purego.RegisterLibFunc(&isValid, io, "IOIteratorIsValid")
 	purego.RegisterLibFunc(&childIter, io, "IORegistryEntryGetChildIterator")
 	purego.RegisterLibFunc(&conforms, io, "IOObjectConformsTo")
 	purego.RegisterLibFunc(&property, io, "IORegistryEntryCreateCFProperty")
@@ -94,19 +97,21 @@ func newDarwinDiskIO() (read func() ([]RawDiskIO, error), err error) {
 		ioStatReadOps: key(ioStatReadOps), ioStatWriteOps: key(ioStatWriteOps)}
 	driverClass, mediaClass, plane := cstr(ioDriverClass), cstr(ioMediaClass), cstr(ioServicePlane)
 
-	// wholeMedia is the Whole flag and BSD Name of the IOMedia under a driver, for the first media that is a whole disk.
-	wholeMedia := func(driver uint32) (bool, string) {
+	// wholeMedia is the Whole flag and BSD Name of the IOMedia under a driver, for the first media that is a whole disk. complete is
+	// false when the children could not be listed or the registry changed under the iteration (IOIteratorNext then ends the list as
+	// if it were done): what it says is then not the whole answer.
+	wholeMedia := func(driver uint32) (whole bool, name string, complete bool) {
 		var it uint32
 		if childIter(driver, plane, &it) != 0 {
-			return false, ""
+			return false, "", false
 		}
 		defer ioRelease(it)
 		for {
 			child := next(it)
 			if child == 0 {
-				return false, ""
+				return false, "", isValid(it) != 0
 			}
-			whole, name := false, ""
+			whole, name = false, ""
 			if conforms(child, mediaClass) != 0 {
 				if v := property(child, kWhole, 0, 0); v != 0 {
 					whole = typeOf(v) == boolType() && boolValue(v) != 0
@@ -126,7 +131,7 @@ func newDarwinDiskIO() (read func() ([]RawDiskIO, error), err error) {
 			}
 			ioRelease(child)
 			if whole {
-				return true, name
+				return true, name, true
 			}
 		}
 	}
@@ -155,28 +160,46 @@ func newDarwinDiskIO() (read func() ([]RawDiskIO, error), err error) {
 		return out
 	}
 
-	return func() ([]RawDiskIO, error) {
+	// readOnce lists the drivers once. complete is false when an iterator was invalidated by a change in the registry (a disk attached or
+	// removed, wake from sleep) while it ran: the list may then be missing disks, and is not to be taken as the answer.
+	readOnce := func() (out []RawDiskIO, complete bool, err error) {
 		dict := matching(driverClass)
 		if dict == 0 {
-			return nil, errors.New("IOServiceMatching failed")
+			return nil, false, errors.New("IOServiceMatching failed")
 		}
 		var it uint32
 		if kr := services(ioKitMainPortNull, dict, &it); kr != 0 { // consumes dict
-			return nil, fmt.Errorf("IOServiceGetMatchingServices: kern_return %d", kr)
+			return nil, false, fmt.Errorf("IOServiceGetMatchingServices: kern_return %d", kr)
 		}
 		defer ioRelease(it)
-		var out []RawDiskIO
 		for {
 			driver := next(it)
 			if driver == 0 {
-				return out, nil
+				return out, isValid(it) != 0, nil
 			}
 			stats := statistics(driver)
-			whole, name := wholeMedia(driver)
+			whole, name, ok := wholeMedia(driver)
 			ioRelease(driver)
+			if !ok {
+				return nil, false, nil
+			}
 			if d, ok := rawDiskIOFromProps(stats, whole, name); ok {
 				out = append(out, d)
 			}
 		}
+	}
+
+	return func() ([]RawDiskIO, error) {
+		for range ioKitTries {
+			out, complete, err := readOnce()
+			if err != nil {
+				return nil, err
+			}
+			if complete {
+				return out, nil
+			}
+		}
+		// an incomplete list must not become the baseline: the disks missing from it would come back as new ones
+		return nil, errors.New("IOKit registry kept changing while the disks were listed")
 	}, nil
 }
