@@ -38,6 +38,8 @@ export interface PoolJob {
   class: JobClass
   /** Which lane of the host it runs in; absent when the wire does not say. */
   slot?: 'heavy' | 'light'
+  /** When the worker began running it (ms); absent when the wire does not say. */
+  started_at?: number
   labels: string[]
   locks: string[]
   cacheable: boolean

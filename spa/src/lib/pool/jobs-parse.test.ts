@@ -117,3 +117,18 @@ describe('the slot of a job', () => {
     for (const bad of ['medium', 3, null, '']) expect(parseJob({ ...doneJson, slot: bad })).not.toHaveProperty('slot')
   })
 })
+
+describe('the started_at of a job', () => {
+  const startedOf = (started_at: unknown) => parseJob({ ...doneJson, started_at })
+  it('reads an RFC 3339 time as milliseconds', () => {
+    expect(startedOf('2026-10-20T08:00:00Z')?.started_at).toBe(Date.parse('2026-10-20T08:00:00Z'))
+  })
+  it('leaves the field out when absent, null or malformed', () => {
+    expect(parseJob(doneJson)).not.toHaveProperty('started_at')
+    for (const bad of [null, 'not a time', '', 5]) expect(startedOf(bad)).not.toHaveProperty('started_at')
+  })
+  it('does not touch the started_at of the result', () => {
+    const j = startedOf('2026-10-20T08:00:00Z')
+    expect(j?.result?.started_at).toBe(parseJob(doneJson)?.result?.started_at)
+  })
+})
