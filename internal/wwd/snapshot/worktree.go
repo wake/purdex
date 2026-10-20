@@ -290,16 +290,33 @@ func dropOutsideLinks(run gitRunFn, runIn func(env []string, stdin string, args 
 	if rerr != nil {
 		realRoot = root
 	}
-	var out []string
+	untracked := map[string]bool{}
 	for _, rel := range strings.Split(list, "\x00") {
-		if rel == "" {
+		if rel != "" {
+			untracked[rel] = true
+		}
+	}
+	// What a link points at is read from the temporary index (its blob), the content write-tree is about to take, not from the live
+	// working tree, which may have changed since `add -A`.
+	staged, err := runIn(idx, "", append(tempIndexConfig(), "ls-files", "-s", "-z")...)
+	if err != nil {
+		return nil, fmt.Errorf("listing the temporary index: %w", err)
+	}
+	var out []string
+	for _, ent := range strings.Split(staged, "\x00") { // "<mode> <sha> <stage>\t<path>"
+		meta, rel, ok := strings.Cut(ent, "\t")
+		if !ok || !untracked[rel] {
 			continue
 		}
-		full := filepath.Join(root, rel)
-		if fi, err := os.Lstat(full); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		f := strings.Fields(meta)
+		if len(f) != 3 || f[0] != "120000" {
 			continue
 		}
-		if linkLeavesRepo(realRoot, full, rel) {
+		target, err := runIn(idx, "", "cat-file", "blob", f[1])
+		if err != nil {
+			return nil, fmt.Errorf("reading the symlink %s: %w", rel, err)
+		}
+		if linkLeavesRepo(realRoot, filepath.Join(root, rel), rel, target) {
 			out = append(out, rel)
 		}
 	}
@@ -316,11 +333,7 @@ func dropOutsideLinks(run gitRunFn, runIn func(env []string, stdin string, args 
 // linkLeavesRepo says whether the symlink full (rel to the repository) points out of realRoot: an absolute target, a target that
 // climbs out of the repository by its text, or a path that resolves outside through other links. A link that points at nothing but
 // stays inside is not out.
-func linkLeavesRepo(realRoot, full, rel string) bool {
-	target, err := os.Readlink(full)
-	if err != nil {
-		return false
-	}
+func linkLeavesRepo(realRoot, full, rel, target string) bool {
 	if filepath.IsAbs(target) || !filepath.IsLocal(filepath.Join(filepath.Dir(rel), target)) {
 		return true
 	}
