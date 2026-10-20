@@ -1,7 +1,7 @@
 // spa/src/lib/pool/host-looks.ts — a pool host's look and order for the monitoring screens (monitoring tabs spec A3, M9, M13, W7).
 // A pool host is keyed by the wwd `host_id`. Its colour and icon live where the rest of the App already reads them: a host with a daemon in the Purdex host's look
 // (`useHostLookStore`, through `lib/host-look.ts` — the tab badge shows the same one); a host without one, and every indicator, in `usePoolHostsStore`.
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { lookKeyOf, useHostStore } from '../../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry } from '../../stores/useHostLookStore'
 import { usePoolHostsStore, type PoolHostIndicator, type PoolHostLook } from '../../stores/usePoolHostsStore'
@@ -62,18 +62,28 @@ function compose(base: HostLook | PoolHostLook | undefined, indicator: PoolHostI
 const hasFace = (l: Pick<HostLook, 'colors' | 'color' | 'icon' | 'iconWeight'> | undefined): boolean =>
   l !== undefined && (l.colors !== undefined || l.color !== undefined || l.icon !== undefined || l.iconWeight !== undefined)
 
-export function usePoolHostLook(hostId: string): PoolHostResolvedLook {
-  // The owner is the host that has been seen to front this wwd, connected or not: where the look lives must not flip with a reconnect.
-  const owner = usePoolHostOwners()[hostId]
+/**
+ * For lists (a hook cannot run in a loop): a resolver over the owners, the host looks, the pool store's looks and the global indicator default, stable while they are.
+ * The owner is the host that has been seen to front this wwd, connected or not: where the look lives must not flip with a reconnect.
+ */
+export function usePoolHostLookResolver(): (hostId: string) => PoolHostResolvedLook {
+  const owners = usePoolHostOwners()
   const resolve = useHostLookResolver()
-  const stored = usePoolHostsStore((s) => (Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
+  const looks = usePoolHostsStore((s) => s.looks)
   const global = useUISettingsStore((s) => s.fleetCellIndicator)
-  return useMemo(() => {
+  return useCallback((hostId: string) => {
+    const stored = Object.hasOwn(looks, hostId) ? looks[hostId] : undefined
+    const owner = owners[hostId]
     const fromHost = owner !== undefined ? resolve(owner) : undefined
     // A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one.
     const base = fromHost !== undefined && hasFace(fromHost) ? fromHost : stored
     return compose(base, indicatorOf(stored, global))
-  }, [owner, resolve, stored, global])
+  }, [owners, resolve, looks, global])
+}
+
+export function usePoolHostLook(hostId: string): PoolHostResolvedLook {
+  const resolve = usePoolHostLookResolver()
+  return useMemo(() => resolve(hostId), [resolve, hostId])
 }
 
 function applyField<K extends keyof HostLookEntry>(next: Record<string, unknown>, key: K, value: HostLookEntry[K] | null | undefined) {
