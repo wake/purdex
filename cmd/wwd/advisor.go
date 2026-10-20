@@ -34,15 +34,42 @@ type advisorInputs struct {
 	Peers       []daemon.PeerConfig
 	Downs       func() []daemon.PeerDown
 	PartnerSeen func() time.Time
+	// Watch is the [advisor] section: which of the watcher's three pressure rules this host judges (watch_rules, off) and the swap growth
+	// threshold. SampleSignal is signalled, without blocking, at every new sample: pressure danger is judged on it.
+	Watch        daemon.AdvisorRule
+	SampleSignal <-chan struct{}
 }
 
 // advisorRules are the rules this build judges (spec §13.3 except silence, thrash's broker hand-off and the incidents of 8b); the live
 // evaluator and the replay run the same list.
-func advisorRules(known []string) []advisor.Rule {
-	return []advisor.Rule{
+func advisorRules(known []string, watch daemon.AdvisorRule) []advisor.Rule {
+	rs := []advisor.Rule{
 		advisor.DiskLow{}, advisor.DiskFalling{}, advisor.WorkerCrashLoop{},
 		advisor.PressureHeld{}, advisor.Thrash{}, advisor.ResidentGrowth{Known: known}, advisor.MservService{}, advisor.Orphans{},
 	}
+	// the watcher's three pressure rules (S3-2) write a level and kinds an older reader refuses whole: only where [advisor] watch_rules is on
+	if watch.WatchRuleOn(wire.AlertPressureWatch) {
+		rs = append(rs, advisor.PressureWatch{})
+	}
+	if watch.WatchRuleOn(wire.AlertPressureDanger) {
+		rs = append(rs, advisor.PressureDanger{})
+	}
+	if watch.WatchRuleOn(wire.AlertSwapGrowth) {
+		rs = append(rs, advisor.SwapGrowth{ThresholdMB: watch.SwapGrowthMB})
+	}
+	return rs
+}
+
+// retiredWatchKeys are the alert keys of the watcher's rules this host does not judge: the evaluator clears them if they stand, so turning
+// watch_rules off (or listing a rule in `off`) leaves no alert of the new kinds behind (docs/wwd-deploy.md §15).
+func retiredWatchKeys(watch daemon.AdvisorRule) []string {
+	var out []string
+	for _, k := range []wire.AlertKind{wire.AlertPressureWatch, wire.AlertPressureDanger, wire.AlertSwapGrowth} {
+		if !watch.WatchRuleOn(k) {
+			out = append(out, string(k))
+		}
+	}
+	return out
 }
 
 // silenceRules are the silence rules of spec §13.3 that this host runs: one per peer that has alert_unreachable on, and the partner check
@@ -65,26 +92,39 @@ func silenceRules(peers []daemon.PeerConfig, partner bool) []advisor.Rule {
 // facts sample and the start record are in before a rule looks.
 func runAdvisor(ctx context.Context, in advisorInputs) {
 	book := daemon.NewAlertBook(in.Store, in.Alias, in.Broker, nil)
-	input := func() (advisor.Input, bool) {
-		f, ok := in.Sampler.Latest()
-		if !ok {
-			return advisor.Input{}, false
-		}
-		return advisor.Input{
-			Now: time.Now(), Facts: f, WorkRoot: in.WorkRoot,
-			Minutes:     func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step1m) },
-			Recent:      in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
-			Orphans:     in.Orphans,
-			StartsSince: in.Store.StartsSince,
-		}, true
-	}
+	input := liveInput(in)
 	// the silence rules judge the pool and the partner, not the facts: they run on their own, so a host whose first facts sample never comes
 	// (a sampler that keeps failing) still tells that a peer or the Purdex daemon is gone
 	if rs := silenceRules(in.Peers, in.PartnerSeen != nil); len(rs) > 0 {
 		go advisor.NewEvaluator(book, silenceInput(in), log.Printf, rs...).Run(ctx)
 	}
 	// not behind the proto 2 writer gate (spec §13.1): an unreachable host must not silence the others' alerts
-	advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known)...).Run(ctx)
+	ev := advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known, in.Watch)...).WithRetired(retiredWatchKeys(in.Watch)...)
+	if in.SampleSignal != nil {
+		ev = ev.WithSampleSignal(in.SampleSignal) // the same goroutine judges the 30 s pass and the per-sample pass: they never write at once
+	}
+	ev.Run(ctx)
+}
+
+// liveInput is what the facts rules read on this host: the latest sample, the minute history, the sampler's own 5 s samples as read, the
+// process scan and the start log.
+func liveInput(in advisorInputs) func() (advisor.Input, bool) {
+	return func() (advisor.Input, bool) {
+		f, ok := in.Sampler.Latest()
+		if !ok {
+			return advisor.Input{}, false
+		}
+		inp := advisor.Input{
+			Now: time.Now(), Facts: f, WorkRoot: in.WorkRoot,
+			Minutes: func(since time.Time) []wire.Facts { return in.Sampler.History(since, wire.Step1m) },
+			Recent:  in.Sampler.LocalRecent, // as read, not as the proto 2 gate lets records out: alerts are not behind it
+			Orphans: in.Orphans,
+		}
+		if in.Store != nil {
+			inp.StartsSince = in.Store.StartsSince
+		}
+		return inp, true
+	}
 }
 
 // silenceInput is what the silence rules read: the pool's view of the peers and the partner's last read, with no facts.
@@ -190,7 +230,8 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 	if *known != "" {
 		knownList = strings.Split(*known, ",")
 	}
-	rules := advisorRules(knownList)
+	// the replay counts the watcher's rules as if they were on (the pressure ones need the 5 s samples a replay does not have: unjudged)
+	rules := advisorRules(knownList, daemon.AdvisorRule{WatchRules: true})
 	res := advisor.Replay(recs, starts, *root, rules...)
 	span := recs[len(recs)-1].At.Sub(recs[0].At)
 	fmt.Printf("replayed %d minutes (%.1f days) from %s to %s, %d starts\n", len(recs), span.Hours()/24,

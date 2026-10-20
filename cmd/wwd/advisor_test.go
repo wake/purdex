@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/advisor"
+	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -12,7 +13,7 @@ import (
 func TestAdvisorRulesListsEachRuleOnceWithItsKnownResidents(t *testing.T) {
 	seen := map[wire.AlertKind]bool{}
 	var growth advisor.ResidentGrowth
-	for _, r := range advisorRules([]string{"OrbStack Helper"}) {
+	for _, r := range advisorRules([]string{"OrbStack Helper"}, daemon.AdvisorRule{}) {
 		k := r.Kind()
 		if !k.Valid() || seen[k] {
 			t.Fatalf("kind %q is invalid or listed twice", k)
