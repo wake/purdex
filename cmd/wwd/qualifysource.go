@@ -41,7 +41,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 		if !ok {
 			continue
 		}
-		var path string
+		var path, commit string
 		var b []byte
 		if s.mrefs != nil && s.mrefs.Configured(repo) {
 			snap, got := s.mrefs.Get(repo)
@@ -49,7 +49,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 				errs = append(errs, fmt.Errorf("%s: its manifest_ref has not been read yet", repo))
 				continue
 			}
-			path, b, ok = "the manifest_ref of "+repo+" ("+snap.Commit+")", snap.Manifest, true
+			path, b, ok, commit = "the manifest_ref of "+repo+" ("+snap.Commit+")", snap.Manifest, true, snap.Commit
 		} else {
 			path, b, ok = readManifest(root)
 		}
@@ -79,7 +79,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 			}
 			out = append(out, qualify.Task{
 				Repo: repo, Name: name, Reference: t.Qualify.Reference, Args: args,
-				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(),
+				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(), Commit: commit,
 			})
 		}
 	}
@@ -94,16 +94,13 @@ func (s *qualifySource) Prepare(ctx context.Context, t qualify.Task) (wire.JobSu
 	if !ok {
 		return wire.JobSubmission{}, fmt.Errorf("%s has no prepared clone on this host", t.Repo)
 	}
-	var commit string // "": the working tree, as before; a repo with a manifest_ref: the commit it names, the one its manifest was read at
-	if s.mrefs != nil && s.mrefs.Configured(t.Repo) {
-		snap, got := s.mrefs.Get(t.Repo)
-		if !got {
-			return wire.JobSubmission{}, fmt.Errorf("%s: its manifest_ref has not been read yet", t.Repo)
-		}
-		commit = snap.Commit
+	// "": the working tree, as before. A repo with a manifest_ref is snapshotted at the commit Tasks listed the task at (t.Commit), not at what the
+	// ref names now: the ref may have moved on in between, and the definition hash below does not cover everything a commit can change.
+	if s.mrefs != nil && s.mrefs.Configured(t.Repo) && t.Commit == "" {
+		return wire.JobSubmission{}, fmt.Errorf("%s/%s was not listed at a manifest_ref commit: ask again", t.Repo, t.Name)
 	}
 	p, err := submit.Prepare(ctx, submit.Request{
-		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git, Commit: commit,
+		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git, Commit: t.Commit,
 		Submitter: wire.Submitter{Session: qualify.SessionName},
 	})
 	if err != nil {

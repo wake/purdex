@@ -76,6 +76,46 @@ func TestPrepareSnapshotsTheCommitOfTheRefAndItsDefHashMatchesTasks(t *testing.T
 	assert.Equal(t, tsc.DefHash, sub.DefHash)
 }
 
+// The pair is bound to the commit its Tasks() entry was read at (#3673 R2): when the ref moves on in between, to a commit whose task definition
+// hash is the same but whose manifest differs elsewhere (labels, qualify), Prepare still snapshots the commit Tasks saw.
+func TestPrepareKeepsTheCommitTasksSawWhenTheRefMovesOn(t *testing.T) {
+	root, head, qs, _, mr := refSources(t)
+	ctx := context.Background()
+	require.NoError(t, mr.Refresh(ctx, "purdex"))
+	tasks, err := qs.Tasks()
+	require.NoError(t, err)
+	var tsc qualify.Task
+	for _, tk := range tasks {
+		if tk.Name == "tsc" {
+			tsc = tk
+		}
+	}
+	require.Equal(t, head, tsc.Commit)
+	// a new commit: the same tsc definition, a different timeout/labels line elsewhere in the task (not part of the definition hash)
+	changed := strings.Replace(qualifyManifest, `labels  = ["os:darwin", "tool:node24", "repo:purdex", "task:purdex/tsc"]`, `labels  = ["os:darwin", "tool:node24", "tool:extra", "repo:purdex", "task:purdex/tsc"]`, 1)
+	require.NotEqual(t, qualifyManifest, changed)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte(changed), 0o644))
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "moved"}} {
+		out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	require.NoError(t, mr.Refresh(ctx, "purdex"))
+	moved, ok := mr.Get("purdex")
+	require.True(t, ok)
+	require.NotEqual(t, head, moved.Commit, "the ref moved")
+
+	sub, err := qs.Prepare(ctx, tsc)
+	require.NoError(t, err)
+	assert.Equal(t, head, sub.Snapshot.Commit, "the pair runs the commit Tasks listed, not whatever the ref says now")
+}
+
+func TestPrepareOfARefRepoWithoutACommitIsRefused(t *testing.T) {
+	_, _, qs, _, mr := refSources(t)
+	require.NoError(t, mr.Refresh(context.Background(), "purdex"))
+	_, err := qs.Prepare(context.Background(), qualify.Task{Repo: "purdex", Name: "tsc", Args: []string{}})
+	require.Error(t, err, "a task of a ref repo that carries no commit was not listed through the ref")
+}
+
 func TestPrepareWithoutASnapshotOfTheRefIsRefused(t *testing.T) {
 	_, _, qs, _, _ := refSources(t)
 	_, err := qs.Prepare(context.Background(), qualify.Task{Repo: "purdex", Name: "tsc", Args: []string{}})

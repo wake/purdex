@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,14 +101,18 @@ func (s *Source) Refresh(ctx context.Context, repo string) error {
 	}
 	commit := strings.TrimSpace(string(out))
 	// only a plain file: a symlink in the committed tree could name anything on this host
-	out, err = s.run(ctx, root, "ls-tree", commit, "--", ManifestPath)
+	out, err = s.run(ctx, root, "ls-tree", "-l", commit, "--", ManifestPath)
 	if err != nil {
 		return err
 	}
 	meta, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
-	fields := strings.Fields(meta) // mode type oid
-	if len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
+	fields := strings.Fields(meta) // mode type oid size
+	if len(fields) != 4 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
 		return fmt.Errorf("%s: %s at %s is missing or not a regular file", repo, ManifestPath, commit)
+	}
+	// the size comes from the listing, so a huge blob is refused before any of it is read into memory
+	if size, err := strconv.Atoi(fields[3]); err != nil || size > MaxBytes {
+		return fmt.Errorf("%s: %s at %s is larger than %d bytes (or its size is unreadable: %q)", repo, ManifestPath, commit, MaxBytes, fields[3])
 	}
 	b, err := s.run(ctx, root, "cat-file", "blob", fields[2])
 	if err != nil {

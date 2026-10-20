@@ -203,6 +203,26 @@ func TestATooLargeManifestIsRefused(t *testing.T) {
 	}
 }
 
+// The size is checked from the tree listing, before the blob is read (#3673 R2): a ref at a huge manifest must not make wwd read it into memory.
+func TestATooLargeManifestIsNeverRead(t *testing.T) {
+	origin, _, src := fixture(t)
+	commitManifest(t, origin, strings.Repeat("x", MaxBytes+1))
+	script := filepath.Join(t.TempDir(), "git-no-cat-file")
+	body := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = cat-file ] && { echo 'cat-file was called' >&2; exit 99; }; done\nexec git \"$@\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src.git = script
+	ctx := context.Background()
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	err := src.Refresh(ctx, "purdex")
+	if err == nil || strings.Contains(err.Error(), "cat-file was called") {
+		t.Fatalf("an oversize manifest must be refused from its listed size, without reading it: %v", err)
+	}
+}
+
 func TestRunRefreshesAtOnceAndThenAfterEachFetch(t *testing.T) {
 	origin, _, src := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
