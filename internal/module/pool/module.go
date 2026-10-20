@@ -81,7 +81,7 @@ type Module struct {
 	// first read and while wwd cannot be read. Under mu.
 	self *wire.Info
 	// hosts is the aliases of the local wwd's pool as the watch last read it, this host first; the alerts watch asks about each (under mu).
-	hosts       []string
+	hosts       *poolHosts
 	alertsEvery time.Duration // how often every host's alerts are read (watchAlerts)
 	alertKick   chan struct{} // the local wwd's `alert` event: read the local host's alerts now (capacity 1)
 }
@@ -155,7 +155,12 @@ func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel, m.done, m.watching = cancel, done, true
-	m.self = nil // the new watch has not read wwd yet; the socket may be another wwd's than the last run's
+	m.self = nil  // the new watch has not read wwd yet; the socket may be another wwd's than the last run's
+	m.hosts = nil // nor has it read the pool the alerts watch asks about: the last run's hosts are not this run's
+	select {      // an alert event of the last run is not one of this run's
+	case <-m.alertKick:
+	default:
+	}
 	if m.core != nil {
 		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
 	}

@@ -85,21 +85,39 @@ func alertsPrint(list []wire.Alert, known bool) string {
 	return string(b)
 }
 
-// setHosts remembers the aliases of the local wwd's pool, this host first (wwd lists it first), for the alerts watch to read.
+// poolHosts is the hosts of one read of the local wwd's pool: the local host (its first peer, wwd lists this host first) and the others,
+// each alias once. They come from the same read, so which one is local always belongs to the list it is in.
+type poolHosts struct {
+	local  string
+	others []string
+}
+
+// setHosts remembers the hosts of the local wwd's pool, for the alerts watch to read.
 func (m *Module) setHosts(p wire.Pool) {
-	hosts := make([]string, 0, len(p.Peers))
-	for _, peer := range p.Peers {
-		hosts = append(hosts, peer.Info.Alias)
+	h := &poolHosts{others: []string{}}
+	seen := map[string]bool{}
+	for i, peer := range p.Peers {
+		a := peer.Info.Alias
+		if seen[a] { // an alias is one host: the local host's name among the peers, or a peer twice, is asked about once
+			continue
+		}
+		seen[a] = true
+		if i == 0 {
+			h.local = a
+			continue
+		}
+		h.others = append(h.others, a)
 	}
 	m.mu.Lock()
-	m.hosts = hosts
+	m.hosts = h
 	m.mu.Unlock()
 }
 
-func (m *Module) poolHosts() []string {
+// currentHosts is the hosts of the last read of the pool, nil before the first of this run.
+func (m *Module) currentHosts() *poolHosts {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]string(nil), m.hosts...)
+	return m.hosts
 }
 
 // watchAlerts reads every host's alert list every m.alertsEvery until ctx ends and announces alerts.changed for a host whose list differs
@@ -168,25 +186,31 @@ const (
 // alertsPass reads the hosts' alerts once (only the local host's when localOnly) and announces what changed. recovered is true for the
 // first pass after the local wwd was away: every host that was known and is there now is announced.
 func (m *Module) alertsPass(ctx context.Context, known map[string]string, recovered, localOnly bool) (passResult, error) {
-	hosts := m.poolHosts()
-	if len(hosts) == 0 {
+	hosts := m.currentHosts()
+	if hosts == nil {
 		return passNoPool, nil
 	}
+	// the local host first (asked without a host: the local wwd answers for itself), then the others by their alias; a pool without
+	// any host (it can be read, and names no one) asks nothing and, in a whole pass, lets every host looked at before leave
+	var order []string
+	if hosts.local != "" {
+		order = append(order, hosts.local)
+	}
+	if !localOnly {
+		order = append(order, hosts.others...)
+	}
 	now := map[string]string{}
-	for i, alias := range hosts {
-		if localOnly && i > 0 {
-			break
-		}
+	for _, alias := range order {
 		ask := alias
-		if i == 0 {
-			ask = "" // this host itself: the local wwd answers for it
+		if alias == hosts.local {
+			ask = ""
 		}
 		list, known, err := m.client().Alerts(ctx, ask)
 		if err != nil {
 			if ctx.Err() != nil {
 				return passCanceled, nil
 			}
-			if i == 0 {
+			if alias == hosts.local {
 				return passAway, err
 			}
 			continue // a peer that could not be read: its last look stands
@@ -201,8 +225,8 @@ func (m *Module) alertsPass(ctx context.Context, known map[string]string, recove
 		known[alias] = fp
 	}
 	if !localOnly {
-		still := map[string]bool{}
-		for _, a := range hosts {
+		still := map[string]bool{hosts.local: true}
+		for _, a := range hosts.others {
 			still[a] = true
 		}
 		for alias := range known {

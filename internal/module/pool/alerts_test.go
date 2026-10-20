@@ -472,3 +472,61 @@ func countOf(list []string, s string) int {
 	}
 	return c
 }
+
+// A pool that can still be read but names no host lets every host looked at before leave: each is announced once and forgotten, and the
+// watch carries on (a later pool with hosts is a new baseline, not news).
+func TestAlertsWatch_AnEmptyPoolLetsEveryHostLeave(t *testing.T) {
+	la := newLiveAlerts(t)
+	_, n := watchingAlerts(t, la)
+	time.Sleep(3 * testAlertsEvery) // baselines for mlab and air19
+	require.Empty(t, n.hosts())
+
+	la.change(func(p *wire.Pool) { p.Peers = nil })
+	require.Eventually(t, func() bool { return len(n.hosts()) == 2 }, 3*time.Second, testPoll)
+	assert.ElementsMatch(t, []string{"mlab", "air19"}, n.hosts())
+	time.Sleep(3 * testAlertsEvery)
+	assert.Len(t, n.hosts(), 2, "once each, not at every turn")
+}
+
+// An alias is one host: the local host's name listed again among the peers, or a peer twice, is asked about once, and the local host is
+// the one asked without a host whatever else the pool lists.
+func TestAlertsWatch_AnAliasIsAskedAboutOnce(t *testing.T) {
+	la := newLiveAlerts(t)
+	la.change(func(p *wire.Pool) {
+		again := p.Peers[1]
+		dupLocal := p.Peers[0]
+		p.Peers = append(p.Peers, again, dupLocal) // air19 twice, mlab (the local one) among the peers
+	})
+	_, _ = watchingAlerts(t, la, func(m *Module) { m.alertsEvery = time.Hour }) // one pass only
+	require.Eventually(t, func() bool { return len(la.askedHosts()) >= 2 }, 3*time.Second, testPoll)
+	time.Sleep(3 * testAlertsEvery)
+	asked := la.askedHosts()
+	assert.ElementsMatch(t, []string{"", "air19"}, asked, "the local host once without a host, air19 once, mlab never by name")
+}
+
+// A restart does not read the last run's hosts: until its own watch has read the pool, the alerts watch asks no one.
+func TestAlertsWatch_StartDoesNotAskTheLastRunsHosts(t *testing.T) {
+	la := newLiveAlerts(t)
+	hung := make(chan struct{})
+	t.Cleanup(func() { close(hung) })
+	h := la.handler()
+	m := New()
+	m.cl = fakeWWD(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/pool" { // the new run's pool read does not come back
+			select {
+			case <-hung:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	m.pollEvery, m.mergeWithin, m.alertsEvery = testPoll, 20*time.Millisecond, testAlertsEvery
+	m.logf = func(string, ...any) {}
+	m.hosts = &poolHosts{local: "stale", others: []string{"gone"}} // what the last run left
+	m.alertKick <- struct{}{}                                      // and an alert event it had not answered
+	require.NoError(t, m.Start(context.Background()))
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	time.Sleep(4 * testAlertsEvery)
+	assert.Empty(t, la.askedHosts(), "no alert read from the last run's topology")
+}
