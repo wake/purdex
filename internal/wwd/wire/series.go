@@ -25,6 +25,33 @@ type SeriesPoint struct {
 	PageOutRate    *float64  `json:"page_out_rate"`
 	DiskMaxUsedPct *float64  `json:"disk_max_used_pct"` // null when the record names no disk
 	Headroom       Slots     `json:"headroom"`
+
+	// What a record already carries, cut down for a chart (spec §2.3). Each is null when the record does not say.
+	Load1          *float64     `json:"load1"`
+	Load5          *float64     `json:"load5"`
+	SwapUsedMB     *int         `json:"swap_used_mb"`
+	CompressorMB   *int         `json:"compressor_mb"`
+	SwapOutRate    *float64     `json:"swap_out_rate"`
+	DecompressRate *float64     `json:"decompress_rate"`
+	WorkerRunning  *Slots       `json:"worker_running"`
+	QueueQueued    *int         `json:"queue_queued"`
+	Disks          []SeriesDisk `json:"disks"`
+}
+
+// SeriesDisk is one volume of a point: used_pct for the line, free_gb for the disk_min_gb threshold line.
+type SeriesDisk struct {
+	Mount   string  `json:"mount"`
+	UsedPct float64 `json:"used_pct"`
+	FreeGB  float64 `json:"free_gb"`
+}
+
+// copyPtr gives a point its own copy, so it never points into the record it was cut from.
+func copyPtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // FactsSeriesResponse is the answer: the step that was served, the points oldest first, and Truncated when the oldest ones were left
@@ -97,6 +124,16 @@ func SeriesOf(h FactsHistoryResponse, limit int) FactsSeriesResponse {
 		p := SeriesPoint{
 			At: f.At, Zone: f.Derived.Zone, CPUIdlePct: f.CPU.IdlePct, MemAvailableMB: f.Mem.AvailableMB, Pressure: f.Mem.Pressure,
 			PageOutRate: f.Mem.PageOutRate, Headroom: f.Derived.Headroom,
+		}
+		load1, load5, running := f.CPU.Load1, f.CPU.Load5, f.Worker.Running
+		p.Load1, p.Load5, p.WorkerRunning = &load1, &load5, &running
+		p.SwapUsedMB, p.CompressorMB = copyPtr(f.Mem.SwapUsedMB), copyPtr(f.Mem.CompressorMB)
+		p.SwapOutRate, p.DecompressRate = copyPtr(f.Mem.SwapOutRate), copyPtr(f.Mem.DecompressRate)
+		if f.Queue != nil {
+			p.QueueQueued = copyPtr(&f.Queue.Queued)
+		}
+		for _, d := range f.Disk {
+			p.Disks = append(p.Disks, SeriesDisk{Mount: d.Mount, UsedPct: d.UsedPct, FreeGB: d.FreeGB})
 		}
 		for i, d := range f.Disk {
 			if i == 0 || d.UsedPct > *p.DiskMaxUsedPct {
