@@ -95,7 +95,10 @@ describe('usePoolHostsStore', () => {
       expect(sanitizePoolHostLook({ indicator: { shape: 'pie', data: ['cpu'] } })).toEqual({})
       expect(sanitizePoolHostLook({ indicator: { shape: 'ring', data: [] } })).toEqual({})
       expect(sanitizePoolHostLook({ indicator: { shape: 'ring', data: ['bogus'] } })).toEqual({})
-      expect(sanitizePoolHostLook({ indicator: { shape: 'bars', data: ['cpu', 'bogus'] } })).toEqual({ indicator: { shape: 'bars', data: ['cpu', 'pressure'] } })
+      // a malformed list is dropped whole, not rewritten into a different metric (codex R1)
+      expect(sanitizePoolHostLook({ indicator: { shape: 'bars', data: ['cpu', 'bogus'] } })).toEqual({})
+      expect(sanitizePoolHostLook({ indicator: { shape: 'ring', data: ['load', 'bogus'] } })).toEqual({})
+      expect(sanitizePoolHostLook({ indicator: { shape: 'bars', data: ['cpu', 'mem', 'disk'] } })).toEqual({})
     })
   })
 

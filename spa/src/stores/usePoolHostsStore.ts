@@ -52,10 +52,11 @@ const isItem = (v: unknown): v is IndicatorItem => (ITEMS as readonly unknown[])
 function sanitizeIndicator(raw: unknown): PoolHostIndicator | null {
   if (!isRecord(raw) || !(SHAPES as readonly unknown[]).includes(raw.shape) || !Array.isArray(raw.data)) return null
   const shape = raw.shape as IndicatorShape
-  const first = raw.data[0]
-  if (!isItem(first)) return null
+  // 1–2 items, every one recognised: a malformed list is dropped, never rewritten into a different metric.
+  if (raw.data.length < 1 || raw.data.length > 2 || !raw.data.every(isItem)) return null
+  const [first, second] = raw.data as IndicatorItem[]
   if (shape !== 'bars') return { shape, data: [first] }
-  return { shape, data: [first, isItem(raw.data[1]) ? raw.data[1] : 'pressure'] }
+  return { shape, data: [first, second ?? 'pressure'] }
 }
 
 /** An untrusted look: the `HostLookEntry` fields (sanitised as `useHostLookStore` does) without `name`, plus a valid `indicator`. `null` when not a record. */
