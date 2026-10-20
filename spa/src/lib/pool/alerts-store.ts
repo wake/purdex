@@ -83,6 +83,7 @@ function sync(): void {
   const aliases = listed()
   if (sourceChanged) {
     gen++
+    latest.clear()
     useAlertsStore.setState({ source, byHost: Object.fromEntries(Object.entries(useAlertsStore.getState().byHost).filter(([a]) => aliases.includes(a))) })
     readAll(source)
     return
@@ -90,6 +91,7 @@ function sync(): void {
   const have = useAlertsStore.getState().byHost
   const kept = Object.fromEntries(Object.entries(have).filter(([a]) => aliases.includes(a)))
   if (Object.keys(kept).length !== Object.keys(have).length) useAlertsStore.setState({ byHost: kept })
+  for (const alias of [...latest.keys()]) if (!aliases.includes(alias)) latest.delete(alias)
   const token = gen
   for (const alias of aliases) if (!Object.hasOwn(kept, alias)) void readHost(source, alias, token)
 }
@@ -115,6 +117,9 @@ export function retainPoolAlerts(): () => void {
       stopWatching = null
       if (timer !== null) { clearInterval(timer); timer = null }
       gen++
+      // Forget the source and the sequences: what changed while nobody held it open is not known, so the next retain reads every host again (answers are kept to show meanwhile).
+      useAlertsStore.setState({ source: null })
+      latest.clear()
     }
   }
 }
@@ -134,6 +139,9 @@ export function alertsConnectionOpened(hostId: string): void {
   if (source !== null && source === hostId) readAll(source)
 }
 
+/** The key of a silence about a peer: `silence:<alias>`. Only a key of this shape is the same thing across hosts; any other silence belongs to the host whose list holds it. */
+const SILENCE_KEY = /^silence:\S+$/
+
 /** What the guardian still has open (spec M36's second half, MON-11 / S7, S8): 0 until the duty roster is wired in. */
 export const dutyOpenCount = (): number => 0
 
@@ -147,7 +155,7 @@ export function alertCountOf(byHost: Record<string, HostAlertsEntry>): number {
     if (e.kind !== 'ok') continue
     for (const a of e.alerts) {
       if (a.clearedAt !== null || a.level !== 'push') continue
-      open.add(a.kind === 'silence' ? a.key : `${alias}\u0000${a.key}`)
+      open.add(SILENCE_KEY.test(a.key) && a.kind === 'silence' ? a.key : `${alias}\u0000${a.key}`)
     }
   }
   return open.size + dutyOpenCount()

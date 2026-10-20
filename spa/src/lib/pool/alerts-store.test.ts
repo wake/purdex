@@ -178,6 +178,20 @@ describe('the alerts store — what it keeps', () => {
     const e = useAlertsStore.getState().byHost.mlab
     expect(e.kind === 'ok' && e.alerts.map((a) => a.key)).toEqual(['new'])
   })
+  it('release, something changes while nobody holds it, retain again: everything is read again', async () => {
+    setPool('src', ['mlab'])
+    setCaps('src', ['pool.v1', 'pool.alerts.v1'])
+    const first = retainPoolAlerts()
+    await flush()
+    first()
+    fetchMock().mockClear()
+    fetchMock().mockImplementation(async (_s, alias) => answer(alias, [alert('changed-meanwhile')]))
+    release = retainPoolAlerts()
+    await flush()
+    expect(calls()).toEqual(['src:mlab'])
+    const e = useAlertsStore.getState().byHost.mlab
+    expect(e.kind === 'ok' && e.alerts.map((a) => a.key)).toEqual(['changed-meanwhile'])
+  })
   it('a read that fails is an error entry with its code', async () => {
     fetchMock().mockRejectedValueOnce(Object.assign(new Error('x'), { poolError: { code: 'wwd_unavailable', action: 'backoff' } }))
     setPool('src', ['mlab'])
@@ -216,6 +230,11 @@ describe('alertCountOf (M36)', () => {
   })
   it('the spec example: both lists have silence:mserv, mlab has a disk_low push and a digest: 2', () => {
     expect(alertCountOf({ mlab: ok([silence('mserv'), alert('disk_low:mlab'), alert('orphans:mlab', { kind: 'orphans', level: 'digest' })]), air26: ok([silence('mserv')]) })).toBe(2)
+  })
+  it('only a key shaped silence:<alias> is one thing across hosts: a malformed silence is the host\'s own', () => {
+    expect(alertCountOf({ mlab: ok([alert('host_down', { kind: 'silence' })]), air26: ok([alert('host_down', { kind: 'silence' })]) })).toBe(2)
+    expect(alertCountOf({ mlab: ok([alert('silence:', { kind: 'silence' })]), air26: ok([alert('silence:', { kind: 'silence' })]) })).toBe(2)
+    expect(alertCountOf({ mlab: ok([alert('silence:a b', { kind: 'silence' })]), air26: ok([alert('silence:a b', { kind: 'silence' })]) })).toBe(2)
   })
   it('a host whose read failed counts none; no hosts is 0', () => {
     expect(alertCountOf({ mlab: { kind: 'error', code: 'wwd_unavailable', at: 1 } })).toBe(0)
