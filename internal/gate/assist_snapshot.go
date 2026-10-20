@@ -25,8 +25,18 @@ type SnapshotInfo struct {
 	Rel  string // the directory the command was run in, relative to Root ("." for the root)
 }
 
-// SnapshotTree commits the working tree of the repo that contains dir. git is the git program ("" = git).
-func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
+type gitRunFn func(env []string, args ...string) (string, error)
+
+// builtTree is the tree of the working directory taken in a temporary index, and the repo it belongs to.
+type builtTree struct {
+	tree, root string
+	run        gitRunFn
+}
+
+// buildTree takes the working tree of the repo that contains dir into a temporary index and writes its tree. With quarantine the
+// objects it writes (the blobs of changed and new files, the trees) go to a temporary object directory, with the repository's own as
+// an alternate to read from: the repository is not written to, and the tree id is the same.
+func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree, error) {
 	if git == "" {
 		git = "git"
 	}
@@ -46,25 +56,54 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 	run := func(env []string, args ...string) (string, error) { return runIn(env, "", args...) }
 	root, err := run(nil, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return SnapshotInfo{}, err
+		return builtTree{}, err
 	}
 	tmp, err := os.MkdirTemp("", "pdx-assist-index-")
 	if err != nil {
-		return SnapshotInfo{}, err
+		return builtTree{}, err
 	}
 	defer os.RemoveAll(tmp)
 	idxPath := filepath.Join(tmp, "index")
 	idx := []string{"GIT_INDEX_FILE=" + idxPath}
+	if quarantine {
+		objects, err := run(nil, "rev-parse", "--path-format=absolute", "--git-path", "objects")
+		if err != nil {
+			return builtTree{}, err
+		}
+		qdir := filepath.Join(tmp, "objects")
+		if err := os.Mkdir(qdir, 0o700); err != nil {
+			return builtTree{}, err
+		}
+		idx = append(idx, "GIT_OBJECT_DIRECTORY="+qdir, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+objects)
+	}
 	if err := seedIndex(run, runIn, idx, idxPath); err != nil {
-		return SnapshotInfo{}, err
+		return builtTree{}, err
 	}
 	if _, err := run(idx, append(tempIndexConfig(), "add", "-A", "--", root)...); err != nil {
-		return SnapshotInfo{}, err
+		return builtTree{}, err
 	}
 	tree, err := run(idx, append(tempIndexConfig(), "write-tree")...) // it writes the tree cache back into the index
 	if err != nil {
+		return builtTree{}, err
+	}
+	return builtTree{tree: tree, root: root, run: run}, nil
+}
+
+// WorkingTree is the tree of the working directory of the repo that contains dir, as it is now (uncommitted and untracked files
+// included, ignored ones left out): HEAD's tree when nothing differs. It writes nothing into the repository and leaves the caller's
+// index alone. git is the git program ("" = git).
+func WorkingTree(ctx context.Context, git, dir string) (string, error) {
+	b, err := buildTree(ctx, git, dir, true)
+	return b.tree, err
+}
+
+// SnapshotTree commits the working tree of the repo that contains dir. git is the git program ("" = git).
+func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
+	b, err := buildTree(ctx, git, dir, false)
+	if err != nil {
 		return SnapshotInfo{}, err
 	}
+	tree, root, run := b.tree, b.root, b.run
 	args := []string{"commit-tree", tree, "-m", "assist snapshot"}
 	if head, err := run(nil, "rev-parse", "-q", "--verify", "HEAD"); err == nil && head != "" {
 		args = append(args, "-p", head)

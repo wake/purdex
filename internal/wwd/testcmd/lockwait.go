@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/manifest"
 )
@@ -30,7 +31,7 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 	}
 	deadline := time.Now().Add(limit)
 	told := false
-	for {
+	for attempt := 0; ; attempt++ {
 		// one deadline for the lock and the slot together: the gate waits for what is left of it, not for a whole queue_timeout
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -40,6 +41,9 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 		t.QueueTimeout = remaining
 		r := req
 		r.Task = &t
+		if attempt > 0 && req.Body.Snapshot.Commit != "" { // waited: the record is of the directory as it is now
+			r.RetakeTree = func(ctx context.Context) (string, error) { return gate.WorkingTree(ctx, o.GitBin, o.Dir) }
+		}
 		res, err := fastlane.Run(ctx, r)
 		if !errors.Is(err, fastlane.ErrLocksBusy) && !errors.Is(err, fastlane.ErrSlotBusy) {
 			return res, err

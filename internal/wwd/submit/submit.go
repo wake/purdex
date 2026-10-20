@@ -77,6 +77,8 @@ type Prepared struct {
 	Task     *manifest.Task
 	Manifest *manifest.Manifest
 	Root     string // the repo's top level
+	// Note is something the caller should tell the user about the record ("" when there is nothing).
+	Note string
 }
 
 // WorkingManifest is the manifest of the repo that holds dir, read from the working tree (what `pdx test --list` shows). A
@@ -200,6 +202,17 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	note := ""
+	if req.Local {
+		// The record names HEAD, but the run is of the working tree: its tree is what the record holds, HEAD's when nothing differs.
+		// Never HEAD's tree for a tree that could not be taken: that would say a run was of a state it was not. The run goes on with
+		// no tree recorded, and says so.
+		if wt, werr := gate.WorkingTree(ctx, req.Git, req.Dir); werr != nil {
+			tree, note = "", fmt.Sprintf("the working tree could not be recorded (the record has no tree): %v", werr)
+		} else {
+			tree = wt
+		}
+	}
 	base := g.base(ctx, snap.SHA)
 	// The answers above came from req.Dir after the snapshot: if the path was pointed at another repository meanwhile, refuse.
 	// This is the last use of req.Dir, so the check covers every query.
@@ -231,7 +244,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err := sub.Validate(); err != nil {
 		return nil, err
 	}
-	return &Prepared{Body: sub, Task: task, Manifest: m, Root: root}, nil
+	return &Prepared{Body: sub, Task: task, Manifest: m, Root: root, Note: note}, nil
 }
 
 // adHocFree drops a supersede key for an undeclared command: nothing is known about what a newer one would replace.

@@ -79,6 +79,9 @@ func runFast(ctx context.Context, o Options, task *manifest.Task, req fastlane.R
 	if res.JobID == "" {
 		r.Notes = append(r.Notes, "this run was not recorded: wwd has no fast-lane entry yet")
 	}
+	if res.TreeNote != "" {
+		r.Notes = append(r.Notes, res.TreeNote)
+	}
 	if note != "" {
 		r.Notes = append(r.Notes, note)
 	}
