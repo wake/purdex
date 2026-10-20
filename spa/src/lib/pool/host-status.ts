@@ -126,3 +126,80 @@ export function tagsOf(pool: PoolHost, facts: PoolFacts | null): Tags {
     fingerprint: Object.entries(pool.fingerprint ?? {}).map(([name, value]) => ({ name, value })),
   }
 }
+
+// ---- Every field of the record -------------------------------------------------------------------------------------------------------------------------------
+
+/** One line of the facts table: the field's name as the wire has it, and its value as text. `value` null: the field is not there (drawn as a faint null, never 0). `wordKey` (with `wordParams`) is a word the component draws with it. */
+export interface FactRow { key: string; value: string | null; wordKey?: string; wordParams?: Record<string, string | number> }
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+const hms = (ms: number): string => { const d = new Date(ms); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}` }
+const dayTime = (ms: number): string => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` }
+const f1 = (n: number): string => n.toFixed(1)
+const orNull = (n: number | null | undefined, fmt: (x: number) => string = String): string | null => (n === null || n === undefined ? null : fmt(n))
+const nullable = (n: number | null | undefined, fmt: (x: number) => string = String): string => orNull(n, fmt) ?? 'null'
+const wordList = (codes: readonly string[]): string => `[${codes.join(', ')}]`
+
+/**
+ * Every field of the record, in the design's order (`page.js` factRows), then the host-metrics fields of 768 (G-2 to G-4) and the host row's own. The values are text; the words that go with a few of them are keys (`wordKey`).
+ */
+export function factRowsOf(pool: PoolHost, facts: PoolFacts): FactRow[] {
+  const m = facts.mem
+  const c = facts.cpu
+  const rows: FactRow[] = [
+    { key: 'v・host_id・alias', value: `${facts.v}・${facts.host_id}・${facts.alias}` },
+    { key: 'at', value: hms(facts.at) },
+    { key: 'platform・arch・os_version', value: `${facts.platform}・${facts.arch}・${facts.os_version}` },
+    { key: 'cpu.ncpu', value: String(c.ncpu) },
+    { key: 'cpu.idle_pct', value: `${f1(c.idle_pct)}%` },
+    { key: 'cpu.load1・load5', value: `${f1(c.load1)}・${f1(c.load5)}` },
+    { key: 'cpu.load15', value: orNull(c.load15, f1) },
+    { key: 'cpu.user_pct・system_pct', value: c.user_pct === undefined && c.system_pct === undefined ? null : `${nullable(c.user_pct, (x) => `${f1(x)}%`)}・${nullable(c.system_pct, (x) => `${f1(x)}%`)}` },
+    coresRow(c.cores),
+    { key: 'mem.total_mb', value: String(m.total_mb) },
+    { key: 'mem.available_mb', value: String(m.available_mb) },
+    { key: 'mem.pressure', value: String(m.pressure), wordKey: `pool.level.${m.pressure}` },
+    { key: 'mem.page_out_rate', value: orNull(m.page_out_rate, f1) },
+    { key: 'mem.swap_out_rate', value: orNull(m.swap_out_rate, f1) },
+    { key: 'mem.swap_used_mb', value: orNull(m.swap_used_mb) },
+    { key: 'mem.compressor_mb', value: orNull(m.compressor_mb) },
+    { key: 'mem.decompress_rate', value: orNull(m.decompress_rate, f1) },
+    { key: 'mem.psi', value: m.psi ? `some10 ${m.psi.some10}・full10 ${m.psi.full10}・some60 ${m.psi.some60}` : null },
+    { key: 'mem.swap_total_mb', value: orNull(m.swap_total_mb) },
+    { key: 'mem.wired_mb', value: orNull(m.wired_mb) },
+    { key: 'mem.active_mb', value: orNull(m.active_mb) },
+    { key: 'mem.inactive_mb', value: orNull(m.inactive_mb) },
+    { key: 'mem.file_cache_mb', value: orNull(m.file_cache_mb) },
+    ...facts.disk.map((d, i): FactRow => ({ key: `disk[${i}] ${d.mount}`, value: `${f1(d.used_pct)}%・${f1(d.free_gb)} GB／${Math.round(d.total_bytes / 1e9)} GB` })),
+    ...(facts.disk_io ?? []).map((d, i): FactRow => ({ key: `disk_io[${i}] ${d.device}`, value: [d.read_bps, d.write_bps, d.read_iops, d.write_iops].map((x) => nullable(x)).join('・') })),
+    { key: 'procs[]', value: String(facts.procs.length) },
+    { key: 'residents[]', value: `${facts.residents.length}・${facts.residents.reduce((n, r) => n + r.count, 0)}・${facts.residents.reduce((n, r) => n + r.mem_mb, 0)}` },
+    { key: 'tools', value: String(Object.keys(facts.tools).length) },
+    { key: 'owner', value: facts.owner ? `active ${facts.owner.active}・idle_s ${facts.owner.idle_s}・${facts.owner.reason}` : null },
+    { key: 'exceptions[]', value: facts.exceptions.length > 0 ? facts.exceptions.map((e) => e.name).join('、') : '[]' },
+    { key: 'derived.zone', value: facts.derived.zone },
+    { key: 'derived.headroom', value: `heavy ${facts.derived.headroom.heavy}・light ${facts.derived.headroom.light}` },
+    { key: 'derived.sessions_room', value: String(facts.derived.sessions_room) },
+    { key: 'worker.enabled・slots・running', value: `${facts.worker.enabled}・${facts.worker.slots.heavy}/${facts.worker.slots.light}・${facts.worker.running.heavy}/${facts.worker.running.light}` },
+    { key: 'worker.owner_rule', value: facts.worker.owner_rule === '' ? '""' : facts.worker.owner_rule },
+    { key: 'queue.queued', value: orNull(facts.queue?.queued) },
+    { key: 'procs_total', value: orNull(facts.procs_total) },
+    { key: 'boot_at', value: orNull(facts.boot_at, dayTime) },
+    { key: 'self', value: facts.self ? `${nullable(facts.self.cpu_pct, f1)}・${nullable(facts.self.rss_mb)}` : null },
+    { key: 'info.labels・fingerprint', value: `${pool.labels.length}・${Object.keys(pool.fingerprint ?? {}).length}` },
+    { key: 'headroom_reasons', value: pool.headroom_reasons ? `heavy ${wordList(pool.headroom_reasons.heavy)}・light ${wordList(pool.headroom_reasons.light)}` : null },
+    { key: 'load', value: pool.load ? `score ${f1(pool.load.score)}・driver ${pool.load.driver}` : null },
+    { key: 'reachable', value: String(pool.reachable) },
+    { key: 'liveness・_at・_since', value: pool.liveness === undefined ? null : `${pool.liveness}・${orNull(pool.liveness_at, hms) ?? 'null'}・${orNull(pool.liveness_since, hms) ?? 'null'}` },
+    { key: 'rtt_ms', value: orNull(pool.rtt_ms) },
+  ]
+  return rows
+}
+
+/** The core count, with how many are performance and how many efficiency where the platform says (all kinds null on Linux: just the count). */
+function coresRow(cores: PoolFacts['cpu']['cores']): FactRow {
+  if (!cores) return { key: 'cpu.cores', value: null }
+  const p = cores.filter((x) => x.kind === 'p').length
+  const e = cores.filter((x) => x.kind === 'e').length
+  return p + e === 0 ? { key: 'cpu.cores', value: String(cores.length) } : { key: 'cpu.cores', value: String(cores.length), wordKey: 'watch.host.status.cores', wordParams: { n: cores.length, p, e } }
+}

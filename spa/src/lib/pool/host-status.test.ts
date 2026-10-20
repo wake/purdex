@@ -1,6 +1,6 @@
 // The host page's 狀態 data (monitoring tabs spec M44; plan MON-7b-1): pure functions from the pool's facts and host row to what the six cards and the facts table say. Words are i18n keys, never text.
 import { describe, it, expect } from 'vitest'
-import { connectionOf, identityOf, judgeOf, pausesOf, tagsOf, workerCardOf } from './host-status'
+import { connectionOf, factRowsOf, identityOf, judgeOf, pausesOf, tagsOf, workerCardOf } from './host-status'
 import { poolHostState } from './host-state'
 import type { HostAlertsEntry } from './alerts-store'
 import type { PoolAlert } from './alerts-api'
@@ -211,5 +211,77 @@ describe('tagsOf', () => {
     expect(t.tools).toEqual([])
     expect(t.labels).toHaveLength(1)
     expect(t.fingerprint).toEqual([{ name: 'cpu', value: 'x' }])
+  })
+})
+
+describe('factRowsOf', () => {
+  const rich = (): PoolFacts => withFacts((x) => ({
+    ...x,
+    cpu: { ...x.cpu, load15: 1.5, user_pct: 12.34, system_pct: 6, cores: [{ user_pct: 1, system_pct: 1, idle_pct: 98, kind: 'p' }, { user_pct: 1, system_pct: 1, idle_pct: 98, kind: 'p' }, { user_pct: null, system_pct: null, idle_pct: null, kind: 'e' }] },
+    mem: { ...x.mem, pressure: 2, decompress_rate: 11, swap_total_mb: 4096, wired_mb: 2000, active_mb: 3000, inactive_mb: 1500, file_cache_mb: 900 },
+    procs_total: 512, boot_at: Date.parse('2026-10-10T08:00:00Z'), self: { cpu_pct: 1.5, rss_mb: 40 },
+    disk_io: [{ device: 'disk0', read_bps: 1000, write_bps: 2000, read_iops: 10, write_iops: null }],
+  }))
+  const val = (rows: ReturnType<typeof factRowsOf>, key: string) => rows.find((r) => r.key === key)
+
+  it('the record\'s fields in the design\'s order, then the host-metrics fields, then the row\'s', () => {
+    const keys = factRowsOf(pool(), rich()).map((r) => r.key)
+    expect(keys.slice(0, 4)).toEqual(['v・host_id・alias', 'at', 'platform・arch・os_version', 'cpu.ncpu'])
+    for (const k of ['cpu.load15', 'cpu.cores', 'mem.decompress_rate', 'mem.swap_total_mb', 'mem.wired_mb', 'mem.file_cache_mb', 'procs_total', 'boot_at', 'self', 'headroom_reasons', 'load', 'reachable', 'liveness・_at・_since', 'rtt_ms']) expect(keys, k).toContain(k)
+    expect(keys.indexOf('cpu.ncpu')).toBeLessThan(keys.indexOf('mem.total_mb'))
+    expect(keys.indexOf('mem.total_mb')).toBeLessThan(keys.indexOf('derived.zone'))
+    expect(keys.indexOf('derived.zone')).toBeLessThan(keys.indexOf('headroom_reasons'))
+  })
+
+  it('representative values from a darwin record', () => {
+    const f = rich()
+    const rows = factRowsOf(pool(), f)
+    expect(val(rows, 'cpu.ncpu')?.value).toBe(String(f.cpu.ncpu))
+    expect(val(rows, 'cpu.load15')?.value).toBe('1.5')
+    expect(val(rows, 'cpu.user_pct・system_pct')?.value).toBe('12.3%・6.0%')
+    expect(val(rows, 'mem.pressure')).toMatchObject({ value: '2', wordKey: 'pool.level.2' })
+    expect(val(rows, 'mem.wired_mb')?.value).toBe('2000')
+    expect(val(rows, 'procs_total')?.value).toBe('512')
+    expect(val(rows, 'self')?.value).toBe('1.5・40')
+    expect(val(rows, 'derived.sessions_room')?.value).toBe(String(f.derived.sessions_room))
+  })
+
+  it('the cores: how many, and how many of each kind where the platform says', () => {
+    const rows = factRowsOf(pool(), rich())
+    expect(val(rows, 'cpu.cores')).toMatchObject({ value: '3', wordKey: 'watch.host.status.cores', wordParams: { n: 3, p: 2, e: 1 } })
+  })
+
+  it('a disk and a physical disk are one row each, named by the mount and the device', () => {
+    const f = rich()
+    const rows = factRowsOf(pool(), f)
+    expect(rows.some((r) => r.key === `disk[0] ${f.disk[0].mount}`)).toBe(true)
+    expect(val(rows, 'disk_io[0] disk0')?.value).toBe('1000・2000・10・null')
+  })
+
+  it('a linux record: the cores have no kinds, so no kind word; a field the platform has not is null', () => {
+    const f = withFacts((x) => ({ ...x, cpu: { ...x.cpu, cores: [{ user_pct: 1, system_pct: 1, idle_pct: 98, kind: null }] } }))
+    const rows = factRowsOf(pool(), f)
+    expect(val(rows, 'cpu.cores')).toEqual({ key: 'cpu.cores', value: '1' })
+    expect(val(rows, 'mem.wired_mb')?.value).toBeNull()
+  })
+
+  it('a field that is absent is null, never 0', () => {
+    const rows = factRowsOf(pool(), darwin)
+    for (const k of ['cpu.load15', 'cpu.user_pct・system_pct', 'cpu.cores', 'mem.decompress_rate', 'mem.swap_total_mb', 'mem.wired_mb', 'mem.active_mb', 'mem.inactive_mb', 'mem.file_cache_mb', 'procs_total', 'boot_at', 'self']) {
+      expect(val(rows, k)?.value, k).toBeNull()
+    }
+    expect(rows.some((r) => r.key.startsWith('disk_io['))).toBe(false)
+  })
+
+  it('the row\'s own fields: no assess, no load, a local host (no liveness) and a peer\'s round trip', () => {
+    const local = factRowsOf(pool({ headroom_reasons: undefined, load: undefined, liveness: undefined, rtt_ms: undefined }), darwin)
+    expect(val(local, 'headroom_reasons')?.value).toBeNull()
+    expect(val(local, 'load')?.value).toBeNull()
+    expect(val(local, 'liveness・_at・_since')?.value).toBeNull()
+    expect(val(local, 'rtt_ms')?.value).toBeNull()
+    const peer = factRowsOf(pool({ headroom_reasons: { heavy: ['slots_full'], light: [] }, load: { score: 41.26, driver: 'cpu' }, liveness: 'ok', rtt_ms: 12 }), darwin)
+    expect(val(peer, 'headroom_reasons')?.value).toBe('heavy [slots_full]・light []')
+    expect(val(peer, 'load')?.value).toBe('score 41.3・driver cpu')
+    expect(val(peer, 'rtt_ms')?.value).toBe('12')
   })
 })
