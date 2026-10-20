@@ -242,14 +242,27 @@ export interface Workspace {
 }
 // === Factories ===
 
+/**
+ * The tab objects `createTab` minted in this window and no tab store has taken in yet (task groups spec §5: "the one automatic write"). In memory, per window, never persisted; keyed by object identity, so a tab that came any other
+ * way — an Electron transfer, a reopened tab, a rehydrate, an apply — is not in it. The two tab-store actions that insert a tab take it out (`takeFreshTab`) in the same `set()` that inserts it.
+ */
+const freshTabs = new WeakSet<Tab>()
+
+/** Removes `tab` from the fresh set; whether it was in it. */
+export function takeFreshTab(tab: Tab): boolean {
+  return freshTabs.delete(tab)
+}
+
 export function createTab(content: PaneContent, opts?: { pinned?: boolean }): Tab {
-  return {
+  const tab: Tab = {
     id: generateId(),
     pinned: opts?.pinned ?? false,
     locked: false,
     createdAt: Date.now(),
     layout: { type: 'leaf', pane: { id: generateId(), content } },
   }
+  freshTabs.add(tab)
+  return tab
 }
 
 export function createWorkspace(name: string, icon?: string): Workspace {

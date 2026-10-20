@@ -2,14 +2,22 @@
 // inputs (TaskGroupView); an action or a subscriber runs once per event and may afford one pass over the tabs. Reads only.
 import { useTabStore } from '../../stores/useTabStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import type { Tab } from '../../types/tab'
 import { currentTeamState } from '../team/team-state'
+import { buildTeamIndex } from '../team/team-index'
 import { rootOf } from './root-cache'
 import type { GroupOrderCtx } from './group-order'
 import type { PlacementCtx } from './placement'
 
-export function currentPlacementCtx(): PlacementCtx {
+/** `pending`: a tab about to be inserted, which the team index must already know — a seat tab is recognised by its panes, and the store does not hold the tab yet. */
+export function currentPlacementCtx(pending?: Tab): PlacementCtx {
   const { order, groups } = useManualGroupsStore.getState()
-  return { index: currentTeamState().index, manual: { order, groups }, rootOf }
+  const state = currentTeamState()
+  const index = pending === undefined
+    ? state.index
+    : buildTeamIndex(state.views, { ...useTabStore.getState().tabs, [pending.id]: pending }, useSessionStore.getState().sessions)
+  return { index, manual: { order, groups }, rootOf }
 }
 
 export function currentGroupOrderCtx(): GroupOrderCtx {
