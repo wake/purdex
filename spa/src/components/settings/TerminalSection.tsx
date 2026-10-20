@@ -1,5 +1,5 @@
 import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, type FleetCellIndicator, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
-import { useLayoutStore, QUEUE_STRIP_SEGMENT_CHOICES } from '../../stores/useLayoutStore'
+import { useLayoutStore, QUEUE_STRIP_SEGMENT_CHOICES, type QueueStripSegments } from '../../stores/useLayoutStore'
 import { HostBadgeSetting } from './HostBadgeSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
@@ -83,7 +83,7 @@ export function TerminalSection() {
     { value: 'bars-memory', label: t('settings.terminal.fleet_indicator.bars_memory') },
   ]
 
-  const QUEUE_STRIP_SEGMENT_OPTIONS = QUEUE_STRIP_SEGMENT_CHOICES.map((n) => ({ value: n, label: String(n) }))
+  const QUEUE_STRIP_SEGMENT_OPTIONS = QUEUE_STRIP_SEGMENT_CHOICES.map((n) => ({ value: String(n), label: String(n) }))
 
   const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [
     { value: 'bot', label: t('settings.terminal.cc_icon.bot') },
@@ -186,7 +186,7 @@ export function TerminalSection() {
       </SettingItem>
       <SettingItem label={t('settings.terminal.queue_strip_segments.label')} description={t('settings.terminal.queue_strip_segments.desc')}>
         <div data-testid="queue-strip-segments">
-          <SegmentControl options={QUEUE_STRIP_SEGMENT_OPTIONS} value={queueStripSegments} onChange={setQueueStripSegments} />
+          <SegmentControl options={QUEUE_STRIP_SEGMENT_OPTIONS} value={String(queueStripSegments)} onChange={(v) => setQueueStripSegments(Number(v) as QueueStripSegments)} />
         </div>
       </SettingItem>
       <HostBadgeSetting

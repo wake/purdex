@@ -40,7 +40,7 @@ const wjob = (id: string, origin: string, over: Record<string, unknown> = {}): P
   id, origin, state: 'queued', task: 'go-all', args: [], class: 'dev', labels: [], locks: [], manual: '', manual_seq: 0, claim: null, result: null, created_at: facts.at - 1000,
   repo: { name: 'purdex', root: '', remote: '' }, submitter: { session: '', ref: '', team: '', host: origin }, supersede_key: '', cacheable: true, interruptible: false, queue_timeout_s: 0, adhoc: false, local: false, timeout_s: 0, ...over,
 }) as unknown as PoolJob
-const withWorker = (h: PoolHost): PoolHost => ({ ...h, worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } }, labels: [] }) as PoolHost
+const withWorker = (h: PoolHost): PoolHost => ({ ...h, worker: { enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } }, labels: [] }) as unknown as PoolHost
 const seedJobs = (jobs: PoolJob[]) => {
   const byOrigin: Record<string, { jobs: Record<string, PoolJob>; cursor: string; epoch: string; via: string }> = {}
   for (const j of jobs) (byOrigin[j.origin] ??= { jobs: {}, cursor: '', epoch: '', via: '' }).jobs[j.id] = j
