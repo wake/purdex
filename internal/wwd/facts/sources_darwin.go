@@ -47,12 +47,13 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 		procs = func(time.Time) (ProcSnapshot, ProcContext, error) { return ProcSnapshot{}, ProcContext{}, err }
 	}
 	return Sources{
-		Procs: procs,
-		Owner: owner,
-		Boot:  bootTime,
-		Self:  selfSource(),
-		Tools: systemTools(opt.ToolDirs),
-		Now:   time.Now,
+		Procs:  procs,
+		Owner:  owner,
+		Boot:   bootTime,
+		Self:   selfSource(),
+		DiskIO: diskIOSource(),
+		Tools:  systemTools(opt.ToolDirs),
+		Now:    time.Now,
 		CPU: func() (RawCPU, error) {
 			if mach == nil {
 				return RawCPU{}, machErr
@@ -222,4 +223,13 @@ func statfsMounts() ([]RawDisk, error) {
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+// diskIOSource reads the disk counters from IOKit; nil when its frameworks cannot be loaded (disk_io then stays null).
+func diskIOSource() func() ([]RawDiskIO, error) {
+	read, err := newDarwinDiskIO()
+	if err != nil {
+		return nil
+	}
+	return read
 }

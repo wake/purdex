@@ -24,10 +24,12 @@ export interface NexHostEntry {
   fingerprint: string
   /** `/api/info.capabilities` strings of the daemon (e.g. `conversations.scope.v1`); absent until `/api/info` answered. */
   daemonCapabilities?: string[]
+  /** `/api/info.wwd` of the daemon: which wwd host it fronts; `null` when it does not say. */
+  wwd?: { hostId: string; alias: string } | null
 }
 
 /** What one fetch round produced, before it becomes an entry. */
-export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error' | 'daemonCapabilities'>
+export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error' | 'daemonCapabilities' | 'wwd'>
 
 /**
  * A request captures the entry's generation and the host identity it went

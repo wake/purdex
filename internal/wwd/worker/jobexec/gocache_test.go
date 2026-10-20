@@ -214,9 +214,10 @@ func TestAnOverBoundBuildCacheIsEmptiedWhenNobodyUsesIt(t *testing.T) {
 	assert.DirExists(t, cache)
 }
 
-// While another job is using the cache it cannot be emptied; a cache over twice its bound is then not given to a new job (it builds cold in
-// its own workspace), so a busy host cannot grow it without end.
-func TestABusyBuildCacheOverTwiceItsBoundIsNotGivenToANewJob(t *testing.T) {
+// While another job is using the cache it cannot be emptied, and when it cannot be trimmed either (a file that will not go) and it is over
+// twice its bound, it is not given to a new job (it builds cold in its own workspace), so a busy host cannot grow it without end. (A cache
+// that can be trimmed is trimmed while it is held: gocache_prune_test.go.)
+func TestABusyBuildCacheThatCannotBeTrimmedOverTwiceItsBoundIsNotGivenToANewJob(t *testing.T) {
 	r := newGoRig(t)
 	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
 	r.cfgGoCacheMB = 1
@@ -226,6 +227,9 @@ func TestABusyBuildCacheOverTwiceItsBoundIsNotGivenToANewJob(t *testing.T) {
 	big := filepath.Join(cache, "cd", "entry")
 	require.NoError(t, os.MkdirAll(filepath.Dir(big), 0o755))
 	require.NoError(t, os.WriteFile(big, make([]byte, 3<<20), 0o644)) // over 2 MiB
+	old := goCacheRemoveFile
+	goCacheRemoveFile = func(string) error { return os.ErrPermission }
+	t.Cleanup(func() { goCacheRemoveFile = old })
 
 	e2 := r.exec(t, repo, sha) // another worker process of the same host, so the throttle of the first does not decide
 	cold := r.job(t, e2, "j_cold")

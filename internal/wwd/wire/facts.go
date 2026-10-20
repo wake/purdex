@@ -37,6 +37,10 @@ type Facts struct {
 	ProcsTotal *int       `json:"procs_total,omitempty"`
 	BootAt     *time.Time `json:"boot_at,omitempty"`
 	Self       *Self      `json:"self,omitempty"`
+	// DiskIO is one entry per physical disk (host-metrics spec §2.1), apart from Disk, which is per mount point. Absent where it was not
+	// read (an older record, a platform without the source, a failed read); omitted rather than written as null, an absent key meaning
+	// the same. Not gated on FactsProto.
+	DiskIO []DiskIO `json:"disk_io,omitempty"`
 }
 
 // Self is wwd's own use of the host. CPUPct is one core = 100 over the interval since the previous sample (null for the first sample);
@@ -44,6 +48,17 @@ type Facts struct {
 type Self struct {
 	CPUPct *float64 `json:"cpu_pct"`
 	RSSMB  *int     `json:"rss_mb"`
+}
+
+// DiskIO is one physical disk's throughput over the interval since the previous sample: bytes and operations per second, read and
+// written. Device is the system's name for the disk (macOS disk0; Linux nvme0n1, sda). A rate is null where there is nothing to compare
+// with (the first sample, a disk that has just appeared, a counter that went back); 0 is a measured zero.
+type DiskIO struct {
+	Device    string   `json:"device"`
+	ReadBps   *float64 `json:"read_bps"`
+	WriteBps  *float64 `json:"write_bps"`
+	ReadIOPS  *float64 `json:"read_iops"`
+	WriteIOPS *float64 `json:"write_iops"`
 }
 
 // SampleIntervalS is the seconds one facts sample stands for (spec §3.1: one record every 5 s).

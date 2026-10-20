@@ -15,6 +15,7 @@ import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
 import hostsJson from '../../lib/pool/__fixtures__/pool_hosts_response.json'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
+import { fingerprintOf } from '../../lib/nex/nex-host-effects'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
@@ -45,7 +46,8 @@ beforeEach(() => {
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
   useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'air26', ip: '1', port: 1, token: 't', order: 0, daemonId: 'd-a' } }, hostOrder: ['cfg-a'], activeHostId: 'cfg-a', runtime: { 'cfg-a': { status: 'connected' } } } as never)
-  useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', daemonCapabilities: ['pool.v1', 'pool.control.v1'] } } } as never)
+  // Fresh and of this host's identity, so the pool's identity refresh does not read /api/info again and replace the seeded entry.
+  useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', daemonCapabilities: ['pool.v1', 'pool.control.v1'], fetchedAt: Date.now(), fingerprint: fingerprintOf('cfg-a') } } } as never)
   const s = useFleetStore.getState()
   s.reset()
   const gen = s.begin('cfg-a')

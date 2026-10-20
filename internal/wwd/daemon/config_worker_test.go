@@ -115,6 +115,17 @@ func TestConfigReadsTheDependencyCacheSettings(t *testing.T) {
 			t.Errorf("gocache_max_mb = %s accepted (err %v)", bad, err)
 		}
 	}
+	if c, err = load(t, "[worker]\ngocache_prune_hours = 6\n"); err != nil || c.Worker.GoCachePruneHours != 6 {
+		t.Fatalf("gocache_prune_hours: %+v %v", c.Worker, err)
+	}
+	if c, err = load(t, "[worker]\n"); err != nil || c.Worker.GoCachePruneHours != 0 {
+		t.Fatalf("gocache_prune_hours unset is 0, the default of 24: %+v %v", c.Worker, err)
+	}
+	for _, bad := range []string{"-1", "8761"} {
+		if _, err := load(t, "[worker]\ngocache_prune_hours = "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "gocache_prune_hours") {
+			t.Errorf("gocache_prune_hours = %s accepted (err %v)", bad, err)
+		}
+	}
 }
 
 func TestConfigChecksTheSandboxUser(t *testing.T) {

@@ -105,6 +105,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	out.CPU.Load1, out.CPU.Load5, out.CPU.IdlePct = l1/n, l5/n, idle/n
 	rollupHost(&out, recs)
 	rollupCPUSplit(&out.CPU, recs)
+	rollupDiskIO(&out, recs)
 	return out
 }
 

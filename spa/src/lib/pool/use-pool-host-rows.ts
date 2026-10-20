@@ -1,10 +1,11 @@
 // spa/src/lib/pool/use-pool-host-rows.ts — the Hosts page's view of the resource pool: one row per pool host (sidebar group, overview
 // table, host page), from the same models the sidebar cells use, so a host is in one state everywhere.
 import { useFleetHostViews, type FleetHostLook } from '../fleet/use-fleet-host-views'
-import { matchPoolHost } from './cell-model'
+import { matchPoolHost } from './fleet-bridge'
 import { usePoolStore } from './store'
+import { usePoolHostDaemons } from './daemons'
 import type { FallbackReason } from './host-view'
-import { usePoolCellModels } from './use-cell-models'
+import { usePoolCellModels } from './fleet-bridge'
 import type { PoolFacts, PoolHost, PoolZone, Slots } from './types'
 import type { FleetFast } from '../fleet/types'
 
@@ -59,12 +60,13 @@ export function usePoolHostRows(): { rows: PoolHostRow[]; active: boolean; oldDa
   const { views, look } = useFleetHostViews()
   const { models, active } = usePoolCellModels(views)
   const hosts = usePoolStore((s) => s.hosts)
+  const daemons = usePoolHostDaemons()
   const oldDaemon = usePoolStore((s) => s.oldDaemon)
   const rows = models.map((m, i): PoolHostRow => {
     const original = views[i]
     const pool = m.pool
     const state = pool?.state ?? 'fallback'
-    const poolHost = matchPoolHost(hosts, original)
+    const poolHost = matchPoolHost(hosts, original, daemons)
     const dot: PoolHostDot = state === 'live' ? 'live' : state === 'fallback' ? 'warn' : original.status === 'error' ? 'error' : 'off'
     return {
       id: m.view.id, name: m.view.name, kind: m.view.kind, hostConfigId: m.view.hostConfigId, look: look(original), state, dot,

@@ -113,6 +113,8 @@ export interface HostInfo {
   nex?: NexInfo
   /** Daemon feature flags, e.g. `conversations.scope.v1`. */
   capabilities?: unknown
+  /** The wwd this daemon is the front of (`pool.identity.v1`); the key is absent when the daemon does not know. */
+  wwd?: unknown
 }
 
 /** `looks`: whether step 2 (the look store, plan §0.20) was written; `'failed'` leaves the hosts added. */
