@@ -2,12 +2,13 @@
 
 > spec：`docs/specs/2026-10-20-monitoring-tabs-spec.md`（下文的 M、A、W、P 編號都是 spec 的）。B 線 lead 88，2026-10-20。
 > 一期一張 PR（≤ 800 行、≤ 20 檔，測試也算）；一個 task 一個 commit，先寫測試、看它紅，再實作。執行者：Sonnet member。
-> 第一波（MON-1a～MON-4）細到 task；第二波的 MON-5、MON-6、MON-10 在修訂 2 細到 task；MON-7～9、11、12 仍只寫到期，**開工前 plan 再細化一版**（含 file:line 與測試案例），細化版先給 88 看。
+> 第一波（MON-1a～MON-4）細到 task；第二波的 MON-5、MON-6、MON-10 在修訂 2 細到 task；第三波 MON-7～9 在修訂 4 細到 task；MON-11、12 仍只寫到期，**開工前 plan 再細化一版**（含 file:line 與測試案例），細化版先給 88 看。
 > spec 的 W1–W9 已由 88 定案（10-20，spec §7.3），本 plan 照定案寫。
-> 行號以 `origin/main 93034abc5` 為準（修訂 2、3 核對；第一波的 file:line 是在 `86ced9555` 核對的，`86ced9555..93034abc5` 之間 merge 了 MON-1a～1d、2a、2b、3a、3b 與 768 的 bump，還沒 merge 的 MON-4 開工時照舊再對一次），開工時以當下的 `origin/main` 再核對一次。
+> 行號以 `origin/main 93034abc5` 為準（修訂 2、3 核對；第一波的 file:line 是在 `86ced9555` 核對的，`86ced9555..93034abc5` 之間 merge 了 MON-1a～1d、2a、2b、3a、3b 與 768 的 bump，還沒 merge 的 MON-4 開工時照舊再對一次；第三波（修訂 4）的 file:line 在 `a364bac2c` 核對，接 6f-2 的地方以本 plan 的 6f-2 為準），開工時以當下的 `origin/main` 再核對一次。
 > 修訂 1（10-20）：照 codex plan 審查（task-mvgk4yis-tsgk70）的 8 條修正，88 全部採納；對照表在文末。
 > 修訂 2（10-20）：第二波 MON-5、6、10 細化（MON-5 拆 5a～5c、MON-6 拆 6a～6f（修訂 3 再拆成 9 張）、MON-10 拆 10a～10c，理由寫在各期）；MON-7、8、9、11、12 的依賴與範圍跟著調整；細化時查到的 8 個待確認點，88 定案（10-20）全部照 plan 的寫法，記在「待查與已定案」；spec 同步改了 §8 的分期表、M31 的例字與 A7 的欄位名。
 > 修訂 3（10-20）：照 codex 第二波 plan 審查（task-mvgu8cfz-t8p13g）的 8 條修正，88 全部採納；MON-6 改成 6a-1、6a-2、6b、6c、6d-1、6d-2、6e、6f-1、6f-2 九張，MON-10c 改依賴 6f-2；對照表在文末。
+> 修訂 4（10-21）：細化第三波 MON-7／8／9（MON-7 拆 7a、7b-1、7b-2、7c-1、7c-2，MON-8 拆 8a～8c，MON-9 拆 9a-1～9a-3、9b-1、9b-2，理由寫在各期）；外部依賴在 `origin/main a364bac2c` 查核、寫在各條開頭；13 件待 88 定案與自己定的寫在「待查與已定案」；spec §8 的分期表同步改了。
 
 ## 共通規則
 
@@ -280,7 +281,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - 分頁：6a-1（讀者先認得 `poolHostId`，行為不變）→ 6a-2（reconciler 與入口換過去）→ 6b（順序、拖曳、徽章）。
 - 主機頁：6c（讀數記憶）→ 6d-1（量表與小圖的資料模型）→ 6d-2（`MiniChart`）→ 6e（「監控」元件）→ 6f-1（子分頁記憶、入口、`WatchSettings`）→ 6f-2（換殼）。
 - 6a-1、6c 互不依賴，可並行；6f-1 要 6a-2 與 6c，6f-2 要 6f-1 與 6e。
-「監控」以外的三個子分頁在 6f-2 先放過渡內容（6f-2 task 2），MON-7、8、9a 換成正式的。#3785（非 ok 的主機仍帶 fleet 的 `slow` 佇列與行程表）在 6e、6f-2 處理。
+「監控」以外的三個子分頁在 6f-2 先放過渡內容（6f-2 task 2），MON-7b-2、8a、9a-1 換成正式的（修訂 4）。#3785（非 ok 的主機仍帶 fleet 的 `slow` 佇列與行程表）在 6e、6f-2 處理。
 
 #### MON-6a-1 — 主機分頁的讀者先認得 `poolHostId`（A7，行為不變）
 
@@ -386,31 +387,262 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
    - 測試（`WatchHostPane.test.tsx`）：ok 主機的標頭與四個子分頁；**非 ok 主機（三種狀態各一）逐一切到監控、狀態、行程、設定，每一頁都有橫幅、顏色與字對、最後一筆與最後檢查的時間對**；pool 沒列的主機；舊 content。mutation：橫幅只放在「監控」子分頁（逐頁那案轉紅）；`wwd_down` 用紅。
 2. **四個子分頁**
    - 監控：`<MonitorTab host range now />`（6e）。
-   - 狀態（過渡，MON-7 換）：`AvailRow`（`hostExtraOf(state)`，6e）＋一行「完整的狀態（六張卡、facts 全部欄位、完整圖表）在之後的期」。
-   - 行程（過渡，MON-8 換）：兩張 `ProcTable`（`facts.procs` 的 CPU 前 12、記憶體前 12）＋`ResidentsTable`；非 ok 寫離線。
-   - 設定（過渡，MON-9a 換）：`<WatchSettings hostId hostConfigId={daemonHostId ?? undefined} poolAlias={alias} offline peerIds />`（6f-1 的 props；`peerIds` 是其他台的 `daemonHostId`）。
+   - 狀態（過渡，MON-7b-2 換）：`AvailRow`（`hostExtraOf(state)`，6e）＋一行「完整的狀態（六張卡、facts 全部欄位、完整圖表）在之後的期」。
+   - 行程（過渡，MON-8a 換）：兩張 `ProcTable`（`facts.procs` 的 CPU 前 12、記憶體前 12）＋`ResidentsTable`；非 ok 寫離線。
+   - 設定（過渡，MON-9a-1 換）：`<WatchSettings hostId hostConfigId={daemonHostId ?? undefined} poolAlias={alias} offline peerIds />`（6f-1 的 props；`peerIds` 是其他台的 `daemonHostId`）。
 3. **tab-hosted**：`WatchHostPane.tab-switch.test.tsx`（真的 `TabContent`）：mserv 的分頁選「行程」、範圍切到 6 小時、捲到下面，切到別的分頁再切回 → 子分頁、範圍、捲動都在；mlab 的分頁是它自己的（預設監控、30 分）。`WatchSettings`／`WorkerSettings`／`WorkerExceptions` 的三個 tab-switch 測試改成從 pool store 開主機頁的「設定」，原本斷言的草稿與捲動照舊。
 4. **守門測試擴到主機頁**：`no-fleet-reads.guard.test.ts:9-15` 的 glob 加 `components/watch/WatchHostPane.tsx`、`WatchSettings.tsx`（6f-1 已拿掉 `ProbeHostEditor`，codex 第 2 條）、`WorkerSettings.tsx`、`WorkerExceptions.tsx`、`Gauge.tsx`、`ProcTable.tsx`、`AvailRow.tsx`、`ResidentsTable.tsx`、`lib/watch/view-memory.ts`、`features/workspace/lib/watch-area.ts`、`open-watch-area.ts`（`components/watch/jobs/**` 在 5b、`components/watch/host/**` 在 6d-2 已加）；檔頭說明改成「`fleet-bridge.ts` 只剩 Hosts 頁一個讀者（MON-9b 刪）」。mutation：在 `WatchHostPane.tsx` 暫加 `import type { FleetFast } from '../../lib/fleet/types'`、在 `MonitorTab.tsx` 暫加一行 `useFleetStore`、在 `WatchSettings.tsx` 暫加一行 `import '../../lib/fleet/store'`，都要轉紅。
 - 這期之後沒人用、留給 MON-12 刪的檔：`MetricChart.tsx`＋測試、`ZoneBand.tsx`＋測試、`lib/watch/series.ts`＋測試、`lib/watch/metrics.ts`＋測試、`lib/pool/history.ts`＋測試、`use-facts-history.ts`、`use-series-history.ts`＋測試，以及 MON-12 本來就列的 `QueueSection`、`QueueNow`、`QueueLane`、`QueueHistory`。
 - **Split**：task 2 的「行程」過渡內容（兩張前 12 的表＋常駐程式）移到 MON-8 開頭；6f-2 的「行程」先寫一行「在之後的期」。
 
-### MON-7 — 主機頁「狀態」（M44、M43）
-- **目標**：六張卡、facts 全部欄位表、完整圖表分組（監控那六張不重複）、區域色帶、同步 hover。取代 6f-2「狀態」的過渡內容。
-- **主要檔案**：`lib/pool/types.ts`、`parse.ts`（G-2：`cpu.load15`、`user_pct`、`system_pct`、`cores[]`；G-3：`disk_io[]`；G-4：`procs_total`、`boot_at`、`self`、`swap_total_mb`；series 的 G-2、G-4 欄位（6c 只做 G-1）；全部可選、null 安全）、`lib/pool/host-history.ts`（`HostSample` 加欄）、`host-charts.ts`（完整圖表的定義）、新的 `components/watch/host/StatusTab.tsx`、區域色帶新寫（讀 `HostSample.zone`；舊的 `ZoneBand.tsx` 讀 `lib/pool/history` 的 `ZonePoint`，6f-2 之後沒人用、MON-12 刪）、`AvailRow.tsx`（判斷卡，吃 6e 的 `hostExtraOf`）。圖表用 6d-2 的 `MiniChart`（標準高度）、定義加在 6d-1 的 `host-charts.ts`。每核 CPU 讀 5 秒 history（series 不帶 cores）；主機之間的延遲只畫當下值。
-- **依賴**：MON-6f-2（頁面）、6c、6d-1、6d-2、6e；G-1～G-4（768）；G-3（768，沒趕上就 769，之前磁碟 IO 那張畫「A 線補」佔位）。
-- **大小**：兩期（卡片與欄位表、完整圖表），各約 700 行。可與 MON-8、MON-9 並行。
+> **第三波（修訂 4）共通事項**（MON-7、8、9；外部依賴與 file:line 在 `origin/main a364bac2c` 查核）：
+> - **掛點**：三條都接 MON-6f-2 重寫的 `WatchHostPane`。6f-2 的頁殼負責標頭、範圍切換（只在監控、狀態）、四個子分頁都有的橫幅（M22）、子分頁／範圍／捲動的記憶（6f-1，`lib/watch/view-memory.ts:9-31`）與「資源池沒有列出這台」那一行；子分頁的內容是一個開關的四支，6f-2 先放過渡內容（6f-2 task 2）。第三波各換一支：「狀態」→ MON-7b-2 的 `<StatusTab host range now />`、「行程」→ MON-8a 的 `<ProcTab host now />`、「設定」→ MON-9a-1 的 `<SettingsTab host />`。`host` 一律是 `useMonitorHosts()` 的一列（`lib/pool/use-monitor-hosts.ts:18-32`：`hostId`、`alias`、`daemonHostId`、`state`、`look`、`local`），子分頁的內容不讀 fleet。6f-2 還沒 merge：這三期開工時照 merge 後的 `WatchHostPane.tsx` 再核對那一支的行號。
+> - **不必等 6f-2 就能開的**：MON-7a、7b-1、7c-1（純資料）；8b 的 `lib/pool/proc-history.ts`、9a-2 的 `lib/pool/push-switch.ts` 也可以先寫，掛上去那一步等前一張。
+> - **新元件一律放 `components/watch/host/`**：守門測試的 glob 已含它（6d-2，`no-fleet-reads.guard.test.ts:9`），不必另加；新的 `lib/pool/*.ts` 照第二波的規矩加進 `POOL_FILES`（`:12-14`）。
+> - **tab-hosted**：每期的子分頁元件各開一個 tab-switch 測試檔（`StatusTab.tab-switch.test.tsx`、`ProcTab.tab-switch.test.tsx`、`SettingsTab.tab-switch.test.tsx`；真的 `TabContent`，從 pool store 開主機分頁，寫法照 6f-2 的 `WatchHostPane.tab-switch.test.tsx`），不改 6f-2 那個檔；讀者的選擇放 `view-memory.ts`（以 `host_id` 為 key），讀到的資料放模組記憶。
+> - 細化時查到、要 88 定的 13 件列在「待查與已定案」的「第三波細化（修訂 4）待 88 定案」，下文以「待定第 n 條」引用；自己定的列在同一節的後半。
+
+### MON-7 — 主機頁「狀態」（M44、M43、M42）
+
+**為什麼拆五張**：原估兩期各約 700 行。細化後：G-2～G-4 的解析與樣本細項約 470 行；六張卡與欄位表的資料（純函式）約 510；六張卡與欄位表的畫面約 690；完整圖表的定義（18 張圖＋2 個數字卡，純函式）約 610；完整圖表的畫面與區域色帶約 600。
+依賴（整條）：MON-6c、6d-1、6d-2、6e（已 merge：`lib/pool/host-history.ts`、`host-charts.ts`、`use-host-series.ts`、`components/watch/host/MiniChart.tsx`、`MonitorTab.tsx`）、MON-10a、10b（已 merge：`lib/pool/alerts-store.ts`、`events-model.ts`）；7b-2、7c-2 另要 6f-2。順序：7a →（7b-1 ∥ 7c-1）→ 7b-2 → 7c-2。
+外部依賴查核：
+- **G-1～G-4（含 G-3）都在 main、都進了 768**（`VERSION` 是 `1.0.0-alpha.768`；CHANGELOG 768 段：#3749 G-1、#3755 G-2、#3759 G-3、#3756 G-4）。spec §3、M43 的「G-3 沒趕上就 769」不必等。
+  - facts：`internal/wwd/wire/facts.go:122-127`（`cpu.load15`、`user_pct`、`system_pct`、`cores[]`）、`:132-137`（`Core {user_pct, system_pct, idle_pct, kind: "p"|"e"|null}`）、`:33-43`（`procs_total`、`boot_at`、`self`、`disk_io`）、`:48-62`（`Self {cpu_pct, rss_mb}`、`DiskIO {device, read_bps, write_bps, read_iops, write_iops}`）、`:159-167`（`mem.decompress_rate`、`swap_total_mb`、記憶體分項四欄）。
+  - series：`internal/wwd/wire/series.go:29-53`（取值 `:139-169`）。有 `load15`、`cpu_user_pct`、`cpu_system_pct`、`compressor_mb`、`decompress_rate`、`disk_io`、`procs_total`、`self_cpu_pct`、`self_rss_mb`、`swap_total_mb`；**沒有** `cores`（host-metrics spec §2.5 第 1 條：每核不進 series）、PSI、`sessions_room`、常駐程式、列出的行程數、`boot_at`。
+  - `rtt_ms`：`internal/wwd/wire/api.go:53-55`（pool 來源那台 wwd 輪詢這台 `GET /v1/facts` 的往返）、`:321-322`；SPA 已解析（MON-1b，`spa/src/lib/pool/types.ts:76-77`）。`info.fingerprint`：`api.go:21-23`。
+- **SPA 還沒解析 G-2～G-4**：`spa/src/lib/pool/types.ts:21-46`（`PoolFacts`）、`:57-78`（`PoolHost` 沒有 `fingerprint`）、`:83-101`（`SeriesPoint` 只有原 8 欄＋6c 的 G-1）；`parse.ts:88-126`、`:141-166`、`:176-195` → MON-7a。
+- 失聯紀錄（連線卡）：10a 的 alerts store 與 10b 的 `alertRowsOf`（`spa/src/lib/pool/events-model.ts:59`，同一個 `silence:<alias>`、時間重疊的已合成一列、歸在叫不到的那台）都在 main（#3796 等）。
+
+#### MON-7a — G-2～G-4 的解析、樣本的細項
+
+依賴 MON-6c（已 merge）。**不必等 6f-2，可以馬上開。** 檔案（5 個、約 470 行）：`lib/pool/types.ts`、`parse.ts`、新檔 `lib/pool/parse.metrics.test.ts`、`lib/pool/host-history.ts`、`host-history.test.ts`。沒有新的 `lib/pool` 檔，守門清單不動。
+
+1. **facts 的新欄位**（G-2、G-3、G-4）
+   - 型別（`types.ts:21-46`；共通規則：一律可選）：`cpu` 加 `load15?`、`user_pct?`、`system_pct?`、`cores?: PoolCore[]`（`PoolCore = { user_pct: number | null; system_pct: number | null; idle_pct: number | null; kind: 'p' | 'e' | null }`）；`mem` 加 `decompress_rate?`、`swap_total_mb?`、`wired_mb?`、`active_mb?`、`inactive_mb?`、`file_cache_mb?`；頂層加 `procs_total?`、`boot_at?`（ms）、`self?: { cpu_pct: number | null; rss_mb: number | null }`、`disk_io?: PoolDiskIO[]`（`PoolDiskIO = { device: string; read_bps: number | null; write_bps: number | null; read_iops: number | null; write_iops: number | null }`）。
+   - 解析（`parse.ts:88-126` `parseFacts`）：每欄壞了就那一欄缺席，**整筆 facts 照留**（同 `queue`，`:124`）。`cores` 有一個元素壞掉（比例不是數字也不是 null、`kind` 不是 `p`／`e`／null）→ 整個 `cores` 缺席（少一顆會讓後面的核心編號錯位，同 `strictList` 的理由，`:56-60`）；`disk_io` 每筆自帶 `device`，壞的那筆丟掉（`list`，`:51-54`）；`procs_total` 要是非負整數；`boot_at` 用 `time()`（`:14-18`）。
+   - 測試先行（新檔 `parse.metrics.test.ts`；字面值照 Go 的 `internal/wwd/wire/cpu_cores_test.go`、`diskio_test.go`、`host_g4_test.go` 的形狀。`__fixtures__/` 是 Go testdata 的位元組副本（`fixtures-sync.guard.test.ts`），Go 那邊沒有帶 G 欄位的 JSON，所以不加 fixture）：darwin 一筆全有（`kind` 有 p 有 e）；linux 一筆（`kind` 全 null、沒有 `wired_mb`）；`facts_darwin.json`／`facts_linux.json` 照樣解得開、新欄位全缺、其他欄位與現在逐欄相同；`cores` 裡一個 `kind: "x"` → `cores` 缺、其他照留；`disk_io` 一筆沒有 `device` → 只丟那筆；`procs_total` 是 −1 或 1.5 → 缺；`boot_at` 壞 → 缺；`self` 是字串 → 缺。
+   - mutation：`cores` 壞一個時留下其他的；接受負的 `procs_total`。
+2. **`PoolHost.fingerprint` 與 series 的新欄位**
+   - `types.ts:57-78` 加 `fingerprint?: Record<string, string>`（`info.fingerprint`，非字串的值丟掉，空物件 → 缺席）；`parse.ts:141-166` `host()`。
+   - `types.ts:83-101` `SeriesPoint` 加 `load15?`、`cpu_user_pct?`、`cpu_system_pct?`、`compressor_mb?`、`decompress_rate?`、`swap_total_mb?`、`procs_total?`、`self_cpu_pct?`、`self_rss_mb?`、`disk_io?: PoolDiskIO[]`；`parse.ts:176-195` `point()` 逐欄解，壞的那欄缺席、點照留（寫法同 `:185-193` 的 G-1）。series 的記憶體分項（`mem_*`，G9）不解：設計稿「先不畫」，facts 表讀的是 facts 那份。
+   - 測試（同檔）：fingerprint 正常、混了數字、空物件；一個帶 G-2／G-4 欄位與 `disk_io` 的點；欄位是 null → 缺席；`disk_io` 一筆壞掉 → 只丟那筆。
+   - mutation：fingerprint 留下非字串的值；`self_cpu_pct` 壞時整點丟掉。
+3. **樣本的細項**（`host-history.ts`）
+   - `HostSample`（`:8-28`）加**可選的** `detail?: HostDetail`（`MiniChart.test.tsx:12-15`、`host-charts.test.ts:73` 等用字面值建樣本，必填會讓它們的 tsc 紅；缺席＝這筆沒讀細項）。`HostDetail` 每欄 `number | null`（陣列欄 `… | null`）：`load15`、`userPct`、`systemPct`、`cores`（`{ user; system; idle; kind }[]`）、`level`（壓力等級，0 → null）、`psi`（`{ some10; full10; some60 }`）、`compressorMb`、`decompressRate`、`swapTotalMb`、`disks`（`{ mount; usedPct; freeGb }[]`）、`diskIO`（`{ device; readBps; writeBps; readIops; writeIops }[]`）、`headroomHeavy`、`headroomLight`、`queued`、`sessionsRoom`、`procsListed`、`residents`（個數合計）、`residentsMemMb`、`procsTotal`、`selfCpuPct`、`selfRssMb`、`bootAt`。
+   - `sampleOfFacts`（`:31-41`）全部帶上；`sampleOfPoint`（`:47-57`）帶 series 有的，**series 沒有的（`cores`、`psi`、`sessionsRoom`、`procsListed`、`residents`、`residentsMemMb`、`bootAt`）一律 null**（spec §3 最後一段）；`level` 取 `pressure`（0 → null）、`headroom*` 取 `headroom`、`queued` 取 `queue_queued`、`disks` 取 `disks`。
+   - 測試（`host-history.test.ts`）：兩種來源的每一欄；壓力 0 → null；舊紀錄（沒有 G 欄位）→ 那幾欄 null、不是 0；series 點的 5 秒限定欄位都是 null；`merge`（`:135-146`）照舊同一個 `at` 留已有的。
+   - mutation：壓力 0 當 0；`sampleOfPoint` 的 `sessionsRoom` 從 `headroom` 推；series 的 `cores` 不是 null。
+- **Split**：task 3 獨立一張。
+
+#### MON-7b-1 — 六張卡與 facts 欄位表的資料（純函式，M44）
+
+依賴 MON-7a（`fingerprint`、G 欄位）。**不必等 6f-2。** 檔案（3 個、約 510 行）：新檔 `lib/pool/host-status.ts`＋`host-status.test.ts`、`no-fleet-reads.guard.test.ts`（`POOL_FILES` 加 `host-status.ts`）。字一律回 i18n 鍵（同 `words.ts`），元件呼叫 `t`。
+
+1. **判斷**（設計稿 `renderState` 的 judge 卡，`page.js:962-972`）
+   - `judgeOf(facts, pool)` → `{ zone; level; pageRate: number | null; heavy: { n; codes: string[] | null }; light: { n; codes }; sessionsRoom; load: PoolLoad | null; parts: LoadPart[] }`。區域的依據寫壓力等級與換頁率：wwd 的區域只由這兩項判（`internal/wwd/derived/derived.go:44-64`）。`codes` 是 `headroom_reasons[slot]`；沒有 `pool.assess.v1` → null，畫面不編原因（同 `words.ts:23-31`）。
+   - `LoadPart = { id: 'cpu' | 'mem' | 'pressure' | 'paging' | 'disk'; score; raw: number | null; counted: boolean; driver: boolean }`：CPU＝100 − idle、記憶體＝已用 %、壓力＝`levelScore(level)`（`lib/pool/ring-driver.ts:11-16`；raw 是等級）、換頁＝min(頁／秒, 100)、磁碟＝最滿那顆，≥ `DISK_SCORE_FROM`（85，`:8`）才算（`counted`）；`driver` 是 `pool.load.driver` 那一項（daemon 的判斷，`internal/fleet/load.go:37-55`），沒有 `load` → 都 false。
+   - 測試（表格）：spec M8 的例子（mlab 綜合負載 91 被磁碟撐高、區域正常）→ 磁碟那項 `driver`、`counted`；磁碟 80% → 不算；壓力 2 → 75；沒有 `load` → 沒有主因；沒有 `headroom_reasons` → `codes` null。
+   - mutation：磁碟門檻 `>=` 改 `>`；`driver` 取分數最大的那項而不是 daemon 說的。
+2. **Worker 與主人、暫停**
+   - `workerCardOf(facts)` → `{ enabled; slots; running; ownerRule; ownerMinutes（`ownerMinutes`，`lib/pool/worker-rule.ts`）; owner: PoolOwner | null }`；`owner` null 時畫面寫「沒有讀數（Linux）」。
+   - `pausesOf(exceptions, details, at)`：facts 的 `exceptions[]` 在 `at`（facts 自己的時間，同 `AvailRow.tsx:35`）生效的、照開始時間排；每筆 `{ name; since; until; pid; holds: PoolHold[] | null }`，`holds`／`pid` 取 `GET …/exceptions` 的答案（`control-api.ts:84-86` `fetchPauses`；讀不到 → null＝「不知道擋什麼」）。放行類別與標記只列在「設定」的暫停清單（9a-1），這裡不列。
+   - 測試：沒生效的不列；`details` 是 null；跟著 pid 的暫停。mutation：用 App 的時鐘判生效。
+3. **連線**
+   - `connectionOf(host: MonitorHost, byHost, hosts)`：本機（`host.local`，`use-monitor-hosts.ts:30-31`；或 pool 列沒有 `liveness`）→ `{ kind: 'local' }`（畫面寫「本機：daemon 直接讀自己的 wwd，不做存活探測」）；其他 → `{ kind: 'peer'; state; since; checkedAt; outages }`。`outages` 用 10b 的 `alertRowsOf(byHost, hosts)`（`events-model.ts:59`；88 定案（10-20）第二波第 4 條）挑 `kind === 'silence'` 且 `hostId` 是這台的，新的在上，最多 5 筆＋「另有 n 次」。
+   - 測試：本機；`wwd_down` 的對等體帶 since 與 checkedAt；mlab 與 air26 的清單都有 `silence:mserv`（同一段）→ mserv 一筆；別台的 silence 不算進來；6 段 → 5 筆＋1。mutation：本機畫成對等體；不過濾 `hostId`。
+4. **版本與身分、標籤／工具／fingerprint**
+   - `identityOf(pool, facts)` → `{ version; proto; factsV: number | null; platform; arch; osVersion: string | null; hostId }`（「有沒有 Purdex daemon」由元件用 `host.daemonHostId` 與 `useHostLookResolver` 取名字）。
+   - `tagsOf(pool, facts)` → `{ labels: { text; group: 'task' | 'repo' | 'other' }[]; tools: { name; value: string | null }[]; fingerprint: { name; value }[] }`（陣列值以「、」相連；空陣列 → null）。facts 是 null（狀態不是 ok）時 `tools` 空，`labels`、`fingerprint` 照 pool 列。
+   - 測試：分組；工具的 null 與空陣列；facts null。
+5. **facts 全部欄位**：`factRowsOf(pool, facts)` → `{ key: string; value: string | null; wordKey?: string }[]`，順序照設計稿 `factRows`（`page.js:999-1018`），再接 768 的新欄位（`cpu.load15`、`cpu.user_pct・system_pct`、`cpu.cores`（「N 顆：效能 a・節能 b」）、`mem.decompress_rate`、`mem.swap_total_mb`、記憶體分項四欄、每筆 `disk_io[i] {device}`、`procs_total`、`boot_at`、`self`）與 pool 列的 `headroom_reasons`、`load`、`reachable`、`liveness・_at・_since`、`rtt_ms`；值是 null → `value: null`（畫面寫淡色的 null）。測試：darwin、linux 各一筆的列與幾個代表值；新欄位缺席 → null 不是 0。mutation：缺席寫成 0。
+- **Split**：task 5（欄位表）移到 7b-2。
+
+#### MON-7b-2 — 六張卡與欄位表的畫面、掛上「狀態」
+
+依賴 MON-7b-1、MON-6f-2。檔案（9 個、約 690 行）：新檔 `components/watch/host/StatusTab.tsx`＋`StatusTab.test.tsx`、新檔 `components/watch/host/StatusCards.tsx`＋`StatusCards.test.tsx`、新檔 `components/watch/host/FactsTable.tsx`、新檔 `components/watch/host/StatusTab.tab-switch.test.tsx`、`components/watch/WatchHostPane.tsx`、`locales/zh-TW.json`、`en.json`。
+
+1. **`StatusCards`**（M44 上方六張卡）：3 欄 × 2 列（窄時 2 欄），卡片樣式比照 `MiniChart`（`rounded-lg border border-border-default bg-surface-secondary`），標題列是 Phosphor 圖示＋字：判斷（`Gauge`）、Worker 與主人（`PlayCircle`）、連線（`Plugs`）、暫停（`PauseCircle`）、版本與身分（`Wrench`）、標籤、工具與 fingerprint（`StackSimple`）。
+   - 判斷：區域字（`fleet.zone.*`）＋「← 壓力 {等級字}・換頁 {n}」；可接重／輕＋原因（`reasonWord`，`words.ts:13-16`；`codes` null 不寫原因）；session 餘裕；綜合負載＋主因（`driverKey`，`words.ts:37`）；五項的橫條（寬＝score；`driver` 那項加粗；`counted` 為 false 的磁碟淡色）。
+   - 暫停：`fetchPauses(source, alias)`（來源的取法照 `WorkerExceptions.tsx:39`、`:55-60`：facts 的暫停名單變了才重讀）。
+   - 版本與身分：「Purdex daemon：有（{App 主機名}）／沒有」。
+   - **狀態不是 ok**（待定第 8 條）：判斷、Worker 與主人、暫停三張寫「沒有讀數（{`livenessWordOf`}）」；連線、版本與身分、標籤三張照 pool 列畫。
+   - 測試：ok 的六張卡各一個代表值；M8 例子的主因標記；非 ok：三張寫沒有讀數、另三張有值；本機的連線卡；暫停讀到與讀不到。mutation：非 ok 仍畫判斷的值；主因標在分數最大的那項。
+2. **`FactsTable`**：兩欄表（`factRowsOf` 對半分），key 用 mono；標題「facts 全部欄位・{hh:mm:ss} 那一筆」。非 ok → 一行「沒有讀數」。測試併在 `StatusCards.test.tsx`。
+3. **`StatusTab` 與掛上去**：`StatusTab({ host, range, now })`＝`StatusCards` → `FactsTable` →（7c-2 的完整圖表接在這裡）。`WatchHostPane` 的「狀態」那一支（6f-2 task 2 的 `AvailRow`＋一行）換成 `<StatusTab host={host} range={range} now={now} />`。`AvailRow.tsx`＋測試從此沒人用，留給 MON-12。測試（`StatusTab.test.tsx`）：順序；換主機換內容。
+4. **tab-hosted**：「狀態」自己沒有讀者的選擇（範圍與捲動是 6f-1 的記憶；滑鼠時間點不留，理由同 `MonitorTab.tsx:6`）。`StatusTab.tab-switch.test.tsx`：mserv 切到「狀態」、捲到下面，切到別的分頁再切回 → 仍在「狀態」、捲動位置在；暫停卡的讀取在第二次掛上時重送一次、答案回來前畫「讀取中」而不是空的。
+- 語系：卡片標題與各列的字，兩邊都加（約 45 個鍵）。
+- **Split**：task 2（欄位表）移到 7c-2。
+
+#### MON-7c-1 — 完整圖表的定義（純函式，M43、M44）
+
+依賴 MON-7a。**不必等 6f-2，可與 7b-1 並行。** 檔案（4 個、約 610 行）：新檔 `lib/pool/host-charts-full.ts`＋`host-charts-full.test.ts`、`lib/pool/host-charts.ts`、`no-fleet-reads.guard.test.ts`（`POOL_FILES` 加 `host-charts-full.ts`）。
+
+1. **型別放寬**（`host-charts.ts`；監控那六張行為不變，`host-charts.test.ts` 照過）：`ChartDef.id` 改 `string`；六個 id 的 `ChartId`（`:58`）留給監控與 `bigValue`，`bigValue`（`:170-194`）的 switch 加 `default` 回「—」（`id` 變成 `string` 之後 switch 不再窮盡，不加 tsc 會說不是每條路都有回傳值；完整圖表不用大字）；`ChartSeries`（`:62-76`）加可選的 `label?: string`（資料裡的名字：掛載點、裝置名，不經 `t`）與 `labelParams?`；`ChartDef`（`:80-92`）加可選的 `format?: ValueFormat`（`'pct' | 'gb' | 'mb' | 'int' | 'f1' | 'rate' | 'mbps' | 'iops'`，圖例與刻度用）、`pendingKey?`（取代預設的 pending 字）、`noneKey?`（這個平台沒有這項）、`noteKey?`；`series()`、`chart()`（`:114-119`）匯出，`chart()` 多收 `titleKey`。
+2. **六組圖**：`fullChartsOf(samples, facts, range, ctx)` → `ChartGroup[]`（`ctx` 帶 `platform`、`rttMs`、`local`、來源的 alias），`ChartGroup = { id: 'cpu' | 'mem' | 'disk' | 'pool' | 'proc' | 'host'; charts: ChartDef[]; tiles: TileDef[] }`，照設計稿 `chartDefs`＋`GROUPS`（`page.js:773-811`），**不含監控那六張**（`MINI`，`page.js:813`）：
+   - CPU：每核（每顆一條，`kind` p 用 `accent`、e 用 `muted`、null 用 `accent`；圖例「核 n（效能／節能）」；1 小時以上 pending，字見下）、CPU 分項（user＋system 疊起來，%）、load15（附核心數線）。
+   - 記憶體：壓力等級（階梯；2 黃、4 紅；上限 4.4）；Linux 畫 PSI（some10、full10、some60；10 黃、25 紅），macOS 改畫壓縮記憶體（GB，4 GiB 線）；解壓縮速率（macOS，每秒 8 萬線；Linux `noneKey`「Linux 沒有這項（由 PSI 代替）」）；Swap 已用（GB，上限＝最新一筆的 `swapTotalMb`，沒有時照峰值）。
+   - 磁碟：每顆使用率（掛載點聯集、依第一次出現排序；85／95 線）、讀寫量（MB／秒，每顆裝置讀、寫各一條）、IOPS（每顆讀、寫各一條）。
+   - 資源池：可接名額（重、輕，階梯）、這台的佇列（排隊中，階梯）、session 餘裕（5 秒限定）。
+   - 行程：列出的行程與常駐程式數（5 秒限定）、整機行程總數（`procsTotal`）、常駐程式記憶體（5 秒限定）。
+   - 主機與 wwd：wwd 的 CPU（%，1% 預算線）、wwd 的 RSS（MB，50 MB 預算線）；**數字卡** `TileDef`：開機時間（最新 facts 的 `boot_at`：「開機 N 天 h 小時・MM/DD hh:mm」，沒有 → 「—」；不畫重開機線，待定第 12 條）、主機之間的延遲（待定第 11 條：「{來源 alias} 讀這台 N ms」；本機那列「本機（不經網路）」；null → 「—」）。
+   - **pending 的字**：沿用 `series()` 的判法（整段 null → pending）。1 小時以上而 series 本來就不帶的（每核、PSI、session 餘裕、列出的行程與常駐程式數、常駐程式記憶體）→「等 series API 補欄位」；其中**每核**是定案不進 series，`pendingKey` 改寫「每核只在 30 分鐘以內有（每核不進 series）」；series 有帶、卻整段 null 的（舊 wwd、平台沒有）與 30 分以內整段 null 的 →「這台沒有這項資料」（設計稿 `chartHtml` 的 `why`，`page.js:826-830`）。spec M43 的「A 線補」虛線佔位不做（G-1～G-4 都已在 768）。
+   - 線的顏色只用既有的四色（`accent`、`muted`、`heavy`、`light`），多條時依序輪（同 88 定案（10-20）第二波的「不加新 token」）。
+3. **`formatValue(format, v, t)`**：圖例與刻度的字（% 取整、GB 一位小數、MB 取整、bps → MB／秒一位小數、IOPS 取整、rate 千分位）。
+- 測試（`host-charts-full.test.ts`；樣本用 7a 的 `sampleOfFacts`／`sampleOfPoint` 從字面值造）：5 分（全有）與 6 小時（series 點）各一組，每張圖 pending 與否、用哪一個字；darwin 有壓縮與解壓、沒有 PSI，linux 反過來、解壓是 `noneKey`；每核 10 顆 → 10 條、p／e 的顏色、6 小時是每核自己的 `pendingKey`；兩個掛載點、中途多一個 → 三條、順序穩定；Swap 的上限；兩個數字卡（本機、對等體、null）；`formatValue` 的表格；結果不含監控的六個 id。
+- mutation：每核在 5 分也 pending；macOS 也畫 PSI；Swap 上限不看 `swapTotalMb`；本機的延遲寫成數字；series 有帶的欄位整段 null 時寫「等 series API 補欄位」。
+- **Split**：磁碟與行程兩組移到 7c-2 的開頭。
+
+#### MON-7c-2 — 完整圖表的畫面、區域色帶、同步時間點
+
+依賴 MON-7c-1、MON-7b-2（`StatusTab`）。檔案（10 個、約 600 行）：`components/watch/host/MiniChart.tsx`＋`MiniChart.test.tsx`、新檔 `components/watch/host/ZoneStrip.tsx`＋`ZoneStrip.test.tsx`、新檔 `components/watch/host/StatusCharts.tsx`＋`StatusCharts.test.tsx`、`StatusTab.tsx`、`StatusTab.test.tsx`、`locales/zh-TW.json`、`en.json`。
+
+1. **`MiniChart` 的完整版**（`MiniChart.tsx:17-28` 的 props 加 `variant?: 'mini' | 'full'`，預設 mini，監控那六張不變）：full → 標題列寫標題＋單位（`def.unit`）＋`noteKey` 的 `Info` 圖示（title 是說明），**不畫右上大字**（`:106-110`），圖例（`:152-157`）每條寫那一點的值（`formatValue`；滑鼠那點優先，否則最後一筆，規則同 mini）；x 軸 5 個時間（設計稿 `xf`）；`series.label ?? t(labelKey, labelParams)`；`pendingKey`／`noneKey` 取代預設的 pending 字。圖面高度同 90 px（`:11`）。測試（`MiniChart.test.tsx` 加一段）：full 沒有 `mini-big`、圖例有值、hover 換成那一點；label 原字；`pendingKey`、`noneKey` 的字；mini 的既有案例照過。mutation：full 仍畫大字；圖例取第一筆而不是最後一筆。
+2. **`ZoneStrip`**（M44「最上面一條區域色帶」）：8 px 高的一條，每個樣本依時間放在 [now − R, now]（同 `MiniChart` 的 X），色：正常 `bg-status-success`、偏高 `bg-status-warning`、過載 `bg-status-error`、未知 `bg-text-muted`，淡（opacity .6）；沒有樣本的地方空著；`dead` 之後畫斜線（同 `MiniChart` 的 hatch）。讀 `HostSample.zone`，不讀 `lib/pool/history` 的 `ZonePoint`（舊的 `ZoneBand.tsx` 留給 MON-12）。測試：區段的位置與顏色；null zone；dead。mutation：未知畫成正常色。
+3. **`StatusCharts`**：`useHostSeries(host.hostId, host.alias, range, facts)`（同監控：樣本與範圍一起取，`MonitorTab.tsx:5`、`:34`）→ `fullChartsOf` → 先 `ZoneStrip`，再依組畫組名（Phosphor `Cpu`、`Memory`、`HardDrives`、`Stack`、`ListBullets`、`Wrench`）與一格 `grid-cols-2`（寬時 3）的 `MiniChart variant="full"`，數字卡用小卡接在該組最後；**滑鼠時間點整個「狀態」共用一個**（M42；寫法照 `MonitorTab.tsx:35-43`：存時間不存位置，主機或範圍變了就重設）；非 ok → `dead`（色依狀態，同 `MonitorTab.tsx:19`、`:47`）。測試：六組的順序與每組張數（darwin、linux）；在一張圖上 hover → 每張的圖例都換成那一點；換範圍 → hover 清掉；非 ok 的斜線；數字卡的字。mutation：hover 只換自己那張；換範圍不清 hover。
+4. **掛上去**：`StatusTab.tsx` 在 `FactsTable` 之後放標題「完整圖表」＋說明（「監控」那六張不重複；滑鼠移上去，所有圖同一時間點）與 `<StatusCharts host range now />`。`StatusTab.test.tsx` 加一案。
+- 語系：組名、圖名、單位、數字卡、三種 pending 的字，兩邊都加。
+- **Split**：task 2（`ZoneStrip`）與它在 task 4 的掛法移到一張小的 7c-3。
 
 ### MON-8 — 主機頁「行程」（M45）
-- **目標**：CPU 前 12／記憶體前 12（可拉時間軸）、常駐程式、未宣告的重指令、觀察紀錄（`next_until` 翻頁、依 id 去重）。取代 6f-2「行程」的過渡內容。
-- **主要檔案**：`ProcTable.tsx`、`ResidentsTable.tsx`、`lib/pool/observations-api.ts`（MON-10b 建 `/observations`，這期加 `/undeclared`；若 10b 還沒 merge 就由這期先建 `/observations` 那半，10b 改成沿用；device token 403 時說明只有 admin token 能讀）、新的 `components/watch/host/ProcTab.tsx`。時間軸讀 1 小時內 5 秒一筆的完整紀錄（`fetchFactsHistory`，每筆帶 `procs`；6c 的短軌只存 `HostSample`、不存行程，這期在 `host-history.ts` 旁另存每筆的 `procs`，或拉軸時再讀）。
-- **依賴**：MON-6f-2；MD-3（765）；MON-10b（或自建，見上）。
-- **大小**：一期，約 600 行。
+
+**為什麼拆三張**：原估一期約 600 行。細化後：現在的行程表與常駐程式＋掛上去約 500；一小時的時間軸（每 15 秒一筆，要讀 wwd 一小時的 5 秒紀錄）約 520；未宣告的重指令＋觀察紀錄（翻頁、去重、展開）約 720。
+依賴與順序：8a（6f-2 之後）→（8b ∥ 8c）。掛點：6f-2 的 `WatchHostPane`「行程」那一支（6f-2 task 2：兩張 `ProcTable` 的 CPU、記憶體前 12＋`ResidentsTable`；若 6f-2 照它的 Split 把這段移到 MON-8，就是「在之後的期」一行字），8a 換成 `<ProcTab host={host} now={now} />`。
+外部依賴查核：
+- **MD-3 在 main（765）**：Purdex `GET /api/pool/hosts/{alias}/observations?since=&until=`、`/undeclared?since=`（`internal/module/pool/module.go:247-248`；handler `internal/module/pool/observations.go:14-48`，`next_until` 原樣、舊 wwd 回 `known: false`），能力 `pool.observations.v1`（`internal/core/info_handler.go:166`），只有 admin token 能讀；wire：`internal/wwd/wire/undeclared.go:9-20`（`ObservationsResponse`）、`:34-54`（`UndeclaredGroup`、`UndeclaredResponse`）、`:56-69`（`Validate`）。
+- **10b 的觀察讀取已 merge（#3796）**：`spa/src/lib/pool/observations-api.ts:84-91` `fetchObservations`（`next_until` 原字串、依 id 去重、答案的 host 要是問的那台）、`events-model.ts:98-103` `mergeObservations`。spec 的「10b 的觀察 API（沒有就自建）」：已有，不自建。**`/undeclared` 的讀取還沒有**（`spa/src` 裡沒有程式呼叫它）→ 8c 加在 `observations-api.ts`。
+- **1 小時內的 5 秒紀錄**：wwd 的 5 秒 ring 正好 720 筆＝1 小時（`internal/wwd/daemon/sampler.go:23`），經 `GET /api/pool/facts/history?step=5s`（`spa/src/lib/pool/api.ts:64-70`，daemon 讀不到別台時 `host_not_local`）；每筆帶 `procs`（facts 只列 CPU 前 12＋記憶體前 12）。6c 的短軌只留 31 分、只存 `HostSample`（`host-history.ts:70-71`、`:175`），不存行程，所以另存。
+- 與 MON-7、9 並行。10c 也讀觀察紀錄（事件頁「讀到的放模組記憶」）：8c 建的 `lib/pool/host-observations.ts` 兩邊共用，先 merge 的那張建、後 merge 的改用（見「順序與分工」）。
+
+#### MON-8a — 現在的行程表、常駐程式、掛上「行程」
+
+依賴 MON-6f-2。檔案（10 個、約 500 行）：新檔 `components/watch/host/ProcTab.tsx`＋`ProcTab.test.tsx`、新檔 `components/watch/host/ProcList.tsx`＋`ProcList.test.tsx`、`components/watch/ProcTable.tsx`（匯出 `ownerWords`）、`components/watch/ResidentsTable.tsx`、新檔 `components/watch/host/ProcTab.tab-switch.test.tsx`、`components/watch/WatchHostPane.tsx`、`locales/zh-TW.json`、`en.json`。
+
+1. **`ProcList`**（設計稿 `procTable`，`page.js:1019-1023`）：同檔匯出純函式 `procRowsOf(procs, by, n = 12)`：依 CPU 或記憶體排序取前 12。表頭 PID、行程、主值（CPU % 或記憶體 MB；數字前一條相對於表內最大值的橫條，CPU `bg-accent`、記憶體 `bg-queue-light`）、副值（淡色）、歸屬（`ownerWords`，`ProcTable.tsx:12-16` 改成匯出；session 是 `orphan` 寫「沒有主人」）；`mem_kind: 'rss'` 的 RSS 標記照 `ProcTable.tsx:45-51`；`offline` → 一列「離線，沒有資料」（`watch.host.offline_no_data`）。監控的 `ProcTable` 不動。測試：12 列上限、兩種排序、副值、橫條比例、歸屬字、offline。mutation：記憶體表用 CPU 排序；畫 13 列。
+2. **`ProcTab`**（M45 的前半）：段標題「行程」＋提示「facts 列 CPU 前 12＋記憶體前 12；每 5 秒更新」（8b 在標題列加時間軸）；兩張 `ProcList` 並排；下面兩欄：左「常駐程式（只列出、不砍）」（`ResidentsTable` 加 `offline` prop、session 是 `orphan` 寫「沒有主人」、外距 `mt-6` 改由外層決定），右欄留給 8c。資料是 `host.state` 為 ok 時的 `facts.procs`、`facts.residents`；不是 ok → 兩張表與常駐都寫離線。測試：ok 的兩張表與常駐；非 ok 三處離線；換主機換內容。
+3. **掛上去**：`WatchHostPane` 的「行程」那一支換成 `<ProcTab host={host} now={now} />`。
+4. **tab-hosted**：這期沒有新的讀者選擇（捲動是 6f-1 的記憶）。`ProcTab.tab-switch.test.tsx`：mserv 切到「行程」、捲到下面，切走再切回 → 仍在「行程」、捲動位置在；8b、8c 在同一檔加案。
+- **Split**：task 1 的橫條與副值移到 8b。
+
+#### MON-8b — 一小時的時間軸（每 15 秒一筆）
+
+依賴 MON-8a（`lib/pool/proc-history.ts` 可先寫）。檔案（10 個、約 520 行）：新檔 `lib/pool/proc-history.ts`＋`proc-history.test.ts`、`components/watch/host/ProcTab.tsx`、`ProcTab.test.tsx`、`ProcTab.tab-switch.test.tsx`、`lib/watch/view-memory.ts`＋`view-memory.test.ts`、`no-fleet-reads.guard.test.ts`（`POOL_FILES` 加 `proc-history.ts`）、`locales/zh-TW.json`、`en.json`。
+
+1. **讀取與記憶**（`proc-history.ts`；記憶、generation、上限的寫法照 `host-history.ts:77-121`、`:163-179`）
+   - `ProcSnap = { at; procs: PoolProc[] }`；每台（`host_id`）一份 `{ snaps; load: 'idle' | 'loading' | 'ok' | 'host_not_local' | 'error'; loadedAt; gen; holds }`，模組層、不持久，最多 32 台、只淘汰沒人用的。
+   - `PROC_STEP_MS = 15_000`、`PROC_KEEP_MS = 61 分`。`loadProcHistory(source, alias, hostId, now)`：`fetchFactsHistory(source, alias, iso(now − 60 分 − SKEW_MS), '5s')`，依時間取「離上一筆留下的 ≥ 15 秒」的紀錄、只存 `at` 與 `procs`；併入時同一個 `at` 留已有的、比這台時鐘快超過 5 秒的丟掉、只留 61 分。`appendLiveProcs(hostId, facts)`：離最後一筆 ≥ 15 秒才接上。
+   - **什麼時候讀**（待定第 7 條）：第一次動時間軸時才讀；讀過的 5 分鐘內再進來不重讀，之後接 live。hook `useProcHistory(hostId, alias, liveFacts, wanted)`。
+   - 測試：每 15 秒一筆（0～60 秒的 5 秒紀錄 → 留 0、15、30、45、60）；live 接上的 15 秒規則；先發後到的答案不寫；卸下後回來的答案不寫；`host_not_local`；61 分之外的丟掉；`wanted` 為 false 時一次都不讀；5 分鐘內不重讀。
+   - mutation：每筆都留；掛上就讀（`wanted` 那案轉紅）；拿掉 generation 檢查。
+2. **時間軸**（M45「可拉時間軸看 1 小時內每 15 秒一筆」）：`ProcTab` 標題列右邊一條 `<input type="range">`（`accent-color` 用 `accent`）＋時間（hh:mm:ss）＋「回到現在」；最右端＝現在（live facts）；拉到其他點 → 兩張表換成那一筆的 `procs`、標題寫「hh:mm:ss 那一筆」。讀取中寫「讀取這一小時的紀錄…」、`host_not_local` 寫「daemon 讀不到這台的歷史」、錯誤寫「讀不到」。常駐程式只畫現在（`residents` 不在 15 秒的記憶裡）。非 ok → 時間軸停用。測試：拉之前沒有讀；拉了才讀、表換內容；回到現在；讀取中與兩種錯誤的字；非 ok 停用。
+3. **tab-hosted**：選的那一筆存 `view-memory.ts`：`readProcAt`／`writeProcAt(hostId): number | null`（存 `at`、不存位置：live 一直往後接，位置會移；null＝現在），`clearViewMemory` 一併清。`ProcTab.tab-switch.test.tsx` 加一案：拉到 10 分鐘前那一筆，切走再切回 → 還是那一筆（期間 live 又接了幾筆也一樣）；那一筆已滑出 61 分 → 回到現在。mutation：存位置不存時間（「期間 live 又接了幾筆」那案轉紅）。
+- **Split**：task 2 的讀取中、錯誤字與停用規則移到 8c 的開頭。
+
+#### MON-8c — 未宣告的重指令、觀察紀錄
+
+依賴 MON-8a；10b（已 merge）。可與 8b 並行（都改 `ProcTab.tsx`、`ProcTab.tab-switch.test.tsx`、`view-memory.ts`、語系，後 merge 的併最新 main）。檔案（13 個、約 720 行）：`lib/pool/observations-api.ts`＋`observations-api.test.ts`、新檔 `lib/pool/host-observations.ts`＋`host-observations.test.ts`、新檔 `components/watch/host/ObservationTables.tsx`＋`ObservationTables.test.tsx`、`ProcTab.tsx`、`ProcTab.tab-switch.test.tsx`、`lib/watch/view-memory.ts`＋`view-memory.test.ts`、`no-fleet-reads.guard.test.ts`（`POOL_FILES` 加 `host-observations.ts`）、`locales/zh-TW.json`、`en.json`。
+
+1. **`/undeclared` 的讀取**（`observations-api.ts`）
+   - `UndeclaredGroup = { signature; count; cpuSeconds; maxMemMb; lastAt; lastSession; lastVia; lastCommand }`、`UndeclaredPage = { host; known; groups; truncated }`；`parseUndeclared(v)`：`host` 是非空字串；`groups` 是陣列或 null（null 當空）；一組缺 `signature`、`count` ≤ 0 或 `last_at` 壞 → 丟那組（Go 的 `Validate` 也拒，`undeclared.go:56-69`）；`last_via` 不認得照原字；daemon 的 `{ known: false }`（`observations.go:43-45`）→ `known: false`、空。`fetchUndeclared(source, alias, since)` → `GET /api/pool/hosts/{alias}/undeclared?since=`；答案的 `host` 不是問的那台 → `unreadable`（同 `observations-api.ts:88-89`）。
+   - 測試：照 Go 形狀的字面值（兩組、一組是 codex）；`known: false`；壞組丟掉；host 不符；403 → `forbidden`（`errors.ts:27`）。mutation：host 不符照收。
+2. **每台的觀察記憶**（`host-observations.ts`）
+   - 每台（`host_id`）：`undeclared: { page; at } | null`、`observations: { list（`mergeObservations` 依 id 去重，`startedAt` 新的在前）; nextUntil: string | null; truncated; known; at } | null`，各自的 `load`（`idle`／`loading`／`ok`／`forbidden`／`error`）與 generation。
+   - `loadHostObservations(source, alias, hostId, now)`：未宣告 `since = now − 7 天`；觀察 `since = now − 24 小時` 的第一頁；重讀時第一頁與已載入的較早頁合併（不丟掉讀者翻過的）。`loadOlder(hostId)`：`until = nextUntil`，**原字串**（`observations-api.ts:3-4`：切掉小數秒會漏紀錄）。掛著時每 60 秒重讀第一頁（同 10c 事件頁的節奏）。
+   - 只在來源 daemon 宣告 `pool.observations.v1` 時讀；**這台狀態是 `wwd_down`／`host_down` 時不讀**（紀錄存在那台的 wwd 裡，讀了只會逾時）。
+   - 測試：兩條讀取的 since；翻頁帶原字串、去重、新的在前；重讀不丟較早頁；先發後到不寫；403 → `forbidden`；沒有能力不讀；`host_down` 不讀。mutation：`nextUntil` 經 `Date` 轉換再送；不去重；`host_down` 照讀。
+3. **兩張表**（`ObservationTables.tsx`；設計稿 `renderProc` 的 `udT`、`obT`，`page.js:1030-1034`）
+   - 未宣告的重指令（「7 天，依 signature 分組」）：signature（mono）、次數、CPU 秒、記憶體峰值、最近一次（時間・session（via））；`truncated` → 「只列 CPU 用最多的幾組」；空 → 「7 天內沒有」。
+   - 觀察紀錄（「24 小時、依 id 去重，最新在上；沒有工作標記、CPU 用滿 60 秒或記憶體到 1 GB 的行程樹」）：開始、長度（進行中用 `text-status-warning-text`）、session（codex 加標記）、signature、指令（已遮秘密；截斷，title 是全文）、CPU 秒、峰值核（`cpuPeak / 100`，同 `events-model.ts:115`）、記憶體、行程；預設 10 筆，「顯示全部 N 筆」／「只看最新 10 筆」；有 `nextUntil` → 「載入更早的」。
+   - 共通：`forbidden` → 「觀察紀錄只有 admin token 能讀」；`known: false` → 「這台的 wwd 太舊，沒有觀察紀錄」；沒有能力 → 「這台 daemon 沒有觀察紀錄的路由」；非 ok → 「讀不到（{狀態字}）；紀錄存在那台的 wwd 裡」。
+   - 測試：兩張表的欄；10 筆與展開；載入更早的；四種說明字。mutation：展開後仍只畫 10 筆；`forbidden` 寫成一般錯誤。
+4. **掛上去與 tab-hosted**：`ProcTab` 下方左「常駐程式」、右「未宣告的重指令」，再下面整行「觀察紀錄」（設計稿的版面）。「顯示全部」存 `view-memory.ts` 的 `readObsExpanded`／`writeObsExpanded(hostId)`；載入過的較早頁在 `host-observations.ts` 的記憶裡。`ProcTab.tab-switch.test.tsx` 加一案：mserv 展開觀察紀錄、載入更早一頁，切走再切回 → 仍展開、較早那頁的列還在、沒有重讀較早頁。
+- **Split**：觀察紀錄（task 2 的翻頁、task 3 的觀察表、task 4 的展開）移到 8d；8c 只留未宣告的重指令。
 
 ### MON-9 — 主機頁「設定」與 Hosts 頁（M46–M52、W7、W8）
-- **目標**：9a 設定子分頁（取代 6f-2 的過渡內容）：接工作、名額、主人（沿用 `WorkerSettings`）、暫停（沿用 `WorkerExceptions`）、告警（唯讀門檻；兩個失聯開關等 W8 的 API，之前唯讀顯示現值）、推播總開關（M50）、側欄顯示（M51：顏色、圖示、形狀、資料、套用到四台、回到預設，寫 MON-2b 的 `writePoolHostLook`）；`WatchSettings` 的 watch 列（守門員段）整段拿掉——fleet／probe 分支與 `fleetHostId` prop 在 6f-1 已拿掉、守門測試在 6f-2 已含它，9a 改寫時照樣在範圍內；拿掉「設定 → 終端機」的「主機格指示」控制項（欄位與投影留到 MON-12 一起清，免得多升一次 ordinal）。9b Hosts 頁：拿掉資源池主機與觀察主機（M52），留一行連結。
-- **主要檔案**：9a：新的 `components/watch/host/SettingsTab.tsx`、`WorkerSettings.tsx`、`WorkerExceptions.tsx`、`WatchSettings.tsx`（watch 列整段拿掉；6f-1 之後只剩這段）、新的 `lib/pool/push-switch.ts`（`GET /api/hostconfig`、`PUT /api/hostconfig/wwd_alerts`）、`HostColorField.tsx`／`HostIconField.tsx`（沿用）、`TerminalSection.tsx`。9b：刪 `components/hosts/` 的 `PoolHostsSection`、`PoolHostGroup`、`PoolHostPage`、`PoolHostRoute`、`PoolStatusDot`、`ProbeHostsSection`、`ProbeHostPage`、`ProbeHostEditor`、`ProbeHostForm`、`ProbeCheck`、`probe-rows.tsx`、`use-probe-rows.ts`、`useProbeEditor.ts`、`FleetRowEditor.tsx`、`pool-status-word.ts`，`lib/pool/use-pool-host-rows.ts`、`lib/pool/fleet-bridge.ts`（最後一個讀者走了）；改 `HostSidebar.tsx`、`OverviewSection.tsx`、`components/HostPage.tsx`。
-- **依賴**：MON-6f-2、MON-2b；W8 的 API（只擋那兩個開關）。
-- **大小**：9a 約 750 行；9b 以刪除為主（只算新增行）。可與 MON-7、MON-8 並行。
+
+**為什麼拆五張**：原估 9a 約 750 行、9b 以刪除為主。細化後：設定殼＋接工作＋暫停（放行類別與標記）約 520；告警（唯讀）＋推播總開關約 700；側欄顯示＋拿掉終端機的全域指示約 430；Hosts 頁要刪 27 個檔，照 ≤ 20 檔拆成兩張（拿掉入口 17 檔、刪剩下的檔 18 檔）。
+依賴與順序：9a-1（6f-2 之後）→（9a-2 ∥ 9a-3）→ 9b-1（9a-1 之後；建議也在 7b-2、9a-3 之後：Hosts 頁的資源池主機頁有版本、標籤、工具鏈，觀察主機頁有樣式，7b-2 的六張卡、9a-3 的側欄顯示接手）→ 9b-2。掛點：6f-2 的 `WatchHostPane`「設定」那一支（6f-2 task 2：`<WatchSettings hostId hostConfigId poolAlias offline peerIds />`），9a-1 換成 `<SettingsTab host={host} />`。
+外部依賴查核：
+- **worker 開關、名額、主人、暫停在 main**（`pool.control.v1`；`internal/module/pool/control.go:59-96` 把 body 原樣轉給 wwd）。wwd 的暫停已收 `allow {classes, repos}` 與 `flags`（`release`、`expect_pressure`；`internal/wwd/wire/api.go:254-263`、`alert.go:15-30`），**App 還沒送**（`spa/src/lib/pool/control-api.ts:74-76` 只送 `name、until、pid、holds`；`exceptions.ts:3` 註明不帶 allow、flags）→ 9a-1。M46（送出後等下一筆讀數、15 秒提示）、M47（關掉時確認框寫件數）`WorkerSettings` 已經做了（`WorkerSettings.tsx:128-139`、`:217-220`、`:236-242`）。
+- **推播開關的路由在 main、SPA 沒有讀者**：`GET /api/hostconfig` 的 `wwdAlerts`、`PUT /api/hostconfig/wwd_alerts`（`internal/module/hostconfig/handler.go:111`、`module.go:90`、`wwd_alerts.go:12-35`；CAS 用 `baseRevision`）；`spa/src` 沒有 `wwdAlerts` 的程式、`host-config-api.ts:35-41` 的集合清單沒有它 → 9a-2。誰在推：`/api/info.wwdalerts {push, deliverer, suppressed}`（`internal/core/info_handler.go:229-234`、`internal/module/wwdalerts/module.go:706-714`）。
+- **W8 的兩種失聯開關：寫入 API 不在 main，連讀取也沒有**。`alert_unreachable` 只在每台 wwd 的 TOML（`internal/wwd/daemon/config.go:189-198`），wire 與 Purdex 的路由都沒有帶它；A 線的 MD plan 把它歸 S9（`docs/plans/2026-10-20-wwd-monitoring-data-plan.md:150`），沒有排期。→ 9a-2 照 spec 先唯讀，但 spec 寫的「唯讀顯示現值」做不到（待定第 1 條）。
+- **告警門檻沒有讀取 API**：門檻是 wwd 的常數（`internal/wwd/advisor/rules.go:12-25`、`:130-131`、`rules_mem.go:16-17`、`:110-112`、`rules_mserv.go:15-17`），S3-2（10-21）起另有可設定的 `[advisor] watch_rules／off／swap_growth_mb`（`config.go:156-170`）（待定第 2 條）。
+- 外觀與指標的寫入（MON-2b）在 main：`writePoolHostLook`（`spa/src/lib/pool/host-looks.ts:129-157`）、`setIndicatorForAll`（`stores/usePoolHostsStore.ts:36`）。
+
+#### MON-9a-1 — 設定分頁的殼、接工作、暫停的放行類別與標記
+
+依賴 MON-6f-2。檔案（18 個、約 520 行；照 spec 整段拿掉守門員段，待定第 3 條選 (B) 時見 task 3）：新檔 `components/watch/host/SettingsTab.tsx`＋`SettingsTab.test.tsx`、新檔 `components/watch/host/SettingsTab.tab-switch.test.tsx`、`components/watch/WorkerExceptions.tsx`＋`WorkerExceptions.test.tsx`、`lib/pool/control-api.ts`、`lib/pool/exceptions.ts`＋`exceptions.test.ts`、`lib/pool/pause.ts`＋`pause.test.ts`、`lib/pool/types.ts`、`components/watch/WatchHostPane.tsx`、刪 `components/watch/WatchSettings.tsx`、`WatchSettings.test.tsx`、`WatchSettings.tab-switch.test.tsx`（由 `SettingsTab` 的兩個測試取代）、`locales/zh-TW.json`、`en.json`、`no-fleet-reads.guard.test.ts`（6f-2 加進範圍的 `WatchSettings.tsx` 拿掉；`SettingsTab.tsx` 在 `components/watch/host/**`）。6f-1 的 `WatchHostPane.settings.test.tsx`（mock `WatchSettings` 抓 props）若 6f-2 之後還在，改抓 `SettingsTab` 的 props（第 19 個檔）。
+
+1. **殼**（設計稿 `renderSettings`，`page.js:1091-1129`）：`SettingsTab({ host })`：接工作（`<WorkerSettings alias={host.alias} />`，`WorkerSettings.tsx:104`）→ 暫停（`<WorkerExceptions alias psi={…} />`）→（9a-2）告警、推播 →（9a-3）側欄顯示。沒有 daemon 的主機也是同一個版面（M52 的例子：mserv 的名額在這裡改）。測試（`SettingsTab.test.tsx`，整合）：區段順序；M47 的例子：air26 正在跑 1 件時關掉 → 確認框「正在跑的 1 件會跑完」；M46：改重名額 → 「已送出」、15 秒沒有新讀數 → 提示（假計時器）。
+2. **暫停的放行類別與標記**（M48）
+   - `pause.ts`：`PAUSE_CLASSES = ['release', 'merge', 'dev']`、`PAUSE_FLAGS = ['release', 'expect_pressure']`；`allowOf(classes)`：沒選 → `undefined`（**不送 `allow`**：wwd 的 `allow` 一出現就是「只放行列出的」，空清單＝全擋，`api.go:259-261`、`alert.go:14`），有選 → `{ classes, repos: [] }`。
+   - `control-api.ts:74-76` `postPause(…, holds, extra?: { allow?; flags? })`，只在有值時放進 body。`types.ts:18` `PoolExceptionDetail` 加 `allow?: { classes: string[]; repos: string[] }`、`flags?: string[]`；`exceptions.ts` 解析這兩欄（不認得的 class、flag 丟掉），檔頭的註解改掉。
+   - `WorkerExceptions.tsx`（新增表單 `:151-175`）：在「也擋輕工作」下面加兩排可複選的按鈕「仍放行：release、merge、dev」與「標記：發版中（輕名額降為 1）」；**「預期壓力（不推 PSI 告警）」只在這台 facts 有 PSI 時出現**（待定第 10 條）。選擇存 `worker-draft-memory`（`pause_allow`、`pause_flags`，逗號字串，同 `:50-53`）；`add()`（`:101-106`）帶上；清單每列（`:130-148`）的描述加「放行 release、merge・標記 發版中」（取 `details`）。
+   - 測試：沒選放行 → body 沒有 `allow` 鍵；選 release＋merge → `allow.classes`；標記；有 PSI 才有預期壓力；清單顯示放行與標記；草稿跨卸載。
+   - mutation：沒選時送 `allow: { classes: [] }`（「沒有 `allow` 鍵」那案轉紅）；預期壓力不看 PSI。
+3. **守門員段（watch 列）**：照 spec §6（`2026-10-18-wwd-plan.md:278-279` 那列）整段拿掉：`SettingsTab` 不畫它，刪 `WatchSettings.tsx`（`GuardianSection`、`TextControl`，`:44-224`）與兩個測試；`lib/watch/watch-row-write.ts` 因此沒人用，留給 MON-12。**若 88 選待定第 3 條的 (B)**：改成留下 `WatchSettings.tsx` 的 `GuardianSection`，`FIELDS`（`:20-30`）只留啟動那幾欄，`SettingsTab` 在 daemon 主機的最下面收合畫它；檔數改成 16、行數差不多。
+4. **掛上去**：`WatchHostPane` 的「設定」那一支換成 `<SettingsTab host={host} />`（6f-2 為 `WatchSettings` 算的 `peerIds`、`offline` 一併拿掉）。
+5. **tab-hosted**：`SettingsTab.tab-switch.test.tsx`（取代 `WatchSettings.tab-switch.test.tsx`）：mserv 的「設定」選「仍放行 release」「標記 發版中」、自訂時間打到一半、捲到下面，切走再切回 → 三樣與捲動都在。`WorkerSettings.tab-switch.test.tsx`、`WorkerExceptions.tab-switch.test.tsx`（6f-2 改成從 pool store 開主機頁）照過。
+- **Split**：task 2 獨立一張。
+
+#### MON-9a-2 — 告警（唯讀）與推播總開關（M37、M49、M50、W8）
+
+依賴 MON-9a-1（`SettingsTab`；task 1～3 的純函式與元件可先寫，最後一步掛上）。可與 9a-3 並行。檔案（16 個、約 700 行）：新檔 `components/watch/host/AlertSettings.tsx`＋`AlertSettings.test.tsx`、新檔 `lib/pool/push-switch.ts`＋`push-switch.test.ts`、新檔 `components/watch/host/PushSwitch.tsx`＋`PushSwitch.test.tsx`、`lib/host-config-api.ts`、`stores/useHostStore.ts`、`lib/nex/nex-host-reducer.ts`、`lib/nex/nex-host-effects.ts`、`stores/useNexHostStore.test.ts`、`SettingsTab.tsx`、`SettingsTab.test.tsx`、`locales/zh-TW.json`、`en.json`、`no-fleet-reads.guard.test.ts`（`POOL_FILES` 加 `push-switch.ts`）。
+
+1. **告警（唯讀）**（M49、P9、W8）：`AlertSettings({ host })`：
+   - 門檻表（待定第 2 條）：App 內建 wwd spec §13.3 的預設，每列寫規則、門檻、等級：磁碟快滿（剩不到 12 GB，推播）、磁碟在變少（剩不到 14 GB，或每小時少 2 GB 且 6 小時內會低於 10 GB，摘要）、壓力持續（偏高 5 分鐘，推播）、記憶體抖動（壓縮 > 4096 MB 且解壓縮 > 每秒 80000 次、持續 60 秒，摘要）、常駐程式變大（單一常駐或系統行程 ≥ max(4 GB, RAM 的 25%)，摘要）、wwd 反覆重啟（一小時內啟動 3 次，推播）、mserv 服務（生產 PSI some60 ≥ 10% 持續 2 分鐘，或可用 < 1536 MB，推播；只在有 PSI 的主機列，待定第 10 條）；輸入框停用；表頭寫「預設值；門檻寫死在 wwd，實際以各台設定為準（先唯讀，S9）」。常數旁註明 Go 的出處，測試只鎖表的內容與停用。
+   - 兩種失聯：「wwd 沒有回應（主機還在）時告警」（`LinkBreak`、`status-warning`）、「主機離線時告警」（`Power`、`status-error`），開關**停用、不畫開或關**，說明「現值與修改要等 A 線的設定 API（S9）」（待定第 1 條）。
+   - 觀察門檻（行程樹 CPU 用滿 60 秒、記憶體峰值 1024 MB；`[observe] min_cpu_seconds／min_mem_mb` 的預設，`config.go:148-149`）：停用的輸入框，同樣標「預設」。
+   - 測試：每列停用；兩個失聯開關沒有開或關的狀態；mserv 那列只在有 PSI 的主機。mutation：失聯開關照預設畫成開。
+2. **推播總開關的資料**（`push-switch.ts`，M50）
+   - `PushHost = { hostConfigId; on: boolean | null; revision: number | null; error: string | null }`；`readPush(hostIds)`：每台 `fetchHostConfig`（`host-config-api.ts:85-90`）的 `wwdAlerts`（`{ items: { push }, revision }`；不認得的形狀 → `on: null`）；`pushStateOf(hosts)` → `'on' | 'off' | 'partial' | 'unknown'`（讀不到的不算進開或關；全部讀不到 → `unknown`）。
+   - `writePushAll(on, hosts)`：依主機順序逐台 `putHostConfig(id, 'wwd_alerts', { push: on }, revision)`（`:99-116`；`:35-41` 的 `HostConfigCollectionItems` 加 `'wwd_alerts': { push: boolean }`）；409 → 看回應的 `current`，已經是 `on` 就算成功，否則用新的 revision 再送一次；一台失敗不擋下一台，回每台的結果。
+   - 「有 daemon 的主機」＝`usePoolHostOwners()` 的值（`lib/pool/daemons.ts:47`，去重、照主機順序）；寫入只送連著的（`usePoolHostDaemons()`，`:58`）。
+   - 誰在推（待定第 9 條）：`/api/info.wwdalerts` 存進 Nex 快取，寫法照 MON-1a 的 `wwd`：`stores/useHostStore.ts:106-118` `HostInfo` 加 `wwdalerts?: unknown`、`lib/nex/nex-host-reducer.ts:27-32` 加 `wwdAlerts?: { push: 'on' | 'off'; deliverer: boolean } | null`、`nex-host-effects.ts:47-70` 嚴格解析（照 `parseWwd`，`:64-70`）。測試在 `useNexHostStore.test.ts`。
+   - 測試（`push-switch.test.ts`）：兩台都開、都關、一開一關、一台讀不到；寫兩台；409 已是目標值；409 不是 → 再送一次；一台 500、另一台照寫；只寫連著的。mutation：partial 算成 on；只寫第一台；409 不重送。
+3. **`PushSwitch`**：一個 `ToggleSwitch`；`partial` 時旁邊寫「部分開啟」並列各台（「mlab：開・air26：關」），按一下全部設成開（自己定的）；送出中停用；有失敗 → 每台一行原因。說明「這台是 deliverer 時才會送；關著時照樣記在事件頁」（M37）。沒有 daemon 的主機頁：同一個開關，加一行「{alias} 沒有 Purdex daemon，它的告警由 {投遞者} 推（{投遞者} 停擺時由 {另一台}）」；投遞者讀不到時用 spec M50 的原句。tab-hosted：沒有讀者的草稿（狀態在 daemon），掛上就讀；測試加一案「切走再切回 → 重讀後顯示同一個值」。測試：四種狀態的畫法；partial 按一下 → 兩台都寫 true；失敗行；沒有 daemon 的頁兩種說明字。mutation：partial 按下去寫 false；沒有 daemon 的頁寫死 mlab。
+4. **掛上去**：`SettingsTab` 在暫停之後放「告警」「推播」兩段。`SettingsTab.test.tsx` 加順序。
+- **Split**：task 1（告警）移到 9a-3。
+
+#### MON-9a-3 — 側欄顯示、拿掉終端機的「主機格指示」（M9、M51、W7）
+
+依賴 MON-9a-1；可與 9a-2 並行（都只在 `SettingsTab` 加一段，後 merge 的併最新 main）。檔案（11 個、約 430 行）：新檔 `components/watch/host/LookSettings.tsx`＋`LookSettings.test.tsx`、`SettingsTab.tsx`、`SettingsTab.test.tsx`、`SettingsTab.tab-switch.test.tsx`、`lib/watch/view-memory.ts`＋`view-memory.test.ts`、`components/settings/TerminalSection.tsx`＋`TerminalSection.test.tsx`、`locales/zh-TW.json`、`en.json`。
+
+1. **`LookSettings`**（設計稿 `lookPanel`，`page.js:298-309`）：讀 `usePoolHostLook(hostId)`（`lib/pool/host-looks.ts:114-117`），寫一律 `writePoolHostLook`（`:129-157`：有 daemon 的主機，顏色與圖示寫進那台 App 主機的外觀，分頁上的主機徽章一起變；沒有 daemon 的寫新 store；指標一律寫新 store）。
+   - 顏色：`HostColorPicker`（`components/hosts/HostColorPicker.tsx:27`），`onSetLayer`／`onClearMode` 用 `withColorLayer`（`stores/useHostStore.ts:526`）算出新的 `colors` 再 `writePoolHostLook(hostId, { colors })`（寫法照 `ProbeHostForm.tsx:83-91`）。不用 `HostColorField`／`HostIconField`：它們綁 App 主機的 id（`HostColorField.tsx:22-24`），沒有 daemon 的主機用不了；spec A3（W1）的「沿用」落在 picker 這層。
+   - 圖示：`HostIconPicker`＋`withIcon`（`useHostStore.ts:568`）。
+   - 指標形狀：`SegmentControl` 環形／單柱／雙柱；資料：環形與單柱一個選單、雙柱左右兩個；七個項目（`IndicatorItem`，`usePoolHostsStore.ts:15`）。改成雙柱而左邊是綜合負載 → 換成 CPU＋記憶體壓力（設計稿 `wireSettings`，`page.js:1158`）。
+   - 預覽：`<HostCell view={cellOf(host)} variant="wide" …>`（`components/fleet/HostCell.tsx:47`、`lib/pool/cell-model.ts:71`），跟著寫入即時變。
+   - 「形狀與資料套用到四台」：`setIndicatorForAll(useMonitorHosts() 的 hostId, indicator)`，只套指標、不動顏色圖示。
+   - 「回到預設」（待定第 4 條）：寫 `{ shape: 'ring', data: ['load'] }`（M51 的預設），只動指標。
+   - 有 daemon 的主機加一行「顏色與圖示跟分頁上的主機徽章是同一份」。
+   - 測試：daemon 主機改顏色 → `useHostLookStore` 變、分頁徽章（`useTabHostBadge`）跟著變；mserv 改顏色 → 新 store；三種形狀與資料；雙柱的換算；套用到四台只改指標；回到預設；預覽跟著變。mutation：套用到四台連顏色一起複製；回到預設寫 null；雙柱保留綜合負載當左邊。
+2. **tab-hosted**：顏色的模式（主控台／終端機）是讀者的選擇 → `view-memory.ts` 的 `readLookMode`／`writeLookMode(hostId)`，預設 `terminal`（側欄用的那層，`resolveHostBadge(look, 'terminal')`）。`SettingsTab.tab-switch.test.tsx`（9a-1 建）加一案：切到主控台模式，切走再切回 → 還是主控台。
+3. **拿掉「設定 → 終端機」的「主機格指示」**（W7）：`TerminalSection.tsx:182-186` 那一列、`:80` 的選項與 `:59-60` 的讀寫拿掉；`TerminalSection.test.tsx:121` 那案改成斷言它不在、「佇列條節數」還在。`useUISettingsStore.fleetCellIndicator` 的欄位與投影（`lib/profile/projections.ts:67`）留到 MON-12（不多升一次 ordinal）；沒設過指標的主機照舊由它換算（`host-looks.ts:31-40`）。
+4. **掛上去**：`SettingsTab` 最後一段「側欄顯示」。
+- **Split**：task 3 移到 9b-1。
+
+#### MON-9b-1 — Hosts 頁拿掉入口，留一行連結（M52、A10）
+
+依賴 MON-9a-1；建議在 7b-2、9a-3 之後。檔案（17 個；新增約 90 行，其餘是刪除）：`components/hosts/HostSidebar.tsx`、`HostSidebar.test.tsx`、`components/hosts/OverviewSection.tsx`、`components/HostPage.tsx`、`locales/zh-TW.json`、`en.json`；刪 `components/hosts/PoolHostGroup.tsx`、`PoolHostRoute.tsx`、`PoolHostsSection.tsx`、`ProbeHostsSection.tsx`＋`ProbeHostsSection.test.tsx`、`FleetRowEditor.tsx`＋`FleetRowEditor.test.tsx`、`PoolHosts.test.tsx`、`HostSidebar.probes.test.tsx`、`components/HostPage.probe.test.tsx`、`HostPage.probe-nav.test.tsx`。
+
+1. **側欄**：`HostSidebar.tsx` 拿掉資源池主機群組（`:14`、`:188-195`）與觀察主機群組（`:196-226`）、它們的資料（`:10-13`、`:15`、`:53-59`）與 props（`:27-33` 的 `selectedProbeId`、`selectedPoolId`、`onAddProbe`）；在原處放一行按鈕「資源池主機的狀態與設定在監控分頁組 →」（`data-testid="hosts-monitor-link"`），按下去開監控分頁組（待定第 5 條）。這一行永遠畫，不看 pool 有沒有答。
+2. **主頁**：`HostPage.tsx` 拿掉 `ProbeHostPage`、`PoolHostRoute`、`useProbeEditor` 的 import（`:16-18`）、`useFleetDraftStore`（`:19`）與它的選取與離開（`:277-300`）、`probe:`／`pool:` 兩支與 `onAddProbe`（`:401-436`）。
+3. **總覽**：`OverviewSection.tsx` 拿掉 `FleetRowEditor`、`ProbeHostsSection`（`:19-20`、`:323-325`；SSH 備援、SSH 別名、資源池主機表與觀察主機清單都在這兩個裡）與只為它們讀的 `useFleetStore`（`:21`、`:47`）。
+4. **刪檔**：上面列的 11 個；PR 附 `git grep` 證據：刪掉的每個檔在 head 上沒有 import 者。`ProbeHostPage.tsx`、`PoolHostPage.tsx` 等從這期起也沒人 import（只剩自己的測試），9b-2 刪。
+- 測試：`HostSidebar.test.tsx` 加：連結一直在（pool 沒答也在）、按下去開監控（mock `openWatchArea`，斷言收到的目標）、沒有 `pool-group`／`probe-group`；`HostPage.test.tsx`、`OverviewSection.test.tsx` 照過。mutation：連結只在 pool 有答時畫；按下去開錯的分頁。
+- 語系：連結的字兩邊加；舊的 `pool_hosts.*`、`fleet_hosts.*` 鍵先不刪（死鍵不影響 locale-completeness），MON-12 一起清。
+- tab-hosted：Hosts 頁這期只拿掉東西，沒有新的 state。
+- **Split**：task 3（總覽）與它刪的 5 個檔獨立一張。
+
+#### MON-9b-2 — 刪掉剩下沒人用的檔，Hosts 頁進守門範圍
+
+依賴 MON-9b-1。檔案（18 個；新增約 40 行）：刪 `components/hosts/ProbeHostPage.tsx`＋`ProbeHostPage.test.tsx`、`PoolHostPage.tsx`＋`PoolHostPage.test.tsx`、`ProbeHostEditor.tsx`、`ProbeHostForm.tsx`、`ProbeCheck.tsx`＋`ProbeCheck.test.tsx`、`probe-rows.tsx`、`use-probe-rows.ts`、`useProbeEditor.ts`、`PoolStatusDot.tsx`、`pool-status-word.ts`、`lib/pool/use-pool-host-rows.ts`、`lib/pool/fleet-bridge.ts`＋`fleet-bridge.test.ts`；改 `lib/pool/history.ts`、`components/fleet/no-fleet-reads.guard.test.ts`。
+
+1. **`factsToFast` 搬進 `history.ts`**（待定第 6 條 (A)）：`lib/pool/history.ts:7` 從 `fleet-bridge` import 它；6f-2 之後 `history.ts`、`use-facts-history.ts`、`use-series-history.ts` 已沒人用（plan 6f-2 的「留給 MON-12」），但刪 `fleet-bridge.ts` 會讓它斷。這期把 `factsToFast` 原樣搬進 `history.ts`（不匯出），逐宣告位元組比對附在 PR；history 三檔照舊 MON-12 刪。選 (B) 時這步換成 9b-0。
+2. **刪檔**：上面 16 個；PR 附 grep 證據（head 上沒有 import 者）與 `tsc`。`fleet-bridge.ts` 是主機頁與 Hosts 頁的過渡接法（MON-1c-0 建）：主機頁那半 6f-2 已拿掉，這期最後一個讀者走了。
+3. **守門測試擴到 Hosts 頁**（A1 的過渡例外結束）：`no-fleet-reads.guard.test.ts:8-11` 的 glob 加 `'/src/components/hosts/**/*.{ts,tsx}'`、`'/src/components/HostPage.tsx'`，`scoped()`（`:22-26`）收進來；「範圍是它說的那樣」那案（`:29-41`）加 `components/hosts/HostSidebar.tsx`、`components/hosts/OverviewSection.tsx`、`components/HostPage.tsx`；檔頭（`:1-3`）改成「`fleet-bridge.ts`、`use-pool-host-rows.ts` 已刪；不在範圍的只剩 6f-2 之後沒人用的 `history.ts`、`use-series-history.ts`（MON-12 刪）與唯一豁免 `pool-look-migration.ts`」。這期之後 `components/hosts/` 與 `HostPage.tsx` 沒有任何 `lib/fleet` 的 import：現在 import 它的 11 個非測試檔，9b-1 改掉 3 個（`HostSidebar`、`OverviewSection`、`HostPage`）、刪掉 2 個（`FleetRowEditor`、`PoolHostRoute`），這期刪掉其餘 6 個。mutation：在 `HostSidebar.tsx` 暫加 `import { useFleetDaemons } from '../../lib/fleet/use-fleet-daemons'`、在 `HostPage.tsx` 暫加 `import '../lib/fleet/config-draft'`，都要轉紅。
+- **Split**：沒有（以刪除為主）；若 9b-1 之後又有人 import 這些檔，先找出來再刪。
 
 ### MON-10 — 事件分頁、盾牌與分頁上的數字（M23、M35–M37、M40、M41-1 的告警標記）
 
@@ -475,7 +707,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 ### MON-12 — fleet 退場（A11、W9）
 - **目標**：SPA 不再讀 `fleet.v1`、`gate.decisions.v1`；`watch.v1` 只留守門員的 status 與 wake（88 定案 W9：保留 `/api/watch/status`、`/api/watch/wake` 的讀者——守門員頁與盾牌——到 8b 的 incident 路由上線才拿掉）。
 - **主要檔案**：刪 `lib/fleet/*`（store、ws、api、history、config-*、probe-*、parse、types、`use-fleet-*`；`bar-readings.ts`、`ring-driver.ts` 已在 MON-1c-0b 搬到 `lib/pool/`，留著，不刪）；`hooks/useMultiHostEventWs.ts:148-150`、`:354-357`（fleet 的訂閱與處理）；`hooks/useTabQueued.ts` 的 fleet 那半；`components/watch/QueueSection.tsx`、`QueueNow.tsx`、`QueueLane.tsx`、`QueueHistory.tsx`；`lib/watch/api.ts` 的 decisions、`decisions-types.ts`；`lib/pool/pool-look-migration.ts`；`cell-model.ts`、`use-cell-models.ts` 剩下的部分；`useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 再升一次）；fallback 與 fleet 的語系鍵。**修訂 2 加**：MON-6f-2 之後沒人用的 `MetricChart.tsx`、`ZoneBand.tsx`（舊）、`lib/watch/series.ts`、`lib/watch/metrics.ts`、`lib/pool/history.ts`、`use-facts-history.ts`、`use-series-history.ts`（各帶測試）；`lib/watch/queue-time.ts` 拆開（`mss`、`secondsSince`、`WAIT_LONG_S` 留，`holderKey`／`waiterKey` 與 fleet 型別的 import 刪）；MON-10c 之後沒人讀的 `lib/watch/events-store.ts`、`events-view.ts`、`events-types.ts`、`lib/watch/api.ts` 的 events／unhandled 讀取與 `useMultiHostEventWs` 的 `watch.events` 那半（`watch.changed` 與 status 留，W9）；`types/tab.ts` 的 `fleetHostId`（舊分頁的欄位）。守門測試改成全 repo 不 import `lib/fleet/`。
-- **依賴**：MON-5c、6f-2、7、8、9、10c；時程跟 1f 的 WWD-9（daemon 端拿掉 `fleet.v1`、`gate.decisions.v1`）對齊。
+- **依賴**：MON-5c、6f-2、7c-2、8c、9b-2、10c（修訂 4 的期名；第三波留給 MON-12 的舊檔見 7b-2、9a-1、9b-2，刪 `fleetCellIndicator` 前的換算見「第三波細化（修訂 4）待 88 定案」第 4 條）；時程跟 1f 的 WWD-9（daemon 端拿掉 `fleet.v1`、`gate.decisions.v1`）對齊。
 - **大小**：一～兩期；純刪除只算新增行。
 
 ## 順序與分工
@@ -490,15 +722,23 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - 主機頁：6a-1（1c、1d 之後）→ 6a-2（另要 2a、2b）→ 6b；6c（1b 之後，可與 6a-1、6a-2 並行）→ 6d-1 → 6d-2 → 6e（另要 5a 的 task 1）；6f-1（6a-2、6c 之後）；6f-2（6f-1、6e 之後；6b 建議在前）。
   - 事件：10a（1a、1b 之後）→ 10b → 10c（另要 6f-2）。
   - 三條線可同時開。同檔的地方：`pane-labels.ts`、`useTabDisplay.ts`（6a-1、6a-2 的主機標籤與 10a 的事件數字，相鄰幾行）、`watch-area.ts`（6a-2／6b 的主機分頁與 10c 的事件分頁，不同函式）、`view-memory.ts`（6f-1 的主機與 10c 的事件篩選，10c 在後）、`MonitorTab.tsx`（6e 建、10c 加標記）、`no-fleet-reads.guard.test.ts`、語系檔；後 merge 的那張併最新 `origin/main` 再跑 PR 層測試。
-  - MON-7、MON-8、MON-9 在 MON-6f-2 之後並行（MON-8 另看 10b）；MON-11 等 A 線；MON-12 最後（5c、6f-2、7～9、10c 之後）。
+  - MON-7、8、9 的順序見下面的「第三波」；MON-11 等 A 線；MON-12 最後（5c、6f-2、7c-2、8c、9b-2、10c 之後）。
   - 建議分工：甲（MON-4 之後）6c → 6d-1 → 6d-2 → 6a-1 → 6a-2 → 6b → 6f-1 → 6e → 6f-2；乙（MON-1d 之後）10a → 10b → 5a → 5b → 5c → 10c（等 6f-2）。有第三位時 MON-5 整條給他，乙做完 MON-10 接 MON-7。
+- 第三波（修訂 4）：
+  - 「狀態」：7a（現在就能開）→ 7b-1 ∥ 7c-1（都只要 7a）→ 7b-2（另要 6f-2）→ 7c-2（另要 7b-2）。
+  - 「行程」：8a（6f-2 之後）→ 8b ∥ 8c。
+  - 「設定」與 Hosts 頁：9a-1（6f-2 之後）→ 9a-2 ∥ 9a-3 → 9b-1（另要 9a-1；建議在 7b-2、9a-3 之後）→ 9b-2。
+  - 6f-2 merge 之前就能開的：7a、7b-1、7c-1；8b 的 `proc-history.ts`、9a-2 的 `push-switch.ts` 也能先寫。
+  - 同改的檔（後 merge 的那張併最新 `origin/main` 再跑 PR 層測試）：`WatchHostPane.tsx`（7b-2、8a、9a-1 各換子分頁開關裡自己那一支，只動那一行與 import）；`lib/watch/view-memory.ts`＋測試（8b 的 `procAt`、8c 的 `obsExpanded`、9a-3 的 `lookMode`，加上第二波 10c 的事件篩選，各加自己的函式與 `clearViewMemory` 的一行）；`lib/pool/types.ts`（7a 的 facts、`PoolHost`、`SeriesPoint`，9a-1 的 `PoolExceptionDetail`，不同介面）；`no-fleet-reads.guard.test.ts`（7b-1、7c-1、8b、8c、9a-2 加 `POOL_FILES`，取聯集；9a-1 拿掉 `WatchSettings.tsx`；9b-2 擴 glob、改檔頭）；`ProcTab.tsx`、`ProcTab.tab-switch.test.tsx`（8b、8c）；`SettingsTab.tsx`＋兩個測試（9a-2、9a-3）；`StatusTab.tsx`＋測試（7b-2 建、7c-2 加）；語系檔（全部；新鍵各放自己的子樹 `watch.host.status.*`、`watch.host.procs.*`、`watch.host.settings.*`，衝突時兩邊都留）。
+  - 與第二波 10c：10c 只在 `MonitorTab.tsx` 加告警標記，第三波不碰 `MonitorTab`；事件頁的觀察記憶與 8c 的 `lib/pool/host-observations.ts` 共用一份，先 merge 的那張建、後 merge 的改用。
+  - 建議分工（三位 member）：甲 7a → 7b-1 → 7c-1 → 7b-2 → 7c-2；乙 8a → 8b → 8c；丙 9a-1 → 9a-2 → 9a-3 → 9b-1 → 9b-2。兩位時甲做 7 整條，乙做 8 再做 9。
 - 改到 team 模組的不在本線範圍；本線全是純 SPA，88 自己放行（B 線 10-19 起的規則），bump 與部署歸 1f。MON-2a 升 settings ordinal，88 放行前先告訴 1f（同 TG-1a-1）。
 
 ## 待查與已定案
 
 - **iOS（待查）**：purdex-ios 對 settings ordinal 13 與新 store 的反應（MON-2a task 4）。
-- **88 定案（10-20）** W1–W9（spec §7.3），落在這些 task：W1 → MON-2a task 1、MON-2b task 1；W2 → MON-2b task 2、MON-6b；W3 → MON-1b task 2；W4 → MON-1c task 2、MON-3a task 3；W5 → MON-4 task 2；W6 → MON-3a task 5；W7 → MON-2b task 1、MON-9a；W8 → MON-9a；W9 → MON-11、MON-12。
-- **A 線（不擋第一波）**：兩種失聯推播開關的寫入 API 由 88 請 1f 排（A 線小項，W8），上線前 MON-9a 唯讀顯示現值；series 補 `slots`、PSI、`sessions_room`、常駐程式（spec §3 最後一段）由 1f 排。
+- **88 定案（10-20）** W1–W9（spec §7.3），落在這些 task：W1 → MON-2a task 1、MON-2b task 1；W2 → MON-2b task 2、MON-6b；W3 → MON-1b task 2；W4 → MON-1c task 2、MON-3a task 3；W5 → MON-4 task 2；W6 → MON-3a task 5；W7 → MON-2b task 1、MON-9a-3；W8 → MON-9a-2；W9 → MON-11、MON-12。
+- **A 線（不擋第一波）**：兩種失聯推播開關的寫入 API 由 88 請 1f 排（A 線小項，W8），上線前 MON-9a-2 唯讀（修訂 4 查到：連現值也讀不到，見「第三波細化（修訂 4）待 88 定案」第 1 條）；series 補 `slots`、PSI、`sessions_room`、常駐程式（spec §3 最後一段）由 1f 排。
 - **第二波細化（修訂 2）的定案**：細化時查到的 8 點，88 於 10-20 全部照 plan 原本的寫法定案：
   1. **pane content 的欄位名**（A7）：spec 原本寫 watch-host 的 pane content 加 `hostId`（指的是 wwd 的 `host_id`）；`types/tab.ts:155-156` 明寫這個 kind 的欄位**刻意不叫 `hostId`**，免得通用的 pane 讀者把它當 App 主機。88 定案（10-20）：`poolHostId`；spec A7 的欄位名同步改了（MON-6a-1 task 1）。
   2. **舊主機分頁收不掉**（A7）：spec 說舊分頁「照現行 60 秒缺席規則收掉」，但現行規則對「這台從沒列過」的分頁一律留著（`watch-area.ts:231`）；升級重開後沒有一台裝置列過 fleet id，舊分頁會永遠留著。88 定案（10-20）：沒有 `poolHostId` 的主機分頁一看到就記成剛列過，60 秒後收；還沒升級的裝置會把它們同步回來，再 60 秒收一次，直到兩台都升級；接受這個代價（兩台 Mac 一起升）（MON-6a-2 task 1）。
@@ -521,6 +761,33 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - G-1 已進 768，但 SPA 的 `SeriesPoint` 只解原 8 欄（`types.ts:83-92`、`parse.ts:176-185`）→ MON-6c task 1。
   - 原 plan 的 MON-6 說沿用 `lib/pool/history.ts`、`use-series-history.ts`、`MetricChart.tsx`、`Gauge.tsx`、`ProcTable.tsx`、`lib/watch/view-memory.ts`；它們都 import `lib/fleet/`（`history.ts` 把讀數寫進 `fleetHistory`），守門測試擴到主機頁就不能沿用 → MON-6c～6f-2 新寫或改型別。
   - M33（取消的確認規則）`JobMenu` 已經做好（`JobMenu.tsx:1-2`、`JobMenu.test.tsx:106`、`:123`），MON-5 不改。
+
+- **第三波細化（修訂 4）待 88 定案**：細化 MON-7、8、9 時查到 spec 沒寫、寫了做不到或前後不合的 13 件。各期照下面的「建議」寫，88 不同意的那幾條，影響的 task 寫在每條最後。
+  1. **兩種失聯開關的「現值」**（M49、W8）：spec 寫「上線前這兩列唯讀顯示現值」，但現在連讀的地方都沒有——`alert_unreachable` 只在每台 wwd 的 TOML（`internal/wwd/daemon/config.go:189-198`），wire 與 Purdex 的路由都不帶它；A 線把它歸 S9（`docs/plans/2026-10-20-wwd-monitoring-data-plan.md:150`），沒有排期。**建議**：兩列畫成停用的開關、不顯示開或關，寫「現值與修改要等 A 線的設定 API（S9）」；API 上線再開一張小 PR 接上。**理由**：照預設寫死（三台開、air19 關）會跟部署時改過的設定不符，畫錯比不畫糟。影響 9a-2 task 1。
+  2. **告警門檻的「顯示值」從哪來**（M49、P9）：沒有讀取 API；門檻是 wwd 的常數（`internal/wwd/advisor/rules.go:12-25` 等），S3-2（10-21）起又多了可設定的 `[advisor] watch_rules／off／swap_growth_mb`（`config.go:156-170`），`off` 還能把規則關掉。**建議**：App 內建 wwd spec §13.3 的預設表，表頭寫「預設值；實際以各台設定為準」；S3-2 的三條 watch 級規則（`pressure_watch`、`pressure_danger`、`swap_growth`）不列，它們不推播也不進摘要、只叫醒守門員（`c8654f6ca`）。**理由**：P9 要「顯示值」，現階段只拿得到預設；寫明是預設，才不會讓人以為那是那台的實際值。影響 9a-2 task 1。
+  3. **守門員段（watch 列）整段拿掉，App 會沒有地方改守門員的啟動設定**（spec §6 的 `2026-10-18-wwd-plan.md:278-279` 那列）：`WatchSettings` 的守門員段是 App 裡唯一能改 `agent_command`、`workdir`、`start_prompt`、`wake_prompt`、`mode`、`auto_wake` 的地方（`WatchLaunchPanel.tsx:43`、`:90-91` 只顯示），而 W9 讓守門員（lucia）一路用到 8b。**選項**：(A) 照 spec 全拿掉；(B) 拿掉 fleet 觸發門檻那幾欄（`x_cores`、`y_mb`、`t_s`、`pressure_level`、`pressure_t_s`、`page_rate`、`page_t_s`、`targets`，WWD-9 之後沒有意義），留下啟動那幾欄＋`enabled`、`patrol_idle_min`，收合在 daemon 主機的設定最下面，MON-11 再搬去守門員頁。**建議 (B)**。**理由**：選 (A) 的話，8b 之前要改守門員的啟動指令只能直接改 host config。plan 照 (A) 寫、(B) 的改法寫在 9a-1 task 3。
+  4. **「回到預設」的指標，與全域設定的去留**（M51、W7）：M51 寫「預設：環形＋綜合負載」，W7 寫「每台的預設由全域『主機格指示』換算」；9a-3 拿掉全域控制項之後，原本選雙柱的人按「回到預設」，得到的是雙柱（換算值）還是環形（M51）？**建議**：「回到預設」寫明確的環形＋綜合負載、只動指標（不動顏色圖示）；沒設過的主機照 W7 換算顯示。另外，MON-12 刪 `fleetCellIndicator` 欄位之前，要先把換算值寫進每台還沒設過的 `indicator`，否則原本的雙柱會變回環形（列進 MON-12 的待辦）。**理由**：控制項拿掉之後，「預設」只剩 spec 寫的那一個意思。影響 9a-3 task 1、MON-12。
+  5. **Hosts 頁「留一行連結」放哪、開到哪**（M52、P12）：spec 與設計稿都沒寫位置。**建議**：放在 Hosts 側欄原本「資源池主機／觀察主機」群組的位置（哪台 App 主機都看得到）；按下去開監控分頁組裡依 `order` 排第一的主機的「監控」（`openWatchArea({ poolHost: { hostId }, sub: 'monitor' })`），pool 讀不到時開區域的第一個分頁。**理由**：連結的字是「狀態與設定」，直接打開一台主機最近；總覽是每台 App 主機各一頁，放那裡要先點進某台才看得到。影響 9b-1 task 1。
+  6. **刪 `fleet-bridge.ts` 會讓 `lib/pool/history.ts` 斷；以刪除為主的 PR 可不可以超過 20 檔**：`history.ts:7` import `factsToFast`；history 三檔與 `ZoneBand.tsx` 在 6f-2 之後沒人用，plan 原列 MON-12。**選項**：(A) 9b-2 把 `factsToFast` 原樣搬進 `history.ts`，MON-12 的清單不動；(B) 另開 9b-0 純刪除，先刪 `history.ts`＋測試、`use-facts-history.ts`、`use-series-history.ts`＋測試、`ZoneBand.tsx`＋測試（7 個檔，原列 MON-12）。**建議 (A)**：不動 MON-12、少一張 PR。另外，Hosts 頁要刪 27 個檔，照 ≤ 20 檔拆成 9b-1、9b-2；若 88 同意以刪除為主的 PR 可以超過 20 檔，兩張可以併成一張。影響 9b-2 task 1。
+  7. **「行程」的時間軸什麼時候讀**（M45）：「1 小時內每 15 秒一筆」要讀 wwd 一小時的 5 秒紀錄（ring 正好 720 筆，`internal/wwd/daemon/sampler.go:23`；一筆約 7 KB，共約 5 MB，經 daemon 轉送；`/facts/history` 只有 `5s`、`1m` 兩種 step）。**建議**：第一次動時間軸時才讀，App 端每 15 秒留一筆、只存時間與行程，記憶最多 32 台、不持久；讀過的 5 分鐘內不重讀，之後接 live。**理由**：看行程多半只看現在；每次進「行程」都讀 5 MB 太重，還會跟「監控」的 30 分鐘讀取疊在一起。影響 8b task 1。
+  8. **「狀態」在主機不是 ok 時畫什麼**（M44 沒寫；M22 只講橫幅與圖）：**建議**：判斷、Worker 與主人、暫停與 facts 全部欄位寫「沒有讀數（{狀態字}）」；連線、版本與身分、標籤用 pool 列（版本、平台、`host_id`、labels、fingerprint 不靠 facts）；完整圖表照「監控」停在最後一筆、之後畫斜線。**理由**：同 W5 的思路，畫得出來的照畫、靠 facts 的不編。影響 7b-2 task 1、2，7c-2 task 3。
+  9. **沒有 daemon 的主機的推播說明**（M50）：原句「它的告警由 mlab 推（mlab 停擺時由 air26）」寫死主機名；實際由誰推是 wwdalerts 決定的，`/api/info.wwdalerts.deliverer` 有（`internal/core/info_handler.go:229-234`、`internal/module/wwdalerts/module.go:706-714`）。**建議**：動態寫「由 {現在的投遞者} 推（它停擺時由另一台）」，讀不到時退回原句；要把 `/api/info.wwdalerts` 存進 Nex 快取（同 MON-1a 的 `wwd`，多 4 個檔）。**理由**：主從會換（`internal/alertsettings/alertsettings.go:8`），寫死的字會說錯。不採的話 9a-2 少 4 個檔。影響 9a-2 task 2、3。
+  10. **「預期壓力」標記與 mserv 服務那列只給 mserv**（M48「mserv 另有」、設計稿 `a === 'mserv'`）：App 沒有「這台是 mserv」的欄位，只能比 alias。**建議**：facts 有 PSI（Linux）的主機才出現這兩樣。**理由**：這個 flag 只暫停 mserv 服務規則的 PSI 部分（`internal/wwd/wire/alert.go:26-27`），在別台 Linux 上設了也無害；不寫死 alias。影響 9a-1 task 2、9a-2 task 1。
+  11. **「主機之間的延遲」的意思**（M43「畫成數字不畫線」）：設計稿寫「這台讀其他各台 pool 的往返時間，每台一條」，但 pool 列的 `rtt_ms` 是 **pool 來源那台 wwd 讀這台**的往返（`internal/wwd/wire/api.go:53-55`），App 拿不到「這台讀其他各台」。**建議**：數字卡寫「{來源 alias} 讀這台：N ms」，本機那列寫「本機（不經網路）」；要「每台讀每台」得由 A 線在 facts 或 pool 加欄，不在本線。影響 7c-1 task 2。
+  12. **開機時間要不要畫重開機線**（設計稿 `uptime` 的說明）：series 不帶 `boot_at`（`internal/wwd/wire/series.go:29-53`），30 分以內的 5 秒紀錄看得出重開機、1 小時以上看不到。**建議**：只做數字卡（開機多久＋開機時間），不畫線。**理由**：短範圍有、長範圍沒有，畫一半會誤導。影響 7c-1 task 2。
+  13. **期數**：照 ≤ 800 行／20 檔，MON-7 拆 5 張（7a、7b-1、7b-2、7c-1、7c-2）、MON-8 拆 3 張（8a～8c）、MON-9 拆 5 張（9a-1～9a-3、9b-1、9b-2）；原 plan 與 spec §8 寫的是約 2 期、1 期、2 期。理由寫在各期的「為什麼拆」；spec §8 已同步改。
+- **第三波細化時自己定的**（不是衝突；88 不同意再改）：
+  - 新元件都放 `components/watch/host/`（守門 glob 自動涵蓋）；各期的 tab-switch 測試各開新檔，不改 6f-2 的 `WatchHostPane.tab-switch.test.tsx`。
+  - `HostSample` 的新欄位放在可選的 `detail`，既有測試的字面值不必改。
+  - 完整圖表多條線的顏色依序輪既有四色（同第二波「不加新 token」）；圖面高度同「監控」的 90 px（設計稿 96 與 92，差 4 px 不另做）。
+  - pending 的字分三種：series 本來就不帶的「等 series API 補欄位」、每核「每核只在 30 分鐘以內有」、其他整段沒有的「這台沒有這項資料」；spec M43 的「A 線補」虛線佔位不做（G-1～G-4 都已在 768）。
+  - facts 全部欄位表列出 768 的新欄位，含記憶體分項（spec §3 的「先不畫」指圖，表只列值）。
+  - 「狀態」的暫停卡不列放行類別與標記（那在「設定」的暫停清單），免得 7b 依賴 9a-1。
+  - 「行程」的未宣告與觀察紀錄：這台 `wwd_down`／`host_down` 時不讀，寫「紀錄存在那台的 wwd 裡」。
+  - 推播「部分開啟」按一下全部設成開；寫入依主機順序逐台送，一台失敗不擋下一台，每台一行結果。
+  - `LookSettings` 用 `HostColorPicker`／`HostIconPicker`，不用綁 App 主機 id 的 `HostColorField`／`HostIconField`。
+  - 9b-1 要在 9a-1 之後，建議也在 7b-2、9a-3 之後。
+  - Hosts 頁的舊語系鍵留到 MON-12 清（同 MON-1d 的做法）。
 
 ## codex plan 審查（task-mvgk4yis-tsgk70）對照表
 
