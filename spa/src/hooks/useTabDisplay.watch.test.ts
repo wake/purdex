@@ -22,13 +22,11 @@ beforeEach(() => {
 describe('useTabDisplay for a watch-host tab', () => {
   const tab = { ...createTab({ kind: 'watch-host', fleetHostId: 'h1' }), id: 'watch-host-h1' }
 
-  it('the label follows the fleet: the snapshot arrives after mount, and a rename is picked up', () => {
+  it('a tab from before the pool is labelled by its fleet id; the fleet snapshot no longer renames it (MON-6a-2)', () => {
     const { result } = renderHook(() => useTabDisplay(tab))
-    expect(result.current.displayTitle).toBe('h1') // no snapshot yet: the raw fleet id
+    expect(result.current.displayTitle).toBe('h1')
     act(() => useFleetStore.setState({ snapshot: snapshot('mlab') }))
-    expect(result.current.displayTitle).toBe('mlab')
-    act(() => useFleetStore.setState({ snapshot: snapshot('mlab-2') }))
-    expect(result.current.displayTitle).toBe('mlab-2')
+    expect(result.current.displayTitle).toBe('h1')
   })
 })
 

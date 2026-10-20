@@ -1,32 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { createTab } from '../../../types/tab'
 import { WATCH_GUARDIAN_TAB_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { buildTabsSection } from '../../../lib/profile/sections'
 import { applyTabs } from '../../../lib/profile/applier'
 import { openWatchArea } from './open-watch-area'
-import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea, leaveAreaForForeignActiveTab } from './watch-area'
+import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea, leaveAreaForForeignActiveTab, readPoolView } from './watch-area'
 
 const ws = () => useWorkspaceStore.getState()
 // The host tabs of the area: the guardian tab is made by every pass and is covered by watch-area.guardian.test.ts.
 const watchTabs = () => (ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)?.tabs ?? []).filter((id) => id !== WATCH_GUARDIAN_TAB_ID)
-const view = (ids: string[], stale = false) => ({ hostIds: ids, stale })
+const view = (ids: string[]) => ({ hostIds: ids })
 const T0 = 1_000_000
 
-function setFleet(ids: string[], stale = false): void {
-  const snapshot: FleetSnapshot = {
-    hostId: 'p', term: 1, order: ids,
-    hosts: Object.fromEntries(ids.map((id) => [id, { id, alias: id } as never])),
-  }
-  useFleetStore.setState({ snapshot, primaryHostId: 'p', stale })
+function setPool(ids: string[]): void {
+  usePoolStore.setState({ hosts: ids.map((id) => ({ host_id: id, alias: id })) as never, sourceHostId: 'cfg-a' } as never)
 }
 
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
+  usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+  usePoolHostsStore.setState({ order: [], looks: {} } as never)
   ws().addWorkspace('A')
   ws().ensureWatchWorkspace()
 })
@@ -37,7 +35,7 @@ describe('reconcileWatchTabs', () => {
     expect(watchTabs()).toEqual([watchHostTabId('h1'), watchHostTabId('h2')])
     const tab = useTabStore.getState().tabs[watchHostTabId('h1')]
     expect(tab.locked).toBe(true)
-    expect(tab.layout).toEqual({ type: 'leaf', pane: { id: `${watchHostTabId('h1')}.p`, content: { kind: 'watch-host', fleetHostId: 'h1' } } })
+    expect(tab.layout).toEqual({ type: 'leaf', pane: { id: `${watchHostTabId('h1')}.p`, content: { kind: 'watch-host', poolHostId: 'h1' } } })
   })
 
   it('is idempotent: a second pass writes nothing', () => {
@@ -69,11 +67,70 @@ describe('reconcileWatchTabs', () => {
     expect(watchHostTabId('b') in useTabStore.getState().tabs).toBe(false)
   })
 
-  it('removes nothing while the snapshot is stale', () => {
+  it('a pool that cannot be read (no view) removes nothing, however long', () => {
     const r = createWatchReconciler()
     r.reconcile(view(['a', 'b']), T0)
-    r.reconcile(view(['a'], true), T0 + 10 * ABSENT_REMOVE_MS)
+    r.reconcile(null, T0 + 10 * ABSENT_REMOVE_MS)
     expect(watchTabs()).toContain(watchHostTabId('b'))
+  })
+
+  describe('tabs from before the pool (content without poolHostId)', () => {
+    const oldTab = (id: string) => useTabStore.getState().addTab({ id: watchHostTabId(id), pinned: false, locked: true, createdAt: 1, layout: { type: 'leaf', pane: { id: `${watchHostTabId(id)}.p`, content: { kind: 'watch-host', fleetHostId: id } } } })
+    const putInArea = (id: string) => ws().addTabToWorkspace(WATCH_WORKSPACE_ID, watchHostTabId(id))
+
+    it('goes after ABSENT_REMOVE_MS even though no device ever listed its fleet id, and not before', () => {
+      oldTab('fleet-x'); putInArea('fleet-x')
+      const r = createWatchReconciler()
+      expect(r.reconcile(view(['a']), T0)).toBe(T0 + ABSENT_REMOVE_MS)
+      expect(watchTabs()).toContain(watchHostTabId('fleet-x'))
+      r.reconcile(view(['a']), T0 + ABSENT_REMOVE_MS - 1)
+      expect(watchTabs()).toContain(watchHostTabId('fleet-x'))
+      r.reconcile(view(['a']), T0 + ABSENT_REMOVE_MS)
+      expect(watchTabs()).toEqual([watchHostTabId('a')])
+    })
+    it('one that syncs back in later is collected again, one minute after it is seen', () => {
+      const r = createWatchReconciler()
+      oldTab('fleet-x'); putInArea('fleet-x')
+      r.reconcile(view(['a']), T0)
+      r.reconcile(view(['a']), T0 + ABSENT_REMOVE_MS)
+      expect(watchTabs()).toEqual([watchHostTabId('a')])
+      oldTab('fleet-x'); putInArea('fleet-x') // a device that has not upgraded sends it back
+      r.reconcile(view(['a']), T0 + ABSENT_REMOVE_MS + 5000)
+      expect(watchTabs()).toContain(watchHostTabId('fleet-x'))
+      r.reconcile(view(['a']), T0 + 2 * ABSENT_REMOVE_MS + 5000)
+      expect(watchTabs()).toEqual([watchHostTabId('a')])
+    })
+    it('with no view (pool unreadable) it is not touched', () => {
+      oldTab('fleet-x'); putInArea('fleet-x')
+      const r = createWatchReconciler()
+      r.reconcile(null, T0)
+      r.reconcile(null, T0 + 10 * ABSENT_REMOVE_MS)
+      expect(watchTabs()).toContain(watchHostTabId('fleet-x'))
+    })
+    it('an old tab whose id is a listed pool host is made a pool tab, not collected', () => {
+      oldTab('a'); putInArea('a')
+      const r = createWatchReconciler()
+      r.reconcile(view(['a']), T0)
+      r.reconcile(view(['a']), T0 + 10 * ABSENT_REMOVE_MS)
+      const tab = useTabStore.getState().tabs[watchHostTabId('a')]
+      expect(tab.layout.type === 'leaf' && tab.layout.pane.content).toEqual({ kind: 'watch-host', poolHostId: 'a' })
+    })
+  })
+
+  it('a switch of the source that answers is not a host leaving: what the old source listed and the new one does not stays', () => {
+    const r = createWatchReconciler()
+    r.reconcile({ hostIds: ['a', 'b'], source: 'cfg-x' }, T0)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-y' }, T0 + 1000)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-y' }, T0 + 10 * ABSENT_REMOVE_MS)
+    expect(watchTabs()).toContain(watchHostTabId('b'))
+  })
+
+  it('the same source dropping a host still removes it after the minute', () => {
+    const r = createWatchReconciler()
+    r.reconcile({ hostIds: ['a', 'b'], source: 'cfg-x' }, T0)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-x' }, T0 + 1000)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-x' }, T0 + ABSENT_REMOVE_MS)
+    expect(watchTabs()).toEqual([watchHostTabId('a')])
   })
 
   it('a synced tab for a host this device never listed stays', () => {
@@ -202,7 +259,7 @@ describe('through startWatchArea', () => {
 
   it('opening a session while the area is shown leaves it for the return workspace', () => {
     const a = ws().workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)!.id
-    setFleet(['h1'])
+    setPool(['h1'])
     const stop = startWatchArea()
     ws().setActiveWorkspace(a)
     ws().setActiveWorkspace(WATCH_WORKSPACE_ID)
@@ -221,9 +278,9 @@ describe('through startWatchArea', () => {
     ws().insertTab(session.id, a)
     useTabStore.getState().setActiveTab(session.id)
     ws().setActiveWorkspace(a)
-    setFleet(['h1'])
+    setPool(['h1'])
     const stop = startWatchArea()
-    openWatchArea({ host: 'h1' })
+    openWatchArea({ poolHost: { hostId: 'h1' } })
     expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
     expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h1'))
     stop()
@@ -257,11 +314,11 @@ describe('startWatchArea', () => {
   it('reconciles on fleet change while the area exists, and removes after the timer', () => {
     vi.useFakeTimers()
     vi.setSystemTime(T0)
-    setFleet(['a', 'b'])
+    setPool(['a', 'b'])
     const stop = startWatchArea()
     expect(watchTabs()).toEqual(['a', 'b'].map(watchHostTabId))
     vi.setSystemTime(T0 + 1000)
-    setFleet(['a'])
+    setPool(['a'])
     expect(watchTabs()).toHaveLength(2)
     vi.advanceTimersByTime(ABSENT_REMOVE_MS)
     expect(watchTabs()).toEqual([watchHostTabId('a')])
@@ -270,10 +327,22 @@ describe('startWatchArea', () => {
 
   it('does nothing when the area is not there (an apply removed it): no workspace is recreated', () => {
     useWorkspaceStore.setState({ workspaces: ws().workspaces.filter((w) => w.id !== WATCH_WORKSPACE_ID) })
-    setFleet(['a'])
+    setPool(['a'])
     const stop = startWatchArea()
     expect(ws().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)).toBe(false)
     expect(Object.keys(useTabStore.getState().tabs)).toEqual([])
     stop()
+  })
+})
+
+describe('readPoolView', () => {
+  it('is null while no source has answered (the pool cannot be read): host tabs are then not touched', () => {
+    usePoolStore.setState({ hosts: [{ host_id: 'a', alias: 'a' }] as never, sourceHostId: null } as never)
+    expect(readPoolView()).toBeNull()
+  })
+  it('lists the pool hosts in the order of the pool hosts store, the unlisted after them', () => {
+    setPool(['a', 'b', 'c'])
+    usePoolHostsStore.setState({ order: ['c', 'a'] } as never)
+    expect(readPoolView()).toEqual({ hostIds: ['c', 'a', 'b'], source: 'cfg-a' })
   })
 })

@@ -1,7 +1,7 @@
 // spa/src/lib/pool/jobs-view.test.ts — what the jobs tab derives from the jobs the store keeps (plan "WWD-7 design", Jobs tab): the queue's display order, the lanes, the red line, the history and the result column.
 import { describe, it, expect } from 'vitest'
 import type { PoolJob } from './jobs-types'
-import { baseScore, displayOrder, lanes, noHostToGoTo, historyOf, historyHosts, historyRepos, whenText, resultWord, resultText, type PoolHostLabels } from './jobs-view'
+import { baseScore, displayOrder, hostCanTake, lanes, noHostToGoTo, historyOf, historyHosts, historyRepos, whenText, resultWord, resultText, type PoolHostLabels } from './jobs-view'
 
 const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
   id, origin: 'mlab', repo: { name: 'purdex', root: '', remote: '' }, snapshot: { commit: 'c', tree: '', base: '', rel_cwd: '' }, task: 't', args: [], class: 'dev', labels: [], locks: [], cacheable: false,
@@ -138,6 +138,18 @@ describe('"no host to go to": judged against the hosts whose worker is on', () =
   })
   it('with hosts known and none of them taking work, the red line says so', () => {
     expect(noHostToGoTo(job('a'), [{ alias: 'x', labels: [], workerEnabled: false }])).toEqual({ labels: [] })
+  })
+})
+
+describe('hostCanTake', () => {
+  const j = job('a', { labels: ['os:darwin'] })
+  it.each([
+    [true, ['os:darwin'], true],
+    [true, ['os:linux'], false],
+    [false, ['os:darwin'], false],
+    [false, ['os:linux'], false],
+  ])('worker on=%s, labels %j → %s', (workerEnabled, labels, want) => {
+    expect(hostCanTake(j, { alias: 'x', labels, workerEnabled })).toBe(want)
   })
 })
 

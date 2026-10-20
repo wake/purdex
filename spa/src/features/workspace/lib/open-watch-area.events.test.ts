@@ -2,7 +2,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
-import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
 import { createTab } from '../../../types/tab'
 import { WATCH_EVENTS_TAB_ID as E, WATCH_GUARDIAN_TAB_ID as G, watchHostTabId } from '../../../lib/watch/ids'
@@ -11,10 +12,15 @@ import { openWatchArea } from './open-watch-area'
 const ws = () => useWorkspaceStore.getState()
 const area = () => ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
 
+function setPool(ids: string[]): void {
+  usePoolStore.setState({ hosts: ids.map((id) => ({ host_id: id, alias: id })) as never, sourceHostId: 'cfg-a' } as never)
+}
+
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
+  usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+  usePoolHostsStore.setState({ order: [], looks: {} } as never)
   useWatchStatusStore.getState().reset()
   __resetReturnWorkspaceForTest()
   const a = ws().addWorkspace('A').id
@@ -22,8 +28,7 @@ beforeEach(() => {
   useTabStore.getState().addTab(session)
   ws().insertTab(session.id, a)
   useTabStore.getState().setActiveTab(session.id)
-  const snapshot: FleetSnapshot = { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'h1' } as never } }
-  useFleetStore.setState({ snapshot, primaryHostId: 'p', stale: false })
+  setPool(['h1'])
 })
 
 describe('openWatchArea on the events tab', () => {

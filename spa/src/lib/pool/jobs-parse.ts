@@ -61,6 +61,7 @@ export function parseJob(v: unknown): PoolJob | null {
   const args = strings(v.args)
   const labels = strings(v.labels)
   const locks = strings(v.locks)
+  const started = time(v.started_at)
   const cl = claim(v.claim)
   const res = result(v.result)
   if (!args || !labels || !locks || cl === undefined || res === undefined) return null
@@ -70,6 +71,7 @@ export function parseJob(v: unknown): PoolJob | null {
     snapshot: { commit: snap.commit, tree: str(snap.tree) ? snap.tree : '', base: str(snap.base) ? snap.base : '', rel_cwd: str(snap.rel_cwd) ? snap.rel_cwd : '' },
     task: v.task, args, class: v.class, labels, locks,
     ...(v.slot === 'heavy' || v.slot === 'light' ? { slot: v.slot } : {}),
+    ...(started !== null ? { started_at: started } : {}),
     cacheable: v.cacheable === true,
     timeout_s: num(v.timeout_s) ? v.timeout_s : 0,
     supersede_key: str(v.supersede_key) ? v.supersede_key : '',

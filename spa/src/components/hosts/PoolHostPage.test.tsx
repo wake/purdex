@@ -6,7 +6,7 @@ import type { PoolHostRow } from '../../lib/pool/use-pool-host-rows'
 import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
 import hostsJson from '../../lib/pool/__fixtures__/pool_hosts_response.json'
-import { readHostPage, clearViewMemory } from '../../lib/watch/view-memory'
+import { clearViewMemory } from '../../lib/watch/view-memory'
 
 const openWatchArea = vi.fn()
 vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea: (...a: unknown[]) => openWatchArea(...a) }))
@@ -75,8 +75,15 @@ describe('the pool host page', () => {
     expect(within(w).queryByRole('checkbox')).toBeNull()
     expect(within(w).queryByRole('spinbutton')).toBeNull()
     fireEvent.click(within(w).getByTestId('pool-page-worker-settings'))
-    expect(readHostPage('p-mserv')).toBe('settings')
-    expect(openWatchArea).toHaveBeenCalledWith({ host: 'p-mserv' })
+    expect(openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: baseHost.host_id }, sub: 'settings' })
+  })
+
+  it('the link is disabled when the pool has no row for the host (nothing to open)', () => {
+    render(<PoolHostPage row={row({ host: null, worker: { enabled: true, slots: { heavy: 1, light: 1 }, running: { heavy: 0, light: 0 } } })} />)
+    const link = screen.getByTestId('pool-page-worker-settings') as HTMLButtonElement
+    expect(link.disabled).toBe(true)
+    fireEvent.click(link)
+    expect(openWatchArea).not.toHaveBeenCalled()
   })
 
   it('a worker that is off says so', () => {

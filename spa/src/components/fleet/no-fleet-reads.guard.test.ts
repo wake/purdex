@@ -1,4 +1,4 @@
-// Guard (monitoring tabs plan, common rules; spec A1 / A11): the sidebar's host row and the files this line made pool-only do not read the fleet. The scope is `components/fleet/**` and
+// Guard (monitoring tabs plan, common rules; spec A1 / A11): the sidebar's host row and the files this line made pool-only do not read the fleet. The scope is `components/fleet/**`, `components/watch/host/**` (the host page's new files, MON-6d-2 on) and
 // the listed `lib/pool` files. Not in scope, by name: `fleet-bridge.ts` (the host page's and the Hosts page's transitional reader, until MON-6 / MON-9b), `host-view.ts`,
 // `history.ts`, `use-pool-host-rows.ts`, `use-series-history.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
 // A scoped, non-test file must not import anything from `lib/fleet/` (a type import too) and must not mention the fleet's readers.
@@ -6,11 +6,11 @@ import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/features/workspace/components/WatchShieldButton.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'observations-api.ts', 'events-model.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts',
 ]
 // Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet.
 const OTHER_FILES = ['features/workspace/components/WatchShieldButton.tsx']
@@ -20,7 +20,7 @@ const FLEET_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"][^'"]*(?:\/lib|\
 const FLEET_READERS = /\b(useFleetStore|useFleetHostViews|readFleetView|useFleetConfigStore)\b/
 
 function scoped(): Array<{ name: string; code: string | undefined }> {
-  const sidebar = Object.keys(SOURCES).filter((k) => k.startsWith('/src/components/fleet/')).map((k) => ({ name: k.slice('/src/'.length), code: SOURCES[k] }))
+  const sidebar = Object.keys(SOURCES).filter((k) => k.startsWith('/src/components/fleet/') || k.startsWith('/src/components/watch/host/')).map((k) => ({ name: k.slice('/src/'.length), code: SOURCES[k] }))
   return [...sidebar, ...POOL_FILES.map((f) => ({ name: `lib/pool/${f}`, code: SOURCES[`/src/lib/pool/${f}`] })), ...OTHER_FILES.map((f) => ({ name: f, code: SOURCES[`/src/${f}`] }))]
 }
 
@@ -33,6 +33,7 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(names).toContain('lib/pool/use-monitor-hosts.ts')
     expect(names).toContain('lib/pool/alerts-store.ts')
     expect(names).toContain('features/workspace/components/WatchShieldButton.tsx')
+    expect(names).toContain('components/watch/host/MiniChart.tsx')
     for (const f of scoped()) expect(f.code, f.name).toBeTypeOf('string')
   })
 
