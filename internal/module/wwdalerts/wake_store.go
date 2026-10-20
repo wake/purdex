@@ -74,9 +74,9 @@ func (s *store) seedWake(host string, eps []wakeEp, now time.Time) error {
 
 // claimWake writes the episode before anyone is asked, atomically. A row that exists: seen. Otherwise the row is created and the verdict
 // says whether to wake: not when the same (host, key) woke the watcher within throttle (a later wake is not made up), and, when
-// adoptSince is not zero, not when another row of the same key was first seen no earlier than adoptSince (the same shared failure,
-// after a restart of this daemon).
-func (s *store) claimWake(e wakeEp, now time.Time, throttle time.Duration, adoptSince int64) (wakeVerdict, error) {
+// adoptWithin is not zero, not when another row of the same key was last seen holding within adoptWithin (the same shared failure,
+// after a restart of this daemon). Only this daemon's clock is used: the alert's Since is another host's.
+func (s *store) claimWake(e wakeEp, now time.Time, throttle time.Duration, adoptWithin time.Duration) (wakeVerdict, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return wakeSeen, err
@@ -94,10 +94,10 @@ func (s *store) claimWake(e wakeEp, now time.Time, throttle time.Duration, adopt
 		return wakeSeen, tx.Commit()
 	}
 	verdict := wakeNow
-	if adoptSince > 0 {
+	if adoptWithin > 0 {
 		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM wake_ledger WHERE host = ? AND key = ? AND since_ms <> ? AND first_ms >= ?`,
-			e.host, e.key, e.since.UnixMilli(), adoptSince).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT count(*) FROM wake_ledger WHERE host = ? AND key = ? AND since_ms <> ? AND last_seen_ms >= ?`,
+			e.host, e.key, e.since.UnixMilli(), now.Add(-adoptWithin).UnixMilli()).Scan(&n); err != nil {
 			return wakeSeen, err
 		}
 		if n > 0 {

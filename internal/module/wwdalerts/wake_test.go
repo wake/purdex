@@ -144,6 +144,10 @@ func TestWakeLine(t *testing.T) {
 	if err := watch.ValidateWake(wakeReason, long+"；另 99 則"); err != nil {
 		t.Fatalf("a long detail makes an invalid note: %v", err)
 	}
+	wide := wakeLine("h", alertOf("k", wire.AlertThrash, wire.AlertDigest, t0, strings.Repeat("\U00020000", 400)))
+	if err := watch.ValidateWake(wakeReason, wide+"；另 99 則"); err != nil {
+		t.Fatalf("four-byte characters make an invalid note: %v", err)
+	}
 	for k := range wakeKindNames {
 		if !k.Valid() {
 			t.Errorf("%q is not a kind", k)
@@ -288,6 +292,8 @@ func TestARestartDoesNotWakeAgain(t *testing.T) {
 	e.now = e.now.Add(time.Minute)
 	e.m = e.module(t) // the daemon restarted
 	w2 := startWakeFor(t, e)
+	sil.Since = t0.Add(-100 * time.Hour) // the wwd's clock is far from this one's: it must not matter
+	e.src.set("mlab", a, sil)
 	e.pass(t)
 	e.settle(t)
 	if n := len(w2.got()); n != 0 {

@@ -25,6 +25,10 @@ const (
 	wakeReason = "wwd_alert"
 	// wakeDetailMax bounds the detail of one alert in the note, in runes.
 	wakeDetailMax = 120
+	// wakeLineMax bounds one alert line in bytes, leaving room in the 500 of a note for the folded count.
+	wakeLineMax = 400
+	// wakeAdoptWithin is how recently a shared silence must have been seen holding for a restarted daemon to take it as the same failure.
+	wakeAdoptWithin = 10 * time.Minute
 )
 
 // wakeKindNames is what the note calls each alert kind (a wire.Alert has no title). A kind not here is shown by its own name.
@@ -169,6 +173,10 @@ func wakeLine(about string, a wire.Alert) string {
 		}
 		s += "｜" + string(r)
 	}
+	for len(s) > wakeLineMax {
+		r := []rune(s)
+		s = string(r[:len(r)-1])
+	}
 	return s
 }
 
@@ -207,9 +215,9 @@ func (m *Module) wakeAlerts(host string, alerts []wire.Alert, now time.Time) {
 			continue
 		}
 		ep, about, shared := m.wakeIdentity(host, a)
-		var adopt int64
+		var adopt time.Duration
 		if shared && !m.wakeSeen[a.Key] {
-			adopt = a.Since.UnixMilli() // the first look at this key since the daemon started: the ledger may know the failure
+			adopt = wakeAdoptWithin // the first look at this key since the daemon started: the ledger may know the failure
 		}
 		v, err := m.store.claimWake(ep, now, wakeThrottle, adopt)
 		if shared {
