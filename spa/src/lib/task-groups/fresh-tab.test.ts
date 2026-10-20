@@ -19,6 +19,8 @@ const view = () => useGroupViewStore.getState()
 const tabs = () => useTabStore.getState().tabs
 const group = (id: string) => tabs()[id]?.group
 const dashboard = () => createTab({ kind: 'dashboard' })
+/** A tab minted here (so in the fresh set) with fields set on the minted object itself — a spread copy would not be fresh. */
+const minted = (over: Partial<Tab>): Tab => Object.assign(dashboard(), over)
 let stop: () => void
 
 beforeEach(() => {
@@ -69,10 +71,17 @@ describe('a tab this window minted joins the selected group', () => {
     expect(seen).toEqual([G]) // never visible without its group
   })
 
-  it('the tab the group view has not seen yet: a tab that already has a group keeps it', () => {
+  it('a tab whose own group names nothing that exists keeps that group: only a tab with no group is written', () => {
+    const gone = manualGroupKey('cccccccc')
+    const t = minted({ group: gone })
+    useTabStore.getState().addTab(t)
+    expect(group(t.id)).toBe(gone)
+  })
+
+  it('a tab that already has a group keeps it', () => {
     const other = manualGroupKey('bbbbbbbb')
     useManualGroupsStore.setState({ order: ['aaaaaaaa', 'bbbbbbbb'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 }, bbbbbbbb: { name: 'H', members: [], createdAt: 1 } } })
-    const t = { ...dashboard(), group: other }
+    const t = minted({ group: other })
     useTabStore.getState().addTab(t)
     expect(group(t.id)).toBe(other)
   })
@@ -124,7 +133,7 @@ describe('the write needs the task-group view, a real selected group, and no ear
   })
 
   it('a watcher-area tab is never placed', () => {
-    const t = { ...dashboard(), id: 'watch-jobs' }
+    const t = minted({ id: 'watch-jobs' })
     useTabStore.getState().addTab(t)
     expect(group('watch-jobs')).toBeUndefined()
   })
