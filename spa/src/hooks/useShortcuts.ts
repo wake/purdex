@@ -82,7 +82,7 @@ export function useShortcuts(): void {
         const ownedElsewhere = !inBar.includes(activeTabId)
           && useWorkspaceStore.getState().findWorkspaceByTab(activeTabId) !== null
         if (ownedElsewhere) return
-        closeTab(activeTabId, groupRange !== null ? { scope: groupRange } : undefined) // the next tab comes from the group's range
+        closeTab(activeTabId)
         return
       }
 

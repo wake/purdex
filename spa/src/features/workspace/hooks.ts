@@ -9,7 +9,6 @@ import { clearTabMoving, markTabsMoving } from '../../lib/team/moving-tabs'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabMenuExtrasStore } from '../../stores/useTabMenuExtrasStore'
-import { selectedGroupRange } from '../../lib/task-groups/range'
 import type { Tab, PaneContent, PaneRebuildRecord, TerminatedReason } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 import type { RebuildEditableField } from '../../components/RebuildActionSet'
@@ -120,8 +119,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
   const handleCloseTab = useCallback((tabId: string) => {
-    const range = selectedGroupRange() // in the task-group view the next tab comes from the group's range (null = the workspace rule)
-    closeTab(tabId, range !== null ? { scope: range } : undefined)
+    closeTab(tabId)
 
     // Clear rename popover if the renamed tab was closed
     if (renameTarget?.tabId === tabId) {
