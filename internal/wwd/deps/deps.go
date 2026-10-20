@@ -27,6 +27,7 @@ var dirOf = map[string]string{
 	"package-lock.json": "node_modules",
 	"yarn.lock":         "node_modules",
 	"composer.lock":     "vendor",
+	"go.sum":            ".gomodcache", // Go's module cache (GOMODCACHE), which the worker fills outside the job's sandbox
 }
 
 // Spec is what a workspace needs: the lockfiles (paths in the workspace, from the manifest's `deps`) and how to install when the cache has
