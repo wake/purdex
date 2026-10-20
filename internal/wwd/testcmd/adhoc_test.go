@@ -286,3 +286,23 @@ func TestAFastLaneRunThatWaitedForALockRecordsTheTreeOfTheDirectoryWhenItWentOn(
 		t.Fatalf("second tree %q, the directory is %q (%v)", rec.trees[1], want, err)
 	}
 }
+
+// A tree that Prepare could not take but the retake after a wait could is recorded, and the report does not claim it is missing.
+func TestAFastLaneRunWhoseRetakeSucceededDropsPrepareNoteAboutTheMissingTree(t *testing.T) {
+	dir := repo(t, true)
+	state := filepath.Join(t.TempDir(), "failed-once")
+	fake := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\ncase \"$*\" in *write-tree*) if [ ! -e '" + state + "' ]; then : > '" + state + "'; echo 'fatal: transient' >&2; exit 128; fi;; esac\nexec git \"$@\"\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &treeRecorder{dir: dir}
+	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if len(rec.trees) != 2 || rec.trees[0] != "" || rec.trees[1] == "" {
+		t.Fatalf("trees at each registration: %q (the first could not be taken, the second can)", rec.trees)
+	}
+	if strings.Contains(out, "could not be recorded") {
+		t.Fatalf("the record has its tree, the report must not say it has none:\n%s", out)
+	}
+}

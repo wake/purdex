@@ -52,11 +52,7 @@ func adHoc(ctx context.Context, o Options) int {
 	if task.Cwd, err = submit.RelDir(root, o.Dir); err != nil { // where the caller stands, not the top of the repository
 		return failPrepare(o, err)
 	}
-	req := fastlane.Request{Root: root, Task: task, Args: argv, Body: body, Gate: o.Gate, GateClass: gate.ClassHeavy, Recorder: o.Recorder, Env: o.Env}
-	note := "undeclared command: it ran here only, under a heavy slot"
-	if treeNote != "" {
-		note += "; " + treeNote
-	}
-	code, _ := runFast(ctx, o, task, req, "adhoc", note, true)
+	req := fastlane.Request{Root: root, Task: task, Args: argv, Body: body, TreeNote: treeNote, Gate: o.Gate, GateClass: gate.ClassHeavy, Recorder: o.Recorder, Env: o.Env}
+	code, _ := runFast(ctx, o, task, req, "adhoc", "undeclared command: it ran here only, under a heavy slot", true)
 	return code
 }

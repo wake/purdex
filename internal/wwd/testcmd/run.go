@@ -161,8 +161,8 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 			body, note = p.Body, p.Note
 		}
 	}
-	req := fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env}
-	return runFast(ctx, o, task, req, o.Args.Task, note, false)
+	req := fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, TreeNote: note, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env}
+	return runFast(ctx, o, task, req, o.Args.Task, "", false)
 }
 
 func list(ctx context.Context, o Options) int {
