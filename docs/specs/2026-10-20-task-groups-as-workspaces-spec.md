@@ -108,7 +108,9 @@ interface ManualGroupsState {
   two devices rebuild different payloads and push each other's back forever; and one member can sit in the store twice
   for a while, once under a local id and once under a kept wire id of the same host, which translation makes equal
   (the precedent: `sections.ts`'s local / wire collision handling for new tabs). The store removes duplicates of its own
-  form only; the host rewrite collapses the ones its mapping creates.
+  form only; the host rewrite collapses the ones its mapping creates. When translation makes the same member appear in
+  two groups, it stays in the one earlier in `order` (the builder and the host rewrite both apply this; `order` is
+  synced, so every device keeps the same one).
 - `SECTION_SCHEMA_ORDINAL.settings` 11 → 12. An ordinal-11 payload has no `purdex-task-groups`: applying it clears the
   store (the ordinal-11 precedent, "absent = cleared"); the executor only lands an older-shape payload on a clean local
   section (`executor.ts` header), so nothing local is lost.

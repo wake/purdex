@@ -10,6 +10,7 @@ import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
 import { useExecutionListStore, type HostListCache } from '../stores/useExecutionListStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
+import { useManualGroupsStore } from '../stores/useManualGroupsStore'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
@@ -601,6 +602,7 @@ describe('host delete cascade — a write fails half-way', () => {
     useTabStore.getState().addTab(makeSessionTab(HOST_A, 'dev001'))
     useTabStore.getState().addTab(makeSessionTab(HOST_B, 'stg001'))
     useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/a' })
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [{ host: HOST_A, root: 'r1' }, { host: HOST_B, root: 'r2' }], createdAt: 1 } } })
     useNewTabLayoutStore.setState({
       presets: { '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`sessions:${HOST_B}`], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`headless:${HOST_A}`]] } },
       knownIds: [`sessions:${HOST_A}`, `sessions:${HOST_B}`, `headless:${HOST_A}`],
@@ -617,7 +619,7 @@ describe('host delete cascade — a write fails half-way', () => {
     useHostStore.setState({ runtime: { [HOST_A]: { status: 'connected' } } })
   }
 
-  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES]
+  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TASK_GROUPS]
 
   function everything(): string {
     const h = useHostStore.getState()
@@ -626,6 +628,7 @@ describe('host delete cascade — a write fails half-way', () => {
       tabs: useTabStore.getState().tabs,
       parked: [useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves],
       hostSettings: useHostSettingsStore.getState().hosts,
+      groups: [useManualGroupsStore.getState().order, useManualGroupsStore.getState().groups],
       newtab: [useNewTabLayoutStore.getState().presets, useNewTabLayoutStore.getState().knownIds],
       sessions: useSessionStore.getState().sessions,
       agent: [a.lastEvents, a.statuses, a.unread, a.models, a.agentTypes, a.subagents],

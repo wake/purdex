@@ -6,6 +6,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
+import { useManualGroupsStore } from '../stores/useManualGroupsStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import type { ReadCursor } from './read-sync/cursor'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
@@ -183,6 +184,7 @@ const CASCADE_STORES: readonly WholeStore[] = [
   useLocalProfilesStore,
   useHostSettingsStore,
   useNewTabLayoutStore,
+  useManualGroupsStore,
   useSessionStore,
   useAgentStore,
   useExecutionStore,

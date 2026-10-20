@@ -43,6 +43,7 @@ import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildSt
 import { useHostLookStore } from '../stores/useHostLookStore'
 import { useQuickReplyPrefsStore } from '../stores/useQuickReplyPrefsStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { rewriteManualGroupsHosts, useManualGroupsStore } from '../stores/useManualGroupsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { readMasterWorld } from './profile/master-world'
 import { hostSettingsFromWire, presetColumnIdFromWire } from './profile/host-identity'
@@ -116,6 +117,12 @@ function planRewrite(map: HostMap): StoreWrite[] {
     writes.push({ key: 'host settings', commit: () => useHostSettingsStore.setState({ hosts: settingsNext }), undo: () => useHostSettingsStore.setState({ hosts: settings }) })
   }
 
+  const { order, groups } = useManualGroupsStore.getState()
+  const groupsNext = rewriteManualGroupsHosts({ order, groups }, map)
+  if (groupsNext.groups !== groups) {
+    writes.push({ key: 'task groups', commit: () => useManualGroupsStore.setState({ groups: groupsNext.groups }), undo: () => useManualGroupsStore.setState({ groups }) })
+  }
+
   const layout = useNewTabLayoutStore.getState()
   const layoutNext = renameLayoutIds(layout, columnMap(map))
   if (layoutNext !== null) {
@@ -175,7 +182,7 @@ interface Rereadable {
 }
 
 /** The stores the pass rewrites, and the workspace store the world's settledness is read with. */
-const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore] as unknown as Rereadable[]
+const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore] as unknown as Rereadable[]
 
 /**
  * Bring every store in `REREAD` up to what storage holds NOW. A store whose persisted record is exactly what its
@@ -333,7 +340,7 @@ export function scheduleHostReresolve(): void {
 }
 
 /** Every persisted store the pass reads or rewrites: it runs only once ALL of them hold their real state. */
-const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore] as const
+const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore] as const
 
 /**
  * The pass's triggers, for the app's lifetime (`main.tsx`): once every store it touches has hydrated; again whenever
