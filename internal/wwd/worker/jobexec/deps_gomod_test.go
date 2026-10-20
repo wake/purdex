@@ -21,7 +21,7 @@ run     = "true"
 args    = "none"
 summary = "plain"
 deps    = ["go.sum"]
-env     = ["HTTPS_PROXY=http://proxy:3128", "GIT_SSH_COMMAND=./evil", "GOFLAGS=-tags=x"]
+env     = ["HTTPS_PROXY=http://proxy:3128", "GIT_SSH_COMMAND=./evil", "GOFLAGS=-tags=x", "GOPROXY=https://evil.example"]
 
 [tasks.gomulti]
 run     = "true"
@@ -68,7 +68,7 @@ func newGoRig(t *testing.T) *goRig {
 	rig := &goRig{bin: filepath.Join(d, "bin"), log: filepath.Join(d, "download.log"), deps: filepath.Join(d, "deps")}
 	require.NoError(t, os.MkdirAll(rig.bin, 0o755))
 	stub := "#!/bin/sh\ncase \"$1\" in\n  version) echo go version go1.26.0 darwin/arm64;;\n  mod)\n" +
-		"    echo \"cache=$GOMODCACHE private=$GOPRIVATE flags=$GOFLAGS home=$HOME token=$GIT_TOKEN proxy=$HTTPS_PROXY ssh=$GIT_SSH_COMMAND dir=$(pwd)\" >> " + rig.log + "\n" +
+		"    echo \"cache=$GOMODCACHE private=$GOPRIVATE flags=$GOFLAGS home=$HOME token=$GIT_TOKEN proxy=$HTTPS_PROXY ssh=$GIT_SSH_COMMAND toolchain=$GOTOOLCHAIN work=$GOWORK goproxy=$GOPROXY dir=$(pwd)\" >> " + rig.log + "\n" +
 		"    mkdir -p \"$GOMODCACHE/lab.protype.tw/wake/nexen@v0.22.1\" && echo module > \"$GOMODCACHE/lab.protype.tw/wake/nexen@v0.22.1/go.mod\";;\nesac\n"
 	require.NoError(t, os.WriteFile(filepath.Join(rig.bin, "go"), []byte(stub), 0o755))
 	return rig
@@ -119,6 +119,8 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 	assert.Equal(t, 1, r.downloads(t))
 	assert.Contains(t, env, "GOFLAGS=-tags=x -mod=readonly", "the task's own flags stay, readonly is added")
 	assert.Contains(t, env, "GOPROXY=off")
+	assert.Contains(t, env, "GOTOOLCHAIN=local")
+	assert.Contains(t, env, "GOWORK=off")
 	assert.NotContains(t, strings.Join(env, "\n"), "s3cret", "no credential of the worker reaches the job")
 
 	b, _ := os.ReadFile(r.log)
@@ -128,7 +130,10 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 	assert.Contains(t, line, "token=s3cret")
 	assert.Contains(t, line, "flags=-modcacherw", "the cache is writable, so the workspace can be removed")
 	assert.Contains(t, line, "proxy=http://proxy:3128", "a proxy setting of the task reaches the download")
-	assert.Contains(t, line, "ssh= ", "nothing else of the task's environment does: the download runs with the worker's credentials, outside the sandbox")
+	assert.Contains(t, line, "toolchain=local", "a snapshot's go.mod cannot make the unsandboxed go fetch and run another toolchain")
+	assert.Contains(t, line, "work=off", "no go.work of the snapshot is followed: it is not in the key and may point out of the workspace")
+	assert.Contains(t, line, "goproxy= ", "the task does not choose where the modules come from")
+	assert.Contains(t, line, "ssh= ","nothing else of the task's environment does: the download runs with the worker's credentials, outside the sandbox")
 
 	r.prepare(t, e, "j_two")
 	assert.Equal(t, 1, r.downloads(t), "the second job had its modules cloned")

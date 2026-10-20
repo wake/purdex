@@ -127,7 +127,7 @@ func depsJobEnv(ws string, lockfiles []string, taskEnv []string) []string {
 					flags = strings.TrimSpace(v) + " -mod=readonly"
 				}
 			}
-			return []string{"GOMODCACHE=" + filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=" + flags, "GOPROXY=off"}
+			return []string{"GOMODCACHE=" + filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=" + flags, "GOPROXY=off", "GOTOOLCHAIN=local", "GOWORK=off"}
 		}
 	}
 	return nil

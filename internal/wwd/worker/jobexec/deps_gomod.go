@@ -22,7 +22,7 @@ import (
 // manifest comes with the snapshot, and the download runs with the worker's credentials outside the sandbox, so a name such as
 // GIT_SSH_COMMAND, GIT_CONFIG_GLOBAL, GOENV or HOME would let a snapshot run a program of its own with them.
 var downloadEnv = map[string]bool{
-	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true, "GOPROXY": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
 }
 
 // downloadModules fills the module cache (<dir of go.sum>/.gomodcache in the job's workspace) with the modules go.mod and go.sum name. It is
@@ -52,7 +52,7 @@ func (e *Exec) downloadModules(ctx context.Context, job wire.Job, ws snapshot.Wo
 		}
 	}
 	// last, so that nothing before can point the download elsewhere: the later value of a name is the one the child gets
-	cmd.Env = append(env, "GOMODCACHE="+cacheDir, "GOPRIVATE="+goPrivate, "GOFLAGS=-modcacherw")
+	cmd.Env = append(env, "GOMODCACHE="+cacheDir, "GOPRIVATE="+goPrivate, "GOFLAGS=-modcacherw", "GOTOOLCHAIN=local", "GOWORK=off")
 	// its own process group, so a cancel takes git and ssh with it
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
