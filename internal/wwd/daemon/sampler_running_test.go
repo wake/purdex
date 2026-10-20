@@ -27,19 +27,3 @@ func TestSamplerFillsWorkerRunningAndTheHeadroomFollowsIt(t *testing.T) {
 		t.Fatalf("busy: running %+v, headroom %+v", f.Worker.Running, f.Derived.Headroom)
 	}
 }
-
-func TestSamplerGateFullIsReadableBetweenSamples(t *testing.T) {
-	level := 1
-	full := true
-	s := NewSampler(SamplerOptions{
-		HostID: "h1", Alias: "mlab", Sources: fakeSources(&level, nil), Slots: wire.Slots{Heavy: 1, Light: 2},
-		GateHeavyFull: func() bool { return full },
-	})
-	if s.GateFull() {
-		t.Fatal("before the first sample the gate is not known full")
-	}
-	s.Tick(s0)
-	if !s.GateFull() {
-		t.Fatal("the sample read the gate full")
-	}
-}

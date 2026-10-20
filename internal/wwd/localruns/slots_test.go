@@ -19,7 +19,7 @@ func TestALowDiskRefusesAnAdhocRunWithTheReasonAndNotADeclaredTask(t *testing.T)
 	var f wire.Facts
 	f.Worker.Slots = wire.Slots{Heavy: 2, Light: 2}
 	f.Derived = wire.Derived{Zone: wire.ZoneNormal, DiskLow: true}
-	s.Room = func(heavy bool, running wire.Slots) []string { return derived.AdmitLocal(f, false, heavy, running) }
+	s.Room = func(heavy bool, running wire.Slots) []string { return derived.AdmitLocal(f, heavy, running) }
 	rec := post(s, slotRequest(t, true))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("adhoc: %d, want 429: %s", rec.Code, rec.Body)

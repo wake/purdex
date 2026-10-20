@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/run"
@@ -54,12 +55,21 @@ func TestTheReservationIsReleasedAfterTheJobIsRunning(t *testing.T) {
 // A round that claims nothing (every candidate refused) also gives the reservation back.
 func TestTheReservationIsReleasedWhenNothingIsClaimed(t *testing.T) {
 	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
-	g := &fakeGate{free: 0} // the gate has no slot: the round ends before any claim
-	r := withGate(newRig(t, c), g)
+	c.claimErr["j1"] = errors.New("409") // the only candidate is refused: nothing is claimed
+	r := newRig(t, c)
 	released := 0
 	r.loop.cfg.Reserve = func() (func(), bool) { return func() { released++ }, true }
 	r.round()
 	if released != 1 {
 		t.Fatalf("released %d times, want once", released)
 	}
+}
+
+// WWD-9 W3: the worker no longer asks the pdx gate for anything. With the host's ledger and the facts saying there is room, a job is
+// claimed and run whatever the state of a gate on the host (full, paused or absent: the loop cannot tell, there is nothing to ask).
+func TestAJobIsClaimedWithoutAnyGateToAsk(t *testing.T) {
+	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
 }

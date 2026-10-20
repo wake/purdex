@@ -105,12 +105,11 @@ func TestWhyTable(t *testing.T) {
 		r = Why(factsOf(in, true))
 		codes(t, r.Light, []string{"slots_full"})
 	})
-	t.Run("the gate is the remainder", func(t *testing.T) {
-		in := open
-		in.GateHeavyFull = true
-		r := Why(factsOf(in, true))
-		codes(t, r.Heavy, []string{"gate_full"})
-		codes(t, r.Light, []string{})
+	t.Run("a heavy side at 0 that nothing explains is unknown, never gate_full", func(t *testing.T) {
+		// WWD-9 W3: an older peer's record can state heavy 0 for a gate this build does not know; it must not read as room
+		f := factsOf(open, true)
+		f.Derived.Headroom.Heavy = 0
+		codes(t, Why(f).Heavy, []string{"unknown"})
 	})
 	t.Run("the order", func(t *testing.T) {
 		in := open
@@ -127,23 +126,22 @@ func TestWhyTable(t *testing.T) {
 		codes(t, r.Light, []string{"unknown"})
 		codes(t, r.Heavy, []string{})
 	})
-	t.Run("a full slot count hides the gate: it is not guessed", func(t *testing.T) {
+	t.Run("a full slot count is slots_full", func(t *testing.T) {
 		in := open
-		in.GateHeavyFull = true
 		in.Running = wire.Slots{Heavy: 2}
 		codes(t, Why(factsOf(in, true)).Heavy, []string{"slots_full"})
 	})
 }
 
 // Compute and Why are one judgement: over random inputs, a side has no reason exactly when it has room, and the only thing a record
-// cannot show (the gate) comes back as gate_full and nothing else.
+// never states gate_full.
 func TestWhyAgreesWithCompute(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	for i := 0; i < 20000; i++ {
 		in := Input{
 			Pressure: []int{0, 1, 1, 2, 4}[rng.Intn(5)], PageRate: float64(rng.Intn(90)), RateLimit: []float64{0, PageRateLimit}[rng.Intn(2)],
 			Slots:       wire.Slots{Heavy: rng.Intn(4), Light: rng.Intn(5)},
-			OwnerActive: rng.Intn(4) == 0, GateHeavyFull: rng.Intn(3) == 0, AvailableMB: rng.Intn(8000),
+			OwnerActive: rng.Intn(4) == 0, AvailableMB: rng.Intn(8000),
 		}
 		in.PressureKnown = in.Pressure > 0
 		in.Running = wire.Slots{Heavy: rng.Intn(in.Slots.Heavy + 2), Light: rng.Intn(in.Slots.Light + 2)}
@@ -158,26 +156,17 @@ func TestWhyAgreesWithCompute(t *testing.T) {
 		if (f.Derived.Headroom.Light > 0) != (len(r.Light) == 0) {
 			t.Fatalf("%d: light headroom %d but reasons %v (input %+v)", i, f.Derived.Headroom.Light, r.Light, in)
 		}
-		// the gate alone blocks heavy: gate_full, and only then
-		others := in
-		others.GateHeavyFull = false
-		var l ZoneLatch
-		withoutGate := Compute(&l, others)
-		gateOnly := in.GateHeavyFull && withoutGate.Headroom.Heavy > 0
-		if gateOnly != reflect.DeepEqual(r.Heavy, []string{"gate_full"}) {
-			t.Fatalf("%d: gate-only=%v but heavy reasons %v (input %+v)", i, gateOnly, r.Heavy, in)
-		}
 	}
 }
 
-// Compute's own reasons are exact (the gate is known there), so a Compute that names its blocker never needs the remainder rule.
-func TestReasonsOfIsExactWhereTheGateIsKnown(t *testing.T) {
-	in := Input{Pressure: 1, PressureKnown: true, Slots: wire.Slots{Heavy: 2, Light: 2}, GateHeavyFull: true}
+// Compute's own reasons are exact, and gate_full is never among them (WWD-9 W3).
+func TestComputeNeverStatesGateFull(t *testing.T) {
+	in := Input{Pressure: 1, PressureKnown: true, Slots: wire.Slots{Heavy: 2, Light: 2}}
 	var l ZoneLatch
 	d, r := ComputeWithReasons(&l, in)
-	if d.Headroom.Heavy != 0 || d.Headroom.Light != 2 {
+	if d.Headroom.Heavy != 2 || d.Headroom.Light != 2 {
 		t.Fatalf("headroom = %+v", d.Headroom)
 	}
-	codes(t, r.Heavy, []string{"gate_full"})
+	codes(t, r.Heavy, []string{})
 	codes(t, r.Light, []string{})
 }

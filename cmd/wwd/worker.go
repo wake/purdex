@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/wake/purdex/internal/wwd/gateheld"
 	"log"
 	"net/http"
 	"os"
@@ -93,7 +92,6 @@ type workerInputs struct {
 	Usage    loop.UsageRecorder // nil: nothing is recorded
 	DB       perJobDB           // nil: this host has no per-job database
 	Hooks    *fault.Hooks
-	Gate     loop.Gate // the host's pdx gate, whose heavy slot each claimed job holds (#3502); nil: none
 	Logf     func(string, ...any)
 	// FastLaneReady says the fast lane has rebuilt the keys of its runs that were going on (localruns.Service.Ready). The worker takes
 	// no job before that: it could otherwise be given a key a fast-lane run still holds. nil: no fast lane to wait for.
@@ -230,7 +228,6 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		Worker: in.Alias, Facts: in.Labels, Locks: in.Locks, Exec: exec, Guard: guard,
 	})
 	return loop.Config{
-		Gate:     in.Gate,
 		Reserve:  in.ReserveHeavy,
 		Settings: in.Settings,
 		Facts: func() *wire.Facts {
@@ -257,34 +254,6 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		Guarded:            guard != nil,
 		Logf:               logf,
 	}, nil
-}
-
-// gateTaker is the host's gate reader as the worker loop's Gate: a heavy slot for a job, or "no slot to be had" (the gate is full or cannot
-// be read), or "no gate here" (a nil slot, nothing to hold).
-type gateTaker struct{ r *gateheld.Reader }
-
-func (g gateTaker) TakeHeavy() (loop.GateSlot, bool) {
-	h, st := g.r.TakeHeavy()
-	switch st {
-	case gateheld.Taken:
-		return h, true
-	case gateheld.NoGate:
-		return nil, true // an untyped nil: a nil *Held in the interface would not be nil
-	}
-	return nil, false
-}
-
-// TakeLate is a slot for a command that runs already: the slot, "no gate here" (a nil slot, ok), or "none could be had" (not ok: the
-// worker tries again and claims nothing meanwhile).
-func (g gateTaker) TakeLate() (loop.GateSlot, bool) {
-	h, st := g.r.TakeHeavyLate()
-	switch st {
-	case gateheld.Taken:
-		return h, true
-	case gateheld.NoGate:
-		return nil, true
-	}
-	return nil, false
 }
 
 // peerZone is the zone of a peer's last facts, for origin_bonus; unknown when the pool has not reached it.

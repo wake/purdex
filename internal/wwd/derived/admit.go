@@ -8,14 +8,12 @@ import "github.com/wake/purdex/internal/wwd/wire"
 // can be asked while a lock is held.
 //
 // It differs from the headroom a queue job is held by in two things: the owner at the keyboard does not stop it (the owner is the
-// one who asked for the run), and the worker being off does not either (that only stops the queue). gateFull is the gate's reading
-// at the last sample.
-func AdmitLocal(f wire.Facts, gateFull, heavy bool, running wire.Slots) []string {
+// one who asked for the run), and the worker being off does not either (that only stops the queue).
+func AdmitLocal(f wire.Facts, heavy bool, running wire.Slots) []string {
 	j := judgement{
-		zone:     f.Derived.Zone,
-		free:     wire.Slots{Heavy: free(f.Worker.Slots.Heavy, running.Heavy), Light: free(f.Worker.Slots.Light, running.Light)},
-		gateFull: gateFull,
-		diskLow:  f.Derived.DiskLow,
+		zone:    f.Derived.Zone,
+		free:    wire.Slots{Heavy: free(f.Worker.Slots.Heavy, running.Heavy), Light: free(f.Worker.Slots.Light, running.Light)},
+		diskLow: f.Derived.DiskLow,
 	}
 	for _, e := range f.Exception {
 		j.holds = append(j.holds, Hold{Name: e.Name})

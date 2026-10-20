@@ -22,17 +22,17 @@ func TestDiskLowHoldsHeavyOnly(t *testing.T) {
 		t.Fatal("the record does not carry disk_low")
 	}
 	w := Why(f)
-	codes(t, w.Heavy, []string{ReasonDiskLow}) // not gate_full
+	codes(t, w.Heavy, []string{ReasonDiskLow})
 	codes(t, w.Light, []string{})
 }
 
-// The order is spec §3.2: worker_off, the zone, the exceptions, owner_active, disk_low, slots_full, gate_full.
+// The order is spec §3.2: worker_off, the zone, the exceptions, owner_active, disk_low, slots_full.
 func TestDiskLowComesAfterTheOwnerAndBeforeTheSlots(t *testing.T) {
 	in := Input{Pressure: 2, PressureKnown: true, Slots: wire.Slots{Heavy: 1, Light: 1}, Running: wire.Slots{Heavy: 1},
-		OwnerActive: true, DiskLow: true, GateHeavyFull: true, Exceptions: []Hold{{Name: "dev"}}}
+		OwnerActive: true, DiskLow: true, Exceptions: []Hold{{Name: "dev"}}}
 	var l ZoneLatch
 	_, r := ComputeWithReasons(&l, in)
-	codes(t, r.Heavy, []string{ReasonZoneWarning, ReasonExceptionP + "dev", ReasonOwnerActive, ReasonDiskLow, ReasonSlotsFull, ReasonGateFull})
+	codes(t, r.Heavy, []string{ReasonZoneWarning, ReasonExceptionP + "dev", ReasonOwnerActive, ReasonDiskLow, ReasonSlotsFull})
 }
 
 func TestNoDiskLowLeavesTheRecordAsItWas(t *testing.T) {
@@ -57,12 +57,12 @@ func TestAnAllowHoldDoesNotOpenAFullDisk(t *testing.T) {
 func TestAdmitLocalRefusesHeavyOnALowDisk(t *testing.T) {
 	f := admitFacts(wire.ZoneNormal)
 	f.Derived.DiskLow = true
-	codes(t, AdmitLocal(f, false, true, wire.Slots{}), []string{ReasonDiskLow})
-	if got := AdmitLocal(f, false, false, wire.Slots{}); len(got) != 0 {
+	codes(t, AdmitLocal(f, true, wire.Slots{}), []string{ReasonDiskLow})
+	if got := AdmitLocal(f, false, wire.Slots{}); len(got) != 0 {
 		t.Fatalf("a declared task on a low disk: %v", got)
 	}
 	f.Derived.DiskLow = false
-	if got := AdmitLocal(f, false, true, wire.Slots{}); len(got) != 0 {
+	if got := AdmitLocal(f, true, wire.Slots{}); len(got) != 0 {
 		t.Fatalf("a disk with room: %v", got)
 	}
 }

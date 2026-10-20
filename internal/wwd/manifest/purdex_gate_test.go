@@ -15,7 +15,7 @@ import (
 var wwdLinuxPackages = []string{
 	"internal/wwd/facts", "internal/wwd/derived", "internal/wwd/labels", "internal/wwd/clones", "internal/wwd/run", "internal/wwd/jobdb",
 	"internal/wwd/store", "internal/wwd/queue", "internal/wwd/snapshot", "internal/wwd/worker/quarantine", "internal/wwd/worker/jobexec",
-	"internal/wwd/worker/runner", "internal/wwd/worker/loop", "internal/wwd/worker/report", "internal/wwd/worker/pick", "internal/wwd/gateheld",
+	"internal/wwd/worker/runner", "internal/wwd/worker/loop", "internal/wwd/worker/report", "internal/wwd/worker/pick",
 	"internal/wwd/daemon", "internal/hostmem", "internal/wwd/orphans", "internal/wwd/deps", "internal/wwd/install", "internal/wwd/slicecfg",
 	"internal/wwd/qualify", "internal/wwd/manifest", "internal/wwd/wire", "internal/wwd/client", "internal/wwd/jobscmd", "internal/wwd/manifestref",
 	"internal/wwd/advisor",

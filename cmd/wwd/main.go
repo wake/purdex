@@ -18,13 +18,11 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
-	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/manifestref"
@@ -192,9 +190,6 @@ func run(cfgPath string) error {
 	hooks := fault.New(cfg.Fault, log.Printf) // nil unless [fault] enabled = true names a hook
 	// H2 stands in for the keyboard: with owner_active_file named the real HID is not read (#3561)
 	sources.Owner = facts.OverrideOwner(sources.Owner, hooks.OwnerBlock)
-	// until WWD-6 a queue job is outside the gate's slots: the host's own gate is counted before a job is claimed (#3447) and a claimed job
-	// holds one of its heavy slots (#3502); both go with WWD-6 / WWD-9
-	hostGate := gateheld.New(gate.DefaultConfigPath(), log.Printf).WithWorkDir(workRoot) // the jobs' disk is the work root's
 	// the runs on this host by slot: the worker's queue jobs (heavy) and the fast lane's runs (spec §5.2); the sampler shows them in
 	// facts.worker.running and the fast lane's admission counts them
 	queueRun := &queueRunning{}
@@ -208,11 +203,10 @@ func run(cfgPath string) error {
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st, WorkRoot: workRoot, // the disk floor is measured on the work root's volume
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer reports proto >= 2, an unreachable one by its last known info (spec §13.1)
-		SignalsOpen:   func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
-		Queued:        func() (int, error) { return q.CountQueued(ctx) },
-		GateHeavyFull: hostGate.HeavyFull,
+		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
+		Queued:      func() (int, error) { return q.CountQueued(ctx) },
 	})
-	// a fast-lane run is admitted by the latest record, the live counts and the gate's last reading (all memory: the fast lane asks with its lock held)
+	// a fast-lane run is admitted by the latest record and the live counts (all memory: the fast lane asks with its lock held)
 	fastLane.Others = queueRun.Slots
 	fastLane.Capacity = func() wire.Slots { return state.Worker().Slots }
 	fastLane.Room = func(heavy bool, running wire.Slots) []string {
@@ -220,7 +214,7 @@ func run(cfgPath string) error {
 		if !ok {
 			return []string{"no_facts_yet"}
 		}
-		return derived.AdmitLocal(f, sampler.GateFull(), heavy, running)
+		return derived.AdmitLocal(f, heavy, running)
 	}
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
@@ -284,7 +278,7 @@ func run(cfgPath string) error {
 		return runWorker(ctx, workerInputs{
 			Cfg: cfg, Alias: alias, Token: tok, Queue: q, Locks: tbl, Store: qstore, WorkRoot: workRoot, Sandbox: sb, Home: home, ToolDirs: toolDirs,
 			Settings: state.Worker, Latest: sampler.Latest, Labels: d.Labels, Peers: d.Pool().Peers, FastLaneReady: fastLane.Ready, Running: queueRun, ReserveHeavy: fastLane.ReserveHeavy,
-			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks, Gate: gateTaker{hostGate},
+			Usage: usage.ForWorker(), DB: newPerJobDB(cfg.JobDB), Hooks: hooks,
 		})
 	})
 	// What else makes a job's final event besides the worker: the HTTP servers (a peer's or the caller's result, release, cancel), the queue's
