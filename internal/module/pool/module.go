@@ -355,7 +355,9 @@ func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Contex
 	} else if body, err = json.Marshal(v); err != nil {
 		return nil, &apiError{http.StatusInternalServerError, ErrWWDError, "encoding the answer failed"}
 	}
-	body = append(body, '\n')
+	if n := len(body); n == 0 || body[n-1] != '\n' { // wwd's writer ends its answer with one already; an answer ends with exactly one
+		body = append(body, '\n')
+	}
 	m.store(key, body)
 	return body, nil
 }

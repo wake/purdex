@@ -73,15 +73,18 @@ func TestObservations_TheAnswerIsWwdsBytes(t *testing.T) {
 	body := `{ "host": "air26", "since": "2026-10-19T00:00:00Z",  "observations": [ ` +
 		`{"id":"o_1_2","host":"air26","session":"s1","via":"session","command":"a <b> && c","signature":"a","started_at":"` + next + `","ended_at":null,"cpu_seconds":61.5,"cpu_peak":100,"mem_peak_mb":300,"procs_peak":3}` +
 		` ], "truncated": true, "next_until": "` + next + `" }`
-	var s seen
-	mux := newModule(t, fakeWWD(t, observationsWWD(t, &s, 200, body)))
-	rr := send(mux, "GET", "/api/pool/hosts/air26/observations", "", asAdmin)
-	require.Equal(t, 200, rr.Code, rr.Body.String())
-	assert.Equal(t, body+"\n", rr.Body.String())
+	// wwd's own writer is json.Encoder, which ends an answer with a newline; a body without one gets it, one with it does not get a second
+	for name, wrote := range map[string]string{"without a newline": body, "ending as wwd's encoder ends it": body + "\n"} {
+		var s seen
+		mux := newModule(t, fakeWWD(t, observationsWWD(t, &s, 200, wrote)))
+		rr := send(mux, "GET", "/api/pool/hosts/air26/observations", "", asAdmin)
+		require.Equal(t, 200, rr.Code, "%s: %s", name, rr.Body.String())
+		assert.Equal(t, body+"\n", rr.Body.String(), name)
 
-	rr = send(mux, "GET", "/api/pool/hosts/air26/undeclared", "", asAdmin)
-	require.Equal(t, 200, rr.Code, rr.Body.String())
-	assert.Equal(t, body+"\n", rr.Body.String(), "the grouped read is the same")
+		rr = send(mux, "GET", "/api/pool/hosts/air26/undeclared", "", asAdmin)
+		require.Equal(t, 200, rr.Code, "%s: %s", name, rr.Body.String())
+		assert.Equal(t, body+"\n", rr.Body.String(), "%s: the grouped read is the same", name)
+	}
 }
 
 // A bad since or until is refused here, with 400, and wwd is not asked.
