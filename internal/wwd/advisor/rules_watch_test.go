@@ -409,6 +409,44 @@ func TestSwapGrowth_LeavesOutThePartialMinute(t *testing.T) {
 	}
 }
 
+// A raised alert clears below HALF the threshold, exactly: with an odd threshold (a setting, or a RAM-proportional one) half is not a whole
+// number, and the clearing line must not round down.
+func TestSwapGrowth_OddThresholdClearsBelowExactlyHalf(t *testing.T) {
+	r := SwapGrowth{ThresholdMB: 501} // half is 250.5
+	for growth, want := range map[int]bool{250: false, 251: true} {
+		v, err := r.Eval(raisedAs(minutesInput(t0, swapMinutes(30, 1000, growth, 16384)...), "swap_growth"))
+		if err != nil || v.Holds != want {
+			t.Errorf("raised, threshold 501, growth %d: %+v %v, want holds=%v", growth, v, err, want)
+		}
+	}
+	// and it still raises at the threshold itself, not before
+	for growth, want := range map[int]bool{500: false, 501: true} {
+		v, _ := r.Eval(minutesInput(t0, swapMinutes(30, 1000, growth, 16384)...))
+		if v.Holds != want {
+			t.Errorf("not raised, threshold 501, growth %d: holds=%v, want %v", growth, v.Holds, want)
+		}
+	}
+}
+
+// A minute is 12 samples, not a span with a few samples in it: seven samples 10 s apart cover the 60 s and leave no gap over the limit, yet
+// every other sample is missing.
+func TestPressureWatch_SevenSamplesTenSecondsApartAreNotAMinute(t *testing.T) {
+	recs := make([]wire.Facts, 7)
+	for i := range recs {
+		recs[i] = mac(t0.Add(time.Duration(i)*10*time.Second), 2)
+	}
+	v, err := PressureWatch{}.Eval(recentInput(recs[6].At, recs...))
+	if err != nil || v.Holds {
+		t.Fatalf("%+v %v", v, err)
+	}
+	// one sample missing out of thirteen is still a minute (the clock jitters, a tick is late)
+	full := run5(t0, 13, func(at time.Time, i int) wire.Facts { return mac(at, 2) })
+	full = append(full[:5], full[6:]...)
+	if v, err := (PressureWatch{}).Eval(recentInput(full[len(full)-1].At, full...)); err != nil || !v.Holds {
+		t.Errorf("12 of 13 samples: %+v %v", v, err)
+	}
+}
+
 // 28 minutes of whole-minute history is the least that stands for the 30 minute window (the newest whole minute ended up to 90 s ago, the
 // oldest may be 30 s older than the window): a 27 minute one is not enough, and a raised alert is left as it was.
 func TestSwapGrowth_NeedsTwentyEightMinutesOfWholeMinutes(t *testing.T) {

@@ -46,6 +46,8 @@ const (
 	watchSpan   = 60 * time.Second
 	watchSlack  = wire.SampleIntervalS * time.Second
 	watchMaxGap = 2 * wire.SampleIntervalS * time.Second
+	// watchMinSamples is the fewest samples a minute of pressure stands on (a sample stands for 5 s).
+	watchMinSamples = int(watchSpan/time.Second) / wire.SampleIntervalS
 	// watchEntries entries into pressure within watchEntryWindow also raise it, whatever the length of each.
 	watchEntries     = 2
 	watchEntryWindow = 30 * time.Minute
@@ -106,7 +108,8 @@ func minuteOfPressure(recs []wire.Facts, now time.Time) bool {
 			win = append(win, f)
 		}
 	}
-	if len(win) == 0 || now.Sub(win[len(win)-1].At) > watchMaxGap || win[len(win)-1].At.Sub(win[0].At) < watchSpan-watchSlack {
+	// a minute is 12 samples: the span and the gaps alone would pass 7 samples 10 s apart (every other one missing)
+	if len(win) < watchMinSamples || now.Sub(win[len(win)-1].At) > watchMaxGap || win[len(win)-1].At.Sub(win[0].At) < watchSpan-watchSlack {
 		return false
 	}
 	for i, f := range win {
@@ -239,12 +242,11 @@ func (r SwapGrowth) Eval(in Input) (Verdict, error) {
 		total = in.Facts.Mem.TotalMB
 	}
 	limit := SwapThresholdMB(total, r.ThresholdMB)
-	if raised {
-		limit /= 2
-	}
 	grew := *last.Mem.SwapUsedMB - *first.Mem.SwapUsedMB
-	if grew >= limit {
-		v.Holds, v.Detail = true, fmt.Sprintf("swap 在 30 分鐘內增加 %d MB（門檻 %d MB）", grew, SwapThresholdMB(total, r.ThresholdMB))
+	// raised, it stands while the growth is at least half the threshold: compared as twice the growth, so an odd threshold (a setting, or a
+	// RAM-proportional one) does not round the clearing line down
+	if (!raised && grew >= limit) || (raised && 2*grew >= limit) {
+		v.Holds, v.Detail = true, fmt.Sprintf("swap 在 30 分鐘內增加 %d MB（門檻 %d MB）", grew, limit)
 	}
 	return v, nil
 }
