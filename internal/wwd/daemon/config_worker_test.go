@@ -82,6 +82,18 @@ func TestConfigReadsTheDependencyCacheSettings(t *testing.T) {
 			t.Errorf("deps_store_max_mb = %s accepted (err %v)", bad, err)
 		}
 	}
+	c, err = load(t, "[worker]\ngocache_max_mb = 20480\n")
+	if err != nil || c.Worker.GoCacheMaxMB != 20480 {
+		t.Fatalf("gocache_max_mb: %+v %v", c.Worker, err)
+	}
+	if c, err = load(t, "[worker]\n"); err != nil || c.Worker.GoCacheMaxMB != 0 {
+		t.Fatalf("gocache_max_mb unset is 0, the default of 10240: %+v %v", c.Worker, err)
+	}
+	for _, bad := range []string{"-1", "1000001"} {
+		if _, err := load(t, "[worker]\ngocache_max_mb = "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "gocache_max_mb") {
+			t.Errorf("gocache_max_mb = %s accepted (err %v)", bad, err)
+		}
+	}
 }
 
 func TestConfigChecksTheSandboxUser(t *testing.T) {

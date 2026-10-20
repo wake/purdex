@@ -443,6 +443,19 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   name from the worker's own environment (`env_not_allowed`), so a token that lives in the worker's environment does not reach an install.
 * **The download caches are bounded**: `[worker] deps_store_max_mb` (default 4096) per package manager; one over it is emptied before the
   next install that needs it (never under another install that is using it).
+* **Go tasks** (`deps = ["go.sum"]`, one `go.sum` per task): the worker, outside the job's sandbox and with its own HOME and git/ssh
+  configuration (that is how a private module such as `lab.protype.tw/wake/nexen` is reached), runs `go mod download` into
+  `<ws>/.gomodcache`; the job gets `GOMODCACHE` pointing there, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOTOOLCHAIN=local`, `GOWORK=off` and
+  no credentials (#3663). It also gets **one shared Go build cache** per Go version on the host, `<deps_root>/gocache/<key>` (the key is
+  the `go version` text and GOOS/GOARCH; the newest 2 are kept), so a job compiles only what no earlier job did (#3669). The build cache is
+  content addressed and made for several go processes at once, and it is not shared between hosts. A job holds it (a shared lock
+  `<key>.lock`) from `Prepare` to `Cleanup`; a Linux sandbox may write it. **Test results in it are not reused**: the job's `GOFLAGS` gets
+  `-count=1` (after the task's own flags and `-mod=readonly`; a command that names `-count` keeps its own), because Go's test cache knows
+  only the files and variables a test read, not tmux, a socket or an executable; the reuse of whole jobs is the result cache's.
+  `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache: over it, and with no job using it, it is emptied before the next
+  job (a cold build is what every job paid before); over twice the bound while jobs hold it, a new job gets no shared cache and builds in its
+  own workspace. The size is looked at at most every 2 minutes. If the cache is ever doubted, remove `<deps_root>/gocache`: the worker
+  makes it again. Go's own trim removes entries unused for 5 days; it does not bound the size (air26's old shared `gobuild` reached 142 GB).
 * **Disk**: `[worker] deps_keep` (default 2, 1 to 50) is how many installed sets are kept; each is a whole `node_modules`/`vendor` tree
   (purdex's SPA is several hundred MB), and the download cache comes on top. Set it to 1 on a host short of disk. The oldest set is removed
   when a newer one is filed; removing `deps_root` by hand is safe (the next job installs again).
