@@ -1,6 +1,6 @@
 // spa/src/lib/pool/host-state.test.ts — the one host state (monitoring tabs spec M21, A2, W3): ok / wwd_down / host_down / unknown.
 import { describe, it, expect } from 'vitest'
-import { hostIsOk, LIVE_MS, poolHostState } from './host-state'
+import { hostIsOk, LIVE_MS, MAX_SKEW_MS, poolHostState } from './host-state'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import hostsJson from './__fixtures__/pool_hosts_response.json'
@@ -44,6 +44,20 @@ describe('poolHostState — a peer row (it has `liveness`)', () => {
   it('a missing check time or since time is null, not invented', () => {
     const s = poolHostState(peer({ liveness: 'host_down', liveness_at: undefined }), null, NOW)
     expect(s).toMatchObject({ checkedAt: null, since: null, lastFactsAt: null })
+  })
+})
+
+// codex attack (high): facts dated ahead of this clock were "fresh" for good, so a frozen host showed ok forever.
+describe('poolHostState — facts dated in the future', () => {
+  it('a little ahead (clock skew) is still fresh, further ahead than MAX_SKEW_MS is not', () => {
+    expect(MAX_SKEW_MS).toBe(10_000)
+    expect(poolHostState(peer(), facts.at, facts.at - MAX_SKEW_MS).state).toBe('ok')
+    expect(poolHostState(peer(), facts.at, facts.at - MAX_SKEW_MS - 1)).toMatchObject({ state: 'unknown', stalled: true })
+    expect(poolHostState(peer(), facts.at, 1_000)).toMatchObject({ state: 'unknown', stalled: true })
+  })
+
+  it('the same for a row without liveness', () => {
+    expect(poolHostState(base(), facts.at, 1_000)).toMatchObject({ state: 'unknown', stalled: true })
   })
 })
 

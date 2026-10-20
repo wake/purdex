@@ -75,6 +75,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
   let pinned: string | null = null // the source a busy or back-off answer came from
   let busy = 0 // consecutive `busy`
   let timer: ReturnType<typeof setTimeout> | null = null
+  let expiryTimer = false // `timer` is the facts-expiry wait of event mode, not a poll or retry timer: a change to polling must replace it
   let gen = 0
   let running = false
   let inflight = false // a read cycle is under way
@@ -93,12 +94,12 @@ export const usePoolStore = create<PoolState>((set, get) => {
     return get().hosts.every((h) => hostIsOk(h, now))
   }
 
-  const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
+  const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } expiryTimer = false }
 
   /**
    * Event mode, every host ok: the one read still due is when the earliest facts stop being fresh. A peer can keep saying `ok` while its facts
-   * stop advancing and nothing emits `pool.changed` for that, so without it the host would stay ok in the cards' check lines for good. Facts
-   * dated more than `LIVE_MS` ahead (clock skew) are left to the cards, which judge freshness at render time.
+   * stop advancing and nothing emits `pool.changed` for that, so without it the host would stay ok in the cards' check lines for good. Every
+   * ok host has fresh facts (`poolHostState`: at most `MAX_SKEW_MS` ahead, at most `LIVE_MS` old), so the wait is always finite and short.
    */
   const factsExpiryMs = (): number | null => {
     const now = Date.now()
@@ -106,14 +107,16 @@ export const usePoolStore = create<PoolState>((set, get) => {
     for (const h of get().hosts) {
       if (!h.facts) continue
       const left = h.facts.at + LIVE_MS + 1 - now
-      if (left > 0 && left <= LIVE_MS + 1 && (soonest === null || left < soonest)) soonest = left
+      if (left > 0 && (soonest === null || left < soonest)) soonest = left
     }
     return soonest
   }
   const armExpiry = (g: number) => {
     clearTimer()
     const wait = factsExpiryMs()
-    if (wait !== null) timer = setTimeout(() => { timer = null; void tick(g) }, wait)
+    if (wait === null) return
+    expiryTimer = true
+    timer = setTimeout(() => { timer = null; expiryTimer = false; void tick(g) }, wait)
   }
   const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
 
@@ -214,7 +217,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     if (again) { again = false; void tick(g); return }
     // no poll timer: the next read comes with an event, a reconnect or the window turning visible (or when the freshest facts expire)
     if (eventDriven()) { armExpiry(g); return }
-    timer = setTimeout(() => { timer = null; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
+    timer = setTimeout(() => { timer = null; expiryTimer = false; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
   }
 
   function onVisibility() {
@@ -231,7 +234,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
     // a read under way chose its source before this change: when the first source is another one now, read once more after it
     if (inflight) { if (poolSources()[0] !== readFirst) again = true; return }
     if (eventDriven()) armExpiry(gen)
-    else if (timer === null) void tick(gen)
+    else if (timer === null || expiryTimer) { clearTimer(); void tick(gen) }
   }
   let unsubscribe: (() => void)[] = []
 

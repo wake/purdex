@@ -6,6 +6,9 @@ import type { PoolFacts, PoolHost } from './types'
 /** Facts older than this are not a live reading. */
 export const LIVE_MS = 30_000
 
+/** Facts dated this far ahead of this clock are still taken as fresh (clock skew between machines); further ahead is not a reading. */
+export const MAX_SKEW_MS = 10_000
+
 export type PoolHostState =
   | { state: 'ok'; hostId: string; alias: string; pool: PoolHost; facts: PoolFacts }
   | {
@@ -29,7 +32,7 @@ export type PoolHostState =
  */
 export function poolHostState(pool: PoolHost, lastFactsAt: number | null, now: number): PoolHostState {
   const { host_id: hostId, alias, facts } = pool
-  const fresh = facts !== null && now - facts.at <= LIVE_MS
+  const fresh = facts !== null && facts.at - now <= MAX_SKEW_MS && now - facts.at <= LIVE_MS
   const rest = { hostId, alias, pool, lastFactsAt, checkedAt: pool.liveness_at ?? null, since: pool.liveness_since ?? null }
   if (pool.liveness === undefined) {
     if (pool.reachable && fresh) return { state: 'ok', hostId, alias, pool, facts }
