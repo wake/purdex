@@ -50,6 +50,9 @@ type Peer struct {
 	Info      Info   `json:"info"`
 	Facts     *Facts `json:"facts"`
 	Reachable bool   `json:"reachable"`
+	// RttMS is how long the GET /v1/facts request of the last poll took, in ms (that request alone, not the /v1/info before it). Null for
+	// this host itself, for a peer that did not answer, and when its facts did not come.
+	RttMS *float64 `json:"rtt_ms,omitempty"`
 	// Liveness says, for a peer whose wwd does not answer, whether its host does (a TCP connect to its SSH port, nothing read or sent):
 	// wwd_down (the host answers), host_down (nothing does). ok when the wwd answers; unknown before the first look. Present only when
 	// the reader asked for it (PoolLivenessQuery). LivenessAt is when it was last looked at (moves at every poll); LivenessSince is since
@@ -315,6 +318,8 @@ type PoolHost struct {
 	Reachable       bool             `json:"reachable"`
 	HeadroomReasons *HeadroomReasons `json:"headroom_reasons"`
 	Load            *HostLoad        `json:"load"`
+	// RttMS is Peer's, passed on to the App (null: the local host, a peer that did not answer, or an older wwd).
+	RttMS *float64 `json:"rtt_ms,omitempty"`
 	// Liveness, LivenessAt and LivenessSince are Peer's, passed on to the App; absent while the pool does not carry them.
 	Liveness      Liveness   `json:"liveness,omitempty"`
 	LivenessAt    *time.Time `json:"liveness_at,omitempty"`

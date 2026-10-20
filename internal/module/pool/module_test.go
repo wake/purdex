@@ -116,6 +116,28 @@ func TestHosts_MapsThePoolToTheAppShape(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"labels":[]`, "labels are [] not null")
 }
 
+// The round trip wwd measured to a peer reaches the App: PoolHost is built by hand from the Peer, so a field of the Peer that is not
+// copied there is lost without any other test failing.
+func TestHosts_PassesTheRoundTripOn(t *testing.T) {
+	info, err := wire.Decode[wire.Info](fixture(t, "info.json"))
+	require.NoError(t, err)
+	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 3, Platform: "darwin", Arch: "amd64"}
+	rtt := 12.5
+	body, err := json.Marshal(wire.Pool{Peers: []wire.Peer{{Info: info, Reachable: true}, {Info: air19, Reachable: true, RttMS: &rtt}}})
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", serve(body))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/hosts")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	got, err := wire.Decode[wire.PoolHostsResponse](rr.Body.Bytes())
+	require.NoError(t, err)
+	require.Len(t, got.Hosts, 2)
+	assert.Nil(t, got.Hosts[0].RttMS, "the local host has none")
+	require.NotNil(t, got.Hosts[1].RttMS)
+	assert.Equal(t, 12.5, *got.Hosts[1].RttMS)
+	assert.Contains(t, rr.Body.String(), `"rtt_ms":12.5`)
+}
+
 // The hosts answer asks wwd for the liveness of the peers and passes it on; a wwd that does not know the query answers without it, and the
 // hosts then have none (the App sees nothing it did not see before).
 func TestHosts_AsksForLivenessAndPassesItOn(t *testing.T) {

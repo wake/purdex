@@ -121,7 +121,11 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		return
 	}
 	// facts may not exist yet (503 before the peer's first sample): keep what we had
+	// rtt_ms is this request alone: timed from here, after the /v1/info above (which can be slow for its own reasons, and is not a look at
+	// the facts the pool is for).
+	factsStart := p.now()
 	facts, ferr := get[wire.Facts](ctx, p.client, p.peers[i], p.token, "/v1/facts")
+	factsTook := p.now().Sub(factsStart)
 	var write func() // the file of last known infos, written after mu is released (deferred first, so it runs last)
 	defer func() {
 		if write != nil {
@@ -136,6 +140,11 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		return
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
+	p.state[i].RttMS = nil // only a facts answer that was taken has one
+	if ferr == nil {
+		ms := float64(factsTook) / float64(time.Millisecond)
+		p.state[i].RttMS = &ms
+	}
 	p.setLiveness(i, wire.LivenessOK)
 	p.downSince[i] = time.Time{}
 	write = p.rememberInfo(info)
@@ -149,7 +158,7 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 
 // markDown records that peer i did not answer; the caller holds mu. The time it has been silent counts from the first failure, not the latest.
 func (p *PoolPoller) markDown(i int, at time.Time) {
-	p.state[i].Reachable = false
+	p.state[i].Reachable, p.state[i].RttMS = false, nil
 	if p.downSince[i].IsZero() {
 		p.downSince[i] = at
 	}
@@ -244,6 +253,10 @@ func (p *PoolPoller) Peers() []wire.Peer {
 	out := make([]wire.Peer, len(p.state))
 	for i, s := range p.state {
 		out[i] = s
+		if s.RttMS != nil {
+			v := *s.RttMS // the stored figure is replaced, never edited, but the copy is not to alias it
+			out[i].RttMS = &v
+		}
 		if s.Facts != nil {
 			f := *s.Facts // the stored record is replaced, never edited, so a shallow copy is enough
 			out[i].Facts = &f

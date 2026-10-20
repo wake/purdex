@@ -270,7 +270,7 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 		if labels == nil {
 			labels = []string{}
 		}
-		h := wire.PoolHost{Info: peer.Info, Facts: peer.Facts, Worker: w, Labels: labels, Reachable: peer.Reachable,
+		h := wire.PoolHost{Info: peer.Info, Facts: peer.Facts, Worker: w, Labels: labels, Reachable: peer.Reachable, RttMS: peer.RttMS,
 			Liveness: peer.Liveness, LivenessAt: peer.LivenessAt, LivenessSince: peer.LivenessSince}
 		assess(&h)
 		out.Hosts = append(out.Hosts, h)
