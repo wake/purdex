@@ -13,17 +13,16 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/run"
 )
 
 // directGrace is how long a command that is being stopped has between SIGTERM and SIGKILL.
 const directGrace = 5 * time.Second
 
-// Direct is the Gater of the fast lane now that wwd, not the gate, holds its slot (spec §5.2): the slot was taken when the run was
+// Direct is the runner of the fast lane now that wwd, not the gate, holds its slot (spec §5.2): the slot was taken when the run was
 // registered, so there is nothing to wait for here. It runs the command in its own process group, prints the admitted mark before the
 // start like the gate does, stops the group when ctx ends (SIGTERM, then SIGKILL after the grace) and clears what the command left
-// running when it ends. It reads gate.Options for the command only: Class and WaitMax mean nothing to it.
+// running when it ends. It reads Options for the command only: Class and WaitMax mean nothing to it.
 type Direct struct {
 	// Procs finds the processes that still carry the run's WWD_JOB mark once its group is cleared (a server that left the group with
 	// setsid); nil reads the process table of this host (run.DefaultProcSource, none off macOS).
@@ -41,7 +40,7 @@ func stdinIsTTY() bool {
 	return err == nil
 }
 
-func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
+func (d Direct) Run(ctx context.Context, o Options) (int, error) {
 	if len(o.Argv) == 0 {
 		return 127, errors.New("fastlane: no command")
 	}
@@ -64,19 +63,19 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 	env := o.Env
 	nonce := ""
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
+		if v, ok := strings.CutPrefix(kv, AdmittedMarkEnv+"="); ok {
 			nonce = v
 		}
 	}
 	if nonce != "" { // the command must not learn the nonce
 		kept := make([]string, 0, len(env))
 		for _, kv := range env {
-			if !strings.HasPrefix(kv, gate.AdmittedMarkEnv+"=") {
+			if !strings.HasPrefix(kv, AdmittedMarkEnv+"=") {
 				kept = append(kept, kv)
 			}
 		}
 		env = kept
-		_, _ = io.WriteString(stderr, gate.AdmittedMark(nonce)) // before the start: nothing the command prints can come first
+		_, _ = io.WriteString(stderr, AdmittedMark(nonce)) // before the start: nothing the command prints can come first
 	}
 	// Stdin is the caller's own when none is given, like the gate: a runner that reads a prompt must not see an end of file. At a
 	// terminal the command stays in the caller's process group (a group of its own would be stopped by SIGTTIN at its first read):
@@ -97,7 +96,7 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 	}
 	if err := cmd.Start(); err != nil {
 		if nonce != "" {
-			_, _ = io.WriteString(stderr, gate.NotStartedMark(nonce))
+			_, _ = io.WriteString(stderr, NotStartedMark(nonce))
 		}
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return 127, err

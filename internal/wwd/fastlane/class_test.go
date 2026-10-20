@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/manifest"
 )
 
@@ -16,17 +15,17 @@ func TestADeclaredTaskTakesALightSlotAndAnUndeclaredCommandAHeavyOne(t *testing.
 		t.Fatal(err)
 	}
 	res.Cleanup()
-	if g.calls[0].Class != gate.ClassLight {
+	if g.calls[0].Class != ClassLight {
 		t.Fatalf("a declared task took %q", g.calls[0].Class)
 	}
 
 	g = &fakeGate{}
-	res, err = Run(context.Background(), Request{Root: tree(t), Task: manifest.AdHocTask(), Args: []string{"go", "vet", "./..."}, GateClass: gate.ClassHeavy, Gate: g})
+	res, err = Run(context.Background(), Request{Root: tree(t), Task: manifest.AdHocTask(), Args: []string{"go", "vet", "./..."}, GateClass: ClassHeavy, Gate: g})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Cleanup()
-	if g.calls[0].Class != gate.ClassHeavy || !reflect.DeepEqual(g.calls[0].Argv, []string{"go", "vet", "./..."}) {
+	if g.calls[0].Class != ClassHeavy || !reflect.DeepEqual(g.calls[0].Argv, []string{"go", "vet", "./..."}) {
 		t.Fatalf("an undeclared command: class %q argv %q", g.calls[0].Class, g.calls[0].Argv)
 	}
 }

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/wake/purdex/internal/gate"
 )
 
 type brokenWriter struct{ n int }
@@ -17,7 +15,7 @@ type brokenWriter struct{ n int }
 func (b *brokenWriter) Write(p []byte) (int, error) { b.n++; return 0, errors.New("pipe closed") }
 
 func TestTheCommandsOutputGoesToTheTeeAsWellAsTheLog(t *testing.T) {
-	g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+	g := &fakeGate{run: func(_ context.Context, o Options) int {
 		o.Stdout.Write([]byte("to stdout\n"))
 		o.Stderr.Write([]byte("to stderr\n"))
 		return 0
@@ -48,7 +46,7 @@ func TestTailCutOnlyWhenTheTailStartsInsideALine(t *testing.T) {
 		"longer, tail at a line start": {"012345678901234\n", 8000, false}, // 16 bytes: the cut falls on a line boundary
 		"exactly the tail":             {"012345678901234\n", 4096, false}, // 64 KiB of output, all of it kept
 	} {
-		g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+		g := &fakeGate{run: func(_ context.Context, o Options) int {
 			for i := 0; i < tc.rows; i++ {
 				o.Stdout.Write([]byte(tc.line))
 			}
@@ -72,7 +70,7 @@ func (s *stuck) Write(p []byte) (int, error) { <-s.release; return len(p), nil }
 
 func TestATeeThatStallsNeitherHoldsTheCommandNorLosesTheLog(t *testing.T) {
 	const lines = 5000 // far more chunks than the buffer of a live reader
-	g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+	g := &fakeGate{run: func(_ context.Context, o Options) int {
 		for i := 0; i < lines; i++ {
 			o.Stdout.Write([]byte("row\n"))
 		}
@@ -104,7 +102,7 @@ func TestATeeThatStallsNeitherHoldsTheCommandNorLosesTheLog(t *testing.T) {
 }
 
 func TestATeeThatFailsDoesNotStopTheCommandOrLoseTheLog(t *testing.T) {
-	g := &fakeGate{run: func(_ context.Context, o gate.Options) int {
+	g := &fakeGate{run: func(_ context.Context, o Options) int {
 		o.Stdout.Write([]byte("kept\n"))
 		return 0
 	}}

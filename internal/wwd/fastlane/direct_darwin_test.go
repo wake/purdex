@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/run"
 )
 
@@ -50,7 +49,7 @@ func TestDirectEndsWhatLeftTheGroupWithTheRealScanner(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	// the command leaves only once the escaped process is up (a scan cannot read the environment of a process in the middle of exec)
 	script := `"$0" -test.run='^TestDirectHelper$' >/dev/null 2>&1; while [ ! -s "$DIRECT_PIDFILE" ]; do sleep 0.05; done; cat "$DIRECT_PIDFILE"`
-	code, err := Direct{}.Run(context.Background(), gate.Options{
+	code, err := Direct{}.Run(context.Background(), Options{
 		Argv: []string{"sh", "-c", script, os.Args[0]}, Stdin: strings.NewReader(""), Stdout: &out,
 		Env: []string{"PATH=/usr/bin:/bin", "DIRECT_HELPER=parent", "DIRECT_PIDFILE=" + pidFile, run.MarkEnv + "=j_directtest01"},
 	})
