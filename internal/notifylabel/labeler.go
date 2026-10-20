@@ -14,6 +14,7 @@ const (
 	defaultMaxEntries = 4096
 	readTimeout       = 5 * time.Second
 	queueSize         = 256
+	defaultStopWait   = 3 * time.Second
 )
 
 // Sources are where a read gets its facts. Every one may do I/O; the Labeler calls them only from its background
@@ -47,6 +48,9 @@ func WithTTL(d time.Duration) Option { return func(l *Labeler) { l.ttl = d } }
 // WithOverlay sets the memory-only source of the groups the App wrote back.
 func WithOverlay(o Overlay) Option { return func(l *Labeler) { l.overlay = o } }
 
+// WithStopWait sets how long Stop waits for a read that is still running.
+func WithStopWait(d time.Duration) Option { return func(l *Labeler) { l.stopWait = d } }
+
 // WithMaxEntries bounds the cache.
 func WithMaxEntries(n int) Option { return func(l *Labeler) { l.maxEntries = n } }
 
@@ -65,6 +69,7 @@ type Labeler struct {
 	now        func() time.Time
 	ttl        time.Duration
 	maxEntries int
+	stopWait   time.Duration
 	overlay    Overlay
 
 	mu      sync.Mutex
@@ -80,7 +85,7 @@ type Labeler struct {
 
 // New returns a Labeler; Start runs its reader.
 func New(src Sources, opts ...Option) *Labeler {
-	l := &Labeler{src: src, now: time.Now, ttl: defaultTTL, maxEntries: defaultMaxEntries,
+	l := &Labeler{src: src, now: time.Now, ttl: defaultTTL, maxEntries: defaultMaxEntries, stopWait: defaultStopWait,
 		cache: map[string]entry{}, pending: map[string]bool{}, queue: make(chan string, queueSize), done: make(chan struct{})}
 	for _, o := range opts {
 		o(l)
@@ -100,7 +105,8 @@ func (l *Labeler) Start() {
 	go l.run()
 }
 
-// Stop ends the reader and waits for it. Label still answers afterwards, from the cache, and queues nothing.
+// Stop ends the reader and waits for it, up to the stop wait: a source that ignores its context (a store call with no
+// deadline) cannot hold the daemon's shutdown; the reader is then left to finish on its own. Label still answers afterwards, from the cache, and queues nothing.
 func (l *Labeler) Stop() {
 	l.mu.Lock()
 	if l.stopped {
@@ -110,7 +116,12 @@ func (l *Labeler) Stop() {
 	l.stopped = true
 	close(l.done)
 	l.mu.Unlock()
-	l.wg.Wait()
+	ended := make(chan struct{})
+	go func() { l.wg.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(l.stopWait):
+	}
 }
 
 // Label is the label of a session. sessionName is the tmux session name. It reads memory only.

@@ -309,3 +309,36 @@ func BenchmarkLabeler_WarmLabel(b *testing.B) {
 		l.Label("s1", "dev")
 	}
 }
+
+// A source that ignores its context (a store call with no deadline) must not hold the daemon's shutdown: Stop gives the
+// reader a moment, then lets go of it.
+func TestLabeler_StopDoesNotWaitForeverOnAStuckSource(t *testing.T) {
+	f := baseSources()
+	stuck := make(chan struct{})
+	started := make(chan struct{}, 1)
+	src := f.sources()
+	src.Group = func(context.Context, string) (string, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-stuck // never looks at ctx
+		return "", nil
+	}
+	l := New(src, WithStopWait(50*time.Millisecond))
+	l.Start()
+	l.Label("s1", "dev")
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the read did not start")
+	}
+	done := make(chan struct{})
+	go func() { l.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop waited for a source that ignores its context")
+	}
+	close(stuck)
+}
