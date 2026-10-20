@@ -160,6 +160,18 @@ describe('StatusCards, 暫停', () => {
     controlSource.mockImplementation(() => 'cfg-a')
   })
 
+  it('once nothing can control any more, an earlier answer is not shown as known (codex attack)', async () => {
+    fetchPauses.mockResolvedValue([{ name: 'deploy', until: null, pid: 4242, holds: ['heavy'] }])
+    const host = monitorHost({}, paused)
+    const { rerender } = render(<StatusCards host={host} />)
+    await waitFor(() => expect(screen.getByTestId('pause-deploy')).toHaveTextContent('4242'))
+    controlSource.mockImplementation(() => null)
+    rerender(<StatusCards host={host} />)
+    expect(screen.getByTestId('pause-deploy')).toHaveTextContent(t('watch.host.status.pause.holds_unknown'))
+    expect(screen.getByTestId('pause-deploy')).not.toHaveTextContent('4242')
+    controlSource.mockImplementation(() => 'cfg-a')
+  })
+
   it('no pause in force: says none, and reads nothing', () => {
     render(<StatusCards host={monitorHost({}, (f) => { f.exceptions = [] })} />)
     expect(screen.getByTestId('status-card-pause')).toHaveTextContent(t('watch.host.status.pause.none'))

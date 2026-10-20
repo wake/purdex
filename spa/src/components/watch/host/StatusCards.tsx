@@ -126,8 +126,8 @@ function PauseCard({ host, facts, t }: { host: MonitorHost; facts: PoolFacts; t:
   // `controlSource` prefers the host the pool came from when it can control, and otherwise the first that can.
   const readFrom = controlSource(poolSource)
   const names = facts.exceptions.map((e) => e.name).join('\n')
-  const key = `${host.alias}|${names}`
-  // What was read belongs to the host and the names it was read for; a new set of names is read again, and "reading" shows until it is in (a read that failed or a host that has none is null: not known).
+  const key = `${readFrom}|${host.alias}|${names}`
+  // What was read belongs to the host it was read from, the host it is about and the names it was read for (so it is dropped when nothing can control any more); a new set of names is read again, and "reading" shows until it is in (a read that failed or a host that has none is null: not known).
   const [read, setRead] = useState<{ key: string; details: PoolExceptionDetail[] | null } | null>(null)
   useEffect(() => {
     if (names === '' || readFrom === null) return
