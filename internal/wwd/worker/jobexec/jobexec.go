@@ -109,6 +109,16 @@ func (e *Exec) JobDir(job wire.Job, claimID string) string {
 func wsDir(base string) string  { return filepath.Join(base, "ws") }
 func outDir(base string) string { return filepath.Join(base, "out") }
 
+// outLinkRejected turns a snapshot's symlink out of its workspace into a *runner.Rejected: the content of the snapshot is wrong, so the
+// job fails as submitted instead of being released as the host's trouble and claimed again (#3841). Any other error is returned as it is.
+func outLinkRejected(err error) error {
+	var ol *snapshot.OutsideLinkError
+	if errors.As(err, &ol) {
+		return &runner.Rejected{Reason: fmt.Sprintf("snapshot_symlink_outside_workspace: %q -> %q points out of the workspace (an untracked or tracked symlink to a path outside the repository; add it to .gitignore or remove it)", ol.Path, ol.Target)}
+	}
+	return err
+}
+
 // Materialize makes <JobDir>/ws. The returned Cleanup removes the whole job directory (the tree and the run's files), so that nothing of
 // a job stays behind once its result is delivered.
 func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, claimID string) (snapshot.Workspace, error) {
@@ -137,7 +147,7 @@ func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, cla
 	ws, err := f.Fetch(ctx, job, claimID, clone, wsDir(base))
 	if err != nil {
 		_ = os.RemoveAll(base)
-		return snapshot.Workspace{}, err
+		return snapshot.Workspace{}, outLinkRejected(err)
 	}
 	inner := ws.Cleanup
 	key := ref.Key()
@@ -150,6 +160,15 @@ func (e *Exec) Materialize(ctx context.Context, ref ident.Ref, job wire.Job, cla
 		}
 		_ = os.RemoveAll(base)
 		return snapshot.Workspace{}, errors.Join(fmt.Errorf("jobexec: the fetcher made %q, not %q", ws.Dir, wsDir(base)), cerr)
+	}
+	// A checkout (the clone route) is scanned like a tar is: a symlink out of the workspace is the snapshot's fault on every host.
+	if ol, serr := snapshot.FindOutsideLink(ws.Dir); serr == nil && ol != nil {
+		var cerr error
+		if inner != nil {
+			cerr = inner()
+		}
+		_ = os.RemoveAll(base)
+		return snapshot.Workspace{}, errors.Join(outLinkRejected(ol), cerr)
 	}
 	return snapshot.Workspace{Dir: ws.Dir, Cleanup: func() error {
 		var err error
