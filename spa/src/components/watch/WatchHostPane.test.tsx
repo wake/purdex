@@ -7,7 +7,7 @@ vi.mock('../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => () =>
 const monitorProps = vi.fn()
 vi.mock('./host/MonitorTab', () => ({ MonitorTab: (p: unknown) => { monitorProps(p); return <div data-testid="mock-monitor" /> } }))
 const settingsProps = vi.fn()
-vi.mock('./WatchSettings', () => ({ WatchSettings: (p: unknown) => { settingsProps(p); return <div data-testid="mock-settings" /> } }))
+vi.mock('./host/SettingsTab', () => ({ SettingsTab: (p: unknown) => { settingsProps(p); return <div data-testid="mock-settings" /> } }))
 const fetchPoolHosts = vi.fn()
 vi.mock('../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('../../lib/pool/api')>()), fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a) }))
 
@@ -65,11 +65,11 @@ describe('the header and the sub-tabs of a host that is ok', () => {
     expect(readHostTab(SEED_HOST_ID)).toBe('settings')
   })
 
-  it('設定 gets the pool host\'s alias, the pool host id as the key, and the App host that fronts it', () => {
+  it('設定 gets the pool host: its id, its alias, and the App host that fronts it', () => {
     mount([poolHostOf()])
     sub('settings')
-    const p = settingsProps.mock.calls.at(-1)![0] as { hostId: string; poolAlias: string; hostConfigId?: string; offline: boolean }
-    expect(p).toMatchObject({ hostId: SEED_HOST_ID, poolAlias: 'air26', hostConfigId: 'cfg-a', offline: false })
+    const p = settingsProps.mock.calls.at(-1)![0] as { host: { hostId: string; alias: string; daemonHostId: string | null } }
+    expect(p.host).toMatchObject({ hostId: SEED_HOST_ID, alias: 'air26', daemonHostId: 'cfg-a' })
   })
 })
 
@@ -102,22 +102,6 @@ describe('the banner of a host that is not ok (M22, #3785)', () => {
     cleanup()
     mount([down('host_down')])
     expect(screen.getByTestId('host-banner-title')).toHaveTextContent(t('pool.liveness.host_down'))
-  })
-
-  it('a host that is ok but whose owning App host is not connected: the guardian settings are offline too (codex R1)', () => {
-    mount([poolHostOf()])
-    sub('settings')
-    expect(screen.queryByTestId('host-banner')).toBeNull() // the pool still reads the host
-    expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(false)
-    act(() => useHostStore.setState({ runtime: { 'cfg-a': { status: 'disconnected' } } } as never))
-    expect(screen.queryByTestId('host-banner')).toBeNull()
-    expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(true)
-  })
-
-  it('the settings page is told the host is offline', () => {
-    mount([down('host_down')])
-    sub('settings')
-    expect((settingsProps.mock.calls.at(-1)![0] as { offline: boolean }).offline).toBe(true)
   })
 })
 
