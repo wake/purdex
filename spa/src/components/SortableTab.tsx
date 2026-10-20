@@ -15,6 +15,7 @@ import { TeamTabShadow } from './team/TeamTabGroup'
 import { useGroupDragHandle } from './team/group-drag'
 import { HalfHandoffMark } from './relay/HalfHandoffMark'
 import { useFreshHandoffOfTab } from '../hooks/useFreshHandoff'
+import { queueOpener } from '../lib/watch/open-queue'
 
 interface Props {
   tab: Tab
@@ -91,6 +92,15 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     if (isActive) e.preventDefault()
   }
 
+  // The hourglass is not a control of its own (no button inside a tab, #3806): with one lit for a pool job, Alt+Enter on the tab is its press.
+  const openQueue = queueOpener(backgroundWaiters)
+  const queueKey = (e: React.KeyboardEvent) => {
+    if (!openQueue || e.key !== 'Enter' || !e.altKey) return false
+    e.preventDefault()
+    openQueue()
+    return true
+  }
+
   const handleMouseEnter = () => onHover?.(tab.id)
   const handleMouseLeave = () => onHover?.(null)
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -115,6 +125,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onClick={() => onSelect(tab.id)}
         onDoubleClick={handleDoubleClick}
         onPointerDown={handlePointerDown}
+        onKeyDown={queueKey}
+        aria-keyshortcuts={openQueue ? 'Alt+Enter' : undefined}
         onMouseUp={handleMouseUp}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -148,6 +160,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const tipText = stateSuffix ? `${label} · ${stateSuffix}` : label
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (queueKey(e)) return
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(tab.id) }
   }
 
@@ -167,6 +180,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       onDoubleClick={handleDoubleClick}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
+      aria-keyshortcuts={openQueue ? 'Alt+Enter' : undefined}
       onMouseUp={handleMouseUp}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}

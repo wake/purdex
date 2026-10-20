@@ -9,9 +9,8 @@ import type { MouseEvent, PointerEvent } from 'react'
 import type { BackgroundKind } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useCoarseNow } from '../hooks/useCoarseNow'
-import { openWatchArea } from '../features/workspace/lib/open-watch-area'
-import { jobKey, writeJobsMode, writeSelectedJob } from '../lib/pool/jobs-view-memory'
-import { isJobMark, queuedTooltip, type QueuedItem } from '../lib/watch/queued-sessions'
+import { queueOpener } from '../lib/watch/open-queue'
+import { queuedTooltip, type QueuedItem } from '../lib/watch/queued-sessions'
 
 const ICONS = { queued: Hourglass, workflow: TreeStructure, monitor: Eye, schedule: Clock } as const
 
@@ -37,12 +36,11 @@ function QueuedSymbol({ waiters, ...rest }: Props & { waiters: QueuedItem[] }) {
   useCoarseNow() // re-render each minute; the minutes themselves are read from the clock below
   // Date.now(), not the coarse minute: the minute value would understate a wait by up to a minute. The tick above re-renders.
   // The hourglass of a pool job is a way into the job queue (M34, M40); one that stands only for gate waiters is not pressable, as before.
-  const first = waiters.find(isJobMark)
-  const open = first
-    ? () => { writeJobsMode('live'); writeSelectedJob(jobKey(first.origin, first.jobId)); openWatchArea({ tab: 'jobs' }) }
-    : undefined
+  const open = queueOpener(waiters)
+  // The keyboard way in (Alt+Enter on the tab, #3806) is named in the tooltip only where there is a way in.
   // eslint-disable-next-line react-hooks/purity
-  return <Symbol {...rest} title={queuedTooltip(waiters, Date.now(), t)} onOpen={open} />
+  const tip = queuedTooltip(waiters, Date.now(), t)
+  return <Symbol {...rest} title={open ? `${tip}・${t('tab.queued.open_hint')}` : tip} onOpen={open} />
 }
 
 /** `onOpen`: a press on the symbol. It does not go up: the tab holding it is itself a button, and the drag of a tab starts on a pointer-down. */
