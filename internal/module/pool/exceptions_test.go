@@ -46,6 +46,22 @@ func TestExceptions_AnOldHostIsNotKnownNot500(t *testing.T) {
 	assert.JSONEq(t, `{"host":"mserv","known":false,"exceptions":[]}`, rr.Body.String())
 }
 
+// An older wwd that has POST /v1/exceptions and not GET answers the mux's 405: the same "not known" (88 saw wwd_rejected for air19 on 757,
+// #3681), and a 405 of anything else is still the refusal it says.
+func TestExceptions_AnOlderWwdWithOnlyPostIsNotKnownEither(t *testing.T) {
+	old := http.NewServeMux()
+	old.HandleFunc("POST /v1/exceptions", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux := newModule(t, fakeWWD(t, old))
+	rr := send(mux, "GET", "/api/pool/hosts/air19/exceptions", "", asAdmin)
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"host":"air19","known":false,"exceptions":[]}`, rr.Body.String())
+
+	var s seen
+	other := newModule(t, fakeWWD(t, exceptionsWWD(t, &s, 405, `{"error":"read only"}`)))
+	rr = send(other, "GET", "/api/pool/hosts/air19/exceptions", "", asAdmin)
+	assert.NotEqual(t, 200, rr.Code, "a 405 that is not the mux's is a refusal: %s", rr.Body.String())
+}
+
 func TestExceptions_TheErrorsAreTheOnesTheOtherReadsHave(t *testing.T) {
 	var s seen
 	// an alias the local wwd does not know: its own 404 is passed on, as wwd_rejected

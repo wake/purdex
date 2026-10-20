@@ -194,8 +194,12 @@ func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire
 	return getLimit[wire.FactsSeriesResponse](ctx, c, "/v1/facts/series", q.Values(), timeout, maxBody)
 }
 
-// notFoundBody is what net/http's mux answers for a path it has no handler for.
-const notFoundBody = "404 page not found"
+// notFoundBody is what net/http's mux answers for a path it has no handler for; methodNotAllowedBody is what it answers for a path that
+// has handlers, but none for the method asked (an older wwd that has POST /v1/exceptions and not yet GET: a 405, not a 404).
+const (
+	notFoundBody         = "404 page not found"
+	methodNotAllowedBody = "Method Not Allowed"
+)
 
 // RouteMissing says err is a wwd (or the peer behind it) that has no such route: exactly net/http's own 404 for an unknown path.
 // Any other 404 (a JSON {"error":"unknown host"}, a proxy's page, another route's reason) is the answer it is and is not this, so that
@@ -203,6 +207,18 @@ const notFoundBody = "404 page not found"
 func RouteMissing(err error) bool {
 	var se *StatusError
 	return errors.As(err, &se) && se.Code == http.StatusNotFound && strings.TrimSpace(se.Body) == notFoundBody
+}
+
+// RouteOrMethodMissing is RouteMissing, and also net/http's own 405 for a path an older release has only for another method (a wwd with
+// POST /v1/exceptions and not yet GET). That text is also what any handler or layer in front of one can write with http.Error, so it is for
+// a call that knows an older wwd answers so — GET /v1/exceptions — and for no other: a route that every wwd has (FactsSeries) keeps its 405
+// as the refusal it is. Only for calls that GET: a 405 for a write is a refusal.
+func RouteOrMethodMissing(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return RouteMissing(err) || (se.Code == http.StatusMethodNotAllowed && strings.TrimSpace(se.Body) == methodNotAllowedBody)
 }
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
