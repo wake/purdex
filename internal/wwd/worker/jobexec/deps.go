@@ -43,13 +43,22 @@ type installer struct {
 	cacheEnv string // the variable that names the package manager's download cache
 	cacheSub string // its subdirectory of the cache directory
 	tools    []string
+	// asWorker: the install is the worker's own, outside the job's sandbox and with the worker's own HOME and environment, because it
+	// has to reach a private host the job has no credentials for (Go modules from the company Gitea). It fills the dependency
+	// directory in the workspace, which is what the job then uses, offline.
+	asWorker bool
 }
+
+// goPrivate is the host of the private Go modules (lab.protype.tw/wake/nexen): the download names it itself rather than leave it to the go
+// env of the host it runs on.
+const goPrivate = "lab.protype.tw"
 
 var installers = map[string]installer{
 	"pnpm-lock.yaml":    {argv: []string{"pnpm", "install", "--frozen-lockfile"}, cacheEnv: "npm_config_store_dir", cacheSub: "pnpm-store", tools: []string{"pnpm", "node"}},
 	"package-lock.json": {argv: []string{"npm", "ci"}, cacheEnv: "npm_config_cache", cacheSub: "npm-cache", tools: []string{"npm", "node"}},
 	"yarn.lock":         {argv: []string{"yarn", "install", "--frozen-lockfile"}, cacheEnv: "YARN_CACHE_FOLDER", cacheSub: "yarn-cache", tools: []string{"yarn", "node"}},
 	"composer.lock":     {argv: []string{"composer", "install", "--no-interaction", "--no-progress"}, cacheEnv: "COMPOSER_CACHE_DIR", cacheSub: "composer-cache", tools: []string{"composer", "php"}},
+	"go.sum":            {argv: []string{"go", "mod", "download"}, tools: []string{"go"}, asWorker: true},
 }
 
 // depsState is what an Exec keeps for the dependency cache.
@@ -93,6 +102,23 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 	if err != nil {
 		return err
 	}
+	return e.prepareDepsWith(ctx, cache, ref, job, ws, lockfiles, taskEnv)
+}
+
+// depsJobEnv is what the job's command is told about the dependencies it was given besides the directories: a Go task uses the module cache
+// in its workspace and nothing else (no proxy, no network, no change to go.mod or go.sum), so it needs neither credentials nor a route out.
+// These come last in the task's environment, so nothing the manifest lists can point Go elsewhere.
+func depsJobEnv(ws string, lockfiles []string) []string {
+	var env []string
+	for _, lf := range lockfiles {
+		if path.Base(lf) == "go.sum" {
+			env = append(env, "GOMODCACHE="+filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=-mod=readonly", "GOPROXY=off")
+		}
+	}
+	return env
+}
+
+func (e *Exec) prepareDepsWith(ctx context.Context, cache *deps.Cache, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, taskEnv []string) error {
 	var in []installer
 	for _, lf := range lockfiles {
 		i, ok := installers[path.Base(lf)]
@@ -138,6 +164,12 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 // environment with the package managers' download caches in the cache directory). Its log is <out>/deps-install, apart from the job's.
 func (e *Exec) installDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, in []installer, taskEnv []string) error {
 	for i, lf := range lockfiles {
+		if in[i].asWorker {
+			if err := e.downloadModules(ctx, job, ws, lf, in[i], taskEnv); err != nil {
+				return err
+			}
+			continue
+		}
 		cacheDir := filepath.Join(e.cfg.DepsDir, in[i].cacheSub)
 		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 			return err
@@ -237,7 +269,11 @@ func (e *Exec) toolVersion(ctx context.Context, tool string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("jobexec: %s is not on the job PATH: %w", tool, err)
 	}
-	cmd := execstat.CommandContext(cctx, "wwd.jobexec.deps", prog, "--version")
+	args := []string{"--version"}
+	if tool == "go" { // go has no --version
+		args = []string{"version"}
+	}
+	cmd := execstat.CommandContext(cctx, "wwd.jobexec.deps", prog, args...)
 	cmd.Env = e.cfg.ParentEnv
 	out, err := cmd.Output()
 	if err != nil {
@@ -312,7 +348,7 @@ func depsInputs(lockfiles, memberDirs []string) []string {
 	}
 	for _, lf := range lockfiles {
 		d := path.Dir(lf)
-		for _, n := range []string{"package.json", ".npmrc", ".pnpmfile.cjs", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "composer.json"} {
+		for _, n := range []string{"package.json", ".npmrc", ".pnpmfile.cjs", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml", "composer.json", "go.mod"} {
 			add(d, n)
 		}
 	}

@@ -200,6 +200,7 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 		if err := e.prepareDeps(ctx, ref, job, ws, p.Task.Deps, p.Env); err != nil {
 			return runner.Plan{}, err
 		}
+		p.Env = append(append([]string(nil), p.Env...), depsJobEnv(ws.Dir, p.Task.Deps)...)
 	}
 	env := p.Env
 	if p.Task.DB == "per-job" {
