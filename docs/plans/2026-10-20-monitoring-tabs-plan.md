@@ -135,7 +135,7 @@
 依賴 MON-1a（daemon 對應）、MON-2a。可與 MON-1b 並行（MON-1c 依賴它）。檔案（8 個、約 520 行）：新檔 `lib/pool/host-looks.ts`＋測試、新檔 `lib/pool/pool-look-migration.ts`＋測試、`lib/pool/use-cell-models.ts`（抽出 `retainPool()`）、`lib/storage/keys.ts`、`spa/src/main.tsx`、`main.test.tsx`。
 
 1. **解析與寫入**（A3、M9、M13、W7）
-   - `usePoolHostLook(hostId)`：有 daemon（`usePoolHostDaemons`）→ `useHostLookResolver()(hostConfigId)` 的 `colors`／`color`／`icon`／`iconWeight`（`lib/host-look.ts`；不直接讀 HostConfig 的外觀欄位，`host-look.guard.test.ts` 管著）；沒有 → 新 store。
+   - `usePoolHostLook(hostId)`：有 daemon（用 `usePoolHostOwners`：Nex 快取曾指名這個 `host_id` 的 App 主機，不管現在連不連著、快取新不新，重複時主機順序在前的贏；不用要求連線的 `usePoolHostDaemons`，否則外觀歸屬會跟著重連跳動。owner 還不知道時寫進新 store 的顏色圖示，在 owner 的外觀有顏色或圖示之前照樣顯示；owner 一旦有，下一次改外觀就把新 store 裡那份清掉，指標留著）→ `useHostLookResolver()(hostConfigId)` 的 `colors`／`color`／`icon`／`iconWeight`（`lib/host-look.ts`；不直接讀 HostConfig 的外觀欄位，`host-look.guard.test.ts` 管著）；沒有 → 新 store。
    - `indicatorOf(look)`：store 的 `indicator`，沒有時是預設：由 `useUISettingsStore.fleetCellIndicator` 換算（`ring` → 環形＋`load`；`bars-pressure` → 雙柱 `cpu`＋`pressure`；`bars-memory` → 雙柱 `cpu`＋`mem`）。
    - `orderPoolHosts(hosts, order)`：純函式，M13。
    - `writePoolHostLook(hostId, patch)`：顏色、圖示 → 有 daemon 的寫 `useHostLookStore.patchLook(lookKeyOf(host, looks), …)`（Hosts 頁現行的寫法），沒有的寫新 store；指標一律寫新 store。

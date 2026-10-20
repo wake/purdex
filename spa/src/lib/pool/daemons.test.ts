@@ -1,6 +1,6 @@
 // spa/src/lib/pool/daemons.test.ts — which App host is the daemon of which pool host (monitoring tabs MON-1a). The key is the wwd `host_id`, which is never a Purdex daemon's host id.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { poolHostDaemons, readPoolHostDaemons, refreshPoolIdentities } from './daemons'
+import { poolHostDaemons, poolHostOwners, readPoolHostDaemons, refreshPoolIdentities } from './daemons'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, type NexHostEntry } from '../../stores/useNexHostStore'
 
@@ -75,5 +75,23 @@ describe('readPoolHostDaemons', () => {
     useHostStore.setState({ hostOrder: ['d1'], runtime: { d1: connected } } as never)
     useNexHostStore.setState({ byHost: { d1: entry({ wwd: { hostId: WWD_A, alias: 'mlab' } }) } } as never)
     expect(readPoolHostDaemons()).toEqual({ [WWD_A]: 'd1' })
+  })
+})
+
+describe('poolHostOwners', () => {
+  it('counts a daemon that is disconnected or whose entry is stale: who owns a look must not flip with a reconnect', () => {
+    const owners = poolHostOwners({
+      hostOrder: ['d1', 'd2', 'd3'],
+      byHost: {
+        d1: entry({ wwd: { hostId: WWD_A, alias: 'mlab' }, fetchedAt: 0 }),
+        d2: entry({ wwd: { hostId: WWD_B, alias: 'air26' } }),
+        d3: entry(), // no identity
+      },
+    })
+    expect(owners).toEqual({ [WWD_A]: 'd1', [WWD_B]: 'd2' })
+  })
+  it('the first in host order wins a shared id', () => {
+    const same = entry({ wwd: { hostId: WWD_A, alias: 'mlab' } })
+    expect(poolHostOwners({ hostOrder: ['d2', 'd1'], byHost: { d1: same, d2: same } })).toEqual({ [WWD_A]: 'd2' })
   })
 })

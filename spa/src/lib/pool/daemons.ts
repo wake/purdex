@@ -26,6 +26,30 @@ export function poolHostDaemons({ hostOrder, runtime, byHost }: Inputs): Record<
   return out
 }
 
+/**
+ * wwd `host_id` → App host id of the host that has been seen to front it, whether or not it is connected right now or its entry is stale: who OWNS a pool host's look must not flip with a
+ * reconnect (a look written while the daemon is down would otherwise land in a different store than the one read once it is back). First in host order wins.
+ */
+export function poolHostOwners({ hostOrder, byHost }: Pick<Inputs, 'hostOrder' | 'byHost'>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const id of hostOrder) {
+    const w = byHost[id]?.wwd
+    if (w && !Object.hasOwn(out, w.hostId)) out[w.hostId] = id
+  }
+  return out
+}
+
+export function readPoolHostOwners(): Record<string, string> {
+  const { hostOrder } = useHostStore.getState()
+  return poolHostOwners({ hostOrder, byHost: useNexHostStore.getState().byHost })
+}
+
+export function usePoolHostOwners(): Record<string, string> {
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const byHost = useNexHostStore((s) => s.byHost)
+  return useMemo(() => poolHostOwners({ hostOrder, byHost }), [hostOrder, byHost])
+}
+
 export function readPoolHostDaemons(): Record<string, string> {
   const { hostOrder, runtime } = useHostStore.getState()
   return poolHostDaemons({ hostOrder, runtime, byHost: useNexHostStore.getState().byHost })
