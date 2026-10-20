@@ -79,7 +79,7 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
 
   const lastIdx = (() => {
     let last = samples.length - 1
-    if (dead) { last = -1; samples.forEach((s, i) => { if (s.at < dead.fromAt) last = i }) }
+    if (dead) { last = -1; samples.forEach((s, i) => { if (s.at <= dead.fromAt) last = i }) }
     return Math.max(0, last)
   })()
   const shownIdx = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < samples.length ? hoverIndex : lastIdx

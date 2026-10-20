@@ -227,4 +227,10 @@ describe('MiniChart — a host that has gone (M22)', () => {
     // points at -240, -180, -120, -60, 0 seconds: the last one before -90 s is the third (value 30)
     expect(within(screen.getByTestId('mini-chart')).getByTestId('mini-big')).toHaveTextContent('30')
   })
+  it('the big number keeps the reading taken exactly at the moment the host went (fromAt = lastFactsAt)', () => {
+    const s = series(5, 60_000, (i) => ({ cpuPct: 10 * (i + 1) }))
+    show(defOf(s, 'cpu'), s, { dead: { fromAt: s[3].at, tone: 'error' } })
+    // fromAt is the 4th point's own time: that reading (value 40) still counts
+    expect(within(screen.getByTestId('mini-chart')).getByTestId('mini-big')).toHaveTextContent('40')
+  })
 })
