@@ -3,6 +3,7 @@
 // (`host_id`), in module memory (not persisted: a restart starts at the default). The host page keeps its sub-tab, its range and the scroll of each sub-tab here (MON-6f-1);
 // the queue block's sub-tab and the 歷史 class switch are the old gate's, until MON-12. The 事件 tab's three chip filters, its scroll and the observations it last read are here too (W5e, MON-10c).
 import type { HostRange } from '../pool/host-history'
+import type { HostColorMode } from '../host-color'
 import type { EventFilters } from '../pool/events-model'
 import type { PoolObservation } from '../pool/observations-api'
 
@@ -10,6 +11,8 @@ import type { PoolObservation } from '../pool/observations-api'
 export type HostSubTab = 'monitor' | 'status' | 'procs' | 'settings'
 const hostTabs = new Map<string, HostSubTab>()
 const hostRanges = new Map<string, HostRange>()
+/** The colour mode shown in a host's look editor (MON-9a-3). */
+const lookModes = new Map<string, HostColorMode>()
 /** `${host_id}\0${sub-tab}` → scrollTop. */
 const scrolls = new Map<string, number>()
 
@@ -45,6 +48,9 @@ export const writeHostTab = (hostId: string, tab: HostSubTab): void => { hostTab
 /** 30 minutes by default, as the design's `HP.range`. */
 export const readHostRange = (hostId: string): HostRange => hostRanges.get(hostId) ?? '30m'
 export const writeHostRange = (hostId: string, range: HostRange): void => { hostRanges.set(hostId, range) }
+/** `terminal` by default: the layer the sidebar draws (`resolveHostBadge(look, 'terminal')`). */
+export const readLookMode = (hostId: string): HostColorMode => lookModes.get(hostId) ?? 'terminal'
+export const writeLookMode = (hostId: string, mode: HostColorMode): void => { lookModes.set(hostId, mode) }
 export const readHostScroll = (hostId: string, sub: HostSubTab): number => scrolls.get(`${hostId}\0${sub}`) ?? 0
 export const writeHostScroll = (hostId: string, sub: HostSubTab, top: number): void => { scrolls.set(`${hostId}\0${sub}`, top) }
 
@@ -59,6 +65,6 @@ export const writeEventsScroll = (top: number): void => { eventsScroll = top }
 export const readEventsObservations = (): EventsObservations => eventsObservations
 export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
-  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
+  hostTabs.clear(); hostRanges.clear(); lookModes.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
   eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }
