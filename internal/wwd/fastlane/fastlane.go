@@ -92,7 +92,11 @@ type Request struct {
 	Args []string
 	// Body is the record to register (submit.Prepare with Local set).
 	Body submit.Body
-	Gate Gater
+	// RetakeTree, when set, is called before the registration and its tree replaces Body's (empty when it fails, the error in
+	// Result.TreeErr): a run that waited for a lock or a slot is of the directory as it is when it goes on, not as it was before
+	// the wait (#3735). The caller sets it from the second attempt on; the first one uses the tree Prepare took.
+	RetakeTree func(ctx context.Context) (string, error)
+	Gate       Gater
 	// Recorder may be nil: the run is then not recorded and holds no lock.
 	Recorder Recorder
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
@@ -115,6 +119,7 @@ type Result struct {
 	LogPath string
 	Err     error // a failure of the lane itself (the gate refused, the record could not be made): no test result
 	Cleanup func()
+	TreeErr error // why the tree of a registration could not be retaken (RetakeTree); the record has none
 	SumErr  error // why the summary could not be built, when it could not
 	// Tail is the end of the command's output (the last 64 KiB at most, kept in memory whatever the log's cap was).
 	Tail []byte
@@ -154,6 +159,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	env := withTaskEnv(req.Env, task.Env)
 	var handle Handle
 	if req.Recorder != nil {
+		if req.RetakeTree != nil {
+			req.Body.Snapshot.Tree, res.TreeErr = req.RetakeTree(ctx)
+		}
 		h, err := req.Recorder.Register(ctx, req.Body)
 		switch {
 		case errors.Is(err, ErrUnrecorded): // runs on with no record, no job id and no mark

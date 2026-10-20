@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/client"
@@ -252,5 +253,36 @@ func TestADeclaredFastLaneRecordHoldsTheWorkingTreeToo(t *testing.T) {
 	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ()})
 	if !strings.Contains(out, "could not be recorded") {
 		t.Fatalf("the report must say the tree is missing: %q", out)
+	}
+}
+
+// treeRecorder remembers the tree of each registration, refuses the first one for a lock, and edits the directory while the run waits.
+type treeRecorder struct {
+	dir   string
+	trees []string
+}
+
+func (r *treeRecorder) Register(_ context.Context, b submit.Body) (fastlane.Handle, error) {
+	r.trees = append(r.trees, b.Snapshot.Tree)
+	if len(r.trees) == 1 {
+		_ = os.WriteFile(filepath.Join(r.dir, "edited-while-waiting.txt"), []byte("later\n"), 0o644)
+		return nil, fmt.Errorf("%w: tmux", fastlane.ErrLocksBusy)
+	}
+	return nil, fastlane.ErrUnrecorded
+}
+
+// The record is of the directory when the run is registered: a run that waited for a lock and then went on registers the tree of the
+// edited directory, not the one it saw before waiting.
+func TestAFastLaneRunThatWaitedForALockRecordsTheTreeOfTheDirectoryWhenItWentOn(t *testing.T) {
+	dir := repo(t, true)
+	rec := &treeRecorder{dir: dir}
+	run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if len(rec.trees) != 2 || rec.trees[0] == rec.trees[1] {
+		t.Fatalf("trees at each registration: %q: the second must be of the edited directory", rec.trees)
+	}
+	want, err := gate.WorkingTree(context.Background(), "", dir)
+	if err != nil || rec.trees[1] != want {
+		t.Fatalf("second tree %q, the directory is %q (%v)", rec.trees[1], want, err)
 	}
 }
