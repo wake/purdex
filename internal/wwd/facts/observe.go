@@ -68,6 +68,47 @@ type tree struct {
 	cpuPeak     float64
 	memPeakByte uint64
 	procsPeak   int
+	// shellRoot: the root is a shell whose script gave no signature of its own (the scrubber masked it), so the tree is named after
+	// the heaviest program below it. cands are those programs, at most maxCandidates.
+	shellRoot bool
+	cands     map[candKey]*candidate
+	candSeq   int
+}
+
+// maxCandidates bounds the programs that have ended a shell-rooted tree keeps to name itself by; maxAliveCandidates the ones still
+// running (a program that runs keeps adding up, so it is never dropped for the cap of the ended ones).
+const (
+	maxCandidates      = 16
+	maxAliveCandidates = 64
+)
+
+// candKey tells a program from another one that took its pid: its start time, or its argv where the reader has none.
+type candKey struct {
+	pid   int
+	name  string
+	start time.Time
+	argv  string
+}
+
+// candidate is a program below a shell root (the first non-shell one on its path) and everything it has used: its own subtree's CPU
+// over the tree's life, and its memory peak.
+type candidate struct {
+	signature string
+	cpu       float64
+	mem       uint64
+	seq       int
+	seen      int // the last sample it was alive in
+}
+
+// heavier says whether a is a better name for the tree than b: more CPU, then more memory, then the earlier one.
+func (a *candidate) heavier(b *candidate) bool {
+	switch {
+	case a.cpu != b.cpu:
+		return a.cpu > b.cpu
+	case a.mem != b.mem:
+		return a.mem > b.mem
+	}
+	return a.seq < b.seq
 }
 
 func (t *tree) over(cfg ObserveConfig) bool {
@@ -271,6 +312,7 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 				rootPID: root.PID, ident: id, started: now, session: session, via: via[root.PID],
 				command: RedactCommand(argv), signature: CommandSignature(argv),
 			}
+			tr.shellRoot = shellOnly(argv, tr.signature)
 			t.live[k] = tr
 		}
 		tr.last = now
@@ -278,6 +320,9 @@ func (t *Tracker) Update(now time.Time, snap ProcSnapshot, c ProcContext) []wire
 		tr.cpuPeak = max(tr.cpuPeak, cpu)
 		tr.memPeakByte = max(tr.memPeakByte, mem)
 		tr.procsPeak = max(tr.procsPeak, n)
+		if tr.shellRoot {
+			t.nameByHeaviest(tr, root.PID, children, isRoot, c, dt)
+		}
 	}
 
 	for k, tr := range t.live {
@@ -359,4 +404,119 @@ func sortObservations(o []wire.Observation) {
 		}
 		return o[i].ID < o[j].ID
 	})
+}
+
+// shellOnly says whether argv is a shell whose signature is the shell's own name: nothing in its script named the command.
+func shellOnly(argv []string, signature string) bool {
+	return len(argv) > 0 && isShellName(argv[0]) && signature == trimName(path.Base(strings.TrimPrefix(argv[0], "-")))
+}
+
+// passThrough are programs that only start another one (sudo go test): the candidate is what they run, not they themselves.
+var passThrough = map[string]bool{"sudo": true, "time": true, "nice": true, "nohup": true, "caffeinate": true, "exec": true, "command": true, "timeout": true, "gtimeout": true, "arch": true, "env": true}
+
+func isShellName(name string) bool {
+	return shellCommands[path.Base(strings.TrimPrefix(name, "-"))]
+}
+
+// subtreeOf is the CPU and memory of pid and what is below it that belongs to the tree (the same rule as the tree's own totals).
+func (t *Tracker) subtreeOf(pid int, children map[int][]int, isRoot map[int]bool, c ProcContext) (cpu float64, mem uint64) {
+	stack := []int{pid}
+	for n := 0; len(stack) > 0 && n < 5000; n++ {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		p := c.Table[cur]
+		cpu += p.CPUPct
+		mem += p.FootprintBytes
+		for _, ch := range children[cur] {
+			if !isRoot[ch] && !t.notACommand(c.Table[ch], c) {
+				stack = append(stack, ch)
+			}
+		}
+	}
+	return cpu, mem
+}
+
+// nameByHeaviest charges this sample to the programs directly under the shells of a shell-rooted tree and names the tree after the
+// one that has used the most so far. The name is CommandSignature of that program's own argv, scrubbed like any other.
+func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, isRoot map[int]bool, c ProcContext, dt time.Duration) {
+	if tr.cands == nil {
+		tr.cands = map[candKey]*candidate{}
+	}
+	stack := []int{rootPID}
+	for n := 0; len(stack) > 0 && n < 5000; n++ {
+		pid := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, ch := range children[pid] {
+			p := c.Table[ch]
+			if isRoot[ch] || t.notACommand(p, c) {
+				continue
+			}
+			if isShellName(p.Name) || passThrough[path.Base(p.Name)] {
+				stack = append(stack, ch)
+				continue
+			}
+			k := candKey{pid: p.PID, name: p.Name, start: p.Start}
+			var argv []string
+			if k.start.IsZero() { // nothing else tells this program from a later one on the same pid
+				if c.ArgsOf != nil {
+					argv = c.ArgsOf(p.PID)
+				}
+				k.argv = strings.Join(argv, "\x00")
+			}
+			cd := tr.cands[k]
+			if cd == nil {
+				if argv == nil && c.ArgsOf != nil {
+					argv = c.ArgsOf(p.PID)
+				}
+				if len(argv) == 0 {
+					argv = []string{p.Name}
+				}
+				tr.candSeq++
+				cd = &candidate{signature: CommandSignature(argv), seq: tr.candSeq}
+				tr.cands[k] = cd
+			}
+			cpu, mem := t.subtreeOf(ch, children, isRoot, c)
+			cd.cpu += cpu / 100 * dt.Seconds()
+			cd.mem = max(cd.mem, mem)
+			cd.seen = t.sample
+		}
+	}
+	t.trimCandidates(tr) // once every program of this sample is charged and marked seen: a new one competes with what it has used
+	var best *candidate
+	for _, cd := range tr.cands {
+		if cd.signature != "unknown" && (best == nil || cd.heavier(best)) {
+			best = cd
+		}
+	}
+	if best != nil {
+		tr.signature = best.signature
+	}
+}
+
+// trimCandidates keeps at most maxCandidates ended programs and maxAliveCandidates running ones, dropping the lightest first.
+func (t *Tracker) trimCandidates(tr *tree) {
+	for _, alive := range []bool{false, true} {
+		limit := maxCandidates
+		if alive {
+			limit = maxAliveCandidates
+		}
+		for {
+			n := 0
+			var worstK candKey
+			var worst *candidate
+			for k, cd := range tr.cands {
+				if (cd.seen == t.sample) != alive {
+					continue
+				}
+				n++
+				if worst == nil || worst.heavier(cd) {
+					worstK, worst = k, cd
+				}
+			}
+			if n <= limit {
+				break
+			}
+			delete(tr.cands, worstK)
+		}
+	}
 }
