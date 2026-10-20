@@ -147,7 +147,7 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 		ended = started
 	}
 	u := wire.JobUsage{
-		JobID: j.ID, Host: r.host, Repo: j.Repo.Name, Task: j.Task, SlotCharged: slotOf(j), Class: j.Class, Source: wire.UsageQueue,
+		JobID: j.ID, Host: r.host, Repo: j.Repo.Name, Task: j.Task, SlotCharged: wire.JobSlot(j), Class: j.Class, Source: wire.UsageQueue,
 		Result: j.State, Reason: j.Result.Reason, StartedAt: started, EndedAt: ended,
 		CPUSource: wire.CPUNone, PeakCoresMeasure: wire.MeasureNone, MemPeakMeasure: wire.MeasureNone,
 		ZoneAtStart: wire.ZoneUnknown, ZoneWorst: wire.ZoneUnknown,
@@ -170,16 +170,4 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 	// wwd was restarted while the job ran: the samples before the restart are gone, the sampled figures miss the beginning
 	u.Partial = guessed || started.Before(r.tr.StartedAt()) // a start made up from the samples is not the job's own
 	return u, true
-}
-
-// slotOf is the slot the job was charged, which is a rule of the host's admission today and not a property of the job (wire.Job has no
-// slot, nor does a manifest): a queue job the worker runs takes a heavy slot (worker/loop: it claims only while running < Slots.Heavy
-// and the headroom has a heavy slot; lease, 10-18); a fast-lane job takes the slot its request named, a heavy one for an undeclared
-// command (adhoc) and a light one for a declared task (fastlane.Request.GateClass). When the admission rule changes, this changes
-// with it (a loop.SlotOf, if the worker side makes one).
-func slotOf(j wire.Job) wire.Slot {
-	if j.Local && !j.AdHoc {
-		return wire.SlotLight
-	}
-	return wire.SlotHeavy
 }

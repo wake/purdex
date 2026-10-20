@@ -73,7 +73,7 @@ func (r *UsageRecorder) runRow(e runner.Ended) (wire.JobUsage, bool) {
 	}
 	j := e.Job
 	u := wire.JobUsage{
-		JobID: j.ID, Host: r.host, Repo: j.Repo.Name, Task: j.Task, SlotCharged: slotOf(j), Class: j.Class, Source: wire.UsageQueue,
+		JobID: j.ID, Host: r.host, Repo: j.Repo.Name, Task: j.Task, SlotCharged: wire.JobSlot(j), Class: j.Class, Source: wire.UsageQueue,
 		Result: state, Reason: reason, StartedAt: started, EndedAt: ended,
 		CPUSource: wire.CPUNone, PeakCoresMeasure: wire.MeasureNone, MemPeakMeasure: wire.MeasureNone,
 		ZoneAtStart: wire.ZoneUnknown, ZoneWorst: wire.ZoneUnknown,

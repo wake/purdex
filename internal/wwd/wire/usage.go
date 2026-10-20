@@ -25,6 +25,17 @@ const (
 	SlotLight Slot = "light"
 )
 
+// JobSlot is the slot a job is charged, which is a rule of the host's admission today and not a property of the job (a Job has no slot,
+// nor does a manifest): a queue job the worker runs takes a heavy slot (worker/loop: it claims only while running < Slots.Heavy and the
+// headroom has a heavy slot); a fast-lane job takes the slot its request named, a heavy one for an undeclared command (adhoc) and a
+// light one for a declared task (spec §5.2). When the admission rule changes, this changes with it.
+func JobSlot(j Job) Slot {
+	if j.Local && !j.AdHoc {
+		return SlotLight
+	}
+	return SlotHeavy
+}
+
 // CPUSource says where cpu_seconds came from: the process's rusage at exit (macOS, a job wwd ran itself), the sandbox unit's
 // cgroup (Linux), the integral of the 5 s samples (a fast-lane job, whose process wwd did not start), or CPUNone: nothing was
 // measured (a job shorter than a sample, one that never started, wwd restarted) and cpu_seconds is null: unknown, not 0.
