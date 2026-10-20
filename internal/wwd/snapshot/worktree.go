@@ -44,7 +44,7 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	if git == "" {
 		git = "git"
 	}
-	runIn := func(env []string, stdin string, args ...string) (string, error) {
+	runRaw := func(env []string, stdin string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, git, append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(gitenv.Clean(os.Environ()), env...)
 		if stdin != "" {
@@ -55,7 +55,11 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		if err := cmd.Run(); err != nil {
 			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 		}
-		return strings.TrimSpace(out.String()), nil
+		return out.String(), nil
+	}
+	runIn := func(env []string, stdin string, args ...string) (string, error) {
+		out, err := runRaw(env, stdin, args...)
+		return strings.TrimSpace(out), err
 	}
 	run := func(env []string, args ...string) (string, error) { return runIn(env, "", args...) }
 	// one git call for the three answers (each process start is a few ms and the whole of this is the fast lane's cost)
@@ -136,7 +140,7 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	if addErr != nil {
 		return builtTree{}, addErr
 	}
-	skipped, err := dropOutsideLinks(run, runIn, idx, root)
+	skipped, err := dropOutsideLinks(run, runIn, runRaw, idx, root)
 	if err != nil {
 		return builtTree{}, err
 	}
@@ -278,7 +282,7 @@ func clearFlags(runIn func(env []string, stdin string, args ...string) (string, 
 
 // dropOutsideLinks removes from the temporary index the untracked symlinks that lead out of the repository (the caller's index decides
 // what is tracked: a link the repository holds stays whatever it points at) and returns their paths.
-func dropOutsideLinks(run gitRunFn, runIn func(env []string, stdin string, args ...string) (string, error), idx []string, root string) ([]string, error) {
+func dropOutsideLinks(run gitRunFn, runIn, runRaw func(env []string, stdin string, args ...string) (string, error), idx []string, root string) ([]string, error) {
 	list, err := run(nil, "-C", root, "ls-files", "-o", "--exclude-standard", "-z", "--full-name")
 	if err != nil {
 		return nil, fmt.Errorf("listing untracked files: %w", err)
@@ -312,7 +316,7 @@ func dropOutsideLinks(run gitRunFn, runIn func(env []string, stdin string, args 
 		if len(f) != 3 || f[0] != "120000" {
 			continue
 		}
-		target, err := runIn(idx, "", "cat-file", "blob", f[1])
+		target, err := runRaw(idx, "", "cat-file", "blob", f[1]) // raw: a target may begin or end with a space
 		if err != nil {
 			return nil, fmt.Errorf("reading the symlink %s: %w", rel, err)
 		}
