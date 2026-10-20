@@ -25,6 +25,13 @@ const (
 	fallAfter      = 30 * time.Second // a better one this long
 )
 
+// PSIWarn says whether a PSI reading alone calls for warning (level 2): the PSI part of the mapping below, without the available-memory and
+// swap conditions. The watcher's pressure rules (S3-2) judge a Linux sample by it, so they and the zone read the same numbers.
+func PSIWarn(p wire.PSI) bool { return p.Some10 >= psiSome10Warn || p.Full10 >= psiFull10Warn }
+
+// PSIDanger says whether a PSI reading alone calls for danger (level 4).
+func PSIDanger(p wire.PSI) bool { return p.Full10 >= psiFull10Dang || p.Some60 >= psiSome60Dang }
+
 type swapPoint struct {
 	at time.Time
 	mb int
@@ -58,8 +65,8 @@ func (p *LinuxPressure) target(now time.Time, totalMB, availMB, swapUsedMB int, 
 	dang := availMB < availDangMB || grew > swapGrowDang
 	warn := float64(availMB) < availWarnFrac*float64(totalMB) || swapUsedMB > swapWarnMB
 	if psi != nil {
-		dang = dang || psi.Full10 >= psiFull10Dang || psi.Some60 >= psiSome60Dang
-		warn = warn || psi.Some10 >= psiSome10Warn || psi.Full10 >= psiFull10Warn
+		dang = dang || PSIDanger(*psi)
+		warn = warn || PSIWarn(*psi)
 	}
 	switch {
 	case dang:
