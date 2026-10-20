@@ -113,14 +113,7 @@ type Module struct {
 	lastSettings atomic.Pointer[resources.Settings]
 	// lastProcs is the process list of the last good sample, shared read-only (the fleet's local source reads it).
 	lastProcs atomic.Pointer[[]resources.Proc]
-	// The disk guard (diskguard.go, #2470). diskFree reads the free bytes of the volume of a path and goCacheDir says where
-	// the Go build cache is; both nil (a test module) leaves the guard off, Init installs the real ones. trimHook runs at
-	// the start of a trim's walk: a seam for tests.
-	diskFree   func(path string) (int64, error)
-	goCacheDir func() string
-	trimHook   func()
-	disk       diskGuard
-	lastPrune  time.Time
+	lastPrune time.Time
 	// newGate makes the gate the fleet summary reads (a test seam: nil is gate.New).
 	newGate func(gate.Config) *gate.Gate
 
@@ -167,9 +160,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(resources.LocalFactsKey, resources.LocalFactsReader(m))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
-		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
 		if m.gateConfig == nil {
-			m.gateConfig = hostGateConfig() // and so does the reading of the gate's config and slot records
+			m.gateConfig = hostGateConfig() // production wiring (a module with an injected sampler is a test's): the reading of the gate's config and slot records
 		}
 	}
 	m.openStore(c)
