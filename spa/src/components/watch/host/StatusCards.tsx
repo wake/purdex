@@ -123,7 +123,8 @@ function PauseCard({ host, facts, t }: { host: MonitorHost; facts: PoolFacts; t:
   const poolSource = usePoolStore((s) => s.sourceHostId)
   useNexHostStore((s) => s.byHost)
   useHostStore((s) => s.runtime)
-  const readFrom = poolSource ?? controlSource(poolSource)
+  // `controlSource` prefers the host the pool came from when it can control, and otherwise the first that can.
+  const readFrom = controlSource(poolSource)
   const names = facts.exceptions.map((e) => e.name).join('\n')
   const key = `${host.alias}|${names}`
   // What was read belongs to the host and the names it was read for; a new set of names is read again, and "reading" shows until it is in (a read that failed or a host that has none is null: not known).

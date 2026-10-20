@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 
 const fetchPauses = vi.fn()
-vi.mock('../../../lib/pool/control-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/control-api')>()), fetchPauses: (...a: unknown[]) => fetchPauses(...a), controlSource: () => 'cfg-a' }))
+const controlSource = vi.fn((_preferred: string | null): string | null => 'cfg-a')
+vi.mock('../../../lib/pool/control-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/control-api')>()), fetchPauses: (...a: unknown[]) => fetchPauses(...a), controlSource: (p: string | null) => controlSource(p) }))
 
 import { StatusCards } from './StatusCards'
 import { FactsTable } from './FactsTable'
@@ -149,6 +150,14 @@ describe('StatusCards, 暫停', () => {
     fetchPauses.mockResolvedValue(null)
     render(<StatusCards host={monitorHost({}, paused)} />)
     await waitFor(() => expect(screen.getByTestId('pause-deploy')).toHaveTextContent(t('watch.host.status.pause.holds_unknown')))
+  })
+
+  it('reads from the host that can control (codex R1): the pool answered by a host that cannot is not the one asked', async () => {
+    usePoolStore.setState({ sourceHostId: 'cfg-pool' })
+    controlSource.mockImplementation((preferred) => (preferred === 'cfg-pool' ? 'cfg-ctl' : null))
+    render(<StatusCards host={monitorHost({}, paused)} />)
+    await waitFor(() => expect(fetchPauses).toHaveBeenCalledWith('cfg-ctl', 'air26'))
+    controlSource.mockImplementation(() => 'cfg-a')
   })
 
   it('no pause in force: says none, and reads nothing', () => {
