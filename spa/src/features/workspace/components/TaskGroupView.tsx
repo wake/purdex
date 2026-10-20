@@ -24,7 +24,8 @@ import { manualGroupKey, teamGroupKey, UNGROUPED } from '../../../lib/task-group
 import { selectGroupFromSidebar } from '../../../lib/task-groups/group-select'
 import { buildTeamIndex } from '../../../lib/team/team-index'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
-import { deleteManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
+import { deleteManualGroup, recolorManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
+import { requestRename, useRenameRequestStore } from '../../../lib/task-groups/rename-request'
 import type { SessionActionResult } from '../../../lib/task-groups/session-actions'
 import { buildGroupView, type GroupRow, type GroupSection, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
@@ -33,6 +34,7 @@ import { openTeamSeat } from '../../../lib/team/team-actions'
 import { InlineTab } from './InlineTab'
 import { TaskGroupHeader } from './TaskGroupHeader'
 import { TeamGroupHeader } from './TeamGroupHeader'
+import { TaskGroupHeaderMenu } from './TaskGroupHeaderMenu'
 import { useGroupDrag } from './useGroupDrag'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 
@@ -62,6 +64,12 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const [notice, setNotice] = useState<string | null>(null)
   // The empty group the person asked to clear, until they answer.
   const [clearing, setClearing] = useState<string | null>(null)
+  // The header menu (a manual group's right-click) and the group the person asked to delete while it still holds tabs or members.
+  const [menu, setMenu] = useState<{ groupId: string; x: number; y: number } | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const renameFor = useRenameRequestStore((s) => s.groupId)
+  const renameNonce = useRenameRequestStore((s) => s.nonce)
+  const consumeRename = useRenameRequestStore((s) => s.consume)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
   const sessionTabs = useMemo<SessionTab[]>(() => {
@@ -175,14 +183,27 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
   }
 
-  // A group is expanded unless the device collapsed it. A header click selects the group; on the selected, expanded group it collapses it (WorkspaceRow's rule); the chevron alone toggles.
+  // A group is expanded unless the device collapsed it. A header click selects the group; on the selected group it toggles it (WorkspaceRow's rule); the chevron alone toggles.
   const isExpanded = (key: string) => expandedMap[key] !== false
   const headerProps = (key: string, toggleable: boolean) => ({
     selected: selectedGroup === key,
     expanded: isExpanded(key),
-    onClick: () => { if (selectedGroup === key && isExpanded(key)) setExpanded(key, false); else selectGroupFromSidebar(key) },
+    onClick: () => { if (selectedGroup === key) setExpanded(key, !isExpanded(key)); else selectGroupFromSidebar(key) },
     onToggle: toggleable ? () => setExpanded(key, !isExpanded(key)) : undefined,
   })
+
+  // 「刪除任務編組」: a group holding tabs or members asks first; an empty one goes at once. The tabs of the group that were on screen fall back to 「未分組」 (deleteManualGroup clears their `group`).
+  const askDelete = (groupId: string) => {
+    const group = groupsById[groupId]
+    if (!group) return
+    // A tab can name the group in its own `group` and still be shown elsewhere (a team seat is placed before it), so the question counts those too: deleting clears their `group`.
+    const key = manualGroupKey(groupId)
+    const holdsTabs = view.some((s) => s.kind === 'manual' && s.groupId === groupId && s.rows.length > 0) || Object.values(tabsById).some((tab) => tab.group === key)
+    if (holdsTabs || group.members.length > 0) setDeleting(groupId)
+    else done(deleteManualGroup(groupId))
+  }
+  const deletingGroup = deleting !== null ? groupsById[deleting] : undefined
+  if (deleting !== null && deletingGroup === undefined) setDeleting(null) // the group went while the question was up
 
   if (view.length === 0) {
     return <div data-testid="task-group-empty" className="px-4 py-3 text-xs text-text-muted">{t('taskgroups.empty')}</div>
@@ -227,6 +248,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
               <TaskGroupHeader
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} muted={collapsed} {...headerProps(key, !collapsed)}
                 edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
+                onContextMenu={(e) => setMenu({ groupId: section.groupId, x: e.clientX, y: e.clientY })}
+                editRequest={renameFor === section.groupId ? renameNonce : undefined} onEditRequestHandled={consumeRename}
                 clear={collapsed && hasMembers ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
               {collapsed && !hasMembers && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}
@@ -242,6 +265,23 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           </section>
         )
       })}
+      {menu && groupsById[menu.groupId] && (
+        <TaskGroupHeaderMenu
+          position={{ x: menu.x, y: menu.y }} color={groupsById[menu.groupId].color}
+          onRename={() => requestRename(menu.groupId)}
+          onColor={(color) => done(recolorManualGroup(menu.groupId, color))}
+          onDelete={() => askDelete(menu.groupId)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {deleting && deletingGroup && (
+        <ConfirmDialog
+          testIdPrefix="task-group-delete" title={t('taskgroups.delete_title', { name: deletingGroup.name })}
+          body={t('taskgroups.delete_body', { n: deletingGroup.members.length })}
+          confirmLabel={t('taskgroups.menu_delete')} busy={false} onCancel={() => setDeleting(null)}
+          onConfirm={() => { done(deleteManualGroup(deleting)); setDeleting(null) }}
+        />
+      )}
       {clearing && clearOk && clearGroup && (
         <ConfirmDialog
           testIdPrefix="task-group-clear" title={t('taskgroups.clear_title', { name: clearGroup.name })}

@@ -1,5 +1,5 @@
 // spa/src/features/workspace/components/TaskGroupHeader.tsx — a group's header in the sidebar's task-group view (name pool v2 spec §7, NA-6b/6c; task groups spec §6.1): the colour square, the name, the host a manual group gathers, and a chevron
-// (CaretDown / CaretRight, `aria-expanded`) where the count used to be. A click on the header selects the group; a click on the header of the selected, expanded group collapses it (`WorkspaceRow`'s rule); the chevron alone toggles.
+// (CaretDown / CaretRight, `aria-expanded`) where the count used to be. A click on the header selects the group; a click on the header of the selected group toggles it (`WorkspaceRow`'s rule); the chevron alone toggles.
 // A manual group's name is renamed in place (double-click; Enter saves, Esc or a click away drops the draft); a team's name opens the team edit form on a double-click (its own component); a group with nothing live in it
 // offers 「清除」. When the host's groups cannot be edited (unsafe, not read yet) the name and 「清除」 stay, inert, and say why in their tooltip.
 import { forwardRef, useEffect, useId, useRef, useState } from 'react'
@@ -29,6 +29,11 @@ interface Props {
   onClick?: () => void
   /** The chevron was clicked. Without it the header has no chevron. */
   onToggle?: () => void
+  /** A right-click on the header (a manual group's menu); the default menu is suppressed when given. */
+  onContextMenu?: (e: React.MouseEvent) => void
+  /** A rename was asked for (the menu's 「重新命名」, a freshly made group): while it is defined — on mount too — the in-place rename starts, as a double-click does, and `onEditRequestHandled` is called once. */
+  editRequest?: number
+  onEditRequestHandled?: () => void
   strong?: boolean
   muted?: boolean
   host?: string
@@ -38,7 +43,7 @@ interface Props {
   clear?: HeaderClear
 }
 
-export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
+export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, onContextMenu, editRequest, onEditRequestHandled, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
   const t = useI18nStore((s) => s.t)
   const reasonId = useId()
   const [editing, setEditing] = useState(false)
@@ -50,6 +55,8 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
   useEffect(() => { if (editing) { input.current?.focus(); input.current?.select() } }, [editing])
 
   const start = () => { if (edit && edit.blocked === null) { setDraft(name); setEditing(true) } }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a request starts the edit once; `start` reads the latest name
+  useEffect(() => { if (editRequest !== undefined) { start(); onEditRequestHandled?.() } }, [editRequest])
   const cancel = () => { if (!pending) setEditing(false) }
   const commit = async () => {
     const next = draft.trim()
@@ -66,6 +73,7 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
       ref={ref} data-testid="task-group-header" data-selected={selected ? 'true' : undefined}
       // a double-click renames (its first click already selected); only a plain click selects / toggles
       onClick={(e) => { if (e.detail <= 1) onClick?.() }}
+      onContextMenu={onContextMenu ? (e) => { e.preventDefault(); onContextMenu(e) } : undefined}
       className={`mx-2 flex items-center gap-1.5 rounded-md pl-1.5 pr-1.5 py-1 text-xs ${onClick ? 'cursor-pointer' : ''} ${selected ? 'bg-surface-hover' : ''}`}
     >
       <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />

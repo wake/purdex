@@ -179,3 +179,14 @@ describe('BottomNav — workersRef', () => {
     expect(workersRef.current).toBe(screen.getByRole('button', { name: 'Workers' }))
   })
 })
+
+describe('BottomNav — the first button\'s label', () => {
+  it('addLabel replaces 「New workspace」 and the click still goes to onAddWorkspace', () => {
+    const props = renderNav({ addLabel: 'New task group' })
+    expect(titles()).toEqual(['New task group', 'Show as one row', 'Workers', 'Hosts', 'Settings'])
+    expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'New task group' }))
+    expect(props.onAddWorkspace).toHaveBeenCalledTimes(1)
+  })
+})
+

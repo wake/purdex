@@ -219,3 +219,46 @@ describe('chevron, selection and toggle (task groups spec §6.1)', () => {
     expect(onClick).not.toHaveBeenCalled()
   })
 })
+
+describe('context menu and rename request (TG-3d)', () => {
+  it('a right-click calls onContextMenu and suppresses the default menu; without it nothing is intercepted', () => {
+    const onContextMenu = vi.fn()
+    const { rerender } = render(<TaskGroupHeader color="#000" name="G" onContextMenu={onContextMenu} />)
+    const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 7 })
+    screen.getByTestId('task-group-header').dispatchEvent(e)
+    expect(onContextMenu).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+    rerender(<TaskGroupHeader color="#000" name="G" />)
+    const plain = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    screen.getByTestId('task-group-header').dispatchEvent(plain)
+    expect(plain.defaultPrevented).toBe(false)
+  })
+
+  it('an editRequest starts the rename — also one already there when the header mounts — and is reported handled once', () => {
+    const edit = { blocked: null, onCommit: async () => {} }
+    const handled = vi.fn()
+    const { rerender } = render(<TaskGroupHeader color="#000" name="G" edit={edit} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    rerender(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={2} onEditRequestHandled={handled} />)
+    expect(input()).toBeInTheDocument()
+    expect(handled).toHaveBeenCalledTimes(1)
+    cleanup()
+    render(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={3} onEditRequestHandled={handled} />) // a group just made: the request came before the header
+    expect(input()).toBeInTheDocument()
+    expect(handled).toHaveBeenCalledTimes(2)
+  })
+
+  it('without a request nothing starts', () => {
+    render(<TaskGroupHeader color="#000" name="G" edit={{ blocked: null, onCommit: async () => {} }} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+  })
+
+  it('a blocked header ignores a rename request', () => {
+    const edit = { blocked: BLOCKED, onCommit: async () => {} }
+    const handled = vi.fn()
+    render(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={1} onEditRequestHandled={handled} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    expect(handled).toHaveBeenCalledTimes(1) // consumed anyway: it must not wait for the block to lift
+  })
+})
+

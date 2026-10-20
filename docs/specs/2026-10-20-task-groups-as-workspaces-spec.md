@@ -226,7 +226,7 @@ stored view is — the effective view (§3).
 
 - Order: teams (roster order), manual groups (`order`), 「未分組」 last (left out when empty).
 - **Header**: a chevron (CaretDown/CaretRight, `aria-expanded`) replaces the count. Clicking the header selects the
-  group (§6.2); clicking the header of the selected, expanded group collapses it (`WorkspaceRow`'s rule); the chevron
+  group (§6.2); clicking the header of the selected group toggles it (`WorkspaceRow`'s rule); the chevron
   alone toggles. Focus shows only as `focus-visible:ring-1 focus-visible:ring-border-active`. Double-click renames
   (manual) / opens `TeamEditPopover` (team).
 - Expanded state per device, keyed by group key; team keys are reconciled per host once that host's roster is read
