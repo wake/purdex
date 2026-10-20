@@ -317,4 +317,40 @@ describe('useLayoutStore', () => {
       expect(written.state.activityBarWideSize).toBe(310)
     })
   })
+
+  describe('queueStripSegments (monitoring tabs M2, W6)', () => {
+    it('defaults to 10 and takes 6, 8, 10 and 12', () => {
+      expect(useLayoutStore.getState().queueStripSegments).toBe(10)
+      for (const n of [6, 8, 12, 10] as const) {
+        useLayoutStore.getState().setQueueStripSegments(n)
+        expect(useLayoutStore.getState().queueStripSegments).toBe(n)
+      }
+    })
+
+    it('refuses any other value', () => {
+      useLayoutStore.getState().setQueueStripSegments(8)
+      for (const bad of [7, 0, -1, 99, NaN]) useLayoutStore.getState().setQueueStripSegments(bad as never)
+      expect(useLayoutStore.getState().queueStripSegments).toBe(8)
+    })
+
+    it('is stored on this device', () => {
+      useLayoutStore.getState().setQueueStripSegments(12)
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.LAYOUT)!).state.queueStripSegments).toBe(12)
+    })
+
+    it('a stored value that is not one of the four reads back as 10', async () => {
+      localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify({ state: { queueStripSegments: 7 }, version: 1 }))
+      await useLayoutStore.persist.rehydrate()
+      expect(useLayoutStore.getState().queueStripSegments).toBe(10)
+      localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify({ state: { queueStripSegments: 'ten' }, version: 1 }))
+      await useLayoutStore.persist.rehydrate()
+      expect(useLayoutStore.getState().queueStripSegments).toBe(10)
+    })
+
+    it('a stored value that is one of the four is kept', async () => {
+      localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify({ state: { queueStripSegments: 6 }, version: 1 }))
+      await useLayoutStore.persist.rehydrate()
+      expect(useLayoutStore.getState().queueStripSegments).toBe(6)
+    })
+  })
 })

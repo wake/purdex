@@ -4,10 +4,11 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { queueEntries } from '../../lib/pool/jobs-lanes'
 import { usePoolJobs, usePoolReadable } from '../../lib/pool/pool-jobs'
-import { QUEUE_STRIP_SEGMENTS, queueStripOf } from '../../lib/pool/queue-strip'
+import { queueStripOf } from '../../lib/pool/queue-strip'
 import { usePoolStore } from '../../lib/pool/store'
 import { useClock } from '../../lib/pool/use-cell-models'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useLayoutStore } from '../../stores/useLayoutStore'
 import { CountBadge } from './CountBadge'
 import { QueueTooltip } from './QueueTooltip'
 
@@ -15,11 +16,12 @@ const SEGMENT_CLASS = { heavy: 'bg-queue-heavy', light: 'bg-queue-light', empty:
 
 export function QueueStrip() {
   const t = useI18nStore((s) => s.t)
+  const nseg = useLayoutStore((s) => s.queueStripSegments)
   const readable = usePoolReadable()
   const jobs = usePoolJobs()
   const hosts = usePoolStore((s) => s.hosts)
   const now = useClock()
-  const strip = useMemo(() => queueStripOf(queueEntries(jobs, now, hosts), QUEUE_STRIP_SEGMENTS, readable), [jobs, now, hosts, readable])
+  const strip = useMemo(() => queueStripOf(queueEntries(jobs, now, hosts), nseg, readable), [jobs, now, hosts, nseg, readable])
   const ref = useRef<HTMLButtonElement>(null)
   const tipId = useId()
   const [anchor, setAnchor] = useState<DOMRect | null>(null)
@@ -27,7 +29,7 @@ export function QueueStrip() {
   const show = () => { setAnchor(ref.current?.getBoundingClientRect() ?? null); setOpen(true) }
   const hide = () => setOpen(false)
   const waiting = strip.counts.heavy + strip.counts.light
-  const kinds = Array.from({ length: QUEUE_STRIP_SEGMENTS }, (_, i) => strip.segments[i] ?? 'empty')
+  const kinds = Array.from({ length: nseg }, (_, i) => strip.segments[i] ?? 'empty')
 
   return (
     <button

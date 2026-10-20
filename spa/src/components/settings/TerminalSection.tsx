@@ -1,4 +1,5 @@
 import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, type FleetCellIndicator, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { useLayoutStore, QUEUE_STRIP_SEGMENT_CHOICES } from '../../stores/useLayoutStore'
 import { HostBadgeSetting } from './HostBadgeSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
@@ -57,6 +58,8 @@ export function TerminalSection() {
   const setHostBadgeTabBarRadius = useUISettingsStore((s) => s.setHostBadgeTabBarRadius)
   const fleetCellIndicator = useUISettingsStore((s) => s.fleetCellIndicator)
   const setFleetCellIndicator = useUISettingsStore((s) => s.setFleetCellIndicator)
+  const queueStripSegments = useLayoutStore((s) => s.queueStripSegments)
+  const setQueueStripSegments = useLayoutStore((s) => s.setQueueStripSegments)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
@@ -79,6 +82,8 @@ export function TerminalSection() {
     { value: 'bars-pressure', label: t('settings.terminal.fleet_indicator.bars_pressure') },
     { value: 'bars-memory', label: t('settings.terminal.fleet_indicator.bars_memory') },
   ]
+
+  const QUEUE_STRIP_SEGMENT_OPTIONS = QUEUE_STRIP_SEGMENT_CHOICES.map((n) => ({ value: n, label: String(n) }))
 
   const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [
     { value: 'bot', label: t('settings.terminal.cc_icon.bot') },
@@ -177,6 +182,11 @@ export function TerminalSection() {
       <SettingItem label={t('settings.terminal.fleet_indicator.label')} description={t('settings.terminal.fleet_indicator.desc')}>
         <div data-testid="fleet-cell-indicator">
           <SegmentControl options={FLEET_INDICATOR_OPTIONS} value={fleetCellIndicator} onChange={setFleetCellIndicator} />
+        </div>
+      </SettingItem>
+      <SettingItem label={t('settings.terminal.queue_strip_segments.label')} description={t('settings.terminal.queue_strip_segments.desc')}>
+        <div data-testid="queue-strip-segments">
+          <SegmentControl options={QUEUE_STRIP_SEGMENT_OPTIONS} value={queueStripSegments} onChange={setQueueStripSegments} />
         </div>
       </SettingItem>
       <HostBadgeSetting

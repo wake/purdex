@@ -5,8 +5,6 @@ import type { QueueEntry } from './jobs-lanes'
 
 /** The list a hover shows is the first this many; the line "… n more" says the rest. */
 export const QUEUE_STRIP_TOP = 10
-/** The strip's segments until the setting (MON-3b) lets the user pick 6, 8, 10 or 12. */
-export const QUEUE_STRIP_SEGMENTS = 10
 
 export interface QueueStrip {
   readable: boolean

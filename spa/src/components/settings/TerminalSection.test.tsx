@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
 import { useUISettingsStore, HOST_BADGE_DEFAULTS } from '../../stores/useUISettingsStore'
+import { useLayoutStore } from '../../stores/useLayoutStore'
 
 describe('TerminalSection', () => {
   beforeEach(() => {
@@ -126,6 +127,19 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
     fireEvent.click(buttons[0])
     expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+  })
+
+  it('queue strip segments (佇列條節數): 6, 8, 10, 12 beside the host cell indicator, 10 by default, a click sets it', () => {
+    useLayoutStore.setState({ queueStripSegments: 10 })
+    render(<TerminalSection />)
+    expect(screen.getByText('Queue strip segments')).toBeTruthy()
+    const buttons = within(screen.getByTestId('queue-strip-segments')).getAllByRole('button')
+    expect(buttons.map((b) => b.textContent)).toEqual(['6', '8', '10', '12'])
+    expect(buttons[2].className).toContain('border-border-active')
+    fireEvent.click(buttons[0])
+    expect(useLayoutStore.getState().queueStripSegments).toBe(6)
+    fireEvent.click(buttons[3])
+    expect(useLayoutStore.getState().queueStripSegments).toBe(12)
   })
 
   it('updates ccIconVariant when a cc icon button is clicked', () => {

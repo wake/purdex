@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 import { QueueStrip } from './QueueStrip'
 import { usePoolStore } from '../../lib/pool/store'
 import { useJobsStore } from '../../lib/pool/jobs-store'
+import { useLayoutStore } from '../../stores/useLayoutStore'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import type { PoolJob } from '../../lib/pool/jobs-types'
 
@@ -27,6 +28,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
   vi.mocked(openWatchArea).mockClear()
+  useLayoutStore.setState({ queueStripSegments: 10 })
   usePoolStore.setState({ start: vi.fn(), stop: vi.fn() } as never)
 })
 
@@ -145,6 +147,16 @@ describe('QueueStrip — keyboard and screen readers', () => {
     render(<QueueStrip />)
     fireEvent.focus(screen.getByTestId('queue-strip'))
     expect(screen.getByTestId('queue-strip').getAttribute('aria-describedby')).toBe(screen.getByTestId('queue-tooltip').id)
+  })
+})
+
+describe('QueueStrip — the segments setting (M2)', () => {
+  it.each([6, 8, 12])('%s segments, and the overflow counts what does not fit', (nseg) => {
+    useLayoutStore.setState({ queueStripSegments: nseg as never })
+    seed(Array.from({ length: 14 }, (_, i) => job(`j${i}`, 'mlab')))
+    render(<QueueStrip />)
+    expect(segs()).toHaveLength(nseg)
+    expect(screen.getByTestId('queue-overflow').textContent).toBe(`+${14 - nseg}`)
   })
 })
 
