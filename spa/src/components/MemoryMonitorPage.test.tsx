@@ -106,10 +106,12 @@ describe('MemoryMonitorPage', () => {
   })
 
   it('updates monitor config controls through the active host', async () => {
-    vi.mocked(updateMonitorConfig).mockResolvedValue({
-      ...monitorConfig,
-      refresh_interval_ms: 12000,
-      top_process_limit: 20,
+    const applied = { ...monitorConfig, refresh_interval_ms: 12000, top_process_limit: 20 }
+    // Applying reloads the config at once (`configReloadNonce`), so — as the real daemon does — the config it reads next is the applied one.
+    // With the default mock (always 5 s) "Refresh: 12s" was only a transient that the reload overwrote, and a slow runner could miss it (#3770).
+    vi.mocked(updateMonitorConfig).mockImplementation(async () => {
+      vi.mocked(fetchMonitorConfig).mockResolvedValue(applied)
+      return applied
     })
     render(<MemoryMonitorPage />)
 
@@ -123,6 +125,9 @@ describe('MemoryMonitorPage', () => {
       top_process_limit: 20,
     }))
     expect(await screen.findByText('Refresh: 12s')).toBeInTheDocument()
+    // and it stays 12 s after the reload has answered
+    await waitFor(() => expect(vi.mocked(fetchMonitorConfig).mock.calls.length).toBeGreaterThanOrEqual(2))
+    expect(screen.getByText('Refresh: 12s')).toBeInTheDocument()
     expect(screen.getByLabelText('Top process limit')).toHaveValue(20)
   })
 
