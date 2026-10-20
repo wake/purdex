@@ -14,6 +14,7 @@ import { daemonMismatchKey, useHostStore } from '../../stores/useHostStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import type { Tab } from '../../types/tab'
 
@@ -69,10 +70,11 @@ export function startSessionRootsLifecycle(): () => void {
     if (pruneTimer !== null) clearTimeout(pruneTimer)
     pruneTimer = setTimeout(() => {
       pruneTimer = null
-      // Another window's switch arrives store by store, in any order (profile/switch-active.ts): until the three stores agree on one world, the tab store may not hold what is about to be shown. Ask again later.
-      if (!readMasterWorld().settled) { schedulePrune(); return }
+      // Another window's switch arrives store by store, in any order (profile/switch-active.ts): until the three stores agree on one world, the tab store may not hold what is about to be shown. Nothing is pruned then;
+      // the next change of any of the three stores asks again (no timer of its own: a world that never settles must not keep waking this).
+      if (!readMasterWorld().settled) return
       pruneUnreferenced()
-    }, ROOT_PRUNE_SETTLE_MS)
+    },ROOT_PRUNE_SETTLE_MS)
   }
 
   const feed = () => {
@@ -122,6 +124,7 @@ export function startSessionRootsLifecycle(): () => void {
     useUnattendedStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) run() }), // a capability learned after the view opened
     // A world switch updates the profiles store and then the tab store: pruning between the two would see the world about to be shown as neither parked nor on screen. So it waits until the switch settled.
     useLocalProfilesStore.subscribe((s, prev) => { if (s.parkedMaster !== prev.parkedMaster || s.slaves !== prev.slaves) schedulePrune() }),
+    useWorkspaceStore.subscribe((s, prev) => { if (s.worldEpoch !== prev.worldEpoch) schedulePrune() }), // the third store of a switch: its arrival is what settles the world
     useTabStore.subscribe((s, prev) => { if (s.tabs !== prev.tabs) schedulePrune() }), // a plain tab close leaves the profiles store alone; any change of either side restarts the wait
   ]
   evaluate = run

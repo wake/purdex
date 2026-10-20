@@ -14,6 +14,7 @@ import { useRelayQuotaStore } from '../team/relay-quota'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { SessionQuota } from '../team/types'
 import type { Tab } from '../../types/tab'
@@ -157,7 +158,11 @@ describe('cleanup', () => {
     expect(rootOf('h1', 'NEXT')).toBe('R')
     expect(rootOf('h1', 'GONE')).toBe('R') // nothing is pruned while unsettled
     useTabStore.setState({ tabs: world.tabs })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS * 5)
+    expect(rootOf('h1', 'GONE')).toBe('R')
+    expect(vi.getTimerCount()).toBe(0) // a world that never settles keeps nothing waking
     settled.value = true
+    useWorkspaceStore.setState({ worldEpoch: 'e-settled' } as never) // the third store arrives
     vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS * 2)
     expect(rootOf('h1', 'NEXT')).toBe('R')
     expect(rootOf('h1', 'GONE')).toBeNull()
