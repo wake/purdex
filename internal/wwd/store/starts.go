@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
@@ -43,9 +45,54 @@ func (s *Store) StartsSince(since time.Time) (int, error) {
 	return n, err
 }
 
+// How the run before a start ended, as that start records it (prev_exit). Only the first four are written by the current wwd; a record of an
+// older wwd has "" (it did not know), and any other text is a person's or a test's own.
+const (
+	PrevExitFirst   = "first"   // no start was recorded before this one
+	PrevExitClean   = "clean"   // the run before it was asked to stop (SIGTERM, SIGINT) and left its mark
+	PrevExitUnclean = "unclean" // the run before it left no mark: a crash, a kill -9, the OOM killer, a power cut
+	PrevExitUnknown = "unknown" // the run before it was recorded by a wwd that did not know how it ended
+)
+
+// LastStart is the start recorded last: the last one inserted, not the one with the latest stamp (a clock that went back must not make
+// an older run the last one). ok is false when no start was recorded.
+type LastStart struct {
+	At       time.Time
+	PrevExit string
+}
+
+func (s *Store) LastStart() (last LastStart, ok bool, err error) {
+	var ms int64
+	switch err := s.db.QueryRow(`SELECT started_ms, prev_exit FROM wwd_starts ORDER BY id DESC LIMIT 1`).Scan(&ms, &last.PrevExit); {
+	case errors.Is(err, sql.ErrNoRows):
+		return LastStart{}, false, nil
+	case err != nil:
+		return LastStart{}, false, err
+	}
+	last.At = time.UnixMilli(ms).UTC()
+	return last, true, nil
+}
+
+// UncleanStartsSince is the number of recorded starts at or after since that followed a run that did not end cleanly (#3843): the crash-loop
+// rule's input. A start after a planned restart (a deploy, `systemctl restart`) is not one.
+func (s *Store) UncleanStartsSince(since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT count(*) FROM wwd_starts WHERE started_ms >= ? AND prev_exit = ?`, since.UnixMilli(), PrevExitUnclean).Scan(&n)
+	return n, err
+}
+
+// UncleanStartTimes are those starts, oldest first.
+func (s *Store) UncleanStartTimes(since time.Time) ([]time.Time, error) {
+	return s.startTimes(`SELECT started_ms FROM wwd_starts WHERE started_ms >= ? AND prev_exit = ? ORDER BY started_ms`, since.UnixMilli(), PrevExitUnclean)
+}
+
 // StartTimes are the recorded starts at or after since, oldest first.
 func (s *Store) StartTimes(since time.Time) ([]time.Time, error) {
-	rows, err := s.db.Query(`SELECT started_ms FROM wwd_starts WHERE started_ms >= ? ORDER BY started_ms`, since.UnixMilli())
+	return s.startTimes(`SELECT started_ms FROM wwd_starts WHERE started_ms >= ? ORDER BY started_ms`, since.UnixMilli())
+}
+
+func (s *Store) startTimes(query string, args ...any) ([]time.Time, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
