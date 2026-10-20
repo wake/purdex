@@ -208,6 +208,17 @@ describe('App — the task-group view\'s range (TG-4a)', () => {
     expect((tabBarProps.mock.calls.at(-1)![0] as { flat?: boolean }).flat).toBe(false)
   })
 
+  it('the bar is given the group drag (the lead locked) in a team\'s group, and none in the workspace view', () => {
+    tabBarProps.mockClear()
+    render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { groupDrag?: unknown }).groupDrag).toBeDefined()
+    cleanup()
+    tabBarProps.mockClear()
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { groupDrag?: unknown }).groupDrag).toBeUndefined()
+  })
+
   it('hands none in the workspace view, and none while the watcher area is shown', () => {
     useTeamUiStore.setState({ sidebarView: 'workspace' })
     render(<App />)

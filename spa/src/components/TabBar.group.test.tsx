@@ -2,7 +2,7 @@
 // and an empty group says so.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { DragEndEvent } from '@dnd-kit/core'
+import type { CollisionDetection, DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { TeamDisplayProvider } from './team/TeamDisplayProvider'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
@@ -18,13 +18,14 @@ import { teamKeyOf } from '../lib/team/team-views'
 import type { RosterMember, RosterSession, TeamRoster } from '../lib/team/roster'
 import type { PaneLayout, Tab } from '../types/tab'
 
-const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null, started: 0 }))
+const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null, collide: null as CollisionDetection | null, started: 0 }))
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@dnd-kit/core')>()
   return {
     ...actual,
     DndContext: (props: React.ComponentProps<typeof actual.DndContext>) => {
       dnd.onDragEnd = props.onDragEnd as (e: DragEndEvent) => void
+      dnd.collide = props.collisionDetection ?? null
       return <actual.DndContext {...props} onDragStart={() => { dnd.started += 1 }} />
     },
   }
@@ -50,11 +51,13 @@ function seed(all: Tab[]) {
   })
 }
 
-function bar(tabs: Tab[], flat: boolean) {
+type Drag = { locked: ReadonlySet<string>; onDrop: (a: string, o: string) => void; canDrop?: (a: string, o: string) => boolean; blockOf?: (id: string) => string }
+function bar(tabs: Tab[], flat: boolean, drag?: Drag) {
+  const groupDrag = drag && { canDrop: () => true, blockOf: (id: string) => id, ...drag }
   const onReorderTabs = vi.fn()
   const utils = render(
     <TeamDisplayProvider>
-      <TabBar tabs={tabs} flat={flat} activeTabId={null} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onReorderTabs={onReorderTabs} onMiddleClick={vi.fn()} onContextMenu={vi.fn()} />
+      <TabBar tabs={tabs} flat={flat} groupDrag={groupDrag} activeTabId={null} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onReorderTabs={onReorderTabs} onMiddleClick={vi.fn()} onContextMenu={vi.fn()} />
     </TeamDisplayProvider>,
   )
   return { ...utils, onReorderTabs }
@@ -166,6 +169,70 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(dnd.started).toBe(0)
     expect(el.style.transform).toBe('')
     fireEvent.pointerUp(document)
+  })
+
+  describe('dragging (TG-4c)', () => {
+    const press = (el: HTMLElement) => {
+      fireEvent.pointerDown(el, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+      fireEvent.pointerMove(document, { clientX: 60, clientY: 10 })
+    }
+
+    it('with a group drag, a tab is picked up — the locked lead is not, and a pinned-zone tab is picked up too', () => {
+      const list = [mk('lead', 'lead-tm', true), mk('p', 'other', true), mk('ma', 'a-tm')]
+      seed(list)
+      const { container } = bar(list, true, { locked: new Set(['lead']), onDrop: vi.fn() })
+      press(container.querySelector('[data-tab-id="lead"]') as HTMLElement)
+      expect(dnd.started).toBe(0)
+      fireEvent.pointerUp(document)
+      press(container.querySelector('[data-tab-id="ma"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+      dnd.started = 0
+      press(container.querySelector('[data-tab-id="p"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+    })
+
+    it('an unpinned lead (in the one zone with the others) is locked as well', () => {
+      const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm')]
+      seed(list)
+      const { container } = bar(list, true, { locked: new Set(['lead']), onDrop: vi.fn() })
+      press(container.querySelector('[data-tab-id="lead"]') as HTMLElement)
+      expect(dnd.started).toBe(0)
+      fireEvent.pointerUp(document)
+      press(container.querySelector('[data-tab-id="ma"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+    })
+
+    it('while dragging only the tabs the drop would act on are targets', () => {
+      const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm'), mk('plain', 'other')]
+      seed(list)
+      bar(list, true, { locked: new Set(['lead']), onDrop: vi.fn(), canDrop: (a, o) => a === 'plain' && o === 'mb' })
+      const rect = (left: number) => ({ left, right: left + 10, top: 0, bottom: 10, width: 10, height: 10 })
+      const ids = ['lead', 'ma', 'mb', 'plain']
+      const args = {
+        active: { id: 'plain' },
+        collisionRect: rect(0),
+        droppableRects: new Map(ids.map((id, i) => [id, rect(i * 20)])),
+        droppableContainers: ids.map((id) => ({ id, disabled: false, data: { current: undefined }, node: { current: null }, rect: { current: null } })),
+        pointerCoordinates: { x: 2, y: 5 },
+      }
+      expect(dnd.collide!(args as never).map((c) => c.id)).toEqual(['mb'])
+      expect(dnd.collide!({ ...args, active: { id: 'ma' } } as never)).toEqual([])
+    })
+
+    it('a drop is handed to onDrop(active, over) and never to onReorderTabs', () => {
+      const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm')]
+      seed(list)
+      const onDrop = vi.fn()
+      const { onReorderTabs } = bar(list, true, { locked: new Set(['lead']), onDrop })
+      act(() => dnd.onDragEnd!({ active: { id: 'mb' }, over: { id: 'ma' } } as unknown as DragEndEvent))
+      expect(onDrop).toHaveBeenCalledWith('mb', 'ma')
+      expect(onReorderTabs).not.toHaveBeenCalled()
+      act(() => dnd.onDragEnd!({ active: { id: 'ma' }, over: { id: 'ma' } } as unknown as DragEndEvent))
+      expect(onDrop).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('an empty group says so, and keeps the + button', () => {

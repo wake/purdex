@@ -12,6 +12,7 @@ import { groupSegments } from './team/groupSegments'
 import { TeamTabGroupFrame } from './team/TeamTabGroup'
 import { teamGroupDragId } from './team/group-drag'
 import { dragReorder } from '../lib/team/team-group-drag'
+import { blockSortingStrategy } from '../lib/task-groups/block-strategy'
 
 interface Props {
   tabs: Tab[]
@@ -34,13 +35,18 @@ interface Props {
    * collapse), nothing hidden, one zone. The tabs are not draggable yet (the group's order is not `tabOrder`; TG-4c). An empty group says so.
    */
   flat?: boolean
+  /**
+   * With `flat`: how the group's tabs are dragged (TG-4c). `locked` are the tabs that cannot be picked up (a team's lead); a drop of one tab on another is `onDrop(activeId, overId)` — the group's order is written by
+   * the caller (lib/task-groups/bar-drag.ts), never `onReorderTabs`. Without it the group's bar is not draggable.
+   */
+  groupDrag?: { locked: ReadonlySet<string>; onDrop: (activeId: string, overId: string) => void; /** Whether dropping `activeId` on `overId` would write anything: only such tabs are targets while dragging, so a preview is never followed by a snap back. */ canDrop: (activeId: string, overId: string) => boolean; /** The block a tab moves with: the tabs of one team seat share a key, any other tab is its own. */ blockOf: (tabId: string) => string }
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat, groupDrag }: Props) {
   const t = useI18nStore((s) => s.t)
   // The pinned zone: every pinned tab. In a group's bar (`flat`) the order is the one `groupTabs` gives, so the zone is the pinned tabs that LEAD it (a manual group's / 「未分組」's pinned tabs, a team with a pinned lead);
   // a team whose lead is not pinned has the lead first and its pinned tabs after it, in the one zone, still dressed as pinned.
@@ -110,6 +116,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   // the pointer and snaps back on release.
   const collisionDetection: CollisionDetection = useCallback((args) => {
     const activeId = String(args.active.id)
+    if (flat && groupDrag) {
+      // a group's bar: the targets are the tabs the drop would act on (the sidebar's decision decides), nothing else
+      const droppableContainers = args.droppableContainers.filter((c) => groupDrag.canDrop(activeId, String(c.id)))
+      return droppableContainers.length === 0 ? [] : closestCenter({ ...args, droppableContainers })
+    }
     const from = runOf.get(activeId)
     if (from?.role === 'member') {
       const frame = args.droppableRects.get(teamGroupDragId(from.teamKey))
@@ -126,12 +137,12 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return leadOfFrame.has(id) || !runOf.has(id)
     })
     return closestCenter({ ...args, droppableContainers })
-  }, [leadOfFrame, runOf])
+  }, [leadOfFrame, runOf, flat, groupDrag])
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
-    if (flat) return // the group's order is not `tabOrder`; dragging in a group's bar is TG-4c
+    if (flat) { groupDrag?.onDrop(String(active.id), String(over.id)); return } // the group's order is not `tabOrder`
 
     // A group's frame stands for its lead tab.
     const activeId = leadOfFrame.get(String(active.id)) ?? String(active.id)
@@ -178,7 +189,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return m ? { key: m.teamKey, role: m.role } : null
     })
     if (next) onReorderTabs([...pinnedIds, ...next])
-  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf, flat])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf, flat, groupDrag])
+
+  // A group's bar sorts by blocks (a seat's tabs travel together) and leaves the locked lead out of the sortable items; the other bars sort tab by tab.
+  const sortItems = (ids: string[]) => (flat && groupDrag ? ids.filter((id) => !groupDrag.locked.has(id)) : ids)
+  const sortStrategy = (ids: string[]) => (flat && groupDrag ? blockSortingStrategy(sortItems(ids).map(groupDrag.blockOf)) : horizontalListSortingStrategy)
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -195,7 +210,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       isActive={tab.id === activeTabId}
       group={group}
       pinned={flat && tab.pinned}
-      noDrag={flat}
+      noDrag={flat && (!groupDrag || groupDrag.locked.has(tab.id))}
       onSelect={onSelectTab}
       onClose={onCloseTab}
       onMiddleClick={onMiddleClick}
@@ -229,7 +244,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
           <>
-            <SortableContext items={pinnedIds} strategy={horizontalListSortingStrategy}>
+            <SortableContext items={sortItems(pinnedIds)} strategy={sortStrategy(pinnedIds)}>
               <div ref={pinnedZoneRef} className="flex items-center h-full">
                 {pinnedTabs.map((tab, i) => (
                   <Fragment key={tab.id}>
@@ -238,7 +253,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       tab={tab}
                       isActive={tab.id === activeTabId}
                       pinned
-                      noDrag={flat}
+                      noDrag={flat && (!groupDrag || groupDrag.locked.has(tab.id))}
                       onSelect={onSelectTab}
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
@@ -271,7 +286,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
             <div ref={normalTabsRef} className="flex items-center h-full flex-1 min-w-0" style={{ maxWidth: 'max-content' }}>
-              <SortableContext items={unitIds} strategy={horizontalListSortingStrategy}>
+              <SortableContext items={sortItems(unitIds)} strategy={sortStrategy(unitIds)}>
                 {segments.map((seg, si) => {
                   const prev = segments[si - 1]
                   // Separators before the group / after the group stay in the row but are never drawn next to a group.
