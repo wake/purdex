@@ -10,6 +10,7 @@ import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPersonaLoader } from './lib/names/persona-loader'
 import { startTaskGroupsLifecycle } from './lib/task-groups/loader'
+import { startSessionRootsLifecycle } from './lib/task-groups/session-roots-lifecycle'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
 import { startFleetSupport } from './lib/fleet/fleet-support'
@@ -55,6 +56,7 @@ void ensureDefaultDeviceName()
 startHostConfigLoader()
 startPersonaLoader()
 startTaskGroupsLifecycle()
+startSessionRootsLifecycle()
 // Daemon identity: one /api/info per (re)connect / endpoint / token / stored-daemonId change → observeDaemonId.
 startHostDaemonIdVerification()
 // 無人值守模式 support (unattended spec D-U23-5): one /api/info per (re)connect / endpoint / token change → useUnattendedStore.

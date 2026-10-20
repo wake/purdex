@@ -60,6 +60,9 @@ export const STORAGE_KEYS = {
    *  終端機＝沒有紀錄；pane 重綁到別的 session 就回終端機；tab／pane 關掉時清。
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts、也不放 pane content）；走 syncManager（同裝置多視窗互讀，否則後寫的視窗會蓋掉先寫的） */
   SESSION_VIEW: 'purdex-session-view',
+  /** 任務編組的 session → lineage root 快取（lib/task-groups/root-cache.ts）：`{ roots: { [hostId]: { [agentSessionId]: rootSessionId } } }`，
+   *  key 是本機 host id；主機移除／daemon 對不上時清該主機，沒有任何 world（含 parked）的分頁引用的條目也清。device-local，**永遠不進 SOT**、不走 syncManager */
+  TASK_GROUP_ROOTS: 'purdex-task-group-roots',
   /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
   TEAM_UI: 'purdex-team-ui',
