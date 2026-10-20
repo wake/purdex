@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 8
+const schemaVersion = 9
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -73,9 +73,31 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
+		if have < 9 {
+			if err := migrateV8ToV9(ctx, c); err != nil {
+				return err
+			}
+		}
 		_, err := c.ExecContext(ctx, `UPDATE queue_schema SET version = ?`, schemaVersion)
 		return err
 	})
+}
+
+// migrateV8ToV9 adds jobs.started_at (unix milliseconds on the origin's clock, null for a job that has not started): the time Start moved the
+// job to running. A job the database already holds has none, which is also what a queued or claimed job shows. It can run again: the column is
+// looked for first. The column is only added: an older wwd refuses the database (it checks the version), so going back means restoring the
+// backup made before the upgrade (docs/wwd-deploy.md, Roll back). No trigger changes: started_at is written in the same statement that
+// changes state, and the cursor already moves with state.
+func migrateV8ToV9(ctx context.Context, c *sql.Conn) error {
+	var n int
+	if err := c.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'started_at'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := c.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN started_at INTEGER`)
+	return err
 }
 
 // outcomeStatements (version 8) are the origin's record of how declared tasks ended on the hosts that vouch for them, and of the pairs of
@@ -357,7 +379,8 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			manual_seq       INTEGER NOT NULL DEFAULT 0,
 			def_hash          TEXT NOT NULL DEFAULT '',
 			claim_labels      TEXT NOT NULL DEFAULT '',
-			claim_fingerprint TEXT NOT NULL DEFAULT ''
+			claim_fingerprint TEXT NOT NULL DEFAULT '',
+			started_at        INTEGER
 		)`,
 		gitPinsTable,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,

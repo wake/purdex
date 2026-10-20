@@ -23,7 +23,7 @@ type Filter struct {
 
 const jobColumns = `id, origin, repo_name, repo_root, repo_remote, snap_commit, snap_tree, snap_base, snap_rel_cwd,
 	task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
-	sub_session, sub_ref, sub_team, sub_host, created_at, state, attempts, claim_worker, claim_since, result, local, manual, manual_seq`
+	sub_session, sub_ref, sub_team, sub_host, created_at, state, attempts, claim_worker, claim_since, result, local, manual, manual_seq, started_at`
 
 // Get returns one job (the local view: ad-hoc jobs included). The claim_id is never part of it.
 func (q *Queue) Get(ctx context.Context, id string) (wire.Job, error) {
@@ -143,7 +143,7 @@ func scanJob(r scanner) (wire.Job, error) {
 		j                                      wire.Job
 		args, labels, locks, class, state      string
 		cacheable, interruptible, adhoc, local int
-		created, claimSince                    sql.NullInt64
+		created, claimSince, startedAt         sql.NullInt64
 		attempts                               int
 		claimWorker, result                    sql.NullString
 		manual                                 string
@@ -151,7 +151,7 @@ func scanJob(r scanner) (wire.Job, error) {
 	if err := r.Scan(&j.ID, &j.Origin, &j.Repo.Name, &j.Repo.Root, &j.Repo.Remote,
 		&j.Snapshot.Commit, &j.Snapshot.Tree, &j.Snapshot.Base, &j.Snapshot.RelCwd,
 		&j.Task, &args, &class, &labels, &locks, &cacheable, &j.TimeoutS, &j.SupersedeKey, &interruptible, &j.QueueTimeoutS, &adhoc,
-		&j.Submitter.Session, &j.Submitter.Ref, &j.Submitter.Team, &j.Submitter.Host, &created, &state, &attempts, &claimWorker, &claimSince, &result, &local, &manual, &j.ManualSeq); err != nil {
+		&j.Submitter.Session, &j.Submitter.Ref, &j.Submitter.Team, &j.Submitter.Host, &created, &state, &attempts, &claimWorker, &claimSince, &result, &local, &manual, &j.ManualSeq, &startedAt); err != nil {
 		return wire.Job{}, err
 	}
 	j.Class, j.State, j.Manual = wire.JobClass(class), wire.JobState(state), wire.Position(manual)
@@ -164,6 +164,10 @@ func scanJob(r scanner) (wire.Job, error) {
 		if *dst == nil {
 			*dst = []string{}
 		}
+	}
+	if startedAt.Valid {
+		t := time64(startedAt.Int64)
+		j.StartedAt = &t
 	}
 	// a claim is shown while someone holds it; attempt is the number this claim is (counted attempts so far, plus this one)
 	if claimWorker.Valid && (j.State == wire.StateClaimed || j.State == wire.StateRunning) {

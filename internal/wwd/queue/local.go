@@ -26,9 +26,9 @@ func (q *Queue) RecordLocal(ctx context.Context, req wire.LocalRunRequest, worke
 		if err := insertJob(ctx, c, id, q.opt.Origin, req.JobSubmission, now, false); err != nil {
 			return err
 		}
-		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', local = 1, claim_worker = ?, claim_id = ?, claim_since = ?,
+		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', local = 1, claim_worker = ?, claim_id = ?, claim_since = ?, started_at = ?,
 			lease_deadline = ?, lease_s = ?, updated_at = ? WHERE id = ?`,
-			worker, claimID, now, q.deadline(now), q.leaseS, now, id); err != nil {
+			worker, claimID, now, now, q.deadline(now), q.leaseS, now, id); err != nil {
 			return err
 		}
 		*changed = append(*changed, id)

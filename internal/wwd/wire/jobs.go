@@ -120,6 +120,12 @@ type Job struct {
 	// one than the fronts before it, a later back a larger one). ManualSeq is 0 when Manual is empty or hold.
 	Manual    Position `json:"manual"`
 	ManualSeq int64    `json:"manual_seq"`
+	// StartedAt is when the worker that holds the claim started the command (its workspace was ready, spec §4.2): the origin's clock, written
+	// by Start, so ClaimSince to StartedAt is the time spent preparing and StartedAt to the end is the time spent running. Absent while the job
+	// has not started, and cleared whenever it goes back to the queue (a release, a lapsed lease): it is the start of the run that is now
+	// going on or was the last. An ended job keeps the last one. A reader from before this field (strict) refuses a record that has it, so it
+	// is only sent once every reader of jobs is a build that skips what it does not know (docs/wwd-deploy.md, conversion build).
+	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
 // JobSubmission is the body of POST /v1/jobs (local socket only, spec §4.4): what the submitter fixes. The origin assigns the

@@ -77,7 +77,7 @@ func (q *Queue) Start(ctx context.Context, id, claimID string) (wire.Lease, erro
 		}
 		now := q.now().UnixMilli()
 		if h.state == wire.StateClaimed {
-			if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', lease_deadline = ?, updated_at = ? WHERE id = ?`, q.deadline(now), now, id); err != nil {
+			if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'running', started_at = ?, lease_deadline = ?, updated_at = ? WHERE id = ?`, now, q.deadline(now), now, id); err != nil {
 				return err
 			}
 			*changed = append(*changed, id)
@@ -162,7 +162,7 @@ func (q *Queue) letGo(ctx context.Context, c *sql.Conn, h held, counted int, lap
 		res.Reason = failReason
 	default:
 		_, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'queued', attempts = attempts + ?, lapses = lapses + ?, claim_worker = NULL,
-			claim_id = NULL, claim_since = NULL, lease_deadline = NULL, lease_s = NULL, updated_at = ? WHERE id = ?`, counted, b2i(lapsed), now, h.id)
+			claim_id = NULL, claim_since = NULL, started_at = NULL, lease_deadline = NULL, lease_s = NULL, updated_at = ? WHERE id = ?`, counted, b2i(lapsed), now, h.id)
 		return err
 	}
 	// the counts are kept when the job ends too: the attempt and the lapse that ended it are part of its history
