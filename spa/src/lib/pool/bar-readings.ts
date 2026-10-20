@@ -1,4 +1,4 @@
-// spa/src/lib/fleet/bar-readings.ts — what each bar of a fleet host cell's two-bar indicator shows (「主機格指示」 = 雙柱, the
+// spa/src/lib/pool/bar-readings.ts — what each bar of a fleet host cell's two-bar indicator shows (「主機格指示」 = 雙柱, the
 // user 10-16 on #3033): a fill share and a band, with the ring's bands (70 warn, 90 danger) and rounding.
 //
 // Why the pressure level is offered over memory used %: on macOS the used % sits at 70–90 % most of the time (file cache), so

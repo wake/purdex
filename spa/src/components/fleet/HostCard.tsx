@@ -9,7 +9,7 @@ import type { FleetHostView } from '../../lib/fleet/store'
 import type { PoolZone } from '../../lib/pool/types'
 import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
 import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
-import { ringDriver, type RingDriver } from '../../lib/fleet/ring-driver'
+import { ringDriver, type RingDriver } from '../../lib/pool/ring-driver'
 import { usageTone, type UsageTone } from '../../lib/usage-display'
 import { useI18nStore } from '../../stores/useI18nStore'
 

@@ -36,7 +36,7 @@ import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { fallbackWord } from '../../lib/pool/words'
-import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
+import { cpuReading, memoryReading, pressureReading } from '../../lib/pool/bar-readings'
 import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
 import type { PoolZone } from '../../lib/pool/types'
 
