@@ -5,10 +5,9 @@ import { manualGroupKey, teamGroupKey, UNGROUPED } from './group-key'
 import type { Pane, PaneContent, PaneLayout } from '../../types/tab'
 import type { SeatHit, TeamView } from '../team/team-views'
 
-const sess = (hostId: string, agent?: string, terminated = false): PaneContent => ({
+const sess = (hostId: string, agent?: string, ended = false): PaneContent => ({
   kind: 'tmux-session', hostId, sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i',
-  ...(terminated ? { terminated: 'session-closed' as never } : {}),
-  ...(agent ? { rebuild: { sessionName: 'n', tmuxInstance: 'i', agent: { type: 'cc', sessionId: agent } } } : {}),
+  ...(agent ? { rebuild: { sessionName: 'n', tmuxInstance: 'i', agent: { type: 'cc', sessionId: agent, updatedAt: 1 }, ...(ended ? { agentExited: { at: 2, reason: 'session-end' as const } } : {}) } } : {}),
 })
 const leaf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } as Pane })
 const split = (a: PaneLayout, b: PaneLayout): PaneLayout => ({ type: 'split', direction: 'h', children: [a, b], sizes: [50, 50] } as PaneLayout)
