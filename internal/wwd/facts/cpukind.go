@@ -34,3 +34,16 @@ func KindsFromNodes(nodes []CPUNode, ncpu int) []string {
 	}
 	return kinds
 }
+
+// isCPUNodeName is "cpu" followed by digits: the children of /cpus that are cores.
+func isCPUNodeName(s string) bool {
+	if len(s) < 4 || s[:3] != "cpu" {
+		return false
+	}
+	for _, c := range s[3:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}

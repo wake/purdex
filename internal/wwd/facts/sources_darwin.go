@@ -57,7 +57,7 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			if mach == nil {
 				return RawCPU{}, machErr
 			}
-			l1, l5, err := loadavg()
+			l1, l5, l15, err := loadavg()
 			if err != nil {
 				return RawCPU{}, err
 			}
@@ -65,11 +65,21 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			if err != nil {
 				return RawCPU{}, err
 			}
-			busy, total, err := mach.CPUTicks()
+			ticks, err := mach.CPUCoreTicks()
 			if err != nil {
 				return RawCPU{}, err
 			}
-			return RawCPU{Load1: l1, Load5: l5, NCPU: int(n), Busy: busy, Total: total}, nil
+			busy, total := hostmem.SumTicks(ticks)
+			raw := RawCPU{Load1: l1, Load5: l5, Load15: &l15, NCPU: int(n), Busy: busy, Total: total, HaveSplit: true,
+				Cores: make([]RawCore, len(ticks)), Kinds: DarwinCoreKinds(len(ticks))}
+			for i, t := range ticks {
+				c := RawCore{User: t.User + t.Nice, System: t.System, Idle: t.Idle}
+				c.Total = c.User + c.System + c.Idle
+				raw.Cores[i] = c
+				raw.User += c.User
+				raw.System += c.System
+			}
+			return raw, nil
 		},
 		Mem: func() (RawMem, error) {
 			if mach == nil {
@@ -111,22 +121,13 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 	}
 }
 
-// loadavg reads struct loadavg: three uint32 fixed-point values, padding, then
-// fscale as uint64.
-func loadavg() (l1, l5 float64, err error) {
+// loadavg reads vm.loadavg (see ParseDarwinLoadavg).
+func loadavg() (l1, l5, l15 float64, err error) {
 	b, err := unix.SysctlRaw("vm.loadavg")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	if len(b) != 24 {
-		return 0, 0, errors.New("vm.loadavg: unexpected size")
-	}
-	fscale := binary.NativeEndian.Uint64(b[16:])
-	if fscale == 0 {
-		return 0, 0, errors.New("vm.loadavg: fscale is 0")
-	}
-	return float64(binary.NativeEndian.Uint32(b[0:])) / float64(fscale),
-		float64(binary.NativeEndian.Uint32(b[4:])) / float64(fscale), nil
+	return ParseDarwinLoadavg(b)
 }
 
 // swapUsage reads struct xsw_usage (vm.swapusage): the swap total and the part used, from the one read.

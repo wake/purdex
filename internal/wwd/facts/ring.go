@@ -104,7 +104,47 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	n := float64(len(recs))
 	out.CPU.Load1, out.CPU.Load5, out.CPU.IdlePct = l1/n, l5/n, idle/n
 	rollupHost(&out, recs)
+	rollupCPUSplit(&out.CPU, recs)
 	return out
+}
+
+// rollupCPUSplit averages load15, the user and system shares and each core's shares over the records that have a value (spec
+// §2.4). None of them is a proto 2 field, so the version of the last record does not clear them. out.Cores is the last record's
+// list, so its length and kinds stand; a core is averaged over the records that have a core at the same index.
+func rollupCPUSplit(out *wire.CPU, recs []wire.Facts) {
+	out.Load15 = meanOf(recs, func(f wire.Facts) *float64 { return f.CPU.Load15 })
+	out.UserPct = meanOf(recs, func(f wire.Facts) *float64 { return f.CPU.UserPct })
+	out.SystemPct = meanOf(recs, func(f wire.Facts) *float64 { return f.CPU.SystemPct })
+	for i := range out.Cores {
+		at := func(get func(wire.Core) *float64) func(wire.Facts) *float64 {
+			return func(f wire.Facts) *float64 {
+				if i >= len(f.CPU.Cores) {
+					return nil
+				}
+				return get(f.CPU.Cores[i])
+			}
+		}
+		out.Cores[i].UserPct = meanOf(recs, at(func(c wire.Core) *float64 { return c.UserPct }))
+		out.Cores[i].SystemPct = meanOf(recs, at(func(c wire.Core) *float64 { return c.SystemPct }))
+		out.Cores[i].IdlePct = meanOf(recs, at(func(c wire.Core) *float64 { return c.IdlePct }))
+	}
+}
+
+// meanOf is the mean of the values get finds, nil when it finds none.
+func meanOf(recs []wire.Facts, get func(wire.Facts) *float64) *float64 {
+	var sum float64
+	var n int
+	for _, r := range recs {
+		if v := get(r); v != nil {
+			sum += *v
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	m := sum / float64(n)
+	return &m
 }
 
 func maxPtr(a, b *float64) *float64 {
