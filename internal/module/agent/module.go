@@ -25,6 +25,7 @@ import (
 	"github.com/wake/purdex/internal/execstat"
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/notifylabel"
 	"github.com/wake/purdex/internal/statuspending"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -60,7 +61,9 @@ type Module struct {
 	// turnEndSeq numbers the hooks as they arrive (stampTurnEnd).
 	turnEnds turnEndHub
 	// notifies fans every live tmux `hook` frame out to in-process subscribers (push, PU-3a).
-	notifies   notifyHub
+	notifies notifyHub
+	// labeler works out the notification title's label of a session from memory (notify-title spec §3.1); nil = none.
+	labeler    *notifylabel.Labeler
 	turnEndSeq atomic.Int64
 
 	prober    *probe.Prober
@@ -307,6 +310,8 @@ func (m *Module) Init(c *core.Core) error {
 	m.paneSnapTTL = defaultPaneSnapTTL
 	m.pendingDir = statuspending.DirFor(c.Cfg) // the one directory the statusline proxy writes (#2545), from the one config
 	m.initModLights(c)
+	m.labeler = newLabeler(c)
+	c.Registry.Register(notifylabel.Key, m.labeler) // the label's one owner; N-2 adds the groups the App wrote back
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
 		log.Printf("[agent] warning: session provider not found")
@@ -414,6 +419,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // → replayStatus so detectors see fully-hydrated state on first poll
 // (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
+	if m.labeler != nil {
+		m.labeler.Start()
+	}
 	m.followRevokes()
 	// Step timings (#1767): observation only, same order as before.
 	execBase := execstat.Take()
@@ -461,6 +469,9 @@ func (m *Module) getUploadDir() string {
 
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
+	if m.labeler != nil {
+		m.labeler.Stop()
+	}
 	m.stopModLights()
 	if m.usageCancel != nil { // the flusher writes the readings it still holds as it ends
 		m.usageCancel()
@@ -836,6 +847,7 @@ func (m *Module) snapshotItemsLocked(legacy *legacyRows) (items []snapshotItem, 
 			}
 			proj := item.Projection
 			normalized := buildProjectionNormalized(&proj, proj.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			normalized.NotifyLabel = m.notifyLabelFor(projectionSessionID(&proj), item.SessionName)
 			items = append(items, snapshotItem{code: item.SessionCode, session: item.SessionName, event: normalized, proj: &proj})
 		}
 	}
@@ -919,6 +931,7 @@ func (m *Module) legacySnapshotItems(rows *legacyRows, projectedSessions map[str
 			continue
 		}
 		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.AgentType, ev.BroadcastTs, result)
+		normalized.NotifyLabel = m.notifyLabelFor(storedSessionID(ev.RawEvent), ev.TmuxSession) // a legacy row has no projection: the id the stored hook named
 		items = append(items, snapshotItem{code: code, event: normalized})
 	}
 	return items, stale

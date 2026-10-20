@@ -579,6 +579,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(team.RelayGuardKey, store)
 	c.Registry.Register(team.PredecessorReaderKey, store)                       // the conversation module's scroll-back across a relay
 	c.Registry.Register(team.ModReadKey, team.ModReader(store))                 // the mod socket's team read (TI-5a)
+	c.Registry.Register(team.NotifyGroupKey, team.NotifyGrouper(m))             // the agent module's notification title (notify-title spec §3.1)
 	c.Registry.Register(team.MembershipReaderKey, team.MembershipReader(store)) // the push module's badge rules (BG-1a)
 	c.Registry.Register(team.LeadNoticerKey, team.LeadNoticer(m))               // the lease notice outbox's fallback (lease v2 P2d-2)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))

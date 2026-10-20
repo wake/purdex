@@ -1,0 +1,242 @@
+[
+ {
+  "case": "named, with a group",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — Purdex A team"
+ },
+ {
+  "case": "named, with a group, en",
+  "locale": "en",
+  "name": "Mei",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — Purdex A team"
+ },
+ {
+  "case": "named, with a group and a workbook thing",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "修好 G-3",
+  "want": "Mei — Purdex A team・修好 G-3"
+ },
+ {
+  "case": "named, no group: host and tmux (zh-TW)",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — mlab：aigora4"
+ },
+ {
+  "case": "named, no group: host and tmux (en)",
+  "locale": "en",
+  "name": "Mei",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — mlab: aigora4"
+ },
+ {
+  "case": "named, no group, no host label",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "",
+  "thing": "",
+  "want": "Mei — aigora4"
+ },
+ {
+  "case": "named, no group, with a thing",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "修好 G-3",
+  "want": "Mei — mlab：aigora4・修好 G-3"
+ },
+ {
+  "case": "no name: today's title (zh-TW)",
+  "locale": "zh-TW",
+  "name": "",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "mlab：aigora4"
+ },
+ {
+  "case": "no name: today's title (en)",
+  "locale": "en",
+  "name": "",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "mlab: aigora4"
+ },
+ {
+  "case": "no name, no host label",
+  "locale": "zh-TW",
+  "name": "",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "",
+  "thing": "",
+  "want": "aigora4"
+ },
+ {
+  "case": "no name, with a thing",
+  "locale": "zh-TW",
+  "name": "",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "修好 G-3",
+  "want": "mlab：aigora4・修好 G-3"
+ },
+ {
+  "case": "no name, a group alone is not used",
+  "locale": "zh-TW",
+  "name": "",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "mlab：aigora4"
+ },
+ {
+  "case": "the thing is cut first",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "want": "Mei — Purdex A team・xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+ },
+ {
+  "case": "name and group at their caps, the thing takes the rest",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "gggggggggggggggggggggggggggggggggggggggg",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN — gggggggggggggggggggggggggggggggggggggggg・zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz…"
+ },
+ {
+  "case": "the host row is cut before the name",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+  "host_label": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+  "thing": "thing",
+  "want": "Mei — hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh：ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt…"
+ },
+ {
+  "case": "a little room left: the thing is cut to it",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+  "host_label": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+  "thing": "abcdefghij",
+  "want": "Mei — hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh：ttttttttttttttttttttttttttttttttttttttttttttttttttttttttt・abcde…"
+ },
+ {
+  "case": "a long name is kept whole (it is only normalised)",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN — Purdex A team"
+ },
+ {
+  "case": "a long name leaves the group the room it has",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "gggggggggggggggggggggggggggggg",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "thing",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN — ggggggggggggggggg…"
+ },
+ {
+  "case": "a name longer than the title limit is still whole",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "thing",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN"
+ },
+ {
+  "case": "a name too long for any group is the whole title",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "thing",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN"
+ },
+ {
+  "case": "control, bidi and newline characters in the group",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "Pur‮dex\nA​ team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — Purdex A team"
+ },
+ {
+  "case": "markdown in the thing",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "**修好** [G-3](http://x)",
+  "want": "Mei — Purdex A team・修好 G-3"
+ },
+ {
+  "case": "a blank group counts as none",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "  \n ",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "",
+  "want": "Mei — mlab：aigora4"
+ },
+ {
+  "case": "CJK group and thing",
+  "locale": "zh-TW",
+  "name": "美",
+  "group": "任務編組甲",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "修好登入",
+  "want": "美 — 任務編組甲・修好登入"
+ }
+]

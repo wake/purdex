@@ -42,6 +42,9 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	}
 	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail,
 		EventCursor: reads.Cursor{Epoch: ev.Event.Epoch, Seq: ev.Event.Seq}}
+	if l := ev.Event.NotifyLabel; l != nil { // the daemon's label, the same one the event carried to the Apps (spec §3.4)
+		content.Label = *l
+	}
 	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "unknown"
 	// (member spec R4): the gate treats the session as not a member (rule 4a does not drop it) and the payload does not
 	// announce it either.

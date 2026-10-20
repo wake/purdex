@@ -5,8 +5,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/notifylabel"
 	"github.com/wake/purdex/internal/reads"
 )
+
+// NotifyLabel is the persona, task group and tmux name an agent push's title is built from (notify-title spec §1).
+type NotifyLabel = notifylabel.Label
 
 // AgentInput is what the content of an agent push is built from: the session, the event (the frame's raw_event_name)
 // and the frame's detail.
@@ -15,8 +19,10 @@ type AgentInput struct {
 	SessionCode string
 	SessionID   string
 	SessionName string // the tmux session name; "" falls back to the code
-	EventName   string
-	Detail      map[string]any
+	// Label is the persona and task group the daemon worked out; the zero value is today's title "{host}: {session}".
+	Label     NotifyLabel
+	EventName string
+	Detail    map[string]any
 	// Workbook is the session workbook's line for the Stop this push is about (WB-3); nil = today's push. Only a Stop or a
 	// StopFailure uses it.
 	Workbook *WorkbookLine
@@ -94,6 +100,38 @@ func workbookTitle(title, thing string) string {
 	return base + "・" + cutRunes(thing, room)
 }
 
+// noRuneLimit is the "no cut" limit for Normalise.
+const noRuneLimit = 1 << 30
+
+// NotifyTitle is the title of an agent push (notify-title spec §1). With a persona name: "{name} — {group}", or without a
+// group "{name} — {host}：{tmux}"; without a name today's "{host}：{tmux}". A workbook thing follows as "・{thing}". When the
+// whole is over the limit the thing is cut first (and dropped when nothing is left for it), then the group or the host and
+// tmux part; the name is never cut (only normalised; the payload's own size limit bounds a title in the end); the group is normalised to the length of a session's title. The host
+// label is the receiving device's own name for the host, so it is an argument, not part of the label.
+func NotifyTitle(label NotifyLabel, hostLabel, thing, locale string) string {
+	t := table(locale)
+	row := label.Tmux
+	if hostLabel != "" {
+		row = fmt.Sprintf(t["agent_title"], hostLabel, label.Tmux)
+	}
+	name := Normalise(label.Name, noRuneLimit) // only normalised: a persona's name is never cut (spec §1)
+	if name == "" {
+		return workbookTitle(row, thing)
+	}
+	mid := Normalise(label.Group, maxNamedRunes)
+	if mid == "" {
+		mid = row
+	}
+	prefix := name + " — "
+	if room := maxTitleRunes - utf8.RuneCountInString(prefix); utf8.RuneCountInString(mid) > room {
+		if room <= 0 {
+			return name
+		}
+		return prefix + cutRunes(mid, room)
+	}
+	return workbookTitle(prefix+mid, thing)
+}
+
 func detailString(d map[string]any, key string) string {
 	s, _ := d[key].(string)
 	return s
@@ -146,17 +184,16 @@ func AgentContent(in AgentInput, locale string) (Content, bool) {
 	if name == "" {
 		name = in.SessionCode
 	}
-	title := name
-	if in.HostLabel != "" {
-		title = fmt.Sprintf(t["agent_title"], in.HostLabel, name)
-	}
+	label := in.Label
+	label.Tmux = name
+	title := NotifyTitle(label, in.HostLabel, "", locale)
 	c := Content{
 		Title: cutRunes(title, maxTitleRunes), Body: body, Kind: "agent",
 		SessionCode: in.SessionCode, SessionID: in.SessionID, SessionName: name, Event: ev,
 		CollapseID: "agent-" + in.SessionCode, Member: in.Member, EventCursor: in.EventCursor,
 	}
 	if wb != nil {
-		c.Title = workbookTitle(title, wb.Thing)
+		c.Title = NotifyTitle(label, in.HostLabel, wb.Thing, locale)
 		c.WorkbookConv, c.WorkbookEntry = wb.ConvKey, wb.EntryID
 	}
 	return c, true

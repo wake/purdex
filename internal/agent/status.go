@@ -1,5 +1,7 @@
 package agent
 
+import "github.com/wake/purdex/internal/notifylabel"
+
 // Status represents the normalized agent status.
 type Status string
 
@@ -72,4 +74,8 @@ type NormalizedEvent struct {
 	// a tool): it ends a tool, not the main agent's turn, so a client raises no desktop notification and no unread
 	// for it. Only present when true; the status itself is unchanged.
 	FromProxy bool `json:"from_proxy,omitempty"`
+	// NotifyLabel is what the daemon worked out for the notification title of this session (notify-title spec §3.4): the
+	// persona's name, the task group and the tmux name. Absent for a worker, a session the daemon could not label yet, and
+	// an older daemon; a client then titles the notification as it did before.
+	NotifyLabel *notifylabel.Label `json:"notify_label,omitempty"`
 }
