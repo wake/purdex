@@ -139,8 +139,7 @@ describe('HostCard — the title and the lower rows (M11)', () => {
   })
   it('jobs: what it sent and waits, and what runs on it', () => {
     show(cellView({ count: { n: 3, tone: 'neutral', queued: 2, running: 1 } }))
-    expect(screen.getByTestId('host-card-pool-jobs').textContent).toContain('2')
-    expect(screen.getByTestId('host-card-pool-jobs').textContent).toContain('1')
+    expect(screen.getByTestId('host-card-pool-jobs').textContent).toBe('JobsWaiting 2 · running here 1')
   })
   it('jobs with no count read 0 and 0', () => {
     show(cellView({ count: null }))
