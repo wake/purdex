@@ -3537,6 +3537,7 @@
   "watch.host.proc.loading": "讀取這一小時的紀錄…",
   "watch.host.proc.not_local": "daemon 讀不到這台的歷史",
   "watch.host.proc.error": "讀不到",
+  "watch.host.proc.no_record": "這個時間點沒有紀錄",
   "watch.host.top_cpu12": "CPU 前 12 名",
   "watch.host.top_mem12": "記憶體前 12 名",
   "watch.host.residents": "常駐程式",

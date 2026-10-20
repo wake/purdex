@@ -133,6 +133,15 @@ describe('the timeline (MON-8b)', () => {
     expect((screen.getByTestId('proc-timeline') as HTMLInputElement).value).toBe('240')
   })
 
+  it('a gap in the hour: a pick far from every record says there is none, it does not show the far one (codex attack)', async () => {
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: [{ ...darwin, at: NOW - 3000_000, procs: [proc(5, { name: 'faraway' })] }] })
+    render(<ProcTab host={okHost({ procs: [proc(1, { name: 'livenow' })] })} now={NOW} />)
+    await move(200) // 10 minutes back; the only record is 50 minutes back
+    expect(screen.getByTestId('proc-note')).toHaveTextContent(t('watch.host.proc.no_record'))
+    expect(screen.queryByText('faraway')).toBeNull()
+    expect(screen.queryByText('livenow')).toBeNull()
+  })
+
   it('a pick that has slid out of the hour is the live record again', () => {
     writeProcAt('h-mlab', NOW - 600_000)
     render(<ProcTab host={okHost({ procs: [proc(1, { name: 'livenow' })] })} now={NOW + 3 * 3600_000} />)

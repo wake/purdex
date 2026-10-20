@@ -51,7 +51,7 @@ describe('loadProcHistory', () => {
     fetchFactsHistory.mockReturnValueOnce(new Promise((r) => { first = r }))
     const a = loadProcHistory('cfg-a', 'mlab', 'h1', NOW)
     fetchFactsHistory.mockResolvedValueOnce(ok([rec(NOW, 2)]))
-    await loadProcHistory('cfg-a', 'mlab', 'h1', NOW)
+    await loadProcHistory('cfg-a', 'mlab-renamed', 'h1', NOW) // another ask: it takes over
     first(ok([rec(NOW - 15_000, 1)]))
     await a
     expect(readProcSnaps('h1').map((s) => s.procs[0].pid)).toEqual([2])
@@ -75,6 +75,29 @@ describe('loadProcHistory', () => {
     expect(await loadProcHistory('cfg-a', 'mlab', 'h2', NOW)).toBe('error')
     expect(readProcSnaps('h1')).toEqual([])
     expect(readProcLoad('h2')).toBe('error')
+  })
+})
+
+describe('two pages on one host (codex attack)', () => {
+  it('share the read in flight: one request, and a second page whose call would fail cannot spoil it', async () => {
+    let answer: (v: unknown) => void = () => {}
+    fetchFactsHistory.mockReturnValueOnce(new Promise((r) => { answer = r }))
+    fetchFactsHistory.mockRejectedValue(new Error('boom'))
+    const a = loadProcHistory('cfg-a', 'mlab', 'h1', NOW)
+    const b = loadProcHistory('cfg-a', 'mlab', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+    answer(ok([rec(NOW)]))
+    expect(await a).toBe('ok')
+    expect(await b).toBe('ok')
+    expect(readProcLoad('h1')).toBe('ok')
+    expect(readProcSnaps('h1')).toHaveLength(1)
+  })
+  it('another source or alias is not the same ask: it takes over', async () => {
+    fetchFactsHistory.mockResolvedValue(ok([rec(NOW)]))
+    const a = loadProcHistory('cfg-a', 'mlab', 'h1', NOW)
+    const b = loadProcHistory('cfg-b', 'mlab', 'h1', NOW)
+    await Promise.all([a, b])
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
   })
 })
 

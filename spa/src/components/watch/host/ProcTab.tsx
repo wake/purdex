@@ -3,7 +3,7 @@
 // tables say it is offline and the timeline is off. The right column under the tables is for the undeclared heavy commands (MON-8c).
 //
 // Tab-hosted checklist: the picked record is the reader's own choice, so it lives in `lib/watch/view-memory` as the record's time (not a place on the timeline: the live end keeps moving), keyed by the pool host id.
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { PROC_STEP_MS, type ProcSnap } from '../../../lib/pool/proc-history'
@@ -35,12 +35,12 @@ export function ProcTab({ host, now }: { host: MonitorHost; now: number }) {
   const setPicked = (at: number | null) => { writeProcAt(hostId, at); setPickedState(at) }
   // A pick that has slid out of the hour (or of a host that is not ok) is the live record again.
   const at = facts !== null && picked !== null && now - picked <= HOUR_MS ? picked : null
-  useEffect(() => { if (picked !== null && at === null) { writeProcAt(hostId, null); setPickedState(null) } }, [picked, at, hostId])
+  if (picked !== null && at === null) { writeProcAt(hostId, null); setPickedState(null) }
 
   const { snaps, load } = useProcHistory(hostId, host.alias, facts, at !== null)
-  // While the hour is still being read the memory may hold only the live records that joined it: one of those is not "the record of that time", so it counts only when it is within a step of the pick.
+  // The record of a time is one within two steps of it (the 5 s records thin to 15 s, give or take): a gap in the hour has none, and while the hour is still being read the memory may hold only the live records that joined it.
   const near = at === null ? null : nearest(snaps, at)
-  const snap = near !== null && at !== null && (load === 'ok' || Math.abs(near.at - at) <= PROC_STEP_MS) ? near : null
+  const snap = near !== null && at !== null && Math.abs(near.at - at) <= 2 * PROC_STEP_MS ? near : null
   const live = at === null
   const rows = useMemo(() => {
     const procs = live ? (facts?.procs ?? []) : (snap?.procs ?? [])
@@ -51,7 +51,7 @@ export function ProcTab({ host, now }: { host: MonitorHost; now: number }) {
   const note = at === null ? null
     : load === 'host_not_local' ? t('watch.host.proc.not_local')
     : load === 'error' ? t('watch.host.proc.error')
-    : snap === null ? t('watch.host.proc.loading')
+    : snap === null ? t(load === 'ok' ? 'watch.host.proc.no_record' : 'watch.host.proc.loading')
     : t('watch.host.proc.at', { time: clock(snap.at) })
 
   return (

@@ -3537,6 +3537,7 @@
   "watch.host.proc.loading": "Reading the last hour…",
   "watch.host.proc.not_local": "The daemon cannot read this host's history",
   "watch.host.proc.error": "Cannot be read",
+  "watch.host.proc.no_record": "No record near this time",
   "watch.host.top_cpu12": "Top 12 by CPU",
   "watch.host.top_mem12": "Top 12 by memory",
   "watch.host.residents": "Resident programs",

@@ -17,7 +17,11 @@ const FRESH_MS = 5 * 60_000
 const FUTURE_TOLERANCE_MS = 5_000
 const MAX_HOSTS = 32
 
-interface ProcMemory { snaps: ProcSnap[]; load: ProcLoad; loadedAt: number | null; gen: number; holds: number; listeners: Set<() => void> }
+interface ProcMemory {
+  snaps: ProcSnap[]; load: ProcLoad; loadedAt: number | null; gen: number; holds: number; listeners: Set<() => void>
+  /** The read in flight, by what it asks for: a second page asking the same is given this one, not a new request that would call it off. */
+  inFlight: { key: string; promise: Promise<ProcLoad> } | null
+}
 const memory = new Map<string, ProcMemory>()
 const inUse = (m: ProcMemory): boolean => m.listeners.size > 0 || m.holds > 0
 function prune(except?: string): void {
@@ -29,7 +33,7 @@ function prune(except?: string): void {
 const memoryOf = (hostId: string): ProcMemory => {
   let m = memory.get(hostId)
   if (!m) {
-    m = { snaps: [], load: 'idle', loadedAt: null, gen: 0, holds: 0, listeners: new Set() }
+    m = { snaps: [], load: 'idle', loadedAt: null, gen: 0, holds: 0, listeners: new Set(), inFlight: null }
     memory.set(hostId, m)
     prune(hostId)
   }
@@ -53,7 +57,7 @@ export function holdProcs(hostId: string): () => void {
     if (released) return
     released = true
     m.holds -= 1
-    if (m.holds <= 0) m.gen += 1
+    if (m.holds <= 0) { m.gen += 1; m.inFlight = null }
     prune()
   }
 }
@@ -88,24 +92,31 @@ function thin(records: PoolFacts[]): ProcSnap[] {
 
 const failure = (e: unknown): ProcLoad => (e instanceof PoolReadError && e.poolError.code === 'host_not_local' ? 'host_not_local' : 'error')
 
-/** Reads the last hour of 5 s records of `alias` through `source`'s daemon and keeps every 15 s. Never throws. */
-export async function loadProcHistory(source: string, alias: string, hostId: string, now: number): Promise<ProcLoad> {
+/** Reads the last hour of 5 s records of `alias` through `source`'s daemon and keeps every 15 s. The same ask while one is out shares it. Never throws. */
+export function loadProcHistory(source: string, alias: string, hostId: string, now: number): Promise<ProcLoad> {
   const m = memoryOf(hostId)
+  const key = `${source}\0${alias}`
+  if (m.inFlight?.key === key) return m.inFlight.promise
   const mine = ++m.gen
   m.load = 'loading'
   notify(m)
-  let records: PoolFacts[] = []
-  let out: ProcLoad
-  try {
-    records = (await fetchFactsHistory(source, alias, new Date(now - 60 * 60_000 - SKEW_MS).toISOString(), '5s')).records
-    out = 'ok'
-  } catch (e) { out = failure(e) }
-  // A newer load started, or the page left, while this one was out: it owns the memory now, whatever this one found.
-  if (m.gen !== mine) return m.load
-  if (out === 'ok') { m.snaps = merge(m.snaps, thin(records), now); m.loadedAt = now }
-  m.load = out
-  notify(m)
-  return out
+  const promise = (async (): Promise<ProcLoad> => {
+    let records: PoolFacts[] = []
+    let out: ProcLoad
+    try {
+      records = (await fetchFactsHistory(source, alias, new Date(now - 60 * 60_000 - SKEW_MS).toISOString(), '5s')).records
+      out = 'ok'
+    } catch (e) { out = failure(e) }
+    // A different ask started, or the page left, while this one was out: it owns the memory now, whatever this one found.
+    if (m.gen !== mine) return m.load
+    if (m.inFlight?.promise === promise) m.inFlight = null
+    if (out === 'ok') { m.snaps = merge(m.snaps, thin(records), now); m.loadedAt = now }
+    m.load = out
+    notify(m)
+    return out
+  })()
+  m.inFlight = { key, promise }
+  return promise
 }
 
 /** A new facts record of this host joins the hour when it is a step after the last one. */
