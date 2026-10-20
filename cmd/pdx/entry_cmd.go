@@ -4,14 +4,27 @@ package main
 // build command; the rules live in internal/wwd/entry, the hook keeps no copy. Not for people: it is not in the help.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/entry"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// entryPoolTimeout bounds the read of the local wwd's pool (the hook's own wait for this command is longer; a wwd that does not answer in
+// time is "cannot be read" and the command runs as typed).
+const entryPoolTimeout = 2 * time.Second
+
+// entryPool reads the pool from the local wwd; a variable so tests can stand in for it.
+var entryPool = func(ctx context.Context) (wire.Pool, error) {
+	return client.New(client.DefaultSocket()).Pool(ctx)
+}
 
 const entryUsage = "usage: pdx entry match --json [--cwd <dir>] -- <command> [args…]\n"
 
@@ -66,7 +79,14 @@ loop:
 		fmt.Fprintf(stderr, "pdx entry match: %s is not a directory\n", cwd)
 		return 2
 	}
-	b, err := json.Marshal(entry.Match(cwd, cmd))
+	res := entry.Match(cwd, cmd)
+	if entry.NeedsPool(res) { // a rewrite through the queue needs a host that can take it (the local fast lane and an ad-hoc job do not)
+		ctx, cancel := context.WithTimeout(context.Background(), entryPoolTimeout)
+		pool, perr := entryPool(ctx)
+		cancel()
+		res = entry.GateOnPool(res, pool, perr)
+	}
+	b, err := json.Marshal(res)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx entry match: %v\n", err)
 		return 2
