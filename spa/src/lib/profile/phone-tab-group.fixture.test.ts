@@ -1,7 +1,9 @@
 // spa/src/lib/profile/phone-tab-group.fixture.test.ts — the phone keeps `group` / `groupRank` it did not write (task groups
 // spec §4.2, TG-1b-1 task 4). iOS preserves unknown tab fields as JSON (purdex-ios `ProfileTab.adding`), so a Mac tab carrying
 // both fields and a phone tab that came back carrying them must pass the Mac's guard, keep the fields on apply, and rebuild
-// to the very section on the SOT. The iOS-owned fixture (`__fixtures__/phone-tab.json`, pinned by iOS) is used untouched.
+// to the very section on the SOT. The section is the static fixture `__fixtures__/phone-tab-group.json` (hash pinned inside it,
+// phtab1 copied byte for byte from the iOS-owned `phone-tab.json`, which stays untouched). It is Mac-authored: it is meant to be
+// adopted as a shared case by purdex-ios's canonical-hash tests, which is how the phone side is pinned.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -9,19 +11,16 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { PaneLayout, Tab } from '../../types/tab'
-import fixtureJson from './__fixtures__/phone-tab.json'
+import groupFixtureJson from './__fixtures__/phone-tab-group.json'
 import { applySectionToStores } from './apply-to-stores'
 import { isWellFormedSection } from './applier'
 import { buildSectionPayload } from './collector'
 import { hashSection } from './hash'
 import type { TabsPayload } from './types'
 
-const fixture = fixtureJson as unknown as { hash: string; payload: TabsPayload }
+const fixture = groupFixtureJson as unknown as { hash: string; payload: TabsPayload }
 const MAC_HOST = 'aaaaaa'
 const DAEMON = 'mini-lab:278cbm'
-/** hashSection of the section below, pinned: a drift in what the hash covers fails here first. */
-const PINNED_HASH = '1aa4cb70858a4973e02b84313aec8365caec64b5f37ccfdca82b5e321fe536fe'
-
 const macTab: Tab = {
   id: 't1',
   pinned: true,
@@ -53,13 +52,8 @@ beforeEach(() => {
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
-/** The Mac's own tabs.w1 (t1 with both fields), the phone's tab appended as the fixture has it, and a second phone tab that carries both fields. */
-function stored(): TabsPayload {
-  const mac = clone(buildSectionPayload('tabs.w1')!.payload as TabsPayload)
-  const plain = clone(fixture.payload.tabs.phtab1)
-  const carrying = { ...clone(plain), id: 'phtab2', group: 'ungrouped', groupRank: 'a' }
-  return { ...mac, order: [...mac.order, 'phtab1', 'phtab2'], tabs: { ...mac.tabs, phtab1: plain, phtab2: carrying } }
-}
+/** The fixture section: the Mac's tab t1 with both fields, the phone's own tab phtab1 (from the iOS fixture, no fields) and phtab2, a phone tab that came back carrying both. */
+const stored = (): TabsPayload => clone(fixture.payload)
 
 describe('phone tabs next to tabs that carry group / groupRank', () => {
   it('a. the Mac\'s own tab builds with both fields, and the whole section is well formed', () => {
@@ -85,6 +79,6 @@ describe('phone tabs next to tabs that carry group / groupRank', () => {
     const rebuilt = buildSectionPayload('tabs.w1')!.payload
     expect(rebuilt).toEqual(payload)
     expect(await hashSection(rebuilt)).toBe(await hashSection(payload))
-    expect(await hashSection(payload)).toBe(PINNED_HASH)
+    expect(await hashSection(payload)).toBe(fixture.hash)
   })
 })

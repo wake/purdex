@@ -1,0 +1,90 @@
+{
+  "hash": "1aa4cb70858a4973e02b84313aec8365caec64b5f37ccfdca82b5e321fe536fe",
+  "payload": {
+    "order": [
+      "t1",
+      "phtab1",
+      "phtab2"
+    ],
+    "tabs": {
+      "t1": {
+        "id": "t1",
+        "pinned": true,
+        "locked": false,
+        "createdAt": 1789999999999,
+        "group": "group\u0000aaaaaaaa",
+        "groupRank": "V",
+        "layout": {
+          "type": "leaf",
+          "pane": {
+            "id": "p1",
+            "content": {
+              "kind": "tmux-session",
+              "hostId": "d1_2u8ajsho6ji7nk6h",
+              "sessionCode": "abc123",
+              "mode": "terminal",
+              "cachedName": "mac",
+              "tmuxInstance": "1:2"
+            }
+          }
+        }
+      },
+      "phtab1": {
+        "createdAt": 1790000000000,
+        "id": "phtab1",
+        "layout": {
+          "pane": {
+            "content": {
+              "cachedName": "fixture-1",
+              "hostId": "d1_aaaaaaaaaaaaaaaa",
+              "kind": "tmux-session",
+              "mode": "terminal",
+              "rebuild": {
+                "capturedAt": 0,
+                "cwd": "/tmp/fixture-cwd",
+                "cwdSource": "pane-probe",
+                "sessionName": "fixture-1",
+                "tmuxInstance": "12345:1790000000"
+              },
+              "sessionCode": "fix001",
+              "tmuxInstance": "12345:1790000000"
+            },
+            "id": "phpan1"
+          },
+          "type": "leaf"
+        },
+        "locked": false,
+        "pinned": false
+      },
+      "phtab2": {
+        "createdAt": 1790000000000,
+        "id": "phtab2",
+        "layout": {
+          "pane": {
+            "content": {
+              "cachedName": "fixture-1",
+              "hostId": "d1_aaaaaaaaaaaaaaaa",
+              "kind": "tmux-session",
+              "mode": "terminal",
+              "rebuild": {
+                "capturedAt": 0,
+                "cwd": "/tmp/fixture-cwd",
+                "cwdSource": "pane-probe",
+                "sessionName": "fixture-1",
+                "tmuxInstance": "12345:1790000000"
+              },
+              "sessionCode": "fix001",
+              "tmuxInstance": "12345:1790000000"
+            },
+            "id": "phpan1"
+          },
+          "type": "leaf"
+        },
+        "locked": false,
+        "pinned": false,
+        "group": "ungrouped",
+        "groupRank": "a"
+      }
+    }
+  }
+}
