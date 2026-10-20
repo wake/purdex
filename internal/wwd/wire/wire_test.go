@@ -60,6 +60,7 @@ func TestRoundTripFixtures(t *testing.T) {
 	roundTrip[Pool](t, "pool.json")
 	roundTrip[FactsHistoryResponse](t, "facts_history_response.json")
 	roundTrip[Job](t, "job_queued.json")
+	roundTrip[Job](t, "job_running.json")
 	roundTrip[Job](t, "job_done.json")
 	roundTrip[ClaimRequest](t, "claim_request.json")
 	roundTrip[ClaimResponse](t, "claim_response.json")
