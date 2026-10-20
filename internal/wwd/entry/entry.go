@@ -46,6 +46,8 @@ type Result struct {
 	// Queued says a rewrite goes through the queue, where it may wait (the task does not take the local fast lane for this many
 	// arguments); the hook then runs the call in the background.
 	Queued bool `json:"queued,omitempty"`
+	// Labels are the task's labels, given for a queued rewrite: what a host must hold to take the job (GateOnPool judges them against the pool).
+	Labels []string `json:"labels,omitempty"`
 	// Mode is the manifest's [entry].mode when no task matched ("advise" when the manifest names none).
 	Mode string `json:"mode,omitempty"`
 	// Hint is the task nearest to the command, for the advice and the refusal.
@@ -79,6 +81,9 @@ func Match(cwd string, argv []string) Result {
 		if args, ok := matchTask(root, cwd, canon, m.Tasks[n]); ok {
 			if found == nil || classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class) {
 				found = &Result{Action: ActionRewrite, Task: n, Args: args, Queued: !m.Tasks[n].Local.Permits(len(args))}
+				if found.Queued {
+					found.Labels = append([]string(nil), m.Tasks[n].Labels...)
+				}
 			}
 		}
 	}
