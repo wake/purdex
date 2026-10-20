@@ -460,3 +460,27 @@ timeout (exit 6). Do not count on the quick failure.
 taken by the hosts that have the label it carries: while some hosts are on 1.27 and the manifest still says 1.26, only the hosts still
 on 1.26 take it (when all three are raised, none does until step 2 lands); after step 2, a host that has not been raised takes none.
 Raise all three before step 2, and do step 2 promptly.
+
+## 12. mserv takes purdex's A-class work (S1-b)
+
+`tsc` and `spa-related` carry no `os:darwin`: they run on a host that holds `repo:purdex`, `tool:node24`, `tool:pnpm10` **and** the earned
+`task:purdex/<name>` (spec §7; `purdex_manifest_test.go` keeps the list of such tasks). To make mserv one of those hosts (the lead runs
+these; wwd is restarted only after the release gate and the guardian's go-ahead):
+
+1. **A prepared clone of its own** (not `~/Assist/repos.noindex/purdex`: that one belongs to the manual `mserv-run.sh` and is on an old commit).
+   Same way as air26's `purdex-wwd`, over anonymous https (the repo is public):
+   `ssh mserv 'git clone https://github.com/wake/purdex.git ~/Assist/repos.noindex/purdex-wwd'`.
+2. **`~/.config/wwd/config.toml`** on mserv: add
+   ```toml
+   [repos]
+   purdex = "~/Assist/repos.noindex/purdex-wwd"
+   ```
+   and put pnpm in front of the job PATH (node is already there; `pnpm` lives in `~/Assist/toolchains.noindex/pnpm/bin`, which `[tools]` does not list yet):
+   `extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noindex/pnpm/bin"]`.
+3. **Restart** (`sudo systemctl restart wwd`) and check `GET /v1/info`: `labels` must show `repo:purdex`, `tool:node24`, `tool:pnpm10`.
+4. **The worker stays off until S2 retires `mserv-run.sh`** (a manual run and a worker must not run beside each other). When it goes on
+   (`PUT /v1/worker`), the coordinator queues one qualify pair per task that has a `qualify` and a reference host (air26) and that mserv does
+   not hold yet: `tsc` (the whole run) and `spa-related` (`src/lib/fleet/parse.test.ts`). The pair needs mserv's worker **and** air26's
+   worker on at the same time. `pdx wwd qualify --status` shows the outcome; `task:purdex/tsc` and `task:purdex/spa-related` appear in
+   mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
+   cache (§10), so it needs network.
