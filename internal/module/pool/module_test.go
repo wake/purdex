@@ -224,7 +224,7 @@ func TestHosts_WWDAbsentOrBrokenAnswersAClearStatus(t *testing.T) {
 	assert.Equal(t, ErrWWDUnavailable, errCode(rr))
 
 	bad := http.NewServeMux()
-	bad.HandleFunc("GET /v1/pool", serve([]byte(`{"peers":[],"surprise":1}`)))
+	bad.HandleFunc("GET /v1/pool", serve([]byte(`{"peers":"not a list","surprise":1}`))) // a field of a later build is skipped; a wrong value is not
 	rr = call(newModule(t, fakeWWD(t, bad)), "/api/pool/hosts")
 	assert.Equal(t, 502, rr.Code)
 	assert.Equal(t, ErrWWDBadResponse, errCode(rr))

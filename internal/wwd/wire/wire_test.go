@@ -114,8 +114,12 @@ func TestEventRejectsBadTypeAndData(t *testing.T) {
 	if _, err := Decode[Event]([]byte(`{"type":"bogus","data":{}}`)); err == nil {
 		t.Fatal("bad type accepted")
 	}
-	if _, err := Decode[Event]([]byte(`{"type":"labels","data":{"host":"a","labels":[],"extra":1}}`)); err == nil {
-		t.Fatal("unknown field in event data accepted")
+	// a field of a later build in the data is skipped (#3710); a wrong value in a known field is not
+	if _, err := Decode[Event]([]byte(`{"type":"labels","data":{"host":"a","labels":[],"extra":1}}`)); err != nil {
+		t.Fatalf("an unknown field in event data refused: %v", err)
+	}
+	if _, err := Decode[Event]([]byte(`{"type":"labels","data":{"host":"a","labels":"not a list","extra":1}}`)); err == nil {
+		t.Fatal("a wrong value in event data accepted")
 	}
 	if _, err := Decode[Event]([]byte(`{"type":"labels"}`)); err == nil {
 		t.Fatal("missing data accepted")

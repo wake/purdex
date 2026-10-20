@@ -19,7 +19,7 @@ func (c *Client) Qualify(ctx context.Context, task string) (wire.QualifyStarted,
 	if err != nil {
 		return wire.QualifyStarted{}, err
 	}
-	return wire.Decode[wire.QualifyStarted](b)
+	return wire.DecodeLenient[wire.QualifyStarted](b)
 }
 
 // QualifyStatus is GET /v1/qualify (local socket only): the pairs in flight and the last ones that ended.

@@ -213,13 +213,17 @@ func TestPeerUnreadableConflictBodyIsAnErrorNotAConflict(t *testing.T) {
 	assert.False(t, errors.As(err, &conf), "a 409 from something that is not wwd must not end a job")
 }
 
-func TestPeerAnswerIsDecodedStrictly(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"lease_s":60,"renew_s":15,"cancel":false,"surprise":1}`))
-	}))
-	defer srv.Close()
-	_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
-	assert.Error(t, err, "an answer with a field wire does not know is not wwd's")
+// A peer's answer is read for what the contract says — framing, types, values — but a field of a later build is skipped (#3710).
+func TestPeerAnswerToleratesAFieldOfALaterBuildButNotAWrongValue(t *testing.T) {
+	for body, wantErr := range map[string]bool{
+		`{"lease_s":60,"renew_s":15,"cancel":false,"surprise":1}`:      false,
+		`{"lease_s":"sixty","renew_s":15,"cancel":false,"surprise":1}`: true,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+		_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
+		assert.Equal(t, wantErr, err != nil, body)
+		srv.Close()
+	}
 }
 
 func TestPeerRefusesAnAnswerOverTheLimitEvenWhenItsPrefixIsValid(t *testing.T) {

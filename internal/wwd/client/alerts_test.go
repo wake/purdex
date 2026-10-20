@@ -50,9 +50,8 @@ func TestAlerts_AnUnknownHostIsStillAnError(t *testing.T) {
 
 func TestAlerts_RefusesWhatTheContractRefuses(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown field": `{"host":"air26","alerts":[],"extra":1}`,
-		"bad kind":      `{"host":"air26","alerts":[{"key":"k","kind":"meltdown","level":"push","since":"2026-10-19T04:00:00Z","last":"2026-10-19T04:00:00Z","cleared_at":null}]}`,
-		"no host":       `{"host":"","alerts":[]}`,
+		"bad kind": `{"host":"air26","alerts":[{"key":"k","kind":"meltdown","level":"push","since":"2026-10-19T04:00:00Z","last":"2026-10-19T04:00:00Z","cleared_at":null}]}`,
+		"no host":  `{"host":"","alerts":[]}`,
 	} {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /v1/alerts", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) })

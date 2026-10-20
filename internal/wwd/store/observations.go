@@ -66,7 +66,7 @@ func (s *Store) LoadObservations(since time.Time) ([]wire.Observation, error) {
 		if err := rows.Scan(&rec); err != nil {
 			return nil, err
 		}
-		o, err := wire.Decode[wire.Observation]([]byte(rec))
+		o, err := wire.DecodeLenient[wire.Observation]([]byte(rec))
 		if err != nil {
 			skipped++
 			continue

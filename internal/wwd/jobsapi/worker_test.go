@@ -152,13 +152,15 @@ func TestClaimTakesOnlyAWellFormedRequestOfAQueuedJob(t *testing.T) {
 	r := workerRig(t)
 	id := r.submit(t)
 	for name, body := range map[string]any{
-		"no worker":     wire.ClaimRequest{},
-		"unknown field": `{"worker":"w","bogus":1}`,
-		"not json":      "{",
-		"empty":         "",
+		"no worker": wire.ClaimRequest{},
+		"not json":  "{",
+		"empty":     "",
 	} {
 		assert.Equal(t, 400, call(r.peer, "POST", "/v1/jobs/"+id+"/claim", body).Code, name)
 	}
+	// a worker of a later build may send a field this one does not know (#3710): skipped, and the claim is taken
+	other := r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	assert.Equal(t, 200, call(r.peer, "POST", "/v1/jobs/"+other+"/claim", `{"worker":"w","bogus":1}`).Code, "an unknown field in a worker's call")
 	r.claim(t, r.peer, id, "air26")
 	w := call(r.peer, "POST", "/v1/jobs/"+id+"/claim", wire.ClaimRequest{Worker: "mserv"})
 	require.Equal(t, 409, w.Code, "first wins")
@@ -176,13 +178,12 @@ func TestBadClaimIDsAndBodies(t *testing.T) {
 		method, path string
 		body         any
 	}{
-		"start bad id":      {"POST", "/start", `{"claim_id":"short"}`},
-		"start unknown key": {"POST", "/start", `{"claim_id":"` + c.ClaimID + `","x":1}`},
-		"heartbeat empty":   {"POST", "/heartbeat", ""},
-		"result bad state":  {"POST", "/result", wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateQueued}},
-		"result reason":     {"POST", "/result", wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Reason: "oom"}},
-		"log no claim":      {"PUT", "/log", "x"},
-		"log bad claim":     {"PUT", "/log?claim_id=zz", "x"},
+		"start bad id":     {"POST", "/start", `{"claim_id":"short"}`},
+		"heartbeat empty":  {"POST", "/heartbeat", ""},
+		"result bad state": {"POST", "/result", wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateQueued}},
+		"result reason":    {"POST", "/result", wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Reason: "oom"}},
+		"log no claim":     {"PUT", "/log", "x"},
+		"log bad claim":    {"PUT", "/log?claim_id=zz", "x"},
 	} {
 		assert.Equal(t, 400, call(r.peer, tc.method, "/v1/jobs/"+id+tc.path, tc.body).Code, name)
 	}
@@ -190,6 +191,8 @@ func TestBadClaimIDsAndBodies(t *testing.T) {
 	huge := wire.ClaimRequest{Worker: "air26", Labels: []string{strings.Repeat("x", 2<<20)}}
 	assert.Equal(t, 400, call(r.peer, "POST", "/v1/jobs/"+r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })+"/claim", huge).Code)
 	assert.Equal(t, 404, call(r.peer, "POST", "/v1/jobs/..%2Fx/start", claimBody(c.ClaimID)).Code)
+	// a field of a later build in a worker's call is skipped (#3710), where a bad claim id in it is still refused (above)
+	assert.Equal(t, 200, call(r.peer, "POST", "/v1/jobs/"+id+"/start", `{"claim_id":"`+c.ClaimID+`","x":1}`).Code, "start with an unknown key")
 	assert.Equal(t, 405, call(r.peer, "GET", "/v1/jobs/"+id+"/claim", nil).Code, "the worker routes take the verb the spec names")
 }
 
