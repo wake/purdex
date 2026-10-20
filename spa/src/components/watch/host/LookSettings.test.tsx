@@ -191,5 +191,19 @@ describe('apply to all, and back to the default', () => {
     expect(ind(AIR)).toEqual({ shape: 'bar', data: ['disk'] })
   })
 
+  it('"to all" says how many hosts the store had no room for, instead of claiming all (codex attack)', () => {
+    const hex = (n: number) => n.toString(16).padStart(16, '0')
+    usePoolHostsStore.setState({ order: [], looks: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [hex(i + 1), { icon: 'Cube' }])) })
+    mount(monitorHost(MSERV, 'mserv', null))
+    fireEvent.click(screen.getByTestId('look-apply-all'))
+    expect(screen.getByTestId('look-apply-partial')).toHaveTextContent(t('watch.look.apply_partial', { n: 4 }))
+  })
+
+  it('"to all" says nothing when every host was written', () => {
+    mount(monitorHost(MSERV, 'mserv', null))
+    fireEvent.click(screen.getByTestId('look-apply-all'))
+    expect(screen.queryByTestId('look-apply-partial')).toBeNull()
+  })
+
   function pick2() { fireEvent.click(screen.getByRole('button', { name: t('watch.look.shape.bars') })) }
 })

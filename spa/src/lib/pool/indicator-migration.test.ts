@@ -131,6 +131,43 @@ describe('migrateGlobalIndicator — the hosts are not known yet', () => {
   })
 })
 
+describe('migrateGlobalIndicator — a store that is full (codex attack)', () => {
+  const hex = (n: number) => n.toString(16).padStart(16, '0')
+  const staleLooks = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [hex(i + 1), { icon: 'Cube' }]))
+
+  it('a host the store has no room for is not written, so the marker is not written either: the next start tries again', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    usePoolHostsStore.setState({ order: [], looks: staleLooks(32) }) // 32 looks: the store takes no 33rd
+    answerPool([MLAB])
+    migrateGlobalIndicator()
+    expect(usePoolHostsStore.getState().looks[MLAB]).toBeUndefined()
+    expect(localStorage.getItem(MARKER)).toBeNull()
+    // the hosts that do have a look were filled in
+    expect(usePoolHostsStore.getState().looks[hex(1)]?.indicator).toEqual(BARS_CPU_MEM)
+  })
+
+  it('once there is room again, the next run finishes the job and writes the marker', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    usePoolHostsStore.setState({ order: [], looks: staleLooks(32) })
+    answerPool([MLAB])
+    migrateGlobalIndicator()
+    const { [hex(32)]: _gone, ...rest } = usePoolHostsStore.getState().looks
+    void _gone
+    usePoolHostsStore.setState({ looks: rest })
+    migrateGlobalIndicator()
+    expect(indicators()[MLAB]).toEqual(BARS_CPU_MEM)
+    expect(localStorage.getItem(MARKER)).not.toBeNull()
+  })
+
+  it('an id that is not a wwd host id cannot be stored and does not keep the marker away for good', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    usePoolStore.setState({ hosts: [poolHost('x', 'not-a-host-id'), poolHost('m', MLAB)], sourceHostId: 'cfg-a' } as never)
+    migrateGlobalIndicator()
+    expect(indicators()[MLAB]).toEqual(BARS_CPU_MEM)
+    expect(localStorage.getItem(MARKER)).not.toBeNull()
+  })
+})
+
 describe('after the control is gone', () => {
   it('a reader who had chosen the double bar still sees it on the sidebar: the look the sidebar resolves has the indicator', () => {
     useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })

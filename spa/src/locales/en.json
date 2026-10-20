@@ -3605,5 +3605,6 @@
   "watch.alert.unreach_wwd": "Alert when wwd does not answer (the host is still up)",
   "watch.alert.unreach_host": "Alert when the host is offline",
   "watch.alert.unreach_d": "The current value and changing it wait for the settings API (S9).",
-  "watch.alert.unreach_pending": "waiting for the settings API"
+  "watch.alert.unreach_pending": "waiting for the settings API",
+  "watch.look.apply_partial": "{{n}} hosts could not be saved: the store keeps a limited number of looks."
 }

@@ -17,9 +17,11 @@ function markMigrated(): void {
   try { localStorage.setItem(STORAGE_KEYS.POOL_INDICATOR_MIGRATED, '1') } catch { /* a failed write only means the next boot looks again; filling in what is missing twice is harmless */ }
 }
 
+// Only a wwd host id (16 lowercase hex) can be stored in the pool hosts store; anything else would never be written, and would keep the marker away for good.
+const HOST_ID = /^[0-9a-f]{16}$/
 function knownHostIds(): string[] {
   const own = usePoolHostsStore.getState()
-  return [...new Set([...own.order, ...Object.keys(own.looks), ...usePoolStore.getState().hosts.map((h) => h.host_id)])]
+  return [...new Set([...own.order, ...Object.keys(own.looks), ...usePoolStore.getState().hosts.map((h) => h.host_id)])].filter((id) => HOST_ID.test(id))
 }
 
 /** Writes the converted global value into every known host that has no indicator of its own, then marks this device done. A global value that converts to the default writes nothing. */
@@ -29,6 +31,9 @@ function copyNow(ids: readonly string[]): void {
     const indicator = defaultIndicator(global)
     const { patchLook } = usePoolHostsStore.getState()
     for (const id of ids) patchLook(id, (cur) => (cur?.indicator !== undefined ? cur : { ...cur, indicator }))
+    // The store holds at most MAX_POOL_HOSTS looks and refuses a new one beyond that. A host it had no room for has not been written: no marker, so the next start tries again (until then the global value still reads for it).
+    const looks = usePoolHostsStore.getState().looks
+    if (ids.some((id) => looks[id]?.indicator === undefined)) return
   }
   markMigrated()
 }

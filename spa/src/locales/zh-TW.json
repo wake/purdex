@@ -3605,5 +3605,6 @@
   "watch.alert.unreach_wwd": "wwd 沒有回應（主機還在）時告警",
   "watch.alert.unreach_host": "主機離線時告警",
   "watch.alert.unreach_d": "現值與修改要等設定 API（S9）。",
-  "watch.alert.unreach_pending": "等設定 API"
+  "watch.alert.unreach_pending": "等設定 API",
+  "watch.look.apply_partial": "有 {{n}} 台沒有存到：外觀最多只能存固定的台數。"
 }

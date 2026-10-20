@@ -44,6 +44,14 @@ export function LookSettings({ host }: { host: MonitorHost }) {
   const t = useI18nStore((s) => s.t)
   const listed = useMonitorHosts()
   const [mode, setModeState] = useState<HostColorMode>(() => readLookMode(host.hostId))
+  // How many hosts the last 「套用到全部」 could not be written for (the store keeps a limited number of looks).
+  const [notWritten, setNotWritten] = useState(0)
+  const applyAll = () => {
+    const ids = listed.map((h) => h.hostId)
+    usePoolHostsStore.getState().setIndicatorForAll(ids, indicator)
+    const looks = usePoolHostsStore.getState().looks
+    setNotWritten(ids.filter((id) => looks[id]?.indicator === undefined).length)
+  }
   const setMode = (m: HostColorMode) => { writeLookMode(host.hostId, m); setModeState(m) }
   const look = host.look
   const indicator = look.indicator
@@ -89,9 +97,10 @@ export function LookSettings({ host }: { host: MonitorHost }) {
             </span>
             <span className="flex items-center gap-2">
               <button type="button" data-testid="look-apply-all" className={BTN}
-                onClick={() => usePoolHostsStore.getState().setIndicatorForAll(listed.map((h) => h.hostId), indicator)}>{t('watch.look.apply_all', { n: listed.length })}</button>
+                onClick={applyAll}>{t('watch.look.apply_all', { n: listed.length })}</button>
               <button type="button" data-testid="look-reset" className={BTN} onClick={() => write(DEFAULT_INDICATOR)}>{t('watch.look.reset')}</button>
             </span>
+            {notWritten > 0 && <span data-testid="look-apply-partial" role="alert" className="text-xs text-status-warning-text">{t('watch.look.apply_partial', { n: notWritten })}</span>}
           </div>
         </SettingItem>
       </div>
