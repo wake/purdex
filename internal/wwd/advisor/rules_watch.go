@@ -180,7 +180,7 @@ const (
 	// swapJitter older than the window and the history must cover swapMinSpan of it. The newest record must be now's (swapFresh).
 	swapWindow  = 30 * time.Minute
 	swapJitter  = 30 * time.Second
-	swapMinSpan = 25 * time.Minute
+	swapMinSpan = 28 * time.Minute // the newest whole minute ended up to 90 s ago and the oldest may be 30 s older than the window
 	swapFresh   = 90 * time.Second
 	// swapBaseMB is the growth that raises it up to swapBaseRAMMB of RAM; above that it grows in proportion (24 GB: 750 MB).
 	swapBaseMB    = 500
@@ -217,7 +217,8 @@ func (r SwapGrowth) Eval(in Input) (Verdict, error) {
 	var first, last *wire.Facts
 	recs := in.Minutes(in.Now.Add(-swapWindow - swapJitter))
 	for i := range recs {
-		if recs[i].At.After(in.Now) || recs[i].Mem.SwapUsedMB == nil {
+		// whole minutes only (the history includes the minute being filled, and a record without stats cannot say what it saw)
+		if recs[i].At.After(in.Now) || recs[i].Mem.SwapUsedMB == nil || !minuteFull(recs[i]) {
 			continue
 		}
 		if first == nil {

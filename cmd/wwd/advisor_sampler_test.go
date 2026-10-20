@@ -107,9 +107,11 @@ func TestWatchRulesAndFailedSamples(t *testing.T) {
 func TestSwapGrowthJudgesTheRealSamplersMinutes(t *testing.T) {
 	r := newSamplerRig()
 	end := time.Now().Truncate(time.Minute)
-	for m := 0; m <= 31; m++ { // one sample at the start of each minute, so each minute rolls up to one record
+	for m := 0; m <= 31; m++ { // twelve samples in each minute, so each rolls up to a whole minute (the rule counts whole minutes only)
 		r.swapMB = uint64(1000 + m*20) // +20 MB a minute: 600 MB over the last 30
-		r.s.Tick(end.Add(-time.Duration(31-m) * time.Minute))
+		for k := 0; k < 12; k++ {
+			r.s.Tick(end.Add(-time.Duration(31-m) * time.Minute).Add(time.Duration(k) * 5 * time.Second))
+		}
 	}
 	r.s.Tick(end.Add(5 * time.Second)) // closes the last minute
 	in := r.input()

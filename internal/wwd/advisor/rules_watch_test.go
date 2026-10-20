@@ -386,3 +386,40 @@ func TestSwapGrowth_ShortHistoryAndMissingReadings(t *testing.T) {
 		t.Error("no minute history must be unjudged")
 	}
 }
+
+// The minute still being filled is not a whole minute (the history includes it): a short rise inside it must not raise the alert, and the
+// growth is measured between whole minutes only (plan: 整分鐘紀錄，窗末減窗首).
+func TestSwapGrowth_LeavesOutThePartialMinute(t *testing.T) {
+	recs := swapMinutes(30, 1000, 100, 16384) // 100 MB over the 30 whole minutes
+	partial := minute(0, wire.ZoneNormal, 1900)
+	partial.At = t0.Add(30 * time.Second)
+	partial.Stats.SampledS = 20 // 20 of 60 s sampled so far
+	partial.Mem.TotalMB = 16384
+	now := t0.Add(30 * time.Second)
+	if v, err := (SwapGrowth{}).Eval(minutesInput(now, append(recs, partial)...)); err != nil || v.Holds {
+		t.Fatalf("a rise inside the minute being filled raised the alert: %+v %v", v, err)
+	}
+	// a record that cannot say how much of its minute it saw (no stats) is not a whole minute either
+	big := swapMinutes(30, 1000, 900, 16384)
+	for i := range big {
+		big[i].Stats = nil
+	}
+	if v, _ := (SwapGrowth{}).Eval(minutesInput(t0, big...)); v.Holds {
+		t.Error("records without stats counted as whole minutes")
+	}
+}
+
+// 28 minutes of whole-minute history is the least that stands for the 30 minute window (the newest whole minute ended up to 90 s ago, the
+// oldest may be 30 s older than the window): a 27 minute one is not enough, and a raised alert is left as it was.
+func TestSwapGrowth_NeedsTwentyEightMinutesOfWholeMinutes(t *testing.T) {
+	short := swapMinutes(27, 1000, 900, 16384)
+	if v, err := (SwapGrowth{}).Eval(minutesInput(t0, short...)); err != nil || v.Holds {
+		t.Errorf("27 minutes, not raised: %+v %v", v, err)
+	}
+	if _, err := (SwapGrowth{}).Eval(raisedAs(minutesInput(t0, short...), "swap_growth")); err == nil {
+		t.Error("27 minutes judged a raised alert")
+	}
+	if v, err := (SwapGrowth{}).Eval(minutesInput(t0, swapMinutes(28, 1000, 900, 16384)...)); err != nil || !v.Holds {
+		t.Errorf("28 minutes: %+v %v", v, err)
+	}
+}
