@@ -11,6 +11,8 @@ import { useRebuildStore } from '../stores/useRebuildStore'
 import { useHostLookStore } from '../stores/useHostLookStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useQuickReplyPrefsStore } from '../stores/useQuickReplyPrefsStore'
+import { useHistoryStore } from '../stores/useHistoryStore'
+import { teamGroupKey } from './task-groups/group-key'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { __resetMasterWorldForTest } from './profile/master-world'
 import { syncIdOfSync } from './profile/host-identity'
@@ -1334,3 +1336,96 @@ describe('reresolveRestoredHost', () => {
   })
 })
 
+
+// #3685 — a tab closed before a host is recognised or removed is reopened later: its layout (and its team placement) must name the host as the device does now.
+describe('the closed-tab history (#3685)', () => {
+  const closed = (id: string, hostId: string, over: Partial<Tab> = {}) => ({ tab: { ...tab(id, leaf(`p-${id}`, tmux(hostId))), ...over }, closedAt: 5 })
+  const seedClosed = () => useHistoryStore.setState({
+    closedTabs: [
+      closed('c1', WIRE, { group: teamGroupKey(`${WIRE}\u0000t1`) }),
+      closed('c2', UNKNOWN),
+      closed('c3', LOCAL),
+    ],
+  })
+
+  it('the pass rewrites a closed tab\'s layout host and team placement; unchanged records keep their identity; reopening gives the local ids', () => {
+    seedClosed()
+    const before = useHistoryStore.getState().closedTabs
+    expect(runHostReresolve()).toBe('done')
+    const after = useHistoryStore.getState().closedTabs
+    expect(hostIdsIn(after[0].tab.layout)).toEqual([LOCAL])
+    expect(after[0].tab.group).toBe(teamGroupKey(`${LOCAL}\u0000t1`))
+    expect(after[0].closedAt).toBe(5)
+    expect(after[1]).toBe(before[1]) // UNKNOWN: untouched, same object
+    expect(after[2]).toBe(before[2]) // already local
+    const reopened = useHistoryStore.getState().reopenLast()
+    expect(reopened).not.toBeNull() // the last record (c3) comes back first; the rewritten one is still in the list
+    expect(hostIdsIn(useHistoryStore.getState().closedTabs[0].tab)).toEqual([LOCAL])
+  })
+
+  it('a second run changes nothing: the list keeps its identity', () => {
+    seedClosed()
+    runHostReresolve()
+    const after = useHistoryStore.getState().closedTabs
+    runHostReresolve()
+    expect(useHistoryStore.getState().closedTabs).toBe(after)
+  })
+
+  it('rewriteHostRefs (the deletion\'s direction: local → wire) rewrites the history as well', () => {
+    useHistoryStore.setState({ closedTabs: [closed('c1', LOCAL, { group: teamGroupKey(`${LOCAL}\u0000t1`) })] })
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    const rec = useHistoryStore.getState().closedTabs[0]
+    expect(hostIdsIn(rec.tab.layout)).toEqual([WIRE])
+    expect(rec.tab.group).toBe(teamGroupKey(`${WIRE}\u0000t1`))
+  })
+
+  it('a later step failing puts the history back with the rest (all or nothing, same objects); the retry lands', () => {
+    vi.useFakeTimers()
+    seedClosed()
+    const before = useHistoryStore.getState().closedTabs
+    const real = Storage.prototype.setItem
+    let left = 1
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.NEW_TAB_LAYOUT && left > 0) { left--; throw new DOMException('quota', 'QuotaExceededError') }
+      real.call(this, k, v)
+    })
+    requestHostReresolve()
+    expect(useHistoryStore.getState().closedTabs).toBe(before)
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(hostIdsIn(useHistoryStore.getState().closedTabs[0].tab.layout)).toEqual([LOCAL])
+    vi.restoreAllMocks()
+  })
+
+  it('the browse history (what the History page reopens a tab from) is rewritten too; unchanged records keep their identity; wire → local and local → wire', () => {
+    const rec = (hostId: string) => ({ tabId: 'x', paneContent: tmux(hostId), visitedAt: 1 })
+    useHistoryStore.setState({ browseHistory: [rec(WIRE), rec(UNKNOWN), rec(LOCAL)] })
+    const before = useHistoryStore.getState().browseHistory
+    expect(runHostReresolve()).toBe('done')
+    const after = useHistoryStore.getState().browseHistory
+    expect(hostIdsIn(after[0].paneContent)).toEqual([LOCAL])
+    expect(after[1]).toBe(before[1])
+    expect(after[2]).toBe(before[2])
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    expect(hostIdsIn(useHistoryStore.getState().browseHistory[0].paneContent)).toEqual([WIRE])
+  })
+
+  it('a file or execution pane in the browse history moves its host too', () => {
+    useHistoryStore.setState({ browseHistory: [
+      { tabId: 'e', paneContent: { kind: 'editor', source: { type: 'daemon', hostId: WIRE }, filePath: '/a' }, visitedAt: 1 },
+      { tabId: 'x', paneContent: { kind: 'execution', executionId: 'e', host: WIRE }, visitedAt: 2 },
+    ] })
+    runHostReresolve()
+    expect(hostIdsIn(useHistoryStore.getState().browseHistory)).toEqual([LOCAL, LOCAL])
+  })
+
+  it('a record another window closed (storage only) is rewritten too: the store is re-read first', () => {
+    seedClosed()
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) ?? '{"state":{},"version":0}')
+    raw.state = { ...(raw.state ?? {}), closedTabs: [closed('other', WIRE)] }
+    localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(raw))
+    runHostReresolve()
+    const list = useHistoryStore.getState().closedTabs
+    expect(list.map((r) => r.tab.id)).toEqual(['other'])
+    expect(hostIdsIn(list[0].tab.layout)).toEqual([LOCAL])
+  })
+})
