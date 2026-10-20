@@ -32,20 +32,22 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 
 等級只決定**還有誰**知道：`watch` 只有你；`digest` 另進每日摘要；`push` 另推使用者手機（推播開關打開時）。
 
-| 規則 | 等級 | 條件（摘要） | 你的處置 |
-|---|---|---|---|
-| `pressure_watch` | watch | 最近 60 秒每個樣本都在壓力中，或 30 分鐘內從平靜進入壓力 ≥ 2 次；10 分鐘沒有壓力樣本才清 | 找原因：`top -o mem`（不要用 RSS 排）、`pdx wwd pool`、該台在跑的 job。請擁有者把 tsc／多檔測試改送 `pdx test`、收掉瀏覽器／模擬器／dev server／閒置 member。必要時讓該台少領工作（見「你可以調的東西」） |
-| `pressure_danger` | push | macOS 壓力 4 任一樣本；Linux PSI full10 ≥ 10 或 some60 ≥ 25；2 分鐘沒有才清 | 立即：`pdx wwd hold <主機> …` 擋新工作，通知各線暫停送測試，告訴使用者 |
-| `pressure_held` | push | 壓力 ≥ warning 持續 ≥ 5 分鐘且 swap 增加 ≥ 1 GB；壓力回 normal 才清 | 同 `pressure_danger`，並找出 swap 漲的那棵行程樹 |
-| `swap_growth` | watch | 30 分鐘內 swap 增量 ≥ 門檻（16 GB RAM 為 500 MB，按 RAM 比例） | 找吃記憶體的行程樹，請擁有者收 |
-| `thrash` | digest | macOS 壓縮器 > 4 GiB 且解壓 > 8 萬／秒持續 ≥ 60 秒 | 同 `pressure_watch` |
-| `resident_growth` | digest | 單一常駐行程 footprint ≥ max(4 GB, RAM 25%) | 查是哪個行程。預期內的大常駐要不要列進 `known_residents` 是使用者的決定，只提議 |
-| `disk_falling` | digest | 剩 < 14 GB，或每小時降 ≥ 2 GB 且 6 小時內預估 < 10 GB | 量大頭（Go 建置快取、wwd gocache／deps、worktree），告訴擁有者；修剪共用快取前問使用者 |
-| `disk_low` | push | 剩 < 12 GB | 同上，且要快：低於 wwd 的 disk floor 時該台不再領 heavy |
-| `mserv_service` | push | mserv PSI some avg60 ≥ 10 連兩分鐘，或 MemAvailable < 1.5 GiB | 找 mserv 上的大戶；牽涉正式站的服務先問那個站的 lead |
-| `orphans` | digest（fork 迴圈升 push） | ppid=1、在開發路徑（worktree、scratch、pdx-tmp、test-wwd、playwright、codex-broker）且已超過工作時間的行程，或持續 fork 的 ppid=1 shell | 找擁有者收；fork 迴圈告訴使用者 |
-| `worker_crash_loop` | push | 1 小時內 wwd 啟動 ≥ 3 次 | **先對啟動紀錄**（launchctl／journal）：部署與計畫內重啟也會被算進去 |
-| `silence` | push | 對端 wwd 讀不到超過 3 分鐘（不報 air19）；或本機 Purdex daemon 沒來讀警報 | 確認主機與 wwd／daemon 是否活著；部署期間的重啟屬預期 |
+**警報消失不等於恢復。** 有幾條在資料過期、讀不到時也會清（表中「清除條件」有寫），清掉時看一次 `watch/report-wwd.sh` 確認真的好了。反過來，規則判斷不了（資料有洞、來源讀不到）時，已立起的警報會原樣留著，不會清。
+
+| 規則 | 等級 | 條件（摘要） | 清除條件 | 你的處置 |
+|---|---|---|---|---|
+| `pressure_watch` | watch | 最近 60 秒每個樣本都在壓力中，或 30 分鐘內從平靜進入壓力 ≥ 2 次 | 連續 10 分鐘完整讀到、且沒有壓力樣本（有洞不清） | 找原因：`top -o mem`（不要用 RSS 排）、`pdx wwd pool`、該台在跑的 job。請擁有者把 tsc／多檔測試改送 `pdx test`、收掉瀏覽器／模擬器／dev server／閒置 member。必要時讓該台少領工作（見「你可以調的東西」）。#3850 修好前：清掉後若 30 分鐘窗內仍有 2 次進入，會立刻重新立起、再叫你一次——10 分鐘內沒有新的壓力樣本就是這個誤報，記一行即可 |
+| `pressure_danger` | push | macOS 壓力 4 任一樣本；Linux PSI full10 ≥ 10 或 some60 ≥ 25 | 2 分鐘沒有這樣的樣本 | 立即：`pdx wwd hold <主機> …` 擋新工作，通知各線暫停送測試，告訴使用者 |
+| `pressure_held` | push | 連續 5 個完整分鐘都在 warning 以上，且這 5 分鐘 swap 增加 ≥ 1 GB | 最新的完整分鐘不在 warning 以上；**也會在沒證明恢復時清**：最新一分鐘的資料超過 90 秒沒更新，或 150 秒內沒有完整的一分鐘 | 同 `pressure_danger`，並找出 swap 漲的那棵行程樹；清掉時看一次 report-wwd.sh |
+| `swap_growth` | watch | 30 分鐘內 swap 增量 ≥ 門檻：RAM ≤ 16 GB 一律 500 MB，超過 16 GB 按比例（24 GB 為 750 MB）；`[advisor] swap_growth_mb` 可覆寫 | 30 分鐘增量降到門檻一半以下（歷史不滿 30 分鐘時不清） | 找吃記憶體的行程樹，請擁有者收 |
+| `thrash` | digest | macOS 壓縮器 > 4 GiB 且解壓 > 8 萬／秒，最近 60 秒每個樣本都是 | 最近 60 秒有任一樣本不符（立即清） | 同 `pressure_watch` |
+| `resident_growth` | digest | 單一系統／常駐行程的 footprint ≥ max(4 GB, RAM 25%)（模擬器除外）；列在 `known_residents` 的，主機可用 ≥ 50% 且 10 分鐘內 swap 沒漲時不報 | 沒有超標的行程（或只剩被豁免的） | 查是哪個行程。預期內的大常駐要不要列進 `known_residents` 是使用者的決定，只提議 |
+| `disk_falling` | digest | 剩 < 14 GB，或最近一小時每小時降 ≥ 2 GB 且 6 小時內預估 < 10 GB | 剩 ≥ 14 GB 且斜率條件不成立 | 量大頭（Go 建置快取、wwd gocache／deps、worktree），告訴擁有者；修剪共用快取前問使用者 |
+| `disk_low` | push | 剩 < 12 GB | 回到 ≥ 12.5 GB | 同上，且要快：低於 wwd 的 disk floor 時該台不再領 heavy |
+| `mserv_service` | push | mserv（Linux）正式服務的 PSI some avg60 ≥ 10 連兩個完整分鐘且此刻仍是，或 MemAvailable < 1.5 GiB | 記憶體分支要回到 ≥ 1.75 GiB；PSI 分支在此刻 some60 < 10 就清（讀不到 PSI 也會清） | 找 mserv 上的大戶；牽涉正式站的服務先問那個站的 lead |
+| `orphans` | digest；fork 迴圈持續 ≥ 10 分鐘升 push | ppid=1、在開發路徑（worktree、scratch、pdx-tmp、test-wwd、playwright、codex-broker）且活了 ≥ 2 小時的行程，或每秒 fork > 10 個子行程的 ppid=1 shell | 掃描結果沒有這類行程 | 找擁有者收；fork 迴圈告訴使用者 |
+| `worker_crash_loop` | push | 1 小時內 wwd 啟動 ≥ 3 次 | 最近 1 小時的啟動數 < 3 | **先對啟動紀錄**（launchctl／journal）：部署與計畫內重啟也會被算進去 |
+| `silence` | push | 對端 wwd 讀不到超過 3 分鐘（air19 這種會睡的筆電不報）；或本機 Purdex daemon 3 分鐘沒來讀警報（`partner_down`） | 對端又讀得到（daemon 又來讀） | 確認主機與 wwd／daemon 是否活著；部署期間的重啟屬預期 |
 
 處理完寫進 `log/<日期>.md`：哪台、哪條規則、查到什麼、做了什麼、告訴了誰。
 
@@ -62,8 +64,8 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 
 每次調整都要**告訴人**：哪台主機、什麼、舊值 → 新值、為什麼，並記進日誌。
 
-- **worker 開關與名額**：`pdx wwd worker on|off [--heavy N] [--light N]`，只作用在執行它的那台。先 `pdx wwd status` 讀現值，寫完再讀一次確認。調另一台就 `ssh <alias>` 在那台做；沒有 pdx CLI 的主機（mserv）照 `watch/README.md` 的本機 socket 做法。**不要直接執行 wwd 的二進位**：它的子指令是部署用的；`wwd help` 這類它不認得的字，在 #3843 修好之前會被當成再啟動一個服務。
-- **讓一台暫時少領工作**：`pdx wwd hold <host> --for <dur> --reason <text>`（不再領新的 heavy；`--allow-class`／`--allow-repo` 留例外），結束用 `pdx wwd exception stop <名字> --host <host>`。正在跑的 job 不受影響。
+- **worker 開關與名額**：`pdx wwd worker on|off [--heavy N] [--light N]`，只作用在執行它的那台。先 `pdx wwd status` 讀現值，寫完再讀一次確認。調另一台就 `ssh <alias>` 在那台做；沒有 pdx CLI 的主機（mserv）照 `watch/README.md` 的本機 socket 做法。**不要直接執行 wwd 的二進位**：它的子指令是部署用的；`wwd help` 這類不認得的字，在 #3843 修好前會被當成再啟動一個服務。
+- **讓一台暫時不領工作**：`pdx wwd hold <host> --for <dur> --reason <text>`，預設 **heavy 與 light 都停**；加 `--allow-class release|merge|dev`／`--allow-repo <repo>` 時只領那些類別或 repo 的工作；`--release` 是發版保留（期間該台 light 降到 1）。指令會等到該台 facts 顯示 hold 才返回（30 秒），沒出現就失敗。結束用 `pdx wwd exception stop <名字> --host <host>`。正在跑的 job 不受影響。
 - **佇列順序**：`pdx jobs move <id> front|back|hold|normal`（只對本機佇列中的工作）。使用者回報的 bug、merge 前驗證、發版優先。
 - **取消別人的 job**：只在擁有者或它的 lead 同意後 `pdx jobs cancel <id>`。
 
