@@ -39,6 +39,8 @@ type SeriesPoint struct {
 	WorkerRunning  *Slots       `json:"worker_running"`
 	QueueQueued    *int         `json:"queue_queued"`
 	Disks          []SeriesDisk `json:"disks"`
+	// DiskIO is the throughput of each physical disk, as the record has it (spec §2.3); null when the record has none.
+	DiskIO []DiskIO `json:"disk_io"`
 
 	// The small host figures (spec §2.3): the process count, wwd's own use, the swap total and the memory breakdown. Null when absent.
 	ProcsTotal     *int     `json:"procs_total"`
@@ -151,6 +153,10 @@ func SeriesOf(h FactsHistoryResponse, limit int) FactsSeriesResponse {
 		p.MemInactiveMB, p.MemFileCacheMB = copyPtr(f.Mem.InactiveMB), copyPtr(f.Mem.FileCacheMB)
 		if f.Self != nil {
 			p.SelfCPUPct, p.SelfRSSMB = copyPtr(f.Self.CPUPct), copyPtr(f.Self.RSSMB)
+		}
+		for _, d := range f.DiskIO {
+			p.DiskIO = append(p.DiskIO, DiskIO{Device: d.Device, ReadBps: copyPtr(d.ReadBps), WriteBps: copyPtr(d.WriteBps),
+				ReadIOPS: copyPtr(d.ReadIOPS), WriteIOPS: copyPtr(d.WriteIOPS)})
 		}
 		for _, d := range f.Disk {
 			p.Disks = append(p.Disks, SeriesDisk{Mount: d.Mount, UsedPct: d.UsedPct, FreeGB: d.FreeGB})
