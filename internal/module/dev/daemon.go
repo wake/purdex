@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -137,8 +138,16 @@ func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
 	latest := ""
 	cmd := execstat.Command("dev.git-log", "git", "log", "-1", "--format=%h")
 	cmd.Dir = m.repoRoot
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if out, err := cmd.Output(); err == nil {
 		latest = strings.TrimSpace(string(out))
+		if latest == "" {
+			log.Printf("dev: git log -1 in %q printed nothing (stderr %q)", m.repoRoot, strings.TrimSpace(stderr.String()))
+		}
+	} else {
+		// the answer is "no latest hash" either way; the reason is what a person looking at an empty one needs
+		log.Printf("dev: git log -1 in %q: %v (stderr %q)", m.repoRoot, err, strings.TrimSpace(stderr.String()))
 	}
 	resp := daemonCheckResponse{
 		CurrentHash: buildinfo.Hash,
