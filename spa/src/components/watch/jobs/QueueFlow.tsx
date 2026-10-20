@@ -1,22 +1,23 @@
 // spa/src/components/watch/jobs/QueueFlow.tsx — 「任務佇列」's live view (monitoring tabs spec M24, M26–M34): the summary line, the queue pool (one cell per host: the jobs it sent and why they wait) and the worker pool (one cell
 // per worker: a row per slot class). Static (M28): nothing here animates. The cards and the rows are buttons that select a job; its detail opens beside the list. The data is `lib/pool/queue-flow`.
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HardDrives, Stack } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useSidebarHostBadgeGeometry } from '../../../hooks/useSidebarHostBadgeGeometry'
-import { resolveHostBadge } from '../../../lib/host-color'
+import { resolveHostBadge, resolveHostColors } from '../../../lib/host-color'
 import { mss } from '../../../lib/watch/queue-time'
 import { jobLine, type QueueEntry } from '../../../lib/pool/jobs-lanes'
 import { whenText } from '../../../lib/pool/jobs-view'
 import { jobKey } from '../../../lib/pool/jobs-view-memory'
 import type { PoolJob } from '../../../lib/pool/jobs-types'
 import type { PoolHostResolvedLook } from '../../../lib/pool/host-looks'
-import { elapsedSince, flowSummaryOf, poolCellsOf, workerCellsOf, type Busy, type FlowHost, type PoolCell, type SlotRow, type Why, type WorkerCell } from '../../../lib/pool/queue-flow'
+import { candidateWorkersOf, elapsedSince, flowSummaryOf, poolCellsOf, workerCellsOf, type Busy, type FlowHost, type PoolCell, type SlotRow, type Why, type WorkerCell } from '../../../lib/pool/queue-flow'
 import { queueStripOf } from '../../../lib/pool/queue-strip'
 import { livenessWordOf, reasonWord } from '../../../lib/pool/words'
 import { QueueSegments } from '../../fleet/QueueStrip'
 import { HostBadge } from '../../HostBadge'
+import { QueueRoutes, type ActiveCard, type CandidateSpec } from './QueueRoutes'
 
 type T = (key: string, opts?: Record<string, string | number>) => string
 /** A host as the page gets it: `useMonitorHosts` gives the order, the state and the look. */
@@ -49,13 +50,24 @@ function whyWord(w: Why, t: T, now: number): string {
   }
 }
 
-interface Pick { selected: string | null; onSelect: (key: string | null) => void }
+/** What the pointer is on (a short-lived state of this view, not the reader's selection): it lights the routes that belong to it. */
+type Hover =
+  | { kind: 'job'; key: string }
+  | { kind: 'queued'; key: string }
+  | { kind: 'pool'; id: string }
+  | { kind: 'worker'; id: string }
+interface Lit { pools: ReadonlySet<string>; workers: ReadonlySet<string> }
+interface Pick { selected: string | null; onSelect: (key: string | null) => void; onHover: (h: Hover | null) => void; lit: Lit }
+
+const LIT_RING = 'ring-1 ring-border-active'
+/** The pointer events of a thing that lights routes. */
+const hoverProps = (onHover: Pick['onHover'], h: Hover) => ({ onMouseEnter: () => onHover(h), onMouseLeave: () => onHover(null), onFocus: () => onHover(h), onBlur: () => onHover(null) })
 
 /** A card or a row the reader can press: it selects the job, the same press lets go. */
-function Press({ jobId, selected, onSelect, className, attrs, children }: { jobId: string; className: string; attrs: Record<string, string>; children: ReactNode } & Pick) {
+function Press({ jobId, hover, selected, onSelect, onHover, className, attrs, children }: { jobId: string; hover: Hover; className: string; attrs: Record<string, string>; children: ReactNode } & Pick) {
   const on = selected === jobId
   return (
-    <button type="button" aria-pressed={on} onClick={() => onSelect(on ? null : jobId)} className={`${className} ${on ? 'ring-1 ring-border-active' : ''}`} {...attrs}>{children}</button>
+    <button type="button" aria-pressed={on} onClick={() => onSelect(on ? null : jobId)} {...hoverProps(onHover, hover)} className={`${className} ${on ? LIT_RING : ''}`} {...attrs}>{children}</button>
   )
 }
 
@@ -65,7 +77,7 @@ function QueueRow({ entry, now, ...pick }: { entry: QueueEntry; now: number } & 
   const cls = CLASSES.includes(job.class) ? t(`watch.jobs.class.${job.class}`) : job.class
   return (
     <li>
-      <Press jobId={jobKey(job.origin, job.id)} {...pick} attrs={{ 'data-q': jobKey(job.origin, job.id), title: jobLine(job) }} className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] ${held ? 'opacity-50' : ''}`}>
+      <Press jobId={jobKey(job.origin, job.id)} hover={{ kind: 'queued', key: jobKey(job.origin, job.id) }} {...pick} attrs={{ 'data-q': jobKey(job.origin, job.id), title: jobLine(job) }} className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] ${held ? 'opacity-50' : ''}`}>
         <span className="shrink-0 rounded border border-current px-1 text-[10px] leading-4 text-text-secondary">{cls}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-text-primary">{jobLine(job)}</span>
         {held && <span className="shrink-0 text-[10px] text-text-muted">{t('watch.jobs.flow.held_tag')}</span>}
@@ -83,8 +95,8 @@ function PoolCellView({ cell, state, look, now, ...pick }: { cell: PoolCell; sta
     ? t('watch.jobs.flow.unreadable', { state: livenessWordOf(t, state.state) })
     : cell.longestS !== null ? t('watch.jobs.flow.waiting', { n, time: mss(now - cell.longestS * 1000, now) }) : n > 0 ? t('watch.jobs.flow.waiting_held', { n }) : t('watch.jobs.flow.nothing_waiting')
   return (
-    <div data-testid="flow-pool-cell" data-pool={cell.hostId} style={{ flex: `${grow} 1 0` }} className="min-w-[13rem] rounded-md border border-border-default bg-surface-secondary p-2">
-      <div className="mb-1 flex items-center gap-1.5 text-xs">
+    <div data-testid="flow-pool-cell" data-pool={cell.hostId} style={{ flex: `${grow} 1 0` }} className={`min-w-[13rem] rounded-md border border-border-default bg-surface-secondary p-2 ${pick.lit.pools.has(cell.hostId) ? LIT_RING : ''}`}>
+      <div data-testid="flow-pool-head" {...hoverProps(pick.onHover, { kind: 'pool', id: cell.hostId })} className="mb-1 flex items-center gap-1.5 text-xs">
         <Badge look={look} size={14} />
         <span className="font-medium text-text-primary">{cell.alias}</span>
         <span className="min-w-0 flex-1 truncate text-text-muted">{sub}{cell.readable && cell.away > 0 && t('watch.jobs.flow.away', { n: cell.away })}</span>
@@ -107,7 +119,7 @@ function WorkerCard({ job, looks, now, ...pick }: { job: PoolJob; looks: Record<
   const since = elapsedSince(job)
   return (
     <Press
-      jobId={jobKey(job.origin, job.id)} {...pick} attrs={{ 'data-j': jobKey(job.origin, job.id), title: jobLine(job) }}
+      jobId={jobKey(job.origin, job.id)} hover={{ kind: 'job', key: jobKey(job.origin, job.id) }} {...pick} attrs={{ 'data-j': jobKey(job.origin, job.id), title: jobLine(job) }}
       className={`flex h-7 w-[200px] shrink-0 items-center gap-1.5 rounded-md px-2 text-left text-xs font-mono ${preparing ? 'border border-dashed border-status-success-text' : 'border border-status-success-text bg-status-success-text/12'}`}
     >
       <Badge look={looks[job.origin]} size={13} />
@@ -140,12 +152,13 @@ function SlotRowView({ row, looks, now, ...pick }: { row: SlotRow; looks: Record
 
 function WorkerCellView({ cell, looks, now, ...pick }: { cell: WorkerCell; looks: Record<string, PoolHostResolvedLook>; now: number } & Pick) {
   const t = useI18nStore((s) => s.t)
+  const wkId = cell.hostId || cell.alias
   const s = cell.state
   const place = s === null ? null : s.state === 'ok' ? t(`fleet.zone.${s.facts.derived.zone}`) : livenessWordOf(t, s.state)
   const total = (r: SlotRow) => (r.total === null ? '—' : r.total)
   return (
-    <div data-testid="flow-worker-cell" data-wk={cell.hostId || cell.alias} className="min-w-[13rem] flex-1 rounded-md border border-border-default bg-surface-secondary p-2">
-      <div className="mb-1 flex items-center gap-1.5 text-xs">
+    <div data-testid="flow-worker-cell" data-wk={wkId} className={`min-w-[13rem] flex-1 rounded-md border border-border-default bg-surface-secondary p-2 ${pick.lit.workers.has(wkId) ? LIT_RING : ''}`}>
+      <div data-testid="flow-worker-head" {...hoverProps(pick.onHover, { kind: 'worker', id: wkId })} className="mb-1 flex items-center gap-1.5 text-xs">
         <Badge look={looks[cell.alias]} size={14} />
         <span className="font-medium text-text-primary">{cell.alias === '' ? t('watch.jobs.lane.unknown') : cell.alias}</span>
         {place && <span className="text-text-muted">{place}</span>}
@@ -157,16 +170,44 @@ function WorkerCellView({ cell, looks, now, ...pick }: { cell: WorkerCell; looks
   )
 }
 
-export function QueueFlow({ hosts, jobs, entries, now, selected, onSelect }: { hosts: readonly FlowMonitorHost[]; jobs: readonly PoolJob[]; entries: readonly QueueEntry[]; now: number } & Pick) {
+export function QueueFlow({ hosts, jobs, entries, now, selected, onSelect }: { hosts: readonly FlowMonitorHost[]; jobs: readonly PoolJob[]; entries: readonly QueueEntry[]; now: number; selected: string | null; onSelect: (key: string | null) => void }) {
   const t = useI18nStore((s) => s.t)
-  const pick = { selected, onSelect }
+  const [hover, setHover] = useState<Hover | null>(null)
+  const flowRef = useRef<HTMLDivElement>(null)
   const looks = useMemo(() => Object.fromEntries(hosts.map((h) => [h.alias, h.look])), [hosts])
   const summary = useMemo(() => flowSummaryOf(entries, jobs), [entries, jobs])
   const strip = useMemo(() => queueStripOf(entries, SUMMARY_SEGMENTS, true), [entries])
   const pools = useMemo(() => poolCellsOf(hosts, entries, jobs), [hosts, entries, jobs])
   const workers = useMemo(() => workerCellsOf(hosts, jobs), [hosts, jobs])
+  const poolIdOf = useMemo(() => Object.fromEntries(hosts.map((h) => [h.alias, h.hostId])), [hosts])
+  // the jobs being prepared or run and where each is drawn: the routes go from its queue pool cell to its card
+  const active = useMemo((): ActiveCard[] => workers.cells.flatMap((c) => [...c.heavy.jobs, ...c.light.jobs].flatMap((j) => (poolIdOf[j.origin] !== undefined ? [{ key: jobKey(j.origin, j.id), pool: poolIdOf[j.origin], worker: c.hostId || c.alias }] : []))), [workers, poolIdOf])
+  // what the pointer is on lights routes and nothing else
+  const { highlighted, candidate, lit } = useMemo(() => {
+    const none = new Set<string>()
+    const out = { highlighted: none as ReadonlySet<string>, candidate: null as CandidateSpec | null, lit: { pools: none, workers: none } as Lit }
+    if (hover === null) return out
+    if (hover.kind === 'job') {
+      const a = active.find((x) => x.key === hover.key)
+      if (a) { out.highlighted = new Set([a.key]); out.lit = { pools: new Set([a.pool]), workers: new Set([a.worker]) } }
+    } else if (hover.kind === 'pool') {
+      out.highlighted = new Set(active.filter((x) => x.pool === hover.id).map((x) => x.key))
+      out.lit = { pools: new Set([hover.id]), workers: none }
+    } else if (hover.kind === 'worker') {
+      out.highlighted = new Set(active.filter((x) => x.worker === hover.id).map((x) => x.key))
+      out.lit = { pools: none, workers: new Set([hover.id]) }
+    } else {
+      const e = entries.find((x) => jobKey(x.job.origin, x.job.id) === hover.key)
+      const pool = e ? poolIdOf[e.job.origin] : undefined
+      if (e && pool !== undefined) { out.candidate = { pool, workers: candidateWorkersOf(e.job, hosts) }; out.lit = { pools: new Set([pool]), workers: none } }
+    }
+    return out
+  }, [hover, active, entries, hosts, poolIdOf])
+  const pick: Pick = { selected, onSelect, onHover: setHover, lit }
+  const lookByPool = useMemo(() => Object.fromEntries(hosts.map((h) => [h.hostId, h.look])), [hosts])
+  const colorOf = (pool: string): string | undefined => resolveHostColors(lookByPool[pool], 'console')?.main
   return (
-    <div data-testid="queue-flow" className="flex flex-col gap-3">
+    <div ref={flowRef} data-testid="queue-flow" className="relative flex flex-col gap-3">
       <div data-testid="flow-summary" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-secondary">
         <span className="tabular-nums">{t('watch.jobs.flow.queued', { n: summary.queued })}</span>
         <span className="tabular-nums text-text-muted">{t('watch.jobs.flow.split', { heavy: summary.heavy, light: summary.light })}</span>
@@ -180,17 +221,18 @@ export function QueueFlow({ hosts, jobs, entries, now, selected, onSelect }: { h
       </div>
       <section aria-label={t('watch.jobs.flow.queue_pool')}>
         <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text-secondary"><Stack size={14} aria-hidden="true" />{t('watch.jobs.flow.queue_pool')}<span className="font-normal text-text-muted">{t('watch.jobs.flow.queue_pool_hint')}</span></h3>
-        <div className="flex flex-wrap gap-2">
+        <div data-qtop className="flex flex-wrap gap-2">
           {pools.map((c, i) => <PoolCellView key={c.hostId} cell={c} state={hosts[i].state} look={looks[c.alias]} now={now} {...pick} />)}
         </div>
       </section>
       <section aria-label={t('watch.jobs.flow.worker_pool')}>
         <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text-secondary"><HardDrives size={14} aria-hidden="true" />{t('watch.jobs.flow.worker_pool')}<span className="font-normal text-text-muted">{t('watch.jobs.flow.worker_pool_hint')}</span></h3>
-        <div className="flex flex-wrap gap-2">
+        <div data-qbot className="flex flex-wrap gap-2">
           {workers.cells.map((c) => <WorkerCellView key={c.hostId || `w:${c.alias}`} cell={c} looks={looks} now={now} {...pick} />)}
         </div>
         {workers.off.length > 0 && <p data-testid="flow-off" className="mt-1.5 text-[11px] text-text-muted">{t('watch.jobs.flow.off_workers', { names: workers.off.join(t('watch.jobs.flow.name_sep')) })}</p>}
       </section>
+      <QueueRoutes flowRef={flowRef} active={active} highlighted={highlighted} candidate={candidate} colorOf={colorOf} />
     </div>
   )
 }

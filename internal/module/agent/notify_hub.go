@@ -150,16 +150,32 @@ func (m *Module) publishNotifyFrom(kind slotKind, code, notifyName, hookSID stri
 	if kind == kindNonTmux || notifyName == "" {
 		return
 	}
-	sid := ""
-	if kind == kindHook {
-		sid = hookSID
-	} else if p != nil {
-		switch {
-		case p.TopFrame != nil && p.TopFrame.SessionID != "":
-			sid = p.TopFrame.SessionID
-		case p.PrimaryFrame != nil:
-			sid = p.PrimaryFrame.SessionID
-		}
-	}
+	sid := notifySessionID(kind, hookSID, p)
 	m.notifies.publish(NotifyEvent{SessionCode: code, SessionName: notifyName, SessionID: sid, Event: n, FromProxy: fromProxy})
+}
+
+// notifySessionID is whose agent session a tmux frame is about (see publishNotify): the hook's own id for a hook frame,
+// else the projection's top frame, then its primary. "" for a frame outside tmux and when nothing says. The label of the
+// frame is looked up under the same id, so the feed and the label cannot disagree.
+func notifySessionID(kind slotKind, hookSID string, p *SessionProjection) string {
+	switch {
+	case kind == kindNonTmux:
+		return ""
+	case kind == kindHook:
+		return hookSID
+	case p == nil:
+		return ""
+	}
+	return projectionSessionID(p)
+}
+
+// projectionSessionID is the session id of a projection: its top frame's, else its primary frame's.
+func projectionSessionID(p *SessionProjection) string {
+	switch {
+	case p.TopFrame != nil && p.TopFrame.SessionID != "":
+		return p.TopFrame.SessionID
+	case p.PrimaryFrame != nil:
+		return p.PrimaryFrame.SessionID
+	}
+	return ""
 }

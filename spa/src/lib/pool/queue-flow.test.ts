@@ -5,7 +5,7 @@ import type { PoolFacts, PoolHost } from './types'
 import { poolHostState } from './host-state'
 import { queueEntries } from './jobs-lanes'
 import { parseFacts } from './parse'
-import { busyOf, elapsedSince, flowSummaryOf, poolCellsOf, recentEndedOf, workerCellsOf, type FlowHost } from './queue-flow'
+import { busyOf, candidateWorkersOf, elapsedSince, flowSummaryOf, poolCellsOf, recentEndedOf, workerCellsOf, type FlowHost } from './queue-flow'
 import { WAIT_LONG_S } from '../watch/queue-time'
 import darwinJson from './__fixtures__/facts_darwin.json'
 
@@ -176,5 +176,17 @@ describe('the summary, the clock and the recent ones', () => {
     const ended = (i: number) => job(`e${i}`, { state: 'succeeded', result: { exit: 0, summary: null, log: '', host: 'a', started_at: 1, finished_at: 100 + i, cache_hit: false, reason: '', superseded_by: null } })
     const r = recentEndedOf(Array.from({ length: 7 }, (_, i) => ended(i)))
     expect(r.map((j) => j.id)).toEqual(['e6', 'e5', 'e4', 'e3', 'e2'])
+  })
+})
+
+describe('candidateWorkersOf (P18)', () => {
+  const hosts = [flowHost('mlab'), flowHost('mserv', { enabled: false }), flowHost('air26', { labels: ['os:linux'] }), flowHost('air19', { labels: ['os:darwin', 'tool:php'] })]
+  it('a worker that is on and holds every label', () => {
+    expect(candidateWorkersOf(job('a', { labels: ['os:darwin'] }), hosts)).toEqual(['id-mlab', 'id-air19'])
+    expect(candidateWorkersOf(job('a', { labels: ['os:darwin', 'tool:php'] }), hosts)).toEqual(['id-air19'])
+  })
+  it('a worker that is on but lacks a label is not one, nor is a worker that is off', () => {
+    expect(candidateWorkersOf(job('a', { labels: ['os:linux'] }), hosts)).toEqual(['id-air26'])
+    expect(candidateWorkersOf(job('a', { labels: ['os:windows'] }), hosts)).toEqual([])
   })
 })
