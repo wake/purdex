@@ -189,7 +189,7 @@ describe('FactsTable', () => {
   })
 
   it('a field that is not there is a faint null, not 0', () => {
-    const host = monitorHost({}, (f) => { f.mem.swap_total_mb = null })
+    const host = monitorHost({}, (f) => { f.mem.swap_total_mb = undefined })
     if (host.state.state !== 'ok') throw new Error('seed is ok')
     render(<FactsTable pool={host.state.pool} facts={host.state.facts} />)
     expect(screen.getByTestId('fact-mem.swap_total_mb')).toHaveTextContent('null')
