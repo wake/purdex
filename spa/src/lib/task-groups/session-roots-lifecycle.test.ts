@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
+const settled = { value: true } // whether the three world stores agree (profile/master-world.ts `readMasterWorld`)
+vi.mock('../profile/master-world', () => ({ readMasterWorld: () => (settled.value ? { settled: true } : { settled: false, reason: 'epoch-mismatch' }) }))
+
 import { startSessionRootsLifecycle, setRootsInterest, ROOT_REREAD_DEBOUNCE_MS, ROOT_PRUNE_SETTLE_MS } from './session-roots-lifecycle'
 import { useRootCacheStore, rootOf } from './root-cache'
 import { useRelayQuotaStore } from '../team/relay-quota'
@@ -27,6 +30,7 @@ const tabOf = (id: string, hostId: string, agentSessionId: string): Tab => ({
 let stop: () => void
 beforeEach(() => {
   vi.useFakeTimers()
+  settled.value = true
   readFirstPage.mockReset()
   readFirstPage.mockResolvedValue({})
   useRelayQuotaStore.getState().reset()
@@ -123,6 +127,7 @@ describe('cleanup', () => {
     useTabStore.setState({ tabs: { t1: tabOf('t1', 'h1', 'ON') } })
     useLocalProfilesStore.setState({ parkedMaster: { workspaces: [], tabs: { t2: tabOf('t2', 'h1', 'PARKED') }, activeWorkspaceId: null, activeTabId: null }, slaves: {} })
     stop = startSessionRootsLifecycle()
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
     expect(rootOf('h1', 'ON')).toBe('R')
     expect(rootOf('h1', 'PARKED')).toBe('R')
     expect(rootOf('h1', 'GONE')).toBeNull()
@@ -141,6 +146,21 @@ describe('cleanup', () => {
     vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
     expect(rootOf('h1', 'CLOSED')).toBeNull()
     expect(rootOf('h1', 'ON')).toBe('R')
+  })
+
+  it('another window\'s switch that has reached only some of the stores holds the prune back, however long it takes, until the world is settled', () => {
+    useRootCacheStore.getState().ingest('h1', [q('NEXT', 'R'), q('GONE', 'R')])
+    const world = { workspaces: [], tabs: { t2: tabOf('t2', 'h1', 'NEXT') }, activeWorkspaceId: null, activeTabId: null }
+    settled.value = false // the profiles store has the switch, the tab store still the old epoch
+    useLocalProfilesStore.setState({ parkedMaster: null, slaves: {} })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS * 5)
+    expect(rootOf('h1', 'NEXT')).toBe('R')
+    expect(rootOf('h1', 'GONE')).toBe('R') // nothing is pruned while unsettled
+    useTabStore.setState({ tabs: world.tabs })
+    settled.value = true
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS * 2)
+    expect(rootOf('h1', 'NEXT')).toBe('R')
+    expect(rootOf('h1', 'GONE')).toBeNull()
   })
 
   it('does not prune in the middle of a world switch: the world about to be shown is neither parked nor on screen for a moment', () => {

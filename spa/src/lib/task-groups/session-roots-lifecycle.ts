@@ -8,6 +8,7 @@
 import { useRelayQuotaStore } from '../team/relay-quota'
 import { readFirstPage } from '../team/unattended-reader'
 import { collectLeaves } from '../pane-tree'
+import { readMasterWorld } from '../profile/master-world'
 import { rootOf, rootsSupported, useRootCacheStore } from './root-cache'
 import { daemonMismatchKey, useHostStore } from '../../stores/useHostStore'
 import { hostEndpointKey } from '../../stores/useHostConfigStore'
@@ -66,7 +67,12 @@ export function startSessionRootsLifecycle(): () => void {
 
   const schedulePrune = () => {
     if (pruneTimer !== null) clearTimeout(pruneTimer)
-    pruneTimer = setTimeout(() => { pruneTimer = null; pruneUnreferenced() }, ROOT_PRUNE_SETTLE_MS)
+    pruneTimer = setTimeout(() => {
+      pruneTimer = null
+      // Another window's switch arrives store by store, in any order (profile/switch-active.ts): until the three stores agree on one world, the tab store may not hold what is about to be shown. Ask again later.
+      if (!readMasterWorld().settled) { schedulePrune(); return }
+      pruneUnreferenced()
+    }, ROOT_PRUNE_SETTLE_MS)
   }
 
   const feed = () => {
@@ -120,7 +126,7 @@ export function startSessionRootsLifecycle(): () => void {
   ]
   evaluate = run
   feed()
-  pruneUnreferenced()
+  schedulePrune()
   run()
   return () => {
     for (const off of unsubs) off()
