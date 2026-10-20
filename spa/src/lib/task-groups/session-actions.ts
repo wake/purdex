@@ -8,6 +8,7 @@ import { collectLeaves } from '../pane-tree'
 import { hostIdentityNow } from '../team/quota-host'
 import { useTabStore } from '../../stores/useTabStore'
 import { resolveRoot } from './root-cache'
+import { personalTargetOf } from './personal'
 import {
   createManualGroup, putMemberInGroup, takeOutOfGroups, type ManualActionResult,
 } from './manual-actions'
@@ -23,13 +24,18 @@ export type SessionActionError = Extract<ManualActionResult, { ok: false }>['rea
 export type SessionActionResult = { ok: true } | { ok: false; reason: SessionActionError }
 export type SessionCreateResult = { ok: true; id: string } | { ok: false; reason: SessionActionError }
 
-/** The session the tab stands for now — the first live tmux session among its panes, as the sidebar reads a tab — or null when the tab is gone or shows none. */
+/**
+ * The session the tab stands for now (spec §3: its agent session — the first tmux pane, in tree order, that recorded an agent session id, live or ended — else the first live tmux session, which recorded none), or null when the
+ * tab is gone or shows none. A session that ended still has its tab, so its group can still be changed.
+ */
 function currentSessionOf(tabId: string): { hostId: string; agentSessionId: string | null } | null {
   const tab = useTabStore.getState().tabs[tabId]
   if (!tab) return null
+  const agent = personalTargetOf(tab)
+  if (agent !== null) return { hostId: agent.hostId, agentSessionId: agent.agentSessionId }
   const c = collectLeaves(tab.layout).map((p) => p.content).find((x) => x.kind === 'tmux-session' && !x.terminated)
   if (!c || c.kind !== 'tmux-session') return null
-  return { hostId: c.hostId, agentSessionId: c.rebuild?.agent?.sessionId ?? null }
+  return { hostId: c.hostId, agentSessionId: null }
 }
 
 const stillThere = (s: SessionRef): boolean => {

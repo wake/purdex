@@ -160,3 +160,27 @@ describe('the host is re-pointed while the root is being got (cache hit or read)
     expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
   })
 })
+
+describe('a session that ended (TG-5c, spec 3: a tab\'s agent session is live or ended)', () => {
+  const ended = () => {
+    const t = tabOf('AG1') as { layout: { pane: { content: Record<string, unknown> } } }
+    t.layout.pane.content.terminated = 'tmux-restarted'
+    return t as never
+  }
+  it('can still be filed, started from and taken out: the tab still stands for the session', async () => {
+    useRootCacheStore.getState().ingest('h1', [q('AG1', 'ROOT')])
+    useTabStore.setState({ tabs: { t1: ended() } })
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: true })
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h1', root: 'ROOT' }])
+    expect(await takeSessionOut(ref())).toEqual({ ok: true })
+    expect((await startGroupWithSession(ref(), 'New')).ok).toBe(true)
+  })
+  it('is the first pane with an agent session, not the first live pane: a live pane with another session does not stand in', async () => {
+    useRootCacheStore.getState().ingest('h1', [q('AG1', 'ROOT')])
+    const t = ended() as { layout: unknown }
+    const live = { id: 'p2', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S2', mode: 'terminal', cachedName: 'n', tmuxInstance: 'I', rebuild: { agent: { sessionId: 'AG2' } } } }
+    useTabStore.setState({ tabs: { t1: { ...t, layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [t.layout, { type: 'leaf', pane: live }] } } as never } })
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: true }) // AG1 (ended) is still the tab's session
+    expect(await fileSession(ref({ agentSessionId: 'AG2' }), 'g1')).toEqual({ ok: false, reason: 'tab-changed' })
+  })
+})
