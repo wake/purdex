@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { holdsOf, loadRecentClocks, parseClock, pauseName, PAUSE_HOURS, RECENT_MAX, rememberClock, saveRecentClocks, untilClock, untilInHours } from './pause'
+import { allowOf, holdsOf, PAUSE_CLASSES, PAUSE_FLAGS, loadRecentClocks, parseClock, pauseName, PAUSE_HOURS, RECENT_MAX, rememberClock, saveRecentClocks, untilClock, untilInHours } from './pause'
 
 // Local time throughout: the end time of a custom clock is the next time the wall clock reads it.
 const at = (h: number, m: number, day = 15) => new Date(2026, 9, day, h, m, 0, 0).getTime()
@@ -74,5 +74,20 @@ describe('the custom end times remembered', () => {
     expect(loadRecentClocks()).toEqual(['18:30'])
     localStorage.setItem('pdx:pool:recent-pause-clocks', '{not json')
     expect(loadRecentClocks()).toEqual([])
+  })
+})
+
+describe('what a pause lets through and carries (M48)', () => {
+  it('the classes and flags offered', () => {
+    expect(PAUSE_CLASSES).toEqual(['release', 'merge', 'dev'])
+    expect(PAUSE_FLAGS).toEqual(['release', 'expect_pressure'])
+  })
+
+  it('no class picked sends no `allow` at all: wwd reads an allow, even an empty one, as "only these", i.e. everything held', () => {
+    expect(allowOf([])).toBeUndefined()
+  })
+
+  it('classes picked send them, with no repo limit', () => {
+    expect(allowOf(['release', 'merge'])).toEqual({ classes: ['release', 'merge'], repos: [] })
   })
 })
