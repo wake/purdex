@@ -60,8 +60,15 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		return builtTree{}, err
 	}
 	lines := strings.Split(where, "\n")
-	if len(lines) != 3 {
-		return builtTree{}, fmt.Errorf("git rev-parse answered %d lines for 3 questions: %q", len(lines), where)
+	if len(lines) != 3 { // a path with a newline in it: git has no -z here, so ask one question at a time
+		lines = lines[:0]
+		for _, q := range [][]string{{"--show-toplevel"}, {"--path-format=absolute", "--git-path", "objects"}, {"--path-format=absolute", "--git-path", "index"}} {
+			one, err := run(nil, append([]string{"rev-parse"}, q...)...)
+			if err != nil {
+				return builtTree{}, err
+			}
+			lines = append(lines, one)
+		}
 	}
 	root, objects, srcIndex := lines[0], lines[1], lines[2]
 	tmp, err := os.MkdirTemp("", "pdx-assist-index-")

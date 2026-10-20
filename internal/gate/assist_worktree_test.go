@@ -132,3 +132,21 @@ func BenchmarkWorkingTree(b *testing.B) {
 		}
 	}
 }
+
+// A repository whose path has a newline in it is still read (git has no -z for rev-parse, so one answer cannot be split on lines).
+func TestWorkingTree_APathWithANewlineInIt(t *testing.T) {
+	base := t.TempDir()
+	if r, err := filepath.EvalSymlinks(base); err == nil {
+		base = r
+	}
+	dir := filepath.Join(base, "a\nb")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	writeFile(t, dir+"/a.txt", "a1\n", 0o644)
+	gitIn(t, dir, "add", "a.txt")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	writeFile(t, dir+"/new.txt", "n\n", 0o644)
+	got, err := WorkingTree(context.Background(), "", dir)
+	require.NoError(t, err)
+	assert.Equal(t, oracleTree(t, dir), got)
+}
