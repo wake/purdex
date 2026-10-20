@@ -9,7 +9,7 @@ import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
-import { layoutFromWire } from '../lib/profile/host-identity'
+import { groupKeyFromWire, layoutFromWire } from '../lib/profile/host-identity'
 import { isTeamTab } from '../lib/team/team-state'
 
 // --- Persist migration helpers ---
@@ -621,9 +621,11 @@ export function rewriteTabsHosts(tabs: Record<string, Tab>, map: (hostId: string
   let next: Record<string, Tab> | null = null
   for (const [id, tab] of Object.entries(tabs)) {
     const layout = layoutFromWire(tab.layout, map)
-    if (layout === tab.layout) continue
+    // The team host inside the placement is a host reference like the panes' (task groups spec §4.2).
+    const group = tab.group === undefined ? undefined : groupKeyFromWire(tab.group, map)
+    if (layout === tab.layout && group === tab.group) continue
     next ??= { ...tabs }
-    next[id] = { ...tab, layout }
+    next[id] = { ...tab, layout, ...(group !== undefined ? { group } : {}) }
   }
   return next ?? tabs
 }

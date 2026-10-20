@@ -49,6 +49,14 @@ describe('useElectronIpc — a received tab always lands in a workspace', () => 
     expect(useWorkspaceStore.getState().findWorkspaceByTab(receiveTab())?.id).toBe(a.id)
   })
 
+  // Task groups spec §4.2: the tab's JSON is the transfer, so its placement and rank ride along between windows.
+  it('a tab torn off to / merged into another window keeps its group and groupRank', () => {
+    renderHook(() => useElectronIpc())
+    const tab = { ...createTab({ kind: 'new-tab' }), group: 'team\u0000host1\u0000t1', groupRank: 'V' }
+    receive!(JSON.stringify(tab), false)
+    expect(useTabStore.getState().tabs[tab.id]).toMatchObject({ group: 'team\u0000host1\u0000t1', groupRank: 'V' })
+  })
+
   it('a new window with no workspace (tear-off, replace) → Unsorted is created and gets the tab', () => {
     const tabId = receiveTab(true)
     const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
