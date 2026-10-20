@@ -7,6 +7,7 @@ vi.mock('../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => () =>
 const monitorProps = vi.fn()
 vi.mock('./host/MonitorTab', () => ({ MonitorTab: (p: unknown) => { monitorProps(p); return <div data-testid="mock-monitor" /> } }))
 const settingsProps = vi.fn()
+vi.mock('./host/ProcTab', () => ({ ProcTab: () => <div data-testid="mock-procs" /> }))
 vi.mock('./WatchSettings', () => ({ WatchSettings: (p: unknown) => { settingsProps(p); return <div data-testid="mock-settings" /> } }))
 const fetchPoolHosts = vi.fn()
 vi.mock('../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('../../lib/pool/api')>()), fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a) }))
@@ -89,7 +90,7 @@ describe('the banner of a host that is not ok (M22, #3785)', () => {
       expect(banner).toHaveTextContent(t('pool.liveness.checked', { time: clock(NOW - 3000) }))
       expect(banner).toHaveTextContent(t('watch.host.banner.chart_stops'))
       // Not inside any sub-tab's body.
-      for (const id of ['mock-monitor', 'mock-settings', 'status-later', 'procs-later']) {
+      for (const id of ['mock-monitor', 'mock-settings', 'status-later', 'mock-procs']) {
         const body = screen.queryByTestId(id)
         if (body) expect(banner.contains(body)).toBe(false)
       }

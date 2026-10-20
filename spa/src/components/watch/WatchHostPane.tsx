@@ -18,6 +18,7 @@ import { readHostRange, readHostScroll, readHostTab, writeHostRange, writeHostSc
 import { AvailRow } from './AvailRow'
 import { WatchSettings } from './WatchSettings'
 import { MonitorTab } from './host/MonitorTab'
+import { ProcTab } from './host/ProcTab'
 
 const SUBS: readonly HostSubTab[] = ['monitor', 'status', 'procs', 'settings']
 const RANGES = Object.keys(RANGE_MS) as HostRange[]
@@ -135,7 +136,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           {st.state === 'ok' && <AvailRow pool={hostExtraOf(st, st.pool)} exceptions={st.facts.exceptions} at={st.facts.at} now={now} />}
           <p className="text-xs text-text-muted" data-testid="status-later">{t('watch.host.status_later')}</p>
         </>)}
-        {sub === 'procs' && <p className="text-xs text-text-muted" data-testid="procs-later">{t('watch.host.procs_later')}</p>}
+        {sub === 'procs' && <ProcTab host={host} now={now} />}
         {sub === 'settings' && <WatchSettings hostId={memoryKey} hostConfigId={host.daemonHostId ?? undefined} poolAlias={host.alias} offline={offline || ownerDown} peerIds={peerIds} />}
       </div>
     </div>
