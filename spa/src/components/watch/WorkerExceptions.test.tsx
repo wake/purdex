@@ -134,6 +134,37 @@ describe('adding', () => {
     expect(lastChange().body.holds).toEqual(['heavy', 'light'])
   })
 
+  it('picks no class to let through: the body has no `allow` key (an empty allow would hold everything)', async () => {
+    setHost(mlab([]))
+    await mount()
+    await click('pool-pause-add-1h')
+    expect(lastChange().body).not.toHaveProperty('allow')
+    expect(lastChange().body).not.toHaveProperty('flags')
+  })
+
+  it('classes picked go as allow.classes; marks picked go as flags', async () => {
+    setHost(mlab([]))
+    await mount()
+    fireEvent.click(screen.getByTestId('pool-pause-allow-release'))
+    fireEvent.click(screen.getByTestId('pool-pause-allow-merge'))
+    fireEvent.click(screen.getByTestId('pool-pause-flag-release'))
+    await click('pool-pause-add-1h')
+    expect(lastChange().body).toMatchObject({ allow: { classes: ['release', 'merge'], repos: [] }, flags: ['release'] })
+  })
+
+  it('"expect pressure" is offered only when the host reports PSI', async () => {
+    setHost(mlab([]))
+    await mount()
+    expect(screen.queryByTestId('pool-pause-flag-expect_pressure')).toBeNull()
+    cleanup()
+    const base = mlab([])
+    setHost({ ...base, facts: { ...base.facts!, mem: { ...base.facts!.mem, psi: { some10: 1, full10: 0, some60: 2 } } } })
+    await mount()
+    fireEvent.click(screen.getByTestId('pool-pause-flag-expect_pressure'))
+    await click('pool-pause-add-1h')
+    expect(lastChange().body.flags).toEqual(['expect_pressure'])
+  })
+
   it('a custom end time ends at the next time the clock reads it, and is remembered and offered again', async () => {
     setHost(mlab([]))
     await mount()
@@ -250,5 +281,31 @@ describe('what is typed and not sent', () => {
     await mount()
     expect(screen.getByTestId('pool-pause-clock')).toHaveValue('21:45')
     expect(screen.getByTestId('pool-pause-light')).toBeChecked()
+  })
+
+  it('the classes and marks picked survive a remount', async () => {
+    setHost(mlab([]))
+    const first = render(<WorkerExceptions alias="mlab" />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTestId('pool-pause-allow-release'))
+    fireEvent.click(screen.getByTestId('pool-pause-flag-release'))
+    first.unmount()
+    await mount()
+    expect(screen.getByTestId('pool-pause-allow-release')).toBeChecked()
+    expect(screen.getByTestId('pool-pause-allow-merge')).not.toBeChecked()
+    expect(screen.getByTestId('pool-pause-flag-release')).toBeChecked()
+  })
+})
+
+describe('the list shows what a pause lets through and carries', () => {
+  it('release, merge and the 發版中 mark are in the row text', async () => {
+    details = { host: 'mlab', known: true, exceptions: [
+      { name: 'app-dev-package', until: '2026-10-19T18:30:00+08:00', pid: null, holds: ['heavy'], allow: { classes: ['release', 'merge'], repos: [] }, flags: ['release'] },
+    ] }
+    setHost(mlab(['app-dev-package']))
+    await mount()
+    const row = screen.getByTestId('pool-pause-row-app-dev-package')
+    expect(row).toHaveTextContent(t('pool.pause.allows', { classes: 'release, merge' }))
+    expect(row).toHaveTextContent(t('pool.pause.marks', { flags: t('pool.pause.flag_short.release') }))
   })
 })
