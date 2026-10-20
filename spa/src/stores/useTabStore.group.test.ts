@@ -63,3 +63,26 @@ describe('setTabGroup / setTabGroupRank', () => {
     expect(raw.state?.tabs?.[a.id]).toMatchObject({ group: 'ungrouped', groupRank: 'V' })
   })
 })
+
+describe('setTabGroupRanks', () => {
+  it('writes several ranks in one state change; unknown tabs are skipped', () => {
+    const a = addTab('a')
+    const b = addTab('b')
+    let notified = 0
+    const unsub = useTabStore.subscribe(() => { notified += 1 })
+    useTabStore.getState().setTabGroupRanks([{ tabId: a.id, rank: 'F' }, { tabId: b.id, rank: 'M' }, { tabId: 'gone', rank: 'T' }])
+    unsub()
+    expect(notified).toBe(1)
+    expect(useTabStore.getState().tabs[a.id].groupRank).toBe('F')
+    expect(useTabStore.getState().tabs[b.id].groupRank).toBe('M')
+    expect(useTabStore.getState().tabs).not.toHaveProperty('gone')
+  })
+
+  it('writes that change nothing return the same state', () => {
+    const a = addTab('a')
+    useTabStore.getState().setTabGroupRank(a.id, 'F')
+    const before = useTabStore.getState().tabs
+    useTabStore.getState().setTabGroupRanks([{ tabId: a.id, rank: 'F' }])
+    expect(useTabStore.getState().tabs).toBe(before)
+  })
+})
