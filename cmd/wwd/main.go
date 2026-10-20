@@ -257,7 +257,12 @@ func run(cfgPath string) error {
 	}))
 	qualifyTick := newQualifyTrigger()
 	watcher := newDriftWatcher(alias, st, refs, d.RefreshLabels) // an earned label whose OS version or tool moved is taken away (spec §7)
+	sampleSignal := make(chan struct{}, 1)                       // pressure danger is judged at every sample (S3-2): a mark only, the judging runs in the advisor's goroutine
 	sampler.SetOnFacts(func(f wire.Facts) {
+		select {
+		case sampleSignal <- struct{}{}:
+		default:
+		}
 		d.OnFacts(f)
 		usage.OnFacts(f)
 		_, fp := labels.FromFacts(f)
@@ -267,7 +272,7 @@ func run(cfgPath string) error {
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	adv := advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report,
-		Peers: cfg.Peers, Downs: d.Pool().Downs}
+		Peers: cfg.Peers, Downs: d.Pool().Downs, Watch: cfg.Advisor, SampleSignal: sampleSignal}
 	if cfg.Advisor.PartnerCheck {
 		adv.PartnerSeen = d.PartnerSeen
 	}
