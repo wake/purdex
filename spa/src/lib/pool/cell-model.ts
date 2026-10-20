@@ -46,7 +46,7 @@ export interface CellView {
   owner: PoolOwner | null
   /** Linux only. */
   psi: { some10: number; full10: number } | null
-  /** What the card's lower rows say beyond the pool's own (M11); null unless `ok`. `checkedAt` is the daemon's last probe of this peer (ms), null for the local host or a daemon that sends none. */
+  /** What the card's lower rows say beyond the pool's own (M11); null unless `ok`. `checkedAt` is the daemon's last probe of this peer (ms), null for the local host or a daemon that sends none. `local` is `MonitorHost.local`. */
   detail: { version: string; memAvailGb: number; swapUsedGb: number | null; local: boolean; checkedAt: number | null } | null
 }
 
@@ -89,7 +89,7 @@ export function cellOf(m: MonitorHost): CellView {
       version: m.state.pool.version,
       memAvailGb: f.mem.available_mb / 1024,
       swapUsedGb: f.mem.swap_used_mb === null ? null : f.mem.swap_used_mb / 1024,
-      local: m.state.pool.liveness === undefined,
+      local: m.local,
       checkedAt: m.state.pool.liveness_at ?? null,
     },
   }

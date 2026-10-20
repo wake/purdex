@@ -16,9 +16,17 @@ const NOW = darwin.at + 5000
 const look = { indicator: { shape: 'ring', data: ['load'] } } as const
 
 const monitor = (pool: PoolHost, lastFactsAt: number | null = null): MonitorHost => ({
-  hostId: pool.host_id, alias: pool.alias, daemonHostId: null, state: poolHostState(pool, lastFactsAt, NOW), look: look as never, poolFailure: null, count: null,
+  hostId: pool.host_id, alias: pool.alias, daemonHostId: null, state: poolHostState(pool, lastFactsAt, NOW), look: look as never, poolFailure: null, count: null, local: false,
 })
 const poolHost = (over: Partial<PoolHost> = {}): PoolHost => ({ ...base, alias: 'mlab', reachable: true, facts: darwin, ...over })
+
+describe('cellOf — the card\'s detail', () => {
+  it('local comes from the monitor row, not from a missing liveness', () => {
+    const peer = poolHost({ liveness: undefined })
+    expect(cellOf(monitor(peer)).detail?.local).toBe(false)
+    expect(cellOf({ ...monitor(peer), local: true }).detail?.local).toBe(true)
+  })
+})
 
 describe('cellOf — an ok host', () => {
   it('the readings come from the facts, the load from the assess field', () => {

@@ -77,6 +77,13 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
 })
 
 describe('useMonitorHosts', () => {
+  it('local: the row without a probe next to probed peers; with no probe anywhere nobody is local', () => {
+    answer([host(A, 'mlab'), host(B, 'mserv', { liveness: 'ok' })])
+    expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true, false])
+    act(() => { answer([host(A, 'mlab'), host(B, 'mserv')]) })
+    expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([false, false])
+  })
+
   it('lists the pool\'s hosts in the order of the store, the unlisted after them in the pool\'s order (M13)', () => {
     answer([host(A, 'mlab'), host(B, 'mserv'), host(C, 'air26')])
     usePoolHostsStore.setState({ order: [C, A] })
