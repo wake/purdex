@@ -27,6 +27,7 @@ import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startWorkerTitlePrefetch } from './lib/nex/worker-title-prefetch'
 import { startProfileSync } from './lib/profile/start'
 import { bootHostLooks } from './lib/host-look-migration'
+import { bootPoolLooks } from './lib/pool/pool-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { startWatchArea } from './features/workspace/lib/watch-area'
 import { startWatchStatus } from './lib/watch/status-store'
@@ -91,8 +92,9 @@ startWorkerTitlePrefetch()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
 // It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
 // migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With
-// synchronous localStorage this is a microtask. `bootHostLooks` never rejects.
-void bootHostLooks().then(() => startProfileSync())
+// synchronous localStorage this is a microtask. `bootHostLooks` never rejects. The pool hosts' look copy (monitoring tabs A3) runs between the two, for the same reason; it waits at most ~10 s
+// and never rejects.
+void bootHostLooks().then(() => bootPoolLooks()).then(() => startProfileSync())
 // Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.
