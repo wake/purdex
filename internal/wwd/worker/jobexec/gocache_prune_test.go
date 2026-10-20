@@ -3,6 +3,7 @@ package jobexec
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -152,4 +153,74 @@ func TestAFileThatIsGoneBeforeItIsRemovedIsNotAnError(t *testing.T) {
 	j := r.job(t, r.exec(t, repo, sha), "j_second")
 	assert.Equal(t, cache, envValue2(j.env, "GOCACHE"))
 	assert.DirExists(t, cache, "not emptied for it")
+}
+
+func countFiles(t *testing.T, dir string) int {
+	t.Helper()
+	n := 0
+	require.NoError(t, filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			n++
+		}
+		return nil
+	}))
+	return n
+}
+
+func withRemovalBudget(t *testing.T, n int) {
+	old := goCacheMaxRemovals
+	goCacheMaxRemovals = n
+	t.Cleanup(func() { goCacheMaxRemovals = old })
+}
+
+// One pass removes at most so many files (a pass is in the preparation of a job); the rest go in the next passes, two minutes on, and the
+// age pass is taken up again until it has gone through the list.
+func TestAPassRemovesAtMostABudgetOfFilesAndTheNextOnesGoOn(t *testing.T) {
+	withRemovalBudget(t, 100)
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	for i := 0; i < 400; i++ {
+		cacheFile(t, cache, filepath.Join("ab", "old-"+strconv.Itoa(i)), 10, 48*time.Hour)
+	}
+	fresh := cacheFile(t, cache, "cd/fresh", 10, time.Hour)
+	before := countFiles(t, cache)
+	e := r.exec(t, repo, sha)
+	clock := time.Now()
+	e.goCache.now = func() time.Time { return clock }
+	for pass := 1; pass <= 4; pass++ {
+		j := r.job(t, e, "j_"+strconv.Itoa(pass))
+		require.NoError(t, j.ws.Cleanup())
+		assert.Equal(t, before-100*pass, countFiles(t, cache), "pass %d removes 100", pass)
+		clock = clock.Add(3 * time.Minute) // the size is looked at again; the hour is not up
+	}
+	assert.FileExists(t, fresh)
+	assert.DirExists(t, cache, "not emptied")
+	j := r.job(t, e, "j_after")
+	require.NoError(t, j.ws.Cleanup())
+	assert.Equal(t, before-400, countFiles(t, cache), "nothing left to remove")
+}
+
+// Over its bound with more to remove than a pass may: the cache is not emptied for it, it is trimmed over the next passes.
+func TestAnOverBoundCacheIsTrimmedOverSeveralPassesNotEmptied(t *testing.T) {
+	withRemovalBudget(t, 10)
+	r := newGoRig(t)
+	r.cfgGoCacheMB = 1
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	for i := 0; i < 30; i++ { // 30 x 100 KiB = 3 MiB over a 1 MiB bound: each pass removes 10, and a trim that began goes on to 80% (8 files) even when the bound is no longer passed
+		cacheFile(t, cache, filepath.Join("ab", "e"+strconv.Itoa(i)), 100<<10, time.Duration(31-i)*time.Minute)
+	}
+	e := r.exec(t, repo, sha)
+	clock := time.Now()
+	e.goCache.now = func() time.Time { return clock }
+	want := []int{20, 10, 8}
+	for pass, n := range want {
+		j := r.job(t, e, "j_"+strconv.Itoa(pass))
+		require.NoError(t, j.ws.Cleanup())
+		assert.Equal(t, n, countFiles(t, cache), "after pass %d", pass+1)
+		clock = clock.Add(3 * time.Minute)
+	}
+	assert.FileExists(t, filepath.Join(cache, "ab", "e29"), "the newest stays")
+	assert.NoFileExists(t, filepath.Join(cache, "ab", "e0"), "the oldest went first")
 }

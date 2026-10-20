@@ -69,6 +69,7 @@ type goCacheState struct {
 	mu       sync.Mutex
 	lookAt   time.Time // when the cache last looked at was looked at
 	pruneAt  time.Time // when the last age pass was
+	trimming bool      // a trim of an over-bound cache began and has not reached its target (it takes several passes when it is long)
 	now      func() time.Time
 	oversize bool // the last look found the cache over twice its bound
 	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
@@ -203,18 +204,28 @@ func scanGoCache(ctx context.Context, dir string) (files []goCacheFile, total in
 	return files, total, err
 }
 
+// goCacheMaxRemovals bounds the files one pass removes, so that a pass in the preparation of a job costs about 0.4 s at most (10,000 files
+// took 1.7 to 2.4 s on mlab); what is left is for the next pass, two minutes on. A variable for the tests.
+var goCacheMaxRemovals = 2000
+
 // removeGoCacheFiles removes the listed entries one by one, in order, while the sum *total is over target (a negative target removes all of
-// them), and takes what was freed off *total. A file that is already gone counts as removed (another worker, or Go's own trim, was first);
-// any other failure leaves it, and it stays in the sum.
-func removeGoCacheFiles(files []goCacheFile, total *int64, target int64) {
+// them) and *budget lasts (each try uses one), and takes what was freed off *total. A file that is already gone counts as removed (another
+// worker, or Go's own trim, was first); any other failure leaves it, and it stays in the sum. It returns whether it went through the list or
+// stopped at the target (false: it stopped for the budget).
+func removeGoCacheFiles(files []goCacheFile, total *int64, target int64, budget *int) bool {
 	for _, f := range files {
 		if *total <= target {
-			break
+			return true
 		}
+		if *budget <= 0 {
+			return false
+		}
+		*budget--
 		if err := goCacheRemoveFile(f.path); err == nil || errors.Is(err, fs.ErrNotExist) {
 			*total -= f.size
 		}
 	}
+	return true
 }
 
 // boundGoCache keeps the cache in dir within its bound, at most once in goCacheLook, in one walk of the entries. An age pass (at most once
@@ -238,9 +249,9 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 	if err != nil && !tooMany {
 		return true // ctx ended
 	}
+	budget := goCacheMaxRemovals
 	if !tooMany {
 		if s.pruneAt.IsZero() || now.Sub(s.pruneAt) >= goCachePruneEvery {
-			s.pruneAt = now
 			cutoff := now.Add(-e.goCachePrune())
 			var aged, kept []goCacheFile
 			for _, f := range files {
@@ -250,16 +261,26 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 					kept = append(kept, f)
 				}
 			}
-			removeGoCacheFiles(aged, &total, -1)
+			if removeGoCacheFiles(aged, &total, -1, &budget) {
+				s.pruneAt = now // the pass went through; one that stopped for its budget is taken up again by the next look
+			}
 			files = kept // (an aged file that would not go is not tried again below: it stays in the size, so the bound still sees it)
 		}
+		target := max / 100 * goCacheTrimPct
 		if total > max {
+			s.trimming = true
+		}
+		if s.trimming && budget > 0 {
 			sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
-			target := max / 100 * goCacheTrimPct
-			removeGoCacheFiles(files, &total, target)
+			removeGoCacheFiles(files, &total, target, &budget)
+			if total <= target {
+				s.trimming = false
+			}
 		}
 	}
-	over := tooMany || total > max
+	// Over the bound for want of budget is not a cache that cannot be trimmed: the next pass goes on. A cache is emptied (or refused to a new
+	// job) only when the removals that were tried did not bring it under its bound.
+	over := tooMany || (total > max && budget > 0)
 	if !over {
 		return true
 	}
