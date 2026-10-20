@@ -7,7 +7,7 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { collectLeaves } from '../../lib/pane-tree'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useTeamDisplay } from './team-display'
-import { useTeamViews } from '../../hooks/useTeamViews'
+import { currentTeamState } from '../../lib/team/team-state'
 import { currentPlacementCtx } from '../../lib/task-groups/current'
 import { addressOf, rootOf, useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { setRootsInterest } from '../../lib/task-groups/session-roots-lifecycle'
@@ -47,20 +47,23 @@ export interface PersonalGroupView {
   rootKnown: boolean
 }
 
-export function usePersonalGroup(target: PersonalTarget | null): PersonalGroupView {
+const NO_TABS: Record<string, never> = {}
+
+/** `withCount`: the group's session count is wanted (the full form's header), which needs every tab; the strip and the one line pass false and are not woken by other tabs changing (`count` is then 0). */
+export function usePersonalGroup(target: PersonalTarget | null, withCount = false): PersonalGroupView {
   const tab = useTabStore((s) => (target ? s.tabs[target.tabId] : undefined))
-  const tabs = useTabStore((s) => s.tabs)
+  const tabs = useTabStore((s) => (withCount ? s.tabs : NO_TABS))
   const order = useManualGroupsStore((s) => s.order)
   const groups = useManualGroupsStore((s) => s.groups)
   const roots = useRootCacheStore((s) => s.roots)
-  const views = useTeamViews()
   return useMemo(() => {
     if (!target || !tab) return { group: { kind: 'ungrouped' }, rootKnown: false }
+    const state = currentTeamState() // read now, not subscribed: the team views follow every tab, and this hook must not (a team group is the rare case, a plain tab filed under a team)
     const ctx = { ...currentPlacementCtx(), manual: { order, groups } }
-    return { group: personalGroupOf(tab, ctx, views, tabs), rootKnown: rootOf(target.hostId, target.agentSessionId) !== null }
+    return { group: personalGroupOf(tab, ctx, state.views, tabs), rootKnown: rootOf(target.hostId, target.agentSessionId) !== null }
     // `roots` is read through `rootOf` (the cache's plain reader); it is a dependency so the capsule follows a read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, tab, tabs, order, groups, roots, views])
+  }, [target, tab, tabs, order, groups, roots])
 }
 
 export interface PersonalReading {

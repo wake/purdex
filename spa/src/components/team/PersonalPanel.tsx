@@ -35,7 +35,7 @@ const headerStyle = { height: HEADER_H, paddingInline: HEADER_PX, columnGap: HEA
 
 export function PersonalPanel({ target, mode, onSetMode }: Props) {
   const t = useI18nStore((s) => s.t)
-  const { group, rootKnown } = usePersonalGroup(target)
+  const { group, rootKnown } = usePersonalGroup(target, mode === 'full')
   const actions = usePersonalActions(target)
   const [renameRequest, setRenameRequest] = useState(0)
   const [workbookOpen, setWorkbookOpen] = useState(false)
