@@ -128,9 +128,17 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	realBin := *real
+	var childEnv []string // nil: the environment as it is
 	if *tool != "" {
 		command = append([]string{*tool}, command...)
-		home, err := os.UserHomeDir()
+		// the fuse against a shim that keeps coming back (#3671): the depth of each tool rides in the environment of the child
+		depthEnv, depth := gateToolDepth(os.Environ(), *tool)
+		if depth >= gateToolDepthMax {
+			fmt.Fprintf(stderr, "pdx gate: shim recursion: %s resolved to the pdx shim again\n", *tool)
+			return 127
+		}
+		childEnv = depthEnv
+		home, err := gate.AccountHome()
 		if err != nil {
 			fmt.Fprintf(stderr, "pdx gate: %v\n", err)
 			return 127
@@ -148,13 +156,13 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		cfg, _ := gate.Load(gateConfigPath(*cfgPath))
 		cls := cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), gateStdinIsTTY()))
 		if !cfg.Enabled {
-			return gateExecDirect(realBin, command, stderr)
+			return gateExecDirect(realBin, command, childEnv, stderr)
 		}
 		if !cls.Valid() {
 			// A packaging script, or a `run` script nobody has a rule for, takes no slot but is run by the gate as its child (to
 			// be written down, and for packaging to be put under a slot when it runs long, #2996); the gate classifies it again.
 			if cfg.WatchKind(command, gate.EnvOf(os.Environ(), gateStdinIsTTY())) == "" {
-				return gateExecDirect(realBin, command, stderr)
+				return gateExecDirect(realBin, command, childEnv, stderr)
 			}
 			c = ""
 		} else {
@@ -173,7 +181,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	if target == nil && *waitMax <= 0 { // a run sent here from another host (--wait-max) is not sent on
 		walk = gateAssistWalk(*cfgPath, cfg.Dir)
 	}
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Env: childEnv, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
 	return code
 }
 
@@ -196,7 +204,7 @@ var gateExec = syscall.Exec
 
 // gateExecDirect runs argv by exec, as the shell would have run it without the gate: argv[0] is the name as typed, the binary
 // is realBin (looked up on PATH when empty). It returns only when the command could not be started.
-func gateExecDirect(realBin string, argv []string, stderr io.Writer) int {
+func gateExecDirect(realBin string, argv, env []string, stderr io.Writer) int {
 	if realBin == "" {
 		p, err := exec.LookPath(argv[0])
 		if err != nil {
@@ -205,7 +213,7 @@ func gateExecDirect(realBin string, argv []string, stderr io.Writer) int {
 		}
 		realBin = p
 	}
-	if err := gateExec(realBin, argv, os.Environ()); err != nil {
+	if err := gateExec(realBin, argv, envOrCurrent(env)); err != nil {
 		fmt.Fprintf(stderr, "pdx gate: %s: %v\n", realBin, err)
 		if errors.Is(err, os.ErrNotExist) {
 			return 127
