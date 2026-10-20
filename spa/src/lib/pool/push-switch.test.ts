@@ -114,6 +114,25 @@ describe('one write at a time per host (codex attack)', () => {
     await vi.waitFor(() => expect(pendingPush()).toEqual([]))
   })
 
+  it('a queued write that failed is tried again only when THAT host connects again — not on every runtime update (latency, another host)', async () => {
+    setRuntime({ A: 'connected', B: 'disconnected' })
+    putHostConfig.mockRejectedValue(new Error('500'))
+    await writePushAll(true, [host('B', { connected: false })])
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(putHostConfig).toHaveBeenCalledTimes(1))
+    // updates that do not change B's connection: B's own latency, and another host's status
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected', latency: 12 } } } as never)
+    useHostStore.setState({ runtime: { A: { status: 'disconnected' }, B: { status: 'connected', latency: 12 } } } as never)
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected', latency: 40 } } } as never)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(putHostConfig).toHaveBeenCalledTimes(1)
+    expect(pendingPush()).toEqual(['B'])
+    // B drops and comes back: now it is tried again
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'disconnected' } } } as never)
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(putHostConfig).toHaveBeenCalledTimes(2))
+  })
+
   it('a failure while still connected is an error on the line, not a queued write', async () => {
     putHostConfig.mockRejectedValue(new Error('500'))
     const r = await writePushAll(true, [host('B')])

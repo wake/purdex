@@ -99,7 +99,11 @@ function stopWhenEmpty(): void {
   if (queue.size === 0 && unsubscribe) { unsubscribe(); unsubscribe = null }
 }
 function keepWaiting(): void {
-  unsubscribe ??= useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime) flush() })
+  // `runtime` is replaced on every latency or tmux update: only a host's own change to `connected` is a reason to write it.
+  unsubscribe ??= useHostStore.subscribe((s, prev) => {
+    if (s.runtime === prev.runtime) return
+    flush((id) => prev.runtime[id]?.status !== 'connected' && s.runtime[id]?.status === 'connected')
+  })
 }
 /** One write at a time per host, in the order they were asked for. `fn` never rejects. */
 function serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
@@ -125,9 +129,9 @@ async function run(id: string, byPress: boolean): Promise<PushResult> {
   if (byPress && queue.get(id) === want) { queue.delete(id); changed(); stopWhenEmpty() }
   return { hostConfigId: id, ok: false, error: r.error }
 }
-/** Called when any connection changes: every waiting host that is connected is written once. A write that fails waits for the next change, it is not retried in a loop. */
-function flush(): void {
-  for (const id of [...queue.keys()]) if (isConnected(id)) void serial(id, () => run(id, false))
+/** Every waiting host that `connecting` names is written once. A write that fails waits for that host's next connection, it is not retried in a loop. */
+function flush(connecting: (id: string) => boolean): void {
+  for (const id of [...queue.keys()]) if (connecting(id) && isConnected(id)) void serial(id, () => run(id, false))
 }
 
 /** Write every host: connected ones now, one after another (a failure does not stop the next); offline ones go into the queue. */
