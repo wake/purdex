@@ -116,6 +116,47 @@ describe('the six charts (M41-2)', () => {
     expect(screen.queryAllByTestId('mini-hover-line')).toHaveLength(0)
   })
 
+  const stub = () => screen.getAllByTestId('mini-plot').forEach((p) => { p.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 90, right: 600, bottom: 90, x: 0, y: 0, toJSON: () => ({}) }) })
+
+  it('going to another range and back does not bring the old hovered time back', () => {
+    const { rerender } = mount(okHost())
+    stub()
+    fireEvent.mouseMove(screen.getAllByTestId('mini-plot')[0], { clientX: 600 })
+    expect(screen.getAllByTestId('mini-hover-line')).toHaveLength(6)
+    rerender(<MonitorTab host={okHost()} range="15m" now={NOW} />)
+    rerender(<MonitorTab host={okHost()} range="5m" now={NOW} />)
+    expect(screen.queryAllByTestId('mini-hover-line')).toHaveLength(0)
+  })
+
+  it('another host on the same range does not inherit the hovered time', () => {
+    const { rerender } = mount(okHost())
+    stub()
+    fireEvent.mouseMove(screen.getAllByTestId('mini-plot')[0], { clientX: 600 })
+    expect(screen.getAllByTestId('mini-hover-line')).toHaveLength(6)
+    rerender(<MonitorTab host={hostOf(poolHost({ host_id: 'h-other', alias: 'other' }))} range="5m" now={NOW} />)
+    expect(screen.queryAllByTestId('mini-hover-line')).toHaveLength(0)
+  })
+
+  it('the hovered time is a time, not a place in the list: when the oldest sample leaves the window it stays on the same time', () => {
+    const { rerender } = mount(okHost())
+    stub()
+    fireEvent.mouseMove(screen.getAllByTestId('mini-plot')[0], { clientX: 600 })
+    const label = () => screen.getAllByTestId('mini-hover-time')[0].textContent
+    const before = label()
+    seriesFor.mockReturnValue({ samples: SAMPLES.slice(1), load: { state: 'ok' }, rev: 1 })
+    rerender(<MonitorTab host={okHost()} range="5m" now={NOW} />)
+    expect(label()).toBe(before)
+  })
+
+  it('when the hovered sample is gone from the window, nothing is hovered', () => {
+    const { rerender } = mount(okHost())
+    stub()
+    fireEvent.mouseMove(screen.getAllByTestId('mini-plot')[0], { clientX: 600 })
+    seriesFor.mockReturnValue({ samples: SAMPLES.slice(0, 3), load: { state: 'ok' }, rev: 1 })
+    rerender(<MonitorTab host={okHost()} range="5m" now={NOW} />)
+    expect(screen.queryAllByTestId('mini-hover-line')).toHaveLength(0)
+  })
+
   it('a host that is ok draws no slanted area', () => {
     mount(okHost())
     expect(screen.queryAllByTestId('mini-dead')).toHaveLength(0)

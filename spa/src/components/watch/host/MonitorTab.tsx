@@ -32,10 +32,15 @@ export function MonitorTab({ host, range, now }: { host: MonitorHost; range: Hos
   const st = host.state
   const facts = st.state === 'ok' ? st.facts : null
   const { samples } = useHostSeries(host.hostId, host.alias, range, facts)
-  // The hovered time is one for the six cards (M42); a new range is a new set of samples, so it does not carry over.
-  const [hover, setHover] = useState<{ range: HostRange; index: number } | null>(null)
-  const hoverIndex = hover !== null && hover.range === range ? hover.index : null
-  const onHover = (i: number | null) => setHover(i === null ? null : { range, index: i })
+  // The hovered time is one for the six cards (M42). It is kept as a time, not a place in the list: new samples arrive and the oldest leave the window under a pointer that has not moved. Another host or another range is another
+  // set of samples, so the time is dropped there (reset while rendering, so going away and coming back does not bring it back).
+  const [hoveredAt, setHoveredAt] = useState<number | null>(null)
+  const scope = `${host.hostId}|${range}`
+  const [seenScope, setSeenScope] = useState(scope)
+  if (seenScope !== scope) { setSeenScope(scope); setHoveredAt(null) }
+  const found = hoveredAt === null || seenScope !== scope ? -1 : samples.findIndex((s) => s.at === hoveredAt)
+  const hoverIndex = found >= 0 ? found : null
+  const onHover = (i: number | null) => setHoveredAt(i === null ? null : (samples[i]?.at ?? null))
 
   const gauges = useMemo(() => gaugesOf(facts, t), [facts, t])
   const defs = useMemo(() => miniChartsOf(samples, facts, range), [samples, facts, range])
