@@ -27,7 +27,7 @@ type delivery struct {
 func openStore(path string) (*store, error) {
 	dsn := path
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
