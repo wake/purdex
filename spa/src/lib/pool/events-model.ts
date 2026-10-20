@@ -12,7 +12,7 @@ export const OBSERVATIONS_SHOWN = 3
 export interface EventHost { hostId: string; alias: string }
 
 interface RowBase {
-  /** Stable across reads: an alert's `host|key|start`, an observation's own id. */
+  /** Stable across reads and unique across hosts: an alert's `host|key|start`, an observation's `host|its own id` (wwd's id is only unique on its own host). */
   id: string
   hostId: string
   alias: string
@@ -73,26 +73,23 @@ export function alertRowsOf(byHost: Record<string, HostAlertsEntry>, hosts: read
     }
   }
   const rows: AlertRow[] = []
+  const rowOf = (c: Owned): AlertRow => ({
+    id: `${c.host.hostId}|${c.key}|${c.since}`, hostId: c.host.hostId, alias: c.host.alias, at: c.since, source: 'alert', level: c.level, kind: c.kind,
+    ...(c.silence !== undefined ? { silence: c.silence } : {}), live: c.live, endAt: c.live ? null : c.end, title: c.detail || c.kind, last: c.last,
+  })
   for (const list of groups.values()) {
     list.sort((a, b) => a.since - b.since)
-    let cur: Owned | null = null
-    const flush = () => {
-      if (!cur) return
-      rows.push({
-        id: `${cur.host.hostId}|${cur.key}|${cur.since}`, hostId: cur.host.hostId, alias: cur.host.alias, at: cur.since, source: 'alert', level: cur.level, kind: cur.kind,
-        ...(cur.silence !== undefined ? { silence: cur.silence } : {}), live: cur.live, endAt: cur.live ? null : cur.end, title: cur.detail || cur.kind, last: cur.last,
-      })
-    }
-    for (const o of list) {
-      if (cur && o.since <= cur.end) {
+    let cur = list[0]
+    for (const o of list.slice(1)) {
+      if (o.since <= cur.end) {
         // overlapping: one event. Still in progress if any is; otherwise over when the last one was.
         cur = { ...cur, end: Math.max(cur.end, o.end), live: cur.live || o.live, last: Math.max(cur.last, o.last), level: cur.level === 'push' || o.level === 'push' ? 'push' : cur.level }
       } else {
-        flush()
-        cur = { ...o }
+        rows.push(rowOf(cur))
+        cur = o
       }
     }
-    flush()
+    rows.push(rowOf(cur))
   }
   return rows
 }
@@ -114,7 +111,7 @@ export function observationRowsOf(byHost: Record<string, readonly PoolObservatio
     const shown = newest.slice(0, OBSERVATIONS_SHOWN)
     for (const o of shown) {
       rows.push({
-        id: o.id, hostId: host.hostId, alias: host.alias, at: o.startedAt, source: 'obs', level: 'obs', kind: 'undeclared', live: o.endedAt === null, endAt: o.endedAt, title: o.signature,
+        id: `${host.hostId}|${o.id}`, hostId: host.hostId, alias: host.alias, at: o.startedAt, source: 'obs', level: 'obs', kind: 'undeclared', live: o.endedAt === null, endAt: o.endedAt, title: o.signature,
         obs: { session: o.session, via: o.via, cpuSeconds: o.cpuSeconds, cpuCores: o.cpuPeak / 100, memPeakMb: o.memPeakMb, procsPeak: o.procsPeak },
       })
     }
@@ -151,11 +148,14 @@ export function groupByDay(rows: readonly EventRow[], now: number): DayGroup[] {
   const y = new Date(now)
   y.setDate(y.getDate() - 1)
   const yesterday = dayKey(y.getTime())
-  const out: DayGroup[] = []
+  const out: Array<DayGroup & { key: string }> = []
   for (const r of [...rows].sort((a, b) => b.at - a.at)) {
     const k = dayKey(r.at)
     let g = out.find((x) => x.key === k)
-    if (!g) { g = { key: k, label: k === today ? 'today' : k === yesterday ? 'yesterday' : 'date', date: mmdd(r.at), rows: [] }; out.push(g) }
+    if (!g) {
+      g = { key: k, label: k === today ? 'today' : k === yesterday ? 'yesterday' : 'date', date: mmdd(r.at), rows: [] }
+      out.push(g)
+    }
     g.rows.push(r)
   }
   return out.map(({ label, date, rows: rs }) => ({ label, date, rows: rs }))

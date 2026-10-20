@@ -59,6 +59,7 @@ function parseObservation(v: unknown): PoolObservation | null {
 
 export function parseObservations(v: unknown): ObservationsPage | null {
   if (!isRec(v)) return null
+  if (!str(v.host) || v.host === '') return null
   if (v.observations !== null && !Array.isArray(v.observations)) return null
   if (v.observations === undefined) return null
   const seen = new Set<string>()

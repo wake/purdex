@@ -66,7 +66,7 @@ describe('observationRowsOf (M35)', () => {
     const list = ['01', '02', '03', '04', '05'].map((h) => obs(`o${h}`, `2026-10-20T${h}:00:00Z`))
     const rows = observationRowsOf({ air26: list }, HOSTS)
     const normal = rows.filter((r): r is Extract<EventRow, { more?: undefined }> => !('more' in r && r.more))
-    expect(normal.map((r) => r.id)).toEqual(['o05', 'o04', 'o03'])
+    expect(normal.map((r) => r.id)).toEqual(['id-air26|o05', 'id-air26|o04', 'id-air26|o03'])
     const more = rows.filter((r) => 'more' in r && r.more)
     expect(more).toHaveLength(1)
     expect(more[0]).toMatchObject({ more: true, hostId: 'id-air26', alias: 'air26', n: 2 })
@@ -87,7 +87,12 @@ describe('observationRowsOf (M35)', () => {
   })
   it('records are taken newest first whatever order they came in (wwd gives the oldest first)', () => {
     const rows = observationRowsOf({ air26: [obs('old', '2026-10-20T01:00:00Z'), obs('new', '2026-10-20T09:00:00Z')] }, HOSTS)
-    expect(rows.map((r) => ('id' in r ? r.id : ''))).toEqual(['new', 'old'])
+    expect(rows.map((r) => ('id' in r ? r.id : ''))).toEqual(['id-air26|new', 'id-air26|old'])
+  })
+  it('two hosts with the same wwd observation id give two different row ids', () => {
+    const same = (alias: string) => [obs('o_1_2', '2026-10-20T01:00:00Z', { host: alias })]
+    const ids = observationRowsOf({ air26: same('air26'), mlab: same('mlab') }, HOSTS).map((r) => r.id)
+    expect(new Set(ids).size).toBe(2)
   })
   it('a host the pool does not know gives nothing', () => {
     expect(observationRowsOf({ nobody: [obs('a', '2026-10-20T01:00:00Z')] }, HOSTS)).toEqual([])

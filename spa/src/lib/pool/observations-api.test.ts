@@ -49,7 +49,7 @@ describe('parseObservations', () => {
   it('a record twice in one answer is one', () => {
     expect(parseObservations(body({ observations: [REC, REC] }))!.observations).toHaveLength(1)
   })
-  it.each([null, 3, 'x', [], { host: 'a' }, { observations: 'none' }])('a wrong envelope is null: %j', (v) => {
+  it.each([null, 3, 'x', [], { host: 'a' }, { observations: 'none' }, { observations: [] }, { host: 3, observations: [] }, { host: '', observations: [] }])('a wrong envelope is null: %j', (v) => {
     expect(parseObservations(v)).toBeNull()
   })
 })
