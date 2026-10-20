@@ -59,8 +59,7 @@ type goCacheState struct {
 	mu       sync.Mutex
 	lookAt   time.Time // when the cache last looked at was looked at
 	now      func() time.Time
-	pruned   map[string]bool // the cache directories made or seen by this process, so that dropping the old ones is done once each
-	oversize bool            // the last look found the cache over twice its bound
+	oversize bool // the last look found the cache over twice its bound
 	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
 	hook            func(stage string)
 	versionOverride string
@@ -191,19 +190,8 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 }
 
 // pruneGoCaches removes the caches of older Go versions beyond the newest goCacheKeep (by modification time of the directory), each only
-// when no job holds it. It looks once per cache directory per process.
+// when no job holds it; one that is held is left, and the next job looks again (the directory is a few entries, so it is looked at every time).
 func (e *Exec) pruneGoCaches(root, current string) {
-	s := &e.goCache
-	s.mu.Lock()
-	if s.pruned == nil {
-		s.pruned = map[string]bool{}
-	}
-	if s.pruned[current] {
-		s.mu.Unlock()
-		return
-	}
-	s.pruned[current] = true
-	s.mu.Unlock()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return

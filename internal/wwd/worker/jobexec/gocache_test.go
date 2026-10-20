@@ -138,6 +138,34 @@ func TestACacheJustMadeIsNotDroppedByAnotherWorkerBeforeItIsHeld(t *testing.T) {
 	assert.NotEmpty(t, <-bDone)
 }
 
+// An old cache that is in use when it is first looked at is dropped by a later job once it is free: "the newest two are kept" is not lost for
+// as long as the process lives (R2).
+func TestAnOldCacheInUseIsDroppedByALaterJob(t *testing.T) {
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	root := filepath.Join(r.deps, "gocache")
+	old := filepath.Join(root, "1111111111111111")
+	mid := filepath.Join(root, "2222222222222222")
+	for i, d := range []string{old, mid} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		require.NoError(t, os.Chtimes(d, timeAfter(i+1), timeAfter(i+1)))
+	}
+	held, err := os.OpenFile(old+".lock", os.O_CREATE|os.O_RDWR, 0o600) // a job of another worker is using it
+	require.NoError(t, err)
+	defer held.Close()
+	require.NoError(t, syscall.Flock(int(held.Fd()), syscall.LOCK_SH))
+
+	e := r.exec(t, repo, sha)
+	r.job(t, e, "j_first")
+	assert.DirExists(t, old, "in use: left alone")
+
+	require.NoError(t, syscall.Flock(int(held.Fd()), syscall.LOCK_UN))
+	r.job(t, e, "j_second")
+	assert.NoDirExists(t, old, "free by the next job: dropped")
+	assert.DirExists(t, mid)
+	assert.FileExists(t, old+".lock")
+}
+
 // A task that does not declare go.sum gets no shared cache (and a host with no deps directory cannot give one).
 func TestATaskWithoutGoSumGetsNoSharedBuildCache(t *testing.T) {
 	r := newDepsRig(t) // withdeps: pnpm
