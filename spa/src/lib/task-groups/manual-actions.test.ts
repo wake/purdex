@@ -38,6 +38,16 @@ describe('createManualGroup', () => {
     expect(useManualGroupsStore.getState()).toBe(before)
   })
 
+  it('starting a group from a session\'s tab clears that tab\'s own `group` (it is a member now); a refused create leaves it', () => {
+    useTabStore.setState({ tabs: { t1: tab('t1', { group: manualGroupKey('aaaaaaaa'), groupRank: 'V' }) } })
+    expect(createManualGroup({ name: '', member: { host: 'h1', root: 'r1' }, tabId: 't1' })).toEqual({ ok: false, reason: 'bad-name' })
+    expect(useTabStore.getState().tabs.t1.group).toBe(manualGroupKey('aaaaaaaa'))
+    const r = createManualGroup({ name: 'A', member: { host: 'h1', root: 'r1' }, tabId: 't1' })
+    expect(r.ok).toBe(true)
+    expect(Object.hasOwn(useTabStore.getState().tabs.t1, 'group')).toBe(false)
+    expect(useTabStore.getState().tabs.t1.groupRank).toBe('V')
+  })
+
   it('a bad name is refused and writes nothing', () => {
     const before = useManualGroupsStore.getState()
     expect(createManualGroup({ name: '  ' })).toEqual({ ok: false, reason: 'bad-name' })

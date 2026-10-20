@@ -38,7 +38,8 @@ function clearTabGroups(which: (group: string) => boolean): void {
   for (const [id, t] of Object.entries(tabs)) if (t.group !== undefined && which(t.group)) setTabGroup(id, undefined)
 }
 
-export function createManualGroup(p: { name: string; color?: string; member?: Given }): CreateResult {
+/** `tabId`, with `member`, is the session's tab: on success it loses its own `group` (it is a member now). */
+export function createManualGroup(p: { name: string; color?: string; member?: Given; tabId?: string }): CreateResult {
   let member: ManualGroupMember | undefined
   if (p.member !== undefined) {
     const m = known(p.member)
@@ -48,7 +49,9 @@ export function createManualGroup(p: { name: string; color?: string; member?: Gi
   // the id is drawn once: nothing is retried, and the store is read and written in one synchronous stretch
   const id = newManualGroupId(useManualGroupsStore.getState().order)
   const r = apply((s) => newGroup(s, { id, name: p.name, ...(p.color !== undefined ? { color: p.color } : {}), ...(member !== undefined ? { member } : {}), now: Date.now() }))
-  return r.ok ? { ok: true, id } : r
+  if (!r.ok) return r
+  if (member !== undefined && p.tabId !== undefined) useTabStore.getState().setTabGroup(p.tabId, undefined)
+  return { ok: true, id }
 }
 
 export function renameManualGroup(id: string, name: string): ManualActionResult {
