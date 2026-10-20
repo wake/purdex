@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0-alpha.769] - 2026-10-21
+
+> daemon、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 768 相同，但 App 仍要用 769 重新打包。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3；Purdex daemon 的 wwdalerts 資料庫新增兩張表（`wake_ledger`、`wake_hosts`，開啟時自動建立）。
+>
+> **新的 wwd 規則預設關閉**：三條給守門員的壓力規則（#3819）要等四台 wwd 與兩台 daemon 都是 769 之後，才逐台在 wwd config 設 `[advisor] watch_rules = true` 並重啟 wwd（air19 不開）。退版前要先關掉、等新 kind 的 alert 解除（`docs/wwd-deploy.md`）。
+
+### Added：wwd 切換 S3 — 守門員改看 wwd
+
+- **wwd 有新 alert 就叫醒守門員（#3817，S3-1）**：Purdex daemon 看到某台主機的 alert 開始新的一輪，不分 push、digest 或 watch 級，立刻經 `WakeWatcher` 叫醒守門員，不等每日摘要；同一台同一條 10 分鐘內不重複叫。至少叫到一次：叫醒成功才記成已叫，失敗依 2、4、8、15 分鐘退避重送，alert 解除就放棄；重啟後照紀錄繼續，第一次部署時已經站著的 alert 不叫。由 fleet primary 叫，跟它有沒有 APNs 無關；standby 只在 primary 沒回應或讀不到 alert 時叫。
+- **給守門員的三條壓力規則（#3818、#3819，S3-2；預設關）**：新的 alert level `watch`（只叫醒守門員，不推手機、不進每日摘要），以及三個 kind：
+  - `pressure_watch`（watch）：macOS 的核心壓力等級 ≥ 2 持續 60 秒，或 30 分鐘內進入壓力兩次；Linux 看 PSI。不看 zone（air19 的 zone 會因 VM 換頁長期是 warning）。
+  - `pressure_danger`（push）：macOS 壓力等級 4、Linux PSI 達 danger，每個 5 秒樣本都評估，樣本後 5 秒內成立。
+  - `swap_growth`（watch）：30 分鐘內 swap 增加超過門檻（16 GB 以下 500 MB，以上按 RAM 比例）。
+  - wwd config `[advisor]`：`watch_rules`（總開關，預設 false）、`off`（逐台關掉個別 kind）、`swap_growth_mb`（覆寫門檻）。只有記憶體來源讀取失敗的樣本才算缺漏。
+
+### Added：推播標題（N-1）
+
+- **手機推播的標題改成「{人名} — {任務編組}」（#3803）**：daemon 算出 session 的 persona 顯示名與 team 名，在事件裡帶出 `notify_label`；手機推播標題改成「Mei — Purdex A team」，有人名但不在 team 的是「Mei — mlab：aigora4」，沒有人名維持「mlab：aigora4」。工作簿的「・{主題}」照接，超長時先截主題、再截編組，人名不截。名字與 team 名在記憶體裡，最多晚 30 秒更新。worker（`exec-<id>`）不變。Mac App 的通知與自訂編組要等 N-2、N-3。
+
+### Changed：B 線監控畫面（MON）
+
+- **側欄主機列與監控分頁改接資源池（#3779、#3783、#3784、#3786、#3788、#3789、#3790、#3794～#3802、#3804、#3805、#3809、#3810、#3816）**：側欄主機列只讀資源池，寬側欄多了佇列條與主機格（指示燈、數量、狀態圖示、段數設定），窄側欄有主機區塊與佇列數；主機卡顯示新的讀數與資源池列；主機頁的記憶、儀表與小圖表、程序表與工作欄（主機頁的「監控」分頁元件已在，之後的版本才掛上）；alerts 資料與盾牌數字、事件頁的 observations；佇列流程圖（路線、懸停、沙漏入口）；監看區的主機分頁跟著資源池，可拖曳排序並寫回。Hosts 頁與主機頁改用資源池的狀態，fleet 的退路拿掉。
+- **從分頁的沙漏用鍵盤進入工作佇列（#3812，#3806）**。
+
+### Changed：WWD-9 移除舊系統的準備
+
+- **wwd 不再借用舊閘門的程式（#3811、#3821）**：`WorkingTree`／`SnapshotTree` 搬到 `internal/wwd/snapshot`（純搬移）；本機快速通道自己定義 Options、標記、結束碼與 Class，不再 import `internal/gate`（值不變，並與舊閘門的現值對照測試）。
+- **刪掉沒人呼叫的舊磁碟守衛（#3822）**。
+
+### Fixed
+
+- **mserv 偵測不到 pnpm（#3807）**：wwd 的工具探測執行 `pnpm -v` 時沒有把 `[tools] extra_path` 放進 PATH，pnpm 是 `#!/usr/bin/env node` 腳本，找不到 node 就失敗；現在探測與 job 用同一個 PATH。空白的 `extra_path` 項目不再變成目前目錄。
+- **deck 後續發言行的名字用主文字色（#3782）**。
+- **兩個不穩定的測試（#3780、#3808）**：群組顏色順序（#3774）、監控設定重載（#3770）、tabs 記錄的鍵順序（#3792）。
+
+### Docs
+
+- **推播標題的 spec 與 plan（#3793）**；監控 plan 第 2 版（#3787）。
+
 ## [1.0.0-alpha.768] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 767 相同，但 App 仍要用 768 重新打包（見下一段）。資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
