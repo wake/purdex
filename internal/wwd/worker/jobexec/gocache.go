@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path"
@@ -34,8 +36,16 @@ import (
 // the test read, not tmux, a socket or an executable, and the reuse of whole jobs is the result cache's.
 
 const (
-	// defaultGoCacheMaxMB bounds one Go version's build cache: over it, and with no job using it, it is emptied before the next job.
+	// defaultGoCacheMaxMB bounds one Go version's build cache: over it, it is trimmed from the oldest entry (#3748), and a cache that cannot
+	// be trimmed is emptied before the next job when no job uses it.
 	defaultGoCacheMaxMB = 10240
+	// defaultGoCachePruneHours is how long an entry may go unused before it is removed. Go touches an entry's file time when it uses it (at
+	// most once an hour), so an entry whose time is older than this was not asked for since; Go's own trim waits 5 days.
+	defaultGoCachePruneHours = 24
+	// goCacheTrimPct is where a trim of an over-bound cache stops: a share of the bound, so that the next job does not trim again.
+	goCacheTrimPct = 80
+	// goCachePruneEvery is the least time between two age passes (Go's file times are an hour coarse).
+	goCachePruneEvery = time.Hour
 	// goCacheKeep is how many Go versions' caches are kept; an older one is removed when a newer one is made.
 	goCacheKeep = 2
 	// goCacheLook is the least time between two looks at the size of a cache (a walk of its entries is not free).
@@ -58,6 +68,7 @@ func (u *goCacheUse) release() {
 type goCacheState struct {
 	mu       sync.Mutex
 	lookAt   time.Time // when the cache last looked at was looked at
+	pruneAt  time.Time // when the last age pass was
 	now      func() time.Time
 	oversize bool // the last look found the cache over twice its bound
 	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
@@ -150,9 +161,67 @@ func (e *Exec) prepareGoCache(ctx context.Context, base string) string {
 	return dir
 }
 
-// boundGoCache keeps the cache in dir within its bound, at most once in goCacheLook: with no job using it (the exclusive lock is free) it is
-// moved aside and made again, and removed in the background; with jobs using it, a cache over twice its bound is not given (false). The
-// lock is left unlocked.
+// goCacheRemoveFile removes one entry of the cache (a test seam).
+var goCacheRemoveFile = os.Remove
+
+// goCacheFile is one entry of the cache as the walk saw it.
+type goCacheFile struct {
+	path string
+	mod  time.Time
+	size int64
+}
+
+// scanGoCache lists the regular files under dir with their sizes and times, and their sum. Go's own bookkeeping at the top (trim.txt, README)
+// is not an entry. A link is not followed and a file that goes away while it is read counts as nothing. errOverBound: more entries than
+// storeScanLimit (the list is then not complete); any other error is that ctx ended.
+func scanGoCache(ctx context.Context, dir string) (files []goCacheFile, total int64, err error) {
+	count := 0
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if werr != nil {
+			return nil
+		}
+		if count++; count > storeScanLimit {
+			return errOverBound
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if rel, rerr := filepath.Rel(dir, p); rerr == nil && (rel == "trim.txt" || rel == "README") {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		files = append(files, goCacheFile{p, info.ModTime(), info.Size()})
+		total += info.Size()
+		return nil
+	})
+	return files, total, err
+}
+
+// removeGoCacheFiles removes the listed entries one by one, in order, while the sum *total is over target (a negative target removes all of
+// them), and takes what was freed off *total. A file that is already gone counts as removed (another worker, or Go's own trim, was first);
+// any other failure leaves it, and it stays in the sum.
+func removeGoCacheFiles(files []goCacheFile, total *int64, target int64) {
+	for _, f := range files {
+		if *total <= target {
+			break
+		}
+		if err := goCacheRemoveFile(f.path); err == nil || errors.Is(err, fs.ErrNotExist) {
+			*total -= f.size
+		}
+	}
+}
+
+// boundGoCache keeps the cache in dir within its bound, at most once in goCacheLook, in one walk of the entries. An age pass (at most once
+// an hour) removes the entries unused for longer than the limit; over the bound, the oldest entries go until it is at 80% of it. Neither needs the
+// cache to be free: Go's own trim removes files while other go processes run, and a file that went away is a miss. Only a cache that could not be
+// trimmed under its bound is emptied, and that needs the exclusive lock (moved aside and made again, removed in the background); while jobs
+// hold it, it is not given to a new job when over twice the bound (false). The lock is left unlocked.
 func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool {
 	s := &e.goCache
 	s.mu.Lock()
@@ -164,12 +233,39 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 	s.lookAt = now
 	max := e.goCacheMax()
 	s.oversize = false
+	files, total, err := scanGoCache(ctx, dir)
+	tooMany := errors.Is(err, errOverBound) // too many entries to list: not trimmed, treated as over the bound
+	if err != nil && !tooMany {
+		return true // ctx ended
+	}
+	if !tooMany {
+		if s.pruneAt.IsZero() || now.Sub(s.pruneAt) >= goCachePruneEvery {
+			s.pruneAt = now
+			cutoff := now.Add(-e.goCachePrune())
+			var aged, kept []goCacheFile
+			for _, f := range files {
+				if f.mod.Before(cutoff) {
+					aged = append(aged, f)
+				} else {
+					kept = append(kept, f)
+				}
+			}
+			removeGoCacheFiles(aged, &total, -1)
+			files = kept // (an aged file that would not go is not tried again below: it stays in the size, so the bound still sees it)
+		}
+		if total > max {
+			sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+			target := max / 100 * goCacheTrimPct
+			removeGoCacheFiles(files, &total, target)
+		}
+	}
+	over := tooMany || total > max
+	if !over {
+		return true
+	}
+	log.Printf("jobexec: the build cache %s could not be trimmed under its bound (%d MB)", dir, max>>20)
 	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
 		defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		big, err := storeTooBig(ctx, dir, max)
-		if err != nil || !big {
-			return true
-		}
 		aside := fmt.Sprintf("%s.old-%d-%d", dir, os.Getpid(), time.Now().UnixNano())
 		log.Printf("jobexec: the build cache %s is over its bound (%d MB): emptied", dir, max>>20)
 		if err := os.Rename(dir, aside); err != nil {
@@ -182,11 +278,19 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 		return true
 	}
 	// in use by other jobs: it cannot be emptied now; over twice the bound it is not given to a new job
-	if big, err := storeTooBig(ctx, dir, 2*max); err == nil && big {
+	if tooMany || total > 2*max {
 		s.oversize = true
 		return false
 	}
 	return true
+}
+
+func (e *Exec) goCachePrune() time.Duration {
+	h := e.cfg.GoCachePruneHours
+	if h <= 0 {
+		h = defaultGoCachePruneHours
+	}
+	return time.Duration(h) * time.Hour
 }
 
 // pruneGoCaches removes the caches of older Go versions beyond the newest goCacheKeep (by modification time of the directory), each only
