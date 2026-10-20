@@ -57,7 +57,8 @@ export function fleetViewOfPoolHost(views: FleetHostView[], poolHost: Pick<PoolH
   const byDaemon = cfg ? views.find((v) => v.kind === 'daemon' && v.hostConfigId === cfg) : undefined
   if (byDaemon) return byDaemon
   // An alias is not unique: with two fleet hosts of the name there is no telling which one this is.
-  const byAlias = poolHost.alias === '' ? [] : views.filter((v) => v.alias === poolHost.alias)
+  // A probe row is not a pool host's fleet host: only a daemon host is (the host page's probe branch is not reachable from a pool tab).
+  const byAlias = poolHost.alias === '' ? [] : views.filter((v) => v.kind === 'daemon' && v.alias === poolHost.alias)
   return byAlias.length === 1 ? byAlias[0] : null
 }
 

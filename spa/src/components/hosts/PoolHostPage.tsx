@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
-import { writeHostPage } from '../../lib/watch/view-memory'
 import type { PoolHostRow } from '../../lib/pool/use-pool-host-rows'
 import type { PoolFacts } from '../../lib/pool/types'
 import type { PoolReadings } from '../../lib/pool/use-pool-host-rows'
@@ -23,7 +22,7 @@ export function PoolHostPage({ row, children }: { row: PoolHostRow; children?: R
   const sub = h ? t('pool_hosts.page.sub', { version: h.version, proto: h.proto, platform: h.platform, arch: h.arch, os: facts?.os_version ?? '' }) : null
   const w = row.worker
 
-  const openSettings = () => { writeHostPage(row.id, 'settings'); openWatchArea({ host: row.id }) }
+  const openSettings = () => { if (h) openWatchArea({ poolHost: { hostId: h.host_id }, sub: 'settings' }) }
 
   return (
     <div data-testid="pool-page" data-pool-id={row.id}>
@@ -46,7 +45,7 @@ export function PoolHostPage({ row, children }: { row: PoolHostRow; children?: R
       <Section title={t('pool.card.worker')} testId="pool-page-worker">
         <div className="flex items-center gap-3">
           <span>{!w ? unknown : w.enabled ? t('pool.card.worker_on', { hr: w.running.heavy, hs: w.slots.heavy, lr: w.running.light, ls: w.slots.light }) : t('pool.card.worker_off')}</span>
-          <button type="button" data-testid="pool-page-worker-settings" onClick={openSettings} className="text-xs text-accent cursor-pointer hover:underline">{t('pool_hosts.page.worker_settings')}</button>
+          <button type="button" data-testid="pool-page-worker-settings" onClick={openSettings} disabled={!h} className="text-xs text-accent cursor-pointer hover:underline">{t('pool_hosts.page.worker_settings')}</button>
         </div>
         <div className="text-xs text-text-muted mt-1">{t('pool.card.headroom')}: {row.headroom ? t('pool.card.headroom_value', { h: row.headroom.heavy, l: row.headroom.light }) : unknown}</div>
       </Section>

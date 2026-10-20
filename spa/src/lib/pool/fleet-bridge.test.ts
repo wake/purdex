@@ -34,6 +34,12 @@ describe('fleetViewOfPoolHost', () => {
     expect(fleetViewOfPoolHost(twins, air, {})).toBeNull()
     expect(fleetViewOfPoolHost(twins, air, { '0123456789abcdef': 'c2' })?.id).toBe('b')
   })
+  it('a probe row of the same alias is never the fleet host of a pool host (a pool host is a daemon)', () => {
+    const onlyProbe = [{ ...fleet({ alias: 'air26', id: 'p-9' }), kind: 'probe' }] as never[]
+    expect(fleetViewOfPoolHost(onlyProbe, air, {})).toBeNull()
+    const both = [...onlyProbe, { ...fleet({ alias: 'air26', id: 'd-9' }), kind: 'daemon', hostConfigId: 'c9' }] as never[]
+    expect(fleetViewOfPoolHost(both, air, {})?.id).toBe('d-9')
+  })
   it('a pool host with neither is null', () => expect(fleetViewOfPoolHost(views, poolHost({ alias: 'nope', host_id: 'zz' }), {})).toBeNull())
 })
 
