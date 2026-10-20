@@ -511,3 +511,96 @@ func TestSwapGrowth_NeedsTwentyEightMinutesOfWholeMinutes(t *testing.T) {
 		t.Errorf("28 minutes: %+v %v", v, err)
 	}
 }
+
+// ---- #3850: the entries rule and the clearing line are one line ----
+
+// timeline5 makes calm samples 5 s apart from t0 up to and including end, with two pressure samples at each of the offsets in entries (the
+// calm sample before each one is what makes it an entry).
+func timeline5(end time.Duration, entries ...time.Duration) []wire.Facts {
+	var recs []wire.Facts
+	for off := time.Duration(0); off <= end; off += 5 * time.Second {
+		p := 1
+		for _, e := range entries {
+			if off == e || off == e+5*time.Second {
+				p = 2
+			}
+		}
+		recs = append(recs, mac(t0.Add(off), p))
+	}
+	return recs
+}
+
+// The timeline of the issue: two entries (06:10:00 and 06:26:15, here 0 and 16m15s), a raise, the clear at ten calm minutes, and the next
+// round: the two entries are still in the 30-minute window, but the last pressure sample is more than ten minutes old, so nothing is raised
+// again. Before the fix every end of pressure woke the watcher one more time.
+func TestPressureWatch_AClearedAlertIsNotRaisedAgainByTheEntriesThatRaisedIt(t *testing.T) {
+	second := 16*time.Minute + 15*time.Second
+	lastPressure := second + 5*time.Second
+	clearAt := lastPressure + watchClear + 5*time.Second // the first round that finds ten calm minutes
+	judge := func(at time.Duration, raised bool) (Verdict, error) {
+		in := recentInput(t0.Add(at), timeline5(at, 10*time.Second, second)...)
+		if raised {
+			in = raisedAs(in, "pressure_watch")
+		}
+		return PressureWatch{}.Eval(in)
+	}
+	if v, err := judge(second+10*time.Second, false); err != nil || !v.Holds {
+		t.Fatalf("the second entry raises it: %+v %v", v, err)
+	}
+	if v, err := judge(clearAt-5*time.Second, true); err != nil || !v.Holds {
+		t.Fatalf("still raised a round before the clear: %+v %v", v, err)
+	}
+	if v, err := judge(clearAt, true); err != nil || v.Holds {
+		t.Fatalf("clears at ten calm minutes: %+v %v", v, err)
+	}
+	// every round after the clear, until the first entry slides out of the window: nothing is raised again
+	for at := clearAt + 5*time.Second; at <= 30*time.Minute+lastPressure; at += 5 * time.Second {
+		if v, err := judge(at, false); err != nil || v.Holds {
+			t.Fatalf("raised again %s after the second entry: %+v %v", at-second, v, err)
+		}
+	}
+}
+
+// The line is where the clearing line is: a pressure sample exactly ten minutes old still holds a raised alert (the clearing code takes it as
+// pressure), so it also lets the entries raise; one sample later it does not.
+func TestPressureWatch_TheEntriesRuleLooksBackTenMinutesLikeTheClear(t *testing.T) {
+	second := 16 * time.Minute
+	lastPressure := second + 5*time.Second
+	for _, c := range []struct {
+		name string
+		now  time.Duration
+		want bool
+	}{
+		{"pressure 9m55s ago", lastPressure + watchClear - 5*time.Second, true},
+		{"pressure exactly 10 min ago", lastPressure + watchClear, true},
+		{"pressure 10m05s ago", lastPressure + watchClear + 5*time.Second, false},
+	} {
+		recs := timeline5(c.now, 10*time.Second, second)
+		v, err := PressureWatch{}.Eval(recentInput(t0.Add(c.now), recs...))
+		if err != nil || v.Holds != c.want {
+			t.Errorf("%s: %+v %v, want holds=%v", c.name, v, err, c.want)
+		}
+		// the same samples with the alert raised: held exactly where the entries rule raises, which is the point
+		raised, rerr := PressureWatch{}.Eval(raisedAs(recentInput(t0.Add(c.now), recs...), "pressure_watch"))
+		if rerr != nil || raised.Holds != c.want {
+			t.Errorf("%s (raised): %+v %v, want holds=%v", c.name, raised, rerr, c.want)
+		}
+	}
+}
+
+// After a clear, a new entry counts as before: with the entry that is still in the window it makes two, and pressure is recent.
+func TestPressureWatch_ANewEntryAfterTheClearRaisesAgain(t *testing.T) {
+	second := 16*time.Minute + 15*time.Second
+	third := second + watchClear + 3*time.Minute // the clear has been, and the second entry is still in the window
+	recs := timeline5(third+10*time.Second, 10*time.Second, second, third)
+	v, err := PressureWatch{}.Eval(recentInput(t0.Add(third+10*time.Second), recs...))
+	if err != nil || !v.Holds {
+		t.Fatalf("a new entry makes two in 30 minutes, with pressure right now: %+v %v", v, err)
+	}
+	// a single entry after the others have slid out is one entry: nothing
+	later := 55 * time.Minute
+	recs = timeline5(later+10*time.Second, 10*time.Second, second, later)
+	if v, err := (PressureWatch{}).Eval(recentInput(t0.Add(later+10*time.Second), recs...)); err != nil || v.Holds {
+		t.Fatalf("one entry in 30 minutes: %+v %v", v, err)
+	}
+}

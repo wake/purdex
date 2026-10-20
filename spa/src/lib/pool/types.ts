@@ -15,7 +15,12 @@ export interface PoolPsi { some10: number; full10: number; some60: number }
 export interface PoolException { name: string; since: number; until: number | null }
 export type PoolHold = 'heavy' | 'light'
 /** One entry of `GET /api/pool/hosts/{alias}/exceptions` (`pool.control.v1`'s list, #3479): a pause with what it holds. `until` and `pid`: exactly one is set. */
-export interface PoolExceptionDetail { name: string; until: number | null; pid: number | null; holds: PoolHold[] }
+export interface PoolExceptionDetail {
+  name: string; until: number | null; pid: number | null; holds: PoolHold[]
+  /** What the pause lets through (wwd's `allow`): absent when it lets nothing through. */
+  allow?: { classes: string[]; repos: string[] }
+  flags?: string[]
+}
 /** One core's shares of its own time, each null on its own; `kind` is `p` (performance) or `e` (efficiency), null when the platform does not say. */
 export interface PoolCore { user_pct: number | null; system_pct: number | null; idle_pct: number | null; kind: 'p' | 'e' | null }
 /** One physical disk's throughput since the previous sample; a rate is null where there was nothing to compare with. */
