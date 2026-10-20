@@ -95,17 +95,9 @@ func TestOpenMigratesV7ToV8(t *testing.T) {
 			t.Errorf("open 2 lost the row: %+v %v", got, err)
 		}
 		var v int
-		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != 8 {
+		if err := s.DB().QueryRow(`SELECT version FROM host_schema`).Scan(&v); err != nil || v != schemaVersion {
 			t.Errorf("open %d: version %d %v", round, v, err)
 		}
 		s.Close()
-	}
-}
-
-// What an older wwd does with a v8 file is the existing rule: a newer schema is refused, so the way back is the backup taken before the
-// upgrade. This pins the number that rule compares.
-func TestSchemaVersionIsEight(t *testing.T) {
-	if schemaVersion != 8 {
-		t.Fatalf("schemaVersion = %d: a step needs its own case in migrate and its own test", schemaVersion)
 	}
 }

@@ -21,7 +21,12 @@ import (
 // schemaVersion is the version of the host tables. Once wwd is deployed the
 // tables exist: a change from here on is a case in migrate, never an edit of
 // createSchema.
-const schemaVersion = 8
+const schemaVersion = 9
+
+// workerDiskCol (v9, ed3920-61): the free-space floor of the work volume, in GB (0: none). A file made before v9 gets it with an ALTER and
+// its one row gets the default 10 (the pdx gate's disk_min_gb, which the host has been under until now); a new file has the column in
+// the table's own DDL. An older wwd refuses a v9 file (a newer schema), so the way back is the backup taken before the upgrade.
+const workerDiskCol = `ALTER TABLE worker_settings ADD COLUMN disk_min_gb REAL NOT NULL DEFAULT 10`
 
 // exceptionHoldCols (v7, WWD-8 8b-3): the two hold fields of an exception (spec §13.4), NULL for an exception made without them. Both
 // are JSON: allow as {"classes":[..],"repos":[..]}, flags as a list. A file made before v7 gets them with an ALTER; a new file gets them
@@ -111,7 +116,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			`CREATE TABLE IF NOT EXISTS worker_settings (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				enabled INTEGER NOT NULL, heavy INTEGER NOT NULL, light INTEGER NOT NULL,
-				owner_rule TEXT NOT NULL)`,
+				owner_rule TEXT NOT NULL, disk_min_gb REAL NOT NULL DEFAULT 10)`,
 			`CREATE TABLE IF NOT EXISTS exceptions (
 				name TEXT PRIMARY KEY,
 				until_ms INTEGER, pid INTEGER, pid_ident TEXT NOT NULL DEFAULT '',
@@ -190,6 +195,11 @@ func (s *Store) migrate(ctx context.Context) error {
 				return err
 			}
 		}
+		if have < 9 { // v9: the disk floor of the worker settings (ed3920-61); a column that is there is left alone
+			if err := addColumn(ctx, tx, "worker_settings", "disk_min_gb", workerDiskCol); err != nil {
+				return err
+			}
+		}
 		if have < schemaVersion {
 			if _, err := tx.ExecContext(ctx, `UPDATE host_schema SET version = ?`, schemaVersion); err != nil {
 				return err
@@ -203,8 +213,9 @@ func (s *Store) migrate(ctx context.Context) error {
 // (the config's starting values apply).
 func (s *Store) LoadWorker() (ws wire.WorkerSettings, ok bool, err error) {
 	var en int
-	err = s.db.QueryRow(`SELECT enabled, heavy, light, owner_rule FROM worker_settings WHERE id = 1`).
-		Scan(&en, &ws.Slots.Heavy, &ws.Slots.Light, &ws.OwnerRule)
+	var disk float64
+	err = s.db.QueryRow(`SELECT enabled, heavy, light, owner_rule, disk_min_gb FROM worker_settings WHERE id = 1`).
+		Scan(&en, &ws.Slots.Heavy, &ws.Slots.Light, &ws.OwnerRule, &disk)
 	if errors.Is(err, sql.ErrNoRows) {
 		return wire.WorkerSettings{}, false, nil
 	}
@@ -212,6 +223,7 @@ func (s *Store) LoadWorker() (ws wire.WorkerSettings, ok bool, err error) {
 		return wire.WorkerSettings{}, false, err
 	}
 	ws.Enabled = en != 0
+	ws.DiskMinGB = &disk
 	return ws, true, nil
 }
 
@@ -221,9 +233,14 @@ func (s *Store) SaveWorker(ws wire.WorkerSettings) error {
 	if ws.Enabled {
 		en = 1
 	}
-	_, err := s.db.Exec(`INSERT INTO worker_settings (id, enabled, heavy, light, owner_rule) VALUES (1, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, heavy = excluded.heavy, light = excluded.light, owner_rule = excluded.owner_rule`,
-		en, ws.Slots.Heavy, ws.Slots.Light, ws.OwnerRule)
+	disk := wire.DefaultDiskMinGB // settings that carry none are stored with the default
+	if ws.DiskMinGB != nil {
+		disk = *ws.DiskMinGB
+	}
+	_, err := s.db.Exec(`INSERT INTO worker_settings (id, enabled, heavy, light, owner_rule, disk_min_gb) VALUES (1, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, heavy = excluded.heavy, light = excluded.light, owner_rule = excluded.owner_rule,
+			disk_min_gb = excluded.disk_min_gb`,
+		en, ws.Slots.Heavy, ws.Slots.Light, ws.OwnerRule, disk)
 	return err
 }
 

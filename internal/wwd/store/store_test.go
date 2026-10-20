@@ -43,6 +43,7 @@ func TestWorkerSettingsPersistAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
+	want2.DiskMinGB = f64(wire.DefaultDiskMinGB) // saved without a floor: stored, and read back, as the default
 	got, ok, err := s2.LoadWorker()
 	if err != nil || !ok || !reflect.DeepEqual(got, want2) {
 		t.Fatalf("got %+v ok=%v err=%v want %+v", got, ok, err, want2)
