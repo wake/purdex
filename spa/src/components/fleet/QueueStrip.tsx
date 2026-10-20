@@ -4,7 +4,7 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { queueEntries } from '../../lib/pool/jobs-lanes'
 import { usePoolJobs, usePoolReadable } from '../../lib/pool/pool-jobs'
-import { queueStripOf } from '../../lib/pool/queue-strip'
+import { queueStripOf, type QueueStrip as QueueStripModel } from '../../lib/pool/queue-strip'
 import { usePoolStore } from '../../lib/pool/store'
 import { useClock } from '../../lib/pool/use-cell-models'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -13,6 +13,22 @@ import { CountBadge } from './CountBadge'
 import { QueueTooltip } from './QueueTooltip'
 
 const SEGMENT_CLASS = { heavy: 'bg-queue-heavy', light: 'bg-queue-light', empty: 'bg-border-default' } as const
+
+/** The strip's segments: one per job still waiting, grey for the rest; more waiting than segments puts "+N" on the last one. */
+export function QueueSegments({ strip, nseg }: { strip: QueueStripModel; nseg: number }) {
+  const kinds = Array.from({ length: nseg }, (_, i) => strip.segments[i] ?? 'empty')
+  return (
+    <>
+      {kinds.map((kind, i) => (
+        <span key={i} data-testid={`queue-seg-${i}`} data-kind={kind} className={`relative min-w-0 flex-1 rounded-[1px] ${SEGMENT_CLASS[kind]}`}>
+          {i === kinds.length - 1 && strip.overflow > 0 && (
+            <CountBadge n={strip.overflow} label={`+${strip.overflow}`} size="sm" className="bg-text-muted text-white pointer-events-none" testId="queue-overflow" />
+          )}
+        </span>
+      ))}
+    </>
+  )
+}
 
 export function QueueStrip() {
   const t = useI18nStore((s) => s.t)
@@ -29,7 +45,6 @@ export function QueueStrip() {
   const show = () => { setAnchor(ref.current?.getBoundingClientRect() ?? null); setOpen(true) }
   const hide = () => setOpen(false)
   const waiting = strip.counts.heavy + strip.counts.light
-  const kinds = Array.from({ length: nseg }, (_, i) => strip.segments[i] ?? 'empty')
 
   return (
     <button
@@ -45,13 +60,7 @@ export function QueueStrip() {
       onClick={() => { hide(); openWatchArea({ tab: 'jobs' }) }}
       className="relative flex h-1.5 w-full shrink-0 cursor-pointer items-stretch gap-px outline-none focus-visible:ring-1 focus-visible:ring-border-active focus-visible:ring-offset-1 focus-visible:ring-offset-surface-tertiary"
     >
-      {kinds.map((kind, i) => (
-        <span key={i} data-testid={`queue-seg-${i}`} data-kind={kind} className={`relative min-w-0 flex-1 rounded-[1px] ${SEGMENT_CLASS[kind]}`}>
-          {i === kinds.length - 1 && strip.overflow > 0 && (
-            <CountBadge n={strip.overflow} label={`+${strip.overflow}`} size="sm" className="bg-text-muted text-white pointer-events-none" testId="queue-overflow" />
-          )}
-        </span>
-      ))}
+      <QueueSegments strip={strip} nseg={nseg} />
       {open && <QueueTooltip id={tipId} strip={strip} placement="above" anchor={anchor} />}
     </button>
   )
