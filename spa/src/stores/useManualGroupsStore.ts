@@ -12,10 +12,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { groupNameError } from '../lib/task-groups/edits'
+import { groupNameError, MAX_GROUPS, MAX_MEMBERS } from '../lib/task-groups/manual-edits'
 
-export const MAX_GROUPS = 32
-export const MAX_MEMBERS = 64
+export { MAX_GROUPS, MAX_MEMBERS }
 
 export interface ManualGroupMember {
   /** LOCAL host id (or, until the host is known here, the wire id as received). */
