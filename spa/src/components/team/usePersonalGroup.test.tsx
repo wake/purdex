@@ -43,11 +43,12 @@ describe('usePersonalGroup', () => {
     useTabStore.setState((s) => ({ tabs: { ...s.tabs, t1: { ...s.tabs.t1, group: `team\u0000${KEY}` } } }) as never)
     useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
     let renders = 0
-    renderHook(() => { renders++; return usePersonalGroup(target, false) })
+    const { result } = renderHook(() => { renders++; return usePersonalGroup(target, false) })
     const before = renders
     act(() => { useTeamRosterStore.setState(roster('Alpha', 2)) }) // a context reading ticked
     expect(renders).toBe(before)
     act(() => { useTeamRosterStore.setState(roster('Beta', 2)) })
     expect(renders).toBeGreaterThan(before)
+    expect(result.current.group).toMatchObject({ kind: 'team', name: 'Beta' })
   })
 })
