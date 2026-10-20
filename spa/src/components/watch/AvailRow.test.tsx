@@ -15,7 +15,7 @@ const live = (over: Partial<PoolCellExtra> = {}): PoolCellExtra => ({
 
 describe('the 可接工作 row', () => {
   it('worker on: running over slots; takes; sessions room; owner away', () => {
-    render(<AvailRow pool={live()} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live()} exceptions={[]} at={AT} now={AT} />)
     const row = screen.getByTestId('avail-row')
     expect(within(row).getByTestId('avail-worker').textContent).toContain('On · heavy 1/2 · light 0/4')
     expect(within(row).getByTestId('avail-headroom').textContent).toContain('heavy 1 · light 4')
@@ -24,13 +24,13 @@ describe('the 可接工作 row', () => {
   })
 
   it('worker off says so', () => {
-    render(<AvailRow pool={live({ worker: { enabled: false, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } }, headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['worker_off'], light: ['worker_off'] } })} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live({ worker: { enabled: false, slots: { heavy: 2, light: 4 }, running: { heavy: 0, light: 0 } }, headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['worker_off'], light: ['worker_off'] } })} exceptions={[]} at={AT} now={AT} />)
     expect(screen.getByTestId('avail-worker').textContent).toContain('Off')
     expect(screen.getByTestId('avail-reason').textContent).toContain('Worker is off')
   })
 
   it('a class at 0 gives its reason; both the same → one line for both', () => {
-    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['zone_warning', 'slots_full'], light: ['zone_warning', 'slots_full'] } })} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['zone_warning', 'slots_full'], light: ['zone_warning', 'slots_full'] } })} exceptions={[]} at={AT} now={AT} />)
     const lines = screen.getAllByTestId('avail-reason')
     expect(lines).toHaveLength(1)
     expect(lines[0].textContent).toContain('heavy · light')
@@ -38,33 +38,33 @@ describe('the 可接工作 row', () => {
   })
 
   it('heavy and light with different reasons: two lines', () => {
-    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['gate_full'], light: ['owner_active'] } })} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: { heavy: ['gate_full'], light: ['owner_active'] } })} exceptions={[]} at={AT} now={AT} />)
     expect(screen.getAllByTestId('avail-reason')).toHaveLength(2)
   })
 
   it('a daemon that sends no reasons: the plain 0, no reason made up', () => {
-    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: null })} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live({ headroom: { heavy: 0, light: 0 }, reasons: null })} exceptions={[]} at={AT} now={AT} />)
     expect(screen.getByTestId('avail-headroom').textContent).toContain('heavy 0 · light 0')
     expect(screen.queryByTestId('avail-reason')).toBeNull()
   })
 
   it('owner at the machine; no owner block for a host without owner rules', () => {
-    const { rerender } = render(<AvailRow pool={live({ owner: { active: true, idle_s: 7, reason: 'hid' } })} exceptions={[]} at={AT} />)
+    const { rerender } = render(<AvailRow pool={live({ owner: { active: true, idle_s: 7, reason: 'hid' } })} exceptions={[]} at={AT} now={AT} />)
     expect(screen.getByTestId('avail-owner').textContent).toContain('At this machine (7 s idle)')
-    rerender(<AvailRow pool={live({ owner: null })} exceptions={[]} at={AT} />)
+    rerender(<AvailRow pool={live({ owner: null })} exceptions={[]} at={AT} now={AT} />)
     expect(screen.queryByTestId('avail-owner')).toBeNull()
   })
 
   it('exceptions in force: the name, and until when or no end', () => {
     const until = AT + 1800_000
-    render(<AvailRow pool={live()} exceptions={[{ name: 'app-dev-package', since: 1, until }, { name: 'dev-server', since: 1, until: null }]} at={AT} />)
+    render(<AvailRow pool={live()} exceptions={[{ name: 'app-dev-package', since: 1, until }, { name: 'dev-server', since: 1, until: null }]} at={AT} now={AT} />)
     const ex = screen.getByTestId('avail-exceptions')
     expect(within(ex).getByTestId('avail-exception-app-dev-package').textContent).toMatch(/app-dev-package.*until/)
     expect(within(ex).getByTestId('avail-exception-dev-server').textContent).toContain('no end')
   })
 
   it('an exception whose end is already past (by the facts\' own time) is not in force', () => {
-    render(<AvailRow pool={live()} exceptions={[{ name: 'old-one', since: AT - 7200_000, until: AT - 60_000 }, { name: 'on-now', since: AT - 60_000, until: AT + 3600_000 }]} at={AT} />)
+    render(<AvailRow pool={live()} exceptions={[{ name: 'old-one', since: AT - 7200_000, until: AT - 60_000 }, { name: 'on-now', since: AT - 60_000, until: AT + 3600_000 }]} at={AT} now={AT} />)
     expect(screen.queryByTestId('avail-exception-old-one')).toBeNull()
     expect(screen.getByTestId('avail-exception-on-now')).toBeTruthy()
   })
@@ -74,19 +74,19 @@ describe('the 可接工作 row', () => {
       { name: 'later', since: AT + 60_000, until: AT + 3600_000 },
       { name: 'later-open', since: AT + 60_000, until: null },
       { name: 'right-now', since: AT, until: null },
-    ]} at={AT} />)
+    ]} at={AT} now={AT} />)
     expect(screen.queryByTestId('avail-exception-later')).toBeNull()
     expect(screen.queryByTestId('avail-exception-later-open')).toBeNull()
     expect(screen.getByTestId('avail-exception-right-now')).toBeTruthy()
   })
 
   it('all exceptions over: no exceptions block', () => {
-    render(<AvailRow pool={live()} exceptions={[{ name: 'old-one', since: 1, until: AT - 1 }]} at={AT} />)
+    render(<AvailRow pool={live()} exceptions={[{ name: 'old-one', since: 1, until: AT - 1 }]} at={AT} now={AT} />)
     expect(screen.queryByTestId('avail-exceptions')).toBeNull()
   })
 
   it('no exceptions: no exceptions block', () => {
-    render(<AvailRow pool={live()} exceptions={[]} at={AT} />)
+    render(<AvailRow pool={live()} exceptions={[]} at={AT} now={AT} />)
     expect(screen.queryByTestId('avail-exceptions')).toBeNull()
   })
 

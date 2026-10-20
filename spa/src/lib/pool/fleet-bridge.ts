@@ -88,7 +88,7 @@ export function poolCellModel(fleet: FleetHostView, st: PoolHostState | Unlisted
   const rest = 'pool' in st ? { checkedAt: st.checkedAt, stalled: st.stalled } : { checkedAt: null, stalled: false }
   return {
     view: { ...fleet, status: 'offline', fast: null, last_ok_at: st.lastFactsAt },
-    pool: { ...none, state: st.state === 'ok' ? 'unknown' : st.state, lastFactsAt: st.lastFactsAt, ...rest },
+    pool: { ...none, state: st.state, lastFactsAt: st.lastFactsAt, ...rest },
   }
 }
 
