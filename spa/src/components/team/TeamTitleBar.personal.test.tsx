@@ -15,6 +15,8 @@ import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { Tab } from '../../types/tab'
 
+const interest = vi.fn()
+vi.mock('../../lib/task-groups/session-roots-lifecycle', () => ({ setRootsInterest: (...a: unknown[]) => interest(...a) }))
 vi.mock('./TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -34,6 +36,7 @@ const personalButton = () => screen.queryByTestId('personal-button')
 const mountBar = () => render(<TeamDisplayProvider><TitleBar title="T" /><TeamPanelArea /></TeamDisplayProvider>)
 
 beforeEach(() => {
+  interest.mockClear()
   cleanup()
   localStorage.clear()
   resetTeamStores()
@@ -128,5 +131,15 @@ describe('the strip', () => {
     act(() => useTeamUiStore.getState().setSharedPanelMode('titlebar'))
     setActive('x')
     expect(screen.queryByTestId('personal-title-strip')).toBeNull()
+  })
+})
+
+describe('the roots read (spec 4.5)', () => {
+  it('asks for the active tab\'s session as the \'personal\' source, whatever the sidebar view; stops on a tab without one', () => {
+    mountBar()
+    setActive('cc1')
+    expect(interest).toHaveBeenLastCalledWith(true, [{ hostId: HOST, agentSessionId: 'S1' }], 'personal')
+    setActive('x')
+    expect(interest).toHaveBeenLastCalledWith(false, [], 'personal')
   })
 })
