@@ -2,6 +2,7 @@ package wwdalerts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -77,12 +78,30 @@ func wakeRule(rv fleet.RoleView) func() bool {
 	}
 }
 
-// wakeQueue holds what waits for the one wake worker: the first episode's line and how many came after it, folded into one note.
+// wakeBackoff is how long a failed call waits before the next try: 2 minutes after the first failure, doubling, at most 15.
+func wakeBackoff(failures int) time.Duration {
+	d := 2 * time.Minute
+	for i := 1; i < failures && d < 15*time.Minute; i++ {
+		d *= 2
+	}
+	if d > 15*time.Minute {
+		d = 15 * time.Minute
+	}
+	return d
+}
+
+// wakeItem is one episode waiting for the worker, with its line of the note.
+type wakeItem struct {
+	ep   wakeEp
+	line string
+}
+
+// wakeQueue holds what waits for the one wake worker: the episodes, folded into one note when the worker takes them. flight holds every
+// episode that is waiting or being called, so one episode never has two wakes (a wake may start the watcher's session).
 type wakeQueue struct {
 	mu     sync.Mutex
-	first  string
-	have   bool
-	more   int
+	items  []wakeItem
+	flight map[wakeEp]bool
 	busy   bool // the worker is inside WakeWatcher
 	signal chan struct{}
 	once   sync.Once
@@ -94,19 +113,24 @@ func (q *wakeQueue) init() { q.once.Do(func() { q.signal = make(chan struct{}, 1
 func (q *wakeQueue) idle() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return !q.have && !q.busy
+	return len(q.items) == 0 && !q.busy
 }
 
-// enqueueWake never blocks: it leaves the episode for the worker, folded into the ones already waiting.
-func (m *Module) enqueueWake(text string) {
+// enqueueWake never blocks: it leaves the episode for the worker, folded into the ones already waiting. An episode already waiting or in
+// a call is not added again.
+func (m *Module) enqueueWake(ep wakeEp, line string) {
 	q := &m.wakeQ
 	q.init()
 	q.mu.Lock()
-	if !q.have {
-		q.first, q.have = text, true
-	} else {
-		q.more++
+	if q.flight == nil {
+		q.flight = map[wakeEp]bool{}
 	}
+	if q.flight[ep] {
+		q.mu.Unlock()
+		return
+	}
+	q.flight[ep] = true
+	q.items = append(q.items, wakeItem{ep, line})
 	q.mu.Unlock()
 	select {
 	case q.signal <- struct{}{}:
@@ -128,38 +152,55 @@ func (m *Module) startWake(ctx context.Context) {
 			case <-q.signal:
 			}
 			q.mu.Lock()
-			first, have, more := q.first, q.have, q.more
-			q.first, q.have, q.more = "", false, 0
-			q.busy = have
+			items := q.items
+			q.items = nil
+			q.busy = len(items) > 0
 			q.mu.Unlock()
-			if !have {
+			if len(items) == 0 {
 				continue
 			}
-			m.wakeOnce(ctx, first, more)
+			m.wakeOnce(ctx, items)
 			q.mu.Lock()
+			for _, it := range items {
+				delete(q.flight, it.ep)
+			}
 			q.busy = false
 			q.mu.Unlock()
 		}
 	}()
 }
 
-func (m *Module) wakeOnce(ctx context.Context, text string, more int) {
-	var w watch.Waker
-	ok := false
-	if m.waker != nil {
-		w, ok = m.waker()
+// wakeOnce makes the one call for the episodes taken together. Success marks all of them told; a failure (no watch module, an error,
+// a timeout) leaves all of them pending with a backoff. A call ended by the module stopping is not a failure.
+func (m *Module) wakeOnce(ctx context.Context, items []wakeItem) {
+	eps := make([]wakeEp, len(items))
+	for i, it := range items {
+		eps[i] = it.ep
 	}
-	if !ok {
-		m.logf("wwdalerts: wake: the watch module is not running, the watcher is not told: %s", text)
+	text := items[0].line
+	if len(items) > 1 {
+		text += fmt.Sprintf("；另 %d 則", len(items)-1)
+	}
+	err := errors.New("the watch module is not running")
+	if m.waker != nil {
+		if w, ok := m.waker(); ok {
+			cctx, cancel := context.WithTimeout(ctx, wakeBudget)
+			err = w.WakeWatcher(cctx, wakeReason, text)
+			cancel()
+		}
+	}
+	if ctx.Err() != nil {
+		return // stopping: still pending, tried again after a restart
+	}
+	if err == nil {
+		if e := m.store.markWoken(eps, m.now()); e != nil {
+			m.logf("wwdalerts: wake ledger: %v", e)
+		}
 		return
 	}
-	if more > 0 {
-		text += fmt.Sprintf("；另 %d 則", more)
-	}
-	cctx, cancel := context.WithTimeout(ctx, wakeBudget)
-	defer cancel()
-	if err := w.WakeWatcher(cctx, wakeReason, text); err != nil && ctx.Err() == nil {
-		m.logf("wwdalerts: wake the watcher: %v", err)
+	m.logf("wwdalerts: wake the watcher (%s): %v; tried again later", text, err)
+	if e := m.store.markWakeFailed(eps, m.now()); e != nil {
+		m.logf("wwdalerts: wake ledger: %v", e)
 	}
 }
 
@@ -180,12 +221,18 @@ func wakeLine(about string, a wire.Alert) string {
 	return s
 }
 
+// mkEp builds an episode identity; the time is normalised to the millisecond the ledger keeps, so it compares (as a map key) equal to
+// the one read back from the ledger.
+func mkEp(host, key string, since time.Time) wakeEp {
+	return wakeEp{host, key, time.UnixMilli(since.UnixMilli())}
+}
+
 // wakeIdentity is the episode an alert stands for: its own (host, key, since), or for a silence, the failure markEpisodes decided on.
 func (m *Module) wakeIdentity(host string, a wire.Alert) (ep wakeEp, about string, shared bool) {
 	if sharedLedger(a) {
-		return wakeEp{silenceLedger, a.Key, m.episode[a.Key]}, strings.TrimPrefix(a.Key, "silence:"), true
+		return mkEp(silenceLedger, a.Key, m.episode[a.Key]), strings.TrimPrefix(a.Key, "silence:"), true
 	}
-	return wakeEp{host, a.Key, a.Since}, host, false
+	return mkEp(host, a.Key, a.Since), host, false
 }
 
 // wakeAlerts is called once per list read. The first look at a host after the wake ledger exists (the first deployment) records what
@@ -210,16 +257,18 @@ func (m *Module) wakeAlerts(host string, alerts []wire.Alert, now time.Time) {
 	if m.wakeRule == nil || !m.wakeRule() {
 		return // not this daemon's to wake: nothing is recorded, so it wakes for what stands when it becomes so
 	}
+	standing := map[wakeEp]bool{}
 	for _, a := range alerts {
 		if a.ClearedAt != nil {
 			continue
 		}
 		ep, about, shared := m.wakeIdentity(host, a)
+		standing[ep] = true
 		var adopt time.Duration
 		if shared && !m.wakeSeen[a.Key] {
 			adopt = wakeAdoptWithin // the first look at this key since the daemon started: the ledger may know the failure
 		}
-		v, err := m.store.claimWake(ep, now, wakeThrottle, adopt)
+		_, err := m.store.claimWake(ep, now, wakeThrottle, adopt)
 		if shared {
 			if m.wakeSeen == nil {
 				m.wakeSeen = map[string]bool{}
@@ -230,8 +279,46 @@ func (m *Module) wakeAlerts(host string, alerts []wire.Alert, now time.Time) {
 			m.logf("wwdalerts: wake ledger %s/%s: %v", ep.host, ep.key, err)
 			continue
 		}
-		if v == wakeNow {
-			m.enqueueWake(wakeLine(about, a))
+		// a new episode, or one whose call failed and whose backoff is over (also after a restart)
+		if m.store.pendingDue(ep, now) {
+			m.enqueueWake(ep, wakeLine(about, a))
 		}
 	}
+	m.dropGone(host, standing)
+}
+
+// dropGone gives up on this host's pending episodes that no longer stand: the alert cleared, so there is nothing to tell. Silence
+// episodes are shared by all hosts and are judged in dropGoneSilences.
+func (m *Module) dropGone(host string, standing map[wakeEp]bool) {
+	eps, err := m.store.pendingOf(host)
+	if err != nil {
+		m.logf("wwdalerts: wake ledger %s: %v", host, err)
+		return
+	}
+	for _, e := range eps {
+		if !standing[e] {
+			m.logf("wwdalerts: wake: %s/%s cleared before the watcher was told, given up", e.host, e.key)
+			if err := m.store.dropPending(e); err != nil {
+				m.logf("wwdalerts: wake ledger %s: %v", host, err)
+			}
+		}
+	}
+}
+
+// dropGoneSilences gives up on pending silence episodes no list holds now (or that are another failure by now).
+func (m *Module) dropGoneSilences() {
+	if m.wakeRule == nil || !m.wakeRule() {
+		return
+	}
+	held := map[string]bool{}
+	for _, keys := range m.lastHeld {
+		for k := range keys {
+			held[k] = true
+		}
+	}
+	standing := map[wakeEp]bool{}
+	for k := range held {
+		standing[mkEp(silenceLedger, k, m.episode[k])] = true
+	}
+	m.dropGone(silenceLedger, standing)
 }

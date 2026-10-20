@@ -385,6 +385,7 @@ func (m *Module) pass(ctx context.Context) {
 	if err := m.store.prune(m.now()); err != nil {
 		m.logf("wwdalerts: prune: %v", err)
 	}
+	m.dropGoneSilences()
 	if err := m.store.pruneWake(m.now()); err != nil {
 		m.logf("wwdalerts: prune wake ledger: %v", err)
 	}

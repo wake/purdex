@@ -19,8 +19,8 @@ const (
 )
 
 // migrateWake creates the wake ledger: one row per alert episode (host, key, since_ms), written before the watcher is asked, so a
-// restart does not wake for it again. woken_ms is 0 for an episode that was only recorded (the first deployment's standing alerts, a
-// throttled one, an adopted one).
+// restart does not wake for it again. woken_ms is when the watcher was told (the call succeeded), 0 for an episode that is pending or was only
+// recorded (the first deployment's standing alerts, a throttled one, an adopted one).
 func migrateWake(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS wake_ledger (
@@ -35,7 +35,17 @@ func migrateWake(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS wake_hosts (
 			host TEXT PRIMARY KEY
 		);`)
-	return err
+	if err != nil {
+		return err
+	}
+	// pending: the watcher has not been told yet (a new episode, or a failed call to be retried); attempts counts the failed calls and
+	// next_ms is when the next try is due, on this daemon's clock.
+	for _, c := range [][2]string{{"pending", "INTEGER NOT NULL DEFAULT 0"}, {"attempts", "INTEGER NOT NULL DEFAULT 0"}, {"next_ms", "INTEGER NOT NULL DEFAULT 0"}} {
+		if err := addColumn(db, "wake_ledger", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // wakeEp is the identity of an alert episode in the wake ledger.
@@ -114,11 +124,71 @@ func (s *store) claimWake(e wakeEp, now time.Time, throttle time.Duration, adopt
 		}
 	}
 	if verdict == wakeNow {
-		if _, err := tx.Exec(`UPDATE wake_ledger SET woken_ms = ? WHERE host = ? AND key = ? AND since_ms = ?`, now.UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
+		if _, err := tx.Exec(`UPDATE wake_ledger SET pending = 1, next_ms = ? WHERE host = ? AND key = ? AND since_ms = ?`, now.UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
 			return wakeSeen, err
 		}
 	}
 	return verdict, tx.Commit()
+}
+
+// pendingDue says whether the episode's watcher call is still to be made and its time has come.
+func (s *store) pendingDue(e wakeEp, now time.Time) bool {
+	var n int
+	err := s.db.QueryRow(`SELECT count(*) FROM wake_ledger WHERE host = ? AND key = ? AND since_ms = ? AND pending = 1 AND next_ms <= ?`,
+		e.host, e.key, e.since.UnixMilli(), now.UnixMilli()).Scan(&n)
+	return err == nil && n > 0
+}
+
+// pendingOf lists the host's episodes whose call is still to be made.
+func (s *store) pendingOf(host string) ([]wakeEp, error) {
+	rows, err := s.db.Query(`SELECT key, since_ms FROM wake_ledger WHERE host = ? AND pending = 1`, host)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []wakeEp
+	for rows.Next() {
+		var k string
+		var ms int64
+		if err := rows.Scan(&k, &ms); err != nil {
+			return nil, err
+		}
+		out = append(out, wakeEp{host, k, time.UnixMilli(ms)})
+	}
+	return out, rows.Err()
+}
+
+// dropPending gives up on an episode that is no longer standing.
+func (s *store) dropPending(e wakeEp) error {
+	_, err := s.db.Exec(`UPDATE wake_ledger SET pending = 0 WHERE host = ? AND key = ? AND since_ms = ?`, e.host, e.key, e.since.UnixMilli())
+	return err
+}
+
+// markWoken records that the watcher call succeeded for these episodes (the ten minutes count from here).
+func (s *store) markWoken(eps []wakeEp, now time.Time) error {
+	for _, e := range eps {
+		if _, err := s.db.Exec(`UPDATE wake_ledger SET pending = 0, woken_ms = ?, attempts = 0 WHERE host = ? AND key = ? AND since_ms = ?`,
+			now.UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// markWakeFailed records a failed call for these episodes: they stay pending, next due after the backoff of their failure count.
+func (s *store) markWakeFailed(eps []wakeEp, now time.Time) error {
+	for _, e := range eps {
+		var n int
+		if err := s.db.QueryRow(`SELECT attempts FROM wake_ledger WHERE host = ? AND key = ? AND since_ms = ?`, e.host, e.key, e.since.UnixMilli()).Scan(&n); err != nil {
+			return err
+		}
+		n++
+		if _, err := s.db.Exec(`UPDATE wake_ledger SET attempts = ?, next_ms = ? WHERE host = ? AND key = ? AND since_ms = ?`,
+			n, now.Add(wakeBackoff(n)).UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pruneWake drops the wake ledger rows of alerts not seen holding for wakeKeep.
