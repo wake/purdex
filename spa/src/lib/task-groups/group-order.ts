@@ -69,8 +69,10 @@ export function teamSections(view: Pick<TeamView, 'lead' | 'members'>, tabs: rea
     const first = mine.filter((t) => t.id === chosen)
     return [...first, ...mine.filter((t) => t.id !== chosen)]
   }
-  const lead = ofSeat(view.lead.session.session_id, view.lead.tabId)
+  // the chosen tab is the one the sidebar draws the seat as (`groupTabId`, else `tabId`): the same rule as the seat row
+  const chosenOf = (seat: Pick<TeamView['lead'], 'tabId' | 'groupTabId'>) => seat.groupTabId ?? seat.tabId
+  const lead = ofSeat(view.lead.session.session_id, chosenOf(view.lead))
   const pinned = take(tabs.filter((t) => t.pinned))
-  const members = view.members.map((m) => ofSeat(m.session.session_id, m.tabId))
+  const members = view.members.map((m) => ofSeat(m.session.session_id, chosenOf(m)))
   return { lead, pinned, members, plain: take([...tabs]) }
 }

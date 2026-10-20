@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildGroupView, type GroupViewInput } from './view-model'
 import { manualGroupKey, teamGroupKey } from './group-key'
-import type { OrderedTab } from './group-order'
+import { groupTabs, type OrderedTab } from './group-order'
 import type { ManualGroup, ManualGroups } from '../../stores/useManualGroupsStore'
 import type { Pane, PaneContent, PaneLayout } from '../../types/tab'
 import type { Seat, SeatHit, TeamView } from '../team/team-views'
@@ -139,6 +139,16 @@ describe('buildGroupView', () => {
       const sec = v[0]
       expect(sec.kind === 'team' && [sec.lead.tabId, ...sec.rest.map((r) => r.tabId)]).toEqual(['t1', 't1b', 't2', 't2b', 't3', 't3b', 'plain'])
       expect(v.map((s) => s.kind)).toEqual(['team'])
+    })
+
+    it('when a seat is drawn from its group tab rather than its first tab, the sidebar order is still groupTabs', () => {
+      const t = team('a', seat('lead', 'L', 't1'), [seat('member', 'M', 't2', { groupTabId: 't2b' })])
+      const inp = input([tab('t1', 'L'), tab('t2', 'M', { groupRank: 'a' }), tab('t2b', 'M', { groupRank: 'z' })], [t], { seats: { t2b: 'M' } })
+      const v = buildGroupView(inp)
+      const sec = v[0]
+      const shown = sec.kind === 'team' ? [sec.lead.tabId, ...sec.rest.map((r) => r.tabId)] : []
+      expect(shown).toEqual(groupTabs(teamGroupKey(t.key), inp)) // same order, each tab once
+      expect(shown).toEqual(['t1', 't2b', 't2'])
     })
 
     it('an unopened seat stays in member order between the others', () => {
