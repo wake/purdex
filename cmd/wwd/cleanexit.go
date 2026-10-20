@@ -20,11 +20,24 @@ import (
 // been written empty since v5. A record an older wwd made has it empty, so a start that follows one is "unknown" and is not counted (the
 // restart that upgrades wwd is not a crash).
 
-// cleanExitFile is the mark in the data directory: the start (milliseconds since the epoch) of the run that was asked to stop.
+// cleanExitFile is the prefix of the mark in the data directory: the mark of the run that started at T (milliseconds since the epoch) is
+// <data_dir>/clean_exit.T. The name carries the run, so a run that is asked to stop while its own start is being recorded leaves a mark that
+// is not taken for the mark of the run before it (the stop arrives at any time, also between the ports being bound and the start record being
+// judged), and two marks never replace each other.
 const cleanExitFile = "clean_exit"
 
-// writeCleanExit leaves the mark for the run that started at startedAt: a temporary file, synced, then renamed over the mark, so a kill
-// halfway leaves the old mark or none and never half of one.
+func cleanExitPath(dir string, startedAt time.Time) string {
+	return filepath.Join(dir, cleanExitFile+"."+strconv.FormatInt(startedAt.UnixMilli(), 10))
+}
+
+// markRun is the run (its start in milliseconds) a mark file names; ok is false for any other file (a temporary one).
+func markRun(path string) (ms int64, ok bool) {
+	ms, err := strconv.ParseInt(strings.TrimPrefix(filepath.Base(path), cleanExitFile+"."), 10, 64)
+	return ms, err == nil
+}
+
+// writeCleanExit leaves the mark for the run that started at startedAt: a temporary file, synced, then renamed to its name, so a kill
+// halfway leaves no mark and never half of one.
 func writeCleanExit(dir string, startedAt time.Time) error {
 	f, err := os.CreateTemp(dir, cleanExitFile+".tmp-*")
 	if err != nil {
@@ -39,7 +52,7 @@ func writeCleanExit(dir string, startedAt time.Time) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp, filepath.Join(dir, cleanExitFile))
+		err = os.Rename(tmp, cleanExitPath(dir, startedAt))
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -47,28 +60,43 @@ func writeCleanExit(dir string, startedAt time.Time) error {
 	return err
 }
 
-// judgePrevExit says how the run before this start ended, from the last start record (nil: none) and the mark, and deletes the mark: it is
-// the mark of one run and is read once. A mark counts when it is not older than the last record (a run that was asked to stop before its
-// own start could be recorded left a newer one); an older one is left over from some earlier stop and is not the mark of the run before.
-func judgePrevExit(dir string, last *store.LastStart) string {
-	p := filepath.Join(dir, cleanExitFile)
-	b, readErr := os.ReadFile(p)
-	if readErr == nil {
-		_ = os.Remove(p)
+// judgePrevExit says how the run before this start (the one that began at own) ended, from the last start record (nil: none) and the marks,
+// and deletes the marks of other runs: a mark is read once. The mark of this run itself (a stop that came already) is left for the next start.
+// A mark counts when it is not older than the last record (a run that was asked to stop before its own start could be recorded left a newer
+// one); older ones are left over from some earlier stop and are not the mark of the run before.
+func judgePrevExit(dir string, last *store.LastStart, own time.Time) string {
+	marks, _ := filepath.Glob(filepath.Join(dir, cleanExitFile+".*"))
+	newest, found := int64(0), false
+	for _, m := range marks {
+		ms, ok := markRun(m)
+		if !ok || ms == own.UnixMilli() { // a temporary file, or this run's own mark
+			continue
+		}
+		_ = os.Remove(m)
+		if !found || ms > newest {
+			newest, found = ms, true
+		}
 	}
 	switch {
 	case last == nil:
 		return store.PrevExitFirst
 	case last.PrevExit == "":
 		return store.PrevExitUnknown
-	case readErr != nil:
-		return store.PrevExitUnclean
-	}
-	ms, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	if err != nil || ms < last.At.UnixMilli() {
+	case !found || newest < last.At.UnixMilli():
 		return store.PrevExitUnclean
 	}
 	return store.PrevExitClean
+}
+
+// removeOtherMarks deletes the marks of the runs before this one: when how they ended could not be judged, they are not to be left to be taken
+// for the mark of a later run.
+func removeOtherMarks(dir string, own time.Time) {
+	marks, _ := filepath.Glob(filepath.Join(dir, cleanExitFile+".*"))
+	for _, m := range marks {
+		if ms, ok := markRun(m); ok && ms != own.UnixMilli() {
+			_ = os.Remove(m)
+		}
+	}
 }
 
 // recordThisStart judges how the run before this one ended (and consumes the mark) and records this start with it, with the retries of
@@ -79,13 +107,13 @@ func recordThisStart(ctx context.Context, st *store.Store, dataDir string, start
 	if l, ok, err := st.LastStart(); err != nil {
 		logf("wwd: reading the last start record: %v (how the run before ended is not known)", err)
 		prev := store.PrevExitUnknown
-		_ = os.Remove(filepath.Join(dataDir, cleanExitFile))
+		removeOtherMarks(dataDir, startedAt)
 		recordStart(ctx, func() error { return st.RecordStartAt(startedAt, version, prev) }, delays, logf)
 		return
 	} else if ok {
 		last = &l
 	}
-	prev := judgePrevExit(dataDir, last)
+	prev := judgePrevExit(dataDir, last, startedAt)
 	recordStart(ctx, func() error { return st.RecordStartAt(startedAt, version, prev) }, delays, logf)
 }
 

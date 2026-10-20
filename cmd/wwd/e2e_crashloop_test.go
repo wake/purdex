@@ -73,15 +73,18 @@ func TestE2E_CrashLoopInputFollowsHowTheRunEnded(t *testing.T) {
 	o := procOpts{name: "crash"}
 	port := freePort(t)
 	p := w.start(o, port)
-	mark := filepath.Join(p.home, "data", cleanExitFile)
+	marks := func() []string {
+		m, _ := filepath.Glob(filepath.Join(p.home, "data", cleanExitFile+".*"))
+		return m
+	}
 
 	p.term()
-	if _, err := os.Stat(mark); err != nil {
-		t.Fatalf("a stop on request leaves the mark: %v", err)
+	if len(marks()) != 1 {
+		t.Fatalf("a stop on request leaves its mark: %v", marks())
 	}
 	p = w.start(o, port) // a planned restart
-	if _, err := os.Stat(mark); !os.IsNotExist(err) {
-		t.Fatalf("the next start consumes the mark: %v", err)
+	if len(marks()) != 0 {
+		t.Fatalf("the next start consumes the mark: %v", marks())
 	}
 	p.kill9()
 	p = w.start(o, port) // after a crash
@@ -102,11 +105,11 @@ func TestE2E_AStartThatCannotBindRecordsNothingAndLeavesTheMark(t *testing.T) {
 	defer l.Close()
 	port := l.Addr().(*net.TCPAddr).Port
 	home := filepath.Join(w.root, "busy")
-	mark := filepath.Join(home, "data", cleanExitFile)
+	mark := filepath.Join(home, "data", cleanExitFile+"."+strconv.FormatInt(time.Now().UnixMilli(), 10))
 	if err := os.MkdirAll(filepath.Dir(mark), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(mark, []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(mark, []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	p, ok := w.launch(procOpts{name: "busy"}, port)
