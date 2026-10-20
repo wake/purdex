@@ -3,7 +3,8 @@ import { isWatchTabId } from '../lib/watch/ids'
 import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern, PaneRebuildRecord, RebuildPatch, TmuxSessionContent } from '../types/tab'
 import type { FileSource } from '../types/fs'
-import { createTab } from '../types/tab'
+import { createTab, takeFreshTab } from '../types/tab'
+import { placeFreshTab } from '../lib/task-groups/fresh-tab'
 import { getPrimaryPane, findPane, collectLeaves, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
 import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
@@ -640,9 +641,11 @@ export const useTabStore = create<TabState>()(
       worldId: 'master',
       worldEpoch: 0,
 
-      addTab: (tab, afterTabId) =>
+      addTab: (incoming, afterTabId) =>
         set((state) => {
-          if (state.tabs[tab.id]) return state // dedup guard
+          if (state.tabs[incoming.id]) return state // dedup guard
+          // A tab this window's `createTab` minted joins the selected task group, in this same update (spec §5); any other tab arrives as it is.
+          const tab = takeFreshTab(incoming) ? placeFreshTab(incoming) : incoming
           let newOrder: string[]
           if (afterTabId) {
             const idx = state.tabOrder.indexOf(afterTabId)
@@ -862,7 +865,10 @@ export const useTabStore = create<TabState>()(
         if (tab.layout.type === 'leaf') return null
         const newLayout = removePane(tab.layout, paneId)
         if (!newLayout) return null
-        const newTab = createTab(pane.content)
+        // The detached pane's tab is minted and inserted by this one action: it leaves the fresh set here and joins the selected task group in the same update (spec §5).
+        const minted = createTab(pane.content)
+        takeFreshTab(minted)
+        const newTab = placeFreshTab(minted)
         let newOrder: string[]
         if (afterTabId) {
           const idx = state.tabOrder.indexOf(afterTabId)
