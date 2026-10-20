@@ -2,10 +2,11 @@
 // live: the pool reads the host. fallback: the pool does not, the fleet does (never dimmed). offline: neither does.
 // "Old daemon" (no daemon announces pool.v1) is not a per-host state: the store says it, see `usePoolStore.oldDaemon`.
 import type { FleetHost } from '../fleet/types'
+import { LIVE_MS } from './host-state'
 import type { PoolFacts, PoolHost } from './types'
 
-/** Facts older than this are not a live reading. */
-export const LIVE_MS = 30_000
+// `LIVE_MS` moved to host-state.ts (MON-1b); re-exported until this file goes (MON-1c).
+export { LIVE_MS }
 
 /** Why the pool does not read a host that the fleet still does: wwd (or the link to it) does not answer, or it answers but its facts stopped. */
 export type FallbackReason = 'unreachable' | 'stale'
