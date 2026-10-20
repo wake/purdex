@@ -70,9 +70,12 @@ export async function putWorker(hostId: string, alias: string, worker: PoolWorke
   await send(hostId, 'PUT', `${hostPath(alias)}/worker`, { enabled: worker.enabled, slots: { heavy: worker.slots.heavy, light: worker.slots.light }, owner_rule: worker.owner_rule })
 }
 
-/** `POST …/exceptions`: a pause bounded by a time (`until`, ms since epoch) — the only kind the App adds. */
-export async function postPause(hostId: string, alias: string, name: string, untilMs: number, holds: PoolHold[]): Promise<void> {
-  await send(hostId, 'POST', `${hostPath(alias)}/exceptions`, { name, until: new Date(untilMs).toISOString(), pid: null, holds })
+/** `POST …/exceptions`: a pause bounded by a time (`until`, ms since epoch) — the only kind the App adds — with the classes it lets through and its marks when there are any. */
+export async function postPause(hostId: string, alias: string, name: string, untilMs: number, holds: PoolHold[], extra: { allow?: { classes: string[]; repos: string[] }; flags?: string[] } = {}): Promise<void> {
+  const body: Record<string, unknown> = { name, until: new Date(untilMs).toISOString(), pid: null, holds }
+  if (extra.allow !== undefined) body.allow = extra.allow // an `allow` that is present means "only these": never send an empty one
+  if (extra.flags !== undefined && extra.flags.length > 0) body.flags = extra.flags
+  await send(hostId, 'POST', `${hostPath(alias)}/exceptions`, body)
 }
 
 /** `DELETE …/exceptions/{name}`. */

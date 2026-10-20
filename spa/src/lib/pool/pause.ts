@@ -33,6 +33,14 @@ export function untilClock(now: number, hhmm: string): number | null {
 export const pauseName = (now: number, rand: number = Math.random()): string =>
   `app-pause-${Math.floor(now).toString(36)}-${Math.floor(rand * 36 ** 4).toString(36).padStart(4, '0')}`
 
+/** The classes a pause can let through (wwd's `allow.classes`) and the marks it can carry (`flags`). */
+export const PAUSE_CLASSES = ['release', 'merge', 'dev'] as const
+export const PAUSE_FLAGS = ['release', 'expect_pressure'] as const
+
+/** What to send as `allow`: nothing when no class is picked. wwd reads an `allow` that is there as "only the listed", so an empty one would hold everything. */
+export const allowOf = (classes: readonly string[]): { classes: string[]; repos: string[] } | undefined =>
+  classes.length === 0 ? undefined : { classes: [...classes], repos: [] }
+
 export const holdsOf = (alsoLight: boolean): PoolHold[] => (alsoLight ? ['heavy', 'light'] : ['heavy'])
 
 /** The custom end times last used, newest first, each once, at most `RECENT_MAX`. */

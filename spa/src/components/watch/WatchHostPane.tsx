@@ -5,7 +5,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
 import { resolveHostBadge } from '../../lib/host-color'
 import { HostBadge } from '../HostBadge'
 import { HostStateIcon } from '../../components/fleet/HostStateIcon'
@@ -16,7 +15,7 @@ import { useMonitorHosts, type MonitorHost } from '../../lib/pool/use-monitor-ho
 import { livenessWord, notOkLines, clock } from '../../lib/pool/words'
 import { readHostRange, readHostScroll, readHostTab, writeHostRange, writeHostScroll, writeHostTab, type HostSubTab } from '../../lib/watch/view-memory'
 import { AvailRow } from './AvailRow'
-import { WatchSettings } from './WatchSettings'
+import { SettingsTab } from './host/SettingsTab'
 import { MonitorTab } from './host/MonitorTab'
 import { ProcTab } from './host/ProcTab'
 
@@ -70,9 +69,6 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const hosts = useMonitorHosts()
   const host = useMemo(() => (poolHostId ? hosts.find((h) => h.hostId === poolHostId) : undefined), [hosts, poolHostId])
   const memoryKey = poolHostId ?? ''
-  // The guardian settings are read from the App host that fronts the pool host, whether or not the pool reads the host through another daemon: a disconnected owner is offline for them.
-  const ownerId = host?.daemonHostId ?? null
-  const ownerDown = useHostStore((s) => ownerId !== null && s.runtime[ownerId]?.status !== 'connected')
 
   // The choices outlive this component: the memory is the source, the state only re-renders.
   const [sub, setSubState] = useState<HostSubTab>(() => readHostTab(memoryKey))
@@ -106,8 +102,6 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const badge = resolveHostBadge(host.look, 'console')
   const opacity = st.state === 'host_down' ? 0.4 : st.state === 'unknown' ? 0.6 : 1
   const zone = st.state === 'ok' ? st.facts.derived.zone : null
-  const offline = st.state !== 'ok'
-  const peerIds = hosts.filter((h) => h.hostId !== host.hostId).flatMap((h) => (h.daemonHostId ? [h.daemonHostId] : []))
 
   return (
     <div ref={scroller} className="flex-1 min-h-0 h-full overflow-y-auto" data-testid={`watch-host-${host.hostId}`}
@@ -137,7 +131,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <p className="text-xs text-text-muted" data-testid="status-later">{t('watch.host.status_later')}</p>
         </>)}
         {sub === 'procs' && <ProcTab host={host} now={now} />}
-        {sub === 'settings' && <WatchSettings hostId={memoryKey} hostConfigId={host.daemonHostId ?? undefined} poolAlias={host.alias} offline={offline || ownerDown} peerIds={peerIds} />}
+        {sub === 'settings' && <SettingsTab host={host} />}
       </div>
     </div>
   )
