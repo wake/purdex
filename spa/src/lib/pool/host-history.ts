@@ -79,12 +79,25 @@ interface HostMemory {
   /** How many pages hold each track open: only the last one to leave calls a read off. */
   holds: Record<HostTrack, number>
   listeners: Set<() => void>
+  /** The long read in flight, by what it asks for: the same ask is not made twice (a second page shares it), a different one takes over. */
+  longInFlight: string | null
 }
 const memory = new Map<string, HostMemory>()
-const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set() })
+const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set(), longInFlight: null })
+/** What the memory keeps of hosts nobody is looking at: leaving a page keeps its history (coming back is full at once), but not for any number of hosts. */
+const MAX_HOSTS = 32
+const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null
 const memoryOf = (hostId: string): HostMemory => {
   let m = memory.get(hostId)
-  if (!m) { m = newMemory(); memory.set(hostId, m) }
+  if (!m) {
+    m = newMemory()
+    memory.set(hostId, m)
+    // Oldest first (Map order): let go of the ones nobody listens to or holds, until the cap is met.
+    for (const [id, old] of memory) {
+      if (memory.size <= MAX_HOSTS) break
+      if (id !== hostId && !inUse(old)) memory.delete(id)
+    }
+  }
   return m
 }
 export const clearHostHistory = (): void => { memory.clear() }
@@ -101,14 +114,14 @@ const notify = (m: HostMemory): void => { for (const fn of [...m.listeners]) fn(
 export function holdTrack(hostId: string, track: HostTrack): () => void {
   const m = memoryOf(hostId)
   m.holds[track] += 1
-  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) m.gen[track] += 1 }
+  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) { m.gen[track] += 1; if (track === 'long') m.longInFlight = null } }
 }
 
 /** The long track is empty again (the daemon no longer announces the series, so what it left is not a history this App can vouch for). */
 export function dropLongTrack(hostId: string): void {
   const m = memory.get(hostId)
   if (!m || (m.tracks.long.length === 0 && m.loads.long === 'idle')) return
-  m.tracks.long = []; m.loads.long = 'idle'; m.gen.long += 1
+  m.tracks.long = []; m.loads.long = 'idle'; m.gen.long += 1; m.longInFlight = null
   notify(m)
 }
 
@@ -139,6 +152,7 @@ export const readHostLoad = (hostId: string, track: HostTrack): HostLoad => memo
 export function invalidateHostHistory(hostId: string, track?: HostTrack): void {
   const m = memoryOf(hostId)
   for (const t of track ? [track] : (['short', 'long'] as const)) m.gen[t] += 1
+  if (!track || track === 'long') m.longInFlight = null
 }
 
 const failure = (e: unknown): HostLoad => (e instanceof PoolReadError && e.poolError.code === 'host_not_local' ? 'host_not_local' : 'error')
@@ -181,7 +195,11 @@ export function seriesAnnounced(source: string | null, byHost: ReturnType<typeof
 export async function loadLong(a: { source: string; alias: string; hostId: string; range: HostRange; memTotalMb: number | null; ncpu: number | null; now: number; refresh?: boolean }): Promise<HostLoad> {
   const m = memoryOf(a.hostId)
   if (!seriesAnnounced(a.source)) return m.loads.long
+  // A top-up never takes over a read in flight, and the same ask made by a second page is that read (a new read would call the first off).
+  const ask = `${a.source}|${a.alias}|${a.range}|${a.memTotalMb !== null && a.memTotalMb > 0}`
+  if (m.longInFlight !== null && (a.refresh || m.longInFlight === ask)) return m.loads.long
   const mine = ++m.gen.long
+  m.longInFlight = ask
   const last = m.tracks.long.length > 0 ? m.tracks.long[m.tracks.long.length - 1].at : null
   const since = a.refresh && last !== null ? last : a.now - RANGE_MS[a.range] - SKEW_MS
   let points: SeriesPoint[] = []
@@ -190,6 +208,7 @@ export async function loadLong(a: { source: string; alias: string; hostId: strin
     points = (await fetchPoolSeries(a.source, a.alias, new Date(since).toISOString(), '1m')).points
     out = 'ok'
   } catch (e) { out = failure(e) }
+  if (m.gen.long === mine) m.longInFlight = null
   if (m.gen.long !== mine) return m.loads.long
   if (out === 'ok') m.tracks.long = merge(m.tracks.long, points.map((p) => sampleOfPoint(p, a.memTotalMb, a.ncpu)), KEEP_MS.long, a.now)
   m.loads.long = out

@@ -15,7 +15,7 @@ vi.mock('./api', async (orig) => ({
 import { PoolReadError } from './api'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import {
-  appendLive, clearHostHistory, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, RANGE_MS, SKEW_MS,
+  appendLive, clearHostHistory, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost, RANGE_MS, SKEW_MS,
 } from './host-history'
 
 const darwin = parseFacts(darwinJson)!
@@ -99,6 +99,18 @@ describe('appendLive', () => {
     appendLive('h1', rec(10, 10), NOW)
     appendLive('h1', rec(5, 70), NOW)
     expect(cpus('h1', '5m')).toEqual([20, 30])
+  })
+})
+
+describe('the memory is bounded', () => {
+  it('past 32 hosts the oldest ones nobody holds or listens to are let go; one that is listened to stays', () => {
+    appendLive('keep', rec(10), NOW)
+    const off = subscribeHost('keep', () => undefined)
+    for (let i = 0; i < 40; i++) appendLive(`x${i}`, rec(10), NOW)
+    expect(readSamples('x0', '5m', NOW)).toEqual([])
+    expect(readSamples('x39', '5m', NOW)).toHaveLength(1)
+    expect(readSamples('keep', '5m', NOW)).toHaveLength(1)
+    off()
   })
 })
 
