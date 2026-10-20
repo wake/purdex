@@ -54,3 +54,52 @@ func TestWorkingTree_WritesNothingIntoTheRepository(t *testing.T) {
 	assert.Equal(t, beforeObjects, objectCount(t, dir), "no loose object written")
 	assert.Equal(t, beforeStatus, gitIn(t, dir, "status", "--porcelain"), "the index is the caller's still")
 }
+
+// ---- WorkingTree gives the tree SnapshotTree commits, in every state the index and the working directory can be in (#3745 keeps this
+// true while it gets faster) ----
+
+func snapTree(t *testing.T, dir string) string {
+	t.Helper()
+	snap, err := SnapshotTree(context.Background(), "", dir)
+	require.NoError(t, err)
+	return gitIn(t, dir, "rev-parse", snap.SHA+"^{tree}")
+}
+
+func TestWorkingTree_EqualsTheSnapshotsTreeInEveryState(t *testing.T) {
+	steps := []struct {
+		name string
+		do   func(t *testing.T, dir string)
+	}{
+		{"clean", func(t *testing.T, dir string) {}},
+		{"a changed file", func(t *testing.T, dir string) { writeFile(t, dir+"/a.txt", "a2\n", 0o644) }},
+		{"a new file", func(t *testing.T, dir string) { writeFile(t, dir+"/new.txt", "n\n", 0o644) }},
+		{"a deleted file", func(t *testing.T, dir string) { require.NoError(t, os.Remove(dir+"/conf.txt")) }},
+		{"a staged change", func(t *testing.T, dir string) {
+			writeFile(t, dir+"/a.txt", "a3 staged\n", 0o644)
+			gitIn(t, dir, "add", "a.txt")
+		}},
+		{"a staged change edited back", func(t *testing.T, dir string) { writeFile(t, dir+"/a.txt", "a1\n", 0o644) }},
+		{"a staged new file then deleted", func(t *testing.T, dir string) {
+			writeFile(t, dir+"/s.txt", "s\n", 0o644)
+			gitIn(t, dir, "add", "s.txt")
+			require.NoError(t, os.Remove(dir+"/s.txt"))
+		}},
+		{"an ignored tracked file changed", func(t *testing.T, dir string) { writeFile(t, dir+"/keep.log", "log2\n", 0o644) }},
+		{"an assume-unchanged file changed", func(t *testing.T, dir string) {
+			gitIn(t, dir, "update-index", "--assume-unchanged", "conf.txt")
+			writeFile(t, dir+"/conf.txt", "c2 hidden\n", 0o644)
+		}},
+		{"a skip-worktree file changed", func(t *testing.T, dir string) {
+			gitIn(t, dir, "update-index", "--no-assume-unchanged", "conf.txt")
+			gitIn(t, dir, "update-index", "--skip-worktree", "a.txt")
+			writeFile(t, dir+"/a.txt", "a4 hidden\n", 0o644)
+		}},
+	}
+	dir := ignoredRepo(t)
+	for _, s := range steps { // the steps build on each other: the states are the ones a working session passes through
+		s.do(t, dir)
+		got, err := WorkingTree(context.Background(), "", dir)
+		require.NoError(t, err, s.name)
+		assert.Equal(t, snapTree(t, dir), got, s.name)
+	}
+}
