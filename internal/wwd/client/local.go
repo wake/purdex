@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -22,6 +23,16 @@ type LocksBusyError struct {
 }
 
 func (e *LocksBusyError) Error() string { return "locks busy: " + e.Held() }
+
+// SlotBusyError: RegisterLocal was refused because this host has no slot for the run now (429): the caller asks again.
+type SlotBusyError struct {
+	Slot    string   // "light" (a declared task) or "heavy" (an adhoc command)
+	Reasons []string // why there is no room (the headroom's reasons, spec §3.2)
+}
+
+func (e *SlotBusyError) Error() string {
+	return "no " + e.Slot + " slot: " + strings.Join(e.Reasons, ", ")
+}
 
 // Held is the held keys with their holders, "tmux (held by j_01), db (held by j_02)".
 func (e *LocksBusyError) Held() string {
@@ -53,6 +64,11 @@ func (c *Client) RegisterLocal(ctx context.Context, req wire.LocalRunRequest) (w
 		if errors.As(err, &se) && se.Code == http.StatusConflict {
 			if b, derr := wire.Decode[wire.LocksBusy]([]byte(se.Body)); derr == nil {
 				return wire.LocalRunResponse{}, &LocksBusyError{Keys: b.Keys, Holders: b.Holders}
+			}
+		}
+		if errors.As(err, &se) && se.Code == http.StatusTooManyRequests {
+			if b, derr := wire.Decode[wire.SlotBusy]([]byte(se.Body)); derr == nil {
+				return wire.LocalRunResponse{}, &SlotBusyError{Slot: b.Slot, Reasons: b.Reasons}
 			}
 		}
 		return wire.LocalRunResponse{}, err

@@ -159,10 +159,14 @@ type fakeGate struct {
 	out     string
 	waitMax time.Duration // the WaitMax of the last call
 	last    gate.Options  // the options of the last call
+	onRun   func()        // called while the command "runs" (nil: nothing)
 }
 
 func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
 	g.calls++
+	if g.onRun != nil {
+		g.onRun()
+	}
 	g.waitMax = o.WaitMax
 	g.last = o
 	for _, kv := range o.Env {
@@ -551,6 +555,41 @@ func (r *busyRecorder) Register(context.Context, submit.Body) (fastlane.Handle, 
 		return nil, fmt.Errorf("%w: tmux", fastlane.ErrLocksBusy)
 	}
 	return nil, fastlane.ErrUnrecorded
+}
+
+// slotRecorder refuses the first busy calls for want of a slot, then lets the run through (unrecorded).
+type slotRecorder struct{ busy, calls int }
+
+func (r *slotRecorder) Register(context.Context, submit.Body) (fastlane.Handle, error) {
+	r.calls++
+	if r.calls <= r.busy {
+		return nil, fmt.Errorf("%w: no light slot: zone_danger", fastlane.ErrSlotBusy)
+	}
+	return nil, fastlane.ErrUnrecorded
+}
+
+func TestNoSlotMakesALocalTaskWaitHereLikeABusyLock(t *testing.T) {
+	g := &fakeGate{}
+	api := &fakeAPI{}
+	rec := &slotRecorder{busy: 2}
+	code, _, errOut := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: api, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if code != 0 || g.calls != 1 || api.submitted != 0 || rec.calls != 3 {
+		t.Fatalf("code %d gate %d submitted %d registers %d", code, g.calls, api.submitted, rec.calls)
+	}
+	if strings.Count(errOut, "等待本機名額／lock") != 1 || !strings.Contains(errOut, "zone_danger") {
+		t.Fatalf("the wait is told once, with the reason: %q", errOut)
+	}
+}
+
+func TestNoSlotForTheWholeQueueTimeoutEndsExpired(t *testing.T) {
+	g := &fakeGate{}
+	rec := &slotRecorder{busy: 1 << 30}
+	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Recorder: rec, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: 30 * time.Millisecond})
+	if code != ExitExpired || g.calls != 0 {
+		t.Fatalf("code %d gate %d", code, g.calls)
+	}
 }
 
 func TestBusyLocksMakeALocalTaskWaitHereAndNeverQueueIt(t *testing.T) {

@@ -20,6 +20,16 @@ type ProcSource interface {
 	JobProcesses(tag, jobID string) ([]int, error)
 }
 
+// SweepMarked ends the processes that still carry the mark of jobID (by id alone, any origin) and returns the pids it found: for a
+// run that is not started by Run (the fast lane's own), after it has cleared the command's process group. src nil (a host that has no
+// reader) finds nothing.
+func SweepMarked(src ProcSource, jobID string, killAfter time.Duration) ([]int, error) {
+	if src == nil || jobID == "" {
+		return nil, nil
+	}
+	return sweepBounded(src, "", jobID, killAfter)
+}
+
 // sweepPoll is how often a sweep looks again while it waits for processes to leave.
 const sweepPoll = 50 * time.Millisecond
 

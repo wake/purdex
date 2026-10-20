@@ -41,7 +41,7 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 		r := req
 		r.Task = &t
 		res, err := fastlane.Run(ctx, r)
-		if !errors.Is(err, fastlane.ErrLocksBusy) {
+		if !errors.Is(err, fastlane.ErrLocksBusy) && !errors.Is(err, fastlane.ErrSlotBusy) {
 			return res, err
 		}
 		if !told {

@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/wake/purdex/internal/wwd/client"
+	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/localrec"
 	"github.com/wake/purdex/internal/wwd/testcmd"
 )
@@ -49,7 +50,7 @@ func testMain(args []string, stdout, stderr io.Writer) int {
 	if home, err := os.UserHomeDir(); err == nil {
 		o.LogDir = filepath.Join(home, ".local", "share", "wwd", "local-runs")
 	}
-	// The local fast lane takes a light slot from the gate; a gate that cannot be configured still runs with its defaults.
-	o.Gate = newGate(loadGateConfig("", stderr)) // the holds of the local wwd count for the fast lane too (8b-3 PR-C)
+	// The local fast lane's slot is wwd's own, taken when the run is registered (spec §5.2): the command is run here with no gate slot.
+	o.Gate = fastlane.Direct{}
 	return testcmd.Run(ctx, o)
 }

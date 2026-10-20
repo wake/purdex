@@ -82,6 +82,15 @@ func TestRegisterRefusesWhatWwdWouldRefuse(t *testing.T) {
 	}
 }
 
+func TestNoSlotBecomesErrSlotBusy(t *testing.T) {
+	api := newAPI()
+	api.regErr = &client.SlotBusyError{Slot: "light", Reasons: []string{"zone_danger"}}
+	_, err := (Recorder{API: api}).Register(context.Background(), body())
+	if !errors.Is(err, fastlane.ErrSlotBusy) || errors.Is(err, fastlane.ErrLocksBusy) || !strings.Contains(err.Error(), "zone_danger") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestBusyLocksBecomeErrLocksBusy(t *testing.T) {
 	api := newAPI()
 	api.regErr = &client.LocksBusyError{Keys: []string{"db"}, Holders: []wire.LockHolder{{Key: "db", Job: "j_07"}}}

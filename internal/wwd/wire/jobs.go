@@ -220,6 +220,19 @@ type SlotBusy struct {
 // SlotBusyReason is the only reason a SlotBusy carries.
 const SlotBusyReason = "slot_busy"
 
+func (b SlotBusy) Validate() error {
+	if b.Reason != SlotBusyReason {
+		return fmt.Errorf("slot busy: unexpected reason %q", b.Reason)
+	}
+	if b.Slot != "light" && b.Slot != "heavy" {
+		return fmt.Errorf("slot busy: unknown slot %q", b.Slot)
+	}
+	if len(b.Reasons) == 0 {
+		return fmt.Errorf("slot busy: no reasons") // a refusal always says why; a bare one is not this protocol
+	}
+	return nil
+}
+
 // LockHolder is the job that holds a lock key.
 type LockHolder struct {
 	Key string `json:"key"`

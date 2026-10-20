@@ -1,5 +1,5 @@
 // Package fastlane is the local fast lane of `pdx test` (spec §5.2): a task that allows it runs at once in the caller's own
-// working tree — no snapshot, no queue, no other host — holding one of the gate's light slots, and leaves a job record with the
+// working tree — no snapshot, no queue, no other host — holding one of wwd's own slots (taken when the run is registered), and leaves a job record with the
 // result. Single-file tests always take this lane and never leave the host (D12). The job is registered with the local wwd
 // before the command starts, so the locks it holds are visible to the worker on this host (§4.1, §5 Locks), and a lock that is
 // busy sends the call to the normal queue instead of failing it.
@@ -31,6 +31,10 @@ var ErrNotLocal = errors.New("fastlane: the task does not allow the local fast l
 
 // ErrLocksBusy: another job on this host holds a lock the task needs. The caller sends the task through the queue.
 var ErrLocksBusy = errors.New("fastlane: a lock of the task is held by another job on this host")
+
+// ErrSlotBusy: this host has no slot for the run now (wwd's own, taken when the run is registered). Nothing was run; the caller waits
+// and asks again, like for ErrLocksBusy.
+var ErrSlotBusy = errors.New("fastlane: this host has no slot for the run now")
 
 // ErrUnrecorded is what a Recorder's Register returns when wwd has no way to record fast-lane runs (it does not know the route,
 // yet): the run goes on without a record, and holds no lock.

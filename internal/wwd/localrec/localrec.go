@@ -43,7 +43,10 @@ func (r Recorder) Register(ctx context.Context, body submit.Body) (fastlane.Hand
 	resp, err := r.API.RegisterLocal(ctx, req)
 	var busy *client.LocksBusyError
 	var se *client.StatusError
+	var full *client.SlotBusyError
 	switch {
+	case errors.As(err, &full):
+		return nil, fmt.Errorf("%w: %s", fastlane.ErrSlotBusy, full)
 	case errors.As(err, &busy):
 		return nil, fmt.Errorf("%w: %s", fastlane.ErrLocksBusy, busy.Held())
 	case errors.As(err, &se) && (se.Code == http.StatusNotFound || se.Code == http.StatusMethodNotAllowed || se.Code == http.StatusNotImplemented):
