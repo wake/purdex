@@ -225,8 +225,26 @@ func TestCommandSignatureSeesThroughTheClaudeCodeWrapper(t *testing.T) {
 		"a newline between commands":  {ccWrap("'cd /x\npnpm vitest run a.test.ts'"), "pnpm vitest run"},
 		"a && inside quotes is data":  {ccWrap(`'echo "a && go test" && true'`), "echo"},
 		"the wrapper only":            {ccWrap(`''`), "zsh"},
-		"no eval, only the scene set": {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, "zsh"},
-		"plain zsh -c still works":    {[]string{"zsh", "-c", "setopt extendedglob && swift build"}, "swift build"},
+		"no eval: as before":          {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, ":"},
+		"plain zsh -c still works":    {[]string{"zsh", "-c", "cd /x && swift build"}, "swift build"},
+	} {
+		if got := CommandSignature(c.argv); got != c.want {
+			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestCommandSignatureWrapperReadingKeepsTheOtherRules(t *testing.T) {
+	for name, c := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"a secret joined by unquoting is not a word": {[]string{"zsh", "-c", "tool sk-'abcdefgh12345' go"}, "tool go"},
+		"a secret inside the eval is not a word":     {ccWrap(`'tool sk-'\''abcdefgh12345'\'' go'`), "tool go"},
+		"unalias outside the wrapper is the command": {[]string{"zsh", "-c", "unalias dangerous; go test ./..."}, "unalias dangerous"},
+		"setopt outside the wrapper is the command":  {[]string{"zsh", "-c", "setopt xtrace; deploy production"}, "setopt xtrace"},
+		"a phrase word in a plain argv stays":        {[]string{"tool", "release candidate", "deploy"}, "tool release candidate deploy"},
+		"a quoted phrase in a script ends the words": {[]string{"zsh", "-c", `echo "a b" c`}, "echo"},
 	} {
 		if got := CommandSignature(c.argv); got != c.want {
 			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)

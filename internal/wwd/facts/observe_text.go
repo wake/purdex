@@ -273,9 +273,6 @@ func signature(clean []string, depth int) string {
 			}
 			break // a flag: what follows is its value or an argument, not a subcommand
 		}
-		if strings.ContainsAny(a, " \t") {
-			break // a phrase in quotes is an argument, not a subcommand
-		}
 		if strings.Contains(a, "=") || isNumber(a) || strings.Contains(a, "://") || a == "." || a == ".." {
 			continue
 		}
@@ -399,15 +396,30 @@ func scriptSignature(script string, depth int, shell string) string {
 }
 
 func scriptFirst(script string, depth int) string {
-	for _, seg := range splitSegments(script) {
+	segs := splitSegments(script)
+	wrapped := false // only a script that ends in eval is Claude Code's wrapper: elsewhere setopt and unalias are the command
+	for _, seg := range segs {
+		if w := splitShellWords(seg); len(w) > 0 && unquoteWord(w[0]) == "eval" {
+			wrapped = true
+		}
+	}
+	for _, seg := range segs {
 		f := splitShellWords(seg)
 		for i := range f {
 			f[i] = unquoteWord(f[i])
 		}
+		if len(f) == 0 || f[0] != "eval" { // the argument of eval is a script: its own words are checked when it is read
+			for i := 1; i < len(f); i++ {
+				if strings.ContainsAny(f[i], " \t") {
+					f[i] = "-" // a quoted phrase is an argument, not a subcommand: it ends the words like a flag
+				}
+			}
+			f = redact.ScrubArgv(f) // unquoting can join what the scrubber saw in pieces (sk-'abc...')
+		}
 		for len(f) > 0 && (f[0] == "{" || f[0] == "builtin" || f[0] == `\builtin` || strings.Contains(f[0], "=") && !strings.HasPrefix(f[0], "-")) {
 			f = f[1:] // a brace group, \builtin, VAR=value prefixes
 		}
-		if len(f) == 0 || shellPrelude[f[0]] || scriptScene[f[0]] {
+		if len(f) == 0 || shellPrelude[f[0]] || wrapped && scriptScene[f[0]] {
 			continue
 		}
 		if f[0] == "eval" {
