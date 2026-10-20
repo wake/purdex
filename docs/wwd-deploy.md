@@ -647,3 +647,29 @@ scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
 3. The jobs run in `wwd.slice` (3 cores, 6 G of mserv's 4 cores and 15 GB). The old run kept to 2 cores and 4 G in `assist.slice`.
 4. `explicit_labels_only = true` stays: the tasks name `os:linux`, which is what the worker accepts. The worker goes on only after the manual `mserv-run.sh`
    is retired (the two must not run side by side).
+
+## 15. The watcher's pressure rules: switching them on, and back (S3-2)
+
+`pressure_watch`, `pressure_danger` and `swap_growth` (spec §13.3) write a level (`watch`) and three kinds that an older reader of the alert list does
+not know, and such a reader refuses the **whole** list (`DecodeLenient` still validates). wwd refuses its own stored list the same way after a
+rollback. So the build that can read them comes first, and the switch that makes a host write them is a config line, off by default.
+
+```toml
+# ~/.config/wwd/config.toml
+[advisor]
+watch_rules    = true                                # default false: none of the three is judged
+off            = ["pressure_watch", "swap_growth"]   # optional: rules this host does not judge (these three kinds only)
+swap_growth_mb = 750                                 # optional: the 30 min growth that raises swap_growth; default by RAM (500 MB to 16 GB, 750 MB at 24 GB)
+```
+
+**Switching on.** Only when **every** reader has the build that knows the new kinds: all four wwds (mlab, air26, air19, mserv) and both Purdex
+daemons (mlab, air26). Then, host by host: add `watch_rules = true` (and `off` where it applies) and restart that wwd. air19 does not turn them on
+(its worker is off and its VM is resident, so the rules mean nothing for scheduling); if it ever does, it lists `off = ["pressure_watch",
+"swap_growth"]`. `pressure_danger` is a push alert: while `wwd_alerts.push` is off (§7) it only wakes the watcher.
+
+**Going back to an older build.** The other way round: on every host set `watch_rules = false` and restart that wwd, then wait for the alerts of
+the three kinds to be gone from `GET /v1/alerts` (a host that no longer judges a rule clears its own active alert at the next pass, within 30 s);
+only then install the older build. An older wwd that finds a row of a kind it does not know in its own `alerts` table refuses the whole list; if
+one is left (the wwd died before it cleared), delete the rows of those three kinds in `wwd.db` before starting the older build.
+
+**Checking.** `pdx wwd alerts` (or the App's pool alert view) lists the active alerts; a host with the rules on and calm shows none of the three.
