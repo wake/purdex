@@ -112,6 +112,47 @@ func TestFetchBringsInNewCommitsAndAFailedFetchKeepsTheLastAnswer(t *testing.T) 
 	}
 }
 
+// The remote that is fetched is the one the ref lives under (#3673 R1): upstream/main is brought up to date by fetching upstream, and a ref that
+// is under no remote (a local branch, a tag) has nothing to fetch.
+func TestFetchTakesTheRemoteTheRefLivesUnder(t *testing.T) {
+	origin, clone, src := fixture(t)
+	upstream := filepath.Join(t.TempDir(), "upstream")
+	git(t, filepath.Dir(upstream), "clone", "-q", origin, upstream)
+	git(t, clone, "remote", "add", "upstream", upstream)
+	git(t, clone, "fetch", "-q", "upstream")
+	src.refs["purdex"] = "upstream/main"
+	ctx := context.Background()
+	if err := src.Refresh(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	second := commitManifest(t, upstream, "from upstream\n")
+	commitManifest(t, origin, "from origin\n") // origin moves too: it must not be what upstream/main shows
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Refresh(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := src.Get("purdex"); got.Commit != second || string(got.Manifest) != "from upstream\n" {
+		t.Fatalf("after fetch: %+v, want upstream's %s", got, second)
+	}
+	src.refs["purdex"] = "refs/remotes/upstream/main" // the long spelling is under the same remote
+	third := commitManifest(t, upstream, "again\n")
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Refresh(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := src.Get("purdex"); got.Commit != third {
+		t.Fatalf("long spelling: %+v, want %s", got, third)
+	}
+	src.refs["purdex"] = "main" // a local branch: nothing to fetch, and not an error
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatalf("a ref under no remote has nothing to fetch: %v", err)
+	}
+}
+
 func TestAnUnresolvableRefKeepsTheLastAnswerAndReports(t *testing.T) {
 	_, _, src := fixture(t)
 	ctx := context.Background()

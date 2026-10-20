@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -121,15 +122,31 @@ func (s *Source) Refresh(ctx context.Context, repo string) error {
 	return nil
 }
 
-// Fetch updates the clone's remote-tracking refs (`git fetch origin`, at most FetchTimeout). A failure changes nothing.
+// Fetch brings up to date the remote the ref lives under (origin for origin/main, upstream for upstream/main or refs/remotes/upstream/main),
+// at most FetchTimeout. A ref under no remote (a local branch, a tag, a commit) has nothing to fetch. A failure changes nothing.
 func (s *Source) Fetch(ctx context.Context, repo string) error {
+	ref, ok := s.refs[repo]
+	if !ok {
+		return fmt.Errorf("%s has no manifest_ref", repo)
+	}
 	root, ok := s.repos.Path(repo)
 	if !ok {
 		return fmt.Errorf("%s has no prepared clone on this host", repo)
 	}
 	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
-	_, err := s.run(ctx, root, "fetch", "--quiet", "--no-tags", "origin")
+	first, _, under := strings.Cut(strings.TrimPrefix(ref, "refs/remotes/"), "/")
+	if !under {
+		return nil
+	}
+	out, err := s.run(ctx, root, "remote")
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(strings.Fields(string(out)), first) {
+		return nil
+	}
+	_, err = s.run(ctx, root, "fetch", "--quiet", "--no-tags", first)
 	return err
 }
 
