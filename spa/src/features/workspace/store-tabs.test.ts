@@ -564,6 +564,15 @@ describe('closeTabInWorkspace with a scope (the task-group range)', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id) // the workspace of the tab now shown
   })
 
+  it('the workspace the tab left is not pointed at a tab it does not hold', () => {
+    const { g1, x, wsA } = world()
+    useWorkspaceStore.getState().setWorkspaceActiveTab(wsA.id, g1.id)
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope: [g1.id, ...[...useTabStore.getState().tabOrder].filter((id) => id !== g1.id && id !== x.id)] })
+    const a = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsA.id)!
+    expect(a.tabs).not.toContain(g1.id)
+    expect(a.tabs).toContain(a.activeTabId ?? x.id)
+  })
+
   it('the last tab of the range gives way to the one before it', () => {
     const { g2, g3, scope } = world()
     useTabStore.getState().setActiveTab(g3.id)

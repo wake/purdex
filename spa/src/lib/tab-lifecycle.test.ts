@@ -14,6 +14,7 @@ import { useGroupViewStore } from '../stores/useGroupViewStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { manualGroupKey } from './task-groups/group-key'
+import { WATCH_WORKSPACE_ID } from './watch/ids'
 
 function resetStores() {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
@@ -304,6 +305,14 @@ describe('closeTab in the task-group view', () => {
 
   it('in the workspace view it is the workspace\'s neighbour, as before', () => {
     const { g1, x } = world('workspace')
+    closeTab(g1.id)
+    expect(useTabStore.getState().activeTabId).toBe(x.id)
+  })
+
+  it('the watcher area keeps the workspace rule', () => {
+    const { g1, x } = world('groups')
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
     closeTab(g1.id)
     expect(useTabStore.getState().activeTabId).toBe(x.id)
   })
