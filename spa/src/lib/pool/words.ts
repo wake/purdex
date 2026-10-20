@@ -1,7 +1,6 @@
 // spa/src/lib/pool/words.ts — the daemon's codes turned into words. Keys only; the surfaces call `t`. A code the App does not
 // know is shown as it is, never as an error (the daemon may be newer).
 import type { PoolErrorCode } from './errors'
-import type { FallbackReason } from './host-view'
 import type { PoolHostState } from './host-state'
 import type { HeadroomReasons, PoolLiveness, PoolZone, Slots } from './types'
 
@@ -55,12 +54,6 @@ const ERROR_TEXT: Partial<Record<PoolErrorCode, string>> = {
 
 /** The key of an error's line, or null when the code has none (wwd_rejected shows wwd's own text; cursor_ahead is silent). */
 export const errorTextKey = (code: PoolErrorCode): string | null => ERROR_TEXT[code] ?? null
-
-/** The line a host shows while the pool does not read it but the fleet does: which of the two it is, and since when the pool last read it. */
-export function fallbackWord(t: T, reason: FallbackReason | null, since: number | null): string {
-  const key = `pool.card.fallback_${reason ?? 'unreachable'}`
-  return since !== null ? t(key, { time: new Date(since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : t(`${key}_nosince`)
-}
 
 /** The state's short word: `pool.liveness.<ok | wwd_down | host_down | unknown>` (the card's headline and the accessible name). */
 export const livenessWordOf = (t: T, state: PoolLiveness): string => t(`pool.liveness.${state}`)
