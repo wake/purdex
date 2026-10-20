@@ -14,11 +14,13 @@ import type { SessionQuota } from '../team/types'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 
-type RootRows = readonly Pick<SessionQuota, 'session_id' | 'root_session_id'>[]
+type RootRows = readonly (Pick<SessionQuota, 'session_id' | 'root_session_id'> & { address?: string })[]
 
 interface RootCacheState {
   /** host id → agent session id → the root of its chain. */
   roots: Record<string, Record<string, string>>
+  /** host id → agent session id → the peer address the quota row carried when it was last listed (the personal panel's persona; kept after the session ends, when no row lists it). */
+  addresses: Record<string, Record<string, string>>
   /** Adds what a read listed. Earlier entries stay (a session's root never changes, and a session that ended is not listed any more). */
   ingest: (hostId: string, rows: RootRows) => void
   dropHost: (hostId: string) => void
@@ -27,8 +29,8 @@ interface RootCacheState {
 }
 
 /** The persisted value read as a cache: anything that is not a string → string map is dropped. */
-function sanitize(persisted: unknown): Record<string, Record<string, string>> {
-  const raw = (persisted as { roots?: unknown } | null | undefined)?.roots
+function sanitize(persisted: unknown, field: 'roots' | 'addresses' = 'roots'): Record<string, Record<string, string>> {
+  const raw = (persisted as Record<string, unknown> | null | undefined)?.[field]
   const out: Record<string, Record<string, string>> = {}
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return out
   for (const [hostId, map] of Object.entries(raw)) {
@@ -44,43 +46,62 @@ export const useRootCacheStore = create<RootCacheState>()(
   persist(
     (set) => ({
       roots: {},
+      addresses: {},
       ingest: (hostId, rows) =>
         set((state) => {
           const cur = state.roots[hostId] ?? {}
+          const curAddr = state.addresses[hostId] ?? {}
           let next: Record<string, string> | null = null
+          let nextAddr: Record<string, string> | null = null
           for (const r of rows) {
             if (typeof r.session_id !== 'string' || typeof r.root_session_id !== 'string' || r.root_session_id === '') continue
-            if (cur[r.session_id] === r.root_session_id) continue
-            next ??= { ...cur }
-            next[r.session_id] = r.root_session_id
+            if (cur[r.session_id] !== r.root_session_id) {
+              next ??= { ...cur }
+              next[r.session_id] = r.root_session_id
+            }
+            if (typeof r.address === 'string' && r.address !== '' && curAddr[r.session_id] !== r.address) {
+              nextAddr ??= { ...curAddr }
+              nextAddr[r.session_id] = r.address
+            }
           }
-          return next === null ? state : { roots: { ...state.roots, [hostId]: next } }
+          if (next === null && nextAddr === null) return state
+          return {
+            ...(next === null ? null : { roots: { ...state.roots, [hostId]: next } }),
+            ...(nextAddr === null ? null : { addresses: { ...state.addresses, [hostId]: nextAddr } }),
+          }
         }),
       dropHost: (hostId) =>
         set((state) => {
-          if (state.roots[hostId] === undefined) return state
+          if (state.roots[hostId] === undefined && state.addresses[hostId] === undefined) return state
           const roots = { ...state.roots }
+          const addresses = { ...state.addresses }
           delete roots[hostId]
-          return { roots }
+          delete addresses[hostId]
+          return { roots, addresses }
         }),
       prune: (keep) =>
         set((state) => {
           let changed = false
-          const roots: Record<string, Record<string, string>> = {}
-          for (const [hostId, map] of Object.entries(state.roots)) {
-            const kept = Object.fromEntries(Object.entries(map).filter(([id]) => keep(hostId, id)))
-            if (Object.keys(kept).length !== Object.keys(map).length) changed = true
-            if (Object.keys(kept).length > 0) roots[hostId] = kept
+          const narrow = (src: Record<string, Record<string, string>>) => {
+            const out: Record<string, Record<string, string>> = {}
+            for (const [hostId, map] of Object.entries(src)) {
+              const kept = Object.fromEntries(Object.entries(map).filter(([id]) => keep(hostId, id)))
+              if (Object.keys(kept).length !== Object.keys(map).length) changed = true
+              if (Object.keys(kept).length > 0) out[hostId] = kept
+            }
+            return out
           }
-          return changed ? { roots } : state
+          const roots = narrow(state.roots)
+          const addresses = narrow(state.addresses)
+          return changed ? { roots, addresses } : state
         }),
     }),
     {
       name: STORAGE_KEYS.TASK_GROUP_ROOTS,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ roots: state.roots }),
-      merge: (persisted, current) => ({ ...current, roots: sanitize(persisted) }),
+      partialize: (state) => ({ roots: state.roots, addresses: state.addresses }),
+      merge: (persisted, current) => ({ ...current, roots: sanitize(persisted), addresses: sanitize(persisted, 'addresses') }),
     },
   ),
 )
@@ -94,6 +115,11 @@ export function rootsSupported(hostId: string): boolean {
 /** The cached root of an agent session on a host, or null. A pure read. */
 export function rootOf(hostId: string, sessionId: string): string | null {
   return useRootCacheStore.getState().roots[hostId]?.[sessionId] ?? null
+}
+
+/** The peer address the daemon last listed for an agent session (a pure read; null when no read ever listed one). It stays after the session ends. */
+export function addressOf(hostId: string, sessionId: string): string | null {
+  return useRootCacheStore.getState().addresses[hostId]?.[sessionId] ?? null
 }
 
 /** The root of an agent session: the cache's answer, else what the host's daemon lists now (cached); null when neither knows. */

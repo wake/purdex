@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
-import { useRootCacheStore, rootOf, resolveRoot, rootsSupported } from './root-cache'
+import { useRootCacheStore, addressOf, rootOf, resolveRoot, rootsSupported } from './root-cache'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { SessionQuota } from '../team/types'
@@ -14,7 +14,7 @@ const supportQuota = (hostId: string, yes = true) => useUnattendedStore.setState
 
 beforeEach(() => {
   readFirstPage.mockReset()
-  useRootCacheStore.setState({ roots: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {} })
   useUnattendedStore.setState({ byHost: {} })
   useHostStore.setState({ hosts: {}, runtime: {} })
 })
@@ -96,5 +96,39 @@ describe('store', () => {
     expect(rootOf('h1', 'S2')).toBe('R2')
     s.dropHost('h1')
     expect(useRootCacheStore.getState().roots).toEqual({})
+  })
+})
+
+describe('addresses (TG-5b)', () => {
+  it('keeps the address of the row beside its root, and keeps it when a later read no longer lists the session', () => {
+    useRootCacheStore.getState().ingest('h1', [q('S1', 'ROOT')])
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    useRootCacheStore.getState().ingest('h1', [q('S2', 'R2')])
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    expect(addressOf('h1', 'S2')).toBe('mlab/R2'.replace('R2', 'S2'))
+    expect(addressOf('h1', 'nope')).toBeNull()
+  })
+
+  it('an empty address is not stored, and a changed one replaces the old', () => {
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: '' }])
+    expect(addressOf('h1', 'S1')).toBeNull()
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: 'mlab/new-name' }])
+    expect(addressOf('h1', 'S1')).toBe('mlab/new-name')
+  })
+
+  it('dropHost and prune take the addresses with the roots', () => {
+    useRootCacheStore.getState().ingest('h1', [q('S1', 'ROOT'), q('S2', 'R2')])
+    useRootCacheStore.getState().prune((_h, id) => id === 'S1')
+    expect(addressOf('h1', 'S2')).toBeNull()
+    expect(addressOf('h1', 'S1')).toBe('mlab/S1')
+    useRootCacheStore.getState().dropHost('h1')
+    expect(addressOf('h1', 'S1')).toBeNull()
+  })
+
+  it('a cache persisted before addresses existed loads with none', async () => {
+    useRootCacheStore.persist.setOptions({ name: useRootCacheStore.persist.getOptions().name })
+    const merged = useRootCacheStore.persist.getOptions().merge!({ roots: { h1: { S1: 'ROOT' } } }, useRootCacheStore.getState())
+    expect(merged.roots).toEqual({ h1: { S1: 'ROOT' } })
+    expect(merged.addresses).toEqual({})
   })
 })
