@@ -177,7 +177,9 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   (`.backup` is safe while wwd runs; copying the file by hand is only right with wwd stopped, and then with its `-wal`
   and `-shm` files.)
 * **The host schema moves too** (`host_schema` in `wwd.db`; 7 since 8b-3: two nullable columns on `exceptions` for a hold's `allow`
-  and `flags`). An older wwd refuses a file whose host schema is newer than it knows (`wwd.db has host schema 7, this wwd knows 6: a
+  and `flags`; 8 since #3655: `qualify_attempts`; **9 since ed3920-61: `worker_settings.disk_min_gb REAL NOT NULL DEFAULT 10`**, the
+  worker's disk floor. A host that has a `worker_settings` row gets 10 on it, whatever its config says; one without a row follows
+  `[worker] disk_min_gb`, unset = 10). An older wwd refuses a file whose host schema is newer than it knows (`wwd.db has host schema 7, this wwd knows 6: a
   newer wwd wrote it`), exactly as it does for the queue schema, so the same back-up and the same roll back apply to it: **a roll
   back across a host-schema step is a restore of the backup**, and a hold made since the backup is lost with it. Check what a host has
   with `sqlite3 -readonly ~/.local/share/wwd/wwd.db "select version from host_schema"`.
@@ -452,6 +454,10 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   `<key>.lock`) from `Prepare` to `Cleanup`; a Linux sandbox may write it. **Test results in it are not reused**: the job's `GOFLAGS` gets
   `-count=1` (after the task's own flags and `-mod=readonly`; a command that names `-count` keeps its own), because Go's test cache knows
   only the files and variables a test read, not tmux, a socket or an executable; the reuse of whole jobs is the result cache's.
+  `[worker] disk_min_gb` (default 10, 0 = none) is the free space the work volume must keep for a **heavy** run to start (a queue job is
+  not claimed, an adhoc command is refused with `disk_low`); `pdx wwd worker on --disk-min-gb N` or `PUT /v1/worker` changes it live and
+  `wwd.db` keeps it. It replaces the pdx gate's `[gate.admission] disk_min_gb`, which goes with the gate. Hosts without a gate (air19,
+  mserv) have the 10 GB floor from host schema 9 on. Roll back across host schema 9 is the backup restore above (an older wwd refuses the file).
   `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache: over it, and with no job using it, it is emptied before the next
   job (a cold build is what every job paid before); over twice the bound while jobs hold it, a new job gets no shared cache and builds in its
   own workspace. The size is looked at at most every 2 minutes. If the cache is ever doubted, remove `<deps_root>/gocache`: the worker
