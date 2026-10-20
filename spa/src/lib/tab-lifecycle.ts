@@ -2,11 +2,17 @@ import { useTabStore } from '../stores/useTabStore'
 import { useEditorStore } from '../stores/useEditorStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { WATCH_WORKSPACE_ID } from './watch/ids'
+import { selectedGroupRange } from './task-groups/range'
 import { destroyBrowserViewIfNeeded } from './browser-cleanup'
 import { scanPaneTree } from './pane-tree'
 import { bufferKey } from './editor-buffer-key'
 
-export function closeTab(tabId: string, opts?: { skipHistory?: boolean }): void {
+/**
+ * In the task-group view the tab shown after a close comes from the selected group's range (task groups spec §6.2), whichever control closed it (every close goes through here); the watcher area keeps the workspace rule.
+ * `opts.scope` overrides the range (a caller that already knows it).
+ */
+export function closeTab(tabId: string, opts?: { skipHistory?: boolean; scope?: readonly string[] }): void {
   const tab = useTabStore.getState().tabs[tabId]
   if (!tab || tab.locked) return
 
@@ -20,5 +26,6 @@ export function closeTab(tabId: string, opts?: { skipHistory?: boolean }): void 
   if (dirty && !window.confirm(useI18nStore.getState().t('editor.close_dirty_confirm'))) return
 
   destroyBrowserViewIfNeeded(tab)
-  useWorkspaceStore.getState().closeTabInWorkspace(tabId, opts)
+  const scope = opts?.scope ?? (useWorkspaceStore.getState().activeWorkspaceId === WATCH_WORKSPACE_ID ? null : selectedGroupRange()) ?? undefined
+  useWorkspaceStore.getState().closeTabInWorkspace(tabId, scope === undefined ? opts : { ...opts, scope })
 }

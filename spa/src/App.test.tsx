@@ -11,9 +11,16 @@ import { useI18nStore } from './stores/useI18nStore'
 import { useLayoutStore } from './stores/useLayoutStore'
 import { WATCH_WORKSPACE_ID } from './features/workspace/store'
 import { leaveWatchArea } from './features/workspace/lib/open-watch-area'
+import { useTabStore } from './stores/useTabStore'
+import { useManualGroupsStore } from './stores/useManualGroupsStore'
+import { useGroupViewStore } from './stores/useGroupViewStore'
+import { useTeamUiStore } from './stores/useTeamUiStore'
+import { manualGroupKey } from './lib/task-groups/group-key'
+import { createTab } from './types/tab'
 
 const activityBarProps = vi.hoisted(() => vi.fn())
 const tabBarProps = vi.hoisted(() => vi.fn())
+const visibleIdsOf = vi.hoisted(() => vi.fn((_p: unknown): string[] => []))
 
 vi.mock('./features/workspace/lib/icon-path-cache', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./features/workspace/lib/icon-path-cache')>()),
@@ -33,10 +40,10 @@ vi.mock('./components/ApprovalDialogHost', () => ({ ApprovalDialogHost: () => nu
 vi.mock('./components/ThemeInjector', () => ({ ThemeInjector: () => null }))
 vi.mock('./components/GlobalUndoToast', () => ({ GlobalUndoToast: () => null }))
 vi.mock('./features/workspace', () => ({
-  getVisibleTabIds: () => [],
+  getVisibleTabIds: (p: unknown) => visibleIdsOf(p),
   nextWorkspaceName: () => 'Workspace',
   WorkspaceContextMenu: () => null,
-  WorkspaceEmptyState: () => null,
+  WorkspaceEmptyState: () => <div data-testid="workspace-empty" />,
 }))
 vi.mock('./lib/browser-shortcuts', () => ({}))
 const stopLifecycle = vi.hoisted(() => vi.fn())
@@ -163,5 +170,48 @@ describe('App — the fixed tab row of the watcher area', () => {
     useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
     render(<App />)
     expect((tabBarProps.mock.calls.at(-1)![0] as { onLeave?: unknown }).onLeave).toBe(leaveWatchArea)
+  })
+})
+
+describe('App — the task-group view\'s range (TG-4a)', () => {
+  const G = manualGroupKey('aaaaaaaa')
+  beforeEach(() => {
+    visibleIdsOf.mockClear()
+    useWorkspaceStore.getState().reset()
+    useWorkspaceStore.getState().addWorkspace('Alpha')
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    useGroupViewStore.setState({ selectedGroup: G, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+  })
+  afterEach(() => {
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+  const lastRange = () => (visibleIdsOf.mock.calls.at(-1)![0] as { groupRange?: string[] | null }).groupRange
+
+  it('hands the selected group\'s tabs to getVisibleTabIds', () => {
+    const t = { ...createTab({ kind: 'new-tab' }), group: G }
+    useTabStore.setState({ tabs: { [t.id]: t }, tabOrder: [t.id], activeTabId: null })
+    render(<App />)
+    expect(lastRange()).toEqual([t.id])
+  })
+
+  it('hands none in the workspace view, and none while the watcher area is shown', () => {
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    render(<App />)
+    expect(lastRange()).toBeNull()
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    render(<App />)
+    expect(lastRange()).toBeNull()
+  })
+
+  it('an empty selected group shows the empty state even with no workspace active', () => {
+    visibleIdsOf.mockReturnValue([])
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+    render(<App />)
+    expect(screen.getByTestId('workspace-empty')).toBeInTheDocument()
   })
 })

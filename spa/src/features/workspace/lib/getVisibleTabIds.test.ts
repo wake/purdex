@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { getVisibleTabIds } from './getVisibleTabIds'
 import type { Workspace } from '../../../types/tab'
+import { WATCH_WORKSPACE_ID } from '../../../lib/watch/ids'
 
 describe('getVisibleTabIds', () => {
   it('returns workspace tabs when active workspace exists', () => {
@@ -102,5 +103,35 @@ describe('getVisibleTabIds', () => {
       activeWorkspaceId: null,
     })
     expect(result).toEqual([])
+  })
+})
+
+describe('getVisibleTabIds — the task-group view\'s range (TG-4a)', () => {
+  const workspaces: Workspace[] = [
+    { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2'], activeTabId: 't1' },
+    { id: 'ws-2', name: 'WS2', tabs: ['t3'], activeTabId: 't3' },
+  ]
+  const base = { tabs: { t1: {}, t2: {}, t3: {} } as Record<string, unknown>, tabOrder: ['t1', 't2', 't3'], activeTabId: 't1', workspaces, activeWorkspaceId: 'ws-1' }
+
+  it('a group range replaces the workspace: the selected group\'s tabs, in the range\'s order, across workspaces', () => {
+    expect(getVisibleTabIds({ ...base, groupRange: ['t3', 't1'] })).toEqual(['t3', 't1'])
+  })
+
+  it('tabs the store no longer has are left out of the range', () => {
+    expect(getVisibleTabIds({ ...base, groupRange: ['t3', 'gone', 't2'] })).toEqual(['t3', 't2'])
+  })
+
+  it('an empty selected group is an empty range, not the workspace\'s tabs', () => {
+    expect(getVisibleTabIds({ ...base, groupRange: [] })).toEqual([])
+  })
+
+  it('no range (null / absent): the workspace rule', () => {
+    expect(getVisibleTabIds({ ...base, groupRange: null })).toEqual(['t1', 't2'])
+    expect(getVisibleTabIds(base)).toEqual(['t1', 't2'])
+  })
+
+  it('the watcher area keeps priority: in it the range is ignored', () => {
+    const w: Workspace[] = [...workspaces, { id: WATCH_WORKSPACE_ID, name: 'watch', tabs: ['watch-jobs'], activeTabId: null }]
+    expect(getVisibleTabIds({ ...base, workspaces: w, tabs: { ...base.tabs, 'watch-jobs': {} }, activeWorkspaceId: WATCH_WORKSPACE_ID, groupRange: ['t3'] })).toEqual(['watch-jobs'])
   })
 })

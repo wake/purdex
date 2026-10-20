@@ -533,3 +533,71 @@ describe('useWorkspaceStore', () => {
     })
   })
 })
+
+// TG-4a — in the task-group view the tab after a close comes from the SELECTED GROUP's range (spec §6.2), not from the
+// closed tab's workspace.
+describe('closeTabInWorkspace with a scope (the task-group range)', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] } as never)
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+  })
+
+  /** g1 and x live in workspace A (x is outside the group), g2 and g3 in workspace B; the group is g1, g2, g3. */
+  function world() {
+    const [g1, g2, g3, x] = [1, 2, 3, 4].map(() => makeTab())
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    for (const t of [g1, x, g2, g3]) useTabStore.getState().addTab(t)
+    for (const t of [g1, x]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    for (const t of [g2, g3]) useWorkspaceStore.getState().addTabToWorkspace(wsB.id, t.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useTabStore.getState().setActiveTab(g1.id)
+    return { g1, g2, g3, x, wsA, wsB, scope: [g1.id, g2.id, g3.id] }
+  }
+
+  it('the next tab is the one after it in the range, even in another workspace — never a tab outside the group', () => {
+    const { g1, g2, x, wsB, scope } = world()
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope })
+    expect(useTabStore.getState().activeTabId).toBe(g2.id)
+    expect(useTabStore.getState().activeTabId).not.toBe(x.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id) // the workspace of the tab now shown
+  })
+
+  it('the workspace the tab left is not pointed at a tab it does not hold', () => {
+    const { g1, x, wsA } = world()
+    useWorkspaceStore.getState().setWorkspaceActiveTab(wsA.id, g1.id)
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope: [g1.id, ...[...useTabStore.getState().tabOrder].filter((id) => id !== g1.id && id !== x.id)] })
+    const a = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsA.id)!
+    expect(a.tabs).not.toContain(g1.id)
+    expect(a.tabs).toContain(a.activeTabId ?? x.id)
+  })
+
+  it('the last tab of the range gives way to the one before it', () => {
+    const { g2, g3, scope } = world()
+    useTabStore.getState().setActiveTab(g3.id)
+    useTabStore.setState({ visitHistory: [] } as never) // no visit to prefer: the neighbour in the range
+    useWorkspaceStore.getState().closeTabInWorkspace(g3.id, { scope })
+    expect(useTabStore.getState().activeTabId).toBe(g2.id)
+  })
+
+  it('the only tab of the group: nothing is active afterwards (the group stays selected, empty)', () => {
+    const { g1, x } = world()
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope: [g1.id] })
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useTabStore.getState().tabs[x.id]).toBeDefined()
+  })
+
+  it('a recently visited tab of the range is preferred, one outside it never is', () => {
+    const { g1, g3, x, scope } = world()
+    useTabStore.setState({ visitHistory: [g3.id, x.id] } as never)
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope })
+    expect(useTabStore.getState().activeTabId).toBe(g3.id)
+  })
+
+  it('without a scope, or with a scope that does not hold the tab, the workspace rule is unchanged', () => {
+    const { g1, x, g2 } = world()
+    useWorkspaceStore.getState().closeTabInWorkspace(g1.id, { scope: [g2.id] })
+    expect(useTabStore.getState().activeTabId).toBe(x.id)
+  })
+})

@@ -80,7 +80,8 @@ interface WorkspaceState {
   ensureWatchWorkspace: () => Workspace
   /** No `workspaceId` → the active workspace → else the first → else a new `Unsorted`. Never a silent no-op. */
   insertTab: (tabId: string, workspaceId?: string, afterTabId?: string | null) => void
-  closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
+  /** `scope`: the tabs the bar shows (the task-group view's range, lib/task-groups/range.ts); when it holds the tab, the tab after the close comes from it, not from the tab's workspace. */
+  closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean; scope?: readonly string[] }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
   setWorkspaceIconWeight: (wsId: string, weight: IconWeight) => void
@@ -305,7 +306,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         // 1. Pre-compute next tab (before any mutation)
         //    Priority: visitHistory (scoped to the workspace) → adjacent in the workspace
-        const scopeIds = new Set((scopeWs?.tabs ?? []).filter((id) => id !== tabId))
+        // In the task-group view the bar's range replaces the workspace as the scope (it can cross workspaces and leave out tabs of the closed tab's own).
+        const range = opts?.scope?.includes(tabId) ? opts.scope.filter((id) => id !== tabId && !!tabStore.tabs[id]) : null
+        const scopeIds = new Set(range ?? (scopeWs?.tabs ?? []).filter((id) => id !== tabId))
 
         let nextTabId: string | null = null
         // Try visitHistory first (most recent visited tab still in scope)
@@ -316,7 +319,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             break
           }
         }
-        if (nextTabId === null && ws) {
+        if (nextTabId === null && range !== null) {
+          const idx = opts!.scope!.indexOf(tabId)
+          const before = opts!.scope!.slice(0, idx).filter((id) => range.includes(id)).length
+          nextTabId = range[Math.min(before, range.length - 1)] ?? null
+        } else if (nextTabId === null && ws) {
           // Fallback to adjacent
           const idx = ws.tabs.indexOf(tabId)
           const remaining = ws.tabs.filter((id) => id !== tabId)
@@ -346,8 +353,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (wasActive) {
           useTabStore.getState().setActiveTab(nextTabId)
         }
-        if (ws && wasWorkspaceActive && nextTabId) {
+        if (ws && wasWorkspaceActive && nextTabId && ws.tabs.includes(nextTabId)) {
           get().setWorkspaceActiveTab(ws.id, nextTabId)
+        }
+        // The next tab of a range may be in another workspace: that workspace is the one shown, as a click on it would make it.
+        if (range !== null && wasActive && nextTabId) {
+          const nextWs = get().findWorkspaceByTab(nextTabId)
+          if (nextWs && nextWs.id !== get().activeWorkspaceId) get().setActiveWorkspace(nextWs.id)
+          if (nextWs) get().setWorkspaceActiveTab(nextWs.id, nextTabId)
         }
       },
 

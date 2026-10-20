@@ -11,6 +11,7 @@ import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { visibleWorkspaces, WATCH_WORKSPACE_ID } from './features/workspace/store'
+import { useSelectedGroupRange } from './lib/task-groups/range'
 import { leaveWatchArea } from './features/workspace/lib/open-watch-area'
 import { useI18nStore } from './stores/useI18nStore'
 import { useHostStore } from './stores/useHostStore'
@@ -114,12 +115,15 @@ export default function App() {
   }, [fetchConfig, firstHostId])
 
   // --- Derive visible tabs for display ---
+  const selectedRange = useSelectedGroupRange() // the task-group view's range (null = the workspace rules); the watcher area keeps priority
+  const groupRange = activeWorkspaceId === WATCH_WORKSPACE_ID ? null : selectedRange
   const visibleTabIds = getVisibleTabIds({
     tabs,
     tabOrder,
     activeTabId,
     workspaces,
     activeWorkspaceId,
+    groupRange,
   })
   const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
 
@@ -251,7 +255,7 @@ export default function App() {
               />
             )}
             <div className="flex-1 flex overflow-hidden relative">
-              {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
+              {visibleTabIds.length === 0 && (activeWorkspaceId !== null || groupRange !== null) ? (
                 <WorkspaceEmptyState />
               ) : (
                 <TabContent

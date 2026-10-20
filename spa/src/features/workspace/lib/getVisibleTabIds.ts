@@ -7,6 +7,8 @@ interface GetVisibleTabIdsParams {
   activeTabId: string | null
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  /** The task-group view's range (lib/task-groups/range.ts): the selected group's tabs; null/absent = the workspace rules. */
+  groupRange?: string[] | null
 }
 
 /**
@@ -20,13 +22,16 @@ interface GetVisibleTabIdsParams {
  *    the first one: what that re-pointing will show, so the bar does not flash every tab, and "close others"
  *    cannot reach into another workspace.
  * 3. Zero workspaces → tabOrder (every tab is in the one range there is).
+ * The task-group view (`groupRange`, task groups spec §6.2) takes the place of 1–3: the selected group's tabs. The watcher area keeps priority: while it is the active
+ * workspace the range is ignored.
  *
  * There is no "Home" view of workspace-less tabs: every tab belongs to a workspace (Profile Sync spec §4.3). A
  * tab nobody has adopted yet is in no workspace's list, so it is not in the bar for that moment even when it is
  * the active tab; the content area shows it all the same.
  */
 export function getVisibleTabIds(params: GetVisibleTabIdsParams): string[] {
-  const { tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId } = params
+  const { tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId, groupRange } = params
+  if (groupRange != null && activeWorkspaceId !== WATCH_WORKSPACE_ID) return groupRange.filter((id) => !!tabs[id])
   if (workspaces.length === 0) return tabOrder
 
   const scope =

@@ -476,3 +476,78 @@ describe('handleContextMenu — rows another surface left on the tab menu', () =
     expect(useTabMenuExtrasStore.getState().items).toEqual([])
   })
 })
+
+// TG-4a — in the task-group view the range is the selected group's tabs (lib/task-groups/range.ts), across workspaces:
+// close-others / close-right act on exactly that list.
+describe('closeOthers / closeRight on a task-group range', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  function world() {
+    const [g1, g2, g3, x1] = [1, 2, 3, 4].map(() => createTab({ kind: 'new-tab' }))
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    for (const t of [g1, x1, g2, g3]) useTabStore.getState().addTab(t)
+    for (const t of [g1, x1]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    for (const t of [g2, g3]) useWorkspaceStore.getState().addTabToWorkspace(wsB.id, t.id)
+    useTabStore.getState().setActiveTab(g1.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    return { g1, g2, g3, x1 }
+  }
+
+  function act_(action: 'closeOthers' | 'closeRight', tabId: string, groupRange: string[]) {
+    const tabState = useTabStore.getState()
+    const ws = useWorkspaceStore.getState()
+    const displayTabs = getVisibleTabIds({
+      tabs: tabState.tabs, tabOrder: tabState.tabOrder, activeTabId: tabState.activeTabId,
+      workspaces: ws.workspaces, activeWorkspaceId: ws.activeWorkspaceId, groupRange,
+    }).map((id) => tabState.tabs[id])
+    const { result } = renderHook(() => useTabWorkspaceActions(displayTabs))
+    act(() => { result.current.handleContextMenu({ preventDefault() {}, clientX: 0, clientY: 0 } as unknown as React.MouseEvent, tabId) })
+    act(() => { result.current.handleContextAction(action) })
+  }
+
+  it('closeOthers on g1 closes the group\'s other tabs (one in another workspace) and not the workspace tab outside the group', () => {
+    const { g1, g2, g3, x1 } = world()
+    act_('closeOthers', g1.id, [g1.id, g2.id, g3.id])
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([g1.id, x1.id].sort())
+  })
+
+  it('closeRight of g2 closes what is right of it in the group\'s order, not in tabOrder or the workspace', () => {
+    const { g1, g2, g3, x1 } = world()
+    act_('closeRight', g2.id, [g1.id, g2.id, g3.id])
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([g1.id, g2.id, x1.id].sort())
+  })
+})
+
+describe('handleCloseTab in the task-group view (TG-4a)', () => {
+  it('the tab shown next is the group\'s neighbour, in whichever workspace, not a tab of the closed tab\'s workspace outside the group', async () => {
+    const { useTeamUiStore } = await import('../../stores/useTeamUiStore')
+    const { useLayoutStore } = await import('../../stores/useLayoutStore')
+    const { useManualGroupsStore } = await import('../../stores/useManualGroupsStore')
+    const { useGroupViewStore } = await import('../../stores/useGroupViewStore')
+    const { manualGroupKey } = await import('../../lib/task-groups/group-key')
+    const G = manualGroupKey('aaaaaaaa')
+    useWorkspaceStore.getState().reset()
+    const [g1, g2, x] = [1, 2, 3].map(() => ({ ...createTab({ kind: 'new-tab' }) }))
+    g1.group = G; g1.groupRank = 'A'
+    g2.group = G; g2.groupRank = 'M'
+    useTabStore.setState({ tabs: { [g1.id]: g1, [g2.id]: g2, [x.id]: x }, tabOrder: [g1.id, x.id, g2.id], activeTabId: g1.id, visitHistory: [] } as never)
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    for (const t of [g1, x]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, g2.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    useGroupViewStore.setState({ selectedGroup: G, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    const { result } = renderHook(() => useTabWorkspaceActions([g1, g2].map((t) => useTabStore.getState().tabs[t.id])))
+    act(() => { result.current.handleCloseTab(g1.id) })
+    expect(useTabStore.getState().activeTabId).toBe(g2.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+  })
+})

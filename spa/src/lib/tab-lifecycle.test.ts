@@ -9,6 +9,12 @@ import type { PaneContent, PaneLayout } from '../types/tab'
 import type { FileSource } from '../types/fs'
 import { closeTab } from './tab-lifecycle'
 import { bufferKey } from './editor-buffer-key'
+import { useManualGroupsStore } from '../stores/useManualGroupsStore'
+import { useGroupViewStore } from '../stores/useGroupViewStore'
+import { useLayoutStore } from '../stores/useLayoutStore'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
+import { manualGroupKey } from './task-groups/group-key'
+import { WATCH_WORKSPACE_ID } from './watch/ids'
 
 function resetStores() {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
@@ -263,5 +269,57 @@ describe('closeTab — unsaved editor warning', () => {
 
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(closeSpy).toHaveBeenCalledWith(id, undefined)
+  })
+})
+
+// TG-4a — every close goes through closeTab (the bar's button, ⌘W, the menu, the content area's close buttons): in the
+// task-group view the tab shown next comes from the selected group's range, not from the closed tab's workspace.
+describe('closeTab in the task-group view', () => {
+  const G = manualGroupKey('aaaaaaaa')
+  afterEach(() => useTeamUiStore.setState({ sidebarView: 'workspace' }))
+
+  function world(view: 'groups' | 'workspace') {
+    resetStores()
+    const g1 = { ...createTab({ kind: 'new-tab' }), group: G, groupRank: 'A' }
+    const g2 = { ...createTab({ kind: 'new-tab' }), group: G, groupRank: 'M' }
+    const x = createTab({ kind: 'new-tab' })
+    useTabStore.setState({ tabs: { [g1.id]: g1, [g2.id]: g2, [x.id]: x }, tabOrder: [g1.id, x.id, g2.id], activeTabId: g1.id, visitHistory: [] })
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    for (const t of [g1, x]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, g2.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    useGroupViewStore.setState({ selectedGroup: G, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
+    useTeamUiStore.setState({ sidebarView: view })
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    return { g1, g2, x, wsB }
+  }
+
+  it('the next tab is the group\'s neighbour in another workspace, and that workspace is shown', () => {
+    const { g1, g2, wsB } = world('groups')
+    closeTab(g1.id)
+    expect(useTabStore.getState().activeTabId).toBe(g2.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+  })
+
+  it('in the workspace view it is the workspace\'s neighbour, as before', () => {
+    const { g1, x } = world('workspace')
+    closeTab(g1.id)
+    expect(useTabStore.getState().activeTabId).toBe(x.id)
+  })
+
+  it('the watcher area keeps the workspace rule', () => {
+    const { g1, x } = world('groups')
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    closeTab(g1.id)
+    expect(useTabStore.getState().activeTabId).toBe(x.id)
+  })
+
+  it('an explicit scope wins over the range', () => {
+    const { g1, x } = world('groups')
+    closeTab(g1.id, { scope: [g1.id, x.id] })
+    expect(useTabStore.getState().activeTabId).toBe(x.id)
   })
 })
