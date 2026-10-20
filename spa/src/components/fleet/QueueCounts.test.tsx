@@ -71,7 +71,7 @@ describe('QueueCounts — the two blocks (M15)', () => {
   it('the accessible name counts the waiting jobs', () => {
     seed([job('a', 'mlab'), light('b', 'mlab')])
     render(<QueueCounts />)
-    expect(screen.getByTestId('queue-counts').getAttribute('aria-label')).toBe('Resource pool: 2 waiting')
+    expect(screen.getByTestId('queue-counts').getAttribute('aria-label')).toBe('Resource pool: 2 waiting (heavy 1 · light 1)')
   })
 })
 

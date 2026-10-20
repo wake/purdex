@@ -101,6 +101,17 @@ describe('FleetCells — the queue strip and the jobs driver (MON-3a)', () => {
     expect(screen.getByTestId('queue-count-light').textContent).toBe('0')
     expect(screen.queryAllByTestId(/^narrow-block-/)).toHaveLength(0)
   })
+  it('a pool never read or failed with no kept list: nothing wide, but the narrow counts stay as two grey 0s (M15, M25)', () => {
+    const wide = render(<FleetCells variant="wide" />)
+    expect(wide.container.firstChild).toBeNull()
+    wide.unmount()
+    render(<FleetCells variant="narrow" />)
+    expect(screen.getByTestId('queue-count-heavy').textContent).toBe('0')
+    expect(screen.getByTestId('queue-count-light').className).toContain('bg-surface-hover')
+    expect(screen.queryAllByTestId(/^narrow-block-/)).toHaveLength(0)
+    fireEvent.mouseEnter(screen.getByTestId('queue-counts'))
+    expect(screen.getByTestId('queue-unreadable')).toBeTruthy()
+  })
   it('a pool never read draws nothing at all', () => {
     const { container } = render(<FleetCells variant="wide" />)
     expect(container.firstChild).toBeNull()

@@ -35,7 +35,7 @@ export function QueueCounts() {
       type="button"
       ref={ref}
       data-testid="queue-counts"
-      aria-label={t('pool.strip.label', { n: heavy + light })}
+      aria-label={t('pool.strip.header', { n: heavy + light, heavy, light })}
       aria-describedby={open ? tipId : undefined}
       onMouseEnter={show}
       onMouseLeave={hide}

@@ -23,8 +23,9 @@ export function FleetCells({ variant }: FleetCellsProps) {
   const cells = useMemo(() => hosts.map(cellOf), [hosts])
   const readable = usePoolReadable()
   const wide = variant === 'wide'
-  // Nothing to show: no host cell, and no strip (wide) or counts (narrow) either unless the pool answered once, when they stay — an answered empty pool is a grey line, or two grey 0s, not a bar that disappears.
-  if (cells.length === 0 && !readable) return null
+  // Nothing to show (wide): no host cell, and no strip either unless the pool answered once, when it stays — an answered empty pool is a grey line, not a bar that disappears.
+  // The narrow counts are always drawn (M15, M25): two grey 0s when the pool cannot be read, so the bar does not jump.
+  if (wide && cells.length === 0 && !readable) return null
 
   return (
     <div
