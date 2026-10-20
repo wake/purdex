@@ -47,6 +47,9 @@ export const STORAGE_KEYS = {
   /** The Mac App's quick-reply switches (useQuickReplyPrefsStore, quick-replies v2 spec §3): `{ rowEnabled, disabled: { [wireHostId]: itemId[] } }` —
    *  off-lists; the keys are WIRE host ids like HOST_LOOKS. Registered with syncManager and projected into Profile Sync `settings` (ordinal 10). */
   QUICK_REPLY_PREFS: 'purdex-quick-reply-prefs',
+  /** The manual task groups (useManualGroupsStore, task groups spec §4.1): `{ order, groups }`, members hold LOCAL host ids in the store and WIRE ids on the wire.
+   *  Registered with syncManager and projected into Profile Sync `settings` (ordinal 12). */
+  TASK_GROUPS: 'purdex-task-groups',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',

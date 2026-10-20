@@ -91,6 +91,9 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // The Mac App's quick-reply switches (quick-replies v2 spec §3): the row's on/off and the per-host off-lists. The `disabled` keys are WIRE host ids
     // (like `purdex-host-looks.looks`): the builder and the applier pass them through verbatim, and the store's `merge` sanitises what arrives.
     ...settingsPaths('purdex-quick-reply-prefs', ['rowEnabled', 'disabled']),
+    // The manual task groups (task groups spec §4.1): the sidebar order and the definitions. Each member's `host` is a LOCAL id in the store and a WIRE id
+    // here: the builder translates, de-duplicates and sorts the members, `settingsFromWire` translates back.
+    ...settingsPaths('purdex-task-groups', ['order', 'groups']),
     // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eleven
     // stores, not thirteen. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
@@ -138,7 +141,10 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   //11: purdex-ui-settings.fleetCellIndicator (the sidebar fleet cell's ring / bars setting, #3033) — a projection change, so the
   //    fingerprint moves by itself (no marker). An ordinal-10 payload lacks the field: applying it clears the field, and the
   //    store's rehydrate (`onRehydrateStorage`) reads a missing or unknown value as the ring, the default.
-  settings: 11,
+  //12: purdex-task-groups.{order,groups} (task groups spec §4.1, TG-1a-1) — a projection change, so the fingerprint moves by itself (no marker).
+  //    An ordinal-11 payload has no such store: applying it CLEARS the store (apply-to-stores / applier `CLEARED_WHEN_ABSENT`); the executor only lands an
+  //    older-shape payload on a clean local settings section, so nothing local is lost.
+  settings: 12,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.

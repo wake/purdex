@@ -578,6 +578,61 @@ export function hostSettingsFromWire<T>(record: Record<string, T>, resolve: Wire
   return rekey(record, resolve)
 }
 
+// === settings: purdex-task-groups.groups ===
+
+/** Code-unit order: the same on every device, unlike a locale-aware compare. */
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+/**
+ * local → wire for the manual task groups' members: each member's host is translated, then members are de-duplicated
+ * (one `(host, root)` in at most one group — the first group in `order` keeps it) and sorted by (wire host, root).
+ * Local ids differ per device, so the sort has to follow the wire form: two devices that added the same members in a
+ * different order must build one payload, or they push each other's back for ever. A host the identity does not map
+ * passes through. Input is never mutated.
+ */
+export function taskGroupsToWire<T extends { groups?: unknown; order?: unknown }>(payload: T, identity: HostIdentity): T {
+  return mapTaskGroups(payload, (id) => identity.toWire.get(id) ?? id, true)
+}
+
+/** wire → local for the manual task groups' members; a host not known here stays as received. No sorting, no de-duplication (the store's merge does its own). */
+export function taskGroupsFromWire<T extends { groups?: unknown; order?: unknown }>(payload: T, resolve: WireResolver): T {
+  return mapTaskGroups(payload, resolve, false)
+}
+
+function mapTaskGroups<T extends { groups?: unknown; order?: unknown }>(payload: T, map: IdMap, canonical: boolean): T {
+  if (!isRecord(payload.groups)) return payload
+  const groups = payload.groups
+  const ids = canonical
+    ? [...new Set([...(Array.isArray(payload.order) ? payload.order.filter((x): x is string => typeof x === 'string') : []), ...Object.keys(groups).sort(byText)])].filter((id) => Object.hasOwn(groups, id))
+    : Object.keys(groups)
+  const taken = new Set<string>()
+  const out: Record<string, unknown> = {}
+  for (const id of ids) {
+    const group = groups[id]
+    if (!isRecord(group) || !Array.isArray(group.members)) {
+      setOwn(out, id, group)
+      continue
+    }
+    let members: unknown[] = group.members.map((m) => (isRecord(m) && typeof m.host === 'string' ? { ...m, host: map(m.host) } : m))
+    if (canonical) {
+      const kept: unknown[] = []
+      for (const m of members) {
+        if (!isRecord(m) || typeof m.host !== 'string' || typeof m.root !== 'string') {
+          kept.push(m)
+          continue
+        }
+        const key = JSON.stringify([m.host, m.root])
+        if (taken.has(key)) continue
+        taken.add(key)
+        kept.push(m)
+      }
+      members = kept.sort((a, b) => (isRecord(a) && isRecord(b) ? byText(String(a.host), String(b.host)) || byText(String(a.root), String(b.root)) : 0))
+    }
+    setOwn(out, id, { ...group, members })
+  }
+  return { ...payload, groups: out }
+}
+
 // === settings: purdex-newtab-layout.presets ===
 
 /**

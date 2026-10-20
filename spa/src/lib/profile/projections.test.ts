@@ -28,6 +28,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
+import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { compareShape, profileLock } from './profile-state'
@@ -277,7 +278,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(12)
+    expect(prefixes).toHaveLength(13)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -339,6 +340,7 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.SHOWN_HOSTS]: useShownHostsStore.getState,
       [STORAGE_KEYS.WORKER_SETTINGS]: useWorkerSettingsStore.getState,
       [STORAGE_KEYS.QUICK_REPLY_PREFS]: useQuickReplyPrefsStore.getState,
+      [STORAGE_KEYS.TASK_GROUPS]: useManualGroupsStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -737,7 +739,7 @@ describe('shape: fingerprint and ordinal', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-worker-settings.')).sort()).toEqual([...WORKER].sort())
       expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(11)
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(11)
     })
 
     it('the two shapes differ by exactly the worker paths', async () => {
@@ -782,7 +784,7 @@ describe('shape: fingerprint and ordinal', () => {
       expect(PROJECTIONS.settings).toContain(FIELD)
       expect(Object.keys(useUISettingsStore.getState())).toContain('fleetCellIndicator')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(11)
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(11)
     })
 
     it('an index holding a settings row of this build → sot-is-newer (locked:schema) for the ordinal-10 client', async () => {
@@ -817,8 +819,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "61fa43c32496f09b198f4e3ece877909ee587886e0edcc414c5ba805fcbb10db",
-          11,
+          "62edd109a44f99ef7ff9f67787f1dca654468fd1df071a027b9e0ae9442307f3",
+          12,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",
