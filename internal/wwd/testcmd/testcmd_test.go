@@ -159,10 +159,14 @@ type fakeGate struct {
 	out     string
 	waitMax time.Duration // the WaitMax of the last call
 	last    gate.Options  // the options of the last call
+	onRun   func()        // called while the command "runs" (nil: nothing)
 }
 
 func (g *fakeGate) Run(_ context.Context, o gate.Options) (int, error) {
 	g.calls++
+	if g.onRun != nil {
+		g.onRun()
+	}
 	g.waitMax = o.WaitMax
 	g.last = o
 	for _, kv := range o.Env {
