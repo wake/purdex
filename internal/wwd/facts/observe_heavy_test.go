@@ -176,3 +176,24 @@ func BenchmarkUpdateShellRootedTrees(b *testing.B) {
 		})
 	}
 }
+
+func TestTrackerKeepsAddingUpALongProgramAfterManyShortOnesEnded(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "zsh", ccRoot())
+	for i := 0; i < 20; i++ { // twenty short programs, one after the other, each heavier in a sample than the long one will be
+		h.add(300+i, 200, "tool", []string{"tool", "short" + strings.Repeat("x", i)})
+		h.rec(300 + i).CPUPct = 200
+		step(tr, h, i)
+		h.remove(300 + i)
+	}
+	h.add(400, 200, "go", []string{"go", "test", "./x/"})
+	for i := 20; i < 60; i++ {
+		h.rec(400).CPUPct = 50
+		step(tr, h, i)
+	}
+	h.remove(200, 400)
+	got := gone(t, tr, h, 60)
+	if len(got) != 1 || got[0].Signature != "go test" {
+		t.Fatalf("the long program adds up to more than any short one: %+v", got)
+	}
+}

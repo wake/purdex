@@ -93,6 +93,7 @@ type candidate struct {
 	cpu       float64
 	mem       uint64
 	seq       int
+	seen      int // the last sample it was alive in
 }
 
 // heavier says whether a is a better name for the tree than b: more CPU, then more memory, then the earlier one.
@@ -470,6 +471,7 @@ func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, 
 			cpu, mem := t.subtreeOf(ch, children, isRoot, c)
 			cd.cpu += cpu / 100 * dt.Seconds()
 			cd.mem = max(cd.mem, mem)
+			cd.seen = t.sample
 			t.trimCandidates(tr) // after the charge, so a new program competes with what it has used
 		}
 	}
@@ -484,13 +486,15 @@ func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, 
 	}
 }
 
-// trimCandidates drops the lightest candidates beyond maxCandidates.
+// trimCandidates drops candidates beyond maxCandidates: the lightest of those that are gone first (a program still running keeps its
+// place and goes on adding up; one that has ended cannot grow), then the lightest of the rest.
 func (t *Tracker) trimCandidates(tr *tree) {
 	for len(tr.cands) > maxCandidates {
 		var worstK candKey
 		var worst *candidate
 		for k, cd := range tr.cands {
-			if worst == nil || worst.heavier(cd) {
+			gone, worstGone := cd.seen < t.sample, worst != nil && worst.seen < t.sample
+			if worst == nil || gone && !worstGone || gone == worstGone && worst.heavier(cd) {
 				worstK, worst = k, cd
 			}
 		}
