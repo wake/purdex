@@ -159,7 +159,8 @@ describe('StatusCards, 暫停', () => {
 })
 
 describe('StatusCards, a host that is not ok', () => {
-  const down = () => monitorHost({ liveness: 'wwd_down', facts: null, liveness_since: NOW - 60_000, liveness_at: NOW - 1000, labels: ['task:build'] })
+  // The row may still carry the last facts it was given; a state that is not ok does not draw them.
+  const down = () => monitorHost({ liveness: 'wwd_down', liveness_since: NOW - 60_000, liveness_at: NOW - 1000, labels: ['task:build'] })
 
   it('判斷, Worker 與主人 and 暫停 say there is no reading, with the state\'s word', () => {
     render(<StatusCards host={down()} />)
