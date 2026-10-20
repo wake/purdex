@@ -121,6 +121,33 @@ describe('QueueStrip — the hover list (M5)', () => {
   })
 })
 
+describe('QueueStrip — keyboard and screen readers', () => {
+  it('focus opens the list and the button is described by it; blur closes it', () => {
+    seed([job('a', 'mlab')])
+    render(<QueueStrip />)
+    const strip = screen.getByTestId('queue-strip')
+    expect(strip.getAttribute('aria-describedby')).toBeNull()
+    fireEvent.focus(strip)
+    const tip = screen.getByTestId('queue-tooltip')
+    expect(strip.getAttribute('aria-describedby')).toBe(tip.id)
+    expect(tip.id).not.toBe('')
+    fireEvent.blur(strip)
+    expect(strip.getAttribute('aria-describedby')).toBeNull()
+  })
+  it('keeps a visible focus ring (the outline is off)', () => {
+    seed([])
+    render(<QueueStrip />)
+    expect(screen.getByTestId('queue-strip').className).toContain('focus-visible:ring-1')
+  })
+  it('the unreadable pool is described too', () => {
+    seed([], false)
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    render(<QueueStrip />)
+    fireEvent.focus(screen.getByTestId('queue-strip'))
+    expect(screen.getByTestId('queue-strip').getAttribute('aria-describedby')).toBe(screen.getByTestId('queue-tooltip').id)
+  })
+})
+
 describe('QueueStrip — click', () => {
   it('opens the job queue of the watcher area', () => {
     seed([])

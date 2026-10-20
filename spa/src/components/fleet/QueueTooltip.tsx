@@ -14,12 +14,14 @@ const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(s % 60).padS
 const jobText = (j: PoolJob): string => [j.repo.name, j.task, ...j.args].filter((x) => x !== '').join(' ')
 
 export interface QueueTooltipProps {
+  /** The id the anchor's `aria-describedby` points at. */
+  id?: string
   strip: QueueStrip
   placement: 'above' | 'right'
   anchor: DOMRect | null
 }
 
-export function QueueTooltip({ strip, placement, anchor }: QueueTooltipProps) {
+export function QueueTooltip({ id, strip, placement, anchor }: QueueTooltipProps) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   const [shift, setShift] = useState({ x: 0, y: 0 })
@@ -59,6 +61,7 @@ export function QueueTooltip({ strip, placement, anchor }: QueueTooltipProps) {
   return createPortal(
     <div
       ref={ref}
+      id={id}
       data-testid="queue-tooltip"
       role="tooltip"
       className="fixed z-50 rounded-lg border border-border-default bg-surface-elevated shadow-xl px-3 py-2.5 text-xs pointer-events-none"

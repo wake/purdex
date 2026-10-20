@@ -1,6 +1,6 @@
 // spa/src/components/fleet/QueueStrip.tsx — the resource pool's queue as one line above the sidebar's host cells (monitoring tabs spec M1–M5, M25). One segment per job still waiting (heavy purple, light teal), the rest
 // grey; more waiting than segments: "+N" on the last one. It is always there, grey when nothing waits or the pool cannot be read, so the cells below do not move. Hover lists the first ten; a click opens the job queue.
-import { useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { queueEntries } from '../../lib/pool/jobs-lanes'
 import { usePoolJobs, usePoolReadable } from '../../lib/pool/pool-jobs'
@@ -21,6 +21,7 @@ export function QueueStrip() {
   const now = useClock()
   const strip = useMemo(() => queueStripOf(queueEntries(jobs, now, hosts), QUEUE_STRIP_SEGMENTS, readable), [jobs, now, hosts, readable])
   const ref = useRef<HTMLButtonElement>(null)
+  const tipId = useId()
   const [anchor, setAnchor] = useState<DOMRect | null>(null)
   const [open, setOpen] = useState(false)
   const show = () => { setAnchor(ref.current?.getBoundingClientRect() ?? null); setOpen(true) }
@@ -34,12 +35,13 @@ export function QueueStrip() {
       ref={ref}
       data-testid="queue-strip"
       aria-label={t('pool.strip.label', { n: waiting })}
+      aria-describedby={open ? tipId : undefined}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}
       onBlur={hide}
       onClick={() => { hide(); openWatchArea({ tab: 'jobs' }) }}
-      className="relative flex h-1.5 w-full shrink-0 cursor-pointer items-stretch gap-px outline-none"
+      className="relative flex h-1.5 w-full shrink-0 cursor-pointer items-stretch gap-px outline-none focus-visible:ring-1 focus-visible:ring-border-active focus-visible:ring-offset-1 focus-visible:ring-offset-surface-tertiary"
     >
       {kinds.map((kind, i) => (
         <span key={i} data-testid={`queue-seg-${i}`} data-kind={kind} className={`relative min-w-0 flex-1 rounded-[1px] ${SEGMENT_CLASS[kind]}`}>
@@ -48,7 +50,7 @@ export function QueueStrip() {
           )}
         </span>
       ))}
-      {open && <QueueTooltip strip={strip} placement="above" anchor={anchor} />}
+      {open && <QueueTooltip id={tipId} strip={strip} placement="above" anchor={anchor} />}
     </button>
   )
 }
