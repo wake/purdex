@@ -9,7 +9,7 @@
 > plan：`docs/plans/2026-10-20-monitoring-tabs-plan.md`。行號以 `origin/main abaa46be5` 為準。
 >
 > **衝突時的優先序**：U1–U3 ＞ 88 的定案 ＞ 設計稿 r3 的畫面（各節的 render 函式）＞ 設計稿附錄的規則文字。附錄有幾條還是 r2 的字（R21 的「其他變淡」、R29 的「狀態列、6 張小圖、告警摘要」），本 spec 照 r3 的畫面改寫，並在那幾條註明。
-> 標「⚠ 待 88 確認」的，是寫 spec 時查到、定案沒涵蓋或與程式不合的地方；確認前 plan 照括號裡的建議寫。
+> 標「88 定案（10-20，Wn）」的，是寫 spec 時查到、原本的定案沒涵蓋或與程式不合的地方，88 於 10-20 逐項定案（W1–W9，§7.3）。
 
 ## 1. 範圍
 
@@ -76,8 +76,9 @@
 
 - **A1 主機清單與身分**：清單＝`/api/pool/hosts`。主鍵 `host_id`；`alias` 用於顯示與路由。跟 Purdex daemon 的對應走 MD-1：一個 HostConfig 的 Nex 快取（`useNexHostStore`，`spa/src/lib/nex/nex-host-effects.ts:47-59` 讀 `/api/info` 的地方）多存 `wwd {host_id, alias}`；pool 主機的 daemon＝依主機順序第一個 `wwd.host_id` 相等、連著的 HostConfig。這個對應同時取代：
   - `matchPoolHost` 的 `kind === 'daemon' && (host_id === v.id || host_id === v.daemonId)`（`spa/src/lib/pool/cell-model.ts:37-39`）；
-  - jobs driver 的 `ownDaemon`（`spa/src/lib/pool/jobs-driver-live.ts:28`）——它拿 HostConfig 的 `daemonId`（Purdex daemon 的 `host_id`）比 wwd 的 `host_id`，兩者不可能相等，所以現在每個 origin 都經主機順序第一台 daemon 加 `?host=` 讀；那台自己的 origin 由本機回答，另一台有 daemon 的主機（air26）送出的工作則拿到對等體的視角，看不到它的快速通道與未宣告的工作。
+  - jobs driver 的 `ownDaemon`（`spa/src/lib/pool/jobs-driver-live.ts:28`），見下面的「現況缺陷」。
   - 整組頁面與側欄不讀 fleet store、不讀 SSH 讀數。
+  - **現況缺陷（MON-1a 修）**：`spa/src/lib/pool/jobs-driver-live.ts:28` 以 `hostState.hosts[id]?.daemonId === h.host_id` 判斷一台 pool 主機自己的 daemon，拿的是 HostConfig 的 `daemonId`（Purdex daemon 的 `host_id`，帶 `:`，`internal/config/config.go:52`）去比 wwd 的 `host_id`（16 位 hex，`cmd/wwd/main.go:341-357`），兩者永遠不相等，所以 `ownDaemon` 一直是空的。結果每個 origin 都交給主機順序第一台 daemon 加 `?host=` 讀：那台自己的 origin 由本機回答（`internal/wwd/daemon/forward.go:41-45`），沒問題；**另一台有 daemon 的主機（air26）送出的工作，則是轉送到對等體拿到的視角，air26 送出的快速通道與未宣告工作在 App 上看不到**（任務佇列、主機頁的工作、分頁沙漏都受影響）。`matchPoolHost` 的 `host_id === v.daemonId` 分支（`spa/src/lib/pool/cell-model.ts:38`）也是同一個比法、永遠不成立，現在能對到全靠 alias。MON-1a 改用 MD-1 的 `/api/info.wwd.host_id` 對應，兩處一起修。
 - **A2 狀態（liveness）**：解析 `liveness`、`liveness_at`、`liveness_since`；`poolHostView`（`spa/src/lib/pool/host-view.ts:30-38`）的 fallback 分支拿掉，狀態改成 `ok`／`wwd_down`／`host_down`／`unknown`，不再收 fleet 的輸入。判法見 M21。
 - **A3 外觀與順序（P11）**：新的 Profile Sync settings store，storage key `purdex-pool-hosts`：
   ```ts
@@ -98,8 +99,8 @@
   - **顏色與圖示的解析順序**：有 daemon 的主機（MD-1 對得到）→ 讀寫那台 Purdex 主機現有的外觀（`useHostLookStore`，經 `lib/host-look.ts` 的 resolver；跟分頁上的主機徽章同一份）；沒有 daemon 的主機（mserv、air19）→ 新 store。**指標一律在新 store**。
   - **一次性搬遷**：沒有 daemon 的主機現在的外觀只在 fleet wire（`lib/fleet/types.ts` 的 `colors`、`icon`、`icon_weight`，經 hostconfig `probe-hosts` 寫）。新 store 沒有這個 `host_id` 的外觀、而 fleet 快照（不 stale）有同 alias 的外觀時，複製一次進新 store，並在這台裝置記下已搬過（不同步的 marker，比照 `lib/host-look-migration.ts`），之後不再讀 fleet。WWD-9 拿掉 fleet 時這段一起刪。
   - **順序**：新 store 的 `order`；沒排到的依 pool 回傳順序接在後面（M13）。
-  - ⚠ 待 88 確認（W1）：定案寫 `{ color?, icon? }`（單色），但現在的徽章與 fleet wire 都是三色組 `colors`（`HostConfig['colors']`，`stores/useHostStore.ts:51`）。建議新 store 的外觀欄位與 `HostLookEntry` 相同（`colors`／`color`／`icon`／`iconWeight`）：搬遷不失真、徽章沿用同一個 `resolveHostBadge`、設定頁沿用 Hosts 頁的 `HostColorField`／`HostIconField`。
-  - ⚠ 待 88 確認（W2）：設計稿沒有改順序的地方，`order` 一開始是空的。建議：一次性搬遷時也把 fleet 快照的 `order`（現在側欄的順序）換成 `host_id` 寫進 `order`（store 的 `order` 是空的才寫）；之後在監控分頁組拖曳主機分頁就寫回 `order`（MON-6 實作）。
+  - 88 定案（10-20，W1）：原定案寫 `{ color?, icon? }`（單色），但現在的徽章與 fleet wire 都是三色組 `colors`（`HostConfig['colors']`，`stores/useHostStore.ts:51`），所以新 store 的外觀欄位與 `HostLookEntry` 相同（`colors`／`color`／`icon`／`iconWeight`）：搬遷不失真、徽章沿用同一個 `resolveHostBadge`、設定頁沿用 Hosts 頁的 `HostColorField`／`HostIconField`。
+  - 88 定案（10-20，W2）：設計稿沒有改順序的地方，`order` 一開始是空的。一次性搬遷時也把 fleet 快照的 `order`（現在側欄的順序）換成 `host_id` 寫進 `order`（store 的 `order` 是空的才寫）；之後在監控分頁組拖曳主機分頁就寫回 `order`（MON-6 實作）。
 - **A4 右上角件數（R6、R7）**：從 jobs store 算（M6、M7）。側欄掛著時讓 jobs driver 跑（`watchJobs`，`spa/src/lib/pool/jobs-driver-live.ts:63-71`）：有 `jobs.changed` 的主機照事件，沒有事件的主機照現行 10 秒輪詢。
 - **A5 佇列條（R1–R5）**：在排的工作，四台合起來，依 `queueEntries` 的顯示順序（`spa/src/lib/pool/jobs-lanes.ts:57-63`）；重／輕依 `job.slot`。寬側欄 M1–M5；窄側欄依 U2（M15）。
 - **A6 寬側欄主機格**：徽章（主機顏色＋圖示）＋右上件數＋指標（每台各自的形狀與資料）；依 U3 沒有右下燈號；讀不到 wwd 時依 M17–M19。
@@ -107,7 +108,7 @@
 - **A8 頁面**：主機頁四分頁（監控｜狀態｜行程｜設定）；任務佇列（靜態上下兩排、hover 只高亮路線、其他不變暗、排不下換行）；事件（alerts＋observations）。照設計稿與 §5。
 - **A9 守門員頁**依賴 A 線的 S7、S8（incident 路由、值班者狀態），不在第一波；P7 選 (A)，由 1f 排。
 - **A10 Hosts 頁**拿掉資源池主機與觀察主機段落，留一行連結到監控（P12）；SSH 備援整個拿掉。這是使用者自己的需求（「這裡的設定取代 Hosts 頁的 wwd 設定」）。
-- **A11 fleet 退場**：本線各期都不再新增 fleet 讀者；SPA 端最後一張 PR 拿掉所有 fleet／gate.decisions 讀者，時程跟 1f 的 WWD-9 對齊。⚠ 待 88 確認（W9）：wwd plan（`docs/plans/2026-10-18-wwd-plan.md:447-449`）定了 `/api/watch/status`、`/api/watch/wake` 保留到 8b，`watch.v1` 為這兩條繼續宣告；建議 MON-12 拿掉其他 watch.v1 讀者，守門員頁與盾牌讀這兩條的部分留到 8b 的 incident 路由上線。
+- **A11 fleet 退場**：本線各期都不再新增 fleet 讀者；SPA 端最後一張 PR 拿掉所有 fleet／gate.decisions 讀者，時程跟 1f 的 WWD-9 對齊。88 定案（10-20，W9）：wwd plan（`docs/plans/2026-10-18-wwd-plan.md:447-449`）定了 `/api/watch/status`、`/api/watch/wake` 保留到 8b，`watch.v1` 為這兩條繼續宣告；MON-12 拿掉其他 watch.v1 讀者，**保留 `/api/watch/status`、`/api/watch/wake` 的讀者（守門員頁與盾牌），到 8b 的 incident 路由上線才拿掉**。
 
 ## 5. 行為規則
 
@@ -116,7 +117,7 @@
 ### 5.1 側欄（寬）
 
 - **M1**（R1）佇列條在主機格上方、整行。**一節＝一件在資源池排隊、還沒被接走的工作**，四台的佇列合起來，依任務佇列的顯示順序（M26）由左往右。重工作用 `queue-heavy`（紫），輕工作用 `queue-light`（青），空的節用 `border-default`（灰）。重／輕取 `job.slot`；舊回應沒有這欄時當作重（佇列裡的工作本來就不是快速通道）。例：mlab 送了 2 件、air26 送了 1 件，都還沒被接：前 3 節亮，後 7 節灰。
-- **M2**（R2、P4）預設 10 節，6／8／10／12 是這台裝置的 UI 設定（不同步）。**超過時多出的不畫節，最右邊那節的右上角疊「+N」**（`CountBadge`），N 是超出的件數。例：排了 14 件：10 節全亮，右上角「+4」。⚠ 待 88 確認（W6）：設定放哪沒定；建議放在「設定 → 終端機」的「主機格指示」旁邊（`components/settings/TerminalSection.tsx:177-181`），存 `useLayoutStore`（它除了 `tabPosition` 都是裝置本機的）。
+- **M2**（R2、P4）預設 10 節，6／8／10／12 是這台裝置的 UI 設定（不同步）。**超過時多出的不畫節，最右邊那節的右上角疊「+N」**（`CountBadge`），N 是超出的件數。例：排了 14 件：10 節全亮，右上角「+4」。88 定案（10-20，W6）：設定放在「設定 → 終端機」的「主機格指示」旁邊（`components/settings/TerminalSection.tsx:177-181`），存 `useLayoutStore`（它除了 `tabPosition` 都是裝置本機的）。
 - **M3**（R3、P6）**被接走的（準備中、執行中）不在條上；保留的也不算**。例：lint 被 air26 接走，條上少一節；把 go-pkg 設成保留，也少一節。
 - **M4**（R4）沒有排隊時**整行灰色、不收起**，主機格的位置不跳動。例：早上沒人送工作：一整條灰線還在。
 - **M5**（R5）滑過佇列條浮出清單：第一行「資源池排隊 N 件（重 a・輕 b）」，接著前 10 件（序號、重／輕色點、工作 `repo task args`、來源主機、等了多久 m:ss），超過 10 件時加「… 另有 n 件」，最後一行「按一下開任務佇列」。沒有排隊時寫「資源池裡沒有在排隊的工作」。**按一下開監控分頁組的「任務佇列」**。例：滑過看到「1 go-all mlab 0:40」。
@@ -134,7 +135,7 @@
 
 - **M14**（U1）**窄側欄的主機格不顯示主機圖示**，每台是一塊「四項狀態」小圖：四根直條，依序 CPU、記憶體、記憶體壓力、磁碟，各自照 M8 的門檻上色（壓力等級 0 改看記憶體使用率）。這塊的**底色是主機顏色的淡色**，與現在徽章的底色相同（`resolveHostBadge(look, 'terminal')` 的 light 層，`spa/src/lib/host-color.ts:309`）；沒設顏色的主機用中性底。**件數 badge 壓在這塊的右上角**（M6、M7）。辨識主機靠底色與滑過的卡片（M11，往右浮出）；按一下同 M12。指標的形狀與資料（M9）只用在寬側欄。例：mlab 綠色淡底、四根直條，有 2 件在排時右上角「2」。
 - **M15**（U2；**取代 P14**）**窄側欄的佇列條換成兩個色塊＋數字**：重（`queue-heavy` 底）、輕（`queue-light` 底）各一塊，數字是在排的件數（M1、M3 的同一組工作，不受節數設定影響）；**0 件的那塊用中性灰底、數字照寫 0**；位置固定在主機格上方、不收起。滑過與按一下同 M5。寬側欄維持 M1–M5 的節條。例：重 3 件、輕 0 件：紫底「3」、灰底「0」。
-- **M16**（⚠ 待 88 確認，W5：U1 沒寫）窄側欄的主機狀態不是 ok 時：四根直條換成 M17–M19 的同一個圖示（置中），小圖的淡化比照徽章（`wwd_down` 不淡、`host_down` 40%、`unknown` 60%），不顯示件數。
+- **M16**（88 定案（10-20，W5）：U1 沒寫這種情況）窄側欄的主機狀態不是 ok 時：四根直條換成 M17–M19 的同一個圖示（置中），小圖的淡化比照徽章（`wwd_down` 不淡、`host_down` 40%、`unknown` 60%），不顯示件數。
 
 ### 5.3 讀不到 wwd（不讀 SSH 數字；#3683 的 22 埠存活探測）
 
@@ -145,12 +146,12 @@
 - **M21**（A2）**狀態怎麼判**：
   - 有 `liveness` 欄的（對等體）：`wwd_down`、`host_down`、`unknown` 照原值；`ok` 而且 facts 在 30 秒內（`LIVE_MS`）→ ok。
   - 沒有這欄的（本機，或還不帶這欄的 daemon）：`reachable` 而且 facts 在 30 秒內 → ok；否則 `unknown`。
-  - ⚠ 待 88 確認（W3）：`liveness` 是 `ok` 但 facts 缺或超過 30 秒（wwd 回應了、讀數卻停了，現行的 `stale`）。建議當 `unknown`，卡片寫「wwd 有回應，但讀數停在 hh:mm:ss」。
+  - 88 定案（10-20，W3）：`liveness` 是 `ok` 但 facts 缺或超過 30 秒（wwd 回應了、讀數卻停了，現行的 `stale`）→ 當 `unknown`，卡片寫「wwd 有回應，但讀數停在 hh:mm:ss」。
   - 「最後一筆讀數」的時間由 App 記（`usePoolStore` 新的 `lastFactsAt`，以 `host_id` 為 key，取代以 alias 為 key 的 `lastLiveAt`），讀不到時照樣顯示。
 - **M22**（R15）主機頁：wwd 停了是**黃色橫幅**、主機離線是**紅色橫幅**、狀態不明是灰色橫幅，寫明是哪一種、最後一筆讀數與最後檢查時間；量表顯示「—」；**圖停在最後一筆讀數，之後畫同色斜線**。例：打開 mserv 頁：黃色橫幅「mserv：wwd 沒有回應，主機還開著」，30 分鐘的圖最後 8 分鐘是斜線。
 - **M23**（R16）事件頁**分成兩種事件**：「wwd 沒有回應（主機還在）」黃色斷線、「主機離線」紅色電源，左邊有同色豎線；恢復時寫「已恢復 hh:mm」。來源是 `silence` 告警的 `silence` 欄（MD-2）。例：air19 06:31 睡著、07:19 醒來：一列「主機離線・已恢復 07:19」。
 - **M24**（R17）任務佇列：**wwd 停了的那台，它的佇列池寫「讀不到」**（工作存在那台的 wwd 裡）；它**在跑的工作約 1 分鐘後（租約到期）回到原來的佇列重排**，等待時間照算。例：mserv 正在跑 phpunit 時 wwd 停了：約 1 分鐘後 phpunit 回到 mlab 的佇列。
-- **M25**（⚠ 待 88 確認，W4：設計稿沒涵蓋）**整個資源池讀不到**（沒有一台 daemon 讀得到 `/api/pool/hosts`）：建議側欄保留這次 App 啟動以來最後一次讀到的清單，每台畫成 `unknown`，卡片寫「讀不到資源池（{原因}）」，佇列條整行灰；App 啟動後從沒讀到過時不畫主機格（同現在沒有 fleet 時）。
+- **M25**（88 定案（10-20，W4）：設計稿沒涵蓋）**整個資源池讀不到**（沒有一台 daemon 讀得到 `/api/pool/hosts`）：側欄保留這次 App 啟動以來最後一次讀到的清單，每台畫成 `unknown`，卡片寫「讀不到資源池（{原因}）」，佇列條整行灰；App 啟動後從沒讀到過時不畫主機格（同現在沒有 fleet 時）。
 
 ### 5.4 任務佇列（分頁原名「工作」）
 
@@ -187,9 +188,9 @@
 - **M46**（R32）改 worker 開關、名額後，**先顯示「已送出，等這台回報」，下一筆讀數帶回新值才算數**；15 秒沒回來就提示。例：把 mlab 的重名額改成 2：先顯示送出中，約 5 秒後變回正常。
 - **M47**（R33）**關掉 worker 時正在跑的會跑完**，確認框寫件數。例：air26 正在跑 1 件時關掉：確認框寫「正在跑的 1 件會跑完」。
 - **M48**（R34）「暫停」只能設**有結束時間的**（1／3／8 小時、自訂）；可以選擋重或重＋輕、仍放行哪些類別（release、merge、dev）、標記（發版中；mserv 另有「預期壓力」）；到時間自動恢復。例：發版前暫停 mlab 8 小時、只放行 release：其他工作都改去別台。
-- **M49**（P9、P16）**告警**：門檻寫死在 wwd，**先唯讀**（顯示值，輸入框停用）；觀察門檻（CPU 60 秒、記憶體 1024 MB）同樣唯讀。兩種失聯各一個開關：「wwd 沒有回應（主機還在）」與「主機離線」，**air19 的「主機離線」預設關**。⚠ 待 88 確認（W8）：P9 要先開放這兩個開關，但現在沒有寫入 API——wwd 只有每台一個 `alert_unreachable`（`*bool`，config 檔），A 線的 MD plan 把「每台兩種開關可寫」歸 S9、延後（`docs/plans/2026-10-20-wwd-monitoring-data-plan.md:150`）。建議請 1f 排一個小項；API 上線前這兩列唯讀顯示現值。
+- **M49**（P9、P16）**告警**：門檻寫死在 wwd，**先唯讀**（顯示值，輸入框停用）；觀察門檻（CPU 60 秒、記憶體 1024 MB）同樣唯讀。兩種失聯各一個開關：「wwd 沒有回應（主機還在）」與「主機離線」，**air19 的「主機離線」預設關**。88 定案（10-20，W8）：P9 要先開放這兩個開關，但現在沒有寫入 API——wwd 只有每台一個 `alert_unreachable`（`*bool`，config 檔），A 線的 MD plan 把「每台兩種開關可寫」歸 S9、延後（`docs/plans/2026-10-20-wwd-monitoring-data-plan.md:150`）。**兩種失聯推播開關的寫入 API 由 88 請 1f 排（A 線小項）；上線前這兩列唯讀顯示現值。**
 - **M50**（P10）**推播**：一個總開關，寫每台有 daemon 的主機的 `wwd_alerts.push`（`PUT /api/hostconfig/wwd_alerts`，現在是 mlab、air26）；兩台不一致時開關顯示「部分開啟」並列出各台，按一下兩台都設成同一個值。沒有 daemon 的主機頁寫「{alias} 沒有 Purdex daemon，它的告警由 mlab 推（mlab 停擺時由 air26）」。
-- **M51**（R10、P2）**側欄顯示**：顏色、圖示、指標形狀、指標資料（雙柱有左右兩個），附即時預覽、「形狀與資料套用到四台」與「回到預設」。預設：環形＋綜合負載。有 daemon 的主機改顏色與圖示，寫的是那台 Purdex 主機的外觀（A3），分頁上的主機徽章一起變。⚠ 待 88 確認（W7）：現在有一個全部主機共用的「主機格指示」（`useUISettingsStore.fleetCellIndicator`，`components/settings/TerminalSection.tsx:177-181`）。建議第一波的每台預設值由它換算（環 → 環形＋綜合負載；雙柱 CPU＋壓力 → 雙柱 CPU＋記憶體壓力；雙柱 CPU＋記憶體 → 雙柱 CPU＋記憶體），使用者現在的選擇不會被重設；本分頁上線時（MON-9a）拿掉那個全域設定。
+- **M51**（R10、P2）**側欄顯示**：顏色、圖示、指標形狀、指標資料（雙柱有左右兩個），附即時預覽、「形狀與資料套用到四台」與「回到預設」。預設：環形＋綜合負載。有 daemon 的主機改顏色與圖示，寫的是那台 Purdex 主機的外觀（A3），分頁上的主機徽章一起變。88 定案（10-20，W7）：現在有一個全部主機共用的「主機格指示」（`useUISettingsStore.fleetCellIndicator`，`components/settings/TerminalSection.tsx:177-181`）。第一波的每台預設值由它換算（環 → 環形＋綜合負載；雙柱 CPU＋壓力 → 雙柱 CPU＋記憶體壓力；雙柱 CPU＋記憶體 → 雙柱 CPU＋記憶體），使用者現在的選擇不會被重設；本分頁上線時（MON-9a）拿掉那個全域設定。
 - **M52**（R35、A10、P12）**Hosts 頁不再有資源池主機與觀察主機**；主機的 wwd 設定只在這裡。Hosts 頁留一行「資源池主機的狀態與設定在監控分頁組」連過來。SSH 備援、SSH 別名、SSH 連線檢查都拿掉。例：要改 mserv 的名額：側欄點 mserv → 設定。
 
 ## 6. 推翻既有規格（原文 → 新文）
@@ -256,21 +257,21 @@
 
 - **P8**：8b 之後的名稱用不用「顧問」（spec §13.5 待使用者確認）。不擋。
 - **S7、S8**：incident 路由與值班者狀態（A 線 8b；P7 (A) 由 1f 排）。守門員頁（MON-11）與盾牌數字的值班者那一半等它。
-- **S9 的兩種失聯開關寫入**（W8）、**series 的剩餘欄位**（§3 最後一段）：由 1f 排，不擋本線。
+- **S9 的兩種失聯開關寫入**（W8，88 請 1f 排）、**series 的剩餘欄位**（§3 最後一段）：A 線排，不擋本線。
 
-### 7.3 寫 spec 時查到、⚠ 待 88 確認
+### 7.3 寫 spec 時查到、88 已定案（10-20）
 
-| # | 事項 | 建議（plan 照這個寫） |
+| # | 事項 | 結論 |
 |---|---|---|
-| W1 | A3 的外觀欄位寫 `color?`（單色），現行徽章是三色組 `colors` | 新 store 用 `HostLookEntry` 同樣的欄位，搬遷不失真、徽章與設定控制項沿用 |
+| W1 | A3 的外觀欄位寫 `color?`（單色），現行徽章是三色組 `colors` | 新 store 用 `HostLookEntry` 同樣的欄位，搬遷不失真、徽章與設定控制項沿用（A3） |
 | W2 | 設計稿沒有改順序的地方；`order` 一開始是空的；監控分頁組的主機分頁本來可以拖 | 搬遷時把 fleet 快照的順序寫進 `order`（空的才寫）；拖主機分頁寫回 `order`（MON-6） |
 | W3 | `liveness: ok` 但 facts 缺或超過 30 秒 | 當 `unknown`，卡片寫讀數停在何時（M21） |
 | W4 | 整個資源池讀不到 | 保留這次啟動以來最後的清單，全部畫 `unknown`（M25） |
 | W5 | 窄側欄主機不是 ok 時怎麼畫（U1 沒寫） | 圖示取代四根直條，淡化比照徽章（M16） |
 | W6 | 佇列條節數的設定放哪 | 「設定 → 終端機」主機格指示旁，存 `useLayoutStore`（M2） |
 | W7 | 第一波沒有每台的指標設定畫面 | 每台預設由現行全域「主機格指示」換算；MON-9a 拿掉全域設定（M51） |
-| W8 | 兩種失聯推播開關沒有寫入 API | 請 1f 排；之前唯讀（M49） |
-| W9 | A11 要拿掉 watch.v1 讀者，但 wwd plan 保留 `/api/watch/status`、`/wake` 到 8b | MON-12 留守門員那兩條（A11） |
+| W8 | 兩種失聯推播開關沒有寫入 API | 寫入 API 由 88 請 1f 排（A 線小項）；上線前唯讀顯示現值（M49） |
+| W9 | A11 要拿掉 watch.v1 讀者，但 wwd plan 保留 `/api/watch/status`、`/wake` 到 8b | MON-12 保留這兩條的讀者（守門員頁與盾牌），到 8b 的 incident 路由上線才拿掉（A11） |
 
 ## 8. 分期總表
 

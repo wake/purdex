@@ -3,7 +3,7 @@
 > spec：`docs/specs/2026-10-20-monitoring-tabs-spec.md`（下文的 M、A、W、P 編號都是 spec 的）。B 線 lead 88，2026-10-20。
 > 一期一張 PR（≤ 800 行、≤ 20 檔，測試也算）；一個 task 一個 commit，先寫測試、看它紅，再實作。執行者：Sonnet member。
 > 第一波（MON-1a～MON-4）細到 task；第二波（MON-5～MON-12）只寫到期，**開工前 plan 再細化一版**（含 file:line 與測試案例），細化版先給 88 看。
-> spec 標「⚠ 待 88 確認」的 W1–W9，本 plan 照 spec 括號裡的建議寫；88 改了就照改，不另開輪。
+> spec 的 W1–W9 已由 88 定案（10-20，spec §7.3），本 plan 照定案寫。
 > 行號以 `origin/main abaa46be5` 為準，開工時以當下的 `origin/main` 重新核對。
 
 ## 共通規則
@@ -57,7 +57,7 @@
    - 測試先行（`cell-model.test.ts`）：alias 相同照樣對到；daemon 主機的 `hostConfigId` 是那台 pool 主機的 daemon 時，alias 不同也對到；舊的 `host_id === v.id`／`daemonId` 不再對到（Purdex 的 host id 不會等於 wwd 的）。
    - 實作：`cell-model.ts:37-39` 加參數 `daemons`；三個呼叫者 `use-cell-models.ts:44`、`WatchHostPane.tsx:114`、`use-pool-host-rows.ts:67` 傳 `usePoolHostDaemons()`。
    - mutation：拿掉 daemons 那一支。
-5. **jobs 的 `ownDaemon`**（A1 的發現）
+5. **jobs 的 `ownDaemon`**（spec §4 A1 的「現況缺陷」）
    - 測試先行（`jobs-driver-live.test.ts`）：pool 主機的 wwd `host_id` 等於某台連著、宣告 `jobs.v1` 的 daemon 的 `/api/info.wwd.host_id` → `ownDaemon[alias]` 是它；HostConfig 的 `daemonId` 剛好等於 wwd 的 `host_id` 但沒有 wwd 身分 → 不算（舊規則）；沒有 `jobs.v1` 的 daemon 不算。
    - 實作：`jobs-driver-live.ts:22-32` 改用 `readPoolHostDaemons()`。
    - 行為改變（寫進 PR 說明）：現在 `ownDaemon` 永遠是空的，每個 origin 都交給主機順序第一台 daemon 加 `?host=` 讀；那台自己的 origin 由本機回答（`internal/wwd/daemon/forward.go:41-45`），**另一台有 daemon 的主機（例如 air26）送出的工作卻是轉送到對等體拿到的視角，看不到它的快速通道與未宣告的工作**。改完後 mlab、air26 各向自己的 daemon 讀；換來源的 origin 由 store 從 0 重讀一次（cursor 是來源自己的，`jobs-store.ts:5-6`）。
@@ -101,7 +101,7 @@
 可與 MON-1a、MON-1b 並行。照 TG-1a-1 的清單（`git show 7fe823a27`、`5e74a7617`）。檔案（15 個、600 行）。
 
 1. **store**（A3、W1）
-   - 新檔 `spa/src/stores/usePoolHostsStore.ts`，`lib/storage/keys.ts:52` 之後加 `POOL_HOSTS: 'purdex-pool-hosts'`。狀態 `{ order: string[]; looks: Record<string, PoolHostLook> }`（spec §4 A3；外觀欄位照 W1 的建議與 `HostLookEntry` 相同）。
+   - 新檔 `spa/src/stores/usePoolHostsStore.ts`，`lib/storage/keys.ts:52` 之後加 `POOL_HOSTS: 'purdex-pool-hosts'`。狀態 `{ order: string[]; looks: Record<string, PoolHostLook> }`（spec §4 A3；外觀欄位依 88 定案 W1，與 `HostLookEntry` 相同）。
    - `merge` 一律清洗：`host_id` 合 `^[A-Za-z0-9_-]{1,64}$`、`__proto__` 丟掉；最多 32 台；`order` 去重、只留合法 id；外觀欄位用 `sanitizeHostLookEntry`（`stores/useHostLookStore.ts:59-68`），丟掉 `name`；`indicator.shape` 在三種之內，`data` 1～2 項且都認得（環形、單柱只留第一項；雙柱缺第二項補 `'pressure'`）。
    - 動作：`setOrder`、`patchLook(hostId, fn)`（回 `undefined` 刪掉）、`putLooksIfAbsent`、`setIndicatorForAll(hostIds, indicator)`。persist version 1，`partialize` 只存 `order`、`looks`。`syncManager.register`。
    - 測試：清洗的表格；各動作；另一個視窗寫入後 rehydrate 也經過清洗。
@@ -216,7 +216,7 @@
 - **大小**：一～兩期。
 
 ### MON-12 — fleet 退場（A11、W9）
-- **目標**：SPA 不再讀 `fleet.v1`、`gate.decisions.v1`；`watch.v1` 只留守門員的 status 與 wake。
+- **目標**：SPA 不再讀 `fleet.v1`、`gate.decisions.v1`；`watch.v1` 只留守門員的 status 與 wake（88 定案 W9：保留 `/api/watch/status`、`/api/watch/wake` 的讀者——守門員頁與盾牌——到 8b 的 incident 路由上線才拿掉）。
 - **主要檔案**：刪 `lib/fleet/*`（store、ws、api、history、config-*、probe-*、parse、types、`use-fleet-*`、`bar-readings.ts`、`ring-driver.ts`）；`hooks/useMultiHostEventWs.ts:148-150`、`:354-357`（fleet 的訂閱與處理）；`hooks/useTabQueued.ts` 的 fleet 那半；`components/watch/QueueSection.tsx`、`QueueNow.tsx`、`QueueLane.tsx`、`QueueHistory.tsx`；`lib/watch/api.ts` 的 decisions、`decisions-types.ts`；`lib/pool/pool-look-migration.ts`；`cell-model.ts`、`use-cell-models.ts` 剩下的部分；`useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 再升一次）；fallback 與 fleet 的語系鍵。守門測試改成全 repo 不 import `lib/fleet/`。
 - **依賴**：MON-5～MON-10；時程跟 1f 的 WWD-9（daemon 端拿掉 `fleet.v1`、`gate.decisions.v1`）對齊。
 - **大小**：一～兩期；純刪除只算新增行。
@@ -231,8 +231,8 @@
 - 第二波：MON-5、MON-6、MON-10 可同時開；MON-7、MON-8、MON-9 在 MON-6 之後並行；MON-11 等 A 線；MON-12 最後。
 - 改到 team 模組的不在本線範圍；本線全是純 SPA，88 自己放行（B 線 10-19 起的規則），bump 與部署歸 1f。MON-2a 升 settings ordinal，88 放行前先告訴 1f（同 TG-1a-1）。
 
-## 待查與待確認
+## 待查與已定案
 
-- **iOS**：purdex-ios 對 settings ordinal 13 與新 store 的反應（MON-2a task 4）。
-- **⚠ 待 88 確認** W1–W9（spec §7.3）：本 plan 已照建議寫；88 改了，受影響的是 W1 → MON-2a task 1、MON-2b task 1；W2 → MON-2b task 2、MON-6a；W3、W4 → MON-1b task 2、MON-3b task 2；W5 → MON-4 task 2；W6 → MON-3a task 5；W7 → MON-2b task 1、MON-9a；W8 → MON-9a；W9 → MON-11、MON-12。
-- **請 1f 排（不擋第一波）**：兩種失聯推播開關的寫入 API（W8）；series 補 `slots`、PSI、`sessions_room`、常駐程式（spec §3 最後一段）。
+- **iOS（待查）**：purdex-ios 對 settings ordinal 13 與新 store 的反應（MON-2a task 4）。
+- **88 定案（10-20）** W1–W9（spec §7.3），落在這些 task：W1 → MON-2a task 1、MON-2b task 1；W2 → MON-2b task 2、MON-6a；W3、W4 → MON-1b task 2、MON-3b task 2；W5 → MON-4 task 2；W6 → MON-3a task 5；W7 → MON-2b task 1、MON-9a；W8 → MON-9a；W9 → MON-11、MON-12。
+- **A 線（不擋第一波）**：兩種失聯推播開關的寫入 API 由 88 請 1f 排（A 線小項，W8），上線前 MON-9a 唯讀顯示現值；series 補 `slots`、PSI、`sessions_room`、常駐程式（spec §3 最後一段）由 1f 排。
