@@ -7,11 +7,13 @@ import { render, screen, cleanup, fireEvent, within, act } from '@testing-librar
 // The sidebar's DndContext is not mounted here: the mocks record each row's and group's drag data (what ActivityBarWide's handleDragEnd would see) and the tests end a drag by calling the handler the view registered.
 const sortables = new Map<string, { data: unknown; disabled: boolean }>()
 const droppables = new Map<string, unknown>()
+const sortableIdsSeen: string[] = []
 vi.mock('@dnd-kit/sortable', () => ({
   SortableContext: ({ children }: { children: React.ReactNode }) => children,
   verticalListSortingStrategy: () => null,
   useSortable: ({ id, data, disabled }: { id: string; data: unknown; disabled?: boolean }) => {
-    sortables.set(id, { data, disabled: !!disabled })
+    sortableIdsSeen.push(id)
+    sortables.set((data as { tabId?: string } | undefined)?.tabId ?? id, { data, disabled: !!disabled })
     return { attributes: {}, listeners: {}, setNodeRef: vi.fn(), transform: null, transition: null, isDragging: false }
   },
 }))
@@ -192,7 +194,9 @@ describe('the task-group view', () => {
       useSessionStore.setState({ sessions: { h1: [{ code: 'S6', name: 'name-S6' }, { code: 'S7', name: 'name-S7' }] as never } })
       useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S6'), [rosterSession('M', 'name-S7')]) as never])
     })
+    sortableIdsSeen.length = 0
     mount()
+    expect(new Set(sortableIdsSeen).size).toBe(2) // two rows of one tab are two sortables (a shared id would make one overwrite the other)
     const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
     // both rows show the tab's title (TG-0b); what tells them apart is the persona name, and each opens its own seat
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('name-S6'), expect.stringContaining('name-S6')])

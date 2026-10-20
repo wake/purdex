@@ -160,8 +160,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     sessionOf: (tabId) => { const s = sessionOfTab.get(tabId); return s ? { hostId: s.hostId, agentSessionId: s.agentSessionId, tabId } : null },
     onResult: done,
   })
-  /** The sortable ids of a group's rows: the rows with a tab, the lead (which never moves) left out. */
-  const sortableIds = (rows: GroupRow[]) => rows.flatMap((r) => (r.tabId !== null && tabsById[r.tabId] ? [r.tabId] : []))
+  /** The sortable ids of a group's rows (the row key: a split tab with two team seats has two rows): the rows with a tab, the lead (which never moves) left out. */
+  const sortableIds = (rows: GroupRow[]) => rows.flatMap((r) => (r.tabId !== null && tabsById[r.tabId] ? [r.key] : []))
 
   const renderRow = (row: GroupRow, groupKey: string, teamKey?: string, isLead = false, groupId: string | null = null, inTeam = false) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
@@ -172,7 +172,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       const dragData: GroupTabDragData = { type: 'group-tab', tabId: tab.id, groupKey, kind }
       const inner = (
         <InlineTab
-          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag={isLead} dragData={dragData} leadOfTeam={isLead ? teamKey : undefined}
+          key={row.key} tab={tab} isActive={tab.id === activeTabId} noDrag={isLead} dragData={dragData} dragId={row.key} leadOfTeam={isLead ? teamKey : undefined}
           seatOverride={seat ? { address: seat.session.address, title: seat.label } : undefined}
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
