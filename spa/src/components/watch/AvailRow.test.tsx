@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup, within } from '@testing-library/react'
 import { AvailRow } from './AvailRow'
-import type { PoolCellExtra } from '../../lib/pool/cell-model'
+import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
 
 afterEach(() => cleanup())
 
