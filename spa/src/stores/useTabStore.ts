@@ -591,6 +591,8 @@ interface TabState {
   setTabGroup: (id: string, group: string | undefined) => void
   /** Sets a tab's rank in its group's bar or, with `undefined`, clears it (the key goes). */
   setTabGroupRank: (id: string, rank: string | undefined) => void
+  /** Sets the rank of several tabs in one state change (a drag in a group's bar); unknown tabs are skipped. */
+  setTabGroupRanks: (writes: ReadonlyArray<{ tabId: string; rank: string }>) => void
   toggleLock: (id: string) => void
   updateSessionCache: (hostId: string, sessionCode: string, cachedName: string, tmuxInstance: string) => void
   setPaneRebuild: (hostId: string, sessionCode: string, expectedTmuxInstance: string, patch: RebuildPatch) => void
@@ -894,6 +896,15 @@ export const useTabStore = create<TabState>()(
       setTabGroup: (id, group) => set((state) => withTabField(state, id, 'group', group)),
 
       setTabGroupRank: (id, rank) => set((state) => withTabField(state, id, 'groupRank', rank)),
+      setTabGroupRanks: (writes) => set((state) => {
+        let tabs = state.tabs
+        for (const w of writes) {
+          const tab = tabs[w.tabId]
+          if (!tab || tab.groupRank === w.rank) continue
+          tabs = { ...tabs, [w.tabId]: { ...tab, groupRank: w.rank } }
+        }
+        return tabs === state.tabs ? state : { tabs }
+      }),
 
       togglePin: (id) =>
         set((state) => {
