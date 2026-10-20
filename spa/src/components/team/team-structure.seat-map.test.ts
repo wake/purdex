@@ -17,8 +17,8 @@ const leaf = (name: string): PaneLayout => ({
 })
 const tab = (id: string, layout: PaneLayout, pinned = false): Tab => ({ id, pinned, locked: false, createdAt: 0, layout })
 
-function build(pinnedIds: string[]) {
-  const tabs = [tab('lead', leaf('lead-tm')), tab('m1', leaf('a-tm')), tab('m2', leaf('b-tm')), tab('plain', leaf('nobody'))].map((t) => (pinnedIds.includes(t.id) ? { ...t, pinned: true } : t))
+function build(pinnedIds: string[], m1Session = 'a-tm') {
+  const tabs = [tab('lead', leaf('lead-tm')), tab('m1', leaf(m1Session)), tab('m2', leaf('b-tm')), tab('plain', leaf('nobody'))].map((t) => (pinnedIds.includes(t.id) ? { ...t, pinned: true } : t))
   const inp: TeamViewsInput = {
     rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm'), mem('B', 2, 'b-tm')])] },
     tabsById: Object.fromEntries(tabs.map((t) => [t.id, t])),
@@ -70,5 +70,14 @@ describe('the inclusive seat map (TG-3a-1)', () => {
     expect(after).not.toBe(before)
     // a pinned plain tab changes nothing the display reads
     expect(structureSignature(build(['plain']).structure)).toBe(before)
+  })
+
+  it('... and when a PINNED tab starts showing a seat\'s session — byTabId is the same either way, only the inclusive map moves', () => {
+    const notSeat = build(['m1'], 'somewhere-else')
+    const seat = build(['m1'])
+    expect([...notSeat.index.byTabId.keys()]).toEqual([...seat.index.byTabId.keys()]) // the tab is pinned: neither shows it
+    expect(structureSignature(seat.structure)).not.toBe(structureSignature(notSeat.structure))
+    expect(notSeat.display.panelTeam('m1')).toBeNull()
+    expect(seat.display.panelTeam('m1')).not.toBeNull()
   })
 })
