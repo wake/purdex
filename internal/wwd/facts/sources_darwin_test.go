@@ -49,6 +49,18 @@ func TestSystemSourcesSmoke(t *testing.T) {
 	if r.CPU.NCPU <= 0 || r.CPU.Load1 < 0 || r.CPU.IdlePct < 0 || r.CPU.IdlePct > 100 {
 		t.Errorf("cpu: %+v", r.CPU)
 	}
+	c2 := r.CPU
+	if c2.Load15 == nil || c2.UserPct == nil || c2.SystemPct == nil || *c2.UserPct+*c2.SystemPct > 100.0001 || len(c2.Cores) != c2.NCPU {
+		t.Errorf("cpu split: load15 %v user %v system %v cores %d of %d", c2.Load15, c2.UserPct, c2.SystemPct, len(c2.Cores), c2.NCPU)
+	}
+	for i, core := range c2.Cores {
+		if core.UserPct == nil || core.SystemPct == nil || core.IdlePct == nil || *core.UserPct+*core.SystemPct+*core.IdlePct > 100.0001 {
+			t.Errorf("core %d: %+v", i, core)
+		}
+		if core.Kind != nil && *core.Kind != "p" && *core.Kind != "e" {
+			t.Errorf("core %d kind %q", i, *core.Kind)
+		}
+	}
 	if r.Mem.TotalMB < 1024 || r.Mem.AvailableMB <= 0 || r.Mem.AvailableMB > r.Mem.TotalMB {
 		t.Errorf("mem: %+v", r.Mem)
 	}
