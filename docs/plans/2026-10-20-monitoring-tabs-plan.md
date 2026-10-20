@@ -170,7 +170,7 @@
 
 依賴 MON-1c、MON-3a。檔案（約 14 個、650 行）：新檔 `lib/pool/indicator.ts`＋測試、`lib/pool/use-monitor-hosts.ts`＋測試、`lib/pool/cell-model.ts`、`components/fleet/HostCell.tsx`、`HostCell.test.tsx`、`HostCell.pool.test.tsx`、`HostBars.tsx`＋測試、`HostCard.tsx`、`HostCard.test.tsx`、`locales/zh-TW.json`、`en.json`。
 
-1. **指標的讀數**（M8）：新檔 `lib/pool/indicator.ts` `indicatorReading(item, facts, load, zone)` → `{ pct; tone }`（七個項目，門檻照 M8；`load` 依區域上色，`unknown` 灰；壓力等級 0 改看記憶體使用率；`sysload` 是 load1 ÷ 核心數，70 黃、100 紅；`slots` worker 關著灰、滿了黃）。門檻與 `lib/fleet/bar-readings.ts` 相同，但不 import 它（守門測試；那個檔 MON-12 刪）。測試：每個項目的表格，含邊界。mutation：各門檻的比較符號。
+1. **指標的讀數**（M8）：新檔 `lib/pool/indicator.ts` `indicatorReading(item, facts, load, zone)` → `{ pct; tone }`（七個項目，門檻照 M8；`load` 依區域上色，`unknown` 灰；壓力等級 0 改看記憶體使用率；`sysload` 是 load1 ÷ 核心數，70 黃、100 紅；`slots` worker 關著灰、滿了黃）。門檻與原 `lib/fleet/bar-readings.ts` 相同；該檔已在 MON-1c-0b 搬到 `lib/pool/bar-readings.ts`（守門範圍內、MON-12 不刪），`indicator.ts` 直接 import 它的 CPU、記憶體、壓力讀數。測試：每個項目的表格，含邊界。mutation：各門檻的比較符號。
 2. **側欄模型加件數與指標**：MON-1c 的 `useMonitorHosts()` 每台多帶 `indicator`（`indicatorOf(look)`，MON-2b）與 `count`（`hostCountsOf(queueEntries(usePoolJobs()…), …)`，MON-3a）；`usePoolReadable()` 為 false 時（M25）不算件數。`CellView` 跟著加這兩欄。測試：件數與顏色帶到每台；讀不到資源池時沒有件數。
 3. **`HostCell` 改寫**（M10、M17–M19、U3）：`components/fleet/HostCell.tsx` 改成畫每台的指標與狀態。徽章 `resolveHostBadge(look, 'terminal')` → `HostBadge`，`host_down` 40%、`unknown` 60%；件數（ok 且 n > 0）用 `CountBadge size="sm"`，灰／`status-warning`／`status-error`；指標：環形 → `ContextRing`（現行 `:162-165`），單柱、雙柱 → `HostBars`（`components/fleet/HostBars.tsx:33-41` 改成一根或兩根）；非 ok → 那一格換成 `LinkBreak`（`status-warning`）／`Power`（`status-error`）／`Question`（`text-muted`），粗細 bold；**刪掉** `:159` 的呼吸綠點。測試（`HostCell.test.tsx`、`HostCell.pool.test.tsx` 合併改寫）：三種形狀 × 代表性資料項；三種非 ok 狀態；件數三種顏色與 99+；沒有 `worker-running-*`。mutation：非 ok 時仍顯示件數；淡化比例對調。
 4. **`HostCard` 改寫**（M11）：`components/fleet/HostCard.tsx` 改吃模型：讀數列（含「環」「柱」標記，沿用 `fleet.card.ring_tag` 等鍵或改名到 `pool.card.*`）、下半部各列、非 ok 的卡片（`livenessLines`）。定位與 portal 程式不動。測試改寫 `HostCard.test.tsx`。
@@ -232,7 +232,7 @@
 
 ### MON-12 — fleet 退場（A11、W9）
 - **目標**：SPA 不再讀 `fleet.v1`、`gate.decisions.v1`；`watch.v1` 只留守門員的 status 與 wake（88 定案 W9：保留 `/api/watch/status`、`/api/watch/wake` 的讀者——守門員頁與盾牌——到 8b 的 incident 路由上線才拿掉）。
-- **主要檔案**：刪 `lib/fleet/*`（store、ws、api、history、config-*、probe-*、parse、types、`use-fleet-*`、`bar-readings.ts`、`ring-driver.ts`）；`hooks/useMultiHostEventWs.ts:148-150`、`:354-357`（fleet 的訂閱與處理）；`hooks/useTabQueued.ts` 的 fleet 那半；`components/watch/QueueSection.tsx`、`QueueNow.tsx`、`QueueLane.tsx`、`QueueHistory.tsx`；`lib/watch/api.ts` 的 decisions、`decisions-types.ts`；`lib/pool/pool-look-migration.ts`；`cell-model.ts`、`use-cell-models.ts` 剩下的部分；`useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 再升一次）；fallback 與 fleet 的語系鍵。守門測試改成全 repo 不 import `lib/fleet/`。
+- **主要檔案**：刪 `lib/fleet/*`（store、ws、api、history、config-*、probe-*、parse、types、`use-fleet-*`；`bar-readings.ts`、`ring-driver.ts` 已在 MON-1c-0b 搬到 `lib/pool/`，留著，不刪）；`hooks/useMultiHostEventWs.ts:148-150`、`:354-357`（fleet 的訂閱與處理）；`hooks/useTabQueued.ts` 的 fleet 那半；`components/watch/QueueSection.tsx`、`QueueNow.tsx`、`QueueLane.tsx`、`QueueHistory.tsx`；`lib/watch/api.ts` 的 decisions、`decisions-types.ts`；`lib/pool/pool-look-migration.ts`；`cell-model.ts`、`use-cell-models.ts` 剩下的部分；`useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 再升一次）；fallback 與 fleet 的語系鍵。守門測試改成全 repo 不 import `lib/fleet/`。
 - **依賴**：MON-5～MON-10；時程跟 1f 的 WWD-9（daemon 端拿掉 `fleet.v1`、`gate.decisions.v1`）對齊。
 - **大小**：一～兩期；純刪除只算新增行。
 
