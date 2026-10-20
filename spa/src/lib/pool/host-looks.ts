@@ -1,14 +1,14 @@
 // spa/src/lib/pool/host-looks.ts — a pool host's look and order for the monitoring screens (monitoring tabs spec A3, M9, M13, W7).
 // A pool host is keyed by the wwd `host_id`. Its colour and icon live where the rest of the App already reads them: a host with a daemon in the Purdex host's look
 // (`useHostLookStore`, through `lib/host-look.ts` — the tab badge shows the same one); a host without one, and every indicator, in `usePoolHostsStore`.
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { lookKeyOf, useHostStore } from '../../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry } from '../../stores/useHostLookStore'
 import { usePoolHostsStore, type PoolHostIndicator, type PoolHostLook } from '../../stores/usePoolHostsStore'
 import { useUISettingsStore, type FleetCellIndicator } from '../../stores/useUISettingsStore'
-import { useHostLookResolver, hostLookOf, type HostLook } from '../host-look'
+import { useHostLook, useHostLookResolver, type HostLook } from '../host-look'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import { poolHostOwners, readPoolHostOwners, usePoolHostOwners } from './daemons'
+import { readPoolHostOwners, usePoolHostOwners } from './daemons'
 
 /** A pool host's look as the screens draw it: colour and icon from their home, the indicator resolved (stored or default). */
 export interface PoolHostResolvedLook {
@@ -87,26 +87,28 @@ function poolLookOf(stored: PoolHostLook | undefined, fromHost: HostLook | undef
   return compose(base, indicatorOf(stored, global))
 }
 
-const NO_ORDER: string[] = []
-const NO_ROWS: Record<string, never> = {}
+/** The App host that fronts a pool host, as a primitive: a tab row re-renders only when this changes, not on every write to the host stores it is computed from. */
+function useOwnerOf(hostId: string): string | undefined {
+  return useSyncExternalStore(
+    (notify) => {
+      const offHosts = useHostStore.subscribe(notify)
+      const offNex = useNexHostStore.subscribe(notify)
+      return () => { offHosts(); offNex() }
+    },
+    () => (hostId === '' ? undefined : readPoolHostOwners()[hostId]),
+  )
+}
 
 /**
- * One pool host's look for a surface that is drawn once per tab (a tab row): the same answer as `usePoolHostLook`, but subscribed to the stores only while `hostId` is not empty.
- * With `''` (the tab is not a pool host's) every selector gives a constant, so an unrelated write to a host store renders nothing.
+ * One pool host's look for a surface that is drawn once per tab (a tab row): the same answer as `usePoolHostLook`, but it subscribes to the one owner, the one host and the one look entry,
+ * so a write about another host renders nothing. With `''` (the tab is not a pool host's) it subscribes to nothing that changes.
  */
 export function useTabPoolHostLook(hostId: string): PoolHostResolvedLook {
-  const on = hostId !== ''
-  const hostOrder = useHostStore((s) => (on ? s.hostOrder : NO_ORDER))
-  const hosts = useHostStore((s) => (on ? s.hosts : NO_ROWS))
-  const byHost = useNexHostStore((s) => (on ? s.byHost : NO_ROWS))
-  const hostLooks = useHostLookStore((s) => (on ? s.looks : NO_ROWS))
-  const stored = usePoolHostsStore((s) => (on && Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
+  const owner = useOwnerOf(hostId)
+  const fromOwner = useHostLook(owner ?? null)
+  const stored = usePoolHostsStore((s) => (hostId !== '' && Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
   const global = useUISettingsStore((s) => s.fleetCellIndicator)
-  return useMemo(() => {
-    const owner = on ? poolHostOwners({ hostOrder, byHost })[hostId] : undefined
-    const fromHost = owner !== undefined ? hostLookOf(owner, hosts, hostLooks) : undefined
-    return poolLookOf(stored, fromHost, global)
-  }, [on, hostId, hostOrder, byHost, hosts, hostLooks, stored, global])
+  return useMemo(() => poolLookOf(stored, owner !== undefined ? fromOwner : undefined, global), [stored, owner, fromOwner, global])
 }
 
 export function usePoolHostLook(hostId: string): PoolHostResolvedLook {

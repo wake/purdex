@@ -5,6 +5,7 @@ import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { PaneLayout, Tab } from '../types/tab'
 import { usePoolHostsStore } from '../stores/usePoolHostsStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
 import { writePoolHostLook } from '../lib/pool/host-looks'
 
 function tmuxTab(hostId: string): Tab {
@@ -294,6 +295,22 @@ describe('useTabHostBadge for a watch-host tab', () => {
     expect(result.current?.colors?.main).toBe('rgba(59, 130, 246, 1)')
     act(() => writePoolHostLook(MLAB, { icon: 'Desktop' }))
     expect(result.current?.icon).toBe('Desktop')
+  })
+
+  it('does not re-render when another host, or another pool host\'s look, changes (the rows of a long host list stay still)', () => {
+    seedHosts(hostA, hostB)
+    useNexHostStore.setState({ byHost: { 'host-a': { phase: 'ready', fetchedAt: 1, wwd: { hostId: MLAB } } } } as never)
+    let renders = 0
+    const { result } = renderHook(() => { renders++; return useTabHostBadge(watchTab(MLAB)) })
+    const baseline = renders
+    act(() => useHostStore.getState().setHostColor('host-b', '#ef4444'))
+    act(() => useNexHostStore.setState((s) => ({ byHost: { ...s.byHost, 'host-b': { phase: 'ready', fetchedAt: 2, wwd: { hostId: '0123456789abcdef' } } } }) as never))
+    act(() => writePoolHostLook('0123456789abcdef', { icon: 'Cloud' }))
+    expect(renders).toBe(baseline)
+    // its own owner's look does reach it
+    act(() => useHostStore.getState().setHostColor('host-a', '#22c55e'))
+    expect(renders).toBeGreaterThan(baseline)
+    expect(result.current?.colors?.main).toBe('rgba(34, 197, 94, 1)')
   })
 
   it('a host with no look gives a badge with no colour, not null', () => {
