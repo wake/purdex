@@ -50,11 +50,11 @@ function seed(all: Tab[]) {
   })
 }
 
-function bar(tabs: Tab[], flat: boolean) {
+function bar(tabs: Tab[], flat: boolean, groupDrag?: { locked: ReadonlySet<string>; onDrop: (a: string, o: string) => void }) {
   const onReorderTabs = vi.fn()
   const utils = render(
     <TeamDisplayProvider>
-      <TabBar tabs={tabs} flat={flat} activeTabId={null} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onReorderTabs={onReorderTabs} onMiddleClick={vi.fn()} onContextMenu={vi.fn()} />
+      <TabBar tabs={tabs} flat={flat} groupDrag={groupDrag} activeTabId={null} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onReorderTabs={onReorderTabs} onMiddleClick={vi.fn()} onContextMenu={vi.fn()} />
     </TeamDisplayProvider>,
   )
   return { ...utils, onReorderTabs }
@@ -166,6 +166,41 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(dnd.started).toBe(0)
     expect(el.style.transform).toBe('')
     fireEvent.pointerUp(document)
+  })
+
+  describe('dragging (TG-4c)', () => {
+    const press = (el: HTMLElement) => {
+      fireEvent.pointerDown(el, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+      fireEvent.pointerMove(document, { clientX: 60, clientY: 10 })
+    }
+
+    it('with a group drag, a tab is picked up — the locked lead is not, and a pinned-zone tab is picked up too', () => {
+      const list = [mk('lead', 'lead-tm', true), mk('p', 'other', true), mk('ma', 'a-tm')]
+      seed(list)
+      const { container } = bar(list, true, { locked: new Set(['lead']), onDrop: vi.fn() })
+      press(container.querySelector('[data-tab-id="lead"]') as HTMLElement)
+      expect(dnd.started).toBe(0)
+      fireEvent.pointerUp(document)
+      press(container.querySelector('[data-tab-id="ma"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+      dnd.started = 0
+      press(container.querySelector('[data-tab-id="p"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+    })
+
+    it('a drop is handed to onDrop(active, over) and never to onReorderTabs', () => {
+      const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm')]
+      seed(list)
+      const onDrop = vi.fn()
+      const { onReorderTabs } = bar(list, true, { locked: new Set(['lead']), onDrop })
+      act(() => dnd.onDragEnd!({ active: { id: 'mb' }, over: { id: 'ma' } } as unknown as DragEndEvent))
+      expect(onDrop).toHaveBeenCalledWith('mb', 'ma')
+      expect(onReorderTabs).not.toHaveBeenCalled()
+      act(() => dnd.onDragEnd!({ active: { id: 'ma' }, over: { id: 'ma' } } as unknown as DragEndEvent))
+      expect(onDrop).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('an empty group says so, and keeps the + button', () => {

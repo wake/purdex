@@ -34,13 +34,18 @@ interface Props {
    * collapse), nothing hidden, one zone. The tabs are not draggable yet (the group's order is not `tabOrder`; TG-4c). An empty group says so.
    */
   flat?: boolean
+  /**
+   * With `flat`: how the group's tabs are dragged (TG-4c). `locked` are the tabs that cannot be picked up (a team's lead); a drop of one tab on another is `onDrop(activeId, overId)` — the group's order is written by
+   * the caller (lib/task-groups/bar-drag.ts), never `onReorderTabs`. Without it the group's bar is not draggable.
+   */
+  groupDrag?: { locked: ReadonlySet<string>; onDrop: (activeId: string, overId: string) => void }
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat, groupDrag }: Props) {
   const t = useI18nStore((s) => s.t)
   // The pinned zone: every pinned tab. In a group's bar (`flat`) the order is the one `groupTabs` gives, so the zone is the pinned tabs that LEAD it (a manual group's / 「未分組」's pinned tabs, a team with a pinned lead);
   // a team whose lead is not pinned has the lead first and its pinned tabs after it, in the one zone, still dressed as pinned.
@@ -131,7 +136,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
-    if (flat) return // the group's order is not `tabOrder`; dragging in a group's bar is TG-4c
+    if (flat) { groupDrag?.onDrop(String(active.id), String(over.id)); return } // the group's order is not `tabOrder`
 
     // A group's frame stands for its lead tab.
     const activeId = leadOfFrame.get(String(active.id)) ?? String(active.id)
@@ -178,7 +183,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return m ? { key: m.teamKey, role: m.role } : null
     })
     if (next) onReorderTabs([...pinnedIds, ...next])
-  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf, flat])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf, flat, groupDrag])
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -195,7 +200,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       isActive={tab.id === activeTabId}
       group={group}
       pinned={flat && tab.pinned}
-      noDrag={flat}
+      noDrag={flat && (!groupDrag || groupDrag.locked.has(tab.id))}
       onSelect={onSelectTab}
       onClose={onCloseTab}
       onMiddleClick={onMiddleClick}
@@ -238,7 +243,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       tab={tab}
                       isActive={tab.id === activeTabId}
                       pinned
-                      noDrag={flat}
+                      noDrag={flat && (!groupDrag || groupDrag.locked.has(tab.id))}
                       onSelect={onSelectTab}
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
