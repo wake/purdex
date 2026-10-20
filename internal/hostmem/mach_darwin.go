@@ -3,6 +3,7 @@
 package hostmem
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -30,6 +31,15 @@ const (
 // zero_fill u64 @16, reactivations @24, pageins @32, pageouts @40, faults @48, cow_faults @56, lookups @64, hits @72, purges @80,
 // purgeable_count u32 @88, speculative_count u32 @92.
 const vmOffSpeculative = 92
+
+// active_count u32 @4, wire_count u32 @12, and external_page_count u32 @136 (after compressor_page_count @128 and throttled_count @132):
+// the pages that back files. Reading it needs the reply to reach byte 140.
+const (
+	vmOffActive   = 4
+	vmOffWired    = 12
+	vmOffExternal = 136
+	vmMinBytes    = vmOffExternal + 4
+)
 
 // decompressions u64 @96 (after speculative_count at 92, which pads to 96): the compressor's pages brought back since boot.
 const vmOffDecompressions = 96
@@ -104,6 +114,8 @@ type VMCounters struct {
 	Free, Inactive, Speculative uint64 // pages
 	Pageouts                    uint64 // pages written out since boot
 	Decompressions              uint64 // compressed pages brought back since boot (vm_stat's "Decompressions")
+	Active, Wired               uint64 // pages
+	External                    uint64 // pages that back files (external_page_count; the file cache)
 }
 
 // VM reads the page counts and the pageout counter.
@@ -112,11 +124,18 @@ func (m *Mach) VM() (VMCounters, error) {
 	if kr := m.vmStats(m.host, hostVMInfo64, &m.vmStatsBuf[0], &count); kr != 0 {
 		return VMCounters{}, fmt.Errorf("host_statistics64: kern_return %d", kr)
 	}
-	if count*4 < vmOffDecompressions+8 {
-		return VMCounters{}, fmt.Errorf("host_statistics64: %d words", count)
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&m.vmStatsBuf[0])), min(int(count), vmStatsWords)*4)
+	return parseVMCounters(b)
+}
+
+// parseVMCounters reads the counters out of a vm_statistics64 reply. The reply must reach the last word read (external_page_count, 140
+// bytes in); a shorter one is an error, not a read past its end.
+func parseVMCounters(b []byte) (VMCounters, error) {
+	if len(b) < vmMinBytes {
+		return VMCounters{}, fmt.Errorf("host_statistics64: %d bytes, need %d", len(b), vmMinBytes)
 	}
-	b := unsafe.Slice((*byte)(unsafe.Pointer(&m.vmStatsBuf[0])), vmStatsWords*4)
-	u32 := func(off int) uint64 { return uint64(*(*uint32)(unsafe.Pointer(&b[off]))) }
-	u64 := func(off int) uint64 { return *(*uint64)(unsafe.Pointer(&b[off])) }
-	return VMCounters{Free: u32(vmOffFree), Inactive: u32(vmOffInactive), Speculative: u32(vmOffSpeculative), Pageouts: u64(vmOffPageouts), Decompressions: u64(vmOffDecompressions)}, nil
+	u32 := func(off int) uint64 { return uint64(binary.NativeEndian.Uint32(b[off:])) }
+	u64 := func(off int) uint64 { return binary.NativeEndian.Uint64(b[off:]) }
+	return VMCounters{Free: u32(vmOffFree), Inactive: u32(vmOffInactive), Speculative: u32(vmOffSpeculative), Pageouts: u64(vmOffPageouts),
+		Decompressions: u64(vmOffDecompressions), Active: u32(vmOffActive), Wired: u32(vmOffWired), External: u32(vmOffExternal)}, nil
 }

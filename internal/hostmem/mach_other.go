@@ -15,6 +15,7 @@ type VMCounters struct {
 	Free, Inactive, Speculative uint64
 	Pageouts                    uint64
 	Decompressions              uint64
+	Active, Wired, External     uint64
 }
 
 func NewMach() (*Mach, error)                         { return nil, ErrNoMach }
