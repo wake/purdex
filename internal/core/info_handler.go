@@ -103,6 +103,23 @@ func (c *Core) moduleFlag(name, key string) bool {
 	return on
 }
 
+// wwdIdentity is the local wwd's {host_id, alias} as the pool module last read it from wwd, or false while it is not known (no pool module,
+// wwd not read yet, wwd away). It reads the module's own Status and never calls wwd, so /api/info does not wait on it.
+func (c *Core) wwdIdentity() (map[string]string, bool) {
+	if !c.moduleReady("pool") {
+		return nil, false
+	}
+	st, ok := c.ModuleStatus("pool")
+	if !ok {
+		return nil, false
+	}
+	id, ok := st["wwd"].(map[string]string)
+	if !ok || id["host_id"] == "" {
+		return nil, false
+	}
+	return id, true
+}
+
 // capabilityList is the static list plus the conditional capabilities: push.v1 while the push module is ready, and
 // devices.v1 while the devices module is. Every other name above is unconditional; keep it that way unless a feature really
 // can be switched off at boot.
@@ -144,6 +161,9 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "pool.series.v1")  // GET /api/pool/facts/series?host=&since=&step=: the history of a host cut down to the points a chart draws (at most 2000, the latest kept); same condition as pool.v1
 		out = append(out, "pool.assess.v1")  // GET /api/pool/hosts: each host with facts also has headroom_reasons {heavy, light} (why a side's headroom is 0) and load {score, driver}; same condition as pool.v1
 		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
+	}
+	if _, ok := c.wwdIdentity(); ok {
+		out = append(out, "pool.identity.v1") // /api/info's wwd {host_id, alias}: who the local wwd is (its own host_id, not this daemon's), read by the pool module's watch; only while that is known
 	}
 	if c.moduleReady("pool") && c.moduleFlag("pool", "events") {
 		out = append(out, "pool.events.v1") // the pool.changed host event {host}: a host's entry in GET /api/pool/hosts changed (read every 5 s from the local wwd, at most one notice per host per 2 s); the App then stops polling the hosts; only while the pool module's watch runs
@@ -223,6 +243,9 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"wwdalerts":      wwdalerts,
 		"capabilities":   c.capabilityList(),
 		"last_shutdown":  nil,
+	}
+	if id, ok := c.wwdIdentity(); ok {
+		info["wwd"] = id
 	}
 	if r := c.LastShutdown; r != nil {
 		info["last_shutdown"] = map[string]any{
