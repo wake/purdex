@@ -105,22 +105,41 @@ mkdir -p "$runs" || die "cannot make $runs"
 work=$(mktemp -d "$runs/$(date +%Y%m%d-%H%M%S)-$(echo "$full" | cut -c1-9).XXXXXX") || die "cannot make a run directory in $runs"
 echo "release gate at $full (clone $clone, logs $work)"
 
-# a signal ends the `pdx test` calls too: none is left waiting for a gate that is gone (the jobs they sent stay in the queue)
+# A signal ends the `pdx test` calls too: none is left waiting for a gate that is gone (the jobs they sent stay in the queue). The handlers
+# only raise a flag, and every step looks at it, so no moment of the start can be missed:
+#  - a worker installs its trap before it starts pdx, and looks at its flag again once it knows pdx's pid;
+#  - the main script looks at its flag before it starts each worker and, polling (a `wait` could start after the signal and sleep through it),
+#    while they run; when it is raised, every worker it has started is killed, and so is the pdx under each.
 pids=""
-trap 'trap - INT TERM HUP; kill $pids 2>/dev/null; wait $pids 2>/dev/null; echo "release gate: interrupted"; exit 130' INT TERM HUP
+interrupted=0
+trap 'interrupted=1' INT TERM HUP
 for t in $tasks; do
+	[ "$interrupted" = 1 ] && break
 	case " $skips " in *" $t "*) continue ;; esac
 	(
+		stop=0 child=""
+		trap 'stop=1; [ -n "$child" ] && kill "$child" 2>/dev/null' INT TERM HUP
 		cd "$clone" || exit 125
+		[ "$stop" = 1 ] && exit 143
 		"$pdx" test "$t" --json $nocache > "$work/$t.json" 2> "$work/$t.err" &
 		child=$!
-		trap 'kill $child 2>/dev/null' INT TERM HUP
-		wait $child
-		echo $? > "$work/$t.rc"
+		[ "$stop" = 1 ] && kill "$child" 2>/dev/null
+		wait "$child"
+		rc=$?
+		# `wait` may have been cut short by a signal: wait for pdx itself to end before reporting
+		while kill -0 "$child" 2>/dev/null; do wait "$child" 2>/dev/null; rc=$?; sleep 0.05; done
+		echo $rc > "$work/$t.rc"
 	) &
 	pids="$pids $!"
 done
-wait $pids # only the tasks: the holder of the lock is also a child, and ends when this script does
+alive() { for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+while [ "$interrupted" = 0 ] && alive; do sleep 0.3; done
+if [ "$interrupted" = 1 ]; then
+	kill $pids 2>/dev/null
+	n=0; while alive && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+	echo "release gate: interrupted"
+	exit 130
+fi
 
 pass=0 cached=0 failed=0 skipped=0
 printf '%-20s %-8s %-4s %-8s %-28s %-6s %s\n' task result exit host job source secs

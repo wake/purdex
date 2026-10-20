@@ -185,6 +185,21 @@ for p in $(cat "$tmp/pids"); do
 	kill -0 "$p" 2>/dev/null && fail "pdx test $p is still running after the gate was terminated"
 done
 
+# 9c. a TERM at any moment of the start (before the tasks are sent, while they are being started, once they all are) leaves no pdx behind
+for delay in 0 0.05 0.1 0.15 0.2 0.3 0.4 0.6; do
+	: > "$tmp/pids"
+	FAKE_PIDS="$tmp/pids" sh "$gate" --pdx "$tmp/pdx-slow" --clone "$clone" --remote "$remote" "$c2" > "$tmp/slow.out" 2>&1 &
+	gpid=$!
+	sleep "$delay"
+	kill -TERM "$gpid" 2>/dev/null || true
+	set +e; wait "$gpid"; grc=$?; set -e
+	case $grc in 130 | 143) ;; *) fail "a TERM after ${delay}s: exit $grc: $(cat "$tmp/slow.out")" ;; esac
+	sleep 1
+	for p in $(cat "$tmp/pids"); do
+		kill -0 "$p" 2>/dev/null && fail "a TERM after ${delay}s left pdx test $p running"
+	done
+done
+
 # 10. the commit must be a hash that the remote has on a branch: a ref name, or a commit that only the clone has, is refused
 run main
 [ "$rc" = 2 ] || fail "a ref name: exit $rc, want 2: $out"
