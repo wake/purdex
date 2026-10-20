@@ -247,3 +247,79 @@ func TestACacheWhoseRemovalsAllFailPastTheBudgetIsStillEmptied(t *testing.T) {
 	}
 	assert.DirExists(t, cache)
 }
+
+// The state of a look (when it was, whether an age pass is due, whether a trim is on, whether the cache was refused) belongs to the cache
+// directory it was about: a worker that goes on to another Go version does not carry it over (#3760 attack).
+func TestTheStateOfALookBelongsToItsCacheDirectory(t *testing.T) {
+	r := newGoRig(t)
+	r.cfgGoCacheMB = 1
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	e := r.exec(t, repo, sha)
+	holder := r.job(t, e, "j_busy")
+	a := envValue2(holder.env, "GOCACHE")
+	cacheFile(t, a, "ab/big", 3<<20, 5*time.Hour)
+	old := goCacheRemoveFile
+	goCacheRemoveFile = func(string) error { return os.ErrPermission }
+	t.Cleanup(func() { goCacheRemoveFile = old })
+	clock := time.Now().Add(10 * time.Minute) // past the look the first job made
+	e.goCache.now = func() time.Time { return clock }
+	cold := r.job(t, e, "j_cold")
+	require.Empty(t, envValue2(cold.env, "GOCACHE"), "the first cache is over twice its bound and cannot be trimmed: refused")
+
+	e.goCache.versionOverride = "go version go1.27.0 darwin/arm64" // another Go: another directory, a minute later
+	clock = clock.Add(time.Minute)
+	next := r.job(t, e, "j_next")
+	b := envValue2(next.env, "GOCACHE")
+	assert.NotEmpty(t, b, "the other directory is looked at for itself, not refused with the first one's answer")
+	assert.NotEqual(t, a, b)
+}
+
+// Go's fuzz corpus under the cache is not an entry: it is Go's to clean (go clean -fuzzcache), and no age or size takes it.
+func TestTheFuzzCorpusIsNotAnEntry(t *testing.T) {
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	corpus := cacheFile(t, cache, "fuzz/pkg/Fuzz/abc", 1000, 90*24*time.Hour)
+	r.job(t, r.exec(t, repo, sha), "j_second")
+	assert.FileExists(t, corpus)
+}
+
+// A clock that went back does not hold the looks off until it catches up: a look and an age pass whose time is in the future are due.
+func TestAClockThatWentBackDoesNotStopTheLooks(t *testing.T) {
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	e := r.exec(t, repo, sha)
+	clock := time.Now()
+	e.goCache.now = func() time.Time { return clock }
+	j := r.job(t, e, "j_one")
+	require.NoError(t, j.ws.Cleanup())
+	aged := cacheFile(t, cache, "ab/aged", 1000, 48*time.Hour+6*time.Hour)
+
+	clock = clock.Add(-6 * time.Hour) // the clock goes back
+	r.job(t, e, "j_two")
+	assert.NoFileExists(t, aged, "looked at again, and the age pass done")
+}
+
+// Without the exclusive lock (a job holds the cache) the cache is trimmed only of entries unused for a while, so that a trim does not take
+// an entry another job read a moment ago; entries it just used stay, and a cache that cannot be brought under its bound that way is refused
+// to a new job when over twice it. With nobody holding it the whole cache may be trimmed.
+func TestATrimWhileAJobHoldsTheCacheLeavesTheEntriesUsedRecently(t *testing.T) {
+	r := newGoRig(t)
+	r.cfgGoCacheMB = 1
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	holder := r.job(t, r.exec(t, repo, sha), "j_busy")
+	cache := envValue2(holder.env, "GOCACHE")
+	recent := cacheFile(t, cache, "ab/recent", 3<<20, 30*time.Minute)
+	cold := r.job(t, r.exec(t, repo, sha), "j_cold")
+	assert.FileExists(t, recent, "used half an hour ago: not taken while a job holds the cache")
+	assert.Empty(t, envValue2(cold.env, "GOCACHE"), "and over twice the bound, so it is not given")
+
+	require.NoError(t, os.Remove(recent))
+	stale := cacheFile(t, cache, "ab/stale", 3<<20, 3*time.Hour)
+	recent = cacheFile(t, cache, "ab/recent2", 900<<10, 30*time.Minute)
+	j := r.job(t, r.exec(t, repo, sha), "j_new")
+	assert.NoFileExists(t, stale, "unused for three hours: trimmed")
+	assert.FileExists(t, recent, "used half an hour ago: left")
+	assert.Equal(t, cache, envValue2(j.env, "GOCACHE"), "and under its bound again, so it is given")
+}
