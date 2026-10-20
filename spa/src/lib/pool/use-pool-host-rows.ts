@@ -1,11 +1,11 @@
 // spa/src/lib/pool/use-pool-host-rows.ts — the Hosts page's view of the resource pool: one row per pool host (sidebar group, overview
 // table, host page), from the same models the sidebar cells use, so a host is in one state everywhere.
 import { useFleetHostViews, type FleetHostLook } from '../fleet/use-fleet-host-views'
-import { matchPoolHost } from './cell-model'
+import { matchPoolHost } from './fleet-bridge'
 import { usePoolStore } from './store'
 import { usePoolHostDaemons } from './daemons'
 import type { FallbackReason } from './host-view'
-import { usePoolCellModels } from './use-cell-models'
+import { usePoolCellModels } from './fleet-bridge'
 import type { PoolFacts, PoolHost, PoolZone, Slots } from './types'
 import type { FleetFast } from '../fleet/types'
 
