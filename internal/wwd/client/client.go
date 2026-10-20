@@ -211,7 +211,8 @@ func RouteMissing(err error) bool {
 		return false
 	}
 	body := strings.TrimSpace(se.Body)
-	return (se.Code == http.StatusNotFound && body == notFoundBody)}
+	return (se.Code == http.StatusNotFound && body == notFoundBody) || (se.Code == http.StatusMethodNotAllowed && body == methodNotAllowedBody)
+}
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
 // 10 MB, which the general cap would refuse.
