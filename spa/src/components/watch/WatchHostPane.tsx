@@ -19,7 +19,7 @@ import { METRICS } from '../../lib/watch/metrics'
 import { RANGES, stepMs } from '../../lib/watch/series'
 import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
 import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
-import { matchPoolHost } from '../../lib/pool/fleet-bridge'
+import { fleetViewOfPoolHost, matchPoolHost } from '../../lib/pool/fleet-bridge'
 import { usePoolHostDaemons } from '../../lib/pool/daemons'
 import { usePoolStore } from '../../lib/pool/store'
 import { useFactsHistory } from '../../lib/pool/use-facts-history'
@@ -91,26 +91,35 @@ function topProcs(procs: PoolProc[]): { cpu: ProcRow[]; mem: ProcRow[] } {
 
 export function WatchHostPane({ pane }: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
-  const fleetHostId = pane.content.kind === 'watch-host' ? pane.content.fleetHostId : ''
+  const poolHostId = pane.content.kind === 'watch-host' ? pane.content.poolHostId : undefined
+  const contentFleetId = pane.content.kind === 'watch-host' ? pane.content.fleetHostId ?? '' : ''
+  // The view memory is keyed by what names the tab: the pool host id, else (a tab from before the pool) the fleet id.
+  const memoryKey = poolHostId ?? contentFleetId
   const snapshot = useFleetStore((s) => s.snapshot)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const lookOf = useHostLookResolver()
   // The range outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
-  const [range, setRangeState] = useState<HistoryRange>(() => readRange(fleetHostId))
-  const setRange = (r: HistoryRange) => { writeRange(fleetHostId, r); setRangeState(r) }
-  const [page, setPageState] = useState<HostPage>(() => readHostPage(fleetHostId))
-  const setPage = (p: HostPage) => { writeHostPage(fleetHostId, p); setPageState(p) }
+  const [range, setRangeState] = useState<HistoryRange>(() => readRange(memoryKey))
+  const setRange = (r: HistoryRange) => { writeRange(memoryKey, r); setRangeState(r) }
+  const [page, setPageState] = useState<HostPage>(() => readHostPage(memoryKey))
+  const setPage = (p: HostPage) => { writeHostPage(memoryKey, p); setPageState(p) }
 
   const all = useMemo(() => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : []), [snapshot, hosts, hostOrder])
+  const poolHosts = usePoolStore((s) => s.hosts)
+  const daemons = usePoolHostDaemons()
+  // A tab with a poolHostId finds its fleet host through the pool host (transitional, until MON-6f-2 drops the fleet here); an older tab names the fleet host itself.
+  const fleetHostId = useMemo(() => {
+    if (!poolHostId) return contentFleetId
+    const ph = poolHosts.find((h) => h.host_id === poolHostId)
+    return (ph && fleetViewOfPoolHost(all, ph, daemons)?.id) || ''
+  }, [poolHostId, contentFleetId, poolHosts, all, daemons])
   const view = useMemo(() => all.find((v) => v.id === fleetHostId), [all, fleetHostId])
   // The other daemon hosts: 設定 reads their `watch` rows to compare `targets`.
   const peers = useMemo(() => all.filter((v) => v.kind === 'daemon'), [all])
   // On the resource pool the numbers are wwd's facts (the model's view carries them in the fleet's shape); before it answers, the fleet's as ever.
   const views = useMemo(() => (view ? [view] : []), [view])
   const { models, active: poolActive } = usePoolCellModels(views)
-  const poolHosts = usePoolStore((s) => s.hosts)
-  const daemons = usePoolHostDaemons()
   const model = poolActive && view ? models[0] : null
   const pool = model?.pool ?? null
   const poolHost = model && view ? matchPoolHost(poolHosts, view, daemons) : null

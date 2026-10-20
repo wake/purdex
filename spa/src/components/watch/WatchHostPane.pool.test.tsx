@@ -69,6 +69,18 @@ beforeEach(() => {
 })
 afterEach(() => { usePoolStore.getState().stop(); vi.useRealTimers() })
 
+describe('WatchHostPane for a content that carries poolHostId (MON-6a-1)', () => {
+  it('draws the fleet host matching that pool host (by alias here) and keeps its view memory under the host_id', async () => {
+    load([host('d-a', { alias: 'air26', fast: fast({ cpu: 1, zone: 'normal' }) })]); fetchPoolHosts.mockResolvedValue([ph({ host_id: 'wh-1' })])
+    writeRange('wh-1', '6h') // remembered under the host_id: the 5 minute history is then not read
+    render(<WatchHostPane pane={{ id: 'watch-host-wh-1.p', content: { kind: 'watch-host', poolHostId: 'wh-1' } }} isActive />)
+    await flush()
+    expect(screen.getByTestId('measure-source')).toBeTruthy()
+    expect(fetchFactsHistory).not.toHaveBeenCalled()
+    expect(screen.getByTestId('gauge-cpu')).toBeTruthy()
+  })
+})
+
 describe('WatchHostPane on the pool — a host wwd reads', () => {
   beforeEach(() => { load([host('d-a', { alias: 'air26', fast: fast({ cpu: 1, zone: 'normal' }) })]); fetchPoolHosts.mockResolvedValue([ph()]) })
 
