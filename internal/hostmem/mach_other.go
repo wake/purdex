@@ -20,4 +20,5 @@ type VMCounters struct {
 
 func NewMach() (*Mach, error)                         { return nil, ErrNoMach }
 func (*Mach) CPUTicks() (busy, total uint64, e error) { return 0, 0, ErrNoMach }
+func (*Mach) CPUCoreTicks() ([]CoreTicks, error)      { return nil, ErrNoMach }
 func (*Mach) VM() (VMCounters, error)                 { return VMCounters{}, ErrNoMach }
