@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gitenv"
 	"github.com/wake/purdex/internal/wwd/clones"
 )
@@ -72,7 +72,7 @@ func (s *Source) Get(repo string) (Snapshot, bool) {
 }
 
 func (s *Source) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, s.git, append([]string{"-C", dir}, args...)...)
+	cmd := execstat.CommandContext(ctx, "wwd.manifestref.git", s.git,append([]string{"-C", dir}, args...)...)
 	cmd.Env = gitenv.Clean(os.Environ())
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
