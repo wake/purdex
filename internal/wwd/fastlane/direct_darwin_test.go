@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +22,9 @@ func TestDirectHelper(t *testing.T) {
 	if os.Getenv("DIRECT_HELPER") == "" {
 		t.Skip("helper for the sweep tests")
 	}
+	if err := os.WriteFile(os.Getenv("DIRECT_PIDFILE"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(40 * time.Second)
 }
 
@@ -31,9 +35,12 @@ func TestDirectEndsAGrandchildOfAnUnrecordedRunAtATerminal(t *testing.T) {
 	isTTY = func() bool { return true }
 	t.Cleanup(func() { isTTY = old })
 	var out bytes.Buffer
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	// the command leaves only once the helper is up (a scan cannot read the environment of a process that is in the middle of exec)
+	script := `"$0" -test.run='^TestDirectHelper$' >/dev/null 2>&1 & while [ ! -s "$DIRECT_PIDFILE" ]; do sleep 0.05; done; cat "$DIRECT_PIDFILE"`
 	code, err := Direct{}.Run(context.Background(), gate.Options{
-		Argv: []string{"sh", "-c", `"$0" -test.run='^TestDirectHelper$' >/dev/null 2>&1 & echo $!`, os.Args[0]},
-		Env:  []string{"PATH=/usr/bin:/bin", "DIRECT_HELPER=1"}, Stdout: &out,
+		Argv: []string{"sh", "-c", script, os.Args[0]},
+		Env:  []string{"PATH=/usr/bin:/bin", "DIRECT_HELPER=1", "DIRECT_PIDFILE=" + pidFile}, Stdout: &out,
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("code %d, err %v", code, err)
