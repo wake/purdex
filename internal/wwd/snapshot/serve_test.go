@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -64,7 +63,7 @@ func origin(t *testing.T) (dir, base, snap string) {
 	writeFile(t, dir+"/a.txt", "a2 changed\n")
 	writeFile(t, dir+"/new.txt", "new\n")
 	writeFile(t, dir+"/keep.log", "log2 changed\n")
-	info, err := gate.SnapshotTree(context.Background(), "", dir)
+	info, err := SnapshotTree(context.Background(), "", dir)
 	require.NoError(t, err)
 	return dir, base, info.SHA
 }

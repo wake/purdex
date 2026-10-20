@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/wake/purdex/internal/wwd/snapshot"
 )
 
 // AssistRun describes one run sent to an assist host.
@@ -227,7 +229,7 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 		res.Cancelled, res.Code, res.Err = true, 128+signalNumber(s), errors.New("cancelled")
 		return res
 	}
-	snap, err := SnapshotTree(pre, a.Git, dir)
+	snap, err := snapshot.SnapshotTree(pre, a.Git, dir)
 	if err != nil {
 		stopWatching()
 		if s, ok := signalled(); ok {
