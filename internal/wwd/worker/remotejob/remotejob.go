@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/submit"
@@ -75,7 +76,11 @@ type Plan struct {
 // Prepare checks job against the manifest in the snapshot at root and renders its command. out is a directory the run may write
 // its report and junit files in ({report}, {junit}); it must be inside the worker's own workspace. A *Rejection says why a job does
 // not fit; any other error is the worker's own trouble (it is not a fault of the job).
-func Prepare(job wire.Job, root, out string) (*Plan, error) {
+func Prepare(job wire.Job, root, out string) (*Plan, error) { return PrepareAt(job, root, out, "") }
+
+// PrepareAt is Prepare on the worker whose own name (its host alias) is host: a job that is a half of a qualification pair is checked against
+// the metadata worked out for it to run on that host (halfMismatch). "" names no host, and then no such half is accepted.
+func PrepareAt(job wire.Job, root, out, host string) (*Plan, error) {
 	if job.AdHoc {
 		return nil, reject(CodeNotRemote, "job %s is ad-hoc", job.ID)
 	}
@@ -102,7 +107,7 @@ func Prepare(job wire.Job, root, out string) (*Plan, error) {
 	}
 	// What the job carries about how it is run must be what the snapshot's task says: the origin copied it at submit, and a worker
 	// that took the job for its labels or its locks must not find them changed in the job it runs.
-	if what := metaMismatch(job, task); what != "" {
+	if what := metaMismatch(job, task, host); what != "" {
 		return nil, reject(CodeMetaMismatch, "%s of job %s is not task %s's own", what, job.ID, task.Name)
 	}
 	if err := checkEnv(job.ID, out, task.Env); err != nil {
@@ -128,7 +133,10 @@ func Prepare(job wire.Job, root, out string) (*Plan, error) {
 
 // metaMismatch names the first field of the job that is not the task's own ("" when all are): labels and locks as sets, cacheable and
 // interruptible as they are.
-func metaMismatch(job wire.Job, task *manifest.Task) string {
+func metaMismatch(job wire.Job, task *manifest.Task, host string) string {
+	if _, own, role, ok := labels.ParseQualifyKey(job.SupersedeKey); ok && job.Submitter.Session == labels.QualifySession {
+		return halfMismatch(job, task, host, own, role)
+	}
 	switch {
 	case !sameSet(job.Labels, task.Labels):
 		return "labels"
@@ -137,6 +145,31 @@ func metaMismatch(job wire.Job, task *manifest.Task) string {
 	case job.Cacheable != task.Cacheable:
 		return "cacheable"
 	case job.Interruptible != task.Interruptible:
+		return "interruptible"
+	}
+	return ""
+}
+
+// halfMismatch is metaMismatch for a half of a qualification pair (submitter session and supersede key both say so). The coordinator
+// changes the half's metadata on purpose, so the expectation is worked out from the snapshot's task by the coordinator's own rule
+// (labels.QualifyHalfLabels): the task's labels as the role takes them plus host:<this worker>, the task's locks, dev class, not
+// cacheable, interruptible. The key's task label must be the snapshot task's own, so a half cannot name another label to be stripped
+// from the candidate's set, and the host must be this worker's: a half is never run for a host it was not worked out for.
+func halfMismatch(job wire.Job, task *manifest.Task, host, own, role string) string {
+	switch {
+	case host == "":
+		return "host (this worker has no name)"
+	case own != labels.TaskLabel(job.Repo.Name, task.Name):
+		return "qualify key"
+	case !sameSet(job.Labels, labels.QualifyHalfLabels(task.Labels, own, role, host)):
+		return "labels"
+	case !sameSet(job.Locks, task.Locks):
+		return "locks"
+	case job.Class != wire.ClassDev:
+		return "class"
+	case job.Cacheable:
+		return "cacheable"
+	case !job.Interruptible:
 		return "interruptible"
 	}
 	return ""
