@@ -58,9 +58,9 @@ describe('refreshPoolIdentities', () => {
     } as never)
   })
 
-  it('asks only a connected pool.v1 daemon whose entry has no wwd', () => {
+  it('asks every connected pool.v1 daemon, with or without a wwd (ensure holds them to the TTL, so a changed identity is re-read)', () => {
     refreshPoolIdentities()
-    expect(ensure.mock.calls).toEqual([['d2']])
+    expect(ensure.mock.calls).toEqual([['d1'], ['d2']])
   })
   it('leaves a daemon with no entry at all to its own first load', () => {
     useNexHostStore.setState({ byHost: {} } as never)

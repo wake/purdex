@@ -39,7 +39,7 @@ export function usePoolHostDaemons(): Record<string, string> {
 }
 
 /**
- * A daemon that learns its wwd later than the App first read `/api/info` would stay unmapped: ask again the connected `pool.v1` daemons whose entry has no wwd.
+ * A daemon can learn its wwd after the App first read `/api/info`, or be pointed at another one: ask again every connected `pool.v1` daemon.
  * `ensure` is held to the cache TTL (60 s), so this costs at most one read a minute each.
  */
 export function refreshPoolIdentities(): void {
@@ -47,6 +47,6 @@ export function refreshPoolIdentities(): void {
   const { byHost, ensure } = useNexHostStore.getState()
   for (const id of hostOrder) {
     const e = byHost[id]
-    if (runtime[id]?.status === 'connected' && e?.daemonCapabilities?.includes(POOL_CAPABILITY) && !e.wwd) void ensure(id)
+    if (runtime[id]?.status === 'connected' && e?.daemonCapabilities?.includes(POOL_CAPABILITY)) void ensure(id)
   }
 }
