@@ -77,6 +77,17 @@ func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 	}
 }
 
+// A worker without a name accepts no half, not even one whose labels were worked out for the empty host.
+func TestAWorkerWithoutANameAcceptsNoHalf(t *testing.T) {
+	root := snapshot(t, qualifyTasks)
+	j := half(labels.RoleReference, "", func(j *wire.Job) {
+		j.Labels = labels.QualifyHalfLabels([]string{"os:darwin", "arch:arm64", "tool:node", "task:purdex/tsc"}, "task:purdex/tsc", labels.RoleReference, "")
+	})
+	if _, err := PrepareAt(j, root, t.TempDir(), ""); code(t, err) != CodeMetaMismatch {
+		t.Errorf("%v", err)
+	}
+}
+
 // Being a qualify half takes both the submitter session and a qualify key; with only one of them the job is an ordinary job and its
 // metadata is the task's own or nothing.
 func TestOnlyTheSessionAndTheKeyTogetherMakeAQualifyHalf(t *testing.T) {
