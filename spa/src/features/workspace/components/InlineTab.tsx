@@ -33,7 +33,7 @@ interface Props {
   /** Not a drag source: the task-group view lists the sessions by group, and a drop there means nothing. */
   noDrag?: boolean
   /** The row's drag data when it is not a workspace tab: the task-group view tags its rows (lib/group-drag.ts). */
-  dragData?: Record<string, unknown>
+  dragData?: object
   /** The row's sortable id when it is not the tab's id: a split tab carrying several team seats has one row per seat. */
   dragId?: string
   /** The row stands for a team seat (the task-group view): its persona comes from the seat's address and its title is the seat's label — a split tab can carry several seats, each with its own row. */
@@ -68,7 +68,7 @@ export function InlineTab({
   // ("press space to pick up") would be false. The row sets its own role=button + tabIndex=0 below (#2531).
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: dragId ?? tab.id,
-    data: dragData ?? { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
+    data: (dragData as Record<string, unknown> | undefined) ?? { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
     disabled: noDrag,
   })
 
