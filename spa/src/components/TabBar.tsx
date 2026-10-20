@@ -31,7 +31,7 @@ interface Props {
   onLeave?: () => void
   /**
    * The task-group view's bar (task groups spec §6.2): `tabs` already come in the group's order (lead, seats with all their tabs, plain tabs by rank) and are drawn as they are — no team run (frame, shadow,
-   * collapse), nothing hidden. Dragging does not reorder yet (the group's order is not `tabOrder`; TG-4c). An empty group says so.
+   * collapse), nothing hidden, one zone. The tabs are not draggable yet (the group's order is not `tabOrder`; TG-4c). An empty group says so.
    */
   flat?: boolean
 }
@@ -42,15 +42,9 @@ function TabSeparator({ show }: { show: boolean }) {
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat }: Props) {
   const t = useI18nStore((s) => s.t)
-  // The pinned zone: every pinned tab — in a group's bar (`flat`) only the pinned tabs that LEAD the given order, so a team's unpinned lead still comes first and the order of `groupTabs` is what is drawn.
-  const pinnedCount = useMemo(() => {
-    if (!flat) return tabs.filter((t) => t.pinned).length
-    let n = 0
-    while (n < tabs.length && tabs[n].pinned) n += 1
-    return n
-  }, [tabs, flat])
-  const pinnedTabs = useMemo(() => (flat ? tabs.slice(0, pinnedCount) : tabs.filter((t) => t.pinned)), [tabs, flat, pinnedCount])
-  const normalTabs = useMemo(() => (flat ? tabs.slice(pinnedCount) : tabs.filter((t) => !t.pinned)), [tabs, flat, pinnedCount])
+  // A group's bar (`flat`) is ONE zone in the order `groupTabs` gives (a team's lead first even when unpinned, then its pinned tabs, ...): a pinned tab keeps its pinned look but is not moved into a zone of its own.
+  const pinnedTabs = useMemo(() => (flat ? [] : tabs.filter((t) => t.pinned)), [tabs, flat])
+  const normalTabs = useMemo(() => (flat ? tabs : tabs.filter((t) => !t.pinned)), [tabs, flat])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
   // Team runs (spec §4.2): the unpinned tabs split into plain tabs and label + lead + visible members. Only the tabs
@@ -193,6 +187,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       tab={tab}
       isActive={tab.id === activeTabId}
       group={group}
+      pinned={flat && tab.pinned}
+      noDrag={flat}
       onSelect={onSelectTab}
       onClose={onCloseTab}
       onMiddleClick={onMiddleClick}

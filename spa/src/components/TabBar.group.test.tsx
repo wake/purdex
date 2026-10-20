@@ -1,7 +1,7 @@
 // spa/src/components/TabBar.group.test.tsx — the top bar in the task-group view (task groups spec §6.2, plan TG-4b): the tabs come in the group's order and are drawn as they are — no team run (frame, shadow, collapse) —
 // and an empty group says so.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { TeamDisplayProvider } from './team/TeamDisplayProvider'
@@ -18,14 +18,14 @@ import { teamKeyOf } from '../lib/team/team-views'
 import type { RosterMember, RosterSession, TeamRoster } from '../lib/team/roster'
 import type { PaneLayout, Tab } from '../types/tab'
 
-const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null }))
+const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null, started: 0 }))
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@dnd-kit/core')>()
   return {
     ...actual,
     DndContext: (props: React.ComponentProps<typeof actual.DndContext>) => {
       dnd.onDragEnd = props.onDragEnd as (e: DragEndEvent) => void
-      return <actual.DndContext {...props} />
+      return <actual.DndContext {...props} onDragStart={() => { dnd.started += 1 }} />
     },
   }
 })
@@ -64,6 +64,7 @@ const idsInOrder = (root: HTMLElement) => Array.from(root.querySelectorAll('[dat
 beforeEach(() => {
   cleanup()
   dnd.onDragEnd = null
+  dnd.started = 0
   clearModuleRegistry()
   registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: () => null }] })
   useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamBeadHost: true })
@@ -115,20 +116,33 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     expect(idsInOrder(container)).toEqual(['lead', 'ma', 'plain'])
   })
 
-  it('an unpinned lead stays first even when other tabs of the team are pinned: the pinned zone is only the pinned tabs that lead the order', () => {
+  it('an unpinned lead stays first even when other tabs of the team are pinned: one zone, in the order given', () => {
     const list = [mk('lead', 'lead-tm'), mk('pa', 'a-tm', true), mk('mb', 'b-tm'), mk('plain', 'other')]
     seed(list)
     const { container } = bar(list, true)
     expect(idsInOrder(container)).toEqual(['lead', 'pa', 'mb', 'plain'])
+    const parent = (id: string) => container.querySelector(`[data-tab-id="${id}"]`)!.parentElement
+    expect(new Set(['lead', 'pa', 'mb', 'plain'].map(parent)).size).toBe(1)
   })
 
-  it('a manual group\'s pinned tabs, which lead its order, keep the pinned zone', () => {
-    const list = [mk('p1', 'other', true), mk('p2', 'lead-tm', true), mk('x', 'a-tm')]
+  it('a pinned tab keeps its pinned look (a button) without a zone of its own', () => {
+    const list = [mk('p1', 'other', true), mk('x', 'a-tm')]
     seed(list)
     const { container } = bar(list, true)
-    expect(idsInOrder(container)).toEqual(['p1', 'p2', 'x'])
-    expect(container.querySelector('[data-tab-id="p1"]')!.parentElement).toBe(container.querySelector('[data-tab-id="p2"]')!.parentElement)
-    expect(container.querySelector('[data-tab-id="x"]')!.parentElement).not.toBe(container.querySelector('[data-tab-id="p1"]')!.parentElement)
+    expect(container.querySelector('[data-tab-id="p1"]')!.tagName).toBe('BUTTON')
+    expect(container.querySelector('[data-tab-id="x"]')!.tagName).not.toBe('BUTTON')
+  })
+
+  it('no tab can be picked up: a press that moves starts no drag and shifts nothing', () => {
+    const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('plain', 'other')]
+    seed(list)
+    const { container } = bar(list, true)
+    const el = container.querySelector('[data-tab-id="ma"]') as HTMLElement
+    fireEvent.pointerDown(el, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { clientX: 60, clientY: 10 })
+    expect(dnd.started).toBe(0)
+    for (const id of ['lead', 'ma', 'plain']) expect((container.querySelector(`[data-tab-id="${id}"]`) as HTMLElement).style.transform).toBe('')
+    fireEvent.pointerUp(document)
   })
 
   it('an empty group says so, and keeps the + button', () => {
