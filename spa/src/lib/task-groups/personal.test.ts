@@ -35,4 +35,7 @@ describe('personalGroupOf', () => {
   it('a root that is not read yet is 未分組 — never guessed (R23)', () => {
     expect(personalGroupOf(t, ctx([{ host: 'h1', root: 'R' }]), [], { t1: t })).toEqual({ kind: 'ungrouped' })
   })
+  it('never takes the session\'s own id for its root: a group listing that id does not claim it while the root is unread', () => {
+    expect(personalGroupOf(t, ctx([{ host: 'h1', root: 'A1' }]), [], { t1: t })).toEqual({ kind: 'ungrouped' })
+  })
 })
