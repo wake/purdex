@@ -97,7 +97,7 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 			return Workspace{}, errUseTar
 		}
 		if got := pinned(ctx, in.Clone, in.JobID); got != "" && got != in.Commit {
-			_, _ = git(ctx, "wwd.snapshot-unref", in.Clone, "update-ref", "-d", ref)
+			_, _ = gitRefWrite(ctx, "wwd.snapshot-unref", in.Clone, "update-ref", "-d", ref)
 			return Workspace{}, fmt.Errorf("snapshot: the bundle holds %s, not the snapshot commit %s", got, in.Commit)
 		}
 	}
@@ -130,7 +130,7 @@ func addWorktree(ctx context.Context, repo, dir, commit, ref string) (Workspace,
 		_, err1 := git(context.Background(), "wwd.snapshot-wtrm", repo, "worktree", "remove", "--force", dir)
 		var err2 error
 		if ref != "" {
-			_, err2 = git(context.Background(), "wwd.snapshot-unref", repo, "update-ref", "-d", ref)
+			_, err2 = gitRefWrite(context.Background(), "wwd.snapshot-unref", repo, "update-ref", "-d", ref)
 		}
 		_, err3 := git(context.Background(), "wwd.snapshot-prune", repo, "worktree", "prune")
 		err4 := os.RemoveAll(dir)
@@ -178,7 +178,7 @@ func fetchBundle(ctx context.Context, clone, ref string, body io.Reader) error {
 		return ErrBundleTooLarge // the temporary file goes with the defer
 	}
 	// the ref is forced: an earlier try of this job on this host may have left it
-	_, err = git(ctx, "wwd.snapshot-fetch", clone, "fetch", "-q", "--no-tags", f.Name(), "+"+ref+":"+ref)
+	_, err = gitRefWrite(ctx, "wwd.snapshot-fetch", clone, "fetch", "-q", "--no-tags", f.Name(), "+"+ref+":"+ref)
 	return err
 }
 

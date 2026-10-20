@@ -11,7 +11,7 @@ import (
 
 // aClassTasks are the tasks that may run on a host other than a Mac because they have been qualified there (spec §7: the `qualify`
 // pair earns `task:<repo>/<task>`). A task is added here together with its `qualify` and the earned label in its labels, never alone.
-var aClassTasks = map[string]bool{"tsc": true}
+var aClassTasks = map[string]bool{"tsc": true, "spa-related": true}
 
 // macOnlyViolations names the tasks of m that can run on a host other than a Mac without being qualified there: a task that can leave the
 // local machine needs os:darwin, or mserv (os:linux, with a worker on) would claim tsc, lint, the whole Go and SPA suites and fail them
@@ -127,30 +127,38 @@ func TestPurdexManifestTasksCarryTheToolsTheyRun(t *testing.T) {
 	}
 }
 
-// tsc runs on a host other than a Mac only once that host has earned task:purdex/tsc: the label is in the task's labels (a job is claimable
-// only by a host that holds all of them), it has no os:darwin, and its qualify names the reference host with no args (the whole run is the
-// qualification). Dropping the earned label would let any worker that has tool:node24 claim it unqualified.
-func TestTscIsClaimableOnlyByAHostThatEarnedIt(t *testing.T) {
+// An A-class task runs on a host other than a Mac only once that host has earned task:purdex/<name>: the label is in the task's labels (a
+// job is claimable only by a host that holds all of them), it has no os:darwin, and its qualify names the reference host. Dropping the
+// earned label would let any worker that has the tools claim it unqualified.
+func TestAClassTasksAreClaimableOnlyByAHostThatEarnedThem(t *testing.T) {
 	m, err := Load("../../../.wwd/tasks.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tsc := m.Tasks["tsc"]
-	if tsc == nil || tsc.Qualify == nil {
-		t.Fatalf("tsc has no qualify: %+v", tsc)
-	}
-	for _, l := range []string{"repo:purdex", "task:purdex/tsc", "tool:node24"} {
-		if !slices.Contains(tsc.Labels, l) {
-			t.Errorf("tsc lacks the label %s: %v", l, tsc.Labels)
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"tsc", nil}, // the whole run is the qualification
+		{"spa-related", []string{"src/lib/fleet/parse.test.ts"}}, // one small test file is
+	} {
+		task := m.Tasks[c.name]
+		if task == nil || task.Qualify == nil {
+			t.Fatalf("%s has no qualify: %+v", c.name, task)
 		}
-	}
-	if slices.Contains(tsc.Labels, "os:darwin") {
-		t.Errorf("tsc still needs os:darwin, so no other host could earn it: %v", tsc.Labels)
-	}
-	if tsc.Qualify.Reference != "air26" || len(tsc.Qualify.Args) != 0 {
-		t.Errorf("qualify %+v", tsc.Qualify)
-	}
-	if bad := macOnlyViolations(m, map[string]bool{}); !slices.Contains(bad, "tsc") {
-		t.Errorf("without the A-class entry tsc would be a violation (the test would prove nothing): %v", bad)
+		for _, l := range []string{"repo:purdex", "task:purdex/" + c.name, "tool:node24", "tool:pnpm10"} {
+			if !slices.Contains(task.Labels, l) {
+				t.Errorf("%s lacks the label %s: %v", c.name, l, task.Labels)
+			}
+		}
+		if slices.Contains(task.Labels, "os:darwin") {
+			t.Errorf("%s still needs os:darwin, so no other host could earn it: %v", c.name, task.Labels)
+		}
+		if task.Qualify.Reference != "air26" || !slices.Equal(task.Qualify.Args, c.args) {
+			t.Errorf("%s qualify %+v", c.name, task.Qualify)
+		}
+		if bad := macOnlyViolations(m, map[string]bool{}); !slices.Contains(bad, c.name) {
+			t.Errorf("without the A-class entry %s would be a violation (the test would prove nothing): %v", c.name, bad)
+		}
 	}
 }

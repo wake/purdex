@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gitenv"
@@ -39,6 +40,12 @@ func validJobID(id string) error {
 // variables the process carries, and no prompt can stop it.
 func gitEnv() []string { return gitenv.Clean(os.Environ()) }
 
+// refWriteEnv is gitEnv with the C locale, for the commands that write a ref (gitRefWrite): isRefLockError reads git's English error text,
+// and LC_ALL wins over LANG and LC_MESSAGES (and makes git ignore LANGUAGE), so a service started in another locale still gets the words
+// it looks for. Those commands run no filter that reads the locale; a checkout (worktree add) keeps the process's own. The later value of
+// a name is the one the child gets.
+func refWriteEnv() []string { return append(gitEnv(), "LC_ALL=C") }
+
 // errTooLarge is what a command whose output went over its limit is: it was stopped, not waited for.
 var errTooLarge = errors.New("snapshot: output over the limit")
 
@@ -68,8 +75,13 @@ func git(ctx context.Context, tag, repoDir string, args ...string) ([]byte, erro
 
 // gitLimited is git with its own limit on the output: over it, git is stopped and the error is errTooLarge.
 func gitLimited(ctx context.Context, tag, repoDir string, max int, args ...string) ([]byte, error) {
+	return gitRun(ctx, gitEnv(), tag, repoDir, max, args...)
+}
+
+// gitRun is gitLimited with the environment of the command given.
+func gitRun(ctx context.Context, env []string, tag, repoDir string, max int, args ...string) ([]byte, error) {
 	cmd := execstat.CommandContext(ctx, tag, "git", append([]string{"-C", repoDir}, args...)...)
-	cmd.Env = gitEnv()
+	cmd.Env = env
 	out := &limitedBuffer{max: max}
 	var errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = out, &errb
@@ -80,6 +92,49 @@ func gitLimited(ctx context.Context, tag, repoDir string, max int, args ...strin
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return out.buf.Bytes(), nil
+}
+
+// refLockBackoff is the wait between the tries of gitRefWrite (a var so a test can shorten it).
+var refLockBackoff = 100 * time.Millisecond
+
+// refLockTries is how many times gitRefWrite tries again after a lock error: the first try and then this many.
+const refLockTries = 3
+
+// isRefLockError says whether a git error is another process holding the lock of a ref (or of packed-refs): git says "cannot lock ref" for a
+// ref and "Unable to create '...lock': File exists" for the lock file itself. Nothing else is worth a second try.
+func isRefLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "cannot lock ref") || strings.Contains(msg, "Unable to create") && strings.Contains(msg, ".lock")
+}
+
+// waitRefLock waits refLockBackoff and returns the context's error when it ended, also when the timer and the end of the context were ready
+// together (select picks either one then), so a cancelled caller never starts another git.
+func waitRefLock(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(refLockBackoff):
+	}
+	return ctx.Err()
+}
+
+// gitRefWrite is git for the commands that write or delete a ref (update-ref, fetch into a ref). The clone may be shared with another git
+// user, and two writers of the same ref directory or of packed-refs fail one of them with "cannot lock ref" for the moment the other holds
+// the lock; that one is tried again (refLockTries times, refLockBackoff apart), any other error at once.
+func gitRefWrite(ctx context.Context, tag, repoDir string, args ...string) ([]byte, error) {
+	out, err := gitRun(ctx, refWriteEnv(), tag, repoDir, smallOutput, args...)
+	for try := 0; try < refLockTries && isRefLockError(err); try++ {
+		if werr := waitRefLock(ctx); werr != nil {
+			return nil, fmt.Errorf("%w (after %v)", werr, err)
+		}
+		out, err = gitRun(ctx, refWriteEnv(), tag, repoDir, smallOutput, args...)
+	}
+	return out, err
 }
 
 // hasCommit says whether repoDir holds the commit.
@@ -122,7 +177,7 @@ func Pin(ctx context.Context, repoDir, jobID, commit string) error {
 		return nil
 	}
 	// the last argument is the value the ref must have now: none, so a second Pin cannot move it
-	_, err := git(ctx, "wwd.snapshot-pin", repoDir, "update-ref", PinRef(jobID), commit, strings.Repeat("0", len(commit)))
+	_, err := gitRefWrite(ctx, "wwd.snapshot-pin", repoDir, "update-ref", PinRef(jobID), commit, strings.Repeat("0", len(commit)))
 	if err != nil && pinned(ctx, repoDir, jobID) == commit {
 		return nil // another call made it first, to the same commit
 	}
@@ -138,7 +193,7 @@ func Unpin(ctx context.Context, repoDir, jobID string) error {
 	if err := ownRepo(ctx, repoDir); err != nil {
 		return err
 	}
-	_, err := git(ctx, "wwd.snapshot-unpin", repoDir, "update-ref", "-d", PinRef(jobID))
+	_, err := gitRefWrite(ctx, "wwd.snapshot-unpin", repoDir, "update-ref", "-d", PinRef(jobID))
 	return err
 }
 

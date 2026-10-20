@@ -66,6 +66,17 @@ What the install does, all of it idempotent (a second run changes nothing and re
    mlab   = "~/Assist/mlab"
    ```
 
+   **Give wwd a clone of its own; do not share it with the assist runs or any other tool.** wwd writes refs in that clone
+   (`refs/wwd/<job id>`: `update-ref` when a job is submitted and when it ends, `fetch` when a worker takes it), and a second
+   git user in the same `.git` (a fetch, a gc, a pack-refs) fights it for the ref and `packed-refs` locks. wwd tries a ref
+   write again 3 times, 100 ms apart, when git says `cannot lock ref`; that covers a short clash, not a clone that is busy for
+   long.
+
+   **The reference label reads this clone's working tree.** A task whose `qualify.reference` is this host is advertised as
+   `task:<repo>/<task>` from the manifest in the clone's working tree (`.wwd/tasks.toml`), not from the caller's. After the
+   `qualify` or `labels` of a task change on `main`, fast-forward this clone (`git -C <clone> pull --ff-only`), or the host
+   keeps advertising the old labels (until #3658 is fixed).
+
    A path counts only if it is a directory you own that holds a `.git`; otherwise that label is simply not
    given (no error). The check runs with every facts record, so a clone that appears or disappears changes
    the labels (a `labels` event) within 5 s. `GET /v1/info` shows the labels and the toolchain fingerprint;
@@ -460,3 +471,37 @@ timeout (exit 6). Do not count on the quick failure.
 taken by the hosts that have the label it carries: while some hosts are on 1.27 and the manifest still says 1.26, only the hosts still
 on 1.26 take it (when all three are raised, none does until step 2 lands); after step 2, a host that has not been raised takes none.
 Raise all three before step 2, and do step 2 promptly.
+
+## 12. mserv takes purdex's A-class work (S1-b)
+
+`tsc` and `spa-related` carry no `os:darwin`: they run on a host that holds `repo:purdex`, `tool:node24`, `tool:pnpm10` **and** the earned
+`task:purdex/<name>` (spec §7; `purdex_manifest_test.go` keeps the list of such tasks). To make mserv one of those hosts (the lead runs
+these; wwd is restarted only after the release gate and the guardian's go-ahead):
+
+1. **A prepared clone of its own** (not `~/Assist/repos.noindex/purdex`: that one belongs to the manual `mserv-run.sh` and is on an old commit).
+   Same way as air26's `purdex-wwd`, over anonymous https (the repo is public):
+   `ssh mserv 'git clone https://github.com/wake/purdex.git ~/Assist/repos.noindex/purdex-wwd'`.
+2. **`~/.config/wwd/config.toml`** on mserv: add a `[repos]` table, and edit the **existing** `[tools]` table (node is already in it; `pnpm`
+   lives in `~/Assist/toolchains.noindex/pnpm/bin`, which it does not list yet). `extra_path` belongs to `[tools]`: a line added after
+   `[repos]` would be read as `repos.extra_path`.
+   ```toml
+   [tools]
+   extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noindex/pnpm/bin"]
+
+   [repos]
+   purdex = "~/Assist/repos.noindex/purdex-wwd"
+   ```
+3. **Make sure the worker is off before and after the restart.** The saved worker settings (`wwd.db`) win over `config.toml`, so a restart
+   keeps whatever the daemon was last told, whatever `enabled` says in the file. On mserv:
+   ```sh
+   S="--unix-socket $HOME/.local/share/wwd/wwd.sock"
+   curl -sS $S http://wwd/v1/worker | jq '.enabled=false' | curl -sS $S -X PUT -d @- http://wwd/v1/worker
+   curl -sS $S http://wwd/v1/worker | jq .enabled      # must print false
+   ```
+   Then **restart** (`sudo systemctl restart wwd`), check `.enabled` is still `false`, and check `GET /v1/info`: `labels` must show `repo:purdex`, `tool:node24`, `tool:pnpm10`.
+4. **The worker stays off until S2 retires `mserv-run.sh`** (a manual run and a worker must not run beside each other). When it goes on
+   (the same call with `.enabled=true`; check `GET /v1/worker` again), the coordinator queues one qualify pair per task that has a `qualify` and a reference host (air26) and that mserv does
+   not hold yet: `tsc` (the whole run) and `spa-related` (`src/lib/fleet/parse.test.ts`). The pair needs mserv's worker **and** air26's
+   worker on at the same time. `pdx wwd qualify --status` shows the outcome; `task:purdex/tsc` and `task:purdex/spa-related` appear in
+   mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
+   cache (§10), so it needs network.

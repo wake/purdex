@@ -298,7 +298,7 @@ precheck() {
   # that never comes. An empty rule is also what a PUT of this run would store back, so for the other cases it is a warning.
   pc_rule=""; [ "$dry" -eq 1 ] || pc_rule=$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)
   if [ "$dry" -eq 1 ]; then
-    case " $cases " in *" 7 "*) say "+ check air26's owner_rule is not empty (case 7 FAILs here when it is)" ;; esac
+    case " $cases " in *" 7 "*) say "+ check air26's owner_rule is not empty (case 7 stops here when it is)" ;; esac
   elif [ -z "$pc_rule" ]; then
     case " $cases " in
       *" 7 "*) say "FAIL: air26's owner_rule is empty, and case 7 (H2) needs a rule: with none the H2 file shows owner.active but headroom stays and the worker does not yield (#3457). Fix: [owner] enabled = true in air26's config, then PUT /v1/worker with owner_rule \"hid<5m\" (docs/wwd-c2-matrix.md, sections 7.1 and the note after it)"; exit 1 ;;
