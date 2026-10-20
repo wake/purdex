@@ -21,7 +21,9 @@
 // results may share structure with `local` and `incoming`.
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
-import { hostSettingsFromWire, layoutFromWire, presetColumnsFromWire, taskGroupsFromWire, type WireResolver } from './host-identity'
+import { groupKeyFromWire, hostSettingsFromWire, layoutFromWire, presetColumnsFromWire, taskGroupsFromWire, type WireResolver } from './host-identity'
+import { parseGroupKey } from '../task-groups/group-key'
+import { isValidRank } from '../task-groups/rank'
 import { PROJECTIONS, workspaceIdOf } from './projections'
 import {
   WORKSPACE_SCOPED_SETTINGS,
@@ -96,7 +98,9 @@ function setOwn<T>(record: Record<string, T>, key: string, value: T): void {
 export function tabsFromWire(payload: TabsPayload, resolve: WireResolver): TabsPayload {
   const tabs: Record<string, TabsPayload['tabs'][string]> = {}
   for (const [id, entry] of Object.entries(payload.tabs)) {
-    setOwn(tabs, id, { ...entry, layout: layoutFromWire(entry.layout, resolve) })
+    const translated = { ...entry, layout: layoutFromWire(entry.layout, resolve) }
+    if (typeof translated.group === 'string') translated.group = groupKeyFromWire(translated.group, resolve)
+    setOwn(tabs, id, translated)
   }
   return { ...payload, tabs }
 }
@@ -260,6 +264,9 @@ export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsP
       locked: entry.locked,
       createdAt: entry.createdAt,
       layout: restoreSizes(entry.layout, localTab?.layout),
+      // Field by field, like the rest: absent in the payload = cleared here (no key at all).
+      ...(entry.group !== undefined ? { group: entry.group } : {}),
+      ...(entry.groupRank !== undefined ? { groupRank: entry.groupRank } : {}),
     }
   }
 
@@ -521,6 +528,8 @@ function isTabsPayload(p: Rec): boolean {
       typeof t.pinned === 'boolean' &&
       typeof t.locked === 'boolean' &&
       isFiniteNumber(t.createdAt) &&
+      isOptional(t.group, (g) => typeof g === 'string' && parseGroupKey(g) !== null) &&
+      isOptional(t.groupRank, isValidRank) &&
       isLayoutShape(t.layout) &&
       // The projection strips `sizes` at ANY depth under `layout`, pane contents
       // included — a payload carrying one could never hash back to itself.

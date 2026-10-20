@@ -47,6 +47,8 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
   ],
   tabs: [
     'order', 'tabs.*.id', 'tabs.*.pinned', 'tabs.*.locked', 'tabs.*.createdAt', 'tabs.*.layout',
+    // A tab's task-group placement and rank (task groups spec §4.2, tabs ordinal 5). `group` holds a team host id: the builder writes it as a wire id.
+    'tabs.*.group', 'tabs.*.groupRank',
     '!tabs.*.layout..sizes', // split ratios at any depth are device-local (decision 8)
   ],
   settings: [
@@ -154,7 +156,10 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   //    payload is upcast on pull and on restore-local (applier.ts `upcastLegacyTabs`).
   // 4: a tmux pane's rebuild record carries `agent.frameId` and `agentExited` (agent-last-state) — a new value domain
   //    inside `layout`, projection unchanged; the fingerprint moves through the second WIRE_MARKERS.tabs entry.
-  tabs: 4,
+  // 5: `tabs.*.group` / `tabs.*.groupRank` (task groups spec §4.2, TG-1b-1) — a projection change, so the fingerprint moves by itself (no marker).
+  //    An ordinal-4 payload lacks them: applying it clears them (applier `applyTabs` builds each tab field by field); the executor only lands an
+  //    older-shape payload on a clean local `tabs.<workspace>` section.
+  tabs: 5,
 }
 
 // === Section keys ===

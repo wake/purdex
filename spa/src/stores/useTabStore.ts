@@ -16,6 +16,16 @@ import { isTeamTab } from '../lib/team/team-state'
 // These functions handle legacy persisted data whose shape no longer matches
 // current TypeScript types, so `any` casts are unavoidable.
 
+/** `state` with one optional string field of one tab set, or removed when `value` is undefined; the same state when nothing changes. */
+function withTabField(state: { tabs: Record<string, Tab> }, id: string, field: 'group' | 'groupRank', value: string | undefined) {
+  const tab = state.tabs[id]
+  if (!tab || tab[field] === value) return state
+  const next = { ...tab }
+  if (value === undefined) delete next[field]
+  else next[field] = value
+  return { tabs: { ...state.tabs, [id]: next } }
+}
+
 function migrateLayout(layout: PaneLayout): PaneLayout {
   if (layout.type === 'leaf') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -576,6 +586,10 @@ interface TabState {
   detachPane: (tabId: string, paneId: string, afterTabId?: string) => string | null
   reorderTabs: (order: string[]) => void
   togglePin: (id: string) => void
+  /** Sets a tab's placement (a task-group key) or, with `undefined`, clears it (the key goes). */
+  setTabGroup: (id: string, group: string | undefined) => void
+  /** Sets a tab's rank in its group's bar or, with `undefined`, clears it (the key goes). */
+  setTabGroupRank: (id: string, rank: string | undefined) => void
   toggleLock: (id: string) => void
   updateSessionCache: (hostId: string, sessionCode: string, cachedName: string, tmuxInstance: string) => void
   setPaneRebuild: (hostId: string, sessionCode: string, expectedTmuxInstance: string, patch: RebuildPatch) => void
@@ -868,6 +882,10 @@ export const useTabStore = create<TabState>()(
 
       reorderTabs: (order) =>
         set({ tabOrder: order }),
+
+      setTabGroup: (id, group) => set((state) => withTabField(state, id, 'group', group)),
+
+      setTabGroupRank: (id, rank) => set((state) => withTabField(state, id, 'groupRank', rank)),
 
       togglePin: (id) =>
         set((state) => {

@@ -14,6 +14,7 @@
 // and a value it cannot map passes through unchanged.
 import { sha256Hex, sha256HexSync } from '../crypto-hash'
 import { isValidDaemonId } from '../daemon-id'
+import { teamGroupKey, teamKeyOfGroupKey } from '../task-groups/group-key'
 import type { HostConfig } from '../../stores/useHostStore'
 import type { HostsPayload } from './types'
 
@@ -559,6 +560,26 @@ export function layoutToWire<L>(layout: L, identity: HostIdentity): L {
 /** wire → local over a whole split tree, through `resolve` (same fields as `layoutToWire`). */
 export function layoutFromWire<L>(layout: L, resolve: WireResolver): L {
   return mapLayout(layout, resolve) as L
+}
+
+// === tabs: the team host inside `tab.group` ===
+
+/** A group key with the team's host id passed through `map`; any other key (a manual group, `ungrouped`, junk) is returned as it is. */
+function mapGroupKeyHost(group: string, map: IdMap): string {
+  const teamKey = teamKeyOfGroupKey(group)
+  if (teamKey === null) return group
+  const [host, teamId] = teamKey.split('\u0000')
+  return teamGroupKey(`${map(host)}\u0000${teamId}`)
+}
+
+/** local → wire for the team host of a tab's `group`. An unknown host passes through. */
+export function groupKeyToWire(group: string, identity: HostIdentity): string {
+  return mapGroupKeyHost(group, (id) => identity.toWire.get(id) ?? id)
+}
+
+/** wire → local for the team host of a tab's `group`. A host not known here stays as received. */
+export function groupKeyFromWire(group: string, resolve: WireResolver): string {
+  return mapGroupKeyHost(group, resolve)
 }
 
 // === settings: purdex-host-settings.hosts ===

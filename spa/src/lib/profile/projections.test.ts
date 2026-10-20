@@ -257,7 +257,7 @@ describe('PROJECTIONS', () => {
       'order', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig', 'workspaces.*.name',
     ])
     expect([...PROJECTIONS.tabs].sort()).toEqual([
-      '!tabs.*.layout..sizes', 'order', 'tabs.*.createdAt', 'tabs.*.id', 'tabs.*.layout', 'tabs.*.locked',
+      '!tabs.*.layout..sizes', 'order', 'tabs.*.createdAt', 'tabs.*.group', 'tabs.*.groupRank', 'tabs.*.id', 'tabs.*.layout', 'tabs.*.locked',
       'tabs.*.pinned',
     ])
   })
@@ -553,7 +553,7 @@ describe('shape: fingerprint and ordinal', () => {
 
     it('the marker is there, and it is the only thing between the two shapes', async () => {
       expect(WIRE_MARKERS.tabs).toEqual(['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'])
-      expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(4)
+      expect(SECTION_SCHEMA_ORDINAL.tabs).toBeGreaterThanOrEqual(4)
       expect((await oldTabs()).fingerprint).toBe(await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1', '@tabs:device-local=v1']))
       expect((await oldTabs()).fingerprint).not.toBe(await sectionFingerprint('tabs'))
     })
@@ -823,8 +823,8 @@ describe('shape: fingerprint and ordinal', () => {
           12,
         ],
         "tabs": [
-          "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",
-          4,
+          "411e633f8b3d40cc46b8bb33d1693a16d6670c536ce8b11d3b7b2e566010a59e",
+          5,
         ],
         "workspaces": [
           "7986550194df9cf330ec521be44e68989a703ac1e90d433f73e9aab00410c87e",
