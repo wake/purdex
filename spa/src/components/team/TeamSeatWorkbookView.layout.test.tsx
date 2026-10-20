@@ -2,7 +2,7 @@
 // asserts the CSS chain instead — the scroll box is flex-1 / min-h-0 / overflow-y-auto with no max-h-*, and every container between it
 // and the area is a flex column that may shrink (min-h-0), under an area whose own height is bounded (full: max-h of the pane, max: inset).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
 import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
@@ -71,6 +71,7 @@ describe('a tab\'s own workbook', () => {
     })
     seedWorkbook(HOST, 'S1', { status: 's', entries: [entry(2)] })
     mount()
+    fireEvent.click(screen.getByTestId('personal-card-workbook')) // the personal panel's card opens the workbook inside the panel (task groups TG-5c)
   }
   it('full: the scroll box and its containers follow the area', () => { own('full'); expectFollowsArea() })
 })
