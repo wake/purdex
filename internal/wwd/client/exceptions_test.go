@@ -11,6 +11,37 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
+// A wwd that predates GET /v1/exceptions but already has POST /v1/exceptions answers a GET with its mux's 405 (the path exists, the method
+// does not), not a 404: it is the same "this wwd does not know the route", not a rejection (#3681).
+func TestExceptions_A405FromAnOlderWwdIsNotKnownEither(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/exceptions", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, host := range []string{"", "air19"} {
+		list, known, err := New(fakeWWD(t, mux)).Exceptions(context.Background(), host)
+		if err != nil || known || list == nil || len(list) != 0 {
+			t.Fatalf("host=%q known=%v list=%+v err=%v", host, known, list, err)
+		}
+	}
+}
+
+// Only the mux's own 405 is a missing route: another 405 (a handler's own reason, a proxy's page) is the answer it is.
+func TestRouteMissing_Only405OfTheMuxCounts(t *testing.T) {
+	if !RouteMissing(&StatusError{Code: 405, Body: "Method Not Allowed\n"}) {
+		t.Error("net/http's own 405 is a route this wwd does not have for GET")
+	}
+	for _, e := range []error{
+		&StatusError{Code: 405, Body: `{"error":"read only"}`},
+		&StatusError{Code: 405, Body: "<html>405 from a proxy</html>"},
+		&StatusError{Code: 405, Body: "Method Not Allowed, but more"},
+		&StatusError{Code: 405, Body: ""},
+		&StatusError{Code: 403, Body: "Method Not Allowed"},
+	} {
+		if RouteMissing(e) {
+			t.Errorf("RouteMissing(%v) = true", e)
+		}
+	}
+}
+
 func TestExceptions_SendsTheHostAndDecodesTheHolds(t *testing.T) {
 	var gotHost string
 	mux := http.NewServeMux()

@@ -194,16 +194,24 @@ func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire
 	return getLimit[wire.FactsSeriesResponse](ctx, c, "/v1/facts/series", q.Values(), timeout, maxBody)
 }
 
-// notFoundBody is what net/http's mux answers for a path it has no handler for.
-const notFoundBody = "404 page not found"
+// notFoundBody is what net/http's mux answers for a path it has no handler for; methodNotAllowedBody is what it answers for a path that
+// has handlers, but none for the method asked (an older wwd that has POST /v1/exceptions and not yet GET: a 405, not a 404).
+const (
+	notFoundBody         = "404 page not found"
+	methodNotAllowedBody = "Method Not Allowed"
+)
 
-// RouteMissing says err is a wwd (or the peer behind it) that has no such route: exactly net/http's own 404 for an unknown path.
-// Any other 404 (a JSON {"error":"unknown host"}, a proxy's page, another route's reason) is the answer it is and is not this, so that
-// it is never mistaken for an old release and answered by asking again for ten times the data.
+// RouteMissing says err is a wwd (or the peer behind it) that has no such route for a GET: exactly net/http's own 404 for an unknown path,
+// or its own 405 for a path an older release has only for another method. Any other 404 or 405 (a JSON {"error":"unknown host"}, a proxy's
+// page, another route's reason) is the answer it is and is not this, so that it is never mistaken for an old release and answered by
+// asking again for ten times the data. Only for calls that GET: a 405 for a write is a refusal.
 func RouteMissing(err error) bool {
 	var se *StatusError
-	return errors.As(err, &se) && se.Code == http.StatusNotFound && strings.TrimSpace(se.Body) == notFoundBody
-}
+	if !errors.As(err, &se) {
+		return false
+	}
+	body := strings.TrimSpace(se.Body)
+	return (se.Code == http.StatusNotFound && body == notFoundBody)}
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about
 // 10 MB, which the general cap would refuse.
