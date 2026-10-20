@@ -2,6 +2,8 @@ package fastlane
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -32,7 +34,10 @@ type Direct struct {
 
 var _ Gater = Direct{}
 
-// stdinIsTTY says whether stdin is a terminal the command would share, as the gate asks it.
+// isTTY says whether stdin is a terminal the command would share (a seam for the tests).
+var isTTY = stdinIsTTY
+
+// stdinIsTTY is isTTY as the gate asks it.
 func stdinIsTTY() bool {
 	_, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
 	return err == nil
@@ -87,9 +92,13 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 		Stdin: stdin, Stdout: stdout, Stderr: stderr,
 		WaitDelay: 300 * time.Millisecond, // output that goes through a pipe the command's leftovers keep open is not waited for
 	}
-	grouped := !(o.Stdin == nil && stdinIsTTY())
+	grouped := !(o.Stdin == nil && isTTY())
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else if markOf(env) == "" {
+		// no group to clear and no job to name the leftovers by: a mark of its own, so they are still found at the end
+		cmd.Env = append(append([]string(nil), env...), run.MarkEnv+"="+newCleanupMark())
+		env = cmd.Env
 	}
 	if err := cmd.Start(); err != nil {
 		if nonce != "" {
@@ -127,11 +136,30 @@ func (d Direct) Run(ctx context.Context, o gate.Options) (int, error) {
 		if src == nil {
 			src = run.DefaultProcSource()
 		}
-		if left, _ := run.SweepMarked(src, id, directGrace); len(left) > 0 {
+		left, err := run.SweepMarked(src, id, directGrace)
+		switch {
+		case err != nil: // the table could not be read (or read again): what is left is not known, and it is not said to be cleared
+			fmt.Fprintf(stderr, "pdx test: 無法確認這個任務是否留下行程（%v）%s\n", err, pidsNote(left))
+		case len(left) > 0:
 			fmt.Fprintf(stderr, "pdx test: 這個任務留下 %d 個脫離 process group 的行程，已清掉 (pid %v)\n", len(left), left)
 		}
 	}
 	return exitStatus(cmd), nil
+}
+
+func pidsNote(pids []int) string {
+	if len(pids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("，已找到但未確認清掉：pid %v", pids)
+}
+
+// newCleanupMark is the mark of a run that has none (it is not recorded) and shares the caller's process group: its leftovers are
+// found by this alone.
+func newCleanupMark() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return "unrecorded-" + hex.EncodeToString(b)
 }
 
 // markOf is the job id the command was marked with (WWD_JOB), "" when it has none.
