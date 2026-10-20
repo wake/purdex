@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { poolCellModel, matchPoolHost, unlistedState, fleetViewOfPoolHost } from './fleet-bridge'
+import { hostExtraOf } from './host-extra'
 import { poolHostState } from './host-state'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
@@ -82,27 +83,16 @@ describe('poolCellModel — live', () => {
     expect(m.pool?.load).toBeNull()
   })
 
-  it('worker, headroom, sessions room, owner and exceptions are carried', () => {
-    const p = model(poolHost())!.pool!
-    expect(p.worker).toEqual({ enabled: true, slots: { heavy: 1, light: 2 }, running: { heavy: 0, light: 1 } })
-    expect(p.headroom).toEqual({ heavy: 1, light: 2 })
-    expect(p.sessionsRoom).toBe(2)
-    expect(p.owner).toEqual({ active: true, idle_s: 42, reason: 'hid' })
-  })
-
-  it('reasons are carried only when the daemon sent them', () => {
-    expect(model(poolHost())!.pool!.reasons).toBeNull()
-    expect(model(poolHost({ headroom_reasons: { heavy: ['gate_full'], light: [] } }))!.pool!.reasons).toEqual({ heavy: ['gate_full'], light: [] })
+  it('the pool part is what hostExtraOf says (worker, headroom, owner, zone, PSI: see host-extra.test.ts)', () => {
+    const ph = poolHost({ facts: linux })
+    const st = poolHostState(ph, null, NOW)
+    expect(model(ph).pool).toEqual(hostExtraOf(st, ph))
   })
 
   it('the zone unknown is kept for the cell, whatever the placeholder in the readings', () => {
     const m = model(poolHost({ facts: linux }), fleet())
+    expect(m.view.fast!.zone).toBe('normal')
     expect(m.pool?.zone).toBe('unknown')
-  })
-
-  it('Linux: PSI some10 / full10; macOS has none', () => {
-    expect(model(poolHost({ facts: linux }))!.pool!.psi).toEqual({ some10: 0.5, full10: 0 })
-    expect(model(poolHost())!.pool!.psi).toBeNull()
   })
 
   it('the fullest disk gives the disk reading', () => {
@@ -122,27 +112,10 @@ describe('poolCellModel — a host that is not ok (no fleet fallback, MON-1d)', 
     expect(m.view).not.toBe(f)
   })
 
-  it.each(['wwd_down', 'host_down', 'unknown'] as const)('%s: the pool part says the state, what is unknown, the check time and the last facts time', (liveness) => {
-    const m = model(peerDown(liveness), fleet(), NOW - 90_000)
-    expect(m.pool).toMatchObject({
-      state: liveness, zone: null, worker: null, headroom: null, owner: null, psi: null, load: null, reasons: null, sessionsRoom: null,
-      checkedAt: NOW - 3000, lastFactsAt: NOW - 90_000, stalled: false,
-    })
-  })
-
-  it('stalled: wwd answers (ok) but the facts are old — unknown with stalled and the time the readings stopped', () => {
-    const old = poolHost({ liveness: 'ok', liveness_at: NOW - 3000, facts: { ...darwin, at: NOW - 60_000 } })
-    expect(model(old, fleet(), NOW - 60_000).pool).toMatchObject({ state: 'unknown', stalled: true, lastFactsAt: NOW - 60_000, checkedAt: NOW - 3000 })
-  })
-
   it('a host the pool does not list is unknown, not read from the fleet (even when the fleet says ok)', () => {
     const m = model(null, fleet(), null)
     expect(m.view).toMatchObject({ status: 'offline', fast: null })
     expect(m.pool).toMatchObject({ state: 'unknown', checkedAt: null, stalled: false, lastFactsAt: null })
-  })
-
-  it('an ok host has no check time and is not stalled', () => {
-    expect(model(poolHost())!.pool).toMatchObject({ checkedAt: null, stalled: false })
   })
 })
 

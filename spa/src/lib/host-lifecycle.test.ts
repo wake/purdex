@@ -1500,7 +1500,8 @@ describe('host delete cascade — parked worlds', () => {
   /** A slave `on` on screen (its tab is live), the master and the slave `off` parked — every world has a tab on A and one on B. */
   function threeWorlds() {
     const live = { a: makeSessionTab(HOST_A, 'live-a'), b: makeSessionTab(HOST_B, 'live-b') }
-    const master = { a: makeSessionTab(HOST_A, 'm-a'), b: makeSessionTab(HOST_B, 'm-b') }
+    // A tab id is random base36, so now and then an all-digit one: JS lists integer-like keys first. Pin one so the key order of a tabs record is never what a test leans on (#3792).
+    const master = { a: makeSessionTab(HOST_A, 'm-a'), b: { ...makeSessionTab(HOST_B, 'm-b'), id: '771785' } }
     const off = { a: makeSessionTab(HOST_A, 'o-a'), b: makeSessionTab(HOST_B, 'o-b') }
     useTabStore.getState().addTab(live.a)
     useTabStore.getState().addTab(live.b)
@@ -1528,7 +1529,8 @@ describe('host delete cascade — parked worlds', () => {
     expect(lp.parkedMaster!.tabs[master.b.id]).toBe(masterB)
     expect(contentIn(lp.slaves.off.world, off.b.id)).toMatchObject({ hostId: HOST_B })
     expect(JSON.stringify([lp.parkedMaster, lp.slaves])).not.toContain('terminated')
-    expect(Object.keys(lp.parkedMaster!.tabs)).toEqual([master.a.id, master.b.id])
+    // nothing lost, nothing added: as a set, since the key order of a record is not the order the tabs were made in
+    expect(Object.keys(lp.parkedMaster!.tabs).sort()).toEqual([master.a.id, master.b.id].sort())
     expect(lp.slaves.on.world).toBeNull()
   })
 

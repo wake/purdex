@@ -10,29 +10,10 @@ import { poolHostState, type PoolHostState } from './host-state'
 import { usePoolStore } from './store'
 import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostDaemons } from './daemons'
-import type { HeadroomReasons, PoolFacts, PoolHost, PoolLiveness, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
+import type { PoolFacts, PoolHost } from './types'
+import { hostExtraOf, type PoolCellExtra } from './host-extra'
 
-export interface PoolCellExtra {
-  state: PoolLiveness
-  /** The pool's zone word: `unknown` is its own (the fleet's zones have no such). Null while the host is not ok. */
-  zone: PoolZone | null
-  /** The daemon's load score and what drives it; null while it has no `pool.assess.v1` (the ring then keeps the fleet's score). */
-  load: PoolLoad | null
-  worker: { enabled: boolean; slots: Slots; running: Slots } | null
-  headroom: Slots | null
-  /** Why each class is at 0, in spec order; null while the daemon does not send them (0 is then shown without a reason). */
-  reasons: HeadroomReasons | null
-  sessionsRoom: number | null
-  owner: PoolOwner | null
-  /** Linux only. */
-  psi: { some10: number; full10: number } | null
-  /** When the probe last ran (`liveness_at`, ms); null for an ok host, the local host and a host the pool does not list. */
-  checkedAt: number | null
-  /** When the pool last read facts from the host (ms); null if it never did. */
-  lastFactsAt: number | null
-  /** wwd answers but its facts stopped (spec W3). */
-  stalled: boolean
-}
+export type { PoolCellExtra }
 
 export interface PoolCellModel {
   view: FleetHostView
@@ -90,19 +71,12 @@ export function poolCellModel(fleet: FleetHostView, st: PoolHostState | Unlisted
     const f = st.facts
     return {
       view: { ...fleet, status: 'ok', error: null, last_ok_at: f.at, fast: factsToFast(f, pool?.load?.score ?? fleet.fast?.load ?? 0), slow: null },
-      pool: {
-        state: 'ok', zone: f.derived.zone, load: pool?.load ?? null,
-        worker: { enabled: f.worker.enabled, slots: f.worker.slots, running: f.worker.running },
-        headroom: f.derived.headroom, reasons: pool?.headroom_reasons ?? null, sessionsRoom: f.derived.sessions_room, owner: f.owner,
-        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, checkedAt: null, lastFactsAt: f.at, stalled: false,
-      },
+      pool: hostExtraOf(st, pool),
     }
   }
-  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null }
-  const rest = 'pool' in st ? { checkedAt: st.checkedAt, stalled: st.stalled } : { checkedAt: null, stalled: false }
   return {
     view: { ...fleet, status: 'offline', fast: null, last_ok_at: st.lastFactsAt },
-    pool: { ...none, state: st.state, lastFactsAt: st.lastFactsAt, ...rest },
+    pool: hostExtraOf(st, pool),
   }
 }
 

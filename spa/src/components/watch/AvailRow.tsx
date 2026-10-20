@@ -2,7 +2,7 @@
 // sessions room, owner and the exceptions in force. A bordered info row, not a gauge: these are judgements, not readings.
 import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
+import type { PoolCellExtra } from '../../lib/pool/host-extra'
 import type { PoolException } from '../../lib/pool/types'
 import { headroomReasonLines, livenessWordOf, notOkLines } from '../../lib/pool/words'
 
