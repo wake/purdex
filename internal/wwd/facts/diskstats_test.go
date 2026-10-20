@@ -82,6 +82,24 @@ func TestPhysicalDiskIONoSysBlockIsAnError(t *testing.T) {
 	}
 }
 
+// A device entry that cannot be inspected for a reason other than "there is no device link" (a permission error in a restricted
+// container) is not a virtual device: the answer would be incomplete, so it is an error and disk_io is null (R1).
+func TestPhysicalDiskIOUnexpectedStatErrorIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode 000 directory")
+	}
+	root := fakeSysBlock(t)
+	locked := filepath.Join(root, "sda")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	all, _ := ParseDiskstats(diskstatsFixture)
+	if got, err := PhysicalDiskIO(all, root); err == nil {
+		t.Fatalf("a device that cannot be inspected must fail the read, got %+v", got)
+	}
+}
+
 // A host with no physical disk at all (a container, a VM with a virtual disk that has no device link) lists none: an empty answer, not
 // an error and not the volumes.
 func TestPhysicalDiskIONoPhysicalDisks(t *testing.T) {

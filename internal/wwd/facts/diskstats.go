@@ -1,11 +1,14 @@
 package facts
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // The Linux disk counters, as text and a directory, with no build tag so every platform's tests can feed them fixtures.
@@ -46,8 +49,13 @@ func PhysicalDiskIO(all []RawDiskIO, sysBlock string) ([]RawDiskIO, error) {
 	}
 	var out []RawDiskIO
 	for _, d := range all {
-		if _, err := os.Stat(filepath.Join(sysBlock, d.Device, "device")); err == nil {
+		switch _, err := os.Stat(filepath.Join(sysBlock, d.Device, "device")); {
+		case err == nil:
 			out = append(out, d)
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+			// no such entry (a partition) or no device link (loop, zram, dm, md): not a physical disk
+		default:
+			return nil, err // permission denied, I/O error: the list would be incomplete
 		}
 	}
 	return out, nil
