@@ -74,7 +74,7 @@ class = "release"
 func TestMatch_AFlagWithEqualsTakesNoValueWord(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, "[entry]\nmode = \"deny\"\n[tasks.t]\nrun = \"make test --mode=fast onlyfast\"\nargs = \"none\"\n")
-	assert.Equal(t, ActionRewrite, Match(root, []string{"make", "test", "onlyfast"}).Action, "the flag left out, its neighbour kept")
+	assert.Equal(t, ActionDeny, Match(root, []string{"make", "test", "onlyfast"}).Action, "a flag that may change what runs is not left out (#3814); its neighbour is not its value")
 	assert.Equal(t, ActionRewrite, Match(root, []string{"make", "test", "--mode=fast", "onlyfast"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"make", "test"}).Action, "the plain word is part of the task")
 }
@@ -145,9 +145,9 @@ func TestMatch_ALinkedTaskDirectoryIsNotMatched(t *testing.T) {
 func TestMatch_ADottedValueBelongsToItsFlag(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, "[entry]\nmode = \"deny\"\n[tasks.t]\nrun = \"vitest run --config ./vitest.config.ts --silent\"\nargs = \"none\"\n")
-	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run"}).Action, "the flag left out with its value")
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run"}).Action, "--config chooses what runs: it is not left out (#3814)")
 	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "--config", "./vitest.config.ts", "--silent"}).Action)
-	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "--config", "./vitest.config.ts"}).Action, "without --silent")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"vitest", "run", "--config", "./vitest.config.ts"}).Action, "without --silent, which only says how to run")
 	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--config", "./other.ts"}).Action, "the same flag with another value")
 }
 

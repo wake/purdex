@@ -59,8 +59,8 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 			i += len(group)
 		case i < len(cmd) && flagName(cmd[i]) == flagName(group[0]):
 			return nil, false // the same flag with another value
-		case selectsWhatRuns[flagName(group[0])]:
-			return nil, false // left out: the command would run more than the task does, and as the task it would run less
+		case !mayBeLeftOut(flagName(group[0]), tw, owned):
+			return nil, false // left out: the command would run more than the task does (or otherwise than it), and as the task it would not
 		}
 		k = j
 	}
@@ -100,10 +100,36 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 	return out, true
 }
 
-// selectsWhatRuns are the flags that choose which tests a command runs. Unlike `-p 3` or `-timeout 20m`, which only say how, leaving one out
-// of the command is not the same command: `go test -tags e2e ./cmd/wwd/` runs the whole package, and read as a task that has `-run TestE2E`
-// it would silently run only that (the task's flags are all that run once the command is a task).
-var selectsWhatRuns = map[string]bool{"-run": true, "-skip": true, "-tags": true, "-short": true, "-bench": true, "-fuzz": true}
+// mayBeLeftOut says whether a flag of the task's command may be missing from the typed command and the typed command still be the task. tw is
+// the task's own words (its tool is the first one).
+//
+// A flag the task has and the user did not type changes what runs, unless it is known not to: `pnpm check` is not `pnpm check --fast
+// --affected origin/main`, and `go test -tags e2e ./cmd/wwd/` is not the task that has `-run TestE2E` (as the task it would silently run only
+// that). So the rule is the one way round: only a flag that says how to run, and not what, may be left out; any other flag of the task, a
+// filter, a mode, a narrowing, is the command's to type, and without it the command is another one (it runs as typed, or as a task without
+// the flag). A list of the flags that narrow was open the other way: every narrowing flag nobody listed was left out silently (#3814).
+//
+// What a flag means is the tool's: `-p` is the parallelism of `go test` and a package of cargo, `--run` is vitest's single run and a filter
+// elsewhere. So the flags that say how are the known ones of the known tools (go test, vitest), and a task of any other tool has none: all its
+// flags are the command's to type. The report file the worker writes (`{report}`, `{junit}`) is any tool's: a caller does not type it.
+func mayBeLeftOut(name string, tw, owned []string) bool {
+	for _, o := range owned {
+		if flagName(o) == name {
+			return true
+		}
+	}
+	switch {
+	case len(tw) >= 2 && tw[0] == "go" && tw[1] == "test":
+		return runFlagsAlone[name] || runFlagsValue[name]
+	case len(tw) >= 1 && tw[0] == "vitest":
+		return vitestHowFlags[name]
+	}
+	return false
+}
+
+// vitestHowFlags are the flags of vitest that only say how to run or how to report: the reporter, the number of workers, the single run of a
+// watcher (`vitest related --run`), quiet output. The output file is the worker's own (also in the task's owned flags).
+var vitestHowFlags = map[string]bool{"--reporter": true, "--outputFile": true, "--maxWorkers": true, "--run": true, "--silent": true}
 
 // Recursive says whether a package argument is a pattern that expands to many packages (`./internal/...`, `...`).
 func Recursive(a string) bool { return strings.Contains(a, "...") }
