@@ -3,10 +3,13 @@ package loop
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 )
 
 // No room in the ledger, no claim: the queue is not touched, and nothing is left booked.
@@ -72,4 +75,32 @@ func TestAJobIsClaimedWithoutAnyGateToAsk(t *testing.T) {
 	r := newRig(t, c)
 	r.round()
 	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+}
+
+// WWD-9 W3: a quarantined job's command may still run, and the pdx gate no longer counts it. The worker does: it holds one heavy slot
+// until the sweep proves the unit gone.
+func TestAQuarantinedJobStillTakesItsHeavySlot(t *testing.T) {
+	c := newConn("mlab", qjob("free", wire.ClassDev, time.Minute))
+	q := newQRig(t, c)
+	q.st.Slots.Heavy = 1
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := q.loop.Running(); n != 1 {
+		t.Fatalf("Running %d, want the quarantined job counted", n)
+	}
+	q.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v with the only heavy slot taken by a quarantined job", claims)
+	}
+	q.units.mu.Lock()
+	q.units.gone["wwd-old"] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	if n := q.loop.Running(); n != 0 {
+		t.Fatalf("Running %d after the quarantine cleared", n)
+	}
+	time.Sleep(2 * unit)
+	q.round()
+	waitFor(t, "the claim", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
 }
