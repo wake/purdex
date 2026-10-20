@@ -199,7 +199,7 @@ func run(cfgPath string) error {
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
 		OwnerRule: ownerRule, State: state, Minutes: st,
-		// the proto 2 fields (decompress_rate, queue) are written only while every peer is reachable and reports proto >= 2 (spec §13.1)
+		// the proto 2 fields (decompress_rate, queue) are written only while every peer reports proto >= 2, an unreachable one by its last known info (spec §13.1)
 		SignalsOpen:   func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
 		Queued:        func() (int, error) { return q.CountQueued(ctx) },
 		GateHeavyFull: hostGate.HeavyFull,
