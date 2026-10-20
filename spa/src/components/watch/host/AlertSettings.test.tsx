@@ -2,7 +2,8 @@
 // "unreachable" switches have no API yet, so they are neither on nor off.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, within, act } from '@testing-library/react'
-import { AlertSettings, ALERT_RULES } from './AlertSettings'
+import { AlertSettings } from './AlertSettings'
+import { ALERT_RULES } from '../../../lib/pool/alert-rules'
 import { usePoolStore } from '../../../lib/pool/store'
 import { parseFacts, parseHostsAnswer } from '../../../lib/pool/parse'
 import type { PoolHost } from '../../../lib/pool/types'

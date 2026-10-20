@@ -3,31 +3,11 @@
 // until A's settings API (S9) exists. When the thresholds can be read per host, this becomes a read of each host's own values.
 import { LinkBreak, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { ALERT_RULES, OBSERVE_RULES, type AlertRule } from '../../../lib/pool/alert-rules'
 import { usePoolStore } from '../../../lib/pool/store'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { Section } from '../../hosts/form-fields'
 import { SettingItem } from '../../settings/SettingItem'
-
-export interface AlertRule {
-  id: string
-  /** `push` goes to the phone; `digest` is only in the 事件 tab and the summary. */
-  level: 'push' | 'digest'
-  /** Only a host that reports PSI has this rule (the mserv service rule). */
-  needsPsi?: boolean
-}
-
-// Defaults of wwd (internal/wwd/advisor/rules.go:12-25, :130-131; rules_mem.go:16-17, :110-112; rules_mserv.go:15-17). The watch-level rules S3-2 added (`pressure_watch`, `pressure_danger`, `swap_growth`) are not alerts.
-export const ALERT_RULES: readonly AlertRule[] = [
-  { id: 'disk_low', level: 'push' },
-  { id: 'disk_trend', level: 'digest' },
-  { id: 'pressure_sustained', level: 'push' },
-  { id: 'mem_thrash', level: 'digest' },
-  { id: 'daemon_big', level: 'digest' },
-  { id: 'wwd_restart', level: 'push' },
-  { id: 'mserv_service', level: 'push', needsPsi: true },
-]
-// `[observe] min_cpu_seconds / min_mem_mb` (internal/wwd/daemon/config.go:148-149).
-const OBSERVE = ['observe_cpu', 'observe_mem'] as const
 
 const INPUT = 'w-96 px-2 py-1 rounded border border-border-default bg-surface-primary text-xs text-text-primary disabled:opacity-50'
 
@@ -68,7 +48,7 @@ export function AlertSettings({ host }: { host: MonitorHost }) {
         {ALERT_RULES.filter((r) => !r.needsPsi || hasPsi).map((r) => <RuleRow key={r.id} id={r.id} level={r.level} />)}
         <Unreachable which="wwd" />
         <Unreachable which="host" />
-        {OBSERVE.map((id) => <RuleRow key={id} id={id} />)}
+        {OBSERVE_RULES.map((id) => <RuleRow key={id} id={id} />)}
       </div>
     </Section>
   )
