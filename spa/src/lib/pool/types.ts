@@ -89,5 +89,14 @@ export interface SeriesPoint {
   page_out_rate: number | null
   disk_max_used_pct: number | null
   headroom: Slots
+  // G-1 (wwd host-metrics spec §2.3). Each is absent when the daemon does not send it or it does not parse; null and absent mean the same.
+  load1?: number
+  load5?: number
+  swap_used_mb?: number
+  swap_out_rate?: number
+  worker_running?: Slots
+  queue_queued?: number
+  disks?: SeriesDisk[]
 }
+export interface SeriesDisk { mount: string; used_pct: number; free_gb: number }
 export interface PoolSeries { step: string; points: SeriesPoint[]; truncated: boolean }

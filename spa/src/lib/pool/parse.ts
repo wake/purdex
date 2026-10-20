@@ -3,7 +3,7 @@
 import {
   LIVENESS, ZONES,
   type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolFactsHistory, type PoolHost, type PoolLiveness, type PoolLoad,
-  type PoolOwner, type PoolProc, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesPoint, type Slots,
+  type PoolOwner, type PoolProc, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesDisk, type SeriesPoint, type Slots,
 } from './types'
 
 type Rec = Record<string, unknown>
@@ -178,10 +178,20 @@ function point(p: unknown): SeriesPoint | null {
   const at = time(p.at)
   const headroom = slots(p.headroom)
   if (at === null || !num(p.cpu_idle_pct) || !num(p.mem_available_mb) || !headroom) return null
-  return {
+  const out: SeriesPoint = {
     at, zone: zoneOf(p.zone), cpu_idle_pct: p.cpu_idle_pct, mem_available_mb: p.mem_available_mb,
     pressure: num(p.pressure) ? p.pressure : 0, page_out_rate: numOrNull(p.page_out_rate), disk_max_used_pct: numOrNull(p.disk_max_used_pct), headroom,
   }
+  // G-1: a field that is not there or does not parse is left out, the point stays.
+  if (num(p.load1)) out.load1 = p.load1
+  if (num(p.load5)) out.load5 = p.load5
+  if (num(p.swap_used_mb)) out.swap_used_mb = p.swap_used_mb
+  if (num(p.swap_out_rate)) out.swap_out_rate = p.swap_out_rate
+  const running = slots(p.worker_running)
+  if (running) out.worker_running = running
+  if (num(p.queue_queued)) out.queue_queued = p.queue_queued
+  if (Array.isArray(p.disks)) out.disks = p.disks.flatMap((d): SeriesDisk[] => (isRec(d) && str(d.mount) && num(d.used_pct) && num(d.free_gb) ? [{ mount: d.mount, used_pct: d.used_pct, free_gb: d.free_gb }] : []))
+  return out
 }
 
 /** `GET /api/pool/facts/series`. */
