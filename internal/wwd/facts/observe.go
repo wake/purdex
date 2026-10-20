@@ -479,9 +479,9 @@ func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, 
 			cd.cpu += cpu / 100 * dt.Seconds()
 			cd.mem = max(cd.mem, mem)
 			cd.seen = t.sample
-			t.trimCandidates(tr) // after the charge, so a new program competes with what it has used
 		}
 	}
+	t.trimCandidates(tr) // once every program of this sample is charged and marked seen: a new one competes with what it has used
 	var best *candidate
 	for _, cd := range tr.cands {
 		if cd.signature != "unknown" && (best == nil || cd.heavier(best)) {

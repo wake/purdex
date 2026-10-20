@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -161,26 +162,26 @@ func TestTrackerBoundsTheCandidatesOfATree(t *testing.T) {
 func TestTrackerKeepsAddingUpARunningProgramBeyondTheCapOfEndedOnes(t *testing.T) {
 	h, tr := newHost(), newTracker()
 	h.add(200, 100, "zsh", ccRoot())
-	for i := 0; i < 17; i++ { // seventeen programs that stay, the first sixteen heavy in the first sample only
-		h.add(300+i, 200, "tool", []string{"tool", "w" + strings.Repeat("x", i)})
+	for i := 0; i < 40; i++ { // forty programs that stay, the first thirty-nine heavy in the first sample only
+		h.add(300+i, 200, "tool", []string{"tool", "w" + strconv.Itoa(i)})
 	}
 	for i := 0; i < 30; i++ {
-		for j := 0; j < 16; j++ {
+		for j := 0; j < 39; j++ {
 			h.rec(300 + j).CPUPct = 0
 			if i == 0 {
 				h.rec(300 + j).CPUPct = 100
 			}
 		}
-		h.rec(316).CPUPct = 50
+		h.rec(339).CPUPct = 50
 		step(tr, h, i)
 	}
 	h.remove(200)
-	for j := 0; j < 17; j++ {
+	for j := 0; j < 40; j++ {
 		h.remove(300 + j)
 	}
 	got := gone(t, tr, h, 30)
-	if want := "tool w" + strings.Repeat("x", 16); len(got) != 1 || got[0].Signature != want {
-		t.Fatalf("the seventeenth program adds up to the most: want %q, got %+v", want, got)
+	if want := "tool w39"; len(got) != 1 || got[0].Signature != want {
+		t.Fatalf("the last of forty programs adds up to the most: want %q, got %+v", want, got)
 	}
 }
 
