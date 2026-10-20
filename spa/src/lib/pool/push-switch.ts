@@ -80,8 +80,10 @@ async function writeOne(id: string, on: boolean): Promise<{ ok: boolean; error?:
 }
 
 // ── the queue of hosts that were offline when the switch was pressed ──
+// `queue` holds the value each host is to have (the last press wins). Every write to a host, from a press or from the queue, goes through `serial`, so two writes to one host never overlap and the older
+// never lands after the newer: a write always sends the value the queue holds when it STARTS.
 const queue = new Map<string, boolean>()
-const flushing = new Set<string>()
+const tails = new Map<string, Promise<unknown>>()
 let unsubscribe: (() => void) | null = null
 let snapshot: string[] = []
 const listeners = new Set<() => void>()
@@ -96,39 +98,47 @@ export const subscribePending = (l: () => void): (() => void) => { listeners.add
 function stopWhenEmpty(): void {
   if (queue.size === 0 && unsubscribe) { unsubscribe(); unsubscribe = null }
 }
-async function flush(): Promise<void> {
-  for (const [id, on] of [...queue]) {
-    if (!isConnected(id) || flushing.has(id)) continue
-    flushing.add(id)
-    let want = on
-    for (;;) {
-      const r = await writeOne(id, want)
-      const now = queue.get(id)
-      if (!r.ok) break // stays queued; the next connection change tries it again, not this loop
-      if (now === want) { queue.delete(id); changed(); break }
-      if (now === undefined) break
-      want = now // a newer press for this host landed while it was being written: send that one too
-    }
-    flushing.delete(id)
-  }
-  stopWhenEmpty()
+function keepWaiting(): void {
+  unsubscribe ??= useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime) flush() })
 }
-function enqueue(id: string, on: boolean): void {
-  queue.set(id, on)
-  changed()
-  unsubscribe ??= useHostStore.subscribe((s, prev) => { if (s.runtime !== prev.runtime) void flush() })
+/** One write at a time per host, in the order they were asked for. `fn` never rejects. */
+function serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const p = (tails.get(id) ?? Promise.resolve()).then(fn)
+  tails.set(id, p)
+  void p.finally(() => { if (tails.get(id) === p) tails.delete(id) })
+  return p
+}
+
+/**
+ * Write the value the queue holds for `id` now. A write that succeeds clears the entry unless a newer press replaced the value meanwhile (that press has its own write behind this one).
+ * One that fails because the host dropped goes back to waiting; one that fails while the host is still there is an error for a press, and stays queued for the queue's own retry (`byPress` false).
+ */
+async function run(id: string, byPress: boolean): Promise<PushResult> {
+  const want = queue.get(id)
+  if (want === undefined) return { hostConfigId: id, ok: true } // already applied by a write that ran before this one
+  const r = await writeOne(id, want)
+  if (r.ok) {
+    if (queue.get(id) === want) { queue.delete(id); changed(); stopWhenEmpty() }
+    return { hostConfigId: id, ok: true }
+  }
+  if (!isConnected(id)) { changed(); keepWaiting(); return { hostConfigId: id, ok: false, queued: true } }
+  if (byPress && queue.get(id) === want) { queue.delete(id); changed(); stopWhenEmpty() }
+  return { hostConfigId: id, ok: false, error: r.error }
+}
+/** Called when any connection changes: every waiting host that is connected is written once. A write that fails waits for the next change, it is not retried in a loop. */
+function flush(): void {
+  for (const id of [...queue.keys()]) if (isConnected(id)) void serial(id, () => run(id, false))
 }
 
 /** Write every host: connected ones now, one after another (a failure does not stop the next); offline ones go into the queue. */
 export async function writePushAll(on: boolean, hosts: readonly PushHost[]): Promise<PushResult[]> {
   const out: PushResult[] = []
   for (const h of hosts) {
+    const id = h.hostConfigId
+    queue.set(id, on) // the press replaces whatever was waiting for this host
     // The connection as it is now, not as it was when the switch was read.
-    if (!isConnected(h.hostConfigId)) { enqueue(h.hostConfigId, on); out.push({ hostConfigId: h.hostConfigId, ok: false, queued: true }); continue }
-    queue.delete(h.hostConfigId) // a press that reaches a connected host replaces what was waiting for it
-    if (queue.size === 0) stopWhenEmpty()
-    const r = await writeOne(h.hostConfigId, on)
-    out.push({ hostConfigId: h.hostConfigId, ...r })
+    if (!isConnected(id)) { changed(); keepWaiting(); out.push({ hostConfigId: id, ok: false, queued: true }); continue }
+    out.push(await serial(id, () => run(id, true)))
   }
   changed()
   return out
@@ -136,5 +146,5 @@ export async function writePushAll(on: boolean, hosts: readonly PushHost[]): Pro
 
 /** Tests only. */
 export function clearPushQueue(): void {
-  queue.clear(); flushing.clear(); stopWhenEmpty(); changed()
+  queue.clear(); tails.clear(); stopWhenEmpty(); changed()
 }

@@ -79,6 +79,50 @@ describe('the queue and the state of the connection now (codex R1)', () => {
   })
 })
 
+describe('one write at a time per host (codex attack)', () => {
+  it('a queued value being written when a newer press arrives: the older write ends first, the newer one is sent after it, and the last value is the newer', async () => {
+    setRuntime({ A: 'connected', B: 'disconnected' })
+    await writePushAll(true, [host('B', { connected: false })]) // queued: true
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const puts: boolean[] = []
+    putHostConfig.mockImplementation(async (id: string, _c: string, items: { push: boolean }) => {
+      puts.push(items.push)
+      if (puts.length === 1) await gate // the first (queued) write is still in the air
+      server[id] = { push: items.push, revision: server[id].revision + 1 }
+      return {}
+    })
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(puts).toEqual([true]))
+    const press = writePushAll(false, [host('B')]) // the reader presses again meanwhile
+    await new Promise((r) => setTimeout(r, 20))
+    expect(puts).toEqual([true]) // not started yet: it waits behind the one in the air
+    release()
+    await press
+    expect(puts).toEqual([true, false])
+    expect(server.B.push).toBe(false)
+    expect(pendingPush()).toEqual([])
+  })
+
+  it('a host that drops after the connection was checked: the failed write goes back to the queue and is written when it returns', async () => {
+    fetchHostConfig.mockImplementationOnce(async () => { setRuntime({ A: 'connected', B: 'disconnected' }); throw new Error('network lost') })
+    const r = await writePushAll(true, [host('B')])
+    expect(r[0]).toMatchObject({ ok: false, queued: true })
+    expect(pendingPush()).toEqual(['B'])
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(putHostConfig).toHaveBeenCalledWith('B', 'wwd_alerts', { push: true }, 4))
+    await vi.waitFor(() => expect(pendingPush()).toEqual([]))
+  })
+
+  it('a failure while still connected is an error on the line, not a queued write', async () => {
+    putHostConfig.mockRejectedValue(new Error('500'))
+    const r = await writePushAll(true, [host('B')])
+    expect(r[0]).toMatchObject({ ok: false })
+    expect(r[0].queued).toBeUndefined()
+    expect(pendingPush()).toEqual([])
+  })
+})
+
 describe('readPush / pushStateOf', () => {
   it('both on, both off, one of each, one unreadable', async () => {
     server.A.push = true
