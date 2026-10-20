@@ -67,7 +67,7 @@ func linuxCPU() (RawCPU, error) {
 	if err != nil {
 		return RawCPU{}, err
 	}
-	busy, total, ncpu, err := ParseCPUStat(stat)
+	d, err := ParseCPUStatDetail(stat)
 	if err != nil {
 		return RawCPU{}, err
 	}
@@ -75,11 +75,13 @@ func linuxCPU() (RawCPU, error) {
 	if err != nil {
 		return RawCPU{}, err
 	}
-	l1, l5, err := ParseLoadavg(la)
+	l1, l5, l15, err := ParseLoadavg(la)
 	if err != nil {
 		return RawCPU{}, err
 	}
-	return RawCPU{Load1: l1, Load5: l5, NCPU: ncpu, Busy: busy, Total: total}, nil
+	// Kinds stay nil: Linux does not say which cores are performance and which efficiency
+	return RawCPU{Load1: l1, Load5: l5, Load15: &l15, NCPU: len(d.Cores), Busy: d.All.Total - d.All.Idle, Total: d.All.Total,
+		User: d.All.User, System: d.All.System, HaveSplit: true, Cores: d.Cores}, nil
 }
 
 func linuxMem() (RawMem, error) {

@@ -52,7 +52,7 @@ func TestParseCPUStat(t *testing.T) {
 }
 
 func TestParseLoadavgAndVmstat(t *testing.T) {
-	l1, l5, err := ParseLoadavg("0.07 0.10 0.05 1/200 1234\n")
+	l1, l5, _, err := ParseLoadavg("0.07 0.10 0.05 1/200 1234\n")
 	if err != nil || l1 != 0.07 || l5 != 0.10 {
 		t.Errorf("%v %v %v", l1, l5, err)
 	}

@@ -20,6 +20,20 @@ type RawCPU struct {
 	Load1, Load5 float64
 	NCPU         int
 	Busy, Total  uint64
+	// Load15 is nil where the platform did not give it.
+	Load15 *float64
+	// User (user + nice) and System (system; on Linux also irq and softirq) are the same ticks as Busy and Total, split; HaveSplit
+	// says they were read. Cores are the per-core ticks in core order (nil: not read). Kinds is each core's kind, "p", "e" or ""
+	// (unknown); it is nil, or the same length as Cores.
+	User, System uint64
+	HaveSplit    bool
+	Cores        []RawCore
+	Kinds        []string
+}
+
+// RawCore is one core's ticks since boot: User and System as in RawCPU, Idle (on Linux with iowait), and Total of all of them.
+type RawCore struct {
+	User, System, Idle, Total uint64
 }
 
 // RawMem is one reading of memory. Free and Inactive are page counts;
@@ -61,12 +75,58 @@ type RawDisk struct {
 // idle share is that since boot.
 func BuildCPU(prev *RawCPU, cur RawCPU) wire.CPU {
 	out := wire.CPU{NCPU: cur.NCPU, Load1: cur.Load1, Load5: cur.Load5, IdlePct: 100}
+	if cur.Load15 != nil {
+		v := *cur.Load15
+		out.Load15 = &v
+	}
 	busy, total := cur.Busy, cur.Total
 	if prev != nil && cur.Total > prev.Total && cur.Busy >= prev.Busy {
 		busy, total = cur.Busy-prev.Busy, cur.Total-prev.Total
 	}
 	if total > 0 {
 		out.IdlePct = clamp(100*(1-float64(busy)/float64(total)), 0, 100)
+	}
+	if cur.HaveSplit && prev != nil && prev.HaveSplit {
+		out.UserPct, out.SystemPct = tickShares(prev.User, prev.System, prev.Total, cur.User, cur.System, cur.Total)
+	}
+	if cur.Cores != nil {
+		out.Cores = buildCores(prev, cur)
+	}
+	return out
+}
+
+// tickShares is the share of the time between two readings spent in user and in system, 0 to 100. Both are nil when the readings
+// cannot be compared: no time passed, or a counter went backwards (a restart of the counters, not a negative share).
+func tickShares(pu, ps, pt, cu, cs, ct uint64) (user, system *float64) {
+	if ct <= pt || cu < pu || cs < ps {
+		return nil, nil
+	}
+	dt := float64(ct - pt)
+	u, s := clamp(100*float64(cu-pu)/dt, 0, 100), clamp(100*float64(cs-ps)/dt, 0, 100)
+	return &u, &s
+}
+
+// buildCores lists every core of cur. A core's shares are measured against the same core in prev, so they are nil when the number
+// of cores changed (the index no longer names the same core) or when that core's own counters cannot be compared.
+func buildCores(prev *RawCPU, cur RawCPU) []wire.Core {
+	out := make([]wire.Core, len(cur.Cores))
+	kinds := len(cur.Kinds) == len(cur.Cores) // a list that does not fit the cores is not trusted for any of them
+	for i, c := range cur.Cores {
+		if kinds && (cur.Kinds[i] == wire.CoreKindP || cur.Kinds[i] == wire.CoreKindE) {
+			k := cur.Kinds[i]
+			out[i].Kind = &k
+		}
+		if prev == nil || len(prev.Cores) != len(cur.Cores) {
+			continue
+		}
+		p := prev.Cores[i]
+		if c.Total <= p.Total || c.Idle < p.Idle {
+			continue
+		}
+		if u, s := tickShares(p.User, p.System, p.Total, c.User, c.System, c.Total); u != nil {
+			idle := clamp(100*float64(c.Idle-p.Idle)/float64(c.Total-p.Total), 0, 100)
+			out[i].UserPct, out[i].SystemPct, out[i].IdlePct = u, s, &idle
+		}
 	}
 	return out
 }
