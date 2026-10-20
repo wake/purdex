@@ -42,8 +42,13 @@ type PoolPoller struct {
 	downSince []time.Time
 
 	// lastFile and last are the last known info of each peer kept in a file (pool_last.go); "" : not kept
-	lastFile string
-	last     map[string]lastKnownPeer
+	lastFile  string
+	last      map[string]lastKnownPeer
+	lastGen   int  // the number of the newest snapshot of last (under mu)
+	lastRetry bool // the last write failed: the next poll writes again (under mu)
+	saveLast  func(path string, b []byte) error
+	saveMu    sync.Mutex // one write of the file at a time, outside mu
+	savedGen  int        // the newest snapshot written (under saveMu)
 }
 
 // NewPoolPoller polls peers with the pool token. client may be nil.
@@ -104,6 +109,12 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	}
 	// facts may not exist yet (503 before the peer's first sample): keep what we had
 	facts, ferr := get[wire.Facts](ctx, p.client, p.peers[i], p.token, "/v1/facts")
+	var write func() // the file of last known infos, written after mu is released (deferred first, so it runs last)
+	defer func() {
+		if write != nil {
+			write()
+		}
+	}()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ferr == nil && (facts.HostID != info.HostID || facts.Alias != info.Alias) {
@@ -112,7 +123,7 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
 	p.downSince[i] = time.Time{}
-	p.rememberInfo(info)
+	write = p.rememberInfo(info)
 	switch {
 	case ferr == nil:
 		p.state[i].Facts = &facts
