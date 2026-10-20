@@ -11,6 +11,7 @@ import { usePoolStore } from '../../../lib/pool/store'
 import { useRunPool } from '../../../lib/pool/use-cell-models'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
+import { usePoolJobs } from '../../../lib/pool/pool-jobs'
 import { errorTextKey } from '../../../lib/pool/words'
 import { jobKey, readJobsMode, readSelectedJob, writeJobsMode, writeSelectedJob, type JobsMode } from '../../../lib/pool/jobs-view-memory'
 import { JobLanes } from './JobLanes'
@@ -35,7 +36,6 @@ export function JobsPane(_props: PaneRendererProps) {
   const now = useNowEverySecond()
   const hosts = usePoolStore((s) => s.hosts)
   const oldDaemon = usePoolStore((s) => s.oldDaemon)
-  const byOrigin = useJobsStore((s) => s.byOrigin)
   const errors = useJobsStore((s) => s.errors)
   // The tab outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
   const [mode, setModeState] = useState<JobsMode>(() => readJobsMode())
@@ -43,9 +43,9 @@ export function JobsPane(_props: PaneRendererProps) {
   const [selected, setSelectedState] = useState<string | null>(() => readSelectedJob())
   const select = (key: string | null) => { writeSelectedJob(key); setSelectedState(key) }
 
-  // The store keeps what it read; the pane shows the pool's hosts' jobs. A pool with no daemon at all shows none, and says so; one that could not be read for a moment (no hosts, not an old daemon) keeps what was read.
-  // `sourceHostId` is set by an answer, so an empty list with it is the pool saying it has no host.
+  // The store keeps what it read; the pane shows the pool's hosts' jobs (`poolJobsOf`: a pool that could not be read for a moment keeps what was read).
   const answered = usePoolStore((s) => s.sourceHostId !== null)
+  const jobs = usePoolJobs()
   const shown = useMemo((): ((origin: string) => boolean) => {
     if (hosts.length > 0 || answered) {
       const aliases = new Set(hosts.map((h) => h.alias))
@@ -53,7 +53,6 @@ export function JobsPane(_props: PaneRendererProps) {
     }
     return () => !oldDaemon
   }, [hosts, answered, oldDaemon])
-  const jobs = useMemo(() => Object.entries(byOrigin).filter(([origin]) => shown(origin)).flatMap(([, o]) => Object.values(o.jobs)), [byOrigin, shown])
   // The selected job as the store holds it now. One the store no longer has (it keeps the newest 200 ended ones) shows no detail; the memory keeps the choice, which is not an error.
   const open = useMemo(() => jobs.find((j) => jobKey(j.origin, j.id) === selected) ?? null, [jobs, selected])
   const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
