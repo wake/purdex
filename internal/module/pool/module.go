@@ -244,6 +244,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/exceptions", m.handleExceptions)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/alerts", m.handleAlerts)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/observations", m.handleObservations)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/undeclared", m.handleUndeclared)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
 	mux.HandleFunc("GET /api/pool/facts/series", m.handleSeries)
 	m.registerControl(mux)
