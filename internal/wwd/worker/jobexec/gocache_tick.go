@@ -99,31 +99,45 @@ func (e *Exec) tickGoCaches(ctx context.Context) {
 	}
 }
 
+// agePassDue says whether the age pass of the cache in dir is due (at most once an hour, shared with the job's pass), and gives its state.
+func (e *Exec) agePassDue(dir string, now time.Time) (*goCacheDir, bool) {
+	s := &e.goCache
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dirs == nil {
+		s.dirs = map[string]*goCacheDir{}
+	}
+	st := s.dirs[dir]
+	if st == nil {
+		st = &goCacheDir{}
+		s.dirs[dir] = st
+	}
+	el := now.Sub(st.pruneAt)
+	return st, st.pruneAt.IsZero() || el < 0 || el >= goCachePruneEvery
+}
+
+// agePassDone records that an age pass went through: only a pass that did is the time of the last one, which the job's pass shares.
+func (e *Exec) agePassDone(st *goCacheDir, now time.Time) {
+	e.goCache.mu.Lock()
+	st.pruneAt = now
+	e.goCache.mu.Unlock()
+}
+
 // tickGoCache is the age pass (on the hour) and the trim of one cache.
 func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) {
-	s := &e.goCache
 	files, total, err := scanGoCache(ctx, dir)
 	if err != nil {
 		if errors.Is(err, errOverBound) {
-			e.pruneAgedWithoutList(ctx, dir, now)
+			if st, due := e.agePassDue(dir, now); due && e.pruneAgedWithoutList(ctx, dir, now) {
+				e.agePassDone(st, now)
+			}
 		}
 		return
 	}
 	before := total
 	removed := 0
 
-	s.mu.Lock()
-	st := s.dirs[dir]
-	if st == nil {
-		if s.dirs == nil {
-			s.dirs = map[string]*goCacheDir{}
-		}
-		st = &goCacheDir{}
-		s.dirs[dir] = st
-	}
-	el := now.Sub(st.pruneAt)
-	agePass := st.pruneAt.IsZero() || el < 0 || el >= goCachePruneEvery
-	s.mu.Unlock()
+	st, agePass := e.agePassDue(dir, now)
 	if agePass { // as in a job's pass: an entry unused for longer than the limit goes, free or held
 		cutoff := now.Add(-e.goCachePrune() - goCacheMtimeStep)
 		var kept []goCacheFile
@@ -143,10 +157,7 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) {
 			}
 		}
 		files = kept
-		// the pass went through (a pass that ctx ended returned above): only then is it the time of the last one, which a job's pass shares
-		s.mu.Lock()
-		st.pruneAt = now
-		s.mu.Unlock()
+		e.agePassDone(st, now) // the pass went through (a pass that ctx ended returned above)
 	}
 
 	max := e.goCacheMax()
@@ -216,11 +227,12 @@ func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile
 // pruneAgedWithoutList is the timer's way with a cache of more entries than scanGoCache will list (storeScanLimit): the oldest-first trim needs
 // the list, but the age rule does not, so the walk removes the entries unused for longer than the limit as it goes. A host that takes few jobs
 // writes nothing while it is idle, so what is left ages out and the cache comes back under the limit of the listing; a job that starts finds a
-// cache that is over the bound and empties it when it is free (boundGoCache), which the timer never does.
-func (e *Exec) pruneAgedWithoutList(ctx context.Context, dir string, now time.Time) {
+// cache that is over the bound and empties it when it is free (boundGoCache), which the timer never does. It says whether the walk went through
+// (the hour of the age pass counts from one that did, as in the listed case).
+func (e *Exec) pruneAgedWithoutList(ctx context.Context, dir string, now time.Time) bool {
 	cutoff := now.Add(-e.goCachePrune() - goCacheMtimeStep)
 	removed, freed := 0, int64(0)
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
@@ -247,4 +259,5 @@ func (e *Exec) pruneAgedWithoutList(ctx context.Context, dir string, now time.Ti
 		return nil
 	})
 	log.Printf("jobexec: the build cache %s has more entries than can be listed: the timer removed %d entries unused for longer than the limit (%d MB freed), the rest is for the next job that starts", dir, removed, freed>>20)
+	return walkErr == nil // a walk that ctx ended is not a pass that went through
 }

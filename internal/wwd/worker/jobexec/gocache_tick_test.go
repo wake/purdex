@@ -251,3 +251,56 @@ func TestAnAgePassTheContextEndedHalfWayIsNotTheLastOne(t *testing.T) {
 	defer r.e.goCache.mu.Unlock()
 	assert.False(t, r.e.goCache.dirs[r.cache].pruneAt.IsZero())
 }
+
+// The age pass of a cache too big to list is on the same hour as any other (codex critic): once it went through, the next ticks within the
+// hour do not walk the whole directory again, and a walk the context ended can be tried again.
+func TestTheAgePassOfACacheTooBigToListIsOnceAnHour(t *testing.T) {
+	r := newTickRig(t, 1)
+	old := storeScanLimit
+	storeScanLimit = 100
+	t.Cleanup(func() { storeScanLimit = old })
+	now := time.Now()
+	r.e.goCache.now = func() time.Time { return now }
+	first := r.fill(t, "first", 150, 100, 48*time.Hour)
+	r.e.tickGoCaches(context.Background())
+	for _, p := range first {
+		assert.NoFileExists(t, p)
+	}
+
+	second := r.fill(t, "second", 150, 100, 48*time.Hour) // aged again, within the hour
+	now = now.Add(goCacheTickEvery)
+	r.e.tickGoCaches(context.Background())
+	for _, p := range second {
+		assert.FileExists(t, p, "the hour of the age pass has not passed: no second walk")
+	}
+
+	now = now.Add(goCachePruneEvery)
+	r.e.tickGoCaches(context.Background())
+	for _, p := range second {
+		assert.NoFileExists(t, p, "and after the hour it is walked again")
+	}
+}
+
+func TestAWalkOfACacheTooBigToListThatTheContextEndedIsNotTheLastPass(t *testing.T) {
+	r := newTickRig(t, 1)
+	old := storeScanLimit
+	storeScanLimit = 100
+	t.Cleanup(func() { storeScanLimit = old })
+	r.fill(t, "aged", 300, 100, 48*time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	n := 0
+	oldRm := goCacheRemoveFile
+	goCacheRemoveFile = func(p string) error {
+		if n++; n == 5 {
+			cancel()
+		}
+		return os.Remove(p)
+	}
+	t.Cleanup(func() { goCacheRemoveFile = oldRm })
+	r.e.tickGoCaches(ctx)
+	r.e.goCache.mu.Lock()
+	st := r.e.goCache.dirs[r.cache]
+	r.e.goCache.mu.Unlock()
+	require.NotNil(t, st)
+	assert.True(t, st.pruneAt.IsZero(), "a walk the context ended is not the last pass")
+}
