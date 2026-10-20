@@ -155,6 +155,69 @@ cacheable = false
 timeout   = "30m"
 summary   = "go-json"
 
+# wwd also runs on mserv (Linux). The packages that build and pass there, one by one (the others need a Mac); the tree is the cwd, so the tests
+# that read the repo's own files run too. Only a host with os:linux takes these (mserv's worker takes a job only when its labels name its os:).
+[tasks.wwd-linux]
+run       = "go test -json ./internal/wwd/facts/ ./internal/wwd/derived/ ./internal/wwd/labels/ ./internal/wwd/clones/ ./internal/wwd/run/ ./internal/wwd/jobdb/ ./internal/wwd/store/ ./internal/wwd/queue/ ./internal/wwd/snapshot/ ./internal/wwd/worker/quarantine/ ./internal/wwd/worker/jobexec/ ./internal/wwd/worker/runner/ ./internal/wwd/worker/loop/ ./internal/wwd/worker/report/ ./internal/wwd/worker/pick/ ./internal/wwd/gateheld/ ./internal/wwd/daemon/ ./internal/hostmem/ ./internal/wwd/orphans/ ./internal/wwd/deps/ ./internal/wwd/install/ ./internal/wwd/slicecfg/ ./internal/wwd/qualify/ ./internal/wwd/manifest/ ./internal/wwd/wire/ ./internal/wwd/client/ ./internal/wwd/jobscmd/ ./internal/wwd/manifestref/ ./internal/wwd/advisor/"
+args      = "none"
+class     = "release"
+labels    = ["os:linux", "repo:purdex", "tool:go1.26"]
+deps      = ["go.sum"]
+cacheable = true
+timeout   = "30m"
+summary   = "go-json"
+
+# The build-tagged tests of mserv (sandbox, deps, the per-job database) need sudo and a real MySQL: vet only, as the release gate always did.
+[tasks.wwd-linux-vet]
+run       = "go vet -tags mserv,e2e ./internal/wwd/run/ ./internal/wwd/worker/jobexec/ ./cmd/wwd/"
+args      = "none"
+class     = "release"
+labels    = ["os:linux", "repo:purdex", "tool:go1.26"]
+deps      = ["go.sum"]
+cacheable = true
+timeout   = "30m"
+
+# The tests of the scripts, one job each (a `run` has no shell, so they cannot be one task). They start processes: never from a stored result.
+[tasks.wwd-scripts-mysql]
+run       = "sh scripts/wwd-mysql-setup_test.sh"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin"]
+cacheable = false
+timeout   = "10m"
+
+[tasks.wwd-scripts-c2]
+run       = "sh scripts/wwd-c2-matrix_test.sh"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin"]
+cacheable = false
+timeout   = "10m"
+
+[tasks.wwd-scripts-c2-stub]
+run       = "sh scripts/wwd-c2-matrix_stub_test.sh"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin"]
+cacheable = false
+timeout   = "10m"
+
+[tasks.wwd-scripts-deploy]
+run       = "sh scripts/wwd-deploy_test.sh"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin"]
+cacheable = false
+timeout   = "10m"
+
+[tasks.wwd-scripts-gate]
+run       = "sh scripts/release-gate_test.sh"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin"]
+cacheable = false
+timeout   = "10m"
+
 [tasks.mod-all]
 run       = "go test -json ./cmd/pdx/..."
 args      = "none"

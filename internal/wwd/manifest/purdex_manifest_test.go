@@ -26,6 +26,9 @@ func macOnlyViolations(m *Manifest, aClass map[string]bool) []string {
 		if slices.Contains(task.Labels, "os:darwin") {
 			continue
 		}
+		if slices.Contains(task.Labels, "os:linux") {
+			continue // a Linux task: a Mac's worker never holds os:linux, so it cannot be given the job (it runs on mserv)
+		}
 		if aClass[name] && task.Qualify != nil && slices.Contains(task.Labels, "task:purdex/"+name) {
 			continue
 		}
@@ -53,6 +56,7 @@ func TestMacOnlyViolationsRules(t *testing.T) {
 	m := &Manifest{Tasks: map[string]*Task{
 		"mac":             {Labels: []string{"os:darwin", "repo:purdex"}},
 		"bare":            {},
+		"linux-only":      {Labels: []string{"os:linux", "repo:purdex"}},
 		"local-always":    {Local: LocalPolicy{Allowed: true, Max: -1}},
 		"local-capped":    {Local: LocalPolicy{Allowed: true, Max: 3}},
 		"a-with-earned":   {Labels: []string{"repo:purdex", "task:purdex/a-with-earned"}, Qualify: q},
@@ -79,7 +83,7 @@ const (
 // needs the Go of the repo's go.mod, and one that runs pnpm needs node and pnpm. goLabel is "tool:go<major>.<minor>".
 func toolNeeds(task *Task, goLabel string) []string {
 	var need []string
-	if strings.Contains(task.Run, "go test") || strings.HasPrefix(task.Run, "make lint") {
+	if strings.Contains(task.Run, "go test") || strings.Contains(task.Run, "go vet") || strings.HasPrefix(task.Run, "make lint") {
 		need = append(need, goLabel)
 	}
 	if strings.Contains(task.Run, "pnpm ") {

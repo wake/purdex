@@ -1,0 +1,128 @@
+#!/bin/sh
+# Test for scripts/release-gate.sh: the gate sends every release task for one commit, from a clean clone of the remote, and says in one table
+# what happened to each. The remote is a local repository and pdx is a stand-in that records how it is called.
+set -eu
+
+script_dir=$(cd "$(dirname "$0")" && pwd)
+gate="$script_dir/release-gate.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() { echo "FAIL: $1" >&2; exit 1; }
+has() { echo "$1" | grep -q -- "$2" || fail "$3: wanted '$2' in: $1"; }
+hasnt() { echo "$1" | grep -q -- "$2" && fail "$3: did not want '$2' in: $1" || true; }
+
+[ -f "$gate" ] || fail "$gate does not exist"
+command -v jq >/dev/null || { echo "ok (skipped: jq is not installed)"; exit 0; }
+
+g() { d=$1; shift; git -C "$d" -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@" >/dev/null 2>&1; }
+
+# a remote with one commit, and a second one for the "a new cut" case
+remote="$tmp/remote"
+git init -q -b main "$remote"
+echo one > "$remote/a.txt"
+g "$remote" add -A; g "$remote" commit -q -m one
+c1=$(git -C "$remote" rev-parse HEAD)
+
+# pdx stand-in: logs "<cwd> <args>", answers a JSON report per task; FAKE_RC_<task> (with dashes as _) sets the exit code, FAKE_CACHE names a
+# task answered from the cache, FAKE_NOREPORT names a task that prints nothing
+cat > "$tmp/pdx" <<'EOF'
+#!/bin/sh
+echo "$(pwd) $*" >> "$FAKE_LOG"
+[ "$1" = test ] || exit 9
+task=$2
+var=FAKE_RC_$(echo "$task" | tr '-' '_')
+rc=$(eval "echo \${$var:-0}")
+[ "${FAKE_NOREPORT:-}" = "$task" ] && exit 3
+cache=false; [ "${FAKE_CACHE:-}" = "$task" ] && cache=true
+state=succeeded; [ "$rc" != 0 ] && state=failed
+printf '{"id":"job-%s","task":"%s","state":"%s","exit":%s,"host":"air26","cache_hit":%s,"duration_s":12.7}\n' "$task" "$task" "$state" "$rc" "$cache"
+exit "$rc"
+EOF
+chmod +x "$tmp/pdx"
+
+clone="$tmp/gate-clone"
+run() { # run <args...>: the gate with the stand-in; sets out and rc
+	: > "$tmp/log"
+	set +e
+	out=$(FAKE_LOG="$tmp/log" sh "$gate" --pdx "$tmp/pdx" --clone "$clone" --remote "$remote" "$@" 2>&1)
+	rc=$?
+	set -e
+}
+ALL="go-all spa-full tsc-force e2e lint wwd-linux wwd-linux-vet wwd-scripts-mysql wwd-scripts-c2 wwd-scripts-c2-stub wwd-scripts-deploy wwd-scripts-gate"
+
+# 1. all pass: exit 0, every task sent from the clone at the commit, one row each
+export FAKE_CACHE=lint
+run "$c1"
+[ "$rc" = 0 ] || fail "all pass: exit $rc: $out"
+for t in $ALL; do
+	grep -q " test $t --json\$" "$tmp/log" || fail "task $t was not sent: $(cat "$tmp/log")"
+	has "$out" "$t" "table row of $t"
+done
+hasnt "$(cat "$tmp/log")" "mod-all" "mod-all is not sent without --mod"
+grep -q "^$clone test" "$tmp/log" || fail "pdx must run in the gate clone: $(cat "$tmp/log")"
+[ "$(git -C "$clone" rev-parse HEAD)" = "$c1" ] || fail "the clone is not at the commit"
+[ "$(git -C "$clone" remote get-url origin)" = "$remote" ] || fail "the clone's origin is not the remote"
+has "$out" "job-go-all" "the job id is in the table"
+has "$out" "air26" "the host is in the table"
+echo "$out" | grep "lint" | grep -q "cache" || fail "the cache hit of lint is not marked: $out"
+echo "$out" | grep "go-all" | grep -q "cache" && fail "go-all ran and must not be marked as cache: $out"
+has "$out" "12 passed" "the summary counts"
+has "$out" "1 from cache" "the summary counts the cache"
+unset FAKE_CACHE
+
+# 2. a task that fails: exit 1, marked
+export FAKE_RC_spa_full=1
+run "$c1"
+unset FAKE_RC_spa_full
+[ "$rc" = 1 ] || fail "a failed task: exit $rc"
+echo "$out" | grep "spa-full" | grep -q "FAIL" || fail "spa-full must be marked FAIL: $out"
+has "$out" "1 failed" "failure count"
+
+# 3. a task with no report (pdx died): a failure, not a pass
+export FAKE_NOREPORT=e2e
+run "$c1"
+unset FAKE_NOREPORT
+[ "$rc" = 1 ] || fail "no report: exit $rc"
+echo "$out" | grep "e2e" | grep -q "FAIL" || fail "a task with no report must be marked FAIL: $out"
+has "$out" "no report" "the reason"
+
+# 4. --skip: not sent, written as skipped (never as a pass); everything else passing is incomplete (3), a failure is still 1
+run --skip wwd-linux --skip wwd-linux-vet "$c1"
+[ "$rc" = 3 ] || fail "skips: exit $rc, want 3 (incomplete): $out"
+grep -q "wwd-linux" "$tmp/log" && fail "a skipped task was sent: $(cat "$tmp/log")"
+echo "$out" | grep "wwd-linux-vet" | grep -q "跳過" || fail "a skipped task must say 跳過: $out"
+has "$out" "10 passed" "skipped tasks are not counted as passed"
+has "$out" "2 skipped" "skip count"
+has "$out" "INCOMPLETE" "the table says the gate is not whole"
+export FAKE_RC_lint=1
+run --skip wwd-linux "$c1"
+unset FAKE_RC_lint
+[ "$rc" = 1 ] || fail "a failure beats a skip: exit $rc"
+run --skip no-such-task "$c1"
+[ "$rc" = 2 ] || fail "an unknown --skip task: exit $rc"
+
+# 5. --no-cache goes to every pdx test; --mod adds mod-all
+run --no-cache "$c1"
+[ "$(grep -c -- "--no-cache" "$tmp/log")" = 12 ] || fail "--no-cache on each of the 12 tasks: $(cat "$tmp/log")"
+run --mod "$c1"
+grep -q " test mod-all --json" "$tmp/log" || fail "--mod must send mod-all"
+
+# 6. a commit the remote does not have: nothing is sent, exit 2
+run 0123456789012345678901234567890123456789
+[ "$rc" = 2 ] || fail "unknown commit: exit $rc: $out"
+[ ! -s "$tmp/log" ] || fail "nothing may be sent for an unknown commit: $(cat "$tmp/log")"
+run
+[ "$rc" = 2 ] || fail "no commit given: exit $rc"
+
+# 7. a new cut: fetched, checked out, and leftovers of the earlier run are gone (a snapshot would carry them)
+echo two > "$remote/a.txt"; g "$remote" add -A; g "$remote" commit -q -m two
+c2=$(git -C "$remote" rev-parse HEAD)
+echo junk > "$clone/leftover.txt"
+mkdir -p "$clone/node_modules" && echo junk > "$clone/node_modules/x"
+run "$c2"
+[ "$rc" = 0 ] || fail "second cut: exit $rc: $out"
+[ "$(git -C "$clone" rev-parse HEAD)" = "$c2" ] || fail "the clone did not move to the new cut"
+[ ! -e "$clone/leftover.txt" ] && [ ! -e "$clone/node_modules" ] || fail "untracked leftovers must be removed before the snapshot"
+
+echo ok

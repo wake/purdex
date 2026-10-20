@@ -552,3 +552,42 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   waits in the background until the queue timeout. Purdex does not meet it: `purdex_manifest_test` makes every queued task carry `os:darwin` or its
   own `task:` label. When another repo does, the setting has to become a field of the host's info.
 * Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.
+
+## 14. The release gate (S2-b)
+
+The gate is `scripts/release-gate.sh <commit>`: every release task of `.wwd/tasks.toml` for that commit, through `pdx test`, and one table.
+
+```sh
+scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
+```
+
+* **The tree.** `pdx test` sends the working tree of the repository it runs in and has no option for a commit, so the gate keeps a clean clone of
+  its own, `~/.local/share/purdex-gate/clone`, whose `origin` is GitHub (`git@github.com:wake/purdex.git`, never the main checkout: its local `main` is
+  often behind the cut, and `--reference` would lean on its objects). Each run fetches, checks the commit out detached, and removes everything the
+  commit does not have (`clean -ffdx`: a snapshot carries untracked files). The commit has to be pushed.
+* **The tasks**, all sent at once, each by its own `pdx test <task> --json` that waits for its job (there is no `pdx jobs wait`, and `--json` has the
+  job id, the host and `cache_hit`): `go-all`, `spa-full`, `tsc-force`, `e2e`, `lint`, `wwd-linux`, `wwd-linux-vet`, and the scripts' own tests
+  (`wwd-scripts-mysql`, `-c2`, `-c2-stub`, `-deploy`, `-gate`). `--mod` adds `mod-all`: send it only when `cmd/pdx/plugin` changed.
+  `purdex_gate_test.go` keeps the script's list and the manifest in step.
+* **The table** has one row per task: pass or FAIL, the job's exit, the host it ran on, the job id, `ran` or `cache`, the seconds. The last line counts
+  them. A task that gave no report (pdx died, wwd was down) is a FAIL. Logs of each `pdx test` call are in `~/.local/share/purdex-gate/runs/`.
+* **The cache.** A result that was filed for the very same snapshot tree (the key is the whole tree, the task and its definition, and the host's
+  toolchain) answers at once and shows as `cache`: what was not touched keeps its last result. Only successes are filed. `--no-cache` runs everything
+  again.
+* **Exit**: 0 every task passed · 1 a task failed · 2 bad usage or the clone could not be made · 3 nothing failed, but a task was skipped.
+* **`--skip <task>`** (repeatable) leaves a task out, shows it as `跳過` and is never counted as a pass; the gate is then INCOMPLETE (3). Without
+  it, a task that no host can take ends with exit 5 and fails the gate. Until mserv is set up (below), `--skip wwd-linux --skip wwd-linux-vet`.
+* **`e2e` starts daemons**, and its labels (`os:darwin`, `tool:go1.26`) are met by mlab and air26 alike, so either may take it. To make it air26's:
+  put `host:air26` in its `labels` in the manifest (every wwd advertises `host:<alias>`; one line, merged like any change, and the job then waits for
+  air26 when it is busy), or for one run switch mlab's worker off (`pdx wwd worker off` on mlab) and on again after. Today nothing pins it.
+
+**mserv takes `wwd-linux` and `wwd-linux-vet`** once it is set up (§12 has the first half). Besides what §12 says, the Go that the tasks run:
+
+1. `~/.config/wwd/config.toml` on mserv: `[tools] extra_path` lists node and pnpm (§12) **and** `~/Assist/toolchains.noindex/go/bin`
+   (Go 1.26.0 is there; it is not on the default path), so the worker advertises `tool:go1.26`.
+2. The Go modules come from the worker, not the job (`deps = ["go.sum"]`): the worker runs `go mod download` outside the sandbox with `GOPRIVATE=lab.protype.tw`,
+   and the job runs offline. The private module (`lab.protype.tw/wake/nexen`) needs credentials for `lab.protype.tw` in the **worker's** environment on mserv;
+   without them the first job fails at the download. Check it with one `pdx test wwd-linux-vet` before the gate relies on it.
+3. The jobs run in `wwd.slice` (3 cores, 6 G of mserv's 4 cores and 15 GB). The old run kept to 2 cores and 4 G in `assist.slice`.
+4. `explicit_labels_only = true` stays: the tasks name `os:linux`, which is what the worker accepts. The worker goes on only after the manual `mserv-run.sh`
+   is retired (the two must not run side by side).
