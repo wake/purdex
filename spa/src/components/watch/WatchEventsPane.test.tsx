@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
 import { WatchEventsPane } from './WatchEventsPane'
+import type { PaneRendererProps } from '../../lib/module-registry'
 import { useAlertsStore, alertCountOf, type HostAlertsEntry } from '../../lib/pool/alerts-store'
 import type { PoolAlert } from '../../lib/pool/alerts-api'
 import type { PoolObservation } from '../../lib/pool/observations-api'
@@ -34,7 +35,8 @@ const obs = (id: string, over: Partial<PoolObservation> = {}): PoolObservation =
 const page = (observations: PoolObservation[]) => ({ host: 'mserv', known: true, observations, truncated: false, nextUntil: null })
 const rows = () => screen.queryAllByTestId('watch-event')
 const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0) }) }
-const pane = () => render(<WatchEventsPane {...({} as never)} />)
+const PROPS = {} as unknown as PaneRendererProps
+const pane = () => render(<WatchEventsPane {...PROPS} />)
 
 beforeEach(() => {
   cleanup(); clearViewMemory(); fetchObservations.mockReset(); openWatchArea.mockReset()
@@ -262,13 +264,13 @@ describe('the events tab (MON-10c)', () => {
     // the same alias is now another host, and its read does not finish
     fetchObservations.mockImplementation(() => new Promise(() => {}))
     monitorHosts.list = [host('h-mlab', 'mlab'), host('h-other', 'mserv')]
-    rerender(<WatchEventsPane {...({} as never)} />)
+    rerender(<WatchEventsPane {...PROPS} />)
     await flush()
     expect(rows()).toHaveLength(0)
     // another source, whose read does not finish either
     monitorHosts.list = [host('h-mlab', 'mlab'), host('h-mserv', 'mserv')]
     fetchObservations.mockImplementationOnce(async () => page([])).mockImplementationOnce(async () => page([obs('o2')]))
-    rerender(<WatchEventsPane {...({} as never)} />)
+    rerender(<WatchEventsPane {...PROPS} />)
     await flush()
     fetchObservations.mockImplementation(() => new Promise(() => {}))
     useNexHostStore.setState({ byHost: { src2: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1', 'pool.observations.v1'] } } } as never)
