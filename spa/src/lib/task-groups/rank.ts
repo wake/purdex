@@ -23,10 +23,8 @@ export function compareRank(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-/** A string strictly between `a` ('' = the lowest) and `b` (null = no upper bound); `a < b`, neither ends in the zero digit. */
+/** A string strictly between `a` ('' = the lowest) and `b` (null = no upper bound); the caller has checked `a < b` and that `b` does not end in the zero digit. */
 function midpoint(a: string, b: string | null): string {
-  if (b !== null && a >= b) throw new Error('rank: neighbours out of order')
-  if (a.endsWith(ZERO) || (b !== null && b.endsWith(ZERO))) throw new Error('rank: a rank ends in the zero digit')
   if (b !== null) {
     // the common prefix (with `a` padded by zero digits) is kept
     let n = 0
@@ -42,9 +40,13 @@ function midpoint(a: string, b: string | null): string {
 
 /**
  * A rank between `a` (before) and `b` (after); either may be absent. `null` = the result would pass
- * `RANK_MAX_GENERATED`: re-rank the group (`rebalance`) and ask again. Throws when `a` is not before `b`.
+ * `RANK_MAX_GENERATED`, or no string sorts between the neighbours (equal ranks — two workspaces that inserted at one spot —
+ * or an upper neighbour ending in the zero digit, which a synced payload may carry): re-rank the group (`rebalance`) and
+ * ask again. Never throws: ranks come from other devices.
  */
 export function rankBetween(a?: string, b?: string): string | null {
+  if (a !== undefined && b !== undefined && a >= b) return null
+  if (b !== undefined && b.endsWith(ZERO)) return null
   const r = midpoint(a ?? '', b ?? null)
   return r.length > RANK_MAX_GENERATED ? null : r
 }

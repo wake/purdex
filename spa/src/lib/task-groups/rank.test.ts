@@ -40,11 +40,24 @@ describe('rankBetween', () => {
     }
   })
 
-  it('refuses neighbours that are not in order', () => {
+  it('answers null (re-rank) for neighbours that cannot be ordered — equal ranks (two workspaces inserting at one spot) included — and never throws', () => {
     const a = rankBetween()!
     const b = rankBetween(a)!
-    expect(() => rankBetween(b, a)).toThrow()
-    expect(() => rankBetween(a, a)).toThrow()
+    expect(rankBetween(b, a)).toBeNull()
+    expect(rankBetween(a, a)).toBeNull()
+  })
+
+  it('copes with a synced rank that ends in the zero digit: as the lower neighbour it works, as the upper one it asks for a re-rank', () => {
+    const below = rankBetween('A0', 'A1')
+    expect(below).not.toBeNull()
+    expect(compareRank('A0', below!)).toBeLessThan(0)
+    expect(compareRank(below!, 'A1')).toBeLessThan(0)
+    const after = rankBetween('A0')!
+    expect(compareRank('A0', after)).toBeLessThan(0)
+    expect(rankBetween('A', 'A0')).toBeNull() // nothing sorts between them
+    expect(() => rankBetween(undefined, 'A0')).not.toThrow()
+    const fresh = rebalance(['A', 'A0', 'A00'])
+    expect(fresh).toHaveLength(3)
   })
 
   it('repeated inserts at one spot hit the generator cap (null), and rebalance gives room again', () => {
@@ -71,6 +84,27 @@ describe('rankBetween', () => {
     }
     expect(rankBetween(undefined, fresh[0])).not.toBeNull()
     expect(rankBetween(fresh[fresh.length - 1])).not.toBeNull()
+  })
+})
+
+describe('rankBetween — any pair of syncable ranks', () => {
+  it('is strictly between the neighbours or null, never throws, whatever the (even zero-ending) strings', () => {
+    let seed = 12345
+    const rnd = (n: number) => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0
+      return seed % n
+    }
+    const ALPHA = '0019AZaz'
+    const word = () => Array.from({ length: 1 + rnd(5) }, () => ALPHA[rnd(ALPHA.length)]).join('')
+    for (let i = 0; i < 3000; i += 1) {
+      const a = rnd(5) === 0 ? undefined : word()
+      const b = rnd(5) === 0 ? undefined : word()
+      const r = rankBetween(a, b)
+      if (r === null) continue
+      expect(isValidRank(r)).toBe(true)
+      if (a !== undefined) expect(compareRank(a, r), `${a} < ${r}`).toBeLessThan(0)
+      if (b !== undefined) expect(compareRank(r, b), `${r} < ${b}`).toBeLessThan(0)
+    }
   })
 })
 
