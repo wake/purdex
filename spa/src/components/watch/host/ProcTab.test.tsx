@@ -120,6 +120,19 @@ describe('the timeline (MON-8b)', () => {
     expect(screen.getByTestId('proc-timeline')).toBeDisabled()
   })
 
+  it('a pick is dropped while the host is not ok and does not come back when it is (codex R1)', async () => {
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: past })
+    const live = okHost({ procs: [proc(1, { name: 'livenow' })] })
+    const { rerender } = render(<ProcTab host={live} now={NOW} />)
+    await move(200)
+    expect(readProcAt('h-mlab')).toBe(NOW - 600_000)
+    rerender(<ProcTab host={downHost('host_down')} now={NOW} />)
+    expect(readProcAt('h-mlab')).toBeNull()
+    rerender(<ProcTab host={live} now={NOW} />)
+    expect(within(screen.getByTestId('procs-cpu')).getByText('livenow')).toBeInTheDocument()
+    expect((screen.getByTestId('proc-timeline') as HTMLInputElement).value).toBe('240')
+  })
+
   it('a pick that has slid out of the hour is the live record again', () => {
     writeProcAt('h-mlab', NOW - 600_000)
     render(<ProcTab host={okHost({ procs: [proc(1, { name: 'livenow' })] })} now={NOW + 3 * 3600_000} />)

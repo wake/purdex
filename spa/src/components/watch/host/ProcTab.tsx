@@ -35,7 +35,7 @@ export function ProcTab({ host, now }: { host: MonitorHost; now: number }) {
   const setPicked = (at: number | null) => { writeProcAt(hostId, at); setPickedState(at) }
   // A pick that has slid out of the hour (or of a host that is not ok) is the live record again.
   const at = facts !== null && picked !== null && now - picked <= HOUR_MS ? picked : null
-  useEffect(() => { if (picked !== null && at === null) writeProcAt(hostId, null) }, [picked, at, hostId])
+  useEffect(() => { if (picked !== null && at === null) { writeProcAt(hostId, null); setPickedState(null) } }, [picked, at, hostId])
 
   const { snaps, load } = useProcHistory(hostId, host.alias, facts, at !== null)
   // While the hour is still being read the memory may hold only the live records that joined it: one of those is not "the record of that time", so it counts only when it is within a step of the pick.
