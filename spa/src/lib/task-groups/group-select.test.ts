@@ -114,6 +114,18 @@ describe('switchSidebarView — restores the view\'s last place (spec §6.3)', (
     expect(active()).toBe('a1') // w1's active tab
   })
 
+  it('to the workspace view: a workspace whose active tab is gone gives its first tab that exists, and an empty workspace none', () => {
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w1', name: 'W1', tabs: ['ghost', 'a1'], activeTabId: 'ghost', moduleConfig: {} }, { id: 'w2', name: 'W2', tabs: [], activeTabId: null, moduleConfig: {} }],
+    } as never)
+    useGroupViewStore.setState({ lastByView: { workspace: 'w1', group: A } })
+    switchSidebarView('workspace')
+    expect(active()).toBe('a1')
+    useGroupViewStore.setState({ lastByView: { workspace: 'w2', group: A } })
+    switchSidebarView('workspace')
+    expect(active()).toBeNull()
+  })
+
   it('to the workspace view when that workspace is gone: the workspace of the current tab', () => {
     useGroupViewStore.setState({ lastByView: { workspace: 'gone', group: A } })
     useTabStore.setState({ activeTabId: 'a2' } as never)
