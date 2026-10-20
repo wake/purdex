@@ -11,7 +11,7 @@
 > 修訂 4（10-21）：細化第三波 MON-7／8／9（MON-7 拆 7a、7b-1、7b-2、7c-1、7c-2，MON-8 拆 8a～8c，MON-9 拆 9a-1、9a-2a、9a-2b、9a-3、9b-1、9b-2，理由寫在各期）；外部依賴在 `origin/main a364bac2c` 查核、寫在各條開頭；細化時查到的 13 件，88 於 10-21 定案（第 3 條選 (B)、第 6 條選 (A) 且 9b 維持兩張、第 4 條的指標搬遷放進 9a-3），記在「待查與已定案」；spec §8 的分期表與 M48–M51、§6 的 watch 列同步改了。同時補三條之前欠的修訂：MON-5c 任務佇列路線的終點夾在卡片右緣之內（#3804 實作時的偏離，88 已接受）；MON-10c 加告警等級 watch（只通知守門員，不推播、不進摘要；事件頁標「守門員」、中性灰、算進「其他進行中」、不算進盾牌；三個新 kind 的顯示名；主機頁的「N 件告警」也算進它；88 定案（10-21），#3825 已照做）；MON-10c 改成與 6f-2 並行開發，merge 仍排在 6f-2 之後。
 > 修訂 4 補（10-21）：codex 審 PR #3828（task-mvh6lrve-tdwwu6）的 4 條 important，88 全部同意：spec W8 與 §8 跟第三波定案第 1 條對齊（W8 的 API 不再是依賴，到了再接、另開一期）；推播總開關寫給每台有 daemon 的主機，離線的進待寫佇列、上線補寫（9a-2 因此照它的 Split 拆成 9a-2a 告警、9a-2b 推播）；9a-1 把改到的三個 `lib/pool` 檔加進守門範圍；9a-3 的搬遷在同一次開機內完成（主機集合空時訂閱，等第一次非空）。
 > 修訂 5（10-21）：細化 MON-12（fleet 退場），對帳 WWD-9 的讀者清單：拆成 12a-1～12a-5（現在就能開）、12b-1～12b-3（Hosts 頁之後）、12c（9a-3 之後）、12d（最後）十張，理由與每張的 import 查核寫在 MON-12 節；1f 的讀者清單逐條對照在 MON-12 節最後（沒有找不到歸屬的讀者）；查到的依賴變化：12b-1 只要 9b-1（不必等 9b-2、7c-2），D1＝9b-1、12a-1、12b-1 出版；12a-2 先 merge 時 9b-2 的 task 1 取消。細化時查到的 8 件記在「待查與已定案」的「MON-12 細化（修訂 5）的定案」；spec §8 的 MON-12 列與 A11 同步改了。
-> 修訂 5 補（10-21）：88 裁定 PR #3855 的 8 件（「MON-12 細化（修訂 5）的定案」）：9b-1 提前、現在就開，7b-2、9a-3 改成「merge 時最好已在 main，還沒進也不擋」，9b-1、9b-2 改歸 MON-12 這條線的 member；12a-2 排在 9b-2 之前、9b-2 省掉 task 1；12a-4 不等 S0；刪 `fleetHostId`；12c 連 9a-3 的搬遷一起刪，但不能跟 9a-3 進同一版、至少隔一版；守門照 retired-wire 的做法；語系鍵只刪沒人讀的、不改名；watch 列觸發欄位的寫回待 1f 回覆歸屬，不排進任何一期。MON-12 節開頭加「給 WWD-9 的對照」。
+> 修訂 5 補（10-21）：88 裁定 PR #3855 的 8 件（「MON-12 細化（修訂 5）的定案」）：9b-1 提前、不必再等、排在 12a-1 之後，7b-2、9a-3 改成「merge 時最好已在 main，還沒進也不擋」，9b-1、9b-2 改歸 MON-12 這條線的 member；12a-2 排在 9b-2 之前、9b-2 省掉 task 1；12a-4 不等 S0；刪 `fleetHostId`；12c 連 9a-3 的搬遷一起刪，但不能跟 9a-3 進同一版、至少隔一版；守門照 retired-wire 的做法；語系鍵只刪沒人讀的、不改名；watch 列偵測器欄位的寫回歸 MON-11、依賴 1f 的 9c-0 出版（1f 回覆：daemon 的 PUT 嚴格解碼且這些欄位必填，App 不能先停送）。順序改成先 12a-1、再 9b-1。MON-12 節開頭加「給 WWD-9 的對照」。
 
 ## 共通規則
 
@@ -564,7 +564,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 ### MON-9 — 主機頁「設定」與 Hosts 頁（M46–M52、W7、W8）
 
 **為什麼拆六張**：原估 9a 約 750 行、9b 以刪除為主。細化後：設定殼＋接工作＋暫停（放行類別與標記）＋守門員段只留啟動設定約 620；告警（唯讀）約 230；推播總開關（含離線待寫的佇列）約 700；側欄顯示＋拿掉終端機的全域指示並搬遷它的值約 690；Hosts 頁要刪 27 個檔，照 ≤ 20 檔拆成兩張（拿掉入口 17 檔、刪剩下的檔 18 檔）。
-依賴與順序：9a-1（6f-2 之後）→（9a-2a ∥ 9a-2b ∥ 9a-3）→ 9b-1（只硬依賴 9a-1，已 merge；**88 定案（10-21）：為了 1f 的 D1（關鍵路徑 9b-1 → MON-12b-1）現在就開**。7b-2、9a-3 merge 時最好已經在 main（Hosts 頁的資源池主機頁有版本、標籤、工具鏈，觀察主機頁有樣式，7b-2 的六張卡、9a-3 的側欄顯示接手）；兩張都在進行中，到時還沒進 main 也不擋 9b-1）→ 9b-2（排在 MON-12a-2 之後）。**9b-1、9b-2 改歸 MON-12 這條線的 member**（88 定案（10-21），不再歸做 MON-9 的 marco），排法見 MON-12 節。掛點：6f-2 的 `WatchHostPane`「設定」那一支（6f-2 task 2：`<WatchSettings hostId hostConfigId poolAlias offline peerIds />`），9a-1 換成 `<SettingsTab host={host} />`。
+依賴與順序：9a-1（6f-2 之後）→（9a-2a ∥ 9a-2b ∥ 9a-3）→ 9b-1（只硬依賴 9a-1，已 merge；**88 定案（10-21）：為了 1f 的 D1（關鍵路徑 9b-1 → MON-12b-1）不必再等、排在 12a-1 之後**。7b-2、9a-3 merge 時最好已經在 main（Hosts 頁的資源池主機頁有版本、標籤、工具鏈，觀察主機頁有樣式，7b-2 的六張卡、9a-3 的側欄顯示接手）；兩張都在進行中，到時還沒進 main 也不擋 9b-1）→ 9b-2（排在 MON-12a-2 之後）。**9b-1、9b-2 改歸 MON-12 這條線的 member**（88 定案（10-21），不再歸做 MON-9 的 marco），排法見 MON-12 節。掛點：6f-2 的 `WatchHostPane`「設定」那一支（6f-2 task 2：`<WatchSettings hostId hostConfigId poolAlias offline peerIds />`），9a-1 換成 `<SettingsTab host={host} />`。
 外部依賴查核：
 - **worker 開關、名額、主人、暫停在 main**（`pool.control.v1`；`internal/module/pool/control.go:59-96` 把 body 原樣轉給 wwd）。wwd 的暫停已收 `allow {classes, repos}` 與 `flags`（`release`、`expect_pressure`；`internal/wwd/wire/api.go:254-263`、`alert.go:15-30`），**App 還沒送**（`spa/src/lib/pool/control-api.ts:74-76` 只送 `name、until、pid、holds`；`exceptions.ts:3` 註明不帶 allow、flags）→ 9a-1。M46（送出後等下一筆讀數、15 秒提示）、M47（關掉時確認框寫件數）`WorkerSettings` 已經做了（`WorkerSettings.tsx:128-139`、`:217-220`、`:236-242`）。
 - **推播開關的路由在 main、SPA 沒有讀者**：`GET /api/hostconfig` 的 `wwdAlerts`、`PUT /api/hostconfig/wwd_alerts`（`internal/module/hostconfig/handler.go:111`、`module.go:90`、`wwd_alerts.go:12-35`；CAS 用 `baseRevision`）；`spa/src` 沒有 `wwdAlerts` 的程式、`host-config-api.ts:35-41` 的集合清單沒有它 → 9a-2b。誰在推：`/api/info.wwdalerts {push, deliverer, suppressed}`（`internal/core/info_handler.go:229-234`、`internal/module/wwdalerts/module.go:706-714`）。
@@ -649,7 +649,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 
 #### MON-9b-1 — Hosts 頁拿掉入口，留一行連結（M52、A10）
 
-依賴 MON-9a-1（已 merge）。**88 定案（10-21）：現在就開**（1f 的 D1 的關鍵路徑是 9b-1 → MON-12b-1）；7b-2、9a-3 merge 時最好已經在 main，兩張都在進行中，到時還沒進也不擋。**歸 MON-12 這條線的 member**（不再歸 marco）。檔案（17 個；新增約 90 行，其餘是刪除）：`components/hosts/HostSidebar.tsx`、`HostSidebar.test.tsx`、`components/hosts/OverviewSection.tsx`、`components/HostPage.tsx`、`locales/zh-TW.json`、`en.json`；刪 `components/hosts/PoolHostGroup.tsx`、`PoolHostRoute.tsx`、`PoolHostsSection.tsx`、`ProbeHostsSection.tsx`＋`ProbeHostsSection.test.tsx`、`FleetRowEditor.tsx`＋`FleetRowEditor.test.tsx`、`PoolHosts.test.tsx`、`HostSidebar.probes.test.tsx`、`components/HostPage.probe.test.tsx`、`HostPage.probe-nav.test.tsx`。
+依賴 MON-9a-1（已 merge）。**88 定案（10-21）：不必再等、排在 12a-1 之後**（1f 的 D1 的關鍵路徑是 9b-1 → MON-12b-1）；7b-2、9a-3 merge 時最好已經在 main，兩張都在進行中，到時還沒進也不擋。**歸 MON-12 這條線的 member**（不再歸 marco）。檔案（17 個；新增約 90 行，其餘是刪除）：`components/hosts/HostSidebar.tsx`、`HostSidebar.test.tsx`、`components/hosts/OverviewSection.tsx`、`components/HostPage.tsx`、`locales/zh-TW.json`、`en.json`；刪 `components/hosts/PoolHostGroup.tsx`、`PoolHostRoute.tsx`、`PoolHostsSection.tsx`、`ProbeHostsSection.tsx`＋`ProbeHostsSection.test.tsx`、`FleetRowEditor.tsx`＋`FleetRowEditor.test.tsx`、`PoolHosts.test.tsx`、`HostSidebar.probes.test.tsx`、`components/HostPage.probe.test.tsx`、`HostPage.probe-nav.test.tsx`。
 
 1. **側欄**：`HostSidebar.tsx` 拿掉資源池主機群組（`:14`、`:188-195`）與觀察主機群組（`:196-226`）、它們的資料（`:10-13`、`:15`、`:53-59`）與 props（`:27-33` 的 `selectedProbeId`、`selectedPoolId`、`onAddProbe`）；在原處放一行按鈕「資源池主機的狀態與設定在監控分頁組 →」（`data-testid="hosts-monitor-link"`），按下去開監控分頁組（第三波定案第 5 條）。這一行永遠畫，不看 pool 有沒有答。
 2. **主頁**：`HostPage.tsx` 拿掉 `ProbeHostPage`、`PoolHostRoute`、`useProbeEditor` 的 import（`:16-18`）、`useFleetDraftStore`（`:19`）與它的選取與離開（`:277-300`）、`probe:`／`pool:` 兩支與 `onAddProbe`（`:401-436`）。
@@ -728,6 +728,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - **目標**：值班卡、打開對話／叫醒／問問題、進行中的 incident、處理紀錄、提議的同意與拒絕；盾牌與「事件」分頁數字的值班者那一半（MON-10a 的 `dutyOpenCount()`）接上 S7。
 - **主要檔案**：`components/watch/WatchGuardianPane.tsx`、`WatchLaunchPanel.tsx`、`lib/watch/status-store.ts`（lucia 期間仍讀 `/api/watch/status`、`/wake`，W9）、新的 incident client（S7 的路由）、`lib/pool/alerts-store.ts`（`dutyOpenCount`）。
 - **依賴**：A 線的 S7、S8（8b；P7 (A) 由 1f 排）。等 A 線的 plan 出來再細化。
+- **另一件依賴**（88 定案（10-21），「MON-12 細化（修訂 5）的定案」第 8 條）：host-config `watch` 列的偵測器欄位（`x_cores`、`y_mb`、`t_s`、`pressure_level`、`pressure_t_s`、`page_rate`、`page_t_s`）停止寫回（`lib/watch/watch-row-write.ts` 的 `WATCH_DEFAULTS` 與整列寫回），**依賴 1f 的 9c-0 出版**（PUT 把這些欄位改成選填）；之前 daemon 嚴格解碼且必填（`internal/module/hostconfig/watch.go:76`、`:83-90`），App 不能先停送。
 - **大小**：一～兩期。
 
 ### MON-12 — fleet 退場（A11、W9）
@@ -738,7 +739,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - **D1 ＝ MON-9b-1、12a-1、12b-1 merge 並出版**；88 在出版後告訴 1f（版本號＋三張 PR），1f 就可以 merge 9d-4。
 - **gate.decisions 的 9b-4 只要等 12a-1 出版。**
 - **12b-2、12b-3、12c、12d 不擋 9d-4**（都是 D1 之後的死碼清理或與 fleet 的 wire 無關）。
-- **9b-1、9b-2 歸這條線的 member**（不再歸做 MON-9 的 marco）；9b-1 現在就開，它是 D1 的關鍵路徑的第一張。
+- **9b-1、9b-2 歸這條線的 member**（louis；不再歸做 MON-9 的 marco）。**順序是 12a-1 → 9b-1 → 12b-1**：12a-1 一出版，1f 的 9b-4 就能開始；louis 已從 12a-1 開工（88 定案（10-21））。
 
 **目標**：SPA 不再讀 `fleet.v1`（`GET /api/fleet`、WS `fleet.changed`、`?fleet=v1`、`/api/fleet/ssh-aliases`、`POST /api/fleet/probe-check`、host-config 的 `probe_hosts`／`fleet` 列）與 `gate.decisions.v1`（`GET /api/gate/decisions`）；`watch.v1` 只留 `/api/watch/status`、`/api/watch/wake`（W9）與 1f 的 9c-c 也留的 `POST /api/watch/start`（`lib/watch/launch.ts:97`，守門員的啟動鍵）。順便刪掉 5c、6f-2、10c 之後已經沒人用的舊畫面與舊 store 欄位。
 
@@ -752,7 +753,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - **gate.decisions**（1f 的 9b-4／9d-7）：SPA 唯一的讀者鏈是 `QueueSection` → `QueueHistory` → `lib/watch/history-read.ts` → `fetchGateDecisions`（`lib/watch/api.ts:15-25`），外加能力判斷 `selectGateDecisionsV1`（`stores/useNexHostStore.ts:110-113`，只有 `QueueSection.tsx:33` 用）。6f-2（#3827）重寫主機頁之後 `QueueSection` 沒人掛，所以 769 之後的下一版起 App 實際上已不呼叫；12a-1 刪掉這串死碼並加守門。**9b-4 的 SPA 前提＝12a-1 出版**，不必等 12b。
 - **fleet**（1f 的 9d-4、9d-5）：執行期讀 fleet 的入口只有兩個：`main.tsx:17`、`:68` 的 `startFleetSupport()`（`lib/fleet/fleet-support.ts:14`、`:26` 看 `/api/info` 有沒有 `fleet.v1`，有就經 `reread.ts` 打 `GET /api/fleet`）與 `hooks/useMultiHostEventWs.ts:150-152`（`?fleet=v1`）、`:355-361`（`fleet.changed` → `fleet-ws.ts`）。其他讀者都是吃 fleet store 的畫面；Hosts 頁吃 fleet 快照的部分（資源池群組、觀察主機頁、Fleet 編輯器）9b-1 拿掉入口，所以接線（12b-1）只要等 9b-1。設定半邊（`config-api.ts` 的 host-config `probeHosts`／`fleet`、`PUT probe-hosts／fleet`、`ssh-aliases`，`probe-check.ts` 的 `POST /api/fleet/probe-check`）的呼叫者全在 Hosts 頁，9b-1 之後沒有畫面走得到，9b-2 刪掉呼叫者、12b-2 刪檔。
 - **D1＝9b-1、12a-1、12b-1 都 merge，並隨 1f 的 bump 出版**。12b-2、12b-3 是之後的死碼清理，不擋 9d-4。12b-1 出版後由 88 告訴 1f（版本號＋三張 PR）。
-- **watch.v1**（1f 的 9c-b、9c-c）：`/api/watch/events`、`/unhandled` 與 WS `watch.events` 的讀者 12a-3 刪；1f 拿掉這些路由時，App 收到 404 本來也只會顯示空（盤點第 4 節），12a-3 只是不再去讀。host-config 的 `watch` 列（`lib/watch/watch-row.ts`、`watch-row-write.ts`，9a-1 的守門員段）不是 watch.v1 的路由，W9 與 9a-1（第三波定案第 3 條）留著，不在 MON-12。
+- **watch.v1**（1f 的 9c-b、9c-c）：`/api/watch/events`、`/unhandled` 與 WS `watch.events` 的讀者 12a-3 刪；1f 拿掉這些路由時，App 收到 404 本來也只會顯示空（盤點第 4 節），12a-3 只是不再去讀。host-config 的 `watch` 列（`lib/watch/watch-row.ts`、`watch-row-write.ts`，9a-1 的守門員段）不是 watch.v1 的路由，W9 與 9a-1（第三波定案第 3 條）留著，不在 MON-12；列裡偵測器欄位（`x_cores` 等）的寫回**歸 MON-11，依賴 1f 的 9c-0 出版**（定案第 8 條）。
 
 **MON-12 的共通事項**（各張都照）：
 - **開工前在當下的 `origin/main` 重查一次**：每張寫了要查哪些檔的 import 者；查法是對那個檔的路徑片段 `git grep -n` 整個 `spa/src`，分成非測試與測試兩邊。結果貼 PR 說明；跟本節寫的不同（MON-7～9 新增或改了 import）就先回報 88，不要自己擴大範圍。
@@ -831,7 +832,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 
 #### MON-12b-1 — 拔掉 fleet 的接線與 A3 的一次性搬遷（1f 的 D1 前提）
 
-依賴：**9b-1**（88 定案（10-21）：9b-1 現在就開、歸本線的 member；Hosts 頁的資源池群組、觀察主機頁、Fleet 編輯器不再出現；它們吃 fleet 快照，接線拔掉會變空）、12a-1（新守門）。建議 12a-3、12a-4 在前；與 9a-3 同改 `main.tsx:97` 的開機鏈與 `main.test.tsx` 的開機順序那案，先後都行，後 merge 的併最新 main。**不必等 9b-2、7c-2**：`lib/fleet/reread.ts`、`api.ts` 本張不刪（9b-2 之前 `components/hosts/useProbeEditor.ts:10` 還 import `reread`），留給 12b-2；7c-2 不碰 fleet（它的 `ZoneStrip` 讀 `HostSample.zone`）。可與 12b-2 並行。檔案（13 個；新增約 70 行，刪約 590 行）：
+依賴：**9b-1**（88 定案（10-21）：9b-1 不必再等、排在 12a-1 之後、歸本線的 member；Hosts 頁的資源池群組、觀察主機頁、Fleet 編輯器不再出現；它們吃 fleet 快照，接線拔掉會變空）、12a-1（新守門）。建議 12a-3、12a-4 在前；與 9a-3 同改 `main.tsx:97` 的開機鏈與 `main.test.tsx` 的開機順序那案，先後都行，後 merge 的併最新 main。**不必等 9b-2、7c-2**：`lib/fleet/reread.ts`、`api.ts` 本張不刪（9b-2 之前 `components/hosts/useProbeEditor.ts:10` 還 import `reread`），留給 12b-2；7c-2 不碰 fleet（它的 `ZoneStrip` 讀 `HostSample.zone`）。可與 12b-2 並行。檔案（13 個；新增約 70 行，刪約 590 行）：
 - 刪（5）：`lib/fleet/fleet-support.ts`＋`fleet-support.test.ts`、`lib/fleet/fleet-ws.ts`、`lib/pool/pool-look-migration.ts`＋`pool-look-migration.test.ts`。
 - 改（8）：`spa/src/main.tsx`、`main.test.tsx`、`hooks/useMultiHostEventWs.ts`、`hooks/useMultiHostEventWs.fleet.test.ts`（改寫）、`lib/host-events.ts`、`lib/storage/keys.ts`、`components/fleet/no-fleet-reads.guard.test.ts`、`lib/retired-wire.guard.test.ts`。
 
@@ -954,18 +955,18 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - 第三波（修訂 4）：
   - 「狀態」：7a（現在就能開）→ 7b-1 ∥ 7c-1（都只要 7a）→ 7b-2（另要 6f-2）→ 7c-2（另要 7b-2）。
   - 「行程」：8a（6f-2 之後）→ 8b ∥ 8c。
-  - 「設定」與 Hosts 頁：9a-1（6f-2 之後）→ 9a-2a ∥ 9a-2b ∥ 9a-3；9b-1（只要 9a-1，現在就開；7b-2、9a-3 最好先進 main，還沒進也不擋）→ 9b-2（MON-12a-2 之後）。9b-1、9b-2 歸 MON-12 這條線的 member（88 定案（10-21））。
+  - 「設定」與 Hosts 頁：9a-1（6f-2 之後）→ 9a-2a ∥ 9a-2b ∥ 9a-3；9b-1（只要 9a-1，不必再等、排在 12a-1 之後；7b-2、9a-3 最好先進 main，還沒進也不擋）→ 9b-2（MON-12a-2 之後）。9b-1、9b-2 歸 MON-12 這條線的 member（88 定案（10-21））。
   - 6f-2 merge 之前就能開的：7a、7b-1、7c-1；8b 的 `proc-history.ts`、9a-2b 的 `push-switch.ts` 也能先寫。
   - 同改的檔（後 merge 的那張併最新 `origin/main` 再跑 PR 層測試）：`WatchHostPane.tsx`（7b-2、8a、9a-1 各換子分頁開關裡自己那一支，只動那一行與 import）；`lib/watch/view-memory.ts`＋測試（8b 的 `procAt`、8c 的 `obsExpanded`、9a-3 的 `lookMode`，加上第二波 10c 的事件篩選，各加自己的函式與 `clearViewMemory` 的一行）；`lib/pool/types.ts`（7a 的 facts、`PoolHost`、`SeriesPoint`，9a-1 的 `PoolExceptionDetail`，不同介面）；`no-fleet-reads.guard.test.ts`（7b-1、7c-1、8b、8c、9a-1、9a-2b、9a-3 加 `POOL_FILES`，取聯集；9b-2 擴 glob、改檔頭）；`ProcTab.tsx`、`ProcTab.tab-switch.test.tsx`（8b、8c）；`SettingsTab.tsx`＋兩個測試（9a-2a、9a-2b、9a-3）；`StatusTab.tsx`＋測試（7b-2 建、7c-2 加）；語系檔（全部；新鍵各放自己的子樹 `watch.host.status.*`、`watch.host.procs.*`、`watch.host.settings.*`，衝突時兩邊都留）。
   - 與第二波 10c：10c 只在 `MonitorTab.tsx` 加告警標記，第三波不碰 `MonitorTab`；事件頁的觀察記憶（#3825，`view-memory` 的 `readEventsObservations`）與 8c 的 `lib/pool/host-observations.ts` 各管各的、不共用。
   - 建議分工（三位 member）：甲 7a → 7b-1 → 7c-1 → 7b-2 → 7c-2；乙 8a → 8b → 8c；丙 9a-1 → 9a-2a → 9a-2b → 9a-3（9b-1、9b-2 改歸 MON-12 這條線的 member，88 定案（10-21））。兩位時甲做 7 整條，乙做 8 再做 9a。
 - MON-12（修訂 5）：
-  - 12a（現在就能開）：12a-1 → 12a-3（同改 `lib/watch/api.ts` 與新守門）；12a-2、12a-4、12a-5 各自獨立，與 12a-1 並行。12a-2 排在 9b-2 之前（9b-2 的 task 1 因此取消，88 定案（10-21））。
+  - 12a（現在就能開）：12a-1 最先（88 定案（10-21）：先 12a-1、再 9b-1）→ 12a-3（同改 `lib/watch/api.ts` 與新守門）；12a-2、12a-4、12a-5 各自獨立，與 12a-1 並行。12a-2 排在 9b-2 之前（9b-2 的 task 1 因此取消，88 定案（10-21））。
   - 12b：12b-1（9b-1、12a-1 之後；建議 12a-3、12a-4 在前）∥ 12b-2（9b-2 之後）→ 12b-3（12b-1、12b-2 與五張 12a 之後）。**D1＝9b-1、12a-1、12b-1 merge 並出版**，88 出版後告訴 1f；9b-4（gate.decisions）只要 12a-1 出版。
   - 12c：9a-3 之後，而且不跟 9a-3 進同一版、至少隔一版（88 定案（10-21））；與 12a、12b 並行；升 settings ordinal，放行前先告訴 1f。
   - 12d：最後（12a、12b、12c、7b-2、9b-2 之後）。
   - 同改的檔：`lib/watch/view-memory.ts`＋測試（12a-1 與 8b #3845）；`no-fleet-reads.guard.test.ts`（12a-1、12a-2、12a-4、12b-1、12c 與第三波各張）；`lib/retired-wire.guard.test.ts`（12a-1 建，12a-3、12b-1、12b-3 加）；`main.tsx`＋`main.test.tsx`（12a-3、12b-1、12c 與 9a-3）；`useMultiHostEventWs.ts`（12b-1）與它的 watch 測試（12a-3）。後 merge 的併最新 `origin/main` 再跑 PR 層測試。
-  - 分工（88 定案（10-21）：9b-1、9b-2 歸這條線）：MON-12 的 member 先開 9b-1（D1 的關鍵路徑，現在就開），再 12a-1；兩張 merge 後接 12b-1，出版後 88 告訴 1f。其餘依序 12a-2 → 9b-2（12a-2 之後）→ 12a-3 → 12a-4 → 12a-5 → 12b-2（9b-2 之後）→ 12b-3；12c（9a-3 出版後的下一版起）、12d 最後。疊分支，ready 後就開下一張。
+  - 分工（88 定案（10-21）：9b-1、9b-2 歸這條線，member 是 louis）：**先 12a-1（已開工；一出版，1f 的 9b-4 就能開始），再 9b-1**；兩張 merge 後接 12b-1，出版後 88 告訴 1f（D1）。其餘依序 12a-2 → 9b-2（12a-2 之後）→ 12a-3 → 12a-4 → 12a-5 → 12b-2（9b-2 之後）→ 12b-3；12c（9a-3 出版後的下一版起）、12d 最後。疊分支，ready 後就開下一張。
 - 改到 team 模組的不在本線範圍；本線全是純 SPA，88 自己放行（B 線 10-19 起的規則），bump 與部署歸 1f。MON-2a 升 settings ordinal，88 放行前先告訴 1f（同 TG-1a-1）。
 
 ## 待查與已定案
@@ -1020,18 +1021,18 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - 「行程」的未宣告與觀察紀錄：這台 `wwd_down`／`host_down` 時不讀，寫「紀錄存在那台的 wwd 裡」。
   - 推播「部分開啟」按一下全部設成開；寫入依主機順序逐台送，一台失敗不擋下一台，每台一行結果。
   - `LookSettings` 用 `HostColorPicker`／`HostIconPicker`，不用綁 App 主機 id 的 `HostColorField`／`HostIconField`。
-  - 9b-1 要在 9a-1 之後，建議也在 7b-2、9a-3 之後。（88 定案（10-21）改成：只硬依賴 9a-1、現在就開；7b-2、9a-3 merge 時最好已在 main，還沒進也不擋；見「MON-12 細化（修訂 5）的定案」第 1 條。）
+  - 9b-1 要在 9a-1 之後，建議也在 7b-2、9a-3 之後。（88 定案（10-21）改成：只硬依賴 9a-1、不必再等、排在 12a-1 之後；7b-2、9a-3 merge 時最好已在 main，還沒進也不擋；見「MON-12 細化（修訂 5）的定案」第 1 條。）
   - Hosts 頁的舊語系鍵留到 MON-12 清（同 MON-1d 的做法）。
 
 - **MON-12 細化（修訂 5）的定案**：細化時查到的 8 件，88 於 10-21 對 PR #3855 裁定（各期已照定案寫，下文的理由保留）：
-  1. **9b-1 提前、改歸 MON-12 的 member**：原方向是 12b 等 9b-2 與 7c-2；實查 12b-1 只要 9b-1（`reread.ts`、`api.ts` 留到 12b-2，9b-2 之前 `useProbeEditor.ts:10` 還 import `reread`；7c-2 不碰 fleet），D1 的關鍵路徑因此是 9b-1 → 12b-1。**88 定案（10-21）：提前**。9b-1 只硬依賴 9a-1（已 merge），現在就開；原本建議等的 7b-2、9a-3 改成「merge 時最好已經在 main；兩張都在進行中，到時還沒進 main 也不擋 9b-1」。9b-1、9b-2 改歸 MON-12 這條線的 member，不再歸做 MON-9 的 marco（MON-9 節與 MON-12 節都已註明）。代價（原分析保留）：7b-2、9a-3 進 main 之前，沒有 daemon 的主機的外觀沒有地方改、版本與標籤只剩主機頁的過渡內容。
+  1. **9b-1 提前、改歸 MON-12 的 member**：原方向是 12b 等 9b-2 與 7c-2；實查 12b-1 只要 9b-1（`reread.ts`、`api.ts` 留到 12b-2，9b-2 之前 `useProbeEditor.ts:10` 還 import `reread`；7c-2 不碰 fleet），D1 的關鍵路徑因此是 9b-1 → 12b-1。**88 定案（10-21）：提前**。9b-1 只硬依賴 9a-1（已 merge），不必再等；順序排在 12a-1 之後（88 定案（10-21）：12a-1 一出版，1f 的 9b-4 就能開始，louis 已從 12a-1 開工）；原本建議等的 7b-2、9a-3 改成「merge 時最好已經在 main；兩張都在進行中，到時還沒進 main 也不擋 9b-1」。9b-1、9b-2 改歸 MON-12 這條線的 member，不再歸做 MON-9 的 marco（MON-9 節與 MON-12 節都已註明）。代價（原分析保留）：7b-2、9a-3 進 main 之前，沒有 daemon 的主機的外觀沒有地方改、版本與標籤只剩主機頁的過渡內容。
   2. **9b-2 的 task 1**：**88 定案（10-21）：12a-2 排在 9b-2 之前，9b-2 省掉 task 1**（`factsToFast` 搬進 `history.ts`，第三波定案第 6 條 (A)）。理由：先刪 `history.ts`，就不必做一個之後會被刪掉的搬移。
   3. **12a-4 不等 1f 的 S0（D0）部署**：**88 定案（10-21），照建議**。理由：S0 之後閘門不再排隊，沙漏本來就不會亮；之前出版只少了舊閘門的等待提示（盤點第 4 節判「不壞」）。
   4. **刪 `types/tab.ts` 的 `fleetHostId`**（12a-5）：**88 定案（10-21），照建議**。它不是 fleet 的 wire，只是舊分頁 content 的欄位；原 MON-12 清單就有。
   5. **12c 連同 9a-3 的搬遷一起刪**：欄位不在了，搬遷沒有東西可讀；代價是跳過 9a-3 那一版、直接升到 12c 之後的裝置不會搬（另一台搬過的指標仍經 settings 同步過來）。**88 定案（10-21）：接受，但加一條限制——12c 不能跟 9a-3 進同一版，至少隔一版**，讓兩台裝置都先跑過搬遷。12c 升 settings ordinal，放行前要先通知 1f。
   6. **守門的形狀**：**88 定案（10-21），照建議**。先新建 `lib/retired-wire.guard.test.ts`（「退場的檔、路由、能力名、識別字不准回來」，範本 `lib/task-groups/retired-per-host.guard.test.ts`），到 12b-3 把 `components/fleet/no-fleet-reads.guard.test.ts` 的偵測式併進來、舊檔刪掉。理由：舊檔是範圍守門（列名的檔不讀 fleet），`lib/fleet` 刪掉之後「範圍」沒有意義；「全 repo 不准 import `lib/fleet/`」放進新檔。
   7. **語系鍵**：**88 定案（10-21），照建議**。12d 只刪沒人讀的，`fleet.*` 不改名成 `pool.*`。理由：`fleet.zone.*` 還有 `lib/pool/words.ts:40`、`WatchHostPane.tsx:114` 在讀，改名要動側欄、主機頁與 7b-2 的卡片，跟 fleet 退場無關。
-  8. **host-config `watch` 列裡的 fleet 觸發欄位**（`x_cores`、`y_mb`、`targets` 等）：9a-1 從畫面拿掉、寫入時原樣帶回（`lib/watch/watch-row-write.ts` 的 `WATCH_DEFAULTS` 也還有）。1f 的 9c-b 拿掉 watch 的觸發之後 SPA 要不要停止寫回，不是 fleet 的 wire、也不是 W9 的兩條路由。**88 定案（10-21）：待 1f 回覆歸屬（MON-11 或 1f 的 9c-b）**；88 去問 1f，plan 先不排進任何一期。
+  8. **host-config `watch` 列裡的偵測器欄位**（`x_cores`、`y_mb`、`t_s`、`pressure_level`、`pressure_t_s`、`page_rate`、`page_t_s` 等）：9a-1 從畫面拿掉、寫入時原樣帶回（`lib/watch/watch-row-write.ts` 的 `WATCH_DEFAULTS` 也還有）。**88 定案（10-21）：歸 MON-11，依賴 1f 的 9c-0 出版，不在 MON-12。** 1f 回覆：daemon 的 `PUT /api/hostconfig/watch` 是嚴格解碼（`DisallowUnknownFields`），而且這些欄位必填（`internal/module/hostconfig/watch.go:76`、`:83-90`），所以 App 不能先停送。順序：(1) A 線先出 9c-0，這些欄位加上 `patrol_*`、`disk_low_gb`、`auto_wake` 在 PUT 改成選填，沒送就沿用現值，GET 照舊回傳；(2) 9c-0 出版後，B 線的 MON-11 才停止寫回；(3) A 線的 9c-b-ii、9c-c 再從儲存與 GET 拿掉這些欄位，PUT 仍接受並忽略舊 App 送來的值（不設先後限制）。
 - **MON-12 細化時自己定的**（不是衝突；88 不同意再改）：
   - 語系鍵一律留到 12d，各張不碰語系檔。
   - 12a-4 的 `QueuedItem` 收成 `QueuedJobMark` 的別名，`backgroundWaiters` 這個 prop 名不改（免得多動幾個元件與測試檔）。
