@@ -7,6 +7,13 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
   prefetchWeight: () => Promise.resolve(),
 }))
 
+// the member collapse of the workspace bar (spec R8): a spy over the real one, to see whether a view applies it
+const collapseSpy = vi.hoisted(() => vi.fn())
+vi.mock('../lib/team/team-actions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/team/team-actions')>()
+  return { ...actual, visibleTabIds: (...a: Parameters<typeof actual.visibleTabIds>) => { collapseSpy(); return actual.visibleTabIds(...a) } }
+})
+
 import { renderHook } from '@testing-library/react'
 import { useShortcuts } from './useShortcuts'
 import { useTabStore } from '../stores/useTabStore'
@@ -53,6 +60,7 @@ function seed(view: 'groups' | 'workspace') {
 }
 
 beforeEach(() => {
+  collapseSpy.mockClear()
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
 })
 afterEach(() => {
@@ -87,6 +95,17 @@ describe('the tab shortcuts in the task-group view', () => {
     expect(useTabStore.getState().activeTabId).toBe(b.id)
     fire('prev-tab')
     expect(useTabStore.getState().activeTabId).toBe(a.id)
+  })
+
+  it('a group\'s bar lists every tab: the member collapse of the workspace bar is not applied (it is, in the workspace view)', () => {
+    seed('groups')
+    const fire = fireShortcut()
+    renderHook(() => useShortcuts())
+    fire('next-tab')
+    expect(collapseSpy).not.toHaveBeenCalled()
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    fire('next-tab')
+    expect(collapseSpy).toHaveBeenCalled()
   })
 
   it('the same keys in the workspace view act on the workspace\'s tabs', () => {

@@ -208,8 +208,9 @@ describe('App — the task-group view\'s range (TG-4a)', () => {
     expect(lastRange()).toBeNull()
   })
 
-  it('an empty selected group shows the empty state, as an empty workspace does', () => {
+  it('an empty selected group shows the empty state even with no workspace active', () => {
     visibleIdsOf.mockReturnValue([])
+    useWorkspaceStore.getState().setActiveWorkspace(null)
     render(<App />)
     expect(screen.getByTestId('workspace-empty')).toBeInTheDocument()
   })
