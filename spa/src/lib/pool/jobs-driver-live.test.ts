@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from './store'
-import { liveTopology, watchJobs, startJobsCatchUp, jobsDriver } from './jobs-driver-live'
+import { liveTopology, watchJobs, startJobsCatchUp, jobsDriver, resetLastOwnDaemons } from './jobs-driver-live'
 
 const A = 'app-a'
 const B = 'app-b'
@@ -15,6 +15,7 @@ const poolHost = (alias: string, host_id: string) => ({ alias, host_id }) as nev
 
 
 beforeEach(() => {
+  resetLastOwnDaemons()
   usePoolStore.getState().reset()
   useHostStore.setState({
     hosts: { [A]: hostCfg(A), [B]: hostCfg(B) }, hostOrder: [A, B], activeHostId: A,
@@ -57,6 +58,37 @@ describe('liveTopology and a connection that came back', () => {
     expect(liveTopology()).toMatchObject({ forwarders: [], ownDaemon: {} })
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 5), [B]: entry(['jobs.v1'], 0) } } as never)
     expect(liveTopology().forwarders).toEqual([A])
+  })
+})
+
+describe('liveTopology across a reconnect (the moment after it, before /api/info is read again)', () => {
+  const stale = (wwd: string, caps = ['jobs.v1']) => entry(caps, 0, wwd)
+
+  it('an origin that was read from its own daemon keeps it while that daemon is connected and its stale entry still names the host', () => {
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A, mserv: B })
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1', 'pool.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    const topo = liveTopology()
+    expect(topo.ownDaemon).toEqual({ mlab: A, mserv: B })
+    expect(topo.forwarders).toEqual([A])
+  })
+  it('it is dropped once the daemon is not connected, the stale entry names another wwd, or it no longer announces jobs.v1', () => {
+    liveTopology()
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'reconnecting' } } } as never)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: entry(['jobs.v1'], 1, WWD_B) } } as never)
+    liveTopology()
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale('ffffffffffffffff') } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: entry(['jobs.v1'], 1, WWD_B) } } as never)
+    liveTopology()
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B, ['pool.v1']) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+  })
+  it('a daemon never seen as an origin\'s own is not made one by a stale entry', () => {
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
   })
 })
 

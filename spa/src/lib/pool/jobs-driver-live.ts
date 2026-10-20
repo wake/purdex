@@ -20,15 +20,30 @@ export function jobsDaemons(): string[] {
   return hostOrder.filter((id) => runtime[id]?.status === 'connected' && (byHost[id]?.fetchedAt ?? 0) > 0 && byHost[id]?.daemonCapabilities?.includes(JOBS_CAPABILITY))
 }
 
+/** The own daemon each origin had at the last look: kept across the moment after a reconnect (see `liveTopology`). */
+let lastOwn: Record<string, string> = {}
+export function resetLastOwnDaemons(): void { lastOwn = {} }
+
+/**
+ * A reconnect marks the daemon's cache entry stale (`fetchedAt` 0, data kept) until `/api/info` is read again, and for that moment `jobsDaemons()` and the identity map leave it out. An origin that was read from its own
+ * daemon would then fall back to a forwarding daemon's peer view (a different source: the store re-reads from cursor 0 and the fast-lane and undeclared jobs only the own daemon lists drop out) and switch back a moment later.
+ * So an own daemon that is still connected, whose stale entry still names this very pool host and still announces `jobs.v1`, stays the origin's own daemon until the new read says otherwise.
+ */
 export function liveTopology(): JobsTopology {
   const forwarders = jobsDaemons()
   const pool = usePoolStore.getState().hosts
   const daemons = readPoolHostDaemons()
+  const { runtime } = useHostStore.getState()
+  const { byHost } = useNexHostStore.getState()
   const ownDaemon: Record<string, string> = {}
   for (const h of pool) {
     const own = daemons[h.host_id]
-    if (own && forwarders.includes(own)) ownDaemon[h.alias] = own
+    if (own && forwarders.includes(own)) { ownDaemon[h.alias] = own; continue }
+    const prev = lastOwn[h.alias]
+    const e = prev ? byHost[prev] : undefined
+    if (prev && runtime[prev]?.status === 'connected' && e && e.fetchedAt <= 0 && e.wwd?.hostId === h.host_id && e.daemonCapabilities?.includes(JOBS_CAPABILITY)) ownDaemon[h.alias] = prev
   }
+  lastOwn = { ...ownDaemon }
   return { origins: pool.map((h) => h.alias), ownDaemon, forwarders }
 }
 
