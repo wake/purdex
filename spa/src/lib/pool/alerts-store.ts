@@ -78,7 +78,11 @@ function syncTimer(): void {
 function sync(): void {
   const source = usePoolStore.getState().sourceHostId
   syncTimer()
-  if (source === null) return // the pool cannot be read: keep what we have
+  if (source === null) {
+    // The pool cannot be read: keep the answers (the number does not fall to zero) and read nothing, but forget the source, so the same daemon coming back is "a source that changed" and everything is read again.
+    if (useAlertsStore.getState().source !== null) useAlertsStore.setState({ source: null })
+    return
+  }
   const sourceChanged = useAlertsStore.getState().source !== source
   const aliases = listed()
   if (sourceChanged) {

@@ -199,6 +199,21 @@ describe('the alerts store — what it keeps', () => {
     await flush()
     expect(useAlertsStore.getState().byHost.mlab).toMatchObject({ kind: 'error', code: 'wwd_unavailable' })
   })
+  it('the same source coming back after the pool was unreadable reads every host once, with no poll to do it', async () => {
+    setPool('src', ['mlab', 'air26'])
+    setCaps('src', ['pool.v1', 'pool.alerts.v1'])
+    release = retainPoolAlerts()
+    await flush()
+    act(() => setPool(null, []))
+    await flush()
+    fetchMock().mockClear()
+    fetchMock().mockImplementation(async (_s, alias) => answer(alias, [alert(`after:${alias}`)]))
+    act(() => setPool('src', ['mlab', 'air26']))
+    await flush()
+    expect(calls().sort()).toEqual(['src:air26', 'src:mlab'])
+    const e = useAlertsStore.getState().byHost.mlab
+    expect(e.kind === 'ok' && e.alerts.map((a) => a.key)).toEqual(['after:mlab'])
+  })
   it('the whole pool unreadable (source null): the last answers stay and nothing is read', async () => {
     setPool('src', ['mlab'])
     setCaps('src', ['pool.v1'])
