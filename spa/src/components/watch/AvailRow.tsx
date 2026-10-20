@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
 import type { PoolException } from '../../lib/pool/types'
-import { fallbackWord, headroomReasonLines } from '../../lib/pool/words'
+import { headroomReasonLines, livenessWordOf, notOkLines } from '../../lib/pool/words'
 
 function Item({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
@@ -17,14 +17,17 @@ function Item({ id, label, children }: { id: string; label: string; children: Re
 
 const hhmm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-/** `at` is the facts' own time (the daemon's clock): an exception is in force from its start to its end by that time, whatever this App's clock says. */
-export function AvailRow({ pool, exceptions: all, at }: { pool: PoolCellExtra; exceptions: PoolException[]; at: number }) {
+/**
+ * `at` is the facts' own time (the daemon's clock): an exception is in force from its start to its end by that time, whatever this App's clock says.
+ * `now` ages the "last reading" line of a host that is not ok.
+ */
+export function AvailRow({ pool, exceptions: all, at, now }: { pool: PoolCellExtra; exceptions: PoolException[]; at: number; now: number }) {
   const t = useI18nStore((s) => s.t)
-  if (pool.state === 'offline') return null
-  if (pool.state === 'fallback') {
+  if (pool.state !== 'ok') {
     return (
       <div data-testid="avail-row" className="mb-5 rounded-lg border border-border-subtle px-4 py-3 text-sm text-text-muted">
-        {fallbackWord(t, pool.reason, pool.since)}
+        <div className="text-text-secondary">{livenessWordOf(t, pool.state)}</div>
+        {notOkLines(t, pool, now).map((line) => <div key={line} className="text-xs">{line}</div>)}
       </div>
     )
   }

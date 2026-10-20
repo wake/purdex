@@ -107,19 +107,32 @@ describe('the sidebar group', () => {
     expect(screen.queryByTestId('pool-item-off-d-mlab')).toBeNull()
   })
 
-  it('wwd silent but the fleet still reads the host: a yellow light, not an offline one', async () => {
+  // MON-1d (spec M21): the light follows the pool's state only — no fleet fallback: ok green, wwd_down yellow, host_down and unknown grey.
+  it('the light: ok green, wwd_down yellow, host_down grey, a host the pool does not list grey', async () => {
+    fetchPoolHosts.mockResolvedValue([
+      ph('mlab'),
+      ph('air26', { liveness: 'wwd_down', liveness_at: Date.now(), facts: null }),
+      ph('mserv', { liveness: 'host_down', liveness_at: Date.now(), facts: null, reachable: false }),
+    ])
+    render(<HostSidebar {...props()} />)
+    await flush()
+    const dot = (id: string) => within(screen.getByTestId(`pool-item-${id}`)).getByTestId('pool-status').getAttribute('data-dot')
+    expect([dot('d-mlab'), dot('d-air26'), dot('p-mserv'), dot('p-air19')]).toEqual(['live', 'warn', 'off', 'off'])
+  })
+
+  it('a fleet host that says ok but the pool does not list is grey, not read from the fleet', async () => {
     fetchPoolHosts.mockResolvedValue([ph('mlab')])
     render(<HostSidebar {...props()} />)
     await flush()
-    expect(within(screen.getByTestId('pool-item-d-air26')).getByTestId('pool-status').getAttribute('data-dot')).toBe('warn')
+    expect(within(screen.getByTestId('pool-item-d-air26')).getByTestId('pool-status').getAttribute('data-dot')).toBe('off')
   })
 
-  it('a fleet error with the pool silent is red', async () => {
+  it('a fleet error status no longer turns the light red', async () => {
     fetchPoolHosts.mockResolvedValue([ph('mlab')])
     useFleetStore.setState((s) => ({ snapshot: { ...s.snapshot!, hosts: { ...s.snapshot!.hosts, 'p-air19': probe('p-air19', 'air19', { status: 'error', fast: null }) } } }) as never)
     render(<HostSidebar {...props()} />)
     await flush()
-    expect(within(screen.getByTestId('pool-item-p-air19')).getByTestId('pool-status').getAttribute('data-dot')).toBe('error')
+    expect(within(screen.getByTestId('pool-item-p-air19')).getByTestId('pool-status').getAttribute('data-dot')).toBe('off')
   })
 
   it('a probe host opens its own entry; a daemon host opens its pool host page', async () => {
@@ -162,26 +175,31 @@ describe('the overview table', () => {
     render(<PoolHostsSection />)
     await flush()
     const air19 = screen.getByTestId('pool-host-row-p-air19')
-    expect(within(air19).getByTestId('pool-host-status').textContent).toBe('Offline')
+    expect(within(air19).getByTestId('pool-host-status').textContent).toBe('State unknown')
     expect(within(air19).getByTestId('pool-host-worker').textContent).toBe('Unknown')
     expect(within(air19).getByTestId('pool-host-version').textContent).toBe('—')
   })
 
-  it('a fleet error with the pool silent says 「Error」 in the status word, not 「Offline」', async () => {
-    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+  it('the status words are the pool\'s: wwd_down, host_down, unknown, and stalled readings — never the fleet\'s Error or a fallback line', async () => {
+    fetchPoolHosts.mockResolvedValue([
+      ph('mlab'),
+      ph('air26', { liveness: 'wwd_down', liveness_at: Date.now(), facts: null }),
+      ph('mserv', { liveness: 'host_down', liveness_at: Date.now(), facts: null, reachable: false }),
+    ])
     useFleetStore.setState((s) => ({ snapshot: { ...s.snapshot!, hosts: { ...s.snapshot!.hosts, 'p-air19': probe('p-air19', 'air19', { status: 'error', fast: null }) } } }) as never)
     render(<PoolHostsSection />)
     await flush()
-    const air19 = screen.getByTestId('pool-host-row-p-air19')
-    expect(within(air19).getByTestId('pool-host-status').textContent).toBe('Error')
+    const word = (id: string) => within(screen.getByTestId(`pool-host-row-${id}`)).getByTestId('pool-host-status').textContent
+    expect(word('d-air26')).toBe('wwd is not answering (the machine is up)')
+    expect(word('p-mserv')).toBe('Host is offline')
+    expect(word('p-air19')).toBe('State unknown')
   })
 
-  it('a fallback row shows when the pool last read the host when it knows, the short words when it does not', async () => {
-    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+  it('a row the pool lists as ok but whose facts stopped says where the readings stopped', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab'), ph('air26', { liveness: 'ok', liveness_at: Date.now(), facts: { ...darwin, alias: 'air26', at: Date.now() - 120_000 } })])
     render(<PoolHostsSection />)
     await flush()
-    const status = within(screen.getByTestId('pool-host-row-d-air26')).getByTestId('pool-host-status').textContent ?? ''
-    expect(status).toMatch(/^wwd is unreachable( \(since .+\))?$/)
+    expect(within(screen.getByTestId('pool-host-row-d-air26')).getByTestId('pool-host-status').textContent).toMatch(/^wwd answers, but its readings stopped at /)
   })
 
   it('a version behind the newest is marked, the newest and the unknown are not', async () => {
@@ -269,14 +287,14 @@ describe('the pool host page on the Hosts page', () => {
     expect(screen.queryByTestId('pool-page-style')).toBeNull()
   })
 
-  it('a host wwd is silent for shows the fleet\'s readings, not the pool\'s old facts', async () => {
-    fetchPoolHosts.mockResolvedValue([ph('mlab')])
+  it('a host wwd is silent for shows no readings — neither the fleet\'s (retired fallback, MON-1d) nor the pool\'s old facts', async () => {
+    fetchPoolHosts.mockResolvedValue([ph('mlab'), ph('air26', { liveness: 'wwd_down', liveness_at: Date.now() })])
     render(<PoolHostRoute id="d-air26" />)
     await flush()
     const now = screen.getByTestId('pool-page-now')
-    expect(within(now).getByTestId('pool-page-cpu').textContent).toBe('CPU 5%')
-    expect(within(now).getByTestId('pool-page-mem').textContent).toBe('Memory 40%')
-    expect(within(now).getByTestId('pool-page-disk').textContent).toContain('Disk 30% used')
+    expect(within(now).queryByTestId('pool-page-cpu')).toBeNull()
+    expect(now.textContent).toContain('Unknown')
+    expect(screen.getByTestId('pool-page-status').textContent).toBe('wwd is not answering (the machine is up)')
   })
 
   it('a live host shows what wwd read', async () => {

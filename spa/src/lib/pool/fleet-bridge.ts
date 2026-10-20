@@ -1,20 +1,20 @@
 // spa/src/lib/pool/fleet-bridge.ts — (moved from cell-model.ts, with usePoolCellModels from use-cell-models.ts; the transitional reader of fleet views for the host page and the Hosts page, MON-1c-0) what a host cell and its card draw when the resource pool is the source (plan "WWD-7 design",
-// "Cells and card"). The cell keeps today's look: a live host is handed to it as a fleet host whose readings are the pool's facts, so
+// "Cells and card"). The cell keeps today's look: an ok host is handed to it as a fleet host whose readings are the pool's facts, so
 // the ring, the bars and the readings of the card are one code path. What the fleet has no word for (worker, headroom, owner, the
-// zone `unknown`) rides along in `pool`. A host the pool does not read goes back to the fleet's readings untouched (fallback) or to
-// offline; without a pool view at all the fleet host is returned as it is.
+// zone `unknown`) rides along in `pool`. A host that is not ok reads as offline with no readings (MON-1d: the fleet is no fallback any
+// more); a host the pool does not list is `unknown`; before the pool has said anything the fleet host is returned as it is.
 import { useMemo } from 'react'
-import { useFleetStore, type FleetHostView } from '../fleet/store'
+import type { FleetHostView } from '../fleet/store'
 import type { FleetFast } from '../fleet/types'
-import { poolHostView, type FallbackReason, type PoolHostView } from './host-view'
+import { poolHostState, type PoolHostState } from './host-state'
 import { usePoolStore } from './store'
 import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostDaemons } from './daemons'
-import type { HeadroomReasons, PoolFacts, PoolHost, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
+import type { HeadroomReasons, PoolFacts, PoolHost, PoolLiveness, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
 
 export interface PoolCellExtra {
-  state: 'live' | 'fallback' | 'offline'
-  /** The pool's zone word: `unknown` is its own (the fleet's zones have no such). Fallback and offline keep the fleet's. */
+  state: PoolLiveness
+  /** The pool's zone word: `unknown` is its own (the fleet's zones have no such). Null while the host is not ok. */
   zone: PoolZone | null
   /** The daemon's load score and what drives it; null while it has no `pool.assess.v1` (the ring then keeps the fleet's score). */
   load: PoolLoad | null
@@ -26,10 +26,12 @@ export interface PoolCellExtra {
   owner: PoolOwner | null
   /** Linux only. */
   psi: { some10: number; full10: number } | null
-  /** Fallback: when the pool last read the host (ms). */
-  since: number | null
-  /** Fallback: why the pool does not read it (wwd unreachable, or answering with old facts); null otherwise. */
-  reason: FallbackReason | null
+  /** When the probe last ran (`liveness_at`, ms); null for an ok host, the local host and a host the pool does not list. */
+  checkedAt: number | null
+  /** When the pool last read facts from the host (ms); null if it never did. */
+  lastFactsAt: number | null
+  /** wwd answers but its facts stopped (spec W3). */
+  stalled: boolean
 }
 
 export interface PoolCellModel {
@@ -64,23 +66,30 @@ export function factsToFast(f: PoolFacts, load: number): FleetFast {
   }
 }
 
-export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, pool: PoolHost | null): PoolCellModel {
-  if (!view) return { view: fleet, pool: null }
-  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null, reason: null }
-  if (view.state === 'live') {
-    const f = view.facts
+/** A host the pool does not list: `unknown`, nothing read. `lastFactsAt` is what the store kept for it, if anything. */
+export interface UnlistedState { state: 'unknown'; lastFactsAt: number | null }
+export const unlistedState = (lastFactsAt: number | null = null): UnlistedState => ({ state: 'unknown', lastFactsAt })
+
+export function poolCellModel(fleet: FleetHostView, st: PoolHostState | UnlistedState | null, pool: PoolHost | null): PoolCellModel {
+  if (!st) return { view: fleet, pool: null }
+  if (st.state === 'ok' && 'facts' in st) {
+    const f = st.facts
     return {
       view: { ...fleet, status: 'ok', error: null, last_ok_at: f.at, fast: factsToFast(f, pool?.load?.score ?? fleet.fast?.load ?? 0), slow: null },
       pool: {
-        state: 'live', zone: f.derived.zone, load: pool?.load ?? null,
+        state: 'ok', zone: f.derived.zone, load: pool?.load ?? null,
         worker: { enabled: f.worker.enabled, slots: f.worker.slots, running: f.worker.running },
         headroom: f.derived.headroom, reasons: pool?.headroom_reasons ?? null, sessionsRoom: f.derived.sessions_room, owner: f.owner,
-        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, since: null, reason: null,
+        psi: f.mem.psi ? { some10: f.mem.psi.some10, full10: f.mem.psi.full10 } : null, checkedAt: null, lastFactsAt: f.at, stalled: false,
       },
     }
   }
-  if (view.state === 'fallback') return { view: fleet, pool: { ...none, state: 'fallback', since: view.since, reason: view.reason } }
-  return { view: { ...fleet, status: 'offline', fast: null, last_ok_at: view.lastOkAt }, pool: { ...none, state: 'offline', since: null } }
+  const none = { load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null, zone: null }
+  const rest = 'pool' in st ? { checkedAt: st.checkedAt, stalled: st.stalled } : { checkedAt: null, stalled: false }
+  return {
+    view: { ...fleet, status: 'offline', fast: null, last_ok_at: st.lastFactsAt },
+    pool: { ...none, state: st.state, lastFactsAt: st.lastFactsAt, ...rest },
+  }
 }
 
 export function usePoolCellModels(views: FleetHostView[]): { models: PoolCellModel[]; active: boolean } {
@@ -90,16 +99,14 @@ export function usePoolCellModels(views: FleetHostView[]): { models: PoolCellMod
   const oldDaemon = usePoolStore((s) => s.oldDaemon)
   const answered = usePoolStore((s) => s.sourceHostId !== null)
   const failed = usePoolStore((s) => s.error !== null)
-  const lastLiveAt = usePoolStore((s) => s.lastLiveAt)
+  const lastFactsAt = usePoolStore((s) => s.lastFactsAt)
   const daemons = usePoolHostDaemons()
-  const fleetStale = useFleetStore((s) => s.stale)
   // Active once the pool has said something: a list (an empty one is an answer too), or that every daemon failed. Before the first read the cells stay the fleet's.
   const active = !oldDaemon && (answered || failed)
   const models = useMemo(() => views.map((v) => {
     if (!active) return poolCellModel(v, null, null)
     const pool = matchPoolHost(hosts, v, daemons)
-    const alias = pool?.alias ?? v.alias
-    return poolCellModel(v, poolHostView({ alias, pool, fleet: v, fleetStale, poolLastOk: lastLiveAt[alias] ?? null }, now), pool)
-  }), [views, active, hosts, daemons, fleetStale, lastLiveAt, now])
+    return poolCellModel(v, pool ? poolHostState(pool, lastFactsAt[pool.host_id] ?? null, now) : unlistedState(), pool)
+  }), [views, active, hosts, daemons, lastFactsAt, now])
   return { models, active }
 }
