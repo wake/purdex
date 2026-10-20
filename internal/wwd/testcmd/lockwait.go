@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/snapshot"
 )
 
 // errWaitedOut: a lock stayed held for the whole queue_timeout of the task and nothing ran.
@@ -42,7 +42,7 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 		r := req
 		r.Task = &t
 		if attempt > 0 && req.Body.Snapshot.Commit != "" { // waited: the record is of the directory as it is now
-			r.RetakeTree = func(ctx context.Context) (string, error) { return gate.WorkingTree(ctx, o.GitBin, o.Dir) }
+			r.RetakeTree = func(ctx context.Context) (string, error) { return snapshot.WorkingTree(ctx, o.GitBin, o.Dir) }
 		}
 		res, err := fastlane.Run(ctx, r)
 		if !errors.Is(err, fastlane.ErrLocksBusy) && !errors.Is(err, fastlane.ErrSlotBusy) {

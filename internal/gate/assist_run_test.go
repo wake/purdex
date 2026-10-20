@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/wwd/snapshot"
 )
 
 // ---- X2a-2: snapshot, marks, the run on an assist host (a fake ssh runs the remote command in a temporary home; no network) ----
@@ -62,7 +64,7 @@ func TestSnapshot_IsTheWorkingTreeAndTouchesNothing(t *testing.T) {
 	headBefore := gitIn(t, dir, "rev-parse", "HEAD")
 	statusBefore := gitIn(t, dir, "status", "--porcelain=v1")
 	cachedBefore := gitIn(t, dir, "diff", "--cached")
-	info, err := SnapshotTree(context.Background(), "", dir+"/sub")
+	info, err := snapshot.SnapshotTree(context.Background(), "", dir+"/sub")
 	require.NoError(t, err)
 	assert.Equal(t, dir, info.Root)
 	assert.Equal(t, "sub", info.Rel)
@@ -84,14 +86,14 @@ func TestSnapshot_NoCommitYet(t *testing.T) {
 	}
 	gitIn(t, dir, "init", "-q", "-b", "main")
 	writeFile(t, dir+"/x.txt", "x\n", 0o644)
-	info, err := SnapshotTree(context.Background(), "", dir)
+	info, err := snapshot.SnapshotTree(context.Background(), "", dir)
 	require.NoError(t, err)
 	assert.Equal(t, ".", info.Rel)
 	assert.Equal(t, "x.txt", gitIn(t, dir, "ls-tree", "-r", "--name-only", info.SHA))
 }
 
 func TestSnapshot_NotARepo(t *testing.T) {
-	_, err := SnapshotTree(context.Background(), "", t.TempDir())
+	_, err := snapshot.SnapshotTree(context.Background(), "", t.TempDir())
 	assert.Error(t, err)
 }
 

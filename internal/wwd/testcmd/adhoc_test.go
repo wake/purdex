@@ -15,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/fastlane"
+	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/submit"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -281,7 +282,7 @@ func TestAFastLaneRunThatWaitedForALockRecordsTheTreeOfTheDirectoryWhenItWentOn(
 	if len(rec.trees) != 2 || rec.trees[0] == rec.trees[1] {
 		t.Fatalf("trees at each registration: %q: the second must be of the edited directory", rec.trees)
 	}
-	want, err := gate.WorkingTree(context.Background(), "", dir)
+	want, err := snapshot.WorkingTree(context.Background(), "", dir)
 	if err != nil || rec.trees[1] != want {
 		t.Fatalf("second tree %q, the directory is %q (%v)", rec.trees[1], want, err)
 	}

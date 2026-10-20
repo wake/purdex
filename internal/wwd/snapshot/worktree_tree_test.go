@@ -1,4 +1,4 @@
-package gate
+package snapshot
 
 import (
 	"context"
@@ -27,7 +27,7 @@ func TestWorkingTree_IsHeadsTreeWhenCleanAndTheRealContentWhenNot(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, headTree, tree, "clean")
 
-	writeFile(t, dir+"/a.txt", "a2 changed\n", 0o644)
+	writeFileMode(t, dir+"/a.txt", "a2 changed\n", 0o644)
 	tree, err = WorkingTree(ctx, "", dir)
 	require.NoError(t, err)
 	assert.NotEqual(t, headTree, tree, "a changed file")
@@ -35,7 +35,7 @@ func TestWorkingTree_IsHeadsTreeWhenCleanAndTheRealContentWhenNot(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, gitIn(t, dir, "rev-parse", snap.SHA+"^{tree}"), tree, "the same tree a snapshot commit holds")
 
-	writeFile(t, dir+"/new.txt", "never added\n", 0o644)
+	writeFileMode(t, dir+"/new.txt", "never added\n", 0o644)
 	withNew, err := WorkingTree(ctx, "", dir)
 	require.NoError(t, err)
 	assert.NotEqual(t, tree, withNew, "an untracked file")
@@ -49,8 +49,8 @@ func TestWorkingTree_IsHeadsTreeWhenCleanAndTheRealContentWhenNot(t *testing.T) 
 // It writes no object into the repository (the fast lane must stay out of it) and leaves the caller's index as it was.
 func TestWorkingTree_WritesNothingIntoTheRepository(t *testing.T) {
 	dir := ignoredRepo(t)
-	writeFile(t, dir+"/a.txt", "a2 changed\n", 0o644)
-	writeFile(t, dir+"/new.txt", "never added\n", 0o644)
+	writeFileMode(t, dir+"/a.txt", "a2 changed\n", 0o644)
+	writeFileMode(t, dir+"/new.txt", "never added\n", 0o644)
 	beforeObjects, beforeStatus := objectCount(t, dir), gitIn(t, dir, "status", "--porcelain")
 	_, err := WorkingTree(context.Background(), "", dir)
 	require.NoError(t, err)
@@ -88,28 +88,28 @@ func TestWorkingTree_EqualsTheSnapshotsTreeInEveryState(t *testing.T) {
 		do   func(t *testing.T, dir string)
 	}{
 		{"clean", func(t *testing.T, dir string) {}},
-		{"a changed file", func(t *testing.T, dir string) { writeFile(t, dir+"/a.txt", "a2\n", 0o644) }},
-		{"a new file", func(t *testing.T, dir string) { writeFile(t, dir+"/new.txt", "n\n", 0o644) }},
+		{"a changed file", func(t *testing.T, dir string) { writeFileMode(t, dir+"/a.txt", "a2\n", 0o644) }},
+		{"a new file", func(t *testing.T, dir string) { writeFileMode(t, dir+"/new.txt", "n\n", 0o644) }},
 		{"a deleted file", func(t *testing.T, dir string) { require.NoError(t, os.Remove(dir+"/conf.txt")) }},
 		{"a staged change", func(t *testing.T, dir string) {
-			writeFile(t, dir+"/a.txt", "a3 staged\n", 0o644)
+			writeFileMode(t, dir+"/a.txt", "a3 staged\n", 0o644)
 			gitIn(t, dir, "add", "a.txt")
 		}},
-		{"a staged change edited back", func(t *testing.T, dir string) { writeFile(t, dir+"/a.txt", "a1\n", 0o644) }},
+		{"a staged change edited back", func(t *testing.T, dir string) { writeFileMode(t, dir+"/a.txt", "a1\n", 0o644) }},
 		{"a staged new file then deleted", func(t *testing.T, dir string) {
-			writeFile(t, dir+"/s.txt", "s\n", 0o644)
+			writeFileMode(t, dir+"/s.txt", "s\n", 0o644)
 			gitIn(t, dir, "add", "s.txt")
 			require.NoError(t, os.Remove(dir+"/s.txt"))
 		}},
-		{"an ignored tracked file changed", func(t *testing.T, dir string) { writeFile(t, dir+"/keep.log", "log2\n", 0o644) }},
+		{"an ignored tracked file changed", func(t *testing.T, dir string) { writeFileMode(t, dir+"/keep.log", "log2\n", 0o644) }},
 		{"an assume-unchanged file changed", func(t *testing.T, dir string) {
 			gitIn(t, dir, "update-index", "--assume-unchanged", "conf.txt")
-			writeFile(t, dir+"/conf.txt", "c2 hidden\n", 0o644)
+			writeFileMode(t, dir+"/conf.txt", "c2 hidden\n", 0o644)
 		}},
 		{"a skip-worktree file changed", func(t *testing.T, dir string) {
 			gitIn(t, dir, "update-index", "--no-assume-unchanged", "conf.txt")
 			gitIn(t, dir, "update-index", "--skip-worktree", "a.txt")
-			writeFile(t, dir+"/a.txt", "a4 hidden\n", 0o644)
+			writeFileMode(t, dir+"/a.txt", "a4 hidden\n", 0o644)
 		}},
 	}
 	dir := ignoredRepo(t)
@@ -142,10 +142,10 @@ func TestWorkingTree_APathWithANewlineInIt(t *testing.T) {
 	dir := filepath.Join(base, "a\nb")
 	require.NoError(t, os.Mkdir(dir, 0o755))
 	gitIn(t, dir, "init", "-q", "-b", "main")
-	writeFile(t, dir+"/a.txt", "a1\n", 0o644)
+	writeFileMode(t, dir+"/a.txt", "a1\n", 0o644)
 	gitIn(t, dir, "add", "a.txt")
 	gitIn(t, dir, "commit", "-q", "-m", "base")
-	writeFile(t, dir+"/new.txt", "n\n", 0o644)
+	writeFileMode(t, dir+"/new.txt", "n\n", 0o644)
 	got, err := WorkingTree(context.Background(), "", dir)
 	require.NoError(t, err)
 	assert.Equal(t, oracleTree(t, dir), got)
@@ -156,7 +156,7 @@ func TestWorkingTree_APathWithANewlineInIt(t *testing.T) {
 func TestWorkingTree_AnIndexReplacedWhileItIsCopiedStillGivesOneConsistentView(t *testing.T) {
 	dir := ignoredRepo(t)
 	gitIn(t, dir, "update-index", "--assume-unchanged", "conf.txt")
-	writeFile(t, dir+"/conf.txt", "c2 changed behind the flag\n", 0o644)
+	writeFileMode(t, dir+"/conf.txt", "c2 changed behind the flag\n", 0o644)
 	indexReadHook = func() { gitIn(t, dir, "update-index", "--no-assume-unchanged", "conf.txt") }
 	t.Cleanup(func() { indexReadHook = nil })
 	got, err := WorkingTree(context.Background(), "", dir)

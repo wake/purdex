@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -52,7 +51,7 @@ func newLateCaseWith(t *testing.T, jobID string, beforeClone, afterBase func(rep
 	writeFile(t, repo+"/a.txt", "a2 changed\n")
 	writeFile(t, repo+"/new.txt", "new\n")
 	writeFile(t, repo+"/keep.log", "log2 changed\n")
-	info, err := gate.SnapshotTree(context.Background(), "", repo)
+	info, err := SnapshotTree(context.Background(), "", repo)
 	require.NoError(t, err)
 	require.NoError(t, Pin(context.Background(), repo, jobID, info.SHA))
 
