@@ -151,6 +151,24 @@ describe('HostCell — the hover card', () => {
     fireEvent.click(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
   })
+  it('the tile is described by its open card, and by nothing while closed', () => {
+    setup(cellView())
+    expect(tile().getAttribute('aria-describedby')).toBeNull()
+    fireEvent.focus(tile())
+    const id = screen.getByTestId('host-card').id
+    expect(id).not.toBe('')
+    expect(tile().getAttribute('aria-describedby')).toBe(id)
+    fireEvent.blur(tile())
+    expect(tile().getAttribute('aria-describedby')).toBeNull()
+  })
+  it('two tiles never share a card id', () => {
+    render(<><HostCell view={cellView()} variant="wide" isActive={false} onOpen={vi.fn()} /><HostCell view={cellView({ hostId: '0123456789abcdef', name: 'air26' })} variant="wide" isActive={false} onOpen={vi.fn()} /></>)
+    fireEvent.focus(screen.getByTestId(`host-tile-${ID}`))
+    const a = screen.getByTestId('host-card').id
+    fireEvent.blur(screen.getByTestId(`host-tile-${ID}`))
+    fireEvent.focus(screen.getByTestId('host-tile-0123456789abcdef'))
+    expect(screen.getByTestId('host-card').id).not.toBe(a)
+  })
   it('the card is on the right in the narrow bar and above in the wide one', () => {
     setup(cellView(), { variant: 'narrow' })
     fireEvent.mouseEnter(tile())

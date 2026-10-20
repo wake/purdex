@@ -104,6 +104,10 @@ describe('HostCard — the readings in M11 order', () => {
     expect(row('mem').textContent).toContain('6.0 GB')
     expect(row('swap').textContent).toContain('0.5 GB')
   })
+  it('a host with no cores shows a dash, not "load / 0"', () => {
+    show(cellView({ fast: fast({ load1: 4, ncpu: 0 }) }))
+    expect(row('sysload').textContent).toBe('System load—')
+  })
   it('system load 70 warns, 100 is danger; no swap figure is a dash', () => {
     show(cellView({ fast: fast({ load1: 6, ncpu: 8 }), detail: { version: '1', memAvailGb: 1, swapUsedGb: null, local: false, checkedAt: null } }))
     expect(row('sysload').innerHTML).toContain('text-status-warning-text')

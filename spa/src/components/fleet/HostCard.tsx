@@ -109,9 +109,11 @@ export interface HostCardProps {
   placement: HostCardPlacement
   /** Where the cell is on screen; null (tests, before the first layout) leaves the card unplaced. */
   anchor: HostCardAnchor | null
+  /** The id the anchor's `aria-describedby` points at. */
+  id?: string
 }
 
-export function HostCard({ view, placement, anchor }: HostCardProps) {
+export function HostCard({ view, placement, anchor, id }: HostCardProps) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   const [shift, setShift] = useState({ x: 0, y: 0 })
@@ -153,6 +155,7 @@ export function HostCard({ view, placement, anchor }: HostCardProps) {
   const card = (
     <div
       ref={ref}
+      id={id}
       data-testid="host-card"
       data-placement={placement}
       role="tooltip"
@@ -174,7 +177,7 @@ export function HostCard({ view, placement, anchor }: HostCardProps) {
           </Row>
           <Row id="cpu" label={t('fleet.card.cpu')} mark={markOf(ind, 'cpu')}>{pct(f.cpu)}</Row>
           <Row id="sysload" label={t('pool.card.sysload')} mark={markOf(ind, 'sysload')}>
-            <span className={sysClass}>{t('pool.card.sysload_value', { l: f.load1.toFixed(1), n: f.ncpu })}</span>
+            {f.ncpu > 0 ? <span className={sysClass}>{t('pool.card.sysload_value', { l: f.load1.toFixed(1), n: f.ncpu })}</span> : '—'}
           </Row>
           <Row id="mem" label={t('fleet.card.mem')} mark={markOf(ind, 'mem')}>
             {pct(f.mem)}
