@@ -187,7 +187,7 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	r.refreshSessions(now)
 	cur := make(map[int]cpuPrev, len(rows))
 	r.idents = make(map[int]ident, len(rows))
-	snap := ProcSnapshot{Procs: make([]ProcRec, 0, len(rows))}
+	snap := ProcSnapshot{Procs: make([]ProcRec, 0, len(rows)), Total: len(rows)}
 	for _, row := range rows {
 		p := row.ProcRec
 		p.Start = row.id.time()

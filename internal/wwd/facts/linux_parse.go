@@ -49,6 +49,9 @@ func ParsePSI(text string) (some10, some60, full10 float64, err error) {
 type Meminfo struct {
 	Total, Available, SwapTotal, SwapFree uint64
 	HasAvailable                          bool
+	// Active, Inactive and Cached (the file cache), each with whether the kernel gave the line.
+	Active, Inactive, Cached          uint64
+	HasActive, HasInactive, HasCached bool
 }
 
 func ParseMeminfo(text string) (Meminfo, error) {
@@ -77,12 +80,49 @@ func ParseMeminfo(text string) (Meminfo, error) {
 			m.SwapTotal = kb << 10
 		case "SwapFree":
 			m.SwapFree = kb << 10
+		case "Active":
+			m.Active, m.HasActive = kb<<10, true
+		case "Inactive":
+			m.Inactive, m.HasInactive = kb<<10, true
+		case "Cached":
+			m.Cached, m.HasCached = kb<<10, true
 		}
 	}
 	if !haveTotal {
 		return m, errors.New("meminfo: no MemTotal")
 	}
 	return m, nil
+}
+
+// ParseStatmRSS is the resident set in bytes from /proc/self/statm (size, resident, ... in pages).
+func ParseStatmRSS(text string, pageSize uint64) (uint64, error) {
+	f := strings.Fields(text)
+	if len(f) < 2 {
+		return 0, errors.New("statm: fewer than two fields")
+	}
+	pages, err := strconv.ParseUint(f[1], 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return pages * pageSize, nil
+}
+
+// rawMemFromMeminfo is the Linux memory reading of a parsed meminfo (the production-slice pressure is added by the caller). Swap used
+// and total come from the same read; the breakdown is nil for a line the kernel did not give, and wired is always nil (no such figure).
+func rawMemFromMeminfo(mi Meminfo, pageSize uint64) RawMem {
+	m := RawMem{TotalBytes: mi.Total, PageSize: pageSize, Linux: true, AvailableBytes: mi.Available}
+	used, total := mi.SwapTotal-min(mi.SwapFree, mi.SwapTotal), mi.SwapTotal
+	m.SwapUsedBytes, m.SwapTotalBytes = &used, &total
+	if mi.HasActive {
+		m.ActiveBytes = &mi.Active
+	}
+	if mi.HasInactive {
+		m.InactiveBytes = &mi.Inactive
+	}
+	if mi.HasCached {
+		m.FileCacheBytes = &mi.Cached
+	}
+	return m
 }
 
 // ParseCPUStat reads the aggregate "cpu" line of /proc/stat: busy and total

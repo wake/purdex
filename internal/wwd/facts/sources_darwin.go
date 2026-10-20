@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -48,6 +49,8 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 	return Sources{
 		Procs: procs,
 		Owner: owner,
+		Boot:  bootTime,
+		Self:  selfSource(),
 		Tools: systemTools(opt.ToolDirs),
 		Now:   time.Now,
 		CPU: func() (RawCPU, error) {
@@ -94,9 +97,11 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			} else {
 				m.NoSwapouts = true // the Mach pageouts are still good
 			}
-			if b, err := swapUsedBytes(); err == nil {
-				m.SwapUsedBytes = &b
+			if total, used, err := swapUsage(); err == nil {
+				m.SwapUsedBytes, m.SwapTotalBytes = &used, &total
 			}
+			m.ActiveBytes, m.WiredBytes, m.FileCacheBytes = pagesBytes(vm.Active, m.PageSize), pagesBytes(vm.Wired, m.PageSize), pagesBytes(vm.External, m.PageSize)
+			m.InactiveBytes = pagesBytes(vm.Inactive, m.PageSize)
 			if b, err := unix.SysctlUint64("vm.compressor_bytes_used"); err == nil {
 				m.CompressorBytes = &b
 			}
@@ -124,17 +129,65 @@ func loadavg() (l1, l5 float64, err error) {
 		float64(binary.NativeEndian.Uint32(b[4:])) / float64(fscale), nil
 }
 
-// swapUsedBytes reads struct xsw_usage: total, avail, used (uint64 each), then
-// pagesize and the encrypted flag.
-func swapUsedBytes() (uint64, error) {
+// swapUsage reads struct xsw_usage (vm.swapusage): the swap total and the part used, from the one read.
+func swapUsage() (total, used uint64, err error) {
 	b, err := unix.SysctlRaw("vm.swapusage")
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
+	return parseSwapUsage(b)
+}
+
+// parseSwapUsage reads struct xsw_usage: total, avail, used (uint64 each), then pagesize and the encrypted flag.
+func parseSwapUsage(b []byte) (total, used uint64, err error) {
 	if len(b) < 24 {
-		return 0, errors.New("vm.swapusage: unexpected size")
+		return 0, 0, errors.New("vm.swapusage: unexpected size")
 	}
-	return binary.NativeEndian.Uint64(b[16:]), nil
+	return binary.NativeEndian.Uint64(b[0:]), binary.NativeEndian.Uint64(b[16:]), nil
+}
+
+// bootFromTimeval is the boot time of a kern.boottime reading; a zero or missing one is unknown.
+func bootFromTimeval(tv *unix.Timeval) (time.Time, bool) {
+	if tv == nil || (tv.Sec == 0 && tv.Usec == 0) {
+		return time.Time{}, false
+	}
+	return time.Unix(tv.Sec, int64(tv.Usec)*1000), true
+}
+
+// bootTime reads kern.boottime once; the boot time does not change while the host is up.
+var bootTime = sync.OnceValues(func() (time.Time, bool) {
+	tv, err := unix.SysctlTimeval("kern.boottime")
+	if err != nil {
+		return time.Time{}, false
+	}
+	return bootFromTimeval(tv)
+})
+
+// pagesBytes is a page count in bytes, as a reading.
+func pagesBytes(pages, pageSize uint64) *uint64 {
+	v := pages * pageSize
+	return &v
+}
+
+// selfSource reads wwd's own use: the CPU time from getrusage, the memory as the physical footprint (the figure every process in the list
+// carries; proc_pid_rusage on this pid). Nil when the footprint cannot be bound: self then stays null.
+func selfSource() func() (RawSelf, error) {
+	fp, err := hostmem.NewFootprinter()
+	if err != nil {
+		return nil
+	}
+	pid := os.Getpid()
+	return func() (RawSelf, error) {
+		cpu, err := selfCPUTime()
+		if err != nil {
+			return RawSelf{}, err
+		}
+		rss, err := fp.Of(pid)
+		if err != nil {
+			return RawSelf{}, err
+		}
+		return RawSelf{CPUTime: cpu, RSSBytes: rss}, nil
+	}
 }
 
 // statfsMounts reports the volume holding the home directory (on macOS the
