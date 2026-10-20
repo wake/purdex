@@ -50,6 +50,10 @@ export interface HeadroomReasons { heavy: string[]; light: string[] }
 /** `driver` is cpu | mem | pressure | paging | disk today; a newer one stays text. */
 export interface PoolLoad { score: number; driver: string }
 
+/** What the daemon's own probe of a peer says (`liveness`, #3676): wwd answers, wwd does not but the machine does, neither, or not checked yet. */
+export const LIVENESS = ['ok', 'wwd_down', 'host_down', 'unknown'] as const
+export type PoolLiveness = (typeof LIVENESS)[number]
+
 export interface PoolHost {
   host_id: string
   alias: string
@@ -63,6 +67,14 @@ export interface PoolHost {
   reachable: boolean
   headroom_reasons?: HeadroomReasons
   load?: PoolLoad
+  /** Only a peer row carries these (the local host has no probe of itself); each is absent when the daemon sent none or it did not parse. */
+  liveness?: PoolLiveness
+  /** When the probe last ran (ms). */
+  liveness_at?: number
+  /** Since when `liveness` has had this value (ms). */
+  liveness_since?: number
+  /** Round trip to the peer's wwd (ms), a non-negative number. */
+  rtt_ms?: number
 }
 
 /** `GET /api/pool/facts/history`: the full facts records, oldest first, at the asked step. */

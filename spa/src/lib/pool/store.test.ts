@@ -34,7 +34,7 @@ const setVisibility = (v: DocumentVisibilityState) => { visibility = v; document
 
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.setSystemTime(1_000_000)
+  vi.setSystemTime(facts.at + 1_000) // the sample's facts are fresh at this time
   fetchPoolHosts.mockReset()
   usePoolStore.getState().stop()
   usePoolStore.getState().reset()
@@ -118,6 +118,26 @@ describe('source and reads', () => {
     fetchPoolHosts.mockResolvedValue([mlab({ reachable: false })])
     await st().readOnce()
     expect(st().lastLiveAt.mlab).toBe(facts.at)
+  })
+
+  // MON-1b (spec M21): the time of the last facts is kept by the wwd host_id, which an alias change does not move.
+  it('keeps the last facts time by host_id, and keeps it when the host cannot be read', async () => {
+    const id = mlab().host_id
+    fetchPoolHosts.mockResolvedValue([mlab()])
+    await st().readOnce()
+    expect(st().lastFactsAt[id]).toBe(facts.at)
+    fetchPoolHosts.mockResolvedValue([mlab({ reachable: false, facts: null, liveness: 'host_down' })])
+    await st().readOnce()
+    expect(st().lastFactsAt[id]).toBe(facts.at)
+    fetchPoolHosts.mockResolvedValue([mlab({ alias: 'renamed' })])
+    await st().readOnce()
+    expect(Object.keys(st().lastFactsAt)).toEqual([id])
+  })
+
+  it('a host that is not reachable never had a facts time recorded', async () => {
+    fetchPoolHosts.mockResolvedValue([mlab({ reachable: false })])
+    await st().readOnce()
+    expect(st().lastFactsAt).toEqual({})
   })
 })
 
@@ -381,6 +401,9 @@ describe('pool.events.v1', () => {
   const EV = 'pool.events.v1'
   const announce = (a: string[], b: string[] = ['pool.v1']) => useNexHostStore.setState({ byHost: { [A]: entry(a), [B]: entry(b) } } as never)
   const settle = () => vi.advanceTimersByTimeAsync(0)
+  // The sample's facts count as fresh from MAX_SKEW_MS before their time, so their expiry (the one timer event mode still arms) is 40 s away:
+  // these tests are about events versus the poll, not about freshness (the M20 cases below set their own clock).
+  beforeEach(() => { vi.setSystemTime(facts.at - 10_000) })
 
   it('a source with the capability is read once and then not on a timer', async () => {
     announce(['pool.v1', EV])
@@ -389,6 +412,75 @@ describe('pool.events.v1', () => {
     await settle()
     await vi.advanceTimersByTimeAsync(POLL_MS * 6)
     expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+  })
+
+  // MON-1b (spec M20): `liveness_at` moves without a pool.changed, so while any host is not ok the 5 s poll stays even in event mode.
+  describe('a host that is not ok keeps the 5 s read (M20)', () => {
+    const down = () => mlab({ host_id: 'a0b1c2d3e4f50617', alias: 'mserv', facts: null, liveness: 'wwd_down' })
+
+    it('all hosts ok: one read, no timer', async () => {
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+    })
+
+    // codex R1 (P2): a peer can keep saying `ok` while its facts stop advancing, and nothing emits pool.changed for that.
+    it('facts that stop advancing are read again when they stop being fresh, then every 5 s (stalled is not ok)', async () => {
+      vi.setSystemTime(facts.at + 5_000)
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(24_000)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2_000) // past facts.at + 30 s
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+    })
+
+    // codex attack (high): facts dated far ahead of this clock must not count as fresh, or the host stays ok and nothing is read again.
+    it('facts dated far in the future are not ok: the 5 s read stays', async () => {
+      vi.setSystemTime(1_000_000)
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+      expect(fetchPoolHosts.mock.calls.length).toBeGreaterThanOrEqual(3)
+    })
+
+    it('an event while the expiry timer waits reads at once and re-arms it', async () => {
+      vi.setSystemTime(facts.at + 5_000)
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab({ liveness: 'ok' })])
+      st().start()
+      await settle()
+      st().poolEvent(A)
+      await settle()
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(26_000)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+    })
+
+    it('one host not ok: read again every 5 s; once it is ok again the next read stops the timer', async () => {
+      announce(['pool.v1', EV])
+      fetchPoolHosts.mockResolvedValue([mlab(), down()])
+      st().start()
+      await settle()
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(3)
+      fetchPoolHosts.mockResolvedValue([mlab(), { ...down(), liveness: 'ok', facts }])
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(4)
+      await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+      expect(fetchPoolHosts).toHaveBeenCalledTimes(4)
+    })
   })
 
   it('without the capability it still polls', async () => {
@@ -459,12 +551,13 @@ describe('pool.events.v1', () => {
     const before = fetchPoolHosts.mock.calls.length
     await vi.advanceTimersByTimeAsync(40_000)
     expect(fetchPoolHosts.mock.calls.length).toBeGreaterThan(before)
-    fetchPoolHosts.mockReset(); fetchPoolHosts.mockResolvedValue([mlab()])
+    fetchPoolHosts.mockReset(); fetchPoolHosts.mockImplementation(async () => [mlab({ facts: { ...facts, at: Date.now() } })]) // facts of the moment of the read
     await vi.advanceTimersByTimeAsync(40_000)
     expect(st().error).toBeNull()
     const settled = fetchPoolHosts.mock.calls.length
-    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
-    expect(fetchPoolHosts.mock.calls.length).toBe(settled)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 5)
+    // no 5 s poll (that would be 5 more reads); at most the one read when the fresh facts expire (they last 30 s from their read)
+    expect(fetchPoolHosts.mock.calls.length).toBeLessThanOrEqual(settled + 1)
   })
 
   // codex R1 (P1): `busy` publishes no error until its third time in a row, but it is a failure: its 1–2 s retry must still run

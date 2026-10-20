@@ -2,6 +2,7 @@
 // know is shown as it is, never as an error (the daemon may be newer).
 import type { PoolErrorCode } from './errors'
 import type { FallbackReason } from './host-view'
+import type { PoolHostState } from './host-state'
 import type { HeadroomReasons, PoolZone, Slots } from './types'
 
 type T = (key: string, opts?: Record<string, string | number>) => string
@@ -59,4 +60,34 @@ export const errorTextKey = (code: PoolErrorCode): string | null => ERROR_TEXT[c
 export function fallbackWord(t: T, reason: FallbackReason | null, since: number | null): string {
   const key = `pool.card.fallback_${reason ?? 'unreachable'}`
   return since !== null ? t(key, { time: new Date(since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : t(`${key}_nosince`)
+}
+
+/** The state's short word: `pool.liveness.<ok | wwd_down | host_down | unknown>` (the card's headline and the accessible name). */
+export const livenessWord = (t: T, s: PoolHostState): string => t(`pool.liveness.${s.state}`)
+
+const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+/** "N seconds / minutes / hours ago", whole units rounded down. */
+function agoWord(t: T, ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return t('pool.liveness.ago_s', { n: sec })
+  if (sec < 3600) return t('pool.liveness.ago_m', { n: Math.floor(sec / 60) })
+  return t('pool.liveness.ago_h', { n: Math.floor(sec / 3600) })
+}
+
+/**
+ * The lines under a host card's headline (M11, M17–M21, W3): what the state means, the last reading and how long ago, the last check and the
+ * 5 s rhythm. An ok host says one word (no last check, M20); the local host, which has no probe of itself, says it is the local wwd.
+ */
+export function livenessLines(t: T, s: PoolHostState, now: number): string[] {
+  if (s.state === 'ok') return [t(s.pool.liveness === undefined ? 'pool.liveness.ok_local' : 'pool.liveness.ok')]
+  const lines: string[] = []
+  if (s.stalled) {
+    lines.push(s.lastFactsAt !== null ? t('pool.liveness.explain_stalled', { time: clock(s.lastFactsAt) }) : t('pool.liveness.explain_stalled_none'))
+  } else {
+    lines.push(t(`pool.liveness.explain_${s.state}`))
+    lines.push(s.lastFactsAt !== null ? t('pool.liveness.last_reading', { time: clock(s.lastFactsAt), ago: agoWord(t, now - s.lastFactsAt) }) : t('pool.liveness.no_reading'))
+  }
+  if (s.checkedAt !== null) lines.push(t('pool.liveness.checked', { time: clock(s.checkedAt) }))
+  return lines
 }

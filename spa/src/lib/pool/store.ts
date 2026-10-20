@@ -10,6 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { fetchPoolHosts } from './api'
 import { backoffMs, busyDelayMs, classify, type PoolError, type PoolErrorCode } from './errors'
+import { hostIsOk, LIVE_MS } from './host-state'
 import type { PoolHost } from './types'
 
 export const POLL_MS = 5000
@@ -28,6 +29,8 @@ interface PoolState {
   oldDaemon: boolean
   /** When each pool host (by alias) was last read live (its facts' time), kept across failures for the "since" lines. */
   lastLiveAt: Record<string, number>
+  /** When each host's facts were last read (the facts' time), by wwd `host_id` (an alias change does not move it); kept across failures for the "last reading" lines. */
+  lastFactsAt: Record<string, number>
   error: PoolReadFailure | null
 
   /** One read cycle; resolves to the wait before the next. An answer that arrives after `stop()` or a visibility change (a newer generation) is dropped. */
@@ -39,7 +42,7 @@ interface PoolState {
   reset: () => void
 }
 
-const initial = { hosts: [], sourceHostId: null, oldDaemon: false, lastLiveAt: {}, error: null }
+const initial = { hosts: [], sourceHostId: null, oldDaemon: false, lastLiveAt: {}, lastFactsAt: {}, error: null }
 
 /** The connected daemons announcing `pool.v1`, in the App's host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here. */
 function poolSources(): string[] {
@@ -72,6 +75,7 @@ export const usePoolStore = create<PoolState>((set, get) => {
   let pinned: string | null = null // the source a busy or back-off answer came from
   let busy = 0 // consecutive `busy`
   let timer: ReturnType<typeof setTimeout> | null = null
+  let expiryTimer = false // `timer` is the facts-expiry wait of event mode, not a poll or retry timer: a change to polling must replace it
   let gen = 0
   let running = false
   let inflight = false // a read cycle is under way
@@ -79,22 +83,55 @@ export const usePoolStore = create<PoolState>((set, get) => {
 
   let lastOk = false // the last read cycle was answered by its source (`busy` and the first back-off failures publish no error, but they are failures: their retry timer must stay)
   let readFirst: string | null = null // the first source in host order when the read under way started
-  /** The reads are event-driven: the last one was answered by the FIRST connected pool daemon (host order, as a read picks it) and it announces `pool.events.v1`. */
+  /**
+   * The reads are event-driven: the last one was answered by the FIRST connected pool daemon (host order, as a read picks it), it announces
+   * `pool.events.v1`, and every host is ok. `liveness_at` moves without a `pool.changed` (events.go), so while any host is not ok the 5 s poll stays (M20).
+   */
   const eventDriven = () => {
     const src = get().sourceHostId
-    return lastOk && src !== null && announcesEvents(src) && poolSources()[0] === src
+    if (!(lastOk && src !== null && announcesEvents(src) && poolSources()[0] === src)) return false
+    const now = Date.now()
+    return get().hosts.every((h) => hostIsOk(h, now))
   }
 
-  const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
+  const clearTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } expiryTimer = false }
+
+  /**
+   * Event mode, every host ok: the one read still due is when the earliest facts stop being fresh. A peer can keep saying `ok` while its facts
+   * stop advancing and nothing emits `pool.changed` for that, so without it the host would stay ok in the cards' check lines for good. Every
+   * ok host has fresh facts (`poolHostState`: at most `MAX_SKEW_MS` ahead, at most `LIVE_MS` old), so the wait is always finite and short.
+   */
+  const factsExpiryMs = (): number | null => {
+    const now = Date.now()
+    let soonest: number | null = null
+    for (const h of get().hosts) {
+      if (!h.facts) continue
+      const left = h.facts.at + LIVE_MS + 1 - now
+      if (left > 0 && (soonest === null || left < soonest)) soonest = left
+    }
+    return soonest
+  }
+  const armExpiry = (g: number) => {
+    clearTimer()
+    const wait = factsExpiryMs()
+    if (wait === null) return
+    expiryTimer = true
+    timer = setTimeout(() => { timer = null; expiryTimer = false; void tick(g) }, wait)
+  }
   const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
 
   function applyHosts(sourceHostId: string, hosts: PoolHost[]) {
     const lastLiveAt = { ...get().lastLiveAt }
-    for (const h of hosts) if (h.reachable && h.facts) lastLiveAt[h.alias] = h.facts.at
+    const lastFactsAt = { ...get().lastFactsAt }
+    for (const h of hosts) {
+      if (!h.reachable || !h.facts) continue
+      lastLiveAt[h.alias] = h.facts.at
+      lastFactsAt[h.host_id] = h.facts.at
+    }
     failures = 0
     busy = 0
     lastOk = true
-    set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, error: null })
+    set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, lastFactsAt, error: null })
   }
 
   function forgetPin() {
@@ -178,8 +215,9 @@ export const usePoolStore = create<PoolState>((set, get) => {
     }
     if (g !== gen) return
     if (again) { again = false; void tick(g); return }
-    if (eventDriven()) return // no timer: the next read comes with an event, a reconnect or the window turning visible
-    timer = setTimeout(() => { timer = null; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
+    // no poll timer: the next read comes with an event, a reconnect or the window turning visible (or when the freshest facts expire)
+    if (eventDriven()) { armExpiry(g); return }
+    timer = setTimeout(() => { timer = null; expiryTimer = false; void tick(g) }, delay) // a fired timer is no timer: onCapabilities reads `timer` to know whether one is pending
   }
 
   function onVisibility() {
@@ -195,8 +233,8 @@ export const usePoolStore = create<PoolState>((set, get) => {
     if (!running || hidden()) return
     // a read under way chose its source before this change: when the first source is another one now, read once more after it
     if (inflight) { if (poolSources()[0] !== readFirst) again = true; return }
-    if (eventDriven()) clearTimer()
-    else if (timer === null) void tick(gen)
+    if (eventDriven()) armExpiry(gen)
+    else if (timer === null || expiryTimer) { clearTimer(); void tick(gen) }
   }
   let unsubscribe: (() => void)[] = []
 
