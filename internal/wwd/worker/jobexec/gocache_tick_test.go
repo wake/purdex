@@ -190,8 +190,10 @@ func TestTheTickWithoutADepsDirectoryDoesNothing(t *testing.T) {
 func TestTheSweeperTrimsInTheBackground(t *testing.T) {
 	r := newTickRig(t, 1)
 	r.fill(t, "old", 600, 4096, 5*time.Hour)
-	require.NoError(t, r.e.GoCacheTrimmer().Sweep(context.Background(), nil))
-	assert.Eventually(t, func() bool { return r.size(t) <= int64(1<<20)/100*80 }, 5*time.Second, 10*time.Millisecond)
+	tr := r.e.GoCacheTrimmer()
+	require.NoError(t, tr.Sweep(context.Background(), nil))
+	// the background trim is over (not only done enough): it reads package variables the next tests change
+	assert.Eventually(t, func() bool { return !tr.running.Load() && r.size(t) <= int64(1<<20)/100*80 }, 5*time.Second, 10*time.Millisecond)
 }
 
 // A cache of more entries than can be listed is not left alone (codex R1): the timer removes the entries unused for longer than the age limit as
