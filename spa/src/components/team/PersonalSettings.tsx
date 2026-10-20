@@ -27,21 +27,26 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
   const order = useManualGroupsStore((s) => s.order)
   const groups = useManualGroupsStore((s) => s.groups)
   const [listOpen, setListOpen] = useState(false)
-  const [draft, setDraft] = useState<string | null>(null)
+  // The name draft belongs to the group it was opened on: a draft whose group is not the one shown is nothing (it is never written to another).
+  const [draftState, setDraft] = useState<{ groupId: string; value: string } | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const [wantEdit, setWantEdit] = useState<string | null>(null) // the id of a group just started from this session: its name field opens once the panel shows THAT group
   const [seenRequest, setSeenRequest] = useState(0)
   const manual = group.kind === 'manual' ? group : null
+  const draft = draftState !== null && draftState.groupId === manual?.id ? draftState.value : null
+  const openDraft = (value: string) => { if (manual !== null) setDraft({ groupId: manual.id, value }) }
+  // A press on a button keeps the terminal's focus — unless a name draft is open: then the press is a click elsewhere, the field loses focus and the draft is dropped (R20).
+  const press = (e: React.MouseEvent) => { if (draft === null) keepFocus(e) }
   const waiting = rootKnown ? undefined : t('taskgroups.err.no-root')
 
   // Adjusting state while rendering (no effect): a new rename request, or a group just started from this session, opens the name field.
   if (renameRequest !== seenRequest) {
     setSeenRequest(renameRequest)
-    if (renameRequest > 0 && manual !== null) setDraft(manual.name)
+    if (renameRequest > 0 && manual !== null) openDraft(manual.name)
   }
   if (wantEdit !== null && manual?.id === wantEdit) {
     setWantEdit(null)
-    setDraft(manual.name)
+    openDraft(manual.name)
   }
   useEffect(() => { if (draft !== null) input.current?.select() }, [draft === null]) // eslint-disable-line react-hooks/exhaustive-deps -- select once when the field opens
 
@@ -58,25 +63,26 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
           <button
             type="button"
             data-testid="personal-group-button"
+            aria-haspopup="menu"
             aria-expanded={listOpen}
-            disabled={!rootKnown}
+            disabled={!rootKnown || actions.busy}
             title={waiting}
-            onMouseDown={keepFocus}
+            onMouseDown={press}
             onClick={() => setListOpen((v) => !v)}
             className={`${BTN} max-w-full truncate`}
           >
             {manual !== null ? manual.name : t('taskgroups.ungrouped')} ▾
           </button>
           {listOpen && (
-            <ul data-testid="personal-group-list" role="listbox" className="absolute z-30 left-0 top-full mt-1 min-w-40 max-h-60 overflow-y-auto rounded-md border border-border-default bg-surface-elevated shadow-xl py-1 text-[11.5px]">
+            <ul data-testid="personal-group-list" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') setListOpen(false) }} className="absolute z-30 left-0 top-full mt-1 min-w-40 max-h-60 overflow-y-auto rounded-md border border-border-default bg-surface-elevated shadow-xl py-1 text-[11.5px]">
               {order.flatMap((id) => (groups[id] ? [id] : [])).map((id) => (
                 <li key={id}>
                   <button
                     type="button"
-                    role="option"
-                    aria-selected={manual?.id === id}
+                    role="menuitemradio"
+                    aria-checked={manual?.id === id}
                     data-testid="personal-group-option"
-                    onMouseDown={keepFocus}
+                    onMouseDown={press}
                     onClick={() => { setListOpen(false); if (manual?.id !== id) void actions.move(id) }}
                     className="w-full flex items-center gap-1.5 px-2 py-1 text-left text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
                   >
@@ -89,7 +95,8 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
                 <button
                   type="button"
                   data-testid="personal-group-new"
-                  onMouseDown={keepFocus}
+                  disabled={actions.busy}
+                  onMouseDown={press}
                   onClick={() => { setListOpen(false); void actions.startGroup().then((id) => { if (id !== null) setWantEdit(id) }) }}
                   className="w-full px-2 py-1 text-left text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
                 >
@@ -102,9 +109,9 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
         <button
           type="button"
           data-testid="personal-take-out"
-          disabled={!rootKnown || manual === null}
+          disabled={!rootKnown || manual === null || actions.busy}
           title={waiting}
-          onMouseDown={keepFocus}
+          onMouseDown={press}
           onClick={() => void actions.takeOut()}
           className={BTN}
         >
@@ -121,8 +128,8 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
               <button
                 type="button"
                 data-testid="personal-name-edit"
-                onMouseDown={keepFocus}
-                onClick={() => setDraft(manual.name)}
+                onMouseDown={press}
+                onClick={() => openDraft(manual.name)}
                 title={t('personal.settings.rename')}
                 className="min-w-0 flex-1 flex items-center gap-1 text-left text-[12px] text-text-primary cursor-pointer"
               >
@@ -134,7 +141,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
                 ref={input}
                 data-testid="personal-name-input"
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={(e) => openDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') commit()
                   else if (e.key === 'Escape') setDraft(null)
@@ -155,7 +162,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
                   data-color={c}
                   aria-pressed={manual.color?.toLowerCase() === c}
                   aria-label={c}
-                  onMouseDown={keepFocus}
+                  onMouseDown={press}
                   onClick={() => actions.recolor(manual.id, c)}
                   className={`w-4 h-4 rounded-full cursor-pointer ${manual.color?.toLowerCase() === c ? 'ring-2 ring-offset-1 ring-text-primary ring-offset-surface-elevated' : ''}`}
                   style={{ background: c }}

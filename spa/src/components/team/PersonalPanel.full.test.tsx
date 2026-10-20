@@ -259,3 +259,61 @@ describe('a session that already has a group starts a new one (codex R1)', () =>
     expect(Object.values(groups()).map((g) => g.name)).toContain('Fresh')
   })
 })
+
+describe('state that must not leak (codex attack)', () => {
+  it('a name draft, the open list and the workbook drill are dropped on a tab switch to another personal tab', () => {
+    readRoot('S1', 'R1'); readRoot('S2', 'R2')
+    act(() => { useManualGroupsStore.setState({ groups: { ...groups(), [A]: { ...groups()[A], members: [{ host: HOST, root: 'R1' }] }, [B]: { ...groups()[B], members: [{ host: HOST, root: 'R2' }] } } }) })
+    seedWorkbook(HOST, 'S1', { status: 'one.', entries: [] }); seedWorkbook(HOST, 'S2', { status: 'two.', entries: [] })
+    scene()
+    addTab(ccTab('cc2', 'S2'))
+    fireEvent.click(q('personal-name-edit'))
+    fireEvent.change(q('personal-name-input'), { target: { value: 'draft of A' } })
+    setActive('cc2')
+    expect(screen.queryByTestId('personal-name-input')).toBeNull()
+    expect(q('personal-name-edit').textContent).toContain('文件整理')
+    fireEvent.click(q('personal-card-workbook'))
+    expect(screen.getByTestId('personal-workbook')).toBeTruthy()
+    setActive('cc1')
+    expect(screen.queryByTestId('personal-workbook')).toBeNull()
+    expect(groups()[A].name).toBe('iOS 發版')
+    expect(groups()[B].name).toBe('文件整理')
+  })
+
+  it('a second click while a move is out is dropped, not run: one group is started, not two', async () => {
+    readRoot('S1', 'R1')
+    scene()
+    fireEvent.click(q('personal-group-button'))
+    const create = q('personal-group-new')
+    fireEvent.click(create)
+    fireEvent.click(create)
+    await waitFor(() => expect(Object.keys(groups())).toHaveLength(3))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(Object.keys(groups())).toHaveLength(3)
+  })
+
+  it('a press on a swatch while the name field is open abandons the draft (a click elsewhere, R20)', () => {
+    readRoot('S1', 'R1')
+    act(() => { useManualGroupsStore.setState({ groups: { ...groups(), [A]: { ...groups()[A], members: [{ host: HOST, root: 'R1' }] } } }) })
+    scene()
+    fireEvent.click(q('personal-name-edit'))
+    fireEvent.change(q('personal-name-input'), { target: { value: 'changed' } })
+    // a real press moves the focus off the field: the blur the browser would fire
+    expect(fireEvent.mouseDown(screen.getAllByTestId('personal-color')[2])).toBe(true) // not default-prevented: the field may lose focus
+    fireEvent.blur(q('personal-name-input'))
+    expect(screen.queryByTestId('personal-name-input')).toBeNull()
+    expect(groups()[A].name).toBe('iOS 發版')
+  })
+
+  it('a draft opened on one group is never written to another (the group changes under it)', () => {
+    readRoot('S1', 'R1')
+    act(() => { useManualGroupsStore.setState({ groups: { ...groups(), [A]: { ...groups()[A], members: [{ host: HOST, root: 'R1' }] } } }) })
+    scene()
+    fireEvent.click(q('personal-name-edit'))
+    fireEvent.change(q('personal-name-input'), { target: { value: 'draft of A' } })
+    // the session moves to B from elsewhere (the sidebar)
+    act(() => { useManualGroupsStore.setState({ groups: { ...groups(), [A]: { ...groups()[A], members: [] }, [B]: { ...groups()[B], members: [{ host: HOST, root: 'R1' }] } } }) })
+    expect(screen.queryByTestId('personal-name-input')).toBeNull()
+    expect(groups()[B].name).toBe('文件整理')
+  })
+})

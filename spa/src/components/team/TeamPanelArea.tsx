@@ -95,6 +95,7 @@ export function TeamPanelArea() {
           />
         ) : view0.kind === 'personal' ? (
           <PersonalPanel
+            key={view0.target.tabId}
             target={view0.target}
             mode={paneMode}
             onSetMode={(m) => useTeamUiStore.getState().setSharedPanelMode(m)}
