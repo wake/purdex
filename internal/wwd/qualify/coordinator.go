@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -105,7 +106,7 @@ type Coordinator struct {
 const maxHistory = 50
 
 // SessionName is the submitter session of the jobs the coordinator queues.
-const SessionName = "wwd-qualify"
+const SessionName = labels.QualifySession
 
 // New builds a coordinator. Nothing runs until Tick or Request is called.
 func New(cfg Config) *Coordinator {
@@ -265,23 +266,13 @@ func halves(base wire.JobSubmission, t Task, candidate string) (cand, ref wire.J
 		s.Cacheable = false
 		s.Interruptible = true // so that a newer pair (after a restart forgot this one) really stops an older one that is still running
 		s.AdHoc = false
-		s.SupersedeKey = "qualify:" + candidate + ":" + own + ":" + role
+		s.SupersedeKey = labels.QualifyKey(candidate, own, role)
 		s.Submitter = wire.Submitter{Session: SessionName, Host: candidate}
-		s.Labels = append(slices.Clone(s.Labels), "host:"+host)
+		s.Labels = labels.QualifyHalfLabels(base.Labels, own, role, host)
 		return s
 	}
-	cb := base
-	cb.Labels = nil
-	for _, l := range base.Labels {
-		if l == own || strings.HasPrefix(l, "os:") || strings.HasPrefix(l, "arch:") {
-			continue
-		}
-		cb.Labels = append(cb.Labels, l)
-	}
-	cand = common(cb, "candidate", candidate)
-	rb := base
-	rb.Labels = slices.Clone(base.Labels)
-	ref = common(rb, "reference", t.Reference)
+	cand = common(base, labels.RoleCandidate, candidate)
+	ref = common(base, labels.RoleReference, t.Reference)
 	return cand, ref
 }
 
