@@ -606,6 +606,11 @@ describe('host delete cascade — a write fails half-way', () => {
     useTabStore.getState().addTab(makeSessionTab(HOST_A, 'dev001'))
     useTabStore.getState().addTab(makeSessionTab(HOST_B, 'stg001'))
     useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/a' })
+    // #3685: the history holds the host's ids too (a closed tab's layout and team placement, a visited pane)
+    useHistoryStore.setState({
+      closedTabs: [{ tab: { ...makeSessionTab(HOST_A, 'old001'), group: teamGroupKey(`${HOST_A}\u0000t1`) }, closedAt: 1 }],
+      browseHistory: [{ tabId: 'v', paneContent: { kind: 'tmux-session', hostId: HOST_A, sessionCode: 'old001', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i' }, visitedAt: 1 }],
+    })
     useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [{ host: HOST_A, root: 'r1' }, { host: HOST_B, root: 'r2' }], createdAt: 1 } } })
     useGroupViewStore.setState({ selectedGroup: teamGroupKey(`${HOST_A}\u0000t1`), lastActiveTab: { [teamGroupKey(`${HOST_A}\u0000t1`)]: 'tab1' }, expanded: {}, lastByView: { workspace: null, group: null } })
     useNewTabLayoutStore.setState({
@@ -624,13 +629,14 @@ describe('host delete cascade — a write fails half-way', () => {
     useHostStore.setState({ runtime: { [HOST_A]: { status: 'connected' } } })
   }
 
-  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TASK_GROUPS, STORAGE_KEYS.GROUP_VIEW]
+  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HISTORY, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TASK_GROUPS, STORAGE_KEYS.GROUP_VIEW]
 
   function everything(): string {
     const h = useHostStore.getState()
     const a = useAgentStore.getState()
     return JSON.stringify({
       tabs: useTabStore.getState().tabs,
+      history: [useHistoryStore.getState().closedTabs, useHistoryStore.getState().browseHistory],
       parked: [useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves],
       hostSettings: useHostSettingsStore.getState().hosts,
       groups: [useManualGroupsStore.getState().order, useManualGroupsStore.getState().groups],
@@ -672,6 +678,16 @@ describe('host delete cascade — a write fails half-way', () => {
     vi.restoreAllMocks()
     expect(everything()).toBe(before)
     expect(JSON.stringify(useTabStore.getState().tabs)).not.toContain(WIRE_A)
+  })
+
+  it('the deletion rewrites the history to the wire ids as well (#3685), and a failed deletion puts it back', () => {
+    seedEverything()
+    expect(deleteHostCascade(HOST_A)).toBeTypeOf('function')
+    const { closedTabs, browseHistory } = useHistoryStore.getState()
+    expect(JSON.stringify(closedTabs)).not.toContain(`"hostId":"${HOST_A}"`)
+    expect(JSON.stringify(closedTabs)).toContain(WIRE_A)
+    expect(JSON.stringify(browseHistory)).toContain(WIRE_A)
+    expect(JSON.stringify(closedTabs[0].tab.group)).toContain(WIRE_A)
   })
 
   it('no lease is released for a deletion that did not happen — nothing pinned is ever sent', () => {

@@ -3,6 +3,7 @@ import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { revPatch } from './presence/host-projection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useHistoryStore } from '../stores/useHistoryStore'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
@@ -182,6 +183,7 @@ interface WholeStore {
 /** Every store `cascadeSteps` writes: those `rewriteHostRefs` rewrites, each per-host store it clears, the host store. */
 const CASCADE_STORES: readonly WholeStore[] = [
   useTabStore,
+  useHistoryStore,
   useLocalProfilesStore,
   useHostSettingsStore,
   useNewTabLayoutStore,

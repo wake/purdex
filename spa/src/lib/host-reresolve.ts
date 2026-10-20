@@ -35,6 +35,7 @@
 
 import { useHostStore } from '../stores/useHostStore'
 import { rewriteTabsHosts, useTabStore } from '../stores/useTabStore'
+import { useHistoryStore } from '../stores/useHistoryStore'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import type { LocalProfile, ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
@@ -47,7 +48,7 @@ import { rewriteManualGroupsHosts, useManualGroupsStore } from '../stores/useMan
 import { rewriteGroupViewHosts, useGroupViewStore } from '../stores/useGroupViewStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { readMasterWorld } from './profile/master-world'
-import { hostSettingsFromWire, presetColumnIdFromWire } from './profile/host-identity'
+import { hostSettingsFromWire, layoutFromWire, presetColumnIdFromWire } from './profile/host-identity'
 import { hostResolverSignature, wireResolverOf } from './profile/sections'
 import { rekeyWireKeyedStores } from './host-look'
 import { rekeyShownHosts } from './shown-hosts'
@@ -79,6 +80,30 @@ function mapWorld(world: ParkedWorld, map: HostMap): ParkedWorld {
   return tabs === world.tabs ? world : { ...world, tabs }
 }
 
+/** The closed-tab history through `map` (#3685): each record's tab like a tab on screen; a record that does not move keeps its identity, and so does the list when none does. */
+function rewriteClosedTabs(closedTabs: ReturnType<typeof useHistoryStore.getState>['closedTabs'], map: HostMap): ReturnType<typeof useHistoryStore.getState>['closedTabs'] {
+  let next: typeof closedTabs | null = null
+  closedTabs.forEach((rec, i) => {
+    const tab = rewriteTabsHosts({ [rec.tab.id]: rec.tab }, map)[rec.tab.id]
+    if (tab === rec.tab) return
+    next ??= [...closedTabs]
+    next[i] = { ...rec, tab }
+  })
+  return next ?? closedTabs
+}
+
+/** The browse history (the History page reopens a record with `createTab(record.paneContent)`): each pane content like a leaf of a layout; unchanged records keep their identity. */
+function rewriteBrowseHistory(browseHistory: ReturnType<typeof useHistoryStore.getState>['browseHistory'], map: HostMap): ReturnType<typeof useHistoryStore.getState>['browseHistory'] {
+  let next: typeof browseHistory | null = null
+  browseHistory.forEach((rec, i) => {
+    const content = layoutFromWire({ type: 'leaf' as const, pane: { id: '', content: rec.paneContent } }, map).pane.content
+    if (content === rec.paneContent) return
+    next ??= [...browseHistory]
+    next[i] = { ...rec, paneContent: content }
+  })
+  return next ?? browseHistory
+}
+
 const columnMap = (map: HostMap) => (id: string) => presetColumnIdFromWire(id, map)
 
 /**
@@ -93,6 +118,13 @@ function planRewrite(map: HostMap): StoreWrite[] {
   const tabsNext = rewriteTabsHosts(tabs, map)
   if (tabsNext !== tabs) {
     writes.push({ key: 'tabs', commit: () => useTabStore.setState({ tabs: tabsNext }), undo: () => useTabStore.setState({ tabs }) })
+  }
+
+  const { closedTabs, browseHistory } = useHistoryStore.getState()
+  const closedNext = rewriteClosedTabs(closedTabs, map)
+  const browseNext = rewriteBrowseHistory(browseHistory, map)
+  if (closedNext !== closedTabs || browseNext !== browseHistory) {
+    writes.push({ key: 'history', commit: () => useHistoryStore.setState({ closedTabs: closedNext, browseHistory: browseNext }), undo: () => useHistoryStore.setState({ closedTabs, browseHistory }) })
   }
 
   const { parkedMaster, slaves } = useLocalProfilesStore.getState()
@@ -194,7 +226,7 @@ interface Rereadable {
 }
 
 /** The stores the pass rewrites, and the workspace store the world's settledness is read with. */
-const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore, useGroupViewStore] as unknown as Rereadable[]
+const REREAD: readonly Rereadable[] = [useTabStore, useHistoryStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore, useGroupViewStore] as unknown as Rereadable[]
 
 /**
  * Bring every store in `REREAD` up to what storage holds NOW. A store whose persisted record is exactly what its
