@@ -43,11 +43,13 @@ export function liveTopology(): JobsTopology {
     const e = prev ? byHost[prev] : undefined
     if (prev && runtime[prev]?.status === 'connected' && e && e.fetchedAt <= 0 && e.wwd?.hostId === h.host_id && e.daemonCapabilities?.includes(JOBS_CAPABILITY)) ownDaemon[h.alias] = prev
   }
-  // Remembered across the non-connected moments of a reconnect too; forgotten once a fresh read (or the pool) no longer confirms it.
-  const aliases = new Set(pool.map((h) => h.alias))
+  // Remembered across the non-connected moments of a reconnect too (the entry is still fresh while the connection is down, and is marked stale only when it comes back);
+  // forgotten once the pool lost the host or a fresh entry itself stops confirming it (another wwd, or no `jobs.v1`).
+  const hostIds = new Map(pool.map((h) => [h.alias, h.host_id]))
   for (const alias of Object.keys(lastOwn)) {
     const e = byHost[lastOwn[alias]]
-    if (!aliases.has(alias) || (e && e.fetchedAt > 0 && ownDaemon[alias] !== lastOwn[alias])) delete lastOwn[alias]
+    const confirmed = !!e && e.wwd?.hostId === hostIds.get(alias) && !!e.daemonCapabilities?.includes(JOBS_CAPABILITY)
+    if (!hostIds.has(alias) || (e && e.fetchedAt > 0 && !confirmed)) delete lastOwn[alias]
   }
   Object.assign(lastOwn, ownDaemon)
   return { origins: pool.map((h) => h.alias), ownDaemon, forwarders }

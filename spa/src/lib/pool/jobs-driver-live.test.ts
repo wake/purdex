@@ -94,6 +94,14 @@ describe('liveTopology across a reconnect (the moment after it, before /api/info
     useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
     expect(liveTopology().ownDaemon).toEqual({ mlab: A, mserv: B })
   })
+  it('the memory also survives a reconnecting moment in which the entry is still fresh (it is marked stale only when the connection comes back)', () => {
+    liveTopology()
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'reconnecting' } } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A })
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } } as never)
+    useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: stale(WWD_B) } } as never)
+    expect(liveTopology().ownDaemon).toEqual({ mlab: A, mserv: B })
+  })
   it('a fresh read that no longer names the host ends the memory for good', () => {
     liveTopology()
     useNexHostStore.setState({ byHost: { [A]: entry(['jobs.v1'], 1, WWD_A), [B]: entry(['jobs.v1'], 5, 'ffffffffffffffff') } } as never)
