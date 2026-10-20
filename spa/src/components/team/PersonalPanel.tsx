@@ -56,8 +56,10 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
     ? jt.origin !== null && jt.origin.hostId === target.hostId && jt.origin.sessionId === target.agentSessionId && jt.memoKey !== null ? { open: memo.journalOpen, onToggle: () => patchUnitMemo(jt.memoHost, jt.memoKey, { journalOpen: !memo.journalOpen }) } : null
     : ownWb.has ? { open: workbookOpen, onToggle: () => setWorkbookOpen((v) => !v) } : null
 
+  // The workbook view fills the area (its scroll box follows the area's height), as a team's drilled-in seat does.
+  const showWorkbook = mode === 'full' && workbookOpen && !jt.journalHost && ownWb.has
   return (
-    <div ref={rootRef} data-testid="personal-panel" data-mode={mode} className="text-xs text-text-primary">
+    <div ref={rootRef} data-testid="personal-panel" data-mode={mode} className={`text-xs text-text-primary${showWorkbook ? ' flex flex-col flex-1 min-h-0' : ''}`}>
       {mode === 'line' ? (
         <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle} {...hdr} onDoubleClick={onHeaderDoubleClick}>
           <GroupCapsule group={group} className="flex-shrink-0" style={{ maxWidth: CAPSULE_MAX_W }} />
@@ -80,7 +82,7 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
               <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
             </span>
           </div>
-          {workbookOpen && !jt.journalHost && ownWb.has ? (
+          {showWorkbook ? (
             <div data-testid="personal-workbook" className="border-t border-border-subtle flex flex-col flex-1 min-h-0">
               <button
                 type="button"
