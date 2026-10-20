@@ -2,7 +2,7 @@
 import { HandPalm, WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
 import { STATUS_COLORS } from './status-colors'
-import { OVERLAY_DOT, OVERLAY_RING } from './overlay-dot'
+import { OVERLAY_DOT, OVERLAY_ERROR, OVERLAY_RING } from './overlay-dot'
 import { useI18nStore } from '../stores/useI18nStore'
 
 /** Render mode — orthogonal to the tab-level indicator style. */
@@ -50,13 +50,13 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false, a
       return (
         <WarningDiamond
           data-testid="tab-status-error"
-          size={10}
+          size={OVERLAY_ERROR.size}
           weight="fill"
           color={STATUS_COLORS.error}
           style={{
             position: 'absolute',
-            top: -2,
-            right: -3,
+            top: OVERLAY_ERROR.top,
+            right: OVERLAY_ERROR.right,
             filter: `drop-shadow(0 0 1px ${ringColor})`,
           }}
         />
