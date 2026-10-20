@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/gitenv"
 )
@@ -54,10 +55,23 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		return strings.TrimSpace(out.String()), nil
 	}
 	run := func(env []string, args ...string) (string, error) { return runIn(env, "", args...) }
-	root, err := run(nil, "rev-parse", "--show-toplevel")
+	// one git call for the three answers (each process start is a few ms and the whole of this is the fast lane's cost)
+	where, err := run(nil, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-path", "objects", "--git-path", "index")
 	if err != nil {
 		return builtTree{}, err
 	}
+	lines := strings.Split(where, "\n")
+	if len(lines) != 3 { // a path with a newline in it: git has no -z here, so ask one question at a time
+		lines = lines[:0]
+		for _, q := range [][]string{{"--show-toplevel"}, {"--path-format=absolute", "--git-path", "objects"}, {"--path-format=absolute", "--git-path", "index"}} {
+			one, err := run(nil, append([]string{"rev-parse"}, q...)...)
+			if err != nil {
+				return builtTree{}, err
+			}
+			lines = append(lines, one)
+		}
+	}
+	root, objects, srcIndex := lines[0], lines[1], lines[2]
 	tmp, err := os.MkdirTemp("", "pdx-assist-index-")
 	if err != nil {
 		return builtTree{}, err
@@ -66,21 +80,58 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	idxPath := filepath.Join(tmp, "index")
 	idx := []string{"GIT_INDEX_FILE=" + idxPath}
 	if quarantine {
-		objects, err := run(nil, "rev-parse", "--path-format=absolute", "--git-path", "objects")
-		if err != nil {
-			return builtTree{}, err
-		}
 		qdir := filepath.Join(tmp, "objects")
 		if err := os.Mkdir(qdir, 0o700); err != nil {
 			return builtTree{}, err
 		}
 		idx = append(idx, "GIT_OBJECT_DIRECTORY="+qdir, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+objects)
 	}
-	if err := seedIndex(run, runIn, idx, idxPath); err != nil {
+	// Two copies of the index: `add -A` works on one while the other is read for flagged entries (the common case has none, and the
+	// wait for the answer was a fifth of the time). A flagged entry makes the first copy's result wrong, so it is made again.
+	probePath := filepath.Join(tmp, "index.probe")
+	snap, err := readIndex(srcIndex) // read once: both copies, and the one made again for flags, are of these bytes
+	if err != nil {
 		return builtTree{}, err
 	}
-	if _, err := run(idx, append(tempIndexConfig(), "add", "-A", "--", root)...); err != nil {
-		return builtTree{}, err
+	if snap != nil {
+		if err := snap.writeTo(idxPath); err != nil {
+			return builtTree{}, err
+		}
+		if err := snap.writeTo(probePath); err != nil {
+			return builtTree{}, err
+		}
+	}
+	probe := append([]string{"GIT_INDEX_FILE=" + probePath}, idx[1:]...)
+	type probed struct {
+		flagged []string
+		err     error
+	}
+	probeDone := make(chan probed, 1)
+	go func() {
+		f, err := flaggedEntries(run, probe)
+		probeDone <- probed{f, err}
+	}()
+	_, addErr := run(idx, append(tempIndexConfig(), "add", "-A", "--", root)...)
+	p := <-probeDone
+	if p.err != nil {
+		return builtTree{}, p.err
+	}
+	if len(p.flagged) > 0 {
+		if snap != nil {
+			if err := snap.writeTo(idxPath); err != nil {
+				return builtTree{}, err
+			}
+		}
+		if err := clearFlags(runIn, idx, p.flagged); err != nil {
+			return builtTree{}, err
+		}
+		addErr = nil
+		if _, err := run(idx, append(tempIndexConfig(), "add", "-A", "--", root)...); err != nil {
+			return builtTree{}, err
+		}
+	}
+	if addErr != nil {
+		return builtTree{}, addErr
 	}
 	tree, err := run(idx, append(tempIndexConfig(), "write-tree")...) // it writes the tree cache back into the index
 	if err != nil {
@@ -129,49 +180,66 @@ func tempIndexConfig() []string {
 	return []string{"-c", "core.splitIndex=false", "-c", "core.fsmonitor=false"}
 }
 
-// seedIndex makes the temporary index a copy of the caller's, so that what git tracks stays in the snapshot (a tracked file that the
+// copyIndex makes dst a copy of the caller's index file src, so that what git tracks stays in the snapshot (a tracked file that the
 // ignore rules match is not lost, as it was from an empty index) and git need not read every file again (the stat information of the
 // entries comes along: M-S1 measured 1.5 s down to 0.25 s for 5,457 files). The copy is of the index file alone: a split index keeps its
-// shared part in the git directory, which git reads from there. A repository with no index yet starts empty.
-//
-// The flags that make `add -A` pass an entry by are cleared on the copy: skip-worktree and assume-unchanged both say "do not look at the
-// file", and the snapshot is the tree as it is now. (A file a sparse checkout left out is then absent from the snapshot, as it is from
-// the tree.) The caller's own index keeps its flags. git update-index takes one of the two options per call.
-func seedIndex(run func(env []string, args ...string) (string, error), runIn func(env []string, stdin string, args ...string) (string, error), idx []string, dst string) error {
-	src, err := run(nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
-	if err != nil {
-		return err
-	}
+// shared part in the git directory, which git reads from there. A repository with no index yet starts empty (no file is made).
+// indexSnapshot is the bytes of the caller's index file at one moment and its file time. A copy of it keeps what git tracks in the snapshot (a
+// tracked file that the ignore rules match is not lost, as it was from an empty index) and git need not read every file again (the stat
+// information of the entries comes along: M-S1 measured 1.5 s down to 0.25 s for 5,457 files). The copy is of the index file alone: a split
+// index keeps its shared part in the git directory, which git reads from there. Every copy of a run is made from one, so that
+// the flags read from one copy are the flags of the copy `add -A` works on, whatever other git processes do to the real index.
+type indexSnapshot struct {
+	b []byte
+	t time.Time
+}
+
+// indexReadHook, when set, runs right after the index file was read (tests change the real index there).
+var indexReadHook func()
+
+// readIndex reads the index file src; nil, nil when there is none (a repository with no index yet starts empty).
+func readIndex(src string) (*indexSnapshot, error) {
 	// One open file gives both the bytes and the file time: git replaces the index by renaming a new file over the path, and a stat
 	// of the path after the read could report the time of a newer index than the bytes that were copied.
 	f, err := os.Open(src)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, err)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, err)
 	}
 	b, rerr := io.ReadAll(f)
 	st, serr := f.Stat()
 	f.Close()
 	if rerr != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, rerr)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, rerr)
 	}
 	if serr != nil {
-		return fmt.Errorf("the index of the repository (%s): %w", src, serr)
+		return nil, fmt.Errorf("the index of the repository (%s): %w", src, serr)
 	}
-	if err := os.WriteFile(dst, b, 0o600); err != nil {
+	if indexReadHook != nil {
+		indexReadHook()
+	}
+	return &indexSnapshot{b: b, t: st.ModTime()}, nil
+}
+
+func (x *indexSnapshot) writeTo(dst string) error {
+	if err := os.WriteFile(dst, x.b, 0o600); err != nil {
 		return err
 	}
 	// The copy keeps the original's file time. git calls an entry racily clean when its file time is not older than the index
 	// file's, and then reads the content instead of trusting size and time; a copy made now would be newer than every entry, and an
 	// edit of the same size in the second of the last index write would read as unchanged and be missing from the snapshot.
-	if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
-		return err
-	}
+	return os.Chtimes(dst, x.t, x.t)
+}
+
+// flaggedEntries are the paths of the index at idx that carry skip-worktree or assume-unchanged: both say "do not look at the file", and
+// `add -A` passes such an entry by, while the snapshot is the tree as it is now. (A file a sparse checkout left out is then absent from
+// the snapshot, as it is from the tree.)
+func flaggedEntries(run gitRunFn, idx []string) ([]string, error) {
 	list, err := run(idx, append(tempIndexConfig(), "ls-files", "-v", "-z")...)
 	if err != nil {
-		return fmt.Errorf("reading the copy of the index: %w", err)
+		return nil, fmt.Errorf("reading the copy of the index: %w", err)
 	}
 	var flagged []string
 	for _, e := range strings.Split(list, "\x00") {
@@ -179,9 +247,12 @@ func seedIndex(run func(env []string, args ...string) (string, error), runIn fun
 			flagged = append(flagged, e[2:]) // "<tag> <path>"
 		}
 	}
-	if len(flagged) == 0 {
-		return nil
-	}
+	return flagged, nil
+}
+
+// clearFlags clears the two flags on those entries of the index copy; the caller's own index keeps its flags. git update-index takes one
+// of the two options per call.
+func clearFlags(runIn func(env []string, stdin string, args ...string) (string, error), idx, flagged []string) error {
 	paths := strings.Join(flagged, "\x00") + "\x00"
 	for _, opt := range []string{"--no-skip-worktree", "--no-assume-unchanged"} {
 		if _, err := runIn(idx, paths, append(tempIndexConfig(), "update-index", opt, "-z", "--stdin")...); err != nil {
