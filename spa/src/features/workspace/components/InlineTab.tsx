@@ -32,6 +32,10 @@ interface Props {
   leadOfTeam?: string
   /** Not a drag source: the task-group view lists the sessions by group, and a drop there means nothing. */
   noDrag?: boolean
+  /** The row's drag data when it is not a workspace tab: the task-group view tags its rows (lib/group-drag.ts). */
+  dragData?: object
+  /** The row's sortable id when it is not the tab's id: a split tab carrying several team seats has one row per seat. */
+  dragId?: string
   /** The row stands for a team seat (the task-group view): its persona comes from the seat's address and its title is the seat's label — a split tab can carry several seats, each with its own row. */
   seatOverride?: { address: string; title: string }
 }
@@ -47,6 +51,8 @@ export function InlineTab({
   onRename,
   leadOfTeam,
   noDrag = false,
+  dragData,
+  dragId,
   seatOverride,
 }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -61,8 +67,8 @@ export function InlineTab({
   // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
   // ("press space to pick up") would be false. The row sets its own role=button + tabIndex=0 below (#2531).
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: tab.id,
-    data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
+    id: dragId ?? tab.id,
+    data: (dragData as Record<string, unknown> | undefined) ?? { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
     disabled: noDrag,
   })
 
@@ -235,6 +241,7 @@ export function InlineTab({
           title={t('common.close')}
           onClick={handleCloseClick}
           onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()} // a press on the button is the button's, never the start of a row drag
           className={`rounded p-0.5 hover:bg-surface-secondary hover:text-text-primary ${
             isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}

@@ -4,8 +4,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within, act } from '@testing-library/react'
 
+// The sidebar's DndContext is not mounted here: the mocks record each row's and group's drag data (what ActivityBarWide's handleDragEnd would see) and the tests end a drag by calling the handler the view registered.
+const sortables = new Map<string, { data: unknown; disabled: boolean }>()
+const droppables = new Map<string, unknown>()
+const sortableIdsSeen: string[] = []
 vi.mock('@dnd-kit/sortable', () => ({
-  useSortable: () => ({ attributes: {}, listeners: {}, setNodeRef: vi.fn(), transform: null, transition: null, isDragging: false }),
+  SortableContext: ({ children }: { children: React.ReactNode }) => children,
+  verticalListSortingStrategy: () => null,
+  useSortable: ({ id, data, disabled }: { id: string; data: unknown; disabled?: boolean }) => {
+    sortableIdsSeen.push(id)
+    sortables.set((data as { tabId?: string } | undefined)?.tabId ?? id, { data, disabled: !!disabled })
+    return { attributes: {}, listeners: {}, setNodeRef: vi.fn(), transform: null, transition: null, isDragging: false }
+  },
+}))
+vi.mock('@dnd-kit/core', () => ({
+  useDroppable: ({ id, data }: { id: string; data: unknown }) => {
+    droppables.set(id, data)
+    return { setNodeRef: vi.fn(), isOver: false }
+  },
 }))
 vi.mock('../lib/icon-path-cache', () => ({ getIconPath: (n: string, w: string) => `M ${n} ${w}`, isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve() }))
 const readFirstPage = vi.fn(async (_hostId: string) => ({}))
@@ -17,6 +33,7 @@ const openTeamSeat = vi.fn()
 vi.mock('../../../lib/team/team-actions', () => ({ openTeamSeat: (...a: unknown[]) => openTeamSeat(...a) }))
 
 import { TaskGroupView } from './TaskGroupView'
+import { groupDragEnd } from '../lib/group-drag'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../store'
 import { useSessionStore } from '../../../stores/useSessionStore'
@@ -177,7 +194,9 @@ describe('the task-group view', () => {
       useSessionStore.setState({ sessions: { h1: [{ code: 'S6', name: 'name-S6' }, { code: 'S7', name: 'name-S7' }] as never } })
       useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S6'), [rosterSession('M', 'name-S7')]) as never])
     })
+    sortableIdsSeen.length = 0
     mount()
+    expect(new Set(sortableIdsSeen).size).toBe(2) // two rows of one tab are two sortables (a shared id would make one overwrite the other)
     const rows = within(screen.getByTestId('task-group-team')).getAllByTestId('inline-tab-row')
     // both rows show the tab's title (TG-0b); what tells them apart is the persona name, and each opens its own seat
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('name-S6'), expect.stringContaining('name-S6')])
@@ -383,46 +402,49 @@ describe('the right-click rows (NA-6c)', () => {
   })
 })
 
-describe('dragging a session onto a group (NA-6c, TG-2b)', () => {
-  const MIME = 'application/x-purdex-group-session'
-  const dt = () => ({ types: [MIME], setData: vi.fn(), getData: () => '', effectAllowed: '', dropEffect: '' })
-  const rowOf = (section: HTMLElement, i = 0) => within(section).getAllByTestId('task-group-session')[i]
-  /** Drags `row` onto `target`: start, over, drop, end — true when the target let the drop through. */
-  const drag = (row: HTMLElement, target: HTMLElement) => {
-    const data = dt()
-    fireEvent.dragStart(row, { dataTransfer: data })
-    const allowed = !fireEvent.dragOver(target, { dataTransfer: data }) // preventDefault called = not "not cancelled"
-    fireEvent.drop(target, { dataTransfer: data })
-    fireEvent.dragEnd(row, { dataTransfer: data })
-    return allowed
+describe('dragging a session onto a group (NA-6c, TG-2b; dnd-kit since TG-3e)', () => {
+  /** Ends a drag of the row of tab `tabId` over the group (`group-drop:<id>`) or the row of tab `overTab`, as the sidebar's DndContext would. */
+  const dragTo = async (tabId: string, over: { drop?: string; row?: string }) => {
+    const active = sortables.get(tabId)
+    const o = over.drop !== undefined ? droppables.get(`group-drop:${over.drop}`) : sortables.get(over.row!)?.data
+    expect(active).toBeDefined()
+    expect(o).toBeDefined()
+    act(() => { groupDragEnd.current?.({ active: { id: tabId, data: { current: active!.data } }, over: { id: 'x', data: { current: o } } } as never) })
+    await act(async () => {})
   }
 
   it('a solo session dropped on a group is filed there, by its lineage root', async () => {
     setGroups([group('g1', [])])
     setRoots([['AG1', 'ROOT1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
     mount()
-    drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual')); await act(async () => {})
+    await dragTo('t1', { drop: 'g1' })
     expect(membersOf('g1')).toEqual([{ host: 'h1', root: 'ROOT1' }])
+  })
+
+  it('dropped on a row of another group it is filed there too', async () => {
+    setGroups([group('g1', ['ROOT2'])])
+    setRoots([['AG1', 'ROOT1'], ['AG2', 'ROOT2'], ['AG3', 'AG3']])
+    mount()
+    await dragTo('t1', { row: 't2' })
+    expect(membersOf('g1')).toEqual([{ host: 'h1', root: 'ROOT2' }, { host: 'h1', root: 'ROOT1' }])
   })
 
   it('dropped on 「未分組」 it is taken out of its group', async () => {
     setGroups([group('g1', ['ROOT1'])])
     setRoots([['AG1', 'ROOT1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
     mount()
-    drag(rowOf(screen.getByTestId('task-group-manual')), screen.getByTestId('task-group-ungrouped')); await act(async () => {})
+    await dragTo('t1', { drop: 'ungrouped' })
     expect(membersOf('g1')).toEqual([])
   })
 
-  it('a target that does not take the session lets nothing through: the group it is already in, and a team', async () => {
+  it('the group it is already in, and a team, take nothing', async () => {
     const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
     useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
     setGroups([group('g1', ['ROOT2'])])
     setRoots([['AG1', 'AG1'], ['AG2', 'ROOT2'], ['AG3', 'AG3']])
     mount()
-    const manual = screen.getByTestId('task-group-manual')
-    expect(drag(rowOf(manual), manual)).toBe(false) // already in it
-    expect(drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-team'))).toBe(false) // a team takes no drop
-    await act(async () => {})
+    await dragTo('t2', { drop: 'g1' }) // already in it
+    await dragTo('t3', { row: 't1' }) // t1 shows the team's seat session: a team takes no drop
     expect(membersOf('g1')).toEqual([{ host: 'h1', root: 'ROOT2' }])
   })
 
@@ -430,7 +452,7 @@ describe('dragging a session onto a group (NA-6c, TG-2b)', () => {
     setGroups([group('g1', [])])
     mount() // no roots read
     readFirstPage.mockClear()
-    drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual')); await act(async () => {})
+    await dragTo('t1', { drop: 'g1' })
     expect(readFirstPage).toHaveBeenCalledWith('h1')
     expect(screen.getByTestId('task-group-notice')).toHaveTextContent('這個 session 的來源還沒讀到')
     expect(membersOf('g1')).toEqual([])
@@ -439,42 +461,34 @@ describe('dragging a session onto a group (NA-6c, TG-2b)', () => {
   it('the drop uses the session as it is when it lands, not as it was when the drag began (its root was read meanwhile)', async () => {
     setGroups([group('g1', [])])
     mount() // no roots read yet
-    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
-    const target = screen.getByTestId('task-group-manual')
-    const data = dt()
-    fireEvent.dragStart(row, { dataTransfer: data })
+    const active = sortables.get('t1')!.data
     act(() => { setRoots([['AG1', 'ROOT-NOW'], ['AG2', 'AG2'], ['AG3', 'AG3']]) })
-    fireEvent.dragOver(target, { dataTransfer: data })
-    fireEvent.drop(target, { dataTransfer: data })
+    act(() => { groupDragEnd.current?.({ active: { id: 't1', data: { current: active } }, over: { id: 'x', data: { current: droppables.get('group-drop:g1') } } } as never) })
     await act(async () => {})
     expect(membersOf('g1')).toEqual([{ host: 'h1', root: 'ROOT-NOW' }])
   })
 
-  it('a drag that starts on a control inside the row (the close button) is not a group drag', async () => {
+  it('a plain tab dropped on a group gets that group, and on 「未分組」 loses it', async () => {
+    const t5 = { id: 't5', kind: 'new-tab', locked: false, pinned: false, layout: { type: 'leaf', pane: { id: 'p5', content: { kind: 'new-tab' } } } }
+    act(() => {
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t5 } } as never)
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'W', tabs: ['t1', 't2', 't3', 't5'], activeTabId: null, moduleConfig: {} }] } as never)
+    })
     setGroups([group('g1', [])])
-    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
     mount()
-    const row = rowOf(screen.getByTestId('task-group-ungrouped'))
-    const target = screen.getByTestId('task-group-manual')
-    const data = dt()
-    fireEvent.mouseDown(row.querySelector('button') as HTMLElement)
-    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(false) // cancelled
-    expect(fireEvent.dragOver(target, { dataTransfer: data })).toBe(true) // nothing taken: the drop is not let through
-    fireEvent.drop(target, { dataTransfer: data })
-    await act(async () => {})
-    expect(membersOf('g1')).toEqual([])
-    // ... and the next press on the row itself drags as usual
-    fireEvent.mouseDown(within(row).getByTestId('inline-tab-title'))
-    expect(fireEvent.dragStart(row, { dataTransfer: data })).toBe(true)
+    await dragTo('t5', { drop: 'g1' })
+    expect(useTabStore.getState().tabs.t5.group).toBe(manualGroupKey('g1'))
+    await dragTo('t5', { drop: 'ungrouped' })
+    expect(useTabStore.getState().tabs.t5.group).toBeUndefined()
   })
 
-  it('a team seat\'s row is not draggable', () => {
+  it('rows are sortable with their group; a team lead is not draggable and a seat row is tagged as a seat', () => {
     const lead = { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'title L' }
     useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '', lead, members: [] } as never])
     setGroups([group('g1', [])])
-    setRoots([['AG1', 'AG1'], ['AG2', 'AG2'], ['AG3', 'AG3']])
     mount()
-    expect(within(screen.getByTestId('task-group-team')).queryAllByTestId('task-group-session')).toHaveLength(0)
+    expect(sortables.get('t1')).toMatchObject({ disabled: true, data: { type: 'group-tab', kind: 'seat' } })
+    expect(sortables.get('t2')).toMatchObject({ disabled: false, data: { type: 'group-tab', kind: 'session', groupKey: UNGROUPED } })
   })
 
   it('a session of another host is draggable too, into a group that holds sessions of other hosts', async () => {
@@ -483,8 +497,7 @@ describe('dragging a session onto a group (NA-6c, TG-2b)', () => {
     useRootCacheStore.getState().ingest('h2', [{ session_id: 'AG9', root_session_id: 'ROOT9' }])
     setGroups([group('g1', ['ROOT1'])])
     mount()
-    expect(drag(rowOf(screen.getByTestId('task-group-ungrouped')), screen.getByTestId('task-group-manual'))).toBe(true)
-    await act(async () => {})
+    await dragTo('t9', { drop: 'g1' })
     expect(membersOf('g1')).toEqual([{ host: 'h1', root: 'ROOT1' }, { host: 'h2', root: 'ROOT9' }])
   })
 })

@@ -102,3 +102,15 @@ describe('InlineTab keyboard select (#2538)', () => {
     cleanup()
   })
 })
+
+describe('InlineTab close button', () => {
+  it('a press that moves on the close button does not start a row drag', () => {
+    const onDragStart = vi.fn()
+    render(<Harness onDragStart={onDragStart} />)
+    const close = screen.getByRole('button', { name: /^Close/ })
+    fireEvent.pointerDown(close, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { clientX: 10, clientY: 30 })
+    expect(onDragStart).not.toHaveBeenCalled()
+    fireEvent.pointerUp(document)
+  })
+})

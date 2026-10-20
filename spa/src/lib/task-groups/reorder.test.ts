@@ -175,6 +175,22 @@ describe('decideGroupDrop', () => {
       expect(drop(TKEY, 'm1a', 'm1b', 'after', c)).toEqual({ kind: 'ignore' })
     })
 
+    it('two seats in the panes of one split tab: the rows are told apart by their seat, not their tab', () => {
+      // the team index keeps only the first pane's seat for the tab; the second seat's row still names its own seat
+      const c = ctxOf([t('x'), t('m2'), t('lt')], { lt: L, x: M1, m2: M2 })
+      const split = (activeSeat: string, overSeat: string, side: DropSide) => decideGroupDrop({ groupKey: TKEY, activeId: 'x', overId: 'x', side, ctx: c, activeSeat, overSeat })
+      expect(split('M3', 'M1', 'after')).toEqual({ kind: 'members', teamKey: TK, order: ['M3', 'M1', 'M2'] }) // the side is the direction among the seats
+      expect(split('M1', 'M3', 'before')).toEqual({ kind: 'members', teamKey: TK, order: ['M2', 'M3', 'M1'] })
+      expect(split('M2', 'L', 'after')).toEqual({ kind: 'members', teamKey: TK, order: ['M2', 'M1', 'M3'] }) // right after the lead
+      expect(split('M2', 'L', 'before')).toEqual({ kind: 'ignore' })
+      expect(split('M2', 'M2', 'after')).toEqual({ kind: 'ignore' })
+      expect(split('M2', 'nobody', 'after')).toEqual({ kind: 'ignore' })
+      // a seat's row dropped on another seat's EXTRA tab (a row with no seat of its own), and the other way round
+      const extra = ctxOf([t('x'), t('m2'), t('m2b'), t('lt')], { lt: L, x: M1, m2: M2, m2b: M2 })
+      expect(decideGroupDrop({ groupKey: TKEY, activeId: 'x', overId: 'm2b', side: 'after', ctx: extra, activeSeat: 'M1' })).toEqual({ kind: 'members', teamKey: TK, order: ['M2', 'M1', 'M3'] })
+      expect(decideGroupDrop({ groupKey: TKEY, activeId: 'm2b', overId: 'x', side: 'before', ctx: extra })).toEqual({ kind: 'members', teamKey: TK, order: ['M2', 'M1', 'M3'] })
+    })
+
     it('pinned tabs and plain tabs move by rank inside their own zone', () => {
       const c = ctxOf(tabs(), seats)
       expect(drop(TKEY, 'pin2', 'pin', 'before', c).kind).toBe('rank')

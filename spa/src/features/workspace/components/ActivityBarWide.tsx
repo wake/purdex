@@ -37,6 +37,7 @@ import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../l
 import { useSpringLoad } from '../lib/useSpringLoad'
 import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
 import { useWorkerListResize } from '../lib/useWorkerListResize'
+import { groupDragEnd, isGroupDropData, isGroupViewData, isGroupTabDrag } from '../lib/group-drag'
 
 // Each WorkspaceRow registers two overlapping droppables: the useSortable
 // wrapper (id = workspace.id) for workspace reordering, and a useDroppable
@@ -49,7 +50,9 @@ import { useWorkerListResize } from '../lib/useWorkerListResize'
 const customCollisionDetection: CollisionDetection = (args) => {
   const activeData = args.active.data.current as DragData | undefined
   const containers =
-    activeData?.type === 'workspace'
+    isGroupTabDrag(activeData)
+      ? args.droppableContainers.filter((c) => isGroupViewData(c.data.current))
+      : activeData?.type === 'workspace'
       ? args.droppableContainers.filter((c) => {
           const d = c.data.current as DragData | undefined
           return d?.type === 'workspace'
@@ -268,6 +271,11 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
       springLoad.cancel()
+      // a row of the task-group view: the view decides (it knows which group each row is shown in)
+      if (isGroupTabDrag(e.active.data.current) || isGroupDropData(e.active.data.current)) {
+        groupDragEnd.current?.(e)
+        return
+      }
       const action = computeDragEndAction(e, { wsIds, workspaces })
       dispatchDragEndAction(action, {
         onReorderWorkspaces,
