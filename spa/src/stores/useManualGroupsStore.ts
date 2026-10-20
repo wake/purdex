@@ -105,6 +105,32 @@ export function sanitizeManualGroups(raw: unknown): ManualGroups {
   return { order, groups }
 }
 
+/**
+ * The groups with every member's host passed through `map` (the host re-resolve pass, and the host deletion's rewrite).
+ * Members the mapping makes equal collapse to one: within a group, and across groups — the first group in `order` keeps it.
+ * The same state back (identity) when nothing moves.
+ */
+export function rewriteManualGroupsHosts(state: ManualGroups, map: (hostId: string) => string): ManualGroups {
+  if (!Object.values(state.groups).some((g) => g.members.some((m) => map(m.host) !== m.host))) return state
+  const taken = new Set<string>()
+  const ids = [...state.order, ...Object.keys(state.groups).filter((id) => !state.order.includes(id))]
+  const groups: Record<string, ManualGroup> = {}
+  for (const id of ids) {
+    const group = state.groups[id]
+    if (group === undefined) continue
+    const members: ManualGroupMember[] = []
+    for (const m of group.members) {
+      const host = map(m.host)
+      const key = JSON.stringify([host, m.root])
+      if (taken.has(key)) continue
+      taken.add(key)
+      members.push(host === m.host ? m : { ...m, host })
+    }
+    groups[id] = { ...group, members }
+  }
+  return { order: state.order, groups }
+}
+
 export const useManualGroupsStore = create<ManualGroupsState>()(
   persist(
     (set) => ({
