@@ -1,0 +1,98 @@
+// spa/src/lib/task-groups/session-actions.test.ts — the sidebar's callers of the manual group actions get the root with `resolveRoot` (TG-2b): a cache miss reads the session's host, and only when the host cannot
+// answer either is it `no-root` (the group store is not touched then).
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const readFirstPage = vi.fn()
+vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
+
+import { fileSession, startGroupWithSession, takeSessionOut, type SessionRef } from './session-actions'
+import { useRootCacheStore } from './root-cache'
+import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useHostStore } from '../../stores/useHostStore'
+import type { SessionQuota } from '../team/types'
+
+const q = (session_id: string, root_session_id: string): SessionQuota => ({ session_id, root_session_id, title: '', address: `mlab/${session_id}`, is_lead: false, self_left: 0, member_pool_left: 0, rev: 1 })
+const ref = (over: Partial<SessionRef> = {}): SessionRef => ({ hostId: 'h1', agentSessionId: 'AG1', tabId: 't1', ...over })
+const GROUP = { name: 'G', members: [], createdAt: 1 }
+
+beforeEach(() => {
+  readFirstPage.mockReset()
+  useRootCacheStore.setState({ roots: {} })
+  useUnattendedStore.setState({ byHost: { h1: { quotaSupport: 'yes' } } as never })
+  useHostStore.setState({ hosts: {}, runtime: {} })
+  useManualGroupsStore.setState({ order: ['g1', 'g2'], groups: { g1: { ...GROUP }, g2: { ...GROUP, name: 'G2' } } })
+  useTabStore.setState({ tabs: { t1: { id: 't1', group: 'group\u0000g1' } } as never })
+})
+
+describe('fileSession', () => {
+  it('uses the cached root without asking the host', async () => {
+    useRootCacheStore.getState().ingest('h1', [q('AG1', 'ROOT')])
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: true })
+    expect(readFirstPage).not.toHaveBeenCalled()
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h1', root: 'ROOT' }])
+  })
+
+  it('a cache miss reads the session\'s host, and files the root the host lists', async () => {
+    readFirstPage.mockResolvedValue({ quotas: [q('AG1', 'ROOT')] })
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: true })
+    expect(readFirstPage).toHaveBeenCalledWith('h1')
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h1', root: 'ROOT' }])
+    expect(useTabStore.getState().tabs.t1.group).toBeUndefined() // a member now: the tab's own `group` goes
+  })
+
+  it('is no-root only when the host cannot answer either — and nothing is written', async () => {
+    readFirstPage.mockRejectedValue(new Error('down'))
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: false, reason: 'no-root' })
+    readFirstPage.mockResolvedValue({ quotas: [q('OTHER', 'X')] })
+    expect(await fileSession(ref(), 'g1')).toEqual({ ok: false, reason: 'no-root' })
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([])
+    expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
+  })
+
+  it('a pane that recorded no agent session id has no root to look for: no-root, and the host is not asked', async () => {
+    expect(await fileSession(ref({ agentSessionId: null }), 'g1')).toEqual({ ok: false, reason: 'no-root' })
+    expect(readFirstPage).not.toHaveBeenCalled()
+  })
+
+  it('a session of ANY host goes into any group', async () => {
+    useUnattendedStore.setState({ byHost: { h1: { quotaSupport: 'yes' }, h2: { quotaSupport: 'yes' } } as never })
+    readFirstPage.mockResolvedValue({ quotas: [q('AG2', 'R2')] })
+    expect(await fileSession(ref({ hostId: 'h2', agentSessionId: 'AG2' }), 'g1')).toEqual({ ok: true })
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h2', root: 'R2' }])
+  })
+})
+
+describe('startGroupWithSession', () => {
+  it('starts a group with the session, reading the host on a cache miss', async () => {
+    readFirstPage.mockResolvedValue({ quotas: [q('AG1', 'ROOT')] })
+    const r = await startGroupWithSession(ref(), 'New')
+    expect(r.ok).toBe(true)
+    const { order, groups } = useManualGroupsStore.getState()
+    expect(order).toHaveLength(3)
+    expect(groups[order[2]]).toMatchObject({ name: 'New', members: [{ host: 'h1', root: 'ROOT' }] })
+  })
+
+  it('is no-root when the host cannot answer; no group is made', async () => {
+    readFirstPage.mockRejectedValue(new Error('down'))
+    expect(await startGroupWithSession(ref(), 'New')).toEqual({ ok: false, reason: 'no-root' })
+    expect(useManualGroupsStore.getState().order).toEqual(['g1', 'g2'])
+  })
+})
+
+describe('takeSessionOut', () => {
+  it('removes the member and clears the tab\'s group', async () => {
+    useManualGroupsStore.setState({ groups: { g1: { ...GROUP, members: [{ host: 'h1', root: 'ROOT' }] }, g2: { ...GROUP } } })
+    readFirstPage.mockResolvedValue({ quotas: [q('AG1', 'ROOT')] })
+    expect(await takeSessionOut(ref())).toEqual({ ok: true })
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([])
+    expect(useTabStore.getState().tabs.t1.group).toBeUndefined()
+  })
+
+  it('without a root it touches nothing (the member could not be named)', async () => {
+    readFirstPage.mockRejectedValue(new Error('down'))
+    expect(await takeSessionOut(ref())).toEqual({ ok: false, reason: 'no-root' })
+    expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
+  })
+})
