@@ -242,6 +242,7 @@ export default function App() {
             {(tabPosition !== 'left' || activeWorkspaceId === WATCH_WORKSPACE_ID) && (
               <TabBar
                 fixed={activeWorkspaceId === WATCH_WORKSPACE_ID}
+                flat={groupRange !== null}
                 onLeave={activeWorkspaceId === WATCH_WORKSPACE_ID ? leaveWatchArea : undefined}
                 tabs={displayTabs}
                 activeTabId={activeTabId}
