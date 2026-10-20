@@ -1,11 +1,11 @@
 // spa/src/stores/useGroupViewStore.ts — what this device remembers of the task-group view (task groups spec §6.2, §6.3): the selected group, each group's last active tab, which groups are expanded, and the last selection per view.
 //
-// Device-local: never in the SOT, never synced (so no `syncManager`), one record for the whole device — not per world. Group keys are the keys of lib/task-groups/group-key.ts, and a team key carries a LOCAL host id, so the store
+// Device-local: never in the SOT, never in Profile Sync; registered with `syncManager` only so the windows of this device read each other's writes. One record for the whole device — not per world. Group keys are the keys of lib/task-groups/group-key.ts, and a team key carries a LOCAL host id, so the store
 // joins the host re-resolve / removal rewrite (`rewriteGroupViewHosts`, used by `planRewrite`). Tab ids are world-specific: an id that no longer exists is the reader's to fall back from. Every arrival (storage, rehydrate)
 // passes through `merge`, which sanitises.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { parseGroupKey, teamGroupKey } from '../lib/task-groups/group-key'
 
 /** The last selection of each view (spec §6.3): the workspace id of the workspace view, the group key of the task-group view. */
@@ -137,3 +137,5 @@ export const useGroupViewStore = create<GroupViewState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.GROUP_VIEW, useGroupViewStore)

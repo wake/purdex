@@ -1,6 +1,14 @@
 // spa/src/stores/useGroupViewStore.test.ts — what the device remembers of the task-group view (task groups spec §6.2, §6.3): writes that change nothing keep the state's identity, arrivals are sanitised, and the host rewrite
 // moves only the host of a team key.
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const registerSpy = vi.hoisted(() => vi.fn())
+
+vi.mock('../lib/storage/sync', () => ({
+  syncManager: { register: registerSpy, notify: vi.fn(), destroy: vi.fn() },
+  createSyncManager: vi.fn(),
+}))
+
 import { rewriteGroupViewHosts, sanitizeGroupView, useGroupViewStore, type GroupViewData } from './useGroupViewStore'
 import { manualGroupKey, teamGroupKey, UNGROUPED } from '../lib/task-groups/group-key'
 import { STORAGE_KEYS } from '../lib/storage'
@@ -16,6 +24,10 @@ beforeEach(() => {
 })
 
 describe('useGroupViewStore', () => {
+  it('is registered with syncManager under its storage key, so this device\'s windows read each other', () => {
+    expect(registerSpy).toHaveBeenCalledWith(STORAGE_KEYS.GROUP_VIEW, useGroupViewStore)
+  })
+
   it('recordGroupActive writes the selection, the group\'s last tab and the view\'s last group in one update; the same call again changes nothing', () => {
     let writes = 0
     const unsub = useGroupViewStore.subscribe(() => { writes += 1 })
