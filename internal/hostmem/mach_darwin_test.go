@@ -40,21 +40,82 @@ func TestMach_VMAgreesWithVMStat(t *testing.T) {
 	}
 }
 
-// The decompression counter is vm_stat's "Decompressions": it only grows, and vm_stat read it between the two Mach reads.
+// The decompression counter is vm_stat's "Decompressions": it only grows, and vm_stat read it between the two Mach reads. On a busy
+// host the counter moves while vm_stat starts and a single try can land outside the two Mach reads (#3758), so, like the page counts
+// above, the test passes when any of a few tries agrees; a host where no try does is one where the two readers really differ.
 func TestMach_DecompressionsAgreeWithVMStat(t *testing.T) {
 	m, err := NewMach()
 	require.NoError(t, err)
-	before, err := m.VM()
-	require.NoError(t, err)
-	out, err := Run(context.Background())
-	require.NoError(t, err)
-	vs, err := ParseVMStat(out)
-	require.NoError(t, err)
-	after, err := m.VM()
-	require.NoError(t, err)
-	require.NotZero(t, before.Decompressions, "the host has decompressed at least once since boot")
-	require.GreaterOrEqual(t, vs.Decompressions, before.Decompressions)
-	require.LessOrEqual(t, vs.Decompressions, after.Decompressions)
+	bad := decompressionsAgreeWithin(5, func() (VMCounters, VMCounters, VMStat) {
+		time.Sleep(statsCacheWindow)
+		before, err := m.VM()
+		require.NoError(t, err)
+		require.NotZero(t, before.Decompressions, "the host has decompressed at least once since boot")
+		out, err := Run(context.Background())
+		require.NoError(t, err)
+		vs, err := ParseVMStat(out)
+		require.NoError(t, err)
+		after, err := m.VM()
+		require.NoError(t, err)
+		return before, after, vs
+	})
+	if bad != "" {
+		t.Error(bad)
+	}
+}
+
+// statsCacheWindow is the quiet the test leaves before each try. host_statistics64 answers a process that calls it again within about
+// a second from a cache (xnu rate-limits it), so a second Mach read right after the first can repeat the first while vm_stat, a fresh
+// process whose first call is never cached, already shows the counter further on (#3758). A try that starts after the window has a fresh
+// first read, and its second read is the second call inside the window, which is still answered live.
+const statsCacheWindow = 1100 * time.Millisecond
+
+// decompressionsAgreeWithin reads up to tries times and answers "" as soon as one try has vm_stat's figure between the two Mach
+// reads, else the disagreement of the last.
+func decompressionsAgreeWithin(tries int, read func() (before, after VMCounters, vs VMStat)) string {
+	var last string
+	for i := 0; i < tries; i++ {
+		before, after, vs := read()
+		if last = decompressionsDisagreement(before, after, vs); last == "" {
+			return ""
+		}
+	}
+	return last
+}
+
+// decompressionsDisagreement is "" when vm_stat's figure lies in the range the Mach counter moved through between the two reads.
+func decompressionsDisagreement(before, after VMCounters, vs VMStat) string {
+	if vs.Decompressions < before.Decompressions || vs.Decompressions > after.Decompressions {
+		return fmt.Sprintf("decompressions: vm_stat %d is outside mach's %d..%d", vs.Decompressions, before.Decompressions, after.Decompressions)
+	}
+	return ""
+}
+
+// The retry passes when a later try agrees, fails when none does, and does not read again once one has agreed.
+func TestDecompressionsAgreeWithinRetries(t *testing.T) {
+	good := func() (VMCounters, VMCounters, VMStat) {
+		return VMCounters{Decompressions: 10}, VMCounters{Decompressions: 20}, VMStat{Decompressions: 15}
+	}
+	off := func() (VMCounters, VMCounters, VMStat) {
+		return VMCounters{Decompressions: 10}, VMCounters{Decompressions: 20}, VMStat{Decompressions: 31}
+	}
+	calls := 0
+	if msg := decompressionsAgreeWithin(5, func() (VMCounters, VMCounters, VMStat) {
+		calls++
+		if calls < 3 {
+			return off()
+		}
+		return good()
+	}); msg != "" || calls != 3 {
+		t.Errorf("a third try agrees: %q after %d reads", msg, calls)
+	}
+	calls = 0
+	if msg := decompressionsAgreeWithin(4, func() (VMCounters, VMCounters, VMStat) { calls++; return off() }); msg == "" || calls != 4 {
+		t.Errorf("no try agrees: %q after %d reads", msg, calls)
+	}
+	if decompressionsDisagreement(VMCounters{Decompressions: 10}, VMCounters{Decompressions: 20}, VMStat{Decompressions: 9}) == "" {
+		t.Error("below the first read is a disagreement")
+	}
 }
 
 // vmAgreeWithin reads up to tries times and answers nothing as soon as one try agrees, else the disagreements of the last.
