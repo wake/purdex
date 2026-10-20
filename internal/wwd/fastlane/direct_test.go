@@ -3,12 +3,14 @@ package fastlane
 import (
 	"bytes"
 	"context"
+	"os/exec"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/wwd/run"
 )
 
 func TestDirectRunsTheCommandAndReportsItsExit(t *testing.T) {
@@ -60,7 +62,7 @@ func TestDirectStopsTheWholeGroupWhenTheContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	start := time.Now()
 	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
-	code, err := Direct{}.Run(ctx, gate.Options{Argv: []string{"sh", "-c", "sleep 30 & sleep 30"}})
+	code, err := Direct{}.Run(ctx, gate.Options{Argv: []string{"sh", "-c", "sleep 30 & sleep 30"}, Stdin: strings.NewReader("")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +74,72 @@ func TestDirectStopsTheWholeGroupWhenTheContextEnds(t *testing.T) {
 	}
 }
 
+func TestDirectGivesTheCommandTheStdinItIsGiven(t *testing.T) {
+	var out bytes.Buffer
+	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"cat"}, Stdin: strings.NewReader("typed\n"), Stdout: &out})
+	if err != nil || code != 0 || out.String() != "typed\n" {
+		t.Fatalf("code %d, err %v, out %q", code, err, out.String())
+	}
+}
+
+// fakeProcs lists the processes of a job from a fixed set of pids that are still alive.
+type fakeProcs struct{ pids []int }
+
+func (f fakeProcs) JobProcesses(_, _ string) ([]int, error) {
+	var alive []int
+	for _, p := range f.pids {
+		if syscall.Kill(p, 0) == nil {
+			alive = append(alive, p)
+		}
+	}
+	return alive, nil
+}
+
+// A process that left the command's group (a server after setsid) is found by the job mark and ended before Run returns.
+func TestDirectEndsWhatLeftTheGroupButKeptTheJobMark(t *testing.T) {
+	// the "escaped" process: its own group, started by the test, not by the command
+	esc := exec.Command("sleep", "30")
+	esc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := esc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = esc.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = esc.Process.Kill() })
+
+	var errb bytes.Buffer
+	env := []string{"PATH=/usr/bin:/bin", run.MarkEnv + "=j_mark"}
+	code, err := Direct{Procs: fakeProcs{pids: []int{esc.Process.Pid}}}.Run(context.Background(),
+		gate.Options{Argv: []string{"true"}, Env: env, Stdin: strings.NewReader(""), Stderr: &errb})
+	if err != nil || code != 0 {
+		t.Fatalf("code %d, err %v", code, err)
+	}
+	select {
+	case <-reaped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the process that left the group is still running")
+	}
+	if !strings.Contains(errb.String(), "脫離 process group") {
+		t.Fatalf("the caller is not told: %q", errb.String())
+	}
+}
+
+func TestDirectWithoutAMarkSweepsNothing(t *testing.T) {
+	called := false
+	code, err := Direct{Procs: probeProcs(func() { called = true })}.Run(context.Background(), gate.Options{Argv: []string{"true"}, Stdin: strings.NewReader("")})
+	if err != nil || code != 0 || called {
+		t.Fatalf("code %d, err %v, the table was read: %v", code, err, called)
+	}
+}
+
+type probeProcs func()
+
+func (p probeProcs) JobProcesses(_, _ string) ([]int, error) { p(); return nil, nil }
+
 func TestDirectClearsWhatTheCommandLeftRunning(t *testing.T) {
 	var out bytes.Buffer
 	// the command prints the pid of a background sleep and exits at once
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "sleep 30 & echo $!"}, Stdout: &out})
+	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "sleep 30 & echo $!"}, Stdout: &out, Stdin: strings.NewReader("")})
 	if err != nil || code != 0 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
