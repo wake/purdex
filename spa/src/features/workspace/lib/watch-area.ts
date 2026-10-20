@@ -177,6 +177,20 @@ export function createWatchReconciler(): WatchReconciler {
     }
   }
 
+  /**
+   * The host tabs listed in the view take, in the order of the view, the places host tabs held in the row (M13). Every other tab keeps its place: the guardian, events and jobs
+   * tabs wherever the reader put them, and host tabs the view does not list (waiting to be collected, or synced in). Writes only on a difference.
+   */
+  const orderHostTabs = (view: WatchHostsView): void => {
+    const tabs = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs
+    const wanted = view.hostIds.map(watchHostTabId).filter((id) => tabs.includes(id))
+    const held = new Set(wanted)
+    const next = [...tabs]
+    let i = 0
+    tabs.forEach((id, at) => { if (held.has(id)) next[at] = wanted[i++] })
+    if (next.some((id, at) => id !== tabs[at])) useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, next)
+  }
+
   const reconcile = (view: WatchHostsView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
@@ -239,6 +253,8 @@ export function createWatchReconciler(): WatchReconciler {
       const inArea = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs.includes(tabId)
       if (!inArea) useWorkspaceStore.getState().addTabToWorkspace(WATCH_WORKSPACE_ID, tabId) // `add` rewrites even a no-op
     }
+
+    orderHostTabs(view)
 
     let next: number | null = null
     {
