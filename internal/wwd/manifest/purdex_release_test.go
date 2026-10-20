@@ -19,8 +19,9 @@ func TestPurdexManifestEntryRewritesUndeclaredCommands(t *testing.T) {
 	}
 }
 
-// The release tasks run what the release gate runs (CLAUDE.md "測試分層", the lead's test-<version>.sh): the same arguments, so a green task
-// means a green gate.
+// The release tasks run what the release gate runs (CLAUDE.md "測試分層", the lead's test-<version>.sh, which this test cannot read): the strings
+// are pinned here on purpose, so changing a release task's command is a decision made in this file too, and the gate script is compared by hand
+// when it is. How the entry treats these commands is tested in internal/wwd/entry.
 func TestPurdexReleaseTasksRunWhatTheReleaseGateRuns(t *testing.T) {
 	m, err := Load("../../../.wwd/tasks.toml")
 	if err != nil {

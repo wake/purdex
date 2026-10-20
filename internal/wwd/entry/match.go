@@ -57,6 +57,8 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 			i += len(group)
 		case i < len(cmd) && flagName(cmd[i]) == flagName(group[0]):
 			return nil, false // the same flag with another value
+		case selectsWhatRuns[flagName(group[0])]:
+			return nil, false // left out: the command would run more than the task does, and as the task it would run less
 		}
 		k = j
 	}
@@ -90,6 +92,11 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 	}
 	return out, true
 }
+
+// selectsWhatRuns are the flags that choose which tests a command runs. Unlike `-p 3` or `-timeout 20m`, which only say how, leaving one out
+// of the command is not the same command: `go test -tags e2e ./cmd/wwd/` runs the whole package, and read as a task that has `-run TestE2E`
+// it would silently run only that (the task's flags are all that run once the command is a task).
+var selectsWhatRuns = map[string]bool{"-run": true, "-skip": true, "-tags": true, "-short": true, "-bench": true, "-fuzz": true}
 
 // valueLike says whether a word after a flag can be its value: not another flag, and, as the very last word of the task, not a
 // relative path or pattern (that is the task's own word, like the trailing ./... of `go test -timeout 30m ./...`; anywhere else a
