@@ -54,7 +54,7 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
     answer([withWorker(host(A, 'mlab')), withWorker(host(B, 'mserv'))])
     seedJobs([wjob('a', 'mlab'), wjob('b', 'mlab'), wjob('c', 'mlab', { state: 'running', claim: { worker: 'mserv', attempt: 1, since: 0 } })])
     const { result } = renderHook(() => useMonitorHosts())
-    expect(result.current.map((h) => h.count)).toEqual([{ n: 2, tone: 'neutral' }, { n: 1, tone: 'neutral' }])
+    expect(result.current.map((h) => h.count)).toEqual([{ n: 2, tone: 'neutral', queued: 2, running: 0 }, { n: 1, tone: 'neutral', queued: 0, running: 1 }])
   })
   it('nothing to count is null, not zero', () => {
     answer([withWorker(host(A, 'mlab'))])
@@ -70,13 +70,45 @@ describe('useMonitorHosts — the count at the corner (M6, M25)', () => {
     answer([withWorker(host(A, 'mlab'))])
     seedJobs([wjob('a', 'mlab')])
     const { result } = renderHook(() => useMonitorHosts())
-    expect(result.current[0].count).toEqual({ n: 1, tone: 'neutral' })
+    expect(result.current[0].count).toEqual({ n: 1, tone: 'neutral', queued: 1, running: 0 })
     act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null, error: { code: 'no_answer', since: 1 } } as never) })
     expect(result.current.map((h) => h.count)).toEqual([null])
   })
 })
 
 describe('useMonitorHosts', () => {
+  describe('local: the wwd of the daemon that answered', () => {
+    const own = (id: string, hostId: string, alias: string) => ({ [id]: { phase: 'ready', fetchedAt: 1, daemonCapabilities: [], wwd: { hostId, alias } } })
+    const fronts = (...ids: string[]) => {
+      useHostStore.setState({ hosts: Object.fromEntries(ids.map((id, i) => [id, { id, name: id, ip: '1', port: 1, token: 't', order: i }])), hostOrder: ids } as never)
+    }
+    it('only the row the answering App host fronts, a single-host pool too, whatever liveness says', () => {
+      answer([host(A, 'mlab', { liveness: 'ok' })])
+      fronts('cfg-a'); useNexHostStore.setState({ byHost: own('cfg-a', A, 'mlab') } as never)
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true])
+    })
+    it('two App hosts share one wwd and the second answered: that row is local', () => {
+      answer([host(A, 'mlab')])
+      usePoolStore.setState({ sourceHostId: 'cfg-b' } as never)
+      fronts('cfg-a', 'cfg-b'); useNexHostStore.setState({ byHost: { ...own('cfg-a', A, 'mlab'), ...own('cfg-b', A, 'mlab') } } as never)
+      const { result } = renderHook(() => useMonitorHosts())
+      expect(result.current[0].daemonHostId).toBe('cfg-a')
+      expect(result.current.map((h) => h.local)).toEqual([true])
+    })
+    it('two rows without liveness: still one local (a legacy daemon)', () => {
+      answer([host(A, 'mlab'), host(B, 'mserv')])
+      fronts('cfg-a', 'cfg-b'); useNexHostStore.setState({ byHost: { ...own('cfg-a', A, 'mlab'), ...own('cfg-b', B, 'mserv') } } as never)
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true, false])
+    })
+    it('nobody is local while no source answers, or when no App host fronts the row', () => {
+      answer([host(A, 'mlab')])
+      expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([false])
+      fronts('cfg-a'); useNexHostStore.setState({ byHost: own('cfg-a', A, 'mlab') } as never)
+      act(() => { usePoolStore.setState({ sourceHostId: null } as never) })
+      expect(renderHook(() => useMonitorHosts()).result.current.every((h) => !h.local)).toBe(true)
+    })
+  })
+
   it('lists the pool\'s hosts in the order of the store, the unlisted after them in the pool\'s order (M13)', () => {
     answer([host(A, 'mlab'), host(B, 'mserv'), host(C, 'air26')])
     usePoolHostsStore.setState({ order: [C, A] })

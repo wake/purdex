@@ -9,7 +9,6 @@ function show(v: CellView, placement: 'above' | 'right' = 'above') {
   return screen.getByTestId('host-card')
 }
 const row = (k: string) => screen.getByTestId(`host-card-row-${k}`)
-const driver = () => screen.queryAllByTestId('host-card-ring-tag').map((e) => e.closest('[data-testid^="host-card-row-"]')!.getAttribute('data-testid'))
 
 describe('HostCard — an ok host', () => {
   it('name, zone word in the zone colour, five readings with their tones', () => {
@@ -64,7 +63,7 @@ describe('HostCard — a host that is not ok (M21)', () => {
     expect(within(c).getByTestId('host-card-zone').textContent).toBe(word)
     expect(within(c).queryByTestId('host-card-row-cpu')).toBeNull()
     expect(within(c).queryByTestId('host-card-pool-worker')).toBeNull()
-    expect(driver()).toEqual([])
+    expect(within(c).queryByTestId('host-card-ring-tag')).toBeNull()
   })
   it('says why, when the last reading was and when it was last checked', () => {
     const c = show(cellView({ liveness: 'host_down', lastFactsAt: FACTS.at - 60_000 }))
@@ -94,26 +93,73 @@ describe('HostCard — the whole pool cannot be read (M25)', () => {
   })
 })
 
-describe('HostCard — the ring-driver mark', () => {
-  const base = { cpu: 10, mem: 10, level: 0, page_rate: 0, disk: 10 }
-  it.each([
-    ['cpu', { cpu: 60 }],
-    ['mem', { mem: 60 }],
-    ['pressure', { level: 2 }],
-    ['paging', { page_rate: 90 }],
-    ['disk', { disk: 95 }],
-  ])('%s can be the driver, and only that row is marked', (key, over) => {
-    show(cellView({ fast: fast({ ...base, ...over }) }))
-    expect(driver()).toEqual([`host-card-row-${key}`])
-    expect(row(key).className).toContain('font-semibold')
+describe('HostCard — the readings in M11 order', () => {
+  it('load (with its cause), CPU, system load, memory (with GB), pressure, paging, swap, disk', () => {
+    show(cellView({ fast: fast({ load: 62, load1: 4, ncpu: 8, mem: 40 }), load: { score: 62, driver: 'cpu' } }))
+    const ids = screen.getAllByTestId(/^host-card-row-/).map((e) => e.getAttribute('data-testid'))
+    expect(ids).toEqual(['load', 'cpu', 'sysload', 'mem', 'pressure', 'paging', 'swap', 'disk'].map((k) => `host-card-row-${k}`))
+    expect(row('load').textContent).toContain('62%')
+    expect(row('load').textContent).toContain('CPU')
+    expect(row('sysload').textContent).toContain('4.0 / 8')
+    expect(row('mem').textContent).toContain('6.0 GB')
+    expect(row('swap').textContent).toContain('0.5 GB')
   })
-  it('the daemon\'s own driver wins over the one worked out', () => {
-    show(cellView({ fast: fast({ ...base, cpu: 60 }), load: { score: 90, driver: 'disk' } }))
-    expect(driver()).toEqual(['host-card-row-disk'])
+  it('a host with no cores shows a dash, not "load / 0"', () => {
+    show(cellView({ fast: fast({ load1: 4, ncpu: 0 }) }))
+    expect(row('sysload').textContent).toBe('System load—')
   })
-  it('a tie marks the first', () => {
-    show(cellView({ fast: fast({ ...base, cpu: 75, level: 2 }) }))
-    expect(driver()).toEqual(['host-card-row-cpu'])
+  it('system load 70 warns, 100 is danger; no swap figure is a dash', () => {
+    show(cellView({ fast: fast({ load1: 6, ncpu: 8 }), detail: { version: '1', memAvailGb: 1, swapUsedGb: null, local: false, checkedAt: null } }))
+    expect(row('sysload').innerHTML).toContain('text-status-warning-text')
+    expect(row('swap').textContent).toContain('—')
+  })
+})
+
+describe('HostCard — the mark of what the indicator uses (M11)', () => {
+  const marked = () => screen.queryAllByTestId('host-card-ring-tag').map((e) => e.parentElement!.closest('[data-testid^="host-card-"]')!.getAttribute('data-testid'))
+  const look = (shape: 'ring' | 'bar' | 'bars', data: string[]) => ({ ...cellView().look, indicator: { shape, data } }) as CellView['look']
+  it('a ring marks its item 環', () => {
+    show(cellView({ look: look('ring', ['load']) }))
+    expect(marked()).toEqual(['host-card-row-load'])
+    expect(screen.getByTestId('host-card-ring-tag').textContent).toBe('Ring')
+    expect(row('load').className).toContain('font-semibold')
+    expect(row('cpu').className).not.toContain('font-semibold')
+  })
+  it('two bars mark both items 柱', () => {
+    show(cellView({ look: look('bars', ['cpu', 'disk']) }))
+    expect(marked()).toEqual(['host-card-row-cpu', 'host-card-row-disk'])
+    expect(screen.getAllByTestId('host-card-ring-tag').map((e) => e.textContent)).toEqual(['Bar', 'Bar'])
+  })
+  it('slots marks the worker row', () => {
+    show(cellView({ look: look('bar', ['slots']), worker: { enabled: true, slots: { heavy: 1, light: 1 }, running: { heavy: 0, light: 0 } } }))
+    expect(marked()).toEqual(['host-card-pool-worker'])
+  })
+})
+
+describe('HostCard — the title and the lower rows (M11)', () => {
+  it('the title carries the host badge', () => {
+    const c = show(cellView())
+    expect(within(c).getByTestId('host-card-badge')).toBeTruthy()
+  })
+  it('jobs: what it sent and waits, and what runs on it', () => {
+    show(cellView({ count: { n: 3, tone: 'neutral', queued: 2, running: 1 } }))
+    expect(screen.getByTestId('host-card-pool-jobs').textContent).toBe('JobsWaiting 2 · running here 1')
+  })
+  it('jobs with no count read 0 and 0', () => {
+    show(cellView({ count: null }))
+    expect(screen.getByTestId('host-card-pool-jobs').textContent).toBe('JobsWaiting 0 · running here 0')
+  })
+  it('wwd: version and the reading time', () => {
+    show(cellView())
+    expect(screen.getByTestId('host-card-pool-wwd').textContent).toContain('0.9.1')
+  })
+  it('link: ok with the last check; the local host says it is the local wwd', () => {
+    show(cellView())
+    expect(screen.getByTestId('host-card-pool-link').textContent).toContain('OK')
+  })
+  it('the local host', () => {
+    show(cellView({ detail: { version: '1', memAvailGb: 1, swapUsedGb: 0, local: true, checkedAt: null } }))
+    expect(screen.getByTestId('host-card-pool-link').textContent).toContain('local wwd')
   })
 })
 

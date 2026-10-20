@@ -85,7 +85,7 @@ describe('HostCell — a host that is not ok (M17–M19)', () => {
     expect(screen.getByTestId(`host-badge-dim-${ID}`).className).not.toContain('opacity')
   })
   it('the cell draws the count it is given (the model gives none to a host that is not ok)', () => {
-    setup({ ...cellView({ liveness: 'host_down' }), count: { n: 3, tone: 'neutral' } })
+    setup({ ...cellView({ liveness: 'host_down' }), count: { n: 3, tone: 'neutral', queued: 3, running: 0 } })
     expect(screen.getByTestId(`count-badge-${ID}`)).toBeTruthy()
   })
   it('the accessible name carries the state word; an ok host also its zone', () => {
@@ -106,13 +106,13 @@ describe('HostCell — the count at the badge\'s corner (M6, M7)', () => {
   it.each([
     ['neutral', 'bg-text-muted'], ['warn', 'bg-status-warning'], ['error', 'bg-status-error'],
   ] as const)('%s count: its colour', (tone, cls) => {
-    setup({ ...cellView(), count: { n: 4, tone } })
+    setup({ ...cellView(), count: { n: 4, tone, queued: 4, running: 0 } })
     const badge = screen.getByTestId(`count-badge-${ID}`)
     expect(badge.textContent).toBe('4')
     expect(badge.className).toContain(cls)
   })
   it('above 99 it reads 99+', () => {
-    setup({ ...cellView(), count: { n: 120, tone: 'neutral' } })
+    setup({ ...cellView(), count: { n: 120, tone: 'neutral', queued: 120, running: 0 } })
     expect(screen.getByTestId(`count-badge-${ID}`).textContent).toBe('99+')
   })
   it('there is no breathing dot any more (U3): the running jobs are in the number', () => {
@@ -150,6 +150,24 @@ describe('HostCell — the hover card', () => {
     fireEvent.mouseEnter(tile())
     fireEvent.click(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
+  })
+  it('the tile is described by its open card, and by nothing while closed', () => {
+    setup(cellView())
+    expect(tile().getAttribute('aria-describedby')).toBeNull()
+    fireEvent.focus(tile())
+    const id = screen.getByTestId('host-card').id
+    expect(id).not.toBe('')
+    expect(tile().getAttribute('aria-describedby')).toBe(id)
+    fireEvent.blur(tile())
+    expect(tile().getAttribute('aria-describedby')).toBeNull()
+  })
+  it('two tiles never share a card id', () => {
+    render(<><HostCell view={cellView()} variant="wide" isActive={false} onOpen={vi.fn()} /><HostCell view={cellView({ hostId: '0123456789abcdef', name: 'air26' })} variant="wide" isActive={false} onOpen={vi.fn()} /></>)
+    fireEvent.focus(screen.getByTestId(`host-tile-${ID}`))
+    const a = screen.getByTestId('host-card').id
+    fireEvent.blur(screen.getByTestId(`host-tile-${ID}`))
+    fireEvent.focus(screen.getByTestId('host-tile-0123456789abcdef'))
+    expect(screen.getByTestId('host-card').id).not.toBe(a)
   })
   it('the card is on the right in the narrow bar and above in the wide one', () => {
     setup(cellView(), { variant: 'narrow' })
