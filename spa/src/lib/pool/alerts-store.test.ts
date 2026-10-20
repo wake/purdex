@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useAlertsStore, retainPoolAlerts, alertsEvent, alertsConnectionOpened, ALERTS_POLL_MS } from './alerts-store'
+import { useAlertsStore, retainPoolAlerts, alertsEvent, alertsConnectionOpened, alertCountOf, dutyOpenCount, readPoolAlertCount, ALERTS_POLL_MS, type HostAlertsEntry } from './alerts-store'
 import { usePoolStore } from './store'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import * as api from './alerts-api'
@@ -179,6 +179,36 @@ describe('the alerts store — what it keeps', () => {
     await vi.advanceTimersByTimeAsync(ALERTS_POLL_MS * 2)
     expect(calls()).toEqual([])
     expect(Object.keys(useAlertsStore.getState().byHost)).toEqual(['mlab'])
+  })
+})
+
+describe('alertCountOf (M36)', () => {
+  const ok = (alerts: PoolAlert[]): HostAlertsEntry => ({ kind: 'ok', known: true, alerts, at: 1 })
+  const silence = (alias: string, over: Partial<PoolAlert> = {}) => alert(`silence:${alias}`, { kind: 'silence', silence: 'host_down', ...over })
+  it('counts the active push alerts only', () => {
+    expect(alertCountOf({ mlab: ok([alert('a'), alert('b', { clearedAt: 5 }), alert('c', { level: 'digest' })]) })).toBe(1)
+  })
+  it('a level the App does not know is not a push', () => {
+    expect(alertCountOf({ mlab: ok([alert('a', { level: 'urgent' })]) })).toBe(0)
+  })
+  it('the same silence key in several hosts\' lists is one; a cleared one is none', () => {
+    expect(alertCountOf({ mlab: ok([silence('mserv')]), air26: ok([silence('mserv')]), air19: ok([silence('mserv', { clearedAt: 9 })]) })).toBe(1)
+    expect(alertCountOf({ mlab: ok([silence('mserv')]), air26: ok([silence('air19')]) })).toBe(2)
+  })
+  it('the same non-silence key on two hosts is two (each belongs to its own host)', () => {
+    expect(alertCountOf({ mlab: ok([alert('disk_low')]), air26: ok([alert('disk_low')]) })).toBe(2)
+  })
+  it('the spec example: both lists have silence:mserv, mlab has a disk_low push and a digest: 2', () => {
+    expect(alertCountOf({ mlab: ok([silence('mserv'), alert('disk_low:mlab'), alert('orphans:mlab', { kind: 'orphans', level: 'digest' })]), air26: ok([silence('mserv')]) })).toBe(2)
+  })
+  it('a host whose read failed counts none; no hosts is 0', () => {
+    expect(alertCountOf({ mlab: { kind: 'error', code: 'wwd_unavailable', at: 1 } })).toBe(0)
+    expect(alertCountOf({})).toBe(0)
+  })
+  it('the guardian\'s half is 0 until MON-11 and readPoolAlertCount reads the store', () => {
+    expect(dutyOpenCount()).toBe(0)
+    useAlertsStore.setState({ byHost: { mlab: ok([alert('a')]) } })
+    expect(readPoolAlertCount()).toBe(1)
   })
 })
 

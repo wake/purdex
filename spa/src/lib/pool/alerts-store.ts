@@ -127,3 +127,25 @@ export function alertsConnectionOpened(hostId: string): void {
   const source = usePoolStore.getState().sourceHostId
   if (source !== null && source === hostId) readAll(source)
 }
+
+/** What the guardian still has open (spec M36's second half, MON-11 / S7, S8): 0 until the duty roster is wired in. */
+export const dutyOpenCount = (): number => 0
+
+/**
+ * The number on the shield and the events tab (M36): alerts still active (`clearedAt` null) at push level, plus what the guardian still has open. Every wwd opens a `silence:<peer>` for the peer it cannot reach,
+ * so the same silence key in several hosts' lists is one thing and counts once (88, 10-20); any other key belongs to the host whose list holds it. A host whose read failed counts none.
+ */
+export function alertCountOf(byHost: Record<string, HostAlertsEntry>): number {
+  const open = new Set<string>()
+  for (const [alias, e] of Object.entries(byHost)) {
+    if (e.kind !== 'ok') continue
+    for (const a of e.alerts) {
+      if (a.clearedAt !== null || a.level !== 'push') continue
+      open.add(a.kind === 'silence' ? a.key : `${alias}\u0000${a.key}`)
+    }
+  }
+  return open.size + dutyOpenCount()
+}
+
+export const usePoolAlertCount = (): number => useAlertsStore((s) => alertCountOf(s.byHost))
+export const readPoolAlertCount = (): number => alertCountOf(useAlertsStore.getState().byHost)
