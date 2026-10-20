@@ -55,13 +55,19 @@ export function gaugesOf(facts: PoolFacts | null, t: T): (GaugeView | null)[] {
 
 // ---- the mini charts (M41-2, M42, M43) --------------------------------------------------------------------------------------------------------------------------
 
+/** The six cards of the 監控 tab; a chart of the full set (`host-charts-full.ts`) has an id of its own, so `ChartDef.id` is any string. */
 export type ChartId = 'cpu' | 'load' | 'mem' | 'paging' | 'dfree' | 'run'
+/** How a chart's legend and ticks write a value (`formatValue` in `host-charts-full.ts`). */
+export type ValueFormat = 'pct' | 'gb' | 'mb' | 'int' | 'f1' | 'rate' | 'mbps' | 'iops'
 /** The colour of a line: `accent` the main one, `muted` the second, `heavy` and `light` the queue's two kinds (MON-3a's tokens). */
 export type ChartColor = 'accent' | 'muted' | 'heavy' | 'light'
 
 export interface ChartSeries {
   id: string
   labelKey: string
+  /** A name that is data (a mount point, a device), written as it is, not through `t`. */
+  label?: string
+  labelParams?: Record<string, string | number>
   /** Aligned with the samples; null: not measured at that point (the line breaks there). */
   values: (number | null)[]
   color: ChartColor
@@ -78,8 +84,15 @@ export interface ChartSeries {
 export interface ChartLine { value: number; labelKey?: string; labelParams?: Record<string, number>; tone?: 'warn' | 'danger' }
 
 export interface ChartDef {
-  id: ChartId
+  id: string
   titleKey: string
+  /** How the legend and the ticks write a value. */
+  format?: ValueFormat
+  /** Replaces the default word for "no point in this range". */
+  pendingKey?: string
+  /** This platform does not have the figure at all (not "waiting for the series"). */
+  noneKey?: string
+  noteKey?: string
   /** The unit of the axis. */
   unit: string
   series: ChartSeries[]
@@ -111,11 +124,11 @@ const lastOf = (samples: readonly HostSample[], pick: (s: HostSample) => number 
 /** The `disk_min_gb` line: below it wwd raises its disk alert. */
 const DISK_MIN_GB = 10
 
-function series(id: string, labelKey: string, values: (number | null)[], color: ChartColor, extra: Partial<ChartSeries> = {}): ChartSeries {
+export function series(id: string, labelKey: string, values: (number | null)[], color: ChartColor, extra: Partial<ChartSeries> = {}): ChartSeries {
   return { id, labelKey, values, color, ...extra, pending: values.every((v) => v === null) }
 }
-function chart(id: ChartId, unit: string, ss: ChartSeries[], lines: ChartLine[], yMax: number): ChartDef {
-  return { id, titleKey: `watch.host.chart.${id}.title`, unit, series: ss, lines, yMin: 0, yMax, pending: ss.every((s) => s.pending) }
+export function chart(id: string, unit: string, ss: ChartSeries[], lines: ChartLine[], yMax: number, titleKey = `watch.host.chart.${id}.title`): ChartDef {
+  return { id, titleKey, unit, series: ss, lines, yMin: 0, yMax, pending: ss.every((s) => s.pending) }
 }
 
 /**
@@ -190,5 +203,7 @@ export function bigValue(def: ChartDef, samples: readonly HostSample[], i: numbe
       const room = (v: number | null): string => (v === null ? '' : `/${v}`)
       return { main: `${t('watch.host.chart.heavy')} ${s.runHeavy}${room(s.slotHeavy)} ${t('watch.host.chart.light')} ${s.runLight}${room(s.slotLight)}` }
     }
+    // The charts of the full set show no big number.
+    default: return dash
   }
 }
