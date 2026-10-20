@@ -90,6 +90,19 @@ describe('FleetCells — the queue strip and the jobs driver (MON-3a)', () => {
     expect(within(strip).getByTestId('queue-strip')).toBeTruthy()
     expect(strip.firstElementChild!.contains(screen.getByTestId('queue-strip'))).toBe(true)
   })
+  it('an answered pool with no host keeps the wide strip (grey), the narrow bar draws nothing', () => {
+    answer([])
+    const wide = render(<FleetCells variant="wide" />)
+    expect(screen.getByTestId('queue-strip')).toBeTruthy()
+    expect(screen.queryAllByTestId(/^host-tile-/)).toHaveLength(0)
+    wide.unmount()
+    const narrow = render(<FleetCells variant="narrow" />)
+    expect(narrow.container.firstChild).toBeNull()
+  })
+  it('a pool never read draws nothing at all', () => {
+    const { container } = render(<FleetCells variant="wide" />)
+    expect(container.firstChild).toBeNull()
+  })
   it('the narrow bar has no strip yet (MON-4 gives it two counts)', () => {
     answer([host(A, 'mlab')])
     render(<FleetCells variant="narrow" />)

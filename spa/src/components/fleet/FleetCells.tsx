@@ -6,6 +6,7 @@ import { useEffect, useMemo } from 'react'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { cellOf } from '../../lib/pool/cell-model'
 import { watchJobs } from '../../lib/pool/jobs-driver-live'
+import { usePoolReadable } from '../../lib/pool/pool-jobs'
 import { useMonitorHosts } from '../../lib/pool/use-monitor-hosts'
 import { HostCell } from './HostCell'
 import { QueueStrip } from './QueueStrip'
@@ -19,8 +20,10 @@ export function FleetCells({ variant }: FleetCellsProps) {
   // The queue strip and the counts read the pool's jobs: while the sidebar shows (wide or narrow) the jobs driver runs (A4).
   useEffect(() => watchJobs(), [])
   const cells = useMemo(() => hosts.map(cellOf), [hosts])
-  if (cells.length === 0) return null
+  const readable = usePoolReadable()
   const wide = variant === 'wide'
+  // Nothing to show: no host cell, and (wide) no strip either unless the pool answered once, when it stays — an answered empty pool is a grey line, not a bar that disappears.
+  if (cells.length === 0 && !(wide && readable)) return null
 
   return (
     <div
