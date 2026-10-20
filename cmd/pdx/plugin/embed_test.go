@@ -14,6 +14,7 @@ import (
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/wwd/jobscmd"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
@@ -675,6 +676,32 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 	for _, verb := range []string{"pdx watch status", "pdx watch log", "pdx watch ack"} {
 		if !strings.Contains(s, verb) {
 			t.Errorf("SKILL.md of pdx-watch does not mention %q", verb)
+		}
+	}
+	// The wwd alert section and the verbs it teaches.
+	for _, want := range []string{
+		"wwd 警報", "`pressure_watch`", "report-wwd.sh", "pdx wwd hold",
+		"不要直接執行 wwd 的二進位", "不需要也沒有 ack",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-watch lacks %q", want)
+		}
+	}
+	// Every pdx wwd / pdx jobs verb the skill teaches is in the CLI's own usage text
+	// (jobscmd.WWDUsage / JobsUsage), so renaming a verb turns this red.
+	for _, c := range []struct{ verb, usage string }{
+		{"pdx wwd worker", jobscmd.WWDUsage}, {"pdx wwd hold", jobscmd.WWDUsage},
+		{"pdx wwd pool", jobscmd.WWDUsage}, {"pdx wwd usage", jobscmd.WWDUsage},
+		{"pdx wwd status", jobscmd.WWDUsage}, {"pdx wwd exception stop", jobscmd.WWDUsage},
+		{"pdx jobs move", jobscmd.JobsUsage}, {"pdx jobs cancel", jobscmd.JobsUsage}, {"pdx jobs show", jobscmd.JobsUsage},
+	} {
+		if !strings.Contains(s, c.verb) {
+			t.Errorf("SKILL.md of pdx-watch does not mention %q", c.verb)
+		}
+		// usage prints the default subcommand as "pdx wwd [status]".
+		inUsage := strings.ReplaceAll(c.usage, "pdx wwd [status]", "pdx wwd status")
+		if !strings.Contains(inUsage, c.verb) {
+			t.Errorf("%q is taught by SKILL.md of pdx-watch but not in the CLI usage", c.verb)
 		}
 	}
 }
