@@ -5,6 +5,8 @@ import { handleRosterEvent } from './roster-ws'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { teamKeyOf } from './team-views'
+import { useGroupViewStore } from '../../stores/useGroupViewStore'
+import { manualGroupKey, teamGroupKey } from '../task-groups/group-key'
 import type { TeamRoster } from './roster'
 
 const team = (id: string): TeamRoster => ({
@@ -31,6 +33,19 @@ describe('handleRosterEvent', () => {
     handleRosterEvent('h1', v({ op: 'changed', teams: [] }))
     expect(useTeamRosterStore.getState().byHost.h1).toEqual([])
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a team the host no longer lists loses its task-group view memory; another host\'s and the manual groups\' stay', () => {
+    const gone = teamGroupKey(teamKeyOf('h1', 'b'))
+    const kept = teamGroupKey(teamKeyOf('h1', 'a'))
+    const otherHost = teamGroupKey(teamKeyOf('h2', 'b'))
+    const manual = manualGroupKey('aaaaaaaa')
+    useGroupViewStore.setState({ selectedGroup: gone, lastActiveTab: { [gone]: 't1', [kept]: 't2', [otherHost]: 't3', [manual]: 't4' }, expanded: { [gone]: false, [kept]: false }, lastByView: { workspace: null, group: gone } })
+    handleRosterEvent('h1', v({ op: 'changed', teams: [team('a')] }))
+    const s = useGroupViewStore.getState()
+    expect(s.lastActiveTab).toEqual({ [kept]: 't2', [otherHost]: 't3', [manual]: 't4' })
+    expect(s.expanded).toEqual({ [kept]: false })
+    expect([s.selectedGroup, s.lastByView.group]).toEqual([null, null])
   })
 
   it('a malformed frame is dropped whole with one warning; the store keeps what it had', () => {

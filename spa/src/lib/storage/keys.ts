@@ -50,6 +50,9 @@ export const STORAGE_KEYS = {
   /** The manual task groups (useManualGroupsStore, task groups spec §4.1): `{ order, groups }`, members hold LOCAL host ids in the store and WIRE ids on the wire.
    *  Registered with syncManager and projected into Profile Sync `settings` (ordinal 12). */
   TASK_GROUPS: 'purdex-task-groups',
+  /** 這台裝置對任務編組視圖的記憶（useGroupViewStore）：選取的群組、每個群組最後的作用中分頁、展開狀態、兩個視圖各自最後的選取；
+   *  team key 內是本機 host id（跟著主機重新解析／刪除改寫）。device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）；走 syncManager（只為同裝置多視窗互讀，否則後寫的視窗會蓋掉先寫的） */
+  GROUP_VIEW: 'purdex-group-view',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',
