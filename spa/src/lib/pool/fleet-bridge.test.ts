@@ -29,6 +29,11 @@ describe('fleetViewOfPoolHost', () => {
     expect(fleetViewOfPoolHost(views, air, { '0123456789abcdef': 'cfg-air26' })?.id).toBe('d-1')
   })
   it('by alias when no daemon is known', () => expect(fleetViewOfPoolHost(views, air, {})?.id).toBe('d-2'))
+  it('two fleet hosts sharing the alias are no match (an alias is not unique), unless the daemon says which', () => {
+    const twins = [{ ...fleet({ alias: 'air26', id: 'a' }), kind: 'daemon', hostConfigId: 'c1' }, { ...fleet({ alias: 'air26', id: 'b' }), kind: 'daemon', hostConfigId: 'c2' }] as never[]
+    expect(fleetViewOfPoolHost(twins, air, {})).toBeNull()
+    expect(fleetViewOfPoolHost(twins, air, { '0123456789abcdef': 'c2' })?.id).toBe('b')
+  })
   it('a pool host with neither is null', () => expect(fleetViewOfPoolHost(views, poolHost({ alias: 'nope', host_id: 'zz' }), {})).toBeNull())
 })
 
