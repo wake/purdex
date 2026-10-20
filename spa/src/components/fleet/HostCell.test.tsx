@@ -106,7 +106,7 @@ describe('HostCell — the count at the badge\'s corner (M6, M7)', () => {
   it.each([
     ['neutral', 'bg-text-muted'], ['warn', 'bg-status-warning'], ['error', 'bg-status-error'],
   ] as const)('%s count: its colour', (tone, cls) => {
-    setup({ ...cellView(), count: { n: 4, tone } })
+    setup({ ...cellView(), count: { n: 4, tone, queued: 4, running: 0 } })
     const badge = screen.getByTestId(`count-badge-${ID}`)
     expect(badge.textContent).toBe('4')
     expect(badge.className).toContain(cls)
