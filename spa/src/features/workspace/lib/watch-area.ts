@@ -173,7 +173,7 @@ export function createWatchReconciler(): WatchReconciler {
     }
   }
 
-  const reconcile = (view: WatchFleetView | null, now: number = Date.now()): number | null => {
+  const reconcile = (view: WatchHostsView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
 
