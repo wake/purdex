@@ -180,6 +180,22 @@ func TestEvaluator_PassAndPassSampleCalledTogetherDoNotOverlap(t *testing.T) {
 	}
 }
 
+// Clearing a retired alert needs no facts: a host whose sampler has nothing to hand out (no first sample yet, a source that keeps failing)
+// still lets go of the alerts of rules it no longer judges.
+func TestEvaluator_RetiredKeysAreClearedEvenWithNoInput(t *testing.T) {
+	b := newBook()
+	b.active["pressure_watch"] = wire.Alert{Key: "pressure_watch"}
+	slow := &stubRule{kind: wire.AlertDiskLow, v: Verdict{Holds: true, Key: "disk_low", Level: wire.AlertPush}}
+	ev := NewEvaluator(b, func() (Input, bool) { return Input{}, false }, nil, slow).WithRetired("pressure_watch")
+	ev.Pass()
+	if _, ok := b.active["pressure_watch"]; ok {
+		t.Fatal("a retired alert was left standing because there was no input")
+	}
+	if _, ok := b.active["disk_low"]; ok {
+		t.Error("a rule was judged with no input")
+	}
+}
+
 // A rule this host does not judge (watch_rules off, or in `off`) must not leave its alert standing: a standing alert of a new kind is what
 // stops a rollback to a build that does not know it.
 func TestEvaluator_RetiredKeysAreClearedAtEveryPass(t *testing.T) {

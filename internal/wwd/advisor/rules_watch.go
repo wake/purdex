@@ -73,20 +73,16 @@ func (PressureWatch) Eval(in Input) (Verdict, error) {
 	v := Verdict{Key: "pressure_watch", Level: wire.AlertWatch}
 	recs := in.Recent(in.Now.Add(-watchEntryWindow))
 	if in.Raised != nil && in.Raised(v.Key) {
-		anyRead := false
+		from := in.Now.Add(-watchClear)
 		for _, f := range recs {
-			if f.At.Before(in.Now.Add(-watchClear)) {
-				continue
-			}
-			read, pressure, _ := pressureState(f)
-			anyRead = anyRead || read
-			if pressure {
+			if _, pressure, _ := pressureState(f); pressure && !f.At.Before(from) {
 				v.Holds, v.Detail = true, "記憶體壓力仍在（最近 10 分鐘內有壓力樣本）"
 				return v, nil
 			}
 		}
-		if !anyRead {
-			return Verdict{}, errors.New("nothing was read in the last 10 minutes: pressure cannot be shown to be over")
+		// it clears only on a window that was read and calm from end to end: calm samples among holes prove nothing about the holes
+		if !calmOver(recs, from, in.Now, func(f wire.Facts) bool { _, pressure, _ := pressureState(f); return pressure }) {
+			return Verdict{}, errors.New("the last 10 minutes were not read in full: pressure cannot be shown to be over")
 		}
 		return v, nil
 	}
@@ -114,6 +110,27 @@ func minuteOfPressure(recs []wire.Facts, now time.Time) bool {
 	}
 	for i, f := range win {
 		if _, pressure, _ := pressureState(f); !pressure || (i > 0 && f.At.Sub(win[i-1].At) > watchMaxGap) {
+			return false
+		}
+	}
+	return true
+}
+
+// calmOver says whether recs show a thing over for the whole of [from, now]: the first sample at or after from is within watchMaxGap of it,
+// the last is within watchMaxGap of now, no two neighbours are further apart, and every sample was read (a hole is not calm) and is not on
+// (still(f) false). A window that has a hole, a gap or no samples shows nothing, so a raised alert is not cleared on it.
+func calmOver(recs []wire.Facts, from, now time.Time, still func(wire.Facts) bool) bool {
+	var win []wire.Facts
+	for _, f := range recs {
+		if !f.At.Before(from) {
+			win = append(win, f)
+		}
+	}
+	if len(win) == 0 || win[0].At.Sub(from) > watchMaxGap || now.Sub(win[len(win)-1].At) > watchMaxGap {
+		return false
+	}
+	for i, f := range win {
+		if read, _, _ := pressureState(f); !read || still(f) || (i > 0 && f.At.Sub(win[i-1].At) > watchMaxGap) {
 			return false
 		}
 	}
@@ -151,13 +168,10 @@ func (PressureDanger) Eval(in Input) (Verdict, error) {
 	if raised {
 		look = dangerClear
 	}
-	anyRead := false
 	var worst *wire.Facts
 	recs := in.Recent(in.Now.Add(-look))
 	for i := range recs {
-		read, _, danger := pressureState(recs[i])
-		anyRead = anyRead || read
-		if danger {
+		if _, _, danger := pressureState(recs[i]); danger {
 			worst = &recs[i]
 		}
 	}
@@ -165,8 +179,9 @@ func (PressureDanger) Eval(in Input) (Verdict, error) {
 		v.Holds, v.Detail = true, dangerDetail(*worst)
 		return v, nil
 	}
-	if raised && !anyRead {
-		return Verdict{}, errors.New("nothing was read in the last 2 minutes: the danger cannot be shown to be over")
+	// raised, it clears only on a window that was read from end to end with no level-4 sample (see calmOver)
+	if raised && !calmOver(recs, in.Now.Add(-look), in.Now, func(f wire.Facts) bool { _, _, danger := pressureState(f); return danger }) {
+		return Verdict{}, errors.New("the last 2 minutes were not read in full: the danger cannot be shown to be over")
 	}
 	return v, nil
 }

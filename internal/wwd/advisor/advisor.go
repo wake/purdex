@@ -158,10 +158,6 @@ func (e *Evaluator) pass(sampleOnly bool) {
 			return
 		}
 	}
-	in, ok := e.input()
-	if !ok {
-		return
-	}
 	// what is raised is read from the table at every pass, so a restart, or an alert cleared by someone else, cannot leave the evaluator
 	// believing something else; when the table cannot be read nothing is judged
 	active, err := e.book.Active()
@@ -170,7 +166,8 @@ func (e *Evaluator) pass(sampleOnly bool) {
 		return
 	}
 	e.ok("")
-	in.Raised = func(key string) bool { return active[key] }
+	// the alerts of rules this host no longer judges are let go first and need no facts: a host that has nothing to hand out (no first sample
+	// yet, a source that keeps failing) must still be able to turn a rule off
 	if !sampleOnly {
 		for _, key := range e.retired {
 			if active[key] {
@@ -180,6 +177,11 @@ func (e *Evaluator) pass(sampleOnly bool) {
 			}
 		}
 	}
+	in, ok := e.input()
+	if !ok {
+		return
+	}
+	in.Raised = func(key string) bool { return active[key] }
 	for _, r := range e.rules {
 		if sampleOnly {
 			if sr, ok := r.(SampleRule); !ok || !sr.EverySample() {

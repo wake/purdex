@@ -409,6 +409,56 @@ func TestSwapGrowth_LeavesOutThePartialMinute(t *testing.T) {
 	}
 }
 
+// A raised alert clears only when the whole clearing window is read and calm: a few calm samples among holes (memory unreadable while the
+// pressure may well go on), or a hole inside an otherwise calm window, leave it standing (the verdict is an error, not a clear).
+func TestRaisedAlertsClearOnlyOnAWindowThatIsReadAndCalm(t *testing.T) {
+	window := func(span time.Duration, f func(at time.Time, i int) wire.Facts) []wire.Facts {
+		return run5(t0, int(span/(5*time.Second))+1, f)
+	}
+	calm := func(at time.Time, i int) wire.Facts { return mac(at, 1) }
+	oneCalmThenHoles := func(at time.Time, i int) wire.Facts {
+		if i == 10 { // a calm sample inside the window; every other sample is a hole
+			return mac(at, 1)
+		}
+		return hole(at)
+	}
+	holeInside := func(at time.Time, i int) wire.Facts {
+		if i == 20 {
+			return hole(at)
+		}
+		return mac(at, 1)
+	}
+	for _, c := range []struct {
+		name string
+		rule Rule
+		key  string
+		span time.Duration
+	}{
+		{"pressure_watch", PressureWatch{}, "pressure_watch", 10*time.Minute + 5*time.Second},
+		{"pressure_danger", PressureDanger{}, "pressure_danger", 2*time.Minute + 5*time.Second},
+	} {
+		recs := window(c.span, calm)
+		if v, err := c.rule.Eval(raisedAs(recentInput(recs[len(recs)-1].At, recs...), c.key)); err != nil || v.Holds {
+			t.Errorf("%s: a fully read calm window did not clear: %+v %v", c.name, v, err)
+		}
+		for name, f := range map[string]func(time.Time, int) wire.Facts{"one calm sample and then holes": oneCalmThenHoles, "a hole inside a calm window": holeInside} {
+			recs := window(c.span, f)
+			v, err := c.rule.Eval(raisedAs(recentInput(recs[len(recs)-1].At, recs...), c.key))
+			if err == nil && !v.Holds {
+				t.Errorf("%s, %s: the alert was cleared on a window that does not show the pressure is over", c.name, name)
+			}
+		}
+		// a window with a gap in it (the sampler stalled) is no proof either
+		recs = append(window(c.span/2, calm)[:len(window(c.span/2, calm))-1], window(c.span/2, calm)...)
+		for i := range recs[len(recs)/2:] {
+			recs[len(recs)/2+i].At = recs[len(recs)/2+i].At.Add(c.span/2 + 30*time.Second)
+		}
+		if v, err := c.rule.Eval(raisedAs(recentInput(recs[len(recs)-1].At, recs...), c.key)); err == nil && !v.Holds {
+			t.Errorf("%s: the alert was cleared across a 30 s gap in the samples", c.name)
+		}
+	}
+}
+
 // A raised alert clears below HALF the threshold, exactly: with an odd threshold (a setting, or a RAM-proportional one) half is not a whole
 // number, and the clearing line must not round down.
 func TestSwapGrowth_OddThresholdClearsBelowExactlyHalf(t *testing.T) {
