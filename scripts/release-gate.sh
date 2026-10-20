@@ -50,7 +50,12 @@ command -v jq >/dev/null 2>&1 || die "jq is needed to read the reports"
 tasks=$GATE_TASKS
 [ "$with_mod" = 1 ] && tasks="$tasks $MOD_TASK"
 for s in $skips; do
-	case " $tasks $MOD_TASK " in *" $s "*) ;; *) die "--skip $s: not a task of the gate ($tasks)" ;; esac
+	# only a task that is part of this run can be skipped: one that is not would leave no row, and the gate would read as whole
+	case " $tasks " in
+	*" $s "*) ;;
+	*) if [ "$s" = "$MOD_TASK" ]; then die "--skip $MOD_TASK needs --mod (it is not part of this run)"; fi
+		die "--skip $s: not a task of the gate ($tasks)" ;;
+	esac
 done
 
 # the clone: its origin is the remote, it holds the commit, it is detached at it and has nothing the commit does not have

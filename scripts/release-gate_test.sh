@@ -101,6 +101,13 @@ unset FAKE_RC_lint
 [ "$rc" = 1 ] || fail "a failure beats a skip: exit $rc"
 run --skip no-such-task "$c1"
 [ "$rc" = 2 ] || fail "an unknown --skip task: exit $rc"
+# a task that is not part of this run cannot be skipped: it would vanish from the table and the gate would read as whole (#3708 R1)
+run --skip mod-all "$c1"
+[ "$rc" = 2 ] || fail "--skip mod-all without --mod: exit $rc, want 2: $out"
+has "$out" "--mod" "the refusal says why"
+run --mod --skip mod-all --skip wwd-linux --skip wwd-linux-vet "$c1"
+[ "$rc" = 3 ] || fail "--mod with --skip mod-all: exit $rc, want 3: $out"
+echo "$out" | grep "mod-all" | grep -q "跳過" || fail "mod-all must say 跳過: $out"
 
 # 5. --no-cache goes to every pdx test; --mod adds mod-all
 run --no-cache "$c1"
