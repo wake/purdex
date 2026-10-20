@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
-import { startSessionRootsLifecycle, setRootsInterest, ROOT_REREAD_DEBOUNCE_MS } from './session-roots-lifecycle'
+import { startSessionRootsLifecycle, setRootsInterest, ROOT_REREAD_DEBOUNCE_MS, ROOT_PRUNE_SETTLE_MS } from './session-roots-lifecycle'
 import { useRootCacheStore, rootOf } from './root-cache'
 import { useRelayQuotaStore } from '../team/relay-quota'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
@@ -127,7 +127,22 @@ describe('cleanup', () => {
     expect(rootOf('h1', 'PARKED')).toBe('R')
     expect(rootOf('h1', 'GONE')).toBeNull()
     useLocalProfilesStore.setState({ parkedMaster: null })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
     expect(rootOf('h1', 'PARKED')).toBeNull() // the world went: its entries go with it
     expect(rootOf('h1', 'ON')).toBe('R')
+  })
+
+  it('does not prune in the middle of a world switch: the world about to be shown is neither parked nor on screen for a moment', () => {
+    useRootCacheStore.getState().ingest('h1', [q('NEXT', 'R')])
+    const world = { workspaces: [], tabs: { t2: tabOf('t2', 'h1', 'NEXT') }, activeWorkspaceId: null, activeTabId: null }
+    useLocalProfilesStore.setState({ parkedMaster: world, slaves: {} })
+    stop()
+    stop = startSessionRootsLifecycle()
+    // the switch: the profiles store takes the world out of the parked ones first, the tab store shows it after
+    useLocalProfilesStore.setState({ parkedMaster: null })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS / 2)
+    useTabStore.setState({ tabs: world.tabs })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
+    expect(rootOf('h1', 'NEXT')).toBe('R')
   })
 })

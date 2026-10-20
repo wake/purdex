@@ -17,6 +17,8 @@ import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import type { Tab } from '../../types/tab'
 
 export const ROOT_REREAD_DEBOUNCE_MS = 800
+/** How long the world stores must stay quiet before the cache is pruned against them. */
+export const ROOT_PRUNE_SETTLE_MS = 1000
 
 export interface WantedSession { hostId: string; agentSessionId: string }
 
@@ -60,6 +62,7 @@ function pruneUnreferenced(): void {
 export function startSessionRootsLifecycle(): () => void {
   const asked = new Map<string, Set<string>>() // per host: the sessions already asked about in this epoch
   let timer: ReturnType<typeof setTimeout> | null = null
+  let pruneTimer: ReturnType<typeof setTimeout> | null = null
 
   const feed = () => {
     for (const [hostId, read] of Object.entries(useRelayQuotaStore.getState().reads)) {
@@ -106,7 +109,12 @@ export function startSessionRootsLifecycle(): () => void {
       if (daemonMismatchKey(next) !== daemonMismatchKey(prev)) run() // `rootsSupported` answers false for a mismatched host: a change re-derives what to read
     }),
     useUnattendedStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) run() }), // a capability learned after the view opened
-    useLocalProfilesStore.subscribe((s, prev) => { if (s.parkedMaster !== prev.parkedMaster || s.slaves !== prev.slaves) pruneUnreferenced() }),
+    // A world switch updates the profiles store and then the tab store: pruning between the two would see the world about to be shown as neither parked nor on screen. So it waits until the switch settled.
+    useLocalProfilesStore.subscribe((s, prev) => {
+      if (s.parkedMaster === prev.parkedMaster && s.slaves === prev.slaves) return
+      if (pruneTimer !== null) clearTimeout(pruneTimer)
+      pruneTimer = setTimeout(() => { pruneTimer = null; pruneUnreferenced() }, ROOT_PRUNE_SETTLE_MS)
+    }),
   ]
   evaluate = run
   feed()
@@ -115,6 +123,7 @@ export function startSessionRootsLifecycle(): () => void {
   return () => {
     for (const off of unsubs) off()
     if (timer !== null) clearTimeout(timer)
+    if (pruneTimer !== null) clearTimeout(pruneTimer)
     if (evaluate === run) evaluate = null
   }
 }
