@@ -30,6 +30,11 @@ func Clone(f wire.Facts) wire.Facts {
 		out.Stats = &st
 	}
 	out.Queue = clonePtr(f.Queue)
+	out.ProcsTotal, out.BootAt = clonePtr(f.ProcsTotal), clonePtr(f.BootAt)
+	if f.Self != nil {
+		self := wire.Self{CPUPct: clonePtr(f.Self.CPUPct), RSSMB: clonePtr(f.Self.RSSMB)}
+		out.Self = &self
+	}
 	out.Exception = make([]wire.FactExc, len(f.Exception))
 	for i, e := range f.Exception {
 		e.Until = clonePtr(e.Until)
@@ -51,6 +56,8 @@ func cloneMem(m wire.Mem) wire.Mem {
 	m.SwapUsedMB, m.CompressorMB = clonePtr(m.SwapUsedMB), clonePtr(m.CompressorMB)
 	m.PSI = clonePtr(m.PSI)
 	m.DecompressRate = clonePtr(m.DecompressRate)
+	m.SwapTotalMB, m.WiredMB, m.ActiveMB = clonePtr(m.SwapTotalMB), clonePtr(m.WiredMB), clonePtr(m.ActiveMB)
+	m.InactiveMB, m.FileCacheMB = clonePtr(m.InactiveMB), clonePtr(m.FileCacheMB)
 	return m
 }
 

@@ -103,6 +103,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	}
 	n := float64(len(recs))
 	out.CPU.Load1, out.CPU.Load5, out.CPU.IdlePct = l1/n, l5/n, idle/n
+	rollupHost(&out, recs)
 	return out
 }
 
