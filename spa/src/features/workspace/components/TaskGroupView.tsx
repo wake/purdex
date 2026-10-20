@@ -19,7 +19,6 @@ import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
 import { useEffectiveView } from '../../../lib/task-groups/effective-view'
-import { collectLeaves } from '../../../lib/pane-tree'
 import { agentSessionOfTab } from '../../../lib/task-groups/placement'
 import { manualGroupKey, teamGroupKey, UNGROUPED } from '../../../lib/task-groups/group-key'
 import { selectGroupFromSidebar } from '../../../lib/task-groups/group-select'
@@ -27,7 +26,7 @@ import { buildTeamIndex } from '../../../lib/team/team-index'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
 import { deleteManualGroup, recolorManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
 import { requestRename, useRenameRequestStore } from '../../../lib/task-groups/rename-request'
-import type { SessionActionResult } from '../../../lib/task-groups/session-actions'
+import { sessionOfTab as sessionOfTabShared, type SessionActionResult } from '../../../lib/task-groups/session-actions'
 import { buildGroupView, type GroupRow, type GroupSection, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
@@ -85,10 +84,10 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     for (const [tabId, workspaceId] of order) {
       const tab = tabsById[tabId]
       if (!tab) continue
-      // The session a tab stands for: the first live tmux session among its panes (a split tab's session may sit in a secondary pane), as `shownSessions` reads a tab.
-      const c = collectLeaves(tab.layout).map((p) => p.content).find((x) => x.kind === 'tmux-session' && !x.terminated)
-      if (!c || c.kind !== 'tmux-session') continue
-      out.push({ tabId, workspaceId, hostId: c.hostId, sessionCode: c.sessionCode, sessionName: sessionsByHost[c.hostId]?.find((r) => r.code === c.sessionCode)?.name ?? c.cachedName, agentSessionId: c.rebuild?.agent?.sessionId ?? null })
+      // The session a tab stands for (spec §3, the one rule `sessionOfTabShared` shares with the personal panel and the actions' re-check): its agent session, live or ended, else the first live tmux session.
+      const c = sessionOfTabShared(tab)
+      if (!c) continue
+      out.push({ tabId, workspaceId, hostId: c.hostId, sessionCode: c.sessionCode, sessionName: sessionsByHost[c.hostId]?.find((r) => r.code === c.sessionCode)?.name ?? c.cachedName, agentSessionId: c.agentSessionId })
     }
     return out
   }, [tabsById, workspaces, sessionsByHost])
