@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
-import { fileSession, startGroupWithSession, takeSessionOut, type SessionRef } from './session-actions'
+import { fileSession, sessionOfTab, startGroupWithSession, takeSessionOut, type SessionRef } from './session-actions'
 import { useRootCacheStore } from './root-cache'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -182,5 +182,24 @@ describe('a session that ended (TG-5c, spec 3: a tab\'s agent session is live or
     useTabStore.setState({ tabs: { t1: { ...t, layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [t.layout, { type: 'leaf', pane: live }] } } as never } })
     expect(await fileSession(ref(), 'g1')).toEqual({ ok: true }) // AG1 (ended) is still the tab's session
     expect(await fileSession(ref({ agentSessionId: 'AG2' }), 'g1')).toEqual({ ok: false, reason: 'tab-changed' })
+  })
+})
+
+describe('sessionOfTab — the one rule of the sidebar rows and the re-check (TG-5c)', () => {
+  const pane = (id: string, over: Record<string, unknown>, agent?: string) => ({ id, content: { kind: 'tmux-session', hostId: 'h1', sessionCode: `S-${id}`, mode: 'terminal', cachedName: `n-${id}`, tmuxInstance: 'I', ...(agent ? { rebuild: { agent: { sessionId: agent } } } : {}), ...over } })
+  const split = (a: unknown, b: unknown) => ({ id: 't1', layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [{ type: 'leaf', pane: a }, { type: 'leaf', pane: b }] } }) as never
+  it('an ended agent pane first and a live agent pane second: the ended one is the tab\'s session — rows and re-check agree', async () => {
+    const tab = split(pane('a', { terminated: 'tmux-restarted' }, 'AG1'), pane('b', {}, 'AG2'))
+    expect(sessionOfTab(tab)).toMatchObject({ agentSessionId: 'AG1', sessionCode: 'S-a', cachedName: 'n-a' })
+    useRootCacheStore.getState().ingest('h1', [q('AG1', 'ROOT')])
+    useTabStore.setState({ tabs: { t1: tab } })
+    expect(await fileSession(ref({ agentSessionId: sessionOfTab(tab)!.agentSessionId }), 'g1')).toEqual({ ok: true })
+  })
+  it('a live pane with no agent first and an agent pane second: the agent pane is the session', () => {
+    expect(sessionOfTab(split(pane('a', {}), pane('b', {}, 'AG2')))).toMatchObject({ agentSessionId: 'AG2', sessionCode: 'S-b' })
+  })
+  it('no agent id anywhere: the first live tmux session, with no agent session; none live: null', () => {
+    expect(sessionOfTab(split(pane('a', { terminated: 'tmux-restarted' }), pane('b', {})))).toMatchObject({ agentSessionId: null, sessionCode: 'S-b' })
+    expect(sessionOfTab(split(pane('a', { terminated: 'tmux-restarted' }), pane('b', { terminated: 'tmux-restarted' })))).toBeNull()
   })
 })

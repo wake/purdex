@@ -7,12 +7,19 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useRootCacheStore } from './root-cache'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useGroupViewStore } from '../../stores/useGroupViewStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { isWatchTabId } from '../watch/ids'
 import { effectiveView } from './effective-view'
 import { currentPlacementCtx } from './current'
 import { groupOfTab } from './placement'
+
+/** How long the rosters and sessions must stay quiet before the active tab's group is re-read for a team change. */
+export const TEAM_INDEX_SETTLE_MS = 250
 
 type TabState = ReturnType<typeof useTabStore.getState>
 
@@ -53,11 +60,24 @@ function activeGroupKey(): string | null {
 export function startGroupSelection(): () => void {
   resyncSelection()
   let lastKey = activeGroupKey()
+  let lastView = effectiveView()
   const regroup = () => {
+    // A change of the view in force is the view toggle's business (§6.3 restores that view's last selection): only the baseline moves, nothing is recorded over the restore.
+    if (effectiveView() !== lastView) {
+      lastView = effectiveView()
+      lastKey = activeGroupKey()
+      return
+    }
     const key = activeGroupKey()
     if (key === lastKey) return
     lastKey = key
     resyncSelection()
+  }
+  // The team index (a seat joining or leaving makes the tab a team's) follows the rosters and the sessions, which tick often: those two are looked at once the burst is over.
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const regroupSoon = () => {
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => { timer = null; regroup() }, TEAM_INDEX_SETTLE_MS)
   }
   const unsubs = [
     useTabStore.subscribe((state, prev) => {
@@ -68,6 +88,13 @@ export function startGroupSelection(): () => void {
     }),
     useManualGroupsStore.subscribe((state, prev) => { if (state.groups !== prev.groups || state.order !== prev.order) regroup() }),
     useRootCacheStore.subscribe((state, prev) => { if (state.roots !== prev.roots) regroup() }),
+    useTeamRosterStore.subscribe((state, prev) => { if (state.byHost !== prev.byHost) regroupSoon() }),
+    useSessionStore.subscribe((state, prev) => { if (state.sessions !== prev.sessions) regroupSoon() }),
+    useTeamUiStore.subscribe((state, prev) => { if (state.sidebarView !== prev.sidebarView) regroup() }),
+    useLayoutStore.subscribe((state, prev) => { if (state.activityBarWidth !== prev.activityBarWidth || state.tabPosition !== prev.tabPosition) regroup() }),
   ]
-  return () => { for (const off of unsubs) off() }
+  return () => {
+    for (const off of unsubs) off()
+    if (timer !== null) clearTimeout(timer)
+  }
 }

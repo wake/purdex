@@ -1,7 +1,7 @@
 // spa/src/lib/task-groups/selection.test.ts — the selection follows the active tab (task groups spec §6.2): in the task-group view the selected group, that group's last tab and the view's last group; in the workspace view the
 // view's last workspace; nothing for a watcher-area tab or none. Real stores.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { startGroupSelection, shouldResync } from './selection'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { startGroupSelection, shouldResync, TEAM_INDEX_SETTLE_MS } from './selection'
 import { useTabStore } from '../../stores/useTabStore'
 import { useGroupViewStore } from '../../stores/useGroupViewStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
@@ -10,7 +10,9 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRootCacheStore } from './root-cache'
-import { manualGroupKey, UNGROUPED } from './group-key'
+import { HOST, KEY, resetTeamStores, seedScene } from '../team/__tests__/team-fixture'
+import { useTeamRosterStore as rosterStore } from '../../stores/useTeamRosterStore'
+import { manualGroupKey, teamGroupKey, UNGROUPED } from './group-key'
 import type { Tab } from '../../types/tab'
 
 const tab = (id: string, group?: string): Tab => ({ id, kind: 'new-tab', locked: false, pinned: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `${id}-p`, content: { kind: 'new-tab' } } }, ...(group ? { group } : {}) } as never)
@@ -146,5 +148,38 @@ describe('the active tab changes group (TG-5c, spec 6.2)', () => {
     view().selectGroup(null)
     useManualGroupsStore.setState({ groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 }, [H]: { name: 'H', members: [], createdAt: 1 } } })
     expect(view().selectedGroup).toBeNull()
+  })
+})
+
+describe('the view in force and the team index (TG-5c)', () => {
+  afterEach(() => { vi.useRealTimers() })
+  const restart = (active: string) => {
+    stop()
+    resetTeamStores()
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'ma', 'x'] }], activeTabId: active })
+    useGroupViewStore.setState({ selectedGroup: null, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    stop = startGroupSelection()
+  }
+  it('a seat leaving the roster makes the active tab a plain tab: the selection follows once the burst is over', () => {
+    vi.useFakeTimers()
+    restart('ma')
+    expect(view().selectedGroup).toBe(teamGroupKey(KEY))
+    rosterStore.setState({ byHost: { [HOST]: [] } })
+    vi.advanceTimersByTime(TEAM_INDEX_SETTLE_MS - 1)
+    expect(view().selectedGroup).toBe(teamGroupKey(KEY))
+    vi.advanceTimersByTime(1)
+    expect(view().selectedGroup).toBe(UNGROUPED)
+  })
+  it('switching the view in force records nothing over what the toggle restores (spec 6.3)', () => {
+    restart('ma')
+    view().selectGroup(manualGroupKey('aaaaaaaa')) // what the group view restored
+    useTeamUiStore.setState({ sidebarView: 'workspaces' })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    expect(view().selectedGroup).toBe(manualGroupKey('aaaaaaaa'))
+    useLayoutStore.setState({ activityBarWidth: 'narrow' })
+    useLayoutStore.setState({ activityBarWidth: 'wide' })
+    expect(view().selectedGroup).toBe(manualGroupKey('aaaaaaaa'))
   })
 })
