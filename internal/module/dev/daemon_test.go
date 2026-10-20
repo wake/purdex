@@ -1,11 +1,14 @@
 package dev
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,9 +17,50 @@ import (
 	"github.com/wake/purdex/internal/core"
 )
 
+// repoWithCommit is a directory that is a git repository with one commit, and that commit's short hash as `git log -1 --format=%h` prints it.
+// The check is about whatever repository the daemon runs from, not about the one the test runs in: a test's working directory is a git
+// worktree on a developer's machine, but a wwd job's can be a tar of the commit with no .git at all (the worker's clone did not have the
+// job's base yet, #3729), where `git log -1` has nothing to read.
+func repoWithCommit(t *testing.T, message string) (dir, short string) {
+	t.Helper()
+	isolateGit(t)
+	dir = t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", message}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	cmd := exec.Command("git", "log", "-1", "--format=%h")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, strings.TrimSpace(string(out))
+}
+
+// isolateGit drops the GIT_ variables of the process for the length of the test (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_COUNT and
+// the rest tell git which repository to use whatever the directory is, and a process started by a hook, a wrapper or a job runner can carry
+// them): the git commands of the test, and the one the handler runs, then look at the directory they are given and nothing else. The three
+// that only choose where configuration is read from stay, as in internal/gitenv: the owner of the process may isolate git from ~/.gitconfig.
+func isolateGit(t *testing.T) {
+	t.Helper()
+	keep := map[string]bool{"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_CONFIG_NOSYSTEM": true}
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "GIT_") && !keep[name] {
+			t.Setenv(name, "") // records the value to put back when the test ends
+			os.Unsetenv(name)
+		}
+	}
+}
+
 func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
 	t.Setenv("PDX_DEV_MODE", "1")
-	m := New(".") // repoRoot = cwd (git worktree)
+	repo, short := repoWithCommit(t, "m")
+	m := New(repo)
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
 
@@ -37,6 +81,85 @@ func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
 	}
 	if body.LatestHash == "" {
 		t.Error("latest_hash empty — expected a git commit short hash")
+	}
+	if body.LatestHash != short {
+		t.Errorf("latest_hash = %q, want the repository's own %q", body.LatestHash, short)
+	}
+}
+
+// A process that carries GIT_DIR / GIT_WORK_TREE (a git hook's child, a runner's wrapper) does not make the tests look at, or commit to, the
+// repository those name: the helper builds its own, the check answers about it, and the other one is untouched.
+func TestHandleDaemonCheck_AnInheritedGitEnvironmentIsNotFollowed(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	other, otherShort := repoWithCommit(t, "the other repository")
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+
+	repo, short := repoWithCommit(t, "ours")
+	if short == otherShort {
+		t.Fatalf("both repositories have the commit %s: the helper worked in the other one", short)
+	}
+	mux := http.NewServeMux()
+	New(repo).RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/dev/daemon/check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body daemonCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.LatestHash != short {
+		t.Errorf("latest_hash = %q, want our repository's %q (the other one's is %q)", body.LatestHash, short, otherShort)
+	}
+	isolateGit(t)
+	cmd := exec.Command("git", "rev-list", "--count", "HEAD")
+	cmd.Dir = other
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "1" {
+		t.Errorf("the other repository has %s commits, want the 1 it started with", got)
+	}
+}
+
+// A directory that is not a repository (a tar workspace has no .git) is "no latest hash", not an error, and the reason is logged, not lost.
+func TestHandleDaemonCheck_NotARepositoryIsEmptyAndSaysWhy(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	isolateGit(t)
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir)) // git looks no higher than the directory: whatever is above the temp dir is no repository of ours
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	m := New(dir)
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/dev/daemon/check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body daemonCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.LatestHash != "" || body.Available {
+		t.Errorf("no repository, no latest hash: %+v", body)
+	}
+	if got := logs.String(); !strings.Contains(got, "git log -1") || !strings.Contains(got, "not a git repository") {
+		t.Errorf("the reason git gave is in the log: %q", got)
 	}
 }
 
@@ -277,7 +400,8 @@ func TestHandleDaemonCheck_AvailableFlag(t *testing.T) {
 
 	buildinfo.Hash = "definitely-not-a-real-hash-0000"
 	t.Setenv("PDX_DEV_MODE", "1")
-	m := New(".")
+	repo, _ := repoWithCommit(t, "m")
+	m := New(repo)
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
 
