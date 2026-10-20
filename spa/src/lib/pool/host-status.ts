@@ -1,8 +1,11 @@
 // spa/src/lib/pool/host-status.ts — the host page's 狀態 tab as data (monitoring tabs spec M44; plan MON-7b-1): what the six cards and the facts table say, worked out from the pool's facts and host row. Pure: data in, data out; the words are
 // i18n keys (as in words.ts) and the component calls `t`. Read from the pool only, never the fleet.
 import { DISK_SCORE_FROM, levelScore, type RingDriver } from './ring-driver'
+import { alertRowsOf, type AlertRow, type EventHost } from './events-model'
+import type { HostAlertsEntry } from './alerts-store'
+import type { MonitorHost } from './use-monitor-hosts'
 import { ownerMinutes } from './worker-rule'
-import type { PoolException, PoolExceptionDetail, PoolFacts, PoolHold, PoolHost, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
+import type { PoolException, PoolExceptionDetail, PoolFacts, PoolHold, PoolHost, PoolLiveness, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
 
 const clamp100 = (v: number): number => Math.min(Math.max(v, 0), 100)
 
@@ -72,4 +75,26 @@ export function pausesOf(exceptions: readonly PoolException[], details: readonly
       const d = details?.find((x) => x.name === e.name)
       return { name: e.name, since: e.since, until: e.until, pid: d?.pid ?? null, holds: d ? d.holds : null }
     })
+}
+
+// ---- Connection ------------------------------------------------------------------------------------------------------------------------------------------
+
+const OUTAGES_SHOWN = 5
+
+export type Connection =
+  | { kind: 'local' }
+  | { kind: 'peer'; state: PoolLiveness; since: number | null; checkedAt: number | null; /** The stops of this host, newest first (at most five), and how many more there are. */ outages: { rows: AlertRow[]; more: number } }
+
+/**
+ * The 連線 card. The local host has no liveness of its own (the daemon reads its wwd directly and does not probe it), so it is told apart by `host.local` or by a row without `liveness`. A peer's outages are the `silence` alerts about it,
+ * from every host's list, with the same stop seen by several hosts being one (`alertRowsOf`, 88 10-20); another host's silence, or an ordinary alert, is not its outage.
+ */
+export function connectionOf(host: MonitorHost, byHost: Record<string, HostAlertsEntry>, hosts: readonly EventHost[]): Connection {
+  const pool = host.state.pool
+  if (host.local || pool.liveness === undefined) return { kind: 'local' }
+  const all = alertRowsOf(byHost, hosts).filter((r) => r.kind === 'silence' && r.hostId === host.hostId).sort((a, b) => b.at - a.at)
+  return {
+    kind: 'peer', state: pool.liveness, since: pool.liveness_since ?? null, checkedAt: pool.liveness_at ?? null,
+    outages: { rows: all.slice(0, OUTAGES_SHOWN), more: Math.max(0, all.length - OUTAGES_SHOWN) },
+  }
 }

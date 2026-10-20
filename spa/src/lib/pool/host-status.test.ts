@@ -1,6 +1,10 @@
 // The host page's 狀態 data (monitoring tabs spec M44; plan MON-7b-1): pure functions from the pool's facts and host row to what the six cards and the facts table say. Words are i18n keys, never text.
 import { describe, it, expect } from 'vitest'
-import { judgeOf, pausesOf, workerCardOf } from './host-status'
+import { connectionOf, judgeOf, pausesOf, workerCardOf } from './host-status'
+import { poolHostState } from './host-state'
+import type { HostAlertsEntry } from './alerts-store'
+import type { PoolAlert } from './alerts-api'
+import type { MonitorHost } from './use-monitor-hosts'
 import { parseFacts, parseHostsAnswer } from './parse'
 import type { PoolExceptionDetail, PoolFacts, PoolHost } from './types'
 import darwinJson from './__fixtures__/facts_darwin.json'
@@ -119,5 +123,54 @@ describe('pausesOf', () => {
     const list = pausesOf([exc('p', at - 1, null), exc('q', at - 2, null)], [detail('p', { pid: 4242, until: null })], at)
     expect(list.find((p) => p.name === 'p')).toMatchObject({ pid: 4242, holds: ['heavy'] })
     expect(list.find((p) => p.name === 'q')).toMatchObject({ pid: null, holds: null })
+  })
+})
+
+describe('connectionOf', () => {
+  const NOW = 10_000_000
+  const peerRow = (over: Partial<PoolHost> = {}): PoolHost => pool({ alias: 'mserv', host_id: 'h-mserv', liveness: 'wwd_down', liveness_at: NOW - 3000, liveness_since: NOW - 600_000, facts: null, ...over })
+  const monitor = (ph: PoolHost, local = false): MonitorHost => ({ hostId: ph.host_id, alias: ph.alias, daemonHostId: null, state: poolHostState(ph, null, NOW), look: {} as never, poolFailure: null, count: null, local })
+  const hosts = [{ hostId: 'h-mlab', alias: 'mlab' }, { hostId: 'h-mserv', alias: 'mserv' }, { hostId: 'h-air26', alias: 'air26' }]
+  const silence = (about: string, since: number, clearedAt: number | null = null): PoolAlert => ({ key: `silence:${about}`, kind: 'silence', level: 'push', since, last: since, clearedAt, detail: `${about} 停了`, silence: 'host_down' })
+  const ok = (alerts: PoolAlert[]): HostAlertsEntry => ({ kind: 'ok', known: true, alerts, at: NOW })
+
+  it('the local host is told apart: no liveness of its own', () => {
+    expect(connectionOf(monitor(pool({ liveness: undefined }), true), {}, hosts)).toEqual({ kind: 'local' })
+    expect(connectionOf(monitor(pool({ liveness: undefined })), {}, hosts)).toEqual({ kind: 'local' }) // a row with no liveness is the same
+  })
+
+  it('a peer: the daemon\'s word, since when, when it was last checked', () => {
+    const c = connectionOf(monitor(peerRow()), {}, hosts)
+    expect(c).toMatchObject({ kind: 'peer', state: 'wwd_down', since: NOW - 600_000, checkedAt: NOW - 3000 })
+  })
+
+  it('the outages are the silences about this host; the same stop in two hosts\' lists is one', () => {
+    const s = silence('mserv', NOW - 900_000, NOW - 600_000)
+    const c = connectionOf(monitor(peerRow()), { mlab: ok([s]), air26: ok([s]) }, hosts)
+    expect(c.kind === 'peer' && c.outages.rows).toHaveLength(1)
+  })
+
+  it('a silence about another host is not this host\'s outage', () => {
+    const c = connectionOf(monitor(peerRow()), { mlab: ok([silence('air26', NOW - 1000)]) }, hosts)
+    expect(c.kind === 'peer' && c.outages.rows).toHaveLength(0)
+  })
+
+  it('an ordinary alert is not an outage', () => {
+    const other: PoolAlert = { key: 'orphans:mserv', kind: 'orphans', level: 'digest', since: NOW - 10, last: NOW, clearedAt: null, detail: '' }
+    const c = connectionOf(monitor(peerRow()), { mserv: ok([other]) }, hosts)
+    expect(c.kind === 'peer' && c.outages.rows).toHaveLength(0)
+  })
+
+  it('six stops: the newest five, and "n more"', () => {
+    const stops = Array.from({ length: 6 }, (_, i) => silence('mserv', NOW - (i + 1) * 100_000, NOW - (i + 1) * 100_000 + 10_000))
+    const c = connectionOf(monitor(peerRow()), { mlab: ok(stops) }, hosts)
+    expect(c.kind === 'peer' && c.outages.rows).toHaveLength(5)
+    expect(c.kind === 'peer' && c.outages.more).toBe(1)
+    expect(c.kind === 'peer' && c.outages.rows[0].at).toBe(NOW - 100_000) // newest first
+  })
+
+  it('a list that could not be read adds nothing', () => {
+    const c = connectionOf(monitor(peerRow()), { mlab: { kind: 'error', code: 'no_answer', at: NOW } }, hosts)
+    expect(c.kind === 'peer' && c.outages.rows).toHaveLength(0)
   })
 })
