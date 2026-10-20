@@ -9,6 +9,7 @@
 > plan：`docs/plans/2026-10-20-monitoring-tabs-plan.md`。行號以 `origin/main 86ced9555` 為準（初稿的 `abaa46be5` 到這裡，main 沒有改到本文引用的檔案）。
 > 修訂 1（10-20）：照 codex plan 審查（task-mvgk4yis-tsgk70）修正，88 全部採納；對照表在 §9。
 > 修訂 2（10-21）：§8 的 MON-7～9 照 plan 修訂 4 的細化拆期（7a～7c-2、8a～8c、9a-1～9b-2），MON-12 的依賴改用新的期名；MON-10c 改成與 6f-2 並行開發；M48、M49、M50、M51、§7.3 的 W8 與 §6 的 watch 列照 88 定案（10-21，plan「第三波細化（修訂 4）的定案」第 1、3、4、9、10 條）改寫。
+> 修訂 3（10-21）：§8 的 MON-12 照 plan 修訂 5 拆成十張（12a-1～12a-5、12b-1～12b-3、12c、12d），依賴改成在 `origin/main e58c0d637` 實查的結果（12b-1 只要 9b-1，不必等 7c-2、8c）；A11 補上 1f 的 D1 條件。
 >
 > **衝突時的優先序**：U1–U3 ＞ 88 的定案 ＞ 設計稿 r3 的畫面（各節的 render 函式）＞ 設計稿附錄的規則文字。附錄有幾條還是 r2 的字（R21 的「其他變淡」、R29 的「狀態列、6 張小圖、告警摘要」），本 spec 照 r3 的畫面改寫，並在那幾條註明。
 > 標「88 定案（10-20，Wn）」的，是寫 spec 時查到、原本的定案沒涵蓋或與程式不合的地方，88 於 10-20 逐項定案（W1–W9，§7.3）。
@@ -111,7 +112,7 @@
 - **A8 頁面**：主機頁四分頁（監控｜狀態｜行程｜設定）；任務佇列（靜態上下兩排、hover 只高亮路線、其他不變暗、排不下換行）；事件（alerts＋observations）。照設計稿與 §5。
 - **A9 守門員頁**依賴 A 線的 S7、S8（incident 路由、值班者狀態），不在第一波；P7 選 (A)，由 1f 排。
 - **A10 Hosts 頁**拿掉資源池主機與觀察主機段落，留一行連結到監控（P12）；SSH 備援整個拿掉。這是使用者自己的需求（「這裡的設定取代 Hosts 頁的 wwd 設定」）。
-- **A11 fleet 退場**：本線各期都不再新增 fleet 讀者；SPA 端最後一張 PR 拿掉所有 fleet／gate.decisions 讀者，時程跟 1f 的 WWD-9 對齊。88 定案（10-20，W9）：wwd plan（`docs/plans/2026-10-18-wwd-plan.md:447-449`）定了 `/api/watch/status`、`/api/watch/wake` 保留到 8b，`watch.v1` 為這兩條繼續宣告；MON-12 拿掉其他 watch.v1 讀者，**保留 `/api/watch/status`、`/api/watch/wake` 的讀者（守門員頁與盾牌），到 8b 的 incident 路由上線才拿掉**。
+- **A11 fleet 退場**：本線各期都不再新增 fleet 讀者；SPA 端由 MON-12 的十張 PR 拿掉所有 fleet／gate.decisions 讀者（plan 修訂 5），時程跟 1f 的 WWD-9 對齊：1f 的 D1（daemon 拿掉 `fleet.v1` 之前，B 線 SPA 不再讀 fleet／gate.decisions 而且已出版）＝ MON-9b-1、12a-1、12b-1 merge 並出版；`gate.decisions.v1`（1f 的 9b-4）只要 12a-1 出版。88 定案（10-20，W9）：wwd plan（`docs/plans/2026-10-18-wwd-plan.md:447-449`）定了 `/api/watch/status`、`/api/watch/wake` 保留到 8b，`watch.v1` 為這兩條繼續宣告；MON-12 拿掉其他 watch.v1 讀者，**保留 `/api/watch/status`、`/api/watch/wake` 的讀者（守門員頁與盾牌），到 8b 的 incident 路由上線才拿掉**。
 
 ## 5. 行為規則
 
@@ -278,7 +279,7 @@
 
 ## 8. 分期總表
 
-一期一張 PR（≤ 800 行或 ≤ 20 檔，測試也算）。第一波細到 task（plan）；第二波的 MON-5、MON-6、MON-10 在 plan 修訂 2 細到 task，照 ≤ 800 行／20 檔拆成 5a～5c、6a-1～6f-2（九張）、10a～10c（88 定案（10-20）；plan 修訂 3 照 codex 第二波審查再拆 6a、6d、6f）；第三波的 MON-7～9 在 plan 修訂 4 細到 task，照同一個尺度拆成 7a～7c-2（五張）、8a～8c（三張）、9a-1～9b-2（六張）（88 定案（10-21），plan「第三波細化（修訂 4）的定案」第 13 條）；MON-11、12 在 plan 只寫到期，開工前 plan 再細化一版。行數含測試、不含純刪除。
+一期一張 PR（≤ 800 行或 ≤ 20 檔，測試也算）。第一波細到 task（plan）；第二波的 MON-5、MON-6、MON-10 在 plan 修訂 2 細到 task，照 ≤ 800 行／20 檔拆成 5a～5c、6a-1～6f-2（九張）、10a～10c（88 定案（10-20）；plan 修訂 3 照 codex 第二波審查再拆 6a、6d、6f）；第三波的 MON-7～9 在 plan 修訂 4 細到 task，照同一個尺度拆成 7a～7c-2（五張）、8a～8c（三張）、9a-1～9b-2（六張）（88 定案（10-21），plan「第三波細化（修訂 4）的定案」第 13 條）；MON-12 在 plan 修訂 5 細到 task，拆成十張（以刪除為主的也照 ≤ 20 檔，88 定案（10-21））；MON-11 在 plan 只寫到期，開工前 plan 再細化一版。行數含測試、不含純刪除。
 
 | 期 | 內容 | 依賴 | 可否並行 | 檔數／行數（估） |
 |---|---|---|---|---|
@@ -322,7 +323,16 @@
 | MON-10b | 觀察的讀取（MD-3，`next_until` 原樣回傳）；事件的模型：告警＋觀察、silence 合成一列列在叫不到的那台、篩選、分日（M23、M35） | 10a；MD-3 | 與 5、6 並行 | 5／560 |
 | MON-10c | 事件分頁重寫（沒有關掉事件的按鈕、拿掉頂端守門員那一行）、事件分頁的建立條件、主機頁「監控」的告警標記（M41-1） | 10b（與 6f-2 並行開發，merge 排在 6f-2 之後） | 與 5、7～9 並行 | 12／720 |
 | MON-11 | 守門員分頁（M38、M39） | A 線 S7、S8 | — | 1～2 期 |
-| MON-12 | fleet 退場（A11）：拿掉 fleet／gate.decisions 讀者與 A3 的搬遷，watch.v1 只留守門員兩條（W9）；6f-2、10c 之後沒人用的舊檔一起刪 | 5c、6f-2、7c-2、8c、9b-2、10c；1f 的 WWD-9 | 最後 | 1～2 期（純刪除只算新增行） |
+| MON-12a-1 | 刪舊閘門的排隊段（`QueueSection`、`QueueNow`、`QueueLane`、`QueueHistory`）與 gate.decisions 的讀取；新守門 `lib/retired-wire.guard.test.ts` | — | 與 12a-2、12a-4、12a-5 並行 | 18／90（其餘是刪除） |
+| MON-12a-2 | 刪 6f-2 之後沒人用的舊圖表（`ZoneBand`、`MetricChart`、`lib/watch/{series,metrics}`）與 `lib/pool` 的 fleet 歷史接法（`history`、`use-facts-history`、`use-series-history`） | — | 與其他 12a 並行；建議在 9b-2 之前 | 14／5 |
+| MON-12a-3 | 刪守門員事件的舊管線（watch.v1 的 `/events`、`/unhandled`、WS `watch.events`）；`/api/watch/` 只留 status、wake、start（W9） | 12a-1 | 與 12a-2、12a-4、12a-5 並行 | 19／50 |
+| MON-12a-4 | 分頁沙漏拿掉舊閘門 waiter 那半，只剩 pool 的工作 | — | 與其他 12a 並行 | 16／40 |
+| MON-12a-5 | 測試不再碰 fleet store；主機分頁的 content 拿掉 `fleetHostId` | — | 與其他 12a 並行 | 16／40 |
+| MON-12b-1 | 拔掉 fleet 的接線（`startFleetSupport`、`?fleet=v1`、`fleet.changed`）與 A3 的一次性搬遷；1f 的 D1 前提 | 9b-1、12a-1 | 與 12b-2 並行 | 13／70 |
+| MON-12b-2 | 刪 `lib/fleet` 的設定半邊與讀取（`config-*`、`probe-check`、`reread`、`api`、`use-fleet-*`） | 9b-2 | 與 12b-1 並行 | 14／5 |
+| MON-12b-3 | 刪 `lib/fleet` 其餘（store、parse、history、types、fixture），守門改成全 repo 不准 import `lib/fleet/` | 12b-1、12b-2、12a-1～12a-5 | — | 15／50 |
+| MON-12c | 拿掉 `fleetCellIndicator` 欄位與投影（settings ordinal ＋1），連同 9a-3 的搬遷 | 9a-3 | 與 12a、12b 並行 | 15／80 |
+| MON-12d | 收尾：沒人讀的語系鍵、7b-2 之後沒人用的 `AvailRow`／`host-extra`、指名已刪檔的註解 | 以上全部、7b-2、9b-2 | 最後 | ≤ 16／10 |
 
 ## 9. 修訂紀錄：codex plan 審查（task-mvgk4yis-tsgk70）對照表
 

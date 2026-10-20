@@ -2,14 +2,15 @@
 
 > spec：`docs/specs/2026-10-20-monitoring-tabs-spec.md`（下文的 M、A、W、P 編號都是 spec 的）。B 線 lead 88，2026-10-20。
 > 一期一張 PR（≤ 800 行、≤ 20 檔，測試也算）；一個 task 一個 commit，先寫測試、看它紅，再實作。執行者：Sonnet member。
-> 第一波（MON-1a～MON-4）細到 task；第二波的 MON-5、MON-6、MON-10 在修訂 2 細到 task；第三波 MON-7～9 在修訂 4 細到 task；MON-11、12 仍只寫到期，**開工前 plan 再細化一版**（含 file:line 與測試案例），細化版先給 88 看。
+> 第一波（MON-1a～MON-4）細到 task；第二波的 MON-5、MON-6、MON-10 在修訂 2 細到 task；第三波 MON-7～9 在修訂 4 細到 task；MON-12 在修訂 5 細到 task；MON-11 仍只寫到期，**開工前 plan 再細化一版**（含 file:line 與測試案例），細化版先給 88 看。
 > spec 的 W1–W9 已由 88 定案（10-20，spec §7.3），本 plan 照定案寫。
-> 行號以 `origin/main 93034abc5` 為準（修訂 2、3 核對；第一波的 file:line 是在 `86ced9555` 核對的，`86ced9555..93034abc5` 之間 merge 了 MON-1a～1d、2a、2b、3a、3b 與 768 的 bump，還沒 merge 的 MON-4 開工時照舊再對一次；第三波（修訂 4）的 file:line 在 `a364bac2c` 核對，接 6f-2 的地方以本 plan 的 6f-2 為準），開工時以當下的 `origin/main` 再核對一次。
+> 行號以 `origin/main 93034abc5` 為準（修訂 2、3 核對；第一波的 file:line 是在 `86ced9555` 核對的，`86ced9555..93034abc5` 之間 merge 了 MON-1a～1d、2a、2b、3a、3b 與 768 的 bump，還沒 merge 的 MON-4 開工時照舊再對一次；第三波（修訂 4）的 file:line 在 `a364bac2c` 核對，接 6f-2 的地方以本 plan 的 6f-2 為準；MON-12（修訂 5）在 `e58c0d637` 核對），開工時以當下的 `origin/main` 再核對一次。
 > 修訂 1（10-20）：照 codex plan 審查（task-mvgk4yis-tsgk70）的 8 條修正，88 全部採納；對照表在文末。
 > 修訂 2（10-20）：第二波 MON-5、6、10 細化（MON-5 拆 5a～5c、MON-6 拆 6a～6f（修訂 3 再拆成 9 張）、MON-10 拆 10a～10c，理由寫在各期）；MON-7、8、9、11、12 的依賴與範圍跟著調整；細化時查到的 8 個待確認點，88 定案（10-20）全部照 plan 的寫法，記在「待查與已定案」；spec 同步改了 §8 的分期表、M31 的例字與 A7 的欄位名。
 > 修訂 3（10-20）：照 codex 第二波 plan 審查（task-mvgu8cfz-t8p13g）的 8 條修正，88 全部採納；MON-6 改成 6a-1、6a-2、6b、6c、6d-1、6d-2、6e、6f-1、6f-2 九張，MON-10c 改依賴 6f-2；對照表在文末。
 > 修訂 4（10-21）：細化第三波 MON-7／8／9（MON-7 拆 7a、7b-1、7b-2、7c-1、7c-2，MON-8 拆 8a～8c，MON-9 拆 9a-1、9a-2a、9a-2b、9a-3、9b-1、9b-2，理由寫在各期）；外部依賴在 `origin/main a364bac2c` 查核、寫在各條開頭；細化時查到的 13 件，88 於 10-21 定案（第 3 條選 (B)、第 6 條選 (A) 且 9b 維持兩張、第 4 條的指標搬遷放進 9a-3），記在「待查與已定案」；spec §8 的分期表與 M48–M51、§6 的 watch 列同步改了。同時補三條之前欠的修訂：MON-5c 任務佇列路線的終點夾在卡片右緣之內（#3804 實作時的偏離，88 已接受）；MON-10c 加告警等級 watch（只通知守門員，不推播、不進摘要；事件頁標「守門員」、中性灰、算進「其他進行中」、不算進盾牌；三個新 kind 的顯示名；主機頁的「N 件告警」也算進它；88 定案（10-21），#3825 已照做）；MON-10c 改成與 6f-2 並行開發，merge 仍排在 6f-2 之後。
 > 修訂 4 補（10-21）：codex 審 PR #3828（task-mvh6lrve-tdwwu6）的 4 條 important，88 全部同意：spec W8 與 §8 跟第三波定案第 1 條對齊（W8 的 API 不再是依賴，到了再接、另開一期）；推播總開關寫給每台有 daemon 的主機，離線的進待寫佇列、上線補寫（9a-2 因此照它的 Split 拆成 9a-2a 告警、9a-2b 推播）；9a-1 把改到的三個 `lib/pool` 檔加進守門範圍；9a-3 的搬遷在同一次開機內完成（主機集合空時訂閱，等第一次非空）。
+> 修訂 5（10-21）：細化 MON-12（fleet 退場），對帳 WWD-9 的讀者清單：拆成 12a-1～12a-5（現在就能開）、12b-1～12b-3（Hosts 頁之後）、12c（9a-3 之後）、12d（最後）十張，理由與每張的 import 查核寫在 MON-12 節；1f 的讀者清單逐條對照在 MON-12 節最後（沒有找不到歸屬的讀者）；查到的依賴變化：12b-1 只要 9b-1（不必等 9b-2、7c-2），D1＝9b-1、12a-1、12b-1 出版；12a-2 先 merge 時 9b-2 的 task 1 取消。待 88 定案的 8 件記在「待查與已定案」的「MON-12 細化（修訂 5）」；spec §8 的 MON-12 列與 A11 同步改了。
 
 ## 共通規則
 
@@ -662,7 +663,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 
 依賴 MON-9b-1。與 9b-1 維持兩張、不合併（第三波定案第 6 條：以刪除為主的 PR 也照 ≤ 20 檔）。檔案（18 個；新增約 40 行）：刪 `components/hosts/ProbeHostPage.tsx`＋`ProbeHostPage.test.tsx`、`PoolHostPage.tsx`＋`PoolHostPage.test.tsx`、`ProbeHostEditor.tsx`、`ProbeHostForm.tsx`、`ProbeCheck.tsx`＋`ProbeCheck.test.tsx`、`probe-rows.tsx`、`use-probe-rows.ts`、`useProbeEditor.ts`、`PoolStatusDot.tsx`、`pool-status-word.ts`、`lib/pool/use-pool-host-rows.ts`、`lib/pool/fleet-bridge.ts`＋`fleet-bridge.test.ts`；改 `lib/pool/history.ts`、`components/fleet/no-fleet-reads.guard.test.ts`。
 
-1. **`factsToFast` 搬進 `history.ts`**（第三波定案第 6 條 (A)）：`lib/pool/history.ts:7` 從 `fleet-bridge` import 它；6f-2 之後 `history.ts`、`use-facts-history.ts`、`use-series-history.ts` 已沒人用（plan 6f-2 的「留給 MON-12」），但刪 `fleet-bridge.ts` 會讓它斷。這期把 `factsToFast` 原樣搬進 `history.ts`（不匯出），逐宣告位元組比對附在 PR；history 三檔照舊 MON-12 刪。
+1. **`factsToFast` 搬進 `history.ts`**（第三波定案第 6 條 (A)）：`lib/pool/history.ts:7` 從 `fleet-bridge` import 它；6f-2 之後 `history.ts`、`use-facts-history.ts`、`use-series-history.ts` 已沒人用（plan 6f-2 的「留給 MON-12」），但刪 `fleet-bridge.ts` 會讓它斷。這期把 `factsToFast` 原樣搬進 `history.ts`（不匯出），逐宣告位元組比對附在 PR；history 三檔照舊 MON-12 刪。**修訂 5：MON-12a-2 先 merge 的話（`history.ts` 已刪），本 task 取消，`fleet-bridge.ts` 直接刪；task 3 的檔頭也不再提 history 三檔。**
 2. **刪檔**：上面 16 個；PR 附 grep 證據（head 上沒有 import 者）與 `tsc`。`fleet-bridge.ts` 是主機頁與 Hosts 頁的過渡接法（MON-1c-0 建）：主機頁那半 6f-2 已拿掉，這期最後一個讀者走了。
 3. **守門測試擴到 Hosts 頁**（A1 的過渡例外結束）：`no-fleet-reads.guard.test.ts:8-11` 的 glob 加 `'/src/components/hosts/**/*.{ts,tsx}'`、`'/src/components/HostPage.tsx'`，`scoped()`（`:22-26`）收進來；「範圍是它說的那樣」那案（`:29-41`）加 `components/hosts/HostSidebar.tsx`、`components/hosts/OverviewSection.tsx`、`components/HostPage.tsx`；檔頭（`:1-3`）改成「`fleet-bridge.ts`、`use-pool-host-rows.ts` 已刪；不在範圍的只剩 6f-2 之後沒人用的 `history.ts`、`use-series-history.ts`（MON-12 刪）與唯一豁免 `pool-look-migration.ts`」。這期之後 `components/hosts/` 與 `HostPage.tsx` 沒有任何 `lib/fleet` 的 import：現在 import 它的 11 個非測試檔，9b-1 改掉 3 個（`HostSidebar`、`OverviewSection`、`HostPage`）、刪掉 2 個（`FleetRowEditor`、`PoolHostRoute`），這期刪掉其餘 6 個。mutation：在 `HostSidebar.tsx` 暫加 `import { useFleetDaemons } from '../../lib/fleet/use-fleet-daemons'`、在 `HostPage.tsx` 暫加 `import '../lib/fleet/config-draft'`，都要轉紅。
 - **Split**：沒有（以刪除為主）；若 9b-1 之後又有人 import 這些檔，先找出來再刪。
@@ -729,10 +730,205 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - **大小**：一～兩期。
 
 ### MON-12 — fleet 退場（A11、W9）
-- **目標**：SPA 不再讀 `fleet.v1`、`gate.decisions.v1`；`watch.v1` 只留守門員的 status 與 wake（88 定案 W9：保留 `/api/watch/status`、`/api/watch/wake` 的讀者——守門員頁與盾牌——到 8b 的 incident 路由上線才拿掉）。
-- **主要檔案**：刪 `lib/fleet/*`（store、ws、api、history、config-*、probe-*、parse、types、`use-fleet-*`；`bar-readings.ts`、`ring-driver.ts` 已在 MON-1c-0b 搬到 `lib/pool/`，留著，不刪）；`hooks/useMultiHostEventWs.ts:148-150`、`:354-357`（fleet 的訂閱與處理）；`hooks/useTabQueued.ts` 的 fleet 那半；`components/watch/QueueSection.tsx`、`QueueNow.tsx`、`QueueLane.tsx`、`QueueHistory.tsx`；`lib/watch/api.ts` 的 decisions、`decisions-types.ts`；`lib/pool/pool-look-migration.ts`；`cell-model.ts`、`use-cell-models.ts` 剩下的部分；`useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 再升一次）；fallback 與 fleet 的語系鍵。**修訂 2 加**：MON-6f-2 之後沒人用的 `MetricChart.tsx`、`ZoneBand.tsx`（舊）、`lib/watch/series.ts`、`lib/watch/metrics.ts`、`lib/pool/history.ts`、`use-facts-history.ts`、`use-series-history.ts`（各帶測試）；`lib/watch/queue-time.ts` 拆開（`mss`、`secondsSince`、`WAIT_LONG_S` 留，`holderKey`／`waiterKey` 與 fleet 型別的 import 刪）；MON-10c 之後沒人讀的 `lib/watch/events-store.ts`、`events-view.ts`、`events-types.ts`、`lib/watch/api.ts` 的 events／unhandled 讀取與 `useMultiHostEventWs` 的 `watch.events` 那半（`watch.changed` 與 status 留，W9）；`types/tab.ts` 的 `fleetHostId`（舊分頁的欄位）。守門測試改成全 repo 不 import `lib/fleet/`。
-- **依賴**：MON-5c、6f-2、7c-2、8c、9b-2、10c（修訂 4 的期名；第三波留給 MON-12 的舊檔見 7b-2（`AvailRow`）、9a-1（拿掉的守門員欄位的語系鍵）、9b-2（history 三檔），`fleetCellIndicator` 的現值在 9a-3 已寫進當時每台沒設過的主機，見「第三波細化（修訂 4）的定案」第 4 條）；時程跟 1f 的 WWD-9（daemon 端拿掉 `fleet.v1`、`gate.decisions.v1`）對齊。
-- **大小**：一～兩期；純刪除只算新增行。
+
+> 修訂 5（10-21）細化。file:line 與 import 的查核在 `origin/main e58c0d637`（9a-1 #3837 merge 之後；7b-2、7c-1、7c-2、8b、8c、9a-2a、9a-2b、9a-3、9b-1、9b-2 還沒 merge）；1f 的讀者清單（WWD-9 plan、盤點附錄 B 的 9d-2）是在 `90e4a44cf` 查的，逐條對照在本節最後。
+
+**目標**：SPA 不再讀 `fleet.v1`（`GET /api/fleet`、WS `fleet.changed`、`?fleet=v1`、`/api/fleet/ssh-aliases`、`POST /api/fleet/probe-check`、host-config 的 `probe_hosts`／`fleet` 列）與 `gate.decisions.v1`（`GET /api/gate/decisions`）；`watch.v1` 只留 `/api/watch/status`、`/api/watch/wake`（W9）與 1f 的 9c-c 也留的 `POST /api/watch/start`（`lib/watch/launch.ts:97`，守門員的啟動鍵）。順便刪掉 5c、6f-2、10c 之後已經沒人用的舊畫面與舊 store 欄位。
+
+**為什麼拆十張**：要刪或要改的檔，舊閘門的排隊段與 gate.decisions 18 個、舊主機頁的圖表與 fleet 歷史接法 14 個、守門員事件的舊管線 19 個、分頁沙漏 16 個、測試裡的 fleet store 與 `fleetHostId` 16 個、`lib/fleet/` 29 個（含測試與 fixture）、`fleetCellIndicator` 15 個、語系與收尾約 16 個。以刪除為主的 PR 也照 ≤ 20 檔（88 定案（10-21））。依「什麼時候能開」分四組：
+- **12a（現在就能開，五張）**：5c、6f-2、10c 都已 merge，下面每張列了 `e58c0d637` 上的 import 查核：這些舊檔已經沒有非測試的 import 者（或只剩一樣要刪的檔）。
+- **12b（Hosts 頁之後，三張）**：12b-1 拔掉 fleet 的接線與 A3 的一次性搬遷，只要 9b-1；12b-2 刪 `lib/fleet` 的設定半邊與讀取，要 9b-2；12b-3 刪 `lib/fleet` 其餘，守門改成全 repo。
+- **12c（9a-3 之後）**：拿掉 `useUISettingsStore.fleetCellIndicator` 與它的投影（settings ordinal 升一次），連同 9a-3 的搬遷。不碰 fleet 的 wire，不是 1f 的前提。
+- **12d（最後）**：沒人讀的語系鍵、7b-2 之後沒人用的 `AvailRow`／`host-extra`、註解裡指名已刪檔的地方。
+
+**跟 1f 的 WWD-9 怎麼對**（1f 的 D1＝「B 線 SPA 不再讀 fleet／gate.decisions，而且已經出版」；9d-4 等它）：
+- **gate.decisions**（1f 的 9b-4／9d-7）：SPA 唯一的讀者鏈是 `QueueSection` → `QueueHistory` → `lib/watch/history-read.ts` → `fetchGateDecisions`（`lib/watch/api.ts:15-25`），外加能力判斷 `selectGateDecisionsV1`（`stores/useNexHostStore.ts:110-113`，只有 `QueueSection.tsx:33` 用）。6f-2（#3827）重寫主機頁之後 `QueueSection` 沒人掛，所以 769 之後的下一版起 App 實際上已不呼叫；12a-1 刪掉這串死碼並加守門。**9b-4 的 SPA 前提＝12a-1 出版**，不必等 12b。
+- **fleet**（1f 的 9d-4、9d-5）：執行期讀 fleet 的入口只有兩個：`main.tsx:17`、`:68` 的 `startFleetSupport()`（`lib/fleet/fleet-support.ts:14`、`:26` 看 `/api/info` 有沒有 `fleet.v1`，有就經 `reread.ts` 打 `GET /api/fleet`）與 `hooks/useMultiHostEventWs.ts:150-152`（`?fleet=v1`）、`:355-361`（`fleet.changed` → `fleet-ws.ts`）。其他讀者都是吃 fleet store 的畫面；Hosts 頁吃 fleet 快照的部分（資源池群組、觀察主機頁、Fleet 編輯器）9b-1 拿掉入口，所以接線（12b-1）只要等 9b-1。設定半邊（`config-api.ts` 的 host-config `probeHosts`／`fleet`、`PUT probe-hosts／fleet`、`ssh-aliases`，`probe-check.ts` 的 `POST /api/fleet/probe-check`）的呼叫者全在 Hosts 頁，9b-1 之後沒有畫面走得到，9b-2 刪掉呼叫者、12b-2 刪檔。
+- **D1＝9b-1、12a-1、12b-1 都 merge，並隨 1f 的 bump 出版**。12b-2、12b-3 是之後的死碼清理，不擋 9d-4。12b-1 出版後由 88 告訴 1f（版本號＋三張 PR）。
+- **watch.v1**（1f 的 9c-b、9c-c）：`/api/watch/events`、`/unhandled` 與 WS `watch.events` 的讀者 12a-3 刪；1f 拿掉這些路由時，App 收到 404 本來也只會顯示空（盤點第 4 節），12a-3 只是不再去讀。host-config 的 `watch` 列（`lib/watch/watch-row.ts`、`watch-row-write.ts`，9a-1 的守門員段）不是 watch.v1 的路由，W9 與 9a-1（第三波定案第 3 條）留著，不在 MON-12。
+
+**MON-12 的共通事項**（各張都照）：
+- **開工前在當下的 `origin/main` 重查一次**：每張寫了要查哪些檔的 import 者；查法是對那個檔的路徑片段 `git grep -n` 整個 `spa/src`，分成非測試與測試兩邊。結果貼 PR 說明；跟本節寫的不同（MON-7～9 新增或改了 import）就先回報 88，不要自己擴大範圍。
+- **刪除的證據**：PR 說明附 head 上的 grep 空結果與 `tsc -p tsconfig.app.json`（送 mserv）。純刪除照樣跑 codex R1／R2（共通規則），focus 寫「找仍然存在的呼叫端、被一起刪掉的行為、對外介面的退化」（1f 的 WWD-9 plan 同一句）。
+- **語系鍵一律留到 12d**：各張不碰語系檔（每張都碰會跟並行的 MON-7～9 撞）。死鍵不影響 `locale-completeness`。
+- **新守門 `spa/src/lib/retired-wire.guard.test.ts`**（12a-1 建，範本是 `lib/task-groups/retired-per-host.guard.test.ts`）：`// @vitest-environment node`，用 `node:fs` 掃 `src/` 的非測試 `.ts`／`.tsx`，跳過自己。**先去掉註解再比對**（`/*…*/` 與 `//…`；字串裡的 `//` 也會被當成註解切掉，只會少抓、不會誤報），所以註解裡提到 `fleet.v1` 的說明不會讓它紅。三份清單，各張往裡加：`RETIRED_FILES`（不准再出現的檔）、`RETIRED_CODE`（字串字面值裡不准出現的路由、能力、事件名）、`RETIRED_NAMES`（不准再出現的識別字）。另一案自測偵測式：該抓的抓到；`'watch.events.level.push'` 這種語系鍵、註解裡的路由不抓。`components/fleet/no-fleet-reads.guard.test.ts`（側欄與本線檔的範圍守門）到 12b-3 才併進來。
+- 各張的檔數含測試；「新增行」不含純刪除。
+
+#### MON-12a-1 — 舊閘門的排隊段與 gate.decisions
+
+依賴：無。可與 12a-2、12a-4、12a-5 並行；12a-3 接在它後面（同改 `lib/watch/api.ts` 與新守門，可疊分支）。與 8b（#3845）同改 `lib/watch/view-memory.ts`＋測試（不同段），後 merge 的併最新 main。檔案（18 個；新增約 90 行，刪約 1480 行）：
+- 刪（11）：`components/watch/QueueSection.tsx`＋`QueueSection.test.tsx`、`QueueNow.tsx`、`QueueLane.tsx`＋`QueueLane.running.test.tsx`、`QueueHistory.tsx`＋`QueueHistory.test.tsx`、`lib/watch/history-read.ts`、`lib/watch/history-view.ts`＋`history-view.test.ts`、`lib/watch/decisions-types.ts`。
+- 改（6）：`lib/watch/api.ts`、`lib/watch/view-memory.ts`＋`view-memory.test.ts`、`stores/useNexHostStore.ts`、`lib/watch/queue-time.ts`、`components/fleet/no-fleet-reads.guard.test.ts`。
+- 新（1）：`lib/retired-wire.guard.test.ts`。
+
+實查：`QueueSection.tsx` 沒有非測試的 import 者（只剩 `QueueSection.test.tsx`、`QueueHistory.test.tsx`）；連帶沒人用的：`QueueNow`（只有 `QueueSection` import）、`QueueLane`（只有 `QueueNow`）、`QueueHistory`（只有 `QueueSection`）、`history-read.ts`（只有 `QueueHistory`）。`history-view.ts` 另一個 import 者是 `api.ts:5`（只拿 `HISTORY_LIMIT` 給 `fetchGateDecisions`）；`decisions-types.ts` 的 import 者是 `api.ts:6`、`history-read.ts`、`history-view.ts`。`queue-time.ts` 的 `holderKey`、`waiterKey`、`QueueClass`（`:5-8`）只有 Queue* 在用；`mss`、`WAIT_LONG_S` 有 `components/watch/jobs/` 五個檔與 `lib/pool/jobs-lanes.ts`、`queue-flow.ts` 在用。
+
+1. **守門先行**：新檔 `retired-wire.guard.test.ts`（結構見共通事項）。`RETIRED_FILES`：上面刪的 7 個非測試檔。`RETIRED_CODE`：`/api/gate/`、`gate.decisions.v1`。`RETIRED_NAMES`：`fetchGateDecisions`、`selectGateDecisionsV1`、`useGateHistory`、`parseGateDecisions`。跑它、看它紅（檔還在；`api.ts:17` 有路由）。
+2. **刪與修剪**：刪 11 檔。`api.ts` 拿掉 `:5-6` 的 import 與 `:8-25`（`GateDecisionsResult`、`fetchGateDecisions`），`:1` 的檔頭不再提 `lib/fleet/api.ts`。`view-memory.ts` 拿掉 `:16-21`（`QueueTab`、`HistoryClass` 與兩個 Map）、`:51-54`、`:62` 的兩個 `clear()` 與 `:4` 那句註解；`view-memory.test.ts` 拿掉 `:4` 的 `readQueueTab, writeQueueTab` 與 `:46-57` 那段。`useNexHostStore.ts:110-113` 刪。`queue-time.ts` 拿掉 `:3` 的 fleet 型別 import 與 `:5-8`，檔頭改成只講等待時間。
+3. **側欄守門擴範圍**：`no-fleet-reads.guard.test.ts:9` 的 glob 與 `OTHER_FILES`（`:16-19`）加 `lib/watch/queue-time.ts`（它被 `components/watch/jobs/**`、`lib/pool/queue-flow.ts` 這些範圍內的檔 import），「範圍是它說的那樣」那案（`:32-52`）加一行。
+- 測試：新守門；`view-memory.test.ts` 其他段照過；PR 層照共通規則。
+- mutation：在 `useNexHostStore.ts` 暫加回 `selectGateDecisionsV1`；在 `api.ts` 暫加 `` hostFetch(id, `/api/gate/decisions?x`) ``；新守門都要轉紅。在 `queue-time.ts` 暫加 `import type { FleetWaiter } from '../fleet/types'`，側欄守門要轉紅。
+- **Split**：元件一張（Queue* 七檔、`view-memory`＋測試、側欄守門）；lib 一張（`history-*`、`decisions-types`、`api.ts`、`useNexHostStore`、新守門），後者等前者。
+
+#### MON-12a-2 — 舊主機頁的圖表與 fleet 歷史接法
+
+依賴：無。可與其他 12a 並行；**建議排在 9b-2 之前**（見 task 1）。7c-1（#3848）改 `lib/pool/host-charts.ts`，本張不碰它。檔案（14 個；新增約 5 行，刪約 1160 行）：刪 `components/watch/ZoneBand.tsx`＋`ZoneBand.test.tsx`、`components/watch/MetricChart.tsx`＋`MetricChart.test.tsx`、`lib/watch/series.ts`＋`series.test.ts`、`lib/watch/metrics.ts`＋`metrics.test.ts`、`lib/pool/history.ts`＋`history.test.ts`、`lib/pool/use-facts-history.ts`、`lib/pool/use-series-history.ts`＋`use-series-history.test.ts`；改 `components/fleet/no-fleet-reads.guard.test.ts`（檔頭）。
+
+實查：`ZoneBand.tsx` 沒有非測試的 import 者；連帶：`MetricChart`（只有 `ZoneBand` import）、`series.ts`（`MetricChart`、`ZoneBand`）、`metrics.ts`（`MetricChart`、`series.ts`；6d-1 起 `Gauge.tsx` 改 import `lib/pool/host-charts`）。`lib/pool/history.ts` 的 import 者是 `ZoneBand`、`use-facts-history.ts`、`use-series-history.ts`，後兩個都沒有非測試的 import 者（`use-facts-history.ts` 連測試也沒有）。本張之後 `lib/fleet/history.ts` 只剩 `lib/fleet/store.ts:15` import（12b-3 刪）。
+
+1. **刪**：13 檔一個 commit。**與 9b-2 的先後**：`lib/pool/history.ts:7` 從 `fleet-bridge.ts` import `factsToFast`，所以 9b-2 原本要先把它搬進 `history.ts`（第三波定案第 6 條 (A)）。本張先 merge，history 就不在了，9b-2 的 task 1 取消、`fleet-bridge.ts` 直接刪；反過來（9b-2 先）也行，本張照刪，`factsToFast` 跟著 `history.ts` 一起走。
+2. **守門檔頭**：`no-fleet-reads.guard.test.ts:2-3` 拿掉 `history.ts`、`use-series-history.ts`。
+- 測試：純刪除，不加新測試；證據是 grep 與 `tsc`。7c-2 的 `ZoneStrip` 照 plan 讀 `HostSample.zone`、不碰 `lib/pool/history`，本張先刪不影響它。
+- mutation：無（沒有新測試）。
+- **Split**：元件與 `lib/watch` 一張（8 檔），`lib/pool` 的 history 三檔一張（5 檔），後者等前者（`ZoneBand` import `history`）。
+
+#### MON-12a-3 — 守門員事件的舊管線（watch.v1 的 events、unhandled）
+
+依賴：12a-1（同改 `api.ts` 與新守門）。檔案（19 個；新增約 50 行，刪約 820 行）：
+- 刪（7）：`lib/watch/events-store.ts`＋`events-store.test.ts`、`events-view.ts`＋`events-view.test.ts`、`events-types.ts`＋`events-types.test.ts`、`lib/watch/capability.test.ts`。
+- 改（12）：`lib/watch/api.ts`＋`api.test.ts`、`lib/watch/watch-ws.ts`＋`watch-ws.test.ts`、`lib/watch/repoint.test.ts`、`spa/src/main.tsx`、`features/workspace/lib/watch-area.ts`、`components/watch/WatchEventsPane.tsx`、`lib/pool/events-model.ts`＋`events-model.test.ts`、`hooks/useMultiHostEventWs.watch.test.ts`、`lib/retired-wire.guard.test.ts`。
+
+實查：10c 之後 `events-store.ts` 的非測試 import 者剩四個，都不是畫面在讀事件（`events-view.ts` 只拿型別，同張刪；其餘三個）：`main.tsx:35`、`:107`（`startWatchEvents`，啟動讀取）、`watch-ws.ts:8`（`watch.events` 推送時重讀）、`watch-area.ts:17`（只拿 `anyHostDeclaresWatch`，`:157`；它看的是 status store）。`useWatchEventsStore`、`pendingCount` 除了它自己與測試沒人讀（盾牌 10a 起讀 alerts）。`events-view.ts` 唯一的 import 者 `WatchEventsPane.tsx:17` 只拿 `shortDuration`（`:179`）。`fetchWatchEvents`、`fetchWatchUnhandled`（`api.ts:42-71`）只有 `events-store` 呼叫。
+
+1. **守門先行**：`retired-wire.guard.test.ts` 的 `RETIRED_FILES` 加三個 events 檔；`RETIRED_CODE` 加「`/api/watch/` 後面不是 `status`、`wake`、`start`」與完整的 `'watch.events'`（前後都是引號，語系鍵 `watch.events.xxx` 不算）；`RETIRED_NAMES` 加 `startWatchEvents`、`useWatchEventsStore`、`fetchWatchEvents`、`fetchWatchUnhandled`、`WATCH_EVENTS_EVENT`。另加一案：非測試檔裡出現的 `/api/watch/` 路由只有這三條。看它紅。
+2. **兩個小函式先搬**（純搬移，逐宣告位元組比對附 PR）：`anyHostDeclaresWatch`（`events-store.ts:61-64`）搬進 `watch-area.ts` 當檔內函式（唯一的讀者；行為由 `watch-area.events.test.ts:38`、`:56` 管著）；`shortDuration`（`events-view.ts:87-92` 與它用的 `pad`，`:54`）搬進 `lib/pool/events-model.ts` 匯出，`events-view.test.ts:56` 那案搬進 `events-model.test.ts`，`WatchEventsPane.tsx:17` 改 import。
+3. **拿掉管線**：刪 6 個 events 檔。`api.ts` 拿掉 `:4`、`:42-71`，只剩 `fetchWatchStatus`；`api.test.ts` 拿掉 `:39-77`。`watch-ws.ts` 只留 `watch.changed`（`:8`、`:11`、`:15-22`、`:27-31` 刪，`isWatchEvent` 只認 `watch.changed`，檔頭 `:5-6` 改）；`watch-ws.test.ts` 改成 `isWatchEvent('watch.events')` 是 false、`watch.events` 的框什麼都不做。`useMultiHostEventWs.watch.test.ts:81` 那案改成「`watch.events` 的框不會送進 `handleWatchEvent`」。`main.tsx:35`、`:106-107` 刪。`capability.test.ts` 整檔刪：它管「events 的讀取與事件分頁跟著 `/api/info`」，status 那半已在 `status-store.test.ts:175`、`:184`、`:205`，事件分頁的建立在 `watch-area.events.test.ts`。`repoint.test.ts` 拿掉 events／unhandled 的 mock（`:8-19`、`:31-32` 裡那幾個）與 `:86-102` 那案，`:103` 那案只留 status 的斷言。
+- 留給 12b-1：`lib/host-events.ts:33` 的 `'watch.events'`（型別聯集的成員，跟 `'fleet.changed'` 同一行附近）與 `useMultiHostEventWs.ts:384` 的註解；留給 12d：`useNexHostStore.ts:98` 的註解。
+- mutation：`isWatchEvent` 仍認 `watch.events`（`watch-ws.test.ts` 那案轉紅）；在 `api.ts` 暫加回 `'/api/watch/events?limit=500'`（守門轉紅）；`anyHostDeclaresWatch` 的 `some` 改 `every`（`watch-area.events.test.ts:56` 轉紅）。
+- **Split**：task 2 獨立成一張純搬移（不派 codex）。
+
+#### MON-12a-4 — 分頁沙漏的 fleet 那半
+
+依賴：無（5c 已 merge：沙漏的入口只開 pool 的工作）。可與其他 12a 並行。檔案（16 個；新增約 40 行，刪約 260 行）：`hooks/useTabQueued.ts`＋`useTabQueued.test.ts`、`hooks/useTabDisplay.ts`、`hooks/useTabDisplay.aggregate.test.ts`、`lib/watch/queued-sessions.ts`＋`queued-sessions.test.ts`、`lib/watch/open-queue.ts`＋`open-queue.test.ts`、`components/BackgroundSymbol.tsx`＋`BackgroundSymbol.test.tsx`、`components/SortableTab.queue-key.test.tsx`、`components/TabContextMenu.queue.test.tsx`、`features/workspace/components/InlineTab.queue-key.test.tsx`、`stores/useAgentStore.ts`（`:88` 的註解）、`lib/agent-lights/tab-aggregate.ts`（`:21` 的註解）、`components/fleet/no-fleet-reads.guard.test.ts`。
+
+實查：`useTabQueued.ts:3-4`、`:28-39` 讀 `useFleetStore` 的 snapshot，找舊閘門排隊的 waiter（spec §6 引 `watcher-area-spec.md:45-56` 那列：fleet 那半在 MON-12 拿掉）；`queued-sessions.ts:3-4`、`:13-28`（`queuedBySession`）、`:45-48`（`QueuedItem`＝waiter 或 job）、`:115-133`（waiter 的提示）；`useTabDisplay.ts:156` 把兩種合起來。舊閘門的 waiter 本來就不能按（`open-queue.ts:9-11`、`BackgroundSymbol.tsx:38`）。
+
+1. **守門先行**：`no-fleet-reads.guard.test.ts` 的 glob 與 `OTHER_FILES` 加 `hooks/useTabQueued.ts`、`lib/watch/queued-sessions.ts`、`lib/watch/open-queue.ts`、`components/BackgroundSymbol.tsx`；看它紅（`useTabQueued.ts:3` import fleet store）。
+2. **拿掉**：`useTabQueued` 只留 jobs 那半，`TabQueued` 拿掉 `waiters`（`:14-15`、`:20`、`:24-39`、`:60-65`）。`queued-sessions.ts` 刪 `queuedBySession`、`waitersTooltip`、`isJobMark`，`QueuedItem` 收成 `QueuedJobMark` 的別名（`TabIcon.tsx:41`、`renderInlineTabIcon.tsx:23`、`useTabDisplay.ts:57` 的 prop 名 `backgroundWaiters` 與型別名不改，免得多動幾個元件與測試檔），`queuedTooltip` 就是 `jobsTooltip`，檔頭 `:1-2` 改。`useTabDisplay.ts:156` 只放 `queued.jobs`。`open-queue.ts:11` 取第一件（`waiters?.[0]`），`:9` 的註解改。`BackgroundSymbol.tsx:36-38` 的註解改（沙漏一律能按）。兩個註解檔照現況改。
+3. **測試**：`queued-sessions.test.ts` 拿掉 `:2-17` 的 fleet 型別與 helper、`queuedBySession`／waiter 提示／`isJobMark` 的案例（`:19-66`、`:155-164`）；`BackgroundSymbol.test.tsx` 拿掉 `:8` 的 fleet 型別 import 與 waiter 的案例（`:47-66`、`:100-110`）；三個 queue-key 測試拿掉 `gate` 字面值（`SortableTab.queue-key.test.tsx:29`、`TabContextMenu.queue.test.tsx:21`、`InlineTab.queue-key.test.tsx:27`）與只有 gate 的案例；`useTabDisplay.aggregate.test.ts` 拿掉 fleet store 那幾段（`:19-29`、`:141-146`、`:258-260`），沙漏的聚合改用 jobs 驗；`useTabQueued.test.ts:42` 改；`open-queue.test.ts:23` 那案拿掉「只有 gate waiter」。
+- mutation：在 `useTabQueued.ts` 暫加回 `useFleetStore` 的讀取（側欄守門轉紅）；`queueOpener` 改取最後一件（`open-queue.test.ts:15` 那案放兩件時轉紅；沒有兩件的案例就加一案）。
+- 行為改變（寫進 PR 說明）：等舊閘門排隊的 session 不再亮沙漏。1f 的 S0（D0）部署後閘門不再排隊，本來就不會亮；S0 之前出版的話，那段期間少了舊閘門的等待提示（WWD-9 盤點第 4 節：「沙漏消失，不壞」）。
+- **Split**：先只拿掉 `useTabQueued` 的 fleet 讀取與 `waiters` 欄（`QueuedItem` 暫留聯集），型別收斂與五個測試檔的 `gate` 字面值另一張，排在 12b-3 之前。
+
+#### MON-12a-5 — 測試不再碰 fleet store、主機分頁的 content 拿掉 `fleetHostId`
+
+依賴：無（6a-2 起新分頁只帶 `poolHostId`，沒有它的舊分頁 60 秒內收掉）。可與其他 12a 並行。檔案（16 個；新增約 40 行，刪約 80 行）：`types/tab.ts`、`lib/pane-labels.ts`、`lib/pane-utils.ts`、`lib/watch/watch-panes.test.ts`、`hooks/useTabDisplay.watch.test.ts`、`components/TabBar.fixed.test.tsx`、`components/fleet/FleetCells.test.tsx`、`features/workspace/lib/watch-area.test.ts`、`watch-area.events.test.ts`、`watch-area.guardian.test.ts`、`watch-area.jobs.test.ts`、`components/watch/WatchHostPane.test.tsx`、`hooks/useRouteSync.watch.test.tsx`、`hooks/useTabHostBadge.test.ts`、`lib/profile/sections.test.ts`、`components/HistoryPage.watch.test.tsx`。
+
+實查：`fleetHostId` 的非測試讀者只剩 `pane-labels.ts:73`（舊分頁的標籤）、`pane-utils.ts:61`（content 比對）與 `types/tab.ts:155-161`（`HistoryPage.tsx:36` 只看有沒有 `poolHostId`），另外是 12a-1 刪的 Queue* 與 12a-2 刪的 `lib/pool/history.ts`（參數名）。測試裡的 `useFleetStore` 只是 reset，或塞 snapshot 證明「不讀它」：`TabBar.fixed.test.tsx:7`、`:35`，`FleetCells.test.tsx:11`、`:38`，`watch-area.{events,guardian,jobs}.test.ts` 的 import 與 reset，`watch-panes.test.ts:11`、`:25`、`:42`、`:107`、`:131`，`useTabDisplay.watch.test.ts:4`、`:13-18`、`:28`、`:44`。12b-3 刪 `lib/fleet/store.ts` 時它們都會斷，先在這裡清掉，12b-3 才放得進 20 檔。
+
+1. **測試先行**（`watch-panes.test.ts`）：沒有 `poolHostId` 的舊主機分頁 → 標籤是空字串（現在回 `fleetHostId` → 紅）；兩個舊分頁的 content 互不相等（現在同 `fleetHostId` 會相等 → 紅）。
+2. **型別與讀者**：`types/tab.ts:161` 拿掉 `fleetHostId?`，`:155-160` 的註解改成「沒有 `poolHostId` 的是 6a-2 以前的舊分頁，reconciler 收掉」；`pane-labels.ts:73` 回 `''`；`pane-utils.ts:61` 兩邊都沒有 `poolHostId` 時回 `false`。
+3. **測試清理**：上面列的測試把 `fleetHostId` 字面值改成 `{ kind: 'watch-host' }`（要的是舊分頁時）或 `poolHostId`（新分頁）；拿掉 `useFleetStore` 的 import、reset 與塞 snapshot 的案例；`watch-panes.test.ts:63-80` 依 `fleetHostId` 比對與 `mapContent` 那兩案改用 `poolHostId`。
+- mutation：`pane-utils.ts` 舊分頁對舊分頁回 true（task 1 第二案轉紅）。
+- **Split**：只清 fleet store 的 7 個測試檔（`TabBar.fixed`、`FleetCells`、三個 `watch-area.*`、`watch-panes`、`useTabDisplay.watch`）一張，`fleetHostId` 一張（後者等前者：同改 `watch-panes.test.ts` 等三檔）。
+
+#### MON-12b-1 — 拔掉 fleet 的接線與 A3 的一次性搬遷（1f 的 D1 前提）
+
+依賴：**9b-1**（Hosts 頁的資源池群組、觀察主機頁、Fleet 編輯器不再出現；它們吃 fleet 快照，接線拔掉會變空）、12a-1（新守門）。建議 12a-3、12a-4 在前；與 9a-3 同改 `main.tsx:97` 的開機鏈與 `main.test.tsx` 的開機順序那案，先後都行，後 merge 的併最新 main。**不必等 9b-2、7c-2**：`lib/fleet/reread.ts`、`api.ts` 本張不刪（9b-2 之前 `components/hosts/useProbeEditor.ts:10` 還 import `reread`），留給 12b-2；7c-2 不碰 fleet（它的 `ZoneStrip` 讀 `HostSample.zone`）。可與 12b-2 並行。檔案（13 個；新增約 70 行，刪約 590 行）：
+- 刪（5）：`lib/fleet/fleet-support.ts`＋`fleet-support.test.ts`、`lib/fleet/fleet-ws.ts`、`lib/pool/pool-look-migration.ts`＋`pool-look-migration.test.ts`。
+- 改（8）：`spa/src/main.tsx`、`main.test.tsx`、`hooks/useMultiHostEventWs.ts`、`hooks/useMultiHostEventWs.fleet.test.ts`（改寫）、`lib/host-events.ts`、`lib/storage/keys.ts`、`components/fleet/no-fleet-reads.guard.test.ts`、`lib/retired-wire.guard.test.ts`。
+
+實查：`fleet-support.ts` 只有 `main.tsx:17` import；`fleet-ws.ts` 只有 `useMultiHostEventWs.ts:37`；`pool-look-migration.ts` 只有 `main.tsx:30`（`:97` 的開機鏈），它等 fleet 快照（`:7`、`:91`）。fleet store 其他的讀者（`useTabQueued`、`use-pool-host-rows`、`fleet-bridge`、Hosts 頁）在 12a-4、9b-1、9b-2 處理；本張之後就算它們還在，store 也不會再有資料進來。
+
+1. **測試先行**：`useMultiHostEventWs.fleet.test.ts` 改寫成「fleet 退場」：連線網址沒有 `fleet` 參數（`searchParams.getAll('fleet')` 是空的，其他 opt-in 照舊）；`fleet.changed` 的框不做任何事、不丟錯。`retired-wire.guard.test.ts` 的 `RETIRED_CODE` 加 `/api/fleet`、`fleet.v1`、`fleet.changed`、`hostconfig/probe-hosts`、`hostconfig/fleet` 與 `searchParams.set('fleet'`；`RETIRED_NAMES` 加 `startFleetSupport`、`handleFleetEvent`、`bootPoolLooks`；`RETIRED_FILES` 加刪掉的三個非測試檔；**本張起掃描先排除 `lib/fleet/**`**（12b-3 拿掉排除）。看它們紅（網址還帶 `fleet=v1`；`main.tsx`、`useMultiHostEventWs.ts` 還有那些字）。
+2. **拔接線**：`main.tsx` 拿掉 `:17`、`:68`；`useMultiHostEventWs.ts` 拿掉 `:37`、`:44` 的 import、`:150-152`、`:355-361`，`:363`、`:384-385` 註解裡的「like the fleet frame above」改指 jobs 那段，`:384` 不再提 `watch.events`；`host-events.ts:29`、`:33` 拿掉 `'fleet.changed'`、`'watch.events'`；刪 `fleet-support.ts`＋測試、`fleet-ws.ts`。
+3. **A3 的搬遷**（spec A3：「WWD-9 拿掉 fleet 時這段一起刪」；MON-2b 起每台裝置每次開機都試、3 次逾時就放棄，兩台 Mac 早已搬過）：刪 `pool-look-migration.ts`＋測試；`main.tsx:30` 的 import 拿掉、`:97` 的鏈拿掉 `bootPoolLooks` 那一環（以當下的鏈為準），`:92-96` 的註解拿掉 pool 外觀那句；`keys.ts:56-57` 刪 `POOL_HOST_LOOKS_MIGRATED`（裝置上殘留的 marker 無害，不清）；`main.test.tsx:22-23` 的 mock 與 `:148-177` 那案（MON-2b 的「pool 外觀搬遷排在 Profile Sync 之前」）刪掉，`:86-146` 的 host 外觀搬遷順序那案照過；9a-3 已 merge 時，它加的開機順序案拿掉 `bootPoolLooks` 那一環（host 外觀搬遷 → `migrateGlobalIndicator` → `startProfileSync`）。
+4. **側欄守門**：`no-fleet-reads.guard.test.ts:3` 拿掉「唯一豁免 `pool-look-migration.ts`」那句（檔不在了）；glob 與 `OTHER_FILES` 加 `main.tsx`、`hooks/useMultiHostEventWs.ts`。共通規則裡「唯一豁免」那句從本張起作廢。
+- mutation：在 `useMultiHostEventWs.ts` 暫加回 `wsUrlObj.searchParams.set('fleet', 'v1')`（fleet 測試與新守門都轉紅）；在 `main.tsx` 暫加一個叫 `bootPoolLooks` 的空函式並接進鏈裡（新守門的 `RETIRED_NAMES` 轉紅）。
+- **出版之後**：88 告訴 1f「9b-1、12a-1、12b-1 已隨 <版本> 出版」，即 1f 的 D1；1f 可以 merge 9d-4。
+- **Split**：task 3（A3 搬遷）獨立一張。
+
+#### MON-12b-2 — 刪 `lib/fleet` 的設定半邊與讀取
+
+依賴：9b-2（Hosts 頁的 `Probe*`、`useProbeEditor`、`use-probe-rows` 與 `lib/pool/use-pool-host-rows.ts` 刪掉之後，這些檔只剩 `lib/fleet/` 自己與測試在 import）。可與 12b-1 並行。檔案（14 個；新增約 5 行，刪約 1080 行）：刪 `lib/fleet/config-api.ts`＋`config-api.test.ts`、`config-draft.ts`、`config-store.ts`＋`config-store.test.ts`、`config-validate.ts`＋`config-validate.test.ts`、`probe-check.ts`＋`probe-check.test.ts`、`use-fleet-daemons.ts`、`use-fleet-host-views.ts`、`reread.ts`、`api.ts`；改 `lib/watch/watch-row-write.ts`（`:2` 的註解指名 `lib/fleet/config-api.ts`）。
+
+實查（9b-2 之前）：這 13 檔在 `lib/fleet/` 以外的非測試 import 者全在 9b 的範圍：`components/hosts/` 的 `FleetRowEditor`、`PoolHostRoute:3`、`HostSidebar:10`（9b-1 刪或改）、`ProbeHostForm`、`ProbeHostEditor`、`ProbeHostPage`、`ProbeCheck`、`use-probe-rows`、`useProbeEditor`（9b-2 刪）、`components/HostPage.tsx:19`（9b-1 改），與 `lib/pool/use-pool-host-rows.ts:3`（9b-2 刪）。`lib/fleet/` 裡面：`config-store` 與 `config-draft` 互相 import，`reread` → `api`；12b-1 刪了 `fleet-support`、`fleet-ws` 之後 `reread` 只剩 `useProbeEditor`。開工時照共通事項再查一次。
+
+1. **刪**：一個 commit。SPA 裡 host-config 的 `probeHosts`／`fleet` 欄位、`PUT /api/hostconfig/{probe-hosts,fleet}`、`GET /api/fleet/ssh-aliases`、`POST /api/fleet/probe-check`、`GET /api/fleet` 的程式從此不在（1f 9d-4、9d-5 拿掉的路由）。
+2. **註解**：`watch-row-write.ts:2` 改成「同 `lib/host-config-api.ts` 的 CAS 寫法」。
+- 測試：純刪除；證據是 grep 與 `tsc`。`lib/fleet/**` 以外由 12b-1 的新守門管著。
+- mutation：無。
+- **Split**：沒有。
+
+#### MON-12b-3 — 刪 `lib/fleet` 其餘，守門改成全 repo
+
+依賴：12b-1、12b-2，以及 12a-1（`queue-time.ts` 的 fleet 型別）、12a-2（`lib/fleet/history.ts` 的讀者）、12a-4（`queued-sessions.ts`、`useTabQueued.ts`、`BackgroundSymbol.test.tsx` 的 fleet 型別）、12a-5（測試裡的 fleet store）。檔案（15 個；新增約 50 行，刪約 1830 行）：刪 `lib/fleet/store.ts`＋`store.test.ts`、`parse.ts`＋`parse.test.ts`＋`parse.footprint.test.ts`、`history.ts`＋`history.test.ts`、`types.ts`、`__fixtures__/`（`api-fleet-off.json`、`api-fleet-primary.json`、`api-fleet-standby.json`、`builders.ts`、`fleet-changed.json`）、`components/fleet/no-fleet-reads.guard.test.ts`；改 `lib/retired-wire.guard.test.ts`。
+
+**開工前要再 grep 一次**：`git grep -n "lib/fleet\|\.\./fleet/" -- spa/src`，排除 `components/` 底下指向側欄 `components/fleet/` 的相對路徑。MON-7～9 之後新增的檔若 import 了 `lib/fleet`（側欄守門管不到的範圍），先找出來回報 88。`e58c0d637` 時 `lib/fleet/` 以外 import 它的檔（含測試），都在上面各張與 9b-1、9b-2 的清單裡。
+
+1. **守門改成全 repo**（88：全 repo 不准 import `lib/fleet/`）：`retired-wire.guard.test.ts` 拿掉 `lib/fleet/**` 的排除，加一案「`lib/fleet/` 目錄不在」；`no-fleet-reads.guard.test.ts` 的 `FLEET_IMPORT`、`FLEET_READERS`（`:22-23`）與偵測式自測（`:62-76`）搬進來，**這兩條的範圍是 `src/` 全部、含測試檔**（路由、能力名照舊只看非測試檔）；`no-fleet-reads.guard.test.ts` 刪掉（範圍已被全 repo 涵蓋）。看它紅（`lib/fleet/` 還在）。
+2. **刪**：13 個檔。
+- mutation：在 `lib/watch/queued-sessions.test.ts` 暫加 `import type { FleetWaiter } from '../fleet/types'`（全 repo 那案轉紅）；暫建 `spa/src/lib/fleet/keep.ts`（目錄那案轉紅）；在任一非測試檔暫加 `useFleetStore`（讀者名那案轉紅）。
+- **Split**：`parse` 與 `__fixtures__`（8 檔，只剩 `lib/fleet` 自己的測試在用）一張，`store`、`history`、`types` 與守門一張。
+
+#### MON-12c — 拿掉 `fleetCellIndicator` 欄位（settings ordinal ＋1）
+
+依賴：9a-3（控制項已拿掉、全域值已搬進每台沒設過的主機，第三波定案第 4 條）。與 12a、12b 並行；不碰 fleet 的 wire，不是 1f 的前提。檔案（15 個；新增約 80 行，刪約 250 行）：`stores/useUISettingsStore.ts`＋`useUISettingsStore.test.ts`、`lib/profile/projections.ts`＋`projections.test.ts`、`lib/profile/executor.direction.integration.test.ts`、`lib/pool/host-looks.ts`＋`host-looks.test.ts`、刪 `lib/pool/indicator-migration.ts`＋`indicator-migration.test.ts`（9a-3 建）、`spa/src/main.tsx`、`main.test.tsx`、`lib/storage/keys.ts`、`components/settings/TerminalSection.tsx`、`TerminalSection.test.tsx`、`components/fleet/no-fleet-reads.guard.test.ts`（`POOL_FILES` 拿掉 `indicator-migration.ts`；12b-3 已刪這個守門就不用，第 15 個檔省掉）。
+
+實查（9a-3 之前）：`fleetCellIndicator` 的非測試讀者是 `useUISettingsStore.ts:121-128`、`:213-214`、`:281-284`、`:360-361`，`TerminalSection.tsx:1`、`:59-60`、`:80-84`、`:182-186`（9a-3 拿掉控制項），`host-looks.ts:8`、`:31-39`、`:74`、`:85`、`:110`，`projections.ts:67`、`:146`；9a-3 再加 `indicator-migration.ts` 與 `main.tsx` 開機鏈的一環。開工時 grep `fleetCellIndicator\|FleetCellIndicator\|FLEET_CELL_INDICATOR`。
+
+1. **預設改成 M51**（測試先行，`host-looks.test.ts:37-45` 改寫）：`indicatorOf(look)` 不再收全域值，沒有 `indicator` → `{ shape: 'ring', data: ['load'] }`；`defaultIndicator`、`host-looks.ts:74`、`:110` 的訂閱與 `poolLookOf` 的 `global` 參數拿掉。
+2. **欄位**：`useUISettingsStore.ts` 刪型別、常數、欄位、setter 與 `:360-361` 的修補；persist `version` 4 → 5，`migrate`（`:291-337`）加一步拿掉舊資料的 `fleetCellIndicator`（寫法照 `stripRemovedHostBadgeFields`）。測試：v4、帶 `bars-memory` 的資料遷移後沒有這欄；初始狀態沒有這欄。
+3. **投影與 ordinal**（`projections.ts:1-8` 的規則：拿掉投影路徑會動 fingerprint，ordinal 要升）：`projections.ts:67` 拿掉；`SECTION_SCHEMA_ORDINAL.settings`（`:155`）＋1，註解加一行（「purdex-ui-settings.fleetCellIndicator removed (monitoring tabs W7, MON-12c) — a projection change; an older payload still carries it and the field is not applied (unlisted)」）；開工時若已不是 13 就順延。`projections.test.ts` 的欄位數（`:363`，26 → 25）、`:770-790` 那段改成斷言它不在、fingerprint／ordinal 的守門 snapshot（同 MON-2a task 2 的做法）；`executor.direction.integration.test.ts:739` 的數字與註解；開工時 `git grep -n "SECTION_SCHEMA_ORDINAL.settings).toBe\|settings: 1[0-9]" -- spa/src` 找其他寫死數字的測試。
+4. **9a-3 的搬遷一起刪**：全域值不在了，`migrateGlobalIndicator` 沒有東西可讀。刪 `indicator-migration.ts`＋測試；`main.tsx` 的開機鏈拿掉那一環、`main.test.tsx` 的開機順序跟著改；`keys.ts` 刪 9a-3 加的 marker 鍵；`TerminalSection.tsx`、`TerminalSection.test.tsx` 裡 9a-3 留下的型別 import 與斷言（若有）。
+- 發版注意（寫進 PR 說明）：settings ordinal 升一次，還在舊版的裝置會鎖 settings 直到升級；**88 放行前先告訴 1f**（同 MON-2a）。跳過 9a-3 那一版、直接升到本張之後的裝置，全域值不會搬進每台；另一台搬過的指標會經 settings 同步過來。
+- mutation：沒有 `indicator` 時回雙柱（task 1 轉紅）；`migrate` 不拿掉欄位（task 2 轉紅）；拿掉投影卻不升 ordinal（`projections.test.ts` 的守門轉紅）。
+- **Split**：task 4 獨立一張，先 merge（先停掉搬遷、再刪欄位）。
+
+#### MON-12d — 收尾：語系鍵、7b-2 之後沒人用的檔、指名已刪檔的註解
+
+依賴：最後（12a、12b、12c 全部，以及 7b-2、9b-2）。檔案（不超過 16 個；新增約 10 行，其餘是刪除）：`locales/zh-TW.json`、`en.json`；刪 `components/watch/AvailRow.tsx`＋`AvailRow.test.tsx`（7b-2 起沒人用）；`lib/pool/host-extra.ts`＋`host-extra.test.ts`（7b-2、9b-2 之後若沒有 import 者：`e58c0d637` 時它的 import 者是 `AvailRow.tsx:5`、`WatchHostPane.tsx:13`（只給 `AvailRow`，`:130`）與 `fleet-bridge.ts`）；註解指名已刪檔或已退場路由的檔（例：`stores/useNexHostStore.ts:98`、`lib/pool/use-cell-models.ts:2`、`lib/pool/host-charts.ts:2-3`，開工時 grep）。
+
+1. **語系鍵**：只刪沒人讀的，不改名（`fleet.*` 有一部分還在用：`fleet.zone.*` 由 `lib/pool/words.ts:40` 的 `zoneKey` 與 `WatchHostPane.tsx:114` 讀）。查法：列出 `fleet.`、`fleet_hosts.`、`pool_hosts.`、`pool.card.`、`pool.strip.`、`watch.queue.`、`watch.history.`、`watch.events.`、`watch.host.`、`watch.jobs.`、`watch.set.`、`tab.queued.`、`settings.terminal.fleet_indicator.` 開頭的鍵；在非語系、非測試的 `spa/src` 裡找不到原字，**而且**上一層前綴也沒有以樣板字串（`` `前綴.${…}` ``、`'前綴.' +`）出現的，才刪；兩個語系一起刪，清單貼 PR。10-21 在 `e58c0d637` 先跑一次，已有 33 個鍵沒人讀（舊事件頁的 `watch.events.kind.*`、`status.*`、`label.*`，6f-2 拿掉的 `watch.host.chart.*`，5b 拿掉的 `watch.jobs.queue.*`、`tag.*` 等）；MON-1d、9a-1、9a-3、9b、12a 留下的會在那之後出現。
+2. **檔**：`AvailRow`、`host-extra`（`no-fleet-reads` 守門若還在，`POOL_FILES` 拿掉 `host-extra.ts`）。
+3. **註解**：`git grep -n "fleet-bridge\|lib/fleet\|fleet snapshot\|fleet queue\|gate/decisions\|watch\.events\|startFleetSupport\|pool-look-migration" -- spa/src ':!spa/src/locales'`；指名已刪的檔或路由、說的是現在已經不是的行為，才改成現況；只講歷史的（「before it, the fleet's」）不改。
+- 測試：`locale-completeness.test.ts`、`tsc`、`vitest related` 改到的檔。
+- mutation：無。
+- **Split**：語系一張（2 檔），檔與註解一張。
+
+#### 對照：1f 的讀者清單 → 歸屬
+
+1f 的清單（WWD-9 plan 第 5 節、盤點附錄 B 的 9d-2，`90e4a44cf`）逐條對到 `e58c0d637` 的實查；「不用動」的寫理由。**沒有找不到歸屬的讀者。**
+
+| 1f 列的讀者 | 讀什麼 | 歸屬 | 說明 |
+|---|---|---|---|
+| `lib/fleet/fleet-support.ts` | `/api/info` 的 `fleet.v1`、啟動讀取 | 12b-1 | 只有 `main.tsx:17`、`:68` |
+| `main.tsx`（`startFleetSupport`） | 同上 | 12b-1 | 也拿掉 `:30`、`:97` 的 A3 搬遷 |
+| `lib/fleet/fleet-ws.ts` | WS `fleet.changed` | 12b-1 | 只有 `useMultiHostEventWs.ts:37` |
+| `hooks/useMultiHostEventWs.ts:150` | `?fleet=v1`；`:355-361` 的 `fleet.changed` | 12b-1 | |
+| `lib/host-events.ts:29` | `'fleet.changed'`（型別聯集） | 12b-1 | 連同 `:33` 的 `'watch.events'` |
+| `lib/fleet/api.ts`、`reread.ts` | `GET /api/fleet` | 12b-2 | 12b-1 之後只剩 `useProbeEditor`（9b-2 刪） |
+| `lib/fleet/config-api.ts` | host-config 的 `probeHosts`／`fleet`、`ssh-aliases`、`PUT probe-hosts／fleet` | 12b-2 | 呼叫者全在 Hosts 頁 |
+| `lib/fleet/probe-check.ts` | `POST /api/fleet/probe-check` | 12b-2 | 呼叫者 `ProbeCheck.tsx`（9b-2 刪） |
+| `lib/fleet/parse.ts`、`types.ts` | wire 的解析與常數 | 12b-3 | |
+| （1f 沒列）`lib/fleet/{config-draft,config-store,config-validate,use-fleet-daemons,use-fleet-host-views}.ts` | Hosts 頁用的 store 與 hook | 12b-2 | |
+| （1f 沒列）`lib/fleet/{store,history}.ts`、`__fixtures__/` | fleet store、讀數歷史 | 12b-3 | |
+| `components/hosts/HostSidebar.tsx` | `useFleetDaemons`、資源池群組 | 9b-1 | 9b-1 task 1 |
+| `components/hosts/OverviewSection.tsx` | `useFleetStore`、`FleetRowEditor`、`ProbeHostsSection` | 9b-1 | 9b-1 task 3 |
+| `components/hosts/FleetRowEditor.tsx` | fleet 列 | 9b-1（刪） | |
+| `components/hosts/PoolHostRoute.tsx`、`PoolHostsSection.tsx`、`PoolHostGroup.tsx` | 資源池主機頁的路由與表 | 9b-1（刪） | |
+| `components/hosts/Probe*`、`probe-rows`、`use-probe-rows`、`useProbeEditor`、`PoolHostPage`、`PoolStatusDot`、`pool-status-word` | 觀察主機與資源池主機頁 | 9b-1（`ProbeHostsSection`）／9b-2（其餘） | |
+| `components/HostPage.tsx` | `useFleetDraftStore`、probe／pool 兩支 | 9b-1 | 9b-1 task 2 |
+| `hooks/useTabQueued.ts` | fleet store 的 waiter | 12a-4 | |
+| `lib/watch/queued-sessions.ts` | fleet 型別、`queuedBySession` | 12a-4 | |
+| `lib/watch/queue-time.ts` | fleet 型別（`holderKey`、`waiterKey`） | 12a-1 | `mss`、`WAIT_LONG_S` 留 |
+| `lib/watch/metrics.ts`、`series.ts` | fleet 的 `FleetFast`、`fleetHistory` | 12a-2（刪） | 6f-2 起沒人用 |
+| `lib/watch/api.ts` | `GET /api/gate/decisions`；`/api/watch/events`、`/unhandled` | 12a-1（decisions）、12a-3（events） | `fetchWatchStatus` 留（W9） |
+| `lib/watch/watch-row-write.ts` | `PUT /api/hostconfig/watch` | 不用動 | host-config 的 `watch` 列，W9 與 9a-1 留；只有 `:2` 的註解指名 `lib/fleet/config-api.ts`，12b-2 改 |
+| `components/watch/QueueLane.tsx`、`QueueNow.tsx`、`QueueSection.tsx`（＋`QueueHistory.tsx`） | fleet 的 `slow.queue`、gate.decisions | 12a-1（刪） | 6f-2 起沒人掛 |
+| `components/watch/MetricChart.tsx`（＋`ZoneBand.tsx`） | `lib/fleet/history` | 12a-2（刪） | 6f-2 起沒人掛 |
+| `lib/pool/pool-look-migration.ts` | fleet 快照 | 12b-1（刪） | spec A3 |
+| `lib/pool/use-pool-host-rows.ts`、`fleet-bridge.ts` | `useFleetHostViews`、fleet 型別 | 9b-2（刪） | |
+| `lib/pool/history.ts`、`use-series-history.ts`（＋`use-facts-history.ts`） | `fleetHistory` | 12a-2（刪） | 讓 9b-2 的 task 1 不必做 |
+| `lib/pool/host-charts.ts` | — | 不用動 | 沒有 import `lib/fleet`（在側欄守門的 `POOL_FILES` 裡）；`:2-3` 的註解提到它，12d 改 |
+| `components/fleet/*` | — | 不用動 | MON-1c 起只讀 pool，側欄守門管著；目錄名不改。測試 `FleetCells.test.tsx` 的 fleet store reset 在 12a-5 |
+| `stores/useNexHostStore.ts:111`（盤點列的 gate.decisions 能力判斷） | `gate.decisions.v1` | 12a-1 | |
+| `lib/watch/history-read.ts`、`decisions-types.ts`（盤點列） | `GET /api/gate/decisions` | 12a-1（刪） | |
+| `lib/watch/{events-store,watch-ws}.ts`、`main.tsx:107`（盤點 9c-2 列） | `/api/watch/events`、`/unhandled`、WS `watch.events` | 12a-3 | `watch-ws.ts` 的 `watch.changed` 留（W9） |
+| `lib/watch/{status-store,launch}.ts`（盤點 9c-2 列） | `/api/watch/status`、`/wake`、`/start` | 不用動 | W9；`/start` 1f 9c-c 也留 |
+| `components/watch/WatchHostPane.tsx`、`ProcTable.tsx`（盤點 9d-2 列） | fleet 快照與歷史 | 已處理 | 6e、6f-2（#3816、#3827）已改成只讀 pool，在側欄守門範圍 |
+
+原 MON-12 清單（修訂 2）裡另外幾項：`cell-model.ts`、`use-cell-models.ts` 不用動（MON-1c 起只讀 pool，在 `POOL_FILES`；`use-cell-models.ts:2` 的註解提到 `fleet-bridge`，12d 改）；`types/tab.ts` 的 `fleetHostId` → 12a-5；`useUISettingsStore.fleetCellIndicator` → 12c；fallback 與 fleet 的語系鍵 → 12d；`AvailRow`（7b-2 留下）→ 12d。
 
 ## 順序與分工
 
@@ -746,7 +942,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - 主機頁：6a-1（1c、1d 之後）→ 6a-2（另要 2a、2b）→ 6b；6c（1b 之後，可與 6a-1、6a-2 並行）→ 6d-1 → 6d-2 → 6e（另要 5a 的 task 1）；6f-1（6a-2、6c 之後）；6f-2（6f-1、6e 之後；6b 建議在前）。
   - 事件：10a（1a、1b 之後）→ 10b → 10c（與 6f-2 並行開發，merge 排在 6f-2 之後；修訂 4）。
   - 三條線可同時開。同檔的地方：`pane-labels.ts`、`useTabDisplay.ts`（6a-1、6a-2 的主機標籤與 10a 的事件數字，相鄰幾行）、`watch-area.ts`（6a-2／6b 的主機分頁與 10c 的事件分頁，不同函式）、`view-memory.ts`（6f-1 的主機與 10c 的事件篩選，10c 在後）、`MonitorTab.tsx`（6e 建、10c 加標記）、`no-fleet-reads.guard.test.ts`、語系檔；後 merge 的那張併最新 `origin/main` 再跑 PR 層測試。
-  - MON-7、8、9 的順序見下面的「第三波」；MON-11 等 A 線；MON-12 最後（5c、6f-2、7c-2、8c、9b-2、10c 之後）。
+  - MON-7、8、9 的順序見下面的「第三波」；MON-11 等 A 線；MON-12 見下面的「MON-12（修訂 5）」。
   - 建議分工：甲（MON-4 之後）6c → 6d-1 → 6d-2 → 6a-1 → 6a-2 → 6b → 6f-1 → 6e → 6f-2；乙（MON-1d 之後）10a → 10b → 5a → 5b → 5c → 10c（等 6f-2）。有第三位時 MON-5 整條給他，乙做完 MON-10 接 MON-7。
 - 第三波（修訂 4）：
   - 「狀態」：7a（現在就能開）→ 7b-1 ∥ 7c-1（都只要 7a）→ 7b-2（另要 6f-2）→ 7c-2（另要 7b-2）。
@@ -756,6 +952,13 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - 同改的檔（後 merge 的那張併最新 `origin/main` 再跑 PR 層測試）：`WatchHostPane.tsx`（7b-2、8a、9a-1 各換子分頁開關裡自己那一支，只動那一行與 import）；`lib/watch/view-memory.ts`＋測試（8b 的 `procAt`、8c 的 `obsExpanded`、9a-3 的 `lookMode`，加上第二波 10c 的事件篩選，各加自己的函式與 `clearViewMemory` 的一行）；`lib/pool/types.ts`（7a 的 facts、`PoolHost`、`SeriesPoint`，9a-1 的 `PoolExceptionDetail`，不同介面）；`no-fleet-reads.guard.test.ts`（7b-1、7c-1、8b、8c、9a-1、9a-2b、9a-3 加 `POOL_FILES`，取聯集；9b-2 擴 glob、改檔頭）；`ProcTab.tsx`、`ProcTab.tab-switch.test.tsx`（8b、8c）；`SettingsTab.tsx`＋兩個測試（9a-2a、9a-2b、9a-3）；`StatusTab.tsx`＋測試（7b-2 建、7c-2 加）；語系檔（全部；新鍵各放自己的子樹 `watch.host.status.*`、`watch.host.procs.*`、`watch.host.settings.*`，衝突時兩邊都留）。
   - 與第二波 10c：10c 只在 `MonitorTab.tsx` 加告警標記，第三波不碰 `MonitorTab`；事件頁的觀察記憶（#3825，`view-memory` 的 `readEventsObservations`）與 8c 的 `lib/pool/host-observations.ts` 各管各的、不共用。
   - 建議分工（三位 member）：甲 7a → 7b-1 → 7c-1 → 7b-2 → 7c-2；乙 8a → 8b → 8c；丙 9a-1 → 9a-2a → 9a-2b → 9a-3 → 9b-1 → 9b-2。兩位時甲做 7 整條，乙做 8 再做 9。
+- MON-12（修訂 5）：
+  - 12a（現在就能開）：12a-1 → 12a-3（同改 `lib/watch/api.ts` 與新守門）；12a-2、12a-4、12a-5 各自獨立，與 12a-1 並行。12a-2 建議排在 9b-2 之前（9b-2 的 task 1 因此取消）。
+  - 12b：12b-1（9b-1、12a-1 之後；建議 12a-3、12a-4 在前）∥ 12b-2（9b-2 之後）→ 12b-3（12b-1、12b-2 與五張 12a 之後）。**D1＝9b-1、12a-1、12b-1 merge 並出版**，88 出版後告訴 1f；9b-4（gate.decisions）只要 12a-1 出版。
+  - 12c：9a-3 之後，與 12a、12b 並行；升 settings ordinal，放行前先告訴 1f。
+  - 12d：最後（12a、12b、12c、7b-2、9b-2 之後）。
+  - 同改的檔：`lib/watch/view-memory.ts`＋測試（12a-1 與 8b #3845）；`no-fleet-reads.guard.test.ts`（12a-1、12a-2、12a-4、12b-1、12c 與第三波各張）；`lib/retired-wire.guard.test.ts`（12a-1 建，12a-3、12b-1、12b-3 加）；`main.tsx`＋`main.test.tsx`（12a-3、12b-1、12c 與 9a-3）；`useMultiHostEventWs.ts`（12b-1）與它的 watch 測試（12a-3）。後 merge 的併最新 `origin/main` 再跑 PR 層測試。
+  - 建議分工：一位 member 依序做 12a-2（最小、讓 9b-2 少一個 task）→ 12a-1 → 12a-3 → 12a-4 → 12a-5，9b-1 merge 後接 12b-1；12b-2、12b-3、12c、12d 由做完第三波的 member 接。D1 趕的話，12a-1 → 12b-1 排在其他 12a 前面。
 - 改到 team 模組的不在本線範圍；本線全是純 SPA，88 自己放行（B 線 10-19 起的規則），bump 與部署歸 1f。MON-2a 升 settings ordinal，88 放行前先告訴 1f（同 TG-1a-1）。
 
 ## 待查與已定案
@@ -812,6 +1015,24 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
   - `LookSettings` 用 `HostColorPicker`／`HostIconPicker`，不用綁 App 主機 id 的 `HostColorField`／`HostIconField`。
   - 9b-1 要在 9a-1 之後，建議也在 7b-2、9a-3 之後。
   - Hosts 頁的舊語系鍵留到 MON-12 清（同 MON-1d 的做法）。
+
+- **MON-12 細化（修訂 5）待 88 定案**（各張先照「建議」寫；88 改了再改 plan）：
+  1. **12b-1 的依賴與 9b-1 要不要提前**：原方向是 12b 等 9b-2 與 7c-2；實查 12b-1 只要 9b-1（`reread.ts`、`api.ts` 留到 12b-2，9b-2 之前 `useProbeEditor.ts:10` 還 import `reread`；7c-2 不碰 fleet）。D1 的關鍵路徑因此是 9b-1 → 12b-1。9b-1 現在就能開（9a-1 已 merge），但 plan 建議它等 7b-2、9a-3（接手 Hosts 頁的版本、標籤與外觀編輯）。**建議**：D1 不急就照原建議；1f 要趕 9d-4 時，9b-1 提前，代價是 7b-2、9a-3 merge 前那段時間，沒有 daemon 的主機的外觀沒有地方改、版本與標籤只剩主機頁的過渡內容。
+  2. **9b-2 的 task 1**：**建議** 12a-2 排在 9b-2 之前，9b-2 的 task 1（`factsToFast` 搬進 `history.ts`，第三波定案第 6 條 (A)）就不必做；反過來也能做，只是多一個會被刪掉的搬移。
+  3. **12a-4 要不要等 1f 的 S0（D0）部署**：拿掉沙漏的 fleet 那半，等舊閘門排隊的 session 不再亮沙漏。**建議不等**：S0 之後閘門不再排隊，本來就不會亮；之前出版只少了舊閘門的等待提示（盤點第 4 節判「不壞」）。
+  4. **`types/tab.ts` 的 `fleetHostId` 要不要刪**（12a-5）：它不是 fleet 的 wire，只是舊分頁 content 的欄位。**建議刪**（原 MON-12 清單就有）；不刪的話 12a-5 只剩清 fleet store 的 7 個測試檔。
+  5. **12c 連同 9a-3 的搬遷一起刪**：欄位不在了，搬遷沒有東西可讀。代價：跳過 9a-3 那一版、直接升到 12c 之後的裝置不會搬（另一台搬過的指標仍經 settings 同步過來）。**建議接受**；不接受的話改成直接讀 localStorage 裡舊的 `purdex-ui-settings`（多 1 檔、約 30 行）。
+  6. **守門的形狀**：新增 `lib/retired-wire.guard.test.ts`（「退場的檔、路由、能力名、識別字不准回來」，範本 `lib/task-groups/retired-per-host.guard.test.ts`），12b-3 把 `components/fleet/no-fleet-reads.guard.test.ts` 的偵測式併進來、舊檔刪掉。**建議照這樣**：舊檔是範圍守門（列名的檔不讀 fleet），`lib/fleet` 刪掉之後「範圍」沒有意義；「全 repo 不准 import `lib/fleet/`」放進新檔。
+  7. **語系鍵**：12d 只刪沒人讀的，`fleet.*` 不改名成 `pool.*`（`fleet.zone.*` 還有 `lib/pool/words.ts:40`、`WatchHostPane.tsx:114` 在讀）。**建議不改名**：改名要動側欄、主機頁與 7b-2 的卡片，跟 fleet 退場無關。
+  8. **host-config `watch` 列裡的 fleet 觸發欄位**（`x_cores`、`y_mb`、`targets` 等）：9a-1 從畫面拿掉、寫入時原樣帶回（`lib/watch/watch-row-write.ts` 的 `WATCH_DEFAULTS` 也還有）。1f 的 9c-b 拿掉 watch 的觸發之後，SPA 要不要停止寫回這幾欄，**不在 MON-12**（不是 fleet 的 wire、也不是 W9 的兩條路由）；建議歸 MON-11 或 1f 9c-b 那張附帶的 SPA 小改，88 跟 1f 對一下。
+- **MON-12 細化時自己定的**（不是衝突；88 不同意再改）：
+  - 語系鍵一律留到 12d，各張不碰語系檔。
+  - 12a-4 的 `QueuedItem` 收成 `QueuedJobMark` 的別名，`backgroundWaiters` 這個 prop 名不改（免得多動幾個元件與測試檔）。
+  - 12a-3 的 `anyHostDeclaresWatch` 搬進 `watch-area.ts` 當檔內函式，`shortDuration` 搬進 `lib/pool/events-model.ts`；`capability.test.ts` 整檔刪（status 那半已在 `status-store.test.ts`）。
+  - 12b-1 不清裝置上殘留的 `purdex-pool-host-looks-migrated`（無害）。
+  - 12c 用 persist 的 `migrate`（版本 4 → 5）拿掉舊資料裡的 `fleetCellIndicator`。
+  - `lib/pool/host-extra.ts` 在 12d 視 grep 結果刪（7b-2、9b-2 之後應該沒人用）。
+  - 盤點時順便看到 `components/hosts/AgentExtensionRow.tsx` 也沒有非測試的 import 者；跟 fleet 無關，不在 MON-12。
 
 ## codex plan 審查（task-mvgk4yis-tsgk70）對照表
 
