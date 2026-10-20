@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
 import { WatchEventsPane } from './WatchEventsPane'
-import { useAlertsStore, type HostAlertsEntry } from '../../lib/pool/alerts-store'
+import { useAlertsStore, alertCountOf, type HostAlertsEntry } from '../../lib/pool/alerts-store'
 import type { PoolAlert } from '../../lib/pool/alerts-api'
 import type { PoolObservation } from '../../lib/pool/observations-api'
 import { usePoolStore } from '../../lib/pool/store'
@@ -94,6 +94,25 @@ describe('the events tab (MON-10c)', () => {
     await flush()
     expect(screen.queryByTestId('event-bar')).toBeNull()
     expect(screen.getByTestId('event-end')).toHaveTextContent(t('watch.events.ended', { time: hhmm(cleared) }))
+  })
+
+  it('a watch-level alert says 守門員, counts as "other" in the top line and has the kind\'s name (88 10-21)', async () => {
+    useAlertsStore.setState({ byHost: { mlab: ok([
+      alert({ key: 'p1', kind: 'pressure_watch', level: 'watch' }),
+      alert({ key: 'p2', kind: 'swap_growth', level: 'watch' }),
+      alert({ key: 'p3', kind: 'pressure_danger', level: 'push' }),
+      alert({ key: 'p4', kind: 'brand_new_kind', level: 'digest' }),
+    ]) } })
+    pane()
+    await flush()
+    const byKey = (k: string) => rows().find((r) => r.getAttribute('data-event-id')!.endsWith(`|${k}|${NOW - 60 * MIN}`))!
+    expect(within(byKey('p1')).getByTestId('event-level')).toHaveTextContent(t('watch.events.level.watch'))
+    expect(within(byKey('p1')).getByTestId('event-kind')).toHaveTextContent(t('watch.events.alert_kind.pressure_watch'))
+    expect(within(byKey('p2')).getByTestId('event-kind')).toHaveTextContent(t('watch.events.alert_kind.swap_growth'))
+    expect(within(byKey('p3')).getByTestId('event-kind')).toHaveTextContent(t('watch.events.alert_kind.pressure_danger'))
+    expect(within(byKey('p4')).getByTestId('event-kind')).toHaveTextContent('brand_new_kind') // a kind this App does not know stays as the word
+    expect(screen.getByTestId('events-live-line')).toHaveTextContent(`${t('watch.events.live_push', { n: 1 })}・${t('watch.events.live_other', { n: 3 })}`)
+    expect(alertCountOf(useAlertsStore.getState().byHost)).toBe(1) // the shield counts push level only
   })
 
   it('has no button in a row: nothing here changes an event (M35)', async () => {

@@ -59,7 +59,9 @@ const SILENCE_LOOK = {
   unknown: { Icon: Question, tone: 'text-text-muted', bar: 'bg-text-muted', key: 'watch.events.silence.unknown' },
 } as const
 
-const LEVEL_KEYS: Record<string, string> = { push: 'watch.events.level.push', digest: 'watch.events.level.digest', obs: 'watch.events.level.obs' }
+const LEVEL_KEYS: Record<string, string> = { push: 'watch.events.level.push', digest: 'watch.events.level.digest', obs: 'watch.events.level.obs', watch: 'watch.events.level.watch' }
+/** Kinds the guardian's rules raise that have a name of their own; any other kind stays as the word. */
+const ALERT_KINDS = ['pressure_watch', 'pressure_danger', 'swap_growth']
 
 /** What a source daemon's read of the observations came to: a host's list, or the reason there is none. */
 type ObsRead = { alias: string; list: readonly PoolObservation[] } | { alias: string; forbidden: true } | { alias: string; failed: true }
@@ -137,6 +139,7 @@ function EventItem({ row, host, now }: { row: AlertRow | ObservationRow; host: M
   const Icon = silence?.Icon
   const kindWord = row.source === 'obs' ? t('watch.events.obs.kind')
     : silence ? t(silence.key)
+    : ALERT_KINDS.includes(row.kind) ? t(`watch.events.alert_kind.${row.kind}`)
     : row.kind
   const kindTone = silence?.tone ?? 'text-text-secondary'
   const levelKey = LEVEL_KEYS[row.level]

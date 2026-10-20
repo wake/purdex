@@ -263,6 +263,13 @@ describe('the alert badge (M41-1, MON-10c)', () => {
     expect(badge).toHaveClass('text-status-warning-text')
   })
 
+  it('counts a watch-level alert in progress, and stays yellow without a push one', () => {
+    put('mlab', [alertOf({ key: 'a', level: 'watch', kind: 'pressure_watch' })])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
+    expect(screen.getByTestId('monitor-alerts')).toHaveClass('text-status-warning-text')
+  })
+
   it('is red when one of them is push level', () => {
     put('mlab', [alertOf({ key: 'a' }), alertOf({ key: 'b', level: 'push' })])
     mount(okHost())
