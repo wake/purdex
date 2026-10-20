@@ -185,6 +185,27 @@ for p in $(cat "$tmp/pids"); do
 	kill -0 "$p" 2>/dev/null && fail "pdx test $p is still running after the gate was terminated"
 done
 
+# 9d. a pdx that ignores TERM is killed once the grace is over: nothing is left running when the gate has returned
+cat > "$tmp/pdx-deaf" <<'EOF'
+#!/bin/sh
+trap '' TERM INT HUP
+echo $$ >> "$FAKE_PIDS"
+while :; do sleep 1; done
+EOF
+chmod +x "$tmp/pdx-deaf"
+: > "$tmp/pids"
+RELEASE_GATE_TERM_GRACE=2 FAKE_PIDS="$tmp/pids" sh "$gate" --pdx "$tmp/pdx-deaf" --clone "$clone" --remote "$remote" "$c2" > "$tmp/deaf.out" 2>&1 &
+gpid=$!
+n=0; while [ "$(wc -l < "$tmp/pids")" -lt 12 ] && [ $n -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+[ "$(wc -l < "$tmp/pids")" -ge 12 ] || fail "the 12 deaf tasks were not all started: $(cat "$tmp/deaf.out")"
+kill -TERM "$gpid"
+set +e; wait "$gpid"; grc=$?; set -e
+[ "$grc" = 130 ] || fail "a TERM with pdx deaf: exit $grc, want 130: $(cat "$tmp/deaf.out")"
+sleep 1
+for p in $(cat "$tmp/pids"); do
+	kill -0 "$p" 2>/dev/null && { kill -9 "$p" 2>/dev/null; fail "a pdx that ignores TERM was left running ($p)"; }
+done
+
 # 9c. a TERM at any moment of the start (before the tasks are sent, while they are being started, once they all are) leaves no pdx behind
 for delay in 0 0.05 0.1 0.15 0.2 0.3 0.4 0.6; do
 	: > "$tmp/pids"

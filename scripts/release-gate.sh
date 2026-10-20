@@ -123,6 +123,7 @@ for t in $tasks; do
 		[ "$stop" = 1 ] && exit 143
 		"$pdx" test "$t" --json $nocache > "$work/$t.json" 2> "$work/$t.err" &
 		child=$!
+		echo "$child" > "$work/$t.pid"
 		[ "$stop" = 1 ] && kill "$child" 2>/dev/null
 		wait "$child"
 		rc=$?
@@ -135,8 +136,16 @@ done
 alive() { for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
 while [ "$interrupted" = 0 ] && alive; do sleep 0.3; done
 if [ "$interrupted" = 1 ]; then
+	# TERM first (each worker passes it to its pdx); what is still there when the grace is over is killed, the pdx calls too: the gate does
+	# not return with a `pdx test` still waiting
 	kill $pids 2>/dev/null
-	n=0; while alive && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+	n=0; grace=$(( ${RELEASE_GATE_TERM_GRACE:-10} * 10 ))
+	while alive && [ $n -lt $grace ]; do sleep 0.1; n=$((n + 1)); done
+	if alive; then
+		for f in "$work"/*.pid; do [ -f "$f" ] && kill -9 "$(cat "$f")" 2>/dev/null; done
+		kill -9 $pids 2>/dev/null
+		n=0; while alive && [ $n -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
+	fi
 	echo "release gate: interrupted"
 	exit 130
 fi

@@ -568,7 +568,7 @@ scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
   and has to be on a branch of the remote after that fetch (a commit that only the clone has is refused). One run per clone: a lock
   of the system (`lockf`, or `flock`, on `<clone>.lock`), held by a small process that ends when the script does, however it ends, refuses a second
   run (exit 2) and cannot go stale; every run writes to a directory of its own. A TERM or Ctrl-C ends the `pdx test` calls too (the jobs they sent
-  stay in the queue) and the gate exits 130. When the
+  stay in the queue; TERM first, KILL for what is still there after 10 s) and the gate exits 130. When the
   tasks are done the clone must still be at the commit, or the gate fails.
 * **The tasks**, all sent at once, each by its own `pdx test <task> --json` that waits for its job (there is no `pdx jobs wait`, and `--json` has the
   job id, the host and `cache_hit`): `go-all`, `spa-full`, `tsc-force`, `e2e`, `lint`, `wwd-linux`, `wwd-linux-vet`, and the scripts' own tests
