@@ -23,7 +23,7 @@ export interface PoolHostLookPatch {
   colors?: HostLook['colors'] | null
   icon?: string | null
   iconWeight?: HostLook['iconWeight'] | null
-  indicator?: PoolHostIndicator
+  indicator?: PoolHostIndicator | null
 }
 
 /** The shape and data of the old global 「主機格指示」, which is each host's default until it is set (W7). */
@@ -82,7 +82,15 @@ function applyField<K extends keyof HostLookEntry>(next: Record<string, unknown>
 export function writePoolHostLook(hostId: string, patch: PoolHostLookPatch): void {
   const daemon = readPoolHostDaemons()[hostId]
   const { indicator, ...face } = patch
-  if (indicator !== undefined) usePoolHostsStore.getState().patchLook(hostId, (cur) => ({ ...cur, indicator }))
+  if (indicator !== undefined) {
+    usePoolHostsStore.getState().patchLook(hostId, (cur) => {
+      if (indicator !== null) return { ...cur, indicator }
+      if (cur?.indicator === undefined) return cur
+      const { indicator: _gone, ...rest } = cur
+      void _gone
+      return rest
+    })
+  }
   if (Object.keys(face).length === 0) return
   if (daemon !== undefined) {
     const host = useHostStore.getState().hosts[daemon]

@@ -87,6 +87,14 @@ describe('writePoolHostLook', () => {
     writePoolHostLook(WWD_B, { icon: null })
     expect(usePoolHostsStore.getState().looks[WWD_B]).toEqual({ iconWeight: 'bold' })
   })
+  it('null on the indicator removes the stored override, so the host follows the default again', () => {
+    writePoolHostLook(WWD_B, { icon: 'Cube', indicator: { shape: 'bar', data: ['disk'] } })
+    writePoolHostLook(WWD_B, { indicator: null })
+    expect(usePoolHostsStore.getState().looks[WWD_B]).toEqual({ icon: 'Cube' })
+    expect(renderHook(() => usePoolHostLook(WWD_B)).result.current.indicator).toEqual({ shape: 'ring', data: ['load'] })
+    writePoolHostLook(WWD_A, { indicator: null }) // nothing stored: nothing to write
+    expect(usePoolHostsStore.getState().looks[WWD_A]).toBeUndefined()
+  })
   it('an unknown id (not 16 hex) writes nothing', () => {
     writePoolHostLook('mlab', { icon: 'Cube' })
     expect(usePoolHostsStore.getState().looks).toEqual({})
