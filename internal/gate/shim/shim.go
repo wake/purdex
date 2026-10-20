@@ -99,12 +99,32 @@ func Resolve(tool, pathEnv, shimDir string) (string, error) {
 		if !isExecutable(cand) {
 			continue
 		}
+		if IsShim(cand) {
+			continue // told by its header, not by where it lies: $HOME may have been swapped (#3671)
+		}
 		if inside(realPath(cand), realShim) {
 			continue
 		}
 		return cand, nil
 	}
 	return "", fmt.Errorf("%s: %w", tool, ErrNoRealBinary)
+}
+
+// shimMarker is the fixed start of the second line of every shim Script writes.
+const shimMarker = "# Written by `pdx setup` (pdx gate shim for"
+
+// IsShim reports whether the file at p (symlinks followed) is a pdx gate shim: its second line is the header Script writes.
+// Only that line counts, so a wrapper that merely mentions the marker in a comment further down is not taken for a shim.
+func IsShim(p string) bool {
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 256)
+	n, _ := f.Read(buf)
+	lines := strings.SplitN(string(buf[:n]), "\n", 3)
+	return len(lines) >= 2 && lines[0] == "#!/bin/sh" && strings.HasPrefix(lines[1], shimMarker)
 }
 
 func realPath(p string) string {

@@ -276,9 +276,11 @@ func TestPoolAtLeast(t *testing.T) {
 		{"empty pool", nil, true},
 		{"all at 2", []Peer{peer(2), peer(2)}, true},
 		{"one at 1", []Peer{peer(2), peer(1)}, false},
-		// the last info said 2, but the host may have been rolled back and be coming up as proto 1 (R2)
-		{"unreachable, last info 2", []Peer{peer(2), gone(2)}, false},
+		// an unreachable peer counts by the last info it gave (a laptop that is mostly off must not shut the gate for everyone); the window
+		// of a host rolled back while it was away is the next poll, which reads its proto again
+		{"unreachable, last info 2", []Peer{peer(2), gone(2)}, true},
 		{"unreachable, last info 1", []Peer{peer(2), gone(1)}, false},
+		{"unreachable, last info too old among reachable ones", []Peer{gone(1), peer(2)}, false},
 		{"a peer never reached carries the oldest proto", []Peer{peer(2), {Info: Info{Proto: MinProto}}}, false},
 		{"a rolled-back host shuts it again", []Peer{peer(2), peer(1), peer(2)}, false},
 	} {

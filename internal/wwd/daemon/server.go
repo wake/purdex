@@ -37,6 +37,7 @@ type Options struct {
 	Fault                  *fault.Hooks // test hooks (nil: none); /v1/info declares them
 	Sampler                *Sampler     // nil: the facts routes are not registered
 	Peers                  []PeerAddr
+	PeersLastFile          string       // where the last known info of the peers is kept across restarts (pool_last.go); "": not kept
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
 	Broker                 *Broker      // the event broker (shared with State); nil: a new one
@@ -115,7 +116,11 @@ func New(o Options) *Daemon {
 	if o.Sampler != nil {
 		b.SetShape(o.Sampler.Shaped)
 	}
-	d := &Daemon{opts: o, broker: b, pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
+	pool := NewPoolPoller(o.Peers, o.Token, poll)
+	if o.PeersLastFile != "" {
+		pool.UseLastKnownFile(o.PeersLastFile)
+	}
+	d := &Daemon{opts: o, broker: b, pool: pool, fwd: fwd}
 	d.partnerAt.Store(d.clock().UnixNano())
 	return d
 }
