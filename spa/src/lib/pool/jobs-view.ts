@@ -70,13 +70,16 @@ export function lanes(jobs: readonly PoolJob[]): Map<string, PoolJob[]> {
 
 export interface PoolHostLabels { alias: string; labels: readonly string[]; workerEnabled: boolean }
 
+/** Could this host take the job, setting load aside: its worker is on and it holds every label of the job. */
+export const hostCanTake = (job: PoolJob, h: PoolHostLabels): boolean => h.workerEnabled && job.labels.every((l) => h.labels.includes(l))
+
 /**
  * The red line: no host whose worker is on holds every label of the job. A host that is only busy, held back by a lock, an active owner or a 「暫停」 is a passing state and does not count here.
  * Null while no host is known at all (the pool has not been read): nothing is said then.
  */
 export function noHostToGoTo(job: PoolJob, hosts: readonly PoolHostLabels[]): { labels: string[] } | null {
   if (hosts.length === 0) return null
-  const fits = hosts.some((h) => h.workerEnabled && job.labels.every((l) => h.labels.includes(l)))
+  const fits = hosts.some((h) => hostCanTake(job, h))
   return fits ? null : { labels: [...job.labels] }
 }
 
