@@ -15,6 +15,7 @@ import (
 // has it; the same flag with another value is another command. A caller does not type the worker's output files, so a flag that
 // carries one is the task's alone. What is left after the task's words is the arguments, which must be what the task takes.
 func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool) {
+	cmd = normalizeGoFlags(cmd) // before anything reads a flag: --junitfile is -junitfile
 	var lits, owned []string
 	shape := t.Shape()
 	for k, w := range shape {
@@ -36,7 +37,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 	}
 	tw := normalize(lits)
-	cmd = dropRunFlags(normalizeGoFlags(cmd))
+	cmd = dropRunFlags(cmd)
 	i, k := 0, 0
 	for k < len(tw) {
 		if !strings.HasPrefix(tw[k], "-") { // a plain word of the task (go test, a trailing ./...): the command has it too
@@ -146,6 +147,7 @@ var goValueFlags = map[string]bool{
 	"-benchtime": true, "-fuzz": true, "-fuzztime": true, "-cpu": true, "-coverprofile": true, "-covermode": true, "-coverpkg": true,
 	"-o": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-asmflags": true, "-gccgoflags": true, "-mod": true, "-modfile": true,
 	"-overlay": true, "-pkgdir": true, "-vet": true, "-outputdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true,
+	"-list": true, "-blockprofilerate": true, "-memprofilerate": true, "-mutexprofilefraction": true, "-run-timeout": true, "-testify.m": true,
 	"-mutexprofile": true, "-trace": true, "-shuffle": true, "-testlogfile": true, "-fuzzcachedir": true, "-fuzzminimizetime": true,
 }
 

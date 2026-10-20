@@ -266,6 +266,9 @@ local = true
 	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-run", "X"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile=out.xml"}).Action)
+	// Go reads --flag as -flag: the double-dash spelling of the worker's own output flag is refused as well (#3711 R2)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile=out.xml"}).Action)
 }
 
 // A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.

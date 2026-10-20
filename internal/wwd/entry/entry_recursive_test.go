@@ -109,6 +109,9 @@ func TestMatch_TheHintDoesNotTakeAFlagValueForAPackage(t *testing.T) {
 		"-tags with a path-shaped value": {"go", "test", "-tags", "./...", "-cover"},
 		"-skip with a path-shaped value": {"go", "test", "-skip", "./...", "-cover"},
 		"-run=… joined":                  {"go", "test", "-run=./...", "-cover"},
+		"-list with a path-shaped value": {"go", "test", "-list", "./...", "-cover"},
+		"-list as the last words":        {"go", "test", "-list", "./..."},
+		"-memprofilerate":                {"go", "test", "-memprofilerate", "./...", "-cover"},
 	} {
 		r := Match(root, argv)
 		assert.NotEqual(t, "go-all", r.Hint, name+": ./... is a value here, not the whole tree")
