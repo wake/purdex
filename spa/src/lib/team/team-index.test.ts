@@ -111,8 +111,48 @@ describe('buildTeamIndex', () => {
     expect(index.bySession.has('h1\u0000r-tm')).toBe(false)
   })
 
+  describe('seatByTabId — the inclusive seat map (task groups spec §3, TG-3a-1)', () => {
+    it('agrees with byTabId for every unpinned tab of a team whose lead is not pinned', () => {
+      const { inp, views } = fixture()
+      const index = buildTeamIndex(views, inp.tabsById, inp.sessionsByHost)
+      expect([...index.seatByTabId.keys()].sort()).toEqual([...index.byTabId.keys()].sort())
+      for (const [tabId, hit] of index.byTabId) expect(index.seatByTabId.get(tabId), tabId).toEqual(hit)
+      expect(index.seatByTabId.has('plain')).toBe(false)
+    })
+
+    it('a pinned seat tab is in it, while byTabId still leaves it out', () => {
+      const { inp, views } = fixture()
+      const pinned = { ...inp.tabsById, member1: { ...inp.tabsById.member1, pinned: true } }
+      const index = buildTeamIndex(views, pinned, inp.sessionsByHost)
+      expect(index.byTabId.has('member1')).toBe(false)
+      expect(index.seatByTabId.get('member1')?.seat.session.session_id).toBe('A')
+    })
+
+    it('a team whose lead tab is pinned: no group in byTabId, but every one of its tabs is still its seat', () => {
+      const { inp, views } = fixture()
+      const pinnedLead = { ...inp.tabsById, lead1: { ...inp.tabsById.lead1, pinned: true } }
+      const index = buildTeamIndex(views, pinnedLead, inp.sessionsByHost)
+      expect(index.byTabId.has('member1')).toBe(false)
+      expect(index.seatByTabId.get('lead1')?.role).toBe('lead')
+      expect(index.seatByTabId.get('member1')?.role).toBe('member')
+      expect(index.seatByTabId.get('dup')?.seat.session.session_id).toBe('A')
+    })
+
+    it('the seat is the first pane\'s in pre-order, a seat in a secondary pane counts, and a tab with no seat is absent', () => {
+      const { inp, views } = fixture()
+      const tabs = {
+        ...inp.tabsById,
+        sec: tab('sec', split(leaf('h1', 'not-a-team'), leaf('h1', 'a-tm'))), // the seat is in the second pane
+        two: { ...tab('two', split(leaf('h1', 'b-tm'), leaf('h1', 'a-tm'))), pinned: true }, // pinned, two seats: the first pane wins
+      }
+      const index = buildTeamIndex(views, tabs, inp.sessionsByHost)
+      expect(index.seatByTabId.get('sec')?.seat.session.session_id).toBe('A')
+      expect(index.seatByTabId.get('two')?.seat.session.session_id).toBe('B')
+    })
+  })
+
   it('an empty input gives empty maps', () => {
     const index = buildTeamIndex([], {}, {})
-    expect(index.byTabId.size + index.byKey.size + index.bySession.size).toBe(0)
+    expect(index.byTabId.size + index.seatByTabId.size + index.byKey.size + index.bySession.size).toBe(0)
   })
 })
