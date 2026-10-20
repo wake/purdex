@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/run"
 )
 
@@ -162,8 +163,12 @@ func TestDirectMarksAnUnrecordedRunAtATerminalAndSweepsByTheMark(t *testing.T) {
 		t.Fatalf("code %d, err %v", code, err)
 	}
 	got := strings.TrimSpace(out.String())
-	if !strings.HasPrefix(got, "unrecorded-") || seen != got {
+	if !strings.HasPrefix(got, "j_unrecorded_") || seen != got {
 		t.Fatalf("the command was marked %q, the sweep looked for %q", got, seen)
+	}
+	// the facts' reader takes nothing else for a mark: the shape is the contract with the scanner
+	if id, ok := facts.JobFromEnv([]string{run.MarkEnv + "=" + got}); !ok || id != got {
+		t.Fatalf("the facts' reader does not take %q as a mark", got)
 	}
 }
 

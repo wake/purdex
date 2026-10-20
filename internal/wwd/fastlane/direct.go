@@ -155,11 +155,12 @@ func pidsNote(pids []int) string {
 }
 
 // newCleanupMark is the mark of a run that has none (it is not recorded) and shares the caller's process group: its leftovers are
-// found by this alone.
+// found by this alone. It has the shape of a job id, which is all the facts' reader accepts as a mark (facts.JobFromEnv); no such job
+// exists, and the usage tracker forgets an entry that never ends.
 func newCleanupMark() string {
-	b := make([]byte, 6)
+	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return "unrecorded-" + hex.EncodeToString(b)
+	return "j_unrecorded_" + hex.EncodeToString(b)
 }
 
 // markOf is the job id the command was marked with (WWD_JOB), "" when it has none.
