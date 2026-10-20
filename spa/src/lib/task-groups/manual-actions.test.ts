@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TEAM_COLORS } from '../../components/team/team-display'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -20,14 +20,28 @@ beforeEach(() => {
   useManualGroupsStore.setState({ order: [], groups: {} })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
 })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('a new group\'s colour (TG-5c)', () => {
+  // The colours in creation order: `order`, never `Object.values(groups)` — an all-digit id such as "59214836" is an array-index key and
+  // JS lists it before every other key (#3774).
+  const colours = () => order().map((id) => groups()[id].color)
+
   it('is the first swatch colour no other manual group uses, and starts again when all eight are used', () => {
-    const colours = () => Object.values(groups()).map((g) => g.color)
     for (let i = 0; i < 8; i++) { const r = createManualGroup({ name: `G${i}` }); expect(r.ok).toBe(true) }
     expect(colours()).toEqual([...TEAM_COLORS])
     createManualGroup({ name: 'ninth' })
     expect(colours()[8]).toBe(TEAM_COLORS[0])
+  })
+
+  it('does not depend on the ids: an all-digit id (an array-index key for JS) in the middle changes nothing (#3774)', () => {
+    // 0x59 0x21 0x48 0x36 → "59214836"; the third group gets it
+    const bytes = [[0xa1, 0, 0, 1], [0xb2, 0, 0, 2], [0x59, 0x21, 0x48, 0x36], [0xc3, 0, 0, 4], [0xd4, 0, 0, 5], [0xe5, 0, 0, 6], [0xf6, 0, 0, 7], [0xa7, 0, 0, 8]]
+    let next = 0
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation(((a: Uint8Array) => { a.set(bytes[next++]); return a }) as never)
+    for (let i = 0; i < 8; i++) createManualGroup({ name: `G${i}` })
+    expect(order()[2]).toBe('59214836')
+    expect(colours()).toEqual([...TEAM_COLORS])
   })
   it('skips colours that are taken, wherever they are; an explicit colour is kept', () => {
     createManualGroup({ name: 'A', color: TEAM_COLORS[0] })
