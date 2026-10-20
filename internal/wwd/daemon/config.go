@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -157,6 +158,31 @@ type AdvisorRule struct {
 	// not read its alerts for 3 minutes. Only a host that runs a Purdex daemon (mlab, air26) sets it; the default is off, since a host
 	// without one (mserv, air19) would otherwise be told it has lost a partner it never had.
 	PartnerCheck bool `toml:"partner_check"`
+	// WatchRules turns on the watcher's three pressure rules (spec §13.3: pressure_watch, pressure_danger, swap_growth). Off by default: they
+	// write a level and kinds an older reader of the alert list refuses whole, so they are switched on host by host once every reader has the
+	// build that knows them (docs/wwd-deploy.md).
+	WatchRules bool `toml:"watch_rules"`
+	// Off names the watcher rules this host does not judge (only the three kinds above); air19 lists the two that mean nothing to a laptop
+	// whose Windows VM pages all day. It takes a rule out, and never switches one on: WatchRules decides that.
+	Off []string `toml:"off"`
+	// SwapGrowthMB is the growth of the swap in use over 30 minutes that raises swap_growth; 0 takes the default by RAM (500 MB up to 16 GB,
+	// more in proportion above it).
+	SwapGrowthMB int `toml:"swap_growth_mb"`
+}
+
+// maxSwapGrowthMB bounds swap_growth_mb: a growth of 1 TB over half an hour is a typo, not a setting.
+const maxSwapGrowthMB = 1 << 20
+
+// watchKinds are the alert kinds [advisor] off may name: the watcher rules added by S3-2.
+var watchKinds = []wire.AlertKind{wire.AlertPressureWatch, wire.AlertPressureDanger, wire.AlertSwapGrowth}
+
+// WatchRuleOn says whether this host judges the watcher rule of kind k: watch_rules is on and k is not in off. A kind that is not a
+// watcher rule is never on here (the other rules do not depend on watch_rules).
+func (a AdvisorRule) WatchRuleOn(k wire.AlertKind) bool {
+	if !a.WatchRules || !slices.Contains(watchKinds, k) {
+		return false
+	}
+	return !slices.Contains(a.Off, string(k))
 }
 
 // PeerConfig is another wwd of the pool: its alias and tailnet address
@@ -227,6 +253,14 @@ func (c Config) validateWorker() error {
 		if n == "" || len(n) > 128 || strings.ContainsFunc(n, unicode.IsControl) {
 			return fmt.Errorf("advisor.known_residents has %q: a process name is 1 to 128 characters without control characters", n)
 		}
+	}
+	for _, n := range c.Advisor.Off {
+		if !slices.Contains(watchKinds, wire.AlertKind(n)) {
+			return fmt.Errorf("advisor.off has %q: it may name only pressure_watch, pressure_danger or swap_growth", n)
+		}
+	}
+	if m := c.Advisor.SwapGrowthMB; m < 0 || m > maxSwapGrowthMB {
+		return fmt.Errorf("advisor.swap_growth_mb is %d, it must be 0 (the default by RAM) or 1-%d", m, maxSwapGrowthMB)
 	}
 	if c.Observe.MinMemMB < 0 {
 		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)
