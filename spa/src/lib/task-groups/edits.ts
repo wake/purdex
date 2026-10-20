@@ -2,22 +2,15 @@
 // a group, a root in at most one group, a title-shaped name) or says why it cannot. Functions of the list alone, because the store may apply a change twice (a lost compare-and-set re-runs it on the daemon's copy), so
 // "the group is gone" and "the group is full" are judged on whatever copy the change meets.
 import type { TaskGroup } from './api'
+import { groupNameError } from './manual-edits'
 
 export const MAX_GROUPS = 32
 export const MAX_ROOTS = 64
-const MAX_NAME_BYTES = 64
 
 export type EditError = 'group-gone' | 'group-full' | 'too-many-groups' | 'bad-name' | 'id-taken' | 'group-changed' | 'group-in-use'
 export type EditResult = { groups: TaskGroup[] } | { error: EditError }
 
-/** The name's rule is the team name's (`peers.ValidateTitle`): 1–64 bytes, printable. `null` = fine. */
-export function groupNameError(name: string): 'bad-name' | null {
-  const n = name.trim()
-  if (n === '' || new TextEncoder().encode(n).length > MAX_NAME_BYTES) return 'bad-name'
-  // eslint-disable-next-line no-control-regex -- control characters are what is refused
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(n)) return 'bad-name'
-  return null
-}
+export { groupNameError }
 
 /** A fresh 8-hex id, not among `used` (the daemon's shape for a generated id). */
 export function newGroupId(used: readonly string[]): string {
