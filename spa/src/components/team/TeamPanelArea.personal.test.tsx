@@ -168,6 +168,18 @@ describe('the interim full form (until TG-5c)', () => {
   })
 })
 
+describe('the interim full form follows the panel\'s target', () => {
+  it('a split tab whose first agent pane is codex and second is cc with a workbook: full does not switch to the cc workbook', () => {
+    scene(); seedWorkbook(HOST, 'S1', { status: 'cc status', entries: [] })
+    const cx = ccTab('sp', { type: 'codex', sessionId: 'S2' })
+    const cc = ccTab('sp2', { type: 'cc', sessionId: 'S1' })
+    addTab({ ...cx, layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [cx.layout, cc.layout] } } as unknown as Tab)
+    setActive('sp'); shared('full'); mount()
+    expect(screen.queryByTestId('own-workbook')).toBeNull()
+    expect(screen.getByTestId('personal-panel').getAttribute('data-mode')).toBe('full')
+  })
+})
+
 describe('a team tab is still the team view', () => {
   it('shows the team whatever the shared value is, and the team value is the team\'s own', () => {
     scene(); shared('line')
