@@ -36,6 +36,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 	}
 	tw := normalize(lits)
+	cmd = dropRunFlags(cmd, tw)
 	i, k := 0, 0
 	for k < len(tw) {
 		if !strings.HasPrefix(tw[k], "-") { // a plain word of the task (go test, a trailing ./...): the command has it too
@@ -84,6 +85,11 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		if a == "" || strings.HasPrefix(a, "-") {
 			return nil, false
 		}
+		// a task that only ever runs here (go-pkg) is for packages by name: a pattern that expands (./internal/...) is not one package, and
+		// run here it would be the suite of a tree on a light slot. It is the queued tasks' (go-changed, go-all).
+		if t.Args == manifest.ArgsPackages && Recursive(a) && t.Local.Allowed && t.Local.Max < 0 {
+			return nil, false
+		}
 		conv, ok := convertArg(t.Args, root, taskDir, cwd, a)
 		if !ok {
 			return nil, false
@@ -97,6 +103,48 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 // of the command is not the same command: `go test -tags e2e ./cmd/wwd/` runs the whole package, and read as a task that has `-run TestE2E`
 // it would silently run only that (the task's flags are all that run once the command is a task).
 var selectsWhatRuns = map[string]bool{"-run": true, "-skip": true, "-tags": true, "-short": true, "-bench": true, "-fuzz": true}
+
+// Recursive says whether a package argument is a pattern that expands to many packages (`./internal/...`, `...`).
+func Recursive(a string) bool { return strings.Contains(a, "...") }
+
+// wholeTree says whether a package argument is the whole tree of the repository.
+func wholeTree(a string) bool { return a == "./..." || a == "..." }
+
+// Flags of `go test` that only say how to run, never what: a command that has one the task does not write still is the task. They are
+// dropped from the command before it is compared, and the task's own command runs (its values of -p and -timeout replace the typed ones;
+// to keep your own, `pdx test --adhoc`). -race, -run, -skip, -tags, -short, -bench, -fuzz, -cover… change what runs or what it means: they
+// stay in the command, and make it another one.
+var (
+	runFlagsAlone = map[string]bool{"-v": true, "-json": true, "-failfast": true}
+	runFlagsValue = map[string]bool{"-count": true, "-p": true, "-parallel": true, "-timeout": true}
+)
+
+// dropRunFlags takes the flags above out of a `go test` command unless the task writes the flag itself (then the usual comparison of the
+// flag and its value applies). A value joined with = is one word; a flag that takes a value in the next word takes it.
+func dropRunFlags(cmd, taskWords []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	own := map[string]bool{}
+	for _, w := range taskWords {
+		if strings.HasPrefix(w, "-") {
+			own[flagName(w)] = true
+		}
+	}
+	out := append([]string(nil), cmd[:2]...)
+	for i := 2; i < len(cmd); i++ {
+		name := flagName(cmd[i])
+		switch {
+		case cmd[i] == "-args" || cmd[i] == "--":
+			return append(out, cmd[i:]...)
+		case own[name] || !(runFlagsAlone[name] || runFlagsValue[name]):
+			out = append(out, cmd[i])
+		case runFlagsValue[name] && !strings.Contains(cmd[i], "=") && i+1 < len(cmd) && !strings.HasPrefix(cmd[i+1], "-"):
+			i++ // its value is the next word
+		}
+	}
+	return out
+}
 
 // valueLike says whether a word after a flag can be its value: not another flag, and, as the very last word of the task, not a
 // relative path or pattern (that is the task's own word, like the trailing ./... of `go test -timeout 30m ./...`; anywhere else a

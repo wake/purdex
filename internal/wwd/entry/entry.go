@@ -9,6 +9,7 @@ package entry
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -77,14 +78,26 @@ func Match(cwd string, argv []string) Result {
 	// Tasks of one shape (a development task and a merge task that run the same command) are told apart by class: a command typed by
 	// hand is the lowest one, and the first name among equals.
 	var found *Result
+	foundLiteral := false // the task spells the command's whole-tree pattern out (go-all runs `./...`)
+	whole := hasWholeTree(canon)
 	for _, n := range names {
-		if args, ok := matchTask(root, cwd, canon, m.Tasks[n]); ok {
-			if found == nil || classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class) {
-				found = &Result{Action: ActionRewrite, Task: n, Args: args, Queued: !m.Tasks[n].Local.Permits(len(args))}
-				if found.Queued {
-					found.Labels = append([]string(nil), m.Tasks[n].Labels...)
-				}
-			}
+		args, ok := matchTask(root, cwd, canon, m.Tasks[n])
+		if !ok {
+			continue
+		}
+		literal := whole && spellsWholeTree(m.Tasks[n])
+		better := found == nil ||
+			(literal && !foundLiteral) || // the whole tree is the task that says `./...`, whatever the class of one that takes any package list
+			(literal == foundLiteral && classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class))
+		if !better {
+			continue
+		}
+		foundLiteral = literal
+		// a pattern that expands is not for the fast lane, even when a count limit would let the arguments in
+		queued := !m.Tasks[n].Local.Permits(len(args)) || (m.Tasks[n].Args == manifest.ArgsPackages && anyRecursive(args))
+		found = &Result{Action: ActionRewrite, Task: n, Args: args, Queued: queued}
+		if queued {
+			found.Labels = append([]string(nil), m.Tasks[n].Labels...)
 		}
 	}
 	if found != nil {
@@ -117,9 +130,12 @@ func classRank(c wire.JobClass) int {
 	return 0
 }
 
-// hintFor is the task nearest to the command: the one whose literal words agree with the command's the longest from the front.
+// hintFor is the task nearest to the command: the one whose plain words (a task's flags and their values are not) agree with the command's
+// the longest from the front. The command's own flags and their values are not words of the comparison either, so `go test -count=1 ./...`
+// is near go-all, which runs `./...`, and not near the first task by name.
 func hintFor(m *manifest.Manifest, names []string, cmd []string) string {
-	best, bestN := "", 0
+	words := plainWords(dropRunFlags(cmd, nil))
+	best, bestN, bestFull := "", 0, false
 	for _, n := range names {
 		var lits []string
 		for _, w := range m.Tasks[n].Shape() {
@@ -127,14 +143,61 @@ func hintFor(m *manifest.Manifest, names []string, cmd []string) string {
 				lits = append(lits, w.Text)
 			}
 		}
-		tw := normalize(lits)
+		tw := plainWords(normalize(lits))
 		k := 0
-		for k < len(tw) && k < len(cmd) && tw[k] == cmd[k] {
+		for k < len(tw) && k < len(words) && tw[k] == words[k] {
 			k++
 		}
-		if k > bestN {
-			best, bestN = n, k
+		// nearer: more words agree; then the task all of whose words agree (its plain words are the command's, the task asks for no more than the
+		// command has) over one that wants other words (e2e's ./cmd/wwd/); then the lower class
+		full := k == len(tw)
+		if k > bestN || (k == bestN && k > 0 && ((full && !bestFull) || (full == bestFull && classRank(m.Tasks[n].Class) < classRank(m.Tasks[best].Class)))) {
+			best, bestN, bestFull = n, k, full
 		}
 	}
 	return best
+}
+
+// plainWords are the words of a command that are not flags or the values of flags: `go test -run X -count=1 ./...` is `go test ./...`.
+// A word that looks like a path or a pattern at the very end (`./...`) is the command's own word, as in matchTask.
+func plainWords(w []string) []string {
+	var out []string
+	for i := 0; i < len(w); i++ {
+		if !strings.HasPrefix(w[i], "-") {
+			out = append(out, w[i])
+			continue
+		}
+		if !strings.Contains(w[i], "=") && i+1 < len(w) && valueLike(w[i+1], i+1 == len(w)-1) {
+			i++
+		}
+	}
+	return out
+}
+
+func hasWholeTree(cmd []string) bool {
+	for _, w := range cmd {
+		if wholeTree(w) {
+			return true
+		}
+	}
+	return false
+}
+
+// spellsWholeTree says whether the task's own command has the whole-tree pattern as a word.
+func spellsWholeTree(t *manifest.Task) bool {
+	for _, w := range t.Shape() {
+		if w.Kind == manifest.ShapeLiteral && wholeTree(w.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyRecursive(args []string) bool {
+	for _, a := range args {
+		if Recursive(a) {
+			return true
+		}
+	}
+	return false
 }
