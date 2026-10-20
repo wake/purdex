@@ -285,6 +285,10 @@ func copyInt(p *int) *int {
 // decompress rate as read, whether or not the proto 2 gate lets the rate into the records others see, and the pressure level, PSI, swap in
 // use and RAM total the watcher's pressure rules judge by. A record here carries only At, Platform and those memory fields; it is for
 // in-process rules and must not be served, stored or sent.
+//
+// A sample whose memory source failed is still in the list, as a sample with **no reading**: Mem.TotalMB is 0 (a successful read always has a
+// total), Pressure is 0 and the swap and PSI are nil. A rule treats it as a hole, never as calm and never as pressure. A sample whose other
+// sources failed but whose memory was read carries that memory: its pressure is evidence.
 func (s *Sampler) LocalRecent(since time.Time) []wire.Facts {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

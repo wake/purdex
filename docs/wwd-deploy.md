@@ -654,6 +654,10 @@ scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
 not know, and such a reader refuses the **whole** list (`DecodeLenient` still validates). wwd refuses its own stored list the same way after a
 rollback. So the build that can read them comes first, and the switch that makes a host write them is a config line, off by default.
 
+**Order of the releases.** S3-2a (the readers, the config keys, the sampler's signals, this section) goes out first; the three rules themselves are
+S3-2b. Until S3-2b is deployed, `watch_rules = true` is accepted and does nothing: no alert of the new kinds is raised. So do not read a quiet
+list as "the watching is on" before S3-2b is on every host. The steps below are for the build that has the rules.
+
 ```toml
 # ~/.config/wwd/config.toml
 [advisor]

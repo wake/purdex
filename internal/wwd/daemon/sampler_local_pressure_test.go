@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -74,5 +75,49 @@ func TestLocalRecentLeavesAnUnreadFieldAbsent(t *testing.T) {
 	got := s.LocalRecent(s0)
 	if len(got) != 1 || got[0].Mem.SwapUsedMB != nil {
 		t.Fatalf("an unread swap figure came out as %+v", got)
+	}
+}
+
+// A sample whose memory source failed has no memory reading: TotalMB 0, pressure 0 (unknown), no swap figure. That is how LocalRecent says
+// "nothing was read here" (a successful read always has a total), so a rule can tell a hole from a calm sample and never counts it as
+// pressure. A sample whose other sources failed still carries the memory it did read: the pressure there is evidence.
+func TestLocalRecentMarksAFailedMemoryReadAsNoReading(t *testing.T) {
+	level, memErr, cpuErr := 2, false, false
+	swap := uint64(1) << 30
+	src := fakeSources(&level, nil)
+	src.Mem = func() (facts.RawMem, error) {
+		if memErr {
+			return facts.RawMem{}, errors.New("memory source failed")
+		}
+		return facts.RawMem{TotalBytes: 16 << 30, PageSize: 16384, Free: 100000, Inactive: 100000, Level: level, SwapUsedBytes: &swap}, nil
+	}
+	cpu := src.CPU
+	src.CPU = func() (facts.RawCPU, error) {
+		if cpuErr {
+			return facts.RawCPU{}, errors.New("cpu source failed")
+		}
+		return cpu()
+	}
+	s := NewSampler(SamplerOptions{HostID: "h1", Alias: "mlab", OSVersion: "26.6.2", Sources: src, Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true})
+	s.Tick(s0)
+	cpuErr = true // the cpu source fails, memory is read
+	s.Tick(s0.Add(5 * time.Second))
+	cpuErr, memErr = false, true // the memory source fails
+	s.Tick(s0.Add(10 * time.Second))
+	got := s.LocalRecent(s0)
+	if len(got) != 3 {
+		t.Fatalf("%d samples, want all three (a hole is a sample with no reading, not a missing one)", len(got))
+	}
+	for i, wantRead := range []bool{true, true, false} {
+		m := got[i].Mem
+		if read := m.TotalMB > 0; read != wantRead {
+			t.Errorf("sample %d: memory read = %v (total %d), want %v", i, read, m.TotalMB, wantRead)
+		}
+		if !wantRead && (m.Pressure != 0 || m.SwapUsedMB != nil || m.PSI != nil) {
+			t.Errorf("sample %d: a failed memory read carries readings: %+v", i, m)
+		}
+		if wantRead && m.Pressure != 2 {
+			t.Errorf("sample %d: pressure %d, want 2 (its memory was read)", i, m.Pressure)
+		}
 	}
 }
