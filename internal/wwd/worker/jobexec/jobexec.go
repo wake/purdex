@@ -198,7 +198,7 @@ func (e *Exec) Prepare(ctx context.Context, ref ident.Ref, job wire.Job, ws snap
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return runner.Plan{}, err
 	}
-	p, err := remotejob.PrepareAt(job, ws.Dir, out, e.cfg.Host)
+	p, err := remotejob.PrepareAt(job, ws.Dir, out, e.cfg.Host, ref.Source)
 	if err != nil {
 		var rej *remotejob.Rejection
 		if errors.As(err, &rej) {

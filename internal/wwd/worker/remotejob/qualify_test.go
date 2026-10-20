@@ -14,6 +14,7 @@ run    = "make tsc"
 args   = "none"
 labels = ["os:darwin", "arch:arm64", "tool:node", "task:purdex/tsc"]
 locks  = ["db"]
+qualify = { args = [], reference = "air26" }
 `
 
 // half makes the job the coordinator queues for one half of a pair, as the origin would have sent it.
@@ -44,7 +45,7 @@ func otherRole(r string) string {
 func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 	root := snapshot(t, qualifyTasks)
 	for _, c := range []struct{ role, host string }{{labels.RoleReference, "air26"}, {labels.RoleCandidate, "mserv"}} {
-		if _, err := PrepareAt(half(c.role, c.host, nil), root, t.TempDir(), c.host); err != nil {
+		if _, err := PrepareAt(half(c.role, c.host, nil), root, t.TempDir(), c.host, "mserv"); err != nil {
 			t.Errorf("%s half on %s: %v", c.role, c.host, err)
 		}
 	}
@@ -63,16 +64,16 @@ func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 			"candidate of the key is not the submitter's host": func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("elsewhere", "task:purdex/tsc", role) },
 			"foreign task label":                               func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("mserv", "task:purdex/other", role) },
 		} {
-			p, err := PrepareAt(half(role, "air26", f), root, t.TempDir(), "air26")
+			p, err := PrepareAt(half(role, "air26", f), root, t.TempDir(), "air26", "mserv")
 			if p != nil || code(t, err) != CodeMetaMismatch {
 				t.Errorf("%s, %s: %v, %v", role, name, p, err)
 			}
 		}
 		// a half that runs on a host other than the one named in its labels
-		if _, err := PrepareAt(half(role, "air26", nil), root, t.TempDir(), "mserv"); code(t, err) != CodeMetaMismatch {
+		if _, err := PrepareAt(half(role, "air26", nil), root, t.TempDir(), "mserv", "mserv"); code(t, err) != CodeMetaMismatch {
 			t.Errorf("%s half for another host: %v", role, err)
 		}
-		if _, err := PrepareAt(half(role, "air26", nil), root, t.TempDir(), ""); code(t, err) != CodeMetaMismatch {
+		if _, err := PrepareAt(half(role, "air26", nil), root, t.TempDir(), "", "mserv"); code(t, err) != CodeMetaMismatch {
 			t.Errorf("%s half where the worker has no name: %v", role, err)
 		}
 	}
@@ -82,11 +83,15 @@ func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 func TestAQualifyHalfOfACandidateWithAColonInItsAlias(t *testing.T) {
 	root := snapshot(t, qualifyTasks)
 	for _, role := range []string{labels.RoleReference, labels.RoleCandidate} {
-		j := half(role, "air26", func(j *wire.Job) {
+		host := "air26" // the reference host of the task; the candidate runs on its own host
+		if role == labels.RoleCandidate {
+			host = "rack:a"
+		}
+		j := half(role, host, func(j *wire.Job) {
 			j.SupersedeKey = labels.QualifyKey("rack:a", "task:purdex/tsc", role)
 			j.Submitter.Host = "rack:a"
 		})
-		if _, err := PrepareAt(j, root, t.TempDir(), "air26"); err != nil {
+		if _, err := PrepareAt(j, root, t.TempDir(), host, "rack:a"); err != nil {
 			t.Errorf("%s: %v", role, err)
 		}
 	}
@@ -98,7 +103,7 @@ func TestAWorkerWithoutANameAcceptsNoHalf(t *testing.T) {
 	j := half(labels.RoleReference, "", func(j *wire.Job) {
 		j.Labels = labels.QualifyHalfLabels([]string{"os:darwin", "arch:arm64", "tool:node", "task:purdex/tsc"}, "task:purdex/tsc", labels.RoleReference, "")
 	})
-	if _, err := PrepareAt(j, root, t.TempDir(), ""); code(t, err) != CodeMetaMismatch {
+	if _, err := PrepareAt(j, root, t.TempDir(), "", "mserv"); code(t, err) != CodeMetaMismatch {
 		t.Errorf("%v", err)
 	}
 }
@@ -112,14 +117,14 @@ func TestOnlyTheSessionAndTheKeyTogetherMakeAQualifyHalf(t *testing.T) {
 		"key only":     func(j *wire.Job) { j.Submitter.Session = "someone" },
 		"neither":      func(j *wire.Job) { j.SupersedeKey, j.Submitter.Session = "", "" },
 	} {
-		if p, err := PrepareAt(half(labels.RoleReference, "air26", f), root, t.TempDir(), "air26"); p != nil || code(t, err) != CodeMetaMismatch {
+		if p, err := PrepareAt(half(labels.RoleReference, "air26", f), root, t.TempDir(), "air26", "mserv"); p != nil || code(t, err) != CodeMetaMismatch {
 			t.Errorf("%s: %v, %v", name, p, err)
 		}
 	}
 	// and an ordinary job with the task's own metadata is as before
 	j := jobOf("tsc", wire.ClassDev)
 	j.Labels, j.Locks = []string{"os:darwin", "arch:arm64", "tool:node", "task:purdex/tsc"}, []string{"db"}
-	if _, err := PrepareAt(j, root, t.TempDir(), "air26"); err != nil {
+	if _, err := PrepareAt(j, root, t.TempDir(), "air26", "mserv"); err != nil {
 		t.Errorf("an ordinary job: %v", err)
 	}
 }

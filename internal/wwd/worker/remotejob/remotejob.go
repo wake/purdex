@@ -76,11 +76,12 @@ type Plan struct {
 // Prepare checks job against the manifest in the snapshot at root and renders its command. out is a directory the run may write
 // its report and junit files in ({report}, {junit}); it must be inside the worker's own workspace. A *Rejection says why a job does
 // not fit; any other error is the worker's own trouble (it is not a fault of the job).
-func Prepare(job wire.Job, root, out string) (*Plan, error) { return PrepareAt(job, root, out, "") }
+func Prepare(job wire.Job, root, out string) (*Plan, error) { return PrepareAt(job, root, out, "", "") }
 
 // PrepareAt is Prepare on the worker whose own name (its host alias) is host: a job that is a half of a qualification pair is checked against
-// the metadata worked out for it to run on that host (halfMismatch). "" names no host, and then no such half is accepted.
-func PrepareAt(job wire.Job, root, out, host string) (*Plan, error) {
+// the metadata worked out for it to run on that host (halfMismatch). source is the worker's own name for the host it claimed the job from
+// (ident.Ref.Source). "" for either names nothing, and then no such half is accepted.
+func PrepareAt(job wire.Job, root, out, host, source string) (*Plan, error) {
 	if job.AdHoc {
 		return nil, reject(CodeNotRemote, "job %s is ad-hoc", job.ID)
 	}
@@ -107,7 +108,7 @@ func PrepareAt(job wire.Job, root, out, host string) (*Plan, error) {
 	}
 	// What the job carries about how it is run must be what the snapshot's task says: the origin copied it at submit, and a worker
 	// that took the job for its labels or its locks must not find them changed in the job it runs.
-	if what := metaMismatch(job, task, host); what != "" {
+	if what := metaMismatch(job, task, host, source); what != "" {
 		return nil, reject(CodeMetaMismatch, "%s of job %s is not task %s's own", what, job.ID, task.Name)
 	}
 	if err := checkEnv(job.ID, out, task.Env); err != nil {
@@ -133,12 +134,12 @@ func PrepareAt(job wire.Job, root, out, host string) (*Plan, error) {
 
 // metaMismatch names the first field of the job that is not the task's own ("" when all are): labels and locks as sets, cacheable and
 // interruptible as they are.
-func metaMismatch(job wire.Job, task *manifest.Task, host string) string {
+func metaMismatch(job wire.Job, task *manifest.Task, host, source string) string {
 	if job.Submitter.Session == labels.QualifySession {
 		// the key is rebuilt from the job's own submitter host and the snapshot task's label, never parsed (an alias may hold a colon)
 		own := labels.TaskLabel(job.Repo.Name, task.Name)
 		if role, ok := labels.QualifyRole(job.SupersedeKey, job.Submitter.Host, own); ok {
-			return halfMismatch(job, task, host, own, role)
+			return halfMismatch(job, task, host, source, own, role)
 		}
 	}
 	switch {
@@ -158,11 +159,19 @@ func metaMismatch(job wire.Job, task *manifest.Task, host string) string {
 // changes the half's metadata on purpose, so the expectation is worked out from the snapshot's task by the coordinator's own rule
 // (labels.QualifyHalfLabels): the task's labels as the role takes them plus host:<this worker>, the task's locks, dev class, not
 // cacheable, interruptible. The key's task label must be the snapshot task's own, so a half cannot name another label to be stripped
-// from the candidate's set, and the host must be this worker's: a half is never run for a host it was not worked out for.
-func halfMismatch(job wire.Job, task *manifest.Task, host, own, role string) string {
+// from the candidate's set, and the host must be this worker's: a half is never run for a host it was not worked out for. It must also have been claimed from the host it names as submitter, the task must declare a qualification, and the host must be the candidate (submitter) or the task's reference host by role.
+func halfMismatch(job wire.Job, task *manifest.Task, host, source, own, role string) string {
 	switch {
 	case host == "":
 		return "host (this worker has no name)"
+	case source == "" || source != job.Submitter.Host:
+		return "submitter (the job was not claimed from the host it says it comes from)"
+	case task.Qualify == nil:
+		return "qualify (the task has no qualification)"
+	case role == labels.RoleCandidate && host != job.Submitter.Host:
+		return "host (a candidate half runs on the candidate host)"
+	case role == labels.RoleReference && host != task.Qualify.Reference:
+		return "host (a reference half runs on the task's reference host)"
 	case !sameSet(job.Labels, labels.QualifyHalfLabels(task.Labels, own, role, host)):
 		return "labels"
 	case !sameSet(job.Locks, task.Locks):
