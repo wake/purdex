@@ -11,13 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/run"
 )
 
 func TestDirectRunsTheCommandAndReportsItsExit(t *testing.T) {
 	var out, errb bytes.Buffer
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "echo hi; echo oops >&2; exit 3"}, Stdout: &out, Stderr: &errb})
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"sh", "-c", "echo hi; echo oops >&2; exit 3"}, Stdout: &out, Stderr: &errb})
 	if err != nil || code != 3 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
@@ -28,12 +27,12 @@ func TestDirectRunsTheCommandAndReportsItsExit(t *testing.T) {
 
 func TestDirectPrintsTheAdmittedMarkFirstAndHidesTheNonceFromTheCommand(t *testing.T) {
 	var out, errb bytes.Buffer
-	env := []string{"PATH=/usr/bin:/bin", gate.AdmittedMarkEnv + "=n0nce"}
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "echo seen=${" + gate.AdmittedMarkEnv + "-none}; echo late >&2"}, Env: env, Stdout: &out, Stderr: &errb})
+	env := []string{"PATH=/usr/bin:/bin", AdmittedMarkEnv + "=n0nce"}
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"sh", "-c", "echo seen=${" + AdmittedMarkEnv + "-none}; echo late >&2"}, Env: env, Stdout: &out, Stderr: &errb})
 	if err != nil || code != 0 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
-	if !strings.HasPrefix(errb.String(), gate.AdmittedMark("n0nce")+"late") {
+	if !strings.HasPrefix(errb.String(), AdmittedMark("n0nce")+"late") {
 		t.Fatalf("stderr %q: the mark must come before the command's output", errb.String())
 	}
 	if out.String() != "seen=none\n" {
@@ -43,7 +42,7 @@ func TestDirectPrintsTheAdmittedMarkFirstAndHidesTheNonceFromTheCommand(t *testi
 
 func TestDirectAMissingCommandIs127(t *testing.T) {
 	var errb bytes.Buffer
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"definitely-not-a-command-xyz"}, Stderr: &errb})
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"definitely-not-a-command-xyz"}, Stderr: &errb})
 	if err == nil || code != 127 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
@@ -51,11 +50,11 @@ func TestDirectAMissingCommandIs127(t *testing.T) {
 
 func TestDirectAnUnexecutableCommandIs126WithTheNotStartedMark(t *testing.T) {
 	var errb bytes.Buffer
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"hosts"}, Real: "/etc/hosts", Env: []string{gate.AdmittedMarkEnv + "=x"}, Stderr: &errb})
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"hosts"}, Real: "/etc/hosts", Env: []string{AdmittedMarkEnv + "=x"}, Stderr: &errb})
 	if err == nil || code != 126 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
-	if want := gate.AdmittedMark("x") + gate.NotStartedMark("x"); errb.String() != want {
+	if want := AdmittedMark("x") + NotStartedMark("x"); errb.String() != want {
 		t.Fatalf("stderr %q, want %q", errb.String(), want)
 	}
 }
@@ -64,7 +63,7 @@ func TestDirectStopsTheWholeGroupWhenTheContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	start := time.Now()
 	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
-	code, err := Direct{}.Run(ctx, gate.Options{Argv: []string{"sh", "-c", "sleep 30 & sleep 30"}, Stdin: strings.NewReader("")})
+	code, err := Direct{}.Run(ctx, Options{Argv: []string{"sh", "-c", "sleep 30 & sleep 30"}, Stdin: strings.NewReader("")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +77,7 @@ func TestDirectStopsTheWholeGroupWhenTheContextEnds(t *testing.T) {
 
 func TestDirectGivesTheCommandTheStdinItIsGiven(t *testing.T) {
 	var out bytes.Buffer
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"cat"}, Stdin: strings.NewReader("typed\n"), Stdout: &out})
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"cat"}, Stdin: strings.NewReader("typed\n"), Stdout: &out})
 	if err != nil || code != 0 || out.String() != "typed\n" {
 		t.Fatalf("code %d, err %v, out %q", code, err, out.String())
 	}
@@ -112,7 +111,7 @@ func TestDirectEndsWhatLeftTheGroupButKeptTheJobMark(t *testing.T) {
 	var errb bytes.Buffer
 	env := []string{"PATH=/usr/bin:/bin", run.MarkEnv + "=j_mark"}
 	code, err := Direct{Procs: fakeProcs{pids: []int{esc.Process.Pid}}}.Run(context.Background(),
-		gate.Options{Argv: []string{"true"}, Env: env, Stdin: strings.NewReader(""), Stderr: &errb})
+		Options{Argv: []string{"true"}, Env: env, Stdin: strings.NewReader(""), Stderr: &errb})
 	if err != nil || code != 0 {
 		t.Fatalf("code %d, err %v", code, err)
 	}
@@ -138,7 +137,7 @@ func TestDirectTellsASweepThatFailedAndDoesNotClaimItCleared(t *testing.T) {
 	for _, procs := range []failingProcs{{err: errors.New("sysctl: boom")}, {found: []int{os.Getpid() + 100000}, err: errors.New("second look failed")}} {
 		var errb bytes.Buffer
 		env := []string{"PATH=/usr/bin:/bin", run.MarkEnv + "=j_fail"}
-		code, err := Direct{Procs: procs}.Run(context.Background(), gate.Options{Argv: []string{"true"}, Env: env, Stdin: strings.NewReader(""), Stderr: &errb})
+		code, err := Direct{Procs: procs}.Run(context.Background(), Options{Argv: []string{"true"}, Env: env, Stdin: strings.NewReader(""), Stderr: &errb})
 		if err != nil || code != 0 {
 			t.Fatalf("code %d, err %v", code, err)
 		}
@@ -157,7 +156,7 @@ func TestDirectAtATerminalLeavesAnUnrecordedRunUnmarkedAndUnswept(t *testing.T) 
 	var out bytes.Buffer
 	scanned := false
 	code, err := Direct{Procs: probeProcs(func() { scanned = true })}.Run(context.Background(),
-		gate.Options{Argv: []string{"sh", "-c", `echo "mark=${` + run.MarkEnv + `-none}"`}, Env: []string{"PATH=/usr/bin:/bin"}, Stdout: &out})
+		Options{Argv: []string{"sh", "-c", `echo "mark=${` + run.MarkEnv + `-none}"`}, Env: []string{"PATH=/usr/bin:/bin"}, Stdout: &out})
 	if err != nil || code != 0 || scanned {
 		t.Fatalf("code %d, err %v, scanned %v", code, err, scanned)
 	}
@@ -169,7 +168,7 @@ func TestDirectAtATerminalLeavesAnUnrecordedRunUnmarkedAndUnswept(t *testing.T) 
 
 func TestDirectWithoutAMarkSweepsNothing(t *testing.T) {
 	called := false
-	code, err := Direct{Procs: probeProcs(func() { called = true })}.Run(context.Background(), gate.Options{Argv: []string{"true"}, Stdin: strings.NewReader("")})
+	code, err := Direct{Procs: probeProcs(func() { called = true })}.Run(context.Background(), Options{Argv: []string{"true"}, Stdin: strings.NewReader("")})
 	if err != nil || code != 0 || called {
 		t.Fatalf("code %d, err %v, the table was read: %v", code, err, called)
 	}
@@ -182,7 +181,7 @@ func (p probeProcs) JobProcesses(_, _ string) ([]int, error) { p(); return nil, 
 func TestDirectClearsWhatTheCommandLeftRunning(t *testing.T) {
 	var out bytes.Buffer
 	// the command prints the pid of a background sleep and exits at once
-	code, err := Direct{}.Run(context.Background(), gate.Options{Argv: []string{"sh", "-c", "sleep 30 & echo $!"}, Stdout: &out, Stdin: strings.NewReader("")})
+	code, err := Direct{}.Run(context.Background(), Options{Argv: []string{"sh", "-c", "sleep 30 & echo $!"}, Stdout: &out, Stdin: strings.NewReader("")})
 	if err != nil || code != 0 {
 		t.Fatalf("code %d, err %v", code, err)
 	}

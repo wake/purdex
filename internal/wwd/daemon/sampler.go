@@ -95,11 +95,16 @@ type Sampler struct {
 	signals []localSignal
 }
 
-// localSignal is one sample's compressor size and decompress rate, as read (nil: not read).
+// localSignal is one sample's readings this host's own alert rules judge by, as read (nil: not read): the compressor size and decompress
+// rate (thrash), and for the watcher's pressure rules (S3-2) the pressure level, the PSI (Linux), the swap in use and the RAM total.
 type localSignal struct {
 	at           time.Time
 	compressorMB *int
 	rate         *float64
+	pressure     int // Mem.Pressure as the record has it (0: unknown)
+	psi          *wire.PSI
+	swapUsedMB   *int
+	totalMB      int
 }
 
 // maxUnsaved bounds the minutes kept for retry: a day, the in-memory depth.
@@ -136,7 +141,8 @@ func (s *Sampler) Tick(now time.Time) {
 	f.V, f.HostID, f.Alias, f.OSVersion = wire.WriteProto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
-	local := localSignal{at: now, compressorMB: f.Mem.CompressorMB, rate: f.Mem.DecompressRate} // before the gate below drops the rate
+	local := localSignal{at: now, compressorMB: f.Mem.CompressorMB, rate: f.Mem.DecompressRate, // before the gate below drops the rate
+		pressure: f.Mem.Pressure, psi: copyPSI(f.Mem.PSI), swapUsedMB: copyInt(f.Mem.SwapUsedMB), totalMB: f.Mem.TotalMB}
 	// The proto 2 fields: written only while every pool host reads them (the gate), else the record is the v1 shape and the
 	// readings are dropped here, before the record reaches the ring, the minute rollups, the store or the event stream.
 	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
@@ -258,9 +264,31 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 }
 
+// copyPSI and copyInt copy a reading so a stored sample never shares memory with a record, or with what LocalRecent hands out.
+func copyPSI(p *wire.PSI) *wire.PSI {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func copyInt(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 // LocalRecent is the samples at or after since (oldest first) as this host's own alert rules judge them: the compressor size and the
-// decompress rate as read, whether or not the proto 2 gate lets the rate into the records others see. A record here carries only At,
-// Platform and those two memory fields; it is for in-process rules and must not be served, stored or sent.
+// decompress rate as read, whether or not the proto 2 gate lets the rate into the records others see, and the pressure level, PSI, swap in
+// use and RAM total the watcher's pressure rules judge by. A record here carries only At, Platform and those memory fields; it is for
+// in-process rules and must not be served, stored or sent.
+//
+// A sample whose memory source failed is still in the list, as a sample with **no reading**: Mem.TotalMB is 0 (a successful read always has a
+// total), Pressure is 0 and the swap and PSI are nil. A rule treats it as a hole, never as calm and never as pressure. A sample whose other
+// sources failed but whose memory was read carries that memory: its pressure is evidence.
 func (s *Sampler) LocalRecent(since time.Time) []wire.Facts {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -278,6 +306,8 @@ func (s *Sampler) LocalRecent(since time.Time) []wire.Facts {
 			v := *g.rate
 			f.Mem.DecompressRate = &v
 		}
+		f.Mem.Pressure, f.Mem.TotalMB = g.pressure, g.totalMB
+		f.Mem.PSI, f.Mem.SwapUsedMB = copyPSI(g.psi), copyInt(g.swapUsedMB)
 		out = append(out, f)
 	}
 	return out

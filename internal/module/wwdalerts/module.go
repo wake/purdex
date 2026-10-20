@@ -570,6 +570,10 @@ func (m *Module) handle(host string, alerts []wire.Alert) {
 			}
 		case wire.AlertPush:
 			m.pushIfDue(host, a, now)
+		case wire.AlertWatch:
+			// for the watcher alone: neither pushed nor gathered here (the wake of the watcher is its own path)
+		default:
+			// a level of a newer wwd: told to nobody, rather than guessed to be a push
 		}
 	}
 	if err := m.store.forgetExcept(host, keys); err != nil {

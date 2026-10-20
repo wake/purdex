@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/fastlane"
 	"github.com/wake/purdex/internal/wwd/snapshot"
@@ -73,7 +72,7 @@ func TestAnAdHocCommandRunsHereUnderAHeavySlotWithItsWordsAsTheArgvAndNoManifest
 	if code != 0 || g.calls != 1 || api.submitted != 0 {
 		t.Fatalf("code %d gate %d submitted %d\n%s", code, g.calls, api.submitted, out)
 	}
-	if g.last.Class != gate.ClassHeavy || !reflect.DeepEqual(g.last.Argv, []string{"go", "vet", "./..."}) {
+	if g.last.Class != fastlane.ClassHeavy || !reflect.DeepEqual(g.last.Argv, []string{"go", "vet", "./..."}) {
 		t.Fatalf("gate got class %q argv %q", g.last.Class, g.last.Argv)
 	}
 	if len(rec.bodies) != 1 || !rec.bodies[0].AdHoc || rec.bodies[0].Task != "adhoc" || rec.bodies[0].Cacheable || len(rec.bodies[0].Locks) != 0 {
