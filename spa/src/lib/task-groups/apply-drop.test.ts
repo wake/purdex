@@ -80,6 +80,21 @@ describe('applyGroupDrop', () => {
     expect(fileSession).not.toHaveBeenCalled()
   })
 
+  it('a tab that became a session (same group) or moved to another group meanwhile is not written from the drag-start picture', () => {
+    const a = mk('a')
+    useTabStore.getState().addTab(a)
+    const ref = { hostId: 'h', agentSessionId: 's', tabId: a.id }
+    const target = { kind: 'target' as const, target: { kind: 'group' as const, groupId: 'aaaaaaaa' } }
+    // it was a plain tab when the drag began, a session now: it is neither written as plain nor filed from the old kind
+    applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'plain' }, target, { ctx: ctx(), sessionOf: () => ref, onResult: vi.fn() })
+    expect(useTabStore.getState().tabs[a.id].group).toBeUndefined()
+    expect(fileSession).not.toHaveBeenCalled()
+    // a session that was in 「未分組」 when the drag began and is in the group now
+    useTabStore.getState().setTabGroup(a.id, G)
+    applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'session' }, target, { ctx: ctx(), sessionOf: () => ref, onResult: vi.fn() })
+    expect(fileSession).not.toHaveBeenCalled()
+  })
+
   it('a drop on a row of its own group reorders by rank', () => {
     const a = mk('a')
     const b = mk('b')
