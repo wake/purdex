@@ -51,6 +51,7 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import type { Workspace } from '../../types/tab'
@@ -119,6 +120,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, SettingsStore> = {
   'purdex-worker-settings': useWorkerSettingsStore,
   'purdex-quick-reply-prefs': useQuickReplyPrefsStore,
   'purdex-task-groups': useManualGroupsStore,
+  'purdex-pool-hosts': usePoolHostsStore,
 }
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_STORES) as SettingsStorageKey[]

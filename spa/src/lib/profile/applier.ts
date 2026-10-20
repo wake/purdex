@@ -373,7 +373,7 @@ function scopeToMaster(current: unknown, sent: unknown, masterWorkspaceIds: Read
 }
 
 /** Stores added after the first ordinal: a payload without their entry came from an older client and CLEARS them (task groups spec §4.1). */
-const CLEARED_WHEN_ABSENT: ReadonlySet<SettingsStorageKey> = new Set<SettingsStorageKey>(['purdex-task-groups'])
+const CLEARED_WHEN_ABSENT: ReadonlySet<SettingsStorageKey> = new Set<SettingsStorageKey>(['purdex-task-groups', 'purdex-pool-hosts'])
 
 /**
  * Per store, the listed fields whose incoming value differs from the local one.

@@ -96,6 +96,9 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // The manual task groups (task groups spec §4.1): the sidebar order and the definitions. Each member's `host` is a LOCAL id in the store and a WIRE id
     // here: the builder translates, de-duplicates and sorts the members, `settingsFromWire` translates back.
     ...settingsPaths('purdex-task-groups', ['order', 'groups']),
+    // The monitoring tabs' pool hosts (monitoring tabs spec A3): the sidebar / tab order and each host's look, both keyed by the wwd `host_id` — the same
+    // on every device, so no local↔wire translation (nothing in sections.ts / applier.ts touches it); the store's `merge` sanitises what arrives.
+    ...settingsPaths('purdex-pool-hosts', ['order', 'looks']),
     // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eleven
     // stores, not thirteen. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
@@ -146,7 +149,10 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   //12: purdex-task-groups.{order,groups} (task groups spec §4.1, TG-1a-1) — a projection change, so the fingerprint moves by itself (no marker).
   //    An ordinal-11 payload has no such store: applying it CLEARS the store (apply-to-stores / applier `CLEARED_WHEN_ABSENT`); the executor only lands an
   //    older-shape payload on a clean local settings section, so nothing local is lost.
-  settings: 12,
+  //13: purdex-pool-hosts.{order,looks} (monitoring tabs spec A3, MON-2a) — a projection change, so the fingerprint moves by itself (no marker).
+  //    An ordinal-12 payload has no such store: applying it CLEARS the store (applier `CLEARED_WHEN_ABSENT`); the executor only lands an
+  //    older-shape payload on a clean local settings section, so nothing local is lost.
+  settings: 13,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
