@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.767] - 2026-10-20
+
+> daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 766 相同。資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
+>
+> **主機設定**：mlab 的 wwd 設定 `[worker] gocache_max_mb` 改為 6144（原本用預設 10240）。wwd 的 go 任務有自己一份 Go 建置快取，超過上限且沒有 job 在用時會整份清空；mlab 磁碟偏緊，先把上限降低。改成依「多久沒用」修剪另由 #3748 處理。
+>
+> **worker**：部署時各台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；mserv、air19 仍關著。
+
+### Fixed：wwd 的工作目錄與紀錄
+
+- **clone 缺 base 時先 fetch 一次（#3738，#3730）**：job 的 base 是 clone 上次 fetch 之後才推上來的 commit 時（例如發版閘門在推送後幾秒就開跑），worker 先對 clone 的 origin fetch 一次（最多 30 秒），以 base 是否已在 clone 裡為準；不再直接退回 tar，所以同一個任務的工作目錄不會因為開跑的時間點不同，時而有 `.git`、時而沒有。
+- **本機快速通道記實際的工作目錄（#3742，#3735）**：`pdx test` 在本機快速通道跑的 job，紀錄的 `snapshot.tree` 改成登記當下工作目錄的 tree（乾淨時等於 HEAD 的 tree），以前一律記 HEAD 的；等過鎖或名額的 run 在開始時重算。算不出來時 tree 留空，原因寫在報告的 notes。submodule 內未提交的改動目前不在 tree 裡（#3743）；每次約多 0.5 秒（#3745 會降低）。
+
+### Fixed：未宣告指令清單
+
+- **看穿閘門 shim 的 `pdx gate`（#3746）**：被閘門接手的重指令，以前在清單上一律顯示成 `pdx gate`；現在 signature 取 `pdx gate [旗標] -- <指令>` 裡的指令（例如 `go test`），查詢用的子命令（`would-wait` 等）不解包。另修正 `eval` 裡 `bash -c "…"` 的腳本被當成引號片語的問題。
+
+### Changed：B 線任務編組檢視
+
+- **上方分頁列只在目前群組內（#3741，TG-4a）**：分頁列、⌘1–9、上一個／下一個分頁都只在目前選的群組裡動；關掉一個分頁後顯示同群組的下一個。
+- **分頁列照群組排列（#3744，TG-4b）**：lead 在最前，接著是各成員和它的分頁，最後是一般分頁；不再畫 team 框，收合的 team 也列出全部分頁，空群組會顯示提示。
+- **分頁列可以拖曳（#3750，TG-4c）**：任務編組檢視的上方分頁列恢復拖曳。
+
+### Docs
+
+- **wwd 主機指標補齊的 spec 與 plan（#3747）**：G 項（series 帶出現有欄位、CPU 細項、磁碟 IO、行程總數等），實作進行中。
+
 ## [1.0.0-alpha.766] - 2026-10-20
 
 > daemon、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 765 相同。
