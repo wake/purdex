@@ -30,7 +30,7 @@ run       = "pnpm vitest related --run --reporter=json --outputFile={report} {fi
 cwd       = "spa"
 args      = "files"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex", "tool:node24", "tool:pnpm10"]
+labels    = ["repo:purdex", "task:purdex/spa-related", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
