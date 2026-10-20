@@ -109,11 +109,15 @@ describe('addresses (TG-5b)', () => {
     expect(addressOf('h1', 'nope')).toBeNull()
   })
 
-  it('an empty address is not stored, and a changed one replaces the old', () => {
+  it('an empty address is not stored; a listed row with an empty one forgets the old, and a new one replaces it', () => {
     useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: '' }])
     expect(addressOf('h1', 'S1')).toBeNull()
     useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: 'mlab/new-name' }])
     expect(addressOf('h1', 'S1')).toBe('mlab/new-name')
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: '' }])
+    expect(addressOf('h1', 'S1')).toBeNull()
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), address: 'mlab/again' }])
+    expect(addressOf('h1', 'S1')).toBe('mlab/again')
   })
 
   it('keeps the pdx title the row carried, beside the address, and forgets it with the host', () => {
