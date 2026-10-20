@@ -11,7 +11,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { usePoolStore } from '../../lib/pool/store'
 import { clearZoneMemory } from '../../lib/pool/history'
 import { fleetHistory } from '../../lib/fleet/history'
-import { clearViewMemory, writeHostPage } from '../../lib/watch/view-memory'
+import { clearViewMemory, writeHostTab } from '../../lib/watch/view-memory'
 import { fast, host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
 import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
@@ -80,7 +80,7 @@ describe('WatchHostPane — the 工作 section', () => {
 
   it('the settings page has none', async () => {
     load([host('d-a', { alias: 'air26', fast: fast({ cpu: 1, zone: 'normal' }) })]); fetchPoolHosts.mockResolvedValue([ph()])
-    writeHostPage('d-a', 'settings')
+    writeHostTab('d-a', 'settings')
     await renderPane()
     expect(screen.queryByTestId('host-jobs')).toBeNull()
   })

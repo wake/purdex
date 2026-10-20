@@ -4,7 +4,7 @@ import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { WatchHostPane } from './WatchHostPane'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
-import { clearViewMemory, readRange } from '../../lib/watch/view-memory'
+import { clearViewMemory, readHostRange } from '../../lib/watch/view-memory'
 import { useHostStore } from '../../stores/useHostStore'
 import { fast, host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -62,8 +62,8 @@ describe('WatchHostPane — 資源', () => {
     fireEvent.click(sw.getByRole('button', { name: t('watch.host.range.6h') }))
     expect(screen.getByRole('button', { name: t('watch.host.resources', { range: t('watch.host.range.6h') }) })).toBeInTheDocument()
     expect(screen.getByTestId('axis')).toHaveTextContent(t('watch.host.axis_hour', { n: 6 }))
-    expect(readRange('d-a')).toBe('6h')
-    expect(readRange('other')).toBe('5m')
+    expect(readHostRange('d-a')).toBe('6h')
+    expect(readHostRange('other')).toBe('30m')
   })
 
   it('has no 狀態｜設定 switch yet', () => {

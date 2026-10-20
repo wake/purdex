@@ -771,7 +771,6 @@
   "watch.set.source_set": "Set",
   "watch.set.source_default": "Default",
   "watch.set.targets_differ": "The two daemons' notify-and-open orders differ; each watcher follows its own host's setting. Consider making them the same.",
-  "watch.set.probe_note": "A host without a daemon: the primary observes it over SSH; it has no resource control and no watcher settings.",
   "watch.set.held": "Another probe host (\"{{name}}\") has unsaved changes, so editing is not opened here.",
   "watch.set.held_goto": "Go to {{name}}",
   "watch.set.stale": "This field was updated on the host; what you typed is kept.",

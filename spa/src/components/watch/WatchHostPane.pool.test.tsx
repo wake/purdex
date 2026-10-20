@@ -10,7 +10,7 @@ import { usePoolStore } from '../../lib/pool/store'
 import { PoolReadError } from '../../lib/pool/api'
 import { clearZoneMemory, readHistoryLoad, readZones } from '../../lib/pool/history'
 import { fleetHistory } from '../../lib/fleet/history'
-import { clearViewMemory, writeRange } from '../../lib/watch/view-memory'
+import { clearViewMemory, writeHostRange } from '../../lib/watch/view-memory'
 import { fast, host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
 import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
@@ -72,7 +72,7 @@ afterEach(() => { usePoolStore.getState().stop(); vi.useRealTimers() })
 describe('WatchHostPane for a content that carries poolHostId (MON-6a-1)', () => {
   it('draws the fleet host matching that pool host (by alias here) and keeps its view memory under the host_id', async () => {
     load([host('d-a', { alias: 'air26', fast: fast({ cpu: 1, zone: 'normal' }) })]); fetchPoolHosts.mockResolvedValue([ph({ host_id: 'wh-1' })])
-    writeRange('wh-1', '6h') // remembered under the host_id: the 5 minute history is then not read
+    writeHostRange('wh-1', '6h') // remembered under the host_id: the 5 minute history is then not read
     render(<WatchHostPane pane={{ id: 'watch-host-wh-1.p', content: { kind: 'watch-host', poolHostId: 'wh-1' } }} isActive />)
     await flush()
     expect(screen.getByTestId('measure-source')).toBeTruthy()
@@ -214,7 +214,7 @@ describe('WatchHostPane on the pool — the 5 minute history', () => {
   })
 
   it('the longer ranges keep the App\'s own history: nothing is read, no band, no note', async () => {
-    writeRange('d-a', '1h')
+    writeHostRange('d-a', '1h')
     await renderPane()
     expect(fetchFactsHistory).not.toHaveBeenCalled()
     expect(screen.queryByTestId('zone-band')).toBeNull()

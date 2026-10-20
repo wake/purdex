@@ -78,7 +78,7 @@ describe('FleetCells — from the pool only', () => {
     answer([host(A, 'mlab'), host(B, 'mserv')])
     render(<FleetCells variant="wide" />)
     fireEvent.click(screen.getByTestId(`host-tile-${B}`))
-    expect(openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: B, alias: 'mserv' } })
+    expect(openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: B, alias: 'mserv' }, sub: 'monitor' })
   })
 })
 
