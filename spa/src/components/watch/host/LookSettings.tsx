@@ -20,7 +20,7 @@ import { SettingItem } from '../../settings/SettingItem'
 
 const SHAPES: readonly IndicatorShape[] = ['ring', 'bar', 'bars']
 /** M51's default: a ring of the overall load. */
-export const DEFAULT_INDICATOR: PoolHostIndicator = { shape: 'ring', data: ['load'] }
+const DEFAULT_INDICATOR: PoolHostIndicator = { shape: 'ring', data: ['load'] }
 const SELECT = 'px-2 py-1 rounded border border-border-default bg-surface-primary text-xs text-text-primary'
 const BTN = 'px-2 py-1 rounded bg-surface-tertiary text-text-secondary text-xs cursor-pointer'
 const noop = () => {}
