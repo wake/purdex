@@ -18,10 +18,6 @@ import (
 // execstat so every fork is counted.
 type RunFunc func(ctx context.Context, tag, bin string, args ...string) ([]byte, error)
 
-func defaultRun(ctx context.Context, tag, bin string, args ...string) ([]byte, error) {
-	return execstat.CommandContext(ctx, tag, bin, args...).Output()
-}
-
 // ToolsReader reports the toolchain versions (spec §3.1 `tools`). Asking each
 // tool forks, so the answer is cached for TTL (default 10 minutes); a tool that
 // fails to answer keeps its last good value, one that was never found is null.
@@ -41,11 +37,34 @@ type ToolsReader struct {
 	php  map[string]string // phpNN binary -> its last good version
 }
 
+// probeRun is the default RunFunc (through execstat) with PATH set to the probe's own list, so a script such as pnpm (#!/usr/bin/env node) finds its interpreter
+// the way a job does, not only on the daemon's PATH.
+func probeRun(path string) RunFunc {
+	return func(ctx context.Context, tag, bin string, args ...string) ([]byte, error) {
+		cmd := execstat.CommandContext(ctx, tag, bin, args...)
+		cmd.Env = append(withoutPath(os.Environ()), "PATH="+path)
+		return cmd.Output()
+	}
+}
+
+func withoutPath(environ []string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if !strings.HasPrefix(kv, "PATH=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// probePath is the PATH of every probe command: exactly the job PATH (ToolPath).
+func probePath(home, pathEnv string, extra []string) string { return ToolPath(home, pathEnv, extra) }
+
 // NewToolsReader is a reader over this host's usual places.
 // extra is the config's [tools] extra_path after ResolveExtraDirs; the job PATH comes from the same ToolDirs call.
 func NewToolsReader(home, pathEnv string, extra []string) *ToolsReader {
 	return &ToolsReader{
-		Run: defaultRun, Now: time.Now, TTL: 10 * time.Minute,
+		Run: probeRun(probePath(home, pathEnv, extra)), Now: time.Now, TTL: 10 * time.Minute,
 		PathDirs:    ToolDirs(home, pathEnv, extra),
 		PHPDirs:     []string{filepath.Join(home, "Library", "Application Support", "Herd", "bin"), "/opt/homebrew/bin", "/usr/local/bin"},
 		XcodePlists: []string{"/Applications/Xcode.app/Contents/version.plist"},
@@ -99,6 +118,10 @@ func ResolveExtraDirs(home string, entries []string, logf func(format string, ar
 	var out []string
 	for _, e := range entries {
 		p := e
+		if strings.TrimSpace(p) == "" { // Clean("") is ".": the daemon's working directory would lead every PATH
+			logf("wwd: tools.extra_path: skipping an empty entry")
+			continue
+		}
 		if p == "~" || strings.HasPrefix(p, "~/") {
 			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
 		}
