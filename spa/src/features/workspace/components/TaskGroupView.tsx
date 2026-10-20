@@ -196,7 +196,9 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const askDelete = (groupId: string) => {
     const group = groupsById[groupId]
     if (!group) return
-    const holdsTabs = view.some((s) => s.kind === 'manual' && s.groupId === groupId && s.rows.length > 0)
+    // A tab can name the group in its own `group` and still be shown elsewhere (a team seat is placed before it), so the question counts those too: deleting clears their `group`.
+    const key = manualGroupKey(groupId)
+    const holdsTabs = view.some((s) => s.kind === 'manual' && s.groupId === groupId && s.rows.length > 0) || Object.values(tabsById).some((tab) => tab.group === key)
     if (holdsTabs || group.members.length > 0) setDeleting(groupId)
     else done(deleteManualGroup(groupId))
   }

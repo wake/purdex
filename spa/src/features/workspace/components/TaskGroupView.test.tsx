@@ -774,6 +774,18 @@ describe('header menu: rename, colour, delete (task groups spec §6.1, TG-3d)', 
     expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(3)
   })
 
+  it('a team seat is placed before the tab\'s own group, but deleting the group would still clear that tab\'s `group`, so it asks', () => {
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'P', team_label: '', lead: { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'L' }, members: [] } as never])
+    setGroups([{ ...group('g2', []), id: 'g2' }])
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t1: { ...useTabStore.getState().tabs.t1, group: manualGroupKey('g2') } } } as never)
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).queryAllByTestId('inline-tab-row')).toHaveLength(0) // t1 shows under the team
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    expect(screen.getByTestId('task-group-delete-dialog')).toBeInTheDocument()
+    expect(useManualGroupsStore.getState().groups.g2).toBeDefined()
+  })
+
   it('a group with members but no tab asks first too', () => {
     setGroups([group('g1', ['GONE'])])
     mount()

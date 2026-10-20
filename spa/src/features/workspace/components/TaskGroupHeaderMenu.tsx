@@ -1,5 +1,6 @@
 // spa/src/features/workspace/components/TaskGroupHeaderMenu.tsx — the right-click menu of a manual group's header (task groups spec §6.1): rename, colour (the team palette, and the default), 「刪除任務編組」. A plain popup in the
-// style of WorkspaceContextMenu: a backdrop that closes it, Escape closes it, it stays inside the window. The delete asks first when the group holds tabs or members — that question is the caller's (a ConfirmDialog).
+// style of WorkspaceContextMenu: a backdrop that closes it, Escape closes it, it stays inside the window. Keyboard: it takes focus on open (the first item), ArrowUp / ArrowDown / Home / End move among its buttons, Tab stays inside, and
+// closing hands focus back to what had it. The delete asks first when the group holds tabs or members — that question is the caller's (a ConfirmDialog).
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { PencilSimple, Trash } from '@phosphor-icons/react'
 import { TEAM_COLORS } from '../../../components/team/team-display'
@@ -37,10 +38,30 @@ export function TaskGroupHeaderMenu({ position, color, onRename, onColor, onDele
     el.style.top = `${y}px`
   }, [position])
 
+  const buttons = () => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+
+  // take focus on open and give it back on close
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    const before = document.activeElement as HTMLElement | null
+    buttons()[0]?.focus()
+    return () => { if (before && before.isConnected) before.focus() }
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return }
+      const items = buttons()
+      if (items.length === 0) return
+      const at = items.indexOf(document.activeElement as HTMLButtonElement)
+      const move = (to: number) => { e.preventDefault(); items[(to + items.length) % items.length].focus() }
+      if (e.key === 'ArrowDown') move(at + 1)
+      else if (e.key === 'ArrowUp') move(at < 0 ? -1 : at - 1)
+      else if (e.key === 'Home') move(0)
+      else if (e.key === 'End') move(items.length - 1)
+      else if (e.key === 'Tab') move(e.shiftKey ? (at < 0 ? -1 : at - 1) : at + 1) // Tab stays inside the menu
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
   const item = 'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors'

@@ -53,4 +53,42 @@ describe('TaskGroupHeaderMenu', () => {
     fireEvent.mouseDown(screen.getByTestId('task-group-menu-backdrop'))
     expect(p.onClose).toHaveBeenCalledTimes(2)
   })
+
+  it('takes focus on open (the first item), moves with the arrows, Home and End, and Tab stays inside', () => {
+    mount()
+    const items = Array.from(screen.getByTestId('task-group-menu').querySelectorAll('button'))
+    expect(document.activeElement).toBe(items[0])
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[1])
+    fireEvent.keyDown(document.activeElement!, { key: 'End' })
+    expect(document.activeElement).toBe(items[items.length - 1])
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' }) // wraps
+    expect(document.activeElement).toBe(items[0])
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' }) // wraps back
+    expect(document.activeElement).toBe(items[items.length - 1])
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
+    expect(document.activeElement).toBe(items[0])
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(items[items.length - 1])
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' })
+    expect(document.activeElement).toBe(items[0])
+  })
+
+  it('Escape closes only the menu (it does not reach a handler further out), and closing hands focus back', () => {
+    const outer = vi.fn()
+    document.addEventListener('keydown', outer)
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    const p = mount()
+    expect(document.activeElement).not.toBe(opener)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(p.onClose).toHaveBeenCalledTimes(1)
+    expect(outer).not.toHaveBeenCalled()
+    cleanup()
+    expect(document.activeElement).toBe(opener)
+    document.removeEventListener('keydown', outer)
+    opener.remove()
+  })
 })
+
