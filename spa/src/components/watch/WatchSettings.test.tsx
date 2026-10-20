@@ -1,5 +1,5 @@
 // W5c1: the 設定 page of a host tab — the 守門員 section writes the whole `watch` row with its revision, a 409 reloads, a 400 shows the
-// daemon's text and puts the field back, the two daemons' `targets` are compared, offline locks it; a probe host gets the note and F-2a2's editor.
+// daemon's text and puts the field back, the two daemons' `targets` are compared, offline locks it; every host gets the worker settings and the pause list (MON-6f-1: the fleet's probe page is gone).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -17,23 +17,10 @@ vi.mock('@tanstack/react-virtual', () => ({
 vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
   getIconPath: () => 'M0,0L10,10', isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve(),
 }))
-const fetchFleetConfig = vi.fn()
-const fetchSshAliases = vi.fn()
-const putProbeHosts = vi.fn()
-const putFleetRow = vi.fn()
-vi.mock('../../lib/fleet/config-api', () => ({
-  fetchFleetConfig: (...a: unknown[]) => fetchFleetConfig(...a),
-  fetchSshAliases: (...a: unknown[]) => fetchSshAliases(...a),
-  putProbeHosts: (...a: unknown[]) => putProbeHosts(...a),
-  putFleetRow: (...a: unknown[]) => putFleetRow(...a),
-}))
-vi.mock('../../lib/fleet/reread', () => ({ readAllFleets: vi.fn(), readFleetOf: vi.fn() }))
+vi.mock('./WorkerSettings', () => ({ WorkerSettings: ({ alias }: { alias: string }) => <div data-testid="mock-worker-settings">{alias}</div> }))
+vi.mock('./WorkerExceptions', () => ({ WorkerExceptions: ({ alias }: { alias: string }) => <div data-testid="mock-worker-exceptions">{alias}</div> }))
 
 import { WatchSettings } from './WatchSettings'
-import { useFleetConfigStore } from '../../lib/fleet/config-store'
-import { useFleetDraftStore } from '../../lib/fleet/config-draft'
-import { useFleetStore } from '../../lib/fleet/store'
-import type { FleetConfigRead, ProbeRow } from '../../lib/fleet/config-api'
 
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
@@ -62,7 +49,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 const daemonPage = (over: Partial<Parameters<typeof WatchSettings>[0]> = {}) =>
-  render(<WatchSettings kind="daemon" fleetHostId="d-a" hostConfigId="A" offline={false} peerIds={[]} {...over} />)
+  render(<WatchSettings hostId="d-a" hostConfigId="A" offline={false} peerIds={[]} {...over} />)
 const edit = (key: string, value: string) => {
   const el = screen.getByTestId(`watch-set-${key}`)
   fireEvent.change(el, { target: { value } })
@@ -275,80 +262,18 @@ describe('WatchSettings — the 守門員 section', () => {
   })
 })
 
-describe('WatchSettings — a probe host', () => {
-  const ID = 'aaaaaaaa'
-  const nas = (alias: string): ProbeRow => ({ id: ID, name: 'nas', ssh_alias: alias, icon: '', icon_weight: '' })
-  const cfg = (alias: string, revision: number): FleetConfigRead => ({
-    probe: { items: [nas(alias)], revision, dropped: null, invalid: false },
-    fleet: { items: { order: ['air26', 'mlab'], peer_ssh_alias: 'mlab', enabled: true }, revision: 5, dropped: null, invalid: false },
+describe('WatchSettings — every host is a pool host (MON-6f-1)', () => {
+  it('a host with no daemon the App has a config for: the worker settings and the pause list are there, the 守門員 section says unmapped, and no probe editor', () => {
+    daemonPage({ hostConfigId: undefined, poolAlias: 'mserv' })
+    expect(screen.getByTestId('mock-worker-settings')).toHaveTextContent('mserv')
+    expect(screen.getByTestId('mock-worker-exceptions')).toHaveTextContent('mserv')
+    expect(screen.getByTestId('watch-set-unmapped')).toBeInTheDocument()
+    expect(screen.queryByTestId('watch-set-probe')).toBeNull()
+    expect(hostFetch).not.toHaveBeenCalled()
   })
-
-  it('shows the note, then the probe-host editor, which writes both daemons', async () => {
-    for (const f of [fetchFleetConfig, fetchSshAliases, putProbeHosts, putFleetRow]) f.mockReset()
-    const copies: Record<string, FleetConfigRead> = { A: cfg('nas-a', 3), B: cfg('nas-b', 8) }
-    fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
-    fetchSshAliases.mockResolvedValue(['nas-a', 'nas-b'])
-    putProbeHosts.mockResolvedValue(undefined)
-    useFleetConfigStore.getState().reset()
-    useFleetDraftStore.getState().selectProbe(null)
-    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } as never })
-    useFleetStore.getState().reset()
-    useFleetStore.setState({ byHost: { A: { gen: 1, support: 'yes', term: 0 }, B: { gen: 1, support: 'yes', term: 0 } } as never })
-
-    render(<WatchSettings kind="probe" fleetHostId={ID} offline={false} peerIds={[]} />)
-    expect(screen.getByTestId('watch-set-probe')).toHaveTextContent(t('watch.set.probe_note'))
-    const name = await screen.findByTestId('probe-field-name')
-    // The editor alone: no second header (badge and name) and no delete button.
-    expect(screen.queryByTestId('probe-page')).toBeNull()
-    expect(screen.queryByTestId('probe-page-name')).toBeNull()
-    expect(screen.queryByTestId('probe-delete')).toBeNull()
-    fireEvent.change(name, { target: { value: 'nas2' } })
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    expect(putProbeHosts.mock.calls.map((c) => [c[0], c[1][0].name]).sort()).toEqual([['A', 'nas2'], ['B', 'nas2']])
-  })
-
-  describe('another probe host\'s unsaved draft (the Hosts page holds one draft at a time)', () => {
-    const OTHER = 'bbbbbbbb'
-    const row2 = (alias: string): ProbeRow => ({ id: OTHER, name: 'other', ssh_alias: alias, icon: '', icon_weight: '' })
-    beforeEach(() => {
-      for (const f of [fetchFleetConfig, fetchSshAliases, putProbeHosts, putFleetRow]) f.mockReset()
-      const two = (alias: string, rev: number): FleetConfigRead => ({ ...cfg(alias, rev), probe: { items: [nas(alias), row2(alias)], revision: rev, dropped: null, invalid: false } })
-      const copies: Record<string, FleetConfigRead> = { A: two('nas-a', 3), B: two('nas-b', 8) }
-      fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
-      fetchSshAliases.mockResolvedValue(['nas-a', 'nas-b'])
-      useFleetConfigStore.getState().reset()
-      useFleetDraftStore.getState().reset()
-      useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } as never })
-      useFleetStore.getState().reset()
-      useFleetStore.setState({ byHost: { A: { gen: 1, support: 'yes', term: 0 }, B: { gen: 1, support: 'yes', term: 0 } } as never })
-      // The reader has typed into probe host `nas` on the Hosts page and not saved.
-      const entry = { id: ID, name: 'nas', icon: '', icon_weight: '', aliases: { A: 'nas-a', B: 'nas-b' } }
-      useFleetDraftStore.getState().beginProbe(entry, false, { revisions: { A: 3, B: 8 }, rows: { A: nas('nas-a'), B: nas('nas-b') } })
-      useFleetDraftStore.getState().setProbeDraft((d) => ({ ...d, name: 'typed, not saved' }))
-    })
-    afterEach(() => { vi.restoreAllMocks(); useFleetDraftStore.getState().reset() })
-
-    it('asks first; refused → the draft stays, no editor, a line says whose it is, with a way there', async () => {
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      const onGoto = vi.fn()
-      render(<WatchSettings kind="probe" fleetHostId={OTHER} offline={false} peerIds={[]} onGotoProbe={onGoto} />)
-      const held = await screen.findByTestId('probe-held')
-      expect(confirm).toHaveBeenCalledTimes(1)
-      expect(held).toHaveTextContent(t('watch.set.held', { name: 'nas' }))
-      expect(useFleetDraftStore.getState().probe?.draft.name).toBe('typed, not saved')
-      expect(useFleetDraftStore.getState().probe?.initial.id).toBe(ID)
-      expect(screen.queryByTestId('probe-field-name')).toBeNull()
-      fireEvent.click(screen.getByTestId('probe-held-goto'))
-      expect(onGoto).toHaveBeenCalledWith(ID)
-    })
-
-    it('agreed → the other draft is dropped and this host\'s editor opens', async () => {
-      vi.spyOn(window, 'confirm').mockReturnValue(true)
-      render(<WatchSettings kind="probe" fleetHostId={OTHER} offline={false} peerIds={[]} />)
-      expect(await screen.findByTestId('probe-field-name')).toHaveValue('other')
-      expect(useFleetDraftStore.getState().probe?.initial.id).toBe(OTHER)
-      expect(screen.queryByTestId('probe-held')).toBeNull()
-    })
+  it('without an alias in the pool there are no worker sections, still no probe editor', () => {
+    daemonPage({ hostConfigId: undefined })
+    expect(screen.queryByTestId('mock-worker-settings')).toBeNull()
+    expect(screen.queryByTestId('watch-set-probe')).toBeNull()
   })
 })
