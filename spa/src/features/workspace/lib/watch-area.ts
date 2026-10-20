@@ -10,7 +10,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore } from '../../../lib/fleet/store'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
-import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, hostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
 import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
 import { anyHostDeclaresWatch } from '../../../lib/watch/events-store'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -225,7 +225,7 @@ export function createWatchReconciler(): WatchReconciler {
     if (!view.stale) {
       const current = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
       for (const tabId of current.tabs) {
-        const hostId = fleetHostIdOfTabId(tabId)
+        const hostId = hostIdOfTabId(tabId)
         if (hostId === null || listed.has(hostId)) continue
         const seenAt = lastListed.get(hostId)
         if (seenAt === undefined) continue // never listed on this device: it came by sync, and stays
