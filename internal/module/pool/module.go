@@ -244,6 +244,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/exceptions", m.handleExceptions)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/alerts", m.handleAlerts)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/observations", m.handleObservations)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/undeclared", m.handleUndeclared)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
 	mux.HandleFunc("GET /api/pool/facts/series", m.handleSeries)
 	m.registerControl(mux)
@@ -345,11 +347,17 @@ func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Contex
 	if aerr != nil {
 		return nil, aerr // an error is never cached
 	}
-	body, err := json.Marshal(v)
-	if err != nil {
+	var err error
+	if raw, ok := v.(json.RawMessage); ok {
+		// wwd's own bytes (already checked against the contract by the client): not run through the encoder again, which would compact them
+		// and escape <, > and &; a reader that hands a cursor back must get exactly what wwd wrote
+		body = append(body, raw...)
+	} else if body, err = json.Marshal(v); err != nil {
 		return nil, &apiError{http.StatusInternalServerError, ErrWWDError, "encoding the answer failed"}
 	}
-	body = append(body, '\n')
+	if n := len(body); n == 0 || body[n-1] != '\n' { // wwd's writer ends its answer with one already; an answer ends with exactly one
+		body = append(body, '\n')
+	}
 	m.store(key, body)
 	return body, nil
 }

@@ -123,6 +123,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
 		{"POST", "/api/pool/jobs"}, {"DELETE", "/api/pool/jobs/j_abc"}, {"POST", "/api/pool/jobs/j_abc/cancel"}, {"POST", "/api/pool/jobs/j_abc/position"}, // the jobs are read here, never changed (cancel and position are the admin's: jobs.control.v1)
 		{"PUT", "/api/pool/hosts/air26/worker"}, {"POST", "/api/pool/hosts/air26/exceptions"}, {"DELETE", "/api/pool/hosts/air26/exceptions/pkg"}, // changing a host's worker is the admin's, not a phone's
+		{"GET", "/api/pool/hosts/air26/observations"}, {"GET", "/api/pool/hosts/air26/undeclared"}, // redacted command lines: the admin's until a phone's event page is decided (pool.observations.v1)
 		{"POST", "/api/journal"}, {"PUT", "/api/journal/pin"}, {"GET", "/api/journal/confirm"}, {"DELETE", "/api/journal/confirm"}, {"PUT", "/api/journal/members"}, {"GET", "/api/journal/other"}, // only the five journal routes
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
@@ -145,6 +146,9 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	}
 	// The admin is not scoped.
 	assert.False(t, forbidden(callWith(t, c, "GET", "/api/config", "t", nil)))
+	for _, p := range []string{"/api/pool/hosts/air26/observations", "/api/pool/hosts/air26/undeclared"} {
+		assert.False(t, forbidden(callWith(t, c, "GET", p, "t", nil)), "the admin reaches %s", p)
+	}
 }
 
 // A nil routes refuses every device request; the admin still works.
