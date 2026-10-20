@@ -144,6 +144,7 @@ func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel, m.done, m.watching = cancel, done, true
+	m.self = nil // the new watch has not read wwd yet; the socket may be another wwd's than the last run's
 	if m.core != nil {
 		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
 	}
@@ -208,8 +209,11 @@ func (m *Module) setSelf(p *wire.Pool) {
 		self = &info
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.watching { // a read that comes back after Stop: nothing is watching, so nothing keeps this true
+		return
+	}
 	m.self = self
-	m.mu.Unlock()
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {

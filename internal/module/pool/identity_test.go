@@ -1,6 +1,7 @@
 package poolmod
 
 import (
+	"context"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -89,6 +90,39 @@ func TestIdentity_StatusDoesNotWaitOnAHungWwd(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Status waited on wwd")
 	}
+}
+
+// A read that returns after Stop (the watch was already past its call when Stop took the lock) cannot put the identity back: nothing
+// is watching, so nothing keeps it true, and Status after Stop has no wwd.
+func TestIdentity_ALateReadAfterStopIsDropped(t *testing.T) {
+	lp := newLivePool(t)
+	m, _ := watching(t, fakeWWD(t, lp.handler()))
+	require.Eventually(t, func() bool { _, ok := wwdOf(m); return ok }, 3*time.Second, testPoll)
+	require.NoError(t, m.Stop(context.Background()))
+	p := lp.get()
+	m.setSelf(&p) // what the old loop does when its read comes back after Stop
+	_, ok := wwdOf(m)
+	assert.False(t, ok, "Stop had cleared it and the late write must not undo that")
+}
+
+// Start does not announce the previous run's identity before its own first read: the socket may be another wwd's by now.
+func TestIdentity_StartDoesNotKeepThePreviousRunsIdentity(t *testing.T) {
+	id := wire.Info{HostID: "h-old", Alias: "old"}
+	hung := make(chan struct{})
+	t.Cleanup(func() { close(hung) })
+	m2 := New()
+	m2.cl = fakeWWD(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	}))
+	m2.self = &id // left over from an earlier run
+	m2.logf = func(string, ...any) {}
+	require.NoError(t, m2.Start(context.Background()))
+	t.Cleanup(func() { _ = m2.Stop(context.Background()) })
+	_, ok := wwdOf(m2)
+	assert.False(t, ok, "no identity until the new watch has read wwd")
 }
 
 // An empty pool (no peers) names no one.
