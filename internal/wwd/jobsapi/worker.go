@@ -32,15 +32,16 @@ func (a *API) WorkerRoutes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("PUT /v1/jobs/{id}/log", a.PutLog())
 }
 
-// readBody strictly decodes the JSON body of a worker call into T (unknown fields, trailing data and anything T's Validate refuses are a
-// 400, answered here). ok is false when the answer has been given.
+// readBody decodes the JSON body of a worker call into T (trailing data and anything T's Validate refuses are a
+// 400, answered here). Unknown fields are skipped: the caller is a worker of a peer host that may run a later build (DecodeLenient, #3710).
+// ok is false when the answer has been given.
 func readBody[T any](w http.ResponseWriter, r *http.Request) (v T, ok bool) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxJSONBody))
 	if err != nil {
 		badRequest(w, "request body too large or unreadable")
 		return v, false
 	}
-	v, err = wire.Decode[T](raw)
+	v, err = wire.DecodeLenient[T](raw)
 	if err != nil {
 		badRequest(w, err.Error())
 		return v, false

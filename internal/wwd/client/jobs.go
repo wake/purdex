@@ -31,7 +31,7 @@ func call[T any](ctx context.Context, c *Client, method, path string, q url.Valu
 	if err != nil {
 		return zero, err
 	}
-	v, err := wire.Decode[T](raw)
+	v, err := wire.DecodeLenient[T](raw)
 	if err != nil {
 		return zero, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
@@ -238,7 +238,7 @@ func (c *Client) JobsPage(ctx context.Context, f JobsPageQuery) (wire.JobsListRe
 func cursorAhead(err error) error {
 	var se *StatusError
 	if errors.As(err, &se) && se.Code == http.StatusConflict {
-		if ca, derr := wire.Decode[wire.CursorAhead]([]byte(se.Body)); derr == nil {
+		if ca, derr := wire.DecodeLenient[wire.CursorAhead]([]byte(se.Body)); derr == nil {
 			return &CursorAheadError{CursorAhead: ca}
 		}
 	}

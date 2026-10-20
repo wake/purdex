@@ -134,9 +134,17 @@ func TestPeerSourceTimesOutOnSilentPeer(t *testing.T) {
 	}
 }
 
-func TestPeerSourceDecodesStrictly(t *testing.T) {
+// A peer's queue is read for what the contract says — framing, types, values — but a field of a later build is skipped (#3710).
+func TestPeerSourceToleratesAFieldOfALaterBuild(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"jobs":[],"surprise":1}`)) }))
+	defer srv.Close()
+	if _, err := NewPeerSource("p", srv.URL, "t", srv.Client()).Queued(context.Background()); err != nil {
+		t.Fatalf("an unknown field: %v", err)
+	}
+}
+
+func TestPeerSourceDecodesWhatTheContractSays(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown field": `{"jobs":[],"surprise":1}`,
 		"trailing data": `{"jobs":[]} {}`,
 		"bad cursor":    `{"jobs":[],"cursor":"x"}`,
 	} {

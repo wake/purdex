@@ -76,7 +76,7 @@ func (s *Store) LoadUsage(since time.Time, after string, limit int) (out []wire.
 		if err := rows.Scan(&rec); err != nil {
 			return nil, false, err
 		}
-		u, err := wire.Decode[wire.JobUsage]([]byte(rec))
+		u, err := wire.DecodeLenient[wire.JobUsage]([]byte(rec))
 		if err != nil {
 			skipped++
 			continue

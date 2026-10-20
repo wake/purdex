@@ -78,10 +78,9 @@ func TestWithoutAUsableFileAPeerIsNeverSeen(t *testing.T) {
 		"missing":   nil,
 		"garbage":   ptr("not json"),
 		"empty":     ptr(""),
-		"other":     ptr(`{"peers":{"mserv":{"info":{"alias":"mserv","proto":3}}}}`),                 // another alias
-		"wrongname": ptr(`{"peers":{"air19":{"info":{"alias":"someone-else","proto":3}}}}`),          // an answer under another name
-		"future":    ptr(`{"peers":{"air19":{"info":{"alias":"air19","proto":99}}}}`),                // a proto this build does not read
-		"unknown":   ptr(`{"peers":{"air19":{"info":{"alias":"air19","proto":3},"surprise":true}}}`), // strict, like every payload
+		"other":     ptr(`{"peers":{"mserv":{"info":{"alias":"mserv","proto":3}}}}`),        // another alias
+		"wrongname": ptr(`{"peers":{"air19":{"info":{"alias":"someone-else","proto":3}}}}`), // an answer under another name
+		"future":    ptr(`{"peers":{"air19":{"info":{"alias":"air19","proto":99}}}}`),       // a proto this build does not read
 	} {
 		t.Run(name, func(t *testing.T) {
 			file := filepath.Join(dir, name+".json")
@@ -98,6 +97,18 @@ func TestWithoutAUsableFileAPeerIsNeverSeen(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// A file written by a later build may carry fields this build does not know (#3710): they are skipped, and the peer is known by the rest.
+func TestAFieldOfALaterBuildInTheLastKnownFileIsSkipped(t *testing.T) {
+	air19 := newLastPeer(t, "air19", wire.Proto)
+	air19.down.Store(true)
+	file := filepath.Join(t.TempDir(), "peers-last.json")
+	require.NoError(t, os.WriteFile(file, []byte(`{"peers":{"air19":{"info":{"alias":"air19","proto":3},"surprise":true}}}`), 0o600))
+	p := NewPoolPoller([]PeerAddr{{"air19", addr(air19.srv)}}, testToken, nil)
+	p.UseLastKnownFile(file)
+	p.PollOnce(context.Background())
+	assert.Equal(t, 3, p.Peers()[0].Info.Proto)
+}
 
 // The file follows the peer: a new proto is written, a poll that reads the same info writes nothing, and a peer that is down does not
 // touch it. The write is a rename of a temporary file, so a crash leaves the old file or the new one.

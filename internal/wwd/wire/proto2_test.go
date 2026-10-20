@@ -254,8 +254,12 @@ func TestAlertEvent(t *testing.T) {
 	if ev, ok := v.(AlertEvent); !ok || ev.Host != "mlab" {
 		t.Fatalf("%#v", v)
 	}
-	if _, err := Decode[Event]([]byte(`{"type":"alert","data":{"host":"mlab","alerts":[]}}`)); err == nil {
-		t.Fatal("the alert event is only a hint: a list in it must be refused")
+	// The alert event is only a hint (the host whose list to read again). A field a later build adds to it — a list, say — is not a break
+	// (#3710): it is skipped, and what the reader acts on is still the host.
+	if got, err := Decode[Event]([]byte(`{"type":"alert","data":{"host":"mlab","alerts":[]}}`)); err != nil {
+		t.Fatalf("an alert event with a field this build does not know: %v", err)
+	} else if v, err := got.DecodeData(); err != nil || v.(AlertEvent).Host != "mlab" {
+		t.Fatalf("%#v %v", v, err)
 	}
 	// it must say which host's list to read again (R1)
 	for _, js := range []string{`{"type":"alert","data":{"host":""}}`, `{"type":"alert","data":{}}`} {

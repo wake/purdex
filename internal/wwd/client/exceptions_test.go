@@ -137,9 +137,8 @@ func TestExceptions_AForwardedCallOutlastsTheShortTimeout(t *testing.T) {
 
 func TestExceptions_RefusesWhatTheContractRefuses(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown field": `[{"name":"x","until":"2026-10-19T09:00:00Z","pid":null,"holds":[],"zzz":1}]`,
-		"bad hold":      `[{"name":"x","until":"2026-10-19T09:00:00Z","pid":null,"holds":["gpu"]}]`,
-		"not a list":    `{"name":"x"}`,
+		"bad hold":   `[{"name":"x","until":"2026-10-19T09:00:00Z","pid":null,"holds":["gpu"]}]`,
+		"not a list": `{"name":"x"}`,
 	} {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /v1/exceptions", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) })

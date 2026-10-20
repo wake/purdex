@@ -234,7 +234,7 @@ func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path str
 	if resp.StatusCode != http.StatusOK {
 		return zero, &StatusError{Path: path, Code: resp.StatusCode}
 	}
-	return wire.Decode[T](body)
+	return wire.DecodeLenient[T](body)
 }
 
 // Peers is a copy of the current view of the peers.

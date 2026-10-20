@@ -62,7 +62,7 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 			if len(data) == 0 {
 				continue
 			}
-			ev, err := wire.Decode[wire.Event]([]byte(strings.Join(data, "\n")))
+			ev, err := wire.DecodeLenient[wire.Event]([]byte(strings.Join(data, "\n")))
 			size = 0
 			data = data[:0]
 			if err != nil {

@@ -45,7 +45,7 @@ func (p *PoolPoller) UseLastKnownFile(path string) {
 	if !ok {
 		return
 	}
-	k, err := wire.Decode[lastKnown](b)
+	k, err := wire.DecodeLenient[lastKnown](b)
 	if err != nil {
 		return // a broken file is the same as no file
 	}

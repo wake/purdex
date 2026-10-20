@@ -212,22 +212,22 @@ func (e Event) Validate() error {
 	return err
 }
 
-// DecodeData strictly decodes Data into the type for e.Type (Facts, JobEvent,
+// DecodeData decodes Data (leniently: an event may come from a later build, see DecodeLenient) into the type for e.Type (Facts, JobEvent,
 // LabelsEvent, ExceptionEvent, WorkerEvent or AlertEvent, by value).
 func (e Event) DecodeData() (any, error) {
 	switch e.Type {
 	case EventFacts:
-		return Decode[Facts](e.Data)
+		return DecodeLenient[Facts](e.Data)
 	case EventJob:
-		return Decode[JobEvent](e.Data)
+		return DecodeLenient[JobEvent](e.Data)
 	case EventLabels:
-		return Decode[LabelsEvent](e.Data)
+		return DecodeLenient[LabelsEvent](e.Data)
 	case EventException:
-		return Decode[ExceptionEvent](e.Data)
+		return DecodeLenient[ExceptionEvent](e.Data)
 	case EventWorker:
-		return Decode[WorkerEvent](e.Data)
+		return DecodeLenient[WorkerEvent](e.Data)
 	case EventAlert:
-		return Decode[AlertEvent](e.Data)
+		return DecodeLenient[AlertEvent](e.Data)
 	}
 	return nil, fmt.Errorf("event: invalid type %q", e.Type)
 }

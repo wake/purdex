@@ -122,7 +122,7 @@ func getLimit[T any](ctx context.Context, c *Client, path string, q url.Values, 
 	if int64(len(body)) > limit {
 		return zero, fmt.Errorf("%w: the answer is over %d bytes", ErrBadResponse, limit)
 	}
-	v, err := wire.Decode[T](body)
+	v, err := wire.DecodeLenient[T](body)
 	if err != nil {
 		return zero, fmt.Errorf("%w: %v", ErrBadResponse, err)
 	}
