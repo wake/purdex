@@ -67,22 +67,17 @@ var fetchClone = fetchCloneFromOrigin
 // fetchCloneFromOrigin brings the clone up to date with its origin, for the one reason fromClone has: the job's base is a commit pushed after the
 // clone was last fetched (manifest_ref fetches it every 10 minutes, and a release gate runs seconds after its push). Without it the
 // workspace of the same task would be a worktree or a tar, with or without a .git, by the minute it started in (#3729, #3730). It fetches
-// the way manifest_ref does (`fetch --quiet --no-tags -- origin`). When another fetch of the same clone (manifest_ref's, every 10 minutes)
-// holds a ref lock, this one does not give up after gitRefWrite's few short tries: that other fetch is bringing in the same commits, and
-// giving up on the first long one would be the tar this exists to avoid. It waits refLockBackoff between tries for as long as the deadline
-// (fetchBaseTimeout) allows, and any other error ends it at once. The error is only the reason the tar follows.
+// the way manifest_ref does (`fetch --quiet --no-tags -- origin`), once, for at most fetchBaseTimeout.
+//
+// What counts is the base being in the clone, which fromClone looks at after it, not what the fetch says: git stores the objects before it
+// updates the refs, so a fetch that fails at a ref (another fetch holds the lock of `origin/main`; a name that cannot be both a branch and
+// a directory of branches, `origin/foo` there and `foo/bar` now on the remote) has still brought the commits in. So there is no waiting
+// for a lock and no telling one error from another, and the error is only the reason the tar may follow.
 func fetchCloneFromOrigin(ctx context.Context, clone string) error {
 	ctx, cancel := context.WithTimeout(ctx, fetchBaseTimeout)
 	defer cancel()
-	for {
-		_, err := gitRun(ctx, refWriteEnv(), "wwd.snapshot-fetch-base", clone, smallOutput, "fetch", "--quiet", "--no-tags", "--", "origin")
-		if err == nil || !isRefLockError(err) {
-			return err
-		}
-		if werr := waitRefLock(ctx); werr != nil {
-			return fmt.Errorf("%w (after %v)", werr, err)
-		}
-	}
+	_, err := git(ctx, "wwd.snapshot-fetch-base", clone, "fetch", "--quiet", "--no-tags", "--", "origin")
+	return err
 }
 
 func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
@@ -90,8 +85,10 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 		return Workspace{}, errUseTar
 	}
 	if !hasCommit(ctx, in.Clone, in.Base) {
-		// the clone may only be behind: ask its origin once. Failing, or still not having it (a base that was never pushed), is the tar.
-		if fetchClone(ctx, in.Clone) != nil || !hasCommit(ctx, in.Clone, in.Base) {
+		// the clone may only be behind: ask its origin once. The answer is whether the base is there after it (a failed fetch that still
+		// brought it in counts); not having it (a base that was never pushed, a remote that does not answer) is the tar.
+		_ = fetchClone(ctx, in.Clone)
+		if !hasCommit(ctx, in.Clone, in.Base) {
 			return Workspace{}, errUseTar
 		}
 	}

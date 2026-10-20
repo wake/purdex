@@ -20,7 +20,10 @@ type lateCase struct {
 	materializeCase
 }
 
-func newLateCase(t *testing.T, jobID string) lateCase {
+func newLateCase(t *testing.T, jobID string) lateCase { return newLateCaseWith(t, jobID, nil, nil) }
+
+// newLateCaseWith is newLateCase with a step to run on the origin before the clone is made and one after the base is committed.
+func newLateCaseWith(t *testing.T, jobID string, beforeClone, afterBase func(repo string)) lateCase {
 	t.Helper()
 	repo := t.TempDir()
 	if r, err := filepath.EvalSymlinks(repo); err == nil {
@@ -33,6 +36,9 @@ func newLateCase(t *testing.T, jobID string) lateCase {
 	gitOut(t, repo, "add", ".gitignore", "a.txt")
 	gitOut(t, repo, "add", "-f", "keep.log")
 	gitOut(t, repo, "commit", "-q", "-m", "one")
+	if beforeClone != nil {
+		beforeClone(repo)
+	}
 	clone := filepath.Join(t.TempDir(), "clone")
 	gitOut(t, repo, "clone", "-q", "--no-local", ".", clone) // the clone's last fetch: only "one"
 
@@ -40,6 +46,9 @@ func newLateCase(t *testing.T, jobID string) lateCase {
 	gitOut(t, repo, "add", "b.txt")
 	gitOut(t, repo, "commit", "-q", "-m", "two") // pushed after
 	base := gitOut(t, repo, "rev-parse", "HEAD")
+	if afterBase != nil {
+		afterBase(repo)
+	}
 	writeFile(t, repo+"/a.txt", "a2 changed\n")
 	writeFile(t, repo+"/new.txt", "new\n")
 	writeFile(t, repo+"/keep.log", "log2 changed\n")
@@ -110,37 +119,47 @@ func TestMaterialize_AFetchThatFailsFallsBackToATar(t *testing.T) {
 }
 
 // manifest_ref fetches the same clone every 10 minutes: when its fetch holds the lock of a remote ref at the moment a job asks for its base,
-// the job's fetch waits it out for as long as its own deadline allows, not for the few short tries a ref write gets (gitRefWrite: about
-// 300 ms), and the workspace is still a worktree. The lock is held 2 s with the default backoff.
-func TestMaterialize_TheFetchWaitsOutAnotherFetchsRefLockUntilItsDeadline(t *testing.T) {
+// the job's fetch fails at that ref, but git has stored the commits before it updates refs, so the base is in the clone and the workspace is a
+// worktree. The job does not wait for the lock (here it is never let go) and does not depend on the fetch's own answer.
+func TestMaterialize_AnotherFetchsRefLockDoesNotStopTheBaseComingIn(t *testing.T) {
+	old := fetchBaseTimeout
+	fetchBaseTimeout = 20 * time.Second
+	t.Cleanup(func() { fetchBaseTimeout = old })
 	m := newLateCase(t, "j_locked")
 	lock := filepath.Join(m.clone, ".git", "refs", "remotes", "origin", "main.lock")
 	require.NoError(t, os.WriteFile(lock, nil, 0o644))
-	go func() { time.Sleep(2 * time.Second); _ = os.Remove(lock) }()
 
 	rec := &recorder{}
+	start := time.Now()
 	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, rec), "j_locked", filepath.Join(t.TempDir(), "ws")))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"bundle"}, rec.seen())
 	assert.Equal(t, m.snap, gitOut(t, ws.Dir, "rev-parse", "HEAD"))
+	assert.Less(t, time.Since(start), 8*time.Second, "not held for the fetch's deadline")
 	require.NoError(t, ws.Cleanup())
 }
 
-// ...but not for ever: a lock that is never let go holds the job's start for the fetch's deadline and the tar follows.
-func TestMaterialize_AnotherFetchsRefLockThatNeverEndsIsCutAtTheDeadline(t *testing.T) {
+// git says "cannot lock ref" for a name that clashes with another ref too (the clone has `origin/foo`, the remote now has `foo/bar`), and
+// that does not go away by waiting. The fetch brought the commits in all the same (main moved), so the job is not held for the deadline
+// and its workspace is a worktree.
+func TestMaterialize_ARefNameClashIsNotWaitedForAndTheFetchedBaseIsUsed(t *testing.T) {
 	old := fetchBaseTimeout
-	fetchBaseTimeout = 700 * time.Millisecond
+	fetchBaseTimeout = 20 * time.Second
 	t.Cleanup(func() { fetchBaseTimeout = old })
-	m := newLateCase(t, "j_stuck")
-	lock := filepath.Join(m.clone, ".git", "refs", "remotes", "origin", "main.lock")
-	require.NoError(t, os.WriteFile(lock, nil, 0o644))
+	m := newLateCaseWith(t, "j_clash",
+		func(repo string) { gitOut(t, repo, "branch", "foo") },
+		func(repo string) {
+			gitOut(t, repo, "branch", "-D", "foo")
+			gitOut(t, repo, "branch", "foo/bar")
+		})
 	rec := &recorder{}
 	start := time.Now()
-	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, rec), "j_stuck", filepath.Join(t.TempDir(), "ws")))
+	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, rec), "j_clash", filepath.Join(t.TempDir(), "ws")))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"tar"}, rec.seen())
-	checkTree(t, ws.Dir)
-	assert.Less(t, time.Since(start), 10*time.Second)
+	assert.Equal(t, []string{"bundle"}, rec.seen(), "the base came in with the fetch whose one ref update failed")
+	assert.Equal(t, m.snap, gitOut(t, ws.Dir, "rev-parse", "HEAD"))
+	assert.Less(t, time.Since(start), 8*time.Second, "not held for the fetch's deadline")
+	require.NoError(t, ws.Cleanup())
 }
 
 // The fetch has a deadline of its own: a remote that does not answer holds a job start for that long and no longer.
