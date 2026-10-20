@@ -64,6 +64,8 @@ export function structureSignature(input: StructureInput): string {
       }),
     ]),
     workspaces.map((w) => [w.id, w.tabs.filter((id) => index.byTabId.has(id)).map((id) => { const h = index.byTabId.get(id)!; return `${id}\u0000${h.key}\u0000${h.role}` })]),
+    // `panelTeam` reads the inclusive seat map, whose pinned tabs `byTabId` leaves out: the display is rebuilt only when the signature moves, so it has to carry them
+    [...index.seatByTabId].map(([id, h]) => `${id}\u0000${h.key}`).sort(),
     Object.keys(input.collapsed).sort(),
     Object.entries(input.panelMode).sort(),
     Object.entries(input.ghostWorkspace).sort(),
@@ -149,7 +151,7 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     sidebarBeads: (tabId) => beads.get(tabId) ?? null,
     ghostLeads: (workspaceId) => (workspaceId === null ? [] : ghosts.get(workspaceId) ?? []),
     panelTeam: (activeTabId) => {
-      const hit = activeTabId === null ? undefined : index.byTabId.get(activeTabId)
+      const hit = activeTabId === null ? undefined : index.seatByTabId.get(activeTabId) // a pinned seat tab is the team's too
       return hit ? panelOf(hit.key) : null
     },
     ...actions,

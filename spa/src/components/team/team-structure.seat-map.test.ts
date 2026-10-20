@@ -1,0 +1,74 @@
+// spa/src/components/team/team-structure.seat-map.test.ts — the inclusive seat map (task groups spec §3, TG-3a-1). A pinned tab that shows a team seat's session is the team's: the panel routing (`panelTeam`) reads the
+// inclusive map and shows the team panel. Every OTHER reader stays on `byTabId`, which leaves a pinned tab out (a pinned tab is never drawn as grouped): the pin guard (`isTeamTab`), the tab marks and the
+// lead's beads, the member collapse of the sidebar. Each is pinned here, so moving one of them onto the inclusive map is a visible change.
+import { describe, it, expect } from 'vitest'
+import { buildTeamIndex } from '../../lib/team/team-index'
+import { selectTeamViews, type TeamViewsInput } from '../../lib/team/team-views'
+import { buildTeamDisplay, structureSignature, type StructureInput } from './team-structure'
+import type { RosterMember, RosterSession, TeamRoster } from '../../lib/team/roster'
+import type { PaneLayout, Tab } from '../../types/tab'
+
+const sess = (id: string, tmux?: string): RosterSession => ({ session_id: id, ref: `_${id}`, address: `mlab/${id}-xx`, live: true, ...(tmux ? { tmux_session: tmux } : {}) })
+const mem = (id: string, joined: number, tmux?: string): RosterMember => ({ ...sess(id, tmux), state: 'active', origin: 'spawned', joined_at: joined })
+const team = (id: string, lead: RosterSession, members: RosterMember[] = []): TeamRoster => ({ id, host_id: 'daemon', created_at: 1, team_name: '', team_label: '', lead, members })
+let seq = 0
+const leaf = (name: string): PaneLayout => ({
+  type: 'leaf', pane: { id: `p${++seq}`, content: { kind: 'tmux-session', hostId: 'h1', sessionCode: `code-${name}`, mode: 'terminal', cachedName: name, tmuxInstance: 'i' } },
+})
+const tab = (id: string, layout: PaneLayout, pinned = false): Tab => ({ id, pinned, locked: false, createdAt: 0, layout })
+
+function build(pinnedIds: string[]) {
+  const tabs = [tab('lead', leaf('lead-tm')), tab('m1', leaf('a-tm')), tab('m2', leaf('b-tm')), tab('plain', leaf('nobody'))].map((t) => (pinnedIds.includes(t.id) ? { ...t, pinned: true } : t))
+  const inp: TeamViewsInput = {
+    rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm'), mem('B', 2, 'b-tm')])] },
+    tabsById: Object.fromEntries(tabs.map((t) => [t.id, t])),
+    workspaces: [{ id: 'w1', tabs: tabs.map((t) => t.id) }],
+    activeWorkspaceId: 'w1',
+    sessionsByHost: {},
+  }
+  const views = selectTeamViews(inp)
+  const index = buildTeamIndex(views, inp.tabsById, inp.sessionsByHost)
+  const structure: StructureInput = { views, index, workspaces: inp.workspaces, sessionsByHost: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, beadHost: false }
+  return { structure, index, display: buildTeamDisplay(structure, { onToggleCollapse: () => {}, onOpenSeat: () => {}, onReorderMembers: () => {} }) }
+}
+
+describe('the inclusive seat map (TG-3a-1)', () => {
+  it('a pinned seat tab routes to the team panel; so does an unpinned one; a plain tab does not', () => {
+    const { display } = build(['m1'])
+    expect(display.panelTeam('m1')).not.toBeNull()
+    expect(display.panelTeam('m2')).not.toBeNull()
+    expect(display.panelTeam('m1')?.key).toBe(display.panelTeam('m2')?.key)
+    expect(display.panelTeam('plain')).toBeNull()
+    expect(display.panelTeam(null)).toBeNull()
+  })
+
+  it('a pinned LEAD tab is the team\'s too, though the team has no group then', () => {
+    const { display, index } = build(['lead'])
+    expect(display.panelTeam('lead')).not.toBeNull()
+    expect(index.byTabId.has('m1')).toBe(false) // a team whose lead tab is pinned has no group: its members are not drawn as grouped
+    expect(display.panelTeam('m1')).not.toBeNull() // ... but they are still the team's for the panel
+  })
+
+  it('byTabId still leaves a pinned tab out — the readers that stay on it (the pin guard, the team tab lifecycle, the run drawing)', () => {
+    const { index } = build(['m1'])
+    expect(index.byTabId.has('m1')).toBe(false)
+    expect(index.byTabId.has('m2')).toBe(true)
+    expect(index.seatByTabId.has('m1')).toBe(true)
+  })
+
+  it('the tab marks, the lead\'s beads and the sidebar\'s member collapse still read byTabId: a pinned member has no mark and is not hidden by a collapse', () => {
+    const { display } = build(['m1'])
+    expect(display.tabMark('m1')).toBeNull()
+    expect(display.tabMark('m2')).not.toBeNull()
+    expect(display.sidebarBeads('lead')).not.toBeNull()
+    expect(display.sidebarBeads('m1')).toBeNull()
+  })
+
+  it('the structure signature moves when a seat tab gets pinned (the display is rebuilt only when it moves, and panelTeam must not go stale)', () => {
+    const before = structureSignature(build([]).structure)
+    const after = structureSignature(build(['m1']).structure)
+    expect(after).not.toBe(before)
+    // a pinned plain tab changes nothing the display reads
+    expect(structureSignature(build(['plain']).structure)).toBe(before)
+  })
+})
