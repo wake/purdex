@@ -3,6 +3,7 @@ import { CaretDown } from '@phosphor-icons/react'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
 import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { switchSidebarView } from '../../../lib/task-groups/group-select'
 import { ProfileIcon, ProfileSwitcher, TeamIcon } from './ProfileSwitcher'
 import { ProfileConflictButton } from './ProfileConflict'
 import { WatchShieldButton } from './WatchShieldButton'
@@ -13,13 +14,12 @@ interface Props {
 }
 
 /**
- * The sidebar's view toggle (name pool v2 spec §9.6): a 30 px square button that switches the sidebar between the workspace view and the task-group view. In the workspace view it wears the
+ * The sidebar's view toggle (name pool v2 spec §9.6): a 30 px square button that switches the sidebar between the workspace view and the task-group view, restoring that view's last workspace / group and its last tab (task groups spec §6.3). In the workspace view it wears the
  * profile icon (the icon that used to sit in the Home button); in the task-group view the profile's team icon (its own weight and colour). Which view it is in is said by the icon itself and `aria-pressed`: no frame. The flag is the device's (useTeamUiStore).
  */
 function ViewToggle({ appearance }: { appearance: ReturnType<typeof useProfileSwitcherTrigger>['current'] }) {
   const t = useI18nStore((s) => s.t)
   const view = useTeamUiStore((s) => s.sidebarView)
-  const setView = useTeamUiStore((s) => s.setSidebarView)
   const groups = view === 'groups'
   // A fixed name with aria-pressed (a two-state toggle): the name does not change with the state it already reports.
   const label = t('sidebar.view.toggle')
@@ -30,7 +30,7 @@ function ViewToggle({ appearance }: { appearance: ReturnType<typeof useProfileSw
       aria-pressed={groups}
       aria-label={label}
       title={label}
-      onClick={() => setView(groups ? 'workspace' : 'groups')}
+      onClick={() => switchSidebarView(groups ? 'workspace' : 'groups')}
       className="w-[30px] h-[30px] shrink-0 flex items-center justify-center rounded-md cursor-pointer text-text-secondary hover:bg-surface-hover hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
     >
       {groups ? (

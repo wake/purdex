@@ -11,10 +11,13 @@ interface Props {
   teamId: string
   color: string
   name: string
-  count: number
+  selected?: boolean
+  expanded?: boolean
+  onClick?: () => void
+  onToggle?: () => void
 }
 
-export function TeamGroupHeader({ hostId, teamId, color, name, count }: Props) {
+export function TeamGroupHeader({ hostId, teamId, color, name, selected, expanded, onClick, onToggle }: Props) {
   const editable = useUnattendedStore((s) => s.byHost[hostId]?.editSupport === 'yes')
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const [open, setOpen] = useState(false)
@@ -22,7 +25,7 @@ export function TeamGroupHeader({ hostId, teamId, color, name, count }: Props) {
   const canEdit = editable && roster !== undefined
   return (
     <>
-      <TaskGroupHeader ref={head} color={color} name={name} count={count} strong onDoubleClickName={canEdit ? () => setOpen(true) : undefined} />
+      <TaskGroupHeader ref={head} color={color} name={name} selected={selected} expanded={expanded} onClick={onClick} onToggle={onToggle} strong onDoubleClickName={canEdit ? () => setOpen(true) : undefined} />
       {open && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
