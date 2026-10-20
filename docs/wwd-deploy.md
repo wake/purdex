@@ -540,4 +540,15 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   task must be in the command with the same value. `go test -tags e2e ./cmd/wwd/` is not the `e2e` task (it would run less), and runs as typed or
   as an ad-hoc job. Flags that only say how (`-p`, `-timeout`, `-count`) may be left out. A flag written as `-flag=value` is compared as
   one word, so `-tags=e2e` does not match a task that has `-tags e2e`: it falls to the ad-hoc path.
+* A command that is a queued task is rewritten only when some host can take it **now**: `pdx entry match` reads the local wwd's pool (2 s) and a
+  host counts when it holds all of the task's labels, answers, and has its worker on (an owner at the keyboard making it yield is waiting, not a
+  no). A host that holds the labels but is down or has its worker off does not count. A host that answers and has its worker on but has not sent its first facts yet (the first seconds after wwd starts, when only its `os:` and `arch:` labels are announced) leaves the answer open and the rewrite stays, as `pdx test` queues in that case. Otherwise the answer is `none` and the command runs as typed:
+  the alternative is `pdx test` ending at once with exit 5 (aigora-v2's `vitest-root` needs `repo:aigora-v2`, which no host has), or a call moved to
+  the background that waits for a down host up to the queue timeout. A pool that cannot be read is `none` too. The reason (one line, for example
+  `no reachable host with a worker on holds repo:aigora-v2`) is in the JSON answer only; the hook does not print it. Local-lane tasks and ad-hoc jobs
+  need no other host and are not judged.
+* **Known gap**: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its `os:` label
+  or a `task:` label it earned). Labels that such a host satisfies, while it will not take the job, still pass the check above, and the call then
+  waits in the background until the queue timeout. Purdex does not meet it: `purdex_manifest_test` makes every queued task carry `os:darwin` or its
+  own `task:` label. When another repo does, the setting has to become a field of the host's info.
 * Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.
