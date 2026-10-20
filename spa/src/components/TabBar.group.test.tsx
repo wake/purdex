@@ -156,6 +156,18 @@ describe('TabBar — the task-group view (TG-4b)', () => {
     fireEvent.pointerUp(document)
   })
 
+  it('a pinned tab of the pinned zone cannot be picked up either', () => {
+    const list = [mk('p1', 'other', true), mk('x', 'a-tm')]
+    seed(list)
+    const { container } = bar(list, true)
+    const el = container.querySelector('[data-tab-id="p1"]') as HTMLElement
+    fireEvent.pointerDown(el, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { clientX: 60, clientY: 10 })
+    expect(dnd.started).toBe(0)
+    expect(el.style.transform).toBe('')
+    fireEvent.pointerUp(document)
+  })
+
   it('an empty group says so, and keeps the + button', () => {
     seed([])
     bar([], true)

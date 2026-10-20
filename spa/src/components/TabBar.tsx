@@ -238,6 +238,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       tab={tab}
                       isActive={tab.id === activeTabId}
                       pinned
+                      noDrag={flat}
                       onSelect={onSelectTab}
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
