@@ -23,6 +23,8 @@ import { usePersonalTarget } from './usePersonalPanel'
 import { TeamPanel } from './TeamPanel'
 import { useShownPanelWidth } from './useShownPanelWidth'
 import { PersonalPanel } from './PersonalPanel'
+import { OwnWorkbookPanel } from './OwnWorkbookPanel'
+import { useOwnWorkbook } from './own-workbook'
 
 export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
@@ -30,6 +32,7 @@ export function TeamPanelArea() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
   const personal = usePersonalTarget()
+  const own = useOwnWorkbook() // TG-5b interim: see the full-form branch below
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
   // On a journal.v1 host (J-2b) the workbook view stays off: no drill into a seat's workbook. Either host decides: the tab's own host (its cc
@@ -93,6 +96,9 @@ export function TeamPanelArea() {
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
             onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}
           />
+        ) : view0.kind === 'personal' && own !== null && paneMode === 'full' ? (
+          // Until the full form's card and workbook entry arrive (TG-5c), an older host's own workbook keeps its full view, so 5b alone loses nothing.
+          <OwnWorkbookPanel hostId={own.hostId} sessionId={own.sessionId} mode={paneMode} onSetMode={(m) => useTeamUiStore.getState().setSharedPanelMode(m)} />
         ) : view0.kind === 'personal' ? (
           <PersonalPanel
             target={view0.target}
