@@ -38,6 +38,21 @@ func TestParseCPUStatDetail(t *testing.T) {
 	}
 }
 
+func TestParseCPUStatDetailRefusesCutOffLines(t *testing.T) {
+	for name, text := range map[string]string{
+		"aggregate with no counters": "cpu\ncpu0 1 0 1 1\n",
+		"aggregate cut off":          "cpu 1 2\n",
+		"core cut off":               "cpu 4 0 4 4\ncpu0 1 0 1\n",
+	} {
+		if _, err := ParseCPUStatDetail(text); err == nil {
+			t.Errorf("%s: must fail", name)
+		}
+	}
+	if _, err := ParseCPUStatDetail("cpu 1 0 1 1\ncpu0 1 0 1 1\n"); err != nil { // an old kernel with only four counters is whole
+		t.Errorf("four counters are enough: %v", err)
+	}
+}
+
 func TestParseCPUStatDetailSortsCoresByNumber(t *testing.T) {
 	// an offline core is missing from the file; the others keep their order by number, not by position
 	d, err := ParseCPUStatDetail("cpu 3 0 0 3 0 0 0 0\ncpu10 1 0 0 1 0 0 0 0\ncpu2 2 0 0 2 0 0 0 0\n")

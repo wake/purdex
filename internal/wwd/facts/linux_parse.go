@@ -140,6 +140,9 @@ type CPUStatDetail struct {
 // inside user and nice). User is user+nice, System system+irq+softirq, Idle idle+iowait; Total is all eight.
 func parseCPULine(f []string) (RawCore, error) {
 	var c RawCore
+	if len(f) < 5 { // the name and at least user, nice, system, idle: a cut-off read is a failed read, not a quiet host
+		return RawCore{}, errors.New("stat: a cpu line with fewer than four counters")
+	}
 	for i, s := range f[1:] {
 		n, err := strconv.ParseUint(s, 10, 64)
 		if err != nil {
