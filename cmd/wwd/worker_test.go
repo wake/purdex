@@ -15,6 +15,7 @@ import (
 	wrun "github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/jobexec"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
@@ -169,16 +170,20 @@ func TestThePerJobDatabaseIsSweptOnlyWhenThereIsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Sweepers) != 0 {
-		t.Fatalf("sweepers %v on a host with no per-job database", cfg.Sweepers)
+	// the build caches' timed trim is always one of the sweepers (#3833); the per-job database is the other, when there is one
+	if len(cfg.Sweepers) != 1 {
+		t.Fatalf("sweepers %v on a host with no per-job database: only the build cache's trim", cfg.Sweepers)
+	}
+	if _, ok := cfg.Sweepers[0].(*jobexec.GoCacheTrimmer); !ok {
+		t.Fatalf("sweeper %T: the build cache's trim", cfg.Sweepers[0])
 	}
 	in.DB = fakeDB{}
 	cfg, err = loopConfig(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Sweepers) != 1 {
-		t.Fatalf("sweepers %v: the per-job database is the loop's sweeper", cfg.Sweepers)
+	if len(cfg.Sweepers) != 2 {
+		t.Fatalf("sweepers %v: the per-job database is a sweeper of the loop, besides the build cache's trim", cfg.Sweepers)
 	}
 }
 
