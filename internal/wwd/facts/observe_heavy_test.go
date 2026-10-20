@@ -129,18 +129,69 @@ func TestTrackerDoesNotCarryTheCPUOfAReusedPIDToTheNewProgram(t *testing.T) {
 	}
 }
 
-func TestTrackerKeepsAtMostSixteenCandidatesPerTree(t *testing.T) {
+func TestTrackerBoundsTheCandidatesOfATree(t *testing.T) {
 	h, tr := newHost(), newTracker()
 	h.add(200, 100, "zsh", ccRoot())
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 100; i++ { // a hundred at once, all running
 		h.add(300+i, 200, "tool", []string{"tool", "n" + strings.Repeat("x", i%3)})
 		h.rec(300 + i).CPUPct = float64(1 + i)
 	}
 	step(tr, h, 0)
 	for _, x := range tr.live {
-		if len(x.cands) > 16 {
-			t.Errorf("%d candidates kept, want at most 16", len(x.cands))
+		if len(x.cands) > maxAliveCandidates {
+			t.Errorf("%d candidates kept, want at most %d", len(x.cands), maxAliveCandidates)
 		}
+	}
+	h.remove(300, 301, 302) // ... and a hundred that ended, one after the other
+	h2, tr2 := newHost(), newTracker()
+	h2.add(200, 100, "zsh", ccRoot())
+	for i := 0; i < 40; i++ {
+		h2.add(300+i, 200, "tool", []string{"tool", "e" + strings.Repeat("x", i)})
+		h2.rec(300 + i).CPUPct = 100
+		step(tr2, h2, i)
+		h2.remove(300 + i)
+	}
+	for _, x := range tr2.live {
+		if len(x.cands) > maxCandidates+1 {
+			t.Errorf("%d candidates kept, want at most %d", len(x.cands), maxCandidates+1)
+		}
+	}
+}
+
+func TestTrackerKeepsAddingUpARunningProgramBeyondTheCapOfEndedOnes(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "zsh", ccRoot())
+	for i := 0; i < 17; i++ { // seventeen programs that stay, the first sixteen heavy in the first sample only
+		h.add(300+i, 200, "tool", []string{"tool", "w" + strings.Repeat("x", i)})
+	}
+	for i := 0; i < 30; i++ {
+		for j := 0; j < 16; j++ {
+			h.rec(300 + j).CPUPct = 0
+			if i == 0 {
+				h.rec(300 + j).CPUPct = 100
+			}
+		}
+		h.rec(316).CPUPct = 50
+		step(tr, h, i)
+	}
+	h.remove(200)
+	for j := 0; j < 17; j++ {
+		h.remove(300 + j)
+	}
+	got := gone(t, tr, h, 30)
+	if want := "tool w" + strings.Repeat("x", 16); len(got) != 1 || got[0].Signature != want {
+		t.Fatalf("the seventeenth program adds up to the most: want %q, got %+v", want, got)
+	}
+}
+
+func TestTrackerSeesThroughProgramsThatOnlyStartAnother(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	h.add(200, 100, "zsh", ccRoot())
+	h.add(201, 200, "sudo", []string{"sudo", "-n", "true"})
+	h.add(202, 201, "go", []string{"go", "test", "./x/"})
+	sig, _ := runHeavy(t, h, tr, 20, func(int) { h.rec(202).CPUPct = 300 })
+	if sig != "go test" {
+		t.Errorf("Signature = %q, want go test (not sudo)", sig)
 	}
 }
 

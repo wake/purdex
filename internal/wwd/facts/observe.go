@@ -75,8 +75,12 @@ type tree struct {
 	candSeq   int
 }
 
-// maxCandidates bounds the programs a shell-rooted tree tracks to name itself by.
-const maxCandidates = 16
+// maxCandidates bounds the programs that have ended a shell-rooted tree keeps to name itself by; maxAliveCandidates the ones still
+// running (a program that runs keeps adding up, so it is never dropped for the cap of the ended ones).
+const (
+	maxCandidates      = 16
+	maxAliveCandidates = 64
+)
 
 // candKey tells a program from another one that took its pid: its start time, or its argv where the reader has none.
 type candKey struct {
@@ -407,6 +411,9 @@ func shellOnly(argv []string, signature string) bool {
 	return len(argv) > 0 && isShellName(argv[0]) && signature == trimName(path.Base(strings.TrimPrefix(argv[0], "-")))
 }
 
+// passThrough are programs that only start another one (sudo go test): the candidate is what they run, not they themselves.
+var passThrough = map[string]bool{"sudo": true, "time": true, "nice": true, "nohup": true, "caffeinate": true, "exec": true, "command": true, "timeout": true, "gtimeout": true, "arch": true, "env": true}
+
 func isShellName(name string) bool {
 	return shellCommands[path.Base(strings.TrimPrefix(name, "-"))]
 }
@@ -444,7 +451,7 @@ func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, 
 			if isRoot[ch] || t.notACommand(p, c) {
 				continue
 			}
-			if isShellName(p.Name) {
+			if isShellName(p.Name) || passThrough[path.Base(p.Name)] {
 				stack = append(stack, ch)
 				continue
 			}
@@ -486,18 +493,30 @@ func (t *Tracker) nameByHeaviest(tr *tree, rootPID int, children map[int][]int, 
 	}
 }
 
-// trimCandidates drops candidates beyond maxCandidates: the lightest of those that are gone first (a program still running keeps its
-// place and goes on adding up; one that has ended cannot grow), then the lightest of the rest.
+// trimCandidates keeps at most maxCandidates ended programs and maxAliveCandidates running ones, dropping the lightest first.
 func (t *Tracker) trimCandidates(tr *tree) {
-	for len(tr.cands) > maxCandidates {
-		var worstK candKey
-		var worst *candidate
-		for k, cd := range tr.cands {
-			gone, worstGone := cd.seen < t.sample, worst != nil && worst.seen < t.sample
-			if worst == nil || gone && !worstGone || gone == worstGone && worst.heavier(cd) {
-				worstK, worst = k, cd
-			}
+	for _, alive := range []bool{false, true} {
+		limit := maxCandidates
+		if alive {
+			limit = maxAliveCandidates
 		}
-		delete(tr.cands, worstK)
+		for {
+			n := 0
+			var worstK candKey
+			var worst *candidate
+			for k, cd := range tr.cands {
+				if (cd.seen == t.sample) != alive {
+					continue
+				}
+				n++
+				if worst == nil || worst.heavier(cd) {
+					worstK, worst = k, cd
+				}
+			}
+			if n <= limit {
+				break
+			}
+			delete(tr.cands, worstK)
+		}
 	}
 }
