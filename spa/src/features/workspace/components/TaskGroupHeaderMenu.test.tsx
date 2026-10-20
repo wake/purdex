@@ -5,10 +5,10 @@ import { TaskGroupHeaderMenu } from './TaskGroupHeaderMenu'
 import { TEAM_COLORS } from '../../../components/team/team-display'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
-function mount(over: Partial<React.ComponentProps<typeof TaskGroupHeaderMenu>> = {}) {
-  const props = { position: { x: 10, y: 60 }, color: undefined, onRename: vi.fn(), onColor: vi.fn(), onDelete: vi.fn(), onClose: vi.fn(), ...over }
-  render(<TaskGroupHeaderMenu {...props} />)
-  return props
+function mount(over: { color?: string } = {}) {
+  const mocks = { onRename: vi.fn(), onColor: vi.fn(), onDelete: vi.fn(), onClose: vi.fn() }
+  render(<TaskGroupHeaderMenu position={{ x: 10, y: 60 }} color={undefined} {...mocks} {...over} />)
+  return mocks
 }
 
 beforeEach(() => { cleanup(); useI18nStore.getState().setLocale('zh-TW') })
