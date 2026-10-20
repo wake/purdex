@@ -672,4 +672,4 @@ the three kinds to be gone from `GET /v1/alerts` (a host that no longer judges a
 only then install the older build. An older wwd that finds a row of a kind it does not know in its own `alerts` table refuses the whole list; if
 one is left (the wwd died before it cleared), delete the rows of those three kinds in `wwd.db` before starting the older build.
 
-**Checking.** `pdx wwd alerts` (or the App's pool alert view) lists the active alerts; a host with the rules on and calm shows none of the three.
+**Checking.** `GET /v1/alerts` on the host's wwd socket (or the App's pool alert view, `GET /api/pool/hosts/{alias}/alerts`) lists the active alerts; a host with the rules on and calm shows none of the three. `wwd alerts-replay` (§8) will count the three rules over recorded minutes once S3-2b is in.
