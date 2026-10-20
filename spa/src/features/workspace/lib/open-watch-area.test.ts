@@ -44,6 +44,20 @@ describe('openWatchArea in a world that is not settled', () => {
 })
 
 describe('openWatchArea', () => {
+  it('a pool host (the sidebar) is found among the fleet\'s hosts by alias and its tab selected (MON-1c bridge)', () => {
+    useFleetStore.setState({ snapshot: { hostId: 'p', term: 1, order: ['h1', 'h2'], hosts: { h1: { id: 'h1', alias: 'air26' } as never, h2: { id: 'h2', alias: 'mlab' } as never } } })
+    openWatchArea({ poolHost: { hostId: '82b11c521df16c12', alias: 'mlab' } })
+    expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h2'))
+    expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
+  })
+
+  it('a pool host no fleet host has the alias of selects the area\'s first tab, like an unknown host', () => {
+    openWatchArea({ poolHost: { hostId: '82b11c521df16c12', alias: 'ghost' } })
+    expect(useTabStore.getState().activeTabId).toBe(G)
+    openWatchArea({ poolHost: { hostId: '82b11c521df16c12', alias: '' } })
+    expect(useTabStore.getState().activeTabId).toBe(G)
+  })
+
   it('entering from a session workspace: creates the area and its tabs, selects the host tab, remembers where from', () => {
     openWatchArea({ host: 'h2' })
     expect(area()!.tabs).toEqual([G, watchHostTabId('h1'), watchHostTabId('h2')])
