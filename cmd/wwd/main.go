@@ -161,23 +161,21 @@ func run(cfgPath string) error {
 	}
 	fastLane = localruns.New(tbl, localruns.FromQueue(q), alias)
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
-		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
+		Store: st, Host: alias, Events: broker, OwnerRuleSupported: facts.OwnerReadable(),
 		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
 	})
 	if err != nil {
 		return err
 	}
-	// the owner rule follows the worker settings: PUT /v1/worker changes the idle limit at run time
+	// the owner is read whether or not the rule is enabled ([owner] enabled only sets the rule in force, above): the facts report the
+	// reading and the rule decides whether it counts (spec §3.2, #3682). The idle limit follows the worker settings: PUT /v1/worker
+	// changes it at run time.
 	// the tool directories of [tools] extra_path: one resolved list for the facts' tool probe and for the jobs' PATH
 	toolDirs := facts.ResolveExtraDirs(home, cfg.Tools.ExtraPath, log.Printf)
-	srcOpt := facts.SourceOptions{ToolDirs: toolDirs}
-	if cfg.Owner.Enabled {
-		srcOpt.Owner = &facts.OwnerConfig{}
-		srcOpt.OwnerMinutes = func() int {
-			m, _ := daemon.ParseOwnerRule(state.Worker().OwnerRule)
-			return m
-		}
-	}
+	srcOpt := sourceOptions(toolDirs, func() int {
+		m, _ := daemon.ParseOwnerRule(state.Worker().OwnerRule)
+		return m
+	})
 	// the observation records (spec 8.4): the sampler hands each process table to the observer, the routes read it back
 	observer := daemon.NewObserver(alias, facts.ObserveConfig{
 		MinCPUSeconds: cfg.Observe.MinCPUSeconds, MinMemMB: cfg.Observe.MinMemMB, Interval: daemon.SampleInterval,

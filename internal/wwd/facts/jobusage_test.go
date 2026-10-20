@@ -15,7 +15,24 @@ func sample(tr *JobUsageTracker, h *host, n int, zone wire.Zone, owner *wire.Own
 	snap, ctx := h.snapshot()
 	now := ot0.Add(time.Duration(n) * 5 * time.Second)
 	tr.Observe(now, snap, ctx)
-	tr.Commit(wire.Facts{At: now, Owner: owner, Derived: wire.Derived{Zone: zone}})
+	// a host whose owner is read has the owner rule in force here: the readings count only with one (see TestJobUsageOwnerReadingCountsOnlyWithARule)
+	tr.Commit(wire.Facts{At: now, Owner: owner, Worker: wire.FactsWorker{OwnerRule: "hid<5m"}, Derived: wire.Derived{Zone: zone}})
+}
+
+// A host with no owner rule in force still reports its owner reading in the facts (#3682), but the usage record of a job leaves the owner
+// out, as spec §8.6 says of a host with no rule: nothing about the owner is stored with the job.
+func TestJobUsageOwnerReadingCountsOnlyWithARule(t *testing.T) {
+	h, tr := jobHost(), newJU()
+	for n, o := range []*wire.OwnerState{{Active: false}, {Active: true, Reason: "hid"}, {Active: false}} {
+		snap, ctx := h.snapshot()
+		now := ot0.Add(time.Duration(n) * 5 * time.Second)
+		tr.Observe(now, snap, ctx)
+		tr.Commit(wire.Facts{At: now, Owner: o, Derived: wire.Derived{Zone: wire.ZoneNormal}}) // no Worker.OwnerRule
+	}
+	got, _ := tr.Take("j_a")
+	if got.OwnerAtStart != nil || got.OwnerSeen != nil {
+		t.Errorf("no rule in force: the job's record has the owner: %+v %+v", got.OwnerAtStart, got.OwnerSeen)
+	}
 }
 
 func jobHost() *host {
