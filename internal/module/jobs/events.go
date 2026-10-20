@@ -133,7 +133,7 @@ func (m *Module) onEvent(ev wire.Event) {
 	if ev.Type != wire.EventJob {
 		return
 	}
-	je, err := wire.Decode[wire.JobEvent](ev.Data)
+	je, err := wire.DecodeLenient[wire.JobEvent](ev.Data)
 	if err != nil {
 		m.logf("jobs: wwd sent a job event that does not decode: %v", err)
 		return

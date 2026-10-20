@@ -133,7 +133,7 @@ func (p *Peer) do(ctx context.Context, method, path string, q url.Values, body i
 		}
 		return nil, fmt.Errorf("origin: %s %s: HTTP 404 that is not wwd's", method, path)
 	case http.StatusConflict:
-		c, derr := wire.Decode[wire.Conflict409](raw)
+		c, derr := wire.DecodeLenient[wire.Conflict409](raw)
 		if derr != nil {
 			return nil, fmt.Errorf("origin: %s %s: 409 with an unreadable body: %w", method, path, derr)
 		}
@@ -155,7 +155,7 @@ func decodeAnswer[T any](raw []byte, err error) (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	v, derr := wire.Decode[T](raw)
+	v, derr := wire.DecodeLenient[T](raw)
 	if derr != nil {
 		return zero, fmt.Errorf("origin: unreadable answer: %w", derr)
 	}

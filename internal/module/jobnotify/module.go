@@ -180,7 +180,7 @@ func (m *Module) onEvent(ctx context.Context, ev wire.Event) {
 	if ev.Type != wire.EventJob {
 		return
 	}
-	je, err := wire.Decode[wire.JobEvent](ev.Data)
+	je, err := wire.DecodeLenient[wire.JobEvent](ev.Data)
 	if err != nil {
 		return
 	}

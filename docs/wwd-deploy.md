@@ -188,6 +188,23 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   hold would keep the hold's `allow` and `flags`. So **the old wwd must be stopped before the new one starts** (`systemctl restart`,
   `launchctl kickstart -k` and the roll back below all stop it first), and **never run two wwd on one `wwd.db`**: the second one
   migrates in `store.Open` and only then fails to bind its port (wwd has no single-instance lock; #3630).
+* **Adding a field to a wire payload: the "conversion build" rule** (#3710). Until this change every reader decoded strictly
+  (`wire.Decode`): a record with a field the reader's build did not know was refused whole, so every new field was a break for any host
+  that was not upgraded first. Readers of what comes from somewhere that may be a later build — a peer's answer or push, an event, a
+  record read back from `wwd.db`, the body of a peer's worker call — now use `wire.DecodeLenient` (unknown fields skipped, framing, types
+  and `Validate` still checked). Request bodies written by a person or a script (`PUT /v1/worker`, `POST /v1/exceptions`, `/v1/jobs`,
+  `/v1/local-runs`, the position calls) stay strict, so a typo is an error; `TestStrictDecodeOnlyReadsRequestBodies` keeps that list.
+  The build that carries `DecodeLenient` is the **conversion build** (from #3710; if it ships in 765, 765 is it). The rules:
+  1. The conversion build itself adds **no field whose safety depends on the reader being lenient**: the 764 hosts still read strictly,
+     and would refuse such a record (`TestAStrictReaderOfTheOldKindRefusesAFieldItDoesNotKnow` pins this).
+  2. Before a later build adds a field to a payload, **check that every pool host (mlab, air26, air19, mserv — air19 is often behind) runs
+     the conversion build or later** (`pdx wwd status` on each: version; or `GET /v1/info`).
+  3. **After a field has been written, do not roll back to a build before the conversion build**, unless the field has not been written
+     yet (a host on the old build refuses the record whole, and the pool view of the host goes stale — `pool.go` keeps the last facts).
+  4. A new **enumeration value** (a new job state, alert kind, event type, …) is not covered: `Validate` still refuses a value the
+     reader does not know. Those need the proto/capability route, or the same deploy-all-first order.
+  Fields shipped before the conversion build (`disk_low` and `disk_min_gb` in 765) keep their own rule: same host, Purdex daemon and `pdx`
+  first, then wwd, all four hosts together.
 * Roll back: deploy the previous build the same way. If the new build moved the queue schema, the old binary refuses
   the migrated database (`queue_schema` newer than it knows), so a roll back across a schema step is: stop wwd,
   put the backup back as `wwd.db` (remove the `-wal` and `-shm` files beside it), start the old build. Jobs

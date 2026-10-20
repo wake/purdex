@@ -96,13 +96,12 @@ func TestUnavailable_WhenThereIsNoSocket(t *testing.T) {
 	}
 }
 
-// wwd answers something the contract refuses (an unknown field, a bad proto): ErrBadResponse, so the caller can tell a
-// broken wwd from an absent one.
+// wwd answers something the contract refuses (a bad proto, not json): ErrBadResponse, so the caller can tell a broken wwd from an absent
+// one. (A field this build does not know is not refused: lenient_test.go.)
 func TestBadResponse_UnknownFieldAndBadProto(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown field": `{"peers": [], "extra": 1}`,
-		"bad proto":     `{"peers": [{"info": {"host_id": "h", "alias": "a", "version": "0", "proto": 9, "platform": "darwin", "arch": "arm64", "worker": {"enabled": false}, "labels": []}, "facts": null, "reachable": false}]}`,
-		"not json":      `<html>`,
+		"bad proto": `{"peers": [{"info": {"host_id": "h", "alias": "a", "version": "0", "proto": 9, "platform": "darwin", "arch": "arm64", "worker": {"enabled": false}, "labels": []}, "facts": null, "reachable": false}]}`,
+		"not json":  `<html>`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			mux := http.NewServeMux()

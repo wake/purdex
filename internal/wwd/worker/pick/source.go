@@ -83,7 +83,7 @@ func (s peerSource) Queued(ctx context.Context) ([]wire.Job, error) {
 	if len(body) > maxAnswer {
 		return nil, fmt.Errorf("peer %s: jobs answer over %d bytes", s.host, maxAnswer)
 	}
-	r, err := wire.Decode[wire.JobsListResponse](body)
+	r, err := wire.DecodeLenient[wire.JobsListResponse](body)
 	if err != nil {
 		return nil, fmt.Errorf("peer %s: bad jobs answer: %w", s.host, err)
 	}

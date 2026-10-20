@@ -62,18 +62,18 @@ func (c *Client) RegisterLocal(ctx context.Context, req wire.LocalRunRequest) (w
 	if err != nil {
 		var se *StatusError
 		if errors.As(err, &se) && se.Code == http.StatusConflict {
-			if b, derr := wire.Decode[wire.LocksBusy]([]byte(se.Body)); derr == nil {
+			if b, derr := wire.DecodeLenient[wire.LocksBusy]([]byte(se.Body)); derr == nil {
 				return wire.LocalRunResponse{}, &LocksBusyError{Keys: b.Keys, Holders: b.Holders}
 			}
 		}
 		if errors.As(err, &se) && se.Code == http.StatusTooManyRequests {
-			if b, derr := wire.Decode[wire.SlotBusy]([]byte(se.Body)); derr == nil {
+			if b, derr := wire.DecodeLenient[wire.SlotBusy]([]byte(se.Body)); derr == nil {
 				return wire.LocalRunResponse{}, &SlotBusyError{Slot: b.Slot, Reasons: b.Reasons}
 			}
 		}
 		return wire.LocalRunResponse{}, err
 	}
-	r, err := wire.Decode[wire.LocalRunResponse](raw)
+	r, err := wire.DecodeLenient[wire.LocalRunResponse](raw)
 	if err != nil {
 		return wire.LocalRunResponse{}, errBad(err)
 	}
@@ -90,7 +90,7 @@ func (c *Client) Heartbeat(ctx context.Context, id, claimID string) (wire.Heartb
 	if err != nil {
 		return wire.HeartbeatResponse{}, claimErr(err)
 	}
-	r, err := wire.Decode[wire.HeartbeatResponse](raw)
+	r, err := wire.DecodeLenient[wire.HeartbeatResponse](raw)
 	if err != nil {
 		return wire.HeartbeatResponse{}, errBad(err)
 	}

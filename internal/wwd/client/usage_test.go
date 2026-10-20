@@ -34,7 +34,6 @@ func TestUsage_SendsTheQueryAndDecodes(t *testing.T) {
 
 func TestUsage_RefusesWhatTheContractRefuses(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown field":    `{"host":"air26","since":"2026-10-18T01:02:03Z","records":[],"truncated":false,"next_since":null,"next_after":null,"extra":1}`,
 		"truncated alone":  `{"host":"air26","since":"2026-10-18T01:02:03Z","records":[],"truncated":true,"next_since":null,"next_after":null}`,
 		"no host":          `{"host":"","since":"2026-10-18T01:02:03Z","records":[],"truncated":false,"next_since":null,"next_after":null}`,
 		"a record missing": `{"host":"air26","since":"2026-10-18T01:02:03Z","records":[{}],"truncated":false,"next_since":null,"next_after":null}`,
