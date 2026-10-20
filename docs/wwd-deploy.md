@@ -564,13 +564,17 @@ scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
 * **The tree.** `pdx test` sends the working tree of the repository it runs in and has no option for a commit, so the gate keeps a clean clone of
   its own, `~/.local/share/purdex-gate/clone`, whose `origin` is GitHub (`git@github.com:wake/purdex.git`, never the main checkout: its local `main` is
   often behind the cut, and `--reference` would lean on its objects). Each run fetches, checks the commit out detached, and removes everything the
-  commit does not have (`clean -ffdx`: a snapshot carries untracked files). The commit has to be pushed.
+  commit does not have (`clean -ffdx`: a snapshot carries untracked files). The commit is given as a **hash** (7 to 40 hex digits, never a branch name)
+  and has to be on a branch of the remote after that fetch (a commit that only the clone has is refused). One run per clone: a lock
+  (`<clone>.lock`, with the pid; one whose run is gone is taken over) refuses a second run, and every run writes to a directory of its own. When the
+  tasks are done the clone must still be at the commit, or the gate fails.
 * **The tasks**, all sent at once, each by its own `pdx test <task> --json` that waits for its job (there is no `pdx jobs wait`, and `--json` has the
   job id, the host and `cache_hit`): `go-all`, `spa-full`, `tsc-force`, `e2e`, `lint`, `wwd-linux`, `wwd-linux-vet`, and the scripts' own tests
   (`wwd-scripts-mysql`, `-c2`, `-c2-stub`, `-deploy`, `-gate`). `--mod` adds `mod-all`: send it only when `cmd/pdx/plugin` changed.
   `purdex_gate_test.go` keeps the script's list and the manifest in step.
 * **The table** has one row per task: pass or FAIL, the job's exit, the host it ran on, the job id, `ran` or `cache`, the seconds. The last line counts
-  them. A task that gave no report (pdx died, wwd was down) is a FAIL. Logs of each `pdx test` call are in `~/.local/share/purdex-gate/runs/`.
+  them. A pass is `pdx test`'s exit 0 **and** a report that says so (this task, `succeeded`, exit 0, with a job id and a host); a task that gave no
+  report (pdx died, wwd was down) or a report that does not, is a FAIL. Logs of each `pdx test` call are in `~/.local/share/purdex-gate/runs/`.
 * **The cache.** A result that was filed for the very same snapshot tree (the key is the whole tree, the task and its definition, and the host's
   toolchain) answers at once and shows as `cache`: what was not touched keeps its last result. Only successes are filed. `--no-cache` runs everything
   again.

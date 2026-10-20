@@ -58,22 +58,44 @@ for s in $skips; do
 	esac
 done
 
-# the clone: its origin is the remote, it holds the commit, it is detached at it and has nothing the commit does not have
+# a hash, not a ref name: the commit is looked up in what the remote has, never in a local branch of the clone
+case $commit in
+*[!0-9a-fA-F]*) die "give a commit hash (7 to 40 hex digits), not $commit" ;;
+esac
+[ ${#commit} -ge 7 ] && [ ${#commit} -le 40 ] || die "give a commit hash (7 to 40 hex digits), not $commit"
+
+# one gate run per clone: it is checked out, cleaned and snapshotted by every task, so two runs at once would send each other's tree. The lock is
+# a directory with the pid of its run; one whose run is gone is taken over.
 export GIT_TERMINAL_PROMPT=0
+mkdir -p "$(dirname "$clone")" || die "cannot make $(dirname "$clone")"
+lock="$clone.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+	pid=$(cat "$lock/pid" 2>/dev/null || true)
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		die "another release gate (pid $pid) is using $clone: wait for it"
+	fi
+	rm -rf "$lock"
+	mkdir "$lock" 2>/dev/null || die "cannot take the lock $lock"
+fi
+echo $$ > "$lock/pid"
+trap 'rm -rf "$lock"' EXIT INT TERM HUP
+
+# the clone: its origin is the remote, it holds the commit, it is detached at it and has nothing the commit does not have
 if [ -d "$clone/.git" ]; then
 	git -C "$clone" remote set-url origin "$remote" || die "cannot point $clone at $remote"
 else
-	mkdir -p "$(dirname "$clone")" || die "cannot make $(dirname "$clone")"
 	git clone -q --no-checkout "$remote" "$clone" || die "cannot clone $remote"
 fi
 git -C "$clone" fetch -q --prune origin || die "cannot fetch $remote"
-git -C "$clone" cat-file -e "$commit^{commit}" 2>/dev/null || die "$commit is not in $remote (is it pushed?)"
-git -C "$clone" checkout -q --detach --force "$commit" || die "cannot check out $commit"
+full=$(git -C "$clone" rev-parse --verify -q "$commit^{commit}") || die "$commit is not in $remote (is it pushed?)"
+# the clone also holds objects of earlier remotes and commits made in it: the commit has to be on a branch of this fetch
+[ -n "$(git -C "$clone" for-each-ref --count=1 --contains "$full" refs/remotes/origin)" ] || die "$commit is not on any branch of $remote (is it pushed?)"
+git -C "$clone" checkout -q --detach --force "$full" || die "cannot check out $commit"
 git -C "$clone" clean -qffdx || die "cannot clean $clone"
-full=$(git -C "$clone" rev-parse HEAD)
 
-work="$(dirname "$clone")/runs/$(date +%Y%m%d-%H%M%S)-$(echo "$full" | cut -c1-9)"
-mkdir -p "$work" || die "cannot make $work"
+runs="$(dirname "$clone")/runs"
+mkdir -p "$runs" || die "cannot make $runs"
+work=$(mktemp -d "$runs/$(date +%Y%m%d-%H%M%S)-$(echo "$full" | cut -c1-9).XXXXXX") || die "cannot make a run directory in $runs"
 echo "release gate at $full (clone $clone, logs $work)"
 
 for t in $tasks; do
@@ -96,16 +118,21 @@ for t in $tasks; do
 		continue ;;
 	esac
 	rc=$(cat "$work/$t.rc" 2>/dev/null || echo "?")
-	if ! jq -e . "$work/$t.json" >/dev/null 2>&1; then
+	if ! jq -s -e 'length == 1 and (.[0] | type == "object")' "$work/$t.json" >/dev/null 2>&1; then
 		why=$(head -n 1 "$work/$t.err" 2>/dev/null | cut -c1-100)
 		printf '%-20s %-8s %-4s %s\n' "$t" FAIL "$rc" "no report${why:+: $why}"
 		failed=$((failed + 1))
 		continue
 	fi
-	row=$(jq -r '[(.exit // "-" | tostring), (.host // "-"), (.id // "-"), (if .cache_hit then "cache" else "ran" end), ((.duration_s // 0) | floor | tostring)] | join(" ")' "$work/$t.json")
+	row=$(jq -r -s '.[0] | [(.exit // "-" | tostring), (.host // "-"), (.id // "-"), (if .cache_hit then "cache" else "ran" end), ((.duration_s // 0) | floor | tostring)] | join(" ")' "$work/$t.json")
 	# shellcheck disable=SC2086
 	set -- $row
-	if [ "$rc" = 0 ]; then
+	# a pass is pdx's exit 0 AND a report that says so: this task, succeeded, exit 0, with a job id and a host (a report of another task, a
+	# failed one, an empty one or a half one is not what a green gate may rest on)
+	if [ "$rc" = 0 ] && ! jq -s -e --arg t "$t" '.[0] | .task == $t and .state == "succeeded" and .exit == 0 and (.id | type == "string" and length > 0) and (.host | type == "string" and length > 0)' "$work/$t.json" >/dev/null 2>&1; then
+		printf '%-20s %-8s %-4s %-8s %-28s %-6s %s\n' "$t" FAIL "$1" "$2" "$3" "$4" "report is not a success of $t"
+		failed=$((failed + 1))
+	elif [ "$rc" = 0 ]; then
 		printf '%-20s %-8s %-4s %-8s %-28s %-6s %s\n' "$t" pass "$1" "$2" "$3" "$4" "$5"
 		pass=$((pass + 1))
 		[ "$4" = cache ] && cached=$((cached + 1))
@@ -114,6 +141,13 @@ for t in $tasks; do
 		failed=$((failed + 1))
 	fi
 done
+
+# every task took its snapshot of the clone as it was sent: if the clone is not at the commit now, some of the results may be for another tree
+now=$(git -C "$clone" rev-parse HEAD 2>/dev/null || echo "?")
+if [ "$now" != "$full" ]; then
+	echo "release gate: the clone moved from $full to $now while the tasks were sent: the results are not for the commit"
+	failed=$((failed + 1))
+fi
 
 echo "release gate: $pass passed ($cached from cache), $failed failed, $skipped skipped; logs $work"
 if [ "$failed" -gt 0 ]; then exit 1; fi

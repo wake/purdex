@@ -36,7 +36,13 @@ rc=$(eval "echo \${$var:-0}")
 [ "${FAKE_NOREPORT:-}" = "$task" ] && exit 3
 cache=false; [ "${FAKE_CACHE:-}" = "$task" ] && cache=true
 state=succeeded; [ "$rc" != 0 ] && state=failed
-printf '{"id":"job-%s","task":"%s","state":"%s","exit":%s,"host":"air26","cache_hit":%s,"duration_s":12.7}\n' "$task" "$task" "$state" "$rc" "$cache"
+[ -n "${FAKE_MOVE_TO:-}" ] && [ "$task" = go-all ] && git checkout -q --detach "$FAKE_MOVE_TO"
+# reports that a gate must not read as a pass although pdx exited 0
+[ "${FAKE_EMPTY:-}" = "$task" ] && { echo '{}'; exit 0; }
+[ "${FAKE_BADSTATE:-}" = "$task" ] && state=failed
+[ "${FAKE_WRONGTASK:-}" = "$task" ] && task=another-task
+host='"host":"air26",'; [ "${FAKE_NOHOST:-}" = "$task" ] && host=''
+printf '{"id":"job-%s","task":"%s","state":"%s","exit":%s,%s"cache_hit":%s,"duration_s":12.7}\n' "$task" "$task" "$state" "$rc" "$host" "$cache"
 exit "$rc"
 EOF
 chmod +x "$tmp/pdx"
@@ -131,5 +137,48 @@ run "$c2"
 [ "$rc" = 0 ] || fail "second cut: exit $rc: $out"
 [ "$(git -C "$clone" rev-parse HEAD)" = "$c2" ] || fail "the clone did not move to the new cut"
 [ ! -e "$clone/leftover.txt" ] && [ ! -e "$clone/node_modules" ] || fail "untracked leftovers must be removed before the snapshot"
+
+# 8. a report is not a pass because pdx exited 0 (#3708 R2): the task, the state, the exit, the job id and the host must all be there
+for bad in FAKE_EMPTY FAKE_BADSTATE FAKE_WRONGTASK FAKE_NOHOST; do
+	export "$bad=wwd-linux"
+	run "$c2"
+	unset "$bad"
+	[ "$rc" = 1 ] || fail "$bad: exit $rc, want 1: $out"
+	echo "$out" | grep "wwd-linux " | grep -q "FAIL" || fail "$bad: wwd-linux must be FAIL: $out"
+done
+
+# 9. one gate run per clone: a live lock refuses the second run, a stale one is taken over, and the lock is gone after a run
+mkdir "$clone.lock"; echo $$ > "$clone.lock/pid"
+run "$c2"
+[ "$rc" = 2 ] || fail "a live lock: exit $rc, want 2: $out"
+has "$out" "another release gate" "the refusal says why"
+[ ! -s "$tmp/log" ] || fail "nothing may be sent while the clone is in use"
+echo 999999 > "$clone.lock/pid"
+run "$c2"
+[ "$rc" = 0 ] || fail "a stale lock must be taken over: exit $rc: $out"
+[ ! -e "$clone.lock" ] || fail "the lock must be removed after a run"
+
+# 10. the commit must be a hash that the remote has on a branch: a ref name, or a commit that only the clone has, is refused
+run main
+[ "$rc" = 2 ] || fail "a ref name: exit $rc, want 2: $out"
+g "$clone" commit -q --allow-empty -m "only here"
+local_only=$(git -C "$clone" rev-parse HEAD)
+run "$local_only"
+[ "$rc" = 2 ] || fail "a commit not on the remote: exit $rc, want 2: $out"
+has "$out" "not on any branch" "the refusal says why"
+[ ! -s "$tmp/log" ] || fail "nothing may be sent for a commit the remote does not have"
+
+# 11. the clone must still be at the commit when the tasks are done (a snapshot is taken as each is sent)
+FAKE_MOVE_TO=$c1 run "$c2"
+[ "$rc" = 1 ] || fail "a clone that moved: exit $rc, want 1: $out"
+has "$out" "moved" "the table says the clone moved"
+unset FAKE_MOVE_TO
+
+# 12. every run has a directory of its own
+runs="$(dirname "$clone")/runs"
+before=$(ls "$runs" | wc -l)
+run "$c2"; run "$c2"
+after=$(ls "$runs" | wc -l)
+[ $((after - before)) = 2 ] || fail "two runs must leave two run directories: $before → $after"
 
 echo ok
