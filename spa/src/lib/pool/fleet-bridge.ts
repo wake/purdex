@@ -1,11 +1,15 @@
-// spa/src/lib/pool/cell-model.ts — what a host cell and its card draw when the resource pool is the source (plan "WWD-7 design",
+// spa/src/lib/pool/fleet-bridge.ts — (moved from cell-model.ts, with usePoolCellModels from use-cell-models.ts; the transitional reader of fleet views for the host page and the Hosts page, MON-1c-0) what a host cell and its card draw when the resource pool is the source (plan "WWD-7 design",
 // "Cells and card"). The cell keeps today's look: a live host is handed to it as a fleet host whose readings are the pool's facts, so
 // the ring, the bars and the readings of the card are one code path. What the fleet has no word for (worker, headroom, owner, the
 // zone `unknown`) rides along in `pool`. A host the pool does not read goes back to the fleet's readings untouched (fallback) or to
 // offline; without a pool view at all the fleet host is returned as it is.
-import type { FleetHostView } from '../fleet/store'
+import { useMemo } from 'react'
+import { useFleetStore, type FleetHostView } from '../fleet/store'
 import type { FleetFast } from '../fleet/types'
-import type { FallbackReason, PoolHostView } from './host-view'
+import { poolHostView, type FallbackReason, type PoolHostView } from './host-view'
+import { usePoolStore } from './store'
+import { useClock, useRunPool } from './use-cell-models'
+import { usePoolHostDaemons } from './daemons'
 import type { HeadroomReasons, PoolFacts, PoolHost, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
 
 export interface PoolCellExtra {
@@ -77,4 +81,25 @@ export function poolCellModel(fleet: FleetHostView, view: PoolHostView | null, p
   }
   if (view.state === 'fallback') return { view: fleet, pool: { ...none, state: 'fallback', since: view.since, reason: view.reason } }
   return { view: { ...fleet, status: 'offline', fast: null, last_ok_at: view.lastOkAt }, pool: { ...none, state: 'offline', since: null } }
+}
+
+export function usePoolCellModels(views: FleetHostView[]): { models: PoolCellModel[]; active: boolean } {
+  useRunPool()
+  const now = useClock()
+  const hosts = usePoolStore((s) => s.hosts)
+  const oldDaemon = usePoolStore((s) => s.oldDaemon)
+  const answered = usePoolStore((s) => s.sourceHostId !== null)
+  const failed = usePoolStore((s) => s.error !== null)
+  const lastLiveAt = usePoolStore((s) => s.lastLiveAt)
+  const daemons = usePoolHostDaemons()
+  const fleetStale = useFleetStore((s) => s.stale)
+  // Active once the pool has said something: a list (an empty one is an answer too), or that every daemon failed. Before the first read the cells stay the fleet's.
+  const active = !oldDaemon && (answered || failed)
+  const models = useMemo(() => views.map((v) => {
+    if (!active) return poolCellModel(v, null, null)
+    const pool = matchPoolHost(hosts, v, daemons)
+    const alias = pool?.alias ?? v.alias
+    return poolCellModel(v, poolHostView({ alias, pool, fleet: v, fleetStale, poolLastOk: lastLiveAt[alias] ?? null }, now), pool)
+  }), [views, active, hosts, daemons, fleetStale, lastLiveAt, now])
+  return { models, active }
 }

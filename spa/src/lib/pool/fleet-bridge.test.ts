@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { poolCellModel, matchPoolHost } from './cell-model'
+import { poolCellModel, matchPoolHost } from './fleet-bridge'
 import { poolHostView, type PoolHostViewInput } from './host-view'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'

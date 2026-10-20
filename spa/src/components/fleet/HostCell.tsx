@@ -37,7 +37,7 @@ import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { fallbackWord } from '../../lib/pool/words'
 import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
-import type { PoolCellExtra } from '../../lib/pool/cell-model'
+import type { PoolCellExtra } from '../../lib/pool/fleet-bridge'
 import type { PoolZone } from '../../lib/pool/types'
 
 // One card at a time: the close function of the cell whose card is open (hover on B closes the card focus left on A).

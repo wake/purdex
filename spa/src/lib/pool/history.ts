@@ -4,7 +4,7 @@
 import { fleetHistory, type HistoryItem, type HistoryRange } from '../fleet/history'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { fetchFactsHistory, fetchPoolSeries, PoolReadError } from './api'
-import { factsToFast } from './cell-model'
+import { factsToFast } from './fleet-bridge'
 import type { PoolZone, SeriesPoint } from './types'
 
 /** The window the band and the seeded raw track cover. */
