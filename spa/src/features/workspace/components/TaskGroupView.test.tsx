@@ -671,6 +671,13 @@ describe('headers: selection, collapse and the three manual group states (task g
     expect(within(bare).queryByTestId('task-group-chevron')).toBeNull()
   })
 
+  it('the hint of a group with neither members nor tabs shows even if the group was collapsed while it had tabs', () => {
+    setGroups([{ ...group('g2', []), id: 'g2' }])
+    useGroupViewStore.setState({ expanded: { [manualGroupKey('g2')]: false } })
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-hint')).toBeInTheDocument()
+  })
+
   it('selecting an empty group sets the active tab to none and keeps the group selected', () => {
     setGroups([{ ...group('g2', []), id: 'g2' }])
     useTabStore.setState({ activeTabId: 't1' } as never)

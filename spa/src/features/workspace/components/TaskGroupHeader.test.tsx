@@ -191,4 +191,31 @@ describe('chevron, selection and toggle (task groups spec §6.1)', () => {
     expect(screen.getByTestId('task-group-header')).toHaveAttribute('data-selected', 'true')
     expect(screen.getByTestId('task-group-chevron').className).toContain('focus-visible:ring-1')
   })
+
+  it('the keyboard selects: with a header click, Enter or Space on the name is that click and only F2 renames', () => {
+    const onClick = vi.fn()
+    render(<TaskGroupHeader color="#000" name="G" onClick={onClick} edit={{ blocked: null, onCommit: async () => {} }} />)
+    fireEvent.keyDown(name(), { key: 'Enter' })
+    fireEvent.keyDown(name(), { key: ' ' })
+    expect(onClick).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    fireEvent.keyDown(name(), { key: 'F2' })
+    expect(input()).toBeInTheDocument()
+  })
+
+  it('a group with nothing to rename is still a tab stop and selectable from the keyboard', () => {
+    const onClick = vi.fn()
+    render(<TaskGroupHeader color="#000" name="G" onClick={onClick} />)
+    expect(name()).toHaveAttribute('tabindex', '0')
+    fireEvent.keyDown(name(), { key: 'Enter' })
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('an Enter that picks an IME candidate on the name is not a select', () => {
+    const onClick = vi.fn()
+    render(<TaskGroupHeader color="#000" name="G" onClick={onClick} />)
+    fireEvent.keyDown(name(), { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(name(), { key: 'Enter', keyCode: 229 })
+    expect(onClick).not.toHaveBeenCalled()
+  })
 })

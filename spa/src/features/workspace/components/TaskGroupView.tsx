@@ -229,7 +229,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
                 edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
                 clear={collapsed && hasMembers ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
-              {collapsed && !hasMembers && open && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}
+              {collapsed && !hasMembers && <div data-testid="task-group-hint" className="px-7 py-1 text-[11px] text-text-muted">{t('taskgroups.drop_hint')}</div>}
               {!collapsed && open && section.rows.map((r) => renderRow(r, undefined, false, section.groupId))}
             </section>
           )

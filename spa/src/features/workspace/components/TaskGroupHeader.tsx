@@ -85,11 +85,14 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
           {/* An editable name is a control: focusable, opened by Enter or F2 as well as a double-click; blocked, it stays focusable and says why (tooltip, and a hidden description). */}
           <span
             data-testid="task-group-name" title={edit?.blocked ?? undefined} aria-disabled={edit?.blocked ? true : undefined}
-            role={interactive ? 'button' : undefined} tabIndex={interactive ? 0 : undefined} aria-label={interactive ? name : undefined}
+            role={interactive || onClick ? 'button' : undefined} tabIndex={interactive || onClick ? 0 : undefined} aria-label={interactive || onClick ? name : undefined}
             aria-describedby={edit?.blocked ? `${reasonId}-name` : undefined}
             onDoubleClick={onDoubleClickName ?? start}
-            onKeyDown={interactive ? (e) => {
-              if ((e.key === 'Enter' || e.key === ' ' || e.key === 'F2') && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); (onDoubleClickName ?? start)() }
+            onKeyDown={interactive || onClick ? (e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              // The name is the header's one tab stop. With a header click (the task-group view) Enter / Space do what a click does — select, or collapse the selected one — and F2 renames; without it, Enter, Space and F2 all rename.
+              if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick(); return }
+              if ((e.key === 'Enter' || e.key === ' ' || e.key === 'F2') && interactive) { e.preventDefault(); (onDoubleClickName ?? start)() }
             } : undefined}
             className={nameClass}
           >
