@@ -5,16 +5,24 @@ import (
 	"testing"
 )
 
-func TestQualifyKeyRoundTrips(t *testing.T) {
-	for _, role := range []string{RoleCandidate, RoleReference} {
-		c, own, r, ok := ParseQualifyKey(QualifyKey("mserv", "task:purdex/tsc", role))
-		if !ok || c != "mserv" || own != "task:purdex/tsc" || r != role {
-			t.Errorf("%s: %q %q %q %v", role, c, own, r, ok)
+func TestQualifyRoleOfAKey(t *testing.T) {
+	// an alias may hold colons (wire.ValidAlias), so the key is compared, not split
+	for _, host := range []string{"mserv", "rack:a", "a:task:purdex/tsc:candidate"} {
+		for _, role := range []string{RoleCandidate, RoleReference} {
+			if r, ok := QualifyRole(QualifyKey(host, "task:purdex/tsc", role), host, "task:purdex/tsc"); !ok || r != role {
+				t.Errorf("%s %s: %q %v", host, role, r, ok)
+			}
 		}
 	}
-	for _, bad := range []string{"", "qualify:", "qualify:a", "qualify:a:b", "qualify::task:x/y:candidate", "qualify:a:task:x/y:other", "wwd:a:task:x/y:candidate"} {
-		if _, _, _, ok := ParseQualifyKey(bad); ok {
-			t.Errorf("%q parsed", bad)
+	key := QualifyKey("mserv", "task:purdex/tsc", RoleCandidate)
+	for name, c := range map[string][2]string{"other host": {"air26", "task:purdex/tsc"}, "other label": {"mserv", "task:purdex/other"}} {
+		if r, ok := QualifyRole(key, c[0], c[1]); ok {
+			t.Errorf("%s: %q", name, r)
+		}
+	}
+	for _, bad := range []string{"", "qualify:", "qualify:mserv:task:purdex/tsc:other", "wwd:mserv:task:purdex/tsc:candidate"} {
+		if _, ok := QualifyRole(bad, "mserv", "task:purdex/tsc"); ok {
+			t.Errorf("%q has a role", bad)
 		}
 	}
 }

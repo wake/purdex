@@ -134,8 +134,12 @@ func PrepareAt(job wire.Job, root, out, host string) (*Plan, error) {
 // metaMismatch names the first field of the job that is not the task's own ("" when all are): labels and locks as sets, cacheable and
 // interruptible as they are.
 func metaMismatch(job wire.Job, task *manifest.Task, host string) string {
-	if cand, own, role, ok := labels.ParseQualifyKey(job.SupersedeKey); ok && job.Submitter.Session == labels.QualifySession {
-		return halfMismatch(job, task, host, cand, own, role)
+	if job.Submitter.Session == labels.QualifySession {
+		// the key is rebuilt from the job's own submitter host and the snapshot task's label, never parsed (an alias may hold a colon)
+		own := labels.TaskLabel(job.Repo.Name, task.Name)
+		if role, ok := labels.QualifyRole(job.SupersedeKey, job.Submitter.Host, own); ok {
+			return halfMismatch(job, task, host, own, role)
+		}
 	}
 	switch {
 	case !sameSet(job.Labels, task.Labels):
@@ -155,14 +159,10 @@ func metaMismatch(job wire.Job, task *manifest.Task, host string) string {
 // (labels.QualifyHalfLabels): the task's labels as the role takes them plus host:<this worker>, the task's locks, dev class, not
 // cacheable, interruptible. The key's task label must be the snapshot task's own, so a half cannot name another label to be stripped
 // from the candidate's set, and the host must be this worker's: a half is never run for a host it was not worked out for.
-func halfMismatch(job wire.Job, task *manifest.Task, host, cand, own, role string) string {
+func halfMismatch(job wire.Job, task *manifest.Task, host, own, role string) string {
 	switch {
 	case host == "":
 		return "host (this worker has no name)"
-	case cand != job.Submitter.Host:
-		return "qualify key (candidate)"
-	case own != labels.TaskLabel(job.Repo.Name, task.Name):
-		return "qualify key"
 	case !sameSet(job.Labels, labels.QualifyHalfLabels(task.Labels, own, role, host)):
 		return "labels"
 	case !sameSet(job.Locks, task.Locks):

@@ -19,26 +19,15 @@ func QualifyKey(candidate, own, role string) string {
 	return "qualify:" + candidate + ":" + own + ":" + role
 }
 
-// ParseQualifyKey reads a half's supersede key back. ok is false for any other key. The candidate is a host alias (no colon); the earned
-// label (task:<repo>/<task>) has a colon of its own, so it is what lies between the first colon after the alias and the last colon.
-func ParseQualifyKey(key string) (candidate, own, role string, ok bool) {
-	rest, found := strings.CutPrefix(key, "qualify:")
-	if !found {
-		return "", "", "", false
+// QualifyRole says which role a supersede key is the key of for this candidate and earned label (ok false when it is neither). The key is
+// rebuilt and compared, not parsed: an alias may hold a colon, so the key does not split back unambiguously.
+func QualifyRole(key, candidate, own string) (role string, ok bool) {
+	for _, r := range []string{RoleCandidate, RoleReference} {
+		if key == QualifyKey(candidate, own, r) {
+			return r, true
+		}
 	}
-	candidate, rest, found = strings.Cut(rest, ":")
-	if !found || candidate == "" {
-		return "", "", "", false
-	}
-	i := strings.LastIndex(rest, ":")
-	if i <= 0 {
-		return "", "", "", false
-	}
-	own, role = rest[:i], rest[i+1:]
-	if role != RoleCandidate && role != RoleReference {
-		return "", "", "", false
-	}
-	return candidate, own, role, true
+	return "", false
 }
 
 // QualifyHalfLabels is the label set of one half of a pair, worked out from the task's own labels: the candidate asks for what a host

@@ -78,6 +78,20 @@ func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 	}
 }
 
+// An alias may hold a colon: the pair of such a candidate is accepted all the same.
+func TestAQualifyHalfOfACandidateWithAColonInItsAlias(t *testing.T) {
+	root := snapshot(t, qualifyTasks)
+	for _, role := range []string{labels.RoleReference, labels.RoleCandidate} {
+		j := half(role, "air26", func(j *wire.Job) {
+			j.SupersedeKey = labels.QualifyKey("rack:a", "task:purdex/tsc", role)
+			j.Submitter.Host = "rack:a"
+		})
+		if _, err := PrepareAt(j, root, t.TempDir(), "air26"); err != nil {
+			t.Errorf("%s: %v", role, err)
+		}
+	}
+}
+
 // A worker without a name accepts no half, not even one whose labels were worked out for the empty host.
 func TestAWorkerWithoutANameAcceptsNoHalf(t *testing.T) {
 	root := snapshot(t, qualifyTasks)
