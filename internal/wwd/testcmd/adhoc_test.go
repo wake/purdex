@@ -229,3 +229,28 @@ func TestAnAdHocRecordHoldsTheWorkingTreeAndSaysWhenItCouldNotTakeIt(t *testing.
 		t.Fatalf("tree %q, report %q", rec.bodies[0].Snapshot.Tree, errOut)
 	}
 }
+
+func TestADeclaredFastLaneRecordHoldsTheWorkingTreeToo(t *testing.T) {
+	dir := repo(t, true)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^{tree}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &capture{}
+	run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ()})
+	if got := rec.bodies[0].Snapshot.Tree; got == "" || got == strings.TrimSpace(string(head)) {
+		t.Fatalf("recorded tree %q: the directory is dirty, so it is not HEAD's %s", got, head)
+	}
+	fake := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncase \"$*\" in *write-tree*) echo 'fatal: disk full' >&2; exit 128;; esac\nexec git \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = &capture{}
+	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ()})
+	if !strings.Contains(out, "could not be recorded") {
+		t.Fatalf("the report must say the tree is missing: %q", out)
+	}
+}
