@@ -178,6 +178,12 @@ func (c *Client) Pool(ctx context.Context) (wire.Pool, error) {
 	return get[wire.Pool](ctx, c, "/v1/pool", nil)
 }
 
+// PoolWithLiveness is Pool with each peer's liveness (wire.PoolLivenessQuery): whether the host answers when its wwd does not. A wwd that
+// predates the fields ignores the query and answers as Pool does, with no liveness.
+func (c *Client) PoolWithLiveness(ctx context.Context) (wire.Pool, error) {
+	return get[wire.Pool](ctx, c, "/v1/pool", url.Values{"liveness": {"1"}})
+}
+
 // FactsSeries is GET /v1/facts/series: the host that has the data cuts its history to the points a chart draws. Like the history, a
 // call that names another host waits for wwd's forwarding. A wwd that does not have the route answers 404: see RouteMissing.
 func (c *Client) FactsSeries(ctx context.Context, q wire.FactsSeriesQuery) (wire.FactsSeriesResponse, error) {

@@ -74,6 +74,22 @@ const (
 	AlertOrphans        AlertKind = "orphans"
 )
 
+// The two kinds of silence about a peer (key silence:<alias>) are told apart by their words, not by a field of the alert: GET /v1/alerts is
+// read strictly, and one key keeps the alert one failure that clears when the peer answers. A reader that wants to know whether the
+// host itself is gone asks SilenceHostDown.
+const silenceHostDownText = "主機離線"
+
+// SilenceDetailWwdDown is the alert text for a peer whose wwd does not answer while its host does.
+func SilenceDetailWwdDown(alias string) string {
+	return alias + "：wwd 沒有回應（主機還在）"
+}
+
+// SilenceDetailHostDown is the alert text for a peer whose host does not answer either.
+func SilenceDetailHostDown(alias string) string { return alias + "：" + silenceHostDownText }
+
+// SilenceHostDown says whether a silence alert's text is the host-down one.
+func SilenceHostDown(detail string) bool { return strings.HasSuffix(detail, silenceHostDownText) }
+
 func (k AlertKind) Valid() bool {
 	switch k {
 	case AlertDiskLow, AlertDiskFalling, AlertPressureHeld, AlertMservService, AlertWorkerCrash, AlertSilence,

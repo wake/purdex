@@ -31,8 +31,7 @@ func newLastPeer(t *testing.T, alias string, proto int) *lastPeer {
 	p.proto.Store(int32(proto))
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p.down.Load() {
-			http.Error(w, "down", http.StatusServiceUnavailable)
-			return
+			panic(http.ErrAbortHandler) // the connection is dropped: nothing answers over HTTP, as with a stopped wwd
 		}
 		switch r.URL.Path {
 		case "/v1/info":
