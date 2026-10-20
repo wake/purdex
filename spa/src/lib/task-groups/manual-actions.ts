@@ -11,6 +11,7 @@
 // in a bar, not its placement, and is left alone.
 import { useManualGroupsStore, type ManualGroupMember, type ManualGroups } from '../../stores/useManualGroupsStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { TEAM_COLORS } from '../../components/team/team-display'
 import { manualGroupKey } from './group-key'
 import {
   addMember, deleteGroup, newGroup, newManualGroupId, removeMember, renameGroup, setGroupColor, type ManualEditError, type ManualEditResult,
@@ -38,6 +39,12 @@ function clearTabGroups(which: (group: string) => boolean): void {
   for (const [id, t] of Object.entries(tabs)) if (t.group !== undefined && which(t.group)) setTabGroup(id, undefined)
 }
 
+/** The colour a new group is given (spec §6.1): the first swatch colour no other manual group uses; with all eight used, the swatch again from the start (by the number of groups), so a new group is never the grey of 「未分組」. */
+export function nextGroupColor(groups: ManualGroups['groups']): string {
+  const used = new Set(Object.values(groups).map((g) => g.color?.toLowerCase()))
+  return TEAM_COLORS.find((c) => !used.has(c)) ?? TEAM_COLORS[Object.keys(groups).length % TEAM_COLORS.length]
+}
+
 /** `tabId`, with `member`, is the session's tab: on success it loses its own `group` (it is a member now). */
 export function createManualGroup(p: { name: string; color?: string; member?: Given; tabId?: string }): CreateResult {
   let member: ManualGroupMember | undefined
@@ -48,7 +55,7 @@ export function createManualGroup(p: { name: string; color?: string; member?: Gi
   }
   // the id is drawn once: nothing is retried, and the store is read and written in one synchronous stretch
   const id = newManualGroupId(useManualGroupsStore.getState().order)
-  const r = apply((s) => newGroup(s, { id, name: p.name, ...(p.color !== undefined ? { color: p.color } : {}), ...(member !== undefined ? { member } : {}), now: Date.now() }))
+  const r = apply((s) => newGroup(s, { id, name: p.name, color: p.color ?? nextGroupColor(useManualGroupsStore.getState().groups), ...(member !== undefined ? { member } : {}), now: Date.now() }))
   if (!r.ok) return r
   if (member !== undefined && p.tabId !== undefined) useTabStore.getState().setTabGroup(p.tabId, undefined)
   return { ok: true, id }

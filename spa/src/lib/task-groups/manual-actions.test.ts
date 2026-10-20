@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { TEAM_COLORS } from '../../components/team/team-display'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import type { Tab } from '../../types/tab'
@@ -18,6 +19,23 @@ const order = () => useManualGroupsStore.getState().order
 beforeEach(() => {
   useManualGroupsStore.setState({ order: [], groups: {} })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+})
+
+describe('a new group\'s colour (TG-5c)', () => {
+  it('is the first swatch colour no other manual group uses, and starts again when all eight are used', () => {
+    const colours = () => Object.values(groups()).map((g) => g.color)
+    for (let i = 0; i < 8; i++) { const r = createManualGroup({ name: `G${i}` }); expect(r.ok).toBe(true) }
+    expect(colours()).toEqual([...TEAM_COLORS])
+    createManualGroup({ name: 'ninth' })
+    expect(colours()[8]).toBe(TEAM_COLORS[0])
+  })
+  it('skips colours that are taken, wherever they are; an explicit colour is kept', () => {
+    createManualGroup({ name: 'A', color: TEAM_COLORS[0] })
+    const r = createManualGroup({ name: 'B' })
+    expect(r.ok && groups()[r.id].color).toBe(TEAM_COLORS[1])
+    const c = createManualGroup({ name: 'C', color: '#112233' })
+    expect(c.ok && groups()[c.id].color).toBe('#112233')
+  })
 })
 
 describe('createManualGroup', () => {
