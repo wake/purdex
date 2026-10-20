@@ -46,7 +46,7 @@ describe('refreshPoolIdentities', () => {
   const ensure = vi.fn(() => Promise.resolve())
   beforeEach(() => {
     ensure.mockClear()
-    useHostStore.setState({ hostOrder: ['d1', 'd2', 'd3', 'd4'], runtime: { d1: connected, d2: connected, d3: connected, d4: { status: 'disconnected' } } } as never)
+    useHostStore.setState({ hostOrder: ['d1', 'd2', 'd3', 'd4', 'd5'], runtime: { d1: connected, d2: connected, d3: connected, d4: { status: 'disconnected' }, d5: connected } } as never)
     useNexHostStore.setState({
       ensure,
       byHost: {
@@ -54,13 +54,14 @@ describe('refreshPoolIdentities', () => {
         d2: entry(),
         d3: entry({ daemonCapabilities: ['jobs.v1'] }),
         d4: entry(),
+        d5: entry({ daemonCapabilities: undefined }), // its first /api/info failed
       },
     } as never)
   })
 
-  it('asks every connected pool.v1 daemon, with or without a wwd (ensure holds them to the TTL, so a changed identity is re-read)', () => {
+  it('asks every connected pool.v1 daemon, with or without a wwd, and one whose /api/info never answered (ensure holds them to the TTL)', () => {
     refreshPoolIdentities()
-    expect(ensure.mock.calls).toEqual([['d1'], ['d2']])
+    expect(ensure.mock.calls).toEqual([['d1'], ['d2'], ['d5']])
   })
   it('leaves a daemon with no entry at all to its own first load', () => {
     useNexHostStore.setState({ byHost: {} } as never)
