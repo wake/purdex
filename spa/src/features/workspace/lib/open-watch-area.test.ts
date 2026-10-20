@@ -3,7 +3,7 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest, g
 import { useTabStore } from '../../../stores/useTabStore'
 import { usePoolStore } from '../../../lib/pool/store'
 import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
-import { readHostPage, clearViewMemory } from '../../../lib/watch/view-memory'
+import { readHostTab, clearViewMemory } from '../../../lib/watch/view-memory'
 import { createTab } from '../../../types/tab'
 import { WATCH_GUARDIAN_TAB_ID as G, watchHostTabId } from '../../../lib/watch/ids'
 import { getVisibleTabIds } from './getVisibleTabIds'
@@ -57,7 +57,7 @@ describe('openWatchArea', () => {
 
   it('with sub, the host page to show is remembered under the host_id before the tab is selected', () => {
     openWatchArea({ poolHost: { hostId: 'h1' }, sub: 'settings' })
-    expect(readHostPage('h1')).toBe('settings')
+    expect(readHostTab('h1')).toBe('settings')
     expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h1'))
   })
 

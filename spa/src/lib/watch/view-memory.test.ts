@@ -1,32 +1,48 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { readRange, writeRange, readQueueTab, writeQueueTab, readHostPage, writeHostPage, clearViewMemory } from './view-memory'
-
-describe('watch view memory — 狀態｜設定', () => {
-  it('defaults to 狀態, is kept per host and cleared with the rest', () => {
-    expect(readHostPage('h1')).toBe('status')
-    writeHostPage('h1', 'settings')
-    expect([readHostPage('h1'), readHostPage('h2')]).toEqual(['settings', 'status'])
-    clearViewMemory()
-    expect(readHostPage('h1')).toBe('status')
-  })
-})
+import {
+  readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
+  readQueueTab, writeQueueTab, clearViewMemory,
+} from './view-memory'
 
 beforeEach(() => clearViewMemory())
 
-describe('watch view memory', () => {
-  it('defaults to 5 minutes', () => expect(readRange('h1')).toBe('5m'))
-  it('keeps the range per host', () => {
-    writeRange('h1', '1h')
-    writeRange('h2', '24h')
-    expect([readRange('h1'), readRange('h2'), readRange('h3')]).toEqual(['1h', '24h', '5m'])
+describe('watch view memory — the host page\'s sub-tab (MON-6f-1)', () => {
+  it('defaults to 監控, is kept per host_id and cleared with the rest', () => {
+    expect(readHostTab('h1')).toBe('monitor')
+    writeHostTab('h1', 'settings')
+    writeHostTab('h2', 'procs')
+    expect([readHostTab('h1'), readHostTab('h2'), readHostTab('h3')]).toEqual(['settings', 'procs', 'monitor'])
+    clearViewMemory()
+    expect(readHostTab('h1')).toBe('monitor')
+  })
+})
+
+describe('watch view memory — the host page\'s range', () => {
+  it('defaults to 30 minutes (the design\'s HP.range) and is kept per host', () => {
+    expect(readHostRange('h1')).toBe('30m')
+    writeHostRange('h1', '1h')
+    writeHostRange('h2', '24h')
+    expect([readHostRange('h1'), readHostRange('h2'), readHostRange('h3')]).toEqual(['1h', '24h', '30m'])
   })
   it('is not persisted', () => {
-    writeRange('h1', '6h')
+    writeHostRange('h1', '6h')
     expect(JSON.stringify(Object.entries(localStorage))).not.toContain('6h')
   })
 })
 
-describe('watch view memory — queue sub-tab', () => {
+describe('watch view memory — the host page\'s scroll', () => {
+  it('is kept per host and per sub-tab, 0 by default', () => {
+    expect(readHostScroll('h1', 'monitor')).toBe(0)
+    writeHostScroll('h1', 'monitor', 120)
+    writeHostScroll('h1', 'procs', 40)
+    writeHostScroll('h2', 'monitor', 7)
+    expect([readHostScroll('h1', 'monitor'), readHostScroll('h1', 'procs'), readHostScroll('h1', 'status'), readHostScroll('h2', 'monitor')]).toEqual([120, 40, 0, 7])
+    clearViewMemory()
+    expect(readHostScroll('h1', 'monitor')).toBe(0)
+  })
+})
+
+describe('watch view memory — queue sub-tab (the old gate\'s, until MON-12)', () => {
   it('defaults to 當下 (now) and is kept per host', () => {
     expect(readQueueTab('h1')).toBe('now')
     writeQueueTab('h1', 'history')
