@@ -201,17 +201,24 @@ const (
 	methodNotAllowedBody = "Method Not Allowed"
 )
 
-// RouteMissing says err is a wwd (or the peer behind it) that has no such route for a GET: exactly net/http's own 404 for an unknown path,
-// or its own 405 for a path an older release has only for another method. Any other 404 or 405 (a JSON {"error":"unknown host"}, a proxy's
-// page, another route's reason) is the answer it is and is not this, so that it is never mistaken for an old release and answered by
-// asking again for ten times the data. Only for calls that GET: a 405 for a write is a refusal.
+// RouteMissing says err is a wwd (or the peer behind it) that has no such route: exactly net/http's own 404 for an unknown path.
+// Any other 404 (a JSON {"error":"unknown host"}, a proxy's page, another route's reason) is the answer it is and is not this, so that
+// it is never mistaken for an old release and answered by asking again for ten times the data.
 func RouteMissing(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusNotFound && strings.TrimSpace(se.Body) == notFoundBody
+}
+
+// RouteOrMethodMissing is RouteMissing, and also net/http's own 405 for a path an older release has only for another method (a wwd with
+// POST /v1/exceptions and not yet GET). That text is also what any handler or layer in front of one can write with http.Error, so it is for
+// a call that knows an older wwd answers so — GET /v1/exceptions — and for no other: a route that every wwd has (FactsSeries) keeps its 405
+// as the refusal it is. Only for calls that GET: a 405 for a write is a refusal.
+func RouteOrMethodMissing(err error) bool {
 	var se *StatusError
 	if !errors.As(err, &se) {
 		return false
 	}
-	body := strings.TrimSpace(se.Body)
-	return (se.Code == http.StatusNotFound && body == notFoundBody) || (se.Code == http.StatusMethodNotAllowed && body == methodNotAllowedBody)
+	return RouteMissing(err) || (se.Code == http.StatusMethodNotAllowed && strings.TrimSpace(se.Body) == methodNotAllowedBody)
 }
 
 // maxHistoryBody caps a history answer: a whole facts record is about 7 KB, so a day of 1 m points or two hours of 5 s ones is about

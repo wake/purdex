@@ -24,10 +24,18 @@ func TestExceptions_A405FromAnOlderWwdIsNotKnownEither(t *testing.T) {
 	}
 }
 
-// Only the mux's own 405 is a missing route: another 405 (a handler's own reason, a proxy's page) is the answer it is.
-func TestRouteMissing_Only405OfTheMuxCounts(t *testing.T) {
-	if !RouteMissing(&StatusError{Code: 405, Body: "Method Not Allowed\n"}) {
+// Only the mux's own 405 is a missing GET: another 405 (a handler's own reason, a proxy's page) is the answer it is. And only the call
+// that knows an older wwd can answer so (Exceptions) asks: RouteMissing, which the others use, stays the 404 alone.
+func TestRouteOrMethodMissing_Only405OfTheMuxCounts(t *testing.T) {
+	mux405 := &StatusError{Code: 405, Body: "Method Not Allowed\n"}
+	if !RouteOrMethodMissing(mux405) {
 		t.Error("net/http's own 405 is a route this wwd does not have for GET")
+	}
+	if !RouteOrMethodMissing(&StatusError{Code: 404, Body: "404 page not found\n"}) {
+		t.Error("and its 404 still is")
+	}
+	if RouteMissing(mux405) {
+		t.Error("RouteMissing must stay the 404: a 405 for a route that exists is not what its callers (FactsSeries) mean")
 	}
 	for _, e := range []error{
 		&StatusError{Code: 405, Body: `{"error":"read only"}`},
@@ -36,9 +44,23 @@ func TestRouteMissing_Only405OfTheMuxCounts(t *testing.T) {
 		&StatusError{Code: 405, Body: ""},
 		&StatusError{Code: 403, Body: "Method Not Allowed"},
 	} {
-		if RouteMissing(e) {
-			t.Errorf("RouteMissing(%v) = true", e)
+		if RouteOrMethodMissing(e) {
+			t.Errorf("RouteOrMethodMissing(%v) = true", e)
 		}
+	}
+}
+
+// FactsSeries has a route on every wwd that answers it at all, so a 405 there is a refusal (a handler or a layer in front of it), and it is
+// not answered by asking for ten times the data.
+func TestFactsSeries_A405IsNotAMissingRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/series", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	})
+	_, err := New(fakeWWD(t, mux)).FactsSeries(context.Background(), wire.FactsSeriesQuery{FactsHistoryQuery: wire.FactsHistoryQuery{Step: wire.Step1m}})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != 405 || RouteMissing(err) {
+		t.Fatalf("err = %v, want the 405 kept as a refusal that is not RouteMissing", err)
 	}
 }
 

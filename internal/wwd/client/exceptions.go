@@ -33,7 +33,7 @@ func (c *Client) Exceptions(ctx context.Context, host string) (list []wire.Excep
 		}
 		return list, true, nil
 	}
-	if RouteMissing(err) {
+	if RouteOrMethodMissing(err) { // an older wwd with only POST /v1/exceptions answers its mux's 405
 		return []wire.Exception{}, false, nil
 	}
 	return nil, false, err
