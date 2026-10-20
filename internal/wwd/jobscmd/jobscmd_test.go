@@ -403,6 +403,38 @@ func TestWorkerSwitchKeepsWhatItWasNotAskedToChange(t *testing.T) {
 	}
 }
 
+func TestWorkerSetsTheDiskFloorAndShowsIt(t *testing.T) {
+	floor := 10.0
+	f := &fakeAPI{worker: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}, DiskMinGB: &floor}}
+	if code, out, _ := runWWD(f, "worker", "on", "--disk-min-gb", "25.5"); code != 0 || f.set == nil || f.set.DiskMinGB == nil || *f.set.DiskMinGB != 25.5 ||
+		f.set.Slots.Heavy != 1 || !strings.Contains(out, "disk floor 25.5 GB") {
+		t.Fatalf("set: code %d set %+v out %q", code, f.set, out)
+	}
+	if code, out, _ := runWWD(f, "worker", "on", "--disk-min-gb=0"); code != 0 || *f.set.DiskMinGB != 0 || !strings.Contains(out, "disk floor none") {
+		t.Fatalf("0 is none: code %d set %+v out %q", code, f.set, out)
+	}
+	// a switch that does not name the floor puts back the one it read
+	f.set = nil
+	if code, _, _ := runWWD(f, "worker", "off"); code != 0 || f.set == nil || f.set.DiskMinGB == nil || *f.set.DiskMinGB != 10 {
+		t.Fatalf("not named: code %d set %+v", code, f.set)
+	}
+	f.set = nil
+	for _, args := range [][]string{{"worker", "on", "--disk-min-gb", "-1"}, {"worker", "on", "--disk-min-gb", "x"}, {"worker", "on", "--disk-min-gb", "NaN"}} {
+		if code, _, _ := runWWD(f, args...); code != ExitUsage || f.set != nil {
+			t.Errorf("%v: code %d set %+v", args, code, f.set)
+		}
+	}
+}
+
+func TestStatusShowsTheDiskFloor(t *testing.T) {
+	floor := 12.0
+	f := &fakeAPI{info: wire.Info{Alias: "mlab", Version: "1.2.3", Platform: "darwin", Arch: "arm64", Proto: 1},
+		worker: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}, DiskMinGB: &floor}}
+	if code, out, _ := runWWD(f, "status"); code != 0 || !strings.Contains(out, "disk floor 12 GB") {
+		t.Fatalf("status: code %d out %q", code, out)
+	}
+}
+
 func TestExceptions(t *testing.T) {
 	f := &fakeAPI{}
 	if code, _, _ := runWWD(f, "exception", "start", "app-dev-package", "--until", "30m"); code != 0 || f.started == nil ||

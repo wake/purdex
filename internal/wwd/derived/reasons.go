@@ -12,6 +12,7 @@ const (
 	ReasonZoneUnknown = "zone_unknown"
 	ReasonExceptionP  = "exception:" // + the exception's name
 	ReasonOwnerActive = "owner_active"
+	ReasonDiskLow     = "disk_low" // the work volume has less free space than the worker's disk floor; heavy only
 	ReasonSlotsFull   = "slots_full"
 	ReasonGateFull    = "gate_full"
 	// ReasonUnknown is a side at 0 that nothing in the record explains; only Why gives it (Compute always knows).
@@ -24,6 +25,7 @@ type judgement struct {
 	zone      wire.Zone
 	holds     []Hold
 	owner     bool
+	diskLow   bool       // the work volume is under the disk floor: holds heavy
 	free      wire.Slots // slots less what runs
 	gateFull  bool
 }
@@ -52,6 +54,9 @@ func (j judgement) reasons() wire.HeadroomReasons {
 	if j.owner {
 		heavy, light = append(heavy, ReasonOwnerActive), append(light, ReasonOwnerActive)
 	}
+	if j.diskLow {
+		heavy = append(heavy, ReasonDiskLow)
+	}
 	if j.free.Heavy <= 0 {
 		heavy = append(heavy, ReasonSlotsFull)
 	}
@@ -70,7 +75,8 @@ func (j judgement) reasons() wire.HeadroomReasons {
 func Why(f wire.Facts) wire.HeadroomReasons {
 	j := judgement{
 		workerOff: !f.Worker.Enabled, zone: f.Derived.Zone, owner: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, // as Compute is fed: a reading counts only with a rule in force
-		free: wire.Slots{Heavy: free(f.Worker.Slots.Heavy, f.Worker.Running.Heavy), Light: free(f.Worker.Slots.Light, f.Worker.Running.Light)},
+		diskLow: f.Derived.DiskLow,
+		free:    wire.Slots{Heavy: free(f.Worker.Slots.Heavy, f.Worker.Running.Heavy), Light: free(f.Worker.Slots.Light, f.Worker.Running.Light)},
 	}
 	for _, e := range f.Exception {
 		j.holds = append(j.holds, Hold{Name: e.Name})
@@ -115,11 +121,11 @@ func (j judgement) withoutWorker() judgement {
 func ComputeWithReasons(l *ZoneLatch, in Input) (wire.Derived, wire.HeadroomReasons) {
 	zone := l.Update(in.Pressure, in.PageRate, in.RateLimit, in.PressureKnown)
 	j := judgement{
-		zone: zone, holds: in.Exceptions, owner: in.OwnerActive, gateFull: in.GateHeavyFull,
+		zone: zone, holds: in.Exceptions, owner: in.OwnerActive, gateFull: in.GateHeavyFull, diskLow: in.DiskLow,
 		free: wire.Slots{Heavy: free(in.Slots.Heavy, in.Running.Heavy), Light: free(releaseLightSlots(in.Slots.Light, in.Exceptions), in.Running.Light)},
 	}
 	r := j.reasons()
-	d := wire.Derived{Zone: zone}
+	d := wire.Derived{Zone: zone, DiskLow: in.DiskLow}
 	if len(r.Heavy) == 0 {
 		d.Headroom.Heavy = j.free.Heavy
 	}

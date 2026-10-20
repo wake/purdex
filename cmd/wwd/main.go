@@ -163,7 +163,7 @@ func run(cfgPath string) error {
 	fastLane = localruns.New(tbl, localruns.FromQueue(q), alias)
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
 		Store: st, Host: alias, Events: broker, OwnerRuleSupported: facts.OwnerReadable(),
-		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
+		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule, DiskMinGB: cfg.Worker.DiskMinGB},
 	})
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func run(cfgPath string) error {
 		Running: hostRunning,
 		HostID:  hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Fault: hooks, Sources: sources, Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
-		OwnerRule: ownerRule, State: state, Minutes: st,
+		OwnerRule: ownerRule, State: state, Minutes: st, WorkRoot: workRoot, // the disk floor is measured on the work root's volume
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer reports proto >= 2, an unreachable one by its last known info (spec §13.1)
 		SignalsOpen:   func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
 		Queued:        func() (int, error) { return q.CountQueued(ctx) },

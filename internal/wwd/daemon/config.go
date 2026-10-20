@@ -83,6 +83,9 @@ type WorkerConfig struct {
 	// GoCacheMaxMB bounds the shared Go build cache of the go tasks (one per Go version, under deps_root/gocache; default 10240): over it, and
 	// with no job using it, it is emptied before the next job.
 	GoCacheMaxMB int `toml:"gocache_max_mb"`
+	// DiskMinGB is the free space the work volume must have for a heavy run to start (a queue job or an adhoc command): 0 is no floor,
+	// unset is 10 (the pdx gate's disk_min_gb default). It is where the setting starts; a PUT /v1/worker is kept in wwd.db and wins.
+	DiskMinGB *float64 `toml:"disk_min_gb"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -181,6 +184,9 @@ func (c Config) validateWorker() error {
 	}
 	if c.Worker.Light != nil && *c.Worker.Light < 0 {
 		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
+	}
+	if v := c.Worker.DiskMinGB; v != nil && (math.IsNaN(*v) || *v < 0 || *v > maxDiskMinGB) {
+		return fmt.Errorf("worker.disk_min_gb is %g, it must be 0 (no floor) or up to %g", *v, float64(maxDiskMinGB))
 	}
 	if c.Worker.DepsKeep < 0 || c.Worker.DepsKeep > 50 {
 		return fmt.Errorf("worker.deps_keep is %d, it must be 0 (the default, 2) or 1-50", c.Worker.DepsKeep)
