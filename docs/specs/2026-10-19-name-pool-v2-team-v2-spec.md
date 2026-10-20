@@ -481,7 +481,7 @@ This is the default classification from the page's probe table. **[待確認]**
 - `DeckView.tsx:72,86` marks an `agent_text` item as a **speech start** when the item before it in the turn is not
   `agent_text`. `thinking` counts as a break; `system` does not.
 - `AgentHeader` shows `[avatar] Name · model · time` on the first start of a turn; the avatar replaces ◆. Every later
-  speech start shows a compact `[avatar] Name` line.
+  speech start shows a compact `[avatar] Name` line, the name in the primary text colour, like the header's (user 10-20).
 - A session with no persona keeps today's header and shows no extra lines.
 
 ### 9.5 Team panel v2 (U9, U13)

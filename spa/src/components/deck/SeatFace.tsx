@@ -6,12 +6,12 @@ export function SeatFace({ seat, size }: { seat: Seat; size: 14 | 16 }) {
   return <Avatar size={size} code={seat.code} name={seat.name} src={seat.avatar} decorative />
 }
 
-/** The compact line over a later speech start (spec §9.4): the face and the name in muted text, no time. */
+/** The compact line over a later speech start (spec §9.4): the face and the name — the name in the primary text colour, like the header's — no time. */
 export function SpeechLine({ seat }: { seat: Seat }) {
   return (
     <div data-testid="deck-speech-line" className="mb-1 flex items-center gap-1.5 deck-t-down text-text-muted">
       <SeatFace seat={seat} size={14} />
-      <span>{seat.name}</span>
+      <span className="text-text-primary">{seat.name}</span>
     </div>
   )
 }

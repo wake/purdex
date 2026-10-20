@@ -50,6 +50,15 @@ describe('the deck of a persona', () => {
     for (const l of lines) { expect(l).toHaveTextContent('Ann'); expect(l).not.toHaveTextContent(/\d\d:\d\d/); expect(within(l).queryByRole('img')).toBeNull() }
   })
 
+  it('the compact line shows the name in the primary text colour, like the header\'s — not muted (user 10-20)', () => {
+    render(<DeckView {...props} seat={ann} entry={entry([text('a', 0), step('s1', 1), text('b', 2)])} />)
+    const name = within(screen.getByTestId('deck-speech-line')).getByText('Ann')
+    expect(name).toHaveClass('text-text-primary')
+    expect(name).not.toHaveClass('text-text-muted')
+    // the header's name is the reference
+    expect(within(screen.getByTestId('deck-agent-header')).getByText('Ann')).toHaveClass('text-text-primary')
+  })
+
   it('a system row between two texts does not make the second a start', () => {
     render(<DeckView {...props} seat={ann} entry={entry([text('a', 0), system('n', 1), text('b', 2)])} />)
     expect(screen.queryAllByTestId('deck-speech-line')).toHaveLength(0)
