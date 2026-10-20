@@ -26,6 +26,8 @@ export interface PoolObservation {
 }
 
 export interface ObservationsPage {
+  /** The host the answer says it is about (the answering wwd's own alias). */
+  host: string
   /** false: that host's wwd predates the route, not an error. */
   known: boolean
   /** In wwd's order, the oldest first. */
@@ -46,7 +48,7 @@ function parseObservation(v: unknown): PoolObservation | null {
   let endedAt: number | null = null
   if (v.ended_at !== null && v.ended_at !== undefined) {
     endedAt = time(v.ended_at)
-    if (endedAt === null) return null
+    if (endedAt === null || endedAt < startedAt) return null // ended before it began: the Go contract refuses it too (wire.Observation.Validate)
   }
   return {
     id, via, signature, startedAt, endedAt,
@@ -66,12 +68,13 @@ export function parseObservations(v: unknown): ObservationsPage | null {
   const observations: PoolObservation[] = []
   for (const row of (v.observations as unknown[] | null) ?? []) {
     const o = parseObservation(row)
-    if (o && !seen.has(o.id)) { seen.add(o.id); observations.push(o) }
+    // A record that names another host than the answer is about does not belong here.
+    if (o && (o.host === '' || o.host === v.host) && !seen.has(o.id)) { seen.add(o.id); observations.push(o) }
   }
   // The daemon's own "not known" answer says `known: false`; wwd's answer has no such field (known).
   const known = v.known !== false
   const nextUntil = str(v.next_until) && time(v.next_until) !== null ? v.next_until : null
-  return { known, observations, truncated: v.truncated === true, nextUntil }
+  return { host: v.host, known, observations, truncated: v.truncated === true, nextUntil }
 }
 
 /**
@@ -82,6 +85,7 @@ export async function fetchObservations(sourceHostId: string, alias: string, que
   let path = `/api/pool/hosts/${encodeURIComponent(alias)}/observations?since=${encodeURIComponent(query.since)}`
   if (query.until) path += `&until=${encodeURIComponent(query.until)}`
   const page = parseObservations(await readJson(sourceHostId, path))
-  if (!page) throw unreadable(path)
+  // The answer must be about the host that was asked for: a wrong forward or a stale cache must not put another host's commands under this name.
+  if (!page || page.host !== alias) throw unreadable(path)
   return page
 }

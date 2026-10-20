@@ -33,7 +33,7 @@ describe('parseObservations', () => {
     expect(parseObservations(body({ truncated: true, next_until: 7 }))!.nextUntil).toBeNull()
   })
   it('known: false (an older wwd) is an answer with nothing in it', () => {
-    expect(parseObservations({ host: 'air19', known: false, observations: [] })).toEqual({ known: false, observations: [], truncated: false, nextUntil: null })
+    expect(parseObservations({ host: 'air19', known: false, observations: [] })).toEqual({ host: 'air19', known: false, observations: [], truncated: false, nextUntil: null })
   })
   it('observations: null is an empty list', () => {
     expect(parseObservations(body({ observations: null }))!.observations).toEqual([])
@@ -45,6 +45,14 @@ describe('parseObservations', () => {
   it('a via the App does not know stays as the word; a missing figure is 0; a missing command is empty', () => {
     const r = parseObservations(body({ observations: [{ ...REC, via: 'newtool', cpu_seconds: undefined, mem_peak_mb: 'big', command: undefined }] }))!
     expect(r.observations[0]).toMatchObject({ via: 'newtool', cpuSeconds: 0, memPeakMb: 0, command: '' })
+  })
+  it('a record that ended before it began is dropped (the Go contract refuses it too)', () => {
+    const r = parseObservations(body({ observations: [{ ...REC, id: 'x', ended_at: '2026-10-20T00:59:59Z' }, { ...REC, id: 'y', ended_at: '2026-10-20T01:00:00Z' }] }))!
+    expect(r.observations.map((o) => o.id)).toEqual(['y'])
+  })
+  it('a record that names another host than the answer is dropped; an empty host stays', () => {
+    const r = parseObservations(body({ observations: [{ ...REC, id: 'a', host: 'mlab' }, { ...REC, id: 'b', host: '' }, { ...REC, id: 'c', host: 'air26' }] }))!
+    expect(r.observations.map((o) => o.id)).toEqual(['b', 'c'])
   })
   it('a record twice in one answer is one', () => {
     expect(parseObservations(body({ observations: [REC, REC] }))!.observations).toHaveLength(1)
@@ -70,9 +78,13 @@ describe('fetchObservations', () => {
     expect(hostFetch).toHaveBeenCalledWith('cfg-a', `/api/pool/hosts/air26/observations?since=2026-10-19T00%3A00%3A00Z&until=${encodeURIComponent(next)}`)
   })
   it('an alias is path-encoded', async () => {
-    ok(body())
+    ok(body({ host: 'a b/c', observations: [] }))
     await fetchObservations('cfg-a', 'a b/c', { since: '2026-10-19T00:00:00Z' })
     expect(vi.mocked(hostFetch).mock.calls[0][1]).toContain('/api/pool/hosts/a%20b%2Fc/observations')
+  })
+  it('an answer about another host than the one asked for is unreadable (wwd_bad_response)', async () => {
+    ok(body({ host: 'mlab' }))
+    await expect(fetchObservations('cfg-a', 'air26', { since: 'x' })).rejects.toMatchObject({ poolError: { code: 'wwd_bad_response' } })
   })
   it('an answer that parses as nothing is unreadable (wwd_bad_response)', async () => {
     ok({ nope: true })
