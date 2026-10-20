@@ -6,7 +6,7 @@
 > spec 的 W1–W9 已由 88 定案（10-20，spec §7.3），本 plan 照定案寫。
 > 行號以 `origin/main aa662c592` 為準（修訂 2 核對；第一波的 file:line 是在 `86ced9555` 核對的，`86ced9555..aa662c592` 之間 merge 了 MON-1a～1d、2a、2b、3a 與 768 的 bump，還沒 merge 的 MON-3b、4 開工時照舊再對一次），開工時以當下的 `origin/main` 再核對一次。
 > 修訂 1（10-20）：照 codex plan 審查（task-mvgk4yis-tsgk70）的 8 條修正，88 全部採納；對照表在文末。
-> 修訂 2（10-20）：第二波 MON-5、6、10 細化（MON-5 拆 5a～5c、MON-6 拆 6a～6f、MON-10 拆 10a～10c，理由寫在各期）；MON-7、8、9、11、12 的依賴與範圍跟著調整；細化時查到的待確認事項在「待查與已定案」。
+> 修訂 2（10-20）：第二波 MON-5、6、10 細化（MON-5 拆 5a～5c、MON-6 拆 6a～6f、MON-10 拆 10a～10c，理由寫在各期）；MON-7、8、9、11、12 的依賴與範圍跟著調整；細化時查到的 8 個待確認點，88 定案（10-20）全部照 plan 的寫法，記在「待查與已定案」；spec 同步改了 §8 的分期表、M31 的例字與 A7 的欄位名。
 
 ## 共通規則
 
@@ -193,7 +193,7 @@
 > 第二波的共通事項：
 > - **守門測試**：每期新增的 `lib/pool/*.ts` 加進 `no-fleet-reads.guard.test.ts` 的 `POOL_FILES`（同 MON-3a #3783 的做法）；元件的範圍在 MON-5b（`components/watch/jobs/**`）、MON-6d（`components/watch/host/**`）、MON-6f（主機頁其餘的檔與 `watch-area.ts`、`open-watch-area.ts`）、MON-10a／10c（盾牌、事件分頁）擴進去。偵測式只看直接的 import：`lib/watch/queue-time.ts` 這種自己 import fleet 型別（`:3`）、被本線元件拿來用 `mss` 的檔不在範圍，MON-12 拆。
 > - **舊畫面因此沒人用的檔**不在本線各期刪（每期 ≤ 20 檔），列在 MON-12。
-> - 原因、狀態的字沿用既有的 `pool.reason.*`、`pool.liveness.*`（見「待查與已定案」⚠ 8）；新字兩個語系都加。
+> - 原因、狀態的字沿用既有的 `pool.reason.*`、`pool.liveness.*`（88 定案（10-20），「待查與已定案」第二波第 8 條）；新字兩個語系都加。
 > - 每一期的「檔案」含測試檔與語系檔；行數含測試、不含純刪除。
 
 ### MON-5 — 任務佇列分頁（M24、M26–M34、M40 的沙漏）
@@ -283,12 +283,12 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 
 1. **id 與 pane content**
    - `ids.ts:11-25`：`watchHostTabId(poolHostId)`；`fleetHostIdOfTabId` 改名 `hostIdOfTabId`（只取字尾）。
-   - `types/tab.ts:155-160`：`{ kind: 'watch-host'; poolHostId?: string; fleetHostId?: string }`。`poolHostId` 是 wwd 的 `host_id`；**名字照 `:155-156` 的理由不叫 `hostId`**（免得通用的 pane 讀者把它當 App 主機，⚠ 1）；`fleetHostId` 只有 MON-6a 以前建的舊分頁有（會被收掉）。兩個都可選：同步進來的舊 content 沒有 `poolHostId`，讀的地方一律判斷。tabs 區只檢查 `kind` 是字串（`lib/profile/sections.ts:167-172`），host id 換算只動 `tmux-session` 等幾種（`lib/profile/host-identity.ts:510-531`），**不升 tabs 的 ordinal、不進換算**。
+   - `types/tab.ts:155-160`：`{ kind: 'watch-host'; poolHostId?: string; fleetHostId?: string }`。`poolHostId` 是 wwd 的 `host_id`；**名字照 `:155-156` 的理由不叫 `hostId`**（免得通用的 pane 讀者把它當 App 主機；88 定案（10-20））；`fleetHostId` 只有 MON-6a 以前建的舊分頁有（會被收掉）。兩個都可選：同步進來的舊 content 沒有 `poolHostId`，讀的地方一律判斷。tabs 區只檢查 `kind` 是字串（`lib/profile/sections.ts:167-172`），host id 換算只動 `tmux-session` 等幾種（`lib/profile/host-identity.ts:510-531`），**不升 tabs 的 ordinal、不進換算**。
    - 測試（`watch-panes.test.ts`）：id 來回；`hostIdOfTabId` 對非主機分頁回 null。
 2. **reconciler 讀 pool**（A7、M13）
    - `watch-area.ts:25-29` `WatchFleetView` → `WatchHostsView { hostIds: readonly string[] }`（沒有 `stale`：pool 的答案就是現在的）；`:263-268` `readFleetView` → `readPoolView()`：`usePoolStore` 的 `sourceHostId` 是 null（W4，或還沒讀到）→ null（主機分頁都不動，同現在沒有 fleet 時）；否則 `orderPoolHosts(hosts, usePoolHostsStore.getState().order).map((h) => h.host_id)`。`:298-302` 的訂閱把 `useFleetStore` 換成 `usePoolStore`＋`usePoolHostsStore`，`:10` 的 import 拿掉。
    - `:216-222` 新分頁的 content `{ kind: 'watch-host', poolHostId: id }`；新的接在後面（照 `order` 排在 6b）。
-   - **舊分頁**：content 沒有 `poolHostId` 的主機分頁＝舊版。每次 view 不是 null，對每個舊分頁的字尾 `lastListed.set(字尾, now)`（已有就不動），由 `:224-238` 的規則在 `ABSENT_REMOVE_MS` 後收掉；之後又從同步回來（還沒升級的裝置）也照這樣。原因寫進註解：`:231` 會留下「這台從沒列過」的分頁，升級（重開）之後沒有一台裝置列過 fleet id，不這樣做舊分頁永遠收不掉（⚠ 2）。
+   - **舊分頁**：content 沒有 `poolHostId` 的主機分頁＝舊版。每次 view 不是 null，對每個舊分頁的字尾 `lastListed.set(字尾, now)`（已有就不動），由 `:224-238` 的規則在 `ABSENT_REMOVE_MS` 後收掉；之後又從同步回來（還沒升級的裝置）也照這樣。原因寫進註解：`:231` 會留下「這台從沒列過」的分頁，升級（重開）之後沒有一台裝置列過 fleet id，不這樣做舊分頁永遠收不掉。88 定案（10-20）：接受還沒升級的裝置把舊分頁同步回來、兩台都升級才停的代價（兩台 Mac 一起升）。
    - 測試（`watch-area.test.ts` 改寫用 fleet view 的那幾案：`:35`、`:43`、`:60`、`:72`、`:79`、`:87`、`:135`、`:257`）：從 pool store 建分頁（`watch-host-<host_id>`、locked、pane id `<tab>.p`）；第二次不寫；pool 讀不到 → 一個都不收；離開 pool 的主機 60 秒後收；舊分頁 60 秒後收、60 秒內還在；舊分頁後來又同步進來 → 再 60 秒收；兩台裝置（兩個 reconciler、共用 store）pool 相同 → 收斂、不互推；沒讀到 pool 的那台不動別台建的分頁。
    - mutation：拿掉舊分頁的 `lastListed` 種子（舊分頁那案轉紅）；view 是 null 時照樣收。
 3. **開分頁的入口**（M12、M40）
@@ -357,13 +357,13 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 2. **頁面殼**（M41 標頭、M22、M43）：`WatchHostPane` 重寫：
    - 讀 `content.poolHostId`；這台＝`useMonitorHosts()` 裡 `hostId` 相同的（W4 時是留著的清單、`unknown`）；pool 沒列 → 一行「資源池沒有列出這台；一分鐘內沒回來，這個分頁會收掉」（A7）；舊 content → 既有的 `watch.host.no_host`。
    - 標頭：徽章 20 px（`resolveHostBadge(look, 'console')`，`host_down` 40%、`unknown` 60%，比照側欄）、alias、區域字（ok）或狀態圖示＋字（`LinkBreak`／`Power`／`Question`）、`wwd {version}・{platform} {arch}・{facts 的 hh:mm:ss}`（非 ok：「最後一筆 hh:mm:ss・最後檢查 hh:mm:ss」）；右邊子分頁切換（監控｜狀態｜行程｜設定）與範圍切換（5 分｜15 分｜30 分｜1 小時｜6 小時｜24 小時，只在監控、狀態）。
-   - **橫幅**（M22、#3785）：狀態不是 ok → 標頭下一條，`wwd_down` 黃、`host_down` 紅、`unknown` 灰（`status-warning`／`status-error`／`text-muted`），圖示＋「{alias}：{狀態字}」（`wwd_down` 加「，主機還開著」），下一行「最後一筆讀數 hh:mm:ss・最後檢查 hh:mm:ss；圖停在最後一筆，之後畫斜線」（`livenessLines`，`words.ts:85-88`）。四個子分頁都有（spec M22；⚠ 3）。
+   - **橫幅**（M22、#3785）：狀態不是 ok → 標頭下一條，`wwd_down` 黃、`host_down` 紅、`unknown` 灰（`status-warning`／`status-error`／`text-muted`），圖示＋「{alias}：{狀態字}」（`wwd_down` 加「，主機還開著」），下一行「最後一筆讀數 hh:mm:ss・最後檢查 hh:mm:ss；圖停在最後一筆，之後畫斜線」（`livenessLines`，`words.ts:85-88`）。四個子分頁都有（spec M22、#3785；88 定案（10-20））。
    - **整頁不讀 fleet**：沒有 `useFleetStore`、`fleetHostsView`、`usePoolCellModels`、`matchPoolHost`、`fleetHistory`、`QueueSection`（舊閘門的排隊段，spec §6「重指令排隊直接拿掉」）、`slow.top_*`（#3785）；6a 的過渡接法 `fleetViewOfPoolHost` 刪掉（`fleet-bridge.ts` 只剩 Hosts 頁在用）。
 3. **四個子分頁**
    - 監控：`<MonitorTab host range now />`（6e）。
    - 狀態（過渡，MON-7 換）：`AvailRow`（`hostExtraOf(state)`，6e）＋一行「完整的狀態（六張卡、facts 全部欄位、完整圖表）在之後的期」。
    - 行程（過渡，MON-8 換）：兩張 `ProcTable`（`facts.procs` 的 CPU 前 12、記憶體前 12）＋`ResidentsTable`；非 ok 寫離線。
-   - 設定（過渡，MON-9a 換）：`<WatchSettings kind="daemon" fleetHostId={hostId} hostConfigId={daemonHostId ?? undefined} poolAlias={alias} offline peerIds />`，`WatchSettings.tsx` 不改：`fleetHostId` 在 daemon 那支只當草稿的 key（`:210`）；`kind` 一律 `daemon`，所以四台都是 `WorkerSettings`＋`WorkerExceptions`＋守門員段（沒有 daemon 的主機在守門員段寫既有的 `watch-set-unmapped`）；**`ProbeHostEditor`（`:238-245`，fleet 的觀察主機設定，含 SSH 別名）不再從主機頁出現**（Hosts 頁的觀察主機頁還在，到 MON-9b；⚠ 6）。`peerIds` 是其他台的 `daemonHostId`。prop 改名留給 MON-9a。
+   - 設定（過渡，MON-9a 換）：`<WatchSettings kind="daemon" fleetHostId={hostId} hostConfigId={daemonHostId ?? undefined} poolAlias={alias} offline peerIds />`，`WatchSettings.tsx` 不改：`fleetHostId` 在 daemon 那支只當草稿的 key（`:210`）；`kind` 一律 `daemon`，所以四台都是 `WorkerSettings`＋`WorkerExceptions`＋守門員段（沒有 daemon 的主機在守門員段寫既有的 `watch-set-unmapped`）；**`ProbeHostEditor`（`:238-245`，fleet 的觀察主機設定，含 SSH 別名）不再從主機頁出現**（Hosts 頁的觀察主機頁照舊到 MON-9b；88 定案（10-20））。`peerIds` 是其他台的 `daemonHostId`。prop 改名留給 MON-9a。
 4. **tab-hosted**：`WatchHostPane.tab-switch.test.tsx`（真的 `TabContent`）：mserv 的分頁選「行程」、範圍切到 6 小時、捲到下面，切到別的分頁再切回 → 子分頁、範圍、捲動都在；mlab 的分頁是它自己的（預設監控、30 分）。
 5. **守門測試擴到主機頁**：`no-fleet-reads.guard.test.ts:9-15` 的 glob 加 `components/watch/WatchHostPane.tsx`、`Gauge.tsx`、`ProcTable.tsx`、`AvailRow.tsx`、`ResidentsTable.tsx`、`WorkerSettings.tsx`、`WorkerExceptions.tsx`、`lib/watch/view-memory.ts`、`features/workspace/lib/watch-area.ts`、`open-watch-area.ts`（`components/watch/jobs/**` 在 5b、`components/watch/host/**` 在 6d 已加；`WatchSettings.tsx` 還 import `ProbeHostEditor`，MON-9a 改寫後加）；檔頭說明改成「`fleet-bridge.ts` 只剩 Hosts 頁一個讀者（MON-9b 刪）」。mutation：在 `WatchHostPane.tsx` 暫加 `import type { FleetFast } from '../../lib/fleet/types'`、在 `MonitorTab.tsx` 暫加一行 `useFleetStore`，都要轉紅。
 - 這期之後沒人用、留給 MON-12 刪的檔：`MetricChart.tsx`＋測試、`ZoneBand.tsx`＋測試、`lib/watch/series.ts`＋測試、`lib/watch/metrics.ts`＋測試、`lib/pool/history.ts`＋測試、`use-facts-history.ts`、`use-series-history.ts`＋測試，以及 MON-12 本來就列的 `QueueSection`、`QueueNow`、`QueueLane`、`QueueHistory`。
@@ -407,7 +407,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
    - 測試（`alerts-store.test.ts`，假計時器）：每台經來源讀一次；來源的事件只重讀那台；別的 daemon 發的事件不理；沒有能力 → 30 秒輪詢、有 → 沒有計時器；來源換了 → 舊來源晚到的答案不寫；最後一個 release → 計時器清掉；離開 pool 的主機拿掉；連線打開 → 全部重讀。`useMultiHostEventWs.alerts.test.ts`（照 `.pool.test.ts`）：事件送到 store、連線的 key 不符不送。
    - mutation：任何 daemon 的事件都收；有能力時照樣輪詢。
 3. **數字**（M36、M40）
-   - `alertCountOf(byHost)`＝進行中（`clearedAt` null）、推播級（`level === 'push'`）的告警數，**同一個 `silence:<alias>` key 出現在幾台的清單裡只算一件**（每台 wwd 都替它的對等體開 `silence:<對等體>`，`cmd/wwd/advisor.go:51-59`；⚠ 4）＋`dutyOpenCount()`（0）。`usePoolAlertCount()`／`readPoolAlertCount()`。
+   - `alertCountOf(byHost)`＝進行中（`clearedAt` null）、推播級（`level === 'push'`）的告警數，**同一個 `silence:<alias>` key 出現在幾台的清單裡只算一件**（每台 wwd 都替它的對等體開 `silence:<對等體>`，`cmd/wwd/advisor.go:51-59`；88 定案（10-20））＋`dutyOpenCount()`（0）。`usePoolAlertCount()`／`readPoolAlertCount()`。
    - `WatchShieldButton.tsx:22-24`、`:34`、`:40`：數字改讀 `usePoolAlertCount()`（取代 `pendingCount(useWatchEventsStore…)`）；有數字開事件、沒有開守門員（M40，照舊）；`aria-label` 沿用 `watch.shield.events`。實心／空心照舊讀 `useWatchStatusStore`。
    - `pane-labels.ts:65-68`：「事件 n」的 n 改 `readPoolAlertCount()`；`useTabDisplay.ts:137-138` 改訂 alerts store 的數字。這兩處、盾牌、事件分頁（10c）是 `lib/watch/events-store.ts` 的全部讀者，10c 之後它只剩寫入端，MON-12 刪。
    - 測試：`WatchShieldButton.test.tsx`（mlab 與 air26 的清單都有 `silence:mserv`＋mlab 一個 disk_low push＋一個 digest → 2；按一下開事件；0 → 開守門員）；`watch-panes.test.ts`（「事件 2」）。
@@ -419,7 +419,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 
 1. **觀察的讀取**（MD-3）：`observations-api.ts`：`PoolObservation = { id; host; session; via; command; signature; startedAt; endedAt: number | null; cpuSeconds; cpuPeak; memPeakMb; procsPeak }`（Go：`internal/wwd/wire/observation.go:21-36`）；`fetchObservations(sourceHostId, alias, { since, until? })` → `{ known; observations（照 wwd，舊的在前）; truncated; nextUntil: string | null }`——**`next_until` 保留原字串**、下一頁原樣送回（`internal/module/pool/observations.go:10-13`：小數秒切掉會漏紀錄；同一筆可能兩頁都有，依 id 去重）；`{ known: false }`（舊 wwd）→ 空；device token 的 403 → `PoolReadError` 的 `forbidden`（`errors.ts` 既有分類），呼叫端寫「只有 admin token 能讀」。`pool.observations.v1` 由呼叫端判斷（`info_handler.go:166`）。MON-8 在這個檔加 `/undeclared`。測試：照 Go 形狀的字面值；`known: false`；壞紀錄丟掉；`next_until` 帶小數秒、原樣回傳；403 的分類。mutation：`next_until` 經過 `Date` 轉換再回傳。
 2. **事件的列**（M23、M35）：`events-model.ts`：
-   - `alertRowsOf(byHost, hosts)`：每筆告警一列 `{ id; hostId; alias; at: since; source: 'alert'; level: 'push' | 'digest'; kind; silence?; live: clearedAt === null; endAt: clearedAt; title: detail 或種類的字; last }`。**主機歸屬**：`silence` 且 key 是 `silence:<alias>` → 那台（叫不到的主機，同設計稿 `DEMO_EVENTS` 的寫法）；**同一個 key、時間重疊的幾筆合成一列**（`at` 取最早；還有一筆進行中就是進行中；都清掉時 `endAt` 取最晚；⚠ 4）；其他（含 `partner_down`）→ 清單所屬的那台。
+   - `alertRowsOf(byHost, hosts)`：每筆告警一列 `{ id; hostId; alias; at: since; source: 'alert'; level: 'push' | 'digest'; kind; silence?; live: clearedAt === null; endAt: clearedAt; title: detail 或種類的字; last }`。**主機歸屬**：`silence` 且 key 是 `silence:<alias>` → 那台（叫不到的主機，同設計稿 `DEMO_EVENTS` 的寫法）；**同一個 key、時間重疊的幾筆合成一列**（`at` 取最早；還有一筆進行中就是進行中；都清掉時 `endAt` 取最晚；88 定案（10-20））；其他（含 `partner_down`）→ 清單所屬的那台。
    - `observationRowsOf(byHost, hosts)`：每台最新 3 筆（`startedAt` 新的在前）各一列（`level: 'obs'`；標題「未宣告的重指令：{signature}」；細節：session（via）、CPU 秒、峰值核數（`cpuPeak / 100`）、記憶體峰值 MB、行程數；`endedAt` null 是進行中）；超過 3 筆 → 一列 `{ more: true; hostId; n }`（排在第 3 筆之前一點）。
    - `filterEvents(rows, { host, source, status })`：`host` 是 `host_id` 或 `all`；`source` 是 `all`／`alert`／`obs`；`status` 是 `all`／`live`／`done`；`more` 列只在主機相符、來源不是 `alert`、狀態不是 `live` 時出現（設計稿 `renderEvents`）。
    - `groupByDay(rows, now)`：新的在上；`today`／`yesterday`／`MM/DD`（跨午夜）。`liveCounts(rows)` → `{ push; other }`（頁首那行）。
@@ -433,7 +433,7 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 1. **事件分頁**（M23、M35、M37）：`WatchEventsPane.tsx` 重寫：
    - 資料：告警讀 alerts store（10a）；觀察在這個分頁掛著時讀（每台、經來源 daemon、`since` 24 小時前；掛上時與之後每 60 秒；來源沒有 `pool.observations.v1` 就不讀），讀到的放模組記憶（切回來立刻有上一次的）。主機與順序來自 `useMonitorHosts()`（M13）。
    - 畫面：標題「事件」；一行「推播級進行中 N・其他進行中 M」（N > 0 用 `text-status-error-text`）；三排篩選（主機：全部＋每台 alias；來源：全部／wwd 告警／觀察；狀態：全部／進行中／已結束；沿用 `ChipRow`，`:30-43`）；依日分段（今天（MM/DD）、昨天（MM/DD）、MM/DD）；每列：時間、等級（推播／摘要／觀察）、種類（silence 的兩種用 `LinkBreak` 黃、`Power` 紅，`unknown` 是 `Question` 灰，加字；其他用中性的框）、主機徽章與 alias、右端「進行中・{多久}」（推播紅、其他黃）或「已恢復 hh:mm」（silence）／「已結束 hh:mm」、標題、細節行；silence 列左邊 2 px 同色豎線（M23）。`more` 列：「{alias} 過去 24 小時還有 n 筆觀察 → {alias} 的「行程」分頁」，按下去 `openWatchArea({ poolHost: { hostId }, sub: 'procs' })`（6a 的入口；6f 之前 `sub` 的型別還沒有 `procs` → 只開那台的分頁）。讀不到某台的告警 → 一行「讀不到 {alias} 的告警（{原因}）」；觀察 403 → 一行「觀察紀錄只有 admin token 能讀」（只寫一次）。
-   - **沒有任何改變事件的按鈕**（M35）；頁首原本的守門員那一行（`:154-160`、`:169-172`）拿掉（⚠ 7）。推播開關不在這頁（M37 的總開關在 MON-9a）。
+   - **沒有任何改變事件的按鈕**（M35）；頁首原本的守門員那一行（`:154-160`、`:169-172`）拿掉（88 定案（10-20））。推播開關不在這頁（M37 的總開關在 MON-9a）。
    - 篩選放 `view-memory.ts:15-16`、`:24-25`（型別換成 `{ host; source; status }`，`lib/watch/events-view.ts` 的 `EventFilters` 不再用），新增 `readEventsScroll`／`writeEventsScroll`；篩的主機已經不在 pool → 當「全部」（同現在的 `:143-146`）。
    - 測試（`WatchEventsPane.test.tsx` 重寫）：告警＋觀察的列；silence 列的圖示、色、豎線與「已恢復 07:19」；進行中的時長；**每一列裡沒有按鈕**（`more` 列的連結除外）；三組篩選；篩的主機離開 pool → 全部；403 那行；觀察每 60 秒讀一次、卸下後不讀；沒有守門員那行。`WatchEventsPane.tab-switch.test.tsx` 重寫（真的 `TabContent`：選主機 mserv＋來源觀察、捲到下面，切走再切回 → 篩選與捲動都在）。
    - mutation：拿掉豎線；`more` 列的條件反過來。
@@ -474,16 +474,16 @@ pane kind 與 tab id 沿用 `watch-jobs`，分頁名改「任務佇列」。歷�
 - **iOS（待查）**：purdex-ios 對 settings ordinal 13 與新 store 的反應（MON-2a task 4）。
 - **88 定案（10-20）** W1–W9（spec §7.3），落在這些 task：W1 → MON-2a task 1、MON-2b task 1；W2 → MON-2b task 2、MON-6b；W3 → MON-1b task 2；W4 → MON-1c task 2、MON-3a task 3；W5 → MON-4 task 2；W6 → MON-3a task 5；W7 → MON-2b task 1、MON-9a；W8 → MON-9a；W9 → MON-11、MON-12。
 - **A 線（不擋第一波）**：兩種失聯推播開關的寫入 API 由 88 請 1f 排（A 線小項，W8），上線前 MON-9a 唯讀顯示現值；series 補 `slots`、PSI、`sessions_room`、常駐程式（spec §3 最後一段）由 1f 排。
-- **第二波細化（修訂 2）⚠ 待 88 確認**（各期照下面「plan 的寫法」寫；88 改了就照改，不影響其他期）：
-  1. **pane content 的欄位名**（A7）：spec 寫 watch-host 的 pane content 加 `hostId`；`types/tab.ts:155-156` 明寫這個 kind 的欄位**刻意不叫 `hostId`**，免得通用的 pane 讀者把它當 App 主機。plan 的寫法：`poolHostId`（MON-6a task 1）。
-  2. **舊主機分頁收不掉**（A7）：spec 說舊分頁「照現行 60 秒缺席規則收掉」，但現行規則對「這台從沒列過」的分頁一律留著（`watch-area.ts:231`）；升級重開後沒有一台裝置列過 fleet id，舊分頁會永遠留著。plan 的寫法：沒有 `poolHostId` 的主機分頁一看到就記成剛列過，60 秒後收；還沒升級的裝置會把它們同步回來，再 60 秒收一次，直到兩台都升級（部署時 mlab、air26 一起升）（MON-6a task 2）。
-  3. **「監控」子分頁要不要畫橫幅**（M22）：spec M22 與 #3785 寫主機頁有橫幅；設計稿 `renderHost`（`page.js:1044`）是 `dead && HP.tab !== 'mon'` 才畫，「監控」改在標頭寫狀態、副字與最後檢查。plan 的寫法：照 spec，四個子分頁都畫（MON-6f task 2）。
-  4. **silence 告警的去重與歸屬**（M23、M36）：每台 wwd 都替自己的對等體開 `silence:<對等體>`（`cmd/wwd/advisor.go:51-59`、`internal/wwd/advisor/rules_silence.go:29-59`），mserv 一停，mlab、air26（與醒著的 air19）各有一筆；照原樣讀，事件頁會有三列、盾牌數字 +3。plan 的寫法：同一個 key 合成一列、算一件，列在叫不到的那台底下（設計稿的示意列也是這樣）；主機頁的告警標記用同一套歸屬（設計稿 `alertsOf` 讀的是那台自己的清單，mserv 的 silence 會出現在 mlab 頁上）（MON-10a task 3、10b task 2、10c task 3）。
-  5. **期數**：照 ≤ 800 行／20 檔切，MON-5 拆 3 期（5a～5c）、MON-6 拆 6 期（6a～6f）、MON-10 拆 3 期（10a～10c），原 plan／spec §8 寫的是約 2、約 2、1～2 期；理由寫在各期的「為什麼拆」。spec §8 的表這次沒改（只改 plan）。
-  6. **主機頁「設定」的過渡內容**：6f 起主機頁的「設定」一律走 `WatchSettings` 的 daemon 那支（`WorkerSettings`、`WorkerExceptions`、守門員段），`ProbeHostEditor`（`WatchSettings.tsx:238-245`；fleet 的觀察主機設定，含 SSH 別名）不再從主機頁出現；Hosts 頁的觀察主機頁還在，到 MON-9b。理由：它寫的是 fleet 的 probe 設定，MON-1c 起側欄已經不讀那份外觀，留著會讓人以為改得到（MON-6f task 3）。
-  7. **事件頁的守門員那一行**：現在的事件頁頁首寫守門員的狀態（`WatchEventsPane.tsx:154-160`、`:169-172`）；設計稿 r3 的事件頁沒有這行，spec M35 也沒提。plan 的寫法：拿掉（守門員頁有）（MON-10c task 1）。
-  8. **原因的字**（M31）：spec M31 的例字（名額已滿、壓力偏高、主人在用、舊閘門名額滿（#3450））與既有的 `pool.reason.*`（名額都在用、負載偏高、主人正在這台操作、閘門的名額被占住，`zh-TW.json:3202-3211`）不同。plan 的寫法：沿用既有鍵（側欄卡片、主機頁、任務佇列同一套字），只新增「暫停到 hh:mm（名稱）」；要改成 spec 的字就改語系值，三處一起變（MON-5b task 2）。
-- **第二波細化時自己定的**（不是衝突，88 可推翻）：
+- **第二波細化（修訂 2）的定案**：細化時查到的 8 點，88 於 10-20 全部照 plan 原本的寫法定案：
+  1. **pane content 的欄位名**（A7）：spec 原本寫 watch-host 的 pane content 加 `hostId`（指的是 wwd 的 `host_id`）；`types/tab.ts:155-156` 明寫這個 kind 的欄位**刻意不叫 `hostId`**，免得通用的 pane 讀者把它當 App 主機。88 定案（10-20）：`poolHostId`；spec A7 的欄位名同步改了（MON-6a task 1）。
+  2. **舊主機分頁收不掉**（A7）：spec 說舊分頁「照現行 60 秒缺席規則收掉」，但現行規則對「這台從沒列過」的分頁一律留著（`watch-area.ts:231`）；升級重開後沒有一台裝置列過 fleet id，舊分頁會永遠留著。88 定案（10-20）：沒有 `poolHostId` 的主機分頁一看到就記成剛列過，60 秒後收；還沒升級的裝置會把它們同步回來，再 60 秒收一次，直到兩台都升級；接受這個代價（兩台 Mac 一起升）（MON-6a task 2）。
+  3. **「監控」子分頁要不要畫橫幅**（M22）：spec M22 與 #3785 寫主機頁有橫幅；設計稿 `renderHost`（`page.js:1044`）是 `dead && HP.tab !== 'mon'` 才畫，「監控」改在標頭寫狀態、副字與最後檢查。88 定案（10-20）：照 spec，四個子分頁都畫（MON-6f task 2）。
+  4. **silence 告警的去重與歸屬**（M23、M36）：每台 wwd 都替自己的對等體開 `silence:<對等體>`（`cmd/wwd/advisor.go:51-59`、`internal/wwd/advisor/rules_silence.go:29-59`），mserv 一停，mlab、air26（與醒著的 air19）各有一筆；照原樣讀，事件頁會有三列、盾牌數字 +3。88 定案（10-20）：同一個 key 合成一列、算一件，列在叫不到的那台底下（設計稿的示意列也是這樣）；主機頁的告警標記用同一套歸屬（設計稿 `alertsOf` 讀的是那台自己的清單，mserv 的 silence 會出現在 mlab 頁上）（MON-10a task 3、10b task 2、10c task 3）。
+  5. **期數**：照 ≤ 800 行／20 檔切，MON-5 拆 3 期（5a～5c）、MON-6 拆 6 期（6a～6f）、MON-10 拆 3 期（10a～10c），原 plan／spec §8 寫的是約 2、約 2、1～2 期；理由寫在各期的「為什麼拆」。88 定案（10-20）：照這個拆法，spec §8 的分期表同步改了。
+  6. **主機頁「設定」的過渡內容**：6f 起主機頁的「設定」一律走 `WatchSettings` 的 daemon 那支（`WorkerSettings`、`WorkerExceptions`、守門員段），`ProbeHostEditor`（`WatchSettings.tsx:238-245`；fleet 的觀察主機設定，含 SSH 別名）不再從主機頁出現；Hosts 頁的觀察主機頁還在，到 MON-9b。理由：它寫的是 fleet 的 probe 設定，MON-1c 起側欄已經不讀那份外觀，留著會讓人以為改得到。88 定案（10-20）：6f 起拿掉，Hosts 頁的觀察主機頁照舊到 MON-9b（MON-6f task 3）。
+  7. **事件頁的守門員那一行**：現在的事件頁頁首寫守門員的狀態（`WatchEventsPane.tsx:154-160`、`:169-172`）；設計稿 r3 的事件頁沒有這行，spec M35 也沒提。88 定案（10-20）：拿掉（守門員頁有）（MON-10c task 1）。
+  8. **原因的字**（M31）：spec M31 原本的例字（名額已滿、壓力偏高、主人在用、舊閘門名額滿（#3450））與既有的 `pool.reason.*`（名額都在用、負載偏高、主人正在這台操作、閘門的名額被占住，`zh-TW.json:3202-3211`）不同。88 定案（10-20）：沿用既有鍵（側欄卡片、主機頁、任務佇列同一套字），只新增「暫停到 hh:mm（名稱）」；spec M31 的例字已改成跟現有的字一致（MON-5b task 2）。
+- **第二波細化時自己定的**（不是衝突；88 定案（10-20），七條都接受）：
   - 主機頁預設範圍 30 分（設計稿的 `HP.range`；現在是 5 分）。
   - 小圖的顏色只用既有 token（`accent`、`text-muted`、`queue-heavy`／`queue-light`），不搬設計稿的 COL 調色盤、不加新 token。
   - 任務佇列的工作列一律寫 `jobLine`（repo task args，過長截斷、title 是全文）；設計稿的 `taskLine` 寫死「repo 是 purdex 時省略」，不搬。
