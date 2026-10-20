@@ -32,7 +32,7 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 
 等級只決定**還有誰**知道：`watch` 只有你；`digest` 另進每日摘要；`push` 另推使用者手機（推播開關打開時）。
 
-**警報消失不等於恢復。** 有幾條在資料過期、讀不到時也會清（表中「清除條件」有寫），清掉時看一次 `watch/report-wwd.sh` 確認真的好了。反過來，規則判斷不了（資料有洞、來源讀不到）時，已立起的警報會原樣留著，不會清。
+**警報消失不等於恢復。** 多數規則在判斷不了時（資料有洞、來源讀不到）會讓已立起的警報原樣留著；但有五條在**缺資料時也會清**：`pressure_held`、`thrash`、`resident_growth`、`disk_falling`（斜率那半）、`mserv_service`（PSI 那半）。各自的情形寫在表中「清除條件」。這五條清掉時，看一次 `watch/report-wwd.sh` 確認真的好了。
 
 | 規則 | 等級 | 條件（摘要） | 清除條件 | 你的處置 |
 |---|---|---|---|---|
@@ -40,9 +40,9 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 | `pressure_danger` | push | macOS 壓力 4 任一樣本；Linux PSI full10 ≥ 10 或 some60 ≥ 25 | 2 分鐘沒有這樣的樣本 | 立即：`pdx wwd hold <主機> …` 擋新工作，通知各線暫停送測試，告訴使用者 |
 | `pressure_held` | push | 連續 5 個完整分鐘都在 warning 以上，且這 5 分鐘 swap 增加 ≥ 1 GB | 最新的完整分鐘不在 warning 以上；**也會在沒證明恢復時清**：最新一分鐘的資料超過 90 秒沒更新，或 150 秒內沒有完整的一分鐘 | 同 `pressure_danger`，並找出 swap 漲的那棵行程樹；清掉時看一次 report-wwd.sh |
 | `swap_growth` | watch | 30 分鐘內 swap 增量 ≥ 門檻：RAM ≤ 16 GB 一律 500 MB，超過 16 GB 按比例（24 GB 為 750 MB）；`[advisor] swap_growth_mb` 可覆寫 | 30 分鐘增量降到門檻一半以下（歷史不滿 30 分鐘時不清） | 找吃記憶體的行程樹，請擁有者收 |
-| `thrash` | digest | macOS 壓縮器 > 4 GiB 且解壓 > 8 萬／秒，最近 60 秒每個樣本都是 | 最近 60 秒有任一樣本不符（立即清） | 同 `pressure_watch` |
-| `resident_growth` | digest | 單一系統／常駐行程的 footprint ≥ max(4 GB, RAM 25%)（模擬器除外）；列在 `known_residents` 的，主機可用 ≥ 50% 且 10 分鐘內 swap 沒漲時不報 | 沒有超標的行程（或只剩被豁免的） | 查是哪個行程。預期內的大常駐要不要列進 `known_residents` 是使用者的決定，只提議 |
-| `disk_falling` | digest | 剩 < 14 GB，或最近一小時每小時降 ≥ 2 GB 且 6 小時內預估 < 10 GB | 剩 ≥ 14 GB 且斜率條件不成立 | 量大頭（Go 建置快取、wwd gocache／deps、worktree），告訴擁有者；修剪共用快取前問使用者 |
+| `thrash` | digest | macOS 壓縮器 > 4 GiB 且解壓 > 8 萬／秒，最近 60 秒每個樣本都是 | 最近 60 秒有任一樣本不符（立即清）；**缺資料也會清**：最近的 5 秒樣本是空的、不滿 60 秒（例如 wwd 剛重啟）或中間有洞。只有 macOS 樣本缺解壓欄位時才原樣留著 | 同 `pressure_watch`；清掉時看一次 report-wwd.sh |
+| `resident_growth` | digest | 單一系統／常駐行程的 footprint ≥ max(4 GB, RAM 25%)（模擬器除外）；列在 `known_residents` 的，主機可用 ≥ 50% 且 10 分鐘內 swap 沒漲時不報 | 沒有超標的行程（或只剩被豁免的）；**缺資料也會清**：採樣失敗、facts 的行程清單是空的時候 | 查是哪個行程。預期內的大常駐要不要列進 `known_residents` 是使用者的決定，只提議 |
+| `disk_falling` | digest | 剩 < 14 GB，或最近一小時每小時降 ≥ 2 GB 且 6 小時內預估 < 10 GB | 剩 ≥ 14 GB 且斜率條件不成立；**缺資料也會清**：最近一小時的分鐘紀錄不足 30 分鐘或少於 20 筆（例如 wwd 剛重啟）時，斜率算不出來，因斜率而立起的警報就清掉 | 量大頭（Go 建置快取、wwd gocache／deps、worktree），告訴擁有者；修剪共用快取前問使用者 |
 | `disk_low` | push | 剩 < 12 GB | 回到 ≥ 12.5 GB | 同上，且要快：低於 wwd 的 disk floor 時該台不再領 heavy |
 | `mserv_service` | push | mserv（Linux）正式服務的 PSI some avg60 ≥ 10 連兩個完整分鐘且此刻仍是，或 MemAvailable < 1.5 GiB | 記憶體分支要回到 ≥ 1.75 GiB；PSI 分支在此刻 some60 < 10 就清（讀不到 PSI 也會清） | 找 mserv 上的大戶；牽涉正式站的服務先問那個站的 lead |
 | `orphans` | digest；fork 迴圈持續 ≥ 10 分鐘升 push | ppid=1、在開發路徑（worktree、scratch、pdx-tmp、test-wwd、playwright、codex-broker）且活了 ≥ 2 小時的行程，或每秒 fork > 10 個子行程的 ppid=1 shell | 掃描結果沒有這類行程 | 找擁有者收；fork 迴圈告訴使用者 |
