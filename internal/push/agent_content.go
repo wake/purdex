@@ -100,10 +100,13 @@ func workbookTitle(title, thing string) string {
 	return base + "・" + cutRunes(thing, room)
 }
 
+// noRuneLimit is the "no cut" limit for Normalise.
+const noRuneLimit = 1 << 30
+
 // NotifyTitle is the title of an agent push (notify-title spec §1). With a persona name: "{name} — {group}", or without a
 // group "{name} — {host}：{tmux}"; without a name today's "{host}：{tmux}". A workbook thing follows as "・{thing}". When the
 // whole is over the limit the thing is cut first (and dropped when nothing is left for it), then the group or the host and
-// tmux part; the name is never cut to make room (it is normalised, up to the title limit as a guard); the group is normalised to the length of a session's title. The host
+// tmux part; the name is never cut (only normalised; the payload's own size limit bounds a title in the end); the group is normalised to the length of a session's title. The host
 // label is the receiving device's own name for the host, so it is an argument, not part of the label.
 func NotifyTitle(label NotifyLabel, hostLabel, thing, locale string) string {
 	t := table(locale)
@@ -111,7 +114,7 @@ func NotifyTitle(label NotifyLabel, hostLabel, thing, locale string) string {
 	if hostLabel != "" {
 		row = fmt.Sprintf(t["agent_title"], hostLabel, label.Tmux)
 	}
-	name := Normalise(label.Name, maxTitleRunes) // only normalised: the name is never cut to make room (the limit is a guard)
+	name := Normalise(label.Name, noRuneLimit) // only normalised: a persona's name is never cut (spec §1)
 	if name == "" {
 		return workbookTitle(row, thing)
 	}

@@ -164,7 +164,7 @@ func (l *Labeler) Label(sessionID, sessionName string) Label {
 
 func (l *Labeler) run() {
 	defer l.wg.Done()
-	tick := time.NewTicker(l.ttl)
+	tick := time.NewTicker(l.ttl / 2) // with the ttl/2 age test in sweep: an entry is never older than the ttl at the next sweep
 	defer tick.Stop()
 	for {
 		select {
@@ -190,7 +190,7 @@ func (l *Labeler) sweep() {
 		switch {
 		case now.Sub(e.usedAt) > l.retention:
 			delete(l.cache, sid)
-		case now.Sub(e.readAt) > l.ttl && !l.pending[sid] && l.started && !l.stopped:
+		case now.Sub(e.readAt) > l.ttl/2 && !l.pending[sid] && l.started && !l.stopped:
 			select {
 			case l.queue <- sid:
 				l.pending[sid] = true
@@ -203,6 +203,12 @@ func (l *Labeler) sweep() {
 // read asks the sources, outside any lock, then stores the answer. A group error keeps the last known group; either way
 // the entry is stamped, so a failing store is asked once per ttl, not once per event.
 func (l *Labeler) read(sid string) {
+	l.mu.Lock()
+	stopped := l.stopped
+	l.mu.Unlock()
+	if stopped { // queued before Stop: do not ask the sources
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 	go func() {
@@ -226,6 +232,9 @@ func (l *Labeler) read(sid string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.pending, sid)
+	if l.stopped { // the reader outlived Stop (a source that ignored its context): its answer is thrown away
+		return
+	}
 	e := l.cache[sid]
 	e.readAt = l.now()
 	if _, had := l.cache[sid]; !had {
