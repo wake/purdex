@@ -66,6 +66,55 @@ func TestMatch_RunFlagsAreReplacedByTheTasksOwnValues(t *testing.T) {
 	}
 }
 
+// Go reads `--flag` as `-flag` (#3711 R2): the double-dash spelling of a run-only flag must not keep the command from its task, and the
+// double-dash spelling of a flag that picks what runs must not slip past the check on it.
+func TestMatch_DoubleDashFlagsAreTheSameFlags(t *testing.T) {
+	root := purdexRoot(t)
+	for name, argv := range map[string][]string{
+		"--count=1":             {"go", "test", "--count=1", "./..."},
+		"--count 1":             {"go", "test", "--count", "1", "./..."},
+		"--p 4 --timeout=5m":    {"go", "test", "--p", "4", "--timeout=5m", "./..."},
+		"--json --v --failfast": {"go", "test", "--json", "--v", "--failfast", "./..."},
+		"--parallel=2":          {"go", "test", "--parallel=2", "./..."},
+	} {
+		r := Match(root, argv)
+		assert.Equal(t, ActionRewrite, r.Action, name)
+		assert.Equal(t, "go-all", r.Task, name)
+		assert.True(t, r.Queued, name)
+	}
+	// the full e2e command, spelled with double dashes, is still the e2e task
+	e2e := Match(root, []string{"go", "test", "--tags", "e2e", "--run", "TestE2E", "--count=1", "--timeout", "20m", "./cmd/wwd/"})
+	assert.Equal(t, "e2e", e2e.Task)
+	// ... and what picks what runs cannot be left out by writing it with two dashes
+	for name, argv := range map[string][]string{
+		"--tags without -run":                             {"go", "test", "--tags", "e2e", "./cmd/wwd/"},
+		"--run on the whole tree":                         {"go", "test", "--run", "TestX", "./..."},
+		"--race on the whole tree is go-race, not go-all": {"go", "test", "--race", "./..."},
+	} {
+		r := Match(root, argv)
+		assert.NotEqual(t, "e2e", r.Task, name)
+		assert.NotEqual(t, "go-all", r.Task, name)
+		assert.NotEqual(t, "go-pkg", r.Task, name)
+	}
+	// a lone -- ends the flags: what follows is not a flag, and nothing after it is rewritten
+	assert.NotEqual(t, "go-all", Match(root, []string{"go", "test", "--", "--count=1", "./..."}).Task)
+}
+
+// The value of a flag that takes one is its value, whatever it looks like: `-run ./...` runs the tests matching that regexp in the current
+// package. The hint must not call it the whole tree (#3711 R2).
+func TestMatch_TheHintDoesNotTakeAFlagValueForAPackage(t *testing.T) {
+	root := purdexRoot(t)
+	for name, argv := range map[string][]string{
+		"-run with a path-shaped value":  {"go", "test", "-run", "./..."},
+		"-tags with a path-shaped value": {"go", "test", "-tags", "./...", "-cover"},
+		"-skip with a path-shaped value": {"go", "test", "-skip", "./...", "-cover"},
+		"-run=… joined":                  {"go", "test", "-run=./...", "-cover"},
+	} {
+		r := Match(root, argv)
+		assert.NotEqual(t, "go-all", r.Hint, name+": ./... is a value here, not the whole tree")
+	}
+}
+
 // A flag that picks what runs, or that is not a way of running at all, is another command: it is not the task, whatever else matches.
 func TestMatch_FlagsThatChangeWhatRunsAreNotIgnored(t *testing.T) {
 	root := purdexRoot(t)

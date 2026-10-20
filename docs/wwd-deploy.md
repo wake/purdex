@@ -543,7 +543,8 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
 * **Flags that only say how to run** (`go test` only: `-count`, `-v`, `-p`, `-parallel`, `-timeout`, `-json`, `-failfast`) do not keep a command from its
   task when the task does not write them: they are dropped, and the task's own command runs. So `go test -count=1 ./...` is `go-all`, and the typed
   `-p`/`-timeout` are **replaced by the task's own values** (`-count=1` is added by the worker anyway). **To keep your own `-p` or `-timeout`, use
-  `pdx test --adhoc -- go test …`.** Any other flag changes what runs or what it means (`-race` is its own task, `go-race`; `-cover`, `-shuffle` …): the
+  `pdx test --adhoc -- go test …`.** (Go reads `--flag` as `-flag`, and so does the entry, for every check on a `go test` command; a lone `--`
+  or `-args` ends the flags.) Any other flag changes what runs or what it means (`-race` is its own task, `go-race`; `-cover`, `-shuffle` …): the
   command is then no task, and an ad-hoc job.
 * **A pattern that expands is not a package.** The fast-lane task (`go-pkg`, `local = true`) takes packages by name; a pattern with `...` is never
   its. `go test ./...` (the whole tree) is `go-all`, the task that spells `./...` out, a release task through the queue; `go test ./internal/...` and other

@@ -134,7 +134,7 @@ func classRank(c wire.JobClass) int {
 // the longest from the front. The command's own flags and their values are not words of the comparison either, so `go test -count=1 ./...`
 // is near go-all, which runs `./...`, and not near the first task by name.
 func hintFor(m *manifest.Manifest, names []string, cmd []string) string {
-	words := plainWords(dropRunFlags(cmd))
+	words := plainWords(dropRunFlags(normalizeGoFlags(cmd)))
 	best, bestN, bestFull := "", 0, false
 	for _, n := range names {
 		var lits []string
@@ -167,7 +167,11 @@ func plainWords(w []string) []string {
 			out = append(out, w[i])
 			continue
 		}
-		if !strings.Contains(w[i], "=") && i+1 < len(w) && valueLike(w[i+1], i+1 == len(w)-1) {
+		if strings.Contains(w[i], "=") || i+1 >= len(w) {
+			continue
+		}
+		// a flag of go that takes a value takes the next word, whatever it looks like; for any other flag the word is guessed at
+		if goValueFlags[w[i]] || valueLike(w[i+1], i+1 == len(w)-1) {
 			i++
 		}
 	}

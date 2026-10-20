@@ -36,7 +36,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 	}
 	tw := normalize(lits)
-	cmd = dropRunFlags(cmd)
+	cmd = dropRunFlags(normalizeGoFlags(cmd))
 	i, k := 0, 0
 	for k < len(tw) {
 		if !strings.HasPrefix(tw[k], "-") { // a plain word of the task (go test, a trailing ./...): the command has it too
@@ -118,6 +118,36 @@ var (
 	runFlagsAlone = map[string]bool{"-v": true, "-json": true, "-failfast": true}
 	runFlagsValue = map[string]bool{"-count": true, "-p": true, "-parallel": true, "-timeout": true}
 )
+
+// normalizeGoFlags writes a `go test` command's `--flag` as `-flag`: Go reads them as the same flag, and every check here goes by the single
+// dash name. A lone `--` ends the flags, and nothing from `-args` or `--` on is a flag of go (it is the test program's, or an argument).
+func normalizeGoFlags(cmd []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	out := append([]string(nil), cmd[:2]...)
+	for i := 2; i < len(cmd); i++ {
+		w := cmd[i]
+		if w == "-args" || w == "--" {
+			return append(out, cmd[i:]...)
+		}
+		if strings.HasPrefix(w, "--") && len(w) > 2 && w[2] != '-' {
+			w = w[1:]
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// goValueFlags are the flags of `go test` (and the build flags it takes) that take a value, in the next word or joined with =: the word after
+// one is its value whatever it looks like (`-run ./...` is a regexp).
+var goValueFlags = map[string]bool{
+	"-run": true, "-skip": true, "-tags": true, "-count": true, "-p": true, "-parallel": true, "-timeout": true, "-bench": true,
+	"-benchtime": true, "-fuzz": true, "-fuzztime": true, "-cpu": true, "-coverprofile": true, "-covermode": true, "-coverpkg": true,
+	"-o": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-asmflags": true, "-gccgoflags": true, "-mod": true, "-modfile": true,
+	"-overlay": true, "-pkgdir": true, "-vet": true, "-outputdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true,
+	"-mutexprofile": true, "-trace": true, "-shuffle": true, "-testlogfile": true, "-fuzzcachedir": true, "-fuzzminimizetime": true,
+}
 
 // dropRunFlags takes the flags above out of a `go test` command, also when the task writes the flag itself with its own value (go-all has
 // -p 3 and -timeout 30m: `go test -p 4 ./...` is go-all, which runs its own). A value joined with = is one word; a flag that takes a value in
