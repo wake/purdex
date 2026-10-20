@@ -5,21 +5,16 @@ import { render, screen, fireEvent, cleanup, within, waitFor } from '@testing-li
 import { TabContent } from '../TabContent'
 import { WatchHostPane } from './WatchHostPane'
 import { registerModule, clearModuleRegistry } from '../../lib/module-registry'
-import { useFleetStore } from '../../lib/fleet/store'
-import { usePoolStore } from '../../lib/pool/store'
 import { clearViewMemory } from '../../lib/watch/view-memory'
 import { clearWatchDrafts } from '../../lib/watch/draft-memory'
 import { clearWorkerDrafts } from '../../lib/pool/worker-draft-memory'
-import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
-import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
-import hostsJson from '../../lib/pool/__fixtures__/pool_hosts_response.json'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { fingerprintOf } from '../../lib/nex/nex-host-effects'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
-import { host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
+import { poolHostOf, seedPool, SEED_HOST_ID } from './host-pane-seed'
 import { useI18nStore } from '../../stores/useI18nStore'
 const t = (k: string) => useI18nStore.getState().t(k)
 
@@ -36,7 +31,7 @@ vi.mock('../../lib/pool/api', async (orig) => ({
 }))
 
 const Other = () => <div data-testid="other-tab" />
-const hostTab: Tab = { ...createTab({ kind: 'watch-host', fleetHostId: 'd-a' }), id: 'watch-host-d-a' }
+const hostTab: Tab = { ...createTab({ kind: 'watch-host', poolHostId: SEED_HOST_ID }), id: `watch-host-${SEED_HOST_ID}` }
 const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
 const all = [hostTab, dashTab]
 
@@ -48,17 +43,10 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'air26', ip: '1', port: 1, token: 't', order: 0, daemonId: 'd-a' } }, hostOrder: ['cfg-a'], activeHostId: 'cfg-a', runtime: { 'cfg-a': { status: 'connected' } } } as never)
   // Fresh and of this host's identity, so the pool's identity refresh does not read /api/info again and replace the seeded entry.
   useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', daemonCapabilities: ['pool.v1', 'pool.control.v1'], fetchedAt: Date.now(), fingerprint: fingerprintOf('cfg-a') } } } as never)
-  const s = useFleetStore.getState()
-  s.reset()
-  const gen = s.begin('cfg-a')
-  s.setSupport('cfg-a', gen, 'yes')
-  s.applyFetched('cfg-a', gen, primaryAnswer(1, [host('d-a', { alias: 'air26' })]))
-  const facts = parseFacts(darwinJson)!
-  usePoolStore.getState().reset()
-  const seeded = [{ ...parseHostsAnswer(hostsJson)![0], alias: 'air26', reachable: true, facts }]
+  const seeded = [poolHostOf()]
   fetchPoolHosts.mockReset()
   fetchPoolHosts.mockResolvedValue(seeded)
-  usePoolStore.setState({ hosts: seeded, sourceHostId: 'cfg-a' })
+  seedPool(seeded)
 })
 afterEach(() => { clearViewMemory(); clearWatchDrafts(); clearWorkerDrafts() })
 
