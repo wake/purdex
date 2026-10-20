@@ -149,6 +149,7 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 		return failPrepare(o, err), true
 	}
 	var body submit.Body
+	note := ""
 	if o.Recorder != nil {
 		p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, Task: o.Args.Task, Args: o.Args.TaskArgs, Class: o.Args.Class, Submitter: sub, Git: o.GitBin, Local: true})
 		switch {
@@ -157,11 +158,11 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 		case err != nil:
 			return failPrepare(o, err), true
 		default:
-			body = p.Body
+			body, note = p.Body, p.Note
 		}
 	}
 	req := fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env}
-	return runFast(ctx, o, task, req, o.Args.Task, "", false)
+	return runFast(ctx, o, task, req, o.Args.Task, note, false)
 }
 
 func list(ctx context.Context, o Options) int {

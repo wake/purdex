@@ -248,7 +248,7 @@ func TestPrepareLocalOnlyAnUnbornBranchIsNoCommit(t *testing.T) {
 	}
 }
 
-func TestPrepareLocalTakesNoSnapshotAndNamesHead(t *testing.T) {
+func TestPrepareLocalNamesHeadAndRecordsTheWorkingTreeOfADirtyDirectory(t *testing.T) {
 	dir := newRepo(t)
 	write(t, filepath.Join(dir, "spa/src/new.test.ts"), "untracked\n")
 	before := gitT(t, dir, "count-objects", "-v")
@@ -257,17 +257,62 @@ func TestPrepareLocalTakesNoSnapshotAndNamesHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := gitT(t, dir, "rev-parse", "HEAD")
-	if p.Body.Snapshot.Commit != head || p.Body.Snapshot.Tree != gitT(t, dir, "rev-parse", "HEAD^{tree}") {
-		t.Fatalf("snapshot = %+v, want HEAD %s", p.Body.Snapshot, head)
+	headTree := gitT(t, dir, "rev-parse", "HEAD^{tree}")
+	if p.Body.Snapshot.Commit != head {
+		t.Fatalf("snapshot commit = %q, want HEAD %s", p.Body.Snapshot.Commit, head)
+	}
+	if p.Body.Snapshot.Tree == "" || p.Body.Snapshot.Tree == headTree {
+		t.Fatalf("snapshot tree = %q: the directory has an untracked file, so it is not HEAD's tree %s (#3735)", p.Body.Snapshot.Tree, headTree)
+	}
+	if p.Note != "" {
+		t.Fatalf("note = %q", p.Note)
 	}
 	if gitT(t, dir, "count-objects", "-v") != before {
-		t.Fatal("a local preparation wrote objects: it took a snapshot")
+		t.Fatal("a local preparation wrote objects into the repository")
 	}
 	if p.Body.GitDir != filepath.Join(dir, ".git") {
 		t.Fatalf("git_dir = %q", p.Body.GitDir)
 	}
 	if p.Body.DefHash != "" || p.Body.NoCache {
 		t.Fatalf("a fast-lane run is never answered from a stored result: def_hash %q no_cache %v", p.Body.DefHash, p.Body.NoCache)
+	}
+}
+
+func TestPrepareLocalRecordsHeadsTreeWhenTheDirectoryIsClean(t *testing.T) {
+	dir := newRepo(t)
+	if out := gitT(t, dir, "status", "--porcelain"); out != "" {
+		t.Fatalf("the fixture is not clean: %s", out)
+	}
+	p, err := Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/a.test.ts"}, Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := gitT(t, dir, "rev-parse", "HEAD^{tree}"); p.Body.Snapshot.Tree != want {
+		t.Fatalf("tree = %q, want HEAD's %s", p.Body.Snapshot.Tree, want)
+	}
+}
+
+// A working tree that cannot be taken is not HEAD's tree: the run goes on with no tree recorded, and the note says why.
+func TestPrepareLocalRecordsNoTreeWhenTheWorkingTreeCannotBeTaken(t *testing.T) {
+	dir := newRepo(t)
+	write(t, filepath.Join(dir, "spa/src/new.test.ts"), "untracked\n")
+	fake := filepath.Join(t.TempDir(), "git")
+	write(t, fake, "#!/bin/sh\ncase \"$*\" in *write-tree*) echo 'fatal: disk full' >&2; exit 128;; esac\nexec git \"$@\"\n")
+	if err := os.Chmod(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/new.test.ts"}, Local: true, Git: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Body.Snapshot.Tree != "" || !strings.Contains(p.Note, "disk full") {
+		t.Fatalf("tree %q note %q: want no tree and the reason", p.Body.Snapshot.Tree, p.Note)
+	}
+	if p.Body.Snapshot.Commit == "" {
+		t.Fatal("the record still names HEAD")
+	}
+	if err := p.Body.Validate(); err != nil {
+		t.Fatalf("a record without a tree must still validate: %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -197,5 +198,34 @@ func TestAnAdHocCommandOnARepositoryWithoutACommitRunsUnrecorded(t *testing.T) {
 	code, _, _ := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: g, Recorder: neverRecorder{t}, Dir: dir, Env: os.Environ()})
 	if code != 0 || g.calls != 1 {
 		t.Fatalf("code %d gate %d", code, g.calls)
+	}
+}
+
+// #3735: the record of a fast-lane run holds the tree of the directory the command ran in, and says so when it could not take it.
+func TestAnAdHocRecordHoldsTheWorkingTreeAndSaysWhenItCouldNotTakeIt(t *testing.T) {
+	dir := noManifestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^{tree}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &capture{}
+	if code, _, _ := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ()}); code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	if got := rec.bodies[0].Snapshot.Tree; got == "" || got == strings.TrimSpace(string(head)) {
+		t.Fatalf("recorded tree %q: the directory is dirty, so it is not HEAD's %s", got, head)
+	}
+
+	fake := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncase \"$*\" in *write-tree*) echo 'fatal: disk full' >&2; exit 128;; esac\nexec git \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = &capture{}
+	_, _, errOut := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ()})
+	if rec.bodies[0].Snapshot.Tree != "" || !strings.Contains(errOut, "could not be recorded") || !strings.Contains(errOut, "disk full") {
+		t.Fatalf("tree %q, report %q", rec.bodies[0].Snapshot.Tree, errOut)
 	}
 }

@@ -36,6 +36,7 @@ func adHoc(ctx context.Context, o Options) int {
 	}
 	argv := o.Args.Argv()
 	var body submit.Body
+	treeNote := ""
 	if o.Recorder != nil {
 		p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, AdHoc: argv, Submitter: sub, Git: o.GitBin})
 		switch {
@@ -44,7 +45,7 @@ func adHoc(ctx context.Context, o Options) int {
 		case err != nil:
 			return failPrepare(o, err)
 		default:
-			body = p.Body
+			body, treeNote = p.Body, p.Note
 		}
 	}
 	task := manifest.AdHocTask()
@@ -52,6 +53,10 @@ func adHoc(ctx context.Context, o Options) int {
 		return failPrepare(o, err)
 	}
 	req := fastlane.Request{Root: root, Task: task, Args: argv, Body: body, Gate: o.Gate, GateClass: gate.ClassHeavy, Recorder: o.Recorder, Env: o.Env}
-	code, _ := runFast(ctx, o, task, req, "adhoc", "undeclared command: it ran here only, under a heavy slot", true)
+	note := "undeclared command: it ran here only, under a heavy slot"
+	if treeNote != "" {
+		note += "; " + treeNote
+	}
+	code, _ := runFast(ctx, o, task, req, "adhoc", note, true)
 	return code
 }
