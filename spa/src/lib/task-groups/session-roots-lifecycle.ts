@@ -1,0 +1,120 @@
+// spa/src/lib/task-groups/session-roots-lifecycle.ts — the roots read, outside React (task groups TG-2r; moved out of hooks/useSessionRoots.ts). The one source is `UnattendedView.quotas` (`GET /api/team/unattended`,
+// `team.relay_quota.v1`): the daemon lists every live session of the host with the root of its chain. The read goes through the shared reader (it joins a read already out and seeds `useRelayQuotaStore.reads`), and
+// only while a caller says the task-group view is on (`setRootsInterest`):
+//   - once for a wanted host that has no read yet (never read, or fenced by a reconnect);
+//   - once more, debounced, when a wanted session is in neither the cache nor the last read — once per session per host epoch, so a daemon that never lists it is not asked again and again.
+// Whatever a read lists goes into the device-local root cache, so an offline host still answers. The cache forgets a host that is removed, moved, or answers as another daemon, and sessions no tab of any world
+// (on screen or parked) refers to. Nothing is guessed: a session whose root is not known is `null`.
+import { useRelayQuotaStore } from '../team/relay-quota'
+import { readFirstPage } from '../team/unattended-reader'
+import { collectLeaves } from '../pane-tree'
+import { rootOf, rootsSupported, useRootCacheStore } from './root-cache'
+import { daemonMismatchKey, useHostStore } from '../../stores/useHostStore'
+import { hostEndpointKey } from '../../stores/useHostConfigStore'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import type { Tab } from '../../types/tab'
+
+export const ROOT_REREAD_DEBOUNCE_MS = 800
+
+export interface WantedSession { hostId: string; agentSessionId: string }
+
+let enabled = false
+let wanted: readonly WantedSession[] = []
+let evaluate: (() => void) | null = null
+
+/** The task-group view says what it needs: while `on`, the wanted sessions' roots are read. Takes effect at once when the lifecycle runs, else when it starts. */
+export function setRootsInterest(on: boolean, sessions: readonly WantedSession[]): void {
+  enabled = on
+  wanted = sessions
+  evaluate?.()
+}
+
+function* agentSessionsOf(tabs: Record<string, Tab>): Generator<[string, string]> {
+  for (const tab of Object.values(tabs)) {
+    for (const leaf of collectLeaves(tab.layout)) {
+      const c = leaf.content
+      if (c.kind === 'tmux-session' && c.rebuild?.agent?.sessionId) yield [c.hostId, c.rebuild.agent.sessionId]
+    }
+  }
+}
+
+/** Every (host, agent session) a tab of any world refers to: the one on screen and every parked one. */
+function referencedSessions(): Set<string> {
+  const refs = new Set<string>()
+  const add = (tabs: Record<string, Tab>) => { for (const [h, id] of agentSessionsOf(tabs)) refs.add(JSON.stringify([h, id])) }
+  add(useTabStore.getState().tabs)
+  const { parkedMaster, slaves } = useLocalProfilesStore.getState()
+  if (parkedMaster !== null) add(parkedMaster.tabs)
+  for (const slave of Object.values(slaves)) if (slave.world !== null) add(slave.world.tabs)
+  return refs
+}
+
+function pruneUnreferenced(): void {
+  const refs = referencedSessions()
+  useRootCacheStore.getState().prune((h, id) => refs.has(JSON.stringify([h, id])))
+}
+
+/** Starts the lifecycle (cache feeding, host forgetting, cleanup, and the reads `setRootsInterest` asks for). Returns the stop. */
+export function startSessionRootsLifecycle(): () => void {
+  const asked = new Map<string, Set<string>>() // per host: the sessions already asked about in this epoch
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const feed = () => {
+    for (const [hostId, read] of Object.entries(useRelayQuotaStore.getState().reads)) {
+      if (read.ok && read.quotas !== undefined && !read.quotasFailed) useRootCacheStore.getState().ingest(hostId, read.quotas)
+    }
+  }
+
+  const run = () => {
+    if (timer !== null) { clearTimeout(timer); timer = null }
+    const reads = useRelayQuotaStore.getState().reads
+    for (const hostId of [...asked.keys()]) if (reads[hostId] === undefined) asked.delete(hostId) // a new epoch of the host: what was asked in the old one is asked again if the new read misses it
+    if (!enabled) return
+    const unread = new Set<string>()
+    for (const w of wanted) if (rootsSupported(w.hostId) && reads[w.hostId] === undefined) unread.add(w.hostId)
+    for (const hostId of [...unread].sort()) readFirstPage(hostId).catch(() => {}) // a failure lands in the store as the host's read
+    const fresh = wanted.filter((w) => {
+      const read = reads[w.hostId]
+      return read !== undefined && read.ok && read.quotas !== undefined && rootsSupported(w.hostId) && rootOf(w.hostId, w.agentSessionId) === null && !asked.get(w.hostId)?.has(w.agentSessionId)
+    })
+    if (fresh.length === 0) return
+    timer = setTimeout(() => {
+      timer = null
+      const hosts = new Set<string>()
+      for (const w of fresh) {
+        hosts.add(w.hostId)
+        const set = asked.get(w.hostId) ?? new Set<string>()
+        set.add(w.agentSessionId)
+        asked.set(w.hostId, set)
+      }
+      for (const hostId of hosts) readFirstPage(hostId).catch(() => {})
+    }, ROOT_REREAD_DEBOUNCE_MS)
+  }
+
+  const unsubs = [
+    useRelayQuotaStore.subscribe((s, prev) => { if (s.reads !== prev.reads) { feed(); run() } }),
+    useHostStore.subscribe((next, prev) => {
+      for (const hostId of Object.keys(prev.hosts)) {
+        if (!next.hosts[hostId] || hostEndpointKey(prev.hosts[hostId]) !== hostEndpointKey(next.hosts[hostId])) useRootCacheStore.getState().dropHost(hostId)
+      }
+      for (const [hostId, rt] of Object.entries(next.runtime)) {
+        const observed = rt?.daemonIdMismatch?.observed
+        if (observed !== undefined && observed !== prev.runtime[hostId]?.daemonIdMismatch?.observed) useRootCacheStore.getState().dropHost(hostId)
+      }
+      if (daemonMismatchKey(next) !== daemonMismatchKey(prev)) run() // `rootsSupported` answers false for a mismatched host: a change re-derives what to read
+    }),
+    useUnattendedStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) run() }), // a capability learned after the view opened
+    useLocalProfilesStore.subscribe((s, prev) => { if (s.parkedMaster !== prev.parkedMaster || s.slaves !== prev.slaves) pruneUnreferenced() }),
+  ]
+  evaluate = run
+  feed()
+  pruneUnreferenced()
+  run()
+  return () => {
+    for (const off of unsubs) off()
+    if (timer !== null) clearTimeout(timer)
+    if (evaluate === run) evaluate = null
+  }
+}
