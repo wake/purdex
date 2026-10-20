@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/url"
 	"syscall"
 	"time"
 
@@ -20,6 +21,13 @@ const (
 	// livenessTimeout bounds the connect.
 	livenessTimeout = 2 * time.Second
 )
+
+// answeredOverHTTP says whether a failed read was an answer: an error status, a body that could not be read as what it should be, or no
+// error at all (the answer was from another name). Only a failure to talk to the address (refused, reset, timed out, no route) is not.
+func answeredOverHTTP(err error) bool {
+	var ue *url.Error
+	return !errors.As(err, &ue)
+}
 
 // look makes the look at peer i and files what it found; the pool lock is not held while the connect goes on. A look cut short because
 // this wwd is stopping says nothing and leaves what was there.

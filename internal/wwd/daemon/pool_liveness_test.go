@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"syscall"
 	"testing"
@@ -92,6 +94,41 @@ func TestLivenessSaysWhetherTheHostAnswersWhenTheWwdDoesNot(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []string{net.JoinHostPort(host, "22")}, d.addrs(), "the SSH port of the peer's address, once")
 			assert.Equal(t, c.want, p.Downs()[0].Liveness, "the silence rules are told the same")
+		})
+	}
+}
+
+// A wwd that answers with something wrong (an error status, a body that is not info, another host's name or facts) is proof that its host is
+// up: the SSH port is not asked, so a host that keeps 22 closed is never reported as off.
+func TestAnAnswerThatIsWrongProvesTheHostIsUp(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"error status": func(w http.ResponseWriter, r *http.Request) { http.Error(w, "x", http.StatusInternalServerError) },
+		"not json":     func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>")) },
+		"other alias": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, 200, wire.Info{HostID: "id-x", Alias: "someone-else", Version: "v", Proto: wire.Proto, Platform: "darwin", Arch: "amd64", Labels: []string{}})
+		},
+		"other host's facts": func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/info":
+				writeJSON(w, 200, wire.Info{HostID: "id-air19", Alias: "air19", Version: "v", Proto: wire.Proto, Platform: "darwin", Arch: "amd64", Labels: []string{}})
+			case "/v1/facts":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(factsFor(wireFixture(t, "facts_darwin.json"), "someone-else")))
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
+			p := NewPoolPoller([]PeerAddr{{"air19", addr(srv)}}, testToken, nil)
+			d := &fakeDial{}
+			d.set(context.DeadlineExceeded) // if it were asked, the host would be called off
+			p.dial = d.dial
+			p.PollOnce(context.Background())
+			got := p.Peers()[0]
+			assert.False(t, got.Reachable)
+			assert.Equal(t, wire.LivenessWwdDown, got.Liveness)
+			assert.Empty(t, d.addrs(), "the host answered over HTTP: no look at the SSH port")
 		})
 	}
 }

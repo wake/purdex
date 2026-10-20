@@ -108,8 +108,14 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		// and is outside the threat model (spec §11).
 		p.mu.Lock()
 		p.markDown(i, started)
+		answered := answeredOverHTTP(err)
+		if answered { // an error status, a body that is not info, another name: something there did answer, so the host is up
+			p.setLiveness(i, wire.LivenessWwdDown)
+		}
 		p.mu.Unlock()
-		p.look(ctx, i) // the wwd does not answer: does its host?
+		if !answered {
+			p.look(ctx, i) // nothing answered over HTTP: does the host?
+		}
 		return
 	}
 	// facts may not exist yet (503 before the peer's first sample): keep what we had
@@ -123,8 +129,8 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ferr == nil && (facts.HostID != info.HostID || facts.Alias != info.Alias) {
-		p.markDown(i, started) // facts of another host: keep the last verified view
-		write = func() { p.look(ctx, i) }
+		p.markDown(i, started)                 // facts of another host: keep the last verified view
+		p.setLiveness(i, wire.LivenessWwdDown) // something answered, so the host is up
 		return
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
