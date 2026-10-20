@@ -40,6 +40,45 @@ describe('pushTargets', () => {
   })
 })
 
+describe('pushTargets — only hosts the pool lists (codex R1)', () => {
+  it('an owner kept from before, whose pool host is gone from the list, is not written', () => {
+    const t = pushTargets({ w1: 'A', gone: 'B' }, [{ host_id: 'w1', alias: 'mlab' }])
+    expect(t).toEqual([{ hostConfigId: 'A', alias: 'mlab' }])
+  })
+})
+
+describe('the queue and the state of the connection now (codex R1)', () => {
+  it('a host that was connected when read but is offline when pressed is queued, not written to fail', async () => {
+    setRuntime({ A: 'connected', B: 'disconnected' })
+    const r = await writePushAll(true, [host('B', { connected: true })])
+    expect(r[0]).toMatchObject({ queued: true })
+    expect(putHostConfig).not.toHaveBeenCalled()
+    expect(pendingPush()).toEqual(['B'])
+  })
+
+  it('a host that was offline when read but is connected when pressed is written now', async () => {
+    const r = await writePushAll(true, [host('B', { connected: false })])
+    expect(r[0].ok).toBe(true)
+    expect(putHostConfig).toHaveBeenCalledWith('B', 'wwd_alerts', { push: true }, 4)
+    expect(pendingPush()).toEqual([])
+  })
+
+  it('a write that keeps failing is tried once per connection, not in a loop; it stays queued and the next connection tries again', async () => {
+    setRuntime({ A: 'connected', B: 'disconnected' })
+    putHostConfig.mockRejectedValue(new Error('500'))
+    await writePushAll(true, [host('B', { connected: false })])
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(putHostConfig).toHaveBeenCalledTimes(1))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(putHostConfig).toHaveBeenCalledTimes(1)
+    expect(pendingPush()).toEqual(['B'])
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'disconnected' } } } as never)
+    putHostConfig.mockImplementation(async (id: string, _c: string, items: { push: boolean }) => { server[id] = { push: items.push, revision: 9 }; return {} })
+    useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } } as never)
+    await vi.waitFor(() => expect(pendingPush()).toEqual([]))
+  })
+})
+
 describe('readPush / pushStateOf', () => {
   it('both on, both off, one of each, one unreadable', async () => {
     server.A.push = true

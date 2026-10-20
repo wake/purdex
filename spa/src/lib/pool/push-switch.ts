@@ -26,13 +26,14 @@ function parseRow(v: unknown): { push: boolean; revision: number } | null {
 
 /** The App hosts to write: each one that fronts a pool host, once, in host order; the alias is that of the first pool host it fronts. */
 export function pushTargets(owners: Record<string, string>, poolHosts: readonly { host_id: string; alias: string }[]): PushTarget[] {
+  // Walk the pool's hosts, not the owners: `owners` remembers every daemon ever seen to front a wwd, including ones whose pool host is no longer listed.
   const aliasOf = new Map<string, string>()
   for (const h of poolHosts) {
     const owner = owners[h.host_id]
     if (owner !== undefined && !aliasOf.has(owner)) aliasOf.set(owner, h.alias)
   }
   const order = useHostStore.getState().hostOrder
-  const ids = [...new Set(Object.values(owners))]
+  const ids = [...aliasOf.keys()]
   const rank = (id: string) => { const i = order.indexOf(id); return i < 0 ? order.length : i }
   return ids.sort((a, b) => rank(a) - rank(b)).map((id) => ({ hostConfigId: id, alias: aliasOf.get(id) ?? id }))
 }
@@ -99,13 +100,18 @@ async function flush(): Promise<void> {
   for (const [id, on] of [...queue]) {
     if (!isConnected(id) || flushing.has(id)) continue
     flushing.add(id)
-    const r = await writeOne(id, on)
+    let want = on
+    for (;;) {
+      const r = await writeOne(id, want)
+      const now = queue.get(id)
+      if (!r.ok) break // stays queued; the next connection change tries it again, not this loop
+      if (now === want) { queue.delete(id); changed(); break }
+      if (now === undefined) break
+      want = now // a newer press for this host landed while it was being written: send that one too
+    }
     flushing.delete(id)
-    if (r.ok && queue.get(id) === on) { queue.delete(id); changed() } // a newer press for this host while it was being written stays queued
   }
   stopWhenEmpty()
-  // a newer press may have landed while the write was in the air: look again
-  if (queue.size > 0 && [...queue.keys()].some((id) => isConnected(id) && !flushing.has(id))) void flush()
 }
 function enqueue(id: string, on: boolean): void {
   queue.set(id, on)
@@ -117,7 +123,8 @@ function enqueue(id: string, on: boolean): void {
 export async function writePushAll(on: boolean, hosts: readonly PushHost[]): Promise<PushResult[]> {
   const out: PushResult[] = []
   for (const h of hosts) {
-    if (!h.connected) { enqueue(h.hostConfigId, on); out.push({ hostConfigId: h.hostConfigId, ok: false, queued: true }); continue }
+    // The connection as it is now, not as it was when the switch was read.
+    if (!isConnected(h.hostConfigId)) { enqueue(h.hostConfigId, on); out.push({ hostConfigId: h.hostConfigId, ok: false, queued: true }); continue }
     queue.delete(h.hostConfigId) // a press that reaches a connected host replaces what was waiting for it
     if (queue.size === 0) stopWhenEmpty()
     const r = await writeOne(h.hostConfigId, on)
