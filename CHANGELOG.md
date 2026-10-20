@@ -1,5 +1,54 @@
 # Changelog
 
+## [1.0.0-alpha.764] - 2026-10-20
+
+> daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 763 相同。
+>
+> **資料庫沒有變**：host schema 與 queue schema 都還是 8，wire 的 `proto` 仍是 3。部署前照常備份 `wwd.db.pre-764`；要退回 763 只要換回舊的執行檔。
+>
+> **快速通道改拿 wwd 自己的名額（#3698，#3700）**：本機的開發測試（單一套件的 `go test`、`vitest run <檔案>`）以前跟舊的 pdx gate 拿 light 名額；現在改在 wwd 登記時一起檢查名額，沒有名額回 429，呼叫端每 2 秒重問，跟鎖的等待共用同一個期限。宣告的任務用 light、臨時指令（`--adhoc`）用 heavy 並跟佇列工作共用；記憶體壓力到危險才擋 light。`facts.worker.running` 現在會算進這些執行。這是移除舊 gate（WWD-9）的前提。
+>
+> **worker 的 Go 編譯快取共用（#3669，#3695）**：每個 Go 工作以前都從零編譯；現在同一個 Go 版本共用一份快取（每台主機一份、只留最新兩個版本、上限預設 10 GB，`[worker] gocache_max_mb`）。測試結果不跨工作重用：拿到共用快取的工作會把 `-count=1` 併進 `GOFLAGS`。
+>
+> **入口切換的準備（S2；入口本身仍是關的）**：
+> - purdex 的 manifest 把 `[entry] mode` 改成 `rewrite`，並新增發版任務 `e2e`（#3688）；`docs/wwd-deploy.md` §13 寫明怎麼打開一台主機的入口。
+> - 入口只在「現在有連得上、worker 開著、標籤齊全的主機」時，才把指令改寫成排佇列的任務；沒有就照原指令執行（#3696）。避免其他 repo（例如 aigora-v2）的測試被改寫成沒有主機能接的工作。
+>
+> **其他 wwd 修正**：每台 Mac 都讀主人是否在用機器，沒有主人規則時只回報、不計入（#3682，#3692）；App 的主人規則編輯器因此也會出現在 mlab、air19 等 Mac 上，預設不啟用。舊版 wwd 對 `GET /v1/exceptions` 回 405 時，Purdex 視為「不知道」而不是錯誤（#3681，#3690）。git 2.53（Linux）的 ref lock 訊息也會重試（#3694）。e2e 測試裡的 wwd 不再讀到主機真的 pdx gate（#3693，只改測試）。
+>
+> **B 線：任務編組改成隨 profile 同步、可跨主機的手動群組**（各張見下方「介面（B 線）」）。⚠️ 資料形狀升級：settings ordinal 11 → 12、tabs ordinal 4 → 5。**舊版 App 視窗在第一次寫入新形狀之後，整份 profile 會停止同步，重新載入就恢復**；iOS 不受影響。另新增一個只存在本機的 localStorage key `purdex-task-group-roots`，不進同步。
+>
+> **worker**：部署時各台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；air26 的主人規則照使用者 10-19 的指示維持關閉；mserv、air19 仍關著。
+
+### Changed：wwd 切換上線（S2 準備、S4 前置）
+
+- **快速通道改拿 wwd 的名額（#3698，#3700）**：登記本機執行時一起檢查名額，沒有名額回 429 `SlotBusy`，呼叫端每 2 秒重問、與鎖等待共用期限；不再占舊 gate 的 light。`facts.worker.running` 算進佇列工作與本機執行；worker 認領前先預留 heavy。
+- **purdex 的入口改 `rewrite`，新增發版任務 `e2e`（#3688）**：manifest 單獨不打開任何東西，主機的入口要在 mod 的 `pdx.json` 設 `entry`（`docs/wwd-deploy.md` §13）。
+- **入口只在有主機接得了時才改寫成排佇列的任務（#3696）**：讀本機的資源池，需要連得上、worker 開著、標籤齊全的主機；沒有就照原指令執行，讀不到資源池也一樣。
+
+### Changed：wwd worker
+
+- **Go 工作共用編譯快取（#3695，#3669）**：每個 Go 版本一份、每台主機一份、只留最新兩份，上限 `[worker] gocache_max_mb`（預設 10240）；共用快取的工作把 `-count=1` 併進 `GOFLAGS`，測試結果不跨工作重用。
+
+### Fixed：wwd
+
+- **每台 Mac 都讀主人是否在用機器（#3692，#3682）**：沒有主人規則時只回報、不計入；有讀數的主機接受 `owner_rule`，`[owner] enabled` 只給起始值；工作的用量紀錄只在規則生效時記主人。
+- **舊版 wwd 的 `GET /v1/exceptions` 回 405 視為「不知道」（#3690，#3681）**。
+- **git 2.53 的 ref lock 訊息也會重試（#3694）**：`fetching ref … failed: reference already exists` 在強制 refspec 下只會是 lock 被佔。
+
+### Internal
+
+- **e2e 的 wwd 不讀主機真的 pdx gate（#3693）**：harness 帶 `PDX_GATE_DIR` 指向不存在的目錄。
+
+### Changed：介面（B 線）
+
+- **手動群組的儲存與同步（#3670，#3674）**：含主機改指向、刪除時的成員改寫與兩台裝置收斂。
+- **分頁記錄所屬群組與群內排序（#3680，#3684）**。
+- **側欄改讀新的群組資料（#3686，#3689，#3697）**：成員以主機與對話根判定，不再按主機分區，可跨主機拖曳，列選單可加入任何群組；root 快取搬出 React（本機 localStorage `purdex-task-group-roots`）。
+- **刪除舊的各主機任務編組程式碼（#3699）**。
+- **釘選的團隊成員分頁也顯示團隊面板（#3701）**。
+- **有效視圖、分頁歸屬與群內排序三個純模組（#3703）**：本版尚不改畫面。
+
 ## [1.0.0-alpha.763] - 2026-10-20
 
 > daemon、`pdx` CLI（含 `pdx gate`）、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 762 相同。
@@ -258,7 +307,7 @@
 - **快照取得方式依認領的來源決定（#3579）**：不再依 `Job.Origin` 選擇。
 - **dev 模式的「重建 daemon」改走正常重啟流程（#3587）**：會寫 log、依序關閉模組後再重啟，重啟後跑的是剛編好的執行檔。
 
-### Tests
+### Internal
 
 - **run 的 alive 檢查把 `/proc` 讀取的 ESRCH 視為已結束（#3584）**，避免誤判。
 
@@ -2271,7 +2320,7 @@
 
 - 分頁的「聊天」顯示真正的對話內容，輸入框沿用指揮台同一個；指揮台與聊天共用右側面板（寬時並排、窄 pane 時疊在上面）；輸入框下方加上狀態列。
 
-### Tests
+### Internal
 
 - 修好兩個機器忙時才會偶發失敗的測試：profiles 的「刪除與寫入搶先」不再斷言誰贏過幾次（#2226）；team 套件裡故意塞滿訂閱者的測試不再把預期的 log 混進別的失敗輸出，失敗時仍會印出（#2210）（#2476）。
 
@@ -2305,7 +2354,7 @@
 
 - 第 15 分鐘那則通知送出前，會重讀接力狀態與 member 狀態；接力已經開始或 member 已閒下來就不送。
 
-### Tests
+### Internal
 
 - team roots 在 spawn 當下重新檢查的回歸測試，並如實註明殘餘的檢查到使用之間的空窗（#2254、#2451）。
 
@@ -2396,7 +2445,7 @@
 
 - 純搬移：命令 store 依領域拆成六個檔，spawn 收尾的交易搬到專責檔案；逐宣告位元組比對零差異，行為不變。
 
-### Tests
+### Internal
 
 - 修好高負載下會偶發失敗的 `TestRoster_SpawnAnnouncesTheClaimedTitle`（#2210、#2425）。
 
@@ -2545,7 +2594,7 @@
 
 - 一輪結束（Stop）或出錯（StopFailure）要推播時，daemon 最多等 8 秒（主機設定 `workbook.push_wait_s`，0＝不等）拿這一輪工作簿的推播短句：標題改成「<主機>：<session>・<事名>」（沒有主機標籤時「<session>・<事名>」），內文是那一句短句，payload 帶 `purdex.workbook = {conv_key, entry_id}`，iOS 點推播可以開到那一筆。沒有紀錄、整理失敗或逾時就照舊用原本的標題與內文。要求權限與其他通知不變。Mac 在場時照舊不推。
 
-### Tests
+### Internal
 
 - 對話轉譯 README 改用短 sha，修好 main 上的守門測試（#2367）。
 
@@ -2562,7 +2611,7 @@
 - 用量環的底色調亮一點。
 - team 面板單行模式的容量改成逐格加總實際寬度，不再把放得下的 member 擠到「更多」。
 
-### Tests
+### Internal
 
 - 對話轉譯的 turn rows 測試資料（#2361）。
 
