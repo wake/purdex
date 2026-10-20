@@ -8,6 +8,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
 import { createTab } from '../types/tab'
+import { usePoolStore } from '../lib/pool/store'
 
 const snapshot = (alias: string): FleetSnapshot => ({
   hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias } as never },
@@ -28,6 +29,22 @@ describe('useTabDisplay for a watch-host tab', () => {
     expect(result.current.displayTitle).toBe('mlab')
     act(() => useFleetStore.setState({ snapshot: snapshot('mlab-2') }))
     expect(result.current.displayTitle).toBe('mlab-2')
+  })
+})
+
+describe('useTabDisplay for a watch-host tab with poolHostId (MON-6a-1)', () => {
+  const tab = { ...createTab({ kind: 'watch-host', poolHostId: 'wh1' }), id: 'watch-host-wh1' }
+
+  it('the label follows the pool alias, and a fleet snapshot does not touch it', () => {
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    const { result } = renderHook(() => useTabDisplay(tab))
+    expect(result.current.displayTitle).toBe('wh1')
+    act(() => usePoolStore.setState({ hosts: [{ host_id: 'wh1', alias: 'mserv' }] as never, sourceHostId: 'cfg-a' } as never))
+    expect(result.current.displayTitle).toBe('mserv')
+    act(() => usePoolStore.setState({ hosts: [{ host_id: 'wh1', alias: 'mserv-2' }] as never, sourceHostId: 'cfg-a' } as never))
+    expect(result.current.displayTitle).toBe('mserv-2')
+    act(() => useFleetStore.setState({ snapshot: snapshot('fleet-name') }))
+    expect(result.current.displayTitle).toBe('mserv-2')
   })
 })
 

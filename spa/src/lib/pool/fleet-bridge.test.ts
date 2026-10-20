@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { poolCellModel, matchPoolHost, unlistedState } from './fleet-bridge'
+import { poolCellModel, matchPoolHost, unlistedState, fleetViewOfPoolHost } from './fleet-bridge'
 import { poolHostState } from './host-state'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
@@ -17,6 +17,25 @@ const fleet = (over: Record<string, unknown> = {}) => ({ ...host('d-mlab', { nam
 // A host the pool does not list reads as `unknown` (MON-1d: no fleet fallback); `lastFactsAt` is what the store kept for the host_id.
 const model = (ph: PoolHost | null, f = fleet(), lastFactsAt: number | null = null) =>
   poolCellModel(f, ph ? poolHostState(ph, lastFactsAt, NOW) : unlistedState(lastFactsAt), ph)
+
+describe('fleetViewOfPoolHost', () => {
+  const air = poolHost({ alias: 'air26', host_id: '0123456789abcdef' })
+  const views = [
+    { ...fleet({ alias: 'other', id: 'd-1' }), kind: 'daemon', hostConfigId: 'cfg-air26' },
+    { ...fleet({ alias: 'air26', id: 'd-2' }), kind: 'daemon', hostConfigId: 'cfg-2' },
+    { ...fleet({ alias: 'probe-x', id: 'p-1' }), kind: 'probe' },
+  ] as never[]
+  it('by the App host that is the daemon of the pool host, whatever the alias says', () => {
+    expect(fleetViewOfPoolHost(views, air, { '0123456789abcdef': 'cfg-air26' })?.id).toBe('d-1')
+  })
+  it('by alias when no daemon is known', () => expect(fleetViewOfPoolHost(views, air, {})?.id).toBe('d-2'))
+  it('two fleet hosts sharing the alias are no match (an alias is not unique), unless the daemon says which', () => {
+    const twins = [{ ...fleet({ alias: 'air26', id: 'a' }), kind: 'daemon', hostConfigId: 'c1' }, { ...fleet({ alias: 'air26', id: 'b' }), kind: 'daemon', hostConfigId: 'c2' }] as never[]
+    expect(fleetViewOfPoolHost(twins, air, {})).toBeNull()
+    expect(fleetViewOfPoolHost(twins, air, { '0123456789abcdef': 'c2' })?.id).toBe('b')
+  })
+  it('a pool host with neither is null', () => expect(fleetViewOfPoolHost(views, poolHost({ alias: 'nope', host_id: 'zz' }), {})).toBeNull())
+})
 
 describe('matchPoolHost', () => {
   const hosts = [poolHost(), poolHost({ alias: 'air26', host_id: '0123456789abcdef' })]
