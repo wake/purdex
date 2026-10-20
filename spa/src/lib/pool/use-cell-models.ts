@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
 import { NEX_HOST_TTL_MS } from '../../stores/useNexHostStore'
 import { refreshPoolIdentities } from './daemons'
+import { retainPoolAlerts } from './alerts-store'
 
 /** How often the freshness of the facts (30 s) is looked at again when nothing new arrives. */
 const CLOCK_MS = 5000
@@ -25,12 +26,14 @@ export function retainPool(): () => void {
 export function useRunPool() {
   useEffect(() => {
     const release = retainPool()
+    // The alerts are read while the pool runs: the shield's and the tab labels' numbers need nobody else to hold them.
+    const releaseAlerts = retainPoolAlerts()
     // A daemon that learned its wwd after the App first read /api/info is picked up when the pool's hosts change.
     refreshPoolIdentities()
     const unsubscribe = usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) refreshPoolIdentities() })
     // An event-driven pool stops polling, so nothing else would ask again once the 60 s cache TTL has passed.
     const timer = setInterval(refreshPoolIdentities, NEX_HOST_TTL_MS)
-    return () => { unsubscribe(); clearInterval(timer); release() }
+    return () => { unsubscribe(); clearInterval(timer); releaseAlerts(); release() }
   }, [])
 }
 

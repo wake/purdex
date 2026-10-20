@@ -3,7 +3,7 @@ import { fileIconForPath } from './file-icon'
 import { oneLine } from './nex/worker-tab-title'
 import { useFleetStore } from './fleet/store'
 import { poolHostAliasOf } from './pool/use-monitor-hosts'
-import { useWatchEventsStore, pendingCount } from './watch/events-store'
+import { readPoolAlertCount } from './pool/alerts-store'
 
 export type TFunction = (key: string, params?: Record<string, string | number>) => string
 
@@ -64,7 +64,7 @@ export function getPaneLabel(
     case 'watch-guardian':
       return t('watch.pane.guardian')
     case 'watch-events': {
-      const n = pendingCount(useWatchEventsStore.getState().unhandled)
+      const n = readPoolAlertCount()
       return n > 0 ? t('watch.pane.events_n', { n }) : t('watch.pane.events')
     }
     case 'watch-jobs':

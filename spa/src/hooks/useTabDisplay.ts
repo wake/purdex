@@ -10,7 +10,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useFleetStore } from '../lib/fleet/store'
 import { usePoolStore } from '../lib/pool/store'
 import { poolHostAliasOf } from '../lib/pool/use-monitor-hosts'
-import { useWatchEventsStore, pendingCount } from '../lib/watch/events-store'
+import { useAlertsStore, alertCountOf } from '../lib/pool/alerts-store'
 import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
 import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
@@ -138,8 +138,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // A tab with a poolHostId is named by the pool (MON-6a-1); an older one still by the fleet.
   useFleetStore((s) => (primaryContent.kind === 'watch-host' && !primaryContent.poolHostId ? s.snapshot?.hosts[primaryContent.fleetHostId ?? '']?.alias : undefined))
   usePoolStore(() => (primaryContent.kind === 'watch-host' && primaryContent.poolHostId ? poolHostAliasOf(primaryContent.poolHostId) : undefined))
-  // The events tab carries the count of events waiting (「事件 n」): subscribe, so the label follows it.
-  useWatchEventsStore((s) => (primaryContent.kind === 'watch-events' ? pendingCount(s.unhandled) : 0))
+  // The events tab carries the count of active push-level alerts (「事件 n」, M36): subscribe, so the label follows it.
+  useAlertsStore((s) => (primaryContent.kind === 'watch-events' ? alertCountOf(s.byHost) : 0))
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
   const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 

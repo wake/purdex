@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { ShieldCheck } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
-import { useWatchEventsStore, pendingCount } from '../../../lib/watch/events-store'
+import { usePoolAlertCount } from '../../../lib/pool/alerts-store'
 import { CountBadge } from '../../../components/fleet/CountBadge'
 import { useWorkspaceStore } from '../store'
 import { WATCH_WORKSPACE_ID } from '../../../lib/watch/ids'
@@ -11,7 +11,7 @@ import { openWatchArea } from '../lib/open-watch-area'
 /**
  * The shield beside the Home button (plan T-a3.3): whether a guardian is there, in two looks. Outline and muted when there is
  * none or its status cannot be read; filled and green when one is awake or resting. A click opens the watcher area on the
- * guardian tab, or on 事件 while events wait (W5e: the count badge says how many). Not in the narrow bar (no HomeRow there): its host cells are the way in.
+ * guardian tab, or on 事件 while push-level alerts are active (M36, M40: the count badge says how many). Not in the narrow bar (no HomeRow there): its host cells are the way in.
  */
 export function WatchShieldButton() {
   const t = useI18nStore((s) => s.t)
@@ -19,7 +19,8 @@ export function WatchShieldButton() {
   const active = useWorkspaceStore((s) => s.activeWorkspaceId === WATCH_WORKSPACE_ID)
   const { state } = useMemo(() => deriveGuardian(byHost), [byHost])
   const present = state === 'awake' || state === 'resting'
-  const waiting = useWatchEventsStore((s) => pendingCount(s.unhandled))
+  // M36: the active push-level alerts (plus what the guardian still has open, MON-11), not the old watch events.
+  const waiting = usePoolAlertCount()
 
   const label = waiting > 0 ? `${t(`watch.shield.${state}`)} · ${t('watch.shield.events', { n: waiting })}` : t(`watch.shield.${state}`)
 

@@ -38,6 +38,8 @@ import { handleFleetEvent } from '../lib/fleet/fleet-ws'
 import { jobsDriver, startJobsCatchUp } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { handlePoolEvent, isPoolEvent } from '../lib/pool/pool-events'
+import { handleAlertsEvent, isAlertsEvent } from '../lib/pool/alerts-events'
+import { alertsConnectionOpened } from '../lib/pool/alerts-store'
 import { usePoolStore } from '../lib/pool/store'
 import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
@@ -371,6 +373,13 @@ export function useMultiHostEventWs() {
             handlePoolEvent(hostId)
             return
           }
+          if (isAlertsEvent(event.type)) {
+            // A pool host's alert list changed (MON-10a): the alerts store reads that host again when this daemon is its source. Bound to the connection like the frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleAlertsEvent(hostId, event.value)
+            return
+          }
           if (isWatchEvent(event.type)) {
             // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
             // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
@@ -432,6 +441,7 @@ export function useMultiHostEventWs() {
           useSessionStore.getState().fetchHost(hostId).catch(() => {})
           jobsDriver.hostOpened(hostId) // the pool's jobs of the origins this daemon answers for are read after their cursor
           usePoolStore.getState().poolEvent(hostId) // events may have been missed while it was down: the pool is read again if this is its source
+          alertsConnectionOpened(hostId) // likewise the alerts, all of them once if this is the source
         },
         () => fetchWsTicket(hostId),
         false, // autoReconnect disabled — SM manages reconnection

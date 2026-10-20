@@ -6,20 +6,22 @@ import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/features/workspace/components/WatchShieldButton.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'host-history.ts', 'use-host-series.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts',
 ]
+// Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet.
+const OTHER_FILES = ['features/workspace/components/WatchShieldButton.tsx']
 // Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
 // barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
-const FLEET_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"][^'"]*\/fleet(?:\/[^'"]*)?['"]/
+const FLEET_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"][^'"]*(?:\/lib|\.\.)\/fleet(?:\/[^'"]*)?['"]/
 const FLEET_READERS = /\b(useFleetStore|useFleetHostViews|readFleetView|useFleetConfigStore)\b/
 
 function scoped(): Array<{ name: string; code: string | undefined }> {
   const sidebar = Object.keys(SOURCES).filter((k) => k.startsWith('/src/components/fleet/')).map((k) => ({ name: k.slice('/src/'.length), code: SOURCES[k] }))
-  return [...sidebar, ...POOL_FILES.map((f) => ({ name: `lib/pool/${f}`, code: SOURCES[`/src/lib/pool/${f}`] }))]
+  return [...sidebar, ...POOL_FILES.map((f) => ({ name: `lib/pool/${f}`, code: SOURCES[`/src/lib/pool/${f}`] })), ...OTHER_FILES.map((f) => ({ name: f, code: SOURCES[`/src/${f}`] }))]
 }
 
 describe('the sidebar and the pool-only files do not read the fleet', () => {
@@ -29,6 +31,8 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(names).toContain('components/fleet/HostCell.tsx')
     expect(names).toContain('lib/pool/cell-model.ts')
     expect(names).toContain('lib/pool/use-monitor-hosts.ts')
+    expect(names).toContain('lib/pool/alerts-store.ts')
+    expect(names).toContain('features/workspace/components/WatchShieldButton.tsx')
     for (const f of scoped()) expect(f.code, f.name).toBeTypeOf('string')
   })
 
@@ -49,6 +53,8 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(FLEET_IMPORT.test("const m = require('../fleet/store')")).toBe(true)
     expect(FLEET_IMPORT.test("export { x } from '../fleet/store'")).toBe(true)
     expect(FLEET_IMPORT.test("import { x } from './fleet-bridge'")).toBe(false)
+    // the sidebar's own components live in `components/fleet`: importing one of them is not reading the fleet
+    expect(FLEET_IMPORT.test("import { CountBadge } from '../../../components/fleet/CountBadge'")).toBe(false)
     expect(FLEET_READERS.test('const s = useFleetStore.getState()')).toBe(true)
   })
 })
