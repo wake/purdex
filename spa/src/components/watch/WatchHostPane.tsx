@@ -164,6 +164,8 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const primaryAlias = primaryFleetHost?.alias || lookOf(snapshot.hostId).name || snapshot.hostId
 
   const alias = view.alias || view.name || view.id
+  // The worker and pause controls act on the pool's own name for the host (the fleet view's alias can differ, the daemon mapping going first); a host the pool does not list gets none.
+  const settingsAlias = poolHostId ? poolHosts.find((h) => h.host_id === poolHostId)?.alias : poolHost?.alias
   const lastOk = offline && view.last_ok_at !== null ? new Date(view.last_ok_at).toLocaleString() : null
 
   return (
@@ -189,7 +191,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           </span>
         </div>
         {page === 'settings' ? (
-          <WatchSettings hostId={view.id} hostConfigId={view.hostConfigId} poolAlias={alias} offline={offline}
+          <WatchSettings hostId={memoryKey} hostConfigId={view.hostConfigId} poolAlias={settingsAlias} offline={offline}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
         {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} now={now} />}
