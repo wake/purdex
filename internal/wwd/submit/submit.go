@@ -18,9 +18,9 @@ import (
 	"strings"
 
 	"github.com/wake/purdex/internal/execstat"
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/gitenv"
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -115,7 +115,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, usagef("not inside a git repository: %v", err)
 	}
-	var snap gate.SnapshotInfo
+	var snap snapshot.SnapshotInfo
 	var src []byte
 	if req.Local {
 		// The fast lane runs in the working tree as it is: no snapshot is taken, the record names HEAD, and the manifest is
@@ -129,7 +129,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 			// not go on unrecorded and past the lock table
 			return nil, fmt.Errorf("cannot resolve HEAD: %v", err)
 		}
-		snap = gate.SnapshotInfo{SHA: head, Root: root, Rel: "."}
+		snap = snapshot.SnapshotInfo{SHA: head, Root: root, Rel: "."}
 		if req.AdHoc == nil { // an undeclared command needs no manifest
 			if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
 				return nil, usagef("%s has no %s", root, ManifestPath)
@@ -142,8 +142,8 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 			if err != nil || sha == "" {
 				return nil, fmt.Errorf("snapshot: %q is not a commit of %s", req.Commit, root)
 			}
-			snap = gate.SnapshotInfo{SHA: sha, Root: root, Rel: "."}
-		} else if snap, err = gate.SnapshotTree(ctx, req.Git, req.Dir); err != nil {
+			snap = snapshot.SnapshotInfo{SHA: sha, Root: root, Rel: "."}
+		} else if snap, err = snapshot.SnapshotTree(ctx, req.Git, req.Dir); err != nil {
 			return nil, fmt.Errorf("snapshot: %w", err)
 		}
 		if !sameDir(root, snap.Root) {
@@ -207,7 +207,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		// The record names HEAD, but the run is of the working tree: its tree is what the record holds, HEAD's when nothing differs.
 		// Never HEAD's tree for a tree that could not be taken: that would say a run was of a state it was not. The run goes on with
 		// no tree recorded, and says so.
-		if wt, werr := gate.WorkingTree(ctx, req.Git, req.Dir); werr != nil {
+		if wt, werr := snapshot.WorkingTree(ctx, req.Git, req.Dir); werr != nil {
 			tree, note = "", fmt.Sprintf("the working tree could not be recorded (the record has no tree): %v", werr)
 		} else {
 			tree = wt
