@@ -91,7 +91,7 @@ describe('store', () => {
     s.ingest('h1', [q('S1', 'R1')])
     s.ingest('h1', [q('S2', 'R2')])
     expect(rootOf('h1', 'S1')).toBe('R1')
-    s.prune((h, id) => id === 'S2')
+    s.prune((_hostId, id) => id === 'S2')
     expect(rootOf('h1', 'S1')).toBeNull()
     expect(rootOf('h1', 'S2')).toBe('R2')
     s.dropHost('h1')
