@@ -19,6 +19,12 @@ describe('personalTargetOf', () => {
     expect(personalTargetOf(tab('t1', pane()))).toEqual({ tabId: 't1', hostId: 'h1', sessionCode: 'c1', agentSessionId: 'A1', agentType: 'cc', ended: false })
     expect(personalTargetOf(tab('t1', pane({ terminated: 'exited' })))?.ended).toBe(true)
   })
+  it('a relay (the pane\'s agent session id changes, the pane is not terminated) never reads as ended, before or after', () => {
+    const before = personalTargetOf(tab('t1', pane({}, { type: 'cc', sessionId: 'A1' })))
+    const after = personalTargetOf(tab('t1', pane({}, { type: 'cc', sessionId: 'A2' })))
+    expect([before?.ended, after?.ended]).toEqual([false, false])
+    expect(after?.agentSessionId).toBe('A2')
+  })
   it('a codex pane counts; a pane with no agent session has none', () => {
     expect(personalTargetOf(tab('t1', pane({}, { type: 'codex', sessionId: 'X' })))?.agentType).toBe('codex')
     expect(personalTargetOf(tab('t1', pane({}, null)))).toBeNull()

@@ -10,8 +10,6 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
-import { setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
-import { seedWorkbook } from '../../lib/team/__tests__/workbook-fixture'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { usePersonaStore } from '../../stores/usePersonaStore'
@@ -155,38 +153,6 @@ describe('the status line asks for the panel\'s own session', () => {
     scene(); addTab(ccTab('cx', { type: 'codex', sessionId: 'S2' })); setActive('cx'); shared('line'); mount()
     expect(loadSeat).toHaveBeenCalledWith(HOST, 'S2')
     act(() => { useWorkbookStore.setState({ loadSeat: orig } as never) })
-  })
-})
-
-describe('the interim full form (until TG-5c)', () => {
-  it('an older host\'s own workbook still opens in the full form; without one the personal panel shows', () => {
-    scene(); seedWorkbook(HOST, 'S1', { status: 'Wiring the login form.', entries: [] })
-    setActive('cc1'); shared('full'); mount()
-    expect(screen.getByTestId('own-workbook')).toBeTruthy()
-    expect(screen.queryByTestId('personal-panel')).toBeNull()
-    shared('line')
-    expect(screen.getByTestId('personal-panel').getAttribute('data-mode')).toBe('line')
-  })
-})
-
-describe('the interim full form follows the panel\'s target', () => {
-  it('on a journal.v1 host the workbook view stays off: the personal panel shows in full', () => {
-    scene(); seedWorkbook(HOST, 'S1', { status: 'Wiring.', entries: [] })
-    setJournalHost(HOST, true)
-    setActive('cc1'); shared('full'); mount()
-    expect(screen.queryByTestId('own-workbook')).toBeNull()
-    expect(screen.getByTestId('personal-panel').getAttribute('data-mode')).toBe('full')
-    setJournalHost(HOST, false)
-  })
-
-  it('a split tab whose first agent pane is codex and second is cc with a workbook: full does not switch to the cc workbook', () => {
-    scene(); seedWorkbook(HOST, 'S1', { status: 'cc status', entries: [] })
-    const cx = ccTab('sp', { type: 'codex', sessionId: 'S2' })
-    const cc = ccTab('sp2', { type: 'cc', sessionId: 'S1' })
-    addTab({ ...cx, layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [cx.layout, cc.layout] } } as unknown as Tab)
-    setActive('sp'); shared('full'); mount()
-    expect(screen.queryByTestId('own-workbook')).toBeNull()
-    expect(screen.getByTestId('personal-panel').getAttribute('data-mode')).toBe('full')
   })
 })
 

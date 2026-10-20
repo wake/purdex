@@ -14,6 +14,7 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
@@ -60,12 +61,12 @@ const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash
 const SETTINGS_STORES = [
   useUISettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
   useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore, useManualGroupsStore,
-  useWorkerSettingsStore,
+  useWorkerSettingsStore, usePoolHostsStore,
 ] as const
 
 const SETTINGS_KEYS = [
   'purdex-host-looks', 'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
-  'purdex-notification-settings', 'purdex-quick-reply-prefs', 'purdex-shown-hosts', 'purdex-task-groups', 'purdex-themes', 'purdex-ui-settings', 'purdex-worker-settings',
+  'purdex-notification-settings', 'purdex-pool-hosts', 'purdex-quick-reply-prefs', 'purdex-shown-hosts', 'purdex-task-groups', 'purdex-themes', 'purdex-ui-settings', 'purdex-worker-settings',
   'purdex-workspace-settings',
 ]
 

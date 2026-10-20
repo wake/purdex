@@ -62,11 +62,11 @@ export async function fileSession(s: SessionRef, groupId: string): Promise<Sessi
   return putMemberInGroup({ host: s.hostId, root }, groupId, s.tabId)
 }
 
-/** Starts a group named `name` with the session in it. */
-export async function startGroupWithSession(s: SessionRef, name: string): Promise<SessionCreateResult> {
+/** Starts a group named `name` with the session in it. A function is asked for the name at the moment the group is created — after the root is known — so a name chosen as "first unused" cannot have been taken meanwhile. */
+export async function startGroupWithSession(s: SessionRef, name: string | (() => string)): Promise<SessionCreateResult> {
   const { root, current } = await rootFor(s)
   if (!current) return { ok: false, reason: 'tab-changed' }
-  return createManualGroup({ name, member: { host: s.hostId, root }, tabId: s.tabId })
+  return createManualGroup({ name: typeof name === 'function' ? name() : name, member: { host: s.hostId, root }, tabId: s.tabId })
 }
 
 /** 「移出」: the session goes out of its group. Without its root the member cannot be named, so nothing is touched. */

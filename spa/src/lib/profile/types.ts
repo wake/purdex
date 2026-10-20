@@ -33,6 +33,7 @@ export type SettingsStorageKey =
   | 'purdex-worker-settings'
   | 'purdex-quick-reply-prefs'
   | 'purdex-task-groups'
+  | 'purdex-pool-hosts'
 
 // === Section payloads (what travels) ===
 

@@ -29,6 +29,7 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { compareShape, profileLock } from './profile-state'
@@ -278,7 +279,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(13)
+    expect(prefixes).toHaveLength(14)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -341,6 +342,7 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.WORKER_SETTINGS]: useWorkerSettingsStore.getState,
       [STORAGE_KEYS.QUICK_REPLY_PREFS]: useQuickReplyPrefsStore.getState,
       [STORAGE_KEYS.TASK_GROUPS]: useManualGroupsStore.getState,
+      [STORAGE_KEYS.POOL_HOSTS]: usePoolHostsStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -819,8 +821,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "62edd109a44f99ef7ff9f67787f1dca654468fd1df071a027b9e0ae9442307f3",
-          12,
+          "57bbaec511405a102d6e7c2958f4c44da54430f7e87d01dcdfffb5bbba9ba4b7",
+          13,
         ],
         "tabs": [
           "411e633f8b3d40cc46b8bb33d1693a16d6670c536ce8b11d3b7b2e566010a59e",

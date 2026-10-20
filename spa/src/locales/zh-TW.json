@@ -3398,5 +3398,14 @@
   "personal.titlebar.to_pane": "把個人面板放回窗格",
   "personal.titlebar.to_titlebar": "把個人面板收進標題列",
   "personal.sessions": "{{count}} 個 session",
-  "personal.ended": "已結束"
+  "personal.ended": "已結束",
+  "personal.last": "最後：{{line}}",
+  "personal.back": "回到卡片",
+  "personal.settings.group": "任務編組",
+  "personal.settings.name": "名稱",
+  "personal.settings.color": "顏色",
+  "personal.settings.new_group": "新增任務編組",
+  "personal.settings.take_out": "移出",
+  "personal.settings.rename": "改名",
+  "personal.settings.ungrouped_hint": "這個 session 還沒有編組。選一個任務編組，或新增一個。"
 }
