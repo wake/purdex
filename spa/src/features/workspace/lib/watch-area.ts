@@ -177,6 +177,20 @@ export function createWatchReconciler(): WatchReconciler {
     }
   }
 
+  /**
+   * The host tabs listed in the view take, in the order of the view, the places host tabs held in the row (M13). Every other tab keeps its place: the guardian, events and jobs
+   * tabs wherever the reader put them, and host tabs the view does not list (waiting to be collected, or synced in). Writes only on a difference.
+   */
+  const orderHostTabs = (view: WatchHostsView): void => {
+    const tabs = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs
+    const wanted = view.hostIds.map(watchHostTabId).filter((id) => tabs.includes(id))
+    const held = new Set(wanted)
+    const next = [...tabs]
+    let i = 0
+    tabs.forEach((id, at) => { if (held.has(id)) next[at] = wanted[i++] })
+    if (next.some((id, at) => id !== tabs[at])) useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, next)
+  }
+
   const reconcile = (view: WatchHostsView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
@@ -240,6 +254,8 @@ export function createWatchReconciler(): WatchReconciler {
       if (!inArea) useWorkspaceStore.getState().addTabToWorkspace(WATCH_WORKSPACE_ID, tabId) // `add` rewrites even a no-op
     }
 
+    orderHostTabs(view)
+
     let next: number | null = null
     {
       const current = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
@@ -278,6 +294,26 @@ export function leaveAreaForForeignActiveTab(): void {
 /** The reconciler `startWatchArea` runs (and `openWatchArea` borrows, so both share one device's memory of what it saw). */
 let current: WatchReconciler = createWatchReconciler()
 export const currentWatchReconciler = (): WatchReconciler => current
+
+/**
+ * A drag in the watcher area's tab row (W2): the host tabs, in the order they now stand, become the order of the pool hosts, which the sidebar and every other device follow. Hosts not
+ * on screen (not in the row) keep their relative place after the ones that were dragged. The order of host tabs is unchanged by a drag of another tab (the guardian): nothing is written then.
+ */
+export function writeWatchHostOrder(tabIds: readonly string[]): void {
+  const tabs = useTabStore.getState().tabs
+  const hostOf = (tabId: string): string | null => {
+    const layout = tabs[tabId]?.layout
+    const content = layout && layout.type === 'leaf' ? layout.pane.content : null
+    return content && content.kind === 'watch-host' && content.poolHostId ? content.poolHostId : null
+  }
+  const dragged = tabIds.map(hostOf).filter((id): id is string => id !== null)
+  const area = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
+  const before = (area?.tabs ?? []).map(hostOf).filter((id): id is string => id !== null)
+  if (dragged.length === before.length && dragged.every((id, i) => id === before[i])) return
+  const store = usePoolHostsStore.getState()
+  const onScreen = new Set(dragged)
+  store.setOrder([...dragged, ...store.order.filter((id) => !onScreen.has(id))])
+}
 
 /** The pool's view for the reconcile: null while no source has answered (W4: none connected, or every one failed); else the pool hosts in the order of the pool hosts store. */
 export function readPoolView(): WatchHostsView | null {
