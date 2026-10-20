@@ -71,13 +71,20 @@ together, 1f told before.
 
 1. `lib/task-groups/manual-edits.ts` (pure, new file beside `edits.ts`): new group (empty allowed), rename, colour,
    delete, add / remove / move member (local host, root), limits, no duplicates. Tests incl. two hosts in one group.
-2. `lib/task-groups/manual-actions.ts`: the verbs on `useManualGroupsStore`; adding a member reads the root from the
-   cache or the daemon (`no-root` otherwise); deleting / taking out also clears the matching tabs' `group` in the
-   on-screen world (spec §5). Tests.
+2. `lib/task-groups/manual-actions.ts`: the verbs on `useManualGroupsStore`; adding a member takes the root the caller
+   gives (`string | null`; `null` = `no-root`, refused before the store is touched) — the cache-then-daemon read is
+   TG-2r's `resolveRoot`, wired in TG-2b (r5.2, 88's ruling after the TG-2a critic: the root cache does not exist yet
+   here, and "ask the daemon if the cache lacks it" is written in one place only); deleting / taking out also clears
+   the matching tabs' `group` in the on-screen world (spec §5). Tests.
 
 ## TG-2r — roots out of React
 
-`lib/task-groups/root-cache.ts` (persisted, device-local; `rootOf(hostId, sessionId)`) and `startSessionRootsLifecycle`
+`lib/task-groups/root-cache.ts` (persisted, device-local; `rootOf(hostId, sessionId)` — a pure cache read — and
+`resolveRoot(hostId, sessionId): Promise<string | null>`: the cache's answer if it has one; otherwise it reads that host
+through the lifecycle's existing daemon read path (`GET /api/team/unattended`, the code moved out of `useSessionRoots`),
+writes the answer into the cache and returns it; `null` when the read fails or the capability is missing. The daemon
+read lives in `root-cache` / the lifecycle only — nobody else writes one. Tests: cache hit; miss then daemon read;
+daemon unreadable) and `startSessionRootsLifecycle`
 (the read / debounce / once-per-session logic moved out of `useSessionRoots`; reads while the effective task-group view
 is on; gate `team.relay_quota.v1`; drops a host's entries on removal / daemon-id mismatch, and entries no tab of any
 world refers to). `useSessionRoots` becomes a thin reader. Tests: offline host still answers; cleanup keeps parked-world
@@ -87,7 +94,9 @@ references.
 
 1. `view-model.ts` / `TaskGroupView.tsx`: manual groups from `useManualGroupsStore` in `order`, membership by (host,
    root); no per-host blocks, no `unsafe` rows. Tests updated.
-2. `drag.ts` without the same-host rule and `row-menu.ts` listing every group, both on the new actions. Tests.
+2. `drag.ts` without the same-host rule and `row-menu.ts` listing every group, both on the new actions. The callers
+   (「加入／移到編組」) get the root with `resolveRoot` and show `no-root` only when it answers `null`. Wiring test: a cache
+   miss reads the daemon, and only when the daemon cannot answer either is it `no-root`. Tests.
 - **Split** if over: task 2 goes to its own PR.
 
 ## TG-2c — delete the old path
