@@ -20,6 +20,7 @@ var deviceAllowed = map[string]bool{
 	// the resource pool (wwd spec §10), read-only: the hosts with their facts, and a host's facts history
 	"GET /api/pool/hosts":                    true,
 	"GET /api/pool/hosts/{alias}/exceptions": true, // a host's exceptions with their holds (G4), read-only like the hosts
+	"GET /api/pool/hosts/{alias}/alerts":     true, // a host's alerts with the kind of each silence (capability pool.alerts.v1), read-only like the hosts
 	"GET /api/pool/facts/history":            true,
 	"GET /api/pool/facts/series":             true, // the same history cut down to what a chart draws (capability pool.series.v1)
 	// the pool's jobs (wwd spec §10), read-only like the hosts: the list, one job, its log. A phone sees the same job fields (task, args,

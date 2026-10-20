@@ -80,6 +80,10 @@ type Module struct {
 	// self is who the local wwd says it is (the first peer of its pool: wwd lists this host first), read by the watch; nil before the
 	// first read and while wwd cannot be read. Under mu.
 	self *wire.Info
+	// hosts is the aliases of the local wwd's pool as the watch last read it, this host first; the alerts watch asks about each (under mu).
+	hosts       []string
+	alertsEvery time.Duration // how often every host's alerts are read (watchAlerts)
+	alertKick   chan struct{} // the local wwd's `alert` event: read the local host's alerts now (capacity 1)
 }
 
 func New() *Module {
@@ -87,6 +91,7 @@ func New() *Module {
 		now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}, flights: map[string]*flight{},
 		logf: log.Printf, pollEvery: defaultPollEvery, mergeWithin: defaultMergeWithin,
 		sentAt: map[string]time.Time{}, pending: map[string]*time.Timer{},
+		alertsEvery: defaultAlertsEvery, alertKick: make(chan struct{}, 1),
 	}
 	m.sendIdle = sync.NewCond(&m.mu)
 	return m
@@ -138,6 +143,12 @@ func (m *Module) Start(context.Context) error {
 	if m.mergeWithin <= 0 {
 		m.mergeWithin = defaultMergeWithin
 	}
+	if m.alertsEvery <= 0 {
+		m.alertsEvery = defaultAlertsEvery
+	}
+	if m.alertKick == nil {
+		m.alertKick = make(chan struct{}, 1)
+	}
 	if m.cl == nil {
 		m.cl = client.New(client.DefaultSocket())
 	}
@@ -148,9 +159,17 @@ func (m *Module) Start(context.Context) error {
 	if m.core != nil {
 		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
 	}
+	var loops sync.WaitGroup
+	for _, loop := range []func(context.Context){m.watch, m.watchAlerts, m.watchAlertEvents} {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			loop(ctx)
+		}()
+	}
 	go func() {
-		defer close(done)
-		m.watch(ctx)
+		loops.Wait()
+		close(done)
 	}()
 	return nil
 }
@@ -194,7 +213,7 @@ func (m *Module) Stop(ctx context.Context) error {
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	st := map[string]any{"ready": m.ready, "events": m.watching}
+	st := map[string]any{"ready": m.ready, "events": m.watching, "alerts": m.watching}
 	if m.self != nil {
 		st["wwd"] = map[string]string{"host_id": m.self.HostID, "alias": m.self.Alias}
 	}
@@ -219,6 +238,7 @@ func (m *Module) setSelf(p *wire.Pool) {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/exceptions", m.handleExceptions)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/alerts", m.handleAlerts)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
 	mux.HandleFunc("GET /api/pool/facts/series", m.handleSeries)
 	m.registerControl(mux)
