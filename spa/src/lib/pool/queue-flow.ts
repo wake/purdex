@@ -22,7 +22,8 @@ export type Busy =
   | { kind: 'unreadable'; state: PoolLiveness }
 
 export interface SlotRow { slot: Slot; /** Null while the host is not read (M17). */ total: number | null; jobs: PoolJob[]; busy: Busy | null }
-export interface WorkerCell { hostId: string; alias: string; state: PoolHostState; heavy: SlotRow; light: SlotRow }
+/** `state` is null for a worker the hosts do not list (`hostId` ''): it still holds a job, so it keeps a cell; `alias` '' is a live job with no claim. */
+export interface WorkerCell { hostId: string; alias: string; state: PoolHostState | null; heavy: SlotRow; light: SlotRow }
 
 const slotOf = (j: PoolJob): Slot => (j.slot === 'light' ? 'light' : 'heavy')
 const isLive = (j: PoolJob) => j.state === 'running' || j.state === 'claimed'
@@ -61,6 +62,13 @@ export function workerCellsOf(hosts: readonly FlowHost[], jobs: readonly PoolJob
       busy: busyOf(h, slot, jobs),
     })
     cells.push({ hostId: h.hostId, alias: h.alias, state: h.state, heavy: row('heavy'), light: row('light') })
+  }
+  // like the lanes of the old page: a worker nobody lists but that holds a job is drawn after the others, the unnamed one last
+  const listed = new Set(hosts.map((h) => h.alias))
+  const others = [...held.keys()].filter((w) => !listed.has(w)).sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a < b ? -1 : a > b ? 1 : 0))
+  for (const w of others) {
+    const row = (slot: Slot): SlotRow => ({ slot, total: null, jobs: heldBy(jobs, w, slot), busy: null })
+    cells.push({ hostId: '', alias: w, state: null, heavy: row('heavy'), light: row('light') })
   }
   return { cells, off }
 }

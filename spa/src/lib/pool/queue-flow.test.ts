@@ -93,6 +93,14 @@ describe('workerCellsOf', () => {
     const r = workerCellsOf([flowHost('mserv', { liveness: 'wwd_down' })], [running('r', 'mserv')])
     expect(r.cells[0].heavy).toMatchObject({ total: null, busy: { kind: 'unreadable', state: 'wwd_down' } })
   })
+  it('a worker the hosts do not list still gets a cell for the job it holds, after the others, the unnamed one last; it is not in `off`', () => {
+    const r = workerCellsOf([flowHost('a')], [running('z', 'gone'), running('u', ''), job('c', { state: 'claimed', claim: claim('air19') })])
+    expect(r.cells.map((c) => c.alias)).toEqual(['a', 'air19', 'gone', ''])
+    expect(r.off).toEqual([])
+    const gone = r.cells.find((c) => c.alias === 'gone')!
+    expect(gone).toMatchObject({ state: null, hostId: '', heavy: { total: null, busy: null } })
+    expect(gone.heavy.jobs.map((j) => j.id)).toEqual(['z'])
+  })
   it('queued jobs are not on a worker', () => {
     expect(workerCellsOf([flowHost('a')], [job('q', { claim: claim('a') })]).cells[0].heavy.jobs).toEqual([])
   })
