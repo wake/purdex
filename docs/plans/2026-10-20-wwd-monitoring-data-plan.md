@@ -110,7 +110,7 @@ S1–S15 是骨架與頁面需要的。這份 plan 只處理 **WWD-9 之前一�
 
 ### MD-4 工作的重／輕（S11）
 - 把 `slotOf` 搬到 wire 套件成為 `wire.JobSlot(Job) Slot`（純函式；`daemon/usagerec.go` 改呼叫它，行為不變）。
-- Purdex 自己的回應型別（`internal/module/jobs`）：`PoolJob struct { wire.Job; Slot string \`json:"slot"\` }`（內嵌，JSON 欄位攤平），
+- Purdex 自己的回應型別（`internal/module/jobs`）：``PoolJob struct { wire.Job; Slot string `json:"slot"` }``（內嵌，JSON 欄位攤平），
   清單 `PoolJobsList`（`Jobs []PoolJob` 加上原本的 `cursor`、`epoch` 等所有欄位）、單筆 `PoolJobDetail`（`Job PoolJob` 加上原本的 `log`
   等所有欄位）。`module.go:209-251` 與 `:254-293` 兩個 handler 改成逐筆轉換後再寫出；不改 `wire.Job`，也不改 wwd 的回應。
 - 已知限制（寫進 spec）：快速通道在等名額（收到 429）的期間還沒有登記，所以看不到；要看得到需要 wwd 記錄等待者，等有需要再開。
