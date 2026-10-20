@@ -507,3 +507,18 @@ these; wwd is restarted only after the release gate and the guardian's go-ahead)
    worker on at the same time. `pdx wwd qualify --status` shows the outcome; `task:purdex/tsc` and `task:purdex/spa-related` appear in
    mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
    cache (§10), so it needs network.
+
+## 13. Switching a host's entry on (S2)
+
+The hook of the Purdex mod asks `pdx entry match` about a test or build command **only on a host whose installed mod has the entry switched on**:
+the `entry` key of the mod's `pdx.json` (the file beside its `VERSION`, written by `pdx setup`) holds a non-empty string. It is off by default, and it is
+the one key `pdx setup` never overwrites, so it is set by hand, once per host, and survives later installs. A missing key, an empty string, a number or
+`null` all mean off (the call goes the old way).
+
+* The switch is per host and covers **every** session on it, whatever the repo. A repo with no `.wwd/tasks.toml` is left alone (the answer is `none`).
+* `[entry].mode` of the repo's manifest (purdex: `rewrite`) only decides what a session **with the entry on** gets for a command no task declares: an
+  ad-hoc job (`pdx test --adhoc`, a heavy slot, this host, never queued) for a single plain command, advice (it runs as typed) for anything else.
+  The manifest alone switches nothing on.
+* Commands that are declared tasks (a single package `go test`, `vitest run <files>`) become `pdx test <task>` and take the local fast lane: no queue,
+  no background move. The fast lane still takes its slot from the gate (spec §8.3; moving it to wwd's own slots is part of retiring the gate).
+* Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.
