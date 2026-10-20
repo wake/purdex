@@ -1,8 +1,8 @@
 // The host page's 狀態 data (monitoring tabs spec M44; plan MON-7b-1): pure functions from the pool's facts and host row to what the six cards and the facts table say. Words are i18n keys, never text.
 import { describe, it, expect } from 'vitest'
-import { judgeOf } from './host-status'
+import { judgeOf, pausesOf, workerCardOf } from './host-status'
 import { parseFacts, parseHostsAnswer } from './parse'
-import type { PoolFacts, PoolHost } from './types'
+import type { PoolExceptionDetail, PoolFacts, PoolHost } from './types'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import hostsJson from './__fixtures__/pool_hosts_response.json'
 
@@ -72,5 +72,52 @@ describe('judgeOf', () => {
     const j = judgeOf(darwin, pool({ headroom_reasons: { heavy: ['slots_full'], light: [] } }))
     expect(j.heavy.codes).toEqual(['slots_full'])
     expect(j.light.codes).toEqual([])
+  })
+})
+
+describe('workerCardOf', () => {
+  it('the switch, the slots, the running, the owner rule in minutes and the owner reading', () => {
+    const f = withFacts((x) => ({ ...x, worker: { ...x.worker, enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 }, owner_rule: 'hid<5m' }, owner: { active: true, idle_s: 30, reason: 'hid' } }))
+    expect(workerCardOf(f)).toEqual({ enabled: true, slots: { heavy: 2, light: 4 }, running: { heavy: 1, light: 0 }, ownerRule: 'hid<5m', ownerMinutes: 5, owner: { active: true, idle_s: 30, reason: 'hid' } })
+  })
+
+  it('no owner reading (Linux) is null, not an idle owner; a rule that is not a minutes rule has no minutes', () => {
+    const w = workerCardOf(withFacts((x) => ({ ...x, owner: null, worker: { ...x.worker, owner_rule: '' } })))
+    expect(w.owner).toBeNull()
+    expect(w.ownerMinutes).toBeNull()
+  })
+})
+
+describe('pausesOf', () => {
+  const at = 1_000_000
+  const exc = (name: string, since: number, until: number | null) => ({ name, since, until })
+  const detail = (name: string, over: Partial<PoolExceptionDetail> = {}): PoolExceptionDetail => ({ name, until: at + 60_000, pid: null, holds: ['heavy'], ...over })
+
+  it('lists the pauses in force at the record\'s own time, by start time, with what each holds', () => {
+    const list = pausesOf([exc('b', at - 10, at + 60_000), exc('a', at - 100, at + 60_000)], [detail('a', { holds: ['heavy', 'light'] }), detail('b')], at)
+    expect(list.map((p) => p.name)).toEqual(['a', 'b'])
+    expect(list[0]).toEqual({ name: 'a', since: at - 100, until: at + 60_000, pid: null, holds: ['heavy', 'light'] })
+  })
+
+  it('one that has ended, or has not begun, is not listed; one with no end is', () => {
+    const list = pausesOf([exc('over', at - 100, at - 1), exc('later', at + 1, null), exc('open', at - 5, null)], [], at)
+    expect(list.map((p) => p.name)).toEqual(['open'])
+  })
+
+  it('judged at the record\'s time, not the App\'s clock', () => {
+    const ex = [exc('x', 1000, 2000)]
+    expect(pausesOf(ex, [], 1500)).toHaveLength(1)
+    expect(pausesOf(ex, [], Date.now())).toHaveLength(0)
+  })
+
+  it('what is not read (no details at all) is "not known what it holds", not "holds nothing"', () => {
+    const list = pausesOf([exc('a', at - 1, at + 1000)], null, at)
+    expect(list[0]).toMatchObject({ pid: null, holds: null })
+  })
+
+  it('a pause that follows a process carries its pid; one the details do not name is not known', () => {
+    const list = pausesOf([exc('p', at - 1, null), exc('q', at - 2, null)], [detail('p', { pid: 4242, until: null })], at)
+    expect(list.find((p) => p.name === 'p')).toMatchObject({ pid: 4242, holds: ['heavy'] })
+    expect(list.find((p) => p.name === 'q')).toMatchObject({ pid: null, holds: null })
   })
 })

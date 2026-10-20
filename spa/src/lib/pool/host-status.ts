@@ -1,7 +1,8 @@
 // spa/src/lib/pool/host-status.ts — the host page's 狀態 tab as data (monitoring tabs spec M44; plan MON-7b-1): what the six cards and the facts table say, worked out from the pool's facts and host row. Pure: data in, data out; the words are
 // i18n keys (as in words.ts) and the component calls `t`. Read from the pool only, never the fleet.
 import { DISK_SCORE_FROM, levelScore, type RingDriver } from './ring-driver'
-import type { PoolFacts, PoolHost, PoolLoad, PoolZone } from './types'
+import { ownerMinutes } from './worker-rule'
+import type { PoolException, PoolExceptionDetail, PoolFacts, PoolHold, PoolHost, PoolLoad, PoolOwner, PoolZone, Slots } from './types'
 
 const clamp100 = (v: number): number => Math.min(Math.max(v, 0), 100)
 
@@ -48,4 +49,27 @@ export function judgeOf(facts: PoolFacts, pool: PoolHost): Judge {
       part('disk', counted ? clamp100(fullest) : 0, fullest, counted),
     ],
   }
+}
+
+// ---- Worker and owner, pauses -----------------------------------------------------------------------------------------------------------------------------
+
+export interface WorkerCard { enabled: boolean; slots: Slots; running: Slots; ownerRule: string; ownerMinutes: number | null; /** null: no reading (Linux). */ owner: PoolOwner | null }
+
+export function workerCardOf(facts: PoolFacts): WorkerCard {
+  const w = facts.worker
+  return { enabled: w.enabled, slots: w.slots, running: w.running, ownerRule: w.owner_rule, ownerMinutes: ownerMinutes(w.owner_rule), owner: facts.owner }
+}
+
+/** A pause in force, with what it holds (`holds`, `pid` are from `GET …/exceptions`; null when that was not read or does not name it: "not known what it holds", never "holds nothing"). */
+export interface Pause { name: string; since: number; until: number | null; pid: number | null; holds: PoolHold[] | null }
+
+/** The facts' pauses in force at `at` (the record's own time, not the App's clock), by start time. */
+export function pausesOf(exceptions: readonly PoolException[], details: readonly PoolExceptionDetail[] | null, at: number): Pause[] {
+  return exceptions
+    .filter((e) => e.since <= at && (e.until === null || e.until > at))
+    .sort((a, b) => a.since - b.since)
+    .map((e) => {
+      const d = details?.find((x) => x.name === e.name)
+      return { name: e.name, since: e.since, until: e.until, pid: d?.pid ?? null, holds: d ? d.holds : null }
+    })
 }
