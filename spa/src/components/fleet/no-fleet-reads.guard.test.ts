@@ -6,14 +6,14 @@ import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar, the task queue tab (MON-5b) and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '/src/components/watch/ProcTable.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts', 'host-extra.ts',
 ]
-// Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet.
-const OTHER_FILES = ['features/workspace/components/WatchShieldButton.tsx']
+// Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet; the process table has its own row type (MON-6e).
+const OTHER_FILES = ['features/workspace/components/WatchShieldButton.tsx', 'components/watch/ProcTable.tsx']
 // Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
 // barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
 const FLEET_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"][^'"]*(?:\/lib|(?<![./])\.\.)\/fleet(?:\/[^'"]*)?['"]/
