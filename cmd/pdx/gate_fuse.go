@@ -30,7 +30,11 @@ func gateToolDepth(env []string, tool string) ([]string, int) {
 		if !ok || name != tool {
 			continue
 		}
-		depth, _ = strconv.Atoi(n)
+		d, err := strconv.Atoi(n)
+		if err != nil || d < 0 {
+			d = gateToolDepthMax // a value that is not a count from 0 up is not to be trusted: the fuse is blown
+		}
+		depth = d
 		pairs[i] = name + "=" + strconv.Itoa(depth+1)
 		found = true
 	}

@@ -113,7 +113,8 @@ func Resolve(tool, pathEnv, shimDir string) (string, error) {
 // shimMarker is the fixed start of the second line of every shim Script writes.
 const shimMarker = "# Written by `pdx setup` (pdx gate shim for"
 
-// IsShim reports whether the file at p (symlinks followed) is a pdx gate shim, by the header Script writes.
+// IsShim reports whether the file at p (symlinks followed) is a pdx gate shim: its second line is the header Script writes.
+// Only that line counts, so a wrapper that merely mentions the marker in a comment further down is not taken for a shim.
 func IsShim(p string) bool {
 	f, err := os.Open(p)
 	if err != nil {
@@ -122,7 +123,8 @@ func IsShim(p string) bool {
 	defer f.Close()
 	buf := make([]byte, 256)
 	n, _ := f.Read(buf)
-	return strings.Contains(string(buf[:n]), shimMarker)
+	lines := strings.SplitN(string(buf[:n]), "\n", 3)
+	return len(lines) >= 2 && lines[0] == "#!/bin/sh" && strings.HasPrefix(lines[1], shimMarker)
 }
 
 func realPath(p string) string {
