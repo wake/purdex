@@ -675,6 +675,7 @@
   "watch.host.jobs.state_running": "Running",
   "watch.host.jobs.queued_more": "{{n}} more queued, see the job queue",
   "watch.host.jobs.all": "All jobs of this host",
+  "watch.host.monitor.alerts": "{{n}} alerts",
   "watch.host.monitor.work": "Jobs and processes",
   "watch.host.monitor.procs_every": "Processes refresh every 5 s",
   "watch.host.top_cpu": "Top 5 by CPU",
