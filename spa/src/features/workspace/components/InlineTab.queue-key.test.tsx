@@ -11,9 +11,10 @@ vi.mock('@dnd-kit/sortable', () => ({
 vi.mock('../lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 
 let waiters: QueuedItem[] | undefined
+let style = 'badge'
 vi.mock('../../../hooks/useTabDisplay', () => ({
   useTabDisplay: () => ({
-    displayTitle: 'tab one', IconComponent: undefined, agentStatus: 'running', isUnread: false, subagentRefs: [], tabIndicatorStyle: 'badge',
+    displayTitle: 'tab one', IconComponent: undefined, agentStatus: 'running', isUnread: false, subagentRefs: [], tabIndicatorStyle: style,
     isHostOffline: false, isAwaitingApproval: false, background: waiters ? 'queued' : undefined, backgroundWaiters: waiters,
   }),
 }))
@@ -40,6 +41,7 @@ describe('InlineTab: Alt+Enter on the hourglass', () => {
   beforeEach(() => {
     cleanup()
     waiters = undefined
+    style = 'badge'
     vi.mocked(openWatchArea).mockClear()
     clearJobsViewMemory()
     useI18nStore.getState().setLocale('en')
@@ -73,6 +75,15 @@ describe('InlineTab: Alt+Enter on the hourglass', () => {
       expect(openWatchArea).not.toHaveBeenCalled()
       expect(onSelect).toHaveBeenCalledWith('t1')
     }
+  })
+
+  it('lights off (icon): no hourglass is drawn, so no shortcut either', () => {
+    waiters = [job]
+    style = 'icon'
+    const { row } = draw()
+    expect(row.getAttribute('aria-keyshortcuts')).toBeNull()
+    fireEvent.keyDown(row, { key: 'Enter', altKey: true })
+    expect(openWatchArea).not.toHaveBeenCalled()
   })
 
   it('a plain Enter still selects the row, not the queue', () => {

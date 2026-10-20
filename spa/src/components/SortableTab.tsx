@@ -15,7 +15,7 @@ import { TeamTabShadow } from './team/TeamTabGroup'
 import { useGroupDragHandle } from './team/group-drag'
 import { HalfHandoffMark } from './relay/HalfHandoffMark'
 import { useFreshHandoffOfTab } from '../hooks/useFreshHandoff'
-import { queueOpener } from '../lib/watch/open-queue'
+import { tabQueueOpener } from '../lib/watch/open-queue'
 
 interface Props {
   tab: Tab
@@ -93,7 +93,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   }
 
   // The hourglass is not a control of its own (no button inside a tab, #3806): with one lit for a pool job, Alt+Enter on the tab is its press.
-  const openQueue = queueOpener(backgroundWaiters)
+  const openQueue = tabQueueOpener({ backgroundWaiters, tabIndicatorStyle, agentStatus, isAwaitingApproval })
   const queueKey = (e: React.KeyboardEvent) => {
     if (!openQueue || e.key !== 'Enter' || !e.altKey) return false
     e.preventDefault()

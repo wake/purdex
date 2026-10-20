@@ -7,7 +7,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useTabMenuExtrasStore, type TabMenuExtra } from '../stores/useTabMenuExtrasStore'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { useTabDisplay } from '../hooks/useTabDisplay'
-import { queueOpener } from '../lib/watch/open-queue'
+import { tabQueueOpener } from '../lib/watch/open-queue'
 
 const PADDING = 4
 const NO_EXTRAS: TabMenuExtra[] = []
@@ -91,7 +91,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
   const isTerminated = isSession && !!(primary.content as { terminated?: string }).terminated
 
   // The hourglass of a tab with a pool job waiting is a way into the job queue; this row is its keyboard-reachable twin (#3806).
-  const openQueue = queueOpener(useTabDisplay(tab).backgroundWaiters)
+  const openQueue = tabQueueOpener(useTabDisplay(tab))
 
   const items: (MenuItem | 'separator')[] = [
     ...(openQueue ? [{ label: t('tab.open_queue'), action: 'openQueue' as const, show: true, run: openQueue }, 'separator' as const] : []),

@@ -8,8 +8,9 @@ import type { QueuedItem } from '../lib/watch/queued-sessions'
 vi.mock('../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 
 let waiters: QueuedItem[] | undefined
+let style = 'badge'
 vi.mock('../hooks/useTabDisplay', () => ({
-  useTabDisplay: () => ({ backgroundWaiters: waiters }),
+  useTabDisplay: () => ({ backgroundWaiters: waiters, tabIndicatorStyle: style, agentStatus: 'running', isAwaitingApproval: false }),
 }))
 
 const { TabContextMenu } = await import('./TabContextMenu')
@@ -32,6 +33,7 @@ describe('TabContextMenu: open the job queue', () => {
   beforeEach(() => {
     cleanup()
     waiters = undefined
+    style = 'badge'
     vi.mocked(openWatchArea).mockClear()
     clearJobsViewMemory()
     useI18nStore.getState().setLocale('en')
@@ -56,6 +58,13 @@ describe('TabContextMenu: open the job queue', () => {
 
   it('gate waiters only (no pool job to open): no row', () => {
     waiters = [gate]
+    draw()
+    expect(screen.queryByText('Open job queue')).toBeNull()
+  })
+
+  it('lights off (icon): the hourglass is not drawn, so no row', () => {
+    waiters = [job]
+    style = 'icon'
     draw()
     expect(screen.queryByText('Open job queue')).toBeNull()
   })

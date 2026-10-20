@@ -18,7 +18,7 @@ import { hasHostBadge } from '../../../lib/host-color'
 import { INLINE_TAB_ROW_CLASSES } from '../lib/inline-tab-row-classes'
 import { HalfHandoffMark } from '../../../components/relay/HalfHandoffMark'
 import { useFreshHandoffOfTab } from '../../../hooks/useFreshHandoff'
-import { queueOpener } from '../../../lib/watch/open-queue'
+import { tabQueueOpener } from '../../../lib/watch/open-queue'
 
 interface Props {
   tab: Tab
@@ -123,7 +123,7 @@ export function InlineTab({
 
   // Same action as a click. Keyboard parity for the role=button row (#2538): Enter / Space select it.
   const select = () => onSelect(tab.id)
-  const openQueue = queueOpener(backgroundWaiters)
+  const openQueue = tabQueueOpener({ backgroundWaiters, tabIndicatorStyle, agentStatus, isAwaitingApproval })
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     // Only the row itself: keys pressed in an inner control (close button, rename input) bubble up here.
     if (e.target !== e.currentTarget) return
