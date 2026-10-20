@@ -66,6 +66,17 @@ What the install does, all of it idempotent (a second run changes nothing and re
    mlab   = "~/Assist/mlab"
    ```
 
+   **Give wwd a clone of its own; do not share it with the assist runs or any other tool.** wwd writes refs in that clone
+   (`refs/wwd/<job id>`: `update-ref` when a job is submitted and when it ends, `fetch` when a worker takes it), and a second
+   git user in the same `.git` (a fetch, a gc, a pack-refs) fights it for the ref and `packed-refs` locks. wwd tries a ref
+   write again 3 times, 100 ms apart, when git says `cannot lock ref`; that covers a short clash, not a clone that is busy for
+   long.
+
+   **The reference label reads this clone's working tree.** A task whose `qualify.reference` is this host is advertised as
+   `task:<repo>/<task>` from the manifest in the clone's working tree (`.wwd/tasks.toml`), not from the caller's. After the
+   `qualify` or `labels` of a task change on `main`, fast-forward this clone (`git -C <clone> pull --ff-only`), or the host
+   keeps advertising the old labels (until #3658 is fixed).
+
    A path counts only if it is a directory you own that holds a `.git`; otherwise that label is simply not
    given (no error). The check runs with every facts record, so a clone that appears or disappears changes
    the labels (a `labels` event) within 5 s. `GET /v1/info` shows the labels and the toolchain fingerprint;
