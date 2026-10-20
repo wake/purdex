@@ -40,6 +40,10 @@ type PoolPoller struct {
 	// downSince is when each peer last stopped answering (in config order): the start of the first failed poll after an answer, or this
 	// poller's creation for a peer never reached. Zero: it answers now. The silence rules (spec §13.3) judge "unreachable for ≥ 3 min" on it.
 	downSince []time.Time
+
+	// lastFile and last are the last known info of each peer kept in a file (pool_last.go); "" : not kept
+	lastFile string
+	last     map[string]lastKnownPeer
 }
 
 // NewPoolPoller polls peers with the pool token. client may be nil.
@@ -108,6 +112,7 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
 	p.downSince[i] = time.Time{}
+	p.rememberInfo(info)
 	switch {
 	case ferr == nil:
 		p.state[i].Facts = &facts
