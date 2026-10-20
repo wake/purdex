@@ -114,6 +114,17 @@ describe('the memory is bounded', () => {
   })
 })
 
+describe('the memory is bounded when the hosts were all in use', () => {
+  it('the cap is met again once they are let go, without a new host arriving', () => {
+    const offs: Array<() => void> = []
+    for (let i = 0; i < 40; i++) { appendLive(`y${i}`, rec(10), NOW); offs.push(subscribeHost(`y${i}`, () => undefined)) }
+    expect(readSamples('y0', '5m', NOW)).toHaveLength(1)
+    offs.forEach((off) => off())
+    expect(readSamples('y0', '5m', NOW)).toEqual([])
+    expect(readSamples('y39', '5m', NOW)).toHaveLength(1)
+  })
+})
+
 describe('seriesAnnounced and loadLong', () => {
   it('without pool.series.v1 the series is not asked and the track stays empty', async () => {
     caps(['pool.v1'])

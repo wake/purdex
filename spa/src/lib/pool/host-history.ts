@@ -87,16 +87,19 @@ const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: {
 /** What the memory keeps of hosts nobody is looking at: leaving a page keeps its history (coming back is full at once), but not for any number of hosts. */
 const MAX_HOSTS = 32
 const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null
+/** Oldest first (Map order): let go of the ones nobody listens to or holds, until the cap is met. Run when a host is added and when one stops being used. */
+function prune(except?: string): void {
+  for (const [id, old] of memory) {
+    if (memory.size <= MAX_HOSTS) break
+    if (id !== except && !inUse(old)) memory.delete(id)
+  }
+}
 const memoryOf = (hostId: string): HostMemory => {
   let m = memory.get(hostId)
   if (!m) {
     m = newMemory()
     memory.set(hostId, m)
-    // Oldest first (Map order): let go of the ones nobody listens to or holds, until the cap is met.
-    for (const [id, old] of memory) {
-      if (memory.size <= MAX_HOSTS) break
-      if (id !== hostId && !inUse(old)) memory.delete(id)
-    }
+    prune(hostId)
   }
   return m
 }
@@ -106,7 +109,7 @@ export const clearHostHistory = (): void => { memory.clear() }
 export function subscribeHost(hostId: string, fn: () => void): () => void {
   const m = memoryOf(hostId)
   m.listeners.add(fn)
-  return () => { m.listeners.delete(fn) }
+  return () => { m.listeners.delete(fn); prune() }
 }
 const notify = (m: HostMemory): void => { for (const fn of [...m.listeners]) fn() }
 
@@ -114,7 +117,7 @@ const notify = (m: HostMemory): void => { for (const fn of [...m.listeners]) fn(
 export function holdTrack(hostId: string, track: HostTrack): () => void {
   const m = memoryOf(hostId)
   m.holds[track] += 1
-  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) { m.gen[track] += 1; if (track === 'long') m.longInFlight = null } }
+  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) { m.gen[track] += 1; if (track === 'long') m.longInFlight = null } prune() }
 }
 
 /** The long track is empty again (the daemon no longer announces the series, so what it left is not a history this App can vouch for). */
