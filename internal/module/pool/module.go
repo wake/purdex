@@ -77,6 +77,9 @@ type Module struct {
 	// until it is 0, so nothing is emitted once Stop has returned. emit must not call Stop (the core's BroadcastEvent does not).
 	sending  int
 	sendIdle *sync.Cond
+	// self is who the local wwd says it is (the first peer of its pool: wwd lists this host first), read by the watch; nil before the
+	// first read and while wwd cannot be read. Under mu.
+	self *wire.Info
 }
 
 func New() *Module {
@@ -141,6 +144,7 @@ func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.cancel, m.done, m.watching = cancel, done, true
+	m.self = nil // the new watch has not read wwd yet; the socket may be another wwd's than the last run's
 	if m.core != nil {
 		m.ready = true // Init ran, and a Stop before this Start had cleared it: the pool is serving again
 	}
@@ -157,6 +161,7 @@ func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.ready = false
 	m.watching = false
+	m.self = nil // nothing reads wwd any more, so nothing keeps this true
 	cancel, done := m.cancel, m.done
 	m.cancel = nil
 	for host, t := range m.pending {
@@ -184,11 +189,31 @@ func (m *Module) Stop(ctx context.Context) error {
 }
 
 // Status is what /api/info reads to announce pool.v1 (the API exists; whether wwd is up is each call's answer) and, while the watch
-// runs, pool.events.v1.
+// runs, pool.events.v1. While the watch knows who the local wwd is, it also gives "wwd" {host_id, alias}: the identity /api/info carries
+// (pool.identity.v1); the key is missing, not empty, before the first read and while wwd cannot be read.
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "events": m.watching}
+	st := map[string]any{"ready": m.ready, "events": m.watching}
+	if m.self != nil {
+		st["wwd"] = map[string]string{"host_id": m.self.HostID, "alias": m.self.Alias}
+	}
+	return st
+}
+
+// setSelf records who the local wwd is from its pool (nil: it cannot be read, or names no one).
+func (m *Module) setSelf(p *wire.Pool) {
+	var self *wire.Info
+	if p != nil && len(p.Peers) > 0 && p.Peers[0].Info.HostID != "" {
+		info := p.Peers[0].Info
+		self = &info
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.watching { // a read that comes back after Stop: nothing is watching, so nothing keeps this true
+		return
+	}
+	m.self = self
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {

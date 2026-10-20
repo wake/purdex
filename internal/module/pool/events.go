@@ -36,11 +36,13 @@ func (m *Module) watch(ctx context.Context) {
 		switch {
 		case err == nil:
 			last = ""
+			m.setSelf(&p)
 			m.compare(known, based, away, p)
 			based, away = true, false
 		case ctx.Err() != nil:
 			return
 		default:
+			m.setSelf(nil)
 			if based && !away {
 				away = true
 				for alias := range known {

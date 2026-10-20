@@ -103,6 +103,23 @@ func (c *Core) moduleFlag(name, key string) bool {
 	return on
 }
 
+// wwdIdentity is the local wwd's {host_id, alias} as the pool module last read it from wwd, or false while it is not known (no pool module,
+// wwd not read yet, wwd away). It reads the module's own Status and never calls wwd, so /api/info does not wait on it.
+func (c *Core) wwdIdentity() (map[string]string, bool) {
+	if !c.moduleReady("pool") {
+		return nil, false
+	}
+	st, ok := c.ModuleStatus("pool")
+	if !ok {
+		return nil, false
+	}
+	id, ok := st["wwd"].(map[string]string)
+	if !ok || id["host_id"] == "" {
+		return nil, false
+	}
+	return id, true
+}
+
 // capabilityList is the static list plus the conditional capabilities: push.v1 while the push module is ready, and
 // devices.v1 while the devices module is. Every other name above is unconditional; keep it that way unless a feature really
 // can be switched off at boot.
@@ -211,6 +228,13 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		wwdalerts = st
 	}
 
+	// one read of the identity gives both the wwd key and its capability, so a watch that changes between two reads cannot make them disagree
+	caps := c.capabilityList()
+	wwdID, ok := c.wwdIdentity()
+	if ok {
+		caps = append(caps, "pool.identity.v1") // /api/info's wwd {host_id, alias}: who the local wwd is (its own host_id, not this daemon's), read by the pool module's watch; only while that is known
+	}
+
 	info := map[string]any{
 		"host_id":        hostID,
 		"tmux_instance":  config.GetTmuxInstance(),
@@ -221,8 +245,11 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"nex":            nex,
 		"push":           push,
 		"wwdalerts":      wwdalerts,
-		"capabilities":   c.capabilityList(),
+		"capabilities":   caps,
 		"last_shutdown":  nil,
+	}
+	if ok {
+		info["wwd"] = wwdID
 	}
 	if r := c.LastShutdown; r != nil {
 		info["last_shutdown"] = map[string]any{
