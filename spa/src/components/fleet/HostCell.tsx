@@ -1,5 +1,5 @@
 // spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's host row (monitoring tabs M10, M17–M19), built from the App's own pieces so it reads like the members beside it:
-//   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side; hover bg-surface-hover, selected bg-surface-active. No click / focus outline; the card opens on focus.
+//   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side; hover bg-surface-hover, selected bg-surface-active. No outline on a click; a keyboard focus (focus-visible) shows a 1 px ring, as the queue strip's does; the card opens on focus.
 //   badge  the App's `HostBadge` as beside a member in the session list (the sidebar badge settings, the host's colours resolved as for an agent member: terminal, falling back to console).
 //          wwd_down: lit as ever; host_down: 40 %; unknown: 60 %.
 //   count  the number at the badge's top right (M6, M7): grey, yellow from a long wait, red when no host can take a job; only for a host that is ok and has something to count; 99+ above 99.
@@ -7,9 +7,9 @@
 //   ring   the App's `ContextRing`, the badge's size: length = the item's share, tone = its band.
 //   bar / bars   `HostBars`: one bar, or two (left and right item), each in its own band.
 //   A host that is not ok has no readings: the indicator's place holds a bold icon instead (M17–M19): wwd_down a yellow broken link, host_down a red power symbol, unknown a grey question mark.
+//   The narrow variant draws `NarrowHostBlock` (M14, M16) instead of the badge and the indicator: the card, the focus and the click are this cell's.
 // Read only from the pool (`CellView`).
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { LinkBreak, Power, Question } from '@phosphor-icons/react'
 import { resolveHostBadge } from '../../lib/host-color'
 import type { CellView } from '../../lib/pool/cell-model'
 import { indicatorReading } from '../../lib/pool/indicator'
@@ -19,6 +19,9 @@ import { HostBadge } from '../HostBadge'
 import { ContextRing } from '../team/ModelIcon'
 import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
+import { HostStateIcon } from './HostStateIcon'
+import { COUNT_TONE, DIM } from './host-cell-style'
+import { NarrowHostBlock } from './NarrowHostBlock'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { livenessWord } from '../../lib/pool/words'
 import type { PoolZone } from '../../lib/pool/types'
@@ -26,9 +29,6 @@ import type { PoolZone } from '../../lib/pool/types'
 // One card at a time: the close function of the cell whose card is open (hover on B closes the card focus left on A).
 let openCell: { owner: object; close: () => void } | null = null
 
-const COUNT_TONE = { neutral: 'bg-text-muted text-white', warn: 'bg-status-warning text-text-inverse', error: 'bg-status-error text-white' } as const
-/** How far a badge is dimmed: wwd_down is lit as ever, host_down 40 %, unknown 60 % (M17–M19). */
-const DIM = { ok: '', wwd_down: '', host_down: 'opacity-40', unknown: 'opacity-60' } as const
 
 export interface HostCellProps {
   view: CellView
@@ -102,28 +102,30 @@ export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
       onFocus={openCard}
       onBlur={closeCard}
       onClick={() => { closeCard(); onOpen() }}
-      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
+      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none focus-visible:ring-1 focus-visible:ring-border-active transition-colors ${narrow ? 'justify-center px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
     >
-      <span className="relative inline-flex shrink-0">
-        <span data-testid={`host-badge-dim-${view.hostId}`} className={`inline-flex ${DIM[view.state.state]}`}>
-          <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.hostId}`} bright />
+      {narrow ? <NarrowHostBlock view={view} /> : (
+        <>
+        <span className="relative inline-flex shrink-0">
+          <span data-testid={`host-badge-dim-${view.hostId}`} className={`inline-flex ${DIM[view.state.state]}`}>
+            <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.hostId}`} bright />
+          </span>
+          {view.count && <CountBadge n={view.count.n} size="sm" className={`pointer-events-none ${COUNT_TONE[view.count.tone]}`} testId={`count-badge-${view.hostId}`} />}
         </span>
-        {view.count && <CountBadge n={view.count.n} size="sm" className={`pointer-events-none ${COUNT_TONE[view.count.tone]}`} testId={`count-badge-${view.hostId}`} />}
-      </span>
-      {off ? (
-        <span className="inline-flex shrink-0 ml-0.5 items-center justify-center" style={{ width: box, height: box }} data-testid={`state-icon-${view.hostId}`} data-state={view.state.state} data-zone="offline">
-          {view.state.state === 'wwd_down' ? <LinkBreak weight="bold" size={box - 2} className="text-status-warning" />
-            : view.state.state === 'host_down' ? <Power weight="bold" size={box - 2} className="text-status-error" />
-            : <Question weight="bold" size={box - 2} className="text-text-muted" />}
-        </span>
-      ) : shape.shape === 'ring' ? (
-        <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.hostId}`} data-zone={zone}>
-          <ContextRing pct={first?.pct} model={undefined} size={box} tone={first && first.tone !== 'muted' ? first.tone : undefined} muted={first?.tone === 'muted'} noShape />
-        </span>
-      ) : (
-        <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.hostId}`} data-zone={zone}>
-          <HostBars left={first} right={second} size={box} />
-        </span>
+        {off ? (
+          <span className="inline-flex shrink-0 ml-0.5 items-center justify-center" style={{ width: box, height: box }} data-testid={`state-icon-${view.hostId}`} data-state={view.state.state} data-zone="offline">
+            <HostStateIcon state={view.state.state as Exclude<typeof view.state.state, 'ok'>} size={box - 2} />
+          </span>
+        ) : shape.shape === 'ring' ? (
+          <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.hostId}`} data-zone={zone}>
+            <ContextRing pct={first?.pct} model={undefined} size={box} tone={first && first.tone !== 'muted' ? first.tone : undefined} muted={first?.tone === 'muted'} noShape />
+          </span>
+        ) : (
+          <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.hostId}`} data-zone={zone}>
+            <HostBars left={first} right={second} size={box} />
+          </span>
+        )}
+        </>
       )}
       {cardOpen && <HostCard id={cardId} view={view} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
     </button>

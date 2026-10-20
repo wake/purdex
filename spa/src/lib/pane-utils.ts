@@ -58,7 +58,7 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
   // a different execution on whichever host now happens to be first.
   // `from` is provenance, not identity: two panes showing the same execution
   // are the same singleton whether or not one of them was handed off.
-  if (a.kind === 'watch-host' && b.kind === 'watch-host') return a.fleetHostId === b.fleetHostId
+  if (a.kind === 'watch-host' && b.kind === 'watch-host') return a.poolHostId !== undefined || b.poolHostId !== undefined ? a.poolHostId === b.poolHostId : a.fleetHostId === b.fleetHostId
   if (a.kind === 'execution' && b.kind === 'execution') {
     return a.executionId === b.executionId
       && resolveExecutionHostId(a.host) === resolveExecutionHostId(b.host)

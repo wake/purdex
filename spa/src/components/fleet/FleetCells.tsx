@@ -9,6 +9,7 @@ import { watchJobs } from '../../lib/pool/jobs-driver-live'
 import { usePoolReadable } from '../../lib/pool/pool-jobs'
 import { useMonitorHosts } from '../../lib/pool/use-monitor-hosts'
 import { HostCell } from './HostCell'
+import { QueueCounts } from './QueueCounts'
 import { QueueStrip } from './QueueStrip'
 
 export interface FleetCellsProps {
@@ -22,8 +23,9 @@ export function FleetCells({ variant }: FleetCellsProps) {
   const cells = useMemo(() => hosts.map(cellOf), [hosts])
   const readable = usePoolReadable()
   const wide = variant === 'wide'
-  // Nothing to show: no host cell, and (wide) no strip either unless the pool answered once, when it stays — an answered empty pool is a grey line, not a bar that disappears.
-  if (cells.length === 0 && !(wide && readable)) return null
+  // Nothing to show (wide): no host cell, and no strip either unless the pool answered once, when it stays — an answered empty pool is a grey line, not a bar that disappears.
+  // The narrow counts are always drawn (M15, M25): two grey 0s when the pool cannot be read, so the bar does not jump.
+  if (wide && cells.length === 0 && !readable) return null
 
   return (
     <div
@@ -31,7 +33,7 @@ export function FleetCells({ variant }: FleetCellsProps) {
       data-variant={variant}
       className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-0 pb-1'}
     >
-      {wide && <div className="basis-full pb-1"><QueueStrip /></div>}
+      {wide ? <div className="basis-full pb-1"><QueueStrip /></div> : <QueueCounts />}
       {cells.map((c) => (
         <HostCell key={c.hostId} view={c} variant={variant} isActive={false} onOpen={() => openWatchArea({ poolHost: { hostId: c.hostId, alias: c.name } })} />
       ))}

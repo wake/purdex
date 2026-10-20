@@ -90,23 +90,44 @@ describe('FleetCells — the queue strip and the jobs driver (MON-3a)', () => {
     expect(within(strip).getByTestId('queue-strip')).toBeTruthy()
     expect(strip.firstElementChild!.contains(screen.getByTestId('queue-strip'))).toBe(true)
   })
-  it('an answered pool with no host keeps the wide strip (grey), the narrow bar draws nothing', () => {
+  it('an answered pool with no host keeps the wide strip (grey) and the narrow counts (two grey 0s)', () => {
     answer([])
     const wide = render(<FleetCells variant="wide" />)
     expect(screen.getByTestId('queue-strip')).toBeTruthy()
     expect(screen.queryAllByTestId(/^host-tile-/)).toHaveLength(0)
     wide.unmount()
-    const narrow = render(<FleetCells variant="narrow" />)
-    expect(narrow.container.firstChild).toBeNull()
+    render(<FleetCells variant="narrow" />)
+    expect(screen.getByTestId('queue-count-heavy').textContent).toBe('0')
+    expect(screen.getByTestId('queue-count-light').textContent).toBe('0')
+    expect(screen.queryAllByTestId(/^narrow-block-/)).toHaveLength(0)
+  })
+  it('a pool never read or failed with no kept list: nothing wide, but the narrow counts stay as two grey 0s (M15, M25)', () => {
+    const wide = render(<FleetCells variant="wide" />)
+    expect(wide.container.firstChild).toBeNull()
+    wide.unmount()
+    render(<FleetCells variant="narrow" />)
+    expect(screen.getByTestId('queue-count-heavy').textContent).toBe('0')
+    expect(screen.getByTestId('queue-count-light').className).toContain('bg-surface-hover')
+    expect(screen.queryAllByTestId(/^narrow-block-/)).toHaveLength(0)
+    fireEvent.mouseEnter(screen.getByTestId('queue-counts'))
+    expect(screen.getByTestId('queue-unreadable')).toBeTruthy()
   })
   it('a pool never read draws nothing at all', () => {
     const { container } = render(<FleetCells variant="wide" />)
     expect(container.firstChild).toBeNull()
   })
-  it('the narrow bar has no strip yet (MON-4 gives it two counts)', () => {
+  it('the narrow bar has the two counts above the cells, not the strip (M15)', () => {
     answer([host(A, 'mlab')])
     render(<FleetCells variant="narrow" />)
     expect(screen.queryByTestId('queue-strip')).toBeNull()
+    const bar = screen.getByTestId('fleet-cells')
+    expect(bar.firstElementChild).toBe(screen.getByTestId('queue-counts'))
+    expect(screen.getAllByTestId(/^narrow-block-/)).toHaveLength(1)
+  })
+  it('the wide bar has no counts', () => {
+    answer([host(A, 'mlab')])
+    render(<FleetCells variant="wide" />)
+    expect(screen.queryByTestId('queue-counts')).toBeNull()
   })
   it('mounting starts watching the pool\'s jobs and unmounting lets go', () => {
     answer([host(A, 'mlab')])

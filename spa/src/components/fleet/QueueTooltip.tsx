@@ -63,6 +63,7 @@ export function QueueTooltip({ id, strip, placement, anchor }: QueueTooltipProps
       ref={ref}
       id={id}
       data-testid="queue-tooltip"
+      data-placement={placement}
       role="tooltip"
       className="fixed z-50 rounded-lg border border-border-default bg-surface-elevated shadow-xl px-3 py-2.5 text-xs pointer-events-none"
       style={{ ...style, width: W, transform: shift.x || shift.y ? `translate(${shift.x}px, ${shift.y}px)` : undefined }}

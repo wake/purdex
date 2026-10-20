@@ -48,6 +48,19 @@ export function matchPoolHost(hosts: PoolHost[], v: Pick<FleetHostView, 'alias' 
   return byDaemon ?? hosts.find((h) => v.alias !== '' && h.alias === v.alias) ?? null
 }
 
+/**
+ * The reverse of `matchPoolHost` (transitional, for the host page until MON-6f-2): the fleet view of a pool host — the daemon host whose App host is the daemon of the pool host (first),
+ * else the only one with the same alias. Null when there is none or the alias is shared.
+ */
+export function fleetViewOfPoolHost(views: FleetHostView[], poolHost: Pick<PoolHost, 'host_id' | 'alias'>, daemons: Record<string, string>): FleetHostView | null {
+  const cfg = daemons[poolHost.host_id]
+  const byDaemon = cfg ? views.find((v) => v.kind === 'daemon' && v.hostConfigId === cfg) : undefined
+  if (byDaemon) return byDaemon
+  // An alias is not unique: with two fleet hosts of the name there is no telling which one this is.
+  const byAlias = poolHost.alias === '' ? [] : views.filter((v) => v.alias === poolHost.alias)
+  return byAlias.length === 1 ? byAlias[0] : null
+}
+
 /** The facts as the fleet's fast reading, which the cell and the card already draw. `zone` is a placeholder for `unknown`. */
 export function factsToFast(f: PoolFacts, load: number): FleetFast {
   const fullest = f.disk.reduce<PoolFacts['disk'][number] | null>((best, d) => (best === null || d.used_pct > best.used_pct ? d : best), null)
