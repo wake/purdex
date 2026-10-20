@@ -61,6 +61,9 @@ type goCacheState struct {
 	now      func() time.Time
 	pruned   map[string]bool // the cache directories made or seen by this process, so that dropping the old ones is done once each
 	oversize bool            // the last look found the cache over twice its bound
+	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
+	hook            func(stage string)
+	versionOverride string
 }
 
 func (s *goCacheState) clock() time.Time {
@@ -96,16 +99,36 @@ func (e *Exec) prepareGoCache(ctx context.Context, base string) string {
 	if e.cfg.DepsDir == "" {
 		return ""
 	}
-	ver, err := e.toolVersion(ctx, "go")
-	if err != nil {
-		return ""
+	ver := e.goCache.versionOverride // a test's other Go
+	if ver == "" {
+		var err error
+		if ver, err = e.toolVersion(ctx, "go"); err != nil {
+			return ""
+		}
 	}
 	sum := sha256.Sum256([]byte(ver + "\x00" + runtime.GOOS + "/" + runtime.GOARCH))
 	root := filepath.Join(e.cfg.DepsDir, "gocache")
 	dir := filepath.Join(root, hex.EncodeToString(sum[:8]))
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		log.Printf("jobexec: the build cache %s: %v", root, err)
+		return ""
+	}
+	// One lock for making, dropping and bounding the caches of the host, across the worker processes: a cache that is just made is held (its
+	// shared lock) before the lock is let go, so that another worker that makes a newer cache cannot drop it, or empty it, in between.
+	meta, err := os.OpenFile(filepath.Join(root, ".meta.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return ""
+	}
+	defer meta.Close()
+	if err := syscall.Flock(int(meta.Fd()), syscall.LOCK_EX); err != nil {
+		return ""
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("jobexec: the build cache %s: %v", dir, err)
 		return ""
+	}
+	if h := e.goCache.hook; h != nil {
+		h("made")
 	}
 	e.pruneGoCaches(root, dir)
 	lock, err := os.OpenFile(dir+".lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -117,6 +140,10 @@ func (e *Exec) prepareGoCache(ctx context.Context, base string) string {
 		return ""
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH); err != nil {
+		lock.Close()
+		return ""
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() { // a directory that is not there is not one to give to a job (the Linux sandbox would not start)
 		lock.Close()
 		return ""
 	}

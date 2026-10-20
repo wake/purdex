@@ -105,6 +105,39 @@ func TestTheBuildCacheIsPerGoVersionAndTheOldOnesAreDropped(t *testing.T) {
 	assert.DirExists(t, dirs[2])
 }
 
+// Another worker of the host that makes a newer cache and drops the oldest ones must not take the one that is just being made: it is made and
+// held under one lock, so the other waits until the new one is held (R2: a job given a directory that was gone fails to start in the Linux sandbox).
+func TestACacheJustMadeIsNotDroppedByAnotherWorkerBeforeItIsHeld(t *testing.T) {
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	root := filepath.Join(r.deps, "gocache")
+	// two caches of other Go versions, newer than anything made now, so that the one made by a is the oldest of three
+	for _, k := range []string{"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, k), 0o755))
+		require.NoError(t, os.Chtimes(filepath.Join(root, k), timeAfter(1).AddDate(5, 0, 0), timeAfter(1).AddDate(5, 0, 0)))
+	}
+	a := r.exec(t, repo, sha)
+	b := r.exec(t, repo, sha)
+	b.goCache.versionOverride = "go version go1.99.0 darwin/arm64" // b has another go: it makes another directory and drops the oldest
+	released := make(chan struct{})
+	bDone := make(chan string, 1)
+	a.goCache.hook = func(stage string) {
+		if stage != "made" {
+			return
+		}
+		go func() { // another worker starts here: its directory is made and the oldest dropped, only after a holds its own
+			bDone <- b.prepareGoCache(context.Background(), t.TempDir())
+			close(released)
+		}()
+		time.Sleep(300 * time.Millisecond) // long enough for b to have dropped a's directory, if nothing stopped it
+	}
+	dir := a.prepareGoCache(context.Background(), t.TempDir())
+	require.NotEmpty(t, dir)
+	<-released
+	assert.DirExists(t, dir, "the directory a holds is still there")
+	assert.NotEmpty(t, <-bDone)
+}
+
 // A task that does not declare go.sum gets no shared cache (and a host with no deps directory cannot give one).
 func TestATaskWithoutGoSumGetsNoSharedBuildCache(t *testing.T) {
 	r := newDepsRig(t) // withdeps: pnpm
