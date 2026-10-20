@@ -104,3 +104,19 @@ func TestAQuarantinedJobStillTakesItsHeavySlot(t *testing.T) {
 	q.round()
 	waitFor(t, "the claim", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
 }
+
+// A job is in the running map and in the quarantine from the moment its marker is written until its delivery is over: it counts once, so
+// one quarantined job does not hide a second heavy slot.
+func TestAJobBothRunningAndQuarantinedCountsOnce(t *testing.T) {
+	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.ex.run = blockUntilDone
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/j1", JobID: "j1", Origin: "mlab", Dir: filepath.Join(q.root, "j1"), Unit: "wwd-j1"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := q.loop.Running(); n != 1 {
+		t.Fatalf("Running %d, want the one job counted once", n)
+	}
+}

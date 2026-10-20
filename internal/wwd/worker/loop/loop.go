@@ -169,18 +169,25 @@ func New(cfg Config) *Loop {
 func (l *Loop) Running() int {
 	l.mu.Lock()
 	l.pruneLocked()
-	n := len(l.running)
+	n := l.countLocked()
 	l.mu.Unlock()
-	return n + l.quarantined()
+	return n
 }
 
-// quarantined is how many jobs the quarantine holds: their commands could not be proven stopped, so each still counts as a heavy
-// job on this host until the sweep clears it (this is what the pdx gate's late slots did before WWD-9).
-func (l *Loop) quarantined() int {
+// countLocked is the jobs that take a heavy slot: the running ones plus the quarantined ones (their commands could not be proven
+// stopped, so each still counts until the sweep clears it; this is what the pdx gate's late slots did before WWD-9). A job is in both
+// from the moment its marker is written until its delivery is over, and is counted once. l.mu is held.
+func (l *Loop) countLocked() int {
+	n := len(l.running)
 	if l.cfg.Quarantine == nil {
-		return 0
+		return n
 	}
-	return len(l.cfg.Quarantine.Held())
+	for _, e := range l.cfg.Quarantine.Held() {
+		if _, also := l.running[e.Owner]; !also {
+			n++
+		}
+	}
+	return n
 }
 
 func (l *Loop) pruneLocked() {
@@ -256,9 +263,8 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	}
 	l.mu.Lock()
 	l.pruneLocked()
-	n, last := len(l.running), l.lastClaim
+	n, last := l.countLocked(), l.lastClaim
 	l.mu.Unlock()
-	n += l.quarantined()
 	// The headroom is 0 while any exception is on, a hold with `allow` included (so every outside reader waits). The worker knows what
 	// `allow` means: when the selective holds are the only thing in the way it may still take a job they list, and only those (claimOne).
 	if n >= st.Slots.Heavy || !heavyRoom(facts) {
