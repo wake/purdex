@@ -72,6 +72,11 @@ const (
 	AlertThrash         AlertKind = "thrash"
 	AlertResidentGrowth AlertKind = "resident_growth"
 	AlertOrphans        AlertKind = "orphans"
+	// The watcher's three pressure rules (spec §13.3, WWD switch S3-2). They are written only where [advisor] watch_rules is on, after every
+	// reader of the alert list knows these values: a reader that does not refuses the whole list.
+	AlertPressureWatch  AlertKind = "pressure_watch"
+	AlertPressureDanger AlertKind = "pressure_danger"
+	AlertSwapGrowth     AlertKind = "swap_growth"
 )
 
 // The two kinds of silence about a peer (key silence:<alias>) are told apart by their words, not by a field of the alert: GET /v1/alerts is
@@ -118,21 +123,23 @@ func SilenceHostDown(detail string) bool { return strings.HasSuffix(detail, sile
 func (k AlertKind) Valid() bool {
 	switch k {
 	case AlertDiskLow, AlertDiskFalling, AlertPressureHeld, AlertMservService, AlertWorkerCrash, AlertSilence,
-		AlertThrash, AlertResidentGrowth, AlertOrphans:
+		AlertThrash, AlertResidentGrowth, AlertOrphans, AlertPressureWatch, AlertPressureDanger, AlertSwapGrowth:
 		return true
 	}
 	return false
 }
 
-// AlertLevel is how an alert is delivered: pushed to the person at once, or gathered into the daily digest.
+// AlertLevel is how an alert is delivered: pushed to the person at once, gathered into the daily digest, or (watch) told only to the
+// watcher: the Purdex daemon wakes it and neither pushes it nor puts it in the digest.
 type AlertLevel string
 
 const (
 	AlertPush   AlertLevel = "push"
 	AlertDigest AlertLevel = "digest"
+	AlertWatch  AlertLevel = "watch"
 )
 
-func (l AlertLevel) Valid() bool { return l == AlertPush || l == AlertDigest }
+func (l AlertLevel) Valid() bool { return l == AlertPush || l == AlertDigest || l == AlertWatch }
 
 // MaxAlertKeyBytes bounds a key (it is a row key and appears in a push).
 const MaxAlertKeyBytes = 200
