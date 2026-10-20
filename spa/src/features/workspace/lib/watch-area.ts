@@ -17,6 +17,7 @@ import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-s
 import { anyHostDeclaresWatch } from '../../../lib/watch/events-store'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
+import { ALERTS_CAPABILITY } from '../../../lib/pool/alerts-store'
 import { jobsDaemons } from '../../../lib/pool/jobs-driver-live'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { tmuxSessionContent } from '../../../lib/open-session-tab'
@@ -142,12 +143,18 @@ export function createWatchReconciler(): WatchReconciler {
   }
 
   /**
-   * The events tab (spec §5): made, right after the guardian tab, once any connected host carries the watch module. Only
+   * The events tab (spec §5, M35): made, right after the guardian tab, once any connected host carries the watch module or a connected daemon announces `pool.alerts.v1` (MON-10c). Only
    * created, never removed — a host that goes away for a moment must not take a tab the reader may have moved or synced.
    */
+  const anyDaemonAnnouncesAlerts = (): boolean => {
+    const { byHost } = useNexHostStore.getState()
+    const { hostOrder, runtime } = useHostStore.getState()
+    return hostOrder.some((id) => runtime[id]?.status === 'connected' && byHost[id]?.daemonCapabilities?.includes(ALERTS_CAPABILITY) === true)
+  }
+
   const reconcileEvents = (): void => {
     const exists = WATCH_EVENTS_TAB_ID in useTabStore.getState().tabs
-    if (!exists && !anyHostDeclaresWatch(useWatchStatusStore.getState().byHost)) return
+    if (!exists && !anyHostDeclaresWatch(useWatchStatusStore.getState().byHost) && !anyDaemonAnnouncesAlerts()) return
     if (!exists) useTabStore.getState().addTab(hostTab(WATCH_EVENTS_TAB_ID, EVENTS_PANE))
     const area = () => useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
     if (!area().tabs.includes(WATCH_EVENTS_TAB_ID)) {

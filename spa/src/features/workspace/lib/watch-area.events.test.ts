@@ -7,6 +7,7 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { useFleetStore } from '../../../lib/fleet/store'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
+import { useNexHostStore } from '../../../stores/useNexHostStore'
 import type { WatchStatus } from '../../../lib/watch/status-types'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { createWatchReconciler } from './watch-area'
@@ -23,6 +24,7 @@ beforeEach(() => {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useFleetStore.getState().reset()
   useWatchStatusStore.getState().reset()
+  useNexHostStore.setState({ byHost: {} } as never)
   useSessionStore.setState({ sessions: {} })
   useHostStore.setState({
     hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0, daemonId: 'd1' } },
@@ -85,5 +87,37 @@ describe('the events tab', () => {
     createWatchReconciler().reconcile(view(['x']), T0)
     expect(watchTabs()).toContain(WATCH_EVENTS_TAB_ID)
     expect(Object.keys(useTabStore.getState().tabs).filter((id) => id === WATCH_EVENTS_TAB_ID)).toHaveLength(1)
+  })
+})
+
+describe('the events tab and pool.alerts.v1 (MON-10c)', () => {
+  const announce = (caps: string[], fetchedAt = 1) => useNexHostStore.setState({ byHost: { h1: { phase: 'ready', fetchedAt, daemonCapabilities: caps } } } as never)
+
+  it('is made when a connected daemon announces pool.alerts.v1, though none carries watch.v1', () => {
+    announce(['pool.alerts.v1'])
+    createWatchReconciler().reconcile(view(['x']), T0)
+    expect(watchTabs()).toContain(WATCH_EVENTS_TAB_ID)
+  })
+
+  it('is not made when no daemon announces it', () => {
+    announce(['jobs.v1'])
+    createWatchReconciler().reconcile(view(['x']), T0)
+    expect(watchTabs()).not.toContain(WATCH_EVENTS_TAB_ID)
+  })
+
+  it('is not made for a daemon that is not connected', () => {
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
+    announce(['pool.alerts.v1'])
+    createWatchReconciler().reconcile(view(['x']), T0)
+    expect(watchTabs()).not.toContain(WATCH_EVENTS_TAB_ID)
+  })
+
+  it('stays once made when the capability goes away', () => {
+    announce(['pool.alerts.v1'])
+    const r = createWatchReconciler()
+    r.reconcile(view(['x']), T0)
+    announce([])
+    r.reconcile(view(['x']), T0)
+    expect(watchTabs()).toContain(WATCH_EVENTS_TAB_ID)
   })
 })

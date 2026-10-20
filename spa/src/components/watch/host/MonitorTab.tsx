@@ -11,6 +11,11 @@ import type { HostRange } from '../../../lib/pool/host-history'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { useHostSeries } from '../../../lib/pool/use-host-series'
 import type { PoolProc } from '../../../lib/pool/types'
+import { useAlertsStore } from '../../../lib/pool/alerts-store'
+import { alertRowsOf } from '../../../lib/pool/events-model'
+import { usePoolStore } from '../../../lib/pool/store'
+import { writeEventFilters } from '../../../lib/watch/view-memory'
+import { openWatchArea } from '../../../features/workspace/lib/open-watch-area'
 import { Gauge } from '../Gauge'
 import { ProcTable, type ProcRow } from '../ProcTable'
 import { HostJobs } from '../jobs/HostJobs'
@@ -47,10 +52,35 @@ export function MonitorTab({ host, range, now }: { host: MonitorHost; range: Hos
   const dead = st.state === 'ok' ? null : { fromAt: st.lastFactsAt ?? 0, tone: DEAD_TONE[st.state] }
   const procs = useMemo(() => topProcs(facts?.procs ?? []), [facts])
 
+  // This host's alerts in progress, owned the way the events tab owns them (a silence about this host that another host's list holds counts here, once; M41-1, 88 10-20).
+  const alertsByHost = useAlertsStore((s) => s.byHost)
+  const poolHosts = usePoolStore((s) => s.hosts)
+  const liveAlerts = useMemo(
+    () => {
+      // The pool's list is empty while the pool cannot be read, though the page stays open on a kept host: this host is always among them.
+      const known = poolHosts.map((h) => ({ hostId: h.host_id, alias: h.alias }))
+      const all = known.some((h) => h.hostId === host.hostId) ? known : [...known, { hostId: host.hostId, alias: host.alias }]
+      return alertRowsOf(alertsByHost, all).filter((r) => r.hostId === host.hostId && r.live)
+    },
+    [alertsByHost, poolHosts, host.hostId, host.alias],
+  )
+  const openAlerts = (): void => {
+    writeEventFilters({ host: host.hostId, source: 'all', status: 'all' })
+    openWatchArea({ tab: 'events' })
+  }
+
   return (
     <div data-testid="monitor-tab" className="flex flex-col gap-3">
       <div data-testid="monitor-gauges" className="flex flex-wrap items-start gap-x-6 gap-y-2">
         {GAUGES.map((g, i) => <Gauge key={g.id} testId={`monitor-gauge-${g.id}`} label={t(g.labelKey)} reading={gauges[i]} />)}
+        {liveAlerts.length > 0 && (
+          <button
+            type="button" data-testid="monitor-alerts" onClick={openAlerts} title={liveAlerts.map((r) => r.title).join('\n')}
+            className={`ml-auto cursor-pointer text-xs hover:underline ${liveAlerts.some((r) => r.level === 'push') ? 'text-status-error-text' : 'text-status-warning-text'}`}
+          >
+            {t('watch.host.monitor.alerts', { n: liveAlerts.length })}
+          </button>
+        )}
       </div>
       <div data-testid="monitor-charts" className="grid grid-cols-3 gap-2">
         {defs.map((d) => <MiniChart key={d.id} def={d} samples={samples} range={range} now={now} hoverIndex={hoverIndex} onHover={onHover} dead={dead} />)}
