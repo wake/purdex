@@ -3382,5 +3382,14 @@
   "personal.titlebar.to_pane": "Put the personal panel back in the pane",
   "personal.titlebar.to_titlebar": "Move the personal panel to the title bar",
   "personal.sessions": "{{count}} sessions",
-  "personal.ended": "Ended"
+  "personal.ended": "Ended",
+  "personal.last": "Last: {{line}}",
+  "personal.back": "Back to the card",
+  "personal.settings.group": "Group",
+  "personal.settings.name": "Name",
+  "personal.settings.color": "Color",
+  "personal.settings.new_group": "New task group",
+  "personal.settings.take_out": "Take out",
+  "personal.settings.rename": "Rename",
+  "personal.settings.ungrouped_hint": "This session is in no group. Pick a task group, or start a new one."
 }
