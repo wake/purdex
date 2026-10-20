@@ -64,6 +64,11 @@ export function startSessionRootsLifecycle(): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null
   let pruneTimer: ReturnType<typeof setTimeout> | null = null
 
+  const schedulePrune = () => {
+    if (pruneTimer !== null) clearTimeout(pruneTimer)
+    pruneTimer = setTimeout(() => { pruneTimer = null; pruneUnreferenced() }, ROOT_PRUNE_SETTLE_MS)
+  }
+
   const feed = () => {
     for (const [hostId, read] of Object.entries(useRelayQuotaStore.getState().reads)) {
       if (read.ok && read.quotas !== undefined && !read.quotasFailed) useRootCacheStore.getState().ingest(hostId, read.quotas)
@@ -110,11 +115,8 @@ export function startSessionRootsLifecycle(): () => void {
     }),
     useUnattendedStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) run() }), // a capability learned after the view opened
     // A world switch updates the profiles store and then the tab store: pruning between the two would see the world about to be shown as neither parked nor on screen. So it waits until the switch settled.
-    useLocalProfilesStore.subscribe((s, prev) => {
-      if (s.parkedMaster === prev.parkedMaster && s.slaves === prev.slaves) return
-      if (pruneTimer !== null) clearTimeout(pruneTimer)
-      pruneTimer = setTimeout(() => { pruneTimer = null; pruneUnreferenced() }, ROOT_PRUNE_SETTLE_MS)
-    }),
+    useLocalProfilesStore.subscribe((s, prev) => { if (s.parkedMaster !== prev.parkedMaster || s.slaves !== prev.slaves) schedulePrune() }),
+    useTabStore.subscribe((s, prev) => { if (s.tabs !== prev.tabs) schedulePrune() }), // a plain tab close leaves the profiles store alone; any change of either side restarts the wait
   ]
   evaluate = run
   feed()

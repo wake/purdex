@@ -132,6 +132,17 @@ describe('cleanup', () => {
     expect(rootOf('h1', 'ON')).toBe('R')
   })
 
+  it('a plain tab close (the profiles store untouched) drops the closed session\'s entry once things settle', () => {
+    useRootCacheStore.getState().ingest('h1', [q('ON', 'R'), q('CLOSED', 'R')])
+    useTabStore.setState({ tabs: { t1: tabOf('t1', 'h1', 'ON'), t2: tabOf('t2', 'h1', 'CLOSED') } })
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
+    useTabStore.setState({ tabs: { t1: tabOf('t1', 'h1', 'ON') } })
+    expect(rootOf('h1', 'CLOSED')).toBe('R') // not at once
+    vi.advanceTimersByTime(ROOT_PRUNE_SETTLE_MS)
+    expect(rootOf('h1', 'CLOSED')).toBeNull()
+    expect(rootOf('h1', 'ON')).toBe('R')
+  })
+
   it('does not prune in the middle of a world switch: the world about to be shown is neither parked nor on screen for a moment', () => {
     useRootCacheStore.getState().ingest('h1', [q('NEXT', 'R')])
     const world = { workspaces: [], tabs: { t2: tabOf('t2', 'h1', 'NEXT') }, activeWorkspaceId: null, activeTabId: null }

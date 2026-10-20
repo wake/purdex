@@ -9,6 +9,7 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage } from '../storage'
 import { STORAGE_KEYS } from '../storage/keys'
 import { readFirstPage } from '../team/unattended-reader'
+import { hostIdentityNow } from '../team/quota-host'
 import type { SessionQuota } from '../team/types'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
@@ -100,8 +101,10 @@ export async function resolveRoot(hostId: string, sessionId: string): Promise<st
   const cached = rootOf(hostId, sessionId)
   if (cached !== null) return cached
   if (!rootsSupported(hostId)) return null
+  const identity = hostIdentityNow(hostId) // the daemon asked: a page that comes back after the host was re-pointed is the old daemon's and must not be cached under the id
   try {
     const view = await readFirstPage(hostId)
+    if (identity !== hostIdentityNow(hostId) || !rootsSupported(hostId)) return null
     if (view.quotas !== undefined && !view.quotasFailed) useRootCacheStore.getState().ingest(hostId, view.quotas)
   } catch {
     return null

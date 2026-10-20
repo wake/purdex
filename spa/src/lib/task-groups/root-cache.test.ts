@@ -56,6 +56,18 @@ describe('resolveRoot', () => {
     expect(readFirstPage).not.toHaveBeenCalled()
   })
 
+  it('does not cache a page that comes back after the host was re-pointed (it is the old daemon\'s)', async () => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, token: 't' } } } as never)
+    supportQuota('h1')
+    let answer: (v: unknown) => void = () => {}
+    readFirstPage.mockReturnValue(new Promise((r) => { answer = r }))
+    const pending = resolveRoot('h1', 'S1')
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.9', port: 7860, token: 't' } } } as never)
+    answer({ quotas: [q('S1', 'OLD')] })
+    await expect(pending).resolves.toBeNull()
+    expect(rootOf('h1', 'S1')).toBeNull()
+  })
+
   it('does not guess when the page has no quota rows (an older daemon)', async () => {
     supportQuota('h1')
     readFirstPage.mockResolvedValue({})
