@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0-alpha.766] - 2026-10-20
+
+> daemon、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 765 相同。
+>
+> ⚠️ **wwd 的資料庫升級：queue schema 8 → 9**（#3733，`jobs` 多 `started_at`）；host schema 仍是 9，wire 的 `proto` 仍是 3。部署前備份 `wwd.db.pre-766`。要退回 765：停 wwd → 把 `wwd.db.pre-766` 放回 `wwd.db`（刪掉旁邊的 `-wal`、`-shm`）→ 給新 epoch → 啟動 765；備份之後的工作與 `PUT /v1/worker` 的設定會遺失（765 的 wwd 會拒絕開 queue schema 9 的資料庫）。
+>
+> 這是 765 轉換版之後第一個在 job 上加欄位的版本：四台 wwd 與兩台 Purdex daemon 都已是 765，所以舊讀者會忽略新的 `started_at`。
+>
+> **入口已打開（S2）**：765 部署後，mlab 與 air26 的 mod 設定 `pdx.json` 已設 `entry: "on"`，Bash 裡的 `go test …`、`pnpm vitest run …` 會依 `.wwd/tasks.toml` 改寫成 `pdx test <task>`。這是主機設定，不在這一版的程式裡。
+>
+> **worker**：部署時各台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；mserv、air19 仍關著。
+
+### Changed：wwd 監控資料
+
+- **job 記下開始執行的時間（#3733，MD-5）**：`jobs.started_at`（origin 的時鐘，毫秒）在 job 由 claimed 變成 running 時寫入；退回 queued 時清掉；origin 的時鐘回撥時不會早於 claim 的時間。`/api/pool/jobs` 與單筆 job 帶出這個欄位。
+
+### Fixed：未宣告指令清單看得出真正跑的是什麼
+
+- **看穿 Claude Code 的 zsh 包裝（#3734）**：Claude Code 每條 Bash 指令都包成 `source 快照 && export … && setopt … && eval '<指令>'`，以前清單把它們全歸成 `setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL`；現在 signature 是 `eval` 裡第一個真正的指令（例如 `go test`）。引號內的 `&&`、`;` 不再被當成分隔；去掉引號後重新遮罩一次，避免分段的秘密被拼回來。
+- **被遮罩的 shell 改用最重的子行程命名（#3739）**：含 `$(`、`` ` ``、`${`、heredoc 的腳本為了不外洩秘密會整段遮罩，以前 signature 只剩 `zsh`；現在改用同一棵行程樹裡、路徑上全是 shell 或包裝指令（`sudo`、`time`、`nice`、`nohup`、`env`）的第一個非 shell 行程中，子樹累計 CPU 最多的那一個。遮罩本身沒有放寬。每次取樣在 50 棵樹、半數根是 shell 時約多 7.7 ms。
+
+### Fixed：測試
+
+- **dev 模組的 daemon 檢查測試自建 git repo（#3731，#3729）**：在 wwd job 的工作目錄沒有 `.git`（clone 還沒有 base、退回 tar）時測試不再失敗；測試隔離行程帶的 `GIT_*` 變數。`git log -1` 失敗或沒有輸出時，daemon 檢查會在日誌寫下原因。
+
+### Changed：B 線任務編組
+
+- **群組重新排序（#3728，TG-3e-1）**：排序決定寫回各群組的 rank，必要時整批重排。
+- **群組列的拖曳改用 dnd-kit（#3732，TG-3e-2/3）**：與工作區共用側欄的 DndContext，刪掉原生拖放；工作區分頁的關閉鈕按住拖曳不會再啟動整列拖曳。
+
 ## [1.0.0-alpha.765] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 764 相同。
