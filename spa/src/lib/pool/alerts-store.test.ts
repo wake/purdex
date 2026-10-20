@@ -162,6 +162,22 @@ describe('the alerts store — what it keeps', () => {
     const e = useAlertsStore.getState().byHost.mlab
     expect(e.kind === 'ok' && e.alerts.map((a) => a.key)).toEqual(['k:mlab'])
   })
+  it('two reads of one host overlap: the older one finishing last does not put its list over the newer one', async () => {
+    const waiting: Array<(v: HostAlerts) => void> = []
+    fetchMock().mockImplementation(() => new Promise<HostAlerts>((r) => { waiting.push(r) }))
+    setPool('src', ['mlab'])
+    release = retainPoolAlerts()
+    await flush()
+    alertsEvent('src', 'mlab') // a second read of the same host while the first is out
+    await flush()
+    expect(waiting).toHaveLength(2)
+    waiting[1](answer('mlab', [alert('new')])) // the newer one answers first
+    await flush()
+    waiting[0](answer('mlab', [alert('old')])) // the older one comes in late
+    await flush()
+    const e = useAlertsStore.getState().byHost.mlab
+    expect(e.kind === 'ok' && e.alerts.map((a) => a.key)).toEqual(['new'])
+  })
   it('a read that fails is an error entry with its code', async () => {
     fetchMock().mockRejectedValueOnce(Object.assign(new Error('x'), { poolError: { code: 'wwd_unavailable', action: 'backoff' } }))
     setPool('src', ['mlab'])

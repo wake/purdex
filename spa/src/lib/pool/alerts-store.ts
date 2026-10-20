@@ -24,7 +24,7 @@ interface AlertsState {
   reset: () => void
 }
 
-export const useAlertsStore = create<AlertsState>(() => ({ byHost: {}, source: null, reset: () => { useAlertsStore.setState({ byHost: {}, source: null }); gen++ } }))
+export const useAlertsStore = create<AlertsState>(() => ({ byHost: {}, source: null, reset: () => { useAlertsStore.setState({ byHost: {}, source: null }); gen++; latest.clear() } }))
 
 const errorOf = (e: unknown): PoolError => (e as { poolError?: PoolError })?.poolError ?? classify(null, null)
 const announcesAlerts = (id: string | null): boolean => id !== null && useNexHostStore.getState().byHost[id]?.daemonCapabilities?.includes(ALERTS_CAPABILITY) === true
@@ -36,7 +36,13 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 const listed = (): string[] => usePoolStore.getState().hosts.map((h) => h.alias)
 
+/** The newest read started for each host: an older read that finishes later (an event during the first read, the poll during an event's) must not put its list over the newer one. */
+const latest = new Map<string, number>()
+let readSeq = 0
+
 async function readHost(source: string, alias: string, token: number): Promise<void> {
+  const mine = ++readSeq
+  latest.set(alias, mine)
   let entry: HostAlertsEntry
   try {
     const a = await fetchHostAlerts(source, alias)
@@ -45,7 +51,7 @@ async function readHost(source: string, alias: string, token: number): Promise<v
     entry = { kind: 'error', code: errorOf(e).code, at: Date.now() }
   }
   // A newer source, a stop, or a host the pool dropped meanwhile: this answer is old news.
-  if (token !== gen || usePoolStore.getState().sourceHostId !== source || !listed().includes(alias)) return
+  if (token !== gen || latest.get(alias) !== mine || usePoolStore.getState().sourceHostId !== source || !listed().includes(alias)) return
   useAlertsStore.setState((s) => ({ byHost: { ...s.byHost, [alias]: entry } }))
 }
 
