@@ -470,13 +470,16 @@ these; wwd is restarted only after the release gate and the guardian's go-ahead)
 1. **A prepared clone of its own** (not `~/Assist/repos.noindex/purdex`: that one belongs to the manual `mserv-run.sh` and is on an old commit).
    Same way as air26's `purdex-wwd`, over anonymous https (the repo is public):
    `ssh mserv 'git clone https://github.com/wake/purdex.git ~/Assist/repos.noindex/purdex-wwd'`.
-2. **`~/.config/wwd/config.toml`** on mserv: add
+2. **`~/.config/wwd/config.toml`** on mserv: add a `[repos]` table, and edit the **existing** `[tools]` table (node is already in it; `pnpm`
+   lives in `~/Assist/toolchains.noindex/pnpm/bin`, which it does not list yet). `extra_path` belongs to `[tools]`: a line added after
+   `[repos]` would be read as `repos.extra_path`.
    ```toml
+   [tools]
+   extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noindex/pnpm/bin"]
+
    [repos]
    purdex = "~/Assist/repos.noindex/purdex-wwd"
    ```
-   and put pnpm in front of the job PATH (node is already there; `pnpm` lives in `~/Assist/toolchains.noindex/pnpm/bin`, which `[tools]` does not list yet):
-   `extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noindex/pnpm/bin"]`.
 3. **Restart** (`sudo systemctl restart wwd`) and check `GET /v1/info`: `labels` must show `repo:purdex`, `tool:node24`, `tool:pnpm10`.
 4. **The worker stays off until S2 retires `mserv-run.sh`** (a manual run and a worker must not run beside each other). When it goes on
    (`PUT /v1/worker`), the coordinator queues one qualify pair per task that has a `qualify` and a reference host (air26) and that mserv does
