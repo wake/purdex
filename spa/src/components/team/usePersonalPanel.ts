@@ -7,6 +7,8 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { collectLeaves } from '../../lib/pane-tree'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useTeamDisplay } from './team-display'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { teamKeyOfGroupKey } from '../../lib/task-groups/group-key'
 import { currentTeamState } from '../../lib/team/team-state'
 import { currentPlacementCtx } from '../../lib/task-groups/current'
 import { addressOf, rootOf, useRootCacheStore } from '../../lib/task-groups/root-cache'
@@ -56,6 +58,14 @@ export function usePersonalGroup(target: PersonalTarget | null, withCount = fals
   const order = useManualGroupsStore((s) => s.order)
   const groups = useManualGroupsStore((s) => s.groups)
   const roots = useRootCacheStore((s) => s.roots)
+  // The one case the group depends on the teams: a plain tab filed under a team (`tab.group`). Its team's name and label are watched as a string, so roster ticks (context readings) do not wake this hook.
+  const teamKey = tab?.group === undefined ? null : teamKeyOfGroupKey(tab.group)
+  const teamText = useTeamRosterStore((s) => {
+    if (teamKey === null) return ''
+    const cut = teamKey.indexOf('\u0000')
+    const team = s.byHost[teamKey.slice(0, cut)]?.find((t) => t.id === teamKey.slice(cut + 1))
+    return team === undefined ? '' : `${team.team_name}\u0000${team.team_label}`
+  })
   return useMemo(() => {
     if (!target || !tab) return { group: { kind: 'ungrouped' }, rootKnown: false }
     const state = currentTeamState() // read now, not subscribed: the team views follow every tab, and this hook must not (a team group is the rare case, a plain tab filed under a team)
@@ -63,7 +73,7 @@ export function usePersonalGroup(target: PersonalTarget | null, withCount = fals
     return { group: personalGroupOf(tab, ctx, state.views, tabs), rootKnown: rootOf(target.hostId, target.agentSessionId) !== null }
     // `roots` is read through `rootOf` (the cache's plain reader); it is a dependency so the capsule follows a read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, tab, tabs, order, groups, roots])
+  }, [target, tab, tabs, order, groups, roots, teamText])
 }
 
 export interface PersonalReading {

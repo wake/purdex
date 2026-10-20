@@ -4,6 +4,8 @@ import { act, renderHook } from '@testing-library/react'
 import { usePersonalGroup } from './usePersonalPanel'
 import { useTabStore } from '../../stores/useTabStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { sess } from '../../lib/team/__tests__/team-fixture'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import type { PersonalTarget } from '../../lib/task-groups/personal'
 import type { Tab } from '../../types/tab'
@@ -33,5 +35,19 @@ describe('usePersonalGroup', () => {
     expect(result.current.group).toMatchObject({ kind: 'manual', count: 1 })
     act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, t2: tab('t2', 'A2') } })) })
     expect(result.current.group).toMatchObject({ kind: 'manual', count: 2 })
+  })
+  it('a plain tab filed under a team follows the team\'s name, and roster ticks that change nothing it shows do not render it', () => {
+    const KEY = 'h1\u0000T1'
+    const roster = (name: string, ctx: number) => ({ byHost: { h1: [{ id: 'T1', team_name: name, team_label: '', host_id: 'daemon', created_at: 1, lead: { ...sess('L', 'lead-tm'), context: { used_percentage: ctx } }, members: [] }] } }) as never
+    useTeamRosterStore.setState(roster('Alpha', 1))
+    useTabStore.setState((s) => ({ tabs: { ...s.tabs, t1: { ...s.tabs.t1, group: `team\u0000${KEY}` } } }) as never)
+    useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
+    let renders = 0
+    renderHook(() => { renders++; return usePersonalGroup(target, false) })
+    const before = renders
+    act(() => { useTeamRosterStore.setState(roster('Alpha', 2)) }) // a context reading ticked
+    expect(renders).toBe(before)
+    act(() => { useTeamRosterStore.setState(roster('Beta', 2)) })
+    expect(renders).toBeGreaterThan(before)
   })
 })
