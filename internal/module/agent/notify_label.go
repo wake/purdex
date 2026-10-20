@@ -19,16 +19,20 @@ import (
 // read (the modules start in no fixed order; either may be absent, and then its part is empty).
 func newLabeler(c *core.Core) *notifylabel.Labeler {
 	return notifylabel.New(notifylabel.Sources{
-		Code: func(ctx context.Context, sessionID string) (string, bool) {
+		Code: func(ctx context.Context, sessionID string) (string, bool, error) {
 			svc, ok := c.Registry.Get(ipeers.NameServiceKey)
 			if !ok {
-				return "", false
+				return "", false, nil
+			}
+			if names, ok := svc.(codeReader); ok {
+				return names.CodeOfErr(ctx, sessionID)
 			}
 			names, ok := svc.(ipeers.NameService)
 			if !ok {
-				return "", false
+				return "", false, nil
 			}
-			return names.CodeOf(ctx, sessionID)
+			code, ok := names.CodeOf(ctx, sessionID)
+			return code, ok, nil
 		},
 		Group: func(_ context.Context, sessionID string) (string, error) {
 			svc, ok := c.Registry.Get(team.NotifyGroupKey)
@@ -43,6 +47,11 @@ func newLabeler(c *core.Core) *notifylabel.Labeler {
 		},
 		Display: ipeers.PoolDisplayName,
 	})
+}
+
+// codeReader is the name service that can say a failed read (the peers module); any other only has CodeOf.
+type codeReader interface {
+	CodeOfErr(ctx context.Context, sessionID string) (string, bool, error)
 }
 
 // notifyLabelFor is the label a frame of the session carries, nil when there is nothing to say about the session (a cold

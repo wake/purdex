@@ -39,12 +39,12 @@ func (s *labelSources) sources() notifylabel.Sources {
 		}
 	}
 	return notifylabel.Sources{
-		Code: func(ctx context.Context, sid string) (string, bool) {
+		Code: func(ctx context.Context, sid string) (string, bool, error) {
 			wait(ctx)
 			if sid == modSID1 {
-				return "mei", true
+				return "mei", true, nil
 			}
-			return "", false
+			return "", false, nil
 		},
 		Group: func(ctx context.Context, sid string) (string, error) {
 			wait(ctx)

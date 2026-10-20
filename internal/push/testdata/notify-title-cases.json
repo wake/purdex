@@ -160,14 +160,34 @@
   "want": "Mei — hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh：ttttttttttttttttttttttttttttttttttttttttttttttttttttttttt・abcde…"
  },
  {
-  "case": "a name over the cap is normalised",
+  "case": "a long name is kept whole (it is only normalised)",
   "locale": "zh-TW",
   "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
   "group": "Purdex A team",
   "tmux": "aigora4",
   "host_label": "mlab",
   "thing": "",
-  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN… — Purdex A team"
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN — Purdex A team"
+ },
+ {
+  "case": "a long name leaves the group the room it has",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "gggggggggggggggggggggggggggggg",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "thing",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN — ggggggggggggggggg…"
+ },
+ {
+  "case": "a name too long for any group is the whole title",
+  "locale": "zh-TW",
+  "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+  "group": "Purdex A team",
+  "tmux": "aigora4",
+  "host_label": "mlab",
+  "thing": "thing",
+  "want": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN"
  },
  {
   "case": "control, bidi and newline characters in the group",

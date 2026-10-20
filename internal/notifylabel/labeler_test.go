@@ -27,19 +27,23 @@ type fakeSources struct {
 	display  map[string]string // code -> display name
 	mu       sync.Mutex
 	groupErr error
+	codeErr  error
 	reads    atomic.Int64
 	gate     chan struct{} // when set, a read waits for it
 }
 
 func (f *fakeSources) sources() Sources {
 	return Sources{
-		Code: func(ctx context.Context, sid string) (string, bool) {
+		Code: func(ctx context.Context, sid string) (string, bool, error) {
 			f.reads.Add(1)
 			f.wait(ctx)
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if f.codeErr != nil {
+				return "", false, f.codeErr
+			}
 			c, ok := f.codes[sid]
-			return c, ok
+			return c, ok, nil
 		},
 		Group: func(ctx context.Context, sid string) (string, error) {
 			f.wait(ctx)
@@ -341,4 +345,86 @@ func TestLabeler_StopDoesNotWaitForeverOnAStuckSource(t *testing.T) {
 		t.Fatal("Stop waited for a source that ignores its context")
 	}
 	close(stuck)
+}
+
+// A failed persona read keeps the name that was known (a busy names db must not blank the title for a ttl).
+func TestLabeler_CodeReadFailureKeepsTheKnownName(t *testing.T) {
+	f := baseSources()
+	l, clk := newTest(t, f)
+	l.Label("s1", "dev")
+	settle(t, l)
+	f.set(func() { f.codeErr = errors.New("db busy") })
+	clk.advance(31 * time.Second)
+	l.Label("s1", "dev")
+	settle(t, l)
+	if got := l.Label("s1", "dev"); got.Name != "Mei" {
+		t.Fatalf("label after a failed persona read = %+v", got)
+	}
+	f.set(func() { f.codeErr = nil; delete(f.codes, "s1") }) // the session really lost its persona
+	clk.advance(31 * time.Second)
+	l.Label("s1", "dev")
+	settle(t, l)
+	if got := l.Label("s1", "dev"); got.Name != "" {
+		t.Fatalf("a read that succeeded with no persona must clear the name: %+v", got)
+	}
+}
+
+// A session that is quiet for a long task is reread on its own, so the notification that ends it carries the current
+// name (spec §3.1): no Label call between the change and the sweep.
+func TestLabeler_SweepRereadsSessionsInUse(t *testing.T) {
+	f := baseSources()
+	l, clk := newTest(t, f)
+	l.Label("s1", "dev")
+	settle(t, l)
+	f.set(func() { f.groups["s1"] = "Other team"; f.codes["s1"] = "kai"; f.display["kai"] = "Kai" })
+	clk.advance(31 * time.Second)
+	l.sweep()
+	settle(t, l)
+	if got := l.Label("s1", "dev"); got != (Label{Name: "Kai", Group: "Other team", Tmux: "dev"}) {
+		t.Fatalf("the first label after a quiet stretch = %+v", got)
+	}
+}
+
+// An entry that was not asked for within the retention is dropped, and not reread.
+func TestLabeler_SweepDropsSessionsNotAskedFor(t *testing.T) {
+	f := baseSources()
+	l, clk := newTest(t, f)
+	l.Label("s1", "dev")
+	settle(t, l)
+	reads := f.reads.Load()
+	clk.advance(61 * time.Minute)
+	l.sweep()
+	settle(t, l)
+	if l.size() != 0 {
+		t.Fatalf("cache holds %d entries after the retention", l.size())
+	}
+	if f.reads.Load() != reads {
+		t.Fatal("an unused session was reread")
+	}
+}
+
+// A sweep that finds nothing stale reads nothing; one whose read is parked on I/O holds neither the sweep nor Label.
+func TestLabeler_SweepDoesIOOutsideTheLock(t *testing.T) {
+	f := baseSources()
+	f.codes["s2"], f.groups["s2"] = "mei", "T2"
+	l, clk := newTest(t, f)
+	l.Label("s1", "dev")
+	l.Label("s2", "dev")
+	settle(t, l)
+	l.sweep()
+	settle(t, l)
+	if got := f.reads.Load(); got != 2 {
+		t.Fatalf("a sweep of fresh entries read: %d", got)
+	}
+	f.gate = make(chan struct{})
+	clk.advance(31 * time.Second)
+	done := make(chan struct{})
+	go func() { l.sweep(); l.Label("s1", "dev"); l.Label("s3", "dev"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sweep or Label waited for a parked read")
+	}
+	close(f.gate)
+	settle(t, l)
 }

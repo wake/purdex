@@ -15,14 +15,15 @@ const (
 	readTimeout       = 5 * time.Second
 	queueSize         = 256
 	defaultStopWait   = 3 * time.Second
+	defaultRetention  = time.Hour
 )
 
 // Sources are where a read gets its facts. Every one may do I/O; the Labeler calls them only from its background
 // goroutine, never under a lock and never from Label.
 type Sources struct {
-	// Code is the persona code a session's name ends in (peers' NameService.CodeOf). It cannot say a read failed, so a
-	// failure reads as "no persona" until the next reread.
-	Code func(ctx context.Context, sessionID string) (string, bool)
+	// Code is the persona code a session's name ends in (peers' CodeOfErr). A session with no persona is ("", false, nil);
+	// an error keeps the last known code.
+	Code func(ctx context.Context, sessionID string) (string, bool, error)
 	// Group is the display name of the team the session sits in ("" = no team). An error keeps the last known value.
 	Group func(ctx context.Context, sessionID string) (string, error)
 	// Display is the display name of a persona code (peers.PoolDisplayName): a memory lookup, called on every Label so a
@@ -48,6 +49,9 @@ func WithTTL(d time.Duration) Option { return func(l *Labeler) { l.ttl = d } }
 // WithOverlay sets the memory-only source of the groups the App wrote back.
 func WithOverlay(o Overlay) Option { return func(l *Labeler) { l.overlay = o } }
 
+// WithRetention sets how long an entry that nobody asked for is kept (and reread by the sweep).
+func WithRetention(d time.Duration) Option { return func(l *Labeler) { l.retention = d } }
+
 // WithStopWait sets how long Stop waits for a read that is still running.
 func WithStopWait(d time.Duration) Option { return func(l *Labeler) { l.stopWait = d } }
 
@@ -57,7 +61,8 @@ func WithMaxEntries(n int) Option { return func(l *Labeler) { l.maxEntries = n }
 type entry struct {
 	code   string
 	group  string
-	readAt time.Time
+	readAt time.Time // when the sources were last read
+	usedAt time.Time // when Label last asked for the session
 }
 
 // Labeler works out the Label of a session from memory only. What it knows about a session (its persona code and its team)
@@ -70,6 +75,7 @@ type Labeler struct {
 	ttl        time.Duration
 	maxEntries int
 	stopWait   time.Duration
+	retention  time.Duration
 	overlay    Overlay
 
 	mu      sync.Mutex
@@ -85,7 +91,7 @@ type Labeler struct {
 
 // New returns a Labeler; Start runs its reader.
 func New(src Sources, opts ...Option) *Labeler {
-	l := &Labeler{src: src, now: time.Now, ttl: defaultTTL, maxEntries: defaultMaxEntries, stopWait: defaultStopWait,
+	l := &Labeler{src: src, now: time.Now, ttl: defaultTTL, maxEntries: defaultMaxEntries, stopWait: defaultStopWait, retention: defaultRetention,
 		cache: map[string]entry{}, pending: map[string]bool{}, queue: make(chan string, queueSize), done: make(chan struct{})}
 	for _, o := range opts {
 		o(l)
@@ -132,6 +138,10 @@ func (l *Labeler) Label(sessionID, sessionName string) Label {
 	}
 	l.mu.Lock()
 	e, ok := l.cache[sessionID]
+	if ok {
+		e.usedAt = l.now()
+		l.cache[sessionID] = e
+	}
 	if (!ok || l.now().Sub(e.readAt) > l.ttl) && !l.pending[sessionID] && l.started && !l.stopped {
 		select {
 		case l.queue <- sessionID:
@@ -154,12 +164,38 @@ func (l *Labeler) Label(sessionID, sessionName string) Label {
 
 func (l *Labeler) run() {
 	defer l.wg.Done()
+	tick := time.NewTicker(l.ttl)
+	defer tick.Stop()
 	for {
 		select {
 		case <-l.done:
 			return
+		case <-tick.C:
+			l.sweep()
 		case sid := <-l.queue:
 			l.read(sid)
+		}
+	}
+}
+
+// sweep keeps the entries in use current while nobody is asking: a session that has been asked for within the retention
+// and whose entry is older than the ttl is queued for a reread (so the notification that ends a long quiet task carries
+// today's name, not the one from its last event); an entry nobody asked for within the retention is dropped. It gathers
+// under the lock and reads after it, through the reader.
+func (l *Labeler) sweep() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	for sid, e := range l.cache {
+		switch {
+		case now.Sub(e.usedAt) > l.retention:
+			delete(l.cache, sid)
+		case now.Sub(e.readAt) > l.ttl && !l.pending[sid] && l.started && !l.stopped:
+			select {
+			case l.queue <- sid:
+				l.pending[sid] = true
+			default: // the reader is behind; the next sweep asks again
+			}
 		}
 	}
 }
@@ -176,9 +212,12 @@ func (l *Labeler) read(sid string) {
 		case <-ctx.Done():
 		}
 	}()
-	var code string
+	var (
+		code    string
+		codeErr error
+	)
 	if l.src.Code != nil {
-		code, _ = l.src.Code(ctx, sid)
+		code, _, codeErr = l.src.Code(ctx, sid)
 	}
 	group, groupErr := "", error(nil)
 	if l.src.Group != nil {
@@ -188,7 +227,13 @@ func (l *Labeler) read(sid string) {
 	defer l.mu.Unlock()
 	delete(l.pending, sid)
 	e := l.cache[sid]
-	e.code, e.readAt = code, l.now()
+	e.readAt = l.now()
+	if _, had := l.cache[sid]; !had {
+		e.usedAt = e.readAt
+	}
+	if codeErr == nil {
+		e.code = code
+	}
 	if groupErr == nil {
 		e.group = group
 	}

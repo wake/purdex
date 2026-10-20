@@ -27,7 +27,7 @@ func TestNotifyTitleFixture(t *testing.T) {
 	if err := json.Unmarshal(raw, &cases); err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) < 20 {
+	if len(cases) < 23 {
 		t.Fatalf("fixture has %d cases; it is shared with the SPA and must not shrink silently", len(cases))
 	}
 	for _, c := range cases {
