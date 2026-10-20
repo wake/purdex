@@ -33,9 +33,12 @@ export interface PoolCellModel {
   pool: PoolCellExtra | null
 }
 
-/** The pool host for a fleet host: by alias, a daemon host also by host id (a host known only by its config, by the daemon id the App verified). An empty alias matches nothing. */
-export function matchPoolHost(hosts: PoolHost[], v: Pick<FleetHostView, 'alias' | 'id' | 'kind' | 'daemonId'>): PoolHost | null {
-  return hosts.find((h) => (v.alias !== '' && h.alias === v.alias) || (v.kind === 'daemon' && (h.host_id === v.id || (!!v.daemonId && h.host_id === v.daemonId)))) ?? null
+/**
+ * The pool host for a fleet host: by alias, or a daemon host by the pool host its App host is the daemon of (`daemons`: wwd `host_id` → App host id, see `daemons.ts`).
+ * An empty alias matches nothing by alias.
+ */
+export function matchPoolHost(hosts: PoolHost[], v: Pick<FleetHostView, 'alias' | 'kind' | 'hostConfigId'>, daemons: Record<string, string>): PoolHost | null {
+  return hosts.find((h) => (v.alias !== '' && h.alias === v.alias) || (v.kind === 'daemon' && !!v.hostConfigId && daemons[h.host_id] === v.hostConfigId)) ?? null
 }
 
 /** The facts as the fleet's fast reading, which the cell and the card already draw. `zone` is a placeholder for `unknown`. */

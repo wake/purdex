@@ -18,15 +18,20 @@ const model = (ph: PoolHost | null, f = fleet(), over: Partial<PoolHostViewInput
   poolCellModel(f, poolHostView({ alias: 'mlab', pool: ph, fleet: f, fleetStale: false, poolLastOk: null, ...over }, NOW), ph)
 
 describe('matchPoolHost', () => {
-  const hosts = [poolHost(), poolHost({ alias: 'air26', host_id: 'h-air26' })]
-  it('by alias', () => expect(matchPoolHost(hosts, fleet({ alias: 'air26' }) as never)?.alias).toBe('air26'))
-  it('a daemon host also by host id', () => expect(matchPoolHost(hosts, fleet({ alias: '', id: 'h-air26' }) as never)?.alias).toBe('air26'))
-  it('a host known only by the App\'s config (no fleet snapshot) matches by the daemon id it verified', () => {
-    expect(matchPoolHost(hosts, { alias: '', id: 'cfg-1', kind: 'daemon', daemonId: 'h-air26' })?.alias).toBe('air26')
+  const hosts = [poolHost(), poolHost({ alias: 'air26', host_id: '0123456789abcdef' })]
+  const daemons = { '0123456789abcdef': 'cfg-air26' }
+  it('by alias', () => expect(matchPoolHost(hosts, fleet({ alias: 'air26' }) as never, {})?.alias).toBe('air26'))
+  it('a daemon host by the App host that is the daemon of the pool host, whatever the alias says', () => {
+    expect(matchPoolHost(hosts, { alias: 'other', kind: 'daemon', hostConfigId: 'cfg-air26' }, daemons)?.alias).toBe('air26')
+    expect(matchPoolHost(hosts, { alias: '', kind: 'daemon', hostConfigId: 'cfg-air26' }, daemons)?.alias).toBe('air26')
+  })
+  it('the old host id and daemon id rules no longer match (a Purdex host id is never the wwd one)', () => {
+    expect(matchPoolHost(hosts, fleet({ alias: '', id: '0123456789abcdef' }) as never, {})).toBeNull()
+    expect(matchPoolHost(hosts, { alias: '', kind: 'daemon', hostConfigId: 'cfg-1', daemonId: '0123456789abcdef' } as never, {})).toBeNull()
   })
   it('no match is null, and an empty alias never matches', () => {
-    expect(matchPoolHost(hosts, fleet({ alias: 'nope' }) as never)).toBeNull()
-    expect(matchPoolHost([poolHost({ alias: '' })], fleet({ alias: '' }) as never)).toBeNull()
+    expect(matchPoolHost(hosts, fleet({ alias: 'nope' }) as never, {})).toBeNull()
+    expect(matchPoolHost([poolHost({ alias: '' })], fleet({ alias: '' }) as never, {})).toBeNull()
   })
 })
 
