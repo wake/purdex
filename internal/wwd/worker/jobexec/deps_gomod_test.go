@@ -133,7 +133,7 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 	assert.Contains(t, line, "toolchain=local", "a snapshot's go.mod cannot make the unsandboxed go fetch and run another toolchain")
 	assert.Contains(t, line, "work=off", "no go.work of the snapshot is followed: it is not in the key and may point out of the workspace")
 	assert.Contains(t, line, "goproxy= ", "the task does not choose where the modules come from")
-	assert.Contains(t, line, "ssh= ","nothing else of the task's environment does: the download runs with the worker's credentials, outside the sandbox")
+	assert.Contains(t, line, "ssh= ", "nothing else of the task's environment does: the download runs with the worker's credentials, outside the sandbox")
 
 	r.prepare(t, e, "j_two")
 	assert.Equal(t, 1, r.downloads(t), "the second job had its modules cloned")
