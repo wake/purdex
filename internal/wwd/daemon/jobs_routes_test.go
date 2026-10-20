@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -44,9 +43,7 @@ func newJobHost(t *testing.T, alias string, peers ...PeerAddr) *jobHost {
 	require.NoError(t, err)
 
 	d := New(Options{HostID: alias + "-id", Alias: alias, Version: "v0", Token: testToken, Queue: q, Peers: peers})
-	dir, err := os.MkdirTemp("", "w") // short path: unix socket names are limited to ~104 bytes
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "w.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

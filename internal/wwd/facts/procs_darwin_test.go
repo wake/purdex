@@ -83,8 +83,13 @@ func TestProcReaderRealTable(t *testing.T) {
 	if id, ok := ctx.JobOf(child.PID); !ok || id != "j_smoke" {
 		t.Fatalf("job marker: %q %v", id, ok)
 	}
-	if _, ok := ctx.JobOf(os.Getpid()); ok {
-		t.Fatal("the test process has no marker")
+	// The test process has the mark its own environment carries: none normally, the job's when the test runs inside a wwd job.
+	wantSelf, wantOK := "", false
+	if _, id, ok := MarkFromEnv(os.Environ()); ok {
+		wantSelf, wantOK = id, true
+	}
+	if id, ok := ctx.JobOf(os.Getpid()); ok != wantOK || id != wantSelf {
+		t.Fatalf("the test process's own mark: got %q %v, want %q %v", id, ok, wantSelf, wantOK)
 	}
 	// the child carries a session id in its environment; only its ref comes back
 	if ref, ok := ctx.EnvSessionOf(child.PID); !ok || ref != sessionRef("7c1f2a9e-5b3d-4e68-9a0c-1d2e3f4a5b6c") {

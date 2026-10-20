@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -16,7 +17,14 @@ func startMarked(t *testing.T, mark ...string) int {
 	t.Helper()
 	pidFile := filepath.Join(t.TempDir(), "other-pid")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSweepHelper$")
-	cmd.Env = append(append(os.Environ(), "SWEEP_HELPER=child", "SWEEP_PIDFILE="+pidFile), mark...)
+	// The test itself may run inside a wwd job and carry that job's mark: the helper gets only the mark the test names.
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, MarkEnv+"=") && !strings.HasPrefix(kv, OriginEnv+"=") {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(append(env, "SWEEP_HELPER=child", "SWEEP_PIDFILE="+pidFile), mark...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

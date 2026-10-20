@@ -86,7 +86,7 @@ func TestSocketNeedsNoTokenAndHasSubmissionRoute(t *testing.T) {
 
 func TestListenBindsOnlyAllowedAddrs(t *testing.T) {
 	d := newTestDaemon(t)
-	sock := filepath.Join(t.TempDir(), "wwd.sock")
+	sock := filepath.Join(shortSockDir(t), "wwd.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	run, err := d.Listen(ctx, ListenSpec{Addrs: []string{"127.0.0.1"}, Port: 0, SocketPath: sock})
@@ -131,11 +131,7 @@ func TestListenBindsOnlyAllowedAddrs(t *testing.T) {
 // process has made at the path since the first.
 func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
 	d := newTestDaemon(t)
-	dir, err := os.MkdirTemp("", "w") // short: a unix socket path has a small limit
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "s")
 	run, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, Port: 0, SocketPath: sock})
 	if err != nil {
@@ -167,11 +163,7 @@ func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
 // A new process binds the path while the old one is still answering its last request (its listener is closed and the path is free):
 // the old Close, when it ends, does not take the new socket away.
 func TestRunningCloseDoesNotRemoveASocketBoundDuringTheShutdown(t *testing.T) {
-	dir, err := os.MkdirTemp("", "w")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "s")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -266,11 +258,7 @@ func TestListenDoesNotDeleteRegularFile(t *testing.T) {
 
 func TestListenRefusesLiveSocketAndReplacesStale(t *testing.T) {
 	d := newTestDaemon(t)
-	dir, err := os.MkdirTemp("", "w") // short path: unix socket names are limited to ~104 bytes
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "w.sock")
 	r1, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: sock})
 	if err != nil {
@@ -293,11 +281,7 @@ func TestListenRefusesLiveSocketAndReplacesStale(t *testing.T) {
 
 func TestListenFailsClosedOnAmbiguousDialError(t *testing.T) {
 	d := newTestDaemon(t)
-	dir, err := os.MkdirTemp("", "w")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "w.sock")
 	ln, _ := net.Listen("unix", sock)
 	ln.(*net.UnixListener).SetUnlinkOnClose(false)

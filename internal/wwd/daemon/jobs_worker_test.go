@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,9 +48,7 @@ func newLaneHost(t *testing.T, withClaimRoutes bool, edit ...func(*Options)) *la
 		e(&o)
 	}
 	d := New(o)
-	dir, err := os.MkdirTemp("", "w")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortSockDir(t)
 	sock := filepath.Join(dir, "w.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
