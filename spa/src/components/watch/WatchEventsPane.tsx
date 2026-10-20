@@ -1,26 +1,34 @@
-// spa/src/components/watch/WatchEventsPane.tsx — the 事件 tab of the watcher area (watcher area spec §5): the count line, the guardian
-// line, three rows of filter chips, and the events newest first with day separators. It only reads: no button here changes an
-// event (U3, U9) — the count goes down when the watcher marks them handled.
+// spa/src/components/watch/WatchEventsPane.tsx — the 事件 tab of the watcher area (monitoring tabs spec M23, M35, M37; plan MON-10c): one list of the pool hosts' alerts (`pool.alerts.v1`) and observations (`pool.observations.v1`), newest first
+// with day separators, a line of what is in progress, and three rows of filter chips. It only reads: no button here changes an event (M35); a "more" row is a link to that host's processes tab.
 //
-// Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the chip filters live in
-// `lib/watch/view-memory`, not in component state.
-import { useEffect, useMemo, useState } from 'react'
-import { ShieldCheck } from '@phosphor-icons/react'
+// Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the chip filters, the scroll and the observations it last read live in `lib/watch/view-memory`, not in component state.
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { LinkBreak, Power, Question } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../lib/module-registry'
-import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostLookResolver, hostLabel } from '../../lib/host-look'
-import { useWatchStatusStore, deriveGuardian } from '../../lib/watch/status-store'
-import { useWatchEventsStore, pendingCount } from '../../lib/watch/events-store'
-import { readWatchRow, modelOf } from '../../lib/watch/watch-row'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+import { resolveHostColors } from '../../lib/host-color'
+import { useAlertsStore } from '../../lib/pool/alerts-store'
+import { fetchObservations, type PoolObservation } from '../../lib/pool/observations-api'
+import { mergeObservations, alertRowsOf, observationRowsOf, filterEvents, groupByDay, liveCounts, type AlertRow, type EventFilters, type EventRow, type ObservationRow } from '../../lib/pool/events-model'
+import { usePoolStore } from '../../lib/pool/store'
+import { useMonitorHosts, type MonitorHost } from '../../lib/pool/use-monitor-hosts'
+import { errorTextKey } from '../../lib/pool/words'
+import { shortDuration } from '../../lib/watch/events-view'
+import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
+import { HostBadge } from '../HostBadge'
 import {
-  applyFilters, clock, groupByDay, mergeRows, shortDuration,
-  KIND_FILTERS, KIND_TONE, KNOWN_KINDS, KNOWN_LABELS, LABEL_TONE, STATUS_FILTERS,
-  type EventFilters, type EventRow,
-} from '../../lib/watch/events-view'
-import { readEventFilters, writeEventFilters } from '../../lib/watch/view-memory'
+  readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
+  type EventsObservations,
+} from '../../lib/watch/view-memory'
 
 type T = (k: string, p?: Record<string, string | number>) => string
+
+const OBSERVATIONS_CAPABILITY = 'pool.observations.v1'
+const OBSERVATIONS_WINDOW_MS = 24 * 60 * 60_000
+const OBSERVATIONS_POLL_MS = 60_000
+/** A host with more observations than one answer holds is read page by page; this many pages at most, so a flood cannot keep a read busy. */
+const OBSERVATIONS_PAGES = 5
 
 const CHIP = 'px-2.5 py-0.5 text-xs rounded-full border cursor-pointer transition-colors'
 const chipClass = (on: boolean): string => `${CHIP} ${on
@@ -42,59 +50,100 @@ function ChipRow<V extends string>({ testId, label, options, value, onPick }: {
   )
 }
 
-/** The kind's tag text, or the wire name of a kind a newer daemon sent. */
-const kindText = (t: T, kind: string, short: boolean): string =>
-  KNOWN_KINDS.includes(kind) ? t(`watch.events.kind.${kind}${short ? '_short' : ''}`) : kind
+const pad = (n: number): string => String(n).padStart(2, '0')
+const hhmm = (ms: number): string => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}` }
 
-function facts(t: T, e: EventRow['event']): string {
-  const parts: string[] = []
-  if (e.cwd) parts.push(e.cwd)
-  if (e.session) parts.push(e.session)
-  if (e.peakCores !== undefined) parts.push(t('watch.events.peak_cores', { n: e.peakCores.toFixed(1) }))
-  if (e.peakMb !== undefined) parts.push(t('watch.events.peak_mb', { n: Math.round(e.peakMb) }))
-  if (e.durationS !== undefined) parts.push(t('watch.events.duration', { t: shortDuration(e.durationS) }))
-  if (e.kind !== 'unmanaged_heavy' && e.detail) parts.push(e.detail)
-  if (e.slot) parts.push(t('watch.events.slot', { slot: e.slot }))
-  return parts.join('・')
+const SILENCE_LOOK = {
+  wwd_down: { Icon: LinkBreak, tone: 'text-status-warning-text', bar: 'bg-status-warning-text', key: 'watch.events.silence.wwd_down' },
+  host_down: { Icon: Power, tone: 'text-status-error-text', bar: 'bg-status-error-text', key: 'watch.events.silence.host_down' },
+  unknown: { Icon: Question, tone: 'text-text-muted', bar: 'bg-text-muted', key: 'watch.events.silence.unknown' },
+} as const
+
+const LEVEL_KEYS: Record<string, string> = { push: 'watch.events.level.push', digest: 'watch.events.level.digest', obs: 'watch.events.level.obs', watch: 'watch.events.level.watch' }
+/** Kinds the guardian's rules raise that have a name of their own; any other kind stays as the word. */
+const ALERT_KINDS = ['pressure_watch', 'pressure_danger', 'swap_growth']
+
+/** What a source daemon's read of one host's observations came to: its list (`truncated`: the pages ran out before the 24 hours did), or the reason there is none. */
+type ObsRead = { list: readonly PoolObservation[]; truncated: boolean } | { forbidden: true } | { failed: true }
+
+async function readObservationsOf(source: string, alias: string, since: string): Promise<ObsRead> {
+  try {
+    const pages: PoolObservation[][] = []
+    let until: string | undefined
+    let truncated = false
+    for (let i = 0; i < OBSERVATIONS_PAGES; i++) {
+      const p = await fetchObservations(source, alias, until ? { since, until } : { since })
+      pages.push(p.observations)
+      truncated = p.known && p.truncated && p.nextUntil !== null
+      if (!truncated) break
+      until = p.nextUntil ?? undefined
+    }
+    return { list: mergeObservations(...pages), truncated }
+  } catch (e) {
+    return (e as { poolError?: { code?: string } })?.poolError?.code === 'forbidden' ? { forbidden: true } : { failed: true }
+  }
 }
 
-function EventItem({ row, hostName, noGuardian }: { row: EventRow; hostName: string; noGuardian: boolean }) {
-  const t = useI18nStore((s) => s.t)
-  const e = row.event
-  const pending = e.status === 'pending'
-  const label = e.label
-  const line = e.kind === 'pressure_high' ? t('watch.events.pressure_line', { host: hostName }) : e.command
-  const factText = facts(t, e)
-  return (
-    <li data-testid="watch-event" data-event-id={e.id} data-status={e.status} className="border-b border-border-subtle/50 py-2.5">
-      <div className="flex items-center gap-2 text-xs">
-        <span data-testid="event-time" className="tabular-nums text-text-muted">{clock(e.at)}</span>
-        <span data-testid="event-kind" className={`rounded border border-current px-1.5 text-[10px] leading-4 ${KIND_TONE[e.kind] ?? 'text-text-secondary'}`}>
-          {kindText(t, e.kind, false)}
-        </span>
-        {label && (
-          <span data-testid="event-label" className={`rounded border border-current px-1.5 text-[10px] leading-4 ${LABEL_TONE[label] ?? 'text-text-secondary'}`}>
-            {KNOWN_LABELS.includes(label) ? t(`watch.events.label.${label}`) : label}
-          </span>
-        )}
-        <span data-testid="event-host" className="text-text-secondary">{hostName}</span>
-        <span data-testid="event-status" className={`ml-auto ${pending ? 'text-status-warning-text' : 'text-text-muted'}`}>
-          {pending ? t(noGuardian ? 'watch.events.status.pending_no_guardian' : 'watch.events.status.pending') : t('watch.events.status.handled')}
-        </span>
-      </div>
-      {line && <div data-testid="event-command" className={`mt-1 text-sm text-text-primary ${e.kind === 'pressure_high' ? '' : 'font-mono'} break-all`}>{line}</div>}
-      {factText && <div data-testid="event-facts" className="mt-0.5 text-xs text-text-muted break-all">{factText}</div>}
-      {!pending && e.note && (
-        <div data-testid="event-note" className="mt-1 flex items-start gap-1.5 text-xs text-text-secondary">
-          <ShieldCheck size={13} weight="fill" className="mt-px shrink-0 text-status-success-text" />
-          <span className="min-w-0 break-words">{e.note}</span>
-        </div>
-      )}
-    </li>
-  )
+/**
+ * What the memory still holds true for `source` (null: nothing is being read) and these hosts: the answers of another source, or of an alias that now names another `host_id`, are dropped, so they are never shown as the current ones.
+ * The same memory comes back when nothing differs.
+ */
+function reconcileObservations(mem: EventsObservations, source: string | null, hosts: readonly { hostId: string; alias: string }[]): EventsObservations {
+  const owners = Object.fromEntries(hosts.map((h) => [h.alias, h.hostId]))
+  const sameSource = mem.source === source
+  const keep = (alias: string): boolean => sameSource && mem.owners[alias] === owners[alias]
+  const only = (list: readonly string[]): string[] => list.filter(keep)
+  const byHost = Object.fromEntries(Object.entries(mem.byHost).filter(([a]) => keep(a)))
+  const same = sameSource && Object.keys(byHost).length === Object.keys(mem.byHost).length && only(mem.failed).length === mem.failed.length
+    && only(mem.truncated).length === mem.truncated.length && only(mem.forbidden).length === mem.forbidden.length && Object.keys(owners).every((a) => mem.owners[a] === owners[a])
+  if (same) return mem
+  return { source, owners, byHost, failed: only(mem.failed), truncated: only(mem.truncated), forbidden: only(mem.forbidden) }
 }
 
-/** The wall clock, moved on every minute: the day separators (今天／昨天) follow midnight without any event arriving. */
+/**
+ * The observations of every pool host over the last 24 hours, while the tab is shown: on mount and every 60 s, through the pool's source daemon, only when it announces `pool.observations.v1`. The last answers are kept in the view memory,
+ * tied to the source and to each alias's `host_id` they were read for. Each host is read and committed on its own, so one that hangs holds back only itself; a host whose read failed keeps its last list but is named as unreadable (`failed`),
+ * a 403 is per host (`forbidden`), and one whose pages ran out is marked `truncated`.
+ */
+function useObservations(hosts: readonly { hostId: string; alias: string }[]): EventsObservations {
+  const source = usePoolStore((s) => s.sourceHostId)
+  const announces = useNexHostStore((s) => source !== null && s.byHost[source]?.daemonCapabilities?.includes(OBSERVATIONS_CAPABILITY) === true)
+  const want = announces ? source : null
+  const [state, setState] = useState<EventsObservations>(readEventsObservations)
+  const key = hosts.map((h) => `${h.alias}\0${h.hostId}`).join('\u0001')
+  const current = useMemo(() => (key === '' ? [] : key.split('\u0001').map((p) => { const [alias, hostId] = p.split('\0'); return { alias, hostId } })), [key])
+  // What is shown is the memory as it holds for this source and these hosts, worked out here; the effect below brings the stored memory to the same.
+  const shown = useMemo(() => reconcileObservations(state, want, current), [state, want, current])
+  useEffect(() => {
+    writeEventsObservations(reconcileObservations(readEventsObservations(), want, current))
+    if (want === null) return
+    let live = true
+    // A read that takes longer than the beat must not land over a newer one of the same host: only the newest started read of a host writes.
+    const seq = new Map<string, number>()
+    const readHost = async (alias: string): Promise<void> => {
+      const mine = (seq.get(alias) ?? 0) + 1
+      seq.set(alias, mine)
+      const r = await readObservationsOf(want, alias, new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString())
+      if (!live || seq.get(alias) !== mine) return
+      const prev = reconcileObservations(readEventsObservations(), want, current)
+      const without = (list: readonly string[]): string[] => list.filter((a) => a !== alias)
+      const next: EventsObservations = 'list' in r
+        ? { ...prev, forbidden: without(prev.forbidden), byHost: { ...prev.byHost, [alias]: r.list }, failed: without(prev.failed), truncated: r.truncated ? [...without(prev.truncated), alias] : without(prev.truncated) }
+        : 'forbidden' in r
+          ? { ...prev, forbidden: [...without(prev.forbidden), alias], failed: without(prev.failed) }
+          : { ...prev, forbidden: without(prev.forbidden), failed: [...without(prev.failed), alias] }
+      writeEventsObservations(next)
+      setState(next)
+    }
+    const readAll = (): void => { for (const h of current) void readHost(h.alias) }
+    readAll()
+    const id = setInterval(readAll, OBSERVATIONS_POLL_MS)
+    return () => { live = false; clearInterval(id) }
+  }, [want, current])
+  return shown
+}
+
+/** The wall clock, moved on every minute: the day separators and the "in progress for" times follow it without any event arriving. */
 function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -104,16 +153,64 @@ function useMinuteClock(): number {
   return now
 }
 
+function obsDetail(t: T, o: ObservationRow['obs']): string {
+  return [
+    `${o.session}（${o.via}）`,
+    t('watch.events.obs.cpu_seconds', { n: Math.round(o.cpuSeconds) }),
+    t('watch.events.obs.cores', { n: o.cpuCores.toFixed(1) }),
+    t('watch.events.obs.mem', { n: Math.round(o.memPeakMb) }),
+    t('watch.events.obs.procs', { n: o.procsPeak }),
+  ].join('・')
+}
+
+function EventItem({ row, host, now }: { row: AlertRow | ObservationRow; host: MonitorHost | undefined; now: number }) {
+  const t = useI18nStore((s) => s.t)
+  const silence = row.source === 'alert' && row.silence !== undefined ? SILENCE_LOOK[row.silence] : null
+  const Icon = silence?.Icon
+  const kindWord = row.source === 'obs' ? t('watch.events.obs.kind')
+    : silence ? t(silence.key)
+    : ALERT_KINDS.includes(row.kind) ? t(`watch.events.alert_kind.${row.kind}`)
+    : row.kind
+  const kindTone = silence?.tone ?? 'text-text-secondary'
+  const levelKey = LEVEL_KEYS[row.level]
+  const colors = host ? resolveHostColors({ colors: host.look.colors, color: host.look.color }, 'console') : null
+  const endTone = row.live ? (row.level === 'push' ? 'text-status-error-text' : 'text-status-warning-text') : 'text-text-muted'
+  const endText = row.live
+    ? t('watch.events.live_for', { t: shortDuration((now - row.at) / 1000) })
+    : t(row.source === 'alert' && row.silence !== undefined ? 'watch.events.recovered' : 'watch.events.ended', { time: hhmm(row.endAt ?? row.at) })
+  return (
+    <li
+      data-testid="watch-event" data-event-id={row.id} data-source={row.source} data-live={row.live ? 'true' : 'false'} data-silence={row.source === 'alert' ? row.silence : undefined}
+      className="relative border-b border-border-subtle/50 py-2.5 pl-3"
+    >
+      {silence && <span data-testid="event-bar" className={`absolute inset-y-1 left-0 w-0.5 rounded ${silence.bar}`} />}
+      <div className="flex items-center gap-2 text-xs">
+        <span data-testid="event-time" className="tabular-nums text-text-muted">{hhmm(row.at)}</span>
+        {levelKey && <span data-testid="event-level" className="rounded border border-current px-1.5 text-[10px] leading-4 text-text-secondary">{t(levelKey)}</span>}
+        <span data-testid="event-kind" className={`flex items-center gap-1 rounded border border-current px-1.5 text-[10px] leading-4 ${kindTone}`}>
+          {Icon && <Icon size={11} weight="bold" />}
+          {kindWord}
+        </span>
+        <span data-testid="event-host" className="flex items-center gap-1.5 text-text-secondary">
+          <HostBadge colors={colors} icon={host?.look.icon} iconWeight={host?.look.iconWeight} box={16} inset={2} radius={4} lineColor="host" />
+          {row.alias}
+        </span>
+        <span data-testid="event-end" className={`ml-auto ${endTone}`}>{endText}</span>
+      </div>
+      <div data-testid="event-title" className="mt-1 text-sm text-text-primary break-all">
+        {row.source === 'obs' ? t('watch.events.obs.title', { sig: row.title }) : row.title}
+      </div>
+      {row.source === 'obs' && <div data-testid="event-detail" className="mt-0.5 text-xs text-text-muted break-all">{obsDetail(t, row.obs)}</div>}
+    </li>
+  )
+}
+
 export function WatchEventsPane(_props: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
-  const byHost = useWatchEventsStore((s) => s.byHost)
-  const known = useWatchEventsStore((s) => s.known)
-  const unhandled = useWatchEventsStore((s) => s.unhandled)
-  const statusByHost = useWatchStatusStore((s) => s.byHost)
-  const hosts = useHostStore((s) => s.hosts)
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const lookOf = useHostLookResolver()
-  const nameOf = (id: string): string => hostLabel(id, lookOf(id))
+  const hosts = useMonitorHosts()
+  const alerts = useAlertsStore((s) => s.byHost)
+  const observations = useObservations(hosts)
+  const now = useMinuteClock()
 
   // Chip choices outlive the pane (view memory); the state only makes the pane redraw.
   const [filters, setFilters] = useState<EventFilters>(readEventFilters)
@@ -122,92 +219,101 @@ export function WatchEventsPane(_props: PaneRendererProps) {
     writeEventFilters(next)
     setFilters(next)
   }
-
-  const guardian = useMemo(() => deriveGuardian(statusByHost), [statusByHost])
-  const holder = guardian.appHostId
-  const [read, setRead] = useState<{ host: string; model?: string } | null>(null)
-  useEffect(() => {
-    if (!holder) return
-    let live = true
-    void readWatchRow(holder).then((row) => { if (live) setRead({ host: holder, model: row ? modelOf(row.agentCommand) : undefined }) })
-    return () => { live = false }
-  }, [holder])
-  const model = holder && read?.host === holder ? read.model : undefined
-
-  const pending = pendingCount(unhandled) // the daemons' own counts: a list holds at most 500 rows
-  const hasGuardian = guardian.state === 'awake' || guardian.state === 'resting'
-  const rows = useMemo(() => mergeRows(byHost, hostOrder), [byHost, hostOrder])
-
-  // A remembered host that is gone from the App means no filter on hosts.
-  const sources = useMemo(() => hostOrder.filter((id) => byHost[id]?.kind === 'ok'), [hostOrder, byHost])
+  // A remembered host that is gone from the pool means no filter on hosts.
   const effective: EventFilters = useMemo(
-    () => (filters.host !== 'all' && !sources.includes(filters.host) ? { ...filters, host: 'all' } : filters),
-    [filters, sources],
+    () => (filters.host !== 'all' && !hosts.some((h) => h.hostId === filters.host) ? { ...filters, host: 'all' } : filters),
+    [filters, hosts],
   )
-  const shown = useMemo(() => applyFilters(rows, effective), [rows, effective])
-  const now = useMinuteClock()
+
+  const eventHosts = useMemo(() => hosts.map((h) => ({ hostId: h.hostId, alias: h.alias })), [hosts])
+  const all = useMemo<EventRow[]>(
+    () => [...alertRowsOf(alerts, eventHosts), ...observationRowsOf(observations.byHost, eventHosts)],
+    [alerts, observations.byHost, eventHosts],
+  )
+  const counts = useMemo(() => liveCounts(all), [all])
+  const shown = useMemo(() => filterEvents(all, effective), [all, effective])
   const groups = useMemo(() => groupByDay(shown, now), [shown, now])
+  const hostById = useMemo(() => new Map(hosts.map((h) => [h.hostId, h])), [hosts])
 
-  // A host that carried the watch module and cannot be read now: offline, or it answered with an error.
-  const unreadable = known.filter((id) => hosts[id] && !(byHost[id]?.kind === 'ok'))
+  // The scroll is kept as it moves and put back when the pane comes up again.
+  const scroller = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (scroller.current) scroller.current.scrollTop = readEventsScroll() }, [])
 
-  const guardianText = hasGuardian
-    ? [
-        t('watch.events.guardian_on', { host: guardian.reachable && guardian.appHostId ? nameOf(guardian.appHostId) : (guardian.alias ?? guardian.hostId ?? '') }),
-        guardian.state === 'awake' ? t('watch.events.guardian_awake') : t('watch.events.guardian_resting'),
-        guardian.mode,
-        model,
-      ].filter(Boolean).join('・')
-    : t('watch.events.guardian_none')
+  const unreadable = hosts.filter((h) => alerts[h.alias]?.kind === 'error')
+  const reasonOf = (alias: string): string => {
+    const e = alerts[alias]
+    const key = e?.kind === 'error' ? errorTextKey(e.code) : null
+    return key ? t(key) : e?.kind === 'error' ? e.code : ''
+  }
 
   return (
-    <div data-testid="watch-events-pane" className="h-full overflow-y-auto p-6">
+    <div ref={scroller} onScroll={(e) => writeEventsScroll(e.currentTarget.scrollTop)} data-testid="watch-events-pane" className="h-full overflow-y-auto p-6">
       <h2 className="text-lg font-semibold text-text-primary">{t('watch.pane.events')}</h2>
-      <p data-testid="events-count" className={`mt-1 text-sm ${pending > 0 ? 'text-status-warning-text' : 'text-text-secondary'}`}>
-        {pending > 0 ? t('watch.events.count_pending', { n: pending }) : t('watch.events.count_none')}
-      </p>
-      <p data-testid="events-guardian" className="mt-0.5 flex items-center gap-1.5 text-xs text-text-muted">
-        <ShieldCheck size={13} weight={hasGuardian ? 'fill' : 'regular'} className={hasGuardian ? 'text-status-success-text' : ''} />
-        <span>{guardianText}</span>
+      <p data-testid="events-live-line" className="mt-1 text-sm text-text-secondary">
+        <span data-testid="events-live-push" className={counts.push > 0 ? 'text-status-error-text' : ''}>{t('watch.events.live_push', { n: counts.push })}</span>
+        {'・'}
+        <span>{t('watch.events.live_other', { n: counts.other })}</span>
       </p>
 
-      {unreadable.map((id) => (
-        <p key={id} data-testid={`events-offline-${id}`} className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-status-warning-text">
-          {t('watch.events.offline', { host: nameOf(id) })}
+      {unreadable.map((h) => (
+        <p key={h.hostId} data-testid={`events-alerts-unreadable-${h.alias}`} className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-status-warning-text">
+          {t('watch.events.alerts_unreadable', { alias: h.alias, reason: reasonOf(h.alias) })}
         </p>
       ))}
+      {observations.failed.filter((a) => hosts.some((h) => h.alias === a)).map((a) => (
+        <p key={a} data-testid={`events-obs-unreadable-${a}`} className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-status-warning-text">
+          {t('watch.events.obs_unreadable', { alias: a })}
+        </p>
+      ))}
+      {observations.forbidden.length > 0 && (
+        <p data-testid="events-obs-forbidden" className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-text-muted">{t('watch.events.obs_forbidden')}</p>
+      )}
 
       <div className="mt-4 flex flex-col gap-2">
         <ChipRow
           testId="filter-host" label={t('watch.events.filter.host')} value={effective.host}
-          options={[{ value: 'all', label: t('watch.events.filter.all') }, ...sources.map((id) => ({ value: id, label: nameOf(id) }))]}
+          options={[{ value: 'all', label: t('watch.events.filter.all') }, ...hosts.map((h) => ({ value: h.hostId, label: h.alias }))]}
           onPick={(v) => pick({ host: v })}
         />
         <ChipRow
-          testId="filter-kind" label={t('watch.events.filter.kind')} value={effective.kind}
-          options={KIND_FILTERS.map((k) => ({ value: k, label: k === 'all' ? t('watch.events.filter.all') : kindText(t, k, true) }))}
-          onPick={(v) => pick({ kind: v })}
+          testId="filter-source" label={t('watch.events.filter.source')} value={effective.source}
+          options={[
+            { value: 'all', label: t('watch.events.filter.all') },
+            { value: 'alert', label: t('watch.events.filter.source_alert') },
+            { value: 'obs', label: t('watch.events.filter.source_obs') },
+          ]}
+          onPick={(v) => pick({ source: v })}
         />
         <ChipRow
           testId="filter-status" label={t('watch.events.filter.status')} value={effective.status}
-          options={STATUS_FILTERS.map((s) => ({ value: s, label: t(`watch.events.filter.status_${s}`) }))}
+          options={[
+            { value: 'all', label: t('watch.events.filter.status_all') },
+            { value: 'live', label: t('watch.events.filter.status_live') },
+            { value: 'done', label: t('watch.events.filter.status_done') },
+          ]}
           onPick={(v) => pick({ status: v })}
         />
       </div>
 
       {groups.length === 0 ? (
-        <p data-testid="events-empty" className="mt-8 text-sm text-text-muted">{rows.length === 0 ? t('watch.events.empty') : t('watch.events.empty_filtered')}</p>
+        <p data-testid="events-empty" className="mt-8 text-sm text-text-muted">{all.length === 0 ? t('watch.events.empty') : t('watch.events.empty_filtered')}</p>
       ) : (
         <div className="mt-4">
           {groups.map((g) => (
-            <section key={g.day} data-testid="event-day" data-day={g.day}>
+            <section key={g.date} data-testid="event-day" data-day={g.label}>
               <h3 className="mt-3 mb-1 text-xs font-medium text-text-muted">
-                {g.day === 'today' ? t('watch.events.today') : g.day === 'yesterday' ? t('watch.events.yesterday') : g.day}
+                {g.label === 'today' ? t('watch.events.today_date', { date: g.date }) : g.label === 'yesterday' ? t('watch.events.yesterday_date', { date: g.date }) : g.date}
               </h3>
               <ul>
-                {g.rows.map((r) => (
-                  <EventItem key={`${r.hostId}\0${r.event.id}`} row={r} hostName={nameOf(r.hostId)} noGuardian={!hasGuardian} />
-                ))}
+                {g.rows.map((r) => (r.more === true
+                  ? (
+                    <li key={r.id} data-testid={`event-more-${r.hostId}`} className="py-2 text-xs text-text-muted">
+                      <button type="button" onClick={() => openWatchArea({ poolHost: { hostId: r.hostId }, sub: 'procs' })} className="cursor-pointer text-left text-accent hover:underline">
+                        {t(observations.truncated.includes(r.alias) ? 'watch.events.more_at_least' : 'watch.events.more', { alias: r.alias, n: r.n })}
+                      </button>
+                    </li>
+                  )
+                  : <EventItem key={r.id} row={r} host={hostById.get(r.hostId)} now={now} />))}
               </ul>
             </section>
           ))}

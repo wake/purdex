@@ -1,9 +1,10 @@
 // spa/src/lib/watch/view-memory.ts — what a watcher host tab remembers across a tab switch (CLAUDE.md tab-hosted checklist). The pane
 // unmounts when the reader leaves it (keepAliveCount 0), so a choice kept in `useState` would reset; it lives here, per pool host
 // (`host_id`), in module memory (not persisted: a restart starts at the default). The host page keeps its sub-tab, its range and the scroll of each sub-tab here (MON-6f-1);
-// the queue block's sub-tab and the 歷史 class switch are the old gate's, until MON-12. The 事件 tab's three chip filters are here too (W5e).
+// the queue block's sub-tab and the 歷史 class switch are the old gate's, until MON-12. The 事件 tab's three chip filters, its scroll and the observations it last read are here too (W5e, MON-10c).
 import type { HostRange } from '../pool/host-history'
-import { DEFAULT_FILTERS, type EventFilters } from './events-view'
+import type { EventFilters } from '../pool/events-model'
+import type { PoolObservation } from '../pool/observations-api'
 
 /** The host page's sub-tabs (M41–M46): 監控, 狀態, 行程, 設定. */
 export type HostSubTab = 'monitor' | 'status' | 'procs' | 'settings'
@@ -20,7 +21,24 @@ export type HistoryClass = 'heavy' | 'light'
 const historyClasses = new Map<string, HistoryClass>()
 
 /** The 事件 tab's three chip filters (one set: the tab exists once). */
-let eventFilters: EventFilters = DEFAULT_FILTERS
+export const DEFAULT_EVENT_FILTERS: EventFilters = { host: 'all', source: 'all', status: 'all' }
+let eventFilters: EventFilters = DEFAULT_EVENT_FILTERS
+let eventsScroll = 0
+/** What the 事件 tab last read of the observations (by pool alias), so coming back shows it at once; `forbidden`: a device token cannot read them. */
+export interface EventsObservations {
+  /** The daemon these were read through (null: nothing is being read), and the `host_id` each alias had then: an answer is only the current one for the same source and the same host. */
+  source: string | null
+  owners: Record<string, string>
+  byHost: Record<string, readonly PoolObservation[]>
+  /** Pool aliases a device token was refused (403) for. */
+  forbidden: readonly string[]
+  /** Pool aliases whose last read failed (their list is the older one). */
+  failed: readonly string[]
+  /** Pool aliases whose 24 hours did not fit in the pages read. */
+  truncated: readonly string[]
+}
+const NO_OBSERVATIONS: EventsObservations = { source: null, owners: {}, byHost: {}, forbidden: [], failed: [], truncated: [] }
+let eventsObservations: EventsObservations = NO_OBSERVATIONS
 
 export const readHostTab = (hostId: string): HostSubTab => hostTabs.get(hostId) ?? 'monitor'
 export const writeHostTab = (hostId: string, tab: HostSubTab): void => { hostTabs.set(hostId, tab) }
@@ -36,6 +54,11 @@ export const readHistoryClass = (fleetHostId: string): HistoryClass => historyCl
 export const writeHistoryClass = (fleetHostId: string, c: HistoryClass): void => { historyClasses.set(fleetHostId, c) }
 export const readEventFilters = (): EventFilters => eventFilters
 export const writeEventFilters = (f: EventFilters): void => { eventFilters = f }
+export const readEventsScroll = (): number => eventsScroll
+export const writeEventsScroll = (top: number): void => { eventsScroll = top }
+export const readEventsObservations = (): EventsObservations => eventsObservations
+export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
-  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_FILTERS
+  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
+  eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }

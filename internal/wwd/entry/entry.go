@@ -8,6 +8,7 @@
 package entry
 
 import (
+	"path"
 	"sort"
 	"strings"
 
@@ -75,10 +76,15 @@ func Match(cwd string, argv []string) Result {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	// Tasks of one shape (a development task and a merge task that run the same command) are told apart by class: a command typed by
-	// hand is the lowest one, and the first name among equals.
+	// Of the tasks the command is, the order is: the one that spells the whole tree out (for `./...`), then the one whose directory is the
+	// deepest, then the lowest class, then the first name. A task is only a candidate when its directory holds the file or the working
+	// directory (matchTask), so the deepest is the most specific: the task of ui/ over the root task for a file under ui/ (#3813). Class
+	// tells apart tasks of one directory that run the same command (a development task and a merge task): a command typed by hand is the
+	// lowest one (#3711). A deeper task of a higher class still wins over a shallower one of a lower class: they are not the same
+	// command, only the first is for those files.
 	var found *Result
 	foundLiteral := false // the task spells the command's whole-tree pattern out (go-all runs `./...`)
+	foundDepth := 0
 	whole := hasWholeTree(canon)
 	for _, n := range names {
 		args, ok := matchTask(root, cwd, canon, m.Tasks[n])
@@ -86,13 +92,15 @@ func Match(cwd string, argv []string) Result {
 			continue
 		}
 		literal := whole && spellsWholeTree(m.Tasks[n])
+		depth := cwdDepth(m.Tasks[n].Cwd)
 		better := found == nil ||
 			(literal && !foundLiteral) || // the whole tree is the task that says `./...`, whatever the class of one that takes any package list
-			(literal == foundLiteral && classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class))
+			(literal == foundLiteral && (depth > foundDepth ||
+				(depth == foundDepth && classRank(m.Tasks[n].Class) < classRank(m.Tasks[found.Task].Class))))
 		if !better {
 			continue
 		}
-		foundLiteral = literal
+		foundLiteral, foundDepth = literal, depth
 		// a pattern that expands is not for the fast lane, even when a count limit would let the arguments in
 		queued := !m.Tasks[n].Local.Permits(len(args)) || (m.Tasks[n].Args == manifest.ArgsPackages && anyRecursive(args))
 		found = &Result{Action: ActionRewrite, Task: n, Args: args, Queued: queued}
@@ -116,6 +124,15 @@ func Match(cwd string, argv []string) Result {
 		r.Action = ActionAdvise
 	}
 	return r
+}
+
+// cwdDepth is how many directories deep a task's cwd (relative to the manifest root) is: "" and "." are the root, 0.
+func cwdDepth(cwd string) int {
+	c := path.Clean(cwd)
+	if c == "." || c == "/" || c == "" {
+		return 0
+	}
+	return strings.Count(strings.Trim(c, "/"), "/") + 1
 }
 
 // classRank orders the job classes: a development task before a merge task before a release one (a task's class is the most a

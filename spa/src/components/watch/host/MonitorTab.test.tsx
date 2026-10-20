@@ -22,6 +22,10 @@ import type { PoolJob } from '../../../lib/pool/jobs-types'
 import darwinJson from '../../../lib/pool/__fixtures__/facts_darwin.json'
 import hostsJson from '../../../lib/pool/__fixtures__/pool_hosts_response.json'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { openWatchArea } from '../../../features/workspace/lib/open-watch-area'
+import { useAlertsStore } from '../../../lib/pool/alerts-store'
+import type { PoolAlert } from '../../../lib/pool/alerts-api'
+import { readEventFilters, clearViewMemory } from '../../../lib/watch/view-memory'
 
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 const darwin = parseFacts(darwinJson)!
@@ -60,6 +64,7 @@ beforeEach(() => {
   useJobsStore.getState().reset()
   usePoolStore.getState().reset()
   usePoolStore.setState({ hosts: [poolHost()] })
+  clearViewMemory()
 })
 afterEach(() => cleanup())
 
@@ -233,5 +238,72 @@ describe('jobs | CPU top 5 | memory top 5 (M41-3)', () => {
     mount(withProcs())
     expect(screen.getByTestId('monitor-work')).toHaveTextContent(t('watch.host.monitor.work'))
     expect(screen.getByTestId('monitor-work')).toHaveTextContent(t('watch.host.monitor.procs_every'))
+  })
+})
+
+describe('the alert badge (M41-1, MON-10c)', () => {
+  const alertOf = (over: Partial<PoolAlert> & { key: string }): PoolAlert => ({ kind: 'orphans', level: 'digest', since: NOW - 60_000, last: NOW, clearedAt: null, detail: over.key, ...over })
+  const put = (alias: string, alerts: PoolAlert[]) => useAlertsStore.setState((s) => ({ byHost: { ...s.byHost, [alias]: { kind: 'ok', known: true, alerts, at: NOW } } }))
+  beforeEach(() => { useAlertsStore.setState({ byHost: {}, source: null }); vi.mocked(openWatchArea).mockClear() })
+
+  it('is not there when the host has no alert in progress', () => {
+    put('mlab', [alertOf({ key: 'old', clearedAt: NOW - 1000 })])
+    mount(okHost())
+    expect(screen.queryByTestId('monitor-alerts')).toBeNull()
+  })
+
+  it('says how many are in progress, at the right end of the gauge row, and lists their titles', () => {
+    put('mlab', [alertOf({ key: 'a', detail: '孤兒行程' }), alertOf({ key: 'b', detail: '磁碟快滿' }), alertOf({ key: 'c', clearedAt: NOW - 1000 })])
+    mount(okHost())
+    const badge = within(screen.getByTestId('monitor-gauges')).getByTestId('monitor-alerts')
+    expect(badge).toHaveTextContent(t('watch.host.monitor.alerts', { n: 2 }))
+    expect(badge.getAttribute('title')).toContain('孤兒行程')
+    expect(badge.getAttribute('title')).toContain('磁碟快滿')
+    expect(screen.getByTestId('monitor-gauges').lastElementChild).toBe(badge)
+    expect(badge).toHaveClass('text-status-warning-text')
+  })
+
+  it('counts a watch-level alert in progress, and stays yellow without a push one', () => {
+    put('mlab', [alertOf({ key: 'a', level: 'watch', kind: 'pressure_watch' })])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
+    expect(screen.getByTestId('monitor-alerts')).toHaveClass('text-status-warning-text')
+  })
+
+  it('is red when one of them is push level', () => {
+    put('mlab', [alertOf({ key: 'a' }), alertOf({ key: 'b', level: 'push' })])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveClass('text-status-error-text')
+  })
+
+  it('counts a silence about this host that other hosts\' lists hold, once (the events tab\'s attribution)', () => {
+    usePoolStore.setState({ hosts: [poolHost(), poolHost({ alias: 'mserv', host_id: 'h-mserv' }), poolHost({ alias: 'air26', host_id: 'h-air26' })] })
+    const s = alertOf({ key: 'silence:mlab', kind: 'silence', silence: 'host_down', level: 'push' })
+    put('mserv', [s])
+    put('air26', [s])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
+  })
+
+  it('keeps the badge while the pool cannot be read (its host list is empty, the page stays on a kept host)', () => {
+    usePoolStore.setState({ hosts: [] })
+    put('mlab', [alertOf({ key: 'a' })])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
+  })
+
+  it('does not count an alert that belongs to another host', () => {
+    usePoolStore.setState({ hosts: [poolHost(), poolHost({ alias: 'mserv', host_id: 'h-mserv' })] })
+    put('mserv', [alertOf({ key: 'orphans' })])
+    mount(okHost())
+    expect(screen.queryByTestId('monitor-alerts')).toBeNull()
+  })
+
+  it('opens the events tab filtered to this host when pressed', () => {
+    put('mlab', [alertOf({ key: 'a' })])
+    mount(okHost())
+    fireEvent.click(screen.getByTestId('monitor-alerts'))
+    expect(readEventFilters()).toEqual({ host: 'h-mlab', source: 'all', status: 'all' })
+    expect(openWatchArea).toHaveBeenCalledWith({ tab: 'events' })
   })
 })
