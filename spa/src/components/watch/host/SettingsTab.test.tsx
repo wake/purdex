@@ -96,6 +96,22 @@ describe('the sections and their order', () => {
   })
 })
 
+describe('changing host in place (codex attack)', () => {
+  it('the next host starts from its own picks and its own guardian section, never the previous host\'s', async () => {
+    setPool([poolHost('air26'), poolHost('mlab')])
+    const { rerender } = render(<SettingsTab host={monitorHost('air26', CFG)} />)
+    await act(async () => {})
+    fireEvent.click(screen.getByTestId('pool-pause-allow-release'))
+    fireEvent.click(screen.getByRole('button', { name: t('watch.set.guardian') }))
+    await act(async () => {})
+    expect(screen.getByTestId('watch-set-guardian')).toBeInTheDocument()
+    rerender(<SettingsTab host={monitorHost('mlab', CFG)} />)
+    await act(async () => {})
+    expect(screen.getByTestId('pool-pause-allow-release')).not.toBeChecked()
+    expect(screen.queryByTestId('watch-set-guardian')).toBeNull() // collapsed again: the old section was unmounted, not reused
+  })
+})
+
 describe('the worker settings inside the tab (M46, M47)', () => {
   it('turning 接工作 off while air26 runs 1 job asks first and says that it finishes', async () => {
     setPool([poolHost('air26')]) // the fixture runs one light job

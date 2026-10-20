@@ -15,7 +15,8 @@ export function SettingsTab({ host }: { host: MonitorHost }) {
   // The guardian settings are the App host's: a disconnected one cannot be read or written.
   const offline = useHostStore((s) => daemon !== null && s.runtime[daemon]?.status !== 'connected')
   return (
-    <div data-testid="settings-tab">
+    // Keyed by the pool host: a pane can change host in place, and what the sections hold in state (picks, the guardian's row and revision) is the previous host's.
+    <div key={host.hostId} data-testid="settings-tab">
       <WorkerSettings alias={host.alias} />
       <WorkerExceptions alias={host.alias} />
       {daemon !== null && (
