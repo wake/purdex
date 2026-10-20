@@ -24,6 +24,7 @@ import {
   taskGroupsToWire,
   hostsToWire,
   identityOfSync,
+  groupKeyToWire,
   layoutToWire,
   makeWireResolver,
   mergeAliases,
@@ -331,7 +332,10 @@ export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>, ident
   const record: Record<string, unknown> = {}
   for (const id of order) {
     const stripped = stripSizes(tabs[id].layout)
-    record[id] = { ...tabs[id], layout: identity === undefined ? stripped : layoutToWire(stripped, identity) }
+    const entry: Record<string, unknown> = { ...tabs[id], layout: identity === undefined ? stripped : layoutToWire(stripped, identity) }
+    // The team host inside the placement is a host reference like the panes' (task groups spec §4.2).
+    if (identity !== undefined && typeof entry.group === 'string') entry.group = groupKeyToWire(entry.group, identity)
+    record[id] = entry
   }
   return { tabs: {}, ...(project({ order, tabs: record }, PROJECTIONS.tabs) as object) } as TabsPayload
 }
