@@ -15,7 +15,7 @@ import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 
 const fetchObservations = vi.hoisted(() => vi.fn())
-vi.mock('../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../lib/pool/observations-api')>()), fetchObservations }))
+vi.mock('../../lib/pool/observations-api', async (orig) => ({ ...((await orig()) as Record<string, unknown>), fetchObservations }))
 vi.mock('../../lib/pool/use-monitor-hosts', () => ({
   useMonitorHosts: () => [
     { hostId: 'h-mlab', alias: 'mlab', look: { indicator: 'ring' } },

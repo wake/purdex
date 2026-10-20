@@ -285,6 +285,13 @@ describe('the alert badge (M41-1, MON-10c)', () => {
     expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
   })
 
+  it('keeps the badge while the pool cannot be read (its host list is empty, the page stays on a kept host)', () => {
+    usePoolStore.setState({ hosts: [] })
+    put('mlab', [alertOf({ key: 'a' })])
+    mount(okHost())
+    expect(screen.getByTestId('monitor-alerts')).toHaveTextContent(t('watch.host.monitor.alerts', { n: 1 }))
+  })
+
   it('does not count an alert that belongs to another host', () => {
     usePoolStore.setState({ hosts: [poolHost(), poolHost({ alias: 'mserv', host_id: 'h-mserv' })] })
     put('mserv', [alertOf({ key: 'orphans' })])

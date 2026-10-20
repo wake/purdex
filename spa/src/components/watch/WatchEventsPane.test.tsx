@@ -16,7 +16,7 @@ import type { MonitorHost } from '../../lib/pool/use-monitor-hosts'
 const fetchObservations = vi.hoisted(() => vi.fn())
 const openWatchArea = vi.hoisted(() => vi.fn())
 const monitorHosts = vi.hoisted(() => ({ list: [] as unknown[] }))
-vi.mock('../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../lib/pool/observations-api')>()), fetchObservations }))
+vi.mock('../../lib/pool/observations-api', async (orig) => ({ ...((await orig()) as Record<string, unknown>), fetchObservations }))
 vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea }))
 vi.mock('../../lib/pool/use-monitor-hosts', () => ({ useMonitorHosts: () => monitorHosts.list }))
 
@@ -181,6 +181,19 @@ describe('the events tab (MON-10c)', () => {
     unmount()
     await act(async () => { await vi.advanceTimersByTimeAsync(180_000) })
     expect(fetchObservations).toHaveBeenCalledTimes(4)
+  })
+
+  it('an older read that finishes after a newer one does not put its answer over it', async () => {
+    let releaseOld: (v: unknown) => void = () => {}
+    fetchObservations.mockImplementationOnce(() => new Promise((r) => { releaseOld = r })) // mlab, first beat: slow
+    fetchObservations.mockImplementationOnce(async () => page([])) // mserv, first beat
+    pane()
+    await flush()
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('new')] : []))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(rows().map((r) => r.getAttribute('data-event-id'))).toEqual(['h-mserv|new'])
+    await act(async () => { releaseOld(page([obs('stale')])); await vi.advanceTimersByTimeAsync(0) })
+    expect(rows().map((r) => r.getAttribute('data-event-id'))).toEqual(['h-mserv|new'])
   })
 
   it('does not read the observations from a source that does not announce pool.observations.v1', async () => {

@@ -91,10 +91,13 @@ function useObservations(aliases: readonly string[]): EventsObservations {
   useEffect(() => {
     if (source === null || !announces) return
     let live = true
+    // A read that takes longer than the beat must not land over a newer one: only the newest started read writes.
+    let seq = 0
     const readAll = async (): Promise<void> => {
+      const mine = ++seq
       const since = new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString()
       const reads = await Promise.all(key.split('\0').filter(Boolean).map((a) => readObservationsOf(source, a, since)))
-      if (!live) return
+      if (!live || mine !== seq) return
       const prev = readEventsObservations()
       const byHost: Record<string, readonly PoolObservation[]> = { ...prev.byHost }
       let forbidden = false
@@ -150,7 +153,7 @@ function EventItem({ row, host, now }: { row: AlertRow | ObservationRow; host: M
     : t(row.source === 'alert' && row.silence !== undefined ? 'watch.events.recovered' : 'watch.events.ended', { time: hhmm(row.endAt ?? row.at) })
   return (
     <li
-      data-testid="watch-event" data-event-id={row.id} data-source={row.source} data-live={row.live ? 'true' : 'false'} data-silence={silence ? row.silence : undefined}
+      data-testid="watch-event" data-event-id={row.id} data-source={row.source} data-live={row.live ? 'true' : 'false'} data-silence={row.source === 'alert' ? row.silence : undefined}
       className="relative border-b border-border-subtle/50 py-2.5 pl-3"
     >
       {silence && <span data-testid="event-bar" className={`absolute inset-y-1 left-0 w-0.5 rounded ${silence.bar}`} />}

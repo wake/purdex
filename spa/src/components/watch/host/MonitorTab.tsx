@@ -56,8 +56,13 @@ export function MonitorTab({ host, range, now }: { host: MonitorHost; range: Hos
   const alertsByHost = useAlertsStore((s) => s.byHost)
   const poolHosts = usePoolStore((s) => s.hosts)
   const liveAlerts = useMemo(
-    () => alertRowsOf(alertsByHost, poolHosts.map((h) => ({ hostId: h.host_id, alias: h.alias }))).filter((r) => r.hostId === host.hostId && r.live),
-    [alertsByHost, poolHosts, host.hostId],
+    () => {
+      // The pool's list is empty while the pool cannot be read, though the page stays open on a kept host: this host is always among them.
+      const known = poolHosts.map((h) => ({ hostId: h.host_id, alias: h.alias }))
+      const all = known.some((h) => h.hostId === host.hostId) ? known : [...known, { hostId: host.hostId, alias: host.alias }]
+      return alertRowsOf(alertsByHost, all).filter((r) => r.hostId === host.hostId && r.live)
+    },
+    [alertsByHost, poolHosts, host.hostId, host.alias],
   )
   const openAlerts = (): void => {
     writeEventFilters({ host: host.hostId, source: 'all', status: 'all' })
