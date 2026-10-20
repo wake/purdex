@@ -190,6 +190,18 @@ describe('TabBar — the task-group view (TG-4b)', () => {
       fireEvent.pointerUp(document)
     })
 
+    it('an unpinned lead (in the one zone with the others) is locked as well', () => {
+      const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm')]
+      seed(list)
+      const { container } = bar(list, true, { locked: new Set(['lead']), onDrop: vi.fn() })
+      press(container.querySelector('[data-tab-id="lead"]') as HTMLElement)
+      expect(dnd.started).toBe(0)
+      fireEvent.pointerUp(document)
+      press(container.querySelector('[data-tab-id="ma"]') as HTMLElement)
+      expect(dnd.started).toBe(1)
+      fireEvent.pointerUp(document)
+    })
+
     it('a drop is handed to onDrop(active, over) and never to onReorderTabs', () => {
       const list = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm')]
       seed(list)
