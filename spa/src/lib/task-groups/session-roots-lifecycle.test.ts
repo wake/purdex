@@ -42,11 +42,26 @@ beforeEach(() => {
   supportQuota('h1')
   stop = startSessionRootsLifecycle()
 })
-afterEach(() => { stop(); setRootsInterest(false, []); vi.useRealTimers() })
+afterEach(() => { stop(); setRootsInterest(false, []); setRootsInterest(false, [], 'personal'); vi.useRealTimers() })
 
 describe('reading', () => {
   it('reads nothing while the view is off', () => {
     setRootsInterest(false, [want('h1', 'S1')])
+    vi.advanceTimersByTime(60_000)
+    expect(readFirstPage).not.toHaveBeenCalled()
+  })
+
+  it('two askers do not clobber each other: the sidebar going off leaves the personal panel\'s session wanted (TG-5b)', () => {
+    setRootsInterest(true, [want('h1', 'S1')], 'personal')
+    setRootsInterest(true, [want('h1', 'S9')])
+    setRootsInterest(false, [])
+    readFirstPage.mockClear()
+    setRead('h1', [q('S2', 'S2')]) // lists neither: S1 is still wanted, so one debounced re-read follows
+    vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS)
+    expect(readFirstPage).toHaveBeenCalledTimes(1)
+    setRootsInterest(false, [], 'personal')
+    readFirstPage.mockClear()
+    setRead('h1', [])
     vi.advanceTimersByTime(60_000)
     expect(readFirstPage).not.toHaveBeenCalled()
   })

@@ -24,14 +24,15 @@ export const ROOT_PRUNE_SETTLE_MS = 1000
 
 export interface WantedSession { hostId: string; agentSessionId: string }
 
-let enabled = false
-let wanted: readonly WantedSession[] = []
+/** Who asks: the sidebar's task-group view, and the personal panel of the active tab (task groups spec §4.5). Each source owns its own entry; the reads serve the union. */
+export type RootsSource = 'sidebar' | 'personal'
+const interests = new Map<RootsSource, readonly WantedSession[]>()
 let evaluate: (() => void) | null = null
 
-/** The task-group view says what it needs: while `on`, the wanted sessions' roots are read. Takes effect at once when the lifecycle runs, else when it starts. */
-export function setRootsInterest(on: boolean, sessions: readonly WantedSession[]): void {
-  enabled = on
-  wanted = sessions
+/** A source says what it needs: while `on`, the wanted sessions' roots are read. Takes effect at once when the lifecycle runs, else when it starts. */
+export function setRootsInterest(on: boolean, sessions: readonly WantedSession[], source: RootsSource = 'sidebar'): void {
+  if (on) interests.set(source, sessions)
+  else interests.delete(source)
   evaluate?.()
 }
 
@@ -87,7 +88,8 @@ export function startSessionRootsLifecycle(): () => void {
     if (timer !== null) { clearTimeout(timer); timer = null }
     const reads = useRelayQuotaStore.getState().reads
     for (const hostId of [...asked.keys()]) if (reads[hostId] === undefined) asked.delete(hostId) // a new epoch of the host: what was asked in the old one is asked again if the new read misses it
-    if (!enabled) return
+    const wanted = [...interests.values()].flat()
+    if (interests.size === 0) return
     const unread = new Set<string>()
     for (const w of wanted) if (rootsSupported(w.hostId) && reads[w.hostId] === undefined) unread.add(w.hostId)
     for (const hostId of [...unread].sort()) readFirstPage(hostId).catch(() => {}) // a failure lands in the store as the host's read
