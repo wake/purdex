@@ -482,10 +482,15 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   not claimed, an adhoc command is refused with `disk_low`); `pdx wwd worker on --disk-min-gb N` or `PUT /v1/worker` changes it live and
   `wwd.db` keeps it. It replaces the pdx gate's `[gate.admission] disk_min_gb`, which goes with the gate. Hosts without a gate (air19,
   mserv) have the 10 GB floor from host schema 9 on. Roll back across host schema 9 is the backup restore above (an older wwd refuses the file).
-  `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache: over it, and with no job using it, it is emptied before the next
-  job (a cold build is what every job paid before); over twice the bound while jobs hold it, a new job gets no shared cache and builds in its
-  own workspace. The size is looked at at most every 2 minutes. If the cache is ever doubted, remove `<deps_root>/gocache`: the worker
-  makes it again. Go's own trim removes entries unused for 5 days; it does not bound the size (air26's old shared `gobuild` reached 142 GB).
+  `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache, and `[worker] gocache_prune_hours` (default 24, 1 to 8760) is how long
+  an entry may go unused: Go touches an entry's file time when it uses it (at most once an hour), so the worker removes the entries whose time is
+  older than that plus that hour (an age pass, at most once an hour). Over the bound it trims from the oldest entry down to 80% of it. Neither needs the cache to
+  be free (Go's own trim removes files while other go processes run; a removed entry is a miss and is compiled again). Only a cache that could
+  not be trimmed under its bound is emptied, when no job holds it (a cold build is what every job paid before); over twice the bound while jobs
+  hold it and it cannot be trimmed, a new job gets no shared cache and builds in its own workspace. The size is looked at, and trimmed, at most
+  every 2 minutes, in one walk of the entries (about 0.4 s for 40,000 files on mlab once the directory is warm, 3 s the first time). Go's
+  `trim.txt` and `README` are left alone. If the cache is ever doubted, remove `<deps_root>/gocache`: the worker makes it again. Go's own trim
+  removes entries unused for 5 days; it does not bound the size (air26's old shared `gobuild` reached 142 GB).
 * **Disk**: `[worker] deps_keep` (default 2, 1 to 50) is how many installed sets are kept; each is a whole `node_modules`/`vendor` tree
   (purdex's SPA is several hundred MB), and the download cache comes on top. Set it to 1 on a host short of disk. The oldest set is removed
   when a newer one is filed; removing `deps_root` by hand is safe (the next job installs again).

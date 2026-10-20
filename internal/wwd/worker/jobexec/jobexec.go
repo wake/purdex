@@ -80,6 +80,8 @@ type Config struct {
 	// GoCacheMaxMB bounds the shared build cache of the go tasks (one per Go version, under DepsDir/gocache): over it, and with no job using
 	// it, it is emptied before the next job (10240 when zero). See gocache.go.
 	GoCacheMaxMB int
+	// GoCachePruneHours: an entry of the shared build cache that has not been used for this long is removed (24 when zero). See gocache.go.
+	GoCachePruneHours int
 }
 
 // Exec implements runner.Exec.
