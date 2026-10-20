@@ -10,14 +10,18 @@ export interface GroupBarDrag {
   locked: ReadonlySet<string>
   onDrop: (activeId: string, overId: string) => void
   canDrop: (activeId: string, overId: string) => boolean
+  blockOf: (tabId: string) => string
 }
 
 export function useGroupBarDrag(groupRange: string[] | null): GroupBarDrag | undefined {
   const selected = useGroupViewStore((s) => s.selectedGroup)
   return useMemo(() => {
     if (groupRange === null || selected === null) return undefined
+    const ctx = currentGroupOrderCtx()
     return {
-      locked: barLockedTabs(selected, currentGroupOrderCtx()),
+      locked: barLockedTabs(selected, ctx),
+      // the tabs of one team seat move as one block (a seat's tabs share the seat's session id)
+      blockOf: (tabId) => ctx.index.seatByTabId.get(tabId)?.seat.session.session_id ?? tabId,
       onDrop: (activeId, overId) => applyReorder(decideBarDrop(selected, activeId, overId, currentGroupOrderCtx())),
       canDrop: (activeId, overId) => decideBarDrop(selected, activeId, overId, currentGroupOrderCtx()).kind !== 'ignore',
     }

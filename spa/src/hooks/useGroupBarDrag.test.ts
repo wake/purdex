@@ -45,6 +45,13 @@ describe('useGroupBarDrag', () => {
     expect(result.current!.canDrop(c.id, 'not-in-the-group')).toBe(false)
   })
 
+  it('blockOf: a tab is its own block', () => {
+    const a = mk({ createdAt: 1 })
+    useTabStore.setState({ tabs: { [a.id]: a }, tabOrder: [a.id], activeTabId: null })
+    const { result } = renderHook(() => useGroupBarDrag([a.id]))
+    expect(result.current!.blockOf(a.id)).toBe(a.id)
+  })
+
   it('a drop that changes nothing writes nothing', () => {
     const a = mk({ createdAt: 1 }), b = mk({ createdAt: 2 })
     useTabStore.setState({ tabs: Object.fromEntries([a, b].map((t) => [t.id, t])), tabOrder: [a.id, b.id], activeTabId: null })

@@ -51,9 +51,9 @@ function seed(all: Tab[]) {
   })
 }
 
-type Drag = { locked: ReadonlySet<string>; onDrop: (a: string, o: string) => void; canDrop?: (a: string, o: string) => boolean }
+type Drag = { locked: ReadonlySet<string>; onDrop: (a: string, o: string) => void; canDrop?: (a: string, o: string) => boolean; blockOf?: (id: string) => string }
 function bar(tabs: Tab[], flat: boolean, drag?: Drag) {
-  const groupDrag = drag && { canDrop: () => true, ...drag }
+  const groupDrag = drag && { canDrop: () => true, blockOf: (id: string) => id, ...drag }
   const onReorderTabs = vi.fn()
   const utils = render(
     <TeamDisplayProvider>
