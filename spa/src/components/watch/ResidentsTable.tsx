@@ -3,10 +3,10 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PoolResident } from '../../lib/pool/types'
 
-export function ResidentsTable({ residents }: { residents: PoolResident[] }) {
+export function ResidentsTable({ residents, offline = false }: { residents: PoolResident[]; offline?: boolean }) {
   const t = useI18nStore((s) => s.t)
   return (
-    <div data-testid="residents" className="min-w-0 mt-6">
+    <div data-testid="residents" className="min-w-0">
       <div className="text-xs text-text-secondary mb-1">{t('watch.host.residents')}</div>
       <table className="w-full border-collapse text-xs">
         <thead>
@@ -18,11 +18,11 @@ export function ResidentsTable({ residents }: { residents: PoolResident[] }) {
           </tr>
         </thead>
         <tbody>
-          {residents.length === 0 ? (
-            <tr><td colSpan={4} className="py-3 text-text-muted">{t('fleet.no_data')}</td></tr>
+          {offline || residents.length === 0 ? (
+            <tr><td colSpan={4} className="py-3 text-text-muted">{offline ? t('watch.host.offline_no_data') : t('fleet.no_data')}</td></tr>
           ) : residents.map((r) => (
             <tr key={`${r.session}-${r.kind}`} data-testid={`resident-${r.session}-${r.kind}`}>
-              <td className="py-1 pr-3 border-b border-border-subtle/50 font-mono text-text-primary">{r.session}</td>
+              <td className="py-1 pr-3 border-b border-border-subtle/50 font-mono text-text-primary">{r.session === 'orphan' ? t('watch.host.owner.orphan') : r.session}</td>
               <td className="py-1 pr-3 border-b border-border-subtle/50 font-mono text-text-primary">{r.kind}</td>
               <td className="py-1 pr-3 border-b border-border-subtle/50 tabular-nums text-text-secondary text-right">{r.count}</td>
               <td className="py-1 border-b border-border-subtle/50 tabular-nums text-text-secondary text-right">{`${r.mem_mb.toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`}</td>

@@ -59,19 +59,19 @@ beforeEach(() => {
 afterEach(() => { clearViewMemory(); clearWatchDrafts() })
 
 describe('設定 across tab switches', () => {
-  it('keeps a half-typed prompt and a half-typed number when the reader switches away and back', async () => {
+  it('keeps a half-typed prompt and a half-typed path when the reader switches away and back', async () => {
     const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
     fireEvent.click(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.settings') }))
     await waitFor(() => { openGuardian(); expect(screen.getByTestId('watch-set-start_prompt')).toBeInTheDocument() })
     fireEvent.change(screen.getByTestId('watch-set-start_prompt'), { target: { value: 'half a prompt' } })
-    fireEvent.change(screen.getByTestId('watch-set-y_mb'), { target: { value: '20' } })
+    fireEvent.change(screen.getByTestId('watch-set-workdir'), { target: { value: '~/half' } })
 
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('watch-set-start_prompt')).toBeNull() // really unmounted, not hidden
 
     rerender(<TabContent activeTab={hostTab} allTabs={all} />)
     await waitFor(() => { openGuardian(); expect(screen.getByTestId('watch-set-start_prompt')).toHaveValue('half a prompt') })
-    expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('20')
-    expect(screen.getByTestId('watch-set-t_s')).toHaveValue('60') // an untouched field shows the stored value
+    expect(screen.getByTestId('watch-set-workdir')).toHaveValue('~/half')
+    expect(screen.getByTestId('watch-set-patrol_idle_min')).toHaveValue('120') // an untouched field shows the stored value
   }, 30_000)
 })
