@@ -109,7 +109,7 @@ export function loadProcHistory(source: string, alias: string, hostId: string, n
     } catch (e) { out = failure(e) }
     // A different ask started, or the page left, while this one was out: it owns the memory now, whatever this one found.
     if (m.gen !== mine) return m.load
-    if (m.inFlight?.promise === promise) m.inFlight = null
+    if (m.inFlight?.key === key) m.inFlight = null
     if (out === 'ok') { m.snaps = merge(m.snaps, thin(records), now); m.loadedAt = now }
     m.load = out
     notify(m)
