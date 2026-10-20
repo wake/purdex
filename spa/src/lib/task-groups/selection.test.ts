@@ -88,6 +88,16 @@ describe('the selection subscriber — workspace view', () => {
   })
 })
 
+describe('the selection subscriber — the watcher area in the workspace view', () => {
+  it('a watcher-area active tab records no workspace either', () => {
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    useWorkspaceStore.setState({ workspaces: [{ id: 'watch', name: 'Watch', tabs: ['watch-jobs'], activeTabId: null, moduleConfig: {} }, { id: 'w1', name: 'W1', tabs: ['t1'], activeTabId: null, moduleConfig: {} }] } as never)
+    useTabStore.getState().setActiveTab('t1')
+    useTabStore.getState().setActiveTab('watch-jobs')
+    expect(view().lastByView.workspace).toBe('w1')
+  })
+})
+
 describe('shouldResync', () => {
   it('is the single predicate: today only a change of the active tab', () => {
     const s = useTabStore.getState()
