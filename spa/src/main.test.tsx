@@ -19,6 +19,8 @@ vi.mock('./stores/useNexHostStore', async (importOriginal) => ({
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
 vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
+// The pool hosts' look copy waits for the pool and the fleet; the boot-order tests below control when it returns.
+vi.mock('./lib/pool/pool-look-migration', () => ({ bootPoolLooks: vi.fn(() => Promise.resolve()) }))
 vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
@@ -141,5 +143,36 @@ describe('boot', () => {
     await flush()
     expect(startProfileSync).toHaveBeenCalledTimes(1)
     expect(order).toEqual(['migration', 'startProfileSync (marker 1)'])
+  })
+  // Monitoring tabs MON-2b (A3): the pool hosts' look copy runs after the host-look migration and before Profile Sync, so the first
+  // `settings` build already holds what it copied.
+  it('starts Profile Sync only after the pool hosts look copy returned, which itself runs after the host-look migration', async () => {
+    vi.resetModules()
+    const { startProfileSync } = await import('./lib/profile/start')
+    const { bootPoolLooks } = await import('./lib/pool/pool-look-migration')
+    const { usePoolHostsStore } = await import('./stores/usePoolHostsStore')
+    const { STORAGE_KEYS } = await import('./lib/storage')
+    localStorage.removeItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)
+    vi.mocked(startProfileSync).mockClear()
+    vi.mocked(bootPoolLooks).mockClear()
+    const order: string[] = []
+    let release!: () => void
+    vi.mocked(bootPoolLooks).mockImplementation(
+      () => new Promise<void>((resolve) => { order.push(`bootPoolLooks (host-look marker ${localStorage.getItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)})`); release = () => { usePoolHostsStore.setState({ order: ['82b11c521df16c12'] }); resolve() } }),
+    )
+    vi.mocked(startProfileSync).mockImplementation(() => {
+      order.push(`startProfileSync (copied ${usePoolHostsStore.getState().order.length})`)
+      return () => {}
+    })
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+    }
+    await import('./main')
+    await flush()
+    expect(bootPoolLooks).toHaveBeenCalledTimes(1)
+    expect(startProfileSync).not.toHaveBeenCalled()
+    release()
+    await flush()
+    expect(order).toEqual(['bootPoolLooks (host-look marker 1)', 'startProfileSync (copied 1)'])
   })
 })
