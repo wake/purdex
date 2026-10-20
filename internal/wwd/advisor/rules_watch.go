@@ -61,7 +61,8 @@ const (
 )
 
 // PressureWatch is "pressure watch" (level watch): every sample of the last 60 s is a pressure sample, or the host went from calm into
-// pressure at least twice in the last 30 minutes. No swap condition. Once raised it clears after 10 minutes with no pressure sample.
+// pressure at least twice in the last 30 minutes, and there was a pressure sample in the last 10 minutes (the line the clear uses). No swap
+// condition. Once raised it clears after 10 minutes with no pressure sample.
 type PressureWatch struct{}
 
 func (PressureWatch) Kind() wire.AlertKind { return wire.AlertPressureWatch }
@@ -74,11 +75,9 @@ func (PressureWatch) Eval(in Input) (Verdict, error) {
 	recs := in.Recent(in.Now.Add(-watchEntryWindow))
 	if in.Raised != nil && in.Raised(v.Key) {
 		from := in.Now.Add(-watchClear)
-		for _, f := range recs {
-			if _, pressure, _ := pressureState(f); pressure && !f.At.Before(from) {
-				v.Holds, v.Detail = true, "記憶體壓力仍在（最近 10 分鐘內有壓力樣本）"
-				return v, nil
-			}
+		if pressureSince(recs, from) {
+			v.Holds, v.Detail = true, "記憶體壓力仍在（最近 10 分鐘內有壓力樣本）"
+			return v, nil
 		}
 		// it clears only on a window that was read and calm from end to end: calm samples among holes prove nothing about the holes
 		if !calmOver(recs, from, in.Now, func(f wire.Facts) bool { _, pressure, _ := pressureState(f); return pressure }) {
@@ -90,10 +89,24 @@ func (PressureWatch) Eval(in Input) (Verdict, error) {
 		v.Holds, v.Detail = true, fmt.Sprintf("記憶體壓力已持續 %d 秒", int(watchSpan.Seconds()))
 		return v, nil
 	}
-	if n := entriesInto(recs); n >= watchEntries {
+	// The entries raise it only while there is pressure to speak of: the same line as the clear, a pressure sample within watchClear. Without
+	// this the entries that raised it were still in the 30-minute window when the clear came (ten calm minutes), and the next round raised it
+	// again, and woke the watcher once more for every end of pressure (#3850). A host that was calm for longer than that is not in trouble now.
+	if n := entriesInto(recs); n >= watchEntries && pressureSince(recs, in.Now.Add(-watchClear)) {
 		v.Holds, v.Detail = true, fmt.Sprintf("30 分鐘內 %d 次進入記憶體壓力", n)
 	}
 	return v, nil
+}
+
+// pressureSince says whether any of recs, at or after from, is a pressure sample: what keeps a raised pressure_watch and what lets the entries
+// raise it.
+func pressureSince(recs []wire.Facts, from time.Time) bool {
+	for _, f := range recs {
+		if _, pressure, _ := pressureState(f); pressure && !f.At.Before(from) {
+			return true
+		}
+	}
+	return false
 }
 
 // minuteOfPressure says whether the samples of the last watchSpan are all pressure samples with no hole between them, the newest being now's.
