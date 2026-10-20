@@ -218,15 +218,15 @@ func TestCommandSignatureSeesThroughTheClaudeCodeWrapper(t *testing.T) {
 		argv []string
 		want string
 	}{
-		"a bare command":              {ccWrap(`'go test ./...'`), "go test"},
-		"a quoted program path":       {ccWrap(`''"'"'/Users/wake/Workspace/wake/purdex/bin/pdx'"'"' test go-all'`), "pdx test go-all"},
-		"cd then the command":         {ccWrap(`'cd /x && git status --short'`), "git status"},
-		"a quote escaped as '\\''":    {ccWrap(`'cd /x && grep -rn '\''a && b'\'' src | wc -l'`), "grep"},
-		"a newline between commands":  {ccWrap("'cd /x\npnpm vitest run a.test.ts'"), "pnpm vitest run"},
-		"a && inside quotes is data":  {ccWrap(`'echo "a && go test" && true'`), "echo"},
-		"the wrapper only":            {ccWrap(`''`), "zsh"},
-		"no eval: as before":          {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, ":"},
-		"plain zsh -c still works":    {[]string{"zsh", "-c", "cd /x && swift build"}, "swift build"},
+		"a bare command":             {ccWrap(`'go test ./...'`), "go test"},
+		"a quoted program path":      {ccWrap(`''"'"'/Users/wake/Workspace/wake/purdex/bin/pdx'"'"' test go-all'`), "pdx test go-all"},
+		"cd then the command":        {ccWrap(`'cd /x && git status --short'`), "git status"},
+		"a quote escaped as '\\''":   {ccWrap(`'cd /x && grep -rn '\''a && b'\'' src | wc -l'`), "grep"},
+		"a newline between commands": {ccWrap("'cd /x\npnpm vitest run a.test.ts'"), "pnpm vitest run"},
+		"a && inside quotes is data": {ccWrap(`'echo "a && go test" && true'`), "echo"},
+		"the wrapper only":           {ccWrap(`''`), "zsh"},
+		"no eval: as before":         {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, ":"},
+		"plain zsh -c still works":   {[]string{"zsh", "-c", "cd /x && swift build"}, "swift build"},
 	} {
 		if got := CommandSignature(c.argv); got != c.want {
 			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)
