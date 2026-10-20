@@ -1,8 +1,8 @@
 // spa/src/lib/pool/parse.ts — the trust boundary of the pool wire. A malformed host row is dropped whole; malformed facts make
 // that host's facts null (nothing is invented); optional #3478 fields that do not parse are left out; a malformed envelope is null.
 import {
-  ZONES,
-  type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolFactsHistory, type PoolHost, type PoolLoad,
+  LIVENESS, ZONES,
+  type FactsWorker, type HeadroomReasons, type PoolDisk, type PoolException, type PoolFacts, type PoolFactsHistory, type PoolHost, type PoolLiveness, type PoolLoad,
   type PoolOwner, type PoolProc, type PoolPsi, type PoolResident, type PoolSeries, type PoolWorker, type PoolZone, type SeriesPoint, type Slots,
 } from './types'
 
@@ -19,6 +19,9 @@ export const time = (v: unknown): number | null => {
 
 /** A zone the App does not know reads as `unknown`, never as an error. */
 export const zoneOf = (v: unknown): PoolZone => ((ZONES as readonly unknown[]).includes(v) ? (v as PoolZone) : 'unknown')
+
+/** A word the App does not know reads as `unknown`, never as `ok`. */
+const livenessOf = (v: unknown): PoolLiveness => ((LIVENESS as readonly unknown[]).includes(v) ? (v as PoolLiveness) : 'unknown')
 
 const slots = (v: unknown): Slots | null => (isRec(v) && num(v.heavy) && num(v.light) ? { heavy: v.heavy, light: v.light } : null)
 
@@ -145,6 +148,8 @@ function host(v: unknown): PoolHost | null {
   if (!w || !labels || typeof v.reachable !== 'boolean') return null
   const hr = reasons(v.headroom_reasons)
   const ld = load(v.load)
+  const at = time(v.liveness_at)
+  const since = time(v.liveness_since)
   return {
     host_id: info.host_id, alias: info.alias, version: info.version, proto: info.proto, platform: info.platform, arch: info.arch,
     facts: parseFacts(v.facts),
@@ -153,6 +158,10 @@ function host(v: unknown): PoolHost | null {
     reachable: v.reachable,
     ...(hr ? { headroom_reasons: hr } : {}),
     ...(ld ? { load: ld } : {}),
+    ...(v.liveness !== undefined ? { liveness: livenessOf(v.liveness) } : {}),
+    ...(at !== null ? { liveness_at: at } : {}),
+    ...(since !== null ? { liveness_since: since } : {}),
+    ...(num(v.rtt_ms) && v.rtt_ms >= 0 ? { rtt_ms: v.rtt_ms } : {}),
   }
 }
 

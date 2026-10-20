@@ -193,3 +193,43 @@ describe('parseFactsHistory', () => {
     expect(parseFactsHistory(null)).toBeNull()
   })
 })
+
+// MON-1b: the peer rows carry `liveness`, `liveness_at`, `liveness_since` (omitempty) and `rtt_ms`; the local row carries none of them.
+describe('liveness fields (monitoring tabs spec A2)', () => {
+  const row = (over: Record<string, unknown> = {}) => ({ ...hostsJson.hosts[0], ...over })
+  const parse1 = (over: Record<string, unknown>) => parseHostsAnswer({ hosts: [row(over)] })![0]
+
+  it('a row without the three fields (the local host, an older daemon) has none of them', () => {
+    const h = parse1({})
+    expect(h).not.toHaveProperty('liveness')
+    expect(h).not.toHaveProperty('liveness_at')
+    expect(h).not.toHaveProperty('liveness_since')
+    expect(h).not.toHaveProperty('rtt_ms')
+  })
+
+  it('a peer row that is ok: the word and the check time (ms) are read', () => {
+    const h = parse1({ liveness: 'ok', liveness_at: '2026-10-20T19:50:05+08:00', rtt_ms: 12 })
+    expect(h).toMatchObject({ liveness: 'ok', liveness_at: Date.parse('2026-10-20T19:50:05+08:00'), rtt_ms: 12 })
+  })
+
+  it.each(['wwd_down', 'host_down', 'unknown'] as const)('%s is read as it is, with its since time', (liveness) => {
+    const h = parse1({ liveness, liveness_at: '2026-10-20T20:00:00+08:00', liveness_since: '2026-10-20T19:40:00+08:00' })
+    expect(h).toMatchObject({ liveness, liveness_at: Date.parse('2026-10-20T20:00:00+08:00'), liveness_since: Date.parse('2026-10-20T19:40:00+08:00') })
+  })
+
+  it('a word the App does not know reads as unknown, never as ok', () => {
+    expect(parse1({ liveness: 'sleeping' }).liveness).toBe('unknown')
+    expect(parse1({ liveness: 7 }).liveness).toBe('unknown')
+  })
+
+  it('a time that does not parse leaves that field out, the others stay', () => {
+    const h = parse1({ liveness: 'wwd_down', liveness_at: 'yesterday', liveness_since: '2026-10-20T19:40:00+08:00' })
+    expect(h).not.toHaveProperty('liveness_at')
+    expect(h.liveness_since).toBe(Date.parse('2026-10-20T19:40:00+08:00'))
+  })
+
+  it('rtt_ms is carried for a non-negative number only', () => {
+    expect(parse1({ rtt_ms: 0 }).rtt_ms).toBe(0)
+    for (const bad of [-1, '5', null, Number.NaN]) expect(parse1({ rtt_ms: bad })).not.toHaveProperty('rtt_ms')
+  })
+})
