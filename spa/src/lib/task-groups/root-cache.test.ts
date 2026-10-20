@@ -120,8 +120,10 @@ describe('addresses (TG-5b)', () => {
     useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: 'purdex-iface-lead' }, q('S2', 'R2')])
     expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead')
     expect(titleOf('h1', 'S2')).toBeNull() // the row carried none
-    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: '' }])
-    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead') // an empty title does not wipe the last one
+    useRootCacheStore.getState().ingest('h1', [q('S2', 'R2')])
+    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead') // a session no row lists keeps its last title
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: undefined }])
+    expect(titleOf('h1', 'S1')).toBeNull() // a listed row without one has none now
     useRootCacheStore.getState().dropHost('h1')
     expect(titleOf('h1', 'S1')).toBeNull()
   })

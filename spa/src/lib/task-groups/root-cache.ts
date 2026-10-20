@@ -68,9 +68,14 @@ export const useRootCacheStore = create<RootCacheState>()(
               nextAddr ??= { ...curAddr }
               nextAddr[r.session_id] = r.address
             }
-            if (typeof r.title === 'string' && r.title !== '' && curTitle[r.session_id] !== r.title) {
+            // A listed row is the session's current state: a title it no longer carries (the wire omits an empty one) is forgotten, so the panel falls back to the session name. A session no row lists keeps its last.
+            const title = typeof r.title === 'string' ? r.title : ''
+            if (title !== '' && curTitle[r.session_id] !== title) {
               nextTitle ??= { ...curTitle }
-              nextTitle[r.session_id] = r.title
+              nextTitle[r.session_id] = title
+            } else if (title === '' && curTitle[r.session_id] !== undefined) {
+              nextTitle ??= { ...curTitle }
+              delete nextTitle[r.session_id]
             }
           }
           if (next === null && nextAddr === null && nextTitle === null) return state
