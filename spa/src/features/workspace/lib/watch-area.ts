@@ -27,6 +27,8 @@ export const ABSENT_REMOVE_MS = 60_000
 /** What the reconcile needs of the pool: the wwd `host_id`s of the current answer, in the order of the pool hosts store. There is no stale: the pool's answer is the current one. */
 export interface WatchHostsView {
   hostIds: readonly string[]
+  /** The App host whose daemon answered. Two sources may list different hosts, so a change of source says nothing of a host leaving. */
+  source?: string
 }
 
 function hostTab(id: string, content: PaneContent): Tab {
@@ -104,6 +106,8 @@ export interface WatchReconciler {
 export function createWatchReconciler(): WatchReconciler {
   /** host id → the last time a pool answer listed it (an older tab's fleet id: the time this device first saw the tab). In memory only: a restart forgets, and forgets safely. */
   const lastListed = new Map<string, number>()
+  /** The source of the last pool answer seen: when it changes, what the old one listed is no evidence about the new one. */
+  let lastSource: string | undefined
   /** The derivation behind the guardian pane's content, as this device last wrote it. Edge-triggered: see `reconcileGuardian`. */
   let guardianKey: string | undefined
 
@@ -211,6 +215,7 @@ export function createWatchReconciler(): WatchReconciler {
 
     // 3. Host tabs, only with a pool view; without one they are left as they are.
     if (!view) return null
+    if (view.source !== lastSource) { lastListed.clear(); lastSource = view.source }
     for (const id of view.hostIds) lastListed.set(id, now)
 
     const listed = new Set(view.hostIds)
@@ -278,7 +283,7 @@ export const currentWatchReconciler = (): WatchReconciler => current
 export function readPoolView(): WatchHostsView | null {
   const s = usePoolStore.getState()
   if (s.sourceHostId === null) return null
-  return { hostIds: orderPoolHosts(s.hosts, usePoolHostsStore.getState().order).map((h) => h.host_id) }
+  return { hostIds: orderPoolHosts(s.hosts, usePoolHostsStore.getState().order).map((h) => h.host_id), source: s.sourceHostId }
 }
 
 /**

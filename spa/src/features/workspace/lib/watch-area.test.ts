@@ -117,6 +117,22 @@ describe('reconcileWatchTabs', () => {
     })
   })
 
+  it('a switch of the source that answers is not a host leaving: what the old source listed and the new one does not stays', () => {
+    const r = createWatchReconciler()
+    r.reconcile({ hostIds: ['a', 'b'], source: 'cfg-x' }, T0)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-y' }, T0 + 1000)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-y' }, T0 + 10 * ABSENT_REMOVE_MS)
+    expect(watchTabs()).toContain(watchHostTabId('b'))
+  })
+
+  it('the same source dropping a host still removes it after the minute', () => {
+    const r = createWatchReconciler()
+    r.reconcile({ hostIds: ['a', 'b'], source: 'cfg-x' }, T0)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-x' }, T0 + 1000)
+    r.reconcile({ hostIds: ['a'], source: 'cfg-x' }, T0 + ABSENT_REMOVE_MS)
+    expect(watchTabs()).toEqual([watchHostTabId('a')])
+  })
+
   it('a synced tab for a host this device never listed stays', () => {
     const r = createWatchReconciler()
     r.reconcile(view(['a', 'b']), T0)
@@ -327,6 +343,6 @@ describe('readPoolView', () => {
   it('lists the pool hosts in the order of the pool hosts store, the unlisted after them', () => {
     setPool(['a', 'b', 'c'])
     usePoolHostsStore.setState({ order: ['c', 'a'] } as never)
-    expect(readPoolView()).toEqual({ hostIds: ['c', 'a', 'b'] })
+    expect(readPoolView()).toEqual({ hostIds: ['c', 'a', 'b'], source: 'cfg-a' })
   })
 })
