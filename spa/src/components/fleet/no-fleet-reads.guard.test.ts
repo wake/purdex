@@ -10,7 +10,7 @@ const SOURCES = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'host-history.ts', 'use-host-series.ts',
 ]
 // Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
 // barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
