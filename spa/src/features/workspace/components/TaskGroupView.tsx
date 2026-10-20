@@ -1,30 +1,25 @@
-// spa/src/features/workspace/components/TaskGroupView.tsx — the sidebar's second view, the task groups (name pool v2 spec §7, U11, NA-6b; the editing is NA-6c). It takes the place of the workspace list while
+// spa/src/features/workspace/components/TaskGroupView.tsx — the sidebar's second view, the task groups (task groups spec §6.1, TG-2b; name pool v2 spec §7, U11, NA-6b/6c). It takes the place of the workspace list while
 // the device's `sidebarView` is `groups`:
 //   - team groups first (the team's name, a colour square, a count; the lead, then the members hanging under it on a tree line);
-//   - then each host's manual groups in creation order (a lighter header with the host it belongs to); a group with nothing live in it is one collapsed line;
+//   - then the manual groups of `useManualGroupsStore`, in its order — a group gathers sessions of any host, so there are no per-host blocks; a group with nothing live in it is one collapsed line;
 //   - then 「未分組」 after a divider.
-// A session is a tab showing a tmux session; its row is the sidebar's own InlineTab (avatar, light, title as in the workspace view), not draggable here. A team seat no open tab shows is listed and not openable.
-// A click switches to the session's workspace and tab (the same handler as the workspace view). Which group a solo session is in is decided by its lineage root (hooks/useSessionRoots.ts); until the
-// root is read it is 未分組 for the display. What it reads — each connected host's groups, the roots — it reads only while this view is mounted, i.e. open.
-import { useEffect, useMemo, useState } from 'react'
+// A session is a tab showing a tmux session; its row is the sidebar's own InlineTab (avatar, light, title as in the workspace view). A team seat no open tab shows is listed and not openable.
+// A click switches to the session's workspace and tab (the same handler as the workspace view). Which group a solo session is in is decided by its (host, lineage root) (hooks/useSessionRoots.ts, the device-local
+// root cache); until the root is read it is 未分組 for the display. A write that needs a root gets it with `resolveRoot` (lib/task-groups/session-actions.ts). The roots are read only while this view is mounted, i.e. open.
+import { useMemo, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
-import { daemonMismatchKey, useHostStore } from '../../../stores/useHostStore'
 import { TaskGroupSeatClosed } from './TaskGroupSeatClosed'
 import { useSessionStore } from '../../../stores/useSessionStore'
-import { useNexHostStore } from '../../../stores/useNexHostStore'
-import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
+import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
-import { hostLabel, hostLookOf } from '../../../lib/host-look'
 import { collectLeaves } from '../../../lib/pane-tree'
-import { loadTaskGroupsIfSupported, taskGroupsSupported } from '../../../lib/task-groups/loader'
-import { hostBlockedReason, failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
-import { clearTaskGroup, renameTaskGroup, type ActionResult } from '../../../lib/task-groups/actions'
-import type { TaskGroup } from '../../../lib/task-groups/api'
-import { buildGroupView, type GroupRow, type GroupSection, type HostGroups, type SessionTab } from '../../../lib/task-groups/view-model'
+import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
+import { deleteManualGroup, renameManualGroup, type ManualActionResult } from '../../../lib/task-groups/manual-actions'
+import { buildGroupView, type GroupRow, type GroupSection, type SessionTab } from '../../../lib/task-groups/view-model'
 import { panelName } from '../../../lib/team/team-names'
 import { teamColor } from '../../../components/team/team-display'
 import { openTeamSeat } from '../../../lib/team/team-actions'
@@ -49,18 +44,14 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   const t = useI18nStore((s) => s.t)
   const tabsById = useTabStore((s) => s.tabs)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const runtime = useHostStore((s) => s.runtime)
-  const mismatched = useHostStore(daemonMismatchKey)
-  const nex = useNexHostStore((s) => s.byHost)
-  const groupsByHost = useTaskGroupsStore((s) => s.byHost)
+  const groupOrder = useManualGroupsStore((s) => s.order)
+  const groupsById = useManualGroupsStore((s) => s.groups)
   const teams = useTeamViews()
   const sessionsByHost = useSessionStore((s) => s.sessions)
   // The last refusal of an edit, in words, until dismissed or replaced by the next action.
   const [notice, setNotice] = useState<string | null>(null)
   // The empty group the person asked to clear, until they answer.
-  const [clearing, setClearing] = useState<{ hostId: string; groupId: string } | null>(null)
-  const [clearBusy, setClearBusy] = useState(false)
+  const [clearing, setClearing] = useState<string | null>(null)
 
   // The sessions: the tabs that show a tmux session, in workspace order, then those no workspace holds.
   const sessionTabs = useMemo<SessionTab[]>(() => {
@@ -80,85 +71,67 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     return out
   }, [tabsById, workspaces, sessionsByHost])
 
-  // Opening the view reads each connected host's groups (when its daemon serves them); the capability entry is asked for first.
-  const connectedKey = hostOrder.filter((h) => runtime[h]?.status === 'connected').join('\n')
-  const capsKey = hostOrder.map((h) => `${h}:${nex[h]?.fetchedAt ?? 0}`).join('\n')
-  useEffect(() => {
-    for (const hostId of connectedKey === '' ? [] : connectedKey.split('\n')) {
-      if (taskGroupsSupported(hostId)) void loadTaskGroupsIfSupported(hostId)
-      else queueMicrotask(() => { void useNexHostStore.getState().ensure(hostId) })
-    }
-  }, [connectedKey, capsKey, mismatched])
-
   const wanted = useMemo<WantedSession[]>(
     () => sessionTabs.filter((s): s is SessionTab & { agentSessionId: string } => s.agentSessionId !== null).map((s) => ({ hostId: s.hostId, agentSessionId: s.agentSessionId })),
     [sessionTabs],
   )
   const roots = useSessionRoots(true, wanted)
 
-  const manual = useMemo(() => {
-    const out: Record<string, HostGroups> = {}
-    for (const [hostId, entry] of Object.entries(groupsByHost)) {
-      if (!taskGroupsSupported(hostId) || !entry.loaded) continue
-      const unsafe = entry.invalid || entry.dropped !== null
-        ? { count: entry.dropped?.count ?? 0, reasons: entry.dropped?.reasons ?? [], invalid: entry.invalid }
-        : null
-      out[hostId] = { groups: entry.groups, unsafe }
-    }
-    return out
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `nex` and `mismatched` (a daemon mismatch) move the capability gate
-  }, [groupsByHost, nex, mismatched])
+  const manual = useMemo(() => ({ order: groupOrder, groups: groupsById }), [groupOrder, groupsById])
 
   const view = useMemo<GroupSection[]>(
-    () => buildGroupView({ tabs: sessionTabs, teams, manual, rootOf: roots.rootOf, hostOrder }),
-    [sessionTabs, teams, manual, roots, hostOrder],
+    () => buildGroupView({ tabs: sessionTabs, teams, manual, rootOf: roots.rootOf }),
+    [sessionTabs, teams, manual, roots],
   )
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
-  // Why a host's groups cannot be edited now (unsafe, not read yet), in words; null = they can. An action's refusal is said in the notice line.
-  const hostBlocked = (hostId: string) => hostBlockedReason(groupsByHost[hostId], t)
-  const done = (r: ActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
-  // A group may be cleared only when nothing in it is alive: the host's groups editable, ITS session roots read, and none of the group's roots a live session of the host (the display leaves out a session a team holds,
+  // An action's refusal is said in the notice line.
+  const done = (r: ManualActionResult) => { setNotice(r.ok ? null : failureText(t, r)) }
+  // A group may be cleared only when nothing in it is alive: every member's host read for ITS session roots, and none of the members' roots a live session of its host (the display leaves out a session a team holds,
   // so an empty-looking group can still have live members). The dialog follows this on every render and goes away when it stops holding.
-  const clearBlocked = (hostId: string, group: TaskGroup): string | null => {
-    const blocked = hostBlocked(hostId)
-    if (blocked !== null) return blocked
-    const live = roots.liveRoots(hostId)
-    if (live === null) return t('taskgroups.clear_roots_reading')
-    return group.roots.some((r) => live.has(r)) ? t('taskgroups.clear_in_use') : null
+  const clearBlocked = (groupId: string): string | null => {
+    const group = groupsById[groupId]
+    if (!group) return null
+    for (const m of group.members) {
+      const live = roots.liveRoots(m.host)
+      if (live === null) return t('taskgroups.clear_roots_reading')
+      if (live.has(m.root)) return t('taskgroups.clear_in_use')
+    }
+    return null
   }
-  const clearGroup = clearing ? groupsByHost[clearing.hostId]?.groups.find((g) => g.id === clearing.groupId) : undefined
-  const clearOk = clearing !== null && clearGroup !== undefined && clearBlocked(clearing.hostId, clearGroup) === null
-  useEffect(() => { if (clearing !== null && !clearOk && !clearBusy) setClearing(null) }, [clearing, clearOk, clearBusy])
-  const confirmClear = async () => {
-    if (!clearing || !clearOk) return
-    setClearBusy(true)
-    try { done(await clearTaskGroup(clearing.hostId, clearing.groupId, clearGroup?.roots ?? [])) } finally { setClearBusy(false); setClearing(null) }
+  const clearGroup = clearing !== null ? groupsById[clearing] : undefined
+  const clearOk = clearing !== null && clearGroup !== undefined && clearBlocked(clearing) === null
+  if (clearing !== null && !clearOk) setClearing(null) // derived state: the confirmation goes when the group stops being clearable (React re-renders at once, before anything is drawn)
+  const confirmClear = () => {
+    if (clearing === null || !clearOk) return
+    done(deleteManualGroup(clearing))
+    setClearing(null)
   }
 
   const sessionOfTab = useMemo(() => new Map(sessionTabs.map((s) => [s.tabId, s])), [sessionTabs])
   // A solo session's right-click menu gets the task-group rows on top (a team seat is filed by its team, L10). Set as the click bubbles up from the row, i.e. AFTER the tab menu's own handler cleared whatever an
-  // earlier menu left; a host that cannot serve groups, or a tab that is no session, gets none.
+  // earlier menu left; a tab that is no session gets none.
   const offerGroupMenu = (tabId: string, groupId: string | null) => {
     const s = sessionOfTab.get(tabId)
-    if (!s || !taskGroupsSupported(s.hostId)) { useTabMenuExtrasStore.getState().clear(); return }
-    const root = s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId)
-    useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({ hostId: s.hostId, root, entry: groupsByHost[s.hostId], currentGroupId: groupId, t, report: setNotice }))
+    if (!s) { useTabMenuExtrasStore.getState().clear(); return }
+    useTabMenuExtrasStore.getState().set(tabId, rowMenuItems({
+      session: { hostId: s.hostId, agentSessionId: s.agentSessionId, tabId }, groups: groupOrder.flatMap((id) => (groupsById[id] ? [{ id, name: groupsById[id].name }] : [])), currentGroupId: groupId, t, report: setNotice,
+    }))
   }
 
-  // Dragging a solo session: onto a group of its host files it there, onto 「未分組」 takes it out (lib/task-groups/drag.ts). A team seat is not draggable and a team takes no drop (L10).
+  // Dragging a solo session: onto any group files it there, onto 「未分組」 takes it out (lib/task-groups/drag.ts). A team seat is not draggable and a team takes no drop (L10).
   const groupOfTab = useMemo(() => {
     const m = new Map<string, string>()
-    for (const sec of view) if (sec.kind === 'manual') for (const r of sec.rows) if (r.tabId !== null) m.set(r.tabId, sec.group.id)
+    for (const sec of view) if (sec.kind === 'manual') for (const r of sec.rows) if (r.tabId !== null) m.set(r.tabId, sec.groupId)
     return m
   }, [view])
   const drag = useGroupDrag({
     sourceOf: (tabId) => {
       const s = sessionOfTab.get(tabId)
-      if (!s || !taskGroupsSupported(s.hostId)) return null
-      return { hostId: s.hostId, root: s.agentSessionId === null ? null : roots.rootOf(s.hostId, s.agentSessionId), currentGroupId: groupOfTab.get(tabId) ?? null }
+      if (!s) return null
+      return { session: { hostId: s.hostId, agentSessionId: s.agentSessionId, tabId }, currentGroupId: groupOfTab.get(tabId) ?? null }
     },
-    entryOf: (hostId) => groupsByHost[hostId], t, onNotice: setNotice, onResult: done,
+    onResult: done,
   })
   const lit = (key: string) => (drag.over === key ? ' rounded-md ring-1 ring-border-active' : '')
 
@@ -193,16 +166,6 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
         </div>
       )}
       {view.map((section, i) => {
-        if (section.kind === 'unsafe') {
-          return (
-            <div
-              key={`unsafe:${section.hostId}`} data-testid="task-group-unsafe" role="status" title={section.reasons.join('\n')}
-              className="mx-3 my-0.5 text-[11px] text-status-warning-text"
-            >
-              {section.invalid ? t('taskgroups.invalid') : t('taskgroups.unsafe', { n: section.count })}
-            </div>
-          )
-        }
         if (section.kind === 'team') {
           const name = panelName(section.view).text
           const count = 1 + section.members.length
@@ -218,16 +181,15 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           const collapsed = section.rows.length === 0
           return (
             <section
-              key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.group.id)}`}
-              {...drag.targetProps({ kind: 'group', hostId: section.hostId, groupId: section.group.id })}
+              key={section.key} data-testid="task-group-manual" data-collapsed={String(collapsed)} className={`flex flex-col${lit(section.groupId)}`}
+              {...drag.targetProps({ kind: 'group', groupId: section.groupId })}
             >
               <TaskGroupHeader
                 color={section.group.color ?? COLOR_DEFAULT} name={section.group.name} count={section.rows.length} muted={collapsed}
-                host={hostLabel(section.hostId, hostLookOf(section.hostId))}
-                edit={{ blocked: hostBlocked(section.hostId), onCommit: (name) => renameTaskGroup(section.hostId, section.group.id, name).then(done) }}
-                clear={collapsed ? { blocked: clearBlocked(section.hostId, section.group), onClick: () => setClearing({ hostId: section.hostId, groupId: section.group.id }) } : undefined}
+                edit={{ blocked: null, onCommit: async (name) => { done(renameManualGroup(section.groupId, name)) } }}
+                clear={collapsed ? { blocked: clearBlocked(section.groupId), onClick: () => setClearing(section.groupId) } : undefined}
               />
-              {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.group.id))}
+              {!collapsed && section.rows.map((r) => renderRow(r, undefined, false, section.groupId))}
             </section>
           )
         }
@@ -242,8 +204,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       {clearing && clearOk && clearGroup && (
         <ConfirmDialog
           testIdPrefix="task-group-clear" title={t('taskgroups.clear_title', { name: clearGroup.name })}
-          body={clearGroup.roots.length > 0 ? t('taskgroups.clear_body', { n: clearGroup.roots.length }) : t('taskgroups.clear_body_none')}
-          confirmLabel={t('taskgroups.clear_confirm')} busy={clearBusy} onCancel={() => setClearing(null)} onConfirm={() => { void confirmClear() }}
+          body={clearGroup.members.length > 0 ? t('taskgroups.clear_body', { n: clearGroup.members.length }) : t('taskgroups.clear_body_none')}
+          confirmLabel={t('taskgroups.clear_confirm')} busy={false} onCancel={() => setClearing(null)} onConfirm={confirmClear}
         />
       )}
     </div>

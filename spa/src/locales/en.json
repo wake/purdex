@@ -2212,6 +2212,8 @@
   "taskgroups.err.too-many-groups": "The task groups are at their limit (32 at most)",
   "taskgroups.err.bad-name": "A name takes 1 to 64 bytes and no control characters",
   "taskgroups.err.id-taken": "The group id was already used, please try again",
+  "taskgroups.err.bad-color": "That colour cannot be used",
+  "taskgroups.err.bad-id": "The group id is not valid, please try again",
   "taskgroups.err.group-changed": "That group was just changed (maybe by another device), so it was not cleared; please look again",
   "taskgroups.err.group-in-use": "That group still has live members, so it was not cleared",
   "taskgroups.err.roots-unknown": "Could not read which sessions of this host are live, so nothing was cleared; please try again shortly",
