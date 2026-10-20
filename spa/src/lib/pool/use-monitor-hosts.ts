@@ -7,6 +7,7 @@ import { orderPoolHosts, usePoolHostLookResolver, type PoolHostResolvedLook } fr
 import { usePoolHostOwners } from './daemons'
 import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
+import { useHostStore } from '../../stores/useHostStore'
 import type { PoolHost } from './types'
 
 export interface MonitorHost {
@@ -21,9 +22,10 @@ export interface MonitorHost {
 
 // W4: when no source answers (every one failed, or none is connected) the pool store has no hosts. The sidebar then keeps the last non-empty list of this run, every host unknown;
 // from the start with nothing read it is empty. Not persisted.
-let remembered: PoolHost[] = usePoolStore.getState().hosts
-usePoolStore.subscribe((s) => { if (s.hosts.length > 0) remembered = s.hosts })
-export function resetRememberedPoolHosts(): void { remembered = [] }
+// The list belongs to the App host that served it: once that host is gone (another world, a removed host) the list is not this App's to show.
+let remembered: { hosts: PoolHost[]; source: string | null } = { hosts: usePoolStore.getState().hosts, source: usePoolStore.getState().sourceHostId }
+usePoolStore.subscribe((s) => { if (s.hosts.length > 0) remembered = { hosts: s.hosts, source: s.sourceHostId } })
+export function resetRememberedPoolHosts(): void { remembered = { hosts: [], source: null } }
 
 export function useMonitorHosts(): MonitorHost[] {
   useRunPool()
@@ -34,8 +36,9 @@ export function useMonitorHosts(): MonitorHost[] {
   const order = usePoolHostsStore((s) => s.order)
   const owners = usePoolHostOwners()
   const lookOf = usePoolHostLookResolver()
-  const stale = hosts.length === 0 && !answered && remembered.length > 0
-  const rows = stale ? remembered : hosts
+  const sourceKnown = useHostStore((s) => remembered.source !== null && Object.hasOwn(s.hosts, remembered.source))
+  const stale = hosts.length === 0 && !answered && remembered.hosts.length > 0 && sourceKnown
+  const rows = stale ? remembered.hosts : hosts
   return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => ({
     hostId: h.host_id,
     alias: h.alias,

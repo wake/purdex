@@ -68,6 +68,7 @@ describe('useMonitorHosts', () => {
   })
 
   it('W4: when no source answers, the last non-empty list stays, every host unknown', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
     answer([host(A, 'mlab'), host(B, 'mserv')])
     const first = renderHook(() => useMonitorHosts())
     expect(first.result.current).toHaveLength(2)
@@ -76,6 +77,16 @@ describe('useMonitorHosts', () => {
     const { result } = renderHook(() => useMonitorHosts())
     expect(result.current.map((h) => h.alias)).toEqual(['mlab', 'mserv'])
     expect(result.current.every((h) => h.state.state === 'unknown')).toBe(true)
+  })
+
+  it('W4: the kept list is dropped once the App host that served it is gone (another world, a removed host)', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
+    answer([host(A, 'mlab')])
+    const first = renderHook(() => useMonitorHosts())
+    first.unmount()
+    usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+    useHostStore.setState({ hosts: {}, hostOrder: [] } as never)
+    expect(renderHook(() => useMonitorHosts()).result.current).toEqual([])
   })
 
   it('W4: never read since the start is an empty list; an empty answer from a source is empty too', () => {
