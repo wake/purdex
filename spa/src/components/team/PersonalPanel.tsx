@@ -48,12 +48,12 @@ export function PersonalPanel({ target, mode, onSetMode }: Props) {
     if (mode !== 'full') onSetMode('full')
   }
 
-  // the workbook button (R14)
+  // the workbook button (R14): the journal cards are the title bar's journal target's (the tab's first live cc session); the button is there only when that is this card's session, so it never switches another session's cards
   const jt = useJournalTarget()
   const memo = useViewMemo(jt.memoHost, jt.memoKey)
   const ownWb = useLoadedSeatWorkbook({ hostId: target.hostId, sessionId: target.agentSessionId })
   const workbook = jt.journalHost
-    ? jt.origin !== null && jt.memoKey !== null ? { open: memo.journalOpen, onToggle: () => patchUnitMemo(jt.memoHost, jt.memoKey, { journalOpen: !memo.journalOpen }) } : null
+    ? jt.origin !== null && jt.origin.hostId === target.hostId && jt.origin.sessionId === target.agentSessionId && jt.memoKey !== null ? { open: memo.journalOpen, onToggle: () => patchUnitMemo(jt.memoHost, jt.memoKey, { journalOpen: !memo.journalOpen }) } : null
     : ownWb.has ? { open: workbookOpen, onToggle: () => setWorkbookOpen((v) => !v) } : null
 
   return (

@@ -231,4 +231,31 @@ describe('the workbook button on a journal.v1 host (R14)', () => {
     expect(memo()).toBe(false)
     setJournalHost(HOST, false)
   })
+  it('no button when the journal cards would be another session\'s (a split tab whose first agent pane is codex)', () => {
+    setJournalHost(HOST, true)
+    seedUnit(HOST, 'S1', { kind: 'session', id: 'S1', label: 'cc1' } as never)
+    scene()
+    const cx = ccTab('sp', 'S0'); const cc = ccTab('sp2', 'S1')
+    const codex = { ...cx, layout: { type: 'leaf', pane: { ...(cx.layout as { pane: { id: string; content: Record<string, unknown> } }).pane, content: { ...(cx.layout as { pane: { content: Record<string, unknown> } }).pane.content, rebuild: { sessionName: 'sp', tmuxInstance: 'i', agent: { type: 'codex', sessionId: 'S0', updatedAt: 1 }, capturedAt: 1 } } } } }
+    addTab({ ...codex, layout: { type: 'split', direction: 'h', sizes: [50, 50], children: [codex.layout, cc.layout] } } as unknown as Tab)
+    setActive('sp')
+    expect(screen.queryByTestId('personal-card-workbook')).toBeNull()
+    setJournalHost(HOST, false)
+  })
+})
+
+describe('a session that already has a group starts a new one (codex R1)', () => {
+  it('the name field opens on the NEW group, with its name — not on the old group', async () => {
+    readRoot('S1', 'R1')
+    act(() => { useManualGroupsStore.setState({ groups: { ...groups(), [A]: { ...groups()[A], members: [{ host: HOST, root: 'R1' }] } } }) })
+    scene()
+    fireEvent.click(q('personal-group-button'))
+    fireEvent.click(q('personal-group-new'))
+    const input = (await screen.findByTestId('personal-name-input')) as HTMLInputElement
+    expect(input.value).toBe('任務編組 1')
+    fireEvent.change(input, { target: { value: 'Fresh' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(groups()[A].name).toBe('iOS 發版')
+    expect(Object.values(groups()).map((g) => g.name)).toContain('Fresh')
+  })
 })

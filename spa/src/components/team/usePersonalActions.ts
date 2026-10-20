@@ -12,8 +12,8 @@ export interface PersonalActions {
   /** The last refusal in words, or null. */
   notice: string | null
   move: (groupId: string) => Promise<boolean>
-  /** Starts 「任務編組 N」 with this session in it; true when it did (the name field then opens). */
-  startGroup: () => Promise<boolean>
+  /** Starts 「任務編組 N」 with this session in it; the new group's id, or null when it refused. */
+  startGroup: () => Promise<string | null>
   takeOut: () => Promise<boolean>
   rename: (groupId: string, name: string) => boolean
   recolor: (groupId: string, color: string) => boolean
@@ -35,7 +35,10 @@ export function usePersonalActions(target: PersonalTarget): PersonalActions {
   return {
     notice,
     move: async (groupId) => settle(await fileSession(ref, groupId)),
-    startGroup: async () => settle(await startGroupWithSession(ref, defaultManualGroupName(t('taskgroups.default_name')))),
+    startGroup: async () => {
+      const r = await startGroupWithSession(ref, defaultManualGroupName(t('taskgroups.default_name')))
+      return settle(r) && r.ok ? r.id : null
+    },
     takeOut: async () => settle(await takeSessionOut(ref)),
     rename: (groupId, name) => report(renameManualGroup(groupId, name)),
     recolor: (groupId, color) => report(recolorManualGroup(groupId, color)),

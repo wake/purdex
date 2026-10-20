@@ -29,7 +29,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
   const [listOpen, setListOpen] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
-  const [wantEdit, setWantEdit] = useState(false) // a group was just started from this session: its name field opens as soon as the group shows
+  const [wantEdit, setWantEdit] = useState<string | null>(null) // the id of a group just started from this session: its name field opens once the panel shows THAT group
   const [seenRequest, setSeenRequest] = useState(0)
   const manual = group.kind === 'manual' ? group : null
   const waiting = rootKnown ? undefined : t('taskgroups.err.no-root')
@@ -39,8 +39,8 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
     setSeenRequest(renameRequest)
     if (renameRequest > 0 && manual !== null) setDraft(manual.name)
   }
-  if (wantEdit && manual !== null) {
-    setWantEdit(false)
+  if (wantEdit !== null && manual?.id === wantEdit) {
+    setWantEdit(null)
     setDraft(manual.name)
   }
   useEffect(() => { if (draft !== null) input.current?.select() }, [draft === null]) // eslint-disable-line react-hooks/exhaustive-deps -- select once when the field opens
@@ -90,7 +90,7 @@ export function PersonalSettings({ group, rootKnown, actions, renameRequest }: P
                   type="button"
                   data-testid="personal-group-new"
                   onMouseDown={keepFocus}
-                  onClick={() => { setListOpen(false); setWantEdit(true); void actions.startGroup().then((ok) => { if (!ok) setWantEdit(false) }) }}
+                  onClick={() => { setListOpen(false); void actions.startGroup().then((id) => { if (id !== null) setWantEdit(id) }) }}
                   className="w-full px-2 py-1 text-left text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
                 >
                   {t('personal.settings.new_group')}
