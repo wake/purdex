@@ -1,19 +1,17 @@
-// spa/src/lib/task-groups/row-menu.ts — the rows the task-group view adds to a solo session's right-click menu (name pool v2 spec §7, NA-6c): 「加入 <group>」 for each group, 「新建任務編組」, and — for a session already in
-// a group — 「移出 <group>」. When the session cannot be filed they are still there, disabled, each saying why: the host's groups cannot be written to (unsafe; the daemon left rows out or the value is not a list), the
-// groups or the session's lineage root have not been read yet. Pure but for the actions it hands to the rows; a failure comes back through `report` in words.
+// spa/src/lib/task-groups/row-menu.ts — the rows the task-group view adds to a solo session's right-click menu (task groups spec §6.1, TG-2b; name pool v2 spec §7, NA-6c): 「加入 <group>」 for every other group — of any
+// host — 「新建任務編組」, and, for a session already in a group, 「移出 <group>」. Nothing is blocked up front: the root a write needs is got when it is chosen (session-actions.ts), and a session whose host cannot
+// answer is told so in words through `report`. Pure but for the actions it hands to the rows.
 import type { TabMenuExtra } from '../../stores/useTabMenuExtrasStore'
-import type { TaskGroupsEntry } from '../../stores/useTaskGroupsStore'
-import { defaultGroupName, putInGroup, startGroupWith, takeOutOfGroup, type ActionResult } from './actions'
-import { MAX_GROUPS } from './edits'
+import { MAX_GROUPS } from './manual-edits'
+import { defaultManualGroupName } from './manual-actions'
+import { fileSession, startGroupWithSession, takeSessionOut, type SessionActionError, type SessionRef } from './session-actions'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 export interface RowMenuInput {
-  hostId: string
-  /** The session's lineage root, or null when it is not known (yet). */
-  root: string | null
-  /** What the store holds for the host; undefined when nothing has been read. */
-  entry: TaskGroupsEntry | undefined
+  session: SessionRef
+  /** Every manual group, in the store's order. */
+  groups: ReadonlyArray<{ id: string; name: string }>
   /** The manual group the session is in now, if any. */
   currentGroupId: string | null
   t: Translate
@@ -21,48 +19,24 @@ export interface RowMenuInput {
   report: (message: string | null) => void
 }
 
-/** A refusal in words (the keys are `taskgroups.err.<reason>`; a daemon rejection carries its own message). */
-export function failureText(t: Translate, r: Extract<ActionResult, { ok: false }>): string {
-  return r.reason === 'rejected' ? t('taskgroups.err.rejected', { message: r.message }) : t(`taskgroups.err.${r.reason}`)
-}
-
-/** Why a host's groups cannot be edited right now, in words; null = they can: unsafe (the daemon left rows out, or the value is not a list), or not read yet. */
-export function hostBlockedReason(entry: TaskGroupsEntry | undefined, t: Translate): string | null {
-  if (entry && (entry.invalid || entry.dropped !== null)) return entry.invalid || !entry.dropped || entry.dropped.count <= 0 ? t('taskgroups.unsafe_edit_nocount') : t('taskgroups.unsafe_edit', { n: entry.dropped.count })
-  if (!entry || !entry.loaded) return t('taskgroups.groups_reading')
-  return null
-}
-
-/** Why nothing can be filed from this host/session right now, in words; null = it can. */
-function blockedReason(i: RowMenuInput): string | null {
-  return hostBlockedReason(i.entry, i.t) ?? (i.root === null ? i.t('taskgroups.root_reading') : null)
+/** A refusal in words (the keys are `taskgroups.err.<reason>`). */
+export function failureText(t: Translate, r: { ok: false; reason: SessionActionError }): string {
+  return t(`taskgroups.err.${r.reason}`)
 }
 
 export function rowMenuItems(i: RowMenuInput): TabMenuExtra[] {
-  const { t, hostId, entry, currentGroupId } = i
-  const blocked = blockedReason(i)
-  const groups = entry?.groups ?? []
+  const { t, session, groups, currentGroupId } = i
   const current = groups.find((g) => g.id === currentGroupId)
-  const done = (r: ActionResult) => i.report(r.ok ? null : failureText(t, r))
+  const done = (r: { ok: true } | { ok: false; reason: SessionActionError }) => i.report(r.ok ? null : failureText(t, r))
 
-  if (blocked !== null) {
-    return [
-      { key: 'put', label: t('taskgroups.menu_put'), onSelect: () => {}, disabled: true, title: blocked },
-      { key: 'new', label: t('taskgroups.menu_new'), onSelect: () => {}, disabled: true, title: blocked },
-      ...(currentGroupId !== null ? [{ key: 'out', label: t('taskgroups.menu_out', { name: current?.name ?? '' }), onSelect: () => {}, disabled: true, title: blocked }] : []),
-    ]
-  }
-
-  const root = i.root as string // blockedReason is null only for a known root
-  const sorted = [...groups].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))
-  const items: TabMenuExtra[] = sorted
+  const items: TabMenuExtra[] = groups
     .filter((g) => g.id !== currentGroupId)
-    .map((g) => ({ key: `put:${g.id}`, label: t('taskgroups.menu_put_to', { name: g.name }), onSelect: () => { void putInGroup(hostId, root, g.id).then(done) } }))
+    .map((g) => ({ key: `put:${g.id}`, label: t('taskgroups.menu_put_to', { name: g.name }), onSelect: () => { void fileSession(session, g.id).then(done) } }))
   const full = groups.length >= MAX_GROUPS
   items.push({
     key: 'new', label: t('taskgroups.menu_new'), disabled: full, title: full ? t('taskgroups.err.too-many-groups') : undefined,
-    onSelect: () => { void startGroupWith(hostId, root, defaultGroupName(t('taskgroups.default_name'), groups)).then(done) },
+    onSelect: () => { void startGroupWithSession(session, defaultManualGroupName(t('taskgroups.default_name'))).then(done) },
   })
-  if (currentGroupId !== null) items.push({ key: 'out', label: t('taskgroups.menu_out', { name: current?.name ?? '' }), onSelect: () => { void takeOutOfGroup(hostId, root).then(done) } })
+  if (currentGroupId !== null) items.push({ key: 'out', label: t('taskgroups.menu_out', { name: current?.name ?? '' }), onSelect: () => { void takeSessionOut(session).then(done) } })
   return items
 }

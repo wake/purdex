@@ -1,10 +1,11 @@
-// spa/src/lib/task-groups/view-model.ts — what the sidebar's task-group view lists (name pool v2 spec §7, L9, L10; NA-6b). Pure: the sidebar feeds it from the stores.
+// spa/src/lib/task-groups/view-model.ts — what the sidebar's task-group view lists (task groups spec §6.1, TG-2b; name pool v2 spec §7, L10). Pure: the sidebar feeds it from the stores.
 //   1. the team groups, in the order given (a team with its lead and members);
-//   2. each host's manual groups, hosts in `hostOrder`, groups in creation order (a host that cannot be written to says so first);
+//   2. the manual groups of `useManualGroupsStore`, in its `order`;
 //   3. 「未分組」 last: every other session, left out when there is none.
-// A session in a live team shows under its team only; its manual membership is ignored until the team ends (L10). A manual group holds the sessions of ITS OWN host (L9) whose lineage root it lists, so a
-// relay keeps the membership; a session whose root is not known yet (or whose pane has no agent session id) is 「未分組」 for the display — it is never guessed into a group.
-import type { TaskGroup } from './api'
+// A session in a live team shows under its team only; its manual membership is ignored until the team ends (L10). A manual group gathers sessions of ANY host: a member is a (host, lineage root), so a relay keeps
+// the membership; a session whose root is not known yet (or whose pane has no agent session id) is 「未分組」 for the display — it is never guessed into a group. A session two groups name (two devices filed it
+// differently) is shown in the first of them in `order`, once.
+import type { ManualGroup, ManualGroups } from '../../stores/useManualGroupsStore'
 import { seatLookup, sessionKey, type Seat, type TeamView } from '../team/team-views'
 
 /** One open tab that shows a tmux session: the sidebar's session row. */
@@ -30,27 +31,22 @@ export interface GroupRow {
 
 export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: GroupRow; members: GroupRow[] }
 /** `rows` empty = nothing live in the group: the view collapses it. */
-export interface ManualSection { kind: 'manual'; key: string; hostId: string; group: TaskGroup; rows: GroupRow[] }
+export interface ManualSection { kind: 'manual'; key: string; groupId: string; group: ManualGroup; rows: GroupRow[] }
 export interface UngroupedSection { kind: 'ungrouped'; key: 'ungrouped'; rows: GroupRow[] }
-/** The host's groups cannot be written to (the daemon left rows out, or the value is not a list): said on that host's block. */
-/** `invalid`: the stored value is not a list of groups at all (a count would be a lie); otherwise `count` rows were left out. */
-export interface UnsafeSection { kind: 'unsafe'; hostId: string; count: number; reasons: string[]; invalid: boolean }
-export type GroupSection = TeamSection | ManualSection | UngroupedSection | UnsafeSection
-
-export interface HostGroups { groups: TaskGroup[]; unsafe: { count: number; reasons: string[]; invalid: boolean } | null }
+export type GroupSection = TeamSection | ManualSection | UngroupedSection
 
 export interface GroupViewInput {
   tabs: readonly SessionTab[]
   teams: readonly TeamView[]
-  /** Per host, what the store holds; a host absent here has no groups to show (no `task_groups.v1`, or not read yet). */
-  manual: Record<string, HostGroups>
+  /** What `useManualGroupsStore` holds: the groups and their order. */
+  manual: ManualGroups
   /** The lineage root of an agent session id on a host, or null when it is not known (yet). */
   rootOf: (hostId: string, agentSessionId: string) => string | null
-  hostOrder: readonly string[]
 }
 
 const seatRow = (view: TeamView, seat: Seat): GroupRow => ({ key: `seat:${view.key}:${seat.session.session_id}`, tabId: seat.groupTabId ?? seat.tabId, seatId: seat.session.session_id, seat })
 const tabRow = (t: SessionTab): GroupRow => ({ key: `tab:${t.tabId}`, tabId: t.tabId })
+const memberKey = (host: string, root: string) => JSON.stringify([host, root])
 
 export function buildGroupView(input: GroupViewInput): GroupSection[] {
   const out: GroupSection[] = []
@@ -68,25 +64,20 @@ export function buildGroupView(input: GroupViewInput): GroupSection[] {
     out.push({ kind: 'team', key: `team:${view.key}`, view, lead: seatRow(view, view.lead), members: view.members.map((m) => seatRow(view, m)) })
   }
 
-  const hosts = [...input.hostOrder, ...Object.keys(input.manual).filter((h) => !input.hostOrder.includes(h))]
-  for (const hostId of hosts) {
-    const entry = input.manual[hostId]
-    if (!entry) continue
-    if (entry.unsafe) out.push({ kind: 'unsafe', hostId, count: entry.unsafe.count, reasons: entry.unsafe.reasons, invalid: entry.unsafe.invalid })
-    const groups = [...entry.groups].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))
-    for (const group of groups) {
-      const roots = new Set(group.roots)
-      const rows: GroupRow[] = []
-      for (const t of input.tabs) {
-        if (t.hostId !== hostId || claimed.has(t.tabId) || t.agentSessionId === null) continue
-        const root = input.rootOf(hostId, t.agentSessionId)
-        if (root !== null && roots.has(root)) {
-          rows.push(tabRow(t))
-          claimed.add(t.tabId)
-        }
+  for (const groupId of input.manual.order) {
+    const group = input.manual.groups[groupId]
+    if (!group) continue
+    const members = new Set(group.members.map((m) => memberKey(m.host, m.root)))
+    const rows: GroupRow[] = []
+    for (const t of input.tabs) {
+      if (claimed.has(t.tabId) || t.agentSessionId === null) continue
+      const root = input.rootOf(t.hostId, t.agentSessionId)
+      if (root !== null && members.has(memberKey(t.hostId, root))) {
+        rows.push(tabRow(t))
+        claimed.add(t.tabId)
       }
-      out.push({ kind: 'manual', key: `manual:${hostId}:${group.id}`, hostId, group, rows })
     }
+    out.push({ kind: 'manual', key: `manual:${groupId}`, groupId, group, rows })
   }
 
   const rest = input.tabs.filter((t) => !claimed.has(t.tabId)).map(tabRow)
