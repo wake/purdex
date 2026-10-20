@@ -49,6 +49,9 @@ const (
 	// goCacheShareMinAge: while a job holds the cache (the exclusive lock is not free), a trim of an over-bound cache takes only entries unused
 	// for this long, so that it does not remove an entry another job has just read and is about to open. Go's own trim waits 5 days.
 	goCacheShareMinAge = 2 * time.Hour
+	// goCacheMtimeStep is how stale a used entry's file time can be: Go updates it only when it is an hour old. The age limit counts from the
+	// last use, so this is added to it (Go's own trim does the same).
+	goCacheMtimeStep = time.Hour
 	// goCacheKeep is how many Go versions' caches are kept; an older one is removed when a newer one is made.
 	goCacheKeep = 2
 	// goCacheLook is the least time between two looks at the size of a cache (a walk of its entries is not free).
@@ -278,7 +281,7 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 	budget, removed := goCacheMaxRemovals, 0
 	if !tooMany {
 		if el := now.Sub(st.pruneAt); st.pruneAt.IsZero() || el < 0 || el >= goCachePruneEvery {
-			cutoff := now.Add(-e.goCachePrune())
+			cutoff := now.Add(-e.goCachePrune() - goCacheMtimeStep)
 			var aged, kept []goCacheFile
 			for _, f := range files {
 				if f.mod.Before(cutoff) {

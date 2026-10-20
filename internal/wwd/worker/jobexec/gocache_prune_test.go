@@ -42,7 +42,7 @@ func TestAnEntryUnusedForLongerThanTheLimitIsRemovedAndAFreshOneStays(t *testing
 	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
 	cache := firstJobCache(t, r, repo, sha)
 	old := cacheFile(t, cache, "ab/old-a", 1000, 48*time.Hour)
-	older := cacheFile(t, cache, "cd/old-d", 1000, 25*time.Hour)
+	older := cacheFile(t, cache, "cd/old-d", 1000, 26*time.Hour)
 	fresh := cacheFile(t, cache, "ab/fresh-a", 1000, 2*time.Hour)
 	trim := cacheFile(t, cache, "trim.txt", 20, 90*24*time.Hour) // Go's own bookkeeping is not an entry
 	readme := cacheFile(t, cache, "README", 20, 90*24*time.Hour)
@@ -61,11 +61,25 @@ func TestTheUnusedLimitIsTheWorkersSetting(t *testing.T) {
 	r.cfgGoCachePruneH = 2
 	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
 	cache := firstJobCache(t, r, repo, sha)
-	three := cacheFile(t, cache, "ab/three", 1000, 3*time.Hour)
+	three := cacheFile(t, cache, "ab/three", 1000, 4*time.Hour)
 	one := cacheFile(t, cache, "ab/one", 1000, time.Hour)
 	r.job(t, r.exec(t, repo, sha), "j_second")
 	assert.NoFileExists(t, three)
 	assert.FileExists(t, one)
+}
+
+// Go updates an entry's file time only when it is an hour old, so an entry used a moment ago can show a time almost an hour old: the limit
+// counts from the use, and the hour is added. With the smallest setting (1) an entry 90 minutes old may have been used 30 minutes ago.
+func TestTheUnusedLimitAllowsForGosHourOfFileTimeResolution(t *testing.T) {
+	r := newGoRig(t)
+	r.cfgGoCachePruneH = 1
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	recentUse := cacheFile(t, cache, "ab/ninety", 1000, 90*time.Minute)
+	idle := cacheFile(t, cache, "ab/three", 1000, 3*time.Hour)
+	r.job(t, r.exec(t, repo, sha), "j_second")
+	assert.FileExists(t, recentUse, "90 minutes on the file may be a use half an hour ago")
+	assert.NoFileExists(t, idle)
 }
 
 // The age pass runs at most once an hour (Go's own file times are that coarse); the size is looked at more often.

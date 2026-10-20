@@ -484,7 +484,7 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   mserv) have the 10 GB floor from host schema 9 on. Roll back across host schema 9 is the backup restore above (an older wwd refuses the file).
   `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache, and `[worker] gocache_prune_hours` (default 24, 1 to 8760) is how long
   an entry may go unused: Go touches an entry's file time when it uses it (at most once an hour), so the worker removes the entries whose time is
-  older than that (an age pass, at most once an hour). Over the bound it trims from the oldest entry down to 80% of it. Neither needs the cache to
+  older than that plus that hour (an age pass, at most once an hour). Over the bound it trims from the oldest entry down to 80% of it. Neither needs the cache to
   be free (Go's own trim removes files while other go processes run; a removed entry is a miss and is compiled again). Only a cache that could
   not be trimmed under its bound is emptied, when no job holds it (a cold build is what every job paid before); over twice the bound while jobs
   hold it and it cannot be trimmed, a new job gets no shared cache and builds in its own workspace. The size is looked at, and trimmed, at most
