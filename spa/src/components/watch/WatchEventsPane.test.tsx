@@ -243,6 +243,17 @@ describe('the events tab (MON-10c)', () => {
     }
   })
 
+  it('a host that was refused (403) and then fails some other way is only unreadable, not still "admin only"', async () => {
+    fetchObservations.mockRejectedValue(new PoolReadError('/x', 403, classify(403, null)))
+    pane()
+    await flush()
+    expect(screen.getAllByTestId('events-obs-forbidden')).toHaveLength(1)
+    fetchObservations.mockRejectedValue(new Error('boom'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(screen.queryByTestId('events-obs-forbidden')).toBeNull()
+    expect(screen.getByTestId('events-obs-unreadable-mserv')).toBeInTheDocument()
+  })
+
   it('drops what was read through another source, or for an alias that now names another host, instead of showing it as current', async () => {
     fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1')] : []))
     const { rerender } = pane()

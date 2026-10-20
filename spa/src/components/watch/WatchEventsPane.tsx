@@ -131,7 +131,7 @@ function useObservations(hosts: readonly { hostId: string; alias: string }[]): E
         ? { ...prev, forbidden: without(prev.forbidden), byHost: { ...prev.byHost, [alias]: r.list }, failed: without(prev.failed), truncated: r.truncated ? [...without(prev.truncated), alias] : without(prev.truncated) }
         : 'forbidden' in r
           ? { ...prev, forbidden: [...without(prev.forbidden), alias], failed: without(prev.failed) }
-          : { ...prev, failed: [...without(prev.failed), alias] }
+          : { ...prev, forbidden: without(prev.forbidden), failed: [...without(prev.failed), alias] }
       writeEventsObservations(next)
       setState(next)
     }
