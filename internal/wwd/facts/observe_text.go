@@ -250,13 +250,8 @@ func signature(clean []string, depth int) string {
 	if name == "." || name == "/" || isScrubbed(name) {
 		return ""
 	}
-	if name == "pdx" && len(clean) > 2 && clean[1] == "gate" {
-		// the gate runs what follows "--" (the shim puts it in front of every heavy command): that is the command
-		for i := 2; i < len(clean)-1; i++ {
-			if clean[i] == "--" {
-				return signature(clean[i+1:], depth) // unwrapping argv is not another level of script (the words only get shorter)
-			}
-		}
+	if inner := gatedCommand(clean); inner != nil {
+		return signature(inner, depth) // unwrapping argv is not another level of script (the words only get shorter)
 	}
 	if i := shellScript(clean); i >= 0 {
 		return scriptSignature(clean[i], depth+1, name)
@@ -403,17 +398,30 @@ func scriptSignature(script string, depth int, shell string) string {
 	return trimName(shell)
 }
 
+// gateControl are the words that make `pdx gate` a query or a setting, not a gated command (cmd/pdx/gate_cmd.go reads the first word).
+var gateControl = map[string]bool{"status": true, "would-wait": true, "queue": true, "conflict": true, "free": true, "set": true, "hosts": true, "history": true, "profile": true}
+
+// gatedCommand is what `pdx gate [flags] -- <command>` runs (the gate shim puts it in front of every heavy command), nil when argv is
+// not that: another pdx command, a gate query (`pdx gate would-wait -- ...` only asks), or no command after the first "--".
+func gatedCommand(argv []string) []string {
+	if len(argv) < 4 || path.Base(argv[0]) != "pdx" || argv[1] != "gate" || gateControl[argv[2]] {
+		return nil
+	}
+	for i := 2; i < len(argv)-1; i++ {
+		if argv[i] == "--" {
+			return argv[i+1:]
+		}
+	}
+	return nil
+}
+
 // runsAScript says whether argv is a `sh -c <script>`, directly or behind `pdx gate ... --`.
 func runsAScript(argv []string) bool {
 	if shellScript(argv) >= 0 {
 		return true
 	}
-	if len(argv) > 2 && path.Base(argv[0]) == "pdx" && argv[1] == "gate" {
-		for i := 2; i < len(argv)-1; i++ {
-			if argv[i] == "--" {
-				return runsAScript(argv[i+1:])
-			}
-		}
+	if inner := gatedCommand(argv); inner != nil {
+		return runsAScript(inner)
 	}
 	return false
 }

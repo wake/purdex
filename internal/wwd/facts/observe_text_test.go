@@ -267,6 +267,8 @@ func TestCommandSignatureSeesThroughPdxGate(t *testing.T) {
 		"gate inside the CC wrapper":          {ccWrap(`'pdx gate --class heavy -- go test ./x/'`), "go test"},
 		"a gated shell inside the CC wrapper": {ccWrap(`'pdx gate -- sh -c "go test ./..."'`), "go test"},
 		"a shell -c inside the CC wrapper":    {ccWrap(`'bash -c "go test ./..."'`), "go test"},
+		"a gate query is not the command":     {[]string{"pdx", "gate", "would-wait", "--auto", "--", "go", "test", "./..."}, "pdx gate would-wait"},
+		"a gate query about a script":         {[]string{"pdx", "gate", "would-wait", "--auto", "--", "sh", "-c", "go test ./..."}, "pdx gate would-wait"},
 		"a gate in a gate":                    {[]string{"pdx", "gate", "--", "pdx", "gate", "--", "go", "build"}, "go build"},
 		"a secret after -- is kept out":       {[]string{"pdx", "gate", "--", "tool", "sk-live-abcdefghijklmnop", "go"}, "tool go"},
 	} {
