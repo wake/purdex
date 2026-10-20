@@ -35,7 +35,6 @@ import { MetricRow, TimeAxis } from './MetricChart'
 import { QueueSection } from './QueueSection'
 import { WatchSettings } from './WatchSettings'
 import { HostJobs } from './jobs/HostJobs'
-import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
@@ -184,7 +183,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           </span>
         </div>
         {page === 'settings' ? (
-          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} poolAlias={view.kind === 'daemon' ? alias : undefined} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
+          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} poolAlias={view.kind === 'daemon' ? alias : undefined} offline={offline}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
         {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} now={now} />}
