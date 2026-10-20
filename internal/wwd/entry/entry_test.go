@@ -156,7 +156,7 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 		"a flag no task has":        {spa, []string{"pnpm", "vitest", "run", "--watch"}, "spa-file"}, // two tasks are as near: the first name
 		"the wrong directory":       {func(r string) string { return r }, []string{"pnpm", "vitest", "run", "src/a.test.ts"}, "spa-file"},
 		"another go command":        {func(r string) string { return r }, []string{"go", "vet", "./..."}, "go-pkg"},
-		"a go flag":                 {func(r string) string { return r }, []string{"go", "test", "-v", "./internal/foo/"}, "go-pkg"},
+		"a go flag":                 {func(r string) string { return r }, []string{"go", "test", "-cover", "./internal/foo/"}, "go-pkg"}, // -v, -count, -p… only say how to run, and are ignored (#S2-b0b)
 		"a package script":          {func(r string) string { return r }, []string{"pnpm", "test"}, ""},
 	}
 	for name, c := range cases {
@@ -266,6 +266,17 @@ local = true
 	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-run", "X"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile=out.xml"}).Action)
+	// Go reads --flag as -flag: the double-dash spelling of the worker's own output flag is refused as well (#3711 R2)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile=out.xml"}).Action)
+	// what follows -args or -- is for the test program, not a flag of go: it is not the worker's output flag (#3711 critic)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-args", "-junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "--", "-junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-args", "--junitfile=out.xml"}).Action)
+	// ... and the same words before -args are the flag
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml", "-args", "x"}).Action)
+	// the rule is go's: another tool's -- is its own (vitest keeps refusing its output flag wherever it stands)
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--", "--outputFile=out.json"}).Action)
 }
 
 // A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.
@@ -287,8 +298,13 @@ func TestMatch_ASameFlagWithAnotherValueIsNotTheTask(t *testing.T) {
 	assert.Equal(t, []string{"-run", "X"}, r.Args)
 	r = Match(root, []string{"go", "test", "-run", "X"})
 	assert.Equal(t, ActionRewrite, r.Action, "the task's flag left out")
+	// -count only says how to run (S2-b0b): another value is replaced by the task's, the command is still the task
 	r = Match(root, []string{"go", "test", "-count=2", "-run", "X"})
-	assert.Equal(t, ActionDeny, r.Action, "-count=2 is not the task's -count=1")
+	assert.Equal(t, ActionRewrite, r.Action, "-count=2 is replaced by the task's -count=1")
+	// a flag that picks what runs is different: the same flag with another value is not the task
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), []byte("[entry]\nmode = \"deny\"\n[tasks.go-tagged]\nrun = \"go test -tags a\"\nargs = \"pass\"\nlocal = true\n"), 0o644))
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-tags", "a", "-run", "X"}).Action)
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-tags", "b", "-run", "X"}).Action, "-tags b is not the task's -tags a")
 }
 
 // A call that is not a test or build command, no manifest, or a manifest that does not parse: left alone.

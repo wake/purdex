@@ -561,8 +561,19 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   from the gate (spec §8.3; moving it to wwd's own slots is part of retiring the gate).
 * A command is a task only when it says what the task says about **which tests run**: `-run`, `-skip`, `-tags`, `-short`, `-bench` and `-fuzz` of the
   task must be in the command with the same value. `go test -tags e2e ./cmd/wwd/` is not the `e2e` task (it would run less), and runs as typed or
-  as an ad-hoc job. Flags that only say how (`-p`, `-timeout`, `-count`) may be left out. A flag written as `-flag=value` is compared as
+  as an ad-hoc job. A flag written as `-flag=value` is compared as
   one word, so `-tags=e2e` does not match a task that has `-tags e2e`: it falls to the ad-hoc path.
+* **Flags that only say how to run** (`go test` only: `-count`, `-v`, `-p`, `-parallel`, `-timeout`, `-json`, `-failfast`) do not keep a command from its
+  task when the task does not write them: they are dropped, and the task's own command runs. So `go test -count=1 ./...` is `go-all`, and the typed
+  `-p`/`-timeout` are **replaced by the task's own values** (`-count=1` is added by the worker anyway). **To keep your own `-p` or `-timeout`, use
+  `pdx test --adhoc -- go test …`.** (Go reads `--flag` as `-flag`, and so does the entry, for every check on a `go test` command; a lone `--`
+  or `-args` ends the flags.) Any other flag changes what runs or what it means (`-race` is its own task, `go-race`; `-cover`, `-shuffle` …): the
+  command is then no task, and an ad-hoc job.
+* **A pattern that expands is not a package.** The fast-lane task (`go-pkg`, `local = true`) takes packages by name; a pattern with `...` is never
+  its. `go test ./...` (the whole tree) is `go-all`, the task that spells `./...` out, a release task through the queue; `go test ./internal/...` and other
+  recursive patterns are `go-changed` (merge, through the queue); `go test -race ./...` is `go-race`. A task with a count limit
+  (`local = "packages<=N"`) is also queued, not run here, once an argument is a pattern. The check on a local-only task is in `internal/wwd/entry`
+  (`matchTask`), not in the manifest; `TestMatch_NoRecursivePatternIsEverLocal` keeps it for purdex's.
 * A command that is a queued task is rewritten only when some host can take it **now**: `pdx entry match` reads the local wwd's pool (2 s) and a
   host counts when it holds all of the task's labels, answers, and has its worker on (an owner at the keyboard making it yield is waiting, not a
   no). A host that holds the labels but is down or has its worker off does not count. A host that answers and has its worker on but has not sent its first facts yet (the first seconds after wwd starts, when only its `os:` and `arch:` labels are announced) leaves the answer open and the rewrite stays, as `pdx test` queues in that case. Otherwise the answer is `none` and the command runs as typed:

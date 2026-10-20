@@ -15,6 +15,7 @@ import (
 // has it; the same flag with another value is another command. A caller does not type the worker's output files, so a flag that
 // carries one is the task's alone. What is left after the task's words is the arguments, which must be what the task takes.
 func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool) {
+	cmd = normalizeGoFlags(cmd) // before anything reads a flag: --junitfile is -junitfile
 	var lits, owned []string
 	shape := t.Shape()
 	for k, w := range shape {
@@ -28,7 +29,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 			owned = append(owned, w.Text) // `--outputFile={report}`
 		}
 	}
-	for _, c := range cmd {
+	for _, c := range beforeGoArgs(cmd) {
 		for _, o := range owned {
 			if c == o || (strings.HasSuffix(o, "=") && strings.HasPrefix(c, o)) || strings.HasPrefix(c, o+"=") {
 				return nil, false
@@ -36,6 +37,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 	}
 	tw := normalize(lits)
+	cmd = dropRunFlags(cmd)
 	i, k := 0, 0
 	for k < len(tw) {
 		if !strings.HasPrefix(tw[k], "-") { // a plain word of the task (go test, a trailing ./...): the command has it too
@@ -84,6 +86,11 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		if a == "" || strings.HasPrefix(a, "-") {
 			return nil, false
 		}
+		// a task that only ever runs here (go-pkg) is for packages by name: a pattern that expands (./internal/...) is not one package, and
+		// run here it would be the suite of a tree on a light slot. It is the queued tasks' (go-changed, go-all).
+		if t.Args == manifest.ArgsPackages && Recursive(a) && t.Local.Allowed && t.Local.Max < 0 {
+			return nil, false
+		}
 		conv, ok := convertArg(t.Args, root, taskDir, cwd, a)
 		if !ok {
 			return nil, false
@@ -97,6 +104,104 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 // of the command is not the same command: `go test -tags e2e ./cmd/wwd/` runs the whole package, and read as a task that has `-run TestE2E`
 // it would silently run only that (the task's flags are all that run once the command is a task).
 var selectsWhatRuns = map[string]bool{"-run": true, "-skip": true, "-tags": true, "-short": true, "-bench": true, "-fuzz": true}
+
+// Recursive says whether a package argument is a pattern that expands to many packages (`./internal/...`, `...`).
+func Recursive(a string) bool { return strings.Contains(a, "...") }
+
+// wholeTree says whether a package argument is the whole tree of the repository.
+func wholeTree(a string) bool { return a == "./..." || a == "..." }
+
+// Flags of `go test` that only say how to run, never what: a command that has one the task does not write still is the task. They are
+// dropped from the command before it is compared, and the task's own command runs (its values of -p and -timeout replace the typed ones;
+// to keep your own, `pdx test --adhoc`). -race, -run, -skip, -tags, -short, -bench, -fuzz, -cover… change what runs or what it means: they
+// stay in the command, and make it another one.
+var (
+	runFlagsAlone = map[string]bool{"-v": true, "-json": true, "-failfast": true}
+	runFlagsValue = map[string]bool{"-count": true, "-p": true, "-parallel": true, "-timeout": true}
+)
+
+// normalizeGoFlags writes a `go test` command's `--flag` as `-flag`, and `-test.flag` as `-flag`: Go reads them as the same flag, and every
+// check here goes by the single dash name. A lone `--` ends the flags, and nothing from `-args` or `--` on is a flag of go (it is the test program's, or an argument).
+func normalizeGoFlags(cmd []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	out := append([]string(nil), cmd[:2]...)
+	for i := 2; i < len(cmd); i++ {
+		w := cmd[i]
+		if w == "-args" || w == "--" {
+			return append(out, cmd[i:]...)
+		}
+		if strings.HasPrefix(w, "--") && len(w) > 2 && w[2] != '-' {
+			w = w[1:]
+		}
+		// -test.run is -run: the test flags of `go help testflag` take the optional test. prefix. Nothing else does: -test.p is no -p, it is an
+		// unknown flag for the test program, and must stay what it is (a command that fails is not one to turn into a task)
+		if rest, ok := strings.CutPrefix(w, "-test."); ok && goTestFlags[flagName("-"+rest)] {
+			w = "-" + rest
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// goTestFlags are the flags that `go help testflag` lists, the ones that may be written with the test. prefix (-test.run for -run). Build
+// flags such as -p, -tags and -race are not among them.
+var goTestFlags = map[string]bool{
+	"-benchmem": true, "-benchtime": true, "-bench": true, "-blockprofile": true, "-blockprofilerate": true, "-count": true,
+	"-coverprofile": true, "-cpu": true, "-cpuprofile": true, "-failfast": true, "-fullpath": true, "-fuzz": true, "-fuzzminimizetime": true,
+	"-fuzztime": true, "-json": true, "-list": true, "-memprofile": true, "-memprofilerate": true, "-mutexprofile": true,
+	"-mutexprofilefraction": true, "-outputdir": true, "-parallel": true, "-run": true, "-short": true, "-shuffle": true, "-skip": true,
+	"-testlogfile": true, "-timeout": true, "-trace": true, "-v": true,
+}
+
+// beforeGoArgs is the part of a `go test` command that is go's own flags and packages: what follows -args or a lone -- is for the test
+// program (or an argument), and is not read as a flag of go, nor as the worker's output flag. Another command is returned whole.
+func beforeGoArgs(cmd []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	for i := 2; i < len(cmd); i++ {
+		if cmd[i] == "-args" || cmd[i] == "--" {
+			return cmd[:i]
+		}
+	}
+	return cmd
+}
+
+// goValueFlags are the flags of `go test` (and the build flags it takes) that take a value, in the next word or joined with =: the word after
+// one is its value whatever it looks like (`-run ./...` is a regexp).
+var goValueFlags = map[string]bool{
+	"-run": true, "-skip": true, "-tags": true, "-count": true, "-p": true, "-parallel": true, "-timeout": true, "-bench": true,
+	"-benchtime": true, "-fuzz": true, "-fuzztime": true, "-cpu": true, "-coverprofile": true, "-covermode": true, "-coverpkg": true,
+	"-o": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-asmflags": true, "-gccgoflags": true, "-mod": true, "-modfile": true,
+	"-overlay": true, "-pkgdir": true, "-vet": true, "-outputdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true,
+	"-list": true, "-blockprofilerate": true, "-memprofilerate": true, "-mutexprofilefraction": true, "-run-timeout": true, "-testify.m": true,
+	"-C": true, "-buildmode": true, "-buildvcs": true, "-compiler": true, "-installsuffix": true, "-pgo": true, "-toolexec": true,
+	"-mutexprofile": true, "-trace": true, "-shuffle": true, "-testlogfile": true, "-fuzzcachedir": true, "-fuzzminimizetime": true,
+}
+
+// dropRunFlags takes the flags above out of a `go test` command, also when the task writes the flag itself with its own value (go-all has
+// -p 3 and -timeout 30m: `go test -p 4 ./...` is go-all, which runs its own). A value joined with = is one word; a flag that takes a value in
+// the next word takes it.
+func dropRunFlags(cmd []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	out := append([]string(nil), cmd[:2]...)
+	for i := 2; i < len(cmd); i++ {
+		name := flagName(cmd[i])
+		switch {
+		case cmd[i] == "-args" || cmd[i] == "--":
+			return append(out, cmd[i:]...)
+		case !(runFlagsAlone[name] || runFlagsValue[name]):
+			out = append(out, cmd[i])
+		case runFlagsValue[name] && !strings.Contains(cmd[i], "=") && i+1 < len(cmd) && !strings.HasPrefix(cmd[i+1], "-"):
+			i++ // its value is the next word
+		}
+	}
+	return out
+}
 
 // valueLike says whether a word after a flag can be its value: not another flag, and, as the very last word of the task, not a
 // relative path or pattern (that is the task's own word, like the trailing ./... of `go test -timeout 30m ./...`; anywhere else a

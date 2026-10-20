@@ -62,10 +62,11 @@ class = "release"
 	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "./..."}).Action, "every flag left out")
 	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-p", "3", "./..."}).Action, "one flag with its value")
 	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-json", "-p", "3", "-timeout", "30m", "./..."}).Action, "all of them")
-	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-timeout", "30m", "-p", "3", "./..."}).Action, "the task's order; another order is not matched")
+	// -p, -timeout and -json only say how to run: their order and their values do not matter, the task's own are what runs (S2-b0b)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-timeout", "30m", "-p", "3", "./..."}).Action, "another order")
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "3", "30m", "./..."}).Action, "bare words are not the flags' values")
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "3", "./..."}).Action)
-	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-p", "4", "./..."}).Action, "the flag with another value")
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-p", "4", "./..."}).Action, "the flag with another value: the task's replaces it")
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test"}).Action, "the task's trailing ./... is part of it")
 }
 
