@@ -139,6 +139,10 @@ describe('connectionOf', () => {
     expect(connectionOf(monitor(pool({ liveness: undefined })), {}, hosts)).toEqual({ kind: 'local' }) // a row with no liveness is the same
   })
 
+  it('the host the answering daemon reports as its own is local even if its row carries a liveness', () => {
+    expect(connectionOf(monitor(peerRow(), true), {}, hosts)).toEqual({ kind: 'local' })
+  })
+
   it('a peer: the daemon\'s word, since when, when it was last checked', () => {
     const c = connectionOf(monitor(peerRow()), {}, hosts)
     expect(c).toMatchObject({ kind: 'peer', state: 'wwd_down', since: NOW - 600_000, checkedAt: NOW - 3000 })
