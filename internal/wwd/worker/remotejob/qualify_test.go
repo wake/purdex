@@ -54,13 +54,14 @@ func TestAQualifyHalfIsCheckedAgainstTheRuleThatMadeIt(t *testing.T) {
 			"tool label missing": func(j *wire.Job) {
 				j.Labels = slices.DeleteFunc(j.Labels, func(l string) bool { return l == "tool:node" })
 			},
-			"other host":         func(j *wire.Job) { j.Labels[len(j.Labels)-1] = "host:elsewhere" },
-			"two hosts":          func(j *wire.Job) { j.Labels = append(j.Labels, "host:mserv") },
-			"cacheable":          func(j *wire.Job) { j.Cacheable = true },
-			"not interruptible":  func(j *wire.Job) { j.Interruptible = false },
-			"lock dropped":       func(j *wire.Job) { j.Locks = nil },
-			"the other role":     func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("mserv", "task:purdex/tsc", otherRole(role)) },
-			"foreign task label": func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("mserv", "task:purdex/other", role) },
+			"other host":        func(j *wire.Job) { j.Labels[len(j.Labels)-1] = "host:elsewhere" },
+			"two hosts":         func(j *wire.Job) { j.Labels = append(j.Labels, "host:mserv") },
+			"cacheable":         func(j *wire.Job) { j.Cacheable = true },
+			"not interruptible": func(j *wire.Job) { j.Interruptible = false },
+			"lock dropped":      func(j *wire.Job) { j.Locks = nil },
+			"the other role":    func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("mserv", "task:purdex/tsc", otherRole(role)) },
+			"candidate of the key is not the submitter's host": func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("elsewhere", "task:purdex/tsc", role) },
+			"foreign task label":                               func(j *wire.Job) { j.SupersedeKey = labels.QualifyKey("mserv", "task:purdex/other", role) },
 		} {
 			p, err := PrepareAt(half(role, "air26", f), root, t.TempDir(), "air26")
 			if p != nil || code(t, err) != CodeMetaMismatch {
