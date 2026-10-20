@@ -10,6 +10,7 @@ import { useRootCacheStore } from './root-cache'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useGroupViewStore } from '../../stores/useGroupViewStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
@@ -90,6 +91,8 @@ export function startGroupSelection(): () => void {
     useRootCacheStore.subscribe((state, prev) => { if (state.roots !== prev.roots) regroup() }),
     useTeamRosterStore.subscribe((state, prev) => { if (state.byHost !== prev.byHost) regroupSoon() }),
     useSessionStore.subscribe((state, prev) => { if (state.sessions !== prev.sessions) regroupSoon() }),
+    // a host re-pointed, or its daemon identity verified / lost, changes which remote seats the team index trusts
+    useHostStore.subscribe((state, prev) => { if (state.hosts !== prev.hosts || state.runtime !== prev.runtime) regroupSoon() }),
     useTeamUiStore.subscribe((state, prev) => { if (state.sidebarView !== prev.sidebarView) regroup() }),
     useLayoutStore.subscribe((state, prev) => { if (state.activityBarWidth !== prev.activityBarWidth || state.tabPosition !== prev.tabPosition) regroup() }),
   ]

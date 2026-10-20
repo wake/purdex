@@ -11,6 +11,8 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRootCacheStore } from './root-cache'
 import { HOST, KEY, resetTeamStores, seedScene } from '../team/__tests__/team-fixture'
+import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
 import { useTeamRosterStore as rosterStore } from '../../stores/useTeamRosterStore'
 import { manualGroupKey, teamGroupKey, UNGROUPED } from './group-key'
 import type { Tab } from '../../types/tab'
@@ -181,5 +183,21 @@ describe('the view in force and the team index (TG-5c)', () => {
     useLayoutStore.setState({ activityBarWidth: 'narrow' })
     useLayoutStore.setState({ activityBarWidth: 'wide' })
     expect(view().selectedGroup).toBe(manualGroupKey('aaaaaaaa'))
+  })
+  it('a remote seat\'s host being verified (host store only) makes the active tab the team\'s: the selection follows', () => {
+    vi.useFakeTimers()
+    restart('x')
+    // member A lives on daemon-b = host h2; the active tab shows its session there
+    rosterStore.setState({ byHost: { [HOST]: rosterStore.getState().byHost[HOST].map((t) => ({ ...t, members: t.members.map((m) => ({ ...m, host_id: 'daemon-b' })) })) } })
+    useSessionStore.setState({ sessions: { ...useSessionStore.getState().sessions, h2: [{ code: 'code-a-tm', name: 'a-tm', mode: 'terminal', cwd: '~' }] as never } })
+    const remote = { ...useTabStore.getState().tabs.ma, id: 'rm', layout: { type: 'leaf', pane: { id: 'p-rm', content: { kind: 'tmux-session', hostId: 'h2', sessionCode: 'code-a-tm', mode: 'terminal', cachedName: 'a-tm', tmuxInstance: 'i' } } } }
+    useTabStore.setState((s) => ({ tabs: { ...s.tabs, rm: remote as never }, tabOrder: [...s.tabOrder, 'rm'] }))
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h2: { id: 'h2', name: 'h2', ip: '1.2.3.4', port: 1, daemonId: 'daemon-b' } as never } }))
+    useTabStore.getState().setActiveTab('rm')
+    vi.advanceTimersByTime(TEAM_INDEX_SETTLE_MS)
+    expect(view().selectedGroup).toBe(UNGROUPED) // the host is not verified: not a seat
+    useHostStore.setState((s) => ({ runtime: { ...s.runtime, h2: { status: 'connected', daemonIdVerified: { endpoint: '1.2.3.4:1', daemonId: 'daemon-b' } } as never } }))
+    vi.advanceTimersByTime(TEAM_INDEX_SETTLE_MS)
+    expect(view().selectedGroup).toBe(teamGroupKey(KEY))
   })
 })
