@@ -111,6 +111,13 @@ describe('fullChartsOf: the lines', () => {
     expect(get(fullChartsOf(five(g), g, '5m', ctx()), 'swap').yMax).not.toBe(4)
   })
 
+  it('swap\'s cap is the latest sample\'s total: an older total is not carried over when the latest has none', () => {
+    const f = rich(darwinJson)
+    const g = rich(darwinJson, (raw) => { delete (raw.mem as Rec).swap_total_mb })
+    const samples = [sampleOfFacts({ ...f, at: T0 }), sampleOfFacts({ ...g, at: T0 + 5000 })]
+    expect(get(fullChartsOf(samples, g, '5m', ctx()), 'swap').yMax).not.toBe(4)
+  })
+
   it('the read and write of each device are two lines each; IOPS the same', () => {
     const f = rich(darwinJson)
     const io = get(fullChartsOf(five(f), f, '5m', ctx()), 'diskio')
