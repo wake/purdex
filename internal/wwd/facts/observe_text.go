@@ -250,6 +250,9 @@ func signature(clean []string, depth int) string {
 	if name == "." || name == "/" || isScrubbed(name) {
 		return ""
 	}
+	if inner := gatedCommand(clean); inner != nil {
+		return signature(inner, depth) // unwrapping argv is not another level of script (the words only get shorter)
+	}
 	if i := shellScript(clean); i >= 0 {
 		return scriptSignature(clean[i], depth+1, name)
 	}
@@ -395,6 +398,34 @@ func scriptSignature(script string, depth int, shell string) string {
 	return trimName(shell)
 }
 
+// gateControl are the words that make `pdx gate` a query or a setting, not a gated command (cmd/pdx/gate_cmd.go reads the first word).
+var gateControl = map[string]bool{"status": true, "would-wait": true, "queue": true, "conflict": true, "free": true, "set": true, "hosts": true, "history": true, "profile": true}
+
+// gatedCommand is what `pdx gate [flags] -- <command>` runs (the gate shim puts it in front of every heavy command), nil when argv is
+// not that: another pdx command, a gate query (`pdx gate would-wait -- ...` only asks), or no command after the first "--".
+func gatedCommand(argv []string) []string {
+	if len(argv) < 4 || path.Base(argv[0]) != "pdx" || argv[1] != "gate" || gateControl[argv[2]] {
+		return nil
+	}
+	for i := 2; i < len(argv)-1; i++ {
+		if argv[i] == "--" {
+			return argv[i+1:]
+		}
+	}
+	return nil
+}
+
+// runsAScript says whether argv is a `sh -c <script>`, directly or behind `pdx gate ... --`.
+func runsAScript(argv []string) bool {
+	if shellScript(argv) >= 0 {
+		return true
+	}
+	if inner := gatedCommand(argv); inner != nil {
+		return runsAScript(inner)
+	}
+	return false
+}
+
 func scriptFirst(script string, depth int) string {
 	segs := splitSegments(script)
 	wrapped := false // only a script that ends in eval is Claude Code's wrapper: elsewhere setopt and unalias are the command
@@ -409,9 +440,11 @@ func scriptFirst(script string, depth int) string {
 			f[i] = unquoteWord(f[i])
 		}
 		if len(f) == 0 || f[0] != "eval" { // the argument of eval is a script: its own words are checked when it is read
-			for i := 1; i < len(f); i++ {
-				if strings.ContainsAny(f[i], " \t") {
-					f[i] = "-" // a quoted phrase is an argument, not a subcommand: it ends the words like a flag
+			if !runsAScript(f) { // a sh -c has a script word, which signature reads
+				for i := 1; i < len(f); i++ {
+					if strings.ContainsAny(f[i], " \t") {
+						f[i] = "-" // a quoted phrase is an argument, not a subcommand: it ends the words like a flag
+					}
 				}
 			}
 			f = redact.ScrubArgv(f) // unquoting can join what the scrubber saw in pieces (sk-'abc...')
