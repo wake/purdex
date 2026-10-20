@@ -30,6 +30,8 @@ export interface CellView {
   look: PoolHostResolvedLook
   /** Set while the host is only the kept one because the whole pool cannot be read (M25). */
   poolFailure: MonitorHost['poolFailure']
+  /** The number at the corner of the cell and its colour; null: none to show. */
+  count: MonitorHost['count']
   /** The readings; null unless the state is `ok`. */
   fast: CellFast | null
   /** The pool's zone word (`unknown` is its own); null unless `ok`. */
@@ -65,7 +67,7 @@ export function factsToCellFast(f: PoolFacts, load: number): CellFast {
 }
 
 export function cellOf(m: MonitorHost): CellView {
-  const base = { hostId: m.hostId, name: m.alias, state: m.state, look: m.look, poolFailure: m.poolFailure }
+  const base = { hostId: m.hostId, name: m.alias, state: m.state, look: m.look, poolFailure: m.poolFailure, count: m.count }
   const none = { fast: null, zone: null, load: null, worker: null, headroom: null, reasons: null, sessionsRoom: null, owner: null, psi: null }
   if (m.state.state !== 'ok') return { ...base, ...none }
   const f = m.state.facts
