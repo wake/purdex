@@ -87,6 +87,14 @@ describe('useMonitorHosts', () => {
       fronts('cfg-a'); useNexHostStore.setState({ byHost: own('cfg-a', A, 'mlab') } as never)
       expect(renderHook(() => useMonitorHosts()).result.current.map((h) => h.local)).toEqual([true])
     })
+    it('two App hosts share one wwd and the second answered: that row is local', () => {
+      answer([host(A, 'mlab')])
+      usePoolStore.setState({ sourceHostId: 'cfg-b' } as never)
+      fronts('cfg-a', 'cfg-b'); useNexHostStore.setState({ byHost: { ...own('cfg-a', A, 'mlab'), ...own('cfg-b', A, 'mlab') } } as never)
+      const { result } = renderHook(() => useMonitorHosts())
+      expect(result.current[0].daemonHostId).toBe('cfg-a')
+      expect(result.current.map((h) => h.local)).toEqual([true])
+    })
     it('two rows without liveness: still one local (a legacy daemon)', () => {
       answer([host(A, 'mlab'), host(B, 'mserv')])
       fronts('cfg-a', 'cfg-b'); useNexHostStore.setState({ byHost: { ...own('cfg-a', A, 'mlab'), ...own('cfg-b', B, 'mserv') } } as never)

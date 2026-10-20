@@ -8,6 +8,7 @@ import { usePoolHostOwners } from './daemons'
 import { useClock, useRunPool } from './use-cell-models'
 import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { PoolErrorCode } from './errors'
 import { hostCountsOf, type HostCount } from './host-counts'
 import { queueEntries } from './jobs-lanes'
@@ -26,7 +27,7 @@ export interface MonitorHost {
   poolFailure: { code: PoolErrorCode | null; since: number | null } | null
   /** The number at the cell's corner and its colour (M6, M7); null when there is none to show: a host that is not ok, a pool nobody can read (M25), or nothing to count. */
   count: HostCount | null
-  /** This row is the wwd of the daemon that answered the pool: the App host that fronts it (`daemonHostId`) is the source of this answer. At most one row, and none while nothing answers. */
+  /** This row is the wwd of the daemon that answered the pool: the answering App host reports this wwd as its own. At most one row, and none while nothing answers. */
   local: boolean
 }
 
@@ -55,7 +56,9 @@ export function useMonitorHosts(): MonitorHost[] {
   const stale = hosts.length === 0 && !answered && remembered.hosts.length > 0 && sourceKnown
   const rows = stale ? remembered.hosts : hosts
   const counts = useMemo(() => (readable ? hostCountsOf(queueEntries(jobs, now, hosts), jobs) : {}), [readable, jobs, now, hosts])
+  // The wwd the answering App host itself reports: its own identity, not the first owner `poolHostOwners` keeps when several App hosts share one wwd.
   const sourceHostId = usePoolStore((s) => s.sourceHostId)
+  const sourceWwdId = useNexHostStore((s) => (sourceHostId === null ? null : (s.byHost[sourceHostId]?.wwd?.hostId ?? null)))
   return useMemo(() => orderPoolHosts(rows, order).map((h): MonitorHost => {
     const state = poolHostState(stale ? { ...h, reachable: false, facts: null, liveness: 'unknown' } : h, lastFactsAt[h.host_id] ?? null, now)
     return {
@@ -67,7 +70,7 @@ export function useMonitorHosts(): MonitorHost[] {
       look: lookOf(h.host_id),
       poolFailure: stale ? { code: poolError?.code ?? null, since: poolError?.since ?? null } : null,
       count: state.state === 'ok' ? (counts[h.alias] ?? null) : null,
-      local: sourceHostId !== null && owners[h.host_id] === sourceHostId,
+      local: sourceWwdId !== null && h.host_id === sourceWwdId,
     }
-  }), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now, counts, sourceHostId])
+  }), [rows, stale, poolError, order, owners, lookOf, lastFactsAt, now, counts, sourceWwdId])
 }
