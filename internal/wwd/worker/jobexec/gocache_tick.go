@@ -123,9 +123,6 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) {
 	}
 	el := now.Sub(st.pruneAt)
 	agePass := st.pruneAt.IsZero() || el < 0 || el >= goCachePruneEvery
-	if agePass {
-		st.pruneAt = now
-	}
 	s.mu.Unlock()
 	if agePass { // as in a job's pass: an entry unused for longer than the limit goes, free or held
 		cutoff := now.Add(-e.goCachePrune() - goCacheMtimeStep)
@@ -146,6 +143,10 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) {
 			}
 		}
 		files = kept
+		// the pass went through (a pass that ctx ended returned above): only then is it the time of the last one, which a job's pass shares
+		s.mu.Lock()
+		st.pruneAt = now
+		s.mu.Unlock()
 	}
 
 	max := e.goCacheMax()

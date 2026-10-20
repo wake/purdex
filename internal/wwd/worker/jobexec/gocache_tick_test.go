@@ -216,3 +216,38 @@ func TestTheTickOfACacheTooBigToListRemovesTheAgedWithoutAList(t *testing.T) {
 	}
 	assert.DirExists(t, r.cache)
 }
+
+// The time of the last age pass is shared with the job's pass, so it is the time of a pass that went through: one that ctx ended half way
+// leaves it as it was, and the job that starts next does the pass (codex R2).
+func TestAnAgePassTheContextEndedHalfWayIsNotTheLastOne(t *testing.T) {
+	r := newTickRig(t, 10)
+	r.fill(t, "aged", 20, 100, 48*time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	removed := 0
+	old := goCacheRemoveFile
+	goCacheRemoveFile = func(p string) error {
+		removed++
+		if removed == 3 {
+			cancel()
+		}
+		return os.Remove(p)
+	}
+	t.Cleanup(func() { goCacheRemoveFile = old })
+
+	r.e.tickGoCaches(ctx)
+
+	r.e.goCache.mu.Lock()
+	st := r.e.goCache.dirs[r.cache]
+	r.e.goCache.mu.Unlock()
+	require.NotNil(t, st)
+	assert.True(t, st.pruneAt.IsZero(), "an interrupted pass is not the last pass")
+	assert.Less(t, removed, 20)
+
+	// a pass that goes through is
+	goCacheRemoveFile = old
+	r.e.goCache.tickAt = time.Time{}
+	r.e.tickGoCaches(context.Background())
+	r.e.goCache.mu.Lock()
+	defer r.e.goCache.mu.Unlock()
+	assert.False(t, r.e.goCache.dirs[r.cache].pruneAt.IsZero())
+}
