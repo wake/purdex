@@ -146,7 +146,7 @@ describe('the active tab changes group (TG-5c, spec 6.2)', () => {
     expect(view().selectedGroup).toBe(manualGroupKey(H))
   })
   it('the workspace view does not select groups', () => {
-    useTeamUiStore.setState({ sidebarView: 'workspaces' })
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
     view().selectGroup(null)
     useManualGroupsStore.setState({ groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 }, [H]: { name: 'H', members: [], createdAt: 1 } } })
     expect(view().selectedGroup).toBeNull()
@@ -177,7 +177,7 @@ describe('the view in force and the team index (TG-5c)', () => {
   it('switching the view in force records nothing over what the toggle restores (spec 6.3)', () => {
     restart('ma')
     view().selectGroup(manualGroupKey('aaaaaaaa')) // what the group view restored
-    useTeamUiStore.setState({ sidebarView: 'workspaces' })
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
     useTeamUiStore.setState({ sidebarView: 'groups' })
     expect(view().selectedGroup).toBe(manualGroupKey('aaaaaaaa'))
     useLayoutStore.setState({ activityBarWidth: 'narrow' })
