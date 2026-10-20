@@ -151,6 +151,11 @@ describe('HostCell — the hover card', () => {
     fireEvent.click(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
   })
+  it.each(['wide', 'narrow'] as const)('%s: the tile shows a ring for keyboard focus only (focus-visible), no outline on a click', (variant) => {
+    setup(cellView(), { variant })
+    expect(tile().className).toContain('focus-visible:ring-1')
+    expect(tile().className).toContain('outline-none')
+  })
   it('the tile is described by its open card, and by nothing while closed', () => {
     setup(cellView())
     expect(tile().getAttribute('aria-describedby')).toBeNull()

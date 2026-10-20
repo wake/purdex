@@ -1,5 +1,5 @@
 // spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's host row (monitoring tabs M10, M17–M19), built from the App's own pieces so it reads like the members beside it:
-//   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side; hover bg-surface-hover, selected bg-surface-active. No click / focus outline; the card opens on focus.
+//   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side; hover bg-surface-hover, selected bg-surface-active. No outline on a click; a keyboard focus (focus-visible) shows a 1 px ring, as the queue strip's does; the card opens on focus.
 //   badge  the App's `HostBadge` as beside a member in the session list (the sidebar badge settings, the host's colours resolved as for an agent member: terminal, falling back to console).
 //          wwd_down: lit as ever; host_down: 40 %; unknown: 60 %.
 //   count  the number at the badge's top right (M6, M7): grey, yellow from a long wait, red when no host can take a job; only for a host that is ok and has something to count; 99+ above 99.
@@ -102,7 +102,7 @@ export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
       onFocus={openCard}
       onBlur={closeCard}
       onClick={() => { closeCard(); onOpen() }}
-      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'justify-center px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
+      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none focus-visible:ring-1 focus-visible:ring-border-active transition-colors ${narrow ? 'justify-center px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
     >
       {narrow ? <NarrowHostBlock view={view} /> : (
         <>
