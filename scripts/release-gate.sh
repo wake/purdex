@@ -129,6 +129,7 @@ for t in $tasks; do
 		rc=$?
 		# `wait` may have been cut short by a signal: wait for pdx itself to end before reporting
 		while kill -0 "$child" 2>/dev/null; do wait "$child" 2>/dev/null; rc=$?; sleep 0.05; done
+		rm -f "$work/$t.pid" # pdx has ended: its number may be another process's by now, and the KILL after a grace must not reach it
 		echo $rc > "$work/$t.rc"
 	) &
 	pids="$pids $!"

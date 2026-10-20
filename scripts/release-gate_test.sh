@@ -206,6 +206,33 @@ for p in $(cat "$tmp/pids"); do
 	kill -0 "$p" 2>/dev/null && { kill -9 "$p" 2>/dev/null; fail "a pdx that ignores TERM was left running ($p)"; }
 done
 
+# 9e. a pdx that has ended leaves no pid file behind: the KILL after the grace goes to the pdx calls that are still there only (a number that
+# was a pdx is another process by then)
+cat > "$tmp/pdx-mixed" <<'EOF'
+#!/bin/sh
+echo $$ >> "$FAKE_PIDS"
+[ "$2" = go-all ] && exit 0
+trap '' TERM INT HUP
+while :; do sleep 1; done
+EOF
+chmod +x "$tmp/pdx-mixed"
+: > "$tmp/pids"
+RELEASE_GATE_TERM_GRACE=2 FAKE_PIDS="$tmp/pids" sh "$gate" --pdx "$tmp/pdx-mixed" --clone "$clone" --remote "$remote" "$c2" > "$tmp/mixed.out" 2>&1 &
+gpid=$!
+n=0; while [ "$(wc -l < "$tmp/pids")" -lt 12 ] && [ $n -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+[ "$(wc -l < "$tmp/pids")" -ge 12 ] || fail "the 12 mixed tasks were not all started: $(cat "$tmp/mixed.out")"
+sleep 1
+logs=$(sed -n 's/.*logs \(.*\))$/\1/p' "$tmp/mixed.out" | head -n 1)
+[ -d "$logs" ] || fail "no run directory in: $(cat "$tmp/mixed.out")"
+[ ! -e "$logs/go-all.pid" ] || fail "the pid file of a pdx that has ended must be gone"
+[ -e "$logs/spa-full.pid" ] || fail "the pid file of a pdx that is still running must be there"
+kill -TERM "$gpid"
+set +e; wait "$gpid"; set -e
+sleep 1
+for p in $(cat "$tmp/pids"); do
+	kill -0 "$p" 2>/dev/null && { kill -9 "$p" 2>/dev/null; fail "a pdx was left running ($p)"; }
+done
+
 # 9c. a TERM at any moment of the start (before the tasks are sent, while they are being started, once they all are) leaves no pdx behind
 for delay in 0 0.05 0.1 0.15 0.2 0.3 0.4 0.6; do
 	: > "$tmp/pids"
