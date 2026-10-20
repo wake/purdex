@@ -13,6 +13,17 @@ import (
 
 // ---- untracked symlinks that point out of the repository are not part of a snapshot (#3841) ----
 
+// snapTree is the tree of a real snapshot commit (WorkingTree writes its objects to a quarantine, so its tree cannot be listed) and
+// is checked to be the tree WorkingTreeSkipped gives.
+func outlinkTree(t *testing.T, dir, workTree string) string {
+	t.Helper()
+	snap, err := SnapshotTree(context.Background(), "", dir)
+	require.NoError(t, err)
+	tree := gitIn(t, dir, "rev-parse", snap.SHA+"^{tree}")
+	require.Equal(t, workTree, tree)
+	return tree
+}
+
 func treeHas(t *testing.T, dir, tree, name string) bool {
 	t.Helper()
 	return gitIn(t, dir, "ls-tree", "--name-only", tree, "--", name) != ""
@@ -22,12 +33,13 @@ func TestWorkingTree_SkipsUntrackedSymlinksLeavingTheRepo(t *testing.T) {
 	dir := workRepo(t)
 	outside := t.TempDir()
 	require.NoError(t, os.Symlink(outside, dir+"/abs-link"))                   // absolute target
-	require.NoError(t, os.Symlink("../../../elsewhere", dir+"/sub/dotdot"))     // climbs out
+	require.NoError(t, os.Symlink("../../../elsewhere", dir+"/sub/dotdot"))    // climbs out
 	require.NoError(t, os.Symlink("sub/../../x", dir+"/dotdot-in-the-middle")) // climbs out after a detour
 	require.NoError(t, os.Symlink("a.txt", dir+"/inside-link"))                // stays inside
 	require.NoError(t, os.Symlink("sub/b.txt", dir+"/inside-link2"))           // stays inside
 	tree, skipped, err := WorkingTreeSkipped(context.Background(), "", dir)
 	require.NoError(t, err)
+	tree = outlinkTree(t, dir, tree)
 	for _, gone := range []string{"abs-link", "sub/dotdot", "dotdot-in-the-middle"} {
 		assert.False(t, treeHas(t, dir, tree, gone), gone)
 	}
@@ -48,6 +60,7 @@ func TestWorkingTree_SkipsALinkThatLeavesThroughAnotherLink(t *testing.T) {
 	require.NoError(t, os.Symlink("hop/file", dir+"/via-hop"))
 	tree, skipped, err := WorkingTreeSkipped(context.Background(), "", dir)
 	require.NoError(t, err)
+	tree = outlinkTree(t, dir, tree)
 	assert.False(t, treeHas(t, dir, tree, "via-hop"))
 	assert.ElementsMatch(t, []string{"hop", "via-hop"}, skipped)
 }
@@ -60,6 +73,7 @@ func TestWorkingTree_KeepsTrackedSymlinkPointingOut(t *testing.T) {
 	gitIn(t, dir, "commit", "-q", "-m", "link")
 	tree, skipped, err := WorkingTreeSkipped(context.Background(), "", dir)
 	require.NoError(t, err)
+	tree = outlinkTree(t, dir, tree)
 	assert.True(t, treeHas(t, dir, tree, "tracked-out"))
 	assert.Empty(t, skipped)
 }
@@ -70,7 +84,7 @@ func TestSnapshotTree_SkipsAndReportsOutsideLinks(t *testing.T) {
 	snap, err := SnapshotTree(context.Background(), "", dir)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"node_modules2"}, snap.Skipped)
-	assert.False(t, treeHas(t, dir, snap.SHA+"^{tree}", "node_modules2"))
+	assert.False(t, treeHas(t, dir, gitIn(t, dir, "rev-parse", snap.SHA+"^{tree}"), "node_modules2"))
 }
 
 // The repository's own .gitignore keeps a root node_modules symlink out: `node_modules/` (with a slash) matches directories only.
