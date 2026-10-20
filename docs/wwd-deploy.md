@@ -489,7 +489,14 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   not be trimmed under its bound is emptied, when no job holds it (a cold build is what every job paid before); over twice the bound while jobs
   hold it and it cannot be trimmed, a new job gets no shared cache and builds in its own workspace. The size is looked at, and trimmed, at most
   every 2 minutes, in one walk of the entries (about 0.4 s for 40,000 files on mlab once the directory is warm, 3 s the first time). Go's
-  `trim.txt` and `README` are left alone. If the cache is ever doubted, remove `<deps_root>/gocache`: the worker makes it again. Go's own trim
+  `trim.txt` and `README` are left alone. **A timer trims too (#3833):** the job's pass above runs only when a go job starts, with at most 2000
+  removals, which a host that starts few jobs and writes a lot with each (mlab, mostly lint) does not keep up with. The worker's beat (the loop's
+  sweepers, once a minute, **also while the worker is switched off**: the cache is on the disk either way) looks at every Go version's cache once
+  in 15 minutes, in the background, and trims one that is over its bound down to 80%. When no job holds the cache (the exclusive lock is had
+  without waiting) there is no limit on the number of entries, but the work is done 5000 entries at a time (about a second) and the lock is let
+  go between two chunks, so a job that waits for the shared lock is kept waiting a second at most; while a job holds the cache the rule is the
+  job's pass (only entries unused for 2 hours). The timer never empties a cache. Each trim that removed something logs one line
+  (`the build cache … trimmed on the timer: N entries, M MB freed, now X MB (bound Y MB, exclusive|shared)`). If the cache is ever doubted, remove `<deps_root>/gocache`: the worker makes it again. Go's own trim
   removes entries unused for 5 days; it does not bound the size (air26's old shared `gobuild` reached 142 GB).
 * **Disk**: `[worker] deps_keep` (default 2, 1 to 50) is how many installed sets are kept; each is a whole `node_modules`/`vendor` tree
   (purdex's SPA is several hundred MB), and the download cache comes on top. Set it to 1 on a host short of disk. The oldest set is removed

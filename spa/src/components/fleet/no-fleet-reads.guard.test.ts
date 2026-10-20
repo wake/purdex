@@ -10,7 +10,7 @@ const SOURCES = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'queue-routes.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts', 'host-extra.ts', 'control-api.ts', 'exceptions.ts', 'pause.ts', 'alert-rules.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'queue-routes.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts', 'host-extra.ts', 'host-status.ts', 'control-api.ts', 'exceptions.ts', 'pause.ts', 'alert-rules.ts',
 ]
 // Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet; the process table has its own row type (MON-6e); the host page (MON-6f-2) and the files it is made of.
 const OTHER_FILES = [
