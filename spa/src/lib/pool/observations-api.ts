@@ -89,3 +89,68 @@ export async function fetchObservations(sourceHostId: string, alias: string, que
   if (!page || page.host !== alias) throw unreadable(path)
   return page
 }
+
+export interface UndeclaredGroup {
+  signature: string
+  count: number
+  /** The total over the group. */
+  cpuSeconds: number
+  /** The greatest peak in the group. */
+  maxMemMb: number
+  lastAt: number
+  /** The latest one's session ref; `orphan` when none could be named. */
+  lastSession: string
+  /** `session` or `codex`; anything else stays as the word. */
+  lastVia: string
+  /** Redacted. */
+  lastCommand: string
+}
+
+export interface UndeclaredPage {
+  host: string
+  /** false: that host's wwd predates the route, not an error. */
+  known: boolean
+  /** Biggest total CPU first, as wwd sorted them. */
+  groups: UndeclaredGroup[]
+  /** There were more groups than one answer carries: the biggest by CPU are here. */
+  truncated: boolean
+}
+
+function parseGroup(v: unknown): UndeclaredGroup | null {
+  if (!isRec(v)) return null
+  const { signature, last_via: via } = v
+  if (!str(signature) || signature === '' || !str(via) || via === '') return null
+  if (!num(v.count) || v.count <= 0) return null
+  const lastAt = time(v.last_at)
+  if (lastAt === null) return null
+  return {
+    signature, count: v.count, lastAt, lastVia: via,
+    cpuSeconds: figure(v.cpu_seconds), maxMemMb: figure(v.max_mem_mb),
+    lastSession: str(v.last_session) ? v.last_session : '', lastCommand: str(v.last_command) ? v.last_command : '',
+  }
+}
+
+/** The grouped read (`/undeclared`): same trust boundary as the records: a group that lacks what names it or whose count or time is broken is dropped (Go: wire.UndeclaredResponse.Validate), the others stay. */
+export function parseUndeclared(v: unknown): UndeclaredPage | null {
+  if (!isRec(v)) return null
+  if (!str(v.host) || v.host === '') return null
+  if (v.groups !== null && !Array.isArray(v.groups)) return null
+  if (v.groups === undefined) return null
+  const groups: UndeclaredGroup[] = []
+  for (const row of (v.groups as unknown[] | null) ?? []) {
+    const g = parseGroup(row)
+    if (g) groups.push(g)
+  }
+  return { host: v.host, known: v.known !== false, groups, truncated: v.truncated === true }
+}
+
+/**
+ * `GET /api/pool/hosts/{alias}/undeclared?since=` from the source daemon, which asks that host's wwd. `since` is RFC 3339, passed on as given. Whether the daemon announces `pool.observations.v1` is the caller's to check.
+ */
+export async function fetchUndeclared(sourceHostId: string, alias: string, since: string): Promise<UndeclaredPage> {
+  const path = `/api/pool/hosts/${encodeURIComponent(alias)}/undeclared?since=${encodeURIComponent(since)}`
+  const page = parseUndeclared(await readJson(sourceHostId, path))
+  // The answer must be about the host that was asked for.
+  if (!page || page.host !== alias) throw unreadable(path)
+  return page
+}

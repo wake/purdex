@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseObservations, fetchObservations } from './observations-api'
+import { parseObservations, fetchObservations, parseUndeclared, fetchUndeclared } from './observations-api'
 
 vi.mock('../host-api', () => ({ hostFetch: vi.fn() }))
 import { hostFetch } from '../host-api'
@@ -93,5 +93,56 @@ describe('fetchObservations', () => {
   it('a 403 (a device token may not read them) is the forbidden class', async () => {
     vi.mocked(hostFetch).mockResolvedValue(new Response('{}', { status: 403 }))
     await expect(fetchObservations('cfg-a', 'air26', { since: 'x' })).rejects.toMatchObject({ status: 403, poolError: { code: 'forbidden' } })
+  })
+})
+
+// The Go shape: internal/wwd/wire/undeclared.go (UndeclaredResponse), passed on untouched by the daemon; an older wwd's answer is the daemon's own `{ known: false }` (internal/module/pool/observations.go).
+const GROUP = { signature: 'go test', count: 3, cpu_seconds: 120.5, max_mem_mb: 800, last_at: '2026-10-20T03:00:00Z', last_session: 's1', last_via: 'session', last_command: 'go test ./...' }
+const CODEX = { ...GROUP, signature: 'codex exec', count: 1, cpu_seconds: 10, max_mem_mb: 50, last_session: 'orphan', last_via: 'codex', last_command: 'codex exec x' }
+const ubody = (over: Record<string, unknown> = {}) => ({ host: 'air26', since: '2026-10-13T00:00:00Z', groups: [GROUP, CODEX], truncated: false, ...over })
+
+describe('parseUndeclared', () => {
+  it('reads the groups, times as ms', () => {
+    const r = parseUndeclared(ubody())!
+    expect(r.known).toBe(true)
+    expect(r.truncated).toBe(false)
+    expect(r.groups[0]).toEqual({ signature: 'go test', count: 3, cpuSeconds: 120.5, maxMemMb: 800, lastAt: Date.parse('2026-10-20T03:00:00Z'), lastSession: 's1', lastVia: 'session', lastCommand: 'go test ./...' })
+    expect(r.groups[1].lastVia).toBe('codex')
+  })
+  it('groups: null is an empty list; known: false (an older wwd) is an answer with nothing in it', () => {
+    expect(parseUndeclared(ubody({ groups: null }))!.groups).toEqual([])
+    const old = parseUndeclared({ host: 'air26', known: false, groups: [] })!
+    expect([old.known, old.groups]).toEqual([false, []])
+  })
+  it('a group without a signature, with a count of 0 or a time that is no time is dropped (the Go contract refuses it too); the others stay', () => {
+    const r = parseUndeclared(ubody({ groups: [{ ...GROUP, signature: '' }, { ...GROUP, count: 0 }, { ...GROUP, last_at: 'nope' }, CODEX] }))!
+    expect(r.groups.map((g) => g.signature)).toEqual(['codex exec'])
+  })
+  it('a via the App does not know stays as the word; a missing figure is 0', () => {
+    const r = parseUndeclared(ubody({ groups: [{ signature: 'x', count: 1, last_at: '2026-10-20T03:00:00Z', last_via: 'newkind' }] }))!
+    expect(r.groups[0]).toMatchObject({ lastVia: 'newkind', cpuSeconds: 0, maxMemMb: 0, lastCommand: '', lastSession: '' })
+  })
+  it('truncated comes through; an answer without a host is nothing', () => {
+    expect(parseUndeclared(ubody({ truncated: true }))!.truncated).toBe(true)
+    expect(parseUndeclared({ groups: [] })).toBeNull()
+  })
+})
+
+describe('fetchUndeclared', () => {
+  beforeEach(() => vi.mocked(hostFetch).mockReset())
+  const ok = (b: unknown) => vi.mocked(hostFetch).mockResolvedValue(new Response(JSON.stringify(b), { status: 200 }))
+  it('asks the source daemon for that host, since as given', async () => {
+    ok(ubody())
+    const r = await fetchUndeclared('cfg-a', 'air26', '2026-10-13T00:00:00Z')
+    expect(hostFetch).toHaveBeenCalledWith('cfg-a', '/api/pool/hosts/air26/undeclared?since=2026-10-13T00%3A00%3A00Z')
+    expect(r.groups).toHaveLength(2)
+  })
+  it('an answer about another host than the one asked for is unreadable (wwd_bad_response)', async () => {
+    ok(ubody({ host: 'mlab' }))
+    await expect(fetchUndeclared('cfg-a', 'air26', 'x')).rejects.toMatchObject({ poolError: { code: 'wwd_bad_response' } })
+  })
+  it('a 403 is the forbidden class', async () => {
+    vi.mocked(hostFetch).mockResolvedValue(new Response('{}', { status: 403 }))
+    await expect(fetchUndeclared('cfg-a', 'air26', 'x')).rejects.toMatchObject({ status: 403, poolError: { code: 'forbidden' } })
   })
 })
