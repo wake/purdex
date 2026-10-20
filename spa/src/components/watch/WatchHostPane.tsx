@@ -191,7 +191,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} rev={seriesRev} />
         </Section>
         {view.kind === 'daemon' && (offline || shown.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={shown.slow?.queue} offline={offline} />}
-        {view.kind === 'daemon' && poolHost && <HostJobs host={poolHost} />}
+        {view.kind === 'daemon' && poolHost && <Section title={t('watch.host.jobs')}><HostJobs host={poolHost} /></Section>}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={live ? topProcs(live.procs).cpu : (view.slow?.top_cpu ?? [])} unit="cpu" offline={offline} />
