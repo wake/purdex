@@ -77,7 +77,7 @@ export function fullChartsOf(samples: readonly HostSample[], facts: PoolFacts | 
   const level = dcol(samples, (d) => d.level)
   const compGb = dcol(samples, (d) => (d.compressorMb === null ? null : d.compressorMb / 1024))
   const decomp = dcol(samples, (d) => d.decompressRate)
-  const swapGb = dcol(samples, (d) => (d.swapUsedMb === null ? null : d.swapUsedMb / 1024))
+  const swapGb = samples.map((s) => (s.swapUsedMb === null ? null : s.swapUsedMb / 1024)) // the swap in use is a field of the sample, not of its detail
   // The cap is the newest sample's total (an older one may be from before a change); with none there, the chart is capped by its own peak.
   const swapTotal = samples.length > 0 ? (samples[samples.length - 1].detail?.swapTotalMb ?? null) : null
   const psi = (pick: (p: NonNullable<HostDetail['psi']>) => number) => dcol(samples, (d) => (d.psi ? pick(d.psi) : null))

@@ -111,6 +111,13 @@ describe('fullChartsOf: the lines', () => {
     expect(get(fullChartsOf(five(g), g, '5m', ctx()), 'swap').yMax).not.toBe(4)
   })
 
+  it('swap is drawn in GB from the swap in use: 512 MB is 0.5, and a sample without one is a gap', () => {
+    const f = rich(darwinJson)
+    const g = rich(darwinJson, (raw) => { (raw.mem as Rec).swap_used_mb = null })
+    const swap = get(fullChartsOf([sampleOfFacts({ ...f, at: T0 }), sampleOfFacts({ ...g, at: T0 + 5000 })], g, '5m', ctx()), 'swap')
+    expect(swap.series[0].values).toEqual([0.5, null])
+  })
+
   it('swap\'s cap is the latest sample\'s total: an older total is not carried over when the latest has none', () => {
     const f = rich(darwinJson)
     const g = rich(darwinJson, (raw) => { delete (raw.mem as Rec).swap_total_mb })
