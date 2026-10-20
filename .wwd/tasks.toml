@@ -2,7 +2,7 @@
 # The test tiers of CLAUDE.md written as tasks: development, merge, release.
 
 [entry]
-mode = "advise"
+mode = "rewrite"
 
 # ---- development: only what was changed; single-file runs stay on the local fast lane ----
 
@@ -143,6 +143,17 @@ labels     = ["os:darwin", "tool:node24", "tool:pnpm10"]
 deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
+
+# The wwd end-to-end tests start daemons: never answered from a stored result, never queued onto a host that has no Mac's Go.
+[tasks.e2e]
+run       = "go test -json -tags e2e -run TestE2E -count=1 -timeout 20m ./cmd/wwd/"
+args      = "none"
+class     = "release"
+labels    = ["os:darwin", "tool:go1.26"]
+deps      = ["go.sum"]
+cacheable = false
+timeout   = "30m"
+summary   = "go-json"
 
 [tasks.mod-all]
 run       = "go test -json ./cmd/pdx/..."
