@@ -212,7 +212,7 @@ var goCacheMaxRemovals = 2000
 // them) and *budget lasts (each try uses one), and takes what was freed off *total. A file that is already gone counts as removed (another
 // worker, or Go's own trim, was first); any other failure leaves it, and it stays in the sum. It returns whether it went through the list or
 // stopped at the target (false: it stopped for the budget).
-func removeGoCacheFiles(files []goCacheFile, total *int64, target int64, budget *int) bool {
+func removeGoCacheFiles(files []goCacheFile, total *int64, target int64, budget *int, removed *int) bool {
 	for _, f := range files {
 		if *total <= target {
 			return true
@@ -223,6 +223,7 @@ func removeGoCacheFiles(files []goCacheFile, total *int64, target int64, budget 
 		*budget--
 		if err := goCacheRemoveFile(f.path); err == nil || errors.Is(err, fs.ErrNotExist) {
 			*total -= f.size
+			*removed++
 		}
 	}
 	return true
@@ -249,7 +250,7 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 	if err != nil && !tooMany {
 		return true // ctx ended
 	}
-	budget := goCacheMaxRemovals
+	budget, removed := goCacheMaxRemovals, 0
 	if !tooMany {
 		if s.pruneAt.IsZero() || now.Sub(s.pruneAt) >= goCachePruneEvery {
 			cutoff := now.Add(-e.goCachePrune())
@@ -261,7 +262,7 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 					kept = append(kept, f)
 				}
 			}
-			if removeGoCacheFiles(aged, &total, -1, &budget) {
+			if removeGoCacheFiles(aged, &total, -1, &budget, &removed) {
 				s.pruneAt = now // the pass went through; one that stopped for its budget is taken up again by the next look
 			}
 			files = kept // (an aged file that would not go is not tried again below: it stays in the size, so the bound still sees it)
@@ -272,15 +273,16 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 		}
 		if s.trimming && budget > 0 {
 			sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
-			removeGoCacheFiles(files, &total, target, &budget)
+			removeGoCacheFiles(files, &total, target, &budget, &removed)
 			if total <= target {
 				s.trimming = false
 			}
 		}
 	}
 	// Over the bound for want of budget is not a cache that cannot be trimmed: the next pass goes on. A cache is emptied (or refused to a new
-	// job) only when the removals that were tried did not bring it under its bound.
-	over := tooMany || (total > max && budget > 0)
+	// job) when the removals that were tried did not bring it under its bound, or when none of them went (a file that will not go uses the
+	// budget up as much as one that does).
+	over := tooMany || (total > max && (budget > 0 || removed == 0))
 	if !over {
 		return true
 	}

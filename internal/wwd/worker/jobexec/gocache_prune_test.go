@@ -224,3 +224,26 @@ func TestAnOverBoundCacheIsTrimmedOverSeveralPassesNotEmptied(t *testing.T) {
 	assert.FileExists(t, filepath.Join(cache, "ab", "e29"), "the newest stays")
 	assert.NoFileExists(t, filepath.Join(cache, "ab", "e0"), "the oldest went first")
 }
+
+// Files that will not go use up a pass's budget as much as files that do: a cache over its bound where nothing could be removed is not
+// left to "the next pass" for ever; it is emptied.
+func TestACacheWhoseRemovalsAllFailPastTheBudgetIsStillEmptied(t *testing.T) {
+	withRemovalBudget(t, 5)
+	r := newGoRig(t)
+	r.cfgGoCacheMB = 1
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	cache := firstJobCache(t, r, repo, sha)
+	var files []string
+	for i := 0; i < 20; i++ { // 20 x 200 KiB over a 1 MiB bound, more files than the budget
+		files = append(files, cacheFile(t, cache, filepath.Join("ab", "e"+strconv.Itoa(i)), 200<<10, time.Hour))
+	}
+	old := goCacheRemoveFile
+	goCacheRemoveFile = func(string) error { return os.ErrPermission }
+	t.Cleanup(func() { goCacheRemoveFile = old })
+	j := r.job(t, r.exec(t, repo, sha), "j_second")
+	assert.Equal(t, cache, envValue2(j.env, "GOCACHE"))
+	for _, f := range files {
+		assert.NoFileExists(t, f, "emptied")
+	}
+	assert.DirExists(t, cache)
+}
