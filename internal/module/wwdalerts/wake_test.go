@@ -370,9 +370,11 @@ func TestEpisodesDuringACallAreFolded(t *testing.T) {
 	e.src.set("mlab", alertOf("k0", wire.AlertThrash, wire.AlertDigest, t0, "first"))
 	e.pass(t)
 	<-w.entered // the worker is inside the first call
+	standing := []wire.Alert{alertOf("k0", wire.AlertThrash, wire.AlertDigest, t0, "first")}
 	for i := 1; i <= 5; i++ {
-		e.src.set("mlab", alertOf("k"+string(rune('0'+i)), wire.AlertOrphans, wire.AlertDigest, t0, "next"))
-		e.pass(t) // does not block on the waker
+		standing = append(standing, alertOf("k"+string(rune('0'+i)), wire.AlertOrphans, wire.AlertDigest, t0, "next"))
+		e.src.set("mlab", standing...) // they all stand: one that cleared while it waited is not told
+		e.pass(t)                      // does not block on the waker
 	}
 	close(w.block)
 	e.settle(t)

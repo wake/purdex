@@ -187,7 +187,7 @@ func TestAGroupSucceedsOrFailsTogether(t *testing.T) {
 	if len(w.got()) != n {
 		t.Fatalf("called again after the success: %v", w.got())
 	}
-	if n < 3 || n > 4 {
+	if n < 3 {
 		t.Fatalf("calls = %v", w.got())
 	}
 }

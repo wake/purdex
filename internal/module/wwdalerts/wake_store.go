@@ -164,31 +164,63 @@ func (s *store) dropPending(e wakeEp) error {
 	return err
 }
 
-// markWoken records that the watcher call succeeded for these episodes (the ten minutes count from here).
-func (s *store) markWoken(eps []wakeEp, now time.Time) error {
+// stillPending returns those of the episodes that are pending in the ledger now (one read, one transaction): a cleared one was given up
+// by dropGone, and a told one is done.
+func (s *store) stillPending(eps []wakeEp) ([]wakeEp, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var out []wakeEp
 	for _, e := range eps {
-		if _, err := s.db.Exec(`UPDATE wake_ledger SET pending = 0, woken_ms = ?, attempts = 0 WHERE host = ? AND key = ? AND since_ms = ?`,
+		var n int
+		if err := tx.QueryRow(`SELECT count(*) FROM wake_ledger WHERE host = ? AND key = ? AND since_ms = ? AND pending = 1`,
+			e.host, e.key, e.since.UnixMilli()).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			out = append(out, e)
+		}
+	}
+	return out, tx.Commit()
+}
+
+// markWoken records that the watcher call succeeded for these episodes (the ten minutes count from here), all or none.
+func (s *store) markWoken(eps []wakeEp, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, e := range eps {
+		if _, err := tx.Exec(`UPDATE wake_ledger SET pending = 0, woken_ms = ?, attempts = 0 WHERE host = ? AND key = ? AND since_ms = ?`,
 			now.UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
-// markWakeFailed records a failed call for these episodes: they stay pending, next due after the backoff of their failure count.
+// markWakeFailed records a failed call for these episodes: they stay pending, next due after the backoff of their failure count (all or none).
 func (s *store) markWakeFailed(eps []wakeEp, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, e := range eps {
 		var n int
-		if err := s.db.QueryRow(`SELECT attempts FROM wake_ledger WHERE host = ? AND key = ? AND since_ms = ?`, e.host, e.key, e.since.UnixMilli()).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT attempts FROM wake_ledger WHERE host = ? AND key = ? AND since_ms = ?`, e.host, e.key, e.since.UnixMilli()).Scan(&n); err != nil {
 			return err
 		}
 		n++
-		if _, err := s.db.Exec(`UPDATE wake_ledger SET attempts = ?, next_ms = ? WHERE host = ? AND key = ? AND since_ms = ?`,
+		if _, err := tx.Exec(`UPDATE wake_ledger SET attempts = ?, next_ms = ? WHERE host = ? AND key = ? AND since_ms = ?`,
 			n, now.Add(wakeBackoff(n)).UnixMilli(), e.host, e.key, e.since.UnixMilli()); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // pruneWake drops the wake ledger rows of alerts not seen holding for wakeKeep.

@@ -138,6 +138,20 @@ func (m *Module) enqueueWake(ep wakeEp, line string) {
 	}
 }
 
+// removeWake takes an episode out of the queue (it was given up while it waited). One already in a call is left to finish.
+func (m *Module) removeWake(ep wakeEp) {
+	q := &m.wakeQ
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.items {
+		if it.ep == ep {
+			q.items = append(q.items[:i:i], q.items[i+1:]...)
+			delete(q.flight, ep)
+			return
+		}
+	}
+}
+
 // startWake runs the one wake worker, ended with ctx and joined by Stop.
 func (m *Module) startWake(ctx context.Context) {
 	q := &m.wakeQ
@@ -173,6 +187,28 @@ func (m *Module) startWake(ctx context.Context) {
 // wakeOnce makes the one call for the episodes taken together. Success marks all of them told; a failure (no watch module, an error,
 // a timeout) leaves all of them pending with a backoff. A call ended by the module stopping is not a failure.
 func (m *Module) wakeOnce(ctx context.Context, items []wakeItem) {
+	// Episodes that waited behind an earlier call may have cleared meanwhile (dropGone gave them up): only those still pending are told.
+	all := make([]wakeEp, len(items))
+	for i, it := range items {
+		all[i] = it.ep
+	}
+	if live, err := m.store.stillPending(all); err != nil {
+		m.logf("wwdalerts: wake ledger: %v", err)
+	} else {
+		keep := map[wakeEp]bool{}
+		for _, e := range live {
+			keep[e] = true
+		}
+		var kept []wakeItem
+		for _, it := range items {
+			if keep[it.ep] {
+				kept = append(kept, it)
+			}
+		}
+		if items = kept; len(items) == 0 {
+			return
+		}
+	}
 	eps := make([]wakeEp, len(items))
 	for i, it := range items {
 		eps[i] = it.ep
@@ -298,6 +334,7 @@ func (m *Module) dropGone(host string, standing map[wakeEp]bool) {
 	for _, e := range eps {
 		if !standing[e] {
 			m.logf("wwdalerts: wake: %s/%s cleared before the watcher was told, given up", e.host, e.key)
+			m.removeWake(e)
 			if err := m.store.dropPending(e); err != nil {
 				m.logf("wwdalerts: wake ledger %s: %v", host, err)
 			}
