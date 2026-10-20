@@ -68,6 +68,15 @@ type Evaluator struct {
 	logf  func(string, ...any)
 	rules []Rule
 
+	// every is the interval of Run's pass (Every unless WithInterval); sample, when set, is signalled at every new sample (WithSampleSignal);
+	// retired are the keys of rules this host does not judge (WithRetired).
+	every   time.Duration
+	sample  <-chan struct{}
+	retired []string
+	// passMu makes a pass (Pass, PassSample) one at a time: the 30 s pass and the per-sample pass write the same alerts, and must not run
+	// beside each other, whoever calls them.
+	passMu sync.Mutex
+
 	mu   sync.Mutex
 	last map[wire.AlertKind]string // the last failure logged per rule, to log a change only
 }
@@ -77,15 +86,37 @@ func NewEvaluator(book Book, input func() (Input, bool), logf func(string, ...an
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Evaluator{book: book, input: input, logf: logf, rules: rules, last: map[wire.AlertKind]string{}}
+	return &Evaluator{book: book, input: input, logf: logf, rules: rules, every: Every, last: map[wire.AlertKind]string{}}
+}
+
+// WithSampleSignal makes Run also judge the SampleRules whenever a value arrives on ch (the sampler signals a new sample there without
+// blocking). It runs in Run's own goroutine, so it is serialized with the 30 s pass.
+func (e *Evaluator) WithSampleSignal(ch <-chan struct{}) *Evaluator {
+	e.sample = ch
+	return e
+}
+
+// WithInterval sets how often Run judges everything (a test shortens it); not positive: Every.
+func (e *Evaluator) WithInterval(d time.Duration) *Evaluator {
+	if d > 0 {
+		e.every = d
+	}
+	return e
+}
+
+// WithRetired names the alert keys of rules this host does not judge: every pass clears them if they are active, so a rule that was turned
+// off (or taken out in `off`) does not leave its alert standing, and an older build, which would refuse the alert, can be installed.
+func (e *Evaluator) WithRetired(keys ...string) *Evaluator {
+	e.retired = append(e.retired, keys...)
+	return e
 }
 
 // Every is how often Run judges. The spec's shortest window is a minute; a push waits for the poll of the deliverer (30 s) anyway.
 const Every = 30 * time.Second
 
-// Run judges every Every until ctx ends.
+// Run judges every Every until ctx ends, and the SampleRules at every sample signal. Both happen in this goroutine, one after the other.
 func (e *Evaluator) Run(ctx context.Context) {
-	t := time.NewTicker(Every)
+	t := time.NewTicker(e.every)
 	defer t.Stop()
 	for {
 		select {
@@ -93,6 +124,8 @@ func (e *Evaluator) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			e.Pass()
+		case <-e.sample:
+			e.PassSample()
 		}
 	}
 }
@@ -100,6 +133,31 @@ func (e *Evaluator) Run(ctx context.Context) {
 // Pass judges every rule once. It does not wait for the proto 2 writer gate: alerts are not behind it (spec §13.1), so an unreachable
 // host cannot silence the others' alerts.
 func (e *Evaluator) Pass() {
+	e.passMu.Lock()
+	defer e.passMu.Unlock()
+	e.pass(false)
+}
+
+// PassSample judges the rules that ask to be judged at every sample (SampleRule) and no other. With none, it reads nothing.
+func (e *Evaluator) PassSample() {
+	e.passMu.Lock()
+	defer e.passMu.Unlock()
+	e.pass(true)
+}
+
+// pass judges the rules (only the SampleRules when sampleOnly) once.
+func (e *Evaluator) pass(sampleOnly bool) {
+	if sampleOnly {
+		any := false
+		for _, r := range e.rules {
+			if sr, ok := r.(SampleRule); ok && sr.EverySample() {
+				any = true
+			}
+		}
+		if !any {
+			return
+		}
+	}
 	in, ok := e.input()
 	if !ok {
 		return
@@ -113,7 +171,21 @@ func (e *Evaluator) Pass() {
 	}
 	e.ok("")
 	in.Raised = func(key string) bool { return active[key] }
+	if !sampleOnly {
+		for _, key := range e.retired {
+			if active[key] {
+				if err := e.book.Clear(key); err != nil {
+					e.fail("", "clear the retired alert "+key, err)
+				}
+			}
+		}
+	}
 	for _, r := range e.rules {
+		if sampleOnly {
+			if sr, ok := r.(SampleRule); !ok || !sr.EverySample() {
+				continue
+			}
+		}
 		v, err := r.Eval(in)
 		if err != nil {
 			e.fail(r.Kind(), "judge", err)
