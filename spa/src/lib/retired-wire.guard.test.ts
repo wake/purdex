@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // Guard (monitoring tabs plan, MON-12; spec A11 / W9): the wire the daemon is retiring (`fleet.v1`, `gate.decisions.v1`, the watch events routes) is no longer read by the SPA. Each MON-12 PR adds what it deletes to the three lists below:
-// the files that must stay gone, the routes / capabilities / event names no code may mention, and the identifiers no code may use. Comments are stripped before matching, so a note that says why something is gone does not turn this red.
+// the files that must stay gone, the routes / capabilities / event names no code may mention, and the identifiers no code may use. Comments (not strings) are stripped before matching, so a note that says why something is gone does not turn this red.
 import { describe, it, expect } from 'vitest'
 // node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see pool/fixtures-sync.guard.test.ts); they work at runtime.
 // @ts-expect-error node:fs is untyped here.
@@ -39,9 +39,29 @@ const RETIRED_NAMES = [
   'parseGateDecisions',
 ]
 
-/** Drops `/* … *\/` and `// …` (a `//` inside a string is cut too: that can only miss a hit, never invent one). */
+/** Drops `/* … *\/` and `// …` comments, leaving string and template literals (where a `//` is part of a URL) untouched. */
 export function stripComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  let out = ''
+  let i = 0
+  while (i < text.length) {
+    const c = text[i]
+    const next = text[i + 1]
+    if (c === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i++
+    } else if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2)
+      i = end === -1 ? text.length : end + 2
+    } else if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1
+      while (j < text.length && text[j] !== c && !(c !== '`' && text[j] === '\n')) j += text[j] === '\\' ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j + 1
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
 }
 
 export function hitsIn(text: string): string[] {
@@ -85,5 +105,9 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn('// was GET /api/gate/decisions (gate.decisions.v1), fetchGateDecisions')).toEqual([])
     expect(hitsIn('/* selectGateDecisionsV1 */ const a = 1')).toEqual([])
     expect(hitsIn('const fetchGateDecisionsLater = 1')).toEqual([])
+    // a `//` inside a string is not a comment: the code after it on the same line still counts
+    expect(hitsIn("const u = 'https://h/api/gate/decisions'")).toEqual(['/api/gate/'])
+    expect(hitsIn("const base = 'https://host'; fetchGateDecisions(base)")).toEqual(['fetchGateDecisions'])
+    expect(hitsIn('const u = `https://h/${x}`; // selectGateDecisionsV1')).toEqual([])
   })
 })
