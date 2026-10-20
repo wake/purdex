@@ -107,7 +107,7 @@ describe('the task-group view', () => {
     expect(within(manual).queryByTestId('inline-tab-row')).toBeNull()
   })
 
-  it('a split tab stands for the session in whichever pane shows one: a tmux session in a secondary pane is listed, a tab with no session at all is not', () => {
+  it('a split tab stands for the session in whichever pane shows one: a tmux session in a secondary pane is placed by its root, and a tab with no session at all is listed too (in 未分組)', () => {
     const split = (id: string, children: unknown[]) => ({ type: 'split', id, direction: 'h', children, sizes: [50, 50] })
     const leaf = (id: string, content: unknown) => ({ type: 'leaf', pane: { id, content } })
     const t4 = { id: 't4', kind: 'tmux-session', locked: false, pinned: false, layout: split('s4', [leaf('p4a', { kind: 'new-tab' }), leaf('p4b', { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S4', mode: 'terminal', cachedName: 'n4', tmuxInstance: 'I', rebuild: { agent: { sessionId: 'AG4' } } })]) }
@@ -119,7 +119,7 @@ describe('the task-group view', () => {
     })
     mount()
     expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
-    expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(3) // t1 t2 t3; t5 shows no session
+    expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(4) // t1 t2 t3, and t5 (no session: every tab is listed)
   })
 
   const rosterSession = (id: string, tmux: string, over: Record<string, unknown> = {}) => ({ session_id: id, ref: `_${id}`, address: `mlab/${id}-x`, live: true, tmux_session: tmux, title: `title ${id}`, ...over })
@@ -140,6 +140,29 @@ describe('the task-group view', () => {
     fireEvent.click(within(secs[0]).getAllByTestId('inline-tab-row')[1])
     expect(openTeamSeat).toHaveBeenCalledWith(expect.stringContaining('team-1'), 'M')
     expect(onSelectTab).not.toHaveBeenCalled()
+  })
+
+  it('a second tab showing a seat session is an extra row of its team (counted) and not a drag source', () => {
+    useTeamRosterStore.getState().apply('h1', [teamOf(rosterSession('L', 'name-S1'), [rosterSession('M', 'name-S2')]) as never])
+    act(() => {
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t2b: tab('t2b', 'S2', 'AG2b') } } as never)
+    })
+    mount()
+    const team = screen.getByTestId('task-group-team')
+    expect(within(team).getAllByTestId('inline-tab-row')).toHaveLength(3) // lead, member, and the member's second tab
+    expect(within(team).getByTestId('task-group-count')).toHaveTextContent('3')
+    expect(within(team).queryByTestId('task-group-session')).toBeNull() // an extra team row is not draggable into a manual group
+    expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(1) // t3 only
+  })
+
+  it('a tab whose agent has ended stays in the group its root names', () => {
+    const ended = tab('t1', 'S1', 'AG1') as never as { layout: { pane: { content: { rebuild: Record<string, unknown> } } } }
+    ended.layout.pane.content.rebuild.agentExited = { at: 2, reason: 'session-end' }
+    act(() => { useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t1: ended } } as never) })
+    setGroups([group('g1', ['ROOT1'])])
+    setRoots([['AG1', 'ROOT1']])
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
   })
 
   it('two seats in the panes of one split tab are two rows, each opening its own seat', () => {

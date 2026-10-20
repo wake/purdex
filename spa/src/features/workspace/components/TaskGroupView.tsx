@@ -18,6 +18,8 @@ import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
 import { useEffectiveView } from '../../../lib/task-groups/effective-view'
 import { collectLeaves } from '../../../lib/pane-tree'
+import { agentSessionOfTab } from '../../../lib/task-groups/placement'
+import { buildTeamIndex } from '../../../lib/team/team-index'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
 import { deleteManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
 import type { SessionActionResult } from '../../../lib/task-groups/session-actions'
@@ -74,21 +76,28 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   }, [tabsById, workspaces, sessionsByHost])
 
   // The open tabs' sessions, and one entry per group member (its root is its own chain's first session): a member on a host no tab shows is still read, so 「清除」 can tell whether that host has it alive.
+  // A tab whose agent has ended is still placed by its root, so every tab's agent session is wanted, not only the live ones.
   const wanted = useMemo<WantedSession[]>(
     () => [
-      ...sessionTabs.filter((s): s is SessionTab & { agentSessionId: string } => s.agentSessionId !== null).map((s) => ({ hostId: s.hostId, agentSessionId: s.agentSessionId })),
+      ...Object.values(tabsById).flatMap((tab) => {
+        const a = agentSessionOfTab(tab)
+        return a === null ? [] : [{ hostId: a.hostId, agentSessionId: a.sessionId }]
+      }),
       ...Object.values(groupsById).flatMap((g) => g.members.map((m) => ({ hostId: m.host, agentSessionId: m.root }))),
     ],
-    [sessionTabs, groupsById],
+    [tabsById, groupsById],
   )
   // The roots are read only while the task-group view is really in force (wide sidebar, tabs not on the left — lib/task-groups/effective-view.ts), whatever this component is mounted for.
   const roots = useSessionRoots(useEffectiveView() === 'groups', wanted)
 
   const manual = useMemo(() => ({ order: groupOrder, groups: groupsById }), [groupOrder, groupsById])
 
+  // The inclusive seat map decides which tabs are a team's (placement.ts); a render reads it once per input change.
+  const index = useMemo(() => buildTeamIndex(teams, tabsById, sessionsByHost), [teams, tabsById, sessionsByHost])
+
   const view = useMemo<GroupSection[]>(
-    () => buildGroupView({ tabs: sessionTabs, teams, manual, rootOf: roots.rootOf }),
-    [sessionTabs, teams, manual, roots],
+    () => buildGroupView({ tabs: tabsById, teams, index, manual, rootOf: roots.rootOf }),
+    [tabsById, teams, index, manual, roots],
   )
 
   // A team seat's row opens the seat (the pane that shows it takes the keyboard — a split tab may carry several seats; a seat with no open tab gets one); any other row switches to its tab.
@@ -142,7 +151,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
   })
   const lit = (key: string) => (drag.over === key ? ' rounded-md ring-1 ring-border-active' : '')
 
-  const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null) => {
+  const renderRow = (row: GroupRow, teamKey?: string, isLead = false, groupId: string | null = null, inTeam = false) => {
     const tab = row.tabId !== null ? tabsById[row.tabId] : undefined
     const seat = row.seat
     const openSeat = seat && teamKey ? () => { openTeamSeat(teamKey, seat.session.session_id) } : undefined
@@ -154,7 +163,7 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
           onSelect={openSeat ? () => openSeat() : onSelectTab} onClose={onCloseTab} onMiddleClick={onMiddleClickTab} onContextMenu={onContextMenuTab} onRename={onRenameTab}
         />
       )
-      return seat ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
+      return seat || inTeam ? inner : <div key={row.key} data-testid="task-group-session" onContextMenu={() => offerGroupMenu(tab.id, groupId)} {...drag.rowProps(tab.id)}>{inner}</div>
     }
     // A team seat no open tab shows: listed (dimmed, dressed as its persona), and a click opens it.
     return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
@@ -175,12 +184,15 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       {view.map((section, i) => {
         if (section.kind === 'team') {
           const name = panelName(section.view).text
-          const count = 1 + section.members.length
+          const count = 1 + section.members.length + section.extra.length
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
               <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} count={count} />
               {renderRow(section.lead, section.view.key, true)}
-              <div className="ml-4 border-l border-border-subtle">{section.members.map((m) => renderRow(m, section.view.key))}</div>
+              <div className="ml-4 border-l border-border-subtle">
+                {section.members.map((m) => renderRow(m, section.view.key))}
+                {section.extra.map((r) => renderRow(r, section.view.key, false, null, true))}
+              </div>
             </section>
           )
         }
