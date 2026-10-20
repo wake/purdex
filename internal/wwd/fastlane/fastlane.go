@@ -92,7 +92,14 @@ type Request struct {
 	Args []string
 	// Body is the record to register (submit.Prepare with Local set).
 	Body submit.Body
-	Gate Gater
+	// RetakeTree, when set, is called before the registration and its tree replaces Body's (empty when it fails, the error in
+	// Result.TreeErr): a run that waited for a lock or a slot is of the directory as it is when it goes on, not as it was before
+	// the wait (#3735). The caller sets it from the second attempt on; the first one uses the tree Prepare took.
+	RetakeTree func(ctx context.Context) (string, error)
+	// TreeNote is what Prepare said about the tree it took (the record has none, and why): it stands unless RetakeTree ran, whose
+	// outcome then replaces it.
+	TreeNote string
+	Gate     Gater
 	// Recorder may be nil: the run is then not recorded and holds no lock.
 	Recorder Recorder
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
@@ -107,15 +114,16 @@ type Request struct {
 
 // Result is how the run ended.
 type Result struct {
-	JobID   string
-	State   wire.JobState
-	Exit    int // the command's exit status; ExitTimeout when it ran out of time
-	Summary wire.Summary
-	Reason  string
-	LogPath string
-	Err     error // a failure of the lane itself (the gate refused, the record could not be made): no test result
-	Cleanup func()
-	SumErr  error // why the summary could not be built, when it could not
+	JobID    string
+	State    wire.JobState
+	Exit     int // the command's exit status; ExitTimeout when it ran out of time
+	Summary  wire.Summary
+	Reason   string
+	LogPath  string
+	Err      error // a failure of the lane itself (the gate refused, the record could not be made): no test result
+	Cleanup  func()
+	TreeNote string // why the registered record has no tree ("" when it has one)
+	SumErr   error  // why the summary could not be built, when it could not
 	// Tail is the end of the command's output (the last 64 KiB at most, kept in memory whatever the log's cap was).
 	Tail []byte
 	// TailCut says the output is longer than Tail, so Tail starts somewhere inside a line.
@@ -154,6 +162,14 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	env := withTaskEnv(req.Env, task.Env)
 	var handle Handle
 	if req.Recorder != nil {
+		res.TreeNote = req.TreeNote
+		if req.RetakeTree != nil {
+			tree, terr := req.RetakeTree(ctx)
+			req.Body.Snapshot.Tree, res.TreeNote = tree, ""
+			if terr != nil {
+				res.TreeNote = fmt.Sprintf("the working tree could not be recorded when the run went on (the record has no tree): %v", terr)
+			}
+		}
 		h, err := req.Recorder.Register(ctx, req.Body)
 		switch {
 		case errors.Is(err, ErrUnrecorded): // runs on with no record, no job id and no mark

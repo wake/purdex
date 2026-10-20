@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/client"
@@ -197,5 +199,110 @@ func TestAnAdHocCommandOnARepositoryWithoutACommitRunsUnrecorded(t *testing.T) {
 	code, _, _ := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: g, Recorder: neverRecorder{t}, Dir: dir, Env: os.Environ()})
 	if code != 0 || g.calls != 1 {
 		t.Fatalf("code %d gate %d", code, g.calls)
+	}
+}
+
+// #3735: the record of a fast-lane run holds the tree of the directory the command ran in, and says so when it could not take it.
+func TestAnAdHocRecordHoldsTheWorkingTreeAndSaysWhenItCouldNotTakeIt(t *testing.T) {
+	dir := noManifestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^{tree}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &capture{}
+	if code, _, _ := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ()}); code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	if got := rec.bodies[0].Snapshot.Tree; got == "" || got == strings.TrimSpace(string(head)) {
+		t.Fatalf("recorded tree %q: the directory is dirty, so it is not HEAD's %s", got, head)
+	}
+
+	fake := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncase \"$*\" in *write-tree*) echo 'fatal: disk full' >&2; exit 128;; esac\nexec git \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = &capture{}
+	_, _, errOut := run(t, Options{Args: args(t, "--adhoc", "--", "true"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ()})
+	if rec.bodies[0].Snapshot.Tree != "" || !strings.Contains(errOut, "could not be recorded") || !strings.Contains(errOut, "disk full") {
+		t.Fatalf("tree %q, report %q", rec.bodies[0].Snapshot.Tree, errOut)
+	}
+}
+
+func TestADeclaredFastLaneRecordHoldsTheWorkingTreeToo(t *testing.T) {
+	dir := repo(t, true)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD^{tree}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &capture{}
+	run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ()})
+	if got := rec.bodies[0].Snapshot.Tree; got == "" || got == strings.TrimSpace(string(head)) {
+		t.Fatalf("recorded tree %q: the directory is dirty, so it is not HEAD's %s", got, head)
+	}
+	fake := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncase \"$*\" in *write-tree*) echo 'fatal: disk full' >&2; exit 128;; esac\nexec git \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = &capture{}
+	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ()})
+	if !strings.Contains(out, "could not be recorded") {
+		t.Fatalf("the report must say the tree is missing: %q", out)
+	}
+}
+
+// treeRecorder remembers the tree of each registration, refuses the first one for a lock, and edits the directory while the run waits.
+type treeRecorder struct {
+	dir   string
+	trees []string
+}
+
+func (r *treeRecorder) Register(_ context.Context, b submit.Body) (fastlane.Handle, error) {
+	r.trees = append(r.trees, b.Snapshot.Tree)
+	if len(r.trees) == 1 {
+		_ = os.WriteFile(filepath.Join(r.dir, "edited-while-waiting.txt"), []byte("later\n"), 0o644)
+		return nil, fmt.Errorf("%w: tmux", fastlane.ErrLocksBusy)
+	}
+	return nil, fastlane.ErrUnrecorded
+}
+
+// The record is of the directory when the run is registered: a run that waited for a lock and then went on registers the tree of the
+// edited directory, not the one it saw before waiting.
+func TestAFastLaneRunThatWaitedForALockRecordsTheTreeOfTheDirectoryWhenItWentOn(t *testing.T) {
+	dir := repo(t, true)
+	rec := &treeRecorder{dir: dir}
+	run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if len(rec.trees) != 2 || rec.trees[0] == rec.trees[1] {
+		t.Fatalf("trees at each registration: %q: the second must be of the edited directory", rec.trees)
+	}
+	want, err := gate.WorkingTree(context.Background(), "", dir)
+	if err != nil || rec.trees[1] != want {
+		t.Fatalf("second tree %q, the directory is %q (%v)", rec.trees[1], want, err)
+	}
+}
+
+// A tree that Prepare could not take but the retake after a wait could is recorded, and the report does not claim it is missing.
+func TestAFastLaneRunWhoseRetakeSucceededDropsPrepareNoteAboutTheMissingTree(t *testing.T) {
+	dir := repo(t, true)
+	state := filepath.Join(t.TempDir(), "failed-once")
+	fake := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\ncase \"$*\" in *write-tree*) if [ ! -e '" + state + "' ]; then : > '" + state + "'; echo 'fatal: transient' >&2; exit 128; fi;; esac\nexec git \"$@\"\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &treeRecorder{dir: dir}
+	_, out, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Recorder: rec, Dir: dir, GitBin: fake, Env: os.Environ(),
+		LockPoll: time.Millisecond, LockWait: time.Minute})
+	if len(rec.trees) != 2 || rec.trees[0] != "" || rec.trees[1] == "" {
+		t.Fatalf("trees at each registration: %q (the first could not be taken, the second can)", rec.trees)
+	}
+	if strings.Contains(out, "could not be recorded") {
+		t.Fatalf("the record has its tree, the report must not say it has none:\n%s", out)
 	}
 }
