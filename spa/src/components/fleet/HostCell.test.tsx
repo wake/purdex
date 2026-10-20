@@ -222,9 +222,16 @@ describe('HostCell — the narrow block (M14, M16)', () => {
     const icon = screen.getByTestId(`state-icon-${ID}`)
     expect(icon.dataset.state).toBe(liveness)
     expect(screen.queryByTestId('host-bars')).toBeNull()
-    const dimmed = screen.getByTestId(`narrow-dim-${ID}`)
+    const dimmed = screen.getByTestId(`narrow-block-${ID}`)
     if (dim) expect(dimmed.className).toContain(dim)
     else expect(dimmed.className).not.toContain('opacity')
+  })
+  it('the dimming covers the tinted block itself, not only what is inside', () => {
+    narrow(cellView({ liveness: 'host_down' }))
+    const block = screen.getByTestId(`narrow-block-${ID}`)
+    expect(block.dataset.tinted).toBe('true')
+    expect(block.className).toContain('opacity-40')
+    expect(within(block).getByTestId(`state-icon-${ID}`).className).not.toContain('opacity')
   })
   it('hover opens the card to the right; a click opens the host', () => {
     const p = narrow(cellView())
