@@ -187,6 +187,9 @@ type Derived struct {
 	ZoneOverride Zone  `json:"zone_override,omitempty"`
 	Headroom     Slots `json:"headroom"`
 	SessionsRoom int   `json:"sessions_room"`
+	// DiskLow is true only while the work volume has less free space than the worker's disk floor: headroom.heavy is then 0 with the
+	// reason disk_low (spec §3.2). Absent otherwise, so a record with room reads as it always did.
+	DiskLow bool `json:"disk_low,omitempty"`
 }
 
 // PickZone is the zone a worker scores this origin's jobs by (spec 4.6 origin_bonus): the fault override when one is set, else Zone.

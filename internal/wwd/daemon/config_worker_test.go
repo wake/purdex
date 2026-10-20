@@ -33,6 +33,27 @@ func TestConfigWorkerSettingsDefaultToNone(t *testing.T) {
 	}
 }
 
+func TestConfigReadsTheDiskFloor(t *testing.T) {
+	c, err := load(t, "[worker]\ndisk_min_gb = 25.5\n")
+	if err != nil || c.Worker.DiskMinGB == nil || *c.Worker.DiskMinGB != 25.5 {
+		t.Fatalf("disk_min_gb: %+v %v", c.Worker.DiskMinGB, err)
+	}
+	if c, err = load(t, "[worker]\ndisk_min_gb = 0\n"); err != nil || c.Worker.DiskMinGB == nil || *c.Worker.DiskMinGB != 0 {
+		t.Fatalf("0 is a floor of its own (none): %+v %v", c.Worker.DiskMinGB, err)
+	}
+	if c, err = load(t, "[worker]\nenabled = true\n"); err != nil || c.Worker.DiskMinGB != nil {
+		t.Fatalf("not set: %+v %v", c.Worker.DiskMinGB, err)
+	}
+}
+
+func TestConfigRefusesADiskFloorThatCannotBeOne(t *testing.T) {
+	for _, v := range []string{"-1", "2000000"} {
+		if _, err := load(t, "[worker]\ndisk_min_gb = "+v+"\n"); err == nil || !strings.Contains(err.Error(), "disk_min_gb") {
+			t.Errorf("disk_min_gb = %s: %v", v, err)
+		}
+	}
+}
+
 func TestConfigReadsExplicitLabelsOnly(t *testing.T) {
 	c, err := load(t, "[worker]\nexplicit_labels_only = true\n")
 	if err != nil {

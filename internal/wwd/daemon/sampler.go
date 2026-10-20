@@ -36,6 +36,12 @@ type SamplerOptions struct {
 	// 0, because until WWD-6 a queue job runs outside the gate's slots (#3447). nil: this host has no gate to count. It is asked on every
 	// sample, outside the sampler's lock, and does file reads only.
 	GateHeavyFull func() bool
+	// WorkRoot is the directory jobs run in: the volume that holds it is the one the worker's disk floor (disk_min_gb, from State) is
+	// measured on (derived.DiskLow). Empty: no disk floor is applied.
+	WorkRoot string
+	// WorkFreeGB reads the free space of the volume that holds a path, in GB; nil reads it with facts.FreeGB (statfs of the path itself:
+	// the work root may be on a volume the facts' disk list does not hold). A path that cannot be read is not a reason to hold work.
+	WorkFreeGB func(path string) (float64, error)
 	// Running, when set, is the runs on this host now by slot (queue jobs and fast-lane runs): facts.worker.running (spec §5.2). It
 	// is asked on every sample, outside the sampler's lock, and reads memory only. nil: nothing is counted.
 	Running func() wire.Slots
@@ -80,6 +86,7 @@ type Sampler struct {
 
 	lastQueue string       // the last queue-count error logged
 	lastStore string       // the last store error logged
+	lastDisk  string       // the last work-root free-space error logged
 	unsaved   []wire.Facts // finished minutes not yet in the store, oldest first
 
 	// signals is the last hour of the memory readings this host's own alert rules judge thrash by, kept as read: the proto 2 gate drops
@@ -148,13 +155,18 @@ func (s *Sampler) Tick(now time.Time) {
 	f.Exception = []wire.FactExc{}
 	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots, OwnerRule: s.opts.OwnerRule}
 	var holds []derived.Hold
+	diskMinGB := 0.0 // the worker's disk floor; none without a State to hold it
 	if st := s.opts.State; st != nil {
 		// one view: an exception that ended is announced before this record shows it
 		// gone, and the exceptions and the holds they cause come from the same moment
 		snap := st.Snapshot(now)
 		f.Worker = wire.FactsWorker{Enabled: snap.Worker.Enabled, Slots: snap.Worker.Slots, OwnerRule: snap.Worker.OwnerRule}
 		f.Exception, holds = snap.Exceptions, snap.Holds
+		if snap.Worker.DiskMinGB != nil {
+			diskMinGB = *snap.Worker.DiskMinGB
+		}
 	}
+	diskLow := s.workDiskLow(diskMinGB)
 
 	if on := s.opts.Fault.OwnerActive(f.Owner != nil && f.Owner.Active); on && (f.Owner == nil || !f.Owner.Active) {
 		// test hook H2: the owner block says active (with a reason that names the hook), which is what the matrix waits for
@@ -182,7 +194,7 @@ func (s *Sampler) Tick(now time.Time) {
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
 		OwnerActive: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
-		GateHeavyFull: gateFull,
+		GateHeavyFull: gateFull, DiskLow: diskLow,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB
@@ -362,6 +374,40 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 		return f, false
 	}
 	return s.Shaped(f), true
+}
+
+// workDiskLow says whether the work root's volume has less free space than the floor. It reads the volume itself (a statfs, outside the
+// sampler's lock) at every sample, so a change of the floor or of the space shows in the next record. No work root or no floor: false.
+func (s *Sampler) workDiskLow(minGB float64) bool {
+	if s.opts.WorkRoot == "" || minGB <= 0 {
+		return false
+	}
+	read := s.opts.WorkFreeGB
+	if read == nil {
+		read = facts.FreeGB
+	}
+	free, err := read(s.opts.WorkRoot)
+	if err != nil {
+		s.logDisk(err)
+		return false
+	}
+	s.logDisk(nil)
+	return derived.DiskLow(free, minGB)
+}
+
+// logDisk tells that the work root's free space cannot be read, once per change.
+func (s *Sampler) logDisk(err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	s.mu.Lock()
+	changed := msg != s.lastDisk
+	s.lastDisk = msg
+	s.mu.Unlock()
+	if changed && err != nil {
+		log.Printf("wwd: sampling: the free space of the work root %s cannot be read, no disk floor applies: %v", s.opts.WorkRoot, err)
+	}
 }
 
 // GateFull is whether the gate had all its heavy slots held at the last sample (false before the first, or without a gate to read).

@@ -15,6 +15,7 @@ func AdmitLocal(f wire.Facts, gateFull, heavy bool, running wire.Slots) []string
 		zone:     f.Derived.Zone,
 		free:     wire.Slots{Heavy: free(f.Worker.Slots.Heavy, running.Heavy), Light: free(f.Worker.Slots.Light, running.Light)},
 		gateFull: gateFull,
+		diskLow:  f.Derived.DiskLow,
 	}
 	for _, e := range f.Exception {
 		j.holds = append(j.holds, Hold{Name: e.Name})

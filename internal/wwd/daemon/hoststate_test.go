@@ -61,8 +61,8 @@ func TestWorkerSettingsStartFromConfigThenFromTheDatabase(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("%v %v", changed, err)
 	}
-	r.reopen(t) // a restart keeps what was set
-	if got := r.st.Worker(); got != want {
+	r.reopen(t)                                       // a restart keeps what was set
+	if got := r.st.Worker(); !sameWorker(got, want) { // the floor is the default in both (want carries none)
 		t.Fatalf("after restart: %+v", got)
 	}
 }

@@ -3,9 +3,9 @@ package advisor
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -28,25 +28,8 @@ const (
 	slopeMinSamples = 20
 )
 
-// workVolume is the facts' disk that holds root: the longest mount that is root itself or a directory above it (whole path components,
-// so /Users/wake/work2 is not under /Users/wake/work).
-func workVolume(disks []wire.Disk, root string) (wire.Disk, bool) {
-	var best wire.Disk
-	found := false
-	for _, d := range disks {
-		m := strings.TrimRight(d.Mount, "/")
-		if m != "" && root != d.Mount && !strings.HasPrefix(root, m+"/") {
-			continue
-		}
-		if !found || len(d.Mount) > len(best.Mount) {
-			best, found = d, true
-		}
-	}
-	return best, found
-}
-
 func volume(in Input) (wire.Disk, error) {
-	d, ok := workVolume(in.Facts.Disk, in.WorkRoot)
+	d, ok := derived.WorkVolume(in.Facts.Disk, in.WorkRoot) // the same volume the worker's disk floor is measured on
 	if !ok {
 		return wire.Disk{}, fmt.Errorf("no disk in the facts holds the work root %q", in.WorkRoot)
 	}

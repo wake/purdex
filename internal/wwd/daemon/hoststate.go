@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"reflect"
 	"regexp"
 	"slices"
@@ -22,6 +23,7 @@ import (
 const (
 	maxExceptions   = 32
 	maxOwnerRuleLen = 256
+	maxDiskMinGB    = 1e6 // the gate's own limit for disk_min_gb
 )
 
 var reExceptionName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -146,7 +148,26 @@ func ParseOwnerRule(text string) (minutes int, ok bool) {
 func (s *HostState) Worker() wire.WorkerSettings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.worker
+	return withFloor(s.worker, nil)
+}
+
+// withFloor is ws with its own copy of the disk floor: the one it carries, else fallback's, else the default. A caller of Worker never
+// shares the pointer the state holds.
+func withFloor(ws wire.WorkerSettings, fallback *wire.WorkerSettings) wire.WorkerSettings {
+	v := wire.DefaultDiskMinGB
+	switch {
+	case ws.DiskMinGB != nil:
+		v = *ws.DiskMinGB
+	case fallback != nil && fallback.DiskMinGB != nil:
+		v = *fallback.DiskMinGB
+	}
+	ws.DiskMinGB = &v
+	return ws
+}
+
+// sameWorker says whether two settings are the same, the floors by value.
+func sameWorker(a, b wire.WorkerSettings) bool {
+	return a.Enabled == b.Enabled && a.Slots == b.Slots && a.OwnerRule == b.OwnerRule && *withFloor(a, nil).DiskMinGB == *withFloor(b, nil).DiskMinGB
 }
 
 // checkWorker is the one rule for worker settings, for a PUT and for what wwd
@@ -154,6 +175,9 @@ func (s *HostState) Worker() wire.WorkerSettings {
 func (s *HostState) checkWorker(ws wire.WorkerSettings) error {
 	if ws.Slots.Heavy < 0 || ws.Slots.Light < 0 {
 		return invalid("slots cannot be negative")
+	}
+	if v := ws.DiskMinGB; v != nil && (math.IsNaN(*v) || *v < 0 || *v > maxDiskMinGB) {
+		return invalid("disk_min_gb must be between 0 and %v", maxDiskMinGB)
 	}
 	if len(ws.OwnerRule) > maxOwnerRuleLen {
 		return invalid("owner_rule is longer than %d bytes", maxOwnerRuleLen)
@@ -177,8 +201,11 @@ func (s *HostState) sane(ws wire.WorkerSettings, from string) wire.WorkerSetting
 		log.Printf("wwd: worker settings from %s: %v; owner_rule cleared", from, err)
 		ws.OwnerRule = ""
 		ws.Slots.Heavy, ws.Slots.Light = max(ws.Slots.Heavy, 0), max(ws.Slots.Light, 0)
+		if v := ws.DiskMinGB; v != nil && (math.IsNaN(*v) || *v < 0 || *v > maxDiskMinGB) {
+			ws.DiskMinGB = nil // the default
+		}
 	}
-	return ws
+	return withFloor(ws, nil)
 }
 
 // SetWorker replaces the worker settings. changed is false (and nothing is saved
@@ -189,7 +216,8 @@ func (s *HostState) SetWorker(ws wire.WorkerSettings) (changed bool, err error) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if ws == s.worker {
+	ws = withFloor(ws, &s.worker) // a PUT without the floor keeps the one in force
+	if sameWorker(ws, s.worker) {
 		return false, nil
 	}
 	if s.store != nil {
