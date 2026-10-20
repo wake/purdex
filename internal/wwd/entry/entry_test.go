@@ -269,6 +269,14 @@ local = true
 	// Go reads --flag as -flag: the double-dash spelling of the worker's own output flag is refused as well (#3711 R2)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile", "out.xml"}).Action)
 	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "--junitfile=out.xml"}).Action)
+	// what follows -args or -- is for the test program, not a flag of go: it is not the worker's output flag (#3711 critic)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-args", "-junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "--", "-junitfile", "out.xml"}).Action)
+	assert.Equal(t, ActionRewrite, Match(root, []string{"go", "test", "-args", "--junitfile=out.xml"}).Action)
+	// ... and the same words before -args are the flag
+	assert.Equal(t, ActionDeny, Match(root, []string{"go", "test", "-junitfile", "out.xml", "-args", "x"}).Action)
+	// the rule is go's: another tool's -- is its own (vitest keeps refusing its output flag wherever it stands)
+	assert.Equal(t, ActionDeny, Match(root, []string{"vitest", "run", "--", "--outputFile=out.json"}).Action)
 }
 
 // A task that takes no arguments is the task of its directory: the same command from elsewhere is not it.

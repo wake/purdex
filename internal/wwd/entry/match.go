@@ -29,7 +29,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 			owned = append(owned, w.Text) // `--outputFile={report}`
 		}
 	}
-	for _, c := range cmd {
+	for _, c := range beforeGoArgs(cmd) {
 		for _, o := range owned {
 			if c == o || (strings.HasSuffix(o, "=") && strings.HasPrefix(c, o)) || strings.HasPrefix(c, o+"=") {
 				return nil, false
@@ -120,8 +120,8 @@ var (
 	runFlagsValue = map[string]bool{"-count": true, "-p": true, "-parallel": true, "-timeout": true}
 )
 
-// normalizeGoFlags writes a `go test` command's `--flag` as `-flag`: Go reads them as the same flag, and every check here goes by the single
-// dash name. A lone `--` ends the flags, and nothing from `-args` or `--` on is a flag of go (it is the test program's, or an argument).
+// normalizeGoFlags writes a `go test` command's `--flag` as `-flag`, and `-test.flag` as `-flag`: Go reads them as the same flag, and every
+// check here goes by the single dash name. A lone `--` ends the flags, and nothing from `-args` or `--` on is a flag of go (it is the test program's, or an argument).
 func normalizeGoFlags(cmd []string) []string {
 	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
 		return cmd
@@ -135,9 +135,26 @@ func normalizeGoFlags(cmd []string) []string {
 		if strings.HasPrefix(w, "--") && len(w) > 2 && w[2] != '-' {
 			w = w[1:]
 		}
+		if rest, ok := strings.CutPrefix(w, "-test."); ok && rest != "" { // -test.run is -run: go test passes the -test. names through
+			w = "-" + rest
+		}
 		out = append(out, w)
 	}
 	return out
+}
+
+// beforeGoArgs is the part of a `go test` command that is go's own flags and packages: what follows -args or a lone -- is for the test
+// program (or an argument), and is not read as a flag of go, nor as the worker's output flag. Another command is returned whole.
+func beforeGoArgs(cmd []string) []string {
+	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
+		return cmd
+	}
+	for i := 2; i < len(cmd); i++ {
+		if cmd[i] == "-args" || cmd[i] == "--" {
+			return cmd[:i]
+		}
+	}
+	return cmd
 }
 
 // goValueFlags are the flags of `go test` (and the build flags it takes) that take a value, in the next word or joined with =: the word after
@@ -148,6 +165,7 @@ var goValueFlags = map[string]bool{
 	"-o": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-asmflags": true, "-gccgoflags": true, "-mod": true, "-modfile": true,
 	"-overlay": true, "-pkgdir": true, "-vet": true, "-outputdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true,
 	"-list": true, "-blockprofilerate": true, "-memprofilerate": true, "-mutexprofilefraction": true, "-run-timeout": true, "-testify.m": true,
+	"-C": true, "-buildmode": true, "-buildvcs": true, "-compiler": true, "-installsuffix": true, "-pgo": true, "-toolexec": true,
 	"-mutexprofile": true, "-trace": true, "-shuffle": true, "-testlogfile": true, "-fuzzcachedir": true, "-fuzzminimizetime": true,
 }
 

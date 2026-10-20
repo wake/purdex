@@ -76,6 +76,8 @@ func TestMatch_DoubleDashFlagsAreTheSameFlags(t *testing.T) {
 		"--p 4 --timeout=5m":    {"go", "test", "--p", "4", "--timeout=5m", "./..."},
 		"--json --v --failfast": {"go", "test", "--json", "--v", "--failfast", "./..."},
 		"--parallel=2":          {"go", "test", "--parallel=2", "./..."},
+		"-test.count=1 (alias)": {"go", "test", "-test.count=1", "./..."},
+		"--test.timeout=5m":     {"go", "test", "--test.timeout=5m", "./..."},
 	} {
 		r := Match(root, argv)
 		assert.Equal(t, ActionRewrite, r.Action, name)
@@ -89,6 +91,8 @@ func TestMatch_DoubleDashFlagsAreTheSameFlags(t *testing.T) {
 	for name, argv := range map[string][]string{
 		"--tags without -run":                             {"go", "test", "--tags", "e2e", "./cmd/wwd/"},
 		"--run on the whole tree":                         {"go", "test", "--run", "TestX", "./..."},
+		"-test.run on the whole tree":                     {"go", "test", "-test.run", "TestX", "./..."},
+		"-test.tags is -tags":                             {"go", "test", "-test.tags", "e2e", "./cmd/wwd/"},
 		"--race on the whole tree is go-race, not go-all": {"go", "test", "--race", "./..."},
 	} {
 		r := Match(root, argv)
@@ -112,6 +116,12 @@ func TestMatch_TheHintDoesNotTakeAFlagValueForAPackage(t *testing.T) {
 		"-list with a path-shaped value": {"go", "test", "-list", "./...", "-cover"},
 		"-list as the last words":        {"go", "test", "-list", "./..."},
 		"-memprofilerate":                {"go", "test", "-memprofilerate", "./...", "-cover"},
+		"-test.list (the -test. alias)":  {"go", "test", "-test.list", "./..."},
+		"-test.run (the -test. alias)":   {"go", "test", "-test.run", "./..."},
+		"-buildmode (a build flag)":      {"go", "test", "-buildmode", "./..."},
+		"-toolexec (a build flag)":       {"go", "test", "-toolexec", "./..."},
+		"-C (a build flag)":              {"go", "test", "-C", "./..."},
+		"-pgo (a build flag)":            {"go", "test", "-pgo", "./..."},
 	} {
 		r := Match(root, argv)
 		assert.NotEqual(t, "go-all", r.Hint, name+": ./... is a value here, not the whole tree")
