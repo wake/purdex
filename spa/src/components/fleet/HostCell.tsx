@@ -1,38 +1,34 @@
-// spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's host row, built from the App's own pieces so it reads like the members beside it:
+// spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's host row (monitoring tabs M10, M17–M19), built from the App's own pieces so it reads like the members beside it:
 //   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side; hover bg-surface-hover, selected bg-surface-active. No click / focus outline; the card opens on focus.
 //   badge  the App's `HostBadge` as beside a member in the session list (the sidebar badge settings, the host's colours resolved as for an agent member: terminal, falling back to console).
-//          A host that is not `ok`: the badge dimmed and the indicator's track only.
-//   hover  a card (HostCard) with the host's readings or, when it is not ok, its state; no native title.
-//   then, in the same square after the badge, 2 px further right than the cell's gap (`ml-0.5`), the host's indicator:
-//   ring   the App's `ContextRing`, the badge's size: length = the composite score, tone = the ZONE the daemon sent, nothing in the middle. No reading: the track only.
-//   bars   `HostBars`: left CPU %, right the memory pressure level or memory used %, each in its own band. No reading: the grey tracks only.
-// Read only from the pool (`CellView`); the per-host shapes and data, the state icon and the item count come with MON-3.
+//          wwd_down: lit as ever; host_down: 40 %; unknown: 60 %.
+//   count  the number at the badge's top right (M6, M7): grey, yellow from a long wait, red when no host can take a job; only for a host that is ok and has something to count; 99+ above 99.
+//   then, in the same square after the badge, 2 px further right than the cell's gap (`ml-0.5`), the host's indicator (its own shape and data, M9):
+//   ring   the App's `ContextRing`, the badge's size: length = the item's share, tone = its band.
+//   bar / bars   `HostBars`: one bar, or two (left and right item), each in its own band.
+//   A host that is not ok has no readings: the indicator's place holds a bold icon instead (M17–M19): wwd_down a yellow broken link, host_down a red power symbol, unknown a grey question mark.
+// Read only from the pool (`CellView`).
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { LinkBreak, Power, Question } from '@phosphor-icons/react'
 import { resolveHostBadge } from '../../lib/host-color'
-import type { UsageTone } from '../../lib/usage-display'
-import type { CellFast, CellView } from '../../lib/pool/cell-model'
+import type { CellView } from '../../lib/pool/cell-model'
+import { indicatorReading } from '../../lib/pool/indicator'
 import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostBadge } from '../HostBadge'
 import { ContextRing } from '../team/ModelIcon'
+import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { livenessWord } from '../../lib/pool/words'
-import { cpuReading, memoryReading, pressureReading } from '../../lib/pool/bar-readings'
 import type { PoolZone } from '../../lib/pool/types'
 
 // One card at a time: the close function of the cell whose card is open (hover on B closes the card focus left on A).
 let openCell: { owner: object; close: () => void } | null = null
 
-const ZONE_TONE: Record<PoolZone, UsageTone | undefined> = { normal: 'ok', warning: 'warn', danger: 'danger', unknown: undefined }
-
-/** The bars' kind for a host's indicator. Until MON-3b draws the per-host shapes and data, ring (and the single bar) read as the ring, the bars as the old two-bar settings. */
-type CellIndicator = 'ring' | 'bars-pressure' | 'bars-memory'
-function cellIndicator(look: CellView['look']): CellIndicator {
-  const ind = look.indicator
-  if (ind.shape !== 'bars') return 'ring'
-  return ind.data[1] === 'mem' ? 'bars-memory' : 'bars-pressure'
-}
+const COUNT_TONE = { neutral: 'bg-text-muted text-white', warn: 'bg-status-warning text-text-inverse', error: 'bg-status-error text-white' } as const
+/** How far a badge is dimmed: wwd_down is lit as ever, host_down 40 %, unknown 60 % (M17–M19). */
+const DIM = { ok: '', wwd_down: '', host_down: 'opacity-40', unknown: 'opacity-60' } as const
 
 export interface HostCellProps {
   view: CellView
@@ -51,15 +47,15 @@ function accessibleName(t: (k: string, p?: Record<string, string | number>) => s
 export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
   const t = useI18nStore((s) => s.t)
   const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
-  const indicator = cellIndicator(view.look)
+  const shape = view.look.indicator
   const { colors, color, icon, iconWeight } = view.look
   // Resolved as the badge beside an agent member is (KnownHostBadge: terminal for an agent), so the two read the same.
   const badge = useMemo(() => resolveHostBadge({ colors, color, icon, iconWeight }, 'terminal'), [colors, color, icon, iconWeight])
   const off = view.state.state !== 'ok'
   const f = view.fast
   const zone: PoolZone | 'offline' | 'nodata' = off ? 'offline' : f ? (view.zone ?? f.zone) : 'nodata'
-  // A breathing dot while this host's worker runs something.
-  const running = view.worker ? view.worker.running.heavy + view.worker.running.light > 0 : false
+  const first = indicatorReading(shape.data[0], view)
+  const second = shape.shape === 'bars' ? indicatorReading(shape.data[1], view) : undefined
   const narrow = variant === 'narrow'
   // The hover card (user 10-17): on enter / focus, off on leave / blur / click. Its anchor is measured when it opens.
   const ref = useRef<HTMLButtonElement>(null)
@@ -107,26 +103,27 @@ export function HostCell({ view, variant, isActive, onOpen }: HostCellProps) {
       className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active [--cell-bg:var(--surface-active)]' : '[--cell-bg:var(--surface-tertiary)] hover:bg-surface-hover hover:[--cell-bg:var(--surface-hover)]'}`}
     >
       <span className="relative inline-flex shrink-0">
-        <span data-testid={`host-badge-dim-${view.hostId}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
+        <span data-testid={`host-badge-dim-${view.hostId}`} className={`inline-flex ${DIM[view.state.state]}`}>
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.hostId}`} bright />
         </span>
-        {running && <span data-testid={`worker-running-${view.hostId}`} className="pointer-events-none absolute -bottom-px -right-px size-[6px] rounded-full bg-status-success animate-breathe" />}
+        {view.count && <CountBadge n={view.count.n} size="sm" className={`pointer-events-none ${COUNT_TONE[view.count.tone]}`} testId={`count-badge-${view.hostId}`} />}
       </span>
-      {indicator === 'ring' ? (
+      {off ? (
+        <span className="inline-flex shrink-0 ml-0.5 items-center justify-center" style={{ width: box, height: box }} data-testid={`state-icon-${view.hostId}`} data-state={view.state.state} data-zone="offline">
+          {view.state.state === 'wwd_down' ? <LinkBreak weight="bold" size={box - 2} className="text-status-warning" />
+            : view.state.state === 'host_down' ? <Power weight="bold" size={box - 2} className="text-status-error" />
+            : <Question weight="bold" size={box - 2} className="text-text-muted" />}
+        </span>
+      ) : shape.shape === 'ring' ? (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.hostId}`} data-zone={zone}>
-          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[view.zone ?? f.zone] : undefined} muted={!!f && view.zone === 'unknown'} noShape />
+          <ContextRing pct={first?.pct} model={undefined} size={box} tone={first && first.tone !== 'muted' ? first.tone : undefined} muted={first?.tone === 'muted'} noShape />
         </span>
       ) : (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.hostId}`} data-zone={zone}>
-          <HostBars left={f ? cpuReading(f.cpu) : null} right={f ? memoryBar(indicator, f) : null} size={box} />
+          <HostBars left={first} right={second} size={box} />
         </span>
       )}
       {cardOpen && <HostCard view={view} placement={narrow ? 'right' : 'above'} anchor={anchor} />}
     </button>
   )
-}
-
-/** The right bar: the pressure level (memory used % when it is unknown), or memory used %. */
-function memoryBar(indicator: Exclude<CellIndicator, 'ring'>, f: CellFast) {
-  return indicator === 'bars-pressure' ? pressureReading(f.level, f.mem) : memoryReading(f.mem)
 }

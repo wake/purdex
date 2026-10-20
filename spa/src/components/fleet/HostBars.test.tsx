@@ -83,3 +83,19 @@ describe('HostBars', () => {
     expect(screen.getByTestId('host-bars').style.width).toBe('20px')
   })
 })
+
+describe('HostBars — one bar and a muted reading (MON-3b)', () => {
+  it('a single bar when there is no right reading at all', () => {
+    render(<HostBars left={cpuReading(30)} size={16} />)
+    expect(screen.getByTestId('host-bar-left')).toBeTruthy()
+    expect(screen.queryByTestId('host-bar-right')).toBeNull()
+  })
+  it('a right reading of null is a track without a fill, still two bars', () => {
+    render(<HostBars left={cpuReading(30)} right={null} size={16} />)
+    expect(screen.getByTestId('host-bar-right')).toBeTruthy()
+  })
+  it('a muted reading is grey', () => {
+    render(<HostBars left={{ pct: 60, tone: 'muted' }} size={16} />)
+    expect(within(screen.getByTestId('host-bar-left')).getByTestId('host-bar-fill').className).toContain('bg-text-muted')
+  })
+})
