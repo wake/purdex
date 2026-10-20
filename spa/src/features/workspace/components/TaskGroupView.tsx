@@ -16,6 +16,7 @@ import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useWorkspaceStore } from '../store'
 import { useTeamViews } from '../../../hooks/useTeamViews'
 import { useSessionRoots, type WantedSession } from '../../../hooks/useSessionRoots'
+import { useEffectiveView } from '../../../lib/task-groups/effective-view'
 import { collectLeaves } from '../../../lib/pane-tree'
 import { failureText, rowMenuItems } from '../../../lib/task-groups/row-menu'
 import { deleteManualGroup, renameManualGroup } from '../../../lib/task-groups/manual-actions'
@@ -80,7 +81,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     ],
     [sessionTabs, groupsById],
   )
-  const roots = useSessionRoots(true, wanted)
+  // The roots are read only while the task-group view is really in force (wide sidebar, tabs not on the left — lib/task-groups/effective-view.ts), whatever this component is mounted for.
+  const roots = useSessionRoots(useEffectiveView() === 'groups', wanted)
 
   const manual = useMemo(() => ({ order: groupOrder, groups: groupsById }), [groupOrder, groupsById])
 
