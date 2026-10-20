@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0-alpha.768] - 2026-10-20
+
+> daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 767 相同，但 App 仍要用 768 重新打包（見下一段）。資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
+>
+> **要一起更新 Mac App**：Profile Sync 的 settings 區版本從 12 升到 13（#3773）。還沒更新的 App 在 settings 區會被擋住，不能同步設定，所以 air26 和 air19 的 Mac App 要跟著更新。iOS App 不受影響。
+>
+> **能力退役**：`task_groups.v1` 從 `/api/info` 拿掉了，`/api/hostconfig/task-groups` 也不再提供（#3757）。App 從 TG-6 起就不讀它。
+>
+> **worker**：部署時各台的 worker 先一律關閉。檢查通過後只打開 air26；mlab 先維持關閉，由守門員決定何時打開（這次用它取代 exception，避免擋到 mlab 閘門的重名額）。mserv、air19 仍關著。
+
+### Added：wwd 主機指標補齊（G 項）
+
+- **series 帶出 Facts 已有的欄位（#3749，G-1）**：`/v1/facts/series` 每分鐘的點多了 load1／load5、swap 用量、壓縮器、swap 換出速率、解壓速率、worker 執行數、佇列中的工作數與各磁碟的用量（後面 G-2～G-4 的新欄位也會出現在 series）。另加一條守門測試：取樣程式（`facts`、`hostmem`）不准另外 fork 行程，只有兩個已知的例外。
+- **CPU 細項（#3755，G-2）**：Facts 的 `cpu` 多了 `load15`、`user_pct`、`system_pct`，以及每個核心的使用率與種類（效能核／節能核）。
+- **磁碟 IO（#3759，G-3）**：Facts 多了 `disk_io`，列出每顆磁碟的讀寫速率與 IOPS；macOS 與 Linux 都有。
+- **其他指標（#3756，G-4）**：行程總數 `procs_total`、開機時間 `boot_at`、wwd 自己的 CPU 與記憶體 `self`、swap 總量與記憶體分項（wired、active、inactive、檔案快取）。`/v1/pool` 與 Purdex 的 `/api/pool/hosts` 多了 `rtt_ms`（輪詢那一台花了多久），Purdex daemon 也要是 768 才看得到。
+
+### Changed：wwd 的工作目錄與快取
+
+- **Go 建置快取依「多久沒用」修剪（#3760）**：以前快取超過上限、而且沒有 job 在用時才整份清空；現在每小時刪掉超過 `[worker] gocache_prune_hours`（預設 24 小時）沒用過的項目，超過上限時從最舊的刪到上限的 80%，不必等快取沒人用。只有修剪後仍超過上限的快取才會整份清空。mlab 的 `gocache_max_mb = 6144` 照舊。
+- **工作目錄的 tree 算得更快（#3751，#3745）**：本機快速通道登記工作目錄 tree 的額外時間變短。
+
+### Fixed
+
+- **關閉分頁與瀏覽歷史跟著主機改寫（#3753，#3685）**：主機被辨認或移除後，從「重開最近關閉的分頁」或 History 頁重開的分頁，主機與 team 編組都會指向正確的主機，不再指向已經不存在的舊主機。
+- **主機記憶體測試不再偶發失敗（#3761，#3758）**：解壓計數的檢查會等過 macOS 一秒內回傳快取值的窗口再重試，忙碌的主機不再誤判。
+
+### Added：B 線個人面板（TG-5）
+
+- **不在 team 裡的 agent 分頁也有個人面板（#3763、#3764、#3767、#3769）**：標題列的「個人」按鈕取代原本的「自己的工作簿」。單行顯示頭像、名稱與標題；展開後是完整卡片（agent 燈號、主機、context 用量、最後一行狀態、工作簿按鈕），以及設定：把這個 session 放進或移出任務編組、新增任務編組、改名稱（也可以雙擊編組膠囊直接改）、改顏色。
+
+### Changed：B 線監控（資料層，畫面還沒換）
+
+- **監控分頁組的資料準備（#3768、#3771、#3772、#3773、#3775、#3776、#3777）**：job 帶出用的是重名額還是輕名額；`/api/info` 的 `wwd` 讓 App 對得上主機與它的 wwd；資源池主機的順序與外觀改存在 Profile Sync 的 settings 區（所以 settings 版本升到 13）；App 啟動時把舊的主機外觀一次搬過去（排在 Profile Sync 之前，最多等 10 秒，連續 3 次逾時就放棄）；主機狀態改成「正常／wwd 沒回應／主機沒回應／不明」四種。側欄與監控分頁的畫面要等之後的版本才換。
+
+### Docs
+
+- **監控分頁組與側欄主機列的 spec 與 plan（#3765）**。
+
 ## [1.0.0-alpha.767] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 766 相同。資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
