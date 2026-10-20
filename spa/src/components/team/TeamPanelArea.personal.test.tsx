@@ -10,6 +10,7 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
 import { seedWorkbook } from '../../lib/team/__tests__/workbook-fixture'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
@@ -169,6 +170,15 @@ describe('the interim full form (until TG-5c)', () => {
 })
 
 describe('the interim full form follows the panel\'s target', () => {
+  it('on a journal.v1 host the workbook view stays off: the personal panel shows in full', () => {
+    scene(); seedWorkbook(HOST, 'S1', { status: 'Wiring.', entries: [] })
+    setJournalHost(HOST, true)
+    setActive('cc1'); shared('full'); mount()
+    expect(screen.queryByTestId('own-workbook')).toBeNull()
+    expect(screen.getByTestId('personal-panel').getAttribute('data-mode')).toBe('full')
+    setJournalHost(HOST, false)
+  })
+
   it('a split tab whose first agent pane is codex and second is cc with a workbook: full does not switch to the cc workbook', () => {
     scene(); seedWorkbook(HOST, 'S1', { status: 'cc status', entries: [] })
     const cx = ccTab('sp', { type: 'codex', sessionId: 'S2' })
