@@ -593,6 +593,10 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   waits in the background until the queue timeout. Purdex does not meet it: `purdex_manifest_test` makes every queued task carry `os:darwin` or its
   own `task:` label. When another repo does, the setting has to become a field of the host's info.
 * Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.
+* What a fast-lane job records (#3735): `snapshot.commit` is HEAD (a reference only), `snapshot.tree` is the tree of the working directory **as it was when the run was
+  registered** (uncommitted and untracked files included, ignored ones left out; HEAD's tree when nothing differs). It is taken in a temporary index with its objects in a
+  temporary directory, so nothing is written into the repository; it costs about 0.5 s in purdex (6.5k tracked files). A file edited while the run goes is not in it.
+  When the tree cannot be taken the run goes on and the record has an empty `snapshot.tree`, with the reason in the run's report notes: it is never HEAD's tree.
 
 ## 14. The release gate (S2-b)
 
