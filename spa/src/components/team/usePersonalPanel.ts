@@ -77,7 +77,7 @@ export function usePersonalReading(target: PersonalTarget | null): PersonalReadi
 }
 
 export interface PersonalWho {
-  /** What the session is called where no persona is: the tmux session's name (the sidebar's row title), else the name the pane cached. */
+  /** What the session is called besides its persona's name: its pdx title, else the tmux session's name, else the name the pane cached. */
   title: string
   /** The address the daemon listed for the session, or '' when no read ever did. */
   address: string
@@ -89,7 +89,9 @@ export function usePersonalWho(target: PersonalTarget | null): PersonalWho {
   usePersonaRevision() // `seatOf` reads the persona store without subscribing: redraw when it loads or changes
   const cached = useRootCacheStore((s) => (target ? s.addresses[target.hostId]?.[target.agentSessionId] : undefined))
   const address = target ? (cached ?? addressOf(target.hostId, target.agentSessionId) ?? '') : ''
-  const title = useSessionStore((s) => {
+  // The pdx title the quota row carried (the sidebar team row's), else the tmux session's name, else the name the pane cached.
+  const pdxTitle = useRootCacheStore((s) => (target ? s.titles[target.hostId]?.[target.agentSessionId] : undefined)) ?? ''
+  const sessionName = useSessionStore((s) => {
     if (!target) return ''
     return s.sessions[target.hostId]?.find((r) => r.code === target.sessionCode)?.name ?? ''
   })
@@ -98,5 +100,5 @@ export function usePersonalWho(target: PersonalTarget | null): PersonalWho {
     const pane = layout ? collectLeaves(layout).find((p) => p.content.kind === 'tmux-session' && p.content.sessionCode === target?.sessionCode) : undefined
     return pane?.content.kind === 'tmux-session' ? pane.content.cachedName : ''
   })
-  return { title: title !== '' ? title : cachedName, address, persona: address === '' ? null : seatOf(address) }
+  return { title: pdxTitle !== '' ? pdxTitle : sessionName !== '' ? sessionName : cachedName, address, persona: address === '' ? null : seatOf(address) }
 }

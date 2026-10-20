@@ -38,7 +38,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useManualGroupsStore.setState({ order: [], groups: {} })
-  useRootCacheStore.setState({ roots: {}, addresses: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
   useI18nStore.getState().setLocale('zh-TW')

@@ -11,6 +11,8 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
 import { useRootCacheStore } from '../../lib/task-groups/root-cache'
+import { usePersonaStore } from '../../stores/usePersonaStore'
+import { makeCollection, makePersona } from '../../lib/names/__fixtures__/personas'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { lineWidthFor } from './panel-layout'
 import type { Tab } from '../../types/tab'
@@ -40,7 +42,7 @@ function scene() {
 const mount = () => render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
 const fileInGroup = () => act(() => {
   useManualGroupsStore.setState({ order: ['g1'], groups: { g1: { name: 'iOS 發版', color: '#fb923c', members: [{ host: HOST, root: 'R' }], createdAt: 0 } } })
-  useRootCacheStore.getState().ingest(HOST, [{ session_id: 'S1', root_session_id: 'R', address: 'mlab/purdex-emma-q9z' }])
+  useRootCacheStore.getState().ingest(HOST, [{ session_id: 'S1', root_session_id: 'R', address: 'mlab/purdex-emma-q9z', title: 'purdex-iface-tg5' }])
 })
 
 beforeEach(() => {
@@ -48,7 +50,8 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useManualGroupsStore.setState({ order: [], groups: {} })
-  useRootCacheStore.setState({ roots: {}, addresses: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
+  usePersonaStore.setState({ byHost: {} })
   useI18nStore.getState().setLocale('zh-TW')
 })
 afterEach(() => cleanup())
@@ -89,11 +92,15 @@ describe('a tab that shows an agent session and is no team seat', () => {
     expect(named.style.background).toBe('rgb(251, 146, 60)')
   })
 
-  it('the persona\'s name comes from the address the root cache kept, with the title after it', () => {
+  it('the persona\'s name comes from the address the root cache kept, with the title after it (an ended session keeps it)', () => {
     scene(); setActive('cc1'); shared('line'); mount()
     expect(screen.getByTestId('personal-name').textContent).toBe('cc1')
-    fileInGroup() // the address names no persona in this fixture, so the title stays the name
-    expect(screen.getByTestId('personal-name').textContent).toBe('cc1')
+    const c = makeCollection(['q9z'])
+    c.items[0] = makePersona('q9z', { name: 'Emma' })
+    act(() => { usePersonaStore.setState({ byHost: { [HOST]: { status: 'ready', collection: c } } }) })
+    fileInGroup() // the quota row's address ends in the persona's code
+    expect(screen.getByTestId('personal-name').textContent).toBe('Emma')
+    expect(screen.getByTestId('personal-title').textContent).toBe('purdex-iface-tg5') // the pdx title, not the tmux name
   })
 
   it('a click on the header toggles line <-> full; the ↑ moves the area to the title bar', () => {
