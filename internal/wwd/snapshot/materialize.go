@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MaterializeIn says what to make a workspace of.
@@ -56,9 +57,40 @@ var maxBundleDownload = 288 << 20
 // errUseTar says that the bundle way did not work out for a reason a tar fixes.
 var errUseTar = errors.New("snapshot: use a tar")
 
+// fetchBaseTimeout bounds the fetch that a missing base asks for: a remote that does not answer holds a job's start for this long and no
+// longer, and the tar follows. (A variable so that a test can lower it.)
+var fetchBaseTimeout = 30 * time.Second
+
+// fetchClone is fetchCloneFromOrigin (a variable so that a test can count the calls).
+var fetchClone = fetchCloneFromOrigin
+
+// fetchCloneFromOrigin brings the clone up to date with its origin, for the one reason fromClone has: the job's base is a commit pushed after the
+// clone was last fetched (manifest_ref fetches it every 10 minutes, and a release gate runs seconds after its push). Without it the
+// workspace of the same task would be a worktree or a tar, with or without a .git, by the minute it started in (#3729, #3730). It fetches
+// the way manifest_ref does (`fetch --quiet --no-tags -- origin`), once, for at most fetchBaseTimeout.
+//
+// What counts is the base being in the clone, which fromClone looks at after it, not what the fetch says: git stores the objects before it
+// updates the refs, so a fetch that fails at a ref (another fetch holds the lock of `origin/main`; a name that cannot be both a branch and
+// a directory of branches, `origin/foo` there and `foo/bar` now on the remote) has still brought the commits in. So there is no waiting
+// for a lock and no telling one error from another, and the error is only the reason the tar may follow.
+func fetchCloneFromOrigin(ctx context.Context, clone string) error {
+	ctx, cancel := context.WithTimeout(ctx, fetchBaseTimeout)
+	defer cancel()
+	_, err := git(ctx, "wwd.snapshot-fetch-base", clone, "fetch", "--quiet", "--no-tags", "--", "origin")
+	return err
+}
+
 func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
-	if ownRepo(ctx, in.Clone) != nil || !hasCommit(ctx, in.Clone, in.Base) {
+	if ownRepo(ctx, in.Clone) != nil {
 		return Workspace{}, errUseTar
+	}
+	if !hasCommit(ctx, in.Clone, in.Base) {
+		// the clone may only be behind: ask its origin once. The answer is whether the base is there after it (a failed fetch that still
+		// brought it in counts); not having it (a base that was never pushed, a remote that does not answer) is the tar.
+		_ = fetchClone(ctx, in.Clone)
+		if !hasCommit(ctx, in.Clone, in.Base) {
+			return Workspace{}, errUseTar
+		}
 	}
 	ref := PinRef(in.JobID)
 	{
