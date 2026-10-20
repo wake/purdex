@@ -366,8 +366,8 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - The source is the `quotas` of `GET /api/team/unattended` (`team.relay_quota.v1`). The daemon gives one row per
     live session of the host, with `session_id`, `root_session_id` and `address` (`internal/team/wire_quota.go`). The
     App matches `session_id` against the agent session id that its pane records.
-  - A host with `task_groups.v1` always has `team.relay_quota.v1`. If one does not, all of that host's sessions show
-    under 「未分組」; the App does not guess.
+  - The App reads it from a host that lists `team.relay_quota.v1`. (The old condition was `task_groups.v1`, retired in TG-6.) If a
+    host does not list it, all of that host's sessions show under 「未分組」; the App does not guess.
   - The App reads it only while the task-group view is open: once when the view opens, once on a host-events
     reconnect, and once (debounced) when it sees a live session that the list does not have. It always goes through
     the existing shared reader.

@@ -36,7 +36,7 @@
 
 ### 1.2 Capabilities (appended in this order; the exact-list test is in `internal/core/info_handler_test.go:419`)
 
-`personas.v1` (NP-1), `team.max_members.v2` and `team.lead_name.v1` (NP-4), `task_groups.v1` (NP-5),
+`personas.v1` (NP-1), `team.max_members.v2` and `team.lead_name.v1` (NP-4), ~~`task_groups.v1` (NP-5)~~ (retired in TG-6),
 `team.decision_log.v1` (NP-6). Each one gets the real-module `/api/info` test from the 743 lesson.
 
 ### 1.3 Name service (Go, `internal/peers` interface, implemented in `internal/module/peers`)
@@ -89,7 +89,7 @@ type SpawnReservationReader interface {
 | ~~NP-2~~ | — | **Dropped 10-19 (user):** no daemon-to-daemon persona sync. One source host, and the App copies it to the others (spec §4.3, NA-1d) | — |
 | NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1 |
 | NP-4 | daemon member B | reservations (local and remote), lead names at approval, `/team` parse and card path, adopt pair, cap 9 | NP-0, NP-3 |
-| NP-5 | daemon member A | `task_groups` key and capability | §1 |
+| NP-5 | daemon member A | ~~`task_groups` key and capability~~ — retired in TG-6 | §1 |
 | NP-6 | daemon member A | decision log, `unattended_events`, `log` field | §1 |
 | NA-0 | lead (Opus) | Design: team panel v2 layout on a real screen, persona page, task-group view, deck speech line. A docs PR with screenshots of a prototype, not a vite server on mlab (the 10-17 rule) | — |
 | NA-1 | interface member | persona store, `seatOf`, `<Avatar>`, persona page, import, Electron image IPC (P2) | §1, NA-0 (page) |
