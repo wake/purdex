@@ -48,15 +48,25 @@ async function load(hostId: string): Promise<{ loaded: Loaded; observed: string 
   let info: Loaded['info']
   let observed = ''
   let daemonCapabilities: string[] = []
+  let wwd: Loaded['wwd'] = null
   try {
     const data = await fetchInfo(hostId).then((r) => readJson(r, '/api/info'))
     info = data.nex ?? null
     if (typeof data.host_id === 'string') observed = data.host_id
     if (Array.isArray(data.capabilities)) daemonCapabilities = data.capabilities.filter((c): c is string => typeof c === 'string')
+    wwd = parseWwd(data.wwd)
   } catch (err) {
     return { loaded: { info: null, capabilities: null, error: errorText(err) }, observed }
   }
-  return { loaded: { ...(await loadCapabilities(hostId, info)), daemonCapabilities }, observed }
+  return { loaded: { ...(await loadCapabilities(hostId, info)), daemonCapabilities, wwd }, observed }
+}
+
+/** `/api/info.wwd`: only a non-empty string `host_id` counts; anything else is "the daemon does not say". */
+function parseWwd(v: unknown): Loaded['wwd'] {
+  if (typeof v !== 'object' || v === null) return null
+  const { host_id, alias } = v as Record<string, unknown>
+  if (typeof host_id !== 'string' || host_id === '') return null
+  return { hostId: host_id, alias: typeof alias === 'string' ? alias : '' }
 }
 
 async function loadCapabilities(hostId: string, info: Loaded['info']): Promise<Loaded> {

@@ -627,6 +627,42 @@ describe('selectors', () => {
   })
 })
 
+describe('wwd identity of /api/info (monitoring tabs MON-1a)', () => {
+  const infoWithWwd = (wwd: unknown): Response =>
+    ({ ok: true, status: 200, json: () => Promise.resolve({ nex: info(), wwd }) }) as Response
+  const load = async (wwd: unknown) => {
+    useNexHostStore.setState({ byHost: {} })
+    vi.mocked(hostApi.fetchInfo).mockResolvedValue(infoWithWwd(wwd))
+    await ensure()
+    return entry().wwd
+  }
+
+  it('keeps host_id and alias', async () => {
+    expect(await load({ host_id: '82b11c521df16c12', alias: 'mlab' })).toEqual({ hostId: '82b11c521df16c12', alias: 'mlab' })
+  })
+  it('missing key → null', async () => {
+    expect(await load(undefined)).toBeNull()
+  })
+  it('empty or non-string host_id → null', async () => {
+    expect(await load({ host_id: '', alias: 'mlab' })).toBeNull()
+    expect(await load({ host_id: 7, alias: 'mlab' })).toBeNull()
+    expect(await load('mlab')).toBeNull()
+  })
+  it('a non-string alias reads as empty', async () => {
+    expect(await load({ host_id: '82b11c521df16c12', alias: 3 })).toEqual({ hostId: '82b11c521df16c12', alias: '' })
+  })
+  it('an answer from before a clearHost does not write it', async () => {
+    let settle!: (r: Response) => void
+    vi.mocked(hostApi.fetchInfo).mockReturnValueOnce(new Promise<Response>((resolve) => { settle = resolve }))
+    const p = ensure()
+    await flush()
+    useNexHostStore.getState().clearHost(H)
+    settle(infoWithWwd({ host_id: '82b11c521df16c12', alias: 'mlab' }))
+    await p
+    expect(entry()).toBeUndefined()
+  })
+})
+
 describe('daemonCapabilities (worker test tab S2)', () => {
   const infoWith = (capabilities: unknown): Response =>
     ({ ok: true, status: 200, json: () => Promise.resolve({ nex: info(), capabilities }) }) as Response
