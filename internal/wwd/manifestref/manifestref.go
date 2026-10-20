@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,18 +139,22 @@ func (s *Source) Fetch(ctx context.Context, repo string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
-	first, _, under := strings.Cut(strings.TrimPrefix(ref, "refs/remotes/"), "/")
-	if !under {
-		return nil
-	}
 	out, err := s.run(ctx, root, "remote")
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(strings.Fields(string(out)), first) {
+	// the remote is the longest name (a name may hold a slash) that prefixes the ref; one named like an option is never fetched
+	short := strings.TrimPrefix(ref, "refs/remotes/")
+	remote := ""
+	for _, r := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(r, "-") && strings.HasPrefix(short, r+"/") && len(r) > len(remote) {
+			remote = r
+		}
+	}
+	if remote == "" {
 		return nil
 	}
-	_, err = s.run(ctx, root, "fetch", "--quiet", "--no-tags", first)
+	_, err = s.run(ctx, root, "fetch", "--quiet", "--no-tags", "--", remote)
 	return err
 }
 

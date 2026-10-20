@@ -153,6 +153,56 @@ func TestFetchTakesTheRemoteTheRefLivesUnder(t *testing.T) {
 	}
 }
 
+// A remote name may hold a slash (a/b → refs/remotes/a/b/main): the longest remote name that prefixes the ref is the one (#3673 critic). A remote
+// whose name starts with a dash is never fetched (it would read as an option).
+func TestFetchMatchesTheLongestRemoteNameAndNeverAFetchOption(t *testing.T) {
+	origin, clone, src := fixture(t)
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, filepath.Dir(other), "clone", "-q", origin, other)
+	git(t, clone, "remote", "add", "a/b", other) // the first path segment alone ("a") names no remote
+	git(t, clone, "fetch", "-q", "a/b")
+	src.refs["purdex"] = "refs/remotes/a/b/main"
+	ctx := context.Background()
+	if err := src.Refresh(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	second := commitManifest(t, other, "moved\n")
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Refresh(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := src.Get("purdex"); got.Commit != second {
+		t.Fatalf("a/b must be fetched (not a): %+v, want %s", got, second)
+	}
+	// a remote called --all: the ref is refused before any fetch runs, and nothing is fetched as an option
+	git(t, clone, "config", "remote.--all.url", other)
+	git(t, clone, "config", "remote.--all.fetch", "+refs/heads/*:refs/remotes/--all/*")
+	script := filepath.Join(t.TempDir(), "git-log-fetch")
+	logf := filepath.Join(t.TempDir(), "fetch.log")
+	body := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = fetch ] && echo \"$@\" >> " + logf + "; done\nexec git \"$@\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src.git = script
+	src.refs["purdex"] = "refs/remotes/--all/main"
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatalf("a dash remote is skipped, not an error: %v", err)
+	}
+	if b, _ := os.ReadFile(logf); len(b) != 0 {
+		t.Fatalf("no fetch may run for a remote named like an option: %s", b)
+	}
+	// and a real remote is fetched with -- before its name
+	src.refs["purdex"] = "origin/main"
+	if err := src.Fetch(ctx, "purdex"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(logf); !strings.Contains(string(b), "-- origin") {
+		t.Fatalf("fetch must put -- before the remote name: %q", b)
+	}
+}
+
 func TestAnUnresolvableRefKeepsTheLastAnswerAndReports(t *testing.T) {
 	_, _, src := fixture(t)
 	ctx := context.Background()
