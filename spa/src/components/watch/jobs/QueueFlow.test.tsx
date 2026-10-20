@@ -171,6 +171,69 @@ describe('the summary and the selection', () => {
   })
 })
 
+describe('pointing at things (M29, P18)', () => {
+  const hosts = () => [host('mlab'), host('air26', { labels: ['os:linux'] }), host('mserv', { enabled: false })]
+  const jobs = () => [
+    running('r1', 'mlab'), running('r2', 'air26', { origin: 'mlab' }), running('r3', 'mlab', { origin: 'air26' }),
+    job('qd', { labels: ['os:darwin'] }), job('qa'), job('qm', { labels: ['os:windows'] }),
+  ]
+  const routeKeys = () => Array.from(document.querySelectorAll('g[data-r]')).map((g) => g.getAttribute('data-r')!).sort()
+  const lit = () => Array.from(document.querySelectorAll('g[data-hl]')).map((g) => g.getAttribute('data-r')!)
+  const hoverOn = (el: Element) => fireEvent.mouseEnter(el)
+  const snapshot = (skip: Set<string>) => {
+    const out: Record<string, string> = {}
+    for (const e of document.querySelectorAll('[data-r], [data-j], [data-q], [data-pool], [data-wk]')) {
+      const id = ['data-r', 'data-j', 'data-q', 'data-pool', 'data-wk'].map((a) => (e.hasAttribute(a) ? `${a}=${e.getAttribute(a)}` : '')).join('')
+      if (!skip.has(id)) out[id] = e.outerHTML
+    }
+    return out
+  }
+
+  it('one route per job being run, from the cell that sent it', () => {
+    mount(hosts(), jobs())
+    expect(routeKeys()).toEqual(['air26/r3', 'mlab/r1', 'mlab/r2'])
+  })
+
+  it('on a running card: only its route is lit, and every other thing keeps its class and attributes (M29: nothing else dims)', () => {
+    mount(hosts(), jobs())
+    const own = new Set(['data-r=mlab/r2', 'data-pool=id-mlab', 'data-wk=id-air26'])
+    // the cells of the pointed-at job get an outline, the rest must not change at all
+    const before = snapshot(own)
+    hoverOn(document.querySelector('[data-j="mlab/r2"]')!)
+    expect(lit()).toEqual(['mlab/r2'])
+    expect(snapshot(own)).toEqual(before)
+    expect(document.querySelector('[data-pool="id-mlab"]')!.className).toContain('ring-1')
+    expect(document.querySelector('[data-wk="id-air26"]')!.className).toContain('ring-1')
+    fireEvent.mouseLeave(document.querySelector('[data-j="mlab/r2"]')!)
+    expect(lit()).toEqual([])
+    expect(document.querySelector('[data-pool="id-mlab"]')!.className).not.toContain('ring-1')
+  })
+
+  it('on a waiting job: dashed lines to the workers that are on and hold every label, none to a worker that lacks a label or is off', () => {
+    mount(hosts(), jobs())
+    hoverOn(q('mlab/qd'))
+    expect(Array.from(document.querySelectorAll('[data-c]')).map((p) => p.getAttribute('data-c'))).toEqual(['id-mlab'])
+    fireEvent.mouseLeave(q('mlab/qd'))
+    hoverOn(q('mlab/qa'))
+    expect(Array.from(document.querySelectorAll('[data-c]')).map((p) => p.getAttribute('data-c')).sort()).toEqual(['id-air26', 'id-mlab'])
+    fireEvent.mouseLeave(q('mlab/qa'))
+    hoverOn(q('mlab/qm'))
+    expect(document.querySelectorAll('[data-c]')).toHaveLength(0)
+    fireEvent.mouseLeave(q('mlab/qm'))
+    expect(document.querySelectorAll('[data-c]')).toHaveLength(0)
+  })
+
+  it('on a pool cell\'s header: every route from it is lit; on a worker cell\'s header: every route into it', () => {
+    mount(hosts(), jobs())
+    hoverOn(document.querySelector('[data-pool="id-mlab"] [data-testid="flow-pool-head"]')!)
+    expect(lit().sort()).toEqual(['mlab/r1', 'mlab/r2'])
+    fireEvent.mouseLeave(document.querySelector('[data-pool="id-mlab"] [data-testid="flow-pool-head"]')!)
+    expect(lit()).toEqual([])
+    hoverOn(document.querySelector('[data-wk="id-mlab"] [data-testid="flow-worker-head"]')!)
+    expect(lit().sort()).toEqual(['air26/r3', 'mlab/r1'])
+  })
+})
+
 describe('the last ended jobs', () => {
   const ended = (id: string, finished: number, over: Partial<PoolJob> = {}): PoolJob => job(id, {
     state: 'succeeded', created_at: 1,
