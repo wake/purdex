@@ -4,7 +4,7 @@
 // When the source daemon announces `pool.events.v1` (WWD-7a-1c) the poll stops: a read follows each `pool.changed`, the host-events
 // connection of the source opening again, and the window turning visible. A failure still retries on its own timer, and a source
 // that lost the capability (or another source without it) brings the 5 s poll back.
-// Nothing here is persisted. A host the pool cannot read is not an error here: `poolHostView` falls back to the fleet.
+// Nothing here is persisted. A host the pool cannot read is not an error here: `poolHostState` says `wwd_down`, `host_down` or `unknown`.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
@@ -28,7 +28,6 @@ interface PoolState {
   /** No connected daemon announces `pool.v1`: the old UI stays, with one notice. */
   oldDaemon: boolean
   /** When each pool host (by alias) was last read live (its facts' time), kept across failures for the "since" lines. */
-  lastLiveAt: Record<string, number>
   /** When each host's facts were last read (the facts' time), by wwd `host_id` (an alias change does not move it); kept across failures for the "last reading" lines. */
   lastFactsAt: Record<string, number>
   error: PoolReadFailure | null
@@ -42,7 +41,7 @@ interface PoolState {
   reset: () => void
 }
 
-const initial = { hosts: [], sourceHostId: null, oldDaemon: false, lastLiveAt: {}, lastFactsAt: {}, error: null }
+const initial = { hosts: [], sourceHostId: null, oldDaemon: false, lastFactsAt: {}, error: null }
 
 /** The connected daemons announcing `pool.v1`, in the App's host order. The Nex cache keeps a daemon's capabilities after it drops, so the connection is checked here. */
 function poolSources(): string[] {
@@ -121,17 +120,15 @@ export const usePoolStore = create<PoolState>((set, get) => {
   const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
 
   function applyHosts(sourceHostId: string, hosts: PoolHost[]) {
-    const lastLiveAt = { ...get().lastLiveAt }
     const lastFactsAt = { ...get().lastFactsAt }
     for (const h of hosts) {
       if (!h.reachable || !h.facts) continue
-      lastLiveAt[h.alias] = h.facts.at
       lastFactsAt[h.host_id] = h.facts.at
     }
     failures = 0
     busy = 0
     lastOk = true
-    set({ hosts, sourceHostId, oldDaemon: false, lastLiveAt, lastFactsAt, error: null })
+    set({ hosts, sourceHostId, oldDaemon: false, lastFactsAt, error: null })
   }
 
   function forgetPin() {

@@ -217,12 +217,14 @@ describe('WatchHostPane on the pool — the 5 minute history', () => {
 })
 
 describe('WatchHostPane on the pool — a host wwd does not read', () => {
-  it('keeps "measured by", says wwd is unreachable, and keeps the fleet\'s process tables', async () => {
+  it('keeps "measured by", says the state is unknown (the pool does not list it; no fleet fallback, MON-1d), and keeps the fleet\'s process tables', async () => {
     load([host('d-a', { alias: 'air26' })])
     fetchPoolHosts.mockResolvedValue([])
     await renderPane()
     expect(screen.getByTestId('measure-source').textContent).toContain(t('watch.host.measured', { alias: 'air26' }))
-    expect(screen.getByTestId('avail-row').textContent).toContain('wwd is unreachable')
+    const row = screen.getByTestId('avail-row').textContent!
+    expect(row).toContain('State unknown')
+    expect(row).not.toContain('unreachable')
     expect(screen.queryByTestId('residents')).toBeNull()
   })
 })

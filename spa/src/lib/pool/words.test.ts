@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
-import { reasonWord, headroomReasonLines, driverKey, zoneKey, errorTextKey, fallbackWord, REASON_CODES, DRIVERS } from './words'
+import { reasonWord, headroomReasonLines, driverKey, zoneKey, errorTextKey, REASON_CODES, DRIVERS } from './words'
 import { parseHostsAnswer } from './parse'
 import reasonsJson from './__fixtures__/pool_hosts_response_reasons.json'
 import { ERROR_CODES } from './errors'
@@ -24,21 +24,6 @@ describe('reason words', () => {
   })
   it('an unknown code is shown as it is', () => {
     expect(reasonWord('from_the_future', t)).toBe('from_the_future')
-  })
-})
-
-describe('fallback words (8a-3b)', () => {
-  it('the two reasons have their own words, with and without a time, in both locales', () => {
-    for (const r of ['unreachable', 'stale'] as const) {
-      expect(has(`pool.card.fallback_${r}`), r).toBe(true)
-      expect(has(`pool.card.fallback_${r}_nosince`), r).toBe(true)
-      expect(fallbackWord((k) => k, r, null)).toBe(`pool.card.fallback_${r}_nosince`)
-      expect(fallbackWord((k) => k, r, 1_700_000_000_000)).toBe(`pool.card.fallback_${r}`)
-    }
-    expect(fallbackWord((k) => k, 'unreachable', null)).not.toBe(fallbackWord((k) => k, 'stale', null))
-  })
-  it('no reason given reads as unreachable (a row built without one)', () => {
-    expect(fallbackWord((k) => k, null, null)).toBe('pool.card.fallback_unreachable_nosince')
   })
 })
 

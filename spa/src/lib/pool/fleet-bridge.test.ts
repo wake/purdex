@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { poolCellModel, matchPoolHost } from './fleet-bridge'
-import { poolHostView, type PoolHostViewInput } from './host-view'
+import { poolCellModel, matchPoolHost, unlistedState } from './fleet-bridge'
+import { poolHostState } from './host-state'
 import { parseFacts, parseHostsAnswer } from './parse'
 import darwinJson from './__fixtures__/facts_darwin.json'
 import linuxJson from './__fixtures__/facts_linux.json'
@@ -14,8 +14,9 @@ const NOW = darwin.at + 5000
 const base = parseHostsAnswer(hostsJson)![0]
 const poolHost = (over: Partial<PoolHost> = {}): PoolHost => ({ ...base, alias: 'mlab', host_id: 'h-mlab', facts: darwin, reachable: true, ...over })
 const fleet = (over: Record<string, unknown> = {}) => ({ ...host('d-mlab', { name: 'mlab', fast: fast({ load: 33 }) }), alias: 'mlab', ...over })
-const model = (ph: PoolHost | null, f = fleet(), over: Partial<PoolHostViewInput> = {}) =>
-  poolCellModel(f, poolHostView({ alias: 'mlab', pool: ph, fleet: f, fleetStale: false, poolLastOk: null, ...over }, NOW), ph)
+// A host the pool does not list reads as `unknown` (MON-1d: no fleet fallback); `lastFactsAt` is what the store kept for the host_id.
+const model = (ph: PoolHost | null, f = fleet(), lastFactsAt: number | null = null) =>
+  poolCellModel(f, ph ? poolHostState(ph, lastFactsAt, NOW) : unlistedState(lastFactsAt), ph)
 
 describe('matchPoolHost', () => {
   const hosts = [poolHost(), poolHost({ alias: 'air26', host_id: '0123456789abcdef' })]
@@ -42,7 +43,7 @@ describe('matchPoolHost', () => {
 describe('poolCellModel — live', () => {
   it('the readings come from the facts, the gate queue is dropped, the load from the assess field', () => {
     const m = model(poolHost({ load: { score: 91, driver: 'disk' } }))
-    expect(m.pool?.state).toBe('live')
+    expect(m.pool?.state).toBe('ok')
     expect(m.view.status).toBe('ok')
     expect(m.view.fast).toMatchObject({ cpu: 100 - darwin.cpu.idle_pct, level: darwin.mem.pressure, load: 91, zone: 'normal' })
     expect(m.view.fast!.mem).toBeCloseTo(((16384 - 843) / 16384) * 100, 5)
@@ -70,7 +71,7 @@ describe('poolCellModel — live', () => {
   })
 
   it('the zone unknown is kept for the cell, whatever the placeholder in the readings', () => {
-    const m = model(poolHost({ facts: linux }), fleet(), {})
+    const m = model(poolHost({ facts: linux }), fleet())
     expect(m.pool?.zone).toBe('unknown')
   })
 
@@ -85,35 +86,38 @@ describe('poolCellModel — live', () => {
   })
 })
 
-describe('poolCellModel — fallback and offline', () => {
-  it('fallback keeps the fleet host and its readings untouched, with the pool part saying what is unknown', () => {
+describe('poolCellModel — a host that is not ok (no fleet fallback, MON-1d)', () => {
+  const peerDown = (liveness: 'wwd_down' | 'host_down' | 'unknown', over: Partial<PoolHost> = {}) =>
+    poolHost({ liveness, liveness_at: NOW - 3000, liveness_since: NOW - 600_000, facts: null, ...over })
+
+  it('the host reads as offline whatever the fleet says: no fast reading, the last facts time as last-ok', () => {
     const f = fleet()
-    const m = model(null, f, { poolLastOk: NOW - 60_000 })
-    expect(m.view).toBe(f)
-    expect(m.pool).toMatchObject({ state: 'fallback', since: NOW - 60_000, worker: null, headroom: null })
+    const m = model(peerDown('wwd_down'), f, NOW - 90_000)
+    expect(m.view).toMatchObject({ status: 'offline', fast: null, last_ok_at: NOW - 90_000 })
+    expect(m.view).not.toBe(f)
   })
 
-  it('fallback carries why: no pool view of the host is unreachable; old facts from an answering wwd are stale', () => {
-    expect(model(null, fleet(), { poolLastOk: NOW - 60_000 }).pool).toMatchObject({ state: 'fallback', reason: 'unreachable' })
-    const old = poolHost({ facts: { ...darwin, at: NOW - 60_000 } })
-    expect(model(old, fleet(), { poolLastOk: NOW - 60_000 }).pool).toMatchObject({ state: 'fallback', reason: 'stale' })
+  it.each(['wwd_down', 'host_down', 'unknown'] as const)('%s: the pool part says the state, what is unknown, the check time and the last facts time', (liveness) => {
+    const m = model(peerDown(liveness), fleet(), NOW - 90_000)
+    expect(m.pool).toMatchObject({
+      state: liveness, zone: null, worker: null, headroom: null, owner: null, psi: null, load: null, reasons: null, sessionsRoom: null,
+      checkedAt: NOW - 3000, lastFactsAt: NOW - 90_000, stalled: false,
+    })
   })
 
-  it('live and offline have no fallback reason', () => {
-    expect(model(poolHost())!.pool!.reason).toBeNull()
-    expect(model(null, fleet({ status: 'offline', fast: null }), {}).pool!.reason).toBeNull()
+  it('stalled: wwd answers (ok) but the facts are old — unknown with stalled and the time the readings stopped', () => {
+    const old = poolHost({ liveness: 'ok', liveness_at: NOW - 3000, facts: { ...darwin, at: NOW - 60_000 } })
+    expect(model(old, fleet(), NOW - 60_000).pool).toMatchObject({ state: 'unknown', stalled: true, lastFactsAt: NOW - 60_000, checkedAt: NOW - 3000 })
   })
 
-  it('offline: the host reads as offline, with the newer last-ok', () => {
-    const f = fleet({ status: 'offline', fast: null, last_ok_at: 1000 })
-    const m = model(null, f, { poolLastOk: 9000 })
-    expect(m.view).toMatchObject({ status: 'offline', last_ok_at: 9000 })
-    expect(m.pool?.state).toBe('offline')
+  it('a host the pool does not list is unknown, not read from the fleet (even when the fleet says ok)', () => {
+    const m = model(null, fleet(), null)
+    expect(m.view).toMatchObject({ status: 'offline', fast: null })
+    expect(m.pool).toMatchObject({ state: 'unknown', checkedAt: null, stalled: false, lastFactsAt: null })
   })
 
-  it('offline: a fleet host that says ok but whose snapshot is stale is shown offline', () => {
-    const m = model(null, fleet(), { fleetStale: true })
-    expect(m.view.status).toBe('offline')
+  it('an ok host has no check time and is not stalled', () => {
+    expect(model(poolHost())!.pool).toMatchObject({ checkedAt: null, stalled: false })
   })
 })
 

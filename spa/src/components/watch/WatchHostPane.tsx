@@ -114,7 +114,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const model = poolActive && view ? models[0] : null
   const pool = model?.pool ?? null
   const poolHost = model && view ? matchPoolHost(poolHosts, view, daemons) : null
-  const live = pool?.state === 'live' ? (poolHost?.facts ?? null) : null
+  const live = pool?.state === 'ok' ? (poolHost?.facts ?? null) : null
   // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
   const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)
   // 1 h / 6 h / 24 h: the daemon's 1 minute series, read once; `seriesRev` moves when a load finishes so the charts redraw at once.
@@ -141,7 +141,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
 
   const shown = model ? model.view : view
   const offline = isOffline(shown)
-  const zone = offline ? 'offline' : pool?.state === 'live' && pool.zone ? pool.zone : shown.fast ? shown.fast.zone : 'nodata'
+  const zone = offline ? 'offline' : pool?.state === 'ok' && pool.zone ? pool.zone : shown.fast ? shown.fast.zone : 'nodata'
   const zoneWord = zone === 'nodata' ? t('fleet.no_data') : t(`fleet.zone.${zone}`)
 
   // "量測：" names the host the numbers come from: the primary (spec §6).
@@ -178,7 +178,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} poolAlias={view.kind === 'daemon' ? alias : undefined} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
-        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} />}
+        {pool && <AvailRow pool={pool} exceptions={poolHost?.facts?.exceptions ?? []} at={poolHost?.facts?.at ?? 0} now={now} />}
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
           <Resources view={shown} range={range} now={now} zones={hist.zones} notLocal={live !== null && range === '5m' && hist.load === 'host_not_local'} rev={seriesRev} />
         </Section>

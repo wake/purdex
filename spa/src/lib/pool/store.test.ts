@@ -111,15 +111,6 @@ describe('source and reads', () => {
     expect(st().sourceHostId).toBeNull()
   })
 
-  it('remembers when each host was last read live', async () => {
-    fetchPoolHosts.mockResolvedValue([mlab()])
-    await st().readOnce()
-    expect(st().lastLiveAt.mlab).toBe(facts.at)
-    fetchPoolHosts.mockResolvedValue([mlab({ reachable: false })])
-    await st().readOnce()
-    expect(st().lastLiveAt.mlab).toBe(facts.at)
-  })
-
   // MON-1b (spec M21): the time of the last facts is kept by the wwd host_id, which an alias change does not move.
   it('keeps the last facts time by host_id, and keeps it when the host cannot be read', async () => {
     const id = mlab().host_id
