@@ -109,4 +109,3 @@ describe('isWellFormedSection(tabs)', () => {
     expect(isWellFormedSection('tabs', withEntry({ groupRankX: 'V' }))).toBe(false)
   })
 })
-
