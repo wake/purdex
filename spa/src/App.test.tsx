@@ -3,7 +3,7 @@
 // batch 3). Everything App composes is stubbed except the stores and the ErrorBoundary; the TitleBar stub only marks
 // that App rendered it (`TitleBar.test.tsx` covers the bar itself).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, cleanup } from '@testing-library/react'
 import App from './App'
 import { useConfigStore } from './stores/useConfigStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
@@ -195,6 +195,17 @@ describe('App — the task-group view\'s range (TG-4a)', () => {
     useTabStore.setState({ tabs: { [t.id]: t }, tabOrder: [t.id], activeTabId: null })
     render(<App />)
     expect(lastRange()).toEqual([t.id])
+  })
+
+  it('the top bar is told it is a group\'s bar (no team run, no collapse) only while the range is in force', () => {
+    tabBarProps.mockClear()
+    render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { flat?: boolean }).flat).toBe(true)
+    cleanup()
+    tabBarProps.mockClear()
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { flat?: boolean }).flat).toBe(false)
   })
 
   it('hands none in the workspace view, and none while the watcher area is shown', () => {

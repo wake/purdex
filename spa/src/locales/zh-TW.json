@@ -2188,6 +2188,7 @@
   "taskgroups.notice_close": "關閉",
   "taskgroups.expand": "展開「{{name}}」",
   "taskgroups.collapse": "收合「{{name}}」",
+  "taskgroups.bar_empty": "這個任務編組還沒有分頁",
   "taskgroups.drop_hint": "拖曳 session 到這裡",
   "nav.new_task_group": "新增任務編組",
   "taskgroups.menu_rename": "重新命名",

@@ -29,16 +29,29 @@ interface Props {
   fixed?: boolean
   /** The watcher area's way back (journal v5 §3.7): given, a back button leads the row. */
   onLeave?: () => void
+  /**
+   * The task-group view's bar (task groups spec §6.2): `tabs` already come in the group's order (lead, seats with all their tabs, plain tabs by rank) and are drawn as they are — no team run (frame, shadow,
+   * collapse), nothing hidden, one zone. The tabs are not draggable yet (the group's order is not `tabOrder`; TG-4c). An empty group says so.
+   */
+  flat?: boolean
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave, flat }: Props) {
   const t = useI18nStore((s) => s.t)
-  const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
-  const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
+  // The pinned zone: every pinned tab. In a group's bar (`flat`) the order is the one `groupTabs` gives, so the zone is the pinned tabs that LEAD it (a manual group's / 「未分組」's pinned tabs, a team with a pinned lead);
+  // a team whose lead is not pinned has the lead first and its pinned tabs after it, in the one zone, still dressed as pinned.
+  const pinnedCount = useMemo(() => {
+    if (!flat) return tabs.filter((t) => t.pinned).length
+    let n = 0
+    while (n < tabs.length && tabs[n].pinned) n += 1
+    return n
+  }, [tabs, flat])
+  const pinnedTabs = useMemo(() => (flat ? tabs.slice(0, pinnedCount) : tabs.filter((t) => t.pinned)), [tabs, flat, pinnedCount])
+  const normalTabs = useMemo(() => (flat ? tabs.slice(pinnedCount) : tabs.filter((t) => !t.pinned)), [tabs, flat, pinnedCount])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
   // Team runs (spec §4.2): the unpinned tabs split into plain tabs and label + lead + visible members. Only the tabs
@@ -47,7 +60,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   // tab there is drawn, and dragged, as a plain tab.
   const team = useTeamDisplay()
   const collapsed = useTeamUiStore((s) => s.collapsed)
-  const markOf = useCallback((id: string): TeamTabMark | null => (fixed ? null : team?.tabMark(id) ?? null), [fixed, team])
+  const markOf = useCallback((id: string): TeamTabMark | null => (fixed || flat ? null : team?.tabMark(id) ?? null), [fixed, flat, team])
   const segments = useMemo(() => groupSegments(normalTabs, markOf, collapsed), [normalTabs, markOf, collapsed])
   /** Tab id → the run it is drawn in (grouped tabs only). */
   const runOf = useMemo(() => {
@@ -118,6 +131,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
+    if (flat) return // the group's order is not `tabOrder`; dragging in a group's bar is TG-4c
 
     // A group's frame stands for its lead tab.
     const activeId = leadOfFrame.get(String(active.id)) ?? String(active.id)
@@ -164,7 +178,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return m ? { key: m.teamKey, role: m.role } : null
     })
     if (next) onReorderTabs([...pinnedIds, ...next])
-  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf, flat])
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -180,6 +194,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       tab={tab}
       isActive={tab.id === activeTabId}
       group={group}
+      pinned={flat && tab.pinned}
+      noDrag={flat}
       onSelect={onSelectTab}
       onClose={onCloseTab}
       onMiddleClick={onMiddleClick}
@@ -222,6 +238,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       tab={tab}
                       isActive={tab.id === activeTabId}
                       pinned
+                      noDrag={flat}
                       onSelect={onSelectTab}
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
@@ -276,6 +293,9 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                 })}
               </SortableContext>
             </div>
+            {flat && tabs.length === 0 && (
+              <span data-testid="tab-bar-group-empty" className="px-2 text-xs text-text-muted whitespace-nowrap">{t('taskgroups.bar_empty')}</span>
+            )}
             {/* Trailing separator + add button (outside SortableContext, inside scroll) */}
             {segments.length > 0 && <TabSeparator show={(() => {
               const last = segments[segments.length - 1]

@@ -30,6 +30,8 @@ interface Props {
   group?: TeamTabMark
   /** The watcher area's row: no lock icon, no close, no context menu, no middle click, no rename. Dragging stays. */
   fixed?: boolean
+  /** Not draggable (the task-group view's bar until TG-4c): no sortable shift, nothing to drop. */
+  noDrag?: boolean
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
@@ -37,14 +39,14 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group, fixed }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group, fixed, noDrag }: Props) {
   // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
   // ("press space to pick up") would be false (#2531). Pinned is a native <button>; the unpinned div sets role=tab + tabIndex=0 itself.
   // A group's lead drags the whole group (TG-1): its own draggable is off, the frame's listeners stand in, and the frame
   // carries the transform. It stays a droppable, so a drop on it still resolves to the group.
   const groupListeners = useGroupDragHandle()
   const isLead = group?.role === 'lead' && groupListeners !== undefined
-  const sortable = useSortable({ id: tab.id, disabled: isLead ? { draggable: true } : undefined })
+  const sortable = useSortable({ id: tab.id, disabled: noDrag ? true : isLead ? { draggable: true } : undefined })
   const { setNodeRef, isDragging } = sortable
   const listeners = isLead ? groupListeners : sortable.listeners
   const transform = isLead ? null : sortable.transform

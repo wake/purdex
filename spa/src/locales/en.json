@@ -2188,6 +2188,7 @@
   "taskgroups.notice_close": "Dismiss",
   "taskgroups.expand": "Expand {{name}}",
   "taskgroups.collapse": "Collapse {{name}}",
+  "taskgroups.bar_empty": "No tabs in this task group",
   "taskgroups.drop_hint": "Drag a session here",
   "nav.new_task_group": "New task group",
   "taskgroups.menu_rename": "Rename",
