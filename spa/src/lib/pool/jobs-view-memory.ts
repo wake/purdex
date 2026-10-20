@@ -15,6 +15,7 @@ let mode: JobsMode = 'live'
 let filter: HistoryFilterChoice = DEFAULT_FILTER
 let selected: string | null = null
 let historyScroll = 0
+let liveScroll = 0
 let logScroll: { key: string; top: number } | null = null
 
 /** An id is only unique within the host that queued the job. */
@@ -28,9 +29,11 @@ export const readSelectedJob = (): string | null => selected
 export const writeSelectedJob = (key: string | null): void => { selected = key }
 export const readHistoryScroll = (): number => historyScroll
 export const writeHistoryScroll = (top: number): void => { historyScroll = top }
+export const readLiveScroll = (): number => liveScroll
+export const writeLiveScroll = (top: number): void => { liveScroll = top }
 
 /** The detail's log keeps one position, the selected job's: another job's log starts at the top. */
 export const readLogScroll = (key: string): number => (logScroll?.key === key ? logScroll.top : 0)
 export const writeLogScroll = (key: string, top: number): void => { logScroll = { key, top } }
 
-export const clearJobsViewMemory = (): void => { mode = 'live'; filter = DEFAULT_FILTER; selected = null; historyScroll = 0; logScroll = null }
+export const clearJobsViewMemory = (): void => { mode = 'live'; filter = DEFAULT_FILTER; selected = null; historyScroll = 0; liveScroll = 0; logScroll = null }
