@@ -25,8 +25,16 @@ export const DEFAULT_EVENT_FILTERS: EventFilters = { host: 'all', source: 'all',
 let eventFilters: EventFilters = DEFAULT_EVENT_FILTERS
 let eventsScroll = 0
 /** What the 事件 tab last read of the observations (by pool alias), so coming back shows it at once; `forbidden`: a device token cannot read them. */
-export interface EventsObservations { byHost: Record<string, readonly PoolObservation[]>; forbidden: boolean }
-let eventsObservations: EventsObservations = { byHost: {}, forbidden: false }
+export interface EventsObservations {
+  byHost: Record<string, readonly PoolObservation[]>
+  forbidden: boolean
+  /** Pool aliases whose last read failed (their list is the older one). */
+  failed: readonly string[]
+  /** Pool aliases whose 24 hours did not fit in the pages read. */
+  truncated: readonly string[]
+}
+const NO_OBSERVATIONS: EventsObservations = { byHost: {}, forbidden: false, failed: [], truncated: [] }
+let eventsObservations: EventsObservations = NO_OBSERVATIONS
 
 export const readHostTab = (hostId: string): HostSubTab => hostTabs.get(hostId) ?? 'monitor'
 export const writeHostTab = (hostId: string, tab: HostSubTab): void => { hostTabs.set(hostId, tab) }
@@ -48,5 +56,5 @@ export const readEventsObservations = (): EventsObservations => eventsObservatio
 export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
   hostTabs.clear(); hostRanges.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
-  eventsScroll = 0; eventsObservations = { byHost: {}, forbidden: false }
+  eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }

@@ -63,26 +63,31 @@ const LEVEL_KEYS: Record<string, string> = { push: 'watch.events.level.push', di
 /** Kinds the guardian's rules raise that have a name of their own; any other kind stays as the word. */
 const ALERT_KINDS = ['pressure_watch', 'pressure_danger', 'swap_growth']
 
-/** What a source daemon's read of the observations came to: a host's list, or the reason there is none. */
-type ObsRead = { alias: string; list: readonly PoolObservation[] } | { alias: string; forbidden: true } | { alias: string; failed: true }
+/** What a source daemon's read of one host's observations came to: its list (`truncated`: the pages ran out before the 24 hours did), or the reason there is none. */
+type ObsRead = { list: readonly PoolObservation[]; truncated: boolean } | { forbidden: true } | { failed: true }
 
 async function readObservationsOf(source: string, alias: string, since: string): Promise<ObsRead> {
   try {
     const pages: PoolObservation[][] = []
     let until: string | undefined
+    let truncated = false
     for (let i = 0; i < OBSERVATIONS_PAGES; i++) {
       const p = await fetchObservations(source, alias, until ? { since, until } : { since })
       pages.push(p.observations)
-      if (!p.known || !p.truncated || !p.nextUntil) break
-      until = p.nextUntil
+      truncated = p.known && p.truncated && p.nextUntil !== null
+      if (!truncated) break
+      until = p.nextUntil ?? undefined
     }
-    return { alias, list: mergeObservations(...pages) }
+    return { list: mergeObservations(...pages), truncated }
   } catch (e) {
-    return (e as { poolError?: { code?: string } })?.poolError?.code === 'forbidden' ? { alias, forbidden: true } : { alias, failed: true }
+    return (e as { poolError?: { code?: string } })?.poolError?.code === 'forbidden' ? { forbidden: true } : { failed: true }
   }
 }
 
-/** The observations of every pool host over the last 24 hours, while the tab is shown: on mount and every 60 s, through the pool's source daemon, only when it announces `pool.observations.v1`. The last answers are kept in the view memory. */
+/**
+ * The observations of every pool host over the last 24 hours, while the tab is shown: on mount and every 60 s, through the pool's source daemon, only when it announces `pool.observations.v1`. The last answers are kept in the view memory.
+ * Each host is read and committed on its own, so one that hangs holds back only itself; a host whose read failed keeps its last list but is named as unreadable (`failed`), and one whose pages ran out is marked `truncated`.
+ */
 function useObservations(aliases: readonly string[]): EventsObservations {
   const source = usePoolStore((s) => s.sourceHostId)
   const announces = useNexHostStore((s) => source !== null && s.byHost[source]?.daemonCapabilities?.includes(OBSERVATIONS_CAPABILITY) === true)
@@ -91,26 +96,26 @@ function useObservations(aliases: readonly string[]): EventsObservations {
   useEffect(() => {
     if (source === null || !announces) return
     let live = true
-    // A read that takes longer than the beat must not land over a newer one: only the newest started read writes.
-    let seq = 0
-    const readAll = async (): Promise<void> => {
-      const mine = ++seq
-      const since = new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString()
-      const reads = await Promise.all(key.split('\0').filter(Boolean).map((a) => readObservationsOf(source, a, since)))
-      if (!live || mine !== seq) return
+    // A read that takes longer than the beat must not land over a newer one of the same host: only the newest started read of a host writes.
+    const seq = new Map<string, number>()
+    const readHost = async (alias: string): Promise<void> => {
+      const mine = (seq.get(alias) ?? 0) + 1
+      seq.set(alias, mine)
+      const r = await readObservationsOf(source, alias, new Date(Date.now() - OBSERVATIONS_WINDOW_MS).toISOString())
+      if (!live || seq.get(alias) !== mine) return
       const prev = readEventsObservations()
-      const byHost: Record<string, readonly PoolObservation[]> = { ...prev.byHost }
-      let forbidden = false
-      for (const r of reads) {
-        if ('list' in r) byHost[r.alias] = r.list
-        else if ('forbidden' in r) forbidden = true
-      }
-      const next = { byHost, forbidden }
+      const without = (list: readonly string[]): string[] => list.filter((a) => a !== alias)
+      const next: EventsObservations = 'list' in r
+        ? { ...prev, forbidden: false, byHost: { ...prev.byHost, [alias]: r.list }, failed: without(prev.failed), truncated: r.truncated ? [...without(prev.truncated), alias] : without(prev.truncated) }
+        : 'forbidden' in r
+          ? { ...prev, forbidden: true }
+          : { ...prev, failed: [...without(prev.failed), alias] }
       writeEventsObservations(next)
       setState(next)
     }
-    void readAll()
-    const id = setInterval(() => { void readAll() }, OBSERVATIONS_POLL_MS)
+    const readAll = (): void => { for (const a of key.split('\0').filter(Boolean)) void readHost(a) }
+    readAll()
+    const id = setInterval(readAll, OBSERVATIONS_POLL_MS)
     return () => { live = false; clearInterval(id) }
   }, [source, announces, key])
   return state
@@ -234,6 +239,11 @@ export function WatchEventsPane(_props: PaneRendererProps) {
           {t('watch.events.alerts_unreadable', { alias: h.alias, reason: reasonOf(h.alias) })}
         </p>
       ))}
+      {!observations.forbidden && observations.failed.filter((a) => hosts.some((h) => h.alias === a)).map((a) => (
+        <p key={a} data-testid={`events-obs-unreadable-${a}`} className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-status-warning-text">
+          {t('watch.events.obs_unreadable', { alias: a })}
+        </p>
+      ))}
       {observations.forbidden && (
         <p data-testid="events-obs-forbidden" className="mt-3 rounded border border-border-subtle px-3 py-1.5 text-xs text-text-muted">{t('watch.events.obs_forbidden')}</p>
       )}
@@ -278,7 +288,7 @@ export function WatchEventsPane(_props: PaneRendererProps) {
                   ? (
                     <li key={r.id} data-testid={`event-more-${r.hostId}`} className="py-2 text-xs text-text-muted">
                       <button type="button" onClick={() => openWatchArea({ poolHost: { hostId: r.hostId }, sub: 'procs' })} className="cursor-pointer text-left text-accent hover:underline">
-                        {t('watch.events.more', { alias: r.alias, n: r.n })}
+                        {t(observations.truncated.includes(r.alias) ? 'watch.events.more_at_least' : 'watch.events.more', { alias: r.alias, n: r.n })}
                       </button>
                     </li>
                   )

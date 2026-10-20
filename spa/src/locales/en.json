@@ -639,6 +639,8 @@
   "watch.events.obs.mem": "memory peak {{n}} MB",
   "watch.events.obs.procs": "{{n}} processes",
   "watch.events.more": "{{alias}} has {{n}} more observations in the last 24 hours → {{alias}}'s Processes tab",
+  "watch.events.more_at_least": "{{alias}} has at least {{n}} more observations in the last 24 hours → {{alias}}'s Processes tab",
+  "watch.events.obs_unreadable": "Cannot read {{alias}}'s observations; showing the last ones read",
   "watch.events.alerts_unreadable": "Cannot read {{alias}}'s alerts ({{reason}})",
   "watch.events.obs_forbidden": "Only an admin token can read the observations",
   "watch.shield.none": "Guardian (not started)",

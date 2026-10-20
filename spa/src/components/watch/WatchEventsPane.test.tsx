@@ -196,6 +196,34 @@ describe('the events tab (MON-10c)', () => {
     expect(rows().map((r) => r.getAttribute('data-event-id'))).toEqual(['h-mserv|new'])
   })
 
+  it('a host whose read never answers does not hold back the others', async () => {
+    fetchObservations.mockImplementation((_s: string, alias: string) => (alias === 'mlab' ? new Promise(() => {}) : Promise.resolve(page([obs('fine')]))))
+    pane()
+    await flush()
+    expect(rows().map((r) => r.getAttribute('data-event-id'))).toEqual(['h-mserv|fine'])
+  })
+
+  it('names a host whose observations could not be read, keeping the list it had', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string) => page(alias === 'mserv' ? [obs('o1')] : []))
+    pane()
+    await flush()
+    expect(screen.queryByTestId('events-obs-unreadable-mserv')).toBeNull()
+    fetchObservations.mockRejectedValue(new Error('boom'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(screen.getByTestId('events-obs-unreadable-mserv')).toHaveTextContent(t('watch.events.obs_unreadable', { alias: 'mserv' }))
+    expect(rows()).toHaveLength(1)
+  })
+
+  it('says "at least" when the pages ran out before the 24 hours did', async () => {
+    fetchObservations.mockImplementation(async (_s: string, alias: string, q: { until?: string }) => ({
+      host: alias, known: true, truncated: true, nextUntil: `u${(q.until ?? 'u0').slice(1) + '1'}`,
+      observations: alias === 'mserv' ? [1, 2, 3, 4].map((n) => obs(`${q.until ?? 'u0'}-${n}`, { startedAt: NOW - n * MIN })) : [],
+    }))
+    pane()
+    await flush()
+    expect(screen.getByTestId('event-more-h-mserv')).toHaveTextContent(t('watch.events.more_at_least', { alias: 'mserv', n: 17 }))
+  })
+
   it('does not read the observations from a source that does not announce pool.observations.v1', async () => {
     useNexHostStore.setState({ byHost: { src: { phase: 'ready', daemonCapabilities: ['pool.alerts.v1'] } } } as never)
     pane()

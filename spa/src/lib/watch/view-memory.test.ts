@@ -60,10 +60,10 @@ describe('watch view memory — the events tab (MON-10c)', () => {
   it('defaults to no filter, no scroll and nothing read; keeps what is written; is cleared with the rest', () => {
     expect(readEventFilters()).toEqual({ host: 'all', source: 'all', status: 'all' })
     expect(readEventsScroll()).toBe(0)
-    expect(readEventsObservations()).toEqual({ byHost: {}, forbidden: false })
+    expect(readEventsObservations()).toEqual({ byHost: {}, forbidden: false, failed: [], truncated: [] })
     writeEventFilters({ host: 'h1', source: 'obs', status: 'live' })
     writeEventsScroll(240)
-    writeEventsObservations({ byHost: { mserv: [] }, forbidden: true })
+    writeEventsObservations({ byHost: { mserv: [] }, forbidden: true, failed: [], truncated: [] })
     expect(readEventFilters()).toEqual({ host: 'h1', source: 'obs', status: 'live' })
     expect(readEventsScroll()).toBe(240)
     expect(readEventsObservations().forbidden).toBe(true)

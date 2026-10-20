@@ -639,6 +639,8 @@
   "watch.events.obs.mem": "記憶體峰值 {{n}} MB",
   "watch.events.obs.procs": "{{n}} 個行程",
   "watch.events.more": "{{alias}} 過去 24 小時還有 {{n}} 筆觀察 → {{alias}} 的「行程」分頁",
+  "watch.events.more_at_least": "{{alias}} 過去 24 小時至少還有 {{n}} 筆觀察 → {{alias}} 的「行程」分頁",
+  "watch.events.obs_unreadable": "讀不到 {{alias}} 的觀察，顯示的是上一次讀到的",
   "watch.events.alerts_unreadable": "讀不到 {{alias}} 的告警（{{reason}}）",
   "watch.events.obs_forbidden": "觀察紀錄只有 admin token 能讀",
   "watch.shield.none": "守門員（未啟動）",
