@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const readFirstPage = vi.fn()
 vi.mock('../team/unattended-reader', () => ({ readFirstPage: (...a: unknown[]) => readFirstPage(...a), refreshHost: (...a: unknown[]) => readFirstPage(...a) }))
 
-import { useRootCacheStore, addressOf, rootOf, resolveRoot, rootsSupported } from './root-cache'
+import { useRootCacheStore, addressOf, titleOf, rootOf, resolveRoot, rootsSupported } from './root-cache'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { SessionQuota } from '../team/types'
@@ -14,7 +14,7 @@ const supportQuota = (hostId: string, yes = true) => useUnattendedStore.setState
 
 beforeEach(() => {
   readFirstPage.mockReset()
-  useRootCacheStore.setState({ roots: {}, addresses: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {}, titles: {} })
   useUnattendedStore.setState({ byHost: {} })
   useHostStore.setState({ hosts: {}, runtime: {} })
 })
@@ -116,6 +116,16 @@ describe('addresses (TG-5b)', () => {
     expect(addressOf('h1', 'S1')).toBe('mlab/new-name')
   })
 
+  it('keeps the pdx title the row carried, beside the address, and forgets it with the host', () => {
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: 'purdex-iface-lead' }, q('S2', 'R2')])
+    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead')
+    expect(titleOf('h1', 'S2')).toBeNull() // the row carried none
+    useRootCacheStore.getState().ingest('h1', [{ ...q('S1', 'ROOT'), title: '' }])
+    expect(titleOf('h1', 'S1')).toBe('purdex-iface-lead') // an empty title does not wipe the last one
+    useRootCacheStore.getState().dropHost('h1')
+    expect(titleOf('h1', 'S1')).toBeNull()
+  })
+
   it('dropHost and prune take the addresses with the roots', () => {
     useRootCacheStore.getState().ingest('h1', [q('S1', 'ROOT'), q('S2', 'R2')])
     useRootCacheStore.getState().prune((_h, id) => id === 'S1')
@@ -130,5 +140,6 @@ describe('addresses (TG-5b)', () => {
     const merged = useRootCacheStore.persist.getOptions().merge!({ roots: { h1: { S1: 'ROOT' } } }, useRootCacheStore.getState())
     expect(merged.roots).toEqual({ h1: { S1: 'ROOT' } })
     expect(merged.addresses).toEqual({})
+    expect(merged.titles).toEqual({})
   })
 })
