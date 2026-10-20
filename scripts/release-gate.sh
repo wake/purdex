@@ -65,20 +65,27 @@ esac
 [ ${#commit} -ge 7 ] && [ ${#commit} -le 40 ] || die "give a commit hash (7 to 40 hex digits), not $commit"
 
 # one gate run per clone: it is checked out, cleaned and snapshotted by every task, so two runs at once would send each other's tree. The lock is
-# a directory with the pid of its run; one whose run is gone is taken over.
+# one the system keeps (lockf on macOS, flock where there is one) and a small process holds it for as long as this script lives: it looks
+# for this pid every 0.2 s and ends when it is gone, so the lock goes with the script however that ends (a kill -9 too): there is no stale lock to
+# take over and no pid to mistake for another. The holder says it has the lock by writing its own pid to a file; one that never does found it taken.
 export GIT_TERMINAL_PROMPT=0
 mkdir -p "$(dirname "$clone")" || die "cannot make $(dirname "$clone")"
-lock="$clone.lock"
-if ! mkdir "$lock" 2>/dev/null; then
-	pid=$(cat "$lock/pid" 2>/dev/null || true)
-	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-		die "another release gate (pid $pid) is using $clone: wait for it"
-	fi
-	rm -rf "$lock"
-	mkdir "$lock" 2>/dev/null || die "cannot take the lock $lock"
+marker=$(mktemp "${TMPDIR:-/tmp}/release-gate-lock.XXXXXX") || die "cannot make a temporary file"
+rm -f "$marker"
+holder_sh='echo $$ > "$1.tmp" && mv "$1.tmp" "$1"; while kill -0 "$2" 2>/dev/null; do sleep 0.2; done'
+if command -v lockf >/dev/null 2>&1; then
+	lockf -t 0 -k "$clone.lock" sh -c "$holder_sh" sh "$marker" $$ 2>/dev/null &
+elif command -v flock >/dev/null 2>&1; then
+	flock -n -E 75 "$clone.lock" sh -c "$holder_sh" sh "$marker" $$ 2>/dev/null &
+else
+	die "neither lockf nor flock is here: cannot keep two gate runs off one clone"
 fi
-echo $$ > "$lock/pid"
-trap 'rm -rf "$lock"' EXIT INT TERM HUP
+lockproc=$!
+n=0
+while [ ! -s "$marker" ] && kill -0 $lockproc 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+[ -s "$marker" ] || die "another release gate is using $clone: wait for it"
+holder=$(cat "$marker")
+trap 'kill "$holder" 2>/dev/null; rm -f "$marker"' EXIT
 
 # the clone: its origin is the remote, it holds the commit, it is detached at it and has nothing the commit does not have
 if [ -d "$clone/.git" ]; then
@@ -98,15 +105,22 @@ mkdir -p "$runs" || die "cannot make $runs"
 work=$(mktemp -d "$runs/$(date +%Y%m%d-%H%M%S)-$(echo "$full" | cut -c1-9).XXXXXX") || die "cannot make a run directory in $runs"
 echo "release gate at $full (clone $clone, logs $work)"
 
+# a signal ends the `pdx test` calls too: none is left waiting for a gate that is gone (the jobs they sent stay in the queue)
+pids=""
+trap 'trap - INT TERM HUP; kill $pids 2>/dev/null; wait $pids 2>/dev/null; echo "release gate: interrupted"; exit 130' INT TERM HUP
 for t in $tasks; do
 	case " $skips " in *" $t "*) continue ;; esac
 	(
 		cd "$clone" || exit 125
-		"$pdx" test "$t" --json $nocache > "$work/$t.json" 2> "$work/$t.err"
+		"$pdx" test "$t" --json $nocache > "$work/$t.json" 2> "$work/$t.err" &
+		child=$!
+		trap 'kill $child 2>/dev/null' INT TERM HUP
+		wait $child
 		echo $? > "$work/$t.rc"
 	) &
+	pids="$pids $!"
 done
-wait
+wait $pids # only the tasks: the holder of the lock is also a child, and ends when this script does
 
 pass=0 cached=0 failed=0 skipped=0
 printf '%-20s %-8s %-4s %-8s %-28s %-6s %s\n' task result exit host job source secs

@@ -566,7 +566,9 @@ scripts/release-gate.sh [--no-cache] [--mod] [--skip <task>]... <commit>
   often behind the cut, and `--reference` would lean on its objects). Each run fetches, checks the commit out detached, and removes everything the
   commit does not have (`clean -ffdx`: a snapshot carries untracked files). The commit is given as a **hash** (7 to 40 hex digits, never a branch name)
   and has to be on a branch of the remote after that fetch (a commit that only the clone has is refused). One run per clone: a lock
-  (`<clone>.lock`, with the pid; one whose run is gone is taken over) refuses a second run, and every run writes to a directory of its own. When the
+  of the system (`lockf`, or `flock`, on `<clone>.lock`), held by a small process that ends when the script does, however it ends, refuses a second
+  run (exit 2) and cannot go stale; every run writes to a directory of its own. A TERM or Ctrl-C ends the `pdx test` calls too (the jobs they sent
+  stay in the queue) and the gate exits 130. When the
   tasks are done the clone must still be at the commit, or the gate fails.
 * **The tasks**, all sent at once, each by its own `pdx test <task> --json` that waits for its job (there is no `pdx jobs wait`, and `--json` has the
   job id, the host and `cache_hit`): `go-all`, `spa-full`, `tsc-force`, `e2e`, `lint`, `wwd-linux`, `wwd-linux-vet`, and the scripts' own tests

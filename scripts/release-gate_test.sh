@@ -147,16 +147,43 @@ for bad in FAKE_EMPTY FAKE_BADSTATE FAKE_WRONGTASK FAKE_NOHOST; do
 	echo "$out" | grep "wwd-linux " | grep -q "FAIL" || fail "$bad: wwd-linux must be FAIL: $out"
 done
 
-# 9. one gate run per clone: a live lock refuses the second run, a stale one is taken over, and the lock is gone after a run
-mkdir "$clone.lock"; echo $$ > "$clone.lock/pid"
-run "$c2"
-[ "$rc" = 2 ] || fail "a live lock: exit $rc, want 2: $out"
-has "$out" "another release gate" "the refusal says why"
-[ ! -s "$tmp/log" ] || fail "nothing may be sent while the clone is in use"
-echo 999999 > "$clone.lock/pid"
-run "$c2"
-[ "$rc" = 0 ] || fail "a stale lock must be taken over: exit $rc: $out"
-[ ! -e "$clone.lock" ] || fail "the lock must be removed after a run"
+# 9. one gate run per clone, by a lock of the system (lockf, or flock): a second run is refused while one holds it, and the lock goes with the
+# process that holds it, however it ends (no stale lock to take over)
+hpid=""
+if command -v lockf >/dev/null 2>&1; then lockf -k "$clone.lock" sleep 30 & hpid=$!
+elif command -v flock >/dev/null 2>&1; then flock "$clone.lock" sleep 30 & hpid=$!
+fi
+if [ -n "$hpid" ]; then
+	sleep 1
+	run "$c2"
+	[ "$rc" = 2 ] || fail "while the lock is held: exit $rc, want 2: $out"
+	has "$out" "another release gate" "the refusal says why"
+	[ ! -s "$tmp/log" ] || fail "nothing may be sent while the clone is in use"
+	pkill -P "$hpid" 2>/dev/null || true # the holder's sleep: the lock goes with it, nothing else is cleaned up
+	wait "$hpid" 2>/dev/null || true
+	run "$c2"
+	[ "$rc" = 0 ] || fail "after the holder is gone the lock is free: exit $rc: $out"
+fi
+
+# 9b. a TERM while the tasks are waiting ends them too (no pdx test is left waiting for a gate that is gone) and the gate exits 130
+cat > "$tmp/pdx-slow" <<'EOF'
+#!/bin/sh
+echo $$ >> "$FAKE_PIDS"
+exec sleep 60
+EOF
+chmod +x "$tmp/pdx-slow"
+: > "$tmp/pids"
+FAKE_PIDS="$tmp/pids" sh "$gate" --pdx "$tmp/pdx-slow" --clone "$clone" --remote "$remote" "$c2" > "$tmp/slow.out" 2>&1 &
+gpid=$!
+n=0; while [ "$(wc -l < "$tmp/pids")" -lt 12 ] && [ $n -lt 100 ]; do sleep 0.2; n=$((n + 1)); done
+[ "$(wc -l < "$tmp/pids")" -ge 12 ] || fail "the 12 tasks were not all started: $(cat "$tmp/slow.out")"
+kill -TERM "$gpid"
+set +e; wait "$gpid"; grc=$?; set -e
+[ "$grc" = 130 ] || fail "a TERM: exit $grc, want 130: $(cat "$tmp/slow.out")"
+sleep 1
+for p in $(cat "$tmp/pids"); do
+	kill -0 "$p" 2>/dev/null && fail "pdx test $p is still running after the gate was terminated"
+done
 
 # 10. the commit must be a hash that the remote has on a branch: a ref name, or a commit that only the clone has, is refused
 run main
