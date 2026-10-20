@@ -47,7 +47,7 @@ func entryAnswer(t *testing.T, root string, argv ...string) entry.Result {
 }
 
 func peerOf(alias string, reachable, workerOn bool, labels ...string) wire.Peer {
-	return wire.Peer{Info: wire.Info{HostID: alias, Alias: alias, Labels: labels, Worker: wire.InfoWorker{Enabled: workerOn}}, Reachable: reachable}
+	return wire.Peer{Info: wire.Info{HostID: alias, Alias: alias, Labels: labels, Worker: wire.InfoWorker{Enabled: workerOn}}, Reachable: reachable, Facts: &wire.Facts{}}
 }
 
 // The aigora case: the task needs repo:aigora-v2 and no host has it, so the command is not rewritten into something that would end with exit 5.
@@ -80,6 +80,18 @@ func TestEntryMatch_APoolThatCannotBeReadIsNone(t *testing.T) {
 	r := entryAnswer(t, root, "pnpm", "vitest", "run")
 	assert.Equal(t, entry.ActionNone, r.Action)
 	assert.Contains(t, r.Reason, "cannot be read")
+}
+
+// The shape of the pool right after wwd starts: this host answers (reachable, worker on) but its first facts record has not come, so only its
+// os and arch labels are announced. A queued task is not turned into none for that: it would be queued as usual.
+func TestEntryMatch_AHostStillSettlingKeepsTheRewrite(t *testing.T) {
+	root := entryPoolRepo(t)
+	settling := peerOf("mlab", true, true, "os:darwin", "arch:arm64")
+	settling.Facts = nil
+	withPool(t, wire.Pool{Peers: []wire.Peer{settling}}, nil)
+	r := entryAnswer(t, root, "pnpm", "vitest", "run")
+	assert.Equal(t, entry.ActionRewrite, r.Action)
+	assert.Equal(t, "vitest-root", r.Task)
 }
 
 // A local task needs no other host: the pool is not even read.

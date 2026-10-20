@@ -15,6 +15,7 @@ func peer(alias string, reachable, workerOn bool, labels ...string) wire.Peer {
 	return wire.Peer{
 		Info:      wire.Info{HostID: alias + "-id", Alias: alias, Labels: labels, Worker: wire.InfoWorker{Enabled: workerOn}},
 		Reachable: reachable,
+		Facts:     &wire.Facts{}, // its facts have arrived: its labels are all in (a peer with no facts yet is still settling)
 	}
 }
 
@@ -97,6 +98,23 @@ func TestGateOnPool_AQueuedRewriteWithNoLabelsNeedsAWorker(t *testing.T) {
 		assert.Contains(t, r.Reason, "no reachable host with a worker on", name)
 		assert.NotContains(t, r.Reason, "holds", name+": there is no label to name")
 	}
+}
+
+// A host that answers but has not sent its first facts record announces only its os and arch labels (repo:, tool:, earned task: labels
+// follow with the facts): it may hold the labels, so the answer is not "no" (#3696 R2; pdx test treats it the same way and queues as usual).
+func TestGateOnPool_AHostStillSettlingMayHoldTheLabels(t *testing.T) {
+	settling := peer("air26", true, true, "os:darwin", "arch:arm64")
+	settling.Facts = nil
+	in := queued("repo:purdex", "tool:node24")
+	assert.Equal(t, in, GateOnPool(in, wire.Pool{Peers: []wire.Peer{peer("mlab", true, true, "os:darwin"), settling}}, nil))
+
+	// ... but one that is not answering holds nothing we can wait for, with or without facts
+	down := peer("air26", false, true, "os:darwin")
+	down.Facts = nil
+	assert.Equal(t, ActionNone, GateOnPool(in, wire.Pool{Peers: []wire.Peer{down}}, nil).Action)
+
+	// and once every host that answers has its facts, the answer is a plain no
+	assert.Equal(t, ActionNone, GateOnPool(in, wire.Pool{Peers: []wire.Peer{peer("mlab", true, true, "os:darwin"), peer("air26", true, true, "os:darwin")}}, nil).Action)
 }
 
 func TestGateOnPool_ANeverReachedPeerHoldsNothing(t *testing.T) {

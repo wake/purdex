@@ -13,7 +13,8 @@ import (
 // as typed. So the answer becomes none, and the hook lets the command run (the same fail-open the entry has everywhere).
 //
 // A host can take it when its labels hold all of the task's, it answers now, and its worker is on; an owner at the keyboard making the host
-// yield is waiting, not a no. A host that holds the labels but is down or has its worker off does not count: its last known labels would
+// yield is waiting, not a no. A host that answers but has not sent its first facts record is still announcing its labels: while one is, the
+// answer is not "no" and the rewrite stays. A host that holds the labels but is down or has its worker off does not count: its last known labels would
 // only say the setting exists. A pool that cannot be read is none too (wwd is not answering, and `pdx test` would exit 3).
 //
 // Only a rewrite that is queued is judged: the local fast lane and the ad-hoc job need no other host (a queued task with no labels needs any
@@ -30,10 +31,19 @@ func GateOnPool(r Result, pool wire.Pool, poolErr error) Result {
 	if poolErr != nil {
 		return Result{Action: ActionNone, Reason: "wwd pool cannot be read (" + firstLine(poolErr.Error()) + "), so the command runs as typed"}
 	}
+	settling := false
 	for _, p := range pool.Peers {
 		if canTake(p, r.Labels) {
 			return r
 		}
+		// answers, but its first facts record has not come: only its os and arch labels are announced so far, the repo:, tool: and earned
+		// task: labels follow. It may hold them, so this is not a "no" (pdx test reads the pool the same way and queues as usual)
+		if p.Reachable && p.Facts == nil {
+			settling = true
+		}
+	}
+	if settling {
+		return r
 	}
 	why := "no reachable host with a worker on"
 	if len(r.Labels) > 0 {
