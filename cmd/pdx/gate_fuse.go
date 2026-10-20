@@ -12,42 +12,44 @@ const gateToolDepthEnv = "PDX_GATE_TOOL_DEPTH"
 
 const gateToolDepthMax = 8
 
-// gateToolDepth is env with the depth of tool raised by one (for the child), and the depth this process found.
+// gateToolDepth is env with the depth of tool raised by one (for the child), and the depth this process found. A value that is
+// not a count from 0 up counts as the limit, and a tool named twice counts as the larger of its values, so no entry can lower
+// what another one blew; the child gets one entry per tool.
 func gateToolDepth(env []string, tool string) ([]string, int) {
-	var pairs []string
-	depth := 0
+	var names []string
+	depths := map[string]int{}
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, gateToolDepthEnv+"="); ok {
-			pairs = strings.Split(v, ",")
+		v, ok := strings.CutPrefix(kv, gateToolDepthEnv+"=")
+		if !ok {
+			out = append(out, kv)
 			continue
 		}
-		out = append(out, kv)
-	}
-	found := false
-	for i, p := range pairs {
-		name, n, ok := strings.Cut(p, "=")
-		if !ok || name != tool {
-			continue
-		}
-		d, err := strconv.Atoi(n)
-		if err != nil || d < 0 {
-			d = gateToolDepthMax // a value that is not a count from 0 up is not to be trusted: the fuse is blown
-		}
-		depth = d
-		pairs[i] = name + "=" + strconv.Itoa(depth+1)
-		found = true
-	}
-	if !found {
-		pairs = append(pairs, tool+"=1")
-	}
-	var keep []string
-	for _, p := range pairs {
-		if p != "" {
-			keep = append(keep, p)
+		for _, p := range strings.Split(v, ",") {
+			if p == "" {
+				continue
+			}
+			name, n, _ := strings.Cut(p, "=")
+			d, err := strconv.Atoi(n)
+			if err != nil || d < 0 {
+				d = gateToolDepthMax
+			}
+			if _, seen := depths[name]; !seen {
+				names = append(names, name)
+			}
+			depths[name] = max(depths[name], d)
 		}
 	}
-	return append(out, gateToolDepthEnv+"="+strings.Join(keep, ",")), depth
+	depth, seen := depths[tool]
+	if !seen {
+		names = append(names, tool)
+	}
+	depths[tool] = depth + 1
+	pairs := make([]string, 0, len(names))
+	for _, n := range names {
+		pairs = append(pairs, n+"="+strconv.Itoa(depths[n]))
+	}
+	return append(out, gateToolDepthEnv+"="+strings.Join(pairs, ",")), depth
 }
 
 func envOrCurrent(env []string) []string {
