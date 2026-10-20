@@ -6,6 +6,8 @@ import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
 import { TEAM_COLORS } from './team-display'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
+import { readViewMemo } from '../../lib/journal/view-memory'
 import { seedWorkbook } from '../../lib/team/__tests__/workbook-fixture'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -211,5 +213,22 @@ describe('the workbook button on an older host (R14)', () => {
   it('no workbook, no button', () => {
     scene()
     expect(screen.queryByTestId('personal-card-workbook')).toBeNull()
+  })
+})
+
+describe('the workbook button on a journal.v1 host (R14)', () => {
+  it('opens and closes the session\'s journal card — the same switch as the title bar\'s 工作簿', () => {
+    setJournalHost(HOST, true)
+    const key = seedUnit(HOST, 'S1', { kind: 'session', id: 'S1', label: 'cc1' } as never)
+    scene()
+    const memo = () => readViewMemo(HOST, key).journalOpen
+    expect(memo()).toBe(false)
+    fireEvent.click(q('personal-card-workbook'))
+    expect(memo()).toBe(true)
+    expect(q('personal-card-workbook').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByTestId('personal-workbook')).toBeNull() // the journal card, not the workbook view
+    fireEvent.click(q('personal-card-workbook'))
+    expect(memo()).toBe(false)
+    setJournalHost(HOST, false)
   })
 })
