@@ -20,9 +20,9 @@ func str(s string) *string { return &s }
 // over the records that have a value.
 func TestRollupAveragesCPUSplitEvenWhenTheLastRecordIsV1(t *testing.T) {
 	recs := []wire.Facts{
-		cpuRec(t0, wire.FactsProto, fp(1), fp(10), fp(4), wire.Core{UserPct: fp(20), SystemPct: fp(10), IdlePct: fp(70), Kind: str("e")}, wire.Core{UserPct: fp(0), SystemPct: fp(0), IdlePct: fp(100), Kind: str("p")}),
-		cpuRec(t0.Add(5*time.Second), wire.FactsProto, nil, nil, nil, wire.Core{}, wire.Core{}), // the first sample after a restart: no figures
-		cpuRec(t0.Add(10*time.Second), 1, fp(3), fp(30), fp(8), wire.Core{UserPct: fp(40), SystemPct: fp(20), IdlePct: fp(40), Kind: str("e")}, wire.Core{UserPct: fp(10), IdlePct: fp(90), Kind: str("p")}),
+		cpuRec(t0, wire.FactsProto, nil, nil, nil, wire.Core{}, wire.Core{}), // the first sample after a restart: no figures
+		cpuRec(t0.Add(5*time.Second), wire.FactsProto, fp(1), fp(10), fp(4), wire.Core{UserPct: fp(20), SystemPct: fp(10), IdlePct: fp(70), Kind: str("e")}, wire.Core{UserPct: fp(0), SystemPct: fp(0), IdlePct: fp(100), Kind: str("p")}),
+		cpuRec(t0.Add(10*time.Second), 1, fp(3), fp(30), fp(8), wire.Core{UserPct: fp(40), SystemPct: fp(20), IdlePct: fp(40), Kind: str("e")}, wire.Core{UserPct: fp(10), SystemPct: fp(0), IdlePct: fp(90), Kind: str("p")}),
 	}
 	got := Rollup(recs)
 	if got.V != 1 {
@@ -59,6 +59,24 @@ func TestRollupCoresWhenTheCoreCountChanged(t *testing.T) {
 	got := Rollup(recs).CPU.Cores
 	if len(got) != 1 || !near(got[0].UserPct, 20) {
 		t.Errorf("%+v", got)
+	}
+}
+
+// cpu1 goes offline and cpu2 takes index 1: the sampler leaves index 1 null at that sample, and the minute must not average the
+// cpu1 values before it with the cpu2 values after it.
+func TestRollupDropsWhatCameBeforeACoreWasReplaced(t *testing.T) {
+	recs := []wire.Facts{
+		cpuRec(t0, 1, nil, nil, nil, wire.Core{UserPct: fp(10)}, wire.Core{UserPct: fp(90)}),
+		cpuRec(t0.Add(5*time.Second), 1, nil, nil, nil, wire.Core{UserPct: fp(20)}, wire.Core{}), // index 1 is cpu2 now: no baseline
+		cpuRec(t0.Add(10*time.Second), 1, nil, nil, nil, wire.Core{UserPct: fp(30)}, wire.Core{UserPct: fp(4)}),
+		cpuRec(t0.Add(15*time.Second), 1, nil, nil, nil, wire.Core{UserPct: fp(40)}, wire.Core{UserPct: fp(6)}),
+	}
+	got := Rollup(recs).CPU.Cores
+	if !near(got[1].UserPct, 5) { // cpu2 only: (4+6)/2, not the 90 of cpu1
+		t.Errorf("index 1: %v", got[1].UserPct)
+	}
+	if !near(got[0].UserPct, 25) { // cpu0 was never replaced
+		t.Errorf("index 0: %v", got[0].UserPct)
 	}
 }
 

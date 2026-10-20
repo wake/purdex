@@ -116,18 +116,36 @@ func rollupCPUSplit(out *wire.CPU, recs []wire.Facts) {
 	out.UserPct = meanOf(recs, func(f wire.Facts) *float64 { return f.CPU.UserPct })
 	out.SystemPct = meanOf(recs, func(f wire.Facts) *float64 { return f.CPU.SystemPct })
 	for i := range out.Cores {
-		at := func(get func(wire.Core) *float64) func(wire.Facts) *float64 {
-			return func(f wire.Facts) *float64 {
-				if i >= len(f.CPU.Cores) {
-					return nil
-				}
-				return get(f.CPU.Cores[i])
-			}
-		}
-		out.Cores[i].UserPct = meanOf(recs, at(func(c wire.Core) *float64 { return c.UserPct }))
-		out.Cores[i].SystemPct = meanOf(recs, at(func(c wire.Core) *float64 { return c.SystemPct }))
-		out.Cores[i].IdlePct = meanOf(recs, at(func(c wire.Core) *float64 { return c.IdlePct }))
+		out.Cores[i].UserPct = coreMean(recs, i, func(c wire.Core) *float64 { return c.UserPct })
+		out.Cores[i].SystemPct = coreMean(recs, i, func(c wire.Core) *float64 { return c.SystemPct })
+		out.Cores[i].IdlePct = coreMean(recs, i, func(c wire.Core) *float64 { return c.IdlePct })
 	}
+}
+
+// coreMean is the mean of one share of the core at index i over the records that have one. A record that has the core but no
+// value for it ends what came before: the sampler leaves a core's share null when its counters cannot be compared with the sample
+// before, which includes the sample at which a different core took over the index (cpu1 offline, cpu2 online). The values from
+// before that sample belong to another core and are dropped, so a minute never averages two cores into one entry.
+func coreMean(recs []wire.Facts, i int, get func(wire.Core) *float64) *float64 {
+	var sum float64
+	var n int
+	for _, r := range recs {
+		if i >= len(r.CPU.Cores) {
+			continue
+		}
+		v := get(r.CPU.Cores[i])
+		if v == nil {
+			sum, n = 0, 0
+			continue
+		}
+		sum += *v
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	m := sum / float64(n)
+	return &m
 }
 
 // meanOf is the mean of the values get finds, nil when it finds none.
