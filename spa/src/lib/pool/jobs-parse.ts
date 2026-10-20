@@ -69,6 +69,7 @@ export function parseJob(v: unknown): PoolJob | null {
     repo: { name: repo.name, root: str(repo.root) ? repo.root : '', remote: str(repo.remote) ? repo.remote : '' },
     snapshot: { commit: snap.commit, tree: str(snap.tree) ? snap.tree : '', base: str(snap.base) ? snap.base : '', rel_cwd: str(snap.rel_cwd) ? snap.rel_cwd : '' },
     task: v.task, args, class: v.class, labels, locks,
+    ...(v.slot === 'heavy' || v.slot === 'light' ? { slot: v.slot } : {}),
     cacheable: v.cacheable === true,
     timeout_s: num(v.timeout_s) ? v.timeout_s : 0,
     supersede_key: str(v.supersede_key) ? v.supersede_key : '',
