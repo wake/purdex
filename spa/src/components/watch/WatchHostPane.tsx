@@ -15,7 +15,7 @@ import { HostBadge } from '../HostBadge'
 import { Section } from '../hosts/form-fields'
 import { SegmentControl } from '../settings/SegmentControl'
 import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
-import { METRICS } from '../../lib/watch/metrics'
+import { METRICS, gaugeOf } from '../../lib/watch/metrics'
 import { RANGES, stepMs } from '../../lib/watch/series'
 import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
 import { usePoolCellModels } from '../../lib/pool/fleet-bridge'
@@ -52,7 +52,7 @@ function Resources({ view, range, now, zones, notLocal, rev }: { view: FleetHost
   return (
     <div data-testid="metrics">
       <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
-        {METRICS.map((d) => <Gauge key={d.k} def={d} fast={view.fast} offline={offline} />)}
+        {METRICS.map((d) => <Gauge key={d.k} label={t(d.shortKey)} reading={offline || !view.fast ? null : gaugeOf(d.k, view.fast, t)} testId={`gauge-${d.k}`} />)}
       </div>
       {notLocal ? (
         // The daemon cannot read this host's history (it does not forward): the gauges above stay, the 5 minute chart does not.
