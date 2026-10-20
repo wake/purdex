@@ -773,7 +773,6 @@
   "watch.set.source_set": "已設定",
   "watch.set.source_default": "預設",
   "watch.set.targets_differ": "兩台 daemon 的通知與開啟順序不一樣；守門員會以各自的設定為準，建議改成一致。",
-  "watch.set.probe_note": "沒有 daemon 的主機：由主方用 SSH 觀察；沒有資源管制，也沒有守門員設定。",
   "watch.set.held": "另一台觀察主機「{{name}}」有未儲存的修改，這裡先不開啟編輯。",
   "watch.set.held_goto": "前往 {{name}}",
   "watch.set.stale": "這個欄位在主機上已被更新；你輸入的內容還保留著。",

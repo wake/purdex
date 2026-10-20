@@ -1,6 +1,6 @@
 // spa/src/components/watch/WatchSettings.tsx — a host tab's 設定 page (watcher area spec §6.2 / §6.3, plan §9): for a daemon host the
-// 守門員 section (the host's `watch` row, read with lib/watch/watch-row and written whole with its revision); for a probe host the
-// note and F-2a2's probe-host editor. The gate settings (設定組, 資源管制, slots) are W5c2.
+// 守門員 section (the host's `watch` row, read with lib/watch/watch-row and written whole with its revision). Every host is a pool host (MON-6f-1): the worker settings and the pause
+// list come first when the pool lists it; a host the App has no config for says so in the 守門員 section. The gate settings (設定組, 資源管制, slots) are W5c2.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostLookResolver } from '../../lib/host-look'
@@ -9,7 +9,6 @@ import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 import { isSet, putWatchRow, rowWith, valueOf, type WatchKey } from '../../lib/watch/watch-row-write'
 import { Section } from '../hosts/form-fields'
-import { ProbeHostEditor } from '../hosts/ProbeHostEditor'
 import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
@@ -102,7 +101,7 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
 }
 
 /** 守門員: one daemon host's `watch` row. `peerIds` are the other daemon hosts, read only to compare `targets`. */
-function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { hostConfigId: string; fleetHostId: string; offline: boolean; peerIds: string[] }) {
+function GuardianSection({ hostConfigId, hostId, offline, peerIds }: { hostConfigId: string; hostId: string; offline: boolean; peerIds: string[] }) {
   const t = useI18nStore((s) => s.t)
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error' } | { status: 'ready'; w: WatchRow }>({ status: 'loading' })
   const [errors, setErrors] = useState<Partial<Record<WatchKey, string>>>({})
@@ -207,7 +206,7 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
                   <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
                     value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
                 ) : (
-                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, fleetHostId, f.key)} onCommit={commitText(f)} />
+                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, hostId, f.key)} onCommit={commitText(f)} />
                 )}
                 <span className="text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</span>
                 {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
@@ -224,32 +223,22 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
   )
 }
 
-/** The 設定 page of one fleet host. `hostConfigId`: the App's id for a daemon host (absent for one the App has no config for). */
-export function WatchSettings({ kind, fleetHostId, hostConfigId, poolAlias, offline, peerIds, onGotoProbe }: {
-  kind: 'daemon' | 'probe'; fleetHostId: string; hostConfigId?: string; offline: boolean; peerIds: string[]
+/** The 設定 page of one host. `hostId` only keys the drafts. `hostConfigId`: the App's id for the daemon (absent for a host the App has no config for). */
+export function WatchSettings({ hostId, hostConfigId, poolAlias, offline, peerIds }: {
+  hostId: string; hostConfigId?: string; offline: boolean; peerIds: string[]
   /** The host's alias in the resource pool: with it the page opens with the worker settings (`pool.control.v1`). */
   poolAlias?: string
-  /** Opens another probe host's tab (where its refused, unsaved draft can be finished). */
-  onGotoProbe?: (probeId: string) => void
 }) {
   const t = useI18nStore((s) => s.t)
   // The worker settings take the top; the watcher section stays collapsed under them (until WWD-8) once the pool lists this host.
   const listed = usePoolStore((s) => poolAlias !== undefined && s.hosts.some((h) => h.alias === poolAlias))
-  if (kind === 'probe') {
-    return (
-      <div data-testid="watch-set-probe">
-        <p className="mb-4 text-xs text-text-secondary">{t('watch.set.probe_note')}</p>
-        <ProbeHostEditor key={fleetHostId} probeId={fleetHostId} onGotoProbe={onGotoProbe} />
-      </div>
-    )
-  }
   return (
     <>
       {poolAlias && <WorkerSettings alias={poolAlias} />}
       {poolAlias && <WorkerExceptions alias={poolAlias} />}
       <Section title={t('watch.set.guardian')} defaultOpen={!listed}>
         {hostConfigId
-          ? <GuardianSection hostConfigId={hostConfigId} fleetHostId={fleetHostId} offline={offline} peerIds={peerIds} />
+          ? <GuardianSection hostConfigId={hostConfigId} hostId={hostId} offline={offline} peerIds={peerIds} />
           : <p data-testid="watch-set-unmapped" className="text-sm text-text-muted">{t('watch.set.unmapped')}</p>}
       </Section>
     </>

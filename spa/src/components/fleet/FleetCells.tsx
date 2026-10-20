@@ -35,7 +35,7 @@ export function FleetCells({ variant }: FleetCellsProps) {
     >
       {wide ? <div className="basis-full pb-1"><QueueStrip /></div> : <QueueCounts />}
       {cells.map((c) => (
-        <HostCell key={c.hostId} view={c} variant={variant} isActive={false} onOpen={() => openWatchArea({ poolHost: { hostId: c.hostId, alias: c.name } })} />
+        <HostCell key={c.hostId} view={c} variant={variant} isActive={false} onOpen={() => openWatchArea({ poolHost: { hostId: c.hostId, alias: c.name }, sub: 'monitor' })} />
       ))}
     </div>
   )

@@ -4,11 +4,11 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore, getReturnWorkspaceId, getWatchReturnTarget } from '../store'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { readMasterWorld } from '../../../lib/profile/master-world'
-import { writeHostPage, type HostPage } from '../../../lib/watch/view-memory'
+import { writeHostTab, type HostSubTab } from '../../../lib/watch/view-memory'
 import { currentWatchReconciler, readPoolView } from './watch-area'
 
 /** `poolHost`: a pool host by its wwd `host_id` (its tab id), with the page of the host to show. `alias` is not read (kept so callers that have it need no change). */
-export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { poolHost: { hostId: string; alias?: string }; sub?: HostPage }
+export type WatchTarget = { tab: 'guardian' | 'events' | 'jobs' } | { poolHost: { hostId: string; alias?: string }; sub?: HostSubTab }
 
 /**
  * Ensures the area's workspace, brings its host tabs up to the pool's host list, then selects the target the way
@@ -24,7 +24,7 @@ export function openWatchArea(target: WatchTarget): void {
   currentWatchReconciler().reconcile(readPoolView())
 
   const area = useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
-  if ('poolHost' in target && target.sub) writeHostPage(target.poolHost.hostId, target.sub)
+  if ('poolHost' in target && target.sub) writeHostTab(target.poolHost.hostId, target.sub)
   const wanted = 'poolHost' in target
     ? watchHostTabId(target.poolHost.hostId)
     : 'tab' in target && target.tab === 'events' ? WATCH_EVENTS_TAB_ID : 'tab' in target && target.tab === 'jobs' ? WATCH_JOBS_TAB_ID : WATCH_GUARDIAN_TAB_ID
