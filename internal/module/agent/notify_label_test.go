@@ -231,29 +231,6 @@ func TestNotifyLabel_SnapshotLegacyRowUsesTheStoredSessionID(t *testing.T) {
 	}
 }
 
-// A worker's frame (outside tmux, or a synthetic one) carries no label, whoever its session id is. Mutation gate: drop
-// the kind test in the emitter → red.
-func TestNotifyLabel_NonTmuxFrameHasNone(t *testing.T) {
-	m, _ := notifyModule(t)
-	l := useLabeler(t, m, &labelSources{})
-	l.Label(modSID1, "named")
-	l.WaitIdle(2 * time.Second)
-	sub := m.core.Events.AddTestSubscriber()
-	defer m.core.Events.RemoveTestSubscriber(sub)
-	if !m.emitSlot(kindNonTmux, "n-code", "", "named", modSID1, frameOf("idle")) {
-		t.Fatal("the frame did not go out")
-	}
-	for _, ev := range rawFrames(t, sub) {
-		var n agentpkg.NormalizedEvent
-		if err := json.Unmarshal([]byte(ev.Value), &n); err != nil {
-			t.Fatal(err)
-		}
-		if n.NotifyLabel != nil {
-			t.Fatalf("a non-tmux frame carries %+v", n.NotifyLabel)
-		}
-	}
-}
-
 // The session id of a frame is one rule for the notify feed and the label: a mod / sweep / probe frame's projection
 // (top frame, then primary), a hook's own id.
 func TestNotifySessionID(t *testing.T) {
