@@ -6,7 +6,7 @@ import { destroyBrowserViewIfNeeded } from './browser-cleanup'
 import { scanPaneTree } from './pane-tree'
 import { bufferKey } from './editor-buffer-key'
 
-export function closeTab(tabId: string, opts?: { skipHistory?: boolean }): void {
+export function closeTab(tabId: string, opts?: { skipHistory?: boolean; scope?: readonly string[] }): void {
   const tab = useTabStore.getState().tabs[tabId]
   if (!tab || tab.locked) return
 

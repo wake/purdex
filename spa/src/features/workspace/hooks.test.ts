@@ -521,3 +521,33 @@ describe('closeOthers / closeRight on a task-group range', () => {
     expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([g1.id, g2.id, x1.id].sort())
   })
 })
+
+describe('handleCloseTab in the task-group view (TG-4a)', () => {
+  it('the tab shown next is the group\'s neighbour, in whichever workspace, not a tab of the closed tab\'s workspace outside the group', async () => {
+    const { useTeamUiStore } = await import('../../stores/useTeamUiStore')
+    const { useLayoutStore } = await import('../../stores/useLayoutStore')
+    const { useManualGroupsStore } = await import('../../stores/useManualGroupsStore')
+    const { useGroupViewStore } = await import('../../stores/useGroupViewStore')
+    const { manualGroupKey } = await import('../../lib/task-groups/group-key')
+    const G = manualGroupKey('aaaaaaaa')
+    useWorkspaceStore.getState().reset()
+    const [g1, g2, x] = [1, 2, 3].map(() => ({ ...createTab({ kind: 'new-tab' }) }))
+    g1.group = G; g1.groupRank = 'A'
+    g2.group = G; g2.groupRank = 'M'
+    useTabStore.setState({ tabs: { [g1.id]: g1, [g2.id]: g2, [x.id]: x }, tabOrder: [g1.id, x.id, g2.id], activeTabId: g1.id, visitHistory: [] } as never)
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    for (const t of [g1, x]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, g2.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useManualGroupsStore.setState({ order: ['aaaaaaaa'], groups: { aaaaaaaa: { name: 'G', members: [], createdAt: 1 } } })
+    useGroupViewStore.setState({ selectedGroup: G, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } })
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
+    const { result } = renderHook(() => useTabWorkspaceActions([g1, g2].map((t) => useTabStore.getState().tabs[t.id])))
+    act(() => { result.current.handleCloseTab(g1.id) })
+    expect(useTabStore.getState().activeTabId).toBe(g2.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+  })
+})

@@ -137,6 +137,16 @@ describe('the tab shortcuts in the task-group view', () => {
     expect(useTabStore.getState().activeTabId).toBe(c.id)
   })
 
+  it('⌘W: the tab shown next is the group\'s neighbour, not a tab of the closed tab\'s workspace outside the group', () => {
+    const { a, b, c } = seed('groups')
+    const fire = fireShortcut()
+    renderHook(() => useShortcuts())
+    fire('close-tab') // a is active; the range is d, a, b and c sits between them in the workspace
+    expect(useTabStore.getState().tabs[a.id]).toBeUndefined()
+    expect(useTabStore.getState().activeTabId).toBe(b.id)
+    expect(useTabStore.getState().activeTabId).not.toBe(c.id)
+  })
+
   it('⌘W closes the active tab of the group, and leaves alone a tab of another group the pointer is stale at', () => {
     const { a, c } = seed('groups')
     const fire = fireShortcut()
