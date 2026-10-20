@@ -37,6 +37,9 @@
   /* The journal's warning text (待確認 chip, highlighted names): themes.css only; Nord lightens it, every other theme falls back to status-warning-text. */
   --color-journal-warning-text: var(--journal-warning-text, var(--status-warning-text, var(--status-warning)));
   --color-status-success-text: var(--status-success-text, var(--status-success));
+  /* The resource pool's queue strip (monitoring tabs M1): heavy and light jobs. themes.css only, like the journal kinds: a custom theme lacks them and gets the fallback. */
+  --color-queue-heavy: var(--queue-heavy, #a18ee6);
+  --color-queue-light: var(--queue-light, #5fb3b3);
 }
 
 /* === Dark (default, matches current hardcoded values) === */
@@ -79,6 +82,8 @@
   --journal-kind-task-done: #b5e07a;
   --journal-kind-comm: #bb9af7;
   --journal-kind-request: #f2647f;
+  --queue-heavy: #a18ee6;
+  --queue-light: #5fb3b3;
 }
 
 /* === Light === */
@@ -119,6 +124,8 @@
   /* The three above are background tints in this theme; these are their text-strength siblings (watch area), >= 4.5:1 on #f5f5f5. */
   --status-success-text: #1e7b34;
   --status-error-text: #b42318;
+  --queue-heavy: #6b4fc0;
+  --queue-light: #2a7f7f;
 }
 
 /* === Nord === */
@@ -158,6 +165,8 @@
   --journal-kind-task-done: #cbe9a2;
   --journal-kind-comm: #e7dbfc;
   --journal-kind-request: #fcd7de;
+  --queue-heavy: #b48ead;
+  --queue-light: #8fbcbb;
 }
 
 /* === Dracula === */
@@ -195,4 +204,6 @@
   --journal-kind-task-done: #bfe48d;
   --journal-kind-comm: #e1d3fb;
   --journal-kind-request: #fbcdd6;
+  --queue-heavy: #bd93f9;
+  --queue-light: #8be9fd;
 }
