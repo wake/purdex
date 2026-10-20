@@ -26,6 +26,10 @@ type Task struct {
 	// DefHash is the manifest's definition hash of the task (manifest.Task.DefinitionHash): what the pair ran, as a whole. The
 	// coordinator compares it again when the pair is done, so a result of an older definition never earns the label.
 	DefHash string
+	// Commit is the commit the task was listed at, when the clone's manifest is read at a manifest_ref (#3658): the pair is snapshotted at
+	// exactly this commit, never at what the ref names by the time Prepare runs. Empty for a clone read in its working tree. It is not part
+	// of Identity: a new commit that leaves the qualification the same is not a new qualification.
+	Commit string
 }
 
 // Identity is a stable string for the task as qualification sees it: where it is, who is its reference, what both halves run, what the

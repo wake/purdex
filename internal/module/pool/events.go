@@ -32,7 +32,7 @@ func (m *Module) watch(ctx context.Context) {
 	based, away := false, false
 	last := ""
 	for {
-		p, err := m.client().Pool(ctx)
+		p, err := m.client().PoolWithLiveness(ctx) // the entry compared is the one GET /api/pool/hosts gives, liveness included
 		switch {
 		case err == nil:
 			last = ""
@@ -67,6 +67,7 @@ func (m *Module) watch(ctx context.Context) {
 func (m *Module) compare(known map[string]string, based, all bool, p wire.Pool) {
 	now := map[string]string{}
 	for _, h := range hostsOf(p).Hosts {
+		h.LivenessAt = nil // when the peer was last looked at moves at every poll; a change of the entry is a change of what it says
 		b, err := json.Marshal(h)
 		if err != nil || !wire.ValidAlias(h.Info.Alias) {
 			continue

@@ -101,13 +101,17 @@ var refLockBackoff = 100 * time.Millisecond
 const refLockTries = 3
 
 // isRefLockError says whether a git error is another process holding the lock of a ref (or of packed-refs): git says "cannot lock ref" for a
-// ref and "Unable to create '...lock': File exists" for the lock file itself. Nothing else is worth a second try.
+// ref and "Unable to create '...lock': File exists" for the lock file itself. git 2.53 (Linux) fetches through a batched ref update that
+// reports a lock file it could not create as "fetching ref <ref> failed: reference already exists" and drops the lock detail; that is only a
+// held lock here because gitRefWrite fetches with a forced refspec (+src:dst), which never fails for a ref that already exists (checked on
+// 2.53: no lock, forced fetch over an existing ref succeeds). Nothing else is worth a second try.
 func isRefLockError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "cannot lock ref") || strings.Contains(msg, "Unable to create") && strings.Contains(msg, ".lock")
+	return strings.Contains(msg, "cannot lock ref") || strings.Contains(msg, "Unable to create") && strings.Contains(msg, ".lock") ||
+		strings.Contains(msg, "fetching ref ") && strings.Contains(msg, " failed: reference already exists")
 }
 
 // waitRefLock waits refLockBackoff and returns the context's error when it ended, also when the timer and the end of the context were ready

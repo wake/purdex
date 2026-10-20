@@ -61,6 +61,9 @@ type Request struct {
 	// Local prepares a fast-lane record (spec §5.2): no snapshot, HEAD named in its place, the manifest read from the working
 	// tree, local-only (pass) tasks allowed, never cacheable.
 	Local bool
+	// Commit, when set (and not Local), is the snapshot: that commit of the repository, not a commit of the working tree. The
+	// qualification coordinator runs the commit a clone's manifest_ref names (#3658).
+	Commit string
 	// NoCache: the origin must not answer this call from a stored result (`pdx test --no-cache`).
 	NoCache bool
 	// AdHoc, when not nil, is an undeclared command (spec §8.3): its words are the whole argv, there is no manifest task, and the
@@ -132,7 +135,13 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		}
 	} else {
 		var err error
-		if snap, err = gate.SnapshotTree(ctx, req.Git, req.Dir); err != nil {
+		if req.Commit != "" {
+			sha, err := g.run(ctx, "rev-parse", "--verify", "-q", "--end-of-options", req.Commit+"^{commit}")
+			if err != nil || sha == "" {
+				return nil, fmt.Errorf("snapshot: %q is not a commit of %s", req.Commit, root)
+			}
+			snap = gate.SnapshotInfo{SHA: sha, Root: root, Rel: "."}
+		} else if snap, err = gate.SnapshotTree(ctx, req.Git, req.Dir); err != nil {
 			return nil, fmt.Errorf("snapshot: %w", err)
 		}
 		if !sameDir(root, snap.Root) {

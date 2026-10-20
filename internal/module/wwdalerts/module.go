@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,6 +87,10 @@ type Module struct {
 	// (a time on this daemon's clock) of the failure each key is about now
 	lastHeld map[string]map[string]bool // host alias -> its silence: keys
 	episode  map[string]time.Time
+	// the kind of each silence: key — whether the peer's host itself is gone (the words of wire.SilenceDetailHostDown) or only its wwd — as the
+	// lists said this pass, and the words the push uses. A change of kind inside one failure is told again (markEpisodes).
+	hostDown map[string]bool
+	words    map[string]string
 }
 
 // New returns the module with production defaults.
@@ -373,7 +378,9 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 	if first {
 		m.lastHeld = map[string]map[string]bool{}
 		m.episode = map[string]time.Time{}
+		m.hostDown = map[string]bool{}
 	}
+	m.words = map[string]string{}
 	if poolWhole {
 		// a host that is not in the pool any more takes what it held with it: coming back it is a new observer, not a continuation
 		for h := range m.lastHeld {
@@ -385,11 +392,27 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 	now := m.now()
 	nowHeld := map[string]map[string]bool{}
 	earliest := map[string]time.Time{} // key -> the earliest Since on the lists (a wwd's clock; used only for the first look after a restart)
-	for host, alerts := range lists {
+	// The lists are read in the order of the hosts' names, so which words a push uses does not depend on which list came first; when the
+	// wwds disagree (one reaches the peer's SSH port, another does not) the host-down words win.
+	hostNames := make([]string, 0, len(lists))
+	for host := range lists {
+		hostNames = append(hostNames, host)
+	}
+	sort.Strings(hostNames)
+	nowHostDown := map[string]bool{}
+	for _, host := range hostNames {
+		alerts := lists[host]
 		held := map[string]bool{}
 		for _, a := range alerts {
 			if a.ClearedAt == nil && sharedLedger(a) {
 				held[a.Key] = true
+				down := wire.SilenceHostDown(a.Detail)
+				if _, seen := m.words[a.Key]; !seen || (down && !nowHostDown[a.Key]) {
+					m.words[a.Key] = a.Detail
+				}
+				if down {
+					nowHostDown[a.Key] = true
+				}
 				if t, ok := earliest[a.Key]; !ok || a.Since.Before(t) {
 					earliest[a.Key] = a.Since
 				}
@@ -431,7 +454,18 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 				continuing = true
 			}
 		}
+		// The kind of the silence (the peer's wwd only, or its host) is part of what was told: the same failure that changes kind is told
+		// again, in the new words. A restart of this daemon forgets the kind it last told (the ledger holds the failure, not its words).
+		prev, had := m.hostDown[k]
+		if !had { // the first look at it since this daemon started: the ledger knows the kind that was told
+			prev, had = m.store.toldKind(silenceLedger, k)
+		}
+		kindChanged := had && prev != nowHostDown[k]
+		m.hostDown[k] = nowHostDown[k]
 		if continuing {
+			if kindChanged {
+				m.episode[k] = now
+			}
 			continue
 		}
 		// The first look after a start has no history of its own. The ledger knows the failure it last told: the same one while a list's
@@ -442,6 +476,15 @@ func (m *Module) markEpisodes(lists map[string][]wire.Alert, inPool map[string]b
 			m.episode[k] = time.UnixMilli(row.Since)
 		} else {
 			m.episode[k] = now
+		}
+		if kindChanged { // the failure goes on, as another kind (the ledger's kind, after a restart, counts as what was told)
+			m.episode[k] = now
+		}
+	}
+	// a key no list holds has cleared; its kind is compared with the ledger's (what was last told) if it comes back
+	for k := range m.hostDown {
+		if !keys[k] {
+			delete(m.hostDown, k)
 		}
 	}
 	for h, held := range nowHeld {
@@ -542,6 +585,9 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 	if sharedLedger(a) {
 		about, host = strings.TrimPrefix(a.Key, "silence:"), silenceLedger
 		since = m.episode[a.Key]
+		if w := m.words[a.Key]; w != "" {
+			a.Detail = w // the words of the failure as the lists agree on them, not of whichever list this alert came from
+		}
 	}
 	prev, hadRow := m.store.delivery(host, a.Key)
 	if hadRow && prev.Since == since.UnixMilli() {
@@ -558,6 +604,9 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		return
 	}
 	key := a.Key
+	// the kind of a silence that is being told (read now: the next pass may change it); it is kept in the ledger only once the push is taken,
+	// so a push taken back, or never queued, leaves the kind that was told before
+	shared, hostDown := sharedLedger(a), m.hostDown[a.Key]
 	queued := ntf.NotifyAlert(push.AlertPush{
 		CollapseID: collapseID(host, a.Key),
 		Title:      title(about, a),
@@ -573,6 +622,11 @@ func (m *Module) pushIfDue(host string, a wire.Alert, now time.Time) {
 		Sent: func() {
 			if err := m.store.markSent(host, key, since, m.now()); err != nil {
 				m.logf("wwdalerts: record delivery %s/%s: %v", host, key, err)
+			}
+			if shared {
+				if err := m.store.setKind(host, key, since, hostDown); err != nil {
+					m.logf("wwdalerts: record kind %s/%s: %v", host, key, err)
+				}
 			}
 		},
 	})

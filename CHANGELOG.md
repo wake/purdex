@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.0-alpha.763] - 2026-10-20
+
+> daemon、`pdx` CLI（含 `pdx gate`）、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 762 相同。
+>
+> **資料庫沒有變**：host schema 與 queue schema 都還是 8，wire 的 `proto` 仍是 3。部署前照常備份 `wwd.db.pre-763`；要退回 762 只要換回舊的執行檔。
+>
+> **修好 gate 的 shim 無限遞迴（#3671，#3677）**：10-20 早上 mlab 出現 `pdx gate --auto --tool go` 一層套一層呼叫自己，兩分鐘長到上千個行程、吃掉約 13 GB 記憶體。原因是 gate 用 `$HOME` 找 shim 目錄與狀態目錄，HOME 被換掉時排除不到真的 shim。現在 shim 以檔頭辨識、目錄改用帳號的 home，而且同一個工具疊到第 8 層就以 127 停下，不再往下開。設定檔的位置仍跟 `$HOME`（#3679）。
+>
+> **wwd 切換上線的障礙清掉一批（使用者 10-20 定案：不與舊系統雙軌）**：
+> - worker 沙盒裡的 Go 工作讀得到私有模組（#3663，#3672）：worker 在沙盒外用自己的身分把模組先下載到一份共用、唯讀的快取，工作只讀它，帳密不進沙盒；固定 `GOTOOLCHAIN=local`、`GOWORK=off`。
+> - 「所有主機都夠新才寫新欄位」的判斷，不再因為一台離線的主機而永遠不成立（#3678）：離線的主機看它最後一次回報的版本，並存在 `peers-last.json`，重啟後也讀得回來。通過測試摘要因此會照常寫出，資格比對才起得來。
+> - 分得出主機停止還是 wwd 停止（#3676，#3683）：讀不到某台的 wwd 時，對它的 22 埠做 TCP 存活探測（不登入、不讀資料）；失聯告警分成「wwd 沒有回應（主機還在）」與「主機離線」，狀態一變就再推一次。新欄位只給主動要的讀者（`GET /v1/pool?liveness=1`）。
+> - 對照主機的標籤改讀 clone 裡 `origin/main` 的 manifest（#3658，#3673），每 10 分鐘 fetch 一次；比對的快照也用同一個 commit。air26 的 wwd 設定加上 `[manifest_refs] purdex = "origin/main"`。
+> - `spa-related` 跟 `tsc` 一樣，改成只給持有 `task:purdex/spa-related` 的主機接（#3668）；`docs/wwd-deploy.md` §12 寫好 mserv 上線的步驟。
+>
+> **其他**：同時有兩台讀不到資源池時，各自退回推自己那份告警（#3610，#3661）；`cannot lock ref` 有限次重試（#3546，#3660）；C2 矩陣的測試修字（#3664）。B 線：任務編組的側欄列（#3662）與團隊面板一行模式的寬度（#3659）。
+>
+> **worker**：部署時三台的 worker 先一律關閉，檢查通過後由 lead 打開 mlab 與 air26；air26 的 `[owner]` 照使用者 10-19 的指示維持關閉；mserv 仍關著（等 S2 停用人工送法後開）；air19 已在 762 升級，這次若在線一併升。
+
+### Fixed：gate
+
+- **gate 的 shim 不再無限遞迴（#3677，#3671）**：shim 以檔頭辨識，shim 目錄與狀態目錄改用帳號的 home；同一個工具疊到第 8 層以 127 停下，不再 spawn。
+
+### Changed：wwd 切換上線（S1）
+
+- **worker 沙盒的 Go 工作讀得到私有模組（#3672，#3663）**：worker 在沙盒外先把模組下載到共用唯讀快取，工作只讀它，帳密不進沙盒；固定 `GOTOOLCHAIN=local`、`GOWORK=off`。
+- **離線主機看最後一次回報的版本（#3678）**：存在 `peers-last.json`，重啟後讀得回來，「所有主機都夠新」的判斷不再被一台離線主機卡死。
+- **分得出主機停止還是 wwd 停止（#3683，#3676）**：讀不到 wwd 時對 22 埠做 TCP 存活探測，失聯告警分成兩種並在狀態改變時再推一次；新欄位只給 `GET /v1/pool?liveness=1`。
+- **對照主機的標籤改讀 `origin/main` 的 manifest（#3673，#3658）**：每 10 分鐘 fetch 一次，比對的快照也用同一個 commit；remote 取最長名稱前綴。
+- **`spa-related` 只給持有 `task:purdex/spa-related` 的主機接（#3668）**：與 `tsc` 一致；`docs/wwd-deploy.md` §12 寫好 mserv 上線步驟。
+
+### Fixed：wwd
+
+- **ref 寫入等過 `cannot lock ref`（#3660，#3546）**：共用 clone 上的 ref 寫入有限次重試。
+- **兩台同時讀不到資源池時各自推自己的告警（#3661，#3610）**。
+- **C2 matrix 的 dry-run 說明不含 FAIL 字樣（#3664）**：`wwd-c2-matrix_test.sh` 恢復綠燈。
+
+### Changed：介面（B 線）
+
+- **一行模式的團隊面板寬度跟著內容（#3659）**：`min(區域寬, max(所有格, 只有 lead + 100px))`；full 模式不變，journal 卡片貼合實際寬度。
+- **任務編組的側欄列（#3662，TG-0b）**：沒有分頁顯示的團隊座位也穿上 persona 列（暗色，點擊仍可開啟）；名稱後接分頁標題；群組標題加 focus ring。
+
+### Docs
+
+- **wwd 計畫：切換上線、不與舊系統雙軌（#3667）**：WWD-9 不再等 C3，S1→S4 順序寫入 `docs/plans/2026-10-18-wwd-plan.md`。
+- **任務編組升為 workspace 層的 spec 與 plan（#3666）**：手動編組改隨 profile 同步（r5.1）。
+
 ## [1.0.0-alpha.762] - 2026-10-20
 
 > daemon、`pdx` CLI、`wwd` 與 SPA 有改；**mod 沒有改，不用重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 與 761 相同。

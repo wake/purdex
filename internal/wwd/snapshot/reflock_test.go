@@ -200,3 +200,23 @@ func (c *endsDuringWait) Done() <-chan struct{} {
 	close(ch)
 	return ch
 }
+
+// The messages git really prints when a fetch into a ref finds the ref's lock held (2.53 on Linux batches the ref update and drops the
+// lock-file detail), and some that must not be taken for a held lock.
+func TestIsRefLockErrorMessages(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"git 2.54 fetch", "error: cannot lock ref 'refs/wwd/j_f': Unable to create '/x/.git/refs/wwd/j_f.lock': File exists.", true},
+		{"git 2.53 fetch", "git fetch -q --no-tags /tmp/b.bundle +refs/wwd/j_f:refs/wwd/j_f: exit status 1: error: fetching ref refs/wwd/j_f failed: reference already exists", true},
+		{"git 2.53 update-ref", "fatal: update_ref failed for ref 'refs/wwd/j_f': cannot lock ref 'refs/wwd/j_f': Unable to create '/x/j_f.lock': File exists.", true},
+		{"already exists elsewhere", "fatal: destination path 'x' already exists and is not an empty directory", false},
+		{"reference already exists without fetching", "fatal: reference already exists", false},
+		{"fetching failed for another reason", "error: fetching ref refs/wwd/j_f failed: some other reason", false},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, isRefLockError(errors.New(c.msg)), c.name)
+	}
+}

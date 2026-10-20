@@ -51,6 +51,10 @@ type Config struct {
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
 	// verified it; the verified repos become repo:<name> labels.
 	Repos map[string]string `toml:"repos"`
+	// ManifestRefs is repo name = git ref (for example origin/main) for the prepared clones whose manifest is read at that ref, and whose
+	// qualification snapshot is taken at the commit it names, instead of the working tree (#3658). Such a clone is fetched in the
+	// background. A repo not listed keeps reading its working tree.
+	ManifestRefs map[string]string `toml:"manifest_refs"`
 	// DepsRoot holds the dependency cache and the package managers' download caches (default <data_dir>/deps; keep it on the volume of work_root
 	// so that installed dependencies are cloned, not copied).
 	DepsRoot string `toml:"deps_root"`
@@ -290,6 +294,19 @@ func (c *Config) validateRepos(home string) error {
 	return nil
 }
 
+// validateManifestRefs: each entry names a repo of [repos], and a ref is one word that cannot be taken for a git option.
+func (c *Config) validateManifestRefs() error {
+	for name, ref := range c.ManifestRefs {
+		if _, ok := c.Repos[name]; !ok {
+			return fmt.Errorf("manifest_refs: %q is not in [repos]", name)
+		}
+		if ref == "" || strings.HasPrefix(ref, "-") || strings.IndexFunc(ref, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return fmt.Errorf("manifest_refs: %s: %q is not a git ref", name, ref)
+		}
+	}
+	return nil
+}
+
 // DefaultConfigPath is ~/.config/wwd/config.toml.
 func DefaultConfigPath(home string) string {
 	return filepath.Join(home, ".config", "wwd", "config.toml")
@@ -320,6 +337,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateRepos(home); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateManifestRefs(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateJobDB(home); err != nil {

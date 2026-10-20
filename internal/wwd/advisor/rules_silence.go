@@ -17,6 +17,9 @@ const SilenceAfter = 3 * time.Minute
 type PeerDown struct {
 	Alias string
 	Since time.Time
+	// Liveness is what a look at the peer's SSH port found while its wwd did not answer (wire.LivenessWwdDown: the host is there;
+	// wire.LivenessHostDown: nothing answers). "" or unknown: not looked at, and the alert says only that the wwd cannot be reached.
+	Liveness wire.Liveness
 }
 
 // PeerSilence is "silence" (push) for one peer wwd: the pool reads of that host have failed for SilenceAfter. A host cannot report its
@@ -42,7 +45,15 @@ func (r PeerSilence) Eval(in Input) (Verdict, error) {
 		if p.Since.IsZero() || in.Now.Sub(p.Since) < SilenceAfter {
 			return v, nil
 		}
-		v.Holds, v.Detail = true, fmt.Sprintf("%s 的 wwd 已 %d 分鐘連不上", r.Alias, int(in.Now.Sub(p.Since)/time.Minute))
+		v.Holds = true
+		switch p.Liveness {
+		case wire.LivenessWwdDown:
+			v.Detail = wire.SilenceDetailWwdDown(r.Alias)
+		case wire.LivenessHostDown:
+			v.Detail = wire.SilenceDetailHostDown(r.Alias)
+		default:
+			v.Detail = fmt.Sprintf("%s 的 wwd 已 %d 分鐘連不上", r.Alias, int(in.Now.Sub(p.Since)/time.Minute))
+		}
 		return v, nil
 	}
 	return Verdict{}, fmt.Errorf("%s is not a peer of this host", r.Alias)

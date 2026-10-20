@@ -95,7 +95,7 @@ func silenceInput(in advisorInputs) func() (advisor.Input, bool) {
 			Peers: func() []advisor.PeerDown {
 				var out []advisor.PeerDown
 				for _, d := range in.Downs() {
-					out = append(out, advisor.PeerDown{Alias: d.Alias, Since: d.Since})
+					out = append(out, advisor.PeerDown{Alias: d.Alias, Since: d.Since, Liveness: d.Liveness})
 				}
 				return out
 			},

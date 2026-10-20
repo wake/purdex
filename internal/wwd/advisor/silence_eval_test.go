@@ -15,7 +15,7 @@ func TestEvaluatorRaisesAndClearsSilence(t *testing.T) {
 	input := func() (Input, bool) {
 		return Input{
 			Now:         now,
-			Peers:       func() []PeerDown { return []PeerDown{{"mserv", downSince}, {"air26", time.Time{}}} },
+			Peers:       func() []PeerDown { return []PeerDown{{"mserv", downSince, ""}, {"air26", time.Time{}, ""}} },
 			PartnerSeen: func() time.Time { return seen },
 		}, true
 	}
