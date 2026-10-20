@@ -34,20 +34,23 @@ describe('applyGroupDrop', () => {
   it('a plain tab onto a manual group gets its group, onto 「未分組」 loses it', () => {
     const a = mk('a')
     useTabStore.getState().addTab(a)
-    const deps = { ctx: ctx(), sessionOf: () => null, onResult: vi.fn() }
-    applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'plain' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, deps)
+    const deps = () => ({ ctx: ctx(), sessionOf: () => null, onResult: vi.fn() })
+    applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'plain' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, deps())
     expect(useTabStore.getState().tabs[a.id].group).toBe(G)
-    applyGroupDrop({ tabId: a.id, groupKey: G, kind: 'plain' }, { kind: 'target', target: { kind: 'ungrouped' } }, deps)
+    applyGroupDrop({ tabId: a.id, groupKey: G, kind: 'plain' }, { kind: 'target', target: { kind: 'ungrouped' } }, deps())
     expect(useTabStore.getState().tabs[a.id].group).toBeUndefined()
   })
 
   it('a session onto a group is filed there, onto 「未分組」 taken out; the result goes to onResult', async () => {
-    const ref = { hostId: 'h', agentSessionId: 's', tabId: 't' }
+    const t = mk('t')
+    useTabStore.getState().addTab(t)
+    const ref = { hostId: 'h', agentSessionId: 's', tabId: t.id }
     const onResult = vi.fn()
-    const deps = { ctx: ctx(), sessionOf: () => ref, onResult }
-    applyGroupDrop({ tabId: 't', groupKey: UNGROUPED, kind: 'session' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, deps)
+    applyGroupDrop({ tabId: t.id, groupKey: UNGROUPED, kind: 'session' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, { ctx: ctx(), sessionOf: () => ref, onResult })
     expect(fileSession).toHaveBeenCalledWith(ref, 'aaaaaaaa')
-    applyGroupDrop({ tabId: 't', groupKey: G, kind: 'session' }, { kind: 'target', target: { kind: 'ungrouped' } }, deps)
+    // it is in the group now (a member whose root the cache knows)
+    useTabStore.getState().setTabGroup(t.id, G)
+    applyGroupDrop({ tabId: t.id, groupKey: G, kind: 'session' }, { kind: 'target', target: { kind: 'ungrouped' } }, { ctx: ctx(), sessionOf: () => ref, onResult })
     expect(takeSessionOut).toHaveBeenCalledWith(ref)
     await Promise.resolve()
     await Promise.resolve()
@@ -60,6 +63,20 @@ describe('applyGroupDrop', () => {
     const before = useTabStore.getState().tabs
     applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'session' }, { kind: 'target', target: { kind: 'ungrouped' } }, { ctx: ctx(), sessionOf: () => null, onResult: vi.fn() })
     expect(useTabStore.getState().tabs).toBe(before)
+    expect(fileSession).not.toHaveBeenCalled()
+  })
+
+  it('a row whose kind or group changed while it was dragged is not written from the old picture', () => {
+    const a = mk('a')
+    useTabStore.getState().addTab(a)
+    const seat = { key: 'h\u0000t', role: 'member', seat: {} } as never
+    const c = ctx()
+    c.index.seatByTabId.set(a.id, seat) // the tab became a team seat meanwhile
+    const deps = { ctx: c, sessionOf: () => null, onResult: vi.fn() }
+    applyGroupDrop({ tabId: a.id, groupKey: UNGROUPED, kind: 'plain' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, deps)
+    expect(useTabStore.getState().tabs[a.id].group).toBeUndefined()
+    // and one that is no longer listed anywhere
+    applyGroupDrop({ tabId: 'gone', groupKey: UNGROUPED, kind: 'plain' }, { kind: 'target', target: { kind: 'group', groupId: 'aaaaaaaa' } }, deps)
     expect(fileSession).not.toHaveBeenCalled()
   })
 

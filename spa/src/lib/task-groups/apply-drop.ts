@@ -1,8 +1,9 @@
 // spa/src/lib/task-groups/apply-drop.ts — makes what a dropped row means (task groups spec §6.1; TG-3e): a reorder inside its group (reorder.ts, apply-reorder.ts) or a move to another one — a solo session is filed
 // or taken out through session-actions.ts, a plain tab gets its own `group` (§5).
 import { useTabStore } from '../../stores/useTabStore'
-import { groupTabs, type GroupOrderCtx } from './group-order'
-import { resolveDrop, type DraggedRow, type DropOn } from './drop-resolve'
+import { allGroupTabs, groupTabs, type GroupOrderCtx } from './group-order'
+import { resolveDrop, type DragRowKind, type DraggedRow, type DropOn } from './drop-resolve'
+import { teamKeyOfGroupKey } from './group-key'
 import { decideGroupDrop } from './reorder'
 import { applyReorder } from './apply-reorder'
 import { manualGroupKey } from './group-key'
@@ -15,7 +16,26 @@ export interface DropDeps {
   onResult: (r: SessionActionResult) => void
 }
 
-export function applyGroupDrop(active: DraggedRow, over: DropOn, { ctx, sessionOf, onResult }: DropDeps): void {
+/** Where a tab is shown NOW and what kind of row it is, or null when no group lists it. */
+function rowNow(tabId: string, { ctx, sessionOf }: DropDeps): { groupKey: string; kind: DragRowKind } | null {
+  for (const [groupKey, ids] of allGroupTabs(ctx)) {
+    if (!ids.includes(tabId)) continue
+    const kind: DragRowKind = ctx.index.seatByTabId.has(tabId) ? 'seat' : sessionOf(tabId) !== null && teamKeyOfGroupKey(groupKey) === null ? 'session' : 'plain'
+    return { groupKey, kind }
+  }
+  return null
+}
+
+/** The drag began on a snapshot (its group, its kind); the drop acts on what is true when it lands: a row whose group or kind changed meanwhile (a roster or root update) is not written from the old picture. */
+export function applyGroupDrop(active: DraggedRow, over: DropOn, deps: DropDeps): void {
+  const { ctx, sessionOf, onResult } = deps
+  const now = rowNow(active.tabId, deps)
+  if (now === null || now.groupKey !== active.groupKey || now.kind !== active.kind) return
+  if (over.kind === 'row') {
+    const o = rowNow(over.tabId, deps)
+    if (o === null) return
+    over = { kind: 'row', tabId: over.tabId, groupKey: o.groupKey }
+  }
   const resolved = resolveDrop(active, over, groupTabs(active.groupKey, ctx))
   if (resolved.kind === 'ignore') return
   if (resolved.kind === 'reorder') {

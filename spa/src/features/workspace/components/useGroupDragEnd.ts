@@ -7,7 +7,7 @@ import { groupDragEnd, isGroupDropData, isGroupTabDrag } from '../lib/group-drag
 
 export function useGroupDragEnd(deps: DropDeps) {
   useEffect(() => {
-    groupDragEnd.current = (e: DragEndEvent) => {
+    const handler = (e: DragEndEvent) => {
       const active = e.active.data.current
       if (!e.over || !isGroupTabDrag(active)) return
       const o = e.over.data.current
@@ -17,6 +17,7 @@ export function useGroupDragEnd(deps: DropDeps) {
       else return
       applyGroupDrop({ tabId: active.tabId, groupKey: active.groupKey, kind: active.kind }, over, deps)
     }
-    return () => { groupDragEnd.current = null }
+    groupDragEnd.current = handler
+    return () => { if (groupDragEnd.current === handler) groupDragEnd.current = null }
   })
 }

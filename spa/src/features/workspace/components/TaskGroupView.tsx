@@ -168,7 +168,8 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     const seat = row.seat
     const openSeat = seat && teamKey ? () => { openTeamSeat(teamKey, seat.session.session_id) } : undefined
     if (tab) {
-      const kind: DragRowKind = seat ? 'seat' : sessionOfTab.has(tab.id) && !inTeam ? 'session' : 'plain'
+      // any tab of a team seat is a seat row for a drag (an extra tab of the seat's session moves with the seat, and a `group` written on it would be shadowed by the team anyway)
+      const kind: DragRowKind = index.seatByTabId.has(tab.id) ? 'seat' : sessionOfTab.has(tab.id) && !inTeam ? 'session' : 'plain'
       const dragData: GroupTabDragData = { type: 'group-tab', tabId: tab.id, groupKey, kind }
       const inner = (
         <InlineTab
