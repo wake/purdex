@@ -89,7 +89,12 @@ type ProcRec struct {
 }
 
 // ProcSnapshot is the whole process table at one moment.
-type ProcSnapshot struct{ Procs []ProcRec }
+type ProcSnapshot struct {
+	Procs []ProcRec
+	// Total is how many processes the reader counted in the one pass that made Procs, including the ones it then could not read or that
+	// changed hands, which are not in Procs (procs_total).
+	Total int
+}
 
 // ProcContext are the lookups attribution needs. JobOf reads a process's
 // environment, ArgsOf its argv; both are called only for the processes that

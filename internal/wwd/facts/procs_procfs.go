@@ -194,6 +194,7 @@ func (r *ProcfsReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error
 		if err != nil || pid <= 0 || !e.IsDir() {
 			continue
 		}
+		snap.Total++ // counted in this pass, before any read that can fail
 		a, ok := r.stat(pid)
 		if !ok {
 			continue // exited between the listing and the read
@@ -221,6 +222,19 @@ func (r *ProcfsReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error
 	r.prev = cur
 	r.dropStale()
 	return snap, ProcContext{JobOf: r.jobOf, OriginOf: r.originOf, SessionOf: r.sessionOf, EnvSessionOf: r.envSessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf, Fresh: r.fresh}, nil
+}
+
+// BootTime is when the host booted, from the btime line of /proc/stat (read once, then kept).
+func (r *ProcfsReader) BootTime() (time.Time, bool) {
+	if r.btime == 0 {
+		if b, err := os.ReadFile(filepath.Join(r.root, "stat")); err == nil {
+			r.btime, _ = ParseBtime(string(b))
+		}
+	}
+	if r.btime == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(r.btime, 0), true
 }
 
 // startTime is the wall-clock time of a start in clock ticks since boot; zero while the boot time is not known.

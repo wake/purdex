@@ -36,6 +36,16 @@ type SeriesPoint struct {
 	WorkerRunning  *Slots       `json:"worker_running"`
 	QueueQueued    *int         `json:"queue_queued"`
 	Disks          []SeriesDisk `json:"disks"`
+
+	// The small host figures (spec §2.3): the process count, wwd's own use, the swap total and the memory breakdown. Null when absent.
+	ProcsTotal     *int     `json:"procs_total"`
+	SelfCPUPct     *float64 `json:"self_cpu_pct"`
+	SelfRSSMB      *int     `json:"self_rss_mb"`
+	SwapTotalMB    *int     `json:"swap_total_mb"`
+	MemWiredMB     *int     `json:"mem_wired_mb"`
+	MemActiveMB    *int     `json:"mem_active_mb"`
+	MemInactiveMB  *int     `json:"mem_inactive_mb"`
+	MemFileCacheMB *int     `json:"mem_file_cache_mb"`
 }
 
 // SeriesDisk is one volume of a point: used_pct for the line, free_gb for the disk_min_gb threshold line.
@@ -131,6 +141,12 @@ func SeriesOf(h FactsHistoryResponse, limit int) FactsSeriesResponse {
 		p.SwapOutRate, p.DecompressRate = copyPtr(f.Mem.SwapOutRate), copyPtr(f.Mem.DecompressRate)
 		if f.Queue != nil {
 			p.QueueQueued = copyPtr(&f.Queue.Queued)
+		}
+		p.ProcsTotal, p.SwapTotalMB = copyPtr(f.ProcsTotal), copyPtr(f.Mem.SwapTotalMB)
+		p.MemWiredMB, p.MemActiveMB = copyPtr(f.Mem.WiredMB), copyPtr(f.Mem.ActiveMB)
+		p.MemInactiveMB, p.MemFileCacheMB = copyPtr(f.Mem.InactiveMB), copyPtr(f.Mem.FileCacheMB)
+		if f.Self != nil {
+			p.SelfCPUPct, p.SelfRSSMB = copyPtr(f.Self.CPUPct), copyPtr(f.Self.RSSMB)
 		}
 		for _, d := range f.Disk {
 			p.Disks = append(p.Disks, SeriesDisk{Mount: d.Mount, UsedPct: d.UsedPct, FreeGB: d.FreeGB})

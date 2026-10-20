@@ -38,6 +38,9 @@ type RawMem struct {
 	HaveDecompressions bool
 	SwapUsedBytes      *uint64
 	CompressorBytes    *uint64
+	// SwapTotalBytes and the breakdown are nil where the platform has no such figure or the read failed (Linux has no wired).
+	SwapTotalBytes                                         *uint64
+	ActiveBytes, InactiveBytes, WiredBytes, FileCacheBytes *uint64
 
 	// Linux reads. AvailableBytes (MemAvailable) replaces Free + Inactive, and
 	// PSI is the production slices' pressure (nil: unreadable). Linux marks the
@@ -104,6 +107,8 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 		v := int(*raw.CompressorBytes / mib)
 		m.CompressorMB = &v
 	}
+	m.SwapTotalMB, m.ActiveMB, m.InactiveMB = mbPtr(raw.SwapTotalBytes), mbPtr(raw.ActiveBytes), mbPtr(raw.InactiveBytes)
+	m.WiredMB, m.FileCacheMB = mbPtr(raw.WiredBytes), mbPtr(raw.FileCacheBytes)
 	if !raw.NoPageouts {
 		po := b.rate(&b.pageouts, now, raw.Pageouts)
 		m.PageOutRate = &po
@@ -117,6 +122,14 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 		m.DecompressRate = &dr
 	}
 	return m
+}
+
+func mbPtr(b *uint64) *int {
+	if b == nil {
+		return nil
+	}
+	v := int(*b / mib)
+	return &v
 }
 
 func (b *MemBuilder) rate(ring *[]hostmem.PageSample, now time.Time, total uint64) float64 {
@@ -165,6 +178,10 @@ type Sources struct {
 	// Observe gets the whole process table of every sample whose process read worked (nil: nobody watches the trees). It runs on
 	// the sampling goroutine, after the other builders, with the context's table already built; it must not keep the snapshot.
 	Observe func(now time.Time, snap ProcSnapshot, c ProcContext)
+	// Boot is when the host booted (nil, or ok false: unknown, boot_at stays null). It is cheap: the platform caches what it reads once.
+	Boot func() (time.Time, bool)
+	// Self is wwd's own CPU time and memory (nil, or an error: self stays null and the sample does not fail).
+	Self func() (RawSelf, error)
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -184,12 +201,17 @@ type Reading struct {
 	Residents []wire.Resident
 	Tools     wire.Tools
 	Owner     *wire.OwnerState
+	// ProcsTotal, BootAt and Self are nil where the source is absent or failed.
+	ProcsTotal *int
+	BootAt     *time.Time
+	Self       *wire.Self
 }
 
 // Apply writes the reading into a facts record.
 func (r Reading) Apply(f *wire.Facts) {
 	f.At, f.CPU, f.Mem, f.Disk = r.At, r.CPU, r.Mem, r.Disk
 	f.Procs, f.Residents, f.Tools, f.Owner = r.Procs, r.Residents, r.Tools, r.Owner
+	f.ProcsTotal, f.BootAt, f.Self = r.ProcsTotal, r.BootAt, r.Self
 }
 
 // Collector takes Readings; one value belongs to one goroutine.
@@ -197,10 +219,11 @@ type Collector struct {
 	src     Sources
 	prevCPU *RawCPU
 	mem     *MemBuilder
+	self    *SelfBuilder
 }
 
 func NewCollector(src Sources) *Collector {
-	return &Collector{src: src, mem: NewMemBuilder()}
+	return &Collector{src: src, mem: NewMemBuilder(), self: NewSelfBuilder()}
 }
 
 // Sample takes one reading. A failing source leaves its fields at zero values
@@ -238,6 +261,8 @@ func (c *Collector) Sample() (Reading, error) {
 			errs = append(errs, err)
 		} else {
 			ctx.ensureTable(snap) // once, shared by the three builders below
+			total := snap.Total
+			r.ProcsTotal = &total
 			r.Procs = BuildProcs(snap, ctx, procsTopMem, procsTopCPU)
 			r.Residents = BuildResidents(snap, ctx)
 			if c.src.Owner != nil {
@@ -246,6 +271,21 @@ func (c *Collector) Sample() (Reading, error) {
 			if c.src.Observe != nil {
 				c.src.Observe(now, snap, ctx)
 			}
+		}
+	}
+	if c.src.Boot != nil {
+		if at, ok := c.src.Boot(); ok {
+			r.BootAt = &at
+		}
+	}
+	if c.src.Self != nil {
+		// a failed read is not a failed sample: self is one figure among many, and the next sample reads again
+		// timed at its own read: the sources above can be slow, and the CPU time this reads covers the time since the last read, not since
+		// this sample started
+		readAt := c.src.Now()
+		if raw, err := c.src.Self(); err == nil {
+			self := c.self.Build(readAt, raw)
+			r.Self = &self
 		}
 	}
 	return r, errors.Join(errs...)

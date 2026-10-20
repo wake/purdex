@@ -27,14 +27,34 @@ func SystemSources() Sources { return SystemSourcesWith(SourceOptions{}) }
 // SystemSourcesWith is SystemSources; the owner rule is macOS only, so the
 // options change nothing here but the tool directories, and owner stays null.
 func SystemSourcesWith(opt SourceOptions) Sources {
+	procs := NewProcfsReader("/proc", DefaultSessionsDir())
 	return Sources{
 		Now:   time.Now,
 		Tools: systemTools(opt.ToolDirs),
-		Procs: NewProcfsReader("/proc", DefaultSessionsDir()).Snapshot,
+		Procs: procs.Snapshot,
+		Boot:  procs.BootTime,
+		Self:  linuxSelf,
 		CPU:   linuxCPU,
 		Mem:   linuxMem,
 		Disks: linuxDisks,
 	}
+}
+
+// linuxSelf is wwd's own use: the CPU time from getrusage and the resident set from /proc/self/statm.
+func linuxSelf() (RawSelf, error) {
+	cpu, err := selfCPUTime()
+	if err != nil {
+		return RawSelf{}, err
+	}
+	text, err := readFile("/proc/self/statm")
+	if err != nil {
+		return RawSelf{}, err
+	}
+	rss, err := ParseStatmRSS(text, uint64(os.Getpagesize()))
+	if err != nil {
+		return RawSelf{}, err
+	}
+	return RawSelf{CPUTime: cpu, RSSBytes: rss}, nil
 }
 
 func readFile(path string) (string, error) {
@@ -75,12 +95,8 @@ func linuxMem() (RawMem, error) {
 		return RawMem{}, errors.New("meminfo: no MemAvailable (kernel older than 3.14)")
 	}
 	ps := uint64(os.Getpagesize())
-	m := RawMem{
-		TotalBytes: mi.Total, PageSize: ps, Linux: true, AvailableBytes: mi.Available,
-		PSI: productionPSI(),
-	}
-	swap := mi.SwapTotal - min(mi.SwapFree, mi.SwapTotal)
-	m.SwapUsedBytes = &swap
+	m := rawMemFromMeminfo(mi, ps)
+	m.PSI = productionPSI()
 	if vm, err := readFile("/proc/vmstat"); err == nil {
 		if kib, swpout, perr := ParseVmstat(vm); perr == nil {
 			m.Pageouts, m.Swapouts = kib*1024/ps, swpout

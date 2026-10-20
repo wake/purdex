@@ -30,6 +30,20 @@ type Facts struct {
 	Stats *MinuteStats `json:"stats,omitempty"`
 	// Queue is this host's queued jobs (spec §13.2); absent before proto 2 writers fill it.
 	Queue *Queue `json:"queue,omitempty"`
+	// ProcsTotal is how many processes the host has at the sample (the raw count of the process table, including those too short-lived
+	// to be read). BootAt is when the host booted. Self is wwd's own use. Each is null where it was not read: an older wwd, an older
+	// minute record, a platform without the source (host-metrics spec §2.1); omitted rather than written as null, so a record from before
+	// them reads and writes back byte for byte, and an absent key means the same as null. They are not gated on FactsProto.
+	ProcsTotal *int       `json:"procs_total,omitempty"`
+	BootAt     *time.Time `json:"boot_at,omitempty"`
+	Self       *Self      `json:"self,omitempty"`
+}
+
+// Self is wwd's own use of the host. CPUPct is one core = 100 over the interval since the previous sample (null for the first sample);
+// RSSMB is its memory in MB (macOS: the physical footprint, as for any process in the list; Linux: the resident set).
+type Self struct {
+	CPUPct *float64 `json:"cpu_pct"`
+	RSSMB  *int     `json:"rss_mb"`
 }
 
 // SampleIntervalS is the seconds one facts sample stands for (spec §3.1: one record every 5 s).
@@ -104,6 +118,14 @@ type Mem struct {
 	// in every record until the writers are gated on proto 2 (§13.1); omitted rather than null so a proto 1 reader is
 	// never shown it.
 	DecompressRate *float64 `json:"decompress_rate,omitempty"`
+	// SwapTotalMB is the swap the host can hold (vm.swapusage total; Linux SwapTotal). The breakdown below is of the same read as
+	// AvailableMB: macOS host_statistics64 / Linux /proc/meminfo. All are null where the platform has no such figure (Linux has no
+	// wired), in an older record, or when the read failed (host-metrics spec §2.1); omitted rather than written as null (see Facts.ProcsTotal).
+	SwapTotalMB *int `json:"swap_total_mb,omitempty"`
+	WiredMB     *int `json:"wired_mb,omitempty"`
+	ActiveMB    *int `json:"active_mb,omitempty"`
+	InactiveMB  *int `json:"inactive_mb,omitempty"`
+	FileCacheMB *int `json:"file_cache_mb,omitempty"`
 }
 
 // Queue is this host's queue as facts show it (spec §13.2). Absent until the writers are gated on proto 2.
