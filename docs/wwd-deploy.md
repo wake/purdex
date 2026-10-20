@@ -519,6 +519,12 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
 * `[entry].mode` of the repo's manifest (purdex: `rewrite`) only decides what a session **with the entry on** gets for a command no task declares: an
   ad-hoc job (`pdx test --adhoc`, a heavy slot, this host, never queued) for a single plain command, advice (it runs as typed) for anything else.
   The manifest alone switches nothing on.
-* Commands that are declared tasks (a single package `go test`, `vitest run <files>`) become `pdx test <task>` and take the local fast lane: no queue,
-  no background move. The fast lane still takes its slot from the gate (spec §8.3; moving it to wwd's own slots is part of retiring the gate).
+* A command that is a declared task becomes `pdx test <task>`. A task marked `local = true` (the development tasks: a single package `go test`,
+  `vitest run <files>`) takes the local fast lane: no queue, no background move. A task that is not local (the merge and release tasks, `e2e`
+  among them) goes through the queue, may wait for a host, and the hook then runs the call in the background. The fast lane still takes its slot
+  from the gate (spec §8.3; moving it to wwd's own slots is part of retiring the gate).
+* A command is a task only when it says what the task says about **which tests run**: `-run`, `-skip`, `-tags`, `-short`, `-bench` and `-fuzz` of the
+  task must be in the command with the same value. `go test -tags e2e ./cmd/wwd/` is not the `e2e` task (it would run less), and runs as typed or
+  as an ad-hoc job. Flags that only say how (`-p`, `-timeout`, `-count`) may be left out. A flag written as `-flag=value` is compared as
+  one word, so `-tags=e2e` does not match a task that has `-tags e2e`: it falls to the ad-hoc path.
 * Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.
