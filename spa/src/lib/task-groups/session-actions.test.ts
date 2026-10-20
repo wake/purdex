@@ -139,3 +139,24 @@ describe('the tab changes while the root is being got (commit-time check)', () =
     if (change === rebind) expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
   })
 })
+
+describe('the host is re-pointed while the root is being got (cache hit or read)', () => {
+  const host = (ip: string) => ({ id: 'h1', name: 'h1', ip, port: 7860, token: 't' })
+  beforeEach(() => { useHostStore.setState({ hosts: { h1: host('10.0.0.1') } as never, runtime: {} }) })
+  const repoint = () => useHostStore.setState({ hosts: { h1: host('10.0.0.9') } as never })
+
+  it.each([
+    ['fileSession', (s: SessionRef) => fileSession(s, 'g1')],
+    ['startGroupWithSession', (s: SessionRef) => startGroupWithSession(s, 'New')],
+    ['takeSessionOut', (s: SessionRef) => takeSessionOut(s)],
+  ])('%s: a cached root of the old daemon is not written once the host moved', async (_n, action) => {
+    useManualGroupsStore.setState({ groups: { g1: { ...GROUP, members: [{ host: 'h1', root: 'OLD' }] }, g2: { ...GROUP } } })
+    useRootCacheStore.getState().ingest('h1', [q('AG1', 'OLD')])
+    const pending = action(ref()) // the cache answers, but only after a turn
+    repoint()
+    expect(await pending).toEqual({ ok: false, reason: 'tab-changed' })
+    expect(useManualGroupsStore.getState().order).toEqual(['g1', 'g2'])
+    expect(useManualGroupsStore.getState().groups.g1.members).toEqual([{ host: 'h1', root: 'OLD' }])
+    expect(useTabStore.getState().tabs.t1.group).toBe('group\u0000g1')
+  })
+})

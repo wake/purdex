@@ -2,8 +2,10 @@
 // group edits themselves are `manual-actions.ts`, which is given a root; this is the caller that gets it: `resolveRoot` answers from the root cache, and when the cache lacks it asks that session's host. `no-root`
 // is what comes back only when the host cannot answer either (or the pane recorded no agent session id) — never a session's own id in its place: it would file the wrong thing the moment the session is relayed.
 // Getting the root can take a daemon read, and the tab may be closed or its pane rebound meanwhile: before anything is written the tab is read again, and if it no longer stands for the session the root was got for,
-// the action is refused (`tab-changed`) and neither the group store nor the tab is touched.
+// the action is refused (`tab-changed`) and neither the group store nor the tab is touched. The same goes for the host: a root got (from the cache or the daemon) for a host that was re-pointed meanwhile is the old
+// daemon's, and is never written.
 import { collectLeaves } from '../pane-tree'
+import { hostIdentityNow } from '../team/quota-host'
 import { useTabStore } from '../../stores/useTabStore'
 import { resolveRoot } from './root-cache'
 import {
@@ -35,26 +37,31 @@ const stillThere = (s: SessionRef): boolean => {
   return now !== null && now.hostId === s.hostId && now.agentSessionId === s.agentSessionId
 }
 
-const rootOf = (s: SessionRef): Promise<string | null> => (s.agentSessionId === null ? Promise.resolve(null) : resolveRoot(s.hostId, s.agentSessionId))
+/** The root of the session, and whether it can still be written: the tab still stands for the session and the host was not re-pointed while it was got. */
+async function rootFor(s: SessionRef): Promise<{ root: string | null; current: boolean }> {
+  const identity = hostIdentityNow(s.hostId)
+  const root = s.agentSessionId === null ? null : await resolveRoot(s.hostId, s.agentSessionId)
+  return { root, current: identity === hostIdentityNow(s.hostId) && stillThere(s) }
+}
 
 /** Puts the session in the group (out of whichever held it). */
 export async function fileSession(s: SessionRef, groupId: string): Promise<SessionActionResult> {
-  const root = await rootOf(s)
-  if (!stillThere(s)) return { ok: false, reason: 'tab-changed' }
+  const { root, current } = await rootFor(s)
+  if (!current) return { ok: false, reason: 'tab-changed' }
   return putMemberInGroup({ host: s.hostId, root }, groupId, s.tabId)
 }
 
 /** Starts a group named `name` with the session in it. */
 export async function startGroupWithSession(s: SessionRef, name: string): Promise<SessionCreateResult> {
-  const root = await rootOf(s)
-  if (!stillThere(s)) return { ok: false, reason: 'tab-changed' }
+  const { root, current } = await rootFor(s)
+  if (!current) return { ok: false, reason: 'tab-changed' }
   return createManualGroup({ name, member: { host: s.hostId, root }, tabId: s.tabId })
 }
 
 /** 「移出」: the session goes out of its group. Without its root the member cannot be named, so nothing is touched. */
 export async function takeSessionOut(s: SessionRef): Promise<SessionActionResult> {
-  const root = await rootOf(s)
-  if (!stillThere(s)) return { ok: false, reason: 'tab-changed' }
+  const { root, current } = await rootFor(s)
+  if (!current) return { ok: false, reason: 'tab-changed' }
   if (root === null) return { ok: false, reason: 'no-root' }
   return takeOutOfGroups({ host: s.hostId, root, tabId: s.tabId })
 }

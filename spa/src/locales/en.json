@@ -2212,7 +2212,7 @@
   "taskgroups.err.too-many-groups": "The task groups are at their limit (32 at most)",
   "taskgroups.err.bad-name": "A name takes 1 to 64 bytes and no control characters",
   "taskgroups.err.id-taken": "The group id was already used, please try again",
-  "taskgroups.err.tab-changed": "The tab changed while this was being worked out, so no group was touched; please try again",
+  "taskgroups.err.tab-changed": "The tab or its host changed while this was being worked out, so no group was touched; please try again",
   "taskgroups.err.bad-color": "That colour cannot be used",
   "taskgroups.err.bad-id": "The group id is not valid, please try again",
   "taskgroups.err.group-changed": "That group was just changed (maybe by another device), so it was not cleared; please look again",
