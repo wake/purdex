@@ -3,6 +3,7 @@
 // Leaving calls off what is still out. The fleet is not read.
 import { useEffect, useRef, useState } from 'react'
 import { usePoolStore } from './store'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { appendLive, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, type HostLoad, type HostRange, type HostSample } from './host-history'
 import type { PoolFacts } from './types'
 
@@ -34,12 +35,18 @@ export function useHostSeries(hostId: string, alias: string | null, range: HostR
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostId, at])
 
-  const longOn = !five && !!source && !!alias && seriesAnnounced(source)
+  // Subscribed: the daemon's capabilities may arrive after the page opened, and that must start the read.
+  const announced = useNexHostStore((s) => seriesAnnounced(source, s.byHost))
+  const longOn = !five && !!source && !!alias && announced
   useEffect(() => {
     if (!longOn || !source || !alias) return
     let cancelled = false
+    // One read at a time: a new one would call the one still out off (it shares the track's generation), so a slow daemon would never land an answer.
+    let busy = false
     const run = (refresh: boolean) => {
-      void loadLong({ source, alias, hostId, range, ...constants.current, now: Date.now(), refresh }).then(() => { if (!cancelled) bump() })
+      if (busy) return
+      busy = true
+      void loadLong({ source, alias, hostId, range, ...constants.current, now: Date.now(), refresh }).then(() => { busy = false; if (!cancelled) bump() })
     }
     run(false)
     const timer = setInterval(() => run(true), TOP_UP_MS)

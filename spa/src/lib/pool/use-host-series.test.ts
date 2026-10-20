@@ -94,6 +94,27 @@ describe('useHostSeries on a long range', () => {
     expect(fetchPoolSeries).not.toHaveBeenCalled()
     expect(result.current.samples).toEqual([])
   })
+  it('a read that takes longer than a minute is not overtaken by the next top-up (the answer still lands)', async () => {
+    let resolve!: (v: unknown) => void
+    fetchPoolSeries.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    const { result } = renderHook(() => useHostSeries('h1', 'air26', '1h', null))
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(130_000) })
+    expect(fetchPoolSeries).toHaveBeenCalledTimes(1)
+    resolve({ step: '1m', truncated: false, points: [pt(10, 40)] })
+    await flush()
+    expect(result.current.samples.length).toBeGreaterThan(0)
+  })
+  it('capabilities that arrive after the page opened start the long read', async () => {
+    useNexHostStore.setState({ byHost: { d1: { phase: 'ready', daemonCapabilities: undefined } } } as never)
+    const { result } = renderHook(() => useHostSeries('h1', 'air26', '1h', null))
+    await flush()
+    expect(fetchPoolSeries).not.toHaveBeenCalled()
+    act(() => useNexHostStore.setState({ byHost: { d1: { phase: 'ready', daemonCapabilities: ['pool.series.v1'] } } } as never))
+    await flush()
+    expect(fetchPoolSeries).toHaveBeenCalledTimes(1)
+    expect(result.current.samples.length).toBeGreaterThan(0)
+  })
   it('leaving stops the top-ups', async () => {
     const { unmount } = renderHook(() => useHostSeries('h1', 'air26', '1h', null))
     await flush()

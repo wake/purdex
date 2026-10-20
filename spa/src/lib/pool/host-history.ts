@@ -132,9 +132,9 @@ export function appendLive(hostId: string, facts: PoolFacts, now: number = Date.
 }
 
 /** Is the daemon the pool is read through able to answer `/api/pool/facts/series`? An older one is simply not asked: the long ranges stay empty. */
-export function seriesAnnounced(source: string | null): boolean {
+export function seriesAnnounced(source: string | null, byHost: ReturnType<typeof useNexHostStore.getState>['byHost'] = useNexHostStore.getState().byHost): boolean {
   if (source === null) return false
-  return useNexHostStore.getState().byHost[source]?.daemonCapabilities?.includes('pool.series.v1') === true
+  return byHost[source]?.daemonCapabilities?.includes('pool.series.v1') === true
 }
 
 /**
