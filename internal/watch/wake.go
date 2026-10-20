@@ -45,6 +45,8 @@ func reasonLabel(reason string) string {
 		return "例行巡檢"
 	case "disk_low":
 		return "磁碟空間不足"
+	case "wwd_alert":
+		return "wwd 警報"
 	}
 	return reason
 }

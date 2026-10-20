@@ -30,6 +30,7 @@ import (
 	"github.com/wake/purdex/internal/fleet"
 	fleetmod "github.com/wake/purdex/internal/module/fleet"
 	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -63,6 +64,11 @@ type Module struct {
 	deliver func() bool                       // whether this daemon is the deliverer now
 	peer    func() fleet.PeerPush             // what the other fleet daemon last said about its push; nil: nothing known
 	pushOn  func() (bool, error)              // the host setting wwd_alerts.push; an error is read as off
+
+	wakeRule func() bool                // whether this daemon wakes the load watcher now (wakeRule); nil: never
+	waker    func() (watch.Waker, bool) // the watch module's service, asked when a wake is made; false: not there
+	wakeQ    wakeQueue                  // what waits for the one wake worker
+	wakeSeen map[string]bool            // shared silence keys looked at since the daemon started (pass goroutine only)
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -132,10 +138,23 @@ func (m *Module) Init(c *core.Core) error {
 			return s.Push, err
 		}
 	}
-	if m.deliver == nil || m.peer == nil {
+	if m.waker == nil {
+		m.waker = func() (watch.Waker, bool) {
+			svc, ok := c.Registry.Get(watch.WakerKey)
+			if !ok {
+				return nil, false
+			}
+			w, ok := svc.(watch.Waker)
+			return w, ok
+		}
+	}
+	if m.deliver == nil || m.peer == nil || m.wakeRule == nil {
 		var rv fleet.RoleView
 		if svc, ok := c.Registry.Get(fleetmod.RoleViewKey); ok {
 			rv, _ = svc.(fleet.RoleView)
+		}
+		if m.wakeRule == nil {
+			m.wakeRule = wakeRule(rv)
 		}
 		if m.deliver == nil {
 			m.deliver = deliverRule(rv)
@@ -161,6 +180,7 @@ func (m *Module) RegisterRoutes(*http.ServeMux) {}
 func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+	m.startWake(ctx)
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -365,6 +385,9 @@ func (m *Module) pass(ctx context.Context) {
 	if err := m.store.prune(m.now()); err != nil {
 		m.logf("wwdalerts: prune: %v", err)
 	}
+	if err := m.store.pruneWake(m.now()); err != nil {
+		m.logf("wwdalerts: prune wake ledger: %v", err)
+	}
 }
 
 // markEpisodes decides, from the lists read this pass, which failure each silence:<host> key is about. Every wwd that loses a peer raises
@@ -532,6 +555,7 @@ func (m *Module) hosts(ctx context.Context) (out []hostRef, whole bool, err erro
 // alerts that are gone.
 func (m *Module) handle(host string, alerts []wire.Alert) {
 	now := m.now()
+	m.wakeAlerts(host, alerts, now) // every level wakes the watcher, whether or not it is pushed
 	keys := make([]string, 0, len(alerts))
 	for _, a := range alerts {
 		if a.ClearedAt != nil {

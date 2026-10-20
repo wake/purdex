@@ -64,6 +64,10 @@ func openStore(path string) (*store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate alert ledger: %w", err)
 	}
+	if err := migrateWake(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate wake ledger: %w", err)
+	}
 	return &store{db: db}, nil
 }
 
