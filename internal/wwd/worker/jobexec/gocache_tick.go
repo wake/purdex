@@ -105,7 +105,7 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) {
 	files, total, err := scanGoCache(ctx, dir)
 	if err != nil {
 		if errors.Is(err, errOverBound) {
-			log.Printf("jobexec: the build cache %s has too many entries to list: left to the next job that starts", dir)
+			e.pruneAgedWithoutList(ctx, dir, now)
 		}
 		return
 	}
@@ -210,4 +210,40 @@ func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile
 		}
 	}
 	return removed, exclusiveAny
+}
+
+// pruneAgedWithoutList is the timer's way with a cache of more entries than scanGoCache will list (storeScanLimit): the oldest-first trim needs
+// the list, but the age rule does not, so the walk removes the entries unused for longer than the limit as it goes. A host that takes few jobs
+// writes nothing while it is idle, so what is left ages out and the cache comes back under the limit of the listing; a job that starts finds a
+// cache that is over the bound and empties it when it is free (boundGoCache), which the timer never does.
+func (e *Exec) pruneAgedWithoutList(ctx context.Context, dir string, now time.Time) {
+	cutoff := now.Add(-e.goCachePrune() - goCacheMtimeStep)
+	removed, freed := 0, int64(0)
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if werr != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == "fuzz" && p == filepath.Join(dir, "fuzz") {
+			return filepath.SkipDir
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if rel, rerr := filepath.Rel(dir, p); rerr == nil && (rel == "trim.txt" || rel == "README") {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil || !info.ModTime().Before(cutoff) {
+			return nil
+		}
+		if err := goCacheRemoveFile(p); err == nil || errors.Is(err, fs.ErrNotExist) {
+			removed++
+			freed += info.Size()
+		}
+		return nil
+	})
+	log.Printf("jobexec: the build cache %s has more entries than can be listed: the timer removed %d entries unused for longer than the limit (%d MB freed), the rest is for the next job that starts", dir, removed, freed>>20)
 }

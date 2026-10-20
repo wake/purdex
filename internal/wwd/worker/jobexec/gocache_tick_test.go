@@ -193,3 +193,26 @@ func TestTheSweeperTrimsInTheBackground(t *testing.T) {
 	require.NoError(t, r.e.GoCacheTrimmer().Sweep(context.Background(), nil))
 	assert.Eventually(t, func() bool { return r.size(t) <= int64(1<<20)/100*80 }, 5*time.Second, 10*time.Millisecond)
 }
+
+// A cache of more entries than can be listed is not left alone (codex R1): the timer removes the entries unused for longer than the age limit as
+// it walks, so an idle host's cache comes back under the limit of the listing. It does not empty it, and it keeps the entries used lately.
+func TestTheTickOfACacheTooBigToListRemovesTheAgedWithoutAList(t *testing.T) {
+	r := newTickRig(t, 1)
+	old := storeScanLimit
+	storeScanLimit = 100
+	t.Cleanup(func() { storeScanLimit = old })
+	aged := r.fill(t, "aged", 300, 100, 48*time.Hour)
+	fresh := r.fill(t, "fresh", 300, 100, time.Hour)
+	_, _, err := scanGoCache(context.Background(), r.cache)
+	require.ErrorIs(t, err, errOverBound, "the cache is past what can be listed")
+
+	r.e.tickGoCaches(context.Background())
+
+	for _, p := range aged {
+		assert.NoFileExists(t, p)
+	}
+	for _, p := range fresh {
+		assert.FileExists(t, p)
+	}
+	assert.DirExists(t, r.cache)
+}
