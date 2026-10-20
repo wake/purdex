@@ -145,6 +145,9 @@ export function flowSummaryOf(entries: readonly QueueEntry[], jobs: readonly Poo
   }
 }
 
+/** The workers a waiting job could go to: the `host_id` of every host whose worker is on and that holds all its labels (`hostCanTake`; load is not judged). */
+export const candidateWorkersOf = (job: PoolJob, hosts: readonly FlowHost[]): string[] => hosts.filter((h) => hostCanTake(job, labelsOf(h))).map((h) => h.hostId)
+
 /** Since when a job has been running (ms): when its worker said it began, else when it was claimed. A job still being prepared has none. */
 export function elapsedSince(job: PoolJob): number | null {
   if (job.state !== 'running') return null
