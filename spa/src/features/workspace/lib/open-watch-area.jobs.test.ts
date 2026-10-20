@@ -4,7 +4,8 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest } 
 import { useTabStore } from '../../../stores/useTabStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
-import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
+import { usePoolStore } from '../../../lib/pool/store'
+import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
 import { createTab } from '../../../types/tab'
 import { WATCH_GUARDIAN_TAB_ID as G, WATCH_JOBS_TAB_ID as J, watchHostTabId } from '../../../lib/watch/ids'
@@ -13,10 +14,15 @@ import { openWatchArea } from './open-watch-area'
 const ws = () => useWorkspaceStore.getState()
 const area = () => ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
 
+function setPool(ids: string[]): void {
+  usePoolStore.setState({ hosts: ids.map((id) => ({ host_id: id, alias: id })) as never, sourceHostId: 'cfg-a' } as never)
+}
+
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
+  usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
+  usePoolHostsStore.setState({ order: [], looks: {} } as never)
   useWatchStatusStore.getState().reset()
   useNexHostStore.setState({ byHost: {} } as never)
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['h1'], activeHostId: 'h1', runtime: { h1: { status: 'connected' } } } as never)
@@ -26,8 +32,7 @@ beforeEach(() => {
   useTabStore.getState().addTab(session)
   ws().insertTab(session.id, a)
   useTabStore.getState().setActiveTab(session.id)
-  const snapshot: FleetSnapshot = { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'h1' } as never } }
-  useFleetStore.setState({ snapshot, primaryHostId: 'p', stale: false })
+  setPool(['h1'])
 })
 
 describe('openWatchArea on the jobs tab', () => {
