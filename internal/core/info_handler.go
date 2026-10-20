@@ -181,8 +181,7 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
 	}
 	if c.moduleReady("hostconfig") {
-		out = append(out, "personas.v1")    // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
-		out = append(out, "task_groups.v1") // PUT /api/hostconfig/task-groups and taskGroups in GET /api/hostconfig: the sidebar's manual task groups, per host (name pool v2, NP-5); same condition as personas.v1
+		out = append(out, "personas.v1") // GET/PUT /api/hostconfig/personas (not in GET /api/hostconfig), the hostconfig.personas event; the name pool and the journal follow the personas (name pool v2, NP-1)
 	}
 	return out
 }

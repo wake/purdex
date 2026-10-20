@@ -100,7 +100,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/probe-hosts", m.putHandler(KeyProbeHosts, func(raw []byte, cur Entry) (any, error) { return normalizeProbeHosts(raw, cur) }))
 	mux.HandleFunc("PUT /api/hostconfig/fleet", m.putHandler(KeyFleet, func(raw []byte, _ Entry) (any, error) { return normalizeFleet(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte, _ Entry) (any, error) { return normalizeResources(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/task-groups", m.putHandler(KeyTaskGroups, func(raw []byte, cur Entry) (any, error) { return normalizeTaskGroups(raw, cur) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 	// the personas have a route of their own (4 MiB body, a stamp, an event) and are not in GET /api/hostconfig
 	mux.HandleFunc("GET /api/hostconfig/personas", m.handleGetPersonas)

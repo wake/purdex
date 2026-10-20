@@ -25,7 +25,7 @@
 | `GET /api/hostconfig` | no longer has `personas` |
 | host event `hostconfig.personas` | `{revision}` (P4) |
 | envelope `names` (`internal/peers/envelope.go`) | `{familiar: [code]}`, optional, added by NP-3. (The `personas` member of rev 2 is dropped with NP-2, 10-19.) |
-| `PUT /api/hostconfig/task-groups` / key `task_groups` | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
+| ~~`PUT /api/hostconfig/task-groups` / key `task_groups`~~ **(retired in TG-6)** | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
 | `LeadPayload.lead_names` | `[{code, name, kind: "keep"|"former"|"lead"|"other", last_at}]`. It is always present from a daemon with `team.lead_name.v1`; `[]` means that no persona exists. |
 | `Grant.lead_name` | an optional code. Absent means keep the current name. |
 | decide error | 409 `{error: "name_taken", lead_names: [...]}` (the refreshed list) |
@@ -269,7 +269,7 @@ sync mechanisms. Nothing of NP-2 merged. The text below is kept only as a record
 - `/team hiro fix the build` → `lead_name` "hiro", note "fix the build".
 - `/team fix the build` → the card kind.
 
-### NP-5 (`internal/module/hostconfig`)
+### NP-5 (`internal/module/hostconfig`) — retired in TG-6 (`taskgroups.go`, the route and the capability are deleted; see the task groups spec §8)
 
 - `taskgroups.go`: the key, the normaliser (spec §7 limits, one group per root, the name rule `peers.ValidateTitle`),
   the route `PUT /api/hostconfig/task-groups`, and the capability.

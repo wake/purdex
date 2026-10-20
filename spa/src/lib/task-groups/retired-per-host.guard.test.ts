@@ -30,6 +30,9 @@ const RETIRED_REFERENCES = [
   /\bstartTaskGroupsLifecycle\b/,
   /\btaskGroupsSupported\b/,
   /\bloadTaskGroupsIfSupported\b/,
+  /\bselectTaskGroupsV1\b/,
+  /task_groups\.v1/,
+  /hostconfig\/task-groups/,
 ]
 
 function sources(dir: string, out: string[] = []): string[] {
