@@ -233,4 +233,34 @@ describe('MiniChart — a host that has gone (M22)', () => {
     // fromAt is the 4th point's own time: that reading (value 40) still counts
     expect(within(screen.getByTestId('mini-chart')).getByTestId('mini-big')).toHaveTextContent('40')
   })
+  it('readings after the moment the host went are not drawn (the line stops at the last one)', () => {
+    const s = series(5, 60_000, (i) => ({ cpuPct: 10 * (i + 1) }))
+    show(defOf(s, 'cpu'), s, { dead: { fromAt: NOW - 90_000, tone: 'error' } })
+    // points at -240, -180, -120 s survive: three points, M + two L
+    expect((pathOf('cpu').match(/[ML]/g) ?? []).length).toBe(3)
+  })
+  it('a hover on a reading after the moment the host went shows nothing and the big number stays on the last good one', () => {
+    const s = series(5, 60_000, (i) => ({ cpuPct: 10 * (i + 1) }))
+    show(defOf(s, 'cpu'), s, { dead: { fromAt: NOW - 90_000, tone: 'error' }, hoverIndex: 4 })
+    expect(screen.queryByTestId('mini-hover-line')).toBeNull()
+    expect(screen.getByTestId('mini-big')).toHaveTextContent('30')
+  })
+  it('the pointer is never matched to a reading after the moment the host went', () => {
+    const s = series(5, 60_000, (i) => ({ cpuPct: 10 * (i + 1) }))
+    const { onHover } = show(defOf(s, 'cpu'), s, { dead: { fromAt: NOW - 90_000, tone: 'error' } })
+    const plot = screen.getByTestId('mini-plot')
+    plot.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 90, right: 600, bottom: 90, x: 0, y: 0, toJSON: () => ({}) })
+    fireEvent.mouseMove(plot, { clientX: 599 })
+    expect(onHover).toHaveBeenLastCalledWith(2)
+  })
+  it('when the host went before every reading, the big number is a dash', () => {
+    const s = series(5, 60_000, (i) => ({ cpuPct: 10 * (i + 1) }))
+    show(defOf(s, 'cpu'), s, { dead: { fromAt: NOW - 2 * RANGE_MS['5m'], tone: 'muted' } })
+    expect(screen.getByTestId('mini-big')).toHaveTextContent('—')
+  })
+  it('the slanted lines take the colour of the tone on the pattern itself (a pattern does not inherit from the rect that uses it)', () => {
+    const s = series(5, 60_000)
+    const { container } = show(defOf(s, 'cpu'), s, { dead: { fromAt: NOW - 90_000, tone: 'error' } })
+    expect(container.querySelector('pattern')!.getAttribute('class')).toContain('text-status-error-text')
+  })
 })

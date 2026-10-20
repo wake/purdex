@@ -52,6 +52,8 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
   const X = (at: number): number => ((at - (now - R)) / R) * W
   const Y = (v: number): number => H - ((Math.min(def.yMax, Math.max(def.yMin, v)) - def.yMin) / span) * H
 
+  // A reading taken after the host went (M22) is not drawn, not hovered and not the big number.
+  const live = (s: HostSample): boolean => !dead || s.at <= dead.fromAt
   // Each series as runs of points: broken by a null, and by a hole of more than 3 steps.
   const runsOf = (index: number): Pt[][] => {
     const totals = totalsOf(def.series, index)
@@ -61,6 +63,7 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
     let prevAt = 0
     samples.forEach((smp, i) => {
       const v = totals[i]
+      if (!live(smp)) return
       if (v === null || v === undefined) { if (cur.length) runs.push(cur); cur = []; return }
       if (cur.length && smp.at - prevAt > BREAK_STEPS * stepMs) { runs.push(cur); cur = [] }
       cur.push({ x: X(smp.at), y: Y(v), base: under && under[i] !== null ? Y(under[i] as number) : Y(0) })
@@ -77,14 +80,11 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
   }).join('')
   const areaD = (runs: Pt[][]): string => runs.filter((r) => r.length > 1).map((r) => `${r.map((p, i) => `${i ? 'L' : 'M'}${f(p.x)} ${f(p.y)}`).join('')}${[...r].reverse().map((p) => `L${f(p.x)} ${f(p.base)}`).join('')}Z`).join('')
 
-  const lastIdx = (() => {
-    let last = samples.length - 1
-    if (dead) { last = -1; samples.forEach((s, i) => { if (s.at <= dead.fromAt) last = i }) }
-    return Math.max(0, last)
-  })()
-  const shownIdx = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < samples.length ? hoverIndex : lastIdx
-  const big = bigValue(def, samples, shownIdx, t)
-  const hovered = hoverIndex !== null ? samples[hoverIndex] : undefined
+  let lastIdx = -1
+  samples.forEach((s, i) => { if (live(s)) lastIdx = i })
+  const hoverable = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < samples.length && live(samples[hoverIndex])
+  const hovered = hoverable ? samples[hoverIndex] : undefined
+  const big = bigValue(def, samples, hoverable ? hoverIndex : lastIdx, t)
 
   const move = (clientX: number): void => {
     const el = plotRef.current
@@ -92,9 +92,9 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
     const r = el.getBoundingClientRect()
     if (r.width <= 0) return
     const at = now - R + ((clientX - r.left) / r.width) * R
-    let best = 0
-    samples.forEach((s, i) => { if (Math.abs(s.at - at) < Math.abs(samples[best].at - at)) best = i })
-    onHover(best)
+    let best = -1
+    samples.forEach((s, i) => { if (live(s) && (best < 0 || Math.abs(s.at - at) < Math.abs(samples[best].at - at))) best = i })
+    onHover(best < 0 ? null : best)
   }
 
   const deadFrom = dead ? Math.min(100, Math.max(0, ((dead.fromAt - (now - R)) / R) * 100)) : null
@@ -116,7 +116,7 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
         <div ref={plotRef} data-testid="mini-plot" className="relative min-w-0 flex-1" style={{ height: H }} onMouseMove={(e) => move(e.clientX)} onMouseLeave={() => onHover(null)}>
           <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block" aria-hidden="true">
             <defs>
-              <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="1.5" /></pattern>
+              <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)" className={dead ? DEAD_COLOR[dead.tone] : undefined}><line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="1.5" /></pattern>
             </defs>
             {[0, 0.5, 1].map((p) => <line key={p} x1="0" x2={W} y1={p * H} y2={p * H} stroke="var(--border-default)" strokeWidth="1" vectorEffect="non-scaling-stroke" opacity="0.5" />)}
             {!def.pending && def.lines.map((l, i) => (
