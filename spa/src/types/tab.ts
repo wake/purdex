@@ -8,6 +8,10 @@ export interface Tab {
   locked: boolean
   createdAt: number
   layout: PaneLayout
+  /** The tab's placement: a task-group key (`lib/task-groups/group-key.ts`). Synced; read only when no team seat or agent root places the tab. */
+  group?: string
+  /** Its position in the group's bar: a fractional-index string (`lib/task-groups/rank.ts`). Synced; absent = after the ranked tabs. */
+  groupRank?: string
 }
 
 // === Pane Layout (tab-internal split tree) ===
