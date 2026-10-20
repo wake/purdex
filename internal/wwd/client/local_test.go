@@ -61,6 +61,32 @@ func TestRegisterLocal_AnotherConflictBodyStaysAStatusError(t *testing.T) {
 	}
 }
 
+func TestRegisterLocal_ANoSlotAnswerIsASlotBusyError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/local-runs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, wire.SlotBusy{Reason: wire.SlotBusyReason, Slot: "heavy", Reasons: []string{"slots_full", "gate_full"}})
+	})
+	_, err := New(fakeWWD(t, mux)).RegisterLocal(context.Background(), wire.LocalRunRequest{})
+	var sb *SlotBusyError
+	if !errors.As(err, &sb) || sb.Slot != "heavy" || len(sb.Reasons) != 2 || sb.Error() != "no heavy slot: slots_full, gate_full" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRegisterLocal_AnotherTooManyRequestsBodyStaysAStatusError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/local-runs", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	})
+	_, err := New(fakeWWD(t, mux)).RegisterLocal(context.Background(), wire.LocalRunRequest{})
+	var se *StatusError
+	var sb *SlotBusyError
+	if !errors.As(err, &se) || errors.As(err, &sb) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestHeartbeat_SendsTheClaimAndAConflictIsClaimLost(t *testing.T) {
 	var got wire.HeartbeatRequest
 	conflict := false
