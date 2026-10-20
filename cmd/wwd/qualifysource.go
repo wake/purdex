@@ -10,6 +10,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/manifestref"
 	"github.com/wake/purdex/internal/wwd/qualify"
 	"github.com/wake/purdex/internal/wwd/submit"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -20,6 +21,8 @@ import (
 // another host.
 type qualifySource struct {
 	repos *clones.Source
+	// mrefs, when set, answers for the repos that have a manifest_ref: the manifest and the snapshot are the commit that ref names (#3658).
+	mrefs *manifestref.Source
 	host  func() qualify.Host
 	git   string // the git program ("" = git)
 }
@@ -38,7 +41,18 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 		if !ok {
 			continue
 		}
-		path, b, ok := readManifest(root)
+		var path string
+		var b []byte
+		if s.mrefs != nil && s.mrefs.Configured(repo) {
+			snap, got := s.mrefs.Get(repo)
+			if !got {
+				errs = append(errs, fmt.Errorf("%s: its manifest_ref has not been read yet", repo))
+				continue
+			}
+			path, b, ok = "the manifest_ref of "+repo+" ("+snap.Commit+")", snap.Manifest, true
+		} else {
+			path, b, ok = readManifest(root)
+		}
 		if !ok {
 			if file := filepath.Join(root, ".wwd", "tasks.toml"); fileExists(file) { // no manifest at all is not a fault; one that is there and cannot be read is
 				errs = append(errs, fmt.Errorf("%s: %s cannot be read (not a regular file inside the clone, too large, or unreadable)", repo, file))
@@ -80,8 +94,16 @@ func (s *qualifySource) Prepare(ctx context.Context, t qualify.Task) (wire.JobSu
 	if !ok {
 		return wire.JobSubmission{}, fmt.Errorf("%s has no prepared clone on this host", t.Repo)
 	}
+	var commit string // "": the working tree, as before; a repo with a manifest_ref: the commit it names, the one its manifest was read at
+	if s.mrefs != nil && s.mrefs.Configured(t.Repo) {
+		snap, got := s.mrefs.Get(t.Repo)
+		if !got {
+			return wire.JobSubmission{}, fmt.Errorf("%s: its manifest_ref has not been read yet", t.Repo)
+		}
+		commit = snap.Commit
+	}
 	p, err := submit.Prepare(ctx, submit.Request{
-		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git,
+		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git, Commit: commit,
 		Submitter: wire.Submitter{Session: qualify.SessionName},
 	})
 	if err != nil {

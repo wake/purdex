@@ -26,6 +26,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/gateheld"
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
+	"github.com/wake/purdex/internal/wwd/manifestref"
 	"github.com/wake/purdex/internal/wwd/orphans"
 	"github.com/wake/purdex/internal/wwd/qualify"
 	"github.com/wake/purdex/internal/wwd/queue"
@@ -211,14 +212,23 @@ func run(cfgPath string) error {
 		}
 		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
-	refs := newRefTaskSource(clones.NewSource(cfg.Repos))
+	repoSource := clones.NewSource(cfg.Repos)
+	// a clone with a manifest_ref is read at that ref, not in its working tree (#3658): fetched in the background, one commit for the
+	// reference labels, the qualify task list and the pair's snapshot alike
+	var mrefs *manifestref.Source
+	if len(cfg.ManifestRefs) > 0 {
+		mrefs = manifestref.New(repoSource, cfg.ManifestRefs, "")
+		go mrefs.Run(ctx, manifestRefInterval)
+	}
+	refs := newRefTaskSource(repoSource)
+	refs.mrefs = mrefs
 	refs.ttl = 2 * time.Second // the daemon's labels and the drift watcher ask once per facts record each: one read of the manifests serves both
 	// the qualification coordinator (spec §7): a person starts a pair with pdx wwd qualify (POST /v1/qualify), and every facts record asks for a
 	// tick that starts the pairs the rules want (qualifyTrigger, on a goroutine of its own). It reads the host through d, which exists before any
 	// request can arrive.
 	qualifier := qualify.New(qualify.Config{
 		Queue: q, Store: st,
-		Source: &qualifySource{repos: clones.NewSource(cfg.Repos), host: func() qualify.Host {
+		Source: &qualifySource{repos: repoSource, mrefs: mrefs, host: func() qualify.Host {
 			l, fp := d.Labels()
 			return qualify.Host{Alias: alias, WorkerOn: state.Worker().Enabled, Labels: l, Fingerprint: fp}
 		}},
@@ -290,6 +300,9 @@ func run(cfgPath string) error {
 
 // sweepEvery is how often the queue's housekeeping runs (queue.Sweep is built for a few seconds).
 const sweepEvery = 5 * time.Second
+
+// manifestRefInterval is how often a clone with a manifest_ref is fetched and its manifest read again.
+const manifestRefInterval = 10 * time.Minute
 
 // sweepQueue runs the queue's periodic housekeeping until ctx ends; without it a run whose caller died would stay running.
 func sweepQueue(ctx context.Context, q *queue.Queue) {
