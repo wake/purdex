@@ -46,12 +46,18 @@ describe('createTab callers', () => {
   for (const file of sourceFiles(SRC)) {
     const rel = relative(SRC, file)
     const src = readFileSync(file, 'utf8') as string
-    const calls = (src.match(/\bcreateTab\(/g) ?? []).length
-    if (calls > 0 && rel !== DEFINITION) { found[rel] = calls; text[rel] = src }
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '') // comments may talk about createTab
+    const calls = (code.match(/\bcreateTab\(/g) ?? []).length
+    // any mention counts, not only a call: an alias (`createTab as mint`) or a namespace use still has to name `createTab` somewhere, and that file must be in the list
+    if (/\bcreateTab\b/.test(code) && rel !== DEFINITION) { found[rel] = calls; text[rel] = src }
   }
 
   it('the production callers are exactly the listed set, each with its listed number of calls', () => {
     expect(Object.fromEntries(Object.entries(found).sort())).toEqual(Object.fromEntries(Object.entries(CALLERS).map(([f, c]) => [f, c.calls]).sort()))
+  })
+
+  it('no file aliases createTab', () => {
+    for (const [file, src] of Object.entries(text)) expect(src, file).not.toMatch(/\bcreateTab\s+as\b|\bcreateTab\s*[,}]\s*as\b/)
   })
 
   it('each caller hands its tab to the tab store (addTab, or detachPane\'s own placement)', () => {
