@@ -79,10 +79,14 @@ describe('行程 across tab switches', () => {
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('proc-timeline')).toBeNull() // really unmounted, not hidden
 
+    // 20 s later (the host's facts are still fresh): the live end has moved on, the picked record has not, so it sits a step further from the live end.
+    const real = Date.now
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + 20_000)
     rerender(<TabContent activeTab={hostTab} allTabs={all} />)
     await act(async () => { await Promise.resolve() })
     expect(readProcAt(SEED_HOST_ID)).toBe(picked)
     expect(screen.getByTestId('proc-note').textContent).toBe(note)
-    expect((screen.getByTestId('proc-timeline') as HTMLInputElement).value).toBe('200')
+    expect((screen.getByTestId('proc-timeline') as HTMLInputElement).value).toBe('199')
+    clock.mockRestore()
   }, 30_000)
 })
