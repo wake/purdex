@@ -64,7 +64,7 @@ export function usePersonalGroup(target: PersonalTarget | null, withCount = fals
     if (teamKey === null) return ''
     const cut = teamKey.indexOf('\u0000')
     const team = s.byHost[teamKey.slice(0, cut)]?.find((t) => t.id === teamKey.slice(cut + 1))
-    return team === undefined ? '' : `${team.team_name}\u0000${team.team_label}`
+    return team === undefined ? 'absent' : `${team.team_name}\u0000${team.team_label}`
   })
   return useMemo(() => {
     if (!target || !tab) return { group: { kind: 'ungrouped' }, rootKnown: false }

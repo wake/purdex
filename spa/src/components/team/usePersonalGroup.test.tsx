@@ -50,5 +50,7 @@ describe('usePersonalGroup', () => {
     act(() => { useTeamRosterStore.setState(roster('Beta', 2)) })
     expect(renders).toBeGreaterThan(before)
     expect(result.current.group).toMatchObject({ kind: 'team', name: 'Beta' })
+    act(() => { useTeamRosterStore.setState({ byHost: { h1: [] } } as never) }) // the team goes: the tab is just ungrouped (existence is part of what is watched; team colour is the team id's, not the roster's)
+    expect(result.current.group).toEqual({ kind: 'ungrouped' })
   })
 })
