@@ -3,6 +3,7 @@ import { Notebook } from '@phosphor-icons/react'
 import type { TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { TeamSeatLight } from './TeamSeatLight'
+import { SEAT_LIGHT_POSITION } from '../overlay-dot'
 import { Avatar } from '../Avatar'
 import { useSeat } from '../../lib/names/seat'
 import { ContextRing } from './ModelIcon'
@@ -101,7 +102,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
             <span className={transition !== null ? 'opacity-40' : ''}>
               <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents light={false} />
             </span>
-            <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute -top-0.5 -right-0.5 ${transition !== null ? 'opacity-40' : ''}`}>
+            <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`absolute ${transition !== null ? 'opacity-40' : ''}`} style={SEAT_LIGHT_POSITION}>
               <TeamSeatLight hostId={seat.hostId} sessionCode={seat.sessionCode} />
             </span>
           </span>

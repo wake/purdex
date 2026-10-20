@@ -6,6 +6,7 @@ import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { TeamSeatLight } from './TeamSeatLight'
+import { SEAT_LIGHT_POSITION } from '../overlay-dot'
 import { ctxLeftText, ctxTip } from './team-readings'
 import { usePersonalNames, usePersonalReading, usePersonalStatusLine } from './usePersonalPanel'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -41,7 +42,7 @@ export function PersonalCard({ target, workbook }: Props) {
           <span className="inline-flex items-center gap-1.5 text-text-muted">
             <span className={`relative inline-flex ${ended ? 'opacity-40' : ''}`}>
               <TeamSeatIcon hostId={target.hostId} sessionCode={target.sessionCode} isActive subagents light={false} />
-              {!ended && <span className="absolute -top-0.5 -right-0.5"><TeamSeatLight hostId={target.hostId} sessionCode={target.sessionCode} /></span>}
+              {!ended && <span data-testid="personal-card-light" className="absolute" style={SEAT_LIGHT_POSITION}><TeamSeatLight hostId={target.hostId} sessionCode={target.sessionCode} /></span>}
             </span>
             <TeamSeatHostBadge hostId={target.hostId} sessionCode={target.sessionCode} />
           </span>
