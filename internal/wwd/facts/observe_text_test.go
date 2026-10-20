@@ -257,16 +257,18 @@ func TestCommandSignatureSeesThroughPdxGate(t *testing.T) {
 		argv []string
 		want string
 	}{
-		"the command after --":          {[]string{"pdx", "gate", "--class", "heavy", "--", "go", "test", "./x/"}, "go test"},
-		"a full path to pdx":            {[]string{"/Users/wake/Workspace/wake/purdex/bin/pdx", "gate", "--", "pnpm", "vitest", "run", "a.test.ts"}, "pnpm vitest run"},
-		"no flags":                      {[]string{"pdx", "gate", "--", "swift", "build"}, "swift build"},
-		"gate flags with values only":   {[]string{"pdx", "gate", "--class", "heavy"}, "pdx gate"},
-		"nothing after --":              {[]string{"pdx", "gate", "--"}, "pdx gate"},
-		"other pdx commands stay":       {[]string{"pdx", "test", "go-changed", "./x/"}, "pdx test go-changed"},
-		"a script that runs the gate":   {[]string{"zsh", "-c", "cd /x && pdx gate --class heavy -- go vet ./..."}, "go vet"},
-		"gate inside the CC wrapper":    {ccWrap(`'pdx gate --class heavy -- go test ./x/'`), "go test"},
-		"a gate in a gate":              {[]string{"pdx", "gate", "--", "pdx", "gate", "--", "go", "build"}, "go build"},
-		"a secret after -- is kept out": {[]string{"pdx", "gate", "--", "tool", "sk-live-abcdefghijklmnop", "go"}, "tool go"},
+		"the command after --":                {[]string{"pdx", "gate", "--class", "heavy", "--", "go", "test", "./x/"}, "go test"},
+		"a full path to pdx":                  {[]string{"/Users/wake/Workspace/wake/purdex/bin/pdx", "gate", "--", "pnpm", "vitest", "run", "a.test.ts"}, "pnpm vitest run"},
+		"no flags":                            {[]string{"pdx", "gate", "--", "swift", "build"}, "swift build"},
+		"gate flags with values only":         {[]string{"pdx", "gate", "--class", "heavy"}, "pdx gate"},
+		"nothing after --":                    {[]string{"pdx", "gate", "--"}, "pdx gate"},
+		"other pdx commands stay":             {[]string{"pdx", "test", "go-changed", "./x/"}, "pdx test go-changed"},
+		"a script that runs the gate":         {[]string{"zsh", "-c", "cd /x && pdx gate --class heavy -- go vet ./..."}, "go vet"},
+		"gate inside the CC wrapper":          {ccWrap(`'pdx gate --class heavy -- go test ./x/'`), "go test"},
+		"a gated shell inside the CC wrapper": {ccWrap(`'pdx gate -- sh -c "go test ./..."'`), "go test"},
+		"a shell -c inside the CC wrapper":    {ccWrap(`'bash -c "go test ./..."'`), "go test"},
+		"a gate in a gate":                    {[]string{"pdx", "gate", "--", "pdx", "gate", "--", "go", "build"}, "go build"},
+		"a secret after -- is kept out":       {[]string{"pdx", "gate", "--", "tool", "sk-live-abcdefghijklmnop", "go"}, "tool go"},
 	} {
 		if got := CommandSignature(c.argv); got != c.want {
 			t.Errorf("%s: CommandSignature(%q) = %q, want %q", name, c.argv, got, c.want)

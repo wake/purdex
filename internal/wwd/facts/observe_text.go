@@ -254,7 +254,7 @@ func signature(clean []string, depth int) string {
 		// the gate runs what follows "--" (the shim puts it in front of every heavy command): that is the command
 		for i := 2; i < len(clean)-1; i++ {
 			if clean[i] == "--" {
-				return signature(clean[i+1:], depth+1)
+				return signature(clean[i+1:], depth) // unwrapping argv is not another level of script (the words only get shorter)
 			}
 		}
 	}
@@ -403,6 +403,21 @@ func scriptSignature(script string, depth int, shell string) string {
 	return trimName(shell)
 }
 
+// runsAScript says whether argv is a `sh -c <script>`, directly or behind `pdx gate ... --`.
+func runsAScript(argv []string) bool {
+	if shellScript(argv) >= 0 {
+		return true
+	}
+	if len(argv) > 2 && path.Base(argv[0]) == "pdx" && argv[1] == "gate" {
+		for i := 2; i < len(argv)-1; i++ {
+			if argv[i] == "--" {
+				return runsAScript(argv[i+1:])
+			}
+		}
+	}
+	return false
+}
+
 func scriptFirst(script string, depth int) string {
 	segs := splitSegments(script)
 	wrapped := false // only a script that ends in eval is Claude Code's wrapper: elsewhere setopt and unalias are the command
@@ -417,9 +432,11 @@ func scriptFirst(script string, depth int) string {
 			f[i] = unquoteWord(f[i])
 		}
 		if len(f) == 0 || f[0] != "eval" { // the argument of eval is a script: its own words are checked when it is read
-			for i := 1; i < len(f); i++ {
-				if strings.ContainsAny(f[i], " \t") {
-					f[i] = "-" // a quoted phrase is an argument, not a subcommand: it ends the words like a flag
+			if !runsAScript(f) { // a sh -c has a script word, which signature reads
+				for i := 1; i < len(f); i++ {
+					if strings.ContainsAny(f[i], " \t") {
+						f[i] = "-" // a quoted phrase is an argument, not a subcommand: it ends the words like a flag
+					}
 				}
 			}
 			f = redact.ScrubArgv(f) // unquoting can join what the scrubber saw in pieces (sk-'abc...')
