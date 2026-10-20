@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 
@@ -51,11 +52,21 @@ func DefaultDir() string {
 	if d := os.Getenv("PDX_GATE_DIR"); d != "" {
 		return d
 	}
-	home, err := os.UserHomeDir()
+	home, err := AccountHome()
 	if err != nil {
 		return filepath.Join(os.TempDir(), "pdx-gate")
 	}
 	return filepath.Join(home, ".config", "pdx", "gate")
+}
+
+// AccountHome is the home directory of the account, not $HOME: a caller that swaps HOME (a job's fake environment) must still
+// reach the real gate state and the real shim directory (#3671). $HOME is the fallback when the account has none on record.
+// PDX_GATE_DIR (tests) is checked by the callers that need it.
+func AccountHome() (string, error) {
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir, nil
+	}
+	return os.UserHomeDir()
 }
 
 // DefaultConfigPath is ~/.config/pdx/config.toml.
