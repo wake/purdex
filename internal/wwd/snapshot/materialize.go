@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MaterializeIn says what to make a workspace of.
@@ -56,9 +57,34 @@ var maxBundleDownload = 288 << 20
 // errUseTar says that the bundle way did not work out for a reason a tar fixes.
 var errUseTar = errors.New("snapshot: use a tar")
 
+// fetchBaseTimeout bounds the fetch that a missing base asks for: a remote that does not answer holds a job's start for this long and no
+// longer, and the tar follows. (A variable so that a test can lower it.)
+var fetchBaseTimeout = 30 * time.Second
+
+// fetchClone is fetchCloneFromOrigin (a variable so that a test can count the calls).
+var fetchClone = fetchCloneFromOrigin
+
+// fetchCloneFromOrigin brings the clone up to date with its origin, for the one reason fromClone has: the job's base is a commit pushed after the
+// clone was last fetched (manifest_ref fetches it every 10 minutes, and a release gate runs seconds after its push). Without it the
+// workspace of the same task would be a worktree or a tar, with or without a .git, by the minute it started in (#3729, #3730). It fetches
+// the way manifest_ref does (`fetch --quiet --no-tags -- origin`) and, as every write to the clone's refs here, waits out another
+// fetch's ref lock a few times (gitRefWrite). The error is only the reason the tar follows.
+func fetchCloneFromOrigin(ctx context.Context, clone string) error {
+	ctx, cancel := context.WithTimeout(ctx, fetchBaseTimeout)
+	defer cancel()
+	_, err := gitRefWrite(ctx, "wwd.snapshot-fetch-base", clone, "fetch", "--quiet", "--no-tags", "--", "origin")
+	return err
+}
+
 func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
-	if ownRepo(ctx, in.Clone) != nil || !hasCommit(ctx, in.Clone, in.Base) {
+	if ownRepo(ctx, in.Clone) != nil {
 		return Workspace{}, errUseTar
+	}
+	if !hasCommit(ctx, in.Clone, in.Base) {
+		// the clone may only be behind: ask its origin once. Failing, or still not having it (a base that was never pushed), is the tar.
+		if fetchClone(ctx, in.Clone) != nil || !hasCommit(ctx, in.Clone, in.Base) {
+			return Workspace{}, errUseTar
+		}
 	}
 	ref := PinRef(in.JobID)
 	{
