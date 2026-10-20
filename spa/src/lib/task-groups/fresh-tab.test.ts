@@ -13,6 +13,8 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
+import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
 
 const G = manualGroupKey('aaaaaaaa')
 const view = () => useGroupViewStore.getState()
@@ -107,6 +109,35 @@ describe('a tab that is not freshly minted here is never placed', () => {
   it('an apply (a store write that brings tabs in) places nothing', () => {
     useTabStore.setState({ tabs: { ...tabs(), applied: { ...dashboard(), id: 'applied' } } } as never)
     expect(group('applied')).toBeUndefined()
+  })
+})
+
+describe('a tab that shows a team seat is the team\'s, not the selected group\'s (rule 1, before the tab is in the store)', () => {
+  const seatPane = { kind: 'tmux-session', hostId: 'h1', sessionCode: 'S1', mode: 'terminal', cachedName: 'name-S1', tmuxInstance: 'I' } as const
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } } } as never)
+    useSessionStore.setState({ sessions: { h1: [{ code: 'S1', name: 'name-S1' }] as never } })
+    useTeamRosterStore.getState().apply('h1', [{
+      id: 'team-1', host_id: 'd', created_at: 1, team_name: 'Payments', team_label: '',
+      lead: { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'L' }, members: [],
+    } as never])
+  })
+
+  it('addTab: a fresh tab showing the seat is not written the selected manual group', () => {
+    const t = createTab({ ...seatPane })
+    useTabStore.getState().addTab(t)
+    expect(group(t.id)).toBeUndefined()
+  })
+
+  it('detachPane: a pane that shows the seat, detached into its own tab, is not written the selected manual group', () => {
+    const split = { type: 'split', direction: 'h', sizes: [50, 50], children: [
+      { type: 'leaf', pane: { id: 'pa', content: { kind: 'dashboard' } } },
+      { type: 'leaf', pane: { id: 'pb', content: { ...seatPane } } },
+    ] }
+    useTabStore.setState({ tabs: { ...tabs(), sp: { ...dashboard(), id: 'sp', layout: split } } } as never)
+    const id = useTabStore.getState().detachPane('sp', 'pb')
+    expect(id).not.toBeNull()
+    expect(group(id!)).toBeUndefined()
   })
 })
 

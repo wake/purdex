@@ -19,7 +19,7 @@ export function placeFreshTab(tab: Tab): Tab {
   if (selected === null || selected === UNGROUPED) return tab
   const parsed = parseGroupKey(selected)
   if (parsed === null) return tab
-  const ctx = currentPlacementCtx()
+  const ctx = currentPlacementCtx(tab) // with this tab in the team index: a tab that shows a seat is the team's (rule 1) before it is in the store
   // the selected group must still exist (rule 3 would ignore a key that names nothing)
   if (parsed.kind === 'team' && !ctx.index.byKey.has(parsed.teamKey)) return tab
   if (parsed.kind === 'manual' && ctx.manual.groups[parsed.id] === undefined) return tab

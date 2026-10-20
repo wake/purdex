@@ -55,7 +55,11 @@ describe('createTab callers', () => {
   })
 
   it('each caller hands its tab to the tab store (addTab, or detachPane\'s own placement)', () => {
-    for (const [file, { handsTo }] of Object.entries(CALLERS)) expect(text[file], file).toMatch(handsTo)
+    for (const [file, { handsTo }] of Object.entries(CALLERS)) {
+      expect(text[file], file).toMatch(handsTo)
+      // a file with several mints hands at least as many tabs on (a store file counts its own two actions separately, below)
+      if (file !== 'stores/useTabStore.ts') expect((text[file].match(new RegExp(handsTo.source, 'g')) ?? []).length, file).toBeGreaterThanOrEqual(CALLERS[file].calls)
+    }
   })
 
   it('addTab and detachPane both take a tab out of the fresh set and place it', () => {
