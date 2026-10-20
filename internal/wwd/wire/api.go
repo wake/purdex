@@ -50,7 +50,38 @@ type Peer struct {
 	Info      Info   `json:"info"`
 	Facts     *Facts `json:"facts"`
 	Reachable bool   `json:"reachable"`
+	// Liveness says, for a peer whose wwd does not answer, whether its host does (a TCP connect to its SSH port, nothing read or sent):
+	// wwd_down (the host answers), host_down (nothing does). ok when the wwd answers; unknown before the first look. Present only when
+	// the reader asked for it (PoolLivenessQuery). LivenessAt is when it was last looked at (moves at every poll); LivenessSince is since
+	// when the peer has had this liveness (moves only when the value does, and is set when it comes back to ok as well).
+	Liveness      Liveness   `json:"liveness,omitempty"`
+	LivenessAt    *time.Time `json:"liveness_at,omitempty"`
+	LivenessSince *time.Time `json:"liveness_since,omitempty"`
 }
+
+// Liveness is what a look at a peer's SSH port, made when its wwd does not answer, found.
+type Liveness string
+
+const (
+	LivenessOK       Liveness = "ok"        // the wwd answers
+	LivenessWwdDown  Liveness = "wwd_down"  // the wwd does not, the host does
+	LivenessHostDown Liveness = "host_down" // neither does: the host is off or the network is cut
+	LivenessUnknown  Liveness = "unknown"   // not looked at yet
+)
+
+// Valid says whether l is one of the four (the empty one, absent on the wire, is checked by the caller).
+func (l Liveness) Valid() bool {
+	switch l {
+	case LivenessOK, LivenessWwdDown, LivenessHostDown, LivenessUnknown:
+		return true
+	}
+	return false
+}
+
+// PoolLivenessQuery is the query that asks GET /v1/pool for the liveness fields. The route is read by the Purdex daemon on the same host,
+// which is not a wwd of the pool, so PoolAtLeast cannot say whether it can read them; a reader that knows the fields asks for them, and
+// one that does not never sees a name it would reject. Another wwd, which ignores the query, simply does not answer with them.
+const PoolLivenessQuery = "liveness=1"
 
 // Pool is GET /v1/pool.
 type Pool struct {
@@ -61,6 +92,9 @@ func (p Pool) Validate() error {
 	for i, peer := range p.Peers {
 		if err := peer.Info.Validate(); err != nil {
 			return fmt.Errorf("pool: peers[%d]: %w", i, err)
+		}
+		if peer.Liveness != "" && !peer.Liveness.Valid() {
+			return fmt.Errorf("pool: peers[%d]: unknown liveness %q", i, peer.Liveness)
 		}
 		if peer.Facts != nil {
 			if err := peer.Facts.Validate(); err != nil {
@@ -274,6 +308,10 @@ type PoolHost struct {
 	Reachable       bool             `json:"reachable"`
 	HeadroomReasons *HeadroomReasons `json:"headroom_reasons"`
 	Load            *HostLoad        `json:"load"`
+	// Liveness, LivenessAt and LivenessSince are Peer's, passed on to the App; absent while the pool does not carry them.
+	Liveness      Liveness   `json:"liveness,omitempty"`
+	LivenessAt    *time.Time `json:"liveness_at,omitempty"`
+	LivenessSince *time.Time `json:"liveness_since,omitempty"`
 }
 
 // PoolHostExceptions is GET /api/pool/hosts/{alias}/exceptions: the exceptions in force on a host with their holds (facts' exceptions[]
@@ -292,6 +330,9 @@ func (r PoolHostsResponse) Validate() error {
 	for i, h := range r.Hosts {
 		if err := h.Info.Validate(); err != nil {
 			return fmt.Errorf("hosts[%d]: %w", i, err)
+		}
+		if h.Liveness != "" && !h.Liveness.Valid() {
+			return fmt.Errorf("hosts[%d]: unknown liveness %q", i, h.Liveness)
 		}
 		if h.Facts != nil {
 			if err := h.Facts.Validate(); err != nil {

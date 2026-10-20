@@ -218,7 +218,8 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 		if labels == nil {
 			labels = []string{}
 		}
-		h := wire.PoolHost{Info: peer.Info, Facts: peer.Facts, Worker: w, Labels: labels, Reachable: peer.Reachable}
+		h := wire.PoolHost{Info: peer.Info, Facts: peer.Facts, Worker: w, Labels: labels, Reachable: peer.Reachable,
+			Liveness: peer.Liveness, LivenessAt: peer.LivenessAt, LivenessSince: peer.LivenessSince}
 		assess(&h)
 		out.Hosts = append(out.Hosts, h)
 	}
@@ -355,7 +356,7 @@ func (m *Module) store(key string, body []byte) {
 
 func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
 	m.serve(w, r, "hosts", func(ctx context.Context) (any, *apiError) {
-		p, err := m.client().Pool(ctx)
+		p, err := m.client().PoolWithLiveness(ctx)
 		if err != nil {
 			return nil, wwdError(err)
 		}

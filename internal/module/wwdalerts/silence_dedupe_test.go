@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -86,6 +87,70 @@ func TestSilenceClearedAndBackIsANewFailure(t *testing.T) {
 	e.now = e.now.Add(time.Minute)
 	e.pass(t)
 	assert.Equal(t, 2, e.ntf.count())
+}
+
+// silenceKind is silenceOf with the words of a kind of silence (the peer's wwd, or its host).
+func silenceKind(peer string, since time.Time, detail string) wire.Alert {
+	a := silenceOf(peer, since)
+	a.Detail = detail
+	return a
+}
+
+// A silence that is the same failure but changes kind — the wwd of a host that was up stops answering, then the host itself goes — is told
+// again, in the new words: "the host is gone" is news the person needs. The same kind again, within the hour, is not told twice.
+func TestSilenceChangingKindIsToldAgainAndTheSameKindIsNot(t *testing.T) {
+	e := newEnv(t)
+	e.src.peers = []string{"air26"}
+	wwdDown := wire.SilenceDetailWwdDown("mserv")
+	hostDown := wire.SilenceDetailHostDown("mserv")
+
+	e.src.set("mlab", silenceKind("mserv", t0, wwdDown))
+	e.pass(t)
+	require.Equal(t, 1, e.ntf.count())
+	assert.Contains(t, e.ntf.got[0].Title, "wwd 沒有回應")
+	e.ntf.confirm(0)
+
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 1, e.ntf.count(), "the same kind, still going on: not told again")
+
+	e.src.set("mlab", silenceKind("mserv", t0, hostDown)) // the same key and Since, other words
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	require.Equal(t, 2, e.ntf.count(), "the host itself went: told again")
+	assert.Contains(t, e.ntf.got[1].Title, "主機離線")
+	e.ntf.confirm(1)
+
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 2, e.ntf.count(), "and not again for the same kind")
+
+	e.src.set("mlab", silenceKind("mserv", t0, wwdDown)) // the host came back, its wwd did not
+	e.now = e.now.Add(time.Minute)
+	e.pass(t)
+	assert.Equal(t, 3, e.ntf.count(), "a change back is a change too")
+}
+
+// Two wwds that see the same failure differently (one reaches the host's SSH port, the other does not) are one failure with one kind: the
+// host-down words win, and the push says the same whichever list is read first.
+func TestSilenceTwoWWDsDisagreeingOnTheKindMakeOneAlertInTheWorseWords(t *testing.T) {
+	for _, mlabFirst := range []bool{true, false} {
+		e := newEnv(t)
+		e.src.peers = []string{"air26"}
+		up := silenceKind("mserv", t0, wire.SilenceDetailWwdDown("mserv"))
+		gone := silenceKind("mserv", t0, wire.SilenceDetailHostDown("mserv"))
+		if mlabFirst {
+			e.src.set("mlab", up)
+			e.src.set("air26", gone)
+		} else {
+			e.src.set("mlab", gone)
+			e.src.set("air26", up)
+		}
+		e.pass(t)
+		e.pass(t)
+		assert.Equal(t, 1, e.ntf.count(), "mlabFirst=%v: one failure, one push", mlabFirst)
+		assert.Contains(t, e.ntf.got[0].Title, "主機離線", "mlabFirst=%v", mlabFirst)
+	}
 }
 
 // The wwds' clocks are not the deliverer's: a new failure is told whatever Since the wwds put on it, a long time before the deliverer's last

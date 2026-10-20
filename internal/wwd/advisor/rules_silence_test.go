@@ -24,7 +24,7 @@ func TestPeerSilenceThresholdAtTheEdge(t *testing.T) {
 		{"at", SilenceAfter, true},
 		{"over", SilenceAfter + time.Minute, true},
 	} {
-		in := Input{Now: silT0, Peers: peersAt(PeerDown{"mserv", silT0.Add(-c.down)})}
+		in := Input{Now: silT0, Peers: peersAt(PeerDown{"mserv", silT0.Add(-c.down), ""})}
 		v, err := r.Eval(in)
 		if err != nil || v.Holds != c.holds || v.Key != "silence:mserv" || v.Level != wire.AlertPush {
 			t.Errorf("%s: %+v (%v)", c.name, v, err)
@@ -32,6 +32,31 @@ func TestPeerSilenceThresholdAtTheEdge(t *testing.T) {
 	}
 	if SilenceAfter != 3*time.Minute {
 		t.Errorf("unreachable is 3 minutes for every host: %v", SilenceAfter)
+	}
+}
+
+// The words say which failure it is: the host answers on its SSH port (wwd is what stopped), or nothing answers (the host or the network);
+// a peer whose liveness is not known says only what is known. One key either way, so the alert clears when the peer answers.
+func TestPeerSilenceSaysWhichKindOfSilence(t *testing.T) {
+	r := PeerSilence{Alias: "mserv"}
+	for _, c := range []struct {
+		liveness wire.Liveness
+		want     string
+		hostDown bool
+	}{
+		{wire.LivenessWwdDown, "mserv：wwd 沒有回應（主機還在）", false},
+		{wire.LivenessHostDown, "mserv：主機離線", true},
+		{wire.LivenessUnknown, "mserv 的 wwd 已 5 分鐘連不上", false},
+		{"", "mserv 的 wwd 已 5 分鐘連不上", false},
+	} {
+		in := Input{Now: silT0, Peers: peersAt(PeerDown{"mserv", silT0.Add(-5 * time.Minute), c.liveness})}
+		v, err := r.Eval(in)
+		if err != nil || !v.Holds || v.Key != "silence:mserv" || v.Detail != c.want {
+			t.Errorf("%q: %+v (%v), want detail %q", c.liveness, v, err, c.want)
+		}
+		if got := wire.SilenceHostDown(v.Detail); got != c.hostDown {
+			t.Errorf("%q: SilenceHostDown(%q) = %v", c.liveness, v.Detail, got)
+		}
 	}
 }
 
@@ -44,7 +69,7 @@ func TestPeerSilenceAnsweringPeerClears(t *testing.T) {
 
 // Each peer has its own key, and a silent one does not hold another's alert.
 func TestPeerSilenceKeysAreOnePerPeer(t *testing.T) {
-	in := Input{Now: silT0, Peers: peersAt(PeerDown{"mserv", silT0.Add(-time.Hour)}, PeerDown{"air26", silT0.Add(-time.Second)})}
+	in := Input{Now: silT0, Peers: peersAt(PeerDown{"mserv", silT0.Add(-time.Hour), ""}, PeerDown{"air26", silT0.Add(-time.Second), ""})}
 	a, _ := PeerSilence{Alias: "mserv"}.Eval(in)
 	b, _ := PeerSilence{Alias: "air26"}.Eval(in)
 	if !a.Holds || b.Holds || a.Key == b.Key {

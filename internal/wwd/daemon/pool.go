@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type PoolPoller struct {
 	client *http.Client
 
 	now func() time.Time
+	// dial connects to a peer's SSH port when its wwd does not answer (liveness.go); a test replaces it.
+	dial func(ctx context.Context, network, address string) (net.Conn, error)
 
 	mu    sync.RWMutex
 	state []wire.Peer // in config order
@@ -56,12 +59,13 @@ func NewPoolPoller(peers []PeerAddr, token string, client *http.Client) *PoolPol
 	if client == nil {
 		client = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
 	}
-	p := &PoolPoller{peers: peers, token: token, client: client, now: time.Now, state: make([]wire.Peer, len(peers)), downSince: make([]time.Time, len(peers))}
+	p := &PoolPoller{peers: peers, token: token, client: client, now: time.Now, state: make([]wire.Peer, len(peers)), downSince: make([]time.Time, len(peers)),
+		dial: (&net.Dialer{}).DialContext}
 	born := p.now()
 	for i, a := range peers {
 		p.downSince[i] = born
 		// a peer never reached claims the oldest proto: the writers gate on every host reporting proto >= 2 (spec §13.1)
-		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.MinProto, Labels: []string{}, Fingerprint: map[string]string{}}}
+		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.MinProto, Labels: []string{}, Fingerprint: map[string]string{}}, Liveness: wire.LivenessUnknown}
 	}
 	return p
 }
@@ -105,6 +109,7 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		p.mu.Lock()
 		p.markDown(i, started)
 		p.mu.Unlock()
+		p.look(ctx, i) // the wwd does not answer: does its host?
 		return
 	}
 	// facts may not exist yet (503 before the peer's first sample): keep what we had
@@ -119,9 +124,11 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	defer p.mu.Unlock()
 	if ferr == nil && (facts.HostID != info.HostID || facts.Alias != info.Alias) {
 		p.markDown(i, started) // facts of another host: keep the last verified view
+		write = func() { p.look(ctx, i) }
 		return
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
+	p.setLiveness(i, wire.LivenessOK)
 	p.downSince[i] = time.Time{}
 	write = p.rememberInfo(info)
 	switch {
@@ -144,6 +151,8 @@ func (p *PoolPoller) markDown(i int, at time.Time) {
 type PeerDown struct {
 	Alias string
 	Since time.Time
+	// Liveness is what the last look at the peer's SSH port found (liveness.go): wwd_down, host_down, ok when it answers, or unknown.
+	Liveness wire.Liveness
 }
 
 // SetClock replaces the clock the unreachable-since times are read from (a test drives time by hand); a peer not reached yet counts from
@@ -166,7 +175,7 @@ func (p *PoolPoller) Downs() []PeerDown {
 	defer p.mu.RUnlock()
 	out := make([]PeerDown, len(p.peers))
 	for i, a := range p.peers {
-		out[i] = PeerDown{Alias: a.Alias, Since: p.downSince[i]}
+		out[i] = PeerDown{Alias: a.Alias, Since: p.downSince[i], Liveness: p.state[i].Liveness}
 	}
 	return out
 }
@@ -245,6 +254,15 @@ func (d *Daemon) poolRoutes(mux *http.ServeMux) {
 				self.Facts = &f
 			}
 		}
-		writeJSON(w, http.StatusOK, wire.Pool{Peers: append([]wire.Peer{self}, d.pool.Peers()...)})
+		peers := d.pool.Peers()
+		// The liveness of the peers goes out only to a reader that asks (wire.PoolLivenessQuery): this route is read by the Purdex daemon
+		// of this host, which is not a wwd of the pool, so a reader that does not know the fields must never be shown them. Any other
+		// query is ignored, as it always was.
+		if r.URL.Query().Get("liveness") != "1" {
+			for i := range peers {
+				peers[i].Liveness, peers[i].LivenessAt, peers[i].LivenessSince = "", nil, nil
+			}
+		}
+		writeJSON(w, http.StatusOK, wire.Pool{Peers: append([]wire.Peer{self}, peers...)})
 	})
 }

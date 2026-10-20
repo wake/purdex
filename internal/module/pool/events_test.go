@@ -148,6 +148,29 @@ func TestPoolChanged_OneNoticeForAWorkerAnExceptionAndAZone(t *testing.T) {
 	}
 }
 
+// A host's liveness changing is news for that host; the time it was last looked at moving, with nothing else, is not (it moves at every
+// poll of wwd, and a host that stays down would otherwise be announced every few seconds).
+func TestPoolChanged_LivenessChangesAreNewsButTheLookTimeIsNot(t *testing.T) {
+	lp := newLivePool(t)
+	t0 := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	set := func(l wire.Liveness, at, since time.Time) func(*wire.Pool) {
+		return func(p *wire.Pool) {
+			p.Peers[1].Liveness, p.Peers[1].LivenessAt, p.Peers[1].LivenessSince = l, &at, &since
+		}
+	}
+	lp.change(set(wire.LivenessWwdDown, t0, t0))
+	_, n := watching(t, fakeWWD(t, lp.handler()))
+	time.Sleep(5 * testPoll) // the baseline
+
+	lp.change(set(wire.LivenessWwdDown, t0.Add(time.Minute), t0)) // looked at again, nothing else
+	time.Sleep(testMerge + 5*testPoll)
+	assert.Empty(t, n.all(), "only the look time moved")
+
+	lp.change(set(wire.LivenessHostDown, t0.Add(2*time.Minute), t0.Add(2*time.Minute)))
+	require.Eventually(t, func() bool { return len(n.all()) == 1 }, 3*time.Second, testPoll)
+	assert.Equal(t, []string{"air19"}, n.hosts())
+}
+
 // A host that is never reached and still is never reached is not news; reaching it is.
 func TestPoolChanged_AHostThatBecomesReachableAndOneThatAppearsOrGoes(t *testing.T) {
 	lp := newLivePool(t)
