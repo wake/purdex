@@ -16,6 +16,7 @@ import { STORAGE_KEYS } from '../lib/storage'
 const TEAM_A = teamGroupKey('hostA\u0000t1')
 const TEAM_B = teamGroupKey('hostB\u0000t1')
 const MANUAL = manualGroupKey('aaaaaaaa')
+const teamKeyOf = (host: string, id: string) => `${host}\u0000${id}`
 const get = () => useGroupViewStore.getState()
 
 beforeEach(() => {
@@ -76,6 +77,21 @@ describe('useGroupViewStore', () => {
     expect(get().selectedGroup).toBe(MANUAL)
     get().forgetGroups((k) => k === MANUAL)
     expect([get().selectedGroup, get().lastByView.group]).toEqual([null, null])
+  })
+
+  it('forgetTeams forgets one host\'s team keys that are not live; forgetManual forgets manual keys whose id is not live', () => {
+    const live = teamGroupKey('hostA\u0000t1')
+    const dead = teamGroupKey('hostA\u0000t2')
+    const other = teamGroupKey('hostB\u0000t2')
+    useGroupViewStore.setState({ selectedGroup: dead, lastActiveTab: { [live]: 'a', [dead]: 'b', [other]: 'c', [MANUAL]: 'd' }, expanded: { [dead]: false }, lastByView: { workspace: null, group: null } })
+    get().forgetTeams('hostA', [teamKeyOf('hostA', 't1')])
+    expect(get().lastActiveTab).toEqual({ [live]: 'a', [other]: 'c', [MANUAL]: 'd' })
+    expect([get().selectedGroup, get().expanded]).toEqual([null, {}])
+    const before = get().lastActiveTab
+    get().forgetTeams('hostA', [teamKeyOf('hostA', 't1')])
+    expect(get().lastActiveTab).toBe(before) // nothing more to forget: the state keeps its identity
+    get().forgetManual([])
+    expect(get().lastActiveTab).toEqual({ [live]: 'a', [other]: 'c' })
   })
 
   it('persists under its own key, and a rehydrate sanitises what storage holds', async () => {

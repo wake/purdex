@@ -33,6 +33,10 @@ interface GroupViewState extends GroupViewData {
   setExpanded: (groupKey: string, expanded: boolean) => void
   /** Forgets everything about the groups `gone` says yes to (a deleted manual group, a team no roster lists). */
   forgetGroups: (gone: (groupKey: string) => boolean) => void
+  /** A host's roster was read: forgets the team keys of that host (local id) that are not in `liveTeamKeys` (`TeamView.key`s). */
+  forgetTeams: (hostId: string, liveTeamKeys: readonly string[]) => void
+  /** Forgets the manual group keys whose id is not in `liveIds` (the manual groups store). */
+  forgetManual: (liveIds: readonly string[]) => void
 }
 
 const EMPTY: GroupViewData = { selectedGroup: null, lastActiveTab: {}, expanded: {}, lastByView: { workspace: null, group: null } }
@@ -90,6 +94,17 @@ export function rewriteGroupViewHosts(state: GroupViewData, map: (hostId: string
   }
 }
 
+/** The data without everything about the groups `gone` says yes to; the same state back when nothing goes. */
+function forget(s: GroupViewData, gone: (groupKey: string) => boolean): GroupViewData {
+  const keep = <T,>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).filter(([k]) => !gone(k)))
+  const lastActiveTab = keep(s.lastActiveTab)
+  const expanded = keep(s.expanded)
+  const selectedGroup = s.selectedGroup !== null && gone(s.selectedGroup) ? null : s.selectedGroup
+  const group = s.lastByView.group !== null && gone(s.lastByView.group) ? null : s.lastByView.group
+  const same = Object.keys(lastActiveTab).length === Object.keys(s.lastActiveTab).length && Object.keys(expanded).length === Object.keys(s.expanded).length && selectedGroup === s.selectedGroup && group === s.lastByView.group
+  return same ? s : { selectedGroup, lastActiveTab, expanded, lastByView: { ...s.lastByView, group } }
+}
+
 export const useGroupViewStore = create<GroupViewState>()(
   persist(
     (set) => ({
@@ -117,16 +132,18 @@ export const useGroupViewStore = create<GroupViewState>()(
       setExpanded: (groupKey, expanded) =>
         set((s) => (s.expanded[groupKey] === expanded ? s : { expanded: { ...s.expanded, [groupKey]: expanded } })),
 
-      forgetGroups: (gone) =>
-        set((s) => {
-          const keep = <T,>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).filter(([k]) => !gone(k)))
-          const lastActiveTab = keep(s.lastActiveTab)
-          const expanded = keep(s.expanded)
-          const selectedGroup = s.selectedGroup !== null && gone(s.selectedGroup) ? null : s.selectedGroup
-          const group = s.lastByView.group !== null && gone(s.lastByView.group) ? null : s.lastByView.group
-          const same = Object.keys(lastActiveTab).length === Object.keys(s.lastActiveTab).length && Object.keys(expanded).length === Object.keys(s.expanded).length && selectedGroup === s.selectedGroup && group === s.lastByView.group
-          return same ? s : { selectedGroup, lastActiveTab, expanded, lastByView: { ...s.lastByView, group } }
-        }),
+      forgetGroups: (gone) => set((s) => forget(s, gone)),
+
+      forgetTeams: (hostId, liveTeamKeys) => {
+        const live = new Set(liveTeamKeys)
+        const prefix = `${hostId}\u0000`
+        set((s) => forget(s, (k) => { const p = parseGroupKey(k); return p?.kind === 'team' && p.teamKey.startsWith(prefix) && !live.has(p.teamKey) }))
+      },
+
+      forgetManual: (liveIds) => {
+        const live = new Set(liveIds)
+        set((s) => forget(s, (k) => { const p = parseGroupKey(k); return p?.kind === 'manual' && !live.has(p.id) }))
+      },
     }),
     {
       name: STORAGE_KEYS.GROUP_VIEW,

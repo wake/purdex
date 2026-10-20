@@ -4,6 +4,7 @@
 // had rather than read a broken frame as "every team ended".
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useGroupViewStore } from '../../stores/useGroupViewStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { parseRosterEvent, type TeamRoster } from './roster'
 import { teamHostMap } from './team-state'
@@ -51,4 +52,6 @@ export function handleRosterEvent(hostId: string, value: unknown): void {
   recordEnded(hostId, before, ev.teams)
   // The frame is the whole roster: the arrangement of a team it does not list (it ended meanwhile) goes with it.
   useTeamUiStore.getState().forgetTeams(hostId, ev.teams.map((t) => teamKeyOf(hostId, t.id)))
+  // The task-group view's memory of a team this host no longer lists goes too.
+  useGroupViewStore.getState().forgetTeams(hostId, ev.teams.map((t) => teamKeyOf(hostId, t.id)))
 }
