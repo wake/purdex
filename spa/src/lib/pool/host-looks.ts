@@ -7,7 +7,7 @@ import { useHostLookStore, type HostLookEntry } from '../../stores/useHostLookSt
 import { usePoolHostsStore, type PoolHostIndicator, type PoolHostLook } from '../../stores/usePoolHostsStore'
 import { useUISettingsStore, type FleetCellIndicator } from '../../stores/useUISettingsStore'
 import { useHostLookResolver, type HostLook } from '../host-look'
-import { readPoolHostDaemons, usePoolHostDaemons } from './daemons'
+import { readPoolHostOwners, usePoolHostOwners } from './daemons'
 
 /** A pool host's look as the screens draw it: colour and icon from their home, the indicator resolved (stored or default). */
 export interface PoolHostResolvedLook {
@@ -58,15 +58,22 @@ function compose(base: HostLook | PoolHostLook | undefined, indicator: PoolHostI
   return out
 }
 
+/** A look with none of its colour or icon fields: what `resolve` gives a daemon host nobody has styled yet. */
+const hasFace = (l: Pick<HostLook, 'colors' | 'color' | 'icon' | 'iconWeight'> | undefined): boolean =>
+  l !== undefined && (l.colors !== undefined || l.color !== undefined || l.icon !== undefined || l.iconWeight !== undefined)
+
 export function usePoolHostLook(hostId: string): PoolHostResolvedLook {
-  const daemon = usePoolHostDaemons()[hostId]
+  // The owner is the host that has been seen to front this wwd, connected or not: where the look lives must not flip with a reconnect.
+  const owner = usePoolHostOwners()[hostId]
   const resolve = useHostLookResolver()
   const stored = usePoolHostsStore((s) => (Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
   const global = useUISettingsStore((s) => s.fleetCellIndicator)
-  return useMemo(
-    () => compose(daemon !== undefined ? resolve(daemon) : stored, indicatorOf(stored, global)),
-    [daemon, resolve, stored, global],
-  )
+  return useMemo(() => {
+    const fromHost = owner !== undefined ? resolve(owner) : undefined
+    // A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one.
+    const base = fromHost !== undefined && hasFace(fromHost) ? fromHost : stored
+    return compose(base, indicatorOf(stored, global))
+  }, [owner, resolve, stored, global])
 }
 
 function applyField<K extends keyof HostLookEntry>(next: Record<string, unknown>, key: K, value: HostLookEntry[K] | null | undefined) {
@@ -80,7 +87,7 @@ function applyField<K extends keyof HostLookEntry>(next: Record<string, unknown>
  * those of a host without one and every indicator into the pool hosts store. An id that is not a wwd `host_id` writes nothing (the store refuses it).
  */
 export function writePoolHostLook(hostId: string, patch: PoolHostLookPatch): void {
-  const daemon = readPoolHostDaemons()[hostId]
+  const daemon = readPoolHostOwners()[hostId]
   const { indicator, ...face } = patch
   if (indicator !== undefined) {
     usePoolHostsStore.getState().patchLook(hostId, (cur) => {

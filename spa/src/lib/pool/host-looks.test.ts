@@ -66,6 +66,32 @@ describe('usePoolHostLook', () => {
   })
 })
 
+describe('where a look lives does not flip with the connection', () => {
+  const drop = () => useHostStore.setState({ runtime: { 'cfg-a': { status: 'reconnecting' } } } as never)
+
+  it('a daemon host that is reconnecting still reads its host look', () => {
+    useHostLookStore.setState({ looks: { 'cfg-a': { icon: 'HardDrives' } } })
+    drop()
+    useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: 0, daemonCapabilities: ['pool.v1'], wwd: { hostId: WWD_A, alias: 'mlab' } } } } as never)
+    expect(renderHook(() => usePoolHostLook(WWD_A)).result.current.icon).toBe('HardDrives')
+  })
+  it('a look edited while the daemon is down still goes to the host look store', () => {
+    drop()
+    writePoolHostLook(WWD_A, { icon: 'Cube' })
+    expect(useHostLookStore.getState().looks['cfg-a']).toMatchObject({ icon: 'Cube' })
+    expect(usePoolHostsStore.getState().looks[WWD_A]).toBeUndefined()
+  })
+  it('a face written to the pool store before the owner was known shows until the host look has one', () => {
+    useNexHostStore.setState({ byHost: {} } as never)
+    writePoolHostLook(WWD_A, { icon: 'Cube' })
+    expect(usePoolHostsStore.getState().looks[WWD_A]).toMatchObject({ icon: 'Cube' })
+    useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: 1000, daemonCapabilities: ['pool.v1'], wwd: { hostId: WWD_A, alias: 'mlab' } } } } as never)
+    expect(renderHook(() => usePoolHostLook(WWD_A)).result.current.icon).toBe('Cube')
+    useHostLookStore.setState({ looks: { 'cfg-a': { icon: 'HardDrives' } } })
+    expect(renderHook(() => usePoolHostLook(WWD_A)).result.current.icon).toBe('HardDrives')
+  })
+})
+
 describe('writePoolHostLook', () => {
   it('colour and icon of a daemon host go to the host look store, not the new one', () => {
     writePoolHostLook(WWD_A, { icon: 'Cube', iconWeight: 'fill' })
