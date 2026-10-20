@@ -6,6 +6,8 @@ import { useFleetStore, type FleetHostView } from '../fleet/store'
 import { poolCellModel, matchPoolHost, type PoolCellModel } from './cell-model'
 import { poolHostView } from './host-view'
 import { usePoolStore } from './store'
+import { NEX_HOST_TTL_MS } from '../../stores/useNexHostStore'
+import { refreshPoolIdentities, usePoolHostDaemons } from './daemons'
 
 /** How often the freshness of the facts (30 s) is looked at again when nothing new arrives. */
 const CLOCK_MS = 5000
@@ -15,7 +17,12 @@ let mounted = 0
 export function useRunPool() {
   useEffect(() => {
     if (mounted++ === 0) usePoolStore.getState().start()
-    return () => { if (--mounted === 0) usePoolStore.getState().stop() }
+    // A daemon that learned its wwd after the App first read /api/info is picked up when the pool's hosts change.
+    refreshPoolIdentities()
+    const unsubscribe = usePoolStore.subscribe((s, prev) => { if (s.hosts !== prev.hosts) refreshPoolIdentities() })
+    // An event-driven pool stops polling, so nothing else would ask again once the 60 s cache TTL has passed.
+    const timer = setInterval(refreshPoolIdentities, NEX_HOST_TTL_MS)
+    return () => { unsubscribe(); clearInterval(timer); if (--mounted === 0) usePoolStore.getState().stop() }
   }, [])
 }
 
@@ -36,14 +43,15 @@ export function usePoolCellModels(views: FleetHostView[]): { models: PoolCellMod
   const answered = usePoolStore((s) => s.sourceHostId !== null)
   const failed = usePoolStore((s) => s.error !== null)
   const lastLiveAt = usePoolStore((s) => s.lastLiveAt)
+  const daemons = usePoolHostDaemons()
   const fleetStale = useFleetStore((s) => s.stale)
   // Active once the pool has said something: a list (an empty one is an answer too), or that every daemon failed. Before the first read the cells stay the fleet's.
   const active = !oldDaemon && (answered || failed)
   const models = useMemo(() => views.map((v) => {
     if (!active) return poolCellModel(v, null, null)
-    const pool = matchPoolHost(hosts, v)
+    const pool = matchPoolHost(hosts, v, daemons)
     const alias = pool?.alias ?? v.alias
     return poolCellModel(v, poolHostView({ alias, pool, fleet: v, fleetStale, poolLastOk: lastLiveAt[alias] ?? null }, now), pool)
-  }), [views, active, hosts, fleetStale, lastLiveAt, now])
+  }), [views, active, hosts, daemons, fleetStale, lastLiveAt, now])
   return { models, active }
 }

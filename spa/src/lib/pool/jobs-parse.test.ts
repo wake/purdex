@@ -105,3 +105,15 @@ describe('the envelopes', () => {
     expect(parseCursorAhead(null)).toBeNull()
   })
 })
+
+describe('the slot of a job', () => {
+  const slotOf = (slot: unknown) => parseJob({ ...doneJson, slot })?.slot
+  it('reads heavy and light', () => {
+    expect(slotOf('heavy')).toBe('heavy')
+    expect(slotOf('light')).toBe('light')
+  })
+  it('leaves the field out when absent or not a known value', () => {
+    expect(parseJob(doneJson)).not.toHaveProperty('slot')
+    for (const bad of ['medium', 3, null, '']) expect(parseJob({ ...doneJson, slot: bad })).not.toHaveProperty('slot')
+  })
+})

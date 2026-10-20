@@ -20,6 +20,7 @@ import { RANGES, stepMs } from '../../lib/watch/series'
 import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
 import { usePoolCellModels } from '../../lib/pool/use-cell-models'
 import { matchPoolHost } from '../../lib/pool/cell-model'
+import { usePoolHostDaemons } from '../../lib/pool/daemons'
 import { usePoolStore } from '../../lib/pool/store'
 import { useFactsHistory } from '../../lib/pool/use-facts-history'
 import { useSeriesHistory } from '../../lib/pool/use-series-history'
@@ -109,9 +110,10 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const views = useMemo(() => (view ? [view] : []), [view])
   const { models, active: poolActive } = usePoolCellModels(views)
   const poolHosts = usePoolStore((s) => s.hosts)
+  const daemons = usePoolHostDaemons()
   const model = poolActive && view ? models[0] : null
   const pool = model?.pool ?? null
-  const poolHost = model && view ? matchPoolHost(poolHosts, view) : null
+  const poolHost = model && view ? matchPoolHost(poolHosts, view, daemons) : null
   const live = pool?.state === 'live' ? (poolHost?.facts ?? null) : null
   // The 5 minute range on a live host: wwd's own last 5 minutes (read once), and each sample's zone for the band.
   const hist = useFactsHistory(fleetHostId, poolHost?.alias ?? null, live !== null && range === '5m', live)

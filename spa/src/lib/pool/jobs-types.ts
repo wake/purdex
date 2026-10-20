@@ -36,6 +36,8 @@ export interface PoolJob {
   task: string
   args: string[]
   class: JobClass
+  /** Which lane of the host it runs in; absent when the wire does not say. */
+  slot?: 'heavy' | 'light'
   labels: string[]
   locks: string[]
   cacheable: boolean
