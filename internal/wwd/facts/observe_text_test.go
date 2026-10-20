@@ -201,3 +201,35 @@ func TestCommandSignature(t *testing.T) {
 		}
 	}
 }
+
+// ccWrap is the zsh -c script Claude Code builds around every Bash command (a real sample from ps; the newlines are real ones): the
+// shell snapshot, two exports, setopt, an unalias guard, then the command as the single-quoted argument of eval, with stdin and the
+// cwd file around it.
+func ccWrap(evalArg string) []string {
+	return []string{"/bin/zsh", "-c", "source /Users/wake/.claude/shell-snapshots/snapshot-zsh-1791868536359-gzelyx.sh 2>/dev/null || true && " +
+		"export CODEX_COMPANION_SESSION_ID='8c088675-7d6b-42da-8b1d-0f9b5ed031cc'\nexport CLAUDE_PLUGIN_DATA='/Users/wake/.claude/plugins/data/codex-openai-codex'\n" +
+		": && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && " +
+		"{ \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && " +
+		"eval " + evalArg + " < /dev/null && pwd -P >| /tmp/claude-19cb-cwd"}
+}
+
+func TestCommandSignatureSeesThroughTheClaudeCodeWrapper(t *testing.T) {
+	for name, c := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"a bare command":              {ccWrap(`'go test ./...'`), "go test"},
+		"a quoted program path":       {ccWrap(`''"'"'/Users/wake/Workspace/wake/purdex/bin/pdx'"'"' test go-all'`), "pdx test go-all"},
+		"cd then the command":         {ccWrap(`'cd /x && git status --short'`), "git status"},
+		"a quote escaped as '\\''":    {ccWrap(`'cd /x && grep -rn '\''a && b'\'' src | wc -l'`), "grep"},
+		"a newline between commands":  {ccWrap("'cd /x\npnpm vitest run a.test.ts'"), "pnpm vitest run"},
+		"a && inside quotes is data":  {ccWrap(`'echo "a && go test" && true'`), "echo"},
+		"the wrapper only":            {ccWrap(`''`), "zsh"},
+		"no eval, only the scene set": {[]string{"/bin/zsh", "-c", ": && setopt NO_EXTENDED_GLOB 2>/dev/null || true"}, "zsh"},
+		"plain zsh -c still works":    {[]string{"zsh", "-c", "setopt extendedglob && swift build"}, "swift build"},
+	} {
+		if got := CommandSignature(c.argv); got != c.want {
+			t.Errorf("%s: CommandSignature = %q, want %q", name, got, c.want)
+		}
+	}
+}

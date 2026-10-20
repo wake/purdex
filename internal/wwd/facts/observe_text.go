@@ -155,11 +155,23 @@ const maxSignatureName = 32
 // KEY=value arguments are left out; env prefixes are looked through; for "bash -c <script>" it is the script's first real command.
 // It is made from the scrubbed command line, so a secret given as a bare word is not in it. "unknown" when argv names nothing.
 func CommandSignature(argv []string) string {
-	sig := signature(scrubbed(argv), 0)
+	sig := signature(scrubbed(scriptNewlines(argv)), 0)
 	if sig == "" {
 		return "unknown"
 	}
 	return sig
+}
+
+// scriptNewlines is argv with the newlines of a `sh -c` script turned into ";": cleanArgv drops control characters, which would
+// join the last word of a line to the first of the next ("export A=1\npnpm test" -> "export A=1pnpm test").
+func scriptNewlines(argv []string) []string {
+	i := shellScript(argv)
+	if i < 0 || !strings.ContainsAny(argv[i], "\r\n") {
+		return argv
+	}
+	out := append([]string(nil), argv...)
+	out[i] = strings.NewReplacer("\r\n", ";", "\n", ";", "\r", ";").Replace(argv[i])
+	return out
 }
 
 // isScrubbed says whether a word is a replacement the scrubber made (or holds one).
@@ -261,6 +273,9 @@ func signature(clean []string, depth int) string {
 			}
 			break // a flag: what follows is its value or an argument, not a subcommand
 		}
+		if strings.ContainsAny(a, " \t") {
+			break // a phrase in quotes is an argument, not a subcommand
+		}
 		if strings.Contains(a, "=") || isNumber(a) || strings.Contains(a, "://") || a == "." || a == ".." {
 			continue
 		}
@@ -289,22 +304,128 @@ func trimName(s string) string {
 	return string([]rune(s)[:maxSignatureName])
 }
 
-var reSegmentSplit = regexp.MustCompile(`&&|\|\||;|\||\n`)
+// splitSegments splits a script into its commands at &&, ||, ;, | and newlines outside quotes (a quoted "a && b" is data, which is
+// what lets the argument of eval stay in one piece). A backslash outside single quotes keeps the next character; an unterminated
+// quote runs to the end.
+func splitSegments(s string) []string {
+	var segs []string
+	var cur strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		segs = append(segs, cur.String())
+		cur.Reset()
+	}
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\' && quote != '\'':
+			cur.WriteRune(r)
+			escaped = true
+		case quote != 0:
+			cur.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+			cur.WriteRune(r)
+		case r == ';' || r == '\n' || r == '|' || r == '&' && i+1 < len(rs) && rs[i+1] == '&':
+			if (r == '|' || r == '&') && i+1 < len(rs) && rs[i+1] == r {
+				i++
+			}
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return segs
+}
+
+// unquoteWord is a shell word with its quoting taken off: 'single' is literal, "double" honours \" \\ \$ \` , a backslash outside
+// quotes keeps the next character, and the pieces of "a"'b'c are one word ('\” and '"'"' are the usual ways to put a quote in one).
+func unquoteWord(w string) string {
+	var b strings.Builder
+	var quote rune
+	escaped := false
+	for _, r := range w {
+		switch {
+		case escaped:
+			if quote == '"' && !strings.ContainsRune("\"\\$`", r) {
+				b.WriteRune('\\')
+			}
+			b.WriteRune(r)
+			escaped = false
+		case r == '\\' && quote != '\'':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				b.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// scriptScene are the words that only set the scene for the command that follows (Claude Code's wrapper adds ":", setopt and a
+// guard of unalias/unset in braces); "}" closes that guard.
+var scriptScene = map[string]bool{":": true, "setopt": true, "unsetopt": true, "unalias": true, "}": true}
+
+// redirectWord says whether a word starts a redirection ("< /dev/null", ">| f", "2>&1"): what follows it is not an argument.
+func redirectWord(w string) bool {
+	w = strings.TrimLeft(w, "0123456789")
+	return strings.HasPrefix(w, "<") || strings.HasPrefix(w, ">")
+}
 
 // scriptSignature is the signature of the first real command of a shell script: the segments that only set the scene (cd, export,
-// VAR=1 prefixes) are passed over.
+// VAR=1 prefixes, setopt, a braced guard) are passed over, and `eval '<script>'` (what Claude Code wraps every command in) is read
+// as the script it holds. The shell's own name when nothing real is found.
 func scriptSignature(script string, depth int, shell string) string {
-	for _, seg := range reSegmentSplit.Split(script, -1) {
-		f := strings.Fields(seg)
-		for len(f) > 0 && strings.Contains(f[0], "=") && !strings.HasPrefix(f[0], "-") {
-			f = f[1:] // VAR=value prefixes
+	if sig := scriptFirst(script, depth); sig != "" {
+		return sig
+	}
+	return trimName(shell)
+}
+
+func scriptFirst(script string, depth int) string {
+	for _, seg := range splitSegments(script) {
+		f := splitShellWords(seg)
+		for i := range f {
+			f[i] = unquoteWord(f[i])
 		}
-		if len(f) == 0 || shellPrelude[f[0]] {
+		for len(f) > 0 && (f[0] == "{" || f[0] == "builtin" || f[0] == `\builtin` || strings.Contains(f[0], "=") && !strings.HasPrefix(f[0], "-")) {
+			f = f[1:] // a brace group, \builtin, VAR=value prefixes
+		}
+		if len(f) == 0 || shellPrelude[f[0]] || scriptScene[f[0]] {
 			continue
+		}
+		if f[0] == "eval" {
+			args := f[1:]
+			for i, a := range args {
+				if redirectWord(a) {
+					args = args[:i]
+					break
+				}
+			}
+			if depth <= 3 {
+				return scriptFirst(strings.Join(args, " "), depth+1)
+			}
+			return "" // eval is the command the wrapper exists for: what follows it (pwd -P) is not
 		}
 		if sig := signature(f, depth); sig != "" {
 			return sig
 		}
 	}
-	return trimName(shell)
+	return ""
 }
