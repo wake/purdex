@@ -4,7 +4,6 @@ package main
 // control works with the daemon down. `pdx gate status` reads the slot records straight from the gate directory.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -82,16 +81,16 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	hasSep := ok || sepIn(args)
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	class := fs.String("class", "", "heavy or light")
-	auto := fs.Bool("auto", false, "classify the command by its words")
-	fg := fs.Bool("fg", false, "no background QoS")
+	class := fs.String("class", "", "heavy or light (no effect: the gate holds nothing)")
+	fs.Bool("auto", false, "classify the command by its words (no effect)")
+	fs.Bool("fg", false, "no background QoS (no effect)")
 	real := fs.String("real", "", "binary to run in place of the first word")
 	tool := fs.String("tool", "", "the shim that called: find the real binary behind it")
-	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
-	waitMax := fs.Float64("wait-max", 0, "seconds the command may wait for its slot; past them it is not run and the exit code is 75")
-	classSource := fs.String("class-source", "", "where --class came from, for the decision record (classifier or kind)")
-	assistHost := fs.String("assist-host", "", "(tests and manual checks) send the command to this assist host instead of running it here")
-	assistSSH := fs.String("assist-ssh", "", "(tests and manual checks) the ssh program for --assist-host")
+	fs.String("config", "", "config.toml (no effect)")
+	waitMax := fs.Float64("wait-max", 0, "no effect: nothing waits for a slot, so nothing is refused with 75")
+	classSource := fs.String("class-source", "", "where --class came from (classifier or kind; no effect)")
+	fs.String("assist-host", "", "no effect")
+	fs.String("assist-ssh", "", "no effect")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
@@ -113,17 +112,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, gateUsage)
 		return 2
 	}
-	var c gate.Class
-	switch *class {
-	case "":
-		if !*auto {
-			c = gate.ClassHeavy
-		}
-	case "heavy":
-		c = gate.ClassHeavy
-	case "light":
-		c = gate.ClassLight
-	default:
+	if *class != "" && *class != "heavy" && *class != "light" {
 		fmt.Fprintf(stderr, "pdx gate: --class must be heavy or light, got %q\n", *class)
 		return 2
 	}
@@ -150,39 +139,10 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return 127
 		}
 	}
-	// The hot path of a shim (go env, pnpm install, …): a command the gate does not take in is run at once, by exec, before any
-	// gate state is made. Only the settings file is read (the intercept rules of it still apply), nothing else of the gate.
-	if *tool != "" && *class == "" {
-		cfg, _ := gate.Load(gateConfigPath(*cfgPath))
-		cls := cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), gateStdinIsTTY()))
-		if !cfg.Enabled {
-			return gateExecDirect(realBin, command, childEnv, stderr)
-		}
-		if !cls.Valid() {
-			// A packaging script, or a `run` script nobody has a rule for, takes no slot but is run by the gate as its child (to
-			// be written down, and for packaging to be put under a slot when it runs long, #2996); the gate classifies it again.
-			if cfg.WatchKind(command, gate.EnvOf(os.Environ(), gateStdinIsTTY())) == "" {
-				return gateExecDirect(realBin, command, childEnv, stderr)
-			}
-			c = ""
-		} else {
-			c = cls
-		}
-	}
-	cfg := loadGateConfig(*cfgPath, stderr)
-	g := newGate(cfg)
-	g.Stderr = stderr
-	g.Load = gateReloader(*cfgPath, cfg)
-	var target *gate.AssistTarget
-	if *assistHost != "" { // a failure there puts the command back in the queue here
-		target = &gate.AssistTarget{Host: *assistHost, SSH: *assistSSH}
-	}
-	var walk *gate.AssistWalk
-	if target == nil && *waitMax <= 0 { // a run sent here from another host (--wait-max) is not sent on
-		walk = gateAssistWalk(*cfgPath, cfg.Dir)
-	}
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Env: childEnv, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
-	return code
+	// WWD-9 S0-a: the gate holds nothing any more. Every form (the script form, --auto, a shim's --tool) runs the command by exec, at once, with
+	// its exit code and its streams; --class, --class-source, --fg, --wait-max and --assist-* are read (a mistake in them is still a usage error)
+	// and have no effect. The wwd's queue and its entry are what hold a heavy command now.
+	return gateExecDirect(realBin, command, childEnv, stderr)
 }
 
 // newGate is the gate of this host for a call that takes a slot or answers about one: it asks the local wwd for its holds (spec §13.4),
@@ -506,41 +466,26 @@ func orDash(s string) string {
 
 const wouldWaitUsage = "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n       pdx gate would-wait --auto [--json] [--config <path>] -- <command…>\n       pdx gate would-wait --auto-batch '<[[\"go\",\"test\"],[\"ls\"]]>' [--json] [--config <path>]\n"
 
-// wouldWaitBatch answers for several commands in one process: each is classified by its words as --auto does and gets the
-// answer a call of its own would get. The commands of one class are looked at once, so they cannot disagree with each other.
-// The JSON is an array in the order of the commands.
-func wouldWaitBatch(g *gate.Gate, cfg gate.Config, argvs [][]string, asJSON bool, stdout io.Writer) int {
-	env := gate.EnvOf(os.Environ(), false) // the same view of the environment as a shim's: no terminal, the caller's variables
-	byClass := map[gate.Class]gate.WouldWait{}
-	views := map[gate.Class]gate.ConflictView{} // the rules, queue and holders of a class, read once like its WouldWait
+// wouldWaitBatch answers for several commands in one process: each is classified by its words as --auto does, and none waits. The JSON is an
+// array in the order of the commands.
+func wouldWaitBatch(cfg gate.Config, env gate.Env, argvs [][]string, asJSON bool, stdout io.Writer) int {
 	answers := make([]gate.WouldWait, 0, len(argvs))
 	for _, argv := range argvs {
-		cl := cfg.Intercept.Classify(argv, env)
-		w, ok := byClass[cl]
-		if !ok {
-			w = g.WouldWait(cl)
-			byClass[cl] = w
-			views[cl] = g.ConflictView(cl)
-		}
-		answers = append(answers, views[cl].Apply(w, argv)) // the class's one reading, and this command's rules
+		answers = append(answers, gate.WouldWait{Class: cfg.Intercept.Classify(argv, env)})
 	}
 	if asJSON {
 		b, _ := json.Marshal(answers)
 		fmt.Fprintln(stdout, string(b))
 		return 0
 	}
-	for _, w := range answers {
-		if !w.Wait {
-			fmt.Fprintln(stdout, "no")
-			continue
-		}
-		fmt.Fprintf(stdout, "yes (%s): %s\n", w.Reason, w.Note)
+	for range answers {
+		fmt.Fprintln(stdout, "no")
 	}
 	return 0
 }
 
-// gateWouldWait answers whether a command of a class would wait now, without taking a slot. It exits 0 either way (the
-// answer is in the output); 2 is a usage error.
+// gateWouldWait answers whether a command of a class would wait now: never (S0-a), and without reading the gate. It exits 0 (the answer
+// is in the output); 2 is a usage error.
 func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate would-wait", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -572,17 +517,18 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	// WWD-9 S0-a: nothing waits for a slot any more, so the answer is always no. It keeps its shape (class, ahead 0) for the readers of the JSON,
+	// reads no slot, no queue and no pressure, and makes no gate directory.
 	cfg := loadGateConfig(*cfgPath, stderr)
-	g := newGate(cfg)
+	env := gate.EnvOf(os.Environ(), false) // the same view of the environment as a shim's: no terminal, the caller's variables
 	if batchGiven {
-		return wouldWaitBatch(g, cfg, argvs, *asJSON, stdout)
+		return wouldWaitBatch(cfg, env, argvs, *asJSON, stdout)
 	}
 	cl := gate.Class(*class)
 	if *auto {
-		// the same view of the environment as a shim's: no terminal, the caller's variables
-		cl = cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), false))
+		cl = cfg.Intercept.Classify(command, env)
 	}
-	w := g.WouldWaitFor(cl, command)
+	w := gate.WouldWait{Class: cl}
 	if *asJSON {
 		b, _ := json.Marshal(w)
 		fmt.Fprintln(stdout, string(b))

@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGate_WouldWaitAnswersNoWhenFreeAndYesWithAReasonWhenTaken(t *testing.T) {
+func TestGate_WouldWaitAnswersNo(t *testing.T) {
 	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, gateMain([]string{"would-wait", "--config", cfg}, &out, &errb), errb.String())
@@ -25,22 +23,7 @@ func TestGate_WouldWaitAnswersNoWhenFreeAndYesWithAReasonWhenTaken(t *testing.T)
 	assert.Equal(t, false, w["would_wait"])
 	assert.Equal(t, "light", w["class"])
 
-	// a held heavy slot: run a command that holds it while we ask
-	gofile := filepath.Join(t.TempDir(), "go")
-	release := func() { _ = os.WriteFile(gofile, nil, 0o644) }
-	defer release()
-	hold := make(chan int, 1)
-	var hout, herr bytes.Buffer
-	go func() {
-		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
-	}()
-	eventuallyOutput(t, func() bool {
-		out.Reset()
-		gateMain([]string{"would-wait", "--config", cfg}, &out, &errb)
-		return bytes.HasPrefix(out.Bytes(), []byte("yes (slots): waiting for a heavy slot"))
-	})
-	release()
-	assert.Equal(t, 0, <-hold)
+	assert.Equal(t, false, w["would_wait"], "and a held heavy slot changes nothing: see gate_direct_test.go")
 }
 
 func TestGate_WouldWaitUsage(t *testing.T) {

@@ -44,7 +44,7 @@ func waitingGates(t *testing.T, cfg string, n int) (release func()) {
 		go func() {
 			defer close(done)
 			var o, e bytes.Buffer
-			gateMain(append([]string{"--config", cfg, "--class", "heavy", "--fg", "--"}, argv...), &o, &e)
+			slotGateMain(append([]string{"--config", cfg, "--class", "heavy", "--fg", "--"}, argv...), &o, &e)
 		}()
 	}
 	t.Cleanup(func() {
