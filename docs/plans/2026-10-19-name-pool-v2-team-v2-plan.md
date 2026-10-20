@@ -25,7 +25,7 @@
 | `GET /api/hostconfig` | no longer has `personas` |
 | host event `hostconfig.personas` | `{revision}` (P4) |
 | envelope `names` (`internal/peers/envelope.go`) | `{familiar: [code]}`, optional, added by NP-3. (The `personas` member of rev 2 is dropped with NP-2, 10-19.) |
-| `PUT /api/hostconfig/task-groups` / key `task_groups` | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
+| ~~`PUT /api/hostconfig/task-groups` / key `task_groups`~~ **(retired in TG-6)** | `{items: [{id, name, color, roots, created_at, updated_at}], baseRevision}`. The GET comes with the collections. |
 | `LeadPayload.lead_names` | `[{code, name, kind: "keep"|"former"|"lead"|"other", last_at}]`. It is always present from a daemon with `team.lead_name.v1`; `[]` means that no persona exists. |
 | `Grant.lead_name` | an optional code. Absent means keep the current name. |
 | decide error | 409 `{error: "name_taken", lead_names: [...]}` (the refreshed list) |
@@ -36,7 +36,7 @@
 
 ### 1.2 Capabilities (appended in this order; the exact-list test is in `internal/core/info_handler_test.go:419`)
 
-`personas.v1` (NP-1), `team.max_members.v2` and `team.lead_name.v1` (NP-4), `task_groups.v1` (NP-5),
+`personas.v1` (NP-1), `team.max_members.v2` and `team.lead_name.v1` (NP-4), ~~`task_groups.v1` (NP-5)~~ (retired in TG-6),
 `team.decision_log.v1` (NP-6). Each one gets the real-module `/api/info` test from the 743 lesson.
 
 ### 1.3 Name service (Go, `internal/peers` interface, implemented in `internal/module/peers`)
@@ -89,7 +89,7 @@ type SpawnReservationReader interface {
 | ~~NP-2~~ | — | **Dropped 10-19 (user):** no daemon-to-daemon persona sync. One source host, and the App copies it to the others (spec §4.3, NA-1d) | — |
 | NP-3 | daemon member B | history tables, rules 1–3, aliases and routing, bracket check, backfill, name service (minus spawn), `familiar` in the envelope, `CLAUDE.md` | NP-1 |
 | NP-4 | daemon member B | reservations (local and remote), lead names at approval, `/team` parse and card path, adopt pair, cap 9 | NP-0, NP-3 |
-| NP-5 | daemon member A | `task_groups` key and capability | §1 |
+| NP-5 | daemon member A | ~~`task_groups` key and capability~~ — retired in TG-6 | §1 |
 | NP-6 | daemon member A | decision log, `unattended_events`, `log` field | §1 |
 | NA-0 | lead (Opus) | Design: team panel v2 layout on a real screen, persona page, task-group view, deck speech line. A docs PR with screenshots of a prototype, not a vite server on mlab (the 10-17 rule) | — |
 | NA-1 | interface member | persona store, `seatOf`, `<Avatar>`, persona page, import, Electron image IPC (P2) | §1, NA-0 (page) |
@@ -269,7 +269,7 @@ sync mechanisms. Nothing of NP-2 merged. The text below is kept only as a record
 - `/team hiro fix the build` → `lead_name` "hiro", note "fix the build".
 - `/team fix the build` → the card kind.
 
-### NP-5 (`internal/module/hostconfig`)
+### NP-5 (`internal/module/hostconfig`) — retired in TG-6 (`taskgroups.go`, the route and the capability are deleted; see the task groups spec §8)
 
 - `taskgroups.go`: the key, the normaliser (spec §7 limits, one group per root, the name rule `peers.ValidateTitle`),
   the route `PUT /api/hostconfig/task-groups`, and the capability.

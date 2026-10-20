@@ -111,5 +111,4 @@ var readers = map[string]func(json.RawMessage) readout{
 	KeyWatch:           readWatch,
 	KeyProbeHosts:      readProbeHosts,
 	KeyFleet:           readFleet,
-	KeyTaskGroups:      readTaskGroups,
 }

@@ -314,7 +314,6 @@ func TestHostConfig_GetAndPutNeverSeeUnattended(t *testing.T) {
 		"fleet":{"items":{"order":["air26","mlab"],"peer_ssh_alias":"","enabled":true},"revision":0},
 		"workbook":{"items":{"push_wait_s":8},"revision":0},
 		"wwdAlerts":{"items":{"push":false},"revision":0},
-		"taskGroups":{"items":[],"revision":0},
 		"watch":{"items":{"enabled":true,"x_cores":1.5,"y_mb":1024,"t_s":60,"pressure_level":2,"pressure_t_s":120,"page_rate":50,"page_t_s":60,"targets":["air26","mlab"],"mode":"patrol","patrol_idle_min":120,"patrol_present_min":30,"patrol_busy_min":10,"patrol_calm_min":15,"patrol_rest_min":10,"disk_low_gb":14,"auto_wake":true,"agent_command":"claude --dangerously-skip-permissions --model opus","workdir":"~/Workspace/wake/mlab-purdex-watch","start_prompt":"","wake_prompt":""},"revision":0}
 	}`, rr.Body.String())
 	_, hasReader := readers[KeyUnattended]

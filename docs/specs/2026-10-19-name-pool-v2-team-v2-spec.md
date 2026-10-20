@@ -70,7 +70,7 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 | L6 | **Name history** lives in the lead's daemon's meta DB, in two tables (§6.1). The familiar set travels to the other hosts in the peers envelope. | the team module knows leads and members; the picker runs in peers |
 | L7 | **A member's name is reserved when the team accepts its spawn** and stored on the spawn op. For a remote spawn it is sent in the spawn command. | the lead's daemon holds the pair history; the session registers later |
 | L8 | **`/team <name>`:** the first word names the lead when it equals an active persona's code or display name (case-insensitive). Without a name, `/team` shows the name card. **[待確認]** | U3 |
-| L9 | **A manual task group only gathers sessions of one host.** **[待確認]** | stored per host, so no cross-host sync is needed |
+| L9 | ~~**A manual task group only gathers sessions of one host.**~~ **Retired (TG-6):** the groups are the profile's `purdex-task-groups` now ([task groups spec](2026-10-20-task-groups-as-workspaces-spec.md) §4, §8); a group can hold sessions of any host. | ~~stored per host, so no cross-host sync is needed~~ |
 | L10 | Task-group membership is keyed by **lineage root**, so a relay keeps it. A session in a live team shows under its team, and its manual membership is ignored until the team ends. | U11 "same level"; no double listing |
 | L11 | The decision log covers the **team approvals**: `lead`, `adopt`, `self_relay`, `member_relay`, `spawn_resources`. Chat prompts (`hook_ask`, `hook_permission`) are excluded. **[待確認]** | the panel is about unattended team actions; chat prompts would flood 30 rows |
 | L12 | **Relay quotas stay in both panels**, as decided on 10-17, until the user says otherwise. **[待確認]** (open question on the page) | no silent reversal of a decision |
@@ -351,11 +351,7 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
 
 ## 7. Task groups (U11, L9, L10)
 
-- Each host stores its groups in the hostconfig key `task_groups`:
-  `[{id, name, color?, roots: [root_session_id], created_at, updated_at}]`.
-  - Limits: ≤ 32 groups, ≤ 64 roots each, and a root is in at most one group.
-  - The name follows the team-name rule (`peers.ValidateTitle`, 1–64 bytes).
-- Capability `task_groups.v1`. Writes go through the usual CAS PUT.
+- **Retired (TG-6, task groups spec §8):** ~~each host stores its groups in the hostconfig key `task_groups` (`[{id, name, color?, roots, created_at, updated_at}]`, ≤ 32 groups, ≤ 64 roots each, one group per root, name by `peers.ValidateTitle`), capability `task_groups.v1`, writes by the usual CAS PUT~~. The daemon no longer has the key, the route `PUT /api/hostconfig/task-groups` or the capability; a `task_groups` row an older daemon left in `host_config` is never read. The groups live in the profile (`purdex-task-groups`).
 - **A team is a task group by itself.** Its header is the team name, and renaming it goes through
   `PUT /api/team/appearance` (L13). Manual groups hold solo sessions only (L10).
 - **Sidebar task-group mode** (App):
@@ -370,8 +366,8 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
   - The source is the `quotas` of `GET /api/team/unattended` (`team.relay_quota.v1`). The daemon gives one row per
     live session of the host, with `session_id`, `root_session_id` and `address` (`internal/team/wire_quota.go`). The
     App matches `session_id` against the agent session id that its pane records.
-  - A host with `task_groups.v1` always has `team.relay_quota.v1`. If one does not, all of that host's sessions show
-    under 「未分組」; the App does not guess.
+  - The App reads it from a host that lists `team.relay_quota.v1`. (The old condition was `task_groups.v1`, retired in TG-6.) If a
+    host does not list it, all of that host's sessions show under 「未分組」; the App does not guess.
   - The App reads it only while the task-group view is open: once when the view opens, once on a host-events
     reconnect, and once (debounced) when it sees a live session that the list does not have. It always goes through
     the existing shared reader.
@@ -631,7 +627,7 @@ These are the defaults this spec uses. Each can be changed later without reworki
 1. ~~Personas sync to every host automatically~~ → decided 10-19: one source host (default mlab), the App copies it to the others (§4.3).
 2. Code and display name are separate; the code is fixed once created (L2).
 3. `/team <name>` takes the first word as the name when it matches a persona; without a name, a card appears (L8).
-4. A manual task group holds sessions of one host only (L9).
+4. ~~A manual task group holds sessions of one host only (L9).~~ Retired (TG-6): see the task groups spec.
 5. Avatars are stored as 128 px images in the daemon (L3).
 6. The decision log leaves out chat permission and ask prompts (L11).
 7. Relay quotas stay in both the team panel and the unattended panel (L12).
