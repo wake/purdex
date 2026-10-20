@@ -37,7 +37,8 @@ describe('the inclusive seat map (TG-3a-1)', () => {
     const { display } = build(['m1'])
     expect(display.panelTeam('m1')).not.toBeNull()
     expect(display.panelTeam('m2')).not.toBeNull()
-    expect(display.panelTeam('m1')?.key).toBe(display.panelTeam('m2')?.key)
+    expect(display.panelTeam('m1')?.teamKey).toBeDefined()
+    expect(display.panelTeam('m1')?.teamKey).toBe(display.panelTeam('m2')?.teamKey)
     expect(display.panelTeam('plain')).toBeNull()
     expect(display.panelTeam(null)).toBeNull()
   })
@@ -79,5 +80,26 @@ describe('the inclusive seat map (TG-3a-1)', () => {
     expect(structureSignature(seat.structure)).not.toBe(structureSignature(notSeat.structure))
     expect(notSeat.display.panelTeam('m1')).toBeNull()
     expect(seat.display.panelTeam('m1')).not.toBeNull()
+  })
+
+  it('... and when a pinned tab shows two teams\' seats, the pane order decides the team — swapping the panes moves the signature though no view and no byTabId entry changes', () => {
+    const run = (order: 'ab' | 'ba') => {
+      const [first, second] = order === 'ab' ? ['lead-tm', 'other-tm'] : ['other-tm', 'lead-tm']
+      const tabs = [tab('two', leaf(first), true)]
+      tabs[0].layout = { type: 'split', id: `s${++seq}`, direction: 'h', children: [leaf(first), leaf(second)], sizes: [1, 1] }
+      const inp: TeamViewsInput = {
+        rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm')]), team('t2', sess('O', 'other-tm'), [mem('B', 1, 'b-tm')])] },
+        tabsById: { two: tabs[0] }, workspaces: [{ id: 'w1', tabs: ['two'] }], activeWorkspaceId: 'w1', sessionsByHost: {},
+      }
+      const views = selectTeamViews(inp)
+      const index = buildTeamIndex(views, inp.tabsById, inp.sessionsByHost)
+      const structure: StructureInput = { views, index, workspaces: inp.workspaces, sessionsByHost: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, beadHost: false }
+      return { structure, index, display: buildTeamDisplay(structure, { onToggleCollapse: () => {}, onOpenSeat: () => {}, onReorderMembers: () => {} }) }
+    }
+    const ab = run('ab')
+    const ba = run('ba')
+    expect(ab.index.seatByTabId.get('two')?.key).not.toBe(ba.index.seatByTabId.get('two')?.key)
+    expect(ab.display.panelTeam('two')?.teamKey).not.toBe(ba.display.panelTeam('two')?.teamKey)
+    expect(structureSignature(ab.structure)).not.toBe(structureSignature(ba.structure))
   })
 })
