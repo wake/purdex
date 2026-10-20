@@ -20,6 +20,8 @@ import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanelArea } from '../team/TeamPanelArea'
 import { useShownPanelWidth } from '../team/useShownPanelWidth'
+import { usePersonalTarget } from '../team/usePersonalPanel'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { findEntry, useJournalStore } from '../../stores/useJournalStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
@@ -101,8 +103,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const memo = useViewMemo(memoHost, memoKey)
   // The docked team panel sits at the right edge while it is in the pane (not in the title bar): the cards float left of it.
   // The width it really draws: the dragged / persisted width is only the cap in one-line mode (user 2026-10-20). A journal.v1 host never drills.
-  const panelWidth = useShownPanelWidth(team, false)
-  const panelInPane = team !== null && team.mode !== 'titlebar'
+  // A tab of no team with an agent session has the personal panel there, in the one shared mode (task groups spec §7).
+  const personal = usePersonalTarget()
+  const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
+  const personalInPane = team === null && personal !== null && sharedMode !== 'titlebar'
+  const panelWidth = useShownPanelWidth(team, false, personalInPane && sharedMode === 'line')
+  const panelInPane = personalInPane || (team !== null && team.mode !== 'titlebar')
   const reserved = panelInPane ? panelWidth + CARD_GAP : 0
   const last = useJournalUiStore((s) => s.lastWidths)
   const rootRef = useRef<HTMLDivElement>(null)

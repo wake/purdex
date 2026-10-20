@@ -5,12 +5,13 @@
 // Only the strip's content is no-drag: the strip box itself ignores the pointer, so the empty part of the title bar still
 // drags the window. The state lives in `useTeamUiStore` (per team), so a tab switch or a reload comes back the same.
 import { Fragment, useLayoutEffect, useRef } from 'react'
-import { Notebook } from '@phosphor-icons/react'
+import { Notebook, User } from '@phosphor-icons/react'
 import { useTeamDisplay, type TeamPanelTeam } from './team-display'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
 import { useCellCapacity } from './useCellCapacity'
-import { useOwnStatusLine } from './own-workbook'
-import type { OwnWorkbookTarget } from './panel-view'
+import { GroupCapsule, PersonalCell } from './PersonalParts'
+import { usePersonalGroup } from './usePersonalPanel'
+import type { PersonalTarget } from '../../lib/task-groups/personal'
 import { CAPSULE_MAX_W, CELL_GAP, HEADER_GAP, PLUS_CHIP_W } from './panel-layout'
 import { BUTTON, IDLE, PRESSED } from '../title-bar-styles'
 import { useTabStore } from '../../stores/useTabStore'
@@ -125,20 +126,37 @@ export function TeamNotebookButton({ team }: { team: TeamPanelTeam }) {
   return <NotebookButton inBar={team.mode === 'titlebar'} onToggle={() => useTeamUiStore.getState().toggleTitleBar(team.teamKey)} />
 }
 
-/** The same button for a tab of no team whose own conversation has a workbook: it moves the shared value. */
-export function OwnNotebookButton() {
+/** The 「個人」 button for a tab of no team that shows an agent session: it moves the shared value between the title bar and the pane, like the team's button (task groups spec §7). */
+export function PersonalButton() {
+  const t = useI18nStore((s) => s.t)
   const inBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
-  return <NotebookButton inBar={inBar} onToggle={() => useTeamUiStore.getState().toggleSharedTitleBar()} />
+  const label = t(inBar ? 'personal.titlebar.to_pane' : 'personal.titlebar.to_titlebar')
+  return (
+    <div data-testid="personal-button-wrap" className="shrink-0 flex items-center mr-0.5" style={NO_DRAG}>
+      <button
+        type="button"
+        data-testid="personal-button"
+        aria-pressed={inBar}
+        aria-label={label}
+        title={label}
+        className={`${BUTTON} ${inBar ? PRESSED : IDLE}`}
+        onMouseDown={keepFocus}
+        onClick={() => useTeamUiStore.getState().toggleSharedTitleBar()}
+      >
+        <User size={14} weight={inBar ? 'fill' : 'regular'} />
+      </button>
+    </div>
+  )
 }
 
 /**
- * The strip of a tab of no team, while the shared value is `titlebar`: one line, the first sentence of the conversation's
- * latest status; a click brings the area back into the pane at the mode it left (the same move as the Notebook button). Same box and sizing contract as `TeamTitleStrip`.
+ * The strip of a tab of no team, while the shared value is `titlebar` (R10): the group's capsule and the session's avatar cell. A click on the capsule brings the area back into the pane at the mode it left (the same move as
+ * the button). Same box and sizing contract as `TeamTitleStrip`.
  */
-export function OwnTitleStrip({ target, room = null, onContentWidth }: { target: OwnWorkbookTarget; room?: number | null; onContentWidth?: (w: number) => void }) {
+export function PersonalTitleStrip({ target, room = null, onContentWidth }: { target: PersonalTarget; room?: number | null; onContentWidth?: (w: number) => void }) {
   const inner = useRef<HTMLDivElement>(null)
-  const line = useOwnStatusLine(target.hostId, target.sessionId)
-  const open = useI18nStore((s) => s.t)('team.workbook.open')
+  const { group } = usePersonalGroup(target)
+  const back = useI18nStore((s) => s.t)('personal.titlebar.to_pane')
   useLayoutEffect(() => {
     const el = inner.current
     if (!el || !onContentWidth) return
@@ -151,14 +169,17 @@ export function OwnTitleStrip({ target, room = null, onContentWidth }: { target:
   }, [onContentWidth])
   return (
     <div
-      data-testid="own-title-strip"
+      data-testid="personal-title-strip"
       className={`flex items-center justify-end relative min-w-0 overflow-hidden pointer-events-none ${room === null ? 'flex-1' : 'shrink-0'}`}
       style={{ ...(room === null ? null : { width: room }), marginRight: HEADER_GAP }}
     >
-      <div ref={inner} className="flex items-center min-w-0 max-w-full">
-        <TeamStripButton testId="own-strip-line" onClick={() => useTeamUiStore.getState().toggleSharedTitleBar()} label={line.full !== '' ? line.full : open} className="min-w-0 shrink overflow-hidden">
-          <span className="block truncate text-[11px] leading-[18px] text-text-secondary">{line.text}</span>
+      <div ref={inner} className="flex items-center min-w-0 max-w-full" style={{ columnGap: HEADER_GAP }}>
+        <TeamStripButton testId="personal-strip-capsule" onClick={() => useTeamUiStore.getState().toggleSharedTitleBar()} label={back} className="min-w-0 shrink overflow-hidden">
+          <GroupCapsule group={group} className="block" style={{ maxWidth: CAPSULE_MAX_W }} />
         </TeamStripButton>
+        <span data-testid="personal-strip-cell" className="pointer-events-auto flex items-center" style={NO_DRAG}>
+          <PersonalCell target={target} />
+        </span>
       </div>
     </div>
   )

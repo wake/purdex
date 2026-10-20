@@ -61,14 +61,14 @@ const openTeamCard = () => {
 describe('panelView', () => {
   const team = { teamKey: KEY, name: 'T' } as TeamPanelTeam
   const drill = { [KEY]: DRILL }
-  const own = { hostId: HOST, sessionId: 'S' }
-  it('on a journal host a persisted drill is ignored and there is no own workbook', () => {
-    expect(panelView({ panelTeam: team, teamDrill: drill, own, journalHost: true })).toEqual({ kind: 'team', team })
-    expect(panelView({ panelTeam: null, teamDrill: drill, own, journalHost: true })).toBeNull()
+  const personal = { tabId: 't1', hostId: HOST, sessionCode: 'c1', agentSessionId: 'S', agentType: 'cc', ended: false }
+  it('on a journal host a persisted drill is ignored; the personal panel is not a workbook view and stays', () => {
+    expect(panelView({ panelTeam: team, teamDrill: drill, personal, journalHost: true })).toEqual({ kind: 'team', team })
+    expect(panelView({ panelTeam: null, teamDrill: drill, personal, journalHost: true })).toEqual({ kind: 'personal', target: personal })
   })
   it('on an older host the same input still drills', () => {
-    expect(panelView({ panelTeam: team, teamDrill: drill, own })).toEqual({ kind: 'workbook', from: 'team', team })
-    expect(panelView({ panelTeam: null, teamDrill: drill, own })).toEqual({ kind: 'workbook', from: 'own', ...own })
+    expect(panelView({ panelTeam: team, teamDrill: drill, personal })).toEqual({ kind: 'workbook', from: 'team', team })
+    expect(panelView({ panelTeam: null, teamDrill: drill, personal })).toEqual({ kind: 'personal', target: personal })
   })
 })
 

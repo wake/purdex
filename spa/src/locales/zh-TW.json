@@ -3378,5 +3378,9 @@
   "watch.host.res_kind": "種類",
   "watch.host.res_count": "數量",
   "watch.host.zone_band": "區域",
-  "watch.host.history_not_local": "這台的歷史還不能經這個 daemon 讀。"
+  "watch.host.history_not_local": "這台的歷史還不能經這個 daemon 讀。",
+  "personal.titlebar.to_pane": "把個人面板放回窗格",
+  "personal.titlebar.to_titlebar": "把個人面板收進標題列",
+  "personal.sessions": "{{count}} 個 session",
+  "personal.ended": "已結束"
 }

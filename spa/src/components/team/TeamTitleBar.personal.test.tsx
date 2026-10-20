@@ -1,17 +1,17 @@
-// spa/src/components/team/TeamTitleBar.own.test.tsx — WA-2b-1b (round 3): a tab of no team whose `cc` conversation has a workbook
-// gets the title-bar Notebook button and, in the `titlebar` state, a one-line strip (first sentence of the status).
+// spa/src/components/team/TeamTitleBar.personal.test.tsx — task groups spec §7 (TG-5b): a tab of no team that shows an agent session gets the title-bar 「個人」 button and, in the `titlebar` state, the strip
+// (the group's capsule and the session's cell).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TitleBar } from '../TitleBar'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
-import { seedWorkbook } from '../../lib/team/__tests__/workbook-fixture'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
+import { useRootCacheStore } from '../../lib/task-groups/root-cache'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { Tab } from '../../types/tab'
 
@@ -30,109 +30,103 @@ const ccTab = (id: string, agent: { type: string; sessionId?: string }): Tab => 
 const addTab = (tab: Tab) => act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tab.id]: tab }, tabOrder: [...s.tabOrder, tab.id] })) })
 const setActive = (id: string | null) => act(() => { useTabStore.setState({ activeTabId: id }) })
 const shared = () => useTeamUiStore.getState().sharedPanelMode
-const button = () => screen.queryByTestId('team-notebook-button')
+const personalButton = () => screen.queryByTestId('personal-button')
 const mountBar = () => render(<TeamDisplayProvider><TitleBar title="T" /><TeamPanelArea /></TeamDisplayProvider>)
 
 beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
-  useWorkbookStore.getState().reset()
+  useManualGroupsStore.setState({ order: [], groups: {} })
+  useRootCacheStore.setState({ roots: {}, addresses: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
+  useI18nStore.getState().setLocale('zh-TW')
   seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'ma', 'x'] }], activeTabId: 'x' })
   addTab(ccTab('cc1', { type: 'cc', sessionId: 'S1' }))
-  seedWorkbook(HOST, 'S1', { status: 'Wiring the login form. Next the tests.' })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => useI18nStore.getState().setLocale('en')) })
 
-describe('the Notebook button for a tab of no team', () => {
-  it('shows for a cc tab with a workbook, and not for a tab without one', () => {
+describe('the 「個人」 button', () => {
+  it('shows for a tab that shows an agent session — a codex one too — and not for a tab without one', () => {
+    addTab(ccTab('cx', { type: 'codex', sessionId: 'S2' }))
+    addTab(ccTab('cn', { type: 'cc' }))
     mountBar()
-    expect(button()).toBeNull() // tab x: no conversation
-    setActive('cc1')
-    expect(button()).not.toBeNull()
-  })
-  it('is absent when the host lacks workbook.v1, the agent is not cc, or the conversation has no workbook', () => {
-    addTab(ccTab('cx', { type: 'codex', sessionId: 'S1' }))
-    addTab(ccTab('cy', { type: 'cc', sessionId: 'S2' }))
-    mountBar()
-    setActive('cx'); expect(button()).toBeNull()
-    setActive('cy'); expect(button()).toBeNull()
-    act(() => { seedWorkbook(HOST, 'S1', { status: 'x' }, { v1: false }) })
-    setActive('cc1'); expect(button()).toBeNull()
+    expect(personalButton()).toBeNull() // tab x: no session
+    setActive('cc1'); expect(personalButton()).not.toBeNull()
+    setActive('cx'); expect(personalButton()).not.toBeNull()
+    setActive('cn'); expect(personalButton()).toBeNull() // the pane recorded no session id
   })
   it('lit in the title bar, dim in the pane; a press moves the shared value between the title bar and the pane state it left', () => {
     setActive('cc1')
     mountBar()
     expect(shared()).toBe('titlebar')
-    expect(button()!.getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(button()!)
+    expect(personalButton()!.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(personalButton()!)
     expect(shared()).toBe('full')
-    expect(button()!.getAttribute('aria-pressed')).toBe('false')
+    expect(personalButton()!.getAttribute('aria-pressed')).toBe('false')
     act(() => useTeamUiStore.getState().setSharedPanelMode('line'))
-    fireEvent.click(button()!)
+    fireEvent.click(personalButton()!)
     expect(shared()).toBe('titlebar')
-    fireEvent.click(button()!)
+    fireEvent.click(personalButton()!)
     expect(shared()).toBe('line') // back to where it left
   })
   it('a team tab keeps the team button (it moves the team value, not the shared one)', () => {
     setActive('lead')
     mountBar()
-    fireEvent.click(button()!)
+    expect(personalButton()).toBeNull()
+    fireEvent.click(screen.getByTestId('team-notebook-button'))
     expect(shared()).toBe('titlebar')
     expect(useTeamUiStore.getState().panelMode).not.toEqual({})
   })
 })
 
-describe('the strip for a tab of no team', () => {
-  it('in the title bar: one line with the first sentence of the status; the window title stays', () => {
+describe('the strip', () => {
+  it('in the title bar: the group\'s capsule and the session\'s cell; the window title stays', () => {
     setActive('cc1')
     mountBar()
-    expect(screen.getByTestId('own-title-strip')).toBeTruthy()
-    expect(screen.getByTestId('own-strip-line').textContent).toBe('Wiring the login form')
+    expect(screen.getByTestId('personal-title-strip')).toBeTruthy()
+    expect(screen.getByTestId('personal-strip-capsule').textContent).toBe('未分組')
+    expect(screen.getByTestId('personal-strip-cell').querySelector('[data-testid="personal-cell"]')).toBeTruthy()
     expect(screen.getByText('T')).toBeTruthy()
     expect(screen.queryByTestId('team-title-strip')).toBeNull()
   })
-  it('a click restores the mode the area left', () => {
+  it('the capsule follows the group the session is filed in', () => {
     setActive('cc1')
     mountBar()
-    fireEvent.click(screen.getByTestId('own-strip-line'))
-    expect(shared()).toBe('full')
-    expect(screen.queryByTestId('own-title-strip')).toBeNull()
-    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
+    act(() => {
+      useManualGroupsStore.setState({ order: ['g1'], groups: { g1: { name: 'iOS 發版', members: [{ host: HOST, root: 'R' }], createdAt: 0 } } })
+      useRootCacheStore.getState().ingest(HOST, [{ session_id: 'S1', root_session_id: 'R' }])
+    })
+    expect(screen.getByTestId('personal-strip-capsule').textContent).toBe('iOS 發版')
   })
-  it.each(['line', 'full'] as const)('from %s: the strip and the Notebook button both give back that mode, again on a second round trip', (mode) => {
+  it('a click on the capsule restores the mode the area left', () => {
+    setActive('cc1')
+    mountBar()
+    fireEvent.click(screen.getByTestId('personal-strip-capsule'))
+    expect(shared()).toBe('full')
+    expect(screen.queryByTestId('personal-title-strip')).toBeNull()
+    expect(screen.getByTestId('personal-panel')).toBeTruthy()
+  })
+  it.each(['line', 'full'] as const)('from %s: the strip and the button both give back that mode, again on a second round trip', (mode) => {
     setActive('cc1')
     mountBar()
     act(() => useTeamUiStore.getState().setSharedPanelMode(mode))
-    for (const press of [() => fireEvent.click(button()!), () => fireEvent.click(screen.getByTestId('own-strip-line'))]) {
-      fireEvent.click(button()!) // into the title bar
+    for (const press of [() => fireEvent.click(personalButton()!), () => fireEvent.click(screen.getByTestId('personal-strip-capsule'))]) {
+      fireEvent.click(personalButton()!) // into the title bar
       expect(shared()).toBe('titlebar')
       press()
       expect(shared()).toBe(mode)
       expect(useTeamUiStore.getState().sharedPanelLast).toBe(mode)
     }
-    // the strip then the button, back to back, still lands on the same mode
-    fireEvent.click(button()!)
-    fireEvent.click(screen.getByTestId('own-strip-line'))
-    fireEvent.click(button()!)
-    fireEvent.click(button()!)
-    expect(shared()).toBe(mode)
   })
-  it('is absent while the area is in the pane, and for a tab with no workbook', () => {
+  it('is absent while the area is in the pane, and for a tab with no session', () => {
     act(() => useTeamUiStore.getState().setSharedPanelMode('line'))
     setActive('cc1')
     mountBar()
-    expect(screen.queryByTestId('own-title-strip')).toBeNull()
+    expect(screen.queryByTestId('personal-title-strip')).toBeNull()
     act(() => useTeamUiStore.getState().setSharedPanelMode('titlebar'))
     setActive('x')
-    expect(screen.queryByTestId('own-title-strip')).toBeNull()
-  })
-  it('the strip follows the status', () => {
-    setActive('cc1')
-    mountBar()
-    act(() => { seedWorkbook(HOST, 'S1', { status: 'Reviewing the diff! More later.' }) })
-    expect(screen.getByTestId('own-strip-line').textContent).toBe('Reviewing the diff')
+    expect(screen.queryByTestId('personal-title-strip')).toBeNull()
   })
 })

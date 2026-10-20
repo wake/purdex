@@ -10,7 +10,7 @@ import { WORKBOOK_MAX_RETRIES, workbookRetryDelay } from '../../lib/workbook/ret
 import type { PaneLayout } from '../../types/tab'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { firstSentence, useSeatWorkbook } from './seat-workbook'
-import type { OwnWorkbookTarget } from './panel-view'
+export interface OwnWorkbookTarget { hostId: string; sessionId: string }
 
 
 /** The conversation a layout's first live `cc` tmux-session pane (pre-order) belongs to; null when there is none. */

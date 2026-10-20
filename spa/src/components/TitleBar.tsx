@@ -13,8 +13,8 @@ import { CollapseButton } from '../features/workspace/components/CollapseButton'
 import { ConfirmDialog } from './ConfirmDialog'
 import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
-import { OwnNotebookButton, OwnTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
-import { useOwnWorkbook } from './team/own-workbook'
+import { PersonalButton, PersonalTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
+import { usePersonalRootsInterest, usePersonalTarget } from './team/usePersonalPanel'
 import { JournalButtons } from './journal/JournalButtons'
 import { useJournalTarget } from './journal/useJournalTarget'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
@@ -110,14 +110,15 @@ export function TitleBar({ title }: Props) {
   const t = useI18nStore((s) => s.t)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const team = useTitleBarTeam()
-  // A tab of no team whose own conversation has a workbook uses the shared value (WA-2b-1b).
-  const own = useOwnWorkbook()
+  // A tab of no team that shows an agent session has the personal panel, in the one shared value (task groups spec §7). Its session's root is read while it is on the tab (§4.5), in either sidebar view.
+  const personal = usePersonalTarget()
+  usePersonalRootsInterest(personal)
   const sharedInBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
-  // On a journal.v1 host the workbook view is off (J-2b): no own-workbook strip, and 團隊 / 工作簿 take the notebook button's place
+  // On a journal.v1 host 團隊 / 個人 and 工作簿 take the notebook button's place
   // (JV-2: the team's strip is back on every host, the 團隊 button moves the panel between the pane and the title bar).
   const jt = useJournalTarget()
-  const ownStrip = !jt.journalHost && team === null && own !== null && sharedInBar
-  const stripShown = team ? team.mode === 'titlebar' : ownStrip
+  const personalStrip = team === null && personal !== null && sharedInBar
+  const stripShown = team ? team.mode === 'titlebar' : personalStrip
   const { barRef, btnsRef, setStripW, layout } = useTitleBarLayout(stripShown)
   const current = useTabStore((s) => {
     const tab = s.activeTabId ? s.tabs[s.activeTabId] : undefined
@@ -197,10 +198,10 @@ export function TitleBar({ title }: Props) {
         <div className="flex-1" />
         {/* The active tab's team in the title bar state: its one-line content, at the right, right before the buttons. */}
         {team && stripShown && <TeamTitleStrip team={team} room={layout ? layout.room : null} onContentWidth={setStripW} />}
-        {ownStrip && own && <OwnTitleStrip target={own} room={layout ? layout.room : null} onContentWidth={setStripW} />}
+        {personalStrip && personal && <PersonalTitleStrip target={personal} room={layout ? layout.room : null} onContentWidth={setStripW} />}
         <div ref={btnsRef} data-testid="title-bar-right" className="shrink-0 flex items-center">
-        {/* Notebook (WA-2a′, WA-2b-1b): moves the panel area between the title bar and the pane; a team tab, or a tab whose own cc conversation has a workbook. */}
-        {jt.journalHost ? <JournalButtons target={jt} /> : team ? <TeamNotebookButton team={team} /> : own && <OwnNotebookButton />}
+        {/* Notebook (WA-2a′) / 個人: moves the panel area between the title bar and the pane; a team tab, or a tab that shows an agent session. */}
+        {jt.journalHost ? <JournalButtons target={jt} /> : team ? <TeamNotebookButton team={team} /> : personal && <PersonalButton />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div
