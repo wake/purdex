@@ -115,6 +115,52 @@ describe('useHostSeries on a long range', () => {
     expect(fetchPoolSeries).toHaveBeenCalledTimes(1)
     expect(result.current.samples.length).toBeGreaterThan(0)
   })
+  it('two hooks on the same host: one leaving does not call off the other, and both draw what lands', async () => {
+    let resolveA!: (v: unknown) => void
+    let resolveB!: (v: unknown) => void
+    fetchFactsHistory.mockReturnValueOnce(new Promise((r) => { resolveA = r }))
+    fetchFactsHistory.mockReturnValueOnce(new Promise((r) => { resolveB = r }))
+    const a = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
+    const b = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
+    await flush()
+    b.unmount()
+    resolveA({ step: '5s', records: [rec(20, 10)] }) // superseded by b's read
+    resolveB({ step: '5s', records: [rec(10, 60)] }) // the latest read lands though the page that made it left: a still holds the track
+    await flush()
+    expect(a.result.current.samples.map((s) => s.cpuPct)).toEqual([40])
+  })
+  it('two hooks on the same host both redraw when one of them reads', async () => {
+    const a = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
+    await flush()
+    const b = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
+    await flush()
+    const before = a.result.current.rev
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(5, 10)] })
+    b.rerender()
+    // b's own mount read landed before a was asked; a new read by a third party (a live record through b) must still reach a
+    const live = renderHook(() => useHostSeries('h1', 'air26', '5m', rec(2, 20)))
+    await flush()
+    expect(a.result.current.rev).toBeGreaterThan(before)
+    expect(a.result.current.samples.map((s) => s.cpuPct)).toContain(80)
+    live.unmount()
+  })
+  it('a capability withdrawn after the long track was read leaves it empty again', async () => {
+    const { result } = renderHook(() => useHostSeries('h1', 'air26', '1h', null))
+    await flush()
+    expect(result.current.samples.length).toBeGreaterThan(0)
+    act(() => useNexHostStore.setState({ byHost: { d1: { phase: 'ready', daemonCapabilities: [] } } } as never))
+    await flush()
+    expect(result.current.samples).toEqual([])
+    expect(result.current.load).toBe('idle')
+  })
+  it('the host\'s constants arriving after the series completed fill the memory used figure of the whole range', async () => {
+    const { result, rerender } = renderHook(({ f }: { f: PoolFacts | null }) => useHostSeries('h1', 'air26', '1h', f), { initialProps: { f: null as PoolFacts | null } })
+    await flush()
+    expect(result.current.samples[0].memUsedMb).toBeNull()
+    rerender({ f: rec(1, 50) })
+    await flush()
+    expect(result.current.samples[0].memUsedMb).not.toBeNull()
+  })
   it('leaving stops the top-ups', async () => {
     const { unmount } = renderHook(() => useHostSeries('h1', 'air26', '1h', null))
     await flush()

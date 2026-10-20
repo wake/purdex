@@ -74,20 +74,55 @@ export const SKEW_MS = 60_000
 /** A sample dated more than this ahead of now (the daemon's clock is ahead) cannot be placed and is dropped. */
 const FUTURE_TOLERANCE_MS = 5_000
 
-interface HostMemory { tracks: Record<HostTrack, HostSample[]>; loads: Record<HostTrack, HostLoad>; gen: Record<HostTrack, number> }
+interface HostMemory {
+  tracks: Record<HostTrack, HostSample[]>; loads: Record<HostTrack, HostLoad>; gen: Record<HostTrack, number>
+  /** How many pages hold each track open: only the last one to leave calls a read off. */
+  holds: Record<HostTrack, number>
+  listeners: Set<() => void>
+}
 const memory = new Map<string, HostMemory>()
+const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set() })
 const memoryOf = (hostId: string): HostMemory => {
   let m = memory.get(hostId)
-  if (!m) { m = { tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 } }; memory.set(hostId, m) }
+  if (!m) { m = newMemory(); memory.set(hostId, m) }
   return m
 }
 export const clearHostHistory = (): void => { memory.clear() }
 
-/** Time order, once per time (what is there stays: a late answer does not overwrite a newer reading), nothing from the future, only `keepMs` back from the newest. */
+/** Everything that draws a host's readings is told when they change, whoever made the change (two pages on one host see the same memory). */
+export function subscribeHost(hostId: string, fn: () => void): () => void {
+  const m = memoryOf(hostId)
+  m.listeners.add(fn)
+  return () => { m.listeners.delete(fn) }
+}
+const notify = (m: HostMemory): void => { for (const fn of [...m.listeners]) fn() }
+
+/** A page holds this track open; the returned release calls off what is still out only when the last page has left. */
+export function holdTrack(hostId: string, track: HostTrack): () => void {
+  const m = memoryOf(hostId)
+  m.holds[track] += 1
+  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) m.gen[track] += 1 }
+}
+
+/** The long track is empty again (the daemon no longer announces the series, so what it left is not a history this App can vouch for). */
+export function dropLongTrack(hostId: string): void {
+  const m = memory.get(hostId)
+  if (!m || (m.tracks.long.length === 0 && m.loads.long === 'idle')) return
+  m.tracks.long = []; m.loads.long = 'idle'; m.gen.long += 1
+  notify(m)
+}
+
+/**
+ * Time order, once per time (what is there stays: a late answer does not overwrite a newer reading), nothing from the future, only `keepMs` back from the newest.
+ * The one exception: a series sample read before the host's memory total was known (null) is replaced by the same time read after it.
+ */
 function merge(have: HostSample[], add: HostSample[], keepMs: number, now: number): HostSample[] {
   const byAt = new Map<number, HostSample>()
   for (const s of add) if (s.at <= now + FUTURE_TOLERANCE_MS) byAt.set(s.at, s)
-  for (const s of have) byAt.set(s.at, s)
+  for (const s of have) {
+    const incoming = byAt.get(s.at)
+    byAt.set(s.at, incoming && s.memTotalMb === null && incoming.memTotalMb !== null ? incoming : s)
+  }
   const all = [...byAt.values()].sort((a, b) => a.at - b.at)
   if (all.length === 0) return all
   const newest = all[all.length - 1].at
@@ -96,9 +131,9 @@ function merge(have: HostSample[], add: HostSample[], keepMs: number, now: numbe
 
 /** The samples of `range` ending at `now`, from the track that range reads. */
 export function readSamples(hostId: string, range: HostRange, now: number): HostSample[] {
-  return memoryOf(hostId).tracks[readsFiveSecond(range) ? 'short' : 'long'].filter((s) => s.at >= now - RANGE_MS[range] && s.at <= now + FUTURE_TOLERANCE_MS)
+  return (memory.get(hostId)?.tracks[readsFiveSecond(range) ? 'short' : 'long'] ?? []).filter((s) => s.at >= now - RANGE_MS[range] && s.at <= now + FUTURE_TOLERANCE_MS)
 }
-export const readHostLoad = (hostId: string, track: HostTrack): HostLoad => memoryOf(hostId).loads[track]
+export const readHostLoad = (hostId: string, track: HostTrack): HostLoad => memory.get(hostId)?.loads[track] ?? 'idle'
 
 /** Whatever load of this track is out is called off: when it comes back it writes nothing (the page left, the range changed, nothing took its place). */
 export function invalidateHostHistory(hostId: string, track?: HostTrack): void {
@@ -122,6 +157,7 @@ export async function loadShort(source: string, alias: string, hostId: string, n
   if (m.gen.short !== mine) return m.loads.short
   if (out === 'ok') m.tracks.short = merge(m.tracks.short, records.map(sampleOfFacts), KEEP_MS.short, now)
   m.loads.short = out
+  notify(m)
   return out
 }
 
@@ -129,6 +165,7 @@ export async function loadShort(source: string, alias: string, hostId: string, n
 export function appendLive(hostId: string, facts: PoolFacts, now: number = Date.now()): void {
   const m = memoryOf(hostId)
   m.tracks.short = merge(m.tracks.short, [sampleOfFacts(facts)], KEEP_MS.short, now)
+  notify(m)
 }
 
 /** Is the daemon the pool is read through able to answer `/api/pool/facts/series`? An older one is simply not asked: the long ranges stay empty. */
@@ -156,5 +193,6 @@ export async function loadLong(a: { source: string; alias: string; hostId: strin
   if (m.gen.long !== mine) return m.loads.long
   if (out === 'ok') m.tracks.long = merge(m.tracks.long, points.map((p) => sampleOfPoint(p, a.memTotalMb, a.ncpu)), KEEP_MS.long, a.now)
   m.loads.long = out
+  notify(m)
   return out
 }
