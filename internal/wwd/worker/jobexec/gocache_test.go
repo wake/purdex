@@ -100,6 +100,7 @@ func TestTheBuildCacheIsPerGoVersionAndTheOldOnesAreDropped(t *testing.T) {
 	assert.NotEqual(t, dirs[0], dirs[1])
 	assert.NotEqual(t, dirs[1], dirs[2])
 	assert.NoDirExists(t, dirs[0], "the oldest of three is dropped")
+	assert.FileExists(t, dirs[0]+".lock", "but its lock file stays: a process waiting on it would otherwise lock an inode nobody else uses")
 	assert.DirExists(t, dirs[1])
 	assert.DirExists(t, dirs[2])
 }

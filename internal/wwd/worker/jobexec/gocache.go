@@ -209,7 +209,7 @@ func (e *Exec) pruneGoCaches(root, current string) {
 			if os.Rename(p, aside) == nil {
 				go removeAsideFn(aside)
 			}
-			_ = os.Remove(p + ".lock")
+			// the lock file stays: a process that already opened it and waits would lock an inode nobody else uses (a split lock)
 		}
 		lock.Close()
 	}
