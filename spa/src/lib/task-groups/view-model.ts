@@ -6,7 +6,7 @@
 // agent has ended, a second tab of a seat. A session in a live team shows under its team only (L10); a session whose root is not known yet is 「未分組」 for the display, never guessed into a group.
 import type { ManualGroup } from '../../stores/useManualGroupsStore'
 import type { Seat, TeamView } from '../team/team-views'
-import { allGroupTabs, type GroupOrderCtx } from './group-order'
+import { allGroupTabs, teamSections, type GroupOrderCtx } from './group-order'
 import { manualGroupKey, teamGroupKey, UNGROUPED } from './group-key'
 
 /** One open tab that shows a live tmux session: what a row's right-click menu and drag act on. */
@@ -30,8 +30,8 @@ export interface GroupRow {
   seat?: Seat
 }
 
-/** `extra`: the team's other tabs — a second tab of a seat, a pinned member's tab, a plain tab `tab.group` filed under the team. */
-export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: GroupRow; members: GroupRow[]; extra: GroupRow[] }
+/** `rest`: every row after the lead, in `groupTabs` order — the lead's other tabs, the other pinned tabs, then each member's seat row followed by its other tabs (a seat no tab shows is a row with no tab), then the plain tabs `tab.group` filed under the team. */
+export interface TeamSection { kind: 'team'; key: string; view: TeamView; lead: GroupRow; rest: GroupRow[] }
 /** `rows` empty = nothing live in the group: the view collapses it. */
 export interface ManualSection { kind: 'manual'; key: string; groupId: string; group: ManualGroup; rows: GroupRow[] }
 export interface UngroupedSection { kind: 'ungrouped'; key: 'ungrouped'; rows: GroupRow[] }
@@ -51,10 +51,13 @@ export function buildGroupView(input: GroupViewInput): GroupSection[] {
 
   for (const view of input.teams) {
     const lead = seatRow(view, view.lead)
-    const members = view.members.map((m) => seatRow(view, m))
-    const shown = new Set([lead, ...members].flatMap((r) => (r.tabId === null ? [] : [r.tabId])))
-    const extra = (placed.get(teamGroupKey(view.key)) ?? []).filter((id) => !shown.has(id)).map(tabRow)
-    out.push({ kind: 'team', key: `team:${view.key}`, view, lead, members, extra })
+    const seatRows = view.members.map((m) => seatRow(view, m))
+    // a seat row stands for its chosen tab: that tab is never listed a second time
+    const used = new Set([lead, ...seatRows].flatMap((r) => (r.tabId === null ? [] : [r.tabId])))
+    const more = (tabs: readonly { id: string }[]): GroupRow[] => tabs.filter((t) => !used.has(t.id)).map((t) => tabRow(t.id))
+    const sec = teamSections(view, (placed.get(teamGroupKey(view.key)) ?? []).map((id) => input.tabs[id]), input)
+    const rest = [...more(sec.lead), ...more(sec.pinned), ...seatRows.flatMap((row, i) => [row, ...more(sec.members[i])]), ...more(sec.plain)]
+    out.push({ kind: 'team', key: `team:${view.key}`, view, lead, rest })
   }
 
   for (const groupId of input.manual.order) {

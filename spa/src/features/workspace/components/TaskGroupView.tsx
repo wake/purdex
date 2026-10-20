@@ -184,14 +184,13 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
       {view.map((section, i) => {
         if (section.kind === 'team') {
           const name = panelName(section.view).text
-          const count = 1 + section.members.length + section.extra.length
+          const count = 1 + section.rest.length
           return (
             <section key={section.key} data-testid="task-group-team" className="flex flex-col">
               <TeamGroupHeader hostId={section.view.hostId} teamId={section.view.teamId} color={teamColor(section.view.colorIndex)} name={name} count={count} />
               {renderRow(section.lead, section.view.key, true)}
               <div className="ml-4 border-l border-border-subtle">
-                {section.members.map((m) => renderRow(m, section.view.key))}
-                {section.extra.map((r) => renderRow(r, section.view.key, false, null, true))}
+                {section.rest.map((r) => renderRow(r, section.view.key, false, null, true))}
               </div>
             </section>
           )

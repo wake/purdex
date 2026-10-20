@@ -4,6 +4,7 @@
 //   - a team: its lead's tabs first (pinned or not), then the other pinned tabs, then each member's tabs in the team's member order (the tab the seat chose first), then the plain tabs `tab.group` put in the team.
 //     The member collapse is a drawing matter and does not apply here: every tab is listed.
 import type { Tab } from '../../types/tab'
+import type { TeamView } from '../team/team-views'
 import { compareGroupTabs } from './rank'
 import { groupOfTab, manualOwners, type PlacementCtx } from './placement'
 import { teamKeyOfGroupKey } from './group-key'
@@ -42,6 +43,19 @@ function orderGroup(key: string, tabs: OrderedTab[], ctx: GroupOrderCtx): Ordere
     const pinned = tabs.filter((t) => t.pinned).sort(compareGroupTabs)
     return [...pinned, ...tabs.filter((t) => !t.pinned).sort(compareGroupTabs)]
   }
+  const s = teamSections(view, tabs, ctx)
+  return [...s.lead, ...s.pinned, ...s.members.flat(), ...s.plain]
+}
+
+/** A team's tabs split the way the bar lays them out: the lead's, the other pinned ones, each member's (in member order), the plain rest. Each part is in bar order. */
+export interface TeamSections {
+  lead: OrderedTab[]
+  pinned: OrderedTab[]
+  members: OrderedTab[][]
+  plain: OrderedTab[]
+}
+
+export function teamSections(view: Pick<TeamView, 'lead' | 'members'>, tabs: readonly OrderedTab[], ctx: Pick<GroupOrderCtx, 'index'>): TeamSections {
   const seatOf = (t: OrderedTab) => ctx.index.seatByTabId.get(t.id)?.seat
   const taken = new Set<string>()
   const take = (list: OrderedTab[]): OrderedTab[] => {
@@ -57,6 +71,6 @@ function orderGroup(key: string, tabs: OrderedTab[], ctx: GroupOrderCtx): Ordere
   }
   const lead = ofSeat(view.lead.session.session_id, view.lead.tabId)
   const pinned = take(tabs.filter((t) => t.pinned))
-  const members = view.members.flatMap((m) => ofSeat(m.session.session_id, m.tabId))
-  return [...lead, ...pinned, ...members, ...take(tabs)]
+  const members = view.members.map((m) => ofSeat(m.session.session_id, m.tabId))
+  return { lead, pinned, members, plain: take([...tabs]) }
 }

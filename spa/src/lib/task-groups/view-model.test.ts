@@ -52,7 +52,7 @@ describe('buildGroupView', () => {
     ))
     expect(v.map((s) => s.kind)).toEqual(['team', 'manual', 'ungrouped'])
     const [t, m, u] = v
-    expect(t.kind === 'team' && [t.lead.tabId, ...t.members.map((r) => r.tabId)]).toEqual(['t1', 't2'])
+    expect(t.kind === 'team' && [t.lead.tabId, ...t.rest.map((r) => r.tabId)]).toEqual(['t1', 't2'])
     expect(m.kind === 'manual' && m.rows.map((r) => r.tabId)).toEqual(['t3'])
     expect(u.kind === 'ungrouped' && u.rows.map((r) => r.tabId)).toEqual(['t4'])
   })
@@ -114,7 +114,7 @@ describe('buildGroupView', () => {
   it('a team seat with no open tab is still listed, not openable', () => {
     const v = buildGroupView(input([tab('t1', 'L')], [team('a', seat('lead', 'L', 't1'), [seat('member', 'M', null)])]))
     const t = v[0]
-    expect(t.kind === 'team' && t.members.map((r) => [r.seatId, r.tabId])).toEqual([['M', null]])
+    expect(t.kind === 'team' && t.rest.map((r) => [r.seatId, r.tabId])).toEqual([['M', null]])
   })
 
   describe('every tab is listed (TG-3a-2b)', () => {
@@ -130,20 +130,26 @@ describe('buildGroupView', () => {
       expect(v.find((s) => s.kind === 'manual')).toMatchObject({ rows: [{ tabId: 't1' }] })
     })
 
-    it('a second tab of a seat, and a plain tab filed under the team, are the team\'s extra rows — the seat tab first, then the plain one (group order)', () => {
-      const t = team('a', seat('lead', 'L', 't1'), [seat('member', 'M', 't2')])
+    it('a seat keeps its other tabs next to it: lead, its second tab, then each member with its second tab, and the plain tab last', () => {
+      const t = team('a', seat('lead', 'L', 't1'), [seat('member', 'M', 't2'), seat('member', 'N', 't3')])
       const v = buildGroupView(input(
-        [tab('t1', 'L'), tab('t2', 'M'), tab('t2b', 'M', { groupRank: 'b' }), tab('plain', null, { group: teamGroupKey(t.key), groupRank: 'a' })], [t],
-        { seats: { t2b: 'M' } },
+        [tab('t1', 'L'), tab('t2', 'M'), tab('t3', 'N'), tab('t1b', 'L', { groupRank: 'z' }), tab('t2b', 'M', { groupRank: 'z' }), tab('t3b', 'N', { groupRank: 'z' }), tab('plain', null, { group: teamGroupKey(t.key) })], [t],
+        { seats: { t1b: 'L', t2b: 'M', t3b: 'N' } },
       ))
       const sec = v[0]
-      expect(sec.kind === 'team' && sec.extra.map((r) => r.tabId)).toEqual(['t2b', 'plain'])
+      expect(sec.kind === 'team' && [sec.lead.tabId, ...sec.rest.map((r) => r.tabId)]).toEqual(['t1', 't1b', 't2', 't2b', 't3', 't3b', 'plain'])
       expect(v.map((s) => s.kind)).toEqual(['team'])
     })
 
-    it('a team with no extra tab has an empty extra', () => {
+    it('an unopened seat stays in member order between the others', () => {
+      const t = team('a', seat('lead', 'L', 't1'), [seat('member', 'M', null), seat('member', 'N', 't3')])
+      const v = buildGroupView(input([tab('t1', 'L'), tab('t3', 'N')], [t]))
+      expect(v[0].kind === 'team' && v[0].rest.map((r) => [r.seatId, r.tabId])).toEqual([['M', null], ['N', 't3']])
+    })
+
+    it('a team with only its lead has no rows after it', () => {
       const v = buildGroupView(input([tab('t1', 'L')], [team('a', seat('lead', 'L', 't1'))]))
-      expect(v[0].kind === 'team' && v[0].extra).toEqual([])
+      expect(v[0].kind === 'team' && v[0].rest).toEqual([])
     })
   })
 })
