@@ -6,24 +6,14 @@ import { useSeatHostMain } from './useSeatHostMain'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { ctxTip } from './team-readings'
-import { firstSentence, useSeatWorkbook } from './seat-workbook'
-import { useOwnWorkbook } from './own-workbook'
-import { leadLastLine, useLeadJournalRead } from './member-lines'
 import { Avatar } from '../Avatar'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useJournalStore } from '../../stores/useJournalStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { UNGROUPED_GREY, type PersonalGroup, type PersonalTarget } from '../../lib/task-groups/personal'
-import { usePersonalReading, usePersonalWho } from './usePersonalPanel'
+import { usePersonalNames, usePersonalReading, usePersonalStatusLine } from './usePersonalPanel'
 
 /** The text on a coloured capsule (the team capsule's). */
 const ON_COLOR = '#14141f'
-
-/** What the capsule says for a group, and the name of 「未分組」. */
-export function groupLabel(group: PersonalGroup, ungrouped: string): string {
-  return group.kind === 'ungrouped' ? ungrouped : group.name
-}
 
 /**
  * The group's capsule: its name on its colour. 「未分組」 is neutral — a quiet fill, a thin border and the secondary text colour, none of the swatch colours (R24).
@@ -31,7 +21,7 @@ export function groupLabel(group: PersonalGroup, ungrouped: string): string {
  */
 export function GroupCapsule({ group, className = '', style }: { group: PersonalGroup; className?: string; style?: React.CSSProperties }) {
   const t = useI18nStore((s) => s.t)
-  const label = groupLabel(group, t('taskgroups.ungrouped'))
+  const label = group.kind === 'ungrouped' ? t('taskgroups.ungrouped') : group.name
   if (group.kind === 'ungrouped') {
     return (
       <span
@@ -57,24 +47,6 @@ export function GroupCapsule({ group, className = '', style }: { group: Personal
       {label}
     </span>
   )
-}
-
-/** The session's last status line (R13): on a journal.v1 host the first line of its own newest journal entry, on an older host the first sentence of 「目前狀況」; '' when there is none. */
-export function usePersonalStatusLine(target: PersonalTarget): string {
-  const journalHost = useIsJournalHost(target.hostId)
-  useOwnWorkbook() // asks the host for the active tab's own workbook (once per connection); the status below reads what it loaded
-  useLeadJournalRead(target.hostId, target.agentSessionId, journalHost)
-  const journalLine = useJournalStore((s) => (journalHost ? leadLastLine(s, target.hostId, target.agentSessionId) : ''))
-  const status = useSeatWorkbook(target.hostId, target.agentSessionId).conv?.status.trim() ?? ''
-  return journalHost ? journalLine : firstSentence(status)
-}
-
-/** The name the person is shown by: the persona's name with the title after it; with no persona the title alone (R15). */
-export function usePersonalNames(target: PersonalTarget): { name: string; title: string; persona: ReturnType<typeof usePersonalWho>['persona'] } {
-  const who = usePersonalWho(target)
-  const name = who.persona?.name ?? who.title
-  const title = who.persona !== null && who.title !== '' && who.title !== who.persona.name ? who.title : ''
-  return { name, title, persona: who.persona }
 }
 
 /** The one-line form's text: the name in the main text colour, the title after it in the secondary one; both give way to the width, the title first. */
