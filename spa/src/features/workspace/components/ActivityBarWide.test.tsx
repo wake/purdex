@@ -731,3 +731,25 @@ describe('ActivityBarWide — auto-expand active workspace', () => {
     expect(useLayoutStore.getState().workspaceExpanded['w1']).toBeFalsy()
   })
 })
+
+describe('ActivityBarWide — the + follows the sidebar view (TG-3d)', () => {
+  it('in the workspace view the + adds a workspace; in the task-group view it is 「New task group」 and makes a group instead', async () => {
+    const { useTeamUiStore } = await import('../../../stores/useTeamUiStore')
+    const { useManualGroupsStore } = await import('../../../stores/useManualGroupsStore')
+    useManualGroupsStore.setState({ order: [], groups: {} })
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+    const onAddWorkspace = vi.fn()
+    const { unmount } = renderBar({ onAddWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace' }))
+    expect(onAddWorkspace).toHaveBeenCalledTimes(1)
+    unmount()
+    useTeamUiStore.setState({ sidebarView: 'groups' })
+    renderBar({ onAddWorkspace })
+    expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'New task group' }))
+    expect(onAddWorkspace).toHaveBeenCalledTimes(1) // not called again
+    expect(Object.values(useManualGroupsStore.getState().groups).map((g) => g.name)).toEqual(['Task group 1'])
+    useTeamUiStore.setState({ sidebarView: 'workspace' })
+  })
+})
+

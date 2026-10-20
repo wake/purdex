@@ -29,6 +29,10 @@ interface Props {
   onClick?: () => void
   /** The chevron was clicked. Without it the header has no chevron. */
   onToggle?: () => void
+  /** A right-click on the header (a manual group's menu); the default menu is suppressed when given. */
+  onContextMenu?: (e: React.MouseEvent) => void
+  /** A counter: each new value starts the in-place rename, as a double-click does (the menu's 「重新命名」, a freshly made group). */
+  editRequest?: number
   strong?: boolean
   muted?: boolean
   host?: string
@@ -38,7 +42,7 @@ interface Props {
   clear?: HeaderClear
 }
 
-export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
+export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGroupHeader({ color, name, selected = false, expanded = true, onClick, onToggle, onContextMenu, editRequest, strong = false, muted = false, host, edit, onDoubleClickName, clear }, ref) {
   const t = useI18nStore((s) => s.t)
   const reasonId = useId()
   const [editing, setEditing] = useState(false)
@@ -50,6 +54,9 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
   useEffect(() => { if (editing) { input.current?.focus(); input.current?.select() } }, [editing])
 
   const start = () => { if (edit && edit.blocked === null) { setDraft(name); setEditing(true) } }
+  const lastRequest = useRef(editRequest)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new request value starts the edit; `start` reads the latest name
+  useEffect(() => { if (editRequest !== lastRequest.current) { lastRequest.current = editRequest; start() } }, [editRequest])
   const cancel = () => { if (!pending) setEditing(false) }
   const commit = async () => {
     const next = draft.trim()
@@ -66,6 +73,7 @@ export const TaskGroupHeader = forwardRef<HTMLDivElement, Props>(function TaskGr
       ref={ref} data-testid="task-group-header" data-selected={selected ? 'true' : undefined}
       // a double-click renames (its first click already selected); only a plain click selects / toggles
       onClick={(e) => { if (e.detail <= 1) onClick?.() }}
+      onContextMenu={onContextMenu ? (e) => { e.preventDefault(); onContextMenu(e) } : undefined}
       className={`mx-2 flex items-center gap-1.5 rounded-md pl-1.5 pr-1.5 py-1 text-xs ${onClick ? 'cursor-pointer' : ''} ${selected ? 'bg-surface-hover' : ''}`}
     >
       <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />

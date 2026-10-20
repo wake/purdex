@@ -15,6 +15,8 @@ export interface BottomNavProps {
   compact: boolean
   workersOpen: boolean
   onAddWorkspace: () => void
+  /** The first button's label when it adds something else than a workspace (the task-group view's 「新增任務編組」). */
+  addLabel?: string
   onToggleWorkers: () => void
   onOpenHosts: () => void
   onOpenSettings: () => void
@@ -46,6 +48,7 @@ export function BottomNav({
   compact,
   workersOpen,
   onAddWorkspace,
+  addLabel,
   onToggleWorkers,
   onOpenHosts,
   onOpenSettings,
@@ -55,7 +58,7 @@ export function BottomNav({
   const t = useI18nStore((s) => s.t)
 
   const entries: Entry[] = [
-    { key: 'new-workspace', label: t('nav.new_workspace'), icon: Plus, onClick: onAddWorkspace },
+    { key: 'new-workspace', label: addLabel ?? t('nav.new_workspace'), icon: Plus, onClick: onAddWorkspace },
     { key: 'workers', label: t('nav.workers'), icon: Lightning, onClick: onToggleWorkers, pressed: workersOpen },
     { key: 'hosts', label: t('nav.hosts'), icon: HardDrives, onClick: onOpenHosts },
     { key: 'settings', label: t('nav.settings'), icon: Sliders, onClick: onOpenSettings },

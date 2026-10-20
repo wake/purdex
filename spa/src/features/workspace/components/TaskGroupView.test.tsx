@@ -698,3 +698,87 @@ describe('headers: selection, collapse and the three manual group states (task g
   })
 })
 
+describe('header menu: rename, colour, delete (task groups spec §6.1, TG-3d)', () => {
+  const g1 = manualGroupKey('g1')
+  const menuOf = (testId: string) => fireEvent.contextMenu(within(screen.getByTestId(testId)).getByTestId('task-group-header'))
+
+  it('a right-click on a manual group header opens its menu; a team and 「未分組」 have none', () => {
+    useTeamRosterStore.getState().apply('h1', [{ id: 'team-1', host_id: 'd', created_at: 1, team_name: 'P', team_label: '', lead: { session_id: 'L', ref: '_L', address: 'mlab/L-x', live: true, tmux_session: 'name-S1', title: 'L' }, members: [] } as never])
+    setGroups([group('g1', ['ROOT2'])])
+    mount()
+    menuOf('task-group-manual')
+    expect(screen.getByTestId('task-group-menu')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('task-group-menu')).toBeNull()
+    menuOf('task-group-team')
+    menuOf('task-group-ungrouped')
+    expect(screen.queryByTestId('task-group-menu')).toBeNull()
+  })
+
+  it('「重新命名」 opens the in-place rename of that group', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    mount()
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-rename'))
+    expect(screen.getByTestId('task-group-name-input')).toBeInTheDocument()
+  })
+
+  it('a colour from the menu is stored on the group (and the default clears it)', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    mount()
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-color-#fb923c'))
+    expect(useManualGroupsStore.getState().groups.g1.color).toBe('#fb923c')
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-color-default'))
+    expect(useManualGroupsStore.getState().groups.g1.color).toBeUndefined()
+  })
+
+  it('deleting a group with nothing in it goes at once', () => {
+    setGroups([{ ...group('g2', []), id: 'g2' }])
+    mount()
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    expect(screen.queryByTestId('task-group-delete-dialog')).toBeNull()
+    expect(useManualGroupsStore.getState().groups.g2).toBeUndefined()
+  })
+
+  it('a group holding tabs asks first; cancel keeps it, confirm deletes it and its tabs fall back to 未分組', () => {
+    setGroups([group('g1', ['ROOT2'])])
+    setRoots([['AG2', 'ROOT2']])
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1)
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    expect(screen.getByTestId('task-group-delete-dialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('task-group-delete-cancel'))
+    expect(useManualGroupsStore.getState().groups.g1).toBeDefined()
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    fireEvent.click(screen.getByTestId('task-group-delete-confirm'))
+    expect(useManualGroupsStore.getState().groups.g1).toBeUndefined()
+    expect(screen.queryByTestId('task-group-manual')).toBeNull()
+    expect(within(screen.getByTestId('task-group-ungrouped')).getAllByTestId('inline-tab-row')).toHaveLength(3)
+  })
+
+  it('a group with members but no tab asks first too', () => {
+    setGroups([group('g1', ['GONE'])])
+    mount()
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    expect(screen.getByTestId('task-group-delete-dialog')).toBeInTheDocument()
+    expect(useManualGroupsStore.getState().groups.g1).toBeDefined()
+  })
+
+  it('the tabs that named the deleted group in their own `group` lose it', () => {
+    setGroups([group('g1', [])])
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, t1: { ...useTabStore.getState().tabs.t1, group: g1 } } } as never)
+    mount()
+    expect(within(screen.getByTestId('task-group-manual')).getAllByTestId('inline-tab-row')).toHaveLength(1) // t1 is in it by its own group
+    menuOf('task-group-manual')
+    fireEvent.click(screen.getByTestId('task-group-menu-delete'))
+    fireEvent.click(screen.getByTestId('task-group-delete-confirm'))
+    expect(useTabStore.getState().tabs.t1.group).toBeUndefined()
+  })
+})
+

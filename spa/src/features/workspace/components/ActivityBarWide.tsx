@@ -28,6 +28,7 @@ import { WorkerList } from '../../../components/executions/WorkerList'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import { TaskGroupView } from './TaskGroupView'
+import { addTaskGroup } from '../../../lib/task-groups/add-group'
 import { useTeamUiStore } from '../../../stores/useTeamUiStore'
 import { BottomNav } from './BottomNav'
 import { FleetCells } from '../../../components/fleet/FleetCells'
@@ -395,7 +396,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
           variant="wide"
           compact={bottomNavCompact}
           workersOpen={workerListOpen}
-          onAddWorkspace={onAddWorkspace}
+          onAddWorkspace={sidebarView === 'groups' ? addTaskGroup : onAddWorkspace}
+          addLabel={sidebarView === 'groups' ? t('nav.new_task_group') : undefined}
           onToggleWorkers={toggleWorkerListOpen}
           onOpenHosts={onOpenHosts}
           onOpenSettings={onOpenSettings}

@@ -219,3 +219,38 @@ describe('chevron, selection and toggle (task groups spec §6.1)', () => {
     expect(onClick).not.toHaveBeenCalled()
   })
 })
+
+describe('context menu and rename request (TG-3d)', () => {
+  it('a right-click calls onContextMenu and suppresses the default menu; without it nothing is intercepted', () => {
+    const onContextMenu = vi.fn()
+    const { rerender } = render(<TaskGroupHeader color="#000" name="G" onContextMenu={onContextMenu} />)
+    const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 7 })
+    screen.getByTestId('task-group-header').dispatchEvent(e)
+    expect(onContextMenu).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+    rerender(<TaskGroupHeader color="#000" name="G" />)
+    const plain = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    screen.getByTestId('task-group-header').dispatchEvent(plain)
+    expect(plain.defaultPrevented).toBe(false)
+  })
+
+  it('a new editRequest value starts the rename; the same value, or none, does not', () => {
+    const edit = { blocked: null, onCommit: async () => {} }
+    const { rerender } = render(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={1} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull() // the value it was mounted with is not a request
+    rerender(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={2} />)
+    expect(input()).toBeInTheDocument()
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+    rerender(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={2} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+  })
+
+  it('a blocked header ignores a rename request', () => {
+    const edit = { blocked: BLOCKED, onCommit: async () => {} }
+    const { rerender } = render(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={1} />)
+    rerender(<TaskGroupHeader color="#000" name="G" edit={edit} editRequest={2} />)
+    expect(screen.queryByTestId('task-group-name-input')).toBeNull()
+  })
+})
+
