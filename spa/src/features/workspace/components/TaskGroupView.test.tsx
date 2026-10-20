@@ -23,6 +23,7 @@ import { useSessionStore } from '../../../stores/useSessionStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../../stores/useUnattendedStore'
+import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useManualGroupsStore } from '../../../stores/useManualGroupsStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
@@ -64,6 +65,8 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['h1'], runtime: { h1: { status: 'connected' } } } as never)
   useTeamRosterStore.getState().reset()
   useManualGroupsStore.setState({ order: [], groups: {} })
+  useTeamUiStore.setState({ sidebarView: 'groups' }) // the task-group view is in force: stored, wide sidebar, tabs not on the left
+  useLayoutStore.setState({ activityBarWidth: 'wide', tabPosition: 'top' })
   useRelayQuotaStore.getState().reset()
   useRootCacheStore.setState({ roots: {} })
   useUnattendedStore.setState((s) => ({ byHost: { ...s.byHost, h1: { ...s.byHost.h1, quotaSupport: 'yes' } } }) as never) // the roots are read from hosts that list team.relay_quota.v1
@@ -247,6 +250,15 @@ describe('the task-group view', () => {
   it('reads the roots of the sessions it shows when the view opens (the groups are the device\'s own: nothing else to read)', () => {
     mount()
     expect(readFirstPage).toHaveBeenCalledWith('h1')
+  })
+
+  it.each([
+    ['a narrow sidebar', { activityBarWidth: 'narrow', tabPosition: 'both' }],
+    ['the tabs on the left', { activityBarWidth: 'wide', tabPosition: 'left' }],
+  ] as const)('reads no roots when the task-group view is not really in force: %s', (_n, layout) => {
+    act(() => { useLayoutStore.setState(layout) })
+    mount()
+    expect(readFirstPage).not.toHaveBeenCalled()
   })
 
   it('a group gathers sessions of ANY host: the same root on another host is another session, and there are no per-host blocks', () => {
