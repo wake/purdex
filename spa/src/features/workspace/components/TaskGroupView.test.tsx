@@ -31,6 +31,8 @@ import { useUnattendedStore } from '../../../stores/useUnattendedStore'
 import { useTaskGroupsStore } from '../../../stores/useTaskGroupsStore'
 import { useTabMenuExtrasStore } from '../../../stores/useTabMenuExtrasStore'
 import { useRelayQuotaStore } from '../../../lib/team/relay-quota'
+import { useRootCacheStore } from '../../../lib/task-groups/root-cache'
+import { startSessionRootsLifecycle } from '../../../lib/task-groups/session-roots-lifecycle'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { useTeamUiStore } from '../../../stores/useTeamUiStore'
@@ -50,6 +52,7 @@ const setGroups = (hostId: string, groups: TaskGroup[], over: Record<string, unk
 const setRoots = (rows: Array<[string, string]>) =>
   useRelayQuotaStore.setState({ reads: { h1: { ok: true, quotas: rows.map(([session_id, root_session_id]) => ({ session_id, root_session_id, title: '', address: `a/${session_id}`, is_lead: false, self_left: 0, member_pool_left: 0, rev: 1 })) } } })
 
+let stopRoots: () => void
 const onSelectTab = vi.fn()
 const mount = () => render(<TaskGroupView activeTabId={null} onSelectTab={onSelectTab} onCloseTab={vi.fn()} onMiddleClickTab={vi.fn()} onContextMenuTab={vi.fn()} />)
 
@@ -67,8 +70,11 @@ beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useTaskGroupsStore.setState({ byHost: {} })
   useRelayQuotaStore.getState().reset()
+  useRootCacheStore.setState({ roots: {} })
+  useUnattendedStore.setState((s) => ({ byHost: { ...s.byHost, h1: { ...s.byHost.h1, quotaSupport: 'yes' } } }) as never) // the roots are read from hosts that list team.relay_quota.v1
+  stopRoots = startSessionRootsLifecycle() // the lifecycle feeds the root cache from the reads, as main.tsx starts it
 })
-afterEach(() => { cleanup() })
+afterEach(() => { cleanup(); stopRoots() })
 
 const sections = () => screen.getAllByTestId(/^task-group-(manual|team|ungrouped|unsafe)/)
 
