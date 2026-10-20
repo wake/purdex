@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { HostBars } from './HostBars'
-import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
+import { cpuReading, memoryReading, pressureReading } from '../../lib/pool/bar-readings'
 
 describe('non-finite readings read as 0 (#3047 review)', () => {
   it.each([NaN, Infinity, -Infinity])('%s in -> a finite pct and a finite bar height', (v) => {

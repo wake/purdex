@@ -1,7 +1,7 @@
-// spa/src/lib/fleet/ring-driver.ts — which reading sets the ring's length: the daemon's composite (internal/fleet/load.go
+// spa/src/lib/pool/ring-driver.ts — which reading sets the ring's length: the daemon's composite (internal/fleet/load.go
 // `Composite`) is the largest of CPU %, memory %, the level score (1 -> 30, 2 -> 75, 4 -> 100), the page rate capped at 100,
 // and the disk % only from 85 %. The hover card marks that row. A tie goes to the first in this order.
-import type { FleetFast } from './types'
+import type { FleetFast } from '../fleet/types'
 
 export type RingDriver = 'cpu' | 'mem' | 'pressure' | 'paging' | 'disk'
 

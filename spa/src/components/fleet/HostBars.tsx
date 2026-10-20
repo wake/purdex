@@ -1,9 +1,9 @@
 // spa/src/components/fleet/HostBars.tsx — the two-bar indicator of a fleet host cell (「主機格指示」 = 雙柱, the user 10-16 on
-// #3033): in the ring's square, two bars, each one reading (lib/fleet/bar-readings) as its fill height, coloured by that
+// #3033): in the ring's square, two bars, each one reading (lib/pool/bar-readings) as its fill height, coloured by that
 // reading's own band with the ring's status tokens. No reading (offline, or none yet): the grey tracks alone. The track is the
 // ring's (`--border-default`).
 import type { UsageTone } from '../../lib/usage-display'
-import type { BarReading } from '../../lib/fleet/bar-readings'
+import type { BarReading } from '../../lib/pool/bar-readings'
 
 const FILL: Record<UsageTone, string> = { ok: 'bg-status-success', warn: 'bg-status-warning', danger: 'bg-status-error' }
 const BAR_W = 4
