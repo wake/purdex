@@ -159,3 +159,22 @@ args = "files"
 	r = Match(root, []string{"pnpm", "vitest", "run", "--mode", "quick", "a.ts"})
 	assert.Equal(t, "strict", r.Task)
 }
+
+// What a flag means is its tool's: `--run` is vitest's single run, and a filter in another tool; `-p` is the parallelism of go test and a
+// package of cargo. A task of a tool that is not known to say so has no flag that may be left out.
+func TestMatch_FlagsOfAnotherToolAreNotLeftOut(t *testing.T) {
+	root := repoWith(t, `
+[tasks.runner-filter]
+run  = "make test --run smoke -p core {files}"
+args = "files"
+[tasks.vitest-related]
+run  = "pnpm vitest related --run {files}"
+args = "files"
+[tasks.go-one]
+run  = "go test -json -p 3 {packages}"
+args = "packages"
+`, "a.ts")
+	assert.NotEqual(t, "runner-filter", Match(root, []string{"make", "test", "a.ts"}).Task, "--run and -p of make are filters")
+	assert.Equal(t, "vitest-related", Match(root, []string{"pnpm", "vitest", "related", "a.ts"}).Task, "vitest's own --run may be left out")
+	assert.Equal(t, "go-one", Match(root, []string{"go", "test", "./x/"}).Task, "go test's own -p may be left out")
+}
