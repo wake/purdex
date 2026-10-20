@@ -175,12 +175,12 @@ export function TaskGroupView({ activeTabId, onSelectTab, onCloseTab, onMiddleCl
     return <TaskGroupSeatClosed key={row.key} address={seat?.session.address ?? ''} label={seat?.label ?? ''} hostId={seat?.hostId ?? null} tmuxSession={seat?.session.tmux_session} onOpen={openSeat} />
   }
 
-  // A group is expanded unless the device collapsed it. A header click selects the group; on the selected, expanded group it collapses it (WorkspaceRow's rule); the chevron alone toggles.
+  // A group is expanded unless the device collapsed it. A header click selects the group; on the selected group it toggles it (WorkspaceRow's rule); the chevron alone toggles.
   const isExpanded = (key: string) => expandedMap[key] !== false
   const headerProps = (key: string, toggleable: boolean) => ({
     selected: selectedGroup === key,
     expanded: isExpanded(key),
-    onClick: () => { if (selectedGroup === key && isExpanded(key)) setExpanded(key, false); else selectGroupFromSidebar(key) },
+    onClick: () => { if (selectedGroup === key) setExpanded(key, !isExpanded(key)); else selectGroupFromSidebar(key) },
     onToggle: toggleable ? () => setExpanded(key, !isExpanded(key)) : undefined,
   })
 

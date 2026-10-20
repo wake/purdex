@@ -1,5 +1,5 @@
 // spa/src/features/workspace/components/TaskGroupHeader.tsx — a group's header in the sidebar's task-group view (name pool v2 spec §7, NA-6b/6c; task groups spec §6.1): the colour square, the name, the host a manual group gathers, and a chevron
-// (CaretDown / CaretRight, `aria-expanded`) where the count used to be. A click on the header selects the group; a click on the header of the selected, expanded group collapses it (`WorkspaceRow`'s rule); the chevron alone toggles.
+// (CaretDown / CaretRight, `aria-expanded`) where the count used to be. A click on the header selects the group; a click on the header of the selected group toggles it (`WorkspaceRow`'s rule); the chevron alone toggles.
 // A manual group's name is renamed in place (double-click; Enter saves, Esc or a click away drops the draft); a team's name opens the team edit form on a double-click (its own component); a group with nothing live in it
 // offers 「清除」. When the host's groups cannot be edited (unsafe, not read yet) the name and 「清除」 stay, inert, and say why in their tooltip.
 import { forwardRef, useEffect, useId, useRef, useState } from 'react'

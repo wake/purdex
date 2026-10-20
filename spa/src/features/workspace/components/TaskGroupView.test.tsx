@@ -621,7 +621,7 @@ describe('headers: selection, collapse and the three manual group states (task g
     expect(head('task-group-ungrouped')).not.toHaveAttribute('data-selected')
   })
 
-  it('a click on the header of the selected, expanded group collapses it; on a collapsed one it selects again', () => {
+  it('a click on the header of the selected group toggles it: collapses an expanded one and expands a collapsed one', () => {
     setGroups([group('g1', ['ROOT2'])])
     setRoots([['AG2', 'ROOT2']])
     mount()
@@ -631,8 +631,9 @@ describe('headers: selection, collapse and the three manual group states (task g
     expect(useGroupViewStore.getState().expanded[g1]).toBe(false)
     expect(rowsIn('task-group-manual')).toHaveLength(0)
     expect(within(screen.getByTestId('task-group-manual')).getByTestId('task-group-chevron')).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(head('task-group-manual')) // selected but collapsed: the rule only collapses an expanded one
-    expect(useGroupViewStore.getState().expanded[g1]).toBe(false)
+    fireEvent.click(head('task-group-manual')) // selected but collapsed: expands (WorkspaceRow's rule is a toggle)
+    expect(useGroupViewStore.getState().expanded[g1]).toBe(true)
+    expect(rowsIn('task-group-manual')).toHaveLength(1)
   })
 
   it('the chevron alone toggles, without selecting', () => {
