@@ -73,7 +73,7 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			raw := RawCPU{Load1: l1, Load5: l5, Load15: &l15, NCPU: int(n), Busy: busy, Total: total, HaveSplit: true,
 				Cores: make([]RawCore, len(ticks)), Kinds: DarwinCoreKinds(len(ticks))}
 			for i, t := range ticks {
-				c := RawCore{User: t.User + t.Nice, System: t.System, Idle: t.Idle}
+				c := RawCore{ID: i, User: t.User + t.Nice, System: t.System, Idle: t.Idle}
 				c.Total = c.User + c.System + c.Idle
 				raw.Cores[i] = c
 				raw.User += c.User

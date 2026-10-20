@@ -32,7 +32,9 @@ type RawCPU struct {
 }
 
 // RawCore is one core's ticks since boot: User and System as in RawCPU, Idle (on Linux with iowait), and Total of all of them.
+// ID is the core's number (Linux cpuN; macOS the index), so a change of which cores are online is told from a change of count.
 type RawCore struct {
+	ID                        int
 	User, System, Idle, Total uint64
 }
 
@@ -107,7 +109,7 @@ func tickShares(pu, ps, pt, cu, cs, ct uint64) (user, system *float64) {
 }
 
 // buildCores lists every core of cur. A core's shares are measured against the same core in prev, so they are nil when the number
-// of cores changed (the index no longer names the same core) or when that core's own counters cannot be compared.
+// of cores or which cores are online changed (the index no longer names the same core) or when that core's own counters cannot be compared.
 func buildCores(prev *RawCPU, cur RawCPU) []wire.Core {
 	out := make([]wire.Core, len(cur.Cores))
 	kinds := len(cur.Kinds) == len(cur.Cores) // a list that does not fit the cores is not trusted for any of them
@@ -120,6 +122,9 @@ func buildCores(prev *RawCPU, cur RawCPU) []wire.Core {
 			continue
 		}
 		p := prev.Cores[i]
+		if p.ID != c.ID { // a core went offline and another came online: the index no longer names the same core
+			continue
+		}
 		if c.Total <= p.Total || c.Idle < p.Idle {
 			continue
 		}

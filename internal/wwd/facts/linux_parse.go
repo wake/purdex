@@ -192,6 +192,7 @@ func ParseCPUStatDetail(text string) (CPUStatDetail, error) {
 		if err != nil {
 			return CPUStatDetail{}, err
 		}
+		c.ID = n
 		cores = append(cores, numbered{n, c})
 	}
 	if !found {

@@ -33,7 +33,7 @@ func TestParseCPUStatDetail(t *testing.T) {
 	if d.All != want {
 		t.Errorf("all %+v want %+v", d.All, want)
 	}
-	if len(d.Cores) != 2 || d.Cores[1] != (RawCore{User: 55, System: 30, Idle: 420, Total: 515}) {
+	if len(d.Cores) != 2 || d.Cores[1] != (RawCore{ID: 1, User: 55, System: 30, Idle: 420, Total: 515}) {
 		t.Errorf("cores %+v", d.Cores)
 	}
 }
@@ -111,6 +111,19 @@ func TestBuildCPUSplitCoreCountChanged(t *testing.T) {
 	}
 	if !near(got.UserPct, 10) { // the whole-machine share does not depend on the core count
 		t.Errorf("user %v", got.UserPct)
+	}
+}
+
+// cpu1 goes offline and cpu2 comes online: the count is the same, but index 1 is no longer the same core.
+func TestBuildCPUSplitOnlineCoresChanged(t *testing.T) {
+	prev := rawSplit(100, 50, 850, RawCore{ID: 0, Total: 100}, RawCore{ID: 1, Total: 100})
+	cur := rawSplit(200, 100, 1700, RawCore{ID: 0, User: 10, Idle: 190, Total: 200}, RawCore{ID: 2, User: 10, Idle: 190, Total: 200})
+	got := BuildCPU(&prev, cur)
+	if !near(got.Cores[0].UserPct, 10) {
+		t.Errorf("cpu0 is the same core and is measured: %+v", got.Cores[0])
+	}
+	if c := got.Cores[1]; c.UserPct != nil || c.SystemPct != nil || c.IdlePct != nil {
+		t.Errorf("index 1 changed from cpu1 to cpu2: must be null, got %+v", c)
 	}
 }
 
