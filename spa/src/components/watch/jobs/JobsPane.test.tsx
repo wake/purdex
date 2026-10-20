@@ -1,16 +1,18 @@
-// spa/src/components/watch/jobs/JobsPane.test.tsx — the 工作 tab: lanes per pool host, the queue in display order with its red line, and 歷史. The jobs are the jobs store's and the hosts the pool's; the driver and the pool's poll are not started here.
+// spa/src/components/watch/jobs/JobsPane.test.tsx — the 任務佇列 tab: the queue flow around the store, the selection and the detail, and 歷史. The jobs are the jobs store's and the hosts the pool's; the driver and the pool's poll are not started here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 
 const release = vi.fn()
 vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => release), jobsDaemons: () => [], liveTopology: () => ({ origins: ['mlab'], ownDaemon: { mlab: 'd-mlab' }, forwarders: ['d-mlab'] }) }))
 vi.mock('../../../lib/pool/jobs-api', () => ({ fetchJob: vi.fn(() => new Promise(() => {})), fetchJobLog: vi.fn() }))
-vi.mock('../../../lib/pool/use-cell-models', () => ({ useRunPool: vi.fn() }))
+vi.mock('../../../lib/pool/use-cell-models', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/use-cell-models')>()), useRunPool: vi.fn() }))
 
 import { JobsPane } from './JobsPane'
 import { JobLanes } from './JobLanes'
 import { JobQueue } from './JobQueue'
 import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
+import { parseFacts } from '../../../lib/pool/parse'
+import darwinJson from '../../../lib/pool/__fixtures__/facts_darwin.json'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
 import { useJobsStore } from '../../../lib/pool/jobs-store'
@@ -28,10 +30,14 @@ const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
   timeout_s: 0, supersede_key: '', interruptible: false, queue_timeout_s: 0, adhoc: false, local: false, submitter: { session: '', ref: '', team: '', host: '' }, created_at: NOW - 1000, state: 'queued',
   claim: null, result: null, manual: '', manual_seq: 0, ...over,
 })
-const host = (alias: string, over: Partial<PoolHost> = {}): PoolHost => ({
-  host_id: `id-${alias}`, alias, version: '1', proto: 1, platform: 'darwin', arch: 'arm64', facts: null, reachable: true, labels: ['os:darwin'],
-  worker: { enabled: true, slots: { heavy: 2, light: 2 }, owner_rule: '' }, ...over,
-})
+const factsOf = (alias: string, worker: PoolHost['worker']) => ({ ...parseFacts(darwinJson)!, alias, at: NOW, worker: { ...worker, running: { heavy: 0, light: 0 } }, exceptions: [] })
+const host = (alias: string, over: Partial<PoolHost> = {}): PoolHost => {
+  const worker = over.worker ?? { enabled: true, slots: { heavy: 2, light: 2 }, owner_rule: '' }
+  return { host_id: `id-${alias}`, alias, version: '1', proto: 1, platform: 'darwin', arch: 'arm64', facts: factsOf(alias, worker), reachable: true, labels: ['os:darwin'], worker, ...over }
+}
+const queued = () => Array.from(document.querySelectorAll('[data-q]')).map((e) => e.getAttribute('data-q'))
+const q = (key: string) => document.querySelector(`[data-q="${key}"]`) as HTMLElement
+const jcard = (key: string) => document.querySelector(`[data-j="${key}"]`) as HTMLElement
 const claim = (worker: string, since = NOW - 65_000) => ({ worker, attempt: 1, since })
 const withJobs = (...jobs: PoolJob[]) => {
   const byOrigin: Record<string, { jobs: Record<string, PoolJob>; cursor: string; epoch: string; via: string }> = {}
@@ -52,92 +58,15 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); cleanup(); clearJobsViewMemory() })
 
-describe('the lanes', () => {
-  it('a lane per pool host with its heavy slots: the running job, then the free ones dashed', () => {
-    withJobs(job('r1', { state: 'running', claim: claim('mlab') }))
+describe('the live view', () => {
+  it('is the queue flow and the last jobs that ended; the lanes and the old queue list are gone', () => {
+    withJobs(job('q1'))
     mount()
-    const lane = screen.getByTestId('job-lane-mlab')
-    expect(within(lane).getByText(t('watch.queue.slots', { used: 1, total: 2 }))).toBeInTheDocument()
-    expect(within(lane).getAllByTestId('job-running')).toHaveLength(1)
-    expect(within(lane).getAllByTestId('job-free')).toHaveLength(1)
-    expect(within(lane).getByTestId('job-dot')).toBeInTheDocument() // the running light breathes
-  })
-
-  it('a claimed job sits in its host\'s lane as a 「準備中」 card — no breathing dot — and is not in the queue', () => {
-    withJobs(job('c1', { state: 'claimed', claim: claim('mlab') }))
-    mount()
-    const card = within(screen.getByTestId('job-lane-mlab')).getByTestId('job-preparing')
-    expect(card).toHaveTextContent(t('watch.jobs.preparing'))
-    expect(within(card).queryByTestId('job-dot')).toBeNull()
-    expect(card.className).toContain('border-dashed')
-    expect(screen.queryByTestId('job-queued')).toBeNull()
-    expect(screen.getByTestId('job-queue-none')).toBeInTheDocument()
-  })
-
-  it('a host whose worker is off is one line: 「不接工作」', () => {
-    mount()
-    const lane = screen.getByTestId('job-lane-mserv')
-    expect(lane).toHaveAttribute('data-off', 'true')
-    expect(within(lane).getByTestId('job-lane-off')).toHaveTextContent(t('watch.jobs.lane.off'))
-    expect(within(lane).queryByTestId('job-free')).toBeNull()
-  })
-
-  it('says why a host takes no more while a slot is free', () => {
-    usePoolStore.setState({ hosts: [host('mlab', { headroom_reasons: { heavy: ['owner_active'], light: [] } })] })
-    mount()
-    expect(within(screen.getByTestId('job-lane-mlab')).getByTestId('job-gate')).toHaveTextContent(t('pool.reason.owner_active'))
-  })
-
-  it('a fast-lane job is marked', () => {
-    withJobs(job('f', { state: 'running', claim: claim('mlab'), local: true }))
-    mount()
-    expect(screen.getByTestId('job-fast-lane')).toHaveTextContent(t('watch.jobs.fast_lane'))
-  })
-})
-
-describe('the queue', () => {
-  it('a card says the class, repo task args, where it was sent from, by which session and how long it has waited; an empty session is 「—」', () => {
-    withJobs(
-      job('q1', { class: 'release', args: ['--all'], created_at: NOW - 65_000, submitter: { session: 'purdex-b0', ref: '', team: '', host: 'mlab' } }),
-      job('q2', { origin: 'mserv', class: 'dev' }),
-    )
-    mount()
-    const cards = screen.getAllByTestId('job-queued')
-    expect(cards.map((c) => c.getAttribute('data-job-id'))).toEqual(['q1', 'q2'])
-    expect(within(cards[0]).getByTestId('job-class')).toHaveTextContent(t('watch.jobs.class.release'))
-    expect(cards[0]).toHaveTextContent('purdex test --all')
-    expect(cards[0]).toHaveTextContent(t('watch.jobs.from', { origin: 'mlab' }))
-    expect(within(cards[0]).getByTestId('job-session')).toHaveTextContent('purdex-b0')
-    expect(within(cards[0]).getByTestId('job-wait')).toHaveTextContent('1:05')
-    expect(within(cards[1]).getByTestId('job-session')).toHaveTextContent('—')
-    expect(screen.getByTestId('jobs-count')).toHaveTextContent(t('watch.jobs.queue.count', { n: 2 }))
-  })
-
-  it('a wait past two minutes turns yellow', () => {
-    withJobs(job('old', { created_at: NOW - 125_000 }), job('new', { created_at: NOW - 5_000 }))
-    mount()
-    const [old, fresh] = screen.getAllByTestId('job-wait')
-    expect(old.className).toContain('text-status-warning-text')
-    expect(fresh.className).not.toContain('text-status-warning-text')
-  })
-
-  it('a held job is dimmed and tagged; a pinned one says so', () => {
-    withJobs(job('h', { manual: 'hold' }), job('f', { manual: 'front', manual_seq: 1 }))
-    mount()
-    const cards = screen.getAllByTestId('job-queued')
-    expect(cards.map((c) => c.getAttribute('data-job-id'))).toEqual(['f', 'h'])
-    expect(cards[1]).toHaveAttribute('data-held', 'true')
-    expect(within(cards[1]).getByTestId('job-tag')).toHaveTextContent(t('watch.jobs.tag.hold'))
-    expect(within(cards[0]).getByTestId('job-tag')).toHaveTextContent(t('watch.jobs.tag.front'))
-  })
-
-  it('the red line: only on a job no host with its worker on can take', () => {
-    withJobs(job('php', { labels: ['os:linux'] }), job('ok', { labels: ['os:darwin'] }))
-    mount()
-    const php = screen.getAllByTestId('job-queued').find((c) => c.getAttribute('data-job-id') === 'php')!
-    const ok = screen.getAllByTestId('job-queued').find((c) => c.getAttribute('data-job-id') === 'ok')!
-    expect(within(php).getByTestId('job-no-host')).toHaveTextContent(t('watch.jobs.no_host', { labels: 'os:linux' }))
-    expect(within(ok).queryByTestId('job-no-host')).toBeNull()
+    expect(screen.getByTestId('queue-flow')).toBeInTheDocument()
+    expect(screen.getByTestId('flow-recent')).toBeInTheDocument()
+    expect(screen.queryByTestId('job-lanes')).toBeNull()
+    expect(screen.queryByTestId('jobs-count')).toBeNull()
+    expect(queued()).toEqual(['mlab/q1'])
   })
 })
 
@@ -151,7 +80,7 @@ describe('歷史 and the mode', () => {
     mount()
     fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.mode.history') }))
     expect(readJobsMode()).toBe('history')
-    expect(screen.queryByTestId('job-lanes')).toBeNull()
+    expect(screen.queryByTestId('queue-flow')).toBeNull()
     const rows = screen.getAllByTestId('job-history-row')
     expect(rows.map((r) => r.getAttribute('data-state'))).toEqual(['failed', 'succeeded'])
     expect(rows[0]).toHaveTextContent(t('pool.job.result.failed', { n: 2 }))
@@ -176,7 +105,7 @@ describe('the pane around the store', () => {
   it('jobs of an origin that has left the pool are not shown (the store keeps them; the pane shows the pool\'s hosts only)', () => {
     withJobs(job('gone', { origin: 'air19' }), job('here', { origin: 'mlab' }))
     mount()
-    expect(screen.getAllByTestId('job-queued').map((c) => c.getAttribute('data-job-id'))).toEqual(['here'])
+    expect(queued()).toEqual(['mlab/here'])
   })
 
   it('no daemon offers the pool any more: the old jobs are not shown, and the pane says so', () => {
@@ -184,14 +113,15 @@ describe('the pane around the store', () => {
     usePoolStore.setState({ hosts: [], oldDaemon: true })
     mount()
     expect(screen.getByTestId('jobs-no-pool')).toBeInTheDocument()
-    expect(screen.queryByTestId('job-queued')).toBeNull()
+    expect(queued()).toEqual([])
   })
 
-  it('the pool could not be read for a moment (no hosts, but not an old daemon): what was read stays on the screen', () => {
+  it('the pool could not be read for a moment (no hosts, but not an old daemon): the jobs are kept in the store, but no cell draws them (M24) and the pane does not call it a missing pool', () => {
     withJobs(job('kept'))
     usePoolStore.setState({ hosts: [], oldDaemon: false })
     mount()
-    expect(screen.getAllByTestId('job-queued').map((c) => c.getAttribute('data-job-id'))).toEqual(['kept'])
+    expect(queued()).toEqual([])
+    expect(screen.getByTestId('queue-flow')).toBeInTheDocument()
     expect(screen.queryByTestId('jobs-no-pool')).toBeNull()
   })
 
@@ -199,7 +129,7 @@ describe('the pane around the store', () => {
     withJobs(job('stale'))
     usePoolStore.setState({ hosts: [], oldDaemon: false, sourceHostId: 'h1' })
     mount()
-    expect(screen.queryByTestId('job-queued')).toBeNull()
+    expect(queued()).toEqual([])
     expect(screen.queryByTestId('jobs-no-pool')).toBeNull()
   })
 
@@ -231,11 +161,11 @@ describe('the detail beside the list', () => {
     withJobs(job('q1'), job('r1', { state: 'running', claim: claim('mlab') }), finished('h1'))
     mount()
     expect(screen.queryByTestId('job-detail')).toBeNull()
-    fireEvent.click(within(screen.getByTestId('job-queue')).getAllByRole('button')[0])
+    fireEvent.click(q('mlab/q1'))
     expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('q1')
-    fireEvent.click(within(screen.getByTestId('job-lane-mlab')).getByTestId('job-running'))
+    fireEvent.click(jcard('mlab/r1'))
     expect(within(screen.getByTestId('job-detail')).getByTestId('job-id')).toHaveTextContent('r1')
-    fireEvent.click(within(screen.getByTestId('job-lane-mlab')).getByTestId('job-running'))
+    fireEvent.click(jcard('mlab/r1'))
     expect(screen.queryByTestId('job-detail')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.mode.history') }))
     fireEvent.click(screen.getByTestId('job-history-row'))
@@ -247,13 +177,11 @@ describe('the detail beside the list', () => {
     usePoolStore.setState({ hosts: [host('mlab'), host('mserv')] })
     withJobs(job('same', { origin: 'mlab' }), job('same', { origin: 'mserv', created_at: NOW - 500 }), job('run', { origin: 'mlab', state: 'running', claim: claim('mlab') }), job('run', { origin: 'mserv', state: 'running', claim: claim('mlab') }))
     mount()
-    const queued = within(screen.getByTestId('job-queue')).getAllByRole('button')
-    expect(queued).toHaveLength(2)
-    fireEvent.click(queued[1])
+    expect(queued()).toEqual(['mlab/same', 'mserv/same'])
+    fireEvent.click(q('mserv/same'))
     expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mserv')
-    const running = within(screen.getByTestId('job-lane-mlab')).getAllByTestId('job-running')
-    expect(running).toHaveLength(2)
-    fireEvent.click(running[0])
+    expect(document.querySelectorAll('[data-j]')).toHaveLength(2)
+    fireEvent.click(jcard('mlab/run'))
     expect(within(screen.getByTestId('job-detail')).getByTestId('job-origin')).toHaveTextContent('mlab')
     expect(errors.mock.calls.flat().join(' ')).not.toContain('same key')
     errors.mockRestore()
@@ -262,7 +190,7 @@ describe('the detail beside the list', () => {
   it('the close button closes it, and the selection goes with it', () => {
     withJobs(job('q1'))
     mount()
-    fireEvent.click(within(screen.getByTestId('job-queue')).getAllByRole('button')[0])
+    fireEvent.click(q('mlab/q1'))
     fireEvent.click(screen.getByRole('button', { name: t('watch.jobs.detail.close') }))
     expect(screen.queryByTestId('job-detail')).toBeNull()
     expect(readSelectedJob()).toBeNull()

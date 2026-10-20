@@ -1,8 +1,8 @@
-// spa/src/components/watch/jobs/JobsPane.tsx — the 工作 tab of the watcher area (plan "WWD-7 design", Jobs tab): 「佇列與執行中」 (lanes per host, then the queue) and 「歷史」. It only reads: the jobs are the jobs
+// spa/src/components/watch/jobs/JobsPane.tsx — the 任務佇列 tab of the watcher area (monitoring tabs MON-5): 「佇列與執行中」 (the queue flow, then the last jobs that ended) and 「歷史」. It only reads: the jobs are the jobs
 // store's (the driver keeps it, `watchJobs` makes it poll the origins no daemon announces while this is mounted), the hosts are the pool's.
 //
 // Tab-hosted checklist: the pane unmounts when another tab is shown (keepAliveCount 0), so the mode (and 歷史's filters, selection and scroll) live in `lib/pool/jobs-view-memory`, not in component state. The jobs themselves are in the store, outside the pane.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { SegmentControl } from '../../settings/SegmentControl'
@@ -10,12 +10,14 @@ import { useJobsStore } from '../../../lib/pool/jobs-store'
 import { usePoolStore } from '../../../lib/pool/store'
 import { useRunPool } from '../../../lib/pool/use-cell-models'
 import { watchJobs } from '../../../lib/pool/jobs-driver-live'
-import { laneModels, queueEntries } from '../../../lib/pool/jobs-lanes'
+import { queueEntries } from '../../../lib/pool/jobs-lanes'
+import { recentEndedOf } from '../../../lib/pool/queue-flow'
+import { useMonitorHosts } from '../../../lib/pool/use-monitor-hosts'
 import { usePoolJobs } from '../../../lib/pool/pool-jobs'
 import { errorTextKey } from '../../../lib/pool/words'
-import { jobKey, readJobsMode, readSelectedJob, writeJobsMode, writeSelectedJob, type JobsMode } from '../../../lib/pool/jobs-view-memory'
-import { JobLanes } from './JobLanes'
-import { JobQueue } from './JobQueue'
+import { jobKey, readJobsMode, readLiveScroll, readSelectedJob, writeJobsMode, writeLiveScroll, writeSelectedJob, type JobsMode } from '../../../lib/pool/jobs-view-memory'
+import { QueueFlow } from './QueueFlow'
+import { RecentEnded } from './RecentEnded'
 import { JobHistory } from './JobHistory'
 import { JobDetail } from './JobDetail'
 
@@ -55,7 +57,12 @@ export function JobsPane(_props: PaneRendererProps) {
   }, [hosts, answered, oldDaemon])
   // The selected job as the store holds it now. One the store no longer has (it keeps the newest 200 ended ones) shows no detail; the memory keeps the choice, which is not an error.
   const open = useMemo(() => jobs.find((j) => jobKey(j.origin, j.id) === selected) ?? null, [jobs, selected])
-  const lanes = useMemo(() => laneModels(hosts, jobs), [hosts, jobs])
+  const monitorHosts = useMonitorHosts()
+  const looks = useMemo(() => Object.fromEntries(monitorHosts.map((h) => [h.alias, h.look])), [monitorHosts])
+  const recent = useMemo(() => recentEndedOf(jobs), [jobs])
+  // The live view's scroll position outlives the pane (tab-hosted): restored when it mounts, written when it scrolls.
+  const liveBox = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { if (liveBox.current) liveBox.current.scrollTop = readLiveScroll() }, [mode])
   const entries = useMemo(() => queueEntries(jobs, now, hosts), [jobs, now, hosts])
   const failed = Object.entries(errors).flatMap(([origin, e]) => {
     const key = e && shown(origin) ? errorTextKey(e.code) : null
@@ -71,20 +78,20 @@ export function JobsPane(_props: PaneRendererProps) {
             value={mode} onChange={setMode}
           />
         </span>
-        {mode === 'live' && <span data-testid="jobs-count" className="tabular-nums text-text-secondary">{t('watch.jobs.queue.count', { n: entries.length })}</span>}
       </div>
       {failed.map((f) => <p key={f.origin} data-testid="jobs-error" className="text-xs text-status-warning-text">{f.origin}：{f.text}</p>)}
       {oldDaemon && <p data-testid="jobs-no-pool" className="text-xs text-text-muted">{t('watch.jobs.no_pool')}</p>}
       <div className="flex min-h-0 flex-1 gap-3">
-        <div className={`flex min-h-0 min-w-0 flex-1 flex-col gap-3 ${mode === 'live' ? 'overflow-y-auto' : 'overflow-hidden'}`}>
+        <div
+          ref={mode === 'live' ? liveBox : undefined} data-testid={mode === 'live' ? 'jobs-live-scroll' : undefined}
+          onScroll={mode === 'live' ? (e) => writeLiveScroll(e.currentTarget.scrollTop) : undefined}
+          className={`flex min-h-0 min-w-0 flex-1 flex-col gap-3 ${mode === 'live' ? 'overflow-y-auto' : 'overflow-hidden'}`}
+        >
           {mode === 'live'
             ? (
               <>
-                <JobLanes lanes={lanes} now={now} selected={selected} onSelect={select} />
-                <div>
-                  <h3 className="mb-1.5 text-xs font-medium text-text-secondary">{t('watch.jobs.queue.title')}</h3>
-                  <JobQueue entries={entries} now={now} selected={selected} onSelect={select} />
-                </div>
+                <QueueFlow hosts={monitorHosts} jobs={jobs} entries={entries} now={now} selected={selected} onSelect={select} />
+                <RecentEnded jobs={recent} now={now} looks={looks} selected={selected} onSelect={select} />
               </>
             )
             : <JobHistory jobs={jobs} now={now} selected={selected} onSelect={select} />}

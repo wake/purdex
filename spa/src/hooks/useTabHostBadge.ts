@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import type { Tab } from '../types/tab'
 import { useHostLook } from '../lib/host-look'
+import { useTabPoolHostLook } from '../lib/pool/host-looks'
+import { getPrimaryPane } from '../lib/pane-tree'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
 import {
@@ -38,11 +40,17 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
       : undefined
   // Hooks run unconditionally (Rules of Hooks); the `hostId` bail-out happens after.
   const look = useHostLook(hostId)
+  // A watch-host tab (MON-6b, M9) wears the look of its pool host, as the sidebar cell does; the hook runs for every tab (`''` is no host).
+  const primary = getPrimaryPane(tab.layout)
+  const poolHostId = primary.content.kind === 'watch-host' ? primary.content.poolHostId ?? '' : ''
+  const poolLook = useTabPoolHostLook(poolHostId)
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const mode: HostColorMode = agentType ? 'terminal' : 'console'
 
   const badge = useMemo(() => resolveHostBadge(look, mode), [look, mode])
+  const poolBadge = useMemo(() => resolveHostBadge(poolLook, 'console'), [poolLook])
 
+  if (poolHostId) return poolBadge
   if (!hostId) return null
   return badge
 }
