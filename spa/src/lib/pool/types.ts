@@ -21,6 +21,11 @@ export interface PoolExceptionDetail {
   allow?: { classes: string[]; repos: string[] }
   flags?: string[]
 }
+/** One core's shares of its own time, each null on its own; `kind` is `p` (performance) or `e` (efficiency), null when the platform does not say. */
+export interface PoolCore { user_pct: number | null; system_pct: number | null; idle_pct: number | null; kind: 'p' | 'e' | null }
+/** One physical disk's throughput since the previous sample; a rate is null where there was nothing to compare with. */
+export interface PoolDiskIO { device: string; read_bps: number | null; write_bps: number | null; read_iops: number | null; write_iops: number | null }
+export interface PoolSelf { cpu_pct: number | null; rss_mb: number | null }
 export interface PoolOwner { active: boolean; idle_s: number; reason: string }
 
 export interface PoolFacts {
@@ -32,11 +37,13 @@ export interface PoolFacts {
   platform: string
   arch: string
   os_version: string
-  cpu: { ncpu: number; load1: number; load5: number; idle_pct: number }
+  // The fields marked optional are the host-metrics spec's (G-2 to G-4); each is absent when the daemon does not send it or it does not parse.
+  cpu: { ncpu: number; load1: number; load5: number; idle_pct: number; load15?: number; user_pct?: number; system_pct?: number; cores?: PoolCore[] }
   mem: {
     total_mb: number; available_mb: number; pressure: number
     page_out_rate: number | null; swap_out_rate: number | null; swap_used_mb: number | null; compressor_mb: number | null
     psi: PoolPsi | null
+    decompress_rate?: number; swap_total_mb?: number; wired_mb?: number; active_mb?: number; inactive_mb?: number; file_cache_mb?: number
   }
   disk: PoolDisk[]
   procs: PoolProc[]
@@ -48,6 +55,11 @@ export interface PoolFacts {
   worker: FactsWorker
   /** Jobs this host submitted that are still queued (filled from 756); absent until a daemon sends it. */
   queue?: { queued: number }
+  /** The raw count of the host's process table, when it booted (ms), wwd's own use, and one entry per physical disk. */
+  procs_total?: number
+  boot_at?: number
+  self?: PoolSelf
+  disk_io?: PoolDiskIO[]
 }
 
 /** Why a class of work is not taken, in spec §3.2 order (#3478, `pool.assess.v1`). A code the App does not know stays text. */
@@ -80,6 +92,8 @@ export interface PoolHost {
   liveness_since?: number
   /** Round trip to the peer's wwd (ms), a non-negative number. */
   rtt_ms?: number
+  /** `info.fingerprint`: what the host says it is (strings only); absent when it sent none or nothing in it parsed. */
+  fingerprint?: Record<string, string>
 }
 
 /** `GET /api/pool/facts/history`: the full facts records, oldest first, at the asked step. */
@@ -102,6 +116,17 @@ export interface SeriesPoint {
   worker_running?: Slots
   queue_queued?: number
   disks?: SeriesDisk[]
+  // G-2 to G-4 (host-metrics spec §2.5). Not in a series: the per-core shares, the pressure stall figures, the sessions room, the residents, the listed processes and the boot time.
+  load15?: number
+  cpu_user_pct?: number
+  cpu_system_pct?: number
+  compressor_mb?: number
+  decompress_rate?: number
+  swap_total_mb?: number
+  procs_total?: number
+  self_cpu_pct?: number
+  self_rss_mb?: number
+  disk_io?: PoolDiskIO[]
 }
 export interface SeriesDisk { mount: string; used_pct: number; free_gb: number }
 export interface PoolSeries { step: string; points: SeriesPoint[]; truncated: boolean }
