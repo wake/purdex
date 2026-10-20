@@ -98,6 +98,15 @@ func (e *Exec) depsCache() (*deps.Cache, error) {
 // the job ends, as failed with no exit and a reason, which no outcome and no qualification counts, and the host stops trying that key
 // until the window has passed.
 func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, taskEnv []string) error {
+	goSums := 0
+	for _, lf := range lockfiles {
+		if path.Base(lf) == "go.sum" {
+			goSums++
+		}
+	}
+	if goSums > 1 { // the job is given one module cache (GOMODCACHE), so it can use the modules of one go.sum
+		return &runner.Rejected{Reason: "deps_one_go_sum: a task may declare one go.sum"}
+	}
 	cache, err := e.depsCache()
 	if err != nil {
 		return err
@@ -108,14 +117,20 @@ func (e *Exec) prepareDeps(ctx context.Context, ref ident.Ref, job wire.Job, ws 
 // depsJobEnv is what the job's command is told about the dependencies it was given besides the directories: a Go task uses the module cache
 // in its workspace and nothing else (no proxy, no network, no change to go.mod or go.sum), so it needs neither credentials nor a route out.
 // These come last in the task's environment, so nothing the manifest lists can point Go elsewhere.
-func depsJobEnv(ws string, lockfiles []string) []string {
-	var env []string
+// The task's own GOFLAGS stay (build tags, -p), with -mod=readonly after them: the later -mod is the one that counts.
+func depsJobEnv(ws string, lockfiles []string, taskEnv []string) []string {
 	for _, lf := range lockfiles {
 		if path.Base(lf) == "go.sum" {
-			env = append(env, "GOMODCACHE="+filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=-mod=readonly", "GOPROXY=off")
+			flags := "-mod=readonly"
+			for _, kv := range taskEnv {
+				if v, ok := strings.CutPrefix(kv, "GOFLAGS="); ok && strings.TrimSpace(v) != "" {
+					flags = strings.TrimSpace(v) + " -mod=readonly"
+				}
+			}
+			return []string{"GOMODCACHE=" + filepath.Join(ws, filepath.FromSlash(path.Dir(lf)), ".gomodcache"), "GOFLAGS=" + flags, "GOPROXY=off"}
 		}
 	}
-	return env
+	return nil
 }
 
 func (e *Exec) prepareDepsWith(ctx context.Context, cache *deps.Cache, ref ident.Ref, job wire.Job, ws snapshot.Workspace, lockfiles []string, taskEnv []string) error {

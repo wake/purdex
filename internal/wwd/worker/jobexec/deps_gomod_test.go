@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/wwd/worker/ident"
+	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
 const goManifest = `
@@ -20,7 +21,13 @@ run     = "true"
 args    = "none"
 summary = "plain"
 deps    = ["go.sum"]
-env     = ["HTTPS_PROXY=http://proxy:3128"]
+env     = ["HTTPS_PROXY=http://proxy:3128", "GIT_SSH_COMMAND=./evil", "GOFLAGS=-tags=x"]
+
+[tasks.gomulti]
+run     = "true"
+args    = "none"
+summary = "plain"
+deps    = ["go.sum", "sub/go.sum"]
 `
 
 // goRepo is a git repository with the manifest, a go.mod and a go.sum committed.
@@ -61,7 +68,7 @@ func newGoRig(t *testing.T) *goRig {
 	rig := &goRig{bin: filepath.Join(d, "bin"), log: filepath.Join(d, "download.log"), deps: filepath.Join(d, "deps")}
 	require.NoError(t, os.MkdirAll(rig.bin, 0o755))
 	stub := "#!/bin/sh\ncase \"$1\" in\n  version) echo go version go1.26.0 darwin/arm64;;\n  mod)\n" +
-		"    echo \"cache=$GOMODCACHE private=$GOPRIVATE flags=$GOFLAGS home=$HOME token=$GIT_TOKEN proxy=$HTTPS_PROXY dir=$(pwd)\" >> " + rig.log + "\n" +
+		"    echo \"cache=$GOMODCACHE private=$GOPRIVATE flags=$GOFLAGS home=$HOME token=$GIT_TOKEN proxy=$HTTPS_PROXY ssh=$GIT_SSH_COMMAND dir=$(pwd)\" >> " + rig.log + "\n" +
 		"    mkdir -p \"$GOMODCACHE/lab.protype.tw/wake/nexen@v0.22.1\" && echo module > \"$GOMODCACHE/lab.protype.tw/wake/nexen@v0.22.1/go.mod\";;\nesac\n"
 	require.NoError(t, os.WriteFile(filepath.Join(rig.bin, "go"), []byte(stub), 0o755))
 	return rig
@@ -110,7 +117,7 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 
 	env := r.prepare(t, e, "j_one")
 	assert.Equal(t, 1, r.downloads(t))
-	assert.Contains(t, env, "GOFLAGS=-mod=readonly")
+	assert.Contains(t, env, "GOFLAGS=-tags=x -mod=readonly", "the task's own flags stay, readonly is added")
 	assert.Contains(t, env, "GOPROXY=off")
 	assert.NotContains(t, strings.Join(env, "\n"), "s3cret", "no credential of the worker reaches the job")
 
@@ -120,7 +127,8 @@ func TestAGoTaskGetsTheModulesAndNoNetwork(t *testing.T) {
 	assert.Contains(t, line, "home=/home/worker", "the download runs as the worker, with its own HOME")
 	assert.Contains(t, line, "token=s3cret")
 	assert.Contains(t, line, "flags=-modcacherw", "the cache is writable, so the workspace can be removed")
-	assert.Contains(t, line, "proxy=http://proxy:3128", "the fixed environment of the task reaches the download")
+	assert.Contains(t, line, "proxy=http://proxy:3128", "a proxy setting of the task reaches the download")
+	assert.Contains(t, line, "ssh= ", "nothing else of the task's environment does: the download runs with the worker's credentials, outside the sandbox")
 
 	r.prepare(t, e, "j_two")
 	assert.Equal(t, 1, r.downloads(t), "the second job had its modules cloned")
@@ -146,4 +154,21 @@ func TestAnotherGoVersionIsAnotherEntry(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(r.bin, "go"), []byte(strings.Replace(string(b), "go1.26.0", "go1.26.1", 1)), 0o755))
 	r.prepare(t, r.exec(t, repo, sha), "j_two")
 	assert.Equal(t, 2, r.downloads(t))
+}
+
+// One module cache serves a job, so a task with two go.sum files is turned away rather than given a cache for only one of them.
+func TestATaskWithTwoGoSumFilesIsRejected(t *testing.T) {
+	r := newGoRig(t)
+	repo, sha := goRepo(t, "module x\n\ngo 1.26\n")
+	e := r.exec(t, repo, sha)
+	j := job("gomulti")
+	ref := ident.Ref{Source: "mlab", ID: j.ID}
+	ws, err := e.Materialize(context.Background(), ref, j, claimID)
+	require.NoError(t, err)
+	defer ws.Cleanup()
+	_, err = e.Prepare(context.Background(), ref, j, ws)
+	var rej *runner.Rejected
+	require.ErrorAs(t, err, &rej)
+	assert.Contains(t, rej.Reason, "deps_one_go_sum")
+	assert.Equal(t, 0, r.downloads(t))
 }
