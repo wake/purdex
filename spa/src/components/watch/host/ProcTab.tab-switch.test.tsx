@@ -7,6 +7,8 @@ vi.mock('../../../lib/pool/jobs-driver-live', () => ({ watchJobs: vi.fn(() => ()
 vi.mock('../../../lib/host-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/host-api')>()), hostFetch: () => new Promise(() => {}) }))
 const fetchPoolHosts = vi.fn()
 const fetchFactsHistory = vi.fn()
+const fetchUndeclared = vi.fn()
+vi.mock('../../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/observations-api')>()), fetchUndeclared: (...a: unknown[]) => fetchUndeclared(...a) }))
 vi.mock('../../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/api')>()), fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
 
 import { TabContent } from '../../TabContent'
@@ -15,6 +17,7 @@ import { poolHostOf, seedPool, SEED_HOST_ID } from '../host-pane-seed'
 import { registerModule, clearModuleRegistry } from '../../../lib/module-registry'
 import { clearViewMemory, readProcAt } from '../../../lib/watch/view-memory'
 import { clearProcHistory } from '../../../lib/pool/proc-history'
+import { clearHostObservations } from '../../../lib/pool/host-observations'
 import { parseFacts } from '../../../lib/pool/parse'
 import darwinJson from '../../../lib/pool/__fixtures__/facts_darwin.json'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -32,12 +35,12 @@ const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
 const all = [hostTab, dashTab]
 
 beforeEach(() => {
-  cleanup(); clearModuleRegistry(); clearViewMemory(); clearProcHistory(); fetchFactsHistory.mockReset()
+  cleanup(); clearModuleRegistry(); clearViewMemory(); clearProcHistory(); clearHostObservations(); fetchFactsHistory.mockReset(); fetchUndeclared.mockReset()
   registerModule({ id: 'watch', name: 'Watch', panes: [{ kind: 'watch-host', component: WatchHostPane }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
   useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'air26', ip: '1', port: 1, token: 't', order: 0, daemonId: 'd-a' } }, hostOrder: ['cfg-a'], activeHostId: 'cfg-a', runtime: { 'cfg-a': { status: 'connected' } } } as never)
-  useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: Date.now(), daemonCapabilities: ['pool.v1'], wwd: { hostId: SEED_HOST_ID }, fingerprint: fingerprintOf('cfg-a') } } } as never)
+  useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: Date.now(), daemonCapabilities: ['pool.v1', 'pool.observations.v1'], wwd: { hostId: SEED_HOST_ID }, fingerprint: fingerprintOf('cfg-a') } } } as never)
   const hosts = [poolHostOf()]
   fetchPoolHosts.mockReset()
   fetchPoolHosts.mockResolvedValue(hosts)
@@ -88,5 +91,21 @@ describe('行程 across tab switches', () => {
     expect(screen.getByTestId('proc-note').textContent).toBe(note)
     expect((screen.getByTestId('proc-timeline') as HTMLInputElement).value).toBe('199')
     clock.mockRestore()
+  }, 30_000)
+
+  it('keeps the groups it read when the reader switches away and back: they are drawn at once, before any new read answers (MON-8c)', async () => {
+    const groups = { host: 'air26', known: true, truncated: false, groups: [{ signature: 'go test', count: 2, cpuSeconds: 30, maxMemMb: 900, lastAt: Date.now() - 60_000, lastSession: 'ab12', lastVia: 'session', lastCommand: 'go test ./...' }] }
+    fetchUndeclared.mockResolvedValueOnce(groups)
+    const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
+    fireEvent.click(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.procs') }))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByTestId('undeclared-row-go test')).toBeInTheDocument()
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('undeclared')).toBeNull() // really unmounted, not hidden
+
+    fetchUndeclared.mockReturnValue(new Promise(() => {})) // the next read never answers
+    rerender(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(screen.getByTestId('undeclared-row-go test')).toBeInTheDocument()
   }, 30_000)
 })
