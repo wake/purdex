@@ -47,6 +47,25 @@ func TestMatch_RecursivePatternsAreNotLocal(t *testing.T) {
 	}
 }
 
+// The typed -p, -timeout and -count are replaced by the task's own values, also when the task writes the flag (#3711 R1): go-all has -p 3 and
+// -timeout 30m, and `go test -p 4 ./...` is still go-all, not go-changed (which has no -p).
+func TestMatch_RunFlagsAreReplacedByTheTasksOwnValues(t *testing.T) {
+	root := purdexRoot(t)
+	for name, argv := range map[string][]string{
+		"-p with another value":                {"go", "test", "-p", "4", "./..."},
+		"-p= with another value":               {"go", "test", "-p=1", "./..."},
+		"-timeout with another value":          {"go", "test", "-timeout", "5m", "./..."},
+		"-timeout= with another value":         {"go", "test", "-timeout=90m", "./..."},
+		"both, and -count":                     {"go", "test", "-p", "1", "-timeout", "1h", "-count=2", "./..."},
+		"-json (the task has it) with a value": {"go", "test", "-json=false", "./..."},
+	} {
+		r := Match(root, argv)
+		assert.Equal(t, ActionRewrite, r.Action, name)
+		assert.Equal(t, "go-all", r.Task, name)
+		assert.True(t, r.Queued, name)
+	}
+}
+
 // A flag that picks what runs, or that is not a way of running at all, is another command: it is not the task, whatever else matches.
 func TestMatch_FlagsThatChangeWhatRunsAreNotIgnored(t *testing.T) {
 	root := purdexRoot(t)

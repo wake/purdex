@@ -36,7 +36,7 @@ func matchTask(root, cwd string, cmd []string, t *manifest.Task) ([]string, bool
 		}
 	}
 	tw := normalize(lits)
-	cmd = dropRunFlags(cmd, tw)
+	cmd = dropRunFlags(cmd)
 	i, k := 0, 0
 	for k < len(tw) {
 		if !strings.HasPrefix(tw[k], "-") { // a plain word of the task (go test, a trailing ./...): the command has it too
@@ -119,17 +119,12 @@ var (
 	runFlagsValue = map[string]bool{"-count": true, "-p": true, "-parallel": true, "-timeout": true}
 )
 
-// dropRunFlags takes the flags above out of a `go test` command unless the task writes the flag itself (then the usual comparison of the
-// flag and its value applies). A value joined with = is one word; a flag that takes a value in the next word takes it.
-func dropRunFlags(cmd, taskWords []string) []string {
+// dropRunFlags takes the flags above out of a `go test` command, also when the task writes the flag itself with its own value (go-all has
+// -p 3 and -timeout 30m: `go test -p 4 ./...` is go-all, which runs its own). A value joined with = is one word; a flag that takes a value in
+// the next word takes it.
+func dropRunFlags(cmd []string) []string {
 	if len(cmd) < 2 || cmd[0] != "go" || cmd[1] != "test" {
 		return cmd
-	}
-	own := map[string]bool{}
-	for _, w := range taskWords {
-		if strings.HasPrefix(w, "-") {
-			own[flagName(w)] = true
-		}
 	}
 	out := append([]string(nil), cmd[:2]...)
 	for i := 2; i < len(cmd); i++ {
@@ -137,7 +132,7 @@ func dropRunFlags(cmd, taskWords []string) []string {
 		switch {
 		case cmd[i] == "-args" || cmd[i] == "--":
 			return append(out, cmd[i:]...)
-		case own[name] || !(runFlagsAlone[name] || runFlagsValue[name]):
+		case !(runFlagsAlone[name] || runFlagsValue[name]):
 			out = append(out, cmd[i])
 		case runFlagsValue[name] && !strings.Contains(cmd[i], "=") && i+1 < len(cmd) && !strings.HasPrefix(cmd[i+1], "-"):
 			i++ // its value is the next word

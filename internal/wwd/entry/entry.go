@@ -134,7 +134,7 @@ func classRank(c wire.JobClass) int {
 // the longest from the front. The command's own flags and their values are not words of the comparison either, so `go test -count=1 ./...`
 // is near go-all, which runs `./...`, and not near the first task by name.
 func hintFor(m *manifest.Manifest, names []string, cmd []string) string {
-	words := plainWords(dropRunFlags(cmd, nil))
+	words := plainWords(dropRunFlags(cmd))
 	best, bestN, bestFull := "", 0, false
 	for _, n := range names {
 		var lits []string
