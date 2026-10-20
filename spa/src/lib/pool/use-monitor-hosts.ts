@@ -26,8 +26,9 @@ export interface MonitorHost {
 // W4: when no source answers (every one failed, or none is connected) the pool store has no hosts. The sidebar then keeps the last non-empty list of this run, every host unknown;
 // from the start with nothing read it is empty. Not persisted.
 // The list belongs to the App host that served it: once that host is gone (another world, a removed host) the list is not this App's to show.
-let remembered: { hosts: PoolHost[]; source: string | null } = { hosts: usePoolStore.getState().hosts, source: usePoolStore.getState().sourceHostId }
-usePoolStore.subscribe((s) => { if (s.hosts.length > 0) remembered = { hosts: s.hosts, source: s.sourceHostId } })
+let remembered: { hosts: PoolHost[]; source: string | null } = usePoolStore.getState().sourceHostId !== null ? { hosts: usePoolStore.getState().hosts, source: usePoolStore.getState().sourceHostId } : { hosts: [], source: null }
+// Every successful answer is remembered, an empty one too: the pool then really is empty, and a failure after it must not bring back an older list.
+usePoolStore.subscribe((s) => { if (s.sourceHostId !== null) remembered = { hosts: s.hosts, source: s.sourceHostId } })
 export function resetRememberedPoolHosts(): void { remembered = { hosts: [], source: null } }
 
 export function useMonitorHosts(): MonitorHost[] {

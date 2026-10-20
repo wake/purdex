@@ -100,6 +100,17 @@ describe('useMonitorHosts', () => {
     expect(renderHook(() => useMonitorHosts()).result.current[0].poolFailure).toEqual({ code: null, since: null })
   })
 
+  it('W4: an empty answer from a source replaces the kept list: a later total failure does not bring the older hosts back', () => {
+    useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 }, 'cfg-b': { id: 'cfg-b', name: 'y', ip: '2', port: 1, token: 't', order: 1 } }, hostOrder: ['cfg-a', 'cfg-b'] } as never)
+    const { result } = renderHook(() => useMonitorHosts())
+    act(() => { usePoolStore.setState({ hosts: [host(A, 'mlab')], sourceHostId: 'cfg-a' } as never) })
+    expect(result.current).toHaveLength(1)
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: 'cfg-b' } as never) })
+    expect(result.current).toEqual([])
+    act(() => { usePoolStore.setState({ hosts: [], sourceHostId: null, error: { code: 'no_answer', since: 1 } } as never) })
+    expect(result.current).toEqual([])
+  })
+
   it('W4: the kept list is dropped once the App host that served it is gone (another world, a removed host)', () => {
     useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'x', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'] } as never)
     answer([host(A, 'mlab')])
