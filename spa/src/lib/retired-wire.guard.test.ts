@@ -2,6 +2,7 @@
 //
 // Guard (monitoring tabs plan, MON-12; spec A11 / W9): the wire the daemon is retiring (`fleet.v1`, `gate.decisions.v1`, the watch events routes) is no longer read by the SPA. Each MON-12 PR adds what it deletes to the three lists below:
 // the files that must stay gone, the routes / capabilities / event names no code may mention, and the identifiers no code may use. Comments (not strings) are stripped before matching, so a note that says why something is gone does not turn this red.
+// Known limit (88's ruling, MON-12a-3): this is a text match against someone putting the old wire back by accident, not against someone building it from pieces on purpose (`'watch' + '.events'`, a route held in a variable and joined later). The common splits are caught; the rest is for review.
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
 // node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see pool/fixtures-sync.guard.test.ts); they work at runtime.
