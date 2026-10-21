@@ -74,7 +74,7 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 使用者的決定：你與人一樣可以**完全控制**各台的 worker 開關與 heavy／light 名額，沒有另外的上下限或限速。四台都用同一組指令，在 mlab 上加 `--host <alias>` 就能看、改另一台，不必 ssh，mserv 也一樣。
 
 1. 先讀現值：`pdx wwd worker --host <alias>`。最後會印出這組設定的 etag。
-2. 寫入要帶剛讀到的 etag：`pdx wwd worker --host <alias> on|off [--heavy N] [--light N] --expect <etag>`。成功時印出讀回的值。如果別人在你讀完之後改過，就什麼都不改，印出現在生效的設定，並以**結束碼 7** 結束——重新讀、重新考慮，不要硬覆蓋。**結束碼 3 是另一件事：那台的 wwd 沒在跑**，不是衝突。
+2. 寫入要帶剛讀到的 etag：`pdx wwd worker --host <alias> on|off [--heavy N] [--light N] --expect <etag>`。成功時印出讀回的值。如果別人在你讀完之後改過，就什麼都不改，印出現在生效的設定，並以**結束碼 7** 結束——重新讀、重新考慮，不要硬覆蓋。**結束碼 3 是另一件事：執行指令這台的本機 wwd 連不上**（「wwd is not running on this host」），不是衝突。用 `--host` 時，遠端那台出問題多半是結束碼 1，要看錯誤訊息才知道原因。
 3. 寫完再讀一次確認。讀回來不一樣，或寫入失敗，就回報失敗。
 4. **告訴人**：哪台主機、heavy 或 light、舊值 → 新值、為什麼；只是暫時調的話，也說好什麼條件下改回來。
 

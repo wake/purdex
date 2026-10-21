@@ -654,7 +654,7 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 		"`gate_gap`", "`unknown`", "`allowed`",
 		"git pull", "purdex-watch", "git push",
 		"pdx watch ack <事件 id>… --note", "pdx watch log --unhandled",
-		"pdx wwd worker --host <alias>", "--expect <etag>", "結束碼 7", "結束碼 3",
+		"pdx wwd worker --host <alias>", "--expect <etag>", "結束碼 7", "結束碼 3 是另一件事",
 		"pdx msg send <地址>",
 		"結束一個**沒有佔名額**的行程", "自己改 `watch` 的門檻",
 		"該休息", "該退場", "/exit",
