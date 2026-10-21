@@ -184,12 +184,13 @@ func (*QueueUnclaimable) Kind() wire.AlertKind { return wire.AlertQueueUnclaimab
 
 func (r *QueueUnclaimable) Eval(in Input) (Verdict, error) {
 	jobs, pool, err := queueInput(in)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err != nil {
+		r.since = nil // a look that could not be made breaks the run: the time it covers is not known to have been unclaimable (codex R2)
 		return Verdict{}, err
 	}
 	v := Verdict{Key: string(wire.AlertQueueUnclaimable), Level: wire.AlertWatch}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	next := make(map[string]time.Time, len(jobs)) // a job that is gone from the queue is forgotten
 	var ids []string
 	for _, j := range jobs {

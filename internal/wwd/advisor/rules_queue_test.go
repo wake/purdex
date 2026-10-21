@@ -254,6 +254,36 @@ func TestQueueUnclaimable_AChangeBetweenTwoLooksRestartsTheTenMinutes(t *testing
 	}
 }
 
+// A look that could not read the queue breaks the run: what it did not see is not known to have been unclaimable (codex R2).
+func TestQueueUnclaimable_AFailedLookRestartsTheTenMinutes(t *testing.T) {
+	r := &QueueUnclaimable{}
+	pool := host("mlab", darwin, down)
+	jobs := []queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour)}
+	at := func(d time.Duration, fail bool) bool {
+		in := queueIn(jobs, pool)
+		if fail {
+			in.Queue = func() ([]queue.QueuedJob, error) { return nil, errors.New("locked") }
+		}
+		in.Now = t0.Add(d)
+		if fail {
+			if _, err := r.Eval(in); err == nil {
+				t.Fatal("no error")
+			}
+			return false
+		}
+		got, _ := holds(t, r, in)
+		return got
+	}
+	at(0, false)
+	at(9*time.Minute, true)
+	if at(10*time.Minute, false) {
+		t.Error("the look at nine minutes failed: the run starts again at ten")
+	}
+	if !at(20*time.Minute, false) {
+		t.Error("ten minutes from the look after the failed one")
+	}
+}
+
 // A job that left the queue and came back starts its own ten minutes, and the memory of a job that is gone (or on hold) does not grow.
 func TestQueueUnclaimable_ForgetsAJobThatLeftTheQueue(t *testing.T) {
 	r := &QueueUnclaimable{}
