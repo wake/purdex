@@ -309,6 +309,34 @@ func TestSuspendedIsPerOrigin(t *testing.T) {
 	eq(t, ids(r), []string{"mine"})
 }
 
+// A task whose command is not on this host is skipped, the repo's other tasks are not, and another host (its own env) still takes the task:
+// the same candidates are ranked by two envs (#3908).
+func TestTaskHeldSkipsThatTaskOnThisHostOnly(t *testing.T) {
+	mod, lint, other := job("mod", wire.ClassMerge, 0), job("lint", wire.ClassMerge, 0), job("mod2", wire.ClassMerge, 0)
+	mod.Task, lint.Task, other.Task = "mod-hooks", "lint", "mod-hooks"
+	other.Repo.Name = "aigora"
+	far := mod
+	far.ID = "mod3"
+	cands := []Candidate{cand(mod), cand(lint), cand(other), {Source: "air26", Job: far}}
+
+	lacks := baseEnv()
+	lacks.TaskHeld = func(source, repo, task string) bool {
+		return source == "mlab" && repo == "purdex" && task == "mod-hooks"
+	}
+	got := map[string]bool{}
+	for _, sc := range Rank(cands, lacks) {
+		got[sc.Source+"/"+sc.Job.ID] = true
+	}
+	if len(got) != 3 || !got["mlab/lint"] || !got["mlab/mod2"] || !got["air26/mod3"] || got["mlab/mod"] {
+		t.Fatalf("the host without the command ranked %v: want lint (same repo), mod2 (another repo) and air26/mod3 (another origin), not mod", got)
+	}
+
+	has := baseEnv() // another host: no hold, takes everything
+	if n := len(Rank(cands, has)); n != 4 {
+		t.Errorf("a host that has the command ranked %d of 4", n)
+	}
+}
+
 // A job whose origin answered wrongly a moment ago is skipped; another job of the same repo is not, and neither is the same id at
 // another origin (#3379).
 func TestHeldOffSkipsThatJobOnly(t *testing.T) {
