@@ -119,6 +119,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"PUT", "/api/push/presence"},
 		{"GET", "/api/team/paused/x/release"}, {"DELETE", "/api/team/paused/x"}, {"POST", "/api/team/paused"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
+		{"PUT", "/api/notify/group-labels"}, // the groups the App writes back are written with the admin token (notify.group_labels.v1), never a phone's
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
 		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
 		{"POST", "/api/pool/jobs"}, {"DELETE", "/api/pool/jobs/j_abc"}, {"POST", "/api/pool/jobs/j_abc/cancel"}, {"POST", "/api/pool/jobs/j_abc/position"}, // the jobs are read here, never changed (cancel and position are the admin's: jobs.control.v1)
