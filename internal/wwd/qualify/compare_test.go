@@ -171,3 +171,29 @@ func TestAMissingDigestIsAMismatchNeverACountFallback(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// A task with no test list (tsc, lint, build) reports a summary of zeros and no digest on both halves: only the exit state can differ.
+func TestHalvesThatCountNoTestMatchOnTheExitState(t *testing.T) {
+	zero := func() *wire.Summary { return &wire.Summary{} }
+	c, r := pair(res("mserv", 0, zero()), res("air26", 0, zero()))
+	if v := Compare(c, r); v.Outcome != OutcomeMatch {
+		t.Fatalf("%+v", v)
+	}
+	c, r = pair(res("mserv", 1, zero()), res("air26", 2, zero()))
+	if v := Compare(c, r); v.Outcome != OutcomeMatch {
+		t.Fatalf("both failing the same way: %+v", v)
+	}
+	c, r = pair(res("mserv", 0, zero()), res("air26", 1, zero()))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("exit states differ: %+v", v)
+	}
+	// one half counting a test brings back the digest rule
+	c, r = pair(res("mserv", 0, zero()), res("air26", 0, sum(10, 0)))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("one half counted tests: %+v", v)
+	}
+	c, r = pair(res("mserv", 0, sum(10, 0)), res("air26", 0, zero()))
+	if v := Compare(c, r); v.Outcome != OutcomeMismatch {
+		t.Fatalf("one half counted tests: %+v", v)
+	}
+}
