@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -27,6 +28,9 @@ func (c *Client) Qualification(ctx context.Context, host string) (v wire.HostQua
 		}
 		if v.Recent == nil {
 			v.Recent = []wire.QualifyRecord{}
+		}
+		if err := v.Validate(); err != nil { // Decode checks the keys, not what the answer means
+			return wire.HostQualification{}, false, fmt.Errorf("%w: %v", ErrBadResponse, err)
 		}
 		return v, true, nil
 	}

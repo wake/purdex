@@ -68,6 +68,23 @@ func TestQualification_A405IsARefusalNotAnOldHost(t *testing.T) {
 	}
 }
 
+// A 200 that is not an answer of the contract is a bad response (502 upstream), never "known".
+func TestQualification_ABadAnswerIsABadResponse(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object":   `{}`,
+		"bad task label": `{"host":"mserv","tasks":[{"label":"tool:x","hold":"none","progress":"ready"}],"recent":[]}`,
+		"no progress":    `{"host":"mserv","tasks":[{"label":"task:purdex/tsc","hold":"none"}],"recent":[]}`,
+		"bad outcome":    `{"host":"mserv","tasks":[],"recent":[{"label":"task:purdex/tsc","outcome":"maybe","why":"","at":"2026-10-22T09:00:00Z","candidate":"","reference":""}]}`,
+	} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /v1/qualification", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) })
+		_, known, err := New(fakeWWD(t, mux)).Qualification(context.Background(), "")
+		if known || !errors.Is(err, ErrBadResponse) {
+			t.Errorf("%s: known=%v err=%v", name, known, err)
+		}
+	}
+}
+
 // A null list in an answer is an empty one: the App reads arrays.
 func TestQualification_NullListsBecomeEmpty(t *testing.T) {
 	mux := http.NewServeMux()
