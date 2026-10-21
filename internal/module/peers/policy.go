@@ -53,7 +53,7 @@ func HostRoutePolicy(r *http.Request) bool {
 	if r.Method == http.MethodPost && r.URL.Path == "/api/peers/team/proxy" { // a remote member's report / task calls (X6)
 		return true
 	}
-	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/watch/holder" || r.URL.Path == "/api/peers/watch/announce" || r.URL.Path == "/api/peers/watch/event" || r.URL.Path == "/api/peers/watch/ack" || r.URL.Path == "/api/peers/watch/log" || r.URL.Path == "/api/peers/watch/start" || r.URL.Path == "/api/peers/watch/wake" || r.URL.Path == "/api/peers/watch/note") { // where is the load watcher; a host registered one (host-load-control W2a, W3a)
+	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/watch/holder" || r.URL.Path == "/api/peers/watch/announce" || r.URL.Path == "/api/peers/watch/event" || r.URL.Path == "/api/peers/watch/ack" || r.URL.Path == "/api/peers/watch/log" || r.URL.Path == "/api/peers/watch/start" || r.URL.Path == "/api/peers/watch/wake" || r.URL.Path == "/api/peers/watch/note" || r.URL.Path == "/api/peers/watch/wake-settings/get" || r.URL.Path == "/api/peers/watch/wake-settings/put" || r.URL.Path == "/api/peers/watch/wake-settings/changed" || r.URL.Path == "/api/peers/watch/wake-suppressed") { // where is the load watcher; a host registered one (host-load-control W2a, W3a)
 		return true
 	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/fleet/role" || r.URL.Path == "/api/peers/fleet/announce") { // the fleet's primary / standby calls (fleet spec §4)

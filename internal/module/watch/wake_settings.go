@@ -43,8 +43,8 @@ func (m *Module) wakeSourceAlias() (source string, isSource bool) {
 	m.core.CfgMu.RLock()
 	defer m.core.CfgMu.RUnlock()
 	source = m.core.Cfg.WakeSource()
-	alias := m.core.Cfg.PeerAlias() // peers.alias, or the part of the host id before the first ':' when none is set
-	return source, alias != "" && alias == source
+	alias := m.core.Cfg.PeerAlias()                                // peers.alias, or the part of the host id before the first ':' when none is set
+	return source, alias != "" && strings.EqualFold(alias, source) // aliases are matched without case, as everywhere in this module (isSelf)
 }
 
 func (m *Module) wakeHostID() string {
