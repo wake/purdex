@@ -76,6 +76,8 @@ export interface NormalizedEvent {
   /** A Stop / StopFailure of a proxy subagent (a codex run by the pane's main agent as a tool): ends a tool, not the
    *  main agent's turn, so it raises no desktop notification and no unread. Only present when true (daemon). */
   from_proxy?: boolean
+  /** What the daemon worked out for the notification title (notify-title spec §3.4); absent for a worker, an older daemon, or a session not labelled yet: the title is then the session's name, as before. */
+  notify_label?: { name?: string; group?: string; tmux?: string }
 }
 
 /** Whether `e` is a proxy subagent's Stop / StopFailure — the only events `from_proxy` mutes. */
