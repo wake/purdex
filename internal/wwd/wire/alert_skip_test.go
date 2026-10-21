@@ -43,6 +43,14 @@ func TestValidateNamesAnUnknownKindOrLevelAndNothingElseAsUnknown(t *testing.T) 
 		"last first":  {Key: "k", Kind: AlertThrash, Level: AlertPush, Since: at, Last: at.Add(-time.Hour)},
 		"bad detail":  {Key: "k", Kind: AlertThrash, Level: AlertPush, Since: at, Last: at, Detail: "a\x07"},
 		"no key, too": {Kind: "meltdown", Level: AlertPush, Since: at, Last: at}, // the key is checked first
+		// an alert that is of a later release and broken in some other way is a broken alert (codex R1): the kind and level come last
+		"unknown kind, bad detail":       {Key: "k", Kind: "meltdown", Level: AlertPush, Since: at, Last: at, Detail: "a\x07"},
+		"unknown kind, no since":         {Key: "k", Kind: "meltdown", Level: AlertPush, Last: at},
+		"unknown kind, last first":       {Key: "k", Kind: "meltdown", Level: AlertPush, Since: at, Last: at.Add(-time.Hour)},
+		"unknown kind, cleared early":    {Key: "k", Kind: "meltdown", Level: AlertPush, Since: at, Last: at, ClearedAt: &[]time.Time{at.Add(-time.Hour)}[0]},
+		"unknown level, bad detail":      {Key: "k", Kind: AlertThrash, Level: "urgent", Since: at, Last: at, Detail: "a\x07"},
+		"unknown level, last first":      {Key: "k", Kind: AlertThrash, Level: "urgent", Since: at, Last: at.Add(-time.Hour)},
+		"unknown kind and level, no key": {Kind: "meltdown", Level: "urgent", Since: at, Last: at},
 	} {
 		if err := a.Validate(); err == nil || IsUnknownAlert(err) {
 			t.Errorf("%s: %v", name, err)

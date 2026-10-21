@@ -89,9 +89,11 @@ func TestAlerts_AllUnknownIsAnEmptyListThatTheHostVouchedFor(t *testing.T) {
 // An unknown kind does not excuse what else is wrong: the first thing wrong that is not an unknown kind refuses the whole list.
 func TestAlerts_ABrokenAlertNextToAnUnknownOneStillRefusesTheList(t *testing.T) {
 	for name, items := range map[string][]string{
-		"an unknown kind and a missing key": {alertJSON("b", "meltdown", "push"), alertJSON("", "thrash", "push")},
-		"a missing key, unknown kind":       {alertJSON("", "meltdown", "push")}, // the key is checked before the kind
-		"a bad detail":                      {`{"key":"a","kind":"thrash","level":"push","detail":"x\u0007y",` + alertAt + `}`},
+		"an unknown kind and a missing key":     {alertJSON("b", "meltdown", "push"), alertJSON("", "thrash", "push")},
+		"a missing key, unknown kind":           {alertJSON("", "meltdown", "push")}, // the key is checked before the kind
+		"an unknown kind and last before since": {`{"key":"b","kind":"meltdown","level":"push","since":"2026-10-19T04:00:00Z","last":"2026-10-19T03:00:00Z","cleared_at":null}`},
+		"an unknown level and a bad detail":     {`{"key":"b","kind":"thrash","level":"urgent","detail":"x\u0007y",` + alertAt + `}`},
+		"a bad detail":                          {`{"key":"a","kind":"thrash","level":"push","detail":"x\u0007y",` + alertAt + `}`},
 	} {
 		body := `{"host":"air26","alerts":[` + strings.Join(items, ",") + `]}`
 		c := alertsServer(t, &body)

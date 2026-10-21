@@ -55,6 +55,22 @@ func TestActiveAlertsLeavesOutAnUnknownKindAndLevelAndSaysSoOnce(t *testing.T) {
 	}
 }
 
+// An unknown kind whose row is also broken (last before since) is a broken row (codex R1), not one to leave out.
+func TestActiveAlertsRefusesAnUnknownKindThatIsAlsoBroken(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "wwd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetLogf(func(string, ...any) {})
+	if _, err := s.DB().Exec(`INSERT INTO alerts (key, kind, level, since_ms, last_ms, cleared_ms, detail) VALUES ('b', 'meltdown', 'push', 2000, 1000, NULL, '')`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ActiveAlerts(); err == nil {
+		t.Fatalf("no error, got %+v", got)
+	}
+}
+
 func TestActiveAlertsStillRefusesAnyOtherBadRow(t *testing.T) {
 	for name, row := range map[string][4]string{
 		"an empty key":         {"", "thrash", "push", ""},

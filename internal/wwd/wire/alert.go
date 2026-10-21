@@ -201,12 +201,6 @@ func (a Alert) Validate() error {
 	if a.Key == "" || len(a.Key) > MaxAlertKeyBytes {
 		return fmt.Errorf("alert: the key must be 1 to %d bytes", MaxAlertKeyBytes)
 	}
-	if !a.Kind.Valid() {
-		return fmt.Errorf("alert: invalid kind %q: %w", a.Kind, ErrUnknownAlertKind)
-	}
-	if !a.Level.Valid() {
-		return fmt.Errorf("alert: invalid level %q: %w", a.Level, ErrUnknownAlertLevel)
-	}
 	if len(a.Detail) > MaxAlertDetailBytes || strings.ContainsFunc(a.Detail, unicode.IsControl) || !utf8.ValidString(a.Detail) {
 		return fmt.Errorf("alert: the detail must be valid text without control characters, at most %d bytes", MaxAlertDetailBytes)
 	}
@@ -218,6 +212,15 @@ func (a Alert) Validate() error {
 	}
 	if a.ClearedAt != nil && a.ClearedAt.Before(a.Last) {
 		return fmt.Errorf("alert: cleared_at is before last, the latest time its rule still held")
+	}
+	// The kind and the level come last (S3-3a): an alert that is only of a kind or level of a later release is the one thing a reader may
+	// leave out (ErrUnknownAlertKind, ErrUnknownAlertLevel), so everything that does not depend on the release is checked before them, and an
+	// alert that is also broken in another way is a broken alert, not an unknown one.
+	if !a.Kind.Valid() {
+		return fmt.Errorf("alert: invalid kind %q: %w", a.Kind, ErrUnknownAlertKind)
+	}
+	if !a.Level.Valid() {
+		return fmt.Errorf("alert: invalid level %q: %w", a.Level, ErrUnknownAlertLevel)
 	}
 	return nil
 }
