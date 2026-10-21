@@ -55,6 +55,31 @@ func TestActiveAlertsLeavesOutAnUnknownKindAndLevelAndSaysSoOnce(t *testing.T) {
 	}
 }
 
+// The rules that raise and clear alerts see every raised key, also the rows of a kind or level this build does not know (codex critic): a
+// list that left them out would have a rule raise over its own alert, or take it for cleared.
+func TestActiveAlertKeysHasTheRowsTheListLeavesOut(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "wwd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetLogf(func(string, ...any) {})
+	insertAlert(t, s, "a", "thrash", "digest", "")
+	insertAlert(t, s, "b", "meltdown", "push", "")
+	insertAlert(t, s, "c", "disk_low", "urgent", "")
+	if _, err := s.DB().Exec(`INSERT INTO alerts (key, kind, level, since_ms, last_ms, cleared_ms, detail) VALUES ('gone', 'thrash', 'push', 1, 1, 2, '')`); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := s.ActiveAlertKeys()
+	if err != nil || strings.Join(keys, ",") != "a,b,c" {
+		t.Fatalf("keys %v err %v (a cleared one is not raised)", keys, err)
+	}
+	list, err := s.ActiveAlerts()
+	if err != nil || len(list) != 1 || list[0].Key != "a" {
+		t.Fatalf("the list a reader is shown is lenient: %+v %v", list, err)
+	}
+}
+
 // An unknown kind whose row is also broken (last before since) is a broken row (codex R1), not one to leave out.
 func TestActiveAlertsRefusesAnUnknownKindThatIsAlsoBroken(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "wwd.db"))

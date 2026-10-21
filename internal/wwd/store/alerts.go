@@ -44,6 +44,26 @@ func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 	return out, rows.Err()
 }
 
+// ActiveAlertKeys are the keys of every alert that is not cleared, ordered, whatever its kind and level: the rows ActiveAlerts leaves out
+// because this build does not know them are here. The rules that raise and clear alerts (AlertBook.Active) need this, not the list a reader
+// is shown: a row they cannot read is still raised, and a rule that sees its own key as not raised would raise it over again.
+func (s *Store) ActiveAlertKeys() ([]string, error) {
+	rows, err := s.db.Query(`SELECT key FROM alerts WHERE cleared_ms IS NULL ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // AlertsRetention is how long a cleared alert's row is kept: a short history, not a log.
 const AlertsRetention = 7 * 24 * time.Hour
 
