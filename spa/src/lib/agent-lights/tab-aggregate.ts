@@ -18,7 +18,7 @@ export interface TabAgentPane {
   hostId: string
   /** Set for an execution (worker) pane. */
   executionId?: string
-  /** The agent's session id from the pane's rebuild record (tmux pane): what the fleet queue's waiters name. */
+  /** The agent's session id from the pane's rebuild record (tmux pane): what the pool jobs' `submitter.session` names. */
   sessionId?: string
 }
 

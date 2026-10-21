@@ -24,7 +24,7 @@ const { openWatchArea } = await import('../lib/open-watch-area')
 const { clearJobsViewMemory, readJobsMode, readSelectedJob, writeJobsMode } = await import('../../../lib/pool/jobs-view-memory')
 
 const job = { jobId: 'j1', origin: 'mlab', line: 'purdex test', state: 'running' as const, place: 0, since: 1, worker: 'mlab' }
-const gate = { class: 'heavy' as const, place: 1, command: 'go test', project: 'p', session: 's', since: 1 }
+const job2 = { jobId: 'j2', origin: 'mserv', line: 'purdex lint', state: 'queued' as const, place: 1, since: 1, worker: '' }
 
 const tab = {
   id: 't1', kind: 'tmux-session', locked: false,
@@ -48,7 +48,7 @@ describe('InlineTab: Alt+Enter on the hourglass', () => {
   })
 
   it('opens the live job queue with the first job selected, and does not select the row', () => {
-    waiters = [gate, job]
+    waiters = [job, job2]
     writeJobsMode('history')
     const { row, onSelect } = draw()
     fireEvent.keyDown(row, { key: 'Enter', altKey: true })
@@ -65,8 +65,8 @@ describe('InlineTab: Alt+Enter on the hourglass', () => {
     expect(screen.getByTestId('tab-background-symbol').getAttribute('title')).toContain('Alt+Enter')
   })
 
-  it('without an hourglass, or with gate waiters only: no shortcut, Alt+Enter is what it was', () => {
-    for (const w of [undefined, [gate]]) {
+  it('without an hourglass: no shortcut, Alt+Enter is what it was', () => {
+    for (const w of [undefined]) {
       cleanup()
       waiters = w
       const { row, onSelect } = draw()
