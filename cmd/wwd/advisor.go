@@ -64,7 +64,27 @@ func advisorRules(known []string, watch daemon.AdvisorRule) []advisor.Rule {
 	if watch.WatchRuleOn(wire.AlertSwapGrowth) {
 		rs = append(rs, advisor.SwapGrowth{ThresholdMB: watch.SwapGrowthMB})
 	}
+	// the queue's four rules (S3-3b), the same: only where [advisor] queue_rules is on
+	if watch.QueueRules {
+		rs = append(rs, advisor.QueueStalled{}, advisor.JobRequeued{}, advisor.QueueBacklog{}, advisor.QueueUnclaimable{})
+	}
 	return rs
+}
+
+// queueKinds are the alert kinds of the queue's four rules.
+var queueKinds = []wire.AlertKind{wire.AlertQueueStalled, wire.AlertJobRequeued, wire.AlertQueueBacklog, wire.AlertQueueUnclaimable}
+
+// retiredQueueKeys are the alert keys of the queue rules when this host does not judge them: the evaluator clears them if they stand, so
+// turning queue_rules off leaves no alert of the four kinds behind (docs/wwd-deploy.md §16).
+func retiredQueueKeys(watch daemon.AdvisorRule) []string {
+	if watch.QueueRules {
+		return nil
+	}
+	out := make([]string, 0, len(queueKinds))
+	for _, k := range queueKinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // retiredWatchKeys are the alert keys of the watcher's rules this host does not judge: the evaluator clears them if they stand, so turning
@@ -106,7 +126,7 @@ func runAdvisor(ctx context.Context, in advisorInputs) {
 		go advisor.NewEvaluator(book, silenceInput(in), log.Printf, rs...).Run(ctx)
 	}
 	// not behind the proto 2 writer gate (spec §13.1): an unreachable host must not silence the others' alerts
-	ev := advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known, in.Watch)...).WithRetired(retiredWatchKeys(in.Watch)...)
+	ev := advisor.NewEvaluator(book, input, log.Printf, advisorRules(in.Known, in.Watch)...).WithRetired(retiredWatchKeys(in.Watch)...).WithRetired(retiredQueueKeys(in.Watch)...)
 	if in.SampleSignal != nil {
 		ev = ev.WithSampleSignal(in.SampleSignal) // the same goroutine judges the 30 s pass and the per-sample pass: they never write at once
 	}

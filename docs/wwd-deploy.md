@@ -698,3 +698,50 @@ only then install the older build. An older wwd that finds a row of a kind it do
 one is left (the wwd died before it cleared), delete the rows of those three kinds in `wwd.db` before starting the older build.
 
 **Checking.** `GET /v1/alerts` on the host's wwd socket (or the App's pool alert view, `GET /api/pool/hosts/{alias}/alerts`) lists the active alerts; a host with the rules on and calm shows none of the three. `wwd alerts-replay` (§8) will count the three rules over recorded minutes once S3-2b is in.
+
+## 16. The queue's four rules: switching them on, and back (S3-3)
+
+`queue_stalled`, `job_requeued`, `queue_backlog` and `queue_unclaimable` (spec §13.3, level `watch`: they wake the watcher and are neither pushed nor put
+in the digest) tell what the daemon's patrol used to see by looking at the queue. Like §15 they are kinds an older reader of the alert list refuses
+whole, so the build that reads them (S3-3a, which skips what it does not know) comes first and the rules are a config line, off by default.
+
+```toml
+# ~/.config/wwd/config.toml
+[advisor]
+queue_rules = true   # default false: none of the four is judged
+```
+
+| kind | holds when | clears when |
+|---|---|---|
+| `queue_stalled` | a job not on hold has not changed for 5 minutes and a host that answers, has its worker on, takes it by its labels and has a heavy slot free is there | no such job |
+| `job_requeued` | a job (on hold or not) has been put back three times or more (`attempts ≥ 3`; a lapse of the lease is one of them, a reclaim is not) | no such job |
+| `queue_backlog` | the oldest job not on hold was submitted 20 minutes ago or more | no such job |
+| `queue_unclaimable` | a job not on hold has not changed for 10 minutes and no host that answers with its worker on takes it by its labels | no such job |
+
+"Takes it by its labels" is the worker's own rule (`pick.Eligible`): the job's labels are among the host's, and a host with `explicit_labels_only`
+(mserv) takes only a job that names an `os:`, `task:` or `host:` label. "A heavy slot free" is the worker's own reading of the host's facts
+(`derived.HasHeavyRoom`). A label that was quarantined is not among the host's labels. A host that is down takes nothing.
+
+**What the clock is.** "Has not changed" counts from the job's last change in the queue: submitted, put back, moved by a person, taken off hold or asked
+to be cancelled (`queue.QueuedJob.Touched`). The table keeps no separate time of the last put-back, and the cost is that a person moving a job starts its
+five minutes (stalled) or ten (unclaimable) again, so those two sound a little later then. `queue_backlog` counts from the submission. All of them are for
+the watcher, who is awake anyway.
+
+**During a release** the workers of the pool are held (release hold) or off: a job that waits more than ten minutes then makes `queue_unclaimable` sound.
+That is expected and not a fault; the watcher is told, nobody is pushed. The alert clears by itself when the workers are back.
+
+**Which host.** Each wwd judges the jobs queued **on itself** against the pool it sees. A host that nobody submits to has an empty queue and the rules
+hold nowhere on it. Turn them on where jobs are queued; `GET /v1/alerts` of that host lists them.
+
+**Switching on.** Only when **every** reader has the S3-3a build: all four wwds (mlab, air26, air19, mserv) and both Purdex daemons (mlab, air26). The
+information a host announces about its worker (`explicit_labels_only` in `/v1/info`) also comes with S3-3b-1; a peer without it is taken to take any job
+its labels hold, so `queue_unclaimable` sounds less, never more, until it is upgraded. Then, host by host: add `queue_rules = true`, restart that wwd,
+and ask the keeper (lucia) whether RUNNING is 0 first, as for any restart.
+
+**Going back.** On every host set `queue_rules = false` and restart that wwd, then wait for the four kinds to be gone from `GET /v1/alerts` (a host that no
+longer judges the rules clears its own active alerts at the next pass, within 30 s); only then install an older build. A build from before S3-3a that
+finds a row of these kinds in its own `alerts` table refuses the whole list; if one is left (the wwd died before it cleared), delete the rows of the
+four kinds in `wwd.db` before starting the older build, as in §15.
+
+**Checking.** With the rules on and the queue calm, none of the four is in `GET /v1/alerts`. `wwd alerts-replay` (§8) cannot judge them: a recording has no
+queue, and a rule without its input is counted as "could not be judged", not as quiet.
