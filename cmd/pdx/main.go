@@ -23,7 +23,6 @@ import (
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
-	assistmod "github.com/wake/purdex/internal/module/assist"
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
@@ -481,10 +480,9 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
-	c.AddModule(gatemod.New()) // the gate's decision history (A1)
-	c.AddModule(poolmod.New()) // the resource pool, read from the local wwd (WWD-2a)
-	c.AddModule(jobsmod.New()) // the pool's jobs, read from the local wwd (WWD-2e)
-	c.AddModule(assistmod.New())
+	c.AddModule(gatemod.New())      // the gate's decision history (A1)
+	c.AddModule(poolmod.New())      // the resource pool, read from the local wwd (WWD-2a)
+	c.AddModule(jobsmod.New())      // the pool's jobs, read from the local wwd (WWD-2e)
 	c.AddModule(jobnotifymod.New()) // tells a job's submitter when it ends (WWD-3f)
 	c.AddModule(fleetmod.New())     // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(wwdalertsmod.New()) // delivers the wwd host alerts: the fleet primary pushes them through the push module (WWD-8a-1c)
