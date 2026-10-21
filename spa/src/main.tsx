@@ -32,7 +32,6 @@ import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalo
 import { startWatchArea } from './features/workspace/lib/watch-area'
 import { startWatchStatus } from './lib/watch/status-store'
 import { startWatchLaunch } from './lib/watch/launch'
-import { startWatchEvents } from './lib/watch/events-store'
 import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { startActiveTabMarkRead } from './lib/active-tab-mark-read'
@@ -103,8 +102,6 @@ startStandaloneAdoption()
 startWatchStatus()
 // The launch panel's busy state ends when the watcher registers, and with the host it was asked of (app lifetime).
 startWatchLaunch()
-// The watcher's events: each watch host's `GET /api/watch/events`, on its first status answer and on its `watch.events` push.
-startWatchEvents()
 // The watcher area's host tabs follow the fleet's host list, while the area's workspace exists (app lifetime).
 startWatchArea()
 // Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions
