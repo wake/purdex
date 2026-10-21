@@ -197,7 +197,6 @@ func (t *Ticket) Drop() {
 			defer unlock()
 		}
 		_ = os.Remove(t.p.rankPath(t.Name))
-		_ = os.Remove(t.p.outPath(t.Name))
 	}
 	_ = os.Remove(t.path)
 	_ = t.f.Close()
@@ -219,14 +218,7 @@ type WaiterInfo struct {
 func (p *Pool) Enqueue() (*Ticket, error) { return p.EnqueueFor(WaiterInfo{}) }
 
 // EnqueueFor takes a ticket. Its name sorts by arrival time, so the order of two tickets is the order of their names.
-func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) { return p.EnqueueRanked(info, nil) }
-
-// EnqueueRanked is EnqueueFor for a ticket that is born with a rank (PDX_GATE_RANK=back, rank_env.go). The rank file is written
-// and the ticket renamed into view under one hold of the admit lock, the one every serve (TryTake) and every queue scan takes, so
-// no gate can look at the queue between "visible" and "ranked": the ticket is never seen as normal. The rank file is written
-// first, under the final name: a scan without the lock (peekSnapshot) lists tickets only, so a rank file with no ticket is
-// invisible, and a scan that cleans up holds the lock and so cannot run between the two steps.
-func (p *Pool) EnqueueRanked(info WaiterInfo, born *BornRank) (*Ticket, error) {
+func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 	if err := os.MkdirAll(p.queueDir(), 0o755); err != nil {
 		return nil, dirError(err)
 	}
@@ -275,20 +267,7 @@ func (p *Pool) EnqueueRanked(info WaiterInfo, born *BornRank) (*Ticket, error) {
 		}
 	}
 	path := filepath.Join(p.queueDir(), name)
-	if born != nil {
-		unlock, err := p.lockAdmit()
-		if err != nil {
-			return fail(err)
-		}
-		defer unlock()
-		if err := p.writeRankFile(name, rankFile{Rank: born.Rank, At: p.Now().UnixNano(), By: born.By, Reason: born.Reason}); err != nil {
-			return fail(err)
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			_ = os.Remove(p.rankPath(name))
-			return fail(err)
-		}
-	} else if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
 	}
 	info.Argv = append([]string(nil), info.Argv...) // the ticket keeps its own copy: the caller's slice may be reused or changed
@@ -393,15 +372,11 @@ func (p *Pool) waiting(clean bool) int {
 			if clean {
 				_ = os.Remove(path)
 				_ = os.Remove(path + ".rank") // a rank never outlives its ticket
-				_ = os.Remove(path + ".out")
 			}
 			_ = f.Close()
 			continue
 		}
 		_ = f.Close()
-		if _, out := p.readOut(e.Name()); out {
-			continue // its command runs on an assist host: not waiting for a slot here
-		}
 		n++
 	}
 	return n
@@ -423,8 +398,6 @@ type Take struct {
 	AheadFront int
 	Rank       RankInfo
 	Held       bool
-	// Out says the ticket is out on an assist host (out.go): no slot is taken for it.
-	Out bool
 	// Blocked is set when a conflict rule keeps the ticket from taking a slot though there is room: what it waits for and the rule.
 	// ConflictsProblem is the reason the rules file could not be used (then there are no rules).
 	Blocked          *ConflictBlock
@@ -442,11 +415,6 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 	snap, err := p.snapshotLocked()
 	if err != nil {
 		return Take{}, err
-	}
-	for _, o := range snap.Out {
-		if o.Name == t.Name {
-			return Take{Out: true}, nil // out on an assist host: it is not served here until it is back
-		}
 	}
 	ahead, aheadFront, rank, found := snap.Ahead(t.Name)
 	if !found {

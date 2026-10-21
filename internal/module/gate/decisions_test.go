@@ -108,6 +108,18 @@ func TestDecisions_AMalformedLineIsSkippedAndCounted(t *testing.T) {
 	assert.Equal(t, 2, r.Skipped)
 }
 
+// WWD-9 9b-2: the assist keys (host, tried, transfer_s, run_s, reclaimed, assist_why) left Decision. A record an assist run wrote earlier
+// still reads: the keys it no longer knows are ignored, not skipped as a malformed line.
+func TestDecisions_ARecordWithTheOldAssistKeysStillReads(t *testing.T) {
+	m, dir := rig(t)
+	old := fmt.Sprintf(`{"time":%q,"argv":["go","test"],"class":"heavy","outcome":"assist","host":"air26","tried":"air26","transfer_s":2.5,"run_s":40,"reclaimed":true,"assist_why":"ssh failed","exit":0,"duration_s":1}`, t0.Format(time.RFC3339))
+	writeFile(t, dir, "decisions.jsonl", old, line(1, "heavy"))
+	_, r := get(t, m, "", true)
+	require.Len(t, r.Records, 2)
+	assert.Equal(t, 0, r.Skipped)
+	assert.Equal(t, "assist", r.Records[1].Outcome)
+}
+
 func TestDecisions_NoFilesIsAnEmptyList(t *testing.T) {
 	m, _ := rig(t)
 	code, r := get(t, m, "", true)

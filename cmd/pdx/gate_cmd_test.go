@@ -27,8 +27,6 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	dir = t.TempDir()
 	t.Setenv("PDX_GATE_DIR", filepath.Join(dir, "gate"))
 	t.Setenv("PDX_GATE_HELD", "")
-	t.Setenv(gate.RankEnv, "") // the assist host's assist.env exports PDX_GATE_RANK=back: the tests are of the default rank
-	t.Setenv(gate.RankReasonEnv, "")
 	cfgPath = filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte("[gate]\n"+gateSection), 0o600))
 	return cfgPath, dir
@@ -137,31 +135,4 @@ func TestGate_ABrokenConfigIsReportedAndTheDefaultsAnswer(t *testing.T) {
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "no\n", out.String())
 	assert.Contains(t, errb.String(), "using the defaults")
-}
-
-// pdx gate history lists what was offered to an assist host, as text and as JSON, and filters by host.
-func TestGate_HistoryListsWhatWasOfferedToAHost(t *testing.T) {
-	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n")
-	gd := filepath.Join(dir, "gate")
-	require.NoError(t, os.MkdirAll(gd, 0o755))
-	now := time.Now().UTC().Format(time.RFC3339)
-	lines := `{"time":"` + now + `","argv":["go","test"],"host":"air26","tried":"air26","transfer_s":2.5,"run_s":40,"exit":0}` + "\n" +
-		`{"time":"` + now + `","argv":["pnpm","build"],"tried":"mserv","assist_why":"ssh to mserv failed","exit":0}` + "\n" +
-		`{"time":"` + now + `","argv":["ls"],"exit":0}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(gd, "decisions.jsonl"), []byte(lines), 0o644))
-
-	var out, errb bytes.Buffer
-	require.Equal(t, 0, gateMain([]string{"history", "--config", cfg}, &out, &errb), errb.String())
-	assert.Contains(t, out.String(), "go test")
-	assert.Contains(t, out.String(), "mserv: ssh to mserv failed")
-	assert.NotContains(t, out.String(), " ls\n", "a command never offered to a host is not history")
-
-	out.Reset()
-	require.Equal(t, 0, gateMain([]string{"history", "--host", "air26", "--json", "--config", cfg}, &out, &errb), errb.String())
-	var recs []map[string]any
-	require.NoError(t, json.Unmarshal(out.Bytes(), &recs))
-	require.Len(t, recs, 1)
-	assert.Equal(t, "air26", recs[0]["host"])
-
-	assert.Equal(t, 2, gateMain([]string{"history", "--since", "soon", "--config", cfg}, &out, &errb))
 }
