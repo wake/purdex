@@ -116,14 +116,15 @@ describe('when it writes', () => {
 })
 
 describe('tab.group sessions', () => {
-  it('are written once their root is cached', () => {
+  it('are written once their root is cached', async () => {
     const tab = { id: 't1', createdAt: 1, group: manualGroupKey('g1'), layout: { type: 'leaf', pane: { id: 'p', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'c', mode: 'terminal', cachedName: 'c', tmuxInstance: '', rebuild: { agent: { sessionId: 'S1' } } } } } } as unknown as Tab
     setSupport('h1', 'yes')
     useTabStore.setState({ tabs: { t1: tab } })
     tick()
     expect(bodies().at(-1)?.labels).toEqual([{ root_session_id: 'R1', group: 'Alpha' }])
     useRootCacheStore.setState({ roots: { h1: { S1: 'R7' } } })
-    tick()
+    await vi.advanceTimersByTimeAsync(0) // the first write answered
+    await vi.advanceTimersByTimeAsync(GROUP_LABELS_DEBOUNCE_MS)
     expect(bodies().at(-1)?.labels).toEqual([{ root_session_id: 'R1', group: 'Alpha' }, { root_session_id: 'R7', group: 'Alpha' }])
   })
 })
