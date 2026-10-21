@@ -41,17 +41,28 @@ func thisPdx() (string, error) {
 	return p, nil
 }
 
-// setupGateForUser runs setupGateShims for the current user.
-func setupGateForUser(w io.Writer) {
+// retireGateForUser is the gate half of `pdx setup` since WWD-9 S0-b: the gate is a pass-through, so no shim is installed and the pdx gate block
+// comes out of ~/.zshenv (the shims already in ~/.config/pdx/shims stay: the shells that started before still have them first on PATH, and they
+// are harmless now; 9a-1 removes the directory). It never fails the setup: the agent hooks are installed already, and what could not be done is
+// a line on w.
+func retireGateForUser(w io.Writer) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(w, "setup: gate shims not installed: %v\n", err)
+		fmt.Fprintf(w, "setup: could not remove the pdx gate block: %v\n", err)
 		return
 	}
-	pdxPath, err := thisPdx()
-	if err != nil {
-		fmt.Fprintf(w, "setup: gate shims not installed: %v\n", err)
-		return
+	retireGate(home, w)
+}
+
+func retireGate(home string, w io.Writer) {
+	switch out, err := shim.RemoveBlock(home); {
+	case err != nil:
+		fmt.Fprintf(w, "setup: could not remove the pdx gate block: %v\n", err)
+	case out == shim.BlockRemoved:
+		fmt.Fprintln(w, "pdx gate ~/.zshenv block removed")
+	case out == shim.BlockNotOurs:
+		fmt.Fprintln(w, "setup: ~/.zshenv has text between the pdx gate markers that pdx did not write; left as it is (remove the block by hand, from the line \"# >>> pdx gate >>>\")")
+	case out == shim.BlockUnclosed:
+		fmt.Fprintln(w, "setup: ~/.zshenv has a pdx gate block with no end marker; left as it is (remove it by hand, from the line \"# >>> pdx gate >>>\")")
 	}
-	setupGateShims(home, pdxPath, w)
 }

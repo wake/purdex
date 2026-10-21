@@ -362,3 +362,155 @@ func Uninstall(home string) error {
 	_ = os.Remove(dir) // only if empty
 	return nil
 }
+
+// RemoveOutcome is what RemoveBlock found and did.
+type RemoveOutcome int
+
+const (
+	// NoBlock: there was no pdx gate block (no file, no marker, or an end marker alone); nothing was written.
+	NoBlock RemoveOutcome = iota
+	// BlockRemoved: the block (every complete one) was taken out of the file.
+	BlockRemoved
+	// BlockUnclosed: a begin marker has no end marker. The file is left exactly as it is (such a file was edited by hand, and nothing here
+	// guesses what is the block's and what is not), also when a complete block is there too.
+	BlockUnclosed
+	// BlockNotOurs: between a begin and an end marker there is text that is not what pdx ever wrote (a here-document of the user's that holds
+	// the two marker lines, a block someone edited). The markers alone do not show a block is ours, so the file is left exactly as it is.
+	BlockNotOurs
+)
+
+// oldBodyLine are the groups of the first version's single line: the directory twice.
+var oldBodyLine = regexp.MustCompile(`^case ":\$PATH:" in \*":(.*):"\*\) ;; \*\) PATH="(.*):\$PATH" ;; esac$`)
+
+// frontLine are the groups of the current block's first line: the directory twice.
+var frontLine = regexp.MustCompile(`^path=\("(.*)" \$\{path:#"(.*)"\}\)$`)
+
+// canonicalDir says whether q is the double-quoted form shQuoteInner writes for the directory it spells.
+func canonicalDir(q string) bool { return shQuoteInner(shUnquoteInner(q)) == q }
+
+// blockBodyOurs says whether the lines between the markers are what pdx has written: the first version's one line, or the current block
+// regenerated from the directory its first line names and compared line for line. The same directory must stand at every place, spelled as
+// the generator spells it; anything else, an added line included, is not provably ours.
+func blockBodyOurs(inner []string) bool {
+	if len(inner) == 1 {
+		m := oldBodyLine.FindStringSubmatch(inner[0])
+		return m != nil && m[1] == m[2] && canonicalDir(m[1])
+	}
+	if len(inner) != len(bodyLines) {
+		return false
+	}
+	m := frontLine.FindStringSubmatch(inner[0])
+	if m == nil || m[1] != m[2] || !canonicalDir(m[1]) {
+		return false
+	}
+	want := blockBody(shUnquoteInner(m[1]))
+	for i := range want {
+		if inner[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// allBlocksOurs says whether every complete block of s (a begin marker, then an end marker before the next begin marker) holds only what pdx
+// wrote. Unclosed ones are hasUnclosed's.
+func allBlocksOurs(s string) bool {
+	lines := strings.SplitAfter(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r\n") != blockBegin {
+			continue
+		}
+		var inner []string
+		for j := i + 1; j < len(lines); j++ {
+			t := strings.TrimRight(lines[j], "\r\n")
+			if t == blockEnd {
+				if !blockBodyOurs(inner) {
+					return false
+				}
+				i = j
+				break
+			}
+			if t == blockBegin {
+				break
+			}
+			inner = append(inner, t)
+		}
+	}
+	return true
+}
+
+// hasUnclosed says whether s has a begin marker that no end marker follows before the next begin marker (or the end of the file).
+func hasUnclosed(s string) bool {
+	lines := strings.SplitAfter(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r\n") != blockBegin {
+			continue
+		}
+		closed := false
+		for j := i + 1; j < len(lines); j++ {
+			t := strings.TrimRight(lines[j], "\r\n")
+			if t == blockEnd {
+				closed, i = true, j
+				break
+			}
+			if t == blockBegin {
+				break
+			}
+		}
+		if !closed {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveBlock takes the pdx gate block out of home/.zshenv and touches nothing else (WWD-9 S0-b: `pdx setup` no longer puts the gate's shims
+// first on PATH). It does not write a shim and does not touch the shims that are there. The rest of the file stays byte for byte; a file left
+// with nothing in it is removed if it is a plain file and emptied, never removed, if it is a symbolic link (a dotfiles repo's). With no file
+// or no block it writes and makes nothing, not even the lock's directory. It takes the lock of the home that Install and Uninstall take.
+func RemoveBlock(home string) (RemoveOutcome, error) {
+	zshenv := filepath.Join(home, ".zshenv")
+	cur, err := readIfExists(zshenv)
+	if err != nil {
+		return NoBlock, fmt.Errorf(".zshenv: %w", err)
+	}
+	if hasUnclosed(cur) {
+		return BlockUnclosed, nil
+	}
+	if Strip(cur) == cur {
+		return NoBlock, nil
+	}
+	if !allBlocksOurs(cur) {
+		return BlockNotOurs, nil
+	}
+	unlock, err := lock(home)
+	if err != nil {
+		return NoBlock, fmt.Errorf("lock: %w", err)
+	}
+	defer unlock()
+	cur, err = readIfExists(zshenv) // again, under the lock
+	if err != nil {
+		return NoBlock, fmt.Errorf(".zshenv: %w", err)
+	}
+	if hasUnclosed(cur) {
+		return BlockUnclosed, nil
+	}
+	next := Strip(cur)
+	if next == cur {
+		return NoBlock, nil
+	}
+	if !allBlocksOurs(cur) {
+		return BlockNotOurs, nil
+	}
+	// The file goes only when the block was all of it (next is empty): blanks the user left around it are theirs, and stay byte for byte.
+	if next == "" && !isSymlink(zshenv) {
+		if err := os.Remove(zshenv); err != nil && !os.IsNotExist(err) {
+			return NoBlock, fmt.Errorf(".zshenv: %w", err)
+		}
+		return BlockRemoved, nil
+	}
+	if err := writeThrough(zshenv, []byte(next), 0o644); err != nil {
+		return NoBlock, fmt.Errorf(".zshenv: %w", err)
+	}
+	return BlockRemoved, nil
+}
