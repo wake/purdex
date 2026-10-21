@@ -80,11 +80,11 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 
 ## 閘門事件（WWD-9 移除前）
 
-WWD-9 的 S0 之後，閘門名額不再管任何指令（閘門直通，wwd 也不再向閘門拿槽），所以**不要再用 `pdx gate set` 調名額**，負載的旋鈕只剩上面的 wwd 名額。閘門的 watch 事件在 `pdx gate` 拆除前仍可能送來。
+WWD-9 的 S0 之後，閘門名額不再管任何指令（閘門直通，wwd 也不再向閘門拿槽），9a-3 又把 `pdx gate` 子命令刪了（打 `pdx gate set` 只會得到 `unknown command`），所以**不要再調閘門名額**，負載的旋鈕只剩上面的 wwd 名額。閘門的 watch 事件在閘門核心拆除前仍可能送來。
 
 | 事件 | 意思 |
 |---|---|
-| `unmanaged_heavy` | 有一棵行程樹不在 `pdx gate` 管制內，卻用了很多核心或記憶體 |
+| `unmanaged_heavy` | 有一棵行程樹不在閘門管制內，卻用了很多核心或記憶體 |
 | `pressure_high` | 整機記憶體壓力過高 |
 | `slot_orphaned` | 一個名額被佔著，但它的 gate 已經不在了（名單上是還活著的鎖持有者） |
 | `slot_long` | 一個名額被佔了很久 |

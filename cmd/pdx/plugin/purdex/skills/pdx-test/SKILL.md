@@ -1,6 +1,6 @@
 ---
 name: pdx-test
-description: 用 pdx test 跑 repo 宣告的測試／建置工作（.wwd/tasks.toml）。repo 有 .wwd/tasks.toml 而你要跑測試、建置、lint 時使用；要跑單一測試檔、想知道有哪些 task、沒有對應的 task、pdx test 回了 3／4／5／6／124／130 之類的結束碼、要看或取消一個工作（pdx jobs）、或看到 pdx gate（舊閘門，已是直通）、結束碼 75 而不確定怎麼辦時使用。
+description: 用 pdx test 跑 repo 宣告的測試／建置工作（.wwd/tasks.toml）。repo 有 .wwd/tasks.toml 而你要跑測試、建置、lint 時使用；要跑單一測試檔、想知道有哪些 task、沒有對應的 task、pdx test 回了 3／4／5／6／124／130 之類的結束碼、要看或取消一個工作（pdx jobs）、或看到 pdx gate（舊閘門，已移除）、結束碼 75 而不確定怎麼辦時使用。
 ---
 
 # pdx-test — 跑 repo 宣告的 task
@@ -13,9 +13,9 @@ repo 的根目錄若有 `.wwd/tasks.toml`，這個 repo 的測試與建置**宣�
 |---|---|
 | 想知道有哪些 task | `pdx test --list`（`--json` 給程式讀） |
 | 跑宣告的 task | `pdx test <task> [參數…]`，例如 `pdx test spa-test src/foo.test.ts` |
-| 只跑單一測試檔 | 一樣 `pdx test <task> <檔案>`：宣告 `local = true` 的 task（`pdx test --list` 的 `local` 欄；目前是 `spa-file`、`go-pkg`）走**本機快車道**，直接在你的工作樹跑（未 commit 的改動也跑得到），**永遠不進佇列、不離開本機**；它會記錄成工作，並佔 wwd 自己的一個 light 名額（不是閘門的：閘門已是直通）。名額或 lock 被別的工作占住時留在本機等：每 2 秒再問一次、印一行說明，等到 task 的 `queue_timeout` 為止，逾時結束碼 6。wwd 沒在跑時它仍會在本機跑，只是不記錄 |
+| 只跑單一測試檔 | 一樣 `pdx test <task> <檔案>`：宣告 `local = true` 的 task（`pdx test --list` 的 `local` 欄；目前是 `spa-file`、`go-pkg`）走**本機快車道**，直接在你的工作樹跑（未 commit 的改動也跑得到），**永遠不進佇列、不離開本機**；它會記錄成工作，並佔 wwd 自己的一個 light 名額（舊閘門已移除）。名額或 lock 被別的工作占住時留在本機等：每 2 秒再問一次、印一行說明，等到 task 的 `queue_timeout` 為止，逾時結束碼 6。wwd 沒在跑時它仍會在本機跑，只是不記錄 |
 | 沒有對應的 task | `pdx test --adhoc -- <指令> [參數…]`：只在本機、在你當下的工作目錄、佔一個 heavy 名額跑、**不經 shell**，輸出即時串到 stdout，記錄成 undeclared（wwd 沒在跑時照跑、不記錄；`&&`、管線、`$VAR` 都不會被解讀；要多步就分開跑，或請人把它加進 tasks.toml）；不排隊，所以 `--detach`、`--class` 都會被拒（結束碼 4） |
-| repo 沒有 `.wwd/tasks.toml` | 這個 skill 不適用；重指令不會被擋，自己克制（舊的 `pdx gate` 已是直通） |
+| repo 沒有 `.wwd/tasks.toml` | 這個 skill 不適用；重指令不會被擋，自己克制（舊的 `pdx gate` 已移除） |
 
 task 的參數會依宣告檢查：檔案必須存在、套件必須是套件樣式；參數以 `-` 開頭時前面加 `--`。`--class dev|merge|release` 只能**降低**優先權，不能高過 task 自己宣告的；`--json` 把報告印成一個 JSON 物件。
 
@@ -55,10 +55,10 @@ pdx wwd [status|pool]          # 本機 wwd 與各主機的狀態
 
 ## 與舊閘門（pdx gate）的關係
 
-`pdx gate` **已經是直通**（WWD-9 S0）：不排隊、不取名額、不提供任何互斥。舊閘門與 wwd 不再並存，重指令的管控只剩 wwd：
+`pdx gate` **已經移除**（WWD-9 S0 先讓它直通，9a-3 刪掉子命令）：打 `pdx gate …` 只會得到 `unknown command: gate`（結束碼 1），不排隊、不取名額、不提供任何互斥。舊閘門與 wwd 不再並存，重指令的管控只剩 wwd：
 
 - **repo 有 tasks.toml、做的是它宣告的事**（測試、建置、lint）：用 `pdx test`。wwd 決定在哪跑、排不排隊。
 - **沒有 tasks.toml、或不是測試的重指令**（臨時的編譯、掃描）：不會被擋，**自己克制**（一次一個）；若只是一條單純的指令又想留紀錄，可以用 `pdx test --adhoc`。
-- 直接呼叫 `pdx test` **不必也不要**再包 `pdx gate`：外層 `pdx gate` 不提供整段 script 的名額或互斥，裡面的 `pdx test` 不會沿用它。需要限制並行的 script，把重的步驟**各自交給 `pdx test`**，由 wwd 管。
-- 舊閘門的訊息（「waiting for a heavy slot」）不會再有，也不會再有結束碼 **75**；`pdx gate would-wait …` 一律回「不會等」。看到了就是舊版 pdx，升級它。
+- 直接呼叫 `pdx test` **不必也不要**再包 `pdx gate`：它已經不存在，指令會直接失敗。需要限制並行的 script，把重的步驟**各自交給 `pdx test`**，由 wwd 管。
+- 舊閘門的訊息（「waiting for a heavy slot」）不會再有，也不會再有結束碼 **75**；`pdx gate would-wait …` 也已不存在。看到舊閘門的訊息就是舊版 pdx，升級它；腳本裡還留著 `pdx gate …` 的，把那一行拿掉（或改成 `pdx test`）。
 - 排隊時的規矩一樣：看到 mod 說明「已轉背景」就等通知（久未收到時用 `pdx jobs show <id>` 查終態），不重跑、不繞過。
