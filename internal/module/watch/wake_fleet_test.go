@@ -385,6 +385,38 @@ func TestWakeFollow_ACopyThatCannotBeStoredStaysInMemoryAndTheNextUpdateStoresIt
 	assert.False(t, f.fol.viewOf(t).Stale)
 }
 
+// A copy that could not be stored is stored by a later read even when the source has not changed (the revision is the same): otherwise a source
+// that never changes again would leave the copy in memory only, and a restart would lose it.
+func TestWakeFollow_ADirtyCopyIsStoredByTheNextReadOfTheSameRevision(t *testing.T) {
+	f := newFleet(t)
+	f.src.viewOf(t)
+	flaky := &flakyRows{WakeRowStore: f.fol.rows, fail: true}
+	f.fol.m.core.Registry.Register(hostconfigWakeKey, flaky)
+	f.fol.m.pollWake(context.Background())
+	_, _, ok, _ := f.fol.rows.Get("watch_wake_cache")
+	require.False(t, ok, "not stored: the disk was full")
+
+	flaky.fail = false
+	f.fol.m.pollWake(context.Background()) // the same revision again
+	_, _, ok, _ = f.fol.rows.Get("watch_wake_cache")
+	assert.True(t, ok, "stored by the next read, though nothing changed")
+}
+
+// A read that fails belongs to the source it asked: when the source has been moved meanwhile, it must not mark the copy of the new one stale.
+func TestWakeFollow_AFailedReadOfAnOldSourceDoesNotMarkTheNewSourcesCopyStale(t *testing.T) {
+	f := newFleet(t)
+	m := f.fol.m
+	def := watchwake.Default("Asia/Taipei")
+	m.core.Cfg.Watch = &config.WatchConfig{WakeSource: "air19"}
+	require.True(t, m.applyWake(wakeResult{source: "air19", view: wakeSettingsView{Settings: watchwake.Marshal(def), Etag: "a1", Revision: 1, SourceID: "air19:dddddd", IsSource: true}}))
+	require.False(t, f.fol.viewOf(t).Stale)
+
+	m.markWakeStale("mlab") // the read of mlab, the old source, failed after the source was moved
+	assert.False(t, f.fol.viewOf(t).Stale, "air19's copy is as fresh as it was")
+	m.markWakeStale("air19")
+	assert.True(t, f.fol.viewOf(t).Stale, "a failed read of the source that is set does mark it")
+}
+
 // Notices that come in while a read is under way are one more read, not one each; Stop waits for it.
 func TestWakeFollow_NoticesDuringAReadAreOneMoreReadAndStopWaitsForIt(t *testing.T) {
 	f := newFleet(t)

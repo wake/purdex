@@ -100,6 +100,9 @@ func (m *Module) applyWake(res wakeResult) bool {
 	f.fresh = true
 	if sameSource && v.Revision <= c.Revision { // the same document or an older answer: the copy stays; the read still counts as a fetch
 		c.FetchedAt = m.now()
+		if f.dirty { // an earlier write of the copy failed: a source that does not change must not leave it in memory only
+			m.persistWakeCache(f)
+		}
 		f.mu.Unlock()
 		return false
 	}
@@ -166,11 +169,15 @@ func (m *Module) followerView(source string) wakeSettingsView {
 }
 
 // markWakeStale records that the source could not be read: what the host has is served as stale until a read succeeds.
-func (m *Module) markWakeStale() {
+// A read belongs to the source it asked: when the source has been moved meanwhile, its failure says nothing of the new one's copy.
+func (m *Module) markWakeStale(source string) {
 	f := &m.wakeFollow
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	if cur, isSource := m.wakeSourceAlias(); isSource || cur != source {
+		return
+	}
 	f.fresh = false
-	f.mu.Unlock()
 }
 
 // background runs fn on a goroutine the module's Stop waits for; with the module not running it does nothing (a test sets backgroundSync to run
@@ -272,7 +279,7 @@ func (m *Module) pollWake(ctx context.Context) {
 	env, hostID, ok := m.callSource(ctx, source, pathWakeGet, func(to string) any { return map[string]string{"to_host_id": to} })
 	var v wakeSettingsView
 	if !ok || env.Status != http.StatusOK || json.Unmarshal(env.Body, &v) != nil || !v.IsSource || v.SourceID != hostID || len(v.Settings) == 0 {
-		m.markWakeStale()
+		m.markWakeStale(source)
 		return
 	}
 	m.applyWake(wakeResult{source: source, view: v})
