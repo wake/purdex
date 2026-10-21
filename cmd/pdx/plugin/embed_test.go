@@ -640,7 +640,7 @@ func TestSkillWatch_TheWakeSettingsAreTheUsersNotTheWatchers(t *testing.T) {
 		"使用者寫的 prompt", "照做",
 		"`pdx watch wake-settings`", "App 的「設定」分頁", "`stale`", "`suppressed`",
 		"不要自己 `pdx watch wake-settings set`",
-		"巡檢不能關，只能放寬", "最長不巡上限",
+		"巡檢不能關，只能放寬", "最長不巡上限", "`patrol_status`", "叫不起來",
 		"`pdx watch wake` 是**手動**叫醒",
 	} {
 		if !strings.Contains(s, want) {
@@ -649,6 +649,11 @@ func TestSkillWatch_TheWakeSettingsAreTheUsersNotTheWatchers(t *testing.T) {
 	}
 	if !strings.Contains(s, "也不自己改喚醒設定（`pdx watch wake-settings set`") {
 		t.Error("the list of what the watcher must not do does not name the wake settings")
+	}
+	// spec 6.3: the max gap always triggers an attempt, but a patrol that cannot reach a watcher is only recorded (patrol_failed): the skill must
+	// not promise delivery (codex R2 on #3956)
+	if strings.Contains(s, "一定會叫醒你") {
+		t.Error("SKILL.md of pdx-watch promises that the max gap always wakes the watcher")
 	}
 }
 

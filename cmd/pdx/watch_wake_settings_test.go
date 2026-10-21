@@ -357,6 +357,54 @@ func TestWakeSettingsSet_ADaemonThatCannotBeReadIsNotWrittenTo(t *testing.T) {
 	require.Equal(t, 0, f.puts)
 }
 
+// ---- codex R2 on #3956 ----
+
+// A file bigger than the daemon would take is refused here, before it is read into memory and before anything is sent.
+func TestWakeSettingsSet_AFileOverTheLimitIsRefusedBeforeItIsRead(t *testing.T) {
+	f, cfg := newWakeDaemon(t)
+	p := filepath.Join(t.TempDir(), "big.txt")
+	require.NoError(t, os.WriteFile(p, bytes.Repeat([]byte("x"), wakeFileMax+1), 0o600))
+	code, _, errb := runWake("set", "rules.patrol.prompt=@"+p, "--config", cfg)
+	require.Equal(t, 2, code, errb)
+	require.Contains(t, errb, "too large")
+	require.Equal(t, 0, f.puts)
+	// the limit itself still goes (the daemon decides about the 2000 bytes of a prompt)
+	require.NoError(t, os.WriteFile(p, bytes.Repeat([]byte("x"), wakeFileMax), 0o600))
+	code, _, errb = runWake("set", "rules.patrol.prompt=@"+p, "--config", cfg)
+	require.Equal(t, 0, code, errb)
+}
+
+// Whatever the daemon sends is printed through sanitizeCell, the fixed times too.
+func TestWakeSettingsShow_NothingTheDaemonSendsReachesTheTerminalRaw(t *testing.T) {
+	f, cfg := newWakeDaemon(t)
+	var v map[string]any
+	require.NoError(t, json.Unmarshal(f.get, &v))
+	patrol := v["settings"].(map[string]any)["rules"].(map[string]any)["patrol"].(map[string]any)
+	patrol["times"] = []any{"08:00\x1b]0;pwned\x07", "09:00\nfake line"}
+	patrol["tz"] = "UTC\x1b[31m"
+	v["source"] = "mlab\x1b[2J"
+	f.get, _ = json.Marshal(v)
+	code, out, errb := runWake("--config", cfg)
+	require.Equal(t, 0, code, errb)
+	require.NotContains(t, out, "\x1b")
+	require.NotContains(t, out, "\x07")
+	require.NotContains(t, out, "\nfake line")
+}
+
+// A 200 that is not a settings document is not a success: the write may have happened, and the CLI says it cannot tell.
+func TestWakeSettingsSet_A200ThatIsNotADocumentIsNotConfirmed(t *testing.T) {
+	for name, body := range map[string]string{"html": "<html>proxy</html>", "empty": "", "no etag": `{"settings":{}}`, "no settings": `{"etag":"x","revision":3}`} {
+		f, cfg := newWakeDaemon(t)
+		f.put = []byte(body)
+		for _, extra := range [][]string{nil, {"--json"}} {
+			code, out, errb := runWake(append([]string{"set", "enabled=false", "--config", cfg}, extra...)...)
+			require.Equal(t, 1, code, "%s %v", name, extra)
+			require.Empty(t, out, "%s %v: nothing is printed as the daemon's answer", name, extra)
+			require.Contains(t, errb, "無法確認", "%s %v", name, extra)
+		}
+	}
+}
+
 // ---- dispatch ----
 
 // `pdx watch wake` is the manual wake-up and stays so (the name wake-settings must not swallow it).

@@ -190,12 +190,17 @@ func setWakeSettings(cfg config.Config, view wakeView, words []string, asJSON bo
 	}
 	switch res.status {
 	case http.StatusOK:
+		// a 200 that is not a settings document (a proxy's page, an empty body) does not say the write happened: it may have, so say that it
+		// cannot be told, and print nothing as the daemon's answer
+		var done wakeView
+		if err := json.Unmarshal(res.body, &done); err != nil || len(done.Settings) == 0 || done.Etag == "" {
+			fmt.Fprintln(stderr, "pdx watch wake-settings set: 伺服器回了 200 但內容不是設定文件，寫入結果無法確認；用 pdx watch wake-settings 看現在的內容")
+			return 1
+		}
 		if asJSON {
 			fmt.Fprintln(stdout, strings.TrimSpace(string(res.body)))
 			return 0
 		}
-		var done wakeView
-		_ = json.Unmarshal(res.body, &done)
 		fmt.Fprintf(stdout, "已更新  revision %d  etag %s\n", done.Revision, sanitizeCell(done.Etag))
 		return 0
 	case http.StatusConflict:
@@ -365,15 +370,32 @@ func wakeScalar(old any, raw string) (any, error) {
 			return raw[1:], nil
 		}
 		if strings.HasPrefix(raw, "@") {
-			b, err := os.ReadFile(raw[1:])
-			if err != nil {
-				return nil, fmt.Errorf("cannot read the file: %v", err)
-			}
-			return string(b), nil
+			return readWakeFile(raw[1:])
 		}
 		return raw, nil
 	}
 	return nil, fmt.Errorf("cannot be set from the command line")
+}
+
+// wakeFileMax is the most a `@file` value may be: what the daemon takes in a whole PUT (64 KiB). The daemon's own limit on a prompt (2000
+// bytes) is its to apply and to explain; this one only keeps a wrong file from being read into memory.
+const wakeFileMax = 64 << 10
+
+// readWakeFile reads a value from a file, at most wakeFileMax bytes: one byte more is read to know it is over.
+func readWakeFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read the file: %v", err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, wakeFileMax+1))
+	if err != nil {
+		return "", fmt.Errorf("cannot read the file: %v", err)
+	}
+	if len(b) > wakeFileMax {
+		return "", fmt.Errorf("the file is too large (over %d bytes)", wakeFileMax)
+	}
+	return string(b), nil
 }
 
 // printWakeView is `show`: the document as a person reads it, then where it came from and how it has been working.
@@ -427,7 +449,7 @@ func printWakeView(w io.Writer, v wakeView) {
 	fmt.Fprintf(w, "巡檢（不能關）\n  間隔（分鐘，0＝只剩上限）：休息 %d  在電腦前 %d  不在電腦前 %d  吃緊 %d  平穩 %d\n", iv["resting"], iv["present"], iv["away"], iv["busy"], iv["calm"])
 	times := "（無）"
 	if len(p.Times) > 0 {
-		times = strings.Join(p.Times, " ")
+		times = sanitizeCell(strings.Join(p.Times, " "))
 	}
 	fmt.Fprintf(w, "  最長不巡上限 %d 小時   固定時刻 %s   時區 %s\n  prompt：%s\n", p.MaxGapHours, times, sanitizeCell(p.TZ), wakePromptText(p.Prompt))
 	fmt.Fprintf(w, "disk_low  %s  低於 %d GB 叫一次\n  prompt：%s\n", wakeOnOff(s.Rules.DiskLow.Enabled), s.Rules.DiskLow.BelowGB, wakePromptText(s.Rules.DiskLow.Prompt))
