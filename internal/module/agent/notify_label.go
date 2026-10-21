@@ -45,8 +45,36 @@ func newLabeler(c *core.Core) *notifylabel.Labeler {
 			}
 			return g.NotifyGroupOf(sessionID)
 		},
+		Root: func(_ context.Context, sessionID string) (string, error) {
+			svc, ok := c.Registry.Get(team.LineageRootKey)
+			if !ok {
+				return "", nil // no lineage yet: the root is not known, and the overlay is not asked with a guess
+			}
+			res, ok := svc.(team.LineageRootResolver)
+			if !ok {
+				return "", nil
+			}
+			return res.RootSessionOf(sessionID)
+		},
 		Display: ipeers.PoolDisplayName,
-	})
+	}, notifylabel.WithOverlay(registryOverlay{c}))
+}
+
+// registryOverlay is the groups the App wrote back (the notify module), looked up in the registry on every call so that it is
+// there whichever of the two modules started first; without it a session has no group but its team's. A registry lookup and a
+// map read: no I/O (the Overlay contract).
+type registryOverlay struct{ c *core.Core }
+
+func (o registryOverlay) GroupOf(rootSessionID string) string {
+	svc, ok := o.c.Registry.Get(notifylabel.OverlayKey)
+	if !ok {
+		return ""
+	}
+	ov, ok := svc.(notifylabel.Overlay)
+	if !ok {
+		return ""
+	}
+	return ov.GroupOf(rootSessionID)
 }
 
 // codeReader is the name service that can say a failed read (the peers module); any other only has CodeOf.
