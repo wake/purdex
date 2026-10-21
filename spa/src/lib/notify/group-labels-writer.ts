@@ -19,6 +19,8 @@ import { NOTIFY_GROUP_LABELS_MAX, NOTIFY_GROUP_LABELS_PATH } from './types'
 
 export const GROUP_LABELS_DEBOUNCE_MS = 500
 const WRITE_TIMEOUT_MS = 10_000
+export const RETRY_BASE_MS = 30_000
+export const RETRY_MAX_MS = 300_000
 
 export function startGroupLabelsWriter(): () => void {
   const lastSent = new Map<string, string>() // host id → the serialised labels last sent (or tried) on this connection
@@ -26,6 +28,25 @@ export function startGroupLabelsWriter(): () => void {
 
   // One write at a time per host: the daemon keeps whichever whole set lands last, so a newer set must never overtake an older one still out. A change made meanwhile is written once the first answers.
   const inFlight = new Set<string>()
+  // A write that failed on the network, timed out or met a 5xx is sent again (the whole current set), after 30 s, doubling to 5 min; a late old request is then overwritten by the retry. A 4xx is a no: the same body
+  // would not fare better, so it is only logged. The delay resets on success, on a changed projection, and when the host goes or loses the capability.
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const failedKey = new Map<string, string>()
+  const delays = new Map<string, number>()
+  const stopRetry = (hostId: string) => {
+    const t = retryTimers.get(hostId)
+    if (t !== undefined) clearTimeout(t)
+    retryTimers.delete(hostId)
+    failedKey.delete(hostId)
+    delays.delete(hostId)
+  }
+  const retryLater = (hostId: string, key: string) => {
+    lastSent.delete(hostId)
+    failedKey.set(hostId, key)
+    const delay = delays.get(hostId) ?? RETRY_BASE_MS
+    delays.set(hostId, Math.min(delay * 2, RETRY_MAX_MS))
+    retryTimers.set(hostId, setTimeout(() => { retryTimers.delete(hostId); schedule() }, delay))
+  }
 
   const send = (hostId: string, labels: unknown[], key: string) => {
     lastSent.set(hostId, key)
@@ -41,8 +62,14 @@ export function startGroupLabelsWriter(): () => void {
       body: JSON.stringify({ device: getClientId(), labels }),
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS), // a write that never answers must not hold the host's slot
     }).then(
-      (res) => { if (!res.ok) console.error(`notify group labels: host ${hostId} answered ${res.status}`); done() },
-      (err) => { console.error('notify group labels: write failed', err); done() },
+      (res) => {
+        if (res.ok) { delays.delete(hostId); failedKey.delete(hostId) } else {
+          console.error(`notify group labels: host ${hostId} answered ${res.status}`)
+          if (res.status >= 500) retryLater(hostId, key)
+        }
+        done()
+      },
+      (err) => { console.error('notify group labels: write failed', err); retryLater(hostId, key); done() },
     )
   }
 
@@ -56,13 +83,16 @@ export function startGroupLabelsWriter(): () => void {
     const wanted: WantedSession[] = []
     for (const hostId of Object.keys(hosts)) {
       const ready = runtime[hostId]?.status === 'connected' && byHost[hostId]?.notifyGroupLabelsSupport === 'yes'
-      if (!ready) { lastSent.delete(hostId); continue }
+      if (!ready) { lastSent.delete(hostId); stopRetry(hostId); continue }
       const p = projectGroupLabels({ hostId, manual: { order: manual.order, groups: manual.groups }, tabs, views, rootOf })
       wanted.push(...p.wanted)
       const key = JSON.stringify(p.labels)
+      if (failedKey.has(hostId) && failedKey.get(hostId) !== key) stopRetry(hostId) // the set changed: send the new one now
+      if (retryTimers.has(hostId)) continue // waiting out a back-off
       if (lastSent.get(hostId) !== key && !inFlight.has(hostId)) send(hostId, p.labels, key)
     }
     for (const hostId of [...lastSent.keys()]) if (!hosts[hostId]) lastSent.delete(hostId)
+    for (const hostId of [...retryTimers.keys()]) if (!hosts[hostId]) stopRetry(hostId)
     setRootsInterest(wanted.length > 0, wanted, 'notify')
   }
   const schedule = () => {
@@ -76,16 +106,17 @@ export function startGroupLabelsWriter(): () => void {
     useTeamRosterStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) schedule() }),
     useRootCacheStore.subscribe((s, prev) => { if (s.roots !== prev.roots) schedule() }),
     useUnattendedStore.subscribe((s, prev) => { if (s.byHost !== prev.byHost) schedule() }),
-    useHostStore.subscribe((s, prev) => { {
+    useHostStore.subscribe((s, prev) => {
       // `runtime` changes with every latency sample: only a host's status (or the host list) matters here.
       const changed = s.hosts !== prev.hosts || Object.keys(s.hosts).some((id) => s.runtime[id]?.status !== prev.runtime[id]?.status)
       if (changed) schedule()
-    } }),
+    }),
   ]
   schedule()
   return () => {
     for (const off of unsubs) off()
     if (timer !== null) clearTimeout(timer)
+    for (const hostId of [...retryTimers.keys()]) stopRetry(hostId)
     setRootsInterest(false, [], 'notify')
   }
 }

@@ -5,7 +5,7 @@ const hostFetch = vi.fn()
 vi.mock('../host-api', () => ({ hostFetch: (...a: unknown[]) => hostFetch(...a) }))
 vi.mock('../client-identity', () => ({ getClientId: () => 'c_aaaaaaaaaaaa' }))
 
-import { startGroupLabelsWriter, GROUP_LABELS_DEBOUNCE_MS } from './group-labels-writer'
+import { startGroupLabelsWriter, GROUP_LABELS_DEBOUNCE_MS, RETRY_BASE_MS, RETRY_MAX_MS } from './group-labels-writer'
 import { NOTIFY_GROUP_LABELS_MAX } from './types'
 import { useHostStore } from '../../stores/useHostStore'
 import { useManualGroupsStore } from '../../stores/useManualGroupsStore'
@@ -112,6 +112,78 @@ describe('when it writes', () => {
     expect(hostFetch).not.toHaveBeenCalled()
     expect(err).toHaveBeenCalled()
     err.mockRestore()
+  })
+})
+
+describe('retry (88 on the critic: a late old request is overwritten by a resend)', () => {
+  beforeEach(() => { setSupport('h1', 'yes'); tick(); hostFetch.mockClear(); vi.spyOn(console, 'error').mockImplementation(() => {}) })
+  afterEach(() => { vi.mocked(console.error).mockRestore() })
+  const change = (n: string) => { setGroups({ g1: group(n, [{ host: 'h1', root: 'R1' }]) }); tick() }
+
+  it('a timeout / network error sends the current set again after 30 s', async () => {
+    hostFetch.mockRejectedValueOnce(new DOMException('timeout', 'TimeoutError'))
+    change('N1')
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS - 1)
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(GROUP_LABELS_DEBOUNCE_MS + 1)
+    expect(bodies().map((b) => b.labels[0].group)).toEqual(['N1', 'N1'])
+  })
+  it('a 5xx is retried', async () => {
+    hostFetch.mockResolvedValueOnce({ ok: false, status: 503 })
+    change('N1')
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS + GROUP_LABELS_DEBOUNCE_MS)
+    expect(hostFetch).toHaveBeenCalledTimes(2)
+  })
+  it('back-off doubles on each failure and stops at 5 minutes', async () => {
+    hostFetch.mockRejectedValue(new Error('down'))
+    change('N1')
+    const gaps: number[] = []
+    let last = 0
+    let elapsed = 0
+    for (let i = 0; i < 400 && gaps.length < 7; i++) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      elapsed += 5_000
+      if (hostFetch.mock.calls.length - 1 > gaps.length) { gaps.push(elapsed - last); last = elapsed }
+    }
+    // the first gap is measured from the first send; each next one is the delay + the debounce (rounded up to 5 s steps)
+    expect(gaps.slice(1, 6)).toEqual([35_000, 65_000, 125_000, 245_000, 305_000])
+    expect(gaps[6]).toBe(305_000) // capped: RETRY_MAX_MS
+    expect(RETRY_MAX_MS).toBe(300_000)
+  })
+  it('a success resets the delay', async () => {
+    hostFetch.mockRejectedValueOnce(new Error('down')).mockRejectedValueOnce(new Error('down'))
+    change('N1')
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS + 2 * GROUP_LABELS_DEBOUNCE_MS) // 2nd send fails too (next delay 60 s)
+    await vi.advanceTimersByTimeAsync(2 * RETRY_BASE_MS + GROUP_LABELS_DEBOUNCE_MS) // 3rd succeeds
+    expect(hostFetch).toHaveBeenCalledTimes(3)
+    hostFetch.mockRejectedValueOnce(new Error('down'))
+    change('N2')
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS + 2 * GROUP_LABELS_DEBOUNCE_MS) // back to 30 s, not 120 s
+    expect(hostFetch).toHaveBeenCalledTimes(5)
+  })
+  it.each([400, 403, 413])('a %i is not retried', async (status) => {
+    hostFetch.mockResolvedValueOnce({ ok: false, status })
+    change('N1')
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 2)
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+  })
+  it('losing the connection cancels the retry', async () => {
+    hostFetch.mockRejectedValueOnce(new Error('down'))
+    change('N1')
+    await vi.advanceTimersByTimeAsync(0)
+    useHostStore.setState((s) => ({ runtime: { ...s.runtime, h1: { status: 'disconnected' } } }) as never)
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS)
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+  })
+  it('a projection that changed while waiting is sent at once, as the new set', async () => {
+    hostFetch.mockRejectedValueOnce(new Error('down'))
+    change('N1')
+    await vi.advanceTimersByTimeAsync(0)
+    change('N2')
+    await vi.advanceTimersByTimeAsync(GROUP_LABELS_DEBOUNCE_MS)
+    expect(bodies().map((b) => b.labels[0].group)).toEqual(['N1', 'N2'])
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS)
+    expect(hostFetch).toHaveBeenCalledTimes(2) // and the old retry is gone
   })
 })
 
