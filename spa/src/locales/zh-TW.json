@@ -1400,6 +1400,7 @@
 
   "hosts.title": "主機",
   "hosts.add": "新增主機",
+  "hosts.monitor_link": "資源池主機的狀態與設定在監控分頁組 →",
   "hosts.add_host": "新增主機",
   "hosts.transfer.share_button": "分享主機",
   "hosts.transfer.share_title": "分享主機",
