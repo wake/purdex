@@ -18,8 +18,7 @@ type originSource interface {
 
 // NotifySelf delivers text to the live session sessionID from that session's own inbox (a notice about itself, so the self-notice
 // sender, which alone skips the self_target refusal), to its own address by ref. A session that restarted since has another
-// session id and another ref, so a notice for the old one cannot reach the new one. The watch module's notices to the watcher and
-// the assist module's notices to a team's sessions both go this way.
+// session id and another ref, so a notice for the old one cannot reach the new one. The watch module's notices to the watcher go this way.
 func NotifySelf(ctx context.Context, c *core.Core, logf func(format string, args ...any), sessionID, text string) error {
 	reg := c.Registry
 	osvc, ok := reg.Get(OriginResolverKey)

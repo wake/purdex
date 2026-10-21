@@ -275,7 +275,7 @@ func TestPatrol_ANoteReceivedFromAnotherHostRestartsTheCount(t *testing.T) {
 	_, _, _ = r.m.Reconcile(context.Background())
 	r.m.dlv.notifier = &fakeNotifier{}
 	r.now = r.now.Add(29 * time.Minute)
-	body := `{"to_host_id":"` + ourID + `","reason":"assist_changed","detail":"d"}`
+	body := `{"to_host_id":"` + ourID + `","reason":"unattended_changed","detail":"d"}`
 	require.Equal(t, 200, r.serve(hostCtx(), "/api/peers/watch/note", body).Code)
 	r.m.patrol.mu.Lock()
 	last := r.m.patrol.last
