@@ -157,7 +157,8 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
 	}
 	if c.moduleReady("watch") {
-		out = append(out, "watch.v1") // GET /api/watch/status, /events, /unhandled, POST /api/watch/ack, the watch.changed and watch.events pushes
+		out = append(out, "watch.wake_settings.v1") // GET /api/watch/wake-settings (any token) and PUT (admin): the watcher's wake settings document, kept on the source host ([watch] wake_source, mlab by default); the API is here, not that wake-ups already read it (that is watch.wake_rules.v1)
+		out = append(out, "watch.v1")               // GET /api/watch/status, /events, /unhandled, POST /api/watch/ack, the watch.changed and watch.events pushes
 	}
 	if c.moduleReady("pool") {
 		out = append(out, "pool.v1")         // GET /api/pool/hosts, GET /api/pool/facts/history (the resource pool from the local wwd; 503 wwd_unavailable while wwd is not running)

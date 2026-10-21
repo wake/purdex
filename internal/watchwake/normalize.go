@@ -295,6 +295,9 @@ func (w *walker) patrol(p *Patrol, v any) {
 	}
 }
 
+// ValidZone says whether name is an IANA zone the document accepts as patrol.tz ("" and "Local" are not names).
+func ValidZone(name string) bool { return validZone(name) }
+
 func validZone(name string) bool {
 	if name == "" || name == "Local" {
 		return false

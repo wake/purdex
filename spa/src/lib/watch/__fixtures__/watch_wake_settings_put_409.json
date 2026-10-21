@@ -1,0 +1,181 @@
+{
+  "current": {
+    "settings": {
+      "version": 1,
+      "enabled": true,
+      "auto_start": true,
+      "rules": {
+        "patrol": {
+          "prompt": "",
+          "interval_min": {
+            "resting": 10,
+            "present": 30,
+            "away": 30,
+            "busy": 10,
+            "calm": 15
+          },
+          "max_gap_hours": 24,
+          "times": [],
+          "tz": "Asia/Taipei"
+        },
+        "disk_low": {
+          "enabled": true,
+          "prompt": "",
+          "below_gb": 14
+        },
+        "wwd_alert": {
+          "enabled": true,
+          "prompt": "",
+          "levels": [
+            "push",
+            "digest",
+            "watch"
+          ],
+          "kinds_off": []
+        },
+        "unattended_changed": {
+          "enabled": true,
+          "prompt": ""
+        },
+        "user_back": {
+          "enabled": true,
+          "prompt": "",
+          "away_min": 30
+        }
+      }
+    },
+    "etag": "064f942514dbe8fa",
+    "revision": 1,
+    "source": "mlab",
+    "source_id": "82b11c521df16c12",
+    "is_source": true,
+    "stale": false,
+    "readonly": false,
+    "fetched_at": "2026-10-22T09:00:00+08:00",
+    "known_kinds": [
+      {
+        "kind": "disk_low",
+        "levels": [
+          "push"
+        ],
+        "label": "磁碟空間不足"
+      },
+      {
+        "kind": "disk_falling",
+        "levels": [
+          "digest"
+        ],
+        "label": "磁碟空間快速下降"
+      },
+      {
+        "kind": "pressure_held",
+        "levels": [
+          "push"
+        ],
+        "label": "記憶體壓力持續"
+      },
+      {
+        "kind": "mserv_service",
+        "levels": [
+          "push"
+        ],
+        "label": "mserv 服務異常"
+      },
+      {
+        "kind": "worker_crash_loop",
+        "levels": [
+          "push"
+        ],
+        "label": "worker 反覆當機"
+      },
+      {
+        "kind": "silence",
+        "levels": [
+          "push"
+        ],
+        "label": "主機失聯"
+      },
+      {
+        "kind": "thrash",
+        "levels": [
+          "digest"
+        ],
+        "label": "換頁過量"
+      },
+      {
+        "kind": "resident_growth",
+        "levels": [
+          "digest"
+        ],
+        "label": "常駐記憶體成長"
+      },
+      {
+        "kind": "orphans",
+        "levels": [
+          "digest",
+          "push"
+        ],
+        "label": "孤兒行程"
+      },
+      {
+        "kind": "pressure_watch",
+        "levels": [
+          "watch"
+        ],
+        "label": "記憶體壓力偏高"
+      },
+      {
+        "kind": "pressure_danger",
+        "levels": [
+          "push"
+        ],
+        "label": "記憶體壓力危險"
+      },
+      {
+        "kind": "swap_growth",
+        "levels": [
+          "watch"
+        ],
+        "label": "swap 持續增加"
+      },
+      {
+        "kind": "queue_stalled",
+        "levels": [
+          "watch"
+        ],
+        "label": "佇列停滯"
+      },
+      {
+        "kind": "job_requeued",
+        "levels": [
+          "watch"
+        ],
+        "label": "job 反覆被放回"
+      },
+      {
+        "kind": "queue_backlog",
+        "levels": [
+          "watch"
+        ],
+        "label": "佇列積壓"
+      },
+      {
+        "kind": "queue_unclaimable",
+        "levels": [
+          "watch"
+        ],
+        "label": "沒有主機接得了"
+      }
+    ],
+    "suppressed": [],
+    "patrol_status": {
+      "last_ok_at": null,
+      "last_ok_host": null,
+      "last_fail_at": null,
+      "last_fail_code": null,
+      "last_fail_detail": null
+    }
+  },
+  "error": "etag_mismatch"
+}
+

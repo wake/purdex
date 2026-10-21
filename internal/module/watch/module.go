@@ -43,6 +43,11 @@ type Module struct {
 	now    func() time.Time
 	// settings reads the watch setting (nil: the registry's reader is looked up at each use).
 	settings func() (watchsettings.Settings, error)
+	// localTZ names this host's time zone for the first wake settings document (nil: localZoneName); a test seam.
+	localTZ func() string
+	// beforeWakeCommit runs in a wake settings PUT after everything is checked and before the source is checked again; duringWakeCommit
+	// runs right after the write. Test seams (nil in production).
+	beforeWakeCommit, duringWakeCommit func()
 	// caller reaches the other hosts (peers.HostCallerKey); nil: only this host can be asked.
 	caller hostCaller
 	// session starts and wakes the watcher on this host (W3); nil until then.
@@ -297,6 +302,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/wake", m.handlePeerWake)
 	mux.HandleFunc("POST /api/peers/watch/log", m.handlePeerLog)
 	mux.HandleFunc("GET /api/watch/log", m.handleLog)
+	m.registerWakeRoutes(mux)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.

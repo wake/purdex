@@ -24,6 +24,8 @@ var deviceAllowed = map[string]bool{
 	"GET /api/pool/hosts/{alias}/alerts":        true, // a host's alerts with the kind of each silence (capability pool.alerts.v1), read-only like the hosts
 	"GET /api/pool/facts/history":               true,
 	"GET /api/pool/facts/series":                true, // the same history cut down to what a chart draws (capability pool.series.v1)
+	// the watcher's wake settings (capability watch.wake_settings.v1): a phone reads them, the PUT is the admin's
+	"GET /api/watch/wake-settings": true,
 	// the pool's jobs (wwd spec §10), read-only like the hosts: the list, one job, its log. A phone sees the same job fields (task, args,
 	// summary, log) as the Mac App; both are the user's own devices (spec §11).
 	"GET /api/pool/jobs":          true,
