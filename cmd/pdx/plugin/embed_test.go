@@ -634,7 +634,7 @@ func TestSkill_GateSaysItIsAPassThrough(t *testing.T) {
 		}
 	}
 	// What the gate promised and does not keep: none of it may survive in the skill as a promise.
-	for _, gone := range []string{"排隊就是主機忙，不是卡住", "你不必自己包 `pdx gate`", "輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "advise", "--maxWorkers=3", "不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊", "pdx gate -- ./script.sh", "不要只包腳本裡的某一步"} {
+	for _, gone := range []string{"排隊就是主機忙，不是卡住", "你不必自己包 `pdx gate`", "輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "pdx lease run", "advise", "--maxWorkers=3", "不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊", "pdx gate -- ./script.sh", "不要只包腳本裡的某一步"} {
 		if strings.Contains(s, gone) {
 			t.Errorf("SKILL.md of pdx-gate still says %q", gone)
 		}

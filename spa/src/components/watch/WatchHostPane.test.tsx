@@ -90,7 +90,7 @@ describe('the banner of a host that is not ok (M22, #3785)', () => {
       expect(banner).toHaveTextContent(t('pool.liveness.checked', { time: clock(NOW - 3000) }))
       expect(banner).toHaveTextContent(t('watch.host.banner.chart_stops'))
       // Not inside any sub-tab's body.
-      for (const id of ['mock-monitor', 'mock-settings', 'status-later', 'mock-procs']) {
+      for (const id of ['mock-monitor', 'mock-settings', 'status-tab', 'mock-procs']) {
         const body = screen.queryByTestId(id)
         if (body) expect(banner.contains(body)).toBe(false)
       }

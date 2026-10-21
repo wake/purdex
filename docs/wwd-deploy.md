@@ -614,8 +614,8 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   the background that waits for a down host up to the queue timeout. A pool that cannot be read is `none` too. The reason (one line, for example
   `no reachable host with a worker on holds repo:aigora-v2`) is in the JSON answer only; the hook does not print it. Local-lane tasks and ad-hoc jobs
   need no other host and are not judged.
-* **Known gap**: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its `os:` label
-  or a `task:` label it earned). Labels that such a host satisfies, while it will not take the job, still pass the check above, and the call then
+* **Known gap**: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its `os:` label,
+  a `task:` label it earned or a `host:` label). Labels that such a host satisfies, while it will not take the job, still pass the check above, and the call then
   waits in the background until the queue timeout. Purdex does not meet it: `purdex_manifest_test` makes every queued task carry `os:darwin` or its
   own `task:` label. When another repo does, the setting has to become a field of the host's info.
 * Everything fails open: a `pdx` that does not answer, an answer that is not JSON or a manifest that does not parse lets the command run as typed.

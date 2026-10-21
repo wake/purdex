@@ -71,7 +71,7 @@ type WorkerConfig struct {
 	BackgroundDev bool `toml:"background_dev"`
 	// SpeedFactor is this host's speed against the reference host for size_penalty (spec §4.6); 0 means none.
 	SpeedFactor float64 `toml:"speed_factor"`
-	// ExplicitLabelsOnly: the worker takes only jobs whose labels name this host's os: label or a task: label it earned (#3441; mserv).
+	// ExplicitLabelsOnly: the worker takes only jobs whose labels name this host's os: label, a task: label it earned (#3441; mserv) or a host: label (#3873).
 	ExplicitLabelsOnly bool `toml:"explicit_labels_only"`
 	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
 	// sandbox, the command runs as a process group of the daemon's own account.

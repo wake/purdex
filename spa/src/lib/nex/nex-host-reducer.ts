@@ -26,10 +26,12 @@ export interface NexHostEntry {
   daemonCapabilities?: string[]
   /** `/api/info.wwd` of the daemon: which wwd host it fronts; `null` when it does not say. */
   wwd?: { hostId: string; alias: string } | null
+  /** `/api/info.wwdalerts` of the daemon: its push switch and whether it is the one that delivers; `null` when the module is not mounted or the answer does not read. */
+  wwdAlerts?: { push: 'on' | 'off'; deliverer: boolean } | null
 }
 
 /** What one fetch round produced, before it becomes an entry. */
-export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error' | 'daemonCapabilities' | 'wwd'>
+export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error' | 'daemonCapabilities' | 'wwd' | 'wwdAlerts'>
 
 /**
  * A request captures the entry's generation and the host identity it went
