@@ -185,14 +185,12 @@ async function bounded($, read) {
   return Promise.race([Promise.resolve().then(read).catch(() => undefined), cap])
 }
 
-// gateConfig is the pdx binary to run and the config file of the daemon that installed the mod, from pdx.json beside VERSION
-// as ask.js does; `pdx` from PATH and its default config when there is none. A second daemon on the host has its own
-// config, and with it its own gate directory: the hook must ask, and send the call to, that one.
+// gateConfig is the pdx binary to run and the wwd entry switch, from pdx.json beside VERSION as ask.js does; `pdx` from PATH and the
+// switch off when there is none.
 async function gateConfig($) {
   const cfg = parse(await bounded($, () => $.fs.read($.plugin.root + '/pdx.json')))
   return {
     bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
-    config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
     entry: isObject(cfg) && typeof cfg.entry === 'string' && cfg.entry !== '', // the wwd entry switch
   }
 }
