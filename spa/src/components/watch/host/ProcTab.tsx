@@ -1,6 +1,6 @@
 // spa/src/components/watch/host/ProcTab.tsx — the host page's 行程 tab (monitoring tabs spec M45, plan MON-8a/8b): the host's top 12 processes by CPU and by memory, side by side, a timeline over the last hour (one record every 15 s),
 // and under them the resident programs. It reads the facts of a host that is ok (`facts.procs` is already the top 12 by each, `facts.residents` the programs a session left running); a host that is not ok has nothing to read, so the
-// tables say it is offline and the timeline is off. The right column under the tables is the undeclared heavy commands (MON-8c; the observation records join in MON-8d).
+// tables say it is offline and the timeline is off. The right column under the tables is the undeclared heavy commands (MON-8c); under them, across the page, the observation records (MON-8d).
 //
 // Tab-hosted checklist: the picked record is the reader's own choice, so it lives in `lib/watch/view-memory` as the record's time (not a place on the timeline: the live end keeps moving), keyed by the pool host id.
 import { useMemo, useState } from 'react'
@@ -10,10 +10,10 @@ import { PROC_STEP_MS, type ProcSnap } from '../../../lib/pool/proc-history'
 import { useProcHistory } from '../../../lib/pool/use-proc-history'
 import { clock, livenessWord } from '../../../lib/pool/words'
 import { useHostObservations } from '../../../lib/pool/use-host-observations'
-import { readProcAt, writeProcAt } from '../../../lib/watch/view-memory'
+import { readObsExpanded, readProcAt, writeObsExpanded, writeProcAt } from '../../../lib/watch/view-memory'
 import { ResidentsTable } from '../ResidentsTable'
 import { ProcList, procRowsOf } from './ProcList'
-import { UndeclaredTable } from './ObservationTables'
+import { RecordsTable, UndeclaredTable } from './ObservationTables'
 
 /** The timeline's positions: the last hour, a step each; the last one is now. */
 const STEPS = 240
@@ -50,6 +50,12 @@ export function ProcTab({ host, now }: { host: MonitorHost; now: number }) {
   }, [live, facts, snap])
   const offline = facts === null
   const obs = useHostObservations(hostId, host.alias, !offline)
+  // Whether every record is drawn is the reader's own choice, kept like the picked time.
+  const [expanded, setExpandedState] = useState(() => readObsExpanded(hostId))
+  const [seenExp, setSeenExp] = useState(hostId)
+  if (seenExp !== hostId) { setSeenExp(hostId); setExpandedState(readObsExpanded(hostId)) }
+  const setExpanded = (on: boolean) => { writeObsExpanded(hostId, on); setExpandedState(on) }
+  const stateWord = livenessWord(t, host.state)
   const position = at === null ? STEPS : Math.max(0, Math.min(STEPS, STEPS - Math.round((now - at) / PROC_STEP_MS)))
   const note = at === null ? null
     : load === 'host_not_local' ? t('watch.host.proc.not_local')
@@ -87,8 +93,10 @@ export function ProcTab({ host, now }: { host: MonitorHost; now: number }) {
       </section>
       <div className="grid grid-cols-2 gap-8">
         <ResidentsTable residents={facts?.residents ?? []} offline={offline} />
-        <UndeclaredTable availability={obs.availability} page={obs.page} load={obs.load} stateWord={livenessWord(t, host.state)} />
+        <UndeclaredTable availability={obs.availability} page={obs.page} load={obs.load} stateWord={stateWord} />
       </div>
+      <RecordsTable availability={obs.availability} records={obs.records} load={obs.recordsLoad} olderLoad={obs.olderLoad} stateWord={stateWord} now={now}
+        expanded={expanded} onToggle={() => setExpanded(!expanded)} onOlder={obs.older} />
     </div>
   )
 }

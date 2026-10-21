@@ -14,6 +14,7 @@ const hostRanges = new Map<string, HostRange>()
 const scrolls = new Map<string, number>()
 /** The 行程 tab's picked record: its time (not a place on the timeline: the live end keeps moving), null = the live one. */
 const procAts = new Map<string, number>()
+const obsExpanded = new Set<string>()
 
 /** The queue block's sub-tab: 當下 (now) or 歷史 (history, W5d). */
 export type QueueTab = 'now' | 'history'
@@ -53,6 +54,10 @@ export const writeHostScroll = (hostId: string, sub: HostSubTab, top: number): v
 export const readProcAt = (hostId: string): number | null => procAts.get(hostId) ?? null
 export const writeProcAt = (hostId: string, at: number | null): void => { if (at === null) procAts.delete(hostId); else procAts.set(hostId, at) }
 
+/** Whether the 行程 tab shows every observation record it holds (not only the newest 10) — the reader's own choice. */
+export const readObsExpanded = (hostId: string): boolean => obsExpanded.has(hostId)
+export const writeObsExpanded = (hostId: string, on: boolean): void => { if (on) obsExpanded.add(hostId); else obsExpanded.delete(hostId) }
+
 export const readQueueTab = (fleetHostId: string): QueueTab => queueTabs.get(fleetHostId) ?? 'now'
 export const writeQueueTab = (fleetHostId: string, tab: QueueTab): void => { queueTabs.set(fleetHostId, tab) }
 export const readHistoryClass = (fleetHostId: string): HistoryClass => historyClasses.get(fleetHostId) ?? 'heavy'
@@ -64,6 +69,6 @@ export const writeEventsScroll = (top: number): void => { eventsScroll = top }
 export const readEventsObservations = (): EventsObservations => eventsObservations
 export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
-  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); procAts.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
+  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); procAts.clear(); obsExpanded.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
   eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }

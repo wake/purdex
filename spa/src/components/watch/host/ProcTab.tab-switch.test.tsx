@@ -8,14 +8,15 @@ vi.mock('../../../lib/host-api', async (orig) => ({ ...(await orig<typeof import
 const fetchPoolHosts = vi.fn()
 const fetchFactsHistory = vi.fn()
 const fetchUndeclared = vi.fn()
-vi.mock('../../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/observations-api')>()), fetchUndeclared: (...a: unknown[]) => fetchUndeclared(...a) }))
+const fetchObservations = vi.fn()
+vi.mock('../../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/observations-api')>()), fetchUndeclared: (...a: unknown[]) => fetchUndeclared(...a), fetchObservations: (...a: unknown[]) => fetchObservations(...a) }))
 vi.mock('../../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/api')>()), fetchPoolHosts: (...a: unknown[]) => fetchPoolHosts(...a), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
 
 import { TabContent } from '../../TabContent'
 import { WatchHostPane } from '../WatchHostPane'
 import { poolHostOf, seedPool, SEED_HOST_ID } from '../host-pane-seed'
 import { registerModule, clearModuleRegistry } from '../../../lib/module-registry'
-import { clearViewMemory, readProcAt } from '../../../lib/watch/view-memory'
+import { clearViewMemory, readObsExpanded, readProcAt } from '../../../lib/watch/view-memory'
 import { clearProcHistory } from '../../../lib/pool/proc-history'
 import { clearHostObservations } from '../../../lib/pool/host-observations'
 import { parseFacts } from '../../../lib/pool/parse'
@@ -27,7 +28,7 @@ import { createTab } from '../../../types/tab'
 import type { Tab } from '../../../types/tab'
 import { fingerprintOf } from '../../../lib/nex/nex-host-effects'
 import { useI18nStore } from '../../../stores/useI18nStore'
-const t = (k: string) => useI18nStore.getState().t(k)
+const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
 const Other = () => <div data-testid="other-tab" />
 const hostTab: Tab = { ...createTab({ kind: 'watch-host', poolHostId: SEED_HOST_ID }), id: `watch-host-${SEED_HOST_ID}` }
@@ -35,7 +36,7 @@ const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
 const all = [hostTab, dashTab]
 
 beforeEach(() => {
-  cleanup(); clearModuleRegistry(); clearViewMemory(); clearProcHistory(); clearHostObservations(); fetchFactsHistory.mockReset(); fetchUndeclared.mockReset()
+  cleanup(); clearModuleRegistry(); clearViewMemory(); clearProcHistory(); clearHostObservations(); fetchFactsHistory.mockReset(); fetchUndeclared.mockReset(); fetchObservations.mockReset(); fetchObservations.mockReturnValue(new Promise(() => {}))
   registerModule({ id: 'watch', name: 'Watch', panes: [{ kind: 'watch-host', component: WatchHostPane }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
@@ -107,5 +108,35 @@ describe('行程 across tab switches', () => {
     fetchUndeclared.mockReturnValue(new Promise(() => {})) // the next read never answers
     rerender(<TabContent activeTab={hostTab} allTabs={all} />)
     expect(screen.getByTestId('undeclared-row-go test')).toBeInTheDocument()
+  }, 30_000)
+  it('keeps the expansion and the older page the reader loaded when they switch away and back: the older page is not asked again (MON-8d)', async () => {
+    const at = Date.now()
+    const rec = (id: string, startedAt: number) => ({ id, host: 'air26', session: 'ab12', via: 'session', command: id, signature: `sig-${id}`, startedAt, endedAt: startedAt + 1000, cpuSeconds: 1, cpuPeak: 100, memPeakMb: 1, procsPeak: 1 })
+    const newest = Array.from({ length: 12 }, (_, i) => rec(`n${i}`, at - 60_000 - i * 1000))
+    fetchObservations.mockReset()
+    fetchObservations.mockImplementation((_s: string, _a: string, q: { until?: string }) => Promise.resolve(q.until
+      ? { host: 'air26', known: true, observations: [rec('old1', at - 3600_000)], truncated: false, nextUntil: null }
+      : { host: 'air26', known: true, observations: newest, truncated: false, nextUntil: 'CURSOR-1' }))
+    const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
+    fireEvent.click(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.procs') }))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getAllByTestId(/^obs-row-/)).toHaveLength(10)
+    fireEvent.click(screen.getByTestId('obs-toggle'))
+    await act(async () => { fireEvent.click(screen.getByTestId('obs-older')) })
+    expect(screen.getByTestId('obs-row-old1')).toBeInTheDocument()
+    expect(readObsExpanded(SEED_HOST_ID)).toBe(true)
+    const asked = fetchObservations.mock.calls.filter((c) => c[2].until !== undefined).length
+    expect(asked).toBe(1)
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('obs-records')).toBeNull() // really unmounted, not hidden
+
+    fetchObservations.mockReset()
+    fetchObservations.mockReturnValue(new Promise(() => {})) // no read answers from here on
+    rerender(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(screen.getAllByTestId(/^obs-row-/)).toHaveLength(13) // still expanded: all 12 and the older one, at once
+    expect(screen.getByTestId('obs-row-old1')).toBeInTheDocument()
+    expect(screen.getByTestId('obs-toggle')).toHaveTextContent(t('watch.host.obs.show_newest', { n: 10 }))
+    expect(fetchObservations.mock.calls.filter((c) => c[2].until !== undefined)).toHaveLength(0) // the older page was not read again
   }, 30_000)
 })

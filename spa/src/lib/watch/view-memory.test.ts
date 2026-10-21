@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  readQueueTab, writeQueueTab, clearViewMemory, readProcAt, writeProcAt,
+  readQueueTab, writeQueueTab, clearViewMemory, readProcAt, writeProcAt, readObsExpanded, writeObsExpanded,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -83,5 +83,17 @@ describe('the 行程 tab\'s picked record (MON-8b)', () => {
     expect(readProcAt('h2')).toBe(5)
     clearViewMemory()
     expect(readProcAt('h2')).toBeNull()
+  })
+
+  it('whether every observation record is shown is kept per host, and cleared with the rest', () => {
+    expect(readObsExpanded('h1')).toBe(false)
+    writeObsExpanded('h1', true)
+    expect(readObsExpanded('h1')).toBe(true)
+    expect(readObsExpanded('h2')).toBe(false)
+    writeObsExpanded('h1', false)
+    expect(readObsExpanded('h1')).toBe(false)
+    writeObsExpanded('h2', true)
+    clearViewMemory()
+    expect(readObsExpanded('h2')).toBe(false)
   })
 })
