@@ -21,7 +21,7 @@ func section(t *testing.T, doc, heading string) string {
 }
 
 // The pdx-test skill names the commands and exit codes pdx test really has, and keeps its warnings: do not get around the wait, do
-// not resend a job whose wait was only interrupted, and keep the outer gate of a script (the contract of pdx-gate).
+// not resend a job whose wait was only interrupted, and do not wrap a script in the old pdx gate (a pass-through since WWD-9 S0).
 func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 	b, err := fs.ReadFile(Files(), "skills/pdx-test/SKILL.md")
 	if err != nil {
@@ -32,7 +32,6 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 		"name: pdx-test", ".wwd/tasks.toml",
 		"pdx test --list", "pdx test --adhoc -- ", "不經 shell",
 		"pdx jobs show <id>", "pdx jobs log <id>", "pdx jobs cancel <id>",
-		"`pdx-gate`",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-test lacks %q", want)
@@ -88,14 +87,14 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 			}
 		}
 	}
-	// the gate is a pass-through (S0): the skill must not promise a slot or an exclusion from an outer `pdx gate`
-	rel := section(t, s, "與 pdx-gate 的關係")
+	// the gate is a pass-through (S0): the skill must not promise a slot or an exclusion from an outer `pdx gate`, and the pdx-gate skill is gone (9a-2)
+	rel := section(t, s, "與舊閘門（pdx gate）的關係")
 	for _, want := range []string{"已經是直通", "不提供任何互斥", "各自交給 `pdx test`", "不必也不要"} {
 		if !strings.Contains(rel, want) {
-			t.Errorf("the pdx-gate section lacks %q", want)
+			t.Errorf("the old-gate section lacks %q", want)
 		}
 	}
-	for _, gone := range []string{"照 `pdx-gate` 的規矩保留外層 gate", "沿用它而不重排", "向閘門拿名額", "雙重排隊", "兩者並存"} {
+	for _, gone := range []string{"照 `pdx-gate` 的規矩保留外層 gate", "`pdx-gate` skill", "見 `pdx-gate`", "沿用它而不重排", "向閘門拿名額", "雙重排隊", "兩者並存"} {
 		if strings.Contains(s, gone) {
 			t.Errorf("the skill still says %q: the outer gate holds nothing now", gone)
 		}
