@@ -5,7 +5,6 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { lookKeyOf, useHostStore } from '../../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry } from '../../stores/useHostLookStore'
 import { usePoolHostsStore, type PoolHostIndicator, type PoolHostLook } from '../../stores/usePoolHostsStore'
-import { useUISettingsStore, type FleetCellIndicator } from '../../stores/useUISettingsStore'
 import { useHostLook, useHostLookResolver, type HostLook } from '../host-look'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { readPoolHostOwners, usePoolHostOwners } from './daemons'
@@ -29,15 +28,11 @@ export interface PoolHostLookPatch {
   indicator?: PoolHostIndicator | null
 }
 
-/** The shape and data of the old global 「主機格指示」, which is each host's default until it is set (W7). */
-export function defaultIndicator(global: FleetCellIndicator): PoolHostIndicator {
-  if (global === 'bars-pressure') return { shape: 'bars', data: ['cpu', 'pressure'] }
-  if (global === 'bars-memory') return { shape: 'bars', data: ['cpu', 'mem'] }
-  return { shape: 'ring', data: ['load'] }
-}
+/** M51: a host that has not set an indicator shows the ring on the overall load. */
+const DEFAULT_INDICATOR: PoolHostIndicator = { shape: 'ring', data: ['load'] }
 
-export function indicatorOf(look: Pick<PoolHostLook, 'indicator'> | undefined, global: FleetCellIndicator): PoolHostIndicator {
-  return look?.indicator ?? defaultIndicator(global)
+export function indicatorOf(look: Pick<PoolHostLook, 'indicator'> | undefined): PoolHostIndicator {
+  return look?.indicator ?? DEFAULT_INDICATOR
 }
 
 /** M13: the ids in `order` first (those the pool lists), the others after them in the pool's own order. */
@@ -66,27 +61,26 @@ const hasFace = (l: Pick<HostLook, 'colors' | 'color' | 'icon' | 'iconWeight'> |
   l !== undefined && (l.colors !== undefined || l.color !== undefined || l.icon !== undefined || l.iconWeight !== undefined)
 
 /**
- * For lists (a hook cannot run in a loop): a resolver over the owners, the host looks, the pool store's looks and the global indicator default, stable while they are.
+ * For lists (a hook cannot run in a loop): a resolver over the owners, the host looks and the pool store's looks, stable while they are.
  * The owner is the host that has been seen to front this wwd, connected or not: where the look lives must not flip with a reconnect.
  */
 export function usePoolHostLookResolver(): (hostId: string) => PoolHostResolvedLook {
   const owners = usePoolHostOwners()
   const resolve = useHostLookResolver()
   const looks = usePoolHostsStore((s) => s.looks)
-  const global = useUISettingsStore((s) => s.fleetCellIndicator)
   return useCallback((hostId: string) => {
     const stored = Object.hasOwn(looks, hostId) ? looks[hostId] : undefined
     const owner = owners[hostId]
     const fromHost = owner !== undefined ? resolve(owner) : undefined
     // A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one.
-    return poolLookOf(stored, fromHost, global)
-  }, [owners, resolve, looks, global])
+    return poolLookOf(stored, fromHost)
+  }, [owners, resolve, looks])
 }
 
 /** A face written to the pool store before the owner was known (first boot) is shown until the host's own look has one. */
-function poolLookOf(stored: PoolHostLook | undefined, fromHost: HostLook | undefined, global: FleetCellIndicator): PoolHostResolvedLook {
+function poolLookOf(stored: PoolHostLook | undefined, fromHost: HostLook | undefined): PoolHostResolvedLook {
   const base = fromHost !== undefined && hasFace(fromHost) ? fromHost : stored
-  return compose(base, indicatorOf(stored, global))
+  return compose(base, indicatorOf(stored))
 }
 
 /** The App host that fronts a pool host, as a primitive: a tab row re-renders only when this changes, not on every write to the host stores it is computed from. */
@@ -109,8 +103,7 @@ export function useTabPoolHostLook(hostId: string): PoolHostResolvedLook {
   const owner = useOwnerOf(hostId)
   const fromOwner = useHostLook(owner ?? null)
   const stored = usePoolHostsStore((s) => (hostId !== '' && Object.hasOwn(s.looks, hostId) ? s.looks[hostId] : undefined))
-  const global = useUISettingsStore((s) => s.fleetCellIndicator)
-  return useMemo(() => poolLookOf(stored, owner !== undefined ? fromOwner : undefined, global), [stored, owner, fromOwner, global])
+  return useMemo(() => poolLookOf(stored, owner !== undefined ? fromOwner : undefined), [stored, owner, fromOwner])
 }
 
 export function usePoolHostLook(hostId: string): PoolHostResolvedLook {

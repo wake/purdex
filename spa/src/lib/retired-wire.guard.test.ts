@@ -31,6 +31,7 @@ const RETIRED_FILES = [
   'lib/fleet/fleet-support.ts',
   'lib/fleet/fleet-ws.ts',
   'lib/pool/pool-look-migration.ts',
+  'lib/pool/indicator-migration.ts', // the global 主機格指示 copy (MON-9a-3), deleted with the field (MON-12c)
   // The Hosts page's probe-host editor, the pool host page and their rows (MON-9b-2).
   'components/hosts/ProbeHostPage.tsx', 'components/hosts/PoolHostPage.tsx', 'components/hosts/ProbeHostEditor.tsx', 'components/hosts/ProbeHostForm.tsx', 'components/hosts/ProbeCheck.tsx',
   'components/hosts/probe-rows.tsx', 'components/hosts/use-probe-rows.ts', 'components/hosts/useProbeEditor.ts', 'components/hosts/PoolStatusDot.tsx', 'components/hosts/pool-status-word.ts',

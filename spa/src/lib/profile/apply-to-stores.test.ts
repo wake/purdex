@@ -548,6 +548,16 @@ describe('applySectionToStores — settings', () => {
     expect(writes).toBe(0)
   })
 
+  // MON-12c: an ordinal-13 build still sends `purdex-ui-settings.fleetCellIndicator`. The guard refuses an unlisted field, so the pull upcasts first (`upcastLegacySettings`): the rest lands, the field is not applied.
+  it('an ordinal-13 payload (ui-settings carries fleetCellIndicator) lands without the field', async () => {
+    const payload = settingsNow()
+    payload['purdex-ui-settings'] = { ...payload['purdex-ui-settings'], fleetCellIndicator: 'bars-memory', dynamicTabName: !UI_DEFAULTS.dynamicTabName } as never
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useUISettingsStore.getState().dynamicTabName).toBe(!UI_DEFAULTS.dynamicTabName)
+    expect('fleetCellIndicator' in (useUISettingsStore.getState() as unknown as Record<string, unknown>)).toBe(false)
+  })
+
   it('bumps terminalSettingsVersion when terminalRenderer changes, and only then', async () => {
     const other = UI_DEFAULTS.terminalRenderer === 'webgl' ? 'dom' : 'webgl'
     const payload = settingsNow()
