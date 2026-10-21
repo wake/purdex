@@ -85,6 +85,6 @@ describe('useAgentNotifications — the daemon\'s notify_label titles the notifi
   it('a worker keeps its title even if a label rides on the event', () => {
     renderHook(() => useAgentNotifications())
     send('exec-w1', ev({ notify_label: { name: 'Mei', group: 'Purdex A team', tmux: 'x' } }))
-    expect(titles()).toEqual(['exec-w1'])
+    expect(titles()).toEqual(['w1']) // the execution id, as before
   })
 })
