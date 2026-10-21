@@ -38,7 +38,7 @@ func Replay(recs []wire.Facts, starts []time.Time, workRoot string, rules ...Rul
 				j := sort.Search(len(upTo), func(k int) bool { return !upTo[k].At.Before(since) })
 				return upTo[j:]
 			},
-			StartsSince: func(since time.Time) (int, error) {
+			UncleanStartsSince: func(since time.Time) (int, error) {
 				lo := sort.Search(len(starts), func(k int) bool { return !starts[k].Before(since) })
 				hi := sort.Search(len(starts), func(k int) bool { return starts[k].After(now) })
 				if hi < lo {

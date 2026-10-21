@@ -30,7 +30,6 @@ export interface HostEvent {
     | 'jobs.changed'
     | 'pool.changed'
     | 'watch.changed'
-    | 'watch.events'
     | 'nex.executions.hello'
     | 'nex.execution'
     | 'hostconfig.personas'

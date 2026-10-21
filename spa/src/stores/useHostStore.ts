@@ -115,6 +115,8 @@ export interface HostInfo {
   capabilities?: unknown
   /** The wwd this daemon is the front of (`pool.identity.v1`); the key is absent when the daemon does not know. */
   wwd?: unknown
+  /** The wwd alert delivery's own status: `{ push: 'on' | 'off', deliverer, suppressed }`, or null while its module is not mounted. */
+  wwdalerts?: unknown
 }
 
 /** `looks`: whether step 2 (the look store, plan §0.20) was written; `'failed'` leaves the hosts added. */

@@ -40,7 +40,9 @@ export const MAX_POOL_HOSTS = 32
 
 const HOST_ID = /^[0-9a-f]{16}$/
 const SHAPES: readonly IndicatorShape[] = ['ring', 'bar', 'bars']
-const ITEMS: readonly IndicatorItem[] = ['load', 'cpu', 'mem', 'pressure', 'sysload', 'disk', 'slots']
+/** The items an indicator can read, in the order the editor lists them. */
+export const INDICATOR_ITEMS: readonly IndicatorItem[] = ['load', 'cpu', 'mem', 'pressure', 'sysload', 'disk', 'slots']
+const ITEMS = INDICATOR_ITEMS
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)

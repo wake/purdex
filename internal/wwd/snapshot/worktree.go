@@ -24,6 +24,8 @@ type SnapshotInfo struct {
 	SHA  string // the commit
 	Root string // the repo's top level
 	Rel  string // the directory the command was run in, relative to Root ("." for the root)
+	// Skipped are the untracked symlinks left out because they point out of the repository (paths relative to Root).
+	Skipped []string
 }
 
 type gitRunFn func(env []string, args ...string) (string, error)
@@ -32,6 +34,7 @@ type gitRunFn func(env []string, args ...string) (string, error)
 type builtTree struct {
 	tree, root string
 	run        gitRunFn
+	skipped    []string // untracked symlinks left out: they lead out of the repository
 }
 
 // buildTree takes the working tree of the repo that contains dir into a temporary index and writes its tree. With quarantine the
@@ -41,7 +44,7 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	if git == "" {
 		git = "git"
 	}
-	runIn := func(env []string, stdin string, args ...string) (string, error) {
+	runRaw := func(env []string, stdin string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, git, append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(gitenv.Clean(os.Environ()), env...)
 		if stdin != "" {
@@ -52,7 +55,11 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		if err := cmd.Run(); err != nil {
 			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 		}
-		return strings.TrimSpace(out.String()), nil
+		return out.String(), nil
+	}
+	runIn := func(env []string, stdin string, args ...string) (string, error) {
+		out, err := runRaw(env, stdin, args...)
+		return strings.TrimSpace(out), err
 	}
 	run := func(env []string, args ...string) (string, error) { return runIn(env, "", args...) }
 	// one git call for the three answers (each process start is a few ms and the whole of this is the fast lane's cost)
@@ -133,19 +140,30 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 	if addErr != nil {
 		return builtTree{}, addErr
 	}
+	skipped, err := dropOutsideLinks(run, runIn, runRaw, idx, root)
+	if err != nil {
+		return builtTree{}, err
+	}
 	tree, err := run(idx, append(tempIndexConfig(), "write-tree")...) // it writes the tree cache back into the index
 	if err != nil {
 		return builtTree{}, err
 	}
-	return builtTree{tree: tree, root: root, run: run}, nil
+	return builtTree{tree: tree, root: root, run: run, skipped: skipped}, nil
 }
 
 // WorkingTree is the tree of the working directory of the repo that contains dir, as it is now (uncommitted and untracked files
 // included, ignored ones left out): HEAD's tree when nothing differs. It writes nothing into the repository and leaves the caller's
 // index alone. git is the git program ("" = git).
 func WorkingTree(ctx context.Context, git, dir string) (string, error) {
+	tree, _, err := WorkingTreeSkipped(ctx, git, dir)
+	return tree, err
+}
+
+// WorkingTreeSkipped is WorkingTree and also the untracked symlinks it left out because they point out of the repository (an absolute
+// target, or one that climbs out, directly or through another link): on another host they point at nothing.
+func WorkingTreeSkipped(ctx context.Context, git, dir string) (string, []string, error) {
 	b, err := buildTree(ctx, git, dir, true)
-	return b.tree, err
+	return b.tree, b.skipped, err
 }
 
 // SnapshotTree commits the working tree of the repo that contains dir. git is the git program ("" = git).
@@ -171,7 +189,7 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 			}
 		}
 	}
-	return SnapshotInfo{SHA: sha, Root: root, Rel: rel}, nil
+	return SnapshotInfo{SHA: sha, Root: root, Rel: rel, Skipped: b.skipped}, nil
 }
 
 // tempIndexConfig is what every git command on the temporary index runs with: the index is written whole (a split index would leave a
@@ -260,4 +278,84 @@ func clearFlags(runIn func(env []string, stdin string, args ...string) (string, 
 		}
 	}
 	return nil
+}
+
+// dropOutsideLinks removes from the temporary index the untracked symlinks that lead out of the repository (the caller's index decides
+// what is tracked: a link the repository holds stays whatever it points at) and returns their paths.
+func dropOutsideLinks(run gitRunFn, runIn, runRaw func(env []string, stdin string, args ...string) (string, error), idx []string, root string) ([]string, error) {
+	list, err := run(nil, "-C", root, "ls-files", "-o", "--exclude-standard", "-z", "--full-name")
+	if err != nil {
+		return nil, fmt.Errorf("listing untracked files: %w", err)
+	}
+	if list == "" {
+		return nil, nil
+	}
+	realRoot, rerr := filepath.EvalSymlinks(root)
+	if rerr != nil {
+		realRoot = root
+	}
+	untracked := map[string]bool{}
+	for _, rel := range strings.Split(list, "\x00") {
+		if rel != "" {
+			untracked[rel] = true
+		}
+	}
+	// What a link points at is read from the temporary index (its blob), the content write-tree is about to take, not from the live
+	// working tree, which may have changed since `add -A`.
+	staged, err := runIn(idx, "", append(tempIndexConfig(), "ls-files", "-s", "-z")...)
+	if err != nil {
+		return nil, fmt.Errorf("listing the temporary index: %w", err)
+	}
+	var out []string
+	for _, ent := range strings.Split(staged, "\x00") { // "<mode> <sha> <stage>\t<path>"
+		meta, rel, ok := strings.Cut(ent, "\t")
+		if !ok || !untracked[rel] {
+			continue
+		}
+		f := strings.Fields(meta)
+		if len(f) != 3 || f[0] != "120000" {
+			continue
+		}
+		target, err := runRaw(idx, "", "cat-file", "blob", f[1]) // raw: a target may begin or end with a space
+		if err != nil {
+			return nil, fmt.Errorf("reading the symlink %s: %w", rel, err)
+		}
+		if linkLeavesRepo(realRoot, filepath.Join(root, rel), rel, target) {
+			out = append(out, rel)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	paths := strings.Join(out, "\x00") + "\x00"
+	if _, err := runIn(idx, paths, append(tempIndexConfig(), "update-index", "--force-remove", "-z", "--stdin")...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// linkLeavesRepo says whether the symlink full (rel to the repository) points out of realRoot: an absolute target, a target that
+// climbs out of the repository by its text, or a path that resolves outside through other links. A link that points at nothing but
+// stays inside is not out.
+func linkLeavesRepo(realRoot, full, rel, target string) bool {
+	if filepath.IsAbs(target) || !filepath.IsLocal(filepath.Join(filepath.Dir(rel), target)) {
+		return true
+	}
+	// resolve the longest part of the target that exists, so that a link through another link is followed to where it really goes
+	p := filepath.Join(filepath.Dir(full), target)
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = filepath.Join(r, rest)
+			break
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return false
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+	r, err := filepath.Rel(realRoot, p)
+	return err != nil || !(r == "." || filepath.IsLocal(r))
 }
