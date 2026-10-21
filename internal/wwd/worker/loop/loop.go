@@ -130,7 +130,7 @@ type Loop struct {
 	ownerRule bool
 
 	mu        sync.Mutex
-	deferred  map[string]time.Time // a job left to a faster host (origin/id) -> when it stops being left; it is told once
+	deferred  map[string]time.Time // a job left to a faster host (origin/id) -> when this host first left it (on its own clock); it is told once
 	running   map[string]*runner.Running
 	lastClaim time.Time
 	lastSweep time.Time
@@ -311,26 +311,55 @@ func (l *Loop) stopAll(ctx context.Context, why string) {
 	wg.Wait()
 }
 
-// noteDeferred tells, once for each job, that it is left to a faster host and until when. The table is swept of the jobs whose time is over
-// (a job that old is taken here from then on), so it stays as small as the queue.
+// deferredSince is when this host first left the job to a faster one, if it did.
+func (l *Loop) deferredSince(j wire.Job) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, ok := l.deferred[j.Origin+"/"+j.ID]
+	return t, ok
+}
+
+// forgetGoneDeferrals drops the jobs that are no longer in the queues this round read, so that the table stays as small as the queue. A job
+// that is still there keeps its entry (it is what ends the leaving by this host's own clock).
+func (l *Loop) forgetGoneDeferrals(cands []pick.Candidate) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.deferred) == 0 {
+		return
+	}
+	here := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		here[c.Job.Origin+"/"+c.Job.ID] = true
+	}
+	for k := range l.deferred {
+		if !here[k] {
+			delete(l.deferred, k)
+		}
+	}
+}
+
+// noteDeferred tells, once for each job, that it is left to a faster host and until when: the earlier of the patience after the submission and
+// the patience after this host first left it.
 func (l *Loop) noteDeferred(j wire.Job, to string, now time.Time) {
-	until := j.CreatedAt.Add(l.cfg.DeferPatience)
 	key := j.Origin + "/" + j.ID
 	l.mu.Lock()
 	if l.deferred == nil {
 		l.deferred = map[string]time.Time{}
 	}
-	for k, t := range l.deferred {
-		if !now.Before(t) {
-			delete(l.deferred, k)
-		}
-	}
-	_, told := l.deferred[key]
-	l.deferred[key] = until
-	l.mu.Unlock()
+	first, told := l.deferred[key]
 	if !told {
-		l.cfg.Logf("worker: leaving %s (task %s of %s) to %s, a faster host with a slot free for it, until %s", key, j.Task, j.Repo.Name, to, until.Format(time.RFC3339))
+		first = now
+		l.deferred[key] = now
 	}
+	l.mu.Unlock()
+	if told {
+		return
+	}
+	until := first.Add(l.cfg.DeferPatience)
+	if byOrigin := j.CreatedAt.Add(l.cfg.DeferPatience); byOrigin.Before(until) {
+		until = byOrigin
+	}
+	l.cfg.Logf("worker: leaving %s (task %s of %s) to %s, a faster host with a slot free for it, until %s", key, j.Task, j.Repo.Name, to, until.Format(time.RFC3339))
 }
 
 func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
@@ -368,7 +397,13 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	}
 	if l.cfg.Peers != nil && l.cfg.DeferPatience > 0 {
 		peers := l.cfg.Peers()
+		l.forgetGoneDeferrals(cands)
 		env.Faster = func(j wire.Job) bool {
+			// The submission time is the origin's clock, which may run ahead of this host's and make a job look younger than it is. So the
+			// leaving also ends when this host has been leaving the job for the patience itself, by its own clock.
+			if first, left := l.deferredSince(j); left && env.Now.Sub(first) >= l.cfg.DeferPatience {
+				return false
+			}
 			to, ok := pick.FasterHost(j, l.cfg.SpeedFactor, peers, env.Now, l.cfg.DeferPatience)
 			if ok {
 				l.noteDeferred(j, to, env.Now)

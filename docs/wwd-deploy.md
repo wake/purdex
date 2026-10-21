@@ -799,7 +799,7 @@ A host that takes a job it could have left to a faster, idle host makes the pull
 **The rule.** Before a worker claims a queued job it asks the pool whether another host answers, has its worker on, **announces a speed_factor that is
 known and strictly below its own**, takes the job by its labels (`pick.Eligible`, with that host's own `explicit_labels_only`) and has a heavy slot free
 for it right now (`derived.HeavyRoomFor`, the reading that host's own worker has, selective holds with `allow` included). If one does, this host skips
-the job. It takes it anyway once the job has waited **`defer_patience_seconds`** since its submission: the faster host did not take it, for whatever
+the job. It takes it anyway once the job has waited **`defer_patience_seconds`** since its submission **or** this host has been leaving it for that long (the submission time is the origin's clock, which may run ahead of this host's; whichever ends first counts): the faster host did not take it, for whatever
 reason, and somebody must. Every class is treated alike, release included: a faster host with room is a quicker release, and a slow host taking a
 `spa-full` or `tsc-force` would run it three times as long.
 

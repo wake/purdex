@@ -582,6 +582,71 @@ func TestAJobThatWaitedAsLongAsThePatienceIsTakenHere(t *testing.T) {
 	waitFor(t, "the old job to be claimed", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
 }
 
+// The submission time is the origin's clock. When it runs ahead of this host's, the job looks like it has not waited at all, and the wait would
+// last as long as the patience plus the difference: so the leaving also ends when this host has left the job for the patience itself (codex R1).
+func TestALeftJobIsTakenAfterThePatienceWhateverTheOriginsClock(t *testing.T) {
+	ahead := qjob("ahead", wire.ClassMerge, -10*time.Minute) // submitted "in the future": the origin's clock is 10 minutes ahead
+	c := newConn("mlab", ahead)
+	r := newRig(t, c)
+	now := time.Now()
+	var mu sync.Mutex
+	r.loop.cfg.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.mu.Lock()
+	r.freezeAt = now // the loop refuses facts from its own future, so they are read at the test's clock
+	r.mu.Unlock()
+
+	r.round()
+	time.Sleep(3 * unit)
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: left to the faster host at first", claims)
+	}
+	r.loop.mu.Lock()
+	left := len(r.loop.deferred)
+	r.loop.mu.Unlock()
+	if left != 1 {
+		t.Fatalf("the round did not leave the job to the faster host (%d left): the test would prove nothing", left)
+	}
+	mu.Lock()
+	now = now.Add(2*time.Minute + time.Second)
+	later := now
+	mu.Unlock()
+	r.mu.Lock()
+	r.freezeAt = later // the facts must not look old to a loop whose clock was moved
+	r.mu.Unlock()
+	r.round()
+	waitFor(t, "the job to be taken once this host has left it for the patience", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+// The table of left jobs keeps only the jobs still in the queues, so it stays as small as the queue.
+func TestTheTableOfLeftJobsForgetsAJobThatIsGone(t *testing.T) {
+	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
+	r := newRig(t, c)
+	now := time.Now()
+	r.loop.cfg.Now = func() time.Time { return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.mu.Lock()
+	r.freezeAt = now
+	r.mu.Unlock()
+	size := func() int { r.loop.mu.Lock(); defer r.loop.mu.Unlock(); return len(r.loop.deferred) }
+
+	r.round()
+	if size() != 1 {
+		t.Fatalf("the job was not left: %d", size())
+	}
+	c.mu.Lock()
+	delete(c.jobs, "spa") // taken by the faster host
+	c.mu.Unlock()
+	r.round()
+	if size() != 0 {
+		t.Errorf("the job is gone and the table keeps %d", size())
+	}
+}
+
 func TestNothingIsLeftWhenThePatienceIsOff(t *testing.T) {
 	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
 	r := newRig(t, c)
