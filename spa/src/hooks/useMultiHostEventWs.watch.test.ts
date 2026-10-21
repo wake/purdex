@@ -75,10 +75,10 @@ describe('useMultiHostEventWs watch pushes (W5e)', () => {
     view.unmount()
   })
 
-  it('a watch.events frame goes to the watch handler with the host id and the type', async () => {
+  it('a watch.events frame (the retired push) is not handed to the watch handler', async () => {
     const view = await connect()
     act(() => { sockets[0].emit(frame('watch.events')) })
-    expect(handleWatchEvent).toHaveBeenCalledWith(HOST, 'watch.events', JSON.stringify({ host_id: 'd1', unhandled: 2, cause: 'recorded' }))
+    expect(handleWatchEvent).not.toHaveBeenCalled()
     view.unmount()
   })
 

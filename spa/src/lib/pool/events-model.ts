@@ -172,3 +172,13 @@ export function liveCounts(rows: readonly EventRow[]): { push: number; other: nu
   }
   return { push, other }
 }
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+
+/** 「42 秒」「3 分 5 秒」-style duration as short numbers: `42s`, `3m05s`, `1h02m`. */
+export function shortDuration(s: number): string {
+  const total = Math.round(s)
+  if (total < 60) return `${total}s`
+  if (total < 3600) return `${Math.floor(total / 60)}m${pad(total % 60)}s`
+  return `${Math.floor(total / 3600)}h${pad(Math.floor((total % 3600) / 60))}m`
+}
