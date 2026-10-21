@@ -27,9 +27,10 @@ var watchDefaultJSON = func() string {
 	return string(b)
 }()
 
-// normalizeWatch validates a PUT body (and a stored value): an object of exactly the watch fields, each in its range. A
-// misspelt or missing threshold field is refused, so a save never means "left out = default". The delivery fields (W2a) may
-// be left out and then read as their defaults, so a row stored before they existed still reads.
+// normalizeWatch validates a PUT body (and a stored value): an object of exactly the watch fields (a misspelt one is refused), each
+// in its range; enabled is required. Every other field may be left out: the detector fields, the patrol numbers and auto_wake then
+// keep the values of the row (normalizeWatchOver; the defaults when reading with none), and the delivery fields (W2a) read as their
+// defaults, so a row stored before they existed still reads.
 func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 	return normalizeWatchOver(raw, watchsettings.Default())
 }
@@ -80,20 +81,44 @@ func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings) (wat
 	if dec.More() {
 		return watchsettings.Settings{}, errors.New("watch: trailing data after the object")
 	}
-	for name, missing := range map[string]bool{
-		"enabled": in.Enabled == nil, "x_cores": in.XCores == nil, "y_mb": in.YMB == nil, "t_s": in.TSeconds == nil,
-		"pressure_level": in.PressureLevel == nil, "pressure_t_s": in.PressureTSeconds == nil, "page_rate": in.PageRate == nil, "page_t_s": in.PageTSeconds == nil,
-	} {
-		if missing {
-			return watchsettings.Settings{}, errors.New(name + " is required")
-		}
+	if in.Enabled == nil {
+		return watchsettings.Settings{}, errors.New("enabled is required")
+	}
+	// The detector fields may be left out (9c-0, #3892): the app that no longer shows them does not write them, and a save then keeps
+	// what the row has. One that is sent as null is not "left out" (json turns null into an absent pointer, so it is looked for here):
+	// it was refused as no value and still is.
+	if err := rejectNullDetectors(raw); err != nil {
+		return watchsettings.Settings{}, err
 	}
 	s := watchsettings.Settings{
-		Enabled: *in.Enabled, XCores: *in.XCores, YMB: *in.YMB, TSeconds: *in.TSeconds,
-		PressureLevel: *in.PressureLevel, PressureTSeconds: *in.PressureTSeconds, PageRate: *in.PageRate, PageTSeconds: *in.PageTSeconds,
+		Enabled: *in.Enabled, XCores: stored.XCores, YMB: stored.YMB, TSeconds: stored.TSeconds,
+		PressureLevel: stored.PressureLevel, PressureTSeconds: stored.PressureTSeconds, PageRate: stored.PageRate, PageTSeconds: stored.PageTSeconds,
+	}
+	if in.XCores != nil {
+		s.XCores = *in.XCores
+	}
+	if in.YMB != nil {
+		s.YMB = *in.YMB
+	}
+	if in.TSeconds != nil {
+		s.TSeconds = *in.TSeconds
+	}
+	if in.PressureLevel != nil {
+		s.PressureLevel = *in.PressureLevel
+	}
+	if in.PressureTSeconds != nil {
+		s.PressureTSeconds = *in.PressureTSeconds
+	}
+	if in.PageRate != nil {
+		s.PageRate = *in.PageRate
+	}
+	if in.PageTSeconds != nil {
+		s.PageTSeconds = *in.PageTSeconds
 	}
 	def := watchsettings.Default()
-	s.Targets, s.Mode, s.PatrolIdleMin, s.AutoWake, s.AgentCommand, s.Workdir = def.Targets, def.Mode, def.PatrolIdleMin, def.AutoWake, def.AgentCommand, def.Workdir
+	// patrol_idle_min and auto_wake left out keep the row's, like the other patrol numbers below (they used to fall back to the default,
+	// which reset what a person had set whenever the writer did not know the field)
+	s.Targets, s.Mode, s.PatrolIdleMin, s.AutoWake, s.AgentCommand, s.Workdir = def.Targets, def.Mode, stored.PatrolIdleMin, stored.AutoWake, def.AgentCommand, def.Workdir
 	if in.Targets != nil {
 		s.Targets = *in.Targets
 	}
@@ -162,6 +187,20 @@ func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings) (wat
 		}
 	}
 	return s, nil
+}
+
+// rejectNullDetectors refuses a detector field whose value is null: left out is allowed, null is not a value.
+func rejectNullDetectors(raw json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("watch: %v", err)
+	}
+	for _, name := range []string{"x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s"} {
+		if v, ok := fields[name]; ok && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return errors.New(name + " must be a number or left out")
+		}
+	}
+	return nil
 }
 
 // readWatch is normalizeWatch's lenient twin (the GET's view): a value that does not read is invalid and answers the default
