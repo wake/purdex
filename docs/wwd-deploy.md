@@ -610,6 +610,13 @@ these; wwd is restarted only after the release gate and the guardian's go-ahead)
    mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
    cache (§10), so it needs network.
 
+5. **`sandbox_user` is part of what a job sees, but not of the result-reuse key.** A job's environment carries `USER` and `LOGNAME` of the account
+   its command runs as: `worker.sandbox_user` on a Linux host with a sandbox (mserv), the daemon's own account elsewhere (#3919). The reuse key
+   (`internal/wwd/reuse`, version 2 from that change) does not name the account. All four hosts run as `wake`, so nothing differs today. **When
+   you change `sandbox_user` on a host, clear that host's `result_cache`** (`DELETE FROM result_cache` in `wwd.db`, wwd stopped), or the host
+   may answer a submission with a result an account of another name produced. The same holds when two hosts that reuse each other's results
+   run as different accounts. A follow-up makes the account part of the key.
+
 ## 13. Switching a host's entry on (S2)
 
 The hook of the Purdex mod asks `pdx entry match` about a test or build command **only on a host whose installed mod has the entry switched on**:
@@ -791,7 +798,25 @@ every host that had one (mlab and air26, read back 2026-10-21; air19 and mserv n
 A shell that started before the setup still has the shim directory on its `PATH`. If it reports `command not found` for `go` and the like, run
 `rehash` or open a new shell. Until then `pdx gate` still skips a leftover shim when it looks for the real tool, so nothing loops.
 
-## 18. A slower host leaves a job to a faster one (#3904)
+## 18. Retiring the assist module (WWD-9 9b-3)
+
+The daemon's `assist` module (`pdx assist …`, `/api/assist*`) is removed in 9b-3. It was the only thing that ran a host's `assist-off` script, and the
+host's state lived in the gate directory's `assist.json`. **A host that is still on when the new build is installed stays on for good**: nobody
+will ever switch it off, and what it holds on the remote side (the assist slice, the cloned repos' environment) stays held.
+
+Before the build that drops the module is installed on a daemon host, with the **old** build still running there:
+
+1. `pdx assist status` — every host must say `要求：關` and its check (`檢查`) must say `主機說 off`. On a host that says on, run `pdx assist off <alias>`
+   and read `pdx assist status` again until the check says off (the check runs about once a minute).
+   **Run `pdx assist off` on air26 only while the wwd there has no running job (RUNNING 0).** The host's `assist-off` script collects every process
+   whose command line carries a `~/Assist/` path (TERM, then KILL under `--apply`), and the wwd's Go toolchain on air26 lives under
+   `~/Assist/toolchains.noindex/go`, so the `compile` and `link` of a running Go job would be killed with it.
+2. Nothing may be in flight: the status shows no pending operation for the host (no `closing`).
+3. Only then install the new build (`pdx setup`, restart).
+
+`assist.json`, `assist-ready.json`, `assist-notified.json` stay on disk in the gate directory and are harmless; delete them when convenient.
+
+## 19. A slower host leaves a job to a faster one (#3904)
 
 A host that takes a job it could have left to a faster, idle host makes the pull request wait. Measured on 2026-10-21 with the same specs: air26
 7:50 to 10:40 for about 17,500 tests, mserv 27:23 (a factor of 2.5 to 3.5; mserv is a 4-core N150 with 3 cores for `wwd.slice`).
