@@ -292,6 +292,9 @@ func TestWakeSettingsSet_AnUnknownPathNamesIt(t *testing.T) {
 	_, cfg := newWakeDaemon(t)
 	_, _, errb := runWake("set", "rules.disk_low.bellow_gb=3", "--config", cfg)
 	require.Contains(t, errb, "rules.disk_low.bellow_gb")
+	require.Contains(t, errb, "no such path", "it says the path is not in the document, not some later complaint about its type")
+	_, _, errb = runWake("set", "rules.nothing.enabled=true", "--config", cfg)
+	require.Contains(t, errb, "no such path")
 }
 
 // ---- set: what the daemon answers ----
