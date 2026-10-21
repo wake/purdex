@@ -20,7 +20,7 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
    | `例行巡檢` | daemon 依無人值守與平穩程度排的巡檢 | 看一次現況（見「查證」），沒事就記一行 |
    | `磁碟空間不足` | 主機磁碟低於門檻 | 同 wwd 警報的 `disk_low` |
    | `輔測開關改變`／`無人值守開關改變` | 使用者或 lead 改了開關 | 見「輔測」一節（WWD-9 移除前）；無人值守只影響巡檢節奏 |
-   | 其他 `[負載守門]` 事件 | 閘門的 watch 事件 | 見「閘門事件與名額」一節（WWD-9 移除前） |
+   | 其他 `[負載守門]` 事件 | 閘門的 watch 事件 | 見「閘門事件」一節（WWD-9 移除前） |
 
 3. 開始時（或剛醒來）也可能收到一則**待辦摘要**：閘門事件的數量與最新幾件。完整清單用 `pdx watch log --unhandled`（可加 `--host <alias>`、`--all`、`--since 24h`、`--kind <種類>`）。
 
@@ -64,14 +64,23 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 
 每次調整都要**告訴人**：哪台主機、什麼、舊值 → 新值、為什麼，並記進日誌。
 
-- **worker 開關與名額**：`pdx wwd worker on|off [--heavy N] [--light N]`，只作用在執行它的那台。先 `pdx wwd status` 讀現值，寫完再讀一次確認。調另一台就 `ssh <alias>` 在那台做；沒有 pdx CLI 的主機（mserv）照 `watch/README.md` 的本機 socket 做法。**不要直接執行 wwd 的二進位**：它的子指令是部署用的；`wwd help` 這類不認得的字，在 #3843 修好前會被當成再啟動一個服務。
+- **worker 開關與名額**：見下面「調整 wwd 名額」。**不要直接執行 wwd 的二進位**：它的子指令是部署用的；`wwd help` 這類不認得的字，在 #3843 修好前會被當成再啟動一個服務。
 - **讓一台暫時不領工作**：`pdx wwd hold <host> --for <dur> --reason <text>`，預設 **heavy 與 light 都停**；加 `--allow-class release|merge|dev`／`--allow-repo <repo>` 時只領那些類別或 repo 的工作；`--release` 是發版保留（期間該台 light 降到 1）。指令會等到該台 facts 顯示 hold 才返回（30 秒），沒出現就失敗。結束用 `pdx wwd exception stop <名字> --host <host>`。正在跑的 job 不受影響。
 - **佇列順序**：`pdx jobs move <id> front|back|hold|normal`（只對本機佇列中的工作）。使用者回報的 bug、merge 前驗證、發版優先。
 - **取消別人的 job**：只在擁有者或它的 lead 同意後 `pdx jobs cancel <id>`。
 
-## 閘門事件與名額（WWD-9 移除前）
+### 調整 wwd 名額
 
-`pdx gate` 拆除前，閘門的 watch 事件照舊會送來，名額也照舊可調。
+使用者的決定：你與人一樣可以**完全控制**各台的 worker 開關與 heavy／light 名額，沒有另外的上下限或限速。四台都用同一組指令，在 mlab 上加 `--host <alias>` 就能看、改另一台，不必 ssh，mserv 也一樣。
+
+1. 先讀現值：`pdx wwd worker --host <alias>`。最後會印出這組設定的 etag。
+2. 寫入要帶剛讀到的 etag：`pdx wwd worker --host <alias> on|off [--heavy N] [--light N] --expect <etag>`。成功時印出讀回的值。如果別人在你讀完之後改過，就什麼都不改，印出現在生效的設定，並以**結束碼 7** 結束——重新讀、重新考慮，不要硬覆蓋。**結束碼 3 是另一件事：執行指令這台的本機 wwd 連不上**（「wwd is not running on this host」），不是衝突。用 `--host` 時，遠端那台出問題多半是結束碼 1，要看錯誤訊息才知道原因。
+3. 寫完再讀一次確認。讀回來不一樣，或寫入失敗，就回報失敗。
+4. **告訴人**：哪台主機、heavy 或 light、舊值 → 新值、為什麼；只是暫時調的話，也說好什麼條件下改回來。
+
+## 閘門事件（WWD-9 移除前）
+
+WWD-9 的 S0 之後，閘門名額不再管任何指令（閘門直通，wwd 也不再向閘門拿槽），所以**不要再用 `pdx gate set` 調名額**，負載的旋鈕只剩上面的 wwd 名額。閘門的 watch 事件在 `pdx gate` 拆除前仍可能送來。
 
 | 事件 | 意思 |
 |---|---|
@@ -85,7 +94,7 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
 - `gate_gap`：gate 本來會替它排隊（重或輕指令），它卻沒經過——多半是直接用路徑呼叫、或從沒有 shim 的環境啟動。
 - `unknown`：gate 的表不認得這個工具或腳本。
 - `allowed`：gate 刻意放行（打包等）。只記錄與送達，不處理。
-- `wwd_job`：wwd 的佇列工作（heavy 的那件佔閘門一個重名額，argv 顯示 `wwd job <id> <task>`）。一建立就標成已處理，不會送給你；要看用 `pdx watch log`。
+- `wwd_job`：wwd 的佇列工作。一建立就標成已處理，不會送給你；要看用 `pdx watch log`。
 
 訊息裡「第一次出現」表示這個指令簽名以前沒看過；之後同樣的只會被計數。同一種事件在短時間內多件會被折成一則「又有 N 件」。
 
@@ -99,19 +108,6 @@ pdx watch ack --all [--host <alias>] --note "…"
 ```
 
 備註必填、一行、至多 500 bytes。有任何一筆沒標到，指令的結束碼不是 0，並列出那些 id——請重看一次，不要略過。查概況用 `pdx watch status`。
-
-### 調整閘門名額
-
-使用者的決定：你與人一樣可以**完全控制**名額（目前範圍 1–64，沒有別的上下限或限速；0＝暫停某類要等之後的版本，現在寫 0 會被拒絕）。步驟：
-
-以下每一步都在**要調整的那台主機**上做；調整另一台就把整串指令包在 `ssh <alias> …` 裡（讀、寫、讀回都一樣，別拿本機的值去驗證遠端）。
-
-1. 先讀現值：`pdx gate status --json`。
-2. 寫入要帶「剛讀到的舊值」：`pdx gate set --expect <舊值> slots.<heavy|light>=<n>`。別人在你讀完之後改過，寫入會被拒絕（結束碼 3）——重新讀、重新考慮，不要硬覆蓋。成功時指令會印出讀回的值。
-3. 寫完再讀一次確認。
-4. **告訴人**：哪台主機、哪個類別、舊值 → 新值、為什麼。寫入失敗或讀回來不一樣，就回報失敗。
-
-名額被孤兒行程佔住時：`pdx gate free <class>-<k>`（先確認佔用者真的沒在做事；沒有人同意時不要加 `--yes`）。
 
 ## 輔測（WWD-9 移除前）
 
@@ -129,7 +125,7 @@ pdx watch ack --all [--host <alias>] --note "…"
 - 查證（見上）。
 - **告訴人**：寫清楚哪台主機、什麼指令或 job、多少資源、持續多久。
 - **告訴啟動那條指令的 session**：用 `pdx msg send <地址> "…"`（地址用 `pdx peers --all` 查），請它改走 `pdx test`／閘門、收掉閒置的東西。
-- 調 wwd 的名額、hold、佇列順序；閘門拆除前調閘門名額。每次都告訴人。
+- 調 wwd 的名額、hold、佇列順序。每次都告訴人。
 - 提議新的規則或門檻——**只提議，使用者同意後才套用**。
 
 ## 你不可以做的事

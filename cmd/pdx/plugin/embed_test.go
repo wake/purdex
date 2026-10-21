@@ -654,13 +654,20 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 		"`gate_gap`", "`unknown`", "`allowed`",
 		"git pull", "purdex-watch", "git push",
 		"pdx watch ack <事件 id>… --note", "pdx watch log --unhandled",
-		"pdx gate status --json", "pdx gate set --expect <舊值> slots.<heavy|light>=<n>", "整串指令包在 `ssh <alias> …` 裡", "別拿本機的值去驗證遠端", "目前範圍 1–64", "結束碼 3",
-		"pdx gate free <class>-<k>", "pdx msg send <地址>",
+		"pdx wwd worker --host <alias>", "--expect <etag>", "結束碼 7", "結束碼 3 是另一件事",
+		"pdx msg send <地址>",
 		"結束一個**沒有佔名額**的行程", "自己改 `watch` 的門檻",
 		"該休息", "該退場", "/exit",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-watch lacks %q", want)
+		}
+	}
+	// The retired gate-slot knob must not be taught. The skill keeps one warning sentence
+	// that names `pdx gate set`, so only the full old forms are forbidden.
+	for _, old := range []string{"pdx gate set --expect", "slots.<heavy|light>="} {
+		if strings.Contains(s, old) {
+			t.Errorf("SKILL.md of pdx-watch still teaches %q", old)
 		}
 	}
 	// Every watch verb the skill names exists in the CLI's own usage text, so the skill cannot teach a command that is not there.
@@ -683,7 +690,7 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 	for _, c := range []struct{ verb, usage string }{
 		{"pdx wwd worker", jobscmd.WWDUsage}, {"pdx wwd hold", jobscmd.WWDUsage},
 		{"pdx wwd pool", jobscmd.WWDUsage}, {"pdx wwd usage", jobscmd.WWDUsage},
-		{"pdx wwd status", jobscmd.WWDUsage}, {"pdx wwd exception stop", jobscmd.WWDUsage},
+		{"pdx wwd exception stop", jobscmd.WWDUsage},
 		{"pdx jobs move", jobscmd.JobsUsage}, {"pdx jobs cancel", jobscmd.JobsUsage}, {"pdx jobs show", jobscmd.JobsUsage},
 	} {
 		if !strings.Contains(s, c.verb) {
