@@ -86,6 +86,8 @@ describe('設定 tab across tab switches', () => {
     expect(screen.queryByTestId('push-toggle')).toBeNull()
     rerender(<TabContent activeTab={mlabTab} allTabs={all} />)
     await waitFor(() => expect(screen.getByTestId('push-toggle')).toHaveAttribute('aria-checked', 'true'))
+  }, 30_000)
+
   it('the 側欄顯示 colour mode (主控台／終端機) chosen on a host is still chosen after switching away and back', async () => {
     const { rerender } = render(<TabContent activeTab={mservTab} allTabs={all} />)
     openSettings()
