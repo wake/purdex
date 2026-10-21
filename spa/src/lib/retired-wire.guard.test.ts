@@ -9,7 +9,7 @@ import ts from 'typescript'
 // @ts-expect-error node:fs is untyped here.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 // @ts-expect-error node:path is untyped here.
-import { join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 
 // @ts-expect-error __dirname is untyped here.
 const SRC: string = join(__dirname, '..')
@@ -49,8 +49,7 @@ const RETIRED_CODE = [
 ]
 
 /**
- * The fleet's wire (MON-12): its routes, its capability, its event, the host-config rows it wrote and the opt-in that asked for it. Not looked for in `lib/fleet/**` (the fleet's own code, which still sends them until MON-12b-3 deletes it);
- * anywhere else in the app a non-test source naming one of these is the wire coming back.
+ * The fleet's wire (MON-12): its routes, its capability, its event, the host-config rows it wrote and the opt-in that asked for it. A non-test source naming one of these is the wire coming back.
  */
 const RETIRED_FLEET_CODE = [
   '/api/fleet', 'fleet.v1', 'fleet.changed', 'hostconfig/probe-hosts', 'hostconfig/fleet',
@@ -59,7 +58,7 @@ const RETIRED_FLEET_CODE = [
 
 /**
  * Every way into the network that `lib/fleet` has (`hostFetch` is called from `api.ts`, `config-api.ts`, `probe-check.ts`; `grep -n hostFetch spa/src/lib/fleet/*.ts` again when this list is changed), and what MON-12b-1 deleted.
- * Not used outside `lib/fleet/**`.
+ * No non-test source may use them.
  */
 const RETIRED_FLEET_NAMES = [
   'fetchFleet', 'readFleetOf', 'readAllFleets', 'fetchFleetConfig', 'fetchSshAliases', 'putProbeHosts', 'putFleetRow', 'runProbeCheck', 'useFleetConfigStore',
@@ -98,22 +97,34 @@ export function stripComments(text: string): string {
   return out
 }
 
-/** Which of the fleet's lists to apply: `lib/fleet/**` (the fleet's own code, until MON-12b-3 deletes it) skips both. */
-export interface FleetScope { wire: boolean; names: boolean }
-const EVERYWHERE: FleetScope = { wire: true, names: true }
-
-export function hitsIn(text: string, fleet: FleetScope = EVERYWHERE): string[] {
-  const fleetCode = fleet.wire ? RETIRED_FLEET_CODE : []
-  const fleetNames = fleet.names ? RETIRED_FLEET_NAMES : []
+export function hitsIn(text: string): string[] {
   // Parsing is the slow part: a file that does not contain a retired term anywhere, comments included, has nothing to find.
-  if (![...RETIRED_CODE, ...RETIRED_NAMES, ...fleetCode, ...fleetNames].some((s) => text.includes(s)) && !/['"`]watch\.['"`]\s*\+/.test(text)) return []
+  if (![...RETIRED_CODE, ...RETIRED_FLEET_CODE, ...RETIRED_NAMES, ...RETIRED_FLEET_NAMES].some((s) => text.includes(s)) && !/['"`]watch\.['"`]\s*\+/.test(text)) return []
   const code = stripComments(text)
   const hits: string[] = []
-  for (const s of [...RETIRED_CODE, ...fleetCode]) if (code.includes(s)) hits.push(s)
-  for (const n of [...RETIRED_NAMES, ...fleetNames]) if (new RegExp(`\\b${n}\\b`).test(code)) hits.push(n)
+  for (const s of [...RETIRED_CODE, ...RETIRED_FLEET_CODE]) if (code.includes(s)) hits.push(s)
+  for (const n of [...RETIRED_NAMES, ...RETIRED_FLEET_NAMES]) if (new RegExp(`\\b${n}\\b`).test(code)) hits.push(n)
   // The event name put together from pieces ('watch.' + 'events'). A guard against drift, not against someone set on getting round it.
   if (/['"`]watch\.['"`]\s*\+/.test(code)) hits.push("'watch.' + …")
   return hits
+}
+
+/** The names of what read the fleet store and its views. Looked for in every file under src, tests included (comments stripped). */
+const FLEET_READERS = /\b(useFleetStore|useFleetHostViews|readFleetView|useFleetConfigStore)\b/
+
+/**
+ * The relative module specifiers of `file` that resolve into `lib/fleet`: any relative string literal (`from`, `import()`, `require`, `vi.mock`, `vi.importActual`…), resolved against the file's own directory,
+ * so `../fleet/QueueStrip` from `components/watch/` (the sidebar's `components/fleet`) is not mistaken for `lib/fleet`. Comments are stripped first.
+ */
+export function fleetImportsIn(file: string, text: string, src: string): string[] {
+  if (!text.includes('fleet')) return []
+  const root = join(src, 'lib', 'fleet')
+  const out: string[] = []
+  for (const m of stripComments(text).matchAll(/['"`](\.{1,2}\/[^'"`]*)['"`]/g)) {
+    const target = join(dirname(file), m[1])
+    if (target === root || target.startsWith(root + '/')) out.push(m[1])
+  }
+  return out
 }
 
 /** The watch routes the SPA may still call (W9): the status, the wake, and the guardian's start key. */
@@ -131,12 +142,12 @@ export function retiredWatchRoutesIn(text: string): string[] {
   return out
 }
 
-function sources(dir: string, out: string[] = []): string[] {
+function sources(dir: string, withTests = false, out: string[] = []): string[] {
   for (const name of readdirSync(dir) as string[]) {
     if (name === 'node_modules') continue
     const full = join(dir, name)
-    if (statSync(full).isDirectory()) sources(full, out)
-    else if (/\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name)) out.push(full)
+    if (statSync(full).isDirectory()) sources(full, withTests, out)
+    else if (/\.(ts|tsx)$/.test(name) && (withTests || !/\.test\.(ts|tsx)$/.test(name))) out.push(full)
   }
   return out
 }
@@ -146,13 +157,29 @@ describe('the retired wire stays retired', () => {
     for (const f of RETIRED_FILES) expect(existsSync(join(SRC, f)), f).toBe(false)
   })
 
+  it('lib/fleet is not there at all', () => {
+    expect(existsSync(join(SRC, 'lib', 'fleet'))).toBe(false)
+  })
+
+  // The whole of src, tests too: a test that imports or names what is gone would be the first step of bringing it back.
+  it('nothing under src imports lib/fleet or names a reader of the fleet store', () => {
+    const hits: string[] = []
+    for (const file of sources(SRC, true)) {
+      const rel = relative(SRC, file)
+      if (rel === SELF) continue
+      const text = readFileSync(file, 'utf8')
+      for (const spec of fleetImportsIn(file, text, SRC)) hits.push(`${rel}: imports ${spec}`)
+      if (FLEET_READERS.test(stripComments(text))) hits.push(`${rel}: names a fleet reader`)
+    }
+    expect(hits).toEqual([])
+  }, 60_000)
+
   it('no source file names a retired route, capability or identifier', () => {
     const hits: string[] = []
     for (const file of sources(SRC)) {
       const rel = relative(SRC, file)
       if (rel === SELF) continue
-      const inFleet = rel.startsWith('lib/fleet/')
-      for (const h of hitsIn(readFileSync(file, 'utf8'), { wire: !inFleet, names: !inFleet })) hits.push(`${rel}: ${h}`)
+      for (const h of hitsIn(readFileSync(file, 'utf8'))) hits.push(`${rel}: ${h}`)
     }
     expect(hits).toEqual([])
   }, 30_000)
@@ -179,7 +206,7 @@ describe('the retired wire stays retired', () => {
     // built from pieces: not told apart from a retired one, so not allowed (codex attack)
     expect(retiredWatchRoutesIn("const p = '/api/watch/' + kind")).toEqual(['/api/watch/<built>'])
     expect(retiredWatchRoutesIn('const p = `/api/watch/${kind}`')).toEqual(['/api/watch/<built>'])
-    // the fleet's wire and the names that reach it: caught outside lib/fleet, left alone inside it
+    // the fleet's wire and the names that reach it
     expect(hitsIn("hostFetch(id, '/api/fleet')")).toEqual(['/api/fleet'])
     expect(hitsIn("hostFetch(id, '/api/fleet/ssh-aliases')")).toEqual(['/api/fleet'])
     expect(hitsIn("caps.includes('fleet.v1')")).toEqual(['fleet.v1'])
@@ -188,8 +215,21 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn("u.searchParams.set('fleet', 'v1')")).toEqual(["searchParams.set('fleet'"])
     expect(hitsIn("u.searchParams.set('agent', 'v2')")).toEqual([])
     expect(hitsIn('readAllFleets(); void startFleetSupport()')).toEqual(['readAllFleets', 'startFleetSupport'])
-    expect(hitsIn("hostFetch(id, '/api/fleet'); readAllFleets()", { wire: false, names: false })).toEqual([])
-    expect(hitsIn("hostFetch(id, '/api/fleet'); readAllFleets()", { wire: true, names: false })).toEqual(['/api/fleet'])
+    // imports are judged by where the specifier lands, not by how it is spelled
+    const f = (file: string, text: string) => fleetImportsIn(join(SRC, file), text, SRC)
+    expect(f('lib/pool/x.ts', "import type { FleetFast } from '../fleet/types'")).toEqual(['../fleet/types'])
+    expect(f('components/fleet/A.tsx', "import { x } from '../../lib/fleet/store'")).toEqual(['../../lib/fleet/store'])
+    expect(f('lib/pool/x.ts', "const m = await import('../fleet')")).toEqual(['../fleet'])
+    expect(f('lib/pool/x.ts', "import '../fleet/store'")).toEqual(['../fleet/store'])
+    expect(f('lib/pool/x.test.ts', "vi.mock('../fleet/reread', () => ({}))")).toEqual(['../fleet/reread'])
+    expect(f('lib/pool/x.ts', "export { x } from '../fleet/store'")).toEqual(['../fleet/store'])
+    // `../fleet/…` from a component is the sidebar's components/fleet, and a name that only looks alike is not a path into lib/fleet
+    expect(f('components/watch/QueueFlow.tsx', "import { QueueSegments } from '../fleet/QueueStrip'")).toEqual([])
+    expect(f('components/watch/host/LookSettings.tsx', "import { HostCell } from '../../fleet/HostCell'")).toEqual([])
+    expect(f('lib/pool/x.ts', "import { x } from './fleet-bridge'; import { y } from '../fleetish/z'")).toEqual([])
+    expect(f('lib/pool/x.ts', "// import { x } from '../fleet/store'\nconst a = 1")).toEqual([])
+    expect(FLEET_READERS.test('const s = useFleetStore.getState()')).toBe(true)
+    expect(FLEET_READERS.test('const s = useFleetStoreLater')).toBe(false)
     expect(hitsIn('// the fleet.v1 capability and fetchFleet are gone\nconst a = 1')).toEqual([])
     expect(hitsIn('const readAllFleetsLater = 1')).toEqual([])
     expect(hitsIn("const type = 'watch.' + 'events'")).toEqual(["'watch.' + …"])
