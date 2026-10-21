@@ -1,5 +1,5 @@
 // spa/src/lib/pool/host-charts.ts — what the host page's 監控 tab draws, as data (monitoring tabs spec M41, M42, M43, M22; plan MON-6d-1): six gauges from the latest facts and six mini charts from the host's samples. Pure: facts and
-// samples come in, plain objects come out; the gauge and `MiniChart` draw them (6d-2) and the words are the caller's (`t` is passed in). The thresholds are written here, next to the gauges that use them.
+// samples come in, plain objects come out; the gauge and `MiniChart` draw them (6d-2) and the words are the caller's (`t` is passed in). The paging, disk and pressure thresholds are written here; the CPU and memory gauges take `usageTone` from `usage-display.ts`.
 import { usageTone, type UsageTone } from '../usage-display'
 import type { HostRange, HostSample } from './host-history'
 import type { PoolFacts } from './types'
