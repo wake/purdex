@@ -20,12 +20,18 @@ const (
 	fallingGBPerHour = 2.0
 	fallingFloorGB   = 10.0
 	fallingHorizon   = 6 * time.Hour
-	// slopeWindow is the span the fall is measured over, and slopeMinSpan the least the history must cover for a slope to count.
-	slopeWindow  = time.Hour
-	slopeMinSpan = 30 * time.Minute
-	// slopeMinSamples is the fewest minutes the slope may stand on: a hour holds about 60, and one with a hole in it (the mount missing for a
-	// while, the daemon down) would otherwise extrapolate two far-apart points six hours ahead.
-	slopeMinSamples = 20
+	// A raised "disk falling" clears later than it raised (#3926): it stays while the fall is still at least fallingClearGBPerHour and the
+	// volume is still under fallingClearFloorGB six hours ahead, so a fall hovering around fallingGBPerHour does not clear and raise every pass.
+	fallingClearGBPerHour = 1.5
+	fallingClearFloorGB   = 12.0
+	// slopeWindow is the span the fall is measured over, and slopeMinSpan the least the history must cover for a slope to count. Three hours
+	// reach over several trims of a cache that is cleaned on a timer (the Go build cache gives back about 4.9 GB each time and grows back at 2 to
+	// 3 GB/h), whose sawtooth the last hour's two ends read as a fall when the hour ends at the bottom of a tooth.
+	slopeWindow  = 3 * time.Hour
+	slopeMinSpan = 90 * time.Minute
+	// slopeMinSamples is the fewest minutes the slope may stand on: three hours hold about 180, and one with a hole in it (the mount missing for
+	// a while, the daemon down) would otherwise extrapolate far-apart points six hours ahead.
+	slopeMinSamples = 60
 )
 
 func volume(in Input) (wire.Disk, error) {
@@ -57,7 +63,8 @@ func (DiskLow) Eval(in Input) (Verdict, error) {
 	return v, nil
 }
 
-// DiskFalling is "disk falling": free < 14 GB, or falling ≥ 2 GB/h with < 10 GB projected within 6 h (digest).
+// DiskFalling is "disk falling": free < 14 GB, or falling ≥ 2 GB/h with < 10 GB projected within 6 h (digest). The fall is the least-squares
+// slope of the last three hours of minutes (#3926). Once raised, it stays while the fall is ≥ 1.5 GB/h and the projection is < 12 GB.
 type DiskFalling struct{}
 
 func (DiskFalling) Kind() wire.AlertKind { return wire.AlertDiskFalling }
@@ -73,22 +80,30 @@ func (DiskFalling) Eval(in Input) (Verdict, error) {
 		return v, nil
 	}
 	rate, ok := fallRate(in, d.Mount)
-	if ok && rate >= fallingGBPerHour && d.FreeGB-rate*fallingHorizon.Hours() < fallingFloorGB {
-		v.Holds, v.Detail = true, fmt.Sprintf("%s 剩 %.1f GB，每小時少 %.1f GB", d.Mount, d.FreeGB, rate)
+	if !ok {
+		return v, nil // not enough history is no judgement, raised or not
+	}
+	minRate, floor := fallingGBPerHour, fallingFloorGB
+	if in.Raised != nil && in.Raised(v.Key) {
+		minRate, floor = fallingClearGBPerHour, fallingClearFloorGB
+	}
+	if rate >= minRate && d.FreeGB-rate*fallingHorizon.Hours() < floor {
+		v.Holds, v.Detail = true, fmt.Sprintf("%s 剩 %.1f GB，每小時少 %.1f GB（3 小時趨勢）", d.Mount, d.FreeGB, rate)
 	}
 	return v, nil
 }
 
-// fallRate is the GB per hour the volume at mount lost over the last hour of minute records, from the oldest to the newest of them; ok is
-// false when there is no history or it covers less than slopeMinSpan.
+// fallRate is the GB per hour the volume at mount lost over the last slopeWindow of minute records: minus the slope of the least-squares line
+// through them, on the clock (hours), not on the record number, so a gap does not bend it. ok is false when there is no history, it covers less than
+// slopeMinSpan, it holds fewer than slopeMinSamples records, or the records are all at one moment.
 func fallRate(in Input, mount string) (float64, bool) {
 	if in.Minutes == nil {
 		return 0, false
 	}
 	var first, last wire.Facts
 	var have bool
-	var firstFree, lastFree float64
-	n := 0
+	type point struct{ x, y float64 } // hours since the oldest record, free GB
+	var pts []point
 	for _, f := range in.Minutes(in.Now.Add(-slopeWindow)) {
 		// only the past, in order: a record after now (the clock stepped back) or out of order is not part of the fall
 		if f.At.After(in.Now) || (have && !f.At.After(last.At)) {
@@ -99,16 +114,30 @@ func fallRate(in Input, mount string) (float64, bool) {
 			continue
 		}
 		if !have {
-			first, firstFree, have = f, free, true
+			first, have = f, true
 		}
-		last, lastFree = f, free
-		n++
+		last = f
+		pts = append(pts, point{f.At.Sub(first.At).Hours(), free})
 	}
-	span := last.At.Sub(first.At)
-	if !have || span < slopeMinSpan || n < slopeMinSamples {
+	if !have || last.At.Sub(first.At) < slopeMinSpan || len(pts) < slopeMinSamples {
 		return 0, false
 	}
-	return (firstFree - lastFree) / span.Hours(), true
+	var sx, sy float64
+	for _, p := range pts {
+		sx += p.x
+		sy += p.y
+	}
+	n := float64(len(pts))
+	mx, my := sx/n, sy/n
+	var sxy, sxx float64
+	for _, p := range pts {
+		sxy += (p.x - mx) * (p.y - my)
+		sxx += (p.x - mx) * (p.x - mx)
+	}
+	if sxx == 0 {
+		return 0, false
+	}
+	return -sxy / sxx, true
 }
 
 func freeOf(f wire.Facts, mount string) (float64, bool) {
