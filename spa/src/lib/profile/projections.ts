@@ -63,8 +63,6 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
       'hostBadgeSidebarRadius',
       'hostBadgeTabBarEnabled', 'hostBadgeTabBarLineColor', 'hostBadgeTabBarBox', 'hostBadgeTabBarInset',
       'hostBadgeTabBarRadius',
-      // 「主機格指示」, the sidebar fleet cell's ring / bars choice — synced like the sidebar badge settings beside it (ordinal 11).
-      'fleetCellIndicator',
     ]),
     ...settingsPaths('purdex-themes', ['activeThemeId', 'customThemes']),
     ...settingsPaths('purdex-i18n', ['activeLocaleId', 'customLocales']),
@@ -152,7 +150,9 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   //13: purdex-pool-hosts.{order,looks} (monitoring tabs spec A3, MON-2a) — a projection change, so the fingerprint moves by itself (no marker).
   //    An ordinal-12 payload has no such store: applying it CLEARS the store (applier `CLEARED_WHEN_ABSENT`); the executor only lands an
   //    older-shape payload on a clean local settings section, so nothing local is lost.
-  settings: 13,
+  //14: purdex-ui-settings.fleetCellIndicator removed (monitoring tabs W7, MON-12c) — a projection change, so the fingerprint moves by itself (no marker). An ordinal-13 payload still carries
+  //    the field: the pull drops it first (applier `upcastLegacySettings`) because the guard refuses an unlisted field, and the field is not applied.
+  settings: 14,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.

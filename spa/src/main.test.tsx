@@ -19,8 +19,6 @@ vi.mock('./stores/useNexHostStore', async (importOriginal) => ({
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
 vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
-// The global 主機格指示 copy (MON-9a-3) is synchronous; the boot-order test below watches when it runs.
-vi.mock('./lib/pool/indicator-migration', () => ({ migrateGlobalIndicator: vi.fn() }))
 vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
@@ -143,33 +141,5 @@ describe('boot', () => {
     await flush()
     expect(startProfileSync).toHaveBeenCalledTimes(1)
     expect(order).toEqual(['migration', 'startProfileSync (marker 1)'])
-  })
-  // Monitoring tabs MON-9a-3 (W7), MON-12b-1: the global 主機格指示 is copied into each host after the host-look migration and before Profile Sync starts, so the first `settings` build already holds the copied
-  // indicators. It does not wait for the pool: the hosts it copies into are the ones this device already stored, and a pool that never answers must not hold Profile Sync back.
-  it('copies the global indicator after the host-look migration and before Profile Sync, without waiting for the pool', async () => {
-    vi.resetModules()
-    const { STORAGE_KEYS } = await import('./lib/storage')
-    localStorage.removeItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)
-    localStorage.setItem(STORAGE_KEYS.POOL_HOSTS, JSON.stringify({ state: { order: ['82b11c521df16c12'], looks: {} }, version: 1 }))
-    const { startProfileSync } = await import('./lib/profile/start')
-    const { migrateGlobalIndicator } = await import('./lib/pool/indicator-migration')
-    const { usePoolHostsStore } = await import('./stores/usePoolHostsStore')
-    const { usePoolStore } = await import('./lib/pool/store')
-    vi.mocked(startProfileSync).mockClear()
-    vi.mocked(migrateGlobalIndicator).mockClear()
-    const order: string[] = []
-    vi.mocked(migrateGlobalIndicator).mockImplementation(() => {
-      order.push(`migrateGlobalIndicator (host-look marker ${localStorage.getItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)}, pool hosts store hydrated ${usePoolHostsStore.persist.hasHydrated()}, order ${usePoolHostsStore.getState().order.length})`)
-    })
-    vi.mocked(startProfileSync).mockImplementation(() => {
-      order.push('startProfileSync')
-      return () => {}
-    })
-    const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
-    await import('./main')
-    await flush()
-    // The pool store never answered in this boot, and Profile Sync started all the same.
-    expect(usePoolStore.getState().sourceHostId).toBeNull()
-    expect(order).toEqual(['migrateGlobalIndicator (host-look marker 1, pool hosts store hydrated true, order 1)', 'startProfileSync'])
   })
 })
