@@ -264,3 +264,64 @@ describe('MiniChart — a host that has gone (M22)', () => {
     expect(container.querySelector('pattern')!.getAttribute('class')).toContain('text-status-error-text')
   })
 })
+
+describe('MiniChart — the full variant (M43, M44; plan MON-7c-2)', () => {
+  const s3 = series(3, 60_000)
+  const fullDef = (over: Partial<ChartDef> = {}): ChartDef => ({
+    id: 'disk', titleKey: 'watch.host.chart.cpu.title', format: 'pct', unit: '%', yMin: 0, yMax: 100, lines: [], pending: false,
+    series: [{ id: 'mount0', labelKey: 'watch.host.chart.s.cpu', label: '/Volumes/data', values: [10, 20, 30], color: 'accent', pending: false }],
+    ...over,
+  })
+
+  it('has no big number at the corner, and the unit sits by the title', () => {
+    show(fullDef(), s3, { variant: 'full' })
+    expect(screen.queryByTestId('mini-big')).toBeNull()
+    expect(screen.getByTestId('mini-unit')).toHaveTextContent('%')
+  })
+
+  it('the legend writes the value of the last point, with the series\' own name as it is', () => {
+    show(fullDef(), s3, { variant: 'full' })
+    const legend = screen.getByTestId('mini-legend-mount0')
+    expect(legend).toHaveTextContent('/Volumes/data')
+    expect(legend).toHaveTextContent('30%')
+    expect(legend).not.toHaveTextContent('10%')
+  })
+
+  it('the hovered point\'s value replaces it', () => {
+    show(fullDef(), s3, { variant: 'full', hoverIndex: 0 })
+    expect(screen.getByTestId('mini-legend-mount0')).toHaveTextContent('10%')
+  })
+
+  it('a name that is a word goes through t with its parameters', () => {
+    const def = fullDef({ series: [{ id: 'core0', labelKey: 'watch.host.chart.s.cpu', labelParams: { n: 1 }, values: [1, 2, 3], color: 'accent', pending: false }] })
+    show(def, s3, { variant: 'full' })
+    expect(screen.getByTestId('mini-legend-core0')).toHaveTextContent(t('watch.host.chart.s.cpu', { n: 1 }))
+  })
+
+  it('five times on the time axis, where a mini card has three', () => {
+    const { unmount } = show(fullDef(), s3, { variant: 'full' })
+    expect([0, 1, 2, 3, 4].map((i) => screen.getByTestId(`mini-xtick-${i}`).textContent)).toEqual([0, 1 / 4, 1 / 2, 3 / 4, 1].map((p) => hm(NOW - RANGE_MS['5m'] * (1 - p))))
+    unmount()
+    show(defOf(s3, 'cpu'), s3)
+    expect(screen.queryByTestId('mini-xtick-3')).toBeNull()
+  })
+
+  it('a note is an info mark whose title is the note', () => {
+    show(fullDef({ noteKey: 'watch.host.chart.pending_all' }), s3, { variant: 'full' })
+    expect(screen.getByTestId('mini-note')).toHaveAttribute('title', t('watch.host.chart.pending_all'))
+  })
+
+  it('a chart that is pending says its own word (pendingKey); one the platform does not have says that (noneKey) instead', () => {
+    const { unmount } = show(fullDef({ pending: true, pendingKey: 'watch.host.chart.s.cpu' }), s3, { variant: 'full' })
+    expect(screen.getByTestId('mini-pending')).toHaveTextContent(t('watch.host.chart.s.cpu'))
+    unmount()
+    show(fullDef({ pending: true, pendingKey: 'watch.host.chart.s.cpu', noneKey: 'watch.host.chart.s.load1' }), s3, { variant: 'full' })
+    expect(screen.getByTestId('mini-pending')).toHaveTextContent(t('watch.host.chart.s.load1'))
+  })
+
+  it('the mini card is as it was: big number, no unit mark', () => {
+    show(defOf(s3, 'cpu'), s3)
+    expect(screen.getByTestId('mini-big')).toBeInTheDocument()
+    expect(screen.queryByTestId('mini-unit')).toBeNull()
+  })
+})
