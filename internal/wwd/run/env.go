@@ -38,11 +38,25 @@ var currentUser = func() string {
 	return os.Getenv("USER")
 }
 
-// BuildEnv is the environment of a job's command: PATH and TERM, USER and LOGNAME (the account the runner runs as, left out when
+// BuildEnv is buildEnv for a command that runs as the account of this process.
+func BuildEnv(jobID, origin, workspace string, taskEnv, parent []string) ([]string, error) {
+	return buildEnv(currentUser(), jobID, origin, workspace, taskEnv, parent)
+}
+
+// accountOf is the account the spec's command runs as: the sandbox's (`systemd-run --uid=<Sandbox.User>`) when it has one, and
+// otherwise the account of this process. The environment must name that one, not the daemon's, when the two differ.
+func accountOf(spec Spec) string {
+	if spec.Sandbox != nil {
+		return spec.Sandbox.User
+	}
+	return currentUser()
+}
+
+// buildEnv is the environment of a job's command: PATH and TERM, USER and LOGNAME (account, the one the command runs as, left out when
 // it cannot be told; macOS tools such as xcodebuild fail without a username), HOME, TMPDIR and the XDG directories inside the workspace,
 // the job mark (the id, and the origin tag when there is one), and what the task's env list asks for. An entry is "NAME" (taken from parent when it has it) or "NAME=value"
 // (fixed). parent is only read for allowed names; nothing else of it reaches the command.
-func BuildEnv(jobID, origin, workspace string, taskEnv, parent []string) ([]string, error) {
+func buildEnv(account, jobID, origin, workspace string, taskEnv, parent []string) ([]string, error) {
 	// the mark must be one the facts' shared check recognises, or the sweep and the attribution could not find the job
 	tag, id, ok := facts.MarkFromEnv([]string{MarkEnv + "=" + jobID, OriginEnv + "=" + origin})
 	if !ok {
@@ -76,8 +90,8 @@ func BuildEnv(jobID, origin, workspace string, taskEnv, parent []string) ([]stri
 	if origin != "" {
 		env[OriginEnv] = origin
 	}
-	if name := currentUser(); name != "" {
-		env["USER"], env["LOGNAME"] = name, name
+	if account != "" {
+		env["USER"], env["LOGNAME"] = account, account
 	}
 	if p, ok := parentVal["PATH"]; ok {
 		env["PATH"] = p
