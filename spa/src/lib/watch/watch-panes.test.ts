@@ -8,7 +8,6 @@ import { layoutFromWire, layoutToWire, identityOfSync } from '../profile/host-id
 import { ICON_MAP } from '../../components/tab-icon-map'
 import { clearModuleRegistry, getModule, getPaneRenderer } from '../module-registry'
 import { registerBuiltinModules } from '../register-modules'
-import { useFleetStore } from '../fleet/store'
 import { useAlertsStore } from '../pool/alerts-store'
 import { getTabBadgePane, getTabHostId } from '../host-color'
 import { usePoolStore } from '../pool/store'
@@ -22,7 +21,7 @@ const host = (id: string): PaneContent => ({ kind: 'watch-host', fleetHostId: id
 const leaf = (content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id: 'p', content } })
 
 describe('watch pane kinds', () => {
-  beforeEach(() => { useFleetStore.getState().reset(); useAlertsStore.getState().reset() })
+  beforeEach(() => { useAlertsStore.getState().reset() })
 
   it('the events tab carries the number of active push-level alerts (「事件 n」, M36)', () => {
     const al = (key: string, over: Record<string, unknown> = {}) => ({ key, kind: 'disk_low', level: 'push', since: 1, last: 2, clearedAt: null, detail: key, ...over })
@@ -33,15 +32,11 @@ describe('watch pane kinds', () => {
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, (k, p) => (p ? `${k}:${p.n}` : k))).toBe('watch.pane.events_n:2')
     useAlertsStore.getState().reset()
   })
-  it('labels: guardian, events, and the host alias from the fleet snapshot (id as fallback)', () => {
+  it('labels: guardian, events, jobs, and an old host tab by its fleet id', () => {
     expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')
     expect(getPaneLabel({ kind: 'watch-jobs' }, sessions, workspaces, t)).toBe('watch.pane.jobs')
     // a tab from before the pool is named by its fleet id: the fleet is no longer read for it (MON-6a-2); the tab is collected within a minute
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
-    useFleetStore.setState({
-      snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } },
-    })
     expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
   })
 
@@ -104,7 +99,6 @@ describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
   const pooled = (id: string): PaneContent => ({ kind: 'watch-host', poolHostId: id })
   const answer = (hosts: Array<{ host_id: string; alias: string }>) => usePoolStore.setState({ hosts: hosts as never, sourceHostId: 'cfg-a' } as never)
   beforeEach(() => {
-    useFleetStore.getState().reset()
     usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
     resetRememberedPoolHosts()
   })
@@ -127,8 +121,7 @@ describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
     expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv-2')
   })
 
-  it('label of an old content is its fleet id, not the fleet\'s alias or the pool\'s', () => {
-    useFleetStore.setState({ snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } } })
+  it('label of an old content is its fleet id, not the pool\'s alias', () => {
     answer([{ host_id: 'h1', alias: 'from-pool' }])
     expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
   })

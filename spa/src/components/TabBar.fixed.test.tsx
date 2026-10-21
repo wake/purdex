@@ -4,7 +4,6 @@ import type { DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { createTab, type PaneContent, type Tab } from '../types/tab'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
-import { useFleetStore } from '../lib/fleet/store'
 import { useI18nStore } from '../stores/useI18nStore'
 
 // The fixed row is the watcher area's tab row (spec §3): nothing is added, locked, closed or menu'd, but the order can be dragged.
@@ -32,7 +31,6 @@ beforeEach(() => {
   cleanup()
   clearModuleRegistry()
   registerModule({ id: 'watch-area', name: 'W', panes: [{ kind: 'watch-host', component: () => null }] })
-  useFleetStore.getState().reset()
 })
 
 describe('TabBar fixed (the watcher area row)', () => {
