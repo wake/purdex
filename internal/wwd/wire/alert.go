@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -77,6 +78,13 @@ const (
 	AlertPressureWatch  AlertKind = "pressure_watch"
 	AlertPressureDanger AlertKind = "pressure_danger"
 	AlertSwapGrowth     AlertKind = "swap_growth"
+	// The queue's four rules (spec §13.3, WWD-9 S3-3b), level watch, written by the host the queue is on only where [advisor] queue_rules is
+	// on. This build reads them (S3-3a). A reader from before S3-3a refuses the whole list that holds one, so the rules are switched on after
+	// every reader has this build; from S3-3a on a reader skips what it does not know (ErrUnknownAlertKind). The four spellings are wire contract.
+	AlertQueueStalled     AlertKind = "queue_stalled"     // a slot a queued job could take is free and the job has not been taken for 5 minutes
+	AlertJobRequeued      AlertKind = "job_requeued"      // one job has been put back (attempts + lapses) 3 times
+	AlertQueueBacklog     AlertKind = "queue_backlog"     // the oldest queued job has waited 20 minutes
+	AlertQueueUnclaimable AlertKind = "queue_unclaimable" // a queued job asks for labels no host with its worker on has, for 10 minutes
 )
 
 // The two kinds of silence about a peer (key silence:<alias>) are told apart by their words, not by a field of the alert: GET /v1/alerts is
@@ -123,7 +131,8 @@ func SilenceHostDown(detail string) bool { return strings.HasSuffix(detail, sile
 func (k AlertKind) Valid() bool {
 	switch k {
 	case AlertDiskLow, AlertDiskFalling, AlertPressureHeld, AlertMservService, AlertWorkerCrash, AlertSilence,
-		AlertThrash, AlertResidentGrowth, AlertOrphans, AlertPressureWatch, AlertPressureDanger, AlertSwapGrowth:
+		AlertThrash, AlertResidentGrowth, AlertOrphans, AlertPressureWatch, AlertPressureDanger, AlertSwapGrowth,
+		AlertQueueStalled, AlertJobRequeued, AlertQueueBacklog, AlertQueueUnclaimable:
 		return true
 	}
 	return false
@@ -180,15 +189,23 @@ type Alert struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// ErrUnknownAlertKind and ErrUnknownAlertLevel are what Validate wraps (errors.Is) for a kind or a level this build does not know: the one
+// failure a reader of the alert list may take as "an alert of a later release" and skip, where any other is a broken list. Only the two
+// alert-specific readers (client.Alerts, store.ActiveAlerts) do; every other payload is still refused whole.
+var (
+	ErrUnknownAlertKind  = errors.New("unknown alert kind")
+	ErrUnknownAlertLevel = errors.New("unknown alert level")
+)
+
 func (a Alert) Validate() error {
 	if a.Key == "" || len(a.Key) > MaxAlertKeyBytes {
 		return fmt.Errorf("alert: the key must be 1 to %d bytes", MaxAlertKeyBytes)
 	}
 	if !a.Kind.Valid() {
-		return fmt.Errorf("alert: invalid kind %q", a.Kind)
+		return fmt.Errorf("alert: invalid kind %q: %w", a.Kind, ErrUnknownAlertKind)
 	}
 	if !a.Level.Valid() {
-		return fmt.Errorf("alert: invalid level %q", a.Level)
+		return fmt.Errorf("alert: invalid level %q: %w", a.Level, ErrUnknownAlertLevel)
 	}
 	if len(a.Detail) > MaxAlertDetailBytes || strings.ContainsFunc(a.Detail, unicode.IsControl) || !utf8.ValidString(a.Detail) {
 		return fmt.Errorf("alert: the detail must be valid text without control characters, at most %d bytes", MaxAlertDetailBytes)

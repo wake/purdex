@@ -10,8 +10,9 @@ import (
 )
 
 // ActiveAlerts are the host's alerts that are not cleared, ordered by key. It is never nil: an empty table is an empty list. A row
-// that is not a valid wire.Alert (a kind or level this build does not know, a bad key) is an error, not a silent gap: the reader
-// would otherwise show a quieter host than it is.
+// that is not a valid wire.Alert (a bad key, text that is not text) is an error, not a silent gap: the reader would otherwise show a
+// quieter host than it is. The one exception is a kind or level this build does not know (S3-3a): a row a later release wrote and this
+// one was started back on, which is left out and said once in the log (SetLogf), the rest of the list being what it is.
 func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 	rows, err := s.db.Query(`SELECT key, kind, level, since_ms, last_ms, detail FROM alerts WHERE cleared_ms IS NULL ORDER BY key`)
 	if err != nil {
@@ -30,6 +31,12 @@ func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 		a.Detail = wire.TruncateDetail(detail) // a text over the limit is cut on the way out, not a reason to hide the alert
 		a.Since, a.Last = time.UnixMilli(since).UTC(), time.UnixMilli(last).UTC()
 		if err := a.Validate(); err != nil {
+			if wire.IsUnknownAlert(err) {
+				if what, first := s.alertSkips.First(a, err); first {
+					s.logf("store: the alerts table has a row (key %q) of %s that this build does not know: left out of the list (said once)", a.Key, what)
+				}
+				continue
+			}
 			return nil, fmt.Errorf("store: alerts row %q: %w", a.Key, err)
 		}
 		out = append(out, a)
