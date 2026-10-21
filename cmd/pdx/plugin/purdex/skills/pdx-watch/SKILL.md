@@ -19,7 +19,7 @@ description: 負載守門員（load watcher）的工作手冊。你是 Purdex �
    | `wwd 警報` | 某台的 wwd advisor 發出警報，說明形如 `<主機>：<規則>｜<細節>` | 照下面「wwd 警報」一節處置 |
    | `例行巡檢` | daemon 依無人值守與平穩程度排的巡檢 | 看一次現況（見「查證」），沒事就記一行 |
    | `磁碟空間不足` | 主機磁碟低於門檻 | 同 wwd 警報的 `disk_low` |
-   | `輔測開關改變`／`無人值守開關改變` | 使用者或 lead 改了開關 | 見「輔測」一節（WWD-9 移除前）；無人值守只影響巡檢節奏 |
+   | `輔測開關改變`／`無人值守開關改變` | 使用者或 lead 改了開關 | 輔測已退場（`pdx assist` 已移除，不再有環境要準備），收到就當提示、不用做事；無人值守只影響巡檢節奏 |
    | 其他 `[負載守門]` 事件 | 閘門的 watch 事件 | 見「閘門事件」一節（WWD-9 移除前） |
 
 3. 開始時（或剛醒來）也可能收到一則**待辦摘要**：閘門事件的數量與最新幾件。完整清單用 `pdx watch log --unhandled`（可加 `--host <alias>`、`--all`、`--since 24h`、`--kind <種類>`）。
@@ -108,17 +108,6 @@ pdx watch ack --all [--host <alias>] --note "…"
 ```
 
 備註必填、一行、至多 500 bytes。有任何一筆沒標到，指令的結束碼不是 0，並列出那些 id——請重看一次，不要略過。查概況用 `pdx watch status`。
-
-## 輔測（WWD-9 移除前）
-
-輔測是把測試送去 air26／mserv 跑，正逐 repo 換成 wwd 佇列（`pdx test`）。還沒換的 repo 照舊：開關與允許名單由 daemon 管（`pdx assist …`），**環境是你準備**。
-
-- **`輔測開關改變`**（提示形如「air26 輔測 關→開 by … ：理由」）
-  - **→ 開**：對該主機上**允許名單內每個隊伍或 session 的 repo**準備環境——在 `~/Assist/repos.noindex` clone 或 fetch、裝好工具；`assist-check` 說某個資料夾在 air26 上還沒被信任時，**請人去信任**，不要自己繞過。然後 `pdx assist status`，一直看到那個 repo 顯示「就緒」。
-  - **→ 關**：用 `assist-check`（該主機的腳本）確認資源真的還回去了（約 60 秒內），把結果**告訴人**。
-- **`assist_allowed`**（提示形如「team … 可用 air26 by … ：理由」）：準備**那個隊伍或 session**的 repo，做法同上。
-
-你**不**打開或關閉輔測、也不改允許名單——那是使用者與 lead 的事（`pdx assist on|off|allow|deny`）。你可以調的是各主機的負載門檻：`pdx assist host set <別名> --load-limit <每核負載> --idle-min <CPU 閒置 %> --hold-min <分鐘>`（先 `pdx assist status` 讀現值，改完讀回來，並告訴人為什麼）。
 
 ## 你可以做的事
 
