@@ -344,6 +344,47 @@ func TestWakeSettings_ANonSourceHostSaysItIsNotAndDoesNotWrite(t *testing.T) {
 	assert.Empty(t, r.events_())
 }
 
+// The source can change while a PUT is on its way (peers.alias or [watch] wake_source is edited): a host that has stopped being the source
+// does not commit the write, and does not say 200 for it.
+func TestWakeSettings_APutDoesNotCommitOnAHostThatStoppedBeingTheSource(t *testing.T) {
+	r := newWakeRig(t, "mlab")
+	etag := r.get(t)["etag"].(string)
+	r.m.beforeWakeCommit = func() { // after the PUT has read and checked everything, before it writes
+		r.m.core.CfgMu.Lock()
+		r.m.core.Cfg.Watch = &config.WatchConfig{WakeSource: "air26"}
+		r.m.core.CfgMu.Unlock()
+	}
+	s := watchwake.Default("Asia/Taipei")
+	s.Rules.DiskLow.BelowGB = 77
+	rr := r.do(adminCtx, http.MethodPut, putBody(t, s, etag))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"error":"source_unreachable","source":"air26"}`, rr.Body.String(), "it names the source as it is now")
+	_, rev, _, _ := r.rows.Get(hostconfig.KeyWatchWake)
+	assert.Equal(t, int64(1), rev, "nothing was written")
+	assert.Empty(t, r.events_())
+}
+
+// A config change waits for a PUT that is committing, so the check and the write are not apart: the commit holds the config's read lock.
+func TestWakeSettings_ACommitHoldsTheConfigReadLock(t *testing.T) {
+	r := newWakeRig(t, "mlab")
+	etag := r.get(t)["etag"].(string)
+	held := make(chan bool, 1)
+	r.m.beforeWakeCommit = nil
+	r.m.duringWakeCommit = func() { held <- !r.m.core.CfgMu.TryLock() } // a writer cannot get in while the commit is under way
+	rr := r.do(adminCtx, http.MethodPut, putBody(t, watchwake.Default("Asia/Taipei"), etag))
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.True(t, <-held, "the config write lock was free during the commit")
+}
+
+func TestLocalZoneName_TZWinsAndANonNameIsSkipped(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	assert.Equal(t, "America/New_York", localZoneName())
+	t.Setenv("TZ", "Not/AZone")
+	got := localZoneName()
+	assert.NotEqual(t, "Not/AZone", got)
+	assert.True(t, watchwake.ValidZone(got), "whatever it falls back to is a name the document accepts: %q", got)
+}
+
 // A host that never set peers.alias goes by the alias its host id gives (Config.PeerAlias): mlab:… is mlab, the default source.
 func TestWakeSettings_TheAliasComesFromTheHostIDWhenNoneIsSet(t *testing.T) {
 	r := newWakeRig(t, "mlab")

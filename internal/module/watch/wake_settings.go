@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -81,12 +82,16 @@ func localZoneName() string {
 			candidates = append(candidates, target[i+len("zoneinfo/"):])
 		}
 	}
+	if b, err := os.ReadFile("/etc/timezone"); err == nil { // Debian and Ubuntu name the zone here even when /etc/localtime is a copy
+		candidates = append(candidates, strings.TrimSpace(string(b)))
+	}
 	candidates = append(candidates, time.Now().Location().String())
 	for _, c := range candidates {
 		if watchwake.ValidZone(c) {
 			return c
 		}
 	}
+	log.Printf("[watch] could not tell this host's time zone (TZ, /etc/localtime and /etc/timezone give no IANA name): the wake settings start with UTC; set rules.patrol.tz")
 	return "UTC"
 }
 
