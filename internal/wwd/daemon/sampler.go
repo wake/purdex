@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/derived"
@@ -32,10 +31,6 @@ type SamplerOptions struct {
 	WorkerEnabled            bool
 	Fault                    *fault.Hooks // test hooks (nil: none): the owner file and the zone override
 	OwnerRule                string       // free text shown in facts.worker.owner_rule ("" without an owner rule)
-	// GateHeavyFull, when set, says whether this host's pdx gate has all its heavy slots held (or cannot be read): headroom.heavy is then
-	// 0, because until WWD-6 a queue job runs outside the gate's slots (#3447). nil: this host has no gate to count. It is asked on every
-	// sample, outside the sampler's lock, and does file reads only.
-	GateHeavyFull func() bool
 	// WorkRoot is the directory jobs run in: the volume that holds it is the one the worker's disk floor (disk_min_gb, from State) is
 	// measured on (derived.DiskLow). Empty: no disk floor is applied.
 	WorkRoot string
@@ -75,8 +70,6 @@ type Sampler struct {
 	collector *facts.Collector
 	latch     derived.ZoneLatch
 	mstats    derived.MinuteAgg // the open minute's per-sample totals (guarded by mu)
-
-	gateFull atomic.Bool // the gate's reading at the last sample (GateFull)
 
 	mu      sync.RWMutex
 	ring    *facts.Ring
@@ -189,8 +182,6 @@ func (s *Sampler) Tick(now time.Time) {
 		// reason that names the hook (jobusage ignores it, like the active one)
 		f.Owner = &wire.OwnerState{Active: false, Reason: "fault: owner_active_file absent"}
 	}
-	gateFull := s.opts.GateHeavyFull != nil && s.opts.GateHeavyFull() // file reads: before the lock
-	s.gateFull.Store(gateFull)
 	if s.opts.Running != nil {
 		f.Worker.Running = s.opts.Running()
 	}
@@ -200,7 +191,7 @@ func (s *Sampler) Tick(now time.Time) {
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
 		OwnerActive: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
-		GateHeavyFull: gateFull, DiskLow: diskLow,
+		DiskLow: diskLow,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB
@@ -439,9 +430,6 @@ func (s *Sampler) logDisk(err error) {
 		log.Printf("wwd: sampling: the free space of the work root %s cannot be read, no disk floor applies: %v", s.opts.WorkRoot, err)
 	}
 }
-
-// GateFull is whether the gate had all its heavy slots held at the last sample (false before the first, or without a gate to read).
-func (s *Sampler) GateFull() bool { return s.gateFull.Load() }
 
 // Shaped is f in the shape the gate allows now: while the gate is shut a record written while it was open (v 2, with the new fields)
 // is handed out as v1, on a copy, so the ring and the store keep what they were written as. Records already in v1 shape come back

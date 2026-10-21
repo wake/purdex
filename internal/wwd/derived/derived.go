@@ -92,9 +92,6 @@ type Input struct {
 	Exceptions    []Hold
 	AvailableMB   int
 	CompressorMB  int // memory held by the compressor (0 where there is none)
-	// GateHeavyFull: the pdx gate on this host has all its heavy slots held (or cannot be read). Until WWD-6 a queue job is outside the
-	// gate's slots, so a full gate stops new heavy work here; the job already running is not touched (#3447).
-	GateHeavyFull bool
 	// DiskLow: the work volume has less free space than the worker's disk floor (DiskLow). Heavy work is held; light work is not.
 	DiskLow bool
 }

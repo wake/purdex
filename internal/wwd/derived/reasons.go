@@ -14,7 +14,8 @@ const (
 	ReasonOwnerActive = "owner_active"
 	ReasonDiskLow     = "disk_low" // the work volume has less free space than the worker's disk floor; heavy only
 	ReasonSlotsFull   = "slots_full"
-	ReasonGateFull    = "gate_full"
+	// ReasonGateFull is no longer produced (WWD-9: the pdx gate is gone); the string stays because an older App or peer still knows it.
+	ReasonGateFull = "gate_full"
 	// ReasonUnknown is a side at 0 that nothing in the record explains; only Why gives it (Compute always knows).
 	ReasonUnknown = "unknown"
 )
@@ -27,7 +28,6 @@ type judgement struct {
 	owner     bool
 	diskLow   bool       // the work volume is under the disk floor: holds heavy
 	free      wire.Slots // slots less what runs
-	gateFull  bool
 }
 
 // reasons lists, in the spec's order, what holds each side. A side with none has room.
@@ -63,15 +63,11 @@ func (j judgement) reasons() wire.HeadroomReasons {
 	if j.free.Light <= 0 {
 		light = append(light, ReasonSlotsFull)
 	}
-	if j.gateFull {
-		heavy = append(heavy, ReasonGateFull)
-	}
 	return wire.HeadroomReasons{Heavy: heavy, Light: light}
 }
 
-// Why is the reasons of a facts record. A record does not carry the gate (GateHeavyFull) or which exception holds light work, so
-// those are read as what is left: heavy at 0 with no other reason is gate_full; light at 0 with slots free, no zone or owner reason
-// and some exceptions is those exceptions. worker_off is the worker's own flag and does not touch the headroom the record states.
+// Why is the reasons of a facts record. A record does not carry which exception holds light work, so that is read as what is left:
+// light at 0 with slots free, no zone or owner reason and some exceptions is those exceptions. worker_off is the worker's own flag and does not touch the headroom the record states.
 func Why(f wire.Facts) wire.HeadroomReasons {
 	j := judgement{
 		workerOff: !f.Worker.Enabled, zone: f.Derived.Zone, owner: f.Worker.OwnerRule != "" && f.Owner != nil && f.Owner.Active, // as Compute is fed: a reading counts only with a rule in force
@@ -87,13 +83,12 @@ func Why(f wire.Facts) wire.HeadroomReasons {
 			j.holds[i].Light = true
 		}
 	}
-	// the same for the gate: heavy at 0 with nothing else in the way
-	if f.Derived.Headroom.Heavy == 0 && j.reasonsHeavyIgnoringWorker() == 0 {
-		j.gateFull = true
-	}
 	r := j.reasons()
-	// a light side at 0 for no reason the record shows (a skewed or faulty peer): never an empty list, which means "there is room".
-	// (Heavy needs no such line: a heavy 0 nothing else explains is gate_full, above.)
+	// a side at 0 for no reason the record shows (a skewed or faulty peer, or an older record that was held by a gate this build no
+	// longer has): never an empty list, which means "there is room".
+	if f.Derived.Headroom.Heavy == 0 && len(r.Heavy) == 0 {
+		r.Heavy = append(r.Heavy, ReasonUnknown)
+	}
 	if f.Derived.Headroom.Light == 0 && len(r.Light) == 0 {
 		r.Light = append(r.Light, ReasonUnknown)
 	}
@@ -106,22 +101,16 @@ func (j judgement) reasonsLightIgnoringHolds() int {
 	return len(j.withoutWorker().reasons().Light)
 }
 
-// reasonsHeavyIgnoringWorker counts the heavy reasons other than worker_off and the gate.
-func (j judgement) reasonsHeavyIgnoringWorker() int {
-	j.gateFull = false
-	return len(j.withoutWorker().reasons().Heavy)
-}
-
 func (j judgement) withoutWorker() judgement {
 	j.workerOff = false
 	return j
 }
 
-// ComputeWithReasons is Compute, and the reasons it was decided by (the gate is known here, so they are exact).
+// ComputeWithReasons is Compute, and the reasons it was decided by (exact).
 func ComputeWithReasons(l *ZoneLatch, in Input) (wire.Derived, wire.HeadroomReasons) {
 	zone := l.Update(in.Pressure, in.PageRate, in.RateLimit, in.PressureKnown)
 	j := judgement{
-		zone: zone, holds: in.Exceptions, owner: in.OwnerActive, gateFull: in.GateHeavyFull, diskLow: in.DiskLow,
+		zone: zone, holds: in.Exceptions, owner: in.OwnerActive, diskLow: in.DiskLow,
 		free: wire.Slots{Heavy: free(in.Slots.Heavy, in.Running.Heavy), Light: free(releaseLightSlots(in.Slots.Light, in.Exceptions), in.Running.Light)},
 	}
 	r := j.reasons()

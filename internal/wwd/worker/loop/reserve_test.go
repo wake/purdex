@@ -2,10 +2,14 @@ package loop
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 )
 
 // No room in the ledger, no claim: the queue is not touched, and nothing is left booked.
@@ -54,12 +58,65 @@ func TestTheReservationIsReleasedAfterTheJobIsRunning(t *testing.T) {
 // A round that claims nothing (every candidate refused) also gives the reservation back.
 func TestTheReservationIsReleasedWhenNothingIsClaimed(t *testing.T) {
 	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
-	g := &fakeGate{free: 0} // the gate has no slot: the round ends before any claim
-	r := withGate(newRig(t, c), g)
+	c.claimErr["j1"] = errors.New("409") // the only candidate is refused: nothing is claimed
+	r := newRig(t, c)
 	released := 0
 	r.loop.cfg.Reserve = func() (func(), bool) { return func() { released++ }, true }
 	r.round()
 	if released != 1 {
 		t.Fatalf("released %d times, want once", released)
+	}
+}
+
+// WWD-9 W3: the worker no longer asks the pdx gate for anything. With the host's ledger and the facts saying there is room, a job is
+// claimed and run whatever the state of a gate on the host (full, paused or absent: the loop cannot tell, there is nothing to ask).
+func TestAJobIsClaimedWithoutAnyGateToAsk(t *testing.T) {
+	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+}
+
+// WWD-9 W3: a quarantined job's command may still run, and the pdx gate no longer counts it. The worker does: it holds one heavy slot
+// until the sweep proves the unit gone.
+func TestAQuarantinedJobStillTakesItsHeavySlot(t *testing.T) {
+	c := newConn("mlab", qjob("free", wire.ClassDev, time.Minute))
+	q := newQRig(t, c)
+	q.st.Slots.Heavy = 1
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := q.loop.Running(); n != 1 {
+		t.Fatalf("Running %d, want the quarantined job counted", n)
+	}
+	q.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v with the only heavy slot taken by a quarantined job", claims)
+	}
+	q.units.mu.Lock()
+	q.units.gone["wwd-old"] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	if n := q.loop.Running(); n != 0 {
+		t.Fatalf("Running %d after the quarantine cleared", n)
+	}
+	time.Sleep(2 * unit)
+	q.round()
+	waitFor(t, "the claim", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+// A job is in the running map and in the quarantine from the moment its marker is written until its delivery is over: it counts once, so
+// one quarantined job does not hide a second heavy slot.
+func TestAJobBothRunningAndQuarantinedCountsOnce(t *testing.T) {
+	c := newConn("mlab", qjob("j1", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.ex.run = blockUntilDone
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/j1", JobID: "j1", Origin: "mlab", Dir: filepath.Join(q.root, "j1"), Unit: "wwd-j1"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := q.loop.Running(); n != 1 {
+		t.Fatalf("Running %d, want the one job counted once", n)
 	}
 }

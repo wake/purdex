@@ -286,7 +286,7 @@ func (e Exception) Validate() error {
 // ---- Purdex daemon API for the App (spec §10) ----
 
 // HeadroomReasons says why a side of a host's headroom is 0: the codes of spec §3.2 in this order, worker_off, zone_warning |
-// zone_danger | zone_unknown, exception:<name>, owner_active, slots_full, gate_full (and unknown for a side at 0 that a faulty record does not explain). An empty list means there is room. Both lists are
+// zone_danger | zone_unknown, exception:<name>, owner_active, slots_full (gate_full is no longer produced, the string stays for older readers; and unknown for a side at 0 that a faulty record does not explain). An empty list means there is room. Both lists are
 // never null.
 type HeadroomReasons struct {
 	Heavy []string `json:"heavy"`
