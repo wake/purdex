@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/derived"
@@ -164,21 +165,35 @@ func (QueueStalled) Eval(in Input) (Verdict, error) {
 }
 
 // QueueUnclaimable is "queue unclaimable": a job that is not on hold has waited 10 minutes or more (from the submission) and no host
-// that answers with its worker on would take it, by its labels. A host that is down, or has its worker off (a release hold), takes nothing;
-// a label that was quarantined is not in the host's labels. It cannot hold with QueueStalled for one job: that one needs a host that takes it.
-type QueueUnclaimable struct{}
+// that answers with its worker on would take it, by its labels, for 10 minutes running. A host that is down, or has its worker off (a
+// release hold), takes nothing; a label that was quarantined is not in the host's labels. It cannot hold with QueueStalled for one job:
+// that one needs a host that takes it.
+//
+// "For 10 minutes running" is judged by the rule itself, not by one look at the pool: a host answers /v1/info within 3 seconds, and under
+// a heavy load (a simulator run ending, load1 50 to 80) one answer is late and the host is unreachable for one poll (#3941). So the rule
+// remembers, per job, since when no host has taken it, and a look that finds a host that takes it starts the ten minutes again. The
+// memory is the rule's own and lives in the process: after a restart the ten minutes start again (the alert comes later, never wrongly).
+// The zero value is ready to use; Eval is safe to call from several goroutines.
+type QueueUnclaimable struct {
+	mu sync.Mutex
+	// since is, per job id, when the first look of the current run of looks found no host that takes it.
+	since map[string]time.Time
+}
 
-func (QueueUnclaimable) Kind() wire.AlertKind { return wire.AlertQueueUnclaimable }
+func (*QueueUnclaimable) Kind() wire.AlertKind { return wire.AlertQueueUnclaimable }
 
-func (QueueUnclaimable) Eval(in Input) (Verdict, error) {
+func (r *QueueUnclaimable) Eval(in Input) (Verdict, error) {
 	jobs, pool, err := queueInput(in)
 	if err != nil {
 		return Verdict{}, err
 	}
 	v := Verdict{Key: string(wire.AlertQueueUnclaimable), Level: wire.AlertWatch}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next := make(map[string]time.Time, len(jobs)) // a job that is gone from the queue is forgotten
 	var ids []string
 	for _, j := range jobs {
-		if j.Held || waited(in.Now, j.CreatedAt) < queueUnclaimableAfter {
+		if j.Held {
 			continue
 		}
 		taken := false
@@ -188,10 +203,19 @@ func (QueueUnclaimable) Eval(in Input) (Verdict, error) {
 				break
 			}
 		}
-		if !taken {
+		if taken {
+			continue
+		}
+		since, ok := r.since[j.ID]
+		if !ok {
+			since = in.Now
+		}
+		next[j.ID] = since
+		if waited(in.Now, j.CreatedAt) >= queueUnclaimableAfter && waited(in.Now, since) >= queueUnclaimableAfter {
 			ids = append(ids, j.ID)
 		}
 	}
+	r.since = next
 	if len(ids) > 0 {
 		v.Holds, v.Detail = true, "沒有主機接得了："+named(ids)
 	}
