@@ -21,7 +21,7 @@ const t = (k: string) => useI18nStore.getState().t(k)
 const ROW = { enabled: true, mode: 'patrol', patrol_idle_min: 120, auto_wake: true, agent_command: 'claude', workdir: '~/w', start_prompt: '', wake_prompt: '' }
 vi.mock('../../../lib/host-api', async (orig) => ({
   ...(await orig<typeof import('../../../lib/host-api')>()),
-  hostFetch: async (_id: string, path: string) => new Response(path === '/api/hostconfig' ? JSON.stringify({ watch: { items: ROW, revision: 3 } }) : '{}', { status: 200 }),
+  hostFetch: async (_id: string, path: string) => new Response(path === '/api/hostconfig' ? JSON.stringify({ watch: { items: ROW, revision: 3 }, wwdAlerts: { items: { push: true }, revision: 2 } }) : '{}', { status: 200 }),
 }))
 
 // The host tab starts the pool's poll (as the cells do); it answers with the hosts this test seeds, so the poll does not wipe the seeded store.
@@ -76,6 +76,16 @@ describe('設定 tab across tab switches', () => {
     expect(screen.getByTestId('pool-pause-flag-release')).toBeChecked()
     expect(screen.getByTestId(`watch-host-${MSERV_ID}`).scrollTop).toBe(321)
     expect(screen.queryByTestId('watch-set-guardian')).toBeNull() // no daemon, no guardian section
+  }, 30_000)
+
+  it('the 推播 switch reads its state again after switching away and back, and shows the same value', async () => {
+    const { rerender } = render(<TabContent activeTab={mlabTab} allTabs={all} />)
+    openSettings()
+    await waitFor(() => expect(screen.getByTestId('push-toggle')).toHaveAttribute('aria-checked', 'true'))
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('push-toggle')).toBeNull()
+    rerender(<TabContent activeTab={mlabTab} allTabs={all} />)
+    await waitFor(() => expect(screen.getByTestId('push-toggle')).toHaveAttribute('aria-checked', 'true'))
   }, 30_000)
 
   it('mlab (a daemon): a half-typed guardian path is still there after switching away and back', async () => {
