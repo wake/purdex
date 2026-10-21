@@ -601,10 +601,26 @@ function isSettingsPayload(p: Rec): boolean {
 export function upcastLegacySettings(payload: unknown): unknown {
   try {
     if (!isPlainObject(payload)) return payload
-    const store = payload['purdex-newtab-layout']
-    if (!isPlainObject(store) || !Object.hasOwn(store, 'profiles') || Object.hasOwn(store, 'presets')) return payload
-    const { profiles, ...rest } = store
-    return { ...payload, 'purdex-newtab-layout': { ...rest, presets: profiles } }
+    let out: Rec = payload
+    const layout = out['purdex-newtab-layout']
+    if (isPlainObject(layout) && Object.hasOwn(layout, 'profiles') && !Object.hasOwn(layout, 'presets')) {
+      const { profiles, ...rest } = layout
+      out = { ...out, 'purdex-newtab-layout': { ...rest, presets: profiles } }
+    }
+    // Ordinal 13 → 14 (monitoring tabs W7, MON-12c): `purdex-ui-settings.fleetCellIndicator` left the projection. An ordinal-13 build still sends it, and the guard refuses an unlisted
+    // field, so the pull would be turned down whole; drop it here. A store left with nothing goes away too (the guard refuses an empty store; an absent one is simply not sent).
+    const ui = out['purdex-ui-settings']
+    if (isPlainObject(ui) && Object.hasOwn(ui, 'fleetCellIndicator')) {
+      const { fleetCellIndicator: _gone, ...rest } = ui
+      void _gone
+      if (Object.keys(rest).length > 0) out = { ...out, 'purdex-ui-settings': rest }
+      else {
+        const { 'purdex-ui-settings': _store, ...others } = out
+        void _store
+        out = others
+      }
+    }
+    return out
   } catch {
     return payload
   }

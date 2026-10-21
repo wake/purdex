@@ -17,7 +17,6 @@ beforeEach(() => {
   useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: 1000, daemonCapabilities: ['pool.v1'], wwd: { hostId: WWD_A, alias: 'mlab' } } } } as never)
   useHostLookStore.setState({ looks: {} })
   usePoolHostsStore.setState({ order: [], looks: {} })
-  useUISettingsStore.setState({ fleetCellIndicator: 'ring' } as never)
 })
 
 describe('orderPoolHosts (M13)', () => {
@@ -36,16 +35,20 @@ describe('orderPoolHosts (M13)', () => {
 
 describe('indicatorOf (W7)', () => {
   it('the stored indicator wins', () => {
-    expect(indicatorOf({ indicator: { shape: 'bar', data: ['disk'] } }, 'ring')).toEqual({ shape: 'bar', data: ['disk'] })
+    expect(indicatorOf({ indicator: { shape: 'bar', data: ['disk'] } })).toEqual({ shape: 'bar', data: ['disk'] })
   })
-  it('the default comes from the global fleetCellIndicator', () => {
-    expect(indicatorOf(undefined, 'ring')).toEqual({ shape: 'ring', data: ['load'] })
-    expect(indicatorOf({}, 'bars-pressure')).toEqual({ shape: 'bars', data: ['cpu', 'pressure'] })
-    expect(indicatorOf(undefined, 'bars-memory')).toEqual({ shape: 'bars', data: ['cpu', 'mem'] })
+  it('a host with none shows the ring on the overall load (M51): there is no global value to take the default from any more', () => {
+    expect(indicatorOf(undefined)).toEqual({ shape: 'ring', data: ['load'] })
+    expect(indicatorOf({})).toEqual({ shape: 'ring', data: ['load'] })
   })
 })
 
 describe('usePoolHostLook', () => {
+  it('a global value left in the store by an older build does not decide the default (MON-12c)', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' } as never)
+    const { result } = renderHook(() => usePoolHostLook(WWD_B))
+    expect(result.current.indicator).toEqual({ shape: 'ring', data: ['load'] })
+  })
   it('a host with a daemon reads the daemon host\'s look (the one the tab badge shows)', () => {
     useHostLookStore.setState({ looks: { 'cfg-a': { colors: { terminal: { bg: '#112233' } } as never, icon: 'HardDrives' } } })
     usePoolHostsStore.setState({ looks: { [WWD_A]: { icon: 'Cube' } } }) // ignored for colour and icon

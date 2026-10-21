@@ -1309,3 +1309,47 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
     expect(out['purdex-newtab-layout']).toEqual(p['purdex-newtab-layout'])
   })
 })
+
+describe('upcastLegacySettings — an ordinal-13 settings payload (ui-settings `fleetCellIndicator`) reads as ordinal 14 (MON-12c)', () => {
+  it('drops purdex-ui-settings.fleetCellIndicator, touching nothing else, never mutating; the guard then accepts it', () => {
+    const legacy = deepFreeze({
+      'purdex-ui-settings': { keepAliveCount: 3, fleetCellIndicator: 'bars-memory' },
+      'purdex-layout': { tabPosition: 'left' },
+    })
+    const out = upcastLegacySettings(legacy) as Record<string, unknown>
+    expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-layout': { tabPosition: 'left' } })
+    expect(out).not.toBe(legacy)
+    expect(out['purdex-layout']).toBe(legacy['purdex-layout']) // untouched stores are the same objects
+    expect(legacy['purdex-ui-settings']).toEqual({ keepAliveCount: 3, fleetCellIndicator: 'bars-memory' }) // input intact
+    expect(isWellFormedSection('settings', out)).toBe(true)
+    expect(isWellFormedSection('settings', legacy)).toBe(false) // why it is needed: the guard refuses an unlisted field
+  })
+
+  it('a ui-settings store with nothing but the field goes away whole (the guard refuses an empty store)', () => {
+    const legacy = deepFreeze({ 'purdex-ui-settings': { fleetCellIndicator: 'ring' }, 'purdex-layout': { tabPosition: 'top' } })
+    expect(upcastLegacySettings(legacy)).toEqual({ 'purdex-layout': { tabPosition: 'top' } })
+  })
+
+  it('an ordinal-14 payload, or no ui-settings store, or not a payload at all → same reference', () => {
+    const current = deepFreeze({ 'purdex-ui-settings': { keepAliveCount: 3 } })
+    expect(upcastLegacySettings(current)).toBe(current)
+    const noStore = deepFreeze({ 'purdex-layout': { tabPosition: 'top' } })
+    expect(upcastLegacySettings(noStore)).toBe(noStore)
+    for (const odd of [null, undefined, 5, 'x', []] as unknown[]) expect(upcastLegacySettings(odd)).toBe(odd)
+    for (const store of [null, 7, 'fleetCellIndicator', [{ fleetCellIndicator: 'ring' }]] as unknown[]) {
+      const p = deepFreeze({ 'purdex-ui-settings': store })
+      expect(upcastLegacySettings(p)).toBe(p)
+    }
+  })
+
+  it('both the ordinal-3 and the ordinal-13 changes in one payload are both made', () => {
+    const legacy = deepFreeze({
+      'purdex-ui-settings': { keepAliveCount: 3, fleetCellIndicator: 'ring' },
+      'purdex-newtab-layout': { profiles: { '1col': { enabled: true, columns: [['a']] } } },
+    })
+    expect(upcastLegacySettings(legacy)).toEqual({
+      'purdex-ui-settings': { keepAliveCount: 3 },
+      'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['a']] } } },
+    })
+  })
+})

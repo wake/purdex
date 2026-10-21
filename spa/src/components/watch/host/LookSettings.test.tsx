@@ -7,7 +7,6 @@ import { MAX_POOL_HOSTS, usePoolHostsStore } from '../../../stores/usePoolHostsS
 import { useHostLookStore } from '../../../stores/useHostLookStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
-import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { clearViewMemory, readLookMode } from '../../../lib/watch/view-memory'
 import { usePoolHostLook } from '../../../lib/pool/host-looks'
@@ -59,7 +58,6 @@ beforeEach(() => {
   cleanup(); clearViewMemory()
   usePoolHostsStore.setState({ order: [], looks: {} })
   useHostLookStore.setState({ looks: {} } as never)
-  useUISettingsStore.setState({ fleetCellIndicator: 'ring' })
   useHostStore.setState({ hosts: { 'cfg-a': { id: 'cfg-a', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['cfg-a'], runtime: {} } as never)
   useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: Date.now(), wwd: { hostId: MLAB, alias: 'mlab' } } } } as never)
   listed = [monitorHost(MLAB, 'mlab', 'cfg-a'), monitorHost(AIR, 'air26', null), monitorHost(MSERV, 'mserv', null), monitorHost('bbbbbbbbbbbbbbbb', 'fourth', null)]

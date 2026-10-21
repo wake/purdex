@@ -360,7 +360,7 @@ describe('PROJECTIONS', () => {
     const valueFields = Object.keys(state).filter((k) => typeof state[k] !== 'function').sort()
     const listed = [...settingsFieldsByStore()[STORAGE_KEYS.UI_SETTINGS]].sort()
     expect(listed).toEqual(valueFields.filter((k) => k !== 'terminalSettingsVersion'))
-    expect(listed).toHaveLength(26) // 25 + fleetCellIndicator (#3033, settings ordinal 11)
+    expect(listed).toHaveLength(25) // fleetCellIndicator (#3033, ordinal 11) went with MON-12c, settings ordinal 14
   })
 })
 
@@ -767,24 +767,23 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
-  // 「主機格指示」 (#3033): `purdex-ui-settings.fleetCellIndicator` joins `settings` beside the sidebar badge settings — a
-  // projection change, so the fingerprint moves by itself (no marker) and the ordinal goes 10 → 11. The ordinal-10 client
+  // 「主機格指示」 (#3033): `purdex-ui-settings.fleetCellIndicator` joined `settings` at ordinal 11 and left it at ordinal 14 (MON-12c). The ordinal-10 shape is this build's list without what came after it:
+  // the task groups (12) and the pool hosts (13) — the field is no longer in the list, so there is nothing to take out for it. The ordinal-10 client
   // meets a settings row of this build as newer and locks; this build pulls an ordinal-10 row.
   describe('fleet cell indicator: the ordinal-10 settings client and this build', () => {
-    const FIELD = 'purdex-ui-settings.fleetCellIndicator'
+    const LATER = (p: string) => p.startsWith('purdex-task-groups.') || p.startsWith('purdex-pool-hosts.')
     async function oldShapes(): Promise<Record<SectionKind, Shape>> {
       const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
       return {
         hosts: await row('hosts'),
         tabs: await row('tabs'),
         workspaces: await row('workspaces'),
-        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => p !== FIELD), ...WIRE_MARKERS.settings]), ordinal: 10 },
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => !LATER(p)), ...WIRE_MARKERS.settings]), ordinal: 10 },
       }
     }
 
-    it('the field is listed, the store has it, no new marker, settings ordinal 11', () => {
-      expect(PROJECTIONS.settings).toContain(FIELD)
-      expect(Object.keys(useUISettingsStore.getState())).toContain('fleetCellIndicator')
+    it('the ordinal-10 shape differs from this build\'s, no new marker, settings ordinal at least 11', () => {
+      expect(PROJECTIONS.settings.filter(LATER).length).toBeGreaterThan(0)
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
       expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(11)
     })
@@ -797,6 +796,44 @@ describe('shape: fingerprint and ordinal', () => {
     })
 
     it('this build meets an ordinal-10 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
+  // 「主機格指示」 left `settings` at ordinal 14 (monitoring tabs W7, MON-12c): `purdex-ui-settings.fleetCellIndicator` is not projected any more — a projection change, so the fingerprint moves by itself
+  // (no marker). The ordinal-13 client (the last build that listed it) meets a settings row of this build as newer and locks; this build pulls an ordinal-13 row.
+  describe('fleet cell indicator removed: the ordinal-13 settings client and this build', () => {
+    const FIELD = 'purdex-ui-settings.fleetCellIndicator'
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        // the last PUBLISHED shape: this build's list with the field still in it
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings, FIELD, ...WIRE_MARKERS.settings]), ordinal: 13 },
+      }
+    }
+
+    it('the field is not listed, the store does not have it, no new marker, settings ordinal 14', () => {
+      expect(PROJECTIONS.settings).not.toContain(FIELD)
+      expect(Object.keys(useUISettingsStore.getState())).not.toContain('fleetCellIndicator')
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(14)
+    })
+
+    it('an index holding a settings row of this build → sot-is-newer (locked:schema) for the ordinal-13 client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-13 settings row as i-am-newer (pulls it, no lock)', async () => {
       const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
       const old = (await oldShapes()).settings
       expect(compareShape(mine, old)).toBe('i-am-newer')
@@ -821,8 +858,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "57bbaec511405a102d6e7c2958f4c44da54430f7e87d01dcdfffb5bbba9ba4b7",
-          13,
+          "5a244497f2e6c5b8a26a3a1ac263421955372a3b4da342e5bba35dbf4b03cd7a",
+          14,
         ],
         "tabs": [
           "411e633f8b3d40cc46b8bb33d1693a16d6670c536ce8b11d3b7b2e566010a59e",

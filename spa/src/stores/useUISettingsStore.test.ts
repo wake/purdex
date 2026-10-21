@@ -20,9 +20,6 @@ import {
   clampHostBadgeRadius,
   isHostBadgeLineColor,
   sanitizeHostBadgePrefs,
-  FLEET_CELL_INDICATORS,
-  FLEET_CELL_INDICATOR_DEFAULT,
-  isFleetCellIndicator,
 } from './useUISettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 
@@ -541,52 +538,46 @@ describe('link detection settings', () => {
   })
 })
 
-// 「主機格指示」 (the user, 10-16 on #3033): what the sidebar's fleet host cell draws beside its badge.
-describe('fleet host cell indicator', () => {
+// 「主機格指示」 (#3033) moved into each pool host's own indicator (MON-9a-3) and the global field is gone (MON-12c): persist version 5.
+describe('the removed fleet host cell indicator (MON-12c)', () => {
   beforeEach(() => {
     localStorage.clear()
-    useUISettingsStore.setState({ fleetCellIndicator: FLEET_CELL_INDICATOR_DEFAULT })
   })
-
-  it('has three values and defaults to the ring', () => {
-    expect([...FLEET_CELL_INDICATORS]).toEqual(['ring', 'bars-pressure', 'bars-memory'])
-    expect(FLEET_CELL_INDICATOR_DEFAULT).toBe('ring')
-    expect(useUISettingsStore.getInitialState().fleetCellIndicator).toBe('ring')
-  })
-
-  it('the setter takes the three values and ignores anything else', () => {
-    const { setFleetCellIndicator } = useUISettingsStore.getState()
-    setFleetCellIndicator('bars-pressure')
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-pressure')
-    setFleetCellIndicator('bars-memory')
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
-    setFleetCellIndicator('pie' as never)
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
-    expect(isFleetCellIndicator('ring')).toBe(true)
-    expect(isFleetCellIndicator('Ring')).toBe(false)
-    expect(isFleetCellIndicator(undefined)).toBe(false)
-  })
-
-  it('round trip: the stored choice comes back on rehydrate', async () => {
-    useUISettingsStore.getState().setFleetCellIndicator('bars-memory')
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.UI_SETTINGS) ?? '{}')
-    expect(stored.state.fleetCellIndicator).toBe('bars-memory')
-    useUISettingsStore.setState({ fleetCellIndicator: 'ring' }) // memory only... and persisted again by setState
-    localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify(stored))
+  const rehydrateFrom = async (state: Record<string, unknown>, version: number) => {
+    localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify({ state, version }))
     await useUISettingsStore.persist.rehydrate()
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
+    return useUISettingsStore.getState() as unknown as Record<string, unknown>
+  }
+
+  it('the initial state has no such field and there is no setter for it', () => {
+    const initial = useUISettingsStore.getInitialState() as unknown as Record<string, unknown>
+    expect('fleetCellIndicator' in initial).toBe(false)
+    expect('setFleetCellIndicator' in initial).toBe(false)
   })
 
-  it('rehydrate with no indicator field at all reads as the ring', async () => {
-    localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify({ state: {}, version: 4 }))
-    await useUISettingsStore.persist.rehydrate()
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+  it('v4 (the field was there): it is dropped, the rest stays', async () => {
+    const s = await rehydrateFrom({ fleetCellIndicator: 'bars-memory', terminalRenderer: 'webgl' }, 4)
+    expect('fleetCellIndicator' in s).toBe(false)
+    expect(s.terminalRenderer).toBe('webgl')
   })
 
-  it('rehydrate repairs a corrupt stored value to the ring (a synced payload is healed by the same rehydrate)', async () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
-    localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify({ state: { fleetCellIndicator: 'pie' }, version: 4 }))
-    await useUISettingsStore.persist.rehydrate()
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+  it('v3: the field and the removed host badge fields are both dropped, the rest stays', async () => {
+    const s = await rehydrateFrom({ ...HOST_BADGE_DEFAULTS, hostBadgeSidebarBgOpacity: 40, fleetCellIndicator: 'bars-pressure', terminalRenderer: 'webgl' }, 3)
+    expect('fleetCellIndicator' in s).toBe(false)
+    for (const k of HOST_BADGE_REMOVED_FIELDS) expect(k in s).toBe(false)
+    expect(s.terminalRenderer).toBe('webgl')
+  })
+
+  it('v2: the field is dropped and the showOscTitle step still ran (both new flags follow it, the old key is gone)', async () => {
+    const s = await rehydrateFrom({ showOscTitle: true, fleetCellIndicator: 'ring' }, 2)
+    expect('fleetCellIndicator' in s).toBe(false)
+    expect(s.dynamicTabName).toBe(true)
+    expect(s.showAgentTitleInStatusBar).toBe(true)
+    expect('showOscTitle' in s).toBe(false)
+  })
+
+  it('the persisted version is 5', () => {
+    useUISettingsStore.setState({ terminalRenderer: 'dom' })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.UI_SETTINGS) ?? '{}').version).toBe(5)
   })
 })
