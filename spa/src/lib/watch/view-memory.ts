@@ -12,6 +12,8 @@ const hostTabs = new Map<string, HostSubTab>()
 const hostRanges = new Map<string, HostRange>()
 /** `${host_id}\0${sub-tab}` → scrollTop. */
 const scrolls = new Map<string, number>()
+/** The 行程 tab's picked record: its time (not a place on the timeline: the live end keeps moving), null = the live one. */
+const procAts = new Map<string, number>()
 
 /** The queue block's sub-tab: 當下 (now) or 歷史 (history, W5d). */
 export type QueueTab = 'now' | 'history'
@@ -48,6 +50,9 @@ export const writeHostRange = (hostId: string, range: HostRange): void => { host
 export const readHostScroll = (hostId: string, sub: HostSubTab): number => scrolls.get(`${hostId}\0${sub}`) ?? 0
 export const writeHostScroll = (hostId: string, sub: HostSubTab, top: number): void => { scrolls.set(`${hostId}\0${sub}`, top) }
 
+export const readProcAt = (hostId: string): number | null => procAts.get(hostId) ?? null
+export const writeProcAt = (hostId: string, at: number | null): void => { if (at === null) procAts.delete(hostId); else procAts.set(hostId, at) }
+
 export const readQueueTab = (fleetHostId: string): QueueTab => queueTabs.get(fleetHostId) ?? 'now'
 export const writeQueueTab = (fleetHostId: string, tab: QueueTab): void => { queueTabs.set(fleetHostId, tab) }
 export const readHistoryClass = (fleetHostId: string): HistoryClass => historyClasses.get(fleetHostId) ?? 'heavy'
@@ -59,6 +64,6 @@ export const writeEventsScroll = (top: number): void => { eventsScroll = top }
 export const readEventsObservations = (): EventsObservations => eventsObservations
 export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
-  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
+  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); procAts.clear(); queueTabs.clear(); historyClasses.clear(); eventFilters = DEFAULT_EVENT_FILTERS
   eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }

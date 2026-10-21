@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { gaugesOf, miniChartsOf, bigValue, GAUGES, type ChartDef } from './host-charts'
+import { gaugesOf, miniChartsOf, bigValue, chart, series, GAUGES, type ChartDef } from './host-charts'
 import type { HostSample } from './host-history'
 import type { PoolFacts } from './types'
 import { parseFacts } from './parse'
@@ -189,5 +189,10 @@ describe('bigValue (the number at the top right of a card)', () => {
   it('a point with no value is a dash', () => {
     const s = full.map((x, i) => (i === 3 ? { ...x, cpuPct: null } : x))
     expect(bigValue(get(charts(s), 'cpu'), s, 3, t)).toEqual({ main: '—' })
+  })
+  it('a chart of the full set (an id the cards do not know) has no big number: a dash (MON-7c-1)', () => {
+    const def = chart('percore', '%', [series('c0', 'k', [1, 2], 'accent')], [], 100, 'watch.host.full.percore.title')
+    expect(bigValue(def, full, 3, t)).toEqual({ main: '—' })
+    expect(def.titleKey).toBe('watch.host.full.percore.title')
   })
 })
