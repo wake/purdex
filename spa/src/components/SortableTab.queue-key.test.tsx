@@ -26,7 +26,7 @@ const { openWatchArea } = await import('../features/workspace/lib/open-watch-are
 const { clearJobsViewMemory, readJobsMode, readSelectedJob, writeJobsMode } = await import('../lib/pool/jobs-view-memory')
 
 const job = { jobId: 'j1', origin: 'mlab', line: 'purdex test', state: 'running' as const, place: 0, since: 1, worker: 'mlab' }
-const gate = { class: 'heavy' as const, place: 1, command: 'go test', project: 'p', session: 's', since: 1 }
+const job2 = { jobId: 'j2', origin: 'mserv', line: 'purdex lint', state: 'queued' as const, place: 1, since: 1, worker: '' }
 
 function makeTab(pinned: boolean): Tab {
   return { ...createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'sc1', mode: 'terminal' as const, cachedName: '', tmuxInstance: '' }, { pinned }), id: 't1' }
@@ -49,7 +49,7 @@ describe.each([['wide tab', false], ['pinned tab', true]] as const)('SortableTab
   })
 
   it('opens the live job queue with the first job selected, and does not select the tab', () => {
-    waiters = [gate, job]
+    waiters = [job, job2]
     writeJobsMode('history')
     const { el, onSelect } = draw(pinned)
     fireEvent.keyDown(el, { key: 'Enter', altKey: true })
@@ -76,14 +76,6 @@ describe.each([['wide tab', false], ['pinned tab', true]] as const)('SortableTab
     fireEvent.keyDown(el, { key: 'Enter', altKey: true })
     expect(openWatchArea).not.toHaveBeenCalled()
     if (!pinned) expect(onSelect).toHaveBeenCalledWith('t1')
-  })
-
-  it('an hourglass of gate waiters only is no way in', () => {
-    waiters = [gate]
-    const { el } = draw(pinned)
-    expect(el.getAttribute('aria-keyshortcuts')).toBeNull()
-    fireEvent.keyDown(el, { key: 'Enter', altKey: true })
-    expect(openWatchArea).not.toHaveBeenCalled()
   })
 
   it('lights off (icon): no hourglass is drawn, so no shortcut either', () => {

@@ -79,7 +79,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 			}
 			out = append(out, qualify.Task{
 				Repo: repo, Name: name, Reference: t.Qualify.Reference, Args: args,
-				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(), Commit: commit,
+				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(), Summary: t.Summary, Commit: commit,
 			})
 		}
 	}
@@ -100,7 +100,7 @@ func (s *qualifySource) Prepare(ctx context.Context, t qualify.Task) (wire.JobSu
 		return wire.JobSubmission{}, fmt.Errorf("%s/%s was not listed at a manifest_ref commit: ask again", t.Repo, t.Name)
 	}
 	p, err := submit.Prepare(ctx, submit.Request{
-		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git, Commit: t.Commit,
+		Dir: root, Task: t.Name, Args: t.Args, Git: s.git, Commit: t.Commit,
 		Submitter: wire.Submitter{Session: qualify.SessionName},
 	})
 	if err != nil {

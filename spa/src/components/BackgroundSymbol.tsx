@@ -1,7 +1,7 @@
 // spa/src/components/BackgroundSymbol.tsx — the corner symbol of a tab's agent icon for background work (spec N6).
 //
 // One small, static symbol at the top-left of the agent icon (or of the dot in the `dot` style): TreeStructure for a
-// workflow, Eye for a monitor, Clock for a scheduled wake-up, Hourglass for an agent waiting in a host's command queue. The colour is the icon's (`currentColor`); background
+// workflow, Eye for a monitor, Clock for a scheduled wake-up, Hourglass for an agent whose session has a pool job queued or running. The colour is the icon's (`currentColor`); background
 // SHELL commands draw nothing (the daemon never sends them). The caller decides WHERE it is drawn and that it is not
 // drawn at all when the lights are off.
 import { Clock, Eye, Hourglass, TreeStructure } from '@phosphor-icons/react'
@@ -10,13 +10,13 @@ import type { BackgroundKind } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useCoarseNow } from '../hooks/useCoarseNow'
 import { queueOpener } from '../lib/watch/open-queue'
-import { queuedTooltip, type QueuedItem } from '../lib/watch/queued-sessions'
+import { jobsTooltip, type QueuedItem } from '../lib/watch/queued-sessions'
 
 const ICONS = { queued: Hourglass, workflow: TreeStructure, monitor: Eye, schedule: Clock } as const
 
 interface Props {
   kind: BackgroundKind
-  /** What a `queued` symbol stands for: pool jobs (their place or where they run) and, until WWD-9, gate waiters (the longest wait, the others counted). */
+  /** What a `queued` symbol stands for: pool jobs (their place or where they run). */
   waiters?: QueuedItem[]
   /** Offsets from the top-left of the positioned box it sits in (px). */
   top?: number
@@ -35,11 +35,11 @@ function QueuedSymbol({ waiters, ...rest }: Props & { waiters: QueuedItem[] }) {
   const t = useI18nStore((s) => s.t)
   useCoarseNow() // re-render each minute; the minutes themselves are read from the clock below
   // Date.now(), not the coarse minute: the minute value would understate a wait by up to a minute. The tick above re-renders.
-  // The hourglass of a pool job is a way into the job queue (M34, M40); one that stands only for gate waiters is not pressable, as before.
+  // The hourglass of a pool job is a way into the job queue (M34, M40).
   const open = queueOpener(waiters)
   // The keyboard way in (Alt+Enter on the tab, #3806) is named in the tooltip only where there is a way in.
   // eslint-disable-next-line react-hooks/purity
-  const tip = queuedTooltip(waiters, Date.now(), t)
+  const tip = jobsTooltip(waiters, Date.now(), t)
   return <Symbol {...rest} title={open ? `${tip}・${t('tab.queued.open_hint')}` : tip} onOpen={open} />
 }
 

@@ -5,7 +5,6 @@ import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 vi.mock('../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 import { Terminal } from '@phosphor-icons/react'
 import { BackgroundSymbol } from './BackgroundSymbol'
-import type { FleetWaiter } from '../lib/fleet/types'
 import { TabIcon } from './TabIcon'
 import { renderInlineTabIcon } from '../features/workspace/lib/renderInlineTabIcon'
 import type { BackgroundKind, SubagentRef } from '../stores/useAgentStore'
@@ -44,28 +43,30 @@ describe('BackgroundSymbol', () => {
   })
 
   describe('the queue tooltip', () => {
-    const waiter = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
-      ({ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: Date.now() - 125_000, ...over })
+    const job = (over: Partial<QueuedJobMark> = {}): QueuedJobMark => ({ jobId: 'j1', origin: 'mlab', line: 'purdex spa-tsc', state: 'queued', place: 1, since: Date.now() - 125_000, worker: '', ...over })
     afterEach(() => { vi.useRealTimers() })
 
-    it('one waiter: place, minutes, command, class', () => {
-      render(<BackgroundSymbol kind="queued" waiters={[waiter({ place: 2 })]} />)
-      expect(sym()!.getAttribute('title')).toBe('Queued: #2 · waiting 2 min · go test (heavy command)')
+    it('one queued job: its place and the minutes waited', () => {
+      render(<BackgroundSymbol kind="queued" waiters={[job({ place: 2 })]} />)
+      expect(sym()!.getAttribute('title')).toContain('purdex spa-tsc')
+      expect(sym()!.getAttribute('title')).toContain('#2')
+      expect(sym()!.getAttribute('title')).toContain('2 min')
     })
 
-    it('three waiters: the longest wait and the count of the others', () => {
-      const now = Date.now()
-      render(<BackgroundSymbol kind="queued" waiters={[waiter({ command: 'new', since: now - 1000 }), waiter({ command: 'old', since: now - 600_000, place: 3 }), waiter({ command: 'mid', since: now - 5000 })]} />)
-      expect(sym()!.getAttribute('title')).toBe('Queued: #3 · waiting 10 min · old (heavy command) · 2 more')
+    it('two jobs: the count and their names', () => {
+      render(<BackgroundSymbol kind="queued" waiters={[job({ line: 'a' }), job({ jobId: 'j2', line: 'b' })]} />)
+      expect(sym()!.getAttribute('title')).toContain('2')
+      expect(sym()!.getAttribute('title')).toContain('a')
+      expect(sym()!.getAttribute('title')).toContain('b')
     })
 
     it('the minutes advance with the clock', () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-10-17T10:00:30Z'))
-      render(<BackgroundSymbol kind="queued" waiters={[waiter({ since: Date.now() - 60_000 })]} />)
-      expect(sym()!.getAttribute('title')).toContain('waiting 1 min')
+      render(<BackgroundSymbol kind="queued" waiters={[job({ since: Date.now() - 60_000 })]} />)
+      expect(sym()!.getAttribute('title')).toContain('1 min')
       act(() => { vi.advanceTimersByTime(60_000) })
-      expect(sym()!.getAttribute('title')).toContain('waiting 2 min')
+      expect(sym()!.getAttribute('title')).toContain('2 min')
     })
 
     it('a symbol that is not queued holds no timer', () => {
@@ -97,18 +98,10 @@ describe('BackgroundSymbol', () => {
       expect(down).not.toHaveBeenCalled()
     })
 
-    it('the first job is the first one among the jobs, whatever gate waiters come before it', () => {
-      render(<BackgroundSymbol kind="queued" waiters={[{ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: 1 }, mark({ jobId: 'j9', origin: 'mserv' })]} />)
+    it('the first job is the one selected', () => {
+      render(<BackgroundSymbol kind="queued" waiters={[mark({ jobId: 'j9', origin: 'mserv' }), mark({ jobId: 'j10' })]} />)
       fireEvent.click(sym()!)
       expect(readSelectedJob()).toBe('mserv/j9')
-    })
-
-    it('only gate waiters: it does nothing and the click goes on up as before', () => {
-      const outer = vi.fn()
-      render(<div onClick={outer}><BackgroundSymbol kind="queued" waiters={[{ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: 1 }]} /></div>)
-      fireEvent.click(sym()!)
-      expect(openWatchArea).not.toHaveBeenCalled()
-      expect(outer).toHaveBeenCalled()
     })
 
     it('the other kinds are not pressable', () => {

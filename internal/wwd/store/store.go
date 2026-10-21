@@ -74,15 +74,18 @@ const alertsDDL = `CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, kind
 // Store is the open wwd.db.
 type Store struct {
 	db *sql.DB
-	// alertMu serializes RaiseAlert: its read-then-write transaction cannot upgrade to a writer while another one holds the lock
-	// (SQLITE_BUSY at once, the busy timeout does not apply), and wwd is the only process that writes alerts.
+	// alertMu keeps the alert writers of this process in a line, so that one waits for the other here and not on the database. It is not
+	// what keeps RaiseAlert from SQLITE_BUSY against the other tables' writers: that is the immediate transaction (Open).
 	alertMu sync.Mutex
 }
 
 // Open opens (creating if need be) wwd.db at path and migrates the host tables.
-// WAL and a long busy timeout let the queue and the host state share the file.
+// WAL and a long busy timeout let the queue and the host state share the file. A transaction takes the write lock when it begins
+// (_txlock=immediate, #3839): one that read first and wrote after (RaiseAlert) could not become the writer once another connection had
+// written in between, and SQLite answers that with SQLITE_BUSY at once, not after the busy timeout. Every transaction of this store writes,
+// so none holds the lock longer than before; the queue takes its own with an explicit BEGIN IMMEDIATE.
 func Open(path string) (*Store, error) {
-	dsn := path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	dsn := path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)

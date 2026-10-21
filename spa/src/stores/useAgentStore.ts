@@ -85,7 +85,7 @@ export function isProxyStop(e: Pick<NormalizedEvent, 'from_proxy' | 'raw_event_n
   return n === 'PdxStop' || n === 'Stop' || n === 'PdxStopFailure' || n === 'StopFailure'
 }
 
-/** `queued` is not an event field: the tab derives it from the fleet queue (a pane's agent session is waiting for a slot). */
+/** `queued` is not an event field: the tab derives it from the pool's jobs (a pane's agent session has a job queued or running). */
 export type BackgroundKind = 'queued' | 'workflow' | 'monitor' | 'schedule'
 
 /** The background symbol an event carries, or undefined (absent, '' or a kind this client does not know). */

@@ -130,3 +130,13 @@ func TestTrackerCurrentIsACopy(t *testing.T) {
 		t.Fatal("Current leaked its state")
 	}
 }
+
+func TestQualifyClass(t *testing.T) {
+	for in, want := range map[wire.JobClass]wire.JobClass{
+		wire.ClassRelease: wire.ClassMerge, wire.ClassMerge: wire.ClassMerge, wire.ClassDev: wire.ClassDev, "": wire.ClassDev, "bogus": wire.ClassDev,
+	} {
+		if got := QualifyClass(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}

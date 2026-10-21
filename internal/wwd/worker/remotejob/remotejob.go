@@ -157,8 +157,8 @@ func metaMismatch(job wire.Job, task *manifest.Task, host, source string) string
 
 // halfMismatch is metaMismatch for a half of a qualification pair (submitter session and supersede key both say so). The coordinator
 // changes the half's metadata on purpose, so the expectation is worked out from the snapshot's task by the coordinator's own rule
-// (labels.QualifyHalfLabels): the task's labels as the role takes them plus host:<this worker>, the task's locks, dev class, not
-// cacheable, interruptible. The key's task label must be the snapshot task's own, so a half cannot name another label to be stripped
+// (labels.QualifyHalfLabels): the task's labels as the role takes them plus host:<this worker>, the task's locks, the pair's class (labels.QualifyClass of the
+// task's; dev too, for an older coordinator), not cacheable, interruptible. The key's task label must be the snapshot task's own, so a half cannot name another label to be stripped
 // from the candidate's set, and the host must be this worker's: a half is never run for a host it was not worked out for. It must also have been claimed from the host it names as submitter, the task must declare a qualification, and the host must be the candidate (submitter) or the task's reference host by role.
 func halfMismatch(job wire.Job, task *manifest.Task, host, source, own, role string) string {
 	switch {
@@ -176,7 +176,8 @@ func halfMismatch(job wire.Job, task *manifest.Task, host, source, own, role str
 		return "labels"
 	case !sameSet(job.Locks, task.Locks):
 		return "locks"
-	case job.Class != wire.ClassDev:
+	case job.Class != labels.QualifyClass(task.Class) && job.Class != wire.ClassDev:
+		// dev stays accepted for a coordinator from before a pair followed the task's class (771), which a deploy leaves running for a while
 		return "class"
 	case job.Cacheable:
 		return "cacheable"

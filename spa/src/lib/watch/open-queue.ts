@@ -4,11 +4,11 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { jobKey, writeJobsMode, writeSelectedJob } from '../pool/jobs-view-memory'
 import type { AgentStatus } from '../../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../../stores/useUISettingsStore'
-import { isJobMark, type QueuedItem } from './queued-sessions'
+import type { QueuedItem } from './queued-sessions'
 
-/** The action behind the hourglass: the live job queue with the first pool job selected. undefined when the waiters hold no pool job (gate waiters alone are not a way in). */
+/** The action behind the hourglass: the live job queue with the first pool job selected. undefined when there is none. */
 export function queueOpener(waiters: QueuedItem[] | undefined): (() => void) | undefined {
-  const first = waiters?.find(isJobMark)
+  const first = waiters?.[0]
   if (!first) return undefined
   return () => { writeJobsMode('live'); writeSelectedJob(jobKey(first.origin, first.jobId)); openWatchArea({ tab: 'jobs' }) }
 }

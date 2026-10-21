@@ -1,46 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import type { FleetWaiter } from '../fleet/types'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { queuedJobsBySession, sharedQueuedJobs, queuedTooltip, jobsTooltip, isJobMark, type QueuedJobMark } from './queued-sessions'
+import { queuedJobsBySession, sharedQueuedJobs, jobsTooltip, type QueuedJobMark } from './queued-sessions'
 import type { PoolJob } from '../pool/jobs-types'
 import type { PoolHost } from '../pool/types'
 
-const w = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
-  ({ class: 'heavy', place: 1, command: 'go test ./...', project: 'p', session: 'AAAA-1', since: 0, ...over })
 const t = (k: string, p?: Record<string, string | number>) => `${k}|${JSON.stringify(p ?? {})}`
-
-describe('queuedTooltip', () => {
-  it('one waiter: place, whole minutes, command and class', () => {
-    expect(queuedTooltip([w({ place: 2, since: 1000 })], 1000 + 125_000, t))
-      .toBe('tab.queued.tooltip|{"place":2,"m":2,"command":"go test ./...","kind":"tab.queued.heavy|{}"}')
-  })
-  it('a light command says light', () => {
-    expect(queuedTooltip([w({ class: 'light' })], 0, t)).toContain('tab.queued.light')
-  })
-  it('three waiters: the longest wait plus 「另有 2 個」', () => {
-    const out = queuedTooltip([w({ command: 'new', since: 9000 }), w({ command: 'old', since: 1000 }), w({ command: 'mid', since: 5000, place: 3 })], 70_000, t)
-    expect(out).toContain('"command":"old"')
-    expect(out).toContain('"m":1')
-    expect(out.endsWith('tab.queued.more|{"n":2}')).toBe(true)
-  })
-  it('an unknown start counts as the shortest wait', () => {
-    expect(queuedTooltip([w({ command: 'x', since: null }), w({ command: 'y', since: 5 })], 10, t)).toContain('"command":"y"')
-  })
-})
-
-describe('queuedTooltip with the real translator', () => {
-  it('fills every placeholder (en)', () => {
-    useI18nStore.getState().setLocale('en')
-    const out = queuedTooltip([w({ place: 2, since: 0 }), w({ place: 3, since: 5000 })], 125_000, useI18nStore.getState().t)
-    expect(out).toBe('Queued: #2 · waiting 2 min · go test ./... (heavy command) · 1 more')
-  })
-  it('fills every placeholder (zh-TW)', () => {
-    useI18nStore.getState().setLocale('zh-TW')
-    const out = queuedTooltip([w({ class: 'light', place: 1, since: 0 })], 61_000, useI18nStore.getState().t)
-    useI18nStore.getState().setLocale('en')
-    expect(out).toBe('排隊中：第 1 位・已等 1 分鐘・go test ./...（輕指令）')
-  })
-})
 
 // WWD-7b1-6: the pool's jobs light the hourglass of the tab whose session submitted them (`submitter.session`)
 const job = (id: string, over: Partial<PoolJob> = {}): PoolJob => ({
@@ -125,20 +89,6 @@ describe('jobsTooltip', () => {
   })
 })
 
-describe('queuedTooltip with jobs and gate waiters together', () => {
-  it('the jobs line first, the gate waiters\' on a line of their own; a waiter is no job mark', () => {
-    const jobM: QueuedJobMark = { jobId: 'j', origin: 'mlab', line: 'x', state: 'queued', place: 1, since: 0, worker: '' }
-    const out = queuedTooltip([jobM, w()], 60_000, t)
-    const lines = out.split('\n')
-    expect(lines).toHaveLength(2)
-    expect(lines[0]).toContain('tab.queued.job.queued')
-    expect(lines[1]).toContain('tab.queued.tooltip')
-    expect(isJobMark(w())).toBe(false)
-    expect(isJobMark(jobM)).toBe(true)
-  })
-})
-
-// codex R2 (high, medium): every tab asks for the same global picture; it is worked out once per (jobs, zones, minute)
 describe('sharedQueuedJobs', () => {
   const origins = (...jobs: PoolJob[]) => ({ mlab: { jobs: Object.fromEntries(jobs.map((j) => [j.id, j])) } })
   const host = (alias: string, zone: string) => ({ alias, labels: [], worker: { enabled: true }, facts: { derived: { zone } } }) as unknown as PoolHost

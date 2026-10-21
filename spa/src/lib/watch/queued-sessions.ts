@@ -1,11 +1,10 @@
 // spa/src/lib/watch/queued-sessions.ts — which agent sessions have a pool job waiting or running (watcher-area plan §8, WWD-7b1-6).
 // A subagent's command carries its main session's id (spec §2.3), so a session id is all it takes.
-import type { FleetWaiter } from '../fleet/types'
 import type { PoolJob } from '../pool/jobs-types'
 import type { PoolHost } from '../pool/types'
 import { jobLine, queueEntries } from '../pool/jobs-lanes'
 
-/** A pool job of a tab's session that is queued, claimed or running (WWD-7b1-6): the hourglass lights for it as for a gate waiter. */
+/** A pool job of a tab's session that is queued, claimed or running (WWD-7b1-6): the hourglass lights for it. */
 export interface QueuedJobMark {
   jobId: string
   origin: string
@@ -20,10 +19,8 @@ export interface QueuedJobMark {
   worker: string
 }
 
-/** What the hourglass stands for: a gate waiter (until WWD-9 removes the gate) or a pool job. */
-export type QueuedItem = FleetWaiter | QueuedJobMark
-
-export const isJobMark = (x: QueuedItem): x is QueuedJobMark => 'jobId' in x
+/** What the hourglass stands for: a pool job (the old gate's waiters are gone, MON-12a-4). The name stays for the props that carry it (`backgroundWaiters`). */
+export type QueuedItem = QueuedJobMark
 
 /**
  * The live jobs of each submitter session, by lowercase session id (a job with no session, every one submitted before #3477 was deployed, lights no tab). Running first, then claimed, then queued in
@@ -88,24 +85,4 @@ export function jobsTooltip(marks: QueuedJobMark[], now: number, t: T): string {
   if (m.state === 'queued') return t('tab.queued.job.queued', { job: m.line, place: m.place, m: Math.max(0, Math.floor((now - m.since) / 60_000)) })
   if (m.state === 'claimed') return t('tab.queued.job.claimed', { job: m.line, host })
   return t('tab.queued.job.running', { job: m.line, host, d: elapsed(now - m.since, t) })
-}
-
-/** The tooltip of the hourglass: the pool jobs' (above) and, until WWD-9, the gate waiters' on a line of their own. */
-export function queuedTooltip(items: QueuedItem[], now: number, t: T): string {
-  const jobs = items.filter(isJobMark)
-  const waiters = items.filter((x): x is FleetWaiter => !isJobMark(x))
-  return [jobsTooltip(jobs, now, t), waitersTooltip(waiters, now, t)].filter((x) => x !== '').join('\n')
-}
-
-/** 「排隊中：第 {place} 位・已等 {m} 分鐘・{command}（重指令｜輕指令）」 for the longest wait, plus 「・另有 n 個」. */
-function waitersTooltip(waiters: FleetWaiter[], now: number, t: T): string {
-  if (waiters.length === 0) return ''
-  // an unknown start (null) sorts as the shortest wait
-  const since = (w: FleetWaiter) => w.since ?? Number.POSITIVE_INFINITY
-  const top = waiters.reduce((a, b) => (since(b) < since(a) ? b : a))
-  const m = top.since === null ? 0 : Math.max(0, Math.floor((now - top.since) / 60_000))
-  const head = t('tab.queued.tooltip', {
-    place: top.place, m, command: top.command, kind: t(top.class === 'light' ? 'tab.queued.light' : 'tab.queued.heavy'),
-  })
-  return waiters.length > 1 ? head + t('tab.queued.more', { n: waiters.length - 1 }) : head
 }

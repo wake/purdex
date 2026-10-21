@@ -95,7 +95,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 				stored = s
 			}
 		}
-		return normalizeWatchOver(raw, stored)
+		return normalizeWatchOver(raw, stored, true)
 	}))
 	mux.HandleFunc("PUT /api/hostconfig/probe-hosts", m.putHandler(KeyProbeHosts, func(raw []byte, cur Entry) (any, error) { return normalizeProbeHosts(raw, cur) }))
 	mux.HandleFunc("PUT /api/hostconfig/fleet", m.putHandler(KeyFleet, func(raw []byte, _ Entry) (any, error) { return normalizeFleet(raw) }))
