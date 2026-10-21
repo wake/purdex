@@ -460,7 +460,7 @@ func (r *Reporter) holdTask(e runner.Ended) {
 	r.mu.Lock()
 	now := r.cfg.Now()
 	for k, h := range r.taskHeld {
-		if r.longOver(now, h) {
+		if r.taskLongOver(now, h) {
 			delete(r.taskHeld, k)
 		}
 	}

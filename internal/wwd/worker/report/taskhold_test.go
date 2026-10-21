@@ -142,3 +142,16 @@ func TestTheTaskHoldIsLoggedWhenItBeginsAndWhenItEnds(t *testing.T) {
 	assert.Contains(t, all[1], "over")
 	assert.Contains(t, all[1], "purdex")
 }
+
+// The two ceilings are set apart: the sweep of the old task holds must use the task's, not the origin's (codex R1).
+func TestTheTaskHoldSweepUsesTheTaskCeiling(t *testing.T) {
+	h := newHarness(t, Config{OriginBackoff: 15 * time.Second, OriginBackoffMax: 15 * time.Second, TaskBackoff: 15 * time.Second, TaskBackoffMax: 5 * time.Minute})
+	fail := func() {
+		h.fin(context.Background(), endedTask("purdex", "mod-hooks", runner.KindRan, startFailed(notFound())))
+	}
+	fail()                              // 15 s
+	h.now = h.now.Add(40 * time.Second) // more than 15 s past the hold: over for the origin's ceiling, not for the task's
+	fail()                              // the run of failures goes on: 30 s
+	h.now = h.now.Add(29 * time.Second)
+	assert.True(t, h.r.TaskHeld("mlab", "purdex", "mod-hooks"), "the second wait is 30 seconds")
+}
