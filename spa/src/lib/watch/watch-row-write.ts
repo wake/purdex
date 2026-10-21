@@ -1,5 +1,5 @@
 // spa/src/lib/watch/watch-row-write.ts — W5c1: writing the 守門員 settings. The `watch` host-config row is written whole
-// (`PUT /api/hostconfig/watch`, `{items, baseRevision}`; the same contract as lib/fleet/config-api.ts): a 409 carries the daemon's
+// (`PUT /api/hostconfig/watch`, `{items, baseRevision}`; the same compare-and-set write as lib/host-config-api.ts): a 409 carries the daemon's
 // copy, any other refusal carries the daemon's plain-text reason. The defaults mirror internal/watchsettings `Default()`.
 import { hostFetch } from '../host-api'
 import { HostConfigApiError, HostConfigConflictError } from '../host-config-api'
