@@ -30,7 +30,7 @@ func (c *Client) Qualification(ctx context.Context, host string) (v wire.HostQua
 		}
 		return v, true, nil
 	}
-	if RouteOrMethodMissing(err) {
+	if RouteMissing(err) { // 404 only: no wwd ever had another method on this path, so a 405 (even the mux's own) is a refusal, not an old host
 		return wire.HostQualification{Host: host, Tasks: []wire.QualificationTask{}, Recent: []wire.QualifyRecord{}}, false, nil
 	}
 	return wire.HostQualification{}, false, err

@@ -47,6 +47,27 @@ func TestQualification_AnotherA404IsAnError(t *testing.T) {
 	}
 }
 
+// A 405 is never "an older wwd": no wwd had another method on this path (unlike /v1/exceptions), so it is the refusal it says, even
+// with net/http's own body.
+func TestQualification_A405IsARefusalNotAnOldHost(t *testing.T) {
+	for name, body := range map[string]string{"the mux's own": "Method Not Allowed\n", "a handler's": `{"error":"read only"}`} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/qualification", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+		if name == "a handler's" {
+			mux = http.NewServeMux()
+			mux.HandleFunc("GET /v1/qualification", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				_, _ = w.Write([]byte(body))
+			})
+		}
+		_, known, err := New(fakeWWD(t, mux)).Qualification(context.Background(), "air19")
+		var se *StatusError
+		if known || !errors.As(err, &se) || se.Code != 405 {
+			t.Fatalf("%s: known=%v err=%v", name, known, err)
+		}
+	}
+}
+
 // A null list in an answer is an empty one: the App reads arrays.
 func TestQualification_NullListsBecomeEmpty(t *testing.T) {
 	mux := http.NewServeMux()
