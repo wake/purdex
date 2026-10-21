@@ -620,7 +620,7 @@ func TestSkill_GateSkillIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"不會再有結束碼 **75**", "`pdx gate would-wait …` 一律回「不會等」"} {
+	for _, want := range []string{"不會再有結束碼 **75**", "`pdx gate would-wait …` 也已不存在"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("the pdx-test skill lacks %q, which the pdx-gate skill used to say", want)
 		}

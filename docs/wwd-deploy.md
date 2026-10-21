@@ -494,7 +494,7 @@ clean environment, the job's workspace as HOME) and its log is `<out>/deps-insta
   only the files and variables a test read, not tmux, a socket or an executable; the reuse of whole jobs is the result cache's.
   `[worker] disk_min_gb` (default 10, 0 = none) is the free space the work volume must keep for a **heavy** run to start (a queue job is
   not claimed, an adhoc command is refused with `disk_low`); `pdx wwd worker on --disk-min-gb N` or `PUT /v1/worker` changes it live and
-  `wwd.db` keeps it. It replaces the pdx gate's `[gate.admission] disk_min_gb`, which goes with the gate. Hosts without a gate (air19,
+  `wwd.db` keeps it. It replaces the old pdx gate's `[gate.admission] disk_min_gb` (the `pdx gate` subcommand is gone, WWD-9 9a-3). Hosts without a gate (air19,
   mserv) have the 10 GB floor from host schema 9 on. Roll back across host schema 9 is the backup restore above (an older wwd refuses the file).
   `[worker] gocache_max_mb` (default 10240) bounds one Go version's cache, and `[worker] gocache_prune_hours` (default 24, 1 to 8760) is how long
   an entry may go unused: Go touches an entry's file time when it uses it (at most once an hour), so the worker removes the entries whose time is
@@ -796,7 +796,9 @@ line saying so. `pdx setup --uninstall-gate` is gone: its work is part of the se
 every host that had one (mlab and air26, read back 2026-10-21; air19 and mserv never had shims), so nothing removes it any more.
 
 A shell that started before the setup still has the shim directory on its `PATH`. If it reports `command not found` for `go` and the like, run
-`rehash` or open a new shell. Until then `pdx gate` still skips a leftover shim when it looks for the real tool, so nothing loops.
+`rehash` or open a new shell. The shims are deleted and the `pdx gate` subcommand they handed over to is gone too (WWD-9 9a-3: `pdx gate …` is
+`unknown command: gate`, exit 1), so a shim that somehow survived (a copy kept elsewhere) would fail on that hand-over and not run the tool: remove it,
+and see that no shim directory is on `PATH`.
 
 ## 18. Retiring the assist module (WWD-9 9b-3)
 
