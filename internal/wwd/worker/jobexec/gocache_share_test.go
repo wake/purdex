@@ -148,6 +148,41 @@ func TestATrimThatNeededTheLockIsTriedAgainAtTheNextBeat(t *testing.T) {
 	assert.True(t, r.e.goCacheTickDue())
 }
 
+// (d2) A trim of several chunks that had the exclusive lock for the first and lost it to a job for the last still wants the next beat (codex R1):
+// what decides is the lock the last chunk found, not whether one had it earlier.
+func TestATrimThatLostTheLockForItsLastChunkIsTriedAgainAtTheNextBeat(t *testing.T) {
+	r := newTickRig(t, 1)
+	now := time.Now()
+	r.e.goCache.now = func() time.Time { return now }
+	r.fill(t, "old", 100, 4096, 5*time.Hour)      // 0.4 MiB, idle for hours
+	r.fill(t, "young", 900, 4096, 10*time.Minute) // 3.6 MiB: only a free cache gives these up
+	oldChunk, oldYield, oldBetween := goCacheTickChunk, goCacheTickYield, goCacheTickBetween
+	goCacheTickChunk, goCacheTickYield = 50, time.Millisecond
+	t.Cleanup(func() { goCacheTickChunk, goCacheTickYield, goCacheTickBetween = oldChunk, oldYield, oldBetween })
+	var held *os.File
+	goCacheTickBetween = func() { // a job starts after the first chunk and keeps the cache
+		if held != nil {
+			return
+		}
+		f, err := os.OpenFile(r.lock, os.O_CREATE|os.O_RDWR, 0o600)
+		require.NoError(t, err)
+		require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_SH))
+		held = f
+	}
+	t.Cleanup(func() {
+		if held != nil {
+			held.Close()
+		}
+	})
+
+	r.e.tickGoCaches(context.Background())
+
+	require.NotNil(t, held, "the trim took more than one chunk")
+	require.Greater(t, r.size(t), int64(1<<20)/100*80, "the young entries stayed")
+	now = now.Add(goCacheTickRetry + time.Second)
+	assert.True(t, r.e.goCacheTickDue(), "the first chunk had the lock, the last did not: look again at the next beat")
+}
+
 // (e) Jobs that come and go: shared locks all the time, never a free moment. The cache is brought back under its bound within a few beats.
 func TestACacheNeverFreeIsBroughtUnderItsBoundWithinFewBeats(t *testing.T) {
 	r := newTickRig(t, 1)

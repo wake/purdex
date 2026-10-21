@@ -175,12 +175,12 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) (retr
 	}
 
 	max := e.goCacheMax()
-	exclusiveAny := false
+	exclusiveAny, lastShared := false, false
 	over := total > max
 	target := max / 100 * goCacheTrimPct
 	if over {
 		var n int
-		n, exclusiveAny = e.trimInChunks(ctx, dir, files, &total, target, max, now)
+		n, exclusiveAny, lastShared = e.trimInChunks(ctx, dir, files, &total, target, max, now)
 		removed += n
 	}
 	// a cache over its bound is said so every time, also when nothing could go: that is the line the host's keeper looks for
@@ -196,15 +196,16 @@ func (e *Exec) tickGoCache(ctx context.Context, dir string, now time.Time) (retr
 		log.Printf("jobexec: the build cache %s %s on the timer: %d entries, %d MB freed, now %d MB (bound %d MB, %s)",
 			dir, what, removed, (before-total)>>20, total>>20, max>>20, mode)
 	}
-	return over && !exclusiveAny && total > target && ctx.Err() == nil
+	return over && lastShared && total > target && ctx.Err() == nil
 }
 
 // trimInChunks removes the oldest entries until the cache is at the target, goCacheTickChunk at a time. While the cache is free (the exclusive
 // lock is had without waiting) any entry may go; while a job holds it, only an entry unused for goCacheShareAge (which falls the further the
 // cache is over max, to goCacheShareFloor). The lock is let go
 // between two chunks, with a pause, so a job that waits for the shared lock gets in; the next chunk takes it again if it can. It returns how many
-// entries it removed and whether it held the exclusive lock at any time.
-func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile, total *int64, target, max int64, now time.Time) (removed int, exclusiveAny bool) {
+// entries it removed, whether it held the exclusive lock at any time, and whether its last chunk went without it (a job holds the cache by then,
+// whatever an earlier chunk had: that is the case where a look soon may find the lock free).
+func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile, total *int64, target, max int64, now time.Time) (removed int, exclusiveAny, lastShared bool) {
 	lock, err := os.OpenFile(dir+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err == nil {
 		defer lock.Close()
@@ -215,6 +216,7 @@ func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile
 		idleCutoff := now.Add(-goCacheShareAge(*total, max)) // as it comes down, the age rises again
 		exclusive := err == nil && syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
 		exclusiveAny = exclusiveAny || exclusive
+		lastShared = !exclusive
 		n := 0
 		for i < len(files) && *total > target && n < goCacheTickChunk {
 			f := files[i]
@@ -238,12 +240,12 @@ func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile
 			}
 			select {
 			case <-ctx.Done():
-				return removed, exclusiveAny
+				return removed, exclusiveAny, lastShared
 			case <-time.After(goCacheTickYield):
 			}
 		}
 	}
-	return removed, exclusiveAny
+	return removed, exclusiveAny, lastShared
 }
 
 // pruneAgedWithoutList is the timer's way with a cache of more entries than scanGoCache will list (storeScanLimit): the oldest-first trim needs
