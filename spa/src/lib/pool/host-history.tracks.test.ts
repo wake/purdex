@@ -15,7 +15,7 @@ vi.mock('./api', async (orig) => ({
 import { PoolReadError } from './api'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import {
-  appendLive, clearHostHistory, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost, RANGE_MS, SKEW_MS,
+  appendLive, clearHostHistory, holdTrack, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost, RANGE_MS, SKEW_MS,
 } from './host-history'
 
 const darwin = parseFacts(darwinJson)!
@@ -70,7 +70,7 @@ describe('loadShort', () => {
     fetchFactsHistory.mockReturnValueOnce(first.promise)
     const early = loadShort('d1', 'air26', 'h1', NOW)
     fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(10, 60)] })
-    await loadShort('d1', 'air26', 'h1', NOW)
+    await loadShort('d1', 'air27', 'h1', NOW)
     first.resolve({ step: '5s', records: [rec(20, 1)] })
     await early
     expect(cpus('h1', '5m')).toEqual([40])
@@ -138,10 +138,57 @@ describe('loadShort: backfill from the 1 minute records', () => {
     const early = loadShort('d1', 'air26', 'h1', NOW)
     await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     byStep([rec(10, 60)], [])
-    await loadShort('d1', 'air26', 'h1', NOW)
+    await loadShort('d1', 'air27', 'h1', NOW)
     minute.resolve({ step: '1m', records: [rec(1500, 1)] })
     await early
     expect(cpus('h1', '30m')).toEqual([40])
+  })
+})
+
+describe('loadShort: one read in flight per host', () => {
+  type Ans = { step: string; records: PoolFacts[] }
+  it('the same ask while one is out shares it: one read, one answer', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const a = loadShort('d1', 'air26', 'h1', NOW)
+    const b = loadShort('d1', 'air26', 'h1', NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect([await a, await b]).toEqual(['ok', 'ok'])
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+  })
+  it('a shared read that fails gives both the same result, and the next call reads again', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const a = loadShort('d1', 'air26', 'h1', NOW)
+    const b = loadShort('d1', 'air26', 'h1', NOW)
+    d.resolve(undefined as never)
+    expect([await a, await b]).toEqual(['error', 'error'])
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
+  })
+  it('a different alias or source while one is out takes over; the old answer writes nothing', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const old = loadShort('d1', 'air26', 'h1', NOW)
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    await loadShort('d1', 'air19', 'h1', NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 1), rec(20, 1)] })
+    await old
+    expect(cpus('h1', '5m')).toEqual([40])
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10)] })
+    await loadShort('d2', 'air19', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(3)
+  })
+  it('a read called off by the last page leaving is not shared by the next', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const release = holdTrack('h1', 'short')
+    void loadShort('d1', 'air26', 'h1', NOW)
+    release()
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10)] })
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
   })
 })
 
