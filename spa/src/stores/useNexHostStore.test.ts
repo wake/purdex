@@ -663,6 +663,30 @@ describe('wwd identity of /api/info (monitoring tabs MON-1a)', () => {
   })
 })
 
+describe('wwdalerts of /api/info (monitoring tabs MON-9a-2b: who delivers the push)', () => {
+  const load = async (wwdalerts: unknown) => {
+    useNexHostStore.setState({ byHost: {} })
+    vi.mocked(hostApi.fetchInfo).mockResolvedValue(({ ok: true, status: 200, json: () => Promise.resolve({ nex: info(), wwdalerts }) }) as Response)
+    await ensure()
+    return entry().wwdAlerts
+  }
+
+  it('keeps the switch word and whether this daemon is the deliverer', async () => {
+    expect(await load({ push: 'on', deliverer: true, suppressed: false })).toEqual({ push: 'on', deliverer: true })
+    expect(await load({ push: 'off', deliverer: false })).toEqual({ push: 'off', deliverer: false })
+  })
+  it('missing, null or a module that is not mounted → null', async () => {
+    expect(await load(undefined)).toBeNull()
+    expect(await load(null)).toBeNull()
+  })
+  it('a word or a deliverer it does not know → null, not a guess', async () => {
+    expect(await load({ push: 'maybe', deliverer: true })).toBeNull()
+    expect(await load({ push: 'on', deliverer: 'yes' })).toBeNull()
+    expect(await load({ push: 'on' })).toBeNull()
+    expect(await load('on')).toBeNull()
+  })
+})
+
 describe('daemonCapabilities (worker test tab S2)', () => {
   const infoWith = (capabilities: unknown): Response =>
     ({ ok: true, status: 200, json: () => Promise.resolve({ nex: info(), capabilities }) }) as Response

@@ -1,21 +1,21 @@
 // Guard (monitoring tabs plan, common rules; spec A1 / A11): the sidebar's host row and the files this line made pool-only do not read the fleet. The scope is `components/fleet/**`, `components/watch/host/**` (the host page's new files, MON-6d-2 on) and
 // the listed `lib/pool` files. Not in scope, by name: `fleet-bridge.ts` (the Hosts page's only reader, until MON-9b), `host-view.ts`,
-// `history.ts`, `use-pool-host-rows.ts`, `use-series-history.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
+// `use-pool-host-rows.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
 // A scoped, non-test file must not import anything from `lib/fleet/` (a type import too) and must not mention the fleet's readers.
 import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar, the task queue tab (MON-5b) and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '/src/components/watch/ProcTable.tsx', '/src/components/watch/WatchHostPane.tsx', '/src/components/watch/WatchSettings.tsx', '/src/components/watch/WorkerSettings.tsx', '/src/components/watch/WorkerExceptions.tsx', '/src/components/watch/Gauge.tsx', '/src/components/watch/AvailRow.tsx', '/src/components/watch/ResidentsTable.tsx', '/src/lib/watch/view-memory.ts', '/src/features/workspace/lib/watch-area.ts', '/src/features/workspace/lib/open-watch-area.ts', '/src/components/watch/WatchEventsPane.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '/src/components/watch/ProcTable.tsx', '/src/components/watch/WatchHostPane.tsx', '/src/components/watch/WatchSettings.tsx', '/src/components/watch/WorkerSettings.tsx', '/src/components/watch/WorkerExceptions.tsx', '/src/components/watch/Gauge.tsx', '/src/components/watch/AvailRow.tsx', '/src/components/watch/ResidentsTable.tsx', '/src/lib/watch/view-memory.ts', '/src/lib/watch/queue-time.ts', '/src/hooks/useTabQueued.ts', '/src/features/workspace/lib/watch-area.ts', '/src/features/workspace/lib/open-watch-area.ts', '/src/components/watch/WatchEventsPane.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
-  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'queue-routes.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts', 'host-extra.ts', 'host-status.ts', 'control-api.ts', 'exceptions.ts', 'pause.ts', 'alert-rules.ts',
+  'bar-readings.ts', 'cell-model.ts', 'daemons.ts', 'host-looks.ts', 'host-state.ts', 'parse.ts', 'ring-driver.ts', 'store.ts', 'types.ts', 'use-cell-models.ts', 'use-monitor-hosts.ts', 'words.ts', 'pool-jobs.ts', 'queue-strip.ts', 'host-counts.ts', 'indicator.ts', 'alerts-api.ts', 'alerts-store.ts', 'alerts-events.ts', 'host-history.ts', 'use-host-series.ts', 'queue-flow.ts', 'queue-routes.ts', 'observations-api.ts', 'events-model.ts', 'host-charts.ts', 'host-extra.ts', 'host-status.ts', 'host-charts-full.ts', 'proc-history.ts', 'use-proc-history.ts', 'control-api.ts', 'exceptions.ts', 'pause.ts', 'indicator-migration.ts', 'push-switch.ts', 'alert-rules.ts', 'host-observations.ts', 'use-host-observations.ts',
 ]
 // Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet; the process table has its own row type (MON-6e); the host page (MON-6f-2) and the files it is made of.
 const OTHER_FILES = [
   'features/workspace/components/WatchShieldButton.tsx', 'components/watch/ProcTable.tsx', 'components/watch/WatchHostPane.tsx', 'components/watch/WatchSettings.tsx', 'components/watch/WorkerSettings.tsx', 'components/watch/WorkerExceptions.tsx',
-  'components/watch/Gauge.tsx', 'components/watch/AvailRow.tsx', 'components/watch/ResidentsTable.tsx', 'lib/watch/view-memory.ts', 'features/workspace/lib/watch-area.ts', 'features/workspace/lib/open-watch-area.ts', 'components/watch/WatchEventsPane.tsx',
+  'components/watch/Gauge.tsx', 'components/watch/AvailRow.tsx', 'components/watch/ResidentsTable.tsx', 'lib/watch/view-memory.ts', 'hooks/useTabQueued.ts', 'lib/watch/queue-time.ts', 'features/workspace/lib/watch-area.ts', 'features/workspace/lib/open-watch-area.ts', 'components/watch/WatchEventsPane.tsx',
 ]
 // Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
 // barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
@@ -47,6 +47,8 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(names).toContain('lib/pool/exceptions.ts')
     expect(names).toContain('lib/pool/pause.ts')
     expect(names).toContain('lib/watch/view-memory.ts')
+    expect(names).toContain('lib/watch/queue-time.ts')
+    expect(names).toContain('hooks/useTabQueued.ts')
     expect(names).toContain('features/workspace/lib/open-watch-area.ts')
     for (const f of scoped()) expect(f.code, f.name).toBeTypeOf('string')
   })

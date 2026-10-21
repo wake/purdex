@@ -49,7 +49,7 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 			// inside, is fine.
 			for l := range links {
 				if linkLeaves(links, l) {
-					return "", fmt.Errorf("snapshot tar: symlink %q -> %q leads out of the workspace", l, links[l])
+					return "", &OutsideLinkError{Path: l, Target: links[l]}
 				}
 				if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) { // and what the file system itself says
 					return "", fmt.Errorf("snapshot tar: symlink %q: %w", l, err)
@@ -108,7 +108,7 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 		case tar.TypeSymlink:
 			// Root does not stop a symlink from being made with an outside target, only from being followed; none is made.
 			if path.IsAbs(h.Linkname) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), h.Linkname)) {
-				return "", fmt.Errorf("snapshot tar: symlink %q -> %q leads out of the workspace", h.Name, h.Linkname)
+				return "", &OutsideLinkError{Path: h.Name, Target: h.Linkname}
 			}
 			if err := root.Symlink(h.Linkname, name); err != nil {
 				return "", err

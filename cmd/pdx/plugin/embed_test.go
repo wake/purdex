@@ -12,8 +12,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/wwd/jobscmd"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
@@ -611,9 +611,8 @@ func TestScanRegistrations_RetiredRegisterLeaseFailsClosed(t *testing.T) {
 	}
 }
 
-// The gate skill tells an agent what is held and why not to get around it, how to read the status, and how to use the gate
-// in a script. The exit code and the strings it names are the real ones.
-func TestSkill_GateSaysWhatAnAgentNeeds(t *testing.T) {
+// The gate skill tells an agent that the gate is a pass-through now, what is gone with it, and who holds heavy work instead (S0).
+func TestSkill_GateSaysItIsAPassThrough(t *testing.T) {
 	b, err := fs.ReadFile(Files(), "skills/pdx-gate/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
@@ -621,31 +620,24 @@ func TestSkill_GateSaysWhatAnAgentNeeds(t *testing.T) {
 	s := string(b)
 	for _, want := range []string{
 		"name: pdx-gate",
-		"排隊就是主機忙，不是卡住",
-		"你不必自己包 `pdx gate`",
-		"**不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊**",
-		"不要重跑、不要自己加 `&`、不要假設它做完了", // what to do with the mod's background note
-		"整個", // the whole call goes to the background
-		"node_modules/.bin/vitest", "vendor/bin/pest", "pdx gate --auto --",
-		"pdx gate status", "pdx gate status --json", "pdx gate would-wait --auto --",
-		"拿著鎖的行程",
-		"pdx gate -- ./script.sh", "不要只包腳本裡的某一步",
-		"旗標都放在 `--` 之前",
-		"**75**", "`pdx gate:`", // the gate's own exit code (gate.ExitRefused) and its stderr prefix
-		"`pdx lease run --kind … -- <指令…>` 目前是 `pdx gate` 的別名", "`--ask`／`--queue`／`--wait` 已沒有作用", "`build` 不經閘門直接執行", "實際數字以 `pdx gate status` 顯示的生效設定為準", // the retired verb is named once, as an alias
+		"現在是直通",
+		"立刻直接執行", "exec",
+		"不排隊、不取名額、不加 `nice`、不限制 `go test -p`",
+		"不會再有結束碼 **75**",
+		"`pdx gate would-wait …` 一律回「不會等」",
+		"不再把你的 Bash 呼叫改成背景執行",
+		"`pdx test`", "`pdx-test` skill",
+		"不代表",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-gate lacks %q", want)
 		}
 	}
-	// What the lease told and the gate does not: none of it may survive in the skill.
-	for _, gone := range []string{"輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "advise", "--maxWorkers=3"} {
+	// What the gate promised and does not keep: none of it may survive in the skill as a promise.
+	for _, gone := range []string{"排隊就是主機忙，不是卡住", "你不必自己包 `pdx gate`", "輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "pdx lease run", "advise", "--maxWorkers=3", "不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊", "pdx gate -- ./script.sh", "不要只包腳本裡的某一步"} {
 		if strings.Contains(s, gone) {
 			t.Errorf("SKILL.md of pdx-gate still says %q", gone)
 		}
-	}
-	if want := fmt.Sprintf("**%d**", gate.ExitRefused); !strings.Contains(s, want) {
-		t.Errorf("SKILL.md of pdx-gate does not name the gate's refusal code %s", want)
 	}
 }
 
@@ -675,6 +667,32 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 	for _, verb := range []string{"pdx watch status", "pdx watch log", "pdx watch ack"} {
 		if !strings.Contains(s, verb) {
 			t.Errorf("SKILL.md of pdx-watch does not mention %q", verb)
+		}
+	}
+	// The wwd alert section and the verbs it teaches.
+	for _, want := range []string{
+		"wwd 警報", "`pressure_watch`", "report-wwd.sh", "pdx wwd hold",
+		"不要直接執行 wwd 的二進位", "不需要也沒有 ack",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-watch lacks %q", want)
+		}
+	}
+	// Every pdx wwd / pdx jobs verb the skill teaches is in the CLI's own usage text
+	// (jobscmd.WWDUsage / JobsUsage), so renaming a verb turns this red.
+	for _, c := range []struct{ verb, usage string }{
+		{"pdx wwd worker", jobscmd.WWDUsage}, {"pdx wwd hold", jobscmd.WWDUsage},
+		{"pdx wwd pool", jobscmd.WWDUsage}, {"pdx wwd usage", jobscmd.WWDUsage},
+		{"pdx wwd status", jobscmd.WWDUsage}, {"pdx wwd exception stop", jobscmd.WWDUsage},
+		{"pdx jobs move", jobscmd.JobsUsage}, {"pdx jobs cancel", jobscmd.JobsUsage}, {"pdx jobs show", jobscmd.JobsUsage},
+	} {
+		if !strings.Contains(s, c.verb) {
+			t.Errorf("SKILL.md of pdx-watch does not mention %q", c.verb)
+		}
+		// usage prints the default subcommand as "pdx wwd [status]".
+		inUsage := strings.ReplaceAll(c.usage, "pdx wwd [status]", "pdx wwd status")
+		if !strings.Contains(inUsage, c.verb) {
+			t.Errorf("%q is taught by SKILL.md of pdx-watch but not in the CLI usage", c.verb)
 		}
 	}
 }

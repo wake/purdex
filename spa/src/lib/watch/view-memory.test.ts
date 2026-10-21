@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  readQueueTab, writeQueueTab, clearViewMemory,
+  clearViewMemory, readProcAt, writeProcAt, readLookMode, writeLookMode,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -15,6 +15,17 @@ describe('watch view memory — the host page\'s sub-tab (MON-6f-1)', () => {
     expect([readHostTab('h1'), readHostTab('h2'), readHostTab('h3')]).toEqual(['settings', 'procs', 'monitor'])
     clearViewMemory()
     expect(readHostTab('h1')).toBe('monitor')
+  })
+})
+
+describe('watch view memory — the colour mode of the host page\'s look editor (MON-9a-3)', () => {
+  it('defaults to the terminal mode (the one the sidebar uses), is kept per host and cleared with the rest', () => {
+    expect(readLookMode('h1')).toBe('terminal')
+    writeLookMode('h1', 'console')
+    writeLookMode('h2', 'execution')
+    expect([readLookMode('h1'), readLookMode('h2'), readLookMode('h3')]).toEqual(['console', 'execution', 'terminal'])
+    clearViewMemory()
+    expect(readLookMode('h1')).toBe('terminal')
   })
 })
 
@@ -43,19 +54,6 @@ describe('watch view memory — the host page\'s scroll', () => {
   })
 })
 
-describe('watch view memory — queue sub-tab (the old gate\'s, until MON-12)', () => {
-  it('defaults to 當下 (now) and is kept per host', () => {
-    expect(readQueueTab('h1')).toBe('now')
-    writeQueueTab('h1', 'history')
-    expect([readQueueTab('h1'), readQueueTab('h2')]).toEqual(['history', 'now'])
-  })
-  it('is cleared with the rest', () => {
-    writeQueueTab('h1', 'history')
-    clearViewMemory()
-    expect(readQueueTab('h1')).toBe('now')
-  })
-})
-
 describe('watch view memory — the events tab (MON-10c)', () => {
   it('defaults to no filter, no scroll and nothing read; keeps what is written; is cleared with the rest', () => {
     expect(readEventFilters()).toEqual({ host: 'all', source: 'all', status: 'all' })
@@ -69,5 +67,19 @@ describe('watch view memory — the events tab (MON-10c)', () => {
     expect(readEventsObservations().forbidden).toEqual(['mserv'])
     clearViewMemory()
     expect([readEventFilters().host, readEventsScroll(), readEventsObservations().forbidden]).toEqual(['all', 0, []])
+  })
+})
+
+describe('the 行程 tab\'s picked record (MON-8b)', () => {
+  it('is the time of the record, per host; null is the live one; clearing forgets it', () => {
+    expect(readProcAt('h1')).toBeNull()
+    writeProcAt('h1', 1_800_000_000_000)
+    writeProcAt('h2', 5)
+    expect([readProcAt('h1'), readProcAt('h2')]).toEqual([1_800_000_000_000, 5])
+    writeProcAt('h1', null)
+    expect(readProcAt('h1')).toBeNull()
+    expect(readProcAt('h2')).toBe(5)
+    clearViewMemory()
+    expect(readProcAt('h2')).toBeNull()
   })
 })

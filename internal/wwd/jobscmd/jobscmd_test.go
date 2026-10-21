@@ -34,6 +34,11 @@ type fakeAPI struct {
 	pool          wire.Pool
 	worker        wire.WorkerSettings
 	set           *wire.WorkerSettings
+	askedHost     string // the host WorkerOn and SetWorkerOn were last asked about
+	expect        string // the etag SetWorkerOn was last given
+	setErr        error  // returned by SetWorkerOn only
+	sets          int    // how many times SetWorkerOn was called
+	noEtag        bool   // WorkerOn answers as a wwd from before the etag does
 	started       *wire.Exception
 	stopped       string
 	startedOn     string
@@ -90,6 +95,23 @@ func (f *fakeAPI) Worker(context.Context) (wire.WorkerSettings, error) { return 
 func (f *fakeAPI) SetWorker(_ context.Context, s wire.WorkerSettings) (wire.WorkerSettings, error) {
 	f.set = &s
 	return s, f.err
+}
+func (f *fakeAPI) WorkerOn(_ context.Context, host string) (wire.WorkerView, error) {
+	f.askedHost = host
+	v := f.worker.View()
+	if f.noEtag {
+		v.Etag = ""
+	}
+	return v, f.err
+}
+func (f *fakeAPI) SetWorkerOn(_ context.Context, host string, s wire.WorkerSettings, expect string) (wire.WorkerView, error) {
+	f.askedHost, f.expect = host, expect
+	f.sets++
+	if f.setErr != nil {
+		return wire.WorkerView{}, f.setErr
+	}
+	f.set = &s
+	return s.View(), f.err
 }
 func (f *fakeAPI) StartException(_ context.Context, e wire.Exception) error {
 	f.started = &e
@@ -396,7 +418,7 @@ func TestWorkerSwitchKeepsWhatItWasNotAskedToChange(t *testing.T) {
 		t.Fatalf("on with slots: code %d set %+v", code, f.set)
 	}
 	f.set = nil
-	for _, args := range [][]string{{"worker"}, {"worker", "maybe"}, {"worker", "on", "--heavy", "-1"}, {"worker", "on", "--heavy", "x"}, {"worker", "on", "--bogus", "1"}} {
+	for _, args := range [][]string{{"worker", "maybe"}, {"worker", "--heavy", "2"}, {"worker", "--expect", "abc"}, {"worker", "on", "--expect="}, {"worker", "on", "--host", "a\nb"}, {"worker", "on", "--heavy", "-1"}, {"worker", "on", "--heavy", "x"}, {"worker", "on", "--bogus", "1"}} {
 		if code, _, _ := runWWD(f, args...); code != ExitUsage || f.set != nil {
 			t.Errorf("%v: code %d set %+v", args, code, f.set)
 		}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -47,14 +46,15 @@ func main() {
 		}
 		return
 	}
-	cfgPath := flag.String("config", "", "config file (default ~/.config/wwd/config.toml)")
-	version := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-	if *version {
+	cfgPath, action, code := parseCLI(os.Args[1:], os.Stdout, os.Stderr)
+	switch action {
+	case cliExit:
+		os.Exit(code)
+	case cliVersion:
 		fmt.Printf("wwd %s (%s)\n", buildinfo.Version, buildinfo.Hash)
 		return
 	}
-	if err := run(*cfgPath); err != nil {
+	if err := run(cfgPath); err != nil {
 		log.Fatalf("wwd: %v", err)
 	}
 }
@@ -100,13 +100,20 @@ func run(cfgPath string) error {
 		}
 		ownerRule = fmt.Sprintf("hid<%dm", mins)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	// wwd.db: the host state here, the queue's tables beside it (queue.Migrate is
-	// idempotent and runs on every start)
+	// one stamp for every try of the start record, and for the clean-exit mark of this run
+	startedAt := time.Now()
+	// A stop on request (SIGTERM, SIGINT) leaves the mark that tells the next start this run did not crash (#3843); an error return does not.
+	// The data directory is made first: the mark may be needed before wwd.db is open.
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return err
 	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	ctx, stop := watchStop(sigs, cfg.DataDir, startedAt, log.Printf)
+	defer stop()
+	// wwd.db: the host state here, the queue's tables beside it (queue.Migrate is
+	// idempotent and runs on every start)
 	st, err := store.Open(filepath.Join(cfg.DataDir, "wwd.db"))
 	if err != nil {
 		return err
@@ -115,9 +122,6 @@ func run(cfgPath string) error {
 	if err := queue.Migrate(ctx, st.DB()); err != nil {
 		return err
 	}
-	// one record per run, for the crash-loop rule (spec §13.1); a failure to write it must not stop the host from starting
-	startedAt := time.Now() // one stamp for every try, so a retry records the same start
-	recordStart(ctx, func() error { return st.RecordStartAt(startedAt, buildinfo.Version, "") }, startRetryDelays, log.Printf)
 	broker := daemon.NewBroker()
 	// The one lock table of this host: the fast lane's runs and the worker's claims take their keys from it. The quarantine store holds
 	// the keys of the jobs whose commands were not proven stopped; their holds go back before anything can take a lock, and a host that
@@ -304,6 +308,9 @@ func run(cfgPath string) error {
 	}
 	httpRun = run
 	log.Printf("wwd %s listening on %v and %s", buildinfo.Version, run.TCPAddrs(), cfg.SocketPath)
+	// One record per run, for the crash-loop rule (spec §13.1), written once the ports are bound: a start that could not bind (a second wwd,
+	// `wwd` run by mistake) is not a start of the service (#3843). A failure to write it must not stop the host.
+	recordThisStart(ctx, st, cfg.DataDir, startedAt, buildinfo.Version, startRetryDelays, log.Printf)
 	select {
 	case <-ctx.Done():
 		return nil

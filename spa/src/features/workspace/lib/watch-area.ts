@@ -14,7 +14,6 @@ import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, WATCH_WORKSPACE_ID, hostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
 import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
-import { anyHostDeclaresWatch } from '../../../lib/watch/events-store'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { ALERTS_CAPABILITY } from '../../../lib/pool/alerts-store'
@@ -63,6 +62,11 @@ function dropTab(tabId: string): void {
 }
 
 const GUARDIAN_PANEL: PaneContent = { kind: 'watch-guardian' }
+/** Whether any connected host carries the watch module: the status answered `ok` (the events tab exists from then on). */
+function anyHostDeclaresWatch(statusByHost: Record<string, { kind: string }>): boolean {
+  return Object.values(statusByHost).some((e) => e.kind === 'ok')
+}
+
 const EVENTS_PANE: PaneContent = { kind: 'watch-events' }
 const JOBS_PANE: PaneContent = { kind: 'watch-jobs' }
 

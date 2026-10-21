@@ -98,33 +98,7 @@ func TestGate_StatusShowsASlotWithNoRecord(t *testing.T) {
 	assert.Contains(t, out.String(), `"no_record": true`)
 }
 
-func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {
-	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
-	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--", "sh", "-c", "touch " + dir + "/ran; exit 5"}, &out, &errb)
-	assert.Equal(t, 5, code)
-	_, err := os.Stat(dir + "/ran")
-	assert.NoError(t, err)
-}
-
-func TestGate_AutoPassesWhatIsNotHeavy(t *testing.T) {
-	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n")
-	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--auto", "--", "sh", "-c", "touch " + dir + "/ran"}, &out, &errb)
-	assert.Equal(t, 0, code)
-	_, err := os.Stat(dir + "/ran")
-	assert.NoError(t, err)
-	_, err = os.Stat(filepath.Join(dir, "gate"))
-	assert.True(t, os.IsNotExist(err), "a command that is not heavy never touches the gate directory")
-}
-
-func TestGate_RealRunsInPlaceOfTheFirstWord(t *testing.T) {
-	cfg, _ := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
-	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--real", "/bin/echo", "--", "not-a-binary", "from-real"}, &out, &errb)
-	assert.Equal(t, 0, code)
-	assert.Equal(t, "from-real\n", out.String()+"")
-}
+// (The tests that ran a command under a slot are gate_direct_test.go now: S0-a.)
 
 func TestGate_Usage(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -151,15 +125,17 @@ func TestGate_StatusReadsTheDirectoryWithoutTheDaemon(t *testing.T) {
 	assert.Equal(t, 0, gateMain([]string{"status", "--holders", "--config", cfg}, &out, &errb), "and harmless without it")
 }
 
-func TestGate_ABrokenConfigIsReportedAndTheDefaultsRun(t *testing.T) {
+// A settings file that does not read is reported and the defaults answer; would-wait is the one that still reads it (a run does not).
+func TestGate_ABrokenConfigIsReportedAndTheDefaultsAnswer(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PDX_GATE_DIR", filepath.Join(dir, "gate"))
 	t.Setenv("PDX_GATE_HELD", "")
 	bad := filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(bad, []byte("[gate\n"), 0o600))
 	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", bad, "--auto", "--", "true"}, &out, &errb)
+	code := gateMain([]string{"would-wait", "--config", bad, "--auto", "--", "go", "test"}, &out, &errb)
 	assert.Equal(t, 0, code)
+	assert.Equal(t, "no\n", out.String())
 	assert.Contains(t, errb.String(), "using the defaults")
 }
 
@@ -188,14 +164,4 @@ func TestGate_HistoryListsWhatWasOfferedToAHost(t *testing.T) {
 	assert.Equal(t, "air26", recs[0]["host"])
 
 	assert.Equal(t, 2, gateMain([]string{"history", "--since", "soon", "--config", cfg}, &out, &errb))
-}
-
-// --assist-host tries the host first; when the command cannot be sent it waits and runs here, as if it had never been sent.
-func TestGate_AssistHostThatCannotBeReachedRunsTheCommandHere(t *testing.T) {
-	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
-	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--assist-host", "air26", "--assist-ssh", "/nonexistent/ssh", "--class", "light", "--", "sh", "-c", "touch " + dir + "/ran"}, &out, &errb)
-	assert.Equal(t, 0, code)
-	assert.Contains(t, errb.String(), "waiting on this host")
-	assert.FileExists(t, dir+"/ran")
 }

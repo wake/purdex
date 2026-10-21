@@ -28,11 +28,11 @@ import { startWorkerTitlePrefetch } from './lib/nex/worker-title-prefetch'
 import { startProfileSync } from './lib/profile/start'
 import { bootHostLooks } from './lib/host-look-migration'
 import { bootPoolLooks } from './lib/pool/pool-look-migration'
+import { migrateGlobalIndicator } from './lib/pool/indicator-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { startWatchArea } from './features/workspace/lib/watch-area'
 import { startWatchStatus } from './lib/watch/status-store'
 import { startWatchLaunch } from './lib/watch/launch'
-import { startWatchEvents } from './lib/watch/events-store'
 import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { startActiveTabMarkRead } from './lib/active-tab-mark-read'
@@ -93,8 +93,8 @@ startWorkerTitlePrefetch()
 // It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
 // migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With
 // synchronous localStorage this is a microtask. `bootHostLooks` never rejects. The pool hosts' look copy (monitoring tabs A3) runs between the two, for the same reason; it waits at most ~10 s
-// and never rejects.
-void bootHostLooks().then(() => bootPoolLooks()).then(() => startProfileSync())
+// and never rejects. The global 主機格指示 copy (MON-9a-3) follows it, for the same reason.
+void bootHostLooks().then(() => bootPoolLooks()).then(() => migrateGlobalIndicator()).then(() => startProfileSync())
 // Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.
@@ -103,8 +103,6 @@ startStandaloneAdoption()
 startWatchStatus()
 // The launch panel's busy state ends when the watcher registers, and with the host it was asked of (app lifetime).
 startWatchLaunch()
-// The watcher's events: each watch host's `GET /api/watch/events`, on its first status answer and on its `watch.events` push.
-startWatchEvents()
 // The watcher area's host tabs follow the fleet's host list, while the area's workspace exists (app lifetime).
 startWatchArea()
 // Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions

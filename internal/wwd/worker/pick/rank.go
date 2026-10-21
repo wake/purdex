@@ -23,7 +23,7 @@ type Candidate struct {
 type Env struct {
 	Now    time.Time
 	Labels []string // this host's labels; a job's labels must be a subset
-	// ExplicitLabelsOnly: take only a job whose labels name this host's os: label or a task:<repo>/<task> label it holds (#3441). A job
+	// ExplicitLabelsOnly: take only a job whose labels name this host's os: label, a task:<repo>/<task> label it holds (#3441) or a host: label (#3873). A job
 	// from an older commit has no labels at all, and without this any worker, mserv included, would claim it.
 	ExplicitLabelsOnly bool
 	// SpeedFactor multiplies Estimate in size_penalty; anything not a positive finite number is taken as 1.
@@ -70,11 +70,12 @@ func classRank(c wire.JobClass) float64 {
 // finite: a score must be a number the comparator can order; NaN and Inf from a bad estimate are treated as "no estimate".
 func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-// explicit: the job names an os: label or an earned task: label. The caller has already checked the job's labels are a subset of the
+// explicit: the job names an os: label, an earned task: label or a host: label (#3873: a qualify candidate names its host and, on purpose, no
+// task:; a host: label only the named host holds is an assignment as explicit as the others). The caller has already checked the job's labels are a subset of the
 // host's, so such a label is one this host holds.
 func explicit(labels []string) bool {
 	for _, l := range labels {
-		if strings.HasPrefix(l, "os:") || strings.HasPrefix(l, "task:") {
+		if strings.HasPrefix(l, "os:") || strings.HasPrefix(l, "task:") || strings.HasPrefix(l, "host:") {
 			return true
 		}
 	}

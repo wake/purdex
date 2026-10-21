@@ -211,11 +211,27 @@ func (s *HostState) sane(ws wire.WorkerSettings, from string) wire.WorkerSetting
 // SetWorker replaces the worker settings. changed is false (and nothing is saved
 // or announced) when they are the same as before.
 func (s *HostState) SetWorker(ws wire.WorkerSettings) (changed bool, err error) {
+	return s.SetWorkerIf(ws, "")
+}
+
+// EtagMismatchError is SetWorkerIf refusing a change because expect no longer names the setting in force; Current is that setting.
+type EtagMismatchError struct{ Current wire.WorkerSettings }
+
+func (e *EtagMismatchError) Error() string {
+	return "worker settings changed since the etag was read (now " + e.Current.Etag() + ")"
+}
+
+// SetWorkerIf is SetWorker that, when expect is not empty, changes nothing unless expect is the etag of the setting in force. The
+// comparison and the write are under the one lock, so two writers that read the same etag cannot both win.
+func (s *HostState) SetWorkerIf(ws wire.WorkerSettings, expect string) (changed bool, err error) {
 	if err := s.checkWorker(ws); err != nil {
 		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if expect != "" && expect != withFloor(s.worker, nil).Etag() {
+		return false, &EtagMismatchError{Current: withFloor(s.worker, nil)}
+	}
 	ws = withFloor(ws, &s.worker) // a PUT without the floor keeps the one in force
 	if sameWorker(ws, s.worker) {
 		return false, nil
