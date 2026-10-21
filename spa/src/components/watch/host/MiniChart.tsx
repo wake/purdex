@@ -2,8 +2,10 @@
 // `lib/pool/host-charts.ts` made from the samples; it holds no state. The plot is an SVG with a viewBox that stretches (`preserveAspectRatio="none"`): a point is placed by its TIME in [now − range, now] and its value between the
 // chart's min and max. A null value breaks a line, and so do two points more than 3 steps apart (a hole in the record). The hovered point is the parent's (`hoverIndex`, `onHover`): the cards of one tab share it (MON-6e).
 import { useId, useRef } from 'react'
+import { Info } from '@phosphor-icons/react'
 import type { ChartColor, ChartDef, ChartSeries } from '../../../lib/pool/host-charts'
 import { bigValue } from '../../../lib/pool/host-charts'
+import { formatValue } from '../../../lib/pool/host-charts-full'
 import { RANGE_MS, readsFiveSecond, type HostRange, type HostSample } from '../../../lib/pool/host-history'
 import { useI18nStore } from '../../../stores/useI18nStore'
 
@@ -24,6 +26,8 @@ export interface MiniChartProps {
   onHover: (i: number | null) => void
   /** The host has gone: the slanted lines run from `fromAt` to the right edge (M22). */
   dead: { fromAt: number; tone: 'warning' | 'error' | 'muted' } | null
+  /** `full` (the 狀態 tab's charts): the unit and a note by the title, no big number, a value in each legend entry, five times on the axis. Default `mini`. */
+  variant?: 'mini' | 'full'
 }
 
 interface Pt { x: number; y: number; base: number }
@@ -42,8 +46,9 @@ function totalsOf(defSeries: readonly ChartSeries[], index: number): (number | n
   return s.values.map((v, i) => (v === null || under[i] === null ? null : v + (under[i] as number)))
 }
 
-export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead }: MiniChartProps) {
+export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead, variant = 'mini' }: MiniChartProps) {
   const t = useI18nStore((s) => s.t)
+  const full = variant === 'full'
   const plotRef = useRef<HTMLDivElement>(null)
   const hatchId = useId()
   const R = RANGE_MS[range]
@@ -84,7 +89,13 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
   samples.forEach((s, i) => { if (live(s)) lastIdx = i })
   const hoverable = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < samples.length && live(samples[hoverIndex])
   const hovered = hoverable ? samples[hoverIndex] : undefined
-  const big = bigValue(def, samples, hoverable ? hoverIndex : lastIdx, t)
+  const at = hoverable ? hoverIndex : lastIdx
+  const big = full ? null : bigValue(def, samples, at, t)
+  // The full legend writes each series' own value at that point (a stacked layer's own, not the sum).
+  const legendValue = (s: ChartSeries): string | null => {
+    const v = at >= 0 ? s.values[at] : null
+    return v === null || v === undefined ? null : formatValue(def.format ?? 'f1', v)
+  }
 
   const move = (clientX: number): void => {
     const el = plotRef.current
@@ -104,14 +115,18 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
     <div data-testid="mini-chart" data-chart={def.id} className="rounded-lg border border-border-default bg-surface-secondary px-3 py-2">
       <div className="flex items-baseline gap-2">
         <span className="text-xs text-text-secondary">{t(def.titleKey)}</span>
+        {full && def.unit !== '' && <span data-testid="mini-unit" className="text-[10px] text-text-muted">{def.unit}</span>}
+        {full && def.noteKey && <span data-testid="mini-note" title={t(def.noteKey)} className="inline-flex text-text-muted"><Info size={11} /></span>}
         <span className="flex-1" />
-        <b data-testid="mini-big" className={`text-sm font-semibold tabular-nums ${big.muted ? 'font-normal text-text-muted' : 'text-text-primary'}`}>
-          {big.main}{big.unit && <i className="ml-0.5 text-[10px] font-normal not-italic text-text-muted">{big.unit}</i>}
-        </b>
+        {big && (
+          <b data-testid="mini-big" className={`text-sm font-semibold tabular-nums ${big.muted ? 'font-normal text-text-muted' : 'text-text-primary'}`}>
+            {big.main}{big.unit && <i className="ml-0.5 text-[10px] font-normal not-italic text-text-muted">{big.unit}</i>}
+          </b>
+        )}
       </div>
       <div className="relative mt-1 flex gap-1">
-        <div className="flex w-7 shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-text-muted" style={{ height: H }}>
-          {[def.yMax, mid, def.yMin].map((v, i) => <span key={i} data-testid={`mini-ytick-${i}`}>{tick(v)}</span>)}
+        <div className={`flex ${full ? 'w-14' : 'w-7'} shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-text-muted`} style={{ height: H }}>
+          {[def.yMax, mid, def.yMin].map((v, i) => <span key={i} data-testid={`mini-ytick-${i}`}>{full && def.format ? formatValue(def.format, v) : tick(v)}</span>)}
         </div>
         <div ref={plotRef} data-testid="mini-plot" className="relative min-w-0 flex-1" style={{ height: H }} onMouseMove={(e) => move(e.clientX)} onMouseLeave={() => onHover(null)}>
           <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block" aria-hidden="true">
@@ -142,17 +157,19 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead 
             <span key={i} data-testid={`mini-threshold-label-${i}`} className="pointer-events-none absolute right-0 text-[9px] text-text-muted" style={{ top: Math.max(0, Y(l.value) - 11) }}>{t(l.labelKey, l.labelParams)}</span>
           ))}
           {hovered && <span data-testid="mini-hover-time" className="pointer-events-none absolute top-0 rounded bg-surface-elevated px-1 text-[9px] tabular-nums text-text-primary" style={{ left: `${Math.min(88, Math.max(0, (X(hovered.at) / W) * 100 - 6))}%` }}>{hms(hovered.at)}</span>}
-          {def.pending && <div data-testid="mini-pending" className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] leading-snug text-text-muted">{t('watch.host.chart.pending_all')}</div>}
+          {def.pending && <div data-testid="mini-pending" className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] leading-snug text-text-muted">{t(def.noneKey ?? def.pendingKey ?? 'watch.host.chart.pending_all')}</div>}
         </div>
       </div>
-      <div className="mt-1 flex justify-between pl-8 text-[9px] tabular-nums text-text-muted">
-        {[now - R, now - R / 2, now].map((at, i) => <span key={i} data-testid={`mini-xtick-${i}`}>{hm(at)}</span>)}
+      <div className={`mt-1 flex justify-between ${full ? 'pl-16' : 'pl-8'} text-[9px] tabular-nums text-text-muted`}>
+        {(full ? [0, 1, 2, 3, 4].map((i) => now - R + (R * i) / 4) : [now - R, now - R / 2, now]).map((tickAt, i) => <span key={i} data-testid={`mini-xtick-${i}`}>{hm(tickAt)}</span>)}
       </div>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 pl-8 text-[10px] text-text-secondary">
+      <div className={`mt-1 flex flex-wrap gap-x-3 gap-y-0.5 ${full ? 'pl-16' : 'pl-8'} text-[10px] text-text-secondary`}>
         {def.series.map((s) => (
           <span key={s.id} data-testid={`mini-legend-${s.id}`} data-pending={String(s.pending)} className="inline-flex items-center gap-1">
             <span className={`inline-block h-1.5 w-1.5 rounded-full bg-current ${COLOR[s.color]} ${s.pending ? 'opacity-30' : ''}`} />
-            {t(s.labelKey)}{s.pending && <span className="text-text-muted">・{t('watch.host.chart.pending_series')}</span>}
+            {s.label ?? t(s.labelKey, s.labelParams)}
+            {full && legendValue(s) !== null && <b className="font-medium tabular-nums text-text-primary">{legendValue(s)}</b>}
+            {s.pending && <span className="text-text-muted">・{t('watch.host.chart.pending_series')}</span>}
           </span>
         ))}
       </div>
