@@ -85,6 +85,25 @@ func TestQualification_ABadAnswerIsABadResponse(t *testing.T) {
 	}
 }
 
+// An answer about another host than the one asked is a bad response: the Purdex route names the host it was asked for, so it must not
+// hang another host's tasks on it.
+func TestQualification_AnAnswerForAnotherHostIsABadResponse(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/qualification", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"host":"mserv","tasks":[],"recent":[]}`))
+	})
+	c := New(fakeWWD(t, mux))
+	if _, known, err := c.Qualification(context.Background(), "air26"); known || !errors.Is(err, ErrBadResponse) {
+		t.Fatalf("asked for air26, answered for mserv: known=%v err=%v", known, err)
+	}
+	if _, known, err := c.Qualification(context.Background(), "mserv"); err != nil || !known {
+		t.Fatalf("the host asked for: known=%v err=%v", known, err)
+	}
+	if _, known, err := c.Qualification(context.Background(), ""); err != nil || !known {
+		t.Fatalf("the local host (no alias) names itself: known=%v err=%v", known, err)
+	}
+}
+
 // A null list in an answer is an empty one: the App reads arrays.
 func TestQualification_NullListsBecomeEmpty(t *testing.T) {
 	mux := http.NewServeMux()

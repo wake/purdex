@@ -70,8 +70,13 @@ func TestQualification_TheErrorsAreTheOnesTheOtherReadsHave(t *testing.T) {
 // The answer is cached for a second, per host: two reads in a row reach wwd once.
 func TestQualification_IsCachedForASecondPerHost(t *testing.T) {
 	var s seen
-	m := New() // New has the cache; newModule turns it off
-	m.cl = fakeWWD(t, qualificationWWD(t, &s, 200, qualJSON))
+	m := New()                   // New has the cache; newModule turns it off
+	byHost := http.NewServeMux() // each host answers for itself, as the local wwd's forward does
+	byHost.HandleFunc("GET /v1/qualification", func(w http.ResponseWriter, r *http.Request) {
+		s.add(r)
+		_, _ = w.Write([]byte(`{"host":"` + r.URL.Query().Get("host") + `","tasks":[],"recent":[]}`))
+	})
+	m.cl = fakeWWD(t, byHost)
 	m.now = func() time.Time { return time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC) }
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)

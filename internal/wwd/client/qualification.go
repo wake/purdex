@@ -32,6 +32,9 @@ func (c *Client) Qualification(ctx context.Context, host string) (v wire.HostQua
 		if err := v.Validate(); err != nil { // Decode checks the keys, not what the answer means
 			return wire.HostQualification{}, false, fmt.Errorf("%w: %v", ErrBadResponse, err)
 		}
+		if host != "" && v.Host != host { // the caller names the host on what it shows: another host's tasks must not wear this one's name
+			return wire.HostQualification{}, false, fmt.Errorf("%w: qualification: asked for %q, answered for %q", ErrBadResponse, host, v.Host)
+		}
 		return v, true, nil
 	}
 	if RouteMissing(err) { // 404 only: no wwd ever had another method on this path, so a 405 (even the mux's own) is a refusal, not an old host
