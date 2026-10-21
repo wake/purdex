@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -29,6 +30,12 @@ type Input struct {
 	PartnerSeen func() time.Time
 	// UncleanStartsSince is the number of wwd starts recorded at or after since that followed a run that did not end cleanly; nil: not available.
 	UncleanStartsSince func(since time.Time) (int, error)
+	// Queue is the jobs that are queued on this host and that another host's worker could take (queue.QueuedView); nil: not available (a
+	// replay has no queue, and neither has a host that has not opened one), and a rule that needs it is unjudged.
+	Queue func() ([]queue.QueuedJob, error)
+	// Pool is the pool as this host sees it, this host first (daemon.PoolView): who answers, whose worker is on, with what labels and how much
+	// room; nil: not available.
+	Pool func() []wire.Peer
 	// WorkRoot is the directory jobs run in: the volume that holds it is the host's work volume (spec §13.3 "disk low").
 	WorkRoot string
 	// Raised says whether the alert with this key is active now (the evaluator fills it; nil: none is). A rule that must not flap around its
