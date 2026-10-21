@@ -138,8 +138,9 @@ func (QueueStalled) Eval(in Input) (Verdict, error) {
 		return Verdict{}, err
 	}
 	v := Verdict{Key: string(wire.AlertQueueStalled), Level: wire.AlertWatch}
-	var ids []string
-	var host string
+	// the jobs by the first host that could take each, in the order the hosts were first named: a job is told with the host it waits on
+	var hosts []string
+	byHost := map[string][]string{}
 	for _, j := range jobs {
 		since := j.CreatedAt
 		if j.Attempts > 0 && j.Touched.After(since) {
@@ -150,16 +151,22 @@ func (QueueStalled) Eval(in Input) (Verdict, error) {
 		}
 		for _, p := range pool {
 			if canTake(p, j.Labels) && hasRoom(p, j) {
-				ids = append(ids, j.ID)
-				if host == "" {
-					host = p.Info.Alias
+				if _, ok := byHost[p.Info.Alias]; !ok {
+					hosts = append(hosts, p.Info.Alias)
 				}
+				byHost[p.Info.Alias] = append(byHost[p.Info.Alias], j.ID)
 				break
 			}
 		}
 	}
-	if len(ids) > 0 {
-		v.Holds, v.Detail = true, fmt.Sprintf("佇列停滯：%s 有空位，%s 已等超過 %d 分鐘沒被領", host, named(ids), int(queueStalledAfter.Minutes()))
+	if len(hosts) == 1 {
+		v.Holds, v.Detail = true, fmt.Sprintf("佇列停滯：%s 有空位，%s 已等超過 %d 分鐘沒被領", hosts[0], named(byHost[hosts[0]]), int(queueStalledAfter.Minutes()))
+	} else if len(hosts) > 1 {
+		parts := make([]string, 0, len(hosts))
+		for _, h := range hosts {
+			parts = append(parts, fmt.Sprintf("%s 有空位，%s", h, named(byHost[h])))
+		}
+		v.Holds, v.Detail = true, fmt.Sprintf("佇列停滯：%s；以上已等超過 %d 分鐘沒被領", strings.Join(parts, "；"), int(queueStalledAfter.Minutes()))
 	}
 	return v, nil
 }

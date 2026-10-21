@@ -371,3 +371,16 @@ func TestQueueStalled_ASelectiveHoldOnlyLeavesRoomForTheJobsItLists(t *testing.T
 		t.Error("a job the hold does not list is not waiting for anything the worker would give it")
 	}
 }
+
+// Two jobs that only different hosts can take: each is told with the host it waits on, not both with the first host (codex R2).
+func TestQueueStalled_EachJobIsNamedWithItsOwnHost(t *testing.T) {
+	pool := []wire.Peer{host("mlab", darwin), host("mserv", linux)}
+	jobs := []queue.QueuedJob{qjob("j_mac", darwin[:1], 10*time.Minute), qjob("j_lin", linux[:1], 10*time.Minute)}
+	got, v := holds(t, QueueStalled{}, queueIn(jobs, pool...))
+	if !got {
+		t.Fatal("both are waiting")
+	}
+	if !strings.Contains(v.Detail, "mlab 有空位，j_mac") || !strings.Contains(v.Detail, "mserv 有空位，j_lin") {
+		t.Errorf("detail %q", v.Detail)
+	}
+}
