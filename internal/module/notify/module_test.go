@@ -318,6 +318,40 @@ func TestRestart_TheTableIsRebuiltFromTheFile(t *testing.T) {
 	}
 }
 
+// A module that has stopped no longer answers for the groups it held: the overlay stays in the registry, so it says so itself, and a
+// write after the stop is refused (codex R2).
+func TestStop_TheOverlayGoesQuietAndAWriteIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.put(e.admin, payload("dev-a", l("root-1", "Alpha")))
+	if got := e.mod.GroupOf("root-1"); got != "Alpha" {
+		t.Fatalf("before the stop: %q", got)
+	}
+	if err := e.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.mod.GroupOf("root-1"); got != "" {
+		t.Fatalf("after the stop the overlay still says %q", got)
+	}
+	if rec := e.put(e.admin, payload("dev-a", l("root-2", "Beta"))); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a write after the stop: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// device and root are ids: no control character of any kind, the Unicode ones (C1, format) included.
+func TestPut_IdsWithUnicodeControlCharactersAreRefused(t *testing.T) {
+	e := newEnv(t)
+	for name, c := range map[string]string{"NEL (C1)": "\u0085", "CSI (C1)": "\u009b", "RLO (format)": "\u202e", "zero width (format)": "\u200b", "DEL": "\u007f"} {
+		for field, body := range map[string]any{
+			"device": payload("dev"+c+"a", l("r1", "g")),
+			"root":   payload("dev-a", l("r"+c+"1", "g")),
+		} {
+			if rec := e.put(e.admin, body); rec.Code != http.StatusBadRequest {
+				t.Errorf("%s in %s: %d %s", name, field, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
+
 // A device that has not written for 30 days goes, with all its rows, from the file and from the table.
 func TestSweep_RemovesTheQuietDevicesFromTheTableToo(t *testing.T) {
 	e := newEnv(t)

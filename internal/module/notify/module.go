@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -38,7 +39,8 @@ type Module struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	tbl groupTable // root -> group, read by the labeler on every Label: memory only
+	tbl     groupTable  // root -> group, read by the labeler on every Label: memory only
+	serving atomic.Bool // the module is running: the overlay stays registered after a stop, so GroupOf asks this
 }
 
 // New returns the module.
@@ -69,6 +71,7 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.store, m.ready, m.initErr = st, true, ""
+	m.serving.Store(true)
 	c.Registry.Register(notifylabel.OverlayKey, m)
 	return nil
 }
@@ -100,7 +103,12 @@ func (m *Module) live() *Store {
 }
 
 // GroupOf implements notifylabel.Overlay: the group the App wrote for the root session, "" when there is none. Memory only.
-func (m *Module) GroupOf(rootSessionID string) string { return m.tbl.groupOf(rootSessionID) }
+func (m *Module) GroupOf(rootSessionID string) string {
+	if !m.serving.Load() { // stopped, or never opened: the registry still holds this module, but it answers for nothing
+		return ""
+	}
+	return m.tbl.groupOf(rootSessionID)
+}
 
 // sweep drops the devices that have not written since retention before now (unix milliseconds) and rebuilds the table.
 func (m *Module) sweep(now int64) error {
@@ -156,6 +164,7 @@ func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
 	m.cancel, m.done, m.ready = nil, nil, false
+	m.serving.Store(false)
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()

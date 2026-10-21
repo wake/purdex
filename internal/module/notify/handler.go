@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/devices"
@@ -58,14 +59,14 @@ func writeError(w http.ResponseWriter, status int, code, detail string) {
 	writeJSON(w, status, map[string]string{"error": code, "detail": detail})
 }
 
-// plain is a non-empty text of at most max runes with no control characters (an id, not prose).
+// plain is a non-empty text of at most max runes with no control or format characters (an id, not prose).
 func plain(s string, max int) bool {
 	n := utf8.RuneCountInString(s)
 	if n < 1 || n > max || !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {
-		if r < ' ' || r == 0x7f {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) { // C0, DEL, C1 and the format characters (bidi, zero width)
 			return false
 		}
 	}
