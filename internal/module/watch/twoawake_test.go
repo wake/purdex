@@ -148,6 +148,7 @@ func newPair(t *testing.T, orderA, orderB []string) *pair {
 	mk := func(id, alias, peerAlias, peerID string, order []string) *daemon {
 		cfg := &config.Config{DataDir: t.TempDir(), HostID: id}
 		cfg.Peers.Alias = alias
+		cfg.Watch = &config.WatchConfig{WakeSource: alias} // each is its own wake settings source: a host that is not reads its source at Start, and these tests count the calls a daemon makes
 		cfg.Peers.Hosts = []config.PeerHost{{Alias: peerAlias, HostID: peerID, URL: "http://x", Token: "t", InboundToken: "i"}}
 		c := core.New(core.CoreDeps{Config: cfg, Registry: core.NewServiceRegistry()})
 		m := New()
