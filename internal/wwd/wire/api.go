@@ -35,6 +35,10 @@ type InfoFault struct {
 
 type InfoWorker struct {
 	Enabled bool `json:"enabled"`
+	// ExplicitLabelsOnly says the worker takes only a job whose labels name an os: label, an earned task: label or a host: label (the host's
+	// `[worker] explicit_labels_only`; mserv). Absent means false, which is also what a wwd from before the field says: a reader that asks
+	// "can this host take the job?" then answers yes for a job it will not, never the other way round (S3-3b).
+	ExplicitLabelsOnly bool `json:"explicit_labels_only,omitempty"`
 }
 
 func (i Info) Validate() error {

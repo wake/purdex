@@ -43,7 +43,7 @@ func daemonOptions(p daemonParts) daemon.Options {
 	}
 	return daemon.Options{
 		HostID: p.HostID, Alias: p.Alias, Version: buildinfo.Version,
-		Token: p.Token, Fault: p.Hooks, WorkerEnabled: p.Cfg.Worker.Enabled, Sampler: p.Sampler, Peers: p.Peers,
+		Token: p.Token, Fault: p.Hooks, WorkerEnabled: p.Cfg.Worker.Enabled, ExplicitLabelsOnly: p.Cfg.Worker.ExplicitLabelsOnly, Sampler: p.Sampler, Peers: p.Peers,
 		PeersLastFile: filepath.Join(p.Cfg.DataDir, "peers-last.json"), // what a peer last said of itself: a restart does not forget it
 		State:         p.State, Broker: p.Broker, Queue: p.Queue, LocalRuns: p.FastLane, RepoSource: repos.Names,
 		ReferenceTasks: refs.Tasks, // the tasks whose qualify.reference is this host, read from the clones' manifests

@@ -270,7 +270,7 @@ func run(cfgPath string) error {
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	adv := advisorInputs{Alias: alias, WorkRoot: workRoot, Store: st, Broker: broker, Sampler: sampler, Known: cfg.Advisor.KnownResidents, Orphans: orphanScan.Report,
-		Peers: cfg.Peers, Downs: d.Pool().Downs, Watch: cfg.Advisor, SampleSignal: sampleSignal}
+		Peers: cfg.Peers, Downs: d.Pool().Downs, Watch: cfg.Advisor, SampleSignal: sampleSignal, Queue: q, Pool: d.PoolView}
 	if cfg.Advisor.PartnerCheck {
 		adv.PartnerSeen = d.PartnerSeen
 	}
