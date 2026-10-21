@@ -115,7 +115,6 @@ var cliOnly = map[string]string{
 	"cmd/pdx/statusline_proxy.go":       "`pdx statusline-proxy`",
 	"cmd/pdx/msg_selftest.go":           "`pdx msg selftest`",
 	"internal/gate/run.go":              "`pdx gate`: the wrapper process that runs the gated command (a process of its own, not the daemon)",
-	"internal/gate/assist_run.go":       "`pdx gate`: sends the command to an assist host over ssh (RunAssist is called only by the gate process)",
 	"internal/wwd/snapshot/worktree.go": "`pdx gate`: git for the snapshot sent to an assist host (SnapshotTree is called only by RunAssist)",
 	"internal/wwd/fastlane/direct.go":   "`pdx test`: runs the fast-lane command in the caller's tree (a CLI process of its own, never the daemon)",
 }
