@@ -337,6 +337,15 @@ func TestTaskHeldSkipsThatTaskOnThisHostOnly(t *testing.T) {
 	}
 }
 
+// A job a faster host could take now is left out of the ranking, the others are not (#3904).
+func TestFasterLeavesOutThatJobOnly(t *testing.T) {
+	env := baseEnv()
+	env.Faster = func(c Candidate) bool { return c.Job.ID == "spa" }
+	r := Rank([]Candidate{cand(job("spa", wire.ClassMerge, 0)), cand(job("lint", wire.ClassMerge, 0))}, env)
+	eq(t, ids(r), []string{"lint"})
+	eq(t, ids(Rank([]Candidate{cand(job("spa", wire.ClassMerge, 0))}, baseEnv())), []string{"spa"})
+}
+
 // A job whose origin answered wrongly a moment ago is skipped; another job of the same repo is not, and neither is the same id at
 // another origin (#3379).
 func TestHeldOffSkipsThatJobOnly(t *testing.T) {

@@ -79,8 +79,13 @@ type Config struct {
 	Report *report.Reporter
 	// Warm says the repo clone and its dependency cache are here (warm_bonus); nil: nothing is warm.
 	Warm func(wire.Job) bool
-	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none.
+	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none. SpeedFactor is also this host's speed against the
+	// pool's when a job is left to a faster host (DeferPatience): 0 is 1.
 	SpeedFactor float64
+	// Peers is the pool without this host (the pool poller's view), asked once a round; DeferPatience is how long a queued job is left to a
+	// faster host of it that could take the job right now (pick.FasterHost, #3904). Either unset (nil, or <= 0): a job is never left.
+	Peers         func() []wire.Peer
+	DeferPatience time.Duration
 	// ExplicitLabelsOnly is pick.Env.ExplicitLabelsOnly.
 	ExplicitLabelsOnly bool
 	Estimate           func(wire.Job) float64
@@ -117,6 +122,9 @@ type Config struct {
 	Logf     func(format string, args ...any)
 }
 
+// deferKey is a queued job of one origin's queue: ids are made by each origin, so the source is part of it.
+type deferKey struct{ source, id string }
+
 // Loop is the worker.
 type Loop struct {
 	cfg Config
@@ -125,6 +133,7 @@ type Loop struct {
 	ownerRule bool
 
 	mu        sync.Mutex
+	deferred  map[deferKey]time.Time // a job left to a faster host -> when this host first left it (on its own clock); it is told once
 	running   map[string]*runner.Running
 	lastClaim time.Time
 	lastSweep time.Time
@@ -305,6 +314,59 @@ func (l *Loop) stopAll(ctx context.Context, why string) {
 	wg.Wait()
 }
 
+// deferredSince is when this host first left the job to a faster one, if it did.
+func (l *Loop) deferredSince(c pick.Candidate) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, ok := l.deferred[deferKey{c.Source, c.Job.ID}]
+	return t, ok
+}
+
+// forgetGoneDeferrals drops the jobs that are no longer in the queues this round read, so that the table stays as small as the queue. A queue
+// that could not be read this round (errs) is not a queue whose jobs are gone: its entries stay. A job that is still there keeps its entry (it is
+// what ends the leaving by this host's own clock).
+func (l *Loop) forgetGoneDeferrals(cands []pick.Candidate, errs map[string]error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.deferred) == 0 {
+		return
+	}
+	here := make(map[deferKey]bool, len(cands))
+	for _, c := range cands {
+		here[deferKey{c.Source, c.Job.ID}] = true
+	}
+	for k := range l.deferred {
+		if _, unread := errs[k.source]; !here[k] && !unread {
+			delete(l.deferred, k)
+		}
+	}
+}
+
+// noteDeferred tells, once for each job, that it is left to a faster host and until when: the earlier of the patience after the submission and
+// the patience after this host first left it.
+func (l *Loop) noteDeferred(c pick.Candidate, to string, now time.Time) {
+	j := c.Job
+	key := deferKey{c.Source, j.ID}
+	l.mu.Lock()
+	if l.deferred == nil {
+		l.deferred = map[deferKey]time.Time{}
+	}
+	first, told := l.deferred[key]
+	if !told {
+		first = now
+		l.deferred[key] = now
+	}
+	l.mu.Unlock()
+	if told {
+		return
+	}
+	until := first.Add(l.cfg.DeferPatience)
+	if byOrigin := j.CreatedAt.Add(l.cfg.DeferPatience); byOrigin.Before(until) {
+		until = byOrigin
+	}
+	l.cfg.Logf("worker: leaving %s/%s (task %s of %s) to %s, a faster host with a slot free for it, until %s", c.Source, j.ID, j.Task, j.Repo.Name, to, until.Format(time.RFC3339))
+}
+
 func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	origins := l.cfg.Origins()
 	byHost := make(map[string]Origin, len(origins))
@@ -336,6 +398,22 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 		if h.Allow != nil {
 			env.Admit = func(j wire.Job) bool { return derived.AdmitsJob(holds, j.Class, j.Repo.Name) }
 			break
+		}
+	}
+	if l.cfg.Peers != nil && l.cfg.DeferPatience > 0 {
+		peers := l.cfg.Peers()
+		l.forgetGoneDeferrals(cands, errs)
+		env.Faster = func(c pick.Candidate) bool {
+			// The submission time is the origin's clock, which may run ahead of this host's and make a job look younger than it is. So the
+			// leaving also ends when this host has been leaving the job for the patience itself, by its own clock.
+			if first, left := l.deferredSince(c); left && env.Now.Sub(first) >= l.cfg.DeferPatience {
+				return false
+			}
+			to, ok := pick.FasterHost(c.Job, l.cfg.SpeedFactor, peers, env.Now, l.cfg.DeferPatience)
+			if ok {
+				l.noteDeferred(c, to, env.Now)
+			}
+			return ok
 		}
 	}
 	ranked := pick.Rank(cands, env)

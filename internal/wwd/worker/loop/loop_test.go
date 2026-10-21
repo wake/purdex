@@ -522,6 +522,177 @@ func TestAMissingCommandHoldsOffThatTaskAndNotTheRepo(t *testing.T) {
 	}
 }
 
+// A slower host leaves a job to a faster one that could take it now, tells it once, and takes it when it has waited as long as the patience
+// (#3904).
+func fasterPeer() []wire.Peer {
+	p := wire.Peer{Reachable: true, Info: wire.Info{Alias: "air26", Labels: nil, Worker: wire.InfoWorker{Enabled: true, SpeedFactor: 1}}, Facts: &wire.Facts{}}
+	p.Facts.Derived.Headroom = wire.Slots{Heavy: 1, Light: 1}
+	return []wire.Peer{p}
+}
+
+func TestAJobIsLeftToAFasterHostAndToldOnce(t *testing.T) {
+	spa := qjob("spa", wire.ClassMerge, 0)
+	spa.Task = "spa-related"
+	c := newConn("mlab", spa)
+	r := newRig(t, c)
+	var mu sync.Mutex
+	var told []string
+	r.loop.cfg.Logf = func(f string, a ...any) {
+		mu.Lock()
+		told = append(told, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+
+	r.round()
+	time.Sleep(3 * unit)
+	r.round()
+	time.Sleep(3 * unit)
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: the job is left to the faster host", claims)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var lines []string
+	for _, l := range told {
+		if strings.Contains(l, "leaving") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("told %d times, want once: %v", len(lines), lines)
+	}
+	for _, w := range []string{"mlab/spa", "spa-related", "air26", "until"} {
+		if !strings.Contains(lines[0], w) {
+			t.Errorf("the line %q lacks %q", lines[0], w)
+		}
+	}
+}
+
+func TestAJobThatWaitedAsLongAsThePatienceIsTakenHere(t *testing.T) {
+	old := qjob("old", wire.ClassMerge, 3*time.Minute)
+	c := newConn("mlab", old)
+	r := newRig(t, c)
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.round()
+	waitFor(t, "the old job to be claimed", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+// The submission time is the origin's clock. When it runs ahead of this host's, the job looks like it has not waited at all, and the wait would
+// last as long as the patience plus the difference: so the leaving also ends when this host has left the job for the patience itself (codex R1).
+func TestALeftJobIsTakenAfterThePatienceWhateverTheOriginsClock(t *testing.T) {
+	ahead := qjob("ahead", wire.ClassMerge, -10*time.Minute) // submitted "in the future": the origin's clock is 10 minutes ahead
+	c := newConn("mlab", ahead)
+	r := newRig(t, c)
+	now := time.Now()
+	var mu sync.Mutex
+	r.loop.cfg.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.mu.Lock()
+	r.freezeAt = now // the loop refuses facts from its own future, so they are read at the test's clock
+	r.mu.Unlock()
+
+	r.round()
+	time.Sleep(3 * unit)
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: left to the faster host at first", claims)
+	}
+	r.loop.mu.Lock()
+	left := len(r.loop.deferred)
+	r.loop.mu.Unlock()
+	if left != 1 {
+		t.Fatalf("the round did not leave the job to the faster host (%d left): the test would prove nothing", left)
+	}
+	mu.Lock()
+	now = now.Add(2*time.Minute + time.Second)
+	later := now
+	mu.Unlock()
+	r.mu.Lock()
+	r.freezeAt = later // the facts must not look old to a loop whose clock was moved
+	r.mu.Unlock()
+	r.round()
+	waitFor(t, "the job to be taken once this host has left it for the patience", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+// The table of left jobs keeps only the jobs still in the queues, so it stays as small as the queue.
+func TestTheTableOfLeftJobsForgetsAJobThatIsGone(t *testing.T) {
+	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
+	r := newRig(t, c)
+	now := time.Now()
+	r.loop.cfg.Now = func() time.Time { return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.mu.Lock()
+	r.freezeAt = now
+	r.mu.Unlock()
+	size := func() int { r.loop.mu.Lock(); defer r.loop.mu.Unlock(); return len(r.loop.deferred) }
+
+	r.round()
+	if size() != 1 {
+		t.Fatalf("the job was not left: %d", size())
+	}
+	c.mu.Lock()
+	delete(c.jobs, "spa") // taken by the faster host
+	c.mu.Unlock()
+	r.round()
+	if size() != 0 {
+		t.Errorf("the job is gone and the table keeps %d", size())
+	}
+}
+
+// A queue that could not be read for a round is not a queue whose jobs are gone: the count of the jobs left from it goes on (codex R2).
+func TestAFailedReadOfAQueueDoesNotRestartTheCountOfItsLeftJobs(t *testing.T) {
+	ahead := qjob("ahead", wire.ClassMerge, -10*time.Minute) // the origin's clock is ahead: only this host's own count can end the leaving
+	c := newConn("mlab", ahead)
+	r := newRig(t, c)
+	now := time.Now()
+	var mu sync.Mutex
+	set := func(d time.Duration) time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+		r.mu.Lock()
+		r.freezeAt = now
+		r.mu.Unlock()
+		return now
+	}
+	r.loop.cfg.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	set(0)
+
+	r.round() // left: the count starts
+	c.mu.Lock()
+	c.readErr = errors.New("the origin does not answer")
+	c.mu.Unlock()
+	set(time.Minute)
+	r.round() // the queue cannot be read this round
+	c.mu.Lock()
+	c.readErr = nil
+	c.mu.Unlock()
+	set(time.Minute + time.Second) // two minutes and a second since the job was first left
+	r.round()
+	waitFor(t, "the job to be taken: a failed read must not have started the count again", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+func TestNothingIsLeftWhenThePatienceIsOff(t *testing.T) {
+	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
+	r := newRig(t, c)
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 0
+	r.loop.cfg.Peers = fasterPeer
+	r.round()
+	waitFor(t, "the job to be claimed", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
 func TestTheOwnerTakingTheMachineStopsAndGivesBackEveryJobAndTakesNothingMore(t *testing.T) {
 	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
 	r := newRig(t, c)

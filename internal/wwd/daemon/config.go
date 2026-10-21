@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/BurntSushi/toml"
@@ -71,6 +72,9 @@ type WorkerConfig struct {
 	BackgroundDev bool `toml:"background_dev"`
 	// SpeedFactor is this host's speed against the reference host for size_penalty (spec §4.6); 0 means none.
 	SpeedFactor float64 `toml:"speed_factor"`
+	// DeferPatienceSeconds is how long a queued job is left to a faster host of the pool that could take it right now, before this one takes it
+	// (#3904). Not set: 120. 0: never leave a job (the switch off). It only matters on a host whose speed_factor is above that of a peer.
+	DeferPatienceSeconds *int `toml:"defer_patience_seconds"`
 	// ExplicitLabelsOnly: the worker takes only jobs whose labels name this host's os: label, a task: label it earned (#3441; mserv) or a host: label (#3873).
 	ExplicitLabelsOnly bool `toml:"explicit_labels_only"`
 	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
@@ -235,6 +239,9 @@ func (c Config) validateWorker() error {
 	}
 	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)
+	}
+	if v := c.Worker.DeferPatienceSeconds; v != nil && (*v < 0 || *v > 86400) {
+		return fmt.Errorf("worker.defer_patience_seconds is %d, it must be 0 (off) or 1-86400 (not set: 120)", *v)
 	}
 	if u := c.Worker.SandboxUser; u != "" {
 		if runtime.GOOS != "linux" {
@@ -475,4 +482,12 @@ func EnsureToken(path string) (string, error) {
 		return "", fmt.Errorf("token file %s is empty", path)
 	}
 	return tok, nil
+}
+
+// DeferPatience is how long a job is left to a faster host before this one takes it: 2 minutes unless set, 0 for never.
+func (w WorkerConfig) DeferPatience() time.Duration {
+	if w.DeferPatienceSeconds == nil {
+		return 2 * time.Minute
+	}
+	return time.Duration(*w.DeferPatienceSeconds) * time.Second
 }

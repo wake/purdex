@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -36,13 +37,15 @@ type Options struct {
 	WorkerEnabled          bool
 	// ExplicitLabelsOnly is `[worker] explicit_labels_only`, announced in /v1/info so that the pool can tell which hosts take a job.
 	ExplicitLabelsOnly bool
-	Fault              *fault.Hooks // test hooks (nil: none); /v1/info declares them
-	Sampler            *Sampler     // nil: the facts routes are not registered
-	Peers              []PeerAddr
-	PeersLastFile      string       // where the last known info of the peers is kept across restarts (pool_last.go); "": not kept
-	HTTPClient         *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
-	State              *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
-	Broker             *Broker      // the event broker (shared with State); nil: a new one
+	// SpeedFactor is `[worker] speed_factor`, announced in /v1/info (1 when it is not set) so that a slower host can leave a job to this one (#3904).
+	SpeedFactor   float64
+	Fault         *fault.Hooks // test hooks (nil: none); /v1/info declares them
+	Sampler       *Sampler     // nil: the facts routes are not registered
+	Peers         []PeerAddr
+	PeersLastFile string       // where the last known info of the peers is kept across restarts (pool_last.go); "": not kept
+	HTTPClient    *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
+	State         *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
+	Broker        *Broker      // the event broker (shared with State); nil: a new one
 	// Queue is this host's job queue (one per process); the job routes serve from it. nil: no queue.
 	Queue *queue.Queue
 	// LocalRuns serves POST /v1/local-runs on the socket (the fast lane, spec 5.2); main builds it over Queue and feeds it the
@@ -249,6 +252,10 @@ func (d *Daemon) info() wire.Info {
 	if d.opts.State != nil {
 		enabled = d.opts.State.Worker().Enabled // the switch can be flipped at run time
 	}
+	speed := d.opts.SpeedFactor
+	if math.IsNaN(speed) || math.IsInf(speed, 0) || speed <= 0 {
+		speed = 1 // not set is the reference host's speed, as pick.Rank reads it
+	}
 	lbl, fp := d.labels.Current()
 	if len(lbl) == 0 { // no facts record yet: what the build says
 		lbl = []string{"arch:" + runtime.GOARCH, "os:" + runtime.GOOS}
@@ -257,7 +264,7 @@ func (d *Daemon) info() wire.Info {
 		Fault:  d.opts.Fault.Declared(),
 		HostID: d.opts.HostID, Alias: d.opts.Alias, Version: d.opts.Version,
 		Proto: wire.Proto, Platform: runtime.GOOS, Arch: runtime.GOARCH,
-		Worker: wire.InfoWorker{Enabled: enabled, ExplicitLabelsOnly: d.opts.ExplicitLabelsOnly},
+		Worker: wire.InfoWorker{Enabled: enabled, ExplicitLabelsOnly: d.opts.ExplicitLabelsOnly, SpeedFactor: speed},
 		Labels: lbl, Fingerprint: fp,
 	}
 }
