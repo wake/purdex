@@ -273,6 +273,27 @@ type FactsWorker struct {
 	Slots     Slots  `json:"slots"`
 	Running   Slots  `json:"running"`
 	OwnerRule string `json:"owner_rule"`
+	// Waiting is the queued jobs this host's worker would take, as the worker last read the queues (#3941); absent when there are none, when
+	// the worker is off, and from a writer that does not know it. The fast lane reads it from the record, so that it asks no other host.
+	Waiting *Waiting `json:"waiting,omitempty"`
+}
+
+// Waiting says what the worker of a host sees waiting for it: the queued jobs it would try to claim (pick.Rank: by labels, holds, locks,
+// and not left to a faster host), counted and with the oldest named. The fast lane of the host gives way to the oldest one when it has
+// waited long enough (derived.YieldPolicy), so a run that is started and ended again and again cannot keep the heavy slot from it.
+type Waiting struct {
+	Count        int    `json:"count"`
+	OldestID     string `json:"oldest_id"`
+	OldestOrigin string `json:"oldest_origin"` // the host id of the queue the oldest job is in
+	// OldestSince is when this worker first saw the oldest job queued for it (this host's clock, not the submission time of its origin, whose
+	// clock may be behind or ahead).
+	OldestSince time.Time `json:"oldest_since"`
+	// ObservedAt is when the worker read the queues (this host's clock); a reader that finds it old does not trust the block.
+	ObservedAt time.Time `json:"observed_at"`
+	// Yielding is set by the sampler: the fast lane of this host is giving way to the oldest job now (derived.YieldPolicy.Yields).
+	Yielding bool `json:"yielding,omitempty"`
+	// YieldOver is set by the sampler: the oldest job has waited past the cap (fastlane_yield_max_seconds), so the fast lane no longer gives way.
+	YieldOver bool `json:"yield_over,omitempty"`
 }
 
 // Validate checks the version and enumerations.
@@ -290,6 +311,9 @@ func (f Facts) Validate() error {
 	}
 	if f.Queue != nil && f.Queue.Queued < 0 {
 		return fmt.Errorf("facts: negative queue.queued")
+	}
+	if f.Worker.Waiting != nil && f.Worker.Waiting.Count < 0 {
+		return fmt.Errorf("facts: negative worker.waiting.count")
 	}
 	for i, e := range f.Exception {
 		if err := validateHoldFields(e.Allow, e.Flags); err != nil {

@@ -903,3 +903,36 @@ env = ["PLAYWRIGHT_BROWSERS_PATH"]
 
 A host that lacks the variable still takes a task that lists it, and the task fails there as it does today (the tool or the cache is not found).
 Letting `/v1/info` announce the names a host gives, so that such a task is taken only by hosts that have them, is a later step.
+
+## 21. The fast lane gives way to a waiting queue job (#3941)
+
+On a host with one heavy slot, a fast-lane run (`pdx test --adhoc`, an undeclared command) that ends is followed by the next before the worker has
+polled again, so a queued job that this host could take never got the slot (air26 under a run of UI tests: a `go-changed` waited 23 minutes, a
+`check-full` 30). Now a **heavy** fast-lane run gives way: while a queued job this worker would take has waited `fastlane_yield_after_seconds`
+(counted from when this worker first saw it queued: the origin's clock may be behind or ahead of this host's), `pdx test --adhoc` waits at the slot, as it does for a full one, and prints one line saying for whom and for how long:
+
+```
+pdx test: 等待本機名額／lock：fastlane: this host has no slot for the run now: no heavy slot: yield_to_queue:j_01ABC(7m)
+```
+
+A declared task (a light slot) is never held by it.
+
+```toml
+[worker]
+fastlane_yield_after_seconds = 300   # not set: 300; 0 switches the giving way off on this host
+fastlane_yield_max_seconds   = 1800  # not set: 1800; past this age of the oldest job the fast lane goes ahead again
+```
+
+- **What counts as waiting** is what the worker would try to claim itself (`pick.Rank`: the labels, holds, locks, a job left to a faster host
+  not counted). The worker tells it in `facts.worker.waiting` (`count`, `oldest_id`, `oldest_origin`, `oldest_since`, `observed_at`), so the fast
+  lane reads its own record and asks no other host. A worker that has room reads the queues every round, as it always did; one that has none (the
+  slot is taken) reads them every 10 s all the same, which is what lets the fast lane see the queue while a run holds the slot. A worker that is off,
+  or that the owner has stopped, tells nothing waits. A job that is not among the ones the worker would take at a look (taken, on hold, locked
+  by a job that is running) is forgotten and counts again from its next first look. A heavy fast-lane run holds no locks (an undeclared command has
+  none), so it cannot be what keeps a queued job out of the count.
+- **The cap.** A job older than `fastlane_yield_max_seconds` is not given way to any more: one that old is more likely held by a label, a lock
+  or a hold than by the fast lane, and the fast lane must not be stopped for good. When it passes the cap, wwd logs `fastlane: not giving way
+  to <job> any more` once for that job. A reading older than a minute (`observed_at`) is not trusted at all.
+- **To see it.** `pdx wwd pool` prints, under the table, `air26: 等候中 2 件（最久 7 分）快車道讓位中` for a host that has jobs waiting (and
+  `已超過讓位上限，快車道不再讓` past the cap); `facts.worker.waiting.yielding` / `yield_over` are the same in the record.
+- **Back out.** `fastlane_yield_after_seconds = 0` and restart wwd. The `waiting` key is additive: an older reader ignores it.

@@ -19,7 +19,6 @@ import (
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/wwd/clones"
 	"github.com/wake/purdex/internal/wwd/daemon"
-	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/labels"
@@ -197,6 +196,7 @@ func run(cfgPath string) error {
 	// the runs on this host by slot: the worker's queue jobs (heavy) and the fast lane's runs (spec §5.2); the sampler shows them in
 	// facts.worker.running and the fast lane's admission counts them
 	queueRun := &queueRunning{}
+	yield := cfg.Worker.FastlaneYield()
 	hostRunning := func() wire.Slots {
 		l, o := fastLane.Running(), queueRun.Slots()
 		return wire.Slots{Heavy: l.Heavy + o.Heavy, Light: l.Light + o.Light}
@@ -209,17 +209,13 @@ func run(cfgPath string) error {
 		// the proto 2 fields (decompress_rate, queue) are written only while every peer reports proto >= 2, an unreachable one by its last known info (spec §13.1)
 		SignalsOpen: func() bool { return d != nil && wire.PoolAtLeast(d.Pool().Peers(), 2) },
 		Queued:      func() (int, error) { return q.CountQueued(ctx) },
+		// what the worker sees queued for it, and when the fast lane gives way to it (#3941)
+		Waiting: queueRun.Waiting, Yield: yield,
 	})
 	// a fast-lane run is admitted by the latest record and the live counts (all memory: the fast lane asks with its lock held)
 	fastLane.Others = queueRun.Slots
 	fastLane.Capacity = func() wire.Slots { return state.Worker().Slots }
-	fastLane.Room = func(heavy bool, running wire.Slots) []string {
-		f, ok := sampler.Latest()
-		if !ok {
-			return []string{"no_facts_yet"}
-		}
-		return derived.AdmitLocal(f, heavy, running)
-	}
+	fastLane.Room = fastLaneRoom(sampler.Latest, yield, time.Now, log.Printf)
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
 		if p.Alias == alias {
