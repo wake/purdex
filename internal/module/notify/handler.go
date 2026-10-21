@@ -19,24 +19,31 @@ import (
 // The body is the whole set this device has for this host: a write replaces the device's earlier one (what it leaves out is gone,
 // so an empty list clears the device). 200 {"count": n} with n the labels kept; 400 for a bad body; 403 for anything but the
 // admin token (a paired phone's device token is refused by the scope middleware before it gets here, and again here); 413
-// `too_many_labels` when the list is over maxLabelsPerDevice — the whole write is refused, nothing is cut. Capability
-// notify.group_labels.v1.
+// `too_many_labels` when the list is over maxLabelsPerDevice — the whole write is refused, nothing is cut. `labels` must be there
+// (a list; null or missing is 400, so a malformed request cannot clear a device). A group is at most 512 characters in, and 40 kept.
+// The body is at most 8 MiB. Capability notify.group_labels.v1.
 
 const (
 	maxLabelsPerDevice = 2000
 	maxDeviceRunes     = 128
 	maxRootRunes       = 128
 	maxGroupRunes      = 40 // the length a group has inside a longer title (push.maxNamedRunes)
-	// maxBody holds maxLabelsPerDevice entries of the longest root and group, with their JSON, and a good deal more.
-	maxBody = 1 << 20
+	// maxRawGroupRunes bounds what comes in as a group, before the rules cut it to maxGroupRunes: the body limit needs a worst case.
+	maxRawGroupRunes = 512
+	// maxBody holds maxLabelsPerDevice entries of the longest root (128 four-byte characters) and the longest raw group (512
+	// characters, each written as a six-byte \uXXXX escape at worst) with their JSON: about 3.7 KB each, 7.5 MB for 2000, so 8 MiB.
+	maxBody = 8 << 20
 )
+
+type putLabel struct {
+	Root  string `json:"root_session_id"`
+	Group string `json:"group"`
+}
 
 type putRequest struct {
 	Device string `json:"device"`
-	Labels []struct {
-		Root  string `json:"root_session_id"`
-		Group string `json:"group"`
-	} `json:"labels"`
+	// Labels is a pointer so that a body without the key (or with null) is told from an explicit empty list: only the latter clears.
+	Labels *[]putLabel `json:"labels"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -95,14 +102,22 @@ func (m *Module) handlePut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "device must be 1-128 characters with no control characters")
 		return
 	}
-	if len(req.Labels) > maxLabelsPerDevice {
+	if req.Labels == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "labels is required: a list, empty to clear this device")
+		return
+	}
+	if len(*req.Labels) > maxLabelsPerDevice {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_many_labels", "at most 2000 labels for one device; nothing was written")
 		return
 	}
-	labels := make([]Label, 0, len(req.Labels))
-	for _, l := range req.Labels {
+	labels := make([]Label, 0, len(*req.Labels))
+	for _, l := range *req.Labels {
 		if !plain(l.Root, maxRootRunes) {
 			writeError(w, http.StatusBadRequest, "bad_request", "root_session_id must be 1-128 characters with no control characters")
+			return
+		}
+		if utf8.RuneCountInString(l.Group) > maxRawGroupRunes {
+			writeError(w, http.StatusBadRequest, "bad_request", "group must be at most 512 characters")
 			return
 		}
 		group := push.Normalise(l.Group, maxGroupRunes) // the notification text rules: plain, one line, cut

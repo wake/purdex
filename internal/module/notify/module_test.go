@@ -192,6 +192,60 @@ func TestPut_BadRequests(t *testing.T) {
 	}
 }
 
+// A body without `labels` (or with null) is a malformed request, not a clear: only an explicit empty list clears a device.
+func TestPut_AMissingLabelsListIs400AndKeepsTheSet(t *testing.T) {
+	e := newEnv(t)
+	e.put(e.admin, payload("dev-a", l("root-1", "Alpha")))
+	for name, body := range map[string]string{
+		"no labels key": `{"device":"dev-a"}`,
+		"labels null":   `{"device":"dev-a","labels":null}`,
+	} {
+		if rec := e.put(e.admin, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	if got := e.mod.GroupOf("root-1"); got != "Alpha" {
+		t.Fatalf("a malformed request cleared the device: %q", got)
+	}
+	if rec := e.put(e.admin, `{"device":"dev-a","labels":[]}`); rec.Code != http.StatusOK {
+		t.Fatalf("an explicit empty list: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := e.mod.GroupOf("root-1"); got != "" {
+		t.Fatalf("the explicit empty list did not clear: %q", got)
+	}
+}
+
+// The limit of 2000 labels holds for the worst case the validation lets through: roots of 128 four-byte characters and groups of
+// 40 four-byte characters, which is more than a megabyte of text. The body limit must not refuse a request the count allows.
+func TestPut_TheBodyLimitFitsTheMostThat2000LabelsCanBe(t *testing.T) {
+	e := newEnv(t)
+	var many []lab
+	for i := 0; i < maxLabelsPerDevice; i++ {
+		root := fmt.Sprintf("%04d", i) + strings.Repeat("😀", maxRootRunes-4)
+		many = append(many, l(root, strings.Repeat("😀", maxGroupRunes)))
+	}
+	rec := e.put(e.admin, payload("dev-a", many...))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %.200s", rec.Code, rec.Body.String())
+	}
+	var resp struct{ Count int }
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Count != maxLabelsPerDevice {
+		t.Fatalf("count = %d", resp.Count)
+	}
+}
+
+// A group is cut to 40 characters after the rules; what comes in is bounded too, so the body limit has a worst case at all.
+func TestPut_AGroupLongerThanTheInputLimitIs400(t *testing.T) {
+	e := newEnv(t)
+	if rec := e.put(e.admin, payload("dev-a", l("r1", strings.Repeat("g", maxRawGroupRunes+1)))); rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d %.200s", rec.Code, rec.Body.String())
+	}
+	if rec := e.put(e.admin, payload("dev-a", l("r1", strings.Repeat("g", maxRawGroupRunes)))); rec.Code != http.StatusOK {
+		t.Fatalf("exactly the limit: %d %.200s", rec.Code, rec.Body.String())
+	}
+}
+
 // The group goes through the notification text rules (control and bidi characters dropped, whitespace one space, cut); one that is
 // nothing after that is not a label.
 func TestPut_TheGroupIsNormalised(t *testing.T) {
