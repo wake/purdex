@@ -82,6 +82,13 @@ func Prepare(job wire.Job, root, out string) (*Plan, error) { return PrepareAt(j
 // the metadata worked out for it to run on that host (halfMismatch). source is the worker's own name for the host it claimed the job from
 // (ident.Ref.Source). "" for either names nothing, and then no such half is accepted.
 func PrepareAt(job wire.Job, root, out, host, source string) (*Plan, error) {
+	return PrepareAtEnv(job, root, out, host, source, nil)
+}
+
+// PrepareAtEnv is PrepareAt for a worker that gives its jobs variables of its own (the config's [jobs.env], already validated): a task may
+// take those names from the worker's environment ("NAME" without a value) as it may take the inheritable ones. Nothing else of the worker's
+// environment is opened by it.
+func PrepareAtEnv(job wire.Job, root, out, host, source string, hostEnv map[string]string) (*Plan, error) {
 	if job.AdHoc {
 		return nil, reject(CodeNotRemote, "job %s is ad-hoc", job.ID)
 	}
@@ -111,7 +118,7 @@ func PrepareAt(job wire.Job, root, out, host, source string) (*Plan, error) {
 	if what := metaMismatch(job, task, host, source); what != "" {
 		return nil, reject(CodeMetaMismatch, "%s of job %s is not task %s's own", what, job.ID, task.Name)
 	}
-	if err := checkEnv(job.ID, out, task.Env); err != nil {
+	if err := checkEnv(job.ID, out, task.Env, hostEnv); err != nil {
 		return nil, err
 	}
 	dir, err := cwdIn(root, task.Cwd)
@@ -194,11 +201,12 @@ func sameSet(a, b []string) bool {
 	return slices.Equal(slices.Compact(x), slices.Compact(y))
 }
 
-// checkEnv refuses a task env that takes a name from the worker's environment that is not inheritable, or sets one the runner owns.
-// The second check is the runner's own (run.BuildEnv), so the two cannot drift.
-func checkEnv(jobID, out string, env []string) error {
+// checkEnv refuses a task env that takes a name from the worker's environment that is neither inheritable nor declared by the host
+// (hostEnv, the config's [jobs.env]), or sets one the runner owns. The second check is the runner's own (run.BuildEnv), so the two cannot drift.
+func checkEnv(jobID, out string, env []string, hostEnv map[string]string) error {
 	for _, e := range env {
-		if name, _, fixed := strings.Cut(e, "="); !fixed && !inheritable[name] {
+		_, declared := hostEnv[strings.SplitN(e, "=", 2)[0]]
+		if name, _, fixed := strings.Cut(e, "="); !fixed && !inheritable[name] && !declared {
 			return reject(CodeEnvNotAllowed, "env %q may not be taken from the worker's environment", name)
 		}
 	}
