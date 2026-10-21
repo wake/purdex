@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.774] - 2026-10-21
+
+> **通知標題改由 daemon 的分組標籤決定、wwd 讓快主機先領、主機可以替工作設定位置類的環境變數。** daemon、`wwd`、**mod** 與 **SPA** 都有改：**部署要重跑 `pdx setup`**（守門員 skill 的 disk_falling 段落），**這版要重新打包 Mac App，使用者要更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`/v1/info` 的 worker 多一個選填的 `speed_factor`）。Purdex daemon 多一個 notify 模組，第一次啟動會建立 `notify.db`。
+>
+> 部署設定（見 `docs/wwd-deploy.md` §19、§20）：mserv 的 `[worker] speed_factor = 3`；air26 的 `[jobs.env] PLAYWRIGHT_BROWSERS_PATH = "~/Assist/cache.noindex/ms-playwright"`（之後 aigora-v2 的 manifest 改回 `env = ["PLAYWRIGHT_BROWSERS_PATH"]`）。
+
+### Added
+
+- **通知分組標籤（N-2a、N-2b，#3936、#3937）**：通知的 labeler 依 session 的 root 查分組（Overlay 的參數語意改成 root session id）；新的 notify 模組提供 `PUT /api/notify/group-labels`（App 回寫分組名稱，每台裝置最多 2000 筆，超過回 413），capability `notify.group_labels.v1`，裝置 token 不能寫。
+- **App 寫回分組名稱、Mac 通知標題讀 notify_label（N-3a、N-3b，#3939、#3942）**：App 把分組名稱寫到有 `notify.group_labels.v1` 的主機（失敗退避重送）；Mac 的通知標題照 daemon 的規則組，主機名與 tmux 名清掉控制、格式與方向字元（Go 與 TS 共用同一份案例檔）。
+- **慢主機讓給快主機（#3925，#3904）**：一件工作在慢主機能領、而快主機也能立刻接時，慢主機先讓；速度用 `[worker] speed_factor`（缺＝未知，不讓），等超過 `defer_patience`（預設 2 分鐘）就不讓。
+- **主機層的工作環境變數 `[jobs.env]`（#3940，#3933）**：主機的 `config.toml` 可以宣告位置類的變數，task 照舊用 `env = ["NAME"]` 取用；`~/` 展開成 wwd 帳號的家目錄；PATH、TERM、USER、LOGNAME 與 runner 固定的名稱不能設；這些值不進結果快取與依賴快取的鍵。
+
+### Fixed
+
+- **disk_falling 不再忽響忽停（#3930，#3926）**：改用 3 小時的最小平方趨勢，清除比觸發晚（遲滯）。
+- **主機短圖的開頭用 1 分鐘紀錄補齊（#3932）**。
+- **Worker 設定的標籤列排版與 SegmentControl 的 focus 外框（#3931）**。
+
+### Changed
+
+- 負載評分（`LocalFast`、`LoadScore`、`levelScore`）複製進 `module/pool`，pool 不再 import fleet（WWD-9 9d-3a，#3934）；fleet 的原版隨 9d-4 刪除。
+- wwd plan 細化 WWD-7b2-1（資源池主機頁的資格狀態），7b2-2 改由現有的行程分頁與事件頁涵蓋（#3935）。
+
 ## [1.0.0-alpha.773] - 2026-10-21
 
 > **WWD-9 組二：舊閘門的 shim 與輔測（assist）整個拿掉。** daemon、`pdx` CLI、`wwd` 與 **mod** 有改：**部署要重跑 `pdx setup`**，它會刪掉 `~/.config/pdx/shims` 裡我們寫的 10 個檔（目錄空了才刪目錄）。**部署前要先在舊版 daemon 上 `pdx assist off air26`**，而且只能在 air26 的 wwd 沒有工作在跑時做（`assist-off` 會收掉指令列帶 `~/Assist/` 的行程，包含 wwd 的 go 工具鏈），見 `docs/wwd-deploy.md` §18。SPA 與 Electron 外殼都沒改，**這版不重新打包 Mac App、使用者不必更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`facts.tools` 多一個選填的 `claude`）。**結果快取的鍵升到第 2 版**：部署後各主機的快取會從頭累積一次。
