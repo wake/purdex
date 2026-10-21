@@ -57,6 +57,33 @@ func TestHeavyRoomForAllowed(t *testing.T) {
 	}
 }
 
+func TestHeavyRoomFor(t *testing.T) {
+	open := Input{Pressure: 1, PressureKnown: true, Slots: wire.Slots{Heavy: 2, Light: 2}}
+	held := open
+	held.Exceptions = []Hold{{Name: "rel"}}
+	sel := selectiveFacts(held, "rel") // lists class release only
+	plain := factsOf(held, true)       // a hold without allow
+	free := factsOf(open, true)
+	free.Derived.Headroom.Heavy = 1 // say the headroom as a peer's record does
+
+	cases := []struct {
+		name  string
+		f     wire.Facts
+		class wire.JobClass
+		want  bool
+	}{
+		{"the headroom has a heavy slot", free, wire.ClassDev, true},
+		{"a selective hold lets its listed class through", sel, wire.ClassRelease, true},
+		{"a selective hold keeps the others out", sel, wire.ClassDev, false},
+		{"a plain hold keeps everyone out", plain, wire.ClassRelease, false},
+	}
+	for _, c := range cases {
+		if got := HeavyRoomFor(c.f, c.class, "purdex"); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestAdmitsJob(t *testing.T) {
 	hold := func(classes []wire.JobClass, repos []string) wire.FactExc {
 		return wire.FactExc{Name: "h", Allow: &wire.HoldAllow{Classes: classes, Repos: repos}}

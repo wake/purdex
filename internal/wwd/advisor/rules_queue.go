@@ -49,18 +49,10 @@ func canTake(p wire.Peer, labels []string) bool {
 	return p.Reachable && p.Info.Worker.Enabled && pick.Eligible(labels, p.Info.Labels, p.Info.Worker.ExplicitLabelsOnly)
 }
 
-// hasRoom says whether the host p has a heavy slot free for job j (a queued job takes a heavy slot): derived.HasHeavyRoom, which the worker's
-// loop asks of its own record before it claims, and, while only holds with `allow` are in the way, that they let this job through
-// (derived.AdmitsJob), as the worker does when it picks.
+// hasRoom says whether the host p has a heavy slot free for job j (a queued job takes a heavy slot): derived.HeavyRoomFor, the worker's own
+// reading of its facts. A peer whose facts have not come has none.
 func hasRoom(p wire.Peer, j queue.QueuedJob) bool {
-	f := p.Facts
-	if f == nil {
-		return false
-	}
-	if f.Derived.Headroom.Heavy >= 1 {
-		return true
-	}
-	return derived.HeavyRoomForAllowed(*f) >= 1 && derived.AdmitsJob(f.Exception, j.Class, j.Repo)
+	return p.Facts != nil && derived.HeavyRoomFor(*p.Facts, j.Class, j.Repo)
 }
 
 func waited(now, since time.Time) time.Duration {
