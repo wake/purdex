@@ -66,7 +66,7 @@ func advisorRules(known []string, watch daemon.AdvisorRule) []advisor.Rule {
 	}
 	// the queue's four rules (S3-3b), the same: only where [advisor] queue_rules is on
 	if watch.QueueRules {
-		rs = append(rs, advisor.QueueStalled{}, advisor.JobRequeued{}, advisor.QueueBacklog{}, advisor.QueueUnclaimable{})
+		rs = append(rs, advisor.QueueStalled{}, advisor.JobRequeued{}, advisor.QueueBacklog{}, &advisor.QueueUnclaimable{})
 	}
 	return rs
 }
