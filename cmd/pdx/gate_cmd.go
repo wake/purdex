@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wake/purdex/internal/gate"
-	"github.com/wake/purdex/internal/gate/shim"
 )
 
 const gateUsage = `usage: pdx gate [--real <binary>] [--tool <name>] [--class heavy|light] [--auto] [--fg] [--wait-max <s>] [--class-source <s>] [--config <path>] -- <command…>
@@ -126,7 +125,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return 127
 		}
 		// looked up at every run from this run's PATH, so an `nvm use` is followed
-		realBin, err = shim.Resolve(*tool, os.Getenv("PATH"), shim.DirIn(home))
+		realBin, err = resolveRealTool(*tool, os.Getenv("PATH"), shimDirIn(home))
 		if err != nil {
 			fmt.Fprintf(stderr, "pdx gate: %v\n", err)
 			return 127

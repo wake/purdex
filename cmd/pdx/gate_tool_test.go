@@ -9,8 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/wake/purdex/internal/gate/shim"
 )
 
 // toolEnv is a temp HOME with the shim directory first on PATH and a real `tool` after it; gateExec records the exec instead of
@@ -30,9 +28,9 @@ func toolEnv(t *testing.T, tool, gateSection string) (real, cfgPath, gateDir str
 	for _, k := range []string{"CI", "AI_AGENT", "CLAUDECODE", "CLAUDE_CODE", "REPL_ID", "GEMINI_CLI", "CODEX_SANDBOX", "CODEX_THREAD_ID", "OPENCODE", "AUGMENT_AGENT", "GOOSE_PROVIDER", "CURSOR_AGENT"} {
 		t.Setenv(k, "")
 	}
-	shimDir := shim.DirIn(home)
+	shimDir := shimDirIn(home)
 	require.NoError(t, os.MkdirAll(shimDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(shimDir, tool), []byte(shim.Script(tool, "/nonexistent/pdx")), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(shimDir, tool), []byte(fakeShim(tool)), 0o755))
 	realDir := filepath.Join(home, "real")
 	require.NoError(t, os.MkdirAll(realDir, 0o755))
 	real = filepath.Join(realDir, tool)
@@ -99,7 +97,7 @@ func TestGateTool_ADisabledGateExecsEverything(t *testing.T) {
 func TestGateTool_NoRealBinaryIs127(t *testing.T) {
 	_, cfg, _, got := toolEnv(t, "go", quietGate)
 	home := filepath.Dir(cfg)
-	t.Setenv("PATH", shim.DirIn(home)+":/usr/bin:/bin") // /usr/bin:/bin have no go in this test's reach
+	t.Setenv("PATH", shimDirIn(home)+":/usr/bin:/bin") // /usr/bin:/bin have no go in this test's reach
 	if _, err := os.Stat("/usr/bin/go"); err == nil {
 		t.Skip("a go in /usr/bin")
 	}
@@ -145,7 +143,7 @@ func TestGateTool_ComposerInADirectoryWithASpace(t *testing.T) {
 	require.NoError(t, os.MkdirAll(herd, 0o755))
 	herdComposer := filepath.Join(herd, "composer")
 	require.NoError(t, os.WriteFile(herdComposer, []byte("#!/bin/sh\ntouch \""+home+"/ran-herd\"\nexit 3\n"), 0o755))
-	t.Setenv("PATH", shim.DirIn(home)+":"+herd+":/usr/bin:/bin")
+	t.Setenv("PATH", shimDirIn(home)+":"+herd+":/usr/bin:/bin")
 	var out, errb bytes.Buffer
 
 	assert.Equal(t, 0, gateMain([]string{"--config", cfg, "--auto", "--tool", "composer", "--", "install"}, &out, &errb), errb.String())
