@@ -124,6 +124,17 @@ describe('loadOlder', () => {
     expect(fetchObservations).toHaveBeenCalledTimes(3) // the re-read did not ask the older page again
   })
 
+  it('a re-read lets go of the older records the sliding 24 hours have left (codex R1)', async () => {
+    const DAY = 24 * 3600_000
+    fetchObservations.mockResolvedValueOnce(page([rec('a', NOW - 1000)], CURSOR))
+    await loadRecords('cfg-a', 'mlab', 'h1', NOW)
+    fetchObservations.mockResolvedValueOnce(page([rec('edge', NOW - DAY + 30_000), rec('deep', NOW - DAY + 90_000)], 'cursor-2'))
+    await loadOlder('cfg-a', 'mlab', 'h1')
+    fetchObservations.mockResolvedValueOnce(page([rec('a', NOW - 1000)], CURSOR))
+    await loadRecords('cfg-a', 'mlab', 'h1', NOW + 60_000) // the window now starts 60 s later: 'edge' has left it
+    expect(readRecords('h1', KEY)!.list.map((o) => o.id)).toEqual(['a', 'deep'])
+  })
+
   it('does nothing without a cursor, and asks once while one is out', async () => {
     fetchObservations.mockResolvedValueOnce(page([rec('a', NOW)], null))
     await loadRecords('cfg-a', 'mlab', 'h1', NOW)

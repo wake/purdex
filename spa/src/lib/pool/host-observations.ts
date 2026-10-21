@@ -11,7 +11,7 @@ export const UNDECLARED_SPAN_MS = 7 * 24 * 3600_000
 export const OBSERVATIONS_SPAN_MS = 24 * 3600_000
 const MAX_HOSTS = 32
 
-/** The records the reader has: the newest page (read again every minute) and the older pages they asked for, which a re-read keeps. */
+/** The records the reader has: the newest page (read again every minute) and the older pages they asked for, which a re-read keeps (the ones the sliding 24 hours have left go). */
 export interface ObservationRecords {
   /** One record by its id, the newest start first. */
   list: PoolObservation[]
@@ -169,7 +169,7 @@ export function loadRecords(source: string, alias: string, hostId: string, now: 
       const base = {
         key, since,
         first: { list: page.observations, nextUntil: page.nextUntil, truncated: page.truncated, known: page.known },
-        older: kept?.older ?? [], olderNext: kept?.olderNext ?? null,
+        older: (kept?.older ?? []).filter((o) => o.startedAt >= now - OBSERVATIONS_SPAN_MS), olderNext: kept?.olderNext ?? null,
       }
       m.records = { ...base, view: viewOf(base, now) }
     } else if (out === 'forbidden') { m.records = null; m.olderLoad = 'idle'; m.olderInFlight = null }
