@@ -610,6 +610,13 @@ these; wwd is restarted only after the release gate and the guardian's go-ahead)
    mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
    cache (§10), so it needs network.
 
+5. **`sandbox_user` is part of what a job sees, but not of the result-reuse key.** A job's environment carries `USER` and `LOGNAME` of the account
+   its command runs as: `worker.sandbox_user` on a Linux host with a sandbox (mserv), the daemon's own account elsewhere (#3919). The reuse key
+   (`internal/wwd/reuse`, version 2 from that change) does not name the account. All four hosts run as `wake`, so nothing differs today. **When
+   you change `sandbox_user` on a host, clear that host's `result_cache`** (`DELETE FROM result_cache` in `wwd.db`, wwd stopped), or the host
+   may answer a submission with a result an account of another name produced. The same holds when two hosts that reuse each other's results
+   run as different accounts. A follow-up makes the account part of the key.
+
 ## 13. Switching a host's entry on (S2)
 
 The hook of the Purdex mod asks `pdx entry match` about a test or build command **only on a host whose installed mod has the entry switched on**:

@@ -26,9 +26,18 @@ type KeyParts struct {
 	Qualification map[string]string
 }
 
+// keyVersion is the V of the key. It is raised when what a job runs with changes in a way the other parts do not show, so that a result
+// stored before is no longer found: 2 since a job's environment carries USER and LOGNAME (#3919), and a success of the older environment
+// must not answer a submission now. The lookup crosses hosts (daemon/reuse_lookup.go): during a rolling deploy the two versions file
+// under different keys, so a host only misses a result of the other, it never hits one it should not.
+const keyVersion = 2
+
 // Key is the hex SHA-256 of the canonical encoding of the parts. Map keys are sorted by encoding/json, so the same parts give the
 // same key whatever order the maps were built in.
-func Key(p KeyParts) string {
+func Key(p KeyParts) string { return keyAt(keyVersion, p) }
+
+// keyAt is Key under the given version (a seam for the test that the version changes the key).
+func keyAt(version int, p KeyParts) string {
 	b, err := json.Marshal(struct {
 		V             int               `json:"v"`
 		Tree          string            `json:"tree"`
@@ -39,7 +48,7 @@ func Key(p KeyParts) string {
 		Arch          string            `json:"arch"`
 		Toolchain     map[string]string `json:"toolchain"`
 		Qualification map[string]string `json:"qual"`
-	}{1, p.Tree, p.Task, nonNil(p.Args), p.DefHash, p.OS, p.Arch, nonNilMap(p.Toolchain), nonNilMap(p.Qualification)})
+	}{version, p.Tree, p.Task, nonNil(p.Args), p.DefHash, p.OS, p.Arch, nonNilMap(p.Toolchain), nonNilMap(p.Qualification)})
 	if err != nil { // strings, slices and maps of strings cannot fail to encode
 		panic("reuse: " + err.Error())
 	}

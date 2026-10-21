@@ -83,7 +83,7 @@ type Result struct {
 // KillAfter). When it returns, no process of the group is left.
 func Run(ctx context.Context, spec Spec) Result {
 	res := Result{ExitCode: -1}
-	env, err := BuildEnv(spec.JobID, spec.Origin, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
+	env, err := buildEnv(accountOf(spec), spec.JobID, spec.Origin, spec.Workspace, spec.TaskEnv, spec.ParentEnv)
 	if err != nil {
 		return failStart(res, err)
 	}
