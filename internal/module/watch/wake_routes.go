@@ -1,6 +1,7 @@
 package watchmod
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -115,11 +116,26 @@ func (m *Module) handlePutWake(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "source_unreachable", "source": source})
 		return
 	}
+	// The whole body is read under the limit (what comes after the object counts), and the object is the only thing in it.
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWakePut))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			m.writeErr(w, http.StatusRequestEntityTooLarge, "too_large", "the body is over the limit")
+			return
+		}
+		m.writeErr(w, http.StatusBadRequest, "bad_request", "the body could not be read")
+		return
+	}
 	var body wakePutBody
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxWakePut+1))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil || len(body.Settings) == 0 {
-		m.writeErr(w, http.StatusBadRequest, "bad_request", `body must be {"settings": {...}, "expect_etag": "..."}`)
+	if err := dec.Decode(&body); err != nil || len(body.Settings) == 0 || dec.More() {
+		m.writeErr(w, http.StatusBadRequest, "bad_request", `body must be one object {"settings": {...}, "expect_etag": "..."}`)
+		return
+	}
+	if _, err := dec.Token(); err != io.EOF { // nothing but white space may follow it
+		m.writeErr(w, http.StatusBadRequest, "bad_request", `body must be one object {"settings": {...}, "expect_etag": "..."}`)
 		return
 	}
 	if body.ExpectEtag == "" {

@@ -344,6 +344,40 @@ func TestWakeSettings_ANonSourceHostSaysItIsNotAndDoesNotWrite(t *testing.T) {
 	assert.Empty(t, r.events_())
 }
 
+// A host that never set peers.alias goes by the alias its host id gives (Config.PeerAlias): mlab:… is mlab, the default source.
+func TestWakeSettings_TheAliasComesFromTheHostIDWhenNoneIsSet(t *testing.T) {
+	r := newWakeRig(t, "mlab")
+	r.m.core.Cfg.Peers.Alias = ""
+	r.m.core.Cfg.HostID = "mlab:82b11c521df16c12"
+	v := r.get(t)
+	assert.Equal(t, true, v["is_source"])
+	assert.Equal(t, false, v["stale"])
+	assert.Equal(t, float64(1), v["revision"])
+	rr := r.do(adminCtx, http.MethodPut, putBody(t, watchwake.Default("Asia/Taipei"), v["etag"].(string)))
+	assert.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	r.m.core.Cfg.HostID = "air26:cccccccccccccccc" // another host by id, no alias set: not the source
+	assert.Equal(t, false, r.get(t)["is_source"])
+}
+
+// The body is one JSON object and no longer than the limit: nothing after it, and not more than maxWakePut bytes.
+func TestWakeSettings_PutBodyIsOneObjectWithinTheLimit(t *testing.T) {
+	r := newWakeRig(t, "mlab")
+	etag := r.get(t)["etag"].(string)
+	good := putBody(t, watchwake.Default("Asia/Taipei"), etag)
+
+	for name, body := range map[string]string{"a second object": good + `{}`, "garbage": good + ` x`, "a second document": good + good} {
+		rr := r.do(adminCtx, http.MethodPut, body)
+		assert.Equal(t, http.StatusBadRequest, rr.Code, name)
+	}
+	assert.Equal(t, float64(1), r.get(t)["revision"], "none of them changed the document")
+
+	pad := strings.Repeat(" ", maxWakePut+10)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, r.do(adminCtx, http.MethodPut, good+pad).Code, "trailing blanks do not get past the limit")
+	assert.Equal(t, http.StatusRequestEntityTooLarge, r.do(adminCtx, http.MethodPut, `{"settings":{"x":"`+strings.Repeat("a", maxWakePut)+`"},"expect_etag":"x"}`).Code)
+	assert.Equal(t, http.StatusOK, r.do(adminCtx, http.MethodPut, good+"  \n").Code, "trailing white space inside the limit is fine")
+}
+
 func TestWakeSettings_WakeSourceInTheConfigMovesTheSource(t *testing.T) {
 	r := newWakeRig(t, "air26")
 	r.m.core.Cfg.Watch = &config.WatchConfig{WakeSource: "air26"}
