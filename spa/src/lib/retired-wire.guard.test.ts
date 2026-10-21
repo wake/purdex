@@ -71,11 +71,13 @@ export function stripComments(text: string): string {
 
 export function hitsIn(text: string): string[] {
   // Parsing is the slow part: a file that does not contain a retired term anywhere, comments included, has nothing to find.
-  if (![...RETIRED_CODE, ...RETIRED_NAMES].some((s) => text.includes(s))) return []
+  if (![...RETIRED_CODE, ...RETIRED_NAMES].some((s) => text.includes(s)) && !/['"`]watch\.['"`]\s*\+/.test(text)) return []
   const code = stripComments(text)
   const hits: string[] = []
   for (const s of RETIRED_CODE) if (code.includes(s)) hits.push(s)
   for (const n of RETIRED_NAMES) if (new RegExp(`\\b${n}\\b`).test(code)) hits.push(n)
+  // The event name put together from pieces ('watch.' + 'events'). A guard against drift, not against someone set on getting round it.
+  if (/['"`]watch\.['"`]\s*\+/.test(code)) hits.push("'watch.' + …")
   return hits
 }
 
@@ -86,7 +88,11 @@ const WATCH_ROUTES_KEPT = ['status', 'wake', 'start']
 export function retiredWatchRoutesIn(text: string): string[] {
   if (!text.includes('/api/watch/')) return []
   const out: string[] = []
-  for (const m of stripComments(text).matchAll(/\/api\/watch\/([A-Za-z0-9_-]*)/g)) if (!WATCH_ROUTES_KEPT.includes(m[1])) out.push(`/api/watch/${m[1]}`)
+  for (const m of stripComments(text).matchAll(/\/api\/watch\/([A-Za-z0-9_-]*)(\$\{|['"`]\s*\+)?/g)) {
+    // A route that is built (`/api/watch/${x}`, '/api/watch/' + x) cannot be told from a retired one: not allowed.
+    if (m[2] !== undefined) out.push(`/api/watch/${m[1]}<built>`)
+    else if (!WATCH_ROUTES_KEPT.includes(m[1])) out.push(`/api/watch/${m[1]}`)
+  }
   return out
 }
 
@@ -134,6 +140,11 @@ describe('the retired wire stays retired', () => {
     expect(retiredWatchRoutesIn("hostFetch(id, '/api/watch/unhandled')")).toEqual(['/api/watch/unhandled'])
     expect(retiredWatchRoutesIn("hostFetch(id, '/api/watch/status'); post('/api/watch/wake'); post('/api/watch/start')")).toEqual([])
     expect(retiredWatchRoutesIn("// GET /api/watch/events\nconst a = 1")).toEqual([])
+    // built from pieces: not told apart from a retired one, so not allowed (codex attack)
+    expect(retiredWatchRoutesIn("const p = '/api/watch/' + kind")).toEqual(['/api/watch/<built>'])
+    expect(retiredWatchRoutesIn('const p = `/api/watch/${kind}`')).toEqual(['/api/watch/<built>'])
+    expect(hitsIn("const type = 'watch.' + 'events'")).toEqual(["'watch.' + …"])
+    expect(hitsIn("const k = 'watch.events.level.' + level")).toEqual([])
     expect(hitsIn("hostFetch(id, `/api/gate/decisions?x`)")).toEqual(['/api/gate/'])
     expect(hitsIn("caps.includes('gate.decisions.v1')")).toEqual(['gate.decisions.v1'])
     expect(hitsIn('export const selectGateDecisionsV1 = () => true')).toEqual(['selectGateDecisionsV1'])
