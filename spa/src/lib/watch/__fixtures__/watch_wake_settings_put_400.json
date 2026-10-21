@@ -1,0 +1,21 @@
+{
+  "error": "invalid",
+  "fields": [
+    {
+      "path": "rules.patrol.enabled",
+      "code": "unknown_field",
+      "message": "is not a field of this document"
+    },
+    {
+      "path": "rules.patrol.max_gap_hours",
+      "code": "out_of_range",
+      "message": "must be between 1 and 72"
+    },
+    {
+      "path": "rules.patrol.times[0]",
+      "code": "bad_time",
+      "message": "must be HH:MM, 24-hour, two digits each"
+    }
+  ]
+}
+

@@ -364,6 +364,31 @@ func TestWakeSettings_OnlyTheAdminTokenWritesAndAnyTokenReads(t *testing.T) {
 	assert.Equal(t, float64(1), r.get(t)["revision"])
 }
 
+// watch.wake_settings.v1 is announced for the real module registered in a real core (when it is ready), and goes with it.
+func TestInfo_AnnouncesWatchWakeSettingsV1ForTheRealModule(t *testing.T) {
+	cfg := &config.Config{DataDir: t.TempDir(), HostID: "h"}
+	c := core.New(core.CoreDeps{Config: cfg, Registry: core.NewServiceRegistry()})
+	m := New()
+	m.logf = func(string, ...any) {}
+	c.AddModule(m)
+	require.NoError(t, m.Init(c))
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	caps := func() []any {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/info", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+		list, _ := body["capabilities"].([]any)
+		return list
+	}
+	require.Contains(t, caps(), "watch.wake_settings.v1")
+	require.NotContains(t, caps(), "watch.wake_rules.v1", "the wake-ups do not read the new document yet: that capability is WK-2/WK-3's")
+	require.NoError(t, m.Stop(context.Background()))
+	require.NotContains(t, caps(), "watch.wake_settings.v1")
+}
+
 func TestWakeSettings_WithoutTheHostConfigRowsTheRoutesAre503(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), HostID: "h"}
 	cfg.Peers.Alias = "mlab" // the source, with no host config module behind it

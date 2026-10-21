@@ -2,10 +2,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -62,6 +64,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig", "GET /api/fleet",
 		"GET /api/pool/hosts", "GET /api/pool/hosts/{alias}/exceptions", "GET /api/pool/hosts/{alias}/qualification", "GET /api/pool/hosts/{alias}/alerts", "GET /api/pool/facts/history", "GET /api/pool/facts/series", // the resource pool from wwd (read-only)
 		"GET /api/pool/jobs", "GET /api/pool/jobs/{id}", "GET /api/pool/jobs/{id}/log", // the pool's jobs (read-only)
+		"GET /api/watch/wake-settings", // the watcher's wake settings (read-only; the PUT is the admin's)
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "POST /api/sessions/{code}/send-now", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
@@ -122,6 +125,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"PUT", "/api/notify/group-labels"}, // the groups the App writes back are written with the admin token (notify.group_labels.v1), never a phone's
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
 		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
+		{"PUT", "/api/watch/wake-settings"},                                                                                                                // the wake settings are read here, never changed (the admin writes them)
 		{"POST", "/api/pool/jobs"}, {"DELETE", "/api/pool/jobs/j_abc"}, {"POST", "/api/pool/jobs/j_abc/cancel"}, {"POST", "/api/pool/jobs/j_abc/position"}, // the jobs are read here, never changed (cancel and position are the admin's: jobs.control.v1)
 		{"PUT", "/api/pool/hosts/air26/worker"}, {"POST", "/api/pool/hosts/air26/exceptions"}, {"DELETE", "/api/pool/hosts/air26/exceptions/pkg"}, // changing a host's worker is the admin's, not a phone's
 		{"GET", "/api/pool/hosts/air26/observations"}, {"GET", "/api/pool/hosts/air26/undeclared"}, // redacted command lines: the admin's until a phone's event page is decided (pool.observations.v1)
@@ -136,7 +140,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
-		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/fleet"}, {"GET", "/api/pool/jobs"}, {"GET", "/api/pool/jobs/j_abc"}, {"GET", "/api/pool/jobs/j_abc/log"}, {"GET", "/api/pool/facts/history"}, {"GET", "/api/pool/facts/series"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
+		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/fleet"}, {"GET", "/api/watch/wake-settings"}, {"GET", "/api/pool/jobs"}, {"GET", "/api/pool/jobs/j_abc"}, {"GET", "/api/pool/jobs/j_abc/log"}, {"GET", "/api/pool/facts/history"}, {"GET", "/api/pool/facts/series"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
@@ -277,4 +281,24 @@ func TestDeviceScope_LaunchPanelRoutesEndToEnd(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s", r.method, r.path)
 		assert.Contains(t, rec.Body.String(), "device_forbidden")
 	}
+}
+
+// The 403 a paired phone gets for PUT /api/watch/wake-settings is the device scope's own body, and the contract fixture holds exactly it
+// (internal/wwd/wire/testdata/watch_wake_settings_put_403.json; the App keeps a byte copy). Rewrite: WWD_UPDATE_FIXTURES=1.
+func TestDeviceScope_WakeSettingsPutFixture(t *testing.T) {
+	c, _ := realDaemonMux(t)
+	_, tok := mintAndUse(t, c, "00000000-0000-4000-8000-00000000000a", "p_0123456789ab")
+	rec := callWith(t, c, "PUT", "/api/watch/wake-settings", tok, map[string]any{"settings": map[string]any{}, "expect_etag": "x"})
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	var indented bytes.Buffer
+	require.NoError(t, json.Indent(&indented, rec.Body.Bytes(), "", "  "))
+	got := append(indented.Bytes(), '\n')
+	path := "../../internal/wwd/wire/testdata/watch_wake_settings_put_403.json"
+	if os.Getenv("WWD_UPDATE_FIXTURES") != "" {
+		require.NoError(t, os.WriteFile(path, got, 0o644))
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(got))
 }

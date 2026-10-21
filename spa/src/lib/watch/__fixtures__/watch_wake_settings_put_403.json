@@ -1,0 +1,4 @@
+{
+  "error": "device_forbidden",
+  "detail": "this route is not available to a paired phone"
+}
