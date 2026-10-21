@@ -44,7 +44,10 @@ const RETIRED_NAMES = [
 export function stripComments(text: string): string {
   const sf = ts.createSourceFile('x.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const ranges: Array<[number, number]> = []
+  const jsxText: Array<[number, number]> = []
   const visit = (n: ts.Node): void => {
+    // The parser asks for trivia next to JSX text too, where `/* x */` is rendered text, not a comment.
+    if (n.kind === ts.SyntaxKind.JsxText) jsxText.push([n.getFullStart(), n.getEnd()])
     for (const r of ts.getLeadingCommentRanges(text, n.getFullStart()) ?? []) ranges.push([r.pos, r.end])
     for (const r of ts.getTrailingCommentRanges(text, n.getEnd()) ?? []) ranges.push([r.pos, r.end])
     // getChildren (not forEachChild) also yields the punctuation tokens, so a comment inside an empty `{ }`, `[ ]` or `( )` is found too.
@@ -52,7 +55,7 @@ export function stripComments(text: string): string {
   }
   visit(sf)
   let out = text
-  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
+  for (const [pos, end] of ranges.filter(([p, e]) => !jsxText.some(([s, f]) => p >= s && e <= f))) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
   return out
 }
 
@@ -106,6 +109,9 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn("const x = `${`https://host`}`; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
     expect(hitsIn("const re = /'/; const u = 'https://h'; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
     expect(hitsIn('const a = <div>https://h</div>; fetchGateDecisions()')).toEqual(['fetchGateDecisions'])
+    // `/* … */` in JSX text is rendered text, but `{/* … */}` is a comment
+    expect(hitsIn('const a = <div>/* fetchGateDecisions */</div>')).toEqual(['fetchGateDecisions'])
+    expect(hitsIn('const a = <div>{/* fetchGateDecisions */}</div>')).toEqual([])
     // a comment alone in an empty container
     expect(hitsIn('const x = { /* fetchGateDecisions */ }')).toEqual([])
     expect(hitsIn('function f() { // fetchGateDecisions\n}')).toEqual([])
