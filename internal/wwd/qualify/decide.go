@@ -26,6 +26,9 @@ type Task struct {
 	// DefHash is the manifest's definition hash of the task (manifest.Task.DefinitionHash): what the pair ran, as a whole. The
 	// coordinator compares it again when the pair is done, so a result of an older definition never earns the label.
 	DefHash string
+	// Summary is the manifest's summary kind of the task (go-json, vitest-json, junit, plain; empty is plain). Compare needs it to tell a task
+	// with no test list from a report that was not read. It is not part of Identity: DefHash already covers the summary kind.
+	Summary string
 	// Commit is the commit the task was listed at, when the clone's manifest is read at a manifest_ref (#3658): the pair is snapshotted at
 	// exactly this commit, never at what the ref names by the time Prepare runs. Empty for a clone read in its working tree. It is not part
 	// of Identity: a new commit that leaves the qualification the same is not a new qualification.

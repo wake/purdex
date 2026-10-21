@@ -319,7 +319,7 @@ func (c *Coordinator) settle(ctx context.Context) {
 		ranC, ranR := ranToAnExit(cj), ranToAnExit(rj)
 		switch {
 		case cDone && rDone:
-			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result})
+			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result}, p.task.Summary)
 			if v.Outcome == OutcomeMatch && c.taskHiddenByUnreadableManifest(p) {
 				continue // a match is not thrown away for a manifest that cannot be read just now: look again on the next tick
 			}

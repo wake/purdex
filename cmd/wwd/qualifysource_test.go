@@ -88,6 +88,7 @@ func TestTheQualifySourceListsTheTasksWithAQualify(t *testing.T) {
 	tsc := byName["tsc"]
 	assert.Equal(t, "purdex", tsc.Repo)
 	assert.Equal(t, "air26", tsc.Reference)
+	assert.Equal(t, "plain", tsc.Summary, "the manifest summary kind is carried into the task")
 	assert.Equal(t, []string{}, tsc.Args, "qualify.args = [] on a task whose args are none: the whole run is the qualification")
 	assert.Equal(t, []string{"os:darwin", "tool:node24"}, tsc.Needs, "neither repo:purdex nor the task's own label is a need")
 	assert.Equal(t, []string{"src/a.test.ts"}, byName["spa-related"].Args)

@@ -39,7 +39,11 @@ func void(format string, a ...any) Verdict {
 // tests and passed as many of them. The exception is a pair in which neither half counted any test (passed, failed and skipped all zero,
 // no failures, no digest: a task with no test list, such as tsc): there is nothing to compare, so the exit state alone decides, as for two
 // halves without a summary. If either half counted anything, the digest rule applies in full.
-func Compare(host, reference Half) Verdict {
+//
+// That exception holds only when summaryKind (the task's manifest summary) is plain, or empty, which the reporter takes as plain: only
+// then is "no tests counted" what the task reports. For go-json, vitest-json and junit the reporter also sends an all-zero summary when the
+// report is missing or cannot be parsed, so two such halves say nothing about the tests and fall through to the digest rule (a mismatch).
+func Compare(host, reference Half, summaryKind string) Verdict {
 	for _, h := range []struct {
 		name string
 		half Half
@@ -60,7 +64,7 @@ func Compare(host, reference Half) Verdict {
 	switch {
 	case hs == nil && rs == nil:
 		return Verdict{Outcome: OutcomeMatch, Why: "the same exit state and neither reports a summary"}
-	case noTests(hs) && noTests(rs):
+	case plainKind(summaryKind) && noTests(hs) && noTests(rs):
 		return Verdict{Outcome: OutcomeMatch, Why: "the same exit state and neither half counted any test"}
 	case hs == nil || rs == nil:
 		return Verdict{Outcome: OutcomeMismatch, Why: "only one half reports a summary"}
@@ -81,6 +85,9 @@ func Compare(host, reference Half) Verdict {
 	}
 	return Verdict{Outcome: OutcomeMatch, Why: "same exit and same pass/fail sets"}
 }
+
+// plainKind says a task of this summary kind reports no test list by design: plain, or empty (the reporter treats it as plain).
+func plainKind(kind string) bool { return kind == "" || kind == "plain" }
 
 // noTests says the summary counts no test and carries no failure or digest: the shape a task with no test list (tsc, lint, build) reports.
 // A nil summary is not this; the caller handles it first.

@@ -79,7 +79,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 			}
 			out = append(out, qualify.Task{
 				Repo: repo, Name: name, Reference: t.Qualify.Reference, Args: args,
-				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(), Commit: commit,
+				Needs: environmentNeeds(repo, name, t.Labels), DefHash: t.DefinitionHash(), Summary: t.Summary, Commit: commit,
 			})
 		}
 	}
