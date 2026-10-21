@@ -381,7 +381,7 @@ export function useMultiHostEventWs() {
             return
           }
           if (isWatchEvent(event.type)) {
-            // The watcher (W5e): `watch.changed` reads the host's status again. Bound to the
+            // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
             // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
