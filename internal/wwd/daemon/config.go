@@ -150,6 +150,9 @@ func (c *Config) validateJobs(home string) error {
 		if run.ReservedEnvName(name) {
 			return fmt.Errorf("jobs.env: %s is set by the runner for every job and cannot be given by the host", name)
 		}
+		if strings.HasPrefix(name, "XDG_") { // the job's workspace keeps it apart from the host's configuration and data; the search paths too
+			return fmt.Errorf("jobs.env: %s is an XDG variable: the job's own directories (and their search paths) keep it apart from the host", name)
+		}
 		switch name {
 		case "PATH":
 			return fmt.Errorf("jobs.env: PATH is the tool list; use [tools] extra_path")

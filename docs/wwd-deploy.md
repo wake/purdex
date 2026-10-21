@@ -885,9 +885,10 @@ env = ["PLAYWRIGHT_BROWSERS_PATH"]
   job's workspace `HOME`. Nothing else is expanded (not `$HOME`, not `~name`); a value need not be a path (`PLAYWRIGHT_BROWSERS_PATH=0` is a
   value). On a host with a sandbox (mserv's `sandbox_user`) the commands run as another account: the path must be one that account can read, and
   wwd does not change any permission for it.
-- **Refused at start** (wwd does not run, the config error names the variable): `HOME`, `TMPDIR`, `XDG_*`, `USER`, `LOGNAME`, anything that starts
-  with `WWD_` or `PDX_` (the runner owns them), `PATH` (use `[tools] extra_path`), `TERM`, a name that is not a variable name, a value with a NUL
-  in it. The rule for the names is the one a task's own `env` is held to (`run.ValidEnvName`, `run.ReservedEnvName`).
+- **Refused at start** (wwd does not run, the config error names the variable): `HOME`, `TMPDIR`, `USER`, `LOGNAME`, anything that starts with
+  `XDG_` (the job's own directories keep it apart from the host's configuration and data, and so do the search paths `XDG_CONFIG_DIRS` and
+  `XDG_DATA_DIRS`), anything that starts with `WWD_` or `PDX_` (the runner owns them), `PATH` (use `[tools] extra_path`), `TERM`, a name that is not a variable name, a value with a NUL
+  in it. The rule for the names is the one a task's own `env` is held to (`run.ValidEnvName`, `run.ReservedEnvName`), with the whole `XDG_` prefix, `PATH` and `TERM` added for the host.
 - **The contract: `[jobs.env]` holds values of place — where something is on this host — never values that change what a job computes.**
   The values are not part of a result's reuse key or of the dependency key: they are host-specific paths, so in a key they would make every
   host's results different and end reuse between hosts that qualify alike, and two hosts whose environment really gives different results are

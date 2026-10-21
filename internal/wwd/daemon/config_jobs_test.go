@@ -80,6 +80,21 @@ func TestConfigJobsEnvRefusesTheNamesThatAreNotTheHostsToSet(t *testing.T) {
 	}
 }
 
+// The XDG_* variables are how a job is kept apart from the host's own configuration and data: the host may not give any of them, the ones
+// the runner sets and the search paths (XDG_CONFIG_DIRS, XDG_DATA_DIRS) alike (codex R2).
+func TestConfigJobsEnvRefusesEveryXDGName(t *testing.T) {
+	for _, name := range []string{"XDG_CONFIG_DIRS", "XDG_DATA_DIRS", "XDG_BIN_HOME", "XDG_ANYTHING", "XDG_"} {
+		_, _, err := loadIn(t, "[jobs.env]\n"+name+" = \"/x\"\n")
+		if err == nil || !strings.Contains(err.Error(), "jobs.env") || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s was accepted or the error does not say why: %v", name, err)
+		}
+	}
+	// a name that only looks like it is not one
+	if _, _, err := loadIn(t, "[jobs.env]\nXDGX = \"/x\"\nMY_XDG_THING = \"/y\"\n"); err != nil {
+		t.Errorf("a name that merely contains XDG: %v", err)
+	}
+}
+
 func TestConfigJobsEnvRefusesNamesThatAreNotVariableNames(t *testing.T) {
 	for _, name := range []string{`"1BAD"`, `"A-B"`, `"--unset=X"`, `"A B"`, `""`, `"A=B"`} {
 		if _, _, err := loadIn(t, "[jobs.env]\n"+name+" = \"x\"\n"); err == nil || !strings.Contains(err.Error(), "jobs.env") {
