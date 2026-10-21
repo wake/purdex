@@ -24,6 +24,9 @@ func TestParseToolVersions(t *testing.T) {
 		{"claude", "2.1.306 (Claude Code)\n", "2.1.306"},
 		{"claude", "2.1.306", "2.1.306"},
 		{"claude", "(Claude Code)", ""},
+		{"claude", "Claude Code v3.0.1-beta.2\n", "3.0.1-beta.2"},
+		{"claude", "3.1.0 (Claude Code)\nupdate available\n", "3.1.0"},
+		{"claude", "claude 4", ""},
 		{"go", "garbage", ""},
 		{"node", "", ""},
 		{"pnpm", "  \n", ""},
@@ -193,5 +196,34 @@ func TestToolsReaderNoClaudeIsNull(t *testing.T) {
 	r := &ToolsReader{Run: (&fakeRun{}).run, Now: func() time.Time { return t0 }, TTL: time.Minute, PathDirs: []string{t.TempDir()}}
 	if got := r.Get(); got.Claude != nil {
 		t.Errorf("claude %v want null", *got.Claude)
+	}
+}
+
+// A claude that fails to answer keeps its last good version; one that answers with no version in it is reported as not found, so a changed
+// format cannot hold an old major in the fingerprint.
+func TestToolsReaderClaudeFailureKeepsButUnreadableClears(t *testing.T) {
+	dir := t.TempDir()
+	claude := exe(t, dir, "claude")
+	run := &fakeRun{out: map[string]string{claude: "2.1.306 (Claude Code)"}}
+	now := t0
+	r := &ToolsReader{Run: run.run, Now: func() time.Time { return now }, TTL: time.Minute, PathDirs: []string{dir}}
+	if got := r.Get(); got.Claude == nil || *got.Claude != "2.1.306" {
+		t.Fatalf("first read %v", got.Claude)
+	}
+	now = now.Add(2 * time.Minute)
+	run.fail = map[string]bool{claude: true}
+	if got := r.Get(); got.Claude == nil || *got.Claude != "2.1.306" {
+		t.Errorf("a transient failure dropped claude: %v", got.Claude)
+	}
+	now = now.Add(2 * time.Minute)
+	run.fail = nil
+	run.out[claude] = "Claude Code, build abc"
+	if got := r.Get(); got.Claude != nil {
+		t.Errorf("an answer with no version kept %q", *got.Claude)
+	}
+	now = now.Add(2 * time.Minute)
+	run.out[claude] = "3.0.0 (Claude Code)"
+	if got := r.Get(); got.Claude == nil || *got.Claude != "3.0.0" {
+		t.Errorf("it did not come back: %v", got.Claude)
 	}
 }

@@ -192,7 +192,7 @@ func semverLess(a, b string) bool {
 var (
 	reGoVersion   = regexp.MustCompile(`^go version go(\S+)`)
 	reDotted      = regexp.MustCompile(`^v?(\d+(?:\.\d+)+\S*)$`)
-	reClaude      = regexp.MustCompile(`^(\d+(?:\.\d+)+\S*)(?:\s+\(Claude Code\))?$`) // "2.1.306 (Claude Code)"
+	reClaude      = regexp.MustCompile(`(?:^|[\s(v])(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`) // the first x.y.z in the first line: "2.1.306 (Claude Code)"
 	reXcodeBundle = regexp.MustCompile(`<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>`)
 )
 
@@ -207,7 +207,8 @@ func parseToolVersion(tool, out string) string {
 		return ""
 	}
 	if tool == "claude" {
-		if m := reClaude.FindStringSubmatch(out); m != nil {
+		first, _, _ := strings.Cut(out, "\n")
+		if m := reClaude.FindStringSubmatch(first); m != nil {
 			return m[1]
 		}
 		return ""
@@ -269,10 +270,31 @@ func (r *ToolsReader) Get() wire.Tools {
 	r.val.Go = one("go", r.val.Go, "version")
 	r.val.Node = one("node", r.val.Node, "-v")
 	r.val.Pnpm = one("pnpm", r.val.Pnpm, "-v")
-	r.val.Claude = one("claude", r.val.Claude, "--version")
+	r.val.Claude = r.claude(ctx, r.val.Claude)
 	r.val.PHP = r.phpVersions(ctx)
 	r.val.Xcode = r.xcode(r.val.Xcode)
 	return cloneTools(r.val)
+}
+
+// claude is `claude --version`. `--version` answers before the CLI sets anything up and writes nothing under HOME (measured with an empty HOME), so
+// it is run like the other tools. A run that fails keeps the last good value (a transient failure); a run that succeeds with an answer that
+// holds no version does not: the format changed, and keeping the old version would hide a major release from the fingerprint (drift), so the
+// tool is reported as not found until the answer reads again.
+func (r *ToolsReader) claude(ctx context.Context, prev *string) *string {
+	bin := lookIn(r.PathDirs, "claude")
+	if bin == "" {
+		return nil
+	}
+	cctx, c := context.WithTimeout(ctx, 5*time.Second)
+	defer c()
+	out, err := r.Run(cctx, "wwd.tool.claude", bin, "--version")
+	if err != nil {
+		return prev
+	}
+	if v := parseToolVersion("claude", string(out)); v != "" {
+		return &v
+	}
+	return nil
 }
 
 // phpVersions probes every phpNN binary once (the same file listed in both
