@@ -36,8 +36,6 @@ const gateUsage = `usage: pdx gate [--real <binary>] [--tool <name>] [--class he
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run
   would-wait  always answers no (the JSON keeps its shape: class by the command's words, ahead 0); it reads no slot and makes no directory
-  history  the commands that were offered to an assist host: where they ran, how long, why a send failed (pdx gate history --help)
-  hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
   status, free, set, profile, queue and conflict still look at, and change, the old gate's slots and settings until they are removed (9a-3)
 `
 
@@ -61,10 +59,6 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateFree(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
-		case "hosts":
-			return gateHosts(args[1:], stdout, stderr)
-		case "history":
-			return gateHistory(args[1:], stdout, stderr)
 		case "profile":
 			return gateProfile(args[1:], stdout, stderr)
 		}

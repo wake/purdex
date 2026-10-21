@@ -357,7 +357,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 
 	slot, code, done := g.wait(ctx, cfg, class, o, sigs, d)
 	if done {
-		if code == ExitRefused && d.Outcome != "wait-max" && d.Outcome != "assist" {
+		if code == ExitRefused && d.Outcome != "wait-max" {
 			d.Outcome = "refused"
 		}
 		return code, nil

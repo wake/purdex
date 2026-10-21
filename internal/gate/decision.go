@@ -56,18 +56,8 @@ type Decision struct {
 	Applied   map[string]Applied `json:"applied,omitempty"`
 	Added     []string           `json:"limits_added,omitempty"`
 	Left      []string           `json:"left_running,omitempty"`
-	// Host is the assist host the command was sent to (absent for a run here); TransferS the seconds of snapshot, push and preparation,
-	// RunS the run there, and Reclaimed says the host took the run back (the command then waited here again).
-	Host string `json:"host,omitempty"`
-	// Tried is the assist host the command was offered to, whether or not it ran there (Host says where it ran).
-	Tried     string  `json:"tried,omitempty"`
-	TransferS float64 `json:"transfer_s,omitempty"`
-	RunS      float64 `json:"run_s,omitempty"`
-	Reclaimed bool    `json:"reclaimed,omitempty"`
-	// AssistWhy is why an attempt to send the command did not run it there (the command then ran here, or was refused).
-	AssistWhy string  `json:"assist_why,omitempty"`
-	Exit      int     `json:"exit"`
-	Duration  float64 `json:"duration_s"`
+	Exit      int                `json:"exit"`
+	Duration  float64            `json:"duration_s"`
 	// The usage of the command tree (setUsage): absent for a command that never started, and for a record of an older gate.
 	CPUS        *float64 `json:"cpu_s,omitempty"`        // user + system seconds (a pointer: a started command with 0 still says 0)
 	MaxRSSMB    *float64 `json:"max_rss_mb,omitempty"`   // the largest single process
