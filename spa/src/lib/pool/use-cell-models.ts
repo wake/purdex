@@ -1,5 +1,5 @@
 // spa/src/lib/pool/use-cell-models.ts — runs the pool store's poll while a strip of cells (or a view of the pool) is mounted, and keeps the
-// daemon identities fresh. The hook that turns fleet hosts into cell models is in fleet-bridge.ts.
+// daemon identities fresh.
 import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
 import { NEX_HOST_TTL_MS } from '../../stores/useNexHostStore'
