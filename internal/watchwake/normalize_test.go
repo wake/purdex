@@ -337,6 +337,38 @@ func TestNormalize_CollectsEveryError(t *testing.T) {
 	}
 }
 
+// A key twice would be read as the last one by this decoder and as the first by another: refused at any depth, naming the second.
+func TestNormalize_RefusesADuplicateKeyAtAnyDepth(t *testing.T) {
+	good := string(Marshal(Default("UTC")))
+	for name, tc := range map[string]struct{ raw, path string }{
+		"top":                {strings.Replace(good, `"enabled":true,`, `"enabled":true,"enabled":false,`, 1), "enabled"},
+		"nested":             {strings.Replace(good, `"below_gb":14`, `"below_gb":14,"below_gb":15`, 1), "rules.disk_low.below_gb"},
+		"object in an array": {`{"version":1,"rules":{"patrol":{"times":[],"times":["09:00"]}}}`, "rules.patrol.times"},
+	} {
+		_, errs := Normalize([]byte(tc.raw))
+		found := false
+		for _, e := range errs {
+			if e.Path == tc.path && e.Code == CodeBadType && strings.Contains(e.Message, "twice") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: %+v", name, errs)
+		}
+	}
+}
+
+// Invalid UTF-8 inside a string would be replaced by U+FFFD by the decoder and stored changed: refused before decoding.
+func TestNormalize_RefusesInvalidUTF8(t *testing.T) {
+	good := string(Marshal(Default("UTC")))
+	raw := strings.Replace(good, `"prompt":""`, "\"prompt\":\"bad \xff byte\"", 1)
+	_, errs := Normalize([]byte(raw))
+	wantOne(t, errs, "", "bad_type")
+	if !strings.Contains(errs[0].Message, "UTF-8") {
+		t.Fatalf("%+v", errs)
+	}
+}
+
 func TestPeekVersion(t *testing.T) {
 	if v, ok := PeekVersion([]byte(`{"version":7,"x":1}`)); !ok || v != 7 {
 		t.Fatalf("%d %v", v, ok)

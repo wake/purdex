@@ -168,6 +168,10 @@ func (w *walker) array(path string, v any, ok bool) ([]any, bool) {
 // settings it returns are meaningful only when there is none. Times, levels and kinds_off come back sorted (levels in the order push,
 // digest, watch), so the same document always has the same etag.
 func Normalize(raw []byte) (Settings, []FieldError) {
+	if !utf8.Valid(raw) { // the decoder would swap a bad byte for U+FFFD and the document would be stored changed
+		return Settings{}, []FieldError{{Path: "", Code: CodeBadType, Message: "is not valid UTF-8"}}
+	}
+	dupes := duplicateKeys(raw)
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var root any
@@ -178,6 +182,9 @@ func Normalize(raw []byte) (Settings, []FieldError) {
 		return Settings{}, []FieldError{{Path: "", Code: CodeBadType, Message: "has data after the document"}}
 	}
 	w := &walker{}
+	for _, p := range dupes {
+		w.add(p, CodeBadType, "appears twice in its object")
+	}
 	var s Settings
 	top := w.object("", root, "version", "enabled", "auto_start", "rules")
 	if top == nil {
@@ -377,6 +384,54 @@ func (w *walker) wwdAlert(a *WwdAlert, v any) {
 			sort.Strings(a.KindsOff)
 		}
 	}
+}
+
+// duplicateKeys is the paths of the object members that repeat a key of their object, at any depth (the second one is named), in document
+// order. encoding/json keeps the last of two equal keys and says nothing, so a document could mean one thing here and another elsewhere.
+// A document that does not parse has none to report: Normalize's own decode reports it.
+func duplicateKeys(raw []byte) []string {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var out []string
+	var walk func(path string) bool
+	walk = func(path string) bool {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		switch d, _ := tok.(json.Delim); d {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				kt, err := dec.Token()
+				if err != nil {
+					return false
+				}
+				key, _ := kt.(string)
+				p := join(path, key)
+				if seen[key] {
+					out = append(out, p)
+				}
+				seen[key] = true
+				if !walk(p) {
+					return false
+				}
+			}
+			_, err := dec.Token() // }
+			return err == nil
+		case '[':
+			for i := 0; dec.More(); i++ {
+				if !walk(fmt.Sprintf("%s[%d]", path, i)) {
+					return false
+				}
+			}
+			_, err := dec.Token() // ]
+			return err == nil
+		}
+		return true
+	}
+	walk("")
+	return out
 }
 
 // PeekVersion reads the version of a stored document without validating the rest, so a document of a newer build can be told from damage.
