@@ -38,6 +38,8 @@ export interface HostConfigCollectionItems {
   'resume-templates': ResumeTemplateOverrides
   'quick-replies': QuickReply[]
   relay: RelaySwitches
+  /** The wwd alert delivery's switch: `PUT /api/hostconfig/wwd_alerts` (the GET carries it as `wwdAlerts`). */
+  wwd_alerts: { push: boolean }
 }
 export type HostConfigCollection = keyof HostConfigCollectionItems
 
