@@ -220,6 +220,9 @@ func TestPurdexManifest(t *testing.T) {
 	if h := m.Tasks["mod-hooks"]; h != nil && !strings.Contains(h.Run, "plugin test cmd/pdx/plugin/purdex") {
 		t.Errorf("mod-hooks must run the mod's own tests, got %q", h.Run)
 	}
+	if h := m.Tasks["mod-hooks"]; h != nil && !slices.Contains(h.Labels, "tool:claude") {
+		t.Error("mod-hooks runs the claude CLI and must need tool:claude (#3908)")
+	}
 	for _, name := range []string{"go-changed", "go-race", "mod-changed", "mod-hooks"} {
 		if task := m.Tasks[name]; task != nil && !slices.Contains(task.Labels, "repo:purdex") {
 			t.Errorf("%s lacks the repo:purdex label", name)

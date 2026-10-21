@@ -140,3 +140,22 @@ func TestQualifyClass(t *testing.T) {
 		}
 	}
 }
+
+// tool:claude has no version in the label (a task needs the tool, not a release of it); the fingerprint holds the major only, because Claude Code
+// releases a patch nearly every day and a patch must not take back the labels earned under it (drift.Changed).
+func TestFromFactsClaudeLabelHasNoVersion(t *testing.T) {
+	l, fp := FromFacts(rec(wire.Tools{Claude: s("2.1.306")}))
+	if want := []string{"arch:arm64", "os:darwin", "tool:claude"}; !reflect.DeepEqual(l, want) {
+		t.Fatalf("labels %v", l)
+	}
+	if fp["claude"] != "2" {
+		t.Errorf("fingerprint %v", fp)
+	}
+	l, fp = FromFacts(rec(wire.Tools{Claude: s("2.1.400")}))
+	if fp["claude"] != "2" || len(l) != 3 {
+		t.Errorf("a patch moved the fingerprint: %v %v", l, fp)
+	}
+	if l, _ := FromFacts(rec(wire.Tools{Claude: s("not a version")})); slices.Contains(l, "tool:claude") {
+		t.Errorf("an unreadable version still gave a label: %v", l)
+	}
+}
