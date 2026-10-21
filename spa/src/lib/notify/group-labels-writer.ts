@@ -25,6 +25,7 @@ export const RETRY_MAX_MS = 300_000
 export function startGroupLabelsWriter(): () => void {
   const lastSent = new Map<string, string>() // host id → the serialised labels last sent (or tried) on this connection
   let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false // a write still out when the writer is disposed must not start anything again
 
   // One write at a time per host: the daemon keeps whichever whole set lands last, so a newer set must never overtake an older one still out. A change made meanwhile is written once the first answers.
   const inFlight = new Set<string>()
@@ -41,6 +42,7 @@ export function startGroupLabelsWriter(): () => void {
     delays.delete(hostId)
   }
   const retryLater = (hostId: string, key: string) => {
+    if (stopped) return
     lastSent.delete(hostId)
     failedKey.set(hostId, key)
     const delay = delays.get(hostId) ?? RETRY_BASE_MS
@@ -96,6 +98,7 @@ export function startGroupLabelsWriter(): () => void {
     setRootsInterest(wanted.length > 0, wanted, 'notify')
   }
   const schedule = () => {
+    if (stopped) return
     if (timer !== null) clearTimeout(timer)
     timer = setTimeout(evaluate, GROUP_LABELS_DEBOUNCE_MS)
   }
@@ -114,6 +117,7 @@ export function startGroupLabelsWriter(): () => void {
   ]
   schedule()
   return () => {
+    stopped = true
     for (const off of unsubs) off()
     if (timer !== null) clearTimeout(timer)
     for (const hostId of [...retryTimers.keys()]) stopRetry(hostId)

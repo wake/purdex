@@ -160,6 +160,15 @@ describe('retry (88 on the critic: a late old request is overwritten by a resend
     await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 2)
     expect(hostFetch).toHaveBeenCalledTimes(1)
   })
+  it('a write that fails after the writer was disposed starts nothing (codex incremental)', async () => {
+    let fail: (e: unknown) => void = () => {}
+    hostFetch.mockImplementationOnce(() => new Promise((_, rej) => { fail = rej }))
+    change('N1')
+    stop()
+    fail(new Error('down'))
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 2)
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+  })
   it('losing the connection cancels the retry', async () => {
     hostFetch.mockRejectedValueOnce(new Error('down'))
     change('N1')
