@@ -296,3 +296,15 @@ func TestUnreadableRepos(t *testing.T) {
 		t.Fatalf("%q", e.Error())
 	}
 }
+
+// A quarantined row of a task whose reference became this host (and which lacks what the reference needs) is no quarantined hold:
+// quarantined + reference_missing is outside the truth table.
+func TestView_AQuarantinedRowOfATaskThatBecameThisHostsReferenceIsNone(t *testing.T) {
+	in := viewInput()
+	in.Tasks[0].Reference = "mserv"
+	in.Host.Labels = []string{"host:mserv", "os:linux"} // no repo:, no tool:node24: the label is not advertised
+	tk := onlyTask(t, build(t, in, []wire.EarnedLabel{earnedRow(wire.EarnedLabelQuarantined)}, nil, nil))
+	if tk.Hold != wire.QualHoldNone || tk.Earned != nil || tk.Progress != wire.QualProgressBlocked || tk.Blocked.Code != wire.QualBlockedReferenceMissing {
+		t.Fatalf("%+v", tk)
+	}
+}

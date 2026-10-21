@@ -91,6 +91,9 @@ func taskView(in Input, t Task, rowOf map[string]wire.EarnedLabel, pairOf map[st
 	switch row, has := rowOf[l]; {
 	case t.Reference != "" && t.Reference == in.Host.Alias && slices.Contains(in.Host.Labels, l):
 		tk.Hold = wire.QualHoldReference
+	case has && row.State == wire.EarnedLabelQuarantined && t.Reference == in.Host.Alias:
+		// the manifest made this host the reference after the row was written: a reference is never quarantined, so the old row says nothing
+		// now (and quarantined + reference_missing is not a valid combination)
 	case has:
 		tk.Hold = row.State
 		tk.Earned = earnedView(row)

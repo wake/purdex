@@ -741,3 +741,35 @@ func TestQualificationFollowsThePairThroughAMismatch(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// Reading the qualification does its disk reads outside the coordinator's lock: a Tasks that hangs must not stop Settle and Tick.
+func TestQualificationDoesNotHoldTheLockWhileItReadsTheManifests(t *testing.T) {
+	r := newRig(t, tsc)
+	hang := &blockingSource{fakeSource: r.src, entered: make(chan struct{}), release: make(chan struct{})}
+	r.c.cfg.Source = hang
+	done := make(chan struct{})
+	go func() { _, _ = r.c.Qualification(); close(done) }()
+	<-hang.entered
+	settled := make(chan struct{})
+	go func() { r.c.Settle(ctx()); close(settled) }()
+	select {
+	case <-settled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Settle waits for a Qualification that is reading the manifests")
+	}
+	close(hang.release)
+	<-done
+}
+
+type blockingSource struct {
+	*fakeSource
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSource) Tasks() ([]Task, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return b.fakeSource.Tasks()
+}

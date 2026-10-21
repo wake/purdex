@@ -234,32 +234,44 @@ func (c *Coordinator) Status() (inFlight []Started, recent []Record) {
 	return inFlight, recent
 }
 
-// Qualification is what the host holds of each task and what happens next (BuildView), for GET /v1/qualification. It only reads: the pairs,
-// the retry memory and the records are the coordinator's own, under its lock; nothing is started or settled.
+// Qualification is what the host holds of each task and what happens next (BuildView), for GET /v1/qualification. It only reads, and it reads
+// the store and the manifests (disk) before it takes the lock: the lock is held only to copy the pairs, the retry memory and the records,
+// so a slow read or a flood of requests cannot hold up Tick and Settle. Nothing is started or settled.
 func (c *Coordinator) Qualification() (wire.HostQualification, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	in, rows, err := c.inputRows()
+	rows, err := c.earnedRows()
 	if err != nil {
 		return wire.HostQualification{}, err
 	}
+	tasks, terr := c.cfg.Source.Tasks()
+	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr}
+	c.mu.Lock()
 	pairs := make([]Pair, 0, len(c.pairs))
 	for l, p := range c.pairs {
 		pairs = append(pairs, Pair{Label: l, Candidate: p.cand, Reference: p.ref, Since: p.at})
 	}
-	return BuildView(in, rows, pairs, c.history, UnreadableRepos(in.TasksErr)), nil
+	in.Last = map[string]Attempt{}
+	for l, a := range c.last {
+		in.Last[l] = a
+	}
+	history := slices.Clone(c.history)
+	c.mu.Unlock()
+	return BuildView(in, rows, pairs, history, UnreadableRepos(terr)), nil
+}
+
+// earnedRows is the earned-label rows; damaged rows are left out and the rest is the answer, any other error is no answer.
+func (c *Coordinator) earnedRows() ([]wire.EarnedLabel, error) {
+	rows, err := c.cfg.Store.EarnedLabels()
+	var damaged *store.SkippedRowsError
+	if err != nil && !errors.As(err, &damaged) {
+		return nil, fmt.Errorf("reading the earned labels: %w", err)
+	}
+	return rows, nil
 }
 
 func (c *Coordinator) input() (Input, error) {
-	in, _, err := c.inputRows()
-	return in, err
-}
-
-func (c *Coordinator) inputRows() (Input, []wire.EarnedLabel, error) {
-	rows, err := c.cfg.Store.EarnedLabels()
-	var damaged *store.SkippedRowsError
-	if err != nil && !errors.As(err, &damaged) { // damaged rows are left out and the rest is the answer; any other error is no answer
-		return Input{}, nil, fmt.Errorf("reading the earned labels: %w", err)
+	rows, err := c.earnedRows()
+	if err != nil {
+		return Input{}, err
 	}
 	tasks, terr := c.cfg.Source.Tasks()
 	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr,
@@ -273,7 +285,7 @@ func (c *Coordinator) inputRows() (Input, []wire.EarnedLabel, error) {
 	for l, a := range c.last {
 		in.Last[l] = a
 	}
-	return in, rows, nil
+	return in, nil
 }
 
 // halves turns the task's own submission into the two halves. The candidate half asks for what a host that has not earned the label can
