@@ -195,9 +195,12 @@ func rejectNullDetectors(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return fmt.Errorf("watch: %v", err)
 	}
-	for _, name := range []string{"x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s"} {
-		if v, ok := fields[name]; ok && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			return errors.New(name + " must be a number or left out")
+	// encoding/json matches a field name without regard to case ("X_CORES" fills x_cores), so a key is compared the same way here
+	for key, v := range fields {
+		for _, name := range []string{"x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s"} {
+			if strings.EqualFold(key, name) && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+				return errors.New(name + " must be a number or left out")
+			}
 		}
 	}
 	return nil

@@ -88,6 +88,8 @@ func TestWatchPut_WhatIsSentIsStillChecked(t *testing.T) {
 		"a detector the wrong type":      `{"enabled":true,"y_mb":2048.5}`,
 		"a detector sent as null":        `{"enabled":true,"y_mb":null}`,
 		"every detector null":            `{"enabled":true,"x_cores":null,"y_mb":null,"t_s":null,"pressure_level":null,"pressure_t_s":null,"page_rate":null,"page_t_s":null}`,
+		"null in another case":           `{"enabled":true,"X_CORES":null}`,
+		"null after a value, other case": `{"enabled":true,"x_cores":2,"X_Cores":null}`,
 		"patrol idle out of range":       `{"enabled":true,"patrol_idle_min":0}`,
 		"an unknown field":               `{"enabled":true,"bogus":1}`,
 		"a duplicate key":                `{"enabled":true,"enabled":false}`,
