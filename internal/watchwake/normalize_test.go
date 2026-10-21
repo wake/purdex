@@ -369,6 +369,30 @@ func TestNormalize_RefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// An escaped lone surrogate is valid UTF-8 on the wire and U+FFFD after decoding: the document would be stored changed. A real pair is fine,
+// and so is the text \ud800 after an escaped backslash.
+func TestNormalize_RefusesAnUnpairedSurrogateEscape(t *testing.T) {
+	good := string(Marshal(Default("UTC")))
+	with := func(prompt string) []byte {
+		return []byte(strings.Replace(good, `"prompt":""`, `"prompt":"`+prompt+`"`, 1))
+	}
+	for _, bad := range []string{`\ud800`, `\udc00`, `\udc00\ud800`, `x\ud800y`, `\ud800A`, `\uD83D`} {
+		_, errs := Normalize(with(bad))
+		wantOne(t, errs, "", "bad_type")
+		if !strings.Contains(errs[0].Message, "surrogate") {
+			t.Errorf("%s: %+v", bad, errs)
+		}
+	}
+	for _, ok := range []string{`😀`, `\\ud800`, `�`, `plain`} {
+		if _, errs := Normalize(with(ok)); len(errs) != 0 {
+			t.Errorf("%s must be accepted: %+v", ok, errs)
+		}
+	}
+	// a key counts too
+	_, errs := Normalize([]byte(`{"\ud800":1}`))
+	wantOne(t, errs, "", "bad_type")
+}
+
 func TestPeekVersion(t *testing.T) {
 	if v, ok := PeekVersion([]byte(`{"version":7,"x":1}`)); !ok || v != 7 {
 		t.Fatalf("%d %v", v, ok)

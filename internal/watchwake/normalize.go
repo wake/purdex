@@ -171,6 +171,9 @@ func Normalize(raw []byte) (Settings, []FieldError) {
 	if !utf8.Valid(raw) { // the decoder would swap a bad byte for U+FFFD and the document would be stored changed
 		return Settings{}, []FieldError{{Path: "", Code: CodeBadType, Message: "is not valid UTF-8"}}
 	}
+	if hasUnpairedSurrogate(raw) { // \ud800 is valid UTF-8 on the wire and U+FFFD once decoded
+		return Settings{}, []FieldError{{Path: "", Code: CodeBadType, Message: "has an unpaired surrogate escape"}}
+	}
 	dupes := duplicateKeys(raw)
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -384,6 +387,49 @@ func (w *walker) wwdAlert(a *WwdAlert, v any) {
 			sort.Strings(a.KindsOff)
 		}
 	}
+}
+
+// hasUnpairedSurrogate says whether a JSON string (a key or a value) holds a \uD800-\uDFFF escape that is not half of a high+low pair.
+func hasUnpairedSurrogate(raw []byte) bool {
+	hex4 := func(i int) (rune, bool) { // raw[i:i+4] as a code unit
+		if i+4 > len(raw) {
+			return 0, false
+		}
+		n, err := strconv.ParseUint(string(raw[i:i+4]), 16, 32)
+		return rune(n), err == nil
+	}
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if !inString {
+			inString = c == '"'
+			continue
+		}
+		switch {
+		case c == '"':
+			inString = false
+		case c == '\\' && i+1 < len(raw) && raw[i+1] == 'u':
+			u, ok := hex4(i + 2)
+			switch {
+			case !ok: // not a valid escape: the decoder reports it
+			case u >= 0xD800 && u <= 0xDBFF:
+				if i+11 >= len(raw) || raw[i+6] != '\\' || raw[i+7] != 'u' {
+					return true
+				}
+				if lo, ok := hex4(i + 8); !ok || lo < 0xDC00 || lo > 0xDFFF {
+					return true
+				}
+				i += 11
+				continue
+			case u >= 0xDC00 && u <= 0xDFFF:
+				return true
+			}
+			i += 5
+		case c == '\\':
+			i++ // the escaped character: an escaped quote or backslash must not end or confuse the string
+		}
+	}
+	return false
 }
 
 // duplicateKeys is the paths of the object members that repeat a key of their object, at any depth (the second one is named), in document
