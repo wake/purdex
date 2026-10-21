@@ -48,6 +48,12 @@ type Module struct {
 	// beforeWakeCommit runs in a wake settings PUT after everything is checked and before the source is checked again; duringWakeCommit
 	// runs right after the write. Test seams (nil in production).
 	beforeWakeCommit, duringWakeCommit func()
+	// The follower side of the wake settings (wake_follow.go): the copy of the source's document, how often it is read again (0: the default),
+	// and what the settings suppressed. backgroundSync runs the work that would go on a goroutine in place, for a test.
+	wakeFollow     wakeFollower
+	wakePollEvery  time.Duration
+	suppressed     suppressLog
+	backgroundSync bool
 	// caller reaches the other hosts (peers.HostCallerKey); nil: only this host can be asked.
 	caller hostCaller
 	// session starts and wakes the watcher on this host (W3); nil until then.
@@ -239,6 +245,11 @@ func (m *Module) Start(context.Context) error {
 			m.patrolLoop(ctx)
 		}()
 	}
+	m.wg.Add(1)
+	go func() { // a host that is not the source keeps a copy of the source's wake settings (wake_follow.go)
+		defer m.wg.Done()
+		m.wakeFollowLoop(ctx)
+	}()
 	every := m.tickEvery
 	if every <= 0 {
 		every = safetyNet

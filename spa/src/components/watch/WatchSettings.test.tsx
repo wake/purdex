@@ -98,6 +98,53 @@ describe('GuardianSection', () => {
     expect(JSON.parse((puts()[1][2] as RequestInit).body as string)).toEqual({ items: { ...FULL, workdir: '~/x', patrol_idle_min: 90 }, baseRevision: 4 })
   })
 
+  it('「閒置時休息」 switch: on writes patrol, off writes resident, the rest of the row goes back as it was', async () => {
+    daemons.A = { items: { ...FULL, mode: 'resident' }, revision: 3 }
+    daemonPage()
+    const sw = await screen.findByTestId('watch-set-mode')
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(sw)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(JSON.parse((puts()[0][2] as RequestInit).body as string).items).toEqual({ ...FULL, mode: 'patrol' })
+    await waitFor(() => expect(screen.getByTestId('watch-set-mode')).toHaveAttribute('aria-checked', 'true'))
+    fireEvent.click(screen.getByTestId('watch-set-mode'))
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(JSON.parse((puts()[1][2] as RequestInit).body as string).items).toEqual({ ...FULL, mode: 'resident' })
+  })
+
+  it('「閒置時休息」 shows on for patrol and for a row that never wrote a mode; off for resident', async () => {
+    daemons.A = { items: { enabled: true }, revision: 3 }
+    const { unmount } = daemonPage()
+    expect(await screen.findByTestId('watch-set-mode')).toHaveAttribute('aria-checked', 'true')
+    unmount()
+    daemons.A = { items: { ...FULL, mode: 'resident' }, revision: 3 }
+    daemonPage()
+    await waitFor(() => expect(screen.getByTestId('watch-set-mode')).toHaveAttribute('aria-checked', 'false'))
+  })
+
+  it('with the switch off the minutes row is disabled, shows its value, and the value goes back unchanged on a write', async () => {
+    daemons.A = { items: { ...FULL, mode: 'resident', patrol_idle_min: 45 }, revision: 3 }
+    daemonPage()
+    const box = await screen.findByTestId('watch-set-patrol_idle_min')
+    expect(box).toHaveValue('45')
+    expect(box).toBeDisabled()
+    edit('workdir', '~/x')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(JSON.parse((puts()[0][2] as RequestInit).body as string).items).toMatchObject({ mode: 'resident', patrol_idle_min: 45, workdir: '~/x' })
+    // On again: the minutes are editable.
+    fireEvent.click(screen.getByTestId('watch-set-mode'))
+    await waitFor(() => expect(screen.getByTestId('watch-set-patrol_idle_min')).not.toBeDisabled())
+  })
+
+  it('names the switch 「閒置時休息」 and has no 常駐／巡檢 choice', async () => {
+    daemonPage()
+    await screen.findByTestId('watch-set-mode')
+    expect(screen.getByRole('switch', { name: t('watch.set.f.rest_idle') })).toBe(screen.getByTestId('watch-set-mode'))
+    expect(screen.getByText(t('watch.set.f.patrol_idle_min'))).toBeInTheDocument()
+    expect(screen.queryByText('常駐')).toBeNull()
+    expect(screen.queryByText('巡檢')).toBeNull()
+  })
+
   it('a switch writes at once', async () => {
     daemonPage()
     fireEvent.click(await screen.findByTestId('watch-set-auto_wake'))
