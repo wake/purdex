@@ -433,7 +433,8 @@ func RemoveBlock(home string) (RemoveOutcome, error) {
 	if next == cur {
 		return NoBlock, nil
 	}
-	if strings.TrimSpace(next) == "" && !isSymlink(zshenv) {
+	// The file goes only when the block was all of it (next is empty): blanks the user left around it are theirs, and stay byte for byte.
+	if next == "" && !isSymlink(zshenv) {
 		if err := os.Remove(zshenv); err != nil && !os.IsNotExist(err) {
 			return NoBlock, fmt.Errorf(".zshenv: %w", err)
 		}

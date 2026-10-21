@@ -29,6 +29,8 @@ func TestRemoveBlock_TakesOutTheBlockAndLeavesTheRestByteForByte(t *testing.T) {
 		{"two blocks from an old double install", block + "mid\n" + block, "mid\n"},
 		{"CRLF lines", "a=1\r\n# >>> pdx gate >>>\r\nx\r\n# <<< pdx gate <<<\r\nb=2\r\n", "a=1\r\nb=2\r\n"},
 		{"the first version's closed one-line block", "a\n" + blockBegin + "\ncase \":$PATH:\" in *\":/x:\"*) ;; *) PATH=\"/x:$PATH\" ;; esac\n" + blockEnd + "\nb\n", "a\nb\n"},
+		{"only blank lines are left outside the block: they are the user's, the file stays (codex R1)", "\n" + block + "\n", "\n\n"},
+		{"only spaces are left outside the block", "  \n" + block, "  \n"},
 		{"blank lines around the block are the user's", "x=1\n\n" + block + "\ny=2\n", "x=1\n\n\ny=2\n"},
 	}
 	for _, c := range cases {
