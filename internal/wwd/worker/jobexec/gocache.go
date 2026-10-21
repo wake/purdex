@@ -46,9 +46,18 @@ const (
 	goCacheTrimPct = 80
 	// goCachePruneEvery is the least time between two age passes (Go's file times are an hour coarse).
 	goCachePruneEvery = time.Hour
-	// goCacheShareMinAge: while a job holds the cache (the exclusive lock is not free), a trim of an over-bound cache takes only entries unused
-	// for this long, so that it does not remove an entry another job has just read and is about to open. Go's own trim waits 5 days.
+	// goCacheShareMinAge: while a job holds the cache (the exclusive lock is not free), a trim of a cache that has just passed its bound takes
+	// only entries unused for this long, so that it does not remove an entry another job has just read and is about to open. Go's own trim
+	// waits 5 days. The further over the bound, the shorter (goCacheShareAge), down to goCacheShareFloor.
 	goCacheShareMinAge = 2 * time.Hour
+	// goCacheShareFloor is the least idle time of an entry a trim under a shared lock may take, however far over the bound the cache is (#3879).
+	// Go touches the file time of a used entry only when it is an hour old, so an entry a running build opened ten minutes ago can show a time
+	// fifty minutes old: below an hour the trim could take an entry that a job under the shared lock has just looked up, and the build would
+	// fail on reading it instead of missing. 75 minutes is that hour and a quarter more. At mlab's 3.6 GB an hour this keeps about 4.5 GB, still
+	// under the bound of 6144 MB.
+	goCacheShareFloor = 75 * time.Minute
+	// goCacheShareSpan is how far over the bound (in percent) the idle time has fallen from goCacheShareMinAge to goCacheShareFloor.
+	goCacheShareSpan = 25
 	// goCacheMtimeStep is how stale a used entry's file time can be: Go updates it only when it is an hour old. The age limit counts from the
 	// last use, so this is added to it (Go's own trim does the same).
 	goCacheMtimeStep = time.Hour
@@ -97,6 +106,20 @@ func (s *goCacheState) clock() time.Time {
 		return s.now()
 	}
 	return time.Now()
+}
+
+// goCacheShareAge is how long an entry must have been unused for a trim under a shared lock to take it (#3879): goCacheShareMinAge at the
+// bound, falling in a line to goCacheShareFloor at goCacheShareSpan percent over it, and never below. A cache that grows faster than the
+// exclusive lock is free cannot be held to a fixed two hours, since what it holds then is all newer than that.
+func goCacheShareAge(total, max int64) time.Duration {
+	if max <= 0 || total <= max {
+		return goCacheShareMinAge
+	}
+	over := (total - max) * 100 / max // percent over the bound
+	if over >= goCacheShareSpan {
+		return goCacheShareFloor
+	}
+	return goCacheShareMinAge - (goCacheShareMinAge-goCacheShareFloor)*time.Duration(over)/goCacheShareSpan
 }
 
 func (e *Exec) goCacheMax() int64 {
@@ -305,7 +328,7 @@ func (e *Exec) boundGoCache(ctx context.Context, dir string, lock *os.File) bool
 		}
 		if st.trimming && budget > 0 {
 			if !exclusive { // a job holds the cache: only what has not been used for a while
-				cutoff := now.Add(-goCacheShareMinAge)
+				cutoff := now.Add(-goCacheShareAge(total, max))
 				idle := files[:0:0]
 				for _, f := range files {
 					if f.mod.Before(cutoff) {
