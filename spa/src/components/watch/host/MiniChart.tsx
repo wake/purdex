@@ -125,8 +125,8 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead,
         )}
       </div>
       <div className="relative mt-1 flex gap-1">
-        <div className="flex w-7 shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-text-muted" style={{ height: H }}>
-          {[def.yMax, mid, def.yMin].map((v, i) => <span key={i} data-testid={`mini-ytick-${i}`}>{tick(v)}</span>)}
+        <div className={`flex ${full ? 'w-14' : 'w-7'} shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-text-muted`} style={{ height: H }}>
+          {[def.yMax, mid, def.yMin].map((v, i) => <span key={i} data-testid={`mini-ytick-${i}`}>{full && def.format ? formatValue(def.format, v) : tick(v)}</span>)}
         </div>
         <div ref={plotRef} data-testid="mini-plot" className="relative min-w-0 flex-1" style={{ height: H }} onMouseMove={(e) => move(e.clientX)} onMouseLeave={() => onHover(null)}>
           <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block" aria-hidden="true">
@@ -160,10 +160,10 @@ export function MiniChart({ def, samples, range, now, hoverIndex, onHover, dead,
           {def.pending && <div data-testid="mini-pending" className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] leading-snug text-text-muted">{t(def.noneKey ?? def.pendingKey ?? 'watch.host.chart.pending_all')}</div>}
         </div>
       </div>
-      <div className="mt-1 flex justify-between pl-8 text-[9px] tabular-nums text-text-muted">
+      <div className={`mt-1 flex justify-between ${full ? 'pl-16' : 'pl-8'} text-[9px] tabular-nums text-text-muted`}>
         {(full ? [0, 1, 2, 3, 4].map((i) => now - R + (R * i) / 4) : [now - R, now - R / 2, now]).map((tickAt, i) => <span key={i} data-testid={`mini-xtick-${i}`}>{hm(tickAt)}</span>)}
       </div>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 pl-8 text-[10px] text-text-secondary">
+      <div className={`mt-1 flex flex-wrap gap-x-3 gap-y-0.5 ${full ? 'pl-16' : 'pl-8'} text-[10px] text-text-secondary`}>
         {def.series.map((s) => (
           <span key={s.id} data-testid={`mini-legend-${s.id}`} data-pending={String(s.pending)} className="inline-flex items-center gap-1">
             <span className={`inline-block h-1.5 w-1.5 rounded-full bg-current ${COLOR[s.color]} ${s.pending ? 'opacity-30' : ''}`} />

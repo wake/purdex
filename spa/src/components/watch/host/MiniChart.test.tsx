@@ -298,6 +298,16 @@ describe('MiniChart — the full variant (M43, M44; plan MON-7c-2)', () => {
     expect(screen.getByTestId('mini-legend-core0')).toHaveTextContent(t('watch.host.chart.s.cpu', { n: 1 }))
   })
 
+  it('the value axis is written in the chart\'s own format, so it agrees with the legend (codex R1)', () => {
+    show(fullDef({ format: 'mbps', unit: '', yMax: 100_000_000 }), s3, { variant: 'full' })
+    expect([0, 1, 2].map((i) => screen.getByTestId(`mini-ytick-${i}`).textContent)).toEqual(['100.0 MB/s', '50.0 MB/s', '0.0 MB/s'])
+  })
+
+  it('a mini card keeps the plain axis', () => {
+    show(defOf(s3, 'cpu'), s3)
+    expect(screen.getByTestId('mini-ytick-0').textContent).toBe('100')
+  })
+
   it('five times on the time axis, where a mini card has three', () => {
     const { unmount } = show(fullDef(), s3, { variant: 'full' })
     expect([0, 1, 2, 3, 4].map((i) => screen.getByTestId(`mini-xtick-${i}`).textContent)).toEqual([0, 1 / 4, 1 / 2, 3 / 4, 1].map((p) => hm(NOW - RANGE_MS['5m'] * (1 - p))))
