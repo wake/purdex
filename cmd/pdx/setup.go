@@ -118,7 +118,7 @@ func runSetup(args []string) {
 			fmt.Printf("pdx hooks for %s removed\n", agentType)
 		} else {
 			fmt.Printf("pdx hooks for %s installed\n", agentType)
-			setupGateForUser(os.Stderr)
+			retireGateForUser(os.Stderr)
 		}
 		return
 	}
@@ -134,7 +134,7 @@ func runSetup(args []string) {
 		fmt.Printf("pdx hooks for %s removed\n", agentType)
 	} else {
 		fmt.Printf("pdx hooks for %s installed\n", agentType)
-		setupGateForUser(os.Stderr)
+		retireGateForUser(os.Stderr)
 	}
 }
 
