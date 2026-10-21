@@ -36,7 +36,11 @@ interface PoolHostsState {
   setIndicatorForAll: (hostIds: readonly string[], indicator: PoolHostIndicator) => void
 }
 
-export const MAX_POOL_HOSTS = 32
+/**
+ * A guard against hostile or runaway data (`merge` on every arrival keeps no more than this), not a capacity plan: four wwd hosts today. Looks outlive the hosts they belong to (a wwd reinstall makes a new `host_id`),
+ * so the limit has to leave room for the stale ones; 128 looks are about 26 KB in the `settings` section, a small part of its 5 MiB. The `order` shares this limit. (32 filled up and kept a listed host from its indicator, #3862.)
+ */
+export const MAX_POOL_HOSTS = 128
 
 const HOST_ID = /^[0-9a-f]{16}$/
 const SHAPES: readonly IndicatorShape[] = ['ring', 'bar', 'bars']

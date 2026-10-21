@@ -52,13 +52,23 @@ describe('usePoolHostsStore', () => {
     })
 
     it('de-duplicates order and caps both at MAX_POOL_HOSTS', async () => {
-      expect(MAX_POOL_HOSTS).toBe(32)
-      const many = Array.from({ length: 40 }, (_, i) => hex(i))
+      expect(MAX_POOL_HOSTS).toBe(128)
+      const many = Array.from({ length: MAX_POOL_HOSTS + 8 }, (_, i) => hex(i))
       const looks = Object.fromEntries(many.map((k) => [k, { icon: 'Cpu' }]))
       await rehydrateFrom({ order: [A, A, ...many], looks })
-      expect(st().order).toHaveLength(32)
+      expect(st().order).toHaveLength(MAX_POOL_HOSTS)
       expect(st().order.filter((k) => k === A)).toHaveLength(1)
+      expect(Object.keys(st().looks)).toHaveLength(MAX_POOL_HOSTS)
+    })
+
+    // #3862: the cap is a guard against hostile or runaway data, not a capacity plan. Looks that stayed behind for hosts that left the pool (a wwd reinstall makes a new host_id) filled the old 32 and left no room for a host the pool lists.
+    it('a store holding the old limit of 32 looks still takes a look for one more host', async () => {
+      const stale = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [hex(i + 1), { icon: 'Cpu' }]))
+      await rehydrateFrom({ order: [], looks: stale })
       expect(Object.keys(st().looks)).toHaveLength(32)
+      st().patchLook(A, () => ({ icon: 'Cube' }))
+      expect(st().looks[A]).toEqual({ icon: 'Cube' })
+      expect(Object.keys(st().looks)).toHaveLength(33)
     })
 
     it('treats a non-record payload as nothing stored', async () => {
