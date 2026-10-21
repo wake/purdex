@@ -647,6 +647,42 @@ func TestTheTableOfLeftJobsForgetsAJobThatIsGone(t *testing.T) {
 	}
 }
 
+// A queue that could not be read for a round is not a queue whose jobs are gone: the count of the jobs left from it goes on (codex R2).
+func TestAFailedReadOfAQueueDoesNotRestartTheCountOfItsLeftJobs(t *testing.T) {
+	ahead := qjob("ahead", wire.ClassMerge, -10*time.Minute) // the origin's clock is ahead: only this host's own count can end the leaving
+	c := newConn("mlab", ahead)
+	r := newRig(t, c)
+	now := time.Now()
+	var mu sync.Mutex
+	set := func(d time.Duration) time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+		r.mu.Lock()
+		r.freezeAt = now
+		r.mu.Unlock()
+		return now
+	}
+	r.loop.cfg.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	set(0)
+
+	r.round() // left: the count starts
+	c.mu.Lock()
+	c.readErr = errors.New("the origin does not answer")
+	c.mu.Unlock()
+	set(time.Minute)
+	r.round() // the queue cannot be read this round
+	c.mu.Lock()
+	c.readErr = nil
+	c.mu.Unlock()
+	set(time.Minute + time.Second) // two minutes and a second since the job was first left
+	r.round()
+	waitFor(t, "the job to be taken: a failed read must not have started the count again", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
 func TestNothingIsLeftWhenThePatienceIsOff(t *testing.T) {
 	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
 	r := newRig(t, c)

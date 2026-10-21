@@ -44,7 +44,7 @@ type Env struct {
 	TaskHeld func(source, repo, task string) bool
 	// Faster: another host of the pool is faster than this one and could take this job right now (FasterHost), so it is left to that host
 	// for a while (#3904). nil: no such host is known.
-	Faster func(wire.Job) bool
+	Faster func(Candidate) bool
 	// Admit: whether the holds with `allow` (spec §13.4) let this job through. A job it refuses is left out of the ranking. nil: no such hold.
 	Admit func(wire.Job) bool
 }
@@ -160,7 +160,7 @@ func Rank(cands []Candidate, env Env) []Scored {
 		if env.TaskHeld != nil && env.TaskHeld(c.Source, j.Repo.Name, j.Task) {
 			continue
 		}
-		if env.Faster != nil && env.Faster(j) {
+		if env.Faster != nil && env.Faster(c) {
 			continue
 		}
 		if j.Manual == wire.PositionHold {
