@@ -139,8 +139,9 @@ type Loop struct {
 	running   map[string]*runner.Running
 	lastClaim time.Time
 	lastSweep time.Time
-	waiting   *wire.Waiting // what was last seen queued for this worker (Waiting)
-	lastLook  time.Time     // when the queues were last read for it
+	waiting   *wire.Waiting          // what was last seen queued for this worker (Waiting)
+	firstSeen map[deferKey]time.Time // the jobs of waiting -> when this worker first saw them (its own clock)
+	lastLook  time.Time              // when the queues were last read for it
 }
 
 // New returns a Loop; the zero values of the durations are the defaults.
@@ -496,24 +497,34 @@ func (l *Loop) Waiting() *wire.Waiting {
 	return &w
 }
 
-// noteWaiting records the ranked jobs as the ones waiting (less skip, a job that was just claimed): their count, and the oldest by its
-// submission time (ties: the first of the ranking, which is stable).
+// noteWaiting records the ranked jobs as the ones waiting (less skip, a job that was just claimed): their count, and the oldest, which is
+// the one this worker has seen queued the longest (ties: the best ranked, since the ranking is stable). A job's time is counted from this host's
+// first look at it, never from its submission time: the origin's clock may be minutes behind or ahead of this host's, and a job that looks hours
+// old, or not yet submitted, must not switch the giving way off or put it off. A job that is not among the ranked jobs at a look (taken, held,
+// locked, left to a faster host) is forgotten, and starts again if it comes back.
 func (l *Loop) noteWaiting(ranked []pick.Scored, skip *pick.Scored) {
 	now := l.cfg.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	seen := make(map[deferKey]time.Time, len(ranked))
 	var w wire.Waiting
 	for _, sc := range ranked {
 		if skip != nil && sc.Source == skip.Source && sc.Job.ID == skip.Job.ID {
 			continue
 		}
+		k := deferKey{sc.Source, sc.Job.ID}
+		first, ok := l.firstSeen[k]
+		if !ok {
+			first = now
+		}
+		seen[k] = first
 		w.Count++
-		if w.Count == 1 || sc.Job.CreatedAt.Before(w.OldestSince) {
-			w.OldestID, w.OldestOrigin, w.OldestSince = sc.Job.ID, sc.Source, sc.Job.CreatedAt
+		if w.Count == 1 || first.Before(w.OldestSince) {
+			w.OldestID, w.OldestOrigin, w.OldestSince = sc.Job.ID, sc.Source, first
 		}
 	}
 	w.ObservedAt = now
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lastLook = now
+	l.firstSeen, l.lastLook = seen, now
 	if w.Count == 0 {
 		l.waiting = nil
 		return
@@ -523,7 +534,7 @@ func (l *Loop) noteWaiting(ranked []pick.Scored, skip *pick.Scored) {
 
 func (l *Loop) clearWaiting() {
 	l.mu.Lock()
-	l.waiting = nil
+	l.waiting, l.firstSeen = nil, nil
 	l.mu.Unlock()
 }
 

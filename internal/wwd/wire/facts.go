@@ -285,7 +285,8 @@ type Waiting struct {
 	Count        int    `json:"count"`
 	OldestID     string `json:"oldest_id"`
 	OldestOrigin string `json:"oldest_origin"` // the host id of the queue the oldest job is in
-	// OldestSince is the submission time of the oldest job (its origin's clock).
+	// OldestSince is when this worker first saw the oldest job queued for it (this host's clock, not the submission time of its origin, whose
+	// clock may be behind or ahead).
 	OldestSince time.Time `json:"oldest_since"`
 	// ObservedAt is when the worker read the queues (this host's clock); a reader that finds it old does not trust the block.
 	ObservedAt time.Time `json:"observed_at"`
