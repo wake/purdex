@@ -235,6 +235,34 @@ func TestPut_TheBodyLimitFitsTheMostThat2000LabelsCanBe(t *testing.T) {
 	}
 }
 
+// The same worst case written the longest way JSON allows: a four-byte character as a UTF-16 surrogate pair, twelve bytes, in a root of 128
+// and a raw group of 512. That is about 15.6 MB for 2000 labels; the body limit must hold it (codex critic).
+func TestPut_TheBodyLimitFitsTheLongestJSONSpellingOf2000Labels(t *testing.T) {
+	e := newEnv(t)
+	const smiley = `\ud83d\ude00`
+	var b strings.Builder
+	b.WriteString(`{"device":"dev-a","labels":[`)
+	for i := 0; i < maxLabelsPerDevice; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"root_session_id":"%04d%s","group":"%s"}`, i, strings.Repeat(smiley, maxRootRunes-4), strings.Repeat(smiley, maxRawGroupRunes))
+	}
+	b.WriteString(`]}`)
+	if b.Len() < 14<<20 { // far over the 8 MiB the limit was before
+		t.Fatalf("the test body is only %d bytes: it would not prove the worst case", b.Len())
+	}
+	rec := e.put(e.admin, b.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %.200s", rec.Code, rec.Body.String())
+	}
+	var resp struct{ Count int }
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Count != maxLabelsPerDevice {
+		t.Fatalf("count = %d", resp.Count)
+	}
+}
+
 // A group is cut to 40 characters after the rules; what comes in is bounded too, so the body limit has a worst case at all.
 func TestPut_AGroupLongerThanTheInputLimitIs400(t *testing.T) {
 	e := newEnv(t)

@@ -22,7 +22,7 @@ import (
 // admin token (a paired phone's device token is refused by the scope middleware before it gets here, and again here); 413
 // `too_many_labels` when the list is over maxLabelsPerDevice — the whole write is refused, nothing is cut. `labels` must be there
 // (a list; null or missing is 400, so a malformed request cannot clear a device). A group is at most 512 characters in, and 40 kept.
-// The body is at most 8 MiB. Capability notify.group_labels.v1.
+// The body is at most 16 MiB. Capability notify.group_labels.v1.
 
 const (
 	maxLabelsPerDevice = 2000
@@ -31,9 +31,10 @@ const (
 	maxGroupRunes      = 40 // the length a group has inside a longer title (push.maxNamedRunes)
 	// maxRawGroupRunes bounds what comes in as a group, before the rules cut it to maxGroupRunes: the body limit needs a worst case.
 	maxRawGroupRunes = 512
-	// maxBody holds maxLabelsPerDevice entries of the longest root (128 four-byte characters) and the longest raw group (512
-	// characters, each written as a six-byte \uXXXX escape at worst) with their JSON: about 3.7 KB each, 7.5 MB for 2000, so 8 MiB.
-	maxBody = 8 << 20
+	// maxBody holds maxLabelsPerDevice entries of the longest root (128 characters) and the longest raw group (512), each character at
+	// worst a four-byte one that JSON may spell as a UTF-16 surrogate pair of twelve bytes: (128 + 512) * 12 plus the JSON around it is
+	// about 7.8 KB an entry, 15.6 MB for 2000, so 16 MiB.
+	maxBody = 16 << 20
 )
 
 type putLabel struct {
