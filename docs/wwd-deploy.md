@@ -779,3 +779,18 @@ every host that had one (mlab and air26, read back 2026-10-21; air19 and mserv n
 
 A shell that started before the setup still has the shim directory on its `PATH`. If it reports `command not found` for `go` and the like, run
 `rehash` or open a new shell. Until then `pdx gate` still skips a leftover shim when it looks for the real tool, so nothing loops.
+
+## 18. Retiring the assist module (WWD-9 9b-3)
+
+The daemon's `assist` module (`pdx assist …`, `/api/assist*`) is removed in 9b-3. It was the only thing that ran a host's `assist-off` script, and the
+host's state lived in the gate directory's `assist.json`. **A host that is still on when the new build is installed stays on for good**: nobody
+will ever switch it off, and what it holds on the remote side (the assist slice, the cloned repos' environment) stays held.
+
+Before the build that drops the module is installed on a daemon host, with the **old** build still running there:
+
+1. `pdx assist status` — every host must say `要求：關` and its check (`檢查`) must say `主機說 off`. On a host that says on, run `pdx assist off <alias>`
+   and read `pdx assist status` again until the check says off (the check runs about once a minute).
+2. Nothing may be in flight: the status shows no pending operation for the host (no `closing`).
+3. Only then install the new build (`pdx setup`, restart).
+
+`assist.json`, `assist-ready.json`, `assist-notified.json` stay on disk in the gate directory and are harmless; delete them when convenient.
