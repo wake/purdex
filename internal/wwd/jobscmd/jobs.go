@@ -25,6 +25,9 @@ const (
 	ExitFailed = 1
 	ExitNoWWD  = testcmd.ExitNoWWD
 	ExitUsage  = testcmd.ExitUsage
+	// ExitConflict is a write that --expect refused: the settings had changed since the etag was read. It is not 3, which here means
+	// wwd is not running.
+	ExitConflict = 7
 )
 
 // API is the part of the wwd client these commands use; *client.Client is one.
@@ -38,7 +41,10 @@ type API interface {
 	SetPosition(ctx context.Context, id string, p wire.Position) (wire.Job, error)
 	WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)) (wire.Job, error)
 	Worker(ctx context.Context) (wire.WorkerSettings, error)
-	SetWorker(ctx context.Context, s wire.WorkerSettings) (wire.WorkerSettings, error)
+	// WorkerOn and SetWorkerOn act on the named host through the local wwd, which forwards (spec §10); "" is this host. SetWorkerOn with
+	// a non-empty expect changes nothing unless it is the etag of the settings in force (a *client.StatusError 409 otherwise).
+	WorkerOn(ctx context.Context, host string) (wire.WorkerView, error)
+	SetWorkerOn(ctx context.Context, host string, s wire.WorkerSettings, expect string) (wire.WorkerView, error)
 	StartException(ctx context.Context, e wire.Exception) error
 	// StartExceptionOn and StopExceptionOn act on the named host through the local wwd, which forwards (spec §10); "" is this host.
 	StartExceptionOn(ctx context.Context, host string, e wire.Exception) error

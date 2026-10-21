@@ -55,7 +55,7 @@ func TestWorkerRoutesCarryTheDiskFloor(t *testing.T) {
 	auth := "Bearer " + testToken
 	floor := func(body []byte) float64 {
 		t.Helper()
-		ws, err := wire.Decode[wire.WorkerSettings](body)
+		ws, err := wire.Decode[wire.WorkerView](body)
 		if err != nil || ws.DiskMinGB == nil {
 			t.Fatalf("answer %s: %v", body, err)
 		}
@@ -86,7 +86,7 @@ func TestWorkerRoutes(t *testing.T) {
 	auth := "Bearer " + testToken
 
 	w := send(h, "GET", "/v1/worker", auth, "")
-	ws, err := wire.Decode[wire.WorkerSettings](w.Body.Bytes())
+	ws, err := wire.Decode[wire.WorkerView](w.Body.Bytes())
 	if w.Code != 200 || err != nil || !ws.Enabled || ws.Slots != (wire.Slots{Heavy: 1, Light: 2}) {
 		t.Fatalf("GET: %d %s", w.Code, w.Body)
 	}
@@ -94,7 +94,7 @@ func TestWorkerRoutes(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("PUT: %d %s", w.Code, w.Body)
 	}
-	ws, _ = wire.Decode[wire.WorkerSettings](send(h, "GET", "/v1/worker", auth, "").Body.Bytes())
+	ws, _ = wire.Decode[wire.WorkerView](send(h, "GET", "/v1/worker", auth, "").Body.Bytes())
 	if ws.Enabled || ws.Slots != (wire.Slots{Heavy: 0, Light: 1}) || ws.OwnerRule != "hid<3m" {
 		t.Fatalf("after PUT: %+v", ws)
 	}
@@ -200,7 +200,7 @@ func TestWorkerAndExceptionMutationsForwardToAPeerFromTheSocketOnly(t *testing.T
 		t.Fatalf("remote=%+v local=%+v", remote.opts.State.Worker(), local.opts.State.Worker())
 	}
 	// GET is forwarded too
-	ws, err := wire.Decode[wire.WorkerSettings](send(sock, "GET", fwdPath("/v1/worker", "air26"), "", "").Body.Bytes())
+	ws, err := wire.Decode[wire.WorkerView](send(sock, "GET", fwdPath("/v1/worker", "air26"), "", "").Body.Bytes())
 	if err != nil || ws.Enabled {
 		t.Fatalf("forwarded GET: %+v %v", ws, err)
 	}
