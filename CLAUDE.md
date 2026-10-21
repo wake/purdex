@@ -119,7 +119,7 @@ mlab 是多條線、多個 session 共用的主機：一個 `go test ./...` 或 
 | 發版 | lead | go 全套（`-p 3`、`-timeout 30m`）、vitest 全套（`--maxWorkers=3`）＋`tsc -b --force`、mod 全部；沒改到的區塊沿用上一次的結果。紅了就找出是哪張 PR，往前修，不出版 |
 
 - **tsc**：`spa/tsconfig*.json` 的 `tsBuildInfoFile` 還在 `node_modules/.tmp/` 時，worktree 把 `node_modules` symlink 到主 checkout 會共用增量快取、顯示假綠（#2796），PR 層要用 `tsc -b --force`；快取改成每個 worktree 一份之後，PR 層用 `tsc -b`（增量）即可，`--force` 只留在發版。
-- **重指令一律經過閘門**（`go`／`pnpm`／`npx`／`vitest`／`tsc`／`composer` 由 shim 自動交給 `pdx gate`；腳本裡可明寫 `pdx gate --class heavy -- …`；mod 會把直接呼叫 `node_modules/.bin`、`vendor/bin` 的指令補上前綴，會排隊的前景呼叫自動轉背景）；被排隊時照提示等，不要自己加 `&`、改用真實執行檔路徑或其他方式繞過。
+- **重指令一律交給 wwd**（測試與建置用 `pdx test <task>`，沒有對應 task 就用 `pdx test --adhoc -- …`；mod 的 entry 開著時會把這類指令自動改成 `pdx test`，會排隊的前景呼叫自動轉背景）。舊的 `pdx gate`／shim 已是直通，不排隊也不取名額，別再包它；被 wwd 排隊時照提示等，不要自己加 `&`、改用真實執行檔路徑或其他方式繞過。
 - **codex review 的 prompt 一律附上**：「不要執行 go test ./... 或完整 vitest；要驗證最多只跑受影響的單一套件／測試檔」。
 - **派 subagent／member 的 brief 一律附上這三層**。
 

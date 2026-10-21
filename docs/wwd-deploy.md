@@ -612,8 +612,8 @@ the one key `pdx setup` never overwrites, so it is set by hand, once per host, a
   The manifest alone switches nothing on.
 * A command that is a declared task becomes `pdx test <task>`. A task marked `local = true` (the development tasks: a single package `go test`,
   `vitest run <files>`) takes the local fast lane: no queue, no background move. A task that is not local (the merge and release tasks, `e2e`
-  among them) goes through the queue, may wait for a host, and the hook then runs the call in the background. The fast lane still takes its slot
-  from the gate (spec §8.3; moving it to wwd's own slots is part of retiring the gate).
+  among them) goes through the queue, may wait for a host, and the hook then runs the call in the background. The fast lane takes its slot from wwd itself
+  (taken when the run is registered), and none from the gate.
 * A command is a task only when it says what the task says about **which tests run**: `-run`, `-skip`, `-tags`, `-short`, `-bench` and `-fuzz` of the
   task must be in the command with the same value. `go test -tags e2e ./cmd/wwd/` is not the `e2e` task (it would run less), and runs as typed or
   as an ad-hoc job. A flag written as `-flag=value` is compared as

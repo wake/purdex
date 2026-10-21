@@ -18,7 +18,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md", "skills/pdx-test/SKILL.md", "skills/pdx-watch/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-test/SKILL.md", "skills/pdx-watch/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -611,32 +611,18 @@ func TestScanRegistrations_RetiredRegisterLeaseFailsClosed(t *testing.T) {
 	}
 }
 
-// The gate skill tells an agent that the gate is a pass-through now, what is gone with it, and who holds heavy work instead (S0).
-func TestSkill_GateSaysItIsAPassThrough(t *testing.T) {
-	b, err := fs.ReadFile(Files(), "skills/pdx-gate/SKILL.md")
+// The pdx-gate skill went with the gate (WWD-9 9a-2): its words live on in the pdx-test skill's section on the old gate.
+func TestSkill_GateSkillIsGone(t *testing.T) {
+	if _, err := fs.ReadFile(Files(), "skills/pdx-gate/SKILL.md"); err == nil {
+		t.Error("skills/pdx-gate/SKILL.md is still in the mod")
+	}
+	b, err := fs.ReadFile(Files(), "skills/pdx-test/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(b)
-	for _, want := range []string{
-		"name: pdx-gate",
-		"現在是直通",
-		"立刻直接執行", "exec",
-		"不排隊、不取名額、不加 `nice`、不限制 `go test -p`",
-		"不會再有結束碼 **75**",
-		"`pdx gate would-wait …` 一律回「不會等」",
-		"不再把你的 Bash 呼叫改成背景執行",
-		"`pdx test`", "`pdx-test` skill",
-		"不代表",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("SKILL.md of pdx-gate lacks %q", want)
-		}
-	}
-	// What the gate promised and does not keep: none of it may survive in the skill as a promise.
-	for _, gone := range []string{"排隊就是主機忙，不是卡住", "你不必自己包 `pdx gate`", "輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "pdx lease run", "advise", "--maxWorkers=3", "不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊", "pdx gate -- ./script.sh", "不要只包腳本裡的某一步"} {
-		if strings.Contains(s, gone) {
-			t.Errorf("SKILL.md of pdx-gate still says %q", gone)
+	for _, want := range []string{"不會再有結束碼 **75**", "`pdx gate would-wait …` 一律回「不會等」"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the pdx-test skill lacks %q, which the pdx-gate skill used to say", want)
 		}
 	}
 }

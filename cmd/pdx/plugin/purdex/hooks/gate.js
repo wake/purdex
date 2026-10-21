@@ -1,20 +1,12 @@
-// Purdex mod — host load control, the part the PATH shims cannot see (host-load-control spec §6, plan L1a).
+// Purdex mod — the wwd entry of a Bash call (spec §8.2; host-load-control spec §6 before WWD-9).
 //
-// Two things happen to a Bash call here, both only for commands of the heavy and light kinds the gate holds:
+// With the wwd entry switched on (the "entry" key of pdx.json, off by default) a test or build command is first shown to
+// `pdx entry match`, which knows the repo's task manifest: a command that is a declared task is run as `pdx test <task> …` (in the
+// background when the task goes through the queue), one that no task declares becomes `pdx test --adhoc` or is advised or refused as
+// the manifest's [entry].mode says. With the switch off the hook does nothing to the call.
 //
-// 1. Direct calls to a tool binary by path — node_modules/.bin/{vitest,tsc}, vendor/bin/{phpunit,pest}, with or without
-//    a leading ./ — get `pdx gate --auto --` in front of them. The shims stand in PATH and never see a call by path.
-//    A rewrite that would change what the engine asks permission for is not made.
-// 2. A foreground call that the gate would make wait (`pdx gate would-wait --auto`: no free slot, a queue in front, or the
-//    memory pressure over the limit) is run in the background instead, with a note: who holds the slot, for how long, the
-//    place in the queue, "it starts by itself and you will be told, do not run it again". A call that can start at once
-//    stays in the foreground. The hook asks pdx; it keeps no copy of the gate's rules.
-//
-// 3. With the wwd entry switched on (the "entry" key of pdx.json, off by default; spec §8.2) a test or build command is first shown
-//    to `pdx entry match`, which knows the repo's task manifest: a command that is a declared task is run as `pdx test <task> …`
-//    (in the background when the task goes through the queue), one that is not is advised or refused as the manifest's
-//    [entry].mode says. The commands advised stay on the paths above. With the switch off none of this runs and the hook is what
-//    it was.
+// The old gate's half is gone (WWD-9 9a-2): the gate holds nothing now, so a tool binary called by path gets no `pdx gate --auto --`
+// in front and no call is moved to the background because the gate would make it wait.
 //
 // Everything fails open: a pdx that does not answer, an answer that is not JSON, a throw while planning — the call runs as
 // it was. The planning is finished before `next` is called, and nothing after `next` can run the tool twice.
@@ -163,22 +155,21 @@ const base = (p) => p.slice(p.lastIndexOf('/') + 1)
 // ---- the hook ----
 
 const PRE_MS = 3_000 // pdx.json, the permission check: a read that has not answered by then is a failed one
-const ASK_MS = 3_000 // `pdx gate would-wait` (about 70 ms): longer than this and the call is not held for it
+const ASK_MS = 3_000 // `pdx entry match`: longer than this and the question counts as no answer
 const PLAN_MS = 4_000 // all of the planning together: a hook that waits on a dead dependency must not hold every Bash call
-const MAX_ASKS = 6 // one call can hold several commands: all of them (distinct ones, at most this many) are asked in one process, and the first that would wait decides
+const MAX_ASKS = 6 // one call can hold several commands: at most this many distinct ones are asked about the entry
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const sq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
 const withNotes = (r, notes) => (notes.length && r && typeof r === 'object' ? { ...r, context: [...(r.context ?? []), ...notes] } : r)
 
-// A tool binary called by path, which no shim sees.
+// A tool binary called by path.
 const GATED_BIN = /(?:^|\/)(?:node_modules\/\.bin\/(?:vitest|tsc)|vendor\/bin\/(?:phpunit|pest))$/
-// `claude plugin test`: the mods' test run, which no shim sees (claude is the agent itself). The gate's classifier holds a whole
-// run and lets one narrowed with --file through as a light one; it is prefixed and asked about like a tool binary called by path.
+// `claude plugin test`: the mods' test run (claude is the agent itself); it is asked about the entry like a tool binary called by path.
 const isPluginTest = (c) => base(c.first) === 'claude' && c.argv[1] === 'plugin' && c.argv[2] === 'test'
 const isGatedBin = (c) => GATED_BIN.test(c.first) || isPluginTest(c)
-// The first words of the commands the gate may hold; anything else is not asked about.
+// The first words of the commands the entry is asked about; anything else is not.
 const TOOLS = new Set(['go', 'pnpm', 'pnpx', 'npx', 'yarn', 'npm', 'bunx', 'bun', 'vitest', 'tsc', 'make', 'composer', 'phpunit', 'pest'])
 
 function log($, text) {
@@ -194,14 +185,12 @@ async function bounded($, read) {
   return Promise.race([Promise.resolve().then(read).catch(() => undefined), cap])
 }
 
-// gateConfig is the pdx binary to run and the config file of the daemon that installed the mod, from pdx.json beside VERSION
-// as ask.js does; `pdx` from PATH and its default config when there is none. A second daemon on the host has its own
-// config, and with it its own gate directory: the hook must ask, and send the call to, that one.
+// gateConfig is the pdx binary to run and the wwd entry switch, from pdx.json beside VERSION as ask.js does; `pdx` from PATH and the
+// switch off when there is none.
 async function gateConfig($) {
   const cfg = parse(await bounded($, () => $.fs.read($.plugin.root + '/pdx.json')))
   return {
     bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
-    config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
     entry: isObject(cfg) && typeof cfg.entry === 'string' && cfg.entry !== '', // the wwd entry switch
   }
 }
@@ -252,64 +241,6 @@ export function readCommand(command, continuation = false) {
     if (h) out.push(h)
   }
   return out
-}
-
-// prefixGated puts `prefix` in front of every call of a tool binary by path, and of `claude plugin test`. changed says whether it did.
-export function prefixGated(command, prefix) {
-  const cmds = readCommand(command)
-  if (!cmds) return { command, changed: false }
-  const at = cmds.filter(isGatedBin).map((c) => c.at)
-  if (at.length === 0) return { command, changed: false }
-  let out = command
-  for (const i of at.sort((a, b) => b - a)) out = out.slice(0, i) + prefix + out.slice(i)
-  return { command: out, changed: true }
-}
-
-// gatedCandidates are the distinct commands of a call that the gate may hold, in order, at most MAX_ASKS.
-export function gatedCandidates(command) {
-  const cmds = readCommand(command)
-  if (!cmds) return []
-  const seen = new Set()
-  const out = []
-  for (const c of cmds) {
-    if (!TOOLS.has(base(c.first)) && !isGatedBin(c)) continue
-    const key = JSON.stringify(c.argv)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(c.argv)
-  }
-  return out.slice(0, MAX_ASKS)
-}
-
-// askWouldWait is the gate's answer for one command: { would_wait, note, … }, or null (no answer is "no").
-async function askWouldWait($, cfg, argv) {
-  try {
-    const r = await $.process.run([cfg.bin, 'gate', 'would-wait', '--auto', '--json', ...(cfg.config ? ['--config', cfg.config] : []), '--', ...argv], { timeoutMs: ASK_MS })
-    if (!r || r.exitCode !== 0) return null
-    const o = parse(String(r.stdout || '').trim())
-    return isObject(o) && typeof o.would_wait === 'boolean' ? o : null
-  } catch (err) {
-    log($, 'would-wait failed: ' + (err && err.message ? err.message : String(err)))
-    return null
-  }
-}
-
-// askWouldWaitAll is the gate's answers for all the candidates of a call in one process: an array in the order of argvs, each
-// as askWouldWait gives it. A pdx that does not know the batch form (older than the mod) or an answer that cannot be read
-// falls back to asking one by one, so the answer for each command is the one it would have had.
-export async function askWouldWaitAll($, cfg, argvs) {
-  if (argvs.length === 0) return []
-  if (argvs.length === 1) return [await askWouldWait($, cfg, argvs[0])]
-  try {
-    const r = await $.process.run([cfg.bin, 'gate', 'would-wait', '--auto-batch', JSON.stringify(argvs), '--json', ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: ASK_MS })
-    if (r && r.exitCode === 0) {
-      const a = parse(String(r.stdout || '').trim())
-      if (Array.isArray(a) && a.length === argvs.length) return a.map((o) => (isObject(o) && typeof o.would_wait === 'boolean' ? o : null))
-    }
-  } catch (err) {
-    log($, 'would-wait batch failed: ' + (err && err.message ? err.message : String(err)))
-  }
-  return Promise.all(argvs.map((argv) => askWouldWait($, cfg, argv)))
 }
 
 // verdict is the engine's permission decision for a call, or null when it could not be had.
@@ -443,62 +374,21 @@ async function planEntry($, e, cfg, wasBackground) {
 }
 
 // planGate is everything decided before the call runs: the command to run, whether to run it in the background, and the
-// notes for the model. A plan that is null (or throws) means the call runs as it is.
+// notes for the model. A plan that is null (or throws) means the call runs as it is. Only the wwd entry plans anything now: the gate
+// holds nothing (WWD-9), so there is no prefix and no question about a wait. planEntry has checked the permission verdict of what it
+// replaced and of the background it chose, each against the call as it came.
 async function planGate($, e) {
   if (typeof e.command !== 'string' || e.command === '') return null
   const cfg = await gateConfig($)
+  if (!cfg.entry) return null
   const wasBackground = e.run_in_background === true
-  let command = e.command
-  const notes = []
-  let entryBackground = false
-  let asked = e.command // the command the older steps work on: the call as it came, or as the entry made it
-  if (cfg.entry) {
-    let ep = null
-    try { ep = await planEntry($, e, cfg, wasBackground) } catch (err) { log($, 'entry failed, the call goes the old way: ' + (err && err.message ? err.message : String(err))) }
-    if (ep && ep.deny) return { deny: ep.deny }
-    if (ep) { command = ep.command; asked = ep.command; entryBackground = ep.background && !wasBackground; notes.push(...ep.notes) }
-  }
-  const prefixed = prefixGated(command, sq(cfg.bin) + ' gate' + (cfg.config ? ' --config ' + sq(cfg.config) : '') + ' --auto -- ')
-  if (prefixed.changed) {
-    // A prefix can change what the engine asks permission for: then the call is left as it is.
-    const [before, after] = await Promise.all([verdict($, asked, wasBackground), verdict($, prefixed.command, wasBackground)])
-    if (before !== null && before === after) {
-      command = prefixed.command
-      notes.push('Purdex mod 把直接呼叫 node_modules/.bin 或 vendor/bin 的指令交給 pdx gate（主機負載控制），實際執行的是：' + command)
-    } else {
-      log($, 'the prefix would change the permission verdict (' + before + ' → ' + after + '): the call runs as it is')
-    }
-  }
-  let background = wasBackground || entryBackground
-  if (!background) {
-    const cands = gatedCandidates(asked)
-    const answers = await askWouldWaitAll($, cfg, cands)
-    for (const w of answers) {
-      if (!w || w.would_wait !== true) continue
-      // A call moved to the background must not raise a prompt the foreground call would not have.
-      const [before, after] = await Promise.all([verdict($, e.command, false), verdict($, command, true)])
-      if (before === null || before !== after) {
-        log($, 'the background would change the permission verdict (' + before + ' → ' + after + '): the call stays in the foreground')
-        break
-      }
-      background = true
-      notes.push('Purdex mod 把這個 Bash 呼叫（整段，包括它前後接的指令）改成背景執行：主機負載控制現在要讓其中的重指令排隊。' + (typeof w.note === 'string' ? w.note + ' ' : '') +
-        '它輪到時會自己開始，整段跑完時你會收到通知與輸出；在那之前不要假設它做完了，不要重跑，也不要自己加 & 繞過排隊。')
-      break
-    }
-  }
-  // The steps above were each checked against the form before them. When the entry changed the call, the form that will run (after
-  // the prefix and the background the older steps added) is checked once against the call as it came, and anything but an equal
-  // verdict puts the whole call back as it was.
-  if (asked !== e.command || entryBackground) {
-    const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, command, background)])
-    if (before === null || before !== after) {
-      log($, 'the final form of the call would change the permission verdict (' + before + ' → ' + after + '): the call runs as it came')
-      return null
-    }
-  }
-  if (command === e.command && background === wasBackground && notes.length === 0) return null
-  return { command, background, notes }
+  let ep = null
+  try { ep = await planEntry($, e, cfg, wasBackground) } catch (err) { log($, 'entry failed, the call goes as it came: ' + (err && err.message ? err.message : String(err))) }
+  if (!ep) return null
+  if (ep.deny) return { deny: ep.deny }
+  const background = ep.background || wasBackground
+  if (ep.command === e.command && background === wasBackground && ep.notes.length === 0) return null
+  return { command: ep.command, background, notes: ep.notes }
 }
 
 export function registerGate(on) {
