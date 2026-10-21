@@ -22,7 +22,7 @@ func TestGate_StatusListsTheWaiters(t *testing.T) {
 	hold := make(chan int, 1)
 	var hout, herr bytes.Buffer
 	go func() {
-		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
+		hold <- slotGateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
 	}()
 	eventuallyOutput(t, func() bool {
 		var o, e bytes.Buffer
@@ -32,7 +32,7 @@ func TestGate_StatusListsTheWaiters(t *testing.T) {
 	wait := make(chan int, 1)
 	var wout, werr bytes.Buffer
 	go func() {
-		wait <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "exit 0"}, &wout, &werr)
+		wait <- slotGateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "exit 0"}, &wout, &werr)
 	}()
 	eventuallyOutput(t, func() bool {
 		var o, e bytes.Buffer

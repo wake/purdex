@@ -3,9 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,29 +33,12 @@ func TestGate_WouldWaitBatchAnswersAsOneByOne(t *testing.T) {
 		}
 	}
 	same("free")
-
-	gofile := filepath.Join(t.TempDir(), "go")
-	release := func() { _ = os.WriteFile(gofile, nil, 0o644) }
-	defer release()
-	hold := make(chan int, 1)
-	var hout, herr bytes.Buffer
-	go func() {
-		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
-	}()
-	// The lock is taken before the holder record is written: until the note names the holder's command ("another command" is what
-	// it says for a record not yet written), two looks can differ in who holds the slot (#3037).
-	eventuallyOutput(t, func() bool {
-		w := wouldWaitAuto(t, cfg, "go", "test", "./...")
-		note, _ := w["note"].(string)
-		return w["would_wait"] == true && strings.Contains(note, "sh -c")
-	})
-	same("a heavy slot held")
 	got := wouldWaitBatchOf(t, cfg, argvs)
-	assert.Equal(t, true, got[0]["would_wait"])
-	assert.Equal(t, false, got[1]["would_wait"], "ls is not a command the gate holds")
-	assert.Equal(t, "none", got[1]["class"])
-	release()
-	assert.Equal(t, 0, <-hold)
+	for i := range got {
+		assert.Equal(t, false, got[i]["would_wait"], "nothing waits for a slot any more")
+	}
+	assert.Equal(t, "heavy", got[0]["class"])
+	assert.Equal(t, "none", got[1]["class"], "ls is not a command the gate holds")
 }
 
 // Text output: one line per command, in order.
