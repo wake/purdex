@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.771] - 2026-10-21
+
+> **WWD-9 第一步（D0）：舊閘門退場，排隊只剩 wwd。** daemon、`pdx` CLI、`wwd`、SPA 與 **mod**（三份 skill、`pdx setup`）有改：**部署要重跑 `pdx setup`**，它會把 `~/.zshenv` 裡的閘門區塊拿掉、不再安裝 shim。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 770 相同，App 仍要用 771 重新打包（設定與分頁的 ordinal 沒變，不必請使用者更新）。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
+>
+> **行為變更**：部署後 Claude Code 以外的重指令（Codex、一般終端機、腳本）不再經閘門排隊，只剩 wwd 的觀察與 S3 的壓力警報（使用者 10-20 定案「不雙軌」）。Claude Code 裡的測試照舊經入口改寫走 `pdx test`。**退版**：用 770 重跑 `pdx setup --agent cc`（會裝回 shim）並把 wwd 退回 770。
+
+### Changed：WWD-9 D0 — 舊閘門退場
+
+- **`pdx gate` 改成直通（#3865，S0-a）**：所有執行形式（shim 的 `--auto --tool`、mod 改寫的 `--auto --`、腳本的 `[--class] --`）一律直接執行真工具，不連 daemon、不排隊、不佔名額；`would-wait`（單次與批次）一律答「不會等」，JSON 形狀不變；`--wait-max`、`--assist-*` 等舊旗標接受但不再有作用。防遞迴保險保留。`pdx gate status` 還在（過渡用）。
+- **`pdx setup` 不再裝 shim，並移除 `~/.zshenv` 的閘門區塊（#3867，S0-b）**：只動 `# >>> pdx gate >>>`～`# <<< pdx gate <<<` 之間，其他內容逐位元不變；區塊缺結尾標記時整檔不動並警告。shims 目錄先留著（舊 shell 走它時已是直通）。
+- **wwd 的 worker 不再向閘門拿 heavy 槽（#3864，W3）**：claim 不再問閘門的名額與入場判斷，headroom 不再出現 `gate_full`（舊 App 仍認得這個字）。被 quarantine 但仍在跑的命令改由 wwd 自己計入名額。
+- **守門員改用 `pdx wwd worker` 調名額（#3876，S0-c）**：`pdx wwd worker [--host <alias>]` 看任一台的現值與 etag；`pdx wwd worker [--host <alias>] on|off [--heavy N] [--light N] --expect <etag>` 寫入並印讀回值，別人在讀與寫之間改過就拒絕（結束碼 7；3 仍是「本機 wwd 連不上」）。etag 是整份設定的內容雜湊，不存資料庫；不帶 `--expect` 照舊寫入（App 相容）。
+- **刪除 `pdx lease run`（#3861，9f）**：唯一的 repo 外呼叫者 aigora-v2 已改走 `pdx test`（aigora-v2 #365）。
+- **守門員手冊（#3878）**：「調整 wwd 名額」取代「調整閘門名額」；`pdx-gate`、`pdx-test` 兩份 skill 不再說閘門會排隊。
+
+### Changed：B 線監控畫面（MON）
+
+- **主機頁「狀態」子分頁正式上線（MON-7b-2、7c-2，#3860、#3868）**：六張卡與主機事實表；完整圖表有區域色帶與六組圖，在任一張圖上懸停，整頁對到同一個時間點。
+- **「行程」子分頁完成（MON-8c、8d，#3856、#3869）**：未宣告的重指令；觀察紀錄表（可展開、可載入更早的）。
+- **「設定」子分頁**：推播總開關（MON-9a-2b，#3847）一次寫給每台有 daemon 的主機，離線的主機上線後自動補寫；側欄顯示（MON-9a-3，#3858）的「主機格指示」從終端機的全域設定搬到每台主機各自設定，舊的選擇第一次開機時自動帶過去。
+- **Hosts 頁瘦身（MON-9b-1，#3871）**：拿掉資源池與 probe 主機兩個群組，改成一行連到監控。
+- **舊介面退場（MON-12a-1～12a-4 前半，#3859、#3870、#3872、#3874）**：App 不再讀 `gate.decisions`、`watch.v1` 的 events／unhandled，舊的排隊區塊與舊圖表拿掉；分頁沙漏只讀新的任務佇列。使用者看得到的差別只有舊排隊區塊不見了。
+
+### Fixed
+
+- **設 `explicit_labels_only` 的主機（mserv）領得到指名給自己的工作（#3875，#3873）**：qualify 的 candidate 只帶 `host:mserv`，以前因為沒有 `os:`／`task:` 標籤永遠不被領，mserv 的 qualify 一直做不完。
+
 ## [1.0.0-alpha.770] - 2026-10-21
 
 > daemon、`wwd`、SPA 與 **mod**（守門員手冊）有改：**部署要重跑 `pdx setup`**。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 769 相同，但 App 仍要用 770 重新打包（不必請使用者更新：設定與分頁的 ordinal 沒變）。wwd 的資料庫結構沒變（host schema 9、queue schema 9；#3849 沿用既有的 `wwd_starts.prev_exit` 欄位），wire 的 `proto` 仍是 3。
