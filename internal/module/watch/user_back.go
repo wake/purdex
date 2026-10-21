@@ -29,6 +29,7 @@ type userBackState struct {
 	mu        sync.Mutex
 	primed    bool      // a reading has been taken as the baseline
 	atPrev    bool      // the person was at the computer at the last reading
+	term      int64     // the fleet term the baseline was taken in (a new term is a change of role, even if no tick saw the standby)
 	awaySince time.Time // when the person was first seen away (zero: at the computer, or no baseline)
 }
 
@@ -40,6 +41,7 @@ type userBackSources struct {
 	primary  func() bool
 	presence func() (atComputer, known bool)
 	awayMin  func() int
+	term     func() int64
 }
 
 // presenceState is what the push module's presence says: at the computer, and whether any report says anything. A value that is only an
@@ -67,6 +69,19 @@ func (m *Module) isFleetPrimary() bool {
 	}
 	rv, ok := svc.(ifleet.RoleView)
 	return ok && rv.State().Role == ifleet.RolePrimary
+}
+
+// fleetTerm is the fleet's term now; 0 with no fleet module.
+func (m *Module) fleetTerm() int64 {
+	if m.ubsrc != nil && m.ubsrc.term != nil {
+		return m.ubsrc.term()
+	}
+	if svc, ok := m.core.Registry.Get(fleetmod.RoleViewKey); ok {
+		if rv, ok := svc.(ifleet.RoleView); ok {
+			return rv.State().Term
+		}
+	}
+	return 0
 }
 
 // userBackAwayMin is rules.user_back.away_min of the settings this host has now (the source's document, or its copy of it); the default when
@@ -103,9 +118,14 @@ func (m *Module) userBackStep(ctx context.Context) {
 	}
 	at, known := m.presenceState()
 	now := m.now()
+	term := m.fleetTerm()
 	var awayFor time.Duration
 	back := false
 	st.mu.Lock()
+	if st.primed && st.term != term { // primary -> standby -> primary between two ticks
+		st.reset()
+	}
+	st.term = term
 	switch {
 	case !known: // nobody reports: neither away nor back, and what was seen before says nothing of what comes next
 		st.reset()

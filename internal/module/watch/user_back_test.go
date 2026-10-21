@@ -20,6 +20,7 @@ type ubRig struct {
 	*recRig
 	mu      sync.Mutex
 	primary bool
+	term    int64
 	at      bool
 	known   bool
 	awayMin int
@@ -34,6 +35,7 @@ func newUBRig(t *testing.T) *ubRig {
 		primary:  func() bool { u.mu.Lock(); defer u.mu.Unlock(); return u.primary },
 		presence: func() (bool, bool) { u.mu.Lock(); defer u.mu.Unlock(); return u.at, u.known },
 		awayMin:  func() int { u.mu.Lock(); defer u.mu.Unlock(); return u.awayMin },
+		term:     func() int64 { u.mu.Lock(); defer u.mu.Unlock(); return u.term },
 	}
 	u.m.wake = func(_ context.Context, reason, detail string) error {
 		u.mu.Lock()
@@ -260,4 +262,18 @@ func TestUserBack_TheLoopRunsEveryTickAndStopsWithTheModule(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the loop did not end with its context")
 	}
+}
+
+// the role went primary -> standby -> primary between two ticks: no tick saw the standby, but the term moved, so the baseline starts over
+func TestUserBack_ANewTermStartsOverEvenIfNoTickSawTheStandby(t *testing.T) {
+	u := newUBRig(t)
+	u.step(0, true)
+	u.step(time.Minute, false)
+	u.now = u.now.Add(time.Hour)
+	u.mu.Lock()
+	u.term++
+	u.mu.Unlock()
+	u.step(0, false) // baseline again: away from now
+	u.step(5*time.Minute, true)
+	require.Zero(t, u.woke(), "the hour before the term changed is not counted")
 }
