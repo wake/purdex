@@ -1,5 +1,5 @@
 // spa/src/lib/pool/indicator-migration.ts — the one-time copy of the old global 「主機格指示」 (`useUISettingsStore.fleetCellIndicator`) into each pool host's own indicator (monitoring tabs MON-9a-3; spec W7, M51).
-// The control is gone from 設定 → 終端機 in the same release, so what the reader chose has to be in every host's own settings before it disappears. It runs between `bootPoolLooks` and `startProfileSync` (`main.tsx`):
+// The control is gone from 設定 → 終端機 in the same release, so what the reader chose has to be in every host's own settings before it disappears. It runs between the host-look migration and `startProfileSync` (`main.tsx`), and does not wait for the pool:
 // the first `settings` build is then not earlier than the copy, and the copied values go out with it. Delete with the global field (MON-12).
 //
 // The hosts are: those the pool stores know (order, looks) and those the pool answered with. When there is none (a fast boot that did not wait for the pool, or a new device) nothing is written and no marker is set; the first
