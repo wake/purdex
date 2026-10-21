@@ -24,12 +24,17 @@ const RETIRED_FILES = [
   'lib/watch/history-read.ts',
   'lib/watch/history-view.ts',
   'lib/watch/decisions-types.ts',
+  'lib/watch/events-store.ts',
+  'lib/watch/events-view.ts',
+  'lib/watch/events-types.ts',
 ]
 
 /** Routes, capabilities and event names no non-test source may contain (matched as plain text, after comments are stripped). */
 const RETIRED_CODE = [
   '/api/gate/',
   'gate.decisions.v1',
+  // The daemon's `watch.events` push, as a whole string: the locale keys (`watch.events.level.push`) and the pane kind `watch-events` are not it.
+  "'watch.events'", '"watch.events"', '`watch.events`',
 ]
 
 /** Identifiers no non-test source may use. */
@@ -38,6 +43,11 @@ const RETIRED_NAMES = [
   'selectGateDecisionsV1',
   'useGateHistory',
   'parseGateDecisions',
+  'startWatchEvents',
+  'useWatchEventsStore',
+  'fetchWatchEvents',
+  'fetchWatchUnhandled',
+  'WATCH_EVENTS_EVENT',
 ]
 
 /** Blanks the comments (found by the TypeScript parser, so a `//` inside a string or template literal is left alone) and keeps everything else, including the line breaks. */
@@ -69,6 +79,17 @@ export function hitsIn(text: string): string[] {
   return hits
 }
 
+/** The watch routes the SPA may still call (W9): the status, the wake, and the guardian's start key. */
+const WATCH_ROUTES_KEPT = ['status', 'wake', 'start']
+
+/** The `/api/watch/<x>` routes named in code (comments stripped) that are not one of the kept three. */
+export function retiredWatchRoutesIn(text: string): string[] {
+  if (!text.includes('/api/watch/')) return []
+  const out: string[] = []
+  for (const m of stripComments(text).matchAll(/\/api\/watch\/([A-Za-z0-9_-]*)/g)) if (!WATCH_ROUTES_KEPT.includes(m[1])) out.push(`/api/watch/${m[1]}`)
+  return out
+}
+
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir) as string[]) {
     if (name === 'node_modules') continue
@@ -94,7 +115,25 @@ describe('the retired wire stays retired', () => {
     expect(hits).toEqual([])
   }, 30_000)
 
+  it('the only /api/watch/ routes in code are the status, the wake and the start', () => {
+    const hits: string[] = []
+    for (const file of sources(SRC)) {
+      const rel = relative(SRC, file)
+      if (rel === SELF) continue
+      for (const h of retiredWatchRoutesIn(readFileSync(file, 'utf8'))) hits.push(`${rel}: ${h}`)
+    }
+    expect(hits).toEqual([])
+  }, 30_000)
+
   it('the detector catches what it is for', () => {
+    expect(hitsIn("const t = 'watch.events'")).toEqual(["'watch.events'"])
+    expect(hitsIn('type X = "watch.events" | "a"')).toEqual(['"watch.events"'])
+    // the locale keys, the pane kind and a comment are not the event
+    expect(hitsIn("t('watch.events.level.push'); const k = 'watch-events'; // 'watch.events'")).toEqual([])
+    expect(retiredWatchRoutesIn("hostFetch(id, '/api/watch/events?limit=500')")).toEqual(['/api/watch/events'])
+    expect(retiredWatchRoutesIn("hostFetch(id, '/api/watch/unhandled')")).toEqual(['/api/watch/unhandled'])
+    expect(retiredWatchRoutesIn("hostFetch(id, '/api/watch/status'); post('/api/watch/wake'); post('/api/watch/start')")).toEqual([])
+    expect(retiredWatchRoutesIn("// GET /api/watch/events\nconst a = 1")).toEqual([])
     expect(hitsIn("hostFetch(id, `/api/gate/decisions?x`)")).toEqual(['/api/gate/'])
     expect(hitsIn("caps.includes('gate.decisions.v1')")).toEqual(['gate.decisions.v1'])
     expect(hitsIn('export const selectGateDecisionsV1 = () => true')).toEqual(['selectGateDecisionsV1'])
