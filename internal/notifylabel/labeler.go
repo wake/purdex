@@ -26,16 +26,26 @@ type Sources struct {
 	Code func(ctx context.Context, sessionID string) (string, bool, error)
 	// Group is the display name of the team the session sits in ("" = no team). An error keeps the last known value.
 	Group func(ctx context.Context, sessionID string) (string, error)
+	// Root is the root of the session's relay chain (team.LineageRootResolver.RootSessionOf: the session with no predecessor, itself
+	// when it has none). An error keeps the last known root, and a session whose root is not known yet has no overlay group. nil:
+	// the session id is the key (a host with no lineage).
+	Root func(ctx context.Context, sessionID string) (string, error)
 	// Display is the display name of a persona code (peers.PoolDisplayName): a memory lookup, called on every Label so a
 	// renamed persona shows at once.
 	Display func(code string) (string, bool)
 }
 
 // Overlay is a second, memory-only source of a session's group, used where no team has one: the groups the App wrote back
-// (notify-title spec §3.2, N-2). It is called on every Label, so it must not do I/O.
+// (notify-title spec §3.2, N-2). It is called on every Label, so it must not do I/O. It is asked with the **root session id**
+// of the session's relay chain (Sources.Root), the key the App writes its groups under; a Labeler made without a Root source
+// asks with the session id itself.
 type Overlay interface {
-	GroupOf(sessionID string) string
+	GroupOf(rootSessionID string) string
 }
+
+// OverlayKey is the service-registry key of the Overlay: the module that keeps the groups the App wrote back registers it, the
+// agent module's Labeler asks for it (it may start before or after that module, and then has no overlay until it is there).
+const OverlayKey = "notifylabel.overlay"
 
 // Option configures a Labeler.
 type Option func(*Labeler)
@@ -61,6 +71,7 @@ func WithMaxEntries(n int) Option { return func(l *Labeler) { l.maxEntries = n }
 type entry struct {
 	code   string
 	group  string
+	root   string    // the root of the session's relay chain; "" until the first read that knew it
 	readAt time.Time // when the sources were last read
 	usedAt time.Time // when Label last asked for the session
 }
@@ -157,7 +168,13 @@ func (l *Labeler) Label(sessionID, sessionName string) Label {
 	}
 	out.Group = e.group
 	if out.Group == "" && l.overlay != nil {
-		out.Group = l.overlay.GroupOf(sessionID)
+		key := sessionID // no Root source: the session is its own key
+		if l.src.Root != nil {
+			key = e.root // a root not read yet is not guessed
+		}
+		if key != "" {
+			out.Group = l.overlay.GroupOf(key)
+		}
 	}
 	return out
 }
@@ -229,6 +246,10 @@ func (l *Labeler) read(sid string) {
 	if l.src.Group != nil {
 		group, groupErr = l.src.Group(ctx, sid)
 	}
+	root, rootErr := "", error(nil)
+	if l.src.Root != nil {
+		root, rootErr = l.src.Root(ctx, sid)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.pending, sid)
@@ -245,6 +266,9 @@ func (l *Labeler) read(sid string) {
 	}
 	if groupErr == nil {
 		e.group = group
+	}
+	if rootErr == nil && root != "" {
+		e.root = root
 	}
 	if _, had := l.cache[sid]; !had && len(l.cache) >= l.maxEntries {
 		l.evictLocked()
