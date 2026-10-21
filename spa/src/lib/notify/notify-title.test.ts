@@ -17,3 +17,13 @@ describe('notifyTitle runs the shared cases', () => {
     expect(notifyTitle({ name: c.name, group: c.group, tmux: c.tmux }, c.host_label, c.thing, c.locale as NotifyTitleLocale)).toBe(c.want)
   })
 })
+
+describe('the host and tmux names are cleaned (codex R2; the Go side has the same gap, reported to 88)', () => {
+  it('control, bidi, zero-width and newline characters never reach the title', () => {
+    const t = notifyTitle({ name: 'Mei', tmux: 'ai\ngora\u202E4\u200B' }, 'ml\u0007ab', '', 'zh-TW')
+    expect(t).toBe('Mei — mlab：ai gora4')
+  })
+  it('a host name that is only control characters is no host name', () => {
+    expect(notifyTitle({ tmux: 'aigora4' }, '\u202E\u200B', '', 'zh-TW')).toBe('aigora4')
+  })
+})

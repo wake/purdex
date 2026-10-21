@@ -2,7 +2,7 @@
 // cases (internal/push/testdata/notify-title-cases.json; notify-title.test.ts here, TestNotifyTitleFixture there), so a rule changed on one side and not the other turns a test red.
 // With a persona name: "{name} — {group}", or without a group "{name} — {host}：{tmux}"; without a name today's "{host}：{tmux}". A workbook thing follows as "・{thing}". Over the limit, the thing is cut first, then
 // the group (or the host and tmux part); the name is never cut. `hostLabel` is THIS device's own name for the host.
-import { cutRunes, normaliseNotificationText, NOTIFICATION_TITLE_RUNES } from '../notification-normalise'
+import { cutRunes, normaliseNotificationText, plainNotificationText, NOTIFICATION_TITLE_RUNES } from '../notification-normalise'
 
 /** What the daemon worked out for a session (`NormalizedEvent.notify_label`); every part may be absent. */
 export interface NotifyLabel { name?: string; group?: string; tmux?: string }
@@ -23,8 +23,10 @@ function workbookTitle(title: string, thing: string): string {
 }
 
 export function notifyTitle(label: NotifyLabel, hostLabel: string, thing: string, locale: NotifyTitleLocale): string {
-  const tmux = label.tmux ?? ''
-  const row = hostLabel === '' ? tmux : `${hostLabel}${locale === 'en' ? ': ' : '：'}${tmux}`
+  // The host's name and the tmux name are written outside (a look name, a session name): cleaned of control, format and direction characters, not Markdown-processed (`finalTitle` skips the cut that used to clean the whole).
+  const tmux = plainNotificationText(label.tmux ?? '', NO_LIMIT)
+  const host = plainNotificationText(hostLabel, NO_LIMIT)
+  const row = host === '' ? tmux : `${host}${locale === 'en' ? ': ' : '：'}${tmux}`
   const name = normaliseNotificationText(label.name ?? '', NO_LIMIT) // only normalised: a persona's name is never cut
   if (name === '') return workbookTitle(row, thing)
   let mid = normaliseNotificationText(label.group ?? '', MAX_NAMED_RUNES)
