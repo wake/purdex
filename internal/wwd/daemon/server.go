@@ -34,13 +34,15 @@ type Options struct {
 	HostID, Alias, Version string
 	Token                  string
 	WorkerEnabled          bool
-	Fault                  *fault.Hooks // test hooks (nil: none); /v1/info declares them
-	Sampler                *Sampler     // nil: the facts routes are not registered
-	Peers                  []PeerAddr
-	PeersLastFile          string       // where the last known info of the peers is kept across restarts (pool_last.go); "": not kept
-	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
-	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
-	Broker                 *Broker      // the event broker (shared with State); nil: a new one
+	// ExplicitLabelsOnly is `[worker] explicit_labels_only`, announced in /v1/info so that the pool can tell which hosts take a job.
+	ExplicitLabelsOnly bool
+	Fault              *fault.Hooks // test hooks (nil: none); /v1/info declares them
+	Sampler            *Sampler     // nil: the facts routes are not registered
+	Peers              []PeerAddr
+	PeersLastFile      string       // where the last known info of the peers is kept across restarts (pool_last.go); "": not kept
+	HTTPClient         *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
+	State              *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
+	Broker             *Broker      // the event broker (shared with State); nil: a new one
 	// Queue is this host's job queue (one per process); the job routes serve from it. nil: no queue.
 	Queue *queue.Queue
 	// LocalRuns serves POST /v1/local-runs on the socket (the fast lane, spec 5.2); main builds it over Queue and feeds it the
@@ -255,7 +257,7 @@ func (d *Daemon) info() wire.Info {
 		Fault:  d.opts.Fault.Declared(),
 		HostID: d.opts.HostID, Alias: d.opts.Alias, Version: d.opts.Version,
 		Proto: wire.Proto, Platform: runtime.GOOS, Arch: runtime.GOARCH,
-		Worker: wire.InfoWorker{Enabled: enabled},
+		Worker: wire.InfoWorker{Enabled: enabled, ExplicitLabelsOnly: d.opts.ExplicitLabelsOnly},
 		Labels: lbl, Fingerprint: fp,
 	}
 }

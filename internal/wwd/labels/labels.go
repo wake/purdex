@@ -91,6 +91,14 @@ func FromFacts(f wire.Facts) (labels []string, fingerprint map[string]string) {
 	one("node", "node", f.Tools.Node, false, major)
 	one("pnpm", "pnpm", f.Tools.Pnpm, false, major)
 	one("xcode", "xcode", f.Tools.Xcode, false, major)
+	// claude: the label names the tool only. The fingerprint keeps the major version: Claude Code ships a patch nearly every day, and a patch
+	// must not take back the labels earned under it (drift.Changed); a major is a change worth qualifying again.
+	if f.Tools.Claude != nil {
+		if maj, _, ok := versionParts(*f.Tools.Claude, false); ok {
+			labels = append(labels, "tool:claude")
+			fingerprint["claude"] = strconv.Itoa(maj)
+		}
+	}
 	var php []string
 	for _, v := range f.Tools.PHP {
 		if maj, min, ok := versionParts(v, true); ok {

@@ -162,6 +162,10 @@ type AdvisorRule struct {
 	// write a level and kinds an older reader of the alert list refuses whole, so they are switched on host by host once every reader has the
 	// build that knows them (docs/wwd-deploy.md).
 	WatchRules bool `toml:"watch_rules"`
+	// QueueRules turns on the four rules of the queue (WWD-9 S3-3b: queue_stalled, job_requeued, queue_backlog, queue_unclaimable). Off by default,
+	// for the same reason as WatchRules: a reader from before S3-3a refuses the whole list that holds one of the kinds. Only the host that the
+	// jobs are queued on has a queue to judge; the others have an empty one and the rules hold nowhere (docs/wwd-deploy.md).
+	QueueRules bool `toml:"queue_rules"`
 	// Off names the watcher rules this host does not judge (only the three kinds above); air19 lists the two that mean nothing to a laptop
 	// whose Windows VM pages all day. It takes a rule out, and never switches one on: WatchRules decides that.
 	Off []string `toml:"off"`

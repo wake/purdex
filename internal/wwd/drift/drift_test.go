@@ -2,6 +2,7 @@ package drift
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -344,5 +345,15 @@ func TestAPendingCleanupIsLetGoOnceTheLabelIsEarnedAgain(t *testing.T) {
 	w.OnFacts(moved)
 	if len(c.calls) != 1 || len(w.pending) != 0 {
 		t.Fatalf("cache calls %v, pending %v: the new qualification's entries must not be dropped", c.calls, w.pending)
+	}
+}
+
+// tool:claude has no version in it: its key is claude, and a task needing it depends on the claude fingerprint (#3908).
+func TestToolKeyClaude(t *testing.T) {
+	if k, ok := ToolKey("tool:claude"); !ok || k != "claude" {
+		t.Errorf("ToolKey = %q %v", k, ok)
+	}
+	if got := KeysFor([]string{"os:darwin", "tool:claude"}); !reflect.DeepEqual(got, []string{"claude", OSVersionKey}) {
+		t.Errorf("KeysFor = %v", got)
 	}
 }

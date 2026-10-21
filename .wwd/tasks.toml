@@ -59,11 +59,12 @@ timeout   = "30m"
 summary   = "go-json"
 
 # The mod's own tests (hooks/*.test.ts), which `go test` does not run. The whole mod directory: they are few and fast.
+# Needs the claude CLI on the host (tool:claude): a host without it must not take the job (#3908). It runs with an empty HOME, no login and no network.
 [tasks.mod-hooks]
 run       = "claude plugin test cmd/pdx/plugin/purdex"
 args      = "none"
 class     = "merge"
-labels    = ["os:darwin", "repo:purdex"]
+labels    = ["os:darwin", "repo:purdex", "tool:claude"]
 cacheable = true
 timeout   = "10m"
 

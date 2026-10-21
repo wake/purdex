@@ -81,7 +81,7 @@ const (
 )
 
 // toolNeeds says which tool: labels a task has to carry, from what it runs: a task that runs go (go test, make lint's gofmt and go vet)
-// needs the Go of the repo's go.mod, and one that runs pnpm needs node and pnpm. goLabel is "tool:go<major>.<minor>".
+// needs the Go of the repo's go.mod, one that runs pnpm needs node and pnpm, and one that runs claude needs tool:claude. goLabel is "tool:go<major>.<minor>".
 func toolNeeds(task *Task, goLabel string) []string {
 	var need []string
 	if strings.Contains(task.Run, "go test") || strings.Contains(task.Run, "go vet") || strings.HasPrefix(task.Run, "make lint") {
@@ -89,6 +89,9 @@ func toolNeeds(task *Task, goLabel string) []string {
 	}
 	if strings.Contains(task.Run, "pnpm ") {
 		need = append(need, nodeLabel, pnpmLabel)
+	}
+	if strings.HasPrefix(task.Run, "claude ") {
+		need = append(need, "tool:claude") // no version in the label: a task needs the CLI, not a release (#3908)
 	}
 	return need
 }

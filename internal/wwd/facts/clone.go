@@ -22,7 +22,7 @@ func Clone(f wire.Facts) wire.Facts {
 	out.Residents = cloneSlice(f.Residents)
 	out.Tools = wire.Tools{
 		Go: clonePtr(f.Tools.Go), Node: clonePtr(f.Tools.Node), Pnpm: clonePtr(f.Tools.Pnpm),
-		PHP: cloneSlice(f.Tools.PHP), Xcode: clonePtr(f.Tools.Xcode),
+		PHP: cloneSlice(f.Tools.PHP), Xcode: clonePtr(f.Tools.Xcode), Claude: clonePtr(f.Tools.Claude),
 	}
 	out.Owner = clonePtr(f.Owner)
 	if f.Stats != nil {
