@@ -60,6 +60,8 @@ func retireGate(home string, w io.Writer) {
 		fmt.Fprintf(w, "setup: could not remove the pdx gate block: %v\n", err)
 	case out == shim.BlockRemoved:
 		fmt.Fprintln(w, "pdx gate ~/.zshenv block removed")
+	case out == shim.BlockNotOurs:
+		fmt.Fprintln(w, "setup: ~/.zshenv has text between the pdx gate markers that pdx did not write; left as it is (remove the block by hand, from the line \"# >>> pdx gate >>>\")")
 	case out == shim.BlockUnclosed:
 		fmt.Fprintln(w, "setup: ~/.zshenv has a pdx gate block with no end marker; left as it is (remove it by hand, from the line \"# >>> pdx gate >>>\")")
 	}

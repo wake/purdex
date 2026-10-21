@@ -374,7 +374,54 @@ const (
 	// BlockUnclosed: a begin marker has no end marker. The file is left exactly as it is (such a file was edited by hand, and nothing here
 	// guesses what is the block's and what is not), also when a complete block is there too.
 	BlockUnclosed
+	// BlockNotOurs: between a begin and an end marker there is text that is not what pdx ever wrote (a here-document of the user's that holds
+	// the two marker lines, a block someone edited). The markers alone do not show a block is ours, so the file is left exactly as it is.
+	BlockNotOurs
 )
+
+// blockBodyOurs says whether the lines between the markers are what pdx has written: the first version's one line, or the five lines of the
+// current block (for any shim directory). Anything else, an added line included, is not provably ours.
+func blockBodyOurs(inner []string) bool {
+	if len(inner) == 1 && bodyLine.MatchString(inner[0]) {
+		return true
+	}
+	if len(inner) != len(bodyLines) {
+		return false
+	}
+	for i, re := range bodyLines {
+		if !re.MatchString(inner[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// allBlocksOurs says whether every complete block of s (a begin marker, then an end marker before the next begin marker) holds only what pdx
+// wrote. Unclosed ones are hasUnclosed's.
+func allBlocksOurs(s string) bool {
+	lines := strings.SplitAfter(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r\n") != blockBegin {
+			continue
+		}
+		var inner []string
+		for j := i + 1; j < len(lines); j++ {
+			t := strings.TrimRight(lines[j], "\r\n")
+			if t == blockEnd {
+				if !blockBodyOurs(inner) {
+					return false
+				}
+				i = j
+				break
+			}
+			if t == blockBegin {
+				break
+			}
+			inner = append(inner, t)
+		}
+	}
+	return true
+}
 
 // hasUnclosed says whether s has a begin marker that no end marker follows before the next begin marker (or the end of the file).
 func hasUnclosed(s string) bool {
@@ -417,6 +464,9 @@ func RemoveBlock(home string) (RemoveOutcome, error) {
 	if Strip(cur) == cur {
 		return NoBlock, nil
 	}
+	if !allBlocksOurs(cur) {
+		return BlockNotOurs, nil
+	}
 	unlock, err := lock(home)
 	if err != nil {
 		return NoBlock, fmt.Errorf("lock: %w", err)
@@ -432,6 +482,9 @@ func RemoveBlock(home string) (RemoveOutcome, error) {
 	next := Strip(cur)
 	if next == cur {
 		return NoBlock, nil
+	}
+	if !allBlocksOurs(cur) {
+		return BlockNotOurs, nil
 	}
 	// The file goes only when the block was all of it (next is empty): blanks the user left around it are theirs, and stay byte for byte.
 	if next == "" && !isSymlink(zshenv) {

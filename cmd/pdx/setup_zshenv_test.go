@@ -249,6 +249,25 @@ func TestSetupCC_AnUnclosedBlockIsLeftAloneWithAWarning(t *testing.T) {
 	}
 }
 
+// The markers around text pdx never wrote (a here-document of the user's): the file is left alone, with a word about it.
+func TestSetupCC_MarkersAroundTheUsersOwnTextAreLeftAlone(t *testing.T) {
+	for name, port := range map[string]func(*testing.T) int{"the daemon answers": daemonThatAnswers, "the daemon does not answer": closedPort} {
+		home := setupEnv(t, port(t))
+		in := "cat <<'EOF' > /tmp/x\n# >>> pdx gate >>>\nmy data\n# <<< pdx gate <<<\nEOF\n"
+		writeZshenv(t, home, in)
+		code, _, errb := runPdxSetup(t, home, "--agent", "cc", "--force")
+		if code != 0 {
+			t.Fatalf("%s: exit %d: %s", name, code, errb)
+		}
+		if got := readZshenv(t, home); got != in {
+			t.Errorf("%s: the file changed: %q", name, got)
+		}
+		if !strings.Contains(errb, "did not write") {
+			t.Errorf("%s: no warning: %q", name, errb)
+		}
+	}
+}
+
 // A .zshenv that cannot be rewritten (a link into a directory that is read-only): a word on stderr, the exit code is 0 and the hooks are in
 // (the setup of the hooks is what the command is for).
 func TestSetupCC_AnUnwritableZshenvOnlyWarns(t *testing.T) {

@@ -27,7 +27,7 @@ func TestRemoveBlock_TakesOutTheBlockAndLeavesTheRestByteForByte(t *testing.T) {
 		{"no newline after the end marker", "a=1\n" + strings.TrimSuffix(block, "\n"), "a=1\n"},
 		{"the user's own text has no final newline and is kept as it is", "a=1\n" + block + "b=2", "a=1\nb=2"},
 		{"two blocks from an old double install", block + "mid\n" + block, "mid\n"},
-		{"CRLF lines", "a=1\r\n# >>> pdx gate >>>\r\nx\r\n# <<< pdx gate <<<\r\nb=2\r\n", "a=1\r\nb=2\r\n"},
+		{"CRLF lines", "a=1\r\n" + strings.ReplaceAll(block, "\n", "\r\n") + "b=2\r\n", "a=1\r\nb=2\r\n"},
 		{"the first version's closed one-line block", "a\n" + blockBegin + "\ncase \":$PATH:\" in *\":/x:\"*) ;; *) PATH=\"/x:$PATH\" ;; esac\n" + blockEnd + "\nb\n", "a\nb\n"},
 		{"only blank lines are left outside the block: they are the user's, the file stays (codex R1)", "\n" + block + "\n", "\n\n"},
 		{"only spaces are left outside the block", "  \n" + block, "  \n"},
@@ -195,5 +195,47 @@ func TestRemoveBlock_AnUnwritableHomeIsAnError(t *testing.T) {
 	}
 	if got := zshenvOf(t, home); got != in {
 		t.Fatalf("the file changed: %q", got)
+	}
+}
+
+// The markers alone do not show a block is ours (codex R2): text between them that pdx never wrote leaves the whole file as it is.
+func TestRemoveBlock_MarkersAroundTextThatIsNotOursLeaveTheWholeFile(t *testing.T) {
+	block := Block("/h/.config/pdx/shims")
+	body := strings.Split(block, "\n")
+	for name, in := range map[string]string{
+		"a here-document of the user's that holds both lines": "cat <<'EOF' > /tmp/x\n" + blockBegin + "\nmy own data\nEOF-not-yet\n" + blockEnd + "\nEOF\n",
+		"a line added inside a real block":                    blockBegin + "\n" + body[1] + "\necho mine\n" + strings.Join(body[2:], "\n"),
+		"a real line edited":                                  blockBegin + "\n" + strings.Replace(body[1], "path=", "PATH=", 1) + "\n" + strings.Join(body[2:], "\n"),
+		"an empty block":                                      blockBegin + "\n" + blockEnd + "\n",
+		"a good block and one of the user's":                  block + "mid\n" + blockBegin + "\ndata\n" + blockEnd + "\n",
+	} {
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte(in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := RemoveBlock(home)
+		if err != nil || out != BlockNotOurs {
+			t.Errorf("%s: %v %v", name, out, err)
+		}
+		if got := zshenvOf(t, home); got != in {
+			t.Errorf("%s: the file was changed: %q", name, got)
+		}
+	}
+	// a marker that is not the whole line (indent, trailing blank, a BOM before the first) is not a marker: no block, nothing done
+	for name, in := range map[string]string{
+		"indented begin":        "  " + blockBegin + "\nx\n" + blockEnd + "\n",
+		"trailing blank":        blockBegin + " \nx\n" + blockEnd + "\n",
+		"a BOM before the file": "\ufeff" + block,
+	} {
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte(in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := RemoveBlock(home); err != nil || out != NoBlock {
+			t.Errorf("%s: %v %v", name, out, err)
+		}
+		if got := zshenvOf(t, home); got != in {
+			t.Errorf("%s: changed: %q", name, got)
+		}
 	}
 }
