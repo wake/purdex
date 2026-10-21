@@ -18,7 +18,7 @@ func TestAWatchLevelAlertWakesAndIsNotPushed(t *testing.T) {
 	e.pass(t)
 	e.settle(t)
 	all := strings.Join(w.got(), "\n")
-	if !strings.Contains(all, "pressure_watch｜壓力持續") {
+	if !strings.Contains(all, wakeKindName(wire.AlertPressureWatch)+"｜壓力持續") || wakeKindName(wire.AlertPressureWatch) == "pressure_watch" {
 		t.Fatalf("the watch-level alert did not wake the watcher: %q", all)
 	}
 	if e.ntf.count() != 0 {

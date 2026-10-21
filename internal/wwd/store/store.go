@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -77,6 +78,29 @@ type Store struct {
 	// alertMu keeps the alert writers of this process in a line, so that one waits for the other here and not on the database. It is not
 	// what keeps RaiseAlert from SQLITE_BUSY against the other tables' writers: that is the immediate transaction (Open).
 	alertMu sync.Mutex
+	// alertSkips and logf are for ActiveAlerts leaving out a row it does not know (S3-3a): said once for each kind or level, to logf
+	// (the standard log, which wwd writes to wwd.log, unless SetLogf says otherwise).
+	alertSkips wire.AlertSkips
+	logfMu     sync.Mutex
+	logfFn     func(format string, args ...any)
+}
+
+// SetLogf sets where the store says what it leaves out; nil goes back to the standard log.
+func (s *Store) SetLogf(f func(format string, args ...any)) {
+	s.logfMu.Lock()
+	s.logfFn = f
+	s.logfMu.Unlock()
+}
+
+func (s *Store) logf(format string, args ...any) {
+	s.logfMu.Lock()
+	f := s.logfFn
+	s.logfMu.Unlock()
+	if f != nil {
+		f(format, args...)
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // Open opens (creating if need be) wwd.db at path and migrates the host tables.

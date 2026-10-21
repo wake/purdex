@@ -43,6 +43,14 @@ var wakeKindNames = map[wire.AlertKind]string{
 	wire.AlertThrash:         "換頁過量",
 	wire.AlertResidentGrowth: "常駐記憶體成長",
 	wire.AlertOrphans:        "孤兒行程",
+	// S3-2's watcher rules and S3-3's queue rules (these are the wire spellings, which are contract)
+	wire.AlertPressureWatch:    "記憶體壓力偏高",
+	wire.AlertPressureDanger:   "記憶體壓力危險",
+	wire.AlertSwapGrowth:       "swap 持續增加",
+	wire.AlertQueueStalled:     "佇列停滯",
+	wire.AlertJobRequeued:      "job 反覆被放回",
+	wire.AlertQueueBacklog:     "佇列積壓",
+	wire.AlertQueueUnclaimable: "沒有主機接得了",
 }
 
 func wakeKindName(k wire.AlertKind) string {

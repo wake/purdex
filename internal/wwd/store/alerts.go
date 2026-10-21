@@ -10,8 +10,9 @@ import (
 )
 
 // ActiveAlerts are the host's alerts that are not cleared, ordered by key. It is never nil: an empty table is an empty list. A row
-// that is not a valid wire.Alert (a kind or level this build does not know, a bad key) is an error, not a silent gap: the reader
-// would otherwise show a quieter host than it is.
+// that is not a valid wire.Alert (a bad key, text that is not text) is an error, not a silent gap: the reader would otherwise show a
+// quieter host than it is. The one exception is a kind or level this build does not know (S3-3a): a row a later release wrote and this
+// one was started back on, which is left out and said once in the log (SetLogf), the rest of the list being what it is.
 func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 	rows, err := s.db.Query(`SELECT key, kind, level, since_ms, last_ms, detail FROM alerts WHERE cleared_ms IS NULL ORDER BY key`)
 	if err != nil {
@@ -30,9 +31,35 @@ func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 		a.Detail = wire.TruncateDetail(detail) // a text over the limit is cut on the way out, not a reason to hide the alert
 		a.Since, a.Last = time.UnixMilli(since).UTC(), time.UnixMilli(last).UTC()
 		if err := a.Validate(); err != nil {
+			if wire.IsUnknownAlert(err) {
+				if what, first := s.alertSkips.First(a, err); first {
+					s.logf("store: the alerts table has a row (key %q) that this build does not know, left out of the list: %s (said once)", a.Key, what)
+				}
+				continue
+			}
 			return nil, fmt.Errorf("store: alerts row %q: %w", a.Key, err)
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ActiveAlertKeys are the keys of every alert that is not cleared, ordered, whatever its kind and level: the rows ActiveAlerts leaves out
+// because this build does not know them are here. The rules that raise and clear alerts (AlertBook.Active) need this, not the list a reader
+// is shown: a row they cannot read is still raised, and a rule that sees its own key as not raised would raise it over again.
+func (s *Store) ActiveAlertKeys() ([]string, error) {
+	rows, err := s.db.Query(`SELECT key FROM alerts WHERE cleared_ms IS NULL ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
 	}
 	return out, rows.Err()
 }
