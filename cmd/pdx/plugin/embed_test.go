@@ -627,6 +627,31 @@ func TestSkill_GateSkillIsGone(t *testing.T) {
 	}
 }
 
+// WK-4 (watcher wake settings spec §7): the wake settings are the user's. The skill tells the watcher to follow a prompt that follows the
+// notification, to read the settings with `pdx watch wake-settings`, not to change them, that the patrol cannot be switched off, and keeps the
+// manual `pdx watch wake` apart from them.
+func TestSkillWatch_TheWakeSettingsAreTheUsersNotTheWatchers(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-watch/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"使用者寫的 prompt", "照做",
+		"`pdx watch wake-settings`", "App 的「設定」分頁", "`stale`", "`suppressed`",
+		"不要自己 `pdx watch wake-settings set`",
+		"巡檢不能關，只能放寬", "最長不巡上限",
+		"`pdx watch wake` 是**手動**叫醒",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-watch lacks %q", want)
+		}
+	}
+	if !strings.Contains(s, "也不自己改喚醒設定（`pdx watch wake-settings set`") {
+		t.Error("the list of what the watcher must not do does not name the wake settings")
+	}
+}
+
 func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 	b, err := fs.ReadFile(Files(), "skills/pdx-watch/SKILL.md")
 	if err != nil {
