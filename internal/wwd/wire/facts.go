@@ -218,6 +218,9 @@ type Tools struct {
 	Pnpm  *string  `json:"pnpm"`
 	PHP   []string `json:"php"`
 	Xcode *string  `json:"xcode"`
+	// Claude is the Claude Code CLI (`claude --version`), found on the job PATH: a task that runs `claude plugin test` needs it (tool:claude, #3908).
+	// omitempty: a peer that predates the field has no claude to us, which only makes it take fewer jobs, never a job it cannot run.
+	Claude *string `json:"claude,omitempty"`
 }
 
 type OwnerState struct {

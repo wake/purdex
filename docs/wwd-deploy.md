@@ -528,6 +528,28 @@ advertises the major only; `tsc` has them besides its earned `task:purdex/tsc`).
 of its jobs, go, node and pnpm** — a `[tools]` `extra_path` (§3) when they live outside the default directories. A host that lacks
 one does not claim those tasks.
 
+**`tool:claude` (#3908).** `mod-hooks` runs `claude plugin test cmd/pdx/plugin/purdex`, so it carries `tool:claude`. The facts probe `claude --version`
+on the job PATH (the same list as go, node and pnpm), and a host advertises `tool:claude` — no version in the label — only when it finds it; the
+fingerprint keeps the major only, because Claude Code ships a patch nearly every day and a patch must not take back the labels a host earned. A
+host without `claude` on that PATH does not claim `mod-hooks`. The test needs no login and no network and runs from an empty HOME (measured with
+`HOME` set to an empty directory and a wwd-like PATH: 817 tests pass in about 130 s; it only writes `~/.claude.json`).
+
+On a host whose `claude` is in `~/.local/bin` (air26) do **not** put the whole `~/.local/bin` into `extra_path`: make a directory that holds
+only the link, and list that one:
+
+```sh
+mkdir -p ~/Assist/toolchains.noindex/claude/bin
+ln -s ~/.local/bin/claude ~/Assist/toolchains.noindex/claude/bin/claude
+```
+
+```toml
+[tools]
+extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noindex/claude/bin"]
+```
+
+Restart wwd, then check `GET /v1/info`: `labels` must show `tool:claude`. The link follows `claude`'s own updates (it points at `~/.local/bin/claude`,
+which points at the current version).
+
 If **no** host has all the labels of a task, `pdx test` can end at once with exit 5 ("no host can take it") — but only when the pool
 was read, no reachable host is still settling its facts, and no host holds the labels, **counting a host that is offline or has its
 worker off by the last labels it reported** (those stay). In every other case the job is queued as usual and may wait until the queue

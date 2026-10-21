@@ -192,6 +192,7 @@ func semverLess(a, b string) bool {
 var (
 	reGoVersion   = regexp.MustCompile(`^go version go(\S+)`)
 	reDotted      = regexp.MustCompile(`^v?(\d+(?:\.\d+)+\S*)$`)
+	reClaude      = regexp.MustCompile(`^(\d+(?:\.\d+)+\S*)(?:\s+\(Claude Code\))?$`) // "2.1.306 (Claude Code)"
 	reXcodeBundle = regexp.MustCompile(`<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>`)
 )
 
@@ -201,6 +202,12 @@ func parseToolVersion(tool, out string) string {
 	out = strings.TrimSpace(out)
 	if tool == "go" {
 		if m := reGoVersion.FindStringSubmatch(out); m != nil {
+			return m[1]
+		}
+		return ""
+	}
+	if tool == "claude" {
+		if m := reClaude.FindStringSubmatch(out); m != nil {
 			return m[1]
 		}
 		return ""
@@ -262,6 +269,7 @@ func (r *ToolsReader) Get() wire.Tools {
 	r.val.Go = one("go", r.val.Go, "version")
 	r.val.Node = one("node", r.val.Node, "-v")
 	r.val.Pnpm = one("pnpm", r.val.Pnpm, "-v")
+	r.val.Claude = one("claude", r.val.Claude, "--version")
 	r.val.PHP = r.phpVersions(ctx)
 	r.val.Xcode = r.xcode(r.val.Xcode)
 	return cloneTools(r.val)
@@ -327,7 +335,7 @@ func (r *ToolsReader) xcode(prev *string) *string {
 }
 
 func cloneTools(t wire.Tools) wire.Tools {
-	t.Go, t.Node, t.Pnpm, t.Xcode = clonePtr(t.Go), clonePtr(t.Node), clonePtr(t.Pnpm), clonePtr(t.Xcode)
+	t.Go, t.Node, t.Pnpm, t.Xcode, t.Claude = clonePtr(t.Go), clonePtr(t.Node), clonePtr(t.Pnpm), clonePtr(t.Xcode), clonePtr(t.Claude)
 	t.PHP = append([]string{}, t.PHP...)
 	return t
 }
