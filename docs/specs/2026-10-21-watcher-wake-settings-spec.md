@@ -128,10 +128,10 @@ capability 有兩個：
 ```
 
 - `etag`：正規化文件的雜湊（不落地）。`revision`：§4。
-- `suppressed`：最近 50 則因設定而沒叫的紀錄，每筆帶做決定的 `host`；非正本以 `/wake-suppressed` 報給正本（失敗就算了），正本彙總；非正本的 GET 回自己的。記憶體內。`why`：`master_off`／`rule_off`／`level_off`／`kind_off`／`no_auto_start`。
-- `fetched_at`：非正本最近一次成功取到正本的時間；正本回自己寫入／讀取的時間；**從來沒取到過時是 `null`**（此時 `stale: true`）。
+- `suppressed`：最近 50 則因設定而沒叫的紀錄，每筆帶做決定的 `host`；非正本以 `/wake-suppressed` 報給正本（失敗就算了），正本彙總；非正本的 GET 回自己的。記憶體內。`why` 的值域只在這裡：`master_off`／`rule_off`／`level_off`／`kind_off`／`no_auto_start`／`patrol_failed`（`patrol_failed` 的 `detail` 帶 `last_fail_code`）。
+- `fetched_at`：非正本最近一次成功取到正本的時間；正本回自己寫入／讀取的時間；**從來沒取到過時是 `null`**，`source_id` 是 `""`（此時 `stale: true`）。
 - `known_kinds`：來自 Purdex wwdalerts 的 kind 名稱表（`internal/module/wwdalerts/wake.go` 抽成可匯出的表），每個 kind 帶 `levels`：這個 kind 可能出現的所有等級（例如 `orphans` 會從摘要升成推播，`internal/wwd/advisor/rules_orphans.go`，所以是 `["digest","push"]`），依 digest→push 排序。`label` 只有中文；App 英文介面照顯示並附 kind 原字。App 不依等級鎖住勾選。
-- `patrol_status`：本機最近一次巡檢（任何一種：間隔、上限、固定時刻）成功與失敗的時間與原因。失敗原因是代碼 `last_fail_code` 加原文 `last_fail_detail`（App 依代碼翻譯、原文附在後面）；代碼值域固定為：`targets_unreachable`（`targets` 全部連不上）、`targets_unknown`（`targets` 指到不存在的主機）、`start_failed`（叫起或啟動守門員失敗）、`deliver_failed`（守門員在，但通知送不到）。沒有失敗過時兩個欄位都是 `null`。非正本的失敗也以 `/wake-suppressed` 一併上報給正本（`why: patrol_failed`），讓 App 讀正本就看得到「巡檢叫不起守門員」。
+- `patrol_status`：本機最近一次巡檢（任何一種：間隔、上限、固定時刻）成功與失敗的時間與原因。失敗原因是代碼 `last_fail_code` 加原文 `last_fail_detail`（App 依代碼翻譯、原文附在後面）；代碼值域固定為：`targets_unreachable`（`targets` 全部連不上）、`targets_unknown`（`targets` 指到不存在的主機）、`start_failed`（叫起或啟動守門員失敗）、`deliver_failed`（守門員在，但通知送不到）。沒有失敗過時兩個欄位都是 `null`。非正本的失敗也以 `/wake-suppressed` 一併上報給正本（`why` 為 `patrol_failed`，值域見上面 `suppressed`），讓 App 讀正本就看得到「巡檢叫不起守門員」。
 - `path` 寫法固定：`rules.<rule>.<field>`，陣列元素 `[i]`；App 只依 `code` 翻譯。
 
 **`PUT /api/watch/wake-settings`**（admin、App token）body `{ "settings": {…整份…}, "expect_etag": "…" }`
@@ -147,7 +147,7 @@ capability 有兩個：
 
 錯誤碼：`missing_field`、`unknown_field`（含 `rules.patrol.enabled`）、`bad_type`、`out_of_range`（含 `max_gap_hours` 為 0）、`bad_time`、`duplicate_time`、`too_many`、`bad_level`、`bad_kind`、`prompt_too_long`、`prompt_bad_char`、`bad_tz`、`bad_version`。
 
-**契約 fixture**：WK-1a 在 `internal/wwd/wire/testdata` 附 `watch_wake_settings_get.json`、`…_put_200.json`、`…_put_400.json`（至少三個錯誤）、`…_put_409.json`、`…_put_403.json`、`…_put_503.json`，**同張**把 SPA 副本放進 `spa/src/lib/watch/__fixtures__/`，並**新增** `spa/src/lib/watch/fixtures-sync.guard.test.ts`（照 `spa/src/lib/pool/fixtures-sync.guard.test.ts` 寫；現行那支寫死只比對 `lib/pool/__fixtures__`、沒有清單可加，放在 `lib/watch` 的副本不會被比對）。
+**契約 fixture**：WK-1a（十個中的八個）與 WK-1b（`…_get_full.json`、`…_get_readonly.json`）在 `internal/wwd/wire/testdata` 附 `watch_wake_settings_get.json`、`…_get_stale.json`、`…_get_full.json`、`…_get_readonly.json`、`…_put_200.json`、`…_put_400.json`、`…_put_400_missing_expect.json`、`…_put_403.json`、`…_put_409.json`、`…_put_503.json`（`…_put_400.json` 至少三個錯誤），**同張**把 SPA 副本放進 `spa/src/lib/watch/__fixtures__/`，並**新增** `spa/src/lib/watch/fixtures-sync.guard.test.ts`（照 `spa/src/lib/pool/fixtures-sync.guard.test.ts` 寫；現行那支寫死只比對 `lib/pool/__fixtures__`、沒有清單可加，放在 `lib/watch` 的副本不會被比對）。
 
 **舊欄位**：`watch` 列的 `enabled`、`auto_wake`、`patrol_present/busy/calm/rest_min`、`disk_low_gb` 在 WK-2 起不再被叫醒或巡檢讀取；GET、PUT 照舊收送。`pdx watch config` 對這幾個 key 改印「已移到 `pdx watch wake-settings`」。
 
@@ -173,7 +173,7 @@ capability 有兩個：
 - 任何主機都沒有清醒或休息中的守門員時（locator 查無），**每一台 daemon** 在自己的巡檢 tick 評估最長不巡上限（基準為本機 `watch-patrol-last.json` 的時間；沒有檔案時為現在，並立刻寫檔），到了就 `WakeWatcher(ctx, "patrol", …)`，由 locator 依本機 `targets` 啟動一個。
 - 兩台同時要求啟動時，目標主機的 `sessionCtl` 一次只跑一個啟動（單一 job＋`StartCooldown`），第二個請求會在 locator 重查時找到剛啟動的守門員並改為送通知，由收件端去重。
 - 每台的上限計時各自獨立，所以放寬到極限時，守門員一個上限內最多會收到每台各一次的上限巡檢（2 台＝最多 2 次／上限），接受。
-- `targets` 全部連不上或指到不存在的主機時，巡檢照常觸發但叫不起守門員：記進 `patrol_status`（`patrol_failed`），App 以警告顯示。這屬設定錯誤的**呈現**，不是巡檢被移除。
+- `targets` 全部連不上或指到不存在的主機時，巡檢照常觸發但叫不起守門員：記進 `patrol_status`（`last_fail_code` 為 `targets_unreachable` 或 `targets_unknown`），App 以警告顯示。這屬設定錯誤的**呈現**，不是巡檢被移除。
 
 ### 6.4 固定時刻
 
@@ -198,7 +198,7 @@ capability 有兩個：
 ## 7. CLI 與 App
 
 - **CLI**：`pdx watch wake-settings [show] [--json]`、`pdx watch wake-settings set <path>=<value>…`（陣列逗號分隔；`@file` 讀多行；讀 → 改 → 帶 expect 寫回；409 結束碼 3、400 逐條印、結束碼 4）。`pdx watch wake`（手動叫醒）不變。
-- **App**（B 線，88 定細節）：守門員專區新增一個**固定分頁「設定」**（不放進守門員分頁本身——那裡的內容會在 `WatchGuardianPane` 與 session 的 terminal／deck／chat 之間切換）。掛法照事件、任務佇列分頁：`spa/src/lib/watch/ids.ts` 加 `WATCH_SETTINGS_TAB_ID`（`'watch-settings'`）與 pane kind `{ kind: 'watch-settings' }`；`spa/src/features/workspace/lib/watch-area.ts` 的 reconcile 把它排在任務佇列之後、主機分頁之前；register-modules 註冊 `spa/src/components/watch/WatchSettingsPane.tsx`，「喚醒條件」是它的第一個區塊。有沒有守門員 session 都不影響這個分頁。巡檢一列沒有開關：五個情境間隔（0＝只剩上限）、最長不巡上限、固定時刻（顯示 `tz`）、prompt。其他規則：開關、多行 prompt、參數；`wwd_alert` 的 kind 用 `known_kinds` 勾選；總開關與自動叫起註明不影響巡檢；`user_back` 標「新」；`stale`、`readonly`、`suppressed`（含 host）、409、裝置 token 唯讀都要有畫面。主機分頁的守門員區塊只留啟動設定（`patrol_idle_min` 改標「閒置多久後休息」），拿掉 `enabled`、`auto_wake`，加連結。中英兩份 locale。
+- **App**（B 線，88 定細節）：守門員專區新增一個**固定分頁「設定」**（不放進守門員分頁本身——那裡的內容會在 `WatchGuardianPane` 與 session 的 terminal／deck／chat 之間切換）。掛法照事件、任務佇列分頁：`spa/src/lib/watch/ids.ts` 加 `WATCH_SETTINGS_TAB_ID`（`'watch-settings'`）與 pane kind `{ kind: 'watch-settings' }`；`spa/src/features/workspace/lib/watch-area.ts` 的 reconcile 把它排在任務佇列之後、主機分頁之前；register-modules 註冊 `spa/src/components/watch/WatchSettingsPane.tsx`，「喚醒條件」是它的第一個區塊。有沒有守門員 session 都不影響這個分頁。巡檢一列沒有開關：五個情境間隔（0＝只剩上限）、最長不巡上限、固定時刻（顯示 `tz`）、prompt。其他規則：開關、多行 prompt、參數；`wwd_alert` 的 kind 用 `known_kinds` 勾選；總開關與自動叫起註明不影響巡檢；`user_back` 標「新」；`stale`、`readonly`、`suppressed`（含 host）、409、裝置 token 唯讀都要有畫面。主機分頁的守門員區塊只留啟動設定（`patrol_idle_min` 改標「閒置多久後休息」），拿掉 `enabled`、`auto_wake`，加連結。主機分頁的 `mode` 以「閒置時休息」開關呈現（開＝`patrol`、關＝`resident`），存的值與 daemon 行為不變（88 的 WK-5h，使用者 10-21 要求）。中英兩份 locale。
   - 出現條件：App 看到 `watch.wake_rules.v1` 才建立「設定」分頁並瘦身主機分頁（§5）。
   - 新 pane kind 除了上面三處，還要改：`types/tab.ts`、`pane-labels.ts`、`route-utils.ts`、`tab-icon-map.tsx`、`HistoryPage.tsx`、`open-watch-area.ts`，與測試 `lib/watch/watch-panes.test.ts`、`lib/profile/sections.test.ts`（88 盤點，行號以實作時為準），否則 tsc 會紅。
 - **pdx-watch skill**：通知後可能附有使用者的 prompt，照做；設定由使用者改；巡檢不可關。
@@ -216,7 +216,7 @@ capability 有兩個：
 
 | 段 | 內容 | 線 |
 |---|---|---|
-| WK-1a | 文件型別、正規化與驗證、etag、遷移；hostconfig `WakeRowStore` 服務（兩個固定 key）；正本 `GET`／`PUT`、revision、`source_id`、capability、WS 事件、device scope；六個 fixture＋SPA 副本 | A |
+| WK-1a | 文件型別、正規化與驗證、etag、遷移；hostconfig `WakeRowStore` 服務（兩個固定 key）；正本 `GET`／`PUT`、revision、`source_id`、capability、WS 事件、device scope；十個 fixture（`watch_wake_settings_get.json`、`…_get_stale.json`、`…_get_full.json`、`…_get_readonly.json`、`…_put_200.json`、`…_put_400.json`、`…_put_400_missing_expect.json`、`…_put_403.json`、`…_put_409.json`、`…_put_503.json`）＋SPA 副本 | A |
 | WK-1b | 非正本：單一更新者、輪詢、快取、stale、依正本身分＋revision 單調；peer 信封路由與白名單；轉寫；變更通知；suppressed 與 patrol_status 接收 | A |
 | WK-2 | 6.1 的規則判斷與 `auto_start`→locator；wwdalerts 認領前過濾（不寫 ledger）、兩個 registry 服務；§3 組字一次、note 帶 prompt；suppressed 紀錄與上報；`reasonLabel`；`pdx watch config` 提示 | A |
 | WK-3 | 6.2–6.5：拿掉 `watch.enabled` 早退、情境間隔與上限、`watch-patrol-last.json`、無守門員時 primary 啟動、固定時刻（primary、邏輯鍵、至多一次）、`patrol_status`、presence 三態、user_back | A |
