@@ -45,8 +45,8 @@ type Module struct {
 	settings func() (watchsettings.Settings, error)
 	// localTZ names this host's time zone for the first wake settings document (nil: localZoneName); a test seam.
 	localTZ func() string
-	// beforeWakeCommit runs in a wake settings PUT after everything is checked and before the commit takes the config lock; duringWakeCommit
-	// runs inside the commit, with the lock held. Test seams (nil in production).
+	// beforeWakeCommit runs in a wake settings PUT after everything is checked and before the source is checked again; duringWakeCommit
+	// runs right after the write. Test seams (nil in production).
 	beforeWakeCommit, duringWakeCommit func()
 	// caller reaches the other hosts (peers.HostCallerKey); nil: only this host can be asked.
 	caller hostCaller

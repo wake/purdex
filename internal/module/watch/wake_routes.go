@@ -168,10 +168,23 @@ func (m *Module) handlePutWake(w http.ResponseWriter, r *http.Request) {
 	if m.beforeWakeCommit != nil {
 		m.beforeWakeCommit()
 	}
-	rev, nowSource, err := m.commitWake(rows, source, next, cur.revision)
-	if nowSource != "" { // this host is no longer the source (peers.alias or wake_source changed while the PUT was on its way): nothing was written
-		m.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "source_unreachable", "source": nowSource})
+	if again, still := m.wakeSourceAlias(); !still || again != source { // peers.alias or wake_source changed while the PUT was on its way: nothing is written
+		m.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "source_unreachable", "source": again})
 		return
+	}
+	rev, err := rows.Put(hostconfig.KeyWatchWake, watchwake.Marshal(next), cur.revision)
+	if m.duringWakeCommit != nil {
+		m.duringWakeCommit()
+	}
+	// The identity can change between the check above and the write, and no lock can span the write (a config change would wait for the store).
+	// So it is checked once more after: if it changed, this write may have landed on the row of a host that is no longer the source, and the
+	// answer is not a 200 - the same 503 as for a source that could not be reached ("it may have been written; read again"), and nothing is
+	// announced. The row it left is read only if this host becomes the source again.
+	if err == nil {
+		if after, still := m.wakeSourceAlias(); !still || after != source {
+			m.writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "source_unreachable", "source": after})
+			return
+		}
 	}
 	if errors.Is(err, hostconfig.ErrConflict) { // another PUT got in between the read and the swap
 		if again, rerr := m.readWakeSource(); rerr == nil {
@@ -186,23 +199,6 @@ func (m *Module) handlePutWake(w http.ResponseWriter, r *http.Request) {
 	d := wakeDoc{settings: watchwake.Marshal(next), etag: watchwake.Etag(next), revision: rev}
 	m.wakeChanged(source, d)
 	m.writeJSON(w, http.StatusOK, m.wakeView(d, source))
-}
-
-// commitWake writes the document under the config's read lock, after checking again that this host is still the source it was when the PUT
-// began. A change of peers.alias or [watch] wake_source takes the config's write lock, so it cannot come between the check and the write
-// (and a write that began first finishes before the change takes effect). When this host is no longer the source, nothing is written and the
-// source as it is now comes back as nowSource.
-func (m *Module) commitWake(rows hostconfig.WakeRowStore, source string, next watchwake.Settings, base int64) (rev int64, nowSource string, err error) {
-	m.core.CfgMu.RLock()
-	defer m.core.CfgMu.RUnlock()
-	if cur := m.core.Cfg.WakeSource(); cur != source || m.core.Cfg.PeerAlias() != cur {
-		return 0, cur, nil
-	}
-	if m.duringWakeCommit != nil {
-		m.duringWakeCommit()
-	}
-	rev, err = rows.Put(hostconfig.KeyWatchWake, watchwake.Marshal(next), base)
-	return rev, "", err
 }
 
 func (m *Module) writeConflict(w http.ResponseWriter, current wakeDoc, source string) {

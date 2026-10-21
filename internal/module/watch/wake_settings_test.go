@@ -364,16 +364,31 @@ func TestWakeSettings_APutDoesNotCommitOnAHostThatStoppedBeingTheSource(t *testi
 	assert.Empty(t, r.events_())
 }
 
-// A config change waits for a PUT that is committing, so the check and the write are not apart: the commit holds the config's read lock.
-func TestWakeSettings_ACommitHoldsTheConfigReadLock(t *testing.T) {
+// The source can also change between the check and the write: the write may land on the row of the host that was the source, so the answer is
+// not a 200 (the caller reads again, as for any 503 of a source it could not reach) and no change is announced. The config lock is not held
+// across the write: a config change never waits for the store.
+func TestWakeSettings_ASourceChangeDuringTheWriteIsNotAnOK(t *testing.T) {
 	r := newWakeRig(t, "mlab")
 	etag := r.get(t)["etag"].(string)
-	held := make(chan bool, 1)
-	r.m.beforeWakeCommit = nil
-	r.m.duringWakeCommit = func() { held <- !r.m.core.CfgMu.TryLock() } // a writer cannot get in while the commit is under way
+	r.m.duringWakeCommit = func() {
+		// a config change gets the write lock while the PUT is writing: it must not have to wait for the PUT
+		done := make(chan struct{})
+		go func() {
+			r.m.core.CfgMu.Lock()
+			r.m.core.Cfg.Peers.Alias = "air26"
+			r.m.core.CfgMu.Unlock()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("the config write lock was held while the PUT wrote")
+		}
+	}
 	rr := r.do(adminCtx, http.MethodPut, putBody(t, watchwake.Default("Asia/Taipei"), etag))
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	assert.True(t, <-held, "the config write lock was free during the commit")
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"error":"source_unreachable","source":"mlab"}`, rr.Body.String())
+	assert.Empty(t, r.events_(), "no change is announced for a write that is not an answer of the source")
 }
 
 func TestLocalZoneName_TZWinsAndANonNameIsSkipped(t *testing.T) {
