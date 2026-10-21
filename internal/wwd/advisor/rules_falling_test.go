@@ -160,6 +160,23 @@ func TestDiskFalling_TheSlopeNeedsNinetyMinutesAndSixtyRecords(t *testing.T) {
 	}
 }
 
+// One odd record at the edge of the window (a reading from before a big delete) does not make a fall: the line through all the records
+// barely moves, where the two ends alone would read 5 GB/h and raise the alert.
+func TestDiskFalling_OneOddRecordAtTheEdgeIsNotAFall(t *testing.T) {
+	hist := history(180, 20, 0) // flat 20 GB for three hours
+	hist[0].Disk[1].FreeGB = 35
+	in := fallingInput(20, hist, false)
+	if ends := (35.0 - 20.0) / (179.0 / 60); ends < fallingGBPerHour || 20-ends*fallingHorizon.Hours() >= fallingFloorGB {
+		t.Fatalf("the two ends (%.1f GB/h) would not have raised it: the case proves nothing", ends)
+	}
+	if r, ok := fallRate(in, "/Users"); !ok || r > 0.5 {
+		t.Fatalf("rate = %.3f (%v), want close to 0", r, ok)
+	}
+	if v, _ := (DiskFalling{}).Eval(in); v.Holds {
+		t.Fatalf("one odd record raised the alert: %+v", v)
+	}
+}
+
 // The slope is the least-squares one on the real time of the records: a straight line gives its own rate, with or without a little noise, and
 // a gap in the middle (the time axis is the clock, not the record number) does not bend it.
 func TestFallRate_LeastSquaresOnTheClock(t *testing.T) {
