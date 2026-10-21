@@ -257,12 +257,14 @@ func (c *Coordinator) input() (Input, error) {
 
 // halves turns the task's own submission into the two halves. The candidate half asks for what a host that has not earned the label can
 // offer: no os:/arch: (those are the task's reason to be Mac-only until a host is qualified) and not the task's own label, plus
-// host:<candidate>. The reference half keeps every label the task has, plus host:<reference>. Both are dev class, never cacheable, never
-// interruptible, and carry supersede keys of their own so that a newer pair replaces an older one that is still around.
+// host:<candidate>. The reference half keeps every label the task has, plus host:<reference>. Both take the class of the task (base.Class, the
+// manifest's) but at merge at most, and dev when it is empty or unknown: a dev class half starves behind a steady stream of merge work
+// (the pick score is 1000 per class rank plus minutes waited). They are never cacheable, never interruptible, and carry supersede keys
+// of their own so that a newer pair replaces an older one that is still around.
 func halves(base wire.JobSubmission, t Task, candidate string) (cand, ref wire.JobSubmission) {
 	own := t.Label()
 	common := func(s wire.JobSubmission, role, host string) wire.JobSubmission {
-		s.Class = wire.ClassDev
+		s.Class = labels.QualifyClass(base.Class)
 		s.Cacheable = false
 		s.Interruptible = true // so that a newer pair (after a restart forgot this one) really stops an older one that is still running
 		s.AdHoc = false
@@ -317,7 +319,7 @@ func (c *Coordinator) settle(ctx context.Context) {
 		ranC, ranR := ranToAnExit(cj), ranToAnExit(rj)
 		switch {
 		case cDone && rDone:
-			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result})
+			v := Compare(Half{Want: c.cfg.Source.Host().Alias, Result: cj.Result}, Half{Want: p.task.Reference, Result: rj.Result}, p.task.Summary)
 			if v.Outcome == OutcomeMatch && c.taskHiddenByUnreadableManifest(p) {
 				continue // a match is not thrown away for a manifest that cannot be read just now: look again on the next tick
 			}
