@@ -143,7 +143,7 @@ const memory = new Map<string, HostMemory>()
 const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set(), longInFlight: null, shortInFlight: null })
 /** What the memory keeps of hosts nobody is looking at: leaving a page keeps its history (coming back is full at once), but not for any number of hosts. */
 const MAX_HOSTS = 32
-const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null
+const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null || m.shortInFlight !== null
 /** Oldest first (Map order): let go of the ones nobody listens to or holds, until the cap is met. Run when a host is added and when one stops being used. */
 function prune(except?: string): void {
   for (const [id, old] of memory) {

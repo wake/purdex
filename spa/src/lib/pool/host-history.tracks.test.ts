@@ -227,6 +227,17 @@ describe('the memory is bounded', () => {
   })
 })
 
+describe('the memory is bounded: a short read in flight', () => {
+  it('a host with a short read out is not let go by the cap, so the answer lands', async () => {
+    const d = deferred<{ step: string; records: PoolFacts[] }>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const p = loadShort('d1', 'air26', 'busy', NOW)
+    for (let i = 0; i < 40; i++) appendLive(`z${i}`, rec(10), NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect(await p).toBe('ok')
+    expect(readSamples('busy', '5m', NOW)).toHaveLength(1)
+  })
+})
 describe('the memory is bounded when the hosts were all in use', () => {
   it('the cap is met again once they are let go, without a new host arriving', () => {
     const offs: Array<() => void> = []
