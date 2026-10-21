@@ -40,6 +40,11 @@ type SamplerOptions struct {
 	// Running, when set, is the runs on this host now by slot (queue jobs and fast-lane runs): facts.worker.running (spec §5.2). It
 	// is asked on every sample, outside the sampler's lock, and reads memory only. nil: nothing is counted.
 	Running func() wire.Slots
+	// Waiting, when set, is what the worker last saw queued for it (loop.Waiting): facts.worker.waiting (#3941). It is asked on every
+	// sample, reads memory only, and its block is copied, never written. Yield is the policy by which the fast lane gives way to it; the
+	// record says whether it does now (Waiting.Yielding).
+	Waiting func() *wire.Waiting
+	Yield   derived.YieldPolicy
 	// State, when set, is where the worker settings and the exceptions come from
 	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
 	State *HostState
@@ -184,6 +189,13 @@ func (s *Sampler) Tick(now time.Time) {
 	}
 	if s.opts.Running != nil {
 		f.Worker.Running = s.opts.Running()
+	}
+	if s.opts.Waiting != nil {
+		if w := s.opts.Waiting(); w != nil {
+			c := *w
+			c.Yielding, c.YieldOver = s.opts.Yield.Judge(&c, now)
+			f.Worker.Waiting = &c
+		}
 	}
 	s.mu.Lock()
 	// the effective owner rule is the only basis for "the owner is active" (#3457): with none, f.Owner still shows the reading but it does not count

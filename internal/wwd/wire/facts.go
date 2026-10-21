@@ -291,6 +291,8 @@ type Waiting struct {
 	ObservedAt time.Time `json:"observed_at"`
 	// Yielding is set by the sampler: the fast lane of this host is giving way to the oldest job now (derived.YieldPolicy.Yields).
 	Yielding bool `json:"yielding,omitempty"`
+	// YieldOver is set by the sampler: the oldest job has waited past the cap (fastlane_yield_max_seconds), so the fast lane no longer gives way.
+	YieldOver bool `json:"yield_over,omitempty"`
 }
 
 // Validate checks the version and enumerations.

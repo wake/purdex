@@ -113,6 +113,8 @@ type Config struct {
 	// Interval is the pause between two rounds (2 s). Settle is the pause after a claim before the next one, so that the facts have
 	// seen the job (the headroom they carry is only true once the job's processes are in a sample); two facts samples by default.
 	Interval, Settle time.Duration
+	// WaitingEvery is how often a round that has no room to claim reads the queues all the same, to tell the host what waits (10 s).
+	WaitingEvery time.Duration
 	// StopTimeout is how long one stop of the running jobs waits (an owner is waiting for the machine); a job that has not ended by
 	// then is asked again at the next round. ShutdownGrace is the same for a worker that is ending.
 	StopTimeout, ShutdownGrace time.Duration
@@ -137,12 +139,17 @@ type Loop struct {
 	running   map[string]*runner.Running
 	lastClaim time.Time
 	lastSweep time.Time
+	waiting   *wire.Waiting // what was last seen queued for this worker (Waiting)
+	lastLook  time.Time     // when the queues were last read for it
 }
 
 // New returns a Loop; the zero values of the durations are the defaults.
 func New(cfg Config) *Loop {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Second
+	}
+	if cfg.WaitingEvery <= 0 {
+		cfg.WaitingEvery = 10 * time.Second
 	}
 	if cfg.FactsMaxAge <= 0 {
 		cfg.FactsMaxAge = 6 * time.Duration(wire.SampleIntervalS) * time.Second
@@ -265,9 +272,11 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 		sctx, cancel := context.WithTimeout(ctx, l.cfg.StopTimeout)
 		l.stopAll(sctx, "the owner is using the machine ("+d.Reason+")")
 		cancel()
+		l.clearWaiting()
 		return
 	}
 	if !st.Enabled || !d.MayClaim || facts == nil {
+		l.clearWaiting() // a worker that takes nothing is not waited for
 		return
 	}
 	l.mu.Lock()
@@ -277,6 +286,7 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	// The headroom is 0 while any exception is on, a hold with `allow` included (so every outside reader waits). The worker knows what
 	// `allow` means: when the selective holds are the only thing in the way it may still take a job they list, and only those (claimOne).
 	if n >= st.Slots.Heavy || !derived.HasHeavyRoom(*facts) {
+		l.observeWaiting(ctx, facts.Exception)
 		return
 	}
 	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
@@ -368,6 +378,13 @@ func (l *Loop) noteDeferred(c pick.Candidate, to string, now time.Time) {
 }
 
 func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
+	ranked, byHost := l.rankQueued(ctx, holds)
+	l.noteWaiting(ranked, nil)
+	l.claimRanked(ctx, jobCtx, ranked, byHost)
+}
+
+// rankQueued reads the queues of every origin and ranks what this worker may try to claim, best first (pick.Rank).
+func (l *Loop) rankQueued(ctx context.Context, holds []wire.FactExc) ([]pick.Scored, map[string]Origin) {
 	origins := l.cfg.Origins()
 	byHost := make(map[string]Origin, len(origins))
 	srcs := make([]pick.Source, 0, len(origins))
@@ -416,7 +433,11 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 			return ok
 		}
 	}
-	ranked := pick.Rank(cands, env)
+	return pick.Rank(cands, env), byHost
+}
+
+// claimRanked tries to claim the ranked jobs, best first, until one is taken.
+func (l *Loop) claimRanked(ctx, jobCtx context.Context, ranked []pick.Scored, byHost map[string]Origin) {
 	// The ledger slot is booked only when there is something to claim, and one booking serves all of this round's tries.
 	if l.cfg.Reserve != nil && len(ranked) > 0 {
 		release, ok := l.cfg.Reserve()
@@ -453,6 +474,7 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 			l.running[sc.Source+"/"+sc.Job.ID] = r
 			l.lastClaim = l.cfg.Now()
 			l.mu.Unlock()
+			l.noteWaiting(ranked, &sc) // the job taken is not waiting any more
 			return
 		}
 		// not taken (someone else was first, the job is held, its locks are busy, the origin did not answer): the next candidate
@@ -460,6 +482,63 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 			l.cfg.Logf("worker: %s/%s not claimed: %v", sc.Source, sc.Job.ID, e.Err)
 		}
 	}
+}
+
+// Waiting is what the worker last saw queued for it (the jobs it would try to claim), for the host's facts (#3941): nil when there are none,
+// when the worker takes nothing now (off, the owner is using the machine, no facts yet) or before it has looked. The caller gets a copy.
+func (l *Loop) Waiting() *wire.Waiting {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.waiting == nil {
+		return nil
+	}
+	w := *l.waiting
+	return &w
+}
+
+// noteWaiting records the ranked jobs as the ones waiting (less skip, a job that was just claimed): their count, and the oldest by its
+// submission time (ties: the first of the ranking, which is stable).
+func (l *Loop) noteWaiting(ranked []pick.Scored, skip *pick.Scored) {
+	now := l.cfg.Now()
+	var w wire.Waiting
+	for _, sc := range ranked {
+		if skip != nil && sc.Source == skip.Source && sc.Job.ID == skip.Job.ID {
+			continue
+		}
+		w.Count++
+		if w.Count == 1 || sc.Job.CreatedAt.Before(w.OldestSince) {
+			w.OldestID, w.OldestOrigin, w.OldestSince = sc.Job.ID, sc.Source, sc.Job.CreatedAt
+		}
+	}
+	w.ObservedAt = now
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastLook = now
+	if w.Count == 0 {
+		l.waiting = nil
+		return
+	}
+	l.waiting = &w
+}
+
+func (l *Loop) clearWaiting() {
+	l.mu.Lock()
+	l.waiting = nil
+	l.mu.Unlock()
+}
+
+// observeWaiting reads the queues for what waits when the round has no room to claim (the slot is taken, a hold is on): the fast lane
+// of the host reads the answer from the facts and gives way to a job that has waited long enough, which it can only do if the worker has
+// looked while a run holds the slot. It reads at most every WaitingEvery, so a busy host does not ask every peer every round.
+func (l *Loop) observeWaiting(ctx context.Context, holds []wire.FactExc) {
+	l.mu.Lock()
+	due := l.cfg.Now().Sub(l.lastLook) >= l.cfg.WaitingEvery
+	l.mu.Unlock()
+	if !due {
+		return
+	}
+	ranked, _ := l.rankQueued(ctx, holds)
+	l.noteWaiting(ranked, nil)
 }
 
 // finish is the runner.Finish of one job: the delivery (report), then the usage record.

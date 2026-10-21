@@ -23,6 +23,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/wake/purdex/internal/wwd/derived"
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/jobdb"
 	"github.com/wake/purdex/internal/wwd/run"
@@ -77,6 +78,11 @@ type WorkerConfig struct {
 	// DeferPatienceSeconds is how long a queued job is left to a faster host of the pool that could take it right now, before this one takes it
 	// (#3904). Not set: 120. 0: never leave a job (the switch off). It only matters on a host whose speed_factor is above that of a peer.
 	DeferPatienceSeconds *int `toml:"defer_patience_seconds"`
+	// FastlaneYieldAfterSeconds is how long a queued job this worker would take waits before a heavy fast-lane run (pdx test --adhoc) gives
+	// way to it (#3941). Not set: 300. 0: the fast lane never gives way. FastlaneYieldMaxSeconds is the age past which it no longer does,
+	// so that a job nothing can start does not stop the fast lane for good (not set: 1800; 1-86400, not below the first).
+	FastlaneYieldAfterSeconds *int `toml:"fastlane_yield_after_seconds"`
+	FastlaneYieldMaxSeconds   *int `toml:"fastlane_yield_max_seconds"`
 	// ExplicitLabelsOnly: the worker takes only jobs whose labels name this host's os: label, a task: label it earned (#3441; mserv) or a host: label (#3873).
 	ExplicitLabelsOnly bool `toml:"explicit_labels_only"`
 	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
@@ -283,6 +289,15 @@ func (c Config) validateWorker() error {
 	}
 	if v := c.Worker.DeferPatienceSeconds; v != nil && (*v < 0 || *v > 86400) {
 		return fmt.Errorf("worker.defer_patience_seconds is %d, it must be 0 (off) or 1-86400 (not set: 120)", *v)
+	}
+	if v := c.Worker.FastlaneYieldAfterSeconds; v != nil && (*v < 0 || *v > 86400) {
+		return fmt.Errorf("worker.fastlane_yield_after_seconds is %d, it must be 0 (off) or 1-86400 (not set: 300)", *v)
+	}
+	if v := c.Worker.FastlaneYieldMaxSeconds; v != nil && (*v < 1 || *v > 86400) {
+		return fmt.Errorf("worker.fastlane_yield_max_seconds is %d, it must be 1-86400 (not set: 1800)", *v)
+	}
+	if p := c.Worker.FastlaneYield(); p.After > 0 && p.Max < p.After {
+		return fmt.Errorf("worker.fastlane_yield_max_seconds (%d) is below fastlane_yield_after_seconds (%d): the fast lane would never give way", int(p.Max.Seconds()), int(p.After.Seconds()))
 	}
 	if u := c.Worker.SandboxUser; u != "" {
 		if runtime.GOOS != "linux" {
@@ -526,6 +541,19 @@ func EnsureToken(path string) (string, error) {
 		return "", fmt.Errorf("token file %s is empty", path)
 	}
 	return tok, nil
+}
+
+// FastlaneYield is the policy by which a heavy fast-lane run gives way to a waiting queue job (#3941): after 5 minutes unless set, up to
+// 30 minutes unless set.
+func (w WorkerConfig) FastlaneYield() derived.YieldPolicy {
+	p := derived.YieldPolicy{After: derived.DefaultYieldAfter, Max: derived.DefaultYieldMax}
+	if v := w.FastlaneYieldAfterSeconds; v != nil {
+		p.After = time.Duration(*v) * time.Second
+	}
+	if v := w.FastlaneYieldMaxSeconds; v != nil {
+		p.Max = time.Duration(*v) * time.Second
+	}
+	return p
 }
 
 // DeferPatience is how long a job is left to a faster host before this one takes it: 2 minutes unless set, 0 for never.
