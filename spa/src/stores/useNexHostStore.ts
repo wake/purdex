@@ -107,11 +107,6 @@ export function selectPersonasV1(hostId: string): (s: Pick<NexHostState, 'byHost
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('personas.v1') === true
 }
 
-/** The daemon lists `gate.decisions.v1`: `GET /api/gate/decisions` (the gate's record of each command) is served. Key presence. */
-export function selectGateDecisionsV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
-  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('gate.decisions.v1') === true
-}
-
 export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {
     const entry = s.byHost[hostId]
