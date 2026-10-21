@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -478,6 +479,46 @@ func TestAnInfraFailureHoldsThatOriginsRepoOff(t *testing.T) {
 	r.round() // the repo is suspended for five minutes
 	if claims, _, _ := c.seen(); len(claims) != 1 {
 		t.Fatalf("claims %v: the repo is held off after an infrastructure failure", claims)
+	}
+}
+
+// A command that is not on this host holds off its task, not the repo (#3908 b): the task's jobs are not claimed again, another task of the
+// same repo is.
+func TestAMissingCommandHoldsOffThatTaskAndNotTheRepo(t *testing.T) {
+	mod1, mod2, lint := qjob("mod1", wire.ClassDev, 2*time.Minute), qjob("mod2", wire.ClassDev, time.Minute), qjob("lint", wire.ClassDev, 0)
+	mod1.Task, mod2.Task, lint.Task = "mod-hooks", "mod-hooks", "lint"
+	c := newConn("mlab", mod1)
+	r := newRig(t, c)
+	r.ex.run = func(_ context.Context, job wire.Job) run.Result {
+		if job.Task == "mod-hooks" {
+			return run.Result{Outcome: run.StartFailed, ExitCode: -1, Err: fmt.Errorf("run: %q not found in PATH: %w", "claude", exec.ErrNotFound)}
+		}
+		return run.Result{Outcome: run.Exited}
+	}
+	r.round()
+	waitFor(t, "the release of mod1", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	if _, rel, _ := c.seen(); rel[0].Reason != wire.ReleaseInfra {
+		t.Fatalf("release %+v: the reason stays infra", rel[0])
+	}
+	c.mu.Lock()
+	c.jobs["mod2"], c.jobs["lint"] = mod2, lint
+	c.mu.Unlock()
+	time.Sleep(3 * unit)
+	r.round()
+	waitFor(t, "lint to run", func() bool { return r.ex.ran.Load() >= 2 })
+	time.Sleep(3 * unit)
+	for _, id := range r.ex.ranOrder() {
+		if id == "mod2" {
+			t.Fatalf("ran %v: mod2 is of the held task and must not be claimed", r.ex.ranOrder())
+		}
+	}
+	claims, _, _ := c.seen()
+	got := map[string]int{}
+	for _, id := range claims {
+		got[id]++
+	}
+	if got["lint"] != 1 || got["mod2"] != 0 {
+		t.Fatalf("claims %v: lint (same repo, another task) must be taken, mod2 (the held task) must not", claims)
 	}
 }
 

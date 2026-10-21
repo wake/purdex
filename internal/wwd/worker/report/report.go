@@ -11,11 +11,13 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	runs "github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/summary"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -56,6 +58,10 @@ type Config struct {
 	// repo is not suspended for it: the failure is often one job's (a commit that is not pinned) and the host is fine. Without the pause
 	// the same job would be claimed and given back at the poll rate for as long as the origin stays wrong.
 	OriginBackoff, OriginBackoffMax time.Duration
+	// TaskBackoff is how long a task of a repo is not picked again after its command was not found on this host (#3908): default 15
+	// seconds, doubled by every failure in a row up to TaskBackoffMax (default 5 minutes). Only that task is held off, not the repo:
+	// the host is fine and the repo's other tasks run. Other start failures and other infra failures still suspend the whole repo.
+	TaskBackoff, TaskBackoffMax time.Duration
 	// Summary builds the summary of a run that ended. Nil: built from the files the run left (see parse).
 	Summary func(runner.Ended) wire.Summary
 	// Digest says whether a summary may carry PassedDigest (WWD-5b-2w): true only while every host of the pool is reachable and reads the
@@ -70,10 +76,14 @@ type repoKey struct{ source, repo string }
 // jobKey is a job of an origin: job ids are made by each origin, so the origin is part of the key.
 type jobKey struct{ source, job string }
 
-// originHold is how long a job is held off and how many origin failures in a row led to it.
+// taskKey is a task of an origin's repo.
+type taskKey struct{ source, repo, task string }
+
+// originHold is how long a job (or a task) is held off and how many failures in a row led to it.
 type originHold struct {
 	until time.Time
 	wait  time.Duration // the wait this failure set
+	ended bool          // a task hold: its end was logged (the end is noticed when the worker asks, so it is told once)
 }
 
 // Reporter delivers the outcome of jobs.
@@ -81,8 +91,9 @@ type Reporter struct {
 	cfg Config
 
 	mu         sync.Mutex
-	suspended  map[repoKey]time.Time // an origin's repo -> when the hold ends
-	originHeld map[jobKey]originHold // a job whose origin answered wrongly -> the hold (in memory: a restart starts again at the first wait)
+	suspended  map[repoKey]time.Time  // an origin's repo -> when the hold ends
+	originHeld map[jobKey]originHold  // a job whose origin answered wrongly -> the hold (in memory: a restart starts again at the first wait)
+	taskHeld   map[taskKey]originHold // a task whose command was not found here -> the hold (in memory, like originHeld)
 }
 
 // New returns a Reporter.
@@ -114,13 +125,22 @@ func New(cfg Config) *Reporter {
 			cfg.OriginBackoffMax = cfg.OriginBackoff
 		}
 	}
+	if cfg.TaskBackoff <= 0 {
+		cfg.TaskBackoff = 15 * time.Second
+	}
+	if cfg.TaskBackoffMax < cfg.TaskBackoff {
+		cfg.TaskBackoffMax = 5 * time.Minute
+		if cfg.TaskBackoffMax < cfg.TaskBackoff {
+			cfg.TaskBackoffMax = cfg.TaskBackoff
+		}
+	}
 	if cfg.LogRetryFor <= 0 {
 		cfg.LogRetryFor = 2 * time.Minute
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Reporter{cfg: cfg, suspended: map[repoKey]time.Time{}, originHeld: map[jobKey]originHold{}}
+	return &Reporter{cfg: cfg, suspended: map[repoKey]time.Time{}, originHeld: map[jobKey]originHold{}, taskHeld: map[taskKey]originHold{}}
 }
 
 func wait(ctx context.Context, d time.Duration) error {
@@ -164,7 +184,8 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool 
 	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
 	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
 	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
-	if e.Run.Err != nil && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown || e.Kind == runner.KindReclaimed) {
+	// A command that is not on the PATH carries an Err too, but says only that: it is held off as a task (ran).
+	if e.Run.Err != nil && !commandNotFound(e.Run) && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown || e.Kind == runner.KindReclaimed) {
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command's unit was not proven stopped: %w", e.Run.Err))
 		return false
 	}
@@ -176,6 +197,9 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool 
 	case runner.KindRejected:
 		return r.rejected(ctx, sink, e)
 	case runner.KindRan:
+		if e.Run.Outcome != runs.StartFailed {
+			r.forgetTask(e) // the command was found and ran: the run of "not found" is over
+		}
 		return r.ran(ctx, sink, e)
 	case runner.KindInfra:
 		r.release(ctx, sink, e, wire.ReleaseInfra, e.Err)
@@ -234,6 +258,9 @@ func (r *Reporter) ran(ctx context.Context, sink Sink, e runner.Ended) bool {
 	case run.Outcome == "exited": // ended by a signal: there is no exit status
 		req.State = wire.StateFailed
 	default: // it never started, or an ending that is not this kind's: not a result of the job
+		if commandNotFound(run) {
+			r.holdTask(e) // this host lacks the program of this task, which says nothing of the repo's other tasks
+		}
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command did not run to an end here (%s): %v", run.Outcome, run.Err))
 		return false
 	}
@@ -364,7 +391,7 @@ func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open f
 
 // release gives the claim back. why is told to the origin as the detail.
 func (r *Reporter) release(ctx context.Context, sink Sink, e runner.Ended, reason wire.ReleaseReason, why error) {
-	if reason == wire.ReleaseInfra {
+	if reason == wire.ReleaseInfra && !commandNotFound(e.Run) {
 		r.suspend(e.Source, e.Job.Repo.Name) // whether or not the origin takes the release: this host cannot run this repo now
 	}
 	req := wire.ReleaseRequest{ClaimID: e.ClaimID, Reason: reason}
@@ -418,6 +445,83 @@ func (r *Reporter) holdOff(source, job string) {
 		wait = min(old.wait*2, r.cfg.OriginBackoffMax)
 	}
 	r.originHeld[k] = originHold{until: now.Add(wait), wait: wait}
+}
+
+// commandNotFound says the run never started because its program is not on this host's PATH (run.lookPath): a lack of one tool of one
+// task. Any other way not to start (a workspace that cannot be made, a unit systemd could not set up) is the host's, and a run that did
+// start is not this.
+func commandNotFound(res runs.Result) bool {
+	return res.Outcome == runs.StartFailed && errors.Is(res.Err, exec.ErrNotFound)
+}
+
+// holdTask holds the task of a job off for the first wait, or twice the last one when it failed the same way again before that was long
+// over, up to the longest; the beginning is logged with when the task may be taken again.
+func (r *Reporter) holdTask(e runner.Ended) {
+	r.mu.Lock()
+	now := r.cfg.Now()
+	for k, h := range r.taskHeld {
+		if r.taskLongOver(now, h) {
+			delete(r.taskHeld, k)
+		}
+	}
+	k := taskKey{e.Source, e.Job.Repo.Name, e.Job.Task}
+	wait := r.cfg.TaskBackoff
+	if old, ok := r.taskHeld[k]; ok && !r.taskLongOver(now, old) {
+		wait = min(old.wait*2, r.cfg.TaskBackoffMax)
+	}
+	h := originHold{until: now.Add(wait), wait: wait}
+	r.taskHeld[k] = h
+	r.mu.Unlock()
+	r.cfg.Logf("report: %s %s/%s: its command is not on this host's PATH; the task is not taken again until %s (%s)",
+		k.source, k.repo, k.task, h.until.Format(time.RFC3339), wait)
+}
+
+// taskLongOver is longOver for a task hold, which has its own longest wait.
+func (r *Reporter) taskLongOver(now time.Time, h originHold) bool {
+	return !now.Before(h.until.Add(r.cfg.TaskBackoffMax))
+}
+
+// forgetTask ends a task's run of "command not found": a run of it found its command.
+func (r *Reporter) forgetTask(e runner.Ended) {
+	r.mu.Lock()
+	k := taskKey{e.Source, e.Job.Repo.Name, e.Job.Task}
+	h, held := r.taskHeld[k]
+	delete(r.taskHeld, k)
+	r.mu.Unlock()
+	if held && !h.ended {
+		r.cfg.Logf("report: %s %s/%s: the task ran, so its hold is over", k.source, k.repo, k.task)
+	}
+}
+
+// TaskHeld says whether the worker must not pick a job of this task now: its command was not found on this host less than the wait ago.
+// It is pick.Env.TaskHeld, asked for every candidate of every round. The end of a hold is logged once, when it is first noticed; the entry
+// stays (so the next failure doubles) until its run of failures is long over.
+func (r *Reporter) TaskHeld(source, repo, task string) bool {
+	r.mu.Lock()
+	k := taskKey{source, repo, task}
+	h, ok := r.taskHeld[k]
+	if !ok {
+		r.mu.Unlock()
+		return false
+	}
+	now := r.cfg.Now()
+	if r.taskLongOver(now, h) {
+		delete(r.taskHeld, k)
+		r.mu.Unlock()
+		return false
+	}
+	if now.Before(h.until) {
+		r.mu.Unlock()
+		return true
+	}
+	told := h.ended
+	h.ended = true
+	r.taskHeld[k] = h
+	r.mu.Unlock()
+	if !told {
+		r.cfg.Logf("report: %s %s/%s: the hold of the task is over; it may be taken again", source, repo, task)
+	}
+	return false
 }
 
 // longOver says a hold ended more than the longest wait ago: its run of failures is over.

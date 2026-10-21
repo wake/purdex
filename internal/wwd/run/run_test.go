@@ -235,6 +235,18 @@ func TestStartFailures(t *testing.T) {
 	}
 }
 
+// A program that is not on the PATH says so with exec.ErrNotFound (the worker holds off that one task on it, #3908); no other way not to start does.
+func TestOnlyAMissingProgramIsErrNotFound(t *testing.T) {
+	if r := Run(context.Background(), spec(t, "no-such-program-xyz")); !errors.Is(r.Err, exec.ErrNotFound) {
+		t.Errorf("a program not on the PATH: %+v", r.Err)
+	}
+	rel := spec(t, "true")
+	rel.Dir = "relative/dir"
+	if r := Run(context.Background(), rel); r.Outcome != StartFailed || errors.Is(r.Err, exec.ErrNotFound) {
+		t.Errorf("a relative working directory is not a missing program: %+v", r)
+	}
+}
+
 func TestTimeoutEndsTheWholeGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	s := spec(t, "sh", "-c", "sleep 30 & echo $! > "+pidFile+"; wait")
@@ -396,5 +408,62 @@ func TestRunsInTheGivenDirectory(t *testing.T) {
 	r := Run(context.Background(), s)
 	if got := strings.TrimSpace(readFile(t, r.StdoutPath)); got != sub {
 		t.Fatalf("pwd = %q, want %q", got, sub)
+	}
+}
+
+// Only a program that is nowhere on the PATH is exec.ErrNotFound (the worker holds off that one task on it, #3908). A candidate that is there
+// but cannot be used (not executable, a dangling link, a directory the worker cannot read) is the host's trouble, and says so.
+func TestLookPathSaysNotFoundOnlyWhenNothingIsThere(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name string) string {
+		d := filepath.Join(root, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	empty := mk("empty")
+	noexec := mk("noexec")
+	if err := os.WriteFile(filepath.Join(noexec, "tool"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dangling := mk("dangling")
+	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(dangling, "tool")); err != nil {
+		t.Fatal(err)
+	}
+	good := mk("good")
+	if err := os.WriteFile(filepath.Join(good, "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	look := func(dirs ...string) (string, error) {
+		return lookPath("tool", root, []string{"PATH=" + strings.Join(dirs, ":")})
+	}
+
+	if _, err := look(empty); !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("nothing on the PATH: %v", err)
+	}
+	for name, dir := range map[string]string{"a file that is not executable": noexec, "a dangling link": dangling} {
+		if _, err := look(empty, dir); err == nil || errors.Is(err, exec.ErrNotFound) {
+			t.Errorf("%s is the host's trouble, not a missing program: %v", name, err)
+		}
+	}
+	if got, err := look(noexec, dangling, good); err != nil || got != filepath.Join(good, "tool") {
+		t.Errorf("a usable program further along the PATH still wins: %q %v", got, err)
+	}
+	if os.Geteuid() != 0 { // root reads everything
+		locked := mk("locked")
+		if err := os.WriteFile(filepath.Join(locked, "tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		if _, err := look(locked); err == nil || errors.Is(err, exec.ErrNotFound) {
+			t.Errorf("a directory the worker cannot read is the host's trouble, not a missing program: %v", err)
+		}
 	}
 }

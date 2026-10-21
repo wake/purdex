@@ -59,3 +59,14 @@ func AdmitsJob(excs []wire.FactExc, class wire.JobClass, repo string) bool {
 func HasHeavyRoom(f wire.Facts) bool {
 	return f.Derived.Headroom.Heavy >= 1 || HeavyRoomForAllowed(f) >= 1
 }
+
+// HeavyRoomFor says whether the facts of a host leave a heavy slot free for a job of this class and repo: the headroom, or, while only holds
+// with `allow` are in the way, the room they leave when they let this job through (AdmitsJob), as the worker does when it picks. The alert rules
+// of the queue ask it of a peer's facts, and the worker asks it of the pool to see whether a faster host could take a job, so all of them read a
+// host's room the way its own worker does.
+func HeavyRoomFor(f wire.Facts, class wire.JobClass, repo string) bool {
+	if f.Derived.Headroom.Heavy >= 1 {
+		return true
+	}
+	return HeavyRoomForAllowed(f) >= 1 && AdmitsJob(f.Exception, class, repo)
+}

@@ -550,6 +550,17 @@ extra_path = ["~/Assist/toolchains.noindex/node/bin", "~/Assist/toolchains.noind
 Restart wwd, then check `GET /v1/info`: `labels` must show `tool:claude`. The link follows `claude`'s own updates (it points at `~/.local/bin/claude`,
 which points at the current version).
 
+**A task whose command is not on the PATH (#3908).** When the program of a task is not found on the worker's PATH (the run ends `start_failed` with
+"not found in PATH"), the job goes back with reason `infra` as before (the origin counts the attempt, so `job_requeued` sees it), but the worker
+holds off **that task** of that origin's repo, not the repo: its other tasks keep being taken. The wait is 15 seconds, doubled by each failure in a
+row, up to 5 minutes, and ends when a run of the task finds its command; it lives in memory, so restarting wwd starts again at 15 seconds. The
+log has one line when the hold begins (origin, repo, task, and when the task may be taken again) and one when it is first noticed to be over.
+"Not found" means nothing of that name is on the PATH at all; a candidate that is there and cannot be used (a file that is not executable, a link
+to nothing, a PATH directory the worker cannot read) is the host's trouble and holds the repo. Every other way not to start (a workspace or HOME
+that cannot be made, a sandbox unit systemd could not set up) and every other infra failure
+still holds the whole repo for 5 minutes, because those say the host is broken. Another host is not affected: it takes the task if its labels
+fit. To fix a host that lacks the command, give it the tool (§11) rather than waiting out the hold.
+
 If **no** host has all the labels of a task, `pdx test` can end at once with exit 5 ("no host can take it") — but only when the pool
 was read, no reachable host is still settling its facts, and no host holds the labels, **counting a host that is offline or has its
 worker off by the last labels it reported** (those stay). In every other case the job is queued as usual and may wait until the queue
