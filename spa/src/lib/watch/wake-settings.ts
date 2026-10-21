@@ -65,7 +65,8 @@ function parseStatus(v: unknown): PatrolStatus | null {
 }
 
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
-const isNum = (v: unknown): v is number => typeof v === 'number'
+// Every number in the document is a whole number (spec §2): a fraction is a document of another shape.
+const isNum = (v: unknown): v is number => Number.isInteger(v)
 const isStrList = (v: unknown): boolean => Array.isArray(v) && v.every(isStr)
 type Check = (v: unknown) => boolean
 const hasShape = (v: unknown, shape: Record<string, Check>): v is Record<string, unknown> => isObj(v) && Object.entries(shape).every(([k, check]) => check(v[k]))

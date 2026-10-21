@@ -165,6 +165,9 @@ describe('responses', () => {
     ['a prompt is a number', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, prompt: 1 } } }],
     ['times has a non-string', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, times: [9] } } }],
     ['kinds_off is not a list', { ...get.settings, rules: { ...rules, wwd_alert: { ...rules.wwd_alert, kinds_off: 'x' } } }],
+    ['a fractional interval', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, interval_min: { ...rules.patrol.interval_min, calm: 1.5 } } } }],
+    ['a fractional below_gb', { ...get.settings, rules: { ...rules, disk_low: { ...rules.disk_low, below_gb: 14.5 } } }],
+    ['a fractional version', { ...get.settings, version: 1.5 }],
     ['an interval is missing', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, interval_min: { resting: 10 } } } }],
   ]
   it.each(brokenSettings)('settings with %s is app_mismatch (200 and 409)', async (_name, settings) => {
