@@ -398,7 +398,7 @@ func scriptSignature(script string, depth int, shell string) string {
 	return trimName(shell)
 }
 
-// gateControl are the words that make `pdx gate` a query or a setting, not a gated command (cmd/pdx/gate_cmd.go reads the first word).
+// gateControl are the words that make `pdx gate` a query or a setting, not a gated command (the way the removed cmd/pdx/gate_cmd.go read the first word; an older pdx on a peer host still runs it).
 var gateControl = map[string]bool{"status": true, "would-wait": true, "queue": true, "conflict": true, "free": true, "set": true, "hosts": true, "history": true, "profile": true}
 
 // gatedCommand is what `pdx gate [flags] -- <command>` runs (the gate shim puts it in front of every heavy command), nil when argv is
