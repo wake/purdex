@@ -162,7 +162,7 @@ func TestQueueStalled_WhatIsNotAReasonToTakeIt(t *testing.T) {
 		"the labels are not the host's":             {[]queue.QueuedJob{job}, []wire.Peer{host("mserv", linux)}},
 		"no facts yet, so no room is known":         {[]queue.QueuedJob{job}, []wire.Peer{host("mlab", darwin, noFactsYet)}},
 		"the job is on hold":                        {[]queue.QueuedJob{qjob("j_1", darwin[:1], 10*time.Minute, held)}, []wire.Peer{host("mlab", darwin)}},
-		"put back a minute ago, not waiting":        {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour, touched(time.Minute))}, []wire.Peer{host("mlab", darwin)}},
+		"put back a minute ago, not waiting":        {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour, attempts(1), touched(time.Minute))}, []wire.Peer{host("mlab", darwin)}},
 		"an empty queue":                            {nil, []wire.Peer{host("mlab", darwin)}},
 		"an explicit-only host, a job with no explicit label": {
 			[]queue.QueuedJob{qjob("j_1", []string{"repo:purdex"}, 10*time.Minute)}, []wire.Peer{host("mserv", append([]string{"repo:purdex"}, linux...), explicitOnly)}},
@@ -223,9 +223,9 @@ func TestQueueUnclaimable_WhatDoesNotRaise(t *testing.T) {
 	}{
 		"a host with its worker on holds the labels":                             {[]queue.QueuedJob{job}, []wire.Peer{host("mlab", darwin)}},
 		"it holds them though it has no room now (that is stalled, if anything)": {[]queue.QueuedJob{job}, []wire.Peer{host("mlab", darwin, full)}},
-		"the job is on hold":   {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour, held)}, []wire.Peer{host("mserv", linux)}},
-		"changed a minute ago": {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour, touched(time.Minute))}, []wire.Peer{host("mserv", linux)}},
-		"an empty queue":       {nil, []wire.Peer{host("mserv", linux)}},
+		"the job is on hold":     {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour, held)}, []wire.Peer{host("mserv", linux)}},
+		"submitted a minute ago": {[]queue.QueuedJob{qjob("j_1", darwin[:1], time.Minute)}, []wire.Peer{host("mserv", linux)}},
+		"an empty queue":         {nil, []wire.Peer{host("mserv", linux)}},
 		"an explicit-only host takes a job that names its os": {
 			[]queue.QueuedJob{qjob("j_1", linux[:1], 15*time.Minute)}, []wire.Peer{host("mserv", linux, explicitOnly)}},
 	}
@@ -319,5 +319,34 @@ func TestQueueRulesThroughTheEvaluator(t *testing.T) {
 	ev.Pass()
 	if len(book.active) != 0 {
 		t.Fatalf("an empty queue clears them: %+v", book.active)
+	}
+}
+
+// ---- the clock of (1) and (4): a person moving a job that was never put back does not start it again (lead's ruling on #3902) ----
+
+func TestQueueStalled_AJobNeverPutBackIgnoresTouched(t *testing.T) {
+	pool := []wire.Peer{host("mlab", darwin)}
+	// submitted 6 minutes ago, moved to the front 1 minute ago, attempts 0: still waiting since the submission.
+	got, _ := holds(t, QueueStalled{}, queueIn([]queue.QueuedJob{qjob("j", darwin[:1], 6*time.Minute, touched(time.Minute))}, pool...))
+	if !got {
+		t.Error("a move must not reset the clock of a job that was never put back")
+	}
+}
+
+func TestQueueStalled_AJobPutBackCountsFromTheLastChange(t *testing.T) {
+	pool := []wire.Peer{host("mlab", darwin)}
+	got, _ := holds(t, QueueStalled{}, queueIn([]queue.QueuedJob{qjob("j", darwin[:1], 6*time.Minute, attempts(1), touched(time.Minute))}, pool...))
+	if got {
+		t.Error("put back a minute ago: the five minutes start again")
+	}
+}
+
+func TestQueueUnclaimable_CountsFromTheSubmissionNotFromTheLastChange(t *testing.T) {
+	pool := []wire.Peer{host("mlab", darwin)}
+	for _, n := range []int{0, 2} {
+		got, _ := holds(t, QueueUnclaimable{}, queueIn([]queue.QueuedJob{qjob("j", []string{"repo:aigora-v2"}, 12*time.Minute, attempts(n), touched(time.Minute))}, pool...))
+		if !got {
+			t.Errorf("attempts %d: a move must not reset the clock", n)
+		}
 	}
 }

@@ -117,8 +117,9 @@ func (JobRequeued) Eval(in Input) (Verdict, error) {
 }
 
 // QueueStalled is "queue stalled": a job that is not on hold has not been taken for 5 minutes or more although a host that could take it has a
-// heavy slot free. "Not taken" counts from when the job last changed (queue.QueuedJob.Touched): one put back a minute ago, or taken off hold,
-// has not been waiting since it was submitted.
+// heavy slot free. "Not taken" counts from the submission, and for a job that was already put back (Attempts > 0) from when it last changed
+// (queue.QueuedJob.Touched): one put back a minute ago has not been waiting since it was submitted. A job never put back ignores Touched, so
+// a person moving it does not start the clock again.
 type QueueStalled struct{}
 
 func (QueueStalled) Kind() wire.AlertKind { return wire.AlertQueueStalled }
@@ -132,7 +133,11 @@ func (QueueStalled) Eval(in Input) (Verdict, error) {
 	var ids []string
 	var host string
 	for _, j := range jobs {
-		if j.Held || waited(in.Now, j.Touched) < queueStalledAfter {
+		since := j.CreatedAt
+		if j.Attempts > 0 && j.Touched.After(since) {
+			since = j.Touched
+		}
+		if j.Held || waited(in.Now, since) < queueStalledAfter {
 			continue
 		}
 		for _, p := range pool {
@@ -151,7 +156,7 @@ func (QueueStalled) Eval(in Input) (Verdict, error) {
 	return v, nil
 }
 
-// QueueUnclaimable is "queue unclaimable": a job that is not on hold has waited 10 minutes or more (from when it last changed) and no host
+// QueueUnclaimable is "queue unclaimable": a job that is not on hold has waited 10 minutes or more (from the submission) and no host
 // that answers with its worker on would take it, by its labels. A host that is down, or has its worker off (a release hold), takes nothing;
 // a label that was quarantined is not in the host's labels. It cannot hold with QueueStalled for one job: that one needs a host that takes it.
 type QueueUnclaimable struct{}
@@ -166,7 +171,7 @@ func (QueueUnclaimable) Eval(in Input) (Verdict, error) {
 	v := Verdict{Key: string(wire.AlertQueueUnclaimable), Level: wire.AlertWatch}
 	var ids []string
 	for _, j := range jobs {
-		if j.Held || waited(in.Now, j.Touched) < queueUnclaimableAfter {
+		if j.Held || waited(in.Now, j.CreatedAt) < queueUnclaimableAfter {
 			continue
 		}
 		taken := false

@@ -716,16 +716,17 @@ queue_rules = true   # default false: none of the four is judged
 | `queue_stalled` | a job not on hold has not changed for 5 minutes and a host that answers, has its worker on, takes it by its labels and has a heavy slot free is there | no such job |
 | `job_requeued` | a job (on hold or not) has been put back three times or more (`attempts ≥ 3`; a lapse of the lease is one of them, a reclaim is not) | no such job |
 | `queue_backlog` | the oldest job not on hold was submitted 20 minutes ago or more | no such job |
-| `queue_unclaimable` | a job not on hold has not changed for 10 minutes and no host that answers with its worker on takes it by its labels | no such job |
+| `queue_unclaimable` | a job not on hold was submitted 10 minutes ago or more and no host that answers with its worker on takes it by its labels | no such job |
 
 "Takes it by its labels" is the worker's own rule (`pick.Eligible`): the job's labels are among the host's, and a host with `explicit_labels_only`
 (mserv) takes only a job that names an `os:`, `task:` or `host:` label. "A heavy slot free" is the worker's own reading of the host's facts
 (`derived.HasHeavyRoom`). A label that was quarantined is not among the host's labels. A host that is down takes nothing.
 
-**What the clock is.** "Has not changed" counts from the job's last change in the queue: submitted, put back, moved by a person, taken off hold or asked
-to be cancelled (`queue.QueuedJob.Touched`). The table keeps no separate time of the last put-back, and the cost is that a person moving a job starts its
-five minutes (stalled) or ten (unclaimable) again, so those two sound a little later then. `queue_backlog` counts from the submission. All of them are for
-the watcher, who is awake anyway.
+**What the clock is.** `queue_backlog` and `queue_unclaimable` count from the submission (`queue.QueuedJob.CreatedAt`). `queue_stalled` counts from the
+submission too, except for a job that was already put back (attempts above 0): it counts from the job's last change (`queue.QueuedJob.Touched`). So a job
+that was put back has its wait counted again when a person moves it or asks to cancel it: 已被放回過的 job，被手動移動或取消時，(1) 的等待時間會重新起算
+(at most the five minutes of the threshold later). The table keeps no separate time of the last put-back (`eligible_since` is in the Backlog, for a batch
+that may change the schema). All of them are for the watcher, who is awake anyway.
 
 **During a release** the workers of the pool are held (release hold) or off: a job that waits more than ten minutes then makes `queue_unclaimable` sound.
 That is expected and not a fault; the watcher is told, nobody is pushed. The alert clears by itself when the workers are back.
