@@ -5,7 +5,6 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
-import { useFleetStore } from '../../../lib/fleet/store'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
 import type { WatchStatus } from '../../../lib/watch/status-types'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_JOBS_TAB_ID, watchHostTabId } from '../../../lib/watch/ids'
@@ -22,7 +21,6 @@ const announce = (caps: string[], fetchedAt = 1) => useNexHostStore.setState({ b
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
   useWatchStatusStore.getState().reset()
   useNexHostStore.setState({ byHost: {} } as never)
   useSessionStore.setState({ sessions: {} })

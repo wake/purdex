@@ -5,7 +5,6 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
-import { useFleetStore } from '../../../lib/fleet/store'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
 import type { WatchStatus } from '../../../lib/watch/status-types'
@@ -22,7 +21,6 @@ const answerOk = (appHost: string) => useWatchStatusStore.setState((st) => ({ by
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
   useWatchStatusStore.getState().reset()
   useNexHostStore.setState({ byHost: {} } as never)
   useSessionStore.setState({ sessions: {} })

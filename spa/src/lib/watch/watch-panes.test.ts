@@ -8,7 +8,6 @@ import { layoutFromWire, layoutToWire, identityOfSync } from '../profile/host-id
 import { ICON_MAP } from '../../components/tab-icon-map'
 import { clearModuleRegistry, getModule, getPaneRenderer } from '../module-registry'
 import { registerBuiltinModules } from '../register-modules'
-import { useFleetStore } from '../fleet/store'
 import { useAlertsStore } from '../pool/alerts-store'
 import { getTabBadgePane, getTabHostId } from '../host-color'
 import { usePoolStore } from '../pool/store'
@@ -18,11 +17,12 @@ import { hostIdOfTabId, watchHostTabId } from './ids'
 const t: TFunction = (key) => key
 const sessions = { getByCode: () => undefined }
 const workspaces = { getById: () => undefined }
-const host = (id: string): PaneContent => ({ kind: 'watch-host', fleetHostId: id })
+/** A tab from before the pool took over: it carries no pool host id. */
+const oldHost = (): PaneContent => ({ kind: 'watch-host' })
 const leaf = (content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id: 'p', content } })
 
 describe('watch pane kinds', () => {
-  beforeEach(() => { useFleetStore.getState().reset(); useAlertsStore.getState().reset() })
+  beforeEach(() => { useAlertsStore.getState().reset() })
 
   it('the events tab carries the number of active push-level alerts (「事件 n」, M36)', () => {
     const al = (key: string, over: Record<string, unknown> = {}) => ({ key, kind: 'disk_low', level: 'push', since: 1, last: 2, clearedAt: null, detail: key, ...over })
@@ -33,23 +33,19 @@ describe('watch pane kinds', () => {
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, (k, p) => (p ? `${k}:${p.n}` : k))).toBe('watch.pane.events_n:2')
     useAlertsStore.getState().reset()
   })
-  it('labels: guardian, events, and the host alias from the fleet snapshot (id as fallback)', () => {
+  it('labels: guardian, events, jobs; an old host tab has no host to name', () => {
     expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
     expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')
     expect(getPaneLabel({ kind: 'watch-jobs' }, sessions, workspaces, t)).toBe('watch.pane.jobs')
-    // a tab from before the pool is named by its fleet id: the fleet is no longer read for it (MON-6a-2); the tab is collected within a minute
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
-    useFleetStore.setState({
-      snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } },
-    })
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
+    // a tab from before the pool carries no host id: it is named nothing, and the reconciler collects it within a minute (MON-6a-2, MON-12a-5)
+    expect(getPaneLabel(oldHost(), sessions, workspaces, t)).toBe('')
   })
 
   it('icons exist in ICON_MAP', () => {
     expect(getPaneIcon({ kind: 'watch-guardian' })).toBe('ShieldCheck')
     expect(getPaneIcon({ kind: 'watch-events' })).toBe('ListBullets')
     expect(getPaneIcon({ kind: 'watch-jobs' })).toBe('ListChecks')
-    expect(getPaneIcon(host('h'))).toBe('Desktop')
+    expect(getPaneIcon(oldHost())).toBe('Desktop')
     for (const n of ['ShieldCheck', 'ListBullets', 'ListChecks', 'Desktop']) expect(ICON_MAP[n]).toBeTruthy()
   })
 
@@ -57,12 +53,11 @@ describe('watch pane kinds', () => {
     expect(tabToUrl('t', { kind: 'watch-guardian' })).toBe('/')
     expect(tabToUrl('t', { kind: 'watch-events' })).toBe('/')
     expect(tabToUrl('t', { kind: 'watch-jobs' })).toBe('/')
-    expect(tabToUrl('t', host('h'))).toBe('/')
+    expect(tabToUrl('t', oldHost())).toBe('/')
   })
 
-  it('contentMatches: host by fleetHostId, the others by kind', () => {
-    expect(contentMatches(host('a'), host('a'))).toBe(true)
-    expect(contentMatches(host('a'), host('b'))).toBe(false)
+  it('contentMatches: two old host tabs (no pool host id) are not the same tab; the others match by kind', () => {
+    expect(contentMatches(oldHost(), oldHost())).toBe(false)
     expect(contentMatches({ kind: 'watch-guardian' }, { kind: 'watch-guardian' })).toBe(true)
     expect(contentMatches({ kind: 'watch-events' }, { kind: 'watch-events' })).toBe(true)
     expect(contentMatches({ kind: 'watch-jobs' }, { kind: 'watch-jobs' })).toBe(true)
@@ -70,20 +65,20 @@ describe('watch pane kinds', () => {
   })
 
   it('none is a light tab', () => {
-    for (const c of [{ kind: 'watch-guardian' }, { kind: 'watch-events' }, { kind: 'watch-jobs' }, host('h')] as PaneContent[]) {
+    for (const c of [{ kind: 'watch-guardian' }, { kind: 'watch-events' }, { kind: 'watch-jobs' }, oldHost()] as PaneContent[]) {
       expect(isLightTab(leaf(c))).toBe(false)
     }
   })
 
-  it('mapContent leaves fleetHostId unchanged (it is global, not an App host id)', () => {
-    const layout = leaf(host('d1_abc'))
+  it('mapContent leaves a watch-host pane unchanged (its host id is global, not an App host id)', () => {
+    const layout = leaf({ kind: 'watch-host', poolHostId: 'd1_abc' })
     const identity = identityOfSync({})
     expect(layoutToWire(layout, identity)).toBe(layout)
     expect(layoutFromWire(layout, () => 'MAPPED')).toBe(layout)
   })
 
   it('host-bearing readers ignore a watch-host pane', () => {
-    const tab = { id: 't', layout: leaf(host('h')) } as unknown as Tab
+    const tab = { id: 't', layout: leaf(oldHost()) } as unknown as Tab
     expect(getTabBadgePane(tab)).toBeNull()
     expect(getTabHostId(tab)).toBeNull()
   })
@@ -104,7 +99,6 @@ describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
   const pooled = (id: string): PaneContent => ({ kind: 'watch-host', poolHostId: id })
   const answer = (hosts: Array<{ host_id: string; alias: string }>) => usePoolStore.setState({ hosts: hosts as never, sourceHostId: 'cfg-a' } as never)
   beforeEach(() => {
-    useFleetStore.getState().reset()
     usePoolStore.setState({ hosts: [], sourceHostId: null } as never)
     resetRememberedPoolHosts()
   })
@@ -127,15 +121,14 @@ describe('watch-host panes that carry poolHostId (MON-6a-1)', () => {
     expect(getPaneLabel(pooled(id), sessions, workspaces, t)).toBe('mserv-2')
   })
 
-  it('label of an old content is its fleet id, not the fleet\'s alias or the pool\'s', () => {
-    useFleetStore.setState({ snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } } })
+  it('label of an old content (no pool host id) is empty, whatever the pool lists', () => {
     answer([{ host_id: 'h1', alias: 'from-pool' }])
-    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
+    expect(getPaneLabel(oldHost(), sessions, workspaces, t)).toBe('')
   })
 
   it('contentMatches: the same poolHostId matches, a different one or an old content does not', () => {
     expect(contentMatches(pooled('a'), pooled('a'))).toBe(true)
     expect(contentMatches(pooled('a'), pooled('b'))).toBe(false)
-    expect(contentMatches(pooled('a'), host('a'))).toBe(false)
+    expect(contentMatches(pooled('a'), oldHost())).toBe(false)
   })
 })

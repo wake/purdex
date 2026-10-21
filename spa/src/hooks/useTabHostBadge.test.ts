@@ -281,7 +281,7 @@ describe('useTabHostBadge for a watch-host tab', () => {
   const MLAB = '82b11c521df16c12'
   const watchTab = (poolHostId?: string): Tab => ({
     id: 'watch-host-x', pinned: false, locked: true, createdAt: 0,
-    layout: { type: 'leaf', pane: { id: 'p', content: { kind: 'watch-host', ...(poolHostId ? { poolHostId } : { fleetHostId: 'old' }) } } },
+    layout: { type: 'leaf', pane: { id: 'p', content: { kind: 'watch-host', ...(poolHostId ? { poolHostId } : {}) } } },
   })
   beforeEach(() => {
     useHostStore.getState().reset()

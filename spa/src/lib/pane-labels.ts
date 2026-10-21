@@ -70,7 +70,7 @@ export function getPaneLabel(
       return t('watch.pane.jobs')
     case 'watch-host':
       if (content.poolHostId) return poolHostAliasOf(content.poolHostId)
-      return content.fleetHostId ?? ''
+      return ''
   }
 }
 
