@@ -31,6 +31,12 @@ summary = "plain"
 env     = ["FOO=fixed-by-the-task"]
 timeout = "3m"
 
+[tasks.hostenv]
+run     = "env"
+args    = "none"
+summary = "plain"
+env     = ["PLAYWRIGHT_BROWSERS_PATH"]
+
 [tasks.dbtask]
 run     = "env"
 args    = "none"

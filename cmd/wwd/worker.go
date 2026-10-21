@@ -213,6 +213,7 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		Sandbox:           in.Sandbox,
 		DB:                db,
 		ParentEnv:         jobParentEnv(os.Environ(), in.Home, in.ToolDirs),
+		HostEnv:           in.Cfg.Jobs.Env, // [jobs.env]: laid over only where a command of a job is run (#3933)
 		DepsDir:           in.Cfg.DepsRoot,
 		DepsKeep:          in.Cfg.Worker.DepsKeep,
 		DepsStoreMaxMB:    in.Cfg.Worker.DepsStoreMaxMB,
