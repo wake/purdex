@@ -4,6 +4,7 @@ import { projectGroupLabels } from './group-labels'
 import { manualGroupKey, teamGroupKey } from '../task-groups/group-key'
 import type { TeamView } from '../team/team-views'
 import type { Tab } from '../../types/tab'
+import type { ManualGroups } from '../../stores/useManualGroupsStore'
 
 const tabOf = (id: string, hostId: string, agent: string | null, group?: string): Tab => ({
   id, createdAt: 1, ...(group ? { group } : {}),
@@ -20,7 +21,7 @@ const teamView = (name: string, lead = 'lead-title', seats: string[] = []): Team
 })
 const roots: Record<string, string> = {}
 const rootOf = (h: string, s: string) => roots[`${h}:${s}`] ?? null
-const run = (hostId: string, tabs: Tab[], views: TeamView[] = [], m = manual) =>
+const run = (hostId: string, tabs: Tab[], views: TeamView[] = [], m: ManualGroups = manual) =>
   projectGroupLabels({ hostId, manual: m, tabs: Object.fromEntries(tabs.map((t) => [t.id, t])), views, rootOf })
 
 describe('(a) manual group members', () => {
