@@ -113,23 +113,14 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('iconDot')
   })
 
-  it('host cell indicator (主機格指示): three options under the sidebar badge setting, the ring by default, a click switches it', () => {
-    useUISettingsStore.setState({ fleetCellIndicator: 'ring' })
+  it('the host cell indicator (主機格指示) is no longer here: it is set per host on the host page (MON-9a-3); the queue strip segments beside it still are', () => {
     render(<TerminalSection />)
-    expect(screen.getByText('Host cell indicator')).toBeTruthy()
-    expect(screen.getByText('Ring: overall load; bars: CPU left, memory right')).toBeTruthy()
-    const buttons = within(screen.getByTestId('fleet-cell-indicator')).getAllByRole('button')
-    expect(buttons.map((b) => b.textContent)).toEqual(['Ring', 'Bars: CPU + memory pressure', 'Bars: CPU + memory used'])
-    expect(buttons[0].className).toContain('border-border-active')
-    fireEvent.click(buttons[1])
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-pressure')
-    fireEvent.click(buttons[2])
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
-    fireEvent.click(buttons[0])
-    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+    expect(screen.queryByTestId('fleet-cell-indicator')).toBeNull()
+    expect(screen.queryByText('Host cell indicator')).toBeNull()
+    expect(screen.getByTestId('queue-strip-segments')).toBeTruthy()
   })
 
-  it('queue strip segments (佇列條節數): 6, 8, 10, 12 beside the host cell indicator, 10 by default, a click sets it', () => {
+  it('queue strip segments (佇列條節數): 6, 8, 10, 12, 10 by default, a click sets it', () => {
     useLayoutStore.setState({ queueStripSegments: 10 })
     render(<TerminalSection />)
     expect(screen.getByText('Queue strip segments')).toBeTruthy()

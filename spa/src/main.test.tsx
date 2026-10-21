@@ -21,6 +21,8 @@ vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
 // The pool hosts' look copy waits for the pool and the fleet; the boot-order tests below control when it returns.
 vi.mock('./lib/pool/pool-look-migration', () => ({ bootPoolLooks: vi.fn(() => Promise.resolve()) }))
+// The global 主機格指示 copy (MON-9a-3) is synchronous; the boot-order test below watches when it runs.
+vi.mock('./lib/pool/indicator-migration', () => ({ migrateGlobalIndicator: vi.fn() }))
 vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
@@ -174,5 +176,31 @@ describe('boot', () => {
     release()
     await flush()
     expect(order).toEqual(['bootPoolLooks (host-look marker 1)', 'startProfileSync (copied 1)'])
+  })
+  // Monitoring tabs MON-9a-3 (W7): the global 主機格指示 is copied into each host after the pool look copy and before Profile Sync, so the first `settings` build already holds the copied indicators.
+  it('copies the global indicator after the pool look copy and before Profile Sync starts', async () => {
+    vi.resetModules()
+    const { startProfileSync } = await import('./lib/profile/start')
+    const { bootPoolLooks } = await import('./lib/pool/pool-look-migration')
+    const { migrateGlobalIndicator } = await import('./lib/pool/indicator-migration')
+    const { usePoolHostsStore } = await import('./stores/usePoolHostsStore')
+    vi.mocked(startProfileSync).mockClear()
+    vi.mocked(bootPoolLooks).mockClear()
+    vi.mocked(migrateGlobalIndicator).mockClear()
+    const order: string[] = []
+    let release!: () => void
+    vi.mocked(bootPoolLooks).mockImplementation(() => new Promise<void>((resolve) => { order.push('bootPoolLooks'); release = resolve }))
+    vi.mocked(migrateGlobalIndicator).mockImplementation(() => { order.push('migrateGlobalIndicator'); usePoolHostsStore.setState({ order: ['82b11c521df16c12'] }) })
+    vi.mocked(startProfileSync).mockImplementation(() => {
+      order.push(`startProfileSync (indicators copied: ${usePoolHostsStore.getState().order.length === 1})`)
+      return () => {}
+    })
+    const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+    await import('./main')
+    await flush()
+    expect(migrateGlobalIndicator).not.toHaveBeenCalled() // the pool look copy has not returned
+    release()
+    await flush()
+    expect(order).toEqual(['bootPoolLooks', 'migrateGlobalIndicator', 'startProfileSync (indicators copied: true)'])
   })
 })
