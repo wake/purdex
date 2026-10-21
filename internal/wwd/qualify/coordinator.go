@@ -237,24 +237,29 @@ func (c *Coordinator) Status() (inFlight []Started, recent []Record) {
 // Qualification is what the host holds of each task and what happens next (BuildView), for GET /v1/qualification. It only reads, and it reads
 // the store and the manifests (disk) before it takes the lock: the lock is held only to copy the pairs, the retry memory and the records,
 // so a slow read or a flood of requests cannot hold up Tick and Settle. Nothing is started or settled.
+//
+// The order matters: the memory is copied first and the rows after, so a pair that settles in between can only make the memory older than the
+// rows (an old pair next to its new earned row reads as held, idle), never newer (which would show a finished pair as no pair and no label,
+// "ready").
 func (c *Coordinator) Qualification() (wire.HostQualification, error) {
-	rows, err := c.earnedRows()
-	if err != nil {
-		return wire.HostQualification{}, err
-	}
-	tasks, terr := c.cfg.Source.Tasks()
-	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr}
+	in := Input{Last: map[string]Attempt{}}
 	c.mu.Lock()
 	pairs := make([]Pair, 0, len(c.pairs))
 	for l, p := range c.pairs {
 		pairs = append(pairs, Pair{Label: l, Candidate: p.cand, Reference: p.ref, Since: p.at})
 	}
-	in.Last = map[string]Attempt{}
 	for l, a := range c.last {
 		in.Last[l] = a
 	}
 	history := slices.Clone(c.history)
 	c.mu.Unlock()
+
+	rows, err := c.earnedRows()
+	if err != nil {
+		return wire.HostQualification{}, err
+	}
+	tasks, terr := c.cfg.Source.Tasks()
+	in.Now, in.Host, in.Tasks, in.TasksErr = c.cfg.Now(), c.cfg.Source.Host(), tasks, terr
 	return BuildView(in, rows, pairs, history, UnreadableRepos(terr)), nil
 }
 

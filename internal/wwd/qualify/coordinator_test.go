@@ -761,6 +761,44 @@ func TestQualificationDoesNotHoldTheLockWhileItReadsTheManifests(t *testing.T) {
 	<-done
 }
 
+// A pair that settles (and earns the label) between the memory copy and the rows read must not read as "no pair, no label, ready": the old
+// pair next to the new earned row is held, idle.
+func TestQualificationAPairSettlingMidReadIsNeverReady(t *testing.T) {
+	for _, after := range []bool{false, true} { // the settle comes before the rows are read, or right after
+		r := newRig(t, tsc)
+		r.c.Tick(ctx())
+		r.finishPair(goodRes("mserv"), goodRes("air26"))
+		r.c.cfg.Store = &hookStore{fakeStore: r.st, after: after, onRead: func() { r.c.Settle(ctx()) }}
+		v, err := r.c.Qualification()
+		if err != nil || len(v.Tasks) != 1 {
+			t.Fatalf("after=%v: %+v %v", after, v, err)
+		}
+		tk := v.Tasks[0]
+		held := tk.Hold == wire.QualHoldEarned && tk.Progress == wire.QualProgressIdle
+		stillPairing := tk.Hold == wire.QualHoldNone && tk.Progress == wire.QualProgressPairing
+		if !held && !stillPairing {
+			t.Fatalf("after=%v: a finished pair read as neither earned nor pairing: %+v", after, tk)
+		}
+	}
+}
+
+type hookStore struct {
+	*fakeStore
+	after  bool // run onRead after the rows were read (the rows returned are then the older ones)
+	onRead func()
+}
+
+func (h *hookStore) EarnedLabels() ([]wire.EarnedLabel, error) {
+	if !h.after {
+		h.onRead()
+	}
+	rows, err := h.fakeStore.EarnedLabels()
+	if h.after {
+		h.onRead()
+	}
+	return rows, err
+}
+
 type blockingSource struct {
 	*fakeSource
 	entered chan struct{}
