@@ -66,4 +66,9 @@ describe('SegmentControl disabled option', () => {
     expect(cls).not.toMatch(/(^|\s)hover:/)
     expect(cls).toContain('enabled:hover:')
   })
+  it('drops the default focus outline; inactive buttons light up on focus-visible like hover', () => {
+    render(<SegmentControl options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} value="a" onChange={() => {}} />)
+    for (const name of ['A', 'B']) expect(screen.getByRole('button', { name }).className).toContain('outline-none')
+    expect(screen.getByRole('button', { name: 'B' }).className).toContain('enabled:focus-visible:border-text-muted')
+  })
 })

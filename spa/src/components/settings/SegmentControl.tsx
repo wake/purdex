@@ -27,10 +27,10 @@ export function SegmentControl<T extends string>({ options, value, onChange }: P
             disabled={opt.disabled}
             title={opt.title}
             onClick={() => { if (!isActive) onChange(opt.value) }}
-            className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+            className={`px-4 py-1.5 text-xs border outline-none transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
               isActive
                 ? 'bg-surface-elevated border-border-active text-text-primary'
-                : 'bg-transparent border-border-default text-text-muted enabled:hover:text-text-primary enabled:hover:border-text-muted'
+                : 'bg-transparent border-border-default text-text-muted enabled:hover:text-text-primary enabled:hover:border-text-muted enabled:focus-visible:text-text-primary enabled:focus-visible:border-text-muted'
             } ${isFirst ? 'rounded-l-md' : ''} ${isLast ? 'rounded-r-md' : ''}`}
           >
             {opt.label}
