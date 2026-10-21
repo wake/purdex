@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigReadsTheWorkersHostSettings(t *testing.T) {
@@ -141,5 +142,24 @@ func TestConfigChecksTheSandboxUser(t *testing.T) {
 		}
 	} else if err != nil {
 		t.Fatalf("a plain account name on Linux: %v", err)
+	}
+}
+
+// #3904: [worker] defer_patience_seconds. Not set is 120 seconds; 0 switches the leaving of jobs to a faster host off; a number is that many seconds.
+func TestConfigDeferPatience(t *testing.T) {
+	c, err := load(t, "[worker]\nenabled = true\n")
+	if err != nil || c.Worker.DeferPatience() != 2*time.Minute {
+		t.Fatalf("not set: %v %v", c.Worker.DeferPatience(), err)
+	}
+	if c, err = load(t, "[worker]\ndefer_patience_seconds = 0\n"); err != nil || c.Worker.DeferPatience() != 0 {
+		t.Fatalf("0 is off: %v %v", c.Worker.DeferPatience(), err)
+	}
+	if c, err = load(t, "[worker]\ndefer_patience_seconds = 300\n"); err != nil || c.Worker.DeferPatience() != 5*time.Minute {
+		t.Fatalf("300: %v %v", c.Worker.DeferPatience(), err)
+	}
+	for _, bad := range []string{"-1", "86401"} {
+		if _, err := load(t, "[worker]\ndefer_patience_seconds = "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "defer_patience_seconds") {
+			t.Errorf("defer_patience_seconds = %s accepted (err %v)", bad, err)
+		}
 	}
 }

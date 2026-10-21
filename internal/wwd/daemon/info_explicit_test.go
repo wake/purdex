@@ -70,3 +70,21 @@ func TestPoolViewIsSelfThenPeers(t *testing.T) {
 		t.Errorf("the view aliases the poller's state: %q", got)
 	}
 }
+
+// #3904: /v1/info announces the host's speed so that a slower host can leave a job to a faster one. Always a number above 0 (an unset
+// speed_factor is 1, the reference), so a peer that says nothing is a wwd from before the field.
+func TestInfoAnnouncesTheSpeedFactor(t *testing.T) {
+	unset := New(Options{HostID: "h1", Alias: "air26", Version: "v0", Token: testToken, WorkerEnabled: true})
+	if i := unset.info(); i.Worker.SpeedFactor != 1 {
+		t.Errorf("an unset speed is the reference, 1: %v", i.Worker.SpeedFactor)
+	}
+	slow := New(Options{HostID: "h2", Alias: "mserv", Version: "v0", Token: testToken, WorkerEnabled: true, SpeedFactor: 3})
+	b, _ := json.Marshal(slow.info())
+	if !strings.Contains(string(b), `"speed_factor":3`) {
+		t.Errorf("not in the json: %s", b)
+	}
+	older := []byte(`{"host_id":"h","alias":"air19","version":"v","proto":3,"platform":"darwin","arch":"amd64","worker":{"enabled":true},"labels":[],"fingerprint":{}}`)
+	if i, err := wire.DecodeLenient[wire.Info](older); err != nil || i.Worker.SpeedFactor != 0 {
+		t.Errorf("an older peer says no speed, which reads 0 = unknown: %+v %v", i.Worker, err)
+	}
+}

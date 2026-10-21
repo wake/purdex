@@ -79,8 +79,13 @@ type Config struct {
 	Report *report.Reporter
 	// Warm says the repo clone and its dependency cache are here (warm_bonus); nil: nothing is warm.
 	Warm func(wire.Job) bool
-	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none.
+	// SpeedFactor and Estimate feed size_penalty (spec §4.6); the zero values mean none. SpeedFactor is also this host's speed against the
+	// pool's when a job is left to a faster host (DeferPatience): 0 is 1.
 	SpeedFactor float64
+	// Peers is the pool without this host (the pool poller's view), asked once a round; DeferPatience is how long a queued job is left to a
+	// faster host of it that could take the job right now (pick.FasterHost, #3904). Either unset (nil, or <= 0): a job is never left.
+	Peers         func() []wire.Peer
+	DeferPatience time.Duration
 	// ExplicitLabelsOnly is pick.Env.ExplicitLabelsOnly.
 	ExplicitLabelsOnly bool
 	Estimate           func(wire.Job) float64
@@ -125,6 +130,7 @@ type Loop struct {
 	ownerRule bool
 
 	mu        sync.Mutex
+	deferred  map[string]time.Time // a job left to a faster host (origin/id) -> when it stops being left; it is told once
 	running   map[string]*runner.Running
 	lastClaim time.Time
 	lastSweep time.Time
@@ -305,6 +311,28 @@ func (l *Loop) stopAll(ctx context.Context, why string) {
 	wg.Wait()
 }
 
+// noteDeferred tells, once for each job, that it is left to a faster host and until when. The table is swept of the jobs whose time is over
+// (a job that old is taken here from then on), so it stays as small as the queue.
+func (l *Loop) noteDeferred(j wire.Job, to string, now time.Time) {
+	until := j.CreatedAt.Add(l.cfg.DeferPatience)
+	key := j.Origin + "/" + j.ID
+	l.mu.Lock()
+	if l.deferred == nil {
+		l.deferred = map[string]time.Time{}
+	}
+	for k, t := range l.deferred {
+		if !now.Before(t) {
+			delete(l.deferred, k)
+		}
+	}
+	_, told := l.deferred[key]
+	l.deferred[key] = until
+	l.mu.Unlock()
+	if !told {
+		l.cfg.Logf("worker: leaving %s (task %s of %s) to %s, a faster host with a slot free for it, until %s", key, j.Task, j.Repo.Name, to, until.Format(time.RFC3339))
+	}
+}
+
 func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	origins := l.cfg.Origins()
 	byHost := make(map[string]Origin, len(origins))
@@ -336,6 +364,16 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 		if h.Allow != nil {
 			env.Admit = func(j wire.Job) bool { return derived.AdmitsJob(holds, j.Class, j.Repo.Name) }
 			break
+		}
+	}
+	if l.cfg.Peers != nil && l.cfg.DeferPatience > 0 {
+		peers := l.cfg.Peers()
+		env.Faster = func(j wire.Job) bool {
+			to, ok := pick.FasterHost(j, l.cfg.SpeedFactor, peers, env.Now, l.cfg.DeferPatience)
+			if ok {
+				l.noteDeferred(j, to, env.Now)
+			}
+			return ok
 		}
 	}
 	ranked := pick.Rank(cands, env)

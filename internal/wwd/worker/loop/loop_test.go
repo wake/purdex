@@ -522,6 +522,76 @@ func TestAMissingCommandHoldsOffThatTaskAndNotTheRepo(t *testing.T) {
 	}
 }
 
+// A slower host leaves a job to a faster one that could take it now, tells it once, and takes it when it has waited as long as the patience
+// (#3904).
+func fasterPeer() []wire.Peer {
+	p := wire.Peer{Reachable: true, Info: wire.Info{Alias: "air26", Labels: nil, Worker: wire.InfoWorker{Enabled: true, SpeedFactor: 1}}, Facts: &wire.Facts{}}
+	p.Facts.Derived.Headroom = wire.Slots{Heavy: 1, Light: 1}
+	return []wire.Peer{p}
+}
+
+func TestAJobIsLeftToAFasterHostAndToldOnce(t *testing.T) {
+	spa := qjob("spa", wire.ClassMerge, 0)
+	spa.Task = "spa-related"
+	c := newConn("mlab", spa)
+	r := newRig(t, c)
+	var mu sync.Mutex
+	var told []string
+	r.loop.cfg.Logf = func(f string, a ...any) {
+		mu.Lock()
+		told = append(told, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+
+	r.round()
+	time.Sleep(3 * unit)
+	r.round()
+	time.Sleep(3 * unit)
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: the job is left to the faster host", claims)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var lines []string
+	for _, l := range told {
+		if strings.Contains(l, "leaving") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("told %d times, want once: %v", len(lines), lines)
+	}
+	for _, w := range []string{"mlab/spa", "spa-related", "air26", "until"} {
+		if !strings.Contains(lines[0], w) {
+			t.Errorf("the line %q lacks %q", lines[0], w)
+		}
+	}
+}
+
+func TestAJobThatWaitedAsLongAsThePatienceIsTakenHere(t *testing.T) {
+	old := qjob("old", wire.ClassMerge, 3*time.Minute)
+	c := newConn("mlab", old)
+	r := newRig(t, c)
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 2 * time.Minute
+	r.loop.cfg.Peers = fasterPeer
+	r.round()
+	waitFor(t, "the old job to be claimed", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
+func TestNothingIsLeftWhenThePatienceIsOff(t *testing.T) {
+	c := newConn("mlab", qjob("spa", wire.ClassMerge, 0))
+	r := newRig(t, c)
+	r.loop.cfg.SpeedFactor = 3
+	r.loop.cfg.DeferPatience = 0
+	r.loop.cfg.Peers = fasterPeer
+	r.round()
+	waitFor(t, "the job to be claimed", func() bool { claims, _, _ := c.seen(); return len(claims) == 1 })
+}
+
 func TestTheOwnerTakingTheMachineStopsAndGivesBackEveryJobAndTakesNothingMore(t *testing.T) {
 	c := newConn("mlab", qjob("a", wire.ClassDev, 0), qjob("b", wire.ClassDev, 0), qjob("c", wire.ClassDev, 0))
 	r := newRig(t, c)

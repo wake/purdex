@@ -790,3 +790,44 @@ every host that had one (mlab and air26, read back 2026-10-21; air19 and mserv n
 
 A shell that started before the setup still has the shim directory on its `PATH`. If it reports `command not found` for `go` and the like, run
 `rehash` or open a new shell. Until then `pdx gate` still skips a leftover shim when it looks for the real tool, so nothing loops.
+
+## 18. A slower host leaves a job to a faster one (#3904)
+
+A host that takes a job it could have left to a faster, idle host makes the pull request wait. Measured on 2026-10-21 with the same specs: air26
+7:50 to 10:40 for about 17,500 tests, mserv 27:23 (a factor of 2.5 to 3.5; mserv is a 4-core N150 with 3 cores for `wwd.slice`).
+
+**The rule.** Before a worker claims a queued job it asks the pool whether another host answers, has its worker on, **announces a speed_factor that is
+known and strictly below its own**, takes the job by its labels (`pick.Eligible`, with that host's own `explicit_labels_only`) and has a heavy slot free
+for it right now (`derived.HeavyRoomFor`, the reading that host's own worker has, selective holds with `allow` included). If one does, this host skips
+the job. It takes it anyway once the job has waited **`defer_patience_seconds`** since its submission: the faster host did not take it, for whatever
+reason, and somebody must. Every class is treated alike, release included: a faster host with room is a quicker release, and a slow host taking a
+`spa-full` or `tsc-force` would run it three times as long.
+
+**Switching it on.** Nothing changes until a host says it is slower. `speed_factor` in `[worker]` is the multiplier of a job's duration on that host
+against the reference, so a larger number is a slower host; not set is 1 and `/v1/info` then announces `worker.speed_factor: 1`. Set it on mserv:
+
+```toml
+[worker]
+speed_factor = 3
+```
+
+Restart wwd, then check `GET /v1/info` on each host: `worker.speed_factor` is there. A host whose wwd predates the field announces nothing, which
+a reader takes as "speed not known": it is never named as the faster one (so upgrade the hosts, then set the number). Two hosts at the same speed
+leave nothing to each other, so they cannot both wait for the other. The same number is also what `size_penalty` has always used it for.
+
+**The patience.** `[worker] defer_patience_seconds`: not set is 120 (2 minutes); `0` switches the whole thing off on that host (the emergency switch:
+set it on mserv and restart wwd); at most 86400. `Estimate` is not wired in production, so the patience is not the faster host's estimated duration
+for the task; a measured one (from `task_outcomes`) is a later step.
+
+**Known side effect.** Facts are sampled every few seconds: right after the faster host has taken a job, a slower one may still read its old "slot
+free" and leave the next job too. The delay is at most the patience. Accepted.
+
+**What the log says.** One line for each job, the first time it is left, with the origin and job id, the task, the repo, the faster host and when the
+leaving ends:
+
+```
+worker: leaving mlab/j_01... (task spa-related of purdex) to air26, a faster host with a slot free for it, until 2026-10-21T15:20:00+08:00
+```
+
+A job left to a faster host waits in the queue for up to the patience, which is shorter than the five minutes after which `queue_stalled` (§16)
+speaks, so the leaving does not raise that alert by itself.

@@ -246,6 +246,8 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		}}),
 		Warm:               func(j wire.Job) bool { _, ok := repos.Path(j.Repo.Name); return ok },
 		SpeedFactor:        in.Cfg.Worker.SpeedFactor,
+		Peers:              in.Peers,
+		DeferPatience:      in.Cfg.Worker.DeferPatience(),
 		ExplicitLabelsOnly: in.Cfg.Worker.ExplicitLabelsOnly,
 		Usage:              in.Usage,
 		Sweepers:           sweepers,

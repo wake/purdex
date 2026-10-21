@@ -42,6 +42,9 @@ type Env struct {
 	// TaskHeld: the command of this task was not found on this host a moment ago (#3908), so the jobs of this one task are skipped for a
 	// while, and the repo's other tasks are not. The origin and the repo are part of the key, like Suspended's.
 	TaskHeld func(source, repo, task string) bool
+	// Faster: another host of the pool is faster than this one and could take this job right now (FasterHost), so it is left to that host
+	// for a while (#3904). nil: no such host is known.
+	Faster func(wire.Job) bool
 	// Admit: whether the holds with `allow` (spec §13.4) let this job through. A job it refuses is left out of the ranking. nil: no such hold.
 	Admit func(wire.Job) bool
 }
@@ -155,6 +158,9 @@ func Rank(cands []Candidate, env Env) []Scored {
 			continue
 		}
 		if env.TaskHeld != nil && env.TaskHeld(c.Source, j.Repo.Name, j.Task) {
+			continue
+		}
+		if env.Faster != nil && env.Faster(j) {
 			continue
 		}
 		if j.Manual == wire.PositionHold {

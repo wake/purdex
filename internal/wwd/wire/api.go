@@ -39,6 +39,10 @@ type InfoWorker struct {
 	// `[worker] explicit_labels_only`; mserv). Absent means false, which is also what a wwd from before the field says: a reader that asks
 	// "can this host take the job?" then answers yes for a job it will not, never the other way round (S3-3b).
 	ExplicitLabelsOnly bool `json:"explicit_labels_only,omitempty"`
+	// SpeedFactor is this host's speed against the reference host (`[worker] speed_factor`, 1 when it is not set): the multiplier of a job's
+	// duration here, so a larger number is a slower host. A wwd always announces a number above 0; absent (0) means a wwd from before the
+	// field, whose speed is not known, and a reader then does not take it to be faster than anyone (#3904).
+	SpeedFactor float64 `json:"speed_factor,omitempty"`
 }
 
 func (i Info) Validate() error {
