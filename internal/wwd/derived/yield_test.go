@@ -24,16 +24,17 @@ func TestYieldPolicy_Judge(t *testing.T) {
 		over    bool
 		comment string
 	}{
-		"nothing waiting":                 {policy, nil, false, false, ""},
-		"waited a minute less than after": {policy, waitingSince(5*time.Minute - time.Second), false, false, ""},
-		"waited after":                    {policy, waitingSince(5 * time.Minute), true, false, ""},
-		"waited max":                      {policy, waitingSince(30 * time.Minute), true, false, ""},
-		"waited past max":                 {policy, waitingSince(30*time.Minute + time.Second), false, true, ""},
-		"off (after 0)":                   {YieldPolicy{Max: 30 * time.Minute}, waitingSince(10 * time.Minute), false, false, ""},
-		"no max given: the default":       {YieldPolicy{After: 5 * time.Minute}, waitingSince(31 * time.Minute), false, true, ""},
-		"observed long ago":               {policy, &wire.Waiting{Count: 1, OldestID: "j", OldestSince: yieldNow.Add(-10 * time.Minute), ObservedAt: yieldNow.Add(-waitingTrust - time.Second)}, false, false, ""},
-		"a clock ahead (future since)":    {policy, waitingSince(-time.Minute), false, false, ""},
-		"count 0":                         {policy, &wire.Waiting{Count: 0, OldestSince: yieldNow.Add(-time.Hour), ObservedAt: yieldNow}, false, false, ""},
+		"nothing waiting":                         {policy, nil, false, false, ""},
+		"waited a minute less than after":         {policy, waitingSince(5*time.Minute - time.Second), false, false, ""},
+		"waited after":                            {policy, waitingSince(5 * time.Minute), true, false, ""},
+		"waited max":                              {policy, waitingSince(30 * time.Minute), true, false, ""},
+		"waited past max":                         {policy, waitingSince(30*time.Minute + time.Second), false, true, ""},
+		"off (after 0)":                           {YieldPolicy{Max: 30 * time.Minute}, waitingSince(10 * time.Minute), false, false, ""},
+		"no max given: the default":               {YieldPolicy{After: 5 * time.Minute}, waitingSince(31 * time.Minute), false, true, ""},
+		"observed long ago":                       {policy, &wire.Waiting{Count: 1, OldestID: "j", OldestSince: yieldNow.Add(-10 * time.Minute), ObservedAt: yieldNow.Add(-waitingTrust - time.Second)}, false, false, ""},
+		"observed in the future (clock set back)": {policy, &wire.Waiting{Count: 1, OldestID: "j", OldestSince: yieldNow.Add(-10 * time.Minute), ObservedAt: yieldNow.Add(time.Second)}, false, false, ""},
+		"a clock ahead (future since)":            {policy, waitingSince(-time.Minute), false, false, ""},
+		"count 0":                                 {policy, &wire.Waiting{Count: 0, OldestSince: yieldNow.Add(-time.Hour), ObservedAt: yieldNow}, false, false, ""},
 	} {
 		yield, over := c.p.Judge(c.w, yieldNow)
 		if yield != c.yield || over != c.over {

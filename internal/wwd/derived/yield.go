@@ -35,7 +35,7 @@ func (p YieldPolicy) Judge(w *wire.Waiting, now time.Time) (yield, over bool) {
 	if p.After <= 0 || w == nil || w.Count <= 0 || w.OldestSince.IsZero() {
 		return false, false
 	}
-	if age := now.Sub(w.ObservedAt); age > waitingTrust {
+	if age := now.Sub(w.ObservedAt); age < 0 || age > waitingTrust { // a reading "from the future" (the clock was set back) is as little to be trusted as an old one
 		return false, false
 	}
 	waited := now.Sub(w.OldestSince)
