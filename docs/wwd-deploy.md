@@ -572,7 +572,7 @@ these; wwd is restarted only after the release gate and the guardian's go-ahead)
    Then **restart** (`sudo systemctl restart wwd`), check `.enabled` is still `false`, and check `GET /v1/info`: `labels` must show `repo:purdex`, `tool:node24`, `tool:pnpm10`.
 4. **The worker stays off until S2 retires `mserv-run.sh`** (a manual run and a worker must not run beside each other). When it goes on
    (the same call with `.enabled=true`; check `GET /v1/worker` again), the coordinator queues one qualify pair per task that has a `qualify` and a reference host (air26) and that mserv does
-   not hold yet: `tsc` (the whole run) and `spa-related` (`src/lib/fleet/parse.test.ts`). The pair needs mserv's worker **and** air26's
+   not hold yet: `tsc` (the whole run) and `spa-related` (`src/lib/crypto-hash.test.ts`). The pair needs mserv's worker **and** air26's
    worker on at the same time. `pdx wwd qualify --status` shows the outcome; `task:purdex/tsc` and `task:purdex/spa-related` appear in
    mserv's labels once the pair agrees, and only then does mserv claim those jobs. The first job runs `pnpm install` into the dependency
    cache (§10), so it needs network.
