@@ -95,7 +95,7 @@ export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'
 
 /**
  * The daemon lists `watch.v1` in `/api/info.capabilities` (internal/core/info_handler.go): the watch module is ready and
- * `GET /api/watch/status|events|unhandled` and the `watch.changed` / `watch.events` pushes are meant to be used. The routes
+ * `GET /api/watch/status|events|unhandled` and the `watch.changed` push are meant to be used. The routes
  * exist whenever the module is registered, so an answer from them is no proof; only this declaration is. Key presence.
  */
 export function selectWatchV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
