@@ -68,8 +68,8 @@ func TestQueuedViewHasWhatTheQueueRulesRead(t *testing.T) {
 
 	b := byID[bounced]
 	assert.Equal(t, 3, b.Attempts, "two infrastructure releases and a lapse")
-	assert.WithinDuration(t, putBack, b.UpdatedAt, time.Second, "updated_at is when it was put back")
-	assert.True(t, b.CreatedAt.Before(b.UpdatedAt))
+	assert.WithinDuration(t, putBack, b.Touched, time.Second, "touched is when it was put back")
+	assert.True(t, b.CreatedAt.Before(b.Touched))
 }
 
 // The counts are in the table, so a wwd that starts again sees the same (the rules do not forget a job that keeps coming back).
@@ -94,4 +94,31 @@ func TestQueuedViewOfAnEmptyQueueIsEmptyNotNil(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Empty(t, got)
+}
+
+// A person moving a job (or taking it off hold) is a change like a put-back: the wait that counts "since the job could be taken" starts again,
+// and nothing else of the job changes (codex R2: the table keeps no separate time of the last put-back).
+func TestQueuedViewTouchedMovesWithAManualPlaceAndNothingElseDoes(t *testing.T) {
+	f := newFixture(t)
+	id := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	c := f.claim(t, id, "air26")
+	require.NoError(t, f.q.Release(bg, id, wire.ReleaseRequest{ClaimID: c.ClaimID, Reason: wire.ReleaseInfra}))
+	before, err := f.q.QueuedView(bg)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	f.clk.Advance(10 * time.Minute)
+	_, err = f.q.SetPosition(bg, id, wire.PositionHold)
+	require.NoError(t, err)
+	f.clk.Advance(10 * time.Minute)
+	_, err = f.q.SetPosition(bg, id, wire.PositionNormal)
+	require.NoError(t, err)
+
+	after, err := f.q.QueuedView(bg)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.False(t, after[0].Held)
+	assert.Equal(t, 1, after[0].Attempts, "the count is not touched by a move")
+	assert.Equal(t, before[0].CreatedAt, after[0].CreatedAt)
+	assert.Equal(t, before[0].Touched.Add(20*time.Minute), after[0].Touched, "taken off hold: the wait starts from then")
 }

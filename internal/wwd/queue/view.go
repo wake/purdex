@@ -14,10 +14,13 @@ import (
 type QueuedJob struct {
 	ID     string
 	Labels []string
-	// CreatedAt is when the job was submitted (the origin's clock). It is what a wait is counted from; UpdatedAt is moved by a reorder or a
-	// cancel request too, so it stands for "when it was last put back" only for a job that was put back (Attempts > 0).
+	// CreatedAt is when the job was submitted (the origin's clock): the oldest wait there is.
 	CreatedAt time.Time
-	UpdatedAt time.Time
+	// Touched is when the job last changed in the queue: submitted, put back by a release or a lapse, moved to another place or taken off
+	// hold, or asked to be cancelled. A wait that is "since the job could be taken" is counted from it, not from CreatedAt: a job that was put
+	// back a minute ago, or that a person has just taken off hold, has not been waiting since it was submitted. A person moving a job restarts
+	// the count too, which is meant (somebody is looking at it); it is not "the time of the last put-back", which the table does not keep.
+	Touched time.Time
 	// Attempts is how many times the job was put back in the queue and counted: a release for an infrastructure reason, and every lease that
 	// ran out (a lapse is also an attempt, letGo is told to count it). A reclaim (the owner of the machine wants it back) is not counted.
 	Attempts int
@@ -48,7 +51,7 @@ func (q *Queue) QueuedView(ctx context.Context) ([]QueuedJob, error) {
 				return nil, fmt.Errorf("queue: the labels of job %s do not read: %w", j.ID, err)
 			}
 		}
-		j.CreatedAt, j.UpdatedAt = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
+		j.CreatedAt, j.Touched = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
 		j.Held = wire.Position(manual) == wire.PositionHold
 		out = append(out, j)
 	}
