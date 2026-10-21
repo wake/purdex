@@ -238,5 +238,25 @@
   "host_label": "mlab",
   "thing": "修好登入",
   "want": "美 — 任務編組甲・修好登入"
+ },
+ {
+  "case": "control, bidi, zero-width characters in the host and tmux names",
+  "locale": "zh-TW",
+  "name": "Mei",
+  "group": "",
+  "tmux": "ai\ngora‮4​",
+  "host_label": "ml\u0007ab",
+  "thing": "",
+  "want": "Mei — mlab：ai gora4"
+ },
+ {
+  "case": "a host name of only control characters is no host name",
+  "locale": "zh-TW",
+  "name": "",
+  "group": "",
+  "tmux": "aigora4",
+  "host_label": "‮​",
+  "thing": "",
+  "want": "aigora4"
  }
 ]

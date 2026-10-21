@@ -1,7 +1,7 @@
 // spa/src/hooks/useAgentNotifications.ts — agent-store events → desktop notifications (persistent dedup, gate,
 // content); split from useNotificationDispatcher (#1690).
 import { useEffect } from 'react'
-import { isProxyStop, useAgentStore } from '../stores/useAgentStore'
+import { isProxyStop, useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { isAgentVisibleInActiveTab } from '../lib/active-session'
 import { splitCompositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -17,6 +17,8 @@ import { clearSeenTs, requestBroadcastTs, requestIdOf, shouldDispatch, shouldDis
 import { shouldNotify } from '../lib/notification-gate'
 import { currentMemberKeys } from '../lib/team/member-set'
 import { sessionSeatNow } from './useSessionSeat'
+import { hostLabel, hostLookOf } from '../lib/host-look'
+import { notifyTitle } from '../lib/notify/notify-title'
 
 export function useAgentNotifications(): void {
   useEffect(() => {
@@ -75,9 +77,11 @@ export function useAgentNotifications(): void {
           isMember: currentMemberKeys().has(compositeKeyStr),
         })) continue
 
-        const sessionName = notificationName(hostId, sessionCode)
+        // The daemon's label (notify-title spec §3.4) titles a tmux agent as the phone push does; a worker, an older daemon or an unlabelled session keeps today's title.
+        const labelled = executionIdOfAgentCode(sessionCode) === null && event.notify_label !== undefined
+        const sessionName = labelled ? labelledTitle(hostId, sessionCode, event.notify_label!) : notificationName(hostId, sessionCode)
 
-        const content = buildNotificationContent(event.raw_event_name, (event.detail ?? {}) as Record<string, unknown>, sessionName, useI18nStore.getState().t)
+        const content = buildNotificationContent(event.raw_event_name, (event.detail ?? {}) as Record<string, unknown>, sessionName, useI18nStore.getState().t, { finalTitle: labelled })
         if (!content) continue
 
         if (window.electronAPI?.showNotification) {
@@ -94,6 +98,13 @@ export function useAgentNotifications(): void {
     })
     return unsubscribe
   }, [])
+}
+
+/** The title the phone push would carry, with THIS device's name for the host; the tmux name is the daemon's, else the session's own name. */
+function labelledTitle(hostId: string, sessionCode: string, label: NonNullable<NormalizedEvent['notify_label']>): string {
+  const tmux = label.tmux || useSessionStore.getState().sessions[hostId]?.find((s) => s.code === sessionCode)?.name || sessionCode
+  const locale = useI18nStore.getState().activeLocaleId === 'zh-TW' ? 'zh-TW' : 'en'
+  return notifyTitle({ ...label, tmux }, hostLabel(hostId, hostLookOf(hostId)), '', locale)
 }
 
 /**

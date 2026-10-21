@@ -14,6 +14,8 @@ export function buildNotificationContent(
   rawEvent: Record<string, unknown>,
   sessionName: string,
   t?: (key: string, params?: Record<string, string | number>) => string,
+  /** `finalTitle`: `sessionName` is already the whole title (`notifyTitle` cut it by its own rule, the name uncut), so it is not cut again. */
+  opts?: { finalTitle?: boolean },
 ): NotificationContent | null {
   let content: NotificationContent | null
   // W2 transition: cc broadcasts PdxXxx; the legacy switch arms live below.
@@ -59,6 +61,6 @@ export function buildNotificationContent(
   // The body was cleaned once, where the text came from (`lockScreenText`: the phone push's rule, once); what is left is our
   // own template. The title is the phone push's title rule: a name written by a session is cleaned of direction marks and
   // cut at 120 runes, and is not Markdown-processed.
-  content.title = plainNotificationText(content.title, NOTIFICATION_TITLE_RUNES)
+  if (opts?.finalTitle !== true) content.title = plainNotificationText(content.title, NOTIFICATION_TITLE_RUNES)
   return content
 }

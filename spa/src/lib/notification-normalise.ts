@@ -51,7 +51,7 @@ function plainChars(s: string): string {
   return out
 }
 
-function cutRunes(s: string, max: number): string {
+export function cutRunes(s: string, max: number): string {
   const runes = Array.from(s)
   return runes.length <= max ? s : runes.slice(0, max).join('') + '…'
 }
