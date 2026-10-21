@@ -110,9 +110,12 @@ const noRuneLimit = 1 << 30
 // label is the receiving device's own name for the host, so it is an argument, not part of the label.
 func NotifyTitle(label NotifyLabel, hostLabel, thing, locale string) string {
 	t := table(locale)
-	row := label.Tmux
-	if hostLabel != "" {
-		row = fmt.Sprintf(t["agent_title"], hostLabel, label.Tmux)
+	// The host's name and the tmux name are written outside (a look name, a session name): cleaned of control, format and direction characters, not Markdown-processed (the Mac's notifyTitle does the same).
+	tmux := strings.Map(plainRune, label.Tmux)
+	host := strings.Map(plainRune, hostLabel)
+	row := tmux
+	if host != "" {
+		row = fmt.Sprintf(t["agent_title"], host, tmux)
 	}
 	name := Normalise(label.Name, noRuneLimit) // only normalised: a persona's name is never cut (spec §1)
 	if name == "" {
