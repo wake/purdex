@@ -56,6 +56,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('WorkerSettings', () => {
+  it('label chips can wrap and break a long unbroken label instead of overflowing the row', () => {
+    setHost(mlab(WORKER, { labels: ['os:darwin', 'task:' + 'x'.repeat(200)] }))
+    render(<WorkerSettings alias="mlab" />)
+    const chips = Array.from(screen.getByTestId('pool-worker-labels').children)
+    expect(chips).toHaveLength(2)
+    for (const c of chips) {
+      expect(c.className).toContain('max-w-full')
+      expect(c.className).toContain('break-all')
+    }
+  })
+
   it('shows what the facts carry: the switch, both slot counts, the labels; the owner row only for a host with an owner', () => {
     setHost(mlab())
     render(<WorkerSettings alias="mlab" />)
