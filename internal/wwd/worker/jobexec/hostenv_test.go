@@ -1,12 +1,15 @@
 package jobexec
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
+	"github.com/wake/purdex/internal/wwd/worker/remotejob"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
@@ -100,5 +103,52 @@ func TestWithoutHostVariablesTheSpecHasTheWorkersEnvironment(t *testing.T) {
 	spec := e.runSpec(testRef, job("t"), wsOf(t), runner.Plan{Argv: []string{"true"}})
 	if strings.Join(spec.ParentEnv, "\n") != "PATH=/usr/bin\nLANG=C" {
 		t.Errorf("ParentEnv = %v", spec.ParentEnv)
+	}
+}
+
+// The whole way a job goes — the snapshot, Prepare (which holds a task's env to the names a worker lets a remote task take), Run — with a
+// host variable: the task `hostenv` lists PLAYWRIGHT_BROWSERS_PATH, which the worker's fixed list of inheritable names does not have, and it
+// is the host's declaration that lets it through (codex critic). Without the declaration the same job is refused at Prepare.
+func TestAJobTakesAHostVariableFromPrepareToRun(t *testing.T) {
+	r, commit := repo(t)
+	e := New(Config{
+		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: r, commit: commit} },
+		ClonePath: func(string) (string, bool) { return "", false }, ParentEnv: os.Environ(),
+		HostEnv: map[string]string{"PLAYWRIGHT_BROWSERS_PATH": hostBrowsers},
+	})
+	ctx := context.Background()
+	j := job("hostenv")
+	ws, err := e.Materialize(ctx, testRef, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	plan, err := e.Prepare(ctx, testRef, j, ws)
+	if err != nil {
+		t.Fatalf("Prepare refused a task that lists a variable the host declared: %v", err)
+	}
+	res := e.Run(ctx, testRef, j, ws, plan)
+	if res.Outcome != run.Exited || res.ExitCode != 0 {
+		t.Fatalf("result %+v", res)
+	}
+	log, err := os.ReadFile(res.LogPath)
+	if err != nil || !strings.Contains(string(log), "PLAYWRIGHT_BROWSERS_PATH="+hostBrowsers+"\n") {
+		t.Fatalf("the job did not see the host's value:\n%s (%v)", log, err)
+	}
+}
+
+func TestAHostThatDeclaredNothingStillRefusesTheName(t *testing.T) {
+	r, commit := repo(t)
+	e := newExec(t, &localFetcher{repo: r, commit: commit})
+	ctx := context.Background()
+	j := job("hostenv")
+	ws, err := e.Materialize(ctx, testRef, j, claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	_, err = e.Prepare(ctx, testRef, j, ws)
+	if err == nil || !strings.Contains(err.Error(), remotejob.CodeEnvNotAllowed) {
+		t.Fatalf("Prepare = %v, want env_not_allowed: only the names the host declared may be taken from the worker's environment", err)
 	}
 }

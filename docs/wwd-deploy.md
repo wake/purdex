@@ -880,7 +880,9 @@ env = ["PLAYWRIGHT_BROWSERS_PATH"]
 ```
 
 - **The task's list stays the whitelist.** A job sees only the names its task lists; a name the host gave and the task does not list is not in
-  the job. The host's value stands over a same-named variable the worker inherited.
+  the job. A task from another host's snapshot may take from the worker's environment only a short fixed list (`PATH`, `LANG`, `LC_ALL`,
+  `LC_CTYPE`, `TZ`, `CI`, `NO_COLOR`, `FORCE_COLOR`; anything else is refused at once as `env_not_allowed`, so that the worker's credentials stay out);
+  the names given in `[jobs.env]` are added to that list on this host, and nothing else is opened. The host's value stands over a same-named variable the worker inherited.
 - **`~` and `~/...` at the start of a value** are the home of the account wwd runs as (the same as `[tools] extra_path` and `[repos]`), not the
   job's workspace `HOME`. Nothing else is expanded (not `$HOME`, not `~name`); a value need not be a path (`PLAYWRIGHT_BROWSERS_PATH=0` is a
   value). On a host with a sandbox (mserv's `sandbox_user`) the commands run as another account: the path must be one that account can read, and
