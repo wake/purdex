@@ -52,3 +52,10 @@ func AdmitsJob(excs []wire.FactExc, class wire.JobClass, repo string) bool {
 	}
 	return true
 }
+
+// HasHeavyRoom says whether the facts leave room for a heavy job: the headroom, or (while only holds with `allow` are in the way) the room
+// they leave, with the jobs they list the only ones to take. The worker's loop decides to claim on it, and the queue rules ask the same of a
+// peer's facts, so the two cannot differ.
+func HasHeavyRoom(f wire.Facts) bool {
+	return f.Derived.Headroom.Heavy >= 1 || HeavyRoomForAllowed(f) >= 1
+}

@@ -85,3 +85,23 @@ func TestAdmitsJob(t *testing.T) {
 		}
 	}
 }
+
+// HasHeavyRoom is what the worker's loop and the queue rules ask of a record: the headroom, or the room the selective holds leave.
+func TestHasHeavyRoom(t *testing.T) {
+	open := Input{Pressure: 1, PressureKnown: true, Slots: wire.Slots{Heavy: 1, Light: 1}}
+	if !HasHeavyRoom(factsOf(open, true)) {
+		t.Error("a free heavy slot is room")
+	}
+	full := Input{Pressure: 1, PressureKnown: true, Slots: wire.Slots{Heavy: 1, Light: 1}, Running: wire.Slots{Heavy: 1}}
+	if HasHeavyRoom(factsOf(full, true)) {
+		t.Error("every heavy slot taken is no room")
+	}
+	held := open
+	held.Exceptions = append(held.Exceptions, Hold{Name: "rel"})
+	if HasHeavyRoom(factsOf(held, true)) {
+		t.Error("a plain hold leaves no room")
+	}
+	if !HasHeavyRoom(selectiveFacts(held, "rel")) {
+		t.Error("a selective hold leaves the room for the jobs it lists")
+	}
+}

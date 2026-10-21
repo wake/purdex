@@ -14,9 +14,13 @@ import (
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/orphans"
+	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
+
+// queueReadTimeout bounds one read of the queue for the alert rules: a pass waits for it, and a rule that cannot read is left as it was.
+const queueReadTimeout = 5 * time.Second
 
 // advisorInputs is what the alert rules (spec §13.3) read on this host.
 type advisorInputs struct {
@@ -38,6 +42,9 @@ type advisorInputs struct {
 	// threshold. SampleSignal is signalled, without blocking, at every new sample: pressure danger is judged on it.
 	Watch        daemon.AdvisorRule
 	SampleSignal <-chan struct{}
+	// Queue is this host's queue and Pool the pool as it sees it: what the queue rules (S3-3b) judge on. Either may be nil.
+	Queue *queue.Queue
+	Pool  func() []wire.Peer
 }
 
 // advisorRules are the rules this build judges (spec §13.3 except silence, thrash's broker hand-off and the incidents of 8b); the live
@@ -123,6 +130,14 @@ func liveInput(in advisorInputs) func() (advisor.Input, bool) {
 		if in.Store != nil {
 			inp.UncleanStartsSince = in.Store.UncleanStartsSince
 		}
+		if in.Queue != nil {
+			inp.Queue = func() ([]queue.QueuedJob, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), queueReadTimeout)
+				defer cancel()
+				return in.Queue.QueuedView(ctx)
+			}
+		}
+		inp.Pool = in.Pool
 		return inp, true
 	}
 }
