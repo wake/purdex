@@ -25,6 +25,8 @@ const watchUsage = `usage: pdx watch status [--json] [--config <path>]
        pdx watch log [--host <alias> | --all] [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--unhandled] [--json] [--config <path>]
        pdx watch start [--json] [--config <path>]
        pdx watch wake [--prompt "<text>"] [--json] [--config <path>]
+       pdx watch wake-settings [show] [--json] [--config <path>]
+       pdx watch wake-settings set <path>=<value>… [--json] [--config <path>]    (path: rules.<rule>.<field>, [i] for an element; a list is comma separated, @file reads a file, @@ is a literal @)
        pdx watch ack <id>… | --all [--host <alias>]  --note "<one line>" [--json] [--config <path>]
 `
 
@@ -39,6 +41,9 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == "config" {
 		return watchConfig(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "wake-settings" {
+		return watchWakeSettings(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && (args[0] == "start" || args[0] == "wake") {
 		return watchSession(args[0], args[1:], stdout, stderr)
