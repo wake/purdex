@@ -3,6 +3,8 @@ package labels
 import (
 	"slices"
 	"strings"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // QualifySession is the submitter session of the two halves of a qualification pair (the coordinator in package qualify queues them).
@@ -43,4 +45,15 @@ func QualifyHalfLabels(taskLabels []string, own, role, host string) []string {
 		out = append(out, l)
 	}
 	return append(slices.Clone(out), "host:"+host)
+}
+
+// QualifyClass is the class both halves of a qualification pair run at, worked out from the task's own: the task's class capped at merge
+// (release becomes merge), and dev when it is empty or not a class. A dev class half starves behind a steady stream of merge work (the
+// pick score is 1000 per class rank plus minutes waited), so a pair follows the task. The coordinator sets it and the worker checks it.
+func QualifyClass(task wire.JobClass) wire.JobClass {
+	switch task {
+	case wire.ClassRelease, wire.ClassMerge:
+		return wire.ClassMerge
+	}
+	return wire.ClassDev
 }

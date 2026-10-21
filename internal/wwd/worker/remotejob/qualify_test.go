@@ -128,3 +128,34 @@ func TestOnlyTheSessionAndTheKeyTogetherMakeAQualifyHalf(t *testing.T) {
 		t.Errorf("an ordinary job: %v", err)
 	}
 }
+
+// The class of a half is the task's own capped at merge (labels.QualifyClass); a dev half is accepted too, for a coordinator from before
+// the class followed the task.
+func TestAQualifyHalfTakesTheTasksClassCappedAtMerge(t *testing.T) {
+	for _, c := range []struct {
+		task, class wire.JobClass
+		ok          bool
+	}{
+		{wire.ClassMerge, wire.ClassMerge, true},
+		{wire.ClassRelease, wire.ClassMerge, true},
+		{wire.ClassMerge, wire.ClassDev, true},
+		{wire.ClassRelease, wire.ClassDev, true},
+		{wire.ClassDev, wire.ClassDev, true},
+		{wire.ClassRelease, wire.ClassRelease, false}, // under the task's own cap, so only the half rule refuses it
+		{wire.ClassMerge, wire.ClassRelease, false},
+		{wire.ClassDev, wire.ClassMerge, false},
+		{wire.ClassDev, wire.ClassRelease, false},
+	} {
+		root := snapshot(t, qualifyTasks+"class = \""+string(c.task)+"\"\n")
+		_, err := PrepareAt(half(labels.RoleReference, "air26", func(j *wire.Job) { j.Class = c.class }), root, t.TempDir(), "air26", "mserv")
+		if c.ok && err != nil {
+			t.Errorf("task %s, half %s: %v", c.task, c.class, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("task %s, half %s: accepted", c.task, c.class)
+		}
+		if !c.ok && c.task == wire.ClassRelease && code(t, err) != CodeMetaMismatch {
+			t.Errorf("task %s, half %s: %v", c.task, c.class, err)
+		}
+	}
+}

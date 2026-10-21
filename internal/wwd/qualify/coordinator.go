@@ -255,15 +255,6 @@ func (c *Coordinator) input() (Input, error) {
 	return in, nil
 }
 
-// pairClass is the class both halves of a pair run at: the task's own, capped at merge; dev when it is empty or not a class.
-func pairClass(c wire.JobClass) wire.JobClass {
-	switch c {
-	case wire.ClassRelease, wire.ClassMerge:
-		return wire.ClassMerge
-	}
-	return wire.ClassDev
-}
-
 // halves turns the task's own submission into the two halves. The candidate half asks for what a host that has not earned the label can
 // offer: no os:/arch: (those are the task's reason to be Mac-only until a host is qualified) and not the task's own label, plus
 // host:<candidate>. The reference half keeps every label the task has, plus host:<reference>. Both take the class of the task (base.Class, the
@@ -273,7 +264,7 @@ func pairClass(c wire.JobClass) wire.JobClass {
 func halves(base wire.JobSubmission, t Task, candidate string) (cand, ref wire.JobSubmission) {
 	own := t.Label()
 	common := func(s wire.JobSubmission, role, host string) wire.JobSubmission {
-		s.Class = pairClass(base.Class)
+		s.Class = labels.QualifyClass(base.Class)
 		s.Cacheable = false
 		s.Interruptible = true // so that a newer pair (after a restart forgot this one) really stops an older one that is still running
 		s.AdHoc = false
