@@ -329,6 +329,7 @@ func (l *Loop) claimOne(ctx, jobCtx context.Context, holds []wire.FactExc) {
 	if l.cfg.Report != nil {
 		env.Suspended = l.cfg.Report.Suspended
 		env.HeldOff = l.cfg.Report.HeldOff
+		env.TaskHeld = l.cfg.Report.TaskHeld
 	}
 	// the holds with `allow` (spec §13.4) let through only the jobs they list
 	for _, h := range holds {

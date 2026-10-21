@@ -39,6 +39,9 @@ type Env struct {
 	// HeldOff: the origin of this job answered the request for its snapshot wrongly a moment ago (#3379), so this one job is skipped for a
 	// while, not the repo: the failure is the origin's and often one job's.
 	HeldOff func(source, id string) bool
+	// TaskHeld: the command of this task was not found on this host a moment ago (#3908), so the jobs of this one task are skipped for a
+	// while, and the repo's other tasks are not. The origin and the repo are part of the key, like Suspended's.
+	TaskHeld func(source, repo, task string) bool
 	// Admit: whether the holds with `allow` (spec §13.4) let this job through. A job it refuses is left out of the ranking. nil: no such hold.
 	Admit func(wire.Job) bool
 }
@@ -149,6 +152,9 @@ func Rank(cands []Candidate, env Env) []Scored {
 			continue
 		}
 		if env.HeldOff != nil && env.HeldOff(c.Source, j.ID) {
+			continue
+		}
+		if env.TaskHeld != nil && env.TaskHeld(c.Source, j.Repo.Name, j.Task) {
 			continue
 		}
 		if j.Manual == wire.PositionHold {

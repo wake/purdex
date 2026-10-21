@@ -235,6 +235,18 @@ func TestStartFailures(t *testing.T) {
 	}
 }
 
+// A program that is not on the PATH says so with exec.ErrNotFound (the worker holds off that one task on it, #3908); no other way not to start does.
+func TestOnlyAMissingProgramIsErrNotFound(t *testing.T) {
+	if r := Run(context.Background(), spec(t, "no-such-program-xyz")); !errors.Is(r.Err, exec.ErrNotFound) {
+		t.Errorf("a program not on the PATH: %+v", r.Err)
+	}
+	rel := spec(t, "true")
+	rel.Dir = "relative/dir"
+	if r := Run(context.Background(), rel); r.Outcome != StartFailed || errors.Is(r.Err, exec.ErrNotFound) {
+		t.Errorf("a relative working directory is not a missing program: %+v", r)
+	}
+}
+
 func TestTimeoutEndsTheWholeGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	s := spec(t, "sh", "-c", "sleep 30 & echo $! > "+pidFile+"; wait")

@@ -264,7 +264,7 @@ func lookPath(name, dir string, env []string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("run: %q not found in PATH", name)
+	return "", fmt.Errorf("run: %q not found in PATH: %w", name, exec.ErrNotFound)
 }
 
 func checkExec(p string) error {
