@@ -65,6 +65,7 @@ describe('設定 across tab switches', () => {
     await waitFor(() => { openGuardian(); expect(screen.getByTestId('watch-set-start_prompt')).toBeInTheDocument() })
     fireEvent.change(screen.getByTestId('watch-set-start_prompt'), { target: { value: 'half a prompt' } })
     fireEvent.change(screen.getByTestId('watch-set-workdir'), { target: { value: '~/half' } })
+    fireEvent.change(screen.getByTestId('watch-set-patrol_idle_min'), { target: { value: '33' } })
 
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('watch-set-start_prompt')).toBeNull() // really unmounted, not hidden
@@ -72,6 +73,7 @@ describe('設定 across tab switches', () => {
     rerender(<TabContent activeTab={hostTab} allTabs={all} />)
     await waitFor(() => { openGuardian(); expect(screen.getByTestId('watch-set-start_prompt')).toHaveValue('half a prompt') })
     expect(screen.getByTestId('watch-set-workdir')).toHaveValue('~/half')
-    expect(screen.getByTestId('watch-set-patrol_idle_min')).toHaveValue('120') // an untouched field shows the stored value
+    expect(screen.getByTestId('watch-set-patrol_idle_min')).toHaveValue('33') // the half-typed minutes are kept
+    expect(screen.getByTestId('watch-set-mode')).toHaveAttribute('aria-checked', 'true') // the switch still shows the host's value
   }, 30_000)
 })

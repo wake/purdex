@@ -7,14 +7,13 @@ import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-conf
 import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from '../../lib/watch/draft-memory'
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 import { isSet, putWatchRow, rowWith, valueOf, type WatchKey } from '../../lib/watch/watch-row-write'
-import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 
-type Kind = 'bool' | 'int' | 'text' | 'textarea' | 'mode'
+type Kind = 'bool' | 'int' | 'text' | 'textarea' | 'rest'
 const FIELDS: { key: WatchKey; kind: Kind }[] = [
   { key: 'enabled', kind: 'bool' },
-  { key: 'mode', kind: 'mode' }, { key: 'patrol_idle_min', kind: 'int' },
+  { key: 'mode', kind: 'rest' }, { key: 'patrol_idle_min', kind: 'int' },
   { key: 'auto_wake', kind: 'bool' },
   { key: 'agent_command', kind: 'text' }, { key: 'workdir', kind: 'text' },
   { key: 'start_prompt', kind: 'textarea' }, { key: 'wake_prompt', kind: 'textarea' },
@@ -27,8 +26,8 @@ function show(v: unknown): string {
 }
 
 /** A text-like control: edited locally, committed on blur / Enter, put back to the stored value when the write is refused. */
-function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
-  k: WatchKey; kind: Kind; stored: string; onCommit: (raw: string) => Promise<boolean>; label: string; draftKey: string
+function TextControl({ k, kind, stored, onCommit, label, draftKey, disabled }: {
+  k: WatchKey; kind: Kind; disabled?: boolean; stored: string; onCommit: (raw: string) => Promise<boolean>; label: string; draftKey: string
 }) {
   // The unsent text lives in `lib/watch/draft-memory`, not only here: the tab unmounts on a switch (checklist).
   const [draft, setDraftState] = useState(() => readWatchDraft(draftKey) ?? stored)
@@ -68,7 +67,7 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
     <textarea aria-label={label} data-testid={`watch-set-${k}`} rows={3} className={`${INPUT} w-96 font-mono`} value={draft}
       onChange={(e) => setDraft(e.target.value)} onBlur={onBoxBlur} />
   ) : (
-    <input aria-label={label} data-testid={`watch-set-${k}`} className={`${INPUT} ${kind === 'text' ? 'w-96 font-mono' : ''}`} value={draft}
+    <input aria-label={label} data-testid={`watch-set-${k}`} className={`${INPUT} ${kind === 'text' ? 'w-96 font-mono' : ''}`} value={draft} disabled={disabled}
       onChange={(e) => setDraft(e.target.value)} onBlur={onBoxBlur} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
   )
   return (
@@ -154,21 +153,22 @@ export function GuardianSection({ hostConfigId, hostId, offline }: { hostConfigI
       {offline && <p data-testid="watch-set-offline" className="mb-2 text-xs text-text-muted">{t('watch.set.offline')}</p>}
       {notice && <p data-testid="watch-set-conflict" role="status" className="mb-2 text-xs text-status-warning-text">{notice}</p>}
       {FIELDS.map((f) => {
-        const label = t(`watch.set.f.${f.key}`)
+        const name = f.kind === 'rest' ? 'rest_idle' : f.key
+        const label = t(`watch.set.f.${name}`)
         const err = errors[f.key]
         const source = isSet(w, f.key) ? t('watch.set.source_set') : t('watch.set.source_default')
         const v = valueOf(w, f.key)
         return (
           <div key={f.key} data-testid={`watch-set-row-${f.key}`}>
-            <SettingItem label={label} disabled={locked} description={t(`watch.set.d.${f.key}`)}>
+            <SettingItem label={label} disabled={locked} description={t(`watch.set.d.${name}`)}>
               <div data-testid={`watch-set-cell-${f.key}`} className="flex flex-col items-end gap-1">
                 {f.kind === 'bool' ? (
                   <ToggleSwitch label={label} checked={v === true} testId={`watch-set-${f.key}`} onChange={(c) => void write(f.key, c)} />
-                ) : f.kind === 'mode' ? (
-                  <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
-                    value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
+                ) : f.kind === 'rest' ? (
+                  // Stored as the daemon already knows it: on = 'patrol', off = 'resident'. A row that never wrote a mode is 'patrol' (the default).
+                  <ToggleSwitch label={label} checked={v !== 'resident'} testId={`watch-set-${f.key}`} onChange={(c) => void write('mode', c ? 'patrol' : 'resident')} />
                 ) : (
-                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(v)} draftKey={watchDraftKey(hostConfigId, hostId, f.key)} onCommit={commitText(f)} />
+                  <TextControl k={f.key} kind={f.kind} disabled={f.key === 'patrol_idle_min' && valueOf(w, 'mode') === 'resident'} label={label} stored={show(v)} draftKey={watchDraftKey(hostConfigId, hostId, f.key)} onCommit={commitText(f)} />
                 )}
                 <span className="text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</span>
                 {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
