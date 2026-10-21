@@ -111,7 +111,6 @@ var cliOnly = map[string]string{
 	"cmd/pdx/hook.go":                 "`pdx hook`: the Claude Code hook command",
 	"cmd/pdx/hook_pid_resolver.go":    "`pdx hook`: finds the pid of the agent",
 	"cmd/pdx/ask.go":                  "`pdx ask`",
-	"cmd/pdx/reap_children.go":        "`pdx gate`: reaps what its command left",
 	"cmd/pdx/statusline_proxy.go":     "`pdx statusline-proxy`",
 	"cmd/pdx/msg_selftest.go":         "`pdx msg selftest`",
 	"internal/gate/run.go":            "`pdx gate`: the wrapper process that runs the gated command (a process of its own, not the daemon)",
