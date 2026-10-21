@@ -183,13 +183,14 @@ func (m *Module) markWakeStale(source string) {
 // background runs fn on a goroutine the module's Stop waits for; with the module not running it does nothing (a test sets backgroundSync to run
 // it in place).
 func (m *Module) background(fn func(ctx context.Context)) (scheduled bool) {
-	if m.backgroundSync {
-		fn(context.Background())
-		return true
-	}
-	ctx, done, ok := m.enterFor(context.Background(), wakeCallBudget)
+	ctx, done, ok := m.acquireBackground()
 	if !ok {
 		return false
+	}
+	if m.backgroundSync {
+		defer done()
+		fn(ctx)
+		return true
 	}
 	go func() {
 		defer done()
@@ -198,21 +199,40 @@ func (m *Module) background(fn func(ctx context.Context)) (scheduled bool) {
 	return true
 }
 
+// acquireBackground takes a place among the work Stop waits for (and a budget); not running, it is refused. In a test with backgroundSync it
+// is free: the work then runs in place.
+func (m *Module) acquireBackground() (context.Context, func(), bool) {
+	if m.backgroundSync {
+		return context.Background(), func() {}, true
+	}
+	return m.enterFor(context.Background(), wakeCallBudget)
+}
+
 // wakeCallBudget bounds a read of the source, a note to another host, a report.
 const wakeCallBudget = 30 * time.Second
 
 // requestWakePoll reads the source's document soon: now, or when the read under way is done (notices that come in meanwhile are one).
+//
+// The slot to run in is taken first and the flags are touched only once it is held, so a request that cannot be scheduled (the module is not
+// running: before Start, after Stop) leaves nothing behind - there is no "read under way" for a later request to be folded into, and no state
+// to take back that Start's first request could race with.
 func (m *Module) requestWakePoll() {
 	f := &m.wakeFollow
+	ctx, done, ok := m.acquireBackground()
+	if !ok {
+		return
+	}
 	f.mu.Lock()
 	if f.polling {
 		f.again = true
 		f.mu.Unlock()
+		done()
 		return
 	}
 	f.polling = true
 	f.mu.Unlock()
-	scheduled := m.background(func(ctx context.Context) {
+	run := func() {
+		defer done()
 		for {
 			m.pollWake(ctx)
 			f.mu.Lock()
@@ -224,12 +244,12 @@ func (m *Module) requestWakePoll() {
 			f.again = false
 			f.mu.Unlock()
 		}
-	})
-	if !scheduled { // the module is not running (before Start, after Stop): no read is under way, and later requests must not be folded into one
-		f.mu.Lock()
-		f.polling, f.again = false, false
-		f.mu.Unlock()
 	}
+	if m.backgroundSync {
+		run()
+		return
+	}
+	go run()
 }
 
 // wakeFollowLoop reads the source at start and then every wakePollEvery, until ctx ends.
