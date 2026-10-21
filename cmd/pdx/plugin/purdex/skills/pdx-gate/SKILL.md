@@ -37,4 +37,3 @@ pdx gate would-wait --auto -- <指令…>   # 這個指令現在會不會排隊�
 - 整段序列要佔一個名額：`pdx gate -- ./script.sh`（裡面的重指令認得外層名額，不會再排一次）。**不要只包腳本裡的某一步**。
 - 旗標都放在 `--` 之前：`pdx gate --class light -- <指令…>`；`--` 之後整段都是你的指令。`--fg` 保留原本優先權。
 - 結束碼是你的指令的結束碼（被 signal 殺掉是 128+n）；gate 自己拒絕執行（gate 目錄壞掉、磁碟空間低於下限）是 **75**，它一定在 stderr 留下以 `pdx gate:` 開頭的一行說明原因；等待中被你中斷是 128+n。
-- 舊的 `pdx lease run --kind … -- <指令…>` 目前是 `pdx gate` 的別名：`--kind`／`--weight` 只用來決定走哪個池（`test-full` 與未知的 kind 走重、`test-pkg`／`lint-full` 與小權重走輕，`build` 不經閘門直接執行），`--ask`／`--queue`／`--wait` 已沒有作用；新的腳本請直接用 `pdx gate`。
