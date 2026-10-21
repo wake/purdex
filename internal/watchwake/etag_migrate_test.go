@@ -70,6 +70,21 @@ func TestMarshal_IsCanonicalAndStable(t *testing.T) {
 	}
 }
 
+// A document built by hand with nil lists is still [] on the wire and has the etag of the same document with empty lists.
+func TestMarshal_NilListsAreEmptyArraysAndNeverNull(t *testing.T) {
+	s := Default("UTC")
+	s.Rules.Patrol.Times, s.Rules.WwdAlert.Levels, s.Rules.WwdAlert.KindsOff = nil, nil, nil
+	raw := string(Marshal(s))
+	if strings.Contains(raw, "null") || !strings.Contains(raw, `"times":[]`) || !strings.Contains(raw, `"levels":[]`) || !strings.Contains(raw, `"kinds_off":[]`) {
+		t.Fatalf("%s", raw)
+	}
+	e := Default("UTC")
+	e.Rules.WwdAlert.Levels = []string{}
+	if Etag(s) != Etag(e) {
+		t.Fatal("nil and empty lists must hash alike")
+	}
+}
+
 func watchRow() watchsettings.Settings {
 	w := watchsettings.Default()
 	w.Enabled = false // the patrol cannot be switched off: this must not travel
