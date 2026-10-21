@@ -9,6 +9,12 @@ import (
 	"syscall"
 )
 
+// shimTools are the names an old `pdx setup` wrote a shim for.
+var shimTools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "xcodebuild", "swift", "swift-build", "swift-test"}
+
+// shimDirIn is the directory the shims of the old gate were written to, under home.
+func shimDirIn(home string) string { return filepath.Join(home, ".config", "pdx", "shims") }
+
 // thisPdx is the path of the running pdx, symlinks followed, as localSetup finds it.
 func thisPdx() (string, error) {
 	p, err := os.Executable()

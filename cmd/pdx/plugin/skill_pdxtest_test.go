@@ -87,9 +87,9 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 			}
 		}
 	}
-	// the gate is a pass-through (S0): the skill must not promise a slot or an exclusion from an outer `pdx gate`, and the pdx-gate skill is gone (9a-2)
+	// the gate was a pass-through (S0) and its subcommand is gone (9a-3): the skill must say `pdx gate` is not there and promise no slot or exclusion from an outer one, and the pdx-gate skill is gone (9a-2)
 	rel := section(t, s, "與舊閘門（pdx gate）的關係")
-	for _, want := range []string{"已經是直通", "不提供任何互斥", "各自交給 `pdx test`", "不必也不要"} {
+	for _, want := range []string{"已經移除", "unknown command: gate", "不提供任何互斥", "各自交給 `pdx test`", "不必也不要"} {
 		if !strings.Contains(rel, want) {
 			t.Errorf("the old-gate section lacks %q", want)
 		}
