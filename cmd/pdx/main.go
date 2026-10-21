@@ -38,6 +38,7 @@ import (
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/nex"
+	notifymod "github.com/wake/purdex/internal/module/notify"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	poolmod "github.com/wake/purdex/internal/module/pool"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
@@ -537,6 +538,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// devices (paired phones' tokens, QR pairing spec §3) is always mounted: it costs one small file and serves nothing
 	// until a Mac mints a token. A store that cannot be opened soft-fails the module (no route, no capability).
 	c.AddModule(devicesmod.New())
+
+	// notify (the groups the App writes back for the notification title, notify-title spec §3.2) is always mounted: one small file, it
+	// soft-fails like devices, and the title is the Mac's too, so it does not wait for APNs. The agent module's labeler asks it.
+	c.AddModule(notifymod.New())
 
 	// workbook (session summaries, spec 2026-10-09-session-workbook) is always mounted: one small file, and it soft-fails
 	// like devices. It reads the agent's turn ends, the team's seats, the conversation's turns and the host settings.
