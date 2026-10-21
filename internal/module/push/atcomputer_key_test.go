@@ -20,4 +20,12 @@ func TestAtComputerKey_RegisteredByTheReadyModule(t *testing.T) {
 	if r.AtComputer() {
 		t.Fatal("no Mac has reported: the person is not at a computer")
 	}
+	// WK-3b: the same value has the three-valued face, which is what the watcher's user_back asks for. No Mac has reported: not known.
+	sr, ok := svc.(pushpkg.PresenceStateReader)
+	if !ok {
+		t.Fatalf("%T is not a PresenceStateReader", svc)
+	}
+	if at, known := sr.PresenceState(); at || known {
+		t.Fatalf("no Mac has reported: at %v known %v, want false false", at, known)
+	}
 }
