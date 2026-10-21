@@ -273,21 +273,28 @@ func (d *Daemon) Pool() *PoolPoller { return d.pool }
 // business asking another wwd for its view.
 func (d *Daemon) poolRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) {
-		self := wire.Peer{Info: d.info(), Reachable: true}
-		if d.opts.Sampler != nil {
-			if f, ok := d.opts.Sampler.Latest(); ok {
-				self.Facts = &f
-			}
-		}
-		peers := d.pool.Peers()
+		peers := d.PoolView()
 		// The liveness of the peers goes out only to a reader that asks (wire.PoolLivenessQuery): this route is read by the Purdex daemon
 		// of this host, which is not a wwd of the pool, so a reader that does not know the fields must never be shown them. Any other
 		// query is ignored, as it always was.
 		if r.URL.Query().Get("liveness") != "1" {
-			for i := range peers {
+			for i := 1; i < len(peers); i++ { // (the first is this host: it has none)
 				peers[i].Liveness, peers[i].LivenessAt, peers[i].LivenessSince = "", nil, nil
 			}
 		}
-		writeJSON(w, http.StatusOK, wire.Pool{Peers: append([]wire.Peer{self}, peers...)})
+		writeJSON(w, http.StatusOK, wire.Pool{Peers: peers})
 	})
+}
+
+// PoolView is the pool as this host sees it: this host first (reachable, with its latest facts), then the peers as the poller last found them.
+// GET /v1/pool answers it, and the alert rules of the queue (WWD-9 S3-3b) judge on it, so what they call a host's labels, switch and room is
+// what the pool shows.
+func (d *Daemon) PoolView() []wire.Peer {
+	self := wire.Peer{Info: d.info(), Reachable: true}
+	if d.opts.Sampler != nil {
+		if f, ok := d.opts.Sampler.Latest(); ok {
+			self.Facts = &f
+		}
+	}
+	return append([]wire.Peer{self}, d.pool.Peers()...)
 }

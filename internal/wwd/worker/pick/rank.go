@@ -70,10 +70,10 @@ func classRank(c wire.JobClass) float64 {
 // finite: a score must be a number the comparator can order; NaN and Inf from a bad estimate are treated as "no estimate".
 func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-// explicit: the job names an os: label, an earned task: label or a host: label (#3873: a qualify candidate names its host and, on purpose, no
+// Explicit: the job names an os: label, an earned task: label or a host: label (#3873: a qualify candidate names its host and, on purpose, no
 // task:; a host: label only the named host holds is an assignment as explicit as the others). The caller has already checked the job's labels are a subset of the
 // host's, so such a label is one this host holds.
-func explicit(labels []string) bool {
+func Explicit(labels []string) bool {
 	for _, l := range labels {
 		if strings.HasPrefix(l, "os:") || strings.HasPrefix(l, "task:") || strings.HasPrefix(l, "host:") {
 			return true
@@ -82,7 +82,16 @@ func explicit(labels []string) bool {
 	return false
 }
 
-func subset(need, have []string) bool {
+// Eligible says whether a host that holds the labels have, and takes only explicitly labelled jobs if explicitOnly, may take a job that asks
+// for need: the labels are a subset of the host's, and (explicitOnly) name something explicit. It is the one rule of what a host can take by its
+// labels: Rank applies it to every candidate, and the alert rules of the queue (a job nobody can take, a free slot a job could use) ask it of
+// each host of the pool, so what they call takeable is what a worker takes.
+func Eligible(need, have []string, explicitOnly bool) bool {
+	return Subset(need, have) && (!explicitOnly || Explicit(need))
+}
+
+// Subset says whether every label of need is among have.
+func Subset(need, have []string) bool {
 	for _, n := range need {
 		found := false
 		for _, h := range have {
@@ -130,10 +139,7 @@ func Rank(cands []Candidate, env Env) []Scored {
 	var es []entry
 	for _, c := range cands {
 		j := c.Job
-		if j.State != wire.StateQueued || !subset(j.Labels, env.Labels) {
-			continue
-		}
-		if env.ExplicitLabelsOnly && !explicit(j.Labels) {
+		if j.State != wire.StateQueued || !Eligible(j.Labels, env.Labels, env.ExplicitLabelsOnly) {
 			continue
 		}
 		if env.Locked != nil && env.Locked(j.Locks) {
