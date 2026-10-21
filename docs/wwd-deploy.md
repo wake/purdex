@@ -820,7 +820,8 @@ set it on mserv and restart wwd); at most 86400. `Estimate` is not wired in prod
 for the task; a measured one (from `task_outcomes`) is a later step.
 
 **Known side effect.** Facts are sampled every few seconds: right after the faster host has taken a job, a slower one may still read its old "slot
-free" and leave the next job too. The delay is at most the patience. Accepted.
+free" and leave the next job too. The delay is at most the patience, counted from the job's submission. This host's own count (for an origin whose clock runs ahead
+of this host's) is kept in memory: restarting wwd starts it again, so a restart can add up to one more patience for such a job, and only for such a job. Accepted.
 
 **What the log says.** One line for each job, the first time it is left, with the origin and job id, the task, the repo, the faster host and when the
 leaving ends:
