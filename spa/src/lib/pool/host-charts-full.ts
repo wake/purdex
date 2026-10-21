@@ -162,10 +162,10 @@ function uptimeTile(facts: PoolFacts | null): TileDef {
   return { id: 'uptime', titleKey, text: { key: `${K}.uptime`, params: { d: Math.floor(up / 86_400_000), h: Math.floor((up % 86_400_000) / 3_600_000), date: `${pad2(b.getMonth() + 1)}/${pad2(b.getDate())} ${pad2(b.getHours())}:${pad2(b.getMinutes())}` } } }
 }
 
-/** How long the source daemon's read of this host takes. The local host is not read over a network; an unknown figure is a dash. */
+/** How long the source daemon's read of this host takes. The local host is not read over a network; an unknown figure, or one whose source is not known yet, is a dash. */
 function latencyTile(ctx: ChartCtx): TileDef {
   const titleKey = `${K}.latency.title`
   if (ctx.local) return { id: 'latency', titleKey, text: { key: `${K}.latency_local` } }
-  if (ctx.rttMs === null) return { id: 'latency', titleKey, text: null }
-  return { id: 'latency', titleKey, text: { key: `${K}.latency`, params: { alias: ctx.sourceAlias ?? '', ms: Math.round(ctx.rttMs) } } }
+  if (ctx.rttMs === null || ctx.sourceAlias === null) return { id: 'latency', titleKey, text: null }
+  return { id: 'latency', titleKey, text: { key: `${K}.latency`, params: { alias: ctx.sourceAlias, ms: Math.round(ctx.rttMs) } } }
 }

@@ -22,6 +22,8 @@ export interface PoolHostResolvedLook {
 /** The edits `writePoolHostLook` takes; `null` clears a field. */
 export interface PoolHostLookPatch {
   colors?: HostLook['colors'] | null
+  /** The legacy single colour: only ever cleared (`null`), by an edit that replaces it with `colors`. */
+  color?: string | null
   icon?: string | null
   iconWeight?: HostLook['iconWeight'] | null
   indicator?: PoolHostIndicator | null
@@ -159,6 +161,7 @@ export function writePoolHostLook(hostId: string, patch: PoolHostLookPatch): voi
 function editFace<T extends HostLookEntry | PoolHostLook>(cur: T | undefined, face: Omit<PoolHostLookPatch, 'indicator'>): T {
   const next: Record<string, unknown> = { ...cur }
   applyField(next, 'colors', face.colors)
+  applyField(next, 'color', face.color)
   applyField(next, 'icon', face.icon)
   applyField(next, 'iconWeight', face.iconWeight)
   return next as T

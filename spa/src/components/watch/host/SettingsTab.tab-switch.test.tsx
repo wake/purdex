@@ -88,6 +88,21 @@ describe('設定 tab across tab switches', () => {
     await waitFor(() => expect(screen.getByTestId('push-toggle')).toHaveAttribute('aria-checked', 'true'))
   }, 30_000)
 
+  it('the 側欄顯示 colour mode (主控台／終端機) chosen on a host is still chosen after switching away and back', async () => {
+    const { rerender } = render(<TabContent activeTab={mservTab} allTabs={all} />)
+    openSettings()
+    const modeBtn = async (name: string) => within(await screen.findByTestId('look-settings')).getByRole('button', { name })
+    expect(await modeBtn(t('hosts.color.mode.terminal'))).toHaveAttribute('aria-pressed', 'true') // the sidebar's layer is the default
+    fireEvent.click(await modeBtn(t('hosts.color.mode.console')))
+    expect(await modeBtn(t('hosts.color.mode.console'))).toHaveAttribute('aria-pressed', 'true')
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('look-settings')).toBeNull()
+
+    rerender(<TabContent activeTab={mservTab} allTabs={all} />)
+    await waitFor(() => expect(within(screen.getByTestId('look-settings')).getByRole('button', { name: t('hosts.color.mode.console') })).toHaveAttribute('aria-pressed', 'true'))
+  }, 30_000)
+
   it('mlab (a daemon): a half-typed guardian path is still there after switching away and back', async () => {
     const { rerender } = render(<TabContent activeTab={mlabTab} allTabs={all} />)
     openSettings()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { alertRowsOf, observationRowsOf, mergeObservations, filterEvents, groupByDay, liveCounts, OBSERVATIONS_SHOWN, type EventRow } from './events-model'
+import { alertRowsOf, observationRowsOf, mergeObservations, filterEvents, groupByDay, liveCounts, shortDuration, OBSERVATIONS_SHOWN, type EventRow } from './events-model'
 import type { PoolAlert } from './alerts-api'
 import type { PoolObservation } from './observations-api'
 import type { HostAlertsEntry } from './alerts-store'
@@ -169,5 +169,11 @@ describe('liveCounts', () => {
       ...observationRowsOf({ air26: ['01', '02', '03', '04'].map((h) => obs(`o${h}`, `2026-10-20T${h}:00:00Z`)) }, HOSTS),
     ]
     expect(liveCounts(rows)).toEqual({ push: 2, other: 1 + 3 })
+  })
+})
+
+describe('shortDuration', () => {
+  it('formats a duration as short numbers', () => {
+    expect([shortDuration(42), shortDuration(185), shortDuration(3720)]).toEqual(['42s', '3m05s', '1h02m'])
   })
 })
