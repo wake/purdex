@@ -135,20 +135,13 @@ describe('retry (88 on the critic: a late old request is overwritten by a resend
     expect(hostFetch).toHaveBeenCalledTimes(2)
   })
   it('back-off doubles on each failure and stops at 5 minutes', async () => {
-    hostFetch.mockRejectedValue(new Error('down'))
+    const at: number[] = []
+    hostFetch.mockImplementation(() => { at.push(Date.now()); return Promise.reject(new Error('down')) })
     change('N1')
-    const gaps: number[] = []
-    let last = 0
-    let elapsed = 0
-    for (let i = 0; i < 400 && gaps.length < 7; i++) {
-      await vi.advanceTimersByTimeAsync(5_000)
-      elapsed += 5_000
-      if (hostFetch.mock.calls.length - 1 > gaps.length) { gaps.push(elapsed - last); last = elapsed }
-    }
-    // the first gap is measured from the first send; each next one is the delay + the debounce (rounded up to 5 s steps)
-    expect(gaps.slice(1, 6)).toEqual([35_000, 65_000, 125_000, 245_000, 305_000])
-    expect(gaps[6]).toBe(305_000) // capped: RETRY_MAX_MS
-    expect(RETRY_MAX_MS).toBe(300_000)
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 4)
+    const gaps = at.slice(1).map((t, i) => Math.round((t - at[i]) / 1000))
+    // each gap is the delay (30 s doubling, capped at 300 s) plus the 0.5 s debounce
+    expect(gaps.slice(0, 6)).toEqual([31, 61, 121, 241, 301, 301]) // rounded up from x.5
   })
   it('a success resets the delay', async () => {
     hostFetch.mockRejectedValueOnce(new Error('down')).mockRejectedValueOnce(new Error('down'))
