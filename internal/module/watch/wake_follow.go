@@ -182,19 +182,20 @@ func (m *Module) markWakeStale(source string) {
 
 // background runs fn on a goroutine the module's Stop waits for; with the module not running it does nothing (a test sets backgroundSync to run
 // it in place).
-func (m *Module) background(fn func(ctx context.Context)) {
+func (m *Module) background(fn func(ctx context.Context)) (scheduled bool) {
 	if m.backgroundSync {
 		fn(context.Background())
-		return
+		return true
 	}
 	ctx, done, ok := m.enterFor(context.Background(), wakeCallBudget)
 	if !ok {
-		return
+		return false
 	}
 	go func() {
 		defer done()
 		fn(ctx)
 	}()
+	return true
 }
 
 // wakeCallBudget bounds a read of the source, a note to another host, a report.
@@ -211,7 +212,7 @@ func (m *Module) requestWakePoll() {
 	}
 	f.polling = true
 	f.mu.Unlock()
-	m.background(func(ctx context.Context) {
+	scheduled := m.background(func(ctx context.Context) {
 		for {
 			m.pollWake(ctx)
 			f.mu.Lock()
@@ -224,6 +225,11 @@ func (m *Module) requestWakePoll() {
 			f.mu.Unlock()
 		}
 	})
+	if !scheduled { // the module is not running (before Start, after Stop): no read is under way, and later requests must not be folded into one
+		f.mu.Lock()
+		f.polling, f.again = false, false
+		f.mu.Unlock()
+	}
 }
 
 // wakeFollowLoop reads the source at start and then every wakePollEvery, until ctx ends.
@@ -315,7 +321,7 @@ func (m *Module) tellFleetWakeChanged(revision int64) {
 	hosts := append([]string(nil), peerHostIDs(m.core.Cfg.Peers.Hosts)...)
 	m.core.CfgMu.RUnlock()
 	for _, id := range hosts {
-		m.background(func(ctx context.Context) {
+		_ = m.background(func(ctx context.Context) { // not running: not told (the poll finds it)
 			m.caller.Call(ctx, id, pathWakeChanged, map[string]any{"to_host_id": id, "revision": revision})
 		})
 	}

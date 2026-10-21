@@ -148,10 +148,8 @@ func TestWakePeerRoutes_TheSourceKeepsTheLast50ReportsNewestFirstAndDropsWhatIsN
 	// what is not an entry is left out, the rest is kept
 	bad := []wakeSuppressed{
 		{Host: "air26", Reason: "wwd_alert", Why: "kind_off"},                                              // no time
-		{At: at(2), Reason: "wwd_alert", Why: "kind_off"},                                                  // no host
 		{At: at(2), Host: "air26", Why: "kind_off"},                                                        // no reason
 		{At: at(2), Host: "air26", Reason: "wwd_alert"},                                                    // no why
-		{At: at(2), Host: strings.Repeat("h", 65), Reason: "r", Why: "w"},                                  // a host name too long
 		{At: at(2), Host: "air26", Reason: "wwd_alert", Why: "kind_off", Detail: strings.Repeat("d", 501)}, // a detail too long
 		{At: f.src.m.now().Add(48 * time.Hour), Host: "air26", Reason: "r", Why: "w"},                      // from the future
 		mk(2, "air26"),
@@ -176,6 +174,57 @@ func TestWakePeerRoutes_TheSourceKeepsTheLast50ReportsNewestFirstAndDropsWhatIsN
 		tooMany = append(tooMany, mk(1, "air26"))
 	}
 	assert.Equal(t, http.StatusBadRequest, f.report(t, f.src, asAir26, srcHostID, tooMany).Code)
+}
+
+// A report is about the host that sent it: the host named in an entry is the sender's alias, whatever the entry says; a why or a reason that is
+// not in the contract is not kept, and a failed patrol is kept only with one of its four codes.
+func TestWakePeerRoutes_AReportIsBoundToItsSenderAndTheContractsVocabulary(t *testing.T) {
+	f := newFleet(t)
+	at := f.src.m.now().Add(-time.Minute)
+	e := func(host, reason, why, detail string) wakeSuppressed {
+		return wakeSuppressed{At: at, Host: host, Reason: reason, Why: why, Detail: detail}
+	}
+	report := []wakeSuppressed{
+		e("mlab", "wwd_alert", "level_off", "claims to be mlab"), // sent by air26: it is air26's
+		e("air26", "wwd_alert", "made_up", "a why that is not in the contract"),
+		e("air26", "made_up", "rule_off", "a reason that is not in the contract"),
+		e("air26", "patrol", "patrol_failed", "no code at all"),
+		e("air26", "patrol", "patrol_failed", "targets_unknown: air19 is not a host"),
+		e("air26", "disk_low", "master_off", ""),
+		e("air26", "unattended_changed", "no_auto_start", ""),
+		e("air26", "user_back", "kind_off", ""),
+	}
+	require.Equal(t, http.StatusOK, f.report(t, f.src, asAir26, srcHostID, report).Code)
+	got := f.src.viewOf(t).Suppressed
+	var kept []string
+	for _, s := range got {
+		assert.Equal(t, "air26", s.Host, "the sender's alias, never what the entry says")
+		kept = append(kept, s.Reason+"/"+s.Why)
+	}
+	assert.ElementsMatch(t, []string{"wwd_alert/level_off", "patrol/patrol_failed", "disk_low/master_off", "unattended_changed/no_auto_start", "user_back/kind_off"}, kept)
+}
+
+// A notice that arrives while the module is not running (before Start, after Stop) must not leave the follower thinking a read is under way: the
+// read it would have started never happens, and every later request would be folded into it.
+func TestWakeFollow_ANoticeWhileNotRunningDoesNotBlockLaterReads(t *testing.T) {
+	f := newFleet(t)
+	f.src.viewOf(t)
+	m := f.fol.m
+	m.backgroundSync = false // the module is not running: nothing can be scheduled
+
+	m.requestWakePoll()
+	m.requestWakePoll()
+	assert.Empty(t, f.folCall.paths(), "nothing ran")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.runMu.Lock()
+	m.running, m.runCtx = true, ctx
+	m.runMu.Unlock()
+	m.requestWakePoll() // Start's first request
+	m.wg.Wait()
+	assert.Equal(t, []string{pathWakeGet}, f.folCall.paths(), "the read runs once the module does")
+	assert.Equal(t, int64(1), f.fol.viewOf(t).Revision)
 }
 
 // A report sent to a host that is not the source is accepted and dropped: the source is where they are kept.

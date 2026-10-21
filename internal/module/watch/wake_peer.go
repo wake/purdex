@@ -30,7 +30,7 @@ func peerHostIDs(hosts []config.PeerHost) []string {
 
 // admitWakePeer is the front of every peer route here, in the order the team routes have it: the host principal bound to its live entry, the
 // per-host rate limit and the body cap before the body is decoded, then to_host_id. It writes the refusal itself and returns false.
-func (m *Module) admitWakePeer(w http.ResponseWriter, r *http.Request, what string, maxBody int64, req any, to func() string) (ours string, ok bool) {
+func (m *Module) admitWakePeer(w http.ResponseWriter, r *http.Request, what string, maxBody int64, req any, to func() string) (ours string, sender config.PeerHost, ok bool) {
 	var entry config.PeerHost
 	_, _, berr := peersmod.BindHostPrincipal(r, what, func(alias string) (config.PeerHost, bool) {
 		var found bool
@@ -40,25 +40,25 @@ func (m *Module) admitWakePeer(w http.ResponseWriter, r *http.Request, what stri
 	if berr != nil {
 		m.logf("[watch] %s refused (%s): %s", what, berr.Code, berr.Detail)
 		m.writeErr(w, berr.Status, berr.Code, berr.Detail)
-		return "", false
+		return "", config.PeerHost{}, false
 	}
 	switch st := peersmod.AdmitDecode(w, r, m.limit, entry.HostID, maxBody, req); st {
 	case 0:
 	case http.StatusTooManyRequests:
 		m.writeErr(w, st, ipeers.ErrRateLimited, "host rate limit exceeded")
-		return "", false
+		return "", config.PeerHost{}, false
 	case http.StatusRequestEntityTooLarge:
 		m.writeErr(w, st, ipeers.ErrBadRequest, "body over the limit")
-		return "", false
+		return "", config.PeerHost{}, false
 	default:
 		m.writeErr(w, st, ipeers.ErrBadRequest, "invalid JSON body")
-		return "", false
+		return "", config.PeerHost{}, false
 	}
 	if to() != ours {
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
-		return "", false
+		return "", config.PeerHost{}, false
 	}
-	return ours, true
+	return ours, entry, true
 }
 
 // writeEnvelope answers a get or put: the inner status and body inside a 200 that names this host (HostCaller checks the name).
@@ -76,7 +76,7 @@ func (m *Module) handlePeerWakeGet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ToHostID string `json:"to_host_id"`
 	}
-	ours, ok := m.admitWakePeer(w, r, "wake settings read", maxWakeSmallBody, &req, func() string { return req.ToHostID })
+	ours, _, ok := m.admitWakePeer(w, r, "wake settings read", maxWakeSmallBody, &req, func() string { return req.ToHostID })
 	if !ok {
 		return
 	}
@@ -100,7 +100,7 @@ func (m *Module) handlePeerWakePut(w http.ResponseWriter, r *http.Request) {
 		Settings   json.RawMessage `json:"settings"`
 		ExpectEtag string          `json:"expect_etag"`
 	}
-	ours, ok := m.admitWakePeer(w, r, "wake settings write", maxWakePut+maxWakeSmallBody, &req, func() string { return req.ToHostID })
+	ours, _, ok := m.admitWakePeer(w, r, "wake settings write", maxWakePut+maxWakeSmallBody, &req, func() string { return req.ToHostID })
 	if !ok {
 		return
 	}
@@ -118,7 +118,7 @@ func (m *Module) handlePeerWakeChanged(w http.ResponseWriter, r *http.Request) {
 		ToHostID string `json:"to_host_id"`
 		Revision int64  `json:"revision"`
 	}
-	ours, ok := m.admitWakePeer(w, r, "wake settings notice", maxWakeSmallBody, &req, func() string { return req.ToHostID })
+	ours, _, ok := m.admitWakePeer(w, r, "wake settings notice", maxWakeSmallBody, &req, func() string { return req.ToHostID })
 	if !ok {
 		return
 	}
@@ -135,7 +135,7 @@ func (m *Module) handlePeerWakeSuppressed(w http.ResponseWriter, r *http.Request
 		ToHostID string           `json:"to_host_id"`
 		Entries  []wakeSuppressed `json:"entries"`
 	}
-	ours, ok := m.admitWakePeer(w, r, "wake suppressed report", maxWakeReport, &req, func() string { return req.ToHostID })
+	ours, sender, ok := m.admitWakePeer(w, r, "wake suppressed report", maxWakeReport, &req, func() string { return req.ToHostID })
 	if !ok {
 		return
 	}
@@ -148,6 +148,7 @@ func (m *Module) handlePeerWakeSuppressed(w http.ResponseWriter, r *http.Request
 		var keep []wakeSuppressed
 		for _, e := range req.Entries {
 			if validSuppressed(e, now) {
+				e.Host = sender.Alias // a report is about the host that sent it, whoever the entry says it is about
 				keep = append(keep, e)
 			}
 		}
