@@ -32,10 +32,9 @@ func newUBRig(t *testing.T) *ubRig {
 	t.Helper()
 	u := &ubRig{recRig: newRecRig(t), primary: true, known: true, at: true, awayMin: 30}
 	u.m.ubsrc = &userBackSources{
-		primary:  func() bool { u.mu.Lock(); defer u.mu.Unlock(); return u.primary },
+		role:     func() (bool, int64) { u.mu.Lock(); defer u.mu.Unlock(); return u.primary, u.term },
 		presence: func() (bool, bool) { u.mu.Lock(); defer u.mu.Unlock(); return u.at, u.known },
 		awayMin:  func() int { u.mu.Lock(); defer u.mu.Unlock(); return u.awayMin },
-		term:     func() int64 { u.mu.Lock(); defer u.mu.Unlock(); return u.term },
 	}
 	u.m.wake = func(_ context.Context, reason, detail string) error {
 		u.mu.Lock()
@@ -213,7 +212,8 @@ func TestUserBack_ReadsThePresenceStateAndTheFleetRoleFromTheRegistry(t *testing
 	// nothing registered: not known, and not the primary
 	at, known := r.m.presenceState()
 	require.False(t, at || known)
-	require.False(t, r.m.isFleetPrimary())
+	isPrimary := func() bool { p, _ := r.m.fleetRole(); return p }
+	require.False(t, isPrimary())
 
 	// a value that is only an AtComputerReader says nothing about "not known"
 	r.m.core.Registry.Register(push.AtComputerKey, push.AtComputerReader(atComputerOnly(true)))
@@ -226,11 +226,35 @@ func TestUserBack_ReadsThePresenceStateAndTheFleetRoleFromTheRegistry(t *testing
 
 	role := ifleet.NewFakeRole(ifleet.RoleState{Role: ifleet.RoleStandby, Self: "mlab", Primary: "air26"})
 	r.m.core.Registry.Register(fleetmod.RoleViewKey, ifleet.RoleView(role))
-	require.False(t, r.m.isFleetPrimary(), "a standby")
+	require.False(t, isPrimary(), "a standby")
 	role.Set(ifleet.RoleState{Role: ifleet.RolePrimary, Term: 2, Self: "mlab"})
-	require.True(t, r.m.isFleetPrimary())
+	p, term := r.m.fleetRole()
+	require.True(t, p)
+	require.EqualValues(t, 2, term)
 	role.Set(ifleet.RoleState{Role: ifleet.RoleOff, Self: "mlab", Reason: "disabled"})
-	require.False(t, r.m.isFleetPrimary(), "fleet off")
+	require.False(t, isPrimary(), "fleet off")
+}
+
+// the role changes while the settings are being read, after the return was seen: a daemon that is no longer the primary does not tell
+func TestUserBack_TheRoleChangingBeforeTheWakeMeansNoWake(t *testing.T) {
+	for name, flip := range map[string]func(u *ubRig){
+		"to standby":    func(u *ubRig) { u.primary = false },
+		"to a new term": func(u *ubRig) { u.term++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			u := newUBRig(t)
+			u.step(0, true)
+			u.step(time.Minute, false)
+			u.m.ubsrc.awayMin = func() int { // the settings are read here; the role moves meanwhile
+				u.mu.Lock()
+				defer u.mu.Unlock()
+				flip(u)
+				return u.awayMin
+			}
+			u.step(time.Hour, true)
+			require.Zero(t, u.woke())
+		})
+	}
 }
 
 // The loop takes a reading every tick, ends with Stop, and a reading that is a return wakes through the module's own WakeWatcher seam.

@@ -38,10 +38,9 @@ func (s *userBackState) reset() { s.primed, s.atPrev, s.awaySince = false, false
 
 // userBackSources are the facts a reading depends on (nil fields: the registry's services and the settings).
 type userBackSources struct {
-	primary  func() bool
+	role     func() (primary bool, term int64)
 	presence func() (atComputer, known bool)
 	awayMin  func() int
-	term     func() int64
 }
 
 // presenceState is what the push module's presence says: at the computer, and whether any report says anything. A value that is only an
@@ -58,30 +57,22 @@ func (m *Module) presenceState() (atComputer, known bool) {
 	return false, false
 }
 
-// isFleetPrimary says whether this daemon is the fleet's primary now; with no fleet module, or the fleet off, it is not.
-func (m *Module) isFleetPrimary() bool {
-	if m.ubsrc != nil && m.ubsrc.primary != nil {
-		return m.ubsrc.primary()
+// fleetRole is one reading of the fleet's role: whether this daemon is the primary now, and the term that reading is of. With no fleet module,
+// or the fleet off, it is not the primary.
+func (m *Module) fleetRole() (primary bool, term int64) {
+	if m.ubsrc != nil && m.ubsrc.role != nil {
+		return m.ubsrc.role()
 	}
 	svc, ok := m.core.Registry.Get(fleetmod.RoleViewKey)
 	if !ok {
-		return false
+		return false, 0
 	}
 	rv, ok := svc.(ifleet.RoleView)
-	return ok && rv.State().Role == ifleet.RolePrimary
-}
-
-// fleetTerm is the fleet's term now; 0 with no fleet module.
-func (m *Module) fleetTerm() int64 {
-	if m.ubsrc != nil && m.ubsrc.term != nil {
-		return m.ubsrc.term()
+	if !ok {
+		return false, 0
 	}
-	if svc, ok := m.core.Registry.Get(fleetmod.RoleViewKey); ok {
-		if rv, ok := svc.(ifleet.RoleView); ok {
-			return rv.State().Term
-		}
-	}
-	return 0
+	st := rv.State()
+	return st.Role == ifleet.RolePrimary, st.Term
 }
 
 // userBackAwayMin is rules.user_back.away_min of the settings this host has now (the source's document, or its copy of it); the default when
@@ -110,7 +101,8 @@ func (m *Module) userBackAwayMin() int {
 // userBackStep takes one reading and, when the person has come back after being away long enough, wakes the watcher.
 func (m *Module) userBackStep(ctx context.Context) {
 	st := &m.ub
-	if !m.isFleetPrimary() {
+	primary, term := m.fleetRole()
+	if !primary {
 		st.mu.Lock()
 		st.reset()
 		st.mu.Unlock()
@@ -118,7 +110,6 @@ func (m *Module) userBackStep(ctx context.Context) {
 	}
 	at, known := m.presenceState()
 	now := m.now()
-	term := m.fleetTerm()
 	var awayFor time.Duration
 	back := false
 	st.mu.Lock()
@@ -145,6 +136,14 @@ func (m *Module) userBackStep(ctx context.Context) {
 	}
 	st.mu.Unlock()
 	if !back || awayFor < time.Duration(m.userBackAwayMin())*time.Minute {
+		return
+	}
+	// the role is read again right before the wake: reading the settings above can take a while, and a daemon that is no longer the primary
+	// (or is in another term) does not tell
+	if again, termAgain := m.fleetRole(); !again || termAgain != term {
+		st.mu.Lock()
+		st.reset()
+		st.mu.Unlock()
 		return
 	}
 	// the state is already moved on: a wake that fails is not sent again (the person is at the computer, and the next one is a new absence)
