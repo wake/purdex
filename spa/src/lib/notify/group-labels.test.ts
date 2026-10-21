@@ -15,8 +15,8 @@ const manual = { order: ['g1', 'g2'], groups: {
 } }
 const teamView = (name: string, lead = 'lead-title', seats: string[] = []): TeamView => ({
   key: 'h1\u0000T1', hostId: 'h1', teamId: 'T1', createdAt: 1, name, label: '', colorIndex: 0,
-  lead: { label: lead, session: { session_id: 'LEAD' } } as never,
-  members: seats.map((id) => ({ session: { session_id: id } }) as never),
+  lead: { label: lead, hostId: 'h1', session: { session_id: 'LEAD' } } as never,
+  members: seats.map((id) => ({ hostId: 'h1', session: { session_id: id } }) as never),
 })
 const roots: Record<string, string> = {}
 const rootOf = (h: string, s: string) => roots[`${h}:${s}`] ?? null
@@ -49,6 +49,11 @@ describe('(b) tab.group', () => {
   it('a session with a team seat is not written (the daemon names the team)', () => {
     roots['h1:S7'] = 'R7'
     expect(run('h1', [tabOf('t1', 'h1', 'S7', teamGroupKey('h1\u0000T1'))], [teamView('Crew', 'x', ['S7'])]).labels.find((l) => l.root_session_id === 'R7')).toBeUndefined()
+  })
+  it('a seat on another host does not hide the same session id here (codex R1)', () => {
+    roots['h2:S7'] = 'R7'
+    const p = run('h2', [tabOf('t1', 'h2', 'S7', manualGroupKey('g1'))], [teamView('Crew', 'x', ['S7'])])
+    expect(p.labels).toContainEqual({ root_session_id: 'R7', group: 'Alpha' })
   })
   it('a group that no longer exists is no placement', () => {
     roots['h1:S6'] = 'R6'

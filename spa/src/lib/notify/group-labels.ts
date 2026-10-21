@@ -35,8 +35,10 @@ export function projectGroupLabels({ hostId, manual, tabs, views, rootOf }: Proj
     if (!group) continue
     for (const m of group.members) if (m.host === hostId && !byRoot.has(m.root)) byRoot.set(m.root, group.name)
   }
+  // A seat is (host, session): the same session id may live on two hosts (a relay keeps it). A seat whose host this Mac does not know matches the id on any host.
   const seated = new Set<string>()
-  for (const v of views) { seated.add(v.lead.session.session_id); for (const m of v.members) seated.add(m.session.session_id) }
+  for (const v of views) for (const seat of [v.lead, ...v.members]) seated.add(`${seat.hostId ?? '*'}\u0000${seat.session.session_id}`)
+  const isSeated = (host: string, session: string) => seated.has(`${host}\u0000${session}`) || seated.has(`*\u0000${session}`)
   const wanted: Projection['wanted'] = []
   const claimed = new Set<string>()
   for (const tabId of Object.keys(tabs).sort()) {
@@ -48,7 +50,7 @@ export function projectGroupLabels({ hostId, manual, tabs, views, rootOf }: Proj
     else if (key?.kind === 'team') { const v = views.find((x) => x.key === key.teamKey); name = v ? panelName(v).text : null }
     if (name === null || name === '') continue
     const s = sessionOfTab(tab)
-    if (s === null || s.hostId !== hostId || s.agentSessionId === null || seated.has(s.agentSessionId)) continue
+    if (s === null || s.hostId !== hostId || s.agentSessionId === null || isSeated(s.hostId, s.agentSessionId)) continue
     wanted.push({ hostId, agentSessionId: s.agentSessionId })
     const root = rootOf(hostId, s.agentSessionId)
     if (root === null || byRoot.has(root) || claimed.has(root)) continue

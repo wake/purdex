@@ -18,10 +18,14 @@ import { projectGroupLabels } from './group-labels'
 import { NOTIFY_GROUP_LABELS_MAX, NOTIFY_GROUP_LABELS_PATH } from './types'
 
 export const GROUP_LABELS_DEBOUNCE_MS = 500
+const WRITE_TIMEOUT_MS = 10_000
 
 export function startGroupLabelsWriter(): () => void {
   const lastSent = new Map<string, string>() // host id → the serialised labels last sent (or tried) on this connection
   let timer: ReturnType<typeof setTimeout> | null = null
+
+  // One write at a time per host: the daemon keeps whichever whole set lands last, so a newer set must never overtake an older one still out. A change made meanwhile is written once the first answers.
+  const inFlight = new Set<string>()
 
   const send = (hostId: string, labels: unknown[], key: string) => {
     lastSent.set(hostId, key)
@@ -29,13 +33,16 @@ export function startGroupLabelsWriter(): () => void {
       console.error(`notify group labels: ${labels.length} labels for host ${hostId} exceed ${NOTIFY_GROUP_LABELS_MAX}; not sent`)
       return
     }
+    inFlight.add(hostId)
+    const done = () => { inFlight.delete(hostId); schedule() }
     hostFetch(hostId, NOTIFY_GROUP_LABELS_PATH, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device: getClientId(), labels }),
+      signal: AbortSignal.timeout(WRITE_TIMEOUT_MS), // a write that never answers must not hold the host's slot
     }).then(
-      (res) => { if (!res.ok) console.error(`notify group labels: host ${hostId} answered ${res.status}`) },
-      (err) => console.error('notify group labels: write failed', err),
+      (res) => { if (!res.ok) console.error(`notify group labels: host ${hostId} answered ${res.status}`); done() },
+      (err) => { console.error('notify group labels: write failed', err); done() },
     )
   }
 
@@ -53,7 +60,7 @@ export function startGroupLabelsWriter(): () => void {
       const p = projectGroupLabels({ hostId, manual: { order: manual.order, groups: manual.groups }, tabs, views, rootOf })
       wanted.push(...p.wanted)
       const key = JSON.stringify(p.labels)
-      if (lastSent.get(hostId) !== key) send(hostId, p.labels, key)
+      if (lastSent.get(hostId) !== key && !inFlight.has(hostId)) send(hostId, p.labels, key)
     }
     for (const hostId of [...lastSent.keys()]) if (!hosts[hostId]) lastSent.delete(hostId)
     setRootsInterest(wanted.length > 0, wanted, 'notify')

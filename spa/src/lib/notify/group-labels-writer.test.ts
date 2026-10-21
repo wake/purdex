@@ -93,6 +93,18 @@ describe('when it writes', () => {
     expect(err).toHaveBeenCalled()
     err.mockRestore()
   })
+  it('a newer set waits for the write still out, then goes (codex R1: no overtaking)', async () => {
+    let finish: (v: unknown) => void = () => {}
+    hostFetch.mockImplementationOnce(() => new Promise((r) => { finish = r }))
+    setGroups({ g1: group('First', [{ host: 'h1', root: 'R1' }]) })
+    tick()
+    setGroups({ g1: group('Second', [{ host: 'h1', root: 'R1' }]) })
+    tick()
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+    finish({ ok: true, status: 200 })
+    await vi.advanceTimersByTimeAsync(GROUP_LABELS_DEBOUNCE_MS)
+    expect(bodies().map((b) => b.labels[0].group)).toEqual(['First', 'Second'])
+  })
   it('more than the cap is not sent and not cut', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     setGroups({ g1: group('Big', Array.from({ length: NOTIFY_GROUP_LABELS_MAX + 1 }, (_, i) => ({ host: 'h1', root: `R${i}` }))) })
