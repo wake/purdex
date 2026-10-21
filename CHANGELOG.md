@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.773] - 2026-10-21
+
+> **WWD-9 組二：舊閘門的 shim 與輔測（assist）整個拿掉。** daemon、`pdx` CLI、`wwd` 與 **mod** 有改：**部署要重跑 `pdx setup`**，它會刪掉 `~/.config/pdx/shims` 裡我們寫的 10 個檔（目錄空了才刪目錄）。**部署前要先在舊版 daemon 上 `pdx assist off air26`**，而且只能在 air26 的 wwd 沒有工作在跑時做（`assist-off` 會收掉指令列帶 `~/Assist/` 的行程，包含 wwd 的 go 工具鏈），見 `docs/wwd-deploy.md` §18。SPA 與 Electron 外殼都沒改，**這版不重新打包 Mac App、使用者不必更新**。依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`facts.tools` 多一個選填的 `claude`）。**結果快取的鍵升到第 2 版**：部署後各主機的快取會從頭累積一次。
+>
+> 舊 shell 若報找不到指令（PATH 裡還有已刪的 shims 目錄），`rehash` 或開新 shell 即可。
+
+### Removed：WWD-9 組二
+
+- **shim（9a-1，#3905）**：刪 `internal/gate/shim` 與 `--uninstall-gate`；`pdx setup --agent cc` 刪掉 shims 目錄裡我們寫的檔（逐 byte 確認是我們產生的才刪）。直通需要的指令解析搬進 `cmd/pdx`。
+- **mod 的閘門排隊（9a-2，#3907）**：`hooks/gate.js` 只留分詞與 wwd 的 entry 改寫；刪 pdx-gate skill；pdx-test skill 與 repo `CLAUDE.md` 改成 wwd 的說法。
+- **輔測（assist）（9b-1～9b-3，#3911、#3916、#3918）**：刪閘門的 assist 引擎、送出紀錄與 `.out` ticket、`pdx assist`、`pdx gate hosts`、`pdx gate history`、`module/assist`（`/api/assist*`）與資料模型；pdx-watch skill 的輔測一節拿掉。`decisions.jsonl` 舊的行多出的鍵不影響讀取。
+
+### Fixed
+
+- **wwd 工作帶上 USER、LOGNAME（#3924，#3919）**：取實際執行的帳號（Linux 有 sandbox 時用 `sandbox_user`），manifest 不能覆寫。修好 aigora-ios `test-ui` 在 wwd 上 400ms 就以「Couldn't find current username」失敗的問題。結果快取鍵升到第 2 版，舊的成功結果不再重用。（改 `sandbox_user` 時要清該主機的 result_cache，#3927。）
+- **task 能宣告需要 claude（#3910，#3908 a）**：wwd 探測 `claude`、產出 `tool:claude` 標籤；`mod-hooks` 帶上它，沒有 claude 的主機就不會領。
+- **找不到執行檔只退避那個 task（#3915，#3908 b）**：以前一次 infra 放回會讓該來源的整個 repo 暫停 5 分鐘（10-21 佇列停了 10 分鐘的原因）；現在只有「命令起不來、找不到執行檔」改成對 (來源, repo, task) 退避（15 秒起倍增、上限 5 分鐘），其他 infra 照舊暫停 repo。
+- **daemon 的兩處 fork 改走 execstat（#3917，#3912）**：`snapshot/worktree.go` 與 `reap_children.go`。
+
+### Changed
+
+- 佇列警報與「讓快主機」共用的空位判斷搬到 `derived.HeavyRoomFor`（#3922，純搬移，#3904 的前半）。
+
 ## [1.0.0-alpha.772] - 2026-10-21
 
 > **B 線 D1 出版：App 不再讀舊 fleet，請使用者更新 Mac App。** 這一版同時把 settings 的 ordinal 從 13 升到 14（MON-12c）：**還沒更新的 Mac App，settings 同步會鎖住，直到更新為止。** iOS App 不讀也不寫 settings 的 ordinal，不受影響，這版不換 iOS OTA。daemon、`wwd`、SPA 有改；**mod 沒改，不用重跑 `pdx setup`**；Electron 外殼的程式與 771 相同；依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`InfoWorker` 多一個選填欄位 `explicit_labels_only`，舊版讀不到就當 false）。
