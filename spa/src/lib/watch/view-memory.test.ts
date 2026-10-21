@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  clearViewMemory,
+  clearViewMemory, readProcAt, writeProcAt,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -56,5 +56,19 @@ describe('watch view memory — the events tab (MON-10c)', () => {
     expect(readEventsObservations().forbidden).toEqual(['mserv'])
     clearViewMemory()
     expect([readEventFilters().host, readEventsScroll(), readEventsObservations().forbidden]).toEqual(['all', 0, []])
+  })
+})
+
+describe('the 行程 tab\'s picked record (MON-8b)', () => {
+  it('is the time of the record, per host; null is the live one; clearing forgets it', () => {
+    expect(readProcAt('h1')).toBeNull()
+    writeProcAt('h1', 1_800_000_000_000)
+    writeProcAt('h2', 5)
+    expect([readProcAt('h1'), readProcAt('h2')]).toEqual([1_800_000_000_000, 5])
+    writeProcAt('h1', null)
+    expect(readProcAt('h1')).toBeNull()
+    expect(readProcAt('h2')).toBe(5)
+    clearViewMemory()
+    expect(readProcAt('h2')).toBeNull()
   })
 })

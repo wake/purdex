@@ -181,3 +181,17 @@ func teamLine(t team.Team) string {
 	}
 	return "team: " + name + " ［" + label + "］"
 }
+
+// getResources is one GET /api/resources: the daemon's body as written, and
+// decoded. An answer that is not a snapshot is an error.
+func getResources(ctx context.Context, client *daemonclient.Client) (json.RawMessage, resources.Snapshot, error) {
+	var raw json.RawMessage
+	var snap resources.Snapshot
+	if _, err := client.Do(ctx, http.MethodGet, "/api/resources", nil, &raw); err != nil {
+		return nil, snap, err
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return nil, snap, fmt.Errorf("the answer is not a resources snapshot: %w", err)
+	}
+	return raw, snap, nil
+}

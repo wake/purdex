@@ -12,6 +12,8 @@ const hostTabs = new Map<string, HostSubTab>()
 const hostRanges = new Map<string, HostRange>()
 /** `${host_id}\0${sub-tab}` → scrollTop. */
 const scrolls = new Map<string, number>()
+/** The 行程 tab's picked record: its time (not a place on the timeline: the live end keeps moving), null = the live one. */
+const procAts = new Map<string, number>()
 
 /** The 事件 tab's three chip filters (one set: the tab exists once). */
 export const DEFAULT_EVENT_FILTERS: EventFilters = { host: 'all', source: 'all', status: 'all' }
@@ -41,6 +43,8 @@ export const writeHostRange = (hostId: string, range: HostRange): void => { host
 export const readHostScroll = (hostId: string, sub: HostSubTab): number => scrolls.get(`${hostId}\0${sub}`) ?? 0
 export const writeHostScroll = (hostId: string, sub: HostSubTab, top: number): void => { scrolls.set(`${hostId}\0${sub}`, top) }
 
+export const readProcAt = (hostId: string): number | null => procAts.get(hostId) ?? null
+export const writeProcAt = (hostId: string, at: number | null): void => { if (at === null) procAts.delete(hostId); else procAts.set(hostId, at) }
 export const readEventFilters = (): EventFilters => eventFilters
 export const writeEventFilters = (f: EventFilters): void => { eventFilters = f }
 export const readEventsScroll = (): number => eventsScroll
@@ -48,6 +52,6 @@ export const writeEventsScroll = (top: number): void => { eventsScroll = top }
 export const readEventsObservations = (): EventsObservations => eventsObservations
 export const writeEventsObservations = (o: EventsObservations): void => { eventsObservations = o }
 export const clearViewMemory = (): void => {
-  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); eventFilters = DEFAULT_EVENT_FILTERS
+  hostTabs.clear(); hostRanges.clear(); scrolls.clear(); procAts.clear(); eventFilters = DEFAULT_EVENT_FILTERS
   eventsScroll = 0; eventsObservations = NO_OBSERVATIONS
 }

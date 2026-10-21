@@ -27,8 +27,8 @@ type Input struct {
 	Peers func() []PeerDown
 	// PartnerSeen is when the local Purdex daemon last read this host's alerts; nil: not available (a replay, or a host without a daemon).
 	PartnerSeen func() time.Time
-	// StartsSince is the number of wwd starts recorded at or after since; nil: not available.
-	StartsSince func(since time.Time) (int, error)
+	// UncleanStartsSince is the number of wwd starts recorded at or after since that followed a run that did not end cleanly; nil: not available.
+	UncleanStartsSince func(since time.Time) (int, error)
 	// WorkRoot is the directory jobs run in: the volume that holds it is the host's work volume (spec §13.3 "disk low").
 	WorkRoot string
 	// Raised says whether the alert with this key is active now (the evaluator fills it; nil: none is). A rule that must not flap around its
