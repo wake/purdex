@@ -10,11 +10,10 @@ import { HostBadge } from '../HostBadge'
 import { HostStateIcon } from '../../components/fleet/HostStateIcon'
 import { SegmentControl } from '../settings/SegmentControl'
 import { RANGE_MS, type HostRange } from '../../lib/pool/host-history'
-import { hostExtraOf } from '../../lib/pool/host-extra'
 import { useMonitorHosts, type MonitorHost } from '../../lib/pool/use-monitor-hosts'
 import { livenessWord, notOkLines, clock } from '../../lib/pool/words'
 import { readHostRange, readHostScroll, readHostTab, writeHostRange, writeHostScroll, writeHostTab, type HostSubTab } from '../../lib/watch/view-memory'
-import { AvailRow } from './AvailRow'
+import { StatusTab } from './host/StatusTab'
 import { SettingsTab } from './host/SettingsTab'
 import { MonitorTab } from './host/MonitorTab'
 import { ProcTab } from './host/ProcTab'
@@ -126,10 +125,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         </div>
         <Banner host={host} now={now} />
         {sub === 'monitor' && <MonitorTab host={host} range={range} now={now} />}
-        {sub === 'status' && (<>
-          {st.state === 'ok' && <AvailRow pool={hostExtraOf(st, st.pool)} exceptions={st.facts.exceptions} at={st.facts.at} now={now} />}
-          <p className="text-xs text-text-muted" data-testid="status-later">{t('watch.host.status_later')}</p>
-        </>)}
+        {sub === 'status' && <StatusTab host={host} range={range} now={now} sourceAlias={hosts.find((h) => h.local)?.alias ?? null} />}
         {sub === 'procs' && <ProcTab host={host} now={now} />}
         {sub === 'settings' && <SettingsTab host={host} />}
       </div>

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  readQueueTab, writeQueueTab, clearViewMemory, readProcAt, writeProcAt, readObsExpanded, writeObsExpanded,
+  clearViewMemory, readProcAt, writeProcAt, readLookMode, writeLookMode, readObsExpanded, writeObsExpanded,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -15,6 +15,17 @@ describe('watch view memory — the host page\'s sub-tab (MON-6f-1)', () => {
     expect([readHostTab('h1'), readHostTab('h2'), readHostTab('h3')]).toEqual(['settings', 'procs', 'monitor'])
     clearViewMemory()
     expect(readHostTab('h1')).toBe('monitor')
+  })
+})
+
+describe('watch view memory — the colour mode of the host page\'s look editor (MON-9a-3)', () => {
+  it('defaults to the terminal mode (the one the sidebar uses), is kept per host and cleared with the rest', () => {
+    expect(readLookMode('h1')).toBe('terminal')
+    writeLookMode('h1', 'console')
+    writeLookMode('h2', 'execution')
+    expect([readLookMode('h1'), readLookMode('h2'), readLookMode('h3')]).toEqual(['console', 'execution', 'terminal'])
+    clearViewMemory()
+    expect(readLookMode('h1')).toBe('terminal')
   })
 })
 
@@ -40,19 +51,6 @@ describe('watch view memory — the host page\'s scroll', () => {
     expect([readHostScroll('h1', 'monitor'), readHostScroll('h1', 'procs'), readHostScroll('h1', 'status'), readHostScroll('h2', 'monitor')]).toEqual([120, 40, 0, 7])
     clearViewMemory()
     expect(readHostScroll('h1', 'monitor')).toBe(0)
-  })
-})
-
-describe('watch view memory — queue sub-tab (the old gate\'s, until MON-12)', () => {
-  it('defaults to 當下 (now) and is kept per host', () => {
-    expect(readQueueTab('h1')).toBe('now')
-    writeQueueTab('h1', 'history')
-    expect([readQueueTab('h1'), readQueueTab('h2')]).toEqual(['history', 'now'])
-  })
-  it('is cleared with the rest', () => {
-    writeQueueTab('h1', 'history')
-    clearViewMemory()
-    expect(readQueueTab('h1')).toBe('now')
   })
 })
 

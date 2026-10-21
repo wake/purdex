@@ -20,8 +20,8 @@ import (
 // Only a rewrite that is queued is judged: the local fast lane and the ad-hoc job need no other host (a queued task with no labels needs any
 // worker that is on and reachable).
 //
-// Known gap: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its os: label
-// or a task: label it earned). Labels that such a host satisfies, while it will not take the job, still pass here, and the call then waits
+// Known gap: the pool does not show a host's `explicit_labels_only` (a worker setting: mserv takes only jobs whose labels name its os: label,
+// a task: label it earned or a host: label). Labels that such a host satisfies, while it will not take the job, still pass here, and the call then waits
 // in the background until the queue timeout. Purdex does not meet it: purdex_manifest_test makes every queued task carry os:darwin or its own
 // task: label. When another repo does, the setting has to become a field of the host's info.
 func GateOnPool(r Result, pool wire.Pool, poolErr error) Result {

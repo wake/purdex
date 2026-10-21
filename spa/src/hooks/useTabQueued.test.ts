@@ -1,4 +1,4 @@
-// spa/src/hooks/useTabQueued.test.ts — WWD-7b1-6: the tab's hourglass is lit by a pool job of its session (queued, claimed or running) as well as by a gate waiter, until WWD-9.
+// spa/src/hooks/useTabQueued.test.ts — WWD-7b1-6: the tab's hourglass is lit by a pool job of its session (queued, claimed or running). The old gate's waiters are not read any more (MON-12a-4).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useTabQueued } from './useTabQueued'
@@ -10,7 +10,6 @@ vi.mock('../lib/pool/jobs-lanes', async (orig) => {
 })
 import { useJobsStore } from '../lib/pool/jobs-store'
 import { usePoolStore } from '../lib/pool/store'
-import { useFleetStore } from '../lib/fleet/store'
 import type { PoolJob } from '../lib/pool/jobs-types'
 import type { TabAgentPane } from '../lib/agent-lights/tab-aggregate'
 
@@ -26,7 +25,6 @@ const pane = (key: string, sessionId?: string): TabAgentPane => ({ key, hostId: 
 beforeEach(() => {
   useJobsStore.getState().reset()
   usePoolStore.setState({ hosts: [] } as never)
-  useFleetStore.setState({ snapshot: null, primaryHostId: null } as never)
 })
 
 describe('useTabQueued with pool jobs', () => {
@@ -39,7 +37,6 @@ describe('useTabQueued with pool jobs', () => {
     const { result } = renderHook(() => useTabQueued([pane('k1', 'sess-1')])) // the session id matches whatever the case
     expect([...result.current.keys]).toEqual(['k1'])
     expect(result.current.jobs.map((j) => j.jobId)).toEqual(['j1'])
-    expect(result.current.waiters).toEqual([])
   })
 
   it('two jobs of one session: both are in the mark', () => {

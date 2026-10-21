@@ -28,6 +28,9 @@ func TestGate_AutoNonHeavyNeverAsksTheWWD(t *testing.T) {
 	gateHoldFetch = func(context.Context) ([]wire.Exception, error) { calls.Add(1); return nil, nil }
 	t.Cleanup(func() { gateHoldFetch = nil })
 	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n")
+	old := gateExec
+	gateExec = func(string, []string, []string) error { return nil }
+	t.Cleanup(func() { gateExec = old })
 	var out, errb bytes.Buffer
 	code := gateMain([]string{"--config", cfg, "--auto", "--", "sh", "-c", "true"}, &out, &errb)
 	assert.Equal(t, 0, code)
