@@ -379,17 +379,33 @@ const (
 	BlockNotOurs
 )
 
-// blockBodyOurs says whether the lines between the markers are what pdx has written: the first version's one line, or the five lines of the
-// current block (for any shim directory). Anything else, an added line included, is not provably ours.
+// oldBodyLine are the groups of the first version's single line: the directory twice.
+var oldBodyLine = regexp.MustCompile(`^case ":\$PATH:" in \*":(.*):"\*\) ;; \*\) PATH="(.*):\$PATH" ;; esac$`)
+
+// frontLine are the groups of the current block's first line: the directory twice.
+var frontLine = regexp.MustCompile(`^path=\("(.*)" \$\{path:#"(.*)"\}\)$`)
+
+// canonicalDir says whether q is the double-quoted form shQuoteInner writes for the directory it spells.
+func canonicalDir(q string) bool { return shQuoteInner(shUnquoteInner(q)) == q }
+
+// blockBodyOurs says whether the lines between the markers are what pdx has written: the first version's one line, or the current block
+// regenerated from the directory its first line names and compared line for line. The same directory must stand at every place, spelled as
+// the generator spells it; anything else, an added line included, is not provably ours.
 func blockBodyOurs(inner []string) bool {
-	if len(inner) == 1 && bodyLine.MatchString(inner[0]) {
-		return true
+	if len(inner) == 1 {
+		m := oldBodyLine.FindStringSubmatch(inner[0])
+		return m != nil && m[1] == m[2] && canonicalDir(m[1])
 	}
 	if len(inner) != len(bodyLines) {
 		return false
 	}
-	for i, re := range bodyLines {
-		if !re.MatchString(inner[i]) {
+	m := frontLine.FindStringSubmatch(inner[0])
+	if m == nil || m[1] != m[2] || !canonicalDir(m[1]) {
+		return false
+	}
+	want := blockBody(shUnquoteInner(m[1]))
+	for i := range want {
+		if inner[i] != want[i] {
 			return false
 		}
 	}

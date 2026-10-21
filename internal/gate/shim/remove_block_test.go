@@ -203,11 +203,15 @@ func TestRemoveBlock_MarkersAroundTextThatIsNotOursLeaveTheWholeFile(t *testing.
 	block := Block("/h/.config/pdx/shims")
 	body := strings.Split(block, "\n")
 	for name, in := range map[string]string{
-		"a here-document of the user's that holds both lines": "cat <<'EOF' > /tmp/x\n" + blockBegin + "\nmy own data\nEOF-not-yet\n" + blockEnd + "\nEOF\n",
-		"a line added inside a real block":                    blockBegin + "\n" + body[1] + "\necho mine\n" + strings.Join(body[2:], "\n"),
-		"a real line edited":                                  blockBegin + "\n" + strings.Replace(body[1], "path=", "PATH=", 1) + "\n" + strings.Join(body[2:], "\n"),
-		"an empty block":                                      blockBegin + "\n" + blockEnd + "\n",
-		"a good block and one of the user's":                  block + "mid\n" + blockBegin + "\ndata\n" + blockEnd + "\n",
+		"a here-document of the user's that holds both lines":    "cat <<'EOF' > /tmp/x\n" + blockBegin + "\nmy own data\nEOF-not-yet\n" + blockEnd + "\nEOF\n",
+		"a line added inside a real block":                       blockBegin + "\n" + body[1] + "\necho mine\n" + strings.Join(body[2:], "\n"),
+		"a real line edited":                                     blockBegin + "\n" + strings.Replace(body[1], "path=", "PATH=", 1) + "\n" + strings.Join(body[2:], "\n"),
+		"an empty block":                                         blockBegin + "\n" + blockEnd + "\n",
+		"the five lines with the directory of one place changed": strings.Replace(block, "_pdx_gate_front() { path=(\"/h/", "_pdx_gate_front() { path=(\"/x/", 1),
+		"the first line with two directories":                    strings.Replace(block, `${path:#"/h/`, `${path:#"/y/`, 1),
+		"a directory spelled in a way the generator does not":    strings.ReplaceAll(block, "/h/.config", `/h/\.config`),
+		"the one-line form with two directories":                 blockBegin + "\n" + `case ":$PATH:" in *":/a:"*) ;; *) PATH="/b:$PATH" ;; esac` + "\n" + blockEnd + "\n",
+		"a good block and one of the user's":                     block + "mid\n" + blockBegin + "\ndata\n" + blockEnd + "\n",
 	} {
 		home := t.TempDir()
 		if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte(in), 0o644); err != nil {
@@ -236,6 +240,23 @@ func TestRemoveBlock_MarkersAroundTextThatIsNotOursLeaveTheWholeFile(t *testing.
 		}
 		if got := zshenvOf(t, home); got != in {
 			t.Errorf("%s: changed: %q", name, got)
+		}
+	}
+}
+
+// A directory with the characters the generator escapes is a block of ours: it is regenerated from the directory and matches.
+func TestRemoveBlock_ADirectoryWithQuotesAndDollarsIsStillOurs(t *testing.T) {
+	for _, dir := range []string{"/h/it's here/.config/pdx/shims", `/h/a "b" $c` + "`d`" + `\e/shims`, "/h/with space/shims", "/h/日本語/shims"} {
+		home := t.TempDir()
+		in := "a=1\n" + Block(dir) + "b=2\n"
+		if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte(in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := RemoveBlock(home); err != nil || out != BlockRemoved {
+			t.Errorf("%q: %v %v", dir, out, err)
+		}
+		if got := zshenvOf(t, home); got != "a=1\nb=2\n" {
+			t.Errorf("%q: %q", dir, got)
 		}
 	}
 }
