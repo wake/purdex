@@ -5,12 +5,14 @@ import { useEffect, useRef, useState } from 'react'
 import { usePoolStore } from './store'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import {
-  appendLive, dropLongTrack, holdTrack, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost,
+  appendLive, dropLongTrack, holdTrack, loadLong, loadShort, newestAt, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost,
   type HostLoad, type HostRange, type HostSample,
 } from './host-history'
 import type { PoolFacts } from './types'
 
 const TOP_UP_MS = 60_000
+/** A live record this much later than the short track's newest sample means live records were missed (the window was hidden); the 5 s history has them. */
+const LIVE_GAP_MS = 30_000
 
 export function useHostSeries(hostId: string, alias: string | null, range: HostRange, liveFacts: PoolFacts | null): { samples: HostSample[]; load: HostLoad; rev: number } {
   const source = usePoolStore((s) => s.sourceHostId)
@@ -33,7 +35,10 @@ export function useHostSeries(hostId: string, alias: string | null, range: HostR
   const at = liveFacts?.at ?? null
   useEffect(() => {
     if (!liveFacts) return
+    // Compare before the append: afterwards the newest sample is this record itself.
+    const newest = newestAt(hostId, 'short')
     appendLive(hostId, liveFacts)
+    if (five && source && alias && newest !== null && liveFacts.at - newest > LIVE_GAP_MS) void loadShort(source, alias, hostId, Date.now())
     // Only a new record time is news; the object itself changes with every pool answer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostId, at])

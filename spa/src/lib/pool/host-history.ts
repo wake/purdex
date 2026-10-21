@@ -204,6 +204,11 @@ function merge(have: HostSample[], add: HostSample[], keepMs: number, now: numbe
 export function readSamples(hostId: string, range: HostRange, now: number): HostSample[] {
   return (memory.get(hostId)?.tracks[readsFiveSecond(range) ? 'short' : 'long'] ?? []).filter((s) => s.at >= now - RANGE_MS[range] && s.at <= now + FUTURE_TOLERANCE_MS)
 }
+/** The time of the newest sample of this track, or null when it has none. */
+export const newestAt = (hostId: string, track: HostTrack): number | null => {
+  const t = memory.get(hostId)?.tracks[track] ?? []
+  return t.length > 0 ? t[t.length - 1].at : null
+}
 export const readHostLoad = (hostId: string, track: HostTrack): HostLoad => memory.get(hostId)?.loads[track] ?? 'idle'
 
 /** Whatever load of this track is out is called off: when it comes back it writes nothing (the page left, the range changed, nothing took its place). */

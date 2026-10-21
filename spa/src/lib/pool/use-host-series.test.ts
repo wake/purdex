@@ -38,13 +38,55 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('useHostSeries on a short range', () => {
+  const byStep = (five: PoolFacts[], one: PoolFacts[]) => fetchFactsHistory.mockImplementation(async (_s: string, _a: string, _since: string, step: string) => (
+    step === '5s' ? { step: '5s', records: five } : { step: '1m', records: one }
+  ))
   it('reads the 5 s history once on mount and returns the cut samples', async () => {
+    byStep([rec(1795, 70), rec(30, 50), rec(20, 60)], [])
     const { result } = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
     await flush()
     expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+    expect(fetchFactsHistory.mock.calls[0][3]).toBe('5s')
     expect(fetchPoolSeries).not.toHaveBeenCalled()
     expect(result.current.samples.map((s) => s.cpuPct)).toEqual([50, 40])
     expect(result.current.load).toBe('ok')
+  })
+  it('a 5 s history that only has the latest also reads the 1 minute records for the front', async () => {
+    byStep([rec(30, 50), rec(20, 60)], [rec(1500, 10), rec(600, 20)])
+    const { result } = renderHook(() => useHostSeries('h1', 'air26', '30m', null))
+    await flush()
+    expect(fetchFactsHistory.mock.calls.map((c) => c[3])).toEqual(['5s', '1m'])
+    expect(result.current.samples.map((s) => s.cpuPct)).toEqual([90, 80, 50, 40])
+  })
+  describe('a gap in the live records', () => {
+    const covered = () => byStep([rec(1795, 70), rec(30, 50), rec(20, 60)], [])
+    const fiveCalls = () => fetchFactsHistory.mock.calls.filter((c) => c[3] === '5s').length
+    it('a live record two minutes after the newest sample reads the 5 s history again', async () => {
+      covered()
+      const { rerender } = renderHook(({ f }: { f: PoolFacts | null }) => useHostSeries('h1', 'air26', '5m', f), { initialProps: { f: null as PoolFacts | null } })
+      await flush()
+      expect(fiveCalls()).toBe(1)
+      rerender({ f: rec(-100, 10) })
+      await flush()
+      expect(fiveCalls()).toBe(2)
+    })
+    it('a live record 5 s after the newest sample does not', async () => {
+      covered()
+      const { rerender } = renderHook(({ f }: { f: PoolFacts | null }) => useHostSeries('h1', 'air26', '5m', f), { initialProps: { f: null as PoolFacts | null } })
+      await flush()
+      rerender({ f: rec(15, 10) })
+      await flush()
+      expect(fiveCalls()).toBe(1)
+    })
+    it('an empty track is not read again because of a live record', async () => {
+      byStep([], [])
+      const { rerender } = renderHook(({ f }: { f: PoolFacts | null }) => useHostSeries('h1', 'air26', '5m', f), { initialProps: { f: null as PoolFacts | null } })
+      await flush()
+      expect(fiveCalls()).toBe(1)
+      rerender({ f: rec(-100, 10) })
+      await flush()
+      expect(fiveCalls()).toBe(1)
+    })
   })
   it('a new facts record joins at once; the same one again does not double', async () => {
     const live = rec(5, 10)
@@ -124,8 +166,8 @@ describe('useHostSeries on a long range', () => {
     const b = renderHook(() => useHostSeries('h1', 'air26', '5m', null))
     await flush()
     b.unmount()
-    resolveA({ step: '5s', records: [rec(20, 10)] }) // superseded by b's read
-    resolveB({ step: '5s', records: [rec(10, 60)] }) // the latest read lands though the page that made it left: a still holds the track
+    resolveA({ step: '5s', records: [rec(1795, 10), rec(20, 10)] }) // superseded by b's read
+    resolveB({ step: '5s', records: [rec(1795, 10), rec(10, 60)] }) // the latest read lands though the page that made it left: a still holds the track
     await flush()
     expect(a.result.current.samples.map((s) => s.cpuPct)).toEqual([40])
   })
@@ -187,6 +229,7 @@ describe('useHostSeries on a long range', () => {
     expect(fetchPoolSeries).toHaveBeenCalledTimes(1)
   })
   it('switching the range reads the other source', async () => {
+    fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(1795, 70), rec(30, 50)] })
     const { rerender } = renderHook(({ r }: { r: '5m' | '1h' }) => useHostSeries('h1', 'air26', r, null), { initialProps: { r: '5m' as '5m' | '1h' } })
     await flush()
     rerender({ r: '1h' })
