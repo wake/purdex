@@ -93,6 +93,58 @@ describe('loadShort', () => {
   })
 })
 
+describe('loadShort: backfill from the 1 minute records', () => {
+  // wwd keeps its 5 s records in memory only, so after a restart the front of the window is empty; the 1 minute step (wwd.db) still has it.
+  const byStep = (five: PoolFacts[], one: PoolFacts[] | Error) => fetchFactsHistory.mockImplementation(async (_s: string, _a: string, _since: string, step: string) => {
+    if (step === '5s') return { step: '5s', records: five }
+    if (one instanceof Error) throw one
+    return { step: '1m', records: one }
+  })
+  const stepsAsked = () => fetchFactsHistory.mock.calls.map((c) => c[3])
+  it('a 5 s answer that starts mid-window is topped up with the older minutes, in time order, once per time', async () => {
+    byStep([rec(600, 20), rec(300, 30)], [rec(1700, 11), rec(1500, 12), rec(1200, 13), rec(660, 14), rec(600, 99), rec(300, 98)])
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(stepsAsked()).toEqual(['5s', '1m'])
+    expect(fetchFactsHistory.mock.calls[1].slice(0, 3)).toEqual(fetchFactsHistory.mock.calls[0].slice(0, 3))
+    expect(cpus('h1', '30m')).toEqual([89, 88, 87, 86, 80, 70])
+  })
+  it('a 5 s answer that covers the window is not topped up', async () => {
+    byStep([rec(1795, 10), rec(300, 30)], [rec(1700, 1)])
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(stepsAsked()).toEqual(['5s'])
+    expect(cpus('h1', '30m')).toEqual([90, 70])
+  })
+  it('an empty 5 s answer takes every minute', async () => {
+    byStep([], [rec(1500, 10), rec(600, 20)])
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(stepsAsked()).toEqual(['5s', '1m'])
+    expect(cpus('h1', '30m')).toEqual([90, 80])
+  })
+  it('minutes at or after the oldest 5 s record are not taken', async () => {
+    byStep([rec(600, 20)], [rec(660, 5), rec(600, 99), rec(540, 98)])
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(cpus('h1', '30m')).toEqual([95, 80])
+  })
+  it('a failed top-up leaves the 5 s answer and the load ok', async () => {
+    byStep([rec(600, 20)], new Error('boom'))
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(readHostLoad('h1', 'short')).toBe('ok')
+    expect(cpus('h1', '30m')).toEqual([80])
+  })
+  it('a top-up that comes back after a later load started writes nothing', async () => {
+    const minute = deferred<{ step: string; records: PoolFacts[] }>()
+    fetchFactsHistory.mockImplementationOnce(async () => ({ step: '5s', records: [rec(600, 20)] }))
+    fetchFactsHistory.mockReturnValueOnce(minute.promise)
+    const early = loadShort('d1', 'air26', 'h1', NOW)
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    byStep([rec(10, 60)], [])
+    await loadShort('d1', 'air26', 'h1', NOW)
+    minute.resolve({ step: '1m', records: [rec(1500, 1)] })
+    await early
+    expect(cpus('h1', '30m')).toEqual([40])
+  })
+})
+
 describe('appendLive', () => {
   it('a new record joins; the same time twice is one sample', () => {
     appendLive('h1', rec(10, 80), NOW)

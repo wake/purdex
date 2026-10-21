@@ -213,6 +213,8 @@ export function invalidateHostHistory(hostId: string, track?: HostTrack): void {
   if (!track || track === 'long') m.longInFlight = null
 }
 
+/** How far into the window the oldest 5 s record may start and still count as covering it. */
+const BACKFILL_TOLERANCE_MS = 15_000
 const failure = (e: unknown): HostLoad => (e instanceof PoolReadError && e.poolError.code === 'host_not_local' ? 'host_not_local' : 'error')
 
 /** Reads wwd's last 30 minutes of 5 s records of `alias` through `source`'s daemon (the 5, 15 and 30 minute ranges are cut from it). Never throws. */
@@ -221,10 +223,21 @@ export async function loadShort(source: string, alias: string, hostId: string, n
   const mine = ++m.gen.short
   let records: PoolFacts[] = []
   let out: HostLoad
+  const since = new Date(now - RANGE_MS['30m'] - SKEW_MS).toISOString()
   try {
-    records = (await fetchFactsHistory(source, alias, new Date(now - RANGE_MS['30m'] - SKEW_MS).toISOString(), '5s')).records
+    records = (await fetchFactsHistory(source, alias, since, '5s')).records
     out = 'ok'
   } catch (e) { out = failure(e) }
+  // wwd keeps its 5 s records in memory only, so after it restarts the front of the window is empty. The 1 minute records live in wwd.db and span the restart: fill the front from them.
+  if (out === 'ok' && m.gen.short === mine) {
+    const oldest = records.reduce((min, r) => Math.min(min, r.at), Infinity)
+    if (!(oldest <= now - RANGE_MS['30m'] + BACKFILL_TOLERANCE_MS)) {
+      try {
+        const minutes = (await fetchFactsHistory(source, alias, since, '1m')).records.filter((r) => r.at < oldest)
+        records = [...minutes, ...records]
+      } catch { /* the 5 s answer stands */ }
+    }
+  }
   // A later load for this host started while this one was out: it owns the memory now, whatever this one found.
   if (m.gen.short !== mine) return m.loads.short
   if (out === 'ok') m.tracks.short = merge(m.tracks.short, records.map(sampleOfFacts), KEEP_MS.short, now)
