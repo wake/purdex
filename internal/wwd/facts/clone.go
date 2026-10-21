@@ -31,6 +31,7 @@ func Clone(f wire.Facts) wire.Facts {
 		out.Stats = &st
 	}
 	out.Queue = clonePtr(f.Queue)
+	out.Worker.Waiting = clonePtr(f.Worker.Waiting)
 	out.ProcsTotal, out.BootAt = clonePtr(f.ProcsTotal), clonePtr(f.BootAt)
 	if f.Self != nil {
 		self := wire.Self{CPUPct: clonePtr(f.Self.CPUPct), RSSMB: clonePtr(f.Self.RSSMB)}
