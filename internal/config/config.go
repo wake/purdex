@@ -331,6 +331,10 @@ func (c Config) Clone() Config {
 		}
 		out.Journal = &j
 	}
+	if c.Watch != nil {
+		w := *c.Watch
+		out.Watch = &w
+	}
 
 	return out
 }
@@ -354,6 +358,8 @@ type Config struct {
 	Push         *PushConfig    `toml:"push,omitempty" json:"push,omitempty"`
 	// Journal is a pointer for the reason Push is: a config without the section is written back without one.
 	Journal *JournalConfig `toml:"journal,omitempty" json:"journal,omitempty"`
+	// Watch is the [watch] section (the source of the watcher's wake settings); a pointer for the same reason.
+	Watch *WatchConfig `toml:"watch,omitempty" json:"watch,omitempty"`
 
 	// Path is the file Load read (or would have read: a missing file still
 	// sets it), so a caller can name this daemon's config to a child — the
