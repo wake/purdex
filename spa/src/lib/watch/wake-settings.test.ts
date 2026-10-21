@@ -11,14 +11,19 @@ import put403 from './__fixtures__/watch_wake_settings_put_403.json'
 import put409 from './__fixtures__/watch_wake_settings_put_409.json'
 import put503 from './__fixtures__/watch_wake_settings_put_503.json'
 import { fieldIdOfPath, hasAppMismatch } from './wake-settings-model'
+import { useHostStore } from '../../stores/useHostStore'
 
+// The page's `fetch` is what the host helper ends in: stubbing it also shows that nothing is sent for a host this device lacks.
 const hostFetch = vi.fn()
-vi.mock('../host-api', async (orig) => ({ ...(await orig<typeof import('../host-api')>()), hostFetch: (...a: unknown[]) => hostFetch(...a) }))
 
 import { fetchWakeSettings, parseWakeSettingsResponse, putWakeSettings, readPath, withPath } from './wake-settings'
 
 const reply = (status: number, body: unknown) => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })
-beforeEach(() => hostFetch.mockReset())
+beforeEach(() => {
+  hostFetch.mockReset()
+  vi.stubGlobal('fetch', hostFetch)
+  useHostStore.setState({ hosts: { A: { id: 'A', name: 'A', ip: '127.0.0.1', port: 7860, token: 't' } } as never, hostOrder: ['A'], runtime: {} as never })
+})
 
 describe('parseWakeSettingsResponse', () => {
   it('reads the GET fixture: every field has its type', () => {
@@ -96,10 +101,16 @@ describe('readPath / withPath', () => {
 })
 
 describe('responses', () => {
+  it('a host this device does not have is never asked: nothing is sent, so the request cannot fall back to another daemon', async () => {
+    expect(await fetchWakeSettings('gone')).toEqual({ kind: 'no_answer' })
+    expect(await putWakeSettings('gone', get.settings, 'x')).toEqual({ kind: 'no_answer' })
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
+
   it('GET: 200 reads, a throwing fetch is no_answer, other statuses are server_error', async () => {
     hostFetch.mockResolvedValueOnce(reply(200, get))
     expect((await fetchWakeSettings('A')).kind).toBe('ok')
-    expect(hostFetch).toHaveBeenCalledWith('A', '/api/watch/wake-settings', undefined)
+    expect(String(hostFetch.mock.calls[0][0])).toMatch(/127\.0\.0\.1:7860\/api\/watch\/wake-settings$/)
     hostFetch.mockRejectedValueOnce(new Error('down'))
     expect(await fetchWakeSettings('A')).toEqual({ kind: 'no_answer' })
     for (const s of [500, 502, 404]) {
@@ -111,8 +122,8 @@ describe('responses', () => {
   it('PUT sends the whole settings with the etag', async () => {
     hostFetch.mockResolvedValueOnce(reply(200, put200))
     expect((await putWakeSettings('A', get.settings, 'abc')).kind).toBe('ok')
-    const [, path, init] = hostFetch.mock.calls[0] as [string, string, RequestInit]
-    expect(path).toBe('/api/watch/wake-settings')
+    const [url, init] = hostFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toMatch(/\/api\/watch\/wake-settings$/)
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body as string)).toEqual({ settings: get.settings, expect_etag: 'abc' })
   })

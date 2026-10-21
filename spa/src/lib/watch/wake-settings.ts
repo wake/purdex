@@ -1,6 +1,6 @@
 // spa/src/lib/watch/wake-settings.ts — the watcher's wake settings document (`/api/watch/wake-settings`, spec §5): its shape, how it is read and written, and the daemons that serve it.
 // The `settings` object is kept as the daemon sent it (never rebuilt from a type), so a field this App does not know goes back unchanged.
-import { hostFetch } from '../host-api'
+import { pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 
@@ -146,7 +146,8 @@ async function classify(res: Response): Promise<WakeResult> {
 
 async function call(hostId: string, init?: RequestInit): Promise<WakeResult> {
   let res: Response
-  try { res = await hostFetch(hostId, URL_PATH, init) } catch { return { kind: 'no_answer' } }
+  // Pinned: a host removed since it was picked must not turn into "the active host", or a PUT would write another daemon's settings.
+  try { res = await pinnedHostFetch(hostId, URL_PATH, init) } catch { return { kind: 'no_answer' } }
   try { return await classify(res) } catch { return { kind: 'no_answer' } }
 }
 
