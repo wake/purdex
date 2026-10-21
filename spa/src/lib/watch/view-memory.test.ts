@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  readQueueTab, writeQueueTab, clearViewMemory, readProcAt, writeProcAt,
+  clearViewMemory, readProcAt, writeProcAt,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -40,19 +40,6 @@ describe('watch view memory — the host page\'s scroll', () => {
     expect([readHostScroll('h1', 'monitor'), readHostScroll('h1', 'procs'), readHostScroll('h1', 'status'), readHostScroll('h2', 'monitor')]).toEqual([120, 40, 0, 7])
     clearViewMemory()
     expect(readHostScroll('h1', 'monitor')).toBe(0)
-  })
-})
-
-describe('watch view memory — queue sub-tab (the old gate\'s, until MON-12)', () => {
-  it('defaults to 當下 (now) and is kept per host', () => {
-    expect(readQueueTab('h1')).toBe('now')
-    writeQueueTab('h1', 'history')
-    expect([readQueueTab('h1'), readQueueTab('h2')]).toEqual(['history', 'now'])
-  })
-  it('is cleared with the rest', () => {
-    writeQueueTab('h1', 'history')
-    clearViewMemory()
-    expect(readQueueTab('h1')).toBe('now')
   })
 })
 
