@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gitenv"
 )
 
@@ -45,7 +45,7 @@ func buildTree(ctx context.Context, git, dir string, quarantine bool) (builtTree
 		git = "git"
 	}
 	runRaw := func(env []string, stdin string, args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, git, append([]string{"-C", dir}, args...)...)
+		cmd := execstat.CommandContext(ctx, "wwd.snapshot-tree", git, append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(gitenv.Clean(os.Environ()), env...)
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
