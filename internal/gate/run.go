@@ -38,16 +38,6 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		return broken(err)
 	}
 	defer ticket.Drop()
-	if o.Assist != nil {
-		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d, sigs); handled {
-			return nil, code, true
-		}
-	}
-	// The automatic walk: a heavy ticket with an assist candidate goes out at the first look (even with a free slot here; after the
-	// orphan check, so a gate whose caller is gone sends nothing); a light one is offered at the first look that finds it waiting, and
-	// every assistWalkEvery after that.
-	var lastWalk time.Time
-	walkFirst := o.Assist == nil && o.Walk != nil
 	// Whoever called this command is the one who waits for its output. When that process is gone (this one is handed to init
 	// or to another reaper) nobody will read what it prints, and a slot taken then would run a whole suite for no one, so the
 	// ticket is given up. A command that was started with no parent to lose (its parent was init already), or that was told
@@ -78,12 +68,6 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		cfg = g.effective(g.refresh()) // the holds of the local wwd are looked at only here, where the command really asks for a slot
 		cfg.Dir = dir
-		if walkFirst {
-			walkFirst, lastWalk = false, g.Now()
-			if code, handled := g.walkAssist(ctx, cfg, class, o, ticket, d, false, sigs); handled {
-				return nil, code, true
-			}
-		}
 		ok := true
 		paused := cfg.Slots.Paused(class) // a class with no slot: it waits for the count to be raised, whatever the host does
 		if g.Pressure != nil && cfg.Admission.Enabled && !paused {
@@ -201,12 +185,6 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				g.say("%s", withFrontNote(waitingLine(class, ahead+len(holders), holders, now), aheadFront)) // everything in front of it: the running and the queued
 			default:
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
-			}
-		}
-		if o.Assist == nil && o.Walk != nil && now.Sub(lastWalk) >= assistWalkEvery {
-			lastWalk = now
-			if code, handled := g.walkAssist(ctx, cfg, class, o, ticket, d, true, sigs); handled {
-				return nil, code, true
 			}
 		}
 		sleep := g.Poll()

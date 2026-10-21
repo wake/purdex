@@ -78,15 +78,9 @@ type Options struct {
 	// WaitedOut, when set, is written when Run returns: true when the wait for a slot ran past WaitMax and that is why nothing
 	// ran, false for every other end (including a refusal for another cause, which also exits ExitRefused).
 	WaitedOut *bool
-	// Assist, when set, sends the command to that assist host once it has a ticket; a failure there brings the ticket back to its place.
-	// It is taken only on the queue path (a gate that is off, or a nested command, runs here and says so); who may go first is the
-	// caller's to decide (the automatic walk of X2b): this does not look at the order of the queue.
-	Assist *AssistTarget
-	// Walk, when set, lets the ticket offer itself to the assist hosts that are usable for it (assist_walk.go); ignored with Assist.
-	Walk   *AssistWalk
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
 }
 
 // state is what copies of a Gate share: the config as last read.
@@ -340,9 +334,6 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 
 	// Nothing to hold: the gate is off, the command is not heavy, or it runs below a slot that really is held.
 	if !cfg.Enabled || !class.Valid() || g.nested(cfg, env, class) || g.underLate(cfg) {
-		if o.Assist != nil {
-			g.say("not sent to %s: this command takes no slot here (the gate is off, or it runs below one)", o.Assist.Host)
-		}
 		switch {
 		case !cfg.Enabled:
 			d.Outcome = "off"
