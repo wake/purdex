@@ -67,8 +67,12 @@ func (e *Exec) goCacheTickDue() bool {
 	s := &e.goCache
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	every := goCacheTickEvery
+	if s.tickRetry { // the last look could not finish for want of the lock: the next beat, not the interval
+		every = goCacheTickRetry
+	}
 	el := s.clock().Sub(s.tickAt)
-	return s.tickAt.IsZero() || el < 0 || el >= goCacheTickEvery
+	return s.tickAt.IsZero() || el < 0 || el >= every
 }
 
 // tickGoCaches looks at every cache under the deps directory (one per Go version), if the interval has passed, and trims each that is over its
@@ -85,7 +89,7 @@ func (e *Exec) tickGoCaches(ctx context.Context) {
 	}
 	s.mu.Lock()
 	now := s.clock()
-	s.tickAt = now
+	s.tickAt, s.tickRetry = now, false
 	s.mu.Unlock()
 	root := filepath.Join(e.cfg.DepsDir, "gocache")
 	entries, err := os.ReadDir(root)
@@ -104,9 +108,9 @@ func (e *Exec) tickGoCaches(ctx context.Context) {
 			retry = true
 		}
 	}
-	if retry { // due again at the next beat instead of after the interval
+	if retry { // due again at the next beat instead of after the interval (a flag, not an earlier tickAt: a clock that steps back stays due)
 		s.mu.Lock()
-		s.tickAt = now.Add(goCacheTickRetry - goCacheTickEvery)
+		s.tickRetry = true
 		s.mu.Unlock()
 	}
 }
@@ -211,12 +215,30 @@ func (e *Exec) trimInChunks(ctx context.Context, dir string, files []goCacheFile
 		defer lock.Close()
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	var lockFault error
+	defer func() {
+		if lockFault != nil { // once per trim, with the fault itself: it is not a job holding the cache
+			log.Printf("jobexec: the build cache %s: its lock could not be taken for a reason other than a job holding it: %v", dir, lockFault)
+		}
+	}()
 	i := 0
 	for i < len(files) && *total > target && ctx.Err() == nil {
 		idleCutoff := now.Add(-goCacheShareAge(*total, max)) // as it comes down, the age rises again
-		exclusive := err == nil && syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+		exclusive, contended := false, false
+		if err == nil {
+			switch ferr := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); {
+			case ferr == nil:
+				exclusive = true
+			case errors.Is(ferr, syscall.EWOULDBLOCK): // a job holds the cache
+				contended = true
+			default:
+				lockFault = ferr
+			}
+		} else {
+			lockFault = err
+		}
 		exclusiveAny = exclusiveAny || exclusive
-		lastShared = !exclusive
+		lastShared = contended // only a held cache is worth looking at again soon: a lock that cannot be had for another reason will not be free in a minute
 		n := 0
 		for i < len(files) && *total > target && n < goCacheTickChunk {
 			f := files[i]

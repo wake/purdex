@@ -96,6 +96,8 @@ type goCacheState struct {
 	// for. tickAt (under mu) is when the tick last looked at the caches.
 	tickMu sync.Mutex
 	tickAt time.Time
+	// tickRetry (under mu) says the last look left a cache over its target for want of the lock: the next one is due after goCacheTickRetry.
+	tickRetry bool
 	// test seams: hook is called at a named step of making a cache; versionOverride is the go version text a test gives instead of asking go
 	hook            func(stage string)
 	versionOverride string

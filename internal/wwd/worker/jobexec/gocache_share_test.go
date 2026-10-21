@@ -148,6 +148,42 @@ func TestATrimThatNeededTheLockIsTriedAgainAtTheNextBeat(t *testing.T) {
 	assert.True(t, r.e.goCacheTickDue())
 }
 
+// A clock that steps back after a retry was scheduled does not push the retry out (codex R2): it is a flag, not an earlier time of the last look.
+func TestARetryStaysDueWhenTheClockStepsBack(t *testing.T) {
+	r := newTickRig(t, 1)
+	now := time.Now()
+	r.e.goCache.now = func() time.Time { return now }
+	r.fill(t, "young", 1000, 4096, 10*time.Minute)
+	r.hold(t)
+	r.e.tickGoCaches(context.Background())
+	require.True(t, r.e.goCache.tickRetry)
+
+	now = now.Add(-10 * time.Minute)
+	assert.True(t, r.e.goCacheTickDue(), "10 minutes back: later than the look by a negative time, so due at once")
+	now = now.Add(10*time.Minute + goCacheTickRetry + time.Second)
+	assert.True(t, r.e.goCacheTickDue())
+}
+
+// A lock that cannot be taken for a reason other than a job holding it (here the lock file is a directory) is not a held cache: it is said, with
+// the reason, and the tick does not come back every minute for it (codex R2).
+func TestALockFaultIsNotARetryAndIsSaid(t *testing.T) {
+	r := newTickRig(t, 1)
+	now := time.Now()
+	r.e.goCache.now = func() time.Time { return now }
+	require.NoError(t, os.MkdirAll(r.lock, 0o755)) // OpenFile of it for writing fails
+	old := r.fill(t, "old", 300, 4096, 3*time.Hour)
+	r.fill(t, "young", 700, 4096, 10*time.Minute)
+	buf := captureLog(t)
+
+	r.e.tickGoCaches(context.Background())
+
+	assert.Greater(t, wasRemoved(old), 0, "without a lock the idle ones still go, as for a held cache")
+	assert.Contains(t, buf.String(), "other than a job holding it", buf.String())
+	assert.False(t, r.e.goCache.tickRetry, "no retry every minute for a fault")
+	now = now.Add(goCacheTickRetry + time.Second)
+	assert.False(t, r.e.goCacheTickDue())
+}
+
 // (d2) A trim of several chunks that had the exclusive lock for the first and lost it to a job for the last still wants the next beat (codex R1):
 // what decides is the lock the last chunk found, not whether one had it earlier.
 func TestATrimThatLostTheLockForItsLastChunkIsTriedAgainAtTheNextBeat(t *testing.T) {
