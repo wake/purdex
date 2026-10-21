@@ -93,47 +93,53 @@ func TestDiskFalling_FreeUnderFourteenIsEnough(t *testing.T) {
 	}
 }
 
-// ≥ 2 GB/h with < 10 GB projected within 6 h.
+// ≥ 2 GB/h (over the last three hours) with < 10 GB projected within 6 h.
 func TestDiskFalling_TheSlopeAndTheProjection(t *testing.T) {
 	// 20 GB now, 3 GB/h: 20 - 18 = 2 < 10 in 6 h
-	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(60, 23, 3))); !v.Holds {
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(180, 29, 3))); !v.Holds {
 		t.Fatalf("3 GB/h from 20 GB should hold: %+v", v)
 	}
 	// 40 GB now, 3 GB/h: 40 - 18 = 22, plenty
-	if v, _ := (DiskFalling{}).Eval(inputWith(40, history(60, 43, 3))); v.Holds {
+	if v, _ := (DiskFalling{}).Eval(inputWith(40, history(180, 49, 3))); v.Holds {
 		t.Fatalf("40 GB falling 3 GB/h is not yet a worry: %+v", v)
 	}
 	// 20 GB now, 1 GB/h: slope below 2
-	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(60, 21, 1))); v.Holds {
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(180, 23, 1))); v.Holds {
 		t.Fatalf("1 GB/h is below the slope: %+v", v)
 	}
 	// rising
-	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(60, 15, -5))); v.Holds {
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(180, 5, -5))); v.Holds {
 		t.Fatalf("a rising disk: %+v", v)
 	}
 }
 
-// The slope needs half an hour of minutes behind it; a host that just started has no slope.
-func TestDiskFalling_NeedsHalfAnHourOfHistory(t *testing.T) {
+// The slope needs an hour and a half of minutes behind it; a host that just started has no slope.
+func TestDiskFalling_NeedsAnHourAndAHalfOfHistory(t *testing.T) {
 	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(10, 23, 18))); v.Holds {
 		t.Fatalf("10 minutes of history gave a slope: %+v", v)
+	}
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(80, 24, 3))); v.Holds {
+		t.Fatalf("80 minutes of history gave a slope: %+v", v)
+	}
+	if v, _ := (DiskFalling{}).Eval(inputWith(20, history(100, 25, 3))); !v.Holds {
+		t.Fatalf("100 minutes of history is enough for a slope: %+v", v)
 	}
 }
 
 // A fall measured on two far-apart points with a hole between them, or on records from after now, is not a slope.
 func TestDiskFalling_AHoleOrTheFutureIsNotASlope(t *testing.T) {
 	// 3 GB/h from 23 GB would hold, but only the two ends are there
-	h := history(60, 23, 3)
+	h := history(180, 29, 3)
 	sparse := []wire.Facts{h[0], h[1], h[len(h)-1]}
 	if v, _ := (DiskFalling{}).Eval(inputWith(20, sparse)); v.Holds {
-		t.Fatalf("three records over an hour gave a slope: %+v", v)
+		t.Fatalf("three records over three hours gave a slope: %+v", v)
 	}
 	// records after now are ignored: a clock stepped back leaves later minutes in the store
-	future := history(60, 23, 3)
+	future := history(180, 29, 3)
 	for i := 1; i <= 30; i++ {
 		future = append(future, diskFacts(t0.Add(time.Duration(i)*time.Minute), "/Users", 1))
 	}
-	flat := inputWith(40, append(history(60, 40, 0), future[len(future)-30:]...))
+	flat := inputWith(40, append(history(180, 40, 0), future[len(future)-30:]...))
 	if v, _ := (DiskFalling{}).Eval(flat); v.Holds {
 		t.Fatalf("future records gave a slope: %+v", v)
 	}
