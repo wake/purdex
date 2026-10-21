@@ -14,6 +14,7 @@ import { startGroupSelection } from './lib/task-groups/selection'
 import { startGroupViewReconcile } from './lib/task-groups/view-reconcile'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
+import { startGroupLabelsWriter } from './lib/notify/group-labels-writer'
 import { startPausedRefresh } from './lib/team/paused-refresh'
 import { startRosterForget } from './lib/team/roster-forget'
 import { startRelayFresh } from './lib/relay/fresh-sync'
@@ -62,6 +63,7 @@ startGroupViewReconcile()
 startHostDaemonIdVerification()
 // 無人值守模式 support (unattended spec D-U23-5): one /api/info per (re)connect / endpoint / token change → useUnattendedStore.
 startUnattendedSupport()
+startGroupLabelsWriter()
 // 被擋下 list (unattended quota pause, UP-5b): read on connect / roster event / poll while the switch is on.
 startPausedRefresh()
 // Team roster (plan PL-2b′): a removed or re-pointed host forgets the teams its old daemon reported.
