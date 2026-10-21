@@ -73,6 +73,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(personas.Key, m)
 	// ... and the wwd alert delivery's switch through this one (WWD-8a-2a-0).
 	c.Registry.Register(alertsettings.Key, m)
+	// ... and the two rows of the watcher's wake settings through this one (wake settings spec section 4, WK-1a).
+	c.Registry.Register(WakeRowStoreKey, m)
 	return nil
 }
 
