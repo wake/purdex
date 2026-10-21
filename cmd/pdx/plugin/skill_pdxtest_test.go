@@ -32,7 +32,7 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 		"name: pdx-test", ".wwd/tasks.toml",
 		"pdx test --list", "pdx test --adhoc -- ", "不經 shell",
 		"pdx jobs show <id>", "pdx jobs log <id>", "pdx jobs cancel <id>",
-		"`pdx-gate`", "兩者並存",
+		"`pdx-gate`",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-test lacks %q", want)
@@ -88,15 +88,17 @@ func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
 			}
 		}
 	}
-	// the gate: nested under a script's gate, the claim of pdx-gate (one slot for the whole script) holds
+	// the gate is a pass-through (S0): the skill must not promise a slot or an exclusion from an outer `pdx gate`
 	rel := section(t, s, "與 pdx-gate 的關係")
-	for _, want := range []string{"照 `pdx-gate` 的規矩保留外層 gate", "沿用它而不重排", "heavy 名額底下的 light 指令", "light 名額底下的 heavy 指令"} {
+	for _, want := range []string{"已經是直通", "不提供任何互斥", "各自交給 `pdx test`", "不必也不要"} {
 		if !strings.Contains(rel, want) {
 			t.Errorf("the pdx-gate section lacks %q", want)
 		}
 	}
-	if strings.Contains(s, "雙重排隊") {
-		t.Error("the skill says a nested gate queues twice; gate.nested makes the inner command use the outer slot")
+	for _, gone := range []string{"照 `pdx-gate` 的規矩保留外層 gate", "沿用它而不重排", "向閘門拿名額", "雙重排隊", "兩者並存"} {
+		if strings.Contains(s, gone) {
+			t.Errorf("the skill still says %q: the outer gate holds nothing now", gone)
+		}
 	}
 	// the flags it tells an agent to use exist in the usage text
 	for _, flag := range []string{"--list", "--adhoc", "--detach", "--class", "--json"} {

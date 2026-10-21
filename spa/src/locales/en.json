@@ -1463,6 +1463,7 @@
 
   "hosts.title": "Hosts",
   "hosts.add": "Add Host",
+  "hosts.monitor_link": "Pool host status and settings are in the monitoring tabs →",
   "hosts.add_host": "Add Host",
   "hosts.transfer.share_button": "Share hosts",
   "hosts.transfer.share_title": "Share hosts",

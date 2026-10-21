@@ -1,31 +1,9 @@
-// spa/src/lib/watch/queued-sessions.ts — which agent sessions are waiting in a host's command queue (watcher-area plan §8),
-// read from the fleet snapshot. A subagent's command carries its main session's id (spec §2.3), so a session id is all it takes.
+// spa/src/lib/watch/queued-sessions.ts — which agent sessions have a pool job waiting or running (watcher-area plan §8, WWD-7b1-6).
+// A subagent's command carries its main session's id (spec §2.3), so a session id is all it takes.
 import type { FleetWaiter } from '../fleet/types'
-import type { FleetSnapshot } from '../fleet/store'
 import type { PoolJob } from '../pool/jobs-types'
 import type { PoolHost } from '../pool/types'
 import { jobLine, queueEntries } from '../pool/jobs-lanes'
-
-/**
- * Every waiter of every daemon host that is answering (a probe host has no queue; an offline daemon's last `slow` is
- * stale), by lowercase session id (empty ids dropped).
- */
-export function queuedBySession(snapshot: FleetSnapshot | null): Map<string, FleetWaiter[]> {
-  const out = new Map<string, FleetWaiter[]>()
-  if (!snapshot) return out
-  for (const id of snapshot.order) {
-    const h = snapshot.hosts[id]
-    if (!h || h.kind !== 'daemon' || h.status !== 'ok') continue
-    for (const w of h.slow?.queue?.waiters ?? []) {
-      if (!w.session) continue
-      const k = w.session.toLowerCase()
-      const list = out.get(k)
-      if (list) list.push(w)
-      else out.set(k, [w])
-    }
-  }
-  return out
-}
 
 /** A pool job of a tab's session that is queued, claimed or running (WWD-7b1-6): the hourglass lights for it as for a gate waiter. */
 export interface QueuedJobMark {

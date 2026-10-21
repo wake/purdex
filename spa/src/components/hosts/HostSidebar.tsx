@@ -7,12 +7,8 @@ import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useHostLookResolver } from '../../lib/host-look'
 import { useShownRefFilter } from '../../lib/shown-hosts'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useFleetDaemons } from '../../lib/fleet/use-fleet-daemons'
-import { ProbeBadge, ProbeStatusDot } from './probe-rows'
-import { useProbeRows } from './use-probe-rows'
-import { usePoolHostRows } from '../../lib/pool/use-pool-host-rows'
-import { PoolHostGroup } from './PoolHostGroup'
-import { MAX_PROBE_HOSTS, useProbeEditor } from './useProbeEditor'
+import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
+import { readPoolView } from '../../features/workspace/lib/watch-area'
 
 interface Props {
   selectedHostId: string
@@ -25,12 +21,6 @@ interface Props {
   onShowPairedPhones?: () => void
   /** The paired-phones page is showing (it is not a host sub-page): no host sub-page is highlighted. */
   pairedPhonesActive?: boolean
-  /** The probe host whose own page is showing (its id; selecting one calls `onSelect('probe:<id>', '')`). */
-  selectedProbeId?: string | null
-  /** The pool host (a daemon host) whose page is showing; selecting one calls `onSelect('pool:<id>', '')`. */
-  selectedPoolId?: string | null
-  /** The 「觀察主機」 heading's `+`: start a new probe host. */
-  onAddProbe?: () => void
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
@@ -44,20 +34,12 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
-export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone, onShowPairedPhones, pairedPhonesActive, selectedProbeId, selectedPoolId, onAddProbe }: Props) {
+export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone, onShowPairedPhones, pairedPhonesActive }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const lookOf = useHostLookResolver()
-  const probeRows = useProbeRows()
-  // The `+` is off for the same reasons as the overview's 「新增觀察主機」 (a daemon unreachable, the list unread, the limit).
-  const { writable, blocked } = useProbeEditor()
-  const addProbeDisabled = !writable || probeRows.length >= MAX_PROBE_HOSTS
-  const { known: fleetDaemons } = useFleetDaemons()
-  // Once the resource pool is the source the group lists its hosts; before that (or with no daemon announcing it) it is the probe group as it was.
-  const pool = usePoolHostRows()
-  const [probesOpen, setProbesOpen] = useState(true)
   // Every host is listed in every workbench; a hidden one only looks muted (H2d-2, user rule 1).
   const isShown = useShownRefFilter()
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
@@ -185,43 +167,18 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
             </div>
           )
         })}
-        {pool.active && pool.rows.length > 0 && (
-          <PoolHostGroup
-            rows={pool.rows}
-            selectedId={selectedPoolId ?? selectedProbeId ?? null}
-            // A probe host opens its own page (the pool host page with the style editor); a daemon host opens the pool host page alone.
-            onOpen={(r) => onSelect(r.kind === 'probe' ? `probe:${r.id}` : `pool:${r.id}`, '')}
-          />
-        )}
-        {!pool.active && (probeRows.length > 0 || fleetDaemons.length > 0) && (
-          <div data-testid="probe-group" className="mt-2">
-            <div className="flex items-center px-1">
-              <button type="button" data-testid="probe-group-toggle" aria-expanded={probesOpen} onClick={() => setProbesOpen((o) => !o)}
-                className="flex-1 flex items-center gap-1.5 px-1 py-1 text-xs uppercase text-text-secondary cursor-pointer text-left">
-                {probesOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
-                <span>{t('fleet_hosts.group')}</span>
-              </button>
-              {onAddProbe && fleetDaemons.length > 0 && (
-                <button type="button" data-testid="probe-group-add" title={addProbeDisabled && blocked ? blocked : t('fleet_hosts.probe.add')} aria-label={t('fleet_hosts.probe.add')} disabled={addProbeDisabled} onClick={onAddProbe}
-                  className="p-1 rounded text-text-muted hover:text-text-secondary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"><Plus size={12} /></button>
-              )}
-            </div>
-            {probesOpen && probeRows.map((row) => {
-              const selected = selectedProbeId === row.id
-              return (
-                <button key={row.id} type="button" data-testid={`probe-item-${row.id}`} aria-current={selected ? 'true' : undefined}
-                  onClick={() => onSelect(`probe:${row.id}`, '')}
-                  className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-1.5 ${
-                    selected ? 'bg-accent text-white' : 'text-text-secondary hover:bg-surface-secondary/50'
-                  }`}>
-                  <ProbeBadge row={row} />
-                  <span className="truncate flex-1">{row.name}</span>
-                  <ProbeStatusDot status={row.status} />
-                </button>
-              )
-            })}
-          </div>
-        )}
+        {/* The pool hosts' state and settings live in the monitoring tabs; this stays whether or not the pool answers. It opens the first pool host's 監控, or the area's first tab when the pool is unread. */}
+        <button
+          type="button"
+          data-testid="hosts-monitor-link"
+          onClick={() => {
+            const first = readPoolView()?.hostIds[0]
+            openWatchArea(first ? { poolHost: { hostId: first }, sub: 'monitor' } : { tab: 'guardian' })
+          }}
+          className="w-full text-left px-2 py-1.5 mt-2 rounded text-xs cursor-pointer text-text-muted hover:text-text-secondary"
+        >
+          {t('hosts.monitor_link')}
+        </button>
       </div>
       <div className="px-1 pt-2 border-t border-border-subtle">
         <button

@@ -16,9 +16,6 @@ import { setHostShown, useIsRefShown } from '../../lib/shown-hosts'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 import { RestartDaemonButton } from './RestartDaemonButton'
-import { FleetRowEditor } from './FleetRowEditor'
-import { ProbeHostsSection } from './ProbeHostsSection'
-import { useFleetStore } from '../../lib/fleet/store'
 
 interface Props {
   hostId: string
@@ -44,7 +41,6 @@ export function OverviewSection({ hostId }: Props) {
   const shown = useIsRefShown(hostId)
   const restarting = useDaemonRestartStore((s) => !!s.restarting[hostId])
   const settled = useDaemonRestartStore((s) => s.settled[hostId])
-  const fleetHost = useFleetStore((s) => s.byHost[hostId]?.support === 'yes')
 
   const [info, setInfo] = useState<HostInfo | null>(null)
   const [config, setConfig] = useState<ConfigData | null>(null)
@@ -319,10 +315,6 @@ export function OverviewSection({ hostId }: Props) {
           </div>
         )}
       </Section>
-
-      {/* ─── Fleet (fleet.v1 hosts only): this daemon's `fleet` row, and the probe-host list once ─── */}
-      {fleetHost && <FleetRowEditor hostId={hostId} />}
-      {fleetHost && <ProbeHostsSection />}
 
       {/* ─── System Info ─── */}
       <Section title={t('hosts.system_info')}>

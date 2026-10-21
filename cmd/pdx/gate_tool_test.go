@@ -73,31 +73,17 @@ func TestGateTool_NoArgumentsIsStillACall(t *testing.T) {
 	assert.Equal(t, []string{"go"}, got.argv)
 }
 
-// A heavy command goes through the gate: the real binary runs under a slot, the exit code is its own.
-func TestGateTool_HeavyRunsUnderASlot(t *testing.T) {
-	_, cfg, gateDir, got := toolEnv(t, "go", quietGate)
+// A heavy command is exec'd too (S0-a): no slot, no gate directory.
+func TestGateTool_HeavyIsExecedAtOnceToo(t *testing.T) {
+	real, cfg, gateDir, got := toolEnv(t, "go", quietGate)
 	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--auto", "--tool", "go", "--", "test", "./..."}, &out, &errb)
-	assert.Equal(t, 7, code, errb.String())
-	assert.Empty(t, got.path, "a heavy command is not exec'd past the gate")
-	home := filepath.Dir(cfg)
-	_, err := os.Stat(filepath.Join(home, "ran-go"))
-	assert.NoError(t, err, "the real go ran")
-	_, err = os.Stat(gateDir)
-	assert.NoError(t, err, "the gate directory exists: a slot was taken")
+	assert.Equal(t, 0, gateMain([]string{"--config", cfg, "--auto", "--tool", "go", "--", "test", "./..."}, &out, &errb), errb.String())
+	assert.Equal(t, real, got.path)
+	_, err := os.Stat(gateDir)
+	assert.True(t, os.IsNotExist(err), "no slot was taken: the gate directory is not made")
 }
 
-// The intercept rules of the settings file still apply on the hot path.
-func TestGateTool_AnInterceptRuleMakesAnOtherwiseFreeCommandHeavy(t *testing.T) {
-	_, cfg, gateDir, got := toolEnv(t, "go", quietGate)
-	require.NoError(t, os.WriteFile(cfg, []byte("[gate]\n"+quietGate+"[[gate.intercept.rule]]\nmatch = \"go version\"\nclass = \"heavy\"\n"), 0o600))
-	var out, errb bytes.Buffer
-	code := gateMain([]string{"--config", cfg, "--auto", "--tool", "go", "--", "version"}, &out, &errb)
-	assert.Equal(t, 7, code, errb.String())
-	assert.Empty(t, got.path)
-	_, err := os.Stat(gateDir)
-	assert.NoError(t, err)
-}
+// (The intercept rules of the settings file hold nothing now: TestGateDirect_AnInterceptRuleHoldsNothing.)
 
 // With the gate switched off nothing is taken in, whatever the command.
 func TestGateTool_ADisabledGateExecsEverything(t *testing.T) {
@@ -136,25 +122,22 @@ func TestGateTool_UsageErrors(t *testing.T) {
 	}
 }
 
-// vitest without a subcommand watches at a terminal and runs once otherwise: the shim's stdin is what tells.
-func TestGateTool_TheTerminalDecidesWhetherABareVitestIsHeavy(t *testing.T) {
-	_, cfg, _, got := toolEnv(t, "vitest", quietGate)
-	old := gateStdinIsTTY
-	t.Cleanup(func() { gateStdinIsTTY = old })
+// vitest without a subcommand: at a terminal or not, it is exec'd (the terminal used to decide whether it was heavy).
+func TestGateTool_ABareVitestIsExecedWithOrWithoutATerminal(t *testing.T) {
+	real, cfg, _, got := toolEnv(t, "vitest", quietGate)
 	var out, errb bytes.Buffer
-
-	gateStdinIsTTY = func() bool { return true }
-	assert.Equal(t, 0, gateMain([]string{"--config", cfg, "--auto", "--tool", "vitest", "--"}, &out, &errb), errb.String())
-	assert.NotEmpty(t, got.path, "at a terminal it watches: not heavy, exec'd at once")
-
-	*got = execCall{}
-	gateStdinIsTTY = func() bool { return false }
-	code := gateMain([]string{"--config", cfg, "--auto", "--tool", "vitest", "--"}, &out, &errb)
-	assert.Equal(t, 7, code, errb.String())
-	assert.Empty(t, got.path, "without a terminal it runs once: through the gate")
+	for _, tty := range []bool{true, false} {
+		*got = execCall{}
+		old := gateStdinIsTTY
+		gateStdinIsTTY = func() bool { return tty }
+		code := gateMain([]string{"--config", cfg, "--auto", "--tool", "vitest", "--"}, &out, &errb)
+		gateStdinIsTTY = old
+		assert.Equal(t, 0, code, errb.String())
+		assert.Equal(t, real, got.path, "tty=%v", tty)
+	}
 }
 
-// composer from a directory with a space in its name (Herd): a test run goes through the gate, an install is exec'd at once.
+// composer from a directory with a space in its name (Herd): found behind the shim, and exec'd at once whatever the subcommand.
 func TestGateTool_ComposerInADirectoryWithASpace(t *testing.T) {
 	_, cfg, gateDir, got := toolEnv(t, "composer", quietGate)
 	home := filepath.Dir(cfg)
@@ -173,10 +156,8 @@ func TestGateTool_ComposerInADirectoryWithASpace(t *testing.T) {
 
 	*got = execCall{}
 	code := gateMain([]string{"--config", cfg, "--auto", "--tool", "composer", "--", "test:integration"}, &out, &errb)
-	assert.Equal(t, 3, code, errb.String())
-	assert.Empty(t, got.path)
-	_, err = os.Stat(filepath.Join(home, "ran-herd"))
-	assert.NoError(t, err, "the Herd composer ran")
+	assert.Equal(t, 0, code, errb.String())
+	assert.Equal(t, herdComposer, got.path, "a test run is exec'd too: no slot")
 	_, err = os.Stat(gateDir)
-	assert.NoError(t, err, "a test run took a slot")
+	assert.True(t, os.IsNotExist(err))
 }
