@@ -35,6 +35,9 @@ const RETIRED_FILES = [
   'components/hosts/ProbeHostPage.tsx', 'components/hosts/PoolHostPage.tsx', 'components/hosts/ProbeHostEditor.tsx', 'components/hosts/ProbeHostForm.tsx', 'components/hosts/ProbeCheck.tsx',
   'components/hosts/probe-rows.tsx', 'components/hosts/use-probe-rows.ts', 'components/hosts/useProbeEditor.ts', 'components/hosts/PoolStatusDot.tsx', 'components/hosts/pool-status-word.ts',
   'lib/pool/use-pool-host-rows.ts', 'lib/pool/fleet-bridge.ts',
+  // The fleet's settings half and its reads (MON-12b-2): host-config's probe-hosts and fleet rows, the ssh aliases, the probe check, the fleet read and its re-read.
+  'lib/fleet/config-api.ts', 'lib/fleet/config-draft.ts', 'lib/fleet/config-store.ts', 'lib/fleet/config-validate.ts', 'lib/fleet/probe-check.ts',
+  'lib/fleet/use-fleet-daemons.ts', 'lib/fleet/use-fleet-host-views.ts', 'lib/fleet/reread.ts', 'lib/fleet/api.ts',
 ]
 
 /** Routes, capabilities and event names no non-test source may contain (matched as plain text, after comments are stripped). */
