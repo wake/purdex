@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.772] - 2026-10-21
+
+> **B 線 D1 出版：App 不再讀舊 fleet，請使用者更新 Mac App。** 這一版同時把 settings 的 ordinal 從 13 升到 14（MON-12c）：**還沒更新的 Mac App，settings 同步會鎖住，直到更新為止。** iOS App 不讀也不寫 settings 的 ordinal，不受影響，這版不換 iOS OTA。daemon、`wwd`、SPA 有改；**mod 沒改，不用重跑 `pdx setup`**；Electron 外殼的程式與 771 相同；依賴沒變，不用 `pnpm install`。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3（`InfoWorker` 多一個選填欄位 `explicit_labels_only`，舊版讀不到就當 false）。
+>
+> **部署注意**：wwd 四台升級的那幾分鐘裡，771 的 worker 仍會拒收 772 送出的 merge 類 qualify 半件（pair 判 void）。四台都升完之後，要再送一次 mserv 的 tsc qualify（#3891）。
+
+### Changed：B 線 D1 — App 只讀 pool（MON）
+
+- **App 不再讀 fleet（MON-12b-1，#3877）**：不呼叫 `/api/fleet`、連線不帶 `?fleet=v1`、不訂閱 `fleet.changed`；A3 的一次性外觀搬遷一併拿掉。
+- **刪掉 Hosts 頁沒人用的觀察主機編輯器、資源池主機頁（MON-9b-2，#3882）**，以及 `lib/fleet` 的設定半邊（MON-12b-2，#3883）與其餘全部（MON-12b-3，#3890）。retired-wire 守門擴大到整個 `src/`（含測試檔）。spa-related 的 qualify 參考檔改成 `src/lib/crypto-hash.test.ts`（舊的 `lib/fleet/parse.test.ts` 已刪；已拿到的標籤不受影響），manifest 測試新增「qualify 參考檔必須存在」。
+- **拿掉全域的「主機格指示」欄位，settings ordinal 13 → 14（MON-12c，#3886）**：771 已把它搬進每台主機各自的設定。新版收到 ordinal 13 的 payload 時會先拿掉這個欄位再套用。
+- 分頁沙漏只代表 pool 的工作（MON-12a-4 後半，#3888）；主機分頁不再帶 `fleetHostId`、測試不再碰 fleet store（MON-12a-5，#3885）；刪 `AvailRow`、`host-extra` 與過時註解（MON-12d，#3898），以及 271 個沒人讀的語系鍵（#3901）。
+
+### Changed：WWD-9
+
+- **host-config 的 `watch` 列在 PUT 時，舊欄位改成選填（WWD9-9c-0，#3893）**：七個偵測器欄位、`patrol_idle_min`、`auto_wake` 沒送就沿用已存的值（以前 `patrol_idle_min`、`auto_wake` 沒送會被洗回預設）。讀取端照舊要求完整欄位，缺欄的已存列仍判 invalid，watcher 保持關閉。這是 B 線 MON-11 停止寫回的前提。
+- **alert 的讀取端寬鬆解碼（WWD9-S3-3a，#3897）**：client 與 wwd store 遇到不認得的 kind 或 level 只略過那一則並記一行 log（每個行程對同一個字串只記一次），不再整份失敗。先認得 S3-3b 的四個新 kind：`queue_stalled`、`job_requeued`、`queue_backlog`、`queue_unclaimable`（wire 契約）。
+- **wwd 的四條佇列規則（WWD9-S3-3b，#3902、#3903）**：`queue_stalled`（有空位卻 5 分鐘沒人領）、`job_requeued`（`attempts ≥ 3`）、`queue_backlog`（最老的排隊超過 20 分鐘）、`queue_unclaimable`（10 分鐘以上沒有開著的主機接得了），等級都是 `watch`，只叫醒守門員。由 `[advisor] queue_rules` 控制，**預設關**；四台 wwd 和兩台 daemon 都升到這一版之後，才逐台打開（`docs/wwd-deploy.md` §16）。「接得了」直接重用 pick 的判斷（含 `explicit_labels_only`）；`/v1/info` 的 worker 多了選填欄位 `explicit_labels_only`。計時：(3)(4) 從提交時間起算，(1) 只有被放回過的 job 才從最後一次變動起算（精確版 `eligible_since` 記在 #3906）。
+
+### Fixed
+
+- **qualify 的兩半沿用 task 的類別，最高到 merge（#3889）**：以前寫死 dev 類，PR 層的 merge 工作不斷時 reference 半件會餓死（10-21 實測排 24 分鐘沒人領）。coordinator 與 worker 共用 `labels.QualifyClass`；worker 仍接受 dev 類，相容 771 的 coordinator。
+- **qualify 對沒有測試清單的 task（tsc）只比 exit（#3891）**：只限 summary 類型是 plain 或空字串的 task。有解析器的類型（go-json、vitest-json、junit）拿到全 0 的 summary 仍判 mismatch，因為那也可能是報告缺檔或解析失敗。
+- **gocache 定時修剪在有工作持有共享鎖時也修得動（#3881，#3879）**：共享鎖退路的最小閒置時間隨超出程度從 2 小時遞減到 75 分鐘；沒拿到獨佔鎖又沒修回 80% 時，下一個 beat（1 分鐘）再試；超過上限的每個 tick 都寫一行 log。
+- **RaiseAlert 不再偶發 SQLITE_BUSY（#3887，#3839）**：wwd.db 的交易在開始時就拿寫鎖（`_txlock=immediate`）。
+- **主機外觀上限從 32 提高到 128（#3884，#3862）**：離池的舊外觀不再擋住池內主機的指示。
+
 ## [1.0.0-alpha.771] - 2026-10-21
 
 > **WWD-9 第一步（D0）：舊閘門退場，排隊只剩 wwd。** daemon、`pdx` CLI、`wwd`、SPA 與 **mod**（三份 skill、`pdx setup`）有改：**部署要重跑 `pdx setup`**，它會把 `~/.zshenv` 裡的閘門區塊拿掉、不再安裝 shim。依賴沒變，不用 `pnpm install`。Electron 外殼的程式與 770 相同，App 仍要用 771 重新打包（設定與分頁的 ordinal 沒變，不必請使用者更新）。wwd 的資料庫結構沒變（host schema 9、queue schema 9），wire 的 `proto` 仍是 3。
