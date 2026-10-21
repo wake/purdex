@@ -893,7 +893,9 @@ env = ["PLAYWRIGHT_BROWSERS_PATH"]
   host's results different and end reuse between hosts that qualify alike, and two hosts whose environment really gives different results are
   what qualification is for. A value that changes what the job computes (a feature flag, a mode, a version) is written in the manifest as
   `NAME=value`, which is part of the task's definition hash.
-- **Only the worker's jobs.** A fast-lane run keeps the caller's own environment, as before.
+- **Only where a command of a job runs.** The values are laid over the worker's environment for the job's command and for the install of its
+  dependencies (the same environment, so a package manager finds what the job will), and nowhere else: the worker's own subprocesses (the Go
+  module download, the tool probe) read the worker's environment as it was. A fast-lane run keeps the caller's own environment, as before.
 - Restart wwd after editing the file; the LaunchAgent or the unit need not be touched.
 
 A host that lacks the variable still takes a task that lists it, and the task fails there as it does today (the tool or the cache is not found).

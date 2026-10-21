@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -103,38 +102,19 @@ type workerInputs struct {
 	Running *queueRunning
 }
 
-// jobParentEnv is the worker's: the given environment, this host's tool list and the config's [jobs.env].
-func (in workerInputs) jobParentEnv(environ []string) []string {
-	return jobParentEnv(environ, in.Home, in.ToolDirs, in.Cfg.Jobs.Env)
-}
-
 // jobParentEnv is the environment the jobs' allowed names are read from: the daemon's own, with PATH replaced by the tool list the
-// facts' tool probe searches (facts.ToolPath, the configured extra directories in front), and the host's own variables ([jobs.env], already
-// validated and with their ~ expanded by the config) set over what was inherited. Built at run time, so a change of [tools] extra_path or
-// [jobs.env] takes effect when wwd restarts, without touching the systemd unit or the LaunchAgent. It is the worker's jobs only: a
-// fast-lane run keeps its caller's environment. A job still sees only the names its task lists in `env`.
-func jobParentEnv(environ []string, home string, extra []string, hostEnv map[string]string) []string {
+// facts' tool probe searches (facts.ToolPath, the configured extra directories in front). Built at run time, so a change of
+// [tools] extra_path takes effect when wwd restarts, without touching the systemd unit or the LaunchAgent. It is the worker's jobs
+// only: a fast-lane run keeps its caller's environment.
+func jobParentEnv(environ []string, home string, extra []string) []string {
 	path := ""
-	out := make([]string, 0, len(environ)+len(hostEnv)+1)
+	out := make([]string, 0, len(environ)+1)
 	for _, kv := range environ {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
 			path = v
 			continue
 		}
-		if name, _, ok := strings.Cut(kv, "="); ok {
-			if _, given := hostEnv[name]; given {
-				continue // the host's value stands in for this one
-			}
-		}
 		out = append(out, kv)
-	}
-	names := make([]string, 0, len(hostEnv))
-	for name := range hostEnv {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		out = append(out, name+"="+hostEnv[name])
 	}
 	return append(out, "PATH="+facts.ToolPath(home, path, extra))
 }
@@ -232,7 +212,8 @@ func loopConfig(in workerInputs) (loop.Config, error) {
 		BackgroundDev:     in.Cfg.Worker.BackgroundDev,
 		Sandbox:           in.Sandbox,
 		DB:                db,
-		ParentEnv:         in.jobParentEnv(os.Environ()),
+		ParentEnv:         jobParentEnv(os.Environ(), in.Home, in.ToolDirs),
+		HostEnv:           in.Cfg.Jobs.Env, // [jobs.env]: laid over only where a command of a job is run (#3933)
 		DepsDir:           in.Cfg.DepsRoot,
 		DepsKeep:          in.Cfg.Worker.DepsKeep,
 		DepsStoreMaxMB:    in.Cfg.Worker.DepsStoreMaxMB,

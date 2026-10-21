@@ -67,8 +67,13 @@ type Config struct {
 	DB PerJobDB
 	// DropTimeout bounds the wait for DB.Drop at cleanup; zero is dropTimeout.
 	DropTimeout time.Duration
-	// ParentEnv is what allowed environment names are read from (os.Environ()).
+	// ParentEnv is what allowed environment names are read from (os.Environ()). It is also the environment of the worker's own
+	// subprocesses (the module download, the tool probe), so it carries nothing of HostEnv.
 	ParentEnv []string
+	// HostEnv is the host's own variables for its jobs (the config's [jobs.env], already validated, with ~ expanded). They are laid over
+	// ParentEnv only where a command of a job is run (the job's command and the install of its dependencies), and a command still sees just
+	// the names its task lists in `env` (#3933).
+	HostEnv map[string]string
 	// Procs and KillAfter are passed to run.Run (the marker sweep's process source and the TERM→KILL grace); zero values are its defaults.
 	Procs     run.ProcSource
 	KillAfter time.Duration
@@ -278,9 +283,40 @@ func (e *Exec) makeDB(ctx context.Context, ref ident.Ref, base, dbEnv string) ([
 
 // Run runs the plan: dev jobs under background QoS where the host asks for it, as a systemd service where there is a Sandbox.
 func (e *Exec) Run(ctx context.Context, ref ident.Ref, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Result {
+	return run.Run(ctx, e.runSpec(ref, job, ws, plan))
+}
+
+// runSpec is the run of the job's command.
+func (e *Exec) runSpec(ref ident.Ref, job wire.Job, ws snapshot.Workspace, plan runner.Plan) run.Spec {
 	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, plan.Argv)
-	return run.Run(ctx, run.Spec{
-		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.cfg.ParentEnv,
+	return run.Spec{
+		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: plan.Dir, Workspace: filepath.Dir(ws.Dir), TaskEnv: plan.TaskEnv, ParentEnv: e.commandParentEnv(),
 		Timeout: plan.Timeout, KillAfter: e.cfg.KillAfter, OutDir: plan.OutDir, Procs: e.cfg.Procs, Sandbox: e.sandboxOf(filepath.Dir(ws.Dir)),
-	})
+	}
+}
+
+// commandParentEnv is what a command of a job reads its allowed names from: the worker's environment with the host's variables (HostEnv)
+// over it. With none, it is the worker's own slice. The worker's own subprocesses read ParentEnv, not this.
+func (e *Exec) commandParentEnv() []string {
+	if len(e.cfg.HostEnv) == 0 {
+		return e.cfg.ParentEnv
+	}
+	out := make([]string, 0, len(e.cfg.ParentEnv)+len(e.cfg.HostEnv))
+	for _, kv := range e.cfg.ParentEnv {
+		if name, _, ok := strings.Cut(kv, "="); ok {
+			if _, given := e.cfg.HostEnv[name]; given {
+				continue // the host's value stands in for the inherited one
+			}
+		}
+		out = append(out, kv)
+	}
+	names := make([]string, 0, len(e.cfg.HostEnv))
+	for name := range e.cfg.HostEnv {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, name+"="+e.cfg.HostEnv[name])
+	}
+	return out
 }
