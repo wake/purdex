@@ -135,6 +135,44 @@ describe('loadOlder', () => {
     expect(readRecords('h1', KEY)!.list.map((o) => o.id)).toEqual(['a', 'deep'])
   })
 
+  it('an older page that was out when the newest page was re-read writes nothing: its window and cursor are the old ones (codex attack)', async () => {
+    fetchObservations.mockResolvedValueOnce(page([rec('a', NOW - 1000)], CURSOR))
+    await loadRecords('cfg-a', 'mlab', 'h1', NOW)
+    let answer: (v: unknown) => void = () => {}
+    fetchObservations.mockReturnValueOnce(new Promise((r) => { answer = r }))
+    const p = loadOlder('cfg-a', 'mlab', 'h1')
+    fetchObservations.mockResolvedValueOnce(page([rec('a', NOW - 1000)], 'cursor-new'))
+    await loadRecords('cfg-a', 'mlab', 'h1', NOW + 60_000)
+    expect(readOlderLoad('h1')).toBe('idle') // no longer waiting on a page nobody will use
+    answer(page([rec('stale', NOW - 86_400_000 - 5000)], 'cursor-old'))
+    await p
+    const got = readRecords('h1', KEY)!
+    expect(got.list.map((o) => o.id)).toEqual(['a'])
+    expect(got.nextUntil).toBe('cursor-new')
+  })
+
+  it('an old older-page request cannot take over the new one after the page left and came back (codex attack)', async () => {
+    fetchObservations.mockResolvedValueOnce(page([rec('a', NOW - 1000)], CURSOR))
+    const release = holdObservations('h1')
+    await loadRecords('cfg-a', 'mlab', 'h1', NOW)
+    let oldAnswer: (v: unknown) => void = () => {}
+    fetchObservations.mockReturnValueOnce(new Promise((r) => { oldAnswer = r }))
+    const oldP = loadOlder('cfg-a', 'mlab', 'h1')
+    release()
+    const hold = holdObservations('h1') // back on the same ask
+    let newAnswer: (v: unknown) => void = () => {}
+    fetchObservations.mockReturnValueOnce(new Promise((r) => { newAnswer = r }))
+    const newP = loadOlder('cfg-a', 'mlab', 'h1')
+    oldAnswer(page([rec('old', NOW - 5000)], 'cursor-old'))
+    await oldP
+    expect(readRecords('h1', KEY)!.list.map((o) => o.id)).toEqual(['a'])
+    expect(readOlderLoad('h1')).toBe('loading') // the new request is still the one out
+    newAnswer(page([rec('new', NOW - 6000)], null))
+    await newP
+    expect(readRecords('h1', KEY)!.list.map((o) => o.id)).toEqual(['a', 'new'])
+    hold()
+  })
+
   it('does nothing without a cursor, and asks once while one is out', async () => {
     fetchObservations.mockResolvedValueOnce(page([rec('a', NOW)], null))
     await loadRecords('cfg-a', 'mlab', 'h1', NOW)

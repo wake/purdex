@@ -40,6 +40,8 @@ interface ObsMemory {
   recordsInFlight: { key: string; promise: Promise<ObservationLoad> } | null
   olderLoad: OlderLoad
   olderInFlight: Promise<OlderLoad> | null
+  /** Identifies the older-page request that may still write; anything that changes what the cursor means takes it away. */
+  olderToken: object | null
   /** `key` is the source and alias it was read for: a page is shown only to the ask that read it. */
   undeclared: { page: UndeclaredPage; at: number; key: string } | null
   load: ObservationLoad
@@ -59,12 +61,14 @@ function prune(except?: string): void {
 const memoryOf = (hostId: string): ObsMemory => {
   let m = memory.get(hostId)
   if (!m) {
-    m = { records: null, recordsLoad: 'idle', recordsGen: 0, recordsInFlight: null, olderLoad: 'idle', olderInFlight: null, undeclared: null, load: 'idle', gen: 0, holds: 0, listeners: new Set(), inFlight: null }
+    m = { records: null, recordsLoad: 'idle', recordsGen: 0, recordsInFlight: null, olderLoad: 'idle', olderInFlight: null, olderToken: null, undeclared: null, load: 'idle', gen: 0, holds: 0, listeners: new Set(), inFlight: null }
     memory.set(hostId, m)
     prune(hostId)
   }
   return m
 }
+/** Calls off the older page that is out: whatever it brings back belongs to records that are gone or have moved on. */
+const dropOlder = (m: ObsMemory): void => { m.olderToken = null; m.olderInFlight = null; if (m.olderLoad === 'loading') m.olderLoad = 'idle' }
 const notify = (m: ObsMemory): void => { for (const fn of [...m.listeners]) fn() }
 export const clearHostObservations = (): void => { memory.clear() }
 
@@ -83,7 +87,7 @@ export function holdObservations(hostId: string): () => void {
     if (released) return
     released = true
     m.holds -= 1
-    if (m.holds <= 0) { m.gen += 1; m.inFlight = null; m.recordsGen += 1; m.recordsInFlight = null; m.olderInFlight = null; if (m.olderLoad === 'loading') m.olderLoad = 'idle' }
+    if (m.holds <= 0) { m.gen += 1; m.inFlight = null; m.recordsGen += 1; m.recordsInFlight = null; dropOlder(m) }
     prune()
   }
 }
@@ -151,7 +155,7 @@ export function loadRecords(source: string, alias: string, hostId: string, now: 
   const key = observationKey(source, alias)
   if (m.recordsInFlight?.key === key) return m.recordsInFlight.promise
   const mine = ++m.recordsGen
-  if (m.records && m.records.key !== key) { m.records = null; m.olderLoad = 'idle'; m.olderInFlight = null }
+  if (m.records && m.records.key !== key) { m.records = null; dropOlder(m) }
   m.recordsLoad = 'loading'
   notify(m)
   const since = new Date(now - OBSERVATIONS_SPAN_MS).toISOString()
@@ -172,7 +176,9 @@ export function loadRecords(source: string, alias: string, hostId: string, now: 
         older: (kept?.older ?? []).filter((o) => o.startedAt >= now - OBSERVATIONS_SPAN_MS), olderNext: kept?.olderNext ?? null,
       }
       m.records = { ...base, view: viewOf(base, now) }
-    } else if (out === 'forbidden') { m.records = null; m.olderLoad = 'idle'; m.olderInFlight = null }
+      // The window moved: an older page asked with the old window and cursor must not be merged into this one.
+      dropOlder(m)
+    } else if (out === 'forbidden') { m.records = null; dropOlder(m) }
     m.recordsLoad = out
     notify(m)
     return out
@@ -189,6 +195,8 @@ export function loadOlder(source: string, alias: string, hostId: string): Promis
   if (m.olderInFlight) return m.olderInFlight
   if (!r || r.key !== key || r.view.nextUntil === null) return Promise.resolve(m.olderLoad)
   const until = r.view.nextUntil
+  const token = {}
+  m.olderToken = token
   m.olderLoad = 'loading'
   notify(m)
   const promise = (async (): Promise<OlderLoad> => {
@@ -197,8 +205,8 @@ export function loadOlder(source: string, alias: string, hostId: string): Promis
     try { page = await fetchObservations(source, alias, { since: r.since, until }) } catch (e) { forbidden = failure(e) === 'forbidden' }
     // The records were dropped or are for another ask, or the last page left: this answer is not theirs.
     const cur = m.records
-    if (m.olderInFlight === null || !cur || cur.key !== key) return m.olderLoad
-    m.olderInFlight = null
+    if (m.olderToken !== token || !cur || cur.key !== key) return m.olderLoad
+    m.olderToken = null; m.olderInFlight = null
     if (page) {
       const base = { key: cur.key, since: cur.since, first: cur.first, older: mergeObservations(cur.older, page.observations), olderNext: { value: page.nextUntil } }
       m.records = { ...base, view: viewOf(base, cur.view.at) }
