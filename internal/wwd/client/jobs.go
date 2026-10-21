@@ -294,6 +294,45 @@ func (c *Client) SetWorker(ctx context.Context, s wire.WorkerSettings) (wire.Wor
 	return call[wire.WorkerSettings](ctx, c, http.MethodPut, "/v1/worker", nil, s)
 }
 
+// WorkerOn is GET /v1/worker for the named host (the local wwd forwards, spec §10; "" is this host): the settings in force with their
+// etag. The etag is empty when that wwd predates it.
+func (c *Client) WorkerOn(ctx context.Context, host string) (wire.WorkerView, error) {
+	if host == "" {
+		return call[wire.WorkerView](ctx, c, http.MethodGet, "/v1/worker", nil, nil)
+	}
+	timeout := c.timeout()
+	if timeout < MutateTimeout {
+		timeout = MutateTimeout // the local wwd may wait for the peer
+	}
+	return getLimit[wire.WorkerView](ctx, c, "/v1/worker", hostQuery(host), timeout, maxBody)
+}
+
+// SetWorkerOn is PUT /v1/worker for the named host and returns the settings then in force. expect, when not empty, is the etag the
+// change is based on: a setting that has changed since is a *StatusError 409 whose body is a wire.WorkerEtagMismatch and nothing is
+// changed. A wwd that predates the etag answers 400 (it does not know expect_etag); the call is not repeated without it.
+func (c *Client) SetWorkerOn(ctx context.Context, host string, s wire.WorkerSettings, expect string) (wire.WorkerView, error) {
+	body := wire.WorkerPut{WorkerSettings: s, ExpectEtag: expect}
+	if host == "" {
+		return call[wire.WorkerView](ctx, c, http.MethodPut, "/v1/worker", nil, body)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return wire.WorkerView{}, err
+	}
+	status, answer, err := c.Mutate(ctx, http.MethodPut, "/v1/worker", host, raw)
+	if err != nil {
+		return wire.WorkerView{}, err
+	}
+	if status < 200 || status >= 300 {
+		return wire.WorkerView{}, &StatusError{Code: status, Body: strings.TrimSpace(string(answer))}
+	}
+	v, err := wire.DecodeLenient[wire.WorkerView](answer)
+	if err != nil {
+		return wire.WorkerView{}, fmt.Errorf("%w: %v", ErrBadResponse, err)
+	}
+	return v, nil
+}
+
 // StartException is POST /v1/exceptions (spec §9).
 func (c *Client) StartException(ctx context.Context, e wire.Exception) error {
 	if err := e.Validate(); err != nil {
