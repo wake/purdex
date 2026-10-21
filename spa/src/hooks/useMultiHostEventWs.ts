@@ -34,14 +34,12 @@ import { handleRelayFreshEvent } from '../lib/relay/fresh-ws'
 import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
-import { handleFleetEvent } from '../lib/fleet/fleet-ws'
 import { jobsDriver, startJobsCatchUp } from '../lib/pool/jobs-driver-live'
 import { handleJobsEvent, isJobsEvent } from '../lib/pool/jobs-events'
 import { handlePoolEvent, isPoolEvent } from '../lib/pool/pool-events'
 import { handleAlertsEvent, isAlertsEvent } from '../lib/pool/alerts-events'
 import { alertsConnectionOpened } from '../lib/pool/alerts-store'
 import { usePoolStore } from '../lib/pool/store'
-import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
@@ -147,9 +145,6 @@ export function useMultiHostEventWs() {
       // `reads=v1` opts in to `session.reads` (every remembered read, on connect) and `session.read` (one per accepted
       // read) — read sync (app-badge spec §7.2). A daemon that does not know it ignores the parameter.
       wsUrlObj.searchParams.set('reads', 'v1')
-      // `fleet=v1` opts in to `fleet.changed`, the primary's whole fleet once a second (fleet spec §6). A daemon that does not
-      // know it ignores the parameter; a standby never sends it.
-      wsUrlObj.searchParams.set('fleet', 'v1')
       const wsUrl = wsUrlObj.toString()
       const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
@@ -352,15 +347,8 @@ export function useMultiHostEventWs() {
             handleWorkbookEvent(hostId, event.type, event.value)
             return
           }
-          if (event.type === FLEET_EVENT_TYPE) {
-            // The fleet (F-2a1): merged from the primary only (the store decides), bound to the connection like the frames above.
-            const now = useHostStore.getState().hosts[hostId]
-            if (!now || connectionKey(now) !== configKey) return
-            handleFleetEvent(hostId, event.value)
-            return
-          }
           if (isJobsEvent(event.type)) {
-            // A job of the resource pool moved (WWD-7b1-1b): the notice makes the App read that one job again. Bound to the connection like the fleet frame above.
+            // A job of the resource pool moved (WWD-7b1-1b): the notice makes the App read that one job again. Bound to the connection like the frames above.
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleJobsEvent(hostId, event.value)
@@ -381,8 +369,8 @@ export function useMultiHostEventWs() {
             return
           }
           if (isWatchEvent(event.type)) {
-            // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
-            // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
+            // The watcher (W5e): `watch.changed` reads the host's status again. Bound to the connection like the jobs frame
+            // above, so a re-pointed host's old daemon cannot make us read the new one.
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleWatchEvent(hostId, event.type, event.value)

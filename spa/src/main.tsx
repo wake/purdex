@@ -14,7 +14,6 @@ import { startGroupSelection } from './lib/task-groups/selection'
 import { startGroupViewReconcile } from './lib/task-groups/view-reconcile'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
-import { startFleetSupport } from './lib/fleet/fleet-support'
 import { startPausedRefresh } from './lib/team/paused-refresh'
 import { startRosterForget } from './lib/team/roster-forget'
 import { startRelayFresh } from './lib/relay/fresh-sync'
@@ -27,7 +26,6 @@ import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startWorkerTitlePrefetch } from './lib/nex/worker-title-prefetch'
 import { startProfileSync } from './lib/profile/start'
 import { bootHostLooks } from './lib/host-look-migration'
-import { bootPoolLooks } from './lib/pool/pool-look-migration'
 import { migrateGlobalIndicator } from './lib/pool/indicator-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { startWatchArea } from './features/workspace/lib/watch-area'
@@ -65,7 +63,6 @@ startGroupViewReconcile()
 startHostDaemonIdVerification()
 // 無人值守模式 support (unattended spec D-U23-5): one /api/info per (re)connect / endpoint / token change → useUnattendedStore.
 startUnattendedSupport()
-startFleetSupport()
 // 被擋下 list (unattended quota pause, UP-5b): read on connect / roster event / poll while the switch is on.
 startPausedRefresh()
 // Team roster (plan PL-2b′): a removed or re-pointed host forgets the teams its old daemon reported.
@@ -92,9 +89,8 @@ startWorkerTitlePrefetch()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
 // It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
 // migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With
-// synchronous localStorage this is a microtask. `bootHostLooks` never rejects. The pool hosts' look copy (monitoring tabs A3) runs between the two, for the same reason; it waits at most ~10 s
-// and never rejects. The global 主機格指示 copy (MON-9a-3) follows it, for the same reason.
-void bootHostLooks().then(() => bootPoolLooks()).then(() => migrateGlobalIndicator()).then(() => startProfileSync())
+// synchronous localStorage this is a microtask. `bootHostLooks` never rejects. The global 主機格指示 copy (MON-9a-3) runs between the two, for the same reason; it does not wait for the pool.
+void bootHostLooks().then(() => migrateGlobalIndicator()).then(() => startProfileSync())
 // Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.

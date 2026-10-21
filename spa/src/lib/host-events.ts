@@ -26,7 +26,6 @@ export interface HostEvent {
     | 'workbook.todos'
     | 'workbook.refresh_available'
     | 'journal.changed'
-    | 'fleet.changed'
     | 'jobs.changed'
     | 'pool.changed'
     | 'watch.changed'
