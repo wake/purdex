@@ -66,22 +66,25 @@ func TestSetupCC_FreshHomeHasNoShimDirectoryAndSaysNothing(t *testing.T) {
 func TestRemoveGateShims_LeavesWhatIsNotOurs(t *testing.T) {
 	home := t.TempDir()
 	dir := seedShims(t, home)
-	writeExe(t, filepath.Join(dir, "go"), "#!/bin/sh\necho my own go wrapper\n")                         // same name, not ours
-	writeExe(t, filepath.Join(dir, "mytool"), "#!/bin/sh\n")                                             // not a shim name at all
-	writeExe(t, filepath.Join(dir, "tsc"), fakeShim("npx"))                                              // the header names another tool
-	writeExe(t, filepath.Join(dir, "pnpm"), shimMarker+"x")                                              // not even a script: no header on a second line
-	writeExe(t, filepath.Join(dir, "npx"), "#!/bin/sh\n"+shimMarker+" npx); mine\nexec /usr/bin/true\n") // the header, but no hand-over to pdx gate
+	writeExe(t, filepath.Join(dir, "go"), "#!/bin/sh\necho my own go wrapper\n")                                                                    // same name, not ours
+	writeExe(t, filepath.Join(dir, "mytool"), "#!/bin/sh\n")                                                                                        // not a shim name at all
+	writeExe(t, filepath.Join(dir, "tsc"), fakeShim("npx"))                                                                                         // the header names another tool
+	writeExe(t, filepath.Join(dir, "pnpm"), shimMarker+"x")                                                                                         // not even a script: no header on a second line
+	writeExe(t, filepath.Join(dir, "npx"), "#!/bin/sh\n"+shimMarker+" npx); mine\nexec /usr/bin/true\n")                                            // the header, but no hand-over to pdx gate
+	writeExe(t, filepath.Join(dir, "vitest"), fakeShim("vitest")+"echo edited\n")                                                                   // a shim someone edited
+	writeExe(t, filepath.Join(dir, "composer"), "#!/bin/sh\n"+shimMarker+" composer); mine\n# exec \"$X\" gate --auto --tool composer -- \"$@\"\n") // the hand-over only in a comment
+	writeExe(t, filepath.Join(dir, "xcodebuild"), shimScript("xcodebuild", "/Users/a b/\"$`x/pdx"))                                                 // a path sh quoting escapes: still ours
 	var out strings.Builder
 	removeGateShims(home, &out)
 
-	assert.ElementsMatch(t, []string{"go", "mytool", "tsc", "pnpm", "npx"}, dirNames(t, dir))
+	assert.ElementsMatch(t, []string{"go", "mytool", "tsc", "pnpm", "npx", "vitest", "composer"}, dirNames(t, dir))
 	assert.Contains(t, out.String(), "left in "+dir)
 	assert.Contains(t, out.String(), "pdx gate shims removed")
 
 	// again: the same two files, the same word, nothing else
 	out.Reset()
 	removeGateShims(home, &out)
-	assert.ElementsMatch(t, []string{"go", "mytool", "tsc", "pnpm", "npx"}, dirNames(t, dir))
+	assert.ElementsMatch(t, []string{"go", "mytool", "tsc", "pnpm", "npx", "vitest", "composer"}, dirNames(t, dir))
 	assert.NotContains(t, out.String(), "shims removed")
 }
 
