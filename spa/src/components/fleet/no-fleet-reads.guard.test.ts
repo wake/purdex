@@ -1,6 +1,6 @@
 // Guard (monitoring tabs plan, common rules; spec A1 / A11): the sidebar's host row and the files this line made pool-only do not read the fleet. The scope is `components/fleet/**`, `components/watch/host/**` (the host page's new files, MON-6d-2 on) and
 // the listed `lib/pool` files. Not in scope, by name: `fleet-bridge.ts` (the Hosts page's only reader, until MON-9b), `host-view.ts`,
-// `history.ts`, `use-pool-host-rows.ts`, `use-series-history.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
+// `use-pool-host-rows.ts` (the same two screens), and the one exemption `pool-look-migration.ts` (the one-time copy of the fleet's looks, deleted with the fleet).
 // A scoped, non-test file must not import anything from `lib/fleet/` (a type import too) and must not mention the fleet's readers.
 import { describe, it, expect } from 'vitest'
 
