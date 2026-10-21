@@ -139,9 +139,9 @@ func TestDiskFalling_AHoleOrTheFutureIsNotASlope(t *testing.T) {
 	}
 }
 
-func TestWorkerCrashLoop_ThreeStartsInAnHour(t *testing.T) {
+func TestWorkerCrashLoop_ThreeUncleanStartsInAnHour(t *testing.T) {
 	for n, want := range map[int]bool{0: false, 2: false, 3: true, 7: true} {
-		in := Input{Now: t0, StartsSince: func(since time.Time) (int, error) {
+		in := Input{Now: t0, UncleanStartsSince: func(since time.Time) (int, error) {
 			if !since.Equal(t0.Add(-time.Hour)) {
 				t.Errorf("window starts at %v", since)
 			}
@@ -155,7 +155,7 @@ func TestWorkerCrashLoop_ThreeStartsInAnHour(t *testing.T) {
 	if _, err := (WorkerCrashLoop{}).Eval(Input{Now: t0}); err == nil {
 		t.Fatal("no start log is not a verdict")
 	}
-	if _, err := (WorkerCrashLoop{}).Eval(Input{Now: t0, StartsSince: func(time.Time) (int, error) { return 0, errors.New("x") }}); err == nil {
+	if _, err := (WorkerCrashLoop{}).Eval(Input{Now: t0, UncleanStartsSince: func(time.Time) (int, error) { return 0, errors.New("x") }}); err == nil {
 		t.Fatal("an unreadable start log is not a verdict")
 	}
 }

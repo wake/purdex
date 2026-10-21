@@ -3,7 +3,7 @@
 .worktrees/
 bin/
 /pdx
-node_modules/
+node_modules
 spa/node_modules/
 spa/dist/
 .playwright-mcp/

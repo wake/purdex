@@ -121,7 +121,7 @@ func liveInput(in advisorInputs) func() (advisor.Input, bool) {
 			Orphans: in.Orphans,
 		}
 		if in.Store != nil {
-			inp.StartsSince = in.Store.StartsSince
+			inp.UncleanStartsSince = in.Store.UncleanStartsSince
 		}
 		return inp, true
 	}
@@ -222,7 +222,7 @@ func runAdvisorCmd(args []string) (handled bool, err error) {
 		return true, errors.New("alerts-replay: the database holds no minutes in that range")
 	}
 	// the first minutes need the starts of the hour before them (the crash-loop window)
-	starts, err := st.StartTimes(recs[0].At.Add(-time.Hour))
+	starts, err := st.UncleanStartTimes(recs[0].At.Add(-time.Hour))
 	if err != nil {
 		return true, err
 	}

@@ -6,6 +6,7 @@ import { useHostStore } from '../../../stores/useHostStore'
 import type { MonitorHost } from '../../../lib/pool/use-monitor-hosts'
 import { Section } from '../../hosts/form-fields'
 import { AlertSettings } from './AlertSettings'
+import { PushSwitch } from './PushSwitch'
 import { LookSettings } from './LookSettings'
 import { GuardianSection } from '../WatchSettings'
 import { WorkerExceptions } from '../WorkerExceptions'
@@ -22,6 +23,7 @@ export function SettingsTab({ host }: { host: MonitorHost }) {
       <WorkerSettings alias={host.alias} />
       <WorkerExceptions alias={host.alias} />
       <AlertSettings host={host} />
+      <PushSwitch host={host} />
       <LookSettings host={host} />
       {daemon !== null && (
         <Section title={t('watch.set.guardian')} defaultOpen={false}>

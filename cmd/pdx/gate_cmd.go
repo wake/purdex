@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/gate/shim"
 )
@@ -198,6 +200,28 @@ var gateHoldFetch gate.HoldFetch = gate.WwdHoldFetch
 
 // gateStdinIsTTY says whether stdin is a terminal (a seam for tests): vitest without a subcommand runs once, or watches, by it.
 var gateStdinIsTTY = func() bool { return leaseStdinIsTTY() }
+
+// leaseStdinIsTTY says whether stdin is a terminal (a seam for tests).
+var leaseStdinIsTTY = func() bool {
+	_, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+	return err == nil
+}
+
+// Where the class of an aliased run came from, as the decision record says it.
+const (
+	classByClassifier = "classifier"
+	classByKind       = "kind"
+)
+
+// splitRunArgs separates a run's own flags from the command: everything after the first "--" is the command.
+func splitRunArgs(args []string) (flags, command []string, ok bool) {
+	for i, a := range args {
+		if a == "--" {
+			return args[:i], args[i+1:], len(args[i+1:]) > 0
+		}
+	}
+	return args, nil, false
+}
 
 // gateExec replaces this process with the command (a seam for tests).
 var gateExec = syscall.Exec
