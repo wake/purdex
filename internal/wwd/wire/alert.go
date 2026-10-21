@@ -215,12 +215,31 @@ func (a Alert) Validate() error {
 	}
 	// The kind and the level come last (S3-3a): an alert that is only of a kind or level of a later release is the one thing a reader may
 	// leave out (ErrUnknownAlertKind, ErrUnknownAlertLevel), so everything that does not depend on the release is checked before them, and an
-	// alert that is also broken in another way is a broken alert, not an unknown one.
+	// alert that is also broken in another way is a broken alert, not an unknown one. That includes a kind or a level that is missing, or is
+	// not a name at all: a name of a later release is a short line of text.
+	if err := checkAlertName("kind", string(a.Kind)); err != nil {
+		return err
+	}
+	if err := checkAlertName("level", string(a.Level)); err != nil {
+		return err
+	}
 	if !a.Kind.Valid() {
 		return fmt.Errorf("alert: invalid kind %q: %w", a.Kind, ErrUnknownAlertKind)
 	}
 	if !a.Level.Valid() {
 		return fmt.Errorf("alert: invalid level %q: %w", a.Level, ErrUnknownAlertLevel)
+	}
+	return nil
+}
+
+// MaxAlertNameBytes bounds the kind and the level of an alert as a reader takes them (a name of a later release, which it can only skip,
+// is held to the same shape: a short line of text).
+const MaxAlertNameBytes = 64
+
+// checkAlertName refuses a kind or level that is missing or is not a short line of text. It is an ordinary error, not an unknown name.
+func checkAlertName(what, s string) error {
+	if s == "" || len(s) > MaxAlertNameBytes || !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+		return fmt.Errorf("alert: the %s must be 1 to %d bytes of text without control characters", what, MaxAlertNameBytes)
 	}
 	return nil
 }

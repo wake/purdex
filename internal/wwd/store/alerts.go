@@ -33,7 +33,7 @@ func (s *Store) ActiveAlerts() ([]wire.Alert, error) {
 		if err := a.Validate(); err != nil {
 			if wire.IsUnknownAlert(err) {
 				if what, first := s.alertSkips.First(a, err); first {
-					s.logf("store: the alerts table has a row (key %q) of %s that this build does not know: left out of the list (said once)", a.Key, what)
+					s.logf("store: the alerts table has a row (key %q) that this build does not know, left out of the list: %s (said once)", a.Key, what)
 				}
 				continue
 			}

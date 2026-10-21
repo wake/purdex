@@ -60,7 +60,7 @@ func (c *Client) readAlertList(raw json.RawMessage) (wire.AlertList, error) {
 			out.Alerts = append(out.Alerts, a)
 		case wire.IsUnknownAlert(err):
 			if what, first := c.alertSkips.First(a, err); first {
-				c.logf("wwd client: %s has an alert (key %q) of %s that this build does not know: left out (said once)", env.Host, a.Key, what)
+				c.logf("wwd client: %s has an alert (key %q) that this build does not know, left out: %s (said once)", env.Host, a.Key, what)
 			}
 		default:
 			return wire.AlertList{}, fmt.Errorf("alerts[%d]: %w", i, err)
