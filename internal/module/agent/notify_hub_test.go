@@ -214,14 +214,9 @@ func TestNotify_AStuckSubscriberDoesNotSlowTheEmitter(t *testing.T) {
 	if m.NotifyDropped() == 0 {
 		t.Fatal("overflow was not counted")
 	}
-	n := 0
-	for len(got) > 0 {
-		<-got
-		n++
-	}
-	if n == 0 {
-		t.Fatal("the healthy subscriber got nothing")
-	}
+	// The healthy subscriber is fed by a goroutine of its own, so the emitter being done does not mean its first frame has arrived (#3923: on a busy
+	// host that goroutine may not have run yet): wait for the frame (wantNotify fails after 2 s with nothing), then take what else is there.
+	wantNotify(t, got)
 }
 
 // A subscriber that panics does not end delivery; unsubscribing twice is harmless and later frames do not reach it.

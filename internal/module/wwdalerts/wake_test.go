@@ -3,6 +3,7 @@ package wwdalerts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -98,19 +99,21 @@ func alertOf(key string, kind wire.AlertKind, level wire.AlertLevel, since time.
 	return wire.Alert{Key: key, Kind: kind, Level: level, Since: since, Last: since, Detail: detail}
 }
 
-// Every level wakes the watcher: push, digest, and a level this module does not know yet (the watch level that comes with S3-2).
+// Every level wakes the watcher: push, digest, and a kind and a level this module does not know (a newer wwd's). The unknown ones are made up on
+// purpose (#3921): a kind that exists, like pressure_watch, has a name in wakeKindNames, so the note says that name and not the kind, and a test
+// that looks for the kind's own spelling passes or fails with how the wake worker happened to batch the three alerts.
 func TestEveryLevelWakesTheWatcher(t *testing.T) {
 	e, w, _ := wakeEnv(t)
 	e.baseline(t)
 	e.src.set("mlab",
 		alertOf("disk_low:/", wire.AlertDiskLow, wire.AlertPush, t0, "mlab 剩 9.8 GB"),
 		alertOf("thrash", wire.AlertThrash, wire.AlertDigest, t0, "換頁"),
-		alertOf("pressure_watch", wire.AlertKind("pressure_watch"), wire.AlertLevel("watch"), t0, "壓力"),
+		alertOf("future_alert", wire.AlertKind("future_kind"), wire.AlertLevel("future_level"), t0, "壓力"),
 	)
 	e.pass(t)
 	e.settle(t)
 	all := strings.Join(w.got(), "\n")
-	for _, want := range []string{"磁碟空間不足", "換頁過量", "pressure_watch"} {
+	for _, want := range []string{"磁碟空間不足", "換頁過量", "future_kind"} {
 		if !strings.Contains(all, want) && !strings.Contains(all, "另 ") {
 			t.Fatalf("%q not told: %q", want, all)
 		}
@@ -118,15 +121,20 @@ func TestEveryLevelWakesTheWatcher(t *testing.T) {
 	if !strings.Contains(all, "wwd_alert|mlab：") {
 		t.Fatalf("calls = %q", all)
 	}
-	// the three are told one way or another: lines, or the first and a count
+	// the three are told one way or another: lines, or the first and a count. The count is read from the note: how the wake worker batches
+	// the episodes depends on when it runs, so a fold of two ("另 1 則") must not count as a fold of three.
 	told := 0
 	for _, c := range w.got() {
 		told++
 		if i := strings.Index(c, "；另 "); i >= 0 {
-			told += 2 // only "另 2 則" can follow when folded from three
+			var more int
+			if _, err := fmt.Sscanf(c[i:], "；另 %d 則", &more); err != nil {
+				t.Fatalf("a folded note without its count: %q", c)
+			}
+			told += more
 		}
 	}
-	if told < 3 {
+	if told != 3 {
 		t.Fatalf("told %d of 3: %q", told, all)
 	}
 }
