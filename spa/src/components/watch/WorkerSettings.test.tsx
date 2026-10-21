@@ -65,6 +65,9 @@ describe('WorkerSettings', () => {
     expect(screen.getByTestId('pool-worker-owner-rule')).toHaveValue('5')
     expect(screen.getByTestId('pool-worker-owner-state')).toHaveTextContent(t('pool.worker.owner_active', { reason: 'hid' }))
     expect(screen.getByTestId('pool-worker-labels')).toHaveTextContent('os:darwin')
+    // many/long labels must not squeeze the title: the row is stacked and the chips wrap from the left
+    expect(screen.getByTestId('pool-worker-labels').closest('[data-layout="stacked"]')).not.toBeNull()
+    expect(screen.getByTestId('pool-worker-labels').className).not.toContain('justify-end')
     cleanup()
     setHost(mlab(WORKER, { facts: { ...facts, owner: null, worker: { ...facts.worker, ...WORKER } } }))
     render(<WorkerSettings alias="mlab" />)

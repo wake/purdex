@@ -269,11 +269,11 @@ export function WorkerSettings({ alias }: { alias: string }) {
           </SettingItem>
         )}
 
-        <SettingItem label={t('pool.worker.labels')} description={t('pool.worker.labels_d')}>
-          <span data-testid="pool-worker-labels" className="flex flex-wrap justify-end gap-1">
+        <SettingItem stacked label={t('pool.worker.labels')} description={t('pool.worker.labels_d')}>
+          <span data-testid="pool-worker-labels" className="flex flex-wrap gap-1">
             {host.labels.length === 0
               ? <span className="text-xs text-text-muted">{t('pool.worker.labels_none')}</span>
-              : host.labels.map((l) => <span key={l} className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs text-text-secondary">{l}</span>)}
+              : host.labels.map((l) => <span key={l} className="px-1.5 py-0.5 rounded bg-surface-tertiary text-xs text-text-secondary max-w-full break-all">{l}</span>)}
           </span>
         </SettingItem>
       </div>
