@@ -152,6 +152,32 @@ describe('responses', () => {
     expect(await putWakeSettings('A', get.settings, 'x')).toEqual({ kind: 'unreachable', source: 'mlab' })
   })
 
+  // A settings object whose known structure is broken is a format mismatch, in a 200 and in a 409's `current` alike.
+  const rules = get.settings.rules
+  const brokenSettings: [string, unknown][] = [
+    ['no version', { ...get.settings, version: undefined }],
+    ['no rules', { version: 1 }],
+    ['rules is a list', { ...get.settings, rules: [] }],
+    ['a rule is missing', { ...get.settings, rules: { ...rules, user_back: undefined } }],
+    ['a rule is not an object', { ...get.settings, rules: { ...rules, disk_low: 3 } }],
+    ['a switch is a string', { ...get.settings, enabled: 'yes' }],
+    ['a number is a string', { ...get.settings, rules: { ...rules, disk_low: { ...rules.disk_low, below_gb: '14' } } }],
+    ['a prompt is a number', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, prompt: 1 } } }],
+    ['times has a non-string', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, times: [9] } } }],
+    ['kinds_off is not a list', { ...get.settings, rules: { ...rules, wwd_alert: { ...rules.wwd_alert, kinds_off: 'x' } } }],
+    ['an interval is missing', { ...get.settings, rules: { ...rules, patrol: { ...rules.patrol, interval_min: { resting: 10 } } } }],
+  ]
+  it.each(brokenSettings)('settings with %s is app_mismatch (200 and 409)', async (_name, settings) => {
+    hostFetch.mockResolvedValueOnce(reply(200, { ...get, settings }))
+    expect(await putWakeSettings('A', get.settings, 'x')).toEqual({ kind: 'app_mismatch' })
+    hostFetch.mockResolvedValueOnce(reply(409, { error: 'etag_mismatch', current: { ...get, settings } }))
+    expect(await putWakeSettings('A', get.settings, 'x')).toEqual({ kind: 'app_mismatch' })
+  })
+
+  it('a document of another version is read, not checked field by field (it is not writable anyway)', () => {
+    expect(parseWakeSettingsResponse({ ...get, settings: { version: 2, shape: 'new' } })?.writable).toBe(false)
+  })
+
   const { etag: _etag, ...noEtag } = get
   const { settings: _settings, ...noSettings } = get
   it.each([

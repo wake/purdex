@@ -64,9 +64,30 @@ function parseStatus(v: unknown): PatrolStatus | null {
   return { lastOkAt: lastOkAt!, lastOkHost: lastOkHost!, lastFailAt: lastFailAt!, lastFailCode: lastFailCode!, lastFailDetail: lastFailDetail! }
 }
 
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
+const isNum = (v: unknown): v is number => typeof v === 'number'
+const isStrList = (v: unknown): boolean => Array.isArray(v) && v.every(isStr)
+type Check = (v: unknown) => boolean
+const hasShape = (v: unknown, shape: Record<string, Check>): v is Record<string, unknown> => isObj(v) && Object.entries(shape).every(([k, check]) => check(v[k]))
+const objOf = (shape: Record<string, Check>): Check => (v) => hasShape(v, shape)
+const SITUATIONS = { resting: isNum, present: isNum, away: isNum, busy: isNum, calm: isNum }
+const RULES: Record<string, Check> = {
+  patrol: objOf({ prompt: isStr, interval_min: objOf(SITUATIONS), max_gap_hours: isNum, times: isStrList, tz: isStr }),
+  disk_low: objOf({ enabled: isBool, prompt: isStr, below_gb: isNum }),
+  wwd_alert: objOf({ enabled: isBool, prompt: isStr, levels: isStrList, kinds_off: isStrList }),
+  unattended_changed: objOf({ enabled: isBool, prompt: isStr }),
+  user_back: objOf({ enabled: isBool, prompt: isStr, away_min: isNum }),
+}
+/** Every field this App draws is there with its type; fields it does not know are not looked at. A document of another version has its own shape and is only read (it is never writable). */
+function validSettings(s: Record<string, unknown>): boolean {
+  if (!isNum(s.version)) return false
+  if (s.version !== SUPPORTED_VERSION) return true
+  return isBool(s.enabled) && isBool(s.auto_start) && hasShape(s.rules, RULES)
+}
+
 /** A GET body (and a PUT 200's, and a 409's `current`, which have the same shape); `null` when it is not that shape. */
 export function parseWakeSettingsResponse(body: unknown): WakeSettingsDoc | null {
-  if (!isObj(body) || !isObj(body.settings)) return null
+  if (!isObj(body) || !isObj(body.settings) || !validSettings(body.settings)) return null
   const { etag, revision, source, source_id: sourceId, is_source: isSource, stale, readonly: ro, fetched_at: fetchedAt } = body
   if (!isStr(etag) || typeof revision !== 'number' || !isStr(source) || !isStr(sourceId)) return null
   if (typeof isSource !== 'boolean' || typeof stale !== 'boolean' || typeof ro !== 'boolean') return null
