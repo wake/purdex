@@ -136,12 +136,14 @@ interface HostMemory {
   listeners: Set<() => void>
   /** The long read in flight, by what it asks for: the same ask is not made twice (a second page shares it), a different one takes over. */
   longInFlight: string | null
+  /** The short read in flight, with what it asks for: the same ask shares it (a second caller gets its answer, the memory's generation is not moved), a different one takes over. */
+  shortInFlight: { ask: string; p: Promise<HostLoad> } | null
 }
 const memory = new Map<string, HostMemory>()
-const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set(), longInFlight: null })
+const newMemory = (): HostMemory => ({ tracks: { short: [], long: [] }, loads: { short: 'idle', long: 'idle' }, gen: { short: 0, long: 0 }, holds: { short: 0, long: 0 }, listeners: new Set(), longInFlight: null, shortInFlight: null })
 /** What the memory keeps of hosts nobody is looking at: leaving a page keeps its history (coming back is full at once), but not for any number of hosts. */
 const MAX_HOSTS = 32
-const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null
+const inUse = (m: HostMemory): boolean => m.listeners.size > 0 || m.holds.short > 0 || m.holds.long > 0 || m.longInFlight !== null || m.shortInFlight !== null
 /** Oldest first (Map order): let go of the ones nobody listens to or holds, until the cap is met. Run when a host is added and when one stops being used. */
 function prune(except?: string): void {
   for (const [id, old] of memory) {
@@ -172,7 +174,7 @@ const notify = (m: HostMemory): void => { for (const fn of [...m.listeners]) fn(
 export function holdTrack(hostId: string, track: HostTrack): () => void {
   const m = memoryOf(hostId)
   m.holds[track] += 1
-  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) { m.gen[track] += 1; if (track === 'long') m.longInFlight = null } prune() }
+  return () => { m.holds[track] -= 1; if (m.holds[track] <= 0) { m.gen[track] += 1; if (track === 'long') m.longInFlight = null; else m.shortInFlight = null } prune() }
 }
 
 /** The long track is empty again (the daemon no longer announces the series, so what it left is not a history this App can vouch for). */
@@ -204,6 +206,11 @@ function merge(have: HostSample[], add: HostSample[], keepMs: number, now: numbe
 export function readSamples(hostId: string, range: HostRange, now: number): HostSample[] {
   return (memory.get(hostId)?.tracks[readsFiveSecond(range) ? 'short' : 'long'] ?? []).filter((s) => s.at >= now - RANGE_MS[range] && s.at <= now + FUTURE_TOLERANCE_MS)
 }
+/** The time of the newest sample of this track, or null when it has none. */
+export const newestAt = (hostId: string, track: HostTrack): number | null => {
+  const t = memory.get(hostId)?.tracks[track] ?? []
+  return t.length > 0 ? t[t.length - 1].at : null
+}
 export const readHostLoad = (hostId: string, track: HostTrack): HostLoad => memory.get(hostId)?.loads[track] ?? 'idle'
 
 /** Whatever load of this track is out is called off: when it comes back it writes nothing (the page left, the range changed, nothing took its place). */
@@ -211,20 +218,45 @@ export function invalidateHostHistory(hostId: string, track?: HostTrack): void {
   const m = memoryOf(hostId)
   for (const t of track ? [track] : (['short', 'long'] as const)) m.gen[t] += 1
   if (!track || track === 'long') m.longInFlight = null
+  if (!track || track === 'short') m.shortInFlight = null
 }
 
+/** How far into the window the oldest 5 s record may start and still count as covering it. */
+const BACKFILL_TOLERANCE_MS = 15_000
 const failure = (e: unknown): HostLoad => (e instanceof PoolReadError && e.poolError.code === 'host_not_local' ? 'host_not_local' : 'error')
 
 /** Reads wwd's last 30 minutes of 5 s records of `alias` through `source`'s daemon (the 5, 15 and 30 minute ranges are cut from it). Never throws. */
-export async function loadShort(source: string, alias: string, hostId: string, now: number): Promise<HostLoad> {
+export function loadShort(source: string, alias: string, hostId: string, now: number): Promise<HostLoad> {
   const m = memoryOf(hostId)
+  const ask = `${source}|${alias}`
+  // The same ask already out is that read: a second one would call the first off (they share the generation), and if it failed it would throw away what the first found.
+  if (m.shortInFlight !== null && m.shortInFlight.ask === ask) return m.shortInFlight.p
   const mine = ++m.gen.short
+  const flight: NonNullable<HostMemory['shortInFlight']> = { ask, p: undefined as unknown as Promise<HostLoad> }
+  flight.p = readShort(m, source, alias, now, mine, flight)
+  m.shortInFlight = flight
+  return flight.p
+}
+
+async function readShort(m: HostMemory, source: string, alias: string, now: number, mine: number, flight: NonNullable<HostMemory['shortInFlight']>): Promise<HostLoad> {
   let records: PoolFacts[] = []
   let out: HostLoad
+  const since = new Date(now - RANGE_MS['30m'] - SKEW_MS).toISOString()
   try {
-    records = (await fetchFactsHistory(source, alias, new Date(now - RANGE_MS['30m'] - SKEW_MS).toISOString(), '5s')).records
+    records = (await fetchFactsHistory(source, alias, since, '5s')).records
     out = 'ok'
   } catch (e) { out = failure(e) }
+  // wwd keeps its 5 s records in memory only, so after it restarts the front of the window is empty. The 1 minute records live in wwd.db and span the restart: fill the front from them.
+  if (out === 'ok' && m.gen.short === mine) {
+    const oldest = records.reduce((min, r) => Math.min(min, r.at), Infinity)
+    if (!(oldest <= now - RANGE_MS['30m'] + BACKFILL_TOLERANCE_MS)) {
+      try {
+        const minutes = (await fetchFactsHistory(source, alias, since, '1m')).records.filter((r) => r.at < oldest)
+        records = [...minutes, ...records]
+      } catch { /* the 5 s answer stands */ }
+    }
+  }
+  if (m.shortInFlight === flight) m.shortInFlight = null
   // A later load for this host started while this one was out: it owns the memory now, whatever this one found.
   if (m.gen.short !== mine) return m.loads.short
   if (out === 'ok') m.tracks.short = merge(m.tracks.short, records.map(sampleOfFacts), KEEP_MS.short, now)

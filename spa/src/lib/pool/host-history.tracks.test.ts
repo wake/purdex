@@ -15,7 +15,7 @@ vi.mock('./api', async (orig) => ({
 import { PoolReadError } from './api'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import {
-  appendLive, clearHostHistory, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost, RANGE_MS, SKEW_MS,
+  appendLive, clearHostHistory, holdTrack, invalidateHostHistory, loadLong, loadShort, readHostLoad, readSamples, readsFiveSecond, seriesAnnounced, subscribeHost, RANGE_MS, SKEW_MS,
 } from './host-history'
 
 const darwin = parseFacts(darwinJson)!
@@ -70,7 +70,7 @@ describe('loadShort', () => {
     fetchFactsHistory.mockReturnValueOnce(first.promise)
     const early = loadShort('d1', 'air26', 'h1', NOW)
     fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(10, 60)] })
-    await loadShort('d1', 'air26', 'h1', NOW)
+    await loadShort('d1', 'air27', 'h1', NOW)
     first.resolve({ step: '5s', records: [rec(20, 1)] })
     await early
     expect(cpus('h1', '5m')).toEqual([40])
@@ -90,6 +90,119 @@ describe('loadShort', () => {
     fetchFactsHistory.mockResolvedValue({ step: '5s', records: [rec(2000, 10), rec(1500, 20), rec(100, 30)] })
     await loadShort('d1', 'air26', 'h1', NOW)
     expect(readSamples('h1', '30m', NOW - 1000_000).map((s) => s.cpuPct)).toEqual([80])
+  })
+})
+
+describe('loadShort: backfill from the 1 minute records', () => {
+  // wwd keeps its 5 s records in memory only, so after a restart the front of the window is empty; the 1 minute step (wwd.db) still has it.
+  const byStep = (five: PoolFacts[], one: PoolFacts[] | Error) => fetchFactsHistory.mockImplementation(async (_s: string, _a: string, _since: string, step: string) => {
+    if (step === '5s') return { step: '5s', records: five }
+    if (one instanceof Error) throw one
+    return { step: '1m', records: one }
+  })
+  const stepsAsked = () => fetchFactsHistory.mock.calls.map((c) => c[3])
+  it('a 5 s answer that starts mid-window is topped up with the older minutes, in time order, once per time', async () => {
+    byStep([rec(600, 20), rec(300, 30)], [rec(1700, 11), rec(1500, 12), rec(1200, 13), rec(660, 14), rec(600, 99), rec(300, 98)])
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(stepsAsked()).toEqual(['5s', '1m'])
+    expect(fetchFactsHistory.mock.calls[1].slice(0, 3)).toEqual(fetchFactsHistory.mock.calls[0].slice(0, 3))
+    expect(cpus('h1', '30m')).toEqual([89, 88, 87, 86, 80, 70])
+  })
+  it('a 5 s answer that covers the window is not topped up', async () => {
+    byStep([rec(1795, 10), rec(300, 30)], [rec(1700, 1)])
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(stepsAsked()).toEqual(['5s'])
+    expect(cpus('h1', '30m')).toEqual([90, 70])
+  })
+  it('an empty 5 s answer takes every minute', async () => {
+    byStep([], [rec(1500, 10), rec(600, 20)])
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(stepsAsked()).toEqual(['5s', '1m'])
+    expect(cpus('h1', '30m')).toEqual([90, 80])
+  })
+  it('minutes at or after the oldest 5 s record are not taken', async () => {
+    byStep([rec(600, 20)], [rec(660, 5), rec(600, 99), rec(540, 98)])
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(cpus('h1', '30m')).toEqual([95, 80])
+  })
+  it('a failed top-up leaves the 5 s answer and the load ok', async () => {
+    byStep([rec(600, 20)], new Error('boom'))
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(readHostLoad('h1', 'short')).toBe('ok')
+    expect(cpus('h1', '30m')).toEqual([80])
+  })
+  it('a top-up that comes back after a later load started writes nothing', async () => {
+    const minute = deferred<{ step: string; records: PoolFacts[] }>()
+    fetchFactsHistory.mockImplementationOnce(async () => ({ step: '5s', records: [rec(600, 20)] }))
+    fetchFactsHistory.mockReturnValueOnce(minute.promise)
+    const early = loadShort('d1', 'air26', 'h1', NOW)
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    byStep([rec(10, 60)], [])
+    await loadShort('d1', 'air27', 'h1', NOW)
+    minute.resolve({ step: '1m', records: [rec(1500, 1)] })
+    await early
+    expect(cpus('h1', '30m')).toEqual([40])
+  })
+})
+
+describe('loadShort: one read in flight per host', () => {
+  type Ans = { step: string; records: PoolFacts[] }
+  it('the same ask while one is out shares it: one read, one answer', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const a = loadShort('d1', 'air26', 'h1', NOW)
+    const b = loadShort('d1', 'air26', 'h1', NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect([await a, await b]).toEqual(['ok', 'ok'])
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(1)
+  })
+  it('a shared read that fails gives both the same result, and the next call reads again', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const a = loadShort('d1', 'air26', 'h1', NOW)
+    const b = loadShort('d1', 'air26', 'h1', NOW)
+    d.resolve(undefined as never)
+    expect([await a, await b]).toEqual(['error', 'error'])
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect(await loadShort('d1', 'air26', 'h1', NOW)).toBe('ok')
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
+  })
+  it('a different alias or source while one is out takes over; the old answer writes nothing', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const old = loadShort('d1', 'air26', 'h1', NOW)
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    await loadShort('d1', 'air19', 'h1', NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 1), rec(20, 1)] })
+    await old
+    expect(cpus('h1', '5m')).toEqual([40])
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10)] })
+    await loadShort('d2', 'air19', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(3)
+  })
+  it('an old read finishing does not clear the read that took over', async () => {
+    const o = deferred<Ans>()
+    const n = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(o.promise)
+    fetchFactsHistory.mockReturnValueOnce(n.promise)
+    const old = loadShort('d1', 'air26', 'h1', NOW)
+    const taker = loadShort('d1', 'air19', 'h1', NOW)
+    o.resolve({ step: '5s', records: [rec(1795, 1)] })
+    await old
+    const again = loadShort('d1', 'air19', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
+    n.resolve({ step: '5s', records: [rec(1795, 10)] })
+    expect([await taker, await again]).toEqual(['ok', 'ok'])
+  })
+  it('a read called off by the last page leaving is not shared by the next', async () => {
+    const d = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const release = holdTrack('h1', 'short')
+    void loadShort('d1', 'air26', 'h1', NOW)
+    release()
+    fetchFactsHistory.mockResolvedValueOnce({ step: '5s', records: [rec(1795, 10)] })
+    await loadShort('d1', 'air26', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -114,6 +227,17 @@ describe('the memory is bounded', () => {
   })
 })
 
+describe('the memory is bounded: a short read in flight', () => {
+  it('a host with a short read out is not let go by the cap, so the answer lands', async () => {
+    const d = deferred<{ step: string; records: PoolFacts[] }>()
+    fetchFactsHistory.mockReturnValueOnce(d.promise)
+    const p = loadShort('d1', 'air26', 'busy', NOW)
+    for (let i = 0; i < 40; i++) appendLive(`z${i}`, rec(10), NOW)
+    d.resolve({ step: '5s', records: [rec(1795, 10), rec(10, 60)] })
+    expect(await p).toBe('ok')
+    expect(readSamples('busy', '5m', NOW)).toHaveLength(1)
+  })
+})
 describe('the memory is bounded when the hosts were all in use', () => {
   it('the cap is met again once they are let go, without a new host arriving', () => {
     const offs: Array<() => void> = []
