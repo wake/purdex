@@ -223,7 +223,7 @@ func (e *Exec) installSpec(ref ident.Ref, job wire.Job, ws snapshot.Workspace, l
 	argv, _ := qos.For(job.Class, e.cfg.BackgroundDev, in.argv)
 	return run.Spec{
 		JobID: job.ID, Origin: ref.Tag(), Argv: argv, Dir: filepath.Join(ws.Dir, filepath.FromSlash(path.Dir(lockfile))), Workspace: base,
-		TaskEnv: append(append([]string(nil), taskEnv...), in.cacheEnv+"="+cacheDir), ParentEnv: e.cfg.ParentEnv, Timeout: depsInstallTimeout,
+		TaskEnv: append(append([]string(nil), taskEnv...), in.cacheEnv+"="+cacheDir), ParentEnv: e.commandParentEnv(), Timeout: depsInstallTimeout,
 		KillAfter: e.cfg.KillAfter, OutDir: filepath.Join(outDir(base), "deps-install"), Procs: e.cfg.Procs, Sandbox: depsSandbox(e.cfg.Sandbox, cacheDir),
 	}
 }
