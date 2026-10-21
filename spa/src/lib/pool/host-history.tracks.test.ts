@@ -180,6 +180,20 @@ describe('loadShort: one read in flight per host', () => {
     await loadShort('d2', 'air19', 'h1', NOW)
     expect(fetchFactsHistory).toHaveBeenCalledTimes(3)
   })
+  it('an old read finishing does not clear the read that took over', async () => {
+    const o = deferred<Ans>()
+    const n = deferred<Ans>()
+    fetchFactsHistory.mockReturnValueOnce(o.promise)
+    fetchFactsHistory.mockReturnValueOnce(n.promise)
+    const old = loadShort('d1', 'air26', 'h1', NOW)
+    const taker = loadShort('d1', 'air19', 'h1', NOW)
+    o.resolve({ step: '5s', records: [rec(1795, 1)] })
+    await old
+    const again = loadShort('d1', 'air19', 'h1', NOW)
+    expect(fetchFactsHistory).toHaveBeenCalledTimes(2)
+    n.resolve({ step: '5s', records: [rec(1795, 10)] })
+    expect([await taker, await again]).toEqual(['ok', 'ok'])
+  })
   it('a read called off by the last page leaving is not shared by the next', async () => {
     const d = deferred<Ans>()
     fetchFactsHistory.mockReturnValueOnce(d.promise)
