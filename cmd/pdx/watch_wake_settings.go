@@ -57,6 +57,19 @@ type wakeView struct {
 	} `json:"patrol_status"`
 }
 
+// parseWakeView reads the daemon's document answer (the GET, and the 200 of a PUT, which is the same): settings must be a JSON object, not
+// null, an array or a scalar, and there must be an etag. ok is false for anything else (a proxy's page, a wrong version).
+func parseWakeView(body []byte) (v wakeView, ok bool) {
+	if err := json.Unmarshal(body, &v); err != nil || v.Etag == "" {
+		return wakeView{}, false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(v.Settings, &obj); err != nil || obj == nil {
+		return wakeView{}, false
+	}
+	return v, true
+}
+
 func watchWakeSettings(args []string, stdout, stderr io.Writer) int {
 	// flags and the words are mixed (`set a=1 --json`): a word is never a flag (a path=value does not start with "-"), so the flags are taken out first
 	var flagArgs, words []string
@@ -113,8 +126,8 @@ func watchWakeSettings(args []string, stdout, stderr io.Writer) int {
 	if res.status != http.StatusOK {
 		return wakeFailure("pdx watch wake-settings", res.status, res.body, stderr)
 	}
-	var view wakeView
-	if err := json.Unmarshal(res.body, &view); err != nil || len(view.Settings) == 0 || view.Etag == "" {
+	view, ok := parseWakeView(res.body)
+	if !ok {
 		fmt.Fprintln(stderr, "pdx watch wake-settings: the daemon's answer is not a settings document (older version?)")
 		return 1
 	}
@@ -190,8 +203,8 @@ func setWakeSettings(cfg config.Config, view wakeView, words []string, asJSON bo
 	case http.StatusOK:
 		// a 200 that is not a settings document (a proxy's page, an empty body) does not say the write happened: it may have, so say that it
 		// cannot be told, and print nothing as the daemon's answer
-		var done wakeView
-		if err := json.Unmarshal(res.body, &done); err != nil || len(done.Settings) == 0 || done.Etag == "" {
+		done, ok := parseWakeView(res.body)
+		if !ok {
 			fmt.Fprintln(stderr, "pdx watch wake-settings set: 伺服器回了 200 但內容不是設定文件，寫入結果無法確認；用 pdx watch wake-settings 看現在的內容")
 			return 1
 		}

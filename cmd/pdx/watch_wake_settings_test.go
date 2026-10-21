@@ -161,6 +161,21 @@ func TestWakeSettingsShow_PatrolStatusAndTheSuppressedAreListed(t *testing.T) {
 	}
 }
 
+// The same check holds for the read: a document that is not an object is not shown, and `set` does not build on it.
+func TestWakeSettings_AReadThatIsNotADocumentIsRefused(t *testing.T) {
+	for name, body := range map[string]string{"null": `{"settings":null,"etag":"x"}`, "array": `{"settings":[],"etag":"x"}`, "no etag": `{"settings":{}}`, "html": "<html>"} {
+		f, cfg := newWakeDaemon(t)
+		f.get = []byte(body)
+		for _, args := range [][]string{{"--config", cfg}, {"set", "enabled=false", "--config", cfg}} {
+			code, out, errb := runWake(args...)
+			require.Equal(t, 1, code, "%s %v", name, args)
+			require.Empty(t, out, "%s %v", name, args)
+			require.NotEmpty(t, errb, "%s %v", name, args)
+		}
+		require.Equal(t, 0, f.puts, name)
+	}
+}
+
 func TestWakeSettingsShow_ADaemonThatCannotBeReadIsAFailure(t *testing.T) {
 	f, cfg := newWakeDaemon(t)
 	f.getStatus, f.get = http.StatusServiceUnavailable, []byte(`{"error":"unavailable","detail":"the host config module is not running"}`)
@@ -393,7 +408,11 @@ func TestWakeSettingsShow_NothingTheDaemonSendsReachesTheTerminalRaw(t *testing.
 
 // A 200 that is not a settings document is not a success: the write may have happened, and the CLI says it cannot tell.
 func TestWakeSettingsSet_A200ThatIsNotADocumentIsNotConfirmed(t *testing.T) {
-	for name, body := range map[string]string{"html": "<html>proxy</html>", "empty": "", "no etag": `{"settings":{}}`, "no settings": `{"etag":"x","revision":3}`} {
+	for name, body := range map[string]string{
+		"html": "<html>proxy</html>", "empty": "", "no etag": `{"settings":{}}`, "no settings": `{"etag":"x","revision":3}`,
+		"settings null": `{"settings":null,"etag":"x"}`, "settings array": `{"settings":[],"etag":"x"}`,
+		"settings string": `{"settings":"x","etag":"x"}`, "settings number": `{"settings":5,"etag":"x"}`,
+	} {
 		f, cfg := newWakeDaemon(t)
 		f.put = []byte(body)
 		for _, extra := range [][]string{nil, {"--json"}} {
