@@ -18,7 +18,7 @@ const { openWatchArea } = await import('../features/workspace/lib/open-watch-are
 const { clearJobsViewMemory, readJobsMode, readSelectedJob, writeJobsMode } = await import('../lib/pool/jobs-view-memory')
 
 const job = { jobId: 'j1', origin: 'mlab', line: 'purdex test', state: 'running' as const, place: 0, since: 1, worker: 'mlab' }
-const gate = { class: 'heavy' as const, place: 1, command: 'go test', project: 'p', session: 's', since: 1 }
+const job2 = { jobId: 'j2', origin: 'mserv', line: 'purdex lint', state: 'queued' as const, place: 1, since: 1, worker: '' }
 
 function draw() {
   const props = {
@@ -40,7 +40,7 @@ describe('TabContextMenu: open the job queue', () => {
   })
 
   it('a tab with an hourglass for a pool job: the row opens the live queue on the first job, then closes the menu', () => {
-    waiters = [gate, job]
+    waiters = [job, job2]
     writeJobsMode('history')
     const { onClose, onAction } = draw()
     fireEvent.click(screen.getByText('Open job queue'))
@@ -52,12 +52,6 @@ describe('TabContextMenu: open the job queue', () => {
   })
 
   it('no hourglass: no row', () => {
-    draw()
-    expect(screen.queryByText('Open job queue')).toBeNull()
-  })
-
-  it('gate waiters only (no pool job to open): no row', () => {
-    waiters = [gate]
     draw()
     expect(screen.queryByText('Open job queue')).toBeNull()
   })

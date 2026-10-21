@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 
 // Every non-test source file of the sidebar, the task queue tab (MON-5b) and the pool, raw. Keys are `/src/…` paths.
 const SOURCES = import.meta.glob<string>(
-  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '/src/components/hosts/**/*.{ts,tsx}', '/src/components/HostPage.tsx', '/src/components/watch/ProcTable.tsx', '/src/components/watch/WatchHostPane.tsx', '/src/components/watch/WatchSettings.tsx', '/src/components/watch/WorkerSettings.tsx', '/src/components/watch/WorkerExceptions.tsx', '/src/components/watch/Gauge.tsx', '/src/components/watch/AvailRow.tsx', '/src/components/watch/ResidentsTable.tsx', '/src/main.tsx', '/src/hooks/useMultiHostEventWs.ts', '/src/lib/watch/view-memory.ts', '/src/lib/watch/queue-time.ts', '/src/hooks/useTabQueued.ts', '/src/features/workspace/lib/watch-area.ts', '/src/features/workspace/lib/open-watch-area.ts', '/src/components/watch/WatchEventsPane.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
+  ['/src/components/fleet/**/*.{ts,tsx}', '/src/lib/pool/*.ts', '/src/components/watch/jobs/*.tsx', '/src/features/workspace/components/WatchShieldButton.tsx', '/src/components/watch/host/**/*.{ts,tsx}', '/src/components/hosts/**/*.{ts,tsx}', '/src/components/HostPage.tsx', '/src/components/watch/ProcTable.tsx', '/src/components/watch/WatchHostPane.tsx', '/src/components/watch/WatchSettings.tsx', '/src/components/watch/WorkerSettings.tsx', '/src/components/watch/WorkerExceptions.tsx', '/src/components/watch/Gauge.tsx', '/src/components/watch/AvailRow.tsx', '/src/components/watch/ResidentsTable.tsx', '/src/main.tsx', '/src/hooks/useMultiHostEventWs.ts', '/src/lib/watch/view-memory.ts', '/src/lib/watch/queue-time.ts', '/src/hooks/useTabQueued.ts', '/src/lib/watch/queued-sessions.ts', '/src/lib/watch/open-queue.ts', '/src/components/BackgroundSymbol.tsx', '/src/features/workspace/lib/watch-area.ts', '/src/features/workspace/lib/open-watch-area.ts', '/src/components/watch/WatchEventsPane.tsx', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.fixture.ts'],
   { query: '?raw', import: 'default', eager: true },
 )
 const POOL_FILES = [
@@ -14,7 +14,7 @@ const POOL_FILES = [
 // Other files made pool-only by the line: the shield beside the Home button reads the alerts (MON-10a), not the fleet; the process table has its own row type (MON-6e); the host page (MON-6f-2) and the files it is made of.
 const OTHER_FILES = [
   'features/workspace/components/WatchShieldButton.tsx', 'components/watch/ProcTable.tsx', 'components/watch/WatchHostPane.tsx', 'components/watch/WatchSettings.tsx', 'components/watch/WorkerSettings.tsx', 'components/watch/WorkerExceptions.tsx',
-  'components/HostPage.tsx', 'components/watch/Gauge.tsx', 'components/watch/AvailRow.tsx', 'components/watch/ResidentsTable.tsx', 'main.tsx', 'hooks/useMultiHostEventWs.ts', 'lib/watch/view-memory.ts', 'hooks/useTabQueued.ts', 'lib/watch/queue-time.ts', 'features/workspace/lib/watch-area.ts', 'features/workspace/lib/open-watch-area.ts', 'components/watch/WatchEventsPane.tsx',
+  'components/HostPage.tsx', 'components/watch/Gauge.tsx', 'components/watch/AvailRow.tsx', 'components/watch/ResidentsTable.tsx', 'main.tsx', 'hooks/useMultiHostEventWs.ts', 'lib/watch/view-memory.ts', 'hooks/useTabQueued.ts', 'lib/watch/queued-sessions.ts', 'lib/watch/open-queue.ts', 'components/BackgroundSymbol.tsx', 'lib/watch/queue-time.ts', 'features/workspace/lib/watch-area.ts', 'features/workspace/lib/open-watch-area.ts', 'components/watch/WatchEventsPane.tsx',
 ]
 // Any module specifier that points into `lib/fleet`: `from '…/fleet/…'`, `from '…/fleet'`, a side-effect `import '…/fleet/…'`, a dynamic `import('…/fleet…')`, `require('…/fleet…')`. (A re-export through a
 // barrel outside `lib/fleet` is not followed; nothing in the scope imports a barrel.)
@@ -50,6 +50,9 @@ describe('the sidebar and the pool-only files do not read the fleet', () => {
     expect(names).toContain('main.tsx')
     expect(names).toContain('hooks/useMultiHostEventWs.ts')
     expect(names).toContain('hooks/useTabQueued.ts')
+    expect(names).toContain('lib/watch/queued-sessions.ts')
+    expect(names).toContain('lib/watch/open-queue.ts')
+    expect(names).toContain('components/BackgroundSymbol.tsx')
     expect(names).toContain('components/hosts/HostSidebar.tsx')
     expect(names).toContain('components/hosts/OverviewSection.tsx')
     expect(names).toContain('components/HostPage.tsx')
