@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePoolStore } from './store'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import { holdObservations, loadUndeclared, observationKey, readUndeclared, readUndeclaredLoad, subscribeObservations, type ObservationLoad } from './host-observations'
+import { holdObservations, loadOlder, loadRecords, loadUndeclared, observationKey, readOlderLoad, readRecords, readRecordsLoad, readUndeclared, readUndeclaredLoad, subscribeObservations, type ObservationLoad, type ObservationRecords, type OlderLoad } from './host-observations'
 import type { UndeclaredPage } from './observations-api'
 
 const REFRESH_MS = 60_000
@@ -13,6 +13,7 @@ export type ObservationsAvailability = 'ok' | 'no_route' | 'host_down'
 
 export function useHostObservations(hostId: string, alias: string, hostOk: boolean): {
   availability: ObservationsAvailability; page: UndeclaredPage | null; load: ObservationLoad
+  records: ObservationRecords | null; recordsLoad: ObservationLoad; olderLoad: OlderLoad; older: () => void
 } {
   const source = usePoolStore((s) => s.sourceHostId)
   // Subscribed: the daemon's capabilities may arrive after the page opened, and that must start the read.
@@ -24,11 +25,14 @@ export function useHostObservations(hostId: string, alias: string, hostOk: boole
   useEffect(() => {
     if (!on || !source) return
     const release = holdObservations(hostId)
-    void loadUndeclared(source, alias, hostId, Date.now())
-    const timer = setInterval(() => { void loadUndeclared(source, alias, hostId, Date.now()) }, REFRESH_MS)
+    const read = () => { const now = Date.now(); void loadUndeclared(source, alias, hostId, now); void loadRecords(source, alias, hostId, now) }
+    read()
+    const timer = setInterval(read, REFRESH_MS)
     return () => { clearInterval(timer); release() }
   }, [on, source, alias, hostId])
 
   const availability: ObservationsAvailability = !announced ? 'no_route' : !hostOk ? 'host_down' : 'ok'
-  return { availability, page: source ? (readUndeclared(hostId, observationKey(source, alias))?.page ?? null) : null, load: readUndeclaredLoad(hostId) }
+  const key = source ? observationKey(source, alias) : null
+  const older = () => { if (source) void loadOlder(source, alias, hostId) }
+  return { availability, records: key ? readRecords(hostId, key) : null, recordsLoad: readRecordsLoad(hostId), olderLoad: readOlderLoad(hostId), older, page: source ? (readUndeclared(hostId, observationKey(source, alias))?.page ?? null) : null, load: readUndeclaredLoad(hostId) }
 }
