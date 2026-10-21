@@ -243,6 +243,7 @@ func (m *Module) setSelf(p *wire.Pool) {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/exceptions", m.handleExceptions)
+	mux.HandleFunc("GET /api/pool/hosts/{alias}/qualification", m.handleQualification)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/alerts", m.handleAlerts)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/observations", m.handleObservations)
 	mux.HandleFunc("GET /api/pool/hosts/{alias}/undeclared", m.handleUndeclared)
@@ -444,6 +445,23 @@ func (m *Module) handleExceptions(w http.ResponseWriter, r *http.Request) {
 			return nil, historyError(err)
 		}
 		return wire.PoolHostExceptions{Host: alias, Known: known, Exceptions: list}, nil
+	})
+}
+
+// handleQualification is what a host holds of each task and what happens next (WWD-7b2-0a), asked of the local wwd with that host. A host whose
+// wwd predates the route is "not known" (known: false, empty lists), not an error; the errors are the history read's.
+func (m *Module) handleQualification(w http.ResponseWriter, r *http.Request) {
+	alias := r.PathValue("alias")
+	if !validAlias(alias) {
+		writeErr(w, http.StatusBadRequest, ErrBadRequest, "the host alias is empty, a dot name (. or ..), too long or holds a control character")
+		return
+	}
+	m.serve(w, r, "qualification|"+alias, func(ctx context.Context) (any, *apiError) {
+		v, known, err := m.client().Qualification(ctx, alias)
+		if err != nil {
+			return nil, historyError(err)
+		}
+		return wire.PoolHostQualification{Host: alias, Known: known, Tasks: v.Tasks, Unreadable: v.Unreadable, Recent: v.Recent}, nil
 	})
 }
 

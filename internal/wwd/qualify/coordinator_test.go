@@ -711,3 +711,103 @@ func TestAFailedSaveOfTheAttemptStillWaitsInMemory(t *testing.T) {
 		t.Fatalf("a failed save lost the wait in this run: %d", n)
 	}
 }
+
+// Qualification reads the coordinator's own memory: the pair in flight with its ids, then the wait after a mismatch with the why of the
+// record, and the repos whose manifest cannot be read. It starts and settles nothing.
+func TestQualificationFollowsThePairThroughAMismatch(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	v, err := r.c.Qualification()
+	if err != nil || len(v.Tasks) != 1 || v.Tasks[0].Progress != wire.QualProgressPairing || v.Tasks[0].Pair == nil || v.Tasks[0].Pair.Candidate != "j1" || v.Tasks[0].Pair.Reference != "j2" {
+		t.Fatalf("%+v %v", v, err)
+	}
+	cs := sum(9, 0)
+	cs.PassedDigest = digestOf(77)
+	bad := goodRes("mserv")
+	bad.Summary = cs
+	r.finishPair(bad, goodRes("air26"))
+	r.c.Tick(ctx())
+	v, _ = r.c.Qualification()
+	tk := v.Tasks[0]
+	if tk.Progress != wire.QualProgressWaiting || tk.Last == nil || tk.Last.Outcome != "mismatch" || tk.Last.Why == "" || tk.RetryAt == nil || !tk.RetryAt.Equal(r.now.Add(RetryAfter)) || len(v.Recent) != 1 {
+		t.Fatalf("%+v", v)
+	}
+	if n := len(r.q.submissions()); n != 2 {
+		t.Fatalf("reading started a pair: %d", n)
+	}
+	r.src.tasksErr = &ManifestError{Repo: "purdex", Err: errors.New("bad")}
+	r.src.tasks = nil
+	if v, _ = r.c.Qualification(); len(v.Unreadable) != 1 || v.Unreadable[0] != "purdex" {
+		t.Fatalf("%+v", v)
+	}
+}
+
+// Reading the qualification does its disk reads outside the coordinator's lock: a Tasks that hangs must not stop Settle and Tick.
+func TestQualificationDoesNotHoldTheLockWhileItReadsTheManifests(t *testing.T) {
+	r := newRig(t, tsc)
+	hang := &blockingSource{fakeSource: r.src, entered: make(chan struct{}), release: make(chan struct{})}
+	r.c.cfg.Source = hang
+	done := make(chan struct{})
+	go func() { _, _ = r.c.Qualification(); close(done) }()
+	<-hang.entered
+	settled := make(chan struct{})
+	go func() { r.c.Settle(ctx()); close(settled) }()
+	select {
+	case <-settled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Settle waits for a Qualification that is reading the manifests")
+	}
+	close(hang.release)
+	<-done
+}
+
+// A pair that settles (and earns the label) between the memory copy and the rows read must not read as "no pair, no label, ready": the old
+// pair next to the new earned row is held, idle.
+func TestQualificationAPairSettlingMidReadIsNeverReady(t *testing.T) {
+	for _, after := range []bool{false, true} { // the settle comes before the rows are read, or right after
+		r := newRig(t, tsc)
+		r.c.Tick(ctx())
+		r.finishPair(goodRes("mserv"), goodRes("air26"))
+		r.c.cfg.Store = &hookStore{fakeStore: r.st, after: after, onRead: func() { r.c.Settle(ctx()) }}
+		v, err := r.c.Qualification()
+		if err != nil || len(v.Tasks) != 1 {
+			t.Fatalf("after=%v: %+v %v", after, v, err)
+		}
+		tk := v.Tasks[0]
+		held := tk.Hold == wire.QualHoldEarned && tk.Progress == wire.QualProgressIdle
+		stillPairing := tk.Hold == wire.QualHoldNone && tk.Progress == wire.QualProgressPairing
+		if !held && !stillPairing {
+			t.Fatalf("after=%v: a finished pair read as neither earned nor pairing: %+v", after, tk)
+		}
+	}
+}
+
+type hookStore struct {
+	*fakeStore
+	after  bool // run onRead after the rows were read (the rows returned are then the older ones)
+	onRead func()
+}
+
+func (h *hookStore) EarnedLabels() ([]wire.EarnedLabel, error) {
+	if !h.after {
+		h.onRead()
+	}
+	rows, err := h.fakeStore.EarnedLabels()
+	if h.after {
+		h.onRead()
+	}
+	return rows, err
+}
+
+type blockingSource struct {
+	*fakeSource
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSource) Tasks() ([]Task, error) {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return b.fakeSource.Tasks()
+}

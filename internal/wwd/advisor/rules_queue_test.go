@@ -184,13 +184,158 @@ func TestQueueStalled_AnotherHostWithRoomIsEnough(t *testing.T) {
 
 // ---- queue unclaimable ----
 
+// settledHolds is the verdict of a fresh QueueUnclaimable for in, after it has looked once, ten minutes before in.Now, at the same queue and
+// pool: the rule holds only for what has gone unclaimable for ten minutes running, and a rule that has just started has not seen that yet.
+func settledHolds(t *testing.T, in Input) (bool, Verdict) {
+	t.Helper()
+	r := &QueueUnclaimable{}
+	first := in
+	first.Now = in.Now.Add(-queueUnclaimableAfter)
+	if _, err := r.Eval(first); err != nil {
+		t.Fatalf("first look: %v", err)
+	}
+	return holds(t, r, in)
+}
+
+// A host that is late for one poll (load1 50 to 80: /v1/info took over 3 seconds, so it was unreachable for 5 seconds) must not raise the
+// alert, whatever the job's age; the ten minutes start again at every look that finds a host that takes the job (#3941).
+func TestQueueUnclaimable_ABlipOfAHostRestartsTheTenMinutes(t *testing.T) {
+	job := []queue.QueuedJob{qjob("j_1", darwin[:1], 30*time.Minute)}
+	r := &QueueUnclaimable{}
+	at := func(d time.Duration, pool ...wire.Peer) bool {
+		in := queueIn(job, pool...)
+		in.Now = t0.Add(d)
+		got, _ := holds(t, r, in)
+		return got
+	}
+	mlabDown, mlabUp := host("mlab", darwin, down), host("mlab", darwin)
+	if at(0, mlabDown) {
+		t.Fatal("the first look")
+	}
+	if at(9*time.Minute, mlabDown) {
+		t.Error("nine minutes without a host")
+	}
+	if at(9*time.Minute+5*time.Second, mlabUp) {
+		t.Error("the host answered")
+	}
+	if at(9*time.Minute+10*time.Second, mlabDown) || at(19*time.Minute, mlabDown) {
+		t.Error("it went down again: the ten minutes start from here, not from the first look")
+	}
+	if !at(19*time.Minute+10*time.Second, mlabDown) {
+		t.Error("ten minutes running without a host")
+	}
+	if at(19*time.Minute+15*time.Second, mlabUp) {
+		t.Error("a host takes it again")
+	}
+}
+
+// A job that was put on hold and released (or relabelled) between two looks is changed, though neither look saw it held: its ten minutes start
+// from the change (QueuedJob.Touched), not from the first look (codex R1).
+func TestQueueUnclaimable_AChangeBetweenTwoLooksRestartsTheTenMinutes(t *testing.T) {
+	r := &QueueUnclaimable{}
+	pool := host("mlab", darwin, down)
+	look := func(d time.Duration, touchedAt time.Duration) bool {
+		j := qjob("j_1", darwin[:1], time.Hour)
+		j.Touched = t0.Add(touchedAt)
+		in := queueIn([]queue.QueuedJob{j}, pool)
+		in.Now = t0.Add(d)
+		got, _ := holds(t, r, in)
+		return got
+	}
+	look(0, -time.Hour)
+	if look(10*time.Minute-time.Second, -time.Hour) {
+		t.Fatal("nine minutes and 59 seconds")
+	}
+	if look(10*time.Minute, 9*time.Minute+30*time.Second) {
+		t.Error("changed half a minute before this look: it starts from the change")
+	}
+	if !look(19*time.Minute+30*time.Second, 9*time.Minute+30*time.Second) {
+		t.Error("ten minutes after the change")
+	}
+}
+
+// A look that could not read the queue breaks the run: what it did not see is not known to have been unclaimable (codex R2).
+func TestQueueUnclaimable_AFailedLookRestartsTheTenMinutes(t *testing.T) {
+	r := &QueueUnclaimable{}
+	pool := host("mlab", darwin, down)
+	jobs := []queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour)}
+	at := func(d time.Duration, fail bool) bool {
+		in := queueIn(jobs, pool)
+		if fail {
+			in.Queue = func() ([]queue.QueuedJob, error) { return nil, errors.New("locked") }
+		}
+		in.Now = t0.Add(d)
+		if fail {
+			if _, err := r.Eval(in); err == nil {
+				t.Fatal("no error")
+			}
+			return false
+		}
+		got, _ := holds(t, r, in)
+		return got
+	}
+	at(0, false)
+	at(9*time.Minute, true)
+	if at(10*time.Minute, false) {
+		t.Error("the look at nine minutes failed: the run starts again at ten")
+	}
+	if !at(20*time.Minute, false) {
+		t.Error("ten minutes from the look after the failed one")
+	}
+}
+
+// A job that left the queue and came back starts its own ten minutes, and the memory of a job that is gone (or on hold) does not grow.
+func TestQueueUnclaimable_ForgetsAJobThatLeftTheQueue(t *testing.T) {
+	r := &QueueUnclaimable{}
+	pool := host("mlab", darwin, down)
+	look := func(d time.Duration, jobs ...queue.QueuedJob) bool {
+		in := queueIn(jobs, pool)
+		in.Now = t0.Add(d)
+		got, _ := holds(t, r, in)
+		return got
+	}
+	j := qjob("j_1", darwin[:1], time.Hour)
+	look(0, j)
+	look(time.Minute) // gone
+	if len(r.since) != 0 {
+		t.Errorf("remembers %v", r.since)
+	}
+	if look(11*time.Minute, j) {
+		t.Error("it is back: its ten minutes start from this look")
+	}
+	hold := j
+	hold.Held = true
+	look(12*time.Minute, hold)
+	if len(r.since) != 0 {
+		t.Errorf("remembers a held job: %v", r.since)
+	}
+}
+
+// Eval is called from the evaluator's goroutine: the memory is guarded.
+func TestQueueUnclaimable_EvalIsSafeFromSeveralGoroutines(t *testing.T) {
+	r := &QueueUnclaimable{}
+	in := queueIn([]queue.QueuedJob{qjob("j_1", darwin[:1], time.Hour)}, host("mlab", darwin, down))
+	done := make(chan struct{})
+	for range 4 {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 200 {
+				_, _ = r.Eval(in)
+			}
+		}()
+	}
+	for range 4 {
+		<-done
+	}
+}
+
 func TestQueueUnclaimable_TenMinutesAndNoHostTakesIt(t *testing.T) {
 	jobs := func(age time.Duration) []queue.QueuedJob {
 		return []queue.QueuedJob{qjob("j_1", []string{"repo:aigora-v2"}, age)}
 	}
 	pool := []wire.Peer{host("mlab", darwin), host("mserv", linux)}
 	for age, w := range map[time.Duration]bool{10*time.Minute - time.Second: false, 10 * time.Minute: true} {
-		got, v := holds(t, QueueUnclaimable{}, queueIn(jobs(age), pool...))
+		got, v := settledHolds(t, queueIn(jobs(age), pool...))
 		if got != w {
 			t.Errorf("waited %v: holds %v, want %v", age, got, w)
 		}
@@ -204,13 +349,13 @@ func TestQueueUnclaimable_TenMinutesAndNoHostTakesIt(t *testing.T) {
 // release and is a call to the watcher only.
 func TestQueueUnclaimable_EveryWorkerOffOrDownRaises(t *testing.T) {
 	jobs := []queue.QueuedJob{qjob("j_1", darwin[:1], 15*time.Minute)}
-	if got, _ := holds(t, QueueUnclaimable{}, queueIn(jobs, host("mlab", darwin, workerOff), host("air26", darwin, workerOff))); !got {
+	if got, _ := settledHolds(t, queueIn(jobs, host("mlab", darwin, workerOff), host("air26", darwin, workerOff))); !got {
 		t.Error("workers off")
 	}
-	if got, _ := holds(t, QueueUnclaimable{}, queueIn(jobs, host("mlab", darwin, down))); !got {
+	if got, _ := settledHolds(t, queueIn(jobs, host("mlab", darwin, down))); !got {
 		t.Error("the only host down")
 	}
-	if got, _ := holds(t, QueueUnclaimable{}, queueIn(jobs)); !got {
+	if got, _ := settledHolds(t, queueIn(jobs)); !got {
 		t.Error("no host at all")
 	}
 }
@@ -230,7 +375,7 @@ func TestQueueUnclaimable_WhatDoesNotRaise(t *testing.T) {
 			[]queue.QueuedJob{qjob("j_1", linux[:1], 15*time.Minute)}, []wire.Peer{host("mserv", linux, explicitOnly)}},
 	}
 	for name, c := range cases {
-		if got, _ := holds(t, QueueUnclaimable{}, queueIn(c.jobs, c.pool...)); got {
+		if got, _ := settledHolds(t, queueIn(c.jobs, c.pool...)); got {
 			t.Errorf("%s: holds", name)
 		}
 	}
@@ -241,11 +386,11 @@ func TestQueueUnclaimable_WhatDoesNotRaise(t *testing.T) {
 func TestQueueUnclaimable_AnExplicitOnlyHostDoesNotTakeAnUnlabelledJob(t *testing.T) {
 	job := qjob("j_1", []string{"repo:purdex"}, 15*time.Minute)
 	mserv := host("mserv", append([]string{"repo:purdex"}, linux...), explicitOnly)
-	if got, _ := holds(t, QueueUnclaimable{}, queueIn([]queue.QueuedJob{job}, mserv)); !got {
+	if got, _ := settledHolds(t, queueIn([]queue.QueuedJob{job}, mserv)); !got {
 		t.Error("only a host that takes the job only when it names its os: the job names none")
 	}
 	// a host that is not explicit-only takes it
-	if got, _ := holds(t, QueueUnclaimable{}, queueIn([]queue.QueuedJob{job}, mserv, host("mlab", append([]string{"repo:purdex"}, darwin...)))); got {
+	if got, _ := settledHolds(t, queueIn([]queue.QueuedJob{job}, mserv, host("mlab", append([]string{"repo:purdex"}, darwin...)))); got {
 		t.Error("mlab takes it")
 	}
 }
@@ -259,7 +404,7 @@ func TestStalledAndUnclaimableNameDifferentJobs(t *testing.T) {
 	}
 	pool := []wire.Peer{host("mlab", darwin)}
 	_, s := holds(t, QueueStalled{}, queueIn(jobs, pool...))
-	_, u := holds(t, QueueUnclaimable{}, queueIn(jobs, pool...))
+	_, u := settledHolds(t, queueIn(jobs, pool...))
 	if !strings.Contains(s.Detail, "j_takeable") || strings.Contains(s.Detail, "j_nobody") {
 		t.Errorf("stalled: %q", s.Detail)
 	}
@@ -271,7 +416,7 @@ func TestStalledAndUnclaimableNameDifferentJobs(t *testing.T) {
 // ---- when the inputs are not there ----
 
 func TestQueueRulesAreUnjudgedWithoutTheQueueOrThePool(t *testing.T) {
-	rules := []Rule{QueueStalled{}, JobRequeued{}, QueueBacklog{}, QueueUnclaimable{}}
+	rules := []Rule{QueueStalled{}, JobRequeued{}, QueueBacklog{}, &QueueUnclaimable{}}
 	pool := func() []wire.Peer { return nil }
 	q := func() ([]queue.QueuedJob, error) { return nil, nil }
 	for name, in := range map[string]Input{
@@ -299,7 +444,7 @@ func TestQueueRulesThroughTheEvaluator(t *testing.T) {
 		}
 		return jobs, nil
 	}}
-	ev := NewEvaluator(book, func() (Input, bool) { return in, true }, nil, QueueStalled{}, JobRequeued{}, QueueBacklog{}, QueueUnclaimable{})
+	ev := NewEvaluator(book, func() (Input, bool) { return in, true }, nil, QueueStalled{}, JobRequeued{}, QueueBacklog{}, &QueueUnclaimable{})
 	ev.Pass()
 	if _, ok := book.active["queue_backlog"]; !ok || book.active["queue_backlog"].Level != wire.AlertWatch || book.active["queue_backlog"].Kind != wire.AlertQueueBacklog {
 		t.Fatalf("backlog not raised: %+v", book.active)
@@ -344,7 +489,7 @@ func TestQueueStalled_AJobPutBackCountsFromTheLastChange(t *testing.T) {
 func TestQueueUnclaimable_CountsFromTheSubmissionNotFromTheLastChange(t *testing.T) {
 	pool := []wire.Peer{host("mlab", darwin)}
 	for _, n := range []int{0, 2} {
-		got, _ := holds(t, QueueUnclaimable{}, queueIn([]queue.QueuedJob{qjob("j", []string{"repo:aigora-v2"}, 12*time.Minute, attempts(n), touched(time.Minute))}, pool...))
+		got, _ := settledHolds(t, queueIn([]queue.QueuedJob{qjob("j", []string{"repo:aigora-v2"}, 12*time.Minute, attempts(n), touched(11*time.Minute))}, pool...))
 		if !got {
 			t.Errorf("attempts %d: a move must not reset the clock", n)
 		}

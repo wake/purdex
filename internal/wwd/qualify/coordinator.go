@@ -50,7 +50,7 @@ type Source interface {
 	// Host is the host now: its alias, whether its worker is on, the labels it advertises and its fingerprint.
 	Host() Host
 	// Tasks is the tasks of the prepared clones that have a qualify with a reference host. A clone whose manifest cannot be read or parsed
-	// contributes nothing and is reported in the error (joined, one per clone) next to the tasks of the others.
+	// contributes nothing and is reported in the error (joined, one *ManifestError per clone) next to the tasks of the others.
 	Tasks() ([]Task, error)
 	// Prepare takes the snapshot of the task's clone and returns the submission of the task as the manifest declares it, with the qualify
 	// args as its args (the caller turns it into the two halves). One call, so both halves share one snapshot.
@@ -234,11 +234,49 @@ func (c *Coordinator) Status() (inFlight []Started, recent []Record) {
 	return inFlight, recent
 }
 
-func (c *Coordinator) input() (Input, error) {
+// Qualification is what the host holds of each task and what happens next (BuildView), for GET /v1/qualification. It only reads, and it reads
+// the store and the manifests (disk) before it takes the lock: the lock is held only to copy the pairs, the retry memory and the records,
+// so a slow read or a flood of requests cannot hold up Tick and Settle. Nothing is started or settled.
+//
+// The order matters: the memory is copied first and the rows after, so a pair that settles in between can only make the memory older than the
+// rows (an old pair next to its new earned row reads as held, idle), never newer (which would show a finished pair as no pair and no label,
+// "ready").
+func (c *Coordinator) Qualification() (wire.HostQualification, error) {
+	in := Input{Last: map[string]Attempt{}}
+	c.mu.Lock()
+	pairs := make([]Pair, 0, len(c.pairs))
+	for l, p := range c.pairs {
+		pairs = append(pairs, Pair{Label: l, Candidate: p.cand, Reference: p.ref, Since: p.at})
+	}
+	for l, a := range c.last {
+		in.Last[l] = a
+	}
+	history := slices.Clone(c.history)
+	c.mu.Unlock()
+
+	rows, err := c.earnedRows()
+	if err != nil {
+		return wire.HostQualification{}, err
+	}
+	tasks, terr := c.cfg.Source.Tasks()
+	in.Now, in.Host, in.Tasks, in.TasksErr = c.cfg.Now(), c.cfg.Source.Host(), tasks, terr
+	return BuildView(in, rows, pairs, history, UnreadableRepos(terr)), nil
+}
+
+// earnedRows is the earned-label rows; damaged rows are left out and the rest is the answer, any other error is no answer.
+func (c *Coordinator) earnedRows() ([]wire.EarnedLabel, error) {
 	rows, err := c.cfg.Store.EarnedLabels()
 	var damaged *store.SkippedRowsError
-	if err != nil && !errors.As(err, &damaged) { // damaged rows are left out and the rest is the answer; any other error is no answer
-		return Input{}, fmt.Errorf("reading the earned labels: %w", err)
+	if err != nil && !errors.As(err, &damaged) {
+		return nil, fmt.Errorf("reading the earned labels: %w", err)
+	}
+	return rows, nil
+}
+
+func (c *Coordinator) input() (Input, error) {
+	rows, err := c.earnedRows()
+	if err != nil {
+		return Input{}, err
 	}
 	tasks, terr := c.cfg.Source.Tasks()
 	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr,
