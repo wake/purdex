@@ -30,7 +30,7 @@ deps      = ["pnpm-lock.yaml"]
 cacheable = true
 timeout   = "30m"
 summary   = "vitest-json"
-qualify   = { args = ["src/lib/fleet/parse.test.ts"], reference = "air26" }
+qualify   = { args = ["src/lib/crypto-hash.test.ts"], reference = "air26" }
 `
 
 func mustParse(t *testing.T, src string) *Manifest {
