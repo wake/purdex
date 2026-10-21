@@ -7,7 +7,7 @@
 ## 共通規則（每張 brief 都附）
 
 - TDD；每個 task 一個 commit。
-- 測試分層：開發中只跑改到的套件；PR 前 `pdx test go-changed <套件…>`＋`pdx test lint`，job tree＝PR head；動到 goroutine／鎖的加 `pdx test go-race <套件>`；改 `cmd/pdx/plugin`（skill）的加 `./cmd/pdx/...`；新增 exec 的加 execstat-guard；SPA 只動 fixture 副本時跑 `pdx test spa-file spa/src/lib/pool/fixtures-sync.guard.test.ts`。tsc 不在 mlab 跑。
+- 測試分層：開發中只跑改到的套件；PR 前 `pdx test go-changed <套件…>`＋`pdx test lint`，job tree＝PR head；動到 goroutine／鎖的加 `pdx test go-race <套件>`；改 `cmd/pdx/plugin`（skill）的加 `./cmd/pdx/...`；新增 exec 的加 execstat-guard；SPA 只動 fixture 副本時跑 `pdx test spa-file spa/src/lib/watch/fixtures-sync.guard.test.ts`。tsc 不在 mlab 跑。
 - 規模：每張 ≤ 800 行或 ≤ 20 檔，超過就拆，每張都能編譯。
 - codex：R1 → R2（攻擊 → critic），`--model gpt-5.6-sol`；codex 不跑完整測試。
 - 只能 kill 自己的 pid；禁止 pkill -f／killall。
@@ -20,7 +20,7 @@
 3. watch 模組 `wake_settings.go`、`wake_routes.go`：正本模式讀寫、第一次讀取遷移（CAS 競爭時重讀）、`readonly`（版本較新）、`GET`／`PUT`（§5）、`revision`、`source_id`（本機 host_id）、`known_kinds`（把 `internal/module/wwdalerts/wake.go` 的 kind 名稱表抽成可匯出的表，每個 kind 補 `levels` 陣列，spec §5）、`fetched_at`（從沒取到是 null）、`patrol_status` 的 `last_fail_code`／`last_fail_detail` 欄位（本張先回 null；值域見 spec §5）、`/ws/host-events` 事件 `watch.wake_settings.changed`（`value` 只帶 revision／etag／source）、capability `watch.wake_settings.v1`（`internal/core/info_handler.go`；**不宣告** `watch.wake_rules.v1`）。
 4. `internal/config/config.go`：`[watch] wake_source`（預設 mlab）；本張只回 `source`、`is_source`。
 5. `cmd/pdx/device_scope.go`：GET 加入允許清單；`cmd/pdx/device_scope_test.go` 的精確集合同步；PUT 不加（middleware 回 `device_forbidden`）。
-6. fixture：六個 Go 檔＋SPA 副本 `spa/src/lib/watch/__fixtures__/`，403 的 body 固定為 middleware 的 `{"error":"device_forbidden","detail":"this route is not available to a paired phone"}`；**新增** `spa/src/lib/watch/fixtures-sync.guard.test.ts`（照 `lib/pool` 那支寫，現行那支寫死目錄、沒有清單可加），PR 層跑 `pdx test spa-file spa/src/lib/watch/fixtures-sync.guard.test.ts`。
+6. fixture：十個 Go 檔（`watch_wake_settings_get.json`、`…_get_stale.json`、`…_get_full.json`、`…_get_readonly.json`、`…_put_200.json`、`…_put_400.json`、`…_put_400_missing_expect.json`、`…_put_403.json`、`…_put_409.json`、`…_put_503.json`）＋SPA 副本 `spa/src/lib/watch/__fixtures__/`，403 的 body 固定為 middleware 的 `{"error":"device_forbidden","detail":"this route is not available to a paired phone"}`；**新增** `spa/src/lib/watch/fixtures-sync.guard.test.ts`（照 `lib/pool` 那支寫，現行那支寫死目錄、沒有清單可加），PR 層跑 `pdx test spa-file spa/src/lib/watch/fixtures-sync.guard.test.ts`。
 - **測試**：spec §10 的驗證、CAS／並行（兩個並行 PUT、遷移 vs 第一個 PUT）、遷移、版本、capability、裝置 token。mutation：etag 與欄位順序有關、遷移帶入 `watch.enabled`、`max_gap_hours` 接受 0。
 - 約 750／18 檔；超過就把 1、2 拆成前置一張。
 
