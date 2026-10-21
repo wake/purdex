@@ -49,9 +49,16 @@ func TestAlerts_AnUnknownHostIsStillAnError(t *testing.T) {
 }
 
 func TestAlerts_RefusesWhatTheContractRefuses(t *testing.T) {
+	const at = `"since":"2026-10-19T04:00:00Z","last":"2026-10-19T04:00:00Z","cleared_at":null`
 	for name, body := range map[string]string{
-		"bad kind": `{"host":"air26","alerts":[{"key":"k","kind":"meltdown","level":"push","since":"2026-10-19T04:00:00Z","last":"2026-10-19T04:00:00Z","cleared_at":null}]}`,
-		"no host":  `{"host":"","alerts":[]}`,
+		// (an unknown kind or level is no longer here: it is left out, alerts_lenient_test.go)
+		"no host":                `{"host":"","alerts":[]}`,
+		"no key":                 `{"host":"air26","alerts":[{"key":"","kind":"thrash","level":"push",` + at + `}]}`,
+		"last before since":      `{"host":"air26","alerts":[{"key":"k","kind":"thrash","level":"push","since":"2026-10-19T04:00:00Z","last":"2026-10-19T03:00:00Z","cleared_at":null}]}`,
+		"alerts not a list":      `{"host":"air26","alerts":"none"}`,
+		"an alert not an object": `{"host":"air26","alerts":["x"]}`,
+		"a type that is wrong":   `{"host":"air26","alerts":[{"key":5,"kind":"thrash","level":"push",` + at + `}]}`,
+		"not json":               `nope`,
 	} {
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /v1/alerts", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) })

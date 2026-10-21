@@ -33,6 +33,10 @@ func otherWrites(t *testing.T, s *Store, stop <-chan struct{}) *sync.WaitGroup {
 					t.Errorf("other writer: %v", err)
 					return
 				}
+				// Not a loop that never lets go: SQLite's busy handler is not fair, and three writers that never pause can keep one
+				// that waits from the lock for longer than the busy timeout when the host is loaded (the 5.1 s "database is locked" of a
+				// run beside other test packages). A pause still leaves the writes close enough together to cross a read and a write.
+				time.Sleep(200 * time.Microsecond)
 			}
 		}()
 	}

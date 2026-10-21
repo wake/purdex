@@ -46,8 +46,21 @@ func (k *AlertBook) Raise(a wire.Alert) error {
 	return nil
 }
 
-// Active is the keys of the alerts that are active in the table now. It is the truth about what is raised, whoever raised or cleared it.
+// Active is the keys of the alerts that are active in the table now. It is the truth about what is raised, whoever raised or cleared it —
+// including a row of a kind or level this build does not know (S3-3a: the list a reader is shown leaves it out, this does not), so that a
+// rule never takes its own raised alert for one that is not.
 func (k *AlertBook) Active() (map[string]bool, error) {
+	if kw, ok := k.w.(interface{ ActiveAlertKeys() ([]string, error) }); ok {
+		keys, err := kw.ActiveAlertKeys()
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]bool, len(keys))
+		for _, key := range keys {
+			out[key] = true
+		}
+		return out, nil
+	}
 	as, err := k.w.ActiveAlerts()
 	if err != nil {
 		return nil, err

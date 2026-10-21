@@ -58,8 +58,11 @@ func DefaultSocket() string {
 type Client struct {
 	// Timeout bounds one call (DefaultTimeout when zero).
 	Timeout time.Duration
-	sock    string
-	http    *http.Client
+	// Logf takes the client's own log lines (an alert it left out, S3-3a); the standard log when nil.
+	Logf       func(format string, args ...any)
+	sock       string
+	http       *http.Client
+	alertSkips wire.AlertSkips
 }
 
 // New returns a client for the socket at path.
