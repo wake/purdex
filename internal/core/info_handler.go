@@ -166,6 +166,7 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "pool.control.v1") // PUT /api/pool/hosts/{alias}/worker, POST /api/pool/hosts/{alias}/exceptions, DELETE .../exceptions/{name}: the admin token changes a host's worker through the local wwd (a device token gets 403); same condition as pool.v1
 	}
 	if c.moduleReady("pool") {
+		out = append(out, "pool.qualify.v1")      // GET /api/pool/hosts/{alias}/qualification: a host's tasks on two axes (hold, progress) with the last pairs, through the local wwd; known false when that host's wwd predates the route; a device token may read it; same condition as pool.v1
 		out = append(out, "pool.observations.v1") // GET /api/pool/hosts/{alias}/observations?since=&until= and /undeclared?since=: a host's process-tree observations (wwd spec 8.4) through the local wwd, next_until sent back as it came; the admin token only; same condition as pool.v1
 	}
 	if c.moduleReady("pool") && c.moduleFlag("pool", "events") {

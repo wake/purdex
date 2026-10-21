@@ -18,11 +18,12 @@ var deviceAllowed = map[string]bool{
 	"GET /api/hostconfig": true,
 	"GET /api/fleet":      true, // the fleet status (fleet spec §6): the primary / standby answer; the alias list next to it is the admin's
 	// the resource pool (wwd spec §10), read-only: the hosts with their facts, and a host's facts history
-	"GET /api/pool/hosts":                    true,
-	"GET /api/pool/hosts/{alias}/exceptions": true, // a host's exceptions with their holds (G4), read-only like the hosts
-	"GET /api/pool/hosts/{alias}/alerts":     true, // a host's alerts with the kind of each silence (capability pool.alerts.v1), read-only like the hosts
-	"GET /api/pool/facts/history":            true,
-	"GET /api/pool/facts/series":             true, // the same history cut down to what a chart draws (capability pool.series.v1)
+	"GET /api/pool/hosts":                       true,
+	"GET /api/pool/hosts/{alias}/exceptions":    true, // a host's exceptions with their holds (G4), read-only like the hosts
+	"GET /api/pool/hosts/{alias}/qualification": true, // a host's tasks on two axes (capability pool.qualify.v1), read-only like the hosts; job ids, labels and fingerprints, nothing secret
+	"GET /api/pool/hosts/{alias}/alerts":        true, // a host's alerts with the kind of each silence (capability pool.alerts.v1), read-only like the hosts
+	"GET /api/pool/facts/history":               true,
+	"GET /api/pool/facts/series":                true, // the same history cut down to what a chart draws (capability pool.series.v1)
 	// the pool's jobs (wwd spec §10), read-only like the hosts: the list, one job, its log. A phone sees the same job fields (task, args,
 	// summary, log) as the Mac App; both are the user's own devices (spec §11).
 	"GET /api/pool/jobs":          true,
