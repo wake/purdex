@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/watchwake"
 )
 
 const (
@@ -57,8 +58,11 @@ type wakeView struct {
 	} `json:"patrol_status"`
 }
 
-// parseWakeView reads the daemon's document answer (the GET, and the 200 of a PUT, which is the same): settings must be a JSON object, not
-// null, an array or a scalar, and there must be an etag. ok is false for anything else (a proxy's page, a wrong version).
+// parseWakeView reads the daemon's document answer (the GET, and the 200 of a PUT, which is the same). There must be an etag and settings must
+// be a JSON object. A document this build can read is checked by the validator the daemon uses for it (watchwake.Normalize: every field, its
+// type, no null, no field it does not have), so what is shown or built on is what the daemon would accept. A readonly document is one a newer
+// build wrote: it is not that document, so it is only read (the fields `show` prints must have the types it prints them as) and never written.
+// ok is false for anything else (a proxy's page, a wrong shape).
 func parseWakeView(body []byte) (v wakeView, ok bool) {
 	if err := json.Unmarshal(body, &v); err != nil || v.Etag == "" {
 		return wakeView{}, false
@@ -67,8 +71,14 @@ func parseWakeView(body []byte) (v wakeView, ok bool) {
 	if err := json.Unmarshal(v.Settings, &obj); err != nil || obj == nil {
 		return wakeView{}, false
 	}
-	var typed wakeDocView // the fields `show` reads have to be of the types it reads them as
-	if err := json.Unmarshal(v.Settings, &typed); err != nil {
+	if v.Readonly {
+		var typed wakeDocView
+		if err := json.Unmarshal(v.Settings, &typed); err != nil {
+			return wakeView{}, false
+		}
+		return v, true
+	}
+	if _, errs := watchwake.Normalize(v.Settings); len(errs) > 0 {
 		return wakeView{}, false
 	}
 	return v, true

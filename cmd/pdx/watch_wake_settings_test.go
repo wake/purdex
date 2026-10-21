@@ -191,6 +191,16 @@ func TestWakeSettings_AReadonlyDocumentIsShownAsReadonlyAndItsWriteIsRefusedByTh
 	require.Contains(t, errb, "newer version")
 }
 
+// withExtraField is the get fixture's settings with a field the document does not have.
+func withExtraField(t *testing.T) []byte {
+	t.Helper()
+	s := fixtureSettings(t, "get")
+	s["surprise"] = true
+	b, err := json.Marshal(s)
+	require.NoError(t, err)
+	return b
+}
+
 // A settings object whose fields have the wrong types is not a document either: show would print its zero values as if they were the settings
 // (a "no" for an enabled that came as the string "yes"), and a PUT 200 of that shape is not a confirmed write (codex critic on #3956).
 func TestWakeSettings_AnObjectWithFieldsOfTheWrongTypeIsNotADocument(t *testing.T) {
@@ -201,6 +211,12 @@ func TestWakeSettings_AnObjectWithFieldsOfTheWrongTypeIsNotADocument(t *testing.
 		"levels as a string":     `{"rules":{"wwd_alert":{"levels":"push"}}}`,
 		"times as numbers":       `{"rules":{"patrol":{"times":[8,9]}}}`,
 		"interval_min as a list": `{"rules":{"patrol":{"interval_min":[1,2]}}}`,
+		// JSON null decodes into any Go type without an error, and a missing field is no field: the document the daemon serves has every field
+		"enabled null":      `{"enabled":null}`,
+		"rules null":        `{"enabled":true,"auto_start":true,"version":1,"rules":null}`,
+		"below_gb null":     `{"rules":{"disk_low":{"below_gb":null}}}`,
+		"only a few fields": `{"version":1,"enabled":true}`,
+		"an unknown field":  string(withExtraField(t)),
 	} {
 		doc := `{"settings":` + settings + `,"etag":"x","revision":2}`
 		// the read
@@ -456,6 +472,9 @@ func TestWakeSettingsShow_NothingTheDaemonSendsReachesTheTerminalRaw(t *testing.
 	patrol := v["settings"].(map[string]any)["rules"].(map[string]any)["patrol"].(map[string]any)
 	patrol["times"] = []any{"08:00\x1b]0;pwned\x07", "09:00\nfake line"}
 	patrol["tz"] = "UTC\x1b[31m"
+	// a document of a newer build (readonly) is the one whose fields are not checked against this build's rules, so it is what can carry this
+	v["readonly"] = true
+	v["settings"].(map[string]any)["version"] = 2
 	v["source"] = "mlab\x1b[2J"
 	f.get, _ = json.Marshal(v)
 	code, out, errb := runWake("--config", cfg)
