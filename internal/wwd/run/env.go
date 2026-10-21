@@ -98,10 +98,10 @@ func buildEnv(account, jobID, origin, workspace string, taskEnv, parent []string
 	}
 	for _, e := range taskEnv {
 		name, value, fixed := strings.Cut(e, "=")
-		if !envName.MatchString(name) {
+		if !ValidEnvName(name) {
 			return nil, fmt.Errorf("run: %q is not an environment variable name", name)
 		}
-		if fixedNames[name] || strings.HasPrefix(name, "WWD_") || strings.HasPrefix(name, "PDX_") {
+		if ReservedEnvName(name) {
 			return nil, fmt.Errorf("run: the task env may not set %s", name)
 		}
 		if fixed {
@@ -116,6 +116,15 @@ func buildEnv(account, jobID, origin, workspace string, taskEnv, parent []string
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// ValidEnvName says whether name can be the name of an environment variable of a job.
+func ValidEnvName(name string) bool { return envName.MatchString(name) }
+
+// ReservedEnvName says the runner owns name: the workspace's directories, the account, the job's mark, the Purdex state directories. Neither a task
+// nor the host (the config's [jobs.env]) may set it. The rule is here once so that the two cannot drift.
+func ReservedEnvName(name string) bool {
+	return fixedNames[name] || strings.HasPrefix(name, "WWD_") || strings.HasPrefix(name, "PDX_")
 }
 
 // envName is what a variable name may look like; a name such as "--unset=X" would be taken as an option by env(1).

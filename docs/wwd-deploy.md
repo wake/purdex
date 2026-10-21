@@ -857,3 +857,44 @@ worker: leaving mlab/j_01... (task spa-related of purdex) to air26, a faster hos
 
 A job left to a faster host waits in the queue for up to the patience, which is shorter than the five minutes after which `queue_stalled` (§16)
 speaks, so the leaving does not raise that alert by itself.
+
+## 20. Variables of the host for its jobs: `[jobs.env]` (#3933)
+
+A job runs in a clean environment: `PATH`, `TERM`, `USER` and `LOGNAME`, a `HOME`, `TMPDIR` and `XDG_*` inside its workspace, the job's mark,
+and the names its task lists in `env`. A name in that list without a value (`env = ["NAME"]`) is read from the environment of the worker, which
+is the LaunchAgent's or the unit's, and that one has nothing of the host's own in it (`wwd install` rewrites it). So where something lives on a
+host — a browser cache, a toolchain directory — had nowhere to be said, and a manifest wrote `NAME=/Users/wake/...` into the repository.
+
+The host says it in `config.toml`:
+
+```toml
+[jobs.env]
+PLAYWRIGHT_BROWSERS_PATH = "~/Assist/cache.noindex/ms-playwright"
+```
+
+and a task that needs it lists the name, as before:
+
+```toml
+[tasks.check-full]
+env = ["PLAYWRIGHT_BROWSERS_PATH"]
+```
+
+- **The task's list stays the whitelist.** A job sees only the names its task lists; a name the host gave and the task does not list is not in
+  the job. The host's value stands over a same-named variable the worker inherited.
+- **`~` and `~/...` at the start of a value** are the home of the account wwd runs as (the same as `[tools] extra_path` and `[repos]`), not the
+  job's workspace `HOME`. Nothing else is expanded (not `$HOME`, not `~name`); a value need not be a path (`PLAYWRIGHT_BROWSERS_PATH=0` is a
+  value). On a host with a sandbox (mserv's `sandbox_user`) the commands run as another account: the path must be one that account can read, and
+  wwd does not change any permission for it.
+- **Refused at start** (wwd does not run, the config error names the variable): `HOME`, `TMPDIR`, `XDG_*`, `USER`, `LOGNAME`, anything that starts
+  with `WWD_` or `PDX_` (the runner owns them), `PATH` (use `[tools] extra_path`), `TERM`, a name that is not a variable name, a value with a NUL
+  in it. The rule for the names is the one a task's own `env` is held to (`run.ValidEnvName`, `run.ReservedEnvName`).
+- **The contract: `[jobs.env]` holds values of place — where something is on this host — never values that change what a job computes.**
+  The values are not part of a result's reuse key or of the dependency key: they are host-specific paths, so in a key they would make every
+  host's results different and end reuse between hosts that qualify alike, and two hosts whose environment really gives different results are
+  what qualification is for. A value that changes what the job computes (a feature flag, a mode, a version) is written in the manifest as
+  `NAME=value`, which is part of the task's definition hash.
+- **Only the worker's jobs.** A fast-lane run keeps the caller's own environment, as before.
+- Restart wwd after editing the file; the LaunchAgent or the unit need not be touched.
+
+A host that lacks the variable still takes a task that lists it, and the task fails there as it does today (the tool or the cache is not found).
+Letting `/v1/info` announce the names a host gives, so that such a task is taken only by hosts that have them, is a later step.

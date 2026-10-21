@@ -25,6 +25,7 @@ import (
 
 	"github.com/wake/purdex/internal/wwd/fault"
 	"github.com/wake/purdex/internal/wwd/jobdb"
+	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/slicecfg"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -45,6 +46,7 @@ type Config struct {
 	Advisor     AdvisorRule  `toml:"advisor"`
 	JobDB       JobDBConfig  `toml:"jobdb"`
 	Tools       ToolsConfig  `toml:"tools"`
+	Jobs        JobsConfig   `toml:"jobs"`
 	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
 	// Slice is the limits `wwd install` writes for wwd.slice on a Linux host (#3549). The daemon does not use it; it is a known key so
 	// that an operator's override does not stop wwd from starting.
@@ -125,6 +127,42 @@ func (c *Config) validateTools() error {
 				return fmt.Errorf("tools.extra_path: %q is not absolute (or ~/...)", p)
 			}
 			c.Tools.ExtraPath[i] = filepath.Clean(p)
+		}
+	}
+	return nil
+}
+
+// JobsConfig is what the host gives to its jobs (#3933).
+type JobsConfig struct {
+	// Env is variables of the host's own for the jobs of its worker: where something is on this host (a browser cache, a toolchain
+	// directory). A leading ~ or ~/ in a value is the home of the account wwd runs as, not the job's workspace home. A job still sees only the
+	// names its task lists in `env`; a name the runner owns (HOME, TMPDIR, XDG_*, USER, LOGNAME, WWD_*, PDX_*), PATH ([tools] extra_path) and
+	// TERM cannot be set here, and wwd does not start with one. Values are not part of a result's reuse key or of the dependency key: a value
+	// that changes what the job computes belongs in the manifest (`NAME=value`).
+	Env map[string]string `toml:"env"`
+}
+
+func (c *Config) validateJobs(home string) error {
+	for name, v := range c.Jobs.Env {
+		if !run.ValidEnvName(name) {
+			return fmt.Errorf("jobs.env: %q is not an environment variable name", name)
+		}
+		if run.ReservedEnvName(name) {
+			return fmt.Errorf("jobs.env: %s is set by the runner for every job and cannot be given by the host", name)
+		}
+		switch name {
+		case "PATH":
+			return fmt.Errorf("jobs.env: PATH is the tool list; use [tools] extra_path")
+		case "TERM":
+			return fmt.Errorf("jobs.env: TERM is set by the runner")
+		}
+		if strings.ContainsRune(v, 0) {
+			return fmt.Errorf("jobs.env: the value of %s has a NUL in it", name)
+		}
+		if v == "~" {
+			c.Jobs.Env[name] = home
+		} else if rest, ok := strings.CutPrefix(v, "~/"); ok {
+			c.Jobs.Env[name] = filepath.Join(home, rest)
 		}
 	}
 	return nil
@@ -409,6 +447,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateTools(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateJobs(home); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.Slice.Validate(); err != nil {
