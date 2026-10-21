@@ -1,33 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/wake/purdex/internal/gate/shim"
+	"syscall"
 )
-
-// setupGateShims is the gate half of `pdx setup` (spec 2026-10-15 §4): the shims in ~/.config/pdx/shims and the delimited
-// ~/.zshenv block that puts them first on PATH. It runs after the agent hooks are installed and never fails the setup: a
-// home that cannot be written is said on w and the hooks stay installed. pdxPath is the pdx the shims call.
-func setupGateShims(home, pdxPath string, w io.Writer) {
-	if err := shim.Install(home, pdxPath); err != nil {
-		fmt.Fprintf(w, "setup: gate shims not installed: %v\n", err)
-		return
-	}
-	fmt.Fprintf(w, "pdx gate shims installed in %s\n", shim.DirIn(home))
-}
-
-// uninstallGateShims is `pdx setup --uninstall-gate`: the ~/.zshenv block (and nothing else in that file) and the shims.
-func uninstallGateShims(home string, w io.Writer) error {
-	if err := shim.Uninstall(home); err != nil {
-		return err
-	}
-	fmt.Fprintln(w, "pdx gate shims removed")
-	return nil
-}
 
 // thisPdx is the path of the running pdx, symlinks followed, as localSetup finds it.
 func thisPdx() (string, error) {
@@ -41,28 +21,47 @@ func thisPdx() (string, error) {
 	return p, nil
 }
 
-// retireGateForUser is the gate half of `pdx setup` since WWD-9 S0-b: the gate is a pass-through, so no shim is installed and the pdx gate block
-// comes out of ~/.zshenv (the shims already in ~/.config/pdx/shims stay: the shells that started before still have them first on PATH, and they
-// are harmless now; 9a-1 removes the directory). It never fails the setup: the agent hooks are installed already, and what could not be done is
-// a line on w.
-func retireGateForUser(w io.Writer) {
+// removeGateShimsForUser is the gate half of `pdx setup` since WWD-9 9a-1: the gate is a pass-through and its shims are gone, so the ones an
+// old setup left in ~/.config/pdx/shims are removed. It never fails the setup: the agent hooks are installed already, and what could not be
+// done is a line on w.
+func removeGateShimsForUser(w io.Writer) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(w, "setup: could not remove the pdx gate block: %v\n", err)
+		fmt.Fprintf(w, "setup: could not remove the pdx gate shims: %v\n", err)
 		return
 	}
-	retireGate(home, w)
+	removeGateShims(home, w)
 }
 
-func retireGate(home string, w io.Writer) {
-	switch out, err := shim.RemoveBlock(home); {
-	case err != nil:
-		fmt.Fprintf(w, "setup: could not remove the pdx gate block: %v\n", err)
-	case out == shim.BlockRemoved:
-		fmt.Fprintln(w, "pdx gate ~/.zshenv block removed")
-	case out == shim.BlockNotOurs:
-		fmt.Fprintln(w, "setup: ~/.zshenv has text between the pdx gate markers that pdx did not write; left as it is (remove the block by hand, from the line \"# >>> pdx gate >>>\")")
-	case out == shim.BlockUnclosed:
-		fmt.Fprintln(w, "setup: ~/.zshenv has a pdx gate block with no end marker; left as it is (remove it by hand, from the line \"# >>> pdx gate >>>\")")
+// removeGateShims removes, from the shim directory under home, the files an old setup wrote: a regular file named like one of shimTools whose
+// header says it is a pdx shim. The directory goes when that leaves it empty; anything else in it is left, with a line saying so. A shim
+// directory that is a symbolic link is not followed. Nothing to remove is not worth a word.
+func removeGateShims(home string, w io.Writer) {
+	dir := shimDirIn(home)
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return // none, or a link or a file: not ours to touch
+	}
+	removed := 0
+	for _, tool := range shimTools {
+		p := filepath.Join(dir, tool)
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() || !isShim(p) {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			fmt.Fprintf(w, "setup: could not remove the pdx gate shim %s: %v\n", p, err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		fmt.Fprintf(w, "pdx gate shims removed from %s (a shell started before may need `rehash`, or a new shell)\n", dir)
+	}
+	switch err := os.Remove(dir); {
+	case err == nil:
+	case errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST):
+		fmt.Fprintf(w, "setup: other files are left in %s; remove the directory by hand when you no longer need them\n", dir)
+	default:
+		fmt.Fprintf(w, "setup: could not remove %s: %v\n", dir, err)
 	}
 }

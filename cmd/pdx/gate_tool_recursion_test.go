@@ -8,8 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/wake/purdex/internal/gate/shim"
 )
 
 // #3671: with HOME swapped for a fake directory the shim directory worked out from $HOME is not the one on PATH. The shim on
@@ -17,7 +15,7 @@ import (
 func TestGateTool_FakeHomeStillFindsTheRealBinaryBehindTheShim(t *testing.T) {
 	real, cfg, _, got := toolEnv(t, "go", quietGate)
 	shimDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(shimDir, "go"), []byte(shim.Script("go", "/nonexistent/pdx")), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(shimDir, "go"), []byte(fakeShim("go")), 0o755))
 	t.Setenv("PATH", shimDir+":"+filepath.Dir(real)+":/usr/bin:/bin")
 	t.Setenv("HOME", t.TempDir()) // swapped after the shim directory was made
 	var out, errb bytes.Buffer
@@ -29,7 +27,7 @@ func TestGateTool_FakeHomeStillFindsTheRealBinaryBehindTheShim(t *testing.T) {
 func TestGateTool_OnlyAShimOnPathIs127UnderAFakeHome(t *testing.T) {
 	_, cfg, _, got := toolEnv(t, "go", quietGate)
 	shimDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(shimDir, "go"), []byte(shim.Script("go", "/nonexistent/pdx")), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(shimDir, "go"), []byte(fakeShim("go")), 0o755))
 	t.Setenv("PATH", shimDir)
 	t.Setenv("HOME", t.TempDir())
 	var out, errb bytes.Buffer

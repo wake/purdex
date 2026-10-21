@@ -698,3 +698,14 @@ only then install the older build. An older wwd that finds a row of a kind it do
 one is left (the wwd died before it cleared), delete the rows of those three kinds in `wwd.db` before starting the older build.
 
 **Checking.** `GET /v1/alerts` on the host's wwd socket (or the App's pool alert view, `GET /api/pool/hosts/{alias}/alerts`) lists the active alerts; a host with the rules on and calm shows none of the three. `wwd alerts-replay` (§8) will count the three rules over recorded minutes once S3-2b is in.
+
+## 16. The old gate's shims (WWD-9 9a-1)
+
+The host-load gate's shims (`go`, `pnpm`, `npx`, `vitest`, `tsc`, `composer`, `xcodebuild`, `swift`, `swift-build`, `swift-test` in
+`~/.config/pdx/shims`) are retired. `pdx setup --agent cc` removes the ten files an old setup wrote there (a file counts only if its second line is
+the shim header) and then the directory, if nothing else is in it; a file of another name, or one of those names that is not a shim, is left, with a
+line saying so. `pdx setup --uninstall-gate` is gone: its work is part of the setup now. The `~/.zshenv` block was taken out by the S0-b setup on
+every host that had one (mlab and air26, read back 2026-10-21; air19 and mserv never had shims), so nothing removes it any more.
+
+A shell that started before the setup still has the shim directory on its `PATH`. If it reports `command not found` for `go` and the like, run
+`rehash` or open a new shell. Until then `pdx gate` still skips a leftover shim when it looks for the real tool, so nothing loops.
