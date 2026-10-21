@@ -1,0 +1,235 @@
+{
+  "host": "mserv",
+  "known": true,
+  "tasks": [
+    {
+      "label": "task:purdex/earned-ok",
+      "reference": "air26",
+      "hold": "earned",
+      "progress": "idle",
+      "earned": {
+        "granted_at": "2026-10-19T09:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-earned-ok"
+      }
+    },
+    {
+      "label": "task:purdex/n-missing",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "blocked",
+      "blocked": {
+        "code": "missing",
+        "labels": [
+          "tool:zig"
+        ]
+      }
+    },
+    {
+      "label": "task:purdex/n-no-def",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "blocked",
+      "blocked": {
+        "code": "no_definition"
+      }
+    },
+    {
+      "label": "task:purdex/n-pairing",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "pairing",
+      "pair": {
+        "candidate": "j_01CAND0000000000000000002",
+        "reference": "j_01REF00000000000000000002",
+        "since": "2026-10-22T08:51:00Z"
+      }
+    },
+    {
+      "label": "task:purdex/n-ready",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "ready"
+    },
+    {
+      "label": "task:purdex/n-ref-missing",
+      "reference": "mserv",
+      "hold": "none",
+      "progress": "blocked",
+      "blocked": {
+        "code": "reference_missing",
+        "labels": [
+          "tool:zig"
+        ]
+      }
+    },
+    {
+      "label": "task:purdex/n-waiting",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "waiting",
+      "last": {
+        "outcome": "mismatch",
+        "at": "2026-10-22T07:00:00Z",
+        "why": "the passed counts differ: 41 on the candidate, 40 on the reference"
+      },
+      "retry_at": "2026-10-23T07:00:00Z"
+    },
+    {
+      "label": "task:purdex/off-none",
+      "reference": "air26",
+      "hold": "none",
+      "progress": "blocked",
+      "blocked": {
+        "code": "worker_off"
+      }
+    },
+    {
+      "label": "task:purdex/off-quarantined",
+      "reference": "air26",
+      "hold": "quarantined",
+      "progress": "blocked",
+      "earned": {
+        "granted_at": "2026-10-21T03:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-off-quarantined"
+      },
+      "blocked": {
+        "code": "worker_off"
+      }
+    },
+    {
+      "label": "task:purdex/old-earned",
+      "gone": true,
+      "hold": "earned",
+      "progress": "idle",
+      "earned": {
+        "granted_at": "2026-10-05T17:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-old-earned"
+      }
+    },
+    {
+      "label": "task:purdex/old-quarantined",
+      "gone": true,
+      "hold": "quarantined",
+      "progress": "idle",
+      "earned": {
+        "granted_at": "2026-10-05T17:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-old-quarantined"
+      }
+    },
+    {
+      "label": "task:purdex/q-missing",
+      "reference": "air26",
+      "hold": "quarantined",
+      "progress": "blocked",
+      "earned": {
+        "granted_at": "2026-10-21T03:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-q-missing"
+      },
+      "blocked": {
+        "code": "missing",
+        "labels": [
+          "tool:zig"
+        ]
+      }
+    },
+    {
+      "label": "task:purdex/q-pairing",
+      "reference": "air26",
+      "hold": "quarantined",
+      "progress": "pairing",
+      "earned": {
+        "granted_at": "2026-10-21T03:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-q-pairing"
+      },
+      "pair": {
+        "candidate": "j_01CAND0000000000000000001",
+        "reference": "j_01REF00000000000000000001",
+        "since": "2026-10-22T08:57:00Z"
+      }
+    },
+    {
+      "label": "task:purdex/q-ready",
+      "reference": "air26",
+      "hold": "quarantined",
+      "progress": "ready",
+      "earned": {
+        "granted_at": "2026-10-21T03:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-q-ready"
+      }
+    },
+    {
+      "label": "task:purdex/q-waiting",
+      "reference": "air26",
+      "hold": "quarantined",
+      "progress": "waiting",
+      "earned": {
+        "granted_at": "2026-10-21T03:00:00Z",
+        "fingerprint": {
+          "node": "24.1",
+          "pnpm": "10.2"
+        },
+        "snapshot": "tree-q-waiting"
+      },
+      "last": {
+        "outcome": "void",
+        "at": "2026-10-22T04:00:00Z"
+      },
+      "retry_at": "2026-10-23T04:00:00Z"
+    },
+    {
+      "label": "task:purdex/ref-ok",
+      "reference": "mserv",
+      "hold": "reference",
+      "progress": "idle"
+    }
+  ],
+  "unreadable": [
+    "broken"
+  ],
+  "recent": [
+    {
+      "label": "task:purdex/earned-ok",
+      "outcome": "match",
+      "why": "",
+      "at": "2026-10-19T09:00:00Z",
+      "candidate": "j_01CAND0000000000000000004",
+      "reference": "j_01REF00000000000000000004"
+    },
+    {
+      "label": "task:purdex/n-waiting",
+      "outcome": "mismatch",
+      "why": "the passed counts differ: 41 on the candidate, 40 on the reference",
+      "at": "2026-10-22T07:00:00Z",
+      "candidate": "j_01CAND0000000000000000003",
+      "reference": "j_01REF00000000000000000003"
+    }
+  ]
+}

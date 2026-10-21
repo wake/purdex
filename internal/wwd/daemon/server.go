@@ -155,6 +155,7 @@ func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/events", d.handleEvents(peer))
 	d.factsRoutes(mux, peer)
 	d.workerRoutes(mux, peer)
+	d.qualificationRoutes(mux, peer)
 	d.jobRoutes(mux, peer)
 	d.observeRoutes(mux, peer)
 	d.alertsRoutes(mux, peer)

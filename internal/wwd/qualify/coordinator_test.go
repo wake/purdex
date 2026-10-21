@@ -711,3 +711,33 @@ func TestAFailedSaveOfTheAttemptStillWaitsInMemory(t *testing.T) {
 		t.Fatalf("a failed save lost the wait in this run: %d", n)
 	}
 }
+
+// Qualification reads the coordinator's own memory: the pair in flight with its ids, then the wait after a mismatch with the why of the
+// record, and the repos whose manifest cannot be read. It starts and settles nothing.
+func TestQualificationFollowsThePairThroughAMismatch(t *testing.T) {
+	r := newRig(t, tsc)
+	r.c.Tick(ctx())
+	v, err := r.c.Qualification()
+	if err != nil || len(v.Tasks) != 1 || v.Tasks[0].Progress != wire.QualProgressPairing || v.Tasks[0].Pair == nil || v.Tasks[0].Pair.Candidate != "j1" || v.Tasks[0].Pair.Reference != "j2" {
+		t.Fatalf("%+v %v", v, err)
+	}
+	cs := sum(9, 0)
+	cs.PassedDigest = digestOf(77)
+	bad := goodRes("mserv")
+	bad.Summary = cs
+	r.finishPair(bad, goodRes("air26"))
+	r.c.Tick(ctx())
+	v, _ = r.c.Qualification()
+	tk := v.Tasks[0]
+	if tk.Progress != wire.QualProgressWaiting || tk.Last == nil || tk.Last.Outcome != "mismatch" || tk.Last.Why == "" || tk.RetryAt == nil || !tk.RetryAt.Equal(r.now.Add(RetryAfter)) || len(v.Recent) != 1 {
+		t.Fatalf("%+v", v)
+	}
+	if n := len(r.q.submissions()); n != 2 {
+		t.Fatalf("reading started a pair: %d", n)
+	}
+	r.src.tasksErr = &ManifestError{Repo: "purdex", Err: errors.New("bad")}
+	r.src.tasks = nil
+	if v, _ = r.c.Qualification(); len(v.Unreadable) != 1 || v.Unreadable[0] != "purdex" {
+		t.Fatalf("%+v", v)
+	}
+}

@@ -50,7 +50,7 @@ type Source interface {
 	// Host is the host now: its alias, whether its worker is on, the labels it advertises and its fingerprint.
 	Host() Host
 	// Tasks is the tasks of the prepared clones that have a qualify with a reference host. A clone whose manifest cannot be read or parsed
-	// contributes nothing and is reported in the error (joined, one per clone) next to the tasks of the others.
+	// contributes nothing and is reported in the error (joined, one *ManifestError per clone) next to the tasks of the others.
 	Tasks() ([]Task, error)
 	// Prepare takes the snapshot of the task's clone and returns the submission of the task as the manifest declares it, with the qualify
 	// args as its args (the caller turns it into the two halves). One call, so both halves share one snapshot.
@@ -234,11 +234,32 @@ func (c *Coordinator) Status() (inFlight []Started, recent []Record) {
 	return inFlight, recent
 }
 
+// Qualification is what the host holds of each task and what happens next (BuildView), for GET /v1/qualification. It only reads: the pairs,
+// the retry memory and the records are the coordinator's own, under its lock; nothing is started or settled.
+func (c *Coordinator) Qualification() (wire.HostQualification, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	in, rows, err := c.inputRows()
+	if err != nil {
+		return wire.HostQualification{}, err
+	}
+	pairs := make([]Pair, 0, len(c.pairs))
+	for l, p := range c.pairs {
+		pairs = append(pairs, Pair{Label: l, Candidate: p.cand, Reference: p.ref, Since: p.at})
+	}
+	return BuildView(in, rows, pairs, c.history, UnreadableRepos(in.TasksErr)), nil
+}
+
 func (c *Coordinator) input() (Input, error) {
+	in, _, err := c.inputRows()
+	return in, err
+}
+
+func (c *Coordinator) inputRows() (Input, []wire.EarnedLabel, error) {
 	rows, err := c.cfg.Store.EarnedLabels()
 	var damaged *store.SkippedRowsError
 	if err != nil && !errors.As(err, &damaged) { // damaged rows are left out and the rest is the answer; any other error is no answer
-		return Input{}, fmt.Errorf("reading the earned labels: %w", err)
+		return Input{}, nil, fmt.Errorf("reading the earned labels: %w", err)
 	}
 	tasks, terr := c.cfg.Source.Tasks()
 	in := Input{Now: c.cfg.Now(), Host: c.cfg.Source.Host(), Tasks: tasks, TasksErr: terr,
@@ -252,7 +273,7 @@ func (c *Coordinator) input() (Input, error) {
 	for l, a := range c.last {
 		in.Last[l] = a
 	}
-	return in, nil
+	return in, rows, nil
 }
 
 // halves turns the task's own submission into the two halves. The candidate half asks for what a host that has not earned the label can

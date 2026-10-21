@@ -46,7 +46,7 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 		if s.mrefs != nil && s.mrefs.Configured(repo) {
 			snap, got := s.mrefs.Get(repo)
 			if !got {
-				errs = append(errs, fmt.Errorf("%s: its manifest_ref has not been read yet", repo))
+				errs = append(errs, &qualify.ManifestError{Repo: repo, Err: errors.New("its manifest_ref has not been read yet")})
 				continue
 			}
 			path, b, ok, commit = "the manifest_ref of "+repo+" ("+snap.Commit+")", snap.Manifest, true, snap.Commit
@@ -55,13 +55,13 @@ func (s *qualifySource) Tasks() ([]qualify.Task, error) {
 		}
 		if !ok {
 			if file := filepath.Join(root, ".wwd", "tasks.toml"); fileExists(file) { // no manifest at all is not a fault; one that is there and cannot be read is
-				errs = append(errs, fmt.Errorf("%s: %s cannot be read (not a regular file inside the clone, too large, or unreadable)", repo, file))
+				errs = append(errs, &qualify.ManifestError{Repo: repo, Err: fmt.Errorf("%s cannot be read (not a regular file inside the clone, too large, or unreadable)", file)})
 			}
 			continue
 		}
 		m, err := manifest.Parse(b)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %s does not parse: %w", repo, path, err))
+			errs = append(errs, &qualify.ManifestError{Repo: repo, Err: fmt.Errorf("%s does not parse: %w", path, err)})
 			continue
 		}
 		var names []string

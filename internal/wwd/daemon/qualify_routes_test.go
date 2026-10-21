@@ -23,6 +23,8 @@ type fakeQualifier struct {
 	err      error
 	inFlight []qualify.Started
 	recent   []qualify.Record
+	view     wire.HostQualification
+	viewErr  error
 }
 
 func (f *fakeQualifier) Request(_ context.Context, task string) (qualify.Started, error) {
@@ -34,6 +36,10 @@ func (f *fakeQualifier) Request(_ context.Context, task string) (qualify.Started
 }
 
 func (f *fakeQualifier) Status() ([]qualify.Started, []qualify.Record) { return f.inFlight, f.recent }
+
+func (f *fakeQualifier) Qualification() (wire.HostQualification, error) {
+	return f.view, f.viewErr
+}
 
 func qualifyDaemon(t *testing.T, q Qualifier) *Daemon {
 	t.Helper()

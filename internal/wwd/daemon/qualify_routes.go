@@ -14,6 +14,28 @@ import (
 type Qualifier interface {
 	Request(ctx context.Context, repoTask string) (qualify.Started, error)
 	Status() (inFlight []qualify.Started, recent []qualify.Record)
+	// Qualification is what the host holds of each task and what happens next (GET /v1/qualification).
+	Qualification() (wire.HostQualification, error)
+}
+
+// qualificationRoutes registers GET /v1/qualification on both surfaces like GET /v1/exceptions (WWD-7b2-0a): on the socket ?host=<alias>
+// forwards to that host, on TCP the host answers for itself (a peer's Purdex daemon reads it so). Read only, and nothing in it is secret (job
+// ids, labels, fingerprints). Without a coordinator the route does not exist, which a reader takes for a wwd that predates it.
+func (d *Daemon) qualificationRoutes(mux *http.ServeMux, peer bool) {
+	if d.opts.Qualifier == nil {
+		return
+	}
+	mux.HandleFunc("GET /v1/qualification", d.viaHost(peer, d.handleQualification))
+}
+
+func (d *Daemon) handleQualification(w http.ResponseWriter, r *http.Request) {
+	v, err := d.opts.Qualifier.Qualification()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	v.Host = d.opts.Alias
+	writeJSON(w, http.StatusOK, v)
 }
 
 // qualifyRoutes registers POST /v1/qualify and GET /v1/qualify on the local socket only (spec §7): a person asks this host to start a pair for
