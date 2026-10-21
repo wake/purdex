@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -255,14 +256,29 @@ func lookPath(name, dir string, env []string) (string, error) {
 		return p, checkExec(p)
 	}
 	path, _ := envValue(env, "PATH")
+	var unusable error
 	for _, d := range filepath.SplitList(path) {
 		if d == "" || !filepath.IsAbs(d) {
 			continue
 		}
 		p := filepath.Join(d, name)
-		if checkExec(p) == nil {
+		err := checkExec(p)
+		if err == nil {
 			return p, nil
 		}
+		// Nothing there is the only thing that is a missing program (exec.ErrNotFound: the worker holds off that one task, #3908). A candidate
+		// that is there and cannot be used (not executable, a link to nothing, a directory the worker cannot read) is the host's trouble: it
+		// is told as it is, and a usable program further along the PATH still wins.
+		if unusable == nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				unusable = err
+			} else if _, lerr := os.Lstat(p); lerr == nil {
+				unusable = fmt.Errorf("run: %s is a link to nothing: %w", p, err)
+			}
+		}
+	}
+	if unusable != nil {
+		return "", fmt.Errorf("run: %q is on the PATH but cannot be used: %w", name, unusable)
 	}
 	return "", fmt.Errorf("run: %q not found in PATH: %w", name, exec.ErrNotFound)
 }
