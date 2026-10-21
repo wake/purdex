@@ -94,8 +94,9 @@ func TestLabeler_NoRootNoOverlayLookup(t *testing.T) {
 	}
 }
 
-// A failed read keeps the root known before (as the other sources do); a changed root shows within one ttl.
-func TestLabeler_RootKeepsItsLastValueOnAnErrorAndFollowsAChange(t *testing.T) {
+// A root that could not be read leaves the group empty (spec §3.1: no guess, and no stale root either); the next good read brings it back,
+// and a changed root shows within one ttl.
+func TestLabeler_ARootReadErrorLeavesTheGroupEmptyUntilTheNextGoodRead(t *testing.T) {
 	f := baseSources()
 	delete(f.groups, "s1")
 	r := &rootSource{roots: map[string]string{"s1": "root-1"}}
@@ -111,16 +112,16 @@ func TestLabeler_RootKeepsItsLastValueOnAnErrorAndFollowsAChange(t *testing.T) {
 	clk.advance(defaultTTL + time.Second)
 	l.Label("s1", "dev") // queues a reread, which fails
 	settle(t, l)
-	if got := l.Label("s1", "dev"); got.Group != "Old group" {
-		t.Fatalf("after a failed read: group = %q", got.Group)
+	if got := l.Label("s1", "dev"); got.Group != "" {
+		t.Fatalf("after a failed read: group = %q, want none (the old root is not trusted)", got.Group)
 	}
 
-	r.set(func() { r.err = nil; r.roots["s1"] = "root-2" }) // the relay moved the session to another chain
+	r.set(func() { r.err = nil; r.roots["s1"] = "root-2" }) // the read works again, and the relay moved the session to another chain
 	clk.advance(defaultTTL + time.Second)
 	l.Label("s1", "dev")
 	settle(t, l)
 	if got := l.Label("s1", "dev"); got.Group != "New group" {
-		t.Fatalf("after the root changed: group = %q", got.Group)
+		t.Fatalf("after the next good read: group = %q", got.Group)
 	}
 }
 

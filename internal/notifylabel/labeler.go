@@ -27,8 +27,8 @@ type Sources struct {
 	// Group is the display name of the team the session sits in ("" = no team). An error keeps the last known value.
 	Group func(ctx context.Context, sessionID string) (string, error)
 	// Root is the root of the session's relay chain (team.LineageRootResolver.RootSessionOf: the session with no predecessor, itself
-	// when it has none). An error keeps the last known root, and a session whose root is not known yet has no overlay group. nil:
-	// the session id is the key (a host with no lineage).
+	// when it has none). An error clears the root (a session whose root is not known has no overlay group, spec §3.1); "" with no
+	// error is "not known" and keeps the root known before. nil: the session id is the key (a host with no lineage).
 	Root func(ctx context.Context, sessionID string) (string, error)
 	// Display is the display name of a persona code (peers.PoolDisplayName): a memory lookup, called on every Label so a
 	// renamed persona shows at once.
@@ -267,8 +267,10 @@ func (l *Labeler) read(sid string) {
 	if groupErr == nil {
 		e.group = group
 	}
-	if rootErr == nil && root != "" {
-		e.root = root
+	if rootErr != nil {
+		e.root = "" // a root that could not be read leaves the group empty (spec §3.1), not the group of a root known before
+	} else if root != "" {
+		e.root = root // "" with no error is "not known": the root known before stays
 	}
 	if _, had := l.cache[sid]; !had && len(l.cache) >= l.maxEntries {
 		l.evictLocked()
