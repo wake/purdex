@@ -311,11 +311,9 @@ func (c *Client) WorkerOn(ctx context.Context, host string) (wire.WorkerView, er
 // change is based on: a setting that has changed since is a *StatusError 409 whose body is a wire.WorkerEtagMismatch and nothing is
 // changed. A wwd that predates the etag answers 400 (it does not know expect_etag); the call is not repeated without it.
 func (c *Client) SetWorkerOn(ctx context.Context, host string, s wire.WorkerSettings, expect string) (wire.WorkerView, error) {
-	body := wire.WorkerPut{WorkerSettings: s, ExpectEtag: expect}
-	if host == "" {
-		return call[wire.WorkerView](ctx, c, http.MethodPut, "/v1/worker", nil, body)
-	}
-	raw, err := json.Marshal(body)
+	// this host too goes through Mutate (an empty host is the local wwd itself): the refusal's body must come back whole, and the
+	// ordinary call path cuts the body of a non-2xx answer to 200 bytes
+	raw, err := json.Marshal(wire.WorkerPut{WorkerSettings: s, ExpectEtag: expect})
 	if err != nil {
 		return wire.WorkerView{}, err
 	}

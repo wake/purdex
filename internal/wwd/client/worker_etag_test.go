@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -27,6 +28,11 @@ func TestWorkerOnAndSetWorkerOnCarryTheHostAndTheEtag(t *testing.T) {
 			}
 		}
 		w.WriteHeader(status)
+		if status == http.StatusConflict {
+			// longer than the 200 bytes an ordinary call keeps of a refusal
+			writeJSON(w, wire.WorkerEtagMismatch{Reason: wire.WorkerEtagMismatchReason, Etag: answer.Etag(), Worker: wire.WorkerSettings{OwnerRule: strings.Repeat("x", 300)}.View()})
+			return
+		}
 		writeJSON(w, answer.View())
 	})
 	c := New(fakeWWD(t, mux))
@@ -53,8 +59,12 @@ func TestWorkerOnAndSetWorkerOnCarryTheHostAndTheEtag(t *testing.T) {
 	for _, host := range []string{"", "air26"} {
 		_, err := c.SetWorkerOn(ctx, host, answer, "stale")
 		var se *StatusError
-		if !errors.As(err, &se) || se.Code != http.StatusConflict || se.Body == "" {
-			t.Errorf("SetWorkerOn(%q) 409: %v", host, err)
+		if !errors.As(err, &se) || se.Code != http.StatusConflict {
+			t.Fatalf("SetWorkerOn(%q) 409: %v", host, err)
+		}
+		// the whole refusal comes back, whichever host it is about
+		if m, e := wire.DecodeLenient[wire.WorkerEtagMismatch]([]byte(se.Body)); e != nil || m.Reason != wire.WorkerEtagMismatchReason || len(m.Worker.OwnerRule) != 300 {
+			t.Errorf("SetWorkerOn(%q) 409 body (%d bytes) was cut: %v", host, len(se.Body), e)
 		}
 	}
 }
