@@ -55,6 +55,12 @@ describe('(b) tab.group', () => {
     const p = run('h2', [tabOf('t1', 'h2', 'S7', manualGroupKey('g1'))], [teamView('Crew', 'x', ['S7'])])
     expect(p.labels).toContainEqual({ root_session_id: 'R7', group: 'Alpha' })
   })
+  it('a seat on a host this Mac does not know hides nothing (codex R2)', () => {
+    roots['h1:S7'] = 'R7'
+    const v = teamView('Crew', 'x', ['S7'])
+    ;(v.members[0] as { hostId: string | null }).hostId = null
+    expect(run('h1', [tabOf('t1', 'h1', 'S7', manualGroupKey('g1'))], [v]).labels).toContainEqual({ root_session_id: 'R7', group: 'Alpha' })
+  })
   it('a group that no longer exists is no placement', () => {
     roots['h1:S6'] = 'R6'
     expect(run('h1', [tabOf('t1', 'h1', 'S6', manualGroupKey('gone'))]).labels.find((l) => l.root_session_id === 'R6')).toBeUndefined()
