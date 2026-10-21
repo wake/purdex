@@ -49,16 +49,26 @@ async function load(hostId: string): Promise<{ loaded: Loaded; observed: string 
   let observed = ''
   let daemonCapabilities: string[] = []
   let wwd: Loaded['wwd'] = null
+  let wwdAlerts: Loaded['wwdAlerts'] = null
   try {
     const data = await fetchInfo(hostId).then((r) => readJson(r, '/api/info'))
     info = data.nex ?? null
     if (typeof data.host_id === 'string') observed = data.host_id
     if (Array.isArray(data.capabilities)) daemonCapabilities = data.capabilities.filter((c): c is string => typeof c === 'string')
     wwd = parseWwd(data.wwd)
+    wwdAlerts = parseWwdAlerts(data.wwdalerts)
   } catch (err) {
     return { loaded: { info: null, capabilities: null, error: errorText(err) }, observed }
   }
-  return { loaded: { ...(await loadCapabilities(hostId, info)), daemonCapabilities, wwd }, observed }
+  return { loaded: { ...(await loadCapabilities(hostId, info)), daemonCapabilities, wwd, wwdAlerts }, observed }
+}
+
+/** `/api/info.wwdalerts`: only `{ push: 'on' | 'off', deliverer: boolean }` counts; anything else is "the daemon does not say". */
+function parseWwdAlerts(v: unknown): Loaded['wwdAlerts'] {
+  if (typeof v !== 'object' || v === null) return null
+  const { push, deliverer } = v as Record<string, unknown>
+  if ((push !== 'on' && push !== 'off') || typeof deliverer !== 'boolean') return null
+  return { push, deliverer }
 }
 
 /** `/api/info.wwd`: only a non-empty string `host_id` counts; anything else is "the daemon does not say". */
