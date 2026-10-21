@@ -161,6 +161,36 @@ func TestWakeSettingsShow_PatrolStatusAndTheSuppressedAreListed(t *testing.T) {
 	}
 }
 
+// The fixtures WK-1b added: a document with the patrol failing and three refused wake-ups (get_full), and one a newer build wrote (get_readonly).
+func TestWakeSettingsShow_TheFullFixtureShowsThePatrolFailureAndTheRefusedWakeUps(t *testing.T) {
+	f, cfg := newWakeDaemon(t)
+	f.get = wakeFixture(t, "get_full")
+	code, out, errb := runWake("--config", cfg)
+	require.Equal(t, 0, code, errb)
+	for _, want := range []string{
+		"targets_unreachable", "targets 全部連不上：mlab、air26", // the last failure of the patrol, code and text
+		"2026-10-22T08:30:00+08:00", // the last success
+		"level_off", "kind_off", "patrol_failed", "air26：記憶體壓力偏高｜available 1.2 GB", "mlab：swap 持續增加",
+	} {
+		require.Contains(t, out, want, out)
+	}
+}
+
+func TestWakeSettings_AReadonlyDocumentIsShownAsReadonlyAndItsWriteIsRefusedByTheDaemon(t *testing.T) {
+	f, cfg := newWakeDaemon(t)
+	f.get = wakeFixture(t, "get_readonly")
+	code, out, errb := runWake("--config", cfg)
+	require.Equal(t, 0, code, errb)
+	require.Contains(t, out, "唯讀：是")
+	// a newer build wrote it: the daemon answers a PUT with invalid/bad_version, and that is exit 4 like any refused document
+	f.putStatus = http.StatusBadRequest
+	f.put = []byte(`{"error":"invalid","fields":[{"path":"version","code":"bad_version","message":"the stored document is of a newer version than this build reads"}]}`)
+	code, _, errb = runWake("set", "enabled=false", "--config", cfg)
+	require.Equal(t, 4, code, errb)
+	require.Contains(t, errb, "bad_version")
+	require.Contains(t, errb, "newer version")
+}
+
 // A settings object whose fields have the wrong types is not a document either: show would print its zero values as if they were the settings
 // (a "no" for an enabled that came as the string "yes"), and a PUT 200 of that shape is not a confirmed write (codex critic on #3956).
 func TestWakeSettings_AnObjectWithFieldsOfTheWrongTypeIsNotADocument(t *testing.T) {
