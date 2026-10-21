@@ -42,12 +42,13 @@ const RETIRED_NAMES = [
 
 /** Blanks the comments (found by the TypeScript parser, so a `//` inside a string or template literal is left alone) and keeps everything else, including the line breaks. */
 export function stripComments(text: string): string {
-  const sf = ts.createSourceFile('x.tsx', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX)
+  const sf = ts.createSourceFile('x.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const ranges: Array<[number, number]> = []
   const visit = (n: ts.Node): void => {
     for (const r of ts.getLeadingCommentRanges(text, n.getFullStart()) ?? []) ranges.push([r.pos, r.end])
     for (const r of ts.getTrailingCommentRanges(text, n.getEnd()) ?? []) ranges.push([r.pos, r.end])
-    ts.forEachChild(n, visit)
+    // getChildren (not forEachChild) also yields the punctuation tokens, so a comment inside an empty `{ }`, `[ ]` or `( )` is found too.
+    for (const c of n.getChildren(sf)) visit(c)
   }
   visit(sf)
   let out = text
@@ -105,5 +106,9 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn("const x = `${`https://host`}`; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
     expect(hitsIn("const re = /'/; const u = 'https://h'; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
     expect(hitsIn('const a = <div>https://h</div>; fetchGateDecisions()')).toEqual(['fetchGateDecisions'])
+    // a comment alone in an empty container
+    expect(hitsIn('const x = { /* fetchGateDecisions */ }')).toEqual([])
+    expect(hitsIn('function f() { // fetchGateDecisions\n}')).toEqual([])
+    expect(hitsIn('const a = [/* selectGateDecisionsV1 */]; f(/* parseGateDecisions */)')).toEqual([])
   })
 })
