@@ -9,7 +9,7 @@ import ts from 'typescript'
 // @ts-expect-error node:fs is untyped here.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 // @ts-expect-error node:path is untyped here.
-import { dirname, join, relative } from 'node:path'
+import { join, relative } from 'node:path'
 
 // @ts-expect-error __dirname is untyped here.
 const SRC: string = join(__dirname, '..')
@@ -31,6 +31,10 @@ const RETIRED_FILES = [
   'lib/fleet/fleet-support.ts',
   'lib/fleet/fleet-ws.ts',
   'lib/pool/pool-look-migration.ts',
+  // The Hosts page's probe-host editor, the pool host page and their rows (MON-9b-2).
+  'components/hosts/ProbeHostPage.tsx', 'components/hosts/PoolHostPage.tsx', 'components/hosts/ProbeHostEditor.tsx', 'components/hosts/ProbeHostForm.tsx', 'components/hosts/ProbeCheck.tsx',
+  'components/hosts/probe-rows.tsx', 'components/hosts/use-probe-rows.ts', 'components/hosts/useProbeEditor.ts', 'components/hosts/PoolStatusDot.tsx', 'components/hosts/pool-status-word.ts',
+  'lib/pool/use-pool-host-rows.ts', 'lib/pool/fleet-bridge.ts',
 ]
 
 /** Routes, capabilities and event names no non-test source may contain (matched as plain text, after comments are stripped). */
@@ -52,18 +56,11 @@ const RETIRED_FLEET_CODE = [
 
 /**
  * Every way into the network that `lib/fleet` has (`hostFetch` is called from `api.ts`, `config-api.ts`, `probe-check.ts`; `grep -n hostFetch spa/src/lib/fleet/*.ts` again when this list is changed), and what MON-12b-1 deleted.
- * Not used outside `lib/fleet/**`, except by the files of `PENDING_9B2`.
+ * Not used outside `lib/fleet/**`.
  */
 const RETIRED_FLEET_NAMES = [
   'fetchFleet', 'readFleetOf', 'readAllFleets', 'fetchFleetConfig', 'fetchSshAliases', 'putProbeHosts', 'putFleetRow', 'runProbeCheck', 'useFleetConfigStore',
   'startFleetSupport', 'handleFleetEvent', 'bootPoolLooks',
-]
-
-/** MON-9b-2 deletes these: the Hosts page's probe-host editor and the pool rows. Until it does, they are the only files outside `lib/fleet/**` that may still use `RETIRED_FLEET_NAMES` (9b-2 drops this list and the test that goes with it). */
-const PENDING_9B2 = [
-  'components/hosts/ProbeHostPage.tsx', 'components/hosts/PoolHostPage.tsx', 'components/hosts/ProbeHostEditor.tsx', 'components/hosts/ProbeHostForm.tsx', 'components/hosts/ProbeCheck.tsx',
-  'components/hosts/probe-rows.tsx', 'components/hosts/use-probe-rows.ts', 'components/hosts/useProbeEditor.ts', 'components/hosts/PoolStatusDot.tsx', 'components/hosts/pool-status-word.ts',
-  'lib/pool/use-pool-host-rows.ts', 'lib/pool/fleet-bridge.ts',
 ]
 
 /** Identifiers no non-test source may use. */
@@ -98,7 +95,7 @@ export function stripComments(text: string): string {
   return out
 }
 
-/** Which of the fleet's lists to apply: `lib/fleet/**` skips both, the files of `PENDING_9B2` skip the names. */
+/** Which of the fleet's lists to apply: `lib/fleet/**` (the fleet's own code, until MON-12b-3 deletes it) skips both. */
 export interface FleetScope { wire: boolean; names: boolean }
 const EVERYWHERE: FleetScope = { wire: true, names: true }
 
@@ -114,13 +111,6 @@ export function hitsIn(text: string, fleet: FleetScope = EVERYWHERE): string[] {
   // The event name put together from pieces ('watch.' + 'events'). A guard against drift, not against someone set on getting round it.
   if (/['"`]watch\.['"`]\s*\+/.test(code)) hits.push("'watch.' + …")
   return hits
-}
-
-/** The relative module specifiers a source names (`from '…'`, `import('…')`, `import '…'`), resolved to a path without its extension. */
-export function importedPaths(file: string, text: string): string[] {
-  const out: string[] = []
-  for (const m of stripComments(text).matchAll(/(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"](\.{1,2}\/[^'"]+)['"]/g)) out.push(join(dirname(file), m[1]).replace(/\.(tsx?|jsx?)$/, ''))
-  return out
 }
 
 /** The watch routes the SPA may still call (W9): the status, the wake, and the guardian's start key. */
@@ -159,20 +149,7 @@ describe('the retired wire stays retired', () => {
       const rel = relative(SRC, file)
       if (rel === SELF) continue
       const inFleet = rel.startsWith('lib/fleet/')
-      for (const h of hitsIn(readFileSync(file, 'utf8'), { wire: !inFleet, names: !inFleet && !PENDING_9B2.includes(rel) })) hits.push(`${rel}: ${h}`)
-    }
-    expect(hits).toEqual([])
-  }, 30_000)
-
-  // The pending files may use the fleet's names only because nothing alive reaches them: no file outside the set imports one of them.
-  it('nothing outside the 9b-2 files imports one of them', () => {
-    for (const f of PENDING_9B2) expect(existsSync(join(SRC, f)), `${f} is gone: drop PENDING_9B2 (9b-2 merged)`).toBe(true)
-    const pending = PENDING_9B2.map((f) => join(SRC, f.replace(/\.tsx?$/, '')))
-    const hits: string[] = []
-    for (const file of sources(SRC)) {
-      const rel = relative(SRC, file)
-      if (rel === SELF || PENDING_9B2.includes(rel)) continue
-      for (const target of importedPaths(file, readFileSync(file, 'utf8'))) if (pending.includes(target)) hits.push(`${rel} imports ${relative(SRC, target)}`)
+      for (const h of hitsIn(readFileSync(file, 'utf8'), { wire: !inFleet, names: !inFleet })) hits.push(`${rel}: ${h}`)
     }
     expect(hits).toEqual([])
   }, 30_000)
@@ -199,7 +176,7 @@ describe('the retired wire stays retired', () => {
     // built from pieces: not told apart from a retired one, so not allowed (codex attack)
     expect(retiredWatchRoutesIn("const p = '/api/watch/' + kind")).toEqual(['/api/watch/<built>'])
     expect(retiredWatchRoutesIn('const p = `/api/watch/${kind}`')).toEqual(['/api/watch/<built>'])
-    // the fleet's wire and the names that reach it: caught outside lib/fleet, left alone inside it, and the pending files may keep the names
+    // the fleet's wire and the names that reach it: caught outside lib/fleet, left alone inside it
     expect(hitsIn("hostFetch(id, '/api/fleet')")).toEqual(['/api/fleet'])
     expect(hitsIn("hostFetch(id, '/api/fleet/ssh-aliases')")).toEqual(['/api/fleet'])
     expect(hitsIn("caps.includes('fleet.v1')")).toEqual(['fleet.v1'])
@@ -212,8 +189,6 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn("hostFetch(id, '/api/fleet'); readAllFleets()", { wire: true, names: false })).toEqual(['/api/fleet'])
     expect(hitsIn('// the fleet.v1 capability and fetchFleet are gone\nconst a = 1')).toEqual([])
     expect(hitsIn('const readAllFleetsLater = 1')).toEqual([])
-    expect(importedPaths('/s/components/a.tsx', "import { x } from './hosts/useProbeEditor'; const m = await import('../lib/pool/fleet-bridge.ts')")).toEqual(['/s/components/hosts/useProbeEditor', '/s/lib/pool/fleet-bridge'])
-    expect(importedPaths('/s/components/a.tsx', "// import { x } from './hosts/useProbeEditor'")).toEqual([])
     expect(hitsIn("const type = 'watch.' + 'events'")).toEqual(["'watch.' + …"])
     expect(hitsIn("const k = 'watch.events.level.' + level")).toEqual([])
     expect(hitsIn("hostFetch(id, `/api/gate/decisions?x`)")).toEqual(['/api/gate/'])
