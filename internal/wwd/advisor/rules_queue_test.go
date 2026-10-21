@@ -229,6 +229,31 @@ func TestQueueUnclaimable_ABlipOfAHostRestartsTheTenMinutes(t *testing.T) {
 	}
 }
 
+// A job that was put on hold and released (or relabelled) between two looks is changed, though neither look saw it held: its ten minutes start
+// from the change (QueuedJob.Touched), not from the first look (codex R1).
+func TestQueueUnclaimable_AChangeBetweenTwoLooksRestartsTheTenMinutes(t *testing.T) {
+	r := &QueueUnclaimable{}
+	pool := host("mlab", darwin, down)
+	look := func(d time.Duration, touchedAt time.Duration) bool {
+		j := qjob("j_1", darwin[:1], time.Hour)
+		j.Touched = t0.Add(touchedAt)
+		in := queueIn([]queue.QueuedJob{j}, pool)
+		in.Now = t0.Add(d)
+		got, _ := holds(t, r, in)
+		return got
+	}
+	look(0, -time.Hour)
+	if look(10*time.Minute-time.Second, -time.Hour) {
+		t.Fatal("nine minutes and 59 seconds")
+	}
+	if look(10*time.Minute, 9*time.Minute+30*time.Second) {
+		t.Error("changed half a minute before this look: it starts from the change")
+	}
+	if !look(19*time.Minute+30*time.Second, 9*time.Minute+30*time.Second) {
+		t.Error("ten minutes after the change")
+	}
+}
+
 // A job that left the queue and came back starts its own ten minutes, and the memory of a job that is gone (or on hold) does not grow.
 func TestQueueUnclaimable_ForgetsAJobThatLeftTheQueue(t *testing.T) {
 	r := &QueueUnclaimable{}
@@ -434,7 +459,7 @@ func TestQueueStalled_AJobPutBackCountsFromTheLastChange(t *testing.T) {
 func TestQueueUnclaimable_CountsFromTheSubmissionNotFromTheLastChange(t *testing.T) {
 	pool := []wire.Peer{host("mlab", darwin)}
 	for _, n := range []int{0, 2} {
-		got, _ := settledHolds(t, queueIn([]queue.QueuedJob{qjob("j", []string{"repo:aigora-v2"}, 12*time.Minute, attempts(n), touched(time.Minute))}, pool...))
+		got, _ := settledHolds(t, queueIn([]queue.QueuedJob{qjob("j", []string{"repo:aigora-v2"}, 12*time.Minute, attempts(n), touched(11*time.Minute))}, pool...))
 		if !got {
 			t.Errorf("attempts %d: a move must not reset the clock", n)
 		}

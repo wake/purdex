@@ -210,6 +210,10 @@ func (r *QueueUnclaimable) Eval(in Input) (Verdict, error) {
 		if !ok {
 			since = in.Now
 		}
+		// a change of the job between two looks (put on hold and released, its labels changed, put back) starts its state anew, though no look saw it
+		if j.Touched.After(since) {
+			since = j.Touched
+		}
 		next[j.ID] = since
 		if waited(in.Now, j.CreatedAt) >= queueUnclaimableAfter && waited(in.Now, since) >= queueUnclaimableAfter {
 			ids = append(ids, j.ID)
