@@ -53,8 +53,6 @@ export const STORAGE_KEYS = {
   /** The monitoring tabs' pool hosts (usePoolHostsStore, monitoring tabs spec A3): `{ order, looks }`, both keyed by the wwd `host_id` (same on every device, no local↔wire mapping).
    *  Registered with syncManager and projected into Profile Sync `settings` (ordinal 13). */
   POOL_HOSTS: 'purdex-pool-hosts',
-  /** This device's marker of the one-time copy of the fleet's probe-host looks and order into usePoolHostsStore (`{ done, tries }`, MON-2b). Device-local: never projected, never registered with syncManager. Removed with the copy (MON-12). */
-  POOL_HOST_LOOKS_MIGRATED: 'purdex-pool-host-looks-migrated',
   /** This device's marker that the old global 「主機格指示」 was copied into each pool host's own indicator (`'1'` once done, MON-9a-3). Device-local: never projected, never registered with syncManager. Removed with `useUISettingsStore.fleetCellIndicator` (MON-12). */
   POOL_INDICATOR_MIGRATED: 'purdex-pool-indicator-migrated',
   /** 這台裝置對任務編組視圖的記憶（useGroupViewStore）：選取的群組、每個群組最後的作用中分頁、展開狀態、兩個視圖各自最後的選取；
