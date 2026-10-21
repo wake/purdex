@@ -29,14 +29,16 @@ export interface UnattendedHostEntry {
   stagesSupport?: UnattendedSupport
   /** The host lists `team.max_members.v2`: the cap may go to 9 (name pool v2 spec §5.1). */
   maxMembersV2Support?: UnattendedSupport
+  /** The host lists `notify.group_labels.v1`: it takes the group names the app computes for its push titles (notify title spec §3.2). */
+  notifyGroupLabelsSupport?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
 
 /** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
-const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support'] as const
+const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support', 'notifyGroupLabelsSupport'] as const
 /** Only the probe answers these; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
-export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support'] as const
+export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support', 'notifyGroupLabelsSupport'] as const
 export type SupportFlag = (typeof SUPPORT_FLAGS)[number]
 
 interface UnattendedStoreState {
@@ -50,6 +52,7 @@ interface UnattendedStoreState {
   setPersonSupport: (hostId: string, support: UnattendedSupport) => void
   setStagesSupport: (hostId: string, support: UnattendedSupport) => void
   setMaxMembersV2Support: (hostId: string, support: UnattendedSupport) => void
+  setNotifyGroupLabelsSupport: (hostId: string, support: UnattendedSupport) => void
   /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
    *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
   invalidateSupport: (hostId: string, flags?: readonly SupportFlag[]) => void
@@ -103,6 +106,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.maxMembersV2Support === maxMembersV2Support) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersV2Support } } }
+  }),
+  setNotifyGroupLabelsSupport: (hostId, notifyGroupLabelsSupport) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.notifyGroupLabelsSupport === notifyGroupLabelsSupport) return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', notifyGroupLabelsSupport } } }
   }),
   setStagesSupport: (hostId, stagesSupport) => set((s) => {
     const cur = s.byHost[hostId]

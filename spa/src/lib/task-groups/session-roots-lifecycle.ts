@@ -24,8 +24,8 @@ export const ROOT_PRUNE_SETTLE_MS = 1000
 
 export interface WantedSession { hostId: string; agentSessionId: string }
 
-/** Who asks: the sidebar's task-group view, and the personal panel of the active tab (task groups spec §4.5). Each source owns its own entry; the reads serve the union. */
-export type RootsSource = 'sidebar' | 'personal'
+/** Who asks: the sidebar's task-group view, and the personal panel of the active tab (task groups spec §4.5), and the push-title writer (`notify`: tabs that carry `tab.group`, notify title spec §3.2). Each source owns its own entry; the reads serve the union. */
+export type RootsSource = 'sidebar' | 'personal' | 'notify'
 const interests = new Map<RootsSource, readonly WantedSession[]>()
 let evaluate: (() => void) | null = null
 

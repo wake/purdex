@@ -100,6 +100,15 @@ describe('startUnattendedSupport', () => {
     expect(useUnattendedStore.getState().byHost.h1?.maxMembersV2Support).toBe('no')
   })
 
+  it('notify.group_labels.v1 in the capabilities → the app writes its group names to that host; without it, not', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
+    fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['notify.group_labels.v1'] : []))
+    stop = startUnattendedSupport()
+    await flush()
+    expect(useUnattendedStore.getState().byHost.h1?.notifyGroupLabelsSupport).toBe('yes')
+    expect(useUnattendedStore.getState().byHost.h2?.notifyGroupLabelsSupport).toBe('no')
+  })
+
   it('team.person.v1 in the capabilities → the daemon refuses lead / adopt itself under unattended mode; without it, not', async () => {
     useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
     fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'team.person.v1'] : ['relay.unattended.v1']))

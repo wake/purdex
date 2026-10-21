@@ -42,7 +42,7 @@ beforeEach(() => {
   supportQuota('h1')
   stop = startSessionRootsLifecycle()
 })
-afterEach(() => { stop(); setRootsInterest(false, []); setRootsInterest(false, [], 'personal'); vi.useRealTimers() })
+afterEach(() => { stop(); setRootsInterest(false, []); setRootsInterest(false, [], 'personal'); setRootsInterest(false, [], 'notify'); vi.useRealTimers() })
 
 describe('reading', () => {
   it('reads nothing while the view is off', () => {
@@ -64,6 +64,24 @@ describe('reading', () => {
     setRead('h1', [])
     vi.advanceTimersByTime(60_000)
     expect(readFirstPage).not.toHaveBeenCalled()
+  })
+
+  it('the notify asker is a third source: the other two going off leave its session wanted, and it going off leaves theirs', () => {
+    setRootsInterest(true, [want('h1', 'S1')], 'notify')
+    setRootsInterest(true, [want('h1', 'S2')])
+    setRootsInterest(true, [want('h1', 'S3')], 'personal')
+    setRootsInterest(false, [])
+    setRootsInterest(false, [], 'personal')
+    readFirstPage.mockClear()
+    setRead('h1', [q('S9', 'S9')])
+    vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS)
+    expect(readFirstPage).toHaveBeenCalledTimes(1) // S1 is still wanted by notify
+    setRootsInterest(true, [want('h1', 'S2')])
+    setRootsInterest(false, [], 'notify')
+    readFirstPage.mockClear()
+    setRead('h1', [q('S8', 'S8')])
+    vi.advanceTimersByTime(ROOT_REREAD_DEBOUNCE_MS)
+    expect(readFirstPage).toHaveBeenCalledTimes(1) // S2 (sidebar) remains
   })
 
   it('reads a supporting host once when the view opens, and never a host without team.relay_quota.v1', () => {
