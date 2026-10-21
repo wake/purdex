@@ -20,8 +20,8 @@ function watchTab(id: string, content: PaneContent): Tab {
   return { ...createTab(content), id, locked: true }
 }
 const tabs: Tab[] = [
-  watchTab('watch-host-a', { kind: 'watch-host', fleetHostId: 'a' }),
-  watchTab('watch-host-b', { kind: 'watch-host', fleetHostId: 'b' }),
+  watchTab('watch-host-a', { kind: 'watch-host', poolHostId: 'a' }),
+  watchTab('watch-host-b', { kind: 'watch-host', poolHostId: 'b' }),
 ]
 const handlers = () => ({
   onSelectTab: vi.fn(), onCloseTab: vi.fn(), onAddTab: vi.fn(), onReorderTabs: vi.fn(), onMiddleClick: vi.fn(), onContextMenu: vi.fn(),
@@ -43,7 +43,7 @@ describe('TabBar fixed (the watcher area row)', () => {
   })
 
   it('shows no lock icon on a locked tab, in the normal and the pinned branch', () => {
-    const pinned = { ...watchTab('watch-pinned', { kind: 'watch-host', fleetHostId: 'p' }), pinned: true }
+    const pinned = { ...watchTab('watch-pinned', { kind: 'watch-host', poolHostId: 'p' }), pinned: true }
     const h = handlers()
     const { container, rerender } = render(<TabBar tabs={[pinned, ...tabs]} activeTabId="watch-host-a" fixed {...h} />)
     expect(container.querySelector('svg[class*="ml-0.5"]')).toBeNull()
@@ -81,7 +81,7 @@ describe('TabBar — the watcher area back button (journal v5 §3.7, U11)', () =
 
   it('is the first item of the row, ahead of the pinned and the normal tabs; a click calls onLeave and selects no tab', () => {
     useI18nStore.getState().setLocale('zh-TW')
-    const pinned = { ...watchTab('watch-pinned', { kind: 'watch-host', fleetHostId: 'p' }), pinned: true }
+    const pinned = { ...watchTab('watch-pinned', { kind: 'watch-host', poolHostId: 'p' }), pinned: true }
     const h = handlers()
     const onLeave = vi.fn()
     const { container } = render(<TabBar tabs={[pinned, ...tabs]} activeTabId="watch-host-a" fixed onLeave={onLeave} {...h} />)

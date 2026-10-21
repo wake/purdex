@@ -75,7 +75,7 @@ describe('reconcileWatchTabs', () => {
   })
 
   describe('tabs from before the pool (content without poolHostId)', () => {
-    const oldTab = (id: string) => useTabStore.getState().addTab({ id: watchHostTabId(id), pinned: false, locked: true, createdAt: 1, layout: { type: 'leaf', pane: { id: `${watchHostTabId(id)}.p`, content: { kind: 'watch-host', fleetHostId: id } } } })
+    const oldTab = (id: string) => useTabStore.getState().addTab({ id: watchHostTabId(id), pinned: false, locked: true, createdAt: 1, layout: { type: 'leaf', pane: { id: `${watchHostTabId(id)}.p`, content: { kind: 'watch-host' } } } })
     const putInArea = (id: string) => ws().addTabToWorkspace(WATCH_WORKSPACE_ID, watchHostTabId(id))
 
     it('goes after ABSENT_REMOVE_MS even though no device ever listed its fleet id, and not before', () => {

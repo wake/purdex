@@ -14,11 +14,11 @@ beforeEach(() => {
 })
 
 describe('useTabDisplay for a watch-host tab', () => {
-  const tab = { ...createTab({ kind: 'watch-host', fleetHostId: 'h1' }), id: 'watch-host-h1' }
+  const tab = { ...createTab({ kind: 'watch-host' }), id: 'watch-host-h1' }
 
-  it('a tab from before the pool is labelled by its fleet id', () => {
+  it('a tab from before the pool (no poolHostId) has no host to name: its label is empty', () => {
     const { result } = renderHook(() => useTabDisplay(tab))
-    expect(result.current.displayTitle).toBe('h1')
+    expect(result.current.displayTitle).toBe('')
   })
 })
 
