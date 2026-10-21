@@ -72,7 +72,7 @@ func TestFixtureHostQualification(t *testing.T) {
 			task("n-ref-missing", "mserv", "h", "tool:zig"),
 		},
 		Last: map[string]Attempt{
-			"task:purdex/q-waiting": {At: t0.Add(-5 * time.Hour), Outcome: OutcomeVoid, Fingerprint: fp},      // no why: a restart forgot it
+			"task:purdex/q-waiting": {At: t0.Add(-5 * time.Hour), Outcome: OutcomeVoid, Fingerprint: fp},     // no why: a restart forgot it
 			"task:purdex/n-waiting": {At: t0.Add(-2 * time.Hour), Outcome: OutcomeMismatch, Fingerprint: fp}, // with the why below
 		},
 	}
