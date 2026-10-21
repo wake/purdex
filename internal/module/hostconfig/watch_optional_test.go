@@ -122,6 +122,19 @@ func TestWatchGet_AStoredRowWithoutTheDetectorFieldsIsInvalidAndTheReaderErrs(t 
 	assert.Contains(t, string(got["watch"]), `"invalid":true`)
 }
 
+// And a stored row that has every field but one out of its range is invalid as before (the reader checks the ranges of what a row has).
+func TestWatchGet_AStoredRowWithAFieldOutOfRangeIsInvalidAndTheReaderErrs(t *testing.T) {
+	m := newTestModule(t)
+	_, _, err := m.store.Put(KeyWatch, 0, func(Entry) (json.RawMessage, error) {
+		return json.RawMessage(strings.Replace(nonDefault, `"x_cores":3.5`, `"x_cores":0`, 1)), nil
+	})
+	require.NoError(t, err)
+	_, err = m.WatchSettings()
+	assert.Error(t, err)
+	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
+	assert.Contains(t, rr.Body.String(), `"invalid":true`)
+}
+
 func TestWatchPut_ALeftOutBodyStoresAWholeRow(t *testing.T) {
 	m := newTestModule(t)
 	require.Equal(t, http.StatusOK, putWatch(t, m, `{"enabled":true}`, 0))
