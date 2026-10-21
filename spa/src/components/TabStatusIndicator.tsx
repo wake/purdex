@@ -2,7 +2,7 @@
 import { HandPalm, WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
 import { STATUS_COLORS } from './status-colors'
-import { OVERLAY_DOT, OVERLAY_ERROR, OVERLAY_RING } from './overlay-dot'
+import { OVERLAY_DOT, OVERLAY_ERROR, OVERLAY_HAND_RIGHT, OVERLAY_HAND_SIZE, OVERLAY_RING } from './overlay-dot'
 import { useI18nStore } from '../stores/useI18nStore'
 
 /** Render mode — orthogonal to the tab-level indicator style. */
@@ -26,9 +26,6 @@ interface Props {
 
 const UNREAD_COLOR = '#ef4444'
 
-/** The 「等待核准」 hand in overlay mode: this size, 1px left of the dot, on the dot's top line. */
-const OVERLAY_HAND_SIZE = 8
-const OVERLAY_HAND_RIGHT = OVERLAY_DOT.right + OVERLAY_DOT.size + 1
 /** The replace-mode slot (the dot itself, or the hand drawn in its place). */
 const REPLACE_SLOT = 8
 

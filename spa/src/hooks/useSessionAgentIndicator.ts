@@ -1,11 +1,15 @@
-import type { ComponentType } from 'react'
+import { useMemo, type ComponentType } from 'react'
 import type { AgentStatus, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
 import { getAgentIcon } from '../lib/agent-icons'
+import { executionIdOfAgentCode } from '../lib/nex/worker-agent-status'
 import { useActiveMemberKeys } from './useActiveMemberKeys'
+import { awaitingKeys, listAwaitingFlags, liveAwaitingFlags } from './useTabAgentAggregate'
 
 export type TabIconComponent = ComponentType<{ size: number; className?: string }>
 
@@ -16,6 +20,8 @@ export interface SessionAgentIndicator {
   agentStatus: AgentStatus | undefined
   subagentRefs: SubagentRef[]
   isUnread: boolean
+  /** 「等待核准」: this session is a worker waiting on a permission request. The same projection as the tab bar's `isAwaitingApproval` (the host's execution list row, the live summary where the list is cut short). */
+  isAwaitingApproval: boolean
   tabIndicatorStyle: TabIndicatorStyle
 }
 
@@ -46,5 +52,12 @@ export function useSessionAgentIndicator(
     ? (getAgentIcon(agentType, { ccVariant: ccIconVariant, codexVariant: codexIconVariant }) as TabIconComponent | undefined)
     : undefined
 
-  return { agentIcon, agentStatus, subagentRefs, isUnread, tabIndicatorStyle }
+  // A worker's session code is `exec-<executionId>`; the tab bar decides its hand from the same list row (useTabAgentAggregate), so the very same helpers decide it here.
+  const executionId = sessionCode ? executionIdOfAgentCode(sessionCode) : null
+  const panes = useMemo(() => (ck && executionId !== null ? [{ key: ck, hostId, executionId }] : []), [ck, hostId, executionId])
+  const listFlags = useExecutionListStore((s) => listAwaitingFlags(s.byHost, panes))
+  const liveFlags = useExecutionStore((s) => (listFlags.includes('L') ? liveAwaitingFlags(s.executions, panes) : ''))
+  const isAwaitingApproval = awaitingKeys(panes, listFlags, liveFlags).length > 0
+
+  return { agentIcon, agentStatus, subagentRefs, isUnread, isAwaitingApproval, tabIndicatorStyle }
 }

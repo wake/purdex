@@ -104,7 +104,7 @@ describe('TeamSeatLight', () => {
       expect(hand.getAttribute('height')).toBe(String(OVERLAY_HAND_SIZE))
       expect(hand.style.top).toBe('0px')
       expect(hand.style.right).toBe(`${OVERLAY_HAND_RIGHT - OVERLAY_DOT.right}px`)
-      expect(hand.getAttribute('color') ?? hand.style.color).toContain(STATUS_COLORS.waiting)
+      expect(hand.getAttribute('fill')).toBe(STATUS_COLORS.waiting)
     })
 
     it('awaiting wins over an error, and unread never tints it (the dot stays the waiting colour)', () => {
