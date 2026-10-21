@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -378,14 +379,28 @@ func TestAlertsWatch_AwayAndBackEachAnnounceEveryHostOnce(t *testing.T) {
 }
 
 // Stop ends all the loops the module started and nothing is announced after it returns.
+//
+// The count of reads is taken when no read can be in flight (#3949): a request the loop sent just before Stop is counted by the server when it
+// arrives, which under load can be after Stop returned, so a count taken at Stop and compared later is off by one now and then. So the watch
+// reads once (alertsEvery is an hour), the test waits until that pass has asked every host (nothing more is sent by it), stops it, and then
+// does what a loop that is still there answers at once: an alert event of the local wwd (alertKick) makes it read.
 func TestAlertsWatch_NothingAfterStop(t *testing.T) {
 	la := newLiveAlerts(t)
-	m, n := watchingAlerts(t, la)
-	time.Sleep(2 * testAlertsEvery)
-	require.NoError(t, m.Stop(context.Background()))
+	m, n := watchingAlerts(t, la, func(m *Module) { m.alertsEvery = time.Hour })
+	require.Eventually(t, func() bool {
+		asked := la.askedHosts()
+		return slices.Contains(asked, "") && slices.Contains(asked, "air19")
+	}, 3*time.Second, testPoll, "the one pass has read every host")
+	stop, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	require.NoError(t, m.Stop(stop), "Stop waits for every loop")
 	before := len(la.askedHosts())
 	la.set("air19", []wire.Alert{anAlert("disk:air19", "x")})
-	time.Sleep(4 * testAlertsEvery)
+	select { // the local wwd's alert event, as the event loop would kick the alerts loop
+	case m.alertKick <- struct{}{}:
+	default:
+	}
+	time.Sleep(4 * testAlertsEvery) // absence can only be waited for: a late answer cannot fail this, only a read that happens
 	assert.Equal(t, before, len(la.askedHosts()), "no read after Stop")
 	assert.Empty(t, n.hosts())
 }
