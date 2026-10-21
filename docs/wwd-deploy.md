@@ -790,6 +790,9 @@ Before the build that drops the module is installed on a daemon host, with the *
 
 1. `pdx assist status` — every host must say `要求：關` and its check (`檢查`) must say `主機說 off`. On a host that says on, run `pdx assist off <alias>`
    and read `pdx assist status` again until the check says off (the check runs about once a minute).
+   **Run `pdx assist off` on air26 only while the wwd there has no running job (RUNNING 0).** The host's `assist-off` script collects every process
+   whose command line carries a `~/Assist/` path (TERM, then KILL under `--apply`), and the wwd's Go toolchain on air26 lives under
+   `~/Assist/toolchains.noindex/go`, so the `compile` and `link` of a running Go job would be killed with it.
 2. Nothing may be in flight: the status shows no pending operation for the host (no `closing`).
 3. Only then install the new build (`pdx setup`, restart).
 
