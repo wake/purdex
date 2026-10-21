@@ -102,32 +102,38 @@ func TestWatchPut_WhatIsSentIsStillChecked(t *testing.T) {
 	assert.Equal(t, int64(0), e.Revision, "nothing stored")
 }
 
-// A row stored without the detector fields (the app that wrote it left them out, or an older one) reads with the default for each field it
-// lacks. It is not an invalid row, and the GET does not say so.
-func TestWatchGet_AStoredRowWithoutTheDetectorFieldsReadsAsDefaultsAndIsNotInvalid(t *testing.T) {
+// The reader is not loosened (codex R2, ruled by lead): a stored row that lacks a detector field does not read whole, so the GET marks it
+// invalid and shows the defaults, and WatchSettings is an error (the watcher stays off, watchsettings.Reader). Only a PUT may leave them out,
+// and the row it stores is whole.
+func TestWatchGet_AStoredRowWithoutTheDetectorFieldsIsInvalidAndTheReaderErrs(t *testing.T) {
 	m := newTestModule(t)
 	_, _, err := m.store.Put(KeyWatch, 0, func(Entry) (json.RawMessage, error) {
-		return json.RawMessage(`{"enabled":false,"targets":["a26"],"mode":"resident"}`), nil
+		return json.RawMessage(`{"enabled":true,"targets":["a26"],"mode":"resident"}`), nil
 	})
 	require.NoError(t, err)
 
-	s, err := m.WatchSettings()
-	require.NoError(t, err, "the setting reads")
-	want := watchsettings.Default()
-	want.Enabled, want.Targets, want.Mode = false, []string{"a26"}, watchsettings.ModeResident
-	assert.Equal(t, want, s)
+	_, err = m.WatchSettings()
+	assert.Error(t, err, "an enabled row that is not whole does not start the watcher")
 
 	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 	var got map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
-	assert.NotContains(t, string(got["watch"]), `"invalid"`, "not marked invalid")
-	var row struct {
-		Items watchsettings.Settings `json:"items"`
+	assert.Contains(t, string(got["watch"]), `"invalid":true`)
+}
+
+func TestWatchPut_ALeftOutBodyStoresAWholeRow(t *testing.T) {
+	m := newTestModule(t)
+	require.Equal(t, http.StatusOK, putWatch(t, m, `{"enabled":true}`, 0))
+	e, err := m.store.Get(KeyWatch)
+	require.NoError(t, err)
+	var row map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(e.Value, &row))
+	for _, k := range []string{"x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s", "patrol_idle_min", "auto_wake"} {
+		assert.Contains(t, row, k, "the stored row has "+k)
 	}
-	require.NoError(t, json.Unmarshal(got["watch"], &row))
-	assert.Equal(t, want.XCores, row.Items.XCores)
-	assert.Equal(t, want.YMB, row.Items.YMB)
-	assert.Equal(t, want.PageRate, row.Items.PageRate)
-	assert.False(t, row.Items.Enabled)
+	_, err = m.WatchSettings()
+	assert.NoError(t, err, "and it reads")
+	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
+	assert.NotContains(t, rr.Body.String(), `"invalid"`)
 }

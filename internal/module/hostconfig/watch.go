@@ -27,17 +27,19 @@ var watchDefaultJSON = func() string {
 	return string(b)
 }()
 
-// normalizeWatch validates a PUT body (and a stored value): an object of exactly the watch fields (a misspelt one is refused), each
-// in its range; enabled is required. Every other field may be left out: the detector fields, the patrol numbers and auto_wake then
-// keep the values of the row (normalizeWatchOver; the defaults when reading with none), and the delivery fields (W2a) read as their
-// defaults, so a row stored before they existed still reads.
+// normalizeWatch validates a stored value (and is what the reader and the GET read it with): an object of exactly the watch fields
+// (a misspelt one is refused), each in its range, and the switch and the seven detector fields present, so a row that does not read
+// whole is invalid and the watcher stays off (watchsettings.Reader). The delivery fields (W2a) may be left out and then read as their
+// defaults, so a row stored before they existed still reads. Rows are stored whole (the PUT stores what normalizeWatchOver made).
 func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
-	return normalizeWatchOver(raw, watchsettings.Default())
+	return normalizeWatchOver(raw, watchsettings.Default(), false)
 }
 
 // normalizeWatchOver is normalizeWatch where the patrol numbers a body leaves out keep the values of stored (the row now), so a
-// client that predates them and writes the row back does not reset what a newer client set.
-func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings) (watchsettings.Settings, error) {
+// client that predates them and writes the row back does not reset what a newer client set. partial is a PUT body (9c-0, #3892): the
+// seven detector fields too may be left out (an app that no longer shows them does not write them), and so keep the row's values;
+// patrol_idle_min and auto_wake likewise. enabled is required either way.
+func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings, partial bool) (watchsettings.Settings, error) {
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return watchsettings.Settings{}, err
 	}
@@ -84,9 +86,18 @@ func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings) (wat
 	if in.Enabled == nil {
 		return watchsettings.Settings{}, errors.New("enabled is required")
 	}
-	// The detector fields may be left out (9c-0, #3892): the app that no longer shows them does not write them, and a save then keeps
-	// what the row has. One that is sent as null is not "left out" (json turns null into an absent pointer, so it is looked for here):
-	// it was refused as no value and still is.
+	if !partial {
+		for name, missing := range map[string]bool{
+			"x_cores": in.XCores == nil, "y_mb": in.YMB == nil, "t_s": in.TSeconds == nil, "pressure_level": in.PressureLevel == nil,
+			"pressure_t_s": in.PressureTSeconds == nil, "page_rate": in.PageRate == nil, "page_t_s": in.PageTSeconds == nil,
+		} {
+			if missing {
+				return watchsettings.Settings{}, errors.New(name + " is required")
+			}
+		}
+	}
+	// A PUT may leave the detector fields out and a save then keeps what the row has. One that is sent as null is not "left out" (json
+	// turns null into an absent pointer, so it is looked for here): it was refused as no value and still is.
 	if err := rejectNullDetectors(raw); err != nil {
 		return watchsettings.Settings{}, err
 	}

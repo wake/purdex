@@ -64,8 +64,7 @@ func TestWatch_IsStrictAndBounded(t *testing.T) {
 // the default items.
 func TestWatch_AStoredBadValueIsAnErrorAndInvalidInTheGet(t *testing.T) {
 	m := newTestModule(t)
-	// a value out of its range (a row with fields merely left out reads as the defaults: watch_optional_test.go)
-	_, _, err := m.store.Put(KeyWatch, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"enabled":true,"x_cores":0}`), nil })
+	_, _, err := m.store.Put(KeyWatch, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"enabled":true}`), nil })
 	require.NoError(t, err)
 	_, err = m.WatchSettings()
 	assert.Error(t, err)
