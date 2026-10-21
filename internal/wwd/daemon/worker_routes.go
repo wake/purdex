@@ -59,7 +59,7 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 }
 
 func (d *Daemon) handleGetWorker(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.opts.State.Worker())
+	writeJSON(w, http.StatusOK, d.opts.State.Worker().View())
 }
 
 func (d *Daemon) handlePutWorker(w http.ResponseWriter, r *http.Request) {
@@ -68,16 +68,21 @@ func (d *Daemon) handlePutWorker(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	ws, err := wire.Decode[wire.WorkerSettings](body)
+	put, err := wire.Decode[wire.WorkerPut](body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := d.opts.State.SetWorker(ws); err != nil {
+	if _, err := d.opts.State.SetWorkerIf(put.WorkerSettings, put.ExpectEtag); err != nil {
+		var mm *EtagMismatchError
+		if errors.As(err, &mm) {
+			writeJSON(w, http.StatusConflict, wire.WorkerEtagMismatch{Reason: wire.WorkerEtagMismatchReason, Etag: mm.Current.Etag(), Worker: mm.Current.View()})
+			return
+		}
 		stateError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, d.opts.State.Worker())
+	writeJSON(w, http.StatusOK, d.opts.State.Worker().View())
 }
 
 // handleGetExceptions answers the exceptions in force with their holds (read-only; a host without this route answers 404 to a reader).

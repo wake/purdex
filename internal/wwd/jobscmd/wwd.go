@@ -2,21 +2,25 @@ package jobscmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/client"
 	"github.com/wake/purdex/internal/wwd/testcmd"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 const WWDUsage = `usage: pdx wwd [status] [--json]
        pdx wwd pool [--json]
-       pdx wwd worker on|off [--heavy N] [--light N] [--disk-min-gb GB]
+       pdx wwd worker [--host <host>]
+       pdx wwd worker on|off [--heavy N] [--light N] [--disk-min-gb GB] [--host <host>] [--expect <etag>]
        pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
        pdx wwd exception stop <name> [--host <host>]
        pdx wwd hold <host> --for <dur> --reason <text> [--allow-class release|merge|dev]... [--allow-repo <repo>]... [--release] [--expect pressure]
@@ -31,7 +35,9 @@ const WWDUsage = `usage: pdx wwd [status] [--json]
   qualify     this host earns a task label by running the task and the reference host's run of it on one snapshot and comparing them; --status lists the pairs
   status    this host's wwd: version, labels, worker switch and slots
   pool       every host the pool knows: reachable, pressure zone, free slots, worker
-  worker     switch this host's worker; --heavy / --light set the slot counts; --disk-min-gb the free GB the work volume must keep for a heavy run (0: none)
+  worker     show (no argument) or switch a host's worker, this host's or --host's; --heavy / --light set the slot counts; --disk-min-gb the free GB the work volume must keep for a heavy run (0: none)
+             Every answer ends with the settings' etag. --expect <etag> makes a write apply only if the settings are still the ones that etag names:
+             otherwise nothing is changed, the settings now in force are printed and the exit code is 7.
   exception  tell wwd a dev server or packaging run is using the host: its worker takes no new heavy work (and no light work if
              --holds says light) until --until passes or --pid ends
   hold       keep a host quiet for a while (the worker takes no new heavy work there): an exception with a reason. With --allow-class or
@@ -171,7 +177,11 @@ func diskFloorText(w wire.WorkerSettings) string {
 func wwdWorker(ctx context.Context, args []string, env Env) int {
 	flags, pos, err := splitFlags(args)
 	if err == nil {
-		err = only(flags, "heavy", "light", "disk-min-gb")
+		err = only(flags, "heavy", "light", "disk-min-gb", "host", "expect")
+	}
+	host := flags["host"]
+	if err == nil && host != "" && !wire.ValidAlias(host) {
+		err = fmt.Errorf("--host %q is not a host alias", host)
 	}
 	var floor *float64
 	if v, ok := flags["disk-min-gb"]; ok && err == nil {
@@ -181,8 +191,15 @@ func wwdWorker(ctx context.Context, args []string, env Env) int {
 		}
 		floor = &n
 	}
-	if err == nil && (len(pos) != 1 || (pos[0] != "on" && pos[0] != "off")) {
-		err = fmt.Errorf("worker takes on or off")
+	show := len(pos) == 0
+	if err == nil && !show && (len(pos) != 1 || (pos[0] != "on" && pos[0] != "off")) {
+		err = fmt.Errorf("worker takes on or off, or nothing to show the settings")
+	}
+	if err == nil && show && (len(flags) > 0 && !(len(flags) == 1 && host != "")) {
+		err = fmt.Errorf("worker with no on or off only shows the settings (and takes --host)")
+	}
+	if v, ok := flags["expect"]; ok && err == nil && v == "" {
+		err = fmt.Errorf("--expect needs the etag `pdx wwd worker` printed")
 	}
 	slots := map[string]int{}
 	for _, k := range []string{"heavy", "light"} {
@@ -197,26 +214,69 @@ func wwdWorker(ctx context.Context, args []string, env Env) int {
 	if err != nil {
 		return usageErr(env, WWDUsage, err)
 	}
-	cur, err := env.API.Worker(ctx)
+	cur, err := env.API.WorkerOn(ctx, host)
 	if err != nil {
 		return fail(env, "wwd worker", err)
 	}
-	cur.Enabled = pos[0] == "on"
+	if show {
+		printWorker(env, cur, host)
+		return ExitOK
+	}
+	ws := cur.WorkerSettings
+	ws.Enabled = pos[0] == "on"
 	if n, ok := slots["heavy"]; ok {
-		cur.Slots.Heavy = n
+		ws.Slots.Heavy = n
 	}
 	if n, ok := slots["light"]; ok {
-		cur.Slots.Light = n
+		ws.Slots.Light = n
 	}
 	if floor != nil {
-		cur.DiskMinGB = floor
+		ws.DiskMinGB = floor
 	}
-	now, err := env.API.SetWorker(ctx, cur)
+	now, err := env.API.SetWorkerOn(ctx, host, ws, flags["expect"])
 	if err != nil {
-		return fail(env, "wwd worker", err)
+		return failWorkerWrite(env, host, err)
 	}
-	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d%s\n", onOff(now.Enabled), now.Slots.Heavy, now.Slots.Light, diskFloorText(now))
+	printWorker(env, now, host)
 	return ExitOK
+}
+
+// printWorker prints the settings in force with the etag a later write can pass as --expect.
+func printWorker(env Env, v wire.WorkerView, host string) {
+	line := fmt.Sprintf("worker %s  slots heavy %d light %d%s", onOff(v.Enabled), v.Slots.Heavy, v.Slots.Light, diskFloorText(v.WorkerSettings))
+	if v.OwnerRule != "" {
+		line += "  owner_rule " + v.OwnerRule
+	}
+	switch {
+	case v.Etag != "":
+		line += "  etag " + v.Etag
+	default:
+		line += "  etag (none: this wwd predates it)"
+	}
+	if host != "" {
+		line += "  host " + testcmd.CleanLine(host)
+	}
+	fmt.Fprintln(env.Stdout, line)
+}
+
+// failWorkerWrite is fail for a write of the worker settings, which has two answers of its own: 409 (the --expect etag is out of date:
+// nothing changed, the setting now there is shown) and 400 for a field an older wwd does not know (it is not asked again without it).
+func failWorkerWrite(env Env, host string, err error) int {
+	var se *client.StatusError
+	if errors.As(err, &se) {
+		switch {
+		case se.Code == http.StatusConflict:
+			if m, e := wire.DecodeLenient[wire.WorkerEtagMismatch]([]byte(se.Body)); e == nil && m.Reason == wire.WorkerEtagMismatchReason {
+				fmt.Fprintf(env.Stderr, "pdx wwd worker: the settings changed since that etag; nothing was changed\n")
+				printWorker(Env{Stdout: env.Stderr}, m.Worker, host)
+				return ExitConflict
+			}
+		case se.Code == http.StatusBadRequest && strings.Contains(se.Body, "expect_etag"):
+			fmt.Fprintf(env.Stderr, "pdx wwd worker: that wwd does not know --expect (it predates it); upgrade it, or write without --expect. Nothing was changed.\n")
+			return ExitUsage
+		}
+	}
+	return fail(env, "wwd worker", err)
 }
 
 func wwdException(ctx context.Context, args []string, env Env) int {
