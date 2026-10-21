@@ -6,7 +6,6 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
-import { useFleetStore } from '../../../lib/fleet/store'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
 import type { WatchStatus } from '../../../lib/watch/status-types'
 import { WATCH_GUARDIAN_TAB_ID, watchHostTabId } from '../../../lib/watch/ids'
@@ -36,7 +35,6 @@ const tmuxOn = (hostId: string, code: string, instance = 'i1'): PaneContent =>
 beforeEach(() => {
   ws().reset()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useFleetStore.getState().reset()
   useWatchStatusStore.getState().reset()
   useSessionStore.setState({ sessions: {} })
   useHostStore.setState({

@@ -129,8 +129,8 @@ describe('a tab whose host the pool does not list', () => {
     mount([poolHostOf({ host_id: 'ffffffffffffffff', alias: 'other' })])
     expect(screen.getByTestId('host-not-listed')).toHaveTextContent(t('watch.host.pool_missing'))
   })
-  it('an older tab (a fleet id only) has no data to show', () => {
-    mount([poolHostOf()], { kind: 'watch-host', fleetHostId: 'd-a' })
+  it('an older tab (no pool host id) has no data to show', () => {
+    mount([poolHostOf()], { kind: 'watch-host' })
     expect(screen.getByText(t('watch.host.no_host'))).toBeInTheDocument()
   })
 })

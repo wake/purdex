@@ -28,7 +28,7 @@ beforeEach(() => {
 
 describe('useRouteSync and the watcher area', () => {
   it('records no visit of a watch tab (it could be reopened outside the area), but does of an ordinary one', () => {
-    const w = tabOf('watch-host-a', { kind: 'watch-host', fleetHostId: 'a' })
+    const w = tabOf('watch-host-a', { kind: 'watch-host', poolHostId: 'a' })
     const d = tabOf('dash', { kind: 'dashboard' })
     useTabStore.setState({ tabs: { [w.id]: w, [d.id]: d }, tabOrder: [w.id, d.id], activeTabId: w.id })
     renderHook(() => useRouteSync(), { wrapper: wrapper(memoryLocation({ path: '/', record: true })) })

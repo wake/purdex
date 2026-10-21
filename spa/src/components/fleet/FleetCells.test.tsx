@@ -8,7 +8,6 @@ import { resetRememberedPoolHosts } from '../../lib/pool/use-monitor-hosts'
 import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import { useFleetStore } from '../../lib/fleet/store'
 import { parseFacts, parseHostsAnswer } from '../../lib/pool/parse'
 import darwinJson from '../../lib/pool/__fixtures__/facts_darwin.json'
 import hostsJson from '../../lib/pool/__fixtures__/pool_hosts_response.json'
@@ -35,7 +34,6 @@ beforeEach(() => {
   usePoolHostsStore.setState({ order: [], looks: {} })
   useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {} } as never)
   useNexHostStore.setState({ byHost: {} } as never)
-  useFleetStore.getState().reset()
 })
 
 describe('FleetCells — from the pool only', () => {

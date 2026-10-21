@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { migrateGlobalIndicator } from './indicator-migration'
 import { usePoolStore } from './store'
-import { usePoolHostsStore } from '../../stores/usePoolHostsStore'
+import { MAX_POOL_HOSTS, usePoolHostsStore } from '../../stores/usePoolHostsStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { STORAGE_KEYS } from '../storage'
 import { indicatorOf } from './host-looks'
@@ -135,9 +135,19 @@ describe('migrateGlobalIndicator — a store that is full (codex attack)', () =>
   const hex = (n: number) => n.toString(16).padStart(16, '0')
   const staleLooks = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [hex(i + 1), { icon: 'Cube' }]))
 
+  // #3862: 32 looks left behind by hosts that are gone used to fill the store; the cap is 128 now, so the host the pool lists still gets its indicator.
+  it('32 looks left behind by hosts that are gone do not keep a listed host from its indicator', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    usePoolHostsStore.setState({ order: [], looks: staleLooks(32) })
+    answerPool([MLAB])
+    migrateGlobalIndicator()
+    expect(indicators()[MLAB]).toEqual(BARS_CPU_MEM)
+    expect(localStorage.getItem(MARKER)).not.toBeNull()
+  })
+
   it('a host the store has no room for is not written, so the marker is not written either: the next start tries again', () => {
     useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
-    usePoolHostsStore.setState({ order: [], looks: staleLooks(32) }) // 32 looks: the store takes no 33rd
+    usePoolHostsStore.setState({ order: [], looks: staleLooks(MAX_POOL_HOSTS) }) // the store is at its limit: it takes no more
     answerPool([MLAB])
     migrateGlobalIndicator()
     expect(usePoolHostsStore.getState().looks[MLAB]).toBeUndefined()
@@ -148,10 +158,10 @@ describe('migrateGlobalIndicator — a store that is full (codex attack)', () =>
 
   it('once there is room again, the next run finishes the job and writes the marker', () => {
     useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
-    usePoolHostsStore.setState({ order: [], looks: staleLooks(32) })
+    usePoolHostsStore.setState({ order: [], looks: staleLooks(MAX_POOL_HOSTS) })
     answerPool([MLAB])
     migrateGlobalIndicator()
-    const { [hex(32)]: _gone, ...rest } = usePoolHostsStore.getState().looks
+    const { [hex(MAX_POOL_HOSTS)]: _gone, ...rest } = usePoolHostsStore.getState().looks
     void _gone
     usePoolHostsStore.setState({ looks: rest })
     migrateGlobalIndicator()

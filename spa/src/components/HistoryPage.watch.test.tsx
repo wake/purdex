@@ -24,8 +24,8 @@ describe('HistoryPage and the watcher area', () => {
     expect(Object.keys(useTabStore.getState().tabs)).toEqual([])
   })
 
-  it('a record from before the pool (a fleet host id) opens the first tab of the area', () => {
-    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: { kind: 'watch-host', fleetHostId: 'h1' }, visitedAt: 1 }], closedTabs: [] })
+  it('a record from before the pool (no pool host id) opens the first tab of the area', () => {
+    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: { kind: 'watch-host' }, visitedAt: 1 }], closedTabs: [] })
     render(<HistoryPage {...props} />)
     fireEvent.click(screen.getAllByRole('button')[0])
     expect(openWatchArea).toHaveBeenCalledWith({ tab: 'guardian' })

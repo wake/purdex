@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { LookSettings } from './LookSettings'
-import { usePoolHostsStore } from '../../../stores/usePoolHostsStore'
+import { MAX_POOL_HOSTS, usePoolHostsStore } from '../../../stores/usePoolHostsStore'
 import { useHostLookStore } from '../../../stores/useHostLookStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useNexHostStore } from '../../../stores/useNexHostStore'
@@ -193,7 +193,7 @@ describe('apply to all, and back to the default', () => {
 
   it('"to all" says how many hosts the store had no room for, instead of claiming all (codex attack)', () => {
     const hex = (n: number) => n.toString(16).padStart(16, '0')
-    usePoolHostsStore.setState({ order: [], looks: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [hex(i + 1), { icon: 'Cube' }])) })
+    usePoolHostsStore.setState({ order: [], looks: Object.fromEntries(Array.from({ length: MAX_POOL_HOSTS }, (_, i) => [hex(i + 1), { icon: 'Cube' }])) })
     mount(monitorHost(MSERV, 'mserv', null))
     fireEvent.click(screen.getByTestId('look-apply-all'))
     expect(screen.getByTestId('look-apply-partial')).toHaveTextContent(t('watch.look.apply_partial', { n: 4 }))
