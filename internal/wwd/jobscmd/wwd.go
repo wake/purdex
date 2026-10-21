@@ -160,6 +160,21 @@ func wwdPool(ctx context.Context, args []string, env Env) int {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", testcmd.CleanLine(p.Info.Alias), reach, zone, free, worker, running, factsAge)
 	}
 	tw.Flush()
+	// what waits for a worker (facts.worker.waiting, #3941): the watcher reads it to see a queue that a busy host is not taking
+	for _, p := range pool.Peers {
+		if p.Facts == nil || p.Facts.Worker.Waiting == nil {
+			continue
+		}
+		w := p.Facts.Worker.Waiting
+		line := fmt.Sprintf("%s: 等候中 %d 件（最久 %d 分）", testcmd.CleanLine(p.Info.Alias), w.Count, int(env.now().Sub(w.OldestSince).Minutes()))
+		switch {
+		case w.Yielding:
+			line += "快車道讓位中"
+		case w.YieldOver:
+			line += "已超過讓位上限，快車道不再讓"
+		}
+		fmt.Fprintln(env.Stdout, line)
+	}
 	return ExitOK
 }
 

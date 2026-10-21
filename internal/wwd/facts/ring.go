@@ -73,6 +73,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	out.Mem.Pressure = 0
 	out.Mem.PageOutRate, out.Mem.SwapOutRate, out.Mem.DecompressRate = nil, nil, nil
 	out.Queue = nil
+	out.Worker.Waiting = nil // a moment of the worker's reading, not a figure of the minute
 	out.Derived.Zone = wire.ZoneUnknown
 	out.Worker.Running = wire.Slots{}
 	for _, r := range recs {

@@ -319,6 +319,14 @@ func runWorker(ctx context.Context, in workerInputs) error {
 // slot (the loop claims only while its running count is below the heavy slots).
 type queueRunning struct{ l atomic.Pointer[loop.Loop] }
 
+// Waiting is what the worker last saw queued for it (loop.Waiting), nil before the worker is made: facts.worker.waiting.
+func (r *queueRunning) Waiting() *wire.Waiting {
+	if l := r.l.Load(); l != nil {
+		return l.Waiting()
+	}
+	return nil
+}
+
 func (r *queueRunning) Slots() wire.Slots {
 	if l := r.l.Load(); l != nil {
 		return wire.Slots{Heavy: l.Running()}
