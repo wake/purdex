@@ -350,3 +350,24 @@ func TestQueueUnclaimable_CountsFromTheSubmissionNotFromTheLastChange(t *testing
 		}
 	}
 }
+
+// A selective hold (an exception with `allow`) leaves room only for the jobs it lists: the rule reads it as the worker does (codex R1 on #3903).
+func selectiveHold(repos ...string) hostOpt {
+	return func(p *wire.Peer) {
+		p.Facts.Derived.Zone, p.Facts.Derived.Headroom.Heavy = wire.ZoneNormal, 0
+		p.Facts.Worker.Enabled, p.Facts.Worker.Slots.Heavy = true, 1
+		p.Facts.Exception = []wire.FactExc{{Name: "dev", Allow: &wire.HoldAllow{Repos: repos}}}
+	}
+}
+
+func TestQueueStalled_ASelectiveHoldOnlyLeavesRoomForTheJobsItLists(t *testing.T) {
+	pool := []wire.Peer{host("mlab", darwin, selectiveHold("purdex"))}
+	listed := qjob("j_in", darwin[:1], 10*time.Minute, func(j *queue.QueuedJob) { j.Repo = "purdex" })
+	other := qjob("j_out", darwin[:1], 10*time.Minute, func(j *queue.QueuedJob) { j.Repo = "aigora" })
+	if got, _ := holds(t, QueueStalled{}, queueIn([]queue.QueuedJob{listed}, pool...)); !got {
+		t.Error("a job the hold lists is waiting for a slot the worker would give it")
+	}
+	if got, _ := holds(t, QueueStalled{}, queueIn([]queue.QueuedJob{other}, pool...)); got {
+		t.Error("a job the hold does not list is not waiting for anything the worker would give it")
+	}
+}

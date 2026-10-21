@@ -14,6 +14,9 @@ import (
 type QueuedJob struct {
 	ID     string
 	Labels []string
+	// Class and Repo are what a selective hold (an exception with `allow`) reads of a job: derived.AdmitsJob.
+	Class wire.JobClass
+	Repo  string
 	// CreatedAt is when the job was submitted (the origin's clock): the oldest wait there is.
 	CreatedAt time.Time
 	// Touched is when the job last changed in the queue: submitted, put back by a release or a lapse, moved to another place or taken off
@@ -32,7 +35,7 @@ type QueuedJob struct {
 // command run on the host that submitted them and are not offered to the pool, so they are not here: a wait of theirs is no fault of the pool.
 // It reads the table, so the counts survive a restart of wwd.
 func (q *Queue) QueuedView(ctx context.Context) ([]QueuedJob, error) {
-	rows, err := q.db.QueryContext(ctx, `SELECT id, labels, created_at, updated_at, attempts, manual FROM jobs
+	rows, err := q.db.QueryContext(ctx, `SELECT id, labels, class, repo_name, created_at, updated_at, attempts, manual FROM jobs
 		WHERE state = ? AND adhoc = 0 AND local = 0 ORDER BY seq`, string(wire.StateQueued))
 	if err != nil {
 		return nil, err
@@ -41,9 +44,9 @@ func (q *Queue) QueuedView(ctx context.Context) ([]QueuedJob, error) {
 	out := []QueuedJob{}
 	for rows.Next() {
 		var j QueuedJob
-		var labels, manual string
+		var labels, manual, class string
 		var created, updated int64
-		if err := rows.Scan(&j.ID, &labels, &created, &updated, &j.Attempts, &manual); err != nil {
+		if err := rows.Scan(&j.ID, &labels, &class, &j.Repo, &created, &updated, &j.Attempts, &manual); err != nil {
 			return nil, err
 		}
 		if labels != "" {
@@ -51,6 +54,7 @@ func (q *Queue) QueuedView(ctx context.Context) ([]QueuedJob, error) {
 				return nil, fmt.Errorf("queue: the labels of job %s do not read: %w", j.ID, err)
 			}
 		}
+		j.Class = wire.JobClass(class)
 		j.CreatedAt, j.Touched = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
 		j.Held = wire.Position(manual) == wire.PositionHold
 		out = append(out, j)
