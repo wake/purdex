@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readHostRange, writeHostRange, readHostTab, writeHostTab, readHostScroll, writeHostScroll,
-  clearViewMemory, readProcAt, writeProcAt,
+  clearViewMemory, readProcAt, writeProcAt, readLookMode, writeLookMode,
   readEventFilters, writeEventFilters, readEventsScroll, writeEventsScroll, readEventsObservations, writeEventsObservations,
 } from './view-memory'
 
@@ -15,6 +15,17 @@ describe('watch view memory — the host page\'s sub-tab (MON-6f-1)', () => {
     expect([readHostTab('h1'), readHostTab('h2'), readHostTab('h3')]).toEqual(['settings', 'procs', 'monitor'])
     clearViewMemory()
     expect(readHostTab('h1')).toBe('monitor')
+  })
+})
+
+describe('watch view memory — the colour mode of the host page\'s look editor (MON-9a-3)', () => {
+  it('defaults to the terminal mode (the one the sidebar uses), is kept per host and cleared with the rest', () => {
+    expect(readLookMode('h1')).toBe('terminal')
+    writeLookMode('h1', 'console')
+    writeLookMode('h2', 'execution')
+    expect([readLookMode('h1'), readLookMode('h2'), readLookMode('h3')]).toEqual(['console', 'execution', 'terminal'])
+    clearViewMemory()
+    expect(readLookMode('h1')).toBe('terminal')
   })
 })
 
