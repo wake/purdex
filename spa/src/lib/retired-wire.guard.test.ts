@@ -3,6 +3,7 @@
 // Guard (monitoring tabs plan, MON-12; spec A11 / W9): the wire the daemon is retiring (`fleet.v1`, `gate.decisions.v1`, the watch events routes) is no longer read by the SPA. Each MON-12 PR adds what it deletes to the three lists below:
 // the files that must stay gone, the routes / capabilities / event names no code may mention, and the identifiers no code may use. Comments (not strings) are stripped before matching, so a note that says why something is gone does not turn this red.
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 // node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see pool/fixtures-sync.guard.test.ts); they work at runtime.
 // @ts-expect-error node:fs is untyped here.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -39,32 +40,24 @@ const RETIRED_NAMES = [
   'parseGateDecisions',
 ]
 
-/** Drops `/* … *\/` and `// …` comments, leaving string and template literals (where a `//` is part of a URL) untouched. */
+/** Blanks the comments (found by the TypeScript parser, so a `//` inside a string or template literal is left alone) and keeps everything else, including the line breaks. */
 export function stripComments(text: string): string {
-  let out = ''
-  let i = 0
-  while (i < text.length) {
-    const c = text[i]
-    const next = text[i + 1]
-    if (c === '/' && next === '/') {
-      while (i < text.length && text[i] !== '\n') i++
-    } else if (c === '/' && next === '*') {
-      const end = text.indexOf('*/', i + 2)
-      i = end === -1 ? text.length : end + 2
-    } else if (c === "'" || c === '"' || c === '`') {
-      let j = i + 1
-      while (j < text.length && text[j] !== c && !(c !== '`' && text[j] === '\n')) j += text[j] === '\\' ? 2 : 1
-      out += text.slice(i, j + 1)
-      i = j + 1
-    } else {
-      out += c
-      i++
-    }
+  const sf = ts.createSourceFile('x.tsx', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX)
+  const ranges: Array<[number, number]> = []
+  const visit = (n: ts.Node): void => {
+    for (const r of ts.getLeadingCommentRanges(text, n.getFullStart()) ?? []) ranges.push([r.pos, r.end])
+    for (const r of ts.getTrailingCommentRanges(text, n.getEnd()) ?? []) ranges.push([r.pos, r.end])
+    ts.forEachChild(n, visit)
   }
+  visit(sf)
+  let out = text
+  for (const [pos, end] of ranges) out = out.slice(0, pos) + out.slice(pos, end).replace(/[^\n]/g, ' ') + out.slice(end)
   return out
 }
 
 export function hitsIn(text: string): string[] {
+  // Parsing is the slow part: a file that does not contain a retired term anywhere, comments included, has nothing to find.
+  if (![...RETIRED_CODE, ...RETIRED_NAMES].some((s) => text.includes(s))) return []
   const code = stripComments(text)
   const hits: string[] = []
   for (const s of RETIRED_CODE) if (code.includes(s)) hits.push(s)
@@ -95,7 +88,7 @@ describe('the retired wire stays retired', () => {
       for (const h of hitsIn(readFileSync(file, 'utf8'))) hits.push(`${rel}: ${h}`)
     }
     expect(hits).toEqual([])
-  })
+  }, 30_000)
 
   it('the detector catches what it is for', () => {
     expect(hitsIn("hostFetch(id, `/api/gate/decisions?x`)")).toEqual(['/api/gate/'])
@@ -109,5 +102,8 @@ describe('the retired wire stays retired', () => {
     expect(hitsIn("const u = 'https://h/api/gate/decisions'")).toEqual(['/api/gate/'])
     expect(hitsIn("const base = 'https://host'; fetchGateDecisions(base)")).toEqual(['fetchGateDecisions'])
     expect(hitsIn('const u = `https://h/${x}`; // selectGateDecisionsV1')).toEqual([])
+    expect(hitsIn("const x = `${`https://host`}`; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
+    expect(hitsIn("const re = /'/; const u = 'https://h'; fetchGateDecisions()")).toEqual(['fetchGateDecisions'])
+    expect(hitsIn('const a = <div>https://h</div>; fetchGateDecisions()')).toEqual(['fetchGateDecisions'])
   })
 })
