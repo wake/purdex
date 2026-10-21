@@ -3499,5 +3499,22 @@
   "watch.alert.unreach_host": "主機離線時告警",
   "watch.alert.unreach_d": "現值與修改要等設定 API（S9）。",
   "watch.alert.unreach_pending": "等設定 API",
-  "watch.look.apply_partial": "有 {{n}} 台沒有存到：外觀最多只能存固定的台數。"
+  "watch.look.apply_partial": "有 {{n}} 台沒有存到：外觀最多只能存固定的台數。",
+  "watch.wake.err.app_mismatch": "這個 App 和主機的版本不合，修改沒有存到；請先更新 App（或主機）。",
+  "watch.wake.err.interval": "要是 0，或 1 到 1440 分鐘。",
+  "watch.wake.err.max_gap": "要在 1 到 72 小時之間，不能是 0。",
+  "watch.wake.err.below_gb": "要在 1 到 100000 GB 之間。",
+  "watch.wake.err.away_min": "要在 5 到 1440 分鐘之間。",
+  "watch.wake.err.range": "超出允許的範圍。",
+  "watch.wake.err.bad_time": "時刻要寫成 HH:MM（24 小時制），例如 09:00。",
+  "watch.wake.err.duplicate_time": "這個時刻已經有了。",
+  "watch.wake.err.too_many_times": "最多 24 個時刻。",
+  "watch.wake.err.too_many_kinds": "最多只能停用 32 種警報。",
+  "watch.wake.err.bad_level": "等級只能是推播、摘要或守門員。",
+  "watch.wake.err.bad_kind": "有一個警報種類的名字不合規則。",
+  "watch.wake.err.prompt_too_long": "太長了：最多 2000 位元組（中文大約 660 字）。",
+  "watch.wake.err.prompt_bad_char": "含有不能用的控制字元；換行和 Tab 可以。",
+  "watch.wake.err.bad_tz": "主機不認得這個時區。",
+  "watch.wake.err.other": "主機不接受這個值：{{message}}",
+  "watch.wake.err.not_int": "請輸入整數。"
 }
