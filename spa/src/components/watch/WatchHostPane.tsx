@@ -125,7 +125,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         </div>
         <Banner host={host} now={now} />
         {sub === 'monitor' && <MonitorTab host={host} range={range} now={now} />}
-        {sub === 'status' && <StatusTab host={host} />}
+        {sub === 'status' && <StatusTab host={host} range={range} now={now} sourceAlias={hosts.find((h) => h.local)?.alias ?? null} />}
         {sub === 'procs' && <ProcTab host={host} now={now} />}
         {sub === 'settings' && <SettingsTab host={host} />}
       </div>
