@@ -22,24 +22,34 @@ const hostOf = (alias: string, over = {}): MonitorHost => {
 beforeEach(() => { cleanup(); usePoolStore.getState().reset(); useAlertsStore.getState().reset() })
 afterEach(() => cleanup())
 
+const tab = (host: MonitorHost) => <StatusTab host={host} range="5m" now={NOW} sourceAlias="mlab" />
+
 describe('StatusTab', () => {
-  it('the six cards come first, the facts table after them', () => {
-    render(<StatusTab host={hostOf('air26')} />)
+  it('the six cards come first, the facts table after them, the full charts last', () => {
+    render(tab(hostOf('air26')))
     const cards = screen.getByTestId('status-cards')
     const facts = screen.getByTestId('facts-table')
+    const charts = screen.getByTestId('status-charts')
     expect(cards.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(facts.compareDocumentPosition(charts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the full charts have a heading that says the 監控 six are not repeated', () => {
+    render(tab(hostOf('air26')))
+    expect(screen.getByTestId('status-charts-heading')).toHaveTextContent(t('watch.host.status.charts.title'))
+    expect(screen.getByTestId('status-charts-heading')).toHaveTextContent(t('watch.host.status.charts.note'))
   })
 
   it('another host is another content', () => {
-    const { rerender } = render(<StatusTab host={hostOf('air26')} />)
+    const { rerender } = render(tab(hostOf('air26')))
     expect(screen.getByText('id-air26')).toBeInTheDocument()
-    rerender(<StatusTab host={hostOf('mserv')} />)
+    rerender(tab(hostOf('mserv')))
     expect(screen.getByText('id-mserv')).toBeInTheDocument()
     expect(screen.queryByText('id-air26')).toBeNull()
   })
 
   it('a host that is not ok: no reading in the cards and in the facts table', () => {
-    render(<StatusTab host={hostOf('air26', { liveness: 'host_down', facts: null })} />)
+    render(tab(hostOf('air26', { liveness: 'host_down', facts: null })))
     expect(screen.getByTestId('status-card-judge')).toHaveTextContent(t('watch.host.status.no_reading', { state: t('pool.liveness.host_down') }))
     expect(screen.getByTestId('facts-table')).toHaveTextContent(t('watch.host.status.facts.none'))
   })

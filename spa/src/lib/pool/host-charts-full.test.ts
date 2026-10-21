@@ -156,6 +156,11 @@ describe('fullChartsOf: the number tiles', () => {
     expect(find(fullChartsOf(five(f), f, '5m', ctx({ local: true, rttMs: 3 })), 'latency').text).toEqual({ key: 'watch.host.full.latency_local' })
     expect(find(fullChartsOf(five(f), f, '5m', ctx({ rttMs: null })), 'latency').text).toBeNull()
   })
+
+  it('latency: a figure whose source is not known yet is a dash, not "  reads this host in N ms" (codex attack, MON-7c-2)', () => {
+    const f = rich(darwinJson)
+    expect(find(fullChartsOf(five(f), f, '5m', ctx({ rttMs: 12, sourceAlias: null })), 'latency').text).toBeNull()
+  })
 })
 
 describe('formatValue', () => {
