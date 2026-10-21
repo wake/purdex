@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -144,7 +145,7 @@ func TestAClassTasksAreClaimableOnlyByAHostThatEarnedThem(t *testing.T) {
 		args []string
 	}{
 		{"tsc", nil}, // the whole run is the qualification
-		{"spa-related", []string{"src/lib/fleet/parse.test.ts"}}, // one small test file is
+		{"spa-related", []string{"src/lib/crypto-hash.test.ts"}}, // one small test file is
 	} {
 		task := m.Tasks[c.name]
 		if task == nil || task.Qualify == nil {
@@ -160,6 +161,12 @@ func TestAClassTasksAreClaimableOnlyByAHostThatEarnedThem(t *testing.T) {
 		}
 		if task.Qualify.Reference != "air26" || !slices.Equal(task.Qualify.Args, c.args) {
 			t.Errorf("%s qualify %+v", c.name, task.Qualify)
+		}
+		// What the reference host is asked to run has to exist: deleting a test file must not leave the qualification pointing at it (MON-12b-3).
+		for _, a := range task.Qualify.Args {
+			if _, err := os.Stat(filepath.Join("../../..", task.Cwd, a)); err != nil {
+				t.Errorf("%s qualify names %s, which is not there: %v", c.name, a, err)
+			}
 		}
 		if bad := macOnlyViolations(m, map[string]bool{}); !slices.Contains(bad, c.name) {
 			t.Errorf("without the A-class entry %s would be a violation (the test would prove nothing): %v", c.name, bad)
