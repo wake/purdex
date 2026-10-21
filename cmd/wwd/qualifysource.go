@@ -100,7 +100,7 @@ func (s *qualifySource) Prepare(ctx context.Context, t qualify.Task) (wire.JobSu
 		return wire.JobSubmission{}, fmt.Errorf("%s/%s was not listed at a manifest_ref commit: ask again", t.Repo, t.Name)
 	}
 	p, err := submit.Prepare(ctx, submit.Request{
-		Dir: root, Task: t.Name, Args: t.Args, Class: wire.ClassDev, Git: s.git, Commit: t.Commit,
+		Dir: root, Task: t.Name, Args: t.Args, Git: s.git, Commit: t.Commit,
 		Submitter: wire.Submitter{Session: qualify.SessionName},
 	})
 	if err != nil {

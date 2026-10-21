@@ -207,7 +207,7 @@ func TestPrepareTakesOneSnapshotWithTheQualifyArgs(t *testing.T) {
 
 	sub, err = src.Prepare(context.Background(), byName["heavy"])
 	require.NoError(t, err)
-	assert.Equal(t, wire.ClassDev, sub.Class, "a qualification runs at the lowest class whatever the manifest's")
+	assert.Equal(t, wire.ClassRelease, sub.Class, "the submission carries the manifest's class; the coordinator caps the halves at merge")
 
 	sub, err = src.Prepare(context.Background(), byName["spa-related"])
 	require.NoError(t, err)

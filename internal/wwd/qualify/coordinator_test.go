@@ -220,7 +220,7 @@ func TestTickStartsAPairWithTheRightHalves(t *testing.T) {
 	}
 	for name, s := range map[string]wire.JobSubmission{"candidate": cand, "reference": ref} {
 		// interruptible on purpose: a newer pair's supersede key must be able to stop an older pair that is still running
-		if s.Class != wire.ClassDev || s.Cacheable || !s.Interruptible || s.AdHoc || s.Submitter.Session != SessionName {
+		if s.Class != wire.ClassMerge || s.Cacheable || !s.Interruptible || s.AdHoc || s.Submitter.Session != SessionName {
 			t.Errorf("%s: %+v", name, s)
 		}
 	}
@@ -246,6 +246,20 @@ func TestTickStartsAPairWithTheRightHalves(t *testing.T) {
 	}
 	if st, _ := r.c.Status(); len(st) != 1 || st[0].Label != tsc.Label() {
 		t.Fatalf("in flight: %+v", st)
+	}
+}
+
+// Both halves keep the task's own class, capped at merge: a dev class pair starves behind merge work, a release class one does not need
+// to outrank every merge.
+func TestHalvesTakeTheTasksClassUpToMerge(t *testing.T) {
+	for _, tc := range []struct{ base, want wire.JobClass }{
+		{wire.ClassRelease, wire.ClassMerge}, {wire.ClassMerge, wire.ClassMerge}, {wire.ClassDev, wire.ClassDev},
+		{"", wire.ClassDev}, {"bogus", wire.ClassDev},
+	} {
+		cand, ref := halves(wire.JobSubmission{Class: tc.base}, tsc, "mserv")
+		if cand.Class != tc.want || ref.Class != tc.want {
+			t.Errorf("base %q: halves %q and %q, want %q", tc.base, cand.Class, ref.Class, tc.want)
+		}
 	}
 }
 
