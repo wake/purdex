@@ -66,6 +66,20 @@ func isShim(p string) bool {
 	return len(lines) >= 2 && lines[0] == "#!/bin/sh" && strings.HasPrefix(lines[1], shimMarker)
 }
 
+// isShimOf is isShim, and more: the header names tool, and the script hands the call to `pdx gate --tool <tool>`. It is what lets setup delete a
+// file: a wrapper of the user's that only copied the header is not removed.
+func isShimOf(p, tool string) bool {
+	if !isShim(p) {
+		return false
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return false
+	}
+	lines := strings.SplitN(string(b), "\n", 3)
+	return strings.HasPrefix(lines[1], shimMarker+" "+tool+")") && strings.Contains(string(b), " gate --auto --tool "+tool+` -- "$@"`)
+}
+
 func realPath(p string) string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		p = r

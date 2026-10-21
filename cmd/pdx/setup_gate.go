@@ -33,8 +33,8 @@ func removeGateShimsForUser(w io.Writer) {
 	removeGateShims(home, w)
 }
 
-// removeGateShims removes, from the shim directory under home, the files an old setup wrote: a regular file named like one of shimTools whose
-// header says it is a pdx shim. The directory goes when that leaves it empty; anything else in it is left, with a line saying so. A shim
+// removeGateShims removes, from the shim directory under home, the files an old setup wrote: a regular file named like one of shimTools that
+// isShimOf that tool (the header, and the hand-over to `pdx gate` that the script is for). The directory goes when that leaves it empty; anything else in it is left, with a line saying so. A shim
 // directory that is a symbolic link is not followed. Nothing to remove is not worth a word.
 func removeGateShims(home string, w io.Writer) {
 	dir := shimDirIn(home)
@@ -45,7 +45,7 @@ func removeGateShims(home string, w io.Writer) {
 	for _, tool := range shimTools {
 		p := filepath.Join(dir, tool)
 		fi, err := os.Lstat(p)
-		if err != nil || !fi.Mode().IsRegular() || !isShim(p) {
+		if err != nil || !fi.Mode().IsRegular() || !isShimOf(p, tool) {
 			continue
 		}
 		if err := os.Remove(p); err != nil {
