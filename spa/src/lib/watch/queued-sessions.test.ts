@@ -1,40 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import type { FleetHost, FleetWaiter } from '../fleet/types'
-import type { FleetSnapshot } from '../fleet/store'
+import type { FleetWaiter } from '../fleet/types'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { queuedBySession, queuedJobsBySession, sharedQueuedJobs, queuedTooltip, jobsTooltip, isJobMark, type QueuedJobMark } from './queued-sessions'
+import { queuedJobsBySession, sharedQueuedJobs, queuedTooltip, jobsTooltip, isJobMark, type QueuedJobMark } from './queued-sessions'
 import type { PoolJob } from '../pool/jobs-types'
 import type { PoolHost } from '../pool/types'
 
 const w = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
   ({ class: 'heavy', place: 1, command: 'go test ./...', project: 'p', session: 'AAAA-1', since: 0, ...over })
-const host = (id: string, waiters: FleetWaiter[], kind: FleetHost['kind'] = 'daemon'): FleetHost =>
-  ({ id, kind, alias: id, name: id, icon: '', os: '', status: 'ok', error: null, last_ok_at: 0, fast: null,
-    slow: { at: 0, top_cpu: [], top_mem: [], queue: { heavy_used: 0, heavy_total: 1, light_used: 0, light_total: 1, holders: [], waiters, longest_wait_s: 0,
-      admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } } })
-const snap = (...hosts: FleetHost[]): FleetSnapshot =>
-  ({ hostId: 'h', term: 1, hosts: Object.fromEntries(hosts.map((h) => [h.id, h])), order: hosts.map((h) => h.id) })
 const t = (k: string, p?: Record<string, string | number>) => `${k}|${JSON.stringify(p ?? {})}`
-
-describe('queuedBySession', () => {
-  it('no fleet → empty', () => {
-    expect(queuedBySession(null).size).toBe(0)
-  })
-  it('groups the waiters of every host by lowercase session id and skips empty sessions', () => {
-    const m = queuedBySession(snap(host('a', [w(), w({ session: '' })]), host('b', [w({ session: 'aaaa-1', place: 2 })])))
-    expect([...m.keys()]).toEqual(['aaaa-1'])
-    expect(m.get('aaaa-1')!.map((x) => x.place)).toEqual([1, 2])
-  })
-})
-
-describe('queuedBySession — which hosts count', () => {
-  it('skips a probe host and a daemon that is not ok (its last queue is stale)', () => {
-    const off = host('off', [w({ session: 'off-1' })]); off.status = 'offline'
-    const err = host('err', [w({ session: 'err-1' })]); err.status = 'error'
-    const m = queuedBySession(snap(host('probe', [w({ session: 'probe-1' })], 'probe'), off, err, host('ok', [w({ session: 'ok-1' })])))
-    expect([...m.keys()]).toEqual(['ok-1'])
-  })
-})
 
 describe('queuedTooltip', () => {
   it('one waiter: place, whole minutes, command and class', () => {

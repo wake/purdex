@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, cleanup, fireEvent, act } from '@testing-library/react'
 
 const fetchFactsHistory = vi.fn()
+const fetchUndeclared = vi.fn()
+vi.mock('../../../lib/pool/observations-api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/observations-api')>()), fetchUndeclared: (...a: unknown[]) => fetchUndeclared(...a) }))
 vi.mock('../../../lib/pool/api', async (orig) => ({ ...(await orig<typeof import('../../../lib/pool/api')>()), fetchFactsHistory: (...a: unknown[]) => fetchFactsHistory(...a) }))
 import { ProcTab } from './ProcTab'
 import { clearProcHistory } from '../../../lib/pool/proc-history'
+import { clearHostObservations } from '../../../lib/pool/host-observations'
+import { useNexHostStore } from '../../../stores/useNexHostStore'
 import { clearViewMemory, readProcAt, writeProcAt } from '../../../lib/watch/view-memory'
 import { usePoolStore } from '../../../lib/pool/store'
 import { PoolReadError } from '../../../lib/pool/api'
@@ -29,8 +33,9 @@ const okHost = (over: Partial<PoolFacts> = {}, id = 'h-mlab') => hostOf(poolHost
 const downHost = (liveness: 'wwd_down' | 'host_down' | 'unknown') => hostOf(poolHost({ liveness, liveness_at: NOW - 3000, liveness_since: NOW - 600_000, facts: null }))
 
 beforeEach(() => {
-  cleanup(); fetchFactsHistory.mockReset(); clearProcHistory(); clearViewMemory()
+  cleanup(); fetchFactsHistory.mockReset(); fetchUndeclared.mockReset(); clearProcHistory(); clearHostObservations(); clearViewMemory()
   usePoolStore.setState({ sourceHostId: 'cfg-a' })
+  useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: Date.now(), daemonCapabilities: ['pool.v1', 'pool.observations.v1'] } } } as never)
 })
 
 describe('ProcTab', () => {
@@ -146,5 +151,36 @@ describe('the timeline (MON-8b)', () => {
     writeProcAt('h-mlab', NOW - 600_000)
     render(<ProcTab host={okHost({ procs: [proc(1, { name: 'livenow' })] })} now={NOW + 3 * 3600_000} />)
     expect(within(screen.getByTestId('procs-cpu')).getByText('livenow')).toBeInTheDocument()
+  })
+})
+
+describe('the undeclared heavy commands (MON-8c)', () => {
+  const GROUPS = { host: 'mlab', known: true, truncated: false, groups: [{ signature: 'go test', count: 2, cpuSeconds: 30, maxMemMb: 900, lastAt: NOW - 60_000, lastSession: 'ab12', lastVia: 'session', lastCommand: 'go test ./...' }] }
+
+  it('an ok host: reads the groups of that host and draws them in the right column', async () => {
+    fetchUndeclared.mockResolvedValue(GROUPS)
+    await act(async () => { render(<ProcTab host={okHost()} now={NOW} />) })
+    expect(fetchUndeclared).toHaveBeenCalledTimes(1)
+    expect(fetchUndeclared.mock.calls[0].slice(0, 2)).toEqual(['cfg-a', 'mlab'])
+    expect(screen.getByTestId('undeclared-row-go test')).toBeInTheDocument()
+  })
+
+  it('a host that is not ok is not asked (the records live in its wwd), and the table says so', async () => {
+    await act(async () => { render(<ProcTab host={downHost('host_down')} now={NOW} />) })
+    expect(fetchUndeclared).not.toHaveBeenCalled()
+    expect(screen.getByTestId('undeclared-note')).toHaveTextContent(t('watch.host.obs.host_down', { state: t('pool.liveness.host_down') }))
+  })
+
+  it('a daemon that does not announce the route is not asked', async () => {
+    useNexHostStore.setState({ byHost: { 'cfg-a': { phase: 'ready', fetchedAt: Date.now(), daemonCapabilities: ['pool.v1'] } } } as never)
+    await act(async () => { render(<ProcTab host={okHost()} now={NOW} />) })
+    expect(fetchUndeclared).not.toHaveBeenCalled()
+    expect(screen.getByTestId('undeclared-note')).toHaveTextContent(t('watch.host.obs.no_route'))
+  })
+
+  it('a refusal (403) is shown as the admin-only note', async () => {
+    fetchUndeclared.mockRejectedValue(new PoolReadError('/p', 403, { code: 'forbidden', message: '' } as never))
+    await act(async () => { render(<ProcTab host={okHost()} now={NOW} />) })
+    expect(screen.getByTestId('undeclared-note')).toHaveTextContent(t('watch.host.obs.forbidden'))
   })
 })

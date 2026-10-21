@@ -201,7 +201,7 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 	for i, p := range []string{a, b} {
 		go func() {
 			var o, e bytes.Buffer
-			done <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", p}, &o, &e)
+			done <- slotGateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", p}, &o, &e)
 		}()
 		eventuallyOutput(t, func() bool {
 			var o, e bytes.Buffer

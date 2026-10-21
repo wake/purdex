@@ -9,6 +9,10 @@ import { clearContributions, registerSettingsContribution } from '../../lib/sett
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { registerBuiltinModules } from '../../lib/register-modules'
 
+const watch = vi.hoisted(() => ({ openWatchArea: vi.fn(), readPoolView: vi.fn() }))
+vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea: watch.openWatchArea }))
+vi.mock('../../features/workspace/lib/watch-area', async (importOriginal) => ({ ...(await importOriginal() as Record<string, unknown>), readPoolView: watch.readPoolView }))
+
 vi.mock('../../lib/host-api', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
   return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
@@ -464,5 +468,37 @@ describe('HostSidebar — shown / hidden hosts (H2d-2)', () => {
     expect(useShownHostsStore.getState().ids).toEqual(['unknown-id'])
     setState.mockRestore()
     setItem.mockRestore()
+  })
+})
+
+describe('HostSidebar — the monitoring link (MON-9b-1, M52)', () => {
+  const props = { selectedHostId: HOST_ID, selectedSubPage: 'overview' as const, onSelect: vi.fn(), onAddHost: vi.fn() }
+  beforeEach(() => { watch.openWatchArea.mockClear(); watch.readPoolView.mockReset() })
+
+  it('is always drawn, whether or not the pool answers, and the old pool / probe groups are gone', () => {
+    watch.readPoolView.mockReturnValue(null)
+    render(<HostSidebar {...props} />)
+    expect(screen.getByTestId('hosts-monitor-link')).toBeTruthy()
+    expect(screen.queryByTestId('pool-group')).toBeNull()
+    expect(screen.queryByTestId('probe-group')).toBeNull()
+  })
+
+  it('opens the first pool host\'s 監控 in the monitoring tabs', () => {
+    watch.readPoolView.mockReturnValue({ hostIds: ['wwd-1', 'wwd-2'], source: 'd1' })
+    render(<HostSidebar {...props} />)
+    fireEvent.click(screen.getByTestId('hosts-monitor-link'))
+    expect(watch.openWatchArea).toHaveBeenCalledWith({ poolHost: { hostId: 'wwd-1' }, sub: 'monitor' })
+  })
+
+  it('opens the area\'s first tab when the pool is unread or has no host', () => {
+    watch.readPoolView.mockReturnValue(null)
+    render(<HostSidebar {...props} />)
+    fireEvent.click(screen.getByTestId('hosts-monitor-link'))
+    expect(watch.openWatchArea).toHaveBeenLastCalledWith({ tab: 'guardian' })
+    cleanup()
+    watch.readPoolView.mockReturnValue({ hostIds: [], source: 'd1' })
+    render(<HostSidebar {...props} />)
+    fireEvent.click(screen.getByTestId('hosts-monitor-link'))
+    expect(watch.openWatchArea).toHaveBeenLastCalledWith({ tab: 'guardian' })
   })
 })

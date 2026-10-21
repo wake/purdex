@@ -153,7 +153,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
   // Over every execution pane of the tab (useTabAgentAggregate), not only the primary one.
 
-  const queuedItems: QueuedItem[] = [...queued.jobs, ...queued.waiters]
+  const queuedItems: QueuedItem[] = [...queued.jobs]
   const backgroundWaiters = agg.background === 'queued' && queuedItems.length > 0 ? queuedItems : undefined
 
   return {
