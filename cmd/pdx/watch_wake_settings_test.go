@@ -161,6 +161,35 @@ func TestWakeSettingsShow_PatrolStatusAndTheSuppressedAreListed(t *testing.T) {
 	}
 }
 
+// A settings object whose fields have the wrong types is not a document either: show would print its zero values as if they were the settings
+// (a "no" for an enabled that came as the string "yes"), and a PUT 200 of that shape is not a confirmed write (codex critic on #3956).
+func TestWakeSettings_AnObjectWithFieldsOfTheWrongTypeIsNotADocument(t *testing.T) {
+	for name, settings := range map[string]string{
+		"enabled as a string":    `{"enabled":"yes"}`,
+		"a number for a rule":    `{"rules":{"disk_low":5}}`,
+		"below_gb as a string":   `{"rules":{"disk_low":{"below_gb":"14"}}}`,
+		"levels as a string":     `{"rules":{"wwd_alert":{"levels":"push"}}}`,
+		"times as numbers":       `{"rules":{"patrol":{"times":[8,9]}}}`,
+		"interval_min as a list": `{"rules":{"patrol":{"interval_min":[1,2]}}}`,
+	} {
+		doc := `{"settings":` + settings + `,"etag":"x","revision":2}`
+		// the read
+		f, cfg := newWakeDaemon(t)
+		f.get = []byte(doc)
+		code, out, errb := runWake("--config", cfg)
+		require.Equal(t, 1, code, "read %s", name)
+		require.Empty(t, out, "read %s: nothing is shown as the settings", name)
+		require.NotEmpty(t, errb, name)
+		// the 200 of a write
+		f, cfg = newWakeDaemon(t)
+		f.put = []byte(doc)
+		code, out, errb = runWake("set", "enabled=false", "--config", cfg)
+		require.Equal(t, 1, code, "write %s", name)
+		require.Empty(t, out, "write %s", name)
+		require.Contains(t, errb, "無法確認", name)
+	}
+}
+
 // The same check holds for the read: a document that is not an object is not shown, and `set` does not build on it.
 func TestWakeSettings_AReadThatIsNotADocumentIsRefused(t *testing.T) {
 	for name, body := range map[string]string{"null": `{"settings":null,"etag":"x"}`, "array": `{"settings":[],"etag":"x"}`, "no etag": `{"settings":{}}`, "html": "<html>"} {

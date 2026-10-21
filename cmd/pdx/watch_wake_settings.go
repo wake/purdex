@@ -67,6 +67,10 @@ func parseWakeView(body []byte) (v wakeView, ok bool) {
 	if err := json.Unmarshal(v.Settings, &obj); err != nil || obj == nil {
 		return wakeView{}, false
 	}
+	var typed wakeDocView // the fields `show` reads have to be of the types it reads them as
+	if err := json.Unmarshal(v.Settings, &typed); err != nil {
+		return wakeView{}, false
+	}
 	return v, true
 }
 

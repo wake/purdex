@@ -10,42 +10,46 @@ import (
 	"strings"
 )
 
+// wakeDocView is the part of the settings document `show` reads. parseWakeView decodes into it too, so a document whose fields have the wrong
+// types is not taken for one (show would print their zero values as the settings).
+type wakeDocView struct {
+	Enabled   bool `json:"enabled"`
+	AutoStart bool `json:"auto_start"`
+	Rules     struct {
+		Patrol struct {
+			Prompt      string         `json:"prompt"`
+			IntervalMin map[string]int `json:"interval_min"`
+			MaxGapHours int            `json:"max_gap_hours"`
+			Times       []string       `json:"times"`
+			TZ          string         `json:"tz"`
+		} `json:"patrol"`
+		DiskLow struct {
+			Enabled bool   `json:"enabled"`
+			Prompt  string `json:"prompt"`
+			BelowGB int    `json:"below_gb"`
+		} `json:"disk_low"`
+		WwdAlert struct {
+			Enabled  bool     `json:"enabled"`
+			Prompt   string   `json:"prompt"`
+			Levels   []string `json:"levels"`
+			KindsOff []string `json:"kinds_off"`
+		} `json:"wwd_alert"`
+		Unattended struct {
+			Enabled bool   `json:"enabled"`
+			Prompt  string `json:"prompt"`
+		} `json:"unattended_changed"`
+		UserBack struct {
+			Enabled bool   `json:"enabled"`
+			Prompt  string `json:"prompt"`
+			AwayMin int    `json:"away_min"`
+		} `json:"user_back"`
+	} `json:"rules"`
+}
+
 // printWakeView is `show`: the document as a person reads it, then where it came from and how it has been working.
 func printWakeView(w io.Writer, v wakeView) {
-	var s struct {
-		Enabled   bool `json:"enabled"`
-		AutoStart bool `json:"auto_start"`
-		Rules     struct {
-			Patrol struct {
-				Prompt      string         `json:"prompt"`
-				IntervalMin map[string]int `json:"interval_min"`
-				MaxGapHours int            `json:"max_gap_hours"`
-				Times       []string       `json:"times"`
-				TZ          string         `json:"tz"`
-			} `json:"patrol"`
-			DiskLow struct {
-				Enabled bool   `json:"enabled"`
-				Prompt  string `json:"prompt"`
-				BelowGB int    `json:"below_gb"`
-			} `json:"disk_low"`
-			WwdAlert struct {
-				Enabled  bool     `json:"enabled"`
-				Prompt   string   `json:"prompt"`
-				Levels   []string `json:"levels"`
-				KindsOff []string `json:"kinds_off"`
-			} `json:"wwd_alert"`
-			Unattended struct {
-				Enabled bool   `json:"enabled"`
-				Prompt  string `json:"prompt"`
-			} `json:"unattended_changed"`
-			UserBack struct {
-				Enabled bool   `json:"enabled"`
-				Prompt  string `json:"prompt"`
-				AwayMin int    `json:"away_min"`
-			} `json:"user_back"`
-		} `json:"rules"`
-	}
-	_ = json.Unmarshal(v.Settings, &s)
+	var s wakeDocView
+	_ = json.Unmarshal(v.Settings, &s) // parseWakeView has decoded it already: it is a document
 	role := "不是正本"
 	if v.IsSource {
 		role = "這台就是正本"
