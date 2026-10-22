@@ -127,6 +127,11 @@ func run(cfgPath string) error {
 	// cannot put them all back does not start (a key another owner took would let a second job run beside the first one's leftovers).
 	tbl := locks.New()
 	sb := sandboxFor(cfg.Worker)
+	// The work root may be on a volume that is not mounted yet (mlab's is on an external disk the booter mounts after login). Waiting here,
+	// before anything listens or is recorded as a start, keeps launchd from restarting wwd every few seconds until the volume is there.
+	if !waitWorkRoot(ctx, cfg.WorkRoot, 30*time.Second, 10*time.Minute, time.Now, log.Printf) {
+		return nil
+	}
 	qstore, workRoot, err := openQuarantine(cfg, tbl, sb)
 	if err != nil {
 		return err
