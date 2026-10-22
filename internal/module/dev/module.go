@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,6 +40,14 @@ type DevModule struct {
 	// RequestRestart: ordered shutdown, then re-exec). Nil means skip the
 	// restart (test-safe default); Init sets it to the core's.
 	restartFn func(reason, execPath string, afterAccept func()) error
+	// selfPathFn returns the resolved path of the binary this daemon is running
+	// from; a rebuild replaces that file (spec 2026-10-22-kc3-offline §1). Nil
+	// means <repoRoot>/bin/pdx (test-safe default: a test never renames over its
+	// own test executable); Init sets it to runningBinary.
+	selfPathFn func() (string, error)
+	// verifyFn runs the freshly built binary at path before it replaces the installed one and returns an error when it is not a working pdx
+	// of wantHash. Nil means no check (test-safe default: the binaries tests build have no version command); Init sets verifyBinary.
+	verifyFn func(ctx context.Context, path, wantHash string) error
 	// gitHeadFn returns the short hash of HEAD, or "" when unavailable.
 	// Injected by tests; defaulted to m.gitHead in Init.
 	gitHeadFn func() string
@@ -80,7 +89,57 @@ func (m *DevModule) Init(c *core.Core) error {
 	if m.restartFn == nil {
 		m.restartFn = c.RequestRestart
 	}
+	if m.selfPathFn == nil {
+		m.selfPathFn = runningBinary
+	}
+	if m.verifyFn == nil {
+		m.verifyFn = verifyBinary
+	}
 	return nil
+}
+
+// runningBinary is the file this process was started from, symlinks resolved: the same value `pdx setup` and the hook and statusline
+// installers write into settings. It never falls back to the unresolved path, so a caller can tell "unknown" from "known".
+func runningBinary() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+// verifyBinary runs `path version --json` and requires exit 0 and JSON output; when wantHash is not empty the JSON's hash must equal it.
+func verifyBinary(ctx context.Context, path, wantHash string) error {
+	out, err := execstat.CommandContext(ctx, "dev.verify-binary", path, "version", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("%s version --json: %w", filepath.Base(path), err)
+	}
+	var info struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return fmt.Errorf("%s version --json printed no JSON: %w", filepath.Base(path), err)
+	}
+	if wantHash != "" && info.Hash != wantHash {
+		return fmt.Errorf("the new binary reports hash %q, the build injected %q", info.Hash, wantHash)
+	}
+	return nil
+}
+
+// rebuildTarget is the file a daemon rebuild replaces. Rebuilding into the repo while the daemon runs from elsewhere (mlab runs
+// ~/.config/pdx/bin/pdx so a missing Workspace volume cannot take it down) would send the next restart, and the next `pdx setup`, back to the repo.
+func (m *DevModule) rebuildTarget() (string, error) {
+	if m.selfPathFn == nil {
+		return filepath.Join(m.repoRoot, "bin", "pdx"), nil
+	}
+	p, err := m.selfPathFn()
+	if err != nil {
+		return "", err
+	}
+	if p == "" {
+		return "", fmt.Errorf("the executable path is empty")
+	}
+	return p, nil
 }
 
 // startBuildLocked transitions the module into building state, allocates a

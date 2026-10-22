@@ -81,12 +81,20 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	}()
 
 	log.Printf("dev rebuild requested by %s (current %s)", r.RemoteAddr, buildinfo.Hash)
-	binDir := filepath.Join(m.repoRoot, "bin")
+	// The target is the binary this daemon runs from, found before anything is built: when it cannot be found the answer is an error, never
+	// the repo's bin/pdx, which is the move away from the running binary this exists to prevent.
+	target, err := m.rebuildTarget()
+	if err != nil {
+		writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot find the running pdx binary: " + err.Error()})
+		return
+	}
+	// The build goes next to the target so the rename below stays on one volume and is atomic.
+	binDir := filepath.Dir(target)
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
-	newPath := filepath.Join(binDir, "pdx.new")
+	newPath := target + ".new"
 
 	// Fix 1: Inject the current git hash via -ldflags so the rebuilt binary
 	// reports the correct buildinfo.Hash through /api/dev/daemon/check. Without
@@ -98,19 +106,65 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	hashOut, _ := execstat.CommandContext(hashCtx, "dev.git-hash", "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	hash := strings.TrimSpace(string(hashOut))
 
+	// Every way out below that is not a swap leaves no <target>.new behind.
 	if err := m.buildBinary(ctx, buildTarget{}, hash, m.readVersionFile(), newPath, func(line string) {
 		writeEvent(daemonRebuildEvent{Type: "log", Line: line})
 	}); err != nil {
+		os.Remove(newPath)
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
+	}
+
+	// The target is the one installed binary that the daemon, hooks, statusline and setup all use, so the new file is run once before it
+	// replaces that: one that cannot start (signature, architecture, a broken file) must not be swapped in.
+	if m.verifyFn != nil {
+		vctx, vcancel := context.WithTimeout(ctx, 10*time.Second)
+		err := m.verifyFn(vctx, newPath, hash)
+		vcancel()
+		if err != nil {
+			os.Remove(newPath)
+			writeEvent(daemonRebuildEvent{Type: "error", Message: "new binary verification failed, nothing was replaced: " + err.Error()})
+			return
+		}
+	}
+
+	// Keep the version being replaced as <target>.prev (a hard link to its inode, so the rename below cannot lose it): the way back when
+	// the restart is refused, and what a person moves back by hand if the new version does not start after the exec. No way back means
+	// no update. The first install has nothing to keep; a target that is not a regular file is left for the rename to report.
+	finalPath := target
+	prevPath := target + ".prev"
+	havePrev := false
+	fi, statErr := os.Lstat(target)
+	if statErr == nil || !os.IsNotExist(statErr) {
+		// the target exists (or cannot be told apart from existing): it has to be a regular file whose inode can be kept
+		reason := ""
+		switch {
+		case statErr != nil:
+			reason = statErr.Error()
+		case !fi.Mode().IsRegular():
+			reason = fmt.Sprintf("%s is not a regular file (mode %s)", target, fi.Mode())
+		}
+		if reason == "" {
+			if err := os.Remove(prevPath); err != nil && !os.IsNotExist(err) {
+				reason = err.Error()
+			} else if err := os.Link(target, prevPath); err != nil {
+				reason = err.Error()
+			}
+		}
+		if reason != "" {
+			os.Remove(newPath)
+			writeEvent(daemonRebuildEvent{Type: "error", Message: "cannot keep the previous version, nothing was replaced: " + reason})
+			return
+		}
+		havePrev = true
 	}
 
 	// Fix 3: send success AFTER atomic rename so we don't emit success-then-
 	// error if rename fails. hash was captured before the build (Fix 1/5).
 
-	// Atomic swap: bin/pdx.new -> bin/pdx
-	finalPath := filepath.Join(binDir, "pdx")
+	// Atomic swap: <target>.new -> <target>, where target is the running binary (bin/pdx only when the daemon runs from the repo).
 	if err := os.Rename(newPath, finalPath); err != nil {
+		os.Remove(newPath)
 		writeEvent(daemonRebuildEvent{Type: "error", Message: "rename failed: " + err.Error()})
 		return
 	}
@@ -127,7 +181,16 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 		reason := fmt.Sprintf("dev rebuild from %s (%s -> %s)", r.RemoteAddr, buildinfo.Hash, hash)
 		if err := m.restartFn(reason, finalPath, nil); err != nil {
 			log.Printf("dev rebuild: restart refused: %v", err)
-			writeEvent(daemonRebuildEvent{Type: "error", Message: "restart: " + err.Error()})
+			msg := "restart: " + err.Error()
+			if havePrev {
+				// the daemon keeps running, so the file on disk goes back to the version it is running
+				if rerr := os.Rename(prevPath, finalPath); rerr != nil {
+					msg += "; putting the previous version back failed too: " + rerr.Error()
+				} else {
+					msg += "; the previous version was put back"
+				}
+			}
+			writeEvent(daemonRebuildEvent{Type: "error", Message: msg})
 			return
 		}
 	}
